@@ -84,6 +84,7 @@ secrets:
                                     # identity verifies it. Generated at install like the one above; with
                                     # existingSecretName, carry VEXA_MCP_DELEGATION_SECRET.
   botApiKey: ""                     # agent-api → gateway "add bot from URL" key (optional)
+  mailSmtpPassword: ""              # the mail relay's AUTH password (VEXA_MAIL_SMTP_PASSWORD; see terminal.mail)
   nextauthSecret: ""                # terminal sign-in signing secret (32+ bytes, never a published
                                     # value). Empty → kept from this release's Secret, else generated;
                                     # set it when rendering with `helm template` — `openssl rand -hex 32`
@@ -489,6 +490,16 @@ terminal:
   # security, OAuth callbacks, and the emailed sign-in link, which is built only from it — empty, the
   # terminal sends no link). Empty for cluster-internal / port-forward access.
   publicUrl: ""
+  # The mail relay the emailed sign-in link goes through — the deployment's VEXA_MAIL_SMTP_* family.
+  # Empty host: no link is delivered. secure "1" = implicit TLS (:465; STARTTLS is not supported);
+  # user + secrets.mailSmtpPassword = AUTH LOGIN; tlsInsecure "1" skips the certificate check (dev only).
+  mail:
+    smtpHost: ""
+    smtpPort: ""          # empty = 25
+    from: ""              # empty = "Vexa <no-reply@vexa.ai>"
+    user: ""
+    secure: ""
+    tlsInsecure: ""
   resources:
     requests: { cpu: 100m, memory: 256Mi }
     limits:   { cpu: 1000m, memory: 1Gi }

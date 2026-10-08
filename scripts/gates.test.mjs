@@ -163,6 +163,35 @@ test("an entrypoint.sh export that no adopted declaration carries is RED, named 
     `the failure must name the FILE AND LINE the operator has to open:\n${r.out}`);
 });
 
+// ── gate:config-contract — the terminal, adopted for the VEXA_MAIL_SMTP_* family (S2) ────────────
+// A TypeScript service with no vendored preflight, scanned as `process.env.KEY`, and held to its
+// families only: a family key read or set without a declaration is RED; a key outside the family is
+// the terminal's backlog, not this gate's business yet.
+const TERMINAL_MAILER = "clients/terminal/src/app/api/auth/mailer.ts";
+
+test("a mail-family key the terminal reads but does not declare is RED, naming the file", () => {
+  const r = withEdited(TERMINAL_MAILER, "export function mailerConfig(): MailerConfig {",
+    "export function mailerConfig(): MailerConfig {\n  void process.env.VEXA_MAIL_SMTP_PHANTOM;",
+    () => runGate("config-contract"));
+  assert.equal(r.green, false, `an undeclared family read passed:\n${r.out}`);
+  assert.match(r.out, /terminal: undeclared env read VEXA_MAIL_SMTP_PHANTOM at clients\/terminal\/src\/app\/api\/auth\/mailer\.ts/);
+});
+
+test("a mail-family key compose sets on the terminal without a declaration is RED", () => {
+  const r = withEdited("deploy/compose/docker-compose.yml", "      - VEXA_MAIL_SMTP_HOST=${VEXA_MAIL_SMTP_HOST:-}\n      - VEXA_MAIL_SMTP_PORT=${VEXA_MAIL_SMTP_PORT:-}\n",
+    "      - VEXA_MAIL_SMTP_HOST=${VEXA_MAIL_SMTP_HOST:-}\n      - VEXA_MAIL_SMTP_PORT=${VEXA_MAIL_SMTP_PORT:-}\n      - VEXA_MAIL_SMTP_PHANTOM=1\n",
+    () => runGate("config-contract"));
+  assert.equal(r.green, false, `an undeclared family key on the terminal passed:\n${r.out}`);
+  assert.match(r.out, /terminal: compose sets VEXA_MAIL_SMTP_PHANTOM/);
+});
+
+test("a declared mail-family key missing from a terminal surface is RED", () => {
+  const r = withEdited("deploy/helm/charts/vexa/templates/deployment-terminal.yaml", "- name: VEXA_MAIL_SMTP_FROM",
+    "- name: VEXA_MAIL_SMTP_FROM_RENAMED", () => runGate("config-contract"));
+  assert.equal(r.green, false, `a declared key the Helm terminal does not set passed:\n${r.out}`);
+  assert.match(r.out, /terminal: VEXA_MAIL_SMTP_FROM declared for helm but absent/);
+});
+
 const COMPOSE = "deploy/compose/docker-compose.yml";
 const VALUES = "deploy/helm/charts/vexa/values.yaml";
 const LITE = "deploy/lite/Dockerfile.lite";

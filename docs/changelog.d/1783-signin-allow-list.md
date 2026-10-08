@@ -12,3 +12,8 @@
   `.env` unchanged; Helm `adminApi.adminEmails`, with a value still under `terminal.extraEnv` carried
   over) and names the admins instead, with no code. A configured admin list or allow-list closes the
   unclaimed door entirely.
+- **The sign-in mail uses the deployment's mail relay keys (#1784).** The terminal now reads
+  `VEXA_MAIL_SMTP_HOST`, `_PORT`, `_FROM`, `_USER`, `_PASSWORD`, `_SECURE` and `_TLS_INSECURE` — the
+  same family flows sends through, which now also speaks TLS and AUTH to a configured relay — on
+  compose, Helm (`terminal.mail.*`, `secrets.mailSmtpPassword`) and Lite. The `SMTP_*` names v0.13.0
+  read still work, with a warning naming the key to set instead. A relay set with no port uses 25.

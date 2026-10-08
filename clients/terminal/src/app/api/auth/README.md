@@ -15,8 +15,8 @@ Two doors, and no third:
   sets the cookies. Control of the mailbox is the proof of identity. `magicToken.ts` owns the token
   (HMAC-SHA256 over `{email, exp, jti}` with the link key, 15-minute default TTL capped at 60
   minutes, in-process single-use ledger) and the `next=` open-redirect guard; `mailer.ts` is a dependency-free SMTP
-  client driven by `SMTP_HOST` / `SMTP_PORT` / `SMTP_FROM` (+ optional `SMTP_USER`/`SMTP_PASS`,
-  `SMTP_SECURE`).
+  client driven by the deployment's mail family, `VEXA_MAIL_SMTP_HOST` / `_PORT` / `_FROM` (+ optional
+  `_USER`/`_PASSWORD`, `_SECURE`, `_TLS_INSECURE`), declared in `clients/terminal/config.v1.json`.
 
 **Who may sign in** (Vexa-ai/vexa#1783) is decided by admin-api alone; this process holds no list.
 Every door admits only an existing user of this instance, an admin (the claimed one, or an address in

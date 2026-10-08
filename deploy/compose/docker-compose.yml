@@ -715,6 +715,10 @@ services:
       - VEXA_MAIL_APP_PASSWORD=${VEXA_MAIL_APP_PASSWORD:-}
       - VEXA_MAIL_SMTP_HOST=${VEXA_MAIL_SMTP_HOST:-}
       - VEXA_MAIL_SMTP_PORT=${VEXA_MAIL_SMTP_PORT:-25}
+      - VEXA_MAIL_SMTP_SECURE=${VEXA_MAIL_SMTP_SECURE:-}
+      - VEXA_MAIL_SMTP_TLS_INSECURE=${VEXA_MAIL_SMTP_TLS_INSECURE:-}
+      - VEXA_MAIL_SMTP_USER=${VEXA_MAIL_SMTP_USER:-}
+      - VEXA_MAIL_SMTP_PASSWORD=${VEXA_MAIL_SMTP_PASSWORD:-}
       - VEXA_MAILPIT_URL=${VEXA_MAILPIT_URL:-}
       - VEXA_MAILPIT_LOOKBACK_S=${VEXA_MAILPIT_LOOKBACK_S:-300}
       - VEXA_NOTIFY_CHANNEL=${VEXA_NOTIFY_CHANNEL:-smtp}
@@ -828,6 +832,10 @@ services:
       - VEXA_MAIL_APP_PASSWORD=${VEXA_MAIL_APP_PASSWORD:-}
       - VEXA_MAIL_SMTP_HOST=${VEXA_MAIL_SMTP_HOST:-}
       - VEXA_MAIL_SMTP_PORT=${VEXA_MAIL_SMTP_PORT:-25}
+      - VEXA_MAIL_SMTP_SECURE=${VEXA_MAIL_SMTP_SECURE:-}
+      - VEXA_MAIL_SMTP_TLS_INSECURE=${VEXA_MAIL_SMTP_TLS_INSECURE:-}
+      - VEXA_MAIL_SMTP_USER=${VEXA_MAIL_SMTP_USER:-}
+      - VEXA_MAIL_SMTP_PASSWORD=${VEXA_MAIL_SMTP_PASSWORD:-}
       - VEXA_MAILPIT_URL=${VEXA_MAILPIT_URL:-}
       - VEXA_MAILPIT_LOOKBACK_S=${VEXA_MAILPIT_LOOKBACK_S:-300}
       - VEXA_NOTIFY_CHANNEL=${VEXA_NOTIFY_CHANNEL:-smtp}
@@ -941,6 +949,10 @@ services:
       - VEXA_MAIL_APP_PASSWORD=${VEXA_MAIL_APP_PASSWORD:-}
       - VEXA_MAIL_SMTP_HOST=${VEXA_MAIL_SMTP_HOST:-}
       - VEXA_MAIL_SMTP_PORT=${VEXA_MAIL_SMTP_PORT:-25}
+      - VEXA_MAIL_SMTP_SECURE=${VEXA_MAIL_SMTP_SECURE:-}
+      - VEXA_MAIL_SMTP_TLS_INSECURE=${VEXA_MAIL_SMTP_TLS_INSECURE:-}
+      - VEXA_MAIL_SMTP_USER=${VEXA_MAIL_SMTP_USER:-}
+      - VEXA_MAIL_SMTP_PASSWORD=${VEXA_MAIL_SMTP_PASSWORD:-}
       - VEXA_MAILPIT_URL=${VEXA_MAILPIT_URL:-}
       - VEXA_MAILPIT_LOOKBACK_S=${VEXA_MAILPIT_LOOKBACK_S:-300}
       - VEXA_NOTIFY_CHANNEL=${VEXA_NOTIFY_CHANNEL:-smtp}
@@ -1162,16 +1174,17 @@ services:
       # tenant, but only sign-ins whose ID token carries `xms_edov: true` (an optional claim to add in
       # the app registration). Google sign-ins need a verified email.
       - MICROSOFT_TENANT_ID=${MICROSOFT_TENANT_ID:-common}
-      # Sign-in link mail (clients/terminal/src/app/api/auth/mailer.ts) — the email sign-in sends a
-      # magic link through this SMTP server. Unset, the mailer dials localhost:1025 inside THIS
+      # Sign-in link mail (clients/terminal/src/app/api/auth/mailer.ts) goes through the deployment's
+      # mail relay — the VEXA_MAIL_SMTP_* family flows sends through too (declared in
+      # clients/terminal/config.v1.json). Unset, the mailer dials localhost:1025 inside THIS
       # container, where nothing listens, and no link is delivered.
-      - SMTP_HOST=${SMTP_HOST:-}
-      - SMTP_PORT=${SMTP_PORT:-}
-      - SMTP_FROM=${SMTP_FROM:-}
-      - SMTP_USER=${SMTP_USER:-}
-      - SMTP_PASS=${SMTP_PASS:-}
-      - SMTP_SECURE=${SMTP_SECURE:-}
-      - SMTP_TLS_INSECURE=${SMTP_TLS_INSECURE:-}
+      - VEXA_MAIL_SMTP_HOST=${VEXA_MAIL_SMTP_HOST:-}
+      - VEXA_MAIL_SMTP_PORT=${VEXA_MAIL_SMTP_PORT:-}
+      - VEXA_MAIL_SMTP_FROM=${VEXA_MAIL_SMTP_FROM:-}
+      - VEXA_MAIL_SMTP_USER=${VEXA_MAIL_SMTP_USER:-}
+      - VEXA_MAIL_SMTP_PASSWORD=${VEXA_MAIL_SMTP_PASSWORD:-}
+      - VEXA_MAIL_SMTP_SECURE=${VEXA_MAIL_SMTP_SECURE:-}
+      - VEXA_MAIL_SMTP_TLS_INSECURE=${VEXA_MAIL_SMTP_TLS_INSECURE:-}
       # Connections panel (credential-broker.v1, ADR-0040). The terminal's server routes sign as
       # the `human` role for the signed-in person: consent, store, disconnect, delete. The public
       # origin is what browser POSTs must come from; unset, NEXTAUTH_URL's origin is used, and with

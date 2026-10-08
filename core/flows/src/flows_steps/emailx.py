@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import email.utils
 import smtplib
+import ssl
 import time
 from email.message import EmailMessage
 from email.mime.multipart import MIMEMultipart
@@ -62,11 +63,32 @@ def _smtp():
     Hardcoding smtp.gmail.com meant the mail double this rig runs was never reachable: the invite
     path could not be rehearsed, only fired at real recipients. When VEXA_MAIL_SMTP_HOST is set we
     honour it; with nothing set, behaviour is exactly as before.
+
+    A SET HOST IS THE DEPLOYMENT'S RELAY, the one the terminal's sign-in mail uses too (the
+    VEXA_MAIL_SMTP_* family is one setting for every sender), so it is spoken to the same way:
+    implicit TLS when VEXA_MAIL_SMTP_SECURE is on, AUTH LOGIN when VEXA_MAIL_SMTP_USER and
+    VEXA_MAIL_SMTP_PASSWORD are both set — the relay connection comes back already authenticated.
     """
     if _needs_login():
         return smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=20), True
-    return smtplib.SMTP(flows_config.get("VEXA_MAIL_SMTP_HOST"),
-                        flows_config.get_int("VEXA_MAIL_SMTP_PORT"), timeout=20), False
+    host, port = flows_config.get("VEXA_MAIL_SMTP_HOST"), flows_config.get_int("VEXA_MAIL_SMTP_PORT")
+    if flows_config.get_bool("VEXA_MAIL_SMTP_SECURE"):
+        ctx = ssl.create_default_context()
+        if flows_config.get_bool("VEXA_MAIL_SMTP_TLS_INSECURE"):
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+        conn = smtplib.SMTP_SSL(host, port, timeout=20, context=ctx)
+    else:
+        conn = smtplib.SMTP(host, port, timeout=20)
+    user = flows_config.get("VEXA_MAIL_SMTP_USER")
+    password = flows_config.get("VEXA_MAIL_SMTP_PASSWORD")
+    if user and password:
+        try:
+            conn.login(user, password)
+        except BaseException:
+            conn.close()
+            raise
+    return conn, False
 
 
 def send(to: str, subject: str, body: str, *, in_reply_to: str | None = None) -> str:

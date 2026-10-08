@@ -94,6 +94,26 @@ spec:
             - name: VEXA_CONNECTIONS_PUBLIC_ORIGIN
               value: {{ .Values.terminal.publicUrl | default "" | trimSuffix "/" | quote }}
             {{- end }}
+            # The sign-in link's mail relay — the deployment's VEXA_MAIL_SMTP_* family
+            # (clients/terminal/config.v1.json). The password comes from the chart's Secret.
+            - name: VEXA_MAIL_SMTP_HOST
+              value: {{ .Values.terminal.mail.smtpHost | default "" | toString | quote }}
+            - name: VEXA_MAIL_SMTP_PORT
+              value: {{ .Values.terminal.mail.smtpPort | default "" | toString | quote }}
+            - name: VEXA_MAIL_SMTP_FROM
+              value: {{ .Values.terminal.mail.from | default "" | quote }}
+            - name: VEXA_MAIL_SMTP_USER
+              value: {{ .Values.terminal.mail.user | default "" | quote }}
+            - name: VEXA_MAIL_SMTP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: VEXA_MAIL_SMTP_PASSWORD
+                  optional: true
+            - name: VEXA_MAIL_SMTP_SECURE
+              value: {{ .Values.terminal.mail.secure | default "" | toString | quote }}
+            - name: VEXA_MAIL_SMTP_TLS_INSECURE
+              value: {{ .Values.terminal.mail.tlsInsecure | default "" | toString | quote }}
             {{- with .Values.terminal.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

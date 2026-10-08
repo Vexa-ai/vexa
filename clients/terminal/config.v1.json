@@ -1,0 +1,56 @@
+{
+  "contract": "config.v1",
+  "service": "terminal",
+  "keys": [
+    {
+      "key": "VEXA_MAIL_SMTP_HOST",
+      "class": "defaulted",
+      "default": "(unset — the local dev mail double at localhost:1025)",
+      "description": "The SMTP relay the terminal sends the emailed sign-in link through (src/app/api/auth/mailer.ts). The same key flows sends its mail through: one relay per deployment, one family of keys. Unset, the terminal dials the local dev double (Mailpit) at localhost:1025, which inside a container is nothing, so no link is delivered.",
+      "targets": ["compose", "helm", "lite"]
+    },
+    {
+      "key": "VEXA_MAIL_SMTP_PORT",
+      "class": "defaulted",
+      "default": "25 (1025 for the dev double when VEXA_MAIL_SMTP_HOST is unset)",
+      "description": "The relay's port.",
+      "targets": ["compose", "helm", "lite"]
+    },
+    {
+      "key": "VEXA_MAIL_SMTP_FROM",
+      "class": "defaulted",
+      "default": "Vexa <no-reply@vexa.ai>",
+      "description": "The From of the sign-in mail, as `Name <address>` or a bare address; its domain is also the EHLO name.",
+      "targets": ["compose", "helm", "lite"]
+    },
+    {
+      "key": "VEXA_MAIL_SMTP_USER",
+      "class": "defaulted",
+      "default": "(unset — no AUTH)",
+      "description": "AUTH LOGIN user for the relay; used only when VEXA_MAIL_SMTP_PASSWORD is set as well.",
+      "targets": ["compose", "helm", "lite"]
+    },
+    {
+      "key": "VEXA_MAIL_SMTP_PASSWORD",
+      "class": "defaulted",
+      "default": "(unset — no AUTH)",
+      "description": "AUTH LOGIN password for the relay; used only when VEXA_MAIL_SMTP_USER is set as well. Helm feeds it from the chart's Secret (secrets.mailSmtpPassword).",
+      "secret": true,
+      "targets": ["compose", "helm", "lite"]
+    },
+    {
+      "key": "VEXA_MAIL_SMTP_SECURE",
+      "class": "defaulted",
+      "default": "0",
+      "description": "1 = implicit TLS (a provider's :465 endpoint). STARTTLS on :587 is not supported.",
+      "targets": ["compose", "helm", "lite"]
+    },
+    {
+      "key": "VEXA_MAIL_SMTP_TLS_INSECURE",
+      "class": "defaulted",
+      "default": "0",
+      "description": "1 = skip the relay's certificate check under VEXA_MAIL_SMTP_SECURE. Development only.",
+      "targets": ["compose", "helm", "lite"]
+    }
+  ]
+}

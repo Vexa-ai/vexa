@@ -24,5 +24,5 @@
 - Creates nothing and mints no session — that happens at `../redeem`, after the recipient proves
   they hold the mailbox.
 
-Token rules live in `../magicToken.ts`; SMTP wiring (`SMTP_HOST`/`SMTP_PORT`/`SMTP_FROM`, optional
-`SMTP_USER`/`SMTP_PASS`/`SMTP_SECURE`) in `../mailer.ts`.
+Token rules live in `../magicToken.ts`; SMTP wiring (the `VEXA_MAIL_SMTP_*` family — host, port, from,
+optional user/password, secure, tls-insecure) in `../mailer.ts`.

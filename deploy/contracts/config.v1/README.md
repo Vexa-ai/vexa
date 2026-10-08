@@ -139,8 +139,13 @@ For every adopted service (meeting-api · runtime · agent-api — the three pla
 | runtime | `core/runtime/src/runtime_kernel/config.v1.json` | `__main__.build_production_app` → `preflight()` |
 | agent-api | `core/agent/control_plane/config.v1.json` | `api._build_production_app` → `preflight()` |
 
+| terminal (by family) | `clients/terminal/config.v1.json` | none — TypeScript; reads scanned as `process.env.KEY` |
+
 Other services adopt by shipping a declaration + the vendored preflight and registering in the
-gate's `CONFIG_ADOPTED` table.
+gate's `CONFIG_ADOPTED` table. A service may adopt BY FAMILY (`families` in that table): checks 4 and
+5 then hold only keys with those prefixes, so one family is held on every surface in both directions
+while the rest of the service's environment stays its backlog. The terminal is adopted that way for
+the deployment's mail relay, `VEXA_MAIL_SMTP_*`; it has no Python preflight to vendor (check 2).
 
 **Depends on:** nothing (a leaf contract; the preflight is stdlib-only). Consumed by: the three
 planes' boot paths, `scripts/gates.mjs` (`gate:config-contract`), and the deploy surfaces it keeps

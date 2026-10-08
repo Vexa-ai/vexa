@@ -167,7 +167,7 @@
     {
       "key": "VEXA_MAIL_SMTP_HOST",
       "class": "capability",
-      "description": "Unset = Gmail SMTP over SSL; set = a plain host (the mail double).",
+      "description": "Unset = Gmail SMTP over SSL; set = the deployment's mail relay, shared with the terminal's sign-in mail: plain, implicit TLS with VEXA_MAIL_SMTP_SECURE, AUTH LOGIN with VEXA_MAIL_SMTP_USER + VEXA_MAIL_SMTP_PASSWORD (the mail double in a rig).",
       "capability": "mail_double",
       "targets": [
         "compose"
@@ -178,6 +178,43 @@
       "class": "defaulted",
       "description": "The port for a set VEXA_MAIL_SMTP_HOST.",
       "default": "25",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_MAIL_SMTP_SECURE",
+      "class": "defaulted",
+      "description": "1 = implicit TLS to a set VEXA_MAIL_SMTP_HOST (a provider's :465 endpoint). The relay keys are one family for every sender of the deployment: the terminal's sign-in mail reads the same ones.",
+      "default": "0",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_MAIL_SMTP_TLS_INSECURE",
+      "class": "defaulted",
+      "description": "1 = skip the relay's certificate check under VEXA_MAIL_SMTP_SECURE. Development only.",
+      "default": "0",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_MAIL_SMTP_USER",
+      "class": "defaulted",
+      "description": "AUTH LOGIN user for a set relay; used only together with VEXA_MAIL_SMTP_PASSWORD.",
+      "default": "",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_MAIL_SMTP_PASSWORD",
+      "class": "defaulted",
+      "description": "AUTH LOGIN password for a set relay; used only together with VEXA_MAIL_SMTP_USER.",
+      "default": "",
+      "secret": true,
       "targets": [
         "compose"
       ]

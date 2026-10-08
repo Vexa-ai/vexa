@@ -1145,7 +1145,50 @@ const CONFIG_ADOPTED = [
     scan: ["core/agent/services/credential-broker/src"],
     compose: "credential-broker", helm: ["deployment-credential-broker.yaml"], lite: null,
   },
+  {
+    // THE TERMINAL, ADOPTED BY FAMILY. It is TypeScript, so there is no vendored Python preflight to
+    // compare and its reads are scanned as `process.env.KEY`. And it is adopted for the key families
+    // named in `families` only: checks 4 and 5 look at keys in those families and nowhere else, so
+    // a family is held on compose, Helm and Lite in both directions while the rest of the terminal's
+    // environment stays the backlog it was (CONFIG_LITE_UNADOPTED). Widening the adoption is adding a
+    // family here and its keys to the declaration. The sign-in mail family came first: it was a
+    // second, unprefixed SMTP family next to flows' declared one, pinned only by a one-off test.
+    service: "terminal",
+    decl: "clients/terminal/config.v1.json",
+    preflight: null,
+    scan: [], scanTs: ["clients/terminal/src", "clients/terminal/server.mjs"],
+    families: ["VEXA_MAIL_SMTP_"],
+    compose: "terminal", helm: ["deployment-terminal.yaml"], lite: "terminal",
+  },
 ];
+
+// TypeScript env reads (the terminal): `process.env.KEY` and `process.env["KEY"]`.
+const CONFIG_READ_RES_TS = [
+  /process\.env\.([A-Z][A-Z0-9_]*)/g,
+  /process\.env\[\s*["'`]([A-Z][A-Z0-9_]*)["'`]\s*\]/g,
+];
+function scanTsEnvReads(paths) {
+  const found = new Map();
+  const visit = (p) => {
+    let st; try { st = statSync(p); } catch { return; }
+    if (st.isDirectory()) {
+      for (const name of readdirSync(p)) {
+        if (skippable(name) || name === "__tests__") continue;
+        visit(join(p, name));
+      }
+      return;
+    }
+    const name = p.split("/").pop();
+    if (!/\.(ts|tsx|mjs|js)$/.test(name) || /\.(test|spec)\.[cm]?[jt]sx?$/.test(name)) return;
+    const text = readFileSync(p, "utf8");
+    for (const re of CONFIG_READ_RES_TS) {
+      re.lastIndex = 0;
+      for (const m of text.matchAll(re)) if (!found.has(m[1])) found.set(m[1], rel(p));
+    }
+  };
+  for (const d of paths) if (existsSync(join(ROOT, d))) visit(join(ROOT, d));
+  return found;
+}
 
 // docker-compose.yml is parsed line-wise (no YAML dep): a service block runs from `  name:` to the
 // next 2-space key; its `environment:` list items are `- KEY=…`; `env_file:` marks .env-fed services.
@@ -1245,8 +1288,8 @@ function gateConfigContract() {
     // 1. schema conformance (the contract's own validator — same oracle as gate:schema)
     try { execFileSync("node", [join(CONFIG_CONTRACT_DIR, "validate.mjs"), "--check", "--file", declPath], { stdio: "pipe" }); }
     catch (e) { errs.push(`${svc.service}: declaration does not conform:\n${errText(e).slice(-800)}`); continue; }
-    // 2. the vendored preflight is the canonical one, byte for byte
-    if (!existsSync(join(ROOT, svc.preflight)) || readFileSync(join(ROOT, svc.preflight), "utf8") !== canonical)
+    // 2. the vendored preflight is the canonical one, byte for byte (a TypeScript service has none)
+    if (svc.preflight !== null && (!existsSync(join(ROOT, svc.preflight)) || readFileSync(join(ROOT, svc.preflight), "utf8") !== canonical))
       errs.push(`${svc.service}: ${svc.preflight} is missing or has drifted from deploy/contracts/config.v1/preflight.py (vendor it VERBATIM)`);
     const decl = JSON.parse(readFileSync(declPath, "utf8"));
     const declared = new Set((decl.keys || []).map((k) => k.key));
@@ -1268,17 +1311,20 @@ function gateConfigContract() {
       if (targets.includes("lite") && !lite.has(k.key) && !entrypointExports.has(k.key))
         errs.push(`${svc.service}: ${k.key} declared for lite but absent from [program:${svc.lite}] env and entrypoint.sh exports`);
     }
-    // 4. surfaces → declaration (explicit entries only; env_file feeds the whole .env by design)
+    // 4. surfaces → declaration (explicit entries only; env_file feeds the whole .env by design).
+    //    A service adopted by family is held to its families only.
+    const inScope = (key) => !svc.families || svc.families.some((f) => key.startsWith(f));
     const surfaceSets = [["compose", compose.keys], ["helm", helm], ["lite", lite]];
     for (const [surface, keys] of surfaceSets) {
       for (const key of keys) {
-        if (!declared.has(key) && !surfaceOnly.has(key) && !CONFIG_SURFACE_ALLOW.has(key))
+        if (inScope(key) && !declared.has(key) && !surfaceOnly.has(key) && !CONFIG_SURFACE_ALLOW.has(key))
           errs.push(`${svc.service}: ${surface} sets ${key} but the declaration does not carry it (declare it, or list it in surface_only with a reason)`);
       }
     }
-    // 5. undeclared literal env reads in the service's source
-    for (const [key, where] of scanEnvReads(svc.scan)) {
-      if (!declared.has(key) && !CONFIG_SURFACE_ALLOW.has(key))
+    // 5. undeclared literal env reads in the service's source (Python, and TypeScript for the terminal)
+    const reads = new Map([...scanEnvReads(svc.scan), ...(svc.scanTs ? scanTsEnvReads(svc.scanTs) : [])]);
+    for (const [key, where] of reads) {
+      if (inScope(key) && !declared.has(key) && !CONFIG_SURFACE_ALLOW.has(key))
         errs.push(`${svc.service}: undeclared env read ${key} at ${where} — add it to ${svc.decl}`);
     }
     // 6. publish edges → the carrier census (one producing domain per carrier)

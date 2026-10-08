@@ -42,6 +42,15 @@ export VEXA_SIGNIN_ALLOW="${VEXA_SIGNIN_ALLOW:-}"
 # The administrators, comma-separated full addresses (admin-api reads it; the terminal only asks).
 # Naming them closes the admin claim — set it whenever the terminal is reachable from outside.
 export VEXA_ADMIN_EMAILS="${VEXA_ADMIN_EMAILS:-}"
+# The mail relay the terminal sends the emailed sign-in link through — the deployment's
+# VEXA_MAIL_SMTP_* family (see deploy/compose/.env.example). Empty host: no link is delivered.
+export VEXA_MAIL_SMTP_HOST="${VEXA_MAIL_SMTP_HOST:-}"
+export VEXA_MAIL_SMTP_PORT="${VEXA_MAIL_SMTP_PORT:-}"
+export VEXA_MAIL_SMTP_FROM="${VEXA_MAIL_SMTP_FROM:-}"
+export VEXA_MAIL_SMTP_USER="${VEXA_MAIL_SMTP_USER:-}"
+export VEXA_MAIL_SMTP_PASSWORD="${VEXA_MAIL_SMTP_PASSWORD:-}"
+export VEXA_MAIL_SMTP_SECURE="${VEXA_MAIL_SMTP_SECURE:-}"
+export VEXA_MAIL_SMTP_TLS_INSECURE="${VEXA_MAIL_SMTP_TLS_INSECURE:-}"
 # A chat turn continues past its tool-call budget into a fresh window, at most this many times
 # (agent-api validates both and stamps them into every worker; see deploy/compose/.env.example).
 export VEXA_AGENT_AUTO_CONTINUE_CHAT="${VEXA_AGENT_AUTO_CONTINUE_CHAT:-1}"

@@ -163,8 +163,15 @@ DECLARED: dict[str, tuple[str, object, str]] = {
         "below): the deploy surface feeds it from a secret store, the service never reads one. "
         "Required WITHIN the capability, not at boot: `mailbox` is `all` mode, so a set address "
         "with no password is misconfigured rather than optional."),
-    "VEXA_MAIL_SMTP_HOST": ("capability", None, "unset = Gmail SMTP over SSL; set = a plain host (the mail double)."),
+    # THE DEPLOYMENT'S MAIL RELAY is one family of keys for every sender: the terminal mails its
+    # sign-in links through the same VEXA_MAIL_SMTP_* (clients/terminal/config.v1.json), so a relay
+    # an operator configures once has to work for both — TLS and AUTH included, not only plain.
+    "VEXA_MAIL_SMTP_HOST": ("capability", None, "unset = Gmail SMTP over SSL; set = the deployment's relay (plain, or TLS with _SECURE; AUTH with _USER + _PASSWORD) — the mail double in a rig."),
     "VEXA_MAIL_SMTP_PORT": ("defaulted", "25", "the port for a set VEXA_MAIL_SMTP_HOST."),
+    "VEXA_MAIL_SMTP_SECURE": ("defaulted", "0", "1 = implicit TLS to a set relay (a provider's :465)."),
+    "VEXA_MAIL_SMTP_TLS_INSECURE": ("defaulted", "0", "1 = skip the relay's certificate check under _SECURE; development only."),
+    "VEXA_MAIL_SMTP_USER": ("defaulted", "", "AUTH LOGIN user for a set relay; used only with VEXA_MAIL_SMTP_PASSWORD."),
+    "VEXA_MAIL_SMTP_PASSWORD": ("defaulted", "", "AUTH LOGIN password for a set relay, a P14 SECRET; used only with VEXA_MAIL_SMTP_USER."),
     "VEXA_MAILPIT_URL": ("defaulted", "http://127.0.0.1:8025", "mailpit's HTTP base, when the inbox is mailpit."),
     "VEXA_MAILPIT_LOOKBACK_S": ("defaulted", "300", "re-scan window behind the mailpit watermark."),
     "VEXA_NOTIFY_CHANNEL": ("defaulted", "smtp",
@@ -264,12 +271,13 @@ DECLARED: dict[str, tuple[str, object, str]] = {
 SECRETS = frozenset({
     "INTERNAL_API_SECRET", "VEXA_INTERNAL_SECRET", "VEXA_INTERNAL_API_SECRET",
     "VEXA_FLOWS_ADMIN_KEY", "VEXA_FLOWS_API_KEY", "VEXA_FLOWS_TIMELINE_KEY",
-    "VEXA_MAIL_APP_PASSWORD",
+    "VEXA_MAIL_APP_PASSWORD", "VEXA_MAIL_SMTP_PASSWORD",
 })
 
 #: The mail capability's keys, in one place so a half-declared control is visible as one.
 MAIL_KEYS = ("VEXA_MAIL_ADDR", "VEXA_MAIL_APP_PASSWORD", "VEXA_MAIL_SMTP_HOST",
-             "VEXA_MAIL_SMTP_PORT")
+             "VEXA_MAIL_SMTP_PORT", "VEXA_MAIL_SMTP_SECURE", "VEXA_MAIL_SMTP_TLS_INSECURE",
+             "VEXA_MAIL_SMTP_USER", "VEXA_MAIL_SMTP_PASSWORD")
 
 
 def _decl(name: str) -> tuple[str, object, str]:
