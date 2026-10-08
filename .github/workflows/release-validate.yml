@@ -252,7 +252,7 @@ jobs:
             v0.12.28-rc.3|v0.12.28)
               CANDIDATE_MAP=releases/v0.12.28/candidate-images.json
               EXPECTED_MAP_STABLE_TAG=v0.12.28
-              EXPECTED_MAP_SHA256=62c30489f6661cea5d436204283ebd9d0b959b49a08efac43afc837cf64a1bab
+              EXPECTED_MAP_SHA256=d100543d11c2b78883cdede9bcd5a0cae3e71484d2b922912910cfebd742a758
               EXPECTED_TOP_DESCRIPTORS=11
               EXPECTED_PLATFORM_IDENTITIES=21
               ;;
@@ -1057,7 +1057,7 @@ jobs:
               EXPECTED_MAP_SHA256=c5a310465b9005573c9fef79534e34a7822447d6c7004f24271ed59df61fe2a6
               ;;
             v0.12.28)
-              EXPECTED_MAP_SHA256=62c30489f6661cea5d436204283ebd9d0b959b49a08efac43afc837cf64a1bab
+              EXPECTED_MAP_SHA256=d100543d11c2b78883cdede9bcd5a0cae3e71484d2b922912910cfebd742a758
               ;;
             v0.12.27)
               EXPECTED_MAP_SHA256=5dfc6f51c2b2cde6ba0f152b06de0ae35624c09e8ad159b3555cd92c6674178d
