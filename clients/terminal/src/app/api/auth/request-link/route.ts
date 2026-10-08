@@ -16,8 +16,8 @@
  *  both run AFTER the response is written (`../linkDelivery.ts`), so a refused address does not answer
  *  faster than an allowed one by the length of an SMTP round-trip. Nothing about the account, the
  *  list, or the mail transport's health may be inferred from this response — refusals and delivery
- *  failures are logged server-side instead. The one exception is a MISCONFIGURED instance (no
- *  NEXTAUTH_SECRET, so no token can be signed at all): that is a 503, because pretending to have
+ *  failures are logged server-side instead. The one exception is a MISCONFIGURED instance (no usable
+ *  signing secret, or no configured public URL to build the link from): that is a 503, because pretending to have
  *  sent a link nobody can ever receive would hide a broken deploy behind a security property it does
  *  not have — and it is the same 503 for every address.
  *
@@ -34,15 +34,21 @@ export const fetchCache = "force-no-store";
 const NO_STORE = { "Cache-Control": "no-store, no-cache, must-revalidate" } as const;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-/** Where the link points. Explicit env wins (the container knows its public URL; the request's own
- *  Host is whatever a proxy passed through), then the forwarded/Host headers as a last resort. */
-function baseUrl(request: NextRequest): string {
-  const configured = process.env.NEXTAUTH_URL || process.env.TERMINAL_URL || "";
-  if (configured) return configured.replace(/\/$/, "");
-  const h = request.headers;
-  const proto = h.get("x-forwarded-proto") || "http";
-  const host = h.get("x-forwarded-host") || h.get("host") || "localhost:3000";
-  return `${proto}://${host}`;
+/** Where the link points: the CONFIGURED public URL (`NEXTAUTH_URL`, else `TERMINAL_URL`), and nothing
+ *  else. Never the request's Host or X-Forwarded-* headers — whoever asks for a link can set those,
+ *  and the link goes to somebody else's mailbox. A value that is not a plain absolute http(s) URL
+ *  (no credentials) counts as unset. Null means the emailed door is not configured. */
+function baseUrl(): string | null {
+  const configured = (process.env.NEXTAUTH_URL || process.env.TERMINAL_URL || "").trim();
+  if (!configured) return null;
+  let url: URL;
+  try {
+    url = new URL(configured);
+  } catch {
+    return null;
+  }
+  if ((url.protocol !== "https:" && url.protocol !== "http:") || !url.hostname || url.username || url.password) return null;
+  return `${url.origin}${url.pathname}`.replace(/\/+$/, "");
 }
 
 export async function POST(request: NextRequest) {
@@ -65,6 +71,11 @@ export async function POST(request: NextRequest) {
   // Minted for every well-formed address, admitted or not: whether this can succeed at all is a fact
   // about the instance, not about the address, and answering it the same way for everybody is what
   // keeps the 503 below from becoming an oracle.
+  const base = baseUrl();
+  if (!base) {
+    console.error("[terminal-auth] magic link refused: no public URL configured (NEXTAUTH_URL or TERMINAL_URL)");
+    return NextResponse.json({ error: "Email sign-in is not configured on this instance." }, { status: 503, headers: NO_STORE });
+  }
   const minted = mintMagicToken(normalized);
   if (!minted.ok) {
     console.error(`[terminal-auth] magic link refused: ${minted.error}`);
@@ -72,7 +83,7 @@ export async function POST(request: NextRequest) {
   }
 
   const target = safeNext(typeof next === "string" ? next : null);
-  const url = `${baseUrl(request)}/api/auth/redeem?t=${encodeURIComponent(minted.token)}&next=${encodeURIComponent(target)}`;
+  const url = `${base}/api/auth/redeem?t=${encodeURIComponent(minted.token)}&next=${encodeURIComponent(target)}`;
   const minutes = Math.round(ttlSeconds() / 60);
 
   // Admission and the send run AFTER this response (../linkDelivery.ts) — see the header.

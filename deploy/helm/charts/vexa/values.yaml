@@ -444,7 +444,8 @@ terminal:
     port: 3000
     nodePort: ""
   # External origin once an ingress/LB fronts the terminal (sets NEXTAUTH_URL/TERMINAL_URL for cookie
-  # security + OAuth callbacks). Empty for cluster-internal / port-forward access.
+  # security, OAuth callbacks, and the emailed sign-in link, which is built only from it — empty, the
+  # terminal sends no link). Empty for cluster-internal / port-forward access.
   publicUrl: ""
   resources:
     requests: { cpu: 100m, memory: 256Mi }

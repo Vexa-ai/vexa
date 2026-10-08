@@ -1133,7 +1133,8 @@ services:
       # NEXTAUTH_SECRET). Unset, the link key is derived from NEXTAUTH_SECRET.
       - MAGIC_LINK_SECRET=${MAGIC_LINK_SECRET:-}
       # Public origin when self-hosting behind a domain/reverse-proxy (e.g. https://vexa.example.com).
-      # Empty by default (localhost). Setting an https:// value also flips auth cookies to Secure.
+      # The emailed sign-in link is built ONLY from it (never from request headers): empty, the
+      # terminal sends no link. Setting an https:// value also flips auth cookies to Secure.
       - NEXTAUTH_URL=${NEXTAUTH_URL:-}
       # OAuth login providers (NextAuth). Each provider self-gates on its creds: set BOTH the id and
       # secret to expose that sign-in button on the login page; leave empty to hide it (the dev

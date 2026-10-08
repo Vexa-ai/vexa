@@ -136,7 +136,8 @@ Now bots transcribe end-to-end: **bot → transcription service → segments →
 
 `make all` binds every service to `127.0.0.1` (loopback only). To expose the **terminal** at a public
 hostname, put a TLS-terminating reverse proxy in front of the terminal port (`TERMINAL_PORT`, default
-`13000`) and tell the terminal its public origin so auth cookies and OAuth callbacks are correct:
+`13000`) and tell the terminal its public origin so auth cookies, OAuth callbacks and emailed sign-in
+links are correct (the link is built only from `NEXTAUTH_URL`; without it the terminal sends none):
 
 ```bash
 # deploy/compose/.env

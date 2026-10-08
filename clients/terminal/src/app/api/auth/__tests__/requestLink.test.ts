@@ -91,13 +91,51 @@ describe("the link that goes out", () => {
     expect(sentLink().url.origin).toBe("https://terminal.test");
   });
 
-  it("falls back to the forwarded host when nothing is configured", async () => {
+  it("ignores forwarded host headers when a public URL is configured", async () => {
+    await requestLink(
+      makeReq({ email: "someone@example.com" }, { host: "evil.example", "x-forwarded-host": "evil.example", "x-forwarded-proto": "http" }),
+    );
+    expect(sentLink().url.origin).toBe("https://terminal.test");
+  });
+
+  it("uses TERMINAL_URL when NEXTAUTH_URL is unset", async () => {
+    vi.stubEnv("NEXTAUTH_URL", "");
+    vi.stubEnv("TERMINAL_URL", "https://vexa.example.com/");
+    await requestLink(makeReq({ email: "someone@example.com" }));
+    expect(sentLink().url.origin).toBe("https://vexa.example.com");
+  });
+});
+
+describe("the link is built only from a configured public URL", () => {
+  it("refuses to send — 503, nothing mailed — when no public URL is configured, whatever the headers say", async () => {
     vi.stubEnv("NEXTAUTH_URL", "");
     vi.stubEnv("TERMINAL_URL", "");
-    await requestLink(
+    const res = await requestLink(
       makeReq({ email: "someone@example.com" }, { host: "internal:3000", "x-forwarded-host": "app.dev.vexa.ai", "x-forwarded-proto": "https" }),
     );
-    expect(sentLink().url.origin).toBe("https://app.dev.vexa.ai");
+    expect(res.status).toBe(503);
+    expect(sendMail).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it.each(["terminal.test", "javascript:alert(1)", "ftp://terminal.test", "https://user:pw@terminal.test", "https://"])(
+    "refuses a configured public URL that is not a plain http(s) origin (%s)",
+    async (bad) => {
+      vi.stubEnv("NEXTAUTH_URL", bad);
+      vi.stubEnv("TERMINAL_URL", "");
+      const res = await requestLink(makeReq({ email: "someone@example.com" }));
+      expect(res.status).toBe(503);
+      expect(sendMail).not.toHaveBeenCalled();
+    },
+  );
+
+  it("answers the same 503 for every address", async () => {
+    vi.stubEnv("NEXTAUTH_URL", "");
+    vi.stubEnv("TERMINAL_URL", "");
+    const a = await requestLink(makeReq({ email: "known@example.com" }));
+    const b = await requestLink(makeReq({ email: "unknown@example.com" }));
+    expect([a.status, b.status]).toEqual([503, 503]);
+    expect(await a.json()).toEqual(await b.json());
   });
 });
 

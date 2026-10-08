@@ -11,7 +11,9 @@
   logged server-side). The admission question and the send run after the response
   (`../linkDelivery.ts`), so the answer takes the same time either way.
 - `400` for a missing/malformed address, `503` when the instance has no usable signing secret
-  (`../authSecret.mjs`) and therefore cannot sign anything.
+  (`../authSecret.mjs`) or no configured public URL, the same for every address.
+- The link's origin is the configured public URL (`NEXTAUTH_URL`, else `TERMINAL_URL`; a plain
+  absolute http(s) URL), never the request's `Host` or `X-Forwarded-*` headers.
 - `next` is reduced to a site-relative path (`safeNext`) BEFORE it is written into the mail.
 - Creates nothing and mints no session — that happens at `../redeem`, after the recipient proves
   they hold the mailbox.
