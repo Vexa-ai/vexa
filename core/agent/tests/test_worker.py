@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import pathlib
 
-from llm.claude_code import ClaudeCodeHarness, _link_skills_into_workspace
+from llm.claude_code import ClaudeCodeHarness
 from worker.worker import serve
 
 
@@ -184,60 +184,6 @@ def test_midturn_message_uses_the_active_harness_steering_seam():
 # durable envelope, and the agents/meeting.md config knobs. All of it exercised the in-product
 # inference pipeline, which is gone: the product runs no model calls of its own beside the
 # agent, and a meeting reaches it over the MCP.
-
-
-# ── workspace skills: governed skills/ symlinked into .claude/skills ──────────────────────────────
-
-def test_link_skills_creates_dir_and_symlink(tmp_path):
-    """Creates skills/ and points .claude/skills at it."""
-    _link_skills_into_workspace(tmp_path)
-    skills = tmp_path / "skills"
-    link = tmp_path / ".claude" / "skills"
-    assert skills.is_dir()
-    assert link.is_symlink()
-    assert pathlib.Path(link.readlink()) == skills
-
-
-def test_link_skills_idempotent(tmp_path):
-    """Running twice leaves a single correct symlink; an existing skill file survives."""
-    (tmp_path / "skills" / "demo").mkdir(parents=True)
-    (tmp_path / "skills" / "demo" / "SKILL.md").write_text("x")
-    _link_skills_into_workspace(tmp_path)
-    _link_skills_into_workspace(tmp_path)
-    link = tmp_path / ".claude" / "skills"
-    assert link.is_symlink()
-    assert (link / "demo" / "SKILL.md").read_text() == "x"
-
-
-def test_link_skills_does_not_clobber_real_skills_dir(tmp_path):
-    """A pre-existing real skills/ dir + its files are preserved, not replaced."""
-    (tmp_path / "skills").mkdir()
-    (tmp_path / "skills" / "keep.md").write_text("keep")
-    _link_skills_into_workspace(tmp_path)
-    assert (tmp_path / "skills" / "keep.md").read_text() == "keep"
-
-
-def test_link_skills_corrects_wrong_existing_symlink(tmp_path):
-    """A stale .claude/skills symlink pointing elsewhere is repointed at skills/."""
-    wrong = tmp_path / "elsewhere"
-    wrong.mkdir()
-    claude = tmp_path / ".claude"
-    claude.mkdir()
-    (claude / "skills").symlink_to(wrong, target_is_directory=True)
-    _link_skills_into_workspace(tmp_path)
-    link = claude / "skills"
-    assert link.is_symlink()
-    assert pathlib.Path(link.readlink()) == tmp_path / "skills"
-
-
-def test_link_skills_keeps_real_claude_skills_dir(tmp_path):
-    """If .claude/skills is a real dir (not a symlink), leave it untouched."""
-    (tmp_path / ".claude" / "skills").mkdir(parents=True)
-    (tmp_path / ".claude" / "skills" / "x.md").write_text("real")
-    _link_skills_into_workspace(tmp_path)
-    link = tmp_path / ".claude" / "skills"
-    assert not link.is_symlink() and link.is_dir()
-    assert (link / "x.md").read_text() == "real"
 
 
 def test_seed_claude_md_defers_copilot_steering_to_meeting_md():

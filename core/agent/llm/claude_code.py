@@ -438,6 +438,10 @@ def parse_stream_json(lines: Iterable[str]) -> Iterator[dict]:
         close_event_stream(lines)
 
 
+#: The settings every launch adds on top of the user scope: no hooks run in the worker.
+NO_HOOKS_SETTINGS = json.dumps({"disableAllHooks": True})
+
+
 def build_argv(
     prompt: str,
     *,
@@ -468,12 +472,16 @@ def build_argv(
     environment, permission rules or helper commands to the turn. Only the user scope — the
     worker's own per-subject HOME — is read, and the turn's capabilities come from this argv alone.
 
+    `--settings {"disableAllHooks": true}` — ALWAYS. The worker runs no hooks of its own, so no hook
+    may run in it, from any settings scope or plugin. The worker images also carry the same key in
+    the managed settings file, the scope `--setting-sources` cannot turn off.
+
     `--add-dir <workspace>` — the cwd again, as an additional directory, so its `CLAUDE.md` (the
     workspace's governance root, which every turn must read) still loads as project memory once
     project settings are off. The CLI reads `CLAUDE.md` from an added directory only with
     `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1`, which `_cli_env` sets; it does not read an
-    added directory's `.claude/` settings. Workspace skills reach the CLI through the user scope
-    instead (`_link_skills_into_home`).
+    added directory's `.claude/` settings or skills. The only skills the CLI sees are the platform's
+    governed ones, linked into the user scope (`_link_governed_skills_into_home`).
     """
     if stdin_mode:
         # prompt travels via stdin (stream-json) so the pipe stays open for mid-turn injection
@@ -482,7 +490,7 @@ def build_argv(
     else:
         argv = ["claude", "-p", prompt, "--output-format", "stream-json", "--verbose",
                 "--include-partial-messages", "--permission-mode", "acceptEdits"]
-    argv += ["--setting-sources", "user"]
+    argv += ["--setting-sources", "user", "--settings", NO_HOOKS_SETTINGS]
     if workspace:
         argv += ["--add-dir", workspace]
     tools = list(allowed_tools)
@@ -665,56 +673,33 @@ def _link_chat_into_workspace(work: Path) -> None:
         pass  # best-effort; a fresh turn still works, just without cross-turn resume
 
 
-def _link_skills_into_workspace(work: Path) -> None:
-    """Expose the user's GOVERNED skills to the CLI. Skills live as VISIBLE, git-tracked files under the
-    workspace's ``skills/<name>/SKILL.md`` (the ``skills/`` tree mirrors the ``agents/`` config home —
-    not a dotfile, so it shows in the Files surface and is committed). claude-code auto-discovers skills
-    from ``.claude/skills``, which is governance-excluded; so we point ``.claude/skills`` at the real
-    ``skills/`` dir via a symlink. The real files stay durable + committed; the CLI finds them through
-    the link. Idempotent: create ``skills/`` if absent, then (re)point a stale/wrong symlink — but never
-    clobber a real ``.claude/skills`` directory."""
-    skills = work / "skills"
-    link = work / ".claude" / "skills"
-    try:
-        # The two mkdirs are INSIDE the guard on purpose. This function is documented best-effort —
-        # "the turn still works, just without workspace skills" — but the directory creation used to
-        # sit outside it, so a cwd bound READ-ONLY (the post-meeting room run, where the ruling is
-        # that the turn writes no desk) raised an uncaught OSError and killed the turn during
-        # PREPARE, before a single token. On a ro cwd whose seed already carries `skills/` both
-        # mkdirs are no-ops and the link is found already correct; on one that does not, we now skip
-        # exactly as the docstring always promised.
-        skills.mkdir(parents=True, exist_ok=True)
-        link.parent.mkdir(parents=True, exist_ok=True)
-        if link.is_symlink():
-            if os.readlink(link) == str(skills):
-                return
-            link.unlink()
-        elif link.exists():
-            return  # a real dir already there — don't clobber
-        link.symlink_to(skills, target_is_directory=True)
-    except OSError:
-        pass  # best-effort; the turn still works, just without workspace skills
+def _governed_skills_dir() -> Optional[Path]:
+    """The platform's governed skills: the ``skills/`` of the workspace seed this deployment ships
+    (``shared.seeding.resolve_seed_dir`` — read-only in the image). None when the seed has none."""
+    from shared.seeding import resolve_seed_dir
+
+    skills = resolve_seed_dir() / "skills"
+    return skills if skills.is_dir() else None
 
 
-def _link_skills_into_home(work: Path) -> None:
-    """Expose the workspace's governed skills through the USER scope, the only settings scope the
-    CLI reads (``build_argv`` passes ``--setting-sources user``, which also stops it discovering
-    ``<cwd>/.claude/skills``). ``~/.claude/skills`` is pointed at ``<work>/skills``.
+def _link_governed_skills_into_home() -> None:
+    """Expose the platform's GOVERNED skills through the USER scope, the only settings scope the CLI
+    reads (``build_argv`` passes ``--setting-sources user``). ``~/.claude/skills`` is pointed at the
+    seed's ``skills/`` and never at a workspace's own ``skills/``: a workspace's files may come from
+    an imported repository, and a skill can carry hooks and tool grants of its own. With no governed
+    skills, a link left by an earlier turn is removed.
 
     SAFETY, exactly as ``_link_chat_into_workspace``: only the disposable per-subject HOME may be
     rewritten. Outside a worker (a host test run, a developer shell) ``~/.claude/skills`` holds the
     developer's own skills, so an existing directory is replaced only when EMPTY (``rmdir`` cannot
     destroy content); a non-empty one, or any other object, is left alone and the link is skipped —
-    the turn still works, without workspace skills. Best-effort: never raises."""
-    skills = work / "skills"
+    the turn still works, without skills. Best-effort: never raises."""
     home_claude = Path(os.environ.get("HOME", "/root")) / ".claude"
     link = home_claude / "skills"
     try:
-        if not skills.is_dir():
-            return
-        home_claude.mkdir(parents=True, exist_ok=True)
+        governed = _governed_skills_dir()
         if link.is_symlink():
-            if os.readlink(link) == str(skills):
+            if governed is not None and os.readlink(link) == str(governed):
                 return
             link.unlink()
         elif link.is_dir():
@@ -723,7 +708,10 @@ def _link_skills_into_home(work: Path) -> None:
             link.rmdir()
         elif link.exists():
             return
-        link.symlink_to(skills, target_is_directory=True)
+        if governed is None:
+            return
+        home_claude.mkdir(parents=True, exist_ok=True)
+        link.symlink_to(governed, target_is_directory=True)
     except OSError:
         pass
 
@@ -753,10 +741,9 @@ class ClaudeCodeHarness:
     def prepare(self, work: Path, chat_root: Optional[Path] = None) -> None:
         # chats are saved to / resumed from the PRIVATE continuity root (the _system mount when the
         # dispatch declares one — the flat model can make the cwd a SHARED workspace, and chats are
-        # private), not ~/.claude; skills stay cwd-scoped (.claude/skills → <work>/skills)
+        # private), not ~/.claude; skills are the platform's governed set, never the workspace's own
         _link_chat_into_workspace(chat_root or work)
-        _link_skills_into_workspace(work)
-        _link_skills_into_home(work)
+        _link_governed_skills_into_home()
 
     def transcript_bytes(self, work: Path, session_id: str) -> int:
         total = 0

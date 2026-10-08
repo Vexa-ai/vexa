@@ -131,9 +131,9 @@ def test_build_argv_effort_pin():
 # ── settings scope: the workspace's own .claude/ settings never load ─────────
 # The cwd is a workspace whose files may come from an imported repository. Its .claude/settings.json
 # and .claude/settings.local.json must not add hooks, env or permission rules to the turn; only the
-# worker's user scope is read. CLAUDE.md (the governance root) and the workspace's skills still load —
-# CLAUDE.md through --add-dir + CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD, skills through
-# ~/.claude/skills.
+# worker's user scope is read, and no hook runs at all. CLAUDE.md (the governance root) still loads,
+# through --add-dir + CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD; the only skills are the
+# platform's governed ones, linked at ~/.claude/skills.
 
 def test_build_argv_reads_only_user_settings():
     for argv in (build_argv("hi"), build_argv("", stdin_mode=True)):
@@ -192,32 +192,102 @@ def test_default_runner_launches_with_the_cli_env(monkeypatch):
     assert captured["env"]["CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD"] == "1"
 
 
-def test_workspace_skills_reach_the_cli_through_the_user_scope(tmp_path, monkeypatch):
-    home, work = tmp_path / "home", tmp_path / "ws"
-    (work / "skills" / "brief").mkdir(parents=True)
+def test_build_argv_turns_every_hook_off():
+    """The worker runs no hooks of its own, so none may run: `--settings` carries disableAllHooks on
+    every launch, ahead of the variadic --add-dir."""
+    for argv in (build_argv("hi", workspace="/ws/desk"), build_argv("", stdin_mode=True, workspace="/ws/desk")):
+        settings = json.loads(argv[argv.index("--settings") + 1])
+        assert settings == {"disableAllHooks": True}
+        assert argv.index("--settings") < argv.index("--add-dir")
+
+
+def _governed_seed(tmp_path: Path, monkeypatch) -> Path:
+    seed = tmp_path / "seed"
+    (seed / "skills" / "scheduling").mkdir(parents=True)
+    (seed / "skills" / "scheduling" / "SKILL.md").write_text("governed")
+    monkeypatch.setenv("VEXA_WORKSPACE_SEED_DIR", str(seed))
+    return seed
+
+
+def _imported_workspace(tmp_path: Path, name: str = "ws") -> Path:
+    work = tmp_path / name
+    (work / "skills" / "imported").mkdir(parents=True)
+    (work / "skills" / "imported" / "SKILL.md").write_text("from the repository")
+    return work
+
+
+def test_only_governed_skills_reach_the_user_scope(tmp_path, monkeypatch):
+    """`~/.claude/skills` points at the platform's governed skills, never at the workspace's own
+    `skills/` — an imported repository's skills do not load."""
+    seed = _governed_seed(tmp_path, monkeypatch)
+    home, work = tmp_path / "home", _imported_workspace(tmp_path)
     monkeypatch.setenv("HOME", str(home))
     ClaudeCodeHarness().prepare(work)
     link = home / ".claude" / "skills"
-    assert link.is_symlink() and link.resolve() == (work / "skills").resolve()
-    # re-pointed when the next turn runs in another workspace
-    other = tmp_path / "ws2"
-    (other / "skills").mkdir(parents=True)
-    ClaudeCodeHarness().prepare(other)
-    assert link.resolve() == (other / "skills").resolve()
+    assert link.is_symlink() and link.resolve() == (seed / "skills").resolve()
+    assert (link / "scheduling" / "SKILL.md").read_text() == "governed"
+    assert not (link / "imported").exists()
+
+
+def test_a_workspace_skills_link_from_an_earlier_turn_is_replaced(tmp_path, monkeypatch):
+    seed = _governed_seed(tmp_path, monkeypatch)
+    home, work = tmp_path / "home", _imported_workspace(tmp_path)
+    monkeypatch.setenv("HOME", str(home))
+    (home / ".claude").mkdir(parents=True)
+    (home / ".claude" / "skills").symlink_to(work / "skills", target_is_directory=True)
+    ClaudeCodeHarness().prepare(work)
+    assert (home / ".claude" / "skills").resolve() == (seed / "skills").resolve()
+
+
+def test_without_governed_skills_no_skills_link_remains(tmp_path, monkeypatch):
+    seed = tmp_path / "seed-without-skills"
+    seed.mkdir()
+    monkeypatch.setenv("VEXA_WORKSPACE_SEED_DIR", str(seed))
+    home, work = tmp_path / "home", _imported_workspace(tmp_path)
+    monkeypatch.setenv("HOME", str(home))
+    (home / ".claude").mkdir(parents=True)
+    (home / ".claude" / "skills").symlink_to(work / "skills", target_is_directory=True)
+    ClaudeCodeHarness().prepare(work)
+    link = home / ".claude" / "skills"
+    assert not link.exists() and not link.is_symlink()
+
+
+def test_prepare_does_not_link_the_workspace_skills_into_the_workspace(tmp_path, monkeypatch):
+    _governed_seed(tmp_path, monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    work = _imported_workspace(tmp_path)
+    ClaudeCodeHarness().prepare(work)
+    assert not (work / ".claude" / "skills").exists()
 
 
 def test_home_skills_link_never_replaces_real_skills(tmp_path, monkeypatch):
-    from llm.claude_code import _link_skills_into_home
+    from llm.claude_code import _link_governed_skills_into_home
 
-    home, work = tmp_path / "home", tmp_path / "ws"
-    (work / "skills").mkdir(parents=True)
+    _governed_seed(tmp_path, monkeypatch)
+    home = tmp_path / "home"
     real = home / ".claude" / "skills" / "mine"
     real.mkdir(parents=True)
     (real / "SKILL.md").write_text("keep me")
     monkeypatch.setenv("HOME", str(home))
-    _link_skills_into_home(work)
+    _link_governed_skills_into_home()
     assert not (home / ".claude" / "skills").is_symlink()
     assert (real / "SKILL.md").read_text() == "keep me"
+
+
+REPO = Path(__file__).resolve().parents[3]
+
+
+def test_the_worker_images_turn_hooks_off_and_run_a_supported_node():
+    """Both images that run Claude Code carry a managed settings file with disableAllHooks (the
+    managed scope is read whatever `--setting-sources` says), and the worker image installs the Node
+    major the pinned CLI declares (`engines.node >= 22`). Lite's base image already ships Node 22."""
+    worker = (REPO / "core" / "agent" / "worker" / "Dockerfile").read_text()
+    lite = (REPO / "deploy" / "lite" / "Dockerfile.lite").read_text()
+    for text in (worker, lite):
+        assert "/etc/claude-code/managed-settings.json" in text
+        assert '{"disableAllHooks": true}' in text
+    assert "setup_22.x" in worker and "setup_20.x" not in worker
+
 
 # ── the untrusted-subprocess env scrub (data-plane tenancy) ──────────────────
 # The model-driven harness CLI exposes a Bash tool. It must NOT inherit the worker's REDIS_URL (which

@@ -168,7 +168,12 @@ RUN chmod o+x /root
 
 # Claude Code (the agent worker's model+tooling runtime) — npm global, on PATH for every spawned worker.
 # Pinned with core/agent/worker/Dockerfile: the launch passes --setting-sources (llm/claude_code.py).
+# 2.1.293 declares engines.node >= 22; this stage's Playwright noble base ships Node 22.
 RUN npm install -g @anthropic-ai/claude-code@2.1.293
+# No hook runs in a worker, from any scope: the managed settings file is read whatever
+# --setting-sources says (the launch also passes the same key with --settings).
+RUN mkdir -p /etc/claude-code && \
+    printf '%s\n' '{"disableAllHooks": true}' > /etc/claude-code/managed-settings.json
 
 # ── Service source + the sealed contracts each loads BY PATH (layout mirrors each service image,
 #    re-rooted under /app/<service> so the import walk-up resolves the same relative tree). ────────

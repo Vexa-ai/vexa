@@ -725,17 +725,18 @@ def test_the_resolver_carries_the_group_from_meeting_api(tmp_path):
     assert any(m["role"] == "system" and m["write"] for m in mounts)
 
 
-def test_the_skills_link_survives_a_read_only_cwd(tmp_path):
-    """PREPARE used to mkdir OUTSIDE its own try/except, so a ro cwd killed the turn before a single
-    token. A room run's cwd is ro by construction, so this is now load-bearing."""
+def test_prepare_survives_a_read_only_cwd(tmp_path, monkeypatch):
+    """A room run's cwd is ro by construction, so PREPARE must write nothing into it: chats go to the
+    private continuity root and skills to the per-subject HOME."""
     import os
     import stat
-    from llm.claude_code import _link_skills_into_workspace
+    from llm.claude_code import ClaudeCodeHarness
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
     work = tmp_path / "ro-desk"
     work.mkdir()
     (work / "README.md").write_text("x")
     os.chmod(work, stat.S_IRUSR | stat.S_IXUSR)
     try:
-        _link_skills_into_workspace(work)          # must not raise
+        ClaudeCodeHarness().prepare(work, chat_root=tmp_path / "system")   # must not raise
     finally:
         os.chmod(work, stat.S_IRWXU)

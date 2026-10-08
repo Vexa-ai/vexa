@@ -64,10 +64,11 @@ uv run pytest -q        # uv manages this package's own venv/deps
   cleaned-notes stream and the `processed-notes.v1` contract, the SSE's merge of the copilot's
   out-stream, and every `VEXA_LLM_*` completion dial. The product runs no model calls of its own
   beside the agent; a meeting reaches the agent over the MCP, on a human's turn.
-- ✅ delivered — workspace skills: governed `skills/<name>/SKILL.md` (a VISIBLE, git-tracked tree,
-  seeded with one example) symlinked into `.claude/skills` per turn so the isolated worker's `claude`
-  auto-discovers them. `agents/` + `skills/` are the two per-workspace agent-extension homes. Skill
-  helper scripts run under the turn's existing `--allowedTools` grant (no separate skills gate).
+- ✅ delivered — governed skills: the platform seed's `skills/<name>/SKILL.md` (shipped in the
+  image) is linked at the worker's `~/.claude/skills` per turn so its `claude` auto-discovers them. A
+  workspace's own `skills/` is never linked: its files may come from an imported repository. No hook
+  runs in the worker (`disableAllHooks`, on the command line and in the image's managed settings).
+  Skill helper scripts run under the turn's existing `--allowedTools` grant (no separate skills gate).
 - ⬜ planned — multi-workspace (company/service tiers — a FUTURE axis beyond the single user workspace)
 - 🟡 partial — in-memory live-meeting registry (redis-backed adapter pending)
 - ⬜ planned — GET /api/meetings (proxy meeting-api + merge live registry)

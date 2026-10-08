@@ -28,12 +28,17 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # Claude Code + Codex (selectable model/tooling runtimes) and git (governance git ops). Subscription
 # credentials are bind-mounted read-only at runtime; pin Codex because app-server is a versioned protocol.
 # Pin Claude Code too: the launch passes --setting-sources (llm/claude_code.py), which 2.1.197 lacks,
-# and an unpinned global install is whatever the build cache or npm happened to hold.
+# and an unpinned global install is whatever the build cache or npm happened to hold. Node 22: the
+# pinned CLI declares engines.node >= 22.
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates curl gnupg && \
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
     apt-get install -y --no-install-recommends nodejs && \
     npm install -g @anthropic-ai/claude-code@2.1.293 @openai/codex@0.146.0 && \
     apt-get purge -y curl gnupg && apt-get autoremove -y && apt-get clean && rm -rf /var/lib/apt/lists/*
+# No hook runs in a worker, from any scope: the managed settings file is read whatever
+# --setting-sources says (the launch also passes the same key with --settings).
+RUN mkdir -p /etc/claude-code && \
+    printf '%s\n' '{"disableAllHooks": true}' > /etc/claude-code/managed-settings.json
 
 # The worker's own packages (NO control_plane): worker + llm + shared + contracts, copied to /app so
 # `PYTHONPATH=/app` resolves them as top-level imports. llm/ is the provider-agnostic ports module
