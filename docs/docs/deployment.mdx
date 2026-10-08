@@ -216,3 +216,25 @@ We have not run an install on a genuinely disconnected network, so we do not cla
 procurement review can hold us to is self-hosted with no egress, not a certified air gap. On
 **Kubernetes** the chart does not yet expose `TRANSCRIPTION_MODEL` as a value — see
 [No-egress clusters](/deployment-kubernetes#no-egress-clusters).
+
+## One-time steps after upgrading
+
+Run these once on an existing install when you move to this release. They are safe to repeat.
+
+**Clear the transcript feeds of meetings deleted earlier.** Deleting a meeting's transcript now also
+removes its live feed from Redis. Meetings deleted on an earlier release kept that feed at rest (no
+reader serves it). This sweep removes it for every deleted meeting and touches nothing else; add
+`--dry-run` first to see the counts:
+
+```bash
+# Docker Compose
+docker compose -p vexa-v012 -f deploy/compose/docker-compose.yml exec meeting-api \
+  python -m meeting_api.collector.erased_feed_sweep
+# Kubernetes (find the Deployment with: kubectl -n vexa get deploy -l app.kubernetes.io/component=meeting-api)
+kubectl -n vexa exec deploy/<meeting-api deployment> -- python -m meeting_api.collector.erased_feed_sweep
+# Vexa Lite
+docker exec -e REDIS_URL=redis://localhost:6379/0 vexa-lite \
+  /opt/venvs/meeting/bin/python -m meeting_api.collector.erased_feed_sweep
+```
+
+It prints one JSON line with the number of deleted meetings found and the keys removed.

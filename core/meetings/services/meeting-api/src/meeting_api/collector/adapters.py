@@ -273,6 +273,18 @@ class SqlAlchemyTranscriptStore:
             self._erased.add(mid)
         return erased
 
+    async def erased_meeting_ids(self) -> "list[int]":
+        """Every meeting row carrying the deletion stamp, oldest first — the operator sweep's input
+        (``erased_feed_sweep``). Served by the ``data`` GIN index."""
+        from sqlalchemy import select  # lazy: not needed for the in-memory fakes
+
+        from .models import Meeting
+
+        async with self._session_factory() as db:
+            rows = await db.execute(
+                select(Meeting.id).where(Meeting.data.has_key("artifact_deletion")).order_by(Meeting.id))
+            return [int(mid) for mid in rows.scalars().all()]
+
     async def native_for(self, meeting_id) -> "Optional[tuple[str, str]]":
         """Resolve a NUMERIC meeting_id → (native_meeting_id, platform) from the meetings table.
 

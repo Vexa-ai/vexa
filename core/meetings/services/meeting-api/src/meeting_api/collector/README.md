@@ -17,6 +17,9 @@ conformance.
 - **`ingest` / `consume_segments`** — `ingest.py`. `transcription_segments` stream → `store` →
   publish `tc:meeting:{id}:mutable`. No background loop — the caller drives it (eval `tick`). The
   always-on consumer loop is a P3 seam.
+- **`erased_feed_sweep.py`** — the one-time operator sweep
+  (`python -m meeting_api.collector.erased_feed_sweep [--dry-run]`): erases the Redis transcript keys
+  of every meeting whose transcript was deleted, the same keys the delete route erases.
 - **`ports.py`** — `TranscriptStore`, `RedisBus`, `PubSub` (Protocols; real adapters + fakes both
   satisfy them structurally).
 - **`adapters.py`** — the real SQLAlchemy-async + redis wiring (lazy imports).
