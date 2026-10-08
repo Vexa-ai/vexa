@@ -15,7 +15,9 @@ golden-locked — this module only orchestrates the IO + the JSONB bookkeeping a
 """
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
+from .media_metadata import seekable_webm
 from typing import Any, Optional
 
 from ..obs import log_event
@@ -262,7 +264,10 @@ async def finalize_master(
     # or the chunk count changed since the master was last assembled. With zero chunk objects we never
     # rebuild — an existing master is served as-is rather than assembled from nothing.
     rebuild = listed_count > 0 and ((not master_exists) or assembled_count != listed_count)
-    if rebuild:
+    normalized = False
+    duration = None
+    repair_metadata = media_format == "webm" and mf.get("seekable_version") != 1
+    if rebuild or (master_exists and repair_metadata):
         if master_exists and assembled_count is not None and listed_count > assembled_count:
             # A prior (partial) master is being superseded by chunks that arrived after it — the exact
             # #768 unfreeze. Log it so a re-freeze regression is noisy rather than silent.
@@ -272,8 +277,14 @@ async def finalize_master(
                 fields={"recording_id": recording_id, "media_type": media_type,
                         "prior_assembled_count": assembled_count, "new_count": listed_count},
             )
-        chunks = [await storage.get(k) for k in keys]
-        master_bytes = build_recording_master(chunks, media_format)
+        if rebuild:
+            chunks = [await storage.get(k) for k in keys]
+            master_bytes = build_recording_master(chunks, media_format)
+        else:
+            master_bytes = await storage.get(master_key)
+        if media_format == "webm" and master_bytes.startswith(b"\x1a\x45\xdf\xa3"):
+            master_bytes, duration = await asyncio.to_thread(seekable_webm, master_bytes)
+            normalized = True
         await storage.upload(master_key, master_bytes, content_type=_content_type(media_format))
 
     # G3 — stamp the media-file finalized ATOMICALLY (read→modify→write under one row lock), so a late
@@ -286,6 +297,10 @@ async def finalize_master(
         m = next((x for x in r.get("media_files", []) if x.get("type") == media_type), None)
         if m is None:
             return recs, None
+        if normalized:
+            m["seekable_version"] = 1
+            m["duration_seconds"] = duration
+            m["file_size_bytes"] = len(master_bytes)
         m["storage_path"] = master_key
         m["is_final"] = True
         m["assembled_chunk_count"] = listed_count

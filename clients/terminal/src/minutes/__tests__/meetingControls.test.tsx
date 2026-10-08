@@ -18,7 +18,7 @@ describe("meeting controls", () => {
     const audio = container.querySelector("audio")!;
     expect(audio.getAttribute("src")).toBe("/api/recordings/7/media/9/raw?type=audio");
     expect(audio.autoplay).toBe(false);
-    expect(audio.preload).toBe("none");
+    expect(audio.preload).toBe("metadata");
     fireEvent.click(screen.getByText("Delete meeting data"));
     expect(vi.mocked(fetch).mock.calls.filter(c => c[1]?.method === "DELETE")).toHaveLength(0);
     fireEvent.click(screen.getByText("Confirm delete"));

@@ -10,6 +10,9 @@
 # contract files must be vendored into the image alongside src/.
 FROM python:3.12-slim
 
+# Finalized WebM duration/cues; stream-copy only, no re-encoding.
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
+
 # uv via PyPI (ghcr.io is unreachable in this build env) — pinned for deterministic resolves.
 RUN pip install --no-cache-dir uv==0.9.22
 
