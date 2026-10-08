@@ -148,7 +148,9 @@ def push_with_token(work_dir: str | Path, remote_url: str, ref: str, token: str 
     Both credential flows converge here: ``GitHubVcs.push`` (brokered secret store) and the
     per-call-token workspace publish (``control_plane.workspace_publish``)."""
     work = Path(work_dir)
-    if token and "://" in remote_url:
+    # A credential rides only over https; any other URL is pushed without one (and fails loud if the
+    # remote needs it).
+    if token and remote_url.strip().lower().startswith("https://"):
         proto, rest = remote_url.split("://", 1)
         auth_url = f"{proto}://{token}@{rest}"
     else:

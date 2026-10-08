@@ -265,7 +265,7 @@ def pull_origin(ws: str | Path, *, token: Optional[str] = None, ssh_env: Optiona
     auth_url = url
     if ssh_env and _is_ssh_url(url):
         token = None            # an ssh home authenticates by key; there is nothing to embed
-    elif token and "://" in url:
+    elif token and url.strip().lower().startswith("https://"):   # a credential rides only over https
         proto, rest = url.split("://", 1)
         auth_url = f"{proto}://{token}@{rest}"
     # Fetch from the URL directly (not a persisted remote) so the credential never lands anywhere.

@@ -28,6 +28,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, Optional
+from urllib.parse import urlsplit
 
 from control_plane import deploy_keys, git_credentials, secret_store
 
@@ -82,15 +83,53 @@ def is_auth_failure(message: str) -> bool:
     return bool(_AUTH_FAILURE.search(message or ""))
 
 
+def is_https(repo_url: str) -> bool:
+    """Whether ``repo_url`` is an ``https://`` URL — the only transport a token is ever sent over."""
+    try:
+        return urlsplit((repo_url or "").strip()).scheme.lower() == "https"
+    except ValueError:
+        return False
+
+
+def saved_token_may_reach(repo_url: str) -> bool:
+    """Whether the caller's SAVED GitHub token may be sent to ``repo_url``: only ``https://github.com/…``.
+
+    The saved token is a GitHub credential, entered once in the terminal's token card; nothing else is
+    entitled to it. Any other host, any other port, ``http://``, or a URL carrying userinfo gets no
+    saved token — a person can still type a token for that one call in the terminal."""
+    try:
+        parts = urlsplit((repo_url or "").strip())
+        port = parts.port
+    except ValueError:
+        return False
+    return (parts.scheme.lower() == "https" and (parts.hostname or "").lower() == "github.com"
+            and port in (None, 443) and not parts.username and not parts.password
+            and parts.path.startswith("/") and len(parts.path) > 1)
+
+
+def _token_for(root: str | Path, repo_url: str, subject: str, explicit_token: Optional[str]) -> Optional[str]:
+    """The token one op may use for ``repo_url``: a per-call token typed in the terminal, else the
+    saved token when ``repo_url`` is ``https://github.com/…``, else none.
+
+    A typed token is the person's choice for this one call and is returned for any URL; the three
+    places a token is put on the wire (clone, pull, push) embed it only in an ``https`` URL, so it
+    never travels in cleartext."""
+    explicit = (explicit_token or "").strip()
+    if explicit:
+        return explicit
+    if not subject or not saved_token_may_reach(repo_url):
+        return None
+    return git_credentials.read_github_token(root, subject)
+
+
 @contextlib.contextmanager
 def for_workspace(root: str | Path, *, key: str, repo_url: str = "", subject: str = "",
                   explicit_token: Optional[str] = None) -> Iterator[Credential]:
     """Resolve the credential for ONE git op on the workspace whose deploy-key name is ``key``.
 
-    Deploy key for an ssh remote (the private half exists on disk only inside this ``with``), else the
-    caller's saved PAT / an explicitly-passed one, else nothing. ``explicit_token`` is the terminal's
-    per-call token field — the MCP path never supplies it."""
-    token = (explicit_token or "").strip() or (git_credentials.read_github_token(root, subject) if subject else None)
+    Deploy key for an ssh remote (the private half exists on disk only inside this ``with``), else an
+    explicitly-passed token / the caller's saved PAT (``https://github.com/`` only), else nothing. ``explicit_token`` is the terminal's per-call token field — the MCP path never supplies it."""
+    token = _token_for(root, repo_url, subject, explicit_token)
     if deploy_keys.is_ssh_url(repo_url) or not repo_url:
         with deploy_keys.ssh_env(root, key) as env:
             if env is not None:
@@ -111,7 +150,7 @@ def home_capability(root: str | Path, *, key: str, remote: Optional[str], url: O
     bits = [f"origin {url}" if (remote or "origin") == "origin" else f"{remote} {url}"]
     if deploy_keys.exists(root, key):
         bits.append("deploy key set")
-    elif subject and git_credentials.read_github_token(root, subject):
+    elif subject and saved_token_may_reach(url) and git_credentials.read_github_token(root, subject):
         bits.append("saved token")
     else:
         bits.append("no credential yet")

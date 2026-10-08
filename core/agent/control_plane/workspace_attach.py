@@ -139,9 +139,10 @@ def _slug(repo_url: str) -> str:
 
 
 def _authenticated_url(repo_url: str, token: Optional[str]) -> str:
-    """Embed ``token`` as HTTP basic-auth in an https(/http) URL so a PRIVATE repo can be cloned. SSH/scp
-    URLs (``git@host:org/repo``) and tokenless calls are returned unchanged (key-auth / public)."""
-    if not token or "://" not in repo_url:
+    """Embed ``token`` as HTTP basic-auth in an ``https`` URL so a PRIVATE repo can be cloned. SSH/scp
+    URLs (``git@host:org/repo``), tokenless calls and every non-``https`` URL are returned unchanged
+    (key-auth / public / never a credential in cleartext)."""
+    if not token or not repo_url.strip().lower().startswith("https://"):
         return repo_url
     proto, rest = repo_url.split("://", 1)
     return f"{proto}://{token}@{rest}"

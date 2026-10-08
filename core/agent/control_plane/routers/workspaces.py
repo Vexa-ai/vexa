@@ -1234,9 +1234,17 @@ def build(**d) -> APIRouter:
         or a clear error on divergence — never a force push). The token is used server-side for this
         call only and never stored; every error is token-redacted (P15)."""
         subject = subject_of(request)
-        token = (body.token or "").strip() or git_creds.read_github_token(wsr.root, subject)
+        remote_url = (body.remote_url or "").strip()
+        if remote_url and not wcreds.is_https(remote_url):
+            raise HTTPException(status_code=400, detail="publish pushes only to an https:// repository URL")
+        token = (body.token or "").strip()
+        if not token and (not remote_url or wcreds.saved_token_may_reach(remote_url)):
+            # The saved token goes only to GitHub: a repository this call creates there, or an
+            # https://github.com/ URL. Any other host needs a token typed for this call.
+            token = git_creds.read_github_token(wsr.root, subject)
         if not token:
-            raise HTTPException(status_code=400, detail="a GitHub token is required — pass one or save a reusable token")
+            raise HTTPException(status_code=400, detail="a GitHub token is required — pass one or save a reusable token "
+                                                        "(a saved token is only sent to https://github.com/)")
         try:
             result = publish_workspace(
                 wsr.root, subject,

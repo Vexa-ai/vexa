@@ -925,6 +925,11 @@ HUMAN_REGIME = "human"
 HUMAN_ONLY_VERBS = {
     "bot_say": "speaks out loud to everyone in a live meeting",
     "meeting_delete": "erases a meeting and its transcript permanently, and cannot be undone",
+    # A repository load authenticates with the person's saved git credentials (their GitHub token,
+    # or a workspace deploy key) whenever the repository asks for one, and this layer cannot know in
+    # advance whether it will. So loading a repository waits for a person in the session.
+    "workspace_attach": "loads a repository with the person's saved git credentials",
+    "workspace_import": "loads a repository with the person's saved git credentials",
 }
 
 
