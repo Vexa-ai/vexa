@@ -32,6 +32,8 @@
     "workspace_move",
     "workspace_invite",
     "workspace_membership",
+    "workspace_members",
+    "mark_global_ready",
     "entity_upsert",
     "transcript_terms",
     "open_page",

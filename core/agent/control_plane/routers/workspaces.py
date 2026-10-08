@@ -45,7 +45,7 @@ from control_plane.workspace_membership import MembershipError
 from control_plane.workspace_publish import (
     PublishError, RepoExistsError, publish_workspace, published_remote_url)
 from control_plane.workspace_purpose import read_purpose, write_purpose
-from fastapi import APIRouter, Body, File, Form, Header, HTTPException, Request, Response, UploadFile
+from fastapi import APIRouter, Body, File, Form, Header, HTTPException, Query, Request, Response, UploadFile
 from pathlib import Path
 from workspaces.shared import entities as entities_mod
 from workspaces.shared import workspace_paths as wpaths
@@ -1807,10 +1807,12 @@ def build(**d) -> APIRouter:
         except MembershipError as exc:
             raise _member_error(exc)
     @router.get("/api/workspace/members")
-    def ws_members_list(request: Request, workspace_id: str):
-        """List a workspace's members (owner/contributor). Opportunistically records the CALLER's own
-        verified email onto their member row (self-healing for members granted before emails were stored)
-        so the roster shows human labels, not opaque subject ids."""
+    def ws_members_list(request: Request, workspace_id: str = Query(
+            ..., description="the shared workspace's slug")):
+        """List a workspace's members and what each one is — owner, contributor or viewer (shown to
+        a person as reader). Readable by a contributor or owner. Opportunistically records the
+        CALLER's own verified email onto their member row (self-healing for members granted before
+        emails were stored) so the roster shows human labels, not opaque subject ids."""
         subject = subject_of(request)
         try:
             membership_mod.require_role(wsr.root, workspace_id, subject, "contributor")

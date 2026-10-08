@@ -9,6 +9,7 @@ single identifier changed.
 from __future__ import annotations
 
 from control_plane import global_layer
+from control_plane.api_shared import GlobalReadyBody
 from fastapi import APIRouter, Body, HTTPException, Request
 from fastapi.responses import JSONResponse
 from shared.git_redaction import redact as redact_secrets
@@ -101,8 +102,10 @@ def build(**d) -> APIRouter:
         return admin_panel.run_probe(settings, r, live.list(), relay_health=_txw.relay_health(),
                                      workloads=workloads)
     @router.post("/api/global/ready")
-    def global_ready(request: Request, body: dict = Body(default={})):
+    def global_ready(request: Request, body: GlobalReadyBody = Body(default_factory=GlobalReadyBody)):
         """ACCEPT an admin-written company layer: verify the files and commit them as the admin.
+        Call it at the END of the company-setup conversation, once the administrator agrees the five
+        files are right; telling them it is done before this has accepted it is always wrong.
 
         OPTIONAL. Nothing waits for this any more (founder ruling 2026-10-08: "let's remove global
         setup at all so that there is no need to setup global at all - let it be empty with no data -
@@ -132,8 +135,13 @@ def build(**d) -> APIRouter:
                 "reasons": st["reasons"],
                 "next": "write the missing files into /workspaces/_global, then call this again",
             })
-        email = str(body.get("author_email") or "").strip() or f"admin-{subject}@vexa.local"
-        name = str(body.get("author_name") or "").strip() or f"vexa admin {subject}"
+        # THE CALLER IS THE AUTHOR. The identity the call arrived with carries the admin's address,
+        # so an agent accepting on their behalf names them without having to know it.
+        caller = (request.headers.get("x-user-email") or "").strip()
+        email = (body.author_email or "").strip() or caller or f"admin-{subject}@vexa.local"
+        name = ((body.author_name or "").strip()
+                or (email.split("@", 1)[0] if caller or body.author_email else "")
+                or f"vexa admin {subject}")
         try:
             sha = global_layer.commit(root, author_email=email, author_name=name,
                                       message=f"company layer: {st['company']}")

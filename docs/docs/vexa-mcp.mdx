@@ -48,7 +48,8 @@ Nine tools, plus four prompts (`vexa.meeting_prep` · `vexa.during_meeting` · `
 At start-up the server asks each deployed domain for its tool manifest (`mcp.tools.v1`) and serves
 the union beside the tools above — one server, one tool list. With the agent domain deployed that adds
 the workspace tools (reading, and the page verbs `workspace_write`, `workspace_delete`,
-`workspace_move`, `entity_upsert` and `fetch_asset`), the claim book (`propose`, `validate`), Connections (`connection_request`, `connections_status`, `gmail_search`,
+`workspace_move`, `entity_upsert` and `fetch_asset`), the claim book (`propose`, `validate`), membership (`workspace_members`, `workspace_invite`,
+`workspace_membership`), the company-layer accept (`mark_global_ready`), Connections (`connection_request`, `connections_status`, `gmail_search`,
 `gmail_read`, `gmail_thread`, `calendar_events`, `mail_inbox`, `mail_read`, `gmail_draft_create`,
 `secret_service_call`, `onboarding_research`), the person's clock (`current_time`, `timezone_set`) and
 `chat_name`; with flows deployed, `whats_waiting`, `report_friction` and the flow tools. Each is a route

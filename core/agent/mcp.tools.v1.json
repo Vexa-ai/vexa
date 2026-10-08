@@ -231,6 +231,75 @@
       "note": "CREATE a brand-new blank workspace, seeded from the template, and add it to the caller's active set. `name` is optional (`WorkspaceNewBody.name`) \u2014 omitted, the route mints a unique default label."
     },
     {
+      "name": "workspace_members",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/api/workspace/members"
+      },
+      "arguments": [
+        "workspace_id"
+      ],
+      "note": "The roster of one shared workspace, by its slug: who is in it and as what. The two verbs below are answered against it."
+    },
+    {
+      "name": "workspace_invite",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/workspace/invite"
+      },
+      "arguments": [
+        "slug",
+        "email",
+        "role"
+      ],
+      "note": "Invite one address as owner, contributor or reader (Vexa-ai/vexa#1632). Owner-only; the answer says whether the link was mailed or is to be handed over."
+    },
+    {
+      "name": "workspace_membership",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/workspace/membership"
+      },
+      "arguments": [
+        "slug",
+        "email",
+        "role"
+      ],
+      "note": "Change what a member is, or `remove` them (Vexa-ai/vexa#1632). Owner-only; the last owner cannot be demoted."
+    },
+    {
+      "name": "mark_global_ready",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/global/ready"
+      },
+      "note": "Accept the company layer written into `_global`: it re-reads the five files, refuses naming what is missing, and commits them authored by the calling admin. Optional; nothing waits for it."
+    },
+    {
       "name": "workspace_import",
       "identity": "user",
       "auth": "subject",

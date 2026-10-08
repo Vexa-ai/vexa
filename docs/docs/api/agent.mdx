@@ -268,6 +268,9 @@ and the token carries no workspace id — it is resolved by hash ·
 `GET /api/workspace/members?workspace_id=` → `{ members: [...] }` ·
 `POST /api/workspace/members/{member_subject}/role?workspace_id=` `{ role }` → the member record
 (owner) · `DELETE /api/workspace/members/{member_subject}?workspace_id=` → `{ ok, subject }` (owner) ·
+`POST /api/workspace/invite` `{ slug, email, role? }` → the invite, mailed to an address this deployment
+does not know or handed back as a link (owner) · `POST /api/workspace/membership`
+`{ slug, email, role }` → the member's new role, or `remove` (owner; the last owner is refused `409`) ·
 `POST /api/workspace/{workspace_id}/leave` → `{ ok, left }` — any role, but the last owner is refused
 `409` and must hand off or unshare · `GET /api/workspace/shared` →
 `{ memberships: [...], index_degraded }`, the **union** of both stores, with `index_degraded: true`
@@ -332,7 +335,7 @@ names a separate host repo, agent-api keeps `_global` in its own store and creat
 `POST /api/global/ready` `{ author_email?, author_name? }` →
 `{ accepted, company, service, commit, files }` — accept a company layer an admin chose to write.
 Admin only (`403`) and idempotent; it reads the files and commits them itself, authored by the
-admin — nothing may mark itself accepted. A layer that is not complete answers
+admin (the caller's own address unless the body names another) — nothing may mark itself accepted. A layer that is not complete answers
 `409 { accepted: false, missing_files, reasons, next }`. It gates nothing.
 
 ## Scaffolds

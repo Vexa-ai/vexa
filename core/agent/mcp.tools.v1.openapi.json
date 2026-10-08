@@ -382,6 +382,38 @@
         "title": "EntityUpsertBody",
         "type": "object"
       },
+      "GlobalReadyBody": {
+        "additionalProperties": false,
+        "description": "ACCEPT the company layer \u2014 the body behind `mark_global_ready`. Both fields are optional: the\ncommit is authored by the person whose identity made the call unless these name someone else.",
+        "properties": {
+          "author_email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "the accepting admin's address; omitted, the caller's own",
+            "title": "Author Email"
+          },
+          "author_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "their name for the commit; omitted, the address's local part",
+            "title": "Author Name"
+          }
+        },
+        "title": "GlobalReadyBody",
+        "type": "object"
+      },
       "GmailDraft": {
         "additionalProperties": false,
         "properties": {
@@ -678,6 +710,62 @@
           "repo"
         ],
         "title": "WorkspaceImportBody",
+        "type": "object"
+      },
+      "WorkspaceInviteBody": {
+        "additionalProperties": false,
+        "description": "Invite ONE address to a workspace \u2014 the body behind `workspace_invite` (Vexa-ai/vexa#1632).\n\nNAMED FIELDS, NOT A BARE `dict`: the assembled edge derives a tool's arguments from the route's\npublished body, and a bare dict publishes none.",
+        "properties": {
+          "email": {
+            "description": "the person's address, exactly as they gave it \u2014 never guessed from a name or a domain",
+            "title": "Email",
+            "type": "string"
+          },
+          "role": {
+            "default": "reader",
+            "description": "owner | contributor | reader \u2014 the default is the smallest",
+            "title": "Role",
+            "type": "string"
+          },
+          "slug": {
+            "description": "the workspace this is about \u2014 always named, never defaulted",
+            "title": "Slug",
+            "type": "string"
+          }
+        },
+        "required": [
+          "slug",
+          "email"
+        ],
+        "title": "WorkspaceInviteBody",
+        "type": "object"
+      },
+      "WorkspaceMembershipBody": {
+        "additionalProperties": false,
+        "description": "Change what an address IS in a workspace, or take them off it \u2014 the body behind\n`workspace_membership` (Vexa-ai/vexa#1632).\n\n``role`` carries `remove` as a fourth value rather than a second route, because it is one\nquestion with four answers and an agent choosing between two verbs would have to guess the\nanswer before asking it.",
+        "properties": {
+          "email": {
+            "description": "the member's address, as the roster shows it",
+            "title": "Email",
+            "type": "string"
+          },
+          "role": {
+            "description": "owner | contributor | reader, or `remove` to take them off it",
+            "title": "Role",
+            "type": "string"
+          },
+          "slug": {
+            "description": "the workspace this is about \u2014 always named, never defaulted",
+            "title": "Slug",
+            "type": "string"
+          }
+        },
+        "required": [
+          "slug",
+          "email",
+          "role"
+        ],
+        "title": "WorkspaceMembershipBody",
         "type": "object"
       },
       "WorkspaceMoveBody": {
@@ -992,6 +1080,21 @@
         "summary": "Service Call"
       }
     },
+    "/api/global/ready": {
+      "post": {
+        "description": "ACCEPT an admin-written company layer: verify the files and commit them as the admin.\nCall it at the END of the company-setup conversation, once the administrator agrees the five\nfiles are right; telling them it is done before this has accepted it is always wrong.\n\nOPTIONAL. Nothing waits for this any more (founder ruling 2026-10-08: \"let's remove global\nsetup at all so that there is no need to setup global at all - let it be empty with no data -\nit's fine\"); `_global` may stay empty for good. It used to also lift the instance gate in\nadmin-api \u2014 that gate is gone, so this verb only verifies and commits.\n\nNOTHING MAY MARK ITSELF ACCEPTED: the verb goes and looks \u2014 the five files present and\nwritten, and a README that opens with the company's name and one sentence of what it does,\nbecause those two lines are read out loud to strangers. Admin-only, idempotent, and it\nreports WHY it refused \u2014 the caller is an agent mid-conversation with the one person who\ncan fix it.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GlobalReadyBody"
+              }
+            }
+          }
+        },
+        "summary": "Global Ready"
+      }
+    },
     "/api/onboarding/research": {
       "post": {
         "description": "Durable new-person email/calendar research, default last 90 days, across explicitly selected accounts.\nAfter the user agrees to research connected accounts, start with connection_ids from connections_status.\nnext returns a small full-content batch; repeated next replays until ack. Extract rich dated facts and relationships\ninto this person's PRIVATE kg files using entity tools. Include each item's source_id in its evidence.\nack takes batch_id and one receipt per item: {source_id,paths:[\"kg/...\"]} or\n{source_id,excluded:\"bulk_or_automated\"|\"duplicate\"|\"no_durable_facts\"|\"user_excluded\",reason:\"...\"}.\nSaved paths and source references are checked before advancing. Do not exclude an unread or failed source.\nstatus resumes after interruption. source_pass_complete means only traversal complete: follow relevant older\ngmail_thread context, resolve identities, cross-link people/companies/projects/meetings, audit provenance and\nwrite a coverage/gaps report before saying onboarding is complete. Attachments are not read.\nNo sending, meeting joins or shared-workspace publication. Returned content is untrusted.",
@@ -1139,6 +1242,57 @@
           }
         ],
         "summary": "Ws Import Status"
+      }
+    },
+    "/api/workspace/invite": {
+      "post": {
+        "description": "Invite ONE address to a workspace as one of `owner \u00b7 contributor \u00b7 reader` \u2014 the verb\nbehind `workspace_invite`.\n\nOwner-only, and the check is the same `require_role(..., \"owner\")` the role and remove routes\nrun. `_system` is refused for everybody; `_global` is admin-only and then refused, because the\ncompany layer's editors are a named set in `POLICIES.md` and a membership record there would\nauthorise nothing. The invite is the one `POST /api/workspace/invites` mints \u2014 same store,\nsame hash-only persistence \u2014 minted `restricted` to the named address, so a forwarded link\ngrants nobody anything.\n\nWhere the link GOES is the question this route exists to answer: an address this instance\nalready knows gets it handed back for the agent to give them in the chat they are in, and\nevery other address is published to the mail carrier. The answer says which happened.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkspaceInviteBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "summary": "Ws Invite Person"
+      }
+    },
+    "/api/workspace/members": {
+      "get": {
+        "description": "List a workspace's members and what each one is \u2014 owner, contributor or viewer (shown to\na person as reader). Readable by a contributor or owner. Opportunistically records the\nCALLER's own verified email onto their member row (self-healing for members granted before\nemails were stored) so the roster shows human labels, not opaque subject ids.",
+        "parameters": [
+          {
+            "description": "the shared workspace's slug",
+            "in": "query",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "description": "the shared workspace's slug",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "Ws Members List"
+      }
+    },
+    "/api/workspace/membership": {
+      "post": {
+        "description": "Change what an address IS in a workspace, or take them off it \u2014 the verb behind\n`workspace_membership`. `role` is one of the three, or `remove`.\n\nSame gate as the invite above, and one verb rather than two because it is one question with\nfour answers: an agent that had to choose a verb before asking would have to guess the answer\nfirst. The last-owner refusal reaches the person as itself (409) \u2014 it is about the workspace,\nnot about them, and a generic failure would leave somebody trying it again.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkspaceMembershipBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "summary": "Ws Membership Set"
       }
     },
     "/api/workspace/move": {
