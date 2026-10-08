@@ -24,7 +24,8 @@ from control_plane import workspace_credentials as wcreds
 from control_plane import workspace_ids as ids_mod
 from control_plane import workspace_membership as membership_mod
 from control_plane.api_shared import (
-    ArchiveBody, AssetFetchBody, EntityUpsertBody, GitTokenBody, InviteAcceptBody,
+    ArchiveBody, AssetFetchBody, ClaimVerdictsBody, ClaimsProposeBody, EntityUpsertBody,
+    GitTokenBody, InviteAcceptBody,
     InviteCreateBody, MAX_UPLOAD_BYTES,
     RoleSetBody, SharedActiveBody, SharedAttachBody, SharedNewBody, WorkspaceActivateBody,
     WorkspaceDeactivateBody, WorkspaceMoveBody, WorkspaceNewBody, WorkspacePublishBody,
@@ -953,9 +954,11 @@ def build(**d) -> APIRouter:
                 "system_seeded": not system_existed}
 
     @router.post("/api/claims")
-    def write_claims(request: Request, body: dict = Body(...)):
+    def write_claims(request: Request, body: ClaimsProposeBody = Body(...)):
         """Record what an agent believes about this person's company as PROPOSED — and tell flows,
-        once per claim.
+        once per claim. Put everything learned in ONE call, show the person the lines it hands
+        back, and record their answer with `validate`. A proposed claim is never company context
+        until a person has answered: an agent cannot promote its own guess.
 
         THIS ROUTE EXISTS SO THE FACT HAS A PRODUCER. The book was written through
         `PUT /api/workspace/file`, a generic route that holds bytes and knows nothing about what
@@ -972,8 +975,8 @@ def build(**d) -> APIRouter:
         needs — the subject, the reader, the desk path — is already closed over here; the state
         machine itself is `control_plane.claims`, which is the concern."""
         subject = subject_of(request)
-        batch = (body or {}).get("claims") or []
-        if not isinstance(batch, list) or not batch:
+        batch = [b if isinstance(b, str) else b.model_dump() for b in body.claims]
+        if not batch:
             raise HTTPException(status_code=400, detail="claims must be a non-empty list")
         result = claims_mod.propose(wsr.workspace_dir(subject), batch)
         for cid in result["ids"]:
@@ -981,6 +984,20 @@ def build(**d) -> APIRouter:
                                 publish_mod.claim_source_id(subject, cid),
                                 publish_mod.claim_refs(subject, cid))
         return result
+
+    @router.post("/api/claims/verdicts")
+    def record_claim_verdicts(request: Request, body: ClaimVerdictsBody = Body(...)):
+        """Record a PERSON's word on proposed claims — `confirmed`, `corrected` (the note is the
+        correction; the original stays beside it) or `rejected`. Put their whole answer in ONE call,
+        and only after asking them: this is their word, never an agent's guess about it.
+
+        The first claim they stand behind makes the desk ready, so answering finishes the setup.
+        An unknown id or verdict comes back in `errors` and the rest of the answer still lands."""
+        subject = subject_of(request)
+        if not body.verdicts:
+            raise HTTPException(status_code=400, detail="verdicts must be a non-empty list")
+        return claims_mod.record_verdicts(wsr.workspace_dir(subject),
+                                          [v.model_dump() for v in body.verdicts])
     @router.get("/api/workspaces/by-slug/{slug}")
     def ws_id_by_slug(slug: str, request: Request):
         """The identity of a workspace addressed the OLD way — by slug. What the terminal calls to

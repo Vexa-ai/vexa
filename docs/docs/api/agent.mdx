@@ -213,6 +213,16 @@ Returns the upsert result — `path`, `created`, `changed`, `facts_written`, `li
 path) and `commit` (the sha, `null` when nothing changed). `403` for `_global`; `422` when the write is
 refused, and the refusal sentence is the product — fix the fact rather than retrying.
 
+## Claims
+
+What an agent believes about a person's company is **proposed**, and is company context only once the
+person has answered. `POST /api/claims` `{ claims: [{ claim, source?, scope? } | "…"] }` →
+`{ ids, state: "proposed", show_them_exactly_this, then }`, and publishes `claim.proposed` once per new
+claim (`400` on an empty list). `POST /api/claims/verdicts` `{ verdicts: [{ id, verdict, note? }] }` →
+`{ recorded: [{ id, state, usable_as_context }], errors?, workspace_ready? }` — `verdict` is
+`confirmed` · `corrected` · `rejected`; an unknown id or verdict is reported in `errors` and the rest
+still lands. The first claim the person stands behind writes the desk's `.scaffolded` marker.
+
 ## Rough edges
 
 `POST /api/friction` — body `{ kind?, severity?, tried?, happened?, would_help?, session?, context? }`;

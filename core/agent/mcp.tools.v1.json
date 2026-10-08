@@ -150,6 +150,40 @@
       "note": "The server fetches a picture into the workspace, so a page references it relatively instead of hotlinking (Vexa-ai/vexa#1612). Same `slug` rule as workspace_write."
     },
     {
+      "name": "propose",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/claims"
+      },
+      "arguments": [
+        "claims"
+      ],
+      "note": "What an agent believes about the person's company, recorded as PROPOSED and published once per claim as `claim.proposed`; never company context until the person answers."
+    },
+    {
+      "name": "validate",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/claims/verdicts"
+      },
+      "arguments": [
+        "verdicts"
+      ],
+      "note": "The person's word on proposed claims; the first one they stand behind makes the desk ready (`.scaffolded`)."
+    },
+    {
       "name": "workspaces",
       "identity": "user",
       "auth": "subject",

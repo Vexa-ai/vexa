@@ -12,10 +12,9 @@ without inspecting paths and guessing at contents, which is how a file route bec
 machine nobody declared. So the state machine moves here, beside the file, and the route above it
 publishes exactly one fact per claim.
 
-SCOPE, deliberately narrow: this module PROPOSES and nothing else. `validate` / verdicts /
-`mark_scaffolded` remain the rig's for now — they are a human's word on a claim, they belong with
-the desk-ready join, and moving them is a separate change with its own event. What is here is what
-`claim.proposed` needs to exist.
+BOTH HALVES LIVE HERE: an agent PROPOSES, and a person's answer is recorded as VERDICTS. The first
+verdict a person stands behind is also the desk becoming ready (`.scaffolded`) — answering IS the
+setup, and a separate third step was a step somebody could forget.
 """
 from __future__ import annotations
 
@@ -30,6 +29,15 @@ CLAIMS_PATH = "_pending/claims.json"
 
 MAX_CLAIM_CHARS = 600
 MAX_SOURCE_CHARS = 300
+MAX_NOTE_CHARS = 600
+
+#: The marker a finished setup leaves on the desk — the same file `flows_steps.common.scaffolded`
+#: reads to decide a desk is waiting for nothing.
+READY_MARKER = ".scaffolded"
+#: A person's word on a claim -> the state it leaves the claim in.
+VERDICTS = {"confirmed": "validated", "corrected": "corrected", "rejected": "rejected"}
+#: The states whose claim may be used as company context: a person stood behind it.
+USABLE = frozenset({"validated", "corrected"})
 
 
 def _load(workspace: Path) -> dict:
@@ -94,3 +102,47 @@ def propose(workspace: Path, batch: list) -> dict:
                  "validate(verdicts=[{id, verdict, note}]) call. That call finishes the setup."),
         "note": "None of this counts as company context until a human has answered.",
     }
+
+
+def record_verdicts(workspace: Path, batch: list) -> dict:
+    """Record a PERSON's word on proposed claims: `confirmed`, `corrected` (the original stays, the
+    correction is the note) or `rejected`. One call carries the whole answer.
+
+    A bad item — an id the book does not hold, a verdict that is not one of the three — is reported
+    in `errors` and the rest of the answer still lands: a person who answered five questions in one
+    sentence must not lose four of them to a typo in the fifth.
+
+    The first claim a person stands behind makes the desk READY: `.scaffolded` is written once and
+    never rewritten, because a desk that is ready stays ready."""
+    book = _load(workspace)
+    by_id = {str(c.get("id")): c for c in book["claims"] if isinstance(c, dict)}
+    recorded, errors = [], []
+    for v in batch:
+        vid = str(v.get("id") or "").strip()
+        verdict = str(v.get("verdict") or "").strip()
+        claim = by_id.get(vid)
+        if claim is None:
+            errors.append({"id": vid, "error": "no such claim"})
+            continue
+        if verdict not in VERDICTS:
+            errors.append({"id": vid, "error": "verdict must be confirmed | corrected | rejected"})
+            continue
+        claim.update(state=VERDICTS[verdict], verdict=verdict,
+                     human_note=str(v.get("note") or "")[:MAX_NOTE_CHARS],
+                     validated_at=time.time())
+        recorded.append({"id": vid, "state": claim["state"],
+                         "usable_as_context": claim["state"] in USABLE})
+    if recorded:
+        _save(workspace, book)
+    out: dict = {"recorded": recorded}
+    if errors:
+        out["errors"] = errors
+    marker = workspace / READY_MARKER
+    if any(r["usable_as_context"] for r in recorded) and not marker.exists():
+        usable = sum(1 for c in book["claims"] if isinstance(c, dict) and c.get("state") in USABLE)
+        marker.write_text(json.dumps({"ready": True, "at": time.time(),
+                                      "validated_claims": usable}), encoding="utf-8")
+        out["workspace_ready"] = True
+        out["tell_your_person"] = ("One line — noted, write-ups will use it — then offer the next "
+                                   "thing. No recap of what you just did.")
+    return out

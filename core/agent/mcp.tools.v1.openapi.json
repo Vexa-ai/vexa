@@ -104,6 +104,107 @@
         "title": "CalendarEvents",
         "type": "object"
       },
+      "ClaimProposal": {
+        "additionalProperties": false,
+        "description": "One thing an agent believes about this person's work, and where it came from.",
+        "properties": {
+          "claim": {
+            "description": "the belief, in one short line the person can correct",
+            "title": "Claim",
+            "type": "string"
+          },
+          "scope": {
+            "default": "tenant",
+            "description": "who it is about; `tenant` is the person's company",
+            "title": "Scope",
+            "type": "string"
+          },
+          "source": {
+            "default": "",
+            "description": "where it came from, in a few words",
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "claim"
+        ],
+        "title": "ClaimProposal",
+        "type": "object"
+      },
+      "ClaimVerdict": {
+        "additionalProperties": false,
+        "description": "A person's word on one proposed claim.",
+        "properties": {
+          "id": {
+            "description": "the claim's id, as `propose` returned it (`c001`)",
+            "title": "Id",
+            "type": "string"
+          },
+          "note": {
+            "default": "",
+            "description": "the person's own words \u2014 the correction, for `corrected`",
+            "title": "Note",
+            "type": "string"
+          },
+          "verdict": {
+            "description": "confirmed | corrected | rejected",
+            "title": "Verdict",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "verdict"
+        ],
+        "title": "ClaimVerdict",
+        "type": "object"
+      },
+      "ClaimVerdictsBody": {
+        "additionalProperties": false,
+        "description": "RECORD the person's answer \u2014 the body behind `validate`. One call carries the whole answer.",
+        "properties": {
+          "verdicts": {
+            "description": "one per claim the person answered, `{id, verdict, note?}`. Call it only after asking them.",
+            "items": {
+              "$ref": "#/components/schemas/ClaimVerdict"
+            },
+            "title": "Verdicts",
+            "type": "array"
+          }
+        },
+        "required": [
+          "verdicts"
+        ],
+        "title": "ClaimVerdictsBody",
+        "type": "object"
+      },
+      "ClaimsProposeBody": {
+        "additionalProperties": false,
+        "description": "PROPOSE claims \u2014 the body behind `propose`. One call carries everything learned.",
+        "properties": {
+          "claims": {
+            "description": "every belief at once, each `{claim, source?, scope?}` or a plain string. Nothing proposed counts as company context until the person answers.",
+            "items": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/ClaimProposal"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "title": "Claims",
+            "type": "array"
+          }
+        },
+        "required": [
+          "claims"
+        ],
+        "title": "ClaimsProposeBody",
+        "type": "object"
+      },
       "ConnectionRequest": {
         "additionalProperties": false,
         "properties": {
@@ -723,6 +824,38 @@
           "required": true
         },
         "summary": "Name Chat As Agent"
+      }
+    },
+    "/api/claims": {
+      "post": {
+        "description": "Record what an agent believes about this person's company as PROPOSED \u2014 and tell flows,\nonce per claim. Put everything learned in ONE call, show the person the lines it hands\nback, and record their answer with `validate`. A proposed claim is never company context\nuntil a person has answered: an agent cannot promote its own guess.\n\nTHIS ROUTE EXISTS SO THE FACT HAS A PRODUCER. The book was written through\n`PUT /api/workspace/file`, a generic route that holds bytes and knows nothing about what\nthey mean \u2014 so the one moment worth telling anybody about, a claim being proposed, was\nindistinguishable from any other file write, and `claim.proposed` had no publisher. A\ngeneric route cannot publish a specific fact without inspecting paths and guessing at\ncontents, which is how a file route quietly becomes a state machine nobody declared.\n\nONE EVENT PER CLAIM, and only for claims this call actually added: `await_claim` looks a\n`claim_id` up in the book and blocks on that claim's own words, so one event for a batch\nwould be one card for three questions with no way to answer two of them.\n\nIt lives in the workspaces router because the book is a file on a desk and everything this\nneeds \u2014 the subject, the reader, the desk path \u2014 is already closed over here; the state\nmachine itself is `control_plane.claims`, which is the concern.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClaimsProposeBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "summary": "Write Claims"
+      }
+    },
+    "/api/claims/verdicts": {
+      "post": {
+        "description": "Record a PERSON's word on proposed claims \u2014 `confirmed`, `corrected` (the note is the\ncorrection; the original stays beside it) or `rejected`. Put their whole answer in ONE call,\nand only after asking them: this is their word, never an agent's guess about it.\n\nThe first claim they stand behind makes the desk ready, so answering finishes the setup.\nAn unknown id or verdict comes back in `errors` and the rest of the answer still lands.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClaimVerdictsBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "summary": "Record Claim Verdicts"
       }
     },
     "/api/connections": {
