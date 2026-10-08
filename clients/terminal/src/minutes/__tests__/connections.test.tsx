@@ -137,3 +137,63 @@ test('an arbitrary OAuth definition renders application fields without service-s
  expect(screen.queryByLabelText('Unused API token')).toBeNull();
  expect(screen.getByText(/Authorization: https/).textContent).toContain('login.example.com');
 });
+
+// ── M3: a prepared setup names where the secret goes; the person reads it and types it once ──────
+const prepared=(over:Record<string,unknown>={})=>({id:'c'.repeat(32),provider:'custom_secret',label:'Service',status:'awaiting_user',setup_request:'proposal',
+ setup:{endpoint:'https://collector.unknown-host.test/v1',method:'GET',secret_label:'API key',fields:[],documentation_url:'https://docs.example.com/api'},...over});
+function panelWith(row:Record<string,unknown>){
+ const fetch=vi.fn().mockImplementation(async(path:string)=>({ok:true,json:async()=>path.endsWith('/custom-secret')||path.endsWith('/oauth-application')?{connection_id:'c'.repeat(32),status:'ready'}:{connections:[row]}}));
+ vi.stubGlobal('fetch',fetch);render(<ConnectionsPanel/>);
+ fireEvent(window,new CustomEvent(CONNECTIONS_OPEN,{detail:{provider:'custom_secret',label:'Service'}}));
+ return fetch;
+}
+test('the destination host leads the form, an unknown host is flagged, and save waits for the typed host',async()=>{
+ const fetch=panelWith(prepared());
+ expect((await screen.findByLabelText('Destination host')).textContent).toBe('collector.unknown-host.test');
+ expect(screen.getByRole('alert').textContent).toContain('not a known provider');
+ fireEvent.change(screen.getByLabelText('API key'),{target:{value:'fixture-key'}});
+ const save=screen.getByRole('button',{name:'Save securely'}) as HTMLButtonElement;
+ expect(save.disabled).toBe(true);
+ fireEvent.change(screen.getByLabelText('Confirm destination host'),{target:{value:'collector.unknown-host'}});
+ expect(save.disabled).toBe(true);
+ fireEvent.change(screen.getByLabelText('Confirm destination host'),{target:{value:' Collector.Unknown-Host.test '}});
+ expect(save.disabled).toBe(false);
+ fireEvent.click(save);
+ await waitFor(()=>expect(fetch.mock.calls.some(([p])=>p.endsWith('/custom-secret'))).toBe(true));
+ const [,init]=fetch.mock.calls.find(([p])=>p.endsWith('/custom-secret'))!;
+ expect(JSON.parse(init.body)).toMatchObject({confirmed_host:'collector.unknown-host.test',value:'fixture-key',setup_request:'proposal'});
+});
+test('a known provider is not flagged but is still confirmed on first use',async()=>{
+ panelWith(prepared({setup:{endpoint:'https://api.telegram.org/bot{secret}/getMe',method:'GET',secret_label:'Bot token',fields:[]}}));
+ expect((await screen.findByLabelText('Destination host')).textContent).toBe('api.telegram.org');
+ expect(screen.queryByRole('alert')).toBeNull();
+ expect(screen.getByLabelText('Confirm destination host')).toBeTruthy();
+});
+test('the documentation site counts as recognised, and an approved host needs no second confirmation',async()=>{
+ panelWith(prepared({approved_host:'api.example.com',setup:{endpoint:'https://api.example.com/v1',method:'GET',secret_label:'API key',fields:[],documentation_url:'https://docs.example.com'}}));
+ expect((await screen.findByLabelText('Destination host')).textContent).toBe('api.example.com');
+ expect(screen.queryByRole('alert')).toBeNull();
+ expect(screen.queryByLabelText('Confirm destination host')).toBeNull();
+ fireEvent.change(screen.getByLabelText('API key'),{target:{value:'k'}});
+ expect((screen.getByRole('button',{name:'Save securely'}) as HTMLButtonElement).disabled).toBe(false);
+});
+test('an OAuth application names the token host that receives the client secret and confirms it',async()=>{
+ const fetch=panelWith(prepared({setup:{endpoint:'https://api.example.com/data',method:'GET',secret_label:'Unused',fields:[],
+  oauth:{authorization_url:'https://login.example.com/authorize',token_url:'https://tokens.elsewhere.test/token',scopes:['read']}}}));
+ expect((await screen.findByLabelText('Destination host')).textContent).toBe('tokens.elsewhere.test');
+ expect(screen.getByText(/Your client secret will be sent to/)).toBeTruthy();
+ fireEvent.change(screen.getByLabelText('Client ID'),{target:{value:'id'}});
+ fireEvent.change(screen.getByLabelText('Client secret'),{target:{value:'s'}});
+ const save=screen.getByRole('button',{name:'Save application securely'}) as HTMLButtonElement;
+ expect(save.disabled).toBe(true);
+ fireEvent.change(screen.getByLabelText('Confirm destination host'),{target:{value:'tokens.elsewhere.test'}});
+ fireEvent.click(save);
+ await waitFor(()=>expect(fetch.mock.calls.some(([p])=>p.endsWith('/oauth-application'))).toBe(true));
+ expect(JSON.parse(fetch.mock.calls.find(([p])=>p.endsWith('/oauth-application'))![1].body)).toMatchObject({confirmed_host:'tokens.elsewhere.test'});
+});
+test('an endpoint the person types is shown but not re-confirmed',async()=>{
+ panelWith({id:'c'.repeat(32),provider:'custom_secret',label:'Service',status:'awaiting_user'});
+ fireEvent.change(await screen.findByLabelText('HTTPS endpoint'),{target:{value:'https://api.mine.test/v1'}});
+ expect(screen.getByLabelText('Destination host').textContent).toBe('api.mine.test');
+ expect(screen.queryByLabelText('Confirm destination host')).toBeNull();
+});

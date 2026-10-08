@@ -2,13 +2,21 @@
 import {useState} from 'react';
 import { connectionStyle as cs } from './connectionStyles';
 import {type as ty} from './tokens';
+import { DestinationHost, hostConfirmed } from './DestinationHost';
+import { hostOf } from './connectionHosts';
 export type ConnectionSetup={oauth?:{authorization_url:string;token_url:string;scopes:string[];token_auth?:string}|null;documentation_url?:string;endpoint:string;method:string;secret_label:string;fields:{name:string;label:string;location:string}[]};
-export function SecretConnectionForm({onSave,busy,setup,hasCredential=false}:{onSave:(body:Record<string,unknown>)=>Promise<void>;busy:boolean;setup?:ConnectionSetup;hasCredential?:boolean}) {
+export function SecretConnectionForm({onSave,busy,setup,hasCredential=false,approvedHost}:{onSave:(body:Record<string,unknown>)=>Promise<void>;busy:boolean;setup?:ConnectionSetup;hasCredential?:boolean;approvedHost?:string}) {
  const [value,setValue]=useState(''),[endpoint,setEndpoint]=useState(''),[header,setHeader]=useState('Authorization'),[scheme,setScheme]=useState('bearer'),[method,setMethod]=useState('GET');
  const [fields,setFields]=useState<Record<string,string>>({});
+ const [confirmed,setConfirmed]=useState('');
  const prepared=!!setup?.endpoint;
+ // A prepared setup may come from the agent: its host must be confirmed on first use (M3). An
+ // endpoint the person types here is their own choice and is shown, not re-confirmed.
+ const host=prepared?hostOf(setup!.endpoint):hostOf(endpoint);
+ const trusted=!prepared||hostConfirmed(host,approvedHost,confirmed);
  const input=cs.input;
- return <form onSubmit={async e=>{e.preventDefault();try{await onSave(prepared?{value,fields}:{value,endpoint,header,scheme,method});}finally{setValue('');}}}>
+ return <form onSubmit={async e=>{e.preventDefault();if(!trusted)return;try{await onSave(prepared?{value,fields,...(host?{confirmed_host:confirmed.trim().toLowerCase()||host}:{})}:{value,endpoint,header,scheme,method});}finally{setValue('');}}}>
+  {host&&<DestinationHost host={host} role="Your secret will be sent to" documentationUrl={setup?.documentation_url} approvedHost={prepared?approvedHost:host} confirmed={confirmed} onConfirm={setConfirmed}/>}
   <label style={ty.meta}>{prepared?setup!.secret_label:"Secret value"}<textarea aria-label={prepared?setup!.secret_label:"Secret value"} required={!hasCredential} value={value} onChange={e=>setValue(e.target.value)} autoComplete="off" spellCheck={false} maxLength={65536} style={{...input,WebkitTextSecurity:'disc'} as React.CSSProperties}/></label>
   {hasCredential&&<p style={ty.meta}>Your saved credential will be reused. Enter a replacement only if it changed.</p>}
   {prepared?<>
@@ -23,6 +31,6 @@ export function SecretConnectionForm({onSave,busy,setup,hasCredential=false}:{on
    <p style={ty.meta}>Saving authorizes the agent to use this credential at this exact endpoint. {method==='POST'?'POST can change data in that service.':'GET is intended for reading data.'} Redirects and private network destinations are blocked.</p>
   </>}
   </>}
-  <button disabled={busy||(!value&&!hasCredential)} style={{...cs.button,...cs.primary,width:'100%'}}>Save securely</button>
+  <button disabled={busy||(!value&&!hasCredential)||!trusted} style={{...cs.button,...cs.primary,width:'100%'}}>Save securely</button>
  </form>;
 }
