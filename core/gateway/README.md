@@ -12,8 +12,8 @@ client over one socket. Python/FastAPI, hexagonal (collaborators injected as por
 |---|---|---|---|
 | **produces** | the world (clients, dashboard) | `api.v1` (OpenAPI 3.1) | REST surface: `/bots`, `/transcripts`, `/meetings`, `/recordings`, `/auth/me`, `/health` |
 | **produces** | the world | `ws.v1` (`/ws`) | subscribe/unsubscribe/ping ↔ `subscribed`/`unsubscribed`/`pong`/`error` + forwarded live frames |
-| **calls** | identity / admin-api | HTTP `/internal/validate` + `/ws/authorize-subscribe` (via `Authorizer` port) | `x-api-key` → `{user_id, scopes, max_concurrent, webhook_*}`; per-meeting subscribe authz |
-| **calls** | meeting-api | HTTP forward (via `DownstreamClient` port) | proxied method/path/body + injected `x-user-*` identity headers |
+| **calls** | identity / admin-api | HTTP `/internal/validate` + `/ws/authorize-subscribe` (via `Authorizer` port) | a bearer (API key, or a worker's `vxd_` delegation token) → `{user_id, scopes, max_concurrent, webhook_*, delegation?}`; per-meeting subscribe authz |
+| **calls** | meeting-api | HTTP forward (via `DownstreamClient` port) | proxied method/path/body + injected `x-user-*` identity headers, signed as `X-Vexa-Identity` ([`identity.v1`](contracts/identity.v1)) |
 | **consumes** | redis (per meeting) | channels `tc:meeting:{id}:mutable` · `bm:meeting:{id}:status` · `va:meeting:{id}:chat` (via `RedisBus` port) | raw payloads forwarded verbatim to the subscribed socket |
 | **produces** | observability sink | `logevent.v1` (stdout JSON) | one envelope per log line; `X-Trace-Id` minted at the edge, forwarded downstream |
 

@@ -58,14 +58,30 @@ its token's scope; the boundaries enforce, not the model. See
 
 Everything reaches the domains through the [gateway](/architecture/modules); the [terminal](/concepts) is
 one client. For every call the gateway resolves the key to a user and forwards to the owning domain with
-`X-User-Id` stamped on.
+`X-User-Id` stamped on, and signs what it stamped.
 
 ```
-terminal ──(API key, from your login)──▶  GATEWAY  ──(X-User-Id, verified)──▶  meetings / agent domain
+terminal ──(API key, from your login)──▶  GATEWAY  ──(X-User-Id + X-Vexa-Identity)──▶  meetings / agent domain
                                             │ resolve key → user (fail-closed)
                                             │ strip any client-supplied identity (anti-spoof)
                                             │ check the route's coarse scope
+                                            │ sign the identity (HMAC, 60 s) — identity.v1
 ```
+
+agent-api and meeting-api believe `X-User-Id` (and the email, limits, workspaces and webhook beside it)
+only when the gateway's signature verifies, and rebuild those headers from the signed claims. The one
+other way to name a person is the **internal tier**: a service holding `INTERNAL_API_SECRET` (flows,
+agent-api calling meeting-api) presents `X-Internal-Secret` and names the user it acts for. Anything
+else that names a person is refused with `401` before a route reads it — a process that reaches a
+service past the gateway cannot become a user. The contract is
+[`core/gateway/contracts/identity.v1`](https://github.com/Vexa-ai/vexa/tree/main/core/gateway/contracts/identity.v1).
+
+An agent worker is an ordinary client of the same edge. Each dispatch mints it a short-lived
+delegation token (`vxd_…`); identity's `/internal/validate` resolves that token like an API key — the
+person it acts for, scopes `bot` + `tx`, and the dispatch's ceiling (regime, workspaces) — and the
+gateway signs that onto the forward. A worker dispatched without a person in the loop is refused the
+verbs that need one (reading a mailbox, spending a stored credential, loading a repository), and a
+workspace outside its isolation set.
 
 The full public surface, grouped by **what it protects** — this is the real attack surface, and what the
 security model has to cover (nothing more):
@@ -180,9 +196,10 @@ that makes it real (P9: an ungated rule is aspirational). Foundations:
 | **Multi-tenant attribution** | the copilot **does** dispatch on live meetings; what is pre-M2 is *who it is attributed to* — the watcher starts with the default `subject = "u_live"` (`control_plane/api.py:2342` passes no `subject=` → `transcription_watcher.py:216`, whose docstring calls it a "PRE-M2 placeholder"), so every armed copilot lands on one subject instead of the meeting's owner | pass the real meeting owner at `transcription_watcher.start` before M2 ships | Auth spine · M2 |
 | **P9 / P6 — one front door** | `_resolve_user_id` is duplicated across four meeting-api routers (`collector` · `bot_spawn` · `lifecycle` · `recordings`) | fold identity resolution into the shared `identity` front door | cleanup |
 
-<Note>`subject_of` (`control_plane/api.py`) has a `VEXA_AGENT_DEFAULT_SUBJECT` fallback for a gateway-less
-single-user self-host. It is fail-closed (401) when unset; it **must stay unset** in any multi-tenant
-deployment, or every caller collapses to one subject.</Note>
+<Note>`subject_of` (`control_plane/api.py`) has no fallback subject in a deployed agent-api: with the
+gateway's signing key configured (every deployment — the boot requires it), a request that names
+nobody is a `401`. `VEXA_AGENT_DEFAULT_SUBJECT` applies only to an app built without the identity guard,
+which is the in-process test harness.</Note>
 
 ## Data at rest (encryption)
 

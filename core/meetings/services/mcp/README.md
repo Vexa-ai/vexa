@@ -14,9 +14,10 @@ redis, never reaches into meeting-api or admin-api directly.
 
 | Direction | Neighbour | Via | What crosses |
 |---|---|---|---|
-| serves | MCP clients | `POST/GET /mcp` (streamable HTTP) | tool calls + prompt gets; auth = `Authorization: Bearer <VEXA_API_KEY>` (back-compat: raw `Authorization` or `X-API-Key`) |
+| serves | MCP clients — a person's own client and every agent worker's toolbelt | `POST/GET /mcp` (streamable HTTP, relayed by the gateway) | tool calls + prompt gets; auth = `Authorization: Bearer <credential>` — a Vexa API key, or a worker's per-dispatch delegation token (`vxd_…`), which the gateway resolves through identity like a key (back-compat: raw `Authorization` or `X-API-Key`) |
+| asks | each deployed domain (`ADMIN_API_URL`, `MEETING_API_URL`, `AGENT_API_URL`, `FLOWS_API_URL`) | `GET /.well-known/mcp-tools.json` + `/openapi.json`, once at boot | the manifests assembled below; a named domain that never answers fails the boot |
 | calls | ticket sink (`VEXA_TICKET_SINK_URL`) | `POST <sink>` | `report_issue` tickets: the agent's words + a server timestamp + a dedupe fingerprint + a **salted fingerprint of the caller's key** (never the key). Unset → `report_issue` returns 503 and nothing else is affected. |
-| calls | gateway (`GATEWAY_URL`) | `POST /bots` · `GET /bots/status` · `PUT/DELETE /bots/{platform}/{native}` · `GET /meetings` · `GET /transcripts/{platform}/{native}` · `GET /recordings[/{id}]` | each tool forwards verbatim with the caller's `X-API-Key` |
+| calls | gateway (`GATEWAY_URL`) | `POST /bots` · `GET /bots/status` · `PUT/DELETE /bots/{platform}/{native}` · `GET /meetings` · `GET /transcripts/{platform}/{native}` · `GET /recordings[/{id}]`, and `/agent/*` for the agent domain's assembled tools | each tool forwards verbatim with the caller's own credential as `X-API-Key`, and waits as long as the gateway's buffered leg does (30 s) |
 
 ## The manifest contract — `mcp.tools.v1`
 
@@ -51,7 +52,13 @@ previous shape — including one supplied through `VEXA_MCP_MANIFEST_DIR` — re
 the tool and the field. That is deliberate: a default is a guess applied silently to every tool, and
 the guess was wrong for the four it was applied to.
 
-## Tools (10)
+## Built-in tools
+
+Beside these, every tool a deployed domain declares in its manifest joins the same surface — with the
+agent domain deployed, its workspace, Connections, clock and `chat_name` tools
+([`core/agent/mcp.tools.v1.json`](../../../agent/mcp.tools.v1.json)); with flows, `whats_waiting`,
+`report_friction` and the flow tools ([`core/flows/mcp.tools.v1.json`](../../../flows/mcp.tools.v1.json)).
+An optional object or list argument (`setup`, `receipts`) is published with its own type.
 
 | Tool | Wraps |
 |---|---|

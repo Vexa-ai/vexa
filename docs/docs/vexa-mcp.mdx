@@ -43,6 +43,25 @@ Nine tools, plus four prompts (`vexa.meeting_prep` · `vexa.during_meeting` · `
 `update_bot_config` wraps a route that is not wired in the v0.12 open core and returns `404` — see
 [Meetings API → Manage the bot](/api/meetings#manage-the-bot). The other eight reach live routes.
 
+### Tools the deployed domains add
+
+At start-up the server asks each deployed domain for its tool manifest (`mcp.tools.v1`) and serves
+the union beside the tools above — one server, one tool list. With the agent domain deployed that adds
+the workspace tools, Connections (`connection_request`, `connections_status`, `gmail_search`,
+`gmail_read`, `gmail_thread`, `calendar_events`, `mail_inbox`, `mail_read`, `gmail_draft_create`,
+`secret_service_call`, `onboarding_research`), the person's clock (`current_time`, `timezone_set`) and
+`chat_name`; with flows deployed, `whats_waiting`, `report_friction` and the flow tools. Each is a route
+its domain serves, and the tool's arguments and description are that route's own.
+
+### Agent workers use this same server
+
+Every agent worker attaches this server, through the gateway's `/mcp`, as its `vexa` toolbelt. Its
+bearer is a delegation token minted for that one dispatch (`vxd_…`, an hour at most); the gateway
+resolves it through identity like an API key — as the person the worker acts for, with scopes `bot` and
+`tx` — and every tool call it makes is checked as theirs. A worker dispatched without a person in the
+loop (a routine, a meeting-triggered run) is refused the verbs that need one. There is no second MCP
+server for workers.
+
 ## Connect a client
 
 Point the client at the **gateway**, not at the MCP service's own port — the gateway is the

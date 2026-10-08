@@ -9,6 +9,8 @@ the same machinery as every other `<domain>/contracts/<name>.v<N>` (gate:schema 
 |---|---|---|
 | [`api.v1`](api.v1/) | api-gateway / mcp / meeting-api → the world | **frozen ≡ vexa `main` api-gateway 1.5.0** (OpenAPI 3.1) |
 | [`ws.v1`](ws.v1/) | api-gateway `/ws` → the world (live transcripts/status/chat) | **frozen ≡ vexa `main` `/ws`** (pinned by main's G5 WS gate test) |
+| [`logevent.v1`](logevent.v1/) | every service → logs (the structured log envelope + `trace_id`) | sealed |
+| [`identity.v1`](identity.v1/) | gateway → agent-api / meeting-api (`X-Vexa-Identity`, the signed identity on every forward) | sealed; the signer/verifier is vendored byte for byte (`gate:fact-parity`) |
 
 The rule (MANIFEST §2): a back-compatible change re-seals (`pnpm seal:contracts`); a
 breaking change opens `api.v2`, leaving `api.v1` until no consumer pins it.

@@ -41,6 +41,21 @@ ingress) and the values table. Key knobs: `global.imageTag`, `runtime.backend`
 (`k8s`|`docker`|`process`), `secrets.*` (or `secrets.existingSecretName`), `storage.s3.*`,
 `postgres/redis.enabled`, `pgbouncer.enabled`, `ingress.*`.
 
+## Identity, the MCP server and the network policy
+
+- **Generated at install.** `VEXA_GATEWAY_IDENTITY_SECRET` (the gateway signs the identity it resolved;
+  agent-api and meeting-api verify it) and `VEXA_MCP_DELEGATION_SECRET` (each agent worker's delegation
+  token, verified by admin-api) are generated into the chart Secret on first install and read back on
+  every upgrade. Set `secrets.gatewayIdentitySecret` / `secrets.mcpDelegationSecret` to supply your own;
+  with `secrets.existingSecretName` your Secret must carry both keys.
+- **One MCP server.** `mcp.enabled` (default on) deploys the assembled MCP service; the gateway relays
+  `/mcp` to it and agent-api points every worker's toolbelt at the gateway's `/mcp`.
+- **Who reaches agent-api and meeting-api.** `networkPolicy.enabled` (default on) admits agent-api traffic
+  from the gateway, the MCP service, the runtime, flows and the terminal, and meeting-api traffic from
+  the gateway, agent-api, the MCP service, the runtime and meeting bots. Agent workers reach neither —
+  they act through the gateway. Add your own peers with `networkPolicy.agentApi.extraFrom` /
+  `networkPolicy.meetingApi.extraFrom`. The policy needs a CNI that enforces NetworkPolicy.
+
 ## Spreading replicas across nodes
 
 `replicaCount > 1` alone buys rolling-update safety, not availability — the scheduler may place

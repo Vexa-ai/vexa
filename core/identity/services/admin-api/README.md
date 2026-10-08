@@ -13,7 +13,7 @@ service stays out of the identity business. Python because it carves the parent 
 | **calls** | terminal / dashboard login | `GET /admin/users/email/{email}` | resolve a returning user by email (find-or-create) |
 | **calls** | terminal / dashboard login | `POST /admin/users` · `POST /admin/users/{id}/tokens` | create user · mint a scoped session token |
 | **consumes** | terminal sign-in doors | `POST /internal/signin-admission` | `{email}` → `{admitted, why}`: an existing user, the admin, or an address on the sign-in allow-list (`VEXA_SIGNIN_ALLOW` + the `signin.allow` setting); anybody while no admin is claimed (Vexa-ai/vexa#1783) |
-| **consumes** | the gateway | `POST /internal/validate` | a raw token → `{user_id, scopes, max_concurrent, email, webhook_*}` (fail-closed) |
+| **consumes** | the gateway, flows | `POST /internal/validate` | a raw token → `{user_id, scopes, max_concurrent, email, webhook_*}` (fail-closed). A worker's delegation token (`vxd_…`, verified with `VEXA_MCP_DELEGATION_SECRET`) answers the same shape with scopes `bot`+`tx`, no admin role, and the dispatch's ceiling as `delegation` |
 | **calls** | bot/worker clients | `X-API-Key` on `/user/*` | user-tier self-serve (webhook config in `user.data`) |
 | **produces** | Postgres (backing stack) | SQLAlchemy `users` · `api_tokens` | the identity tables (one `Base`, FK `api_tokens.user_id → users.id`) |
 

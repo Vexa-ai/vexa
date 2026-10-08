@@ -32,8 +32,10 @@ lives in the cookbook layer *above* both domains, never inside this one. See
 |---|---|---|---|
 | consumes | meetings | `meetings/contracts/transcript.v1` (redis stream `transcription_segments` / `tc:meeting:<id>`) | transcript beats → live cards + `session_end` |
 | consumes | gateway / terminal | `POST /api/chat`, `POST /events`, `POST /invocations`, `POST /api/routines` | chat turns, external events, routine authoring |
+| verifies | gateway | `gateway/contracts/identity.v1` (`X-Vexa-Identity`, `control_plane/identity_token.py`) | the caller's identity, signed by the edge; an unsigned `x-user-*` header is believed only from the internal tier (`X-Internal-Secret`) |
+| publishes | gateway's MCP service | `mcp.tools.v1.json` at `/.well-known/mcp-tools.json` (routes in `mcp.tools.v1.openapi.json`) | the agent's tools — workspaces, Connections, the person's clock, `chat_name` — served by the one assembled MCP server to a person's client and to every worker |
 | consumes | identity | `identity/contracts/identity.v1` (`IdentityPort.mint`) | per-dispatch signed token, `canAccess` |
-| spawns-over | runtime | `runtime/contracts/runtime.v1` (profile `agent`) | worker `env`: mounted workspaces, token, redis topics, `start` |
+| spawns-over | runtime | `runtime/contracts/runtime.v1` (profile `agent`) | worker `env`: mounted workspaces, token, redis topics, `start`, and the toolbelt (`VEXA_MCP_URL` = the gateway's `/mcp`, a per-dispatch delegation token) |
 | produces | workspace | `workspaces/contracts/workspace.v1` (git repo) | typed `kg/entities/*` with `EntityFrontmatter` |
 | publishes | gateway / surfaces | `gateway/contracts/ws.v1` (redis `unit:<id>:out`, mode `card`) | turn events + `proactive-card.v1` outputs |
 | calls | scheduler | `schedule.v1` (a `routine.v1` `kind:scheduled` compiles to a cron job) | a `unit.v1` Invocation as the cron body |

@@ -68,6 +68,7 @@ Supervised by `supervisord`:
 | meeting-api | 8080 | bots, transcripts, recordings (→ storage sidecar, S3) |
 | runtime | 8090 | spawns bot + agent workers as **child processes** (process backend) |
 | agent-api | **8100** | the agent control plane — dispatch, chat (SSE), routines |
+| mcp | 8010 (loopback) | the one assembled MCP server; the gateway relays `/mcp` to it, and every agent worker's toolbelt reaches it there |
 | terminal | **3001** | agent-domain browser-CLI workbench (Next.js + custom `server.mjs` SSE/`/ws` relay) |
 | redis | 6379 | bus + scheduler + per-dispatch streams (internal) |
 | Xvfb · fluxbox · PulseAudio | :99 | display + audio for the headful bot browser |
@@ -144,7 +145,7 @@ Outgrow lite? Switch to [compose](../compose/README.md) — same images, same co
 |---|---|
 | Shared X11 display | bots share one Xvfb (`:99`) — best for one browser session at a time |
 | Ephemeral redis | internal redis is in-container; mount `/var/lib/redis` for persistence |
-| Agent ↔ gateway | the agent control plane is reached directly on `:8100` (gateway-fronting is roadmap) |
+| Agent ↔ gateway | the agent control plane listens on `:8100`, but it believes a user only from the gateway's signature (`X-Vexa-Identity`) or the internal tier — reach it through the gateway's `/agent/*` with an API key |
 
 ## Smoke probe — "is this install actually working?"
 

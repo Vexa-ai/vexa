@@ -106,6 +106,7 @@ redirect this operator callback. Leave all four values unset for the stock OSS b
 |---|---|---|
 | `ADMIN_TOKEN` | none — you must set it | Admin API key (`X-Admin-API-Key`) — mints users and tokens, and signs every per-spawn MeetingToken (meeting-api reads it as `ADMIN_TOKEN`, admin-api as `ADMIN_API_TOKEN`). |
 | `INTERNAL_API_SECRET` | none — you must set it | Shared secret for service-to-service calls. |
+| `VEXA_GATEWAY_IDENTITY_SECRET` | none — generated at install | The gateway signs the identity it resolved onto every request it forwards (`X-Vexa-Identity`); agent-api and meeting-api verify it and refuse a user header that is not signed. All three refuse to boot without it. `make up` / `mint-dev-env.sh`, the Helm chart and the Lite entrypoint generate it. |
 
 Neither has a default any more. Both services **refuse to boot** on a placeholder literal
 (`changeme`, `vexa-internal-secret`, `lite-internal-secret`, `default`, `secret`, …): a value
@@ -205,7 +206,8 @@ Point the agent at your own model so no inference leaves the network.
 | `ANTHROPIC_API_KEY` | — | Key for Anthropic-backed runners. |
 | `ANTHROPIC_MODEL` · `ANTHROPIC_DEFAULT_OPUS_MODEL` · `…_SONNET_MODEL` · `…_HAIKU_MODEL` | — | Per-tier model overrides. |
 | `HOST_CLAUDE_CREDENTIALS` | — | Host path to Claude credentials mounted into agent containers (see below). |
-| `VEXA_AGENT_DEFAULT_SUBJECT` | `u_live` | Fallback subject before the gateway fronts agent-api. |
+| `VEXA_MCP_URL` | the gateway's `/mcp` | The MCP server each agent worker attaches as its `vexa` toolbelt — the gateway's one assembled MCP server on every shipped surface. |
+| `VEXA_MCP_DELEGATION_SECRET` | generated at install | Signs each worker's short-lived delegation token (agent-api) and verifies it (admin-api, where the gateway resolves it). Empty: workers run without vexa tools, and every spawn says so in its log. |
 | `VEXA_ALLOW_LOCAL_REPO_ROOT` | — | `os.pathsep`-separated directories a workspace repo may be attached from as a local path (`POST /agent/workspace/swap`). Unset refuses local paths. |
 
 ### Claude subscription credentials (`HOST_CLAUDE_CREDENTIALS`)
