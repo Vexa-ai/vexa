@@ -1,35 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
-
-const ADMIN_COOKIE_NAME = "vexa-admin-session";
-const COOKIE_MAX_AGE = 60 * 60 * 24; // 24 hours
+import { ADMIN_COOKIE_NAME, checkAdminSessionValue } from "@/lib/admin-session";
 
 /**
- * Verify admin session from cookie
+ * Verify the admin session cookie: signature (JWT_SECRET HMAC) and age.
  */
 async function verifyAdminSession(): Promise<boolean> {
-  try {
-    const cookieStore = await cookies();
-    const sessionCookie = cookieStore.get(ADMIN_COOKIE_NAME);
-
-    if (!sessionCookie) {
-      return false;
-    }
-
-    const sessionData = JSON.parse(
-      Buffer.from(sessionCookie.value, "base64").toString()
-    );
-
-    // Check if session is expired (24 hours)
-    const sessionAge = Date.now() - sessionData.timestamp;
-    if (sessionAge > COOKIE_MAX_AGE * 1000) {
-      return false;
-    }
-
-    return sessionData.authenticated === true;
-  } catch {
-    return false;
-  }
+  const cookieStore = await cookies();
+  return checkAdminSessionValue(cookieStore.get(ADMIN_COOKIE_NAME)?.value).valid;
 }
 
 /**

@@ -6,8 +6,8 @@ import { findUserByEmail, createUser, createUserToken } from "@/lib/vexa-admin-a
 import { cookies } from "next/headers";
 import { getAuthCookieName, getUserInfoCookieName } from "@/lib/auth-cookies";
 import { isValidEmailFormat } from "@/lib/email-format";
+import { JWT_SECRET_NOT_CONFIGURED, getJwtSecret } from "@/lib/jwt-secret";
 
-const JWT_SECRET = process.env.JWT_SECRET || process.env.VEXA_ADMIN_API_KEY || "default-secret-change-me";
 const MAGIC_LINK_EXPIRY = "15m"; // 15 minutes
 
 /**
@@ -148,7 +148,7 @@ async function handleDirectLogin(email: string): Promise<NextResponse> {
     maxAge: 60 * 60 * 24 * 30, // 30 days
     path: "/",
   });
-  // Set user-info cookie so getAuthenticatedUserId can resolve the user
+  // Set the user-info cookie (display details only; identity comes from the token)
   // (mirrors what the verify endpoint and SSO flow set)
   cookieStore.set(getUserInfoCookieName(), JSON.stringify({ email: user!.email, name: user!.name }), {
     httpOnly: true,
@@ -226,6 +226,11 @@ export async function POST(request: NextRequest) {
     }
 
     // Magic Link mode - send email verification
+    const jwtSecret = getJwtSecret();
+    if (!jwtSecret) {
+      return NextResponse.json(JWT_SECRET_NOT_CONFIGURED, { status: 503 });
+    }
+
     // Check if user exists (also validates API connectivity)
     const userCheck = await checkUserExists(email);
 
@@ -250,8 +255,8 @@ export async function POST(request: NextRequest) {
     // Generate JWT token with email
     const token = jwt.sign(
       { email, type: "magic-link" },
-      JWT_SECRET,
-      { expiresIn: MAGIC_LINK_EXPIRY }
+      jwtSecret,
+      { algorithm: "HS256", expiresIn: MAGIC_LINK_EXPIRY }
     );
 
     // Build magic link URL

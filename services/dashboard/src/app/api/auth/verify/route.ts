@@ -3,6 +3,7 @@ import { cookies } from "next/headers";
 import jwt from "jsonwebtoken";
 import { getRegistrationConfig, validateEmailForRegistration } from "@/lib/registration";
 import { findUserByEmail, createUser, createUserToken, type ApiError } from "@/lib/vexa-admin-api";
+import { JWT_SECRET_NOT_CONFIGURED, getJwtSecret } from "@/lib/jwt-secret";
 
 function isSecureRequest(): boolean {
   return process.env.NEXTAUTH_URL?.startsWith("https://") ||
@@ -10,7 +11,6 @@ function isSecureRequest(): boolean {
          false;
 }
 
-const JWT_SECRET = process.env.JWT_SECRET || process.env.VEXA_ADMIN_API_KEY || "default-secret-change-me";
 
 interface MagicLinkPayload {
   email: string;
@@ -95,9 +95,13 @@ export async function POST(request: NextRequest) {
     }
 
     // Step 1: Verify JWT token
+    const jwtSecret = getJwtSecret();
+    if (!jwtSecret) {
+      return NextResponse.json(JWT_SECRET_NOT_CONFIGURED, { status: 503 });
+    }
     let payload: MagicLinkPayload;
     try {
-      payload = jwt.verify(token, JWT_SECRET) as MagicLinkPayload;
+      payload = jwt.verify(token, jwtSecret, { algorithms: ["HS256"] }) as MagicLinkPayload;
     } catch (jwtError) {
       const err = jwtError as jwt.JsonWebTokenError;
       if (err.name === "TokenExpiredError") {
@@ -193,7 +197,7 @@ export async function POST(request: NextRequest) {
       maxAge: 60 * 60 * 24 * 30, // 30 days
       path: "/",
     });
-    // Set user-info cookie so getAuthenticatedUserId can resolve the user
+    // Set the user-info cookie (display details only; identity comes from the token)
     cookieStore.set("vexa-user-info", JSON.stringify({ email: user!.email, name: user!.name }), {
       httpOnly: true,
       secure: isSecureRequest(),

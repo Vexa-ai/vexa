@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { cookies } from "next/headers";
-import { getAuthCookieName } from "@/lib/auth-cookies";
+import { getAuthenticatedUserId } from "@/lib/auth-utils";
 
 /**
- * DELETE /api/profile/keys/:id — revoke an API key via admin API
+ * DELETE /api/profile/keys/:id — revoke one of the signed-in user's API keys
+ * via the admin API. Keys belonging to anyone else are reported as not found.
  */
 export async function DELETE(
   _request: NextRequest,
@@ -16,20 +16,35 @@ export async function DELETE(
     return NextResponse.json({ error: "Admin API URL/key not configured" }, { status: 503 });
   }
 
-  const cookieStore = await cookies();
-  const token = cookieStore.get(getAuthCookieName())?.value;
-  if (!token) {
+  const userId = await getAuthenticatedUserId();
+  if (!userId) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
   }
 
   const { id } = await params;
+  if (!/^\d+$/.test(id)) {
+    return NextResponse.json({ error: "API key not found" }, { status: 404 });
+  }
 
   try {
-    const response = await fetch(`${VEXA_ADMIN_API_URL}/admin/tokens/${id}`, {
+    // Only revoke a key the signed-in user owns.
+    const userRes = await fetch(`${VEXA_ADMIN_API_URL}/admin/users/${encodeURIComponent(userId)}`, {
+      headers: { "X-Admin-API-Key": VEXA_ADMIN_API_KEY },
+      cache: "no-store",
+    });
+    if (!userRes.ok) {
+      return NextResponse.json({ error: "Failed to revoke API key" }, { status: 502 });
+    }
+    const userData = (await userRes.json()) as { api_tokens?: Array<{ id?: unknown }> };
+    const owned = (userData.api_tokens || []).some((t) => String(t.id) === id);
+    if (!owned) {
+      return NextResponse.json({ error: "API key not found" }, { status: 404 });
+    }
+
+    const response = await fetch(`${VEXA_ADMIN_API_URL}/admin/tokens/${encodeURIComponent(id)}`, {
       method: "DELETE",
       headers: {
         "X-Admin-API-Key": VEXA_ADMIN_API_KEY,
-        "X-API-Key": token,
       },
     });
 

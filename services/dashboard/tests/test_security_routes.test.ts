@@ -6,6 +6,7 @@ const findUserByEmail = vi.fn();
 const getUserById = vi.fn();
 const updateUser = vi.fn();
 const getAuthenticatedUserId = vi.fn();
+const getAuthenticatedUser = vi.fn();
 const cookieValues = new Map<string, string>();
 
 vi.mock("@/lib/vexa-admin-api", () => ({
@@ -15,6 +16,7 @@ vi.mock("@/lib/vexa-admin-api", () => ({
 }));
 vi.mock("@/lib/auth-utils", () => ({
   getAuthenticatedUserId: () => getAuthenticatedUserId(),
+  getAuthenticatedUser: () => getAuthenticatedUser(),
 }));
 vi.mock("next/headers", () => ({
   cookies: async () => ({
@@ -34,6 +36,11 @@ const ENV_KEYS = [
   "VEXA_API_URL",
   "VEXA_ADMIN_API_URL",
   "VEXA_ADMIN_API_KEY",
+  "VEXA_API_KEY",
+  "JWT_SECRET",
+  "SMTP_HOST",
+  "SMTP_USER",
+  "SMTP_PASS",
 ];
 const savedEnv: Record<string, string | undefined> = {};
 
@@ -49,10 +56,7 @@ beforeEach(() => {
   process.env.VEXA_API_URL = "http://gateway.test";
   process.env.VEXA_ADMIN_API_URL = "http://admin.test";
   process.env.VEXA_ADMIN_API_KEY = "admin-key";
-  findUserByEmail.mockResolvedValue({
-    success: true,
-    data: { id: 42, email: "user@example.com" },
-  });
+  getAuthenticatedUser.mockResolvedValue({ id: "42", email: "user@example.com" });
 });
 
 afterEach(() => {
@@ -290,5 +294,154 @@ describe("GET /api/webhooks/deliveries", () => {
     expect(fetchSpy.mock.calls.map((call) => String(call[0]))).toEqual([
       "http://gateway.test/meetings",
     ]);
+  });
+});
+
+describe.each([
+  ["zoom", "@/app/api/zoom/oauth/start/route"],
+  ["calendar", "@/app/api/calendar/oauth/start/route"],
+])("%s OAuth start is bound to the signed-in user", (_name, modulePath) => {
+  it("refuses a request without a session, whatever email the body names", async () => {
+    getAuthenticatedUser.mockResolvedValue(null);
+    const { POST } = await import(modulePath);
+    const res = await POST(
+      jsonRequest("https://dashboard.example.com/api/x", { userEmail: "victim@example.com" })
+    );
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: "Not authenticated" });
+    expect(findUserByEmail).not.toHaveBeenCalled();
+  });
+
+  it("signs state for the session user and ignores a different body email", async () => {
+    const { POST } = await import(modulePath);
+    const res = await POST(
+      jsonRequest("https://dashboard.example.com/api/x", { userEmail: "victim@example.com" })
+    );
+    expect(res.status).toBe(200);
+    const { payload } = stateParts((await res.json()).authUrl);
+    expect(payload).toMatchObject({ userId: "42", email: "user@example.com" });
+    expect(findUserByEmail).not.toHaveBeenCalled();
+  });
+
+  it("does not reveal whether an email is registered", async () => {
+    getAuthenticatedUser.mockResolvedValue(null);
+    const { POST } = await import(modulePath);
+    const known = await POST(
+      jsonRequest("https://dashboard.example.com/api/x", { userEmail: "user@example.com" })
+    );
+    const unknown = await POST(
+      jsonRequest("https://dashboard.example.com/api/x", { userEmail: "nobody@example.com" })
+    );
+    expect(known.status).toBe(unknown.status);
+    expect(await known.json()).toEqual(await unknown.json());
+  });
+
+  it("looks up the email by the session user id when the session carries none", async () => {
+    getAuthenticatedUser.mockResolvedValue({ id: "42", email: "" });
+    getUserById.mockResolvedValue({ success: true, data: { id: 42, email: "user@example.com" } });
+    const { POST } = await import(modulePath);
+    const res = await POST(jsonRequest("https://dashboard.example.com/api/x", {}));
+    expect(res.status).toBe(200);
+    expect(getUserById).toHaveBeenCalledWith("42");
+    expect(stateParts((await res.json()).authUrl).payload.email).toBe("user@example.com");
+  });
+});
+
+describe("GET /api/webhooks/deliveries/:meetingId", () => {
+  const params = (meetingId: string) => ({ params: Promise.resolve({ meetingId }) });
+
+  it("refuses a request without a user session, even with a service key configured", async () => {
+    process.env.VEXA_API_KEY = "service-key";
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    const { GET } = await import("@/app/api/webhooks/deliveries/[meetingId]/route");
+    const res = await GET(
+      new NextRequest("https://dashboard.example.com/api/webhooks/deliveries/5"),
+      params("5")
+    );
+    expect(res.status).toBe(401);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("calls the gateway with the user's own token", async () => {
+    process.env.VEXA_API_KEY = "service-key";
+    cookieValues.set("vexa-token", "user-token");
+    const fetchSpy = vi.fn(
+      async (_url: string, _init?: RequestInit) => new Response(JSON.stringify({ attempts: [] }))
+    );
+    vi.stubGlobal("fetch", fetchSpy);
+    const { GET } = await import("@/app/api/webhooks/deliveries/[meetingId]/route");
+    const res = await GET(
+      new NextRequest("https://dashboard.example.com/api/webhooks/deliveries/5"),
+      params("5")
+    );
+    expect(res.status).toBe(200);
+    const [url, init] = fetchSpy.mock.calls[0];
+    expect(url).toBe("http://gateway.test/admin/webhooks/deliveries/5");
+    expect((init?.headers as Record<string, string>)["X-API-Key"]).toBe("user-token");
+  });
+});
+
+describe("magic-link signing secret", () => {
+  function enableSmtp() {
+    process.env.SMTP_HOST = "smtp.example.com";
+    process.env.SMTP_USER = "u";
+    process.env.SMTP_PASS = "p";
+  }
+
+  it.each([undefined, "", "default-secret-change-me"])(
+    "refuses to send a link when JWT_SECRET is %j",
+    async (value) => {
+      enableSmtp();
+      if (value === undefined) delete process.env.JWT_SECRET;
+      else process.env.JWT_SECRET = value;
+      const fetchSpy = vi.fn();
+      vi.stubGlobal("fetch", fetchSpy);
+      const { POST } = await import("@/app/api/auth/send-magic-link/route");
+      const res = await POST(
+        jsonRequest("https://dashboard.example.com/api/auth/send-magic-link", {
+          email: "user@example.com",
+        })
+      );
+      expect(res.status).toBe(503);
+      expect((await res.json()).code).toBe("JWT_SECRET_NOT_CONFIGURED");
+      expect(fetchSpy).not.toHaveBeenCalled();
+    }
+  );
+
+  it("refuses to verify a link when JWT_SECRET is unset", async () => {
+    delete process.env.JWT_SECRET;
+    const { POST } = await import("@/app/api/auth/verify/route");
+    const res = await POST(
+      jsonRequest("https://dashboard.example.com/api/auth/verify", { token: "anything" })
+    );
+    expect(res.status).toBe(503);
+    expect((await res.json()).code).toBe("JWT_SECRET_NOT_CONFIGURED");
+  });
+
+  it("rejects a link signed with the former default secret", async () => {
+    process.env.JWT_SECRET = "the-real-secret";
+    const jwt = (await import("jsonwebtoken")).default;
+    const forged = jwt.sign({ email: "user@example.com", type: "magic-link" }, "default-secret-change-me");
+    const { POST } = await import("@/app/api/auth/verify/route");
+    const res = await POST(
+      jsonRequest("https://dashboard.example.com/api/auth/verify", { token: forged })
+    );
+    expect(res.status).toBe(401);
+    expect(findUserByEmail).not.toHaveBeenCalled();
+  });
+
+  it("accepts a link signed with JWT_SECRET", async () => {
+    process.env.JWT_SECRET = "the-real-secret";
+    const jwt = (await import("jsonwebtoken")).default;
+    const token = jwt.sign({ email: "user@example.com", type: "magic-link" }, "the-real-secret");
+    findUserByEmail.mockResolvedValue({ success: false, error: { code: "SERVER_ERROR", message: "x" } });
+    const { POST } = await import("@/app/api/auth/verify/route");
+    const res = await POST(
+      jsonRequest("https://dashboard.example.com/api/auth/verify", { token })
+    );
+    // Past the signature check: the (stubbed) user lookup is what answers.
+    expect(findUserByEmail).toHaveBeenCalledWith("user@example.com");
+    expect(res.status).not.toBe(401);
   });
 });
