@@ -2,6 +2,13 @@
   "_comment": "Packaging-side licence manifest (P17 / ADR-0004, #653), the complement to license-exceptions.json. gate:licenses scans the npm/py DEPENDENCY tree; it is blind to what our IMAGES ship. This file declares the two surfaces it cannot see, and gate:image-licenses (scripts/gates.mjs) audits them: `images` = third-party container images pinned by deploy-owned compose, Helm, Lite Dockerfile FROM surfaces, or Lite Makefile `*_IMAGE` variables (an undeclared pin fails; a non-permissive one needs a logged `reason`); `bundled` = components baked INTO a published vexaai/* image (redistribution \u2014 Cat A or Cat-B-with-reason only, Cat X always fails). `name` matches an image ref with its :tag stripped. The per-release SPDX SBOM inventories every package name installed by the Lite final stage; because Docker source cannot resolve Ubuntu package versions or licences, those fields stay NOASSERTION until an image-level scanner enriches them.",
   "images": [
     {
+      "name": "openbao/openbao",
+      "license": "MPL-2.0",
+      "disposition": "operator-run",
+      "reason": "Optional credential-store backend for the Connections broker (VEXA_CONNECTIONS_STORE=openbao, ADR-0040). Not pinned on any deploy surface and not redistributed in any vexaai/* artifact: compose and the chart default to the broker's own AES-256-GCM store, and an operator who chooses OpenBao runs their own server and points the broker at it over HTTP. MPL-2.0 is Category B (file-level weak copyleft); the broker is separate code that only speaks OpenBao's KV v2 API, so no Vexa source is covered. Declared here so the day a surface pins it, the licence decision is already on record.",
+      "note": "The 0.13.2 development harness (deploy/dogfood/credentials-mvp, removed) pinned ghcr.io/openbao/openbao by digest; that compose file was never a scanned deploy surface."
+    },
+    {
       "name": "mcr.microsoft.com/playwright",
       "license": "Apache-2.0",
       "disposition": "base-image",
