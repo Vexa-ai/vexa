@@ -419,6 +419,12 @@ agentApi:
   resources:
     requests: { cpu: 100m, memory: 256Mi }
     limits:   { cpu: 1000m, memory: 1Gi }
+  # A chat turn that reaches its tool-call budget continues into a fresh window ("1"), at most
+  # maxChatContinuations times ("4"; 0-50) and always inside the whole-turn clock, so research in a
+  # chat is not cut off at 40 calls and no chat runs without end. "0" stops every chat turn at the
+  # budget with a Continue act instead. agent-api validates both at boot and stamps them into workers.
+  autoContinueChat: "1"
+  maxChatContinuations: "4"
   extraEnv: []
 
 # ---------- Connections: the credential broker (credential-broker.v1, ADR-0040) ----------

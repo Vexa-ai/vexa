@@ -50,7 +50,8 @@ always attached, and refuses any URL that resolves into the deployment's own net
 
 SIZING (CCC-Inference-Deployment): the KV cache holds ~29 requests at 24k context, so the loop
 keeps a whole-turn time budget and trims context (oldest tool results first) to stay under
-``VEXA_AGENT_CONTEXT_TOKENS``. Chat call windows continue automatically by default;
+``VEXA_AGENT_CONTEXT_TOKENS``. Chat call windows continue automatically by default, at most
+``VEXA_AGENT_MAX_CHAT_CONTINUATIONS`` times (default 4) inside the whole-turn clock;
 ``VEXA_AGENT_AUTO_CONTINUE_CHAT=0`` restores the hard call cap for operators who require it.
 
 A JOB IS NOT A TURN (Vexa-ai/vexa#1613). The sizing above is about how much of the box ONE request
@@ -146,6 +147,12 @@ log = logging.getLogger(__name__)
 _DEFAULT_CONTEXT_TOKENS = 24_000
 _DEFAULT_MAX_TOOL_CALLS = 40
 _DEFAULT_MAX_TURN_SEC = 900.0
+#: A CHAT turn that reaches its per-window call budget continues into a fresh window
+#: (``VEXA_AGENT_AUTO_CONTINUE_CHAT``, on by default) at most this many times
+#: (``VEXA_AGENT_MAX_CHAT_CONTINUATIONS``); after the last one it stops at the budget and offers
+#: Continue, like a turn with continuation off. With the default 40 calls a window, that is 200 calls.
+_DEFAULT_AUTO_CONTINUE_CHAT = True
+_DEFAULT_MAX_CHAT_CONTINUATIONS = 4
 #: A BACKGROUND JOB's budgets (Vexa-ai/vexa#1613) — per WINDOW for the calls, whole-job for the
 #: clock. 160 is four turns' worth: above the 72 steps the OeNB job reached before it was killed,
 #: and low enough that one job cannot hold the box indefinitely between checkpoints.
@@ -179,6 +186,14 @@ def _int_env(key: str, default: int) -> int:
         return int(os.environ.get(key, "") or default)
     except ValueError:
         return default
+
+
+def _auto_continue_chat() -> bool:
+    """``VEXA_AGENT_AUTO_CONTINUE_CHAT`` — unset means the default (on); 0/false/no turns it off."""
+    raw = (os.environ.get("VEXA_AGENT_AUTO_CONTINUE_CHAT") or "").strip().lower()
+    if not raw:
+        return _DEFAULT_AUTO_CONTINUE_CHAT
+    return raw not in {"0", "false", "no", "off"}
 
 
 def _float_env(key: str, default: float) -> float:
@@ -1103,7 +1118,9 @@ class OpenAIAgentHarness:
             budget_calls = _calls_budget(kind)
             # Interactive research continues across call windows without replaying tools.
             # Zero still disables execution; the whole-turn clock and allow-set remain enforced.
-            auto_continue = kind == "chat" and os.environ.get("VEXA_AGENT_AUTO_CONTINUE_CHAT", "1").lower() not in {"0", "false", "no"}
+            auto_continue = kind == "chat" and _auto_continue_chat()
+            continuations_left = _int_env("VEXA_AGENT_MAX_CHAT_CONTINUATIONS",
+                                          _DEFAULT_MAX_CHAT_CONTINUATIONS) if auto_continue else 0
             budget_secs = _job_seconds() if is_job else _float_env("VEXA_AGENT_MAX_TURN_SEC",
                                                                    _DEFAULT_MAX_TURN_SEC)
             ctx_budget = _int_env("VEXA_AGENT_CONTEXT_TOKENS", _DEFAULT_CONTEXT_TOKENS)
@@ -1155,11 +1172,14 @@ class OpenAIAgentHarness:
                 messages.append(oa)
                 over_budget = False
                 for i, call in enumerate(calls):
-                    if auto_continue and budget_calls > 0 and calls_made >= budget_calls:
+                    if (auto_continue and budget_calls > 0 and calls_made >= budget_calls
+                            and continuations_left > 0):
                         # Keep the pending call and every prior result. Context trimming remains
                         # bounded independently; do not fabricate a refusal or re-ask the model.
+                        # Bounded: after the last continuation the budget below stops the turn.
                         calls_made = 0
                         window += 1
+                        continuations_left -= 1
                     if calls_made >= budget_calls or (time.monotonic() - started) > budget_secs:
                         over_budget = True
                         reason = "tool-call budget" if calls_made >= budget_calls else "time budget"

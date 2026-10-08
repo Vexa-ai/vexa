@@ -697,6 +697,10 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
             env[_var] = os.environ[_var]
     if settings.agent_model:
         env["VEXA_AGENT_MODEL"] = settings.agent_model
+    # The chat-continuation dials the openai-agent harness reads (shared/config.py). Always stamped,
+    # so a worker runs on the deployment's declared value rather than on a default of its own.
+    env["VEXA_AGENT_AUTO_CONTINUE_CHAT"] = "1" if settings.agent_auto_continue_chat else "0"
+    env["VEXA_AGENT_MAX_CHAT_CONTINUATIONS"] = str(settings.agent_max_chat_continuations)
     # The optional operator model gate.
     if settings.model_allowlist:
         env["VEXA_MODEL_ALLOWLIST"] = settings.model_allowlist

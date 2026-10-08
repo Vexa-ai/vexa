@@ -42,6 +42,10 @@ export VEXA_SIGNIN_ALLOW="${VEXA_SIGNIN_ALLOW:-}"
 # The administrators, comma-separated full addresses (admin-api reads it; the terminal only asks).
 # Naming them closes the admin claim — set it whenever the terminal is reachable from outside.
 export VEXA_ADMIN_EMAILS="${VEXA_ADMIN_EMAILS:-}"
+# A chat turn continues past its tool-call budget into a fresh window, at most this many times
+# (agent-api validates both and stamps them into every worker; see deploy/compose/.env.example).
+export VEXA_AGENT_AUTO_CONTINUE_CHAT="${VEXA_AGENT_AUTO_CONTINUE_CHAT:-1}"
+export VEXA_AGENT_MAX_CHAT_CONTINUATIONS="${VEXA_AGENT_MAX_CHAT_CONTINUATIONS:-4}"
 # The admin tier, on the same terms as the internal tier below and for a LARGER blast radius:
 # this token mints an API key for ANY user and HS256-signs every per-spawn MeetingToken. It
 # defaulted to the published literal `changeme`, so every lite stack nobody configured shared one

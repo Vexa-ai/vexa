@@ -260,7 +260,9 @@ def test_the_qwen_lane_dials_are_declared():
 # VEXA_GIT_STORE_BROKER_URL + VEXA_GIT_STORE_KEY_FILE (capability `git_credential_broker`). The four
 # were first declared `targets: []` for a dogfood overlay; since the broker is a product service
 # (ADR-0040) they are plumbed on compose and helm, and gate:config-contract holds them there.
-EXPECTED_DECLARED_KEYS = 103
+# 104: +1 VEXA_AGENT_MAX_CHAT_CONTINUATIONS — the bound on VEXA_AGENT_AUTO_CONTINUE_CHAT, and both
+# now plumbed on compose, helm and lite (they were `targets: []`, so no standard install could set them).
+EXPECTED_DECLARED_KEYS = 104
 
 
 def test_connections_keys_are_capabilities_on_real_surfaces():

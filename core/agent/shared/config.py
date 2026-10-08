@@ -83,6 +83,14 @@ class Settings(BaseSettings):
     # (TTL-on-idle). A live worker takes the thread's next message WARM (no container/CLI cold
     # start) — the window is the warm-hit budget; an idle worker costs only its parked memory.
     chat_idle_timeout_sec: int = Field(default=900, ge=30)
+    # The openai-agent harness's CHAT turns continue past the per-window tool-call budget into a
+    # fresh window (v0.13.2: research in an ordinary chat is not cut off at 40 calls), at most
+    # `agent_max_chat_continuations` times — the bound that keeps one chat from running without end
+    # (the whole-turn clock, VEXA_AGENT_MAX_TURN_SEC, still applies). Both are stamped into every
+    # worker (dispatch.build_unit_env), so the deployment's value is the one a turn runs on. The
+    # defaults are the harness's own (llm/openai_agent.py); a test holds them equal.
+    agent_auto_continue_chat: bool = True
+    agent_max_chat_continuations: int = Field(default=4, ge=0, le=50)
 
     # ── MVP3 toolbelt — tool.v1 descriptors + MCP launch specs (the generic tool mechanism) ──
     # A unit's unit.v1.tools names resolve against this dir into --allowedTools + an .mcp.json.

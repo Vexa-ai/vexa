@@ -1009,3 +1009,72 @@ def test_auto_continuation_keeps_time_limit(tmp_path, monkeypatch):
     events=_events(h,tmp_path,"work",allowed_tools=["Write"])
     assert not events[-1]['ok'] and 'time budget' in events[-1]['reason']
     assert not (tmp_path/'never.md').exists()
+
+
+# ── chat continuation is BOUNDED (VEXA_AGENT_MAX_CHAT_CONTINUATIONS) ────────────────────────────
+
+def test_chat_continuation_stops_after_the_configured_number_of_windows(tmp_path, monkeypatch):
+    """Auto-continue lifts the per-window call cap; this is the cap on the lifting. A model that
+    never stops gets 1 + N windows and then the same stop, line and Continue act as a hard cap."""
+    monkeypatch.delenv("VEXA_AGENT_AUTO_CONTINUE_CHAT", raising=False)
+    monkeypatch.setenv("VEXA_AGENT_MAX_TOOL_CALLS", "3")
+    monkeypatch.setenv("VEXA_AGENT_MAX_CHAT_CONTINUATIONS", "2")
+    h = _harness(_never_stops())
+    h.prepare(tmp_path)
+    evs = _events(h, tmp_path, "research everything", allowed_tools=["Glob"])
+    done = evs[-1]
+    assert sum(1 for e in evs if e["type"] == "tool-call") == 9      # 3 windows of 3
+    assert done["ok"] is False and "tool-call budget" in done["reason"]
+    assert done["act"]["label"] == "Continue"
+
+
+def test_no_continuations_means_the_hard_cap(tmp_path, monkeypatch):
+    monkeypatch.delenv("VEXA_AGENT_AUTO_CONTINUE_CHAT", raising=False)
+    monkeypatch.setenv("VEXA_AGENT_MAX_TOOL_CALLS", "3")
+    monkeypatch.setenv("VEXA_AGENT_MAX_CHAT_CONTINUATIONS", "0")
+    h = _harness(_never_stops())
+    h.prepare(tmp_path)
+    evs = _events(h, tmp_path, "research everything", allowed_tools=["Glob"])
+    assert sum(1 for e in evs if e["type"] == "tool-call") == 3 and evs[-1]["ok"] is False
+
+
+def test_the_default_bound_is_finite(tmp_path, monkeypatch):
+    """Unset, a never-stopping chat still ends: 1 + the default continuations windows."""
+    from llm import openai_agent
+    monkeypatch.delenv("VEXA_AGENT_AUTO_CONTINUE_CHAT", raising=False)
+    monkeypatch.delenv("VEXA_AGENT_MAX_CHAT_CONTINUATIONS", raising=False)
+    monkeypatch.setenv("VEXA_AGENT_MAX_TOOL_CALLS", "2")
+    h = _harness(_never_stops())
+    h.prepare(tmp_path)
+    evs = _events(h, tmp_path, "research everything", allowed_tools=["Glob"])
+    expected = 2 * (1 + openai_agent._DEFAULT_MAX_CHAT_CONTINUATIONS)
+    assert sum(1 for e in evs if e["type"] == "tool-call") == expected and evs[-1]["ok"] is False
+
+
+def test_agent_api_declares_the_harness_defaults_and_stamps_them_into_every_worker(monkeypatch):
+    from llm import openai_agent
+    from shared.config import Settings
+    from control_plane.dispatch import build_unit_env
+    monkeypatch.delenv("VEXA_AGENT_AUTO_CONTINUE_CHAT", raising=False)
+    monkeypatch.delenv("VEXA_AGENT_MAX_CHAT_CONTINUATIONS", raising=False)
+    s = Settings()
+    assert s.agent_auto_continue_chat is openai_agent._DEFAULT_AUTO_CONTINUE_CHAT
+    assert s.agent_max_chat_continuations == openai_agent._DEFAULT_MAX_CHAT_CONTINUATIONS
+    inv = {"identity": {"subject": "u_1", "launcher": "user:u_1"}, "runner": "openai-agent",
+           "workspaces": [{"id": "u_1", "mode": "rw"}], "trigger": "message",
+           "start": {"entrypoint": {"inline": "hi"}}}
+    env = build_unit_env(s, inv, unit_id="unit-1", token="tok")
+    assert env["VEXA_AGENT_AUTO_CONTINUE_CHAT"] == "1" and env["VEXA_AGENT_MAX_CHAT_CONTINUATIONS"] == "4"
+    monkeypatch.setenv("VEXA_AGENT_AUTO_CONTINUE_CHAT", "0")
+    monkeypatch.setenv("VEXA_AGENT_MAX_CHAT_CONTINUATIONS", "7")
+    env = build_unit_env(Settings(), inv, unit_id="unit-1", token="tok")
+    assert env["VEXA_AGENT_AUTO_CONTINUE_CHAT"] == "0" and env["VEXA_AGENT_MAX_CHAT_CONTINUATIONS"] == "7"
+
+
+@pytest.mark.parametrize("bad", ["-1", "51", "many"])
+def test_agent_api_refuses_a_malformed_continuation_bound_at_boot(monkeypatch, bad):
+    from pydantic import ValidationError
+    from shared.config import Settings
+    monkeypatch.setenv("VEXA_AGENT_MAX_CHAT_CONTINUATIONS", bad)
+    with pytest.raises(ValidationError):
+        Settings()

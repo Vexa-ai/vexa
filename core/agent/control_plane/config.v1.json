@@ -867,9 +867,24 @@
     {
       "key": "VEXA_AGENT_AUTO_CONTINUE_CHAT",
       "default": "1",
-      "description": "Continue chat tool-call windows automatically; 0 restores the hard per-turn call cap. Configured through the Minutes dogfood deployment overlay; standard deployment templates do not expose this setting.",
+      "description": "openai-agent harness: a CHAT turn that reaches its per-window tool-call budget continues into a fresh window instead of stopping (v0.13.2: research in an ordinary chat is not cut off at 40 calls), at most VEXA_AGENT_MAX_CHAT_CONTINUATIONS times and always inside VEXA_AGENT_MAX_TURN_SEC. 0 restores the hard per-turn call cap. Validated by agent-api at boot (shared/config.py) and stamped into every worker (dispatch.build_unit_env).",
       "class": "defaulted",
-      "targets": []
+      "targets": [
+        "compose",
+        "helm",
+        "lite"
+      ]
+    },
+    {
+      "key": "VEXA_AGENT_MAX_CHAT_CONTINUATIONS",
+      "default": "4",
+      "description": "openai-agent harness: the most fresh windows a chat turn may continue into (0-50). After the last one the turn stops at the tool-call budget and offers Continue, so a chat cannot run unbounded: with the default 40 calls a window, 200 calls. Validated by agent-api at boot and stamped into every worker.",
+      "class": "defaulted",
+      "targets": [
+        "compose",
+        "helm",
+        "lite"
+      ]
     }
   ],
   "capabilities": {
