@@ -1,0 +1,26 @@
+{
+  "name": "@vexa/zoom-sdk-capture",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "tsx src/capture.test.ts"
+  },
+  "dependencies": {
+    "@vexa/capture-codec": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "tsx": "^4.19.0",
+    "@types/node": "^20.0.0"
+  }
+}
