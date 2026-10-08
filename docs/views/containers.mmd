@@ -10,6 +10,7 @@ flowchart LR
   end
   subgraph agent["agent"]
     agent_api["agent-api"]
+    credentials_broker["credential-broker"]
     agent_worker["agent-worker"]
     agent_mcp["agent-mcp"]
   end
@@ -43,8 +44,7 @@ flowchart LR
   claude_plugin["claude-plugin"]
   terminal["terminal"]
   dashboard["dashboard (deprecated)"]
-  credentials_broker["credentials-broker"]
-  credentials_vault["OpenBao"]
+  credentials_vault["OpenBao (optional)"]
   meeting_api -->|"write"| segments_table
   bot -->|"HTTPS"| transcription
   meeting_api -->|"JDBC"| postgres
@@ -69,8 +69,8 @@ flowchart LR
   flows_worker -->|""| agent_api
   flows_worker -->|""| gateway
   flows_worker -->|""| admin_api
-  agent_api -->|"req"| credentials_broker
-  terminal -->|"req"| credentials_broker
+  agent_api -->|"HTTP"| credentials_broker
+  terminal -->|"HTTP"| credentials_broker
   credentials_broker -->|"req"| credentials_vault
   gateway -->|"HTTP"| agent_mcp
   agent_mcp -->|"HTTP"| agent_api

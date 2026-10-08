@@ -17,6 +17,7 @@ flowchart LR
   va_chat[("va:meeting:{id}:chat (pubsub)")]
   identity_db[("identity (users/api_tokens)")]
   flows_rows[("flows-rows")]
+  credentials_store[("broker state (metadata.sqlite, secrets.sqlite)")]
   bot -->|write| segments_stream
   bot -->|write| tc_mutable
   meeting_api -.->|read| segments_stream
@@ -48,3 +49,4 @@ flowchart LR
   flows_worker -->|write| flows_rows
   flows_api -->|write| flows_rows
   flows_api -.->|read| flows_rows
+  credentials_broker -->|write| credentials_store

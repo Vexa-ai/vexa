@@ -1336,19 +1336,58 @@
   {
    "unique-id": "credentials-broker",
    "node-type": "service",
-   "name": "credentials-broker",
-   "description": "Optional development credential broker; tenant metadata and audited fixed operations, human-only consent",
+   "name": "credential-broker",
+   "description": "Connections credential broker (credential-broker.v1, ADR-0039): verifies signed agent/human/git role assertions, owns connection metadata, audit and OAuth state, and uses stored credentials for the caller without returning them to the agent or human roles. Deployed with agent-api (compose, helm); not in Lite",
    "metadata": [
     {
-     "path": "deploy/dogfood/credentials-mvp"
+     "path": "core/agent/services/credential-broker"
+    }
+   ],
+   "interfaces": [
+    {
+     "unique-id": "credential-broker-rest",
+     "type": "api"
     }
    ]
   },
   {
    "unique-id": "credentials-vault",
    "node-type": "service",
-   "name": "OpenBao",
-   "description": "Optional encrypted credential storage; broker-only access"
+   "name": "OpenBao (optional)",
+   "description": "An OpenBao or Vault KV v2 mount the operator runs, selected with VEXA_CONNECTIONS_STORE=openbao; broker-only access. Not shipped by the chart or compose: without it the broker keeps credentials in credentials-store"
+  },
+  {
+   "unique-id": "credential-broker.v1",
+   "node-type": "contract",
+   "name": "credential-broker.v1",
+   "description": "credential-broker.v1 \u2014 sealed/published contract (agent): the signed role assertion and every broker route body",
+   "metadata": [
+    {
+     "path": "core/agent/contracts/credential-broker.v1",
+     "domain": "agent"
+    }
+   ]
+  },
+  {
+   "unique-id": "credentials-store",
+   "node-type": "data-asset",
+   "name": "broker state (metadata.sqlite, secrets.sqlite)",
+   "description": "connection metadata, audit, OAuth state and (default backend) AES-256-GCM credential versions on the broker's own volume; ciphertext only, the key is a secret mounted beside it",
+   "controls": {
+    "ownership": {
+     "description": "single writer (P23)",
+     "requirements": [
+      {
+       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "config": {
+        "writers": [
+         "credentials-broker"
+        ]
+       }
+      }
+     ]
+    }
+   }
   },
   {
    "unique-id": "agent-mcp",
@@ -1418,6 +1457,9 @@
       "task.v1",
       "tool.v1",
       "unit.v1",
+      "credential-broker.v1",
+      "credentials-broker",
+      "credentials-store",
       "agent-worker",
       "out-stream",
       "unit-in",
@@ -2620,14 +2662,17 @@
       "node": "agent-api"
      },
      "destination": {
-      "node": "credentials-broker"
+      "node": "credentials-broker",
+      "interface": "credential-broker-rest"
      }
     }
    },
+   "protocol": "HTTP",
    "metadata": [
     {
      "access": "req",
-     "description": "Agent-scoped signed setup and metadata requests; no consent"
+     "contract": "credential-broker.v1",
+     "description": "role agent (Connections routes) and role git (Git credential store); request, list, read, draft, call; no consent, no stored credential returned"
     }
    ]
   },
@@ -2639,14 +2684,17 @@
       "node": "terminal"
      },
      "destination": {
-      "node": "credentials-broker"
+      "node": "credentials-broker",
+      "interface": "credential-broker-rest"
      }
     }
    },
+   "protocol": "HTTP",
    "metadata": [
     {
      "access": "req",
-     "description": "Server-validated human identity; signed consent and metadata requests"
+     "contract": "credential-broker.v1",
+     "description": "role human for the identity-validated person: consent, credential save, disconnect, delete"
     }
    ]
   },
@@ -2665,7 +2713,26 @@
    "metadata": [
     {
      "access": "req",
-     "description": "Versioned credential write/read and audit correlation"
+     "description": "optional backend: versioned credential write/read and audit correlation over KV v2"
+    }
+   ]
+  },
+  {
+   "unique-id": "broker-store",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "credentials-broker"
+     },
+     "destination": {
+      "node": "credentials-store"
+     }
+    }
+   },
+   "metadata": [
+    {
+     "access": "write",
+     "description": "connection metadata, audit and (default backend) encrypted credential versions"
     }
    ]
   },

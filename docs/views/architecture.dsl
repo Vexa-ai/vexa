@@ -50,6 +50,9 @@ system agent  # the execution domain: a trigger becomes one governed agent turn 
   contract task.v1
   contract tool.v1
   contract unit.v1
+  contract credential-broker.v1
+  service credentials-broker
+  data-asset credentials-store [writers: credentials-broker]
   service agent-worker
   data-asset out-stream [writers: agent-worker]
   data-asset unit-in
@@ -157,6 +160,7 @@ edges:
   agent-api -req-> credentials-broker
   terminal -req-> credentials-broker
   credentials-broker -req-> credentials-vault
+  credentials-broker -write-> credentials-store
   gateway -req-> agent-mcp  # Delegated /mcp transport; bearer forwarded without asserted identity; agent domain validates scope
   agent-mcp -req-> agent-api  # Authenticated subject scoped agent operations and connection setup requests
   bot, agent-worker deployed-in runtime
