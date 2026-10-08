@@ -89,10 +89,12 @@ def test_every_third_party_import_in_the_rig_is_declared():
 
     std = set(sys.stdlib_module_names)
     local = {"vexa_control_mcp", "vexa_oauth", "rig_secrets", "mcpcli", "rehearse",
+             "workspace_import_tools",
              "shared", "control_plane",          # loaded by path, never installed
              "flows", "flows_defs"}              # VEXA_FLOWS_SRC, a deployment input
     used = set()
-    for f in ("vexa_control_mcp.py", "vexa_oauth.py", "rig_secrets.py", "mcpcli.py"):
+    for f in ("vexa_control_mcp.py", "vexa_oauth.py", "rig_secrets.py", "mcpcli.py",
+              "workspace_import_tools.py"):
         for node in ast.walk(ast.parse((RIG_DIR / f).read_text())):
             if isinstance(node, ast.Import):
                 used |= {a.name.split(".")[0] for a in node.names}

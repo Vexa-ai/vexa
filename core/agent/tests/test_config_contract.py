@@ -229,7 +229,9 @@ def test_the_qwen_lane_dials_are_declared():
 # harness reads every budget through `_int_env(name, default)` and the scan looks for `os.environ`
 # with a literal beside it. The same blind spot already hides #1613's VEXA_AGENT_JOB_MAX_TOOL_CALLS
 # and VEXA_AGENT_JOB_MAX_TURN_SEC, which are read by the shipped worker and declared nowhere.
-EXPECTED_DECLARED_KEYS = 98
+# 98 at v0.13.1; v0.13.2 adds VEXA_AGENT_AUTO_CONTINUE_CHAT, VEXA_CONNECTIONS_AGENT_KEY_FILE,
+# VEXA_CONNECTIONS_BROKER_URL, VEXA_GIT_STORE_BROKER_URL and VEXA_GIT_STORE_KEY_FILE.
+EXPECTED_DECLARED_KEYS = 103
 
 
 def test_the_declared_key_count_is_asserted_not_merely_printed():
