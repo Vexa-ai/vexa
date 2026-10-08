@@ -1116,6 +1116,16 @@ services:
       - MICROSOFT_CLIENT_SECRET=${MICROSOFT_CLIENT_SECRET:-}
       # Microsoft tenant: "common" = work/school + personal accounts; or a specific tenant id for org-only.
       - MICROSOFT_TENANT_ID=${MICROSOFT_TENANT_ID:-common}
+      # Sign-in link mail (clients/terminal/src/app/api/auth/mailer.ts) — the email sign-in sends a
+      # magic link through this SMTP server. Unset, the mailer dials localhost:1025 inside THIS
+      # container, where nothing listens, and no link is delivered.
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-}
+      - SMTP_FROM=${SMTP_FROM:-}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASS=${SMTP_PASS:-}
+      - SMTP_SECURE=${SMTP_SECURE:-}
+      - SMTP_TLS_INSECURE=${SMTP_TLS_INSECURE:-}
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/',r=>process.exit(r.statusCode<500?0:1)).on('error',()=>process.exit(1))"]
       interval: 10s
