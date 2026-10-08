@@ -447,6 +447,7 @@ def build_argv(
     mcp_config: Optional[str] = None,
     stdin_mode: bool = False,
     effort: Optional[str] = None,
+    workspace: Optional[str] = None,
 ) -> list[str]:
     """The headless Claude Code argv — `claude -p <prompt> --output-format stream-json [...]`.
 
@@ -460,6 +461,19 @@ def build_argv(
     Backends that validate the OpenAI-compatible `reasoning_effort` field (e.g. vLLM/LiteLLM model
     groups) reject the CLI's default `high` when it is outside their allowlist; an explicit value
     overrides that default. Unset ⇒ no flag ⇒ the CLI's own behaviour, unchanged.
+
+    `--setting-sources user` — ALWAYS. The cwd is a workspace whose files come from wherever the
+    person imported them, and a repository may carry its own `.claude/settings.json` or
+    `.claude/settings.local.json`. Loaded as project/local settings, those could add hooks,
+    environment, permission rules or helper commands to the turn. Only the user scope — the
+    worker's own per-subject HOME — is read, and the turn's capabilities come from this argv alone.
+
+    `--add-dir <workspace>` — the cwd again, as an additional directory, so its `CLAUDE.md` (the
+    workspace's governance root, which every turn must read) still loads as project memory once
+    project settings are off. The CLI reads `CLAUDE.md` from an added directory only with
+    `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1`, which `_cli_env` sets; it does not read an
+    added directory's `.claude/` settings. Workspace skills reach the CLI through the user scope
+    instead (`_link_skills_into_home`).
     """
     if stdin_mode:
         # prompt travels via stdin (stream-json) so the pipe stays open for mid-turn injection
@@ -468,6 +482,9 @@ def build_argv(
     else:
         argv = ["claude", "-p", prompt, "--output-format", "stream-json", "--verbose",
                 "--include-partial-messages", "--permission-mode", "acceptEdits"]
+    argv += ["--setting-sources", "user"]
+    if workspace:
+        argv += ["--add-dir", workspace]
     tools = list(allowed_tools)
     if tools:
         argv += ["--allowedTools", ",".join(tools)]
@@ -516,6 +533,16 @@ def inject_user_message(text: str) -> bool:
             return False
 
 
+def _cli_env() -> dict[str, str]:
+    """The Claude Code subprocess env: ``harness_subprocess_env()`` plus the one switch that makes
+    the CLI read ``CLAUDE.md`` from an ``--add-dir`` directory. ``build_argv`` turns project settings
+    off and adds the workspace back as an additional directory, so this is what keeps the
+    workspace's ``CLAUDE.md`` loading as project memory."""
+    env = harness_subprocess_env()
+    env["CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD"] = "1"
+    return env
+
+
 def _reap_grace() -> float:
     """How long a finished-with stdout is given to bring the CLI down on its own, before it is
     killed. Tunable only so a test can prove the kill path in a fraction of a second."""
@@ -559,7 +586,7 @@ def _exec_subprocess_stdin(argv: list[str], cwd: str, first_message: str) -> Ite
     global _ACTIVE_STDIN
     proc = subprocess.Popen(argv, cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, text=True, bufsize=1,
-                            env=harness_subprocess_env())
+                            env=_cli_env())
     assert proc.stdout is not None and proc.stdin is not None
     try:
         proc.stdin.write(_user_message_json(first_message) + "\n")
@@ -592,7 +619,7 @@ def _exec_subprocess(argv: list[str], cwd: str) -> Iterator[str]:
     # mounts enforce on the filesystem) nor the minted per-dispatch bearer token. It also drops the
     # git repo-discovery redirects (a hook-exported GIT_DIR would re-point the workspace's git ops).
     proc = subprocess.Popen(argv, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
-                            env=harness_subprocess_env())
+                            env=_cli_env())
     assert proc.stdout is not None
     try:
         yield from proc.stdout
@@ -669,6 +696,38 @@ def _link_skills_into_workspace(work: Path) -> None:
         pass  # best-effort; the turn still works, just without workspace skills
 
 
+def _link_skills_into_home(work: Path) -> None:
+    """Expose the workspace's governed skills through the USER scope, the only settings scope the
+    CLI reads (``build_argv`` passes ``--setting-sources user``, which also stops it discovering
+    ``<cwd>/.claude/skills``). ``~/.claude/skills`` is pointed at ``<work>/skills``.
+
+    SAFETY, exactly as ``_link_chat_into_workspace``: only the disposable per-subject HOME may be
+    rewritten. Outside a worker (a host test run, a developer shell) ``~/.claude/skills`` holds the
+    developer's own skills, so an existing directory is replaced only when EMPTY (``rmdir`` cannot
+    destroy content); a non-empty one, or any other object, is left alone and the link is skipped —
+    the turn still works, without workspace skills. Best-effort: never raises."""
+    skills = work / "skills"
+    home_claude = Path(os.environ.get("HOME", "/root")) / ".claude"
+    link = home_claude / "skills"
+    try:
+        if not skills.is_dir():
+            return
+        home_claude.mkdir(parents=True, exist_ok=True)
+        if link.is_symlink():
+            if os.readlink(link) == str(skills):
+                return
+            link.unlink()
+        elif link.is_dir():
+            if any(link.iterdir()):
+                return  # real skills live here — never delete, skip the link
+            link.rmdir()
+        elif link.exists():
+            return
+        link.symlink_to(skills, target_is_directory=True)
+    except OSError:
+        pass
+
+
 class ClaudeCodeHarness:
     """``HarnessPort`` adapter for the Claude Code CLI. ``exec_fn`` is injectable for tests."""
 
@@ -683,11 +742,12 @@ class ClaudeCodeHarness:
         effort = os.environ.get("VEXA_AGENT_EFFORT") or None
         if midturn_enabled() and self._exec is _exec_subprocess:
             argv = build_argv(prompt, allowed_tools=allowed_tools, session=session, model=model,
-                              mcp_config=mcp_config, stdin_mode=True, effort=effort)
+                              mcp_config=mcp_config, stdin_mode=True, effort=effort,
+                              workspace=str(work))
             yield from parse_stream_json(_exec_subprocess_stdin(argv, str(work), prompt))
         else:
             argv = build_argv(prompt, allowed_tools=allowed_tools, session=session, model=model,
-                              mcp_config=mcp_config, effort=effort)
+                              mcp_config=mcp_config, effort=effort, workspace=str(work))
             yield from parse_stream_json(self._exec(argv, str(work)))
 
     def prepare(self, work: Path, chat_root: Optional[Path] = None) -> None:
@@ -696,6 +756,7 @@ class ClaudeCodeHarness:
         # private), not ~/.claude; skills stay cwd-scoped (.claude/skills → <work>/skills)
         _link_chat_into_workspace(chat_root or work)
         _link_skills_into_workspace(work)
+        _link_skills_into_home(work)
 
     def transcript_bytes(self, work: Path, session_id: str) -> int:
         total = 0

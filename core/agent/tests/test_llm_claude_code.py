@@ -127,6 +127,98 @@ def test_build_argv_effort_pin():
     assert "--effort" in argv and "medium" in argv
     assert argv[argv.index("--effort") + 1] == "medium"
 
+
+# ── settings scope: the workspace's own .claude/ settings never load ─────────
+# The cwd is a workspace whose files may come from an imported repository. Its .claude/settings.json
+# and .claude/settings.local.json must not add hooks, env or permission rules to the turn; only the
+# worker's user scope is read. CLAUDE.md (the governance root) and the workspace's skills still load —
+# CLAUDE.md through --add-dir + CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD, skills through
+# ~/.claude/skills.
+
+def test_build_argv_reads_only_user_settings():
+    for argv in (build_argv("hi"), build_argv("", stdin_mode=True)):
+        i = argv.index("--setting-sources")
+        assert argv[i + 1] == "user"
+        assert "project" not in argv[i + 1] and "local" not in argv[i + 1]
+
+
+def test_build_argv_adds_the_workspace_back_for_its_claude_md():
+    argv = build_argv("hi", allowed_tools=["Read"], workspace="/ws/desk")
+    assert argv[argv.index("--add-dir") + 1] == "/ws/desk"
+    # --add-dir is variadic: the next token must be a flag, never a value it could swallow
+    assert argv[argv.index("--add-dir") + 2].startswith("--")
+    assert "--add-dir" not in build_argv("hi")
+
+
+def test_run_turn_launches_with_user_settings_and_the_workspace_as_memory_dir(tmp_path):
+    seen: dict = {}
+
+    def fake_exec(argv, cwd):
+        seen["argv"], seen["cwd"] = argv, cwd
+        return iter(())
+
+    list(ClaudeCodeHarness(exec_fn=fake_exec).run_turn(tmp_path, "hi", allowed_tools=["Read"]))
+    argv = seen["argv"]
+    assert argv[argv.index("--setting-sources") + 1] == "user"
+    assert argv[argv.index("--add-dir") + 1] == str(tmp_path) == seen["cwd"]
+
+
+def test_cli_env_loads_claude_md_from_the_added_workspace(monkeypatch):
+    from llm.claude_code import _cli_env
+
+    monkeypatch.setenv("REDIS_URL", "redis://the-shared-bus:6379/0")
+    env = _cli_env()
+    assert env["CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD"] == "1"
+    assert "REDIS_URL" not in env, "the data-plane scrub still applies"
+
+
+def test_default_runner_launches_with_the_cli_env(monkeypatch):
+    from llm import claude_code
+
+    captured: dict = {}
+
+    class _FakeProc:
+        stdout = iter(())
+
+        def wait(self, timeout=None):
+            return 0
+
+    def fake_popen(argv, **kw):
+        captured.update(kw)
+        return _FakeProc()
+
+    monkeypatch.setattr(claude_code.subprocess, "Popen", fake_popen)
+    list(claude_code._exec_subprocess(["claude"], "/tmp"))
+    assert captured["env"]["CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD"] == "1"
+
+
+def test_workspace_skills_reach_the_cli_through_the_user_scope(tmp_path, monkeypatch):
+    home, work = tmp_path / "home", tmp_path / "ws"
+    (work / "skills" / "brief").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    ClaudeCodeHarness().prepare(work)
+    link = home / ".claude" / "skills"
+    assert link.is_symlink() and link.resolve() == (work / "skills").resolve()
+    # re-pointed when the next turn runs in another workspace
+    other = tmp_path / "ws2"
+    (other / "skills").mkdir(parents=True)
+    ClaudeCodeHarness().prepare(other)
+    assert link.resolve() == (other / "skills").resolve()
+
+
+def test_home_skills_link_never_replaces_real_skills(tmp_path, monkeypatch):
+    from llm.claude_code import _link_skills_into_home
+
+    home, work = tmp_path / "home", tmp_path / "ws"
+    (work / "skills").mkdir(parents=True)
+    real = home / ".claude" / "skills" / "mine"
+    real.mkdir(parents=True)
+    (real / "SKILL.md").write_text("keep me")
+    monkeypatch.setenv("HOME", str(home))
+    _link_skills_into_home(work)
+    assert not (home / ".claude" / "skills").is_symlink()
+    assert (real / "SKILL.md").read_text() == "keep me"
+
 # ── the untrusted-subprocess env scrub (data-plane tenancy) ──────────────────
 # The model-driven harness CLI exposes a Bash tool. It must NOT inherit the worker's REDIS_URL (which
 # reaches the SHARED redis — another tenant's tc:meeting:* / unit:*:in) nor the minted per-dispatch
