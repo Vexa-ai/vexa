@@ -29,6 +29,13 @@ stack's shape, that change belongs in the stack, where users get it too.
 | `nginx/mcp.dev.vexa.ai.conf` | the two vhosts, on the host's existing `*.dev.vexa.ai` wildcard cert |
 | `bin/mcp-validate` | drives the endpoint as a real MCP client; stdlib-only, runs from anywhere |
 | `Makefile` | `up · down · ps · logs · key · validate · connect · nginx-check` |
+| `rig/` | the rehearsal rig: provenance for the code the product rehearsal runs on — not a service, not for main |
+| `rehearse/` | user states as data, invokable without rebuilding |
+| `minutes-stack/` | read-only verification of the Minutes deployment against its private lock, and its agent MCP composition root |
+
+The Connections credential broker used to live here as a harness (`credentials-mvp/`). It is a
+product service now — `core/agent/services/credential-broker`, deployed by the stock compose file
+and the chart (ADR-0039) — so a dogfood stack gets it the way users do.
 
 ## Hostnames
 
