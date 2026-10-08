@@ -25,11 +25,8 @@ function getStateSecret(): string {
 }
 
 function toBase64Url(value: string): string {
-  return Buffer.from(value, "utf8")
-    .toString("base64")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/g, "");
+  // Unpadded base64url (RFC 4648 §5), produced natively.
+  return Buffer.from(value, "utf8").toString("base64url");
 }
 
 function signStatePayload(payload: CalendarOAuthStatePayload, secret: string): string {

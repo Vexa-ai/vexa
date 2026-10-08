@@ -1,6 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createHmac } from "crypto";
 import { findUserByEmail } from "@/lib/vexa-admin-api";
+import {
+  ZOOM_PENDING_REQUEST_COOKIE,
+  ZOOM_PENDING_REQUEST_TTL_SECONDS,
+  encryptPendingZoomBotRequest,
+  normalizePendingZoomBotRequest,
+  pendingRequestCookieOptions,
+} from "@/lib/zoom-pending-request";
 
 type ZoomOAuthStatePayload = {
   userId: string;
@@ -25,17 +32,19 @@ function getStateSecret(): string {
 }
 
 function toBase64Url(value: string): string {
-  return Buffer.from(value, "utf8")
-    .toString("base64")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/g, "");
+  // Unpadded base64url (RFC 4648 §5), produced natively.
+  return Buffer.from(value, "utf8").toString("base64url");
 }
 
 function signStatePayload(payload: ZoomOAuthStatePayload, secret: string): string {
   const data = toBase64Url(JSON.stringify(payload));
   const signature = createHmac("sha256", secret).update(data).digest("base64url");
   return `${data}.${signature}`;
+}
+
+function isHttpsRequest(req: NextRequest): boolean {
+  const forwarded = req.headers.get("x-forwarded-proto")?.split(",")[0]?.trim();
+  return forwarded ? forwarded === "https" : req.nextUrl.protocol === "https:";
 }
 
 function resolveRedirectUri(req: NextRequest): string {
@@ -47,9 +56,10 @@ function resolveRedirectUri(req: NextRequest): string {
 
 export async function POST(req: NextRequest) {
   try {
-    const { userEmail, returnTo } = (await req.json()) as {
+    const { userEmail, returnTo, pendingRequest } = (await req.json()) as {
       userEmail?: string;
       returnTo?: string;
+      pendingRequest?: unknown;
     };
 
     if (!userEmail || typeof userEmail !== "string") {
@@ -92,9 +102,26 @@ export async function POST(req: NextRequest) {
     authUrl.searchParams.set("redirect_uri", redirectUri);
     authUrl.searchParams.set("state", state);
 
-    return NextResponse.json({
+    const response = NextResponse.json({
       authUrl: authUrl.toString(),
     });
+
+    // Carry the bot request across the Zoom round trip encrypted, server-side.
+    const pending = normalizePendingZoomBotRequest(pendingRequest);
+    if (pending) {
+      response.cookies.set(
+        ZOOM_PENDING_REQUEST_COOKIE,
+        encryptPendingZoomBotRequest(pending, payload.userId, secret, now),
+        pendingRequestCookieOptions(isHttpsRequest(req), ZOOM_PENDING_REQUEST_TTL_SECONDS)
+      );
+    } else {
+      response.cookies.set(
+        ZOOM_PENDING_REQUEST_COOKIE,
+        "",
+        pendingRequestCookieOptions(isHttpsRequest(req), 0)
+      );
+    }
+    return response;
   } catch (error) {
     return NextResponse.json(
       { error: `Failed to initialize Zoom OAuth: ${(error as Error).message}` },

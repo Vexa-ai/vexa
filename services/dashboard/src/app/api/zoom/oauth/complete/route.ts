@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createHmac } from "crypto";
+import { createHmac, timingSafeEqual } from "crypto";
 import { getUserById, updateUser } from "@/lib/vexa-admin-api";
+import {
+  ZOOM_PENDING_REQUEST_COOKIE,
+  decryptPendingZoomBotRequest,
+  pendingRequestCookieOptions,
+} from "@/lib/zoom-pending-request";
 
 type ZoomOAuthStatePayload = {
   userId: string;
@@ -35,14 +40,23 @@ function resolveRedirectUri(req: NextRequest): string {
   return `${req.nextUrl.origin}/auth/zoom/callback`;
 }
 
+function isHttpsRequest(req: NextRequest): boolean {
+  const forwarded = req.headers.get("x-forwarded-proto")?.split(",")[0]?.trim();
+  return forwarded ? forwarded === "https" : req.nextUrl.protocol === "https:";
+}
+
 function parseAndVerifyState(state: string, secret: string): ZoomOAuthStatePayload {
   const [data, signature] = state.split(".");
   if (!data || !signature) {
     throw new Error("Invalid state format");
   }
 
-  const expectedSig = createHmac("sha256", secret).update(data).digest("base64url");
-  if (signature !== expectedSig) {
+  const expectedSig = Buffer.from(
+    createHmac("sha256", secret).update(data).digest("base64url"),
+    "utf8"
+  );
+  const givenSig = Buffer.from(signature, "utf8");
+  if (givenSig.length !== expectedSig.length || !timingSafeEqual(givenSig, expectedSig)) {
     throw new Error("Invalid state signature");
   }
 
@@ -192,10 +206,24 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    return NextResponse.json({
+    const pendingRequest = decryptPendingZoomBotRequest(
+      req.cookies.get(ZOOM_PENDING_REQUEST_COOKIE)?.value,
+      String(parsedState.userId),
+      stateSecret,
+      now
+    );
+
+    const response = NextResponse.json({
       success: true,
       returnTo: parsedState.returnTo || "/meetings",
+      ...(pendingRequest ? { pendingRequest } : {}),
     });
+    response.cookies.set(
+      ZOOM_PENDING_REQUEST_COOKIE,
+      "",
+      pendingRequestCookieOptions(isHttpsRequest(req), 0)
+    );
+    return response;
   } catch (error) {
     return NextResponse.json(
       { error: `Failed to complete Zoom OAuth: ${(error as Error).message}` },

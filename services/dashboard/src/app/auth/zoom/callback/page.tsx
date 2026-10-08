@@ -8,7 +8,10 @@ import { Button } from "@/components/ui/button";
 import { Logo } from "@/components/ui/logo";
 import { toast } from "sonner";
 import { vexaAPI } from "@/lib/api";
-import { consumePendingZoomBotRequest } from "@/lib/zoom-oauth-client";
+import {
+  clearLegacyPendingZoomBotRequest,
+  pendingZoomBotRequestFrom,
+} from "@/lib/zoom-oauth-client";
 import { useLiveStore } from "@/stores/live-store";
 import { useMeetingsStore } from "@/stores/meetings-store";
 import { getUserFriendlyError } from "@/lib/error-messages";
@@ -65,7 +68,8 @@ function ZoomCallbackContent() {
         return;
       }
 
-      const pendingRequest = consumePendingZoomBotRequest();
+      clearLegacyPendingZoomBotRequest();
+      const pendingRequest = pendingZoomBotRequestFrom(completeData);
       if (pendingRequest) {
         if (!mounted) return;
         setState("starting_meeting");

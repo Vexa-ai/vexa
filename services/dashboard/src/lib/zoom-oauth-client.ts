@@ -1,7 +1,9 @@
 import type { CreateBotRequest } from "@/types/vexa";
 import { withBasePath } from "@/lib/base-path";
 
-const PENDING_ZOOM_BOT_REQUEST_KEY = "vexa.pending_zoom_bot_request";
+// Earlier builds kept the pending request in sessionStorage; it is now carried
+// server-side (encrypted cookie) and only this legacy key is cleared here.
+const LEGACY_PENDING_ZOOM_BOT_REQUEST_KEY = "vexa.pending_zoom_bot_request";
 
 type ZoomOAuthStartResponse = {
   authUrl: string;
@@ -10,6 +12,7 @@ type ZoomOAuthStartResponse = {
 type ZoomOAuthStartPayload = {
   userEmail: string;
   returnTo?: string;
+  pendingRequest: CreateBotRequest;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -46,23 +49,25 @@ export function shouldTriggerZoomOAuth(error: unknown, platform: string): boolea
   return false;
 }
 
-export function savePendingZoomBotRequest(request: CreateBotRequest): void {
+/** Remove any pending request an earlier build left in sessionStorage. */
+export function clearLegacyPendingZoomBotRequest(): void {
   if (typeof window === "undefined") return;
-  sessionStorage.setItem(PENDING_ZOOM_BOT_REQUEST_KEY, JSON.stringify(request));
+  try {
+    sessionStorage.removeItem(LEGACY_PENDING_ZOOM_BOT_REQUEST_KEY);
+  } catch {
+    // storage unavailable — nothing to clear
+  }
 }
 
-export function consumePendingZoomBotRequest(): CreateBotRequest | null {
-  if (typeof window === "undefined") return null;
-
-  const raw = sessionStorage.getItem(PENDING_ZOOM_BOT_REQUEST_KEY);
-  if (!raw) return null;
-  sessionStorage.removeItem(PENDING_ZOOM_BOT_REQUEST_KEY);
-
-  try {
-    return JSON.parse(raw) as CreateBotRequest;
-  } catch {
+/** The pending request returned by /api/zoom/oauth/complete, if any. */
+export function pendingZoomBotRequestFrom(completeData: unknown): CreateBotRequest | null {
+  if (!isRecord(completeData)) return null;
+  const pending = completeData.pendingRequest;
+  if (!isRecord(pending)) return null;
+  if (typeof pending.platform !== "string" || typeof pending.native_meeting_id !== "string") {
     return null;
   }
+  return pending as unknown as CreateBotRequest;
 }
 
 export async function startZoomOAuth({
@@ -74,11 +79,12 @@ export async function startZoomOAuth({
   returnTo?: string;
   pendingRequest: CreateBotRequest;
 }): Promise<void> {
-  savePendingZoomBotRequest(pendingRequest);
+  clearLegacyPendingZoomBotRequest();
 
   const payload: ZoomOAuthStartPayload = {
     userEmail,
     returnTo,
+    pendingRequest,
   };
 
   const resp = await fetch(withBasePath("/api/zoom/oauth/start"), {
