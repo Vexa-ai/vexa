@@ -19,7 +19,7 @@ import { useState } from "react";
 import { copyText } from "../ui-kit/ContextMenu";
 import { LiveTranscriptEngine } from "./LiveTranscriptEngine";
 import { CanvasActionsProvider } from "./actions";
-import { HighlightButton, useTermRenderer } from "./TranscriptTerms";
+import { HighlightButton, useTermRenderer } from "./TranscriptTermControls";
 import { MeetingScopeProvider, MeetingSourceProvider, useMeeting } from "./useMeeting";
 
 function WidgetBody({ meetingId }: { meetingId: string }) {

@@ -1401,17 +1401,23 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
   //  against the server's own pending list. Never a silent drop, and never a disabled control.
   useEffect(() => {
     const onAsk = (e: Event) => {
-      const detail = (e as CustomEvent<{ prompt?: string; display?: string; hidden?: boolean; ground?: boolean; session?: string; scaffoldId?: string; intent?: ChatIntent }>).detail;
+      const detail = (e as CustomEvent<{ mode?: "draft"; prompt?: string; display?: string; hidden?: boolean; ground?: boolean; session?: string; scaffoldId?: string; intent?: ChatIntent }>).detail;
       const prompt = detail?.prompt;
       if (!prompt) return;
       // A SESSION-TARGETED ask must never land in whichever chat happens to be visible (the
       // workspace-scaffold kickoff once fired into the org-setup thread mid-switch). Not ours →
       // stash it; the target session's Chat consumes it the moment it mounts.
       if (detail?.session && detail.session !== session) {
+        if (detail.mode === "draft") return;
         try { localStorage.setItem(`vexa.pendingAsk.${detail.session}`, JSON.stringify({ prompt, display: detail.display, hidden: detail.hidden, ground: detail.ground, scaffoldId: detail.scaffoldId })); } catch { /* ignore */ }
         return;
       }
       if (layout.store.getState().rightCollapsed) layout.toggleRight();
+      if (detail.mode === "draft") {
+        setValue((current) => current ? `${current}\n\n${prompt}` : prompt);
+        window.setTimeout(() => inputRef.current?.focus(), 0);
+        return;
+      }
       // `display` — what the READER sees when it is not what the agent gets: a chip whose label is
       // the user's own sentence renders as their message, and the grounding it carries does not.
       const display = detail?.display || prompt;

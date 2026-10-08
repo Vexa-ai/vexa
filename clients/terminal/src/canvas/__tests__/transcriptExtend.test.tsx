@@ -130,127 +130,31 @@ const roomText = () => {
   return main?.textContent;
 };
 
-/** the whole gesture as the reader performs it: highlight, press, then a key. */
-function extend(phrase: string, line?: string) {
-  expect(highlight(container, phrase)).toBe(true);
-  fireEvent.mouseDown(control() as HTMLElement);
-  const input = field() as HTMLInputElement;
-  if (line === undefined) { fireEvent.keyDown(input, { key: "Escape" }); return; }
-  fireEvent.change(input, { target: { value: line } });
-  fireEvent.keyDown(input, { key: "Enter" });
-}
-
-describe("the Extend control on a transcript selection", () => {
-  it("is not on screen until something is selected", async () => {
-    await renderRoom();
-    expect(container.textContent).toContain(SAID);
-    expect(control()).toBeNull();
-
-    highlight(container, PASSAGE);
-    expect(control()).toBeTruthy();
-  });
-
-  it("is the same control a page has — a press opens the line, and sends nothing yet", async () => {
-    await renderRoom();
-    highlight(container, PASSAGE);
-    fireEvent.mouseDown(control() as HTMLElement);
-
-    expect(field()).toBeTruthy();
-    expect(field()!.placeholder).toBe(LINE_PLACEHOLDER);
-    expect(asks).toHaveLength(0);                       // the press is not the act (#1593)
-  });
-
-  it("fires an act carrying the words, the meeting and where in the room they were said", async () => {
-    await renderRoom();
-    extend(PASSAGE);
-
-    expect(asks).toHaveLength(1);
-    expect(asks[0].intent).toEqual({
-      kind: "extend_transcript", meeting: MEETING, selection: PASSAGE, ...WHERE,
-    });
-  });
-
-  it("carries the person's own line when they typed one, verbatim", async () => {
-    await renderRoom();
-    extend(PASSAGE, LINE);
-
-    expect(asks[0].intent).toEqual({
-      kind: "extend_transcript", meeting: MEETING, selection: PASSAGE, ...WHERE, instruction: LINE,
-    });
-    expect(asks[0].prompt).toContain(INSTRUCTION_LEAD);
-    expect(asks[0].prompt).toContain(LINE);
-  });
-
-  it("shows the reader the label, never the prompt", async () => {
-    await renderRoom();
-    extend(PASSAGE, LINE);
-
-    expect(asks[0].display).toBe(`Extend: meeting ${MEETING} · “${PASSAGE}”`);
-    expect(asks[0].display).not.toContain(LINE);        // the bubble stays the act label (#1588)
-    expect(asks[0].prompt).toContain(`meeting ${MEETING}`);
-  });
-
-  it("leaves the transcript exactly as it was — the act writes pages, never the record", async () => {
+describe("Ask about this on transcript selections", () => {
+  it("prepares the quote and meeting reference without sending or changing the transcript", async () => {
     await renderRoom();
     const before = roomText();
-
-    extend(PASSAGE);
-
+    expect(control()).toBeNull();
+    expect(highlight(container, PASSAGE)).toBe(true);
+    expect(control()?.textContent).toContain("Ask about this");
+    fireEvent.click(control() as HTMLElement);
+    expect(asks).toHaveLength(1);
+    expect(asks[0]).toMatchObject({ mode: "draft", reference: { meeting: MEETING, ...WHERE } });
+    expect(asks[0].intent).toBeUndefined();
+    expect(asks[0].prompt).toContain(`> ${PASSAGE}`);
     expect(roomText()).toBe(before);
-    expect(roomText()).toContain(SAID);
-  });
-
-  it("navigates nowhere on the reply — the pages it writes have paths nobody can predict", async () => {
-    await renderRoom();
-    extend(PASSAGE);
+    expect(control()).toBeNull();
     expect(pendingLanding()).toBeNull();
   });
 
-  it("says nothing about where a passage the room said twice was said", async () => {
-    await renderRoom([
-      { id: "s1", speaker: "Jane", text: "let us park that", tsMs: AT, completed: true },
-      { id: "s2", speaker: "Ravi", text: "let us park that", tsMs: AT + 5000, completed: true },
-    ]);
-    extend("let us park that");
-
-    expect(asks[0].intent).toEqual({
-      kind: "extend_transcript", meeting: MEETING, selection: "let us park that",
-    });
-  });
-
-  it("a selection somewhere else on the screen is not this transcript's", async () => {
+  it("ignores selections outside the transcript", async () => {
     await renderRoom();
     const elsewhere = document.createElement("p");
-    elsewhere.textContent = "a sentence in the chat, not in the room";
+    elsewhere.textContent = "another pane";
     document.body.appendChild(elsewhere);
-    highlight(elsewhere, "a sentence in the chat");
-
+    highlight(elsewhere, "another pane");
     expect(control()).toBeNull();
     expect(asks).toHaveLength(0);
     elsewhere.remove();
-  });
-
-  /** REPLACED 2026-09-06 (Vexa-ai/vexa#1604). This used to read "closes on the act — the highlight is
-   *  spent" and required the control to be GONE after a press. The founder's ruling on the page form
-   *  of the same act — *"this thing should indicate it's actually working"* — reverses that half: the
-   *  highlight is still spent and the field still closes, but the control stays where it was pressed
-   *  and becomes the act. Vanishing was the defect, one surface along. */
-  it("the field closes and the control BECOMES the act — working, in place", async () => {
-    await renderRoom();
-    extend(PASSAGE);
-
-    expect(field()).toBeNull();          // the line is spent with the press that fired it
-    expect(asks).toHaveLength(1);
-    expect(control()?.getAttribute("data-act-state")).toBe("working");
-    expect(control()?.textContent).toContain("Extending…");
-  });
-
-  it("a second press while it runs is inert — never a second act", async () => {
-    await renderRoom();
-    extend(PASSAGE);
-
-    fireEvent.mouseDown(control() as HTMLElement);
-    expect(field()).toBeNull();
-    expect(asks).toHaveLength(1);
   });
 });

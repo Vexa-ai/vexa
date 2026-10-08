@@ -91,9 +91,9 @@ describe("a page that declares a transcript widget", () => {
     sel?.removeAllRanges(); sel?.addRange(range);
     fireEvent(document, new Event("selectionchange"));
     expect(body).toBeTruthy();
-    fireEvent.mouseDown(container.querySelector('[data-doc-act="extend-selection"]') as HTMLElement);
-    fireLine();
-    expect(asks[0].intent).toMatchObject({ kind: "extend", path: PATH, meeting: "147", selection: "The CLA" });
+    fireEvent.click(container.querySelector('[data-doc-act="extend-selection"]') as HTMLElement);
+    expect(asks[0]).toMatchObject({ mode: "draft", reference: { path: PATH, meeting: "147" } });
+    expect(asks[0].prompt).toContain("> The CLA");
   });
 });
 

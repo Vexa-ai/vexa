@@ -1,35 +1,8 @@
 "use client";
-/** THE "EXTEND" CONTROLS — the triggers, one optional line, and a landing (PRD decision 32.1).
- *
- *  The page action asks about the whole open page; the floating action asks about what the reader
- *  just highlighted — on a page here, and on a meeting transcript through `canvas/TranscriptExtend`
- *  (Vexa-ai/vexa#1596), which wears the same `SelectionAct`. All of them post into the SAME chat and
- *  all go through `postIntent`, so there is one place that decides what a press means and one place
- *  that refuses a press it cannot honour.
- *
- *  THE LINE (Vexa-ai/vexa#1593). Founder, 2026-09-06, with "recorded YouTube video" selected on a
- *  page: *"extend might have an extra prompt that opens on click like 'find link on youtube i would
- *  add then'"*. So a press opens a one-line field before it fires. The selection is the WHERE, the
- *  line is the WHAT, and it is optional in the strongest sense he asked for: **Escape fires the act
- *  too**. The click already said "extend" — the field is a refinement offered after the decision,
- *  never a second confirmation of it, and an empty line is today's behaviour to the byte.
- *
- *  AND THEN IT SHOWS ITS OWN STATE (Vexa-ai/vexa#1604). Founder, 2026-09-06, having pressed "Create
- *  this page": *"this thing should indicate it's actually working"* — the act ran in the background
- *  and the control it was pressed on did not move. Every control below now becomes the act while the
- *  act runs: working with the job's step count, queued when a turn is in front of it, one line when
- *  it fails, and back to a control when the page lands. The state itself lives in
- *  `surfaces/actState`, keyed by the target the press and the job both name — this file only wears
- *  it.
- *
- *  The panel supplies `workspace` and `path` from THE RESOLVED VIEW SLOT — never from a tab label,
- *  a crumb, or the document header's rendered name (F63). Those are display strings; two of them
- *  have already been wrong on this screen (a folder listing renaming the document behind it), and
- *  an intent built from one sends the agent to work on a file nobody opened.
- */
+/** Full-page Extend actions run jobs; selected passages prepare a quote in the chat composer. */
 import type { CSSProperties, RefObject } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { WORKSPACE_COMMIT_EVENT } from "../canvas/actions";
+import { ASK_CHAT_EVENT, WORKSPACE_COMMIT_EVENT } from "../canvas/actions";
 import { actCleared, actWords, useActState } from "../surfaces/actState";
 import type { ChatIntent } from "../surfaces/chatIntent";
 import { actTarget, isJobIntent } from "../surfaces/jobs";
@@ -276,150 +249,50 @@ export function CreatePageButton(p: { workspace?: string; path: string }) {
 
 interface Hit { text: string; top: number; left: number }
 
-/** THE FLOATING ACTION — appears over a live text selection inside one container, and only there.
- *
- *  Scoped to the container on purpose: a selection in the conversation, in the rail, or in another
- *  panel is not a selection in this document, and an action that offered to extend it would name
- *  this page while quoting something else. The check is containment in the DOM, not a guess from
- *  coordinates.
- *
- *  ⚠ THE FIELD DESTROYS THE SELECTION IT IS ABOUT (#1593). Focusing an input collapses the
- *  document's highlight, `selectionchange` fires, and the naive component unmounts its own field
- *  mid-type. So a press CAPTURES the hit into `asking`, and while a field is open the listener
- *  stands down: the collapse it caused is not news about what the reader wanted. Same reason the
- *  button below reads `onMouseDown` rather than `onClick`, one step further along.
- *
- *  …AND THE ACT OUTLIVES THE SELECTION IT WAS ABOUT (#1604). Firing used to end this component: the
- *  highlight collapsed, the button vanished, and the reader was left looking at the paragraph they
- *  had just acted on with nothing to say the act existed. So the hit is KEPT while its act runs, and
- *  the box stands where the button stood — working, queued, or one line of why it failed. For the
- *  same reason the listener stands down here too: while an act of this control's is alive, a fresh
- *  highlight must not draw a second button over the one reporting it.
- *
- *  ONE CONTROL, TWO SURFACES (Vexa-ai/vexa#1596). The founder asked for the SAME Extend on a
- *  meeting transcript — *"we also want extend on transcript when i can select some text and push the
- *  button"* — so the transcript wears this component (`canvas/TranscriptExtend.tsx`) rather than a
- *  look-alike beside it. Everything above is the same problem in both places, and the half that
- *  differs is only what the press MEANS, which is why that half is the callback: `onFire` gets the
- *  selected text and the person's optional line, decides what act they name, and hands back the
- *  intent it posted. */
+/** Prepare a quote in chat; sending remains the user's action. */
 export function SelectionAct(p: {
   containerRef: RefObject<HTMLElement | null>;
-  /** the `data-doc-act` handle for the button; the field it opens carries `<act>-line` */
   act: string;
-  /** what the button says it will do, on hover */
-  hint: string;
-  /** what the field is FOR, for a reader who cannot see the box it opened in */
-  fieldLabel: string;
-  /** whatever makes a captured selection stale — a new page, a new meeting. A line typed about one
-   *  must never fire against the thing that replaced it. */
   slot: string;
-  onFire: (selection: string, instruction?: string) => ChatIntent | null;
+  onReference: (selection: string) => void;
 }) {
   const [hit, setHit] = useState<Hit | null>(null);
-  /** the hit a press captured — the field is open on THIS text, whatever the document's live
-   *  selection has become since */
-  const [asking, setAsking] = useState<Hit | null>(null);
-  /** where the act that is running was fired, so its state can stand exactly there */
-  const [pin, setPin] = useState<Hit | null>(null);
-  const { fired, state, remember, forget } = useFiredAct(p.slot);
-
   const read = useCallback(() => {
-    if (asking || fired) return;   // a field is open, or an act of ours is running: the DOM's selection is stale news
     const host = p.containerRef.current;
-    const sel = typeof window !== "undefined" ? window.getSelection() : null;
-    if (!host || !sel || sel.isCollapsed || sel.rangeCount === 0) { setHit(null); return; }
+    const sel = window.getSelection();
+    if (!host || !sel || sel.isCollapsed || !sel.rangeCount) { setHit(null); return; }
+    const range = sel.getRangeAt(0);
+    if (!host.contains(range.startContainer) || !host.contains(range.endContainer)) { setHit(null); return; }
     const text = sel.toString().trim();
     if (!text) { setHit(null); return; }
-    const range = sel.getRangeAt(0);
-    // BOTH ends inside this container, or it is not this container's selection.
-    if (!host.contains(range.startContainer) || !host.contains(range.endContainer)) { setHit(null); return; }
-    // jsdom has no layout, so every rect is zeroes there. That is not an error state — the action
-    // still belongs on screen, it simply pins to the top-left of the document until a real browser
-    // gives it a rect.
     const r = range.getBoundingClientRect?.();
-    const hostRect = host.getBoundingClientRect?.();
-    const top = r && hostRect ? r.top - hostRect.top + host.scrollTop - 34 : 0;
-    const left = r && hostRect ? r.left - hostRect.left : 0;
-    setHit({ text, top: Math.max(0, top), left: Math.max(0, left) });
-  }, [p.containerRef, asking, fired]);
-
+    const h = host.getBoundingClientRect?.();
+    setHit({ text, top: Math.max(0, r && h ? r.top - h.top + host.scrollTop - 34 : 0),
+      left: Math.max(0, r && h ? r.left - h.left : 0) });
+  }, [p.containerRef]);
   useEffect(() => {
-    // `selectionchange` is the only event that fires for a keyboard selection and for a
-    // drag that ends outside the element; mouseup alone misses both.
     document.addEventListener("selectionchange", read);
     return () => document.removeEventListener("selectionchange", read);
   }, [read]);
-
-  // A new document — or a new meeting — is a new selection context: never carry the last one's
-  // highlight, or a field opened over it, onto it.
-  useEffect(() => { setHit(null); setAsking(null); setPin(null); }, [p.slot]);
-  // The act is over (it landed, or it was never posted): the place it stood is not a fact any more.
-  useEffect(() => { if (!state) setPin(null); }, [state]);
-
-  const fire = (instruction?: string) => {
-    const h = asking;
-    setAsking(null); setHit(null);
-    if (!h) return;
-    setPin(h);
-    remember(p.onFire(h.text, instruction));
-  };
-
-  /** the floating box, worn by the button, by the field it opens, and by the act it fires */
-  const floating: CSSProperties = {
-    ...ty.chip, position: "absolute", zIndex: 4, display: "inline-flex", alignItems: "center",
-    gap: 5, color: "var(--t1)", background: surface.raisedHi, border: "1px solid var(--line)",
-    borderRadius: 6, padding: "3px 8px", boxShadow: "0 2px 8px rgba(0,0,0,.18)",
-  };
-
-  if (asking) {
-    return (
-      <span data-doc-act={`${p.act}-line`} title={LINE_HINT}
-        style={{ ...floating, top: asking.top, left: asking.left, width: 260, cursor: "text" }}>
-        <Icon name="spark" size={12} />
-        <ActLine onFire={fire} label={p.fieldLabel} />
-      </span>
-    );
-  }
-
-  if (state && pin) {
-    const w = actWords(state, "Extend");
-    // FAILED — the act offered again, on the passage it was fired on, with the reason under it. The
-    // captured hit is still in hand, so pressing this re-opens the field on the same words rather
-    // than asking the reader to find and highlight them a second time.
-    if (state.phase === "failed") {
-      return (
-        <button data-doc-act={p.act} data-act-state="failed" title={p.hint}
-          onMouseDown={(e) => { e.preventDefault(); forget(); setAsking(pin); }}
-          style={{ ...floating, top: pin.top, left: pin.left, alignItems: "flex-start", flexDirection: "column", gap: 1, maxWidth: 280, cursor: "pointer" }}>
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 5, color: "var(--danger)" }}>
-            <Icon name="alert" size={12} /> Extend
-          </span>
-          <span data-act-line style={{ ...ty.meta, color: "var(--danger)" }}>{w.line}</span>
-        </button>
-      );
-    }
-    return (
-      <span data-doc-act={p.act} data-act-state={state.phase} role="status" aria-live="polite" aria-busy="true"
-        style={{ ...floating, top: pin.top, left: pin.left, maxWidth: 280, cursor: "default" }}>
-        <span className="vx-op-spin" aria-hidden="true" style={spinner(11)} />
-        <span data-act-title>{w.head}</span>
-        {w.line && <span data-act-line style={{ ...ty.meta }}>{w.line}</span>}
-      </span>
-    );
-  }
-
+  useEffect(() => { setHit(null); }, [p.slot]);
   if (!hit) return null;
-  return (
-    <button data-doc-act={p.act} title={p.hint}
-      // mousedown, not click: a click on this button would first collapse the selection it is
-      // about, and the text would be gone by the time the handler read it.
-      onMouseDown={(e) => { e.preventDefault(); setAsking(hit); }}
-      style={{ ...floating, top: hit.top, left: hit.left, cursor: "pointer" }}>
-      <Icon name="spark" size={12} />
-      Extend
-    </button>
-  );
+  return <button data-doc-act={p.act} title="Add this quote to your chat"
+    onMouseDown={(e) => e.preventDefault()}
+    onClick={() => { p.onReference(hit.text); window.getSelection()?.removeAllRanges(); setHit(null); }}
+    style={{ ...ty.chip, position: "absolute", zIndex: 4, top: hit.top, left: hit.left,
+      display: "inline-flex", alignItems: "center", gap: 5, color: "var(--t1)",
+      background: surface.raisedHi, border: "1px solid var(--line)", borderRadius: 6,
+      padding: "3px 8px", cursor: "pointer", boxShadow: "0 2px 8px rgba(0,0,0,.18)" }}>
+    <Icon name="spark" size={12} /> Ask about this
+  </button>;
+}
+
+export function referenceInChat(selection: string, source: Record<string, unknown>): void {
+  const quote = selection.split("\n").map((line) => `> ${line}`).join("\n");
+  const label = source.path ? [source.workspace, source.path].filter(Boolean).join("/") : `Meeting ${source.meeting}`;
+  window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, { detail: {
+    mode: "draft", reference: source, prompt: `Source: ${label}\n\n${quote}\n\n`,
+  } }));
 }
 
 /** EXTEND ON A PAGE'S SELECTION. What it adds to the control above is the one thing a page knows
@@ -439,13 +312,10 @@ export function SelectionExtend(p: {
 }) {
   return (
     <SelectionAct containerRef={p.containerRef} act="extend-selection"
-      hint="Extend — ask this chat to go further on the highlighted text"
-      fieldLabel="What to do with the highlighted text (optional)"
       slot={`${p.workspace ?? ""}|${p.path}`}
-      onFire={(selection, instruction) => postIntent({
-        kind: "extend", workspace: p.workspace, path: p.path,
-        selection, selection_range: sourceRange(p.body, selection),
-        ...(instruction ? { instruction } : {}),
+      onReference={(selection) => referenceInChat(selection, {
+        workspace: p.workspace, path: p.path,
+        selection_range: sourceRange(p.body, selection),
         ...(p.meeting ? { meeting: p.meeting } : {}),
       })} />
   );
