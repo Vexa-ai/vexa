@@ -203,7 +203,7 @@ def test_a_move_inside_one_workspace_leaves_a_pointer_at_the_old_path(tmp_path):
     ws = _init_ws(tmp_path, JANE)
     _page(ws, "kg/entities/company/oenb.md")
     r = _move(_client(tmp_path), JANE,
-              **{"from": "kg/entities/company/oenb.md", "to": "customers/oenb.md"})
+              **{"path": "kg/entities/company/oenb.md", "to": "customers/oenb.md"})
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["moved"] is True and body["pointer"] == "kg/entities/company/oenb.md"
@@ -224,7 +224,7 @@ def test_a_moved_asset_gets_no_markdown_pointer(tmp_path):
     (ws / "assets/logo.png").write_bytes(b"\x89PNG\r\n\x1a\n")
     _git(ws, "add", "-A")
     _git(ws, "commit", "-q", "-m", "logo")
-    r = _move(_client(tmp_path), JANE, **{"from": "assets/logo.png", "to": "assets/oenb-logo.png"})
+    r = _move(_client(tmp_path), JANE, **{"path": "assets/logo.png", "to": "assets/oenb-logo.png"})
     assert r.status_code == 200 and r.json()["pointer"] is None
     assert not (ws / "assets/logo.png").exists()
     assert (ws / "assets/oenb-logo.png").read_bytes() == b"\x89PNG\r\n\x1a\n"
@@ -233,7 +233,7 @@ def test_a_moved_asset_gets_no_markdown_pointer(tmp_path):
 def test_moving_a_page_onto_itself_is_refused(tmp_path):
     ws = _init_ws(tmp_path, JANE)
     _page(ws, "notes/plan.md")
-    r = _move(_client(tmp_path), JANE, **{"from": "notes/plan.md", "to": "notes/plan.md"})
+    r = _move(_client(tmp_path), JANE, **{"path": "notes/plan.md", "to": "notes/plan.md"})
     assert r.status_code == 400
 
 
@@ -247,7 +247,7 @@ def test_a_move_with_no_to_slug_stays_in_the_workspace_it_started_in(tmp_path):
     m.ensure_owner(root, "oenb-c1", JANE, index=idx)
     _page(ws, "notes/plan.md")
     r = _move(_client(root, index=idx), JANE,
-              **{"from": "notes/plan.md", "to": "notes/2026-plan.md", "slug": "oenb-c1"})
+              **{"path": "notes/plan.md", "to": "notes/2026-plan.md", "slug": "oenb-c1"})
     assert r.status_code == 200, r.text
     assert r.json()["to_workspace"] == "oenb-c1"
     assert (ws / "notes/2026-plan.md").is_file()
@@ -267,7 +267,7 @@ def test_a_cross_workspace_move_writes_the_target_and_deletes_the_source(tmp_pat
     before_target = _git(target, "rev-parse", "HEAD")
 
     r = _move(_client(root, index=idx), JANE,
-              **{"from": "kg/entities/company/oenb.md", "to": "kg/entities/company/oenb.md",
+              **{"path": "kg/entities/company/oenb.md", "to": "kg/entities/company/oenb.md",
                  "to_slug": "oenb-c1"})
     assert r.status_code == 200, r.text
     body = r.json()
@@ -295,7 +295,7 @@ def test_a_cross_workspace_move_into_a_workspace_the_caller_only_reads_is_refuse
     m.grant_membership(root, "wsA", JANE, "viewer", added_by="owner1", index=idx)
 
     r = _move(_client(root, index=idx), JANE,
-              **{"from": "notes/plan.md", "to": "notes/plan.md", "to_slug": "wsA"})
+              **{"path": "notes/plan.md", "to": "notes/plan.md", "to_slug": "wsA"})
     assert r.status_code == 403
     assert (desk / "notes/plan.md").is_file(), "the source was touched by a refused move"
     assert not (root / "wsA/notes/plan.md").exists()
@@ -311,8 +311,8 @@ def test_the_private_system_tier_is_never_a_removal_target(tmp_path):
     _init_ws(root, JANE)
     c = _client(root)
     assert _delete(c, JANE, "identity.md", slug="_system").status_code == 403
-    assert _move(c, JANE, **{"from": "identity.md", "to": "x.md", "slug": "_system"}).status_code == 403
-    assert _move(c, JANE, **{"from": "notes/plan.md", "to": "x.md",
+    assert _move(c, JANE, **{"path": "identity.md", "to": "x.md", "slug": "_system"}).status_code == 403
+    assert _move(c, JANE, **{"path": "notes/plan.md", "to": "x.md",
                              "to_slug": "_system"}).status_code == 403
 
 
@@ -342,7 +342,7 @@ def test_a_move_out_of_the_company_tier_is_refused_for_everyone_but_the_admin(tm
     g = _init_ws(root, "_global")
     _page(g, "README.md", "# the company\n")
     r = _move(_client(root, admins=ADMIN), JANE,
-              **{"from": "README.md", "to": "stolen.md", "slug": "_global"})
+              **{"path": "README.md", "to": "stolen.md", "slug": "_global"})
     assert r.status_code == 403
     assert (g / "README.md").is_file() and not (desk / "stolen.md").exists()
 

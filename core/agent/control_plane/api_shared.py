@@ -28,7 +28,7 @@ from typing import Callable, Iterator, Optional
 from fastapi import Body, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from jsonschema.exceptions import ValidationError
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from control_plane import meeting_room
 from control_plane import meeting_steering
@@ -1005,11 +1005,96 @@ class WorkspaceNewBody(BaseModel):
     name: Optional[str] = None
 
 
+#: WHERE A PAGE VERB WRITES, said once for every one of them. An omitted `slug` is where the
+#: conversation is WORKING: a worker's identity carries the chat's target (`x-user-delegation-target`),
+#: and a caller with none — a person's own client, the terminal — writes on their own desk as before.
+#: `personal` (or `desk`) names the desk explicitly, which is how *"note this on my desk"* still works
+#: from a chat working somewhere else.
+WRITE_SLUG_HELP = ("the workspace to act in. Omit it to act where this conversation is working; "
+                   "pass `personal` for the person's own desk, or a workspace's slug for one act "
+                   "anywhere else they may write.")
+#: The words that name the person's own desk on a page verb.
+DESK_ALIASES = frozenset({"personal", "desk"})
+
+
+def write_slug(request: "Request", asked: Optional[str]) -> Optional[str]:
+    """The workspace a page verb acts in: the caller's explicit `slug`, else the chat's target, else
+    the desk (``None``). The target is a DEFAULT, never a grant — every route still authorizes the
+    resolved slug exactly as it would one the caller had typed."""
+    named = (asked or "").strip()
+    if named in DESK_ALIASES:
+        return None
+    if named:
+        return named
+    return (request.headers.get("x-user-delegation-target") or "").strip() or None
+
+
+class WorkspaceWriteBody(BaseModel):
+    """WRITE one page — the body behind `workspace_write`. Creates the file or replaces it whole."""
+    model_config = {"extra": "forbid"}
+    path: str = Field(description="workspace-relative path of the page, e.g. `notes/plan.md`")
+    content: str = Field(description="the whole file as it should read after this write")
+    slug: Optional[str] = Field(None, description=WRITE_SLUG_HELP)
+
+
+class EntityUpsertBody(BaseModel):
+    """RECORD what was learned about a person, company, meeting, project or decision — the body
+    behind `entity_upsert`. One call creates `kg/entities/<kind>/<slug>.md` as a card or updates it
+    in place; repeating a fact the page already carries writes nothing."""
+    model_config = {"extra": "forbid"}
+    kind: str = Field(description="person | company | meeting | project | decision")
+    name: str = Field(description="what the page is about, as a person would say it; it becomes "
+                                  "the title `[[wikilinks]]` resolve to")
+    facts: list[str] = Field(default_factory=list, description=(
+        "one short sentence each, only what was SAID or READ. Name another entity inside a fact as "
+        "`[[Their Name]]`. Filed under `section` when given, else under `## Timeline`."))
+    source: str = Field("", description=(
+        "where these facts came from, in a few words — the meeting, the mail, the file. Required "
+        "with facts: one source for the whole call, stamped onto every fact; split the call when "
+        "facts came from different places. A fact with no source is refused."))
+    slug: Optional[str] = Field(None, description=WRITE_SLUG_HELP + " Companies belong in the "
+                                                  "company layer, `_global`.")
+    dates: Optional[dict] = Field(None, description=(
+        "for a meeting: any of `scheduled_at`, `held_at`, `report_delivered_at` (ISO-8601 or "
+        "epoch). Any other key is dropped."))
+    summary: str = Field("", description="the one line under the title; set when the page is "
+                                         "created and never overwritten")
+    fields: Optional[dict] = Field(None, description=(
+        "facts filed into the kind's sections: person — role, company, cares_about, relationship; "
+        "company — what, people, relationship; meeting — when, who, participants, decided, "
+        "committed; project — what, who, status; decision — what, why, changes. A field naming "
+        "another entity links both pages."))
+    section: str = Field("", description="the section `facts` are filed into, by its name")
+    connections: list = Field(default_factory=list, description=(
+        "other pages this one links to, both ways: `\"Acme\"` or "
+        "`{\"name\": \"Acme\", \"relation\": \"works at\", \"reverse\": \"employs\"}`"))
+    open_questions: list[str] = Field(default_factory=list, description=(
+        "what is not known yet, written as the question — a gap goes here, never on the page as a "
+        "guess"))
+
+    @field_validator("facts", "open_questions", mode="before")
+    @classmethod
+    def _one_is_a_list(cls, value):
+        """A single fact given as a string is one fact, not a refusal."""
+        return [value] if isinstance(value, str) else value
+
+
+class AssetFetchBody(BaseModel):
+    """FETCH a picture into a workspace — the body behind `fetch_asset`. The server fetches it, so a
+    page references the stored file relatively and never hotlinks."""
+    model_config = {"extra": "forbid"}
+    url: str = Field(description="the picture's address on the web")
+    path: str = Field("", description="where to store it; omitted, the URL's own file name under "
+                                      "`assets/`")
+    slug: Optional[str] = Field(None, description=WRITE_SLUG_HELP + " Fetch it into the workspace "
+                                                  "of the page that shows it.")
+
+
 class WorkspaceRemoveBody(BaseModel):
     """REMOVE one page from a workspace — the body behind `workspace_delete` (Vexa-ai/vexa#1621).
 
-    ``path`` is workspace-RELATIVE; ``slug`` names the workspace (omitted = the caller's own desk /
-    the chat's target).
+    ``path`` is workspace-RELATIVE; ``slug`` names the workspace (omitted = the chat's target, or the
+    caller's own desk when there is none).
 
     ⚠ WHY THIS IS A POST AND NOT `DELETE /api/workspace/file`, which is what it was written as
     first. `DELETE /api/workspace/{slug}` already exists and DESTROYS A WHOLE WORKSPACE
@@ -1020,29 +1105,27 @@ class WorkspaceRemoveBody(BaseModel):
     "destroy the workspace" is the worst. A POST on its own literal path cannot be confused with
     anything, and it reads beside its sibling `POST /api/workspace/move`."""
     model_config = {"extra": "forbid"}
-    path: str
-    slug: Optional[str] = None
+    path: str = Field(description="workspace-relative path of the page to remove")
+    slug: Optional[str] = Field(None, description=WRITE_SLUG_HELP)
 
 
 class WorkspaceMoveBody(BaseModel):
     """MOVE one page from one path to another — the body behind `workspace_move` (Vexa-ai/vexa#1621).
 
-    ``from``/``to`` are workspace-RELATIVE paths. ``slug`` names the workspace the page is in today
-    (omitted = the caller's own desk / the chat's target); ``to_slug`` names where it is going,
+    ``path`` (where the page is now) and ``to`` are workspace-RELATIVE paths — ``path``, like every
+    other page verb, and not ``from``, which no tool signature can carry because it is a Python
+    keyword. ``slug`` names the workspace the page is in today; ``to_slug`` names where it is going,
     and omitted means *the same workspace*, which is the ordinary rename.
 
     A CROSS-WORKSPACE MOVE IS A WRITE IN THE TARGET AND A DELETE IN THE SOURCE — two repositories,
-    two commits, and either end being read-only refuses the whole call before anything is written.
-
-    ``from`` is a Python keyword, so the field is ``from_`` with the alias the wire actually
-    carries. ``populate_by_name`` keeps the Python spelling usable from a caller that builds the
-    model directly (the tests do); the published OpenAPI property is ``from``, which is what a
-    manifest-bound tool would name and what the rig sends."""
-    model_config = {"extra": "forbid", "populate_by_name": True}
-    from_: str = Field(alias="from")
-    to: str
-    slug: Optional[str] = None
-    to_slug: Optional[str] = None
+    two commits, and either end being read-only refuses the whole call before anything is written."""
+    model_config = {"extra": "forbid"}
+    path: str = Field(description="workspace-relative path of the page as it is now")
+    to: str = Field(description="workspace-relative path it should have after the move")
+    slug: Optional[str] = Field(None, description=WRITE_SLUG_HELP)
+    to_slug: Optional[str] = Field(None, description=(
+        "the workspace it is going to; omit it for a rename inside the same workspace, pass "
+        "`personal` for the person's own desk"))
 
 
 class WorkspaceDeactivateBody(BaseModel):

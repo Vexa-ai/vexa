@@ -88,14 +88,12 @@ MANIFEST_GLOBS = ["core/*/mcp.tools.v1.json", "core/*/services/*/mcp.tools.v1.js
 GAP = {
     "meeting_transcript", "meetings_list", "bot_send", "bot_stop", "meeting_info",   # meetings domain
     "transcript_terms",                                                             # meetings domain
-    "workspace_write", "entity_upsert", "propose",                                  # agent: untyped dict body
-    "workspace_delete", "workspace_move",                                           # agent: rig-served, with the write
+    "propose",                                                                      # agent: untyped dict body
     "workspace_invite", "workspace_membership",                                     # agent: rig-served, with the roster
     "validate", "mark_scaffolded", "company_context",                               # agent: no server home
     "vexa_overview", "start_onboarding",                                            # agent: no server home
     "open_page",                                                                    # rig: the panel verb
     "workspace_target",                                                             # rig: the target verb
-    "fetch_asset",                                                                  # rig: the picture verb
 }
 
 

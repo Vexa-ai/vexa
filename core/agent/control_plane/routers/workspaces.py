@@ -24,12 +24,14 @@ from control_plane import workspace_credentials as wcreds
 from control_plane import workspace_ids as ids_mod
 from control_plane import workspace_membership as membership_mod
 from control_plane.api_shared import (
-    ArchiveBody, GitTokenBody, InviteAcceptBody, InviteCreateBody, MAX_UPLOAD_BYTES,
+    ArchiveBody, AssetFetchBody, EntityUpsertBody, GitTokenBody, InviteAcceptBody,
+    InviteCreateBody, MAX_UPLOAD_BYTES,
     RoleSetBody, SharedActiveBody, SharedAttachBody, SharedNewBody, WorkspaceActivateBody,
     WorkspaceDeactivateBody, WorkspaceMoveBody, WorkspaceNewBody, WorkspacePublishBody,
     WorkspaceInviteBody, WorkspaceMembershipBody, WorkspaceImportBody,
     WorkspacePullBody, WorkspacePurposeBody, WorkspacePushBody, WorkspaceRemoveBody,
-    WorkspaceRenameBody, WorkspaceSwapBody, _upload_filename, logger)
+    WorkspaceRenameBody, WorkspaceSwapBody, WorkspaceWriteBody, _upload_filename, logger,
+    write_slug)
 from control_plane.workspace_attach import (
     CloneError, activate_workspace, active_workspaces, attach_shared_workspace, bind_repository_credential,
     attached_workspaces, create_shared_workspace_dir, create_workspace,
@@ -309,9 +311,10 @@ def build(**d) -> APIRouter:
                         headers=headers)
 
     @router.post("/api/workspace/asset")
-    def ws_asset_fetch(request: Request, body: dict = Body(...)):
+    def ws_asset_fetch(request: Request, body: AssetFetchBody = Body(...)):
         """FETCH a remote image INTO the workspace — the act behind the external-image placeholder,
-        and behind the rig's `fetch_asset`.
+        and the verb behind `fetch_asset`. Then reference the stored file on the page relatively,
+        `![alt](assets/<name>)`; never put the remote URL on a page.
 
         The server fetches, never the reader's browser: that is the whole rule (#1612). It is also
         the only place that CAN — a page in a bank's workspace must not make that browser talk to a
@@ -324,8 +327,8 @@ def build(**d) -> APIRouter:
         that is wrong), **424** when the remote answered and answered badly — its own code carried
         as `upstream_status`, so the client can say *the site answered 404* in words — and **502**
         when nothing usable came back at all."""
-        url = str(body.get("url") or "").strip()
-        slug = str(body.get("slug") or "").strip() or None
+        url = body.url.strip()
+        slug = write_slug(request, body.slug)
         try:
             content, ctype, final_url = assets_mod.fetch_asset(url)
         except assets_mod.AssetFetchError as exc:
@@ -337,7 +340,7 @@ def build(**d) -> APIRouter:
                 detail={"error": "asset_upstream" if upstream else "asset_unreachable",
                         "message": str(exc), "url": getattr(exc, "url", "") or url,
                         "upstream_status": upstream}) from None
-        rel = assets_mod.asset_path_for(url, ctype, str(body.get("path") or ""))
+        rel = assets_mod.asset_path_for(url, ctype, body.path)
         return _store_asset(request, rel, slug, content, final_url or url)
 
     @router.put("/api/workspace/asset")
@@ -372,18 +375,20 @@ def build(**d) -> APIRouter:
             raise HTTPException(status_code=404, detail="not found")
         return {"path": path, "content": content}
     @router.put("/api/workspace/file")
-    def ws_file_write(request: Request, body: dict = Body(...)):
-        """WRITE one doc — the terminal's in-place page editor (Codex-style). Authorization mirrors the
-        MOUNT rules, not the read rules: own baseline/_system always; a shared workspace needs
-        contributor+; `_global` only the admin allowlist. Commits so history stays honest."""
+    def ws_file_write(request: Request, body: WorkspaceWriteBody = Body(...)):
+        """WRITE one page, creating it or replacing it whole — the terminal's in-place page editor and
+        the verb behind `workspace_write`. Authorization mirrors the MOUNT rules, not the read rules:
+        own desk and `_system` always; a shared workspace needs contributor+; `_global` only the
+        admin allowlist. Commits, so the history stays honest.
+
+        Never overwrite a page with a note saying it moved or went away: `workspace_move` and
+        `workspace_delete` do those, and keep the history."""
         import shutil as _sh  # noqa: F401 — parity with ws_reset's import style
         import subprocess as _sp
         subject = subject_of(request)
-        rel = str(body.get("path") or "").strip()
-        slug = str(body.get("slug") or "").strip() or None
-        content = body.get("content")
-        if not isinstance(content, str):
-            raise HTTPException(status_code=400, detail="need a relative path and string content")
+        rel = body.path.strip()
+        slug = write_slug(request, body.slug)
+        content = body.content
         # #1624: an image address nobody checked never reaches the page (see `_screen_images`).
         content = _screen_images(request, [content], path=rel, tool="workspace_write")[0]
         target = _write_dir(request, subject, rel, slug)
@@ -470,7 +475,7 @@ def build(**d) -> APIRouter:
         agent is meant to read that and say so, not retry."""
         subject = subject_of(request)
         rel = str(body.path or "").strip()
-        slug = (body.slug or "").strip() or None
+        slug = write_slug(request, body.slug)
         target = _movable_dir(request, subject, rel, slug)
         try:
             f = wpaths.resolve_inside(target, rel)
@@ -501,14 +506,15 @@ def build(**d) -> APIRouter:
         contributor. Half a move is the one outcome worse than no move — the page would exist twice,
         or nowhere."""
         subject = subject_of(request)
-        src_rel = str(body.from_ or "").strip()
+        src_rel = str(body.path or "").strip()
         dst_rel = str(body.to or "").strip()
-        src_slug = (body.slug or "").strip() or None
+        src_slug = write_slug(request, body.slug)
         # NO `to_slug` MEANS THE SAME WORKSPACE — the ordinary rename. Defaulting it to the caller's
         # desk instead would turn every rename inside a shared workspace into a silent extraction of
         # a page out of it, which is the failure `_writeback_workspace_note` already documents for
-        # `entity_upsert`'s slug default.
-        dst_slug = (body.to_slug or "").strip() or src_slug
+        # `entity_upsert`'s slug default. `personal` names the desk, as on every page verb.
+        asked_to = (body.to_slug or "").strip()
+        dst_slug = write_slug(request, asked_to) if asked_to else src_slug
         src = _movable_dir(request, subject, src_rel, src_slug)
         dst = _movable_dir(request, subject, dst_rel, dst_slug)
         try:
@@ -550,32 +556,31 @@ def build(**d) -> APIRouter:
                 "commit": to_sha, "source_commit": from_sha}
 
     @router.post("/api/workspace/entity")
-    def ws_entity_upsert(request: Request, body: dict = Body(...)):
-        """UPSERT one knowledge-graph entity — PRD decision 24, the single call behind `entity_upsert`.
+    def ws_entity_upsert(request: Request, body: EntityUpsertBody = Body(...)):
+        """RECORD what was just learned about a person, company, meeting, project or decision — the
+        verb behind `entity_upsert` (PRD decision 24). Use it the moment a turn learns anything
+        durable; a name without a page gets one now.
 
-        Creates or updates `kg/entities/<kind>/<slug>.md` AS A CARD (decision 24.6): a summary, the
-        kind's sections, `## Connected` chips both ways, `## Sources`, `## Open questions`, and the
-        dated log at the end under `## Timeline`. A page in the old flat shape is re-rendered into
-        the card on its next touch, entries preserved. Then it refreshes `kg/INDEX.md` and commits
-        both by pathspec with the F31 subject shape. Authorization is `ws_file_write`'s, because it
-        is the same act — a write into a workspace — and two spellings of one authorization rule is
-        how the second one ends up weaker.
+        One call creates `kg/entities/<kind>/<slug>.md` if it is missing and updates it in place if
+        it is there — never check first, never merge by hand. The page is a CARD (decision 24.6): a
+        summary, the kind's sections (file facts into them with `fields`, or with `section`),
+        `## Connected` chips both ways, `## Sources`, `## Open questions`, and `## Timeline` last for
+        anything dated. A refusal names what to fix: 400 is an argument in a shape this does not
+        read (send the same facts again in the shape it names), 422 is a rule (fix the fact, do not
+        retry). The answer lists `links_missing` — names with no page yet, which are the next calls.
 
-        This endpoint exists so the MCP tool can be a THIN FORWARD (PRD §3.3: every host-reaching rig
-        tool is a missing endpoint in an owning service wearing a shell command). `workspace_write`'s
-        `docker exec` double is the shape this deliberately does not copy.
+        Authorization is `ws_file_write`'s, because it is the same act — a write into a workspace —
+        and two spellings of one authorization rule is how the second one ends up weaker. It
+        refreshes `kg/INDEX.md` and commits both by pathspec with the F31 subject shape.
         """
         subject = subject_of(request)
-        kind = str(body.get("kind") or "").strip().lower()
-        name = str(body.get("name") or "").strip()
-        source = str(body.get("source") or "").strip()
-        slug = str(body.get("slug") or "").strip() or None
-        raw_facts = body.get("facts")
-        if isinstance(raw_facts, str):
-            raw_facts = [raw_facts]
-        facts = [str(f) for f in (raw_facts or []) if str(f).strip()]
-        summary = str(body.get("summary") or "").strip()
-        questions = [str(q) for q in (body.get("open_questions") or ())]
+        kind = body.kind.strip().lower()
+        name = body.name.strip()
+        source = body.source.strip()
+        slug = write_slug(request, body.slug)
+        facts = [str(f) for f in body.facts if str(f).strip()]
+        summary = body.summary.strip()
+        questions = [str(q) for q in body.open_questions]
         # #1624 — the card's free text goes through the same door a plain page does, in ONE call so
         # a logo named in both the summary and a fact costs the host one question, not two.
         screened = _screen_images(request, [summary, *facts, *questions],
@@ -617,11 +622,11 @@ def build(**d) -> APIRouter:
             # the facts in `## Timeline`, which is the shape the migration produces anyway.
             result = entities_mod.upsert_entity(
                 target, kind, name, facts, source,
-                mounts=_entity_mounts(subject), dates=body.get("dates"),
+                mounts=_entity_mounts(subject), dates=body.dates,
                 summary=summary,
-                fields=body.get("fields") if isinstance(body.get("fields"), dict) else None,
-                section=str(body.get("section") or "").strip(),
-                connections=body.get("connections") or (),
+                fields=body.fields,
+                section=body.section.strip(),
+                connections=body.connections or (),
                 open_questions=questions)
         except entities_mod.EntityMalformed as e:
             # 400, and CAUGHT FIRST — `EntityMalformed` is a subclass, so the broader clause below

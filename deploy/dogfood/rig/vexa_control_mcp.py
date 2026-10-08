@@ -2553,7 +2553,7 @@ def workspace_move(path: str, to: str, slug: str = "", to_slug: str = "") -> str
             "refused": "invalid_path", "from": path, "to": to, "why": str(e),
             "tell_your_person": "plainly, that the file name is not one a workspace can hold.",
         })
-    body = {"from": src, "to": dst}
+    body = {"path": src, "to": dst}
     if slug:
         body["slug"] = slug
     if to_slug:

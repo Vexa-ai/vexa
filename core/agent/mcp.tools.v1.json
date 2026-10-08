@@ -8,7 +8,7 @@
   "depends_on": [
     "identity"
   ],
-  "note": "ADR-0037 / PRD decision 40.5 \u2014 the agent domain's cut at the assembled edge: every tool an agent has here is a route agent-api serves, bound by `bind.py` from the route's own OpenAPI (`parameters` and a named pydantic `requestBody`). The gateway's one MCP server serves them to a person's own client and to a cloud worker alike; a worker's delegation token reaches them as the person it acts for, and the routes that need a person in the loop refuse it when it was dispatched without one. Three JSON-body routes remain UNBINDABLE because they take a bare `body: dict = Body(...)`, which FastAPI publishes with no named `properties`: `PUT /api/workspace/file` (`workspace_write`), `POST /api/workspace/entity` (`entity_upsert`) and `POST /api/claims` (`propose`). They need named pydantic body models before they can be manifest entries.",
+  "note": "ADR-0037 / PRD decision 40.5 \u2014 the agent domain's cut at the assembled edge: every tool an agent has here is a route agent-api serves, bound by `bind.py` from the route's own OpenAPI (`parameters` and a named pydantic `requestBody`). The gateway's one MCP server serves them to a person's own client and to a cloud worker alike; a worker's delegation token reaches them as the person it acts for, and the routes that need a person in the loop refuse it when it was dispatched without one. The page verbs default an omitted `slug` to the chat's target, which the worker's signed identity carries as `x-user-delegation-target`.",
   "tools": [
     {
       "name": "workspace_tree",
@@ -45,6 +45,109 @@
         "slug"
       ],
       "note": "Read one file's content by its relative path. `slug` selects a shared workspace; omitted, it is the caller's own."
+    },
+    {
+      "name": "workspace_write",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "PUT",
+        "path": "/api/workspace/file"
+      },
+      "arguments": [
+        "path",
+        "content",
+        "slug"
+      ],
+      "note": "Create a page or replace it whole, committed in the workspace. An omitted `slug` is where the conversation is working (the chat's target on a worker's identity, the desk otherwise); `personal` names the desk."
+    },
+    {
+      "name": "workspace_delete",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/workspace/remove"
+      },
+      "arguments": [
+        "path",
+        "slug"
+      ],
+      "note": "Remove one page as a commit; it stays in the workspace's history. Same `slug` rule as workspace_write."
+    },
+    {
+      "name": "workspace_move",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/workspace/move"
+      },
+      "arguments": [
+        "path",
+        "to",
+        "slug",
+        "to_slug"
+      ],
+      "note": "Move one page to another path or workspace in one call; inside one workspace a pointer stays at the old path. Same `slug` rule as workspace_write; an omitted `to_slug` is the same workspace."
+    },
+    {
+      "name": "entity_upsert",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/workspace/entity"
+      },
+      "arguments": [
+        "kind",
+        "name",
+        "facts",
+        "source",
+        "slug",
+        "dates",
+        "summary",
+        "fields",
+        "section",
+        "connections",
+        "open_questions"
+      ],
+      "note": "Create or update one knowledge-graph card (PRD decision 24). Same `slug` rule as workspace_write."
+    },
+    {
+      "name": "fetch_asset",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/workspace/asset"
+      },
+      "arguments": [
+        "url",
+        "path",
+        "slug"
+      ],
+      "note": "The server fetches a picture into the workspace, so a page references it relatively instead of hotlinking (Vexa-ai/vexa#1612). Same `slug` rule as workspace_write."
     },
     {
       "name": "workspaces",

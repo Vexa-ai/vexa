@@ -155,6 +155,10 @@ ask about a meeting with `POST /api/chat`, passing
 `GET /api/workspace/file?path=` → `{ "path": "...", "content": "..." }` (`404` if absent) ·
 `PUT /api/workspace/file` `{ path, content, slug? }` → `{ "path": "...", "written": true }` (commits;
 `kg/templates/` is refused `403`, and `_global` needs the admin allowlist) ·
+`POST /api/workspace/remove` `{ path, slug? }` → `{ path, deleted, workspace, commit }` (one page, as a
+commit) · `POST /api/workspace/move` `{ path, to, slug?, to_slug? }` → `{ from, to, moved, pointer,
+commit, source_commit }` (an omitted `to_slug` is the same workspace) ·
+`POST /api/workspace/asset` `{ url, path?, slug? }` → the stored picture's `path` (the server fetches it) ·
 `GET /api/workspace/git` → `{ branch, changes, commits }` ·
 `GET /api/workspace/git/show?sha=&path=&slug=` → the unified diff of one commit ·
 `POST /api/workspace/upload` (multipart `files`, ≤25 MB each) → `{ "files": [{ name, path }] }` ·
@@ -164,6 +168,10 @@ ask about a meeting with `POST /api/chat`, passing
 workspace (parks the current one; omit `repo` to swap back to the seed).
 
 (All workspace routes derive `subject` from `X-User-Id` — no `subject` query parameter.)
+
+On the page writes — file, remove, move, asset and entity — an omitted `slug` is where the conversation
+is working: an agent worker's identity carries its chat's target workspace, and a caller with none
+writes on its own desk. `slug: "personal"` (or `"desk"`) names the desk explicitly.
 
 ## Workspace identity and links
 
@@ -196,7 +204,7 @@ read answers `recorded: false` rather than confirming it exists. `400` without b
 `POST /api/workspace/entity` — the one write that makes a knowledge-graph page. Body
 `{ kind, name, facts?, source?, summary?, fields?, section?, connections?, open_questions?, dates?, slug? }`;
 `kind` is `person` · `company` · `meeting` · `project` · `decision`, and `slug` names the **workspace**
-to write into (default: the caller's own). It renders `kg/entities/<kind>/<slug>.md` as a card, writes
+to write into (default: as for the other page writes above). It renders `kg/entities/<kind>/<slug>.md` as a card, writes
 the reciprocal `## Connected` chips on the other page, refreshes `kg/INDEX.md`, and commits both by
 pathspec.
 

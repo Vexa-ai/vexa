@@ -25,6 +25,40 @@
         "title": "AgentChatNameBody",
         "type": "object"
       },
+      "AssetFetchBody": {
+        "additionalProperties": false,
+        "description": "FETCH a picture into a workspace \u2014 the body behind `fetch_asset`. The server fetches it, so a\npage references the stored file relatively and never hotlinks.",
+        "properties": {
+          "path": {
+            "default": "",
+            "description": "where to store it; omitted, the URL's own file name under `assets/`",
+            "title": "Path",
+            "type": "string"
+          },
+          "slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "the workspace to act in. Omit it to act where this conversation is working; pass `personal` for the person's own desk, or a workspace's slug for one act anywhere else they may write. Fetch it into the workspace of the page that shows it.",
+            "title": "Slug"
+          },
+          "url": {
+            "description": "the picture's address on the web",
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "title": "AssetFetchBody",
+        "type": "object"
+      },
       "CalendarEvents": {
         "additionalProperties": false,
         "properties": {
@@ -145,6 +179,106 @@
           "connection_id"
         ],
         "title": "CustomCall",
+        "type": "object"
+      },
+      "EntityUpsertBody": {
+        "additionalProperties": false,
+        "description": "RECORD what was learned about a person, company, meeting, project or decision \u2014 the body\nbehind `entity_upsert`. One call creates `kg/entities/<kind>/<slug>.md` as a card or updates it\nin place; repeating a fact the page already carries writes nothing.",
+        "properties": {
+          "connections": {
+            "description": "other pages this one links to, both ways: `\"Acme\"` or `{\"name\": \"Acme\", \"relation\": \"works at\", \"reverse\": \"employs\"}`",
+            "items": {},
+            "title": "Connections",
+            "type": "array"
+          },
+          "dates": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "for a meeting: any of `scheduled_at`, `held_at`, `report_delivered_at` (ISO-8601 or epoch). Any other key is dropped.",
+            "title": "Dates"
+          },
+          "facts": {
+            "description": "one short sentence each, only what was SAID or READ. Name another entity inside a fact as `[[Their Name]]`. Filed under `section` when given, else under `## Timeline`.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Facts",
+            "type": "array"
+          },
+          "fields": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "facts filed into the kind's sections: person \u2014 role, company, cares_about, relationship; company \u2014 what, people, relationship; meeting \u2014 when, who, participants, decided, committed; project \u2014 what, who, status; decision \u2014 what, why, changes. A field naming another entity links both pages.",
+            "title": "Fields"
+          },
+          "kind": {
+            "description": "person | company | meeting | project | decision",
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "description": "what the page is about, as a person would say it; it becomes the title `[[wikilinks]]` resolve to",
+            "title": "Name",
+            "type": "string"
+          },
+          "open_questions": {
+            "description": "what is not known yet, written as the question \u2014 a gap goes here, never on the page as a guess",
+            "items": {
+              "type": "string"
+            },
+            "title": "Open Questions",
+            "type": "array"
+          },
+          "section": {
+            "default": "",
+            "description": "the section `facts` are filed into, by its name",
+            "title": "Section",
+            "type": "string"
+          },
+          "slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "the workspace to act in. Omit it to act where this conversation is working; pass `personal` for the person's own desk, or a workspace's slug for one act anywhere else they may write. Companies belong in the company layer, `_global`.",
+            "title": "Slug"
+          },
+          "source": {
+            "default": "",
+            "description": "where these facts came from, in a few words \u2014 the meeting, the mail, the file. Required with facts: one source for the whole call, stamped onto every fact; split the call when facts came from different places. A fact with no source is refused.",
+            "title": "Source",
+            "type": "string"
+          },
+          "summary": {
+            "default": "",
+            "description": "the one line under the title; set when the page is created and never overwritten",
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "name"
+        ],
+        "title": "EntityUpsertBody",
         "type": "object"
       },
       "GmailDraft": {
@@ -445,6 +579,52 @@
         "title": "WorkspaceImportBody",
         "type": "object"
       },
+      "WorkspaceMoveBody": {
+        "additionalProperties": false,
+        "description": "MOVE one page from one path to another \u2014 the body behind `workspace_move` (Vexa-ai/vexa#1621).\n\n``path`` (where the page is now) and ``to`` are workspace-RELATIVE paths \u2014 ``path``, like every\nother page verb, and not ``from``, which no tool signature can carry because it is a Python\nkeyword. ``slug`` names the workspace the page is in today; ``to_slug`` names where it is going,\nand omitted means *the same workspace*, which is the ordinary rename.\n\nA CROSS-WORKSPACE MOVE IS A WRITE IN THE TARGET AND A DELETE IN THE SOURCE \u2014 two repositories,\ntwo commits, and either end being read-only refuses the whole call before anything is written.",
+        "properties": {
+          "path": {
+            "description": "workspace-relative path of the page as it is now",
+            "title": "Path",
+            "type": "string"
+          },
+          "slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "the workspace to act in. Omit it to act where this conversation is working; pass `personal` for the person's own desk, or a workspace's slug for one act anywhere else they may write.",
+            "title": "Slug"
+          },
+          "to": {
+            "description": "workspace-relative path it should have after the move",
+            "title": "To",
+            "type": "string"
+          },
+          "to_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "the workspace it is going to; omit it for a rename inside the same workspace, pass `personal` for the person's own desk",
+            "title": "To Slug"
+          }
+        },
+        "required": [
+          "path",
+          "to"
+        ],
+        "title": "WorkspaceMoveBody",
+        "type": "object"
+      },
       "WorkspaceNewBody": {
         "additionalProperties": false,
         "description": "CREATE a brand-new BLANK workspace (seeded from the template) at a fresh slug and ADD it to the\nactive set \u2014 the additive-model \"new workspace\" action. NOT a swap: nothing is parked/rebuilt/backed\nup. ``name`` (optional) \u2192 the new workspace's display label (default a unique \"New workspace\").",
@@ -462,6 +642,68 @@
           }
         },
         "title": "WorkspaceNewBody",
+        "type": "object"
+      },
+      "WorkspaceRemoveBody": {
+        "additionalProperties": false,
+        "description": "REMOVE one page from a workspace \u2014 the body behind `workspace_delete` (Vexa-ai/vexa#1621).\n\n``path`` is workspace-RELATIVE; ``slug`` names the workspace (omitted = the chat's target, or the\ncaller's own desk when there is none).\n\n\u26a0 WHY THIS IS A POST AND NOT `DELETE /api/workspace/file`, which is what it was written as\nfirst. `DELETE /api/workspace/{slug}` already exists and DESTROYS A WHOLE WORKSPACE\nirreversibly \u2014 and `{slug}` matches the literal segment `file`, so the two routes can match one\nURL and the answer would be decided by which router `create_app` includes first.\n`test_route_table.test_no_two_routes_can_match_the_same_url` caught it, which is the entire\npoint of that gate: of all the pairs to leave to registration order, \"remove one page\" and\n\"destroy the workspace\" is the worst. A POST on its own literal path cannot be confused with\nanything, and it reads beside its sibling `POST /api/workspace/move`.",
+        "properties": {
+          "path": {
+            "description": "workspace-relative path of the page to remove",
+            "title": "Path",
+            "type": "string"
+          },
+          "slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "the workspace to act in. Omit it to act where this conversation is working; pass `personal` for the person's own desk, or a workspace's slug for one act anywhere else they may write.",
+            "title": "Slug"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "title": "WorkspaceRemoveBody",
+        "type": "object"
+      },
+      "WorkspaceWriteBody": {
+        "additionalProperties": false,
+        "description": "WRITE one page \u2014 the body behind `workspace_write`. Creates the file or replaces it whole.",
+        "properties": {
+          "content": {
+            "description": "the whole file as it should read after this write",
+            "title": "Content",
+            "type": "string"
+          },
+          "path": {
+            "description": "workspace-relative path of the page, e.g. `notes/plan.md`",
+            "title": "Path",
+            "type": "string"
+          },
+          "slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "the workspace to act in. Omit it to act where this conversation is working; pass `personal` for the person's own desk, or a workspace's slug for one act anywhere else they may write.",
+            "title": "Slug"
+          }
+        },
+        "required": [
+          "path",
+          "content"
+        ],
+        "title": "WorkspaceWriteBody",
         "type": "object"
       }
     }
@@ -655,6 +897,38 @@
         "summary": "Timezone Set"
       }
     },
+    "/api/workspace/asset": {
+      "post": {
+        "description": "FETCH a remote image INTO the workspace \u2014 the act behind the external-image placeholder,\nand the verb behind `fetch_asset`. Then reference the stored file on the page relatively,\n`![alt](assets/<name>)`; never put the remote URL on a page.\n\nThe server fetches, never the reader's browser: that is the whole rule (#1612). It is also\nthe only place that CAN \u2014 a page in a bank's workspace must not make that browser talk to a\nthird party, and a browser cannot store the result in a workspace anyway.\n\nAND IT ANSWERS WITH WHOSE FAULT IT WAS (Vexa-ai/vexa#1624). Every failure here used to be\na 400 \u2014 our status code for the reader's request \u2014 so a page whose address answers 404 told\nthem `400: \u2026 answered 404`, which reads as a broken button rather than a dead link. Now the\nthree cases are three answers: **400** when the URL itself is refused (it is the request\nthat is wrong), **424** when the remote answered and answered badly \u2014 its own code carried\nas `upstream_status`, so the client can say *the site answered 404* in words \u2014 and **502**\nwhen nothing usable came back at all.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssetFetchBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "summary": "Ws Asset Fetch"
+      }
+    },
+    "/api/workspace/entity": {
+      "post": {
+        "description": "RECORD what was just learned about a person, company, meeting, project or decision \u2014 the\nverb behind `entity_upsert` (PRD decision 24). Use it the moment a turn learns anything\ndurable; a name without a page gets one now.\n\nOne call creates `kg/entities/<kind>/<slug>.md` if it is missing and updates it in place if\nit is there \u2014 never check first, never merge by hand. The page is a CARD (decision 24.6): a\nsummary, the kind's sections (file facts into them with `fields`, or with `section`),\n`## Connected` chips both ways, `## Sources`, `## Open questions`, and `## Timeline` last for\nanything dated. A refusal names what to fix: 400 is an argument in a shape this does not\nread (send the same facts again in the shape it names), 422 is a rule (fix the fact, do not\nretry). The answer lists `links_missing` \u2014 names with no page yet, which are the next calls.\n\nAuthorization is `ws_file_write`'s, because it is the same act \u2014 a write into a workspace \u2014\nand two spellings of one authorization rule is how the second one ends up weaker. It\nrefreshes `kg/INDEX.md` and commits both by pathspec with the F31 subject shape.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EntityUpsertBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "summary": "Ws Entity Upsert"
+      }
+    },
     "/api/workspace/file": {
       "get": {
         "parameters": [
@@ -685,6 +959,20 @@
           }
         ],
         "summary": "Ws File"
+      },
+      "put": {
+        "description": "WRITE one page, creating it or replacing it whole \u2014 the terminal's in-place page editor and\nthe verb behind `workspace_write`. Authorization mirrors the MOUNT rules, not the read rules:\nown desk and `_system` always; a shared workspace needs contributor+; `_global` only the\nadmin allowlist. Commits, so the history stays honest.\n\nNever overwrite a page with a note saying it moved or went away: `workspace_move` and\n`workspace_delete` do those, and keep the history.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkspaceWriteBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "summary": "Ws File Write"
       }
     },
     "/api/workspace/import": {
@@ -718,6 +1006,22 @@
           }
         ],
         "summary": "Ws Import Status"
+      }
+    },
+    "/api/workspace/move": {
+      "post": {
+        "description": "MOVE one page \u2014 the verb behind `workspace_move`.\n\nWITHIN one workspace it is a rename with a POINTER STUB left at the old path, so a\n`[[wikilink]]` written before the move still lands somewhere that says where the page went.\nACROSS workspaces it is a WRITE IN THE TARGET AND A DELETE IN THE SOURCE \u2014 two repositories,\ntwo commits, no stub (the containment rule: a link out of another workspace is the reader's\nproblem to hold, and a stub pointing at a path they cannot open is worse than a dead link).\n\nBOTH ENDS ARE AUTHORIZED BEFORE ANYTHING IS WRITTEN, and both through `_movable_dir`, so a\nread-only end refuses the whole move rather than half-performing it: `_system` always,\n`_global` unless the caller is an org admin, a shared workspace unless they are a\ncontributor. Half a move is the one outcome worse than no move \u2014 the page would exist twice,\nor nowhere.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkspaceMoveBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "summary": "Ws File Move"
       }
     },
     "/api/workspace/new": {
@@ -758,6 +1062,22 @@
           }
         ],
         "summary": "Ws Purpose Get"
+      }
+    },
+    "/api/workspace/remove": {
+      "post": {
+        "description": "REMOVE one page from a workspace, as a commit \u2014 the verb behind `workspace_delete`.\n\nNOT `DELETE /api/workspace/file`, which is what this was written as first: `DELETE\n/api/workspace/{slug}` destroys a whole workspace and `{slug}` matches the literal `file`,\nso the two would match one URL and registration order would pick the winner (see\n`WorkspaceRemoveBody`, and the gate that caught it).\n\nRefuses a folder (this removes A PAGE, and a recursive delete an agent can call is a\ndifferent decision nobody has made), a path outside the workspace, and every mount the write\nroute refuses plus `_system` (see `_movable_dir`). A path that is not there is a 404 \u2014 the\nagent is meant to read that and say so, not retry.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkspaceRemoveBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "summary": "Ws File Remove"
       }
     },
     "/api/workspace/shared": {
