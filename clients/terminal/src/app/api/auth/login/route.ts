@@ -14,6 +14,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { cookies } from "next/headers";
 import { AUTH_COOKIE, USER_INFO_COOKIE, findOrCreateUserToken, mintFirstVisitScaffold } from "../adminApi";
+import { SIGNIN_NOT_ALLOWED, SIGNIN_UNAVAILABLE } from "../../../signinRefusal";
 
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
@@ -56,9 +57,15 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid email format" }, { status: 400, headers: NO_STORE });
   }
 
+  // Dev-only as this door is, it still ADMITS the way every other door does (Vexa-ai/vexa#1783):
+  // `findOrCreateUserToken` asks first, so a development host reachable from outside — the hot
+  // overlay runs NODE_ENV=development — cannot mint accounts for whoever posts here.
   const result = await findOrCreateUserToken(normalized);
   if (!result.ok) {
-    return NextResponse.json({ error: result.error }, { status: result.status || 500, headers: NO_STORE });
+    const error = result.refused === "not-allowed" ? SIGNIN_NOT_ALLOWED
+      : result.refused === "unavailable" ? SIGNIN_UNAVAILABLE
+      : result.error;
+    return NextResponse.json({ error }, { status: result.status || 500, headers: NO_STORE });
   }
 
   const { user, token } = result;

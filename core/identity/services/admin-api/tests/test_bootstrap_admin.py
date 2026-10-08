@@ -129,6 +129,33 @@ def test_the_gate_doors_are_gone(client):
                       json={"company": "Acme"}).status_code in (404, 405)
 
 
+def test_signin_admission_against_real_postgres(client, monkeypatch):
+    """Vexa-ai/vexa#1783, end to end on a real schema: while no admin exists anybody is admitted
+    (that sign-in is the claim); once the claim lands, a stranger is refused, the admin and every
+    existing user are admitted, and the allow-list (env + settings row) admits the rest. The
+    offline twin of this is tests/test_signin_allow.py."""
+    def ask(email):
+        return client.post("/internal/signin-admission", headers=_internal(),
+                           json={"email": email}).json()
+
+    monkeypatch.setenv("VEXA_SIGNIN_ALLOW", "@seeded.example")
+    assert ask("first@anywhere.net") == {"admitted": True, "why": "unclaimed-instance"}
+
+    boss = _mk_user(client, "boss-test@vexa.ai")
+    _mk_user(client, "Member-Test@vexa.ai")
+    client.post("/internal/bootstrap-admin", headers=_internal(), json={"user_id": boss})
+
+    assert ask("stranger@anywhere.net") == {"admitted": False, "why": "not-allowed"}
+    assert ask("BOSS-test@vexa.ai") == {"admitted": True, "why": "admin"}
+    assert ask("member-test@vexa.ai") == {"admitted": True, "why": "existing-user"}
+    assert ask("anna@seeded.example") == {"admitted": True, "why": "allow-list"}
+
+    assert client.put("/internal/settings/signin", headers=_internal(),
+                      json={"allow": "Stranger@anywhere.net"}).status_code == 200
+    assert ask("stranger@anywhere.net") == {"admitted": True, "why": "allow-list"}
+    assert client.post("/internal/signin-admission", json={"email": "x@y.z"}).status_code == 403
+
+
 def test_release_admin_hands_the_instance_back_to_first_run(client):
     """The rehearsal needs an instance that has never been claimed, and the account holding the
     role is usually a leftover test identity sitting next to a real one. Role, and only role."""

@@ -109,6 +109,28 @@ curl "$ADMIN/admin/users/1/tokens" -H "X-Admin-API-Key: $ADMIN_TOKEN"
 — the `terminal-login`-named entries are login sessions (capped, not unbounded), while any
 differently-named entries are self-serve keys the user minted and are never pruned by login.
 
+## Who may sign in to the terminal
+
+The terminal's sign-in doors — the emailed link, Google and Microsoft — each end by creating an
+account and minting a `terminal-login` key for it, so they are gated on **who** the address is, not
+only on proof that the person holds it. A sign-in is admitted only for:
+
+- an **existing user** of this instance (upgrading locks nobody out),
+- an **admin** — the claimed one, or an address in `VEXA_ADMIN_EMAILS`,
+- an address on the **sign-in allow-list**: `VEXA_SIGNIN_ALLOW` on admin-api plus what the admin
+  adds in the terminal under **Settings → Sign-in**. Entries are exact addresses
+  (`alice@example.org`) or whole domains (`@example.com`, that domain exactly).
+
+Anybody else is refused before an account exists. The email form answers "check your email" for
+every address and mails only the admitted ones; the redeem page and the OAuth return show one
+sentence that names no list. If admin-api cannot answer, new sign-ins are refused (existing sessions
+keep working).
+
+While **no admin has been claimed**, anybody may sign in and the first sign-in becomes the admin.
+`VEXA_ADMIN_EMAILS` turns that off — set it before first boot on any instance reachable from outside.
+An account created through `POST /admin/users` (above) counts as an existing user, so minting a key
+for someone also lets them sign in.
+
 ## What can go wrong
 
 | Status | `detail` | Meaning |

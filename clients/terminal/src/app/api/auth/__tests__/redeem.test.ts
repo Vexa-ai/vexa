@@ -21,6 +21,11 @@ function makeReq(query: Record<string, string>): import("next/server").NextReque
  *  is allowed to fail. */
 function stubAdminApi() {
   return vi.fn(async (url: string, init?: RequestInit) => {
+    // Vexa-ai/vexa#1783: the redeem asks whether this address may sign in before it creates
+    // anything. These cases are about the link; the refusals are in signinAllowList.test.ts.
+    if (url.includes("/internal/signin-admission")) {
+      return new Response(JSON.stringify({ admitted: true, why: "existing-user" }), { status: 200 });
+    }
     if (url.includes("/admin/users/email/")) {
       return new Response(JSON.stringify({ id: 42, email: "magic@example.com", name: "Magic" }), { status: 200 });
     }
@@ -39,6 +44,7 @@ beforeEach(() => {
   vi.stubEnv("NEXTAUTH_SECRET", "test-signing-secret");
   vi.stubEnv("VEXA_ADMIN_API_URL", "http://admin.test");
   vi.stubEnv("VEXA_ADMIN_API_KEY", "admin-secret");
+  vi.stubEnv("VEXA_INTERNAL_API_SECRET", "internal-secret");
   vi.stubEnv("VEXA_ADMIN_EMAILS", "admin@example.com"); // allowlist → bootstrap claim stays off
   vi.stubEnv("TERMINAL_URL", "https://terminal.test");
 });

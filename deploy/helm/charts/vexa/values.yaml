@@ -221,6 +221,15 @@ adminApi:
   resources:
     requests: { cpu: 100m, memory: 256Mi }
     limits:   { cpu: 500m, memory: 512Mi }
+  # Who may sign in to the terminal besides existing users and admins (VEXA_SIGNIN_ALLOW):
+  # comma-separated exact addresses and @domain entries, e.g. "@example.com,alice@example.org".
+  # `@example.com` admits everyone at exactly that domain (a subdomain needs its own entry).
+  # Empty = nobody new once an admin exists. The admin can add more in the terminal under
+  # Settings → Sign-in; the effective list is both.
+  # ⚠ While no admin is claimed, ANY address may sign in and becomes the admin. Before exposing
+  # the terminal publicly, name the admins with VEXA_ADMIN_EMAILS (terminal.extraEnv), which
+  # turns that first-sign-in claim off.
+  signinAllow: ""
   extraEnv: []
 
 # Meetings + recordings (compose: meeting-api → :8080).
@@ -389,6 +398,11 @@ terminal:
   # OAuth (Google/Microsoft) + other knobs: add here, e.g.
   #   - name: GOOGLE_CLIENT_ID
   #     value: "..."
+  # Set VEXA_ADMIN_EMAILS here BEFORE first install when the terminal is reachable from outside:
+  #   - name: VEXA_ADMIN_EMAILS
+  #     value: "admin@example.com"
+  # Without it the first address to sign in claims the admin role. Who else may sign in is
+  # adminApi.signinAllow.
   extraEnv: []
 
 # DEPRECATED, OFF BY DEFAULT — the 0.10 dashboard as an opt-in component (#813). Hosted production

@@ -6,6 +6,9 @@
    admin-api round-trip, so a replay cannot race a slow mint.
 2. Runs the same `findOrCreateUserToken` + cookie flow as every other door, so downstream
    consumers see an ordinary session (including the `id` field the `api/minutes/*` seams read).
+   That function first asks whether the address may sign in AT ALL (Vexa-ai/vexa#1783) — checked
+   again here because the link may outlive the allow-list entry that sent it — and refuses before
+   any account exists: `403` with the shared sentence, or `503` when admin-api cannot answer.
 3. `302`s to `next`, already reduced to a site-relative path — an emailed link can never bounce
    its recipient off this origin.
 

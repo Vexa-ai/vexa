@@ -6,6 +6,10 @@
  *  refused everybody but the administrator while `_global` was unwritten. Now no door asks: an
  *  admin-api that would still answer "refused" is never consulted, and an ordinary person gets a
  *  session on an instance whose `_global` is empty.
+ *
+ *  (Doors DO ask a different question now — `/internal/signin-admission`, whether this address may
+ *  sign in at all (Vexa-ai/vexa#1783). It is about the person, never about `_global`; the member here
+ *  has an account, so it admits them. See signinAllowList.test.ts.)
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -37,6 +41,11 @@ function stubAdminApi() {
   const calls: string[] = [];
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     calls.push(`${init?.method || "GET"} ${url}`);
+    // The allow-list's admission door (Vexa-ai/vexa#1783) is a DIFFERENT question from the removed
+    // company-layer gate: this member already has an account, so it admits them.
+    if (url.includes("/internal/signin-admission")) {
+      return new Response(JSON.stringify({ admitted: true, why: "existing-user" }), { status: 200 });
+    }
     if (url.includes("/internal/signin-allowed")) {
       return new Response(JSON.stringify({ allowed: false, reason: "This Vexa is being set up by its administrator." }), { status: 200 });
     }

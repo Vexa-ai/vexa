@@ -114,6 +114,8 @@ anyone who read the repo can mint an API key for any account. Generate each with
 `openssl rand -hex 32` and set the same `ADMIN_TOKEN` on every service that shares the tier.
 | `VEXA_DISPATCH_SIGNING_KEY` | `dev-dispatch-signing-key` | Signs dispatch tokens (the identity chain of custody). |
 | `NEXTAUTH_SECRET` | `dev-nextauth-secret` | Session secret for the web UI. |
+| `VEXA_ADMIN_EMAILS` | — | Terminal admins, comma-separated. Also turns off the first-sign-in admin claim — set it before first boot on any terminal reachable from outside. |
+| `VEXA_SIGNIN_ALLOW` | — | admin-api: who else may sign in to the terminal besides existing users and admins — exact addresses and `@domain` entries, comma-separated (`@example.com,alice@example.org`). Merged with the list the admin edits under Settings → Sign-in. See [Who may sign in](/deployment#who-may-sign-in). |
 | `VEXA_BOT_API_KEY` | — | Pre-shared key a bot uses to call back into the stack. |
 
 <Warning>

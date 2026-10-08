@@ -134,6 +134,13 @@ class FakeAdminApi {
     const path = u.pathname;
     this.calls.push({ method, path });
 
+    // POST /internal/signin-admission — Vexa-ai/vexa#1783: every sign-in is admitted before anything
+    // is created. This fixture is about the login-token prune, so it admits everybody; the admission
+    // rule itself is proven in signinAllowList.test.ts.
+    if (path === "/internal/signin-admission" && method === "POST") {
+      return jsonRes({ admitted: true, why: "allow-list" });
+    }
+
     // GET /admin/users/email/{email}
     let m = path.match(/^\/admin\/users\/email\/(.+)$/);
     if (m && method === "GET") {
@@ -205,6 +212,7 @@ beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn(fake.fetch));
   process.env.VEXA_ADMIN_API_URL = "http://admin.test";
   process.env.VEXA_ADMIN_API_KEY = "test-admin-key";
+  process.env.VEXA_INTERNAL_API_SECRET = "test-internal-secret"; // the admission door (#1783)
   // allowlist configured → the bootstrap-admin internal call short-circuits (no /internal hit)
   process.env.VEXA_ADMIN_EMAILS = "owner@vexa.ai";
   process.env.VEXA_TERMINAL_LOGIN_TOKEN_CAP = "3";
@@ -214,6 +222,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   delete process.env.VEXA_ADMIN_API_URL;
   delete process.env.VEXA_ADMIN_API_KEY;
+  delete process.env.VEXA_INTERNAL_API_SECRET;
   delete process.env.VEXA_ADMIN_EMAILS;
   delete process.env.VEXA_TERMINAL_LOGIN_TOKEN_CAP;
   delete process.env.VEXA_TERMINAL_LOGIN_TOKEN_MAX;

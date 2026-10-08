@@ -462,6 +462,31 @@ terminal:                                 # the same `terminal:` key as above �
 Register the redirect URI in the provider console as `<publicUrl>/api/auth/callback/microsoft`
 (or `.../google`) — so `terminal.publicUrl` above is a prerequisite, not an optional extra.
 
+### Who may sign in
+
+A provider vouches for an address; it does not decide whether that address belongs here. Every
+sign-in — Google, Microsoft, or the emailed link — is admitted only for an **existing user** of the
+instance, an **admin**, or an address on the **sign-in allow-list**. Anybody else is refused before an
+account is created. Seed the list with `adminApi.signinAllow` (exact addresses and `@domain`
+entries, comma-separated); the admin can add more in the Terminal under **Settings → Sign-in**, and
+the effective list is both:
+
+```yaml
+adminApi:
+  signinAllow: "@example.com,alice@example.org"
+terminal:
+  extraEnv:
+    - name: VEXA_ADMIN_EMAILS              # set BEFORE the first install — see the warning
+      value: "admin@example.com"
+```
+
+<Warning>
+**Until an admin is claimed, anybody may sign in, and the first sign-in becomes the admin.** If the
+Ingress makes the Terminal reachable before you have signed in yourself, a stranger can claim it.
+Name the admins in `VEXA_ADMIN_EMAILS` on the Terminal before the first install: that turns the
+first-sign-in claim off.
+</Warning>
+
 <Note>
 Without an Ingress the Services stay cluster-internal. `helm install` alone does not expose Vexa —
 reach it with `kubectl port-forward` during evaluation, or enable the Ingress above.

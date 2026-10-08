@@ -14,6 +14,7 @@ import GoogleProvider from "next-auth/providers/google";
 import AzureADProvider from "next-auth/providers/azure-ad";
 import { cookies } from "next/headers";
 import { AUTH_COOKIE, USER_INFO_COOKIE, findOrCreateUserToken, mintFirstVisitScaffold } from "../adminApi";
+import { SIGNIN_ERROR_NOT_ALLOWED, SIGNIN_ERROR_UNAVAILABLE } from "../../../signinRefusal";
 
 const isGoogleEnabled = () => !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
 const isMicrosoftEnabled = () =>
@@ -86,8 +87,27 @@ export const authOptions: AuthOptions = {
       const provider = account?.provider;
       if ((provider !== "google" && provider !== "microsoft") || !user.email) return false;
 
+      // WHO MAY SIGN IN (Vexa-ai/vexa#1783) is asked inside findOrCreateUserToken, BEFORE it can
+      // create an account — the same question the emailed link asks, about the address the provider
+      // vouched for. It is about the ADDRESS, not the provider: a provider added later lands here
+      // and is asked the same thing.
+      //
+      // A refusal returns a URL rather than `false`. `false` becomes NextAuth's `?error=AccessDenied`,
+      // which cannot tell "this address may not sign in" from a cancelled consent screen; the codes
+      // below let the sign-in card say the one sentence every door uses (app/signinRefusal.ts) —
+      // naming no list and no domain, so it reveals nothing the person could not learn by trying.
       const result = await findOrCreateUserToken(user.email.toLowerCase());
       if (!result.ok) {
+        if (result.refused === "not-allowed") {
+          // eslint-disable-next-line no-console
+          console.info(`[terminal-auth] ${provider} sign-in refused: ${user.email} is not allowed to sign in`);
+          return `/?error=${SIGNIN_ERROR_NOT_ALLOWED}`;
+        }
+        if (result.refused === "unavailable") {
+          // eslint-disable-next-line no-console
+          console.error(`[terminal-auth] ${provider} sign-in refused, admission unavailable (fail closed): ${result.error}`);
+          return `/?error=${SIGNIN_ERROR_UNAVAILABLE}`;
+        }
         // eslint-disable-next-line no-console
         console.error(`[terminal-auth] ${provider} sign-in failed for ${user.email}: ${result.error}`);
         return false;

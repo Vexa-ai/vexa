@@ -1,0 +1,270 @@
+"""WHO MAY SIGN IN — the sign-in allow-list and `POST /internal/signin-admission` (Vexa-ai/vexa#1783).
+
+Removing the company-layer gate removed the only thing that controlled who could sign in: every
+terminal door ends in find-or-create, so anybody who could finish one got an account, an API token,
+agent turns and bot launches. The rule now: an EXISTING user, an ADMIN, or an address on the
+allow-list (`VEXA_SIGNIN_ALLOW` + the admin-edited `signin.allow` setting) — and anybody while no
+admin has been claimed, because that sign-in is the claim.
+
+Offline, no docker: the rule is pure (`app/signin_allow.py`), and the two doors are driven through
+the real FastAPI app with the DB dependency replaced by an in-memory double that answers exactly the
+three reads the admission makes (the user row, the `signin` settings row, "is there an admin").
+"""
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy.dialects import postgresql
+
+from admin_api.app import db as app_db
+from admin_api.app import signin_allow as sa
+from admin_api.app.main import create_app
+
+SECRET = "internal-secret-for-the-signin-test"
+ADMIN = "admin-token-for-the-signin-test"
+
+
+# ── the rule, pure ──────────────────────────────────────────────────────────────────────────────
+
+def _decide(email, *, users=(), admins=(), admin_exists=True, allow=()):
+    e = email.lower()
+    return sa.decide(email, user_exists=e in users or e in admins, is_admin=e in admins,
+                     admin_exists=admin_exists, allow=allow)
+
+
+def test_an_unknown_address_is_refused_once_an_admin_exists():
+    assert _decide("stranger@example.com") == (False, sa.WHY_NOT_ALLOWED)
+
+
+def test_an_existing_user_is_admitted_whatever_the_list_says():
+    """Upgrading must lock out nobody who already has an account — the list is empty here."""
+    assert _decide("member@example.com", users={"member@example.com"}) == (True, sa.WHY_EXISTING_USER)
+    assert _decide("Member@Example.COM", users={"member@example.com"}) == (True, sa.WHY_EXISTING_USER)
+
+
+def test_the_claimed_admin_is_admitted():
+    assert _decide("boss@example.com", admins={"boss@example.com"}) == (True, sa.WHY_ADMIN)
+
+
+def test_a_domain_entry_admits_exactly_that_domain():
+    allow = ["@oenb.at"]
+    assert _decide("anna@oenb.at", allow=allow) == (True, sa.WHY_ALLOW_LIST)
+    assert _decide("ANNA@OENB.AT", allow=allow) == (True, sa.WHY_ALLOW_LIST)
+    # lookalikes and subdomains are not that domain
+    for other in ("anna@sub.oenb.at", "anna@evil-oenb.at", "anna@oenb.at.evil.com",
+                  "oenb.at@evil.com", "anna@oenb.atx"):
+        assert _decide(other, allow=allow) == (False, sa.WHY_NOT_ALLOWED), other
+
+
+def test_an_exact_entry_admits_that_address_only():
+    allow = ["alice@example.org"]
+    assert _decide("alice@example.org", allow=allow) == (True, sa.WHY_ALLOW_LIST)
+    assert _decide("bob@example.org", allow=allow) == (False, sa.WHY_NOT_ALLOWED)
+    # no plus-address folding: an exact entry is exact
+    assert _decide("alice+x@example.org", allow=allow) == (False, sa.WHY_NOT_ALLOWED)
+
+
+def test_an_unclaimed_instance_admits_anybody_because_that_sign_in_is_the_claim():
+    assert _decide("first@anywhere.net", admin_exists=False) == (True, sa.WHY_UNCLAIMED)
+
+
+def test_a_non_address_is_refused_even_on_an_unclaimed_instance():
+    for junk in ("", "   ", "no-at-sign", "@example.com", "a@b", "a b@example.com"):
+        assert _decide(junk, admin_exists=False) == (False, sa.WHY_NOT_ALLOWED), junk
+
+
+def test_the_env_and_the_settings_lists_merge(monkeypatch):
+    monkeypatch.setenv("VEXA_SIGNIN_ALLOW", "@oenb.at, alice@example.com")
+    env_valid, problems = sa.env_entries()
+    assert env_valid == ["@oenb.at", "alice@example.com"] and problems == []
+    allow = sa.effective(env_valid, "bob@example.net\n@partner.example, alice@example.com")
+    assert allow == ["@oenb.at", "alice@example.com", "bob@example.net", "@partner.example"]
+    for ok in ("x@oenb.at", "alice@example.com", "bob@example.net", "y@partner.example"):
+        assert _decide(ok, allow=allow)[0] is True, ok
+    assert _decide("carol@example.com", allow=allow) == (False, sa.WHY_NOT_ALLOWED)
+
+
+def test_an_invalid_env_entry_never_matches_and_is_reported(monkeypatch):
+    """`oenb.at` without the @ is a typo, not a domain: guessing it into one would widen the list
+    the operator wrote. It is reported instead."""
+    monkeypatch.setenv("VEXA_SIGNIN_ALLOW", "oenb.at,ok@example.com")
+    env_valid, problems = sa.env_entries()
+    assert env_valid == ["ok@example.com"]
+    assert len(problems) == 1 and "@oenb.at" in problems[0]
+    assert _decide("anna@oenb.at", allow=env_valid) == (False, sa.WHY_NOT_ALLOWED)
+
+
+def test_unset_env_is_an_empty_list(monkeypatch):
+    monkeypatch.delenv("VEXA_SIGNIN_ALLOW", raising=False)
+    assert sa.env_entries() == ([], [])
+
+
+def test_a_settings_write_is_canonicalised_and_all_or_nothing():
+    assert sa.normalize_setting(" Alice@Example.com ,\n@OENB.at;alice@example.com ") == \
+        "alice@example.com, @oenb.at"
+    assert sa.normalize_setting("") == ""
+    assert sa.normalize_setting(["a@b.co", "@c.co"]) == "a@b.co, @c.co"
+    with pytest.raises(sa.InvalidAllowList) as bad:
+        sa.normalize_setting("ok@example.com, oenb.at, @nodot, x@@y.z, *")
+    # every problem at once — one per bad entry, the good one not among them
+    assert len(bad.value.problems) == 4
+    assert not any("ok@example.com" in p for p in bad.value.problems)
+
+
+# ── the doors, through the real app with an in-memory DB double ────────────────────────────────
+
+class _Result:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def scalars(self):
+        return self
+
+    def first(self):
+        return self._rows[0] if self._rows else None
+
+
+class FakeDB:
+    """Answers the admission's three reads, and holds platform_settings rows for the settings door."""
+
+    def __init__(self, *, users=(), admins=(), admin_exists=True, signin_allow=""):
+        self.users = {u: SimpleNamespace(email=u, data={}) for u in users}
+        for a in admins:
+            self.users[a] = SimpleNamespace(email=a, data={"is_admin": True})
+        self.admin_exists = admin_exists or bool(admins)
+        self.rows = {}
+        if signin_allow:
+            self.rows["signin"] = SimpleNamespace(key="signin", value={"allow": signin_allow})
+        self.asked_admin_exists = 0
+
+    async def execute(self, stmt):
+        if len(stmt.selected_columns) == 1:                 # _admin_exists: select(User.id)…
+            self.asked_admin_exists += 1
+            return _Result([(1,)] if self.admin_exists else [])
+        params = stmt.compile(dialect=postgresql.dialect()).params
+        email = next((v for v in params.values() if isinstance(v, str)), "")
+        user = self.users.get(email)
+        return _Result([user] if user else [])
+
+    async def get(self, _model, key):
+        return self.rows.get(key)
+
+    def add(self, row):
+        self.rows[row.key] = row
+
+    async def commit(self):
+        pass
+
+
+@pytest.fixture()
+def make_client(monkeypatch):
+    monkeypatch.setenv("ADMIN_API_TOKEN", ADMIN)
+    monkeypatch.setenv("INTERNAL_API_SECRET", SECRET)
+    monkeypatch.setenv("DEV_MODE", "false")
+    monkeypatch.delenv("VEXA_SIGNIN_ALLOW", raising=False)
+    clients = []
+
+    def _make(db: FakeDB) -> TestClient:
+        app = create_app()
+
+        async def _db():
+            yield db
+
+        app.dependency_overrides[app_db.get_db] = _db
+        c = TestClient(app)
+        clients.append(c)
+        return c
+
+    yield _make
+    for c in clients:
+        c.close()
+
+
+def _ask(client, email, secret=SECRET):
+    headers = {"X-Internal-Secret": secret} if secret is not None else {}
+    return client.post("/internal/signin-admission", headers=headers, json={"email": email})
+
+
+def test_admission_refuses_an_unknown_address(make_client):
+    r = _ask(make_client(FakeDB(users={"member@example.com"})), "stranger@example.com")
+    assert r.status_code == 200
+    assert r.json() == {"admitted": False, "why": "not-allowed"}
+
+
+def test_admission_admits_an_existing_user_and_the_admin(make_client):
+    c = make_client(FakeDB(users={"member@example.com"}, admins={"boss@example.com"}))
+    assert _ask(c, "Member@Example.com").json() == {"admitted": True, "why": "existing-user"}
+    assert _ask(c, "boss@example.com").json() == {"admitted": True, "why": "admin"}
+
+
+def test_admission_reads_the_env_and_the_settings_lists_together(make_client, monkeypatch):
+    monkeypatch.setenv("VEXA_SIGNIN_ALLOW", "@oenb.at")
+    c = make_client(FakeDB(signin_allow="alice@example.com"))
+    assert _ask(c, "anna@oenb.at").json() == {"admitted": True, "why": "allow-list"}
+    assert _ask(c, "alice@example.com").json() == {"admitted": True, "why": "allow-list"}
+    assert _ask(c, "bob@example.com").json() == {"admitted": False, "why": "not-allowed"}
+
+
+def test_admission_on_an_unclaimed_instance_admits_the_claim(make_client):
+    db = FakeDB(admin_exists=False)
+    assert _ask(make_client(db), "first@anywhere.net").json() == \
+        {"admitted": True, "why": "unclaimed-instance"}
+    assert db.asked_admin_exists == 1
+
+
+def test_admission_does_not_ask_about_the_admin_when_the_answer_is_already_yes(make_client):
+    db = FakeDB(users={"member@example.com"}, admin_exists=False)
+    assert _ask(make_client(db), "member@example.com").json()["admitted"] is True
+    assert db.asked_admin_exists == 0
+
+
+def test_admission_is_internal_tier_with_no_dev_mode_escape(make_client, monkeypatch):
+    """The answer says whether an address has an account here — exactly what the sign-in form is
+    built not to reveal. Never open without the secret, dev mode included."""
+    c = make_client(FakeDB(users={"member@example.com"}))
+    assert _ask(c, "member@example.com", secret=None).status_code == 403
+    assert _ask(c, "member@example.com", secret="wrong").status_code == 403
+    monkeypatch.setenv("DEV_MODE", "true")
+    monkeypatch.delenv("INTERNAL_API_SECRET")
+    assert _ask(c, "member@example.com", secret=None).status_code == 503
+
+
+def test_the_old_company_layer_door_is_still_gone(make_client):
+    c = make_client(FakeDB())
+    r = c.post("/internal/signin-allowed", headers={"X-Internal-Secret": SECRET}, json={"email": "x@y.z"})
+    assert r.status_code in (404, 405)
+
+
+def test_the_settings_door_canonicalises_the_list(make_client):
+    db = FakeDB()
+    c = make_client(db)
+    r = c.put("/internal/settings/signin", headers={"X-Internal-Secret": SECRET},
+              json={"allow": "Alice@Example.com\n@OENB.at"})
+    assert r.status_code == 200, r.text
+    assert r.json()["value"] == {"allow": "alice@example.com, @oenb.at"}
+    # …and the admission reads what was written
+    assert _ask(c, "anna@oenb.at").json()["admitted"] is True
+    # clearing it is the empty string, as for every other settings field
+    r = c.put("/internal/settings/signin", headers={"X-Internal-Secret": SECRET}, json={"allow": ""})
+    assert r.json()["value"] == {}
+
+
+def test_the_settings_door_refuses_a_bad_entry_and_stores_nothing(make_client):
+    db = FakeDB(signin_allow="keep@example.com")
+    c = make_client(db)
+    r = c.put("/internal/settings/signin", headers={"X-Internal-Secret": SECRET},
+              json={"allow": "new@example.com, oenb.at"})
+    assert r.status_code == 422
+    assert "@oenb.at" in r.json()["detail"]
+    assert db.rows["signin"].value == {"allow": "keep@example.com"}
+
+
+def test_the_settings_read_shows_the_env_half_and_its_problems(make_client, monkeypatch):
+    monkeypatch.setenv("VEXA_SIGNIN_ALLOW", "@oenb.at,typo.example")
+    c = make_client(FakeDB(signin_allow="alice@example.com"))
+    body = c.get("/internal/settings/signin", headers={"X-Internal-Secret": SECRET}).json()
+    assert body["value"] == {"allow": "alice@example.com"}
+    assert body["env"] == {"allow": "@oenb.at"}
+    assert len(body["env_problems"]) == 1 and "typo.example" in body["env_problems"][0]

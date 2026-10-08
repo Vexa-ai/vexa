@@ -307,6 +307,55 @@ export async function mintFirstVisitScaffold(
   return mintArrivalScaffold(email, userId, { flow: "sign-in", step: "first-visit" });
 }
 
+// ── who may sign in (Vexa-ai/vexa#1783) ─────────────────────────────────────────────────────────
+//    Removing the company-layer gate removed the only thing that controlled who could sign in, and
+//    every door ends in find-or-create: whoever finished one got an account, an API token, agent
+//    turns on this instance's model credentials and bot launches. A self-hosted instance must not
+//    be open to anyone with an email address by default.
+
+/** The verdict on one address. `why` is a reason for logs and tests, never shown to the person. */
+export type SigninAdmission =
+  | { admitted: true; why: "admin-email" | "admin" | "existing-user" | "allow-list" | "unclaimed-instance" }
+  | { admitted: false; why: "not-allowed" | "unavailable"; detail?: string };
+
+const ADMITTED_REASONS = new Set(["admin", "existing-user", "allow-list", "unclaimed-instance"]);
+
+function adminEmails(): string[] {
+  return (process.env.VEXA_ADMIN_EMAILS || "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
+}
+
+/** MAY THIS ADDRESS SIGN IN? Every door asks this BEFORE it creates or sends anything — the
+ *  emailed link's request and redeem halves, OAuth, the dev login — and the last three ask it
+ *  through `findOrCreateUserToken`, so a door added later cannot reach an account without it.
+ *
+ *  Admitted: an address in `VEXA_ADMIN_EMAILS` (decided here, because this process holds that
+ *  list), or whatever admin-api's `POST /internal/signin-admission` admits — an existing user, the
+ *  claimed admin, an address on the allow-list (`VEXA_SIGNIN_ALLOW` + the `signin.allow` setting
+ *  the admin edits in Settings), or anybody while no admin has been claimed, because that sign-in
+ *  IS the claim. That last reason is refused here when `VEXA_ADMIN_EMAILS` is set, for the same
+ *  reason the claim itself is off then: the instance already has its admins.
+ *
+ *  ⚠ FAILS CLOSED, the opposite direction from `instanceState()`. An unreachable or unconfigured
+ *  admin-api, a non-2xx (an older admin-api has no such route and answers 404), or a body that does
+ *  not literally say `admitted: true` with a reason we know — all refuse. Admission is positive
+ *  evidence or nothing. Sessions that already exist never pass through here, so an outage stops
+ *  new sign-ins and nothing else. */
+export async function signinAdmission(email: string): Promise<SigninAdmission> {
+  const normalized = (email || "").trim().toLowerCase();
+  if (adminEmails().includes(normalized)) return { admitted: true, why: "admin-email" };
+  const res = await internalRequest<{ admitted?: unknown; why?: unknown }>("/internal/signin-admission", {
+    method: "POST",
+    body: JSON.stringify({ email: normalized }),
+  });
+  if (!res.ok || !res.data) {
+    return { admitted: false, why: "unavailable", detail: res.error || `admin-api returned ${res.status}` };
+  }
+  const why = typeof res.data.why === "string" ? res.data.why : "";
+  if (res.data.admitted !== true || !ADMITTED_REASONS.has(why)) return { admitted: false, why: "not-allowed" };
+  if (why === "unclaimed-instance" && allowlistConfigured()) return { admitted: false, why: "not-allowed" };
+  return { admitted: true, why: why as "admin" | "existing-user" | "allow-list" | "unclaimed-instance" };
+}
+
 /** Does this instance have an admin yet? An allowlist counts as "yes" (those emails ARE admins),
  *  and short-circuits before the probe — those addresses are admins whatever admin-api thinks.
  *  FAIL-SAFE towards true: if the probe can't answer, the login surface shows plain sign-in
@@ -571,11 +620,29 @@ async function pruneLoginTokens(userId: string | number): Promise<void> {
   }
 }
 
-/** Find the user by email, creating them if they don't exist, then mint an APIToken.
- *  Returns the user + token, or an error with an HTTP-ish status for the caller to surface. */
+/** A sign-in that `findOrCreateUserToken` turned away before anything was created. `refused` tells
+ *  the door which sentence to show (signinRefusal.ts); `status` is 403 for "not allowed" and 503 for
+ *  "could not decide". */
+export type SigninRefused = { ok: false; status: number; error: string; refused: "not-allowed" | "unavailable" };
+
+/** Admit, then find the user by email (creating them if they don't exist), then mint an APIToken.
+ *  Returns the user + token, or an error with an HTTP-ish status for the caller to surface.
+ *
+ *  ADMISSION COMES FIRST, and its place is load-bearing: `createUser` below makes an account as a
+ *  side effect, so a refusal placed after it would leave a real account behind for somebody who was
+ *  never admitted — and that account would then pass as an existing user next time. Every sign-in
+ *  door reaches an account through this function, so the check here is the one a new door cannot
+ *  forget. */
 export async function findOrCreateUserToken(
   email: string,
-): Promise<{ ok: true; user: AdminUser; token: string } | { ok: false; status: number; error: string }> {
+): Promise<{ ok: true; user: AdminUser; token: string } | SigninRefused | { ok: false; status: number; error: string; refused?: undefined }> {
+  const admission = await signinAdmission(email);
+  if (!admission.admitted) {
+    return admission.why === "unavailable"
+      ? { ok: false, status: 503, error: `sign-in admission unavailable: ${admission.detail ?? "admin-api did not answer"}`, refused: "unavailable" }
+      : { ok: false, status: 403, error: "this address is not allowed to sign in here", refused: "not-allowed" };
+  }
+
   const found = await findUserByEmail(email);
 
   let user: AdminUser | undefined;

@@ -19,6 +19,11 @@
  *  the one-time "Set up your instance" claim screen — the first sign-in becomes the admin —
  *  through whichever door the deploy actually has.
  *
+ *  WHO MAY SIGN IN is decided by the server, never here (Vexa-ai/vexa#1783): an existing user, an
+ *  admin, or an address on the instance's allow-list. The card learns of a refusal only as an OAuth
+ *  round-trip coming back with `?error=` (`takeSigninError`), and shows the one shared sentence. The
+ *  email form says "check your email" for every address, allowed or not, by design.
+ *
  *  NO COMPANY-LAYER GATE (founder ruling 2026-10-08: "let's remove global setup at all so that
  *  there is no need to setup global at all - let it be empty with no data - it's fine"). This
  *  reverses the 2026-09-02 ruling that a fresh instance served nobody until its admin had written
@@ -44,6 +49,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { signIn } from "next-auth/react";
 import { onSessionSuspect } from "./session";
+import { signinErrorMessage } from "./signinRefusal";
 import { SESSION_ENDED_HEADLINE } from "../surfaces/apiClient";
 
 type Status = "checking" | "out" | "in";
@@ -54,6 +60,20 @@ type Providers = { google: boolean; microsoft: boolean };
 function currentPath(): string {
   if (typeof window === "undefined") return "/";
   return window.location.pathname + window.location.search;
+}
+
+/** A refused OAuth sign-in comes back to `/?error=<code>` (Vexa-ai/vexa#1783 — see
+ *  api/auth/[...nextauth]/authOptions.ts). Read the code ONCE and take it out of the address bar, so
+ *  a reload does not repeat a refusal that is over and the next sign-in link does not carry it into
+ *  its `next=`. */
+export function takeSigninError(): string | null {
+  if (typeof window === "undefined") return null;
+  const url = new URL(window.location.href);
+  const code = url.searchParams.get("error");
+  if (!code) return null;
+  url.searchParams.delete("error");
+  try { window.history.replaceState(window.history.state, "", url.pathname + url.search + url.hash); } catch { /* history unavailable */ }
+  return signinErrorMessage(code);
 }
 
 /** Don't re-probe more than once every few seconds: a dead session makes EVERY in-flight surface
@@ -90,6 +110,8 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   const [submitting, setSubmitting] = useState(false);
   const [sent, setSent] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Why the last OAuth round-trip did not sign anybody in, when it said (`?error=` on the way back).
+  const [notice, setNotice] = useState<string | null>(null);
   // The session died while the app was open (as opposed to arriving signed-out). Drives the
   // "your session ended" card, whose one button reveals the sign-in card below it.
   const [ended, setEnded] = useState(false);
@@ -125,6 +147,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     let active = true;
+    setNotice(takeSigninError());
     // The session probe also carries what to call the subject on the claim screen.
     fetch("/api/auth/me", { cache: "no-store" })
       .then(async (r) => {
@@ -273,6 +296,11 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
           </>
         ) : (
           <>
+            {notice && (
+              <div role="alert" data-testid="signin-notice" style={{ fontSize: 12, color: "var(--danger)", lineHeight: 1.5 }}>
+                {notice}
+              </div>
+            )}
             {claiming ? (
               <>
                 <div style={{ fontSize: 12, color: "var(--t3)", lineHeight: 1.5 }}>

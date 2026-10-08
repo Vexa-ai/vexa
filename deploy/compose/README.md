@@ -52,6 +52,19 @@ who signs in after them is served at once. There is no company-layer gate (found
 and flows act on the world whether or not anybody ever writes it. `VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH`
 is optional — set it only to manage `_global` as a separate host repo.
 
+**Who may sign in.** Every terminal door — the emailed link, Google, Microsoft — admits only an
+existing user of this instance, an admin, or an address on the sign-in allow-list; anybody else is
+refused before an account is created, and the emailed-link form answers "check your email" either
+way without sending them anything. The allow-list is `VEXA_SIGNIN_ALLOW` on `admin-api` (exact
+addresses and `@domain` entries, comma-separated, e.g. `@example.com,alice@example.org`) plus
+whatever the admin adds in the terminal under Settings → Sign-in. If admin-api cannot be reached,
+new sign-ins are refused; sessions that already exist are untouched. Upgrading admits every
+account that already exists, so nobody is locked out by it.
+
+⚠ **Until an admin is claimed, anybody may sign in** — that first sign-in becomes the admin.
+`VEXA_ADMIN_EMAILS` names the admins and turns the claim off, so **set it in `.env` before first
+boot whenever the terminal is reachable from outside.**
+
 Every service answers `GET /health` and carries a compose healthcheck; `depends_on` waits on
 `condition: service_healthy` so the bring-up is ordered. The `runtime` mounts
 `/var/run/docker.sock` and spawns the bot (`BROWSER_IMAGE=vexaai/vexa-bot:v012`, published — a

@@ -5,7 +5,9 @@
  *       burning happens BEFORE the session is minted, so a replay can never win a race with a slow
  *       admin-api round-trip. The cost is that a transient admin-api failure eats the link and the
  *       visitor asks for another one; that is the right side of the trade),
- *    2. reuse the SAME machinery the direct-login route uses — findOrCreateUserToken + the
+ *    2. reuse the SAME machinery the direct-login route uses — findOrCreateUserToken (which first
+ *       ASKS whether this address may sign in at all, Vexa-ai/vexa#1783, and refuses before any
+ *       account exists if not) + the
  *       httpOnly `vexa-token` / `vexa-user-info` cookies — so every downstream consumer
  *       (server.mjs's WS proxy, api/proxyAuth.ts, /api/auth/me, the minutes dev seams that read
  *       `id` out of the info cookie) sees a session identical to any other,
@@ -18,6 +20,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { AUTH_COOKIE, USER_INFO_COOKIE, findOrCreateUserToken, mintFirstVisitScaffold } from "../adminApi";
 import { redeemMagicToken, safeNext } from "../magicToken";
+import { SIGNIN_NOT_ALLOWED, SIGNIN_UNAVAILABLE } from "../../../signinRefusal";
 
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
@@ -32,9 +35,11 @@ function isSecureRequest(): boolean {
   );
 }
 
-/** The refused-link card. Every refusal here means the link is gone (used, expired, forged), so its
- *  one link out asks for a new one. */
-function page(title: string, detail: string, status: number): NextResponse {
+/** The refused-link card. Almost every refusal here means the link is gone (used, expired, forged,
+ *  or burned by a redeem that then could not finish), so its one link out asks for a new one. The
+ *  exception is an address that may not sign in at all: a new link would not help, and a button
+ *  saying it would is the card contradicting itself. */
+function page(title: string, detail: string, status: number, cta = "Ask for a new link"): NextResponse {
   const esc = (s: string) => s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]!);
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -49,7 +54,7 @@ function page(title: string, detail: string, status: number): NextResponse {
  a{display:inline-block;background:#3b82f6;color:#fff;text-decoration:none;border-radius:7px;
    padding:9px 14px;font-size:13px;font-weight:600}
 </style></head><body><div class="card">
-<h1>${esc(title)}</h1><p>${esc(detail)}</p><a href="/">Ask for a new link</a>
+<h1>${esc(title)}</h1><p>${esc(detail)}</p><a href="/">${esc(cta)}</a>
 </div></body></html>`;
   return new NextResponse(html, { status, headers: { "Content-Type": "text/html; charset=utf-8", ...NO_STORE } });
 }
@@ -112,8 +117,25 @@ export async function GET(request: NextRequest) {
     }
   }
 
+  // CHECKED AGAIN HERE, not only when the link was sent (Vexa-ai/vexa#1783): the address may have
+  // been taken off the allow-list in the minutes between, and a link is a bearer credential that
+  // outlives the decision that sent it. `findOrCreateUserToken` asks before it creates anything.
+  //
+  // AFTER the burn, deliberately. Admission depends only on the address inside the token, never on
+  // who clicked, so checking first would protect nothing — and it would cost an admin-api round-trip
+  // on every replayed, expired or forged link, which today are answered without one. The price is
+  // that a refusal spends the link; for an address that may not sign in that is no loss, and for an
+  // admin-api outage it is the trade the burn already makes (ask for a fresh link).
   const result = await findOrCreateUserToken(verdict.email);
   if (!result.ok) {
+    if (result.refused === "not-allowed") {
+      console.info(`[terminal-auth] magic-link redeem refused: ${verdict.email} is not allowed to sign in`);
+      return page("You can’t sign in here", SIGNIN_NOT_ALLOWED, 403, "Back to sign-in");
+    }
+    if (result.refused === "unavailable") {
+      console.error(`[terminal-auth] magic-link redeem refused, admission unavailable (fail closed): ${result.error}`);
+      return page("Sign-in is unavailable", `${SIGNIN_UNAVAILABLE} This link has been used; ask for a fresh one.`, 503);
+    }
     console.error(`[terminal-auth] magic-link redeem failed after verification: ${result.error}`);
     return page("Could not complete sign-in", "Something on our side failed. Ask for a fresh link and try again.", 502);
   }

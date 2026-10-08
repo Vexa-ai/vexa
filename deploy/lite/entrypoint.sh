@@ -35,6 +35,10 @@ export DB_PASSWORD="${DB_PASSWORD:-postgres}"
 # ─── Defaults for every var supervisord interpolates (empty is fine; must be SET) ─────────────────
 export LOG_LEVEL="${LOG_LEVEL:-info}"
 export DISPLAY="${DISPLAY:-:99}"
+# Who may sign in to the terminal besides existing users and admins — exact addresses and @domain
+# entries, comma-separated (admin-api reads it; see deploy/compose/.env.example). Empty = nobody new
+# once an admin exists. Pass it with `docker run -e VEXA_SIGNIN_ALLOW=@example.com …`.
+export VEXA_SIGNIN_ALLOW="${VEXA_SIGNIN_ALLOW:-}"
 # The admin tier, on the same terms as the internal tier below and for a LARGER blast radius:
 # this token mints an API key for ANY user and HS256-signs every per-spawn MeetingToken. It
 # defaulted to the published literal `changeme`, so every lite stack nobody configured shared one

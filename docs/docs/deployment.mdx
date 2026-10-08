@@ -181,6 +181,30 @@ source is ignored, so it cannot rotate an abuser's budget. See
 
 The terminal carries its own Google/Microsoft OAuth login, so the proxy needs no auth of its own.
 
+### Who may sign in
+
+Every terminal sign-in — the emailed link, Google, Microsoft — is admitted only for an **existing
+user** of this instance, an **admin**, or an address on the **sign-in allow-list**. Anybody else is
+refused before an account is created, and the email form answers "check your email" either way
+without sending them anything. Seed the list in `deploy/compose/.env` (admin-api reads it; restart
+it after a change), and add more in the terminal under **Settings → Sign-in** — the effective list is
+both:
+
+```bash
+# deploy/compose/.env
+VEXA_ADMIN_EMAILS=admin@example.com                 # set BEFORE first boot — see the warning
+VEXA_SIGNIN_ALLOW=@example.com,alice@example.org    # exact addresses and whole domains
+```
+
+`@example.com` admits everyone at exactly that domain; a subdomain needs its own entry. If admin-api
+cannot be reached, new sign-ins are refused; sessions that already exist are untouched.
+
+<Warning>
+**Until an admin is claimed, anybody may sign in, and the first sign-in becomes the admin.** If the
+terminal is reachable from outside before you have signed in yourself, a stranger can claim it.
+Set `VEXA_ADMIN_EMAILS` before first boot: it names the admins and turns the first-sign-in claim off.
+</Warning>
+
 ## No egress
 
 Everything runs inside your perimeter: gateway + services + redis/postgres/storage on your host, the

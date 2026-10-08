@@ -121,6 +121,13 @@
    "description": "log verbosity"
   },
   {
+   "key": "VEXA_SIGNIN_ALLOW",
+   "class": "defaulted",
+   "default": "(empty — only existing users and admins may sign in, plus anybody while no admin has been claimed)",
+   "description": "The deployment's seed for the terminal sign-in allow-list (Vexa-ai/vexa#1783): comma-separated exact addresses and @domain entries, e.g. \"@example.com,alice@example.org\". A sign-in through any terminal door (emailed link, Google, Microsoft) is admitted only for an existing user, an admin, or an address on the effective list = these entries + the admin-edited `signin.allow` platform setting. Read on every POST /internal/signin-admission (app/signin_allow.py), so a change applies on restart with no migration. A malformed entry never matches and is reported on GET /internal/settings/signin. Removing an entry does not remove an account that already exists: existing users stay admitted.",
+   "targets": ["compose", "helm", "lite"]
+  },
+  {
    "key": "VEXA_FLOWS_API_URL",
    "class": "publish-edge",
    "publishes_events": ["onboarding.completed"],

@@ -3,5 +3,8 @@
 `main.py` exposes `create_app()` with 3 auth tiers (admin `X-Admin-API-Key`, user `X-API-Key`,
 internal `X-Internal-Secret`) and the gateway's fail-closed `/internal/validate` oracle. `db.py`
 builds an INJECTABLE async engine so the same app runs against testcontainers-PG or prod.
+`signin_allow.py` is the pure rule for who may sign in to the terminal (existing user · admin ·
+sign-in allow-list · unclaimed instance) and the allow-list's grammar; `main.py` serves it as
+`POST /internal/signin-admission` and stores the admin-edited half under the `signin` platform setting.
 
 _Governed by `docs/docs/governance/architecture.mdx` (P1–P12). This folder owns one concern; its public surface is its `index`/contract; it may depend only on what the dependency-rules allow._

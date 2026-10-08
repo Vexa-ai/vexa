@@ -13,8 +13,17 @@ type MailArgs = { to: string; subject: string; text: string };
 const sendMail = vi.fn(async (_opts: MailArgs): Promise<void> => {});
 vi.mock("../mailer", () => ({ sendMail: (opts: MailArgs) => sendMail(opts) }));
 
-import { POST as requestLink } from "../request-link/route";
+import { POST as requestLinkRoute } from "../request-link/route";
+import { _settleLinkDeliveries } from "../linkDelivery";
 import { verifyMagicToken } from "../magicToken";
+
+/** The route answers BEFORE it asks admin-api or mails anything (Vexa-ai/vexa#1783 — so a refused
+ *  address cannot be told apart by timing), so every case here waits for the delivery it started. */
+async function requestLink(req: import("next/server").NextRequest) {
+  const res = await requestLinkRoute(req);
+  await _settleLinkDeliveries();
+  return res;
+}
 
 function makeReq(body: unknown, headers: Record<string, string> = { host: "terminal.test" }) {
   return {
@@ -39,10 +48,18 @@ beforeEach(() => {
   vi.stubEnv("NEXTAUTH_SECRET", "test-signing-secret");
   vi.stubEnv("NEXTAUTH_URL", "https://terminal.test");
   vi.stubEnv("MAGIC_LINK_TTL_SECONDS", "");
+  // admin-api admits every address these cases use; the refusals are in signinAllowList.test.ts.
+  vi.stubEnv("VEXA_ADMIN_API_URL", "http://admin.test");
+  vi.stubEnv("VEXA_INTERNAL_API_SECRET", "internal-secret");
+  vi.stubGlobal("fetch", vi.fn(async (url: string) =>
+    String(url).includes("/internal/signin-admission")
+      ? new Response(JSON.stringify({ admitted: true, why: "allow-list" }), { status: 200 })
+      : new Response("nope", { status: 500 })));
 });
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
 });
 
 describe("the link that goes out", () => {

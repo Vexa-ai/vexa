@@ -65,6 +65,8 @@ spec:
                   key: INTERNAL_API_SECRET
             - name: LOG_LEVEL
               value: {{ .Values.adminApi.logLevel | default "info" | quote }}
+            - name: VEXA_SIGNIN_ALLOW
+              value: {{ .Values.adminApi.signinAllow | default "" | quote }}
             {{- with .Values.adminApi.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

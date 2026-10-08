@@ -131,6 +131,11 @@ services:
       - ADMIN_API_TOKEN=${ADMIN_TOKEN:-}
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET}
       - LOG_LEVEL=${LOG_LEVEL:-info}
+      # Who may sign in to the terminal, besides existing users and admins: comma-separated exact
+      # addresses and @domain entries ("@example.com,alice@example.org"). Empty = nobody new once an
+      # admin exists. The admin can add more in the terminal's Settings → Sign-in; the effective list
+      # is both. See .env.example.
+      - VEXA_SIGNIN_ALLOW=${VEXA_SIGNIN_ALLOW:-}
       # ── the publish edge (config.v1 class `publish-edge`) ──────────────────────────────────
       # Identity hands `onboarding.completed` to flows here. Same variable, same default-empty
       # shape as the mcp service's assembly URLs: EMPTY IS A PROFILE, not a misconfiguration —
@@ -1086,6 +1091,9 @@ services:
       # Hidden admin panel (/api/admin/*): comma-separated email allowlist — EMPTY = the panel is off
       # for everyone. Identity is VERIFIED against admin-api /internal/validate over the internal-tier
       # secret (never trusted from a cookie), and the same secret fronts agent-api's admin overview.
+      # Setting it also turns OFF the first-sign-in admin claim: while no admin is claimed, ANY
+      # address may sign in (that sign-in becomes the admin). Set it before first boot whenever the
+      # terminal is reachable from outside.
       - VEXA_ADMIN_EMAILS=${VEXA_ADMIN_EMAILS:-}
       # NO PLACEHOLDER FALLBACK. F95 removed the published `vexa-internal-secret` default from
       # every service that REFUSES it at boot; these two lines kept it, so an unconfigured stack

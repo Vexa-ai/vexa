@@ -31,6 +31,13 @@ function stubAdminApi(opts: { adminExists: boolean; company?: string | null }) {
     "fetch",
     vi.fn(async (url: string, init?: RequestInit) => {
       calls.push({ url, body: init?.body as string });
+      // Vexa-ai/vexa#1783: admission comes first. On an instance nobody has claimed, anybody is
+      // admitted — that sign-in IS the claim.
+      if (url.includes("/internal/signin-admission")) {
+        return new Response(JSON.stringify({
+          admitted: true, why: opts.adminExists ? "existing-user" : "unclaimed-instance",
+        }), { status: 200 });
+      }
       if (url.includes("/admin/users/email/")) {
         return new Response(JSON.stringify({ id: 7, email: "new-test@vexa.ai" }), { status: 200 });
       }

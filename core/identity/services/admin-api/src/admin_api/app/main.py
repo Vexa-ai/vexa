@@ -37,6 +37,7 @@ from ..token_scope import VALID_SCOPES, generate_prefixed_token
 from .db import get_db
 from . import events as events_mod
 from . import person_settings as person_settings_mod
+from . import signin_allow
 
 ADMIN_KEY_HEADER = APIKeyHeader(name="X-Admin-API-Key", auto_error=False)
 USER_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
@@ -292,9 +293,15 @@ _DIAGNOSTICS_FIELDS = ("capture_signal",)
 # global at all - let it be empty with no data - it's fine"); the key stays writable so older
 # writers and existing rows do not 400, and NOTHING READS IT.
 _GLOBAL_SETUP_FIELDS = ("state", "company", "completed_at")
+# "signin" is the admin-edited half of the sign-in allow-list (`allow`: exact addresses and
+# @domain entries). The other half is the deployment's VEXA_SIGNIN_ALLOW; the effective list is the
+# union, and the one reader of it is POST /internal/signin-admission. Validated by its own rulebook
+# (app/signin_allow.py), not _validate_config_fields: an entry is not a free string, and a list of
+# colleagues outgrows the 2048-character bound the other fields carry.
 SETTING_KEYS = {"models": _MODELS_FIELDS, "transcription": _TRANSCRIPTION_FIELDS,
                 "setup": _SETUP_FIELDS, "diagnostics": _DIAGNOSTICS_FIELDS,
-                "global_setup": _GLOBAL_SETUP_FIELDS}
+                "global_setup": _GLOBAL_SETUP_FIELDS,
+                signin_allow.SETTING_KEY: signin_allow.SETTING_FIELDS}
 
 class ModelPrefsUpdate(BaseModel):
     """Partial update — only fields the caller SENDS change; an empty string clears a field."""
@@ -1107,6 +1114,44 @@ def create_app() -> FastAPI:
         await db.commit()
         return {"claimed": True, "admin_exists": True}
 
+    @app.post("/internal/signin-admission", include_in_schema=False)
+    async def signin_admission(payload: dict, request: Request,
+                               db: AsyncSession = Depends(get_db)):
+        """MAY THIS ADDRESS SIGN IN? Asked by every terminal sign-in door BEFORE anything is created
+        or sent (Vexa-ai/vexa#1783). Decided here because this service owns every input: the user
+        rows, the claimed admin, the `signin` settings row, and the VEXA_SIGNIN_ALLOW seed. The rule
+        itself is `signin_allow.decide`.
+
+        Answers {"admitted": bool, "why": str}. The caller must read `admitted` as POSITIVE
+        evidence — only a literal true admits — so an older admin-api with no such route (404), an
+        unreachable one, or a malformed body all refuse. That is the fail-closed direction.
+
+        Internal tier WITHOUT the dev-mode escape: the answer says whether an address has an account
+        here, which is exactly the enumeration the sign-in form is built not to reveal, so this door
+        is never open without the secret, dev mode included."""
+        _check_internal_no_dev_bypass(request)
+        email = signin_allow.normalize_email(payload.get("email") if isinstance(payload, dict) else "")
+        if not signin_allow.is_address(email):
+            return {"admitted": False, "why": signin_allow.WHY_NOT_ALLOWED}
+        user = (await db.execute(
+            select(User).where(func.lower(User.email) == email).limit(1)
+        )).scalars().first()
+        data = user.data if user is not None and isinstance(user.data, dict) else {}
+        env_valid, _ = signin_allow.env_entries()
+        allow = signin_allow.effective(
+            env_valid,
+            (await _platform_setting(signin_allow.SETTING_KEY, db)).get(signin_allow.SETTING_FIELD, ""))
+        admitted, why = signin_allow.decide(
+            email,
+            user_exists=user is not None,
+            is_admin=data.get("is_admin") is True,
+            # Only consulted when nothing else admitted — one query fewer on the common path.
+            admin_exists=True if user is not None or signin_allow.matches(email, allow)
+            else await _admin_exists(db),
+            allow=allow,
+        )
+        return {"admitted": admitted, "why": why}
+
     # --- GET /internal/users/by-email/{email} → JUST the id, for the internal tier ---
     # The post-meeting run mounts the desks of the people who were in the meeting, and it starts
     # from the invite's ATTENDEE addresses. agent-api therefore has to turn an address into a
@@ -1410,7 +1455,15 @@ def create_app() -> FastAPI:
         if key not in SETTING_KEYS:
             raise HTTPException(status.HTTP_404_NOT_FOUND,
                                 detail=f"Unknown setting key. Known: {sorted(SETTING_KEYS)}")
-        return {"key": key, "value": await _platform_setting(key, db)}
+        body = {"key": key, "value": await _platform_setting(key, db)}
+        if key == signin_allow.SETTING_KEY:
+            # The deployment's half of the allow-list, read-only here, so the admin editing the
+            # settings half sees the whole effective list — and any env entry that can never match
+            # because it is malformed, rather than finding out from a refused colleague.
+            env_valid, env_problems = signin_allow.env_entries()
+            body["env"] = {signin_allow.SETTING_FIELD: ", ".join(env_valid)}
+            body["env_problems"] = env_problems
+        return body
 
     @app.put("/internal/settings/{key}", include_in_schema=False)
     async def put_platform_setting(key: str, payload: dict, request: Request,
@@ -1443,7 +1496,14 @@ def create_app() -> FastAPI:
                 status.HTTP_400_BAD_REQUEST,
                 detail=(f"none of {sorted(payload)} is a field of '{key}'. "
                         f"Known fields: {list(fields)}"))
-        cleaned = _validate_config_fields(update, kind=key)
+        if key == signin_allow.SETTING_KEY:
+            try:
+                cleaned = {f: signin_allow.normalize_setting(v) for f, v in update.items()}
+            except signin_allow.InvalidAllowList as bad:
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                    detail="; ".join(bad.problems))
+        else:
+            cleaned = _validate_config_fields(update, kind=key)
         row = await db.get(PlatformSetting, key)
         merged = _apply_config_update(dict(row.value) if row is not None else {}, cleaned)
         if row is None:

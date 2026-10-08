@@ -41,6 +41,9 @@ function stubs(opts: { mint?: "ok" | "fail"; history?: "none" | "some" | "down" 
   probed = [];
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     const u = String(url);
+    if (u.includes("/internal/signin-admission")) {
+      return new Response(JSON.stringify({ admitted: true, why: "allow-list" }), { status: 200 });
+    }
     if (u.includes("/internal/instance")) {
       return new Response(JSON.stringify({ admin_exists: true }), { status: 200 });
     }
