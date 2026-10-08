@@ -1427,6 +1427,16 @@ def _enriched_meeting_focus(focus: dict, rows: "list[dict]") -> dict:
     return merged
 
 
+def transcript_erased(row: "dict | None") -> bool:
+    """Whether the owner deleted (or is deleting) this meeting's transcript and recordings.
+
+    meeting-api keeps the row after a typed delete — its title, times and status are history the
+    owner asked to keep — and stamps ``data.artifact_deletion`` on it. Every reader of the
+    transcript treats that stamp as "there is no transcript", whatever a cache may still hold."""
+    data = row.get("data") if isinstance(row, dict) else None
+    return isinstance(data, dict) and bool(data.get("artifact_deletion"))
+
+
 def _readable_meeting_focus(
     focus: dict, meeting_access: "Callable[[str], dict | None] | None",
 ) -> "dict | None":
@@ -1439,8 +1449,8 @@ def _readable_meeting_focus(
 
     The PREP phase reads nothing server-side (it renders the caller's own fields, overlaid only from
     the caller's own rows), so it passes through unchecked. Every other phase folds a transcript and
-    is checked. FAIL CLOSED: no access check wired, a row id that is not a row id, or a lookup that
-    raises all mean no grounding.
+    is checked. FAIL CLOSED: no access check wired, a row id that is not a row id, a lookup that
+    raises, or a meeting whose transcript its owner deleted all mean no grounding.
 
     On success the server row's truth (row id, status, native id) replaces the client's, so the
     stream that is folded is exactly the row that was checked."""
@@ -1456,7 +1466,7 @@ def _readable_meeting_focus(
     except Exception:  # noqa: BLE001 — an access check that cannot answer refuses
         logger.warning("meeting access check failed for row %s — no meeting grounding", rid)
         return None
-    if not isinstance(row, dict):
+    if not isinstance(row, dict) or transcript_erased(row):
         return None
     checked = _enriched_meeting_focus({**m, "kind": "meeting", "meeting_id": rid}, [{**row, "id": int(rid)}])
     checked["meeting_id"] = rid

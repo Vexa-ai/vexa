@@ -12,7 +12,7 @@ from control_plane import meeting_mint as meeting_mint_mod
 from control_plane import meeting_note as meeting_note_mod
 from control_plane import meeting_terms as meeting_terms_mod
 from control_plane.api_shared import (
-    _decode_sse_cursor, _encode_sse_cursor, _sse, meeting_access_check)
+    _decode_sse_cursor, _encode_sse_cursor, _sse, meeting_access_check, transcript_erased)
 from fastapi import APIRouter, Body, HTTPException, Request
 from fastapi.responses import StreamingResponse
 import json
@@ -189,6 +189,10 @@ def build(**d) -> APIRouter:
         if owned is None:
             # Absent row, or a row this caller has no claim on → refuse (404-equivalent, no stream opened).
             raise HTTPException(status_code=403, detail="not authorized for this meeting")
+        if transcript_erased(owned):
+            # The owner deleted this meeting's transcript. The row survives as history, so access
+            # alone would still pass; nothing is replayed from the stream, whatever it still holds.
+            raise HTTPException(status_code=410, detail="this meeting's transcript was deleted")
         # `session_uid` is ALSO caller-supplied. The terminal passes the ROW id as `session_uid` for
         # live rows (liveMeetings.ts `session_uid = live ? id : undefined`); the meeting's own native
         # id is accepted for the legacy shape (native==row==session). Bind it to the OWNED row so a

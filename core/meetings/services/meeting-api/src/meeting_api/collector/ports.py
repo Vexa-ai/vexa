@@ -22,6 +22,20 @@ from __future__ import annotations
 from typing import Any, AsyncIterator, Optional, Protocol, runtime_checkable
 
 
+def erased_meeting_cache_keys(meeting_id) -> tuple[str, ...]:
+    """Every Redis key that holds a meeting's transcript, removed when its owner deletes it.
+
+    * ``meeting:{id}:segments`` — the in-flight segment hash (``db_writer.segments_hash_key``);
+    * ``proc:meeting:{id}`` — the cleaned-notes stream the db-writer folds into the row;
+    * ``tc:meeting:{id}`` — the live transcript feed the collector appends every persisted segment
+      to (``ingest._transcript_stream``), which the live view and the chat replay from the start.
+
+    ``tc:meeting:{id}:mutable`` is a pub/sub CHANNEL, not a key: nothing is stored there. Both
+    stores' finalize steps delete exactly this tuple, and a test ties it to the writers' own key
+    functions so a new transcript key cannot be added without being erased."""
+    return (f"meeting:{meeting_id}:segments", f"proc:meeting:{meeting_id}", f"tc:meeting:{meeting_id}")
+
+
 @runtime_checkable
 class TranscriptStore(Protocol):
     """Read a meeting's transcript; list a user's meetings; append a segment; authorize a

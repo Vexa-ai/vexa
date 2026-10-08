@@ -1612,9 +1612,9 @@ class SqlAlchemyTranscriptStore:
         # The DB tombstone makes this retryable: if Redis cleanup fails, a repeat reaches this same
         # terminal row and tries the cache/stream cleanup again without resurrecting durable data.
         if self._redis is not None:
-            await self._redis.delete(
-                f"meeting:{meeting_id}:segments", f"proc:meeting:{meeting_id}"
-            )
+            from .ports import erased_meeting_cache_keys
+
+            await self._redis.delete(*erased_meeting_cache_keys(meeting_id))
             await self._redis.srem("active_meetings", str(meeting_id))
         return True
 
