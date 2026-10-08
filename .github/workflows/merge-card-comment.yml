@@ -1,12 +1,14 @@
 # merge-card-comment — the friendly surface of the merge card. The GATE (merge-card.yml) produces
 # the required status check; THIS posts the same card as ONE sticky PR comment (create-or-update by
-# marker, never a thread of new comments) so a contributor sees "value ✅/❌ · diff ✅/❌ — here's
-# what's left" inline, without digging into check logs. It matches the constitution's "one card,
-# plain language" intent. It gates nothing — comment-only.
+# marker, never a thread of new comments) so a contributor sees every row ✅/❌ and what's left
+# inline, without digging into check logs. It matches the constitution's "one card, plain language"
+# intent. It gates nothing — comment-only. merge-card-pass.yml re-runs it when a pass is posted.
 #
 # pull_request_target (not pull_request) so it can comment on FORK PRs too; it checks out `main`
 # (trusted gate code, never the PR's tree) and reads PR state via the API — no untrusted code runs.
 name: merge-card-comment
+# Names each run after its PR, so merge-card-pass.yml can tell two PRs on one head apart.
+run-name: "merge-card-comment: PR #${{ github.event.pull_request.number }}"
 
 on:
   pull_request_target:
@@ -38,9 +40,12 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
           PR_NUMBERS: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}   # judge the head this event was for
         run: node scripts/merge-card-gate.mjs > card.md || true   # exit 1 when not accepted; the card body is what we want
       - uses: actions/github-script@v7
         with:
+          # The marker string is CARD_MARKER in scripts/merge-card-gate.mjs; its test holds the two
+          # equal. A card without it (a run whose head moved on) is not posted.
           script: |
             const fs = require('fs');
             const body = fs.readFileSync('card.md', 'utf8').trim();

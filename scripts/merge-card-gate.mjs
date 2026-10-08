@@ -1,5 +1,6 @@
-// merge-card-gate — choke point 1 (the merge card), enforced. A PR carries two artifacts judged
-// on different axes; MAIN accepts it only when BOTH are accepted (delivery constitution, merge bar):
+// merge-card-gate — choke point 1 (the merge card), enforced. MAIN accepts a PR only when every row
+// of its card is accepted (delivery constitution, merge bar): value, diff, acceptance (when the PR
+// closes an issue), and the architecture and security passes:
 //
 //   • VALUE accepted  — the observation bundle is real. Runtime PRs: `value-fsm` (pr-value L3)
 //     GREEN on the head sha AND `state: value-signed` (the D9 human sign-off). Non-runtime PRs
@@ -21,37 +22,52 @@
 //     live acceptance leg written as a plain bullet, not a checkbox — both shapes are parsed.
 //   • ARCHITECTURE and SECURITY passes — required on EVERY PR (docs and CI included), one row each.
 //     A row is ✅ only when a PR comment from an account with write or admin on the repo (the same
-//     maintainer check DIFF uses) carries a marker for the PR's CURRENT head sha:
+//     maintainer check DIFF uses) carries a marker for the head sha the card is judging (THE HEAD,
+//     below):
 //
 //       <!-- vexa-pass:architecture sha=<full head sha> verdict=pass -->
 //       <!-- vexa-pass:security sha=<full head sha> verdict=pass -->
 //
-//     `verdict=waived` also clears the row, but only when the same comment carries a non-empty
-//     `waived-by=<who>` field; the card shows the row as waived and names who waived it. Bound to
-//     the head: a marker for any other sha does not count (a new push needs a new pass), and the row
-//     says which sha the pass on record was for. When several maintainer markers name the head, the
-//     newest wins, so a later `verdict=fail` supersedes an earlier pass. Only issue comments are
-//     read (not review bodies), and the card's own sticky comment never counts.
+//     Each marker starts its own line, outside code: that is where GitHub's Markdown hides it. A
+//     marker in inline code, a code block, a quote or mid-sentence is shown as text or quotes
+//     someone else, and does not count. `verdict=waived` also clears the row, but only when the same
+//     marker carries `waived-by=<login>` naming an account with write or admin; the card shows the
+//     waiver as recorded by the commenter and names that account. Bound to the head: a marker for any
+//     other sha does not count (a new push needs a new pass), and the row says which sha the pass on
+//     record was for. When several maintainer markers name the head, the newest wins, so a later
+//     `verdict=fail` supersedes an earlier pass. Only issue comments are read (not review bodies),
+//     the newest COMMENT_PAGES × 100 of them: on a longer thread a pass older than that window does
+//     not count and must be re-posted. The card's own sticky comment never counts.
 //
 //     SECURITY FINDINGS STAY PRIVATE. The marker and its comment carry only the verdict, a finding
 //     count (`findings=<n>`, optional) and the sha — never a finding, a path, a payload or an
 //     exploit. The findings themselves stay in the private channel SECURITY.md describes until
 //     fixed and released (coordinated disclosure); this repo is public and so is every PR comment.
 //
+// THE HEAD. Every row is judged against one sha: the commit the check is posted for. A
+// pull_request or pull_request_review run passes the event's head as HEAD_SHA; if the PR has moved
+// on by the time the run reads it, the card fails without judging (the run for the new head
+// decides). A merge_group run posts on the group commit, which is not a PR head, so it judges the
+// PR's head as queued: a push takes a PR out of the queue, so the head it reads is the one queued.
+//
 // This is a required status check on `main` (added to branch protection alongside `gates`). It
 // runs on pull_request + pull_request_review (PR-entry) and on merge_group (the queue re-check,
 // where the PR number is parsed from the queue ref). A red merge-card blocks the merge with a
-// plain-language card of exactly what's missing. A pass comment re-runs the head's newest card
-// through merge-card-pass.yml, because a comment event cannot refresh a head-bound check itself.
+// plain-language card of exactly what's missing. A comment does not trigger this check, so a pass
+// takes effect through merge-card-pass.yml, which RE-RUNS the PR's newest merge-card run on the
+// head. A comment-triggered workflow could instead publish a check run on the head itself, as
+// contribution-rights.yml does; re-running keeps merge-card.yml the only writer of the `merge-card`
+// check (P23).
 //
 // The workflow checks out `main` for every PR, so this file judges PRs into every base branch.
 // Whether a red card BLOCKS a merge is a property of the base branch's protection, not of this
 // script: on an unprotected base the card renders and the merge is not gated.
 //
-// Inputs (env): GITHUB_REPOSITORY; and PR_NUMBERS (space-separated) OR MERGE_GROUP_REF to parse.
+// Inputs (env): GITHUB_REPOSITORY; PR_NUMBERS (space-separated) OR MERGE_GROUP_REF to parse; and
+// HEAD_SHA, the head the check is posted for (set on pull_request events, empty in merge_group).
 // Exit 0 = every named PR's card is satisfied; 1 = one or more not; 2 = usage/nothing to check.
 
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 
 const REPO = process.env.GITHUB_REPOSITORY;
@@ -61,15 +77,16 @@ if (IS_MAIN && !REPO) { console.error("merge-card-gate: GITHUB_REPOSITORY requir
 const RUNTIME_PREFIXES = ["core/", "clients/terminal/", "deploy/compose/", "deploy/lite/", "libs/"];
 const RUNTIME_FILES = ["package.json", "pnpm-lock.yaml"];
 
-function ghRaw(path) {
+// Every API call is an argv to `gh`, never a shell string: logins read from comments reach it.
+function gh(args) {
   let last;
   for (let i = 0; i < 3; i++) {
-    try { return execSync(`gh api "${path}"`, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }); }
+    try { return execFileSync("gh", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }); }
     catch (e) { last = e; }
   }
   throw last;
 }
-const ghj = (path) => JSON.parse(ghRaw(path));
+const ghj = (path) => JSON.parse(gh(["api", path]));
 
 // Resolve the PR number(s) to check.
 function prNumbers() {
@@ -80,9 +97,9 @@ function prNumbers() {
   return [...new Set([...ref.matchAll(/pr-(\d+)-/g)].map((m) => +m[1]))];
 }
 
-function touchesRuntime(num) {
+function touchesRuntime(num, api = ghj) {
   for (let page = 1; page <= 10; page++) {
-    const files = ghj(`repos/${REPO}/pulls/${num}/files?per_page=100&page=${page}`);
+    const files = api(`repos/${REPO}/pulls/${num}/files?per_page=100&page=${page}`);
     for (const f of files) {
       const p = f.filename;
       if (RUNTIME_FILES.includes(p) || RUNTIME_PREFIXES.some((pre) => p.startsWith(pre))) return true;
@@ -114,8 +131,8 @@ export function verdictFromRuns(runs) {
   return top.conclusion === "success" ? "success" : "failure";
 }
 
-function readValueFsmRuns(sha) {
-  return ghj(`repos/${REPO}/commits/${sha}/check-runs?per_page=100`).check_runs || [];
+function readValueFsmRuns(sha, api = ghj) {
+  return api(`repos/${REPO}/commits/${sha}/check-runs?per_page=100`).check_runs || [];
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -147,22 +164,21 @@ export async function waitForTerminalValueFsm(
 // maintainer's own PR does not require a separate non-author review: the mandatory-review rule is
 // the quality gate for CONTRIBUTOR PRs, not for a maintainer reviewing their own work (D-R0 — a
 // maintainer's exclusive authorities are the ready-stamp and the merge).
-function authorIsMaintainer(login) {
+function authorIsMaintainer(login, api = ghj) {
   if (!login) return false;
   try {
-    const p = ghj(`repos/${REPO}/collaborators/${login}/permission`);
+    const p = api(`repos/${REPO}/collaborators/${login}/permission`);
     return p.permission === "admin" || p.permission === "write"; // admin/maintain/write = has the commit bit
   } catch { return false; }
 }
 
 // DIFF accepted when EITHER the author is a maintainer (self-review, above) OR a fresh, non-author
 // APPROVED review exists: the reviewer's latest review is APPROVED and was submitted against the
-// current head sha (a later push moves the head and invalidates the approval).
-function diffAccepted(pr) {
+// head the card is judging (a later push moves the head and invalidates the approval).
+function diffAccepted(pr, head, api = ghj) {
   const author = pr.user?.login;
-  if (authorIsMaintainer(author)) return { ok: true, maintainer: true };
-  const head = pr.head?.sha;
-  const reviews = ghj(`repos/${REPO}/pulls/${pr.number}/reviews?per_page=100`);
+  if (authorIsMaintainer(author, api)) return { ok: true, maintainer: true };
+  const reviews = api(`repos/${REPO}/pulls/${pr.number}/reviews?per_page=100`);
   const latestByUser = new Map();
   for (const r of reviews) {
     if (!["APPROVED", "CHANGES_REQUESTED", "DISMISSED"].includes(r.state)) continue; // ignore COMMENTED
@@ -240,31 +256,26 @@ function readClosingIssues(num) {
   const [owner, name] = REPO.split("/");
   const query =
     "query($owner:String!,$name:String!,$num:Int!){repository(owner:$owner,name:$name){pullRequest(number:$num){closingIssuesReferences(first:50){nodes{number body}}}}}";
-  let last;
-  for (let i = 0; i < 3; i++) {
-    try {
-      const out = execSync(
-        `gh api graphql -f query='${query}' -F owner="${owner}" -F name="${name}" -F num=${num}`,
-        { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-      );
-      return JSON.parse(out).data.repository.pullRequest.closingIssuesReferences.nodes || [];
-    } catch (e) { last = e; }
-  }
-  throw last;
+  const out = gh(["api", "graphql", "-f", `query=${query}`, "-F", `owner=${owner}`, "-F", `name=${name}`, "-F", `num=${num}`]);
+  return JSON.parse(out).data.repository.pullRequest.closingIssuesReferences.nodes || [];
 }
 
 // ── ARCHITECTURE and SECURITY passes ────────────────────────────────────────────────────────────
 
-const CARD_MARKER = "<!-- merge-card -->";
+// The sticky card's marker. merge-card-comment.yml finds its own comment by this exact string.
+export const CARD_MARKER = "<!-- merge-card -->";
 const FULL_SHA = /^[0-9a-f]{40}$/i;
+// A GitHub login: letters, digits and single inner hyphens, at most 39 characters.
+const LOGIN = /^[a-z0-9](?:[a-z0-9]|-(?=[a-z0-9])){0,38}$/i;
 const short = (sha) => String(sha || "").slice(0, 7);
+// How many pages of 100 comments the card reads, newest first.
+export const COMMENT_PAGES = 10;
 
-// Every `<!-- vexa-pass:<kind> key=value … -->` marker in a comment body, in order. Fields are
-// whitespace-separated key=value tokens; a marker without a sha or a verdict is not a marker.
-// Pure over the raw body string so it is unit-testable against fixtures.
-export function passMarkers(body) {
+const MARKER = /<!--\s*vexa-pass:([a-z][a-z-]*)\s([\s\S]*?)-->/gi;
+
+function parseMarkers(text) {
   const out = [];
-  for (const m of String(body || "").matchAll(/<!--\s*vexa-pass:([a-z][a-z-]*)\s([\s\S]*?)-->/gi)) {
+  for (const m of String(text || "").matchAll(MARKER)) {
     const fields = {};
     for (const f of m[2].matchAll(/([a-z][a-z-]*)=([^\s<>]+)/gi)) fields[f[1].toLowerCase()] = f[2];
     if (!fields.sha || !fields.verdict) continue;
@@ -273,29 +284,74 @@ export function passMarkers(body) {
   return out;
 }
 
-// The `waived-by=<who>` field anywhere in the same comment (inside the marker or beside it). An
-// empty value, or one with no letter or digit in it, is no waiver.
-function waivedBy(body) {
-  const m = String(body || "").match(/(?:^|[\s(|])waived-by=([^\s<>]+)/i);
-  const who = m ? m[1].replace(/-+$/, "") : "";
-  return /[a-z0-9]/i.test(who) ? who : null;
+// The parts of a comment where GitHub's Markdown hides an HTML comment: HTML blocks, i.e. runs of
+// lines that open with `<!--` at the start of a line (at most three spaces in) and close at the
+// first line holding `-->`, outside fenced code. Block structure is read before inline code, so a
+// line that starts with `<!--` is never inside a code span. Everything else is excluded: inline code
+// and fenced blocks show the marker as text, a line indented four spaces is code or nested
+// content, and a quoted or list-marker line carries someone else's words or the marker as text. A
+// marker misread here fails its row closed, never open.
+function hiddenBlocks(body) {
+  const blocks = [];
+  let fence = null, html = null;
+  for (const line of String(body || "").replace(/\r\n?/g, "\n").split("\n")) {
+    if (html) {
+      html.push(line);
+      if (line.includes("-->")) { blocks.push(html.join("\n")); html = null; }
+      continue;
+    }
+    if (fence) {
+      const close = line.match(/^ {0,3}(`{3,}|~{3,})[ \t]*$/);
+      if (close && close[1][0] === fence[0] && close[1].length >= fence.length) fence = null;
+      continue;
+    }
+    // a fence may open on a list item or in a quote; its lines then never start with `<!--`
+    const open = line.match(/^ {0,3}(?:(?:[-*+]|\d{1,9}[.)])[ \t]+|>[ \t]?)*(`{3,}|~{3,})(.*)$/);
+    if (open && !(open[1][0] === "`" && open[2].includes("`"))) { fence = open[1]; continue; }
+    if (/^ {0,3}<!--/.test(line)) {
+      if (line.includes("-->")) blocks.push(line);
+      else html = [line];
+    }
+  }
+  if (html) blocks.push(html.join("\n")); // an unclosed comment hides the rest of the comment
+  return blocks;
+}
+
+// Every `<!-- vexa-pass:<kind> key=value … -->` marker in a comment's normal text, in order: only
+// markers in the hidden blocks above. Fields are whitespace-separated key=value tokens; a marker
+// without a sha or a verdict is not a marker. Pure over the raw body so it is unit-testable.
+export function passMarkers(body) {
+  return hiddenBlocks(body).flatMap(parseMarkers);
+}
+
+// The `waived-by=<login>` field of one marker, as a login (leading `@` optional), or null when the
+// marker names none or names something that is not a GitHub login. Never read from the rest of
+// the comment, so a waiver covers only the marker it sits in.
+function waiverLogin(fields) {
+  const who = String(fields["waived-by"] || "").replace(/^@/, "");
+  return LOGIN.test(who) ? who : null;
 }
 
 const howToPass = (kind) =>
-  `a maintainer (write or admin on the repo) posts a PR comment carrying \`<!-- vexa-pass:${kind} sha=<full head sha> verdict=pass -->\``;
+  `a maintainer (write or admin on the repo) posts a PR comment with \`<!-- vexa-pass:${kind} sha=<full head sha> verdict=pass -->\` at the start of its own line`;
 
 // One pass row, pure over the PR's issue comments (the `repos/:repo/issues/:n/comments` shape, in
 // API order = oldest first) and an injected maintainer predicate, so it has no network in its unit
-// path. Returns { ok, state, why } where state is pass | waived | stale | invalid | missing.
-export function passRow(kind, comments, { head, isMaintainer }) {
+// path. `truncated` says the comments are only the newest window of a longer thread. Returns
+// { ok, state, why } where state is pass | waived | stale | invalid | missing.
+export function passRow(kind, comments, { head, isMaintainer, truncated = false }) {
   const headSha = String(head || "").toLowerCase();
-  const seen = []; // { by, sha, verdict, fields, waiver }
+  const seen = []; // { by, sha, verdict, fields }
+  const misplaced = []; // who wrote a marker of this kind for the head outside the comment's normal text
   for (const c of comments || []) {
     const body = c?.body || "";
     if (body.includes(CARD_MARKER)) continue; // the card quoting itself is never a pass
     const by = c?.user?.login;
     if (!by) continue;
-    for (const mk of passMarkers(body)) if (mk.kind === kind) seen.push({ ...mk, by, waiver: waivedBy(body) });
+    const counted = passMarkers(body).filter((mk) => mk.kind === kind);
+    for (const mk of counted) seen.push({ ...mk, by });
+    const onHead = (list) => list.filter((mk) => mk.kind === kind && mk.sha.toLowerCase() === headSha).length;
+    if (onHead(parseMarkers(body)) > onHead(counted)) misplaced.push(by);
   }
   const counted = seen.filter((s) => isMaintainer(s.by));
   const onHead = counted.filter((s) => s.sha.toLowerCase() === headSha);
@@ -305,12 +361,26 @@ export function passRow(kind, comments, { head, isMaintainer }) {
     const count = /^\d+$/.test(s.fields.findings || "") ? ` (${s.fields.findings} finding${s.fields.findings === "1" ? "" : "s"})` : "";
     if (s.verdict === "pass")
       return { ok: true, state: "pass", why: `pass on head ${short(head)} by @${s.by}${count}` };
-    if (s.verdict === "waived" && s.waiver)
-      return { ok: true, state: "waived", why: `waived on head ${short(head)} by ${s.waiver} (recorded by @${s.by})${count}` };
-    if (s.verdict === "waived")
-      return { ok: false, state: "invalid", why: `@${s.by} recorded \`verdict=waived\` on head ${short(head)} without a \`waived-by=\` field — a waiver counts only when the same comment names who waived it` };
+    if (s.verdict === "waived") {
+      const named = s.fields["waived-by"];
+      if (!named)
+        return { ok: false, state: "invalid", why: `@${s.by} recorded \`verdict=waived\` on head ${short(head)} without a \`waived-by=\` field — a waiver counts only when its own marker names who waived it` };
+      const who = waiverLogin(s.fields);
+      if (!who || !isMaintainer(who))
+        return { ok: false, state: "invalid", why: `@${s.by}'s waiver on head ${short(head)} names \`${named}\`, which is not an account with write or admin on the repo — \`waived-by=\` must name one` };
+      return { ok: true, state: "waived", why: `waived on head ${short(head)}: waiver recorded by @${s.by}, names @${who}${count}` };
+    }
     return { ok: false, state: "invalid", why: `the newest ${kind} pass on head ${short(head)} (by @${s.by}) is \`verdict=${s.verdict}\`${count} — only \`verdict=pass\`, or \`verdict=waived\` with \`waived-by=\`, clears this row` };
   }
+
+  const placed = [...new Set(misplaced.filter((by) => isMaintainer(by)).map((by) => "@" + by))];
+  if (placed.length)
+    return { ok: false, state: "invalid", why: `${placed.join(", ")} wrote a ${kind} marker for head ${short(head)} inside code, a quote or a sentence, where it does not count — post it at the start of its own line, outside code` };
+
+  // Only the newest window of a long thread was read: an older pass may exist but cannot be
+  // verified, so the row fails closed. A re-posted pass lands in the window.
+  if (truncated)
+    return { ok: false, state: "missing", why: `comment history too long to verify — re-post the pass (no ${kind} pass for head ${short(head)} among the newest ${COMMENT_PAGES * 100} comments); ${howToPass(kind)}` };
 
   if (counted.length) {
     const s = counted[counted.length - 1];
@@ -324,17 +394,26 @@ export function passRow(kind, comments, { head, isMaintainer }) {
   return { ok: false, state: "missing", why: `no ${kind} pass on head ${short(head)}${ignored} — ${howToPass(kind)}` };
 }
 
-// Paginated like touchesRuntime: a long-running PR here routinely passes 100 comments, and a pass
-// posted past the first page would render a false ❌. These rows GATE, so a failed read throws and
-// fails the card, like every other gating read in card().
-function readComments(num) {
-  const all = [];
-  for (let page = 1; page <= 10; page++) {
-    const batch = ghj(`repos/${REPO}/issues/${num}/comments?per_page=100&page=${page}`);
-    all.push(...batch);
+// The PR's newest comments, oldest first, as { comments, truncated }. Reads newest first, because
+// the newest marker on the head wins: start at the last page the PR's comment count names, read on
+// while pages come back full (comments posted since the count was read), then read back until
+// `maxPages` pages are held. `truncated` = older comments exist that were not read; passRow then
+// fails a row that has no pass in the window, never one whose newest verdict is in it. A failed
+// read throws and fails the card, like every other gating read in card().
+export function readComments(num, total, { fetchPage = (page) => ghj(`repos/${REPO}/issues/${num}/comments?per_page=100&page=${page}`), maxPages = COMMENT_PAGES } = {}) {
+  const got = new Map(); // page → its comments; an empty page past the end is not held
+  let page = Math.max(1, Math.ceil((Number(total) || 0) / 100));
+  for (;;) {
+    const batch = fetchPage(page);
+    if (batch.length) got.set(page, batch);
     if (batch.length < 100) break;
+    if (got.size >= maxPages) throw new Error(`PR #${num} gained more than ${maxPages * 100} comments while the card read it`);
+    page++;
   }
-  return all;
+  const lowest = got.size ? Math.min(...got.keys()) : page;
+  for (let p = lowest - 1; p >= 1 && got.size < maxPages; p--) got.set(p, fetchPage(p));
+  const pages = [...got.keys()].sort((a, b) => a - b);
+  return { comments: pages.flatMap((p) => got.get(p)), truncated: pages.length > 0 && pages[0] > 1 };
 }
 
 // The verdict, pure over the rows. Every row gates; ACCEPTANCE exists only when the PR carries a
@@ -343,16 +422,22 @@ export function cardOk({ valueOk, diffOk, acceptance, architecture, security }) 
   return Boolean(valueOk) && Boolean(diffOk) && (!acceptance || acceptance.ok) && Boolean(architecture?.ok) && Boolean(security?.ok);
 }
 
-async function card(num, { readClosing = readClosingIssues, readCmts = readComments } = {}) {
-  const pr = ghj(`repos/${REPO}/pulls/${num}`);
+// One PR's card. `expectedHead` is the sha the check is posted for (the event's head); when the
+// PR's head has moved past it, nothing is judged. Without it (merge_group) the PR's head as queued
+// is the binding. Every read goes through the injected `api`, so the card is testable offline.
+export async function card(num, { api = ghj, expectedHead = "", readClosing = readClosingIssues } = {}) {
+  const pr = api(`repos/${REPO}/pulls/${num}`);
   if (pr.draft) return { num, ok: true, skip: "draft" };
+  const live = pr.head?.sha;
+  if (expectedHead && String(expectedHead).toLowerCase() !== String(live || "").toLowerCase())
+    return { num, ok: false, moved: { from: expectedHead, to: live } };
+  const head = live;
   const labels = (pr.labels || []).map((l) => l.name);
   const signed = labels.includes("state: value-signed");
-  const head = pr.head?.sha;
-  const runtime = touchesRuntime(num);
+  const runtime = touchesRuntime(num, api);
   // Only a runtime PR has a value-fsm leg, and only then do we pay the wait. A non-terminal
   // value-fsm is waited out to its real verdict rather than sampled once mid-run (the #655 race).
-  const vf = runtime && head ? await waitForTerminalValueFsm(head) : "absent";
+  const vf = runtime && head ? await waitForTerminalValueFsm(head, { read: (sha) => readValueFsmRuns(sha, api) }) : "absent";
 
   // VALUE
   let valueOk = false, valueWhy;
@@ -364,7 +449,7 @@ async function card(num, { readClosing = readClosingIssues, readCmts = readComme
   else { valueOk = true; valueWhy = "non-runtime + value-signed"; }
 
   // DIFF
-  const d = diffAccepted(pr);
+  const d = diffAccepted(pr, head, api);
   const diffWhy = d.ok
     ? (d.maintainer
         ? `maintainer self-review — @${pr.user?.login} holds the commit bit (no separate non-author review required)`
@@ -375,15 +460,17 @@ async function card(num, { readClosing = readClosingIssues, readCmts = readComme
   const acceptance = acceptanceFromIssues(readClosing(num));
 
   // ARCHITECTURE + SECURITY — a maintainer's pass marker for THIS head sha, every PR. One comments
-  // read and one permission lookup per distinct marker author serve both rows.
-  const comments = readCmts(num);
+  // read and one permission lookup per distinct login serve both rows.
+  const { comments, truncated } = readComments(num, pr.comments, {
+    fetchPage: (page) => api(`repos/${REPO}/issues/${num}/comments?per_page=100&page=${page}`),
+  });
   const perms = new Map();
   const isMaintainer = (login) => {
-    if (!perms.has(login)) perms.set(login, authorIsMaintainer(login));
+    if (!perms.has(login)) perms.set(login, authorIsMaintainer(login, api));
     return perms.get(login);
   };
-  const architecture = passRow("architecture", comments, { head, isMaintainer });
-  const security = passRow("security", comments, { head, isMaintainer });
+  const architecture = passRow("architecture", comments, { head, isMaintainer, truncated });
+  const security = passRow("security", comments, { head, isMaintainer, truncated });
 
   const rows = { valueOk, diffOk: d.ok, acceptance, architecture, security };
   return { num, ok: cardOk(rows), valueOk, valueWhy, diffOk: d.ok, diffWhy, acceptance, architecture, security };
@@ -391,15 +478,19 @@ async function card(num, { readClosing = readClosingIssues, readCmts = readComme
 
 // Render one PR's card as GitHub-flavoured markdown. The leading marker lets the sticky-comment
 // workflow find and update its own comment in place. This same markdown feeds the check summary.
+// A run whose head moved on renders WITHOUT the marker: it explains its red check, and the sticky
+// workflow skips it, so it never overwrites the card the run for the new head writes.
 export function renderCard(c) {
-  if (c.skip) return `<!-- merge-card -->\n### 🃏 Merge card — #${c.num}\n\n_Skipped (${c.skip})._`;
+  if (c.moved)
+    return `### 🃏 Merge card — #${c.num}\n\n**Not judged** — this run is for head ${short(c.moved.from)}, but the PR's head is now ${short(c.moved.to)}. The run for ${short(c.moved.to)} decides.`;
+  if (c.skip) return `${CARD_MARKER}\n### 🃏 Merge card — #${c.num}\n\n_Skipped (${c.skip})._`;
   const row = (label, ok, why, mark = ok ? "✅" : "❌") => `| **${label}** | ${mark} | ${why} |`;
   const pass = (label, r) => row(label, r.ok, r.why, r.ok && r.state === "waived" ? "✅ waived" : undefined);
   const verdict = c.ok
     ? `**Ready to merge** — every row above is accepted.`
     : `**Not mergeable yet** — every row above must be accepted before merge (choke point 1). Fill in what's ❌ above, then this clears automatically.`;
   return [
-    `<!-- merge-card -->`,
+    CARD_MARKER,
     `### 🃏 Merge card — #${c.num}`,
     ``,
     `| check | | what it needs |`,
@@ -422,11 +513,13 @@ export function renderCard(c) {
 async function main() {
   const nums = prNumbers();
   if (!nums.length) { console.error("merge-card-gate: no PR number resolved from PR_NUMBERS / MERGE_GROUP_REF"); process.exit(2); }
+  // The head the check is posted for: one PR's event head. Empty in merge_group (see THE HEAD).
+  const expectedHead = nums.length === 1 ? (process.env.HEAD_SHA || "").trim() : "";
 
   let failed = 0;
   for (const num of nums) {
     let c;
-    try { c = await card(num); }
+    try { c = await card(num, { expectedHead }); }
     catch (e) { console.error(`::error ::merge-card #${num} — could not evaluate: ${e.message}`); failed++; continue; }
     console.log(renderCard(c));
     console.log("");
