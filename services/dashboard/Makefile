@@ -11,7 +11,9 @@ LAST_TAG_FILE := .last-tag
 
 # Paths (Makefile and Dockerfile are in the same directory, context is repo root)
 DOCKERFILE := $(shell pwd)/Dockerfile
-CONTEXT := $(shell pwd)
+CONTEXT := $(abspath $(shell pwd)/../..)
+# Required: the gateway URL the dashboard's /b and /ws rewrites point at (baked at build time).
+VEXA_API_URL ?=
 
 # Function to set a tag on DockerHub using buildx imagetools
 define set_tag
@@ -34,7 +36,8 @@ help:
 
 build:
 	@echo "Building $(LOCAL_TAG)..."
-	docker build -f $(DOCKERFILE) -t $(LOCAL_TAG) $(CONTEXT)
+	@test -n "$(VEXA_API_URL)" || { echo "Set VEXA_API_URL=http://<gateway-service>:<port>"; exit 1; }
+	DOCKER_BUILDKIT=1 docker build -f $(DOCKERFILE) --build-arg VEXA_API_URL=$(VEXA_API_URL) -t $(LOCAL_TAG) $(CONTEXT)
 	@echo "$(IMAGE_TAG)" > $(LAST_TAG_FILE)
 	@echo "Build complete: $(LOCAL_TAG)"
 

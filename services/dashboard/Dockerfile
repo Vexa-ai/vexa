@@ -1,3 +1,15 @@
+# Build from the repository root, with BuildKit (the default builder):
+#
+#   docker build -f services/dashboard/Dockerfile \
+#     --build-arg VEXA_API_URL=http://<gateway-service>:<port> .
+#
+# VEXA_API_URL is required: the /b and /ws rewrites are baked into the build and
+# must match the runtime VEXA_API_URL (docker-entrypoint.sh checks it is set).
+# The build context is filtered by services/dashboard/Dockerfile.dockerignore,
+# which BuildKit uses instead of the repository-root .dockerignore.
+# The release identity comes from deploy/helm/charts/vexa/Chart.yaml appVersion
+# (NEXT_PUBLIC_VEXA_OSS_VERSION, if passed, must equal it).
+
 # Build stage
 FROM node:20-alpine AS builder
 
@@ -21,7 +33,6 @@ COPY services/dashboard/public ./public
 COPY services/dashboard/scripts ./scripts
 COPY services/dashboard/next.config.ts services/dashboard/tsconfig.json services/dashboard/postcss.config.mjs services/dashboard/eslint.config.mjs ./
 COPY services/dashboard/components.json ./
-COPY VERSION /repo/VERSION
 COPY deploy/helm/charts/vexa/Chart.yaml /repo/deploy/helm/charts/vexa/Chart.yaml
 
 # Version disclosure (NEXT_PUBLIC_VEXA_OSS_VERSION + RELEASE_DATE).
@@ -33,6 +44,7 @@ COPY deploy/helm/charts/vexa/Chart.yaml /repo/deploy/helm/charts/vexa/Chart.yaml
 ARG NEXT_PUBLIC_VEXA_OSS_VERSION
 ARG NEXT_PUBLIC_VEXA_OSS_RELEASE_DATE
 ARG VEXA_API_URL
+RUN test -n "$VEXA_API_URL" || { echo "VEXA_API_URL build arg is required (see the top of this Dockerfile)" >&2; exit 1; }
 ENV NEXT_PUBLIC_VEXA_OSS_VERSION=$NEXT_PUBLIC_VEXA_OSS_VERSION
 ENV NEXT_PUBLIC_VEXA_OSS_RELEASE_DATE=$NEXT_PUBLIC_VEXA_OSS_RELEASE_DATE
 ENV VEXA_API_URL=$VEXA_API_URL

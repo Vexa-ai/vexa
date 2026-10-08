@@ -28,6 +28,13 @@ function readVersionFile() {
   return normalizeVersion(fs.readFileSync(file, 'utf-8'));
 }
 
+function readChartAppVersion() {
+  const file = path.join(REPO_ROOT, 'deploy', 'helm', 'charts', 'vexa', 'Chart.yaml');
+  if (!fs.existsSync(file)) return null;
+  const m = fs.readFileSync(file, 'utf-8').match(/^\s*appVersion\s*:\s*['"]?(\d+(?:\.\d+)+)['"]?\s*$/m);
+  return m ? normalizeVersion(m[1]) : null;
+}
+
 function walk(dir) {
   if (!fs.existsSync(dir)) return [];
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -41,7 +48,8 @@ function main() {
   const expected =
     normalizeVersion(process.env.EXPECTED_VEXA_OSS_VERSION) ||
     normalizeVersion(process.env.NEXT_PUBLIC_VEXA_OSS_VERSION) ||
-    readVersionFile();
+    readVersionFile() ||
+    readChartAppVersion();
 
   if (!expected) {
     throw new Error('[release-version] cannot assert bundle version: no expected version');
