@@ -14,7 +14,7 @@ services:
     # Valkey (Linux Foundation BSD-3 fork of Redis 7.2.4): parity with the Lite witness surface
     # and off source-available Redis ≥7.4 (RSALv2/SSPLv1). Wire-compatible (RESP) — the service
     # name, REDIS_URL, and every consumer stay put; only the engine changes (#653).
-    image: valkey/valkey:8-alpine
+    image: valkey/valkey:8-alpine@sha256:081c2f5cb575efc901aa80ff9cdbd1ec6a301682fd35e1ebb4b0990a4a4a8507
     command: ["valkey-server", "--appendonly", "yes", "--appendfsync", "everysec"]
     healthcheck:
       test: ["CMD", "valkey-cli", "ping"]
@@ -27,7 +27,7 @@ services:
     restart: unless-stopped
 
   postgres:
-    image: postgres:17-alpine
+    image: postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
     command: ["postgres", "-c", "idle_in_transaction_session_timeout=60000"]
     environment:
       - POSTGRES_DB=${DB_NAME:-vexa}
