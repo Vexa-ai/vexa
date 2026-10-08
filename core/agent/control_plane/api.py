@@ -206,6 +206,10 @@ def create_app(
     app.state.live_meetings = live
     app.state.scheduler = scheduler
     settings = dispatcher.settings if dispatcher is not None else None
+    if settings is not None:
+        # An out-of-store `_global` is read where the worker mount serves it from, not from a stale
+        # slot in the store (`system_mounts.global_root`).
+        wsr.allow(system_mounts.global_root(settings, wsr.root))
     # The SSE ownership gate's owner-lookup (P0): default = HTTP to meeting-api; injectable for L2 tests.
     _meeting_owner_lookup = meeting_owner_lookup or _http_meeting_owner_lookup(
         settings.meeting_api_url if settings is not None else "")
@@ -387,7 +391,7 @@ def create_app(
         # The _global org tier is readable by EVERY subject — it is mounted ro into every worker,
         # so the read API mirrors that; writes still go only through the admin's worker mount.
         if target == system_mounts.GLOBAL_SLUG:
-            g = wsr.root / system_mounts.GLOBAL_SLUG
+            g = _global_root()
             if g.exists():
                 return g
             raise HTTPException(status_code=404, detail="the organisation tier is not configured")
@@ -545,15 +549,12 @@ def create_app(
     # of whatever it could find, and the two disagreed in every way the alpha ledger records.
 
     def _global_root() -> Path:
-        """Where `_global` actually is, from agent-api's own filesystem.
-
-        The volume slot FIRST and the configured source second — that order is the 2026-09-02
-        single-store fix (audit N1): `_global` was two disjoint stores, agent-api read one and the
-        admin's setup chat wrote the other, and his README went into a directory nothing reads."""
-        vol = wsr.root / system_mounts.GLOBAL_SLUG
-        if vol.is_dir():
-            return vol
-        return Path((settings.global_system_workspace_path if settings is not None else "") or "/nonexistent")
+        """Where `_global` actually is, from agent-api's own filesystem — `system_mounts.global_root`,
+        the same answer the worker mount and every writer use, so a preset the admin wrote is the
+        preset this reads."""
+        if settings is None:
+            return wsr.root / system_mounts.GLOBAL_SLUG
+        return system_mounts.global_root(settings, wsr.root)
 
     def _internal_caller(request: Request) -> bool:
         secret = settings.internal_api_secret.get_secret_value() if settings is not None else ""
@@ -943,16 +944,10 @@ def create_app(
     # where its acceptance belongs, because agent-api is the only service that can SEE the store.
 
     def _global_store() -> Path:
-        """The WRITABLE `_global` on this host. Two candidates because the deployment mounts the
-        same bytes twice — the workspaces-dir copy (read-write in dev) and the host-path mirror
-        (read-only) — and a writer that picks the wrong one fails at commit time with a permissions
-        error that reads like a bug in git."""
-        candidates = [Path(settings.workspaces_dir) / system_mounts.GLOBAL_SLUG,
-                      Path(settings.global_system_workspace_path or "/nonexistent")]
-        target = next((c for c in candidates if c.is_dir() and os.access(c, os.W_OK)), None)
-        if target is None:
-            target = next((c for c in candidates if c.is_dir()), None)
-        if target is None:
+        """The `_global` this host commits to — `system_mounts.global_root`, the directory the worker
+        mount serves, so what is committed here is what every agent reads next turn."""
+        target = system_mounts.global_root(settings, wsr.root)
+        if not target.is_dir():
             raise HTTPException(status_code=404, detail="the organisation tier is not present here")
         return target
 
@@ -1102,15 +1097,12 @@ def _build_production_app() -> FastAPI:
     # tier lives in this service's own store and is created here, so a fresh stack dispatches chat
     # with no configuration at all. An operator's out-of-store path is theirs: it is never created,
     # and the boot writes below go to it rather than growing a second `_global` in the store.
-    _gconf = (settings.global_system_workspace_path or "").strip()
-    _gdir = Path(settings.workspaces_dir) / system_mounts.GLOBAL_SLUG
-    if not _gconf or Path(_gconf).resolve() == _gdir.resolve():
+    _gdir = system_mounts.global_root(settings)
+    if _gdir == Path(settings.workspaces_dir) / system_mounts.GLOBAL_SLUG:
         try:
             system_mounts.ensure_global_dir(settings.workspaces_dir)
         except Exception as exc:  # noqa: BLE001
             print(f"organisation tier: could not create {_gdir}: {exc}", flush=True)
-    else:
-        _gdir = Path(_gconf)
 
     # THE PRESET LIBRARY IS TOPPED UP BEFORE THE REPO IS INITIALISED, so a fresh instance's very
     # first commit carries the presets this build ships rather than acquiring them as an untracked

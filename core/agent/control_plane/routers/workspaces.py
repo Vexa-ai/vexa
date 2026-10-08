@@ -96,6 +96,17 @@ def build(**d) -> APIRouter:
     workspace_registry = d['workspace_registry']
     wsr = d['wsr']
 
+    def _writable_global() -> Optional[Path]:
+        """The `_global` the worker mount serves (`system_mounts.global_root`), when this process may
+        write it — else None. One answer for the editor, the page writer and reset, so an admin's
+        edit lands in the bytes every agent reads."""
+        target = system_mounts.global_root(settings, wsr.root)
+        return target if target.is_dir() and os.access(target, os.W_OK) else None
+
+    def _global_dir() -> Path:
+        """Where `_global` is, for the readers in this router (the company directory's person pages)."""
+        return system_mounts.global_root(settings, wsr.root)
+
     @router.get("/api/workspace/tree")
     def ws_tree(request: Request, hidden: bool = False, slug: Optional[str] = None):
         try:
@@ -159,9 +170,7 @@ def build(**d) -> APIRouter:
         if slug == system_mounts.GLOBAL_SLUG:
             if not global_layer.is_admin(settings, str(subject)):
                 raise HTTPException(status_code=403, detail="only an org admin may edit _global")
-            candidates = [Path(settings.workspaces_dir) / system_mounts.GLOBAL_SLUG,
-                          Path(settings.global_system_workspace_path or "/nonexistent")]
-            target = next((c for c in candidates if c.is_dir() and os.access(c, os.W_OK)), None)
+            target = _writable_global()
             if target is None:
                 raise HTTPException(status_code=404, detail="the organisation tier is not writable here")
             return target
@@ -583,9 +592,7 @@ def build(**d) -> APIRouter:
             if not global_layer.is_admin(settings, str(subject)):
                 raise HTTPException(status_code=403,
                                     detail="only an org admin may write company-tier pages into _global")
-            candidates = [Path(settings.workspaces_dir) / system_mounts.GLOBAL_SLUG,
-                          Path(settings.global_system_workspace_path or "/nonexistent")]
-            global_target = next((c for c in candidates if c.is_dir() and os.access(c, os.W_OK)), None)
+            global_target = _writable_global()
             if global_target is None:
                 raise HTTPException(status_code=404, detail="the organisation tier is not writable here")
         elif slug and slug not in (subject, system_mounts.SYSTEM_SLUG):
@@ -783,7 +790,7 @@ def build(**d) -> APIRouter:
                     # `person_name` — because the sentence must never say *someone*: where nobody
                     # has written this person down, their own address read as a name is the floor.
                     name_of=lambda author, email: front_page_mod.display_name(
-                        wsr.root, address=author, principal=email))}
+                        wsr.root, address=author, principal=email, global_dir=_global_dir()))}
 
     @router.get("/api/people/me")
     def people_me(request: Request):
@@ -803,7 +810,7 @@ def build(**d) -> APIRouter:
         # the reader's own verified address — the key every step of the chain is actually written
         # against, and the floor under it when no page names them.
         address = (request.headers.get("x-user-email") or "").strip() or None
-        name = front_page_mod.display_name(wsr.root, subject, email=address)
+        name = front_page_mod.display_name(wsr.root, subject, email=address, global_dir=_global_dir())
         return {"subject": subject, "name": name,
                 "first_name": front_page_mod.first_name(name)}
 
@@ -844,7 +851,7 @@ def build(**d) -> APIRouter:
         author, email = front_page_mod.admin_principal(history.get("commits") or [])
         if not author and not email:
             return empty
-        name = front_page_mod.display_name(wsr.root, address=author, principal=email)
+        name = front_page_mod.display_name(wsr.root, address=author, principal=email, global_dir=_global_dir())
         return {"name": name, "first_name": front_page_mod.first_name(name)}
 
     @router.post("/api/workspace/git/reset")
@@ -1560,11 +1567,9 @@ def build(**d) -> APIRouter:
         if target == "_global":
             if not global_layer.is_admin(settings, str(subject)):
                 raise HTTPException(status_code=403, detail="only an org admin may reset _global")
-            # write through the WORKSPACES-DIR mount (rw in dev) — the host-path mirror mount is ro.
-            # Unset config is the in-store `_global` (founder ruling 2026-10-08), not "no _global".
-            candidates = [Path(settings.workspaces_dir) / "_global",
-                          Path(settings.global_system_workspace_path or "/nonexistent")]
-            path = next((c for c in candidates if c.is_dir() and os.access(c, os.W_OK)), candidates[0])
+            # The `_global` the worker mount serves (`system_mounts.global_root`): unset config is the
+            # in-store one (founder ruling 2026-10-08), not "no _global".
+            path = system_mounts.global_root(settings, wsr.root)
         elif target == "personal":
             path = Path(wsr.workspace_dir(subject))
         else:
@@ -1802,7 +1807,7 @@ def build(**d) -> APIRouter:
             rows = []
             for m in membership_mod.read_members(wsr.root, workspace_id):
                 named = front_page_mod.person_name(wsr.root, str(m.get("subject") or ""),
-                                                   email=m.get("email"))
+                                                   email=m.get("email"), global_dir=_global_dir())
                 rows.append({**m, "name": named} if named else dict(m))
             return {"members": rows}
         except MembershipError as exc:

@@ -67,6 +67,28 @@ _IDENTITY_STUB = (
 )
 
 
+def global_root(settings, root: "str | Path | None" = None) -> Path:
+    """WHERE ``_global`` IS, on this service's filesystem — the one answer every reader, every writer
+    and the worker mount use.
+
+    ``VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH`` when it names a directory OUTSIDE the store (a separately
+    managed repo the operator binds in); otherwise the in-store ``<workspaces_dir>/_global``. ``root``
+    is the store root when the caller holds it, else ``settings.workspaces_dir``.
+
+    Why one function: the admin's editor, the page writer, reset, the ready-commit, the preset reader
+    and the boot each used to pick between the two candidates themselves, most of them preferring the
+    in-store slot whenever it existed — while the mount preferred the configured path. On an instance
+    that once ran with the default, that slot exists, so with an out-of-store path configured the
+    admin's edits landed in a ``_global`` no worker mounts. Nothing is created here; the in-store
+    directory is made by ``ensure_global_dir``."""
+    store = Path(root if root is not None else settings.workspaces_dir)
+    in_store = store / GLOBAL_SLUG
+    configured = (getattr(settings, "global_system_workspace_path", "") or "").strip()
+    if not configured or Path(configured).resolve() == in_store.resolve():
+        return in_store
+    return Path(configured)
+
+
 def ensure_global_dir(root: str | Path) -> Path:
     """The in-store ``<root>/_global``, made an (empty) DIRECTORY if it is not one yet. Idempotent.
 
@@ -97,9 +119,10 @@ def global_mount(settings, root: str) -> dict:
     ``<root>/_global``; an in-store one rides the store bind. Mount HEAD; a pinned ref
     (``GLOBAL_SYSTEM_WORKSPACE_REF``) is carried through as the mount ``ref`` for the backend to check
     out on materialization (default: whatever the repo's HEAD is)."""
-    src = (getattr(settings, "global_system_workspace_path", "") or "").strip()
-    if not src or Path(src).resolve() == (Path(root) / GLOBAL_SLUG).resolve():
-        src = str(ensure_global_dir(root))
+    src_path = global_root(settings, root)
+    if src_path == Path(root) / GLOBAL_SLUG:
+        src_path = ensure_global_dir(root)
+    src = str(src_path)
     if not Path(src).exists():
         raise RuntimeError(f"VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH does not exist: {src}")
     if not Path(src).is_dir():

@@ -145,9 +145,12 @@ def test_an_unauthenticated_caller_is_refused(tmp_path):
     assert c.get("/api/workspace/file", params={"path": "README.md", "slug": "pilot"}).status_code in (401, 403)
 
 
-def test_a_desk_and_the_company_tier_are_unchanged(tmp_path):
+def test_a_desk_and_the_company_tier_are_unchanged(tmp_path, monkeypatch):
     """The other two kinds a `/w/…` link can name. Neither goes through the new branch; both are
     asserted here so a change to it cannot quietly move them."""
+    # This test keeps `_global` in the store; the suite otherwise configures an out-of-store one
+    # (conftest), which is where every reader and writer would then go (system_mounts.global_root).
+    monkeypatch.delenv("VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH", raising=False)
     c, _ = _world(tmp_path)
     # another person's desk — readable by any signed-in subject (founder ruling 2026-09-02)
     assert _read(c, "127", "126").status_code == 200

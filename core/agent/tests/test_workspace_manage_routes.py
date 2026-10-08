@@ -120,7 +120,7 @@ def _seed_global(root: Path) -> Path:
     return g
 
 
-def test_git_remote_status_answers_for_the_company_layer(tmp_path):
+def test_git_remote_status_answers_for_the_company_layer(tmp_path, monkeypatch):
     """`_global` is nobody's slot and nobody's membership, so `_manage_dir` answered 404 — and the
     workspace README's front page, having asked a true question and been told the workspace does not
     exist, rendered `not readable` with `Could not read the GitHub state.` in red, to the
@@ -129,6 +129,9 @@ def test_git_remote_status_answers_for_the_company_layer(tmp_path):
     *No repo attached* is a STATE. This route now resolves the company layer through the READ gate —
     the same call `/api/workspace/git` beside it already uses for `_global` — so the client is told
     the truth and can render it as the ordinary thing it is."""
+    # This test keeps `_global` in the store; the suite otherwise configures an out-of-store one
+    # (conftest), which is where every reader and writer would then go (system_mounts.global_root).
+    monkeypatch.delenv("VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH", raising=False)
     _seed_primary(tmp_path, "u_jane", with_origin=False)
     _seed_global(tmp_path)
 

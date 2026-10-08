@@ -213,7 +213,10 @@ def test_a_person_page_without_self_true_is_not_that_persons_name(tmp_path):
     assert _change(tmp_path, "wsA", "owner1", idx)["change"]["author"] is None
 
 
-def test_the_company_directory_answers_when_the_desk_does_not(tmp_path):
+def test_the_company_directory_answers_when_the_desk_does_not(tmp_path, monkeypatch):
+    # This test keeps `_global` in the store; the suite otherwise configures an out-of-store one
+    # (conftest), which is where every reader and writer would then go (system_mounts.global_root).
+    monkeypatch.delenv("VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH", raising=False)
     ws = _init_ws(tmp_path, "wsA")
     idx = _shared(tmp_path, "wsA")
     d = tmp_path / front_page.GLOBAL_SLUG / front_page.PERSON_DIR
@@ -449,10 +452,13 @@ def _company_layer(root, policies: str = ADMIN_ONLY, *, accepted=True):
     return g
 
 
-def test_the_company_layer_names_its_writer_from_its_own_acceptances(tmp_path):
+def test_the_company_layer_names_its_writer_from_its_own_acceptances(tmp_path, monkeypatch):
     """`_global/STRUCTURE.md`: *"every acceptance is a commit authored by the administrator who made
     it"*. So the layer's own history is the record of who writes it — no second store, no new
     credential, no hop to another service."""
+    # This test keeps `_global` in the store; the suite otherwise configures an out-of-store one
+    # (conftest), which is where every reader and writer would then go (system_mounts.global_root).
+    monkeypatch.delenv("VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH", raising=False)
     _company_layer(tmp_path)
     _uid_desk(tmp_path, "176", "jsmith.md", FOUNDER_SHAPE_PAGE)
 

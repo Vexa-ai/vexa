@@ -271,9 +271,11 @@ def _self_page_name(desk: Path, address: Optional[str] = None) -> Optional[str]:
     return None
 
 
-def _directory_name(root: Path, subject: str, email: Optional[str]) -> Optional[str]:
-    """The company directory's answer — a `_global` person page that names this subject or address."""
-    folder = root / GLOBAL_SLUG / PERSON_DIR
+def _directory_name(root: Path, subject: str, email: Optional[str],
+                    global_dir: Optional[Path] = None) -> Optional[str]:
+    """The company directory's answer — a `_global` person page that names this subject or address.
+    ``global_dir`` is where `_global` is (``system_mounts.global_root``); the in-store one by default."""
+    folder = Path(global_dir if global_dir is not None else root / GLOBAL_SLUG) / PERSON_DIR
     if not folder.is_dir():
         return None
     want_mail = (email or "").strip().lower()
@@ -427,7 +429,8 @@ def name_from_address(address: Optional[str]) -> Optional[str]:
 
 
 def person_name(root: Path, subject: Optional[str] = None, *, email: Optional[str] = None,
-                address: Optional[str] = None, principal: Optional[str] = None) -> Optional[str]:
+                address: Optional[str] = None, principal: Optional[str] = None,
+                global_dir: Optional[Path] = None) -> Optional[str]:
     """What this person is CALLED, or ``None`` — steps 1 to 4, never an address read verbatim.
 
     ``subject`` may be absent: ``principal`` (a commit's ``%ae``) and ``address`` (their sign-in
@@ -452,7 +455,7 @@ def person_name(root: Path, subject: Optional[str] = None, *, email: Optional[st
         if own and not looks_like_email(own):
             return own
     try:
-        listed = _directory_name(root, sub, mail) if (sub or mail) else None
+        listed = _directory_name(root, sub, mail, global_dir) if (sub or mail) else None
     except OSError:
         listed = None
     if listed and not looks_like_email(listed):
@@ -470,13 +473,15 @@ def person_name(root: Path, subject: Optional[str] = None, *, email: Optional[st
 
 
 def display_name(root: Path, subject: Optional[str] = None, *, email: Optional[str] = None,
-                 address: Optional[str] = None, principal: Optional[str] = None) -> Optional[str]:
+                 address: Optional[str] = None, principal: Optional[str] = None,
+                 global_dir: Optional[Path] = None) -> Optional[str]:
     """The whole chain, floor included — what a SENTENCE puts where a person's name goes (#1642).
 
     ``person_name`` answers ``None`` when nobody has written this person down; this adds the last
     step the founder's line was missing, and it is the only function on this module that will ever
     turn an address into words."""
-    found = person_name(root, subject, email=email, address=address, principal=principal)
+    found = person_name(root, subject, email=email, address=address, principal=principal,
+                        global_dir=global_dir)
     if found:
         return found
     for candidate in (address, email):

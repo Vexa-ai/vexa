@@ -238,6 +238,15 @@ def _commit_records(raw: str, viewer_email: Optional[str]) -> list[dict]:
 class WorkspaceReader:
     def __init__(self, workspaces_dir: str) -> None:
         self._root = Path(workspaces_dir)
+        self._also: list[Path] = []
+
+    def allow(self, base: "str | Path") -> None:
+        """Admit one directory OUTSIDE the store to the path-based readers — the organisation tier
+        when the deployment keeps `_global` out of the store (`system_mounts.global_root`). Exactly
+        that tree; the store root stays the guard for everything else."""
+        resolved = Path(base).resolve()
+        if resolved not in self._also:
+            self._also.append(resolved)
 
     @property
     def root(self) -> Path:
@@ -258,10 +267,10 @@ class WorkspaceReader:
         readers so a mount PATH (from the active set — own private slots under .attached, or a shared
         workspace at <root>/<id>) can be read directly, not only a ``<root>/<subject>`` dir."""
         base = base.resolve()
-        root = self._root.resolve()
-        if base != root and root not in base.parents:
-            raise ValueError("outside root")
-        return base
+        for root in (self._root.resolve(), *self._also):
+            if base == root or root in base.parents:
+                return base
+        raise ValueError("outside root")
 
     def tree(self, subject: str, hidden: bool = False) -> list[str]:
         """Sorted relative paths of the subject's files (the subject's own ``<root>/<subject>`` dir)."""

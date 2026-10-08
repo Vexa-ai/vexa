@@ -243,9 +243,12 @@ def test_system_is_refused_even_though_a_file_read_of_it_is_not(tmp_path):
     assert "_system" in r.json()["detail"]
 
 
-def test_global_is_readable_by_every_subject(tmp_path):
+def test_global_is_readable_by_every_subject(tmp_path, monkeypatch):
     """The org tier is mounted read-only into every worker and every chat, so its history answers
     everyone — the same answer `_read_target` already gives the file read."""
+    # This test keeps `_global` in the store; the suite otherwise configures an out-of-store one
+    # (conftest), which is where every reader and writer would then go (system_mounts.global_root).
+    monkeypatch.delenv("VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH", raising=False)
     _init_ws(tmp_path, "_global")
     c = _client(tmp_path)
 

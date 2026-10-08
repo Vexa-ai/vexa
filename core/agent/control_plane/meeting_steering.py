@@ -30,7 +30,6 @@ override raise at format time → caught → loud log + fallback):
 from __future__ import annotations
 
 import logging
-import os
 import re
 from pathlib import Path
 
@@ -149,9 +148,14 @@ OVERRIDE_RELPATH = "agents/meeting-lifecycle.md"
 
 def steering_templates(global_ws_path: "str | None" = None) -> dict[str, str]:
     """The effective per-phase templates: built-in defaults overlaid with the _global
-    override file when present/parseable. ``global_ws_path`` defaults to the same env the
-    _global mount uses (VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH — config.v1-declared)."""
-    root = (global_ws_path if global_ws_path is not None else os.environ.get("VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH", "")).strip()
+    override file when present/parseable. ``global_ws_path`` defaults to where the _global mount
+    reads from (``system_mounts.global_root``), so an override the admin writes in the default
+    in-store ``_global`` is read too, not only one in an out-of-store path."""
+    if global_ws_path is None:
+        from control_plane import system_mounts
+        from shared.config import load_settings
+        global_ws_path = str(system_mounts.global_root(load_settings()))
+    root = global_ws_path.strip()
     if not root:
         return dict(DEFAULT_TEMPLATES)
     path = Path(root) / OVERRIDE_RELPATH
