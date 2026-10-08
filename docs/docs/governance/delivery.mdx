@@ -853,14 +853,18 @@ admin on the repo) carries its marker for the PR's current head sha:
 <!-- vexa-pass:security sha=<full head sha> verdict=pass -->
 ```
 
-- **Waiver.** `verdict=waived` clears the row only when the same comment also carries
-  `waived-by=<who>`. The card shows the row as waived and names who waived it.
-- **Bound to the head.** A pass covers one sha. After a new push the row reads *pass on record is
-  for `<old>`, head is `<new>` — re-run*. If several maintainer markers name the head, the newest
-  wins, so a later `verdict=fail` replaces an earlier pass.
-- **Re-evaluation.** The marker is an HTML comment, so the rendered thread does not show it.
-  Posting it re-runs the card (`merge-card-pass`). Only issue comments count; review bodies and the
-  card's own comment do not.
+- **Placement.** Each marker starts its own line, outside code, so the rendered thread does not
+  show it. A marker in inline code, a code block, a quote or mid-sentence does not count.
+- **Waiver.** `verdict=waived` clears the row only when the same marker also carries
+  `waived-by=<login>`, naming a maintainer. The card shows the waiver, who recorded it and whom it
+  names.
+- **Bound to the head.** A pass covers one sha, the commit the card's check is posted for. After a
+  new push the row reads *pass on record is for `<old>`, head is `<new>` — re-run*. If several
+  maintainer markers name the head, the newest wins, so a later `verdict=fail` replaces an earlier
+  pass.
+- **Re-evaluation.** Posting a marker re-runs the card (`merge-card-pass`). Only issue comments
+  count; review bodies and the card's own comment do not. The card reads the newest 1,000
+  comments, so on a longer thread re-post an older pass.
 - **Security findings stay private.** The marker and its comment carry only the verdict, an
   optional count (`findings=<n>`) and the sha. A finding, a path or a payload never appears on the
   PR. Findings go through the private channel in `SECURITY.md` until they are fixed and released.
@@ -1073,7 +1077,7 @@ silence is released, never punished · every decline names its reopen condition 
 | D9 value-signed, corroborated | `gate:value-signed` checks non-author + channel consistency (merge-time) · **release-time:** `value-gate` requires every batch PR pr-value-green/value-signed | **have** (CI: `merge-card-gate` merge-time, `release-value-gate` release-time; [ADR-0029](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0029-release-witness-and-value-gates-enforced.md)/[ADR-0030](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0030-merge-card-value-and-diff-gate.md)) |
 | D10 acceptance floor | bundle-vs-table check (merge-time) · **release-time:** guarantee line 8 enforced by `value-gate` | **TO BUILD** (bundle checker) / **have** (CI: `release-value-gate`) |
 | Merge bar — value + diff accepted (choke point 1) | `merge-card` required status check: value-fsm green + `state: value-signed` (value) AND a fresh non-author review approval (diff) | **have** (CI: `merge-card-gate`, [ADR-0030](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0030-merge-card-value-and-diff-gate.md)) |
-| Merge bar — architecture + security passes on every PR | `merge-card` rows: a maintainer's `vexa-pass:architecture` and `vexa-pass:security` markers for the current head sha (`verdict=pass`, or `verdict=waived` with `waived-by=`); a pass comment re-runs the card (`merge-card-pass`); findings never on the PR | **have** (CI: `merge-card-gate`, [ADR-0030 amendment](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0030-merge-card-value-and-diff-gate.md#amendment-2026-10-08--architecture-and-security-passes)) |
+| Merge bar — architecture + security passes on every PR | `merge-card` rows: a maintainer's `vexa-pass:architecture` and `vexa-pass:security` markers for the current head sha (`verdict=pass`, or `verdict=waived` with `waived-by=<maintainer>`), each at the start of its own line outside code; a pass comment re-runs the card (`merge-card-pass`); findings never on the PR | **have** (CI: `merge-card-gate`, [ADR-0030 amendment](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0030-merge-card-value-and-diff-gate.md#amendment-2026-10-08--architecture-and-security-passes)) |
 | Contributor onboarding — explain the change | PR template + CONTRIBUTING recommend Discord; `pr-welcome` nudges first-timers (recommended, never a gate) | **have** (templates + CI) |
 | D11 both verdicts credited | release-notes generation from bundles | **TO BUILD** |
 | D12 altitude-scaled validation | stated live bar in every prepared issue | **have** (manual review) |

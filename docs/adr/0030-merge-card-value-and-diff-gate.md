@@ -79,17 +79,32 @@ sha:
 <!-- vexa-pass:security sha=<full head sha> verdict=pass -->
 ```
 
-- `verdict=waived` clears a row only when the same comment carries `waived-by=<who>`; the card
-  shows the row as waived and names who waived it.
+- A marker counts only at the start of its own line, outside code, which is where GitHub's
+  Markdown hides it. A marker in inline code, a code block, a quote or mid-sentence does not count.
+- `verdict=waived` clears a row only when the same marker carries `waived-by=<login>`, naming an
+  account with write or admin on the repo. The card shows the waiver as recorded by the commenter
+  and names that account.
 - A marker for any other sha does not count. The row names the sha the pass on record was for and
-  asks for a re-run. Among maintainer markers for the head, the newest wins.
+  asks for a re-run. Among maintainer markers for the head, the newest wins. The card reads the
+  newest 1,000 comments; on a longer thread an older pass does not count and must be re-posted.
+- **The head is the commit the check is posted for.** A `pull_request` or `pull_request_review`
+  run judges its event's head and fails without judging if the PR has moved on. A `merge_group`
+  run judges the PR's head as queued; a push takes the PR out of the queue.
 - **Security findings stay private.** The marker and its comment carry only the verdict, an
   optional `findings=<n>` count and the sha. Findings follow `SECURITY.md` (coordinated disclosure)
   and never appear on the PR.
-- A comment event cannot refresh a head-bound check, so `merge-card-pass.yml` re-runs the head's
-  newest `merge-card` run (and its `merge-card-comment` run, so the sticky card agrees) when a
-  repo-associated account posts, edits or deletes a comment carrying a marker. The re-run decides
-  nothing itself.
+- **How a pass takes effect.** A comment does not trigger `merge-card`. When a repo-associated
+  account posts, edits or deletes a comment carrying a marker, `merge-card-pass.yml` re-runs the
+  PR's newest `merge-card` run on the head, and its `merge-card-comment` run so the sticky card
+  agrees. It finds the run by PR as well as head sha (each card run is named after its PR, since
+  two PRs can share a head), never re-runs a run awaiting approval, and decides nothing itself.
+  - *Alternative considered:* the comment-triggered workflow publishes a `merge-card` check run on
+    the head itself, as `contribution-rights.yml` does for its own check from an `issue_comment`
+    run. Not taken: the `merge-card` check would then have two writers. With a re-run,
+    `merge-card.yml` stays its only writer (P23).
+  - *Costs of the re-run:* it needs an existing run for the PR on the head (none: push or re-run
+    by hand); it waits out a run in flight, so it can hold a runner for up to about 25 minutes;
+    and GitHub re-runs a run only within 30 days of it.
 
 **Why.** Founder ruling 2026-10-08: the architecture and security checks are obligatory at PR
 level. Until now they were review practice (D-S, TAKE step 3), so a PR could merge without either.
