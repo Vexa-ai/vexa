@@ -1,16 +1,9 @@
 """Agent-facing connection requests/status. Human OAuth routes are never proxied here."""
-import base64
-import hashlib
-import hmac
-import json
 import os
-import time
-import uuid
-from pathlib import Path
 from typing import Literal
-import httpx
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
+from control_plane import broker_client
 
 class ConnectionRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
@@ -49,30 +42,25 @@ class CustomCall(BaseModel):
 
 
 def call_broker(actor, method, path, payload=None):
-    base = os.environ.get('VEXA_CONNECTIONS_BROKER_URL', '').rstrip('/')
-    keyfile = os.environ.get('VEXA_CONNECTIONS_AGENT_KEY_FILE', '')
-    if not base or not keyfile:
-        raise HTTPException(503, 'Connections are not configured on this deployment')
+    """One broker request as the agent role (credential-broker.v1), signed by the shared client.
+
+    A refusal the person can act on (400/404/409/422) passes through with the broker's fixed
+    sentence. Anything else is a typed fault, logged by broker_client, and answered 503."""
     try:
-        key = Path(keyfile).read_bytes().strip()
-        if len(key) < 32:
-            raise ValueError()
-        body = json.dumps(payload, separators=(',', ':')).encode() if payload is not None else b''
-        claims = {'role':'agent', 'actor':str(actor), 'session':'mcp-request-'+uuid.uuid4().hex,
-                  'at':int(time.time()), 'nonce':uuid.uuid4().hex, 'method':method,
-                  'path':path, 'body':hashlib.sha256(body).hexdigest()}
-        encoded = base64.urlsafe_b64encode(json.dumps(claims,separators=(',',':')).encode()).decode().rstrip('=')
-        signature = hmac.new(key, encoded.encode(), hashlib.sha256).hexdigest()
-        with httpx.Client(timeout=60, follow_redirects=False) as client:
-            response = client.request(method, base+path, content=body,
-                headers={'X-Vexa-Assertion':encoded+'.'+signature, 'Content-Type':'application/json'})
-        if response.status_code != 200:
-            if response.status_code in (400,404,409,422):
-                detail=response.json().get('detail')
-                raise HTTPException(response.status_code,detail if isinstance(detail,str) else 'Invalid connection request')
-            raise ValueError()
-        return response.json()
-    except (OSError, ValueError, httpx.HTTPError):
+        response = broker_client.request(
+            base_url=os.environ.get('VEXA_CONNECTIONS_BROKER_URL', ''),
+            key_file=os.environ.get('VEXA_CONNECTIONS_AGENT_KEY_FILE', ''),
+            role='agent', actor=actor, method=method, path=path, payload=payload)
+        if response.status_code == 200:
+            return broker_client.json_of(response, role='agent', method=method, path=path)
+        if response.status_code in (400, 404, 409, 422):
+            detail = broker_client.json_of(response, role='agent', method=method, path=path).get('detail')
+            raise HTTPException(response.status_code, detail if isinstance(detail, str) else 'Invalid connection request')
+        raise broker_client.fault('http_%d' % response.status_code, role='agent', method=method, path=path,
+                                  status=response.status_code)
+    except broker_client.BrokerFault as exc:
+        if exc.kind == 'config':
+            raise HTTPException(503, 'Connections are not configured on this deployment') from None
         raise HTTPException(503, 'Connection service unavailable') from None
 
 

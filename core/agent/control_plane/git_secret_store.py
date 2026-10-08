@@ -4,16 +4,10 @@ Only the trusted control plane holds the git service signing key. MCP and the
 browser have no endpoint that returns values. Existing local entries migrate on
 first use; a confirmed remote tombstone prevents resurrecting a deleted key.
 """
-import base64
-import hashlib
-import hmac
-import json
 import os
 import re
-import time
-import uuid
 from pathlib import Path
-import httpx
+from control_plane import broker_client
 from control_plane import secret_store as legacy
 
 SECRETS_DIRNAME = legacy.SECRETS_DIRNAME
@@ -26,27 +20,27 @@ def enabled():
     return bool(os.environ.get('VEXA_GIT_STORE_BROKER_URL'))
 
 def _call(name, action, value=None):
+    """One Git credential RPC as the git role, signed by the shared broker client. Every failure —
+    unconfigured, unreachable, refused, malformed — is logged by kind there and raised here as
+    GitStoreUnavailable, never read as an absent credential."""
     if not NAME.fullmatch(name) or '..' in name:
         raise ValueError('Invalid Git credential name')
-    path='/api/internal/git-secret'
-    body=json.dumps({'name':name,'action':action,'value':value},separators=(',',':')).encode()
-    actor=name.split('/',1)[1].removesuffix('.priv').removesuffix('.pub')
+    path = '/api/internal/git-secret'
+    actor = name.split('/', 1)[1].removesuffix('.priv').removesuffix('.pub')
     try:
-        key=Path(os.environ['VEXA_GIT_STORE_KEY_FILE']).read_bytes().strip()
-        if len(key)<32:raise ValueError()
-        claims={'role':'git','actor':actor,'session':'git-request-'+uuid.uuid4().hex,
-                'at':int(time.time()),'nonce':uuid.uuid4().hex,'method':'POST','path':path,
-                'body':hashlib.sha256(body).hexdigest()}
-        encoded=base64.urlsafe_b64encode(json.dumps(claims,separators=(',',':')).encode()).decode().rstrip('=')
-        signature=hmac.new(key,encoded.encode(),hashlib.sha256).hexdigest()
-        with httpx.Client(timeout=10,follow_redirects=False,trust_env=False) as client:
-            r=client.post(os.environ['VEXA_GIT_STORE_BROKER_URL'].rstrip('/')+path,content=body,
-                          headers={'X-Vexa-Assertion':encoded+'.'+signature,'Content-Type':'application/json'})
-        if r.status_code!=200:raise ValueError()
-        result=r.json()
-        if not isinstance(result.get('found'),bool) or result.get('value') is not None and not isinstance(result['value'],str):raise ValueError()
+        r = broker_client.request(
+            base_url=os.environ.get('VEXA_GIT_STORE_BROKER_URL', ''),
+            key_file=os.environ.get('VEXA_GIT_STORE_KEY_FILE', ''),
+            role='git', actor=actor, method='POST', path=path,
+            payload={'name': name, 'action': action, 'value': value}, timeout=10)
+        if r.status_code != 200:
+            raise broker_client.fault('http_%d' % r.status_code, role='git', method='POST', path=path, status=r.status_code)
+        result = broker_client.json_of(r, role='git', method='POST', path=path)
+        if not isinstance(result, dict) or not isinstance(result.get('found'), bool) or \
+                result.get('value') is not None and not isinstance(result['value'], str):
+            raise broker_client.fault('parse', role='git', method='POST', path=path, status=r.status_code)
         return result
-    except (KeyError,OSError,ValueError,httpx.HTTPError):
+    except broker_client.BrokerFault:
         raise GitStoreUnavailable('Git credential store unavailable; retry when Connections is healthy') from None
 
 def get(root,name,*,key_env=''):

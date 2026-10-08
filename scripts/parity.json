@@ -65,6 +65,29 @@
         },
         {
           "path": "core/runtime/src/runtime_kernel/config_preflight.py"
+        },
+        {
+          "path": "core/agent/services/credential-broker/src/credential_broker/config_preflight.py"
+        }
+      ]
+    },
+    {
+      "id": "credential-broker-assertion",
+      "fact": "the credential-broker.v1 assertion signer and verifier (Python)",
+      "kind": "file-bytes",
+      "enforced": true,
+      "canonical": "core/agent/contracts/credential-broker.v1/assertion.py",
+      "how_to_agree": "edit the contract's assertion.py, re-seal nothing (it is not a schema), then copy it VERBATIM over both vendored copies",
+      "why": "Three hand-written copies of this HMAC envelope (agent-api's Connections router, its Git store, the terminal) were the B1 finding on 0.13.2. The Python side is now one file vendored into the two packages that sign or verify, the config-preflight mechanism; the TypeScript twin (clients/terminal/src/app/api/connections/assertion.ts) is held to it by the contract's SignedAssertionVector goldens instead, because a byte comparison across languages means nothing.",
+      "sites": [
+        {
+          "path": "core/agent/contracts/credential-broker.v1/assertion.py"
+        },
+        {
+          "path": "core/agent/control_plane/broker_assertion.py"
+        },
+        {
+          "path": "core/agent/services/credential-broker/src/credential_broker/assertion.py"
         }
       ]
     },
