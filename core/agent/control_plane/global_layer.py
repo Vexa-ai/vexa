@@ -33,6 +33,8 @@ import urllib.request
 from pathlib import Path
 from typing import Optional
 
+from shared.marks import UNWRITTEN_MARK
+
 logger = logging.getLogger("agent_api.global_layer")
 
 # The thin layer, in the order the setup conversation walks it. README FIRST and its first lines
@@ -50,7 +52,9 @@ LAYER_FILES = ("README.md", "PRINCIPLES.md", "OBJECTIVES.md", "STRUCTURE.md", "M
 # seed's. A hash of the shipped file would go stale the moment the seed's wording changed and would
 # then silently call an untouched placeholder "written"; a marker the admin's editor cannot remove
 # by accident cannot. Writing the file means deleting the comment, which the comment itself says.
-UNWRITTEN_MARKER = "vexa:unwritten"
+# The literal lives in `shared/marks.py` because the worker reads it too; flows' copy and the seed
+# files are held to it by `gate:fact-parity` (`scripts/parity.json`, fact `unwritten-marker`).
+UNWRITTEN_MARKER = UNWRITTEN_MARK
 
 
 def is_unwritten(text: str) -> bool:

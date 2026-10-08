@@ -6,11 +6,11 @@
 // a pattern that matches nothing, a pattern that matches twice, a ledger fact that quietly moved.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { checkParity, asSet, asProse } from "./check-parity.mjs";
+import { checkParity, asSet, asProse, loadManifest } from "./check-parity.mjs";
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -263,4 +263,59 @@ test("this repository's manifest still describes the tree, and the tip is green"
     }
     if (f.enforced) assert.ok(f.canonical || f.sites.length === 1, `${f.id}: an enforced fact names where the truth lives`);
   }
+});
+
+// The two facts the 2026-10-08 architecture pass found written twice with nothing holding them
+// together. Each test copies the REAL sites into a fixture, so it fails if the manifest stops
+// naming a site, and drifts exactly one copy, so it fails if the gate would not notice.
+function realFixture(id, drift) {
+  const fact = loadManifest(REPO).facts.find((f) => f.id === id);
+  assert.ok(fact, `${id} is a fact in scripts/parity.json`);
+  assert.equal(fact.enforced, true, `${id} is enforced, not ledgered`);
+  const files = {};
+  for (const s of fact.sites) files[s.path] = readFileSync(join(REPO, s.path), "utf8");
+  return { fact, clean: fixture([fact], files), drifted: fixture([fact], { ...files, ...drift(files) }) };
+}
+
+test("the seed's unwritten marker: every seed file and flows' copy must match core/agent's", () => {
+  const { fact, clean, drifted } = realFixture("unwritten-marker", (f) => ({
+    "behavior/global/OBJECTIVES.md": f["behavior/global/OBJECTIVES.md"].replace("vexa:unwritten", "vexa:unwriten"),
+  }));
+  try {
+    assert.ok(fact.sites.some((s) => s.path === "core/flows/src/flows_steps/mailtext.py"));
+    assert.ok(fact.sites.filter((s) => s.path.startsWith("behavior/global/")).length >= 5);
+    assert.deepEqual(run(clean).errs, []);
+    const e = run(drifted).errs;
+    assert.equal(e.length, 1);
+    assert.match(e[0], /OBJECTIVES\.md/);
+  } finally { rmSync(clean, { recursive: true, force: true }); rmSync(drifted, { recursive: true, force: true }); }
+});
+
+test("the Claude Code pin: the worker and Lite images install the same version", () => {
+  const { clean, drifted } = realFixture("claude-code-pin", (f) => ({
+    "deploy/lite/Dockerfile.lite": f["deploy/lite/Dockerfile.lite"].replace(/claude-code@[0-9.]+/, "claude-code@2.0.0"),
+  }));
+  try {
+    assert.deepEqual(run(clean).errs, []);
+    const e = run(drifted).errs;
+    assert.equal(e.length, 1);
+    assert.match(e[0], /2\.0\.0/);
+  } finally { rmSync(clean, { recursive: true, force: true }); rmSync(drifted, { recursive: true, force: true }); }
+});
+
+test("forbid_elsewhere sweeps Dockerfiles, which carry no extension", () => {
+  const facts = [{
+    id: "pin", fact: "the pin", kind: "literal", enforced: true, canonical: "core/worker/Dockerfile",
+    sites: [{ path: "core/worker/Dockerfile", pattern: "tool@([0-9.]+)" }],
+    forbid_elsewhere: "tool@", scan: ["core", "deploy"],
+  }];
+  const stray = fixture(facts, {
+    "core/worker/Dockerfile": "RUN npm i -g tool@1.2.3\n",
+    "deploy/lite/Dockerfile.lite": "RUN npm i -g tool@1.2.3\n",
+  });
+  try {
+    const e = run(stray).errs;
+    assert.equal(e.length, 1);
+    assert.match(e[0], /deploy\/lite\/Dockerfile\.lite:1/);
+  } finally { rmSync(stray, { recursive: true, force: true }); }
 });

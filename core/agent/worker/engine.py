@@ -47,6 +47,7 @@ from llm import (
 from llm import jobs as llm_jobs
 from llm.errors import _AUTH_SIGNATURE_RE  # noqa: F401 — re-exported for the worker.worker shim
 from shared.seeding import resolve_seed_dir, seed_workspace, validate_seed
+from shared.marks import UNWRITTEN_MARK
 # PRD decision 31 §1 — WHERE THIS PERSON IS IN TIME, on every dispatch (used in the preamble list
 # in `run_turn_over_workspace`). Imported rather than written here: the work is an HTTP read and a
 # cache, not prompt text, and what it returns is rendered by the flows route — the same rendering
@@ -499,10 +500,10 @@ def global_context_preamble(mounts: list[dict]) -> str:
             content = path.read_text(encoding="utf-8")
         except (OSError, UnicodeError):
             continue
-        # A seed placeholder nobody wrote (`vexa:unwritten`, see control_plane/global_layer.py) is
+        # A seed placeholder nobody wrote (it carries UNWRITTEN_MARK, see shared/marks.py) is
         # not organisation context: `_global` may stay unwritten for good (founder ruling
         # 2026-10-08), and its "# Company" heading must never reach a turn as the employer's name.
-        if not content.strip() or "vexa:unwritten" in content or remaining <= 0:
+        if not content.strip() or UNWRITTEN_MARK in content or remaining <= 0:
             continue
         excerpt = content[:remaining]
         remaining -= len(excerpt)

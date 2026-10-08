@@ -75,8 +75,9 @@ VISIBILITY_SENTENCE = ("Vexa runs on this organisation's own servers; what you a
 # this phrase is what a recipient reads in its place.
 COMPANY_UNSET = "this organisation"
 
-# The marker every seeded `_global` placeholder carries until somebody writes the file (agent-api's
-# `global_layer.UNWRITTEN_MARKER`, spelled again here because flows does not import agent-api). The
+# The marker every seeded `_global` placeholder carries until somebody writes the file
+# (`core/agent/shared/marks.py` `UNWRITTEN_MARK`, spelled again here because flows' image carries no
+# `core/agent`; `gate:fact-parity` holds this copy to that one, fact `unwritten-marker`). The
 # seeded README's heading is the word "Company"; a mail must never introduce us as working there.
 UNWRITTEN_MARKER = "vexa:unwritten"
 

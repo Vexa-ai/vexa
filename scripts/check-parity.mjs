@@ -156,6 +156,9 @@ const short = (v) => {
 const SWEEP_SKIP = new Set(["node_modules", "dist", ".turbo", "__pycache__", ".venv", ".next",
                             "coverage", "test-results", "playwright-report", "tests", "__tests__"]);
 const SWEEP_EXT = /\.(py|ts|tsx|js|jsx|mjs|cjs|sh|sql|json|yml|yaml|md)$/;
+// An image recipe has no extension to match on (`Dockerfile`, `Dockerfile.lite`), and a version pin
+// is exactly the fact one is most likely to retype.
+const SWEEP_DOCKERFILE = /^Dockerfile(\.[A-Za-z0-9_-]+)?$/;
 const sweepTestFile = (n) => /^test_.*\.py$/.test(n) || /_test\.py$/.test(n) || /\.(test|spec)\.[cm]?[jt]sx?$/.test(n);
 
 function sweep(dir, root, needle, hits) {
@@ -165,7 +168,7 @@ function sweep(dir, root, needle, hits) {
     const p = join(dir, name);
     let st; try { st = statSync(p); } catch { continue; }
     if (st.isDirectory()) { sweep(p, root, needle, hits); continue; }
-    if (!SWEEP_EXT.test(name) || sweepTestFile(name)) continue;
+    if (!(SWEEP_EXT.test(name) || SWEEP_DOCKERFILE.test(name)) || sweepTestFile(name)) continue;
     let text; try { text = readFileSync(p, "utf8"); } catch { continue; }
     const i = text.indexOf(needle);
     if (i < 0) continue;

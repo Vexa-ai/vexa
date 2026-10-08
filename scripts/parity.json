@@ -565,6 +565,77 @@
           "pattern": "TRANSCRIPT_SLOT_SOURCE = String\\.raw`(.+)`;"
         }
       ]
+    },
+    {
+      "id": "unwritten-marker",
+      "fact": "the marker a seeded `_global` layer file carries until somebody writes it",
+      "kind": "literal",
+      "enforced": true,
+      "canonical": "core/agent/shared/marks.py",
+      "how_to_agree": "import UNWRITTEN_MARK from shared.marks in core/agent; flows' copy and every seed file must carry the same literal",
+      "why": "It was spelled three times in product code — control_plane/global_layer.py, worker/engine.py and flows_steps/mailtext.py — and once more in each seed file under behavior/global/. The seed WRITES it and three readers TEST for it: the control plane counts a file still carrying it as unwritten, the worker keeps such a file out of a turn's organisation context, and flows keeps the seed's \"# Company\" heading out of a mail. A seed whose comment drifts by one character reads as WRITTEN to all three, so an unfilled placeholder becomes the employer's name on an outbound mail. core/agent now reads it from shared.marks; flows' image carries no core/agent, so its copy is a site here, and so is every seed file.",
+      "sites": [
+        {
+          "path": "core/agent/shared/marks.py",
+          "pattern": "^UNWRITTEN_MARK = \"([^\"]+)\""
+        },
+        {
+          "path": "core/flows/src/flows_steps/mailtext.py",
+          "pattern": "^UNWRITTEN_MARKER = \"([^\"]+)\""
+        },
+        {
+          "path": "behavior/global/README.md",
+          "pattern": "^<!-- (vexa:[a-z]+) —"
+        },
+        {
+          "path": "behavior/global/PRINCIPLES.md",
+          "pattern": "^<!-- (vexa:[a-z]+) —"
+        },
+        {
+          "path": "behavior/global/OBJECTIVES.md",
+          "pattern": "^<!-- (vexa:[a-z]+) —"
+        },
+        {
+          "path": "behavior/global/STRUCTURE.md",
+          "pattern": "^<!-- (vexa:[a-z]+) —"
+        },
+        {
+          "path": "behavior/global/MISSING.md",
+          "pattern": "^<!-- (vexa:[a-z]+) —"
+        }
+      ],
+      "forbid_elsewhere": "vexa:unwritten",
+      "scan": [
+        "core",
+        "clients",
+        "deploy",
+        "behavior"
+      ]
+    },
+    {
+      "id": "claude-code-pin",
+      "fact": "the Claude Code version the agent worker runs, as each image that installs it pins it",
+      "kind": "literal",
+      "enforced": true,
+      "canonical": "core/agent/worker/Dockerfile",
+      "how_to_agree": "bump both Dockerfiles in one change",
+      "why": "The worker image and the Lite image each `npm install -g` Claude Code, and the same turn runs on whichever one the deployment uses. Two pins that drift mean a turn behaves differently on Lite than on compose or Helm, with nothing in either build to say so.",
+      "sites": [
+        {
+          "path": "core/agent/worker/Dockerfile",
+          "pattern": "@anthropic-ai/claude-code@([0-9][0-9A-Za-z.+-]*)"
+        },
+        {
+          "path": "deploy/lite/Dockerfile.lite",
+          "pattern": "@anthropic-ai/claude-code@([0-9][0-9A-Za-z.+-]*)"
+        }
+      ],
+      "forbid_elsewhere": "@anthropic-ai/claude-code@",
+      "scan": [
+        "core",
+        "deploy",
+        "clients"
+      ]
     }
   ]
 }
