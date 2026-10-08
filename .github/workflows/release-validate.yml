@@ -94,6 +94,7 @@ on:
           - vexaai/v012-mcp
           - vexaai/v012-terminal
           - vexaai/v012-flows
+          - vexaai/v012-credential-broker
           - vexaai/vexa-bot
           - vexaai/vexa-lite
       validation_leg:
@@ -120,6 +121,7 @@ env:
     vexaai/v012-mcp
     vexaai/v012-terminal
     vexaai/v012-flows
+    vexaai/v012-credential-broker
     vexaai/vexa-bot
     vexaai/vexa-lite
   # The terminal variant THIS release line publishes, asserted against the published image's own
@@ -538,6 +540,8 @@ jobs:
               # from /.well-known/mcp-tools.json (absent ⇒ that route 503s and the assembled MCP
               # surface silently loses this domain's tools).
               vexaai/v012-flows)        probe "$ref" python -c "import flows_worker, flows_integrations.mailbox, flows_integrations.flows_api, os; assert os.path.exists('/app/mcp.tools.v1.json')" ;;
+              # The broker and its vendored contract signer import, and the image runs unprivileged.
+              vexaai/v012-credential-broker) probe "$ref" python -c "import os, credential_broker.app, credential_broker.store, credential_broker.assertion; assert os.getuid() != 0" ;;
               vexaai/vexa-bot)          probe "$ref" bash -c 'test -x /app/entrypoint.sh && test -f /app/browser-utils.global.js' ;;
               vexaai/vexa-lite)         probe "$ref" bash -c 'test -f /etc/supervisor/conf.d/vexa.conf && test -x /entrypoint.sh' ;;
               *)
@@ -711,7 +715,7 @@ jobs:
             echo "   ✓ $ref ← Docker Hub"
           }
           for img in v012-admin-api v012-runtime v012-agent-api v012-meeting-api \
-                     v012-gateway v012-flows v012-mcp v012-terminal v012-agent-worker; do
+                     v012-gateway v012-flows v012-mcp v012-terminal v012-agent-worker v012-credential-broker; do
             mirror_pull "vexaai/$img:$VERSION"
           done
           for ref in valkey/valkey:8-alpine postgres:17-alpine minio/minio:latest minio/mc:latest; do
@@ -773,7 +777,7 @@ jobs:
             echo "   ✓ $ref ← Docker Hub"
           }
           for img in v012-admin-api v012-runtime v012-agent-api v012-meeting-api \
-                     v012-gateway v012-flows v012-mcp v012-terminal v012-agent-worker; do
+                     v012-gateway v012-flows v012-mcp v012-terminal v012-agent-worker v012-credential-broker; do
             mirror_pull "vexaai/$img:$VERSION"
           done
           for ref in valkey/valkey:8-alpine postgres:17-alpine minio/minio:latest minio/mc:latest node:20-slim; do
@@ -838,7 +842,7 @@ jobs:
             echo "   ✓ $ref ← Docker Hub"
           }
           for img in v012-admin-api v012-runtime v012-agent-api v012-meeting-api \
-                     v012-gateway v012-flows v012-mcp v012-terminal v012-agent-worker; do
+                     v012-gateway v012-flows v012-mcp v012-terminal v012-agent-worker v012-credential-broker; do
             mirror_pull "vexaai/$img:$VERSION"
           done
           for ref in valkey/valkey:8-alpine postgres:17-alpine minio/minio:latest minio/mc:latest node:20-slim; do
@@ -904,7 +908,7 @@ jobs:
           }
           mirror_pull "vexaai/vexa-bot:$VERSION"
           for img in v012-admin-api v012-runtime v012-agent-api v012-meeting-api \
-                     v012-gateway v012-flows v012-mcp v012-terminal v012-agent-worker; do
+                     v012-gateway v012-flows v012-mcp v012-terminal v012-agent-worker v012-credential-broker; do
             mirror_pull "vexaai/$img:$VERSION"
           done
           for ref in valkey/valkey:8-alpine postgres:17-alpine minio/minio:latest minio/mc:latest; do
@@ -1083,6 +1087,8 @@ jobs:
                 assert_terminal_mode "$ref"
                 ;;
               vexaai/v012-flows)        probe "$ref" python -c "import flows_worker, flows_integrations.mailbox, flows_integrations.flows_api, os; assert os.path.exists('/app/mcp.tools.v1.json')" ;;
+              # The broker and its vendored contract signer import, and the image runs unprivileged.
+              vexaai/v012-credential-broker) probe "$ref" python -c "import os, credential_broker.app, credential_broker.store, credential_broker.assertion; assert os.getuid() != 0" ;;
               vexaai/vexa-lite)         probe "$ref" bash -c 'test -f /etc/supervisor/conf.d/vexa.conf && test -x /entrypoint.sh' ;;
               *)
                 echo "::error title=validate-arm64::no identity assertion for $img — every matrix image must state what proves its contents match its name"

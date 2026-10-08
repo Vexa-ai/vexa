@@ -10,6 +10,8 @@ import {
   PROD_DEPLOYED_IMAGES,
   REQUIRED_IMAGES,
   FLOWS_IMAGE,
+  CREDENTIAL_BROKER_IMAGE,
+  CURRENT_SCHEMA_VERSION,
   CURRENT_REQUIRED_IMAGES,
   requiredImagesFor,
   BUILD_MATRIX_BY_IMAGE,
@@ -142,7 +144,7 @@ test("schema 2 names the flows image as the eleventh; schema 1 stays ten", () =>
   assert.throws(() => validateCandidateMap({ ...eleven, schema_version: 1 }), /image set mismatch/);
   const plan = candidateBuildPlan(null);
   assert.equal(plan.mode, "full");
-  assert.equal(plan.changed_images.length, 11);
+  assert.equal(plan.changed_images.length, CURRENT_REQUIRED_IMAGES.length);
   assert.deepEqual(plan.build_matrix.find((row) => row.name === "flows"), {
     name: "flows",
     repository: "v012-flows",
@@ -150,6 +152,32 @@ test("schema 2 names the flows image as the eleventh; schema 1 stays ten", () =>
     dockerfile: "core/flows/Dockerfile",
     use_registry_cache: true,
   });
+});
+
+test("schema 3 names the credential broker as the twelfth; schema 2 stays eleven", () => {
+  assert.equal(CURRENT_SCHEMA_VERSION, 3);
+  const eleven = validMap();
+  eleven.schema_version = 2;
+  eleven.images[FLOWS_IMAGE] = { ...eleven.images["vexaai/v012-mcp"], digest: "sha256:" + "f".repeat(64) };
+  assert.throws(() => validateCandidateMap({ ...eleven, schema_version: 3 }), /image set mismatch/);
+  const twelve = structuredClone(eleven);
+  twelve.schema_version = 3;
+  twelve.images[CREDENTIAL_BROKER_IMAGE] = { ...eleven.images["vexaai/v012-mcp"], digest: "sha256:" + "e".repeat(64) };
+  const map = validateCandidateMap(twelve, twelve.release);
+  assert.equal(requiredImagesFor(map).length, 12);
+  assert.equal(map.images[CREDENTIAL_BROKER_IMAGE].class, "oss_only");
+  assert.throws(() => validateCandidateMap({ ...twelve, schema_version: 2 }), /image set mismatch/);
+  assert.throws(() => validateCandidateMap({ ...twelve, schema_version: 4 }), /schema_version must be 1, 2 or 3/);
+  const plan = candidateBuildPlan(null);
+  assert.equal(plan.changed_images.length, 12);
+  assert.deepEqual(plan.build_matrix.find((row) => row.name === "credential-broker"), {
+    name: "credential-broker",
+    repository: "v012-credential-broker",
+    context: "core/agent/services/credential-broker",
+    dockerfile: "core/agent/services/credential-broker/Dockerfile",
+    use_registry_cache: true,
+  });
+  assert.deepEqual(RUNTIME_INPUTS_BY_IMAGE[CREDENTIAL_BROKER_IMAGE], ["core/agent/services/credential-broker"]);
 });
 
 test("refuses a missing image", () => {

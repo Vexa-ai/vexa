@@ -1181,6 +1181,11 @@ services:
   # mounts any of them. To rotate a key, remove its volume and restart the stack (rotating the
   # store key also makes every stored credential unreadable — reconnect them).
   connections-keys:
+    # Same image as credential-broker (its Python is all this needs); the build is repeated so a
+    # fresh `up --build` resolves it locally whichever of the two compose creates first.
+    build:
+      context: ../../core/agent/services/credential-broker
+      dockerfile: Dockerfile
     image: vexaai/v012-credential-broker:${IMAGE_TAG:-dev}
     user: "0:0"
     command:

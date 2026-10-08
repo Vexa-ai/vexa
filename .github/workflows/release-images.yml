@@ -591,7 +591,7 @@ jobs:
           }
           mirror_pull "vexaai/vexa-bot:$VERSION" --platform linux/amd64
           for img in v012-admin-api v012-runtime v012-agent-api v012-meeting-api \
-                     v012-gateway v012-flows v012-mcp v012-terminal v012-agent-worker; do
+                     v012-gateway v012-flows v012-mcp v012-terminal v012-agent-worker v012-credential-broker; do
             mirror_pull "vexaai/$img:$BASE_VERSION"
           done
           for ref in valkey/valkey:8-alpine postgres:17-alpine minio/minio:latest minio/mc:latest; do
