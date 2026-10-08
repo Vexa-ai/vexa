@@ -152,8 +152,8 @@ describe("DELETE /api/profile/keys/:id", () => {
 
   function stubAdmin() {
     const fetchSpy = vi.fn(async (url: string, _init?: RequestInit) => {
-      if (url === "http://admin.test/admin/users/42") {
-        return new Response(JSON.stringify({ id: 42, api_tokens: [{ id: 11 }, { id: 12 }] }));
+      if (url === "http://admin.test/admin/users/42/tokens") {
+        return new Response(JSON.stringify([{ id: 11, user_id: 42 }, { id: 12, user_id: 42 }]));
       }
       return new Response(null, { status: 204 });
     });
@@ -168,7 +168,7 @@ describe("DELETE /api/profile/keys/:id", () => {
     const res = await DELETE(request(), params("12"));
     expect(res.status).toBe(200);
     expect(fetchSpy.mock.calls.map((c) => [c[0], c[1]?.method ?? "GET"])).toEqual([
-      ["http://admin.test/admin/users/42", "GET"],
+      ["http://admin.test/admin/users/42/tokens", "GET"],
       ["http://admin.test/admin/tokens/12", "DELETE"],
     ]);
   });

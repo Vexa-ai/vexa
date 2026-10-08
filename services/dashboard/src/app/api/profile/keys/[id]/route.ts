@@ -28,15 +28,20 @@ export async function DELETE(
 
   try {
     // Only revoke a key the signed-in user owns.
-    const userRes = await fetch(`${VEXA_ADMIN_API_URL}/admin/users/${encodeURIComponent(userId)}`, {
-      headers: { "X-Admin-API-Key": VEXA_ADMIN_API_KEY },
-      cache: "no-store",
-    });
-    if (!userRes.ok) {
+    const tokensRes = await fetch(
+      `${VEXA_ADMIN_API_URL}/admin/users/${encodeURIComponent(userId)}/tokens`,
+      {
+        headers: { "X-Admin-API-Key": VEXA_ADMIN_API_KEY },
+        cache: "no-store",
+      }
+    );
+    if (!tokensRes.ok) {
       return NextResponse.json({ error: "Failed to revoke API key" }, { status: 502 });
     }
-    const userData = (await userRes.json()) as { api_tokens?: Array<{ id?: unknown }> };
-    const owned = (userData.api_tokens || []).some((t) => String(t.id) === id);
+    const tokens = (await tokensRes.json()) as unknown;
+    const owned =
+      Array.isArray(tokens) &&
+      tokens.some((t) => typeof t === "object" && t !== null && String((t as { id?: unknown }).id) === id);
     if (!owned) {
       return NextResponse.json({ error: "API key not found" }, { status: 404 });
     }
