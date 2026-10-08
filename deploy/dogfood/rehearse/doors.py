@@ -46,6 +46,8 @@ from email.utils import formatdate, make_msgid
 # ── deployment values, every one of them named ───────────────────────────────────────────────────
 ADMIN_API = os.environ.get("VEXA_ADMIN_API_URL", "http://localhost:18457")
 AGENT_API = os.environ.get("VEXA_AGENT_API_URL", "http://localhost:18500")
+#: Who an operator's internal-tier read of a scaffold acts as — never a recipient, so it never redeems.
+OPERATOR_SUBJECT = "rehearse-operator"
 GATEWAY = os.environ.get("VEXA_GATEWAY_URL", "http://localhost:18456")
 FLOWS_API = os.environ.get("VEXA_FLOWS_API_URL", "http://localhost:18200")
 MAILPIT = os.environ.get("VEXA_MAILPIT_URL", os.environ.get("MAILPIT_URL", "http://localhost:8025"))
@@ -169,6 +171,11 @@ MEETINGS_PAGE_MAX = 100
 
 def _http(method: str, url: str, headers: dict | None = None, body=None, timeout: float = 40):
     h = {"content-type": "application/json", **(headers or {})}
+    # agent-api believes an asserted X-User-Id only from the gateway's signature or the internal
+    # tier (identity.v1). These doors reach agent-api directly, so every call naming a person
+    # presents the internal tier beside it.
+    if url.startswith(AGENT_API) and any(k.lower() == "x-user-id" for k in h):
+        h.setdefault("X-Internal-Secret", _internal_secret())
     req = urllib.request.Request(
         url, method=method,
         data=json.dumps(body).encode() if body is not None else None, headers=h)
@@ -651,7 +658,9 @@ class LiveDoors(Doors):
         return list(r.get("members") or [])
 
     def scaffold_get(self, scaffold_id: str, subject: str = "") -> dict:
-        hdr = {"X-Internal-Secret": _internal_secret()} if not subject else {"X-User-Id": str(subject)}
+        # The operator's read names the operator: agent-api resolves a subject on every route and
+        # has no fallback one; the internal tier is what lets a non-recipient read the record.
+        hdr = {"X-User-Id": str(subject or OPERATOR_SUBJECT)}
         st, b = _http("GET", f"{AGENT_API}/api/scaffolds/{scaffold_id}", hdr)
         if st != 200 or not isinstance(b, dict):
             raise DoorRefused(

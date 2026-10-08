@@ -113,6 +113,12 @@ def _admin_key() -> str:
 
 def _http(method: str, url: str, headers: dict | None = None, body=None, timeout=40):
     h = {"content-type": "application/json", **(headers or {})}
+    # agent-api believes an asserted X-User-Id only from the gateway's signature or from the
+    # internal tier (identity.v1). This rig reaches agent-api directly as an internal caller, so
+    # every call that names a person carries the tier's credential — and the delegation's regime
+    # and workspace ceiling, so the routes that need a person in the loop can refuse on their own.
+    if url.startswith(AGENT_API) and any(k.lower() == "x-user-id" for k in h):
+        h.update(_agent_identity_headers())
     req = urllib.request.Request(
         url, method=method,
         data=json.dumps(body).encode() if body is not None else None, headers=h)
@@ -452,6 +458,18 @@ def _internal_headers() -> dict:
     `/user/settings` to `/internal/users/{id}/settings`, which is named-by-path and therefore
     carries NO dev-mode bypass — this rig is an internal caller and authenticates as one."""
     return {"X-Internal-Secret": INTERNAL_SECRET}
+
+
+def _agent_identity_headers() -> dict:
+    """What a call to agent-api that names a person carries besides `X-User-Id`: the internal
+    tier, and — on a delegated call — the dispatch's regime and workspace ceiling."""
+    h = {"X-Internal-Secret": INTERNAL_SECRET}
+    scope = CALL_SCOPE.get()
+    if isinstance(scope, dict) and scope.get("regime"):
+        h["X-User-Regime"] = str(scope["regime"])
+        ws = scope.get("workspaces")
+        h["X-User-Delegation-Workspaces"] = "*" if ws == "*" else ",".join(str(w) for w in (ws or []))
+    return h
 
 
 def _settings(uid: str) -> dict:

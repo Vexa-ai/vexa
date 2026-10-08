@@ -22,28 +22,45 @@ Run `python -m unittest discover -s deploy/dogfood/minutes-stack` for failure co
 Use `--inventory` for sanitized evidence. A locked legacy route is still legacy:
 tool discovery does not prove domain separation, tool execution, consent, or sync.
 
-The agent domain owns connection request/status semantics. The gateway assembler
-loads its manifest independently from meetings. Before moving a Minutes worker
-to that assembled surface, preserve its delegated identity, expiry/revocation,
-workspace isolation, autonomous restrictions, and existing tool capabilities.
-Do not substitute a service API key for a user's scoped delegation to make a
-routing test pass.
+The agent domain owns its tools: each is a typed agent-api route in
+`core/agent/mcp.tools.v1.json`, served on a standard deployment by the gateway's one
+assembled MCP server. Minutes still gives its workers the rig as their MCP server, so
+`agent_tools.py` registers the same tool names on the rig and calls those same routes.
 
 ## Agent MCP service
 
-The Minutes deployment supplies `agent_mcp.py` with one explicit JSON configuration:
-`environment_file`, `runtime`, `crm_tools`, `import_tools`, `connection_tools`,
-`agent_source`, `host`, and `port`. The runtime bundle preserves existing scoped
-handlers; the composition root adds the agent-owned connection module. Every
-input belongs in the deployment lock. This is not a rewritten legacy tool engine.
+`agent_mcp.py` reads one JSON configuration, every input of which belongs in the
+deployment lock:
 
-`AGENT_MCP_URL` on gateway selects that dedicated upstream only for `vxd_`
-delegated requests to exact `/mcp`. The edge forwards the bearer with transport
-headers and strips asserted identity, cookies and operator keys. The agent service
-validates signature, expiry and revocation and enforces scope/regime. It is not
-an API-key exchange; delegated tokens never authorize gateway REST requests.
-API-key MCP callers retain the separately configured `MCP_URL` upstream.
+| key | what it is |
+|---|---|
+| `environment_file` | JSON environment; its `VEXA_*`, `CRM_*` and `INTERNAL_API_SECRET` entries are exported |
+| `runtime` | the rig module (`deploy/dogfood/rig/vexa_control_mcp.py`) — the delegated identity and the rig's own tools |
+| `agent_tools` | `agent_tools.py` — the agent domain's tools (Connections, `current_time`, `timezone_set`, `chat_name`) and the clock folded into `whats_waiting` |
+| `import_tools` | the rig's `workspace_import_tools.py` |
+| `crm_enabled`, `crm_tools` | optional CRM tools (`CRM_API_URL` must be in the environment) |
+| `agent_source` | exported as `VEXA_AGENT_SRC` |
+| `host`, `port` | where the server listens; `VEXA_PUBLIC_MCP_URL` is derived from them |
 
-Configure workers with gateway's `/mcp` URL. Validate the actual worker's image,
-URL and tool call before retiring the previous service; pre-existing workers
-keep the environment they were launched with and must drain first.
+`agent_tools.register(mcp, call=…, guard=…)` takes two explicit ports: `call` reaches
+agent-api as the caller (the rig's `_http` adds `X-Internal-Secret` and the delegation's
+regime and workspace ceiling to every call that names a person — agent-api believes an
+unsigned `X-User-Id` from nothing else) and `guard` is the rig's identity guard. Consent,
+credential use, the regime refusals and the ceiling are agent-api's, not the adapter's.
+
+### What Minutes needs after the identity change
+
+- The gateway has ONE `/mcp` upstream (`MCP_URL`); `AGENT_MCP_URL` is gone. Point
+  agent-api's `VEXA_MCP_URL` at this service's own in-network `/mcp` to keep workers on
+  the rig, or at the gateway's `/mcp` to move them to the assembled surface (which does
+  not carry the rig-only tools: `workspace_write`, `entity_upsert`, `propose`, …).
+- Replace `connection_tools`, `time_tools` and `chat_names` in the lock with `agent_tools`.
+- `VEXA_GATEWAY_IDENTITY_SECRET` on gateway, agent-api and meeting-api, and
+  `VEXA_MCP_DELEGATION_SECRET` on admin-api as well as agent-api and this service.
+- A worker files friction through the gateway (`/agent/friction`, its delegation token),
+  derived from `VEXA_MCP_URL`; a worker pointed at the rig keeps the record in its
+  fallback log instead.
+
+Validate the actual worker's image, URL and tool call before retiring the previous
+service; pre-existing workers keep the environment they were launched with and must drain
+first.
