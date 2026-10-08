@@ -1,6 +1,12 @@
 {
  "contract": "config.v1",
  "service": "admin-api",
+ "capabilities": {
+  "agent_delegation": {
+   "description": "identity resolves a worker's delegation token (vxd_, minted per dispatch by agent-api) through /internal/validate, like an API key: signature, audience, expiry and the account still existing — so the gateway and flows authenticate a worker's tool calls without holding the delegation key themselves.",
+   "when_unconfigured": "/internal/validate answers 401 to every vxd_ bearer, so a worker's toolbelt is refused at the edge; API keys are unaffected. This is the no-agents profile, which mints no delegation tokens."
+  }
+ },
  "keys": [
   {
    "key": "INTERNAL_API_SECRET",
@@ -162,6 +168,14 @@
    "default": "8001",
    "description": "uvicorn bind port",
    "targets": ["lite"]
+  },
+  {
+   "key": "VEXA_MCP_DELEGATION_SECRET",
+   "class": "capability",
+   "capability": "agent_delegation",
+   "secret": true,
+   "description": "the HS256 key agent-api signs a worker's per-dispatch delegation token with; /internal/validate verifies vxd_ bearers with it. Same value as agent-api's VEXA_MCP_DELEGATION_SECRET; generated at install on every deploy surface.",
+   "targets": ["compose", "helm", "lite"]
   }
  ]
 }

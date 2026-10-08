@@ -35,6 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..schema.models import (APIToken, Meeting, MeetingSession, PlatformSetting,
                              Transcription, User)
+from .. import delegation as delegation_mod
 from ..token_scope import VALID_SCOPES, generate_prefixed_token
 from .db import get_db
 from . import events as events_mod
@@ -46,6 +47,9 @@ from . import signin_wire
 claim_log = logging.getLogger("admin_api.claim")
 
 ADMIN_KEY_HEADER = APIKeyHeader(name="X-Admin-API-Key", auto_error=False)
+#: What a worker's delegation token may do at the edge: act in the two service domains for the
+#: person it names — the same reach a person's own bot+tx key has, and nothing operator-shaped.
+DELEGATED_SCOPES = ("bot", "tx")
 USER_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 
@@ -1071,6 +1075,9 @@ def create_app() -> FastAPI:
         if not token:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Missing token")
 
+        if delegation_mod.is_delegation_token(token):
+            return await _validate_delegation(token, db)
+
         row = (await db.execute(
             select(APIToken, User).join(User, APIToken.user_id == User.id)
             .where(APIToken.token == token)
@@ -1086,14 +1093,50 @@ def create_app() -> FastAPI:
         await db.commit()
 
         scopes = list(api_token.scopes) if api_token.scopes else ["legacy"]
+        return _validated_identity(user, scopes=scopes, is_admin=signin_allow.is_admin(
+            user.email, user.data, signin_allow.admin_emails()[0]))
+
+    # A WORKER'S DELEGATION TOKEN (`vxd_…`) is a bearer like an API key, and this oracle answers for
+    # both — so every resolver (the gateway, flows) authenticates it the same way and none of them
+    # holds the delegation key. agent-api mints it per dispatch (`core/agent/shared/delegation.py`,
+    # vendored here byte for byte); it says WHO the worker acts for and the ceiling the dispatch was
+    # granted. The account must still exist: a token minted for a deleted user names nobody.
+    # Scopes are the two service domains a person's agent acts in (`bot`, `tx`) — never `browser`,
+    # never admin — and the ceiling travels on as `delegation`, for the services to enforce.
+    async def _validate_delegation(token: str, db: AsyncSession) -> dict:
+        secret = os.environ.get("VEXA_MCP_DELEGATION_SECRET", "")
+        if not secret:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED,
+                                detail="Delegation tokens are not accepted on this deployment")
+        try:
+            claims = delegation_mod.verify_delegation(secret, token)
+        except delegation_mod.DelegationError as e:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail=f"Invalid delegation: {e.reason}")
+        try:
+            uid = int(str(claims["sub"]))
+        except (TypeError, ValueError):
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Invalid delegation: malformed")
+        user = (await db.execute(select(User).where(User.id == uid))).scalar_one_or_none()
+        if user is None:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Invalid delegation: no such user")
+        scope = claims.get("scope") if isinstance(claims.get("scope"), dict) else {}
+        resp = _validated_identity(user, scopes=list(DELEGATED_SCOPES), is_admin=False)
+        resp["delegation"] = {"regime": str(scope.get("regime") or ""),
+                              "workspaces": scope.get("workspaces") if scope.get("workspaces") == "*"
+                              else [str(w) for w in (scope.get("workspaces") or [])]}
+        if claims.get("target"):
+            resp["delegation"]["target"] = str(claims["target"])
+        return resp
+
+    def _validated_identity(user: User, *, scopes: list, is_admin: bool) -> dict:
         resp = {
             "user_id": user.id,
             "scopes": scopes,
             "max_concurrent": user.max_concurrent_bots,
             "email": user.email,
-            # THE admin test (signin_allow.is_admin): the claimed role on the row, or an address in
-            # VEXA_ADMIN_EMAILS. The terminal's admin gate reads this and holds no list of its own.
-            "is_admin": signin_allow.is_admin(user.email, user.data, signin_allow.admin_emails()[0]),
+            # THE admin test (signin_allow.is_admin) for an API key; never for a worker's delegation.
+            # The terminal's admin gate reads this and holds no list of its own.
+            "is_admin": is_admin,
         }
         data_blob = user.data if isinstance(user.data, dict) else {}
         if data_blob.get("webhook_url"):
