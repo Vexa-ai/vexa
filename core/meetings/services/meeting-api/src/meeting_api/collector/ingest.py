@@ -157,6 +157,25 @@ def _log_publish_failure(meeting_id: int, e: Exception) -> None:
         pass
 
 
+async def _erased(store: TranscriptStore, meeting_id: int) -> bool:
+    """Whether ``meeting_id``'s transcript was deleted by its owner, so nothing for it is ingested.
+
+    A lookup that fails answers "not erased": refusing would drop the segment for good (the batch is
+    acked either way), and every transcript reader checks the deletion stamp itself, so what an
+    outage can cost here is retention of a late segment, never its exposure."""
+    try:
+        return bool(await store.transcript_erased(meeting_id))
+    except Exception as e:  # noqa: BLE001 — never abort the batch on the check
+        try:
+            from ..obs import log_event
+
+            log_event("segment_erased_check_failed", audience="system", level="warning",
+                      span="collector.ingest", fields={"meeting_id": meeting_id, "error": str(e)})
+        except Exception:  # noqa: BLE001
+            pass
+        return False
+
+
 async def ingest(store: TranscriptStore, redis: RedisBus, message: dict) -> int:
     """Process ONE ``transcription_segments`` stream message.
 
@@ -187,7 +206,7 @@ async def ingest(store: TranscriptStore, redis: RedisBus, message: dict) -> int:
             meeting_id = int(mid_raw) if mid_raw is not None else None
         except (TypeError, ValueError):
             meeting_id = None
-        if meeting_id is not None:
+        if meeting_id is not None and not await _erased(store, meeting_id):
             uid = data.get("native_meeting_id") or data.get("uid") or data.get("session_uid") or str(meeting_id)
             try:
                 await redis.xadd(_transcript_stream(meeting_id), {"type": "session_end", "uid": uid})
@@ -205,6 +224,8 @@ async def ingest(store: TranscriptStore, redis: RedisBus, message: dict) -> int:
             meeting_id = None
         seg_ids = data.get("segment_ids")
         if meeting_id is None or not isinstance(seg_ids, list) or not seg_ids:
+            return 0
+        if await _erased(store, meeting_id):
             return 0
         ids = [str(s) for s in seg_ids if s]
         try:
@@ -231,6 +252,10 @@ async def ingest(store: TranscriptStore, redis: RedisBus, message: dict) -> int:
 
     raw_segments = data.get("segments")
     if not isinstance(raw_segments, list):
+        return 0
+    # A meeting whose owner deleted its transcript takes nothing more: no live hash, no
+    # active_meetings entry, no tc:meeting feed, no mutable publish.
+    if await _erased(store, meeting_id):
         return 0
 
     persisted: list[dict] = []

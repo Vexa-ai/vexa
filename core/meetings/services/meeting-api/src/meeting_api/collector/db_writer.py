@@ -231,6 +231,17 @@ async def flush_meeting_segments(
         done_fields.append(field)
 
     if batch:
+        # A meeting whose owner deleted its transcript is not written back: a segment that reached
+        # the hash in the instant before the delete is dropped with the hash. A check that cannot
+        # answer leaves the hash for the next tick.
+        erased = getattr(sink, "transcript_erased", None)
+        if erased is not None and await erased(meeting_id):
+            await redis_c.delete(hash_key)
+            try:
+                await redis_c.srem(ACTIVE_MEETINGS_KEY, str(meeting_id))
+            except Exception:  # noqa: BLE001 — set upkeep is best-effort
+                pass
+            return 0
         # The durable write FIRST; only a confirmed write may trim redis. On a FAILED write,
         # re-arm the hash TTL before propagating: a completed meeting gets no more appends (nothing
         # re-arms the TTL), so a sink outage longer than the TTL would expire the tail unflushed

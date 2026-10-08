@@ -251,6 +251,27 @@ class SqlAlchemyTranscriptStore:
         # numeric meeting_id → (native_meeting_id, platform). The id→native map is immutable for a
         # meeting row, so cache it forever once resolved (bounded by the live meeting set).
         self._native_cache: dict[int, tuple[str, str]] = {}
+        # Meeting ids whose transcript was deleted. Deletion is one-way, so a positive answer is
+        # cached for the life of the process; a negative one never is.
+        self._erased: set[int] = set()
+
+    async def transcript_erased(self, meeting_id) -> bool:
+        try:
+            mid = int(meeting_id)
+        except (TypeError, ValueError):
+            return False
+        if mid in self._erased:
+            return True
+        from sqlalchemy import select  # lazy: not needed for the in-memory fakes
+
+        from .models import Meeting
+
+        async with self._session_factory() as db:
+            data = (await db.execute(select(Meeting.data).where(Meeting.id == mid))).scalars().first()
+        erased = isinstance(data, dict) and bool(data.get("artifact_deletion"))
+        if erased:
+            self._erased.add(mid)
+        return erased
 
     async def native_for(self, meeting_id) -> "Optional[tuple[str, str]]":
         """Resolve a NUMERIC meeting_id → (native_meeting_id, platform) from the meetings table.

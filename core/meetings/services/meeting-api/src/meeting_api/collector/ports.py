@@ -173,6 +173,14 @@ class TranscriptStore(Protocol):
         above — inventing attendance from speech is the exact failure #861's preparation forbids."""
         ...
 
+    async def transcript_erased(self, meeting_id: int) -> bool:
+        """Whether the meeting's owner deleted (or is deleting) its transcript: the row carries
+        ``data.artifact_deletion``. Ingest refuses every message for such a meeting and the db-writer
+        flushes nothing for it, so a segment that arrives after the delete re-creates no feed, no
+        live hash and no rows. Cross-user (the collector is the trusted internal consumer). An
+        unknown id is not erased."""
+        ...
+
     async def append_segment(self, meeting_id: int, segment: dict) -> None:
         """Persist one ingested transcript segment for ``meeting_id`` (keyed by its
         ``segment_id`` — stable identity, last-write-wins, exactly the collector's Redis-hash

@@ -87,6 +87,14 @@ class InMemoryTranscriptStore:
         }
         return mid
 
+    async def transcript_erased(self, meeting_id) -> bool:
+        try:
+            m = self._meetings.get(int(meeting_id))
+        except (TypeError, ValueError):
+            return False
+        data = (m or {}).get("data")
+        return isinstance(data, dict) and bool(data.get("artifact_deletion"))
+
     async def native_for(self, meeting_id):
         """Numeric meeting_id → (native_meeting_id, platform), cross-user (the internal segment
         consumer owns the mapping). Mirrors the SqlAlchemy store so ingest can stamp the live payload."""
