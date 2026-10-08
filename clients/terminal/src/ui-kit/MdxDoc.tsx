@@ -15,6 +15,7 @@ import { isValidElement, useContext, useEffect, useState, type CSSProperties, ty
 import * as runtime from "react/jsx-runtime";
 import { evaluate } from "@mdx-js/mdx";
 import remarkGfm from "remark-gfm";
+import { EntityProperties, entityProperties } from "./EntityProperties";
 import { Markdown, stripHtmlComments } from "./Markdown";
 import { DocImage } from "./docImages";
 import { MermaidDiagram, isMermaidFence } from "./docDiagrams";
@@ -300,15 +301,7 @@ type CompileState =
   | { status: "ok"; Content: import("mdx/types").MDXContent }
   | { status: "fallback"; error: string };
 
-// FRONTMATTER IS STILL STRIPPED FROM THE BODY — it is metadata for the agent, never body copy —
-// but it is no longer DISCARDED: `splitFrontmatter` (./policyDoc) hands back both halves. Two
-// kinds of page need the block itself. `_global/POLICIES.md` declares `kind: policies`, and there
-// the front matter IS the content — it is what this deployment answers, and the prose under it is
-// the argument for each answer. Throwing it away would render the reasoning for a set of choices
-// without ever showing the choices. A generated flow page declares `kind: flow`, and there the
-// block is the summary — trigger, steps, the rules it honours — which is what the reader of
-// `_global/flows/` came for (Vexa-ai/vexa#1626). `docHeader` decides which, by what the page says
-// it is; every other page still renders exactly as it did.
+// Frontmatter renders through the declared document header or the entity properties view.
 
 /** THE WIDGET A DOC DECLARES, resolved through the tab REGISTRY rather than imported.
  *
@@ -395,7 +388,7 @@ export function MdxDoc({ children, style }: { children: string; style?: CSSPrope
   // where the proposal act was not registered.
   const kind = declaredKind(attrs);
   const head = docHeader(attrs, body,
-    kind === PROPOSAL_KIND ? <RegisteredDocAct kind={PROPOSAL_ACT_KIND} /> : <PolicySetupAct />);
+    kind === PROPOSAL_KIND ? <RegisteredDocAct kind={PROPOSAL_ACT_KIND} /> : <PolicySetupAct />) ?? (entityProperties(children) ? <EntityProperties source={children} /> : null);
   if (!head && segments.length === 1 && segments[0].kind === "text") {
     return <MdxBody style={style}>{segments[0].text}</MdxBody>;
   }
