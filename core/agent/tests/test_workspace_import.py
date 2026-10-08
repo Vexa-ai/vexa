@@ -82,12 +82,12 @@ def test_import_http_and_mcp_manifest_expose_same_operation(tmp_path, monkeypatc
     assert client.get('/api/workspaces/by-slug/'+slug, headers={'X-User-Id':'another'}).json()['access'] != 'readable'
     assert client.get('/api/workspace/file', params={'slug':slug, 'path':'MARK'}, headers={'X-User-Id':'u_jane'}).json()['content'] == 'RAW'
     assert client.get('/api/workspace/file', params={'slug':slug, 'path':'MARK'}, headers={'X-User-Id':'another'}).status_code in (403,404)
-    assert client.get('/api/workspace/import/'+operation_id, headers={'X-User-Id':'another'}).status_code == 404
+    assert client.get('/api/workspace/import/'+operation_id+'/status', headers={'X-User-Id':'another'}).status_code == 404
     manifest = json.loads((pathlib.Path(__file__).parents[1] / 'mcp.tools.v1.json').read_text())
     names = {t['name']:t for t in manifest['tools']}
     assert names['workspace_import']['route']['path'] == '/api/workspace/import'
     assert 'token' not in names['workspace_import']['arguments']
-    assert names['workspace_import_status']['route']['path'] == '/api/workspace/import/{operation_id}'
+    assert names['workspace_import_status']['route']['path'] == '/api/workspace/import/{operation_id}/status'
 
 
 def test_only_completed_import_changes_chat_focus():

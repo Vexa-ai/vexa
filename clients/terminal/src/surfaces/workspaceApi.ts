@@ -690,9 +690,9 @@ export async function importWorkspace(repo: string, ref: string, token: string |
   while (job.status === "queued" || job.status === "running") {
     progress("Importing repository as a new workspace. Large repositories can take several minutes.");
     await new Promise(resolve => setTimeout(resolve, 1500));
-    job = await getJson<WorkspaceImport>(`/api/workspace/import/${encodeURIComponent(job.operation_id)}`);
+    job = await getJson<WorkspaceImport>(`/api/workspace/import/${encodeURIComponent(job.operation_id)}/status`);
   }
   if (job.status !== "completed" || !job.result)
-    throw new ApiError(job.error_status ?? 409, job.error ?? "Import interrupted. Check the workspace before retrying.", `/api/workspace/import/${job.operation_id}`);
+    throw new ApiError(job.error_status ?? 409, job.error ?? "Import interrupted. Check the workspace before retrying.", `/api/workspace/import/${job.operation_id}/status`);
   return job.result;
 }

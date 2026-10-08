@@ -48,7 +48,7 @@ AGENT_OPENAPI["paths"].update({
     "/api/workspace/import": {"post": {"description": "Import private or public repositories as independent workspaces; do not WebFetch for access.", "requestBody": {"content": {
         "application/json": {"schema": {"type": "object", "required": ["repo"], "properties": {
             "repo": {"type": "string"}, "ref": {"type": "string", "default": "main"}, "token": {"type": "string"}, "credential_workspace": {"type": "string"}}}}}}}},
-    "/api/workspace/import/{operation_id}": {"get": {"description": "Poll import until completed.", "parameters": [
+    "/api/workspace/import/{operation_id}/status": {"get": {"description": "Poll import until completed.", "parameters": [
         {"name": "operation_id", "in": "path", "required": True, "schema": {"type": "string"}}]}}
 })
 AGENT_OPENAPI["components"] = {"schemas": {"WorkspaceNewBody": {

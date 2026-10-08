@@ -1168,7 +1168,9 @@ def build(**d) -> APIRouter:
                     "name": name}
         return imports.start(wsr.root, subject, repo, ref, operation)
 
-    @router.get("/api/workspace/import/{operation_id}")
+    # `/status` keeps this route from matching the same URL as `/api/workspace/{slug}/deploy-key`
+    # (slug "import", operation "deploy-key"): see tests/test_route_table.py.
+    @router.get("/api/workspace/import/{operation_id}/status")
     def ws_import_status(operation_id: str, request: Request):
         """Read your repository import. Only completed confirms an independently usable workspace.
 

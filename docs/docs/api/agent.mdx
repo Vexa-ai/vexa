@@ -357,7 +357,7 @@ rather than on every segment; `source` says whether settings or the deployment e
 optional one-off `token` from the authenticated UI. It returns HTTP 202 with an
 `operation_id` and `status`. Credentials are never included in the persisted operation.
 
-Poll `GET /api/workspace/import/{operation_id}`. States are `queued`, `running`,
+Poll `GET /api/workspace/import/{operation_id}/status`. States are `queued`, `running`,
 `completed`, `failed`, and `interrupted`. Only `completed` includes a usable `result`
 with the workspace slug, repository and ref. Status is scoped to the caller. Repeating
 the same repository/ref recovers the operation; a different import while one is

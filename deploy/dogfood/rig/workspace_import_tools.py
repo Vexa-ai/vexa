@@ -27,6 +27,6 @@ def register_workspace_import_tools(mcp, *, http, subject, guard, agent_api):
         Return failures to the user. Poll this tool while queued/running; do not start
         another import or claim completion. The completed result names the workspace.
         """
-        status, body = http("GET", f"{agent_api}/api/workspace/import/{quote(operation_id, safe='')}",
+        status, body = http("GET", f"{agent_api}/api/workspace/import/{quote(operation_id, safe='')}/status",
                             {"X-User-Id": subject()})
         return json.dumps(body if status == 200 else {"status": "failed", "error_status": status, "detail": body})
