@@ -23,6 +23,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 #: smoke against a running admin-api — keeps it. The tests that are ABOUT the refusal unset it
 #: themselves with `monkeypatch.delenv`, which is per-test and unaffected.
 os.environ.setdefault("VEXA_FLOWS_ADMIN_KEY", "test-admin-key-not-a-placeholder")
+#: The internal tier, on the same terms: every agent-api call that acts for a person carries it
+#: (identity.v1 — agent-api believes an unsigned X-User-Id from nothing else), so a step test that
+#: reaches the agent door needs one declared. The refusal tests unset it themselves.
+os.environ.setdefault("INTERNAL_API_SECRET", "test-internal-secret-not-a-placeholder")
 
 
 #: The doors, declared for the test process the way a deployment declares them. NOT autouse-set to

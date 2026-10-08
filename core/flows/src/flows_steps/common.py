@@ -481,7 +481,7 @@ def ws_file(uid: str, path: str, slug: Optional[str] = None) -> Optional[str]:
     # forges a second query parameter on an internal service (R-B14).
     q = f"&slug={_q(slug, safe='')}" if slug else ""
     code, body = http("GET", f"{agent_door()}/api/workspace/file?path={_q(path, safe='')}{q}",
-                      {"X-User-Id": uid})
+                      {"X-User-Id": uid, "X-Internal-Secret": require_internal_secret()})
     return body.get("content") if code == 200 and isinstance(body, dict) else None
 
 

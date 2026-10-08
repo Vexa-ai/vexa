@@ -473,6 +473,7 @@ def _mint_rig(monkeypatch, status, body):
         calls.append({"method": method, "url": url, "headers": headers, "body": payload})
         return status, body
 
+    monkeypatch.delenv("INTERNAL_API_SECRET", raising=False)
     monkeypatch.setenv("VEXA_INTERNAL_SECRET", "internal-tier-secret-for-tests")
     monkeypatch.setattr(common, "http", fake_http)
     return calls

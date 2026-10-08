@@ -273,15 +273,17 @@ def test_the_room_travels_as_agent_apis_four_fields_plus_the_internal_header(mon
 
 def test_no_room_means_the_body_and_headers_this_dispatch_always_sent(monkeypatch):
     """Every other turn in the system — onboarding, the email conversation, the re-ask — must not
-    grow a header or a field, and must never present the internal secret."""
+    grow a room field. It carries the internal tier like every call flows makes FOR a person
+    (identity.v1: agent-api believes an unsigned X-User-Id only beside it); a room is the BODY
+    fields, never the header."""
     seen = _chat_post(monkeypatch)
     REAL_DISPATCH_TURN("7", "s", "hello")
     assert seen["body"] == {"prompt": "hello", "session": "s"}
-    assert "X-Internal-Secret" not in seen["headers"]
+    assert set(seen["headers"]) == {"X-User-Id", "X-Internal-Secret"}
 
     REAL_DISPATCH_TURN("7", "s", "hello", room={"meeting_id": None, "read": ["a@b.test"]})
     assert seen["body"] == {"prompt": "hello", "session": "s"}
-    assert "X-Internal-Secret" not in seen["headers"]
+    assert set(seen["headers"]) == {"X-User-Id", "X-Internal-Secret"}
 
 
 def test_the_room_addresses_the_ROW_not_the_native_id(monkeypatch):
