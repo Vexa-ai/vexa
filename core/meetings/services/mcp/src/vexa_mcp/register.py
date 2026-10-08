@@ -65,6 +65,9 @@ from .bind import BoundTool
 #: the requestBody-derived fields query parameters never needed (`FlowSubmission.steps: list[str]`,
 #: `.params: dict`) — a query-origin field never publishes either shape, so widening the map here
 #: changes nothing for a query-declared argument.
+#: How long an assembled tool waits for its owning route — the gateway's buffered-forward bound.
+TOOL_TIMEOUT_S = 30
+
 _PY_TYPE = {"integer": int, "number": float, "boolean": bool, "string": str,
            "array": list, "object": dict}
 
@@ -126,7 +129,7 @@ def _signature(bt: BoundTool) -> inspect.Signature:
     for name, schema in bt.parameters.items():
         if name in bt.path_params:
             continue
-        annotation = Optional[_PY_TYPE.get(str(schema.get("type")), str)]
+        annotation = Optional[_PY_TYPE.get(_json_type(schema), str)]
         description = schema.get("description") or None
         vocabulary = _vocabulary(schema) or None
         # QUERY OR BODY, decided by where the OWNING ROUTE publishes the argument (bind.py read its
@@ -139,6 +142,24 @@ def _signature(bt: BoundTool) -> inspect.Signature:
         params.append(inspect.Parameter(name, inspect.Parameter.KEYWORD_ONLY,
                                         annotation=annotation, default=default))
     return inspect.Signature(params)
+
+
+def _json_type(schema: dict) -> str:
+    """The JSON type an owning route published for one argument.
+
+    A pydantic `Optional[X]` publishes `anyOf: [X, {"type": "null"}]` with no top-level `type`, and
+    a nested model publishes a `$ref`; reading only `type` turned `setup: dict | None` and
+    `receipts: list[Receipt]` into strings an agent could not fill. The first non-null branch is
+    the argument's type, and a `$ref` is an object."""
+    if schema.get("type"):
+        return str(schema["type"])
+    if schema.get("$ref"):
+        return "object"
+    for key in ("anyOf", "oneOf"):
+        for branch in schema.get(key) or []:
+            if isinstance(branch, dict) and branch.get("type") != "null":
+                return _json_type(branch)
+    return "string"
 
 
 def _vocabulary(schema: dict) -> dict:
@@ -228,7 +249,10 @@ def _add(app: FastAPI, bt: BoundTool, base: str,
             body = raw_body
 
         try:
-            async with httpx.AsyncClient(timeout=10, transport=transport) as client:
+            # The forward crosses the gateway, whose buffered leg allows 30 s; a tool that waits
+            # less than its own door gives up on calls the door would have answered (a mailbox
+            # read through the credential broker is routinely several seconds).
+            async with httpx.AsyncClient(timeout=TOOL_TIMEOUT_S, transport=transport) as client:
                 r = await client.request(
                     method, (gateway_url.rstrip("/")+"/agent/"+path.removeprefix("/api/")
                              if bt.tool.domain == "agent" and gateway_url else f"{base}{path}"),

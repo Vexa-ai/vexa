@@ -103,6 +103,7 @@ from control_plane.routers import scaffolds as routers_scaffolds
 from control_plane.routers import friction as routers_friction
 from control_plane.routers import proposals as routers_proposals
 from control_plane.routers import connections as routers_connections
+from control_plane.routers import clock as routers_clock
 from control_plane.routers import workspaces as routers_workspaces
 from control_plane.api_shared import (logger, _PHASE_WORD, _iso, _provenance_line, _epoch_text, 
     MAX_UPLOAD_BYTES, MEETING_STREAM_TRANSCRIPT_REPLAY, _upload_filename, _truncate_title, 
@@ -1045,7 +1046,7 @@ def create_app(
         require_person=require_person, settings=settings, stream_reader=stream_reader,
         subject_of=subject_of,
         workspace_registry=workspace_registry, workspace_touches=workspace_touches, wsr=wsr)
-    for _r in (routers_health, routers_chats, routers_admin, routers_meetings, routers_scaffolds, routers_friction, routers_proposals, routers_workspaces, routers_connections):
+    for _r in (routers_health, routers_chats, routers_admin, routers_meetings, routers_scaffolds, routers_friction, routers_proposals, routers_workspaces, routers_connections, routers_clock):
         app.include_router(_r.build(**_deps))
 
     return app

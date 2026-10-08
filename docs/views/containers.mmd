@@ -12,7 +12,6 @@ flowchart LR
     agent_api["agent-api"]
     credentials_broker["credential-broker"]
     agent_worker["agent-worker"]
-    agent_mcp["agent-mcp"]
   end
   subgraph gateway_system["gateway"]
     conformance["conformance"]
@@ -74,5 +73,5 @@ flowchart LR
   agent_api -->|"HTTP"| credentials_broker
   terminal -->|"HTTP"| credentials_broker
   credentials_broker -->|"req"| credentials_vault
-  gateway -->|"HTTP"| agent_mcp
-  agent_mcp -->|"HTTP"| agent_api
+  agent_worker -->|"HTTPS"| gateway
+  mcp -->|"HTTP"| agent_api

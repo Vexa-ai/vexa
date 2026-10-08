@@ -39,6 +39,18 @@
     "workspace_import",
     "workspace_import_status",
     "connection_request",
-    "connections_status"
+    "connections_status",
+    "gmail_search",
+    "gmail_read",
+    "gmail_thread",
+    "calendar_events",
+    "mail_inbox",
+    "mail_read",
+    "gmail_draft_create",
+    "onboarding_research",
+    "secret_service_call",
+    "current_time",
+    "timezone_set",
+    "chat_name"
   ]
 }

@@ -57,13 +57,13 @@ system agent  # the execution domain: a trigger becomes one governed agent turn 
   data-asset out-stream [writers: agent-worker]
   data-asset unit-in
   data-asset va-chat
-  service agent-mcp
 
 system gateway-system  # the one public edge (api.v1, ws.v1)
   service conformance
   service gateway
   contract api.v1
   contract logevent.v1
+  contract identity.v1
   contract ws.v1
 
 system identity  # access + audit; owns the durable DB
@@ -136,10 +136,10 @@ edges:
   agent-worker -read-> tc-stream  # copilot tails transcript
   agent-worker -write-> out-stream  # XADD cards/notes/deltas
   agent-worker -read-> unit-in  # chat path XREADs interactive input
-  mcp -req-> gateway  # every MCP tool forwards the caller's X-API-Key to the public REST surface
+  mcp -req-> gateway  # every MCP tool forwards the caller's own bearer (an API key or a worker's delegation token) to the public REST surface
   gateway -req-> meeting-api  # proxy /bots /transcripts /meetings /recordings and per-calendar sync
-  gateway -req-> agent-api  # proxy /agent/*
-  gateway -req-> mcp  # proxy /mcp — POST buffered, GET relayed unbuffered (SSE stream)
+  gateway -req-> agent-api  # proxy /agent/* with the resolved identity signed (identity.v1)
+  gateway -req-> mcp  # proxy /mcp — the ONE assembled MCP server for every bearer, a person's key or a worker's delegation token; POST buffered, GET relayed unbuffered (SSE stream)
   gateway -req-> admin-api  # POST /internal/validate (authz oracle) plus user calendar connection CRUD
   gateway -read-> bm-status  # WS fan-out
   gateway -read-> u-meetings  # WS auto-subscribe
@@ -164,8 +164,8 @@ edges:
   terminal -req-> credentials-broker
   credentials-broker -req-> credentials-vault
   credentials-broker -write-> credentials-store
-  gateway -req-> agent-mcp  # Delegated /mcp transport; bearer forwarded without asserted identity; agent domain validates scope
-  agent-mcp -req-> agent-api  # Authenticated subject scoped agent operations and connection setup requests
+  agent-worker -req-> gateway  # the worker's toolbelt: /mcp and /agent/friction with its per-dispatch delegation token, which identity resolves as the person it acts for
+  mcp -req-> agent-api  # boot assembly: GET /.well-known/mcp-tools.json + /openapi.json — the agent domain's tools join the one MCP surface
   bot, agent-worker deployed-in runtime
   gateway, meeting-api, agent-api, admin-api, runtime, redis, postgres, object-store, transcription deployed-in deploy
   flows-api, flows-worker deployed-in deploy

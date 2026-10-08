@@ -25,7 +25,10 @@ from control_plane.api_shared import (
 from control_plane.config_preflight import NOT_CONFIGURED, capability_state
 from control_plane.events import event_to_invocation
 from control_plane.workspace_attach import active_workspaces, shared_active_mounts
+from typing import Annotated, Literal
+
 from fastapi import APIRouter, Body, HTTPException, Request
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 from fastapi.responses import StreamingResponse
 from jsonschema.exceptions import ValidationError
 from shared import chat_label as chat_label_mod
@@ -37,6 +40,25 @@ from shared.marks import flow_mark
 #: chat born as a meeting's is named by that meeting (and one that merely CREATED a meeting is not —
 #: Vexa-ai/vexa#1597).
 _MEET_SESSION_PREFIX = "meet-"
+
+
+class ChatNameBody(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    session: str = Field(min_length=1, max_length=300, description='the chat session to name')
+    title: str = Field(max_length=300, description='a concise 3-7 word task title')
+    source: Literal['human', 'agent'] = 'human'
+
+
+class AgentChatNameBody(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    session: str = Field(min_length=1, max_length=300,
+                         description='the current chat session, as the turn context states it')
+    title: str = Field(max_length=300, description='a concise 3-7 word title naming the actual objective')
+
+
+class ChatOrderBody(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    order: list[Annotated[str, StringConstraints(min_length=1, max_length=300)]] = Field(max_length=5000)
 
 
 def build(**d) -> APIRouter:
@@ -58,6 +80,10 @@ def build(**d) -> APIRouter:
     scheduler = d['scheduler']
     sess = d['sess']
     settings = d['settings']
+
+    def _toolbelt_configured() -> bool:
+        return bool(settings is not None and (settings.mcp_url or "").strip()
+                    and settings.mcp_delegation_secret.get_secret_value())
     stream_reader = d['stream_reader']
     subject_of = d['subject_of']
     workspace_registry = d['workspace_registry']
@@ -533,11 +559,15 @@ def build(**d) -> APIRouter:
         # and therefore in front of the sentinel below, so the person's half stays exactly their
         # words (F47): this is machinery, and machinery never renders as somebody's speech.
         prompt = _target_line(subject, session, _target) + prompt
-        import json
-        prompt = (f"Current chat session: {json.dumps(session)}. Once the task is clear, call chat_name "
-                  "with this session and a concise 3–7 word task title describing the actual objective "
-                  "(for example, ‘Connect personal calendar’). Do not copy the raw opening message, "
-                  "include secrets, or narrate naming. A human-chosen title is protected.\n" + prompt)
+        # The naming ask names a TOOL, so it rides only a turn whose worker gets the toolbelt that
+        # serves it (`chat_name` on the assembled MCP — the `worker_toolbelt` capability). A turn
+        # without one is never told to call something it does not have.
+        if _toolbelt_configured():
+            import json
+            prompt = (f"Current chat session: {json.dumps(session)}. Once the task is clear, call chat_name "
+                      "with this session and a concise 3–7 word task title describing the actual objective "
+                      "(for example, ‘Connect personal calendar’). Do not copy the raw opening message, "
+                      "include secrets, or narrate naming. A human-chosen title is protected.\n" + prompt)
         # Mark the grounding→user boundary. Every branch returns `<grounding> + body.prompt`, so the
         # user's words are the exact suffix; the sentinel goes right before them.
         #
@@ -766,34 +796,39 @@ def build(**d) -> APIRouter:
         except Exception:  # noqa: BLE001 — index drop is the contract; the file delete is best-effort
             logger.exception("dropping continuity file failed subject=%s session=%s", subject, session)
         return {"ok": True}
-    @router.post("/api/chat/name")
-    def name_chat(request: Request, body: dict = Body(...)):
+    def _name(request: Request, session: str, title: str, *, human: bool) -> dict:
         subject = subject_of(request)
-        session = body.get('session')
-        title = body.get('title')
-        if not isinstance(session, str) or not isinstance(title, str):
-            raise HTTPException(422, 'A session and title are required')
         title = ' '.join(title.split())
         if not title or len(title) > 100:
             raise HTTPException(422, 'Use a title between 1 and 100 characters')
         if not any(r['session'] == session for r in sess.list(subject)):
             raise HTTPException(404, 'Chat not found')
-        changed = sess.name(subject, session, title, human=body.get('source') != 'agent')
+        changed = sess.name(subject, session, title, human=human)
         row = next(r for r in _labelled(subject, sess.list(subject)) if r['session'] == session)
         return {'changed': changed, 'label': row['label'], 'name_source': row.get('name_source')}
+
+    @router.post("/api/chat/name")
+    def name_chat(request: Request, body: ChatNameBody):
+        """Name a chat. A name from the person (`source: human`, the default) is protected from the
+        agent's renames; `source: agent` is the agent's suggestion and never overwrites one."""
+        return _name(request, body.session, body.title, human=body.source != 'agent')
+
+    @router.post("/api/chat/name/agent")
+    def name_chat_as_agent(request: Request, body: AgentChatNameBody):
+        """Name the current chat with a concise 3–7 word task title once its objective is clear.
+        Use the current chat session supplied in the turn context. Avoid raw prompts, secrets,
+        generic names and status words. Human-chosen names cannot be overwritten."""
+        return _name(request, body.session, body.title, human=False)
 
     @router.get("/api/chat/order")
     def read_chat_order(request: Request):
         return {'order': sess.rail_order(subject_of(request))}
 
     @router.put("/api/chat/order")
-    def save_chat_order(request: Request, body: dict = Body(...)):
-        order = body.get('order')
-        if (not isinstance(order, list) or len(order) > 5000
-                or any(not isinstance(x, str) or not x or len(x) > 300 for x in order)
-                or len(order) != len(set(order))):
+    def save_chat_order(request: Request, body: ChatOrderBody):
+        if len(body.order) != len(set(body.order)):
             raise HTTPException(422, 'Invalid chat order')
-        return {'order': sess.rail_order(subject_of(request), order)}
+        return {'order': sess.rail_order(subject_of(request), body.order)}
 
     @router.get("/api/sessions")
     def list_sessions(request: Request):

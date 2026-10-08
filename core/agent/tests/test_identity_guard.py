@@ -85,6 +85,13 @@ def test_the_gateway_signed_identity_is_believed_and_wins_over_plain_headers(cli
     assert client.get("/api/chat/order", headers=_signed("8")).json()["order"] == []
 
 
+def test_a_delegated_worker_without_a_person_is_refused_a_person_verb(client):
+    worker = _signed("7", delegation={"regime": "autonomous", "workspaces": ["ws_1"]})
+    r = client.post("/api/connections/request", headers=worker, json={"provider": "google_email"})
+    assert r.status_code == 403
+    assert r.json()["detail"]["reason"] == "human_session_required"
+
+
 def test_a_delegated_worker_is_held_to_its_workspace_ceiling(client):
     worker = _signed("7", delegation={"regime": "autonomous", "workspaces": ["ws_1"]})
     r = client.get("/api/workspace/tree", params={"slug": "ws_other"}, headers=worker)

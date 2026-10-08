@@ -4,17 +4,15 @@ Mirrors `test_assembled_surface.py` (flows): the manifest used here is THE FILE 
 `core/agent/mcp.tools.v1.json`, the same one agent-api serves at `/.well-known/mcp-tools.json`
 (`control_plane/routers/health.py`). If that file stops being assemblable, this fails.
 
-`AGENT_OPENAPI` below is a fixture, not agent-api's live spec — but every path/method/parameter in
-it is copied from a real `app.openapi()` dump of `control_plane.api.create_app(...)` (verified by
-hand: `GET /api/workspace/tree`, `/api/workspace/file`, `/api/workspace/shared`,
-`/api/workspace/purpose` publish exactly these query parameters, and `POST /api/workspace/new`
-publishes `requestBody` -> `$ref: WorkspaceNewBody`, one named field `name`, exactly as dumped).
+`AGENT_OPENAPI` is `core/agent/mcp.tools.v1.openapi.json`: the slice of agent-api's live
+`/openapi.json` the manifest's routes occupy, regenerated from `create_app().openapi()` and held
+true by `core/agent/tests/test_mcp_manifest_routes.py`. So the tools assembled here are bound
+against what agent-api really serves — every argument, type and description — not a hand copy.
 
 Three workspace WRITE routes (`PUT /api/workspace/file`, `POST /api/workspace/entity`,
 `POST /api/claims`) are still deliberately NOT tools: each takes a bare `body: dict = Body(...)`,
-which FastAPI publishes as `{"type": "object", "additionalProperties": true}` with no named
-`properties` — there is nothing there for `bind.py` to derive a schema from, unlike `WorkspaceNewBody`
-and flows' `FlowSubmission`, which are named pydantic models and DO bind (see `core/agent/mcp.tools.v1.json`'s own top-level `note`).
+which FastAPI publishes with no named `properties` — there is nothing there for `bind.py` to
+derive a schema from (see `core/agent/mcp.tools.v1.json`'s own top-level `note`).
 """
 from __future__ import annotations
 
@@ -29,38 +27,7 @@ from vexa_mcp.manifest import CONTRACT
 REPO = pathlib.Path(__file__).resolve().parents[5]
 AGENT_MANIFEST = json.loads((REPO / "core" / "agent" / "mcp.tools.v1.json").read_text())
 
-AGENT_OPENAPI = {"paths": {
-    "/api/workspace/tree": {"get": {"summary": "Ws Tree", "parameters": [
-        {"name": "hidden", "in": "query", "schema": {"type": "boolean"}},
-        {"name": "slug", "in": "query", "schema": {"type": "string"}}]}},
-    "/api/workspace/file": {"get": {"summary": "Ws File", "parameters": [
-        {"name": "path", "in": "query", "required": True, "schema": {"type": "string"}},
-        {"name": "slug", "in": "query", "schema": {"type": "string"}}]}},
-    "/api/workspace/shared": {"get": {"summary": "The \"workspaces shared with me\" listing",
-                                      "parameters": []}},
-    "/api/workspace/purpose": {"get": {"summary": "Read a workspace's PURPOSE one-liner",
-                                       "parameters": [
-        {"name": "slug", "in": "query", "schema": {"type": "string"}}]}},
-    "/api/workspace/new": {"post": {"summary": "Ws New", "requestBody": {"content": {
-        "application/json": {"schema": {"$ref": "#/components/schemas/WorkspaceNewBody"}}}}}},
-}}
-AGENT_OPENAPI["paths"].update({
-    "/api/workspace/import": {"post": {"description": "Import private or public repositories as independent workspaces; do not WebFetch for access.", "requestBody": {"content": {
-        "application/json": {"schema": {"type": "object", "required": ["repo"], "properties": {
-            "repo": {"type": "string"}, "ref": {"type": "string", "default": "main"}, "token": {"type": "string"}, "credential_workspace": {"type": "string"}}}}}}}},
-    "/api/workspace/import/{operation_id}/status": {"get": {"description": "Poll import until completed.", "parameters": [
-        {"name": "operation_id", "in": "path", "required": True, "schema": {"type": "string"}}]}}
-})
-AGENT_OPENAPI["components"] = {"schemas": {"WorkspaceNewBody": {
-    "type": "object", "title": "WorkspaceNewBody",
-    "properties": {"name": {"anyOf": [{"type": "string"}, {"type": "null"}], "title": "Name"}}}}}
-
-AGENT_OPENAPI["paths"].update({
-    "/api/connections/request": {"post": {"description": "Request trusted connection setup", "requestBody": {"content": {
-        "application/json": {"schema": {"type":"object", "required":["provider"], "properties": {
-            "provider":{"type":"string", "enum":["google_email","google_calendar"]}}}}}}}},
-    "/api/connections": {"get": {"description":"Read connection metadata", "parameters":[]}},
-})
+AGENT_OPENAPI = json.loads((REPO / "core" / "agent" / "mcp.tools.v1.openapi.json").read_text())
 BUILT_IN = 14
 
 
@@ -109,8 +76,9 @@ def test_an_assembled_agent_tool_carries_the_owning_route_s_description():
     """The manifest holds no description of its own — it is derived from the route's OpenAPI, so a
     tool and the route behind it cannot disagree."""
     app = _boot(AGENT_API_URL="http://agent")
-    tool = next(t for t in app.state.mcp.tools if t.name == "workspace_tree")
-    assert "Ws Tree" in (tool.description or "")
+    tool = next(t for t in app.state.mcp.tools if t.name == "gmail_search")
+    route = AGENT_OPENAPI["paths"]["/api/connections/gmail/search"]["post"]
+    assert route["description"].splitlines()[0] in (tool.description or "")
 
 
 def test_no_assembled_agent_tool_takes_a_credential_argument():
@@ -194,31 +162,70 @@ def test_agent_beside_flows_is_twentythree_plus_the_agent_tools():
 
 
 def test_connections_are_owned_only_by_agent_and_absent_without_it():
-    names={'connection_request','connections_status'}
+    names = {'connection_request', 'connections_status', 'gmail_search', 'calendar_events',
+             'secret_service_call', 'current_time', 'chat_name'}
     assert names <= {t['name'] for t in AGENT_MANIFEST['tools']}
     assert names.isdisjoint({t.name for t in _boot().state.mcp.tools})
-    app=_boot(AGENT_API_URL='http://agent')
-    assert all(t.domain=='agent' for t in app.state.assembly.tools if t.name in names)
+    app = _boot(AGENT_API_URL='http://agent')
+    assert all(t.domain == 'agent' for t in app.state.assembly.tools if t.name in names)
+
+
+def _assembled_with(upstream):
+    def discovery(request):
+        if str(request.url) == 'http://agent/.well-known/mcp-tools.json':
+            return httpx.Response(200, json=AGENT_MANIFEST)
+        if str(request.url) == 'http://agent/openapi.json':
+            return httpx.Response(200, json=AGENT_OPENAPI)
+        return httpx.Response(404)
+    return create_app('http://gateway.test', transport=httpx.MockTransport(upstream),
+                      assembly_env={'ADMIN_API_URL': 'http://identity', 'AGENT_API_URL': 'http://agent'},
+                      assembly_transport=httpx.MockTransport(discovery))
 
 
 def test_connection_call_goes_through_gateway_with_caller_identity():
     from fastapi.testclient import TestClient
-    seen=[]
+    seen = []
+
     def upstream(request):
         seen.append(request)
-        return httpx.Response(200,json={'status':'awaiting_user','connection_id':'a'*32})
-    def discovery(request):
-        if str(request.url)=='http://agent/.well-known/mcp-tools.json':
-            return httpx.Response(200,json=AGENT_MANIFEST)
-        if str(request.url)=='http://agent/openapi.json':
-            return httpx.Response(200,json=AGENT_OPENAPI)
-        return httpx.Response(404)
-    app=create_app('http://gateway.test',transport=httpx.MockTransport(upstream),
-        assembly_env={'ADMIN_API_URL':'http://identity','AGENT_API_URL':'http://agent'},
-        assembly_transport=httpx.MockTransport(discovery))
-    result=TestClient(app).post('/tools/connection_request',json={'provider':'google_email'},headers={'x-api-key':'fixture-user-key'})
-    assert result.status_code==200
-    assert str(seen[-1].url)=='http://gateway.test/agent/connections/request'
-    assert seen[-1].headers['x-api-key']=='fixture-user-key'
+        return httpx.Response(200, json={'status': 'awaiting_user', 'connection_id': 'a' * 32})
+    app = _assembled_with(upstream)
+    result = TestClient(app).post('/tools/connection_request', json={'provider': 'google_email'},
+                                  headers={'x-api-key': 'fixture-user-key'})
+    assert result.status_code == 200
+    assert str(seen[-1].url) == 'http://gateway.test/agent/connections/request'
+    assert seen[-1].headers['x-api-key'] == 'fixture-user-key'
     assert 'x-user-id' not in seen[-1].headers
-    assert json.loads(seen[-1].content)=={'provider':'google_email'}
+    assert json.loads(seen[-1].content) == {'provider': 'google_email'}
+
+
+def test_a_worker_s_delegation_bearer_travels_to_the_edge_like_any_other():
+    """ADR-0037 §2: a cloud worker is an ordinary client of the one assembled server — its bearer
+    reaches the gateway, which resolves it as the person it acts for."""
+    from fastapi.testclient import TestClient
+    seen = []
+
+    def upstream(request):
+        seen.append(request)
+        return httpx.Response(200, json={'utc_now': '2026-10-08T00:00:00+00:00'})
+    app = _assembled_with(upstream)
+    r = TestClient(app).get('/tools/current_time', headers={'Authorization': 'Bearer vxd_a.b.c'})
+    assert r.status_code == 200
+    assert str(seen[-1].url) == 'http://gateway.test/agent/time'
+    assert seen[-1].headers['x-api-key'] == 'vxd_a.b.c'
+
+
+def test_optional_object_and_list_arguments_are_published_with_their_types():
+    """`setup: dict | None` and `receipts: list[...]` publish as anyOf/$ref — the edge must keep them
+    an object and an array, not collapse them into strings an agent cannot fill."""
+    app = _boot(AGENT_API_URL='http://agent')
+    tools = {t.name: (t.inputSchema if hasattr(t, 'inputSchema') else t.input_schema) for t in app.state.mcp.tools}
+
+    def kind(tool, arg):
+        prop = tools[tool]['properties'][arg]
+        return prop.get('type') or [b.get('type') for b in prop.get('anyOf', []) if b.get('type') != 'null'][0]
+    assert kind('connection_request', 'setup') == 'object'
+    assert kind('onboarding_research', 'receipts') == 'array'
+    assert kind('onboarding_research', 'connection_ids') == 'array'
+    assert kind('secret_service_call', 'parameters') == 'object'
+    assert kind('gmail_search', 'limit') == 'integer'

@@ -541,6 +541,18 @@
    ]
   },
   {
+   "unique-id": "identity.v1",
+   "node-type": "contract",
+   "name": "identity.v1",
+   "description": "identity.v1 \u2014 sealed/published contract (gateway): the identity the edge resolved, HMAC-signed onto every forward and verified by agent-api and meeting-api",
+   "metadata": [
+    {
+     "path": "core/gateway/contracts/identity.v1",
+     "domain": "gateway"
+    }
+   ]
+  },
+  {
    "unique-id": "ws.v1",
    "node-type": "contract",
    "name": "ws.v1",
@@ -1402,23 +1414,6 @@
    }
   },
   {
-   "unique-id": "agent-mcp",
-   "node-type": "service",
-   "name": "agent-mcp",
-   "description": "Delegated worker MCP: scoped agent tool execution and connection setup metadata. Separate from the meeting MCP transport.",
-   "metadata": [
-    {
-     "path": "core/agent/mcp"
-    }
-   ],
-   "interfaces": [
-    {
-     "unique-id": "agent-mcp-http",
-     "type": "api"
-    }
-   ]
-  },
-  {
    "unique-id": "sdk-join.v1",
    "node-type": "contract",
    "name": "sdk-join.v1",
@@ -1475,8 +1470,7 @@
       "agent-worker",
       "out-stream",
       "unit-in",
-      "va-chat",
-      "agent-mcp"
+      "va-chat"
      ]
     }
    }
@@ -1491,6 +1485,7 @@
       "gateway",
       "api.v1",
       "logevent.v1",
+      "identity.v1",
       "ws.v1"
      ]
     }
@@ -2252,7 +2247,7 @@
      }
     }
    },
-   "description": "every MCP tool forwards the caller's X-API-Key to the public REST surface",
+   "description": "every MCP tool forwards the caller's own bearer (an API key or a worker's delegation token) to the public REST surface",
    "protocol": "HTTPS"
   },
   {
@@ -2284,7 +2279,7 @@
      }
     }
    },
-   "description": "proxy /agent/*",
+   "description": "proxy /agent/* with the resolved identity signed (identity.v1)",
    "protocol": "HTTPS"
   },
   {
@@ -2300,7 +2295,7 @@
      }
     }
    },
-   "description": "proxy /mcp \u2014 POST buffered, GET relayed unbuffered (SSE stream)",
+   "description": "proxy /mcp \u2014 the ONE assembled MCP server for every bearer, a person's key or a worker's delegation token; POST buffered, GET relayed unbuffered (SSE stream)",
    "protocol": "HTTPS"
   },
   {
@@ -2793,27 +2788,27 @@
    ]
   },
   {
-   "unique-id": "gw-agent-mcp",
+   "unique-id": "aw-gw",
    "relationship-type": {
     "connects": {
      "source": {
-      "node": "gateway"
+      "node": "agent-worker"
      },
      "destination": {
-      "node": "agent-mcp",
-      "interface": "agent-mcp-http"
+      "node": "gateway",
+      "interface": "gateway-rest"
      }
     }
    },
-   "description": "Delegated /mcp transport; bearer forwarded without asserted identity; agent domain validates scope",
-   "protocol": "HTTP"
+   "description": "the worker's toolbelt: /mcp and /agent/friction with its per-dispatch delegation token, which identity resolves as the person it acts for",
+   "protocol": "HTTPS"
   },
   {
-   "unique-id": "agent-mcp-api",
+   "unique-id": "mcp-aa-discover",
    "relationship-type": {
     "connects": {
      "source": {
-      "node": "agent-mcp"
+      "node": "mcp"
      },
      "destination": {
       "node": "agent-api",
@@ -2821,7 +2816,7 @@
      }
     }
    },
-   "description": "Authenticated subject scoped agent operations and connection setup requests",
+   "description": "boot assembly: GET /.well-known/mcp-tools.json + /openapi.json \u2014 the agent domain's tools join the one MCP surface",
    "protocol": "HTTP"
   }
  ],
