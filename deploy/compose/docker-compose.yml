@@ -1144,7 +1144,9 @@ services:
       - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
       - MICROSOFT_CLIENT_ID=${MICROSOFT_CLIENT_ID:-}
       - MICROSOFT_CLIENT_SECRET=${MICROSOFT_CLIENT_SECRET:-}
-      # Microsoft tenant: "common" = work/school + personal accounts; or a specific tenant id for org-only.
+      # Microsoft tenant: a tenant id (GUID) admits only that tenant's accounts; "common" admits any
+      # tenant, but only sign-ins whose ID token carries `xms_edov: true` (an optional claim to add in
+      # the app registration). Google sign-ins need a verified email.
       - MICROSOFT_TENANT_ID=${MICROSOFT_TENANT_ID:-common}
       # Sign-in link mail (clients/terminal/src/app/api/auth/mailer.ts) — the email sign-in sends a
       # magic link through this SMTP server. Unset, the mailer dials localhost:1025 inside THIS

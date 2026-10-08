@@ -165,9 +165,15 @@ function clickLinkFor(email: string) {
   return redeem(redeemReq(m.token));
 }
 
+/** An OAuth sign-in whose provider VERIFIED the address (providerIdentity.ts): Google's
+ *  `email_verified`, Microsoft's ID token with a verified-email claim. */
+const verifiedIdToken = (email: string) =>
+  `e30.${Buffer.from(JSON.stringify({ tid: "t-1", oid: "o-1", email, xms_edov: true })).toString("base64url")}.sig`;
 const oauth = (email: string, provider: "google" | "microsoft" = "google") =>
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (authOptions.callbacks!.signIn as any)({ user: { email, name: "N" }, account: { provider } });
+  (authOptions.callbacks!.signIn as any)(provider === "google"
+    ? { user: { email, name: "N" }, account: { provider }, profile: { email, email_verified: true, sub: "g-1" } }
+    : { user: { email, name: "N" }, account: { provider, id_token: verifiedIdToken(email) } });
 
 describe("an unknown address is refused at every door, before anything exists", () => {
   it("the emailed link: no mail is sent", async () => {

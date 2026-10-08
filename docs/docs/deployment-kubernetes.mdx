@@ -452,9 +452,10 @@ terminal:                                 # the same `terminal:` key as above �
     - name: MICROSOFT_CLIENT_SECRET
       valueFrom:
         secretKeyRef: { name: vexa-oauth, key: microsoft-client-secret }
-    # "common" = work/school + personal; or a single org tenant id. Unset ⇒ common.
+    # Your tenant id (a GUID) admits only that tenant's accounts. "common" (or unset) admits any
+    # tenant, and then each sign-in must carry the xms_edov optional ID-token claim, or it is refused.
     - name: MICROSOFT_TENANT_ID
-      value: "common"
+      value: "<directory (tenant) id>"
     # Google is the same shape, minus the tenant:
     - name: GOOGLE_CLIENT_ID
       value: "<client id>"
@@ -465,6 +466,11 @@ terminal:                                 # the same `terminal:` key as above �
 
 Register the redirect URI in the provider console as `<publicUrl>/api/auth/callback/microsoft`
 (or `.../google`) — so `terminal.publicUrl` above is a prerequisite, not an optional extra.
+
+The terminal uses a provider's email only when the provider verified it: Google must report
+`email_verified`, and a Microsoft sign-in must come from the pinned tenant, or — with `common` — carry
+the `xms_edov` claim (Entra admin center → App registrations → your app → Token configuration → Add
+optional claim → ID → `xms_edov`). Anything else is refused with a sentence on the sign-in card.
 
 ### Who may sign in
 

@@ -14,7 +14,8 @@ import GoogleProvider from "next-auth/providers/google";
 import AzureADProvider from "next-auth/providers/azure-ad";
 import { cookies } from "next/headers";
 import { AUTH_COOKIE, USER_INFO_COOKIE, findOrCreateUserToken, mintFirstVisitScaffold } from "../adminApi";
-import { SIGNIN_ERROR_NOT_ALLOWED, SIGNIN_ERROR_UNAVAILABLE } from "../../../signinRefusal";
+import { SIGNIN_ERROR_NOT_ALLOWED, SIGNIN_ERROR_UNAVAILABLE, SIGNIN_ERROR_UNVERIFIED } from "../../../signinRefusal";
+import { verifiedProviderIdentity } from "../providerIdentity";
 
 const isGoogleEnabled = () => !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
 const isMicrosoftEnabled = () =>
@@ -83,9 +84,22 @@ export const authOptions: AuthOptions = {
   callbacks: {
     /** The load-bearing step: turn a verified OAuth identity into the terminal's `vexa-token` +
      *  `vexa-user-info` cookies, reusing the admin-api find-or-create+mint flow. Deny on any failure. */
-    async signIn({ user, account }) {
+    async signIn({ user, account, profile }) {
       const provider = account?.provider;
       if ((provider !== "google" && provider !== "microsoft") || !user.email) return false;
+
+      // THE ADDRESS IS ONLY USABLE WHEN THE PROVIDER VERIFIED IT (../providerIdentity.ts): accounts
+      // here are keyed by email, so Google must say `email_verified`, and Microsoft must be this
+      // instance's pinned tenant or carry `xms_edov`. Decided before admin-api is asked anything.
+      const identity = verifiedProviderIdentity(provider, {
+        account: account as unknown as Record<string, unknown>,
+        profile: profile as unknown as Record<string, unknown> | undefined,
+      });
+      if (!identity.ok) {
+        // eslint-disable-next-line no-console
+        console.info(`[terminal-auth] ${provider} sign-in refused: ${identity.why}`);
+        return `/?error=${SIGNIN_ERROR_UNVERIFIED}`;
+      }
 
       // WHO MAY SIGN IN (Vexa-ai/vexa#1783) is asked inside findOrCreateUserToken, BEFORE it can
       // create an account — the same question the emailed link asks, about the address the provider
@@ -96,7 +110,7 @@ export const authOptions: AuthOptions = {
       // which cannot tell "this address may not sign in" from a cancelled consent screen; the codes
       // below let the sign-in card say the one sentence every door uses (app/signinRefusal.ts) —
       // naming no list and no domain, so it reveals nothing the person could not learn by trying.
-      const result = await findOrCreateUserToken(user.email.toLowerCase());
+      const result = await findOrCreateUserToken(identity.email);
       if (!result.ok) {
         if (result.refused === "not-allowed") {
           // eslint-disable-next-line no-console

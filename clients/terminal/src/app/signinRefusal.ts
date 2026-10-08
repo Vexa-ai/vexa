@@ -19,16 +19,23 @@ export const SIGNIN_NOT_ALLOWED = "This email address is not allowed to sign in 
 /** Admission could not be decided (admin-api unreachable): refused, because the door fails closed. */
 export const SIGNIN_UNAVAILABLE = "Sign-in is unavailable right now. Try again in a minute.";
 
+/** The provider did not vouch for the address: Google has not verified it, or the Microsoft account is
+ *  outside this instance's tenant or carries no verified-email claim. */
+export const SIGNIN_UNVERIFIED =
+  "That account's email address isn't verified by its provider, so it can't sign in here. Use the emailed sign-in link instead.";
+
 /** The `?error=` codes the OAuth door redirects to. NextAuth owns `AccessDenied` and friends; these
  *  two are ours, so the card can say the precise sentence instead of a provider-shaped shrug. */
 export const SIGNIN_ERROR_NOT_ALLOWED = "SigninNotAllowed";
 export const SIGNIN_ERROR_UNAVAILABLE = "SigninUnavailable";
+export const SIGNIN_ERROR_UNVERIFIED = "SigninUnverified";
 
 /** The sentence for an `?error=` code on the sign-in card, or null when there is nothing to say. */
 export function signinErrorMessage(code: string | null | undefined): string | null {
   if (!code) return null;
   if (code === SIGNIN_ERROR_NOT_ALLOWED) return SIGNIN_NOT_ALLOWED;
   if (code === SIGNIN_ERROR_UNAVAILABLE) return SIGNIN_UNAVAILABLE;
+  if (code === SIGNIN_ERROR_UNVERIFIED) return SIGNIN_UNVERIFIED;
   // Any other NextAuth error (a cancelled consent screen, a provider hiccup) — the sign-in did not
   // happen, and the card says so without guessing why.
   return "That sign-in did not complete. Try again.";
