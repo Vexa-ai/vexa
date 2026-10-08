@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { getAuthCookieName } from "@/lib/auth-cookies";
+import { getAuthenticatedUserId } from "@/lib/auth-utils";
 
 const getAdminConfig = () => {
   const VEXA_ADMIN_API_URL = process.env.VEXA_ADMIN_API_URL || "";
@@ -9,11 +10,12 @@ const getAdminConfig = () => {
 };
 
 /**
- * GET /api/webhooks/deliveries?userId=N&status=...&time_range=...
+ * GET /api/webhooks/deliveries?status=...&time_range=...
  *
  * Combines two sources:
  * 1. meeting.data.webhook_delivery — real deliveries from the gateway on meeting completion
- * 2. user.data.webhook_deliveries  — test deliveries sent from the dashboard
+ * 2. user.data.webhook_deliveries  — test deliveries sent from the dashboard,
+ *    read for the signed-in user only (a `userId` query parameter is ignored)
  */
 export async function GET(request: NextRequest) {
   const { VEXA_ADMIN_API_URL, VEXA_ADMIN_API_KEY } = getAdminConfig();
@@ -28,7 +30,10 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
   }
 
-  const userId = request.nextUrl.searchParams.get("userId");
+  // Resolve the user from the session, never from the query string.
+  const authenticatedUserId = await getAuthenticatedUserId();
+  const userId =
+    authenticatedUserId && /^\d+$/.test(authenticatedUserId) ? authenticatedUserId : null;
 
   try {
     const allDeliveries: Array<Record<string, unknown>> = [];
@@ -96,7 +101,7 @@ export async function GET(request: NextRequest) {
 
     // Source 2: Test webhook deliveries from user data
     if (VEXA_ADMIN_API_KEY && userId) {
-      const userRes = await fetch(`${VEXA_ADMIN_API_URL}/admin/users/${userId}`, {
+      const userRes = await fetch(`${VEXA_ADMIN_API_URL}/admin/users/${encodeURIComponent(userId)}`, {
         headers: { "X-Admin-API-Key": VEXA_ADMIN_API_KEY },
         cache: "no-store",
       });

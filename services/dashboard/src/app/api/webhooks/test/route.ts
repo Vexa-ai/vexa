@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { getAuthenticatedUserId } from "@/lib/auth-utils";
+import {
+  WebhookDestinationError,
+  postToWebhookDestination,
+  resolveWebhookDestination,
+  type WebhookDestination,
+} from "@/lib/webhook-destination";
 
 const getAdminConfig = () => {
   const VEXA_ADMIN_API_URL = process.env.VEXA_ADMIN_API_URL || "";
@@ -65,6 +71,20 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, error: "No webhook URL provided" }, { status: 400 });
     }
 
+    // Same destination rules as real deliveries: public http(s) targets only.
+    let destination: WebhookDestination;
+    try {
+      destination = await resolveWebhookDestination(url);
+    } catch (destinationError) {
+      if (destinationError instanceof WebhookDestinationError) {
+        return NextResponse.json(
+          { success: false, error: destinationError.message },
+          { status: 400 }
+        );
+      }
+      throw destinationError;
+    }
+
     // Build a test payload using the standard envelope format
     const eventId = `evt_${crypto.randomUUID().replace(/-/g, "")}`;
     const testPayload = {
@@ -117,16 +137,15 @@ export async function POST(request: NextRequest) {
       headers["X-Webhook-Timestamp"] = timestamp;
     }
 
-    let webhookRes: Response;
+    let webhookRes: { status: number; ok: boolean };
     let timeMs: number;
     let errorMsg = "";
 
     try {
-      webhookRes = await fetch(url, {
-        method: "POST",
+      webhookRes = await postToWebhookDestination(destination, {
         headers,
         body: payloadStr,
-        signal: AbortSignal.timeout(10000),
+        timeoutMs: 10000,
       });
       timeMs = Date.now() - startTime;
     } catch (fetchError) {
