@@ -3962,20 +3962,35 @@ GATEWAY = os.environ.get("VEXA_GATEWAY_URL", "http://localhost:18456")
 
 
 def _meeting_ref(meeting_url: str):
-    """(platform, native_meeting_id) from a pasted link, or (None, why-it-failed)."""
+    """Read meeting identity from an HTTPS provider URL; preserve the original URL for joining."""
     import re as _re
-    u = (meeting_url or "").strip()
-    m = _re.search(r"meet\.google\.com/([a-z]{3}-[a-z]{4}-[a-z]{3})", u)
-    if m:
-        return "google_meet", m.group(1)
-    m = _re.search(r"teams\.live\.com/meet/(\d+)", u)
-    if m:
-        return "teams", m.group(1)
-    m = _re.search(r"zoom\.us/j/(\d+)", u)
-    if m:
-        return "zoom", m.group(1)
-    return None, ("could not read that link — send the full meeting URL "
-                  "(meet.google.com/xxx-xxxx-xxx, teams.live.com/meet/<id>, zoom.us/j/<id>)")
+    from urllib.parse import urlsplit
+    import hashlib
+    try:
+        u = urlsplit((meeting_url or "").strip())
+        host = (u.hostname or "").lower()
+        if u.scheme != "https" or u.username or u.password or u.port not in (None, 443):
+            raise ValueError()
+        def is_host(base):
+            return host == base or host.endswith("." + base)
+        if host == "meet.google.com":
+            m = _re.fullmatch(r"/([a-z]{3}-[a-z]{4}-[a-z]{3})/?", u.path)
+            if m:
+                return "google_meet", m.group(1)
+        if any(is_host(base) for base in ("teams.live.com", "teams.microsoft.com", "teams.microsoft.us", "teams.cloud.microsoft")):
+            path = urlsplit(u.fragment).path if u.path.rstrip("/") in ("", "/v2") and u.fragment.startswith("/meet/") else u.path
+            m = _re.fullmatch(r"/meet/(\d{10,16})/?", path)
+            if m:
+                return "teams", m.group(1)
+            if u.path.startswith("/l/meetup-join/") and len(u.path) > len("/l/meetup-join/"):
+                return "teams", hashlib.sha256(meeting_url.strip().encode()).hexdigest()[:16]
+        if is_host("zoom.us") or is_host("zoomgov.com"):
+            m = _re.fullmatch(r"/j/(\d+)/?", u.path)
+            if m:
+                return "zoom", m.group(1)
+    except ValueError:
+        pass
+    return None, "could not read that link — send the original HTTPS Google Meet, Microsoft Teams or Zoom meeting URL"
 
 
 # meeting-api's own non-terminal set (collector/app.py `_RUNNING_STATUSES`, canonical MeetingStatus

@@ -154,3 +154,16 @@ def test_bot_config_still_applies_normally(monkeypatch):
     })
     out = json.loads(tool("bot_config")(meeting_url=MEETING_URL, language="es"))
     assert out == {"applied": True, "status": 200}, out
+
+
+def test_enterprise_teams_send_preserves_original_url_and_passcode(monkeypatch):
+    as_user(monkeypatch, "7")
+    url = "https://teams.microsoft.com/meet/1234567890123456?p=fixture-passcode"
+    calls = _script_gw_http(monkeypatch, {("POST", "/bots"): (201, {"id": 10})})
+    out = json.loads(tool("bot_send")(meeting_url=url))
+    assert out["sent"] is True
+    posts = [body for method, path, body in calls if (method, path) == ("POST", "/bots")]
+    assert len(posts) == 1
+    assert posts[0]["meeting_url"] == url
+    assert posts[0]["native_meeting_id"] == "1234567890123456"
+    assert posts[0]["platform"] == "teams"

@@ -1027,7 +1027,8 @@ def _spawned_invocation(runtime) -> dict:
     return json.loads(runtime.specs[0]["env"]["BOT_CONFIG"])
 
 
-def test_teams_short_id_plus_passcode_builds_the_passcode_bearing_join_url(monkeypatch):
+@pytest.mark.parametrize("short_id", [TEAMS_SHORT_ID, "1234567890123456"])
+def test_teams_short_id_plus_passcode_builds_the_passcode_bearing_join_url(monkeypatch, short_id):
     """#892 A1 — a bare Teams meeting id + its separate `passcode` reaches the bot as the URL
     Teams itself would hand out: `…/meet/<id>?p=<passcode>`.
 
@@ -1039,11 +1040,11 @@ def test_teams_short_id_plus_passcode_builds_the_passcode_bearing_join_url(monke
     monkeypatch.setenv("ADMIN_TOKEN", SECRET)
     runtime = FakeRuntimeClient()
     r = _client(InMemoryMeetingRepo(), runtime).post("/bots", headers=HEADERS, json={
-        "platform": "teams", "native_meeting_id": TEAMS_SHORT_ID, "passcode": TEAMS_PASSCODE,
+        "platform": "teams", "native_meeting_id": short_id, "passcode": TEAMS_PASSCODE,
     })
     assert r.status_code == 201, r.text
     inv = _spawned_invocation(runtime)
-    assert inv["meetingUrl"] == f"https://teams.microsoft.com/meet/{TEAMS_SHORT_ID}?p={TEAMS_PASSCODE}", (
+    assert inv["meetingUrl"] == f"https://teams.microsoft.com/meet/{short_id}?p={TEAMS_PASSCODE}", (
         f"the bot was handed {inv['meetingUrl']!r}"
     )
     # The passcode still rides the invocation's own field too — zoom/jitsi read it from there, and

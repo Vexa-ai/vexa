@@ -280,7 +280,7 @@ class RequestMeetingBot(BaseModel):
         description=(
             "The meeting identifier.\n"
             "- Google Meet: meeting code like 'abc-defg-hij'\n"
-            "- Microsoft Teams: numeric meeting ID only (10-15 digits) from teams.live.com/meet/<id>\n"
+            "- Microsoft Teams: numeric meeting ID only (10-16 digits) from teams.microsoft.com/meet/<id> or teams.live.com/meet/<id>\n"
             "- Zoom: ALWAYS pass meeting_url (the full join link, host included) — meeting-api needs the\n"
             "  host to build the join; a bare numeric id is rejected (422)\n"
             "- Jitsi: ALWAYS pass meeting_url (the full room URL) — a jitsi room is deployment-scoped,\n"

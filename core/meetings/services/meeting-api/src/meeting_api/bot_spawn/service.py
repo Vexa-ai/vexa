@@ -126,18 +126,18 @@ _URL_TEMPLATES = {
 #   * THREAD id — ``19:meeting_…@thread.v2``, the id inside a classic ``/l/meetup-join/`` deep
 #     link. It joins at ``/l/meetup-join/<thread>`` and carries no separate passcode: the deep
 #     link's own query string is the credential, so a caller holding this id holds the whole URL.
-#   * SHORT id — the 10–15 digit meeting id Teams prints next to "Meeting ID / Passcode" and
+#   * SHORT id — the 10–16 digit meeting id Teams prints next to "Meeting ID / Passcode" and
 #     hands out as ``…/meet/<id>?p=<passcode>``. It joins at ``/meet/<id>``, and the passcode is
 #     a SEPARATE value by construction — this is the ONLY shape for which a bare id plus its own
 #     ``passcode`` field is a complete address.
 #
 # Only the SHORT shape is matched: it is the one that needs a different path from the one every
-# Teams id used to get, and its 10–15 digit range mirrors the SSOT parsers that produce these ids
+# Teams id used to get, and its 10–16 digit range mirrors the SSOT parsers that produce these ids
 # (``collector.meeting_link``, the MCP ``link_parser``). Everything else — thread ids included —
 # stays on ``/l/meetup-join/``. Interpolating a SHORT id into that path builds
 # ``/l/meetup-join/397421056486982``: the wrong path for that id, and with nowhere for the
 # passcode to go (#892).
-_TEAMS_SHORT_ID = re.compile(r"^\d{10,15}$")
+_TEAMS_SHORT_ID = re.compile(r"^\d{10,16}$")
 
 #: Teams web-client host SUFFIXES a constructed URL may be built on — the same set the join
 #: layer recognizes as "this page IS Teams" (``join/src/msteams/auth-redirect.ts``
@@ -177,7 +177,7 @@ def _teams_url(native_meeting_id: str, teams_base_host: Optional[str]) -> str:
 
     An id matching neither shape keeps the classic ``/l/meetup-join/`` path: that is what every
     such id resolved to before this rule existed, and shape does not predict joinability here
-    (a bare-numeric id outside the 10–15 range has transcribed real meetings), so an unrecognized
+    (a bare-numeric id outside the 10–16 range has transcribed real meetings), so an unrecognized
     id is left on its established path rather than rerouted on a guess.
     """
     host = resolve_teams_base_host(teams_base_host) or _TEAMS_DEFAULT_HOST
