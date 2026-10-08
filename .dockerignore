@@ -22,3 +22,13 @@ node_modules/
 clients/
 sdks/
 docs/
+# Operator-supplied native meeting SDK (ADR-0039): its archive, headers, libraries and the compiled
+# wrapper are external files and never enter an image, even when a local checkout holds them.
+# Mirrors core/meetings/services/bot/runtime/native-meeting/.gitignore.
+core/meetings/services/bot/runtime/native-meeting/**/zoom_meeting_sdk
+core/meetings/services/bot/runtime/native-meeting/**/sdk
+core/meetings/services/bot/runtime/native-meeting/**/build
+core/meetings/services/bot/runtime/native-meeting/**/*.node
+core/meetings/services/bot/runtime/native-meeting/**/*.so
+core/meetings/services/bot/runtime/native-meeting/**/*.so.*
+core/meetings/services/bot/runtime/native-meeting/**/*.tar.*
