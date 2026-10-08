@@ -37,12 +37,14 @@ lives in the cookbook layer *above* both domains, never inside this one. See
 | produces | workspace | `workspaces/contracts/workspace.v1` (git repo) | typed `kg/entities/*` with `EntityFrontmatter` |
 | publishes | gateway / surfaces | `gateway/contracts/ws.v1` (redis `unit:<id>:out`, mode `card`) | turn events + `proactive-card.v1` outputs |
 | calls | scheduler | `schedule.v1` (a `routine.v1` `kind:scheduled` compiles to a cron job) | a `unit.v1` Invocation as the cron body |
+| calls | credential broker (this domain's own service) | `contracts/credential-broker.v1`, roles `agent` and `git` | Connections requests and results; never a stored credential |
 
 ## Contracts
 **Owns:** [`unit.v1`](contracts/unit.v1) · [`routine.v1`](contracts/routine.v1) ·
 [`event.v1`](contracts/event.v1) ·
 [`tool.v1`](contracts/tool.v1) · [`task.v1`](contracts/task.v1) ·
-[`invoke.v1`](contracts/invoke.v1) · [`proactive-card.v1`](contracts/proactive-card.v1).
+[`invoke.v1`](contracts/invoke.v1) · [`proactive-card.v1`](contracts/proactive-card.v1) ·
+[`credential-broker.v1`](contracts/credential-broker.v1).
 Only `invoke.v1` is pinned in `contracts.seal.json`; the rest are
 **UNSEALED** (sealed per-MVP). **Consumes:** `meetings/contracts/transcript.v1`,
 [`workspaces/contracts/workspace.v1`](../workspaces/contracts/workspace.v1) (moved out of this
