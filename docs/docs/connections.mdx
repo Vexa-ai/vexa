@@ -1,0 +1,130 @@
+---
+title: "Connections"
+description: "Set up Connections on a self-hosted install: the credential broker, its keys, Google consent, and the optional OpenBao backend."
+---
+
+Connections lets a person connect Gmail, Google Calendar or any HTTPS API to their agent. The person
+consents, or pastes the key, in the terminal's **Connections** panel; from then on the agent reads
+mail and events, saves Gmail drafts, or calls the service — and never receives the credential.
+
+The credentials live in the **credential broker**, a small service that runs beside agent-api. It is
+part of a standard Docker Compose or Helm install whenever agent-api is. [Vexa Lite](/deployment-lite)
+does not include Connections: Lite runs agent workers inside its one container, so nothing could
+keep the person's key away from them.
+
+## What runs
+
+| Piece | Compose | Helm |
+|---|---|---|
+| The broker | `credential-broker` | `<release>-credential-broker` Deployment (one replica) |
+| Its state | the `connections-state` volume | the `<release>-credential-broker-state` PVC |
+| Keys | generated once by `connections-keys` into four volumes | the `<release>-credential-broker-keys` Secret, generated once |
+| Who can reach it | agent-api and the terminal, on the internal `connections` network | agent-api and terminal Pods, by NetworkPolicy |
+
+Each service holds only its own key. agent-api signs as the **agent**: it can request a connection
+and use one. The terminal signs as the **human**, for the person signed in: only it can consent,
+save a credential, disconnect or delete. Agent workers hold no key and cannot reach the broker.
+
+Credentials are encrypted with AES-256-GCM. The encryption key lives apart from the state volume,
+so a copy or backup of the volume alone is unreadable. Keep a copy of the keys: **if the store key
+is lost, every stored credential is lost** and people reconnect.
+
+## Compose
+
+Connections works with no extra configuration: `docker compose up -d` starts the broker and the key
+generator with the rest of the stack. Two settings in `.env` decide what people can connect:
+
+```bash
+# The address people use for the terminal. Browser saves must come from this origin.
+# Defaults to NEXTAUTH_URL, which you set when you publish the terminal.
+VEXA_CONNECTIONS_PUBLIC_ORIGIN=https://vexa.example.com
+
+# Gmail and Google Calendar (optional). Usually the client the terminal signs in with.
+VEXA_CONNECTIONS_GOOGLE_CLIENT_ID=...apps.googleusercontent.com
+VEXA_CONNECTIONS_GOOGLE_CLIENT_SECRET=...
+VEXA_CONNECTIONS_PRODUCT_REDIRECT=https://vexa.example.com/api/auth/callback/google
+```
+
+Without the Google settings, Gmail and Calendar answer "not configured" and custom-service
+connections still work. To run without Connections at all, set `VEXA_CONNECTIONS_BROKER_URL=` (empty).
+
+## Helm
+
+The chart deploys the broker with agent-api. Set the terminal's public URL and, for Gmail and
+Calendar, the Google client:
+
+```yaml
+terminal:
+  publicUrl: https://vexa.example.com     # also the default consent callback
+credentialBroker:
+  google:
+    clientId: "...apps.googleusercontent.com"
+    clientSecret: "..."                    # stored in the keys Secret
+```
+
+The keys Secret is generated on first install and kept across upgrades and uninstalls. If you deploy
+with `helm template` (GitOps), the chart cannot look up an existing Secret and would generate new
+keys on every render — create the Secret yourself instead:
+
+```bash
+kubectl create secret generic vexa-connections-keys \
+  --from-literal=agent.key="$(openssl rand -hex 32)" \
+  --from-literal=human.key="$(openssl rand -hex 32)" \
+  --from-literal=git.key="$(openssl rand -hex 32)" \
+  --from-literal=store.key="$(openssl rand -hex 32)"
+```
+
+and set `credentialBroker.existingSecret: vexa-connections-keys`. Add `google-client-secret` to the
+same Secret if you use Google. The NetworkPolicy needs a network plugin that enforces policies.
+
+## Google consent
+
+Register `https://<your terminal>/api/auth/callback/google` as an authorized redirect URI on the
+Google OAuth client. It is the same callback the terminal's Google sign-in uses; consent requests
+carry their own state, and the terminal routes them to the broker. Enable the Gmail API and the
+Google Calendar API on the client's project. The broker asks for read-only Calendar access, and for
+Gmail read plus draft creation; Vexa never sends mail.
+
+## Custom services
+
+A person, or their agent, can prepare a custom connection: an HTTPS endpoint and how the key is
+presented, or a full OAuth application. Only the person can save the secret, in the panel. The panel
+shows the host the secret will be sent to, flags a host that is not a known provider or the
+service's own documentation site, and on the first save to a new host asks the person to type it.
+The broker sends only to public addresses, refuses redirects, and redacts the key from responses.
+
+## Using your own OpenBao
+
+To keep credentials in an OpenBao or Vault you already run, set the backend to `openbao`:
+
+| | Compose (`.env`) | Helm |
+|---|---|---|
+| Backend | `VEXA_CONNECTIONS_STORE=openbao` | `credentialBroker.store.backend: openbao` |
+| Address | `VEXA_CONNECTIONS_OPENBAO_ADDR=https://openbao.example:8200` | `credentialBroker.openbao.address` |
+| Token | `VEXA_CONNECTIONS_OPENBAO_TOKEN_FILE` (mount the file into the broker) | `credentialBroker.openbao.tokenSecret` (a Secret with key `token`) |
+| Mount | `VEXA_CONNECTIONS_OPENBAO_MOUNT=connections` | `credentialBroker.openbao.mount` |
+
+The mount is KV version 2, and the token's policy needs `create`, `update` and `read` on
+`<mount>/data/*`. The broker reads the token file on every request, so a renewed token takes effect
+without a restart. Vexa does not ship OpenBao; it is MPL-2.0 software you run yourself.
+
+## Git credentials in the broker (optional)
+
+agent-api keeps saved Git tokens and deploy keys in its own encrypted store (`VEXA_SECRETS_KEY`).
+To keep them in the broker instead, set `VEXA_GIT_STORE_BROKER_URL=http://credential-broker:8100`
+(compose) or `credentialBroker.gitStore: true` (Helm). Existing credentials move on first use. With
+it on, a broker outage stops Git operations instead of falling back to disk.
+
+## When something fails
+
+Every broker failure is logged as one JSON line with `"event":"broker_fault"`, a `source` and a
+`kind` — never a key or a value:
+
+| `kind` | Where | Meaning |
+|---|---|---|
+| `config` | agent-api, terminal | the broker URL or this service's key is not set or not readable |
+| `transport` | agent-api, terminal | the broker did not answer |
+| `http_401` | agent-api, terminal | the broker refused the signature: the two sides hold different keys, or clocks differ by more than 30 seconds |
+| `http_503` | agent-api, terminal | the broker could not reach its store; see the broker's own `store` fault |
+| `expired`, `signature`, `replay` | broker (`assertion_refused`) | a request was refused before any route ran |
+| `transport`, `integrity`, `config` | broker (`source: store`) | the store is unreachable, a stored version did not decrypt (wrong store key), or the backend is misconfigured |

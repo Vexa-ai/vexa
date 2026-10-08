@@ -114,6 +114,7 @@
           "deployment-lite",
           "deployment-kubernetes",
           "configuration",
+          "connections",
           "upgrade-from-minio",
           "authenticated-bots",
           "model-credentials-licensing",
