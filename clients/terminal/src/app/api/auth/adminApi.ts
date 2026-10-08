@@ -7,6 +7,7 @@
  */
 
 import { cookies } from "next/headers";
+import { type AdmittedReason, type ClaimReason, isAdmittedReason, isClaimReason } from "./signinWire";
 
 export const AUTH_COOKIE = process.env.VEXA_AUTH_COOKIE_NAME || "vexa-token";
 export const USER_INFO_COOKIE = process.env.VEXA_USER_INFO_COOKIE_NAME || "vexa-user-info";
@@ -314,16 +315,12 @@ export async function mintFirstVisitScaffold(
 //    turns on this instance's model credentials and bot launches. A self-hosted instance must not
 //    be open to anyone with an email address by default.
 
-/** The admission reasons admin-api answers with. */
-type AdmittedWhy = "admin" | "admin-email" | "existing-user" | "allow-list" | "claim-code";
-
-/** The verdict on one address. `why` is a reason for logs and tests, never shown to the person. */
+/** The verdict on one address. `why` is a reason for logs and tests, never shown to the person.
+ *  The reasons are signin.v1's (core/identity/contracts/signin.v1), generated into `signinWire.ts`
+ *  from the same schema admin-api's are, so this process knows every reason admin-api can give. */
 export type SigninAdmission =
-  | { admitted: true; why: AdmittedWhy }
+  | { admitted: true; why: AdmittedReason }
   | { admitted: false; why: "not-allowed" | "unavailable"; detail?: string };
-
-const ADMITTED_REASONS: ReadonlySet<string> = new Set<AdmittedWhy>(
-  ["admin", "admin-email", "existing-user", "allow-list", "claim-code"]);
 
 /** The claim code this request carries, if the visitor entered one on the claim screen. Read from
  *  the request's cookies; outside a request (a test, a script) there is none. */
@@ -362,16 +359,15 @@ export async function signinAdmission(email: string): Promise<SigninAdmission> {
   if (!res.ok || !res.data) {
     return { admitted: false, why: "unavailable", detail: res.error || `admin-api returned ${res.status}` };
   }
-  const why = typeof res.data.why === "string" ? res.data.why : "";
-  if (res.data.admitted !== true || !ADMITTED_REASONS.has(why)) return { admitted: false, why: "not-allowed" };
-  return { admitted: true, why: why as AdmittedWhy };
+  const why = res.data.why;
+  if (res.data.admitted !== true || !isAdmittedReason(why)) return { admitted: false, why: "not-allowed" };
+  return { admitted: true, why };
 }
 
-/** Why admin-api did or did not hand over the role: `claimed`, `admin-exists` (somebody holds it,
- *  or the deployment names the admins), `bad-code` (no claim code, a wrong one, or a spent one),
- *  `not-allowed` (this address may not be the first admin). */
-export type ClaimWhy = "claimed" | "admin-exists" | "bad-code" | "not-allowed";
-const CLAIM_REFUSALS: ReadonlySet<string> = new Set<ClaimWhy>(["admin-exists", "bad-code", "not-allowed"]);
+/** Why admin-api did or did not hand over the role (signin.v1 `ClaimReason`): `claimed`,
+ *  `admin-exists` (somebody holds it, or the deployment names the admins), `bad-code` (no claim code,
+ *  a wrong one, or a spent one), `not-allowed` (this address may not be the first admin). */
+export type ClaimWhy = ClaimReason;
 
 /** Is `code` the live admin claim code? `null` when admin-api could not answer. */
 export async function checkClaimCode(code: string): Promise<boolean | null> {
@@ -413,8 +409,9 @@ export async function claimAdminRole(userId: string | number, claimCode?: string
   });
   if (!res.ok) return { ok: false, status: res.status || 503, error: res.error || "admin-api refused the claim" };
   const claimed = res.data?.claimed === true;
-  const why = String(res.data?.why ?? "");
-  return { ok: true, claimed, why: claimed ? "claimed" : CLAIM_REFUSALS.has(why) ? (why as ClaimWhy) : "admin-exists" };
+  const why = res.data?.why;
+  // A refusal whose reason is not signin.v1's is still a refusal; it reads as the role being taken.
+  return { ok: true, claimed, why: claimed ? "claimed" : isClaimReason(why) && why !== "claimed" ? why : "admin-exists" };
 }
 
 /** Claim the admin role for this user IF admin-api says this sign-in may — called on every

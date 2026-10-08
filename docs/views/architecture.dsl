@@ -69,6 +69,7 @@ system gateway-system  # the one public edge (api.v1, ws.v1)
 system identity  # access + audit; owns the durable DB
   service admin-api
   contract identity.v1
+  contract signin.v1
   data-asset identity-db [writers: admin-api]
 
 system runtime-system  # workload spawn (bot/agent containers)
@@ -145,8 +146,10 @@ edges:
   gateway -read-> va-chat  # WS fan-out
   admin-api -write-> identity-db
   admin-api -write-> postgres
-  terminal -req-> gateway  # all REST via gateway
+  terminal -req-> gateway  # every REST call a browser makes, via gateway (the terminal's server also calls admin-api and agent-api directly: term-admin-internal, term-agent-internal)
   terminal -req-> gateway  # live WS via gateway
+  terminal -req-> admin-api  # the terminal's server, with the internal secret: sign-in admission, the admin claim, the claim-code check and instance state (signin.v1), plus /internal/validate and the settings it edits for the admin
+  terminal -req-> agent-api  # the terminal's server, with the internal secret: POST /internal/scaffolds (a sign-in's arrival) and GET /internal/has-history
   dashboard -req-> gateway  # dashboard → gateway REST (hosted-compat aliases; the hosted-proven wiring)
   dashboard -req-> gateway  # dashboard → gateway /ws (live transcript view)
   slim -req-> gateway  # Python client; REST via gateway

@@ -565,6 +565,18 @@
    ]
   },
   {
+   "unique-id": "signin.v1",
+   "node-type": "contract",
+   "name": "signin.v1",
+   "description": "signin.v1 \u2014 sealed contract (identity): sign-in admission, the admin claim and the claim-code check between the terminal's server and admin-api; its reason vocabularies are generated into both sides",
+   "metadata": [
+    {
+     "path": "core/identity/contracts/signin.v1",
+     "domain": "identity"
+    }
+   ]
+  },
+  {
    "unique-id": "acts.v1",
    "node-type": "contract",
    "name": "acts.v1",
@@ -1492,6 +1504,7 @@
      "nodes": [
       "admin-api",
       "identity.v1",
+      "signin.v1",
       "identity-db"
      ]
     }
@@ -2414,7 +2427,7 @@
      }
     }
    },
-   "description": "all REST via gateway",
+   "description": "every REST call a browser makes, via gateway (the terminal's server also calls admin-api and agent-api directly: term-admin-internal, term-agent-internal)",
    "protocol": "HTTPS"
   },
   {
@@ -2432,6 +2445,49 @@
    },
    "description": "live WS via gateway",
    "protocol": "WebSocket"
+  },
+  {
+   "unique-id": "term-admin-internal",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "terminal"
+     },
+     "destination": {
+      "node": "admin-api",
+      "interface": "admin-api-rest"
+     }
+    }
+   },
+   "description": "the terminal's server, with the internal secret: sign-in admission, the admin claim, the claim-code check and instance state (signin.v1), plus /internal/validate and the settings it edits for the admin",
+   "protocol": "HTTP",
+   "metadata": [
+    {
+     "access": "req",
+     "contract": "signin.v1"
+    }
+   ]
+  },
+  {
+   "unique-id": "term-agent-internal",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "terminal"
+     },
+     "destination": {
+      "node": "agent-api",
+      "interface": "agent-api-rest"
+     }
+    }
+   },
+   "description": "the terminal's server, with the internal secret: POST /internal/scaffolds (a sign-in's arrival) and GET /internal/has-history",
+   "protocol": "HTTP",
+   "metadata": [
+    {
+     "access": "req"
+    }
+   ]
   },
   {
    "unique-id": "dash-gw-rest",

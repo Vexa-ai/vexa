@@ -27,7 +27,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request, Response, Security, status
 from fastapi.security import APIKeyHeader
-from pydantic import BaseModel, Field, field_serializer, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, model_validator
 from sqlalchemy import delete, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.future import select
@@ -41,6 +41,7 @@ from . import events as events_mod
 from . import person_settings as person_settings_mod
 from . import claim_code
 from . import signin_allow
+from . import signin_wire
 
 claim_log = logging.getLogger("admin_api.claim")
 
@@ -307,6 +308,53 @@ SETTING_KEYS = {"models": _MODELS_FIELDS, "transcription": _TRANSCRIPTION_FIELDS
                 "setup": _SETUP_FIELDS, "diagnostics": _DIAGNOSTICS_FIELDS,
                 "global_setup": _GLOBAL_SETUP_FIELDS,
                 signin_allow.SETTING_KEY: signin_allow.SETTING_FIELDS}
+
+# ── the sign-in admission wire, sealed as core/identity/contracts/signin.v1 ─────────────────────────
+# The reason vocabularies are GENERATED from that schema (`signin_wire.py`, the terminal's
+# `signinWire.ts`), so a reason this service returns is one the terminal knows, and one the schema
+# does not know fails the response here instead of reading as a refusal there.
+
+class SigninAdmissionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    email: str = Field(max_length=signin_wire.EMAIL_MAX_LENGTH)
+    claim_code: Optional[str] = Field(default=None, max_length=signin_wire.CLAIM_CODE_MAX_LENGTH)
+
+
+class SigninAdmissionResponse(BaseModel):
+    admitted: bool
+    why: signin_wire.SigninReason
+
+    @model_validator(mode="after")
+    def _reason_matches_verdict(self):
+        if self.admitted != (self.why in signin_wire.ADMITTED_REASONS):
+            raise ValueError(f"admitted={self.admitted} cannot carry why={self.why!r}")
+        return self
+
+
+class AdminClaimRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    user_id: int | str
+    claim_code: Optional[str] = Field(default=None, max_length=signin_wire.CLAIM_CODE_MAX_LENGTH)
+
+
+class AdminClaimResponse(BaseModel):
+    claimed: bool
+    admin_exists: bool
+    why: signin_wire.ClaimReason
+
+
+class ClaimCodeCheckRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    claim_code: str = Field(max_length=signin_wire.CLAIM_CODE_MAX_LENGTH)
+
+
+class ClaimCodeCheckResponse(BaseModel):
+    valid: bool
+
+
+class InstanceState(BaseModel):
+    admin_exists: bool
+
 
 class ModelPrefsUpdate(BaseModel):
     """Partial update — only fields the caller SENDS change; an empty string clears a field."""
@@ -1140,12 +1188,12 @@ def create_app() -> FastAPI:
             env_valid,
             (await _platform_setting(signin_allow.SETTING_KEY, db)).get(signin_allow.SETTING_FIELD, ""))
 
-    @app.get("/internal/instance", include_in_schema=False)
+    @app.get("/internal/instance", include_in_schema=False, response_model=InstanceState)
     async def instance_status(request: Request, db: AsyncSession = Depends(get_db)):
         _check_internal(request)
         return await _instance_state(db)
 
-    @app.get("/admin/instance", include_in_schema=False,
+    @app.get("/admin/instance", include_in_schema=False, response_model=InstanceState,
              dependencies=[Depends(verify_admin_token)])
     async def instance_status_admin(db: AsyncSession = Depends(get_db)):
         """The SAME instance state over the admin-key door, for a caller that holds an admin key and
@@ -1153,8 +1201,8 @@ def create_app() -> FastAPI:
         computation, different transport."""
         return await _instance_state(db)
 
-    @app.post("/internal/bootstrap-admin", include_in_schema=False)
-    async def bootstrap_admin(payload: dict, request: Request,
+    @app.post("/internal/bootstrap-admin", include_in_schema=False, response_model=AdminClaimResponse)
+    async def bootstrap_admin(payload: AdminClaimRequest, request: Request,
                               db: AsyncSession = Depends(get_db)):
         """Claim the admin role for `user_id` IF `signin_allow.may_claim` allows it — which needs
         the one-time claim code (`claim_code`) unless VEXA_ADMIN_EMAILS already names the admins.
@@ -1170,7 +1218,7 @@ def create_app() -> FastAPI:
 
         _check_internal(request)
         user = await _load_user(
-            str(payload.get("user_id", "")),
+            str(payload.user_id),
             db,
             for_update=True,
         )
@@ -1178,7 +1226,7 @@ def create_app() -> FastAPI:
                          {"key": _BOOTSTRAP_ADMIN_LOCK})
         admins, _ = signin_allow.admin_emails()
         claimed_already = await _admin_exists(db)
-        code_ok = claim_code.matches(payload.get("claim_code"), await _claim_record(db))
+        code_ok = claim_code.matches(payload.claim_code, await _claim_record(db))
         allowed, why = signin_allow.may_claim(
             user.email, admin_claimed=claimed_already, admins=admins,
             allow=await _effective_allow(db), code_ok=code_ok)
@@ -1193,8 +1241,9 @@ def create_app() -> FastAPI:
         await db.commit()
         return {"claimed": True, "admin_exists": True, "why": why}
 
-    @app.post("/internal/signin-admission", include_in_schema=False)
-    async def signin_admission(payload: dict, request: Request,
+    @app.post("/internal/signin-admission", include_in_schema=False,
+              response_model=SigninAdmissionResponse)
+    async def signin_admission(payload: SigninAdmissionRequest, request: Request,
                                db: AsyncSession = Depends(get_db)):
         """MAY THIS ADDRESS SIGN IN? Asked by every terminal sign-in door BEFORE anything is created
         or sent (Vexa-ai/vexa#1783). Decided here because this service owns every input: the user
@@ -1202,7 +1251,7 @@ def create_app() -> FastAPI:
         VEXA_SIGNIN_ALLOW seed. The rule itself is `signin_allow.decide`; the terminal holds no part
         of it.
 
-        Answers {"admitted": bool, "why": str}. The caller must read `admitted` as POSITIVE
+        Answers `SigninAdmissionResponse` (signin.v1). The caller must read `admitted` as POSITIVE
         evidence — only a literal true admits — so an older admin-api with no such route (404), an
         unreachable one, or a malformed body all refuse. That is the fail-closed direction.
 
@@ -1210,7 +1259,7 @@ def create_app() -> FastAPI:
         here, which is exactly the enumeration the sign-in form is built not to reveal, so this door
         is never open without the secret, dev mode included."""
         _check_internal_no_dev_bypass(request)
-        email = signin_allow.normalize_email(payload.get("email") if isinstance(payload, dict) else "")
+        email = signin_allow.normalize_email(payload.email)
         if not signin_allow.is_address(email):
             return {"admitted": False, "why": signin_allow.WHY_NOT_ALLOWED}
         user = (await db.execute(
@@ -1225,9 +1274,7 @@ def create_app() -> FastAPI:
         if user is None and not admins and not allow:
             admin_claimed_now = await _admin_exists(db)
             if not admin_claimed_now:
-                code_ok = claim_code.matches(
-                    payload.get("claim_code") if isinstance(payload, dict) else None,
-                    await _claim_record(db))
+                code_ok = claim_code.matches(payload.claim_code, await _claim_record(db))
         admitted, why = signin_allow.decide(
             email,
             user_exists=user is not None,
@@ -1239,16 +1286,17 @@ def create_app() -> FastAPI:
         )
         return {"admitted": admitted, "why": why}
 
-    @app.post("/internal/admin-claim/check", include_in_schema=False)
-    async def admin_claim_check(payload: dict, request: Request,
+    @app.post("/internal/admin-claim/check", include_in_schema=False,
+              response_model=ClaimCodeCheckResponse)
+    async def admin_claim_check(payload: ClaimCodeCheckRequest, request: Request,
                                 db: AsyncSession = Depends(get_db)):
         """Is this the live admin claim code? The terminal's claim screen asks before it lets a code
         ride a sign-in, so a typo is answered at once rather than as a sign-in that never arrives.
         True only while the claim is open (nobody claimed, VEXA_ADMIN_EMAILS empty)."""
         _check_internal(request)
         admins, _ = signin_allow.admin_emails()
-        valid = (not admins and not await _admin_exists(db) and claim_code.matches(
-            payload.get("claim_code") if isinstance(payload, dict) else None, await _claim_record(db)))
+        valid = (not admins and not await _admin_exists(db)
+                 and claim_code.matches(payload.claim_code, await _claim_record(db)))
         return {"valid": bool(valid)}
 
     # --- GET /internal/users/by-email/{email} → JUST the id, for the internal tier ---

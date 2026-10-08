@@ -62,6 +62,8 @@ flowchart LR
   admin_api -->|"JDBC"| postgres
   terminal -->|"HTTPS"| gateway
   terminal -->|"WebSocket"| gateway
+  terminal -->|"HTTP"| admin_api
+  terminal -->|"HTTP"| agent_api
   dashboard -->|""| gateway
   dashboard -->|""| gateway
   slim -->|"HTTPS"| gateway

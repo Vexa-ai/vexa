@@ -105,8 +105,9 @@ def test_first_claim_wins_then_idempotent(client):
 def test_bootstrap_unknown_user_404(client):
     assert client.post("/internal/bootstrap-admin", headers=_internal(),
                        json={"user_id": 99999}).status_code == 404
+    # a body without a user is not the signin.v1 AdminClaimRequest shape
     assert client.post("/internal/bootstrap-admin", headers=_internal(),
-                       json={}).status_code == 404
+                       json={}).status_code == 422
 
 
 def test_validate_surfaces_is_admin(client):

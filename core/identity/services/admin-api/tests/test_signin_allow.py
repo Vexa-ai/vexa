@@ -481,3 +481,35 @@ def test_the_settings_read_shows_the_env_half_and_its_problems(make_client, monk
     assert body["value"] == {"allow": "alice@example.com"}
     assert body["env"] == {"allow": "@oenb.at"}
     assert len(body["env_problems"]) == 1 and "typo.example" in body["env_problems"][0]
+
+
+# ── the wire is signin.v1: the reasons are the contract's ─────────────────────────────────────────
+
+def test_every_reason_the_rule_can_give_is_in_the_contract():
+    """signin_wire.py is generated from core/identity/contracts/signin.v1 — the same file the
+    terminal's signinWire.ts comes from. A reason the rule returns that the contract does not know
+    would be refused by the terminal without anyone saying why."""
+    from admin_api.app import signin_wire
+    admitted = {sa.WHY_ADMIN, sa.WHY_ADMIN_EMAIL, sa.WHY_EXISTING_USER, sa.WHY_ALLOW_LIST, sa.WHY_CLAIM_CODE}
+    assert admitted == set(signin_wire.ADMITTED_REASONS)
+    assert {sa.WHY_NOT_ALLOWED} == set(signin_wire.REFUSED_REASONS)
+    assert {sa.CLAIMED, sa.CLAIM_ADMIN_EXISTS, sa.CLAIM_BAD_CODE, sa.CLAIM_NOT_ALLOWED} == set(signin_wire.CLAIM_REASONS)
+
+
+def test_a_reason_outside_the_contract_fails_the_response_loudly(make_client, monkeypatch):
+    """The route serves the sealed shape: a reason the schema does not know is a 500 here, not a
+    body the terminal reads as a refusal."""
+    monkeypatch.setattr(sa, "decide", lambda *a, **k: (True, "unclaimed-instance"))
+    c = make_client(FakeDB())
+    with pytest.raises(Exception):
+        _ask(c, "anyone@example.com")
+
+
+def test_the_routes_take_the_contract_request_shapes(make_client):
+    c = make_client(FakeDB(users={"member@example.com"}))
+    h = {"X-Internal-Secret": SECRET}
+    assert c.post("/internal/signin-admission", headers=h,
+                  json={"email": "member@example.com", "unexpected": 1}).status_code == 422
+    assert c.post("/internal/signin-admission", headers=h, json={}).status_code == 422
+    assert c.post("/internal/bootstrap-admin", headers=h, json={"claim_code": "x"}).status_code == 422
+    assert c.post("/internal/admin-claim/check", headers=h, json={"claim_code": "x" * 65}).status_code == 422

@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vexa.ai/schemas/signin.v1",
+  "title": "signin.v1",
+  "description": "Who may sign in, and who may become the administrator: the internal wire between the terminal's server (the sign-in doors) and admin-api (which holds every input and decides). The terminal asks and obeys; it holds no list of its own. Internal tier only (X-Internal-Secret). The reason vocabularies are the contract: the terminal's TypeScript and admin-api's Python both read them from code generated from this file (gen.mjs), so a reason one side adds is a reason the other side knows.",
+  "$defs": {
+    "AdmittedReason": {
+      "description": "Why a sign-in was admitted. admin: the claimed role is on this user. admin-email: VEXA_ADMIN_EMAILS names this address. existing-user: an account exists. allow-list: VEXA_SIGNIN_ALLOW or the admin-edited signin.allow setting matches. claim-code: the instance is unclaimed, nothing is configured, and this sign-in carries the live admin claim code.",
+      "enum": ["admin", "admin-email", "existing-user", "allow-list", "claim-code"]
+    },
+    "RefusedReason": {
+      "description": "Why a sign-in was refused. not-allowed covers every refusal on purpose: the answer must not tell a caller which list an address is missing from.",
+      "enum": ["not-allowed"]
+    },
+    "ClaimReason": {
+      "description": "Why the admin role was or was not handed over. claimed: this user is now the administrator. admin-exists: a user holds the role, or VEXA_ADMIN_EMAILS names the admins. bad-code: no admin claim code, a wrong one, or a spent one. not-allowed: an allow-list is configured and this address is not on it.",
+      "enum": ["claimed", "admin-exists", "bad-code", "not-allowed"]
+    },
+    "ClaimCode": {
+      "description": "The one-time admin claim code as a person typed it. admin-api folds case, separators and O/I/L before comparing; the canonical form is XXXX-XXXX-XXXX-XXXX in Crockford base32.",
+      "type": "string",
+      "maxLength": 64
+    },
+    "SigninAdmissionRequest": {
+      "description": "POST /internal/signin-admission — may this address sign in? Asked by every terminal door before anything is created or mailed.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["email"],
+      "properties": {
+        "email": { "type": "string", "maxLength": 320, "description": "The address, as the door received it. admin-api lower-cases and trims it." },
+        "claim_code": { "$ref": "#/$defs/ClaimCode" }
+      }
+    },
+    "SigninAdmissionResponse": {
+      "description": "The verdict. A caller admits only on a literal admitted:true with an AdmittedReason; anything else, including a body that does not conform, refuses.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["admitted", "why"],
+          "properties": { "admitted": { "const": true }, "why": { "$ref": "#/$defs/AdmittedReason" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["admitted", "why"],
+          "properties": { "admitted": { "const": false }, "why": { "$ref": "#/$defs/RefusedReason" } }
+        }
+      ]
+    },
+    "AdminClaimRequest": {
+      "description": "POST /internal/bootstrap-admin — make this user the administrator, if admin-api's claim rule allows it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["user_id"],
+      "properties": {
+        "user_id": { "type": ["integer", "string"], "description": "The admin-api user id, as the validate oracle returned it." },
+        "claim_code": { "$ref": "#/$defs/ClaimCode" }
+      }
+    },
+    "AdminClaimResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["claimed", "admin_exists", "why"],
+      "properties": {
+        "claimed": { "type": "boolean" },
+        "admin_exists": { "type": "boolean", "description": "Whether the instance has an administrator after this call." },
+        "why": { "$ref": "#/$defs/ClaimReason" }
+      }
+    },
+    "ClaimCodeCheckRequest": {
+      "description": "POST /internal/admin-claim/check — is this the live admin claim code? The claim screen asks before a sign-in carries it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["claim_code"],
+      "properties": { "claim_code": { "$ref": "#/$defs/ClaimCode" } }
+    },
+    "ClaimCodeCheckResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["valid"],
+      "properties": { "valid": { "type": "boolean", "description": "True only while the claim is open and the code is the live one." } }
+    },
+    "InstanceState": {
+      "description": "GET /internal/instance — does this instance have an administrator (a claimed one, or addresses VEXA_ADMIN_EMAILS names)?",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["admin_exists"],
+      "properties": { "admin_exists": { "type": "boolean" } }
+    }
+  }
+}
