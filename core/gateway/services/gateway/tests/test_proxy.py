@@ -203,12 +203,12 @@ def test_internal_tier_header_is_stripped_from_a_public_request():
         "x-internal-secret": "vexa-internal-secret",   # the value that shipped in docker-compose.yml
         "x-vexa-internal-api-secret": "vexa-internal-secret",
         "x-admin-api-key": "changeme",
-        "x-gateway-verified": "1",                     # VEXA_REQUIRE_GATEWAY_IDENTITY's own marker
+        "x-vexa-identity": "v1.forged.forged",         # identity.v1's signature header
     })
     assert r.status_code == 200
     fwd = downstream.last["headers"]
     for spoofed in ("x-internal-secret", "x-vexa-internal-api-secret",
-                    "x-admin-api-key", "x-gateway-verified"):
+                    "x-admin-api-key", "x-vexa-identity"):
         assert spoofed not in fwd, f"{spoofed} reached the downstream from a public request"
     # The strip is by FAMILY, not by a list that rots: a header nobody has invented yet, spelled
     # inside one of the internal families, is stripped for free.
@@ -221,7 +221,7 @@ def test_authority_header_families_are_recognised_by_prefix():
 
     for name in ("x-internal-secret", "X-Internal-Secret", "x-internal-anything-new",
                  "x-vexa-internal-api-secret", "x-user-id", "x-user-invented-tomorrow",
-                 "x-admin-api-key", "x-gateway-verified"):
+                 "x-admin-api-key", "x-vexa-identity"):
         assert _is_authority_header(name), name
     for name in ("x-api-key", "content-type", "x-trace-id", "authorization", "mcp-session-id"):
         assert not _is_authority_header(name), name

@@ -25,8 +25,19 @@ def test_preflight_refuses_boot_without_internal_api_secret():
     assert "INTERNAL_API_SECRET" in str(ei.value)
 
 
+REQUIRED = {"INTERNAL_API_SECRET": "a-real-secret", "VEXA_GATEWAY_IDENTITY_SECRET": "a-real-signing-key"}
+
+
 def test_preflight_passes_when_required_set():
-    cp.preflight({"INTERNAL_API_SECRET": "a-real-secret"})
+    cp.preflight(dict(REQUIRED))
+
+
+def test_preflight_refuses_boot_without_the_identity_signing_key():
+    """identity.v1 — every forward is signed; with no key nothing behind the edge can authenticate a
+    request, so the gateway refuses to boot rather than forward identities nobody will believe."""
+    with pytest.raises(cp.ConfigError) as ei:
+        cp.preflight({"INTERNAL_API_SECRET": "a-real-secret"})
+    assert "VEXA_GATEWAY_IDENTITY_SECRET" in str(ei.value)
 
 
 def test_preflight_refuses_the_published_placeholder():
@@ -40,6 +51,6 @@ def test_preflight_refuses_the_published_placeholder():
     KEY, never the value."""
     for placeholder in ("vexa-internal-secret", "lite-internal-secret", "changeme"):
         with pytest.raises(cp.ConfigError) as ei:
-            cp.preflight({**{}, "INTERNAL_API_SECRET": placeholder})
+            cp.preflight({**REQUIRED, "INTERNAL_API_SECRET": placeholder})
         assert "INTERNAL_API_SECRET" in str(ei.value)
         assert placeholder not in str(ei.value), "a refusal must never echo the value"

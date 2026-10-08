@@ -24,6 +24,21 @@
       ]
     },
     {
+      "key": "VEXA_GATEWAY_IDENTITY_SECRET",
+      "class": "required-explicit",
+      "secret": true,
+      "description": "identity.v1 signing key. The gateway HMAC-signs the identity it resolved onto every forward (X-Vexa-Identity, short expiry); agent-api and meeting-api verify it with the same value and refuse an x-user-* header without it. Unset, nothing behind the edge can authenticate a request, so the boot refuses. Generated at install (compose mint-dev-env.sh, the Helm Secret, the lite entrypoint).",
+      "forbidden_values": [
+        "vexa-internal-secret",
+        "lite-internal-secret",
+        "changeme",
+        "change-me",
+        "CHANGE-ME",
+        "default",
+        "secret"
+      ]
+    },
+    {
       "key": "ADMIN_API_URL",
       "class": "defaulted",
       "default": "http://admin-api:8001",
@@ -210,13 +225,6 @@
       "class": "defaulted",
       "default": "vexa:guard:",
       "description": "Redis key prefix for the guard's rate-limit/ban buckets",
-      "targets": []
-    },
-    {
-      "key": "AGENT_MCP_URL",
-      "default": "",
-      "description": "Dedicated upstream for delegated agent MCP requests; unset leaves the route unavailable. Configured through the Minutes dogfood deployment overlay; standard deployment templates do not expose this setting.",
-      "class": "defaulted",
       "targets": []
     }
   ]

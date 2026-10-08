@@ -38,7 +38,7 @@ import httpx  # the downstream adapter's transport errors are mapped to 502/504 
 
 from fastapi import FastAPI, Request, Response, WebSocket, WebSocketDisconnect
 
-from . import routes_manifest
+from . import identity_token, routes_manifest
 from fastapi.responses import StreamingResponse
 from fastapi.routing import APIRoute
 
@@ -208,9 +208,10 @@ def _required_scopes(request: Request, table=None) -> Optional[FrozenSet[str]]:
 
 # ── the authority-header strip (F95) ─────────────────────────────────────────────
 # Downstream services trust a small vocabulary of headers as AUTHORITY: ``x-user-*`` is the identity
-# the gateway resolved from the api-key, ``x-internal-secret`` is the internal service tier (agent-api
-# ``_internal_caller``, admin-api ``_check_internal`` — the gate the meeting room calls its own trust
-# boundary), ``x-gateway-verified`` is the marker ``VEXA_REQUIRE_GATEWAY_IDENTITY`` looks for, and
+# the gateway resolved from the api-key, ``x-vexa-identity`` is the signature that makes it believable
+# (identity.v1 — agent-api and meeting-api refuse an ``x-user-*`` header without it),
+# ``x-internal-secret`` is the internal service tier (agent-api ``_internal_caller``, admin-api
+# ``_check_internal`` — the gate the meeting room calls its own trust boundary), and
 # ``x-admin-api-key`` is admin-api's privileged surface.
 #
 # NONE of them may arrive from a client. The strip used to be an eight-name list of ``x-user-*``
@@ -219,7 +220,7 @@ def _required_scopes(request: Request, table=None) -> Optional[FrozenSet[str]]:
 # any api-key holder. A LIST rots the moment a new authority header is added; a PREFIX rule does not,
 # which is why this matches by family and why every new internal header must be spelled into one.
 _AUTHORITY_HEADER_PREFIXES = ("x-user-", "x-internal-", "x-vexa-internal-")
-_AUTHORITY_HEADER_EXACT = frozenset({"x-admin-api-key", "x-gateway-verified"})
+_AUTHORITY_HEADER_EXACT = frozenset({"x-admin-api-key", identity_token.HEADER})
 
 
 def _is_authority_header(name: str) -> bool:
@@ -245,7 +246,7 @@ def create_app(
     agent_api_url: Optional[str] = None,
     admin_api_url: str = _DEFAULT_ADMIN_API_URL,
     mcp_url: str = _DEFAULT_MCP_URL,
-    agent_mcp_url: str = "",
+    identity_secret: str = "",
     rate_limiter=None,
 ) -> FastAPI:
     """Build the gateway FastAPI app over the injected ports.
@@ -254,6 +255,10 @@ def create_app(
     ``downstream``  — forwards proxied HTTP requests to meeting-api (the unified control plane:
                       /bots + /transcripts + /meetings + /recordings all live there now, P2).
     ``redis``       — pub/sub bus for the ``/ws`` fan-in.
+    ``identity_secret`` — signs the resolved identity onto every forward (identity.v1,
+                      ``X-Vexa-Identity``). The production builder passes
+                      ``VEXA_GATEWAY_IDENTITY_SECRET``, which the boot preflight requires; a harness
+                      that injects fakes downstream may leave it empty and forward plain headers.
     """
     # ── WHICH DOMAINS THIS DEPLOYMENT FRONTS (PRD decisions 40.6 + 40.7) ─────────────────────
     #
@@ -324,17 +329,11 @@ def create_app(
         # ``api_key`` overrides the header lookup for a route whose CLIENT protocol carries the key
         # somewhere else (the MCP transport uses ``Authorization: Bearer``). The resolution, the
         # scope check and the identity injection below are the same for every route.
+        # A worker's delegation token (`vxd_…`) is a bearer like any other: identity verifies it
+        # (signature, audience, expiry, the account still existing) and answers with the person it
+        # acts for plus the dispatch's ceiling, which rides the signed identity below as
+        # `delegation`. There is no second path for it here.
         client_key = api_key if api_key is not None else request.headers.get("x-api-key")
-        # The agent domain validates delegated MCP credentials and enforces their
-        # workspace/regime ceiling. This transport route forwards no asserted identity
-        # or service credential. Delegations never authorize ordinary REST routes.
-        if (agent_mcp_url and request.url.path == "/mcp"
-                and client_key and client_key.startswith("vxd_")):
-            allowed = {"accept", "content-type", "mcp-session-id", "mcp-protocol-version", "last-event-id"}
-            headers = {k: v for k, v in request.headers.items() if k.lower() in allowed}
-            headers["authorization"] = "Bearer " + client_key
-            headers[TRACE_HEADER] = get_trace_id() or ""
-            return headers, None
         # Fail-closed: a client route with no key is rejected before any downstream call.
         if not client_key:
             return None, Response(
@@ -420,27 +419,20 @@ def create_app(
             if _is_authority_header(h):
                 headers.pop(h, None)
         headers["x-api-key"] = client_key
-        headers["x-user-id"] = str(user_id)
-        # The RESOLVED verified email (never client-declared; /internal/validate returns it). agent-api's
-        # membership redeem (Lane M) checks it for RESTRICTED invites (allowed_emails).
-        if user_data.get("email"):
-            headers["x-user-email"] = str(user_data["email"])
-        headers["x-user-scopes"] = ",".join(user_data.get("scopes", []))
-        headers["x-user-limits"] = str(user_data.get("max_concurrent", 3))
-        # Lane A: the RESOLVED shared-workspace membership ids (never client-declared; /internal/validate
-        # returns them). meeting-api authorizes a member's live-transcript subscribe against this set.
-        if user_data.get("workspaces"):
-            headers["x-user-workspaces"] = ",".join(str(w) for w in user_data["workspaces"])
-        # Per-user webhook config (identity owns it; /internal/validate returns it from user.data).
-        # Forwarded so bot_spawn persists it into meeting.data → the lifecycle callback delivers from
-        # there, with NO cross-domain users-table read (the carve's principled path; main read the user
-        # row inline as a monolith).
-        if user_data.get("webhook_url"):
-            headers["x-user-webhook-url"] = str(user_data["webhook_url"])
-            if user_data.get("webhook_secret"):
-                headers["x-user-webhook-secret"] = str(user_data["webhook_secret"])
-            if user_data.get("webhook_events"):
-                headers["x-user-webhook-events"] = json.dumps(user_data["webhook_events"])
+        # THE RESOLVED IDENTITY, RE-STAMPED (identity.v1). Every value comes from /internal/validate,
+        # never from the client: the user id; the verified email agent-api's membership redeem checks
+        # for RESTRICTED invites (Lane M); the scopes and the bot limit `POST /bots` enforces; the
+        # shared-workspace memberships meeting-api authorizes a member's transcript subscribe against
+        # (Lane A); the per-user webhook bot_spawn persists into meeting.data (identity owns it); and,
+        # for a worker's delegation token, the dispatch's ceiling. The services behind this edge
+        # believe these headers only with the signature beside them — `X-Vexa-Identity`, HMAC over the
+        # same claims with a short expiry — so a process that reaches them past this edge cannot
+        # name a user.
+        if identity_secret:
+            headers.update(identity_token.signed_headers(identity_secret, user_data))
+        else:
+            headers.update(identity_token.headers_from_claims(
+                identity_token.claims_from_validation(user_data)))
         headers[TRACE_HEADER] = get_trace_id() or ""
         return headers, None
 
@@ -931,10 +923,10 @@ def create_app(
     #               read timeout, and answers a gateway-manufactured 5xx the MCP service never sees
     #               (#795 — 8 × 503 on GET at the edge, 0 at the service, POST 116/116 fine).
     # The two legs are therefore declared separately: GET streams, everything else buffers.
+    # ONE MCP server (ADR-0037 §2): every bearer — a person's API key, a worker's delegation token —
+    # reaches the same assembled surface, authenticated by the same `_authorize`.
     def _mcp(path: str, request: Request) -> str:
-        delegated = path == "/mcp" and (_mcp_key(request) or "").startswith("vxd_")
-        base = agent_mcp_url if delegated and agent_mcp_url else mcp_url
-        return f"{base.rstrip('/')}{path}"
+        return f"{mcp_url.rstrip('/')}{path}"
 
     def _mcp_key(request: Request) -> Optional[str]:
         """The caller's Vexa API key, from whichever carrier the MCP transport used.
