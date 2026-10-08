@@ -113,7 +113,6 @@
           "deployment",
           "deployment-lite",
           "deployment-kubernetes",
-          "deployment-zoom-sdk",
           "configuration",
           "upgrade-from-minio",
           "authenticated-bots",
