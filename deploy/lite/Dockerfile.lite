@@ -155,7 +155,13 @@ RUN cd /tmp/gateway && uv venv --python 3.12 /opt/venvs/gateway \
 COPY core/agent/pyproject.toml core/agent/uv.lock /tmp/agent/
 RUN cd /tmp/agent && uv venv --python 3.12 /opt/venvs/agent \
  && UV_PROJECT_ENVIRONMENT=/opt/venvs/agent uv sync --frozen --no-install-project --no-default-groups --group control-plane
-RUN rm -rf /tmp/admin /tmp/runtime /tmp/meeting /tmp/gateway /tmp/agent
+# mcp — the ONE assembled MCP server the gateway relays /mcp to (ADR-0037); each agent worker's
+# toolbelt and a person's own MCP client reach the same tools through it.
+COPY core/meetings/services/mcp/pyproject.toml core/meetings/services/mcp/uv.lock /tmp/mcp/
+RUN cd /tmp/mcp && uv venv --python 3.12 /opt/venvs/mcp \
+ && UV_PROJECT_ENVIRONMENT=/opt/venvs/mcp uv sync --frozen --no-install-project \
+ && uv pip install --python /opt/venvs/mcp/bin/python "uvicorn[standard]==0.34.0"
+RUN rm -rf /tmp/admin /tmp/runtime /tmp/meeting /tmp/gateway /tmp/agent /tmp/mcp
 
 # The agent worker is the ONE venv exec'd as a NON-ROOT per-subject uid (the runtime process
 # backend's POSIX tenant isolation — core/runtime/src/runtime_kernel/isolation.py). Its interpreter
@@ -201,6 +207,9 @@ COPY core/agent/routes.v1.json                    /app/gateway/core/agent/routes
 # in the layout this image ships. `import gateway.app` is where the manifest walk happens, so an
 # omitted or misplaced manifest fails the build rather than the container's first boot.
 RUN cd /app/gateway && PYTHONPATH=/app/gateway/src /opt/venvs/gateway/bin/python -c "import gateway.app"
+# mcp        (PYTHONPATH=/app/mcp/src) — imports at build time, like the gateway above.
+COPY core/meetings/services/mcp/src /app/mcp/src
+RUN cd /app/mcp && PYTHONPATH=/app/mcp/src /opt/venvs/mcp/bin/python -c "import vexa_mcp.app"
 # meeting-api (PYTHONPATH=/app/meeting-api/src; repo_root walk-up == /app/meeting-api)
 COPY core/meetings/services/meeting-api/src /app/meeting-api/src
 COPY core/meetings/contracts/invocation.v1/invocation.schema.json /app/meeting-api/meetings/contracts/invocation.v1/invocation.schema.json
@@ -273,7 +282,7 @@ ENV LOG_LEVEL=info \
     ADMIN_API_TOKEN= INTERNAL_API_SECRET= \
     TRANSCRIPTION_SERVICE_URL= TRANSCRIPTION_SERVICE_TOKEN= \
     MINIO_ENDPOINT= MINIO_ACCESS_KEY= MINIO_SECRET_KEY= MINIO_BUCKET=vexa MINIO_SECURE=false \
-    VEXA_AGENT_DEFAULT_SUBJECT=u_live VEXA_DISPATCH_SIGNING_KEY=dev-dispatch-signing-key \
+    VEXA_DISPATCH_SIGNING_KEY=dev-dispatch-signing-key \
     VEXA_BOT_API_KEY= VEXA_AGENT_MODEL= HOST_CLAUDE_CREDENTIALS= \
     ANTHROPIC_API_KEY= ANTHROPIC_AUTH_TOKEN= ANTHROPIC_BASE_URL= ANTHROPIC_MODEL= \
     ANTHROPIC_DEFAULT_OPUS_MODEL= ANTHROPIC_DEFAULT_SONNET_MODEL= ANTHROPIC_DEFAULT_HAIKU_MODEL= \

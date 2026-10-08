@@ -57,6 +57,11 @@ export ADMIN_API_TOKEN="${ADMIN_API_TOKEN:-${ADMIN_TOKEN:-$(python3 -c "import s
 # internal tier (F95). A random per-boot value keeps the one-command quickstart working and is
 # nobody's to guess; set INTERNAL_API_SECRET explicitly when something outside talks in.
 export INTERNAL_API_SECRET="${INTERNAL_API_SECRET:-$(python3 -c "import secrets; print(secrets.token_hex(32))")}"
+# identity.v1 — the gateway signs the identity it resolved and agent-api and meeting-api verify it;
+# all three refuse to boot without it. Same terms as the internal tier: minted per boot unless set.
+export VEXA_GATEWAY_IDENTITY_SECRET="${VEXA_GATEWAY_IDENTITY_SECRET:-$(python3 -c "import secrets; print(secrets.token_hex(32))")}"
+# The worker toolbelt: agent-api signs each worker's delegation token, admin-api verifies it.
+export VEXA_MCP_DELEGATION_SECRET="${VEXA_MCP_DELEGATION_SECRET:-$(python3 -c "import secrets; print(secrets.token_hex(32))")}"
 export DEFAULT_BOT_NAME="${DEFAULT_BOT_NAME:-Vexa}"
 
 # Optional Google Meet speaker-stream tuning. Empty values preserve bot defaults; the runtime
@@ -101,7 +106,6 @@ export BOT_COMMAND="${BOT_COMMAND:-/usr/local/bin/vexa-bot-launch}"
 export AGENT_WORKER_COMMAND="${AGENT_WORKER_COMMAND:-/usr/local/bin/vexa-agent-worker}"
 
 # Agent control plane + worker (BYO inference; credentials brokered by the runtime).
-export VEXA_AGENT_DEFAULT_SUBJECT="${VEXA_AGENT_DEFAULT_SUBJECT:-u_live}"
 export VEXA_DISPATCH_SIGNING_KEY="${VEXA_DISPATCH_SIGNING_KEY:-dev-dispatch-signing-key}"
 export VEXA_BOT_API_KEY="${VEXA_BOT_API_KEY:-}"
 export VEXA_AGENT_MODEL="${VEXA_AGENT_MODEL:-}"

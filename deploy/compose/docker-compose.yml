@@ -130,6 +130,9 @@ services:
       # the admin surface answers 500 rather than accepting a secret everybody has.
       - ADMIN_API_TOKEN=${ADMIN_TOKEN:-}
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET}
+      # identity resolves a worker's delegation token (vxd_) in /internal/validate, so the gateway and
+      # flows authenticate a worker's tool calls without holding this key (agent_delegation).
+      - VEXA_MCP_DELEGATION_SECRET=${VEXA_MCP_DELEGATION_SECRET:-}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       # Who may sign in to the terminal, besides existing users and admins: comma-separated exact
       # addresses and @domain entries ("@example.com,alice@example.org"). Empty = nobody new once an
@@ -333,6 +336,10 @@ services:
       # `INTERNAL_API_SECRET` and marks `VEXA_INTERNAL_API_SECRET` DEPRECATED ("no deploy surface
       # sets it on agent-api any more"), so the A19 fix rides the spelling this service reads.
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-}
+      # identity.v1: the key that verifies the gateway's X-Vexa-Identity. agent-api believes an
+      # x-user-* header only with that signature (or from the internal tier above) and refuses to
+      # boot without it. mint-dev-env.sh generates it beside INTERNAL_API_SECRET.
+      - VEXA_GATEWAY_IDENTITY_SECRET=${VEXA_GATEWAY_IDENTITY_SECRET:-}
       # The post-meeting room resolves a participant's email to a subject through admin-api. There
       # is no narrow door yet — the internal-secret tier exposes no by-email lookup, and
       # GET /admin/users/email/{email} sits behind this much broader credential, which can also
@@ -347,11 +354,6 @@ services:
       # says nothing about meetings — it never asserts there are none. Goes away when meeting-api
       # serves an invited-by-address route and agent-api stops holding a second DB credential.
       - VEXA_MEETINGS_DB_URL=${MEETINGS_DB_URL:-}
-      # Identity (P20): agent-api derives the subject from the gateway-injected X-User-Id. Until the terminal
-      # routes through the gateway (Stage 4), it still reaches agent-api directly with no header, so this
-      # single-user fallback keeps the dev stack working (shared subject). Remove it once the gateway fronts
-      # agent-api and X-User-Id is always present — then a missing header fails closed (401).
-      - VEXA_AGENT_DEFAULT_SUBJECT=${VEXA_AGENT_DEFAULT_SUBJECT:-u_live}
       - VEXA_AGENT_MODEL=${VEXA_AGENT_MODEL:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       # ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL come from env_file (below), NOT environment: — an
@@ -376,17 +378,12 @@ services:
       - VEXA_GLOBAL_ADMIN_SUBJECTS=${VEXA_GLOBAL_ADMIN_SUBJECTS:-}
       # The shared key the control plane signs per-dispatch tokens with (dev tier; k8s → SPIRE).
       - VEXA_DISPATCH_SIGNING_KEY=${VEXA_DISPATCH_SIGNING_KEY:-dev-dispatch-signing-key}
-      # The AUTHENTICATED vexa-control MCP a chat worker gets. agent-api mints a short-lived, scoped,
-      # revocable delegation token per dispatch and the MCP verifies it with the same secret — so a
-      # worker never holds a durable user credential. No secret ⇒ no MCP is attached (default),
-      # whatever the URL says.
-      #
-      # ADR-0037 / PRD decision 40.5 — the default is the GATEWAY's assembled MCP surface
-      # (`gateway` proxies `/mcp` to the `mcp` service in this same compose file), not
-      # deploy/dogfood's rig: a worker's MCP attachment is an ordinary CLIENT edge to the one
-      # assembled server, the same edge a terminal or any other MCP client reaches. A deployment
-      # that still needs the rig (or a private mounted domain's MCP) sets VEXA_MCP_URL itself —
-      # this is only the in-network default for a stack that names none.
+      # THE WORKER'S TOOLBELT (capability worker_toolbelt). agent-api mints a short-lived, scoped
+      # delegation token per dispatch with this secret; the worker presents it at the gateway's /mcp,
+      # where the ONE assembled MCP server serves the meetings, agent and flows tools (ADR-0037), and
+      # identity verifies it with the same secret (admin-api above). A worker never holds a durable
+      # user credential. mint-dev-env.sh generates the secret; with it empty no toolbelt is attached
+      # and every spawn says so in the log.
       - VEXA_MCP_URL=${VEXA_MCP_URL:-http://gateway:8000/mcp}
       - VEXA_MCP_DELEGATION_SECRET=${VEXA_MCP_DELEGATION_SECRET:-}
       # THE SCAFFOLD's link origin (PRD §5.5). The SAME variable the flows lane reads, on purpose:
@@ -488,6 +485,9 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - RUNTIME_API_URL=http://runtime:8090
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET}
+      # identity.v1: verifies the gateway's X-Vexa-Identity — the owner, bot limit, memberships and
+      # webhook meeting-api reads come from that signature (or the internal tier), never a bare header.
+      - VEXA_GATEWAY_IDENTITY_SECRET=${VEXA_GATEWAY_IDENTITY_SECRET:-}
       # The bot's display name in the meeting. The terminal omits bot_name on join, so this is what
       # participants see; set DEFAULT_BOT_NAME in .env and restart meeting-api (no terminal rebuild).
       - DEFAULT_BOT_NAME=${DEFAULT_BOT_NAME:-Vexa}
@@ -603,6 +603,9 @@ services:
       - AGENT_API_URL=${AGENT_API_URL:-http://agent-api:8100}
       - REDIS_URL=redis://redis:6379/0
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET}
+      # identity.v1: the gateway signs the identity it resolved onto every forward with this key;
+      # agent-api and meeting-api verify it. Required — mint-dev-env.sh generates it.
+      - VEXA_GATEWAY_IDENTITY_SECRET=${VEXA_GATEWAY_IDENTITY_SECRET:-}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       # fastapi-guard edge layer (edge_guard.py): per-IP throttle + auto-ban at the edge.
       # ON by default with generous limits (owner ruling — protection that ships dark protects
@@ -1004,7 +1007,10 @@ services:
       # URLs already say.
       - ADMIN_API_URL=http://admin-api:8001
       - MEETING_API_URL=http://meeting-api:8080
-      - AGENT_API_URL=${AGENT_API_URL:-}
+      # The agent domain — the same presence signal (and the same default) the gateway reads: this
+      # full profile runs agents, so its tools (Connections, the person's clock, chat naming, the
+      # workspace verbs) join the surface every worker's toolbelt reaches. Empty = no-agents.
+      - AGENT_API_URL=${AGENT_API_URL:-http://agent-api:8100}
       # DEFAULTS TO THE SERVICE. It used to default to empty, so a stack that ran flows still
       # assembled without its tools unless somebody supplied a URL by hand — which is how a
       # docker bridge address came to be the answer. Override to point at a flows elsewhere;
@@ -1065,6 +1071,10 @@ services:
       # that does not run it (a stack without the flows services has no such dependency to wait
       # on, and `FLOWS_API_URL=` is still how you say you do not carry the domain).
       flows-api:
+        condition: service_healthy
+      # Same reason, for the agent domain's tools: an agent-api still starting when this boots would
+      # cost every worker its agent tools for the life of the process.
+      agent-api:
         condition: service_healthy
     networks: [vexa]
     restart: unless-stopped

@@ -76,6 +76,13 @@ secrets:
   serviceAuthoritySecret: ""        # exact-byte HMAC secret; required only when meetingApi.serviceAuthorityConfig is set
   systemWebhookSecret: ""           # exact-byte HMAC secret; required only when meetingApi.systemWebhookUrl is set
   dispatchSigningKey: ""            # agent-api signs per-dispatch tokens (default dev key; k8s prod → set this)
+  gatewayIdentitySecret: ""         # identity.v1: the gateway signs the identity it resolved, agent-api and
+                                    # meeting-api verify it. Empty → GENERATED at install and kept across
+                                    # upgrades (read back from the release's Secret). With
+                                    # existingSecretName, the Secret must carry VEXA_GATEWAY_IDENTITY_SECRET.
+  mcpDelegationSecret: ""           # the worker toolbelt: agent-api signs each worker's delegation token,
+                                    # identity verifies it. Generated at install like the one above; with
+                                    # existingSecretName, carry VEXA_MCP_DELEGATION_SECRET.
   botApiKey: ""                     # agent-api → gateway "add bot from URL" key (optional)
   nextauthSecret: ""                # terminal sign-in signing secret (32+ bytes, never a published
                                     # value). Empty → kept from this release's Secret, else generated;
@@ -159,6 +166,36 @@ models:
 # ============ Components ============
 
 # The HTTP front door (compose: gateway → :8000).
+# The ONE MCP server (ADR-0037): the gateway relays /mcp here, and it serves the tools every
+# deployed domain declares — to a person's own MCP client and to each agent worker's toolbelt.
+mcp:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: vexaai/v012-mcp
+    tag: v012
+  service:
+    port: 8010
+  logLevel: "info"
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits:   { cpu: 500m, memory: 384Mi }
+  extraEnv: []
+
+# Who may open a connection to agent-api and meeting-api. Both read the person they act for from
+# a signed identity (identity.v1), and this is the second wall: only the pods that legitimately call
+# them can reach them at all — the gateway, the MCP service, the runtime, flows and the terminal for
+# agent-api; the gateway, agent-api, the MCP service, the runtime and the meeting BOTS (their
+# lifecycle callbacks and recording uploads) for meeting-api. Agent WORKERS reach neither: they act
+# through the gateway with their delegation token. Pods this chart does not render (an operator's
+# own services) are added with extraFrom, as NetworkPolicy `from` peers.
+networkPolicy:
+  enabled: true
+  agentApi:
+    extraFrom: []
+  meetingApi:
+    extraFrom: []
+
 gateway:
   enabled: true
   replicaCount: 2
@@ -364,7 +401,6 @@ agentApi:
   service:
     type: ClusterIP
     port: 8100
-  defaultSubject: "u_live"      # VEXA_AGENT_DEFAULT_SUBJECT single-user fallback until gateway fronts agent-api
   logLevel: "info"
   # ONE workspace store with TWO mounters, which is the whole reason accessMode is a value.
   # agent-api holds this claim for its entire lifetime (deployment-agent-api.yaml volumes:

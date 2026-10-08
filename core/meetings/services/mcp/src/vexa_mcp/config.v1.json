@@ -8,7 +8,9 @@
       "default": "http://gateway:8000",
       "description": "The PUBLIC API this service forwards every built-in tool to, with the caller's own key. It never reaches past the gateway.",
       "targets": [
-        "compose"
+        "compose",
+        "helm",
+        "lite"
       ]
     },
     {
@@ -17,7 +19,9 @@
       "default": "8010",
       "description": "The port the MCP transport listens on; the gateway's MCP_URL points here.",
       "targets": [
-        "compose"
+        "compose",
+        "helm",
+        "lite"
       ]
     },
     {
@@ -25,7 +29,9 @@
       "class": "defaulted",
       "default": "0.0.0.0",
       "description": "Bind address. Container-internal only \u2014 the gateway is the edge.",
-      "targets": []
+      "targets": [
+        "lite"
+      ]
     },
     {
       "key": "VEXA_ENV",
@@ -33,7 +39,8 @@
       "default": "development",
       "description": "`production` closes /docs, /redoc and /openapi.json on the PUBLIC app. Note the ASSEMBLER still reads each DOMAIN's OpenAPI over the internal network to derive tool schemas \u2014 that is a different app's docs, on a different edge.",
       "targets": [
-        "compose"
+        "compose",
+        "helm"
       ]
     },
     {
@@ -42,7 +49,9 @@
       "default": "info",
       "description": "Log verbosity.",
       "targets": [
-        "compose"
+        "compose",
+        "helm",
+        "lite"
       ]
     },
     {
@@ -60,7 +69,9 @@
       "capability": "assembly",
       "description": "identity's base URL. A domain whose URL is set is ASKED for its tool manifest; one whose URL is unset is never asked and its tools are absent. Identity is the one domain everyone may depend on.",
       "targets": [
-        "compose"
+        "compose",
+        "helm",
+        "lite"
       ]
     },
     {
@@ -69,7 +80,9 @@
       "capability": "assembly",
       "description": "meetings' base URL, on the same terms.",
       "targets": [
-        "compose"
+        "compose",
+        "helm",
+        "lite"
       ]
     },
     {
@@ -78,7 +91,8 @@
       "capability": "assembly",
       "description": "flows' base URL, on the same terms.",
       "targets": [
-        "compose"
+        "compose",
+        "helm"
       ]
     },
     {
@@ -88,7 +102,8 @@
       "secret": true,
       "description": "flows' own operator key, forwarded as X-Flows-Operator-Key on the two admin-gated tools (flows_submit, flow_lifecycle — core/flows/mcp.tools.v1.json's `auth: admin`). Their doors read ONLY this key, never the caller's own credential, so unset alongside a set FLOWS_API_URL is a deployment whose facts assembly refuses to publish (manifest.py's admin-key check fails the boot) rather than list two tools their own door would 401.",
       "targets": [
-        "compose"
+        "compose",
+        "helm"
       ]
     },
     {
@@ -97,7 +112,9 @@
       "capability": "assembly",
       "description": "agent's base URL, on the same terms. Unset is the no-agents deployment, which is a product and not a degraded state.",
       "targets": [
-        "compose"
+        "compose",
+        "helm",
+        "lite"
       ]
     },
     {

@@ -1,0 +1,93 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- /*
+WHO MAY REACH agent-api AND meeting-api — derived from the callers in the code, not from memory:
+
+  agent-api (8100)
+    gateway       forwards /agent/* with the signed identity
+    mcp           boot discovery: /.well-known/mcp-tools.json + /openapi.json
+    runtime       the scheduler fires routines at /invocations
+    flows-*       flow steps act for a person over the internal tier
+    terminal      server-side admin probes and the internal scaffold routes
+    agent-api     itself (VEXA_AGENT_API_SELF_URL)
+
+  meeting-api (8080)
+    gateway       the meetings proxy and the /ws subscribe-authorization hop
+    agent-api     meeting access checks, the schedule digest and annotations, over the internal tier
+    mcp           boot discovery of the meetings domain's manifest
+    runtime       workload callbacks (/runtime/callback)
+    meeting bots  lifecycle callbacks and recording uploads: runtime-managed pods that are not
+                  agent workers (`vexa.role: worker`, stamped by the runtime's k8s backend)
+    meeting-api   itself
+
+Agent WORKERS reach neither service: they act through the gateway with their delegation token.
+*/}}
+{{- $sel := include "vexa.selectorLabels" . }}
+{{- if .Values.agentApi.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "vexa.componentName" (list . "agent-api-ingress") }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- $sel | nindent 6 }}
+      app.kubernetes.io/component: agent-api
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - port: 8100
+          protocol: TCP
+      from:
+        {{- range $c := list "gateway" "mcp" "runtime" "terminal" "agent-api" }}
+        - podSelector:
+            matchLabels:
+              {{- $sel | nindent 14 }}
+              app.kubernetes.io/component: {{ $c }}
+        {{- end }}
+        - podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values: [flows-worker, flows-api, flows-mailbox]
+        {{- with .Values.networkPolicy.agentApi.extraFrom }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+---
+{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "vexa.componentName" (list . "meeting-api-ingress") }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- $sel | nindent 6 }}
+      app.kubernetes.io/component: meeting-api
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - port: 8080
+          protocol: TCP
+      from:
+        {{- range $c := list "gateway" "agent-api" "mcp" "runtime" "meeting-api" }}
+        - podSelector:
+            matchLabels:
+              {{- $sel | nindent 14 }}
+              app.kubernetes.io/component: {{ $c }}
+        {{- end }}
+        # meeting bots — every runtime-managed pod except an agent worker
+        - podSelector:
+            matchLabels:
+              runtime.managed: "true"
+            matchExpressions:
+              - key: vexa.role
+                operator: NotIn
+                values: [worker]
+        {{- with .Values.networkPolicy.meetingApi.extraFrom }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+{{- end }}

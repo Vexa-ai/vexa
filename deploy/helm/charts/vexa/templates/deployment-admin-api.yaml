@@ -63,6 +63,12 @@ spec:
                 secretKeyRef:
                   name: {{ include "vexa.adminTokenSecretName" . }}
                   key: INTERNAL_API_SECRET
+            # /internal/validate resolves a worker's delegation token (vxd_) with this key.
+            - name: VEXA_MCP_DELEGATION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: VEXA_MCP_DELEGATION_SECRET
             - name: LOG_LEVEL
               value: {{ .Values.adminApi.logLevel | default "info" | quote }}
             - name: VEXA_SIGNIN_ALLOW

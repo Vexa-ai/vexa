@@ -88,6 +88,23 @@ spec:
                 secretKeyRef:
                   name: {{ include "vexa.adminTokenSecretName" . }}
                   key: INTERNAL_API_SECRET
+            # identity.v1: verifies the gateway's signature over the identity agent-api reads.
+            - name: VEXA_GATEWAY_IDENTITY_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: VEXA_GATEWAY_IDENTITY_SECRET
+            # THE WORKER'S TOOLBELT (worker_toolbelt): each worker presents a per-dispatch delegation
+            # token, signed with this secret, at the gateway's /mcp — the one assembled MCP server.
+            {{- if .Values.mcp.enabled }}
+            - name: VEXA_MCP_URL
+              value: "http://{{ include "vexa.componentName" (list . "gateway") }}:{{ .Values.gateway.service.port }}/mcp"
+            {{- end }}
+            - name: VEXA_MCP_DELEGATION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: VEXA_MCP_DELEGATION_SECRET
             - name: VEXA_DISPATCH_SIGNING_KEY
               valueFrom:
                 secretKeyRef:
@@ -109,8 +126,6 @@ spec:
                   optional: true
             - name: VEXA_ENV
               value: {{ .Values.vexaEnv | default "development" | quote }}
-            - name: VEXA_AGENT_DEFAULT_SUBJECT
-              value: {{ .Values.agentApi.defaultSubject | default "u_live" | quote }}
             - name: VEXA_AGENT_MODEL
               value: {{ .Values.models.agentModel | default "" | quote }}
             - name: ANTHROPIC_API_KEY

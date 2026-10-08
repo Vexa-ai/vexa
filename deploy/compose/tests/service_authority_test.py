@@ -91,7 +91,7 @@ def test_active_service_boundary_stops_once_and_replay_is_inert(stack) -> None:
             "transcribe_enabled": False,
             "recording_enabled": False,
         },
-        headers={"x-user-id": str(user_id), "x-user-limits": "5"},
+        headers={"x-internal-secret": stack.internal_secret, "x-user-id": str(user_id), "x-user-limits": "5"},
     )
     assert code == 201, f"authority-backed POST /bots → {code} {created}"
 

@@ -59,6 +59,17 @@ spec:
                 secretKeyRef:
                   name: {{ include "vexa.adminTokenSecretName" . }}
                   key: INTERNAL_API_SECRET
+            # identity.v1: signs the identity the edge resolved onto every forward.
+            - name: VEXA_GATEWAY_IDENTITY_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: VEXA_GATEWAY_IDENTITY_SECRET
+            {{- if .Values.mcp.enabled }}
+            # The ONE MCP server (ADR-0037): /mcp is relayed to the assembled MCP service.
+            - name: MCP_URL
+              value: "http://{{ include "vexa.componentName" (list . "mcp") }}:{{ .Values.mcp.service.port }}"
+            {{- end }}
             - name: LOG_LEVEL
               value: {{ .Values.gateway.logLevel | default "info" | quote }}
             # fastapi-guard edge layer (edge_guard.py): per-IP throttle + auto-ban at the edge.

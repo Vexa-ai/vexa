@@ -228,7 +228,8 @@ def build_pod(
         "name": name,
         # Adoption labels (the orphaned-live-bot fix): a recreated runtime re-discovers its
         # still-running Pods by this label pair and re-registers them (see the kernel's adopt()).
-        "labels": {MANAGED_LABEL: "true", WORKLOAD_ID_LABEL: workload_id},
+        "labels": {MANAGED_LABEL: "true", WORKLOAD_ID_LABEL: workload_id,
+                   **_role_labels(workload_id)},
     }
     if namespace:
         metadata["namespace"] = namespace
@@ -253,6 +254,18 @@ def build_pod(
             if key != "name":
                 container[key] = value
     return pod
+
+
+#: The label that tells an agent WORKER apart from every other workload — the same key and value the
+#: docker backend stamps (`docker_backend._worker_naming`). The chart's NetworkPolicy lets
+#: runtime-managed pods reach meeting-api for their lifecycle callbacks and uploads EXCEPT workers,
+#: which act through the gateway and have no business on an internal service.
+ROLE_LABEL = "vexa.role"
+
+
+def _role_labels(workload_id: str) -> dict:
+    """``{vexa.role: worker}`` for an agent-dispatch workload (``agent-…``), nothing otherwise."""
+    return {ROLE_LABEL: "worker"} if workload_id.startswith("agent-") else {}
 
 
 class K8sBackend:

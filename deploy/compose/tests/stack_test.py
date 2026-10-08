@@ -273,7 +273,7 @@ def test_05_recording_to_storage(stack):
     # Finalize → a master is assembled + uploaded to object storage.
     code, master = http(
         "GET", f"{stack.meeting_api}/recordings/{recording_id}/master?type=audio",
-        headers={"x-user-id": str(user_id)},
+        headers={"x-internal-secret": stack.internal_secret, "x-user-id": str(user_id)},
     )
     assert code == 200, f"finalize master → {code} {master}"
     master_key = master["storage_path"]
@@ -337,7 +337,7 @@ def test_06d_max_bots(stack):
     cap = 2
     user_id = _create_user(stack, max_bots=cap)
     platform = "google_meet"
-    spawn_headers = {"x-user-id": str(user_id), "x-user-limits": str(cap), "Content-Type": "application/json"}
+    spawn_headers = {"x-internal-secret": stack.internal_secret, "x-user-id": str(user_id), "x-user-limits": str(cap), "Content-Type": "application/json"}
 
     def _add_active():
         stack.psql(
@@ -413,7 +413,7 @@ def test_03_real_bot_spawn_joining(stack):
         f"{stack.meeting_api}/bots",
         {"platform": platform, "native_meeting_id": native_id, "bot_name": "GateBot",
          "transcribe_enabled": False},
-        headers={"x-user-id": str(user_id), "x-user-limits": "5"},
+        headers={"x-internal-secret": stack.internal_secret, "x-user-id": str(user_id), "x-user-limits": "5"},
     )
     assert code == 201, f"POST /bots → {code} {body}"
     workload_id = body["bot_container_id"]

@@ -82,6 +82,12 @@ spec:
                 secretKeyRef:
                   name: {{ include "vexa.adminTokenSecretName" . }}
                   key: INTERNAL_API_SECRET
+            # identity.v1: verifies the gateway's signature over the identity meeting-api reads.
+            - name: VEXA_GATEWAY_IDENTITY_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: VEXA_GATEWAY_IDENTITY_SECRET
             # MeetingToken is signed AND verified with the SAME admin secret admin-api holds.
             - name: ADMIN_TOKEN
               valueFrom:

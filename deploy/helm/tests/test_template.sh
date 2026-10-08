@@ -150,13 +150,13 @@ else
   echo "  FAIL: agent-api did not render type: Recreate under default RWO workspace"; fail=1
 fi
 # The other API/UI Deployments keep the shared zero-downtime RollingUpdate — redis + agent-api are
-# the only two single-PVC opt-outs, so exactly 5 RollingUpdate blocks remain (gateway, admin-api,
-# meeting-api, runtime, terminal).
+# the only two single-PVC opt-outs, so exactly 6 RollingUpdate blocks remain (gateway, admin-api,
+# meeting-api, runtime, terminal, mcp).
 roll_count="$(grep -cE '^    type: RollingUpdate' <<< "$RENDER" || true)"
-if [ "$roll_count" -eq 5 ]; then
-  echo "  OK: 5 non-PVC Deployments keep RollingUpdate (agent-api + redis excepted)"
+if [ "$roll_count" -eq 6 ]; then
+  echo "  OK: 6 non-PVC Deployments keep RollingUpdate (agent-api + redis excepted)"
 else
-  echo "  FAIL: expected 5 RollingUpdate Deployments, got $roll_count"; fail=1
+  echo "  FAIL: expected 6 RollingUpdate Deployments, got $roll_count"; fail=1
 fi
 # A ReadWriteMany workspace lifts the single-mount constraint → agent-api takes the shared rolling
 # strategy back (conditional is on accessMode, not hardcoded).
@@ -633,6 +633,58 @@ else
 fi
 
 # Negative controls — each MUST fail to render, with the message that names the fix.
+# ── identity.v1 + the one MCP server (Vexa-ai/vexa#1783) ────────────────────────────────────────
+# The gateway signs the identity it resolved and agent-api + meeting-api verify it (all three refuse
+# to boot without the key); identity verifies a worker's delegation token and agent-api signs it.
+need 3 'key: VEXA_GATEWAY_IDENTITY_SECRET' "identity signing key on gateway, agent-api, meeting-api"
+need 2 'key: VEXA_MCP_DELEGATION_SECRET'   "delegation key on agent-api and admin-api"
+if grep -qE '^  VEXA_GATEWAY_IDENTITY_SECRET: "[A-Za-z0-9]{64}"$' <<< "$RENDER"; then
+  echo "  OK: the identity signing key is generated at install"
+else
+  echo "  FAIL: the chart Secret carries no generated VEXA_GATEWAY_IDENTITY_SECRET"; fail=1
+fi
+# ADR-0037: the chart deploys the assembled MCP server, the gateway relays /mcp to it, and every
+# agent worker's toolbelt points at the gateway's /mcp.
+need 1 'name: vexa-vexa-mcp$' "mcp Service/Deployment rendered"
+if grep -A1 'name: MCP_URL$' <<< "$RENDER" | grep -q 'value: "http://vexa-vexa-mcp:8010"'; then
+  echo "  OK: the gateway relays /mcp to the chart's MCP service"
+else
+  echo "  FAIL: gateway MCP_URL does not name vexa-vexa-mcp:8010"; fail=1
+fi
+if grep -A1 'name: VEXA_MCP_URL$' <<< "$RENDER" | grep -q 'value: "http://vexa-vexa-gateway:8000/mcp"'; then
+  echo "  OK: agent-api's worker toolbelt points at the gateway's /mcp"
+else
+  echo "  FAIL: agent-api VEXA_MCP_URL does not name the gateway's /mcp"; fail=1
+fi
+if grep -A1 'name: AGENT_API_URL$' <<< "$(awk '/deployment-mcp.yaml/{f=1} f{print} f&&/^---/{exit}' <<< "$RENDER")" \
+    | grep -q 'vexa-vexa-agent-api:8100'; then
+  echo "  OK: the MCP service assembles the agent domain's tools"
+else
+  echo "  FAIL: the MCP service does not name agent-api"; fail=1
+fi
+# The second wall: only legitimate callers reach agent-api and meeting-api, bots keep their
+# callbacks into meeting-api, and agent workers reach neither.
+need 1 'name: vexa-vexa-agent-api-ingress$'   "agent-api ingress NetworkPolicy"
+need 1 'name: vexa-vexa-meeting-api-ingress$' "meeting-api ingress NetworkPolicy"
+np_agent="$(awk '/networkpolicy.yaml/{f=1} f&&/name: vexa-vexa-agent-api-ingress/{p=1} p{print} p&&/^---/{exit}' <<< "$RENDER")"
+np_meeting="$(awk '/name: vexa-vexa-meeting-api-ingress/{p=1} p{print} p&&/^---/{exit}' <<< "$RENDER")"
+for c in gateway mcp runtime terminal; do
+  if grep -q "app.kubernetes.io/component: $c\$" <<< "$np_agent"; then echo "  OK: agent-api admits $c"
+  else echo "  FAIL: agent-api NetworkPolicy does not admit $c"; fail=1; fi
+done
+if grep -q 'runtime.managed' <<< "$np_agent"; then
+  echo "  FAIL: agent-api NetworkPolicy admits runtime-managed pods (bots/workers)"; fail=1
+else echo "  OK: agent-api admits no bot or worker pod"; fi
+if grep -q 'runtime.managed: "true"' <<< "$np_meeting" && grep -A2 'key: vexa.role' <<< "$np_meeting" | grep -q 'NotIn'; then
+  echo "  OK: meeting-api admits bots (runtime-managed, not workers) for their callbacks"
+else
+  echo "  FAIL: meeting-api NetworkPolicy does not admit bot callbacks while excluding workers"; fail=1
+fi
+np_off="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set networkPolicy.enabled=false)"
+if grep -qE 'name: vexa-vexa-(agent|meeting)-api-ingress' <<< "$np_off"; then
+  echo "  FAIL: networkPolicy.enabled=false still renders the agent-api/meeting-api policies"; fail=1
+else echo "  OK: networkPolicy.enabled=false renders neither agent-api nor meeting-api policy"; fi
+
 refuse() {  # refuse <label> <expected-message-regex> <helm args...>
   local label="$1" want="$2" out; shift 2
   if out="$(helm template vexa "$CHART" -n vexa "$@" 2>&1)"; then

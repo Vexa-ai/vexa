@@ -65,9 +65,11 @@
       "key": "MCP_URL",
       "class": "defaulted",
       "default": "http://mcp:8010",
-      "description": "MCP service base URL \u2014 the streamable-HTTP transport fronted under /mcp (GET streams the SSE leg, POST forwards buffered)",
+      "description": "the ONE assembled MCP service (ADR-0037) \u2014 the streamable-HTTP transport fronted under /mcp (GET streams the SSE leg, POST forwards buffered). Every bearer reaches it: a person's API key and a worker's delegation token alike",
       "targets": [
-        "compose"
+        "compose",
+        "helm",
+        "lite"
       ]
     },
     {
