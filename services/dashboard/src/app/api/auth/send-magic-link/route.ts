@@ -5,6 +5,7 @@ import { getRegistrationConfig, validateEmailForRegistration } from "@/lib/regis
 import { findUserByEmail, createUser, createUserToken } from "@/lib/vexa-admin-api";
 import { cookies } from "next/headers";
 import { getAuthCookieName, getUserInfoCookieName } from "@/lib/auth-cookies";
+import { isValidEmailFormat } from "@/lib/email-format";
 
 const JWT_SECRET = process.env.JWT_SECRET || process.env.VEXA_ADMIN_API_KEY || "default-secret-change-me";
 const MAGIC_LINK_EXPIRY = "15m"; // 15 minutes
@@ -199,8 +200,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Validate email format
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
+    if (!isValidEmailFormat(email)) {
       return NextResponse.json(
         { error: "Invalid email format" },
         { status: 400 }
