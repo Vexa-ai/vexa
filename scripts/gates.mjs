@@ -347,7 +347,7 @@ function gateStack() {
 // by bin/stack-test) owns the full up→prove→down(-v) lifecycle; this gate just dispatches it.
 // GREEN-OR-SKIP like gate:stack: detect docker (`docker info`); if absent → print a skip line +
 // return green. GREEN-ON-EMPTY if the compose file is missing. When docker IS present it runs the
-// ALWAYS-ON proof subset (health · auth surface · transcript dataflow · recording→minio · max-bots ·
+// ALWAYS-ON proof subset (health · auth surface · transcript dataflow · recording→storage · max-bots ·
 // continue_meeting · join-retry-wiring) and fails LOUD on any assertion. The real bot-spawn proof
 // (steps 3·6a — a live vexaai/vexa-bot:dev container reaching `joining`) is opt-in behind COMPOSE_BOT=1
 // (slow/flaky for a routine gate), runnable via `make -C deploy/compose stack-test-bot`.
@@ -368,7 +368,7 @@ function gateCompose() {
 // holds (max-bots never overspills), every FSM reaches terminal under contention. OPT-IN + green-or-skip:
 // runs ONLY when COMPOSE_STRESS=1 (heavy → not in the routine `all`; `all` skips it green). Set
 // MOCK_BOT=1 + BROWSER_IMAGE=mock-bot:dev too; delegates to the same real-stack runner (stress_test.py
-// runs as part of the session). On a shared host (bbb) pass COMPOSE_PROJECT + MINIO_HOST_PORT to isolate.
+// runs as part of the session). On a shared host (bbb) pass COMPOSE_PROJECT + STORAGE_HOST_PORT to isolate.
 function gateComposeStress() {
   if (process.env.COMPOSE_STRESS !== "1") {
     console.log("  ✓ gate:compose-stress — opt-in (COMPOSE_STRESS=1 + MOCK_BOT=1 + BROWSER_IMAGE=mock-bot:dev) → skip");
@@ -506,7 +506,8 @@ function gateLicenses() {
 // gate:image-licenses (P17, #653) — the packaging-side complement to gate:licenses. That gate scans the
 // npm/py DEPENDENCY tree; it is blind to two license surfaces the project actually ships, the class the
 // #653 audit exposed — "the thing we ship is not the thing the gate checks":
-//   (1) third-party container images our deploy surfaces PIN (compose/helm `image:` refs) — user-pulled
+//   (1) third-party container images our deploy surfaces PIN (compose/helm `image:` refs, Lite Dockerfile
+//       FROM refs, and Lite Makefile `*_IMAGE` variables) — user-pulled
 //       sidecars. Each is DECLARED in image-licenses.json; an undeclared pin fails (the "green gate ships
 //       an un-audited component" hole); a non-permissive licence (e.g. a source-available Redis ≥7.4
 //       RSALv2/SSPL, or AGPL MinIO) requires a logged `reason`, so it is a reviewed decision, never silent.
@@ -526,7 +527,8 @@ function gateImageLicenses() {
   // (1) third-party image pins across the deploy-owned forms:
   //     • scalar `image: ref` in compose, Helm values, and Helm templates;
   //     • structured Helm `image: { repository, tag }` blocks;
-  //     • every `FROM ref` in the Lite Dockerfile (including builder stages whose bytes feed final).
+  //     • every `FROM ref` in the Lite Dockerfile (including builder stages whose bytes feed final);
+  //     • non-recipe `*_IMAGE` variable assignments in the Lite Makefile.
   //     Skip our own vexaai/* / vexa/* images — those are built here, not third-party inputs.
   const chartDir = join(ROOT, "deploy", "helm", "charts", "vexa");
   const tplDir = join(chartDir, "templates");
@@ -560,8 +562,8 @@ function gateImageLicenses() {
 
   // Helm's established structured values shape:
   //   image:
-  //     repository: minio/minio
-  //     tag: latest
+  //     repository: <registry>/<image>
+  //     tag: <tag>
   // Use indentation to bind repository+tag to the same image block.
   for (const f of helmValueFiles) {
     const lines = readFileSync(f, "utf8").split(/\r?\n/);
@@ -589,6 +591,19 @@ function gateImageLicenses() {
     for (const m of readFileSync(liteDockerfile, "utf8").matchAll(
       /^FROM[ \t]+(?:--platform=\S+[ \t]+)?(\S+)/gmi,
     )) recordImage(m[1], rel(liteDockerfile));
+  }
+
+  const liteMakefile = join(ROOT, "deploy", "lite", "Makefile");
+  if (existsSync(liteMakefile)) {
+    // Scan ?=, :=, ::=, = with optional export/override; not target-specific assignments, define blocks or \-continued values.
+    for (const line of readFileSync(liteMakefile, "utf8").split(/\r?\n/)) {
+      if (line.startsWith("\t")) continue;
+      const assignment = line.match(/^[ \t]*(?:(?:export|override)[ \t]+)*[A-Za-z_][A-Za-z0-9_]*_IMAGE[ \t]*(?:\?=|::?=|=)[ \t]*([^\s#]+)/);
+      if (assignment) {
+        const value = assignment[1];
+        recordImage(/[/@:$]/.test(value) ? value : `${value}:latest`, rel(liteMakefile));
+      }
+    }
   }
 
   for (const [name, { ref, source }] of foundImages) {

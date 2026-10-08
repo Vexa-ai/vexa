@@ -166,6 +166,7 @@ test("an entrypoint.sh export that no adopted declaration carries is RED, named 
 const COMPOSE = "deploy/compose/docker-compose.yml";
 const VALUES = "deploy/helm/charts/vexa/values.yaml";
 const LITE = "deploy/lite/Dockerfile.lite";
+const LITE_MAKEFILE = "deploy/lite/Makefile";
 const IMG_MANIFEST = "image-licenses.json";
 
 // ── gate:runtime-parity ─────────────────────────────────────────────────────────────────────────
@@ -198,6 +199,38 @@ test("image-licenses vacuity: the committed tree (Valkey everywhere) is green", 
   assert.equal(r.green, true, `the clean tree already reds — the fixtures below prove nothing:\n${r.out}`);
 });
 
+for (const assignment of [
+  "EVIL_IMAGE ?= evil/agpl-thing:1.0",
+  "EVIL_IMAGE := evil/agpl-thing:1.0",
+  "EVIL_IMAGE = evil/agpl-thing:1.0",
+  "export EVIL_IMAGE ?= evil/agpl-thing:1.0",
+  "override EVIL_IMAGE := evil/agpl-thing:1.0",
+]) {
+  test(`image-licenses RED: an undeclared Lite Makefile image variable reds (${assignment})`, () => {
+    const r = withEdited(LITE_MAKEFILE, /$/, `\n${assignment}\n`,
+      () => runGate("image-licenses"));
+    assert.equal(r.green, false, "an undeclared Lite image variable passed the gate");
+    assert.match(r.out, /undeclared pinned image/);
+    assert.match(r.out, /evil\/agpl-thing/);
+    assert.match(r.out, /deploy\/lite\/Makefile/);
+  });
+}
+
+test("image-licenses RED: an undeclared bare Lite Makefile image name reds", () => {
+  const r = withEdited(LITE_MAKEFILE, /$/, "\nEVIL_IMAGE ?= evilbare\n",
+    () => runGate("image-licenses"));
+  assert.equal(r.green, false, "an undeclared bare Lite image name passed the gate");
+  assert.match(r.out, /undeclared pinned image/);
+  assert.match(r.out, /evilbare/);
+  assert.match(r.out, /deploy\/lite\/Makefile/);
+});
+
+test("image-licenses GREEN: Lite recipe assignments are not image variables", () => {
+  const r = withEdited(LITE_MAKEFILE, /$/, "\n\tFOO_IMAGE=evil/agpl-thing:1.0 true\n",
+    () => runGate("image-licenses"));
+  assert.equal(r.green, true, `a shell recipe assignment red the image gate:\n${r.out}`);
+});
+
 test("image-licenses RED: an undeclared pinned image (a stray redis:7.4) reds", () => {
   // redis:7.4 is exactly the source-available (RSALv2/SSPL) engine #653 keeps out; undeclared ⇒ loud red.
   const r = withEdited(COMPOSE, "image: valkey/valkey:8-alpine", "image: redis:7.4-alpine",
@@ -223,16 +256,16 @@ test("image-licenses RED: a bundled component under a source-available licence (
   assert.match(r.out, /redis/);
 });
 
-const MINIO_JOB = "deploy/helm/charts/vexa/templates/job-minio-init.yaml";
+const PGBOUNCER_TPL = "deploy/helm/charts/vexa/templates/deployment-pgbouncer.yaml";
 
 test("image-licenses RED: an undeclared image pinned in a helm TEMPLATE (not just values) reds", () => {
   // The gate must read helm templates, not only compose + values — a literal `image:` in a template
   // is a real pin. An undeclared one must red, else the 'green gate ships an un-audited component' hole.
-  // #1321 moved the mc image from a template literal to values (minio.mcImage) — the template
-  // line is now templated. The test's subject is unchanged: inject a LITERAL pin into the
-  // template and require the gate to read it.
-  const r = withEdited(MINIO_JOB,
-    "image: {{ .Values.minio.mcImage.repository }}:{{ .Values.minio.mcImage.tag }}",
+  // Anchored on the pgbouncer template since the MinIO bucket-init Job it used to edit left the
+  // chart (storage.s3). The test's subject is unchanged: inject a LITERAL pin into a template and
+  // require the gate to read it.
+  const r = withEdited(PGBOUNCER_TPL,
+    'image: "{{ .Values.pgbouncer.image }}"',
     "image: somevendor/unaudited:1.2",
     () => runGate("image-licenses"));
   assert.equal(r.green, false, "an undeclared image in a helm template sailed through — the gate never read templates");
@@ -247,9 +280,9 @@ test("image-licenses RED: an undeclared structured Helm repository/tag pin reds"
     "    repository: somevendor/unaudited",
     "    tag: 1.2",
     "",
-    "minio:",
+    "ingress:",
   ].join("\n");
-  const r = withEdited(VALUES, "minio:\n", injected, () => runGate("image-licenses"));
+  const r = withEdited(VALUES, "\ningress:\n", `\n${injected}\n`, () => runGate("image-licenses"));
   assert.equal(r.green, false, "a structured Helm repository/tag image pin sailed through");
   assert.match(r.out, /undeclared pinned image/);
   assert.match(r.out, /somevendor\/unaudited:1\.2/);

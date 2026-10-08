@@ -2,8 +2,8 @@
 # mint-dev-env.sh — seed deploy/compose/.env from .env.example and MINT every secret the stack
 # refuses to run without. Since 0.12.27 the services refuse to boot on an empty or published
 # placeholder for these keys (config.v1 `forbidden_values`); a fresh checkout therefore needs real
-# values before `docker compose up`. CI's value leg and release-validate call this instead of a bare
-# `cp`; self-hosters may call it too — it never overwrites an existing non-empty value.
+# values before `docker compose up`. `make up` / `make all` / `make dev`, CI's value leg and
+# release-validate call this instead of a bare `cp` — it never overwrites an existing non-empty value.
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 env_file="${1:-$here/.env}"

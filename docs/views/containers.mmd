@@ -32,7 +32,7 @@ flowchart LR
   subgraph platform["platform"]
     redis["redis"]
     postgres["postgres"]
-    minio["minio"]
+    object_store["object-store"]
   end
   subgraph flows["flows"]
     flows_api["flows-api"]
@@ -40,6 +40,7 @@ flowchart LR
   end
   slim["slim"]
   extension["extension"]
+  claude_plugin["claude-plugin"]
   terminal["terminal"]
   dashboard["dashboard (deprecated)"]
   credentials_broker["credentials-broker"]
@@ -47,7 +48,7 @@ flowchart LR
   meeting_api -->|"write"| segments_table
   bot -->|"HTTPS"| transcription
   meeting_api -->|"JDBC"| postgres
-  meeting_api -->|"HTTPS"| minio
+  meeting_api -->|"HTTPS"| object_store
   meeting_api -->|"HTTPS"| runtime
   meeting_api -->|"HTTPS"| admin_api
   meeting_api -->|"HTTPS"| service_authority

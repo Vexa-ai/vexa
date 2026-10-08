@@ -83,7 +83,7 @@ system system-webhook-system  # optional operator-owned terminal-event consumer;
 system platform  # shared infra backing the services
   service redis
   database postgres
-  service minio
+  service object-store
 
 system flows  # the reaction engine; owns the reaction row and its effect receipts
   module flows-engine
@@ -118,7 +118,7 @@ edges:
   meeting-api -write-> bot-commands  # PUBLISH leave/speak
   meeting-api -write-> recording-blob  # S3 PUT stitched master
   meeting-api -write-> postgres
-  meeting-api -write-> minio
+  meeting-api -write-> object-store
   meeting-api -req-> runtime  # POST /workloads spawn bot
   meeting-api -req-> admin-api  # GET /internal/calendar-configs discovers secret-gated calendar connections for sync and disconnect cleanup
   meeting-api -req-> service-authority  # optional signed service-authority.v1 admit/continue decision; unset is explicit OSS allow-all, configured failure is closed
@@ -157,7 +157,7 @@ edges:
   gateway -req-> agent-mcp  # Delegated /mcp transport; bearer forwarded without asserted identity; agent domain validates scope
   agent-mcp -req-> agent-api  # Authenticated subject scoped agent operations and connection setup requests
   bot, agent-worker deployed-in runtime
-  gateway, meeting-api, agent-api, admin-api, runtime, redis, postgres, minio, transcription deployed-in deploy
+  gateway, meeting-api, agent-api, admin-api, runtime, redis, postgres, object-store, transcription deployed-in deploy
   flows-api, flows-worker deployed-in deploy
 
 flows:

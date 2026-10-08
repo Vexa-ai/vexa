@@ -1,5 +1,5 @@
 {
-  "_comment": "Packaging-side licence manifest (P17 / ADR-0004, #653), the complement to license-exceptions.json. gate:licenses scans the npm/py DEPENDENCY tree; it is blind to what our IMAGES ship. This file declares the two surfaces it cannot see, and gate:image-licenses (scripts/gates.mjs) audits them: `images` = third-party container images pinned by deploy-owned compose, Helm, or Lite Dockerfile FROM surfaces (an undeclared pin fails; a non-permissive one needs a logged `reason`); `bundled` = components baked INTO a published vexaai/* image (redistribution — Cat A or Cat-B-with-reason only, Cat X always fails). `name` matches an image ref with its :tag stripped. The per-release SPDX SBOM inventories every package name installed by the Lite final stage; because Docker source cannot resolve Ubuntu package versions or licences, those fields stay NOASSERTION until an image-level scanner enriches them.",
+  "_comment": "Packaging-side licence manifest (P17 / ADR-0004, #653), the complement to license-exceptions.json. gate:licenses scans the npm/py DEPENDENCY tree; it is blind to what our IMAGES ship. This file declares the two surfaces it cannot see, and gate:image-licenses (scripts/gates.mjs) audits them: `images` = third-party container images pinned by deploy-owned compose, Helm, Lite Dockerfile FROM surfaces, or Lite Makefile `*_IMAGE` variables (an undeclared pin fails; a non-permissive one needs a logged `reason`); `bundled` = components baked INTO a published vexaai/* image (redistribution \u2014 Cat A or Cat-B-with-reason only, Cat X always fails). `name` matches an image ref with its :tag stripped. The per-release SPDX SBOM inventories every package name installed by the Lite final stage; because Docker source cannot resolve Ubuntu package versions or licences, those fields stay NOASSERTION until an image-level scanner enriches them.",
   "images": [
     {
       "name": "mcr.microsoft.com/playwright",
@@ -23,31 +23,31 @@
       "name": "edoburu/pgbouncer",
       "license": "MIT",
       "disposition": "sidecar",
-      "note": "Connection pooler. Wrapper image is MIT; PgBouncer itself is ISC — both Category A."
+      "note": "Connection pooler. Wrapper image is MIT; PgBouncer itself is ISC \u2014 both Category A."
     },
     {
-      "name": "minio/minio",
-      "license": "AGPL-3.0-or-later",
+      "name": "versity/versitygw",
+      "license": "Apache-2.0",
       "disposition": "sidecar",
-      "reason": "Object store the operator pulls DIRECTLY from MinIO's official registry — it is not redistributed inside any vexaai/* artifact, so no AGPL source-offer obligation attaches to Vexa's Apache-2.0 images; the obligation rests with the upstream image the operator runs. A deliberate, reviewed sidecar allowance (ADR-0004). Not a bundled component."
+      "note": "Object storage for Lite and Compose (the `storage` sidecar): versitygw with its POSIX backend, recordings as plain files in a local volume. Apache-2.0 is Category A. Pinned by tag and digest in deploy/compose/docker-compose.yml and deploy/lite/Makefile (the gate scans the Lite Makefile image variables)."
     },
     {
-      "name": "minio/mc",
-      "license": "AGPL-3.0-or-later",
+      "name": "fedirz/faster-whisper-server",
+      "license": "MIT",
       "disposition": "sidecar",
-      "reason": "MinIO client, used only by the compose/helm bucket-init Job. Same disposition as minio/minio: operator-pulled, never redistributed inside a vexaai/* artifact (ADR-0004)."
+      "note": "Opt-in local CPU speech-to-text sidecar for Lite (LOCAL_STT, WHISPER_IMAGE in deploy/lite/Makefile). Upstream speaches-ai/speaches (formerly fedirz/faster-whisper-server), MIT, Category A. User-pulled and not redistributed inside any vexaai/* artifact."
     },
     {
       "name": "searxng/searxng",
       "license": "AGPL-3.0-or-later",
       "disposition": "sidecar",
-      "reason": "Search endpoint the operator pulls DIRECTLY from SearXNG's own registry, unmodified and pinned by digest — it is not redistributed inside any vexaai/* artifact, so no AGPL source-offer obligation attaches to Vexa's Apache-2.0 images; the obligation rests with the upstream image the operator runs. OFF by default behind the `search` compose profile; it answers WebSearch for the openai-agent harness through VEXA_SEARCH_URL, which accepts any endpoint of that shape. A deliberate, reviewed sidecar allowance (ADR-0004), same disposition as minio/minio. Not a bundled component, and not a Helm chart component."
+      "reason": "Search endpoint the operator pulls DIRECTLY from SearXNG's own registry, unmodified and pinned by digest \u2014 it is not redistributed inside any vexaai/* artifact, so no AGPL source-offer obligation attaches to Vexa's Apache-2.0 images; the obligation rests with the upstream image the operator runs. OFF by default behind the `search` compose profile; it answers WebSearch for the openai-agent harness through VEXA_SEARCH_URL, which accepts any endpoint of that shape. A deliberate, reviewed sidecar allowance (ADR-0004), same disposition as minio/minio. Not a bundled component, and not a Helm chart component."
     },
     {
       "name": "litellm/litellm",
       "license": "MIT",
       "disposition": "sidecar",
-      "note": "The llm-shim: the Anthropic /v1/messages front door for a deployment running its own OpenAI-dialect model server (deploy/compose/llm-shim/README.md). OFF by default, behind the `llm-shim` compose profile, and operator-pulled from LiteLLM's own registry — never redistributed inside a vexaai/* artifact. LiteLLM's LICENSE is MIT with one carve-out: content under `enterprise/` is governed by `enterprise/LICENSE`. We pin, run and vouch for the image as published; we bundle no part of it."
+      "note": "The llm-shim: the Anthropic /v1/messages front door for a deployment running its own OpenAI-dialect model server (deploy/compose/llm-shim/README.md). OFF by default, behind the `llm-shim` compose profile, and operator-pulled from LiteLLM's own registry \u2014 never redistributed inside a vexaai/* artifact. LiteLLM's LICENSE is MIT with one carve-out: content under `enterprise/` is governed by `enterprise/LICENSE`. We pin, run and vouch for the image as published; we bundle no part of it."
     }
   ],
   "bundled": [
@@ -56,7 +56,7 @@
       "license": "BSD-3-Clause",
       "artifact": "vexaai/vexa-lite",
       "how": "source-build from the pinned git tag 8.1.9 (deploy/lite/Dockerfile.lite valkey-builder stage); valkey-server + valkey-cli copied into the final image, COPYING preserved at /usr/local/share/valkey/LICENSE",
-      "reason": "XAUTOCLAIM parity with compose/helm and off BOTH jammy apt's stale Redis 6.0.16 (no XAUTOCLAIM) and source-available Redis ≥7.4 (RSALv2/SSPLv1). BSD-3 is Category A — clean to redistribute (#653)."
+      "reason": "XAUTOCLAIM parity with compose/helm and off BOTH jammy apt's stale Redis 6.0.16 (no XAUTOCLAIM) and source-available Redis \u22657.4 (RSALv2/SSPLv1). BSD-3 is Category A \u2014 clean to redistribute (#653)."
     }
   ]
 }

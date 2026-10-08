@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Render the v0.12 vexa chart (no cluster required) and assert the carved control plane is present:
-# 5 service Deployments, postgres + minio StatefulSets, redis, minio-init Job, runtime SA/Role/
-# RoleBinding (k8s backend), agent-workspaces PVC. This is the gate:helm static proof.
+# 5 service Deployments, the postgres StatefulSet, redis, runtime SA/Role/RoleBinding (k8s backend),
+# agent-workspaces PVC — and NO object store: recordings go to the operator's S3 (storage.s3), and
+# the storage guards refuse a render without it. This is the gate:helm static proof.
 set -euo pipefail
 
 HELM_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -23,13 +24,12 @@ need() {  # need <count> <grep-pattern> <label>
 echo "=== gate:helm — template render assertions ==="
 # 6 long-running services (+ terminal) + redis = 7 Deployments
 need 7 '^kind: Deployment'    "Deployments"
-need 2 '^kind: StatefulSet'   "StatefulSets (postgres+minio)"
-need 9 '^kind: Service$'      "Services"
+need 1 '^kind: StatefulSet'   "StatefulSets (postgres)"
+need 8 '^kind: Service$'      "Services"
 need 1 'name: vexa-vexa-terminal' "terminal present"
 need 1 '^kind: ServiceAccount' "runtime ServiceAccount"
 need 1 '^kind: Role$'         "runtime Role"
 need 1 '^kind: RoleBinding'   "runtime RoleBinding"
-need 1 '^kind: Job'           "minio-init Job"
 need 2 '^kind: PersistentVolumeClaim' "PVCs (redis+workspaces)"
 need 1 'name: vexa-vexa-agent-api' "agent-api present"
 need 1 'RUNTIME_BACKEND'      "runtime backend env"
@@ -541,5 +541,125 @@ if grep -q 'image: "reg.example/flows@sha256:abc"' <<< "$FLOWS_OVERRIDE"; then
 else
   echo "  FAIL: an explicit flows.image no longer wins over global.imageTag (#A12)"; fail=1
 fi
+
+# ── storage.s3 — recordings in the operator's own S3; the built-in MinIO is gone ─────────────────
+# The chart runs no object store: no MinIO workload, Service, PVC template, bucket Job or image in
+# the render, and no StatefulSet beyond postgres (asserted exactly, not >=).
+exact() {  # exact <count> <grep-pattern> <label> [render]
+  local want="$1" pat="$2" label="$3" got
+  got="$(printf '%s\n' "${4:-$RENDER}" | grep -cE "$pat" || true)"
+  if [ "$got" -eq "$want" ]; then echo "  OK: $label ($got)"; else echo "  FAIL: $label — want $want got $got"; fail=1; fi
+}
+exact 0 'component: minio' "no MinIO workload, Service or Job (component: minio)"
+exact 0 'image: .*(minio|/mc[:@])' "no MinIO server or client image"
+exact 0 'vexa-vexa-minio' "nothing addresses the old MinIO Service"
+exact 0 'minio-init' "no bucket-init Job"
+exact 1 '^kind: StatefulSet' "exactly one StatefulSet (postgres)"
+exact 0 '^kind: Job' "no Job in the default render (the bucket-init Job is gone)"
+# meeting-api's storage env comes from storage.s3, VALUE-level (values-test points at the fixture).
+MA="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --show-only templates/deployment-meeting-api.yaml)"
+for kv in 'S3_ENDPOINT|value: "http://s3-fixture:7070"' 'MINIO_ENDPOINT|value: "http://s3-fixture:7070"' \
+          'MINIO_BUCKET|value: "vexa-recordings"' 'MINIO_SECURE|value: "false"' \
+          'STORAGE_BACKEND|value: "s3"' 'AWS_CONFIG_FILE|value: /etc/vexa/s3/config'; do
+  k="${kv%%|*}"; v="${kv##*|}"
+  if grep -A1 "name: $k\$" <<< "$MA" | grep -qF "$v"; then echo "  OK: meeting-api $k = ${v#value: }"
+  else echo "  FAIL: meeting-api $k is not ${v#value: }"; fail=1; fi
+done
+# Credentials only by secretKeyRef on storage.s3.existingSecret — never a literal value. Both name
+# pairs (S3_* and the MINIO_* keys the /health object_storage row is declared on) read the Secret.
+for k in S3_ACCESS_KEY MINIO_ACCESS_KEY; do
+  if grep -A5 "name: $k\$" <<< "$MA" | tr -d '\n' | grep -qE 'secretKeyRef:[[:space:]]+name: "s3-fixture-credentials"[[:space:]]+key: "AWS_ACCESS_KEY_ID"'; then
+    echo "  OK: $k from secretKeyRef s3-fixture-credentials/AWS_ACCESS_KEY_ID"
+  else echo "  FAIL: $k is not read from the storage.s3 Secret"; fail=1; fi
+done
+for k in S3_SECRET_KEY MINIO_SECRET_KEY; do
+  if grep -A5 "name: $k\$" <<< "$MA" | tr -d '\n' | grep -qE 'secretKeyRef:[[:space:]]+name: "s3-fixture-credentials"[[:space:]]+key: "AWS_SECRET_ACCESS_KEY"'; then
+    echo "  OK: $k from secretKeyRef s3-fixture-credentials/AWS_SECRET_ACCESS_KEY"
+  else echo "  FAIL: $k is not read from the storage.s3 Secret"; fail=1; fi
+done
+if grep -A1 -E 'name: (S3|MINIO)_(ACCESS|SECRET)_KEY$' <<< "$MA" | grep -q 'value:'; then
+  echo "  FAIL: a storage credential is rendered as a literal value"; fail=1
+else echo "  OK: no storage credential rendered as a literal value"; fi
+# The boto3 shared-config file: path-style by default, virtual when forcePathStyle=false, and a CA
+# bundle only when one is named (ConfigMap or Secret, mounted read-only at the path it names).
+CM="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --show-only templates/configmap-s3-client.yaml)"
+if grep -q 'addressing_style = path' <<< "$CM" && grep -q 'region = us-east-1' <<< "$CM" && ! grep -q ca_bundle <<< "$CM"; then
+  echo "  OK: S3 client config defaults (path-style, us-east-1, system CAs)"
+else echo "  FAIL: S3 client config defaults wrong"; fail=1; fi
+CMV="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set storage.s3.forcePathStyle=false \
+  --set storage.s3.region=eu-central-1 --show-only templates/configmap-s3-client.yaml)"
+if grep -q 'addressing_style = virtual' <<< "$CMV" && grep -q 'region = eu-central-1' <<< "$CMV"; then
+  echo "  OK: forcePathStyle=false → virtual-hosted; region threads through"
+else echo "  FAIL: forcePathStyle=false / region not honored"; fail=1; fi
+CA="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set storage.s3.caBundle.configMapName=corp-ca \
+  --set storage.s3.caBundle.key=ca-bundle.crt)"
+if grep -q 'ca_bundle = /etc/vexa/s3-ca/ca.crt' <<< "$CA" && grep -A6 'name: s3-ca$' <<< "$CA" | grep -q 'name: "corp-ca"' \
+   && grep -q 'key: "ca-bundle.crt"' <<< "$CA" && grep -q 'mountPath: /etc/vexa/s3-ca' <<< "$CA"; then
+  echo "  OK: caBundle.configMapName mounts the bundle and names it in the client config"
+else echo "  FAIL: caBundle.configMapName not wired"; fail=1; fi
+CAS="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set storage.s3.caBundle.secretName=corp-ca \
+  --show-only templates/deployment-meeting-api.yaml)"
+if grep -A3 'name: s3-ca$' <<< "$CAS" | grep -q 'secretName: "corp-ca"'; then
+  echo "  OK: caBundle.secretName mounts the bundle from a Secret"
+else echo "  FAIL: caBundle.secretName not wired"; fail=1; fi
+# A pinned MinIO-era values shape with MinIO OFF (the enterprise kit's rehearsal values) renders.
+if helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set minio.enabled=false >/dev/null 2>&1; then
+  echo "  OK: minio.enabled=false beside storage.s3 renders (MinIO-off values keep working)"
+else echo "  FAIL: minio.enabled=false beside storage.s3 does not render"; fail=1; fi
+
+# Render the Install command's actual --set flags, substituting only its generated secrets and
+# bucket placeholder. Parse the flags as data: never execute commands copied from the docs.
+INSTALL_SECRET=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+INSTALL_ARGS=()
+while read -r flag value; do
+  INSTALL_ARGS+=("$flag" "$value")
+done < <(awk -v secret="$INSTALL_SECRET" '
+  /^helm install vexa / { install=1; next }
+  install && /^```/ { exit }
+  install {
+    sub(/[[:space:]]*\\$/, "")
+    gsub(/"\$\(openssl rand -hex 32\)"/, secret)
+    sub(/<your bucket>/, "b")
+    print
+  }
+' "$HELM_DIR/../../docs/docs/deployment-kubernetes.mdx")
+if INSTALL="$(helm template vexa "$CHART" -n vexa "${INSTALL_ARGS[@]}" 2>&1)" && [ -n "$INSTALL" ]; then
+  echo "  OK: documented Install command flags render successfully"
+  exact 0 'CHANGE_ME' "documented Install has no published admin token" "$INSTALL"
+  exact 4 "^  (ADMIN_API_TOKEN|INTERNAL_API_SECRET|VEXA_DISPATCH_SIGNING_KEY|NEXTAUTH_SECRET): \"$INSTALL_SECRET\"$" \
+    "documented Install supplies all four secrets" "$INSTALL"
+else
+  echo "  FAIL: documented Install command flags did not render: $INSTALL"; fail=1
+fi
+
+# Negative controls — each MUST fail to render, with the message that names the fix.
+refuse() {  # refuse <label> <expected-message-regex> <helm args...>
+  local label="$1" want="$2" out; shift 2
+  if out="$(helm template vexa "$CHART" -n vexa "$@" 2>&1)"; then
+    echo "  FAIL: $label — rendered, must refuse"; fail=1
+  elif grep -qE "$want" <<< "$out"; then echo "  OK: $label → refused with the actionable message"
+  else echo "  FAIL: $label — refused without the expected message: $(grep -m1 Error <<< "$out")"; fail=1; fi
+}
+refuse "no storage.s3 (chart defaults)" 'storage\.s3 is incomplete, missing: storage\.s3\.endpoint, storage\.s3\.bucket, storage\.s3\.existingSecret' \
+  --set secrets.internalApiSecret=x
+refuse "stale minio.enabled=true" 'minio\.enabled=true is no longer supported.*data-vexa-vexa-minio-0' \
+  -f "$CHART/values-test.yaml" --set minio.enabled=true
+refuse "endpoint without a scheme" 'storage\.s3\.endpoint must be a full URL' \
+  -f "$CHART/values-test.yaml" --set storage.s3.endpoint=minio:9000
+refuse "region with whitespace" 'storage\.s3\.region must be a region name such as us-east-1' \
+  -f "$CHART/values-test.yaml" --set 'storage.s3.region=us east'
+refuse "region with an INI injection" 'storage\.s3\.region must be a region name such as us-east-1' \
+  -f "$CHART/values-test.yaml" --set $'storage.s3.region=us-east-1\nca_bundle=/tmp/other-ca'
+refuse "no existingSecret" 'missing: storage\.s3\.existingSecret' \
+  -f "$CHART/values-test.yaml" --set storage.s3.existingSecret=
+refuse "CA bundle named twice" 'set configMapName or secretName, not both' \
+  -f "$CHART/values-test.yaml" --set storage.s3.caBundle.configMapName=a --set storage.s3.caBundle.secretName=b
+refuse "extraEnv still setting S3_ENDPOINT" 'meetingApi\.extraEnv sets S3_ENDPOINT' \
+  -f "$CHART/values-test.yaml" --set-json 'meetingApi.extraEnv=[{"name":"S3_ENDPOINT","value":"http://old"}]'
+for k in AWS_DEFAULT_REGION AWS_CA_BUNDLE AWS_PROFILE AWS_SHARED_CREDENTIALS_FILE; do
+  refuse "extraEnv setting $k" \
+    "meetingApi\\.extraEnv sets $k, which the chart now sets from storage\\.s3\\. Put the value in storage\\.s3 and remove it from meetingApi\\.extraEnv\\." \
+    -f "$CHART/values-test.yaml" --set "meetingApi.extraEnv[0].name=$k" --set 'meetingApi.extraEnv[0].value=override'
+done
 
 [ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }
