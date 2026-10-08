@@ -24,6 +24,8 @@ const EMPTY_LIVE = { transcript: [], issues: [], connected: false, ended: false,
 
 vi.mock("../../surfaces/liveMeetings", () => ({
   useLiveMeetings: () => meetingsState,
+  useLiveMeetingsConnection: () => true,
+  refreshMeetings: vi.fn(),
   fetchDurableTranscript: vi.fn(async () => ({ lines: durableState.lines })),
 }));
 

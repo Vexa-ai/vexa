@@ -66,3 +66,20 @@ describe("catch-all proxy — upstream status passthrough", () => {
     expect((await res.json()).error).toBe("upstream_unreachable");
   });
 });
+
+it("streams recording bytes and preserves range seeking through the meetings gateway", async () => {
+  const bytes = new Uint8Array([0, 255, 128, 1]);
+  const mock = vi.fn(async (_url: string, _init: RequestInit) => new Response(bytes, { status: 206, headers: {
+    "Content-Type": "audio/webm", "Content-Range": "bytes 4-7/100", "Accept-Ranges": "bytes", "Content-Length": "4",
+  } }));
+  vi.stubGlobal("fetch", mock);
+  const req = makeReq("GET");
+  Object.defineProperty(req, "headers", { value: new Headers({ Range: "bytes=4-7" }) });
+  const res = await getRoute(req, ctx("recordings", "7", "media", "9", "raw"));
+  expect(mock.mock.calls[0][0]).toContain("/recordings/7/media/9/raw");
+  expect(mock.mock.calls[0][0]).not.toContain("/agent/");
+  expect((mock.mock.calls[0][1].headers as Record<string, string>).Range).toBe("bytes=4-7");
+  expect(res.status).toBe(206);
+  expect(res.headers.get("content-range")).toBe("bytes 4-7/100");
+  expect(new Uint8Array(await res.arrayBuffer())).toEqual(bytes);
+});

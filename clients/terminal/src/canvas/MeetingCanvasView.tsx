@@ -1,4 +1,5 @@
 "use client";
+import { MeetingControls } from "../minutes/MeetingControls";
 import { useEffect, useRef } from "react";
 import { useService } from "../platform";
 import { LayoutServiceId } from "../workbench/layout";
@@ -68,6 +69,7 @@ function MeetingCanvasBody({ meetingId }: { meetingId?: string }) {
         </div>
       )}
       <MeetingHealthBanner />
+      {meetingId && <div style={{ padding: "0 18px 8px" }}><MeetingControls meetingId={meetingId} showBot={false} /></div>}
       <main style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
         <div style={{ padding: MEETING_CANVAS_CONTENT_INSET }}>
           <RawTranscript meetingId={meetingId} />
