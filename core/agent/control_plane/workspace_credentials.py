@@ -28,9 +28,8 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, Optional
-from urllib.parse import urlsplit
-
 from control_plane import deploy_keys, git_credentials, secret_store
+from shared import token_destination
 
 log = logging.getLogger(__name__)
 
@@ -83,28 +82,10 @@ def is_auth_failure(message: str) -> bool:
     return bool(_AUTH_FAILURE.search(message or ""))
 
 
-def is_https(repo_url: str) -> bool:
-    """Whether ``repo_url`` is an ``https://`` URL — the only transport a token is ever sent over."""
-    try:
-        return urlsplit((repo_url or "").strip()).scheme.lower() == "https"
-    except ValueError:
-        return False
-
-
-def saved_token_may_reach(repo_url: str) -> bool:
-    """Whether the caller's SAVED GitHub token may be sent to ``repo_url``: only ``https://github.com/…``.
-
-    The saved token is a GitHub credential, entered once in the terminal's token card; nothing else is
-    entitled to it. Any other host, any other port, ``http://``, or a URL carrying userinfo gets no
-    saved token — a person can still type a token for that one call in the terminal."""
-    try:
-        parts = urlsplit((repo_url or "").strip())
-        port = parts.port
-    except ValueError:
-        return False
-    return (parts.scheme.lower() == "https" and (parts.hostname or "").lower() == "github.com"
-            and port in (None, 443) and not parts.username and not parts.password
-            and parts.path.startswith("/") and len(parts.path) > 1)
+# Where a token may travel is one rule in one module (``shared/token_destination.py``) — clone, pull
+# and push embed through ``embed_token`` there, and the routes ask these two predicates.
+is_https = token_destination.is_https
+saved_token_may_reach = token_destination.saved_token_may_reach
 
 
 def _token_for(root: str | Path, repo_url: str, subject: str, explicit_token: Optional[str]) -> Optional[str]:

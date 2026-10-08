@@ -31,6 +31,7 @@ from typing import Optional
 from shared.git_redaction import redact
 from shared.adapters import GitPushError, push_with_token
 from shared.gitenv import pinned_git_env, scrubbed_git_env
+from shared.token_destination import embed_token
 
 from control_plane.workspace_publish import PUBLISH_REMOTE, _URL_CREDENTIAL_RE, _display_url
 
@@ -262,12 +263,9 @@ def pull_origin(ws: str | Path, *, token: Optional[str] = None, ssh_env: Optiona
     if not branch:
         raise RemoteSyncError("workspace is on a detached HEAD — check out a branch to pull")
     token = (token or "").strip() or None
-    auth_url = url
     if ssh_env and _is_ssh_url(url):
         token = None            # an ssh home authenticates by key; there is nothing to embed
-    elif token and url.strip().lower().startswith("https://"):   # a credential rides only over https
-        proto, rest = url.split("://", 1)
-        auth_url = f"{proto}://{token}@{rest}"
+    auth_url = embed_token(url, token)   # a credential rides only over https (token_destination)
     # Fetch from the URL directly (not a persisted remote) so the credential never lands anywhere.
     fetch = _git(wsp, "fetch", "--quiet", auth_url, branch, token=token, ssh_env=ssh_env,
                  check=False, url=url)

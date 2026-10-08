@@ -12,9 +12,9 @@ from pathlib import Path
 
 import pytest
 
+from shared.token_destination import embed_token
 from control_plane.workspace_attach import (
     CloneError,
-    _authenticated_url,
     _git_clone,
     attached_workspaces,
     rename_workspace,
@@ -174,10 +174,10 @@ def test_requesting_active_repo_is_a_noop(tmp_path):
 
 
 def test_authenticated_url_embeds_token_for_https_only():
-    assert _authenticated_url("https://github.com/o/r.git", "TOK") == "https://TOK@github.com/o/r.git"
-    assert _authenticated_url("https://github.com/o/r.git", None) == "https://github.com/o/r.git"
-    assert _authenticated_url("git@github.com:o/r.git", "TOK") == "git@github.com:o/r.git"  # ssh: untouched
-    assert _authenticated_url("/local/path", "TOK") == "/local/path"                         # local: untouched
+    assert embed_token("https://github.com/o/r.git", "TOK") == "https://TOK@github.com/o/r.git"
+    assert embed_token("https://github.com/o/r.git", None) == "https://github.com/o/r.git"
+    assert embed_token("git@github.com:o/r.git", "TOK") == "git@github.com:o/r.git"  # ssh: untouched
+    assert embed_token("/local/path", "TOK") == "/local/path"                         # local: untouched
 
 
 def test_token_threads_to_clone_but_is_never_stored(tmp_path):
