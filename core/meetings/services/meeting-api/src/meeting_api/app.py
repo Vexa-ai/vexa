@@ -36,6 +36,7 @@ from fastapi.responses import JSONResponse
 
 from . import bot_spawn as _bot_spawn
 from . import events as _flows_events
+from . import identity_token
 from . import recordings as _recordings
 from .collector.app import build_router as _build_collector_router
 from .collector.ports import RedisBus, TranscriptStore
@@ -183,6 +184,12 @@ def create_app(
     # calendar-sync user edges (async callables from the composition root; None → routes 503)
     calendar_sync_now: Optional["object"] = None,
     calendar_sync_status: Optional["object"] = None,
+    # identity.v1 — the gateway's signing key, and the internal tier's secret. With a key, every
+    # x-user-* header must be signed by the gateway or carried by the internal tier, or the request
+    # is refused before any route reads it. The production entrypoint always passes one (the boot
+    # refuses without it); None is the in-process harness, which drives the routes directly.
+    identity_secret: Optional[str] = None,
+    internal_secret: Optional[str] = None,
 ) -> FastAPI:
     """Build the unified meeting-api app from the injected ports.
 
@@ -194,6 +201,13 @@ def create_app(
     app = FastAPI(title="Vexa Meeting API (v0.12)", version="0.12.0")
     # The edge: read/mint X-Trace-Id and bind it for the request (logevent.v1 trace_id).
     app.add_middleware(TraceMiddleware)
+    # THE DOOR FOR x-user-* (identity.v1). meeting-api derives the owner, the bot limit, the
+    # workspace memberships and the webhook from these headers; a request that names a person
+    # without the gateway's signature or the internal tier is refused here. Bot and runtime
+    # callbacks name no person and pass through to the routes that authenticate them.
+    if identity_secret:
+        app.add_middleware(identity_token.IdentityGuard, secret=identity_secret,
+                           internal_secret=internal_secret or "", service="meeting-api")
 
     # --- shared liveness probe (gate:health): the unified process is up. No auth. The ADDITIVE
     # `capabilities` rows are the config.v1 tri-states (stt · object_storage) incl. the cached STT

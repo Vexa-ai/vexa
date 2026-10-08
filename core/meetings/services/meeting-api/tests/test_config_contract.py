@@ -20,6 +20,7 @@ HEADERS = {"x-user-id": "7"}
 @pytest.fixture(autouse=True)
 def _admin_token(monkeypatch):
     monkeypatch.setenv("ADMIN_TOKEN", "test-admin-token")
+    monkeypatch.setenv("VEXA_GATEWAY_IDENTITY_SECRET", "test-signing-key")
 
 
 @pytest.fixture(autouse=True)
@@ -47,9 +48,18 @@ def test_declaration_loads_and_is_internally_consistent():
     # are exactly the two keys the original ad-hoc guard checked
     stt_keys = {k["key"] for k in decl["keys"] if k.get("capability") == "stt"}
     assert stt_keys == {"TRANSCRIPTION_SERVICE_URL", "TRANSCRIPTION_SERVICE_TOKEN"}
-    # required-explicit is exactly the A4 boot bar
+    # required-explicit is exactly the A4 boot bar plus identity.v1's verification key
     required = {k["key"] for k in decl["keys"] if k["class"] == "required-explicit"}
-    assert required == {"ADMIN_TOKEN"}
+    assert required == {"ADMIN_TOKEN", "VEXA_GATEWAY_IDENTITY_SECRET"}
+
+
+def test_preflight_refuses_a_boot_that_cannot_verify_identity(monkeypatch):
+    """identity.v1 — meeting-api believes an x-user-* header only with the gateway's signature
+    beside it; with no key to check it, nobody can be authenticated, so the boot refuses."""
+    monkeypatch.delenv("VEXA_GATEWAY_IDENTITY_SECRET")
+    with pytest.raises(cp.ConfigError) as ei:
+        cp.preflight()
+    assert "VEXA_GATEWAY_IDENTITY_SECRET" in str(ei.value)
 
 
 def test_db_pool_keys_declared_defaulted():

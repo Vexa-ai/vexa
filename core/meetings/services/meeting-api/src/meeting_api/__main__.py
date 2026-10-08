@@ -242,6 +242,10 @@ def build_production_app():
         transcript_finalizer=_transcript_finalizer,
         calendar_sync_now=_calendar_sync_now,
         calendar_sync_status=_calendar_sync_status,
+        # identity.v1: the door for x-user-*. _require_config() above refused the boot without the
+        # signing key, so this is never empty here.
+        identity_secret=os.environ.get("VEXA_GATEWAY_IDENTITY_SECRET", ""),
+        internal_secret=os.environ.get("INTERNAL_API_SECRET", ""),
     )
 
     _attach_background_loops(

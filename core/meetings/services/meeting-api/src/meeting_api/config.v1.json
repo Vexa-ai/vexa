@@ -18,6 +18,21 @@
    ]
   },
   {
+   "key": "VEXA_GATEWAY_IDENTITY_SECRET",
+   "class": "required-explicit",
+   "secret": true,
+   "description": "identity.v1 verification key — the same value the gateway signs X-Vexa-Identity with. meeting-api rebuilds every x-user-* header (owner, bot limit, workspace memberships, webhook) from a verified signature and refuses (401) one that is neither signed nor carried by the internal tier. Unset, nobody can be authenticated, so the boot refuses. Generated at install on every deploy surface.",
+   "forbidden_values": [
+     "vexa-internal-secret",
+     "lite-internal-secret",
+     "changeme",
+     "change-me",
+     "CHANGE-ME",
+     "default",
+     "secret"
+   ]
+  },
+  {
    "key": "DB_HOST",
    "class": "defaulted",
    "default": "postgres",
@@ -94,9 +109,9 @@
   {
    "key": "INTERNAL_API_SECRET",
    "class": "defaulted",
-   "default": "(unset — the internal lifecycle-callback header is then not attached)",
+   "default": "(unset — the internal lifecycle-callback header is then not attached, and no internal-tier caller may name a person)",
    "secret": true,
-   "description": "shared secret for internal service-to-service calls (x-internal-secret on the self-driven lifecycle callback). Unset is a documented degrade; a PUBLISHED PLACEHOLDER is not — it is the whole internal tier handed to anyone who read the repository (F95), so the boot refuses it.",
+   "description": "shared secret for internal service-to-service calls (x-internal-secret on the self-driven lifecycle callback), and the internal tier identity.v1 believes an unsigned X-User-Id from (agent-api acting for a person). Unset is a documented degrade; a PUBLISHED PLACEHOLDER is not — it is the whole internal tier handed to anyone who read the repository (F95), so the boot refuses it.",
    "forbidden_values": [
      "vexa-internal-secret",
      "lite-internal-secret",
