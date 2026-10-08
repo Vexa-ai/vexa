@@ -828,7 +828,8 @@ preferred signer (D16); an invalidation is a first-class, credited result (D11).
 
 Main is **always releasable, never auto-released**. A PR enters it when: the acceptance floor is
 presented (TAKE, step 2 — machine rows + contributor rows) · the diff passes review + the named
-security checks (D-S) · the value is signed (D9) · sealed-contract changes rode `lane:contract`
+security checks (D-S) · **an architecture pass and a security pass are on record for the PR's
+head sha** (every PR, below) · the value is signed (D9) · sealed-contract changes rode `lane:contract`
 with a human review · the full CI gate suite is green **and `pr-value` is green when the PR
 touches a runtime surface** — the machine contract between every PR and main
 ([the live map](/governance/arch-compliance)). **Merge is the promise to the contributor,
@@ -841,6 +842,31 @@ honored.**
 a `Closes`-target issue with undelivered acceptance legs is a ❌ row on the card
 (choke point 1), so a dropped leg is a decision on record, never a GitHub-keyword
 side-effect. Cross-reference sweeps miss what was never referenced, so the closure mechanism (#712) carries a second detection mode: **periodic mechanism-vs-tree verification over open prepared issues** — reading whether the tree already delivers an issue, not whether a PR happens to link it (one night surfaced eleven stale-open issues, five of them delivered by PRs that named no issue at all — invisible to any link sweep).
+
+**Architecture and security passes are required on every PR, bound to the head sha.** The merge
+card carries an **Architecture** row and a **Security** row on every PR, docs and CI included,
+and the card fails without both. A row clears only when a PR comment from a maintainer (write or
+admin on the repo) carries its marker for the PR's current head sha:
+
+```
+<!-- vexa-pass:architecture sha=<full head sha> verdict=pass -->
+<!-- vexa-pass:security sha=<full head sha> verdict=pass -->
+```
+
+- **Waiver.** `verdict=waived` clears the row only when the same comment also carries
+  `waived-by=<who>`. The card shows the row as waived and names who waived it.
+- **Bound to the head.** A pass covers one sha. After a new push the row reads *pass on record is
+  for `<old>`, head is `<new>` — re-run*. If several maintainer markers name the head, the newest
+  wins, so a later `verdict=fail` replaces an earlier pass.
+- **Re-evaluation.** The marker is an HTML comment, so the rendered thread does not show it.
+  Posting it re-runs the card (`merge-card-pass`). Only issue comments count; review bodies and the
+  card's own comment do not.
+- **Security findings stay private.** The marker and its comment carry only the verdict, an
+  optional count (`findings=<n>`) and the sha. A finding, a path or a payload never appears on the
+  PR. Findings go through the private channel in `SECURITY.md` until they are fixed and released.
+- **Every base branch.** The card's script runs from `main` for PRs into any branch, so release-line
+  PRs show the rows too. A red card blocks a merge only where the base branch's protection requires
+  `merge-card`, which today means `main`.
 
 ## Release — the ship bar
 
@@ -1043,10 +1069,11 @@ silence is released, never punished · every decline names its reopen condition 
 | D-L3 "flake" is earned | durable regression test on the fixed gate + the one-rerun rule in TAKE | **have** (#686 `deploy/helm/tests/test_template.sh`) / **TO BUILD** (rerun-discipline in the checks bot) |
 | D-L4 human placement — exactly twice + rehearsal | agent-rehearsable probe is the rehearsal; choke point 2 names the witness moment | **have** (choke point 2 named) / **TO BUILD** (#690 agent-rehearsable probe) |
 | D8 bundle + diff | PR template requires the observation bundle | **have** (`.github/pull_request_template.md`) |
-| D-S security lanes | contributor security status + maintainer bundle | **TO BUILD** (status) / **have** (maintainer practice) |
+| D-S security lanes | contributor security status + maintainer bundle · **merge-time:** a maintainer security pass on the head sha, every PR | **TO BUILD** (status) / **have** (maintainer practice; CI: `merge-card` Security row) |
 | D9 value-signed, corroborated | `gate:value-signed` checks non-author + channel consistency (merge-time) · **release-time:** `value-gate` requires every batch PR pr-value-green/value-signed | **have** (CI: `merge-card-gate` merge-time, `release-value-gate` release-time; [ADR-0029](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0029-release-witness-and-value-gates-enforced.md)/[ADR-0030](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0030-merge-card-value-and-diff-gate.md)) |
 | D10 acceptance floor | bundle-vs-table check (merge-time) · **release-time:** guarantee line 8 enforced by `value-gate` | **TO BUILD** (bundle checker) / **have** (CI: `release-value-gate`) |
 | Merge bar — value + diff accepted (choke point 1) | `merge-card` required status check: value-fsm green + `state: value-signed` (value) AND a fresh non-author review approval (diff) | **have** (CI: `merge-card-gate`, [ADR-0030](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0030-merge-card-value-and-diff-gate.md)) |
+| Merge bar — architecture + security passes on every PR | `merge-card` rows: a maintainer's `vexa-pass:architecture` and `vexa-pass:security` markers for the current head sha (`verdict=pass`, or `verdict=waived` with `waived-by=`); a pass comment re-runs the card (`merge-card-pass`); findings never on the PR | **have** (CI: `merge-card-gate`, [ADR-0030 amendment](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0030-merge-card-value-and-diff-gate.md#amendment-2026-10-08--architecture-and-security-passes)) |
 | Contributor onboarding — explain the change | PR template + CONTRIBUTING recommend Discord; `pr-welcome` nudges first-timers (recommended, never a gate) | **have** (templates + CI) |
 | D11 both verdicts credited | release-notes generation from bundles | **TO BUILD** |
 | D12 altitude-scaled validation | stated live bar in every prepared issue | **have** (manual review) |

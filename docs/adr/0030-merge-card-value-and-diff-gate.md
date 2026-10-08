@@ -66,3 +66,37 @@ evidence, not on whether the author shows up.
 
 `docs/docs/governance/delivery.mdx`: new rows for *Merge bar — value + diff accepted* (**have**,
 CI) and *Contributor onboarding* (**have**, templates + CI).
+
+## Amendment 2026-10-08 — architecture and security passes
+
+**Decision.** The card gains two rows that gate **every** PR, docs and CI included: **Architecture**
+and **Security**. Each clears only when a PR comment from an account with write or admin on the
+repo (the maintainer check the Diff row already uses) carries a marker for the PR's current head
+sha:
+
+```
+<!-- vexa-pass:architecture sha=<full head sha> verdict=pass -->
+<!-- vexa-pass:security sha=<full head sha> verdict=pass -->
+```
+
+- `verdict=waived` clears a row only when the same comment carries `waived-by=<who>`; the card
+  shows the row as waived and names who waived it.
+- A marker for any other sha does not count. The row names the sha the pass on record was for and
+  asks for a re-run. Among maintainer markers for the head, the newest wins.
+- **Security findings stay private.** The marker and its comment carry only the verdict, an
+  optional `findings=<n>` count and the sha. Findings follow `SECURITY.md` (coordinated disclosure)
+  and never appear on the PR.
+- A comment event cannot refresh a head-bound check, so `merge-card-pass.yml` re-runs the head's
+  newest `merge-card` run (and its `merge-card-comment` run, so the sticky card agrees) when a
+  repo-associated account posts, edits or deletes a comment carrying a marker. The re-run decides
+  nothing itself.
+
+**Why.** Founder ruling 2026-10-08: the architecture and security checks are obligatory at PR
+level. Until now they were review practice (D-S, TAKE step 3), so a PR could merge without either.
+
+**Consequences.**
+
+- Every push resets both rows: a pass is evidence about one tree, not about a branch.
+- The card's script runs from `main` for PRs into every base branch, so release-line PRs render the
+  rows. Whether a red card blocks the merge is the base branch's protection: today only `main`
+  requires `merge-card`.

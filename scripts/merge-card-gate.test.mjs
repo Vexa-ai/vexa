@@ -1,5 +1,6 @@
-// Unit tests for merge-card-gate.mjs: the value-fsm verdict + wait logic (issue #655) and the
-// acceptance row over closing-issue bodies (issue #712). Run: node --test scripts/merge-card-gate.test.mjs
+// Unit tests for merge-card-gate.mjs: the value-fsm verdict + wait logic (issue #655), the
+// acceptance row over closing-issue bodies (issue #712), and the architecture + security pass rows
+// bound to the head sha. Run: node --test scripts/merge-card-gate.test.mjs
 //
 // #655 regression: a non-terminal value-fsm run (queued|in_progress, conclusion === null) on the
 // head sha was collapsed to "failure", red-carding a PR whose value-fsm was on its way to green.
@@ -15,6 +16,10 @@ import {
   waitForTerminalValueFsm,
   openAcceptanceLegs,
   acceptanceFromIssues,
+  passMarkers,
+  passRow,
+  cardOk,
+  renderCard,
 } from "./merge-card-gate.mjs";
 
 const run = (o) => ({ name: "value-fsm", started_at: "2026-07-16T20:07:14Z", ...o });
@@ -166,4 +171,149 @@ test("precision control: an unchecked box OUTSIDE the Acceptance section does no
   ].join("\n");
   assert.equal(openAcceptanceLegs(body), 0);
   assert.equal(acceptanceFromIssues([{ number: 903, body }]).ok, true);
+});
+
+// ── the ARCHITECTURE and SECURITY pass rows — pure over PR comments, bound to the head sha ──────
+
+const HEAD = "1111111111111111111111111111111111111111";
+const OLD = "2222222222222222222222222222222222222222";
+const MAINTAINERS = new Set(["maint", "admin-person"]);
+const isMaintainer = (login) => MAINTAINERS.has(login);
+const comment = (login, body, extra = {}) => ({ user: { login, type: "User" }, body, html_url: `https://example.test/c/${login}`, ...extra });
+const marker = (kind, sha, verdict, extra = "") => `<!-- vexa-pass:${kind} sha=${sha} verdict=${verdict}${extra ? " " + extra : ""} -->`;
+const opts = { head: HEAD, isMaintainer };
+
+test("pass markers: parses kind, full sha, verdict and extra fields; ignores prose that names no marker", () => {
+  const body = [
+    "Architecture pass done.",
+    marker("architecture", HEAD, "pass"),
+    marker("security", HEAD, "pass", "findings=0"),
+    "no marker here: vexa-pass:architecture sha=deadbeef",
+  ].join("\n");
+  assert.deepEqual(passMarkers(body), [
+    { kind: "architecture", sha: HEAD, verdict: "pass", fields: { sha: HEAD, verdict: "pass" } },
+    { kind: "security", sha: HEAD, verdict: "pass", fields: { sha: HEAD, verdict: "pass", findings: "0" } },
+  ]);
+  assert.deepEqual(passMarkers(""), []);
+  assert.deepEqual(passMarkers(undefined), []);
+});
+
+test("RED, no marker: the row fails and names exactly what is missing", () => {
+  for (const kind of ["architecture", "security"]) {
+    const row = passRow(kind, [comment("maint", "LGTM")], opts);
+    assert.equal(row.ok, false);
+    assert.equal(row.state, "missing");
+    assert.match(row.why, new RegExp(`^no ${kind} pass on head 1111111`));
+    assert.match(row.why, new RegExp(`<!-- vexa-pass:${kind} sha=<full head sha> verdict=pass -->`));
+    assert.match(row.why, /write or admin/);
+  }
+  assert.equal(passRow("architecture", [], opts).ok, false);
+  assert.equal(passRow("architecture", null, opts).ok, false);
+});
+
+test("RED, stale sha: a pass for an older head does not count, and the row says re-run", () => {
+  const row = passRow("architecture", [comment("maint", marker("architecture", OLD, "pass"))], opts);
+  assert.equal(row.ok, false);
+  assert.equal(row.state, "stale");
+  assert.match(row.why, /^architecture pass on record is for 2222222, head is 1111111 — re-run/);
+});
+
+test("RED, non-maintainer: a marker from an account without write or admin does not count", () => {
+  const row = passRow("security", [comment("drive-by", marker("security", HEAD, "pass"))], opts);
+  assert.equal(row.ok, false);
+  assert.equal(row.state, "missing");
+  assert.match(row.why, /@drive-by/);
+  assert.match(row.why, /does not count/);
+});
+
+test("GREEN, pass: a maintainer's marker for the current head passes the row", () => {
+  const row = passRow("architecture", [comment("maint", marker("architecture", HEAD, "pass"))], opts);
+  assert.equal(row.ok, true);
+  assert.equal(row.state, "pass");
+  assert.match(row.why, /^pass on head 1111111 by @maint/);
+  // the head match is case-insensitive (a sha pasted in upper case is the same sha)
+  assert.equal(passRow("architecture", [comment("maint", marker("architecture", HEAD.toUpperCase(), "pass"))], opts).ok, true);
+});
+
+test("GREEN, waived with waived-by: passes, and the row says waived and by whom", () => {
+  const row = passRow("security", [comment("maint", marker("security", HEAD, "waived", "waived-by=@founder"))], opts);
+  assert.equal(row.ok, true);
+  assert.equal(row.state, "waived");
+  assert.match(row.why, /^waived on head 1111111 by @founder \(recorded by @maint\)/);
+  // waived-by elsewhere in the SAME comment also carries the waiver
+  const elsewhere = passRow("security", [comment("maint", `${marker("security", HEAD, "waived")}\nwaived-by=@founder`)], opts);
+  assert.equal(elsewhere.ok, true);
+  assert.equal(elsewhere.state, "waived");
+});
+
+test("RED, waived without waived-by: the waiver does not pass the row", () => {
+  for (const body of [marker("security", HEAD, "waived"), marker("security", HEAD, "waived", "waived-by=")]) {
+    const row = passRow("security", [comment("maint", body)], opts);
+    assert.equal(row.ok, false, body);
+    assert.equal(row.state, "invalid");
+    assert.match(row.why, /waived-by=/);
+  }
+});
+
+test("the kinds do not substitute: a security pass never clears the architecture row", () => {
+  const comments = [comment("maint", marker("security", HEAD, "pass"))];
+  assert.equal(passRow("security", comments, opts).ok, true);
+  assert.equal(passRow("architecture", comments, opts).ok, false);
+});
+
+test("the newest maintainer verdict on head wins: a later fail supersedes an earlier pass", () => {
+  const row = passRow("security", [
+    comment("maint", marker("security", HEAD, "pass")),
+    comment("admin-person", marker("security", HEAD, "fail", "findings=2")),
+  ], opts);
+  assert.equal(row.ok, false);
+  assert.equal(row.state, "invalid");
+  assert.match(row.why, /verdict=fail/);
+  assert.match(row.why, /2 finding/);
+});
+
+test("the merge card's own comment never counts, even when it quotes a marker for the head", () => {
+  const card = comment("github-actions[bot]", `<!-- merge-card -->\n${marker("architecture", HEAD, "pass")}`, { user: { login: "maint", type: "User" } });
+  assert.equal(passRow("architecture", [card], opts).ok, false);
+});
+
+test("a short sha is named as the defect, not reported as a stale pass", () => {
+  const row = passRow("architecture", [comment("maint", marker("architecture", HEAD.slice(0, 7), "pass"))], opts);
+  assert.equal(row.ok, false);
+  assert.match(row.why, /full 40-character head sha/);
+});
+
+test("the card: both rows render, and the verdict fails without both passes", () => {
+  const base = { num: 4242, valueOk: true, valueWhy: "fixture", diffOk: true, diffWhy: "fixture", acceptance: null };
+  const architecture = passRow("architecture", [comment("maint", marker("architecture", HEAD, "pass"))], opts);
+  const securityMissing = passRow("security", [], opts);
+  const securityWaived = passRow("security", [comment("maint", marker("security", HEAD, "waived", "waived-by=@founder"))], opts);
+
+  assert.equal(cardOk({ ...base, architecture, security: securityMissing }), false);
+  assert.equal(cardOk({ ...base, architecture: securityMissing, security: securityWaived }), false);
+  assert.equal(cardOk({ ...base, architecture, security: securityWaived }), true);
+  // the passes never buy the other rows
+  assert.equal(cardOk({ ...base, valueOk: false, architecture, security: securityWaived }), false);
+
+  const red = renderCard({ ...base, architecture, security: securityMissing, ok: false });
+  assert.match(red, /^<!-- merge-card -->\n/);
+  assert.match(red, /\| \*\*Architecture\*\* \| ✅ \| pass on head 1111111 by @maint/);
+  assert.match(red, /\| \*\*Security\*\* \| ❌ \| no security pass on head 1111111/);
+  assert.match(red, /\*\*Not mergeable yet\*\*/);
+
+  const green = renderCard({ ...base, architecture, security: securityWaived, ok: true });
+  assert.match(green, /\| \*\*Security\*\* \| ✅ waived \| waived on head 1111111 by @founder/);
+  assert.match(green, /\*\*Ready to merge\*\*/);
+  // the rows sit after the existing ones, Architecture before Security
+  const lines = green.split("\n");
+  const at = (label) => lines.findIndex((l) => l.startsWith(`| **${label}**`));
+  assert.ok(at("Diff") < at("Architecture") && at("Architecture") < at("Security"));
+});
+
+test("the rendered card never carries a marker that a pass row would accept", () => {
+  const rendered = renderCard({
+    num: 4242, ok: false, valueOk: true, valueWhy: "x", diffOk: true, diffWhy: "x", acceptance: null,
+    architecture: passRow("architecture", [], opts), security: passRow("security", [], opts),
+  });
+  assert.deepEqual(passMarkers(rendered).filter((m) => m.sha.toLowerCase() === HEAD), []);
 });

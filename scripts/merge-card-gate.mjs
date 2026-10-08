@@ -19,11 +19,34 @@
 //     evidence, or the link is re-filed as `Part of #N` (a plain reference closes nothing, so
 //     the row disappears). Born of the #622/#623 incident: a merge keyword silently dropped a
 //     live acceptance leg written as a plain bullet, not a checkbox — both shapes are parsed.
+//   • ARCHITECTURE and SECURITY passes — required on EVERY PR (docs and CI included), one row each.
+//     A row is ✅ only when a PR comment from an account with write or admin on the repo (the same
+//     maintainer check DIFF uses) carries a marker for the PR's CURRENT head sha:
+//
+//       <!-- vexa-pass:architecture sha=<full head sha> verdict=pass -->
+//       <!-- vexa-pass:security sha=<full head sha> verdict=pass -->
+//
+//     `verdict=waived` also clears the row, but only when the same comment carries a non-empty
+//     `waived-by=<who>` field; the card shows the row as waived and names who waived it. Bound to
+//     the head: a marker for any other sha does not count (a new push needs a new pass), and the row
+//     says which sha the pass on record was for. When several maintainer markers name the head, the
+//     newest wins, so a later `verdict=fail` supersedes an earlier pass. Only issue comments are
+//     read (not review bodies), and the card's own sticky comment never counts.
+//
+//     SECURITY FINDINGS STAY PRIVATE. The marker and its comment carry only the verdict, a finding
+//     count (`findings=<n>`, optional) and the sha — never a finding, a path, a payload or an
+//     exploit. The findings themselves stay in the private channel SECURITY.md describes until
+//     fixed and released (coordinated disclosure); this repo is public and so is every PR comment.
 //
 // This is a required status check on `main` (added to branch protection alongside `gates`). It
 // runs on pull_request + pull_request_review (PR-entry) and on merge_group (the queue re-check,
 // where the PR number is parsed from the queue ref). A red merge-card blocks the merge with a
-// plain-language card of exactly what's missing.
+// plain-language card of exactly what's missing. A pass comment re-runs the head's newest card
+// through merge-card-pass.yml, because a comment event cannot refresh a head-bound check itself.
+//
+// The workflow checks out `main` for every PR, so this file judges PRs into every base branch.
+// Whether a red card BLOCKS a merge is a property of the base branch's protection, not of this
+// script: on an unprotected base the card renders and the merge is not gated.
 //
 // Inputs (env): GITHUB_REPOSITORY; and PR_NUMBERS (space-separated) OR MERGE_GROUP_REF to parse.
 // Exit 0 = every named PR's card is satisfied; 1 = one or more not; 2 = usage/nothing to check.
@@ -230,7 +253,97 @@ function readClosingIssues(num) {
   throw last;
 }
 
-async function card(num, { readClosing = readClosingIssues } = {}) {
+// ── ARCHITECTURE and SECURITY passes ────────────────────────────────────────────────────────────
+
+const CARD_MARKER = "<!-- merge-card -->";
+const FULL_SHA = /^[0-9a-f]{40}$/i;
+const short = (sha) => String(sha || "").slice(0, 7);
+
+// Every `<!-- vexa-pass:<kind> key=value … -->` marker in a comment body, in order. Fields are
+// whitespace-separated key=value tokens; a marker without a sha or a verdict is not a marker.
+// Pure over the raw body string so it is unit-testable against fixtures.
+export function passMarkers(body) {
+  const out = [];
+  for (const m of String(body || "").matchAll(/<!--\s*vexa-pass:([a-z][a-z-]*)\s([\s\S]*?)-->/gi)) {
+    const fields = {};
+    for (const f of m[2].matchAll(/([a-z][a-z-]*)=([^\s<>]+)/gi)) fields[f[1].toLowerCase()] = f[2];
+    if (!fields.sha || !fields.verdict) continue;
+    out.push({ kind: m[1].toLowerCase(), sha: fields.sha, verdict: fields.verdict.toLowerCase(), fields });
+  }
+  return out;
+}
+
+// The `waived-by=<who>` field anywhere in the same comment (inside the marker or beside it). An
+// empty value, or one with no letter or digit in it, is no waiver.
+function waivedBy(body) {
+  const m = String(body || "").match(/(?:^|[\s(|])waived-by=([^\s<>]+)/i);
+  const who = m ? m[1].replace(/-+$/, "") : "";
+  return /[a-z0-9]/i.test(who) ? who : null;
+}
+
+const howToPass = (kind) =>
+  `a maintainer (write or admin on the repo) posts a PR comment carrying \`<!-- vexa-pass:${kind} sha=<full head sha> verdict=pass -->\``;
+
+// One pass row, pure over the PR's issue comments (the `repos/:repo/issues/:n/comments` shape, in
+// API order = oldest first) and an injected maintainer predicate, so it has no network in its unit
+// path. Returns { ok, state, why } where state is pass | waived | stale | invalid | missing.
+export function passRow(kind, comments, { head, isMaintainer }) {
+  const headSha = String(head || "").toLowerCase();
+  const seen = []; // { by, sha, verdict, fields, waiver }
+  for (const c of comments || []) {
+    const body = c?.body || "";
+    if (body.includes(CARD_MARKER)) continue; // the card quoting itself is never a pass
+    const by = c?.user?.login;
+    if (!by) continue;
+    for (const mk of passMarkers(body)) if (mk.kind === kind) seen.push({ ...mk, by, waiver: waivedBy(body) });
+  }
+  const counted = seen.filter((s) => isMaintainer(s.by));
+  const onHead = counted.filter((s) => s.sha.toLowerCase() === headSha);
+
+  if (onHead.length) {
+    const s = onHead[onHead.length - 1]; // newest maintainer verdict on head wins
+    const count = /^\d+$/.test(s.fields.findings || "") ? ` (${s.fields.findings} finding${s.fields.findings === "1" ? "" : "s"})` : "";
+    if (s.verdict === "pass")
+      return { ok: true, state: "pass", why: `pass on head ${short(head)} by @${s.by}${count}` };
+    if (s.verdict === "waived" && s.waiver)
+      return { ok: true, state: "waived", why: `waived on head ${short(head)} by ${s.waiver} (recorded by @${s.by})${count}` };
+    if (s.verdict === "waived")
+      return { ok: false, state: "invalid", why: `@${s.by} recorded \`verdict=waived\` on head ${short(head)} without a \`waived-by=\` field — a waiver counts only when the same comment names who waived it` };
+    return { ok: false, state: "invalid", why: `the newest ${kind} pass on head ${short(head)} (by @${s.by}) is \`verdict=${s.verdict}\`${count} — only \`verdict=pass\`, or \`verdict=waived\` with \`waived-by=\`, clears this row` };
+  }
+
+  if (counted.length) {
+    const s = counted[counted.length - 1];
+    if (!FULL_SHA.test(s.sha) && headSha.startsWith(s.sha.toLowerCase()))
+      return { ok: false, state: "invalid", why: `@${s.by}'s ${kind} marker carries \`sha=${s.sha}\` — it must carry the full 40-character head sha (${head})` };
+    return { ok: false, state: "stale", why: `${kind} pass on record is for ${short(s.sha)}, head is ${short(head)} — re-run the ${kind} pass on the current head; ${howToPass(kind)}` };
+  }
+
+  const strangers = [...new Set(seen.map((s) => "@" + s.by))];
+  const ignored = strangers.length ? ` (${strangers.join(", ")} posted a marker, which does not count — no write or admin on the repo)` : "";
+  return { ok: false, state: "missing", why: `no ${kind} pass on head ${short(head)}${ignored} — ${howToPass(kind)}` };
+}
+
+// Paginated like touchesRuntime: a long-running PR here routinely passes 100 comments, and a pass
+// posted past the first page would render a false ❌. These rows GATE, so a failed read throws and
+// fails the card, like every other gating read in card().
+function readComments(num) {
+  const all = [];
+  for (let page = 1; page <= 10; page++) {
+    const batch = ghj(`repos/${REPO}/issues/${num}/comments?per_page=100&page=${page}`);
+    all.push(...batch);
+    if (batch.length < 100) break;
+  }
+  return all;
+}
+
+// The verdict, pure over the rows. Every row gates; ACCEPTANCE exists only when the PR carries a
+// closing reference. The passes never buy another row, and no other row buys a pass.
+export function cardOk({ valueOk, diffOk, acceptance, architecture, security }) {
+  return Boolean(valueOk) && Boolean(diffOk) && (!acceptance || acceptance.ok) && Boolean(architecture?.ok) && Boolean(security?.ok);
+}
+
+async function card(num, { readClosing = readClosingIssues, readCmts = readComments } = {}) {
   const pr = ghj(`repos/${REPO}/pulls/${num}`);
   if (pr.draft) return { num, ok: true, skip: "draft" };
   const labels = (pr.labels || []).map((l) => l.name);
@@ -261,14 +374,27 @@ async function card(num, { readClosing = readClosingIssues } = {}) {
   // ACCEPTANCE — what would this merge auto-close, and is every closed issue fully delivered?
   const acceptance = acceptanceFromIssues(readClosing(num));
 
-  return { num, ok: valueOk && d.ok && (!acceptance || acceptance.ok), valueOk, valueWhy, diffOk: d.ok, diffWhy, acceptance };
+  // ARCHITECTURE + SECURITY — a maintainer's pass marker for THIS head sha, every PR. One comments
+  // read and one permission lookup per distinct marker author serve both rows.
+  const comments = readCmts(num);
+  const perms = new Map();
+  const isMaintainer = (login) => {
+    if (!perms.has(login)) perms.set(login, authorIsMaintainer(login));
+    return perms.get(login);
+  };
+  const architecture = passRow("architecture", comments, { head, isMaintainer });
+  const security = passRow("security", comments, { head, isMaintainer });
+
+  const rows = { valueOk, diffOk: d.ok, acceptance, architecture, security };
+  return { num, ok: cardOk(rows), valueOk, valueWhy, diffOk: d.ok, diffWhy, acceptance, architecture, security };
 }
 
 // Render one PR's card as GitHub-flavoured markdown. The leading marker lets the sticky-comment
 // workflow find and update its own comment in place. This same markdown feeds the check summary.
-function renderCard(c) {
+export function renderCard(c) {
   if (c.skip) return `<!-- merge-card -->\n### 🃏 Merge card — #${c.num}\n\n_Skipped (${c.skip})._`;
-  const row = (label, ok, why) => `| **${label}** | ${ok ? "✅" : "❌"} | ${why} |`;
+  const row = (label, ok, why, mark = ok ? "✅" : "❌") => `| **${label}** | ${mark} | ${why} |`;
+  const pass = (label, r) => row(label, r.ok, r.why, r.ok && r.state === "waived" ? "✅ waived" : undefined);
   const verdict = c.ok
     ? `**Ready to merge** — every row above is accepted.`
     : `**Not mergeable yet** — every row above must be accepted before merge (choke point 1). Fill in what's ❌ above, then this clears automatically.`;
@@ -282,6 +408,10 @@ function renderCard(c) {
     row("Diff", c.diffOk, c.diffWhy),
     // The row exists only when the PR carries a closing reference — `Part of #N` closes nothing.
     ...(c.acceptance ? [row("Acceptance", c.acceptance.ok, c.acceptance.why)] : []),
+    // Every PR carries both pass rows; a card built without them renders them as missing (red),
+    // never silently drops them.
+    pass("Architecture", c.architecture || { ok: false, why: "architecture pass not evaluated" }),
+    pass("Security", c.security || { ok: false, why: "security pass not evaluated" }),
     ``,
     verdict,
     ``,

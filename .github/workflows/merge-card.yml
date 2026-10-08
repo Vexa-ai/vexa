@@ -1,10 +1,14 @@
 # merge-card — choke point 1 of the delivery constitution, enforced. MAIN accepts a PR only when
 # BOTH its value and its diff are accepted (the merge bar): value-fsm green + `state: value-signed`
-# (value), and a fresh non-author review approval (diff). This is a required status check on main
-# (added to branch protection alongside `gates`), so the merge queue will not merge without it.
+# (value), and a fresh non-author review approval (diff) — and, on EVERY PR, a maintainer's
+# architecture pass and security pass recorded for the current head sha (PR-comment markers; the
+# format is in scripts/merge-card-gate.mjs). This is a required status check on main (added to
+# branch protection alongside `gates`), so the merge queue will not merge without it.
 #
 # Runs on pull_request + pull_request_review (PR-entry) and merge_group (the queue re-check, where
-# the PR number is parsed from the queue ref). See scripts/merge-card-gate.mjs and ADR-0029.
+# the PR number is parsed from the queue ref). A pass comment re-runs this check through
+# merge-card-pass.yml. See scripts/merge-card-gate.mjs and ADR-0030 (ADR-0029 is its release-time
+# sibling).
 name: merge-card
 
 on:
