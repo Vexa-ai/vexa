@@ -27,10 +27,12 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 # Claude Code + Codex (selectable model/tooling runtimes) and git (governance git ops). Subscription
 # credentials are bind-mounted read-only at runtime; pin Codex because app-server is a versioned protocol.
+# Pin Claude Code too: the launch passes --setting-sources (llm/claude_code.py), which 2.1.197 lacks,
+# and an unpinned global install is whatever the build cache or npm happened to hold.
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates curl gnupg && \
     curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
     apt-get install -y --no-install-recommends nodejs && \
-    npm install -g @anthropic-ai/claude-code @openai/codex@0.146.0 && \
+    npm install -g @anthropic-ai/claude-code@2.1.293 @openai/codex@0.146.0 && \
     apt-get purge -y curl gnupg && apt-get autoremove -y && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # The worker's own packages (NO control_plane): worker + llm + shared + contracts, copied to /app so
