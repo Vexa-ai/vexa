@@ -158,6 +158,7 @@ function normalizeSegments(segments: TranscriptSegment[] | null | undefined): Tr
       text: textOf(segment.text),
       ts: segment.ts,
       tsMs: segment.tsMs,
+      endMs: segment.endMs,
       completed: segment.completed,
     }))
     .filter((segment) => segment.text.trim());
@@ -366,9 +367,10 @@ function useLiveMeetingState(meetingId?: string): MeetingState {
     // terms against the text it is drawing, so a term the agent extracted from the RAW
     // transcript could never match its own chip in the REWRITTEN one.
     const liveSegments = safeArray(live.transcript).map((s) => ({ id: s.id, speaker: s.speaker, text: s.text, ts: s.t, tsMs: s.tsMs, completed: s.completed }));
-    const recordedSegments = safeArray(durable.lines).map((s) => ({ speaker: s.speaker, text: s.text, ts: lineTs(s) }));
-    const fallbackSegments = normalizedSelected.transcript.map((s) => ({ speaker: s.speaker, text: s.text, ts: lineTs(s) }));
-    const segments = selected.session_uid ? liveSegments : (recordedSegments.length ? recordedSegments : fallbackSegments);
+    const recordedSegments = safeArray(durable.lines).map((s) => ({ speaker: s.speaker, text: s.text, ts: s.offsetSeconds ?? lineTs(s), tsMs: s.tsMs, endMs: s.endMs }));
+    const fallbackSegments = normalizedSelected.transcript.map((s) => ({ speaker: s.speaker, text: s.text, ts: s.offsetSeconds ?? lineTs(s), tsMs: s.tsMs, endMs: s.endMs }));
+    const isFinished = ["completed", "failed", "stopped", "past"].includes(selected.live_status ?? selected.status);
+    const segments = selected.session_uid && !isFinished ? liveSegments : (recordedSegments.length ? recordedSegments : liveSegments.length ? liveSegments : fallbackSegments);
     const diagnostics = {
       liveConnected: live.connected,
       ended: live.ended,

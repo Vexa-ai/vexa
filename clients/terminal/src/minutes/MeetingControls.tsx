@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import { useLiveMeetings, useLiveMeetingsConnection, refreshMeetings } from "../surfaces/liveMeetings";
 import type { MeetingMock } from "../surfaces/meetingModel";
 
-type Track = { id: number; duration_seconds?: number; media_files?: { id: number; type: string; duration_seconds?: number }[] };
+type Track = { id: number; duration_seconds?: number; media_files?: { capture_started_at_ms?: number; id: number; type: string; duration_seconds?: number }[] };
 const button = { background: "transparent", color: "var(--t2)", border: "1px solid var(--line)", borderRadius: 6, padding: "4px 9px", fontSize: 12, cursor: "pointer" };
 const terminal = new Set(["completed", "failed", "stopped"]);
 const running = new Set(["requested", "joining", "awaiting_admission", "needs_help", "active", "stopping"]);
@@ -53,7 +53,7 @@ function Controls({ meeting: m, connected, showBot }: { meeting: MeetingMock; co
     } catch (e) { setError(e instanceof Error ? e.message : "Request failed"); }
     finally { setBusy(false); }
   }
-  const audio = tracks.flatMap(t => (t.media_files || []).filter(f => f.type === "audio").map(f => ({ recording: t.id, media: f.id, duration: finiteDuration(f.duration_seconds) ?? finiteDuration(t.duration_seconds) })));
+  const audio = tracks.flatMap(t => (t.media_files || []).filter(f => f.type === "audio").map(f => ({ recording: t.id, media: f.id, origin: finiteDuration(f.capture_started_at_ms), duration: finiteDuration(f.duration_seconds) ?? finiteDuration(t.duration_seconds) })));
   return <section aria-label="Meeting controls" style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 8 }}>
     <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
       {showBot && running.has(status) && !m.shared && <button style={button} disabled={busy || !connected || status === "stopping"} onClick={() => void mutate("stop")}>{status === "stopping" ? "Stopping…" : "Stop bot"}</button>}
@@ -75,7 +75,8 @@ function Controls({ meeting: m, connected, showBot }: { meeting: MeetingMock; co
     </Modal>}
     {finished && !deleted && <>
       {loading ? <span role="status">Loading recording…</span> : !audio.length && !error ? <span style={{ fontSize: 12, color: "var(--t3)" }}>No audio recording available.</span> : null}
-      {audio.map(t => <RecordingPlayer key={`${t.recording}/${t.media}/${retry}`} duration={t.duration} src={`/api/recordings/${t.recording}/media/${t.media}/raw?type=audio`} onError={() => setError("Audio could not be played. Retry loading the recording.")} />)}
+      {!!audio.length && <span style={{ fontSize: 11, color: "var(--t3)" }}>Click transcript text to play from there. {audio.some(t => !t.origin) ? "Older recording timing uses the meeting start and may be approximate." : ""}</span>}
+      {audio.map(t => <RecordingPlayer key={`${t.recording}/${t.media}/${retry}`} meetingId={m.id} originMs={t.origin ?? (m.start_time && Number.isFinite(Date.parse(m.start_time)) ? Date.parse(m.start_time) : undefined)} duration={t.duration} src={`/api/recordings/${t.recording}/media/${t.media}/raw?type=audio`} onError={() => setError("Audio could not be played. Retry loading the recording.")} />)}
     </>}
     {error && <div role="alert" style={{ fontSize: 12, color: "var(--danger)" }}>{error} {finished && <button style={button} onClick={() => setRetry(n => n + 1)}>Retry</button>}</div>}
   </section>;

@@ -125,7 +125,7 @@ async function main(): Promise<void> {
 
   // ── 7) the DEFAULT uploader on the real RecordingService HTTP wire: session_uid == connectionId ──
   {
-    interface Wire { session_uid?: string; chunk_seq?: number; is_final?: boolean; format?: string; size?: number }
+    interface Wire { capture_started_at_ms?: number; session_uid?: string; chunk_seq?: number; is_final?: boolean; format?: string; size?: number }
     const wire: Wire[] = [];
     const server = http.createServer((req, res) => {
       const parts: Buffer[] = [];
@@ -136,6 +136,7 @@ async function main(): Promise<void> {
         let meta: Record<string, unknown> = {};
         if (m) { try { meta = JSON.parse(m[1]); } catch { /* ignore */ } }
         wire.push({
+          capture_started_at_ms: meta.capture_started_at_ms as number,
           session_uid: meta.session_uid as string, chunk_seq: meta.chunk_seq as number,
           is_final: meta.is_final as boolean, format: meta.format as string,
           size: meta.file_size_bytes as number,
@@ -150,12 +151,13 @@ async function main(): Promise<void> {
     const sink = createBotRecordingSink({
       inv: inv({ connectionId: 'conn-xyz', meeting_id: 42, recordingUploadUrl: url, internalSecret: 's' }),
     });
-    sink.chunk('google_meet/w', 0, false, 'webm', new Uint8Array([1, 2, 3, 4]));
+    sink.chunk('google_meet/w', 0, false, 'webm', new Uint8Array([1, 2, 3, 4]), 1791460000123);
     sink.chunk('google_meet/w', 1, false, 'webm', new Uint8Array([5, 6]));
     sink.chunk('google_meet/w', 2, true, 'webm', new Uint8Array(0));
     for (let i = 0; i < 100 && wire.length < 3; i++) await new Promise((r) => setTimeout(r, 10));
     await new Promise<void>((r) => server.close(() => r()));
 
+    check('wire: capture origin survives subsequent and final chunks', wire.length === 3 && wire.every(w => w.capture_started_at_ms === 1791460000123));
     check('wire: 3 chunks POSTed to meeting-api', wire.length === 3, String(wire.length));
     check('wire: session_uid == inv.connectionId on EVERY chunk (never nativeMeetingId/master key)',
       wire.length === 3 && wire.every((w) => w.session_uid === 'conn-xyz'),

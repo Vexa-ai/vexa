@@ -44,7 +44,7 @@ MAX_LIST_LIMIT = 200
 #: `storage_path`, `storage_backend`, `is_final`, `finalized_at/by`, `metadata` — which is upload
 #: bookkeeping no list renders and no caller can act on. It stays whole on
 #: ``GET /recordings/{id}``, which is where a caller goes when they want one recording.
-LIST_MEDIA_FILE_KEYS = ("id", "type", "format", "duration_seconds", "file_size_bytes")
+LIST_MEDIA_FILE_KEYS = ("id", "type", "format", "duration_seconds", "file_size_bytes", "capture_started_at_ms")
 
 #: Top-level keys the LIST row keeps. `playback_url` is the one a client actually follows, so it
 #: stays; `user_id`/`session_uid`/`source` identify the producer, not the recording, and the
@@ -261,6 +261,7 @@ def build_router(
                 media_type=media_type, media_format=media_format,
                 chunk_seq=chunk_seq, is_final=is_final,
                 duration_seconds=duration_seconds, sample_rate=sample_rate,
+                capture_started_at_ms=meta.get("capture_started_at_ms"),
             )
         except SessionNotFound as e:
             raise HTTPException(status_code=404, detail=str(e))

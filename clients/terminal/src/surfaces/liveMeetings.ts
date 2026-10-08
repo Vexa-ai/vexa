@@ -44,6 +44,9 @@ function displayStatus(d: MeetingRowDTO): string {
 /** A transcript segment from meeting-api GET /transcripts/{platform}/{native}. */
 interface SegmentDTO {
   start?: number | null;
+  end?: number | null;
+  absolute_start_time?: string | null;
+  absolute_end_time?: string | null;
   speaker?: string | null;
   text?: string | null;
 }
@@ -57,6 +60,11 @@ interface TranscriptResponseDTO {
  *  inference pipeline that produced it, so `data.processed` has no producer and is not read. */
 export interface DurableTranscript {
   lines: TranscriptLine[];
+}
+
+function transcriptEpochMs(seconds?: number | null, iso?: string | null): number | undefined {
+  if (iso && Number.isFinite(Date.parse(iso))) return Date.parse(iso);
+  return typeof seconds === "number" && Number.isFinite(seconds) && seconds >= 1e9 ? seconds * 1000 : undefined;
 }
 
 function formatTranscriptTime(start?: number | null): string {
@@ -268,7 +276,13 @@ export async function fetchDurableTranscript(meetingId: string): Promise<Durable
     const list = body.segments || [];
     const lines = list
       .filter((s) => (s.text ?? "").trim())
-      .map((s) => ({ t: formatTranscriptTime(s.start), speaker: s.speaker || "Speaker", text: s.text ?? "" }));
+      .map((s) => ({
+        t: formatTranscriptTime(s.start),
+        tsMs: transcriptEpochMs(s.start, s.absolute_start_time),
+        endMs: transcriptEpochMs(s.end, s.absolute_end_time),
+        offsetSeconds: typeof s.start === "number" && s.start < 1e9 ? s.start : undefined,
+        speaker: s.speaker || "Speaker", text: s.text ?? "",
+      }));
     return { lines };
   } catch {
     return EMPTY_DURABLE;

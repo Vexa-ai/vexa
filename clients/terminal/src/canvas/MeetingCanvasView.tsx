@@ -17,7 +17,7 @@ export const MEETING_CANVAS_CONTENT_INSET = 18;
  *  view to switch to any more, so there is no switch: the pane renders what the bot heard, and
  *  everything intelligent happens in the chat's agent over MCP. */
 function RawTranscript({ meetingId }: { meetingId?: string }) {
-  const { transcript } = useMeeting();
+  const { transcript, meeting } = useMeeting();
   // THE TERM CHIPS (PRD decision 35), as a layer over the same words. `useTermRenderer` returns
   // undefined until a Highlight has published something, so an un-highlighted meeting renders
   // exactly the plain text it did before — this costs nothing until somebody asks for it.
@@ -33,7 +33,7 @@ function RawTranscript({ meetingId }: { meetingId?: string }) {
   const box = useRef<HTMLDivElement>(null);
   return (
     <div ref={box} style={{ position: "relative" }}>
-      <LiveTranscriptEngine segments={transcript.segments} renderText={renderText} />
+      <LiveTranscriptEngine meetingId={meeting.id} segments={transcript.segments} renderText={renderText} />
       {meetingId && <TranscriptExtend containerRef={box} meeting={meetingId} segments={transcript.segments} />}
     </div>
   );

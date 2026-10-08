@@ -69,6 +69,7 @@ async def upload_chunk(
     media_format: str = "wav",
     chunk_seq: int = 0,
     is_final: bool = True,
+    capture_started_at_ms: Optional[float] = None,
     duration_seconds: Optional[float] = None,
     sample_rate: Optional[int] = None,
 ) -> dict:
@@ -122,6 +123,7 @@ async def upload_chunk(
             session_uid=session_uid, media_type=media_type, media_format=media_format,
             storage_path=key, file_size=len(data), chunk_seq=chunk_seq, is_final=is_final,
             duration_seconds=duration_seconds, sample_rate=sample_rate,
+            capture_started_at_ms=capture_started_at_ms,
         )
         others = [r for r in recs if r.get("id") != rid]
         return others + [payload], (payload, transitioned_)

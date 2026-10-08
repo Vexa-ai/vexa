@@ -42,6 +42,7 @@ def apply_chunk_to_recording(
     is_final: bool,
     duration_seconds: Optional[float],
     sample_rate: Optional[int],
+    capture_started_at_ms: Optional[float] = None,
 ) -> tuple[dict, bool]:
     """Fold one uploaded chunk into the recording payload.
 
@@ -95,7 +96,12 @@ def apply_chunk_to_recording(
     new_storage_path = prior_sp if keep_prior_path else storage_path
     new_is_final = True if master_finalized else is_final
 
+    # Keep the capture clock fixed across retries, later chunks and the final empty marker.
+    origin = (prior_same_type or {}).get("capture_started_at_ms")
+    if origin is None and type(capture_started_at_ms) in (int, float) and 1e12 < capture_started_at_ms < 1e14:
+        origin = capture_started_at_ms
     media_files.append({
+        **({"capture_started_at_ms": origin} if origin is not None else {}),
         "id": (prior_same_type or {}).get("id") or new_recording_numeric_id(),
         "type": media_type,
         "format": media_format,

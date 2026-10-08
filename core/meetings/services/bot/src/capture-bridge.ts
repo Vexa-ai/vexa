@@ -1393,20 +1393,22 @@ export async function startRecording(page: Page, inv: Invocation, recording: Bot
     return Number.isFinite(n) && n > 0 ? n : 15000;
   })();
   // Node-side: decode one base64 recording.v1 chunk → the per-chunk upload sink. mimeType→format.
-  await page.exposeFunction('__vexaRecordingChunk', (base64: string, chunkSeq: number, isFinal: boolean, mimeType: string): void => {
+  await page.exposeFunction('__vexaRecordingChunk', (base64: string, chunkSeq: number, isFinal: boolean, mimeType: string, startedAtMs?: number): void => {
     const bytes = base64 ? new Uint8Array(Buffer.from(base64, 'base64')) : new Uint8Array(0);
     const format: RecordingMasterFormat = /wav/i.test(mimeType) ? 'wav' : 'webm';
-    recording.chunk(key, chunkSeq, isFinal, format, bytes);
+    recording.chunk(key, chunkSeq, isFinal, format, bytes, startedAtMs);
   }).catch((e: Error) => { if (!String(e.message).includes('already registered')) throw e; });
 
   // Page-side: start the generic recording tap (finds + combines the page audio elements).
   await page.evaluate(async (timesliceMs) => {
     const w = (globalThis as any) as Record<string, any>;
     if (w.VexaBrowserUtils?.createRecordingTap && !w.__vexaRecordingTap) {
+      let recordingStartedAtMs: number | undefined;
       w.__vexaRecordingTap = w.VexaBrowserUtils.createRecordingTap({
+        onStarted: () => { recordingStartedAtMs = Date.now(); },
         timesliceMs,
         onChunk: async (c: { base64: string; chunkSeq: number; isFinal: boolean; mimeType: string }) => {
-          try { await w.__vexaRecordingChunk(c.base64, c.chunkSeq, c.isFinal, c.mimeType); return true; }
+          try { await w.__vexaRecordingChunk(c.base64, c.chunkSeq, c.isFinal, c.mimeType, recordingStartedAtMs); return true; }
           catch { return false; }
         },
       });

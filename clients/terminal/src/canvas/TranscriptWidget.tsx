@@ -66,6 +66,7 @@ function WidgetBody({ meetingId }: { meetingId: string }) {
         <HighlightButton meeting={meetingId} live={live} />
       </div>
       <LiveTranscriptEngine
+        meetingId={meeting.id}
         segments={transcript.segments}
         renderText={renderText}
         emptyLabel="Nothing said yet — this fills in as the room talks."
