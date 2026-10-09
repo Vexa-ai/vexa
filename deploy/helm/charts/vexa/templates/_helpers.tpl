@@ -109,6 +109,40 @@ dispatch is refused, so all three are rendered from here.
 {{- end -}}
 {{- end -}}
 
+{{/*
+Where flows' operator key (VEXA_FLOWS_API_KEY) comes from when it is a Secret you manage rather than
+a chart value: `flows.existingSecret`, else `secrets.existingSecretName` when `flows.apiKey` is empty.
+Empty ⇒ the chart renders `flows.apiKey` into its own flows Secret, as it always has. A template-only
+render (GitOps) names a Secret here so the key never sits in values.
+*/}}
+{{- define "vexa.flowsApiKeyExistingSecret" -}}
+{{- if and .Values.flows.existingSecret .Values.flows.apiKey -}}
+{{- fail "flows.apiKey and flows.existingSecret are both set — keep one: the key in values, or the Secret that carries VEXA_FLOWS_API_KEY" -}}
+{{- end -}}
+{{- if .Values.flows.existingSecret -}}
+{{- .Values.flows.existingSecret -}}
+{{- else if and (not .Values.flows.apiKey) .Values.secrets.existingSecretName -}}
+{{- .Values.secrets.existingSecretName -}}
+{{- end -}}
+{{- end -}}
+
+{{/* The Secret every consumer of VEXA_FLOWS_API_KEY reads it from. */}}
+{{- define "vexa.flowsApiKeySecretName" -}}
+{{- include "vexa.flowsApiKeyExistingSecret" . | default (include "vexa.componentName" (list . "flows")) -}}
+{{- end -}}
+
+{{/* flows' own containers take the flows Secret by envFrom; when the key lives in a Secret you
+manage, they read it from there by name instead (an explicit env entry wins over envFrom). */}}
+{{- define "vexa.flowsApiKeyEnv" -}}
+{{- with include "vexa.flowsApiKeyExistingSecret" . -}}
+- name: VEXA_FLOWS_API_KEY
+  valueFrom:
+    secretKeyRef:
+      name: {{ . | quote }}
+      key: VEXA_FLOWS_API_KEY
+{{- end -}}
+{{- end -}}
+
 {{- define "vexa.adminTokenSecretName" -}}
 {{- if .Values.secrets.existingSecretName -}}
 {{- .Values.secrets.existingSecretName -}}

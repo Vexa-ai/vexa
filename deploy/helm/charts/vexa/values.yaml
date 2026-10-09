@@ -766,7 +766,15 @@ flows:
   # application database already exists by definition. Reason this matters in prod: a separate
   # "flows" database is NOT covered by a backup job that only dumps the app database by name.
   databaseName: "flows"
+  # The operator key (VEXA_FLOWS_API_KEY) gating flows-api's POST /flows and POST /events, also
+  # presented by the MCP edge. Three sources, first that applies:
+  #   existingSecret       a Secret you manage carrying the key VEXA_FLOWS_API_KEY;
+  #   apiKey               the key in values, rendered into the chart's flows Secret;
+  #   secrets.existingSecretName, when apiKey is empty — the chart's shared Secret.
+  # A template-only render (GitOps) uses one of the Secrets, so the key never sits in values.
+  # Setting both apiKey and existingSecret is refused.
   apiKey: ""
+  existingSecret: ""
   mail:
     address: ""
     appPassword: ""

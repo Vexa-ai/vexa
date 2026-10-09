@@ -61,7 +61,7 @@ spec:
             - name: VEXA_FLOWS_API_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "vexa.componentName" (list . "flows") }}
+                  name: {{ include "vexa.flowsApiKeySecretName" . }}
                   key: VEXA_FLOWS_API_KEY
             {{- end }}
             - name: VEXA_ENV

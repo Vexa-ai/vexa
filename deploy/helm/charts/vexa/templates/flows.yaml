@@ -29,7 +29,12 @@ stringData:
   VEXA_FLOWS_MAIL_RATE_PER_SENDER: {{ .Values.flows.mailRate.perSender | quote }}
   VEXA_FLOWS_MAIL_RATE_GLOBAL: {{ .Values.flows.mailRate.global | quote }}
   VEXA_FLOWS_MAIL_RATE_WINDOW_S: {{ .Values.flows.mailRate.windowSeconds | quote }}
+  {{- /* The operator key, unless it comes from a Secret you manage (flows.existingSecret, or
+  secrets.existingSecretName with flows.apiKey empty): then it is not rendered here, and every
+  consumer reads it from that Secret by name. */}}
+  {{- if not (include "vexa.flowsApiKeyExistingSecret" .) }}
   VEXA_FLOWS_API_KEY: {{ .Values.flows.apiKey | quote }}
+  {{- end }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -144,6 +149,7 @@ spec:
             - secretRef:
                 name: {{ include "vexa.componentName" (list . "flows") }}
           env:
+            {{- with include "vexa.flowsApiKeyEnv" . }}{{ . | nindent 12 }}{{ end }}
             - name: DB_USER
               valueFrom:
                 secretKeyRef:
@@ -314,6 +320,7 @@ spec:
           # authorization decision (R-B12) — a known user outside the domain would otherwise be
           # quarantined on a lookup that never reached anything.
           env:
+            {{- with include "vexa.flowsApiKeyEnv" . }}{{ . | nindent 12 }}{{ end }}
             - name: DB_USER
               valueFrom:
                 secretKeyRef:
@@ -461,6 +468,7 @@ spec:
             - secretRef:
                 name: {{ include "vexa.componentName" (list . "flows") }}
           env:
+            {{- with include "vexa.flowsApiKeyEnv" . }}{{ . | nindent 12 }}{{ end }}
             - name: DB_USER
               valueFrom:
                 secretKeyRef:

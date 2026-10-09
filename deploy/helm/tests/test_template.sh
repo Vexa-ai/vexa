@@ -1069,4 +1069,30 @@ idmiss="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set
 if grep -q 'identity.publicKey is required with identity.existingSecret' <<< "$idmiss"; then echo "  OK: identity.existingSecret without its public key is refused"
 else echo "  FAIL: identity.existingSecret rendered without a public key"; fail=1; fi
 
+# flows' operator key (VEXA_FLOWS_API_KEY) from a Secret you manage, so a template-only render can
+# turn flows on without the key in values: flows.existingSecret, or secrets.existingSecretName when
+# flows.apiKey is empty. Then the chart's flows Secret omits the key and all four consumers (three
+# flows containers, the MCP edge) read it from that Secret by name. With flows.apiKey set, nothing
+# changes; both apiKey and existingSecret is refused.
+flows_key_refs() {  # flows_key_refs <render> → "<secret> <count>" lines for VEXA_FLOWS_API_KEY refs
+  grep -A4 -E '^[[:space:]]+- name: VEXA_FLOWS_API_KEY$' <<< "$1" | grep 'key: VEXA_FLOWS_API_KEY' -B1 \
+    | sed -nE 's/^[[:space:]]+name: "?([^"]*)"?$/\1/p' | sort | uniq -c | awk '{print $2" "$1}'
+}
+for src in "secrets.existingSecretName=shared-secrets shared-secrets" "flows.existingSecret=flows-key flows-key"; do
+  set -- $src
+  fk="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true --set "$1")"
+  if grep -qE '^  VEXA_FLOWS_API_KEY:' <<< "$fk"; then echo "  FAIL: $1 still renders the key into the flows Secret"; fail=1
+  elif [ "$(flows_key_refs "$fk")" = "$2 4" ]; then echo "  OK: $1 — flows' three containers and the MCP edge read VEXA_FLOWS_API_KEY from $2"
+  else echo "  FAIL: $1 — VEXA_FLOWS_API_KEY refs: $(flows_key_refs "$fk" | tr '\n' ';')"; fail=1; fi
+done
+fk="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true \
+  --set secrets.existingSecretName=shared-secrets --set flows.apiKey=inline-test-key)"
+if grep -qE '^  VEXA_FLOWS_API_KEY: "inline-test-key"$' <<< "$fk" && [ "$(flows_key_refs "$fk")" = "vexa-vexa-flows 1" ]; then
+  echo "  OK: flows.apiKey in values keeps the key in the chart's flows Secret, as before"
+else echo "  FAIL: flows.apiKey with secrets.existingSecretName"; fail=1; fi
+fboth="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true \
+  --set flows.existingSecret=flows-key --set flows.apiKey=inline-test-key 2>&1 || true)"
+if grep -q 'flows.apiKey and flows.existingSecret are both set' <<< "$fboth"; then echo "  OK: flows.apiKey with flows.existingSecret is refused"
+else echo "  FAIL: flows.apiKey with flows.existingSecret rendered"; fail=1; fi
+
 [ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }
