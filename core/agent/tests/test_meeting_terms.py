@@ -185,7 +185,7 @@ class _FakeIdentity:
 def client(tmp_path) -> TestClient:
     (tmp_path / JANE).mkdir(parents=True)
 
-    def _owner(user_id, meeting_id):
+    def _owner(user_id, meeting_id, workspaces=None):
         """meeting-api owner-scopes in SQL: another tenant's row is a 404, i.e. None here."""
         return {"id": meeting_id, "native_meeting_id": "96088138284"} if str(user_id) == JANE else None
 

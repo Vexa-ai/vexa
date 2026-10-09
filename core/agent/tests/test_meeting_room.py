@@ -439,7 +439,7 @@ def _client(tmp_path, rows: dict, *, secret=INTERNAL_SECRET, directory=None):
     book = DIRECTORY if directory is None else directory
     app = create_app(
         Dispatcher(settings, runtime, _FakeIdentity()), stream_reader=_FakeReader(),
-        meeting_owner_lookup=lambda uid, mid: rows.get((str(uid), str(mid))),
+        meeting_owner_lookup=lambda uid, mid, workspaces=None: rows.get((str(uid), str(mid))),
         email_subject_lookup=lambda address: book.get(address),
     )
     return TestClient(app), runtime

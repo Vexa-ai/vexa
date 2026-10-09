@@ -258,7 +258,7 @@ def _client(stack, events=None):
         Dispatcher(settings, _FakeRuntime(), _FakeIdentity()),
         stream_reader=_SendingReader(events if events is not None else SEND_TURN),
         reader=WorkspaceReader(str(stack["root"])), sessions=_Sessions(),
-        meeting_owner_lookup=lambda subject, mid: (stack["rows"].get(str(mid))
+        meeting_owner_lookup=lambda subject, mid, workspaces=None: (stack["rows"].get(str(mid))
                                                    if subject == SUBJECT else None),
         meeting_note_recorder=lambda s, m, p: stack["recorded"].append((s, str(m), p)) or True)
     return TestClient(app)

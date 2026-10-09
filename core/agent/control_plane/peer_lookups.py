@@ -223,28 +223,13 @@ def meeting_access_check(lookup, roster_root) -> "Callable[[str, object], dict |
     to. The live transcript stream and the chat's meeting grounding both read the same transcript,
     so both ask this one question.
 
-    The caller's workspaces are READ FROM `policy/members.json` under ``roster_root``, not from a
-    request header: agent-api is reachable directly in the dev/self-host topology (see
-    `subject_of`'s TOPOLOGY BOUNDARY note), where identity headers are spoofable, and this value
-    decides who may read a transcript. The membership scan NEVER RAISES — a scan that fails narrows
-    access to owner-only, never opens it.
+    The caller's workspaces are READ FROM `policy/members.json` under ``roster_root`` — the roster,
+    which is what grants a membership — and not from a request header, because this value decides
+    who may read a transcript. The membership scan NEVER RAISES — a scan that fails narrows access
+    to owner-only, never opens it.
 
-    ``lookup`` is an INJECTED seam: the shipped one takes the caller's workspaces as a third
-    argument, and older test fakes take two. The callable is asked which it is, once, rather than
-    called three-arg with a `TypeError` rescue — that rescue would also swallow a genuine TypeError
-    raised INSIDE the lookup and silently downgrade it to "not authorized"."""
-    def _caller_workspaces(subject: str) -> list[str]:
-        return caller_workspaces(roster_root, subject)
-
-    try:
-        import inspect as _inspect
-        takes_workspaces = len(_inspect.signature(lookup).parameters) >= 3
-    except (TypeError, ValueError):  # C-implemented or otherwise unintrospectable → narrower call
-        takes_workspaces = False
-
+    ``lookup`` is an INJECTED seam, always called as ``(subject, meeting_id, workspaces)``."""
     def _access(subject: str, meeting_id) -> "dict | None":
-        if takes_workspaces:
-            return lookup(subject, meeting_id, _caller_workspaces(subject))
-        return lookup(subject, meeting_id)
+        return lookup(subject, meeting_id, caller_workspaces(roster_root, subject))
 
     return _access

@@ -83,7 +83,7 @@ def client(stack):
                      # caller made every test here blind to ownership, which is exactly the check
                      # the hand-link route depends on. A row with no `user_id` is treated as the
                      # caller's, so the fixtures that predate this keep meaning what they meant.
-                     meeting_owner_lookup=lambda u, m: (
+                     meeting_owner_lookup=lambda u, m, workspaces=None: (
                          row if (row := stack["rows"].get(str(m))) is not None
                          and str(row.get("user_id") or u) == str(u) else None),
                      email_subject_lookup=lambda a: stack["subjects"].get(str(a).lower()))

@@ -55,7 +55,7 @@ def world(tmp_path):
     reads: list = []
     state = {"down": False}
 
-    def _owner(user_id, meeting_id):
+    def _owner(user_id, meeting_id, workspaces=None):
         return {"id": meeting_id, "native_meeting_id": "abc-defg-hij"} if user_id == JANE else None
 
     def _transcript(user_id, meeting_id, workspaces=None):

@@ -77,8 +77,8 @@ def _client(stream_reader=None) -> TestClient:
 # every /api/meeting/stream request carries an X-User-Id. `None` from the lookup == not-owned → 403.
 def _fake_owner_lookup(owned: dict):
     """owned = {(user_id, str(meeting_id)): native_meeting_id}. Returns a create_app-compatible
-    ``(user_id, meeting_id) -> dict | None`` — the meeting record when owned, else None."""
-    def _lookup(user_id, meeting_id):
+    ``(user_id, meeting_id, workspaces) -> dict | None`` — the meeting record when owned, else None."""
+    def _lookup(user_id, meeting_id, workspaces=None):
         nat = owned.get((str(user_id), str(meeting_id)))
         if nat is None:
             return None
