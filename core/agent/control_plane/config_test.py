@@ -174,36 +174,70 @@ def test_custom_endpoint(base_url: str, api_key: str, model: str = "",
 
 def run_models_test(config: dict, env: Optional[dict] = None,
                     creds_path: Optional[str] = None, post: HttpPost = _post) -> dict:
-    """The EFFECTIVE model credential test — same resolution the dispatch overlay applies
-    (Settings user > global config already collapsed by admin-api; env is the floor)."""
+    """The EFFECTIVE model credential test: the route this subject's turn would take, as the
+    dispatch decides it. The decision is not restated here: ``overlay_model_config`` (the operator
+    gate, ``subject_route_env``, the model allowlist) runs on an empty env and the probe reads what
+    it stamped (F84 · F93 · Vexa-ai/vexa#1783).
+
+    There are two routes, and a probe never mixes them:
+
+    * **The subject's own**, when a custom endpoint passes the gate. Probed with the subject's key
+      (empty included), model and extra_body: the values the worker receives.
+    * **The deployment's**, in every other case. Probed with the deployment's credential only: its
+      gateway (``ANTHROPIC_BASE_URL`` with ``ANTHROPIC_AUTH_TOKEN`` / ``ANTHROPIC_API_KEY``) when
+      one is configured, else the mounted subscription file. A key the subject stored is not used
+      on this route, so it is sent nowhere, and the summary says that nothing of theirs was tested.
+
+    A custom endpoint the gate refuses is reported as refused, and no request is made."""
+    from control_plane.dispatch import overlay_model_config   # the dispatch's decision, reused
+
     env = env if env is not None else dict(os.environ)
-    mode = (config.get("mode") or "").strip()
-    # `custom_base_url` is the dispatch overlay's OWN inertness rule, imported rather than restated
-    # (F93): `mode=custom` with no base_url is inert, and such a turn really does run on the
-    # deployment's endpoint — so that is what this button must probe.
-    cfg_url = model_endpoint.custom_base_url(config)
-    base_url = cfg_url or env.get("ANTHROPIC_BASE_URL", "")
-    if cfg_url:
-        # A CUSTOM ENDPOINT CARRIES THE SUBJECT'S OWN KEY AND NOTHING ELSE (F84). The dispatch now
-        # stamps the empty string rather than letting the deployment's brokered token be backfilled
-        # onto a foreign host — so falling back to that token here would green an endpoint the turn
-        # reaches unauthenticated, which is precisely the "certifies a config the turn will not
-        # use" failure.
-        api_key = (config.get("api_key") or "").strip()
+    cfg = config if isinstance(config, dict) else {}
+    route: dict[str, str] = {}
+    overlay_model_config(route, cfg, allowlist=env.get("VEXA_MODEL_ALLOWLIST", ""))
+    # The model the turn runs on: the subject's, when the allowlist kept it, else the deployment's.
+    model = route.get("VEXA_AGENT_MODEL") or (env.get("VEXA_AGENT_MODEL") or "").strip()
+    cfg_url = model_endpoint.custom_base_url(cfg)
+    if cfg_url and route.get("VEXA_LLM_BASE_URL") == cfg_url:
+        out = test_custom_endpoint(route["VEXA_LLM_BASE_URL"], route["VEXA_LLM_API_KEY"], model,
+                                   post=post, extra_body=route["VEXA_LLM_EXTRA_BODY"])
+        out["mode"], out["route"] = "custom", "subject"
+    elif cfg_url:
+        reason = model_endpoint.refuse_reason(cfg_url) or "the endpoint is not admitted"
+        out = _result(False, f"Refused before any request was made: {reason}")
+        out["mode"], out["route"] = "custom", "subject"
     else:
-        api_key = (config.get("api_key") or "").strip() or env.get("ANTHROPIC_AUTH_TOKEN", "") \
-            or env.get("ANTHROPIC_API_KEY", "")
-    if mode == "custom" or (not mode and base_url and api_key):
-        out = test_custom_endpoint(
-            base_url, api_key, (config.get("model") or "").strip(), post=post,
-            extra_body=(config.get("extra_body") or "").strip(),
-        )
+        out = _test_deployment_route(env, model, creds_path, post)
+        out["route"] = "deployment"
+        runner = route.get("VEXA_RUNNER") or (env.get("VEXA_RUNNER") or "").strip()
+        if runner == "openai-agent":
+            # The worker reads that lane's own keys, and this image does not ship the harness that
+            # orders them, so the button says what it did not test rather than guess.
+            out["summary"] += (" Your turns run on openai-agent, whose deployment endpoint "
+                               "(VEXA_LLM_BASE_URL) this button does not probe.")
+        if (cfg.get("api_key") or "").strip() or (cfg.get("base_url") or "").strip():
+            out["summary"] += (" Your stored endpoint settings are not in effect (mode is not "
+                               "custom with a Base URL), so your turns run on the deployment's "
+                               "credentials: nothing of yours was sent or tested.")
+    # Non-secret provenance so the UI can say WHAT was tested.
+    out["config"] = {k: v for k, v in cfg.items() if k in ("mode", "model", "base_url") and v}
+    return out
+
+
+def _test_deployment_route(env: dict, model: str, creds_path: Optional[str],
+                           post: HttpPost) -> dict:
+    """The deployment's own route, with the deployment's own credential and no extra body (the
+    claude CLI sends none): its gateway when one is configured with a key, else the subscription
+    file the worker mounts."""
+    base = (env.get("ANTHROPIC_BASE_URL") or "").strip()
+    key = (env.get("ANTHROPIC_AUTH_TOKEN") or env.get("ANTHROPIC_API_KEY") or "").strip()
+    if base and key:
+        out = test_custom_endpoint(base, key, model, post=post)
+        out["summary"] = "Deployment gateway: " + out["summary"]
         out["mode"] = "custom"
     else:
         out = test_subscription_credentials(creds_path)
         out["mode"] = "subscription"
-    # Non-secret provenance so the UI can say WHAT was tested.
-    out["config"] = {k: v for k, v in config.items() if k in ("mode", "model", "base_url") and v}
     return out
 
 

@@ -373,9 +373,13 @@ scratch keys. Both are **internal tier**: the caller sends `X-Internal-Secret` m
 `VEXA_INTERNAL_API_SECRET`, and an unconfigured secret means nobody gets in (`403`), whichever ingress
 they arrive on.
 
-`GET /api/models/test` → `{ ok, summary, mode, config }`. Tests the caller's **effective** credentials
-now: `custom` makes a real one-token completion against the endpoint, `subscription` checks the mounted
-credentials for expiry. `config` echoes only `mode`, `model` and `base_url`.
+`GET /api/models/test` → `{ ok, summary, mode, route, config }`. Tests the route the caller's turns
+take now. `route: subject` is the caller's own custom endpoint, when it passes the deployment's
+allow-list: it is probed with the caller's own key, model and extra body. `route: deployment` is every
+other case, probed with the deployment's credential only. `mode` says how: `custom` makes a real
+one-token completion against the endpoint, `subscription` checks the mounted credentials for expiry. A
+stored key that is not in effect is never sent, and the summary says that nothing of the caller's was
+tested. `config` echoes only `mode`, `model` and `base_url`.
 
 `GET /api/transcription/test` → `{ ok, summary, source }` (plus per-failure detail). Probes the
 effective STT backend with its token and then a real transcribe, so a zero-balance account fails here
