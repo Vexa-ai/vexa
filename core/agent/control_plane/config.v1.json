@@ -227,10 +227,24 @@
     },
     {
       "key": "VEXA_DISPATCH_SIGNING_KEY",
-      "class": "defaulted",
-      "default": "dev-dispatch-signing-key",
+      "class": "required-explicit",
       "secret": true,
-      "description": "the shared key per-dispatch tokens are signed with (dev tier; k8s \u2192 SPIRE behind the same seam)"
+      "description": "the shared key agent-api signs each dispatch's identity token with (dev tier; k8s \u2192 SPIRE behind the same seam). It had a published default, `dev-dispatch-signing-key`; anyone holding that value can mint a token this key would sign, so the boot refuses it, the placeholders, and an unset key. Generated at install on every deploy surface: compose's mint-dev-env.sh, the Helm chart's Secret (kept by lookup), the Lite entrypoint (kept under $VEXA_LITE_STATE_DIR)",
+      "targets": [
+        "compose",
+        "helm",
+        "lite"
+      ],
+      "forbidden_values": [
+        "dev-dispatch-signing-key",
+        "vexa-internal-secret",
+        "lite-internal-secret",
+        "changeme",
+        "change-me",
+        "CHANGE-ME",
+        "default",
+        "secret"
+      ]
     },
     {
       "key": "VEXA_GATEWAY_URL",

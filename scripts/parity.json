@@ -391,10 +391,10 @@
       "sites": [
         {
           "path": "core/agent/control_plane/config.v1.json",
-          "pattern": "\"key\"\\s*:\\s*\"(?!VEXA_MCP_DELEGATION_SECRET\")[A-Z0-9_]+\"[^{}]*?\"forbidden_values\"\\s*:\\s*\\[([^\\]]*)\\]",
+          "pattern": "\"key\"\\s*:\\s*\"(?!VEXA_MCP_DELEGATION_SECRET\"|VEXA_DISPATCH_SIGNING_KEY\")[A-Z0-9_]+\"[^{}]*?\"forbidden_values\"\\s*:\\s*\\[([^\\]]*)\\]",
           "flags": "m",
           "all": true,
-          "note": "every forbidden_values list in this contract but the delegation secret's (fact delegation-secret-placeholders) must be the same list"
+          "note": "every forbidden_values list in this contract but the delegation secret's (fact delegation-secret-placeholders) and the dispatch signing key's (fact dispatch-key-placeholders) must be the same list"
         },
         {
           "path": "core/flows/src/config.v1.json",
@@ -467,6 +467,26 @@
         {
           "path": "core/identity/services/admin-api/src/admin_api/config.v1.json",
           "pattern": "\"key\"\\s*:\\s*\"VEXA_MCP_DELEGATION_SECRET\"[^{}]*?\"forbidden_values\"\\s*:\\s*\\[([^\\]]*)\\]"
+        }
+      ]
+    },
+    {
+      "id": "dispatch-key-placeholders",
+      "fact": "the values VEXA_DISPATCH_SIGNING_KEY may never hold: the internal-secret placeholders plus its old default, dev-dispatch-signing-key",
+      "kind": "set",
+      "enforced": true,
+      "canonical": "core/agent/control_plane/config.v1.json — VEXA_DISPATCH_SIGNING_KEY (the signer's declaration; its boot preflight refuses these)",
+      "how_to_agree": "change both in one change; a value the chart accepts must be one agent-api boots with",
+      "why": "agent-api signs each dispatch's identity token with this key. Its default, dev-dispatch-signing-key, shipped on compose, Helm and Lite and is published in this repository, so a token signed with it proved nothing. agent-api's boot preflight refuses the declared values, and the chart refuses an explicit secrets.dispatchSigningKey on the same list (it compares lowercased, so the list carries both spellings of change-me only to stay equal to the declaration). Two copies of one refusal list drift unless they are held together.",
+      "sites": [
+        {
+          "path": "core/agent/control_plane/config.v1.json",
+          "pattern": "\"key\"\\s*:\\s*\"VEXA_DISPATCH_SIGNING_KEY\"[^{}]*?\"forbidden_values\"\\s*:\\s*\\[([^\\]]*)\\]"
+        },
+        {
+          "path": "deploy/helm/charts/vexa/templates/secret.yaml",
+          "pattern": "\\$publishedDispatchKeys := list ([^}]*?) \\}\\}",
+          "note": "the chart's refusal of an explicit secrets.dispatchSigningKey"
         }
       ]
     },

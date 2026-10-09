@@ -94,7 +94,10 @@ secrets:
   transcriptionServiceToken: ""     # funded STT token threaded into spawned bots
   serviceAuthoritySecret: ""        # exact-byte HMAC secret; required only when meetingApi.serviceAuthorityConfig is set
   systemWebhookSecret: ""           # exact-byte HMAC secret; required only when meetingApi.systemWebhookUrl is set
-  dispatchSigningKey: ""            # agent-api signs per-dispatch tokens (default dev key; k8s prod → set this)
+  dispatchSigningKey: ""            # agent-api signs each dispatch's identity token with it
+                                    # (VEXA_DISPATCH_SIGNING_KEY, 32+ bytes, never a published value).
+                                    # Empty → kept from this release's Secret, else generated; with
+                                    # existingSecretName, carry VEXA_DISPATCH_SIGNING_KEY.
   mcpDelegationSecret: ""           # the worker toolbelt: agent-api signs each worker's delegation token,
                                     # identity verifies it. Generated at install like the one above; with
                                     # existingSecretName, carry VEXA_MCP_DELEGATION_SECRET.

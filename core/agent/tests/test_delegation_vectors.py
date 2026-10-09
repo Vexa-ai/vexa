@@ -59,7 +59,8 @@ def test_the_vectors_key_is_refused_at_boot():
     key = _load(_golden("Vector")[0])["secret"]
     base = {"INTERNAL_API_SECRET": "a-real-secret",
             "VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE": "/run/vexa-identity/public/key.pem",
-            "RUNTIME_API_TOKEN": "runtime-caller-token-for-tests-0123456789abcdef"}
+            "RUNTIME_API_TOKEN": "runtime-caller-token-for-tests-0123456789abcdef",
+            "VEXA_DISPATCH_SIGNING_KEY": "dispatch-signing-key-for-tests-0123456789abcdef"}
     with pytest.raises(cp.ConfigError) as e:
         cp.preflight({**base, "VEXA_MCP_DELEGATION_SECRET": key})
     assert "VEXA_MCP_DELEGATION_SECRET" in str(e.value)

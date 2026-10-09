@@ -431,7 +431,9 @@ services:
       - VEXA_GLOBAL_SYSTEM_WORKSPACE_REF=${VEXA_GLOBAL_SYSTEM_WORKSPACE_REF:-}
       - VEXA_GLOBAL_ADMIN_SUBJECTS=${VEXA_GLOBAL_ADMIN_SUBJECTS:-}
       # The shared key the control plane signs per-dispatch tokens with (dev tier; k8s → SPIRE).
-      - VEXA_DISPATCH_SIGNING_KEY=${VEXA_DISPATCH_SIGNING_KEY:-dev-dispatch-signing-key}
+      # No default: the old one was published here. mint-dev-env.sh (`make up`) mints it into .env,
+      # and agent-api refuses to boot on an unset or published value.
+      - VEXA_DISPATCH_SIGNING_KEY=${VEXA_DISPATCH_SIGNING_KEY:-}
       # THE WORKER'S TOOLBELT (capability worker_toolbelt). agent-api mints a short-lived, scoped
       # delegation token per dispatch with this secret; the worker presents it at the gateway's /mcp,
       # where the ONE assembled MCP server serves the meetings, agent and flows tools (ADR-0037), and

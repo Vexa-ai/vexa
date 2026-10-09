@@ -149,7 +149,9 @@ class Settings(BaseSettings):
     agent_identity_token: SecretStr = SecretStr("")
     # The shared key the Identity service signs per-dispatch tokens with (dev tier); every boundary
     # verifies with the same key. k8s replaces this with SPIRE-issued SVIDs behind the same interface.
-    dispatch_signing_key: SecretStr = SecretStr("dev-dispatch-signing-key")
+    # No default: the old one was published in this repository, so a token signed with it proved
+    # nothing. The boot preflight refuses an unset or published value (config.v1 forbidden_values).
+    dispatch_signing_key: SecretStr = SecretStr("")
     # THE internal-tier shared secret. agent-api both PRESENTS it (Lane M: the admin-api
     # membership-index edge) and BELIEVES it — ``_internal_caller`` compares this value, and gate 0
     # of the meeting room is by that code's own statement the trust boundary on who is in the room.

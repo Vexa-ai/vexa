@@ -134,7 +134,7 @@ export BOT_COMMAND="${BOT_COMMAND:-/usr/local/bin/vexa-bot-launch}"
 export AGENT_WORKER_COMMAND="${AGENT_WORKER_COMMAND:-/usr/local/bin/vexa-agent-worker}"
 
 # Agent control plane + worker (BYO inference; credentials brokered by the runtime).
-export VEXA_DISPATCH_SIGNING_KEY="${VEXA_DISPATCH_SIGNING_KEY:-dev-dispatch-signing-key}"
+# (VEXA_DISPATCH_SIGNING_KEY is set below, once the state directory is known.)
 export VEXA_BOT_API_KEY="${VEXA_BOT_API_KEY:-}"
 export VEXA_AGENT_MODEL="${VEXA_AGENT_MODEL:-}"
 # HOST_CLAUDE_CREDENTIALS (config.v1 `model_inference`): path of a claude credentials JSON as seen
@@ -181,6 +181,15 @@ mkdir -p -m 0700 "$lite_state_dir/identity"
 /opt/venvs/gateway/bin/python /app/gateway/src/gateway/identity_token.py keygen \
     "$lite_state_dir/identity/signing-key.pem" "$lite_state_dir/identity/public-key.pem"
 export NEXTAUTH_SECRET="${NEXTAUTH_SECRET:-$(/usr/local/bin/persisted-secret "$lite_state_dir/nextauth-secret")}"
+# The key agent-api signs each dispatch's identity token with. Its old default was published in this
+# repository and agent-api refuses to boot on it. Unset, it is minted on the first boot and kept in
+# $VEXA_LITE_STATE_DIR like the terminal's secret. A .env seeded from an older compose .env may still
+# carry the published value; that one is set aside for the kept key, with a warning.
+if [ "${VEXA_DISPATCH_SIGNING_KEY:-}" = "dev-dispatch-signing-key" ]; then
+    echo "WARNING: VEXA_DISPATCH_SIGNING_KEY holds the value published in the Vexa repository; using the key kept in $lite_state_dir instead." >&2
+    unset VEXA_DISPATCH_SIGNING_KEY
+fi
+export VEXA_DISPATCH_SIGNING_KEY="${VEXA_DISPATCH_SIGNING_KEY:-$(/usr/local/bin/persisted-secret "$lite_state_dir/dispatch-signing-key")}"
 # Read by no Lite program; minted per boot like the internal tier so no published value is exported.
 export JWT_SECRET="${JWT_SECRET:-$(python3 -c "import secrets; print(secrets.token_hex(32))")}"
 

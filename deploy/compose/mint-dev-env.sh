@@ -17,8 +17,14 @@ if grep -qE "^NEXTAUTH_SECRET=\s*(dev-nextauth-secret|vexa-dev-nextauth-secret|v
   sed -i.bak "s|^NEXTAUTH_SECRET=.*|NEXTAUTH_SECRET=|" "$env_file" && rm -f "$env_file.bak"
   echo "replacing NEXTAUTH_SECRET (a published default)"
 fi
+# The same for the dispatch signing key's old default. Nothing verifies its tokens yet, so a new value
+# changes nothing a running stack depends on.
+if grep -qE "^VEXA_DISPATCH_SIGNING_KEY=\s*dev-dispatch-signing-key\s*$" "$env_file"; then
+  sed -i.bak "s|^VEXA_DISPATCH_SIGNING_KEY=.*|VEXA_DISPATCH_SIGNING_KEY=|" "$env_file" && rm -f "$env_file.bak"
+  echo "replacing VEXA_DISPATCH_SIGNING_KEY (a published default)"
+fi
 for key in INTERNAL_API_SECRET RUNTIME_API_TOKEN DB_PASSWORD REDIS_PASSWORD VEXA_MCP_DELEGATION_SECRET \
-           VEXA_FLOWS_API_KEY VEXA_FLOWS_TIMELINE_KEY NEXTAUTH_SECRET; do
+           VEXA_DISPATCH_SIGNING_KEY VEXA_FLOWS_API_KEY VEXA_FLOWS_TIMELINE_KEY NEXTAUTH_SECRET; do
   if grep -qE "^${key}=\s*$" "$env_file"; then
     v="$(mint)"
     # portable in-place edit (GNU and BSD sed)

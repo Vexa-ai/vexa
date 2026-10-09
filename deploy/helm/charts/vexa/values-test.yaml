@@ -24,7 +24,7 @@ secrets:
   # holding it refuses to start.
   internalApiSecret: "helm-render-test-only"
   transcriptionServiceToken: ""
-  dispatchSigningKey: "dev-dispatch-signing-key"
+  dispatchSigningKey: ""   # generated: the old literal is published and the chart refuses it
 
 gateway:
   replicaCount: 1

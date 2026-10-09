@@ -354,6 +354,9 @@ class LocalIdentityMinter(IdentityPort):
     """Dev-tier ``IdentityPort`` — signs a per-dispatch token with a shared key (HS256)."""
 
     def __init__(self, signing_key: str, *, ttl_sec: int = 900) -> None:
+        # A token signed with an empty key would verify for anyone who guessed the format.
+        if not signing_key:
+            raise ValueError("dispatch signing key is required")
         self._key = signing_key
         self._ttl = ttl_sec
 

@@ -36,8 +36,9 @@ PG_IMAGE          ?= postgres:17-alpine
 STORAGE_CONTAINER ?= vexa-lite-storage
 APP_CONTAINER     ?= vexa-lite
 PG_VOLUME         ?= vexa-lite-pgdata
-# The app container's own state (/var/lib/vexa/state): the terminal's NEXTAUTH_SECRET, minted on
-# first boot when .env sets none, so re-creating the container keeps sign-in cookies valid.
+# The app container's own state (/var/lib/vexa/state): the terminal's NEXTAUTH_SECRET and agent-api's
+# VEXA_DISPATCH_SIGNING_KEY, minted on first boot when .env sets none, so re-creating the container
+# keeps sign-in cookies valid and the same signing key.
 STATE_VOLUME      ?= vexa-lite-state
 HOST_GATEWAY_PORT   ?= 8056
 HOST_TERMINAL_PORT  ?= 3001

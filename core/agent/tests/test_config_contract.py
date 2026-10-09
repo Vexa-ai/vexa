@@ -112,21 +112,58 @@ def test_preflight_refuses_a_secretless_or_placeheld_internal_tier():
 
 
 RUNTIME_TOKEN = "runtime-caller-token-for-tests-0123456789abcdef"
+DISPATCH_KEY = "dispatch-signing-key-for-tests-0123456789abcdef"
 IDENTITY = {"VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE": "/run/vexa-identity/public/key.pem",
-            "RUNTIME_API_TOKEN": RUNTIME_TOKEN}
+            "RUNTIME_API_TOKEN": RUNTIME_TOKEN, "VEXA_DISPATCH_SIGNING_KEY": DISPATCH_KEY}
 
 
 def test_preflight_refuses_a_boot_that_cannot_reach_the_runtime():
     """Every worker spawn and routine job presents the runtime caller credential; the runtime refuses
     any other caller, so a boot without one (or with a published placeholder) refuses."""
     base = {"INTERNAL_API_SECRET": "a-real-secret",
-            "VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE": "/run/vexa-identity/public/key.pem"}
+            "VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE": "/run/vexa-identity/public/key.pem",
+            "VEXA_DISPATCH_SIGNING_KEY": DISPATCH_KEY}
     with pytest.raises(cp.ConfigError) as ei:
         cp.preflight(base)
     assert "RUNTIME_API_TOKEN" in str(ei.value)
     with pytest.raises(cp.ConfigError):
         cp.preflight({**base, "RUNTIME_API_TOKEN": "changeme"})
     cp.preflight({**base, "RUNTIME_API_TOKEN": RUNTIME_TOKEN})
+
+
+def test_preflight_refuses_an_unset_or_published_dispatch_signing_key():
+    """agent-api signs every dispatch's identity token with VEXA_DISPATCH_SIGNING_KEY. Its default,
+    `dev-dispatch-signing-key`, was published in this repository and shipped on every deploy
+    surface, so a token signed with it proved nothing. The boot refuses it, every internal-secret
+    placeholder, and an unset key, and never echoes the value."""
+    base = {"INTERNAL_API_SECRET": "a-real-secret", **IDENTITY}
+    unset = {k: v for k, v in base.items() if k != "VEXA_DISPATCH_SIGNING_KEY"}
+    with pytest.raises(cp.ConfigError) as ei:
+        cp.preflight(unset)
+    assert "VEXA_DISPATCH_SIGNING_KEY" in str(ei.value)
+    with pytest.raises(cp.ConfigError) as ei:
+        cp.preflight({**unset, "VEXA_DISPATCH_SIGNING_KEY": "   "})
+    assert "VEXA_DISPATCH_SIGNING_KEY" in str(ei.value)
+    forbidden = next(k["forbidden_values"] for k in cp.load_declaration()["keys"]
+                     if k["key"] == "VEXA_DISPATCH_SIGNING_KEY")
+    assert "dev-dispatch-signing-key" in forbidden
+    for published in forbidden:
+        with pytest.raises(cp.ConfigError) as ei:
+            cp.preflight({**base, "VEXA_DISPATCH_SIGNING_KEY": published})
+        assert "VEXA_DISPATCH_SIGNING_KEY" in str(ei.value)
+        if "-" in published:   # "secret" and "default" are ordinary words in the message itself
+            assert published not in str(ei.value), "a refusal must never echo the value"
+    cp.preflight(base)
+
+
+def test_the_dispatch_token_is_never_signed_with_an_empty_key():
+    """The code default is empty now; an empty key must not sign anything, since such a token
+    verifies for anyone who knows the format."""
+    from shared.adapters import LocalIdentityMinter
+
+    assert Settings().dispatch_signing_key.get_secret_value() == ""
+    with pytest.raises(ValueError):
+        LocalIdentityMinter("")
 
 
 def test_preflight_refuses_a_boot_that_cannot_verify_identity():
@@ -165,6 +202,7 @@ def test_preflight_reports_capability_rows(monkeypatch):
     monkeypatch.setenv("INTERNAL_API_SECRET", "a-real-secret")
     monkeypatch.setenv("VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE", "/run/vexa-identity/public/key.pem")
     monkeypatch.setenv("RUNTIME_API_TOKEN", RUNTIME_TOKEN)
+    monkeypatch.setenv("VEXA_DISPATCH_SIGNING_KEY", DISPATCH_KEY)
     report = cp.preflight()
     assert report["service"] == "agent-api"
     assert report["capabilities"]["bot_gateway"]["state"] == cp.NOT_CONFIGURED

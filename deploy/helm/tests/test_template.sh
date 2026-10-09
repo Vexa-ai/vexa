@@ -856,6 +856,25 @@ for weak in dev-nextauth-secret DEV-NEXTAUTH-SECRET vexa-lite-nextauth-secret sh
 done
 exact 0 'dev-nextauth-secret' "no published NEXTAUTH_SECRET in the default render"
 
+# VEXA_DISPATCH_SIGNING_KEY has no published default either (agent-api refuses `dev-dispatch-signing-key`
+# at boot): empty generates one, a published or short value refuses. Keeping it across upgrades is the
+# lookup every generated key here uses; a Secret still holding the published value gets a new one.
+dispatch_key() {  # dispatch_key <helm args...> → the VEXA_DISPATCH_SIGNING_KEY the chart's Secret renders
+  helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "$@" --show-only templates/secret.yaml \
+    | sed -nE 's/^  VEXA_DISPATCH_SIGNING_KEY: "(.*)"$/\1/p' | head -1
+}
+DGEN="$(dispatch_key)"
+if [ "${#DGEN}" -ge 32 ] && [ "$DGEN" != "dev-dispatch-signing-key" ]; then
+  echo "  OK: an empty secrets.dispatchSigningKey renders a generated ${#DGEN}-character key"
+else echo "  FAIL: empty secrets.dispatchSigningKey rendered '${DGEN:0:8}…'"; fail=1; fi
+[ "$(dispatch_key --set secrets.dispatchSigningKey=$GIVEN)" = "$GIVEN" ] && echo "  OK: a given secrets.dispatchSigningKey is used as is" \
+  || { echo "  FAIL: a given secrets.dispatchSigningKey did not render"; fail=1; }
+for weak in dev-dispatch-signing-key DEV-DISPATCH-SIGNING-KEY CHANGE-ME short-key; do
+  refuse "secrets.dispatchSigningKey=$weak" 'secrets\.dispatchSigningKey must be 32\+ bytes and not a value published' \
+    -f "$CHART/values-test.yaml" --set "secrets.dispatchSigningKey=$weak"
+done
+exact 0 'dev-dispatch-signing-key' "no published VEXA_DISPATCH_SIGNING_KEY in the default render"
+
 # The admin list is admin-api's (VEXA_ADMIN_EMAILS); an install that still sets it in the terminal's
 # extraEnv, as this chart once said to, keeps its admins on upgrade.
 admin_emails() {  # admin_emails <helm args...> → the value admin-api's VEXA_ADMIN_EMAILS renders to

@@ -123,7 +123,7 @@ Neither has a default any more. Both services **refuse to boot** on a placeholde
 published in this repository is not a secret, and a stack running on one comes up green while
 anyone who read the repo can mint an API key for any account. Generate each with
 `openssl rand -hex 32` and set the same `ADMIN_TOKEN` on every service that shares the tier.
-| `VEXA_DISPATCH_SIGNING_KEY` | `dev-dispatch-signing-key` | Signs dispatch tokens (the identity chain of custody). |
+| `VEXA_DISPATCH_SIGNING_KEY` | — (required) | agent-api signs each dispatch's identity token with it, and refuses to boot on an unset key, on the old default `dev-dispatch-signing-key`, or on a placeholder. `make all` mints one; Helm (which also wants 32+ bytes) and Lite generate and keep one when none is given; by hand `openssl rand -hex 32`. |
 | `NEXTAUTH_SECRET` | — (required) | The terminal's signing secret: sign-in cookies, and through a derived key every emailed sign-in link. At least 32 bytes and never a value published in this repository — the terminal refuses to start otherwise. `make all` mints one; by hand `openssl rand -hex 32`. Helm and Lite generate and keep one when none is given. |
 | `MAGIC_LINK_RATE_PER_ADDRESS` · `MAGIC_LINK_RATE_PER_IP` · `MAGIC_LINK_RATE_WINDOW_SECONDS` | `5` · `20` · `900` | Terminal: how many emailed sign-in links one email address and one client address may ask for per window. Past the address limit nothing is sent; past the client limit the form gets a 429. |
 | `TERMINAL_TRUSTED_PROXIES` | — | Terminal: public proxy addresses, comma-separated, whose `X-Forwarded-For` names the client (private and loopback peers are trusted already). |
