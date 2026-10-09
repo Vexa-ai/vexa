@@ -86,6 +86,8 @@ There is **no** top-level `subject`, `workspace_repo`, or `plan` field.
 ## Chat (streamed)
 
 `POST /api/chat` — body `{ prompt, session?, active? }` (`subject` is server-derived, not sent).
+`session` is 1–128 characters from `A-Z a-z 0-9 . _ -`, starting with a letter or digit (empty or
+absent means `main`); any other value is a `422`, here and on `/api/chat/submit` and `/api/chat/reset`.
 Returns **Server-Sent Events**; each `data:` line is one frame:
 
 | frame | fields |

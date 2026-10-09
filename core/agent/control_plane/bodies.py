@@ -24,13 +24,21 @@ class ChatContextBody(BaseModel):
     include: Optional[dict] = None      # {schedule?: bool} — explicit user toggle beats the gate
 
 
+#: A chat session id, bounded where it enters. It becomes part of the chat's unit id
+#: (`units.chat_unit_id`), its stream topics, its continuity file and the runtime's names for its
+#: worker, so it may hold only what every producer mints: `main`, `onboarding`, `chat-<base36>`,
+#: `meet-<row>`, `group-<slug>`, the terminal's `scaffold-<token_urlsafe>` and UUIDs. Empty means
+#: the default session, as before.
+CHAT_SESSION_PATTERN = r"^([A-Za-z0-9][A-Za-z0-9._-]{0,127})?$"
+
+
 class ChatBody(BaseModel):
     model_config = {"extra": "forbid"}
     prompt: str
     # subject is DERIVED server-side from X-User-Id (P20) — kept here only so a client that still sends it
     # doesn't 422 (extra=forbid); the value is IGNORED. Dropped from the client in Stage 4.
     subject: Optional[str] = None
-    session: Optional[str] = None
+    session: Optional[str] = Field(default=None, pattern=CHAT_SESSION_PATTERN)
     # LEGACY single-focus grounding ({kind, ref}) — still honored when ``context`` is absent, so
     # old clients keep byte-identical behavior. The terminal now sends ``context`` (below) too.
     active: Optional[dict] = None
@@ -124,7 +132,7 @@ class ResetBody(BaseModel):
     needs the session; ``prompt``/``subject``/``active`` are accepted-and-ignored so a client reusing the
     chat-body shape doesn't 422 (reset must NOT require a prompt the way the chat turn does)."""
     model_config = {"extra": "forbid"}
-    session: Optional[str] = None
+    session: Optional[str] = Field(default=None, pattern=CHAT_SESSION_PATTERN)
     subject: Optional[str] = None
     prompt: Optional[str] = None
     active: Optional[dict] = None
