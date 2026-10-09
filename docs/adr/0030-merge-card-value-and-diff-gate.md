@@ -79,8 +79,14 @@ sha:
 <!-- vexa-pass:security sha=<full head sha> verdict=pass -->
 ```
 
-- A marker counts only at the start of its own line, outside code, which is where GitHub's
-  Markdown hides it. A marker in inline code, a code block, a quote or mid-sentence does not count.
+- **Markers lead the comment.** A marker counts only in the comment's leading lines: from the
+  first line, each starting at column 0 with `<!--` and closing `-->` on the same line, with blank
+  lines allowed between them. GitHub always hides those lines, and nothing above them can open
+  code. Nothing after the first other line counts, so the card never has to read Markdown. A
+  comment that leads with its marker may quote other markers below it. A maintainer's marker for
+  the head that stands only lower in a comment fails the row, if it is the newest marker for the
+  head, and the row says it must be the first line of the comment: placement can take a pass
+  away, never grant one.
 - `verdict=waived` clears a row only when the same marker carries `waived-by=<login>`, naming an
   account with write or admin on the repo. The card shows the waiver as recorded by the commenter
   and names that account.
@@ -98,8 +104,9 @@ sha:
   PR's newest `merge-card` run on the head, and its `merge-card-comment` run so the sticky card
   agrees. It finds the run by PR as well as head sha (each card run is named after its PR, since
   two PRs can share a head), takes the sticky card's `pull_request_target` run, never re-runs a run
-  awaiting approval, re-reads the PR head just before each re-run and skips it if the head moved,
-  and decides nothing itself. The run name is read from the copy of the workflow that ran, so on a
+  awaiting approval, re-reads the PR head just before each re-run and skips it if the head moved
+  or cannot be read, and decides nothing itself. A pass names one sha, so after a move it must be
+  re-posted for the new head. The run name is read from the copy of the workflow that ran, so on a
   base branch without this change the pick falls back to the run's `pull_requests` list.
   - *Alternative considered:* the comment-triggered workflow publishes a `merge-card` check run on
     the head itself, as `contribution-rights.yml` does for its own check from an `issue_comment`
