@@ -17,6 +17,22 @@
       "type": "string",
       "minLength": 32
     },
+    "CallbackSignature": {
+      "description": "The X-Runtime-Signature header on every RuntimeEvent the runtime POSTs to a callbackUrl: \"v1=\" + hex(HMAC-SHA256(key, canonical(event))), where key = HMAC-SHA256(RUNTIME_API_TOKEN, \"vexa-runtime-callback.v1\") and canonical(event) is the RuntimeEvent as JSON with keys sorted, no whitespace and UTF-8 unescaped. The token itself never travels to a callback URL. A receiver that holds the token (meeting-api) refuses a callback without a valid signature with 401 and moves nothing.",
+      "type": "string",
+      "pattern": "^v1=[0-9a-f]{64}$"
+    },
+    "SignedEventVector": {
+      "description": "A callback-signing vector: signing `event` with `token` must produce `signature` exactly.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["token", "event", "signature"],
+      "properties": {
+        "token": { "type": "string", "minLength": 32, "description": "a published test token; it authenticates nothing" },
+        "event": { "$ref": "#/$defs/RuntimeEvent" },
+        "signature": { "$ref": "#/$defs/CallbackSignature" }
+      }
+    },
     "RuntimeOwnedEnvPrefix": {
       "description": "WorkloadSpec.env keys only the runtime may set: RUNTIME_K8S_* (Pod scheduling and Secret mounts) and VEXA_WORKSPACE_MOUNT_* (the workspace store's backing). A caller-supplied key with one of these prefixes is dropped, not refused. When the spec declares a mount set (VEXA_MOUNTS or VEXA_WORKSPACE_PATH), the runtime injects VEXA_WORKSPACE_MOUNT_TARGET and, when it has one, VEXA_WORKSPACE_MOUNT_SOURCE from its own configuration.",
       "enum": ["RUNTIME_K8S_", "VEXA_WORKSPACE_MOUNT_"]
@@ -72,7 +88,7 @@
       }
     },
     "RuntimeEvent": {
-      "description": "The lifecycle callback the kernel POSTs to callbackUrl on each transition.",
+      "description": "The lifecycle callback the kernel POSTs to callbackUrl on each transition, signed in the X-Runtime-Signature header (CallbackSignature).",
       "type": "object",
       "additionalProperties": false,
       "required": ["workloadId", "state", "at"],

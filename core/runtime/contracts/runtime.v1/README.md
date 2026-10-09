@@ -14,6 +14,12 @@ meeting-api hold the same value; no workload receives it. A missing or wrong cre
 with `WWW-Authenticate: Bearer`. The runtime will not boot without a token, with one shorter than 32
 bytes, or with a placeholder published in this repository.
 
+**The callback is signed.** Every `RuntimeEvent` the runtime POSTs to a `callbackUrl` carries
+`X-Runtime-Signature: v1=<hex>` (`$defs/CallbackSignature`): HMAC-SHA256 over the event as canonical
+JSON (keys sorted, no whitespace, UTF-8), keyed with HMAC-SHA256(`RUNTIME_API_TOKEN`,
+`"vexa-runtime-callback.v1"`). The token itself never travels to a callback URL. meeting-api, which
+holds the token, refuses an unsigned or forged `/runtime/callback` with 401 and moves no meeting.
+
 **A caller of a runtime from before this requirement.** agent-api and meeting-api send the bearer
 from the release that introduced it (v0.13.2). Upgrade the runtime together with both callers; a
 caller that sends no bearer gets 401 on every workload and schedule call.
@@ -93,7 +99,8 @@ running → stopped directly when the workload exits on its own (reason=complete
 ## Shapes
 Defined in [`runtime.schema.json`](runtime.schema.json) (`$defs`): **WorkloadSpec** (create input),
 **WorkloadStatus** (the kernel's view), **RuntimeEvent** (the callback), **Error**, plus the
-`RuntimeState`, `StopReason`, `CallerCredential` and `RuntimeOwnedEnvPrefix` definitions. Conforming examples live in [`golden/`](golden/) and are validated by
+`RuntimeState`, `StopReason`, `CallerCredential`, `CallbackSignature` and `RuntimeOwnedEnvPrefix`
+definitions and the `SignedEventVector` shape. Conforming examples live in [`golden/`](golden/) and are validated by
 [`validate.mjs`](validate.mjs) (run by `gate:schema`).
 
 ## Status

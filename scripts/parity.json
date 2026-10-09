@@ -182,6 +182,71 @@
       ]
     },
     {
+      "id": "runtime-callback-signature",
+      "fact": "how a RuntimeEvent callback is signed: the key-derivation label (runtime.v1 CallbackSignature)",
+      "kind": "literal",
+      "enforced": true,
+      "canonical": "core/runtime/contracts/runtime.v1/runtime.schema.json — $defs.CallbackSignature",
+      "how_to_agree": "a new label is a new signature version: change the contract, the runtime's signer, meeting-api's verifier and the vectors in one change",
+      "why": "The runtime signs and meeting-api verifies, in two images with no shared module. A label that differs on one side refuses every runtime callback, so no meeting ever sees its bot's workload end. The vector below holds the whole derivation; this holds the one constant each side retypes.",
+      "sites": [
+        {
+          "path": "core/runtime/contracts/runtime.v1/validate.mjs",
+          "pattern": "^const CALLBACK_LABEL = \"([^\"]+)\""
+        },
+        {
+          "path": "core/runtime/src/runtime_kernel/caller_auth.py",
+          "pattern": "^_CALLBACK_LABEL = b\"([^\"]+)\""
+        },
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/runtime_signature.py",
+          "pattern": "^_LABEL = b\"([^\"]+)\""
+        }
+      ]
+    },
+    {
+      "id": "runtime-callback-header",
+      "fact": "the header a RuntimeEvent callback carries its signature in",
+      "kind": "literal",
+      "enforced": true,
+      "canonical": "core/runtime/src/runtime_kernel/caller_auth.py — SIGNATURE_HEADER",
+      "how_to_agree": "rename on both sides in one change",
+      "why": "The signer writes the header and the verifier reads it, and an unread header is an unsigned callback: every one refused.",
+      "sites": [
+        {
+          "path": "core/runtime/src/runtime_kernel/caller_auth.py",
+          "pattern": "^SIGNATURE_HEADER = \"([^\"]+)\""
+        },
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/runtime_signature.py",
+          "pattern": "^HEADER = \"([^\"]+)\""
+        }
+      ]
+    },
+    {
+      "id": "runtime-callback-vector",
+      "fact": "the callback-signing vector both sides' tests and the contract pin",
+      "kind": "literal",
+      "enforced": true,
+      "canonical": "core/runtime/contracts/runtime.v1/golden/signed-event-stopped.json",
+      "how_to_agree": "re-derive the vector once and paste the same signature into the golden and both tests",
+      "why": "Each side's test pins its own implementation to a literal; the contract's validate.mjs re-derives the golden in Node. Holding the three literals equal is what makes them one vector rather than three that happen to agree today.",
+      "sites": [
+        {
+          "path": "core/runtime/contracts/runtime.v1/golden/signed-event-stopped.json",
+          "pattern": "\"signature\": \"(v1=[0-9a-f]{64})\""
+        },
+        {
+          "path": "core/runtime/tests/test_caller_auth.py",
+          "pattern": "^VECTOR_SIGNATURE = \"(v1=[0-9a-f]{64})\""
+        },
+        {
+          "path": "core/meetings/services/meeting-api/tests/test_runtime_callback_signature.py",
+          "pattern": "^SIGNATURE = \"(v1=[0-9a-f]{64})\""
+        }
+      ]
+    },
+    {
       "id": "machinery-mark",
       "fact": "the machinery mark — the literal that hides a composed opening's prompt bubble",
       "kind": "literal",

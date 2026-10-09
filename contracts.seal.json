@@ -25,7 +25,7 @@
   "core/meetings/contracts/service-authority.v1": "cbcb1662424e180faebc9170896cc270985d8510b50f51ae1e9b32bc2e6050e6",
   "core/meetings/contracts/transcript.v1": "7d07d0fbac77f6562af64ae6c6286051e0e07763f427347d4e7b7735eaa0f9c8",
   "core/meetings/contracts/webhook.v1": "7d5b9d674544cf8ce7bdeda85b5156907be7c4d3e9be359366cc2ab1665bafba",
-  "core/runtime/contracts/runtime.v1": "f962391f8a8ba262ae9a729819c19340df733d52a44fc336f24a4f0b49021474",
+  "core/runtime/contracts/runtime.v1": "4310f423224aa8e57324ca7a2b95d1eb6f08c32618c52dd4d469833740c87621",
   "core/runtime/contracts/schedule.v1": "6f2c0277d3d186ca2a9333342930f135ea66bfd931135c451bd12b05ff862648",
   "core/workspaces/contracts/workspace.v1": "4069d5a747914765ba2d4f2d4cf0968916be1208137f845a3f1691a241f7f20f",
   "deploy/contracts/config.v1": "813bf5b3ab9b3d6dfb19960ae0960b51dbca163101f80dca3f2279c517e081f4",

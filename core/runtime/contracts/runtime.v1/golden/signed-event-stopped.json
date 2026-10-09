@@ -1,0 +1,11 @@
+{
+  "token": "runtime-caller-token-for-tests-0123456789abcdef",
+  "event": {
+    "workloadId": "mtg-1-abcdef12",
+    "state": "stopped",
+    "at": "2026-10-09T00:00:00+00:00",
+    "exitCode": 0,
+    "stopReason": "completed"
+  },
+  "signature": "v1=2d3b0c1312be4c69a6144019dbd480b5c0f21c905b818e496c3f98cd30a2e286"
+}
