@@ -110,6 +110,48 @@
       ]
     },
     {
+      "id": "credential-broker-assertion-fields",
+      "fact": "the claims a credential-broker.v1 assertion binds, in the Python signer, the TypeScript signer and the contract's validator",
+      "kind": "set",
+      "enforced": true,
+      "canonical": "core/agent/contracts/credential-broker.v1/assertion.py — _FIELDS",
+      "how_to_agree": "a new claim is a contract change: assertion.py (then its vendored copies), assertion.ts, validate.mjs and the SignedAssertionVector goldens in one change",
+      "why": "The byte comparison holds the three Python copies; the TypeScript twin and the contract's Node validator each retype the claim list. Membership is held here; the ORDER, which the encoding depends on, is held by the signed vectors all three re-derive.",
+      "sites": [
+        {
+          "path": "core/agent/contracts/credential-broker.v1/assertion.py",
+          "pattern": "^_FIELDS = \\(([^)]*)\\)"
+        },
+        {
+          "path": "clients/terminal/src/app/api/connections/assertion.ts",
+          "pattern": "^const FIELDS = \\[([^\\]]*)\\]"
+        },
+        {
+          "path": "core/agent/contracts/credential-broker.v1/validate.mjs",
+          "pattern": "^const ORDER = \\[([^\\]]*)\\]"
+        }
+      ]
+    },
+    {
+      "id": "credential-broker-assertion-header",
+      "fact": "the header a credential-broker.v1 assertion travels in",
+      "kind": "header",
+      "enforced": true,
+      "canonical": "core/agent/contracts/credential-broker.v1/assertion.py — HEADER",
+      "how_to_agree": "rename in the contract, its vendored copies and the TypeScript signer in one change",
+      "why": "The terminal signs in TypeScript and the broker reads the Python constant; a spelling that differs refuses every human-role call with a malformed-assertion 401.",
+      "sites": [
+        {
+          "path": "core/agent/contracts/credential-broker.v1/assertion.py",
+          "pattern": "^HEADER = \"([^\"]+)\""
+        },
+        {
+          "path": "clients/terminal/src/app/api/connections/assertion.ts",
+          "pattern": "^export const ASSERTION_HEADER = '([^']+)'"
+        }
+      ]
+    },
+    {
       "id": "identity-token",
       "fact": "gateway-identity.v1 — the signed identity the gateway forwards and the guard that checks it",
       "kind": "file-bytes",
@@ -994,6 +1036,47 @@
         {
           "path": "core/runtime/src/runtime_kernel/workload_env.py",
           "pattern": "^DEFAULT_STORE_TARGET = \"([^\"]+)\""
+        }
+      ]
+    },
+    {
+      "id": "teams-meeting-id-length",
+      "fact": "how many digits a Teams short meeting id (teams.microsoft.com/meet/<id>) may have",
+      "kind": "literal",
+      "enforced": false,
+      "decision": "WHICH LENGTHS A TEAMS SHORT MEETING ID HAS. meeting-api and the MCP's link parser accept 10 to 16 digits; the browser extension accepts 10 to 15, so a 16-digit link the server takes is one the extension does not recognise as a meeting. Agreeing means knowing what Teams issues, which is evidence about the platform, not something this gate can pick.",
+      "why": "Three parsers in three packages and two languages decide whether a URL is a Teams meeting; nothing compared them and they already disagree at 16 digits (architecture pass 3, S4).",
+      "sites": [
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/bot_spawn/service.py",
+          "pattern": "_TEAMS_SHORT_ID = re\\.compile\\(r\"\\^\\\\d\\{(\\d+,\\d+)\\}\\$\"\\)"
+        },
+        {
+          "path": "core/meetings/services/mcp/src/vexa_mcp/link_parser.py",
+          "pattern": "/meet/\\(\\\\d\\{(\\d+,\\d+)\\}\\)",
+          "all": true,
+          "note": "the path, the fragment and the launcher forms"
+        },
+        {
+          "path": "clients/extension/src/meeting.ts",
+          "pattern": "\\\\/meet\\\\/\\(\\\\d\\{(\\d+,\\d+)\\}\\)",
+          "all": true,
+          "note": "the path and the hash forms"
+        }
+      ],
+      "answers": [
+        {
+          "value": "10,15",
+          "sites": [
+            "clients/extension/src/meeting.ts"
+          ]
+        },
+        {
+          "value": "10,16",
+          "sites": [
+            "core/meetings/services/mcp/src/vexa_mcp/link_parser.py",
+            "core/meetings/services/meeting-api/src/meeting_api/bot_spawn/service.py"
+          ]
         }
       ]
     }
