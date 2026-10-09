@@ -7,7 +7,7 @@ with jitsi as the newest row. Pure string logic — no app, no DB.
 from __future__ import annotations
 
 from meeting_api.bot_spawn.service import construct_meeting_url
-from meeting_api.collector.meeting_link import find_meeting_link, parse_meeting_url
+from meeting_api.collector.meeting_link import find_meeting_link, find_meeting_links, parse_meeting_url
 
 
 class TestParseJitsi:
@@ -73,6 +73,28 @@ class TestFindMeetingLinkJitsi:
         # The meet-label convention is pasted-link-only — an ICS full of arbitrary
         # links must not guess rooms. Declaring the host (below) is the opt-in.
         assert find_meeting_link("agenda: https://eu.meet.example.org/Weekly") is None
+
+
+class TestFindMeetingLinks:
+    """Every recognizable link in the text, in order, each URL once — the calendar reader picks."""
+
+    def test_all_links_in_text_order(self):
+        text = ("Join with Google Meet: https://meet.google.com/abc-defg-hij\n"
+                "Телемост: https://telemost.yandex.ru/j/12345678901234567890")
+        assert find_meeting_links(text) == [
+            ("google_meet", "abc-defg-hij", "https://meet.google.com/abc-defg-hij"),
+            ("telemost", "12345678901234567890", "https://telemost.yandex.ru/j/12345678901234567890"),
+        ]
+
+    def test_repeated_url_listed_once_and_non_meeting_urls_skipped(self):
+        text = ("agenda https://docs.google.com/document/d/abc, room https://meet.jit.si/Standup "
+                "(again: https://meet.jit.si/Standup)")
+        assert find_meeting_links(text) == [("jitsi", "Standup", "https://meet.jit.si/Standup")]
+
+    def test_empty_text_yields_nothing_and_first_link_matches_the_singular(self):
+        assert find_meeting_links("") == []
+        text = "a https://meet.google.com/abc-defg-hij then https://telemost.yandex.ru/j/1"
+        assert find_meeting_link(text) == find_meeting_links(text)[0]
 
 
 class TestConfiguredJitsiHosts:
@@ -219,3 +241,51 @@ class TestTeamsThreadIdIsBounded:
         start = time.monotonic()
         assert parse_meeting_url(f"https://teams.microsoft.com/l/meetup-join/{payload}") is None
         assert time.monotonic() - start < 2.0
+
+
+class TestParseTelemost:
+    """Yandex Telemost: exact public hosts, one ``/j/<digits>`` join path, the digits as the id."""
+
+    def test_canonical_link(self):
+        assert parse_meeting_url("https://telemost.yandex.ru/j/12345678901234") == (
+            "telemost", "12345678901234",
+        )
+
+    def test_yandex_360_host(self):
+        assert parse_meeting_url("https://telemost.360.yandex.ru/j/12345678901234") == (
+            "telemost", "12345678901234",
+        )
+
+    def test_trailing_slash_and_query(self):
+        assert parse_meeting_url("https://telemost.yandex.ru/j/12345678901234/?utm=x") == (
+            "telemost", "12345678901234",
+        )
+
+    def test_address_bar_form(self):
+        assert parse_meeting_url("https://telemost.yandex.ru/@/j/12345678901234") == (
+            "telemost", "12345678901234",
+        )
+
+    def test_non_join_path_rejected(self):
+        assert parse_meeting_url("https://telemost.yandex.ru/") is None
+        assert parse_meeting_url("https://telemost.yandex.ru/j/abc") is None
+
+    def test_ten_digit_id_is_not_read_as_hosted_zoom(self):
+        # `/j/<10-11 digits>` is also Zoom's hosted join path; on a Telemost host it is Telemost.
+        assert parse_meeting_url("https://telemost.yandex.ru/j/1234567890?pwd=x") == (
+            "telemost", "1234567890",
+        )
+
+    def test_look_alike_host_is_not_telemost(self):
+        assert parse_meeting_url("https://telemost.yandex.ru.evil.example/j/12345678901234") is None
+        assert parse_meeting_url("https://xtelemost.yandex.ru/j/12345678901234") is None
+
+    def test_found_in_calendar_text(self):
+        text = "Ссылка на встречу: https://telemost.yandex.ru/j/12345678901234, до связи"
+        assert find_meeting_link(text) == (
+            "telemost", "12345678901234", "https://telemost.yandex.ru/j/12345678901234",
+        )
+
+    def test_no_url_template(self):
+        # Callers pass meeting_url: the id is not reconstructed into a link.
+        assert construct_meeting_url("telemost", "12345678901234") is None

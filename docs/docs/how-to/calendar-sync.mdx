@@ -4,7 +4,7 @@ description: "Connect one or more calendars with secret ICS addresses — upcomi
 ---
 
 Connect your calendars once and Vexa keeps your **Upcoming** meetings in sync: every calendar event
-with a Meet/Zoom/Teams link becomes a [planned meeting](/core/meetings#the-lifecycle--one-meeting-one-row),
+with a Meet, Zoom, Teams, Jitsi or Telemost link becomes a [planned meeting](/core/meetings#the-lifecycle--one-meeting-one-row),
 and the bot [auto-joins](/core/meetings#auto-join--scheduled-means-the-bot-comes) each one at start
 time. No OAuth, no calendar permissions — it works off the **secret ICS address** your calendar
 already provides.
@@ -260,9 +260,13 @@ can show:
 
 ## What imports (and what doesn't)
 
-- **Events with a recognizable meeting link** — Meet, Zoom, or Teams, found in the event's
-  conferencing field, location, or description — can auto-join. Link-less events still appear as
-  planned calendar entries, but Vexa has nowhere to send a bot until a meeting link is added.
+- **Events with a recognizable meeting link** — Meet, Zoom, Teams, Jitsi, or Telemost, found in the
+  event's conferencing field, location, URL, or description — can auto-join. Google Calendar attaches
+  a Meet conference to every event it creates; when the organiser also put a link to another
+  platform on the event (a daily held in Telemost, say), that link names the room and the
+  auto-attached Meet is ignored. An event whose only links are Meet imports as a Meet meeting.
+  Link-less events still appear as planned calendar entries, but Vexa has nowhere to send a bot
+  until a meeting link is added.
 - **One meeting per event — the next occurrence only.** A recurring series tracks its next
   upcoming occurrence; the one after imports once the current completes.
 - **Moves and cancellations follow the feed.** A rescheduled event moves its meeting; a cancelled

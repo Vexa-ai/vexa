@@ -40,11 +40,15 @@ def _ics(*events: str) -> str:
 
 def _event(uid="uid-1", summary="Weekly sync", start="20260708T150000Z",
            location="https://meet.google.com/abc-defg-hij", rrule=None,
-           status=None, description=None) -> str:
+           status=None, description=None, conference=None, url=None) -> str:
     lines = [f"BEGIN:VEVENT\r\nUID:{uid}\r\nDTSTAMP:20260701T000000Z\r\nDTSTART:{start}\r\n"
              f"SUMMARY:{summary}\r\n"]
+    if conference:
+        lines.append(f"X-GOOGLE-CONFERENCE:{conference}\r\n")
     if location:
         lines.append(f"LOCATION:{location}\r\n")
+    if url:
+        lines.append(f"URL:{url}\r\n")
     if description:
         lines.append(f"DESCRIPTION:{description}\r\n")
     if rrule:
@@ -125,6 +129,51 @@ def test_parse_link_found_in_description():
     )), now=NOW)
     (ev,) = parsed["events"]
     assert ev["platform"] == "zoom" and ev["native_meeting_id"] == "1234567890"
+
+
+TELEMOST = "https://telemost.yandex.ru/j/12345678901234567890"
+MEET = "https://meet.google.com/abc-defg-hij"
+
+
+def test_parse_explicit_telemost_in_location_beats_auto_attached_meet_conference():
+    # Google Calendar stamps a Meet conference on the event; the organiser typed the Telemost
+    # room into LOCATION — the room is where the organiser said it is.
+    (ev,) = parse_ics(_ics(_event(conference=MEET, location=TELEMOST)), now=NOW)["events"]
+    assert (ev["platform"], ev["native_meeting_id"], ev["meeting_url"]) == (
+        "telemost", "12345678901234567890", TELEMOST,
+    )
+
+
+def test_parse_explicit_link_in_description_beats_meet_line_written_before_it():
+    # The description Google writes opens with its own "Join with Google Meet" line; the
+    # organiser's Telemost link further down still names the room.
+    (ev,) = parse_ics(_ics(_event(
+        conference=MEET, location="",
+        description=f"Join with Google Meet: {MEET}\\nТелемост: {TELEMOST}",
+    )), now=NOW)["events"]
+    assert (ev["platform"], ev["meeting_url"]) == ("telemost", TELEMOST)
+
+
+def test_parse_url_property_is_a_link_source():
+    (ev,) = parse_ics(_ics(_event(location="", url=TELEMOST)), now=NOW)["events"]
+    assert (ev["platform"], ev["meeting_url"]) == ("telemost", TELEMOST)
+
+
+def test_parse_meet_only_event_stays_meet():
+    # Negative control: a Meet event whose description links a document, not another room.
+    (ev,) = parse_ics(_ics(_event(
+        conference=MEET, location="",
+        description=f"Join with Google Meet: {MEET}\\nAgenda: https://docs.google.com/document/d/abc",
+    )), now=NOW)["events"]
+    assert (ev["platform"], ev["meeting_url"]) == ("google_meet", MEET)
+
+
+def test_parse_two_explicit_links_take_the_location_first():
+    jitsi = "https://meet.jit.si/Standup"
+    (ev,) = parse_ics(_ics(_event(
+        conference=MEET, location=TELEMOST, description=f"backup room: {jitsi}",
+    )), now=NOW)["events"]
+    assert (ev["platform"], ev["meeting_url"]) == ("telemost", TELEMOST)
 
 
 def test_parse_imports_events_without_meeting_link_as_linkless():

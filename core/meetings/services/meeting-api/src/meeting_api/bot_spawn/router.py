@@ -439,7 +439,7 @@ def build_router(
                 status_code=422,
                 detail=(
                     f"unsupported platform '{platform}' without a meeting_url — "
-                    "use google_meet/teams, or provide meeting_url (required for zoom/jitsi)"
+                    "use google_meet/teams, or provide meeting_url (required for zoom/jitsi/telemost)"
                 ),
             )
 

@@ -26,6 +26,10 @@ class ParseMeetingLinkResponse(BaseModel):
     warnings: List[str] = Field(default_factory=list)
 
 
+_TELEMOST_HOSTS = frozenset({
+    "telemost.yandex.ru", "telemost.yandex.com", "telemost.360.yandex.ru", "telemost.360.yandex.com",
+})
+
 _TEAMS_ENTERPRISE_HOSTS = {
     "teams.microsoft.com",
     "gov.teams.microsoft.us",
@@ -195,6 +199,25 @@ def parse_meeting_url(meeting_url: str) -> ParseMeetingLinkResponse:
         # the bot then sits in a passcode prompt nobody can see.
         passcode = (query.get("pwd") or query.get("password") or [None])[0]
         return ParseMeetingLinkResponse(platform="zoom", native_meeting_id=native_id, passcode=passcode, warnings=warnings)
+
+    # Yandex Telemost — a hosted service on exact public hosts (Yandex 360 serves the same client
+    # on its own sub-domain), one join path `/j/<digits>`. Checked BEFORE the hosted-Zoom path shape
+    # below, which `/j/<10-11 digits>` would otherwise satisfy. meeting-api carries no URL template
+    # for it, so the canonical link rides along as `meeting_url` for the bot to join.
+    if host in _TELEMOST_HOSTS:
+        m = re.fullmatch(r"(?:/@)?/j/(\d{1,32})/?", path)   # /@/j/<id>: the address-bar form
+        if not m:
+            raise HTTPException(
+                status_code=422,
+                detail="Unsupported Telemost URL format. Expected https://telemost.yandex.ru/j/<id>.",
+            )
+        return ParseMeetingLinkResponse(
+            platform="telemost",
+            native_meeting_id=m.group(1),
+            passcode=None,
+            meeting_url=f"https://{host}/j/{m.group(1)}",
+            warnings=warnings,
+        )
 
     configured_hosts = {
         h.strip().lower() for h in os.getenv("VEXA_JITSI_HOSTS", "").split(",") if h.strip()

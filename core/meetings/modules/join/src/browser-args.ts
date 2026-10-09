@@ -76,3 +76,14 @@ export const JOIN_BROWSER_ARGS: readonly string[] = [
 export function getJoinBrowserArgs(): string[] {
   return [...JOIN_BROWSER_ARGS, ...getLocaleBrowserArgs()];
 }
+
+/** The window fills the display it is given. Without a size Chromium opens its default window —
+ *  945×921 on the bot's bare 1920×1080 Xvfb (no window manager to maximise it), measured in the
+ *  bot's own image. A meeting page laid out for that width is a different page from the one a
+ *  person sees: Telemost's messenger shell then leaves the call frame 549 px, and in that width its
+ *  screen-share layout carries no participant strip at all — no speaking outline, no participant
+ *  slot, no VAD flag — every hint the mixed lane names by, gone. Matches the Xvfb screen the
+ *  bot's entrypoint opens and the CDP session set (remote-browser/args.ts). */
+export function getDisplayFillBrowserArgs(): string[] {
+  return ["--window-size=1920,1080", "--window-position=0,0"];
+}

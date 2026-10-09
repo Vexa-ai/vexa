@@ -25,7 +25,7 @@ Three concepts, three names, and they never overlap:
 ===================  =======  ===============================================================
 name                 type     what it is
 ===================  =======  ===============================================================
-``platform``         str      the meeting platform: google_meet | teams | zoom | jitsi
+``platform``         str      the meeting platform: google_meet | teams | zoom | jitsi | telemost
 ``native_meeting_id``str      the PLATFORM's own id — "abc-defg-hij", "9361792952021"
 ``meeting_db_id``    int      VEXA's internal row id. Never the platform's.
 ===================  =======  ===============================================================

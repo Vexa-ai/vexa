@@ -34,6 +34,7 @@ Pass one of these as `platform`:
 | Zoom | `zoom` |
 | Microsoft Teams | `teams` |
 | Jitsi Meet | `jitsi` * |
+| Yandex Telemost | `telemost` † |
 
 The bot joins like any participant — no plugins, no host configuration.
 
@@ -42,6 +43,10 @@ production. On Jitsi the bot joins and records audio, but transcripts are not ye
 [#883](https://github.com/Vexa-ai/vexa/issues/883) reports a witness run on self-hosted
 docker-jitsi-meet where the speaker binder matched **0 of 122** frames and the meeting completed
 with 0 transcript segments. Track [#570](https://github.com/Vexa-ai/vexa/issues/570).
+
+† **Telemost: join, speaker names — in the grid and with a screen shared — and end-to-end transcripts
+are witnessed live on a compose stack.** The bot joins as a guest through the web client, so a meeting
+with the waiting room on (the default for Yandex 360 organisations) needs the organiser to admit it.
 
 For `teams`, a meeting is addressed either by its **numeric meeting ID** (10–15 digits, the one
 Teams prints beside a passcode) or by the **thread id** from a `…/l/meetup-join/19:meeting_…@thread.v2`
@@ -65,6 +70,11 @@ A password-protected room is joined by passing the optional `passcode` field. To
 `VEXA_JITSI_HOSTS` env (comma-separated). On Jitsi the transcript also carries the meeting's **chat**: each chat
 message arrives as a segment with `source: "chat"` (the sender is the `speaker`), and speaker
 names come from the conference's own dominant-speaker signal.
+
+For `telemost`, pass the full `meeting_url` (`https://telemost.yandex.ru/j/<id>`, or the
+`telemost.360.yandex.ru` host of Yandex 360); the `native_meeting_id` is the numeric id from the
+link. A meeting that requires a Yandex sign-in, or a link to a meeting that does not exist, ends the
+join as `rejected` rather than being retried.
 
 ## Meeting statuses
 

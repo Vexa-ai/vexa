@@ -49,7 +49,7 @@ from __future__ import annotations
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Optional
 
-from ..collector.meeting_link import find_meeting_link
+from ..collector.meeting_link import find_meeting_links
 from ..lifecycle import may_dispatch_again
 
 # How far ahead the importer looks (events beyond it import on a later sweep) and how far back a
@@ -196,6 +196,34 @@ def _component_metadata(comp, *, include_components: bool = True,
     return snapshot
 
 
+# The event properties that can carry the joinable link, in reading order: the conference
+# property Google Calendar stamps on an event, the organiser's own LOCATION, the iCalendar URL
+# property, then the DESCRIPTION text.
+_LINK_SOURCES = ("X-GOOGLE-CONFERENCE", "LOCATION", "URL", "DESCRIPTION")
+# The platform a calendar attaches on its own. Google Calendar adds a Meet conference to every
+# event it creates unless the organiser removes it — both the X-GOOGLE-CONFERENCE property and
+# the "Join with Google Meet" line it writes into DESCRIPTION — so a Meet link on an event is not
+# evidence that the meeting happens on Meet.
+_AUTO_ATTACHED_PLATFORM = "google_meet"
+
+
+def _pick_meeting_link(comp) -> Optional[tuple[str, str, str]]:
+    """The link that names the room → ``(platform, native_meeting_id, url)`` or ``None``.
+
+    A link to any platform other than the calendar's auto-attached one is the organiser's own act
+    (a Telemost, Zoom, Teams or Jitsi link typed into LOCATION, URL or DESCRIPTION), so the first
+    such link wins over an auto-attached Meet conference on the same event. An event whose only
+    recognizable links are Meet keeps the first of them; an event with none imports link-less."""
+    first: Optional[tuple[str, str, str]] = None
+    for key in _LINK_SOURCES:
+        for candidate in find_meeting_links(_event_text(comp, key)):
+            if first is None:
+                first = candidate
+            if candidate[0] != _AUTO_ATTACHED_PLATFORM:
+                return candidate
+    return first
+
+
 def parse_ics(text: str, *, now: datetime,
               horizon_days: int = DEFAULT_HORIZON_DAYS,
               lookback_s: float = DEFAULT_LOOKBACK_S,
@@ -269,14 +297,7 @@ def parse_ics(text: str, *, now: datetime,
             continue
         occurrence, comp = min(candidates, key=lambda t: t[0])
 
-        # the joinable link: Google's conference property first, then LOCATION, then DESCRIPTION
-        link = None
-        for source in (_event_text(comp, "X-GOOGLE-CONFERENCE"),
-                       _event_text(comp, "LOCATION"),
-                       _event_text(comp, "DESCRIPTION")):
-            link = find_meeting_link(source)
-            if link:
-                break
+        link = _pick_meeting_link(comp)
         # no recognizable link → import LINK-LESS (fail loud; the terminal shows "no link")
         platform, native_id, url = link if link else (None, None, None)
         event_metadata = {

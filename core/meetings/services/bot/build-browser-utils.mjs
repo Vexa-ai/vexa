@@ -54,6 +54,7 @@ const GMEET = moduleEntry('gmeet-capture');       // @vexa/gmeet-capture
 const MIXED = moduleEntry('mixed-capture-core');  // @vexa/mixed-capture-core
 const RECORD = moduleEntry('record-chunker');     // @vexa/record-chunker (MediaRecorder → recording.v1)
 const JITSI = moduleEntry('jitsi-capture');       // @vexa/jitsi-capture (dominant-speaker hints + chat)
+const TELEMOST = moduleEntry('telemost-capture'); // @vexa/telemost-capture (speaking-tile hints)
 const TEAMS = moduleEntry('teams-capture');       // @vexa/teams-capture (voice-level-outline speaker hints)
 const ZOOM = moduleEntry('zoom-capture');         // @vexa/zoom-capture (active-speaker DOM watcher → 'dom-active' hints)
 
@@ -85,6 +86,10 @@ import {
   sendJitsiChatMessage,
 } from ${JSON.stringify(JITSI)};
 import {
+  createTelemostSpeakers,
+  installTelemostSignalTap,
+} from ${JSON.stringify(TELEMOST)};
+import {
   createTeamsSpeakers,
   createTeamsCaptions,
 } from ${JSON.stringify(TEAMS)};
@@ -113,6 +118,9 @@ const VexaBrowserUtils = {
   createJitsiSpeakers,       // capture-bridge.ts: w.VexaBrowserUtils.createJitsiSpeakers
   createJitsiChat,           // capture-bridge.ts: w.VexaBrowserUtils.createJitsiChat
   sendJitsiChatMessage,
+  // ── telemost lane (speaking-tile naming hints) ──
+  createTelemostSpeakers,    // capture-bridge.ts: w.VexaBrowserUtils.createTelemostSpeakers
+  installTelemostSignalTap,  // capture-bridge.ts init script: the media-engine socket tap (slot VAD)
   // ── teams lane (voice-level "blue-square" outline → speaker hints) ──
   createTeamsSpeakers,       // capture-bridge.ts: w.VexaBrowserUtils.createTeamsSpeakers
   createTeamsCaptions,       // capture-bridge.ts: w.VexaBrowserUtils.createTeamsCaptions (live CC → diagnostics)
@@ -164,5 +172,6 @@ console.log('  - createGmeetCapture / createGmeetSpeakers / createGmeetCaptureV1
 console.log('  - GmeetChannelBinder / createPcmCaptureNode');
 console.log('  - createMixedAudioCapture / installRemoteAudioHook / selectTeamsMixStreams / createCsrcPoll');
 console.log('  - createJitsiSpeakers / createJitsiChat / sendJitsiChatMessage');
+console.log('  - createTelemostSpeakers / installTelemostSignalTap');
 console.log('  - createTeamsSpeakers / createTeamsCaptions / createZoomSpeakers / createTrackNameResolver');
 console.log('  - window.performLeaveAction');

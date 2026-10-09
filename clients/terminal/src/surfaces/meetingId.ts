@@ -3,9 +3,10 @@
  *    google_meet → abc-defg-hij   ·   zoom → 9–11 digits   ·   teams → non-empty (passcode handled elsewhere)
  *    jitsi → the meet.jit.si room name, or room@host for a self-hosted deployment (a single
  *    URL-safe path segment; declared VEXA_JITSI_HOSTS arrive via the `jitsiHosts` parameter).
+ *    telemost → the digits of a telemost.yandex.ru/j/<id> link (exact public hosts).
  *  Accepts either a raw id or a full meeting URL the user pasted. */
 
-export type Platform = "google_meet" | "teams" | "zoom" | "jitsi";
+export type Platform = "google_meet" | "teams" | "zoom" | "jitsi" | "telemost";
 
 export interface ParsedMeeting {
   platform: Platform;
@@ -17,6 +18,9 @@ const ZOOM_ID = /\d{9,11}/;
 // A Jitsi room: one URL-safe path segment (no separators/whitespace) — the id is embedded
 // back into the construct-URL template, so the encoded form is the id.
 const JITSI_ROOM = /^[^/?#\s]+$/;
+// Yandex Telemost: a hosted service on exact public hosts, joined at /j/<digits>.
+const TELEMOST_HOSTS = ["telemost.yandex.ru", "telemost.yandex.com", "telemost.360.yandex.ru", "telemost.360.yandex.com"];
+const TELEMOST_ID = /^\d{1,32}$/;
 
 /** True if `id` is a valid native id for `platform`. */
 export function isValidMeetingId(platform: Platform, id: string): boolean {
@@ -25,10 +29,11 @@ export function isValidMeetingId(platform: Platform, id: string): boolean {
   if (platform === "google_meet") return GMEET_ID.test(v.toLowerCase());
   if (platform === "zoom") return /^\d{9,11}$/.test(v);
   if (platform === "jitsi") return JITSI_ROOM.test(v);
+  if (platform === "telemost") return TELEMOST_ID.test(v);
   return v.length > 0; // teams
 }
 
-/** Parse a pasted Google Meet / Teams / Zoom / Jitsi link (or bare id) into a platform + native id.
+/** Parse a pasted Google Meet / Teams / Zoom / Jitsi / Telemost link (or bare id) into a platform + native id.
  *  Returns null when nothing valid can be extracted. `jitsiHosts` is the deployment's
  *  VEXA_JITSI_HOSTS list (served by /api/meeting/jitsi-hosts) — declared hosts are recognized
  *  as jitsi even without jitsi/meet naming, matching the server parser. */
@@ -68,6 +73,10 @@ export function parseMeetingInput(raw: string, jitsiHosts: readonly string[] = [
       const short = url.pathname.match(/\/meet\/([^/?#]+)/i);
       if (short) return { platform: "teams", native_meeting_id: short[1] };
       return null;
+    }
+    if (TELEMOST_HOSTS.includes(host)) {
+      const m = url.pathname.match(/^(?:\/@)?\/j\/(\d{1,32})\/?$/); // /@/j/<id>: the address-bar form
+      return m ? { platform: "telemost", native_meeting_id: m[1] } : null;
     }
     // Jitsi: LAST, so every known platform above claims its hosts first (mirrors the server
     // parser's ordering). The canonical public deployment, the deployment-declared hosts
