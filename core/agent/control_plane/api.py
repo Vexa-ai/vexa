@@ -359,22 +359,8 @@ def create_app(
                 "group_workspace_id": group, "read_max": read_max,
                 "lookup": _email_subject_lookup}
 
-
-
-
-
-
-
-
-
-
-
-
     # ── routines (MVP2) — a scheduled routine compiles to a schedule.v1 cron job whose body is a
     #    unit.v1 dispatch POSTed back to /invocations when due (the runtime owns the durable cron) ──
-
-
-
 
     # ── events (MVP3) — the GENERIC event-source ingress: any event.v1 Event → a unit.v1 dispatch →
     #    the one Dispatcher. agent-api knows no tool/domain; the unit reaches email/calendar via its
@@ -802,11 +788,6 @@ def create_app(
             "share_token": str(share_token) if share_token else None,
         })
 
-
-
-
-
-
     # ── ROUGH EDGES (PRD decision 33) ───────────────────────────────────────────────────────────
     def _friction_subject(request: Request) -> str:
         """Who filed it, BEST-EFFORT — never a refusal.
@@ -822,13 +803,6 @@ def create_app(
         length-capped in `shared/friction.py`, and the dedup key folds a flood of identical reports
         into ONE row with a counter."""
         return (request.headers.get("x-user-id") or "").strip()
-
-
-
-
-
-
-
 
     def _entity_mounts(subject: str) -> list:
         """`[{slug, path}]` for every workspace this subject has mounted — their own actives plus
@@ -850,9 +824,6 @@ def create_app(
             if m.path:
                 out.append({"slug": m.slug, "path": m.path})
         return out
-
-
-
 
     # ── workspace lifecycle (SCAFFOLD / TODO(phase-6)) — init from a validated template, swap which
     # validated workspace/template the next dispatch mounts. The seams exist downstream (seeding.seed_workspace
@@ -898,28 +869,7 @@ def create_app(
         access = ids_mod.access_for(rec, subject, root=wsr.root, is_member=_ws_is_member)
         return rec if access == ids_mod.ACCESS_READABLE else None
 
-
-
-
-
-
-
-
     # ── the additive mount set (WP-A2.1): ACTIVE-SET membership over swap's park/restore machinery ──────
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     # ── workspace membership + invites + roles (Lane M) ───────────────────────────────────────────
     # The access layer for SHARED workspaces. Authoritative store = policy/members.json in the
@@ -967,14 +917,6 @@ def create_app(
             return HTTPException(status_code=502, detail=detail)
         return HTTPException(status_code=502, detail=f"{detail}\n\n{wcreds.prompt_sentence(prompt)}")
 
-
-
-
-
-
-
-
-
     # ── the COMPANY LAYER (optional; founder ruling 2026-10-08) ─────────────────────────────────
     # `_global` may stay empty. When an admin chooses to write the thin company layer, agent-api is
     # where its acceptance belongs, because agent-api is the only service that can SEE the store.
@@ -987,26 +929,9 @@ def create_app(
             raise HTTPException(status_code=404, detail="the organisation tier is not present here")
         return target
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     # ── Settings → Models "Test" buttons (on-demand credential tests, fail-loud surface) ────────
     # Both test the caller's EFFECTIVE config — the same user > global > env resolution the
     # dispatch overlay / bot_spawn apply — so what's tested is what a turn/bot actually gets.
-
-
 
     # ── THE ROUTES, BY OWNER ─────────────────────────────────────────────────────────────────
     #
