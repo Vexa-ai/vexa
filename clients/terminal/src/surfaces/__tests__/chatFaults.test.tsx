@@ -34,7 +34,7 @@ vi.mock("../chatStream", async (importOriginal) => ({
 import { Chat } from "../chat";
 import { ServicesProvider, createContainer, reg, CommandServiceId, type CommandService } from "../../platform";
 import { LayoutServiceId, createLayoutService } from "../../workbench/layout";
-import { ASK_CHAT_EVENT } from "../../canvas/actions";
+import { ASK_CHAT_EVENT } from "../../platform";
 
 const SPAWN_REFUSED = {
   source: "runtime", kind: "spawn_refused", op: "spawn", status: 502,

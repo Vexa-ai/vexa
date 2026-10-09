@@ -33,7 +33,7 @@ import { useContext, useEffect, useState, type CSSProperties } from "react";
 import { Icon } from "./index";
 import { DocMetaContext } from "./docRefs";
 import { isInternalHref, normalizeDocPath } from "./docLinks";
-import { WORKSPACE_COMMIT_EVENT } from "../canvas/actions";
+import { WORKSPACE_COMMIT_EVENT } from "../platform";
 
 /** The only schemes a placeholder can offer to fetch. A `data:` image carries its own bytes and has
  *  no source to record; anything else is not a thing we can GET. */

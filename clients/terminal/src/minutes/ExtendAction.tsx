@@ -2,7 +2,7 @@
 /** Full-page Extend actions run jobs; selected passages prepare a quote in the chat composer. */
 import type { CSSProperties, RefObject } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ASK_CHAT_EVENT, WORKSPACE_COMMIT_EVENT } from "../canvas/actions";
+import { ASK_CHAT_EVENT, WORKSPACE_COMMIT_EVENT } from "../platform";
 import { actCleared, actWords, useActState } from "../surfaces/actState";
 import type { ChatIntent } from "../surfaces/chatIntent";
 import { actTarget, isJobIntent } from "../surfaces/jobs";

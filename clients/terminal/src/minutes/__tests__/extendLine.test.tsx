@@ -26,7 +26,7 @@ vi.mock("../../ui-kit/MdxDoc", async (importOriginal) => {
 
 import { PagesPanel } from "../PagesPanel";
 import { LINE_PLACEHOLDER } from "../ExtendAction";
-import { ASK_CHAT_EVENT } from "../../canvas/actions";
+import { ASK_CHAT_EVENT } from "../../platform";
 import { INSTRUCTION_LEAD, clearPending } from "../extend";
 import { INSTRUCTION_MAX, normalizeIntent } from "../../surfaces/chatIntent";
 import type { PageIntent } from "../../surfaces/chatIntent";

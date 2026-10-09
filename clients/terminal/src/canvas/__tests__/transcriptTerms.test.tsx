@@ -16,7 +16,7 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { ASK_CHAT_EVENT, OPEN_ENTITY_EVENT } from "../actions";
+import { ASK_CHAT_EVENT, OPEN_ENTITY_EVENT } from "../../platform";
 import { LiveTranscriptEngine } from "../LiveTranscriptEngine";
 import { HighlightButton, TermText, useTermRenderer } from "../TranscriptTermControls";
 import {

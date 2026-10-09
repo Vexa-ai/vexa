@@ -51,8 +51,7 @@ import { PagesPanel } from "../PagesPanel";
 import { resetActs } from "../../surfaces/actState";
 import { clearPending } from "../extend";
 import { QUEUED_LINE } from "../../surfaces/jobs";
-import { ASK_CHAT_EVENT } from "../../canvas/actions";
-import { ServicesProvider, createContainer, reg, CommandServiceId, type CommandService } from "../../platform";
+import { ASK_CHAT_EVENT, ServicesProvider, createContainer, reg, CommandServiceId, type CommandService } from "../../platform";
 import { LayoutServiceId, createLayoutService } from "../../workbench/layout";
 
 const PATH = "kg/new.md";

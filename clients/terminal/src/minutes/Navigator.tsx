@@ -22,7 +22,7 @@
 import type { CSSProperties, ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "../ui-kit";
-import { WORKSPACE_COMMIT_EVENT } from "../canvas/actions";
+import { WORKSPACE_COMMIT_EVENT } from "../platform";
 import type { Page } from "./types";
 import { navigateView } from "./roomView";
 import {

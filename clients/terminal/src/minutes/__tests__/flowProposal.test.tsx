@@ -20,7 +20,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { cleanup, render, waitFor, fireEvent } from "@testing-library/react";
-import { ASK_CHAT_EVENT } from "../../canvas/actions";
+import { ASK_CHAT_EVENT } from "../../platform";
 import { registry, type TabProps } from "../../contributions";
 import { normalizeIntent, isPageIntent, type ChatIntent } from "../../surfaces/chatIntent";
 import { isJobIntent } from "../../surfaces/jobs";

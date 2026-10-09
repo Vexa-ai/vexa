@@ -34,7 +34,7 @@ vi.mock("../../surfaces/meetingLive", () => ({
 }));
 
 import { MeetingCanvasView } from "../MeetingCanvasView";
-import { ASK_CHAT_EVENT } from "../actions";
+import { ASK_CHAT_EVENT } from "../../platform";
 import { LINE_PLACEHOLDER } from "../../minutes/ExtendAction";
 import { INSTRUCTION_LEAD, clearPending, pendingLanding } from "../../minutes/extend";
 import { resetActs } from "../../surfaces/actState";

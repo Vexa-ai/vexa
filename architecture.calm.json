@@ -974,7 +974,7 @@
    "unique-id": "terminal-platform",
    "node-type": "module",
    "name": "terminal/platform",
-   "description": "platform adapters (terminal)",
+   "description": "the client substrate (terminal): DI, stores, commands, and the window-event and chat-turn vocabulary the surfaces share; imports no other terminal folder",
    "metadata": [
     {
      "path": "clients/terminal/src/platform"

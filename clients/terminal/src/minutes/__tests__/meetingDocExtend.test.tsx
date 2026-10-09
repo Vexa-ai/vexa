@@ -20,7 +20,7 @@ vi.mock("../../ui-kit/MdxDoc", async (importOriginal) => {
 });
 
 import { PagesPanel } from "../PagesPanel";
-import { ASK_CHAT_EVENT } from "../../canvas/actions";
+import { ASK_CHAT_EVENT } from "../../platform";
 import { clearPending } from "../extend";
 import { transcriptSlotMarker } from "../../ui-kit/transcriptSlot";
 import type { PageIntent } from "../../surfaces/chatIntent";

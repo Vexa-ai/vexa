@@ -88,7 +88,7 @@ import {
   readWorkspaceGitDiff,
   type GitCommit, type WorkspaceMember,
 } from "../surfaces/workspaceApi";
-import { ASK_CHAT_EVENT } from "../canvas/actions";
+import { ASK_CHAT_EVENT } from "../platform";
 import { AttachRepo } from "./AttachRepo";
 import { postIntent } from "./extend";
 import { POLICIES_PATH, POLICIES_WORKSPACE } from "./PoliciesAct";

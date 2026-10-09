@@ -4,7 +4,7 @@
  *  was redundant. This module now just exports `sessionTitle` (the chat rail's session picker reuses it)
  *  and re-exports `SessionSummary`. */
 import { type SessionSummary } from "./sessionsApi";
-import { MACHINERY_MARK, ONBOARDING_KICKOFF_MARK } from "../canvas/actions";
+import { MACHINERY_MARK, ONBOARDING_KICKOFF_MARK } from "../platform";
 export type { SessionSummary } from "./sessionsApi";  // re-exported for the chat surface
 
 const truncateSessionId = (session: string) => session.length > 18 ? `${session.slice(0, 18)}...` : session;

@@ -6,7 +6,7 @@ import { setChatActivity } from "./chatActivity";
 import { useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ClipboardEvent, type DragEvent, type ReactNode } from "react";
 import { minutesOnly } from "../app/mode";
 import { liveMeetingsNow } from "./liveMeetings";
-import { useService, useStore, CommandServiceId } from "../platform";
+import { useService, useStore, CommandServiceId, ARTIFACT_EVENT, ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, FOCUS_WORKSPACE_EVENT, MACHINERY_MARK, OPEN_PAGE_EVENT, WORKSPACE_COMMIT_EVENT, MACHINERY_NOTE, ONBOARDING_KICKOFF_MARK, ONBOARDING_REPLY_SEP } from "../platform";
 import { LayoutServiceId, type ActiveTab } from "../workbench/layout";
 import { registerCommand, type TabProps } from "../contributions";
 import { meetingsOnly } from "../app/mode";
@@ -31,7 +31,7 @@ import { actTarget, endJob, isJobIntent, jobLine, jobTarget, noteJob, promoteJob
 // THE CHAT'S INBOX (Vexa-ai/vexa#1610) — everything submitted is on the SERVER at once, and the
 // queued rows are read back from it rather than remembered here. See `surfaces/inbox.ts`.
 import { blockSubmission, claimInboxRow, fetchPending, flushOutbox, newSubmissionId, readOutbox, reconcileInbox, runnable, submitToInbox, SubmitRefused } from "./inbox";
-import { ARTIFACT_EVENT, ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, FOCUS_WORKSPACE_EVENT, MACHINERY_MARK, OPEN_PAGE_EVENT, WORKSPACE_COMMIT_EVENT, MACHINERY_NOTE, ONBOARDING_KICKOFF_MARK, MINUTES_ONBOARDING_GREETING, MINUTES_PREP_GREETING, ONBOARDING_REPLY_SEP } from "../canvas/actions";
+import { MINUTES_ONBOARDING_GREETING, MINUTES_PREP_GREETING } from "../canvas/actions";
 import { TERMS_EVENT } from "../canvas/transcriptTerms";
 
 /** classify a tool name into one of the op icons so the operation line reads at a glance */

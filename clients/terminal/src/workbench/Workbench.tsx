@@ -13,7 +13,7 @@ import "dockview/dist/styles/dockview.css";
 const PANES_KEY = "vexa.terminal.panes.v2";
 const savedSizes = (): number[] | undefined => { try { const s = localStorage.getItem(PANES_KEY); const a = s ? JSON.parse(s) : null; return Array.isArray(a) && a.length === 3 ? a : undefined; } catch { return undefined; } };
 const persistSizes = (s: number[]) => { try { localStorage.setItem(PANES_KEY, JSON.stringify(s)); } catch { /* noop */ } };
-import { useService, useStore, KeybindingServiceId } from "../platform";
+import { useService, useStore, KeybindingServiceId, OPEN_ENTITY_EVENT, OPEN_MEETING_EVENT, ASK_CHAT_EVENT } from "../platform";
 import { LayoutServiceId } from "./layout";
 import { CommandPalette } from "./CommandPalette";
 import { OpsNotice } from "./OpsNotice";
@@ -27,10 +27,8 @@ import { resolveDocRef } from "../ui-kit/docLinks";
 import { liveMeetingsNow } from "../surfaces/liveMeetings";
 import { firstViewPlan } from "./firstView";
 import { isOwnedPath, meetingIdFromPath, meetingPath } from "../app/meetingRoute";
-import { OPEN_ENTITY_EVENT, OPEN_MEETING_EVENT } from "../canvas/actions";
 import { useTheme } from "../app/theme";
 import { meetingsOnly, minutesOnly } from "../app/mode";
-import { ASK_CHAT_EVENT } from "../canvas/actions";
 
 // ── theme toggle: dark ⇄ day mode, icon button in the profile row ──
 function ThemeToggle() {

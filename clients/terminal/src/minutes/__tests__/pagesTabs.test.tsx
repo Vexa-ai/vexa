@@ -21,7 +21,7 @@ vi.mock("../../ui-kit/MdxDoc", async (importOriginal) => {
 });
 
 import { PagesPanel } from "../PagesPanel";
-import { ASK_CHAT_EVENT } from "../../canvas/actions";
+import { ASK_CHAT_EVENT } from "../../platform";
 import type { PageIntent } from "../../surfaces/chatIntent";
 import type { Page } from "../types";
 

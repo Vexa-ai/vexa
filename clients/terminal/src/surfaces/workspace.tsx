@@ -3,14 +3,13 @@
  *  entity: frontmatter + wikilinked body). Clicking a file opens a Doc tab; the chat rail references the
  *  active file from the center tab. Reuses /api/workspace/*. */
 import { useContext, useEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
-import { useService } from "../platform";
+import { useService, OPEN_ENTITY_EVENT, OPEN_MEETING_EVENT } from "../platform";
 import { LayoutServiceId } from "../workbench/layout";
 import { registerList, registerTab, type TabProps } from "../contributions";
 import { minutesOnly } from "../app/mode";
 import { Icon, Checkbox } from "../ui-kit";
 import { Modal } from "../ui-kit/Modal";
 import { RoomOnboarding } from "./roomOnboarding";
-import { OPEN_ENTITY_EVENT, OPEN_MEETING_EVENT } from "../canvas/actions";
 import { ENTITY_CHIP, DEFAULT_ENTITY_CHIP, DocMetaContext, DocNavContext, resolveDocRef, type DocNavigate } from "../ui-kit/docLinks";
 import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
 import { MdxDoc } from "../ui-kit/MdxDoc";

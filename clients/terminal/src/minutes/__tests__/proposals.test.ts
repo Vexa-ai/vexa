@@ -17,7 +17,7 @@ import type { DeskProposal } from "../../surfaces/proposalsApi";
 import type { DeskFacts } from "../../surfaces/workspaceApi";
 import type { Chat } from "../chats";
 import { applyProposal, isUnlabeled, jtbdProposal, KICK, needsSetup, PREP_WINDOW_MS, PROPOSALS_MAX, proposals, setupProposal, standingProposals } from "../proposals";
-import { ONBOARDING_GROUNDING, ONBOARDING_REPLY_SEP } from "../../canvas/actions";
+import { ONBOARDING_GROUNDING, ONBOARDING_REPLY_SEP } from "../../platform";
 
 const NOW = Date.UTC(2026, 8, 1, 12, 0, 0);            // a fixed "now" — nothing here reads the clock
 const at = (mins: number) => new Date(NOW + mins * 60000).toISOString();

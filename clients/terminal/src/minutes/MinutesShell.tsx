@@ -14,7 +14,7 @@
  *  One CSS grid: three columns (rail · conversation · pages), a shared 46px header band. */
 import { COMPANY_WORD, WORKSPACE_WORD } from "./vocabulary";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ARTIFACT_EVENT, ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, FOCUS_WORKSPACE_EVENT, WORKSPACE_COMMIT_EVENT, OPEN_ENTITY_EVENT, OPEN_MEETING_EVENT, OPEN_PAGE_EVENT } from "../canvas/actions";
+import { ARTIFACT_EVENT, ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, FOCUS_WORKSPACE_EVENT, WORKSPACE_COMMIT_EVENT, OPEN_ENTITY_EVENT, OPEN_MEETING_EVENT, OPEN_PAGE_EVENT, useService } from "../platform";
 import { Chat } from "../surfaces/chat";
 import { ensureMeetingKnown, useLiveMeetings } from "../surfaces/liveMeetings";
 import {
@@ -53,7 +53,6 @@ import { ProposalChips } from "./ProposalChips";
 import { EdgeHandle, EDGE_W } from "./Collapse";
 import { MOCK_CHATS, MOCK_MEETINGS, mockBody, mockOn } from "./mockPhases";
 import { T, maxPagesW, surface, type as ty } from "./tokens";
-import { useService } from "../platform";
 import { LayoutServiceId } from "../workbench/layout";
 import type { Page, Sel } from "./types";
 

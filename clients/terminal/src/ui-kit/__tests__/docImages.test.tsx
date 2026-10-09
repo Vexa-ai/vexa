@@ -22,7 +22,7 @@ import { Markdown } from "../Markdown";
 import { MdxDoc } from "../MdxDoc";
 import { DocMetaContext } from "../docRefs";
 import { DocImage, fetchFailureLine, findItInstruction, removeImageReference, rewriteImageReference, workspaceAssetUrl } from "../docImages";
-import { WORKSPACE_COMMIT_EVENT } from "../../canvas/actions";
+import { WORKSPACE_COMMIT_EVENT } from "../../platform";
 
 const fetchWorkspaceAsset = vi.fn(async () => ({
   path: "assets/bank-logo.svg", bytes: 12, source: "https://bank.example/logo.svg",

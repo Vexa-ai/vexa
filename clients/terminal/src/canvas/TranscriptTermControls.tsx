@@ -18,7 +18,7 @@
  *  on'", and a background loop that highlights unasked is that feature under a different name.
  */
 import React, { useMemo } from "react";
-import { OPEN_ENTITY_EVENT } from "./actions";
+import { OPEN_ENTITY_EVENT } from "../platform";
 import { splitTextIntoSpans } from "./inlineSpans";
 import { postIntent } from "../minutes/extend";
 import { termSpans, termsCursor, useTranscriptTerms, type TranscriptTerm } from "./transcriptTerms";

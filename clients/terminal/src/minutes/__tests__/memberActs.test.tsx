@@ -23,7 +23,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
-import { ASK_CHAT_EVENT } from "../../canvas/actions";
+import { ASK_CHAT_EVENT } from "../../platform";
 import * as api from "../../surfaces/workspaceApi";
 import { MEMBER_MAX, isMemberIntent, isPageIntent, normalizeIntent, type ChatIntent } from "../../surfaces/chatIntent";
 import { isJobIntent } from "../../surfaces/jobs";

@@ -581,14 +581,14 @@
       "enforced": true,
       "canonical": "core/agent/shared/marks.py",
       "how_to_agree": "import it from shared.marks in Python; the terminal's copy is the one genuine mirror and this gate is what keeps it honest",
-      "why": "Was written FOUR times across three images — control_plane/chat_intents.py, control_plane/scaffolds.py, worker/engine.py, clients/terminal/src/canvas/actions.ts — each with a comment saying the duplication was deliberate because 'the sides ship in different images'. True of the TypeScript copy; never true of the Python ones: core/agent/shared is COPY'd into agent-api, the worker AND lite, and two of the three modules already imported from it at module scope. Three images were agreeing on a literal by hand while the module that could hold it was already in all three. The Python side is now one definition; what is left is the one copy that cannot import Python, and it is gated here rather than hoped about in a comment.",
+      "why": "Was written FOUR times across three images — control_plane/chat_intents.py, control_plane/scaffolds.py, worker/engine.py, clients/terminal/src/canvas/actions.ts (now platform/turnMarks.ts) — each with a comment saying the duplication was deliberate because 'the sides ship in different images'. True of the TypeScript copy; never true of the Python ones: core/agent/shared is COPY'd into agent-api, the worker AND lite, and two of the three modules already imported from it at module scope. Three images were agreeing on a literal by hand while the module that could hold it was already in all three. The Python side is now one definition; what is left is the one copy that cannot import Python, and it is gated here rather than hoped about in a comment.",
       "sites": [
         {
           "path": "core/agent/shared/marks.py",
           "pattern": "^MACHINERY_MARK = \"([^\"]+)\""
         },
         {
-          "path": "clients/terminal/src/canvas/actions.ts",
+          "path": "clients/terminal/src/platform/turnMarks.ts",
           "pattern": "MACHINERY_MARK = \"([^\"]+)\""
         }
       ],
@@ -1043,14 +1043,14 @@
       "fact": "the machinery note — the prose a composed opening carries so the agent knows nobody typed it",
       "kind": "prose",
       "decision": "WHICH INSTRUCTION THE AGENT ACTUALLY GETS. The Python copy carries a clause the TypeScript copy does not. The two are handed to the same model in different code paths, so the model is given different instructions depending on which side composed the opening. Unlike the mark it rides on, this is prose with meaning and the two bodies cannot be reconciled mechanically — someone has to say which instruction is right.",
-      "why": "The mark this note carries is now single-sourced (fact machinery-mark). The note is not, and it had already drifted: scaffolds.py continues past where actions.ts stops. Kept on the ledger rather than fixed, because choosing the surviving text is choosing what the agent is told.",
+      "why": "The mark this note carries is now single-sourced (fact machinery-mark). The note is not, and it had already drifted: scaffolds.py continues past where the TypeScript copy (platform/turnMarks.ts) stops. Kept on the ledger rather than fixed, because choosing the surviving text is choosing what the agent is told.",
       "sites": [
         {
           "path": "core/agent/control_plane/scaffolds.py",
           "pattern": "MACHINERY_NOTE = \\(([\\s\\S]*?)\\)\\n"
         },
         {
-          "path": "clients/terminal/src/canvas/actions.ts",
+          "path": "clients/terminal/src/platform/turnMarks.ts",
           "pattern": "export const MACHINERY_NOTE = ([^;]*);"
         }
       ],
@@ -1059,7 +1059,7 @@
         {
           "value": "+ MACHINERY_MARK + This opening was composed by the product from the link this person clicked",
           "sites": [
-            "clients/terminal/src/canvas/actions.ts"
+            "clients/terminal/src/platform/turnMarks.ts"
           ]
         },
         {

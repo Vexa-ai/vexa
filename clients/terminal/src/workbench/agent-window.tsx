@@ -8,7 +8,7 @@ import { type CSSProperties, type ReactNode, type RefObject, useEffect, useState
 import { Icon } from "../ui-kit";
 import { Markdown } from "../ui-kit/Markdown";
 import { MdxDoc } from "../ui-kit/MdxDoc";
-import { OPEN_ENTITY_EVENT } from "../canvas/actions";
+import { OPEN_ENTITY_EVENT } from "../platform";
 import { faultHeadline, type Fault } from "../surfaces/faults";
 
 // ── the turn model ────────────────────────────────────────────────────────────────

@@ -25,7 +25,7 @@ import {
   Wikilink, WorkspaceRef, isDistinctiveWorkspaceToken, isInternalHref, knownWorkspaces, lookupWorkspace,
   primeKnownWorkspaces, type DocNavigate,
 } from "./docLinks";
-import { OPEN_MEETING_EVENT } from "../canvas/actions";
+import { OPEN_MEETING_EVENT } from "../platform";
 import { registry } from "../contributions";
 import { splitTranscriptSlots, TRANSCRIPT_WIDGET_KIND } from "./transcriptSlot";
 import { POLICY_ACT_KIND, PROPOSAL_ACT_KIND, PROPOSAL_KIND, ViewSource, declaredKind, docHeader, splitFrontmatter } from "./policyDoc";

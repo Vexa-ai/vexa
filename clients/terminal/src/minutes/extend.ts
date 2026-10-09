@@ -19,7 +19,7 @@
  *  intent still does the right thing, and a build where it reads it is not confused by the
  *  sentence — the two say the same thing.
  */
-import { ASK_CHAT_EVENT } from "../canvas/actions";
+import { ASK_CHAT_EVENT } from "../platform";
 import { actPressed } from "../surfaces/actState";
 import { isMemberIntent, isPageIntent, isSilent, normalizeIntent, type ChatIntent, type ChatIntentKind, type ExtendTranscriptIntent, type IntentOf, type RawIntent } from "../surfaces/chatIntent";
 import { actTarget, isJobIntent } from "../surfaces/jobs";
