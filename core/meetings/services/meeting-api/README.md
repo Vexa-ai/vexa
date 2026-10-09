@@ -19,14 +19,30 @@ and stays in their ecosystem (FastAPI + redis + DB).
 | calls | dashboard / agent-api | `GET /meetings` | the user's meetings (live + past), api.v1 `MeetingListResponse` |
 | calls | dashboard / agent-api | `GET /transcripts/{platform}/{native}` | the meeting transcript, api.v1 `TranscriptionResponse` |
 | calls | api-gateway `/ws` | `POST /ws/authorize-subscribe` | identity-scoped subscribe authorization |
-| spawns-over | runtime kernel | `runtime.v1` (`RuntimeClient.create_workload`) | the meeting-bot workload (carries the `invocation.v1` BOT_CONFIG + MeetingToken) |
-| consumes | meeting-bot | `POST /bots/internal/callback/lifecycle` | `lifecycle.v1` `LifecycleEvent` → FSM advance + DB persist |
-| consumes | runtime kernel | `POST /runtime/callback` | workload state/terminal ACK (CC5 synthetic `failed`) |
+| spawns-over | runtime kernel | `runtime.v1` (`RuntimeClient.create_workload`) | the meeting-bot workload (carries the `invocation.v1` BOT_CONFIG + MeetingToken); every call presents `RUNTIME_API_TOKEN` |
+| consumes | meeting-bot | `POST /bots/internal/callback/lifecycle` | `lifecycle.v1` `LifecycleEvent` → FSM advance + DB persist. Admitted by the event's own session's MeetingToken (see below) or the internal tier (`X-Internal-Secret`); anything else is a `401` |
+| consumes | meeting-bot | `POST /internal/recordings/upload` | recording chunks and signal tapes for the session named by `session_uid`. Admitted by that session's MeetingToken or the internal tier (`Bearer <INTERNAL_API_SECRET>`) |
+| consumes | runtime kernel | `POST /runtime/callback` | workload state/terminal ACK (CC5 synthetic `failed`). Admitted only with the runtime's `X-Runtime-Signature`, an HMAC over the event keyed from `RUNTIME_API_TOKEN` (`src/meeting_api/runtime_signature.py`) |
 | calls (optional) | operator service authority | `service-authority.v1` over signed HTTP | allow/deny before spawn and at each one-minute active-service boundary; no hosted billing data |
 | consumes | transcription worker | redis stream `transcription_segments` | raw `transcript.v1` segments → DB |
 | publishes | api-gateway `/ws` | redis channel `tc:meeting:{id}:mutable` | the live mutable transcript bundle |
 | publishes | api-gateway `/ws` | redis channel `bm:meeting:{id}:status` | ws.v1 `meeting.status` (BotStatus) on each FSM advance |
 | produces | user webhook endpoint | `webhook.v1` envelope | `meeting.status_change` (signed, best-effort delivery) |
+
+### The session token (MeetingToken)
+
+The one credential a meeting bot holds (`src/meeting_api/meeting_token.py`). An HS256 JWT signed
+with `ADMIN_TOKEN`, minted by `POST /bots` for ONE bot session and bound to it: its `session_uid`
+claim is the spawn's `connection_id`, the id the eager `MeetingSession` is keyed by. It rides the
+bot's `invocation.v1` as `token`, so the bot workload is its only holder; it expires after
+`MEETING_TOKEN_TTL_SECONDS` (default 5 h). The bot presents it as `Authorization: Bearer <token>` on
+the two doors above: the lifecycle callback (session = the event's `connection_id`) and the
+recording/tape upload (session = the request's `session_uid`). Both apply one rule,
+`admit_session`: a valid signature, unexpired, and bound to exactly that session. A token for another
+session, or bound to none, is refused, so a bot can move and write only its own session. No
+service-tier secret is ever placed in an invocation. With no `ADMIN_TOKEN` (or no
+`RUNTIME_API_TOKEN` for the runtime callback) a door refuses every caller; only the in-process test
+harness opens them, with `create_app(open_callbacks=True)`.
 
 ## Contracts
 
