@@ -68,7 +68,9 @@ uv run pytest -q        # uv manages this package's own venv/deps
   the workspace's own `skills/` are staged at the worker's `~/.claude/skills` per turn so its `claude`
   auto-discovers them; on a name clash the platform's loads. A workspace skill is staged as a copy
   without `allowed-tools` (Claude Code reads it as a grant beyond `--allowedTools`), `hooks`, or any
-  hidden entry such as `.claude-plugin/`: its files may come from an imported repository. No hook
+  hidden entry such as `.claude-plugin/`: its files may come from an imported repository. The copy
+  holds regular files only, each opened without following a link; a skill reached through a link,
+  or holding a second `SKILL.md` below its top, is not staged. No hook
   runs in the worker (`disableAllHooks`, on the command line and in the image's managed settings).
   Skill helper scripts run under the turn's existing `--allowedTools` grant (no separate skills gate).
 - ⬜ planned — multi-workspace (company/service tiers — a FUTURE axis beyond the single user workspace)

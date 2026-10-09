@@ -29,7 +29,10 @@ trivial fakes.
   default.
 - **Claude Code's skills**: `claude_skills.py` stages the turn's skill set into the worker's user
   scope (`~/.claude/skills`) — the platform's governed skills, then the workspace's own with the
-  tool-granting frontmatter removed. Part of the `claude-code` adapter.
+  tool-granting frontmatter removed. A workspace skill is staged as a copy of its regular files,
+  each opened without following a link: a link, a FIFO or a hard-linked file is left out, and a
+  skill whose `skills/` folder, skill folder or `SKILL.md` is a link, or that holds a second
+  `SKILL.md` below its top, is not staged. Part of the `claude-code` adapter.
 - **Panel events**: `tool_events.py` — the closed tool vocabularies and the event a successful
   result earns (a write opens its file, a bot send opens the transcript, `open_page`, chips, a
   workspace joining the chat). Imported by all three harnesses so a turn paints the same screen

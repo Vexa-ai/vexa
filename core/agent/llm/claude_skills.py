@@ -5,16 +5,27 @@ The Claude Code CLI reads skills from ``~/.claude/skills`` (``build_argv`` passe
 governed skills from the workspace seed this deployment ships, then the workspace's own
 ``skills/``, copied with the frontmatter keys that could grant tools or register hooks removed.
 Part of the Claude Code adapter (``claude_code.ClaudeCodeHarness.prepare`` calls it).
+
+A workspace's files come from wherever its person imported them or the model wrote them, and the
+worker that stages them may run as root while the model's tools do not. So nothing below a
+workspace's ``skills/`` is reached through a link: every folder and file there is opened by
+descriptor without following one, a file is read only once ``fstat`` says it is a regular file
+with no other hard link, and what is staged is a copy of the bytes read, which a later change in
+the workspace cannot alter.
 """
 from __future__ import annotations
 
+import logging
 import os
 import shutil
+import stat
 import tempfile
 from pathlib import Path
 from typing import Optional
 
 import yaml
+
+_log = logging.getLogger("llm.claude_skills")
 
 
 def _governed_skills_dir() -> Optional[Path]:
@@ -43,6 +54,20 @@ WORKSPACE_SKILL_DROPPED_KEYS = frozenset({"allowed-tools", "hooks"})
 #: the newest ``turn-*`` directory in it; every directory there was made by ``_link_skills_into_home``.
 SKILLS_STAGE_DIR = ".vexa-skills"
 
+#: What the workspace's skills may stage in one turn, all of them together. Every turn copies them,
+#: so this bounds that copy; a skill that would pass it is not staged.
+WORKSPACE_SKILLS_MAX_FILES = 2000
+WORKSPACE_SKILLS_MAX_BYTES = 64 << 20
+
+#: How many folders deep a workspace skill may nest below its own.
+WORKSPACE_SKILL_MAX_DEPTH = 16
+
+_O_CLOEXEC = getattr(os, "O_CLOEXEC", 0)
+#: A folder below a workspace's ``skills/``: opened as a directory, never through a link.
+_DIR_FLAGS = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW | _O_CLOEXEC
+#: A file below it: never through a link, and ``O_NONBLOCK`` so opening a FIFO never waits.
+_FILE_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | _O_CLOEXEC
+
 
 def _frontmatter_key(key: object) -> str:
     return str(key).strip().lower().replace("_", "-")
@@ -54,7 +79,7 @@ def _sanitized_workspace_skill(text: str) -> "tuple[dict, str] | None":
     the keys kept here, and a file with none gets an empty block ahead of its text. None — the skill
     is not loaded — when the frontmatter does not close or does not parse to a mapping: a parser
     more lenient than this one might still find a grant in it."""
-    rest = text.lstrip("\ufeff")
+    rest = text.lstrip("﻿")
     meta: dict = {}
     lines = rest.splitlines(keepends=True)
     if lines and lines[0].strip() == "---":
@@ -78,37 +103,204 @@ def _sanitized_workspace_skill(text: str) -> "tuple[dict, str] | None":
 
 
 def _skill_dir(d: Path) -> bool:
-    """A loadable skill folder: ``<name>/SKILL.md``, not hidden, not the CLI's reserved ``synced``."""
-    return (not d.name.startswith(".") and d.name.lower() != "synced"
-            and d.is_dir() and (d / "SKILL.md").is_file())
+    """A loadable PLATFORM skill folder: ``<name>/SKILL.md``, not hidden, not the CLI's reserved
+    ``synced``. The platform's skills ship in the image and are linked as shipped; a workspace's
+    own are never reached through a link (``_assemble_skills``)."""
+    return _skill_name(d.name) and d.is_dir() and (d / "SKILL.md").is_file()
 
 
-def _stage_workspace_skill(src: Path, dst: Path, taken: set) -> None:
-    """Stage one workspace skill as a real folder holding the sanitized ``SKILL.md``, with every
-    other entry linked back to the workspace so the skill's scripts and references resolve. Hidden
-    entries are not linked: a ``.claude-plugin/`` would make the folder a plugin, which brings its
-    own hooks, agents and MCP servers. A skill whose name is taken by a platform skill is skipped."""
+def _skill_name(name: str) -> bool:
+    return not name.startswith(".") and name.lower() != "synced"
+
+
+class _SkillRefused(Exception):
+    """A workspace skill that is not staged at all; the message says why (it goes to the log)."""
+
+
+class _EntryRefused(Exception):
+    """One entry of a workspace skill that is not staged; the rest of the skill still is."""
+
+
+class _Budget:
+    """What is left of ``WORKSPACE_SKILLS_MAX_FILES`` and ``WORKSPACE_SKILLS_MAX_BYTES``."""
+
+    def __init__(self) -> None:
+        self.files = WORKSPACE_SKILLS_MAX_FILES
+        self.bytes = WORKSPACE_SKILLS_MAX_BYTES
+
+
+def _kind(entry: "os.DirEntry[str]") -> str:
+    """``link``, ``dir``, ``file`` or ``other``, from the entry itself, never following a link."""
     try:
-        staged = _sanitized_workspace_skill((src / "SKILL.md").read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError):
+        if entry.is_symlink():
+            return "link"
+        if entry.is_dir(follow_symlinks=False):
+            return "dir"
+        if entry.is_file(follow_symlinks=False):
+            return "file"
+    except OSError:
+        pass
+    return "other"
+
+
+def _open_dir(name: str, dir_fd: int) -> int:
+    """A descriptor for folder ``name`` under ``dir_fd``, opened without following a link.
+    ``FileNotFoundError`` when there is none; ``_EntryRefused`` when it is anything but a folder."""
+    try:
+        fd = os.open(name, _DIR_FLAGS, dir_fd=dir_fd)
+    except FileNotFoundError:
+        raise
+    except OSError as exc:
+        raise _EntryRefused(f"{name!r} is not a folder ({exc.strerror})") from exc
+    try:
+        if not stat.S_ISDIR(os.fstat(fd).st_mode):
+            raise _EntryRefused(f"{name!r} is not a folder")
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def _read_file(name: str, dir_fd: int, budget: _Budget) -> "tuple[bytes, int]":
+    """The bytes and mode of file ``name`` under ``dir_fd``, opened without following a link — and
+    only when it is a regular file, so a device or a FIFO is never opened — and read only when
+    ``fstat`` says it is still that file, with no other hard link (whose other name could be
+    anywhere on the volume). ``FileNotFoundError`` when there is none; ``_EntryRefused`` when it is
+    not such a file; ``_SkillRefused`` when it would pass the turn's budget."""
+    try:
+        seen = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+        if not stat.S_ISREG(seen.st_mode):
+            raise _EntryRefused(f"{name!r} is not a regular file")
+        fd = os.open(name, _FILE_FLAGS, dir_fd=dir_fd)
+    except FileNotFoundError:
+        raise
+    except OSError as exc:
+        raise _EntryRefused(f"{name!r} is not a regular file ({exc.strerror})") from exc
+    try:
+        st = os.fstat(fd)
+        if (not stat.S_ISREG(st.st_mode)
+                or (st.st_dev, st.st_ino) != (seen.st_dev, seen.st_ino)):
+            raise _EntryRefused(f"{name!r} is not a regular file")
+        if st.st_nlink > 1:
+            raise _EntryRefused(f"{name!r} has another hard link")
+        if budget.files < 1 or st.st_size > budget.bytes:
+            raise _SkillRefused("the workspace's skills are past what one turn stages")
+        chunks: list[bytes] = []
+        size = 0
+        while True:
+            chunk = os.read(fd, 1 << 16)
+            if not chunk:
+                break
+            size += len(chunk)
+            if size > budget.bytes:
+                raise _SkillRefused("the workspace's skills are past what one turn stages")
+            chunks.append(chunk)
+        budget.files -= 1
+        budget.bytes -= size
+        return b"".join(chunks), st.st_mode
+    finally:
+        os.close(fd)
+
+
+def _write_new(path: Path, data: bytes, mode: int) -> None:
+    """Create ``path`` holding ``data``; never opens anything already there."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | _O_CLOEXEC, mode)
+    try:
+        view = memoryview(data)
+        while view:
+            view = view[os.write(fd, view):]
+    finally:
+        os.close(fd)
+
+
+def _copy_entries(src_fd: int, dst: Path, budget: _Budget, where: str, depth: int) -> None:
+    """Copy one folder of a workspace skill into ``dst``: each regular file as a copy of the bytes
+    read (an executable one stays executable; nothing else of its mode is kept), each folder
+    recursively. Hidden entries are not staged: a ``.claude-plugin/`` would make the skill folder a
+    plugin, which brings its own hooks, agents and MCP servers. A link, a FIFO or any other kind of
+    entry is not opened at all; it is left out and logged. A ``SKILL.md`` anywhere but the top of
+    the skill refuses the whole skill, since only the top one is sanitized."""
+    with os.scandir(src_fd) as it:
+        entries = sorted((entry.name, _kind(entry)) for entry in it)
+    for name, kind in entries:
+        if name.startswith("."):
+            continue
+        if name.lower() == "skill.md":
+            if depth == 0 and name == "SKILL.md":
+                continue  # the sanitized copy, written by the caller
+            raise _SkillRefused(f"it holds {where}/{name}, a second SKILL.md")
+        try:
+            if kind == "dir":
+                if depth >= WORKSPACE_SKILL_MAX_DEPTH:
+                    raise _SkillRefused("its folders nest too deep")
+                fd = _open_dir(name, src_fd)
+                try:
+                    (dst / name).mkdir()
+                    _copy_entries(fd, dst / name, budget, f"{where}/{name}", depth + 1)
+                finally:
+                    os.close(fd)
+            elif kind == "file":
+                data, mode = _read_file(name, src_fd, budget)
+                _write_new(dst / name, data, 0o755 if mode & 0o111 else 0o644)
+            elif kind == "link":
+                raise _EntryRefused(f"{name!r} is a link")
+            else:
+                raise _EntryRefused(f"{name!r} is not a regular file or a folder")
+        except FileNotFoundError:
+            continue  # gone since it was listed
+        except _EntryRefused as exc:
+            _log.warning("workspace skill entry %r not staged: %s", f"{where}/{name}", exc)
+
+
+def _stage_workspace_skill(skills_fd: int, name: str, dst: Path, taken: set,
+                           budget: _Budget) -> None:
+    """Stage workspace skill ``name`` (a folder under ``skills_fd``) as a real folder holding the
+    sanitized ``SKILL.md`` and a copy of every other regular file in it (``_copy_entries``): the
+    skill's scripts and references resolve, and nothing staged changes with the workspace. A skill
+    whose name is taken by a platform skill is skipped. ``_SkillRefused`` when it is not staged for
+    a reason worth logging; it then leaves nothing behind, and nothing of the budget spent."""
+    files, size, staged = budget.files, budget.bytes, False
+    try:
+        src = _open_dir(name, skills_fd)
+    except FileNotFoundError:
         return
-    if staged is None:
-        return
-    meta, text = staged
-    if str(meta.get("name") or src.name) in taken:
-        return
-    dst.mkdir()
-    (dst / "SKILL.md").write_text(text, encoding="utf-8")
-    for entry in src.iterdir():
-        if entry.name != "SKILL.md" and not entry.name.startswith("."):
-            (dst / entry.name).symlink_to(entry, target_is_directory=entry.is_dir())
+    try:
+        try:
+            raw, _mode = _read_file("SKILL.md", src, budget)
+        except FileNotFoundError:
+            return  # a folder without a SKILL.md is not a skill
+        except _EntryRefused as exc:
+            raise _SkillRefused(str(exc)) from exc
+        try:
+            sanitized = _sanitized_workspace_skill(raw.decode("utf-8"))
+        except UnicodeDecodeError:
+            sanitized = None
+        if sanitized is None:
+            return
+        meta, text = sanitized
+        if str(meta.get("name") or name) in taken:
+            return
+        dst.mkdir()
+        try:
+            _write_new(dst / "SKILL.md", text.encode("utf-8"), 0o644)
+            _copy_entries(src, dst, budget, name, 0)
+        except BaseException:
+            shutil.rmtree(dst, ignore_errors=True)
+            raise
+        staged = True
+    finally:
+        os.close(src)
+        if not staged:
+            budget.files, budget.bytes = files, size
 
 
 def _assemble_skills(stage: Path, work: Path) -> None:
     """The turn's skill set in ``stage``: every platform skill, linked as shipped, then every skill
-    in the workspace's own ``skills/`` that does not reuse a platform skill's name, sanitized. A
-    seeded workspace keeps a copy of the platform's skills, so on a name clash the platform's
-    current version is the one that loads."""
+    in the workspace's own ``skills/`` that does not reuse a platform skill's name, sanitized and
+    copied. A seeded workspace keeps a copy of the platform's skills, so on a name clash the
+    platform's current version is the one that loads. Nothing of the workspace's is reached through
+    a link: a ``skills`` that is not a folder stages none of the workspace's skills, and a skill
+    folder or ``SKILL.md`` that is a link stages no skill. A refused skill is logged; the turn runs."""
     taken: set = set()
     platform = _governed_skills_dir()
     if platform is not None:
@@ -116,14 +308,40 @@ def _assemble_skills(stage: Path, work: Path) -> None:
             if _skill_dir(d):
                 (stage / d.name).symlink_to(d, target_is_directory=True)
                 taken.add(d.name)
-    own = work / "skills"
-    if own.is_dir():
-        for d in sorted(own.iterdir()):
+    try:
+        work_fd = os.open(work, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | _O_CLOEXEC)
+    except OSError:
+        return
+    try:
+        own = _open_dir("skills", work_fd)
+    except FileNotFoundError:
+        return
+    except _EntryRefused as exc:
+        _log.warning("workspace skills not staged: %s", exc)
+        return
+    finally:
+        os.close(work_fd)
+    budget = _Budget()
+    try:
+        with os.scandir(own) as it:
+            entries = sorted((entry.name, _kind(entry)) for entry in it)
+        for name, kind in entries:
+            if not _skill_name(name) or name in taken:
+                continue
+            if kind == "link":
+                _log.warning("workspace skill %r not staged: it is a link", name)
+                continue
+            if kind != "dir":
+                continue  # a file beside the skills is not one
             try:
-                if _skill_dir(d) and d.name not in taken:
-                    _stage_workspace_skill(d, stage / d.name, taken)
+                _stage_workspace_skill(own, name, stage / name, taken, budget)
+            except (_SkillRefused, _EntryRefused) as exc:
+                _log.warning("workspace skill %r not staged: %s", name, exc)
             except Exception:  # noqa: BLE001 — one unreadable skill, not all of them
-                shutil.rmtree(stage / d.name, ignore_errors=True)
+                _log.warning("workspace skill %r not staged", name, exc_info=True)
+                shutil.rmtree(stage / name, ignore_errors=True)
+    finally:
+        os.close(own)
 
 
 def _link_skills_into_home(work: Path) -> None:
