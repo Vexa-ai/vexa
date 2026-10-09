@@ -8,9 +8,9 @@ exercises:
     - user    : `X-API-Key` resolves to an APIToken with a valid scope       → /user/* self-serve
     - internal: `X-Internal-Secret` == INTERNAL_API_SECRET, FAIL-CLOSED      → /internal/validate
 
-  /internal/validate (the gateway's authz oracle): returns user_id + scopes + max_concurrent +
-  email, plus webhook_url/secret/events from user.data; rejects expired tokens; bumps
-  last_used_at; FAILS CLOSED when INTERNAL_API_SECRET is unset (503) and on a bad secret (403).
+  /internal/validate (the gateway's authz oracle) lives in `validate.py`, the platform-settings door
+  in `platform_settings.py`, and the internal tier's checks in `internal_tier.py`; this module
+  assembles them with the routes below.
 
   Token mint: scoped {bot,tx,browser}. Scopes via JSON body `{"scopes":["bot","tx"]}` or
   query `?scopes=bot,tx` / `?scope=bot` (body wins when present). Optional `name` /
