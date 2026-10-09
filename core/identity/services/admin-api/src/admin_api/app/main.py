@@ -43,6 +43,7 @@ from . import person_settings as person_settings_mod
 from . import claim_code
 from . import signin_allow
 from . import signin_wire
+from .internal_tier import check_internal, check_internal_no_dev_bypass
 
 claim_log = logging.getLogger("admin_api.claim")
 
@@ -55,10 +56,6 @@ USER_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 def _admin_token() -> Optional[str]:
     return os.getenv("ADMIN_API_TOKEN")
-
-
-def _internal_secret() -> str:
-    return os.environ.get("INTERNAL_API_SECRET", "")
 
 
 def normalise_email(email: str) -> str:
@@ -79,10 +76,6 @@ def normalise_email(email: str) -> str:
     case its person typed, mail already goes there, and a migration that rewrote every address to
     chase an index would be changing data to suit a query plan."""
     return (email or "").strip().lower()
-
-
-def _dev_mode() -> bool:
-    return os.getenv("DEV_MODE", "false").lower() == "true"
 
 
 async def verify_admin_token(admin_api_key: str = Security(ADMIN_KEY_HEADER)):
@@ -1061,15 +1054,7 @@ def create_app() -> FastAPI:
     # --- internal tier: the gateway's authz oracle (FAIL-CLOSED) ---
     @app.post("/internal/validate", include_in_schema=False)
     async def validate_token(request: Request, payload: dict, db: AsyncSession = Depends(get_db)):
-        secret = _internal_secret()
-        # Fail closed: no secret configured → reject unless dev mode.
-        if not _dev_mode() and not secret:
-            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
-                                detail="INTERNAL_API_SECRET not configured")
-        if secret:
-            provided = request.headers.get("X-Internal-Secret", "")
-            if not hmac.compare_digest(provided, secret):
-                raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Invalid internal secret")
+        check_internal(request)  # fail closed: no secret configured → 503 unless dev mode
 
         token = payload.get("token", "")
         if not token:
@@ -1159,44 +1144,6 @@ def create_app() -> FastAPI:
                                   if isinstance(m, dict) and m.get("workspace_id")]
         return resp
 
-    # --- internal tier: workspace membership index (Lane M) — the DERIVED users.data.memberships[]
-    #     mirror of the authoritative policy/members.json in each shared workspace's git repo. agent-api
-    #     (no DB) POSTs mirror updates here over the same X-Internal-Secret internal edge as /internal/
-    #     validate. The git file is the source of truth (Q6): this index is a rebuildable listing cache.
-    def _check_internal(request: Request) -> None:
-        secret = _internal_secret()
-        if not _dev_mode() and not secret:
-            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
-                                detail="INTERNAL_API_SECRET not configured")
-        if secret:
-            provided = request.headers.get("X-Internal-Secret", "")
-            if not hmac.compare_digest(provided, secret):
-                raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Invalid internal secret")
-
-    def _check_internal_no_dev_bypass(request: Request) -> None:
-        """The internal check WITHOUT the dev-mode escape — for a door that reads or writes ONE
-        NAMED PERSON'S data by path id.
-
-        `_check_internal` lets `DEV_MODE=true` with no `INTERNAL_API_SECRET` through unauthenticated.
-        For the doors it was written for — `/internal/validate`, the membership index — that is a
-        local-development convenience over data the caller could get anyway. For a route shaped
-        `/internal/users/{id}/…` it is not the same thing: the id is supplied by the CALLER, so the
-        bypass is a cross-user read (or write) of somebody's private preferences with no credential
-        at all. The two cases have opposite blast radii and had one check, which is how the weaker
-        one ended up guarding the stronger door.
-
-        Dev mode still works; it simply has to name a secret first — a one-line change to a compose
-        file against a route that otherwise answers for any person on the instance."""
-        secret = _internal_secret()
-        if not secret:
-            raise HTTPException(
-                status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=("INTERNAL_API_SECRET not configured — this door reads/writes one named "
-                        "person's settings and is never open, dev mode included"))
-        provided = request.headers.get("X-Internal-Secret", "")
-        if not hmac.compare_digest(provided, secret):
-            raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Invalid internal secret")
-
     async def _load_user(
         user_id: str,
         db: AsyncSession,
@@ -1239,7 +1186,7 @@ def create_app() -> FastAPI:
 
     @app.get("/internal/instance", include_in_schema=False, response_model=InstanceState)
     async def instance_status(request: Request, db: AsyncSession = Depends(get_db)):
-        _check_internal(request)
+        check_internal(request)
         return await _instance_state(db)
 
     @app.get("/admin/instance", include_in_schema=False, response_model=InstanceState,
@@ -1265,7 +1212,7 @@ def create_app() -> FastAPI:
         from sqlalchemy import text as sa_text
         from sqlalchemy.orm import attributes
 
-        _check_internal(request)
+        check_internal(request)
         user = await _load_user(
             str(payload.user_id),
             db,
@@ -1307,7 +1254,7 @@ def create_app() -> FastAPI:
         Internal tier WITHOUT the dev-mode escape: the answer says whether an address has an account
         here, which is exactly the enumeration the sign-in form is built not to reveal, so this door
         is never open without the secret, dev mode included."""
-        _check_internal_no_dev_bypass(request)
+        check_internal_no_dev_bypass(request)
         email = signin_allow.normalize_email(payload.email)
         if not signin_allow.is_address(email):
             return {"admitted": False, "why": signin_allow.WHY_NOT_ALLOWED}
@@ -1342,7 +1289,7 @@ def create_app() -> FastAPI:
         """Is this the live admin claim code? The terminal's claim screen asks before it lets a code
         ride a sign-in, so a typo is answered at once rather than as a sign-in that never arrives.
         True only while the claim is open (nobody claimed, VEXA_ADMIN_EMAILS empty)."""
-        _check_internal(request)
+        check_internal(request)
         admins, _ = signin_allow.admin_emails()
         valid = (not admins and not await _admin_exists(db)
                  and claim_code.matches(payload.claim_code, await _claim_record(db)))
@@ -1371,7 +1318,7 @@ def create_app() -> FastAPI:
     @app.get("/internal/users/by-email/{email}", include_in_schema=False)
     async def internal_user_id_by_email(email: str, request: Request,
                                         db: AsyncSession = Depends(get_db)):
-        _check_internal(request)
+        check_internal(request)
         # Case-folded (R-B08) — the mount path reads this one, so an exact match here silently
         # drops a mixed-case signup out of every meeting room they are actually in.
         user = (await db.execute(
@@ -1387,7 +1334,7 @@ def create_app() -> FastAPI:
         organisation tier read-write. It exists because the admin is CLAIMED at first sign-in — long
         after any deployment env was written — so an env allow-list could never have been the
         definition of who may rewrite how every agent in the company behaves."""
-        _check_internal(request)
+        check_internal(request)
         user = await _load_user(user_id, db)
         return {"user_id": user.id, "email": user.email,
                 "is_admin": signin_allow.is_admin(user.email, user.data, signin_allow.admin_emails()[0])}
@@ -1403,7 +1350,7 @@ def create_app() -> FastAPI:
         one-off UPDATE in somebody's shell is not. Internal-tier only, and it deliberately does NOT
         delete the user or anything they own — role, and only role."""
         from sqlalchemy.orm import attributes
-        _check_internal(request)
+        check_internal(request)
         user = await _load_user(str(payload.get("user_id", "")), db, for_update=True)
         data = dict(user.data or {})
         had = data.pop("is_admin", None) is True
@@ -1423,9 +1370,13 @@ def create_app() -> FastAPI:
                 body["claim_code"] = code
         return body
 
+    # --- internal tier: workspace membership index (Lane M) — the DERIVED users.data.memberships[]
+    #     mirror of the authoritative policy/members.json in each shared workspace's git repo. agent-api
+    #     (no DB) POSTs mirror updates here over the same X-Internal-Secret internal edge as /internal/
+    #     validate. The git file is the source of truth (Q6): this index is a rebuildable listing cache.
     @app.get("/internal/users/{user_id}/memberships", include_in_schema=False)
     async def list_memberships(user_id: str, request: Request, db: AsyncSession = Depends(get_db)):
-        _check_internal(request)
+        check_internal(request)
         user = await _load_user(user_id, db)
         data = user.data if isinstance(user.data, dict) else {}
         return {"memberships": data.get("memberships", [])}
@@ -1434,7 +1385,7 @@ def create_app() -> FastAPI:
     async def upsert_membership(user_id: str, payload: dict, request: Request,
                                 db: AsyncSession = Depends(get_db)):
         """Upsert {workspace_id, role, added_at} into the user's memberships[] (idempotent per ws)."""
-        _check_internal(request)
+        check_internal(request)
         from sqlalchemy.orm import attributes
         user = await _load_user(user_id, db, for_update=True)
         ws_id = payload.get("workspace_id")
@@ -1455,7 +1406,7 @@ def create_app() -> FastAPI:
     @app.delete("/internal/users/{user_id}/memberships/{workspace_id}", include_in_schema=False)
     async def remove_membership(user_id: str, workspace_id: str, request: Request,
                                 db: AsyncSession = Depends(get_db)):
-        _check_internal(request)
+        check_internal(request)
         from sqlalchemy.orm import attributes
         user = await _load_user(user_id, db, for_update=True)
         data = dict(user.data or {})
@@ -1472,7 +1423,7 @@ def create_app() -> FastAPI:
     #     secret URL crosses ONLY this internal hop (never a user-facing response). ---
     @app.get("/internal/calendar-configs", include_in_schema=False)
     async def list_calendar_configs(request: Request, db: AsyncSession = Depends(get_db)):
-        _check_internal(request)
+        check_internal(request)
         from sqlalchemy import or_
         from .calendars import internal_connections
         rows = (await db.execute(select(User).where(or_(
@@ -1503,10 +1454,10 @@ def create_app() -> FastAPI:
         and "defaults for somebody who does not" are opposite facts, and the second one means a flow
         is about to mail a person who is not there.
 
-        NO DEV-MODE BYPASS (see `_check_internal_no_dev_bypass`): the person is named in the PATH by
+        NO DEV-MODE BYPASS (see `check_internal_no_dev_bypass`): the person is named in the PATH by
         the caller, so an unauthenticated dev-mode answer here is a cross-user read of somebody's
         private preferences."""
-        _check_internal_no_dev_bypass(request)
+        check_internal_no_dev_bypass(request)
         user = await _load_user(user_id, db)
         return person_settings_mod.read_person_facts(
             user.data if isinstance(user.data, dict) else {})
@@ -1532,7 +1483,7 @@ def create_app() -> FastAPI:
         `users.data.calendar_bot_name` this service stores). Accepting it on the PERSON's settings
         door would be a second name for one fact. The one-shot importer below still carries it into
         that store, which is what a migration off the old file has to do."""
-        _check_internal_no_dev_bypass(request)
+        check_internal_no_dev_bypass(request)
         if not isinstance(payload, dict):
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                                 detail="body must be an object of settings to change")
@@ -1603,7 +1554,7 @@ def create_app() -> FastAPI:
 
     @app.get("/internal/users/{user_id}/bot-context", include_in_schema=False)
     async def get_bot_context(user_id: str, request: Request, db: AsyncSession = Depends(get_db)):
-        _check_internal(request)
+        check_internal(request)
         user = await _load_user(user_id, db)
         data = user.data if isinstance(user.data, dict) else {}
         resp: dict = {
@@ -1657,7 +1608,7 @@ def create_app() -> FastAPI:
     #     the terminal's ADMIN-GATED settings editor over this edge, read by agent-api/meeting-api.
     @app.get("/internal/settings/{key}", include_in_schema=False)
     async def get_platform_setting(key: str, request: Request, db: AsyncSession = Depends(get_db)):
-        _check_internal(request)
+        check_internal(request)
         if key not in SETTING_KEYS:
             raise HTTPException(status.HTTP_404_NOT_FOUND,
                                 detail=f"Unknown setting key. Known: {sorted(SETTING_KEYS)}")
@@ -1675,7 +1626,7 @@ def create_app() -> FastAPI:
     async def put_platform_setting(key: str, payload: dict, request: Request,
                                    db: AsyncSession = Depends(get_db)):
         """Partial update, same field rules + clear semantics as the user-tier writers."""
-        _check_internal(request)
+        check_internal(request)
         fields = SETTING_KEYS.get(key)
         if fields is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND,
@@ -1725,7 +1676,7 @@ def create_app() -> FastAPI:
     #     cross ONLY this internal hop, straight into the worker's brokered env.
     @app.get("/internal/users/{user_id}/model-config", include_in_schema=False)
     async def get_model_config(user_id: str, request: Request, db: AsyncSession = Depends(get_db)):
-        _check_internal(request)
+        check_internal(request)
         user = await _load_user(user_id, db)
         data = user.data if isinstance(user.data, dict) else {}
         return {"models": _resolve_effective(
