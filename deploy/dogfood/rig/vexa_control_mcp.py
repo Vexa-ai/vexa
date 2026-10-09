@@ -311,6 +311,54 @@ def _gw_http(uid: str, method: str, path: str, body=None, timeout: int = 40):
 import contextvars  # noqa: E402
 import vexa_oauth  # noqa: E402
 
+_AGENT_FORWARD: list = []
+
+
+def _agent_forward() -> tuple:
+    """The agent domain's declared edge mapping, `(edge_prefix, upstream_prefix)`, from `forward`
+    in `core/agent/mcp.tools.v1.json`. Read once, on first use; this file spells no mapping."""
+    if not _AGENT_FORWARD:
+        path = pathlib.Path(rig_secrets.agent_src()) / "mcp.tools.v1.json"
+        raw = (json.loads(path.read_text()) or {}).get("forward") or {}
+        edge, up = raw.get("edge_prefix"), raw.get("upstream_prefix")
+        if not all(isinstance(x, str) and len(x) > 2 and x.startswith("/") and x.endswith("/")
+                   for x in (edge, up)):
+            raise RuntimeError(f"{path} declares no usable forward: {raw!r}")
+        _AGENT_FORWARD[:] = [edge, up]
+    return tuple(_AGENT_FORWARD)
+
+
+def _agent_git(uid: str, method: str, path: str, body=None, timeout: int = 40):
+    """agent-api's GIT-BACKED workspace routes (attach, swap, push, pull, git-remote-status, the
+    deploy key, repository import): every one of them may read or write the person's git
+    credentials, and a broker-backed git store acts only for the person the gateway signed for.
+
+    A person's own session therefore goes THROUGH THE GATEWAY with their own key: the gateway signs
+    them, agent-api holds that signature for the request, and its git store forwards it to the
+    credential broker's git role. A 401 (a revoked key) re-mints once; nothing else does.
+
+    A DELEGATED worker keeps the internal tier, which carries its regime and workspace ceiling
+    (`_agent_identity_headers`). The person's own key would sign it as the person, unwatched and
+    unbounded, and its own token is admitted at the gateway on `/mcp` only, whose tools do not
+    include these verbs. Against a broker-backed store agent-api then refuses it (no signed person),
+    which is the closed answer."""
+    delegated = CALL_SCOPE.get() is not None or _is_delegation_token(CALL_TOKEN.get() or "")
+    if delegated:
+        return _http(method, f"{AGENT_API}{path}", {"X-User-Id": uid}, body, timeout)
+    try:
+        edge, up = _agent_forward()
+    except (OSError, ValueError, RuntimeError) as e:
+        return 0, _safe_error(e)
+    if not path.startswith(up):
+        raise ValueError(f"agent-api routes are {up}...")
+    url = f"{GATEWAY}{edge}{path[len(up):]}"
+    st, r = _http(method, url, {"X-API-Key": _user_key(uid)}, body, timeout)
+    if st == 401:
+        st, r = _http(method, url, {"X-API-Key": _user_key(uid, fresh=True)}, body, timeout)
+    return st, r
+
+
+
 CURRENT = contextvars.ContextVar("vexa_subject", default=None)
 CURRENT_SID = contextvars.ContextVar("vexa_mcp_session", default=None)
 SESSION_BIND: dict = {}
@@ -2530,7 +2578,7 @@ def workspace_tree(slug: str = "") -> str:
     # whether a credential for it exists at all. It is what lets you answer "can we push this back?"
     # without going looking — and the only shape a credential ever takes in front of a model.
     home = None
-    sst, sbody = _http("GET", f"{AGENT_API}/api/workspace/git-remote-status{q}", {"X-User-Id": uid})
+    sst, sbody = _agent_git(uid, "GET", f"/api/workspace/git-remote-status{q}")
     if sst == 200 and isinstance(sbody, dict) and sbody.get("has_home"):
         home = f"{sbody.get('remote')} {sbody.get('url')} on {sbody.get('branch')}"
     return _capped({"for_display": "a file is opened with a SHORT-LIVED view link this server mints per file (workspace_read returns one) — never show a person a path: paths are arguments for workspace_read/write; show names and links", "status": st, "result": body, "git_home": home or "no git home — this workspace was not loaded from a repository"}, 8000)
@@ -2950,8 +2998,8 @@ def _refuse_credentials(*values) -> str:
 def _deploy_key_state(uid: str, workspace: str, repo: str) -> dict:
     """The ONE next action when a git op is refused for want of a credential: our public key, where it
     goes, and the state the person reports back. Never a place to paste a secret."""
-    st, body = _http("POST", f"{AGENT_API}/api/workspace/{workspace or 'personal'}/deploy-key",
-                     {"X-User-Id": uid}, {"repo": repo})
+    st, body = _agent_git(uid, "POST", f"/api/workspace/{workspace or 'personal'}/deploy-key",
+                          {"repo": repo})
     if st != 200 or not isinstance(body, dict):
         return {"error": "could not prepare a deploy key for this workspace", "status": st}
     return {
@@ -2980,19 +3028,19 @@ def workspace_attach(workspace: str = "", repo: str = "", ref: str = "main") -> 
     they have. Then call this again.
 
     What is already there is not destroyed: the workspace's current contents are parked and can be
-    swapped back to. If the repo is not a Vexa-shaped workspace it is nested under `kg/` inside one."""
-    refusal = _refuse_credentials(repo, ref, workspace, token)
+    swapped back to. The repository is used as it is."""
+    refusal = _refuse_credentials(repo, ref, workspace)
     if refusal:
         return json.dumps({"refused": refusal, "next": "call again with just the repository URL"})
     uid = me()
     if not repo:
         return json.dumps({"error": "which repository?", "ask": "the repo URL, e.g. git@github.com:acme/kg.git"})
     if workspace:
-        st, body = _http("POST", f"{AGENT_API}/api/workspace/shared/{workspace}/attach",
-                         {"X-User-Id": uid}, {"repo": repo, "ref": ref or "main"})
+        st, body = _agent_git(uid, "POST", f"/api/workspace/shared/{workspace}/attach",
+                              {"repo": repo, "ref": ref or "main"})
     else:
-        st, body = _http("POST", f"{AGENT_API}/api/workspace/swap",
-                         {"X-User-Id": uid}, {"repo": repo, "ref": ref or "main"})
+        st, body = _agent_git(uid, "POST", "/api/workspace/swap",
+                              {"repo": repo, "ref": ref or "main"})
     if st == 403:
         return json.dumps({"error": "they can read that workspace but not replace it",
                            "tell_your_person": "an owner or contributor has to load a repo into a group workspace"})
@@ -3006,7 +3054,7 @@ def workspace_attach(workspace: str = "", repo: str = "", ref: str = "main") -> 
     state = b.get("state") or ("cloned" if b.get("cloned") else "attached")
     return json.dumps({
         "workspace": workspace or "personal", "repo": b.get("repo"), "ref": b.get("ref"),
-        "state": state, "parked": b.get("parked"), "nested": b.get("nested"),
+        "state": state, "parked": b.get("parked"),
         "tell_your_person": (f"Loaded {repo} — it is the workspace now. What was here before is parked "
                              f"and can be brought back."
                              if state == "cloned" else
@@ -3026,12 +3074,11 @@ def workspace_push(workspace: str = "") -> str:
     No credential argument, and none is accepted: the workspace's deploy key or their saved token is
     resolved server-side. If neither exists the result carries a public key to add — say that, and ask
     them to say `done` when it is added."""
-    refusal = _refuse_credentials(workspace, token)
+    refusal = _refuse_credentials(workspace)
     if refusal:
         return json.dumps({"refused": refusal})
     uid = me()
-    st, body = _http("POST", f"{AGENT_API}/api/workspace/push", {"X-User-Id": uid},
-                     {"slug": workspace or None})
+    st, body = _agent_git(uid, "POST", "/api/workspace/push", {"slug": workspace or None})
     if st in (200, 201):
         b = body or {}
         return json.dumps({"pushed": b.get("branch"), "to": b.get("url"), "head": (b.get("head_sha") or "")[:8],
@@ -5449,15 +5496,14 @@ def workspace_pull(workspace: str = "") -> str:
 
     No credential argument, and none is accepted — the deploy key or saved token is resolved
     server-side, and a missing one comes back as a key to add, not a box to fill."""
-    refusal = _refuse_credentials(workspace, token)
+    refusal = _refuse_credentials(workspace)
     if refusal:
         return json.dumps({"refused": refusal})
     uid = me()
     q = f"?slug={workspace}" if workspace else ""
-    sst, sbody = _http("GET", f"{AGENT_API}/api/workspace/git-remote-status{q}", {"X-User-Id": uid})
+    sst, sbody = _agent_git(uid, "GET", f"/api/workspace/git-remote-status{q}")
     if sst == 200 and isinstance(sbody, dict) and sbody.get("has_home"):
-        st, body = _http("POST", f"{AGENT_API}/api/workspace/pull", {"X-User-Id": uid},
-                         {"slug": workspace or None})
+        st, body = _agent_git(uid, "POST", "/api/workspace/pull", {"slug": workspace or None})
         if st in (200, 201):
             b = body or {}
             return json.dumps({
@@ -6260,7 +6306,7 @@ def _transport_security():
 # outlive, and a restart is invisible to a client mid-turn. The cost is server-initiated streaming,
 # which this server does not use — every tool here answers in one response.
 from workspace_import_tools import register_workspace_import_tools
-register_workspace_import_tools(mcp, http=_http, subject=me, guard=_anon_guard, agent_api=AGENT_API)
+register_workspace_import_tools(mcp, git=_agent_git, subject=me, guard=_anon_guard)
 
 app = AUTH_MIDDLEWARE(mcp.streamable_http_app(
     transport_security=_transport_security(), stateless_http=True))

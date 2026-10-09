@@ -142,7 +142,23 @@ def gateway_tool(gateway, token, tool, arguments, timeout=60, transport=_transpo
             transport('DELETE', url, headers, None, timeout)
 
 
-def agent_call(runtime, transport=_transport):
+def agent_forward(manifest_path):
+    """The agent domain's declared edge mapping, `(edge_prefix, upstream_prefix)`, read from its
+    tool manifest (`forward` in `core/agent/mcp.tools.v1.json`, held equal to `routes.v1.json`'s).
+    A manifest without a readable one stops the boot: this adapter spells no paths of its own."""
+    doc = json.loads(Path(manifest_path).read_text())
+    raw = doc.get('forward') if isinstance(doc, dict) else None
+    edge = (raw or {}).get('edge_prefix') if isinstance(raw, dict) else None
+    upstream = (raw or {}).get('upstream_prefix') if isinstance(raw, dict) else None
+    ok = all(isinstance(p, str) and len(p) > 2 and p.startswith('/') and p.endswith('/')
+             for p in (edge, upstream))
+    if not ok:
+        raise ValueError(f'{manifest_path}: forward must be {{"edge_prefix": "/x/", '
+                         f'"upstream_prefix": "/y/"}} (got {raw!r})')
+    return edge, upstream
+
+
+def agent_call(runtime, forward, transport=_transport):
     """The `call` port: agent-api, as the person the current MCP call acts for, THROUGH THE GATEWAY.
 
     The gateway resolves the caller's own credential and signs that identity (gateway-identity.v1);
@@ -151,11 +167,14 @@ def agent_call(runtime, transport=_transport):
     (`vxd_`) is an MCP credential: the gateway admits it on `/mcp` only, so it goes there as itself,
     calling the gateway's tool of the same name (`tool`), and identity resolves its regime and
     workspace ceiling. Any other caller goes as the person's own gateway key (`_gw_http`, which
-    re-mints once on a revoked key) to the REST route: `/api/x` on agent-api is `/agent/x` at the
-    gateway."""
+    re-mints once on a revoked key) to the REST route, mapped by the domain's declared `forward`
+    (`agent_forward`): an upstream path under `upstream_prefix` is the same tail under
+    `edge_prefix` at the gateway."""
+    edge, upstream = forward
+
     def call(method, path, body=None, timeout=60, tool=None):
-        if not path.startswith('/api/'):
-            raise ValueError('agent-api routes are /api/...')
+        if not path.startswith(upstream):
+            raise ValueError(f'agent-api routes are {upstream}...')
         token = (runtime.CALL_TOKEN.get() or '').strip()
         if token.startswith(runtime.DELEGATION_PREFIX):
             if not tool:
@@ -164,7 +183,7 @@ def agent_call(runtime, transport=_transport):
                 return 508, {'detail': "the gateway's /mcp leads back to this rig: point the "
                                        "gateway's MCP_URL at the product MCP service"}
             return gateway_tool(runtime.GATEWAY, token, tool, body or {}, timeout, transport)
-        return runtime._gw_http(runtime.me(), method, '/agent/' + path[len('/api/'):], body,
+        return runtime._gw_http(runtime.me(), method, edge + path[len(upstream):], body,
                                 timeout=timeout)
     return call
 
@@ -195,13 +214,13 @@ def main(config_path):
             scope=runtime.CALL_SCOPE.get, user_key=runtime._user_key, http=runtime._http,
             guard=runtime._anon_guard)
     imports = load('minutes_import_tools', cfg['import_tools'])
-    imports.register_workspace_import_tools(runtime.mcp, http=runtime._http,
-        subject=runtime.me, guard=runtime._anon_guard, agent_api=runtime.AGENT_API)
+    imports.register_workspace_import_tools(runtime.mcp, git=runtime._agent_git,
+        subject=runtime.me, guard=runtime._anon_guard)
     # Product mail tools must never query the development outbound mail sink.
     runtime.mcp.remove_tool('mail_inbox')
     runtime.mcp.remove_tool('mail_read')
     tools = load('minutes_agent_tools', cfg['agent_tools'])
-    call = agent_call(runtime)
+    call = agent_call(runtime, agent_forward(Path(cfg['agent_source']) / 'mcp.tools.v1.json'))
     tools.register(runtime.mcp, call=call, guard=runtime._anon_guard)
     original = runtime.whats_waiting
     runtime.mcp.remove_tool('whats_waiting')

@@ -134,7 +134,7 @@ def test_the_target_rides_the_delegation_token_and_not_the_scope(monkeypatch):
 
 def test_the_verb_answers_with_the_slug_the_harness_turns_into_a_focus_event(monkeypatch):
     """The rig does not write the record — it has never been told which chat is calling. It confirms
-    the person may write there and answers with the slug; `llm/claude_code._workspace_focus` turns
+    the person may write there and answers with the slug; `llm/tool_events._workspace_focus` turns
     that into the `focus` event agent-api reads on the way past. One writer."""
     as_user(monkeypatch, "7", routes={"/api/workspace/shared": (200, {"memberships": [
         {"workspace_id": TARGET, "role": "owner"}]})})
@@ -160,3 +160,11 @@ def test_the_empty_slug_puts_the_work_back_on_their_own_desk(monkeypatch):
     as_user(monkeypatch, "7")
     out = json.loads(tool("workspace_target")())
     assert out["targeted"] == "" and "desk" in out["workspace"]
+
+
+def test_the_harness_function_this_file_cites_is_where_it_says():
+    """The docstrings above name `llm/tool_events._workspace_focus`; a citation that outlives a move
+    sends the next reader to a file that no longer holds it."""
+    import pathlib
+    src = pathlib.Path(rig.rig_secrets.agent_src()) / "llm" / "tool_events.py"
+    assert "\ndef _workspace_focus(" in src.read_text()

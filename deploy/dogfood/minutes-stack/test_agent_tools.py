@@ -8,6 +8,7 @@ import agent_mcp
 import agent_tools
 
 PRODUCT_TOOLS = Path(__file__).resolve().parents[3] / 'core' / 'agent' / 'mcp.tools.v1.json'
+FORWARD = agent_mcp.agent_forward(PRODUCT_TOOLS)
 
 
 class Registry:
@@ -163,7 +164,7 @@ class AgentCallGoesThroughTheGateway(unittest.TestCase):
 
     def worker(self, gateway, tool='gmail_search', body=None):
         rig = Rig('vxd_header.payload.signature')
-        out = agent_mcp.agent_call(rig, transport=gateway)(
+        out = agent_mcp.agent_call(rig, FORWARD, transport=gateway)(
             'POST', '/api/connections/gmail/search', body if body is not None else {'query': 'x'},
             tool=tool)
         return rig, out
@@ -256,13 +257,33 @@ class AgentCallGoesThroughTheGateway(unittest.TestCase):
 
     def test_a_person_goes_as_their_own_gateway_key(self):
         rig = Rig('vxa_mcp_durable')
-        agent_mcp.agent_call(rig, transport=Gateway())('GET', '/api/connections',
+        agent_mcp.agent_call(rig, FORWARD, transport=Gateway())('GET', '/api/connections',
                                                        tool='connections_status')
         self.assertEqual(rig.sent[-1], ('gateway-as-person', '7', 'GET', '/agent/connections', None))
 
+    def test_the_rest_path_is_the_declared_forward(self):
+        """The person's path is the manifest's `forward`, never one the adapter spells."""
+        self.assertEqual(FORWARD, ('/agent/', '/api/'))
+        rig = Rig('vxa_mcp_durable')
+        agent_mcp.agent_call(rig, ('/edge-x/', '/up-y/'))('GET', '/up-y/connections',
+                                                           tool='connections_status')
+        self.assertEqual(rig.sent[-1], ('gateway-as-person', '7', 'GET', '/edge-x/connections', None))
+        with self.assertRaises(ValueError):
+            agent_mcp.agent_call(rig, ('/edge-x/', '/up-y/'))('GET', '/api/connections')
+
+    def test_a_manifest_without_a_forward_stops_the_boot(self):
+        import tempfile
+        for doc in ({}, {'forward': {'edge_prefix': '/agent/'}},
+                    {'forward': {'edge_prefix': 'agent', 'upstream_prefix': '/api/'}}):
+            with tempfile.NamedTemporaryFile('w', suffix='.json', delete=False) as f:
+                json.dump(doc, f)
+            with self.assertRaises(ValueError):
+                agent_mcp.agent_forward(f.name)
+            Path(f.name).unlink()
+
     def test_only_agent_api_routes(self):
         with self.assertRaises(ValueError):
-            agent_mcp.agent_call(Rig(''))('GET', '/internal/anything')
+            agent_mcp.agent_call(Rig(''), FORWARD)('GET', '/internal/anything')
 
 
 if __name__ == '__main__':

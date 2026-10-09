@@ -52,6 +52,11 @@ each slice carrying only what the rehearsal proved worth carrying.
   or http to loopback; the consent screen names the host the code is sent to, and redirects only to
   a URI the client registered, exactly. Refresh tokens expire after 30 days, rotate on every use,
   stay with the client they were issued to, and re-ask sign-in admission.
+- **Git-backed workspace verbs go through the gateway as the person.** `workspace_attach`,
+  `workspace_push`, `workspace_pull`, `workspace_import`, the deploy key and the git-remote status
+  reach agent-api at the path the agent manifest's `forward` maps, with the person's own key, so a
+  broker-backed git store can act for them. A delegated worker keeps the internal tier with its
+  regime and ceiling and never borrows that key; against a broker-backed store, agent-api refuses it.
 - **`workspace_write` is a dev double** — agent-api exposes no HTTP write, so this reaches the
   volume directly. That missing endpoint is the real gap behind first-class remote workspaces.
 - **Mail is a double** (mailpit): nothing leaves the host. It holds every message sent to anyone,
