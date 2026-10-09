@@ -28,10 +28,14 @@ The chart sets no pod security context by default and the service images run as 
 Containers have all capabilities dropped, with PodDisruptionBudgets on the control plane and
 rolling updates that never take the last replica down.
 
-The chart Secret generates `VEXA_GATEWAY_IDENTITY_SECRET` and `VEXA_MCP_DELEGATION_SECRET` on first
-install and keeps them across upgrades; the gateway signs every request it forwards with the first, and
-agent-api and meeting-api refuse a user header without that signature. With
-`secrets.existingSecretName`, your Secret must carry both keys.
+The chart generates the gateway's identity keypair on first install and keeps it across upgrades: the
+Ed25519 private key in the `<release>-identity-signing-key` Secret, mounted by the gateway alone, and
+the public key in the `<release>-identity-public-key` ConfigMap, mounted by agent-api, meeting-api and
+the credential broker. The gateway signs every request it forwards; the others can verify that
+signature and cannot make one. If you render with `helm template` (GitOps), set `identity.signingKey`
+to a key from `openssl genpkey -algorithm ed25519`, or every render mints a new pair. The chart Secret
+also generates `VEXA_MCP_DELEGATION_SECRET`; with `secrets.existingSecretName`, your Secret must carry
+it.
 
 ## Install
 

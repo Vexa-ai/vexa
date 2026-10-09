@@ -65,15 +65,22 @@ terminal ──(API key, from your login)──▶  GATEWAY  ──(X-User-Id + 
                                             │ resolve key → user (fail-closed)
                                             │ strip any client-supplied identity (anti-spoof)
                                             │ check the route's coarse scope
-                                            │ sign the identity (HMAC, 60 s) — gateway-identity.v1
+                                            │ sign the identity (Ed25519, 60 s) — gateway-identity.v1
 ```
 
-agent-api and meeting-api believe `X-User-Id` (and the email, limits, workspaces and webhook beside it)
-only when the gateway's signature verifies, and rebuild those headers from the signed claims. The one
-other way to name a person is the **internal tier**: a service holding `INTERNAL_API_SECRET` (flows,
+The gateway signs with an **Ed25519 private key that only it holds**. agent-api, meeting-api and the
+credential broker hold the public key: they can check the signature and cannot make one. agent-api and
+meeting-api believe `X-User-Id` (and the email, limits, workspaces and webhook beside it) only when the
+gateway's signature verifies, and rebuild those headers from the signed claims. The one other way to
+name a person to them is the **internal tier**: a service holding `INTERNAL_API_SECRET` (flows,
 agent-api calling meeting-api) presents `X-Internal-Secret` and names the user it acts for. Anything
 else that names a person is refused with `401` before a route reads it — a process that reaches a
-service past the gateway cannot become a user. The contract is
+service past the gateway cannot become a user.
+
+The credential broker does not accept the internal tier. agent-api forwards the gateway's signed
+identity to it unchanged on every Connections call, and the broker uses a person's connections only
+when that signature verifies and names the same person as agent-api's broker assertion. Holding
+agent-api's keys is not enough to use someone else's Gmail. The contract is
 [`core/gateway/contracts/gateway-identity.v1`](https://github.com/Vexa-ai/vexa/tree/main/core/gateway/contracts/gateway-identity.v1).
 
 An agent worker is an ordinary client of the same edge. Each dispatch mints it a short-lived
@@ -197,7 +204,7 @@ that makes it real (P9: an ungated rule is aspirational). Foundations:
 | **P9 / P6 — one front door** | `_resolve_user_id` is duplicated across four meeting-api routers (`collector` · `bot_spawn` · `lifecycle` · `recordings`) | fold identity resolution into the shared `identity` front door | cleanup |
 
 <Note>`subject_of` (`control_plane/api.py`) has no fallback subject in a deployed agent-api: with the
-gateway's signing key configured (every deployment — the boot requires it), a request that names
+gateway's public key configured (every deployment — the boot requires it), a request that names
 nobody is a `401`. `VEXA_AGENT_DEFAULT_SUBJECT` applies only to an app built without the identity guard,
 which is the in-process test harness.</Note>
 

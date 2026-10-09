@@ -78,6 +78,7 @@ sha256 per contract; CI fails if a sealed schema drifts. Grouped by owning modul
 | `api.v1` | gateway → all clients (eval · terminal · SDKs) | The public REST + WS + MCP surface, OpenAPI 3.1, frozen to vexa `main`. |
 | `ws.v1` | gateway → clients | The live `/ws` multiplex (transcripts · bot status · chat), pinned to `main`'s G5 gate. |
 | `logevent.v1` | all control-plane services → observability | The structured log envelope + distributed `trace_id` — the observability SSOT. |
+| `gateway-identity.v1` | gateway → agent-api, meeting-api, credential broker | The identity the gateway resolved, Ed25519-signed onto every forward (`X-Vexa-Identity`); the services behind the edge hold only the public key. |
 
 ### core/identity
 

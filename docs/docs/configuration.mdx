@@ -106,7 +106,14 @@ redirect this operator callback. Leave all four values unset for the stock OSS b
 |---|---|---|
 | `ADMIN_TOKEN` | none — you must set it | Admin API key (`X-Admin-API-Key`) — mints users and tokens, and signs every per-spawn MeetingToken (meeting-api reads it as `ADMIN_TOKEN`, admin-api as `ADMIN_API_TOKEN`). |
 | `INTERNAL_API_SECRET` | none — you must set it | Shared secret for service-to-service calls. |
-| `VEXA_GATEWAY_IDENTITY_SECRET` | none — generated at install | The gateway signs the identity it resolved onto every request it forwards (`X-Vexa-Identity`); agent-api and meeting-api verify it and refuse a user header that is not signed. All three refuse to boot without it. `make up` / `mint-dev-env.sh`, the Helm chart and the Lite entrypoint generate it. |
+| `VEXA_GATEWAY_IDENTITY_SIGNING_KEY_FILE` | none — generated at install | **Gateway only.** A file holding the gateway's Ed25519 private key (PKCS#8 PEM). The gateway signs the identity it resolved onto every request it forwards (`X-Vexa-Identity`). No other service mounts it. |
+| `VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE` | none — generated at install | **agent-api, meeting-api, credential broker.** A file holding the matching public key. They verify the gateway's signature and cannot make one: agent-api and meeting-api refuse a user header that is not signed, and the broker refuses a Connections call without the gateway's signature for that person. A private key here refuses the boot. |
+
+The identity keypair is generated for you: compose's `identity-keys` service on first start (two
+volumes, the private one mounted by the gateway alone), the Helm chart (a Secret and a ConfigMap),
+and the Lite entrypoint (persisted in its state directory). To bring your own, generate it with
+`openssl genpkey -algorithm ed25519 -out signing-key.pem` and
+`openssl pkey -in signing-key.pem -pubout -out public-key.pem`.
 
 Neither has a default any more. Both services **refuse to boot** on a placeholder literal
 (`changeme`, `vexa-internal-secret`, `lite-internal-secret`, `default`, `secret`, …): a value
