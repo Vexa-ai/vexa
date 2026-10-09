@@ -27,16 +27,16 @@ from typing import Optional
 
 from fastapi import HTTPException, Request
 
-from control_plane.identity_token import CLAIM_HEADERS, DELEGATION_HEADERS
+from control_plane import identity_token
+# `REFUSAL` is what a verb that needs a person answers a worker dispatched without one: the vendored
+# gateway-identity.v1 body, the same one meeting-api's `regime.py` answers with.
+from control_plane.identity_token import CLAIM_HEADERS, DELEGATION_HEADERS, REFUSAL
 
 logger = logging.getLogger("agent_api.ceiling")
 
-REGIME_HEADER = DELEGATION_HEADERS["regime"]
 WORKSPACES_HEADER = DELEGATION_HEADERS["workspaces"]
 TARGET_HEADER = DELEGATION_HEADERS["target"]
 SUBJECT_HEADER = CLAIM_HEADERS["sub"]
-#: The one regime under which a person is in the loop.
-HUMAN = "human"
 
 
 def refusal(reason: str, instruction: str) -> dict:
@@ -44,14 +44,6 @@ def refusal(reason: str, instruction: str) -> dict:
     return {"status": "refused", "reason": reason, "instruction": instruction}
 
 
-#: What a verb that needs a person answers a worker dispatched without one — the same body, spelled
-#: the same way, as meeting-api's `regime.py` REFUSAL.
-REFUSAL = {
-    "status": "refused",
-    "reason": "human_session_required",
-    "instruction": "This session runs without a person in the loop. Record what you wanted to do "
-                   "and stop; do not retry it another way.",
-}
 
 
 def refused(request: "Request", status: int, detail, *, reason: str, **fields) -> HTTPException:
@@ -104,16 +96,15 @@ def delegation_allows(request: "Request", slug: Optional[str]) -> bool:
 
 
 def is_delegated(request: "Request") -> bool:
-    """Does the caller act under a delegation token? Any delegation header on the identity says so,
-    present at all — an empty one included. The identity door stamps them only from a signed
-    delegation, and a header that is there but says nothing is not a person's own credential."""
-    return any(h in request.headers for h in DELEGATION_HEADERS.values())
+    """Does the caller act under a delegation token? `identity_token.is_delegated`: any delegation
+    header on the identity, an empty one included."""
+    return identity_token.is_delegated(request.headers)
 
 
 def is_unwatched(request: "Request") -> bool:
-    """Is the caller a worker dispatched without a person in the loop? Delegated, and its regime is
-    not `human` — an unknown regime, and a missing or empty one, run unwatched."""
-    return is_delegated(request) and (request.headers.get(REGIME_HEADER) or "").strip().lower() != HUMAN
+    """Is the caller a worker dispatched without a person in the loop? `identity_token.is_unwatched`:
+    delegated, and a regime other than `human` (unknown, missing or empty included)."""
+    return identity_token.is_unwatched(request.headers)
 
 
 def require_in_ceiling(request: "Request", *slugs: Optional[str]) -> None:

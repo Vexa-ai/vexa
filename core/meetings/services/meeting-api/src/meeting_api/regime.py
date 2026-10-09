@@ -17,21 +17,14 @@ from __future__ import annotations
 
 from fastapi import HTTPException, Request
 
-#: The headers a delegated identity carries (gateway-identity.v1 `DELEGATION_HEADERS`).
-DELEGATION_HEADERS = ("x-user-regime", "x-user-delegation-workspaces", "x-user-delegation-target")
-
-REFUSAL = {
-    "status": "refused",
-    "reason": "human_session_required",
-    "instruction": "This session runs without a person in the loop. Record what you wanted to do "
-                   "and stop; do not retry it another way.",
-}
+from . import identity_token
+# The rule and the refusal are gateway-identity.v1's (the vendored identity_token), shared with
+# agent-api byte for byte.
+from .identity_token import REFUSAL
 
 
 def require_person(request: Request) -> None:
-    """FastAPI dependency: 403 for a delegated identity whose regime is not ``human``."""
-    headers = request.headers
-    if not any(h in headers for h in DELEGATION_HEADERS):
-        return
-    if (headers.get("x-user-regime") or "").strip().lower() != "human":
+    """FastAPI dependency: 403 for a delegated identity whose regime is not ``human``
+    (`identity_token.is_unwatched`: an empty or unknown regime included)."""
+    if identity_token.is_unwatched(request.headers):
         raise HTTPException(status_code=403, detail=REFUSAL)

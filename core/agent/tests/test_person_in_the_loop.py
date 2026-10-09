@@ -64,16 +64,17 @@ def test_an_empty_regime_is_refused_a_person_verb():
 
 
 def test_the_refusal_is_meeting_api_s_refusal():
+    """Both services answer with the vendored gateway-identity.v1 body (fact identity-token holds the
+    copies byte-identical), and meeting-api spells no refusal of its own."""
+    from control_plane import identity_token
+    assert ceiling.REFUSAL is identity_token.REFUSAL
     regime_py = (Path(__file__).resolve().parents[2] / "meetings" / "services" / "meeting-api" / "src"
                  / "meeting_api" / "regime.py")
     if not regime_py.is_file():
         pytest.skip("meeting-api is not in this checkout")
-    ns: dict = {}
     src = regime_py.read_text()
-    block = re.search(r"^REFUSAL = \{.*?^\}", src, re.S | re.M)
-    assert block, "meeting-api regime.py no longer spells REFUSAL as a dict literal"
-    exec(block.group(0), ns)  # noqa: S102 — a dict literal read from our own source tree
-    assert ns["REFUSAL"] == ceiling.REFUSAL
+    assert "from .identity_token import REFUSAL" in src
+    assert not re.search(r"^REFUSAL = ", src, re.M), "meeting-api regime.py spells its own REFUSAL again"
 
 
 def test_a_refusal_is_logged_once(caplog):
