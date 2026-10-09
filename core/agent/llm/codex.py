@@ -14,11 +14,11 @@ import threading
 from pathlib import Path
 from typing import Callable, Iterable, Iterator, Optional
 
-# THE PANEL CONVENTIONS ARE THE CLAUDE ADAPTER'S, IMPORTED (F92) — the writer's tab, decision 35's
-# transcript chips and decision 30.4's bot-send open. This adapter emitted NONE of them, so the same
-# turn painted the person's screen or did not depending on which harness the deployment ran, which
-# is exactly the thing `openai_agent` imports these to avoid. One vocabulary, three harnesses.
-from llm.claude_code import (_BOT_TOOLS, _TERMS_TOOLS, _WRITER_TOOLS, _bot_artifact,
+# THE PANEL CONVENTIONS ARE SHARED, IMPORTED (F92) — the writer's tab, decision 35's transcript
+# chips and decision 30.4's bot-send open. This adapter emitted NONE of them, so the same turn
+# painted the person's screen or did not depending on which harness the deployment ran.
+# `llm.tool_events` owns them. One vocabulary, three harnesses.
+from llm.tool_events import (_BOT_TOOLS, _TERMS_TOOLS, _WRITER_TOOLS, _bot_artifact,
                              _published_terms, _written_artifact)
 from llm.ports import harness_subprocess_env
 

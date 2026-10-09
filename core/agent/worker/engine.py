@@ -1990,7 +1990,7 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
         # tool results.
         #
         # ⚠ THE TOOL RESULTS ARE NOT AVAILABLE HERE, and the version that thought they were invented
-        # people. What reaches this seam is `llm.claude_code._short(content, 80)` — an 80-character
+        # people. What reaches this seam is `llm.tool_events._short(content, 80)` — an 80-character
         # PREVIEW — so a name straddling the cut arrives as a fragment. Measured on a second turn
         # over a populated desk, the pre-pass proposed "James Spadaf", "James Spad", "Technical
         # Stee" and "DNA TSC Inaugural Meetin": none has a page, none ever would, and each one

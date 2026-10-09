@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 
-from llm.claude_code import _bot_artifact
+from llm.tool_events import _bot_artifact
 from worker.friction import disbelieved_capability
 
 TOOLS = ["Read", "Write", "mcp__vexa__request_meeting_bot", "mcp__vexa__stop_bot",

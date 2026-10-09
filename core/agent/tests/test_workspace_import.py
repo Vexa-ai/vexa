@@ -132,7 +132,7 @@ def test_import_http_and_mcp_manifest_expose_same_operation(tmp_path, monkeypatc
 
 
 def test_only_completed_import_changes_chat_focus():
-    from llm.claude_code import _workspace_focus
+    from llm.tool_events import _workspace_focus
     assert _workspace_focus(json.dumps({'status':'running','result':{'workspace':'repo'}})) is None
     assert _workspace_focus(json.dumps({'status':'completed','result':{'workspace':'repo','name':'Repository'}}))['workspace'] == 'repo'
 

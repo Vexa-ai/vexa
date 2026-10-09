@@ -191,9 +191,9 @@ def test_the_refusal_detector_names_only_served_verbs():
 @pytest.mark.parametrize("vocab_name", ["_BOT_TOOLS", "_TERMS_TOOLS", "_OPEN_TOOLS", "_FOCUS_TOOLS",
                                         "_WRITER_TOOLS"])
 def test_the_harness_acts_only_on_results_of_served_tools(vocab_name):
-    from llm import claude_code
+    from llm import tool_events
 
-    names = {t.removeprefix("mcp__vexa__") for t in getattr(claude_code, vocab_name)
+    names = {t.removeprefix("mcp__vexa__") for t in getattr(tool_events, vocab_name)
              if t.startswith("mcp__vexa__")}
     assert names <= served() | ALLOWLIST_GAP, sorted(names - served() - ALLOWLIST_GAP)
 

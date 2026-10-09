@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import json
 
-from llm.claude_code import _published_terms, _TERMS_TOOLS, parse_stream_json
+from llm.claude_code import parse_stream_json
+from llm.tool_events import _published_terms, _TERMS_TOOLS
 from shared.terms import extract_terms, index_entries, match_known, terms_for
 
 

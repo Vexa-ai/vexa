@@ -30,7 +30,7 @@ from fastapi.testclient import TestClient
 from control_plane.api import create_app
 from control_plane.dispatch import Dispatcher
 from control_plane.workspace_reader import WorkspaceReader
-from llm.claude_code import _published_terms
+from llm.tool_events import _published_terms
 from shared.config import load_settings
 
 from tests.test_api import _FakeIdentity, _FakeRuntime

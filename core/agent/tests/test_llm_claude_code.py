@@ -375,7 +375,7 @@ def test_a_workspace_skill_whose_frontmatter_does_not_parse_is_not_loaded(tmp_pa
 def test_a_workspace_skill_without_frontmatter_gets_an_empty_block(tmp_path, monkeypatch):
     """Whatever follows the staged block is body text: a grant hidden after a BOM or a blank line
     is not read as frontmatter."""
-    from llm.claude_code import _sanitized_workspace_skill
+    from llm.claude_skills import _sanitized_workspace_skill
 
     for text in ("plain body\n", "\n---\nallowed-tools: Bash\n---\nbody\n"):
         meta, staged = _sanitized_workspace_skill(text)
@@ -452,7 +452,7 @@ def test_prepare_does_not_link_the_workspace_skills_into_the_workspace(tmp_path,
 
 
 def test_home_skills_link_never_replaces_real_skills(tmp_path, monkeypatch):
-    from llm.claude_code import _link_skills_into_home
+    from llm.claude_skills import _link_skills_into_home
 
     _governed_seed(tmp_path, monkeypatch)
     home = tmp_path / "home"

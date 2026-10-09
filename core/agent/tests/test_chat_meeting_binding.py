@@ -32,7 +32,7 @@ from control_plane.api import _Sessions, create_app
 from control_plane.api_shared import meeting_binding
 from control_plane.dispatch import Dispatcher
 from control_plane.workspace_reader import WorkspaceReader
-from llm.claude_code import _bot_artifact
+from llm.tool_events import _bot_artifact
 from shared.config import load_settings
 
 

@@ -39,7 +39,8 @@ from control_plane.dispatch import (Dispatcher, _worker_cwd, build_mount_set,
 from control_plane.workspace_attach import create_shared_workspace_dir
 from control_plane.workspace_membership import InMemoryMembershipIndex, ensure_owner
 from control_plane.workspace_reader import WorkspaceReader
-from llm.claude_code import _FOCUS_TOOLS, _workspace_focus, parse_stream_json
+from llm.claude_code import parse_stream_json
+from llm.tool_events import _FOCUS_TOOLS, _workspace_focus
 from shared import delegation, units
 from shared.config import load_settings
 from worker import engine

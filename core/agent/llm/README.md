@@ -27,6 +27,13 @@ trivial fakes.
   agent loop over any OpenAI-compatible `chat/completions` with function calling, no CLI and no
   vendor SDK). All three normalize into the same frozen UnitEvents; Claude remains the deployment
   default.
+- **Claude Code's skills**: `claude_skills.py` stages the turn's skill set into the worker's user
+  scope (`~/.claude/skills`) — the platform's governed skills, then the workspace's own with the
+  tool-granting frontmatter removed. Part of the `claude-code` adapter.
+- **Panel events**: `tool_events.py` — the closed tool vocabularies and the event a successful
+  result earns (a write opens its file, a bot send opens the transcript, `open_page`, chips, a
+  workspace joining the chat). Imported by all three harnesses so a turn paints the same screen
+  whichever one runs.
 
 ### The runner matrix
 
@@ -96,7 +103,7 @@ carries the event vocabulary and the rest.
 
 - **This module imports NOTHING from product code** (`shared/`, `contracts`, `worker/`,
   `control_plane/`) — it must stay liftable into a standalone brick.
-- Vendor names appear only in adapter files (`claude_code.py`, `codex.py`), never in
+- Vendor names appear only in adapter files (`claude_code.py`, `claude_skills.py`, `codex.py`), never in
   `ports.py`/`registry.py` beyond registry keys.
 - UnitEvent shapes (`message-delta` / `tool-call` / `tool-result` / `done{reply,sessionId,ok}` /
   `commit` and the `model-error` / `auth-error` builders in `errors.py`) are FROZEN — the terminal
