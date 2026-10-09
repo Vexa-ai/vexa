@@ -3,7 +3,12 @@
 | Module | Concern |
 |---|---|
 | `main.py` | composition root: preflight → settings → store → app (`uvicorn credential_broker.main:app`) |
-| `app.py` | the routes, the assertion middleware, metadata and audit (`metadata.sqlite`) |
+| `app.py` | the app factory: the assertion middleware, the error handlers, the health probe; includes the routes |
+| `broker.py` | the shared core every route calls: metadata access, the store port, caller checks, the audit trail, typed fault lines, OAuth helpers |
+| `models.py` | the request bodies, one strict model per contract request shape |
+| `metadata.py` | the state directory: `metadata.sqlite`'s schema and its additive migration, and the broker-private HMAC key |
+| `routes_connections.py` | the agent and human roles' connection routes: lifecycle (setup, prepare, save, consent, disconnect, delete) and use (read, draft, call) |
+| `routes_git.py` | the git role's route: agent-api's Git token and deploy-key store |
 | `assertion.py` | VENDORED from `core/agent/contracts/credential-broker.v1/assertion.py` — edit the canonical copy, then copy it here byte for byte |
 | `identity_token.py` | VENDORED from `core/gateway/contracts/gateway-identity.v1/identity_token.py` — verifies the gateway's signature an agent-role call carries; the broker holds the public key only |
 | `store.py` | the store port: `LocalEncryptedStore` (AES-256-GCM, default) and `OpenBaoStore` (KV v2) |

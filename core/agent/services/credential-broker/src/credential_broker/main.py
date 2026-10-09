@@ -13,7 +13,8 @@ from typing import Mapping, Optional
 from fastapi import FastAPI
 
 from . import assertion, identity_token
-from .app import Broker, create_app
+from .app import create_app
+from .broker import Broker
 from .config_preflight import ConfigError, preflight
 from .obs import log_event
 from .settings import Settings, load

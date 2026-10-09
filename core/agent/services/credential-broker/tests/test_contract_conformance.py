@@ -13,16 +13,16 @@ import pytest
 from fastapi.routing import APIRoute
 
 from conftest import CONTRACT, golden, schema
-from credential_broker import app as app_module, providers, secret_service
+from credential_broker import models, providers, secret_service
 
 SCHEMA = schema()
 ROUTES = SCHEMA["x-routes"]
 CID = "0123456789abcdef0123456789abcdef"
 MODELS = {
-    "SetupRequest": app_module.SetupBody, "PrepareRequest": app_module.PreparedSetupBody,
-    "CustomSecretRequest": app_module.CustomSecretBody, "OAuthApplicationRequest": app_module.OAuthApplicationBody,
-    "AccountReadRequest": app_module.AccountReadBody, "GmailDraftRequest": app_module.GmailDraftBody,
-    "CustomCallRequest": app_module.CustomCallBody, "GitSecretRequest": app_module.GitSecretBody,
+    "SetupRequest": models.SetupBody, "PrepareRequest": models.PreparedSetupBody,
+    "CustomSecretRequest": models.CustomSecretBody, "OAuthApplicationRequest": models.OAuthApplicationBody,
+    "AccountReadRequest": models.AccountReadBody, "GmailDraftRequest": models.GmailDraftBody,
+    "CustomCallRequest": models.CustomCallBody, "GitSecretRequest": models.GitSecretBody,
 }
 
 
@@ -30,8 +30,23 @@ def conforms(shape, data):
     jsonschema.validate(data, {"$ref": f"#/$defs/{shape}", **{k: v for k, v in SCHEMA.items() if k != "x-routes"}})
 
 
+def served_routes(routes, prefix=""):
+    """Every route a request can reach. FastAPI keeps an included router as one placeholder in
+    `app.routes` (its routes resolve at match time), so the placeholder is opened here; reading
+    `app.routes` alone would find no connection routes and test nothing."""
+    out = []
+    for r in routes:
+        inc = getattr(r, "include_context", None)
+        if inc is not None:
+            out.extend(served_routes(r.original_router.routes, prefix + (getattr(inc, "prefix", "") or "")))
+        elif isinstance(r, APIRoute):
+            out.extend((m, prefix + r.path) for m in r.methods)
+    return out
+
+
 def test_registered_routes_equal_the_contract(client):
-    served = {(m, r.path.replace("{cid}", "{cid}")) for r in client.app.routes if isinstance(r, APIRoute) for m in r.methods}
+    served = set(served_routes(client.app.routes))
+    assert len(served) == len(served_routes(client.app.routes))      # no route registered twice
     declared = {(r["method"], r["path"]) for r in ROUTES}
     assert served == declared
 

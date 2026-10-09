@@ -16,7 +16,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from credential_broker import assertion, identity_token
-from credential_broker.app import Broker, create_app
+from credential_broker.app import create_app
+from credential_broker.broker import Broker
 from credential_broker.settings import Settings
 from credential_broker.store import Record, StoreUnavailable
 
