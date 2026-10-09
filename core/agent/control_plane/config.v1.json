@@ -173,7 +173,7 @@
       "key": "VEXA_RUNNER",
       "class": "defaulted",
       "default": "claude-code",
-      "description": "agent harness stamped onto dispatched workspace turns: claude-code (default) | codex (the Codex app-server) | openai-agent (this repo's own loop over any OpenAI-compatible endpoint). The deployment FLOOR only \u2014 Settings \u2192 Models pins a harness per subject and the dispatch overlay wins. The openai-agent lane is configured by VEXA_LLM_BASE_URL / _API_KEY / _MODEL / _EXTRA_BODY, which the runtime forwards into the worker from its own environment; a per-subject endpoint and extra_body from Settings \u2192 Models are stamped by the dispatch and win",
+      "description": "agent harness stamped onto dispatched workspace turns: claude-code (default) | codex (the Codex app-server) | openai-agent (this repo's own loop over any OpenAI-compatible endpoint). The deployment FLOOR only \u2014 Settings \u2192 Models pins a harness per subject and the dispatch overlay wins. The openai-agent lane is configured by VEXA_LLM_BASE_URL / _API_KEY / _MODEL / _EXTRA_BODY, which the runtime forwards into the worker from its own environment; a subject's own Settings \u2192 Models endpoint replaces all four for that subject, because the dispatch stamps them and the runtime never overrides a stamped key",
       "targets": [
         "compose"
       ]
@@ -594,7 +594,7 @@
       "key": "VEXA_LLM_BASE_URL",
       "class": "defaulted",
       "default": "(unset \u2014 falls back to ANTHROPIC_BASE_URL)",
-      "description": "openai-agent harness: the OpenAI-compatible endpoint the turn's chat/completions run against. Falls back to ANTHROPIC_BASE_URL, which is what a per-subject Settings \u2192 Models gateway arrives as \u2014 there is ONE endpoint pair and this is its second spelling, kept because the harness predates the collapse",
+      "description": "openai-agent harness: the deployment's OpenAI-compatible endpoint the turn's chat/completions run against. Unset, ANTHROPIC_BASE_URL applies. A subject's own Settings \u2192 Models endpoint that passes VEXA_MODEL_BASE_URL_ALLOW replaces it for that subject: the dispatch stamps this key and ANTHROPIC_BASE_URL to the subject's endpoint, and the runtime never overrides a stamped key",
       "targets": [
         "compose"
       ]
@@ -604,7 +604,7 @@
       "class": "capability",
       "capability": "model_inference",
       "secret": true,
-      "description": "openai-agent harness: the bearer token for VEXA_LLM_BASE_URL. Optional \u2014 a self-hosted vLLM behind the deployment's own network needs none. Falls back to ANTHROPIC_AUTH_TOKEN then ANTHROPIC_API_KEY",
+      "description": "openai-agent harness: the deployment's bearer token for VEXA_LLM_BASE_URL. Optional \u2014 a self-hosted vLLM behind the deployment's own network needs none. Unset, ANTHROPIC_AUTH_TOKEN then ANTHROPIC_API_KEY apply. Never sent to a subject's own endpoint: there the dispatch stamps the subject's own key under every credential name (empty when they set none)",
       "targets": [
         "compose"
       ]
@@ -613,7 +613,7 @@
       "key": "VEXA_LLM_MODEL",
       "class": "defaulted",
       "default": "(unset \u2014 VEXA_AGENT_MODEL applies)",
-      "description": "openai-agent harness: the model id, when it differs from the product-wide VEXA_AGENT_MODEL. VEXA_AGENT_MODEL is the one Settings \u2192 Models writes and the one the dispatch stamps, so this is an override and not the main dial",
+      "description": "openai-agent harness: a fallback model id, read only when no VEXA_AGENT_MODEL reaches the worker. The worker passes VEXA_AGENT_MODEL (what Settings \u2192 Models writes, under VEXA_MODEL_ALLOWLIST, and the dispatch stamps) into every turn, and it wins. Stamped empty when a subject's own endpoint applies, so this deployment value never names the model sent there",
       "targets": [
         "compose"
       ]
@@ -622,7 +622,7 @@
       "key": "VEXA_LLM_EXTRA_BODY",
       "class": "defaulted",
       "default": "(unset \u2014 no extra fields)",
-      "description": "openai-agent harness: a JSON object merged into EVERY chat/completions request \u2014 the escape hatch for server-specific fields the OpenAI dialect cannot express. THE ONE DIAL WITH NO ANTHROPIC-DIALECT EQUIVALENT, and load-bearing: a self-hosted Qwen returns nothing parseable without {\"chat_template_kwargs\":{\"enable_thinking\":false}}, and a mis-stamped value fails SILENTLY (the turn runs with thinking on). Also settable per subject under Settings \u2192 Models",
+      "description": "openai-agent harness: a JSON object merged into EVERY chat/completions request \u2014 the escape hatch for server-specific fields the OpenAI dialect cannot express. THE ONE DIAL WITH NO ANTHROPIC-DIALECT EQUIVALENT, and load-bearing: a self-hosted Qwen returns nothing parseable without {\"chat_template_kwargs\":{\"enable_thinking\":false}}, and a mis-stamped value fails SILENTLY (the turn runs with thinking on). A subject's own Settings \u2192 Models endpoint carries its own extra_body instead (stamped empty when they set none); the deployment's is never sent there",
       "targets": [
         "compose"
       ]

@@ -108,7 +108,8 @@ Returns the same masked shape as the read, with **200 OK**.
   Request fields the OpenAI dialect cannot express, as a JSON string — a self-hosted vLLM/Qwen
   endpoint returns no valid JSON until thinking is disabled with
   `{"chat_template_kwargs": {"enable_thinking": false}}`. Write-only: it is stored and applied, and
-  the read-back above does not echo it.
+  the read-back above does not echo it. With a custom `base_url`, this is the only extra body sent
+  there: the deployment's own is not.
 </ParamField>
 <ParamField body="effort" type="string">
   The reasoning-effort pin — `low`, `medium`, `high` or `xhigh`. Unset leaves the harness's own

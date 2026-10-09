@@ -501,7 +501,7 @@
       "class": "defaulted",
       "default": "(adapter default)",
       "secret": true,
-      "description": "llm-module endpoint, brokered into spawned workers",
+      "description": "openai-agent harness endpoint, forwarded into spawned agent workers when the spec does not set it. A dispatch that applies a subject's own model endpoint stamps it, and a stamped value always wins",
       "targets": [
         "compose"
       ]
@@ -511,7 +511,7 @@
       "class": "capability",
       "capability": "model_inference",
       "secret": true,
-      "description": "provider-agnostic llm-module credential path, brokered into spawned workers (the HarnessPort adapters in core/agent/llm)",
+      "description": "openai-agent harness credential, forwarded into spawned agent workers when the spec does not set it. Never over a stamped value, the empty string included, so a subject's own model endpoint never receives it",
       "targets": [
         "compose"
       ]
@@ -520,7 +520,7 @@
       "key": "VEXA_LLM_MODEL",
       "class": "defaulted",
       "default": "(adapter default)",
-      "description": "llm-module deployment-default model, brokered into spawned workers",
+      "description": "openai-agent harness fallback model, forwarded into spawned agent workers when the spec does not set it; VEXA_AGENT_MODEL wins inside the worker",
       "targets": [
         "compose"
       ]
@@ -529,7 +529,7 @@
       "key": "VEXA_LLM_EXTRA_BODY",
       "class": "defaulted",
       "default": "(unset — no extra fields)",
-      "description": "openai-agent harness: a JSON object merged into every chat/completions request (server-specific fields the OpenAI dialect cannot express); forwarded into spawned workers",
+      "description": "openai-agent harness: a JSON object merged into every chat/completions request (server-specific fields the OpenAI dialect cannot express); forwarded into spawned agent workers when the spec does not set it. A subject's own model endpoint stamps its own, empty included",
       "targets": [
         "compose"
       ]

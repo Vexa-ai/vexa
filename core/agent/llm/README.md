@@ -88,7 +88,7 @@ carries the event vocabulary and the rest.
 | `VEXA_RUNNER` | harness adapter key: `claude-code` \| `codex` \| `openai-agent` | `claude-code` |
 | `VEXA_LLM_BASE_URL` | openai-agent endpoint | **required** for `openai-agent` (falls back to `ANTHROPIC_BASE_URL`) |
 | `VEXA_LLM_API_KEY` | openai-agent credential (optional for local runtimes) | falls back `ANTHROPIC_AUTH_TOKEN` → `ANTHROPIC_API_KEY` |
-| `VEXA_LLM_MODEL` | openai-agent model (free string) | empty → fail-loud at the first request |
+| `VEXA_LLM_MODEL` | openai-agent fallback model (free string), read only when no `VEXA_AGENT_MODEL` reaches the worker | `VEXA_AGENT_MODEL`; neither → fail-loud at the first request |
 | `VEXA_LLM_EXTRA_BODY` | JSON object merged into EVERY openai-agent request | `{}` |
 | `VEXA_AGENT_MAX_TOOL_CALLS` / `VEXA_AGENT_MAX_TURN_SEC` | openai-agent per-turn budget | 40 / 900 |
 | `VEXA_AGENT_CONTEXT_TOKENS` | openai-agent context ceiling (trims oldest tool results first) | 24000 |
@@ -96,8 +96,22 @@ carries the event vocabulary and the rest.
 | `VEXA_SEARCH_URL` | operator-supplied search endpoint for `WebSearch` | empty → `WebSearch` is not attached |
 | `VEXA_SEARCH_DIALECT` | wire format of that endpoint: `searxng` \| `brave` | `searxng` |
 | `VEXA_SEARCH_API_KEY` | credential for that endpoint (brave needs one; searxng does not) | empty |
-| `ANTHROPIC_*`, `HOST_CLAUDE_CREDENTIALS` | claude-code adapter ONLY | — |
+| `ANTHROPIC_*`, `HOST_CLAUDE_CREDENTIALS` | claude-code adapter; openai-agent reads `ANTHROPIC_BASE_URL` / `_AUTH_TOKEN` / `_API_KEY` only as the fallbacks above | — |
 | `HOST_CODEX_CREDENTIALS`, `OPENAI_API_KEY` | codex adapter subscription-file / API-key auth | — |
+
+**Whose endpoint, the deployment's or a subject's own, is decided by the dispatch, once.** The
+`VEXA_LLM_*` and `ANTHROPIC_*` values above are the deployment's: agent-api backfills the
+`ANTHROPIC_*` ones and the runtime forwards the rest into every worker. When a subject's Settings →
+Models `mode: custom` endpoint passes the operator gate (`VEXA_MODEL_BASE_URL_ALLOW`),
+`control_plane.dispatch.subject_route_env` stamps the whole route for that worker: the subject's
+endpoint as `ANTHROPIC_BASE_URL` and `VEXA_LLM_BASE_URL`, the subject's key (empty when they set
+none) as `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY` and `VEXA_LLM_API_KEY`, the subject's
+`extra_body` (or empty) as `VEXA_LLM_EXTRA_BODY`, and an empty `CLAUDE_CODE_OAUTH_TOKEN` and
+`VEXA_LLM_MODEL`. The model is `VEXA_AGENT_MODEL`, under `VEXA_MODEL_ALLOWLIST`. The runtime never
+overrides a key the dispatch stamped, the empty string included. So both harnesses run on the
+subject's endpoint, key, model and extra body whatever the deployment's `VEXA_LLM_*` say, the
+subject's key reaches no other endpoint, and no deployment credential reaches the subject's. With
+no subject endpoint, or a refused one, nothing is stamped and the table above applies unchanged.
 
 ## Rules
 
