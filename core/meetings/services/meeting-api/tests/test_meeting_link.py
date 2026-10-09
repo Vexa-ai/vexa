@@ -7,7 +7,7 @@ with jitsi as the newest row. Pure string logic — no app, no DB.
 from __future__ import annotations
 
 from meeting_api.bot_spawn.service import construct_meeting_url
-from meeting_api.collector.meeting_link import find_meeting_link, parse_meeting_url
+from meeting_api.collector.meeting_link import find_meeting_link, find_meeting_links, parse_meeting_url
 
 
 class TestParseJitsi:
@@ -73,6 +73,28 @@ class TestFindMeetingLinkJitsi:
         # The meet-label convention is pasted-link-only — an ICS full of arbitrary
         # links must not guess rooms. Declaring the host (below) is the opt-in.
         assert find_meeting_link("agenda: https://eu.meet.example.org/Weekly") is None
+
+
+class TestFindMeetingLinks:
+    """Every recognizable link in the text, in order, each URL once — the calendar reader picks."""
+
+    def test_all_links_in_text_order(self):
+        text = ("Join with Google Meet: https://meet.google.com/abc-defg-hij\n"
+                "Телемост: https://telemost.yandex.ru/j/12345678901234567890")
+        assert find_meeting_links(text) == [
+            ("google_meet", "abc-defg-hij", "https://meet.google.com/abc-defg-hij"),
+            ("telemost", "12345678901234567890", "https://telemost.yandex.ru/j/12345678901234567890"),
+        ]
+
+    def test_repeated_url_listed_once_and_non_meeting_urls_skipped(self):
+        text = ("agenda https://docs.google.com/document/d/abc, room https://meet.jit.si/Standup "
+                "(again: https://meet.jit.si/Standup)")
+        assert find_meeting_links(text) == [("jitsi", "Standup", "https://meet.jit.si/Standup")]
+
+    def test_empty_text_yields_nothing_and_first_link_matches_the_singular(self):
+        assert find_meeting_links("") == []
+        text = "a https://meet.google.com/abc-defg-hij then https://telemost.yandex.ru/j/1"
+        assert find_meeting_link(text) == find_meeting_links(text)[0]
 
 
 class TestConfiguredJitsiHosts:

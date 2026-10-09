@@ -181,17 +181,32 @@ def parse_meeting_url(raw: str, *, generic_hosts: bool = True) -> Optional[tuple
     return None
 
 
-def find_meeting_link(text: str) -> Optional[tuple[str, str, str]]:
-    """Scan free text (an ICS LOCATION/DESCRIPTION) for the FIRST recognizable meeting URL →
-    ``(platform, native_meeting_id, url)``, or ``None``. Only http(s) URLs are considered."""
+def find_meeting_links(text: str) -> list[tuple[str, str, str]]:
+    """Scan free text (an ICS LOCATION/DESCRIPTION) for EVERY recognizable meeting URL, in text
+    order → ``[(platform, native_meeting_id, url), …]`` (a URL repeated in the text appears once).
+    Only http(s) URLs are considered. The caller decides which link names the room — a calendar
+    event can carry more than one (Google's auto-attached Meet conference beside the organiser's
+    own link to another platform), and that choice belongs to the calendar reader, not the scan."""
+    found: list[tuple[str, str, str]] = []
+    seen: set[str] = set()
     if not text:
-        return None
+        return found
     for m in re.finditer(r"https?://[^\s<>\"']+", text):
         url = m.group(0).rstrip(").,;")
+        if url in seen:
+            continue
         # Free-text scan: hold jitsi to the explicit hosts (meet.jit.si + VEXA_JITSI_HOSTS) —
         # a calendar description is full of arbitrary links, and the pasted-link naming
         # heuristics (*jitsi* / ``meet.*``) would misread them as rooms.
         parsed = parse_meeting_url(url, generic_hosts=False)
         if parsed:
-            return (parsed[0], parsed[1], url)
-    return None
+            seen.add(url)
+            found.append((parsed[0], parsed[1], url))
+    return found
+
+
+def find_meeting_link(text: str) -> Optional[tuple[str, str, str]]:
+    """The FIRST recognizable meeting URL in free text → ``(platform, native_meeting_id, url)``,
+    or ``None`` — ``find_meeting_links`` for callers that want one link and no choice."""
+    links = find_meeting_links(text)
+    return links[0] if links else None

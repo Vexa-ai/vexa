@@ -11,8 +11,11 @@ domain).
   (pure). **One event per UID — the next upcoming occurrence only** (a recurring meeting reuses one
   link; two active rows on one native id would violate `uq_meeting_active_user_platform_native`).
   Every event carries a JSON-safe snapshot of all VEVENT properties, parameters, nested components,
-  top-level VCALENDAR properties, and the series master for an override. Link-less events still
-  import honestly; only recognized Meet/Zoom/Teams links arm auto-join.
+  top-level VCALENDAR properties, and the series master for an override. The joinable link is read
+  from `X-GOOGLE-CONFERENCE`, `LOCATION`, `URL` and `DESCRIPTION`; a link to any platform other
+  than the calendar's auto-attached Google Meet (Telemost, Zoom, Teams, Jitsi) is the organiser's
+  own act and names the room even when a Meet conference sits on the same event. Link-less
+  events still import honestly; only recognized links arm auto-join.
 - `sync_user(store, user_id, parsed, auto_join_default, …)` → upserts through the SAME planned-meeting
   store primitives `POST /meetings` uses (advisory-locked). Intent rows follow the feed; FSM rows
   are never touched; a manual plan on the same link is ADOPTED (uid stamped), not duplicated;
