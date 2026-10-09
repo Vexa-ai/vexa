@@ -14,7 +14,9 @@ from fastapi.testclient import TestClient
 from control_plane import identity_token
 from control_plane.api import create_app
 from control_plane.dispatch import Dispatcher
+from control_plane.workspace_reader import WorkspaceReader
 from shared.config import load_settings
+from workspaces.shared.workspace_id import mint_id
 
 KEY = identity_token.generate_signing_key()
 
@@ -38,8 +40,14 @@ def client(monkeypatch, tmp_path):
     public.write_bytes(identity_token.public_key_pem(KEY))
     monkeypatch.setenv("VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE", str(public))
     monkeypatch.setenv("INTERNAL_API_SECRET", "agent-test-internal-secret")
-    monkeypatch.setenv("VEXA_WORKSPACES_DIR", str(tmp_path / "workspaces"))
-    return TestClient(create_app(Dispatcher(load_settings(), _Runtime(), _Identity())))
+    root = tmp_path / "workspaces"
+    root.mkdir()
+    monkeypatch.setenv("VEXA_WORKSPACES_DIR", str(root))
+    # A route the ceiling lets through may still fail further in on this bare store; that is the
+    # route answering, which is all the "not refused by the ceiling" cases need to see.
+    return TestClient(create_app(Dispatcher(load_settings(), _Runtime(), _Identity()),
+                                 reader=WorkspaceReader(str(root))),
+                      raise_server_exceptions=False)
 
 
 def _as(workspaces, regime="autonomous") -> dict:
@@ -67,6 +75,9 @@ VERBS = [
     ("POST", "/api/workspace/reset", None, {"target": "_global"}),
     ("PUT", "/api/workspace/file", None, {"path": "README.md", "content": "x", "slug": "_global"}),
     ("POST", "/api/global/ready", None, {}),
+    ("POST", f"/api/workspaces/{OUTSIDE}/rename", None, {"name": "Elsewhere"}),
+    ("POST", f"/api/workspace/shared/{OUTSIDE}/attach", None, {}),
+    ("POST", f"/api/workspace/shared/{OUTSIDE}/active", None, {"active": False}),
 ]
 
 
@@ -103,3 +114,15 @@ def test_the_workspace_inside_the_ceiling_is_not_refused_by_it(client, method, p
 def test_an_empty_ceiling_refuses_every_named_workspace(client):
     r = client.delete(f"/api/workspace/{OUTSIDE}", headers=_as([]))
     assert _out_of_scope(r)
+
+
+def test_rename_by_id_is_held_to_the_ceiling_by_the_slug_the_id_names(client):
+    """The ceiling lists slugs; rename addresses a workspace by its stable id. A worker granted the
+    workspace whose slug the id resolves to is not refused by the ceiling, and one granted something
+    else is."""
+    wid = mint_id()
+    client.app.state.workspace_registry.put({"id": wid, "slug": OUTSIDE, "kind": "group", "name": "B"})
+    assert _out_of_scope(client.post(f"/api/workspaces/{wid}/rename", json={"name": "x"},
+                                      headers=_as(["ws_a"])))
+    assert not _out_of_scope(client.post(f"/api/workspaces/{wid}/rename", json={"name": "x"},
+                                          headers=_as([OUTSIDE])))

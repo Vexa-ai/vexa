@@ -1040,6 +1040,9 @@ def build(**d) -> APIRouter:
         AUDITED: who, old, new, when, kept on the record (capped) and logged. A rename is the one
         operation whose whole point is that nothing else changes, which means the only way to see
         that it happened at all is to have written it down."""
+        # The ceiling names workspaces by slug; this route names one by id, so ask by both.
+        known = workspace_registry.get(workspace_id) or {}
+        require_in_ceiling(request, str(known.get("slug") or workspace_id))
         subject = subject_of(request)
         try:
             rec = ids_mod.rename_audited(
@@ -1473,6 +1476,7 @@ def build(**d) -> APIRouter:
         Park-and-clone, exactly as the desk swap: the current tree is kept under the workspace's own
         store and can be swapped back to by slug with no re-clone, so this is reversible. ``policy/``
         (the member list) is carried into the new tree, so an attach can never lock the group out."""
+        require_in_ceiling(request, workspace_id)
         subject = subject_of(request)
         try:
             membership_mod.require_role(wsr.root, workspace_id, subject, "contributor")
@@ -1554,6 +1558,7 @@ def build(**d) -> APIRouter:
     def ws_shared_active(workspace_id: str, request: Request, body: SharedActiveBody = Body(...)):
         """Switch a SHARED workspace ON/OFF in the caller's active set (mount vs hide). Membership is
         unchanged — this is a per-user mount preference so a member can 'switch it off' without leaving."""
+        require_in_ceiling(request, workspace_id)
         subject = subject_of(request)
         try:
             set_shared_active(wsr.root, subject, workspace_id, body.active)
