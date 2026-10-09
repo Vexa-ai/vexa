@@ -149,3 +149,30 @@ def test_bot_context_carries_effective_transcription(client):
     cfg = client.get("/user/transcription", headers={"X-API-Key": tok}).json()
     assert cfg["url"] == "https://stt-mine.example.com"
     assert cfg["token_set"] is False
+
+def test_bot_context_transcription_carries_model(client):
+    """#1338: a Settings-configured STT can name its model. The bot-context `transcription"""
+    "object carries `model` (non-secret model id, not a credential) and the Settings API"""
+    "accepts it — symmetric with the env path's TRANSCRIPTION_MODEL."""
+    uid, tok = _user_token(client, email="stt-model@vexa.ai")
+
+    # Customer backend WITHOUT a model → no model key (byte-identical to pre-fix behaviour)
+    client.put("/user/transcription", headers={"X-API-Key": tok},
+               json={"url": "https://stt-mine.example.com", "token": "tok-mine"})
+    r = client.get(f"/internal/users/{uid}/bot-context", headers=_internal())
+    tx = r.json()["transcription"]
+    assert tx["url"] == "https://stt-mine.example.com"
+    assert tx["provider"] == "customer"
+    assert "model" not in tx
+
+    # Set a model → the bot-context carries it, and the customer token is still NOT leaked
+    client.put("/user/transcription", headers={"X-API-Key": tok},
+               json={"url": "https://stt-mine.example.com", "token": "tok-mine",
+                     "model": "customer-stt-model"})
+    tx2 = client.get(f"/internal/users/{uid}/bot-context", headers=_internal()).json()["transcription"]
+    assert tx2["model"] == "customer-stt-model"
+    assert tx2["provider"] == "customer"
+    # the platform credential rule is unchanged: the customer token stays the customer's
+    assert tx2.get("token") == "tok-mine"
+
+
