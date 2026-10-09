@@ -16,6 +16,8 @@ from runtime_kernel import Runtime
 from runtime_kernel import config_preflight as cp
 from runtime_kernel.api import create_app
 
+from _caller import TOKEN, caller_client
+
 
 @pytest.fixture(autouse=True)
 def _fresh_probe_cache():
@@ -32,8 +34,9 @@ def test_declaration_loads_and_is_internally_consistent():
     # model credentials are ALTERNATIVE paths (subscription mount OR an API-style key)
     assert caps["model_inference"]["mode"] == "any"
     assert caps["model_inference"]["probe"]["kind"] == "file"
-    # the runtime has no required-explicit keys: it boots on defaults, capabilities gate features
-    assert [k for k in decl["keys"] if k["class"] == "required-explicit"] == []
+    # the runtime's one required-explicit key is its caller credential; everything else boots on
+    # defaults and capabilities gate features
+    assert [k["key"] for k in decl["keys"] if k["class"] == "required-explicit"] == ["RUNTIME_API_TOKEN"]
 
 
 def test_capability_tri_states():
@@ -150,7 +153,7 @@ def test_health_carries_capability_rows_additively(monkeypatch):
     for k in ("REDIS_URL", "BROWSER_IMAGE", "AGENT_IMAGE", "HOST_CLAUDE_CREDENTIALS",
               "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
         monkeypatch.delenv(k, raising=False)
-    app = create_app(Runtime(profiles={"test": ["sleep", "30"]}))
+    app = create_app(Runtime(profiles={"test": ["sleep", "30"]}), caller_token=TOKEN)
     r = TestClient(app).get("/health")
     assert r.status_code == 200
     body = r.json()

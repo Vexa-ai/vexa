@@ -1099,8 +1099,9 @@ def _build_production_app() -> FastAPI:
     preflight()
 
     settings = load_settings()
-    runtime = RuntimeHttpClient(settings.runtime_api_url)
-    scheduler = SchedulerHttpClient(settings.runtime_api_url)
+    runtime_token = settings.runtime_api_token.get_secret_value()
+    runtime = RuntimeHttpClient(settings.runtime_api_url, token=runtime_token)
+    scheduler = SchedulerHttpClient(settings.runtime_api_url, token=runtime_token)
     identity = LocalIdentityMinter(settings.dispatch_signing_key.get_secret_value())
     invocations_url = settings.agent_api_self_url.rstrip("/") + "/invocations"
     # Lane M: the membership index mirror (users.data.memberships[]) over the admin-api internal edge.

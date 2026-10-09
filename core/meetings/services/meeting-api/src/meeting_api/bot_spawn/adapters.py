@@ -936,6 +936,16 @@ class SqlAlchemyMeetingRepo:
             return _row_to_dict(m)
 
 
+def runtime_caller_headers(token: Optional[str] = None) -> dict:
+    """The runtime caller credential (``RUNTIME_API_TOKEN``) as request headers, for the httpx client
+    every runtime.v1 call goes through. The runtime answers 401 to any other caller, so an empty
+    token is refused here rather than discovered on the first spawn."""
+    token = token if token is not None else os.getenv("RUNTIME_API_TOKEN", "")
+    if not token:
+        raise RuntimeError("the runtime caller credential (RUNTIME_API_TOKEN) is required")
+    return {"Authorization": f"Bearer {token}"}
+
+
 class HttpRuntimeClient:
     """``RuntimeClient`` over the runtime.v1 HTTP kernel (``POST /workloads``). 429 → QuotaExceeded;
     non-201 → SpawnFailed (parent ``_spawn_via_runtime_api``)."""
@@ -1010,5 +1020,5 @@ def build_production_router(*, database_url: Optional[str] = None, runtime_api_u
 
     engine = build_engine(database_url)  # #635: env-steered pool
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    http = httpx.AsyncClient(timeout=30.0)
+    http = httpx.AsyncClient(timeout=30.0, headers=runtime_caller_headers())
     return build_router(SqlAlchemyMeetingRepo(session_factory), HttpRuntimeClient(http, runtime_api_url))

@@ -21,7 +21,8 @@ import requests_unixsocket
 from .backend import WorkloadHandle
 from .models import Resources
 from .mounts import workspace_binds
-from .profiles import Runnable
+from .profiles import ROLE_WORKER, Runnable
+from .workload_env import forwarded_worker_env
 
 MANAGED_LABEL = "runtime.managed"
 WORKLOAD_ID_LABEL = "runtime.workload_id"
@@ -242,19 +243,21 @@ class DockerBackend:
         if api_mounts:
             host_config["Mounts"] = api_mounts
 
-        # The Runtime BROKERS model credentials. Subscription credentials are mounted read-only;
-        # API-style provider env (the claude-code runner's ANTHROPIC_*) is copied from the trusted
-        # runtime service into spawned workers.
-        creds = host_claude_credentials(os.environ)
+        # The Runtime BROKERS model credentials into agent WORKERS. Subscription credentials are
+        # mounted read-only; API-style provider env (the claude-code runner's ANTHROPIC_*) is copied
+        # from the trusted runtime service below. A meeting bot reads no model credential and is
+        # given none.
+        worker = runnable.role == ROLE_WORKER
+        creds = host_claude_credentials(os.environ) if worker else None
         if creds:
             binds.append(f"{creds}:/root/.claude/.credentials.json:ro")
-        codex_creds = os.getenv("HOST_CODEX_CREDENTIALS")
+        codex_creds = os.getenv("HOST_CODEX_CREDENTIALS") if worker else None
         if codex_creds:
             binds.append(f"{codex_creds}:/root/.codex/auth.json:ro")
         # DEV hot-mount (parallels the dev.yml service hot-reload): bind the HOST agent_api source over
         # the image's baked copy so a SPAWNED worker runs the latest worker.py with NO image rebuild —
         # the next spawn picks up the change. Host path (daemon-resolved); set only in dev.
-        dev_src = os.getenv("VEXA_AGENT_SRC_MOUNT")
+        dev_src = os.getenv("VEXA_AGENT_SRC_MOUNT") if worker else None
         if dev_src:
             binds.append(f"{dev_src}:/app/src/agent_api:ro")
         if binds:
@@ -266,57 +269,10 @@ class DockerBackend:
             # agent source tree first or the bind above is decorative: `python -m worker` otherwise
             # resolves /app/worker and silently runs stale code.
             spawn_env["PYTHONPATH"] = "/app/src/agent_api:/app"
-        for key in (
-            # llm-module dials: the harness runner selection and its gate. Dispatch-stamped values
-            # win (`key not in spawn_env`). The completion dials that stood here went with the
-            # in-product inference pipeline (PRD decision 34); what remains is read by the
-            # openai-agent HARNESS inside the worker (decision 37), so it must still be forwarded.
-            # THE WORKER'S MODEL (decision 36). `engine.py` reads VEXA_AGENT_MODEL and passes it to
-            # every turn — the chat turn AND the write-back phase — so a deployment that wants
-            # Sonnet sets one value. It has to be FORWARDED or it reaches the runtime and stops
-            # there: the runtime spawns workers with this list, and a setting the worker never sees
-            # is a setting that silently does nothing while reading as configured.
-            "VEXA_AGENT_MODEL",
-            "VEXA_LLM_BASE_URL",
-            "VEXA_LLM_API_KEY",
-            "VEXA_LLM_MODEL",
-            # Server-specific request fields the OpenAI dialect cannot express. LOAD-BEARING for a
-            # self-hosted Qwen ({"chat_template_kwargs":{"enable_thinking":false}}): without it the
-            # model reasons its whole budget away and returns nothing parseable — a failure that
-            # looks like a bad model, not like a missing variable.
-            "VEXA_LLM_EXTRA_BODY",
-            "VEXA_MODEL_ALLOWLIST",
-            "VEXA_RUNNER",
-            "VEXA_MIDTURN_INJECT",
-            "VEXA_CODEX_MODEL",
-            # openai-agent harness budget dials (per-turn ceiling + context trim + streaming)
-            "VEXA_AGENT_MAX_TOOL_CALLS",
-            "VEXA_AGENT_MAX_TURN_SEC",
-            "VEXA_AGENT_CONTEXT_TOKENS",
-            "VEXA_AGENT_STREAM",
-            # The worker's reach onto the open web (the openai-agent harness's WebSearch/WebFetch).
-            # THE ENDPOINT IS THE OPERATOR'S — nothing search-shaped ships with this product — so it
-            # arrives as deployment env and has to be forwarded like every other worker-read dial: a
-            # VEXA_SEARCH_URL that stops at the runtime is a deployment that reads as configured and
-            # hands every turn no search tool at all.
-            "VEXA_SEARCH_URL",
-            "VEXA_SEARCH_DIALECT",
-            "VEXA_SEARCH_API_KEY",
-            # codex harness API-key auth (subscription auth is the read-only bind above)
-            "OPENAI_API_KEY",
-            "CODEX_API_KEY",
-            # claude-code harness credentials (that adapter's concern only)
-            "ANTHROPIC_API_KEY",
-            "ANTHROPIC_AUTH_TOKEN",
-            "ANTHROPIC_BASE_URL",
-            "ANTHROPIC_MODEL",
-            "ANTHROPIC_DEFAULT_OPUS_MODEL",
-            "ANTHROPIC_DEFAULT_SONNET_MODEL",
-            "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-        ):
-            value = os.getenv(key)
-            if value and key not in spawn_env:
-                spawn_env[key] = value
+        if worker:
+            # The Runtime BROKERS model credentials and worker dials into agent workers (never into
+            # meeting bots, which read none). A dispatch-stamped value wins.
+            spawn_env.update(forwarded_worker_env(os.environ, spawn_env))
 
         payload: dict[str, Any] = {
             "Image": runnable.image,

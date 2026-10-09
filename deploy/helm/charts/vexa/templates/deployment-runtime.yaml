@@ -72,11 +72,24 @@ spec:
               value: {{ .Values.runtime.speakerStream.maxBufferSec | default "" | quote }}
             - name: BOT_SPEAKER_IDLE_TIMEOUT_SEC
               value: {{ .Values.runtime.speakerStream.idleTimeoutSec | default "" | quote }}
-            - name: INTERNAL_API_SECRET
+            # The runtime caller credential: every route but /health requires it as a bearer. The
+            # runtime refuses to boot without it.
+            - name: RUNTIME_API_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: {{ include "vexa.adminTokenSecretName" . }}
-                  key: INTERNAL_API_SECRET
+                  key: RUNTIME_API_TOKEN
+            # The workspace store as the RUNTIME serves it — never as a workload spec describes it.
+            # Every mount a spec declares must sit under the target; the only out-of-store source a
+            # spec may name is the _global tier agent-api is configured with.
+            {{- if .Values.agentApi.enabled }}
+            - name: VEXA_WORKSPACE_MOUNT_SOURCE
+              value: {{ include "vexa.componentName" (list . "agent-workspaces") | quote }}
+            {{- end }}
+            - name: VEXA_WORKSPACE_MOUNT_TARGET
+              value: "/workspaces"
+            - name: VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH
+              value: {{ .Values.agentApi.globalSystemWorkspacePath | default "" | quote }}
             - name: ANTHROPIC_API_KEY
               valueFrom:
                 secretKeyRef:

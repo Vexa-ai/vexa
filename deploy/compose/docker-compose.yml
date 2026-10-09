@@ -225,7 +225,17 @@ services:
       - ANTHROPIC_DEFAULT_OPUS_MODEL=${ANTHROPIC_DEFAULT_OPUS_MODEL:-}
       - ANTHROPIC_DEFAULT_SONNET_MODEL=${ANTHROPIC_DEFAULT_SONNET_MODEL:-}
       - ANTHROPIC_DEFAULT_HAIKU_MODEL=${ANTHROPIC_DEFAULT_HAIKU_MODEL:-}
-      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET}
+      # The runtime caller credential: every route but /health requires it, and agent-api and
+      # meeting-api present it. No default — the runtime refuses to boot without one (mint-dev-env.sh
+      # mints it into .env). No spawned workload receives it.
+      - RUNTIME_API_TOKEN=${RUNTIME_API_TOKEN:-}
+      # The workspace store as the RUNTIME serves it: what backs it (the named volume agent-api also
+      # mounts) and where it sits inside a worker. A workload spec cannot move either; every mount a
+      # spec declares must sit under the target, and the only out-of-store source it may name is the
+      # _global tier below.
+      - VEXA_WORKSPACE_MOUNT_SOURCE=${COMPOSE_PROJECT_NAME:-vexa-v012}_agent-workspaces
+      - VEXA_WORKSPACE_MOUNT_TARGET=/workspaces
+      - VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH=${VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH:-}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       # Spawn the bot onto THIS compose network so it resolves meeting-api:8080 (lifecycle callback)
       # + redis. Must equal the project-prefixed network name (DockerBackend → HostConfig.NetworkMode).
@@ -336,6 +346,9 @@ services:
       # `INTERNAL_API_SECRET` and marks `VEXA_INTERNAL_API_SECRET` DEPRECATED ("no deploy surface
       # sets it on agent-api any more"), so the A19 fix rides the spelling this service reads.
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-}
+      # The runtime caller credential agent-api presents on every runtime.v1 / schedule.v1 call.
+      # Required; the same value the runtime and meeting-api hold.
+      - RUNTIME_API_TOKEN=${RUNTIME_API_TOKEN:-}
       # gateway-identity.v1: the gateway's PUBLIC key, which verifies its X-Vexa-Identity. agent-api
       # believes an x-user-* header only with that signature (or from the internal tier above), can
       # check it and cannot make one, and forwards it unchanged to the credential broker. Written by
@@ -489,6 +502,9 @@ services:
       - DB_PASSWORD=${DB_PASSWORD:-postgres}
       - REDIS_URL=redis://redis:6379/0
       - RUNTIME_API_URL=http://runtime:8090
+      # The runtime caller credential meeting-api presents on every runtime.v1 call. Required; the
+      # same value the runtime and agent-api hold. Never placed in a bot invocation.
+      - RUNTIME_API_TOKEN=${RUNTIME_API_TOKEN:-}
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET}
       # gateway-identity.v1: the gateway's PUBLIC key — the owner, bot limit, memberships and webhook
       # meeting-api reads come from a signature it verifies (or the internal tier), never a bare

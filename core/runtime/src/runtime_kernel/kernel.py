@@ -8,7 +8,10 @@ serializable, so they live in a process-local map keyed by workloadId; on a fres
 simply absent, and the reloaded statuses describe what was running before the restart.
 
 Quotas (O-RT-2): create() rejects the N+1th active workload for an owner via the store's
-count_for_owner."""
+count_for_owner.
+
+The environment a backend receives is built by workload_env: the caller's env minus the keys only
+the runtime may set, its mount set checked against the runtime's own workspace store."""
 from __future__ import annotations
 
 import time
@@ -20,6 +23,7 @@ from .clock import Clock, SystemClock
 from .models import RuntimeEvent, RuntimeState, StopReason, WorkloadSpec, WorkloadStatus
 from .process_backend import ProcessBackend
 from .profiles import Profile, ProfileRegistry, Runnable, default_registry
+from .workload_env import StoreConfig, workload_env
 from .store import (
     InMemoryStore,
     OwnerResolver,
@@ -67,8 +71,11 @@ class Runtime:
         clock: Optional[Clock] = None,
         owner_resolver: OwnerResolver = default_owner,
         owner_quota: Optional[int] = None,
+        workspace_store: Optional[StoreConfig] = None,
     ) -> None:
         self.backend: Backend = backend or ProcessBackend()
+        # The workspace store as THIS runtime is configured to serve it (never as a spec describes it).
+        self.workspace_store: StoreConfig = workspace_store or StoreConfig.from_env()
         # `profiles` accepts a ProfileRegistry, a plain {name: Runnable|command} dict (legacy/tests),
         # or None (the real default registry). We normalize to a ProfileRegistry.
         self.profiles: ProfileRegistry = _coerce_registry(profiles)
@@ -177,6 +184,12 @@ class Runtime:
         if profile is None:
             raise ValueError(f"unknown profile: {spec.profile!r}")
         runnable = profile.runnable
+        # The profile's base_env is the deployment-wide floor (e.g. meeting-bot's BOT_SPEAKER_*
+        # tuning, rendered onto the runtime pod by the chart); the per-workload spec.env is layered
+        # on top so an explicit spec value always wins (issue #771). Keys only the runtime may set
+        # are dropped and the mount set is checked here — a refused mount is a 400 that never
+        # reaches the substrate or the store.
+        effective_env = workload_env({**profile.base_env, **spec.env}, self.workspace_store)
 
         # Quota check (O-RT-2): reject the N+1th active workload for this owner.
         if self.owner_quota is not None:
@@ -191,11 +204,6 @@ class Runtime:
         self._persist(spec, status)
         self._emit(spec.workloadId, RuntimeState.starting)
         try:
-            # The profile's base_env is the deployment-wide floor (e.g. meeting-bot's BOT_SPEAKER_*
-            # tuning, rendered onto the runtime pod by the chart); the per-workload spec.env is
-            # layered on top so an explicit spec value always wins. Without this merge the base_env
-            # never reaches the spawned pod and chart-set tuning is dead config (issue #771).
-            effective_env = {**profile.base_env, **spec.env}
             # Resource intent must cross the Backend port or it is dead contract: the schema accepts
             # `resources`, and a quota-controlled namespace rejects every container that declares
             # none. The spec's own sizing wins; otherwise the profile's deployment default (the

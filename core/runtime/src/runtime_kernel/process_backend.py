@@ -28,7 +28,8 @@ from .backend import WorkloadHandle
 from .isolation import apply_process_isolation, child_env_for, plan_process_isolation, preexec_for
 from .models import Resources
 from .mounts import mount_set
-from .profiles import Runnable
+from .profiles import ROLE_WORKER, Runnable
+from .workload_env import child_environment
 
 log = logging.getLogger("runtime_kernel.process")
 
@@ -101,7 +102,12 @@ class ProcessBackend:
             log.info("workload %s: %d active workspace mounts: %s",
                      workload_id, len(mounts), ", ".join(m.get("slug", "?") for m in mounts))
         preexec = None
-        child_env = {**os.environ, **env}
+        # The child's environment is built from scratch (workload_env.child_environment): host
+        # plumbing, the worker forward list for an agent worker, and the workload's own env. The
+        # runtime's own environment — its caller token, and whatever service secrets the host
+        # process was started with — never reaches a child.
+        base_env = child_environment(env, worker=runnable.role == ROLE_WORKER)
+        child_env = base_env
         try:
             iso = plan_process_isolation(env)
             if iso is not None:
@@ -114,7 +120,7 @@ class ProcessBackend:
             # a broken store layout must not brick dispatch — but say exactly what didn't apply
             log.error("workload %s: isolation setup failed (%s) — spawning shared-trust", workload_id, e)
             preexec = None
-            child_env = {**os.environ, **env}
+            child_env = base_env
         # Capture the child's output to a per-workload file (both streams interleaved, like
         # `docker logs`). Fail-open: if the log dir is unwritable we fall back to DEVNULL rather
         # than refusing to start the workload.

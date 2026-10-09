@@ -25,6 +25,13 @@ class Settings(BaseSettings):
     # The agent worker is spawned via runtime.v1 under this opaque profile (P11); routine jobs are
     # registered on the same runtime's schedule.v1 surface.
     runtime_api_url: str = "http://runtime-api:8090"
+    # The runtime caller credential, presented as a bearer on every runtime.v1 / schedule.v1 call.
+    # ONE NAME across the runtime, agent-api and meeting-api (the compose/helm secret key), hence the
+    # explicit alias past the VEXA_ prefix. Required at boot (config.v1 required-explicit).
+    runtime_api_token: SecretStr = Field(
+        default=SecretStr(""),
+        validation_alias=AliasChoices("RUNTIME_API_TOKEN"),
+    )
     agent_profile: str = "agent"
     # How the runtime's scheduler reaches THIS service's /invocations sink when a routine fires.
     agent_api_self_url: str = "http://agent-api:8100"

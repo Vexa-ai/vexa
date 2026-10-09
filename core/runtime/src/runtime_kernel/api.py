@@ -5,15 +5,20 @@ RuntimeEvents to each workload's callbackUrl. A thin FastAPI surface over the ke
 O-RT-2 additions:
   • /health — 200 when the backend + store are reachable and the scheduler (if wired) is live; 503 otherwise.
   • durable callback delivery — events go through a CallbackQueue (enqueue + retry-until-ack), replacing
-    the old fire-once POST. A receiver that 500s is retried on the next sweep until it acks."""
+    the old fire-once POST. A receiver that 500s is retried on the next sweep until it acks.
+
+Every route except /health requires the runtime caller credential (caller_auth): the workload and
+schedule surfaces start processes and fire requests on a caller's word, so only the control plane
+may drive them."""
 from __future__ import annotations
 
 from typing import Callable, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import APIRouter, Depends, FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from .caller_auth import bearer_guard
 from .callbacks import CallbackQueue
 from .kernel import QuotaExceeded, Runtime, StartFailed
 from .models import RuntimeEvent, StopReason, WorkloadSpec
@@ -60,7 +65,11 @@ def create_app(
     callback_queue: Optional[CallbackQueue] = None,
     health_checks: Optional[dict[str, HealthCheck]] = None,
     scheduler: Optional[Scheduler] = None,
+    *,
+    caller_token: str,
 ) -> FastAPI:
+    """``caller_token`` is the bearer credential every route but ``/health`` requires. There is no
+    unauthenticated mode: an empty token raises before any route exists."""
     rt = runtime or Runtime()
     queue = callback_queue or CallbackQueue()
     sink = deliver or _queue_deliver(rt, queue)
@@ -82,6 +91,8 @@ def create_app(
     # the same trace as the meeting-api/agent-api request that asked for the workload.
     app.add_middleware(TraceMiddleware)
     dump = lambda s: s.model_dump(exclude_none=True)
+    # The control-plane surface: every route registered on `guarded` requires the caller credential.
+    guarded = APIRouter(dependencies=[Depends(bearer_guard(caller_token))])
 
     @app.get("/health")
     def health():
@@ -102,7 +113,7 @@ def create_app(
                 "capabilities": capability_health()}
         return JSONResponse(body, status_code=200 if healthy else 503)
 
-    @app.post("/workloads", status_code=201)
+    @guarded.post("/workloads", status_code=201)
     def create(spec: WorkloadSpec):
         try:
             status = rt.create(spec)
@@ -141,25 +152,25 @@ def create_app(
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
 
-    @app.get("/workloads")
+    @guarded.get("/workloads")
     def list_workloads():
         return [dump(s) for s in rt.list()]
 
-    @app.get("/workloads/{workload_id}")
+    @guarded.get("/workloads/{workload_id}")
     def get(workload_id: str):
         try:
             return dump(rt.get(workload_id))
         except KeyError:
             raise HTTPException(status_code=404, detail="unknown workload")
 
-    @app.post("/workloads/{workload_id}/stop")
+    @guarded.post("/workloads/{workload_id}/stop")
     def stop(workload_id: str, body: StopBody = StopBody()):
         try:
             return dump(rt.stop(workload_id, body.reason or StopReason.stopped))
         except KeyError:
             raise HTTPException(status_code=404, detail="unknown workload")
 
-    @app.delete("/workloads/{workload_id}")
+    @guarded.delete("/workloads/{workload_id}")
     def destroy(workload_id: str):
         try:
             return dump(rt.destroy(workload_id))
@@ -172,7 +183,7 @@ def create_app(
             raise HTTPException(status_code=503, detail="scheduler not wired")
         return scheduler
 
-    @app.post("/schedule", status_code=201)
+    @guarded.post("/schedule", status_code=201)
     def schedule_job(spec: dict):
         """Register a schedule.v1 job (one-shot ``execute_at`` or re-arming ``cron``). The job's
         ``request`` is the HTTP call fired when due — for a routine, a unit.v1 Invocation POSTed to
@@ -183,17 +194,18 @@ def create_app(
         except ValueError as e:  # missing request.url / execute_at|cron — fail loud (P18)
             raise HTTPException(status_code=400, detail=str(e))
 
-    @app.get("/schedule")
+    @guarded.get("/schedule")
     def list_jobs(status: Optional[str] = None, limit: int = 50):
         return _require_scheduler().list(status=status, limit=limit)
 
-    @app.delete("/schedule/{job_id}")
+    @guarded.delete("/schedule/{job_id}")
     def cancel_job(job_id: str):
         cancelled = _require_scheduler().cancel(job_id)
         if cancelled is None:
             raise HTTPException(status_code=404, detail="unknown job")
         return cancelled
 
+    app.include_router(guarded)
     return app
 
 

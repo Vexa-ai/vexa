@@ -111,7 +111,22 @@ def test_preflight_refuses_a_secretless_or_placeheld_internal_tier():
     cp.preflight({"INTERNAL_API_SECRET": "a-real-secret", **IDENTITY})
 
 
-IDENTITY = {"VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE": "/run/vexa-identity/public/key.pem"}
+RUNTIME_TOKEN = "runtime-caller-token-for-tests-0123456789abcdef"
+IDENTITY = {"VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE": "/run/vexa-identity/public/key.pem",
+            "RUNTIME_API_TOKEN": RUNTIME_TOKEN}
+
+
+def test_preflight_refuses_a_boot_that_cannot_reach_the_runtime():
+    """Every worker spawn and routine job presents the runtime caller credential; the runtime refuses
+    any other caller, so a boot without one (or with a published placeholder) refuses."""
+    base = {"INTERNAL_API_SECRET": "a-real-secret",
+            "VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE": "/run/vexa-identity/public/key.pem"}
+    with pytest.raises(cp.ConfigError) as ei:
+        cp.preflight(base)
+    assert "RUNTIME_API_TOKEN" in str(ei.value)
+    with pytest.raises(cp.ConfigError):
+        cp.preflight({**base, "RUNTIME_API_TOKEN": "changeme"})
+    cp.preflight({**base, "RUNTIME_API_TOKEN": RUNTIME_TOKEN})
 
 
 def test_preflight_refuses_a_boot_that_cannot_verify_identity():
@@ -149,6 +164,7 @@ def test_preflight_reports_capability_rows(monkeypatch):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("INTERNAL_API_SECRET", "a-real-secret")
     monkeypatch.setenv("VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE", "/run/vexa-identity/public/key.pem")
+    monkeypatch.setenv("RUNTIME_API_TOKEN", RUNTIME_TOKEN)
     report = cp.preflight()
     assert report["service"] == "agent-api"
     assert report["capabilities"]["bot_gateway"]["state"] == cp.NOT_CONFIGURED
@@ -260,7 +276,8 @@ def test_the_qwen_lane_dials_are_declared():
 # (ADR-0040) they are plumbed on compose and helm, and gate:config-contract holds them there.
 # 104: +1 VEXA_AGENT_MAX_CHAT_CONTINUATIONS — the bound on VEXA_AGENT_AUTO_CONTINUE_CHAT, and both
 # now plumbed on compose, helm and lite (they were `targets: []`, so no standard install could set them).
-EXPECTED_DECLARED_KEYS = 104
+# 105: +1 RUNTIME_API_TOKEN — the runtime caller credential every runtime.v1 / schedule.v1 call presents.
+EXPECTED_DECLARED_KEYS = 105
 
 
 def test_connections_keys_are_capabilities_on_real_surfaces():

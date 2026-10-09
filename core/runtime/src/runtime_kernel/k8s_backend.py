@@ -17,7 +17,7 @@ from typing import Optional
 from .backend import WorkloadHandle
 from .models import Resources
 from .mounts import k8s_volume_mounts
-from .profiles import Runnable
+from .profiles import ROLE_WORKER, Runnable
 
 MANAGED_LABEL = "runtime.managed"
 WORKLOAD_ID_LABEL = "runtime.workload_id"
@@ -89,7 +89,7 @@ def _stop_grace_sec() -> int:
         return 30
 
 
-def pod_overrides(env: dict[str, str], *, container_name: str) -> Optional[dict]:
+def pod_overrides(env: dict[str, str], *, container_name: str, worker: bool = False) -> Optional[dict]:
     """The env-derived OVERLAY ``build_pod`` merges onto a spawned Pod's spec. It carries two
     independent seams:
 
@@ -102,15 +102,16 @@ def pod_overrides(env: dict[str, str], *, container_name: str) -> Optional[dict]
     The overlay is built whenever EITHER seam is present; returns None only when neither is (nothing
     to merge). Building it for scheduling alone is load-bearing: a plain meeting bot has no workspace
     PVC, so a volumes-only early return would silently drop its tolerations and re-create the bug.
-    Pure/env-driven → unit-tested offline (no kubectl)."""
+    ``worker`` (the profile's class, never the spec) decides whether the runtime's credential-file
+    Secrets are mounted: agent workers only. Pure/env-driven → unit-tested offline (no kubectl)."""
     pvc = env.get("VEXA_WORKSPACE_MOUNT_SOURCE")
     root = env.get("VEXA_WORKSPACE_MOUNT_TARGET")
     volumes, volume_mounts = k8s_volume_mounts(env, pvc_name=pvc or "", store_target=root or "")
     tolerations = _scheduling_json(env, TOLERATIONS_ENV, list)
     node_selector = _scheduling_json(env, NODE_SELECTOR_ENV, dict)
-    # credential files go to AGENT WORKERS only (a dispatch env carries VEXA_UNIT_ID); a meeting
-    # bot never needs a model credential and must not carry one
-    secret_mounts = _scheduling_json(env, SECRET_MOUNTS_ENV, list) if env.get("VEXA_UNIT_ID") else None
+    # credential files go to AGENT WORKERS only (the agent profile's class); a meeting bot never
+    # needs a model credential and must not carry one
+    secret_mounts = _scheduling_json(env, SECRET_MOUNTS_ENV, list) if worker else None
     for i, sm in enumerate(secret_mounts or ()):
         if not (isinstance(sm, dict) and sm.get("secret") and sm.get("mountPath")):
             raise ValueError(f"{SECRET_MOUNTS_ENV}[{i}] must be {{secret, mountPath[, file]}}, got {sm!r}")
@@ -229,21 +230,25 @@ def build_pod(
         # Adoption labels (the orphaned-live-bot fix): a recreated runtime re-discovers its
         # still-running Pods by this label pair and re-registers them (see the kernel's adopt()).
         "labels": {MANAGED_LABEL: "true", WORKLOAD_ID_LABEL: workload_id,
-                   **_role_labels(workload_id)},
+                   **_role_labels(runnable)},
     }
     if namespace:
         metadata["namespace"] = namespace
 
     # restart=Never: the kernel owns restart policy, so the Pod must not resurrect itself.
+    # A workload is not a cluster client: it gets no ServiceAccount token, and no service-link env
+    # enumerating every Service in the namespace.
     pod: dict = {
         "apiVersion": "v1",
         "kind": "Pod",
         "metadata": metadata,
-        "spec": {"containers": [container], "restartPolicy": "Never"},
+        "spec": {"containers": [container], "restartPolicy": "Never",
+                 "automountServiceAccountToken": False, "enableServiceLinks": False},
     }
 
     overlay_source = env if overlay_env is None else overlay_env
-    overlay = (pod_overrides(overlay_source, container_name=name) or {}).get("spec", {})
+    overlay = (pod_overrides(overlay_source, container_name=name,
+                             worker=runnable.role == ROLE_WORKER) or {}).get("spec", {})
     for key in ("volumes", "tolerations", "nodeSelector"):
         if overlay.get(key):
             pod["spec"][key] = overlay[key]
@@ -256,16 +261,17 @@ def build_pod(
     return pod
 
 
-#: The label that tells an agent WORKER apart from every other workload — the same key and value the
-#: docker backend stamps (`docker_backend._worker_naming`). The chart's NetworkPolicy lets
-#: runtime-managed pods reach meeting-api for their lifecycle callbacks and uploads EXCEPT workers,
-#: which act through the gateway and have no business on an internal service.
+#: The label naming a workload's class — ``worker`` (an agent worker) or ``bot`` (a meeting bot) —
+#: taken from the PROFILE that runs it, never from the caller's workload id. The chart's
+#: NetworkPolicies key on it: meeting-api admits runtime-managed pods for their lifecycle callbacks
+#: and uploads EXCEPT workers, which act through the gateway and have no business on an internal
+#: service, and each class has its own egress policy.
 ROLE_LABEL = "vexa.role"
 
 
-def _role_labels(workload_id: str) -> dict:
-    """``{vexa.role: worker}`` for an agent-dispatch workload (``agent-…``), nothing otherwise."""
-    return {ROLE_LABEL: "worker"} if workload_id.startswith("agent-") else {}
+def _role_labels(runnable: Runnable) -> dict:
+    """``{vexa.role: <class>}`` from the profile's runnable; nothing for a classless test runnable."""
+    return {ROLE_LABEL: runnable.role} if runnable.role else {}
 
 
 class K8sBackend:

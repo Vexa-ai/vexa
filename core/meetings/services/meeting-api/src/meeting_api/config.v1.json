@@ -18,6 +18,21 @@
    ]
   },
   {
+   "key": "RUNTIME_API_TOKEN",
+   "class": "required-explicit",
+   "secret": true,
+   "description": "the runtime caller credential meeting-api presents (`Authorization: Bearer`) on every runtime.v1 call — bot spawns, liveness probes, teardown. The runtime refuses any other caller; the same value is set on the runtime and on agent-api, and never placed in a bot invocation. Unset, the boot refuses: every POST /bots would be refused by the runtime",
+   "forbidden_values": [
+    "vexa-internal-secret",
+    "lite-internal-secret",
+    "changeme",
+    "change-me",
+    "CHANGE-ME",
+    "default",
+    "secret"
+   ]
+  },
+  {
    "key": "VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE",
    "class": "required-explicit",
    "description": "gateway-identity.v1 verification key: a file holding the gateway's Ed25519 PUBLIC key (SubjectPublicKeyInfo PEM). meeting-api rebuilds every x-user-* header (owner, bot limit, workspace memberships, webhook) from a verified signature and refuses (401) one that is neither signed nor carried by the internal tier. It verifies and cannot sign; a private key in this file refuses the boot, as does a missing file or any other key type. Generated at install with the gateway's signing key: compose's identity-keys one-shot, the Helm identity-keys ConfigMap, the Lite entrypoint"

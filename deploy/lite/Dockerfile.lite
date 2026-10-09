@@ -265,10 +265,10 @@ COPY licenses/onnx-community-pyannote-segmentation-3.0.LICENSE.txt /opt/hf-cache
 COPY --from=terminal-builder /app/terminal /app/terminal
 
 # ── Launchers, supervisor config, entrypoint ──────────────────────────────────────────────────────
-COPY deploy/lite/bin/vexa-bot-launch deploy/lite/bin/vexa-agent-worker deploy/lite/bin/setup-pulseaudio-sinks.sh deploy/lite/bin/provision-key.sh deploy/lite/bin/persisted-secret /usr/local/bin/
+COPY deploy/lite/bin/vexa-bot-launch deploy/lite/bin/vexa-agent-worker deploy/lite/bin/vexa-runtime deploy/lite/bin/setup-pulseaudio-sinks.sh deploy/lite/bin/provision-key.sh deploy/lite/bin/persisted-secret /usr/local/bin/
 COPY deploy/lite/supervisord.conf /etc/supervisor/conf.d/vexa.conf
 COPY deploy/lite/entrypoint.sh /entrypoint.sh
-RUN chmod +x /usr/local/bin/vexa-bot-launch /usr/local/bin/vexa-agent-worker \
+RUN chmod +x /usr/local/bin/vexa-bot-launch /usr/local/bin/vexa-agent-worker /usr/local/bin/vexa-runtime \
       /usr/local/bin/setup-pulseaudio-sinks.sh /usr/local/bin/provision-key.sh \
       /usr/local/bin/persisted-secret /entrypoint.sh
 

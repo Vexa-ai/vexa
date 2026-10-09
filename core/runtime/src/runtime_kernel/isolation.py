@@ -57,7 +57,8 @@ def plan_process_isolation(env: Mapping[str, str], *, euid: Optional[int] = None
         euid = os.geteuid()
     subject = (env.get("VEXA_OWNER") or "").strip()
     mounts = mount_set(env)
-    root = env.get("VEXA_WORKSPACE_MOUNT_TARGET") or env.get("VEXA_WORKSPACES_DIR") or ""
+    # The store root is the runtime's own (workload_env injects it); a dispatch cannot move it.
+    root = env.get("VEXA_WORKSPACE_MOUNT_TARGET") or ""
     if not root:
         # the process backend serves bots too (no workspace env) — nothing to isolate, not an error
         return None if not mounts else _unavailable("no workspace store root in the dispatch env")

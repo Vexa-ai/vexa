@@ -852,6 +852,7 @@ def test_startup_requires_admin_token(monkeypatch):
 
     monkeypatch.delenv("ADMIN_TOKEN", raising=False)
     monkeypatch.setenv("VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE", "/run/vexa-identity/public/key.pem")
+    monkeypatch.setenv("RUNTIME_API_TOKEN", "runtime-caller-token-for-tests-0123456789abcdef")
     with pytest.raises(RuntimeError) as ei:
         entry._require_config()
     msg = str(ei.value)
@@ -913,3 +914,27 @@ def test_spawn_reconciles_a_stop_that_raced_the_boot():
                     json={"platform": "google_meet", "native_meeting_id": "raced-spawn"})
     assert r.status_code == 201, r.text
     assert runtime.deleted, "spawn must tear down the workload when a stop raced its boot (no orphan)"
+
+
+async def test_the_runtime_client_presents_the_caller_credential(monkeypatch):
+    """Every runtime.v1 call meeting-api makes carries the runtime caller credential; the runtime
+    answers 401 to anything else, so a missing credential is refused when the client is built."""
+    import httpx
+    import pytest
+
+    from meeting_api.bot_spawn.adapters import HttpRuntimeClient, runtime_caller_headers
+
+    monkeypatch.delenv("RUNTIME_API_TOKEN", raising=False)
+    with pytest.raises(RuntimeError):
+        runtime_caller_headers()
+    monkeypatch.setenv("RUNTIME_API_TOKEN", "runtime-caller-token-for-tests-0123456789abcdef")
+    seen = []
+
+    def handler(request):
+        seen.append(request.headers.get("authorization"))
+        return httpx.Response(201, json={"workloadId": "mtg-1-abc", "state": "starting"})
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler), headers=runtime_caller_headers())
+    await HttpRuntimeClient(http, "http://runtime:8090").create_workload(
+        {"workloadId": "mtg-1-abc", "profile": "meeting-bot", "env": {}})
+    assert seen == ["Bearer runtime-caller-token-for-tests-0123456789abcdef"]

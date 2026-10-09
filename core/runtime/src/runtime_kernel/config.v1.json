@@ -37,6 +37,21 @@
       "description": "uvicorn/app log level"
     },
     {
+      "key": "RUNTIME_API_TOKEN",
+      "class": "required-explicit",
+      "secret": true,
+      "description": "the runtime caller credential: every route except /health requires it as `Authorization: Bearer`, because the workload and schedule surfaces start containers, Pods and processes and fire requests on a caller's word. agent-api and meeting-api hold the same value; no spawned workload receives it. Unset, shorter than 32 bytes, or a published placeholder ⇒ the runtime refuses to boot rather than serve the API open. Minted at install: compose's mint-dev-env.sh, the Helm chart Secret, the Lite entrypoint",
+      "forbidden_values": [
+        "vexa-internal-secret",
+        "lite-internal-secret",
+        "changeme",
+        "change-me",
+        "CHANGE-ME",
+        "default",
+        "secret"
+      ]
+    },
+    {
       "key": "REDIS_URL",
       "class": "capability",
       "capability": "scheduler",
@@ -81,6 +96,37 @@
       "default": "(backend default)",
       "description": "shm-size for spawned browser-bot containers",
       "targets": []
+    },
+    {
+      "key": "VEXA_WORKSPACE_MOUNT_SOURCE",
+      "class": "defaulted",
+      "default": "(unset — no store backing: in-store workspace mounts are not bound)",
+      "description": "what backs the agent workspace store on the substrate — a host path or named volume (docker backend), the PVC claim name (k8s backend); the process backend shares the filesystem and needs none. The RUNTIME's own value: a workload spec's VEXA_WORKSPACE_MOUNT_* keys are discarded, and this is injected into every spec that declares a mount set",
+      "targets": [
+        "compose",
+        "helm"
+      ]
+    },
+    {
+      "key": "VEXA_WORKSPACE_MOUNT_TARGET",
+      "class": "defaulted",
+      "default": "/workspaces",
+      "description": "where the workspace store sits inside a workload (agent-api's VEXA_WORKSPACES_DIR). Every mount a spec declares must sit strictly under it, or the create is refused (400); on the process backend it is also the root the POSIX tenant isolation seals",
+      "targets": [
+        "compose",
+        "helm",
+        "lite"
+      ]
+    },
+    {
+      "key": "VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH",
+      "class": "defaulted",
+      "default": "(unset — the _global tier lives in the store; no out-of-store mount source is served)",
+      "description": "the one host path a spec's mount may name as its own `source`: the _global organisation tier when it is provisioned OUTSIDE the workspace store (the same value agent-api is given). Any other mount source refuses the create (400)",
+      "targets": [
+        "compose",
+        "helm"
+      ]
     },
     {
       "key": "RUNTIME_STOP_GRACE_SEC",
@@ -493,11 +539,5 @@
         }
       }
     }
-  },
-  "surface_only": [
-    {
-      "key": "INTERNAL_API_SECRET",
-      "reason": "set on the runtime by compose/helm/lite but never read by runtime code (the internal-call secret is a gateway↔admin-api↔meeting-api concern) — documented drift surfaced by gate:config-contract; candidate for a deploy-surface cleanup"
-    }
-  ]
+  }
 }

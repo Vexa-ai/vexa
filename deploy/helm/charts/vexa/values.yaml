@@ -93,6 +93,10 @@ secrets:
   mcpDelegationSecret: ""           # the worker toolbelt: agent-api signs each worker's delegation token,
                                     # identity verifies it. Generated at install like the one above; with
                                     # existingSecretName, carry VEXA_MCP_DELEGATION_SECRET.
+  runtimeApiToken: ""               # the runtime caller credential (RUNTIME_API_TOKEN, 32+ bytes): the
+                                    # runtime refuses every workload/schedule call without it; only
+                                    # agent-api and meeting-api hold it. Empty → kept from this release's
+                                    # Secret, else generated; with existingSecretName, carry RUNTIME_API_TOKEN.
   botApiKey: ""                     # agent-api → gateway "add bot from URL" key (optional)
   mailSmtpPassword: ""              # the mail relay's AUTH password (VEXA_MAIL_SMTP_PASSWORD; see terminal.mail)
   nextauthSecret: ""                # terminal sign-in signing secret (32+ bytes, never a published

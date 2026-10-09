@@ -11,6 +11,9 @@ Conforms to `runtime.v1` (and `schedule.v1` for the scheduler). Files:
 - `enforcement` — the reaper: stops workloads past idle/max-lifetime limits via the Clock.
 - `scheduler` — the redis sorted-set job scheduler (one-shot/cron, retry/backoff, idempotency, orphan recovery).
 - `callbacks` — durable RuntimeEvent delivery (a CallbackQueue that retries until the receiver acks).
+- `workload_env` — what a spec may carry versus what the runtime decides: runtime-owned keys dropped,
+  the mount set checked against the runtime's own workspace store, the process backend's child env.
+- `caller_auth` — the runtime caller credential (`RUNTIME_API_TOKEN`) every route but `/health` requires.
 - `api` — the FastAPI surface (create/get/list/stop/destroy + `/health`).
 
 Depends on nothing above it.

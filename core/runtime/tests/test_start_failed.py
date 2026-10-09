@@ -16,6 +16,8 @@ from fastapi.testclient import TestClient
 
 from runtime_kernel import Runtime, RuntimeState, StartFailed, StopReason, WorkloadSpec
 from runtime_kernel.api import create_app
+
+from _caller import TOKEN, caller_client
 from runtime_kernel.backend import WorkloadHandle
 
 _MISSING_IMAGE_MSG = "docker create vexa-w1 failed (404): No such image: vexaai/vexa-bot:dev"
@@ -71,8 +73,8 @@ def test_post_workloads_dead_at_start_is_502_not_a_false_201(capsys):
     """API level (the point of introduction): ``POST /workloads`` for a dead-at-start workload is a
     502 naming the missing image — NOT a bare 201 — and logs ``workload_spawn_failed``, never
     ``workload_spawned``."""
-    app = create_app(Runtime(backend=_DeadAtStartBackend(), profiles={"bot": ["run"]}))
-    client = TestClient(app)
+    app = create_app(Runtime(backend=_DeadAtStartBackend(), profiles={"bot": ["run"]}), caller_token=TOKEN)
+    client = caller_client(app)
 
     r = client.post("/workloads", json={"workloadId": "w1", "profile": "bot", "env": {}})
 
@@ -95,6 +97,6 @@ def test_post_workloads_healthy_spawn_still_201():
         def exit_code(self, h):
             return None
 
-    app = create_app(Runtime(backend=_OkBackend(), profiles={"bot": ["run"]}))
-    r = TestClient(app).post("/workloads", json={"workloadId": "w1", "profile": "bot", "env": {}})
+    app = create_app(Runtime(backend=_OkBackend(), profiles={"bot": ["run"]}), caller_token=TOKEN)
+    r = caller_client(app).post("/workloads", json={"workloadId": "w1", "profile": "bot", "env": {}})
     assert r.status_code == 201 and r.json()["state"] == "running"

@@ -45,10 +45,14 @@ def classify_workload(status: dict) -> dict:
     return out
 
 
-def fetch_workloads(runtime_api_url: str, *, timeout: float = 5.0) -> list[dict]:
+def fetch_workloads(runtime_api_url: str, *, token: str, timeout: float = 5.0) -> list[dict]:
     """``GET {runtime}/workloads`` — every managed container (agent workers + meeting bots) with
-    state/ports/exit info. Raises on transport errors; the route types them into the response."""
-    req = urllib.request.Request(f"{runtime_api_url.rstrip('/')}/workloads", method="GET")
+    state/ports/exit info, asked with the runtime caller credential. Raises on transport errors and
+    on a missing credential; the route types them into the response."""
+    from shared.adapters import runtime_caller_headers
+
+    req = urllib.request.Request(f"{runtime_api_url.rstrip('/')}/workloads",
+                                 headers=runtime_caller_headers(token), method="GET")
     with urllib.request.urlopen(req, timeout=timeout) as r:  # noqa: S310 — internal service URL from Settings
         rows = json.loads(r.read())
     return [classify_workload(s) for s in rows if isinstance(s, dict)]

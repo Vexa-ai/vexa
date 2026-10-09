@@ -82,6 +82,13 @@ spec:
                 secretKeyRef:
                   name: {{ include "vexa.adminTokenSecretName" . }}
                   key: INTERNAL_API_SECRET
+            # The runtime caller credential meeting-api presents on every runtime.v1 call. Never
+            # placed in a bot invocation.
+            - name: RUNTIME_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: RUNTIME_API_TOKEN
             # gateway-identity.v1: the gateway's PUBLIC key (the identity-public-key ConfigMap, mounted
             # below). This service verifies the gateway's signature and cannot make one.
             - name: VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE

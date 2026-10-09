@@ -30,8 +30,8 @@ make bot      # build the meeting bot FROM SOURCE — required before a bot can 
 ```
 
 `make all` seeds `.env` from `.env.example`, mints the secrets the services refuse to boot without
-(`INTERNAL_API_SECRET`, `VEXA_FLOWS_API_KEY`, `VEXA_FLOWS_TIMELINE_KEY`, `NEXTAUTH_SECRET` — a value you
-already set is kept),
+(`INTERNAL_API_SECRET`, `RUNTIME_API_TOKEN`, `VEXA_FLOWS_API_KEY`, `VEXA_FLOWS_TIMELINE_KEY`,
+`NEXTAUTH_SECRET` — a value you already set is kept),
 brings the stack up, and **prints an API key plus the
 service URLs** when it's done. The **meeting bot is built from source** (`make bot`), **not pulled** —
 the published `vexaai/vexa-bot:dev` on Docker Hub is the older 0.10 line and is **not compatible** with
@@ -85,7 +85,7 @@ absent).
   `.env` endpoint as described in [Where your recordings live now](/upgrade-from-minio).
 - **Agent inference** — bring your own: point the agent at your endpoint so no inference leaves the
   network (`VEXA_AGENT_MODEL` / mounted credentials).
-- **Secrets** — `ADMIN_TOKEN`, `INTERNAL_API_SECRET`, DB credentials. Set real values before exposing.
+- **Secrets** — `ADMIN_TOKEN`, `INTERNAL_API_SECRET`, `RUNTIME_API_TOKEN`, DB credentials. Set real values before exposing.
 
 ## Transcription (the separate GPU unit)
 

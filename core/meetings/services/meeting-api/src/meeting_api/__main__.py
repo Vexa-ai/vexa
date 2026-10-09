@@ -116,7 +116,7 @@ def build_production_app():
 
     from . import create_app
     from .db import build_engine
-    from .bot_spawn.adapters import HttpRuntimeClient, SqlAlchemyMeetingRepo
+    from .bot_spawn.adapters import HttpRuntimeClient, SqlAlchemyMeetingRepo, runtime_caller_headers
     from .collector.adapters import RedisStreamBus, SqlAlchemyTranscriptStore
     from .recordings.adapters import S3Storage, SqlAlchemyRecordingRepo
 
@@ -147,7 +147,9 @@ def build_production_app():
 
     import httpx
 
-    runtime_http = httpx.AsyncClient(timeout=30.0)
+    # Every runtime.v1 call carries the runtime caller credential (required-explicit; the runtime
+    # answers 401 to anything else).
+    runtime_http = httpx.AsyncClient(timeout=30.0, headers=runtime_caller_headers())
     runtime_client = HttpRuntimeClient(runtime_http, runtime_api_url)
     from .service_authority import build_service_authority_from_env
 

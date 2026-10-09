@@ -21,6 +21,7 @@ HEADERS = {"x-user-id": "7"}
 def _admin_token(monkeypatch):
     monkeypatch.setenv("ADMIN_TOKEN", "test-admin-token")
     monkeypatch.setenv("VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE", "/run/vexa-identity/public/key.pem")
+    monkeypatch.setenv("RUNTIME_API_TOKEN", "runtime-caller-token-for-tests-0123456789abcdef")
 
 
 @pytest.fixture(autouse=True)
@@ -48,9 +49,22 @@ def test_declaration_loads_and_is_internally_consistent():
     # are exactly the two keys the original ad-hoc guard checked
     stt_keys = {k["key"] for k in decl["keys"] if k.get("capability") == "stt"}
     assert stt_keys == {"TRANSCRIPTION_SERVICE_URL", "TRANSCRIPTION_SERVICE_TOKEN"}
-    # required-explicit is exactly the A4 boot bar plus gateway-identity.v1's verification key
+    # required-explicit is exactly the A4 boot bar, gateway-identity.v1's verification key and the
+    # runtime caller credential every spawn presents
     required = {k["key"] for k in decl["keys"] if k["class"] == "required-explicit"}
-    assert required == {"ADMIN_TOKEN", "VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE"}
+    assert required == {"ADMIN_TOKEN", "VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE", "RUNTIME_API_TOKEN"}
+
+
+def test_preflight_refuses_a_boot_that_cannot_reach_the_runtime(monkeypatch):
+    """Every bot spawn presents the runtime caller credential; without it the runtime refuses every
+    spawn, so the boot refuses instead."""
+    monkeypatch.delenv("RUNTIME_API_TOKEN")
+    with pytest.raises(cp.ConfigError) as ei:
+        cp.preflight()
+    assert "RUNTIME_API_TOKEN" in str(ei.value)
+    monkeypatch.setenv("RUNTIME_API_TOKEN", "changeme")
+    with pytest.raises(cp.ConfigError):
+        cp.preflight()
 
 
 def test_preflight_refuses_a_boot_that_cannot_verify_identity(monkeypatch):

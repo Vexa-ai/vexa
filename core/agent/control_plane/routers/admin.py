@@ -54,7 +54,8 @@ def build(**d) -> APIRouter:
 
         overview: dict = {"workloads": [], "meetings": []}
         try:
-            overview["workloads"] = admin_panel.fetch_workloads(settings.runtime_api_url)
+            overview["workloads"] = admin_panel.fetch_workloads(
+                settings.runtime_api_url, token=settings.runtime_api_token.get_secret_value())
         except Exception as e:  # noqa: BLE001 — typed partial failure (P18): the panel shows the section error
             # SCRUBBED, like every other error this service returns (R-E11). Both of these come off
             # a client built from a URL that routinely carries a credential — `redis://:password@host`
@@ -96,7 +97,8 @@ def build(**d) -> APIRouter:
         # Workloads cross-check the in-memory live registry (a stale "live" entry must not turn
         # relay quiet into a false FAIL). Unknown (kernel unreachable) → None = trust the registry.
         try:
-            workloads = admin_panel.fetch_workloads(settings.runtime_api_url)
+            workloads = admin_panel.fetch_workloads(
+                settings.runtime_api_url, token=settings.runtime_api_token.get_secret_value())
         except Exception:  # noqa: BLE001
             workloads = None
         return admin_panel.run_probe(settings, r, live.list(), relay_health=_txw.relay_health(),

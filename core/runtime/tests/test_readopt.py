@@ -22,6 +22,8 @@ from fastapi.testclient import TestClient
 
 from runtime_kernel import Runtime
 from runtime_kernel.api import create_app
+
+from _caller import TOKEN, caller_client
 from runtime_kernel.backend import WorkloadHandle
 from runtime_kernel.docker_backend import DockerBackend
 from runtime_kernel.models import RuntimeState, WorkloadSpec, WorkloadStatus
@@ -272,7 +274,7 @@ def test_adopt_makes_get_truthful_after_restart():
     assert status.profile == "adopted"
 
     # …and over HTTP, exactly what meeting-api polls:
-    client = TestClient(create_app(rt))
+    client = caller_client(create_app(rt, caller_token=TOKEN))
     r = client.get("/workloads/mtg-2-d93eee39")
     assert r.status_code == 200, "recreated runtime must not 404 a live workload"
     assert r.json()["state"] == "running"

@@ -23,10 +23,17 @@ from typing import Optional
 from .models import Resources
 
 
+#: The workload classes a profile declares. A backend labels and provisions a workload by its
+#: profile's class — never by anything in the caller's spec (the workload id included).
+ROLE_WORKER = "worker"   # an agent worker: model credentials brokered in, no internal service reach
+ROLE_BOT = "bot"         # a meeting bot: reaches meeting-api for its callbacks, holds no model credential
+
+
 @dataclass(frozen=True)
 class Runnable:
     image: Optional[str] = None
     command: Optional[list[str]] = None
+    role: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -162,6 +169,7 @@ def default_registry() -> ProfileRegistry:
                 runnable=Runnable(
                     image=browser_image,
                     command=None,
+                    role=ROLE_BOT,
                 ),
                 idle_timeout_sec=0,  # 0 ⇒ managed externally; enforcement skips it
                 base_env=bot_tuning_env,
@@ -176,6 +184,7 @@ def default_registry() -> ProfileRegistry:
                 runnable=Runnable(
                     image=agent_worker_image,
                     command=["python", "-m", "worker"],
+                    role=ROLE_WORKER,
                 ),
                 idle_timeout_sec=300,
                 max_lifetime_sec=3600,

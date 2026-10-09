@@ -12,7 +12,7 @@ These never touch a real daemon: the unix-socket session is faked so we can asse
 from __future__ import annotations
 
 from runtime_kernel.docker_backend import DockerBackend
-from runtime_kernel.profiles import Runnable
+from runtime_kernel.profiles import ROLE_WORKER, Runnable
 
 
 class FakeResp:
@@ -135,7 +135,7 @@ def test_worker_create_spec_uses_worker_image():
     sess.request = spy
     h = b.start(
         "agent-foo-chat",
-        Runnable(image=TARGET, command=["python", "-m", "worker"]),
+        Runnable(image=TARGET, command=["python", "-m", "worker"], role=ROLE_WORKER),
         {"VEXA_X": "y"},
     )
     assert captured["Image"] == TARGET
@@ -162,7 +162,7 @@ def test_worker_dev_mount_is_first_on_pythonpath(monkeypatch):
         return orig(method, url, **kw)
 
     sess.request = spy
-    b.start("agent-hot-chat", Runnable(image=TARGET, command=["python", "-m", "worker"]), {})
+    b.start("agent-hot-chat", Runnable(image=TARGET, command=["python", "-m", "worker"], role=ROLE_WORKER), {})
 
     assert "/host/core/agent:/app/src/agent_api:ro" in captured["HostConfig"]["Binds"]
     env = dict(item.split("=", 1) for item in captured["Env"])
@@ -191,7 +191,7 @@ def test_worker_create_spec_injects_anthropic_route_env(monkeypatch):
     sess.request = spy
     b.start(
         "agent-foo-chat",
-        Runnable(image=TARGET, command=["python", "-m", "worker"]),
+        Runnable(image=TARGET, command=["python", "-m", "worker"], role=ROLE_WORKER),
         {"ANTHROPIC_AUTH_TOKEN": "dispatch-wins"},
     )
     env = dict(item.split("=", 1) for item in captured["Env"])
