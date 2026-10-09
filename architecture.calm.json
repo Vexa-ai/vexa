@@ -544,7 +544,7 @@
    "unique-id": "gateway-identity.v1",
    "node-type": "contract",
    "name": "gateway-identity.v1",
-   "description": "gateway-identity.v1 \u2014 sealed/published contract (gateway): the identity the edge resolved, HMAC-signed onto every forward and verified by agent-api and meeting-api",
+   "description": "gateway-identity.v1 \u2014 sealed/published contract (gateway): the identity the edge resolved, signed onto every forward with the gateway's Ed25519 private key and verified with its public key by agent-api, meeting-api and the credential broker, none of which can sign",
    "metadata": [
     {
      "path": "core/gateway/contracts/gateway-identity.v1",
@@ -2723,7 +2723,7 @@
     {
      "access": "req",
      "contract": "credential-broker.v1",
-     "description": "role agent (Connections routes) and role git (Git credential store); request, list, read, draft, call; no consent, no stored credential returned"
+     "description": "role agent (Connections routes) and role git (Git credential store); request, list, read, draft, call; no consent, no stored credential returned. Every agent-role call carries the gateway's signed identity (gateway-identity.v1) unchanged, and the broker acts only for the subject it names"
     }
    ]
   },

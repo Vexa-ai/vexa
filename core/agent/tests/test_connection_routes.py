@@ -19,7 +19,8 @@ READY = [{'id': 'a' * 32, 'provider': 'google_email', 'status': 'ready', 'label'
 def broker(monkeypatch):
     calls = []
 
-    def fake(actor, method, path, payload=None):
+    def fake(actor, method, path, payload=None, *, identity):
+        assert identity == SIGNED, 'every broker call forwards the gateway signature unchanged'
         calls.append((actor, method, path, payload))
         if path == '/api/connections':
             return {'connections': READY}
@@ -44,8 +45,10 @@ def client(broker):
     return TestClient(app)
 
 
-HUMAN = {'X-User-Id': 'u1'}
-WORKER = {'X-User-Id': 'u1', 'X-User-Regime': 'autonomous'}
+SIGNED = 'v1.signed-by-the-gateway.for-u1'
+HUMAN = {'X-User-Id': 'u1', 'X-Vexa-Identity': SIGNED}
+WORKER = {'X-User-Id': 'u1', 'X-User-Regime': 'autonomous', 'X-Vexa-Identity': SIGNED}
+INTERNAL_TIER = {'X-User-Id': 'u1'}   # named over the internal tier: no gateway signature
 
 
 def test_status_returns_metadata_only(client):
@@ -109,3 +112,23 @@ def test_every_tool_route_publishes_named_body_fields(client):
                  '/api/connections/service/call', '/api/onboarding/research'):
         ref = spec['paths'][path]['post']['requestBody']['content']['application/json']['schema']['$ref']
         assert spec['components']['schemas'][ref.rsplit('/', 1)[-1]]['properties'], path
+
+
+@pytest.mark.parametrize('method,path,payload', [
+    ('GET', '/api/connections', None),
+    ('POST', '/api/connections/request', {'provider': 'google_email'}),
+    ('POST', '/api/connections/gmail/search', {'query': 'x'}),
+    ('POST', '/api/connections/gmail/draft', {'recipient': 'a@b.c', 'subject': 's', 'body': 'b',
+                                              'request_id': 'req-0001'}),
+    ('POST', '/api/connections/service/call', {'connection_id': 'c' * 32}),
+    ('POST', '/api/onboarding/research', {'action': 'status'}),
+])
+def test_a_caller_without_the_gateway_signature_never_reaches_the_broker(client, broker, method, path, payload):
+    """The broker acts for a person only on the gateway's signature (gateway-identity.v1). A caller
+    that named the person over the internal tier has none, so agent-api refuses it here with a
+    sentence instead of letting the broker refuse it as an opaque fault."""
+    before = len(broker)
+    r = client.request(method, path, headers=INTERNAL_TIER, json=payload)
+    assert r.status_code == 403
+    assert 'signed in through the gateway' in r.json()['detail']
+    assert len(broker) == before

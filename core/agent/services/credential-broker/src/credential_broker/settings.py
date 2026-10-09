@@ -1,7 +1,7 @@
 """Deployment configuration, read once from the environment (config.v1.json is the declaration).
 
 `load()` refuses a configuration the broker cannot honour — no role keys, no store, an unknown
-backend — with one ConfigError naming each problem, so a bad deployment stops at boot instead of
+backend, no gateway identity key — with one ConfigError naming each problem, so a bad deployment stops at boot instead of
 at the first request. Keys are read by path on every use (a rotated key file takes effect without
 a restart); only their presence is checked here.
 """
@@ -28,6 +28,9 @@ class Settings:
     google_client_id: str = ""
     google_client_secret: str = ""
     product_redirect: str = ""
+    # gateway-identity.v1: the gateway's Ed25519 PUBLIC key. Every agent-role call must carry the
+    # gateway's signature over the person it acts for; the broker can check it and cannot make one.
+    identity_public_key_file: str = ""
 
 
 def _env(env: Mapping[str, str], key: str, default: str = "") -> str:
@@ -51,8 +54,12 @@ def load(env: Optional[Mapping[str, str]] = None) -> Settings:
         google_client_id=_env(env, "VEXA_CONNECTIONS_GOOGLE_CLIENT_ID"),
         google_client_secret=_env(env, "VEXA_CONNECTIONS_GOOGLE_CLIENT_SECRET"),
         product_redirect=_env(env, "VEXA_CONNECTIONS_PRODUCT_REDIRECT"),
+        identity_public_key_file=_env(env, "VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE"),
     )
     problems = []
+    if not settings.identity_public_key_file:
+        problems.append("VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE must name the gateway's identity public key "
+                        "(no agent-role call can be verified without it)")
     if settings.store == "local" and not settings.store_key_file:
         problems.append("VEXA_CONNECTIONS_STORE=local needs VEXA_CONNECTIONS_STORE_KEY_FILE")
     elif settings.store == "openbao" and not (settings.openbao_addr and settings.openbao_token_file):

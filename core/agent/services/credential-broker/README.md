@@ -17,7 +17,7 @@ human key — the authority to consent and store — must live in no process an 
 
 | Direction | Neighbour | Via | What crosses |
 |---|---|---|---|
-| consumes | agent-api (`routers/connections.py`) | `credential-broker.v1`, role `agent` | request, prepare, list, read, draft, call — results only |
+| consumes | agent-api (`routers/connections.py`) | `credential-broker.v1`, role `agent`, plus the gateway's `X-Vexa-Identity` for the same person (`gateway-identity.v1`) | request, prepare, list, read, draft, call — results only |
 | consumes | agent-api (`git_secret_store.py`) | `credential-broker.v1`, role `git` | Git tokens and deploy keys named for the actor |
 | consumes | terminal (`src/app/api/connections/`) | `credential-broker.v1`, role `human` | consent, credential save, disconnect, delete |
 | calls | Google OAuth, Gmail, Calendar APIs | fixed URLs in `providers.py` | tokens, reads, drafts |
@@ -27,11 +27,19 @@ human key — the authority to consent and store — must live in no process an 
 The broker is reachable only from agent-api and the terminal: compose puts it on a network nothing
 else joins, and the chart ships a NetworkPolicy. Worker containers never hold a role key.
 
+The agent role is bound to a person by the gateway, not by agent-api: every agent-role call carries
+the gateway's signed identity, forwarded unchanged, and the broker verifies it with the gateway's
+public key (`VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE`) and refuses the call unless it names the
+assertion's actor. agent-api's keys alone cannot act for anybody.
+
 ## Contracts
 
 **Owns:** [`core/agent/contracts/credential-broker.v1`](../../contracts/credential-broker.v1) — the
 signed role assertion and every route's body. `src/credential_broker/assertion.py` is the
 contract's canonical signer, vendored byte-for-byte (`gate:fact-parity`).
+**Consumes:** [`core/gateway/contracts/gateway-identity.v1`](../../../gateway/contracts/gateway-identity.v1)
+— the gateway's signed identity; `src/credential_broker/identity_token.py` is its verifier, vendored
+byte-for-byte.
 **Config:** `src/credential_broker/config.v1.json` (`gate:config-contract`; compose and helm).
 
 ## Isolated evaluation
@@ -40,7 +48,8 @@ contract's canonical signer, vendored byte-for-byte (`gate:fact-parity`).
 uv run pytest -q
 ```
 
-`tests/` covers the assertion boundary (forged, expired, replayed, mis-bound, wrong role), every
+`tests/` covers the assertion boundary (forged, expired, replayed, mis-bound, wrong role), the
+forwarded identity on the agent role (missing, forged, expired, another person's), every
 route against the contract in both directions (`test_contract_conformance.py`), the two store
 adapters, the Google and custom-service adapters offline, M3's host confirmation, and a boot from a
 real environment with the encrypted store, asserting a canary secret appears in no file and no log

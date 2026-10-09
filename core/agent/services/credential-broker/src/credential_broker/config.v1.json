@@ -15,6 +15,12 @@
       "targets": ["compose", "helm"]
     },
     {
+      "key": "VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE",
+      "class": "required-explicit",
+      "description": "file holding the gateway's Ed25519 PUBLIC identity key (gateway-identity.v1, SubjectPublicKeyInfo PEM) — the same file agent-api and meeting-api verify with. Every agent-role call must carry the gateway's X-Vexa-Identity naming the assertion's actor, forwarded unchanged by agent-api; without a valid one the call is refused, so the agent key alone cannot act for anybody. The broker verifies and cannot sign; a private key here refuses the boot",
+      "targets": ["compose", "helm"]
+    },
+    {
       "key": "VEXA_CONNECTIONS_GIT_KEY_FILE",
       "class": "capability",
       "capability": "git_store",

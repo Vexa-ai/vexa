@@ -12,6 +12,7 @@ from typing import Mapping, Optional
 
 from fastapi import FastAPI
 
+from . import identity_token
 from .app import Broker, create_app
 from .config_preflight import ConfigError, preflight
 from .obs import log_event
@@ -37,6 +38,12 @@ def build_app(env: Optional[Mapping[str, str]] = None) -> FastAPI:
     os.umask(0o077)
     preflight(env)
     settings = load(env)
+    # gateway-identity.v1: read per use like the role keys, but a file that is not the gateway's
+    # Ed25519 public key (its private key included — a broker holding it could sign) stops the boot.
+    try:
+        identity_token.read_verify_key(settings.identity_public_key_file)
+    except identity_token.KeyUnavailable as e:
+        raise ConfigError(f"credential-broker refuses to boot: VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE — {e}") from None
     store = build_store(settings)
     log_event("broker_started", fields={"store": store.name, "git_store": bool(settings.key_files.get("git")),
                                         "google_oauth": bool(settings.google_client_id and settings.product_redirect)})

@@ -5,6 +5,9 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 from control_plane import broker_client
 
+#: gateway-identity.v1's header — the gateway's signature, verified by agent-api's IdentityGuard.
+SIGNED_IDENTITY_HEADER = 'x-vexa-identity'
+
 class ConnectionRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
     provider: Literal['google_email', 'google_calendar', 'custom_secret', 'github']
@@ -41,16 +44,19 @@ class CustomCall(BaseModel):
     body: dict | None = None
 
 
-def call_broker(actor, method, path, payload=None):
+def call_broker(actor, method, path, payload=None, *, identity):
     """One broker request as the agent role (credential-broker.v1), signed by the shared client.
 
+    ``identity`` is the gateway's signature over ``actor`` (gateway-identity.v1 ``X-Vexa-Identity``),
+    forwarded unchanged: the broker verifies it with the gateway's public key and acts for
+    ``actor`` only when it names them, so holding the agent key is not enough to act for anybody.
     A refusal the person can act on (400/404/409/422) passes through with the broker's fixed
     sentence. Anything else is a typed fault, logged by broker_client, and answered 503."""
     try:
         response = broker_client.request(
             base_url=os.environ.get('VEXA_CONNECTIONS_BROKER_URL', ''),
             key_file=os.environ.get('VEXA_CONNECTIONS_AGENT_KEY_FILE', ''),
-            role='agent', actor=actor, method=method, path=path, payload=payload)
+            role='agent', actor=actor, method=method, path=path, payload=payload, identity=identity)
         if response.status_code == 200:
             return broker_client.json_of(response, role='agent', method=method, path=path)
         if response.status_code in (400, 404, 409, 422):
@@ -126,6 +132,20 @@ _READ_INSTRUCTION = ('Correct invalid arguments or select an explicit account wh
 _STATUS_FIELDS = ('id', 'provider', 'label', 'status', 'created', 'account', 'setup')
 
 
+def signed_identity(request: Request) -> str:
+    """The gateway's signature over the person this request acts for (gateway-identity.v1).
+
+    agent-api's IdentityGuard has verified it and left it on the request; it is forwarded to the
+    broker unchanged, and the broker verifies it again and acts only for the subject it names. A
+    caller that reached agent-api over the internal tier carries none — the internal tier is
+    agent-api's own credential, and the broker does not let agent-api name a person on its own say
+    — so it is refused here, with a sentence, rather than as an opaque broker fault."""
+    token = (request.headers.get(SIGNED_IDENTITY_HEADER) or '').strip()
+    if not token:
+        raise HTTPException(403, 'Connections act only for a person signed in through the gateway')
+    return token
+
+
 def build(*, subject_of, wsr=None, require_person=None, **_):
     router=APIRouter()
     # A person in the loop: the verbs that read a mailbox, spend a stored credential or ask for
@@ -159,15 +179,16 @@ def build(*, subject_of, wsr=None, require_person=None, **_):
         if body.provider=='custom_secret' and not body.label.strip():
             raise HTTPException(422,'Name the service in label before requesting its connection')
         label=body.label.strip() or ({'google_email':'Gmail','google_calendar':'Google Calendar','custom_secret':'Custom secret'}[body.provider])
-        existing=call_broker(actor,'GET','/api/connections')['connections']
+        signed=signed_identity(request)
+        existing=call_broker(actor,'GET','/api/connections',identity=signed)['connections']
         result=next(({'connection_id':c['id'],'status':c['status']} for c in existing
                      if not body.new_account and c['provider']==body.provider and (not body.label or c['label']==label) and c['status'] in {'ready','awaiting_user'}),None)
         if result is not None:
-            result=call_broker(actor,'POST','/api/connections/'+result['connection_id']+'/request')
+            result=call_broker(actor,'POST','/api/connections/'+result['connection_id']+'/request',identity=signed)
         if result is None:
-            result=call_broker(actor,'POST','/api/setup',{'provider':body.provider,'label':label})
+            result=call_broker(actor,'POST','/api/setup',{'provider':body.provider,'label':label},identity=signed)
         if body.setup is not None:
-            call_broker(actor,'POST','/api/connections/'+result['connection_id']+'/prepare',{'setup':body.setup})
+            call_broker(actor,'POST','/api/connections/'+result['connection_id']+'/prepare',{'setup':body.setup},identity=signed)
         return {'connection_id':result['connection_id'], 'provider':body.provider,
                 'status':'awaiting_user' if body.setup is not None else result['status'], 'ui_action':'open_connections',
                 'instruction':'A setup request was delivered to Minutes; do not claim the panel is visible until the user confirms. The user must review and approve the proposed configuration. OAuth definitions show client ID/client secret and consent; API-key definitions show the secret field. An existing ready credential does not prove this new setup is approved. Do not construct links or call workspace_view for this request. Never paste credentials in chat. Call connections_status after consent; a request is not a connected account.'}
@@ -176,11 +197,12 @@ def build(*, subject_of, wsr=None, require_person=None, **_):
     def connections_status(request: Request):
         """Read your connection metadata. Ready confirms stored consent, not mail/calendar sync.
         No tokens and no email or calendar contents are returned."""
-        rows = call_broker(subject_of(request),'GET','/api/connections').get('connections', [])
+        rows = call_broker(subject_of(request),'GET','/api/connections',
+                           identity=signed_identity(request)).get('connections', [])
         return {'connections': [{k: row[k] for k in _STATUS_FIELDS if k in row} for row in rows]}
 
-    def _ready(actor, provider, connection_id):
-        rows=call_broker(actor,'GET','/api/connections')['connections']
+    def _ready(actor, signed, provider, connection_id):
+        rows=call_broker(actor,'GET','/api/connections',identity=signed)['connections']
         ready=[c for c in rows if c['provider']==provider and c['status']=='ready' and (not connection_id or c['id']==connection_id)]
         if len(ready)!=1:
             raise HTTPException(409,'Choose a ready connection_id from connections_status; multiple accounts require an explicit selection')
@@ -189,9 +211,11 @@ def build(*, subject_of, wsr=None, require_person=None, **_):
     def _read(request: Request, payload: dict, connection_id: str):
         person(request)
         actor=subject_of(request)
+        signed=signed_identity(request)
         provider='google_calendar' if payload['action']=='calendar.events' else 'google_email'
         try:
-            return call_broker(actor,'POST','/api/connections/'+_ready(actor, provider, connection_id)+'/read',payload)
+            return call_broker(actor,'POST','/api/connections/'+_ready(actor, signed, provider, connection_id)+'/read',
+                               payload,identity=signed)
         except HTTPException as exc:
             raise HTTPException(exc.status_code, {'reason': exc.detail, 'instruction': _READ_INSTRUCTION}) from None
 
@@ -239,11 +263,13 @@ def build(*, subject_of, wsr=None, require_person=None, **_):
         Never claim a draft exists unless status is draft_created. Do not retry unknown outcomes."""
         person(request)
         actor=subject_of(request)
+        signed=signed_identity(request)
         try:
-            cid=_ready(actor, 'google_email', body.connection_id)
+            cid=_ready(actor, signed, 'google_email', body.connection_id)
         except HTTPException:
             raise HTTPException(409,'Choose a ready Gmail connection_id from connections_status') from None
-        return call_broker(actor,'POST','/api/connections/'+cid+'/draft',body.model_dump(exclude={'connection_id'}))
+        return call_broker(actor,'POST','/api/connections/'+cid+'/draft',body.model_dump(exclude={'connection_id'}),
+                           identity=signed)
 
     @router.post('/api/connections/service/call')
     def service_call(request: Request, body: CustomCall):
@@ -254,7 +280,8 @@ def build(*, subject_of, wsr=None, require_person=None, **_):
         POST may have side effects: only call for an action the user requested. Never retry
         uncertain POST outcomes automatically. No shell/password/SSH execution is exposed."""
         person(request)
-        return call_broker(subject_of(request),'POST','/api/connections/'+body.connection_id+'/call',body.model_dump(exclude={'connection_id'}))
+        return call_broker(subject_of(request),'POST','/api/connections/'+body.connection_id+'/call',
+                           body.model_dump(exclude={'connection_id'}),identity=signed_identity(request))
 
     @router.post('/api/onboarding/research')
     def research(request: Request, body: ResearchRequest):
@@ -272,17 +299,18 @@ def build(*, subject_of, wsr=None, require_person=None, **_):
         from control_plane.onboarding_research import Research, ResearchError
         person(request)
         actor = subject_of(request)
+        signed = signed_identity(request)
         if wsr is None:
             raise HTTPException(503, 'Private workspace is unavailable')
         selected = []
         if body.action == 'start':
-            rows = call_broker(actor, 'GET', '/api/connections')['connections']
+            rows = call_broker(actor, 'GET', '/api/connections', identity=signed)['connections']
             ids = set(body.connection_ids)
             selected = [c for c in rows if c['id'] in ids and c['status'] == 'ready' and c['provider'] in {'google_email','google_calendar'}]
             if not ids or len(selected) != len(ids):
                 raise HTTPException(409, 'Select ready email/calendar accounts owned by this user')
         def read(cid, payload):
-            return call_broker(actor, 'POST', '/api/connections/'+cid+'/read', payload)
+            return call_broker(actor, 'POST', '/api/connections/'+cid+'/read', payload, identity=signed)
         try:
             return Research(wsr.workspace_dir(actor), read).run(body.action, connections=selected,
                 batch_id=body.batch_id, receipts=[r.model_dump() for r in body.receipts])

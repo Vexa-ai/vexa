@@ -5,6 +5,7 @@
 | `main.py` | composition root: preflight → settings → store → app (`uvicorn credential_broker.main:app`) |
 | `app.py` | the routes, the assertion middleware, metadata and audit (`metadata.sqlite`) |
 | `assertion.py` | VENDORED from `core/agent/contracts/credential-broker.v1/assertion.py` — edit the canonical copy, then copy it here byte for byte |
+| `identity_token.py` | VENDORED from `core/gateway/contracts/gateway-identity.v1/identity_token.py` — verifies the gateway's signature an agent-role call carries; the broker holds the public key only |
 | `store.py` | the store port: `LocalEncryptedStore` (AES-256-GCM, default) and `OpenBaoStore` (KV v2) |
 | `settings.py` | environment → `Settings`; refuses an unusable configuration at boot |
 | `providers.py` | Google OAuth, Gmail and Calendar adapters — fixed URLs and scopes |

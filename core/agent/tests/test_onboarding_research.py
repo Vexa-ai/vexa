@@ -101,13 +101,14 @@ def test_unauthorized_account_cannot_start_and_route_uses_owner(tmp_path, monkey
         if not request.headers.get('x-user-id'):raise HTTPException(401)
         return request.headers['x-user-id']
     calls=[]
-    def broker(actor,method,path,payload=None):
+    def broker(actor,method,path,payload=None,*,identity):
+        assert identity=='signed-one'
         calls.append(actor)
         if method=='GET':return {'connections':[{**MAIL,'status':'ready'}]}
         return {'messages':[], 'has_more':False}
     monkeypatch.setattr(connections,'call_broker',broker)
     app=FastAPI();app.include_router(connections.build(subject_of=subject,wsr=Reader()))
-    client=TestClient(app);headers={'x-user-id':'one'}
+    client=TestClient(app);headers={'x-user-id':'one','x-vexa-identity':'signed-one'}
     assert client.post('/api/onboarding/research',json={'action':'status'}).status_code==401
     assert client.post('/api/onboarding/research',headers=headers,json={'action':'start','connection_ids':[CAL['id']]}).status_code==409
     assert client.post('/api/onboarding/research',headers=headers,json={'action':'start','connection_ids':[MAIL['id']]}).status_code==200
@@ -115,7 +116,7 @@ def test_unauthorized_account_cannot_start_and_route_uses_owner(tmp_path, monkey
     assert batch['status']=='batch'
     assert client.post('/api/onboarding/research',headers=headers,json={'action':'ack','batch_id':batch['batch_id']}).json()['status']=='source_pass_complete'
     assert set(calls)=={'one'}
-    assert client.post('/api/onboarding/research',headers={'x-user-id':'two'},json={'action':'status'}).json()['status']=='not_started'
+    assert client.post('/api/onboarding/research',headers={'x-user-id':'two','x-vexa-identity':'signed-two'},json={'action':'status'}).json()['status']=='not_started'
 
 
 def test_malformed_provider_result_is_not_an_empty_success(tmp_path):

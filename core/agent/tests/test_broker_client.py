@@ -71,11 +71,13 @@ def test_vendored_signer_reproduces_golden_vectors(vector):
 
 def test_connections_requests_are_signed_as_the_agent_for_the_exact_request(keys, broker):
     broker["handler"] = lambda req: httpx.Response(200, json={"connection_id": "a" * 32, "status": "awaiting_user"})
-    connections.call_broker("u1", "POST", "/api/setup", {"provider": "google_email", "label": "Gmail"})
+    connections.call_broker("u1", "POST", "/api/setup", {"provider": "google_email", "label": "Gmail"}, identity="signed-u1")
     req = broker["sent"][-1]
     assert str(req.url) == "http://credential-broker:8100/api/setup"
     claims = verified(req, keys["agent"])
     assert claims["role"] == "agent" and claims["actor"] == "u1"
+    # the gateway's signature over u1 rides beside the assertion, unchanged (gateway-identity.v1)
+    assert req.headers["x-vexa-identity"] == "signed-u1"
     with pytest.raises(broker_assertion.AssertionRefused):
         verified(req, keys["git"])          # the git key cannot have produced it
 
@@ -85,6 +87,7 @@ def test_git_store_signs_as_the_git_role_for_the_owner(keys, broker):
     assert git_secret_store._call("deploy/user-7.priv", "get") == {"found": True, "value": "fixture"}
     claims = verified(broker["sent"][-1], keys["git"])
     assert (claims["role"], claims["actor"]) == ("git", "user-7")
+    assert "x-vexa-identity" not in broker["sent"][-1].headers
     assert json.loads(broker["sent"][-1].content) == {"name": "deploy/user-7.priv", "action": "get", "value": None}
 
 
@@ -102,7 +105,7 @@ def test_connection_faults_are_typed_and_logged_without_values(keys, broker, cap
     broker["handler"] = handler
     caplog.set_level(logging.WARNING)
     with pytest.raises(HTTPException) as exc:
-        connections.call_broker("u1", "POST", "/api/connections/" + "c" * 32 + "/read", {"action": "gmail.search", "query": "PRIVATE-QUERY"})
+        connections.call_broker("u1", "POST", "/api/connections/" + "c" * 32 + "/read", {"action": "gmail.search", "query": "PRIVATE-QUERY"}, identity="signed-u1")
     assert exc.value.status_code == status and exc.value.detail == "Connection service unavailable"
     logged = faults(caplog)
     assert logged and logged[-1]["kind"] == kind and logged[-1]["source"] == "credential-broker"
@@ -114,7 +117,7 @@ def test_connection_faults_are_typed_and_logged_without_values(keys, broker, cap
 def test_refusals_the_person_can_act_on_pass_through(keys, broker):
     broker["handler"] = lambda req: httpx.Response(409, json={"detail": "Matching connection is not ready"})
     with pytest.raises(HTTPException) as exc:
-        connections.call_broker("u1", "GET", "/api/connections")
+        connections.call_broker("u1", "GET", "/api/connections", identity="signed-u1")
     assert (exc.value.status_code, exc.value.detail) == (409, "Matching connection is not ready")
 
 
@@ -122,7 +125,7 @@ def test_unconfigured_is_its_own_answer(monkeypatch, broker, caplog):
     monkeypatch.delenv("VEXA_CONNECTIONS_BROKER_URL", raising=False)
     caplog.set_level(logging.WARNING)
     with pytest.raises(HTTPException) as exc:
-        connections.call_broker("u1", "GET", "/api/connections")
+        connections.call_broker("u1", "GET", "/api/connections", identity="signed-u1")
     assert exc.value.detail == "Connections are not configured on this deployment"
     assert faults(caplog)[-1]["kind"] == "config"
     assert not broker["sent"]
@@ -135,7 +138,7 @@ def test_short_key_never_signs(tmp_path, monkeypatch, broker, caplog):
     monkeypatch.setenv("VEXA_CONNECTIONS_AGENT_KEY_FILE", str(short))
     caplog.set_level(logging.WARNING)
     with pytest.raises(HTTPException):
-        connections.call_broker("u1", "GET", "/api/connections")
+        connections.call_broker("u1", "GET", "/api/connections", identity="signed-u1")
     assert faults(caplog)[-1]["kind"] == "config" and not broker["sent"]
 
 

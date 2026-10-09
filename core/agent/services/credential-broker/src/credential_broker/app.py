@@ -1,7 +1,9 @@
 """The credential broker's HTTP front door (credential-broker.v1).
 
 Every route except GET /health requires an X-Vexa-Assertion signed with a role key; the role decides
-what the caller may do (contract `x-routes`). The broker owns three things nobody else writes:
+what the caller may do (contract `x-routes`). An agent-role call must ALSO carry the gateway's signed
+identity (gateway-identity.v1 `X-Vexa-Identity`) naming the same person as the assertion's actor:
+agent-api holds the agent key, and the agent key alone must not let it act for anybody it likes. The broker owns three things nobody else writes:
 connection metadata and its audit trail (metadata.sqlite), the credential store (ADR-0040), and
 the OAuth state that binds a consent to the browser session that started it.
 
@@ -31,7 +33,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from . import assertion, connection_setup, providers, secret_service, service_oauth
+from . import assertion, connection_setup, identity_token, providers, secret_service, service_oauth
 from .obs import TraceMiddleware, log_event
 from .settings import Settings, google_client
 from .store import Record, Store, StoreUnavailable
@@ -210,6 +212,28 @@ class Broker:
     def key_for(self, role: str) -> bytes:
         return assertion.load_key(self.settings.key_files.get(role, ""))
 
+    def person_signed(self, header: str, actor: str) -> None:
+        """gateway-identity.v1 for an agent-role call: the gateway's signature over ``actor``.
+
+        agent-api forwards the X-Vexa-Identity it verified, unchanged. The broker verifies it with
+        the gateway's PUBLIC key (read per use, like the role keys, so a rotated file takes effect
+        without a restart) and requires its subject to be the assertion's actor. Raises
+        AssertionRefused with a typed kind: identity_missing, identity_invalid (a bad signature,
+        expired, malformed), identity_mismatch (signed for somebody else) or identity_key (this
+        deployment's key file is unusable — a configuration fault, refused like the rest)."""
+        if not header:
+            raise assertion.AssertionRefused("identity_missing")
+        try:
+            key = identity_token.read_verify_key(self.settings.identity_public_key_file)
+        except identity_token.KeyUnavailable:
+            raise assertion.AssertionRefused("identity_key") from None
+        try:
+            claims = identity_token.verify(key, header)
+        except identity_token.IdentityError:
+            raise assertion.AssertionRefused("identity_invalid") from None
+        if not hmac.compare_digest(claims["sub"].encode(), str(actor).encode()):
+            raise assertion.AssertionRefused("identity_mismatch")
+
     def remember(self, nonce: str, expires: float) -> bool:
         now = time.time()
         try:
@@ -320,6 +344,8 @@ def create_app(broker: Broker) -> FastAPI:
                 raise assertion.AssertionRefused("missing")
             claims = assertion.verify(header, key_for=b.key_for, method=request.method, path=path,
                                       body=body, remember=b.remember)
+            if claims["role"] == "agent":
+                b.person_signed(request.headers.get(identity_token.HEADER, "").strip(), claims["actor"])
         except assertion.AssertionRefused as exc:
             log_event("assertion_refused", level="warning",
                       fields={"kind": exc.kind, "method": request.method, "route": route_of(path)})

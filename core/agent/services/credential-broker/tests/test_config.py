@@ -22,13 +22,14 @@ def env_for(tmp_path, **over):
     store_key.write_text("ab" * 32)
     env = {"VEXA_CONNECTIONS_AGENT_KEY_FILE": keys["agent"], "VEXA_CONNECTIONS_HUMAN_KEY_FILE": keys["human"],
            "VEXA_CONNECTIONS_GIT_KEY_FILE": keys["git"], "VEXA_CONNECTIONS_STATE_DIR": str(tmp_path / "state"),
-           "VEXA_CONNECTIONS_STORE_KEY_FILE": str(store_key)}
+           "VEXA_CONNECTIONS_STORE_KEY_FILE": str(store_key),
+           "VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE": keys["identity"]}
     env.update(over)
     return {k: v for k, v in env.items() if v is not None}, keys
 
 
 def test_every_key_settings_reads_is_declared():
-    read = set(re.findall(r'"(VEXA_CONNECTIONS_[A-Z_]+)"', (SRC / "settings.py").read_text()))
+    read = set(re.findall(r'"(VEXA_(?:CONNECTIONS|GATEWAY_IDENTITY)_[A-Z_]+)"', (SRC / "settings.py").read_text()))
     assert read and read <= DECLARED
     assert DECLARED <= read, "a declared key nobody reads is a dead surface"
 
@@ -41,6 +42,8 @@ def test_every_key_settings_reads_is_declared():
     ({"VEXA_CONNECTIONS_STORE": "vault"}, "`local` or `openbao`"),
     ({"VEXA_CONNECTIONS_STORE_KEY_FILE": "/nonexistent/store.key"}, "64 hex characters"),
     ({"VEXA_CONNECTIONS_PRODUCT_REDIRECT": "http://app.example.test/api/auth/callback/google"}, "PRODUCT_REDIRECT"),
+    ({"VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE": None}, "VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE"),
+    ({"VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE": "/nonexistent/identity.pem"}, "VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE"),
 ])
 def test_boot_refuses_an_unusable_configuration(tmp_path, over, needle):
     env, _ = env_for(tmp_path, **over)

@@ -4,6 +4,11 @@ Two callers share it: `routers/connections.py` (role `agent`) and `git_secret_st
 `git`). Each names its own door and key — the two roles stay separate keys, held by this process
 alone — and this module signs with the vendored contract signer (`broker_assertion.py`).
 
+An agent-role request also carries the gateway's signed identity (gateway-identity.v1
+`X-Vexa-Identity`) for the person it acts for, forwarded exactly as agent-api received it: the
+broker verifies it with the gateway's public key and refuses an agent-role call without it, so the
+agent key alone cannot act for anybody.
+
 A failure is a `BrokerFault` with a `kind` — `config` (no door or no usable key), `transport` (the
 broker did not answer), `http_<status>` (it answered with a refusal), `parse` (it answered with
 something that is not JSON) — and is logged once, here, as one structured line naming the source,
@@ -43,10 +48,15 @@ def fault(kind: str, *, role: str, method: str, path: str, status: Optional[int]
     return BrokerFault(kind, status)
 
 
+#: gateway-identity.v1's header: the gateway's signature over the person, forwarded unchanged.
+IDENTITY_HEADER = "X-Vexa-Identity"
+
+
 def request(*, base_url: str, key_file: str, role: str, actor: str, method: str, path: str,
-            payload: Any = None, timeout: float = 60) -> httpx.Response:
+            payload: Any = None, timeout: float = 60, identity: str = "") -> httpx.Response:
     """Sign and send one request. Returns the broker's response whatever its status; raises
-    BrokerFault only when there is no response to interpret."""
+    BrokerFault only when there is no response to interpret. ``identity`` is the gateway's signed
+    identity for ``actor``; the agent role is refused by the broker without it."""
     if not base_url or not key_file:
         raise fault("config", role=role, method=method, path=path)
     try:
@@ -58,8 +68,10 @@ def request(*, base_url: str, key_file: str, role: str, actor: str, method: str,
                                    method=method, path=path, body=body)
     try:
         with httpx.Client(timeout=timeout, follow_redirects=False, trust_env=False) as client:
-            return client.request(method, base_url.rstrip("/") + path, content=body,
-                                  headers={broker_assertion.HEADER: header, "Content-Type": "application/json"})
+            headers = {broker_assertion.HEADER: header, "Content-Type": "application/json"}
+            if identity:
+                headers[IDENTITY_HEADER] = identity
+            return client.request(method, base_url.rstrip("/") + path, content=body, headers=headers)
     except httpx.HTTPError:
         raise fault("transport", role=role, method=method, path=path) from None
 
