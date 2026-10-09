@@ -18,19 +18,9 @@
    ]
   },
   {
-   "key": "VEXA_GATEWAY_IDENTITY_SECRET",
+   "key": "VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE",
    "class": "required-explicit",
-   "secret": true,
-   "description": "gateway-identity.v1 verification key — the same value the gateway signs X-Vexa-Identity with. meeting-api rebuilds every x-user-* header (owner, bot limit, workspace memberships, webhook) from a verified signature and refuses (401) one that is neither signed nor carried by the internal tier. Unset, nobody can be authenticated, so the boot refuses. Generated at install on every deploy surface.",
-   "forbidden_values": [
-     "vexa-internal-secret",
-     "lite-internal-secret",
-     "changeme",
-     "change-me",
-     "CHANGE-ME",
-     "default",
-     "secret"
-   ]
+   "description": "gateway-identity.v1 verification key: a file holding the gateway's Ed25519 PUBLIC key (SubjectPublicKeyInfo PEM). meeting-api rebuilds every x-user-* header (owner, bot limit, workspace memberships, webhook) from a verified signature and refuses (401) one that is neither signed nor carried by the internal tier. It verifies and cannot sign; a private key in this file refuses the boot, as does a missing file or any other key type. Generated at install with the gateway's signing key: compose's identity-keys one-shot, the Helm identity-keys ConfigMap, the Lite entrypoint"
   },
   {
    "key": "DB_HOST",

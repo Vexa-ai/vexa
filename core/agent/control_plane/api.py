@@ -202,13 +202,22 @@ def create_app(
     # server-side admin routes, the dogfood rig) with `X-Internal-Secret`. Anything else that names a
     # person is a 401 at this middleware, before any route reads a header. The production boot
     # requires the key (config.v1 required-explicit), so a deployed agent-api always has this door;
-    # an app built without one is the in-process test harness.
-    _identity_secret = (settings.gateway_identity_secret.get_secret_value()
-                        if settings is not None else "")
-    _identity_guarded = bool(_identity_secret)
+    # an app built without one is the in-process test harness. The key is the gateway's Ed25519
+    # PUBLIC key: this process can check the gateway's signature and cannot make one. A file that
+    # is unreadable, or is anything but an Ed25519 public key (the private key included), refuses
+    # the boot here, naming the fault and never the key.
+    _identity_key_file = settings.gateway_identity_public_key_file if settings is not None else ""
+    _identity_guarded = bool(_identity_key_file)
     if _identity_guarded:
+        try:
+            _identity_key = identity_token.read_verify_key(_identity_key_file)
+        except identity_token.KeyUnavailable as e:
+            from control_plane.config_preflight import ConfigError
+
+            raise ConfigError(
+                f"agent-api refuses to boot: VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE — {e}") from None
         app.add_middleware(
-            identity_token.IdentityGuard, secret=_identity_secret, service="agent-api",
+            identity_token.IdentityGuard, verify_key=_identity_key, service="agent-api",
             internal_secret=settings.internal_api_secret.get_secret_value())
 
     # There is NO company-layer gate here (founder ruling 2026-10-08: "let's remove global setup at

@@ -1,6 +1,6 @@
 """gateway-identity.v1 at agent-api's door — who may name a person, one test per caller class.
 
-agent-api reads WHO is calling from x-user-* headers. With the gateway's signing key configured
+agent-api reads WHO is calling from x-user-* headers. With the gateway's public key configured
 (every deployment: the production boot requires it), a header is believed only when:
 
   * the gateway signed it (X-Vexa-Identity)            — the terminal, a person's MCP client and a
@@ -20,7 +20,7 @@ from control_plane.api import create_app
 from control_plane.dispatch import Dispatcher
 from shared.config import load_settings
 
-KEY = "agent-test-signing-key"
+KEY = identity_token.generate_signing_key()   # the gateway's; agent-api gets only the public half
 INTERNAL = "agent-test-internal-secret"
 
 
@@ -38,8 +38,10 @@ class _Identity:
 
 
 @pytest.fixture
-def client(monkeypatch):
-    monkeypatch.setenv("VEXA_GATEWAY_IDENTITY_SECRET", KEY)
+def client(monkeypatch, tmp_path):
+    public = tmp_path / "identity-public-key.pem"
+    public.write_bytes(identity_token.public_key_pem(KEY))
+    monkeypatch.setenv("VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE", str(public))
     monkeypatch.setenv("INTERNAL_API_SECRET", INTERNAL)
     return TestClient(create_app(Dispatcher(load_settings(), _Runtime(), _Identity())))
 
@@ -56,7 +58,7 @@ def test_an_unsigned_identity_is_refused(client):
 
 
 @pytest.mark.parametrize("token", [
-    identity_token.sign("someone-elses-key", {"sub": "7"}),
+    identity_token.sign(identity_token.generate_signing_key(), {"sub": "7"}),
     identity_token.sign(KEY, {"sub": "7"}, now=1_000_000, ttl_sec=60),   # long expired
     "v1.not.a-token",
 ])
@@ -119,3 +121,51 @@ def test_a_request_that_names_nobody_reaches_routes_that_need_nobody(client):
     # the route answers on its own terms (a schema refusal, never the guard's 401)
     r = client.post("/invocations", json={})
     assert r.status_code != 401
+
+
+# ── the key split: agent-api holds the public key, never one that signs ───────────────────────────
+@pytest.mark.parametrize("material", ["private", "hmac", "missing"])
+def test_the_boot_refuses_anything_but_the_gateways_public_key(monkeypatch, tmp_path, material):
+    """A verifier mounted with the private key could sign identities; an old shared HMAC secret
+    left in place, or no file, verifies nothing. Each refuses the boot, naming the key's name."""
+    from control_plane.config_preflight import ConfigError
+
+    path = tmp_path / "key.pem"
+    if material == "private":
+        path.write_bytes(identity_token.private_key_pem(KEY))
+    elif material == "hmac":
+        path.write_text("4f" * 32)
+    monkeypatch.setenv("VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE", str(path))
+    monkeypatch.setenv("INTERNAL_API_SECRET", INTERNAL)
+    with pytest.raises(ConfigError) as e:
+        create_app(Dispatcher(load_settings(), _Runtime(), _Identity()))
+    assert "VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE" in str(e.value)
+    assert "BEGIN" not in str(e.value)
+
+
+def test_the_verified_token_stays_on_the_request_for_the_broker(client):
+    """The guard rebuilds x-user-* from the claims and keeps the verified token, so a Connections
+    route can forward exactly what the gateway signed to the credential broker."""
+    token = _signed("7")[identity_token.HEADER]
+    seen = {}
+
+    async def probe(scope, receive, send):
+        seen.update({k.decode(): v.decode() for k, v in scope["headers"]})
+        await send({"type": "http.response.start", "status": 204, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
+    import asyncio
+
+    guard = identity_token.IdentityGuard(probe, verify_key=KEY.public_key())
+    scope = {"type": "http", "method": "GET", "path": "/x",
+             "headers": [(identity_token.HEADER.encode(), token.encode()), (b"x-user-id", b"8")]}
+
+    async def receive():
+        return {"type": "http.request"}
+
+    async def send(message):
+        pass
+
+    asyncio.run(guard(scope, receive, send))
+    assert seen[identity_token.HEADER] == token
+    assert seen["x-user-id"] == "7"

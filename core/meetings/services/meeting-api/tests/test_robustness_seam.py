@@ -851,7 +851,7 @@ def test_startup_requires_admin_token(monkeypatch):
     import meeting_api.__main__ as entry
 
     monkeypatch.delenv("ADMIN_TOKEN", raising=False)
-    monkeypatch.setenv("VEXA_GATEWAY_IDENTITY_SECRET", "a-real-signing-key")
+    monkeypatch.setenv("VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE", "/run/vexa-identity/public/key.pem")
     with pytest.raises(RuntimeError) as ei:
         entry._require_config()
     msg = str(ei.value)

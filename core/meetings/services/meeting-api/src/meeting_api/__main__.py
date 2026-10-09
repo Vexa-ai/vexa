@@ -60,6 +60,19 @@ def _require_config(env: "os._Environ | dict | None" = None) -> None:
     preflight(env)
 
 
+def _identity_key():
+    """gateway-identity.v1 — the gateway's Ed25519 public key, or a refused boot. A file that is
+    unreadable, or is anything but an Ed25519 public key (the private key included: a verifier that
+    holds it could sign), stops the boot naming the fault, never the key."""
+    from . import identity_token
+    from .config_preflight import ConfigError
+
+    try:
+        return identity_token.read_verify_key(os.environ.get("VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE", ""))
+    except identity_token.KeyUnavailable as e:
+        raise ConfigError(f"meeting-api refuses to boot: VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE — {e}") from None
+
+
 # How many users a calendar sweep syncs at once. Users are independent, so the tick's wall time
 # tracks concurrency rather than the number of connected feeds; the bound keeps the DB pool and
 # the outbound feed fetches inside the budget a handful of users would already use.
@@ -242,9 +255,10 @@ def build_production_app():
         transcript_finalizer=_transcript_finalizer,
         calendar_sync_now=_calendar_sync_now,
         calendar_sync_status=_calendar_sync_status,
-        # gateway-identity.v1: the door for x-user-*. _require_config() above refused the boot without the
-        # signing key, so this is never empty here.
-        identity_secret=os.environ.get("VEXA_GATEWAY_IDENTITY_SECRET", ""),
+        # gateway-identity.v1: the door for x-user-*, holding the gateway's PUBLIC key — this service
+        # verifies the gateway's signature and cannot make one. _require_config() refused a boot
+        # without the path; _identity_key() refuses one whose file is not that key.
+        identity_key=_identity_key(),
         internal_secret=os.environ.get("INTERNAL_API_SECRET", ""),
     )
 

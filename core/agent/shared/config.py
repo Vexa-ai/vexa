@@ -43,13 +43,14 @@ class Settings(BaseSettings):
 
     # ── identity seam — the subject is the authenticated user (P20) ──────────
     # agent-api is fronted by the gateway, which resolves the bearer → user and forwards X-User-Id
-    # together with X-Vexa-Identity, an HMAC over the same identity with a short expiry
-    # (gateway-identity.v1). ``gateway_identity_secret`` verifies it: with it set, agent-api refuses any
-    # x-user-* header that is neither signed nor carried by the internal tier, and a request that
-    # names nobody is a 401 — there is no fallback subject. The production boot requires it.
-    gateway_identity_secret: SecretStr = SecretStr("")
+    # together with X-Vexa-Identity, an Ed25519 signature over the same identity with a short expiry
+    # (gateway-identity.v1). ``gateway_identity_public_key_file`` names the gateway's PUBLIC key: with it
+    # set, agent-api refuses any x-user-* header that is neither signed nor carried by the internal
+    # tier, and a request that names nobody is a 401 — there is no fallback subject. agent-api can
+    # verify that signature and cannot make one. The production boot requires it.
+    gateway_identity_public_key_file: str = ""
     # The single-user fallback subject for an app built WITHOUT the identity guard (the in-process
-    # test harness). Ignored whenever ``gateway_identity_secret`` is set, which every deployment is.
+    # test harness). Ignored whenever the public key is set, which every deployment is.
     agent_default_subject: str = ""
 
     # ── Stream primitive — the per-dispatch redis Streams (unit:<id>:out / :in) ─

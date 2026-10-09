@@ -618,18 +618,21 @@ def test_policy_guard_removes_policy_in_freshly_seeded_workspace(tmp_path):
 
 # ── vector 2 (topology): a forged X-User-Id never reaches the role gate ──────────────────────────
 def test_an_unsigned_identity_is_refused_before_the_role_gate(tmp_path, monkeypatch):
-    """gateway-identity.v1: with the gateway's signing key configured (every deployment), a caller that
+    """gateway-identity.v1: with the gateway's public key configured (every deployment), a caller that
     reaches agent-api directly and asserts X-User-Id without the signature is refused 401 at the door;
     the gateway's signed identity reaches the normal role gate (403 for a non-member, not 401)."""
     from control_plane import identity_token
 
     _init_ws(tmp_path, "wsA")
-    monkeypatch.setenv("VEXA_GATEWAY_IDENTITY_SECRET", "test-signing-key")
+    key = identity_token.generate_signing_key()
+    public = tmp_path / "identity-public-key.pem"
+    public.write_bytes(identity_token.public_key_pem(key))
+    monkeypatch.setenv("VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE", str(public))
     monkeypatch.setenv("INTERNAL_API_SECRET", "test-internal-secret")
     c = _client(tmp_path)
     r = c.get("/api/workspace/members?workspace_id=wsA", headers={"X-User-Id": "attacker"})
     assert r.status_code == 401
-    signed = {identity_token.HEADER: identity_token.sign("test-signing-key", {"sub": "attacker"})}
+    signed = {identity_token.HEADER: identity_token.sign(key, {"sub": "attacker"})}
     r2 = c.get("/api/workspace/members?workspace_id=wsA", headers={"X-User-Id": "victim", **signed})
     assert r2.status_code == 403
 

@@ -127,7 +127,7 @@
       "key": "VEXA_AGENT_DEFAULT_SUBJECT",
       "class": "defaulted",
       "default": "(empty \u2014 FAIL-CLOSED: 401 when no identity is named)",
-      "description": "single-user fallback subject for an app built WITHOUT the identity guard (the in-process test harness). Ignored whenever VEXA_GATEWAY_IDENTITY_SECRET is set, which every deployment is; no deploy surface sets it",
+      "description": "single-user fallback subject for an app built WITHOUT the identity guard (the in-process test harness). Ignored whenever VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE is set, which every deployment is; no deploy surface sets it",
       "targets": []
     },
     {
@@ -353,19 +353,9 @@
       ]
     },
     {
-      "key": "VEXA_GATEWAY_IDENTITY_SECRET",
+      "key": "VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE",
       "class": "required-explicit",
-      "secret": true,
-      "description": "gateway-identity.v1 verification key \u2014 the same value the gateway signs X-Vexa-Identity with. agent-api rebuilds every x-user-* header from a verified signature and refuses (401) an identity that is neither signed nor carried by the internal tier. Unset, nobody can be authenticated, so the boot refuses. Generated at install (compose mint-dev-env.sh, the Helm Secret, the lite entrypoint)",
-      "forbidden_values": [
-        "vexa-internal-secret",
-        "lite-internal-secret",
-        "changeme",
-        "change-me",
-        "CHANGE-ME",
-        "default",
-        "secret"
-      ]
+      "description": "gateway-identity.v1 verification key: a file holding the gateway's Ed25519 PUBLIC key (SubjectPublicKeyInfo PEM). agent-api rebuilds every x-user-* header from a verified signature and refuses (401) an identity that is neither signed nor carried by the internal tier, and forwards the verified token unchanged to the credential broker on every agent-role call. It verifies and cannot sign; a private key in this file refuses the boot, as does a missing file or any other key type. Generated at install with the gateway's signing key: compose's identity-keys one-shot, the Helm identity-keys ConfigMap, the Lite entrypoint"
     },
     {
       "key": "VEXA_INTERNAL_API_SECRET",

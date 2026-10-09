@@ -111,7 +111,7 @@ def test_preflight_refuses_a_secretless_or_placeheld_internal_tier():
     cp.preflight({"INTERNAL_API_SECRET": "a-real-secret", **IDENTITY})
 
 
-IDENTITY = {"VEXA_GATEWAY_IDENTITY_SECRET": "a-real-signing-key"}
+IDENTITY = {"VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE": "/run/vexa-identity/public/key.pem"}
 
 
 def test_preflight_refuses_a_boot_that_cannot_verify_identity():
@@ -119,11 +119,9 @@ def test_preflight_refuses_a_boot_that_cannot_verify_identity():
     beside it; with no key to check it, nobody can be authenticated, so the boot refuses."""
     with pytest.raises(cp.ConfigError) as ei:
         cp.preflight({"INTERNAL_API_SECRET": "a-real-secret"})
-    assert "VEXA_GATEWAY_IDENTITY_SECRET" in str(ei.value)
-    for placeholder in ("changeme", "secret"):
-        with pytest.raises(cp.ConfigError):
-            cp.preflight({"INTERNAL_API_SECRET": "a-real-secret",
-                          "VEXA_GATEWAY_IDENTITY_SECRET": placeholder})
+    assert "VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE" in str(ei.value)
+    with pytest.raises(cp.ConfigError):
+        cp.preflight({"INTERNAL_API_SECRET": "a-real-secret", "VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE": ""})
 
 
 def test_the_toolbelt_is_a_capability_with_both_halves():
@@ -150,7 +148,7 @@ def test_preflight_reports_capability_rows(monkeypatch):
     for k in ("VEXA_BOT_API_KEY", "HOST_CLAUDE_CREDENTIALS", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("INTERNAL_API_SECRET", "a-real-secret")
-    monkeypatch.setenv("VEXA_GATEWAY_IDENTITY_SECRET", "a-real-signing-key")
+    monkeypatch.setenv("VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE", "/run/vexa-identity/public/key.pem")
     report = cp.preflight()
     assert report["service"] == "agent-api"
     assert report["capabilities"]["bot_gateway"]["state"] == cp.NOT_CONFIGURED
