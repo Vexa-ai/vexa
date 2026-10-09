@@ -9,14 +9,43 @@
 // stay green through exactly the bug it was written to catch. The planted file IS the input
 // population: `git grep --untracked` reads the working tree, so a file on disk is a real input.
 
-import test from "node:test";
+import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { writeFileSync, readFileSync, rmSync, mkdirSync, existsSync } from "node:fs";
+import { writeFileSync, readFileSync, rmSync, mkdirSync, existsSync, mkdtempSync, copyFileSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+
+// The tree every gate in this file runs against: a private copy of the checkout's files (tracked,
+// plus untracked and not ignored: the population `git grep --untracked` reads), made once per run,
+// with git pointed at the checkout's own repository. Fixtures plant and edit files in the COPY.
+// node --test runs test FILES in parallel, and other files run gates over the real checkout (for
+// example publish-edge.test.mjs expects gate:config-contract green), so a fixture written into the
+// checkout reds them whenever their read lands in its window; on CI's three-wide runner it did on
+// every run. Tests in this file run one at a time, so editing the copy in place and restoring it
+// stays race-free.
+let TREE = null;
+let GIT_ENV = null;
+after(() => { if (TREE) rmSync(TREE, { recursive: true, force: true }); }); // once, after every test in the file
+function tree() {
+  if (TREE) return TREE;
+  const copy = mkdtempSync(join(tmpdir(), "vexa-gates-tree-"));
+  const files = execFileSync("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard"], { cwd: ROOT })
+    .toString().split("\0").filter(Boolean);
+  for (const f of files) {
+    if (!existsSync(join(ROOT, f))) continue; // deleted in the working tree, not yet committed
+    mkdirSync(dirname(join(copy, f)), { recursive: true });
+    copyFileSync(join(ROOT, f), join(copy, f));
+  }
+  // installed packages are read, never written: the gates' own imports (ajv, for example) resolve through a link
+  if (existsSync(join(ROOT, "node_modules"))) symlinkSync(join(ROOT, "node_modules"), join(copy, "node_modules"));
+  const gitDir = execFileSync("git", ["rev-parse", "--absolute-git-dir"], { cwd: ROOT, encoding: "utf8" }).trim();
+  GIT_ENV = { ...process.env, GIT_DIR: gitDir, GIT_WORK_TREE: copy };
+  return (TREE = copy);
+}
 
 // admin-api is declared in deploy/db-budget.json (pool_size 5 / max_overflow 10), so a literal
 // planted here is compared against a real ceiling. agent-api is a real service dir that is NOT
@@ -35,7 +64,7 @@ const POOL_LITERALS = "configure(url, pool_size=20, max_overflow=30)\n";
 // another run, with no trace of who dropped it. So remember the topmost ancestor that did not
 // already exist and prune from there.
 function withPlanted(relPath, body, fn) {
-  const abs = join(ROOT, relPath);
+  const abs = join(tree(), relPath);
   const dir = dirname(abs);
   let prune = null;
   for (let d = dir; !existsSync(d); d = dirname(d)) prune = d;
@@ -51,7 +80,7 @@ function withPlanted(relPath, body, fn) {
 
 function runDbBudget() {
   try {
-    return { green: true, out: execFileSync("node", ["scripts/gates.mjs", "db-budget"], { cwd: ROOT, encoding: "utf8" }) };
+    return { green: true, out: execFileSync("node", ["scripts/gates.mjs", "db-budget"], { cwd: tree(), env: GIT_ENV, encoding: "utf8" }) };
   } catch (e) {
     return { green: false, out: `${e.stdout || ""}${e.stderr || ""}` };
   }
@@ -124,12 +153,12 @@ test("a test-only create_async_engine does not invent a service in the budget", 
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 
 function runGate(name) {
-  try { return { green: true, out: execFileSync("node", ["scripts/gates.mjs", name], { cwd: ROOT, encoding: "utf8" }) }; }
+  try { return { green: true, out: execFileSync("node", ["scripts/gates.mjs", name], { cwd: tree(), env: GIT_ENV, encoding: "utf8" }) }; }
   catch (e) { return { green: false, out: `${e.stdout || ""}${e.stderr || ""}` }; }
 }
-// Temporarily replace `find`→`repl` in a tracked file, run fn, always restore the exact original bytes.
+// Temporarily replace `find`→`repl` in a tracked file of the copy, run fn, always restore the exact original bytes.
 function withEdited(relPath, find, repl, fn) {
-  const abs = join(ROOT, relPath);
+  const abs = join(tree(), relPath);
   const orig = readFileSync(abs, "utf8");
   const edited = orig.replace(find, repl);
   assert.notEqual(edited, orig, `fixture setup: pattern not found in ${relPath} — the test would prove nothing`);
@@ -143,8 +172,6 @@ function withEdited(relPath, find, repl, fn) {
 // deploy/lite/entrypoint.sh was read ONLY as check 3's fallback, so it was the one surface, in the
 // one direction, that nothing walked: an export whose declaration AND reader were both deleted left
 // no refusal and no warning. Measured on the tip before the fix — the same plant was green.
-// entrypoint.sh is touched by no other test file, so the in-place edit below stays inside this
-// file's sequential run.
 const LITE_ENTRYPOINT = "deploy/lite/entrypoint.sh";
 
 test("config-contract vacuity: the committed lite entrypoint is green", () => {
@@ -302,4 +329,22 @@ test("runtime-parity RED: the bare `apt install` form (not just apt-get) is caug
   assert.equal(r.green, false, "`apt install redis-server` (no -get) bypassed the parity guard");
   assert.match(r.out, /lite/);
   assert.match(r.out, /XAUTOCLAIM/);
+});
+
+// ── fixtures never write the checkout ────────────────────────────────────────────────────────────
+// node --test runs test FILES in parallel, and other files run gates over the real tree (for
+// example publish-edge.test.mjs runs gate:config-contract and expects it green). A fixture written
+// into the checkout reds them whenever their read lands inside its window, which CI's three-wide
+// file concurrency hit on every run. So every fixture here lives in this file's private copy.
+test("a fixture is visible to the gate it runs, and never to the checkout other test files read", () => {
+  const entry = readFileSync(join(ROOT, LITE_ENTRYPOINT), "utf8");
+  const seen = withEdited(LITE_ENTRYPOINT, "\nexport ", "\nexport VEXA_PHANTOM_ENTRY=1\nexport ", () => ({
+    checkout: readFileSync(join(ROOT, LITE_ENTRYPOINT), "utf8"),
+    gate: runGate("config-contract"),
+  }));
+  assert.equal(seen.checkout, entry, "the edit stays out of the checkout");
+  assert.equal(seen.gate.green, false, "and the gate still reads it");
+  const planted = withPlanted(PROD_FILE, POOL_LITERALS, () => ({ checkout: existsSync(join(ROOT, PROD_FILE)), gate: runDbBudget() }));
+  assert.equal(planted.checkout, false, "a planted file stays out of the checkout");
+  assert.equal(planted.gate.green, false, "and the gate still reads it");
 });
