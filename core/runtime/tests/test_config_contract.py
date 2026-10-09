@@ -165,3 +165,13 @@ def test_health_carries_capability_rows_additively(monkeypatch):
     assert caps["scheduler"]["state"] == cp.NOT_CONFIGURED
     assert caps["model_inference"]["state"] == cp.NOT_CONFIGURED
     assert set(caps) == {"scheduler", "bot_spawn", "agent_spawn", "model_inference"}
+
+
+def test_every_forwarded_worker_setting_is_declared():
+    """The runtime forwards WORKER_FORWARD_ENV from its own environment into agent workers, and Lite
+    starts the runtime with only the keys this declaration names (deploy/lite/bin/vexa-runtime) — so a
+    forwarded key the declaration lacks silently never reaches a Lite worker."""
+    from runtime_kernel.workload_env import WORKER_FORWARD_ENV
+
+    declared = {k["key"] for k in cp.load_declaration()["keys"]}
+    assert set(WORKER_FORWARD_ENV) <= declared, sorted(set(WORKER_FORWARD_ENV) - declared)
