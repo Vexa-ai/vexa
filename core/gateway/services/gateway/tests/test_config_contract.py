@@ -25,7 +25,8 @@ def test_preflight_refuses_boot_without_internal_api_secret():
     assert "INTERNAL_API_SECRET" in str(ei.value)
 
 
-REQUIRED = {"INTERNAL_API_SECRET": "a-real-secret", "VEXA_GATEWAY_IDENTITY_SECRET": "a-real-signing-key"}
+REQUIRED = {"INTERNAL_API_SECRET": "a-real-secret",
+            "VEXA_GATEWAY_IDENTITY_SIGNING_KEY_FILE": "/run/vexa-identity/signing/key.pem"}
 
 
 def test_preflight_passes_when_required_set():
@@ -37,7 +38,7 @@ def test_preflight_refuses_boot_without_the_identity_signing_key():
     request, so the gateway refuses to boot rather than forward identities nobody will believe."""
     with pytest.raises(cp.ConfigError) as ei:
         cp.preflight({"INTERNAL_API_SECRET": "a-real-secret"})
-    assert "VEXA_GATEWAY_IDENTITY_SECRET" in str(ei.value)
+    assert "VEXA_GATEWAY_IDENTITY_SIGNING_KEY_FILE" in str(ei.value)
 
 
 def test_preflight_refuses_the_published_placeholder():
@@ -54,3 +55,26 @@ def test_preflight_refuses_the_published_placeholder():
             cp.preflight({**REQUIRED, "INTERNAL_API_SECRET": placeholder})
         assert "INTERNAL_API_SECRET" in str(ei.value)
         assert placeholder not in str(ei.value), "a refusal must never echo the value"
+
+
+def test_the_boot_refuses_a_signing_key_file_that_is_not_the_private_key(tmp_path):
+    """gateway-identity.v1 — the path being set is not enough: an unreadable file, the PUBLIC key mounted by
+    mistake, or an old shared HMAC secret left in place each refuse the boot, and the refusal names
+    the key's name, never its material."""
+    from gateway import identity_token
+    from gateway.adapters import load_signing_key
+
+    key = identity_token.generate_signing_key()
+    good = tmp_path / "signing.pem"
+    good.write_bytes(identity_token.private_key_pem(key))
+    assert load_signing_key(str(good)).public_key() == key.public_key()
+
+    public = tmp_path / "public.pem"
+    public.write_bytes(identity_token.public_key_pem(key))
+    legacy = tmp_path / "hmac-secret"
+    legacy.write_text("4f" * 32)
+    for path in ("", str(tmp_path / "missing.pem"), str(public), str(legacy)):
+        with pytest.raises(cp.ConfigError) as ei:
+            load_signing_key(path)
+        assert "VEXA_GATEWAY_IDENTITY_SIGNING_KEY_FILE" in str(ei.value)
+        assert "BEGIN" not in str(ei.value) and "4f4f" not in str(ei.value)

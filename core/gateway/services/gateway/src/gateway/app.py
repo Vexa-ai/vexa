@@ -246,7 +246,7 @@ def create_app(
     agent_api_url: Optional[str] = None,
     admin_api_url: str = _DEFAULT_ADMIN_API_URL,
     mcp_url: str = _DEFAULT_MCP_URL,
-    identity_secret: str = "",
+    identity_key=None,
     rate_limiter=None,
 ) -> FastAPI:
     """Build the gateway FastAPI app over the injected ports.
@@ -255,10 +255,11 @@ def create_app(
     ``downstream``  — forwards proxied HTTP requests to meeting-api (the unified control plane:
                       /bots + /transcripts + /meetings + /recordings all live there now, P2).
     ``redis``       — pub/sub bus for the ``/ws`` fan-in.
-    ``identity_secret`` — signs the resolved identity onto every forward (gateway-identity.v1,
-                      ``X-Vexa-Identity``). The production builder passes
-                      ``VEXA_GATEWAY_IDENTITY_SECRET``, which the boot preflight requires; a harness
-                      that injects fakes downstream may leave it empty and forward plain headers.
+    ``identity_key`` — the Ed25519 PRIVATE key that signs the resolved identity onto every forward
+                      (gateway-identity.v1, ``X-Vexa-Identity``). The gateway is its only holder. The
+                      production builder loads it from ``VEXA_GATEWAY_IDENTITY_SIGNING_KEY_FILE``,
+                      which the boot requires; a harness that injects fakes downstream may leave it
+                      ``None`` and forward plain headers.
     """
     # ── WHICH DOMAINS THIS DEPLOYMENT FRONTS (PRD decisions 40.6 + 40.7) ─────────────────────
     #
@@ -425,11 +426,11 @@ def create_app(
         # shared-workspace memberships meeting-api authorizes a member's transcript subscribe against
         # (Lane A); the per-user webhook bot_spawn persists into meeting.data (identity owns it); and,
         # for a worker's delegation token, the dispatch's ceiling. The services behind this edge
-        # believe these headers only with the signature beside them — `X-Vexa-Identity`, HMAC over the
-        # same claims with a short expiry — so a process that reaches them past this edge cannot
-        # name a user.
-        if identity_secret:
-            headers.update(identity_token.signed_headers(identity_secret, user_data))
+        # believe these headers only with the signature beside them — `X-Vexa-Identity`, an Ed25519
+        # signature over the same claims with a short expiry, made with a private key only this edge
+        # holds — so a process that reaches them past this edge cannot name a user.
+        if identity_key is not None:
+            headers.update(identity_token.signed_headers(identity_key, user_data))
         else:
             headers.update(identity_token.headers_from_claims(
                 identity_token.claims_from_validation(user_data)))

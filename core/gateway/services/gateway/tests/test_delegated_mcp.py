@@ -9,9 +9,8 @@ There is no second upstream for it and no branch that skips authentication or th
 from fastapi.testclient import TestClient
 
 from gateway import create_app, identity_token
-from conftest import FakeAuthorizer, FakeDownstream, FakeRedis, VALID_KEY
+from conftest import SIGNING_KEY, VERIFY_KEY, FakeAuthorizer, FakeDownstream, FakeRedis, VALID_KEY
 
-SECRET = "test-identity-secret"
 DELEGATED = "vxd_header.payload.signature"
 DELEGATED_USER = {"user_id": 42, "scopes": ["bot", "tx"], "max_concurrent": 3,
                   "email": "ada@example.com",
@@ -21,7 +20,7 @@ DELEGATED_USER = {"user_id": 42, "scopes": ["bot", "tx"], "max_concurrent": 3,
 def _client(user=DELEGATED_USER, key=DELEGATED, rate_limiter=None):
     downstream = FakeDownstream()
     app = create_app(FakeAuthorizer(user=user, valid_key=key), downstream, FakeRedis(),
-                     identity_secret=SECRET, rate_limiter=rate_limiter)
+                     identity_key=SIGNING_KEY, rate_limiter=rate_limiter)
     return TestClient(app), downstream
 
 
@@ -32,7 +31,7 @@ def test_a_delegation_bearer_reaches_the_one_assembled_mcp_with_a_signed_identit
     assert r.status_code == 200
     fwd = downstream.last
     assert fwd["url"] == "http://mcp:8010/mcp"
-    claims = identity_token.verify(SECRET, fwd["headers"][identity_token.HEADER])
+    claims = identity_token.verify(VERIFY_KEY, fwd["headers"][identity_token.HEADER])
     assert claims["sub"] == "42"
     assert claims["delegation"] == {"regime": "autonomous", "workspaces": ["ws_1"], "target": "ws_1"}
     assert fwd["headers"]["x-user-id"] == "42"
@@ -64,7 +63,7 @@ def test_the_tool_calls_behind_the_mcp_resolve_the_same_bearer_on_rest_routes():
     client, downstream = _client()
     r = client.get("/meetings", headers={"X-API-Key": DELEGATED})
     assert r.status_code == 200
-    assert identity_token.verify(SECRET, downstream.last["headers"][identity_token.HEADER])["sub"] == "42"
+    assert identity_token.verify(VERIFY_KEY, downstream.last["headers"][identity_token.HEADER])["sub"] == "42"
 
 
 def test_api_key_mcp_traffic_reaches_the_same_server():

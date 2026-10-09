@@ -24,19 +24,9 @@
       ]
     },
     {
-      "key": "VEXA_GATEWAY_IDENTITY_SECRET",
+      "key": "VEXA_GATEWAY_IDENTITY_SIGNING_KEY_FILE",
       "class": "required-explicit",
-      "secret": true,
-      "description": "gateway-identity.v1 signing key. The gateway HMAC-signs the identity it resolved onto every forward (X-Vexa-Identity, short expiry); agent-api and meeting-api verify it with the same value and refuse an x-user-* header without it. Unset, nothing behind the edge can authenticate a request, so the boot refuses. Generated at install (compose mint-dev-env.sh, the Helm Secret, the lite entrypoint).",
-      "forbidden_values": [
-        "vexa-internal-secret",
-        "lite-internal-secret",
-        "changeme",
-        "change-me",
-        "CHANGE-ME",
-        "default",
-        "secret"
-      ]
+      "description": "gateway-identity.v1 signing key: a file holding the gateway's Ed25519 PRIVATE key (PKCS#8 PEM). The gateway signs the identity it resolved onto every forward (X-Vexa-Identity, short expiry); agent-api, meeting-api and the credential broker hold only the public half and can verify but never sign. No other service mounts this file. Unset, or not an Ed25519 private key, the boot refuses. Generated at install: compose's identity-keys one-shot, the Helm identity-keys Secret, the Lite entrypoint (persisted in its state directory)."
     },
     {
       "key": "ADMIN_API_URL",
