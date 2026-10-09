@@ -20,6 +20,7 @@ behavior is the v0.12 carve of the deployed ``services/api-gateway/main.py``:
 The collaborators (admin-api, downstream services, redis) are injected as PORTS (``ports.py``)
 so the same app runs with real adapters in prod (``adapters.py``) and in-process fakes in the
 conformance harness — the conformance assertions therefore drive SHIPPED code.
+Both forwarding paths encode the ceiling and optional account ramp through ``user_limits_header``.
 
 The edge threads ``logevent.v1`` trace_id: ``TraceMiddleware`` mints/reads ``X-Trace-Id`` and
 forwards it to the downstream hop; user/system ``log_event``s are emitted on the auth + proxy
@@ -38,7 +39,7 @@ import httpx  # the downstream adapter's transport errors are mapped to 502/504 
 
 from fastapi import FastAPI, Request, Response, WebSocket, WebSocketDisconnect
 
-from . import routes_manifest
+from . import routes_manifest, user_limits
 from fastapi.responses import StreamingResponse
 from fastapi.routing import APIRoute
 
@@ -415,7 +416,7 @@ def create_app(
         if user_data.get("email"):
             headers["x-user-email"] = str(user_data["email"])
         headers["x-user-scopes"] = ",".join(user_data.get("scopes", []))
-        headers["x-user-limits"] = str(user_data.get("max_concurrent", 3))
+        headers["x-user-limits"] = user_limits.user_limits_header(user_data)
         # Lane A: the RESOLVED shared-workspace membership ids (never client-declared; /internal/validate
         # returns them). meeting-api authorizes a member's live-transcript subscribe against this set.
         if user_data.get("workspaces"):

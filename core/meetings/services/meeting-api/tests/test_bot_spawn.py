@@ -1222,3 +1222,226 @@ async def test_spawn_threads_capture_signal_from_bot_context(monkeypatch, ctx, e
                       token_secret=SECRET)
     inv = json.loads(runtime.specs[0]["env"]["BOT_CONFIG"])
     assert inv["captureSignalEnabled"] is expected
+
+
+# Per-account creation-window ramp: drive the shipped HTTP route and auto-join flow.
+@pytest.mark.parametrize("header,expected", [
+    ("5", (5, None)), ("0", (0, None)), (None, (None, None)),
+    ('{"max_concurrent": 5, "ramp_bots": 2, "ramp_window_s": 300}', (5, (2, 300))),
+    ('{"max_concurrent_bots": 5, "ramp_bots": 0, "ramp_window_s": 1}', (5, (0, 1))),
+    ('{"max_concurrent": 5}', (5, None)),
+    ('{"max_concurrent": 5, "ramp_bots": 2}', (5, None)),
+    ('{"max_concurrent": 5, "ramp_bots": -1, "ramp_window_s": 300}', (5, None)),
+    ('{"max_concurrent": 5, "ramp_bots": 2, "ramp_window_s": 0}', (5, None)),
+    ("garbage", (None, None)), ("[]", (None, None)),
+    ('{"max_concurrent": 1e400}', (None, None)),
+])
+def test_resolve_limits_ramp_and_legacy_headers(header, expected):
+    from meeting_api.bot_spawn.router import _resolve_limits, _resolve_max_concurrent
+    assert _resolve_limits(header) == expected
+    assert _resolve_max_concurrent(header) == expected[0]
+
+
+def test_ramp_refuses_third_spawn_until_window_expires(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    _spawn_env(monkeypatch)
+    now = [datetime(2026, 9, 19, tzinfo=timezone.utc)]
+    repo, runtime = InMemoryMeetingRepo(clock=lambda: now[0]), FakeRuntimeClient()
+    client = _client(repo, runtime)
+    headers = {**HEADERS, "x-user-limits": json.dumps({
+        "max_concurrent": 10, "ramp_bots": 2, "ramp_window_s": 300,
+    })}
+
+    def spawn(native):
+        return client.post("/bots", headers=headers,
+                           json={"platform": "google_meet", "native_meeting_id": native})
+
+    first, second = spawn("ramp-one"), spawn("ramp-two")
+    assert first.status_code == second.status_code == 201
+    # A failed attempt and a completed bot both consumed a hot slot.
+    repo.set_status(first.json()["id"], "failed")
+    repo.set_status(second.json()["id"], "completed")
+    now[0] += timedelta(seconds=10.25)
+    third = spawn("ramp-three")
+    assert third.status_code == 429
+    assert 1 <= int(third.headers["Retry-After"]) <= 300
+    assert third.headers["Retry-After"] == "290"  # round up the fractional second
+    assert third.json() == {"detail":
+        "Ramp limit: at most 2 new bots per 300 s for this account; retry in 290 s"}
+    assert len(repo._meetings) == len(runtime.specs) == 2
+    now[0] += timedelta(seconds=289.75)  # exactly the window boundary
+    assert spawn("ramp-four").status_code == 201
+    assert len(runtime.specs) == 3
+
+
+def test_zero_ramp_refuses_first_spawn(monkeypatch):
+    _spawn_env(monkeypatch)
+    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
+    response = _client(repo, runtime).post("/bots", headers={
+        **HEADERS, "x-user-limits": json.dumps({
+            "max_concurrent": 10, "ramp_bots": 0, "ramp_window_s": 300,
+        }),
+    }, json={"platform": "google_meet", "native_meeting_id": "ramp-zero"})
+    assert response.status_code == 429
+    assert response.headers["Retry-After"] == "300"
+    assert "at most 0 new bots per 300 s" in response.json()["detail"]
+    assert not repo._meetings and not runtime.specs
+
+
+async def test_ramp_counts_only_this_users_non_browser_non_excluded_rows():
+    from meeting_api.bot_spawn import RampExceeded
+
+    repo = InMemoryMeetingRepo()
+    browser = await repo.create_meeting(user_id=USER, platform="browser_session",
+                                        native_meeting_id="browser", data={})
+    await repo.create_meeting(user_id=USER + 1, platform="google_meet",
+                              native_meeting_id="other-user", data={})
+    excluded = await repo.create_meeting(user_id=USER, platform="google_meet",
+                                         native_meeting_id="excluded", data={})
+    row = await repo.create_meeting_guarded(
+        user_id=USER, platform="google_meet", native_meeting_id="allowed", data={},
+        ramp=(1, 300), exclude_meeting_id=excluded["id"],
+    )
+    assert row["id"] != browser["id"]
+    with pytest.raises(RampExceeded):
+        await repo.create_meeting_guarded(
+            user_id=USER, platform="google_meet", native_meeting_id="refused", data={},
+            ramp=(1, 300), exclude_meeting_id=excluded["id"],
+        )
+
+
+async def test_no_ramp_preserves_ceiling_on_guarded_store():
+    from meeting_api.bot_spawn import MaxBotsExceeded
+
+    repo = InMemoryMeetingRepo()
+    await repo.create_meeting_guarded(user_id=USER, platform="google_meet",
+        native_meeting_id="ceiling-one", data={}, max_concurrent=1, ramp=None)
+    with pytest.raises(MaxBotsExceeded):
+        await repo.create_meeting_guarded(user_id=USER, platform="google_meet",
+            native_meeting_id="ceiling-two", data={}, max_concurrent=1, ramp=None)
+
+
+@pytest.mark.parametrize("bots", [0, 2])
+async def test_auto_join_carries_ramp_and_logs_refusal(monkeypatch, bots):
+    from datetime import datetime, timedelta, timezone
+    from meeting_api.bot_spawn import service as spawn_service
+    from meeting_api.bot_spawn.auto_join import auto_join_tick
+
+    _spawn_env(monkeypatch)
+    now = datetime(2026, 9, 19, tzinfo=timezone.utc)
+    ramps, logs = [], []
+
+    class ObservedRepo(InMemoryMeetingRepo):
+        async def create_meeting_guarded(self, **kwargs):
+            ramps.append(kwargs.get("ramp"))
+            return await super().create_meeting_guarded(**kwargs)
+
+    repo = ObservedRepo(clock=lambda: now)
+    row = await repo.create_meeting(user_id=USER, platform="google_meet",
+                                    native_meeting_id="ramp-calendar", data={
+                                        "scheduled_at": now.isoformat(), "auto_join": True,
+                                    })
+    repo._meetings[row["id"]]["created_at"] = (now - timedelta(days=1)).isoformat()
+    repo.set_status(row["id"], "scheduled")
+
+    async def context(user_id):
+        assert user_id == USER
+        return {"max_concurrent": 10, "ramp_bots": bots, "ramp_window_s": 300}
+
+    monkeypatch.setattr(spawn_service, "log_event", lambda event, **kw: logs.append((event, kw)))
+    counters = await auto_join_tick(repo, FakeRuntimeClient(), fetch_bot_context=context,
+        now=now, transcribe_gate=lambda: None, token_secret=SECRET, redis_url="redis://r")
+    assert ramps == [(bots, 300)]
+    refused = [(event, kw) for event, kw in logs if event == "bot_spawn_ramp_exceeded"]
+    if bots == 0:
+        assert counters["errors"] == 1 and counters["spawned"] == 0
+        assert len(refused) == 1
+        assert refused[0][1] == {
+            "audience": "user", "level": "warning", "span": "bots.create", "user_id": USER,
+            "fields": {"ramp_bots": 0, "ramp_window_s": 300, "retry_after_s": 300},
+        }
+        assert "Ramp limit:" in repo._meetings[row["id"]]["data"]["auto_join_error"]
+    else:
+        assert counters["spawned"] == 1 and counters["errors"] == 0
+        assert not refused
+
+
+def test_continue_meeting_obeys_ramp(monkeypatch):
+    _spawn_env(monkeypatch)
+    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
+    client = _client(repo, runtime)
+    headers = {**HEADERS, "x-user-limits": json.dumps({
+        "max_concurrent": 10, "ramp_bots": 2, "ramp_window_s": 300,
+    })}
+    for native in ("continue-one", "continue-two"):
+        response = client.post("/bots", headers=headers,
+            json={"platform": "google_meet", "native_meeting_id": native})
+        assert response.status_code == 201
+        repo.set_status(response.json()["id"], "completed")
+    response = client.post("/bots", headers=headers, json={
+        "platform": "google_meet", "native_meeting_id": "continue-one", "continue_meeting": True,
+    })
+    assert response.status_code == 429
+    assert response.headers["Retry-After"] == "300"
+    assert "at most 2 new bots per 300 s" in response.json()["detail"]
+    assert not repo.reopened and len(runtime.specs) == 2
+
+
+@pytest.mark.parametrize("planned_status", ["idle", "scheduled"])
+async def test_planned_row_does_not_consume_its_own_ramp_slot(monkeypatch, planned_status):
+    _spawn_env(monkeypatch)
+    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
+    planned = await repo.create_meeting(user_id=USER, platform="google_meet",
+        native_meeting_id="planned-ramp", data={"title": "Planned"})
+    repo.set_status(planned["id"], planned_status)
+    client = _client(repo, runtime)
+    headers = {**HEADERS, "x-user-limits": json.dumps({
+        "max_concurrent": 10, "ramp_bots": 1, "ramp_window_s": 300,
+    })}
+    response = client.post("/bots", headers=headers,
+        json={"platform": "google_meet", "native_meeting_id": "planned-ramp"})
+    assert response.status_code == 201
+    assert response.json()["id"] == planned["id"]
+    assert repo._meetings[planned["id"]]["data"]["title"] == "Planned"
+    response = client.post("/bots", headers=headers,
+        json={"platform": "google_meet", "native_meeting_id": "next-ramp"})
+    assert response.status_code == 429
+    assert response.headers["Retry-After"] == "300"
+    assert len(repo._meetings) == len(runtime.specs) == 1
+
+
+@pytest.mark.parametrize("resolver_error", [False, True])
+async def test_auto_join_datetime_context_keeps_the_tick_running(monkeypatch, resolver_error):
+    from datetime import datetime, timezone
+    from meeting_api.bot_spawn import auto_join
+
+    _spawn_env(monkeypatch)
+    now = datetime(2026, 9, 19, tzinfo=timezone.utc)
+    repo = InMemoryMeetingRepo(clock=lambda: now)
+    for user in (USER, USER + 1):
+        row = await repo.create_meeting(user_id=user, platform="google_meet",
+            native_meeting_id=f"context-{user}", data={"scheduled_at": now.isoformat()})
+        repo.set_status(row["id"], "scheduled")
+    ramps, warnings = [], []
+
+    async def context(user_id):
+        return {"max_concurrent": 10, "updated_at": now}
+
+    async def spawn(*args, **kwargs):
+        ramps.append(kwargs["ramp"])
+
+    if resolver_error:
+        def broken_resolver(mapping):
+            raise ValueError("invalid ramp context")
+        monkeypatch.setattr(auto_join, "_ramp_from_mapping", broken_resolver)
+    monkeypatch.setattr(auto_join, "request_bot", spawn)
+    monkeypatch.setattr(auto_join, "log_event", lambda event, **kw: warnings.append((event, kw)))
+    counters = await auto_join.auto_join_tick(repo, FakeRuntimeClient(), fetch_bot_context=context,
+        now=now, transcribe_gate=lambda: None, token_secret=SECRET, redis_url="redis://r")
+    assert ramps == [None, None]
+    assert counters["spawned"] == 2 and counters["errors"] == 0
+    if resolver_error:
+        warning_events = [kw for event, kw in warnings if event == "auto_join_invalid_ramp"]
+        assert len(warning_events) == 2
+        assert all(kw["level"] == "warning" for kw in warning_events)
