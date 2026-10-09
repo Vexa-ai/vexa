@@ -42,11 +42,18 @@ def test_missing_redirect_is_a_typed_503(signed, connection, broker, capsys):
     assert '"kind":"oauth_redirect_unset"' in capsys.readouterr().out
 
 
-def test_application_migrated_from_harness_store_is_honoured(signed, connection, broker, store):
-    object.__setattr__(broker.settings, "google_client_id", "")
-    store.put("operator-google", {"client_id": GOOGLE["client_id"], "client_secret": GOOGLE["client_secret"]})
+def test_the_google_application_comes_from_configuration_only(signed, connection, broker, store):
+    """VEXA_CONNECTIONS_GOOGLE_CLIENT_ID/SECRET are the one declared source. A store record a
+    development harness once wrote is not a second, undeclared one: it is never read, whether or
+    not the deployment configured an application."""
+    store.put("operator-google", {"client_id": "harness-client", "client_secret": "harness-secret"})
     q = authorize(signed, connection("google_calendar"))
     assert q["client_id"] == [GOOGLE["client_id"]]
+    object.__setattr__(broker.settings, "google_client_id", "")
+    r = signed("human", "POST", f"/api/connections/{connection('google_email')}/authorize")
+    assert r.status_code == 409
+    assert r.json()["detail"] == "Provider application is not configured on this deployment"
+    assert not [c for c in store.calls if c[0] == "get" and c[1] == "operator-google"]
 
 
 def test_callback_stores_tokens_and_returns_status_only(signed, connection, store):

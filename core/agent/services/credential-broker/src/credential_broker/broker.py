@@ -168,12 +168,9 @@ class Broker:
         return verifier, challenge
 
     def google(self) -> dict:
+        """The operator's Google OAuth application, from VEXA_CONNECTIONS_GOOGLE_CLIENT_ID/SECRET
+        and nowhere else."""
         client = google_client(self.settings)
-        if client is None:
-            # A store carried over from the 0.13.2 development harness kept the application here.
-            legacy = self.get("operator-google")
-            if legacy and legacy.data.get("client_id") and legacy.data.get("client_secret"):
-                client = {"client_id": legacy.data["client_id"], "client_secret": legacy.data["client_secret"]}
         if client is None:
             raise providers.ProviderError("Provider application is not configured on this deployment")
         return client
