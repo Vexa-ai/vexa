@@ -47,6 +47,10 @@ COPY core/agent/contracts ./contracts
 # assembled MCP edge serves 0 agent tools). test_agent_api_image_manifest.py asserts every
 # by-path read control_plane/*.py makes is COPYd somewhere in this Dockerfile.
 COPY core/agent/mcp.tools.v1.json ./mcp.tools.v1.json
+# The domain's routes.v1 manifest: its `verbs` rows say which verbs need a person in the loop, read
+# BY PATH at import by control_plane/route_policy.py (parents[1] lands on core/agent/). A build
+# without it refuses to start rather than serve those verbs to a worker with nobody watching.
+COPY core/agent/routes.v1.json ./routes.v1.json
 # The portable workspace primitives (workspace_id/workspace_paths/entities/links), moved out of
 # core/agent/shared into their own domain (PRD decision 47, step 2). control_plane imports them as
 # `workspaces.shared.<module>` — a plain __init__.py (no FastAPI/pydantic) is enough to make

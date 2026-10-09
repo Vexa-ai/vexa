@@ -30,7 +30,7 @@ from control_plane.bodies import (
     WorkspaceDeactivateBody, WorkspaceMoveBody, WorkspaceNewBody, WorkspacePublishBody,
     WorkspaceImportBody, WorkspacePullBody, WorkspacePurposeBody, WorkspacePushBody,
     WorkspaceRemoveBody, WorkspaceRenameBody, WorkspaceSwapBody, WorkspaceWriteBody)
-from control_plane.ceiling import is_unwatched, require_in_ceiling, require_person, write_slug
+from control_plane.ceiling import is_unwatched, require_in_ceiling, write_slug
 from control_plane.workspace_attach import (
     CloneError, activate_workspace, active_workspaces, attach_shared_workspace, bind_repository_credential,
     attached_workspaces, create_workspace, deactivate_workspace, delete_workspace,
@@ -1076,7 +1076,7 @@ def build(**d) -> APIRouter:
 
         Mounting is by-folder (``<root>/<subject>`` is what the next dispatch mounts), so the swapped
         tree takes effect on the subject's next turn — no dispatch change needed."""
-        require_person(request)      # loads a repository with the person's saved git credentials
+        # `person` in routes.v1.json: loads a repository with the person's saved git credentials
         require_in_ceiling(request, body.slug)
         subject = subject_of(request)
         repo = _repo(body.repo)      # 422 before any git process exists
@@ -1170,7 +1170,7 @@ def build(**d) -> APIRouter:
         queued/running is not success. Stored credentials are resolved inside the agent service.
         credential_workspace optionally reuses the deploy key of a workspace you own.
         """
-        require_person(request)      # loads a repository with the person's saved git credentials
+        # `person` in routes.v1.json: loads a repository with the person's saved git credentials
         require_in_ceiling(request, body.credential_workspace)
         subject = subject_of(request)
         repo = _repo(body.repo)
@@ -1288,7 +1288,7 @@ def build(**d) -> APIRouter:
         ``remote_url`` skips creation (pre-created/empty repo). Re-publish = plain push (fast-forward
         or a clear error on divergence — never a force push). The token is used server-side for this
         call only and never stored; every error is token-redacted (P15)."""
-        require_person(request)      # spends the person's git credential and changes where the tree syncs
+        # `person` in routes.v1.json: spends the person's git credential and changes where the tree syncs
         subject = subject_of(request)
         # slug → any workspace the caller can manage (own parked slot or shared membership, resolved
         # + permission-checked by _manage_dir); omitted keeps the legacy seed target.
@@ -1385,7 +1385,7 @@ def build(**d) -> APIRouter:
         """Push a workspace's current branch to its GitHub home (origin for attached clones, vexa-publish
         for published vexa-born), fast-forward only — NEVER a force push. The token authenticates the push
         and is never stored; a diverged remote fails loud (pull first). Every error is token-redacted (P15)."""
-        require_person(request)      # spends the person's git credential
+        # `person` in routes.v1.json: spends the person's git credential
         subject = subject_of(request)
         ws = _manage_dir(request, body.slug)
         home = remote_status(ws)
@@ -1408,7 +1408,7 @@ def build(**d) -> APIRouter:
         """Fetch + FAST-FORWARD a workspace from its GitHub home. A divergence (local commits the remote
         lacks) is refused — no merge/rebase/force — so it is resolved deliberately. The token (optional for
         public repos) is used for the fetch only and never stored (P15)."""
-        require_person(request)      # spends the person's git credential
+        # `person` in routes.v1.json: spends the person's git credential
         subject = subject_of(request)
         ws = _manage_dir(request, body.slug)
         # A pull REWRITES the tree, so on a shared workspace it is a write: viewers are refused here even
@@ -1443,7 +1443,7 @@ def build(**d) -> APIRouter:
 
         The RECEIPT is the returned pair plus the log line — the two facts a person needs afterwards
         are *which remote went* and *what its URL was*, and neither survives in git once it is gone."""
-        require_person(request)      # changes where the tree syncs
+        # `person` in routes.v1.json: changes where the tree syncs
         subject = subject_of(request)
         ws = _manage_dir(request, body.slug)
         _require_shared_write(subject, body.slug)

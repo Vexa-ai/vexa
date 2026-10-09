@@ -48,9 +48,8 @@ def clock_context(zone: str = '', now: "datetime | None" = None) -> dict:
     return result
 
 
-def build(*, subject_of, settings=None, require_person=None, **_) -> APIRouter:
+def build(*, subject_of, settings=None, **_) -> APIRouter:
     router = APIRouter()
-    person = require_person or (lambda request: None)
 
     def _identity(method: str, subject: str, body: "dict | None" = None) -> "tuple[int, dict]":
         base = ((settings.admin_api_url if settings is not None else '') or '').rstrip('/')
@@ -91,7 +90,7 @@ def build(*, subject_of, settings=None, require_person=None, **_) -> APIRouter:
     def timezone_set(request: Request, body: TimezoneBody):
         """Remember this person's explicitly stated IANA timezone (e.g. Europe/Lisbon) across chats.
         Ask when unknown; do not guess from server location or an email address."""
-        person(request)
+        # A person in the loop only: `person` in routes.v1.json, refused by the app's one gate.
         try:
             ZoneInfo(body.timezone)
         except (ZoneInfoNotFoundError, ValueError):

@@ -18,6 +18,9 @@ This module is the one place agent-api reads those headers, by the names the ven
 - `delegation_allows` / `require_in_ceiling` — the workspace ceiling, applied by every resolver of a
   named workspace before it resolves anything;
 - `write_slug` — where a page verb acts when the caller names no workspace.
+
+Which verbs need a person is not decided here: `route_policy.py` reads it from `routes.v1.json`
+and applies `require_person` for the matched route.
 """
 from __future__ import annotations
 

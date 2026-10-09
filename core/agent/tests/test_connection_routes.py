@@ -8,6 +8,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from control_plane import route_policy
 from control_plane.routers import connections
 
 READY = [{'id': 'a' * 32, 'provider': 'google_email', 'status': 'ready', 'label': 'Gmail',
@@ -30,19 +31,16 @@ def broker(monkeypatch):
     return calls
 
 
-def _person(request):
-    regime = (request.headers.get('x-user-regime') or '').lower()
-    if regime and regime != 'human':
-        from fastapi import HTTPException
-        raise HTTPException(403, {'status': 'refused', 'reason': 'human_session_required'})
+def _app() -> FastAPI:
+    """The router under agent-api's own person gate — the one place a `person` verb is refused."""
+    app = FastAPI(dependencies=[route_policy.PERSON_GATE])
+    app.include_router(connections.build(subject_of=lambda r: r.headers['x-user-id']))
+    return app
 
 
 @pytest.fixture
 def client(broker):
-    app = FastAPI()
-    app.include_router(connections.build(subject_of=lambda r: r.headers['x-user-id'],
-                                         require_person=_person))
-    return TestClient(app)
+    return TestClient(_app())
 
 
 SIGNED = 'v1.signed-by-the-gateway.for-u1'
@@ -199,8 +197,6 @@ def test_an_outage_choosing_the_mailbox_is_not_reported_as_a_missing_one(monkeyp
     def down(actor, method, path, payload=None, *, identity):
         raise HTTPException(503, 'Credential store unavailable — an outage, not an authorization problem')
     monkeypatch.setattr(connections, 'call_broker', down)
-    app = FastAPI()
-    app.include_router(connections.build(subject_of=lambda r: r.headers['x-user-id'], require_person=_person))
-    r = TestClient(app).post('/api/connections/gmail/draft', headers=HUMAN,
+    r = TestClient(_app()).post('/api/connections/gmail/draft', headers=HUMAN,
                              json={'request_id': 'req-00000001', 'recipient': 'a@b.example', 'subject': 's', 'body': 'b'})
     assert r.status_code == 503 and 'outage' in r.json()['detail']

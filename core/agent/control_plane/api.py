@@ -108,7 +108,8 @@ from control_plane.routers import connections as routers_connections
 from control_plane.routers import clock as routers_clock
 from control_plane.routers import workspaces as routers_workspaces
 from control_plane.routers import sharing as routers_sharing
-from control_plane.ceiling import require_in_ceiling, require_person
+from control_plane import route_policy
+from control_plane.ceiling import require_in_ceiling
 from control_plane.api_shared import (
     logger, _PHASE_WORD, _iso, _provenance_line, _epoch_text, _Sessions, _LiveMeetings)
 from control_plane.peer_lookups import (
@@ -199,7 +200,10 @@ def create_app(
                         len(_migrated["indexed"]))
     except Exception as exc:  # noqa: BLE001 — a volume that cannot be walked must not stop the boot
         logger.warning("workspace-id migration could not run: %s: %s", type(exc).__name__, exc)
-    app = FastAPI(title="vexa-agent-api", version="0.12.0")
+    # WHICH VERBS NEED A PERSON IN THE LOOP is data — `routes.v1.json`'s `verbs` rows — and this is
+    # the one place it is enforced: an app-level dependency, so it runs for the route a request
+    # matched, before the handler, and no route asks for it by hand (`route_policy.py`).
+    app = FastAPI(title="vexa-agent-api", version="0.12.0", dependencies=[route_policy.PERSON_GATE])
     settings = dispatcher.settings if dispatcher is not None else None
     # THE DOOR FOR `x-user-*` (gateway-identity.v1). Every request that names a person must carry the
     # gateway's signature over that identity, or come from the internal tier (flows, the terminal's
@@ -967,11 +971,13 @@ def create_app(
         _ws_is_member=_ws_is_member, _ws_sync=_ws_sync, dispatcher=dispatcher,
         invocations_url=invocations_url, live=live, mindex=mindex,
         redis_url=redis_url, scaffolds=scaffolds, scheduler=scheduler, sess=sess,
-        require_person=require_person, settings=settings, stream_reader=stream_reader,
+        settings=settings, stream_reader=stream_reader,
         subject_of=subject_of,
         workspace_registry=workspace_registry, workspace_touches=workspace_touches, wsr=wsr)
     for _r in (routers_health, routers_ingress, routers_chats, routers_routines, routers_admin, routers_meetings, routers_scaffolds, routers_friction, routers_proposals, routers_workspaces, routers_sharing, routers_connections, routers_clock):
         app.include_router(_r.build(**_deps))
+    # A `verbs` row naming a route this app does not serve protects nothing — refuse the boot.
+    route_policy.assert_served(app.routes)
 
     return app
 

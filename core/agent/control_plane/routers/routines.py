@@ -13,7 +13,6 @@ from jsonschema.exceptions import ValidationError
 from control_plane import routines as routines_mod
 from control_plane import workspace_routines as workspace_routines_mod
 from control_plane.bodies import RoutineCreate, RoutineEnabledPatch
-from control_plane.ceiling import require_person
 
 
 def build(**d) -> APIRouter:
@@ -31,8 +30,8 @@ def build(**d) -> APIRouter:
 
     @router.post("/api/routines", status_code=201)
     def create_routine(body: RoutineCreate, request: Request):
-        # A routine is a dispatch armed for later; an unwatched worker does not arm one.
-        require_person(request)
+        # A routine is a dispatch armed for later; an unwatched worker does not arm one (`person` in
+        # routes.v1.json, refused by the app's one gate before this runs).
         if scheduler is None or not invocations_url:
             raise HTTPException(status_code=501, detail="scheduler not wired")
         try:
@@ -68,7 +67,6 @@ def build(**d) -> APIRouter:
         """A PERSON STANDS BEHIND THIS ROUTINE, exactly as its file reads now — the act that arms a
         routine shown as `pending_confirmation` (`workspace_routines.PENDING`): one written by a
         worker dispatched without a person, or straight onto the workspace by an agent."""
-        require_person(request)
         if scheduler is None or not invocations_url:
             raise HTTPException(status_code=501, detail="scheduler not wired")
         subject = subject_of(request)
@@ -84,7 +82,6 @@ def build(**d) -> APIRouter:
 
     @router.patch("/api/routines/{name}/enabled")
     def set_routine_enabled(name: str, body: RoutineEnabledPatch, request: Request):
-        require_person(request)
         if scheduler is None or not invocations_url:
             raise HTTPException(status_code=501, detail="scheduler not wired")
         subject = subject_of(request)

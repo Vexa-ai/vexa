@@ -368,12 +368,14 @@ GLOBAL_VERBS = [
 
 @pytest.mark.parametrize("method,path,body", GLOBAL_VERBS)
 def test_writing_the_company_layer_is_held_to_the_ceiling(client, method, path, body):
-    r = client.request(method, path, json=body, headers=_as([INSIDE]))
+    # A person in the loop, so a verb that needs one (reset) reaches the ceiling rather than being
+    # refused first for having nobody watching (`test_person_verbs.py`).
+    r = client.request(method, path, json=body, headers=_as([INSIDE], regime="human"))
     assert _kind(r) == "out_of_scope", r.text
 
 
 def test_an_empty_ceiling_refuses_every_named_workspace(client):
-    r = client.delete(f"/api/workspace/{ABSENT}", headers=_as([]))
+    r = client.delete(f"/api/workspace/{ABSENT}", headers=_as([], regime="human"))
     assert _kind(r) == "out_of_scope"
 
 

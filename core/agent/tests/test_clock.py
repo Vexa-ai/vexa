@@ -10,10 +10,11 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
+from control_plane import route_policy
 from control_plane.routers import clock
 
 
@@ -67,13 +68,8 @@ def _client(monkeypatch, status=200):
     settings = SimpleNamespace(admin_api_url='http://admin-api:8001',
                                internal_api_secret=SecretStr('internal'))
 
-    def person(request):
-        if (request.headers.get('x-user-regime') or 'human') != 'human':
-            raise HTTPException(403, {'reason': 'human_session_required'})
-
-    app = FastAPI()
-    app.include_router(clock.build(subject_of=lambda r: r.headers['x-user-id'], settings=settings,
-                                   require_person=person))
+    app = FastAPI(dependencies=[route_policy.PERSON_GATE])   # agent-api's own person gate
+    app.include_router(clock.build(subject_of=lambda r: r.headers['x-user-id'], settings=settings))
     return TestClient(app), ident
 
 
