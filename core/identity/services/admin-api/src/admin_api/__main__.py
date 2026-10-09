@@ -109,12 +109,15 @@ def build_production_app():
 
     # The two sign-in lists are not free strings: a malformed entry matches nothing, silently. Refuse
     # the boot instead, naming the key and the entry, as preflight() does for a missing key.
-    from .app.signin_allow import boot_problems
+    from .app.signin_allow import boot_problems, open_to_everyone
     from .config_preflight import ConfigError
     problems = boot_problems()
     if problems:
         raise ConfigError("admin-api refuses to boot — malformed sign-in configuration: "
                           + "; ".join(problems))
+    if open_to_everyone():
+        logger.warning("VEXA_SIGNIN_ALLOW contains '*': ANY email address may sign in to this "
+                       "instance and get an account. Meant for dev/demo stacks only.")
 
     # F208: FLOWS_API_URL was the one flows publish-edge key spelled without the VEXA_ prefix
     # meeting-api and agent-api already used — a dogfood stage worker had to open each service's

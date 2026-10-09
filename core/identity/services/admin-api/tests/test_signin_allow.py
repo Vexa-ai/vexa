@@ -173,8 +173,9 @@ def test_a_settings_write_is_canonicalised_and_all_or_nothing():
     assert sa.normalize_setting(["a@b.co", "@c.co"]) == "a@b.co, @c.co"
     with pytest.raises(sa.InvalidAllowList) as bad:
         sa.normalize_setting("ok@example.com, bank.example, @nodot, x@@y.z, *")
-    # every problem at once — one per bad entry, the good one not among them
-    assert len(bad.value.problems) == 4
+    # every problem at once — one per bad entry, the good one not among them. `*` is not one of
+    # them: it is the explicit everyone entry (see the wildcard tests at the end of this file).
+    assert len(bad.value.problems) == 3
     assert not any("ok@example.com" in p for p in bad.value.problems)
 
 
@@ -522,3 +523,31 @@ def test_the_routes_take_the_contract_request_shapes(make_client):
     assert c.post("/internal/signin-admission", headers=h, json={}).status_code == 422
     assert c.post("/internal/bootstrap-admin", headers=h, json={"claim_code": "x"}).status_code == 422
     assert c.post("/internal/admin-claim/check", headers=h, json={"claim_code": "x" * 65}).status_code == 422
+
+
+# ── the explicit wildcard: `*` alone opens sign-in to everyone (dev/demo opt-in) ────────────────
+
+def test_the_wildcard_entry_is_valid_and_admits_any_address(monkeypatch):
+    assert sa.entry_problem("*") is None
+    assert sa.parse("*") == (["*"], [])
+    assert sa.matches("test@test.com", ["*"]) is True
+    assert _decide("stranger@example.com", allow=["*"]) == (True, sa.WHY_ALLOW_LIST)
+    monkeypatch.setenv("VEXA_SIGNIN_ALLOW", "*")
+    assert sa.open_to_everyone() is True
+    assert sa.boot_problems() == []
+
+
+def test_the_wildcard_is_never_the_default_and_never_a_pattern(monkeypatch):
+    monkeypatch.delenv("VEXA_SIGNIN_ALLOW", raising=False)
+    assert sa.open_to_everyone() is False
+    assert _decide("stranger@example.com") == (False, sa.WHY_NOT_ALLOWED)
+    # `*` is a whole entry, never a pattern inside one
+    assert sa.matches("someone@example.com", ["*@example.com"]) is False
+    assert sa.entry_problem("@*.example.com") is not None
+    assert sa.matches("not-an-address", ["*"]) is False
+
+
+def test_the_wildcard_is_not_an_admin(monkeypatch):
+    monkeypatch.setenv("VEXA_ADMIN_EMAILS", "*")
+    valid, problems = sa.admin_emails()
+    assert valid == [] and problems

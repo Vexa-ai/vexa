@@ -27,8 +27,10 @@ this service, and the terminal only asks (`POST /internal/signin-admission`,
 
 ENTRIES are exact addresses (`alice@example.com`) and whole domains (`@example.com`). A domain entry
 matches that domain exactly — a subdomain needs its own entry — and an exact entry matches that
-address exactly (no plus-address folding). Case never matters. There is deliberately no wildcard:
-"everybody" is not a list.
+address exactly (no plus-address folding). Case never matters. There is no pattern syntax; the
+one exception is the entry `*` alone, an explicit operator opt-in meaning EVERYONE may sign in
+(a dev or demo stack). It is never a default: unset, the instance stays closed, and admin-api logs
+a warning at boot while `*` is set (`open_to_everyone`).
 
 THIS MODULE IS PURE. `app/main.py` owns the one door that asks (`POST /internal/signin-admission`)
 and the settings row; everything that can be decided without a database is decided here, so it is
@@ -41,6 +43,8 @@ import re
 from typing import Iterable, List, Optional, Tuple
 
 ENV_KEY = "VEXA_SIGNIN_ALLOW"
+# The explicit "everyone may sign in" entry. Accepted only as a whole entry, never as a pattern.
+WILDCARD = "*"
 ADMIN_EMAILS_ENV = "VEXA_ADMIN_EMAILS"
 SETTING_KEY = "signin"
 SETTING_FIELD = "allow"
@@ -96,6 +100,8 @@ def split_entries(raw) -> List[str]:
 
 def entry_problem(entry: str) -> Optional[str]:
     """None when `entry` is a valid allow-list entry, else one sentence saying what is wrong."""
+    if entry == WILDCARD:
+        return None
     if len(entry) > MAX_ENTRY_LEN:
         return f"{entry[:40]!r}… is longer than {MAX_ENTRY_LEN} characters"
     if entry.startswith("@"):
@@ -179,12 +185,16 @@ def matches(email, entries: Iterable[str]) -> bool:
     if not is_address(e):
         return False
     allowed = set(entries)
+    if WILDCARD in allowed:
+        return True
     return e in allowed or ("@" + e.rpartition("@")[2]) in allowed
 
 
 def admin_email_problem(entry: str) -> Optional[str]:
     """None when `entry` is a usable admin address. An admin is one person: a domain entry would make
     everybody at that domain an administrator, so it is refused rather than widened."""
+    if entry == WILDCARD:
+        return f"{entry!r} is everyone — {ADMIN_EMAILS_ENV} names people, one full address each"
     if entry.startswith("@"):
         return f"{entry!r} is a domain — {ADMIN_EMAILS_ENV} names people, one full address each"
     return entry_problem(entry)
@@ -202,6 +212,13 @@ def admin_emails() -> Tuple[List[str], List[str]]:
         elif entry not in valid:
             valid.append(entry)
     return valid, problems
+
+
+def open_to_everyone() -> bool:
+    """True when the deployment's `VEXA_SIGNIN_ALLOW` holds the `*` entry: anybody with an address
+    may sign in. Boot logs a warning while it is set, so an open instance is never open silently."""
+    valid, _ = env_entries()
+    return WILDCARD in valid
 
 
 def boot_problems() -> List[str]:
