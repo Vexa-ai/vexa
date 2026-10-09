@@ -885,11 +885,10 @@ export async function startCaptureBridge(
       // ── Per-track capture: one 16 kHz PCM tap per remote track, each on its own stable channel ──
       // ONE shared AudioContext hosts every track's tap (Chromium hard-caps concurrent AudioContexts
       // at 6 — a per-track context would drop the 7th+ participant in a large meeting). Each track gets
-      // its own ScriptProcessor on that context; the bot page is headless with no UI to stutter, so the
-      // many-node cost that retired ScriptProcessor on the user's busy meeting page does not apply here.
-      // The accumulated-audio-time clock (anchor + samples/rate, the SAME the mix path proved) stamps
-      // every frame on the page clock = the hints' clock, so the resolver can correlate energy with the
-      // active-speaker signal and the per-channel lane times turns correctly.
+      // its own ScriptProcessor on that context; callbacks share the page's main thread.
+      // All tracks use one epoch-anchored monotonic page clock. Each frame is stamped at
+      // callback time minus its duration; skipped callbacks cannot compress elapsed time.
+      // Resolver hints and frame times remain on the same epoch timeline.
       // #1195 — the deaf-capture guard's presence oracle, on THIS lane too. The guard abstains
       // whenever it is never told about streams (aloneness.ts row 2: `streamsPresentAt === undefined`
       // → 'alone', i.e. no objection), so a capture branch that never calls __vexaStreamPresence
@@ -929,6 +928,7 @@ export async function startCaptureBridge(
         if (!w.__vexaTrackCtx) {
           w.__vexaTrackCtx = new (globalThis as any).AudioContext({ sampleRate: 16000 });
           w.__vexaTrackCtx.resume?.();
+          w.__vexaTrackEpochMs = Date.now() - performance.now();
           w.__vexaTrackCaps = new Map();
           w.__vexaTrackNextCh = 0;
         }
@@ -940,12 +940,22 @@ export async function startCaptureBridge(
           try {
             const src = ctx.createMediaStreamSource(s);
             const proc = ctx.createScriptProcessor(4096, 1, 1);
-            const startMs = Date.now();
-            let processed = 0;
+            let lastFrameEndMs: number | undefined;
+            let lastGapReportMs = -Infinity;
             proc.onaudioprocess = (e: any): void => {
               const input = e.inputBuffer.getChannelData(0) as Float32Array;
-              const ts = startMs + (processed / SR) * 1000;   // wall-clock of this frame's first sample
-              processed += input.length;                       // count ALL samples (silent too) → no drift
+              const frameMs = (input.length / SR) * 1000;
+              const frameEndMs = w.__vexaTrackEpochMs + performance.now();
+              const ts = frameEndMs - frameMs;
+              // Callback delivery approximates capture time; it cannot reconstruct audio
+              // lost upstream. Report discontinuities before silence gating so they remain
+              // distinguishable from a participant simply not speaking.
+              const gapMs = lastFrameEndMs === undefined ? 0 : ts - lastFrameEndMs;
+              if (gapMs > 1000 && frameEndMs - lastGapReportMs >= 10000) {
+                w.__vexaObservation?.('pertrack', { type: 'capture-clock-gap', channel: ch, gapMs, frameMs, tMs: ts }, ts);
+                lastGapReportMs = frameEndMs;
+              }
+              lastFrameEndMs = frameEndMs;
               let maxVal = 0;
               for (let i = 0; i < input.length; i++) { const a = Math.abs(input[i]); if (a > maxVal) maxVal = a; }
               if (maxVal <= SILENCE) return;                   // gate silence (as the mix path did)

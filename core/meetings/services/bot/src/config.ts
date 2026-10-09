@@ -157,7 +157,7 @@ export function loadInvocation(env: NodeJS.ProcessEnv = process.env): Invocation
   return parseInvocation(env.VEXA_BOT_CONFIG);
 }
 
-const SPEAKER_STREAM_ENV: Array<[keyof SpeakerStreamManagerConfig, string]> = [
+const SPEAKER_STREAM_ENV: Array<[Exclude<keyof SpeakerStreamManagerConfig, 'callbackStampedFrames'>, string]> = [
   ['minAudioDuration', 'BOT_SPEAKER_MIN_AUDIO_SEC'],
   ['submitInterval', 'BOT_SPEAKER_SUBMIT_INTERVAL_SEC'],
   ['confirmThreshold', 'BOT_SPEAKER_CONFIRM_THRESHOLD'],

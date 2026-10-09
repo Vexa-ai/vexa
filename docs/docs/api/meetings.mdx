@@ -467,8 +467,8 @@ silently merges two people — so the API hands you both layers, labelled, and l
 
 ## Recordings
 
-The meeting's **audio recording** is uploaded to object storage — on a self-host, your own MinIO bucket,
-so it never leaves your environment. This is the meeting audio, stored separately from the diarized
+The meeting's **audio recording** is uploaded to object storage — on a self-host, storage you run (Lite and
+Compose keep it as plain files in a local volume), so it never leaves your environment. This is the meeting audio, stored separately from the diarized
 transcript above (there is no "per-speaker audio" — speaker separation lives in the transcript as text).
 
 ```bash List recordings — GET /recordings
