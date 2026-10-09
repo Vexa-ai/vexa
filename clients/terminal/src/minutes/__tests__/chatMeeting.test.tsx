@@ -64,7 +64,7 @@ const session = (over: Partial<ServerSession> & { session: string }): ServerSess
 // ── what the shell binds FROM ────────────────────────────────────────────────────────────────────
 
 describe("the send's own event names the meeting to bind", () => {
-  /** The `artifact` a successful `bot_send` earns (`llm/claude_code.py::_bot_artifact`), as the
+  /** The `artifact` a successful `bot_send` earns (`llm/tool_events.py::_bot_artifact`), as the
    *  chat stream hands it to the shell. The shell resolves it with the ONE resolver every panel
    *  route already uses and binds when the answer is a meeting — so the dialect and the binding
    *  cannot drift apart without this failing. */

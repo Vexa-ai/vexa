@@ -25,7 +25,7 @@ describe("independent repository import", () => {
     expect(await screen.findByRole("status")).toBeTruthy();
     expect(screen.getByText("Cloning repository")).toBeTruthy();
     expect(attached).not.toHaveBeenCalled();
-    complete({workspace:"repo-123",cloned:true,changed:true,nested:false,repo:"https://github.com/acme/repo.git",ref:"main"});
+    complete({workspace:"repo-123",cloned:true,changed:true,repo:"https://github.com/acme/repo.git",ref:"main"});
     await screen.findByText("Cloned https://github.com/acme/repo.git into repo-123");
     expect(attached).toHaveBeenCalledWith("repo-123");
     expect(screen.getByText("Open workspace")).toBeTruthy();

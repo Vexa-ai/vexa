@@ -54,7 +54,7 @@ export async function initWorkspace(): Promise<{ workspace: string; seeded: bool
   return getJson(`/api/workspace/init`, { method: "POST" });
 }
 
-export interface WorkspaceSlot { repo: string | null; ref: string | null; name?: string; nested?: boolean; archived?: boolean }
+export interface WorkspaceSlot { repo: string | null; ref: string | null; name?: string; archived?: boolean }
 
 /** Archive (collapse, keep the data) or un-archive one of your workspaces. */
 export async function archiveWorkspace(slug: string, archived: boolean): Promise<{ slug: string; archived: boolean }> {
@@ -82,7 +82,7 @@ export async function deleteWorkspace(slug: string): Promise<{ slug: string; del
 /** `active`: the slug occupying the seed slot (`<root>/<subject>`) — a storage detail, not a rank. Every
  *  workspace is equal-rank; `active_set` (from readActiveSet) is the source of truth for what's mounted. */
 export interface AttachedWorkspaces { active: string | null; slots: Record<string, WorkspaceSlot>; published_url?: string | null }
-export interface SwapResult { subject: string; active: string; repo: string | null; ref: string | null; swapped: boolean; cloned: boolean; parked: string | null; nested: boolean }
+export interface SwapResult { subject: string; active: string; repo: string | null; ref: string | null; swapped: boolean; cloned: boolean; parked: string | null }
 
 /** The subject's attachment view: which workspace is active + the parked ones available to swap back to. */
 export async function readAttachedWorkspaces(): Promise<AttachedWorkspaces> {
@@ -276,7 +276,7 @@ export async function setSharedActive(workspace_id: string, active: boolean): Pr
  *  private baseline and any other active workspaces stay mounted. Pass `repo` to clone/restore a git repo,
  *  or `slug` to activate an already-parked slot. Idempotent — an already-active workspace is a no-op.
  *  `token` (optional) authenticates a PRIVATE repo's clone — used server-side only, never stored (P15). */
-export async function activateWorkspace(opts: { repo?: string; ref?: string; slug?: string; token?: string }): Promise<{ subject: string; slug: string; changed: boolean; cloned: boolean; nested: boolean }> {
+export async function activateWorkspace(opts: { repo?: string; ref?: string; slug?: string; token?: string }): Promise<{ subject: string; slug: string; changed: boolean; cloned: boolean }> {
   return getJson(`/api/workspace/activate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -611,7 +611,6 @@ export interface SharedAttachResult {
   attached: boolean;
   cloned: boolean;
   parked: string | null;
-  nested: boolean;
   state: "cloned" | "restored" | "already attached";
 }
 
@@ -678,7 +677,7 @@ export async function readDeployKey(slug: string): Promise<DeployKey> {
 
 export interface WorkspaceImport {
   operation_id: string; status: "queued" | "running" | "completed" | "failed" | "interrupted";
-  result?: { workspace: string; cloned: boolean; changed: boolean; nested: boolean; repo: string; ref: string };
+  result?: { workspace: string; cloned: boolean; changed: boolean; repo: string; ref: string };
   error?: string; error_status?: number;
 }
 
