@@ -115,7 +115,7 @@ def test_import_http_and_mcp_manifest_expose_same_operation(tmp_path, monkeypatc
     operation_id = response.json()['operation_id']
     result = finish(tmp_path, 'u_jane', operation_id)
     assert result['status'] == 'completed', result
-    assert result['result']['nested'] is False
+    assert 'nested' not in result['result']
     slug = result['result']['workspace']
     identity = client.get('/api/workspaces/by-slug/'+slug, headers={'X-User-Id':'u_jane'})
     assert identity.json()['access'] == 'readable'

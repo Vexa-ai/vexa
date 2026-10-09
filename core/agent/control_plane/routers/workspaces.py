@@ -1107,7 +1107,6 @@ def build(**d) -> APIRouter:
             "swapped": result.swapped,
             "cloned": result.cloned,
             "parked": result.parked_slug,
-            "nested": result.nested,
         }
     @router.get("/api/workspace/desk")
     def ws_desk(request: Request):
@@ -1220,7 +1219,7 @@ def build(**d) -> APIRouter:
             if credential_workspace:
                 bind_repository_credential(wsr.root, subject, result.slug, credential_workspace)
             return {"workspace": result.slug, "slug": result.slug, "cloned": result.cloned,
-                    "changed": result.changed, "nested": result.nested, "repo": used, "ref": ref,
+                    "changed": result.changed, "repo": used, "ref": ref,
                     "name": name}
         return imports.start(wsr.root, subject, repo, ref, operation)
 
@@ -1258,7 +1257,7 @@ def build(**d) -> APIRouter:
         except CloneError as exc:
             raise _credential_refusal(f"git clone failed: {redact_secrets(exc)}", subject, None, repo or "")
         return {"subject": result.subject, "slug": result.slug, "changed": result.changed,
-                "cloned": result.cloned, "nested": result.nested}
+                "cloned": result.cloned}
     @router.post("/api/workspace/new", status_code=201)
     def ws_new(request: Request, body: WorkspaceNewBody = Body(default=WorkspaceNewBody())):
         """CREATE a brand-new BLANK workspace (seeded from the template) at a fresh unique slug and ADD it
@@ -1506,7 +1505,7 @@ def build(**d) -> APIRouter:
         return {
             "workspace_id": workspace_id, "active": result.active_slug, "repo": result.repo,
             "ref": result.ref, "attached": result.swapped, "cloned": result.cloned,
-            "parked": result.parked_slug, "nested": result.nested,
+            "parked": result.parked_slug,
             "state": ("cloned" if result.cloned else "restored" if result.swapped else "already attached"),
         }
     @router.get("/api/workspace/shared/{workspace_id}/attached")
