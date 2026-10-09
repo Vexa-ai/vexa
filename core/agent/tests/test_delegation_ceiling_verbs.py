@@ -108,6 +108,14 @@ def _build(monkeypatch, tmp_path) -> TestClient:
     root = tmp_path / "workspaces"
     root.mkdir()
     monkeypatch.setenv("VEXA_WORKSPACES_DIR", str(root))
+    # Every `git commit` starts a detached `git maintenance run --auto`. On a newer git (CI ran 2.55)
+    # that pass can repack while `_disk` walks the store, and a `tmp_pack_*` it wrote vanished between
+    # the walk and the stat (FileNotFoundError in CI). The product's git env keeps GIT_CONFIG_* for
+    # exactly this kind of caller setting; no git process outlives the request it belongs to here.
+    for i, (key, value) in enumerate((("maintenance.auto", "false"), ("gc.auto", "0"))):
+        monkeypatch.setenv(f"GIT_CONFIG_KEY_{i}", key)
+        monkeypatch.setenv(f"GIT_CONFIG_VALUE_{i}", value)
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "2")
     # A route the ceiling lets through may still fail further in on this bare store; that is the
     # route answering, which is all the "not refused by the ceiling" cases need to see.
     return TestClient(create_app(Dispatcher(load_settings(), _Runtime(), _Identity()),
@@ -263,9 +271,27 @@ def _kind(r) -> Optional[str]:
     return detail.get("reason")
 
 
+def _git_objects(rel: Path) -> bool:
+    """A path inside a repository's object store (``…/.git/objects/…``)."""
+    parts = rel.parts
+    return any(parts[i] == ".git" and parts[i + 1] == "objects" for i in range(len(parts) - 1))
+
+
 def _disk(root: Path) -> dict:
-    return {str(p.relative_to(root)): (p.stat().st_size, p.stat().st_mtime_ns)
-            for p in sorted(root.rglob("*"))}
+    """Every path under ``root`` with its size and mtime, except git's object store: git repacks it
+    on its own, which changes no content, and anything a route commits shows in the refs, HEAD, the
+    index and the work tree. A file that is gone by the time it is stat'ed was transient."""
+    out = {}
+    for p in sorted(root.rglob("*")):
+        rel = p.relative_to(root)
+        if _git_objects(rel):
+            continue
+        try:
+            st = p.stat()
+        except FileNotFoundError:
+            continue
+        out[str(rel)] = (st.st_size, st.st_mtime_ns)
+    return out
 
 
 @pytest.fixture
