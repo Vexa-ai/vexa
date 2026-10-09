@@ -347,7 +347,8 @@ def _job_fingerprint(job_spec: dict) -> str:
     return hashlib.sha1(raw.encode()).hexdigest()
 
 
-def _compile_workspace_job(routine: RoutineFile, *, subject: str, invocations_url: str) -> dict:
+def _compile_workspace_job(routine: RoutineFile, *, subject: str, invocations_url: str,
+                           signing_secret: str = "") -> dict:
     routine_id = routine_id_for_workspace_file(subject, routine.name)
     authored = routines_mod.make_routine(
         subject=subject,
@@ -356,7 +357,8 @@ def _compile_workspace_job(routine: RoutineFile, *, subject: str, invocations_ur
         prompt=routine.prompt,
         routine_id=routine_id,
     )
-    job_spec = routines_mod.compile_to_job(authored, invocations_url=invocations_url)
+    job_spec = routines_mod.compile_to_job(authored, invocations_url=invocations_url,
+                                           signing_secret=signing_secret)
     job_spec.pop("idempotency_key", None)
     job_spec["metadata"].update({
         "source": WORKSPACE_ROUTINE_SOURCE,
@@ -393,6 +395,7 @@ def reconcile_workspace_routines(
     scheduler: SchedulerPort,
     invocations_url: str,
     workspaces_dir: str | Path = "/workspaces",
+    signing_secret: str = "",
 ) -> ReconcileResult:
     """Reconcile ``/workspaces/<subject>/routines/*.md`` onto schedule.v1 jobs."""
     ws = _safe_workspace_dir(workspaces_dir, subject)
@@ -409,7 +412,10 @@ def reconcile_workspace_routines(
         if not parsed.enabled:
             continue
         rid = routine_id_for_workspace_file(subject, path.stem)
-        desired[rid] = _compile_workspace_job(parsed, subject=subject, invocations_url=invocations_url)
+        # The fingerprint below covers the request, signature included, so a job compiled before
+        # dispatches were signed reads as changed and is re-armed signed on the next pass.
+        desired[rid] = _compile_workspace_job(parsed, subject=subject, invocations_url=invocations_url,
+                                              signing_secret=signing_secret)
 
     current = _workspace_jobs(scheduler, subject)
     scheduled = kept = cancelled = 0
@@ -459,6 +465,7 @@ def reconcile_all_workspace_routines(
     scheduler: SchedulerPort,
     invocations_url: str,
     workspaces_dir: str | Path = "/workspaces",
+    signing_secret: str = "",
 ) -> list[ReconcileResult]:
     results: list[ReconcileResult] = []
     for subject in scan_workspace_subjects(workspaces_dir):
@@ -468,6 +475,7 @@ def reconcile_all_workspace_routines(
                 scheduler=scheduler,
                 invocations_url=invocations_url,
                 workspaces_dir=workspaces_dir,
+                signing_secret=signing_secret,
             )
         )
     return results
@@ -479,6 +487,7 @@ def start_workspace_routine_reconciler(
     invocations_url: str,
     workspaces_dir: str | Path = "/workspaces",
     interval_sec: float = 60.0,
+    signing_secret: str = "",
 ) -> Optional[RoutineReconcilerHandle]:
     """Run one reconcile pass now, then keep scanning mounted workspaces in a daemon thread."""
     if interval_sec <= 0:
@@ -490,6 +499,7 @@ def start_workspace_routine_reconciler(
                 scheduler=scheduler,
                 invocations_url=invocations_url,
                 workspaces_dir=workspaces_dir,
+                signing_secret=signing_secret,
             )
             for result in results:
                 log.info("workspace routines reconciled: %s", result)

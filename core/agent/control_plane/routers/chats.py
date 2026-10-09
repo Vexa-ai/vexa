@@ -12,6 +12,7 @@ import time
 
 from control_plane import chat_intents
 from control_plane import dispatch as dispatch_mod
+from control_plane import dispatch_sink
 from control_plane import meeting_mint as meeting_mint_mod
 from control_plane import routines as routines_mod
 from control_plane import scaffolds as scaffolds_mod
@@ -33,6 +34,7 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 from fastapi.responses import StreamingResponse
 from jsonschema.exceptions import ValidationError
 from shared import chat_label as chat_label_mod
+from shared import delegation as delegation_mod
 from shared import units
 from shared.marks import flow_mark
 
@@ -81,6 +83,31 @@ def build(**d) -> APIRouter:
     scheduler = d['scheduler']
     sess = d['sess']
     settings = d['settings']
+
+    require_person = d.get('require_person') or (lambda request: None)
+
+    def _internal_secret() -> str:
+        return settings.internal_api_secret.get_secret_value() if settings is not None else ""
+
+    def _sink_caller(request: Request, body) -> str:
+        """Who handed this dispatch over: ``"internal"``, ``"signed"`` (a routine job agent-api
+        composed itself), or ``""`` — refused. See `dispatch_sink.py`."""
+        secret = _internal_secret()
+        if dispatch_sink.internal_caller(secret, request.headers.get("x-internal-secret", "")):
+            return "internal"
+        if dispatch_sink.verify(secret, body, request.headers.get(dispatch_sink.HEADER, "")):
+            return "signed"
+        return ""
+
+    def _refuse_delegated(request: Request) -> None:
+        """A chat turn is started by a person, never by a worker acting for one: a worker's identity
+        (any `x-user-delegation*`/`x-user-regime` on the signed identity) dispatches nothing here."""
+        if any(h in request.headers for h in (
+                "x-user-regime", "x-user-delegation-workspaces", "x-user-delegation-target")):
+            raise HTTPException(status_code=403, detail={
+                "status": "refused", "reason": "delegated_dispatch",
+                "instruction": "A chat turn is started by the person, not by an agent acting for "
+                               "them. Say what you would ask and stop; do not retry it another way."})
 
     def _toolbelt_configured() -> bool:
         return bool(settings is not None and (settings.mcp_url or "").strip()
@@ -320,8 +347,17 @@ def build(**d) -> APIRouter:
             yield item
 
     @router.post("/invocations", status_code=202)
-    def invocations(invocation: dict = Body(...)):
-        """The dispatcher sink — any trigger source POSTs a unit.v1 dispatch here."""
+    def invocations(request: Request, invocation: dict = Body(...)):
+        """The dispatcher sink — the internal tier, or a routine job agent-api signed when it compiled
+        it (`dispatch_sink.py`), POSTs a unit.v1 dispatch here. The body names the person the turn
+        runs as, so the CALLER is authenticated before the body is read; nobody else is heard."""
+        caller = _sink_caller(request, invocation)
+        if not caller:
+            raise HTTPException(status_code=401, detail="the dispatch sink takes the internal tier "
+                                                        "or a dispatch agent-api signed")
+        # A signed job is a routine: it never asks for a person in the loop, whatever it says.
+        if caller != "internal" and str(invocation.get("trigger") or "") in delegation_mod.HUMAN_TRIGGERS:
+            raise HTTPException(status_code=403, detail="a signed dispatch runs without a person")
         try:
             workload_id = dispatcher.dispatch(invocation)
         except ValidationError as e:  # non-conformant unit.v1 envelope — fail loud (P18)
@@ -382,6 +418,7 @@ def build(**d) -> APIRouter:
                 "cursor": _stream_tail_id(redis_url, units.output_topic(unit_id)) or ""}
 
     def _chat(body: ChatBody, request: Request, *, stream: bool):
+        _refuse_delegated(request)
         if stream_reader is None:
             raise HTTPException(status_code=501, detail="stream relay not wired")
         subject = subject_of(request)  # server-derived (P20); body.subject is ignored
@@ -881,13 +918,16 @@ def build(**d) -> APIRouter:
         return {"turns": turns}
     @router.post("/api/routines", status_code=201)
     def create_routine(body: RoutineCreate, request: Request):
+        # A routine is a dispatch armed for later; an unwatched worker does not arm one.
+        require_person(request)
         if scheduler is None or not invocations_url:
             raise HTTPException(status_code=501, detail="scheduler not wired")
         try:
             routine = routines_mod.make_routine(
                 subject=subject_of(request), name=body.name, cron=body.cron, prompt=body.prompt,
             )
-            job_spec = routines_mod.compile_to_job(routine, invocations_url=invocations_url)
+            job_spec = routines_mod.compile_to_job(routine, invocations_url=invocations_url,
+                                                   signing_secret=_internal_secret())
         except (ValueError, ValidationError) as e:  # bad cron form / non-conformant routine — fail loud
             raise HTTPException(status_code=400, detail=str(getattr(e, "message", e)))
         job = scheduler.schedule(job_spec)
@@ -912,6 +952,7 @@ def build(**d) -> APIRouter:
         return {"routines": cards}
     @router.patch("/api/routines/{name}/enabled")
     def set_routine_enabled(name: str, body: RoutineEnabledPatch, request: Request):
+        require_person(request)
         if scheduler is None or not invocations_url:
             raise HTTPException(status_code=501, detail="scheduler not wired")
         subject = subject_of(request)
@@ -927,6 +968,7 @@ def build(**d) -> APIRouter:
                 scheduler=scheduler,
                 invocations_url=invocations_url,
                 workspaces_dir=wsr.root,
+                signing_secret=_internal_secret(),
             )
         except FileNotFoundError:
             raise HTTPException(status_code=404, detail="unknown routine")
@@ -950,7 +992,10 @@ def build(**d) -> APIRouter:
                 return {"ok": True, "routine_id": routine_id}
         raise HTTPException(status_code=404, detail="unknown routine")
     @router.post("/events", status_code=202)
-    def events(event: dict = Body(...)):
+    def events(request: Request, event: dict = Body(...)):
+        # The event names the person it is about; only the internal tier may say who that is.
+        if _sink_caller(request, None) != "internal":
+            raise HTTPException(status_code=401, detail="the event sink takes the internal tier")
         try:
             invocation = event_to_invocation(event)
         except ValidationError as e:

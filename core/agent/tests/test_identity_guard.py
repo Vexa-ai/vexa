@@ -118,9 +118,12 @@ def test_the_internal_tier_may_name_the_person_it_acts_for(client):
 def test_a_request_that_names_nobody_reaches_routes_that_need_nobody(client):
     assert client.get("/health").status_code == 200
     # the runtime's scheduler fires routines here with no identity; the guard lets it through and
-    # the route answers on its own terms (a schema refusal, never the guard's 401)
+    # the route authenticates the dispatcher on its own terms (`dispatch_sink.py`) — its refusal,
+    # never the guard's
     r = client.post("/invocations", json={})
-    assert r.status_code != 401
+    assert r.status_code == 401 and "dispatch sink" in r.json()["detail"]
+    r = client.post("/invocations", json={}, headers={"X-Internal-Secret": INTERNAL})
+    assert r.status_code == 400
 
 
 # ── the key split: agent-api holds the public key, never one that signs ───────────────────────────

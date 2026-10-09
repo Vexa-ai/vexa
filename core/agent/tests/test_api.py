@@ -116,14 +116,26 @@ def test_models_reports_the_one_model_and_no_second_one(tmp_path):
     assert "streaming_model" not in body and "meeting_model" not in body
 
 
-def test_invocations_dispatches():
-    r = _client().post("/invocations", json=VALID_INV)
+INTERNAL = "agent-test-internal-secret"
+
+
+def test_invocations_dispatches(monkeypatch):
+    monkeypatch.setenv("INTERNAL_API_SECRET", INTERNAL)
+    r = _client().post("/invocations", json=VALID_INV, headers={"X-Internal-Secret": INTERNAL})
     assert r.status_code == 202 and r.json()["workload_id"]
 
 
-def test_invocations_rejects_nonconformant():
-    r = _client().post("/invocations", json={"trigger": "message"})  # missing identity/workspaces/start
+def test_invocations_rejects_nonconformant(monkeypatch):
+    monkeypatch.setenv("INTERNAL_API_SECRET", INTERNAL)
+    r = _client().post("/invocations", json={"trigger": "message"},  # missing identity/workspaces/start
+                       headers={"X-Internal-Secret": INTERNAL})
     assert r.status_code == 400
+
+
+def test_invocations_refuses_an_unauthenticated_caller_before_reading_the_body():
+    """test_dispatch_sink.py has the whole matrix; this is the front door's own line."""
+    r = _client().post("/invocations", json=VALID_INV)
+    assert r.status_code == 401
 
 
 def test_chat_501_without_reader():

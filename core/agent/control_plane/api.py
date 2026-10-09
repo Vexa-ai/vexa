@@ -291,7 +291,11 @@ def create_app(
         and an unknown regime is refused like ``autonomous`` — the fail direction on a verb that
         reads a mailbox, spends a credential or loads a repository is closed."""
         regime = (request.headers.get("x-user-regime") or "").strip().lower()
-        if regime and regime != "human":
+        # A delegated identity that names no regime is not a human one either: the ceiling headers
+        # mark a worker whether or not identity stated why it was dispatched.
+        delegated = bool(regime) or any(h in request.headers for h in (
+            "x-user-delegation-workspaces", "x-user-delegation-target"))
+        if delegated and regime != "human":
             raise HTTPException(status_code=403, detail={
                 "status": "refused", "reason": "human_session_required",
                 "instruction": "This session runs without a person in the loop. Record what you "
@@ -1131,6 +1135,7 @@ def _build_production_app() -> FastAPI:
         invocations_url=invocations_url,
         workspaces_dir=settings.workspaces_dir,
         interval_sec=settings.routine_reconcile_interval_sec,
+        signing_secret=settings.internal_api_secret.get_secret_value(),
     )
 
     @app.on_event("shutdown")
