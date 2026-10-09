@@ -43,11 +43,14 @@ ingress) and the values table. Key knobs: `global.imageTag`, `runtime.backend`
 
 ## Identity, the MCP server and the network policy
 
-- **Generated at install.** `VEXA_GATEWAY_IDENTITY_SECRET` (the gateway signs the identity it resolved;
-  agent-api and meeting-api verify it) and `VEXA_MCP_DELEGATION_SECRET` (each agent worker's delegation
-  token, verified by admin-api) are generated into the chart Secret on first install and read back on
-  every upgrade. Set `secrets.gatewayIdentitySecret` / `secrets.mcpDelegationSecret` to supply your own;
-  with `secrets.existingSecretName` your Secret must carry both keys.
+- **Generated at install.** The gateway's identity keypair (`templates/identity-keys.yaml`): the Ed25519
+  private key in the `identity-signing-key` Secret, mounted by the gateway alone, and the public key in
+  the `identity-public-key` ConfigMap, derived from it on every render and mounted by agent-api,
+  meeting-api and the credential broker, which verify and cannot sign. The Secret is read back on every
+  upgrade and kept through an uninstall; set `identity.signingKey` to supply your own (required when
+  rendering with `helm template`). `VEXA_MCP_DELEGATION_SECRET` (each agent worker's delegation token,
+  verified by admin-api) is generated into the chart Secret; set `secrets.mcpDelegationSecret` to supply
+  your own, and with `secrets.existingSecretName` your Secret must carry it.
 - **One MCP server.** `mcp.enabled` (default on) deploys the assembled MCP service; the gateway relays
   `/mcp` to it and agent-api points every worker's toolbelt at the gateway's `/mcp`.
 - **Who reaches agent-api and meeting-api.** `networkPolicy.enabled` (default on) admits agent-api traffic

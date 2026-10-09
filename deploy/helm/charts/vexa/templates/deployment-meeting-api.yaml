@@ -82,12 +82,10 @@ spec:
                 secretKeyRef:
                   name: {{ include "vexa.adminTokenSecretName" . }}
                   key: INTERNAL_API_SECRET
-            # gateway-identity.v1: verifies the gateway's signature over the identity meeting-api reads.
-            - name: VEXA_GATEWAY_IDENTITY_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "vexa.adminTokenSecretName" . }}
-                  key: VEXA_GATEWAY_IDENTITY_SECRET
+            # gateway-identity.v1: the gateway's PUBLIC key (the identity-public-key ConfigMap, mounted
+            # below). This service verifies the gateway's signature and cannot make one.
+            - name: VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE
+              value: /run/vexa-identity/public/key.pem
             # MeetingToken is signed AND verified with the SAME admin secret admin-api holds.
             - name: ADMIN_TOKEN
               valueFrom:
@@ -207,6 +205,9 @@ spec:
             - name: s3-client
               mountPath: /etc/vexa/s3
               readOnly: true
+            - name: identity-public-key
+              mountPath: /run/vexa-identity/public
+              readOnly: true
             {{- if or $s3.caConfigMap $s3.caSecret }}
             - name: s3-ca
               mountPath: /etc/vexa/s3-ca
@@ -219,6 +220,13 @@ spec:
           configMap:
             name: {{ include "vexa.componentName" (list . "s3-client") }}
             defaultMode: 0444
+        # gateway-identity.v1: the public key only — the signing key is mounted by the gateway alone.
+        - name: identity-public-key
+          configMap:
+            name: {{ include "vexa.componentName" (list . "identity-public-key") }}
+            defaultMode: 0444
+            items:
+              - { key: public-key.pem, path: key.pem }
         {{- if $s3.caConfigMap }}
         - name: s3-ca
           configMap:

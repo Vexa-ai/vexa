@@ -59,12 +59,10 @@ spec:
                 secretKeyRef:
                   name: {{ include "vexa.adminTokenSecretName" . }}
                   key: INTERNAL_API_SECRET
-            # gateway-identity.v1: signs the identity the edge resolved onto every forward.
-            - name: VEXA_GATEWAY_IDENTITY_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "vexa.adminTokenSecretName" . }}
-                  key: VEXA_GATEWAY_IDENTITY_SECRET
+            # gateway-identity.v1: the Ed25519 PRIVATE key that signs the identity the edge resolved
+            # onto every forward. The gateway is the only workload that mounts it.
+            - name: VEXA_GATEWAY_IDENTITY_SIGNING_KEY_FILE
+              value: /run/vexa-identity/signing/key.pem
             {{- if .Values.mcp.enabled }}
             # The ONE MCP server (ADR-0037): /mcp is relayed to the assembled MCP service.
             - name: MCP_URL
@@ -126,8 +124,20 @@ spec:
             initialDelaySeconds: 30
             periodSeconds: 20
             timeoutSeconds: 5
+          volumeMounts:
+            - name: identity-signing-key
+              mountPath: /run/vexa-identity/signing
+              readOnly: true
           resources:
             {{- toYaml .Values.gateway.resources | nindent 12 }}
+      volumes:
+        # gateway-identity.v1: the signing key, here and in no other workload.
+        - name: identity-signing-key
+          secret:
+            secretName: {{ include "vexa.componentName" (list . "identity-signing-key") }}
+            defaultMode: 0440
+            items:
+              - { key: signing-key.pem, path: key.pem }
       {{- with .Values.global.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

@@ -56,6 +56,20 @@ global:
     capabilities:
       drop: ["ALL"]
 
+# ---------- gateway-identity.v1: the gateway's signing keypair ----------
+# The gateway signs the identity it resolved onto every forward with an Ed25519 PRIVATE key; agent-api,
+# meeting-api and the credential broker verify it with the PUBLIC key and cannot sign. The chart keeps
+# the private key in the `<release>-identity-signing-key` Secret (mounted by the gateway only) and the
+# public key in the `<release>-identity-public-key` ConfigMap, derived from it on every render.
+identity:
+  # Empty → GENERATED at install and kept across upgrades (read back from the release's Secret, which
+  # also survives an uninstall). Set it to a PKCS#8 PEM Ed25519 private key
+  # (`openssl genpkey -algorithm ed25519`) when a GitOps tool renders the chart with `helm template`,
+  # which cannot read the Secret back and would otherwise mint a new pair on every render.
+  # To rotate: delete the Secret, `helm upgrade`, then restart the gateway, agent-api, meeting-api
+  # and the credential broker.
+  signingKey: ""
+
 # ---------- Shared secrets ----------
 # Recommended: override via --set-file / external secret tooling, or point existingSecretName at a
 # Secret carrying these keys: ADMIN_API_TOKEN, INTERNAL_API_SECRET, TRANSCRIPTION_SERVICE_TOKEN,
@@ -76,10 +90,6 @@ secrets:
   serviceAuthoritySecret: ""        # exact-byte HMAC secret; required only when meetingApi.serviceAuthorityConfig is set
   systemWebhookSecret: ""           # exact-byte HMAC secret; required only when meetingApi.systemWebhookUrl is set
   dispatchSigningKey: ""            # agent-api signs per-dispatch tokens (default dev key; k8s prod → set this)
-  gatewayIdentitySecret: ""         # gateway-identity.v1: the gateway signs the identity it resolved, agent-api and
-                                    # meeting-api verify it. Empty → GENERATED at install and kept across
-                                    # upgrades (read back from the release's Secret). With
-                                    # existingSecretName, the Secret must carry VEXA_GATEWAY_IDENTITY_SECRET.
   mcpDelegationSecret: ""           # the worker toolbelt: agent-api signs each worker's delegation token,
                                     # identity verifies it. Generated at install like the one above; with
                                     # existingSecretName, carry VEXA_MCP_DELEGATION_SECRET.

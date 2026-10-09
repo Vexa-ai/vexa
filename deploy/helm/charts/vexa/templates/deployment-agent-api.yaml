@@ -88,12 +88,10 @@ spec:
                 secretKeyRef:
                   name: {{ include "vexa.adminTokenSecretName" . }}
                   key: INTERNAL_API_SECRET
-            # gateway-identity.v1: verifies the gateway's signature over the identity agent-api reads.
-            - name: VEXA_GATEWAY_IDENTITY_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "vexa.adminTokenSecretName" . }}
-                  key: VEXA_GATEWAY_IDENTITY_SECRET
+            # gateway-identity.v1: the gateway's PUBLIC key (the identity-public-key ConfigMap, mounted
+            # below). This service verifies the gateway's signature and cannot make one.
+            - name: VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE
+              value: /run/vexa-identity/public/key.pem
             # THE WORKER'S TOOLBELT (worker_toolbelt): each worker presents a per-dispatch delegation
             # token, signed with this secret, at the gateway's /mcp — the one assembled MCP server.
             {{- if .Values.mcp.enabled }}
@@ -189,6 +187,9 @@ spec:
           volumeMounts:
             - name: workspaces
               mountPath: /workspaces
+            - name: identity-public-key
+              mountPath: /run/vexa-identity/public
+              readOnly: true
             {{- if include "vexa.credentialBrokerEnabled" . }}
             - name: connections-keys
               mountPath: /run/vexa-connections
@@ -221,6 +222,13 @@ spec:
         - name: workspaces
           persistentVolumeClaim:
             claimName: {{ include "vexa.componentName" (list . "agent-workspaces") }}
+        # gateway-identity.v1: the public key only — the signing key is mounted by the gateway alone.
+        - name: identity-public-key
+          configMap:
+            name: {{ include "vexa.componentName" (list . "identity-public-key") }}
+            defaultMode: 0444
+            items:
+              - { key: public-key.pem, path: key.pem }
         {{- if include "vexa.credentialBrokerEnabled" . }}
         # The agent role key (and the git role key when gitStore is on) — never the human key.
         - name: connections-keys

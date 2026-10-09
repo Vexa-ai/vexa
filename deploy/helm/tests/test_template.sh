@@ -634,14 +634,67 @@ fi
 
 # Negative controls — each MUST fail to render, with the message that names the fix.
 # ── gateway-identity.v1 + the one MCP server (Vexa-ai/vexa#1783) ────────────────────────────────────────
-# The gateway signs the identity it resolved and agent-api + meeting-api verify it (all three refuse
-# to boot without the key); identity verifies a worker's delegation token and agent-api signs it.
-need 3 'key: VEXA_GATEWAY_IDENTITY_SECRET' "identity signing key on gateway, agent-api, meeting-api"
+# The gateway signs the identity it resolved with an Ed25519 PRIVATE key that only it mounts;
+# agent-api, meeting-api and the credential broker verify with the PUBLIC key and cannot sign.
+# identity verifies a worker's delegation token and agent-api signs it.
 need 2 'key: VEXA_MCP_DELEGATION_SECRET'   "delegation key on agent-api and admin-api"
-if grep -qE '^  VEXA_GATEWAY_IDENTITY_SECRET: "[A-Za-z0-9]{64}"$' <<< "$RENDER"; then
-  echo "  OK: the identity signing key is generated at install"
+exact 0 'VEXA_GATEWAY_IDENTITY_SECRET' "no shared identity secret anywhere (the HMAC key is gone)"
+exact 1 'name: VEXA_GATEWAY_IDENTITY_SIGNING_KEY_FILE$' "the signing-key path is set on one workload"
+exact 3 'name: VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE$' "the public-key path on agent-api, meeting-api, credential broker"
+# Each Deployment, one document at a time: which mounts the signing Secret, which the public ConfigMap.
+identity_mounts() {  # identity_mounts <render> → "<deployment> <signing|public>" per mount
+  awk '/^---/{name=""} /^kind: Deployment/{d=1} /^kind: /&&!/Deployment/{d=0}
+       d&&/^  name: /&&name==""{name=$2}
+       d&&/secretName: vexa-vexa-identity-signing-key$/{print name" signing"}
+       d&&/name: vexa-vexa-identity-public-key$/{print name" public"}' <<< "$1" | sort
+}
+WANT_MOUNTS="vexa-vexa-agent-api public
+vexa-vexa-credential-broker public
+vexa-vexa-gateway signing
+vexa-vexa-meeting-api public"
+if [ "$(identity_mounts "$RENDER")" = "$WANT_MOUNTS" ]; then
+  echo "  OK: the signing key is mounted by the gateway alone; the public key by the three verifiers"
 else
-  echo "  FAIL: the chart Secret carries no generated VEXA_GATEWAY_IDENTITY_SECRET"; fail=1
+  echo "  FAIL: identity key mounts — got: $(identity_mounts "$RENDER" | tr '\n' ';')"; fail=1
+fi
+# The pair: a generated Ed25519 private key, and a public key that IS its public half (openssl
+# derives it independently of the chart's certificate trick). No key material is printed.
+identity_pair_ok() {  # identity_pair_ok <render>
+  local priv pub derived tmp
+  tmp="$(mktemp -d)"
+  priv="$(awk '/^  signing-key.pem: /{print $2}' <<< "$1")"
+  pub="$(awk '/^  public-key.pem: \|/{f=1;next} f&&/^    /{sub(/^    /,"");print;next} f{exit}' <<< "$1")"
+  [ -n "$priv" ] && [ -n "$pub" ] || { rm -rf "$tmp"; return 1; }
+  printf '%s' "$priv" | base64 -d > "$tmp/k" 2>/dev/null || printf '%s' "$priv" | base64 -D > "$tmp/k"
+  openssl pkey -in "$tmp/k" -noout -text 2>/dev/null | grep -q 'ED25519 Private-Key' || { rm -rf "$tmp"; return 1; }
+  derived="$(openssl pkey -in "$tmp/k" -pubout 2>/dev/null)"
+  rm -rf "$tmp"
+  [ "$derived" = "$pub" ]
+}
+if command -v openssl >/dev/null 2>&1; then
+  if identity_pair_ok "$RENDER"; then
+    echo "  OK: a generated Ed25519 signing key, and the ConfigMap's public key is its public half"
+  else
+    echo "  FAIL: the identity Secret/ConfigMap are not a matching Ed25519 pair"; fail=1
+  fi
+  OWN_KEY="$(openssl genpkey -algorithm ed25519 2>/dev/null)"
+  OWN="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set-string identity.signingKey="$OWN_KEY")"
+  if identity_pair_ok "$OWN" \
+     && [ "$(awk '/^  signing-key.pem: /{print $2}' <<< "$OWN")" = "$(printf '%s' "$OWN_KEY" | base64 | tr -d '\n')" ]; then
+    echo "  OK: identity.signingKey is used as given and its public half derived"
+  else
+    echo "  FAIL: identity.signingKey wiring"; fail=1
+  fi
+  unset OWN_KEY OWN
+  NOT_ED="$(openssl genpkey -algorithm ec -pkeyopt ec_paramgen_curve:P-256 2>/dev/null)"
+  if ! helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set-string identity.signingKey="$NOT_ED" >/dev/null 2>&1; then
+    echo "  OK: a signing key that is not Ed25519 refuses the render"
+  else
+    echo "  FAIL: a P-256 identity.signingKey rendered"; fail=1
+  fi
+  unset NOT_ED
+else
+  echo "  SKIP: openssl not installed — identity key pair not cross-checked"
 fi
 # ADR-0037: the chart deploys the assembled MCP server, the gateway relays /mcp to it, and every
 # agent worker's toolbelt points at the gateway's /mcp.
