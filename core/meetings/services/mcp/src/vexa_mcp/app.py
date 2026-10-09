@@ -38,6 +38,7 @@ from . import notices as notices_mod
 from . import reentry as reentry_mod
 from . import register as register_mod
 from .link_parser import ParseMeetingLinkResponse, parse_meeting_url
+from .paths import path_segment
 from .prompts import PROMPTS, get_prompt_result
 from .streamable_http import install_streaming_http_transport
 from .tool_errors import install_structured_tool_errors, unwrap_detail
@@ -316,7 +317,8 @@ _DB_ID_DESC = (
 VALID_PLATFORMS = ("google_meet", "teams", "zoom", "jitsi")
 
 
-def _validate_platform(tool: str, platform: Optional[str]) -> Optional[str]:
+def _validate_platform(tool: str, platform: Optional[str], *,
+                       omitted: str = "Omit `platform` to search every platform.") -> Optional[str]:
     """Reject an unknown platform loudly rather than filtering everything away."""
     if platform is None or platform in VALID_PLATFORMS:
         return platform
@@ -324,7 +326,7 @@ def _validate_platform(tool: str, platform: Optional[str]) -> Optional[str]:
         status_code=422,
         detail=(
             f"{tool}: unknown platform {platform!r}. Valid values: "
-            f"{', '.join(VALID_PLATFORMS)}. Omit `platform` to search every platform."
+            f"{', '.join(VALID_PLATFORMS)}. {omitted}"
         ),
     )
 
@@ -383,6 +385,9 @@ def _resolve_identity(
 
     Only reached when no `meeting_db_id` was supplied, so on the tools that take one the refusal
     names it too — a caller looking at a row they already hold should be told the shortest way in.
+
+    The pair is returned AS SENT (it is echoed back to the caller); every URL that carries it puts
+    each half through `path_segment`. The platform is one of `VALID_PLATFORMS` or a refusal.
     """
     mid = (native_meeting_id or legacy_id or "").strip()
     plat = (platform or legacy_platform or "google_meet").strip()
@@ -397,7 +402,13 @@ def _resolve_identity(
                 f"with `platform`.{also} Received: native_meeting_id=None, meeting_id=None."
             ),
         )
+    _validate_platform(tool, plat, omitted="Omit `platform` for google_meet.")
     return plat, mid
+
+
+def _room(platform: str, native_meeting_id: str) -> str:
+    """The `{platform}/{native_meeting_id}` part of a gateway path — each half ONE segment."""
+    return f"{path_segment(platform)}/{path_segment(native_meeting_id)}"
 
 
 # What a client is told the moment it connects. Per-tool descriptions cannot carry orientation —
@@ -658,7 +669,8 @@ def create_app(
         plat, mid = _resolve_identity(
             "update_bot_config", platform, native_meeting_id, meeting_platform, meeting_id
         )
-        return await make_request("PUT", f"{base_url}/bots/{plat}/{mid}/config", api_key, data.model_dump())
+        return await make_request("PUT", f"{base_url}/bots/{_room(plat, mid)}/config", api_key,
+                                  data.model_dump())
 
     @app.delete("/bot", operation_id="stop_bot")
     async def stop_bot(
@@ -674,7 +686,7 @@ def create_app(
         request_meeting_bot, list_meetings and parse_meeting_link hand back.
         """
         plat, mid = _resolve_identity("stop_bot", platform, native_meeting_id, meeting_platform, meeting_id)
-        return await make_request("DELETE", f"{base_url}/bots/{plat}/{mid}", api_key)
+        return await make_request("DELETE", f"{base_url}/bots/{_room(plat, mid)}", api_key)
 
     @app.get("/meetings", operation_id="list_meetings")
     async def list_meetings(
@@ -757,13 +769,13 @@ def create_app(
         call; you get only what has been said since, instead of the whole transcript every time.
         """
         if meeting_db_id is not None:
-            url = f"{base_url}/transcripts/by-id/{meeting_db_id}"
+            url = f"{base_url}/transcripts/by-id/{path_segment(meeting_db_id)}"
         else:
             plat, mid = _resolve_identity(
                 "get_meeting_transcript", platform, native_meeting_id, meeting_platform,
                 meeting_id, accepts_db_id=True,
             )
-            url = f"{base_url}/transcripts/{plat}/{mid}"
+            url = f"{base_url}/transcripts/{_room(plat, mid)}"
         result = await make_request("GET", url, api_key)
 
         # The cursor is applied here rather than at the gateway: the scarce resource is the
@@ -860,11 +872,11 @@ def create_app(
         """
         plat = mid = None
         if meeting_db_id is not None:
-            url = f"{base_url}/meetings/{meeting_db_id}/annotate"
+            url = f"{base_url}/meetings/{path_segment(meeting_db_id)}/annotate"
         else:
             plat, mid = _resolve_identity("annotate_meeting", platform, native_meeting_id,
                                           None, None, accepts_db_id=True)
-            url = f"{base_url}/meetings/{plat}/{mid}/annotate"
+            url = f"{base_url}/meetings/{_room(plat, mid)}/annotate"
         body: Dict[str, Any] = {}
         if data.title is not None:
             body["title"] = data.title
@@ -912,7 +924,7 @@ def create_app(
         """
         plat, mid = _resolve_identity("speak_in_meeting", platform, native_meeting_id, None, None)
         return await make_request(
-            "POST", f"{base_url}/bots/{plat}/{mid}/speak", api_key, data.model_dump(exclude_none=True)
+            "POST", f"{base_url}/bots/{_room(plat, mid)}/speak", api_key, data.model_dump(exclude_none=True)
         )
 
     @app.get("/meeting-chat", operation_id="get_meeting_chat")
@@ -926,7 +938,7 @@ def create_app(
         side comments land in chat and are never spoken aloud.
         """
         plat, mid = _resolve_identity("get_meeting_chat", platform, native_meeting_id, None, None)
-        return await make_request("GET", f"{base_url}/bots/{plat}/{mid}/chat", api_key)
+        return await make_request("GET", f"{base_url}/bots/{_room(plat, mid)}/chat", api_key)
 
     @app.get("/recordings", operation_id="list_recordings")
     async def list_recordings(
@@ -957,7 +969,7 @@ def create_app(
         """
         Get a single recording and its media files. Wraps: GET /recordings/{recording_id}
         """
-        return await make_request("GET", f"{base_url}/recordings/{recording_id}", api_key)
+        return await make_request("GET", f"{base_url}/recordings/{path_segment(recording_id)}", api_key)
 
     @app.post("/report-issue", operation_id="report_issue")
     async def report_issue(
@@ -1057,7 +1069,8 @@ def create_app(
                     "type": "meeting",
                     "id": data.native_meeting_id,
                     "platform": m.get("platform"),
-                    "url": f"/transcripts/{m.get('platform')}/{data.native_meeting_id}",
+                    "url": (f"/transcripts/{path_segment(m.get('platform'))}/"
+                            f"{path_segment(data.native_meeting_id)}"),
                 }
                 break
 

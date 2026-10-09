@@ -22,6 +22,9 @@ The MCP service logic, injectable. Public surface is `__init__.py`: **`create_ap
   back through the gateway).
 - **`reentry.py`** — carries the identity the gateway signed onto a request back to the gateway on
   the tool calls that request causes.
+- **`paths.py`** — `path_segment`, the one place a caller-supplied value becomes a path segment:
+  everything but the unreserved characters percent-encoded, `/` included, and a dot-only value
+  encoded too, so no value can end its segment, add a query or fragment, or be resolved as `..`.
 - **`notices.py`** · **`tool_errors.py`** · **`streamable_http.py`** · **`identity.py`** ·
   **`config_preflight.py`** — standing notices on meeting tools, structured tool refusals, the
   streaming `/mcp` transport, the meeting-identity vocabulary, and the vendored config preflight.
