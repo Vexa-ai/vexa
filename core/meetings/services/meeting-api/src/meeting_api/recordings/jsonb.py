@@ -204,6 +204,12 @@ SIGNAL_TAPE_PART_FORMATS = {"botlog": "txt"}
 SIGNAL_PROMOTED_MARKER = "PROMOTED"
 
 
+def signal_meeting_prefix(*, user_id: int, meeting_id: int) -> str:
+    """The prefix holding EVERY tape of one owned meeting (all its bot sessions) — what a deletion of
+    that meeting's fixtures erases."""
+    return f"{SIGNAL_ROOT_PREFIX}{user_id}/{meeting_id}/"
+
+
 def signal_tape_prefix(*, user_id: int, meeting_id: int, session_uid: str) -> str:
     """The prefix holding ONE bot session's tape (both parts + any promotion marker).
 
@@ -212,7 +218,7 @@ def signal_tape_prefix(*, user_id: int, meeting_id: int, session_uid: str) -> st
     would only create a second identifier for the same thing. ``meeting_id`` is the join back to the
     meeting row; ``session_uid`` (the bot's connectionId) is what a curator actually looks up.
     """
-    return f"{_SIGNAL_PREFIX}/{user_id}/{meeting_id}/{session_uid}/"
+    return f"{signal_meeting_prefix(user_id=user_id, meeting_id=meeting_id)}{session_uid}/"
 
 
 def signal_tape_key(*, user_id: int, meeting_id: int, session_uid: str, part: str,

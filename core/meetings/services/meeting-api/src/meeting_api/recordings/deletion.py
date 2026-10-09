@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from typing import Optional
 
+from .jsonb import signal_meeting_prefix
 from .ports import RecordingRepo, Storage
 
 
@@ -90,7 +91,7 @@ async def delete_owned_recording(
 
 async def delete_meeting_fixtures(storage: Storage, *, user_id: int, meeting_id: int) -> list[str]:
     """Erase all session tapes and promotion markers belonging to this owned meeting."""
-    prefix = f"signal/{int(user_id)}/{int(meeting_id)}/"
+    prefix = signal_meeting_prefix(user_id=int(user_id), meeting_id=int(meeting_id))
     keys = [key for key in await storage.list(prefix) if key.startswith(prefix)]
     for key in keys:
         await storage.delete(key)

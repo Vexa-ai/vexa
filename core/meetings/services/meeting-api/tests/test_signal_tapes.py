@@ -317,3 +317,36 @@ async def test_janitor_ignores_stray_objects_under_the_signal_prefix():
     await sweep_signal_tapes(storage, budget_bytes=1, now=NOW)
     assert storage.blobs["signal/README"] == b"not a tape"
     assert not any(k.startswith(p1) for k in storage.blobs)
+
+
+# ── a meeting's fixtures are erased through the tape keyspace's own prefix ──────────────────────
+
+async def test_meeting_fixture_deletion_erases_exactly_that_meetings_tapes():
+    from meeting_api.recordings.deletion import delete_meeting_fixtures
+    from meeting_api.recordings.jsonb import signal_meeting_prefix, signal_tape_key
+
+    storage = InMemoryStorage()
+    mine = [signal_tape_key(user_id=USER, meeting_id=1, session_uid=s, part="captured-signal")
+            for s in ("sess-a", "sess-b")]
+    mine.append(signal_tape_prefix(user_id=USER, meeting_id=1, session_uid="sess-a") + SIGNAL_PROMOTED_MARKER)
+    kept = [signal_tape_key(user_id=USER, meeting_id=12, session_uid="sess-c", part="captured-signal"),
+            signal_tape_key(user_id=USER + 1, meeting_id=1, session_uid="sess-d", part="captured-signal")]
+    for key in mine + kept:
+        await storage.upload(key, TAPE, content_type="application/x-ndjson")
+    assert all(k.startswith(signal_meeting_prefix(user_id=USER, meeting_id=1)) for k in mine)
+
+    deleted = await delete_meeting_fixtures(storage, user_id=USER, meeting_id=1)
+    assert sorted(deleted) == sorted(mine)
+    assert sorted(storage.blobs) == sorted(kept)
+
+
+async def test_meeting_fixture_deletion_derives_its_prefix_from_the_keyspace(monkeypatch):
+    """The delete names no keyspace of its own: move the tape prefix and the delete follows it."""
+    from meeting_api.recordings import deletion
+
+    storage = InMemoryStorage()
+    await storage.upload("moved/7/1/sess/captured-signal.jsonl", TAPE, content_type="application/x-ndjson")
+    monkeypatch.setattr(deletion, "signal_meeting_prefix",
+                        lambda *, user_id, meeting_id: f"moved/{user_id}/{meeting_id}/")
+    assert await deletion.delete_meeting_fixtures(storage, user_id=7, meeting_id=1) == [
+        "moved/7/1/sess/captured-signal.jsonl"]
