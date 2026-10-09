@@ -1,13 +1,13 @@
 """The credential broker's HTTP front door (credential-broker.v1): the app factory.
 
-Every route except GET /health requires an X-Vexa-Assertion signed with a role key; the role decides
+Every route except the two probes (GET /health, GET /ready) requires an X-Vexa-Assertion signed with a role key; the role decides
 what the caller may do (contract `x-routes`). An agent-role call must ALSO carry the gateway's signed
 identity (gateway-identity.v1 `X-Vexa-Identity`) naming the same person as the assertion's actor:
 agent-api holds the agent key, and the agent key alone must not let it act for anybody it likes. The broker owns three things nobody else writes:
 connection metadata and its audit trail (metadata.sqlite), the credential store (ADR-0040), and
 the OAuth state that binds a consent to the browser session that started it.
 
-This module wires the assertion middleware, the error handlers and the health probe, and includes
+This module wires the assertion middleware, the error handlers and the probes, and includes
 the routes (`routes_connections.py`, `routes_git.py`); the shared state and checks are `broker.py`,
 the request bodies `models.py`.
 
@@ -25,6 +25,11 @@ from . import assertion, identity_token, providers, routes_connections, routes_g
 from .broker import Broker, route_of
 from .faults import UpstreamFault
 from .obs import TraceMiddleware, log_event
+
+
+#: The probes an orchestrator calls without an assertion. Liveness is the process; readiness is the
+#: credential store answering.
+PROBES = ("/health", "/ready")
 
 
 def create_app(broker: Broker) -> FastAPI:
@@ -51,7 +56,7 @@ def create_app(broker: Broker) -> FastAPI:
 
     @app.middleware("http")
     async def boundaries(request: Request, call_next):
-        if request.method == "GET" and request.url.path == "/health":
+        if request.method == "GET" and request.url.path in PROBES:
             return await call_next(request)
         header = request.headers.get(assertion.HEADER.lower(), "")
         body = await request.body()
@@ -77,7 +82,23 @@ def create_app(broker: Broker) -> FastAPI:
 
     @app.get("/health")
     def health():
+        """Liveness: the process answers. It stays ok while the store is down, because restarting
+        the broker does not bring a store back."""
         return {"status": "ok", "service": "credential-broker", "store": b.store.name}
+
+    @app.get("/ready")
+    def ready():
+        """Readiness: the credential store answers (`Store.healthy`). 503 while it does not, so no
+        traffic is sent to a broker that would refuse every credential operation."""
+        body = {"service": "credential-broker", "store": b.store.name}
+        try:
+            healthy = bool(b.store.healthy())
+        except Exception:  # noqa: BLE001 — a probe that raises is an unready store, never a crashed probe
+            healthy = False
+        if healthy:
+            return JSONResponse({"status": "ok", **body}, headers={"Cache-Control": "no-store"})
+        b.fault("store", "unhealthy", route="/ready")
+        return JSONResponse({"status": "unavailable", **body}, 503, headers={"Cache-Control": "no-store"})
 
     app.include_router(routes_connections.build(b))
     app.include_router(routes_git.build(b))

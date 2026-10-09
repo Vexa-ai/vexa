@@ -27,6 +27,11 @@ human key — the authority to consent and store — must live in no process an 
 The broker is reachable only from agent-api and the terminal: compose puts it on a network nothing
 else joins, and the chart ships a NetworkPolicy. Worker containers never hold a role key.
 
+Two probes answer without an assertion: `GET /health` is liveness (the process answers; it stays
+ok while the store is down, since a restart does not bring a store back) and `GET /ready` is
+readiness (503 `unavailable` while the credential store does not answer, logged as a `store`
+fault).
+
 The agent role is bound to a person by the gateway, not by agent-api: every agent-role call carries
 the gateway's signed identity, forwarded unchanged, and the broker verifies it with the gateway's
 public key (`VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE`) and refuses the call unless it names the
