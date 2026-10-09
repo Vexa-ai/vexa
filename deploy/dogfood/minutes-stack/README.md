@@ -43,11 +43,19 @@ deployment lock:
 | `host`, `port` | where the server listens; `VEXA_PUBLIC_MCP_URL` is derived from them |
 
 `agent_tools.register(mcp, call=…, guard=…)` takes two explicit ports: `call` reaches
-agent-api as the caller THROUGH THE GATEWAY (`/agent/*`) — a worker's delegation token as
-itself, anyone else with the person's own gateway key — so agent-api receives the gateway's
-signed identity and can forward it to the credential broker, which acts for a person on
-nothing else; `guard` is the rig's identity guard. Consent,
+agent-api as the caller THROUGH THE GATEWAY, so agent-api receives the gateway's signed
+identity and can forward it to the credential broker, which acts for a person on nothing
+else; `guard` is the rig's identity guard. A person goes with their own gateway key to the
+REST route (`/agent/*`). A worker's delegation token (`vxd_`) is an MCP credential the gateway
+admits on `/mcp` only, so a worker's call goes there as itself, to the product tool of the same
+name (each `call` names it; a test holds every name, route and argument to
+`core/agent/mcp.tools.v1.json`), and identity resolves its regime and ceiling. Consent,
 credential use, the regime refusals and the ceiling are agent-api's, not the adapter's.
+
+The gateway's `/mcp` must be the product MCP service, not this one: a worker's call that comes
+back here through the gateway carries this process's hop marker and is refused (508) rather than
+calling itself. The gateway MCP bounds a tool call at 30 s, which is shorter than the
+`onboarding_research` batch timeout a person's REST call gets.
 
 ### What Minutes needs after the identity change
 
@@ -60,6 +68,9 @@ credential use, the regime refusals and the ceiling are agent-api's, not the ada
   only, `VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE` on agent-api, meeting-api and the credential
   broker; and `VEXA_MCP_DELEGATION_SECRET` on admin-api as well as agent-api and this service
   (admin-api resolves the delegation tokens this service forwards to the gateway).
+- Workers' Connections, clock and chat-naming calls reach agent-api through the gateway's
+  `/mcp` (see above), so the gateway's `MCP_URL` must be the product MCP service with the agent
+  domain assembled.
 - A worker files friction through the gateway (`/agent/friction`, its delegation token),
   derived from `VEXA_MCP_URL`; a worker pointed at the rig keeps the record in its
   fallback log instead.
