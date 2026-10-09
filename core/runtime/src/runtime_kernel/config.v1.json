@@ -199,6 +199,78 @@
       ]
     },
     {
+      "key": "RUNTIME_K8S_BOT_NODE_SELECTOR",
+      "class": "defaulted",
+      "default": "(unset — meeting-bot Pods take the runtime-wide RUNTIME_K8S_NODE_SELECTOR)",
+      "description": "k8s backend: JSON object of node labels every SPAWNED meeting-bot Pod selects. When set it replaces the runtime-wide RUNTIME_K8S_NODE_SELECTOR for this class only, so bots can run on their own pool. Read and validated at boot (label keys and values per Kubernetes' rules); malformed is fatal at boot. Never taken from a workload spec",
+      "targets": [
+        "helm"
+      ]
+    },
+    {
+      "key": "RUNTIME_K8S_BOT_TOLERATIONS",
+      "class": "defaulted",
+      "default": "(unset — meeting-bot Pods take the runtime-wide RUNTIME_K8S_TOLERATIONS)",
+      "description": "k8s backend: JSON array of toleration objects (key, operator Equal|Exists, value, effect, tolerationSeconds) every SPAWNED meeting-bot Pod carries. When set it replaces the runtime-wide RUNTIME_K8S_TOLERATIONS for this class only. Validated at boot; malformed is fatal at boot. Never taken from a workload spec",
+      "targets": [
+        "helm"
+      ]
+    },
+    {
+      "key": "RUNTIME_K8S_BOT_PRIORITY_CLASS_NAME",
+      "class": "defaulted",
+      "default": "(unset — no priorityClassName, the cluster's default priority)",
+      "description": "k8s backend: the PriorityClass every SPAWNED meeting-bot Pod names. Validated at boot as a Kubernetes object name; Kubernetes' own system-* classes are refused. Never taken from a workload spec",
+      "targets": [
+        "helm"
+      ]
+    },
+    {
+      "key": "RUNTIME_K8S_BOT_IMAGE_PULL_SECRETS",
+      "class": "defaulted",
+      "default": "(unset — no imagePullSecrets on the Pod; the namespace's default ServiceAccount still applies its own)",
+      "description": "k8s backend: JSON array of Secret names (or {\"name\": …} objects) every SPAWNED meeting-bot Pod pulls its image with. Validated at boot. Never taken from a workload spec",
+      "targets": [
+        "helm"
+      ]
+    },
+    {
+      "key": "RUNTIME_K8S_AGENT_WORKER_NODE_SELECTOR",
+      "class": "defaulted",
+      "default": "(unset — agent-worker Pods take the runtime-wide RUNTIME_K8S_NODE_SELECTOR)",
+      "description": "k8s backend: JSON object of node labels every SPAWNED agent-worker Pod selects. When set it replaces the runtime-wide RUNTIME_K8S_NODE_SELECTOR for this class only. Validated at boot; malformed is fatal at boot. Never taken from a workload spec",
+      "targets": [
+        "helm"
+      ]
+    },
+    {
+      "key": "RUNTIME_K8S_AGENT_WORKER_TOLERATIONS",
+      "class": "defaulted",
+      "default": "(unset — agent-worker Pods take the runtime-wide RUNTIME_K8S_TOLERATIONS)",
+      "description": "k8s backend: JSON array of toleration objects every SPAWNED agent-worker Pod carries. When set it replaces the runtime-wide RUNTIME_K8S_TOLERATIONS for this class only. Validated at boot; malformed is fatal at boot. Never taken from a workload spec",
+      "targets": [
+        "helm"
+      ]
+    },
+    {
+      "key": "RUNTIME_K8S_AGENT_WORKER_PRIORITY_CLASS_NAME",
+      "class": "defaulted",
+      "default": "(unset — no priorityClassName, the cluster's default priority)",
+      "description": "k8s backend: the PriorityClass every SPAWNED agent-worker Pod names. Validated at boot; Kubernetes' own system-* classes are refused. Never taken from a workload spec",
+      "targets": [
+        "helm"
+      ]
+    },
+    {
+      "key": "RUNTIME_K8S_AGENT_WORKER_IMAGE_PULL_SECRETS",
+      "class": "defaulted",
+      "default": "(unset — no imagePullSecrets on the Pod; the namespace's default ServiceAccount still applies its own)",
+      "description": "k8s backend: JSON array of Secret names (or {\"name\": …} objects) every SPAWNED agent-worker Pod pulls its image with. Validated at boot. Never taken from a workload spec",
+      "targets": [
+        "helm"
+      ]
+    },
+    {
       "key": "BROWSER_IMAGE",
       "class": "capability",
       "capability": "bot_spawn",

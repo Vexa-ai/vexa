@@ -207,7 +207,7 @@ def build_pod(
     command, env, labels and scheduling all coexist instead of clobbering each other.
 
     ``env`` is the container's env VERBATIM; ``overlay_env`` (default: ``env``) is the wider env the
-    pod-shaping overlay is derived from. They differ because the runtime's own scheduling knobs live
+    pod-shaping overlay is derived from. The profile's ``runnable.scheduling`` is laid on last. They differ because the runtime's own scheduling knobs live
     in its process env, not in the workload's — and must shape the Pod without being injected into
     the workload's container as config.
 
@@ -263,6 +263,10 @@ def build_pod(
         for key, value in overlay_container.items():
             if key != "name":
                 container[key] = value
+    # The profile's own placement (operator configuration, validated at boot): its node selector
+    # and tolerations, when set, replace the runtime-wide ones above; its priority class and pull
+    # secrets have no runtime-wide counterpart. Nothing here comes from the workload's env.
+    runnable.scheduling.apply(pod["spec"])
     return pod
 
 

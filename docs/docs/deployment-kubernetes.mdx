@@ -221,6 +221,35 @@ Set `runtime.tolerations` / `runtime.nodeSelector` only to send spawned workload
 pool than the kernel (e.g. GPU bots). Both values are serialized to JSON; malformed JSON fails the
 spawn loudly rather than dropping the constraint (a dropped constraint is the stranded-Pod bug).
 
+To place one class on its own, set `runtime.workloadScheduling.meetingBot` or `.agentWorker`. For
+example, to put bots and workers on a dedicated tainted pool, pull them with a private registry's
+Secret, and run them below the priority of the workloads they must not displace:
+
+```yaml
+runtime:
+  workloadScheduling:
+    meetingBot:
+      nodeSelector: {vexa.ai/pool: bots}
+      tolerations:
+        - {key: vexa.ai/pool, operator: Equal, value: bots, effect: NoSchedule}
+      priorityClassName: vexa-bots          # a PriorityClass you create
+      imagePullSecrets: [regcred]
+    agentWorker:
+      priorityClassName: vexa-bots
+      imagePullSecrets: [regcred]
+```
+
+| Value (per class) | Env on the runtime | Applied to that class's Pods |
+|---|---|---|
+| `nodeSelector` | `RUNTIME_K8S_BOT_NODE_SELECTOR` / `RUNTIME_K8S_AGENT_WORKER_NODE_SELECTOR` | `spec.nodeSelector`, replacing the runtime-wide one |
+| `tolerations` | `RUNTIME_K8S_BOT_TOLERATIONS` / `RUNTIME_K8S_AGENT_WORKER_TOLERATIONS` | `spec.tolerations`, replacing the runtime-wide ones |
+| `priorityClassName` | `RUNTIME_K8S_BOT_PRIORITY_CLASS_NAME` / `RUNTIME_K8S_AGENT_WORKER_PRIORITY_CLASS_NAME` | `spec.priorityClassName`; Kubernetes' own `system-*` classes are refused |
+| `imagePullSecrets` | `RUNTIME_K8S_BOT_IMAGE_PULL_SECRETS` / `RUNTIME_K8S_AGENT_WORKER_IMAGE_PULL_SECRETS` | `spec.imagePullSecrets`. Kubernetes then skips the ServiceAccount's own pull secrets for that Pod |
+
+All empty by default, which adds nothing to a Pod. The runtime checks these values when it starts
+and refuses to boot on a malformed one, naming it. A caller cannot set any of them: they are not
+part of a `runtime.v1` `WorkloadSpec`, and the runtime drops a spec's `RUNTIME_K8S_*` env keys.
+
 <Warning>
 **Spawned-workload commands must exist in the target image under k8s (entrypoint-replace)
 semantics.** A runtime profile may carry a `command`; the k8s backend passes it as

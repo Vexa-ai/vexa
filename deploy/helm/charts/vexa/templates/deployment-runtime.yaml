@@ -152,6 +152,27 @@ spec:
               value: {{ .Values.runtime.workloadResources.agentWorker.cpu | default "" | quote }}
             - name: RUNTIME_AGENT_WORKER_MEMORY_MB
               value: {{ .Values.runtime.workloadResources.agentWorker.memoryMb | default "" | quote }}
+            # Per-class placement for SPAWNED Pods (runtime.workloadScheduling): the runtime validates
+            # these at boot and lays them on each class's Pods. Empty ⇒ nothing of the class's own.
+            {{- $placement := .Values.runtime.workloadScheduling | default dict }}
+            {{- $bot := get $placement "meetingBot" | default dict }}
+            {{- $worker := get $placement "agentWorker" | default dict }}
+            - name: RUNTIME_K8S_BOT_NODE_SELECTOR
+              value: {{ $bot.nodeSelector | default dict | toJson | quote }}
+            - name: RUNTIME_K8S_BOT_TOLERATIONS
+              value: {{ $bot.tolerations | default list | toJson | quote }}
+            - name: RUNTIME_K8S_BOT_PRIORITY_CLASS_NAME
+              value: {{ $bot.priorityClassName | default "" | quote }}
+            - name: RUNTIME_K8S_BOT_IMAGE_PULL_SECRETS
+              value: {{ $bot.imagePullSecrets | default list | toJson | quote }}
+            - name: RUNTIME_K8S_AGENT_WORKER_NODE_SELECTOR
+              value: {{ $worker.nodeSelector | default dict | toJson | quote }}
+            - name: RUNTIME_K8S_AGENT_WORKER_TOLERATIONS
+              value: {{ $worker.tolerations | default list | toJson | quote }}
+            - name: RUNTIME_K8S_AGENT_WORKER_PRIORITY_CLASS_NAME
+              value: {{ $worker.priorityClassName | default "" | quote }}
+            - name: RUNTIME_K8S_AGENT_WORKER_IMAGE_PULL_SECRETS
+              value: {{ $worker.imagePullSecrets | default list | toJson | quote }}
             {{- end }}
             {{- with .Values.runtime.extraEnv }}
             {{- toYaml . | nindent 12 }}

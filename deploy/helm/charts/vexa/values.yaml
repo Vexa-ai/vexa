@@ -449,6 +449,29 @@ runtime:
     agentWorker:
       cpu: 0.5                  # cores → requests/limits cpu: 500m
       memoryMb: 1024            # MiB   → requests/limits memory: 1024Mi
+  # Placement for the Pods the runtime SPAWNS (backend=k8s), per class — e.g. bots and workers on
+  # their own tainted pool, pulled with a private registry's Secret, at a priority below the
+  # workloads they must never displace. Rendered as RUNTIME_K8S_BOT_* / RUNTIME_K8S_AGENT_WORKER_*
+  # and validated by the runtime at boot (a malformed value stops the boot by name). Callers cannot
+  # set any of this: it is the runtime's own configuration, never part of a workload spec.
+  #   nodeSelector / tolerations — when set, REPLACE runtime.nodeSelector / runtime.tolerations
+  #     (and so global.*) for that class; empty keeps those, exactly as before.
+  #   priorityClassName — a PriorityClass you create; Kubernetes' own system-* classes are refused.
+  #   imagePullSecrets — Secret names (or {name: …}) in this namespace. When set they replace the
+  #     ServiceAccount's own pull secrets on these Pods (Kubernetes adds the ServiceAccount's only to
+  #     a Pod that names none).
+  # Empty everywhere (the default) renders nothing new on the Pods.
+  workloadScheduling:
+    meetingBot:
+      nodeSelector: {}
+      tolerations: []
+      priorityClassName: ""
+      imagePullSecrets: []
+    agentWorker:
+      nodeSelector: {}
+      tolerations: []
+      priorityClassName: ""
+      imagePullSecrets: []
   # Per-component override of global.topologySpreadConstraints (same shape). Applies to the runtime
   # Deployment's OWN pods (not the bot/agent Pods it spawns — those carry runtime.tolerations/
   # nodeSelector via the RUNTIME_K8S_* env below). Omit `labelSelector` and the runtime's own pod

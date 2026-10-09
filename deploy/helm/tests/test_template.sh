@@ -96,6 +96,44 @@ else
   echo "  FAIL: runtime RUNTIME_K8S_NODE_SELECTOR missing the global.nodeSelector JSON"; fail=1
 fi
 
+# Per-class placement for SPAWNED Pods (runtime.workloadScheduling → RUNTIME_K8S_BOT_* and
+# RUNTIME_K8S_AGENT_WORKER_*; the runtime validates them at boot). Default: every key rendered and
+# empty, so the runtime adds nothing to a Pod. Set: each class's JSON on its own keys only, the
+# runtime-wide RUNTIME_K8S_* untouched, and nothing of it on the chart's own Pods.
+envval() { grep -A1 -E "name: $1\$" <<< "$2" | grep 'value:' | sed -E 's/^[[:space:]]*value: //'; }
+placement_ok=1
+for class in BOT AGENT_WORKER; do
+  for pair in 'NODE_SELECTOR="{}"' 'TOLERATIONS="[]"' 'PRIORITY_CLASS_NAME=""' 'IMAGE_PULL_SECRETS="[]"'; do
+    key="RUNTIME_K8S_${class}_${pair%%=*}"; want="${pair#*=}"
+    got="$(envval "$key" "$RENDER")"
+    if [ "$got" != "$want" ]; then echo "  FAIL: $key default — want $want got '${got}'"; placement_ok=0; fi
+  done
+done
+[ "$placement_ok" -eq 1 ] && echo "  OK: per-class placement keys render empty by default (8)" || fail=1
+RENDER_PLACE="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" \
+  --set-json 'global.nodeSelector={"vexa.ai/pool":"main"}' \
+  --set-json 'runtime.workloadScheduling.meetingBot={"nodeSelector":{"vexa.ai/pool":"stealth"},"tolerations":[{"key":"vexa.ai/pool","operator":"Equal","value":"stealth","effect":"NoSchedule"}],"priorityClassName":"vexa-stealth","imagePullSecrets":["regcred"]}' \
+  --set runtime.workloadScheduling.agentWorker.priorityClassName=vexa-stealth-worker \
+  --set-json 'runtime.workloadScheduling.agentWorker.imagePullSecrets=[{"name":"worker-reg"}]')"
+place_ok=1
+check_place() {  # check_place <key> <expected value line>
+  local got; got="$(envval "$1" "$RENDER_PLACE")"
+  if [ "$got" != "$2" ]; then echo "  FAIL: $1 — want $2 got '${got}'"; place_ok=0; fi
+}
+check_place RUNTIME_K8S_BOT_NODE_SELECTOR '"{\"vexa.ai/pool\":\"stealth\"}"'
+check_place RUNTIME_K8S_BOT_TOLERATIONS '"[{\"effect\":\"NoSchedule\",\"key\":\"vexa.ai/pool\",\"operator\":\"Equal\",\"value\":\"stealth\"}]"'
+check_place RUNTIME_K8S_BOT_PRIORITY_CLASS_NAME '"vexa-stealth"'
+check_place RUNTIME_K8S_BOT_IMAGE_PULL_SECRETS '"[\"regcred\"]"'
+check_place RUNTIME_K8S_AGENT_WORKER_NODE_SELECTOR '"{}"'
+check_place RUNTIME_K8S_AGENT_WORKER_TOLERATIONS '"[]"'
+check_place RUNTIME_K8S_AGENT_WORKER_PRIORITY_CLASS_NAME '"vexa-stealth-worker"'
+check_place RUNTIME_K8S_AGENT_WORKER_IMAGE_PULL_SECRETS '"[{\"name\":\"worker-reg\"}]"'
+check_place RUNTIME_K8S_NODE_SELECTOR '"{\"vexa.ai/pool\":\"main\"}"'
+if grep -qE '^[[:space:]]+priorityClassName: |regcred|worker-reg' <<< "$(grep -vE '^[[:space:]]+value: ' <<< "$RENDER_PLACE")"; then
+  echo "  FAIL: per-class placement leaked onto the chart's own Pods"; place_ok=0
+fi
+[ "$place_ok" -eq 1 ] && echo "  OK: per-class placement reaches its own keys only, as JSON" || fail=1
+
 # #770: pod topology spread. Empty default (values-test sets nothing) must render NOTHING — the
 # field is optional, so a no-spread chart is byte-identical to a chart without it (single-node /
 # k3s installs keep working). This is the red→green control direction: nothing here, everything

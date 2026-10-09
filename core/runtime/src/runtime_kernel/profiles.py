@@ -20,7 +20,9 @@ import shlex
 from dataclasses import dataclass, field, replace
 from typing import Mapping, Optional
 
+from . import pod_scheduling
 from .models import Resources
+from .pod_scheduling import PodScheduling
 from .workload_env import WORKER_FORWARD_ENV
 
 
@@ -46,8 +48,8 @@ class Runnable:
 
     Everything past ``image``/``command`` is profile data that every backend applies the same way, so
     no backend knows what kind of workload it is starting: which labels it carries, which network it
-    joins, which of the runtime's own settings are forwarded into it, and whether the runtime's
-    credential files are mounted into it."""
+    joins, which of the runtime's own settings are forwarded into it, whether the runtime's
+    credential files are mounted into it, and (on Kubernetes) where its Pods are placed."""
 
     image: Optional[str] = None
     command: Optional[list[str]] = None
@@ -65,6 +67,9 @@ class Runnable:
     credential_mounts: bool = False
     #: A development hot-mount the docker backend applies when its runtime setting is set.
     source_mount: Optional[SourceMount] = None
+    #: Where the k8s backend places this workload's Pods (node selector, tolerations, priority
+    #: class, image pull secrets) — operator configuration read at boot, never from a spec.
+    scheduling: PodScheduling = field(default_factory=PodScheduling)
 
 
 @dataclass(frozen=True)
@@ -169,6 +174,20 @@ def _profile_resources(profile: str) -> Optional[Resources]:
     return Resources(cpu=cpu, memoryMb=memory_mb)
 
 
+# Per-profile Pod placement on Kubernetes, read from the runtime's OWN env at boot (the chart renders
+# it from runtime.workloadScheduling.<class>) and validated there: <prefix>NODE_SELECTOR,
+# <prefix>TOLERATIONS, <prefix>PRIORITY_CLASS_NAME, <prefix>IMAGE_PULL_SECRETS. The prefix sits under
+# RUNTIME_K8S_, which a spec's env can never set (workload_env.RUNTIME_OWNED_PREFIXES).
+_SCHEDULING_ENV_PREFIX = {
+    "meeting-bot": "RUNTIME_K8S_BOT_",
+    "agent": "RUNTIME_K8S_AGENT_WORKER_",
+}
+
+
+def _profile_scheduling(profile: str) -> PodScheduling:
+    return pod_scheduling.from_env(_SCHEDULING_ENV_PREFIX[profile], os.environ)
+
+
 def default_registry() -> ProfileRegistry:
     """The real, deployment-shaped registry. Images come from env (no `:latest` fallback — a missing
     image surfaces as an empty string the backend rejects, matching 0.11's fail-visible stance)."""
@@ -210,6 +229,7 @@ def default_registry() -> ProfileRegistry:
                     # A meeting bot joins DOCKER_NETWORK (meeting-api for its callbacks and uploads,
                     # redis for its streams) and is given no model credential.
                     labels={CLASS_LABEL: "bot"},
+                    scheduling=_profile_scheduling("meeting-bot"),
                 ),
                 idle_timeout_sec=0,  # 0 ⇒ managed externally; enforcement skips it
                 base_env=bot_tuning_env,
@@ -232,6 +252,7 @@ def default_registry() -> ProfileRegistry:
                     credential_mounts=True,
                     source_mount=SourceMount(env="VEXA_AGENT_SRC_MOUNT", target="/app/src/agent_api",
                                              pythonpath="/app/src/agent_api:/app"),
+                    scheduling=_profile_scheduling("agent"),
                 ),
                 idle_timeout_sec=300,
                 max_lifetime_sec=3600,
