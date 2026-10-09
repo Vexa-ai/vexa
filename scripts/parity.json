@@ -469,6 +469,16 @@
           "path": "core/meetings/services/meeting-api/src/meeting_api/config.v1.json",
           "pattern": "\"key\"\\s*:\\s*\"DB_PASSWORD\"[^{}]*?\"forbidden_values\"\\s*:\\s*\\[([^\\]]*)\\]",
           "flags": "m"
+        },
+        {
+          "path": "deploy/lite/entrypoint.sh",
+          "pattern": "^\\s*\"\"\\|(postgres\\|[^)\\n]*)\\)\\s*$",
+          "note": "Lite's boot refusal"
+        },
+        {
+          "path": "deploy/lite/Makefile",
+          "pattern": "^\\s*\"\"\\|(postgres\\|[^)\\n]*)\\) \\\\$",
+          "note": "`make up` mints a new password when .env holds one of these"
         }
       ]
     },

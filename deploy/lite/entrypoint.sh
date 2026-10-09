@@ -37,7 +37,7 @@ export DB_USER="${DB_USER:-postgres}"
 # `make -C deploy/lite up` mints one into the repo-root .env and sets it on its postgres sidecar; with
 # your own database, pass that database's password. Refused like compose's postgres refuses it.
 case "${DB_PASSWORD:-}" in
-    ""|postgres|changeme|change-me|CHANGE-ME|default|secret|password)
+    ""|postgres|password|vexa-internal-secret|lite-internal-secret|changeme|change-me|CHANGE-ME|default|secret)
         echo "ERROR: DB_PASSWORD is unset or a value published in the Vexa repository - refusing to start." >&2
         echo "  make -C deploy/lite up mints one; with your own database, pass -e DB_PASSWORD=<its password>." >&2
         exit 1;;

@@ -192,7 +192,7 @@ up: preflight storage-up
 	IMG=$$(docker image inspect $(LOCAL_TAG) >/dev/null 2>&1 && echo $(LOCAL_TAG) || echo $(DOCKERHUB_USER)/$(IMAGE_NAME):$$IMAGE_TAG); \
 	DB_PW=$$(envv DB_PASSWORD); \
 	case "$$DB_PW" in \
-		""|postgres|changeme|change-me|CHANGE-ME|default|secret|password) \
+		""|postgres|password|vexa-internal-secret|lite-internal-secret|changeme|change-me|CHANGE-ME|default|secret) \
 			DB_PW=$$(openssl rand -hex 32); \
 			if grep -qE '^DB_PASSWORD=' "$(ENV_FILE)"; then sed -i.bak "s|^DB_PASSWORD=.*|DB_PASSWORD=$$DB_PW|" "$(ENV_FILE)" && rm -f "$(ENV_FILE).bak"; \
 			else printf '\nDB_PASSWORD=%s\n' "$$DB_PW" >> "$(ENV_FILE)"; fi; \
