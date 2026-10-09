@@ -658,11 +658,12 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
             str(w.get("id")) for w in (invocation.get("workspaces") or []) if w.get("id")
         ]
         # THE ROOM IS DELIBERATELY ABSENT FROM THIS SCOPE, and that is the security answer, not an
-        # omission. The delegation scope is a CEILING ON THE ACCOUNT (`delegation.scope_allows_workspace`:
-        # `"*"` "allows everything the ACCOUNT already allows … the rig still applies its own per-uid
-        # ownership checks underneath"), so naming another attendee's workspace here would be asking the
-        # control MCP to hand THIS uid a workspace it does not own — inert if the rig is correct, and a
-        # genuine widening of the person's account reach if it ever is not. The room is a MOUNT-level read
+        # omission. The delegation scope is a CEILING ON THE ACCOUNT, never a grant: `"*"` allows what
+        # the account already allows, and every workspace route behind the MCP checks the subject's own
+        # access to the workspace it names (membership) as well as the ceiling
+        # (`api_shared.require_in_ceiling`). Naming another attendee's workspace here would therefore be
+        # asking for a workspace this uid does not own — refused by that access check, and a genuine
+        # widening of the person's account reach if it ever failed. The room is a MOUNT-level read
         # grant made by the dispatcher and enforced by the container's mount table (`write: False` → a
         # `:ro` bind), which is a narrower mechanism than a credential and needs no credential change.
         # Net effect on the token: identical bytes to a room-less dispatch — same `sub`, same `regime`,
@@ -672,10 +673,11 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
             # THE TARGET RIDES THE TOKEN (Vexa-ai/vexa#1611) — which is how `entity_upsert` and
             # `workspace_write` with no `slug` land in the workspace this chat is working in rather
             # than on the person's desk. It is a DEFAULT, not a grant: the token's `scope` is still
-            # the ceiling, and the rig applies its per-uid ownership checks underneath exactly as
-            # before. On the token rather than in a tool argument because the model must not have
-            # to remember it — the founder's answer to *"how to softly reinforce that?"* was
-            # context, not a rule somebody repeats.
+            # the ceiling, and each route authorizes the resolved workspace against the subject's own
+            # access exactly as it would one the caller had named (`api_shared.write_slug`). On the
+            # token rather than in a tool argument because the model must not have to remember it —
+            # the founder's answer to *"how to softly reinforce that?"* was context, not a rule
+            # somebody repeats.
             env["VEXA_MCP_DELEGATION_TOKEN"] = delegation.mint_delegation(
                 mcp_secret, subject=str(subject), regime=regime, workspaces=scope_ws,
                 ttl_sec=settings.mcp_delegation_ttl_sec, target=str(target or "").strip(),
