@@ -113,9 +113,10 @@ State lives in the sidecars' named volumes and survives app-container replacemen
 
 The storage sidecar runs `versity/versitygw` (Apache-2.0), pinned by tag and digest in
 `deploy/lite/Makefile`. meeting-api reaches it over S3 at `vexa-lite-storage:9000` with the
-`MINIO_*` settings the Makefile passes (the names are unchanged; the credentials default to
-`vexa-access-key` / `vexa-secret-key` and can be overridden on the `make` command line). Its port is
-not published. Back the volume up with a copy that keeps extended attributes (`rsync -aX`,
+`MINIO_*` settings the Makefile passes. The names are unchanged; the credentials have no default:
+`make up` mints `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` into `.env` (or replaces the old published
+`vexa-access-key` / `vexa-secret-key`) and restarts the sidecar with them over the same volume. Set
+both on the `make` command line to use your own. Its port is not published. Back the volume up with a copy that keeps extended attributes (`rsync -aX`,
 `cp -a`); see [Recordings → Backups](/how-to/recordings#backups).
 
 Upgrading is re-running with a newer image: set `IMAGE_TAG` in `.env` (pin a specific release so

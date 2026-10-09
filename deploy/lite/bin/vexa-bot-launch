@@ -7,9 +7,18 @@
 # NOT bring up Xvfb / PulseAudio — supervisord already owns those for the whole container
 # (one shared display, like 0.10.6 lite). The bot's full constructor arrives in the
 # inherited env as VEXA_BOT_CONFIG (invocation.v1); we just run the worker.
+#
+# The runtime starts each bot as a uid of its own (never root) with a private HOME and only the
+# pulse-access group: the system PulseAudio is reached by its socket, and the join module's checkpoint
+# screenshots (written to /app/storage/screenshots, a link to /proc/self/fd/9 in the image) land in
+# this bot's own HOME through fd 9, so no bot sees or overwrites another's.
 set -u
 
 export DISPLAY="${DISPLAY:-:99}"
+export PULSE_SERVER="${PULSE_SERVER:-unix:/run/pulse/native}"
+screenshots="${HOME:-/tmp}/screenshots"
+mkdir -p "$screenshots"
+exec 9<"$screenshots"
 
 # Run from the bot package dir so its relative schema path (src→../../../contracts) and the
 # pnpm-linked workspace deps resolve, exactly like the bot's container entrypoint does. The

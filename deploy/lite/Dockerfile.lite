@@ -123,7 +123,19 @@ ENV UV_LINK_MODE=copy \
     DISPLAY=:99
 
 WORKDIR /app
-RUN mkdir -p /var/log/supervisor /var/lib/redis /var/run/redis /workspaces
+# Every bot and agent worker runs as a non-root uid of its own (core/runtime isolation.py), so what
+# root keeps here is root's: the Valkey data directory (every stream, every tenant) is 0700, and the
+# workspace store is writable by root alone (the runtime hands each tenant its own 0700 tree).
+RUN mkdir -p /var/log/supervisor /var/lib/redis /var/run/redis /workspaces \
+ && chmod 0700 /var/lib/redis && chmod 0755 /workspaces
+# The Playwright base leaves its browser install writable by every user. Every bot launches these
+# binaries, each as its own uid, so none of them may be able to change them.
+RUN chmod -R a+rX,go-w /ms-playwright
+# The user the model's tools run as where a worker runs as root (core/agent/llm/ports.py TOOLS_USER;
+# the agent worker image creates the same 10001). Lite starts every worker as its subject's uid, and
+# a worker that is not root never switches; the user exists so the harness finds it either way.
+RUN groupadd --system --gid 10001 vexa-tools \
+ && useradd --system --uid 10001 --gid 10001 --home-dir /tmp --no-create-home --shell /usr/sbin/nologin vexa-tools
 
 # ── Python venvs — one per service (avoids cross-service dependency-pin conflicts). Each mirrors
 #    that service's Dockerfile (uv sync --frozen + the production-only ASGI/DB extras). ────────────
@@ -257,6 +269,10 @@ COPY --from=bot-builder /build/core              /app/core
 COPY --from=bot-builder /build/node_modules      /app/node_modules
 COPY --from=bot-builder /build/package.json /build/pnpm-workspace.yaml /build/pnpm-lock.yaml /build/tsconfig.base.json /build/turbo.json /app/
 COPY --from=bot-builder /build/core/meetings/services/bot/dist/browser-utils.global.js /app/browser-utils.global.js
+# The join module writes checkpoint screenshots to /app/storage/screenshots. Every bot runs as its own
+# uid, so that path is a link to the directory its launcher opens as fd 9 (bin/vexa-bot-launch): each
+# bot writes into its own private HOME and no bot reads another's.
+RUN mkdir -p /app/storage && ln -s /proc/self/fd/9 /app/storage/screenshots
 COPY --from=bot-builder /opt/hf-cache /opt/hf-cache
 ENV VEXA_HF_CACHE=/opt/hf-cache
 # License hygiene: the baked weights are onnx-community/pyannote-segmentation-3.0

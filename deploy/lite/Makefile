@@ -49,16 +49,22 @@ HOST_AGENT_PORT     ?= 8100
 # meeting-api keeps its MINIO_* variable names; they now point at this sidecar.
 STORAGE_IMAGE     ?= versity/versitygw:v1.8.0@sha256:30292fc2eeacc67a36993b01f7a7a5e3361a19cced0e80c1d71cfa2a4b0a2499
 STORAGE_VOLUME    ?= vexa-lite-storagedata
-MINIO_ACCESS_KEY ?= vexa-access-key
-MINIO_SECRET_KEY ?= vexa-secret-key
+# The storage root credentials have no default: they live in .env (MINIO_ACCESS_KEY, MINIO_SECRET_KEY),
+# minted there by storage-credentials.sh when unset or published. Set both here to use your own; a
+# published value is refused either way.
+MINIO_ACCESS_KEY ?=
+MINIO_SECRET_KEY ?=
 MINIO_BUCKET     ?= vexa
-# Opt-in copy from an older Lite: only migrate-storage uses the legacy container and volume.
+# Opt-in copy from an older Lite: only migrate-storage uses the legacy container and volume. Its MinIO
+# was started with the pair every older Lite Makefile defaulted to; pass the pair you gave it instead.
 LEGACY_MINIO_CONTAINER  ?= vexa-lite-minio
 LEGACY_MINIO_VOLUME     ?= vexa-lite-miniodata
 LEGACY_MINIO_IMAGE      ?=
-LEGACY_MINIO_ACCESS_KEY ?= $(MINIO_ACCESS_KEY)
-LEGACY_MINIO_SECRET_KEY ?= $(MINIO_SECRET_KEY)
+LEGACY_MINIO_ACCESS_KEY ?= vexa-access-key
+LEGACY_MINIO_SECRET_KEY ?= vexa-secret-key
 LEGACY_MINIO_BUCKET     ?= $(MINIO_BUCKET)
+# The values the storage root refuses, the list compose's storage and Lite's entrypoint refuse.
+STORAGE_PUBLISHED := ""|vexa-access-key|vexa-secret-key|minioadmin|changeme|change-me|CHANGE-ME|default|secret|password
 
 # --- Local CPU STT (LOCAL_STT=1) ---------------------------------------------------------------
 # Transcription in Vexa is always an external OpenAI-compatible /v1/audio/transcriptions service.
@@ -113,23 +119,41 @@ preflight:
 
 ## storage-up — the storage sidecar: versitygw with its POSIX backend on STORAGE_VOLUME (data/ holds the
 ## buckets as directories, iam/ the gateway's account file), then the bucket. `versitygw admin
-## create-bucket` exits 1 when the bucket already exists, so BucketAlreadyOwnedByYou also counts as ready.
+## create-bucket` exits 1 when the bucket already exists, so BucketAlreadyOwnedByYou (or, for a bucket
+## an earlier root key created, BucketAlreadyExists) also counts as ready.
 ## Its S3 port (with the admin API on the same port) is reachable only on NETWORK, never published.
+##
+## Root credentials: MINIO_ACCESS_KEY / MINIO_SECRET_KEY from the make command line, else from .env,
+## where storage-credentials.sh mints them when unset or published. A published value is refused. A
+## running sidecar started with other credentials (an install from before they were minted) is
+## recreated with these: versitygw takes its root key from its environment at start, the volume
+## keeps every object, and the new root reads buckets the old one created. Values are never printed.
 storage-up: preflight
 	@set -e; \
+	envv() { grep -E "^$$1=" $(ENV_FILE) 2>/dev/null | head -1 | cut -d= -f2- | sed -E 's/[[:space:]]+#.*$$//; s/[[:space:]]+$$//'; }; \
+	AK="$(MINIO_ACCESS_KEY)"; SK="$(MINIO_SECRET_KEY)"; \
+	if [ -z "$$AK" ] && [ -z "$$SK" ]; then sh $(ROOT)/deploy/lite/storage-credentials.sh $(ENV_FILE); AK=$$(envv MINIO_ACCESS_KEY); SK=$$(envv MINIO_SECRET_KEY); fi; \
+	case "$$AK" in $(STORAGE_PUBLISHED)) echo "  ✗ storage: MINIO_ACCESS_KEY is unset or published in the Vexa repository"; exit 1;; esac; \
+	case "$$SK" in $(STORAGE_PUBLISHED)) echo "  ✗ storage: MINIO_SECRET_KEY is unset or published in the Vexa repository"; exit 1;; esac; \
 	docker network inspect $(NETWORK) >/dev/null 2>&1 || docker network create $(NETWORK) >/dev/null; \
 	echo "Starting storage ($(STORAGE_CONTAINER), versitygw)..."; \
+	WANT=$$(printf 'ROOT_ACCESS_KEY=%s\nROOT_SECRET_KEY=%s' "$$AK" "$$SK"); \
+	HAVE=$$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' $(STORAGE_CONTAINER) 2>/dev/null | grep -E '^ROOT_(ACCESS|SECRET)_KEY=' | sort); \
+	if docker ps -q -f name=^$(STORAGE_CONTAINER)$$ | grep -q . && [ "$$WANT" != "$$HAVE" ]; then \
+		echo "  Storage root credentials changed: recreating $(STORAGE_CONTAINER) (volume $(STORAGE_VOLUME) kept)"; \
+		docker rm -f $(STORAGE_CONTAINER) >/dev/null; \
+	fi; \
 	if ! docker ps -q -f name=^$(STORAGE_CONTAINER)$$ | grep -q .; then \
 		docker rm -f $(STORAGE_CONTAINER) 2>/dev/null || true; \
 		docker run -d --name $(STORAGE_CONTAINER) --network $(NETWORK) --restart unless-stopped \
-			-e ROOT_ACCESS_KEY="$(MINIO_ACCESS_KEY)" -e ROOT_SECRET_KEY="$(MINIO_SECRET_KEY)" \
+			-e ROOT_ACCESS_KEY="$$AK" -e ROOT_SECRET_KEY="$$SK" \
 			-v $(STORAGE_VOLUME):/srv/vexa-storage --entrypoint /bin/sh $(STORAGE_IMAGE) -c \
 			'mkdir -p /srv/vexa-storage/data /srv/vexa-storage/iam && exec versitygw --port :9000 --health /health --iam-dir /srv/vexa-storage/iam --quiet posix /srv/vexa-storage/data' > /dev/null; \
 	fi; \
 	for i in $$(seq 1 30); do docker exec $(STORAGE_CONTAINER) wget -q -O /dev/null http://127.0.0.1:9000/health 2>/dev/null && break; sleep 1; done; \
-	out=$$(docker run --rm --network $(NETWORK) -e ADMIN_ACCESS_KEY="$(MINIO_ACCESS_KEY)" -e ADMIN_SECRET_KEY="$(MINIO_SECRET_KEY)" \
-		$(STORAGE_IMAGE) admin --endpoint-url http://$(STORAGE_CONTAINER):9000 create-bucket --bucket $(MINIO_BUCKET) --owner "$(MINIO_ACCESS_KEY)" 2>&1) \
-		|| echo "$$out" | grep -q BucketAlreadyOwnedByYou \
+	out=$$(docker run --rm --network $(NETWORK) -e ADMIN_ACCESS_KEY="$$AK" -e ADMIN_SECRET_KEY="$$SK" \
+		$(STORAGE_IMAGE) admin --endpoint-url http://$(STORAGE_CONTAINER):9000 create-bucket --bucket $(MINIO_BUCKET) --owner "$$AK" 2>&1) \
+		|| echo "$$out" | grep -q -E 'BucketAlreadyOwnedByYou|BucketAlreadyExists' \
 		|| { echo "  ✗ storage: could not create bucket $(MINIO_BUCKET): $$out"; exit 1; }; \
 	echo "  ✓ Storage ready (bucket $(MINIO_BUCKET), volume $(STORAGE_VOLUME))"
 
@@ -142,11 +166,12 @@ migrate-storage: preflight storage-up
 	envv() { grep -E "^$$1=" $(ENV_FILE) 2>/dev/null | head -1 | cut -d= -f2- | sed -E 's/[[:space:]]+#.*$$//; s/[[:space:]]+$$//'; }; \
 	IMAGE_TAG=$$(envv IMAGE_TAG); IMAGE_TAG=$${IMAGE_TAG:-v012}; \
 	IMG=$$(docker image inspect $(LOCAL_TAG) >/dev/null 2>&1 && echo $(LOCAL_TAG) || echo $(DOCKERHUB_USER)/$(IMAGE_NAME):$$IMAGE_TAG); \
+	AK="$(MINIO_ACCESS_KEY)"; AK=$${AK:-$$(envv MINIO_ACCESS_KEY)}; SK="$(MINIO_SECRET_KEY)"; SK=$${SK:-$$(envv MINIO_SECRET_KEY)}; \
 	NETWORK=$(NETWORK) LEGACY_VOLUME=$(LEGACY_MINIO_VOLUME) LEGACY_CONTAINER=$(LEGACY_MINIO_CONTAINER) \
 	LEGACY_IMAGE="$(LEGACY_MINIO_IMAGE)" LEGACY_ACCESS_KEY="$(LEGACY_MINIO_ACCESS_KEY)" \
 	LEGACY_SECRET_KEY="$(LEGACY_MINIO_SECRET_KEY)" LEGACY_BUCKET=$(LEGACY_MINIO_BUCKET) \
-	TARGET_ENDPOINT=http://$(STORAGE_CONTAINER):9000 TARGET_ACCESS_KEY="$(MINIO_ACCESS_KEY)" \
-	TARGET_SECRET_KEY="$(MINIO_SECRET_KEY)" TARGET_BUCKET=$(MINIO_BUCKET) STORAGE_VOLUME=$(STORAGE_VOLUME) \
+	TARGET_ENDPOINT=http://$(STORAGE_CONTAINER):9000 TARGET_ACCESS_KEY="$$AK" \
+	TARGET_SECRET_KEY="$$SK" TARGET_BUCKET=$(MINIO_BUCKET) STORAGE_VOLUME=$(STORAGE_VOLUME) \
 	RUN_IMAGE="$$IMG" RUN_PYTHON=/opt/venvs/meeting/bin/python TOOLS_DIR=$(ROOT)/deploy/storage \
 	NAME_PREFIX=$(APP_CONTAINER) RETRY_HINT="make -C deploy/lite migrate-storage" COPY_ARGS="$(COPY_ARGS)" \
 	$(ROOT)/deploy/storage/migrate-from-minio.sh
@@ -191,6 +216,8 @@ up: preflight storage-up
 	TX_TOKEN=$$(envv TRANSCRIPTION_SERVICE_TOKEN); \
 	IMAGE_TAG=$$(envv IMAGE_TAG); IMAGE_TAG=$${IMAGE_TAG:-v012}; \
 	IMG=$$(docker image inspect $(LOCAL_TAG) >/dev/null 2>&1 && echo $(LOCAL_TAG) || echo $(DOCKERHUB_USER)/$(IMAGE_NAME):$$IMAGE_TAG); \
+	MINIO_AK="$(MINIO_ACCESS_KEY)"; MINIO_AK=$${MINIO_AK:-$$(envv MINIO_ACCESS_KEY)}; \
+	MINIO_SK="$(MINIO_SECRET_KEY)"; MINIO_SK=$${MINIO_SK:-$$(envv MINIO_SECRET_KEY)}; \
 	DB_PW=$$(envv DB_PASSWORD); \
 	case "$$DB_PW" in \
 		""|postgres|password|vexa-internal-secret|lite-internal-secret|changeme|change-me|CHANGE-ME|default|secret) \
@@ -242,8 +269,8 @@ up: preflight storage-up
 		-e DB_HOST=$(PG_CONTAINER) -e DB_PORT=5432 -e DB_NAME=vexa -e DB_USER=postgres -e DB_PASSWORD="$$DB_PW" \
 		-e ADMIN_API_TOKEN="$$ADMIN_TK" -e ADMIN_TOKEN="$$ADMIN_TK" \
 		-e TRANSCRIPTION_SERVICE_URL="$$TX_URL" -e TRANSCRIPTION_SERVICE_TOKEN="$$TX_TOKEN" \
-		-e MINIO_ENDPOINT=$(STORAGE_CONTAINER):9000 -e MINIO_ACCESS_KEY="$(MINIO_ACCESS_KEY)" \
-		-e MINIO_SECRET_KEY="$(MINIO_SECRET_KEY)" -e MINIO_BUCKET=$(MINIO_BUCKET) -e MINIO_SECURE=false \
+		-e MINIO_ENDPOINT=$(STORAGE_CONTAINER):9000 -e MINIO_ACCESS_KEY="$$MINIO_AK" \
+		-e MINIO_SECRET_KEY="$$MINIO_SK" -e MINIO_BUCKET=$(MINIO_BUCKET) -e MINIO_SECURE=false \
 		-e VEXA_PUBLIC_API_URL=http://localhost:$(HOST_GATEWAY_PORT) \
 		-e TERMINAL_PUBLIC_URL=http://localhost:$(HOST_TERMINAL_PORT) \
 		$$CLAUDE_MOUNT \
@@ -272,6 +299,9 @@ init-db:
 ## boot provision-key.sh restarts the dashboard and terminal once the self-host key is minted. Then
 ## read every process's environment inside the container (tests/program_environments.py): the
 ## runtime caller credential is held by the runtime, agent-api and meeting-api and nothing else.
+## Then start a worker for a numeric and a named subject, a bot, and refused dispatches through the
+## runtime (tests/child_identities.py): no child is root, each runs as its own uid, and none can read
+## another process's environment, a secret on any command line, or root's state.
 TEST_WAIT_SECONDS ?= 120
 test:
 	@FAIL=0; for ep in "$(HOST_GATEWAY_PORT):gateway" "$(HOST_AGENT_PORT):agent-api" "$(HOST_TERMINAL_PORT):terminal"; do \
@@ -283,6 +313,7 @@ test:
 		if [ $$OK = 1 ]; then echo "  ✓ $$NAME (:$$PORT)"; else echo "  ✗ $$NAME not responding after $(TEST_WAIT_SECONDS)s (:$$PORT)"; FAIL=1; fi; \
 	done; \
 	docker exec -i $(APP_CONTAINER) python3 - < "$(ROOT)/deploy/lite/tests/program_environments.py" || FAIL=1; \
+	docker exec -i $(APP_CONTAINER) python3 - < "$(ROOT)/deploy/lite/tests/child_identities.py" || FAIL=1; \
 	exit $$FAIL
 
 ## down — stop + remove app + sidecars + network (volumes persist; `docker volume rm vexa-lite-pgdata vexa-lite-storagedata` to wipe).

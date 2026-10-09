@@ -120,6 +120,20 @@ export MINIO_ACCESS_KEY="${MINIO_ACCESS_KEY:-}"
 export MINIO_SECRET_KEY="${MINIO_SECRET_KEY:-}"
 export MINIO_BUCKET="${MINIO_BUCKET:-vexa}"
 export MINIO_SECURE="${MINIO_SECURE:-false}"
+# With object storage configured, its credentials must be real: the pair Lite and compose used to
+# default to is published in this repository. `make -C deploy/lite up` mints a pair into .env and
+# starts its storage sidecar with it; with your own S3, pass that store's keys.
+if [ -n "$MINIO_ENDPOINT" ]; then
+    for storage_key in "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"; do
+        case "$storage_key" in
+            ""|vexa-access-key|vexa-secret-key|minioadmin|changeme|change-me|CHANGE-ME|default|secret|password)
+                echo "ERROR: MINIO_ACCESS_KEY / MINIO_SECRET_KEY are unset or a value published in the Vexa repository - refusing to start." >&2
+                echo "  make -C deploy/lite up mints a pair; with your own S3, pass -e MINIO_ACCESS_KEY=… -e MINIO_SECRET_KEY=…" >&2
+                exit 1;;
+        esac
+    done
+fi
+unset storage_key
 
 # Gateway edge guard (fastapi-guard): ON by default with generous limits (owner ruling).
 # Opt out with -e GUARD_ENABLED=false on the container. Other GUARD_* tuning keys
@@ -193,9 +207,12 @@ export VEXA_DISPATCH_SIGNING_KEY="${VEXA_DISPATCH_SIGNING_KEY:-$(/usr/local/bin/
 # Read by no Lite program; minted per boot like the internal tier so no published value is exported.
 export JWT_SECRET="${JWT_SECRET:-$(python3 -c "import secrets; print(secrets.token_hex(32))")}"
 
-# Workspace store for the agent (shared dir; the worker runs in-process, no volume bind).
+# Workspace store for the agent (shared dir; the worker runs in-process, no volume bind). Writable by
+# root alone: every agent worker runs as its subject's own uid, and the runtime hands each subject its
+# own 0700 tree under it. The Valkey data directory holds every stream of every tenant: root's only.
 mkdir -p /workspaces /var/lib/redis /var/run/redis
-chmod 777 /workspaces 2>/dev/null || true
+{ chown root:root /workspaces /var/lib/redis && chmod 0755 /workspaces && chmod 0700 /var/lib/redis; } \
+    || echo "WARNING: could not make /workspaces and /var/lib/redis root's own; the runtime refuses agent dispatches into a store root does not own." >&2
 
 echo "Configuration:"
 echo "  - Redis URL:        $(printf '%s' "$REDIS_URL" | sed -E 's#//[^@/]*@#//***@#')"
@@ -234,6 +251,10 @@ case "$*" in
             || exit 1 ;;
 esac
 unset runtime_api_token
+# Valkey's password reaches it in a root-only config file, never on its command line: every process
+# in the container can read any process's command line.
+mkdir -p -m 0700 /run/vexa
+( umask 077; printf 'requirepass "%s"\n' "$(printf '%s' "$REDIS_PASSWORD" | sed 's/[\\"]/\\&/g')" > /run/vexa/valkey.conf )
 
 echo "Starting services via supervisord..."
 exec "$@"
