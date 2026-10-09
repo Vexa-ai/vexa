@@ -229,8 +229,8 @@
       "why": "agent-api and meeting-api refuse the same class of verb to an unwatched worker, and regime.py promises the worker 'reads one refusal everywhere'. It was kept identical by hand; a reworded copy would teach a worker two instructions for one rule.",
       "sites": [
         {
-          "path": "core/agent/control_plane/api.py",
-          "pattern": "(\"status\": \"refused\", \"reason\": \"human_session_required\",[\\s\\S]*?another way\\.\")"
+          "path": "core/agent/control_plane/ceiling.py",
+          "pattern": "(\"status\": \"refused\",\\s*\"reason\": \"human_session_required\",[\\s\\S]*?another way\\.\")"
         },
         {
           "path": "core/meetings/services/meeting-api/src/meeting_api/regime.py",
@@ -242,41 +242,13 @@
       "id": "delegated-identity-headers",
       "fact": "which x-user-* headers mark a request as a delegated worker's (the person-in-the-loop predicate)",
       "kind": "set",
-      "enforced": false,
-      "decision": "WHETHER A PRESENT BUT EMPTY x-user-regime MARKS A DELEGATED IDENTITY, AND WHERE THE PREDICATE LIVES. agent-api (require_person in api.py, unwatched_worker in api_shared.py) counts x-user-regime only when it is non-empty and otherwise looks at the two ceiling headers; meeting-api (regime.py) and agent-api's chat door (_refuse_delegated in routers/chats.py) count any of the three by presence. So a request whose x-user-regime is present and empty is refused by meeting-api and admitted by agent-api. The architecture finding (S35, PR #1784 pass 3) names the destination: is_delegated, is_unwatched and REFUSAL in gateway-identity.v1's identity_token.py beside DELEGATION_HEADERS, whose four vendored copies identity-token already compares byte for byte. Choosing the empty-regime answer is a security-boundary call for the owners of those services, not for this gate.",
+      "enforced": true,
+      "decided": "an empty x-user-regime counts as delegated (closed); agent-api ceiling.is_delegated and meeting-api regime.py agree. agent-api no longer spells the set: ceiling.is_delegated reads the vendored identity_token.DELEGATION_HEADERS, held byte-identical by identity-token.",
       "why": "Four hand-written copies of one predicate across two services, already disagreeing at one edge. Each site's captured set is the headers it tests; agent-api's two read x-user-regime separately, by value.",
       "sites": [
         {
-          "path": "core/agent/control_plane/api.py",
-          "pattern": "delegated = bool\\(regime\\) or any\\(h in request\\.headers for h in \\(([^)]*)\\)\\)"
-        },
-        {
-          "path": "core/agent/control_plane/api_shared.py",
-          "pattern": "delegated = bool\\(regime\\) or any\\(h in request\\.headers for h in \\(([^)]*)\\)\\)"
-        },
-        {
-          "path": "core/agent/control_plane/routers/chats.py",
-          "pattern": "if any\\(h in request\\.headers for h in \\(([^)]*)\\)\\)"
-        },
-        {
           "path": "core/meetings/services/meeting-api/src/meeting_api/regime.py",
           "pattern": "^DELEGATION_HEADERS = \\(([^)]*)\\)"
-        }
-      ],
-      "answers": [
-        {
-          "value": "x-user-delegation-target · x-user-delegation-workspaces",
-          "sites": [
-            "core/agent/control_plane/api.py",
-            "core/agent/control_plane/api_shared.py"
-          ]
-        },
-        {
-          "value": "x-user-delegation-target · x-user-delegation-workspaces · x-user-regime",
-          "sites": [
-            "core/agent/control_plane/routers/chats.py",
-            "core/meetings/services/meeting-api/src/meeting_api/regime.py"
-          ]
         }
       ]
     },
