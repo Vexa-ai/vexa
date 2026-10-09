@@ -1011,7 +1011,11 @@ def create_app(
             tail, error = _tail_path(path, request)
             if error is not None:
                 return error
-            return await _forward(request.method, _agent(tail), request)
+            # The one REST door a worker's delegation token opens besides `/mcp`: the worker harness
+            # files what went wrong in a turn straight to `/agent/friction` (`worker/friction.py`),
+            # recorded as a report from the person the worker acts for and nothing else.
+            friction = request.method == "POST" and tail == "friction"
+            return await _forward(request.method, _agent(tail), request, delegation_door=friction)
 
     # ---- the MCP front door (#795): the streamable-HTTP transport, fronted at the edge ----
     # MCP streamable-HTTP is ONE endpoint driven by two methods with opposite lifetimes:

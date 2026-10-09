@@ -160,3 +160,18 @@ def test_create_app_has_no_second_mcp_upstream():
     import inspect
 
     assert "agent_mcp_url" not in inspect.signature(create_app).parameters
+
+
+def test_the_worker_harness_files_friction_with_its_token_and_that_is_the_only_rest_door():
+    """`worker/friction.py` posts a turn's friction straight to `/agent/friction` with the dispatch's
+    token. That one route is admitted; its neighbours are not."""
+    if not AGENT_CARRIED:
+        return
+    client, downstream = _client()
+    r = client.post("/agent/friction", headers={"X-API-Key": DELEGATED}, json={"what_happened": "x"})
+    assert r.status_code == 200
+    assert downstream.last["url"] == "http://agent-api/api/friction"
+    assert identity_token.verify(VERIFY_KEY, downstream.last["headers"][identity_token.HEADER])["sub"] == "42"
+    for method, path in (("GET", "/agent/friction"), ("POST", "/agent/friction/x"),
+                         ("POST", "/agent/frictions"), ("DELETE", "/agent/friction")):
+        assert client.request(method, path, headers={"X-API-Key": DELEGATED}).status_code == 403, path
