@@ -32,8 +32,8 @@ from control_plane.api_shared import (
     WorkspaceDeactivateBody, WorkspaceMoveBody, WorkspaceNewBody, WorkspacePublishBody,
     WorkspaceInviteBody, WorkspaceMembershipBody, WorkspaceImportBody,
     WorkspacePullBody, WorkspacePurposeBody, WorkspacePushBody, WorkspaceRemoveBody,
-    WorkspaceRenameBody, WorkspaceSwapBody, WorkspaceWriteBody, _upload_filename, logger,
-    require_in_ceiling, unwatched_worker, write_slug)
+    WorkspaceRenameBody, WorkspaceSwapBody, WorkspaceWriteBody, _upload_filename, logger)
+from control_plane.ceiling import require_in_ceiling, require_person, unwatched_worker, write_slug
 from control_plane.workspace_attach import (
     CloneError, activate_workspace, active_workspaces, attach_shared_workspace, bind_repository_credential,
     attached_workspaces, create_shared_workspace_dir, create_workspace,
@@ -97,7 +97,6 @@ def build(**d) -> APIRouter:
     mindex = d['mindex']
     settings = d['settings']
     subject_of = d['subject_of']
-    require_person = d.get('require_person') or (lambda request: None)
     workspace_registry = d['workspace_registry']
     wsr = d['wsr']
 

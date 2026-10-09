@@ -24,6 +24,7 @@ from control_plane.api_shared import (
     _model_creds_error_message, _record_chat_turn_head, _sse, _stream_tail_id,
     inbox_pending, logger, meeting_access_check, meeting_binding, target_preamble, toolbelt_preamble,
     workspace_focus)
+from control_plane.ceiling import require_person
 from control_plane.config_preflight import NOT_CONFIGURED, capability_state
 from control_plane.events import event_to_invocation
 from control_plane.workspace_attach import active_workspaces, shared_active_mounts
@@ -83,8 +84,6 @@ def build(**d) -> APIRouter:
     scheduler = d['scheduler']
     sess = d['sess']
     settings = d['settings']
-
-    require_person = d.get('require_person') or (lambda request: None)
 
     def _internal_secret() -> str:
         return settings.internal_api_secret.get_secret_value() if settings is not None else ""

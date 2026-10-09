@@ -105,7 +105,7 @@ from control_plane.routers import proposals as routers_proposals
 from control_plane.routers import connections as routers_connections
 from control_plane.routers import clock as routers_clock
 from control_plane.routers import workspaces as routers_workspaces
-from control_plane.api_shared import delegation_allows, require_in_ceiling
+from control_plane.ceiling import delegation_allows, require_in_ceiling, require_person
 from control_plane.api_shared import (logger, _PHASE_WORD, _iso, _provenance_line, _epoch_text, 
     MAX_UPLOAD_BYTES, MEETING_STREAM_TRANSCRIPT_REPLAY, _upload_filename, _truncate_title, 
     _stream_tail_id, CHAT_TURN_HEAD_TTL_SEC, _chat_turn_head_key, _record_chat_turn_head, 
@@ -288,30 +288,6 @@ def create_app(
             return fallback
         raise HTTPException(status_code=401, detail="missing X-User-Id (agent-api is fronted by the gateway)")
 
-    def require_person(request: Request) -> None:
-        """Refuse a verb that needs a person in the loop when the caller is a worker dispatched
-        without one. The gateway carries a delegation token's regime as ``x-user-regime`` (signed);
-        a person's own credential carries none. ``human`` is the only regime these verbs run under,
-        and an unknown regime is refused like ``autonomous`` — the fail direction on a verb that
-        reads a mailbox, spends a credential or loads a repository is closed."""
-        regime = (request.headers.get("x-user-regime") or "").strip().lower()
-        # A delegated identity that names no regime is not a human one either: the ceiling headers
-        # mark a worker whether or not identity stated why it was dispatched.
-        delegated = bool(regime) or any(h in request.headers for h in (
-            "x-user-delegation-workspaces", "x-user-delegation-target"))
-        if delegated and regime != "human":
-            raise HTTPException(status_code=403, detail={
-                "status": "refused", "reason": "human_session_required",
-                "instruction": "This session runs without a person in the loop. Record what you "
-                               "wanted to do and stop; do not retry it another way."})
-
-    def _delegation_allows(request: Request, slug: str) -> bool:
-        """May this caller address workspace ``slug``? A worker dispatched without a person carries
-        the dispatch's isolation set (``x-user-delegation-workspaces``); ``*`` — and every caller
-        that is not a delegated worker — is bounded by the account alone. An EMPTY slug is the
-        caller's own workspace and always in scope: the uid decides it, not the caller."""
-        return delegation_allows(request, slug)
-
     def _resolve_room(request: Request, subject: str, meeting_id: str,
                       participants: "Optional[list[str]]" = None,
                       names: "Optional[dict]" = None,
@@ -449,7 +425,7 @@ def create_app(
         # THE DISPATCH'S CEILING, for a worker dispatched without a person: a named workspace must be
         # in the isolation set it was granted. Checked before any resolution, so a workspace outside
         # the set is refused the same way whether or not it exists.
-        if target and target != subject and not _delegation_allows(request, target):
+        if target and target != subject and not delegation_allows(request, target):
             raise HTTPException(status_code=403, detail={
                 "refused": "out_of_scope", "workspace": target,
                 "why": "this session was dispatched with access to a named set of workspaces and "
