@@ -566,7 +566,8 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
     identity = invocation["identity"]
     subject = identity["subject"]
     # The dispatch's personal (rw) workspace folder is mounted at <root>/<subject>; the Runtime binds the
-    # backing store (a host path / named volume) at <root>, and the worker works in the subject subdir.
+    # backing store at <root> from its OWN configuration (it drops any VEXA_WORKSPACE_MOUNT_* key a spec
+    # carries), and the worker works in the subject subdir.
     root = settings.workspaces_dir
     # The ORDERED mount set (WP-A1.1 + WP-A2.1): the private baseline first, then every activated extra.
     # The whole store root is already bound by the runtime, so this is a WORKER-FACING contract (the paths
@@ -592,8 +593,6 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
         # skip exactly that one entry at boot and drain everything else waiting. Copied, never
         # mutated in place: `invocation` belongs to the caller.
         "VEXA_START": json.dumps(_start_with_nonce(invocation["start"], entry_nonce)),
-        "VEXA_WORKSPACE_MOUNT_SOURCE": settings.workspace_mount_source,  # host path / named volume (the store backing)
-        "VEXA_WORKSPACE_MOUNT_TARGET": root,                      # where the Runtime binds it in the container
         "VEXA_WORKSPACE_PATH": _worker_cwd(root, subject, mounts, cwd_target),  # the worker's cwd — the chat's target, else the primary baseline, or (if it's switched off) the first active normal workspace
         "VEXA_MOUNTS": json.dumps(mounts),                       # the ordered active mount set [{slug,path,role,write,primary}]
         "VEXA_WORKSPACE_STORE_URL": settings.workspace_store_url,

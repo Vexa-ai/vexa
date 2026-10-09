@@ -713,7 +713,6 @@ def test_the_group_is_read_off_the_meeting_row_never_the_caller(tmp_path):
 def test_the_resolver_carries_the_group_from_meeting_api(tmp_path):
     c, runtime = _client(tmp_path, {("u_owner", "42"): _row("u_owner", viewers=["u_bob"],
                                                              data_extra={"workspace_id": "g_acme"})})
-    root = Path(runtime.spawned[0][2]["VEXA_WORKSPACE_MOUNT_TARGET"]) if runtime.spawned else None
     r = c.post("/api/chat", json={"prompt": "go", "session": "m42", "room_meeting_id": "42"},
                headers={"X-User-Id": "u_owner", "X-Internal-Secret": INTERNAL_SECRET})
     assert r.status_code == 200
