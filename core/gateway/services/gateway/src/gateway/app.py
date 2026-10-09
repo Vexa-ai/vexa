@@ -926,9 +926,36 @@ def create_app(
         content = await request.body()
         params = dict(request.query_params) or None
 
+        # THE HEAD DECIDES, NOT THE ROUTE. Only an upstream that answered a 2xx event stream is
+        # relayed as SSE; a refusal (403 from a person-only verb, 501, 404) or any other non-stream
+        # answer reaches the caller with the upstream's own status and body, instead of a 200 SSE
+        # envelope wrapped around an error. Transport failures map to 504/502 as the buffered
+        # forward maps them.
+        stack = AsyncExitStack()
+        try:
+            upstream = await stack.enter_async_context(
+                downstream.open_stream(method, url, headers=headers, params=params, content=content))
+        except httpx.TimeoutException:
+            await stack.aclose()
+            return Response(content=json.dumps({"detail": "upstream timeout"}),
+                            status_code=504, media_type="application/json")
+        except httpx.RequestError as e:
+            await stack.aclose()
+            return Response(content=json.dumps({"detail": f"upstream unreachable: {type(e).__name__}"}),
+                            status_code=502, media_type="application/json")
+
+        media_type = upstream.headers.get("content-type") or "application/json"
+        if not (200 <= upstream.status_code < 300 and media_type.startswith("text/event-stream")):
+            try:
+                answer = b"".join([chunk async for chunk in upstream.aiter_bytes()])
+            finally:
+                await stack.aclose()
+            return Response(content=answer, status_code=upstream.status_code, media_type=media_type)
+
         async def body():
-            async for chunk in downstream.stream(method, url, headers=headers, params=params, content=content):
-                yield chunk
+            async with stack:  # closes the downstream stream when the client goes away
+                async for chunk in upstream.aiter_bytes():
+                    yield chunk
 
         return StreamingResponse(body(), media_type="text/event-stream", headers=SSE_HEADERS)
 
