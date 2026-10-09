@@ -31,6 +31,8 @@ import subprocess
 from pathlib import Path
 from typing import Callable, Iterable, Iterator, Optional, Protocol
 
+from llm.gitexec import run_git
+
 _log = logging.getLogger("llm.ports")
 
 # Env vars that redirect git's repo/worktree/index/object discovery away from cwd. Git HOOKS
@@ -134,17 +136,60 @@ def harness_identity_kwargs() -> dict:
     return {"user": uid, "group": gid, "extra_groups": [], "umask": 0o002}
 
 
+def _keep_git_private(gitdir: str, tools_uid: int) -> None:
+    """A repository's own directory is never the tools user's to write: the worker's write-back and
+    agent-api run git there, and git trusts what it finds in it. Everything under ``gitdir`` loses
+    group and other write, and anything the tools user came to own (an earlier turn's grant, a
+    ``git`` it ran) is handed back to the owner of ``gitdir``. A ``gitdir`` the tools user owns
+    itself is left alone and logged — it is not the platform's repository, and the write-back's git
+    refuses it (``gitexec``: owned by neither this process nor the owner of the work tree)."""
+    try:
+        top = os.lstat(gitdir)
+    except OSError:
+        return
+    if not stat.S_ISDIR(top.st_mode):
+        return
+    if top.st_uid == tools_uid and top.st_uid != os.geteuid():
+        _log.error("%s is owned by the tools user, not the platform — left as it is; git refuses it",
+                   gitdir)
+        return
+    owner = top.st_uid
+
+    def close(p: str) -> None:
+        try:
+            st = os.lstat(p)
+            if stat.S_ISLNK(st.st_mode):
+                return
+            if st.st_uid == tools_uid and tools_uid != owner:
+                os.lchown(p, owner, -1)
+            if st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+                os.chmod(p, stat.S_IMODE(st.st_mode) & ~(stat.S_IWGRP | stat.S_IWOTH))
+        except OSError as exc:
+            if getattr(exc, "errno", None) != 30:    # EROFS: nobody can write it anyway
+                _log.error("cannot keep %s from the tools user: %s", p, exc)
+
+    close(gitdir)
+    for dirpath, dirnames, filenames in os.walk(gitdir):
+        for name in (*dirnames, *filenames):
+            close(os.path.join(dirpath, name))
+
+
 def grant_tools_access(paths: Iterable["str | Path"]) -> bool:
     """Make every directory and file under ``paths`` usable by :data:`TOOLS_USER`'s group — group
     set to it, group read/write (and search on directories, which also get setgid so new entries
-    keep the group). Symlinks are not followed and read-only mounts are left as they are. When a path
-    cannot be granted, this worker stops switching users (``_tools_off``) and says so, and False is
-    returned; True when there is nothing to do or everything was granted."""
+    keep the group). Symlinks are not followed and read-only mounts are left as they are.
+
+    A repository's ``.git`` is the exception, wherever it sits under ``paths``: it is not granted,
+    and anything an earlier grant opened in it is closed again (``_keep_git_private``). The model's
+    tools may read history, never write the repository the worker's and agent-api's git trust.
+
+    When a path cannot be granted, this worker stops switching users (``_tools_off``) and says so,
+    and False is returned; True when there is nothing to do or everything was granted."""
     global _tools_off
     ident = tools_identity()
     if ident is None:
         return True
-    _uid, gid = ident
+    tools_uid, gid = ident
     ok = True
 
     def grant(p: str, is_dir: bool) -> None:
@@ -170,10 +215,14 @@ def grant_tools_access(paths: Iterable["str | Path"]) -> bool:
             continue
         grant(root, True)
         for dirpath, dirnames, filenames in os.walk(root):
+            if ".git" in dirnames:
+                dirnames.remove(".git")              # never walked into, never granted
+                _keep_git_private(os.path.join(dirpath, ".git"), tools_uid)
             for name in dirnames:
                 grant(os.path.join(dirpath, name), True)
             for name in filenames:
-                grant(os.path.join(dirpath, name), False)
+                if name != ".git":                   # a `gitdir:` file is git's, not the turn's
+                    grant(os.path.join(dirpath, name), False)
     if not ok:
         _tools_off = True
         _log.error("the model's tools could not be given what this turn needs — from now on this "
@@ -248,15 +297,12 @@ class HarnessPort(Protocol):
 
 def _git(work: Path, *args: str, env: Optional[dict] = None) -> str:
     """Local git runner (trimmed stdout). Deliberately NOT shared.adapters._git — this module owns
-    zero product imports so it stays liftable. Scrubbed env: the turn commit must land on ``work``,
-    never on a repo a hook exported via GIT_DIR. ``env`` (optional) layers extra vars (the principal
-    ``GIT_AUTHOR_*``) over the scrubbed base."""
-    run_env = scrubbed_git_env()
-    if env:
-        run_env.update(env)
-    proc = subprocess.run(["git", *args], cwd=work, capture_output=True, text=True, check=True,
-                          env=run_env)
-    return proc.stdout.strip()
+    zero product imports so it stays liftable. Runs through ``llm.gitexec`` (the vendored twin of
+    ``shared.gitexec``): the write-back runs as the worker, in a repository the model's tools could
+    write, so nothing the repository configures may run here — no hook, no fsmonitor, no driver —
+    and the commit lands on ``work``, never on a repository a hook exported via GIT_DIR. ``env``
+    (optional) layers extra vars (the principal ``GIT_AUTHOR_*``) over the scrubbed base."""
+    return run_git(work, *args, env=env, check=True).stdout.strip()
 
 
 

@@ -128,9 +128,13 @@ no subject endpoint, or a refused one, nothing is stamped and the table above ap
 - **Every harness CLI starts as the tools user** (`ports.harness_identity_kwargs`, user `vexa-tools`
   in the worker image) wherever the worker runs as root, so the model's tools cannot read the
   worker's environment through /proc or write its code; the worker hands that user, by group, only
-  the workspaces a turn may write and the harness's own state (`grant_tools_access`). A worker that
-  is not root does not switch and is non-dumpable instead (`harden_worker_process`). A new adapter
-  launches its CLI with those keyword arguments and `harness_subprocess_env()`.
+  the workspaces a turn may write and the harness's own state (`grant_tools_access`) — never a
+  repository's `.git`, which stays the worker's (a `.git` an earlier grant opened is closed again).
+  A worker that is not root does not switch and is non-dumpable instead (`harden_worker_process`).
+  A new adapter launches its CLI with those keyword arguments and `harness_subprocess_env()`.
+- **The write-back's git runs through `gitexec`** (`ports._git` → `llm/gitexec.py`, a verbatim copy
+  of `shared/gitexec.py`): no hook, fsmonitor, driver or helper a workspace repository names runs
+  in the worker.
 
 ## Adding a runner
 
