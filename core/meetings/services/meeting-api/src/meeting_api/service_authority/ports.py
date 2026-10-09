@@ -1,4 +1,4 @@
-"""In-process ports consumed by the service-authority application logic."""
+"""Authority port exposes enforcement mode and the unavailable boundary threshold."""
 from __future__ import annotations
 
 from typing import Optional, Protocol, runtime_checkable
@@ -10,6 +10,14 @@ from .models import ServiceAuthorityDecision, ServiceAuthorityRequest
 class ServiceAuthority(Protocol):
     configured: bool
     mode: str
+
+    @property
+    def enforced(self) -> bool:
+        ...
+
+    @property
+    def unavailable_threshold(self) -> int:
+        ...
 
     async def decide(
         self,
