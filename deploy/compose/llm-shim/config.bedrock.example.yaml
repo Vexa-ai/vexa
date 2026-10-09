@@ -1,0 +1,14 @@
+# In-VPC, Bedrock endpoint only, no third-party fallback: a Bedrock-only policy
+# without a Vexa code change. Configure the VPC's private Bedrock endpoint and DNS.
+# os.environ/ substitutes only as a whole value; see config.local.example.yaml's warning.
+# Credentials use the AWS chain: AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
+# (AWS_SESSION_TOKEN for temporary credentials), or the pod's IAM role; no keys here.
+# Set AWS_REGION and LLM_SHIM_BEDROCK_MODEL on the shim, never on the agent worker.
+model_list:
+  - model_name: bedrock-model
+    litellm_params:
+      custom_llm_provider: bedrock
+      model: os.environ/LLM_SHIM_BEDROCK_MODEL
+      aws_region_name: os.environ/AWS_REGION
+litellm_settings:
+  drop_params: true
