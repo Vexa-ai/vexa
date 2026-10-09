@@ -10,6 +10,8 @@
  *   refused-* → a refusal vector, validated against #/$defs/Refusal, then checked here: the token
  *               must NOT verify under the vector's public key (or must be refused before a
  *               signature is checked, for a malformed one or an over-long lifetime).
+ *   reentry-* → an MCP re-entry match vector (#/$defs/Reentry): the gateway's rule, restated here,
+ *               must admit exactly the vectors marked admitted.
  * No golden may carry private-key material: a PEM private-key header anywhere in one fails.
  * Run: node validate.mjs [--check]
  */
@@ -26,6 +28,25 @@ ajv.addSchema(schema);
 const claimsOk = ajv.compile({ $ref: `${schema.$id}#/$defs/Claims` });
 const vectorOk = ajv.compile({ $ref: `${schema.$id}#/$defs/Vector` });
 const refusalOk = ajv.compile({ $ref: `${schema.$id}#/$defs/Refusal` });
+const reentryOk = ajv.compile({ $ref: `${schema.$id}#/$defs/Reentry` });
+
+// The re-entry match rule, restated: the delegation the gateway signs for a validate answer
+// (identity_token.claims_from_validation), then same person AND an equal delegation.
+const canon = (v) => Array.isArray(v) ? `[${v.map(canon).join(",")}]`
+  : v && typeof v === "object" ? `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canon(v[k])}`).join(",")}}`
+  : JSON.stringify(v);
+function signedDelegation(validation) {
+  const d = validation.delegation;
+  if (!d || typeof d !== "object" || Array.isArray(d)) return undefined;
+  const out = { regime: String(d.regime || ""), workspaces: d.workspaces === "*" ? "*" : (d.workspaces || []).map(String) };
+  if (d.target) out.target = String(d.target);
+  return out;
+}
+function reentryAdmitted(validation, signed) {
+  const want = signedDelegation(validation);
+  return want !== undefined && signed.sub === String(validation.user_id)
+    && signed.delegation !== undefined && canon(signed.delegation) === canon(want);
+}
 
 const b64u = (buf) => buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 const unb64u = (s) => Buffer.from(s.replace(/-/g, "+").replace(/_/g, "/"), "base64");
@@ -90,8 +111,14 @@ for (const f of files) {
       console.error(`  ✗ ${f}: signature check disagrees with reason ${data.reason}`); failed++; continue;
     }
     console.log(`  ✓ ${f} ≡ Refusal (${data.reason})`);
+  } else if (f.startsWith("reentry-")) {
+    if (!reentryOk(data)) { console.error(`  ✗ ${f}: ${ajv.errorsText(reentryOk.errors)}`); failed++; continue; }
+    if (reentryAdmitted(data.validation, data.signed) !== data.admitted) {
+      console.error(`  ✗ ${f}: the match rule says ${!data.admitted}, the vector says ${data.admitted}`); failed++; continue;
+    }
+    console.log(`  ✓ ${f} ≡ Reentry (${data.admitted ? "admitted" : "not re-entry"})`);
   } else {
-    console.error(`  ✗ ${f}: filename must start with claims- / vector- / refused-`); failed++;
+    console.error(`  ✗ ${f}: filename must start with claims- / vector- / refused- / reentry-`); failed++;
   }
 }
 console.log(failed ? `gateway-identity.v1: ${failed} golden(s) FAILED` : `gateway-identity.v1: ${files.length} goldens conform`);

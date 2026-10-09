@@ -30,7 +30,8 @@
     "set": "the captured text is split on commas/whitespace, unquoted, de-duped and sorted — membership must be identical, order and spelling of the container need not be",
     "regex-source": "the captured text is a regular expression SOURCE compared as a string. Used where the sites are in different languages and no shared module can exist (ADR-0036 item 10): two engines may still read one source differently, so this is the strongest check available without a mechanism that does not exist — and strictly stronger than the nothing there is today.",
     "(any kind) forbid_elsewhere": "names the literal itself: any non-test source file under `scan` that contains it and is not a declared site fails. A site list is only an inventory if nothing else writes the fact — without this, single-sourcing a mark today just means someone retypes it next month and the manifest reports green over two writers.",
-    "prose": "the captured text is a SENTENCE compared after its carrier is removed — blockquote markers, string-concatenation seams and whitespace runs collapse. A Python implicit-concat splits a sentence at whichever word hit the margin and a markdown file hard-wraps it; those are not different sentences. Apostrophes are NOT normalised: U+2019 vs U+0027 is a real difference in text a stranger reads."
+    "prose": "the captured text is a SENTENCE compared after its carrier is removed — blockquote markers, string-concatenation seams and whitespace runs collapse. A Python implicit-concat splits a sentence at whichever word hit the margin and a markdown file hard-wraps it; those are not different sentences. Apostrophes are NOT normalised: U+2019 vs U+0027 is a real difference in text a stranger reads.",
+    "header": "the captured text is an HTTP field name, compared case-insensitively (RFC 9110 section 5.1): `x-vexa-identity` and `X-Vexa-Identity` are one answer, and any other difference is a second"
   },
   "facts": [
     {
@@ -131,6 +132,56 @@
         },
         {
           "path": "core/agent/services/credential-broker/src/credential_broker/identity_token.py"
+        }
+      ]
+    },
+    {
+      "id": "identity-header",
+      "fact": "the header the gateway's signed identity travels in (gateway-identity.v1 X-Vexa-Identity)",
+      "kind": "header",
+      "enforced": true,
+      "canonical": "core/gateway/contracts/gateway-identity.v1/identity_token.py — HEADER (vendored byte for byte, fact identity-token)",
+      "how_to_agree": "read identity_token.HEADER where the package vendors it; where it does not (the MCP), spell it identically",
+      "why": "Every verifier reads the signed identity from this header, agent-api forwards it to the credential broker under it, and the MCP picks it up to hand back on re-entry. A site that spells it differently forwards nothing and reads nothing, and every check behind it fails closed for a reason no log names. The vendored identity_token.py copies are held by identity-token; these are the sites that retype it.",
+      "sites": [
+        {
+          "path": "core/gateway/contracts/gateway-identity.v1/identity_token.py",
+          "pattern": "^HEADER = \"([^\"]+)\""
+        },
+        {
+          "path": "core/agent/control_plane/broker_client.py",
+          "pattern": "^IDENTITY_HEADER = \"([^\"]+)\""
+        },
+        {
+          "path": "core/agent/control_plane/routers/connections.py",
+          "pattern": "^SIGNED_IDENTITY_HEADER = '([^']+)'"
+        },
+        {
+          "path": "core/meetings/services/mcp/src/vexa_mcp/reentry.py",
+          "pattern": "^INBOUND_HEADER = \"([^\"]+)\""
+        }
+      ]
+    },
+    {
+      "id": "mcp-reentry-header",
+      "fact": "the header the MCP re-enters the gateway with (gateway-identity.v1 ReentryHeader)",
+      "kind": "header",
+      "enforced": true,
+      "canonical": "core/gateway/contracts/gateway-identity.v1/identity.schema.json — $defs.ReentryHeader",
+      "how_to_agree": "a new name is a contract change: the schema, the gateway and the MCP in one change, re-sealed",
+      "why": "The MCP writes it and the gateway reads it, in two images. A spelling that differs leaves every worker's tool call looking like a direct REST call, refused 403, with both ends' own tests green.",
+      "sites": [
+        {
+          "path": "core/gateway/contracts/gateway-identity.v1/identity.schema.json",
+          "pattern": "\"ReentryHeader\": \\{\\s*\"const\": \"([^\"]+)\""
+        },
+        {
+          "path": "core/gateway/services/gateway/src/gateway/delegation.py",
+          "pattern": "^MCP_REENTRY_HEADER = \"([^\"]+)\""
+        },
+        {
+          "path": "core/meetings/services/mcp/src/vexa_mcp/reentry.py",
+          "pattern": "^OUTBOUND_HEADER = \"([^\"]+)\""
         }
       ]
     },

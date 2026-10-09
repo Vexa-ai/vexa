@@ -47,6 +47,25 @@ missing, invalid, or names a subject other than the actor in the broker assertio
 (credential-broker.v1). The internal tier is not accepted there: holding `INTERNAL_API_SECRET` or
 the broker's agent key does not let a process act for a person it has no signature for.
 
+## Re-entry: a worker's tool call back into the gateway (`#/$defs/ReentryHeader`)
+
+A worker's delegation token (`vxd_…`, delegation.v1) is admitted on `/mcp` and nowhere else. The
+MCP's tools act by calling back into the gateway's REST routes with the same bearer, so the gateway
+has to tell *the MCP acting on an `/mcp` request it already admitted* from *a worker calling REST
+directly*. It does so with an identity only it can sign:
+
+| | |
+|---|---|
+| **Header** | `X-Vexa-Internal-Mcp-Identity` (case-insensitive; in the `x-vexa-internal-` family, which the gateway never forwards from a client to a service behind it) |
+| **Value** | the `X-Vexa-Identity` token the gateway signed onto the `/mcp` request being served |
+| **Carrier** | the MCP service (`vexa_mcp/reentry.py`): it holds the inbound `X-Vexa-Identity` for the life of the request and sends it back only on calls to the gateway. It holds no key and verifies nothing |
+| **Verifier** | the gateway, with its own key's public half: signature, then `iat`/`exp` (30 s skew, 300 s lifetime) |
+| **Match rule** | admitted only when the bearer resolves to a delegation now, the signed `sub` equals the bearer's user, and the signed `delegation` equals the one the gateway would sign for the bearer now (`regime`, `workspaces`, `target`) |
+
+Anything else is not re-entry, and the call answers 403 like any other delegated REST call: no
+header, a forged or expired token, another person's identity, a wider delegation, or the person's own
+identity (no `delegation`). The `reentry-*` goldens pin the match rule; `validate.mjs` restates it.
+
 ## Claims (`#/$defs/Claims`)
 
 | claim | header it becomes |
@@ -72,7 +91,9 @@ loop when `x-user-regime` is not `human`.
   `core/agent/control_plane/`, `core/meetings/services/meeting-api/src/meeting_api/` and
   `core/agent/services/credential-broker/src/credential_broker/`; `gate:fact-parity` compares the
   copies. Edit this one and copy it out.
-- `identity.schema.json` — the claims, the signing-vector shape and the refusal-vector shape.
-- `golden/` — two payloads, two signing vectors and the refusal vectors, public keys only;
+- `identity.schema.json` — the claims, the re-entry header and match vector, the signing-vector shape
+  and the refusal-vector shape.
+- `golden/` — two payloads, two signing vectors, the refusal vectors and the re-entry match vectors,
+  public keys only;
   `validate.mjs` re-signs and re-verifies them in Node with the RFC 8032 TEST 1 key derived from
   its published seed, so the format is pinned in a second language.

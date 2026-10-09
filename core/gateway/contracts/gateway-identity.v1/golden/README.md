@@ -15,6 +15,11 @@
   public key (algorithm confusion), no signature, another scheme, and a correctly signed token that
   claims a lifetime over 300 s.
 
+- `reentry-*.json` — the MCP re-entry match rule, after the signature checks: the bearer's
+  `/internal/validate` answer, the signed claims presented in `X-Vexa-Internal-Mcp-Identity`, and
+  whether the gateway admits the call. One admitted (same person, same delegation) and four refused:
+  another person, a wider delegation, the person's own identity, and an API-key bearer.
+
 `validate.mjs` re-signs and re-verifies them in Node and fails any golden that carries a PEM
 private key; the gateway's `tests/test_identity_token.py` does the same in Python against its
 vendored copy, which `gate:fact-parity` holds byte-identical to every other.

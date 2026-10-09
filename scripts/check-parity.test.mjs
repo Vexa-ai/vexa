@@ -10,7 +10,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { checkParity, asSet, asProse, loadManifest } from "./check-parity.mjs";
+import { checkParity, asSet, asProse, asHeader, loadManifest } from "./check-parity.mjs";
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -118,6 +118,27 @@ test("PROSE compares the sentence, not the carrier — but never normalises the 
       "a Python concat split, a markdown hard wrap and a blockquote are carriers, not different sentences");
     assert.equal(run(curly).errs.length, 1, "U+2019 vs U+0027 is a real difference in text a stranger reads");
   } finally { rmSync(ok, { recursive: true, force: true }); rmSync(curly, { recursive: true, force: true }); }
+});
+
+test("a HEADER fact compares field names case-insensitively, and nothing else", () => {
+  const facts = [{
+    id: "reentry", fact: "the re-entry header", kind: "header", enforced: true,
+    sites: [
+      { path: "gw/app.py", pattern: '^MCP_REENTRY_HEADER = "([^"]+)"' },
+      { path: "mcp/reentry.py", pattern: '^OUTBOUND_HEADER = "([^"]+)"' },
+    ],
+  }];
+  const ok = fixture(facts, { "gw/app.py": 'MCP_REENTRY_HEADER = "x-vexa-internal-mcp-identity"\n',
+                              "mcp/reentry.py": 'OUTBOUND_HEADER = "X-Vexa-Internal-Mcp-Identity"\n' });
+  const bad = fixture(facts, { "gw/app.py": 'MCP_REENTRY_HEADER = "x-vexa-internal-mcp-identity"\n',
+                               "mcp/reentry.py": 'OUTBOUND_HEADER = "X-Vexa-Internal-MCP-Identities"\n' });
+  try {
+    assert.deepEqual(run(ok).errs, [], "one header in two cases is one answer");
+    const e = run(bad).errs;
+    assert.equal(e.length, 1);
+    assert.match(e[0], /DISAGREE/);
+  } finally { rmSync(ok, { recursive: true, force: true }); rmSync(bad, { recursive: true, force: true }); }
+  assert.equal(asHeader(" X-Vexa-Identity "), "x-vexa-identity");
 });
 
 test("asProse strips the carrier and keeps the apostrophe", () => {

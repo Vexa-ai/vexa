@@ -9,7 +9,7 @@
   "core/agent/contracts/unit.v1": "d4aea2b8e2e2050cb901395e6be2e14d12640bf6cea559f4db6024d8d782af65",
   "core/flows/contracts/flows.v1": "0c7da386737bf0b82859231c0c3d7bc63caa8fb4578ff73d0e290aa9493879b5",
   "core/gateway/contracts/api.v1": "c2de97ff9287d867f6d1eb5be71ff61d527e5e94370559bff7a3b07017da002f",
-  "core/gateway/contracts/gateway-identity.v1": "18c0b068b1c9076a207018ae8c47f1836b1e8d596b23d59cedd305af2a8bd0c6",
+  "core/gateway/contracts/gateway-identity.v1": "3af0c949a7a956f285bd48a51d6aa27b046870490ada58b822b5e159a2471fd1",
   "core/gateway/contracts/logevent.v1": "7ab25cc7d935e03ea1aec29a0d717576bcfa1a37d7c412400227c98e1df3ed59",
   "core/gateway/contracts/ws.v1": "77ce41cb384600acaf34402f4daf8d04b32063c662831238ba7a2e4195e80287",
   "core/identity/contracts/delegation.v1": "7c7478a5489f3e4b92a032a31d61c23c7f81248e1852a5388b5e8ecfac17cc3e",

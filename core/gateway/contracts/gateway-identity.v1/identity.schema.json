@@ -37,6 +37,22 @@
         "target": { "type": "string", "description": "the chat's target workspace, a default and never a grant; becomes x-user-delegation-target" }
       }
     },
+    "ReentryHeader": {
+      "const": "x-vexa-internal-mcp-identity",
+      "description": "MCP re-entry. A worker's delegation token (delegation.v1) is admitted by the gateway on /mcp only. The MCP's tools act by calling back into the gateway with the same bearer, so the MCP service (the carrier) holds the X-Vexa-Identity the gateway signed onto the /mcp request it is serving and sends it back, only on its calls to the gateway, in this header. The gateway (the only verifier) checks it with its own key's public half (signature, iat/exp within the skew and the 300 s lifetime) and admits the call only when the signed claims name the same sub as the bearer resolves to now AND carry a delegation equal to the bearer's (Reentry). The header is in the x-vexa-internal- family, which the gateway never forwards from a client to a service behind it. Header names are case-insensitive."
+    },
+    "Reentry": {
+      "type": "object",
+      "description": "A re-entry match vector, after the signature and lifetime checks have passed. `validation` is identity's /internal/validate answer for the bearer on the re-entering call (identity.v1 ValidateResponse); `signed` is the claims of the X-Vexa-Internal-Mcp-Identity token. `admitted` must equal: validation carries a delegation, AND signed.sub == str(validation.user_id), AND signed.delegation equals the delegation the gateway would sign for validation (regime, workspaces, target).",
+      "required": ["validation", "signed", "admitted", "what"],
+      "additionalProperties": false,
+      "properties": {
+        "validation": { "type": "object", "required": ["user_id"] },
+        "signed": { "$ref": "#/$defs/Claims" },
+        "admitted": { "type": "boolean" },
+        "what": { "type": "string" }
+      }
+    },
     "Vector": {
       "type": "object",
       "description": "A signing test vector: any implementation signing these claims at `now` with the RFC 8032 section 7.1 TEST 1 key must produce `token` (Ed25519 signatures are deterministic), and `public_key` is that key's public half. The signing key is never in a vector: each implementation derives it from the 32-byte seed RFC 8032 publishes. Every service refuses this key at boot.",

@@ -18,7 +18,7 @@
  * decision is worse than no gate: it makes the wrong answer permanent and calls it enforcement.
  *
  * THE MANIFEST (`scripts/parity.json`) is the deliverable. Each fact declares:
- *   kind          file-bytes | literal | set | regex-source
+ *   kind          file-bytes | literal | set | regex-source | header | prose
  *   sites[]       {path, pattern} — `pattern` is a JS regex with exactly ONE capture group; it must
  *                 match exactly once in the file. Zero matches or two is a STALE MANIFEST and fails:
  *                 the manifest cannot quietly stop describing the tree.
@@ -72,6 +72,11 @@ export const asSet = (raw) => [...new Set(
   raw.split(/[,|\s]+/).map((t) => t.replace(/^[\s'"`\[({]+|[\s'"`\])}]+$/g, "")).filter(Boolean),
 )].sort();
 
+/** The HEADER normaliser. An HTTP field name is case-insensitive (RFC 9110 section 5.1), so
+ *  `x-vexa-identity` and `X-Vexa-Identity` name one header and must not read as two answers; any
+ *  other difference (a hyphen, a letter) still does. */
+export const asHeader = (raw) => raw.trim().toLowerCase();
+
 /** Read one site's value. Returns {value} or {error}. */
 export function readSite(fact, site, root) {
   const abs = join(root, site.path);
@@ -93,7 +98,8 @@ export function readSite(fact, site, root) {
     // a value at all, so an intra-file disagreement is named where it happens rather than being
     // averaged into whichever match came first.
     const vals = all.map((x) => x[1]);
-    const norm = (v) => fact.kind === "set" ? asSet(v).join(" · ") : fact.kind === "prose" ? asProse(v) : v;
+    const norm = (v) => fact.kind === "set" ? asSet(v).join(" · ") : fact.kind === "prose" ? asProse(v)
+      : fact.kind === "header" ? asHeader(v) : v;
     const distinctHere = [...new Set(vals.map(norm))];
     if (distinctHere.length > 1)
       return { error: `${site.path}: this file writes the fact ${all.length} times and its own copies disagree — ${distinctHere.map((v) => JSON.stringify(v.slice(0, 80))).join(" vs ")}` };
@@ -104,6 +110,7 @@ export function readSite(fact, site, root) {
   const raw = m[1];
   const value = fact.kind === "set" ? asSet(raw).join(" · ")
     : fact.kind === "prose" ? asProse(raw)
+    : fact.kind === "header" ? asHeader(raw)
     : raw;
   return { value, line, raw };
 }
