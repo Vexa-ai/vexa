@@ -10,13 +10,15 @@ a version so a credential that was rotated mid-operation is never mixed with its
   deployment supplies and never touches the state volume.
 * `OpenBaoStore` (optional): the OpenBao/Vault KV v2 HTTP API, for operators who already run one.
   Its path layout is the one the 0.13.2 development harness used, so a deployment that ran the
-  harness keeps its stored credentials when it moves to this service.
+  harness keeps its stored credentials when it moves to this service. Its address is https, or
+  plain http to this host's loopback only (`address_allowed`): the vault token rides on every call.
 
 Nothing here logs or raises a value. A failure is a `StoreUnavailable` carrying a `kind`.
 """
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import os
 import re
@@ -28,6 +30,7 @@ from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Protocol
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -173,11 +176,41 @@ class LocalEncryptedStore:
             return False
 
 
+def address_allowed(address: str) -> bool:
+    """Whether the vault token may be sent to ``address``: an ``https://`` endpoint, or plain
+    ``http://`` only to this host's loopback (a sidecar or a port-forward), where the token crosses
+    no network. No credentials, query or fragment in the address itself.
+
+    The same rule, parsed the same way, as meeting-api's service-authority URL
+    (`service_authority/adapters.py`), without its in-cluster allowance: every request here carries
+    the vault token, and an in-cluster name is still another host."""
+    try:
+        parsed = urlsplit(address or "")
+        host = parsed.hostname
+        parsed.port  # noqa: B018 — raises ValueError on a malformed port
+    except ValueError:
+        return False
+    if not host or parsed.username is not None or parsed.password is not None or parsed.query or parsed.fragment:
+        return False
+    if parsed.scheme == "https":
+        return True
+    if parsed.scheme != "http":
+        return False
+    if host.lower() == "localhost":
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    mapped = getattr(ip, "ipv4_mapped", None)
+    return bool(ip.is_loopback or (mapped is not None and mapped.is_loopback))
+
+
 class OpenBaoStore:
     name = "openbao"
 
     def __init__(self, address: str, token_file: Path, mount: str = "connections", *, transport=None) -> None:
-        if not address.startswith(("https://", "http://")) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", mount):
+        if not address_allowed(address) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", mount):
             raise StoreUnavailable("config")
         self._address = address.rstrip("/")
         self._token_file = Path(token_file)

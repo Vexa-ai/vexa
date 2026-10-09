@@ -52,7 +52,7 @@
       "key": "VEXA_CONNECTIONS_OPENBAO_ADDR",
       "class": "defaulted",
       "default": "(unset — required when VEXA_CONNECTIONS_STORE=openbao)",
-      "description": "base URL of the operator's OpenBao or Vault server (https:// across hosts)",
+      "description": "base URL of the operator's OpenBao or Vault server: https://, or plain http:// only to a loopback address on this host (the boot refuses anything else)",
       "targets": ["compose", "helm"]
     },
     {

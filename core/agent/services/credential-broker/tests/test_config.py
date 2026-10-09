@@ -39,6 +39,8 @@ def test_every_key_settings_reads_is_declared():
     ({"VEXA_CONNECTIONS_HUMAN_KEY_FILE": ""}, "VEXA_CONNECTIONS_HUMAN_KEY_FILE"),
     ({"VEXA_CONNECTIONS_STORE_KEY_FILE": None}, "VEXA_CONNECTIONS_STORE_KEY_FILE"),
     ({"VEXA_CONNECTIONS_STORE": "openbao"}, "VEXA_CONNECTIONS_OPENBAO_ADDR"),
+    ({"VEXA_CONNECTIONS_STORE": "openbao", "VEXA_CONNECTIONS_OPENBAO_ADDR": "http://openbao:8200",
+      "VEXA_CONNECTIONS_OPENBAO_TOKEN_FILE": "/run/vexa-openbao/token"}, "VEXA_CONNECTIONS_OPENBAO_ADDR must be https"),
     ({"VEXA_CONNECTIONS_STORE": "vault"}, "`local` or `openbao`"),
     ({"VEXA_CONNECTIONS_STORE_KEY_FILE": "/nonexistent/store.key"}, "64 hex characters"),
     ({"VEXA_CONNECTIONS_PRODUCT_REDIRECT": "http://app.example.test/api/auth/callback/google"}, "PRODUCT_REDIRECT"),

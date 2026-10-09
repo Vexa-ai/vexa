@@ -72,7 +72,7 @@ def test_store_key_file(tmp_path):
 def openbao(tmp_path, handler):
     token = tmp_path / "token"
     token.write_text("fixture-openbao-token\n")
-    return OpenBaoStore("http://bao:8200", token, transport=httpx.MockTransport(handler))
+    return OpenBaoStore("https://bao:8200", token, transport=httpx.MockTransport(handler))
 
 
 def test_openbao_kv2_layout_and_versions(tmp_path):
@@ -117,5 +117,30 @@ def test_openbao_config_refusals(tmp_path):
     with pytest.raises(StoreUnavailable):
         OpenBaoStore("bao:8200", tmp_path / "t")
     with pytest.raises(StoreUnavailable) as e:
-        OpenBaoStore("http://bao:8200", tmp_path / "absent", transport=httpx.MockTransport(lambda r: httpx.Response(200))).get("abc")
+        OpenBaoStore("https://bao:8200", tmp_path / "absent", transport=httpx.MockTransport(lambda r: httpx.Response(200))).get("abc")
     assert e.value.kind == "config"
+
+
+@pytest.mark.parametrize("address", [
+    "http://bao:8200",                       # an in-cluster name is another host: the token crosses a network
+    "http://openbao.example:8200",
+    "http://10.0.0.5:8200",
+    "http://localhost.example:8200",
+    "http://user:pass@127.0.0.1:8200",       # credentials in the address
+    "https://bao:8200?x=1",
+    "ftp://127.0.0.1:8200",
+])
+def test_openbao_refuses_an_address_its_token_could_cross_a_network_in_clear(tmp_path, address):
+    """The vault token rides on every request, so plain http is refused unless the address is this
+    host's loopback (a sidecar or a port-forward), where nothing crosses a network."""
+    with pytest.raises(StoreUnavailable) as e:
+        OpenBaoStore(address, tmp_path / "t")
+    assert e.value.kind == "config"
+
+
+@pytest.mark.parametrize("address", [
+    "https://bao:8200", "https://openbao.example:8200/", "http://127.0.0.1:8200", "http://localhost:8200",
+    "http://[::1]:8200", "http://127.8.9.10:8200",
+])
+def test_openbao_accepts_https_or_loopback_http(tmp_path, address):
+    assert OpenBaoStore(address, tmp_path / "t").name == "openbao"

@@ -14,6 +14,7 @@ from typing import Mapping, Optional
 from urllib.parse import urlsplit
 
 from .config_preflight import ConfigError
+from .store import address_allowed
 
 
 @dataclass(frozen=True)
@@ -65,6 +66,9 @@ def load(env: Optional[Mapping[str, str]] = None) -> Settings:
     elif settings.store == "openbao" and not (settings.openbao_addr and settings.openbao_token_file):
         problems.append("VEXA_CONNECTIONS_STORE=openbao needs VEXA_CONNECTIONS_OPENBAO_ADDR and "
                         "VEXA_CONNECTIONS_OPENBAO_TOKEN_FILE")
+    elif settings.store == "openbao" and not address_allowed(settings.openbao_addr):
+        problems.append("VEXA_CONNECTIONS_OPENBAO_ADDR must be https:// (plain http:// only to a loopback "
+                        "address on this host), with no credentials, query or fragment")
     elif settings.store not in ("local", "openbao"):
         problems.append("VEXA_CONNECTIONS_STORE must be `local` or `openbao`")
     if settings.product_redirect:
