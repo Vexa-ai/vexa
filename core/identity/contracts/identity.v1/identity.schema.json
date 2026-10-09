@@ -73,6 +73,46 @@
         "exp": { "type": "integer", "description": "expiry (unix seconds) — short-lived" }
       }
     },
+    "ValidateRequest": {
+      "description": "The body of POST /internal/validate, the authz oracle the gateway, flows and the terminal's server call on the internal tier (X-Internal-Secret = INTERNAL_API_SECRET). `token` is an API key or a worker's delegation token (delegation.v1, prefix `vxd_`). Failures: 503 when INTERNAL_API_SECRET is unset outside dev mode; 403 on a wrong internal secret; 401 with detail `Missing token`, `Invalid token`, `Token expired`, `Delegation tokens are not accepted on this deployment` (no VEXA_MCP_DELEGATION_SECRET), `Invalid delegation: <delegation.v1 RefusalReason>` or `Invalid delegation: no such user`.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["token"],
+      "properties": {
+        "token": { "type": "string", "minLength": 1 }
+      }
+    },
+    "ValidateDelegation": {
+      "description": "The ceiling a delegation token's dispatch was granted (delegation.v1 `scope`, plus its `target`), passed on for the services behind the gateway to enforce. It becomes gateway-identity.v1 `delegation`.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["regime", "workspaces"],
+      "properties": {
+        "regime": { "enum": ["human", "autonomous"] },
+        "workspaces": { "oneOf": [ { "const": "*" }, { "type": "array", "items": { "type": "string" } } ] },
+        "target": { "type": "string" }
+      }
+    },
+    "ValidateResponse": {
+      "description": "The 200 answer of POST /internal/validate: who the bearer is. For an API key, `scopes` are the key's (`legacy` for a key minted before scopes) and `is_admin` is identity's admin test for its owner. For a delegation token, `scopes` are exactly [bot, tx], `is_admin` is always false (a worker is never the admin), `delegation` carries the dispatch's ceiling and `person_is_admin` says whether the person it acts for is the instance admin; the gateway treats a worker as the admin only when that is true AND the regime is human. `delegation` and `person_is_admin` appear together and only for a delegation token.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["user_id", "scopes", "max_concurrent", "email", "is_admin"],
+      "properties": {
+        "user_id": { "type": "integer", "description": "becomes gateway-identity.v1 `sub`" },
+        "scopes": { "type": "array", "items": { "enum": ["bot", "tx", "browser", "legacy"] } },
+        "max_concurrent": { "type": "integer", "minimum": 0, "description": "max concurrent bots" },
+        "email": { "type": "string" },
+        "is_admin": { "type": "boolean" },
+        "webhook_url": { "type": "string" },
+        "webhook_secret": { "type": "string", "description": "present only with webhook_url" },
+        "webhook_events": { "type": "object", "additionalProperties": { "type": "boolean" }, "description": "present only with webhook_url" },
+        "workspaces": { "type": "array", "items": { "type": "string" }, "description": "shared-workspace memberships" },
+        "delegation": { "$ref": "#/$defs/ValidateDelegation" },
+        "person_is_admin": { "type": "boolean" }
+      },
+      "dependentRequired": { "delegation": ["person_is_admin"], "person_is_admin": ["delegation"], "webhook_secret": ["webhook_url"], "webhook_events": ["webhook_url"] }
+    },
     "AccessDecision": {
       "description": "The verdict canAccess(subject, resource, action) returns. Default-deny: `allow=false` unless a policy explicitly grants. `reason` is a stable machine code, not free text.",
       "type": "object",

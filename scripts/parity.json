@@ -135,6 +135,53 @@
       ]
     },
     {
+      "id": "delegation-token",
+      "fact": "delegation.v1 — the minter and verifier of a worker's per-dispatch vxd_ token",
+      "kind": "file-bytes",
+      "enforced": true,
+      "canonical": "core/identity/contracts/delegation.v1/delegation.py",
+      "how_to_agree": "edit the contract's delegation.py, then copy it VERBATIM over both vendored copies; a change to the wire also changes delegation.schema.json and its goldens, and re-seals",
+      "why": "agent-api mints the token and identity verifies it, in two images that may not import each other (P2). A minter and verifier that drift either refuse every worker or accept a token they should not, and nothing at runtime would say which. The copies were byte-identical by hand before this fact; now the gate is the reason they stay so.",
+      "sites": [
+        {
+          "path": "core/identity/contracts/delegation.v1/delegation.py"
+        },
+        {
+          "path": "core/agent/shared/delegation.py"
+        },
+        {
+          "path": "core/identity/services/admin-api/src/admin_api/delegation.py"
+        }
+      ]
+    },
+    {
+      "id": "delegation-prefix",
+      "fact": "the prefix that marks a bearer as a delegation token",
+      "kind": "literal",
+      "enforced": true,
+      "canonical": "core/identity/contracts/delegation.v1/delegation.py — PREFIX",
+      "how_to_agree": "change the contract's PREFIX and every site in one change",
+      "why": "The gateway decides from the prefix alone that a bearer is a worker's, before identity answers, and refuses it on every route but /mcp. A gateway that spells the prefix differently from the minter admits a worker's token on a person's routes. The two vendored delegation.py copies are held by delegation-token; these are the other places the prefix is written.",
+      "sites": [
+        {
+          "path": "core/identity/contracts/delegation.v1/delegation.py",
+          "pattern": "^PREFIX = \"([^\"]+)\""
+        },
+        {
+          "path": "core/identity/contracts/delegation.v1/validate.mjs",
+          "pattern": "^const PREFIX = \"([^\"]+)\""
+        },
+        {
+          "path": "core/gateway/services/gateway/src/gateway/app.py",
+          "pattern": "str\\(client_key\\)\\.startswith\\(\"([^\"]+)\"\\)"
+        },
+        {
+          "path": "deploy/dogfood/rig/vexa_control_mcp.py",
+          "pattern": "^DELEGATION_PREFIX = \"([^\"]+)\""
+        }
+      ]
+    },
+    {
       "id": "machinery-mark",
       "fact": "the machinery mark — the literal that hides a composed opening's prompt bubble",
       "kind": "literal",

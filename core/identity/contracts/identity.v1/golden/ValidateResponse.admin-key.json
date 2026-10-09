@@ -1,0 +1,7 @@
+{
+  "user_id": 1,
+  "scopes": ["legacy"],
+  "max_concurrent": 5,
+  "email": "admin@example.com",
+  "is_admin": true
+}

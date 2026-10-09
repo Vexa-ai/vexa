@@ -71,6 +71,7 @@ system identity  # access + audit; owns the durable DB
   contract identity.v1
   contract signin.v1
   data-asset identity-db [writers: admin-api]
+  contract delegation.v1
 
 system runtime-system  # workload spawn (bot/agent containers)
   contract runtime.v1

@@ -1447,6 +1447,18 @@
      "domain": "meetings"
     }
    ]
+  },
+  {
+   "unique-id": "delegation.v1",
+   "node-type": "contract",
+   "name": "delegation.v1",
+   "description": "delegation.v1 — sealed contract (identity): the per-dispatch vxd_ token agent-api mints for a worker and identity verifies at /internal/validate; one Python minter/verifier vendored byte for byte into both",
+   "metadata": [
+    {
+     "path": "core/identity/contracts/delegation.v1",
+     "domain": "identity"
+    }
+   ]
   }
  ],
  "relationships": [
@@ -1500,7 +1512,8 @@
       "admin-api",
       "identity.v1",
       "signin.v1",
-      "identity-db"
+      "identity-db",
+      "delegation.v1"
      ]
     }
    }
