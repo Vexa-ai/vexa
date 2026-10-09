@@ -10,6 +10,8 @@
  *   refused-* → a refusal vector, validated against #/$defs/Refusal, then checked here: the token
  *               must NOT verify under the vector's public key (or must be refused before a
  *               signature is checked, for a malformed one or an over-long lifetime).
+ *   headers-* → the x-user-* headers a service rebuilds from a claims-* golden (#/$defs/Headers),
+ *               re-derived here from the mapping restated in Node.
  *   reentry-* → an MCP re-entry match vector (#/$defs/Reentry): the gateway's rule, restated here,
  *               must admit exactly the vectors marked admitted.
  * No golden may carry private-key material: a PEM private-key header anywhere in one fails.
@@ -29,6 +31,33 @@ const claimsOk = ajv.compile({ $ref: `${schema.$id}#/$defs/Claims` });
 const vectorOk = ajv.compile({ $ref: `${schema.$id}#/$defs/Vector` });
 const refusalOk = ajv.compile({ $ref: `${schema.$id}#/$defs/Refusal` });
 const reentryOk = ajv.compile({ $ref: `${schema.$id}#/$defs/Reentry` });
+const headersOk = ajv.compile({ $ref: `${schema.$id}#/$defs/Headers` });
+
+// The claims -> x-user-* mapping (identity_token.headers_from_claims), restated. webhook_events is
+// Python's json.dumps of a flat object: ", " and ": " separators.
+const CLAIM_HEADERS = { sub: "x-user-id", email: "x-user-email", scopes: "x-user-scopes", limits: "x-user-limits",
+  workspaces: "x-user-workspaces", webhook_url: "x-user-webhook-url", webhook_secret: "x-user-webhook-secret",
+  webhook_events: "x-user-webhook-events" };
+const pyDumps = (v) => v && typeof v === "object" && !Array.isArray(v)
+  ? `{${Object.entries(v).map(([k, x]) => `${JSON.stringify(k)}: ${pyDumps(x)}`).join(", ")}}`
+  : Array.isArray(v) ? `[${v.map(pyDumps).join(", ")}]` : JSON.stringify(v);
+function headersFromClaims(c) {
+  const out = {};
+  for (const [claim, header] of Object.entries(CLAIM_HEADERS)) {
+    const v = c[claim];
+    if (v === undefined || v === null || v === "" || (Array.isArray(v) && !v.length)) continue;
+    out[header] = claim === "scopes" || claim === "workspaces" ? v.join(",")
+      : claim === "webhook_events" ? (typeof v === "string" ? v : pyDumps(v)) : String(v);
+  }
+  const d = c.delegation;
+  if (d && typeof d === "object") {
+    if (d.regime) out["x-user-regime"] = String(d.regime);
+    if (d.workspaces === "*") out["x-user-delegation-workspaces"] = "*";
+    else if (Array.isArray(d.workspaces)) out["x-user-delegation-workspaces"] = d.workspaces.join(",");
+    if (d.target) out["x-user-delegation-target"] = String(d.target);
+  }
+  return out;
+}
 
 // The re-entry match rule, restated: the delegation the gateway signs for a validate answer
 // (identity_token.claims_from_validation), then same person AND an equal delegation.
@@ -111,6 +140,13 @@ for (const f of files) {
       console.error(`  ✗ ${f}: signature check disagrees with reason ${data.reason}`); failed++; continue;
     }
     console.log(`  ✓ ${f} ≡ Refusal (${data.reason})`);
+  } else if (f.startsWith("headers-")) {
+    if (!headersOk(data)) { console.error(`  ✗ ${f}: ${ajv.errorsText(headersOk.errors)}`); failed++; continue; }
+    const claims = JSON.parse(readFileSync(join(HERE, "golden", data.claims_golden), "utf8"));
+    if (canon(headersFromClaims(claims)) !== canon(data.headers)) {
+      console.error(`  ✗ ${f}: the mapping restated here gives other headers for ${data.claims_golden}`); failed++; continue;
+    }
+    console.log(`  ✓ ${f} ≡ Headers (${Object.keys(data.headers).length} from ${data.claims_golden})`);
   } else if (f.startsWith("reentry-")) {
     if (!reentryOk(data)) { console.error(`  ✗ ${f}: ${ajv.errorsText(reentryOk.errors)}`); failed++; continue; }
     if (reentryAdmitted(data.validation, data.signed) !== data.admitted) {
@@ -118,7 +154,7 @@ for (const f of files) {
     }
     console.log(`  ✓ ${f} ≡ Reentry (${data.admitted ? "admitted" : "not re-entry"})`);
   } else {
-    console.error(`  ✗ ${f}: filename must start with claims- / vector- / refused- / reentry-`); failed++;
+    console.error(`  ✗ ${f}: filename must start with claims- / vector- / refused- / reentry- / headers-`); failed++;
   }
 }
 console.log(failed ? `gateway-identity.v1: ${failed} golden(s) FAILED` : `gateway-identity.v1: ${files.length} goldens conform`);

@@ -37,6 +37,16 @@
         "target": { "type": "string", "description": "the chat's target workspace, a default and never a grant; becomes x-user-delegation-target" }
       }
     },
+    "Headers": {
+      "type": "object",
+      "description": "A claims-to-headers vector: the x-user-* headers a service rebuilds from the claims in `claims_golden` (a claims-*.json beside it). Lower-cased names; scopes and workspaces comma-joined; webhook_events as JSON; limits as decimal; an absent, empty or null claim gives no header; delegation becomes x-user-regime, x-user-delegation-workspaces (\"*\" or comma-joined) and x-user-delegation-target.",
+      "required": ["claims_golden", "headers"],
+      "additionalProperties": false,
+      "properties": {
+        "claims_golden": { "type": "string", "pattern": "^claims-[a-z-]+\\.json$" },
+        "headers": { "type": "object", "additionalProperties": { "type": "string" }, "propertyNames": { "pattern": "^x-user-[a-z-]+$" } }
+      }
+    },
     "ReentryHeader": {
       "const": "x-vexa-internal-mcp-identity",
       "description": "MCP re-entry. A worker's delegation token (delegation.v1) is admitted by the gateway on /mcp only. The MCP's tools act by calling back into the gateway with the same bearer, so the MCP service (the carrier) holds the X-Vexa-Identity the gateway signed onto the /mcp request it is serving and sends it back, only on its calls to the gateway, in this header. The gateway (the only verifier) checks it with its own key's public half (signature, iat/exp within the skew and the 300 s lifetime) and admits the call only when the signed claims name the same sub as the bearer resolves to now AND carry a delegation equal to the bearer's (Reentry). The header is in the x-vexa-internal- family, which the gateway never forwards from a client to a service behind it. Header names are case-insensitive."

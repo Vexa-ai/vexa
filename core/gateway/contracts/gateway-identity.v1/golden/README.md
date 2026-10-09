@@ -15,6 +15,10 @@
   public key (algorithm confusion), no signature, another scheme, and a correctly signed token that
   claims a lifetime over 300 s.
 
+- `refused-expired.json`, `refused-not-yet-valid.json` — the human vector's own token verified past
+  `exp` plus the 30 s skew, and more than 30 s before its `iat`.
+- `headers-*.json` — the `x-user-*` headers a service rebuilds from `claims-human.json` and
+  `claims-delegated.json`; `validate.mjs` re-derives them from the mapping restated in Node.
 - `reentry-*.json` — the MCP re-entry match rule, after the signature checks: the bearer's
   `/internal/validate` answer, the signed claims presented in `X-Vexa-Internal-Mcp-Identity`, and
   whether the gateway admits the call. One admitted (same person, same delegation) and four refused:

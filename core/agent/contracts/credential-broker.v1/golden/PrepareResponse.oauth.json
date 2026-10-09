@@ -1,0 +1,21 @@
+{
+  "connection_id": "0123456789abcdef0123456789abcdef",
+  "status": "awaiting_user",
+  "setup": {
+    "oauth": {
+      "authorization_url": "https://login.example.test/authorize",
+      "token_url": "https://api.example.test/token",
+      "scopes": [
+        "read"
+      ],
+      "token_auth": "client_secret_post"
+    },
+    "documentation_url": "",
+    "endpoint": "https://api.example.test/v2/data",
+    "header": "Authorization",
+    "scheme": "bearer",
+    "method": "GET",
+    "secret_label": "API token",
+    "fields": []
+  }
+}
