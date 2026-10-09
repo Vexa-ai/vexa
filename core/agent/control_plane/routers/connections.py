@@ -308,8 +308,8 @@ def build(*, subject_of, wsr=None, require_person=None, **_):
         signed=signed_identity(request)
         try:
             cid=_ready(actor, signed, 'google_email', body.connection_id)
-        except HTTPException:
-            raise HTTPException(409,'Choose a ready Gmail connection_id from connections_status') from None
+        except HTTPException as exc:   # only "no single ready mailbox" is the person's to fix; an outage keeps its status
+            raise (exc if exc.status_code != 409 else HTTPException(409,'Choose a ready Gmail connection_id from connections_status')) from None
         return call_broker(actor,'POST','/api/connections/'+cid+'/draft',body.model_dump(exclude={'connection_id'}),
                            identity=signed)
 

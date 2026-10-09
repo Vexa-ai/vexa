@@ -189,3 +189,18 @@ def test_the_published_setup_is_closed_and_the_description_names_label_not_servi
                                         'method', 'secret_label', 'fields'}
     text = spec['paths']['/api/connections/request']['post']['description']
     assert 'name the service in label' in text and 'provide a service label' not in text
+
+
+def test_an_outage_choosing_the_mailbox_is_not_reported_as_a_missing_one(monkeypatch):
+    """The draft route turns "no single ready mailbox" into a 409 that says to choose one. A broker
+    outage on the same lookup keeps its own status, so it never reads as the person's mistake."""
+    from fastapi import HTTPException
+
+    def down(actor, method, path, payload=None, *, identity):
+        raise HTTPException(503, 'Credential store unavailable — an outage, not an authorization problem')
+    monkeypatch.setattr(connections, 'call_broker', down)
+    app = FastAPI()
+    app.include_router(connections.build(subject_of=lambda r: r.headers['x-user-id'], require_person=_person))
+    r = TestClient(app).post('/api/connections/gmail/draft', headers=HUMAN,
+                             json={'request_id': 'req-00000001', 'recipient': 'a@b.example', 'subject': 's', 'body': 'b'})
+    assert r.status_code == 503 and 'outage' in r.json()['detail']
