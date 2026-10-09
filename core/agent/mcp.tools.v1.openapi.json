@@ -618,6 +618,8 @@
           },
           "scopes": {
             "items": {
+              "maxLength": 300,
+              "minLength": 1,
               "type": "string"
             },
             "maxItems": 30,
