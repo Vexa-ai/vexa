@@ -961,6 +961,41 @@
           "pattern": "^# >>> native-sdk-exclusion[^\\n]*\\n([\\s\\S]*?)^# <<< native-sdk-exclusion"
         }
       ]
+    },
+    {
+      "id": "workspace-store-path",
+      "fact": "the workspace store's path: agent-api's VEXA_WORKSPACES_DIR equals the runtime's VEXA_WORKSPACE_MOUNT_TARGET on every surface",
+      "kind": "literal",
+      "enforced": true,
+      "canonical": "deploy/helm/charts/vexa/templates/_helpers.tpl — vexa.workspacesDir (the chart renders all three from it); elsewhere each surface writes it twice",
+      "how_to_agree": "move the path on every surface in one change; on compose and Lite change both keys together",
+      "why": "agent-api hands the runtime mount paths under its VEXA_WORKSPACES_DIR; the runtime refuses (400) any mount outside its own VEXA_WORKSPACE_MOUNT_TARGET. Written separately, a difference refuses every dispatch. The chart renders both from one helper; compose and Lite write each key by hand, and the runtime's built-in default is the same path. compose's own test holds its pair equal; this holds every surface to one value.",
+      "sites": [
+        {
+          "path": "deploy/helm/charts/vexa/templates/_helpers.tpl",
+          "pattern": "define \"vexa\\.workspacesDir\" -\\}\\}\\n(\\S+)\\n"
+        },
+        {
+          "path": "deploy/compose/docker-compose.yml",
+          "pattern": "^\\s*- VEXA_WORKSPACES_DIR=(\\S+)$"
+        },
+        {
+          "path": "deploy/compose/docker-compose.yml",
+          "pattern": "^\\s*- VEXA_WORKSPACE_MOUNT_TARGET=(\\S+)$"
+        },
+        {
+          "path": "deploy/lite/supervisord.conf",
+          "pattern": "VEXA_WORKSPACES_DIR=\"([^\"]+)\""
+        },
+        {
+          "path": "deploy/lite/supervisord.conf",
+          "pattern": "VEXA_WORKSPACE_MOUNT_TARGET=\"([^\"]+)\""
+        },
+        {
+          "path": "core/runtime/src/runtime_kernel/workload_env.py",
+          "pattern": "^DEFAULT_STORE_TARGET = \"([^\"]+)\""
+        }
+      ]
     }
   ]
 }
