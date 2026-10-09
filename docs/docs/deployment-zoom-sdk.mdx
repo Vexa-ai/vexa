@@ -1,14 +1,15 @@
 ---
 title: "Native SDK evaluation"
-description: "Operator-supplied Linux Meeting SDK, private credentials, and authorization for the experimental native path."
+description: "The optional native path: an operator-supplied Linux Meeting SDK, its licence, private credentials and authorization."
 noindex: true
 ---
 
-> **Not part of the v0.13.2 release.** This page is unlisted: the native path is evaluation-only until its
-> architecture disposition (P17 and ADR-0039 in `docs/adr/`) and the SDK's licensing terms are settled.
+> **Optional and operator-supplied. Not a supported deployment path.** No Vexa image, Compose, Helm or
+> Lite install contains the SDK or starts this path. You download the SDK from Zoom under Zoom's own terms, which restrict
+> bot and notetaker use, and you are responsible for that licence. P17 treats it as an optional runtime,
+> not a dependency (ADR-0039 in `docs/adr/`).
 
-This is an **experimental source-branch evaluation path**, not a released Compose
-or Helm option. Native join, per-participant capture and real transcription have
+This is an **experimental, optional path**, not a released Compose or Helm option. Native join, per-participant capture and real transcription have
 been witnessed. The probe counts transcripts in memory: it does **not** save
 transcripts, recordings or meeting records. Production dispatch, OAuth onboarding
 and database/API retrieval are not connected to this path yet.
@@ -29,7 +30,10 @@ and database/API retrieval are not connected to this path yet.
 
 The SDK archive, headers, shared libraries and compiled addon are operator-owned
 external files. Vexa does not download them automatically or include them in its
-repository or stock images.
+repository or stock images, and grants no right to the SDK. You download it under
+Zoom's own terms, which restrict bot and notetaker use; you hold that licence and
+are responsible for complying with it. The wrapper also links Qt5Core (LGPL-3.0),
+which you install from your distribution.
 
 Build the Vexa-owned wrapper in a separate directory. From the repository root:
 
