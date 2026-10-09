@@ -267,6 +267,29 @@
       ]
     },
     {
+      "id": "delegation-accept-header",
+      "fact": "the header a caller of identity's /internal/validate declares it reads a delegation answer with (identity.v1 AcceptsDelegationHeader)",
+      "kind": "header",
+      "enforced": true,
+      "canonical": "core/identity/contracts/identity.v1/identity.schema.json — $defs.AcceptsDelegationHeader",
+      "how_to_agree": "a new name is a contract change: the schema, admin-api and every resolver that reads delegation in one change, re-sealed",
+      "why": "Identity answers a worker's vxd_ token only to a caller that sends this header, so a resolver that predates delegation fails closed instead of taking the worker for its person. Identity reads it and the gateway and flows-api send it, in three images. A sender that spells it differently is answered 401 for every worker, with each side's own tests green.",
+      "sites": [
+        {
+          "path": "core/identity/contracts/identity.v1/identity.schema.json",
+          "pattern": "\"AcceptsDelegationHeader\": \\{\\s*\"const\": \"([^\"]+)\""
+        },
+        {
+          "path": "core/identity/services/admin-api/src/admin_api/app/validate.py",
+          "pattern": "^ACCEPTS_DELEGATION_HEADER = \"([^\"]+)\""
+        },
+        {
+          "path": "core/gateway/services/gateway/src/gateway/adapters.py",
+          "pattern": "^ACCEPTS_DELEGATION_HEADER = \"([^\"]+)\""
+        }
+      ]
+    },
+    {
       "id": "runtime-callback-signature",
       "fact": "how a RuntimeEvent callback is signed: the key-derivation label (runtime.v1 CallbackSignature)",
       "kind": "literal",

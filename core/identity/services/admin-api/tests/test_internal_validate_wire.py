@@ -154,7 +154,10 @@ def test_a_body_that_is_not_the_request_shape_is_refused(monkeypatch, body):
 def test_a_delegation_answers_the_ceiling_and_the_person_and_omits_an_absent_target(monkeypatch):
     client, _ = _client(monkeypatch, data={"is_admin": True})
     tok = delegation.mint_delegation(DLG, subject="42", regime="human", workspaces="*")
-    body = _validate(client, {"token": tok}).json()
+    body = client.post("/internal/validate", json={"token": tok},
+                       headers={"X-Internal-Secret": INTERNAL,
+                                validate_mod.ACCEPTS_DELEGATION_HEADER:
+                                    validate_mod.ACCEPTS_DELEGATION_VALUE}).json()
     assert set(body) == BASE_FIELDS | {"delegation", "person_is_admin"}
     assert body["delegation"] == {"regime": "human", "workspaces": "*"}
     assert body["scopes"] == ["bot", "tx"]

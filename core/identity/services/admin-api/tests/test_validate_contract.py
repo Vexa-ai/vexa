@@ -130,8 +130,11 @@ def _client(monkeypatch):
 
 
 def _validate(client, token):
+    """As a resolver that reads `delegation` asks (identity.v1 AcceptsDelegationHeader)."""
     return client.post("/internal/validate", json={"token": token},
-                       headers={"X-Internal-Secret": INTERNAL})
+                       headers={"X-Internal-Secret": INTERNAL,
+                                validate_mod.ACCEPTS_DELEGATION_HEADER:
+                                    validate_mod.ACCEPTS_DELEGATION_VALUE})
 
 
 def test_the_signing_helper_matches_the_minter(monkeypatch):
@@ -154,3 +157,9 @@ def test_a_token_whose_scope_is_outside_the_sealed_shape_is_refused(monkeypatch,
     r = _validate(_client(monkeypatch), _token(scope))
     assert r.status_code == 401, r.text
     assert r.json()["detail"] == "Invalid delegation: scope"
+
+
+def test_the_delegation_declaration_is_the_sealed_header():
+    """The header a resolver declares it reads `delegation` with is the contract's, by name."""
+    assert validate_mod.ACCEPTS_DELEGATION_HEADER == DEFS["AcceptsDelegationHeader"]["const"]
+    assert validate_mod.ACCEPTS_DELEGATION_VALUE == "1"

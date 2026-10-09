@@ -252,6 +252,13 @@ unsigned entries, so its meeting's live transcript stops (and the meeting leaves
 list) until you send the bot again. Upgrade when no bot is in a meeting, or send those bots again
 afterwards.
 
+**Upgrade the gateway together with identity, the MCP, agent-api and flows-api.** Identity (admin-api)
+now verifies an agent worker's token only for a caller that says it understands one. A gateway older
+than v0.13.2 does not say so, and a v0.13.2 identity refuses it every worker token: agent workers'
+tool calls fail with 401 until the gateway is upgraded too. Nothing is let through in that state; it
+just does not work. Upgrade the gateway, MCP, admin-api, agent-api and flows-api to the same release
+in one step (`make up`, `helm upgrade` and a new Lite image all do).
+
 **Docker Compose: the dispatch signing key needs a value of its own.** agent-api refuses to boot on an
 unset `VEXA_DISPATCH_SIGNING_KEY` or on its old default, `dev-dispatch-signing-key`. `make up` /
 `make all` mint one into `.env` and replace the old default there. If you start the stack with

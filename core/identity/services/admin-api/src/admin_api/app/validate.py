@@ -12,6 +12,13 @@ table or the delegation key. Two kinds of bearer answer the same shape, `Validat
     person's agent acts in (`bot`, `tx`) — never `browser`, never admin — and the ceiling travels on
     as `delegation`, for the services to enforce.
 
+A DELEGATION ANSWER GOES ONLY TO A CALLER THAT ASKED FOR ONE. A worker's 200 looks like a person's
+200 plus two fields, so a resolver that predates delegation reads it as the person and drops the
+ceiling. A caller therefore declares that it reads `delegation`, with `ACCEPTS_DELEGATION_HEADER`
+set to `1` (identity.v1 `AcceptsDelegationHeader`); to any other caller a `vxd_` bearer is refused
+exactly like a bearer nobody answers to (401 `Invalid token`). An old resolver in front of this
+identity fails closed instead of forwarding the worker as its person.
+
 Internal tier, failing closed (`internal_tier.check_internal`). The request and the response are
 named models, so this wire is declared here once. A field that does not apply to a bearer is OMITTED,
 never sent as null (`response_model_exclude_unset`) — the shape every caller has always read.
@@ -36,6 +43,21 @@ from .internal_tier import check_internal
 #: What a worker's delegation token may do at the edge: act in the two service domains for the
 #: person it names — the same reach a person's own bot+tx key has, and nothing operator-shaped.
 DELEGATED_SCOPES = ("bot", "tx")
+
+#: The request header a resolver sets, to `ACCEPTS_DELEGATION_VALUE`, to say it reads `delegation`
+#: (identity.v1 `AcceptsDelegationHeader`). In the `x-vexa-internal-` family, which the gateway never
+#: forwards from a client.
+ACCEPTS_DELEGATION_HEADER = "x-vexa-internal-accepts-delegation"
+ACCEPTS_DELEGATION_VALUE = "1"
+
+#: The refusal for a bearer nobody answers to — and for a delegation token presented by a caller that
+#: did not declare it reads one. One string, so the two cannot be told apart.
+INVALID_TOKEN = "Invalid token"
+
+
+def accepts_delegation(request: Request) -> bool:
+    """Did the caller declare that it reads a delegation answer? Exactly `1`; anything else is no."""
+    return (request.headers.get(ACCEPTS_DELEGATION_HEADER) or "").strip() == ACCEPTS_DELEGATION_VALUE
 
 
 class ValidateRequest(BaseModel):
@@ -151,6 +173,10 @@ async def validate_token(payload: ValidateRequest, request: Request,
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Missing token")
 
     if delegation_mod.is_delegation_token(token):
+        if not accepts_delegation(request):
+            # A caller that did not declare it reads `delegation` would take the worker for its
+            # person: to that caller this bearer names nobody.
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail=INVALID_TOKEN)
         return ValidatedIdentity.model_validate(await _validate_delegation(token, db))
 
     row = (await db.execute(
@@ -158,7 +184,7 @@ async def validate_token(payload: ValidateRequest, request: Request,
         .where(APIToken.token == token)
     )).first()
     if not row:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail=INVALID_TOKEN)
     api_token, user = row
 
     if api_token.expires_at is not None and api_token.expires_at < datetime.utcnow():

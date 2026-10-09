@@ -26,6 +26,13 @@ from . import identity_token
 from .obs import TRACE_HEADER, get_trace_id
 from .ports import AuthUnavailable
 
+#: The header this edge sets, to ``ACCEPTS_DELEGATION_VALUE``, on its ``/internal/validate`` hop to say
+#: it reads a delegation answer (identity.v1 ``AcceptsDelegationHeader``). Identity answers a worker's
+#: ``vxd_`` token only to a caller that sends it, so an edge that does not read ``delegation`` fails
+#: closed instead of forwarding the worker as its person.
+ACCEPTS_DELEGATION_HEADER = "x-vexa-internal-accepts-delegation"
+ACCEPTS_DELEGATION_VALUE = "1"
+
 
 class HttpxDownstreamClient:
     """``DownstreamClient`` over ``httpx.AsyncClient``\\ s — forwards to meeting-api / agent-api /
@@ -73,7 +80,7 @@ class AdminApiAuthorizer:
     """``Authorizer`` over the admin-api + meeting-api hops.
 
     ``resolve`` POSTs ``/internal/validate`` to admin-api (carrying ``X-Internal-Secret`` when
-    configured, and forwarding the request trace_id); ``authorize_subscribe`` POSTs
+    configured, the delegation declaration, and the request trace_id); ``authorize_subscribe`` POSTs
     ``/ws/authorize-subscribe`` to meeting-api (which now hosts the folded-in collector, P2) with
     the resolved user identity.
     """
@@ -88,7 +95,10 @@ class AdminApiAuthorizer:
     async def resolve(self, api_key: str) -> Optional[dict]:
         import httpx
 
-        headers = {TRACE_HEADER: get_trace_id() or ""}
+        # This edge reads `delegation` (delegation.py), so it declares it; identity answers a
+        # worker's token to no caller that does not.
+        headers = {TRACE_HEADER: get_trace_id() or "",
+                   ACCEPTS_DELEGATION_HEADER: ACCEPTS_DELEGATION_VALUE}
         internal_secret = os.getenv("INTERNAL_API_SECRET", "")
         if internal_secret:
             headers["X-Internal-Secret"] = internal_secret

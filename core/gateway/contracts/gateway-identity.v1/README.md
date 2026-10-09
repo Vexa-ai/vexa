@@ -80,7 +80,12 @@ identity (no `delegation`). The `reentry-*` goldens pin the match rule; `validat
 | `typ` · `iat` · `exp` | — |
 
 `delegation` is present when the bearer was a worker's delegation token (`vxd_`, minted by
-agent-api per dispatch, verified by identity). A service refuses a verb that needs a person in the
+agent-api per dispatch, verified by identity). Identity answers such a token only to a resolver that
+declares it reads `delegation` (identity.v1 `AcceptsDelegationHeader`,
+`X-Vexa-Internal-Accepts-Delegation: 1`), and the gateway sends it on every validate hop. **A gateway
+older than v0.13.2 does not, so a v0.13.2 identity refuses it every delegation token (401): it fails
+closed, never forwarding a worker as its person without `delegation`.** Upgrade the gateway, the MCP,
+admin-api, agent-api and flows-api together. A service refuses a verb that needs a person in the
 loop when `x-user-regime` is not `human`. `identity_token.py` carries that rule for every service:
 `is_delegated(headers)` (any delegation header present, an empty one included), `is_unwatched(headers)`
 (delegated, and a regime other than `human`) and `REFUSAL`, the one 403 body a worker reads.
