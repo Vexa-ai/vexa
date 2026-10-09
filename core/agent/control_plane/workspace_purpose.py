@@ -17,7 +17,7 @@ import logging
 import subprocess
 from pathlib import Path
 
-from shared.gitenv import scrubbed_git_env
+from shared.gitexec import run_git
 
 log = logging.getLogger(__name__)
 
@@ -62,13 +62,10 @@ def _commit_purpose(ws: Path, purpose: str) -> None:
     workspace or an empty diff is a quiet no-op — the on-disk file is authoritative regardless."""
     if not (ws / ".git").exists():
         return
-    env = scrubbed_git_env()
     try:
-        subprocess.run(["git", "-C", str(ws), "add", "--", PURPOSE_FILE],
-                       check=True, capture_output=True, text=True, env=env)
+        run_git(ws, "add", "--", PURPOSE_FILE, check=True)
         msg = f"workspace: set purpose" if purpose else "workspace: clear purpose"
-        proc = subprocess.run(["git", "-C", str(ws), "commit", "-q", "-m", msg, "--", PURPOSE_FILE],
-                              capture_output=True, text=True, env=env)
+        proc = run_git(ws, "commit", "-q", "-m", msg, "--", PURPOSE_FILE)
         if proc.returncode != 0 and "nothing to commit" not in (proc.stdout + proc.stderr):
             log.warning("purpose commit in %s failed: %s", ws, proc.stderr.strip())
     except (OSError, subprocess.SubprocessError) as exc:

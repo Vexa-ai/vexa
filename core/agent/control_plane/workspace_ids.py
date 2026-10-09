@@ -28,13 +28,11 @@ from __future__ import annotations
 import datetime as _dt
 import json
 import logging
-import os
-import subprocess
 import time
 from pathlib import Path
 from typing import Callable, Iterable, Optional
 
-from shared.gitenv import scrubbed_git_env
+from shared.gitexec import run_git
 from workspaces.shared.workspace_id import (KINDS, TOUCHES_FILE, VEXA_DIR, WORKSPACE_JSON,
                                  ensure_workspace_json, is_workspace_id, read_touches,
                                  read_workspace_json, write_workspace_json)
@@ -282,12 +280,11 @@ def _commit_identity(ws_dir: Path) -> None:
     over."""
     if not (ws_dir / ".git").is_dir():
         return
-    env = {**os.environ, **scrubbed_git_env(),
-           "GIT_AUTHOR_NAME": "Vexa", "GIT_AUTHOR_EMAIL": "platform@vexa.ai",
+    env = {"GIT_AUTHOR_NAME": "Vexa", "GIT_AUTHOR_EMAIL": "platform@vexa.ai",
            "GIT_COMMITTER_NAME": "Vexa", "GIT_COMMITTER_EMAIL": "platform@vexa.ai"}
 
     def git(*args):
-        return subprocess.run(["git", "-C", str(ws_dir), *args], capture_output=True, text=True, env=env)
+        return run_git(ws_dir, *args, env=env)
 
     try:
         git("add", "--", WORKSPACE_JSON)

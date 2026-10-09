@@ -30,11 +30,10 @@ from __future__ import annotations
 
 import logging
 import os
-import subprocess
 from pathlib import Path
 from typing import Optional
 
-from shared.gitenv import scrubbed_git_env
+from shared.gitexec import run_git
 
 logger = logging.getLogger("agent_api.system_mounts")
 
@@ -222,12 +221,10 @@ def ensure_system_workspace(root: str, subject: str, *, seed_dir: Optional[Path]
             "Private — never shareable.\n"
         )
         (home / "identity.md").write_text(_IDENTITY_STUB)
-    env = scrubbed_git_env()
     for args in (("init", "-q"), ("config", "user.email", "agent@vexa"), ("config", "user.name", "vexa-agent")):
-        subprocess.run(["git", *args], cwd=str(home), check=True, capture_output=True, text=True, env=env)
-    subprocess.run(["git", "add", "-A"], cwd=str(home), check=True, capture_output=True, text=True, env=env)
-    subprocess.run(["git", "commit", "-q", "-m", "system workspace init", "--allow-empty"],
-                   cwd=str(home), check=True, capture_output=True, text=True, env=env)
+        run_git(home, *args, check=True)
+    run_git(home, "add", "-A", check=True)
+    run_git(home, "commit", "-q", "-m", "system workspace init", "--allow-empty", check=True)
     return home
 
 

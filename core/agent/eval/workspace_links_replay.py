@@ -38,7 +38,6 @@ import json
 import pathlib
 import re
 import shutil
-import subprocess
 import sys
 import tempfile
 
@@ -48,6 +47,7 @@ sys.path.insert(0, str(HERE.parents[2]))          # core — for workspaces.shar
 
 from control_plane import link_resolver, workspace_ids as ids  # noqa: E402
 from shared import desk_readme  # noqa: E402
+from shared.gitexec import run_git  # noqa: E402
 from workspaces.shared.entities import upsert_entity  # noqa: E402
 from workspaces.shared.links import cross_workspace_refs  # noqa: E402
 
@@ -89,7 +89,7 @@ def read_truth(path: pathlib.Path) -> dict:
 
 
 def git(ws: pathlib.Path, *args: str) -> None:
-    subprocess.run(["git", "-C", str(ws), *args], check=True, capture_output=True)
+    run_git(ws, *args, check=True)
 
 
 def make_workspace(root: pathlib.Path, slug: str, *, members: list[str] | None = None) -> pathlib.Path:

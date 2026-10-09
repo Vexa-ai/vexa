@@ -35,7 +35,6 @@ import argparse
 import json
 import os
 import shutil
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -74,11 +73,13 @@ def workspace(out: Path, tag: str, seed: Path) -> Path:
     if ws.exists():
         shutil.rmtree(ws)
     shutil.copytree(seed, ws)
-    subprocess.run(["git", "-C", str(ws), "init", "-q"], check=True)
+    from shared.gitexec import run_git     # the one way this domain runs git
+
+    run_git(ws, "init", "-q", check=True)
     for k, v in (("user.email", "bench@rehearsal.test"), ("user.name", "bench")):
-        subprocess.run(["git", "-C", str(ws), "config", k, v], check=True)
-    subprocess.run(["git", "-C", str(ws), "add", "-A"], check=True)
-    subprocess.run(["git", "-C", str(ws), "commit", "-qm", "seed"], check=True)
+        run_git(ws, "config", k, v, check=True)
+    run_git(ws, "add", "-A", check=True)
+    run_git(ws, "commit", "-qm", "seed", check=True)
     return ws
 
 

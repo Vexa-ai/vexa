@@ -565,19 +565,15 @@ class WorkspaceReader:
         OTHER members' agent pushes to a shared workspace distinctly from the viewer's own writes and from
         platform/seed plumbing. ``viewer`` (the caller's subject id) is what makes ``you`` resolvable — the
         turn-commit stamps author email ``<subject>@vexa.local`` (see ``worker/engine.py`` principal)."""
-        import subprocess
-
-        from shared.gitenv import scrubbed_git_env
+        from shared.gitexec import run_git
 
         base = self._guard_under_root(base)
         if not (base / ".git").exists():
             return {"branch": "", "changes": [], "commits": []}
 
         def git(*args: str) -> str:
-            # scrubbed env: a hook-exported GIT_DIR would report the HOOK's repo, not this workspace
-            return subprocess.run(
-                ["git", "-C", str(base), *args], capture_output=True, text=True, env=scrubbed_git_env()
-            ).stdout.strip()
+            # shared.gitexec: nothing the workspace's repository configures runs in this process
+            return run_git(base, *args).stdout.strip()
 
         changes = []
         for line in git("status", "--porcelain").splitlines():
@@ -609,9 +605,7 @@ class WorkspaceReader:
 
         Empty shape (never an exception) for a directory that is not a repository yet: a workspace
         seeded but never committed to is an ordinary state, not a failure."""
-        import subprocess
-
-        from shared.gitenv import scrubbed_git_env
+        from shared.gitexec import run_git
 
         base = self._guard_under_root(base)
         rel = (path or "").strip() or None
@@ -625,9 +619,7 @@ class WorkspaceReader:
             return {"branch": "", "path": rel, "limit": n, "commits": []}
 
         def git(*args: str) -> str:
-            return subprocess.run(
-                ["git", "-C", str(base), *args], capture_output=True, text=True, env=scrubbed_git_env()
-            ).stdout.strip()
+            return run_git(base, *args).stdout.strip()
 
         args = ["log", f"-{n}", "--name-only", _LOG_FORMAT]
         if rel is not None:
@@ -640,9 +632,8 @@ class WorkspaceReader:
         """Unified diff of ONE commit (optionally scoped to a single file) in the workspace at ``base`` —
         so the terminal can HIGHLIGHT exactly what changed. Capped so a huge commit can't flood the UI."""
         import re
-        import subprocess
 
-        from shared.gitenv import scrubbed_git_env
+        from shared.gitexec import run_git
 
         base = self._guard_under_root(base)
         if path is not None:
@@ -654,10 +645,10 @@ class WorkspaceReader:
                 raise ValueError(str(exc)) from None
         if not (base / ".git").exists() or not re.fullmatch(r"[0-9a-fA-F]{4,40}", sha or ""):
             return {"sha": sha, "path": path, "diff": "", "truncated": False}  # bad sha never hits git
-        args = ["git", "-C", str(base), "show", "--no-color", "--format=", sha]
+        args = ["show", "--no-color", "--format=", sha]
         if path:
             args += ["--", path]
-        out = subprocess.run(args, capture_output=True, text=True, env=scrubbed_git_env()).stdout
+        out = run_git(base, *args).stdout
         lines = out.splitlines()
         return {"sha": sha, "path": path, "diff": "\n".join(lines[:600]), "truncated": len(lines) > 600}
 
@@ -683,9 +674,8 @@ class WorkspaceReader:
         ``{"before", "after", "reset", "detail"}``; ``reset`` False with a ``detail`` is the refusal,
         never an exception — the caller is a flow step whose next move is to say why it could not."""
         import re
-        import subprocess
 
-        from shared.gitenv import scrubbed_git_env
+        from shared.gitexec import run_git
 
         base = self._guard_under_root(base)
         if not (base / ".git").exists():
@@ -695,8 +685,7 @@ class WorkspaceReader:
                     "detail": f"{sha!r} is not a commit id"}
 
         def git(*args: str):
-            return subprocess.run(["git", "-C", str(base), *args], capture_output=True, text=True,
-                                  env=scrubbed_git_env())
+            return run_git(base, *args)
 
         before = git("rev-parse", "HEAD").stdout.strip()
         if not before:

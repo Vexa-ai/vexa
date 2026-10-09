@@ -333,19 +333,16 @@ def _policy_commit(ws: Path, message: str, *, author_name: str, author_email: st
     """The one commit body both writers share — extracted verbatim when the authored variant arrived,
     because a second copy of a git-env-scrubbing commit path is a second place the scrub can be
     forgotten."""
-    import subprocess
-    from shared.gitenv import scrubbed_git_env
+    from shared.gitexec import run_git
 
-    env = scrubbed_git_env(
-        GIT_AUTHOR_NAME=author_name, GIT_AUTHOR_EMAIL=author_email,
-        GIT_COMMITTER_NAME="vexa-platform", GIT_COMMITTER_EMAIL="platform@vexa.ai",
-    )
+    env = {
+        "GIT_AUTHOR_NAME": author_name, "GIT_AUTHOR_EMAIL": author_email,
+        "GIT_COMMITTER_NAME": "vexa-platform", "GIT_COMMITTER_EMAIL": "platform@vexa.ai",
+    }
     ws = Path(ws)
     if not (ws / ".git").exists():
-        subprocess.run(["git", "-C", str(ws), "init", "-q"], check=True,
-                       capture_output=True, text=True, env=env)
-    added = subprocess.run(["git", "-C", str(ws), "add", "--", POLICY_DIR],
-                           capture_output=True, text=True, env=env)
+        run_git(ws, "init", "-q", env=env, check=True)
+    added = run_git(ws, "add", "--", POLICY_DIR, env=env)
     if added.returncode != 0:
         # policy/ is EXCLUDED in this clone — the workspace has an ATTACHED external repo as its tree
         # (workspace_attach.carry_policy), where the member list is deliberately untracked so it is
@@ -362,11 +359,9 @@ def _policy_commit(ws: Path, message: str, *, author_name: str, author_email: st
             log.warning("policy commit could not stage %s in %s: %s", POLICY_DIR, ws, stderr)
         return
     # commit only if policy/ actually changed (staged diff non-empty)
-    staged = subprocess.run(["git", "-C", str(ws), "diff", "--cached", "--quiet", "--", POLICY_DIR],
-                            capture_output=True, text=True, env=env)
+    staged = run_git(ws, "diff", "--cached", "--quiet", "--", POLICY_DIR, env=env)
     if staged.returncode != 0:  # non-zero == there IS a staged change
-        subprocess.run(["git", "-C", str(ws), "commit", "-q", "-m", message, "--", POLICY_DIR],
-                       check=True, capture_output=True, text=True, env=env)
+        run_git(ws, "commit", "-q", "-m", message, "--", POLICY_DIR, env=env, check=True)
 
 
 def _now_iso() -> str:
@@ -952,16 +947,14 @@ def voided_invite_ids(root: Path, workspace_id: str, *, now: Optional[float] = N
     ``DEFAULT_EXPIRES_IN_SEC`` ago is expired on its own terms, and saying it is void adds nothing.
     New mints leave no such commit, so this never counts an invite that is currently working."""
     import subprocess
-    from shared.gitenv import scrubbed_git_env
+    from shared.gitexec import run_git
 
     ws = _ws_dir(root, workspace_id)
     if not (ws / ".git").exists():
         return []
     t = now if now is not None else time.time()
     try:
-        out = subprocess.run(
-            ["git", "-C", str(ws), "log", "--format=%ct%x09%s", "--grep=^policy: mint invite "],
-            capture_output=True, text=True, timeout=10, env=scrubbed_git_env())
+        out = run_git(ws, "log", "--format=%ct%x09%s", "--grep=^policy: mint invite ", timeout=10)
     except (OSError, subprocess.SubprocessError):
         return []
     if out.returncode != 0:

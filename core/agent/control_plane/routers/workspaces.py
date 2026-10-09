@@ -50,6 +50,7 @@ from shared import asset_source as assets_mod
 from shared import friction as friction_mod
 from shared import page_images
 from shared.git_redaction import redact as redact_secrets
+from shared.gitexec import run_git
 from shared.seeding import resolve_seed_dir, seed_workspace, validate_seed
 from typing import Optional
 import hashlib
@@ -221,13 +222,11 @@ def build(**d) -> APIRouter:
         runs). One such path would have sunk the other's staging silently, leaving a moved page on
         disk and nothing in history. Per path, `check=False`, and the commit then names only what
         actually staged."""
-        import subprocess as _sp
         if not (target / ".git").is_dir():
             return None
 
         def _git(*args: str):
-            return _sp.run(["git", "-C", str(target), *args], check=False, capture_output=True,
-                           text=True)
+            return run_git(target, *args)
 
         staged = [p for p in paths if p and _git("add", "--", p).returncode == 0]
         if staged:
@@ -375,7 +374,6 @@ def build(**d) -> APIRouter:
         Never overwrite a page with a note saying it moved or went away: `workspace_move` and
         `workspace_delete` do those, and keep the history."""
         import shutil as _sh  # noqa: F401 — parity with ws_reset's import style
-        import subprocess as _sp
         subject = subject_of(request)
         rel = body.path.strip()
         slug = write_slug(request, body.slug)
@@ -390,9 +388,9 @@ def build(**d) -> APIRouter:
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text(content, encoding="utf-8")
         if (target / ".git").is_dir():
-            _sp.run(["git", "-C", str(target), "add", rel], check=False, capture_output=True)
-            _sp.run(["git", "-C", str(target), "-c", "user.name=vexa-terminal", "-c", "user.email=terminal@vexa.local",
-                     "commit", "-m", f"edit {rel} (terminal page editor)"], check=False, capture_output=True)
+            run_git(target, "add", "--", rel)
+            run_git(target, "-c", "user.name=vexa-terminal", "-c", "user.email=terminal@vexa.local",
+                    "commit", "-m", f"edit {rel} (terminal page editor)")
         # A ROUTINE A PERSON WROTE IS A ROUTINE THEY STAND BEHIND (`workspace_routines.PENDING`). A
         # worker dispatched without a person writes one that waits for confirmation instead.
         routine = workspace_routines_mod.is_routine_file(wsr.root, str(subject), f)
@@ -1600,7 +1598,6 @@ def build(**d) -> APIRouter:
         "just folders" (founder ruling 2026-08-22) — wipe the content, re-copy the seed, commit.
         `_system` is deliberately NOT resettable: it is sessions/continuity, not knowledge."""
         import shutil as _sh
-        import subprocess as _sp
         subject = subject_of(request)
         target = str(body.get("target") or "")
         require_in_ceiling(request, None if target == "personal" else target)
@@ -1623,9 +1620,9 @@ def build(**d) -> APIRouter:
             _sh.rmtree(child, ignore_errors=True) if child.is_dir() else child.unlink(missing_ok=True)
         _sh.copytree(seed, path, dirs_exist_ok=True)
         if (path / ".git").is_dir():
-            _sp.run(["git", "-C", str(path), "add", "-A"], check=False, capture_output=True)
-            _sp.run(["git", "-C", str(path), "-c", "user.name=vexa-platform", "-c", "user.email=platform@vexa.local",
-                     "commit", "-m", f"reseed {target}"], check=False, capture_output=True)
+            run_git(path, "add", "-A")
+            run_git(path, "-c", "user.name=vexa-platform", "-c", "user.email=platform@vexa.local",
+                    "commit", "-m", f"reseed {target}")
         return {"target": target, "reset": True}
 
     return router

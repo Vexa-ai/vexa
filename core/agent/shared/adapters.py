@@ -19,7 +19,6 @@ import json
 import logging
 import os
 import re
-import subprocess
 import time
 import urllib.error
 import urllib.request
@@ -28,7 +27,8 @@ from typing import Protocol
 
 import yaml
 
-from shared.gitenv import pinned_git_env, scrubbed_git_env
+from shared.gitenv import transport_env
+from shared.gitexec import run_git
 from shared.models import WorkspaceWrite
 from shared.ports import IdentityPort, RuntimePort, SchedulerPort, StreamReader, VcsPort, WorkspacePort
 from shared.token_destination import embed_token
@@ -60,21 +60,16 @@ def parse_entity(text: str) -> tuple[dict, str]:
 def _git(cwd: Path, *args: str, token: str | None = None, url: str | None = None) -> str:
     """Run a git command in ``cwd``; return trimmed stdout. ``token`` (if given) is passed via env
     for the duration of the call only and is NEVER placed on the argv (which can leak via ps).
-    Always runs on a scrubbed env — a hook-exported GIT_DIR must never re-point the workspace op
-    at the hook's repo (see shared/gitenv.py).
+    Always runs through ``shared.gitexec``: nothing the repository configures runs, and a
+    hook-exported GIT_DIR can never re-point the workspace op at the hook's repo.
 
     ``url`` marks this call as a NETWORK op against that remote and pins git's transport allow-list
     to what the URL legitimately needs, so a remote reference can never reach a transport that runs a
     command (``ext::``) or reads this host's disk (``file://``)."""
-    overrides = {"GIT_ASKPASS": "true"} if token is not None else {}
-    env = pinned_git_env(url, **overrides) if url is not None else scrubbed_git_env(**overrides)
-    proc = subprocess.run(
-        ["git", *args],
-        cwd=str(cwd),
-        env=env,
-        capture_output=True,
-        text=True,
-    )
+    env = {"GIT_ASKPASS": "true"} if token is not None else {}
+    if url is not None:
+        env.update(transport_env(url))
+    proc = run_git(cwd, *args, env=env)
     if proc.returncode != 0:
         raise RuntimeError(f"git {' '.join(args)} failed: {proc.stderr.strip()}")
     return proc.stdout.strip()
@@ -197,10 +192,8 @@ class RealGitWorkspace(WorkspacePort):
             return
         # Local clone (file path or file:// URL) — derived from parent git_clone_init. The transport
         # allow-list is pinned to what this reference needs; `--` keeps a leading `-` a repository.
-        subprocess.run(
-            ["git", "clone", "--", repo_url, str(self.work_dir)],
-            capture_output=True, text=True, check=True, env=pinned_git_env(repo_url),
-        )
+        run_git(None, "clone", "--", repo_url, str(self.work_dir), env=transport_env(repo_url),
+                check=True)
         name, email = self._identity
         _git(self.work_dir, "config", "user.name", name)
         _git(self.work_dir, "config", "user.email", email)

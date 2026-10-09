@@ -11,10 +11,9 @@ from __future__ import annotations
 
 import os
 import shutil
-import subprocess
 from pathlib import Path
 
-from shared.gitenv import scrubbed_git_env
+from shared.gitexec import run_git
 
 # A folder may serve as a workspace seed only if it carries these — the minimum a workspace needs to be
 # governable. CLAUDE.md is the auto-loaded root memory/contract every turn reads; without it the
@@ -122,11 +121,10 @@ def seed_workspace(ws: Path, seed_dir: "Path | None") -> Path:
         # `kg/entities/` must EXIST and be empty: the agent writes entities into it, and a missing
         # directory is a different failure from an empty one.
         (ws / "kg" / "entities").mkdir(parents=True, exist_ok=True)
-    # scrubbed_git_env: a hook-exported GIT_DIR would otherwise re-point init/add/commit at the
-    # HOOK's repo (with `ws` as its work tree) and rewrite that repo's branch — see shared/gitenv.py.
-    env = scrubbed_git_env()
+    # run_git: nothing the repository could name runs, and a hook-exported GIT_DIR cannot re-point
+    # init/add/commit at another repo — see shared/gitexec.py.
     for args in (("init", "-q"), ("config", "user.email", "agent@vexa"), ("config", "user.name", "vexa-agent")):
-        subprocess.run(["git", *args], cwd=str(ws), check=True, capture_output=True, text=True, env=env)
-    subprocess.run(["git", "add", "-A"], cwd=str(ws), check=True, capture_output=True, text=True, env=env)
-    subprocess.run(["git", "commit", "-q", "-m", "seed", "--allow-empty"], cwd=str(ws), check=True, capture_output=True, text=True, env=env)
+        run_git(ws, *args, check=True)
+    run_git(ws, "add", "-A", check=True)
+    run_git(ws, "commit", "-q", "-m", "seed", "--allow-empty", check=True)
     return ws

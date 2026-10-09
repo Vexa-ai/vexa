@@ -25,9 +25,10 @@ from __future__ import annotations
 import datetime as _dt
 import os
 import re
-import subprocess
 import unicodedata
 from pathlib import Path
+
+from workspaces.shared.gitexec import run_git
 
 # The five kinds decision 24 names. A kind outside this set is refused rather than guessed into a new
 # directory: a directory nothing indexes is a page nobody will ever find again.
@@ -1565,12 +1566,13 @@ def commit_entity(root, paths, *, subject_path: str, created: bool,
     root = Path(root)
     if not (root / ".git").is_dir():
         return None
-    env = {**os.environ, "GIT_COMMITTER_NAME": "Vexa", "GIT_COMMITTER_EMAIL": "platform@vexa.ai"}
+    env = {"GIT_COMMITTER_NAME": "Vexa", "GIT_COMMITTER_EMAIL": "platform@vexa.ai"}
     if author:
         env["GIT_AUTHOR_NAME"], env["GIT_AUTHOR_EMAIL"] = author
 
     def git(*args):
-        return subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, env=env)
+        # workspaces.shared.gitexec: nothing the workspace's repository configures runs here
+        return run_git(root, *args, env=env)
 
     paths = [str(p) for p in paths if p]
     if not paths:

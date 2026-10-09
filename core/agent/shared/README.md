@@ -18,7 +18,8 @@ nothing here starts a server.
 | `governance` | the dormant hard-enforcement hook for workspace entity writes |
 | `token_destination` | where a git token may travel: the one rule clone, pull and push obey |
 | `atomic_json` | the one atomic JSON write: a private temp file beside the target, fsynced, then `os.replace` |
-| `git_redaction` · `gitenv` | the P15 scrubber for git output, and the scrubbed environment every git subprocess runs with |
+| `gitexec` | the one way git runs (`run_git`): nothing a workspace repository configures — hooks, fsmonitor, drivers, helpers, includes — runs in this process; vendored verbatim into `llm/` and `core/workspaces/shared/` (parity fact `git-exec`), and `tests/test_git_single_path.py` fails on any other git subprocess |
+| `git_redaction` · `gitenv` | the P15 scrubber for git output; the repo-discovery scrub and the transports a network op may use (`transport_env`) |
 | `host_claude` | where this container reads the host's Claude subscription credential, resolved at read time |
 | `timeline` | the worker's `now / last / next` block, from flows-api's read-only timeline route |
 | `proposals` | the person's short list: what is worth doing now, written by whichever agent saw it |

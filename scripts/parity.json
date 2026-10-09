@@ -110,6 +110,26 @@
       ]
     },
     {
+      "id": "git-exec",
+      "fact": "how this domain runs git inside a workspace repository",
+      "kind": "file-bytes",
+      "enforced": true,
+      "canonical": "core/agent/shared/gitexec.py",
+      "how_to_agree": "edit core/agent/shared/gitexec.py and copy it VERBATIM over core/agent/llm/gitexec.py and core/workspaces/shared/gitexec.py",
+      "why": "agent-api and the worker run git in repositories whose files more than one party writes, and the rules that keep a repository from choosing what git runs (pinned command-line config, scrubbed environment, the allow-list the repository's own config is reduced to, the shape checks) must be the same everywhere. The worker's llm package imports no product code and the workspace primitives import nothing from core/agent, so the module is vendored into both and byte-compared; core/agent/tests/test_git_single_path.py fails on any git subprocess in core/agent or core/workspaces that does not go through it.",
+      "sites": [
+        {
+          "path": "core/agent/shared/gitexec.py"
+        },
+        {
+          "path": "core/agent/llm/gitexec.py"
+        },
+        {
+          "path": "core/workspaces/shared/gitexec.py"
+        }
+      ]
+    },
+    {
       "id": "credential-broker-assertion-fields",
       "fact": "the claims a credential-broker.v1 assertion binds, in the Python signer, the TypeScript signer and the contract's validator",
       "kind": "set",

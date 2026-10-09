@@ -33,6 +33,7 @@ import urllib.request
 from pathlib import Path
 from typing import Optional
 
+from shared.gitexec import run_git
 from shared.marks import UNWRITTEN_MARK
 
 logger = logging.getLogger("agent_api.global_layer")
@@ -159,9 +160,10 @@ def state(root: str | Path) -> dict:
     }
 
 
-def _git(path: Path, *args: str, check: bool = False) -> subprocess.CompletedProcess:
-    return subprocess.run(["git", "-C", str(path), *args], check=check,
-                          capture_output=True, text=True)
+def _git(path: Path, *args: str, check: bool = False, env: Optional[dict] = None) -> subprocess.CompletedProcess:
+    # Through shared.gitexec: `_global` is mounted into every worker, so nothing its repository
+    # configures may run in this process.
+    return run_git(path, *args, check=check, env=env)
 
 
 def _commit_count(path: Path) -> int:
