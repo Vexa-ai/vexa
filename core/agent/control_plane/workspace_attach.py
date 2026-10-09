@@ -30,8 +30,8 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from shared.git_redaction import redact
-from control_plane.repo_ref import RepoRefError, assert_not_credential, assert_public_host, valid_ref
-from shared.gitenv import pinned_git_env, scrubbed_git_env
+from control_plane.repo_ref import assert_not_credential, assert_public_host, valid_ref
+from shared.gitenv import pinned_git_env
 from shared.seeding import resolve_seed_dir, seed_workspace, validate_seed
 from shared.token_destination import embed_token
 
@@ -72,7 +72,9 @@ class SwapResult:
     swapped: bool          # False == requested repo was already the active workspace (no-op)
     cloned: bool           # True == a fresh git clone happened (vs restoring a parked tree)
     parked_slug: Optional[str]  # the slug the previously-active workspace was parked under
-    nested: bool = False   # True == the clone wasn't a compliant workspace, so it was nested under kg/
+    # Always False: a clone is used as it is, never nested. Kept only because the workspace routes
+    # still return the field.
+    nested: bool = False
 
 
 @dataclass(frozen=True)
@@ -98,7 +100,7 @@ class ActiveResult:
     slug: str
     changed: bool             # False == already in the desired state (idempotent no-op)
     cloned: bool = False      # True == a fresh git clone happened (activate of a never-seen repo)
-    nested: bool = False
+    nested: bool = False      # always False — see SwapResult.nested
 
 
 def _slug_dir(root: Path, subject: str, state: dict, slug: str) -> Path:
@@ -121,13 +123,6 @@ def workspace_slot_dir(root: str | Path, subject: str, slug: str) -> Path:
     rootp = Path(root)
     _safe_subject_dir(rootp, subject)
     return _slug_dir(rootp, subject, _load_state(_store(rootp, subject)), slug)
-
-
-def _repo_name(repo_url: str) -> str:
-    """The readable tail of a repo URL — used as the ``kg/<name>/`` subdir when a non-compliant clone is
-    nested inside a fresh template workspace."""
-    tail = re.sub(r"\.git$", "", repo_url.strip().rstrip("/")).rsplit("/", 1)[-1]
-    return re.sub(r"[^A-Za-z0-9._-]+", "-", tail).strip("-") or "repo"
 
 
 def _slug(repo_url: str) -> str:
@@ -361,7 +356,7 @@ def swap_workspace(
     # ── PHASE 1: build the target tree OUT OF PLACE — the live workspace is NOT touched yet, so a clone
     # failure (private repo, bad token, network) raises here leaving everything exactly as it was. ──────
     parked_target = store / target_slug
-    cloned = nested = False
+    cloned = False
     staged: Path                       # the ready-to-activate tree we'll move into active_dir
     restore = False                    # True == staged is the parked slot itself (swap-back; move, don't rebuild)
     if not fresh_seed and parked_target.exists():
@@ -375,7 +370,7 @@ def swap_workspace(
         staged = store / f".staging-{target_slug}"
         if staged.exists():
             shutil.rmtree(staged)
-        cloned, nested = _build_attached(staged, repo_url, ref, token, clone)  # may raise CloneError (safe)
+        cloned = _build_attached(staged, repo_url, ref, token, clone)  # may raise CloneError (safe)
     else:
         raise KeyError(target_slug)    # asked to restore a slot that isn't parked and has no repo to clone
 
@@ -408,7 +403,7 @@ def swap_workspace(
     shutil.move(str(staged), str(active_dir))
     if not restore:
         slot = state["slots"].get(target_slug, {})   # preserve a display name across a content rebuild
-        slot.update({"repo": repo_url, "ref": ref, "nested": nested})
+        slot.update({"repo": repo_url, "ref": ref})
         state["slots"][target_slug] = slot
 
     # Flat model: a swap replaces the SEED-SLOT occupant. In the active set, the new occupant takes the old
@@ -423,7 +418,7 @@ def swap_workspace(
     _save_state(store, state)
     slot = state["slots"].get(target_slug, {})
     return SwapResult(subject, target_slug, slot.get("repo"), slot.get("ref"),
-                      swapped=True, cloned=cloned, parked_slug=parked_slug, nested=bool(slot.get("nested")))
+                      swapped=True, cloned=cloned, parked_slug=parked_slug)
 
 
 # ── the additive mount set (WP-A2.1) — activate ADDS to the set without parking the others ──────────
@@ -703,13 +698,13 @@ def activate_workspace(
     # Materialize the slot tree OUT OF PLACE if it isn't already parked — a clone failure raises here
     # leaving the active set untouched (mirrors swap's phase-1 discipline).
     slot_dir = store / target_slug
-    cloned = nested = False
+    cloned = False
     if not slot_dir.exists():
         if repo_url:
             staged = store / f".staging-{target_slug}"
             if staged.exists():
                 shutil.rmtree(staged)
-            cloned, nested = _build_attached(staged, repo_url, ref, token, clone)  # may raise CloneError (safe)
+            cloned = _build_attached(staged, repo_url, ref, token, clone)  # may raise CloneError (safe)
             slot_dir.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(staged), str(slot_dir))
         else:
@@ -717,7 +712,7 @@ def activate_workspace(
 
     slot = state["slots"].get(target_slug, {})
     if repo_url is not None:
-        slot.update({"repo": repo_url, "ref": ref, "nested": nested})
+        slot.update({"repo": repo_url, "ref": ref})
     else:
         slot.setdefault("repo", None)
         slot.setdefault("ref", None)
@@ -726,7 +721,7 @@ def activate_workspace(
         {**state, "active_set": [*state.get("active_set", []), target_slug]}
     )
     _save_state(store, state)
-    return ActiveResult(subject, target_slug, changed=True, cloned=cloned, nested=nested)
+    return ActiveResult(subject, target_slug, changed=True, cloned=cloned)
 
 
 NEW_SLUG_PREFIX = "workspace"        # fresh blank workspaces get slugs workspace-1, workspace-2, …
@@ -818,25 +813,16 @@ def deactivate_workspace(root: str | Path, subject: str, slug: str) -> ActiveRes
     return ActiveResult(subject, slug, changed=True)
 
 
-def _build_attached(dest: Path, repo_url: str, ref: str, token: Optional[str], clone: CloneFn) -> tuple[bool, bool]:
-    """Clone a repository unchanged at the workspace root, preserving its Git metadata."""
+def _build_attached(dest: Path, repo_url: str, ref: str, token: Optional[str], clone: CloneFn) -> bool:
+    """Clone a repository unchanged at the workspace root, preserving its Git metadata. True: a fresh
+    clone happened."""
     incoming = dest.parent / f"{dest.name}.clone"
     if incoming.exists():
         shutil.rmtree(incoming)
     incoming.parent.mkdir(parents=True, exist_ok=True)
     clone(repo_url, ref, incoming, token)
     shutil.move(str(incoming), str(dest))
-    return True, False
-
-
-def _git_commit_all(ws: Path, message: str) -> None:
-    """Stage + commit everything in the workspace repo (the nested-import commit). Best-effort no-op on
-    an empty diff. Scrubbed env — a hook-exported GIT_DIR must never make this commit land on the
-    hook's repo (see shared/gitenv.py)."""
-    env = scrubbed_git_env()
-    subprocess.run(["git", "-C", str(ws), "add", "-A"], check=True, capture_output=True, text=True, env=env)
-    subprocess.run(["git", "-C", str(ws), "commit", "-q", "-m", message, "--allow-empty"],
-                   check=True, capture_output=True, text=True, env=env)
+    return True
 
 
 def _reseed(active_dir: Path) -> None:
@@ -1056,14 +1042,14 @@ def attach_repo_at(
     if state.get("active") == target_slug and live:
         slot = state["slots"].get(target_slug, {})
         return SwapResult(active_dir.name, target_slug, slot.get("repo"), slot.get("ref"),
-                          swapped=False, cloned=False, parked_slug=None, nested=bool(slot.get("nested")))
+                          swapped=False, cloned=False, parked_slug=None)
     if target_slug == SEED_SLOT and state.get("active") is None and live:
         return SwapResult(active_dir.name, SEED_SLOT, None, None,
                           swapped=False, cloned=False, parked_slug=None)
 
     # ── PHASE 1 — build out of place (a failure here leaves everything exactly as it was) ──────────
     parked_target = store / target_slug
-    cloned = nested = False
+    cloned = False
     restore = False
     if parked_target.exists():
         staged, restore = parked_target, True
@@ -1076,7 +1062,7 @@ def attach_repo_at(
         staged = store / f".staging-{target_slug}"
         if staged.exists():
             shutil.rmtree(staged)
-        cloned, nested = _build_attached(staged, repo_url, ref, token, clone)  # may raise CloneError
+        cloned = _build_attached(staged, repo_url, ref, token, clone)  # may raise CloneError
     else:
         raise KeyError(target_slug)
 
@@ -1097,13 +1083,13 @@ def attach_repo_at(
 
     if not restore:
         slot = state["slots"].get(target_slug, {})
-        slot.update({"repo": repo_url, "ref": ref, "nested": nested})
+        slot.update({"repo": repo_url, "ref": ref})
         state["slots"][target_slug] = slot
     state["active"] = target_slug
     _save_state(store, state)
     slot = state["slots"].get(target_slug, {})
     return SwapResult(active_dir.name, target_slug, slot.get("repo"), slot.get("ref"),
-                      swapped=True, cloned=cloned, parked_slug=parked_slug, nested=bool(slot.get("nested")))
+                      swapped=True, cloned=cloned, parked_slug=parked_slug)
 
 
 def attach_shared_workspace(

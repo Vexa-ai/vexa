@@ -154,6 +154,9 @@ def test_plain_repo_becomes_an_independent_root_with_git_intact(tmp_path):
     result = activate_workspace(root, "u1", origin, "main")
     ws = workspace_slot_dir(root, "u1", result.slug)
     assert result.cloned and not result.nested
+    # a clone is used as it is, so the slot record carries no nesting flag any more
+    from control_plane.workspace_attach import attached_workspaces
+    assert "nested" not in attached_workspaces(root, "u1")["slots"][result.slug]
     assert (ws / "MARK").read_text() == "RAW"
     assert (ws / ".git").is_dir()
     assert not (ws / "CLAUDE.md").exists()
