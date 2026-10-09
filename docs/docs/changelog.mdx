@@ -6,7 +6,7 @@ description: "Release notes and what changes between major versions."
 {/* docs-reflects: 0.12.28 — the released version these docs describe. CI (gate:docs-version) keeps
     this equal to Chart.yaml appVersion; the release version-bump updates it. */}
 
-> 📌 **These docs reflect Vexa `v0.12.28`** — the installation repair release candidate. Older self-hosts
+> 📌 **These docs reflect Vexa `v0.12.28`** — the installation repair release. Older self-hosts
 > should read against their pinned version.
 
 The authoritative, per-release changelog is on **GitHub Releases**:
@@ -1162,6 +1162,14 @@ fix(gates): every gate failure now prints its diagnostic — an empty stdout Buf
   flows-api no longer refuse to boot on a fresh install. `make lite` gives each front door up to two
   minutes to answer, so the terminal's first-boot restart no longer fails the first run.
   See [Deployment](/deployment).
+
+- **Zoom: complete transcripts on busy calls (#1781).** Every Zoom turn is captured in full, even
+  when the bot's page is under heavy load, and each turn is finalized from all of its audio.
+
+- **Zoom: precise timing (#1781, #1778).** Segments are timed from the captured audio on one shared
+  clock. Short pauses no longer split a turn, and long turns break at a natural pause.
+
+- **Live transcripts: a steadier live view (#1778).** The live tail always shows the latest draft.
 
 ## Versioning
 
