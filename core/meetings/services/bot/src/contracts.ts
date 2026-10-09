@@ -135,11 +135,22 @@ export function parseAct(msg: unknown): Act | null {
 
 export type Source = 'glow-bound' | 'provisional-cluster-id' | 'caption' | 'merged' | 'chat';
 
+/** What KIND of participant `speaker` names. Mirrors transcript.v1 `#/$defs/SpeakerKind`.
+ *  `room` is EVIDENCE (a room-device pattern matched the display name); `person` is a DEFAULT
+ *  (a resolved name with no room marker), never a confirmation; `unknown` means there was no name
+ *  to classify. See `room-identity.ts` and contracts/room-identity/README.md. */
+export type SpeakerKind = 'room' | 'person' | 'unknown';
+
 /** One speaker-attributed utterance. Mirrors transcript.v1 `#/$defs/TranscriptSegment`. */
 export interface TranscriptSegment {
   segment_id: string;
   speaker: string;
   speaker_key?: string;
+  /** Additive (transcript.v1, optional): is this speaker a meeting-room device or a person?
+   *  Attribution is UNCHANGED — a room is still one speaker under its own display name; this
+   *  field is how a consumer can tell that the name belongs to a device and that the people
+   *  inside that room are not separated. */
+  speaker_kind?: SpeakerKind;
   text: string;
   start: number;
   end: number;

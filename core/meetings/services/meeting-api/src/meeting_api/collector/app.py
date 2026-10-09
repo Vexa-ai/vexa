@@ -42,6 +42,7 @@ from .meeting_link import parse_meeting_url
 from .obs import TraceMiddleware as _DefaultTraceMiddleware
 from .obs import log_event as _default_log_event
 from .ports import RedisBus, TranscriptStore
+from .room_identity import speaker_kind
 
 
 # The two INTENT states the USER owns (pre-FSM). The user dropdown is the source of truth for
@@ -889,14 +890,29 @@ def build_router(
                 "name": entry.get("name") or None,
                 "email": email if isinstance(email, str) and email else None,
                 "source": "invite",
+                # A calendar RESOURCE (a bookable room) rides the ATTENDEE lines exactly like a
+                # human invitee, so the same name test applies. See the `kind` note below.
+                "kind": speaker_kind(entry.get("name")),
             }
             # PARTSTAT rides through as the invitee's own answer; absent when the feed carried none.
             partstat = entry.get("partstat")
             if isinstance(partstat, str) and partstat.strip():
                 row["response_status"] = partstat.strip().lower()
             participants.append(row)
+        # `kind` says WHAT this row names: a meeting-ROOM device, a person, or nothing we could
+        # classify. A room system mixes its microphones inside the hardware, so it joins as ONE
+        # participant under one display name and everyone in that room is attributed to it — this
+        # route said "Steve Jobs" about a Dutch engineer because that is what somebody typed into
+        # the kit. `room` is EVIDENCE (a pattern in contracts/room-identity/ matched the name);
+        # `person` is a DEFAULT — "no room marker", never "confirmed human", so a room named after
+        # a human still reads `person`; `unknown` means there was no name to classify. It changes
+        # nothing about who is listed: a room is still ONE row, and the people inside it are NOT
+        # separated and do not appear.
         for name in found.get("speakers") or []:
-            participants.append({"name": name, "email": None, "source": "speaker"})
+            participants.append({
+                "name": name, "email": None, "source": "speaker",
+                "kind": speaker_kind(name),
+            })
 
         sources = sorted({p["source"] for p in participants})
         log_event(
