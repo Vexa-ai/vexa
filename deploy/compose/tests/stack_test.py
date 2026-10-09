@@ -243,7 +243,8 @@ def test_05_recording_to_storage(stack):
 
     # The bot authenticates uploads with a MeetingToken (HS256, signed with ADMIN_TOKEN — the admin
     # secret meeting-api mints AND verifies with, like main; INTERNAL_API_SECRET is a different concern).
-    token = mint_meeting_token(meeting_id, user_id, platform, native_id, secret=stack.admin_token)
+    token = mint_meeting_token(meeting_id, user_id, platform, native_id, secret=stack.admin_token,
+                               session_uid=session_uid)
 
     chunk = _canonical_wav(b"gate-compose-recording-chunk-pcm-payload")
     fields = {

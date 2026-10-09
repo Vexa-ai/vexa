@@ -10,7 +10,6 @@ module when docker is absent (the green-or-skip contract the gate relies on).
 """
 from __future__ import annotations
 
-import base64
 import hashlib
 import hmac
 import json
@@ -267,15 +266,11 @@ class Stack:
         """Append ``payload`` to ``transcription_segments`` as the meeting's own bot session would:
         signed with a MeetingToken for ``meeting_id`` (``auth`` = its header.payload, ``sig`` =
         HMAC-SHA256 of the payload keyed with it). The collector drops anything else."""
-        def b64(raw: bytes) -> str:
-            return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
-        now = int(time.time())
-        head = b64(json.dumps({"alg": "HS256", "typ": "JWT"}, separators=(",", ":")).encode())
-        claims = b64(json.dumps({"meeting_id": int(meeting_id), "scope": "transcribe:write", "iss": "meeting-api",
-                                 "aud": "transcription-collector", "iat": now, "exp": now + 3600},
-                                separators=(",", ":")).encode())
-        token = f"{head}.{claims}." + b64(hmac.new(self.admin_token.encode(), f"{head}.{claims}".encode(),
-                                                   hashlib.sha256).digest())
+        from _token import mint_meeting_token
+
+        token = mint_meeting_token(int(meeting_id), 0, "google_meet", "", secret=self.admin_token,
+                                   session_uid=f"segment-writer-{meeting_id}")
+        head, claims, _sig = token.split(".")
         sig = hmac.new(token.encode(), payload.encode(), hashlib.sha256).hexdigest()
         return self.redis_cli("XADD", "transcription_segments", "*", "payload", payload,
                               "auth", f"{head}.{claims}", "sig", sig)

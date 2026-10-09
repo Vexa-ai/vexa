@@ -4,7 +4,7 @@ The recordings upload (`POST /internal/recordings/upload`) authenticates with a 
 HS256 JWS signed with the meeting-api's `token_secret` (== ADMIN_TOKEN in the compose stack). We
 mint one here so the always-on recording proof can drive the bot's real upload path without
 spawning a bot. Kept in lock-step with the shipped minter (same claims, same signing; a
-`session_uid` binds the token to one bot session).
+`session_uid` binds the token to one bot session, and the shipped minter requires one).
 """
 from __future__ import annotations
 
@@ -20,7 +20,9 @@ def _b64url(data: bytes) -> str:
 
 
 def mint_meeting_token(meeting_id: int, user_id: int, platform: str, native_meeting_id: str,
-                       *, secret: str, ttl_seconds: int = 7200, session_uid: str | None = None) -> str:
+                       *, secret: str, session_uid: str, ttl_seconds: int = 7200) -> str:
+    if not session_uid:
+        raise ValueError("a MeetingToken is bound to a session; session_uid is required")
     now = int(time.time())
     header = {"alg": "HS256", "typ": "JWT"}
     payload = {
@@ -28,6 +30,7 @@ def mint_meeting_token(meeting_id: int, user_id: int, platform: str, native_meet
         "user_id": user_id,
         "platform": platform,
         "native_meeting_id": native_meeting_id,
+        "session_uid": session_uid,
         "scope": "transcribe:write",
         "iss": "meeting-api",
         "aud": "transcription-collector",
@@ -35,8 +38,6 @@ def mint_meeting_token(meeting_id: int, user_id: int, platform: str, native_meet
         "exp": now + ttl_seconds,
         "jti": str(uuid.uuid4()),
     }
-    if session_uid:
-        payload["session_uid"] = session_uid
     header_b64 = _b64url(json.dumps(header, separators=(",", ":")).encode())
     payload_b64 = _b64url(json.dumps(payload, separators=(",", ":")).encode())
     signing_input = f"{header_b64}.{payload_b64}".encode("ascii")
