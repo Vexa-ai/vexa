@@ -23,6 +23,7 @@ from control_plane import workspace_import as imports
 from control_plane import workspace_credentials as wcreds
 from control_plane import workspace_ids as ids_mod
 from control_plane import workspace_membership as membership_mod
+from control_plane import workspace_routines as workspace_routines_mod
 from control_plane.api_shared import (
     ArchiveBody, AssetFetchBody, ClaimVerdictsBody, ClaimsProposeBody, EntityUpsertBody,
     GitTokenBody, InviteAcceptBody,
@@ -32,7 +33,7 @@ from control_plane.api_shared import (
     WorkspaceInviteBody, WorkspaceMembershipBody, WorkspaceImportBody,
     WorkspacePullBody, WorkspacePurposeBody, WorkspacePushBody, WorkspaceRemoveBody,
     WorkspaceRenameBody, WorkspaceSwapBody, WorkspaceWriteBody, _upload_filename, logger,
-    require_in_ceiling, write_slug)
+    require_in_ceiling, unwatched_worker, write_slug)
 from control_plane.workspace_attach import (
     CloneError, activate_workspace, active_workspaces, attach_shared_workspace, bind_repository_credential,
     attached_workspaces, create_shared_workspace_dir, create_workspace,
@@ -404,7 +405,13 @@ def build(**d) -> APIRouter:
             _sp.run(["git", "-C", str(target), "add", rel], check=False, capture_output=True)
             _sp.run(["git", "-C", str(target), "-c", "user.name=vexa-terminal", "-c", "user.email=terminal@vexa.local",
                      "commit", "-m", f"edit {rel} (terminal page editor)"], check=False, capture_output=True)
-        return {"path": rel, "written": True}
+        # A ROUTINE A PERSON WROTE IS A ROUTINE THEY STAND BEHIND (`workspace_routines.PENDING`). A
+        # worker dispatched without a person writes one that waits for confirmation instead.
+        routine = workspace_routines_mod.is_routine_file(wsr.root, str(subject), f)
+        if routine and not unwatched_worker(request):
+            workspace_routines_mod.approve_routine_file(str(subject), routine, workspaces_dir=wsr.root)
+        return {"path": rel, "written": True, **({"routine_pending_confirmation": True}
+                                                  if routine and unwatched_worker(request) else {})}
 
     # ── REMOVING AND MOVING A PAGE (Vexa-ai/vexa#1621) ───────────────────────────────────────────
     #

@@ -1042,6 +1042,16 @@ def delegation_allows(request: "Request", slug: Optional[str]) -> bool:
     return target in {w.strip() for w in ceiling.split(",") if w.strip()}
 
 
+def unwatched_worker(request: "Request") -> bool:
+    """Is the caller a worker dispatched without a person in the loop? A delegated identity
+    (any `x-user-delegation-*`/`x-user-regime` on the signed identity) whose regime is not `human`.
+    A person's own credential and the internal tier carry none of these."""
+    regime = (request.headers.get("x-user-regime") or "").strip().lower()
+    delegated = bool(regime) or any(h in request.headers for h in (
+        "x-user-delegation-workspaces", "x-user-delegation-target"))
+    return delegated and regime != "human"
+
+
 def require_in_ceiling(request: "Request", *slugs: Optional[str]) -> None:
     """Refuse (403) any named workspace outside a delegated dispatch's ceiling — the one check every
     route that names a workspace in its path or body runs before it acts, reads aside."""

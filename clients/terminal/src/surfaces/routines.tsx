@@ -11,7 +11,7 @@ import { Icon } from "../ui-kit";
 import { usePreviewPinTab } from "./previewPinTab";
 // Data-access lives in its own SoC module (scoped to the authed user — no client subject, P20),
 // proven in isolation by routinesApi.test.ts.
-import { listRoutines, deleteRoutine, setRoutineEnabled, type Routine } from "./routinesApi";
+import { listRoutines, deleteRoutine, setRoutineEnabled, confirmRoutine, type Routine } from "./routinesApi";
 import { presentError } from "./apiClient";
 
 const BOARD: TabDescriptor = { id: "board:routines", title: "Routines", kind: "routines", params: {}, context: null };
@@ -52,6 +52,12 @@ function RoutinesBoard() {
       setRoutines((rs) => rs.map((r) => (r.id === routine.id && r.enabled === nextEnabled ? { ...r, enabled: routine.enabled } : r)));
     }
   };
+  const confirm = async (routine: Routine) => {
+    try {
+      await confirmRoutine(routine.name);  // throws on a backend error (fail-loud)
+      setRoutines((rs) => rs.map((r) => (r.id === routine.id ? { ...r, pending_confirmation: false } : r)));
+    } catch (e: unknown) { setError(presentError(e).headline); }
+  };
   const patch = (id: string, k: "name" | "cron", v: string) => setRoutines((rs) => rs.map((r) => (r.id === id ? { ...r, [k]: v } : r))); // local card draft
 
   const sw = (on: boolean): CSSProperties => ({ width: 32, height: 18, borderRadius: 10, background: on ? "var(--green)" : "var(--panel2)", position: "relative", cursor: "pointer", flex: "none", transition: "background .15s" });
@@ -81,6 +87,12 @@ function RoutinesBoard() {
                 : <span style={{ fontFamily: "var(--mono)", fontSize: 11.5, borderRadius: 5, padding: "1px 7px", background: "var(--panel2)", color: "var(--accent)" }}>{r.cron}</span>}
             </div>
             {r.plan_summary && <div style={{ fontSize: 12.5, color: "var(--t2)", marginTop: 9, lineHeight: 1.5 }}>{r.plan_summary}</div>}
+            {r.pending_confirmation && (
+              <div role="status" style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10, fontSize: 12.5, color: "var(--t2)" }}>
+                <span style={{ flex: 1 }}>Waiting for you — an agent wrote this routine; it will not run until you confirm it.</span>
+                <button onClick={() => void confirm(r)} style={{ border: "1px solid var(--line2)", borderRadius: 6, background: "var(--panel2)", color: "var(--t1)", fontSize: 12.5, padding: "3px 10px", cursor: "pointer" }}>Confirm</button>
+              </div>
+            )}
           </div>
         ))}
         {routines.length === 0 && <div style={{ color: "var(--t3)", fontSize: 13, padding: "20px 0" }}>No routines yet — open Chat and try <code style={{ fontFamily: "var(--mono)", color: "var(--accent)" }}>/routine</code>.</div>}

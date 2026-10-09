@@ -950,6 +950,25 @@ def build(**d) -> APIRouter:
             workspaces_dir=wsr.root,
         )
         return {"routines": cards}
+    @router.post("/api/routines/{name}/confirm")
+    def confirm_routine(name: str, request: Request):
+        """A PERSON STANDS BEHIND THIS ROUTINE, exactly as its file reads now — the act that arms a
+        routine shown as `pending_confirmation` (`workspace_routines.PENDING`): one written by a
+        worker dispatched without a person, or straight onto the workspace by an agent."""
+        require_person(request)
+        if scheduler is None or not invocations_url:
+            raise HTTPException(status_code=501, detail="scheduler not wired")
+        subject = subject_of(request)
+        try:
+            if workspace_routines_mod.approve_routine_file(subject, name, workspaces_dir=wsr.root) is None:
+                raise HTTPException(status_code=404, detail="unknown routine")
+            result = workspace_routines_mod.reconcile_workspace_routines(
+                subject, scheduler=scheduler, invocations_url=invocations_url,
+                workspaces_dir=wsr.root, signing_secret=_internal_secret())
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        return {"ok": True, "name": name, "confirmed": True, "reconcile": result.__dict__}
+
     @router.patch("/api/routines/{name}/enabled")
     def set_routine_enabled(name: str, body: RoutineEnabledPatch, request: Request):
         require_person(request)
@@ -957,12 +976,19 @@ def build(**d) -> APIRouter:
             raise HTTPException(status_code=501, detail="scheduler not wired")
         subject = subject_of(request)
         try:
+            # The toggle rewrites one line of the file. It carries an approval across that rewrite;
+            # it does not grant one — a pending routine is armed by `confirm`, not by a switch.
+            path = workspace_routines_mod._safe_routine_path(wsr.root, subject, name)
+            approved = path.is_file() and workspace_routines_mod.routine_file_approved(
+                path, subject=subject, workspaces_dir=wsr.root)
             workspace_routines_mod.set_routine_file_enabled(
                 subject,
                 name,
                 enabled=body.enabled,
                 workspaces_dir=wsr.root,
             )
+            if approved:
+                workspace_routines_mod.approve_routine_file(subject, name, workspaces_dir=wsr.root)
             result = workspace_routines_mod.reconcile_workspace_routines(
                 subject,
                 scheduler=scheduler,

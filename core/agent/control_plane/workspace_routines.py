@@ -28,6 +28,25 @@ log = logging.getLogger(__name__)
 ROUTINES_DIR = "routines"
 WORKSPACE_ROUTINE_SOURCE = "workspace-routine"
 
+# ── WHO WROTE IT: a routine is armed only from content a person stands behind ─────────────────────
+#
+# A routine file arms an unwatched agent on a clock, and a routine file is just a file in a workspace
+# an unwatched agent may itself be writing (a scheduled run mounts its person's workspace read-write).
+# A write on disk carries no identity, so the reconciler cannot ask who made it. It asks instead
+# whether a PERSON has stood behind these exact bytes: the person's own write through this service
+# (`PUT /api/workspace/file` from their credential or a worker in the human regime), their explicit
+# confirmation (`POST /api/routines/{name}/confirm`), or — once, at the upgrade — the files already
+# there. Anything else, an unwatched run's write above all, is PENDING: shown on the Routines surface
+# as `pending_confirmation` and not armed until confirmed.
+#
+# The record of approved bytes (one sha-256 per routine) lives in the store's dot-namespace
+# (`<store-root>/.routines/approvals/<subject>.json`), outside every workspace mount, beside the
+# invite store's `.invites` — no worker can write it.
+STATE_DIR = ".routines"
+APPROVALS_DIR = "approvals"
+APPROVALS_MARKER = "approvals.v1.json"
+PENDING = "pending_confirmation"
+
 _FRONTMATTER = re.compile(r"^\s*---\s*\n(.*?)\n---\s*\n?(.*)$", re.DOTALL)
 _FRONTMATTER_BLOCK = re.compile(r"^(\s*---[^\S\n]*\n)(.*?)(\n---[^\S\n]*(?:\n|$))(.*)\Z", re.DOTALL)
 _ENABLED_LINE = re.compile(
@@ -71,6 +90,7 @@ class ReconcileResult:
     kept: int = 0
     cancelled: int = 0
     skipped: int = 0
+    pending: int = 0
 
 
 @dataclass(frozen=True)
@@ -88,6 +108,91 @@ def routine_id_for_workspace_file(subject: str, name: str) -> str:
     """Stable routine id for ``routines/<name>.md``."""
     digest = hashlib.sha1(f"{subject}|{name}".encode()).hexdigest()[:10]
     return f"rt_{digest}"
+
+
+def _content_hash(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _approvals_file(workspaces_dir: str | Path, subject: str) -> Path:
+    _safe_workspace_dir(workspaces_dir, subject)  # the same subject check every path here makes
+    return Path(workspaces_dir) / STATE_DIR / APPROVALS_DIR / f"{subject}.json"
+
+
+def _read_approvals(workspaces_dir: str | Path, subject: str) -> dict[str, str]:
+    try:
+        data = json.loads(_approvals_file(workspaces_dir, subject).read_text())
+    except (OSError, ValueError):
+        return {}
+    return {str(k): str(v) for k, v in data.items()} if isinstance(data, dict) else {}
+
+
+def _write_approvals(workspaces_dir: str | Path, subject: str, data: dict[str, str]) -> None:
+    path = _approvals_file(workspaces_dir, subject)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, sort_keys=True) + "\n")
+    tmp.replace(path)
+
+
+def _approvals_in_force(workspaces_dir: str | Path) -> bool:
+    """Until the first full pass has recorded the files already there, every file arms as before."""
+    return (Path(workspaces_dir) / STATE_DIR / APPROVALS_MARKER).exists()
+
+
+def approve_routine_file(subject: str, name: str, *,
+                         workspaces_dir: str | Path = "/workspaces") -> Optional[str]:
+    """Record that a person stands behind ``routines/<name>.md`` exactly as it is now. Returns the
+    approved content hash, or None when there is no such file."""
+    path = _safe_routine_path(workspaces_dir, subject, name)
+    if not path.is_file():
+        return None
+    digest = _content_hash(path)
+    approvals = _read_approvals(workspaces_dir, subject)
+    if approvals.get(name) != digest:
+        approvals[name] = digest
+        _write_approvals(workspaces_dir, subject, approvals)
+    return digest
+
+
+def routine_file_approved(path: Path, *, subject: str,
+                          workspaces_dir: str | Path = "/workspaces") -> bool:
+    if not _approvals_in_force(workspaces_dir):
+        return True
+    try:
+        return _read_approvals(workspaces_dir, subject).get(path.stem) == _content_hash(path)
+    except OSError:
+        return False
+
+
+def is_routine_file(workspaces_dir: str | Path, subject: str, written: Path) -> Optional[str]:
+    """The routine name when ``written`` is ``<store>/<subject>/routines/<name>.md`` — the files the
+    reconciler reads — else None."""
+    try:
+        routines = (_safe_workspace_dir(workspaces_dir, subject) / ROUTINES_DIR).resolve()
+        resolved = Path(written).resolve()
+    except (OSError, ValueError):
+        return None
+    if resolved.parent != routines or resolved.suffix != ".md":
+        return None
+    return resolved.stem
+
+
+def _record_existing_approvals(workspaces_dir: str | Path) -> None:
+    """The upgrade: the routine files already present were armed before this rule existed, so they
+    are recorded as approved once, and the rule applies from here on."""
+    marker = Path(workspaces_dir) / STATE_DIR / APPROVALS_MARKER
+    if marker.exists():
+        return
+    recorded = 0
+    for subject in scan_workspace_subjects(workspaces_dir):
+        routines_dir = Path(workspaces_dir) / subject / ROUTINES_DIR
+        for path in sorted(routines_dir.glob("*.md")) if routines_dir.is_dir() else []:
+            if approve_routine_file(subject, path.stem, workspaces_dir=workspaces_dir):
+                recorded += 1
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(json.dumps({"recorded": recorded}) + "\n")
+    log.info("routine approvals in force; %d existing routine file(s) recorded as approved", recorded)
 
 
 def _safe_routine_path(workspaces_dir: str | Path, subject: str, name: str) -> Path:
@@ -130,7 +235,8 @@ def _string_value(value: object) -> str:
     return value.strip() if isinstance(value, str) else ""
 
 
-def _routine_card_from_file(path: Path, *, subject: str, job_card: Optional[dict] = None) -> dict:
+def _routine_card_from_file(path: Path, *, subject: str, job_card: Optional[dict] = None,
+                            pending: bool = False) -> dict:
     label = path.as_posix()
     try:
         text = path.read_text()
@@ -163,8 +269,13 @@ def _routine_card_from_file(path: Path, *, subject: str, job_card: Optional[dict
     card.setdefault("next_run", None)
     if not enabled:
         card["status"] = "disabled"
+    elif pending:
+        # Not armed: nobody has confirmed these bytes (see `PENDING` above). The job card a previous
+        # version left behind does not describe what will run.
+        card.update({"status": PENDING, "job_id": None, "next_run": None})
     else:
         card.setdefault("status", None)
+    card["pending_confirmation"] = bool(enabled and pending)
     return card
 
 
@@ -228,7 +339,9 @@ def routine_cards_for_subject(
     for path in sorted(routines_dir.glob("*.md")) if routines_dir.exists() else []:
         rid = routine_id_for_workspace_file(subject, path.stem)
         job_card = job_by_rid.get(rid)
-        cards.append(_routine_card_from_file(path, subject=subject, job_card=job_card))
+        pending = not routine_file_approved(path, subject=subject, workspaces_dir=workspaces_dir)
+        cards.append(_routine_card_from_file(path, subject=subject, job_card=job_card,
+                                             pending=pending))
 
     cards.extend(legacy_cards)
     return cards
@@ -404,13 +517,19 @@ def reconcile_workspace_routines(
     paths = sorted(routines_dir.glob("*.md")) if routines_dir.exists() else []
 
     desired: dict[str, dict] = {}
-    skipped = 0
+    skipped = pending = 0
     for path in paths:
         parsed = load_routine_file(path)
         if parsed is None:
             skipped += 1
             continue
         if not parsed.enabled:
+            continue
+        if not routine_file_approved(path, subject=subject, workspaces_dir=workspaces_dir):
+            # Not desired, so a job armed from earlier bytes is cancelled below like a removed one.
+            pending += 1
+            log.warning("routine %s/%s is pending confirmation: no person has stood behind its "
+                        "current content", subject, path.stem)
             continue
         rid = routine_id_for_workspace_file(subject, path.stem)
         # The fingerprint below covers the request, signature included, so a job compiled before
@@ -451,6 +570,7 @@ def reconcile_workspace_routines(
         kept=kept,
         cancelled=cancelled,
         skipped=skipped,
+        pending=pending,
     )
 
 
@@ -468,6 +588,7 @@ def reconcile_all_workspace_routines(
     workspaces_dir: str | Path = "/workspaces",
     signing_secret: str = "",
 ) -> list[ReconcileResult]:
+    _record_existing_approvals(workspaces_dir)
     results: list[ReconcileResult] = []
     for subject in scan_workspace_subjects(workspaces_dir):
         results.append(

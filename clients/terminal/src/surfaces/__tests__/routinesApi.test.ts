@@ -2,7 +2,7 @@
  *  /api/routines* with NO `subject` (scope is server-derived — P20), AND that a backend error is
  *  FAIL-LOUD: it throws (propagates to the surface) instead of being swallowed into an empty list (P18). */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { listRoutines, deleteRoutine, setRoutineEnabled } from "../routinesApi";
+import { listRoutines, deleteRoutine, setRoutineEnabled, confirmRoutine } from "../routinesApi";
 import { ApiError } from "../apiClient";
 
 let fetchMock: ReturnType<typeof vi.fn>;
@@ -30,6 +30,12 @@ describe("routinesApi — scoped (no subject) + fail-loud", () => {
     await setRoutineEnabled("daily", false);
     expect(lastUrl()).toBe("/api/routines/daily/enabled");
     expect(lastInit().method).toBe("PATCH");
+    expect(lastUrl()).not.toContain("subject");
+  });
+  it("confirmRoutine POSTs /api/routines/{name}/confirm, no subject", async () => {
+    await confirmRoutine("daily brief");
+    expect(lastUrl()).toBe("/api/routines/daily%20brief/confirm");
+    expect(lastInit().method).toBe("POST");
     expect(lastUrl()).not.toContain("subject");
   });
   it("FAIL-LOUD: a backend error throws ApiError (never a silent empty list)", async () => {
