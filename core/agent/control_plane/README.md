@@ -2,6 +2,20 @@
 
 The agent control plane: the FastAPI app (`api.py`) and orchestration that dispatches work to workers and reconciles routine/meeting lifecycle. Owns request handling, routine bookkeeping, transcription watching, and event relay — distinct from the `worker/` that runs a single agent workload.
 
+## The HTTP app, by module
+
+- `api.py` — `create_app`: builds what the routes are built out of (the resolvers, the stores, the
+  peer lookups) and includes the routers. `routers/` holds the routes, one module per owner (see
+  [`routers/README.md`](routers/README.md)).
+- `ceiling.py` — where a caller may act and whether a person is in the loop: the delegated
+  dispatch's workspace ceiling (`require_in_ceiling`, `write_slug`), the one person-in-the-loop rule
+  (`is_delegated`, `is_unwatched`, `require_person`, `REFUSAL`), and the one logged refusal.
+- `bodies.py` — every named request body, as a pydantic model (the OpenAPI schema names).
+- `peer_lookups.py` — every call agent-api makes to meeting-api (meeting access, transcript) and
+  admin-api (email → subject), each as the caller and failing closed.
+- `api_shared.py` — the rest the routes are built out of: the session index, live meetings, SSE
+  framing, the chat's grounding and context bundle.
+
 ## Workspace membership + invites + roles (Lane M — the access layer for shared workspaces)
 
 > **The full workspace + collaboration model (tiers, personal, sharing, live collaboration, deferred)

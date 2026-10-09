@@ -947,7 +947,7 @@ def create_app(
     # reading the same code they reviewed before. Each router declares in its own `build()` which
     # of these it takes, so "what does this router depend on" is answerable by reading one line.
     #
-    # ORDER IS NOT LOAD-BEARING HERE, and that is checked rather than assumed: no two of these 78
+    # ORDER IS NOT LOAD-BEARING HERE, and that is checked rather than assumed: no two of these
     # routes can match the same concrete URL under the same method (FastAPI resolves
     # first-match-wins, so a pair that could would make the include order a behaviour). The check
     # is `tests/test_route_table.py::test_no_two_routes_can_match_the_same_url`.
