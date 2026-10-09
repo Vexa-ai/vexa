@@ -203,9 +203,11 @@ const envNumber = (name: string, fallback: number): number => {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 };
 
-/** How long a source may go quiet before its turn is closed. The sensor already waits 400ms before
- *  declaring a deactivation, so this is the SECOND grace: it spans a breath, a DTX gap, a dropped
- *  packet train. Too small shatters a sentence into turns; too large merges a real handoff. */
+/** How long a source may go quiet before its turn is closed. The sensor already holds a source
+ *  active for its own inactivity window before it synthesizes a deactivation (the bot composes
+ *  800 ms; the brick's built-in default is 400 ms), so this is the SECOND grace: it spans a
+ *  breath, a DTX gap, a dropped packet train. Too small shatters a sentence into turns; too large
+ *  merges a real handoff. */
 export const CSRC_HYSTERESIS_MS = envNumber('VEXA_CSRC_HYSTERESIS_MS', 600);
 /** Energetic audio this long with NOT ONE transition ⇒ the transport stopped talking to us while
  *  the meeting continued. Measured in audio time, on frames that carry energy, so an honestly
