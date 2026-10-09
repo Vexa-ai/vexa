@@ -31,14 +31,15 @@ lives in the cookbook layer *above* both domains, never inside this one. See
 | Direction | Neighbour | Via | What crosses |
 |---|---|---|---|
 | consumes | meetings | `meetings/contracts/transcript.v1` (redis stream `transcription_segments` / `tc:meeting:<id>`) | transcript beats → live cards + `session_end` |
-| consumes | gateway / terminal | `POST /api/chat`, `POST /events`, `POST /invocations`, `POST /api/routines` | chat turns, external events, routine authoring |
+| consumes | gateway / terminal | `POST /api/chat`, `POST /api/routines` | a person's chat turns (never a worker's: a delegated identity is refused) and routine authoring |
+| consumes | the internal tier · the runtime's scheduler | `POST /events` (internal tier only), `POST /invocations` (internal tier, or a routine job this service signed — `X-Vexa-Dispatch-Signature`, `control_plane/dispatch_sink.py`) | external events and fired routines; the caller is authenticated before the body, which names the person, is read |
 | verifies | gateway | `gateway/contracts/gateway-identity.v1` (`X-Vexa-Identity`, `control_plane/identity_token.py`) | the caller's identity, signed by the edge with a key only it holds (agent-api holds the public key); an unsigned `x-user-*` header is believed only from the internal tier (`X-Internal-Secret`) |
 | publishes | gateway's MCP service | `mcp.tools.v1.json` at `/.well-known/mcp-tools.json` (routes in `mcp.tools.v1.openapi.json`) | the agent's tools — workspaces and their page verbs, the claim book, membership, the transcript highlight, Connections, the person's clock, `chat_name` — served by the one assembled MCP server to a person's client and to every worker; `tests/test_prompt_tools_served.py` holds every tool a product prompt names to that served set |
 | consumes | identity | `identity/contracts/identity.v1` (`IdentityPort.mint`) | per-dispatch signed token, `canAccess` |
 | spawns-over | runtime | `runtime/contracts/runtime.v1` (profile `agent`) | worker `env`: mounted workspaces, token, redis topics, `start`, and the toolbelt (`VEXA_MCP_URL` = the gateway's `/mcp`, a per-dispatch delegation token) |
 | produces | workspace | `workspaces/contracts/workspace.v1` (git repo) | typed `kg/entities/*` with `EntityFrontmatter` |
 | publishes | gateway / surfaces | `gateway/contracts/ws.v1` (redis `unit:<id>:out`, mode `card`) | turn events + `proactive-card.v1` outputs |
-| calls | scheduler | `schedule.v1` (a `routine.v1` `kind:scheduled` compiles to a cron job) | a `unit.v1` Invocation as the cron body |
+| calls | scheduler | `schedule.v1` (a `routine.v1` `kind:scheduled` compiles to a cron job) | a `unit.v1` Invocation as the cron body, signed in the job's request headers |
 | calls | credential broker (this domain's own service) | `contracts/credential-broker.v1`, roles `agent` and `git` | Connections requests and results, each agent-role call with the gateway's `X-Vexa-Identity` for the person forwarded unchanged; never a stored credential |
 
 ## Contracts
