@@ -142,8 +142,6 @@ def test_global_setup_is_no_settings_key_and_the_state_is_only_the_admin(client)
     assert client.put("/internal/settings/global_setup", headers=_internal(),
                       json={"state": "missing", "company": "Acme GmbH"}).status_code == 404
     assert client.get("/internal/instance", headers=_internal()).json() == {"admin_exists": False}
-    assert client.get("/admin/instance", headers=_admin()).json() == {"admin_exists": False}
-    assert client.get("/admin/instance").status_code in (401, 403)
 
 
 def test_the_gate_doors_are_gone(client):

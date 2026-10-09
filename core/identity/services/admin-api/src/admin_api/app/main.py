@@ -1007,14 +1007,6 @@ def create_app() -> FastAPI:
         check_internal(request)
         return await _instance_state(db)
 
-    @app.get("/admin/instance", include_in_schema=False, response_model=InstanceState,
-             dependencies=[Depends(verify_admin_token)])
-    async def instance_status_admin(db: AsyncSession = Depends(get_db)):
-        """The SAME instance state over the admin-key door, for a caller that holds an admin key and
-        no internal secret (the dogfood rehearsal rig's blank-instance check). Same body, same
-        computation, different transport."""
-        return await _instance_state(db)
-
     @app.post("/internal/bootstrap-admin", include_in_schema=False, response_model=AdminClaimResponse)
     async def bootstrap_admin(payload: AdminClaimRequest, request: Request,
                               db: AsyncSession = Depends(get_db)):

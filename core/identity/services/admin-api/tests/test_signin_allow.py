@@ -450,6 +450,15 @@ def test_the_old_company_layer_door_is_still_gone(make_client):
     assert r.status_code in (404, 405)
 
 
+def test_the_instance_state_is_served_on_the_internal_tier_only(make_client):
+    """`GET /internal/instance` is the one door for "does this instance have an admin". The same
+    answer over the admin key had no product caller and is gone."""
+    c = make_client(FakeDB(admin_exists=False))
+    assert c.get("/admin/instance", headers={"X-Admin-API-Key": ADMIN}).status_code == 404
+    assert c.get("/internal/instance", headers={"X-Internal-Secret": SECRET}).json() == {
+        "admin_exists": False}
+
+
 def test_the_settings_door_canonicalises_the_list(make_client):
     db = FakeDB()
     c = make_client(db)
