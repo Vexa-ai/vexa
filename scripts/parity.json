@@ -1249,6 +1249,131 @@
           "pattern": "\"forward\": (\\{[^}]*\\})"
         }
       ]
+    },
+    {
+      "id": "bot-redis-stream",
+      "fact": "the stream a meeting bot appends its transcript to, as the bot writes it, the collector reads it and the bot's Redis user is granted it",
+      "kind": "literal",
+      "enforced": true,
+      "canonical": "core/meetings/services/meeting-api/src/meeting_api/collector/ingest.py — STREAM_NAME",
+      "how_to_agree": "rename it in the bot, the collector and the grant in one change",
+      "why": "The bot's Redis user is granted exactly this key (bot_spawn/workload_redis.py). A rename on one side is a NOPERM at runtime or an empty collector, and each side's tests check only themselves (architecture pass 4, S51).",
+      "sites": [
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/collector/ingest.py",
+          "pattern": "^STREAM_NAME = \"([^\"]+)\""
+        },
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/bot_spawn/workload_redis.py",
+          "pattern": "^TRANSCRIPT_STREAM = \"([^\"]+)\""
+        },
+        {
+          "path": "core/meetings/services/bot/src/adapters/transcript-redis.ts",
+          "pattern": "^export const TRANSCRIPTION_STREAM = '([^']+)'"
+        }
+      ]
+    },
+    {
+      "id": "bot-redis-mutable-channel",
+      "fact": "the live channel a meeting bot publishes on, tc:meeting:{meeting id}:mutable, as the bot, the collector and the bot's Redis grant spell it",
+      "kind": "literal",
+      "enforced": true,
+      "canonical": "core/meetings/services/meeting-api/src/meeting_api/collector/ingest.py — _mutable_channel",
+      "how_to_agree": "rename it in the bot, the collector, the gateway's /ws fan-in and the grant in one change",
+      "why": "The grant names the channel by literal; the bot and the collector build it from a template. Each pattern requires the ':mutable' suffix and captures the prefix, so a change to either part fails here (architecture pass 4, S51).",
+      "sites": [
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/collector/ingest.py",
+          "pattern": "f\"(tc:meeting:)\\{[a-z_]+\\}:mutable\""
+        },
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/bot_spawn/workload_redis.py",
+          "pattern": "f\"&(tc:meeting:)\\{[a-z_]+\\}:mutable\""
+        },
+        {
+          "path": "core/meetings/services/bot/src/adapters/transcript-redis.ts",
+          "pattern": "`(tc:meeting:)\\$\\{[a-zA-Z_]+\\}:mutable`"
+        },
+        {
+          "path": "core/gateway/services/gateway/src/gateway/multiplex.py",
+          "pattern": "f\"(tc:meeting:)\\{[a-z_]+\\}:mutable\"",
+          "note": "the /ws fan-in"
+        }
+      ]
+    },
+    {
+      "id": "bot-redis-commands-channel",
+      "fact": "the channel a meeting bot takes acts.v1 commands from, bot_commands:meeting:{meeting id}",
+      "kind": "literal",
+      "enforced": true,
+      "canonical": "core/meetings/services/meeting-api/src/meeting_api/lifecycle/stop.py — the publisher",
+      "how_to_agree": "rename it in the publisher, the bot and the grant in one change",
+      "why": "meeting-api publishes on it, the bot subscribes, and the bot's Redis user is granted it by literal (architecture pass 4, S51).",
+      "sites": [
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/lifecycle/stop.py",
+          "pattern": "return f\"(bot_commands:meeting:)\\{[a-z_]+\\}\""
+        },
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/bot_spawn/workload_redis.py",
+          "pattern": "f\"&(bot_commands:meeting:)\\{[a-z_]+\\}\""
+        },
+        {
+          "path": "core/meetings/services/bot/src/contracts.ts",
+          "pattern": "`(bot_commands:meeting:)\\$\\{[a-zA-Z_]+\\}`"
+        }
+      ]
+    },
+    {
+      "id": "bot-redis-commands",
+      "fact": "the Redis commands a meeting bot's user is granted",
+      "kind": "set",
+      "enforced": true,
+      "canonical": "core/meetings/services/meeting-api/src/meeting_api/bot_spawn/workload_redis.py — BOT_COMMANDS",
+      "how_to_agree": "change the grant and invocation.v1's statement of it in one change",
+      "why": "invocation.v1 tells an operator exactly what a bot's Redis credential reaches; the grant is the truth, and the contract may not promise less or more (architecture pass 4, S45/S51).",
+      "sites": [
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/bot_spawn/workload_redis.py",
+          "pattern": "^BOT_COMMANDS = \\(([^)]*)\\)"
+        },
+        {
+          "path": "core/meetings/contracts/invocation.v1/README.md",
+          "pattern": "and the\\s+commands `([^`]+)`"
+        }
+      ]
+    },
+    {
+      "id": "redis-workload-acl-modes",
+      "fact": "the values REDIS_WORKLOAD_ACL accepts, and what each service does with another",
+      "kind": "literal",
+      "enforced": false,
+      "decision": "WHETHER meeting-api REFUSES AN UNKNOWN REDIS_WORKLOAD_ACL. agent-api validates the key against per-workload|shared and refuses to boot on anything else; meeting-api compares it to the exact string 'shared' and treats every other value, a typo included, as per-workload. Align meeting-api with agent-api (refuse at boot), then make this fact enforced over the two captured value lists. Routed to the R4 agent worker with the code dedupe (S51).",
+      "why": "One switch, two services, two parsers: a value one service refuses the other silently reads as the default (architecture pass 4, S51).",
+      "sites": [
+        {
+          "path": "core/agent/shared/config.py",
+          "pattern": "validation_alias=AliasChoices\\(\"REDIS_WORKLOAD_ACL\"\\),\\s*pattern=\"\\^\\(([^)]*)\\)\\$\""
+        },
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/__main__.py",
+          "pattern": "\\(os\\.getenv\\(\"REDIS_WORKLOAD_ACL\"\\) or \"per-workload\"\\)\\.strip\\(\\) == \"([^\"]+)\""
+        }
+      ],
+      "answers": [
+        {
+          "value": "per-workload|shared",
+          "sites": [
+            "core/agent/shared/config.py"
+          ]
+        },
+        {
+          "value": "shared",
+          "sites": [
+            "core/meetings/services/meeting-api/src/meeting_api/__main__.py"
+          ]
+        }
+      ]
     }
   ]
 }
