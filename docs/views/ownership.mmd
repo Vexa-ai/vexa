@@ -18,6 +18,9 @@ flowchart LR
   identity_db[("identity (users/api_tokens)")]
   flows_rows[("flows-rows")]
   credentials_store[("broker state (metadata.sqlite, secrets.sqlite)")]
+  imports_status[("<store>/.imports/{subject}/ (files)")]
+  onboarding_research_state[("<store>/.onboarding-research/{sha256(workspace)}/ (files)")]
+  rail_order[("agent:rail-order:{subject} (redis key)")]
   bot -->|write| segments_stream
   bot -->|write| tc_mutable
   meeting_api -.->|read| segments_stream
@@ -50,3 +53,6 @@ flowchart LR
   flows_api -->|write| flows_rows
   flows_api -.->|read| flows_rows
   credentials_broker -->|write| credentials_store
+  agent_api -->|write| imports_status
+  agent_api -->|write| onboarding_research_state
+  agent_api -->|write| rail_order

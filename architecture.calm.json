@@ -1459,6 +1459,80 @@
      "domain": "identity"
     }
    ]
+  },
+  {
+   "unique-id": "imports-status",
+   "node-type": "data-asset",
+   "name": "<store>/.imports/{subject}/ (files)",
+   "description": "a repository import's status records, one JSON file per import, written atomically under the workspace store but outside every workspace mount (control_plane/workspace_import.py); agent-api writes and reads them, no worker sees them",
+   "controls": {
+    "ownership": {
+     "description": "single writer (P23)",
+     "requirements": [
+      {
+       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "config": {
+        "writers": [
+         "agent-api"
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "unique-id": "onboarding-research-state",
+   "node-type": "data-asset",
+   "name": "<store>/.onboarding-research/{sha256(workspace)}/ (files)",
+   "description": "onboarding research checkpoints for one workspace (state.json under a file lock), beside the workspace and outside its Git graph so nothing reaches a push (control_plane/onboarding_research.py); agent-api is the only writer",
+   "controls": {
+    "ownership": {
+     "description": "single writer (P23)",
+     "requirements": [
+      {
+       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "config": {
+        "writers": [
+         "agent-api"
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "unique-id": "rail-order",
+   "node-type": "data-asset",
+   "name": "agent:rail-order:{subject} (redis key)",
+   "description": "the order of a person's chat rail, a JSON list (control_plane/api_shared.py rail_order); agent-api writes and reads it, in memory when there is no redis",
+   "controls": {
+    "ownership": {
+     "description": "single writer (P23)",
+     "requirements": [
+      {
+       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "config": {
+        "writers": [
+         "agent-api"
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "unique-id": "workspaces-system",
+   "node-type": "system",
+   "name": "workspaces",
+   "description": "the workspace domain: a person's git repo of durable memory and the contract that addresses it; hosted as a library inside agent, with no runtime of its own (P10)",
+   "metadata": [
+    {
+     "path": "core/workspaces"
+    }
+   ]
   }
  ],
  "relationships": [
@@ -1482,7 +1556,10 @@
       "agent-worker",
       "out-stream",
       "unit-in",
-      "va-chat"
+      "va-chat",
+      "imports-status",
+      "onboarding-research-state",
+      "rail-order"
      ]
     }
    }
@@ -2085,7 +2162,7 @@
      }
     }
    },
-   "description": "POST /workloads spawn bot",
+   "description": "meeting-api drives the kernel with Authorization: Bearer RUNTIME_API_TOKEN (runtime.v1 CallerCredential): POST /workloads to spawn a bot, GET /workloads/{id} to read it and DELETE /workloads/{id} to tear it down; its RuntimeEvents come back signed on rt-ma",
    "protocol": "HTTPS"
   },
   {
@@ -2168,7 +2245,7 @@
      }
     }
    },
-   "description": "POST /workloads spawn agent-worker",
+   "description": "agent-api drives the kernel with Authorization: Bearer RUNTIME_API_TOKEN (runtime.v1 CallerCredential): POST /workloads, GET /workloads and GET /workloads/{id} to spawn and track agent-worker workloads, and POST /schedule, GET /schedule and DELETE /schedule/{job_id} for routine jobs (schedule.v1)",
    "protocol": "HTTPS"
   },
   {
@@ -2738,7 +2815,8 @@
      "contract": "credential-broker.v1",
      "description": "role agent (Connections routes) and role git (Git credential store); request, list, read, draft, call; no consent, no stored credential returned. Every agent-role call carries the gateway's signed identity (gateway-identity.v1) unchanged, and the broker acts only for the subject it names"
     }
-   ]
+   ],
+   "description": "agent-api to the credential broker, signed role assertions (credential-broker.v1): role agent for the Connections routes (request, list, read, draft, call; no consent, no stored credential returned), each carrying the gateway's X-Vexa-Identity unchanged, and role git for the Git credential store"
   },
   {
    "unique-id": "terminal-connections",
@@ -2760,7 +2838,8 @@
      "contract": "credential-broker.v1",
      "description": "role human for the identity-validated person: consent, credential save, disconnect, delete"
     }
-   ]
+   ],
+   "description": "the terminal's server to the credential broker, role human for the identity-validated person (credential-broker.v1): consent, credential save, disconnect, delete"
   },
   {
    "unique-id": "broker-vault",
@@ -2831,6 +2910,225 @@
    },
    "description": "boot assembly: GET /.well-known/mcp-tools.json + /openapi.json \u2014 the agent domain's tools join the one MCP surface",
    "protocol": "HTTP"
+  },
+  {
+   "unique-id": "aa-ma",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "agent-api"
+     },
+     "destination": {
+      "node": "meeting-api",
+      "interface": "meeting-api-rest"
+     }
+    }
+   },
+   "description": "agent-api reads meetings as the caller, X-User-Id (and X-User-Workspaces) over the internal tier (X-Internal-Secret): GET /meetings/{id} (the meeting access lookup behind every meeting-scoped agent route), GET /transcripts/by-id/{id} (a transcript the caller may read), GET /meetings?… (the schedule digest's three bounded queries), POST /meetings/{id}/annotate (the minted meeting's recorder). meeting-api decides access; agent-api holds no meetings data",
+   "protocol": "HTTP",
+   "metadata": [
+    {
+     "access": "req",
+     "contract": "api.v1"
+    }
+   ]
+  },
+  {
+   "unique-id": "aa-admin",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "agent-api"
+     },
+     "destination": {
+      "node": "admin-api",
+      "interface": "admin-api-rest"
+     }
+    }
+   },
+   "description": "agent-api asks identity about a person over the internal tier (X-Internal-Secret): GET /internal/users/by-email/{email} (falling back to GET /admin/users/email/{email} with X-Admin-API-Key) to resolve a share's invitee; POST/DELETE/GET /internal/users/{id}/memberships[/{ws}] (the membership index mirror); GET /internal/users/{id}/model-config; GET /internal/users/{id}/is-admin (the _global tier's writer); GET /internal/users/{id}/bot-context (admin overview); GET /internal/users/{id}/settings (the person's clock)",
+   "protocol": "HTTP",
+   "metadata": [
+    {
+     "access": "req"
+    }
+   ]
+  },
+  {
+   "unique-id": "aw-flows",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "agent-worker"
+     },
+     "destination": {
+      "node": "flows-api",
+      "interface": "flows-http"
+     }
+    }
+   },
+   "description": "the worker's temporal block: GET /timeline?format=preamble with the read-only VEXA_FLOWS_TIMELINE_KEY that dispatch stamps only when the deployment minted one (never the operator key); granted by the workload network fences (compose workers network, the Helm workload egress policy)",
+   "protocol": "HTTP",
+   "metadata": [
+    {
+     "access": "req"
+    }
+   ]
+  },
+  {
+   "unique-id": "bot-ma",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "bot"
+     },
+     "destination": {
+      "node": "meeting-api",
+      "interface": "meeting-api-rest"
+     }
+    }
+   },
+   "description": "the bot's only calls back: every lifecycle.v1 event to POST /bots/internal/callback/lifecycle and every recording chunk to POST /internal/recordings/upload, each with Authorization: Bearer <MeetingToken> (invocation.v1 token), bound to the bot's own session; meeting-api refuses another session's token with 401",
+   "protocol": "HTTP",
+   "metadata": [
+    {
+     "access": "req",
+     "contract": "lifecycle.v1"
+    }
+   ]
+  },
+  {
+   "unique-id": "rt-aa",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "runtime"
+     },
+     "destination": {
+      "node": "agent-api",
+      "interface": "agent-api-rest"
+     }
+    }
+   },
+   "description": "a routine's due schedule.v1 job: POST /invocations with the unit.v1 dispatch agent-api compiled and signed (X-Vexa-Dispatch-Signature, HMAC keyed from INTERNAL_API_SECRET); the runtime holds the job opaquely and cannot re-point it at another person or trigger",
+   "protocol": "HTTP",
+   "metadata": [
+    {
+     "access": "req",
+     "contract": "schedule.v1"
+    }
+   ]
+  },
+  {
+   "unique-id": "rt-ma",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "runtime"
+     },
+     "destination": {
+      "node": "meeting-api",
+      "interface": "meeting-api-rest"
+     }
+    }
+   },
+   "description": "every RuntimeEvent for a bot workload to its callbackUrl, POST /runtime/callback, signed X-Runtime-Signature (runtime.v1 CallbackSignature, keyed from RUNTIME_API_TOKEN); meeting-api refuses an unsigned or forged callback with 401",
+   "protocol": "HTTP",
+   "metadata": [
+    {
+     "access": "req",
+     "contract": "runtime.v1"
+    }
+   ]
+  },
+  {
+   "unique-id": "aa-imports-status",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "agent-api"
+     },
+     "destination": {
+      "node": "imports-status"
+     }
+    }
+   },
+   "description": "repository import status (workspace_import.py)",
+   "metadata": [
+    {
+     "access": "write"
+    }
+   ]
+  },
+  {
+   "unique-id": "aa-onboarding-research",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "agent-api"
+     },
+     "destination": {
+      "node": "onboarding-research-state"
+     }
+    }
+   },
+   "description": "onboarding research checkpoints (onboarding_research.py)",
+   "metadata": [
+    {
+     "access": "write"
+    }
+   ]
+  },
+  {
+   "unique-id": "aa-rail-order",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "agent-api"
+     },
+     "destination": {
+      "node": "rail-order"
+     }
+    }
+   },
+   "description": "SET/GET the chat rail order",
+   "metadata": [
+    {
+     "access": "write"
+    }
+   ]
+  },
+  {
+   "unique-id": "workspaces-composed",
+   "relationship-type": {
+    "composed-of": {
+     "container": "workspaces-system",
+     "nodes": [
+      "workspace.v1"
+     ]
+    }
+   }
+  },
+  {
+   "unique-id": "plugin-gw",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "claude-plugin"
+     },
+     "destination": {
+      "node": "gateway",
+      "interface": "gateway-rest"
+     }
+    }
+   },
+   "description": "the plugin's HTTP MCP server entry: Claude Code calls the gateway's /mcp with the person's Vexa API key; the plugin itself runs no code",
+   "protocol": "HTTPS",
+   "metadata": [
+    {
+     "access": "req"
+    }
+   ]
   }
  ],
  "flows": [

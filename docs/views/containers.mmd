@@ -75,3 +75,10 @@ flowchart LR
   credentials_broker -->|"req"| credentials_vault
   agent_worker -->|"HTTPS"| gateway
   mcp -->|"HTTP"| agent_api
+  agent_api -->|"HTTP"| meeting_api
+  agent_api -->|"HTTP"| admin_api
+  agent_worker -->|"HTTP"| flows_api
+  bot -->|"HTTP"| meeting_api
+  runtime -->|"HTTP"| agent_api
+  runtime -->|"HTTP"| meeting_api
+  claude_plugin -->|"HTTPS"| gateway
