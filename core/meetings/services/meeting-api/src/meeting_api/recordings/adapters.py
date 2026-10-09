@@ -130,6 +130,17 @@ class S3Storage:
         await self._run(self._c().delete_object, Bucket=self._bucket, Key=key)
 
 
+def upload_session(session_row, meeting_row) -> Optional[dict]:
+    """The session an upload may write to, from its ``meeting_sessions`` row and its meeting row: none
+    when the meeting is gone or carries an api.v1 ``ArtifactDeletion`` stamp (its transcript and
+    recordings are deleted, or being deleted, and nothing may write them again)."""
+    from ..collector.ports import meeting_is_erased
+
+    if session_row is None or meeting_row is None or meeting_is_erased(meeting_row.data):
+        return None
+    return {"meeting_id": session_row.meeting_id, "session_uid": session_row.session_uid}
+
+
 class SqlAlchemyRecordingRepo:
     """``RecordingRepo`` over a SQLAlchemy-async ``session_factory`` (``meetings`` /
     ``meeting_sessions``; recordings live in ``meetings.data`` JSONB)."""
@@ -150,10 +161,7 @@ class SqlAlchemyRecordingRepo:
             ).scalars().first()
             if not s:
                 return None
-            meeting = await self._meeting(db, s.meeting_id)
-            if meeting is None or (isinstance(meeting.data, dict) and meeting.data.get("artifact_deletion")):
-                return None
-            return {"meeting_id": s.meeting_id, "session_uid": s.session_uid}
+            return upload_session(s, await self._meeting(db, s.meeting_id))
 
     async def _meeting(self, db, meeting_id):
         from sqlalchemy import select

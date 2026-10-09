@@ -26,6 +26,9 @@ from typing import Any, AsyncIterator, Optional, Protocol, runtime_checkable
 #: ``MeetingResponse.data.artifact_deletion`` (schema ``ArtifactDeletion``), which agent-api and the
 #: terminal read to show the meeting as deleted. ``deletion_stamp`` is its one shape.
 ARTIFACT_DELETION_FIELD = "artifact_deletion"
+#: api.v1 ``ArtifactDeletion.state`` — both mean the transcript and recordings are gone. Pinned to the
+#: sealed schema by ``tests/test_artifact_deletion_contract.py``.
+ARTIFACT_DELETION_STATES = ("pending", "completed")
 _DELETION_SCOPE = "primary_transcript_recording_and_fixture_storage"
 _DELETION_BACKUP_RESIDUALS = "expire_under_deployment_retention_policy"
 
@@ -40,6 +43,22 @@ def deletion_stamp(state: str, *, at: str, prior: "Optional[dict]" = None) -> di
         return {"state": "completed", "completed_at": at,
                 "scope": _DELETION_SCOPE, "backup_residuals": _DELETION_BACKUP_RESIDUALS}
     raise ValueError(f"not an ArtifactDeletion state: {state!r}")
+
+
+def meeting_is_erased(data: Any) -> bool:
+    """Whether a meeting's ``data`` carries an ``ArtifactDeletion`` stamp — its transcript and
+    recordings are being deleted (``pending``) or deleted (``completed``), and nothing may write them
+    again. A value present in another shape still reads as erased (fail closed: a reader that missed
+    a reshaped stamp would bring deleted data back) and is reported."""
+    stamp = data.get(ARTIFACT_DELETION_FIELD) if isinstance(data, dict) else None
+    if stamp is None:
+        return False
+    if not (isinstance(stamp, dict) and stamp.get("state") in ARTIFACT_DELETION_STATES):
+        from ..obs import log_event
+
+        log_event("artifact_deletion_unreadable", audience="operator", level="warning",
+                  span="meetings.deletion", fields={"type": type(stamp).__name__})
+    return True
 
 
 def erased_meeting_cache_keys(meeting_id) -> tuple[str, ...]:
