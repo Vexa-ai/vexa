@@ -216,15 +216,16 @@ function gateTestIsolation() {
 }
 
 // gate:arch-report (P9) — the architecture-compliance map is GREEN: every modularity principle
-// (P2·P3·P4·P6·P12) resolves to a passing gate. scripts/arch-report.mjs --check re-runs each and fails
-// loud if any is red — so "fully modular" is a claim backed by mechanical evidence, and docs/docs/governance/arch-compliance.mdx
-// is regenerable + current. Green-on-empty before the report generator lands.
+// (P2·P3·P4·P6·P12·P23) resolves to a passing gate. scripts/arch-report.mjs --check re-runs each and
+// fails loud if any is red, AND fails when docs/docs/governance/arch-compliance.mdx differs from what
+// the tree renders now — so "fully modular" is a claim backed by mechanical evidence, and the map
+// says what is true today. Green-on-empty before the report generator lands.
 function gateArchReport() {
   const s = join(ROOT, "scripts", "arch-report.mjs");
   if (!existsSync(s)) { console.log("  ✓ gate:arch-report — no report generator yet (green-on-empty)"); return true; }
   try { execFileSync("node", [s, "--check"], { stdio: "pipe" }); }
   catch (e) { return fail([`arch-report:\n${errText(e).slice(0, 900)}`]); }
-  console.log("  ✓ gate:arch-report — every modularity principle maps to a green gate (P9)");
+  console.log("  ✓ gate:arch-report — every modularity principle maps to a green gate, and the committed map is current (P9)");
   return true;
 }
 

@@ -61,6 +61,8 @@ jobs:
       - run: node scripts/gates.mjs isolation-py
       - run: node scripts/gates.mjs graph-py
       - run: node scripts/gates.mjs test-isolation
+      # Also fails when docs/docs/governance/arch-compliance.mdx is not what the tree renders now:
+      # regenerate it with `node scripts/arch-report.mjs` in the change that moved its evidence.
       - run: node scripts/gates.mjs arch-report
       - run: node scripts/gates.mjs eval
       - run: node scripts/gates.mjs eval-baseline
