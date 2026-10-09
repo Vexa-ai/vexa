@@ -1,7 +1,7 @@
 {
   "version": "v0.12.28",
   "candidate": "v0.12.28-rc.3",
-  "generated_from": "v0.12.27...c1d0ef6f0 (main; the release PR adds only release records)",
+  "generated_from": "v0.12.27...6ee2a3abb (main; the release PR adds only release records)",
   "witnessed_by": "Dmitry Grankin",
   "witnessed_at": "2026-10-07",
   "deployment": "compose + lite on bbb from v0.12.28-rc.3 (agent station); the bot additionally live on the bbb station Zoom/Meet runs and in vexa.ai production, image vexaai/vexa-bot@sha256:e2398bfac7fa8671c209e996bc6451598b58438c851956ec050a0300f5a5354b (linux/amd64 config sha256:995b4aed3254eb8ac05fd4d3837086c1371cfd9a39d4d34f64afead87c5ce37d)",
@@ -101,6 +101,13 @@
       "witnessed": true,
       "observation": "DRAFT FOR THE FOUNDER TO CONFIRM — 2026-10-07 21:31-21:40Z, founder-hosted Zoom on the bbb station, single speaker, bot image config 995b4aed (= vexaai/vexa-bot@sha256:e2398bfa, the rc.3 bot): candidate kept 88.8% of the uncapped reference words vs 75.7% for the previous bot; founder in chat ~21:38Z: \"looks good to me when one speaker\". Record: ~/dev/biz/drafts/2026-10-07-zoom-starved-1781-staging-fills.md. Starved-page behaviour proven offline on the production tape of meeting 31849 (recall 91.5% vs 21.8%). In production on the same digest since 2026-10-08T20:41Z (estate entry 48).",
       "platform": "zoom"
+    },
+    {
+      "pr": "1791",
+      "title": "chore(dashboard): bring the hosted dashboard source to main, to be retired",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "source only: adds services/dashboard (and services/.gateignore); no release image copies services/, so none of the eleven images changed — `candidate-image-map.mjs check-source-inputs` green at the merge of 6ee2a3abb into the release branch, packet map sha256 d100543d… unchanged"
     },
     {
       "pr": "1792",
