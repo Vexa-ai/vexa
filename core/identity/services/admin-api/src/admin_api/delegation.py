@@ -1,43 +1,44 @@
-"""delegation.py — the short-lived, scoped, revocable token a chat worker presents to the Vexa MCP.
+"""delegation.py — the short-lived, scoped token a worker presents as the person it acts for (delegation.v1).
 
-THE PROBLEM THIS REPLACES. A worker that needs the vexa-control MCP used to need a DURABLE user
-credential (a ``vxa_mcp_…`` token minted by the rig and pasted into a config). A durable credential in
-a spawned container is the wrong shape three ways: it does not expire, so a leaked worker env is a
-permanent account takeover; it carries the FULL account, so an autonomous routine gets exactly the
-same reach as the human sitting in chat; and it cannot be withdrawn without rotating the human's own
-token. The dispatch already knows WHO it acts for and WHY it fired — so it can mint a credential that
-says only that, lives minutes, and can be struck off by id.
+WHY A TOKEN PER DISPATCH. A worker runs in a spawned container. A durable account credential there
+would not expire, would carry the whole account into an unwatched routine, and could not be withdrawn
+without rotating the person's own key. The dispatch already knows WHO it acts for and WHY it fired,
+so agent-api mints a credential that says only that and expires within the hour.
 
-THE TOKEN. A compact HS256 JWS, deliberately the same shape as ``adapters.LocalIdentityMinter``'s
-dispatch token (one signing idiom in this codebase, not two), with a ``vxd_`` prefix so a verifier can
-tell a delegation token from the rig's opaque ``vxa_mcp_…`` durable tokens WITHOUT trying to parse it:
+THE TOKEN. A compact HS256 JWS, the same signing idiom as ``adapters.LocalIdentityMinter``'s dispatch
+token, with a ``vxd_`` prefix so a verifier can tell it from an API key WITHOUT trying to parse it:
 
     vxd_<b64u(header)>.<b64u(payload)>.<b64u(sig)>
 
     header  {"alg":"HS256","typ":"vxdlg"}
     payload {"sub": "<uid>",            the Vexa uid the worker acts for — resolved, never asserted
-             "aud": "vexa-mcp",         audience pin: this token is for the control MCP and nothing else
+             "aud": "vexa-mcp",         audience pin: the MCP edge and its re-entry, nothing else
              "scope": {"regime": "human"|"autonomous",
                        "workspaces": "*" | ["slug", …]},
-             "iat": <unix>, "exp": <unix>, "jti": "<random>"}
+             "iat": <unix>, "exp": <unix>, "jti": "<random>",
+             "target": "<slug>"}        optional: the chat's default workspace, never a grant
 
 REGIME IS THE POINT. ``human`` = a person is in the loop this turn, so the scope is SOFT: ``workspaces:
-"*"`` — everything that is already theirs, because the human can see and correct what the agent does.
+"*"`` — everything that is already theirs, because the person can see and correct what the agent does.
 ``autonomous`` = a schedule/event/transcription fired with nobody watching, so the scope is HARD: the
-exact isolation set, and a workspace outside it is refused at the rig. The regime is DERIVED from
-``unit.v1.trigger`` (``message`` ⇒ human; ``scheduled``/``event``/``transcription`` ⇒ autonomous) — the
-same field the contract already uses to derive input-trust, so the two trust axes cannot drift apart.
+exact isolation set, and the services behind the gateway refuse a workspace outside it. The regime is
+DERIVED from ``unit.v1.trigger`` (``message`` ⇒ human; ``scheduled``/``event``/``transcription`` ⇒
+autonomous) — the same field the contract uses to derive input-trust, so the two trust axes cannot
+drift apart.
 
-REVOCATION. Stateless verification plus a small denylist of ``jti`` values. This is the honest trade:
-the signature+expiry check needs no shared store (the rig and agent-api share only a secret), while a
-token that must die BEFORE its exp is struck off by id in a file the verifier reads per call. The
-denylist stays small because entries older than the longest TTL can be pruned — an expired token is
-already refused by the exp check, so its jti no longer needs listing.
+VERIFICATION AND REVOCATION. Identity's ``/internal/validate`` verifies the token statelessly:
+signature, audience, expiry. It keeps no denylist, so a token is valid until its ``exp``.
+``verify_delegation`` accepts an optional ``revoked`` set of ``jti`` values for a verifier that keeps
+one; the product passes none.
 
-THE SECRET is symmetric and lives in the environment on both sides (``VEXA_MCP_DELEGATION_SECRET``);
-this module never reads it — callers pass it in, which keeps the module pure, testable, and out of the
-config.v1 undeclared-read scan. An EMPTY secret is fatal on both mint and verify: a zero-length HMAC
-key would "work" and authenticate anyone who guessed the format.
+THE SECRET is symmetric and lives in the environment of the minter (agent-api) and the verifier
+(admin-api) as ``VEXA_MCP_DELEGATION_SECRET``; this module never reads it — callers pass it in, which
+keeps the module pure, testable, and out of the config.v1 undeclared-read scan. An EMPTY secret is
+fatal on both mint and verify: a zero-length HMAC key would "work" and authenticate anyone who guessed
+the format.
+
+This file is the canonical copy in ``core/identity/contracts/delegation.v1/``, vendored byte for byte
+into agent-api and admin-api (gate:fact-parity, fact ``delegation-token``).
 """
 from __future__ import annotations
 
@@ -115,7 +116,7 @@ def regime_for_trigger(trigger: str) -> str:
 def is_delegation_token(token: str) -> bool:
     """Cheap discriminator — does this bearer value even claim to be a delegation token? Lets a verifier
     fall through to its OTHER token schemes without paying a parse, and without a failed parse being
-    mistaken for a failed AUTH (the distinction the rig's 401 reasons depend on)."""
+    mistaken for a failed AUTH (the distinction a verifier's 401 reasons depend on)."""
     return isinstance(token, str) and token.startswith(PREFIX)
 
 
@@ -217,7 +218,7 @@ def verify_delegation(
 def scope_allows_workspace(claims: dict, slug: str) -> bool:
     """May this token touch workspace ``slug``? ``"*"`` allows everything the ACCOUNT already allows —
     the grant is a ceiling on the dispatch, never a grant of something the uid could not otherwise
-    reach; the rig still applies its own per-uid ownership checks underneath. A malformed/absent scope
+    reach; the service still applies the account's own ownership checks underneath. A malformed/absent scope
     fails CLOSED."""
     scope = claims.get("scope")
     if not isinstance(scope, dict):
