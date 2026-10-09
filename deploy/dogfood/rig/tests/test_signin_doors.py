@@ -296,38 +296,48 @@ def test_page_titles_are_escaped():
     assert b"<script>" not in rig._login_page("<p>x</p>", "<script>a</script>.md")
 
 
-# ── the mail double holds everyone's sign-in mail: the operator's view only ─────────────────────
+# ── the mail double holds everyone's mail: a caller sees only their own ─────────────────────────
 
-SINK = {"/api/v1/messages": (200, {"total": 1, "messages": [
-    {"From": {"Address": "vexa@vexa.ai"}, "To": [{"Address": "someone@example.com"}],
-     "Subject": "Your Vexa sign-in code: 123456", "ID": "m1"}]}),
-        "/api/v1/message/": (200, {"Subject": "s", "Text": "123456"})}
-
-
-@pytest.mark.parametrize("verb,args", [("mail_inbox", ()), ("mail_read", ("m1",))])
-def test_a_person_who_is_not_the_operator_cannot_read_the_mail_double(monkeypatch, verb, args):
-    http = as_user(monkeypatch, "7", routes=SINK)
-    out = json.loads(tool(verb)(*args))
-    assert out.get("refused") == "operator only", out
-    assert not http.urls("/api/v1/"), "the sink was read"
+def _msg(mid, to):
+    return {"ID": mid, "From": {"Address": "vexa@vexa.ai"}, "To": [{"Address": a} for a in to],
+            "Subject": f"subject {mid}", "Text": f"body {mid}"}
 
 
-@pytest.mark.parametrize("verb,args", [("mail_inbox", ()), ("mail_read", ("m1",))])
-@pytest.mark.parametrize("regime", ["human", "autonomous"])
-def test_no_delegated_worker_reads_the_mail_double(monkeypatch, verb, args, regime):
-    http = as_user(monkeypatch, "7", admin=True, routes=SINK)
-    rig.CALL_SCOPE.set({"regime": regime, "workspaces": "*"})
-    try:
-        out = json.loads(tool(verb)(*args))
-    finally:
-        rig.CALL_SCOPE.set(None)
-    assert out.get("refused") == "operator only", out
-    assert not http.urls("/api/v1/")
+SINK_MSGS = [_msg("m1", ["someone@example.com"]), _msg("m2", ["Me@Example.com"]),
+             _msg("m3", ["x@example.com", "me@example.com"]), _msg("m4", ["me@example.com"])]
 
 
-def test_the_operator_reads_the_mail_double(monkeypatch):
-    http = as_user(monkeypatch, "7", admin=True, routes=SINK)
+def _sink_http(monkeypatch, email="me@example.com", read=None):
+    http = as_user(monkeypatch, "7", routes={
+        "/api/v1/messages": (200, {"total": len(SINK_MSGS), "messages": SINK_MSGS}),
+        "/api/v1/message/": (200, read or SINK_MSGS[0])})
+    rig.rig_secrets.write(rig.TOKENS_STORE, {"vxa_mcp_t": {"uid": "7", "email": email}} if email
+                          else {})
+    return http
+
+
+def test_the_inbox_shows_only_mail_addressed_to_the_caller(monkeypatch):
+    _sink_http(monkeypatch)
     out = json.loads(tool("mail_inbox")())
-    assert out["messages"][0]["id"] == "m1"
+    assert [m["id"] for m in out["messages"]] == ["m2", "m3", "m4"] and out["total"] == 3
+    assert [m["id"] for m in json.loads(tool("mail_inbox")(limit=1))["messages"]] == ["m2"]
+
+
+def test_an_unknown_address_sees_nothing_and_reads_nothing(monkeypatch):
+    http = _sink_http(monkeypatch, email="")
+    assert json.loads(tool("mail_inbox")()) == {"total": 0, "messages": []}
+    assert not http.urls("/api/v1/messages"), "the sink was read for nobody"
+    assert json.loads(tool("mail_read")("m4"))["status"] == 404
+
+
+def test_a_message_to_someone_else_does_not_exist(monkeypatch):
+    _sink_http(monkeypatch, read=SINK_MSGS[0])
+    out = json.loads(tool("mail_read")("m1"))
+    assert out == {"status": 404, "body": "no such message"}
+
+
+def test_a_message_to_the_caller_reads_and_the_id_stays_one_segment(monkeypatch):
+    http = _sink_http(monkeypatch, read=SINK_MSGS[2])
+    assert json.loads(tool("mail_read")("m3"))["text"] == "body m3"
     tool("mail_read")("../messages")
     assert http.urls("/api/v1/message/")[-1].endswith("/api/v1/message/..%2Fmessages")

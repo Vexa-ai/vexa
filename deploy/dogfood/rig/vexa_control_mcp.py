@@ -2207,8 +2207,7 @@ mcp = MCPServer(
         "so your person can reshape it in a sentence and a wrong step name is a 400, not a "
         "runtime failure. reactions_list shows runs; reaction_signal "
         "(resume/retry/cancel/wake) steers them; fact_emit feeds events in.\n"
-        "\u2022 MAIL — mail_inbox/mail_read: every message Vexa sent, as received — the "
-        "instance operator's view only.\n"
+        "\u2022 MAIL — mail_inbox/mail_read: every message Vexa sent your person, as received.\n"
         "\u2022 DOCS, NO ACCOUNT NEEDED — vexa_overview() and vexa_search_docs(query) work "
         "anonymously, so 'what is this?' is always answerable.\n"
         "\u2022 SIGN-IN — one question, one code, never leaves this chat: ask which email "
@@ -3590,51 +3589,53 @@ def meeting_seed(native_id: str, title: str, video_id: str,
                        "read_the_words_with": "meeting_transcript(meeting_id=%s, tail=0)" % mid})
 
 
-def _mail_sink_gate(verb: str) -> str:
-    """"" when the caller may read the mail double, else the refusal. The sink holds every message
-    this deployment sent to anyone, sign-in codes and sign-in links included, so it is the
-    instance operator's view: never a delegated worker's, whatever its regime, and never another
-    person's."""
-    what_to_do = ("Only the instance admin, in their own session, reads the mail double. To "
-                  "see what Vexa sent your person, ask them to check their inbox.")
-    if CALL_SCOPE.get() is not None:
-        return json.dumps({"refused": "operator only", "verb": verb, "who": "delegated worker",
-                           "why": "the mail double holds every person's sign-in mail",
-                           "what_to_do": what_to_do})
-    return _operator_gate(verb, what_to_do)[1]
+def _addressed_to(message: dict) -> list:
+    """The lower-cased recipient addresses of one mail-double message."""
+    return [str((t or {}).get("Address") or "").strip().lower() for t in (message.get("To") or [])]
+
+
+#: How far back mail_inbox looks through the mail double for the caller's own messages.
+MAIL_SCAN = 500
 
 
 @mcp.tool()
 @_anon_guard
 def mail_inbox(limit: int = 20) -> str:
-    """Read the mail double. Every message the system has sent, with nothing leaving the
-    host — this is the outbound half of the loop and the honest way to check what a flow
-    actually said to a person. OPERATOR ONLY: the sink holds every person's mail, sign-in codes
-    included, so it is refused to anyone but the instance admin and to every delegated worker."""
-    refused = _mail_sink_gate("mail_inbox")
-    if refused:
-        return refused
-    st, body = _http("GET", f"{MAILPIT}/api/v1/messages?limit={limit}", None)
+    """Read the mail double: the messages Vexa sent YOU, with nothing leaving the host — the
+    outbound half of the loop and the honest way to check what a flow actually said to your
+    person. Account-scoped: only messages addressed to the caller's own address, and nothing when
+    that address is unknown. The double holds every person's mail, sign-in codes included."""
+    me()
+    mine = (_caller_email() or "").strip().lower()
+    if not mine:
+        return json.dumps({"total": 0, "messages": []})
+    try:
+        limit = max(1, min(int(limit), 100))
+    except (TypeError, ValueError):
+        limit = 20
+    st, body = _http("GET", f"{MAILPIT}/api/v1/messages?limit={MAIL_SCAN}", None)
     if isinstance(body, dict):
         msgs = [{"from": m["From"]["Address"],
                  "to": [t["Address"] for t in m.get("To", [])],
                  "subject": m["Subject"], "id": m["ID"]}
-                for m in body.get("messages", [])]
-        return _capped({"total": body.get("total"), "messages": msgs}, 8000)
+                for m in body.get("messages", [])
+                if mine in _addressed_to(m)][:limit]
+        return _capped({"total": len(msgs), "messages": msgs}, 8000)
     return json.dumps({"status": st, "body": str(body)[:400]})
 
 
 @mcp.tool()
 @_anon_guard
 def mail_read(message_id: str) -> str:
-    """The full body of one sent message — the artifact as the person receives it. OPERATOR
-    ONLY, like mail_inbox."""
-    refused = _mail_sink_gate("mail_read")
-    if refused:
-        return refused
+    """The full body of one message Vexa sent YOU — the artifact as your person receives it. A
+    message addressed to anyone else does not exist, as far as this tool says."""
+    me()
+    mine = (_caller_email() or "").strip().lower()
     st, body = _http("GET", f"{MAILPIT}/api/v1/message/{urllib.parse.quote(str(message_id), safe='')}",
                      None)
     if isinstance(body, dict):
+        if not mine or mine not in _addressed_to(body):
+            return json.dumps({"status": 404, "body": "no such message"})
         return json.dumps({"subject": body.get("Subject"),
                            "text": (body.get("Text") or "")[:6000]})
     return json.dumps({"status": st, "body": str(body)[:400]})
