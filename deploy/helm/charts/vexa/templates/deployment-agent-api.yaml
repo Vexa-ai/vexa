@@ -64,10 +64,6 @@ spec:
             # Equal to the runtime's VEXA_WORKSPACE_MOUNT_TARGET and to the store's mountPath below.
             - name: VEXA_WORKSPACES_DIR
               value: {{ include "vexa.workspacesDir" . | quote }}
-            # The workspace store backing the runtime binds into spawned workers. On k8s the PVC name
-            # is the contract; full worker mounting needs RWX storage (see README — follow-up).
-            - name: VEXA_WORKSPACE_MOUNT_SOURCE
-              value: {{ include "vexa.componentName" (list . "agent-workspaces") | quote }}
             # Three-tier mount stack (AMENDMENT 4): the platform-owned GLOBAL SYSTEM workspace (_global),
             # mounted into every worker. Empty = agent-api's in-store /workspaces/_global, created empty at
             # boot (an empty _global is fine); set a path only for a separately provisioned repo. REF pins

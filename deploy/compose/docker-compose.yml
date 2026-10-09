@@ -423,8 +423,6 @@ services:
       - VEXA_LOG_LEVEL=${LOG_LEVEL:-info}
       # Stream primitive — the per-dispatch redis Streams the control plane relays (unit:<id>:out → SSE).
       - VEXA_REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis:6379/0
-      # The backing the Runtime binds into the worker as the workspace store (the project-prefixed volume).
-      - VEXA_WORKSPACE_MOUNT_SOURCE=${COMPOSE_PROJECT_NAME:-vexa-v012}_agent-workspaces
       # Three-tier mount stack (AMENDMENT 4): the platform-owned GLOBAL SYSTEM workspace (_global) mounted
       # into every worker (behaviour/skills/tools). OPTIONAL: empty = the in-store /workspaces/_global,
       # created empty at boot; set it only to manage `_global` as a separate host repo OUTSIDE the
@@ -1376,8 +1374,9 @@ services:
     tmpfs: [/tmp]
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
+    # Readiness, not liveness: /ready answers 503 while the credential store does not.
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8100/health').status==200 else 1)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8100/ready').status==200 else 1)"]
       interval: 10s
       timeout: 5s
       retries: 5

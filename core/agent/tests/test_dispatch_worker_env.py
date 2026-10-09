@@ -54,9 +54,8 @@ def test_agent_api_neither_reads_nor_declares_the_store_backing():
     assert "workspace_mount_source" not in Settings.model_fields
     decl = cp.load_declaration()
     assert "VEXA_WORKSPACE_MOUNT_SOURCE" not in {k["key"] for k in decl["keys"]}
-    # a surface that still sets it is documented drift, not a key this service reads
-    surface_only = {k["key"]: k["reason"] for k in decl.get("surface_only") or []}
-    assert "runtime" in surface_only["VEXA_WORKSPACE_MOUNT_SOURCE"]
+    # and no deploy surface sets it on agent-api any more, so it is not even a surface-only key
+    assert "VEXA_WORKSPACE_MOUNT_SOURCE" not in {k["key"] for k in decl.get("surface_only") or []}
 
 
 # ── the configured workspace template reaches the worker ─────────────────────────────────────────

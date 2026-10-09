@@ -950,10 +950,6 @@
     {
       "key": "ANTHROPIC_DEFAULT_HAIKU_MODEL",
       "reason": "not read by the control plane \u2014 the runtime brokers it into workers; present on this service historically"
-    },
-    {
-      "key": "VEXA_WORKSPACE_MOUNT_SOURCE",
-      "reason": "not read and not stamped: the store backing is the runtime's own configuration, and the runtime drops any VEXA_WORKSPACE_MOUNT_* key a spec carries (runtime_kernel/workload_env.py). Compose and Helm still set it on agent-api; it leaves this list when they stop"
     }
   ]
 }
