@@ -10,6 +10,7 @@ nothing here starts a server.
 | `ports` · `adapters` | the hexagonal seams (P5) and their real implementations: the git workspace, GitHub, the runtime and its scheduler over HTTP, the dispatch identity minter, the transcript stream reader, and the membership index and model config over admin-api |
 | `core` | the agent-run core: transcript.v1 → governed action → a workspace commit |
 | `units` | builds the one canonical unit.v1 dispatch envelope |
+| `unit_input` | who may put a message on a live worker's input stream: the per-unit key agent-api signs each entry with and the worker verifies |
 | `spawn` | builds the runtime.v1 `WorkloadSpec.env` for an agent worker |
 | `delegation` | the worker's per-dispatch token (delegation.v1), vendored byte for byte from `core/identity/contracts/delegation.v1/` |
 | `tools` | the generic toolbelt mechanism: tool.v1 → a Claude grant |

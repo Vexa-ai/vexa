@@ -29,7 +29,7 @@ from control_plane.system_mounts import GLOBAL_SLUG, SYSTEM_SLUG, global_mount, 
 from shared.config import Settings
 from shared import delegation
 from shared.ports import IdentityPort, RuntimePort
-from shared import units
+from shared import unit_input, units
 from shared.units import chat_session, dispatch_id, input_topic, output_topic
 
 logger = logging.getLogger("agent_api.dispatch")
@@ -932,6 +932,11 @@ class Dispatcher:
             env["REDIS_URL"] = workload_redis.grant(
                 self._workload_redis, secret=self._settings.internal_api_secret.get_secret_value(),
                 unit_id=uid, service_url=self._settings.redis_url)
+        # The unit's input-stream key: the worker runs only the stream entries signed with it, and
+        # agent-api is the one writer that holds it (shared/unit_input.py).
+        in_key = self._unit_input_key(uid)
+        if in_key:
+            env[unit_input.KEY_ENV] = in_key
         # WARM DELIVERY (the lost-turn fix). The runtime's create is an IDEMPOTENT TOUCH for a
         # workload that is still starting/running (ADR-0027) — it returns the live status and
         # DISCARDS the spec env, where a chat message's prompt rides. So a message sent while the
@@ -996,6 +1001,10 @@ class Dispatcher:
             return None
         return self._warm_stream
 
+    def _unit_input_key(self, uid: str) -> str:
+        secret = self._settings.internal_api_secret
+        return unit_input.unit_key(secret.get_secret_value() if secret else "", uid)
+
     def _warm_fail(self) -> None:
         """An op on the warm client failed — drop it and back off (the spawn path still dispatched)."""
         self._warm_stream = None
@@ -1037,7 +1046,7 @@ class Dispatcher:
             entry = {"type": "message", "prompt": prompt, "nonce": nonce}
             if inbox:
                 entry["inbox"] = inbox
-            r.xadd(input_topic(uid), {"turn": json.dumps(entry)})
+            r.xadd(input_topic(uid), unit_input.signed_entry(self._unit_input_key(uid), entry))
         except Exception as exc:  # noqa: BLE001
             # WHETHER THIS LOSES THE TURN DEPENDS ON THE UNIT, so the decision is the caller's.
             # Cold unit: the spawn carries this same prompt as its entrypoint and nothing is lost —

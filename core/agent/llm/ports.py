@@ -52,7 +52,10 @@ def scrubbed_git_env() -> dict[str, str]:
 # identity token is a bearer secret the subprocess has no use for. The model DOES need its MODEL
 # credentials (ANTHROPIC_*/CLAUDE_CODE_OAUTH_TOKEN) to talk to the provider, so those are
 # deliberately absent here — this is the tight denylist of vars the model has no legitimate reason to hold.
-_HARNESS_SUBPROCESS_DENY_VARS = ("REDIS_URL", "VEXA_AGENT_IDENTITY_TOKEN")
+_HARNESS_SUBPROCESS_DENY_VARS = ("REDIS_URL", "VEXA_AGENT_IDENTITY_TOKEN",
+                                 # the unit's input-stream key (shared/unit_input.py): whoever holds it
+                                 # can put a message on the worker's input as its owner
+                                 "VEXA_UNIT_IN_KEY")
 
 
 def harness_subprocess_env() -> dict[str, str]:

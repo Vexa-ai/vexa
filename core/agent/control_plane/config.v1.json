@@ -830,6 +830,14 @@
       "targets": []
     },
     {
+      "key": "VEXA_UNIT_IN_KEY",
+      "class": "defaulted",
+      "default": "(unset in agent-api \u2014 stamped per dispatch; a worker without one runs no input-stream entry)",
+      "secret": true,
+      "description": "the unit's input-stream key (shared/unit_input.py): agent-api derives it per unit from INTERNAL_API_SECRET, signs every entry it writes to unit:<id>:in with it and stamps it into that unit's worker, which runs only the entries that verify. Never passed to the model's harness",
+      "targets": []
+    },
+    {
       "key": "REDIS_URL",
       "class": "defaulted",
       "default": "(unset in agent-api \u2014 the runtime injects the worker's connection per dispatch)",

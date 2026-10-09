@@ -64,6 +64,7 @@ from shared.timeline import timeline_preamble  # noqa: F401 — re-exported for 
 # `unit_of_topic` reads it back out and `inbox_cursor_key` spells the one key this loop writes, so
 # the reader that answers "what is still queued for this chat" is looking where the writer wrote.
 from shared import units as shared_units
+from shared import unit_input
 # THE JOB RUNNER (Vexa-ai/vexa#1584) — a long act that does not hold the chat. It sits above the
 # harness on purpose, so `serve` gets background work for every runner rather than one adapter's.
 from worker import jobs as worker_jobs
@@ -1773,8 +1774,11 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
           harness: HarnessPort | None = None, writeback: TurnFn | None = None,
           tools: "list[str] | None" = None, job: TurnFn | None = None,
           jobs_dir: "Path | None" = None, jobs_session: str = "",
-          inbox_cursor: "str | None" = None) -> None:
+          inbox_cursor: "str | None" = None, in_key: "str | None" = None) -> None:
     """Run the entrypoint turn (if any), then serve interactive messages on ``in_topic`` until idle.
+
+    Only stream entries signed with this unit's input key run (``shared/unit_input.py``; ``in_key``,
+    else ``VEXA_UNIT_IN_KEY``): anything else on ``in_topic`` is passed over and logged, never run.
 
     Each turn's UnitEvents are XADD'd to ``out_topic`` (tagged with a turn id), followed by a
     ``turn-complete`` marker. An empty blocking read (idle) returns — the process exits and the
@@ -1893,6 +1897,14 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
     # arriving user messages to the RUNNING harness through its runner-neutral steering seam. Claude
     # writes stream-json to its open stdin; Codex sends turn/steer to app-server. A message the active
     # runner cannot take is left IN the stream for the between-turns loop.
+    key = os.environ.get(unit_input.KEY_ENV, "") if in_key is None else in_key
+
+    def _turn_of(entry_id, fields) -> "dict | None":
+        msg = unit_input.verified_turn(key, fields)
+        if msg is None:
+            log.warning("input entry %s is not signed for this unit — not run", entry_id)
+        return msg
+
     def _drain_inject(cursor: list) -> None:
         enabled = getattr(harness, "midturn_enabled", lambda: False)
         inject = getattr(harness, "inject_user_message", lambda _text: False)
@@ -1904,7 +1916,9 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
             return
         for _name, entries in resp or []:
             for entry_id, fields in entries:
-                msg = json.loads(fields.get("turn", "{}"))
+                msg = _turn_of(entry_id, fields)
+                if msg is None:
+                    return  # the outer loop passes over it in order
                 text = msg.get("prompt", "")
                 if msg.get("type") == "stop" or not text:
                     return  # leave stop (and everything after) for the outer loop
@@ -1950,10 +1964,9 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
             took = False
             for _name, entries in resp or []:
                 for entry_id, fields in entries:
-                    try:
-                        msg = json.loads(fields.get("turn", "{}"))
-                    except ValueError:
-                        return
+                    msg = _turn_of(entry_id, fields)
+                    if msg is None:
+                        return          # the outer loop passes over it in order
                     if msg.get("type") == "stop":
                         return          # stopping is the outer loop's, and so is everything after it
                     if read_job_mark(msg.get("prompt", "")) is None:
@@ -2158,7 +2171,9 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
             present = xrange_(in_topic) or []
             for entry_id, fields in present:
                 last = entry_id
-                msg = json.loads(fields.get("turn", "{}"))
+                msg = _turn_of(entry_id, fields)
+                if msg is None:
+                    continue
                 if msg.get("nonce") == entry_nonce:
                     continue          # the entrypoint's own copy — it runs as t0 below
                 text = msg.get("prompt", "")
@@ -2205,7 +2220,9 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
         for _name, entries in resp:
             for entry_id, fields in entries:
                 _took(cursor, entry_id)
-                msg = json.loads(fields.get("turn", "{}"))
+                msg = _turn_of(entry_id, fields)
+                if msg is None:
+                    continue
                 if msg.get("type") == "stop":
                     _join_trailers()
                     if _jobs is not None:

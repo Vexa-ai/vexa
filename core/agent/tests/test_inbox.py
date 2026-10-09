@@ -40,6 +40,7 @@ from shared.marks import job_mark, read_job_mark
 from worker.worker import serve
 
 from .test_worker import CursorStream
+from tests.conftest import signed_turn
 
 
 # ── the inbox is a stream AND a key, so the fake has to be a real redis ─────────────────────────
@@ -199,7 +200,7 @@ class CursorStreamWithKeys(CursorStream):
 
 
 def _entry(eid, prompt, **meta):
-    return (eid, {"turn": json.dumps({"prompt": prompt, "inbox": meta})})
+    return (eid, signed_turn({"prompt": prompt, "inbox": meta}))
 
 
 def _act(eid, kind, target, line):

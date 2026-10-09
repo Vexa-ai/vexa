@@ -86,6 +86,23 @@ def _mandatory_global_workspace(monkeypatch, tmp_path_factory):
     monkeypatch.setenv("VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH", str(global_dir))
 
 
+#: The unit input key every worker test serves with (shared/unit_input.py): a worker runs only the
+#: input entries signed with it, so tests enqueue through :func:`signed_turn`.
+TEST_UNIT_IN_KEY = "11" * 32
+
+
+def signed_turn(body: dict) -> dict:
+    """The stream fields agent-api writes for one message to a unit whose key is TEST_UNIT_IN_KEY."""
+    from shared import unit_input
+
+    return unit_input.signed_entry(TEST_UNIT_IN_KEY, body)
+
+
+@pytest.fixture(autouse=True)
+def _unit_input_key(monkeypatch):
+    monkeypatch.setenv("VEXA_UNIT_IN_KEY", TEST_UNIT_IN_KEY)
+
+
 @pytest.fixture(autouse=True)
 def _isolated_home(monkeypatch, tmp_path_factory):
     """Point HOME at a per-test temp dir. The claude-code harness rewires ``$HOME/.claude/projects``
