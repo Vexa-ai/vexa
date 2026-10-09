@@ -152,8 +152,14 @@ function gateExports() {
   return true;
 }
 
-// gate:isolation (P2) — run every brick's own check-isolation
+// gate:isolation (P2) — run every brick's own check-isolation. A package without one is a brick nobody
+// checks, and nothing would say so, so every package carries one, bar the reasoned exemptions below.
+const ISOLATION_EXEMPT = {
+  "core/meetings/eval": "the L4 eval harness: run by hand against a live deployment, outside the pnpm workspace, and it declares no dependencies, so there is no declared boundary for a check to hold",
+};
 function gateIsolation() {
+  const missing = packageDirs().filter((d) => !existsSync(join(d, "scripts", "check-isolation.js")) && !ISOLATION_EXEMPT[rel(d)]);
+  if (missing.length) return fail(missing.map((d) => `package with no scripts/check-isolation.js: ${rel(d)}`));
   const found = walkDirs()
     .map((d) => [d, join(d, "scripts", "check-isolation.js")])
     .filter(([, s]) => existsSync(s));

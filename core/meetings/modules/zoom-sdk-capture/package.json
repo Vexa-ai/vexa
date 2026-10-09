@@ -13,7 +13,8 @@
   ],
   "scripts": {
     "build": "tsc",
-    "test": "tsx src/capture.test.ts"
+    "test": "tsx src/capture.test.ts",
+    "check:isolation": "node scripts/check-isolation.js"
   },
   "dependencies": {
     "@vexa/capture-codec": "workspace:*"
