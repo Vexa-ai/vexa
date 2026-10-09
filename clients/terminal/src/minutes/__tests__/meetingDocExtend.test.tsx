@@ -73,7 +73,7 @@ describe("a page that declares a transcript widget", () => {
     fireLine();
     const prompt = asks[0].prompt ?? "";
     expect(prompt).toContain("transcript_cursor");
-    expect(prompt).toContain('meeting_transcript(meeting_id="147"');
+    expect(prompt).toContain("get_meeting_transcript(meeting_db_id=147");
     expect(prompt).toContain("vexa:transcript");
     expect(prompt).toContain("meeting:<key>:start");
     // and the bubble stays a label — the machinery never becomes the person's own words

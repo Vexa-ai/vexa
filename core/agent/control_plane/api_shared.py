@@ -1212,7 +1212,7 @@ def meeting_binding(ev: object) -> "tuple[str, str] | None":
     """``(row, native)`` this turn BOUND its chat to, or None (Vexa-ai/vexa#1597).
 
     ONE EVENT MEANS IT, and only one: the ``artifact`` carrying ``meeting:<row>``, which the harness
-    emits for a successful ``bot_send`` and for nothing else (``llm/claude_code.py::_bot_artifact``).
+    emits for a successful ``request_meeting_bot`` and for nothing else (``llm/claude_code.py::_bot_artifact``).
     A bot went into a room BECAUSE this conversation asked for one, so this conversation is that
     meeting's chat — the founder's rule, and his words for the alternative: *"there is no need to
     create a new chat for that"*.

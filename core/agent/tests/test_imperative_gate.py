@@ -22,34 +22,36 @@ from worker.engine import imperative_preamble
 def test_send_bot_is_detected():
     text = imperative_preamble("please send bot now")
     assert "operational imperative" in text
-    assert "call `bot_send` first" in text
+    assert "call `request_meeting_bot` first" in text
 
 
-def test_all_four_repeats_still_name_bot_send_once():
+def test_all_four_repeats_still_name_the_send_once():
     """The founder wrote it four times in the ledger incident — the gate must not repeat itself
     four times back, and must not miss it on any single repeat either."""
     for prompt in ["send bot", "Send bot", "send the bot", "SEND BOT please"]:
         text = imperative_preamble(prompt)
-        assert text.count("bot_send") == 1, prompt
+        assert text.count("request_meeting_bot") == 1, prompt
 
 
-def test_join_the_meeting_maps_to_bot_send():
-    assert "call `bot_send` first" in imperative_preamble("can you join the meeting now")
+def test_join_the_meeting_maps_to_the_send():
+    assert "call `request_meeting_bot` first" in imperative_preamble("can you join the meeting now")
 
 
-def test_stop_recording_and_stop_bot_map_to_bot_stop():
-    assert "call `bot_stop` first" in imperative_preamble("stop recording please")
-    assert "call `bot_stop` first" in imperative_preamble("stop the bot")
+def test_stop_recording_and_stop_bot_map_to_stop_bot():
+    assert "call `stop_bot` first" in imperative_preamble("stop recording please")
+    assert "call `stop_bot` first" in imperative_preamble("stop the bot")
 
 
-def test_schedule_bot_maps_to_bot_schedule():
-    assert "call `bot_schedule` first" in imperative_preamble("schedule the bot for 3pm")
+def test_scheduling_names_no_tool_the_edge_does_not_serve():
+    """There is no verb that books a bot for later on a standard deployment — a meeting gets one by
+    its calendar invite reaching the mailbox — so the gate must not order a call to one."""
+    assert imperative_preamble("schedule the bot for 3pm") == ""
 
 
 def test_multiple_imperatives_in_one_message_all_listed():
     text = imperative_preamble("send bot, and stop recording when it's done")
-    assert "call `bot_send` first" in text
-    assert "call `bot_stop` first" in text
+    assert "call `request_meeting_bot` first" in text
+    assert "call `stop_bot` first" in text
 
 
 def test_ordinary_chat_gets_no_imperative_framing():
@@ -94,7 +96,7 @@ def test_imperative_preamble_ships_on_the_turn_prompt_before_everything_else(tmp
     list(engine.run_turn_over_workspace(tmp_path, "send bot", harness=H(), commit=False))
     prompt = seen["prompt"]
     assert "operational imperative" in prompt
-    assert "call `bot_send` first" in prompt
+    assert "call `request_meeting_bot` first" in prompt
     assert "ASK the user their name early" in prompt  # the onboarding nudge is still there...
     # ...but the imperative gate comes BEFORE it, and before the person's own "send bot" too.
     assert prompt.index("operational imperative") < prompt.index("ASK the user their name early")

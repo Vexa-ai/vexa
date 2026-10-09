@@ -215,18 +215,22 @@ def _adopt_legacy_continuity(chat_root: Path, work: Path, session: str) -> None:
 # prompt, including the MCP-status note — so an imperative is the first thing the model reads, not
 # the last. It fires on the person's OWN words only (`prompt`, not the preamble text that follows),
 # to avoid ever matching itself or another preamble's prose.
+#
+# Each pattern names the verb the ONE MCP serves for it. Booking a bot for later has no verb there — a
+# meeting gets its bot when its calendar invite reaches the mailbox — so "schedule the bot" is not an
+# imperative this gate can order a call for.
 _IMPERATIVE_PATTERNS: tuple[tuple["re.Pattern[str]", str, str], ...] = (
-    (re.compile(r"\bsend\s+(the\s+)?bot\b", re.I), "bot_send", "send the bot"),
-    (re.compile(r"\bschedule\s+(the\s+)?bot\b", re.I), "bot_schedule", "schedule the bot"),
-    (re.compile(r"\bjoin\s+(the\s+)?(meeting|call)\b", re.I), "bot_send", "join the meeting"),
-    (re.compile(r"\bstop\s+record(ing)?\b", re.I), "bot_stop", "stop recording"),
-    (re.compile(r"\bstop\s+(the\s+)?bot\b", re.I), "bot_stop", "stop the bot"),
+    (re.compile(r"\bsend\s+(the\s+)?bot\b", re.I), "request_meeting_bot", "send the bot"),
+    (re.compile(r"\bjoin\s+(the\s+)?(meeting|call)\b", re.I), "request_meeting_bot",
+     "join the meeting"),
+    (re.compile(r"\bstop\s+record(ing)?\b", re.I), "stop_bot", "stop recording"),
+    (re.compile(r"\bstop\s+(the\s+)?bot\b", re.I), "stop_bot", "stop the bot"),
 )
 
 
 def imperative_preamble(prompt: str) -> str:
-    """If the person's own message names an operational imperative — send/stop/schedule the bot,
-    join, stop recording — say so FIRST, in words that outrank every onboarding/propose/write-back
+    """If the person's own message names an operational imperative — send or stop the bot, join,
+    stop recording — say so FIRST, in words that outrank every onboarding/propose/write-back
     concern the rest of the composed prompt carries. Empty string when nothing matches: an ordinary
     chat turn gets no extra framing at all."""
     matched: list[tuple[str, str]] = []
@@ -240,7 +244,7 @@ def imperative_preamble(prompt: str) -> str:
     lines = [
         "## An operational imperative is in this message — act on it FIRST",
         "",
-        "The person's own words below name at least one of: send/stop/schedule the bot, join the "
+        "The person's own words below name at least one of: send or stop the bot, join the "
         "meeting, stop recording. Call the matching tool NOW, before any onboarding question, any "
         "`propose` call, any web search, and before the write-back phase. Answer with what the tool "
         "actually returned — never a scaffold question, a search, or a description of what you would "
@@ -1335,21 +1339,27 @@ def room_run() -> str:
     return (os.environ.get("VEXA_ROOM_MEETING") or "").strip()
 
 
-def room_toolbelt(tools: list[str]) -> list[str]:
-    """The MCP allow-set for a post-meeting turn: everything except the bot verbs.
+#: The verbs that act on a LIVE meeting. A post-meeting turn is offered none of them.
+LIVE_MEETING_VERBS = frozenset({"request_meeting_bot", "stop_bot", "speak_in_meeting",
+                                "update_bot_config", "get_bot_status"})
 
-    The meeting is OVER. `bot_send`, `bot_stop`, `bot_say`, `bot_schedule` and `bots_running` can
-    do nothing useful about a room that has finished, and offering them is not neutral: on
-    2026-09-02 the post-meeting agent for uid 133 read the meeting as still live and called
-    `bot_stop` four times in one turn, each answered with a bare `{"stopped": false, "status":
-    404}` that reads as a transient failure rather than a terminal state (F104). A tool that
-    cannot help is a tool that can be looped on.
+
+def room_toolbelt(tools: list[str]) -> list[str]:
+    """The MCP allow-set for a post-meeting turn: everything except the live-meeting verbs.
+
+    The meeting is OVER. Sending, stopping, speaking through or reconfiguring a bot can do nothing
+    useful about a room that has finished, and offering them is not neutral: on 2026-09-02 the
+    post-meeting agent for uid 133 read the meeting as still live and called the stop verb four
+    times in one turn, each answered with a bare `{"stopped": false, "status": 404}` that reads as
+    a transient failure rather than a terminal state (F104). A tool that cannot help is a tool that
+    can be looped on.
 
     Advertised is not the same as callable, and both matter: the harness will not offer what is
     not in `--allowedTools`, so this removes the option rather than relying on the model declining
     it. `bot_stop` itself also learned to answer the state — the two fixes are independent because
     the MCP serves callers this allow-set never reaches."""
-    return [t for t in tools if not t.startswith(f"mcp__{VEXA_MCP_SERVER}__bot")]
+    prefix = f"mcp__{VEXA_MCP_SERVER}__"
+    return [t for t in tools if not (t.startswith(prefix) and t[len(prefix):] in LIVE_MEETING_VERBS)]
 
 
 def _delegation_dir(work: Path) -> "Path | None":

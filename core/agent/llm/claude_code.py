@@ -47,12 +47,10 @@ _TERMS_TOOLS = frozenset({
     "transcript_terms",
 })
 
-# The sends that put a bot in a room NOW. `bot_schedule` is deliberately absent: it books a join for
-# later, so there is nothing to open beside the chat yet and a panel that jumped to an empty
-# transcript would be answering a question nobody asked.
+# The send that puts a bot in a room NOW.
 _BOT_TOOLS = frozenset({
-    "mcp__vexa__bot_send",
-    "bot_send",
+    "mcp__vexa__request_meeting_bot",
+    "request_meeting_bot",
 })
 
 # THE ASK TO OPEN SOMETHING (Vexa-ai/vexa#1586). Every other panel move on this page is a SIDE
@@ -136,7 +134,7 @@ def _published_terms(content: object) -> "dict | None":
 
 
 def _bot_artifact(content: object) -> "dict | None":
-    """The panel move a successful `bot_send` earns, or None (F73, decision 30.4).
+    """The panel move a successful `request_meeting_bot` earns, or None (F73, decision 30.4).
 
     The founder watched the agent finish a send and then offer him a LINK into the product he was
     already looking at. The fix is not a better sentence — the panel is the product's own surface and
@@ -145,9 +143,10 @@ def _bot_artifact(content: object) -> "dict | None":
 
     BY THE ROW, NEVER THE NATIVE ID. `path` is the literal string ``meeting:`` + the meeting row id;
     a personal room's native id spans every meeting ever held in it, so it names a series and the
-    resolver would pick whichever occurrence is newest. `bot_send` resolves and returns
-    ``meeting_row`` for exactly this. No row, no event — a panel aimed at a guess is the failure this
-    whole seam is careful about.
+    resolver would pick whichever occurrence is newest. The send answers with the meeting row it
+    created (`id`) — or, for a bot already in that room, `{"status": "already_exists", "meeting":
+    row}`. No row, no event — a panel aimed at a guess is the failure this whole seam is careful
+    about, and a meeting whose bot already `failed` opens nothing.
 
     `pin` and `focus` are separate and both are wanted here: pin KEEPS the transcript in the strip so
     it survives the next thing opened, focus FRONTS it now.
@@ -155,7 +154,7 @@ def _bot_artifact(content: object) -> "dict | None":
     …AND THE NATIVE ID RIDES ALONG (Vexa-ai/vexa#1597). This event is the only place in the system
     where "a bot was sent, from THIS chat, into THAT meeting" is stated, and agent-api reads it to
     BIND the meeting to the chat's session. The row addresses the meeting as the panel addresses it;
-    the native id is how everything that talks to meeting-api addresses it (`bot_stop`, the
+    the native id is how everything that talks to meeting-api addresses it (`stop_bot`, the
     transcript API), so the binding carries both rather than making a second lookup the price of
     knowing the second one. Nothing renders it — the client already reads a native id off the
     meetings list — so an absent one costs the binding a field, never the event."""
@@ -163,13 +162,17 @@ def _bot_artifact(content: object) -> "dict | None":
         obj = json.loads(_tool_result_text(content))
     except (json.JSONDecodeError, TypeError):
         return None
-    if not isinstance(obj, dict) or not obj.get("sent"):
+    if not isinstance(obj, dict):
         return None
-    row = str(obj.get("meeting_row") or "").strip()
+    if obj.get("status") == "already_exists":
+        obj = obj.get("meeting") if isinstance(obj.get("meeting"), dict) else {}
+    if str(obj.get("status") or "").lower() == "failed":
+        return None
+    row = str(obj.get("id") or "").strip()
     if not row:
         return None
     ev = {"type": "artifact", "path": f"meeting:{row}", "pin": True, "focus": True}
-    native = str(obj.get("meeting") or "").strip()
+    native = str(obj.get("native_meeting_id") or "").strip()
     if native:
         ev["native"] = native
     return ev

@@ -224,11 +224,11 @@ export function fallbackText(intent: ChatIntent): string {
   const room = (intent.kind === "extend" || intent.kind === "create") && intent.meeting
     ? `\n\nThis is meeting ${intent.meeting}'s own page and the transcript is embedded in it. ` +
       "Read the page first: its frontmatter carries `transcript_cursor`. Read the transcript with " +
-      `meeting_transcript(meeting_id="${intent.meeting}", since="<that cursor>") — only what is new — ` +
-      "then rewrite the content BETWEEN the `<!-- meeting:<key>:start -->` / `:end` markers " +
+      `get_meeting_transcript(meeting_db_id=${intent.meeting}, since_index=<that cursor>) — only what ` +
+      "is new — then rewrite the content BETWEEN the `<!-- meeting:<key>:start -->` / `:end` markers " +
       "(about · decisions · commitments · people · questions), leave every word outside them alone, " +
-      "never touch the `<!-- vexa:transcript … -->` slot, and set `transcript_cursor` to the cursor " +
-      "that read returned."
+      "never touch the `<!-- vexa:transcript … -->` slot, and set `transcript_cursor` to the " +
+      "`next_index` that read returned."
     : "";
   // THE LINE RIDES THE FALLBACK TOO. This sentence is what runs when the preset library is behind
   // the client (the header says why both travel), and a fallback that dropped the one thing the

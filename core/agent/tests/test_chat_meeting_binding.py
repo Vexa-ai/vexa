@@ -45,8 +45,8 @@ def _result(payload):
 def test_a_successful_send_carries_the_row_AND_the_native_id():
     """The row is how the panel addresses a meeting; the native id is how meeting-api does. The
     binding is the one record that has to answer both, so the send hands over both."""
-    ev = _bot_artifact(_result({"sent": True, "platform": "google_meet",
-                                "meeting": "cqb-egsq-vmt", "meeting_row": 118}))
+    ev = _bot_artifact(_result({"id": 118, "platform": "google_meet",
+                                "native_meeting_id": "cqb-egsq-vmt", "status": "requested"}))
     assert ev == {"type": "artifact", "path": "meeting:118", "pin": True, "focus": True,
                   "native": "cqb-egsq-vmt"}
     # the panel move it always earned is untouched — pin KEEPS the transcript, focus FRONTS it
@@ -54,7 +54,7 @@ def test_a_successful_send_carries_the_row_AND_the_native_id():
 
 
 def test_a_send_that_resolved_no_native_still_binds_by_row():
-    ev = _bot_artifact(_result({"sent": True, "meeting_row": "118"}))
+    ev = _bot_artifact(_result({"id": "118", "status": "requested"}))
     assert ev["path"] == "meeting:118" and "native" not in ev
     assert meeting_binding(ev) == ("118", "")
 

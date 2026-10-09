@@ -179,19 +179,20 @@ _DISBELIEF = re.compile(
 # coincidence, and a re-run is not free. Ordered longest-phrase-first is unnecessary — every key is
 # a whole word and the request is matched word-wise.
 _VERB_TOOL: tuple[tuple[tuple[str, ...], str], ...] = (
-    (("send", "drop", "put", "join", "admit", "dispatch"), "bot_send"),
-    (("schedule", "book"), "bot_schedule"),
-    (("stop", "remove", "pull"), "bot_stop"),
-    (("transcript", "transcribe", "read along"), "meeting_transcript"),
-    (("say", "speak"), "bot_say"),
+    (("send", "drop", "put", "join", "admit", "dispatch"), "request_meeting_bot"),
+    (("stop", "remove", "pull"), "stop_bot"),
+    (("transcript", "transcribe", "read along"), "get_meeting_transcript"),
+    (("say", "speak"), "speak_in_meeting"),
 )
+#: The verbs a refusal names by saying "bot" rather than by the tool's own name.
+_BOT_VERBS = frozenset({"request_meeting_bot", "stop_bot", "speak_in_meeting"})
 
 
 def disbelieved_capability(prompt: str, reply: str, tools) -> "str | None":
     """The tool this turn REFUSED while holding it, or None (F70).
 
     On 2026-09-02 the founder asked for a bot and was told "I don't have a bot-dispatch tool in this
-    session". `bot_send` was in the list; the CLI logged `hasTools: true`; the model never attempted
+    session". The send verb was in the list; the CLI logged `hasTools: true`; the model never attempted
     a call. Asked afterwards to enumerate its tools it listed them all and said it had been "guessing
     at my own capabilities instead of checking them".
 
@@ -214,7 +215,8 @@ def disbelieved_capability(prompt: str, reply: str, tools) -> "str | None":
             # the answer refused. Require the SAME refusal clause to name this tool/domain.
             for refusal in refusals:
                 clause=refusal.group(0).lower()
-                if tool in clause or (tool.startswith('bot_') and re.search(r'\bbot\b',clause)) or (tool=='meeting_transcript' and re.search(r'\btranscript\b',clause)):
+                if (tool in clause or (tool in _BOT_VERBS and re.search(r'\bbot\b', clause))
+                        or (tool == 'get_meeting_transcript' and re.search(r'\btranscript\b', clause))):
                     return tool
     return None
 

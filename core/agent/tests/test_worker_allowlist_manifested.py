@@ -86,12 +86,11 @@ MANIFEST_GLOBS = ["core/*/mcp.tools.v1.json", "core/*/services/*/mcp.tools.v1.js
 #: The exact migration backlog, as of the manifest this test shipped beside — see the module
 #: docstring for why each name is here rather than in a manifest.
 GAP = {
-    "meeting_transcript", "meetings_list", "bot_send", "bot_stop", "meeting_info",   # meetings domain
-    "mark_scaffolded", "company_context",                                           # agent: no server home
-    "vexa_overview", "start_onboarding",                                            # agent: no server home
     "open_page",                                                                    # rig: the panel verb
     "workspace_target",                                                             # rig: the target verb
 }
+#: The MCP service's own tools — each a route on it whose `operation_id` is the tool's name.
+BUILT_IN_SOURCE = REPO / "core" / "meetings" / "services" / "mcp" / "src" / "vexa_mcp" / "app.py"
 
 
 def _allowlisted() -> set:
@@ -99,7 +98,8 @@ def _allowlisted() -> set:
 
 
 def _manifested() -> set:
-    names = set()
+    import re
+    names = set(re.findall(r'operation_id="(\w+)"', BUILT_IN_SOURCE.read_text()))
     for pattern in MANIFEST_GLOBS:
         for p in REPO.glob(pattern):
             names |= {t["name"] for t in json.loads(p.read_text()).get("tools") or []}

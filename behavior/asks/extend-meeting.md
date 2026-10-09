@@ -21,10 +21,10 @@ Those are THEIR words. When there is a line there it is the WHAT and it wins ove
 Read `{{path}}` in full first. Its frontmatter carries `transcript_cursor` — where the last Extend
 stopped. Then:
 
-    meeting_transcript(meeting_id="{{meeting}}", since="<that cursor>")
+    get_meeting_transcript(meeting_db_id={{meeting}}, since_index=<that cursor>)
 
-With no cursor yet, read the meeting from the top (`tail=0`). Either way keep the `cursor` that call
-returns; you will write it back. **Never re-read the whole room when a cursor exists** — the page
+With no cursor yet, read the meeting from the top (leave out `since_index`). Either way keep the
+`next_index` that call returns; it is the cursor you will write back. **Never re-read the whole room when a cursor exists** — the page
 already says what was said before it, and a second account of the same ten minutes in a slightly
 different voice is what a reader notices first.
 
@@ -49,8 +49,8 @@ absorb. A region that does not exist yet you add, with its `## Heading`, at the 
 never write inside it.** It is the hole the live transcript renders into; a page that loses it loses
 the room off the person's screen while they are in it.
 
-Then set `transcript_cursor:` in the frontmatter to the cursor your read returned, and write the
-file once, whole, with `workspace_write`.
+Then set `transcript_cursor:` in the frontmatter to the `next_index` your read returned, and write
+the file once, whole, with `workspace_write`.
 
 ## Page what the room named
 
@@ -61,7 +61,7 @@ ways: the meeting page names the entity, the entity's page names this meeting.
 
 Then publish the terms so the transcript shows them where they were said:
 
-    transcript_terms(meeting_id="{{meeting}}", since="<the same cursor>", keep="<the ones that matter>")
+    transcript_terms(meeting_id="{{meeting}}", keep="<the ones that matter>")
 
 Exactly the ones that matter here — a chip on every capitalised word is a screen full of noise.
 

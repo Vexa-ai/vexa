@@ -256,7 +256,7 @@ def build(**d) -> APIRouter:
         any send in it created (Vexa-ai/vexa#1597), and any workspace it created
         (Vexa-ai/vexa#1603).
 
-        THE TURN'S OWN STREAM IS WHERE THIS IS KNOWN. `bot_send` is served by the vexa MCP, which is
+        THE TURN'S OWN STREAM IS WHERE THIS IS KNOWN. `request_meeting_bot` is served by the vexa MCP, which is
         stateless by design and has never been told which chat is calling it; the worker knows the
         result but not that a chat is a rail row; agent-api knows the subject and the session because
         it opened this response. So the one place holding both halves of *"this chat made that
@@ -266,7 +266,7 @@ def build(**d) -> APIRouter:
         the client binds off the same event for the render it is doing now, and this is what makes
         the binding survive a reload, a second window and a second machine.
 
-        NO OWNERSHIP RE-CHECK, deliberately. The row came back from a `bot_send` this subject's own
+        NO OWNERSHIP RE-CHECK, deliberately. The row came back from a send this subject's own
         worker made with this subject's own credential, so re-asking meeting-api would add latency
         inside a live SSE and no authority. Every READ of a meeting is owner-scoped where it matters
         regardless — `/api/meeting/note` and `/api/meeting/stream` both refuse a row this caller does

@@ -190,9 +190,9 @@ def test_a_codex_transcript_terms_publish_paints_the_chips():
 
 
 def test_a_codex_bot_send_opens_the_live_transcript():
-    body = json.dumps({"sent": True, "meeting_row": "77"})
+    body = json.dumps({"id": 77, "native_meeting_id": "abc-defg-hij", "status": "requested"})
     evs = _completed({"type": "mcpToolCall", "id": "i4", "status": "completed",
-                      "server": "vexa", "tool": "bot_send",
+                      "server": "vexa", "tool": "request_meeting_bot",
                       "arguments": {}, "result": body})
     art = next(e for e in evs if e["type"] == "artifact")
     assert art["path"] == "meeting:77" and art["pin"] is True

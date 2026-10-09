@@ -45,7 +45,7 @@ SENTINEL = "<!--vexa:user-input-below-->"
 KICK = (
     "[post-meeting] Meeting 41 is over. You are writing its record.\n\n"
     "## Step 1 — get the words. Nothing else happens until this succeeds.\n\n"
-    "Call the tool `mcp__vexa__meeting_transcript` with `meeting_id=41` and `tail=0`.\n"
+    "Call the tool `mcp__vexa__get_meeting_transcript` with `meeting_db_id=41`.\n"
 )
 
 
