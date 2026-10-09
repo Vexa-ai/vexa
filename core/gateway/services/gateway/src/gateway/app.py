@@ -366,17 +366,26 @@ def create_app(
         if not user_data:
             return Response(content=json.dumps({"detail": "Invalid API key"}),
                             status_code=401, media_type="application/json")
+        # identity's own answer (`/internal/validate`): the MCP edge asks it before it spends the
+        # deployment's operator key on an `auth: admin` tool. A worker's delegation token is answered
+        # here only on the MCP's own re-entry, and it is the admin only when the person it acts for
+        # is the instance admin AND that person is in the loop (regime `human`); an unwatched run
+        # never is, whoever it acts for.
         if _is_delegated(api_key, user_data):
-            return _delegated_route_response()
+            if not _mcp_reentry(request, user_data):
+                return _delegated_route_response()
+            dlg = user_data.get("delegation") if isinstance(user_data.get("delegation"), Mapping) else {}
+            is_admin = (str(dlg.get("regime") or "") == "human"
+                        and user_data.get("person_is_admin") is True)
+        else:
+            is_admin = user_data.get("is_admin") is True
         set_user_id(user_data["user_id"])
         return {
             "user_id": user_data["user_id"],
             "email": user_data.get("email", ""),
             "scopes": user_data.get("scopes", []),
             "max_concurrent": user_data.get("max_concurrent", 3),
-            # identity's own answer (`/internal/validate`): the MCP edge asks it before it spends the
-            # deployment's operator key on an `auth: admin` tool.
-            "is_admin": user_data.get("is_admin") is True,
+            "is_admin": is_admin,
         }
 
     # --- auth + identity prep, shared by the buffered REST proxy (_forward) and the streaming proxy

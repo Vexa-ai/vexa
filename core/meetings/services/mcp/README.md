@@ -39,10 +39,11 @@ Each tool answers two different questions, and conflating them is what issue #14
   must also declare `admin_auth: {"header": …, "key_env": …}`, and this deployment must actually
   hold that key, or **the boot is refused, naming the tool**. A tool that is listed and then refused
   by its own door is worse than one that is absent: an agent that cannot see a tool recovers.
-  Because the key is the deployment's, the edge spends it only for the **instance admin calling
-  with their own credential**: before the forward it asks the gateway's `/auth/me` (identity's
-  `is_admin`) with the caller's credential, and anything else — another person, a worker's
-  delegation token, no answer — is a `403` and nothing is forwarded.
+  Because the key is the deployment's, the edge spends it only for the **instance admin**: before
+  the forward it asks the gateway's `/auth/me` (identity's `is_admin`) with the caller's credential.
+  A worker counts only when the person it acts for is the instance admin **and** that person is in
+  the loop (signed regime `human`, the governance chat); an unwatched run never does. Anything else —
+  another person, an autonomous worker, no answer — is a `403` and nothing is forwarded.
 - **`none`** — nothing travels.
 
 A tool's **arguments** are its `arguments` list plus the path parameters of its route, and both are

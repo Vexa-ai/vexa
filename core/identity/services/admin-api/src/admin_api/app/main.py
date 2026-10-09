@@ -1126,6 +1126,12 @@ def create_app() -> FastAPI:
                               else [str(w) for w in (scope.get("workspaces") or [])]}
         if claims.get("target"):
             resp["delegation"]["target"] = str(claims["target"])
+        # WHO THE WORKER ACTS FOR, as a fact about that person — never a role the worker holds
+        # (`is_admin` above stays False). The MCP edge spends the deployment's operator key for a
+        # worker only when its person is the instance admin AND the person is in the loop
+        # (regime `human`); it asks the gateway, which reads this beside the regime.
+        resp["person_is_admin"] = signin_allow.is_admin(
+            user.email, user.data, signin_allow.admin_emails()[0])
         return resp
 
     def _validated_identity(user: User, *, scopes: list, is_admin: bool) -> dict:

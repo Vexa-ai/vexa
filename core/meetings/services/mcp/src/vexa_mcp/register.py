@@ -109,15 +109,16 @@ async def _require_instance_admin(caller_key: str, gateway_url: Optional[str],
                                   transport: Optional[httpx.AsyncBaseTransport]) -> None:
     """An `auth: admin` tool spends a key the DEPLOYMENT holds, so this edge spends it only for the
     instance admin calling with their own credential — asked of the gateway at call time (`/auth/me`
-    answers `is_admin` from identity), never read from anything the caller sent. A worker's
-    delegation token is refused there (it is an MCP credential and never an admin's), and so is
-    everything else that is not the admin's own key. No gateway to ask is a refusal too."""
+    answers `is_admin` from identity), never read from anything the caller sent. For a worker's
+    delegation token the gateway answers only on this edge's re-entry (the identity it signed onto
+    the `/mcp` request, `reentry.py`), and says admin only when the person the worker acts for is
+    the instance admin and is in the loop (regime `human`). No gateway to ask is a refusal too."""
     if not gateway_url or not caller_key:
         raise HTTPException(status_code=403, detail=ADMIN_REFUSAL)
     try:
         async with httpx.AsyncClient(timeout=TOOL_TIMEOUT_S, transport=transport) as client:
             r = await client.get(gateway_url.rstrip("/") + "/auth/me",
-                                 headers={"X-API-Key": caller_key})
+                                 headers={"X-API-Key": caller_key, **reentry_mod.headers()})
     except httpx.RequestError:
         raise HTTPException(status_code=503, detail="could not confirm who is calling; try again")
     try:

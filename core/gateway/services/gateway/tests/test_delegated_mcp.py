@@ -186,3 +186,23 @@ def test_auth_me_says_whether_the_key_is_the_instance_admins():
             user["is_admin"] = answered
         client, _ = _client(user=user, key=VALID_KEY)
         assert client.get("/auth/me", headers={"X-API-Key": VALID_KEY}).json()["is_admin"] is said
+
+
+def test_a_worker_is_the_admin_only_for_an_admin_person_in_the_loop_and_only_on_re_entry():
+    """Flow authoring from the governance chat: the MCP asks `/auth/me` with the worker's token on
+    its re-entry. The answer is admin only when identity names the person the admin AND the
+    signed regime is `human`; an unwatched run of the admin, or a human run of anyone else, is not."""
+    def me(regime, person_is_admin, marker=True):
+        user = {**DELEGATED_USER, "delegation": {"regime": regime, "workspaces": "*" if regime == "human"
+                                                 else ["ws_1"]}, "person_is_admin": person_is_admin}
+        client, _ = _client(user=user)
+        headers = {"X-API-Key": DELEGATED}
+        if marker:
+            headers["X-Vexa-Internal-Mcp-Identity"] = _reentry(user=user)
+        return client.get("/auth/me", headers=headers)
+
+    assert me("human", True).json()["is_admin"] is True
+    assert me("autonomous", True).json()["is_admin"] is False
+    assert me("human", False).json()["is_admin"] is False
+    assert me("human", None).json()["is_admin"] is False
+    assert me("human", True, marker=False).status_code == 403

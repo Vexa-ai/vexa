@@ -24,6 +24,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from vexa_mcp import reentry as reentry_mod
 from vexa_mcp import bind, register
 from vexa_mcp import manifest as m
 
@@ -227,3 +228,26 @@ def test_every_flows_tool_declares_the_credential_its_own_door_actually_reads():
     admin_gated = {"flows_submit", "flow_lifecycle"}
     assert {t["name"]: t.get("auth") for t in doc["tools"]} == {
         t["name"]: ("admin" if t["name"] in admin_gated else "subject") for t in doc["tools"]}
+
+
+def test_the_admin_question_carries_the_re_entry_identity_so_a_worker_can_be_answered():
+    """A worker's token is answered at the gateway's `/auth/me` only on this edge's re-entry, so the
+    question carries the identity the gateway signed onto the request being served."""
+    asked = []
+    env = {"VEXA_MCP_FLOWS_ADMIN_KEY": "an-operator-key"}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/auth/me":
+            asked.append(request)
+            return httpx.Response(200, json={"user_id": 1, "is_admin": True})
+        return httpx.Response(200, json={"ok": True})
+
+    app = FastAPI()
+    app.add_middleware(reentry_mod.ReentryMiddleware)
+    a = m.assemble([ADMIN_MANIFEST], deployed=DEPLOYED, env=env)
+    register.register(app, bind.verify(a, {"flows": OPENAPI}), {"flows": "http://flows"},
+                      transport=httpx.MockTransport(handler), env=env, gateway_url="http://gateway.test")
+    TestClient(app).post("/tools/flows_retire", json={},
+                         headers={"Authorization": "Bearer vxd_a.b.c", "X-Vexa-Identity": "v1.s.t"})
+    assert asked[-1].headers["x-vexa-internal-mcp-identity"] == "v1.s.t"
+    assert asked[-1].headers["x-api-key"] == "vxd_a.b.c"

@@ -109,3 +109,27 @@ def test_a_deployment_without_the_delegation_key_refuses_every_delegation(client
 def test_the_internal_tier_still_guards_the_oracle(client):
     tok = delegation.mint_delegation(DLG, subject="42")
     assert client.post("/internal/validate", json={"token": tok}).status_code == 403
+
+
+def test_the_person_behind_a_delegation_is_named_admin_or_not_and_the_worker_never_is(client):
+    for regime, ws in (("human", "*"), ("autonomous", ["ws_1"])):
+        body = _validate(client, delegation.mint_delegation(DLG, subject="42", regime=regime,
+                                                            workspaces=ws)).json()
+        assert body["person_is_admin"] is True
+        assert body["is_admin"] is False
+
+
+def test_a_person_who_is_not_the_admin_is_named_so(monkeypatch):
+    monkeypatch.setenv("INTERNAL_API_SECRET", INTERNAL)
+    monkeypatch.setenv("VEXA_MCP_DELEGATION_SECRET", DLG)
+    monkeypatch.setenv("DEV_MODE", "false")
+    monkeypatch.delenv("VEXA_ADMIN_EMAILS", raising=False)
+    app = create_app()
+
+    async def _db():
+        yield _Session({7: User(id=7, email="bob@example.com", max_concurrent_bots=1, data={})})
+
+    app.dependency_overrides[get_db] = _db
+    body = _validate(TestClient(app), delegation.mint_delegation(DLG, subject="7", regime="human",
+                                                                workspaces="*")).json()
+    assert body["person_is_admin"] is False
