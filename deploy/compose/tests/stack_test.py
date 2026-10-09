@@ -197,7 +197,8 @@ def test_04_transcript_dataflow(stack):
         ack = json.loads(ws.recv_text(timeout=10))
         assert ack.get("type") == "subscribed" and ack.get("meetings"), f"subscribe ack: {ack}"
 
-        # XADD a golden segment to the REAL transcription_segments stream (the bot's producer path).
+        # XADD a golden segment to the REAL transcription_segments stream (the bot's producer path),
+        # signed for this meeting as the bot's session signs it.
         seg_id = f"seg-{uuid.uuid4().hex[:8]}"
         payload = json.dumps({
             "type": "transcription", "meeting_id": meeting_id,
@@ -207,7 +208,7 @@ def test_04_transcript_dataflow(stack):
                 "speaker": "Tester", "completed": True,
             }],
         })
-        stack.redis_cli("XADD", "transcription_segments", "*", "payload", payload)
+        stack.xadd_segment_entry(payload, meeting_id)
 
         # The background consumer (running in meeting-api) ingests within a bounded wait → publishes
         # tc:meeting:{id}:mutable → the gateway fans it into our /ws client.

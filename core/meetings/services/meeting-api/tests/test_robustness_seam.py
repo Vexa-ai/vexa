@@ -194,12 +194,15 @@ def test_ingest_should_swallow_publish_failure_and_return_count():
     assert n == 1
 
 
-def test_consume_segments_acks_batch_despite_publish_failure():
+def test_consume_segments_acks_batch_despite_publish_failure(monkeypatch):
     """FIXED (ROB4): with the publish fault-isolated inside ingest, a :mutable publish failure no longer
     aborts consume_segments — the segment is persisted AND the batch is ACKED (not left pending for an
     endless redelivery). The blip is logged-not-fatal, matching the lifecycle path."""
     import fakeredis.aioredis as fakeaio
     from meeting_api.collector.fakes import FakeRedisBus
+    from _segment_auth import SECRET, signed_xadd
+
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)   # the collector admits only session-signed entries
 
     async def _run():
         client = fakeaio.FakeRedis(decode_responses=True)
@@ -211,7 +214,7 @@ def test_consume_segments_acks_batch_despite_publish_failure():
 
         bus.publish = boom  # type: ignore[assignment]
         store = InMemoryTranscriptStore()
-        await bus.xadd("transcription_segments", {
+        await signed_xadd(bus, {
             "type": "transcript", "meeting_id": 1,
             "segments": [{"segment_id": "s1", "start": 0.0, "end": 1.0, "text": "hi", "completed": True}],
         })

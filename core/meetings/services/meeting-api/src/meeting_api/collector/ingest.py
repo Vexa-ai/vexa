@@ -20,6 +20,9 @@ The ``:mutable`` payload mirrors the bot's live publisher
 """
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import json
 import os
 import socket
@@ -147,6 +150,59 @@ async def _resolve_native(store: TranscriptStore, meeting_id: int) -> Optional["
         return None
 
 
+# ── who wrote an entry ──────────────────────────────────────────────────────────────────────────
+#
+# Every bot appends to the one ``transcription_segments`` stream, so the stream itself cannot say
+# which meeting an entry may speak for. Each entry therefore carries, beside its ``payload``:
+#
+#   * ``auth`` — the ``header.payload`` part of the bot's session MeetingToken (its claims, which
+#     name the meeting); and
+#   * ``sig``  — HMAC-SHA256 of the ``payload`` string, keyed with the whole token, hex.
+#
+# The collector rebuilds the token from ``auth`` with the secret that minted it (``ADMIN_TOKEN``),
+# so the bearer itself never enters Redis, then admits the entry only when the signature holds, the
+# token is valid, and the payload's ``meeting_id`` is the token's. Anything else is acknowledged and
+# dropped. The check sits on the stream-facing paths (``consume_segments``, ``reclaim_segments``);
+# ``ingest`` stays the pure per-message step.
+
+
+def _b64url(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+
+
+def _admitted(fields: dict) -> bool:
+    """Whether a stream entry was written by a session whose MeetingToken names the meeting the
+    entry speaks for. Never raises."""
+    from ..meeting_token import verify_meeting_token
+
+    auth, sig, payload = fields.get("auth"), fields.get("sig"), fields.get("payload")
+    secret = os.environ.get("ADMIN_TOKEN")
+    if not (isinstance(auth, str) and isinstance(sig, str) and isinstance(payload, str) and secret):
+        return False
+    if auth.count(".") != 1:
+        return False
+    token = f"{auth}.{_b64url(hmac.new(secret.encode(), auth.encode('ascii', 'replace'), hashlib.sha256).digest())}"
+    try:
+        claims = verify_meeting_token(token, secret=secret)
+        data = json.loads(payload)
+        meeting_id = int(data.get("meeting_id"))
+        token_meeting = int(claims.get("meeting_id"))
+    except (ValueError, TypeError, AttributeError):
+        return False
+    expected = hmac.new(token.encode(), payload.encode(), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, sig) and meeting_id == token_meeting
+
+
+def _log_refused(message_id: str) -> None:
+    try:
+        from ..obs import log_event
+
+        log_event("segment_entry_refused", audience="system", level="warning",
+                  span="collector.ingest", fields={"message_id": message_id})
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _log_publish_failure(meeting_id: int, e: Exception) -> None:
     try:
         from ..obs import log_event
@@ -183,7 +239,8 @@ async def ingest(store: TranscriptStore, redis: RedisBus, message: dict) -> int:
     appends each valid segment to ``store``, then publishes one ``:mutable`` update per meeting
     so the gateway ``/ws`` fan-in forwards it live. Returns the count of persisted segments.
 
-    Trusted internal stream (the bot is the producer): ``meeting_id`` comes from the payload.
+    ``meeting_id`` comes from the payload; the stream-facing callers admit an entry only when its
+    session's MeetingToken names that meeting (``_admitted``).
     """
     payload_raw = message.get("payload")
     if not payload_raw:
@@ -328,13 +385,17 @@ async def consume_segments(
     consumer: str = CONSUMER_NAME,
     count: int = 10,
 ) -> int:
-    """Drain ONE batch from the bus: read → ingest each → ack. Returns the total segments
-    persisted across the batch. No background loop — the caller drives it (eval ``tick``)."""
+    """Drain ONE batch from the bus: read → admit → ingest each → ack. An entry its session did not
+    sign for its own meeting is acknowledged and dropped. Returns the total segments persisted
+    across the batch. No background loop — the caller drives it (eval ``tick``)."""
     batch = await redis.read_segments(group=group, consumer=consumer, stream=stream, count=count)
     total = 0
     acked: list[str] = []
     for message_id, fields in batch:
-        total += await ingest(store, redis, fields)
+        if _admitted(fields):
+            total += await ingest(store, redis, fields)
+        else:
+            _log_refused(message_id)
         acked.append(message_id)
     if acked:
         await redis.ack(group=group, stream=stream, message_ids=acked)
@@ -369,7 +430,10 @@ async def reclaim_segments(
     total = 0
     acked: list[str] = []
     for message_id, fields in reclaimed:
-        total += await ingest(store, redis, fields)
+        if _admitted(fields):
+            total += await ingest(store, redis, fields)
+        else:
+            _log_refused(message_id)
         acked.append(message_id)
     if acked:
         await redis.ack(group=group, stream=stream, message_ids=acked)

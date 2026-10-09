@@ -180,6 +180,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     client: transcriptClient,
     meetingId,
     nativeMeetingId: inv.nativeMeetingId,
+    token: inv.token,
     // Teams is the current blast radius. Its CSRC lanes need the same complete per-speaker pending
     // snapshot the Dashboard already consumes for GMeet-style live rendering. Leave every sibling
     // platform on the existing wire until this is proven on STAGE and deliberately imported back.
