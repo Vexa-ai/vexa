@@ -1,9 +1,9 @@
 """Fixtures: a broker over a temporary state dir, three role keys, and an in-memory store.
 
 `signed(role, method, path, body)` signs a request exactly as the real callers do, with the
-vendored credential-broker.v1 signer; an agent-role request also carries the gateway's signed
-identity for its actor (gateway-identity.v1), as agent-api forwards it. Tests never mount a real key
-or reach a network.
+vendored credential-broker.v1 signer; an agent- or git-role request also carries the gateway's
+signed identity for its actor (gateway-identity.v1), as agent-api forwards it. Tests never mount a
+real key or reach a network.
 """
 from __future__ import annotations
 
@@ -69,9 +69,13 @@ class FakeStore:
 GATEWAY_KEY = identity_token.generate_signing_key()
 
 
-def gateway_identity(sub: str, *, key=None, **kw) -> str:
-    """X-Vexa-Identity as the gateway signs it for ``sub`` (gateway-identity.v1)."""
-    return identity_token.sign(key or GATEWAY_KEY, {"sub": str(sub), "scopes": ["bot", "tx"]}, **kw)
+def gateway_identity(sub: str, *, key=None, workspaces=None, **kw) -> str:
+    """X-Vexa-Identity as the gateway signs it for ``sub`` (gateway-identity.v1), with the person's
+    shared-workspace memberships when given."""
+    claims = {"sub": str(sub), "scopes": ["bot", "tx"]}
+    if workspaces:
+        claims["workspaces"] = list(workspaces)
+    return identity_token.sign(key or GATEWAY_KEY, claims, **kw)
 
 
 def write_keys(root: Path) -> dict:
@@ -123,9 +127,9 @@ def signed(client, keys):
         header = assertion.sign(key, role=role, actor=actor, session=session, method=method, path=path,
                                 body=raw, at=at, nonce=nonce)
         h = {assertion.HEADER: header, "Content-Type": "application/json"}
-        # agent-api forwards the gateway's signature over the person on every agent-role call;
-        # `identity=None` sends none, any other string is sent verbatim.
-        if role == "agent" and identity == "signed":
+        # agent-api forwards the gateway's signature over the person on every agent- and git-role
+        # call; `identity=None` sends none, any other string is sent verbatim.
+        if role in ("agent", "git") and identity == "signed":
             h[identity_token.HEADER] = gateway_identity(actor)
         elif identity not in (None, "signed"):
             h[identity_token.HEADER] = identity

@@ -1,9 +1,10 @@
 """The credential broker's HTTP front door (credential-broker.v1): the app factory.
 
-Every route except the two probes (GET /health, GET /ready) requires an X-Vexa-Assertion signed with a role key; the role decides
-what the caller may do (contract `x-routes`). An agent-role call must ALSO carry the gateway's signed
-identity (gateway-identity.v1 `X-Vexa-Identity`) naming the same person as the assertion's actor:
-agent-api holds the agent key, and the agent key alone must not let it act for anybody it likes. The broker owns three things nobody else writes:
+Every route except the two probes (GET /health, GET /ready) requires an X-Vexa-Assertion signed
+with a role key; the role decides what the caller may do (contract `x-routes`). An agent- or
+git-role call must ALSO carry the gateway's signed identity (gateway-identity.v1 `X-Vexa-Identity`)
+naming the same person as the assertion's actor: agent-api holds both keys, and neither key alone
+may let it act for anybody it likes. The broker owns three things nobody else writes:
 connection metadata and its audit trail (metadata.sqlite), the credential store (ADR-0040), and
 the OAuth state that binds a consent to the browser session that started it.
 
@@ -66,13 +67,17 @@ def create_app(broker: Broker) -> FastAPI:
                 raise assertion.AssertionRefused("missing")
             claims = assertion.verify(header, key_for=b.key_for, method=request.method, path=path,
                                       body=body, remember=b.remember)
-            if claims["role"] == "agent":
-                b.person_signed(request.headers.get(identity_token.HEADER, "").strip(), claims["actor"])
+            person = {}
+            if claims["role"] in ("agent", "git"):
+                person = b.person_signed(request.headers.get(identity_token.HEADER, "").strip(), claims["actor"])
         except assertion.AssertionRefused as exc:
             log_event("assertion_refused", level="warning",
                       fields={"kind": exc.kind, "method": request.method, "route": route_of(path)})
             return JSONResponse({"detail": "Product identity refused"}, 401)
-        request.state.who = {"actor": claims["actor"], "session": claims["session"], "role": claims["role"]}
+        # `memberships`: the shared workspaces the gateway signed for this person (agent and git
+        # roles only; the human role's person is resolved by the terminal, without them).
+        request.state.who = {"actor": claims["actor"], "session": claims["session"], "role": claims["role"],
+                             "memberships": frozenset(str(w) for w in person.get("workspaces") or ())}
         response = await call_next(request)
         response.headers["Cache-Control"] = "no-store"
         response.headers["X-Content-Type-Options"] = "nosniff"

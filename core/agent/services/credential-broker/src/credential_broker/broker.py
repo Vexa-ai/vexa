@@ -98,15 +98,16 @@ class Broker:
     def key_for(self, role: str) -> bytes:
         return assertion.load_key(self.settings.key_files.get(role, ""))
 
-    def person_signed(self, header: str, actor: str) -> None:
-        """gateway-identity.v1 for an agent-role call: the gateway's signature over ``actor``.
+    def person_signed(self, header: str, actor: str) -> dict:
+        """gateway-identity.v1 for an agent- or git-role call: the gateway's signature over ``actor``.
 
         agent-api forwards the X-Vexa-Identity it verified, unchanged. The broker verifies it with
         the gateway's PUBLIC key (read per use, like the role keys, so a rotated file takes effect
-        without a restart) and requires its subject to be the assertion's actor. Raises
-        AssertionRefused with a typed kind: identity_missing, identity_invalid (a bad signature,
-        expired, malformed), identity_mismatch (signed for somebody else) or identity_key (this
-        deployment's key file is unusable — a configuration fault, refused like the rest)."""
+        without a restart), requires its subject to be the assertion's actor, and returns the
+        verified claims. Raises AssertionRefused with a typed kind: identity_missing,
+        identity_invalid (a bad signature, expired, malformed), identity_mismatch (signed for
+        somebody else) or identity_key (this deployment's key file is unusable — a configuration
+        fault, refused like the rest)."""
         if not header:
             raise assertion.AssertionRefused("identity_missing")
         try:
@@ -119,6 +120,7 @@ class Broker:
             raise assertion.AssertionRefused("identity_invalid") from None
         if not hmac.compare_digest(claims["sub"].encode(), str(actor).encode()):
             raise assertion.AssertionRefused("identity_mismatch")
+        return claims
 
     def remember(self, nonce: str, expires: float) -> bool:
         now = time.time()

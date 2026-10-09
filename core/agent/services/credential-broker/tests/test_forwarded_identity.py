@@ -3,8 +3,9 @@
 agent-api holds the agent key, so the assertion alone would let agent-api — or anything that took its
 key — name any actor it liked. Every agent-role call must therefore also carry the gateway's
 X-Vexa-Identity, forwarded unchanged: the broker verifies it with the gateway's PUBLIC key and
-requires its subject to be the assertion's actor. The human role (the terminal, which resolves the
-person from the sign-in cookie against identity) and the git role are unchanged.
+requires its subject to be the assertion's actor. The git role, which agent-api also holds, is bound
+the same way; the human role (the terminal, which resolves the person from the sign-in cookie
+against identity) carries none.
 """
 import json
 import time
@@ -73,10 +74,13 @@ def test_every_agent_route_needs_the_signature(signed, method, path, body):
     assert signed("agent", method, path, body, actor="u1", identity=None).status_code == 401
 
 
-def test_the_human_and_git_roles_do_not_carry_a_gateway_signature(signed):
+def test_the_human_role_does_not_carry_a_gateway_signature_and_the_git_role_does(signed):
+    """The terminal resolves the human role's person from the sign-in cookie. The git role, held by
+    agent-api like the agent role, is bound to the gateway's signature too (test_git_identity.py)."""
     assert signed("human", "GET", "/api/connections", actor="u1").status_code == 200
-    r = signed("git", "POST", "/api/internal/git-secret", {"name": "pat/u1", "action": "get"}, actor="u1")
-    assert r.status_code == 200
+    payload = {"name": "pat/u1", "action": "get"}
+    assert signed("git", "POST", "/api/internal/git-secret", payload, actor="u1").status_code == 200
+    assert signed("git", "POST", "/api/internal/git-secret", payload, actor="u1", identity=None).status_code == 401
 
 
 def test_an_unusable_identity_key_refuses_agent_calls(signed, broker, tmp_path):

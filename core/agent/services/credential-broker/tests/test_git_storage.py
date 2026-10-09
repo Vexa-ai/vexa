@@ -1,9 +1,12 @@
-"""The Git credential RPC: git role only, actor-owned names, CAS writes, tombstones, store faults."""
+"""The Git credential RPC: git role only, names the signed person owns, CAS writes, tombstones, store faults."""
 import pytest
 
+from conftest import gateway_identity
 
-def git(signed, action, value=None, *, name="pat/2", actor="2"):
-    return signed("git", "POST", "/api/internal/git-secret", {"name": name, "action": action, "value": value}, actor=actor)
+
+def git(signed, action, value=None, *, name="pat/2", actor="2", identity="signed"):
+    return signed("git", "POST", "/api/internal/git-secret", {"name": name, "action": action, "value": value},
+                  actor=actor, identity=identity)
 
 
 def test_migrate_write_revoke_and_no_resurrection(signed, store, broker):
@@ -17,11 +20,14 @@ def test_migrate_write_revoke_and_no_resurrection(signed, store, broker):
     assert audit and all(a["operation_id"] for a in audit)
 
 
-def test_deploy_keys_are_owner_scoped(signed):
-    # The actor of a deploy key is the key's owner segment, exactly as agent-api derives it.
-    assert git(signed, "put", "k", name="deploy/user-2.priv", actor="user-2").status_code == 200
-    assert git(signed, "get", name="deploy/user-3.priv", actor="user-2").status_code == 403
-    assert git(signed, "get", name="deploy/ws-team.pub", actor="ws-team").status_code == 200
+def test_deploy_keys_are_scoped_to_the_signed_person(signed):
+    # The actor is the person the gateway signed for; a desk key is theirs by subject, a shared
+    # workspace's key by a membership signed with them (tests/test_git_identity.py has the rest).
+    assert git(signed, "put", "k", name="deploy/user-2.priv").status_code == 200
+    assert git(signed, "get", name="deploy/user-3.priv").status_code == 403
+    member = gateway_identity("2", workspaces=["team"])
+    assert git(signed, "get", name="deploy/ws-team.pub", identity=member).status_code == 200
+    assert git(signed, "get", name="deploy/ws-team.pub").status_code == 403
 
 
 @pytest.mark.parametrize("name", ["pat/../2", "deploy/user-2.key", "other/2", "pat/"])

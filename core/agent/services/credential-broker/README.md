@@ -18,7 +18,7 @@ human key — the authority to consent and store — must live in no process an 
 | Direction | Neighbour | Via | What crosses |
 |---|---|---|---|
 | consumes | agent-api (`routers/connections.py`) | `credential-broker.v1`, role `agent`, plus the gateway's `X-Vexa-Identity` for the same person (`gateway-identity.v1`) | request, prepare, list, read, draft, call — results only |
-| consumes | agent-api (`git_secret_store.py`) | `credential-broker.v1`, role `git` | Git tokens and deploy keys named for the actor |
+| consumes | agent-api (`git_secret_store.py`) | `credential-broker.v1`, role `git`, plus the gateway's `X-Vexa-Identity` for the same person | the person's Git token and deploy keys, and the deploy keys of shared workspaces signed as theirs |
 | consumes | terminal (`src/app/api/connections/`) | `credential-broker.v1`, role `human` | consent, credential save, disconnect, delete |
 | calls | Google OAuth, Gmail, Calendar APIs | fixed URLs in `providers.py` | tokens, reads, drafts |
 | calls | a human-approved HTTPS endpoint | `secret_service.py` (public addresses only, DNS pinned, no redirects) | one custom-service request |
@@ -32,18 +32,26 @@ ok while the store is down, since a restart does not bring a store back) and `GE
 readiness (503 `unavailable` while the credential store does not answer, logged as a `store`
 fault).
 
-The agent role is bound to a person by the gateway, not by agent-api: every agent-role call carries
-the gateway's signed identity, forwarded unchanged, and the broker verifies it with the gateway's
-public key (`VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE`) and refuses the call unless it names the
-assertion's actor. agent-api's agent key alone cannot act for anybody.
+Both roles agent-api holds, `agent` and `git`, are bound to a person by the gateway rather than by
+agent-api. Every call carries the gateway's signed identity for the person the request acts for,
+forwarded unchanged; the broker verifies it with the gateway's public key
+(`VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE`) and refuses the call unless it names the assertion's actor.
+The git role then serves only that person's own names (`pat/<person>`, `deploy/user-<person>.*`)
+and the deploy keys of shared workspaces among the memberships signed with them (`deploy/ws-<id>.*`).
 
-**The git role is not bound that way.** A git-role call names its credential (`pat/<owner>`,
-`deploy/<owner>.priv|.pub`), agent-api signs with that owner as the actor, and the broker checks only
-that the two agree; no gateway signature rides it. So whoever holds the git key can read and write
-any person's Git credentials. The key exists only when the opt-in Git store is switched on and is
-mounted into agent-api alone (compose: `VEXA_GIT_STORE_KEY_FILE`, set together with
-`VEXA_GIT_STORE_BROKER_URL`; the chart: `gitStore`): the git role trusts agent-api, and nothing else
-holds the key.
+What this does and does not stop:
+
+- agent-api's keys alone act for nobody. A request needs a gateway signature the broker accepts.
+- agent-api does see every signature a person's request carries. A signature lives 60 seconds as
+  the gateway signs it; the broker accepts at most 300 seconds, plus 30 seconds of clock skew. A
+  compromised agent-api can therefore act, through either role, for anyone whose request it served
+  within that window, and for nobody else.
+- A shared workspace's members are decided by its own `policy/members.json`, which agent-api keeps.
+  The gateway signs admin-api's mirror of that list, and agent-api writes the mirror. For
+  `deploy/ws-` keys the broker's check is therefore only as strong as that mirror, and a member the
+  mirror has missed is refused.
+- The human role belongs to the terminal. The terminal resolves the person from its sign-in cookie,
+  and the broker trusts the terminal's key for that.
 
 ## Contracts
 
@@ -62,7 +70,8 @@ uv run pytest -q
 ```
 
 `tests/` covers the assertion boundary (forged, expired, replayed, mis-bound, wrong role), the
-forwarded identity on the agent role (missing, forged, expired, another person's), every
+forwarded identity on the agent and git roles (missing, forged, expired, another person's, a
+shared-workspace key outside the signed memberships), every
 route against the contract in both directions (`test_contract_conformance.py`), the two store
 adapters, the Google and custom-service adapters offline, M3's host confirmation, and a boot from a
 real environment with the encrypted store, asserting a canary secret appears in no file and no log
