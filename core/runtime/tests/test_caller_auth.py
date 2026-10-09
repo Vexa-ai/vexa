@@ -93,3 +93,37 @@ def test_production_boot_refuses_without_a_token(monkeypatch):
     monkeypatch.setenv("RUNTIME_API_TOKEN", "too-short")
     with pytest.raises(CallerTokenError):
         build_production_app()
+
+
+# ── callbacks are signed ────────────────────────────────────────────────────────────────────────
+
+#: The same vector meeting-api's verifier is pinned against (tests/test_runtime_callback_signature.py).
+VECTOR_TOKEN = "runtime-caller-token-for-tests-0123456789abcdef"
+VECTOR_EVENT = {"workloadId": "mtg-1-abcdef12", "state": "stopped", "at": "2026-10-09T00:00:00+00:00",
+                "exitCode": 0, "stopReason": "completed"}
+VECTOR_SIGNATURE = "v1=2d3b0c1312be4c69a6144019dbd480b5c0f21c905b818e496c3f98cd30a2e286"
+
+
+def test_the_callback_signature_matches_the_shared_vector():
+    from runtime_kernel.caller_auth import sign_callback
+
+    assert sign_callback(VECTOR_TOKEN, VECTOR_EVENT) == VECTOR_SIGNATURE
+    assert sign_callback(VECTOR_TOKEN, {**VECTOR_EVENT, "state": "running"}) != VECTOR_SIGNATURE
+
+
+def test_every_callback_carries_the_runtimes_signature_and_never_its_token():
+    from runtime_kernel.callbacks import CallbackQueue
+    from runtime_kernel.caller_auth import SIGNATURE_HEADER, sign_callback
+    from runtime_kernel.kernel import Runtime
+
+    posted = []
+    queue = CallbackQueue(poster=lambda url, body, headers: posted.append((url, body, headers)) or 200)
+    rt = Runtime(profiles={"test": ["sleep", "30"]}, grace_sec=1.0)
+    client = caller_client(create_app(rt, callback_queue=queue, caller_token=TOKEN))
+    assert client.post("/workloads", json={"workloadId": "w1", "profile": "test", "env": {},
+                                           "callbackUrl": "http://meeting-api:8080/runtime/callback"}).status_code == 201
+    client.delete("/workloads/w1")
+    assert posted
+    for _url, body, headers in posted:
+        assert headers[SIGNATURE_HEADER] == sign_callback(TOKEN, body)
+        assert TOKEN not in str(headers) and TOKEN not in str(body)

@@ -194,6 +194,10 @@ def create_app(
     # that user's URL and a terminal session removes it. None hands bots the service Redis URL — the
     # in-process harness, and a deployment's explicit REDIS_WORKLOAD_ACL=shared.
     bot_redis: Optional["object"] = None,
+    # The runtime caller credential: a /runtime/callback must carry the runtime's signature over its
+    # event, keyed from it (runtime_signature). The production entrypoint always passes it; None is
+    # the in-process harness, which drives the route directly.
+    runtime_callback_token: Optional[str] = None,
 ) -> FastAPI:
     """Build the unified meeting-api app from the injected ports.
 
@@ -272,6 +276,7 @@ def create_app(
         callback_secret=token_secret,
         internal_secret=internal_secret,
         bot_redis=bot_redis,
+        runtime_callback_token=runtime_callback_token,
     )
 
     # --- bot_spawn: POST /bots (invocation.v1 + runtime.v1) ---
@@ -392,6 +397,7 @@ def _mount_lifecycle(
     callback_secret: Optional[str] = None,
     internal_secret: Optional[str] = None,
     bot_redis: Optional["object"] = None,
+    runtime_callback_token: Optional[str] = None,
 ) -> None:
     """Register the lifecycle.v1 callback route on the unified app (the lifecycle receiver's
     ``/bots/internal/callback/lifecycle`` handler, sharing the app's TraceMiddleware).
@@ -1079,6 +1085,15 @@ def _mount_lifecycle(
             body = await request.json()
         except Exception:  # noqa: BLE001
             body = {}
+        if runtime_callback_token is not None:
+            from . import runtime_signature
+
+            if not runtime_signature.verify(runtime_callback_token, body,
+                                            request.headers.get(runtime_signature.HEADER) or ""):
+                log_event("runtime_callback_rejected", audience="system", level="warning",
+                          span="runtime.callback", fields={"reason": "unsigned"})
+                return JSONResponse(status_code=401, content={"status": "error",
+                                                              "detail": "runtime signature required"})
         workload_id = body.get("workloadId") or body.get("workload_id")
         state = body.get("state")
         log_event(

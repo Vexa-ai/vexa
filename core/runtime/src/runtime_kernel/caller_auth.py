@@ -13,7 +13,9 @@ is refused the same way.
 """
 from __future__ import annotations
 
+import hashlib
 import hmac
+import json
 import os
 from typing import Callable, Mapping, Optional
 
@@ -50,6 +52,22 @@ def load_caller_token(env: Optional[Mapping[str, str]] = None) -> str:
     if len(token.encode("utf-8")) < MIN_TOKEN_BYTES:
         raise CallerTokenError(f"{TOKEN_ENV} must be at least {MIN_TOKEN_BYTES} bytes")
     return token
+
+
+#: The header a RuntimeEvent callback carries its signature in.
+SIGNATURE_HEADER = "X-Runtime-Signature"
+_CALLBACK_LABEL = b"vexa-runtime-callback.v1"
+
+
+def _canonical(event: Mapping[str, object]) -> bytes:
+    return json.dumps(event, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+
+def sign_callback(token: str, event: Mapping[str, object]) -> str:
+    """The signature a callback receiver checks: an HMAC over the event, keyed from the caller
+    token (so the token itself never travels to a callback URL). The receiver holds the same token."""
+    key = hmac.new(token.encode("utf-8"), _CALLBACK_LABEL, hashlib.sha256).digest()
+    return "v1=" + hmac.new(key, _canonical(event), hashlib.sha256).hexdigest()
 
 
 def bearer_guard(token: str) -> Callable[[Request], None]:

@@ -278,6 +278,7 @@ def build_production_app():
         identity_key=_identity_key(),
         internal_secret=os.environ.get("INTERNAL_API_SECRET", ""),
         bot_redis=bot_redis,
+        runtime_callback_token=os.environ.get("RUNTIME_API_TOKEN", ""),
     )
 
     _attach_background_loops(

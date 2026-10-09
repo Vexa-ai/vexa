@@ -18,7 +18,7 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from .caller_auth import bearer_guard
+from .caller_auth import SIGNATURE_HEADER, bearer_guard, sign_callback
 from .callbacks import CallbackQueue
 from .kernel import QuotaExceeded, Runtime, StartFailed
 from .models import RuntimeEvent, StopReason, WorkloadSpec
@@ -33,15 +33,18 @@ class StopBody(BaseModel):
     reason: Optional[StopReason] = None
 
 
-def _queue_deliver(rt: Runtime, queue: CallbackQueue) -> Callable[[RuntimeEvent], None]:
-    """Durable delivery: enqueue each event for the workload's callbackUrl. The queue posts
-    immediately and keeps anything the receiver hasn't acked, so a later sweep() retries it."""
+def _queue_deliver(rt: Runtime, queue: CallbackQueue, caller_token: str) -> Callable[[RuntimeEvent], None]:
+    """Durable delivery: enqueue each event for the workload's callbackUrl, signed with the caller
+    token (``X-Runtime-Signature``) so the receiver can tell a runtime event from anyone else's POST.
+    The queue posts immediately and keeps anything the receiver hasn't acked, so a later sweep()
+    retries it."""
     def deliver(ev: RuntimeEvent) -> None:
         record = rt.store.get(ev.workloadId)
         url = record.spec.callbackUrl if record else None
         if not url:
             return
-        queue.enqueue(url, ev.model_dump(exclude_none=True))
+        event = ev.model_dump(exclude_none=True)
+        queue.enqueue(url, event, headers={SIGNATURE_HEADER: sign_callback(caller_token, event)})
     return deliver
 
 
@@ -70,9 +73,10 @@ def create_app(
 ) -> FastAPI:
     """``caller_token`` is the bearer credential every route but ``/health`` requires. There is no
     unauthenticated mode: an empty token raises before any route exists."""
+    guard = bearer_guard(caller_token)   # refuses an empty token before anything is built
     rt = runtime or Runtime()
     queue = callback_queue or CallbackQueue()
-    sink = deliver or _queue_deliver(rt, queue)
+    sink = deliver or _queue_deliver(rt, queue, caller_token)
     prior = rt.on_event
     rt.on_event = lambda ev: (prior(ev), sink(ev))  # chain: preserve any existing handler, then deliver
 
@@ -92,7 +96,7 @@ def create_app(
     app.add_middleware(TraceMiddleware)
     dump = lambda s: s.model_dump(exclude_none=True)
     # The control-plane surface: every route registered on `guarded` requires the caller credential.
-    guarded = APIRouter(dependencies=[Depends(bearer_guard(caller_token))])
+    guarded = APIRouter(dependencies=[Depends(guard)])
 
     @app.get("/health")
     def health():
