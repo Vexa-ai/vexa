@@ -35,9 +35,10 @@ from typing import Any, Callable, Optional
 
 import json
 
-from fastapi import APIRouter, FastAPI, Header, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 
+from ..regime import require_person
 from .meeting_link import parse_meeting_url
 from .obs import TraceMiddleware as _DefaultTraceMiddleware
 from .obs import log_event as _default_log_event
@@ -685,7 +686,7 @@ def build_router(
 
     # --- DELETE /meetings/{meeting_id} → delete a PLANNED row (intent status only; an FSM row is
     # never deletable from here). Owner-scoped, ROW-id addressed. ---
-    @router.delete("/meetings/{meeting_id}", status_code=204)
+    @router.delete("/meetings/{meeting_id}", status_code=204, dependencies=[Depends(require_person)])
     async def delete_planned_meeting(
         meeting_id: int,
         x_user_id: Optional[str] = Header(default=None),
@@ -821,7 +822,7 @@ def build_router(
         row = await _apply_meeting_patch(user_id, meeting_id, payload)
         return JSONResponse(content=row)
 
-    @router.delete("/meetings/{platform}/{native_meeting_id}")
+    @router.delete("/meetings/{platform}/{native_meeting_id}", dependencies=[Depends(require_person)])
     async def delete_native_meeting(
         platform: str,
         native_meeting_id: str,
@@ -950,7 +951,7 @@ def build_router(
     # --- POST /meetings/{platform}/{native_meeting_id}/workspace → BIND the meeting to a shared workspace
     # (meetings.data.workspace_id). Owner-scoped. Members of that workspace can then subscribe to this
     # meeting's live transcript feed (authorize_subscribe branch b). Many meetings → one workspace. ---
-    @router.post("/meetings/{platform}/{native_meeting_id}/workspace")
+    @router.post("/meetings/{platform}/{native_meeting_id}/workspace", dependencies=[Depends(require_person)])
     async def bind_workspace(
         platform: str,
         native_meeting_id: str,
@@ -1159,7 +1160,7 @@ def build_router(
     #
     # Owner-scoped: a row that is not the caller's 404s exactly like an unknown one. Minting a
     # capability is an owner act, and a share route that distinguished the two would leak existence.
-    @router.post("/meetings/{meeting_id}/share")
+    @router.post("/meetings/{meeting_id}/share", dependencies=[Depends(require_person)])
     async def mint_transcript_share_by_id(
         meeting_id: int,
         request: Request,
@@ -1190,7 +1191,7 @@ def build_router(
     # (only its hash is stored). Redeemed at POST /transcripts/share/accept — NO workspace involved.
     # Kept for 0.10 clients and the /transcripts/{platform}/{native}/share alias; new callers use the
     # by-row-id route above, which can address rows this one cannot. ---
-    @router.post("/meetings/{platform}/{native_meeting_id}/share")
+    @router.post("/meetings/{platform}/{native_meeting_id}/share", dependencies=[Depends(require_person)])
     async def mint_transcript_share(
         platform: str,
         native_meeting_id: str,

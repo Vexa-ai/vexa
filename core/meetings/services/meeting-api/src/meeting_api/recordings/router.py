@@ -15,9 +15,10 @@ import json
 import os
 from typing import Optional
 
-from fastapi import APIRouter, File, Form, Header, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 
+from ..regime import require_person
 from .ports import RecordingRepo, Storage
 from .deletion import MeetingNotTerminal, delete_owned_recording
 from .service import (
@@ -322,7 +323,7 @@ def build_router(
             raise HTTPException(status_code=404, detail="Recording not found")
         return JSONResponse(content=rec)
 
-    @router.delete("/recordings/{recording_id}")
+    @router.delete("/recordings/{recording_id}", dependencies=[Depends(require_person)])
     async def delete_recording(
         recording_id: int,
         x_user_id: Optional[str] = Header(default=None),

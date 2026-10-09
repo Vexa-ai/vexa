@@ -13,7 +13,7 @@ and stays in their ecosystem (FastAPI + redis + DB).
 
 | Direction | Neighbour | Via | What crosses |
 |---|---|---|---|
-| verifies | api-gateway | `X-Vexa-Identity` ([`gateway-identity.v1`](../../../gateway/contracts/gateway-identity.v1), `src/meeting_api/identity_token.py`) | every `x-user-*` header (owner, bot limit, memberships, webhook) comes from the gateway's signature, or from the internal tier (`X-Internal-Secret`, agent-api acting for a person); anything else naming a person is a `401` |
+| verifies | api-gateway | `X-Vexa-Identity` ([`gateway-identity.v1`](../../../gateway/contracts/gateway-identity.v1), `src/meeting_api/identity_token.py`) | every `x-user-*` header (owner, bot limit, memberships, webhook) comes from the gateway's signature, or from the internal tier (`X-Internal-Secret`, agent-api acting for a person); anything else naming a person is a `401`. A worker's identity carries its dispatch's regime: `POST /bots`, the transcript-share mints, the workspace bind and the meeting/recording deletes refuse (`403 human_session_required`) a delegated identity whose regime is not `human` (`src/meeting_api/regime.py`) |
 | calls | api-gateway / agent-api | `POST /bots` | request a bot (platform + native id + per-user webhook cfg) → eager `MeetingSession` |
 | calls | api-gateway / agent-api | `DELETE /bots/{platform}/{native}` | user-stop → leave command + workload teardown |
 | calls | dashboard / agent-api | `GET /meetings` | the user's meetings (live + past), api.v1 `MeetingListResponse` |

@@ -1309,7 +1309,10 @@ def test_spawn_refuses_a_workspace_the_caller_is_not_in(monkeypatch):
 # `personal` keeps it theirs alone.
 
 def _spawn_as_worker(client, body, workspaces, target):
+    # A chat worker: its person is in the loop (`human`), which is the only regime a bot is sent
+    # under by a delegated identity (`meeting_api/regime.py`; test_regime.py has the refusals).
     headers = {**HEADERS, "x-user-workspaces": ",".join(workspaces),
+               "x-user-regime": "human", "x-user-delegation-workspaces": "*",
                "x-user-delegation-target": target}
     return client.post("/bots", headers=headers, json=body)
 

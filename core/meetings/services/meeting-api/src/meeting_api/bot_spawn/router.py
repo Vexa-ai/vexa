@@ -17,10 +17,11 @@ import os
 from typing import Awaitable, Callable, Optional
 from urllib.parse import parse_qs, urlparse
 
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from ..collector.meeting_link import parse_meeting_url
+from ..regime import require_person
 from ..service_authority import (
     ServiceAuthorityDenied,
     ServiceAuthorityUnavailable,
@@ -268,7 +269,8 @@ def build_router(
     the service already has (``service._bot_name_from_context``)."""
     router = APIRouter()
 
-    @router.post("/bots", status_code=201)
+    # A worker dispatched without a person does not put a bot into a meeting (`regime.py`).
+    @router.post("/bots", status_code=201, dependencies=[Depends(require_person)])
     async def create_bot(
         request: Request,
         x_user_id: Optional[str] = Header(default=None),
