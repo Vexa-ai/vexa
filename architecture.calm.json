@@ -1091,10 +1091,10 @@
    "description": "durable relational store"
   },
   {
-   "unique-id": "minio",
+   "unique-id": "object-store",
    "node-type": "service",
-   "name": "minio",
-   "description": "S3-compatible object store for recordings"
+   "name": "object-store",
+   "description": "S3-compatible object store for recordings: the versitygw storage sidecar in Lite and Compose (plain files in a local volume); the chart's MinIO or the operator's S3 under Helm"
   },
   {
    "unique-id": "bm-status",
@@ -1749,7 +1749,7 @@
      "nodes": [
       "redis",
       "postgres",
-      "minio"
+      "object-store"
      ]
     }
    }
@@ -1919,14 +1919,14 @@
    ]
   },
   {
-   "unique-id": "ma-minio",
+   "unique-id": "ma-object-store",
    "relationship-type": {
     "connects": {
      "source": {
       "node": "meeting-api"
      },
      "destination": {
-      "node": "minio"
+      "node": "object-store"
      }
     }
    },
@@ -2407,7 +2407,7 @@
       "runtime",
       "redis",
       "postgres",
-      "minio",
+      "object-store",
       "transcription"
      ]
     }

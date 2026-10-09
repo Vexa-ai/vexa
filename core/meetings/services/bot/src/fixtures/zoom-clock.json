@@ -1,0 +1,10 @@
+{
+  "description": "Synthetic timing fixture: eight continuous tracks, one-hour wall time, callbacks deliver 43% of nominal audio. No customer PCM or text.",
+  "epochMs": 1700000000000,
+  "wallDurationMs": 3600000,
+  "sampleRate": 16000,
+  "frameSamples": 4096,
+  "deliveredAudioRatio": 0.43,
+  "tracks": 8,
+  "pcmAmplitude": 0.1
+}

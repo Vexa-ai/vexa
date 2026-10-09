@@ -1,0 +1,17 @@
+[project]
+name = "vexa-storage-tools"
+version = "0.12.0"
+description = "Storage readiness and verified S3 migration tools for Lite and Compose."
+requires-python = ">=3.11"
+# boto3 matches the meeting-api and Lite images.
+dependencies = ["boto3==1.35.0"]
+
+[dependency-groups]
+dev = ["pytest>=8,<10"]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+# gate:python discovers this suite through pyproject.toml + tests/.
+testpaths = ["tests"]
