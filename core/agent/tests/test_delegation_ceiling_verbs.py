@@ -74,12 +74,7 @@ DICT_BASE = {
 #: before the ceiling is asked, which is all a worker needs.
 INTERNAL_TIER = frozenset({("POST", "/internal/scaffolds")})
 #: Gaps this test documents until their router is changed: the route answers without refusing.
-KNOWN_GAPS = {
-    ("POST", "/api/desk/touch", "workspace"):
-        "routers/scaffolds.py desk_touch records a touch for a workspace id without asking the "
-        "ceiling (the touch is filed on the caller's own desk); it needs "
-        "`require_in_ceiling(request, (rec or {}).get('slug') or wid)` before the access check",
-}
+KNOWN_GAPS: dict = {}
 #: The routes this pass found unguarded, by path — the floor below keeps them in the generated set.
 MUST_COVER = {
     ("POST", "/api/workspace/publish"), ("POST", "/api/workspace/rename"),
