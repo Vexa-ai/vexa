@@ -3,10 +3,10 @@ title: "Changelog & migration"
 description: "Release notes and what changes between major versions."
 ---
 
-{/* docs-reflects: 0.12.27 — the released version these docs describe. CI (gate:docs-version) keeps
+{/* docs-reflects: 0.12.28 — the released version these docs describe. CI (gate:docs-version) keeps
     this equal to Chart.yaml appVersion; the release version-bump updates it. */}
 
-> 📌 **These docs reflect Vexa `v0.12.26`** — the current release candidate control-plane. Older self-hosts
+> 📌 **These docs reflect Vexa `v0.12.28`** — the installation repair release candidate. Older self-hosts
 > should read against their pinned version.
 
 The authoritative, per-release changelog is on **GitHub Releases**:
@@ -1121,6 +1121,47 @@ fix(gates): every gate failure now prints its diagnostic — an empty stdout Buf
   (`us02web.zoom.us`, `company.zoom.us`, `frbmeetings.zoomgov.com`, `contoso.teams.microsoft.com`)
   are unaffected, and a look-alike hostname is refused instead of sending a bot somewhere on its
   say-so. See [MCP tools](/mcp).
+
+- **MCP: `request_meeting_bot` can start a Zoom bot again (#1630).** The tool forwards the
+  caller's full Zoom join link to the bots API, which needs the link's host to join; before, it
+  kept only the numeric id and every Zoom request from an agent was refused with 422. Pass the
+  full `meeting_url` for Zoom, as for Jitsi.
+
+- **Helm: recordings go to your own S3; the built-in MinIO is removed (#1671).** The chart's default
+  MinIO could no longer be pulled, so fresh installs failed. Set `storage.s3.endpoint`,
+  `storage.s3.bucket` and `storage.s3.existingSecret` (a Secret holding the key pair); region,
+  path-style and a private CA are optional. The chart refuses to render without them, and refuses a
+  leftover `minio.enabled: true`. `meetingApi.extraEnv` may no longer set storage variables; move
+  them into `storage.s3`. Upgrades using `--reuse-values` must add `--set minio.enabled=false`.
+  Upgrading a release that ran the built-in MinIO: copy its objects
+  to your bucket first — the upgrade leaves the MinIO PVC in place. See
+  [Kubernetes → Upgrading from the built-in MinIO](/deployment-kubernetes#upgrading-from-the-built-in-minio).
+
+- **Old recordings stay in the old MinIO volume and do not play back until copied with `make migrate-storage` (the API answers HTTP 500 until copied; #1671).**
+  Lite and Compose now store new recordings in versitygw (Apache-2.0, pinned by digest), in
+  `vexa-lite-storagedata` and `<project>_storage-data` respectively. Startup does not migrate or
+  write old volumes itself. With a stale `MINIO_ENDPOINT=minio:9000` and a running old MinIO,
+  meeting-api keeps writing new recordings to the old volume. The opt-in copy verifies objects
+  by SHA-256, preserves and reports target edits/deletions on reruns, and never deletes the old
+  volume. An ETag-only change with identical bytes updates the manifest without a false report.
+  Compose checks its configured
+  recording endpoint with a bucket check and a PUT/GET/DELETE probe before meeting-api starts;
+  update an old `.env` endpoint to `MINIO_ENDPOINT=storage:9000` before starting; `make up` then
+  prints no storage line for the bundled store, a WARNING line naming any other store, or the STOP
+  line if the store did not answer. Never remove the old MinIO
+  container or its volume until the script's last run ends with **VERIFIED**; reruns also copy
+  recordings written to the old MinIO after the upgrade. Compose
+  `make down` keeps data volumes; `make destroy DESTROY=yes` explicitly deletes the current
+  stack's volumes. See [Where your recordings live now](/upgrade-from-minio).
+- Compose startup prints a WARNING when the ready recording endpoint differs from bundled storage;
+  Lite startup prints one when `.env` sets a non-empty `S3_ENDPOINT`. Each names the store and links the upgrade guide.
+
+- **A fresh `make all` comes up without hand-editing `.env`; the first `make lite` passes its own check (#1759).**
+  `make all` / `make up` / `make dev` now mint `INTERNAL_API_SECRET`, `VEXA_FLOWS_API_KEY` and
+  `VEXA_FLOWS_TIMELINE_KEY` when `.env` leaves them empty (a value you set is kept), so admin-api and
+  flows-api no longer refuse to boot on a fresh install. `make lite` gives each front door up to two
+  minutes to answer, so the terminal's first-boot restart no longer fails the first run.
+  See [Deployment](/deployment).
 
 ## Versioning
 

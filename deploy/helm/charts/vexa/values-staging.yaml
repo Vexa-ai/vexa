@@ -7,6 +7,8 @@
 #   kubectl --context lke590708-ctx create namespace vexa-v012-staging
 #   # create the vexa-v012-secrets Secret (ADMIN_API_TOKEN, INTERNAL_API_SECRET,
 #   #   TRANSCRIPTION_SERVICE_TOKEN, VEXA_DISPATCH_SIGNING_KEY) from vexa-secrets (sops, in-memory)
+#   # create the recordings bucket named under storage.s3 below, and the vexa-v012-s3 Secret
+#   #   (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY) holding a key pair scoped to it
 #   helm --kube-context lke590708-ctx upgrade --install vexa deploy/helm/charts/vexa \
 #     -n vexa-v012-staging -f deploy/helm/charts/vexa/values-staging.yaml --wait
 
@@ -57,9 +59,13 @@ postgres:
 redis:
   persistence:
     size: 2Gi
-minio:
-  persistence:
-    size: 5Gi
+
+# Recordings: Linode Object Storage, the store hosted production uses. The chart runs no object store.
+storage:
+  s3:
+    endpoint: "https://us-sea-1.linodeobjects.com"
+    bucket: "vexa-v012-staging-recordings"
+    existingSecret: "vexa-v012-s3"
 
 ingress:
   enabled: false               # reach via port-forward for the first proof; add ingress/LB next

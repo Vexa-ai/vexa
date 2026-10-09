@@ -15,8 +15,11 @@ permissions:
   issues: read
   checks: write
 
+# issue_comment and check_run runs belong to the default branch's newest commit, so each gets its
+# own group: a cancelled run there would mark that commit. PR and merge-group runs belong to the
+# evaluated head and supersede each other. The merge queue re-evaluates rights on its own head.
 concurrency:
-  group: contribution-rights-${{ github.event.pull_request.number || github.event.issue.number || github.event.merge_group.head_sha }}
+  group: contribution-rights-${{ github.event_name }}-${{ github.event.pull_request.number || github.event.merge_group.head_sha || github.run_id }}
   cancel-in-progress: true
 
 jobs:
@@ -34,6 +37,7 @@ jobs:
         with:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
+      # The verdict is the published head-bound check run; this job itself never fails on it.
       - name: Evaluate and publish the head-bound rights check
         run: node scripts/contribution-rights-gate.mjs
         env:

@@ -1,6 +1,6 @@
 name: vexa-v012
 # v0.12 control plane (P4). The carved analog of deploy/compose/docker-compose.yml (0.11):
-# postgres:17 + valkey:8 + minio + minio-init infra, then the four long-running Python services —
+# postgres:17 + valkey:8 + storage (versitygw) + storage-init infra, then the four long-running Python services —
 # admin-api · runtime · meeting-api · gateway — each building its own slim uv-based image.
 # Improvement over 0.11: EVERY service carries a healthcheck and depends_on waits on
 # `condition: service_healthy` so the bring-up is ordered + observable.
@@ -49,40 +49,65 @@ services:
     networks: [vexa]
     restart: unless-stopped
 
-  minio:
-    image: minio/minio:latest
-    command: server /data --console-address ":9001"
+  storage:
+    # Object storage for recordings, and for authenticated bots' saved sessions when those point here:
+    # versitygw (Apache-2.0) with its POSIX backend, pinned by digest. Buckets are directories under
+    # data/ in the storage-data volume and every object is a plain file; S3 metadata (content type,
+    # ETag) rides in extended attributes, so back the volume up with an attribute-preserving copy
+    # (rsync -aX, cp -a). iam/ holds the gateway's account file. The admin API shares the S3 port.
+    # meeting-api keeps its MINIO_* variable names; MINIO_ACCESS_KEY / MINIO_SECRET_KEY are this
+    # server's root credentials. The host port is loopback-only and deliberately not MinIO's 9000,
+    # so an upgrading install's old MinIO container can keep running beside it until its recordings
+    # are copied (docs: /upgrade-from-minio).
+    image: versity/versitygw:v1.8.0@sha256:30292fc2eeacc67a36993b01f7a7a5e3361a19cced0e80c1d71cfa2a4b0a2499
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - mkdir -p /srv/vexa-storage/data /srv/vexa-storage/iam && exec versitygw --port :9000 --health /health --iam-dir /srv/vexa-storage/iam --quiet posix /srv/vexa-storage/data
     environment:
-      - MINIO_ROOT_USER=${MINIO_ACCESS_KEY:-vexa-access-key}
-      - MINIO_ROOT_PASSWORD=${MINIO_SECRET_KEY:-vexa-secret-key}
+      - ROOT_ACCESS_KEY=${MINIO_ACCESS_KEY:-vexa-access-key}
+      - ROOT_SECRET_KEY=${MINIO_SECRET_KEY:-vexa-secret-key}
     ports:
-      - "127.0.0.1:${MINIO_HOST_PORT:-9000}:9000"
-      - "127.0.0.1:${MINIO_CONSOLE_HOST_PORT:-9001}:9001"
+      - "127.0.0.1:${STORAGE_HOST_PORT:-18900}:9000"
     healthcheck:
-      test: ["CMD-SHELL", "mc ready local || curl -sf http://localhost:9000/minio/health/live || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9000/health || exit 1"]
       interval: 5s
       timeout: 5s
       retries: 5
     volumes:
-      - minio-data:/data
+      - storage-data:/srv/vexa-storage
     networks: [vexa]
     restart: unless-stopped
 
-  minio-init:
-    image: minio/mc:latest
+  storage-init:
+    # Checks the endpoint meeting-api uses (deploy/storage/storage_init.py, with its Python + boto3):
+    # ensures the bucket exists and PUTs/GETs/DELETEs a probe under .vexa-storage-init/, comparing bytes.
+    # Any failure holds meeting-api back. When authenticated bots point BOT_S3_ENDPOINT here, also
+    # creates their scoped account and bucket policy limited to BOT_USERDATA_S3_PATH, then proves it.
+    build:
+      context: ../..
+      dockerfile: core/meetings/services/meeting-api/Dockerfile
+    image: vexaai/v012-meeting-api:${IMAGE_TAG:-dev}
+    entrypoint: ["python", "/vexa-storage-tools/storage_init.py"]
     depends_on:
-      minio:
+      storage:
         condition: service_healthy
-    entrypoint:
-      - /bin/sh
-      - -c
-      - |
-        mc alias set vexa http://minio:9000 $${MINIO_ROOT_USER:-vexa-access-key} $${MINIO_ROOT_PASSWORD:-vexa-secret-key}
-        mc mb --ignore-existing vexa/${MINIO_BUCKET:-vexa}
-        exit 0
     environment:
-      - MINIO_ROOT_USER=${MINIO_ACCESS_KEY:-vexa-access-key}
-      - MINIO_ROOT_PASSWORD=${MINIO_SECRET_KEY:-vexa-secret-key}
+      - STORAGE_ENDPOINT=http://storage:9000
+      - S3_ENDPOINT=${S3_ENDPOINT:-}
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY:-}
+      - S3_SECRET_KEY=${S3_SECRET_KEY:-}
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT:-storage:9000}
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-vexa-access-key}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-vexa-secret-key}
+      - MINIO_BUCKET=${MINIO_BUCKET:-vexa}
+      - MINIO_SECURE=${MINIO_SECURE:-false}
+      - BOT_S3_ENDPOINT=${BOT_S3_ENDPOINT:-}
+      - BOT_S3_BUCKET=${BOT_S3_BUCKET:-}
+      - BOT_S3_ACCESS_KEY=${BOT_S3_ACCESS_KEY:-}
+      - BOT_S3_SECRET_KEY=${BOT_S3_SECRET_KEY:-}
+      - BOT_USERDATA_S3_PATH=${BOT_USERDATA_S3_PATH:-}
+    volumes:
+      - ../storage:/vexa-storage-tools:ro
     networks: [vexa]
 
   # ─── Core services ────────────────────────────────────────────────────────────────────────────
@@ -369,7 +394,10 @@ services:
       - VEXA_FLOWS_API_KEY=${VEXA_FLOWS_API_KEY:-}
       # Self-hosted Jitsi hostnames (comma-separated) recognized in pasted + calendar links.
       - VEXA_JITSI_HOSTS=${VEXA_JITSI_HOSTS:-}
-      - MINIO_ENDPOINT=${MINIO_ENDPOINT:-minio:9000}
+      - S3_ENDPOINT=${S3_ENDPOINT:-}
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY:-}
+      - S3_SECRET_KEY=${S3_SECRET_KEY:-}
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT:-storage:9000}
       - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-vexa-access-key}
       - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-vexa-secret-key}
       - MINIO_BUCKET=${MINIO_BUCKET:-vexa}
@@ -389,7 +417,7 @@ services:
         condition: service_healthy
       runtime:
         condition: service_healthy
-      minio-init:
+      storage-init:
         condition: service_completed_successfully
     networks: [vexa]
     restart: unless-stopped
@@ -995,7 +1023,7 @@ services:
 volumes:
   redis-data:
   postgres-data:
-  minio-data:
+  storage-data:
   agent-workspaces:
 
 networks:
