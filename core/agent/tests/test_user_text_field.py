@@ -230,6 +230,7 @@ def test_the_sentinel_is_written_even_when_the_control_plane_folded_nothing(monk
     runtime = _FakeRuntime()
     c = TestClient(create_app(
         Dispatcher(load_settings(), runtime, _FakeIdentity()), stream_reader=_FakeReader(),
+        default_subject="u_jane",
     ))
 
     r = c.post("/api/chat", json={"prompt": "what did we decide?", "subject": "u_dmitry",

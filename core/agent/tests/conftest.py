@@ -80,14 +80,6 @@ def transcription_golden() -> dict:
 
 
 @pytest.fixture(autouse=True)
-def _default_subject(monkeypatch):
-    """The HTTP tests exercise agent-api with no gateway in front, so set the single-user fallback
-    (``VEXA_AGENT_DEFAULT_SUBJECT``) — agent-api derives the subject from it when ``X-User-Id`` is absent.
-    Tests that assert per-user *isolation* pass an explicit ``X-User-Id`` header, which always wins (P20)."""
-    monkeypatch.setenv("VEXA_AGENT_DEFAULT_SUBJECT", "u_jane")
-
-
-@pytest.fixture(autouse=True)
 def _mandatory_global_workspace(monkeypatch, tmp_path_factory):
     """Dispatch tests obey production's mandatory _global invariant by default."""
     global_dir = tmp_path_factory.mktemp("global-system")

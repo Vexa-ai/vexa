@@ -136,7 +136,11 @@ def create_app(
     schedule_source: "Optional[Callable[[str], list]]" = None,
     email_subject_lookup: "Optional[object]" = None,
     meeting_note_recorder: "Optional[object]" = None,
+    default_subject: str = "",
 ) -> FastAPI:
+    """Build agent-api. ``default_subject`` is for an in-process test harness only: the subject a
+    request that names nobody runs as, honoured only when the app has no identity door. The
+    production entrypoint never passes it."""
     if sessions is not None:
         sess = sessions
     elif redis_url:
@@ -276,15 +280,12 @@ def create_app(
         """The authenticated subject (P20): ``X-User-Id`` as the door above let it through — signed
         by the gateway, or asserted by the internal tier. agent-api derives the workspace/chat/quota
         partition from THAT, never from the client body/query, and fails closed (401) when no subject
-        is named. The single-user fallback (``VEXA_AGENT_DEFAULT_SUBJECT``) exists only for an app
-        built without the door; a deployed agent-api never has one."""
+        is named. A harness's ``default_subject`` applies only to an app built without the door."""
         uid = request.headers.get("x-user-id")
         if uid:
             return uid
-        fallback = (settings.agent_default_subject
-                    if settings is not None and not _identity_guarded else "")
-        if fallback:
-            return fallback
+        if default_subject and not _identity_guarded:
+            return default_subject
         raise HTTPException(status_code=401, detail="missing X-User-Id (agent-api is fronted by the gateway)")
 
     def _resolve_room(request: Request, subject: str, meeting_id: str,

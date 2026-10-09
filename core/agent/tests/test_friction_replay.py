@@ -22,8 +22,7 @@ def _load():
     return mod
 
 
-def test_three_synthetic_edges_all_reach_the_flows_carrier(monkeypatch):
-    monkeypatch.setenv("VEXA_AGENT_DEFAULT_SUBJECT", "u_jane")
+def test_three_synthetic_edges_all_reach_the_flows_carrier():
     res = _load().run(out=io.StringIO())
     assert res["filed"] == 3
     assert res["all_recorded"]

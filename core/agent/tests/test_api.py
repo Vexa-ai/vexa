@@ -5,10 +5,15 @@ spawns a now-dispatch and streams its Stream back as SSE; chat is an honest 501 
 """
 from __future__ import annotations
 
+import functools
+
 import pytest
 from fastapi.testclient import TestClient
 
 from control_plane.api import create_app
+# No gateway in-process: a request that names nobody runs as `u_jane` (`create_app`'s harness-only
+# `default_subject`). A test that asserts per-user isolation sends `X-User-Id`, which always wins.
+create_app = functools.partial(create_app, default_subject="u_jane")
 from tests import gitserve
 from shared.config import load_settings
 from control_plane.dispatch import Dispatcher
@@ -878,7 +883,7 @@ def test_sse_session_start_clears_stale_ending_no_premature_end(monkeypatch):
 # param with NO identity/ownership check → any authenticated user B could enumerate A's rows and stream
 # A's live transcript + copilot cards. These tests FAIL on the pre-fix code (the stream opened for B) and
 # pass after: B is REFUSED (403, no stream opened) on A's row, and A's own row streams fine.
-def _xtenant_stream_client(monkeypatch):
+def _xtenant_stream_client(monkeypatch, default_subject="u_jane"):
     """A live-SSE client whose owner-lookup says: row "10" is owned by u_alice (native "aaa-bbb-ccc"),
     row "20" is owned by u_bob (native "xxx-yyy-zzz"). The redis fake ends every stream immediately."""
     import redis
@@ -901,7 +906,7 @@ def _xtenant_stream_client(monkeypatch):
     owned = {("u_alice", "10"): "aaa-bbb-ccc", ("u_bob", "20"): "xxx-yyy-zzz"}
     return TestClient(create_app(
         Dispatcher(load_settings(), _FakeRuntime(), _FakeIdentity()), redis_url="redis://test",
-        meeting_owner_lookup=_fake_owner_lookup(owned),
+        meeting_owner_lookup=_fake_owner_lookup(owned), default_subject=default_subject,
     ), raise_server_exceptions=True)
 
 
@@ -916,10 +921,9 @@ def test_sse_cross_tenant_meeting_stream_is_refused(monkeypatch):
     assert r.status_code == 403, "user B must NOT stream tenant A's live meeting"
 
     # No identity at all → fail closed. In the gateway-fronted topology (no default subject) that is a
-    # 401; the L2 harness sets VEXA_AGENT_DEFAULT_SUBJECT (autouse `_default_subject`), so clear it here to
-    # assert the real gateway contract: a missing X-User-Id is rejected, never a silent open.
-    monkeypatch.setenv("VEXA_AGENT_DEFAULT_SUBJECT", "")
-    c_no_fallback = _xtenant_stream_client(monkeypatch)
+    # 401; the harness's `default_subject` is left out here to assert the real gateway contract: a
+    # missing X-User-Id is rejected, never a silent open.
+    c_no_fallback = _xtenant_stream_client(monkeypatch, default_subject="")
     r = c_no_fallback.get("/api/meeting/stream", params={"meeting_id": "10", "session_uid": "aaa-bbb-ccc"})
     assert r.status_code == 401
 

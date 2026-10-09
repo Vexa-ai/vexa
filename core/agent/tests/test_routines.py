@@ -8,11 +8,16 @@ dispatch emitted + container spawned."
 """
 from __future__ import annotations
 
+import functools
+
 from fastapi.testclient import TestClient
 
 import contracts
 from control_plane import routines as R
 from control_plane.api import create_app
+# No gateway in-process: a request that names nobody runs as `u_jane` (`create_app`'s harness-only
+# `default_subject`). A test that asserts per-user isolation sends `X-User-Id`, which always wins.
+create_app = functools.partial(create_app, default_subject="u_jane")
 from shared.config import load_settings
 from control_plane.dispatch import Dispatcher
 from control_plane.workspace_reader import WorkspaceReader

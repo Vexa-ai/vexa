@@ -21,12 +21,17 @@ The claims, in the order they matter:
 """
 from __future__ import annotations
 
+import functools
+
 import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from control_plane import publish as publish_mod
 from control_plane.api import create_app
+# No gateway in-process: a request that names nobody runs as `u_jane` (`create_app`'s harness-only
+# `default_subject`). A test that asserts per-user isolation sends `X-User-Id`, which always wins.
+create_app = functools.partial(create_app, default_subject="u_jane")
 from control_plane.dispatch import Dispatcher
 from control_plane.workspace_reader import WorkspaceReader
 from shared import page_images

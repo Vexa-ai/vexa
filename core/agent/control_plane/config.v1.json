@@ -116,8 +116,8 @@
     {
       "key": "VEXA_AGENT_DEFAULT_SUBJECT",
       "class": "defaulted",
-      "default": "(empty \u2014 FAIL-CLOSED: 401 when no identity is named)",
-      "description": "single-user fallback subject for an app built WITHOUT the identity guard (the in-process test harness). Ignored whenever VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE is set, which every deployment is; no deploy surface sets it",
+      "default": "(empty \u2014 read by no code)",
+      "description": "RETIRED: agent-api no longer reads it \u2014 a request that names nobody is a 401, and the in-process test harness passes its subject to create_app(default_subject=...). Declared only while shared.config.Settings still carries the agent_default_subject field; remove the two together. No deploy surface sets it",
       "targets": []
     },
     {

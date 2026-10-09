@@ -73,9 +73,10 @@ def test_a_wrong_internal_secret_does_not_carry_an_identity(client):
     assert r.status_code == 401
 
 
-def test_naming_nobody_is_401_and_there_is_no_fallback_subject(client, monkeypatch):
-    monkeypatch.setenv("VEXA_AGENT_DEFAULT_SUBJECT", "u_live")
-    c = TestClient(create_app(Dispatcher(load_settings(), _Runtime(), _Identity())))
+def test_naming_nobody_is_401_and_there_is_no_fallback_subject(client):
+    """With the identity door, a harness subject handed to `create_app` is ignored too."""
+    c = TestClient(create_app(Dispatcher(load_settings(), _Runtime(), _Identity()),
+                              default_subject="u_live"))
     assert c.get("/api/chat/order").status_code == 401
 
 
