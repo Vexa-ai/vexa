@@ -56,7 +56,29 @@ jobs:
       - run: pnpm gate:dataflow
       - run: pnpm gate:calm
       - run: pnpm gate:licenses
+      # The rest of the static set. Each is offline and takes about a second; before this they ran
+      # only in the pre-push hook (which a worker may not have) or nowhere at all.
+      - run: node scripts/gates.mjs isolation-py
+      - run: node scripts/gates.mjs graph-py
+      - run: node scripts/gates.mjs test-isolation
+      - run: node scripts/gates.mjs arch-report
+      - run: node scripts/gates.mjs eval
+      - run: node scripts/gates.mjs eval-baseline
       - run: pnpm gate:image-licenses
+      - run: pnpm gate:runtime-parity
+      - run: node scripts/gates.mjs execution-env
+      - run: node scripts/gates.mjs lite-makefile
+      # The Helm chart's fences: the NetworkPolicies, which workloads hold which token, the broker's
+      # key split. They render offline (`helm template`, no cluster). They used to run only in
+      # release-images.yml, at tag push, after a PR that broke one had already merged.
+      # test_template.sh prints SKIP and exits 0 when helm is absent, so the step first proves helm is
+      # on the runner: a fence test that silently skips reads as a green one.
+      - name: helm static gates (lint + template assertions)
+        run: |
+          command -v helm >/dev/null 2>&1 || { echo "::error ::helm is not on this runner, so the chart's fence tests would SKIP"; exit 1; }
+          helm version --short
+          bash deploy/helm/tests/test_helm_lint.sh
+          bash deploy/helm/tests/test_template.sh
       # Tests OF the gate scripts (the instruments the steps above trust). scripts/ is not a
       # workspace package, so `pnpm test` — turbo run test — never reaches it: this step is the
       # only lane these files run in. Kept here, beside the gates they cover, rather than in the

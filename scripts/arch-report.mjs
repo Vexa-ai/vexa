@@ -63,7 +63,7 @@ if (!CHECK) {
     "|---|---|---|---|---|",
     ...rows.map((r) => `| **${r.p}** | ${r.rule} | ${r.results.map((x) => `\`gate:${x.g}\``).join(" · ")} | ${r.results.map((x) => x.ev).join("; ")} | ${r.ok ? "✅" : "❌"} |`),
     "",
-    `**Modularity verdict: ${allOk ? "all gates green — the v0.12 backend is fully modular by the constitution's own definition" : "RED — a modularity gate is failing"}.**`,
+    `**Modularity verdict: ${allOk ? "all gates green — the backend is fully modular by the constitution's own definition" : "RED — a modularity gate is failing"}.**`,
     "",
     "Per-service module structure (each a front-doored brick, independently testable): `meeting-api` =",
     "`{lifecycle · bot_spawn · collector · recordings · webhooks · scheduling · sessions · obs}`; `runtime` =",
