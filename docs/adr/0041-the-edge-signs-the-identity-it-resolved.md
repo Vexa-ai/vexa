@@ -104,3 +104,6 @@ and agent-api not at all, and workers are labelled so the policy can tell them f
   Lite runs it as a program.
 - Delegation revocation (a `jti` denylist) lived in the rig; identity does not hold one yet. A token
   lives at most its TTL (an hour by default).
+- `gate:fact-parity` gains a `header` kind (2026-10-09): the captured text is an HTTP field name,
+  compared case-insensitively (RFC 9110 §5.1), so `x-vexa-identity` and `X-Vexa-Identity` are one
+  answer. Facts `identity-header` and `mcp-reentry-header` use it.
