@@ -69,11 +69,18 @@ WORKSPACE_WORD = "desk"
 # "first-visit" is the touch nobody sent: a person signs in with no link, so nothing composed an
 # arrival for them. Before it existed they got the seeded greeting — "paste a meeting link" — which
 # is the wrong sentence for somebody who was INVITED to a meeting and is here because of it.
-KINDS = ("admin-setup", "first-visit", "prep", "post-meeting", "catch-up", "group-setup",
+KINDS = ("first-visit", "prep", "post-meeting", "catch-up", "group-setup",
          # `hand-link`: somebody was handed or pasted `/?ask=<preset>&meeting=<row>`. Minted by
          # POST /api/scaffolds/hand FOR THE CALLER, so its opening is composed server-side out
          # of the record like every other kind, and never out of the address bar.
          "invite-offer", "hand-link")
+
+# Kinds a stored record may still carry but nothing mints any more, so the mint refuses them.
+# `admin-setup` was the first administrator's setup conversation, minted by the claim route until
+# the company-layer gate went (founder ruling 2026-10-08). A record minted before then still opens
+# (opening never checks the kind) and the terminal still names its chat, until the record's
+# TTL_SECONDS run out; a chat's session row keeps the `{kind, id}` pair for as long as the chat.
+READ_ONLY_KINDS = ("admin-setup",)
 
 # A preset NAME, and only a name — no slashes, no dots, nothing that walks out of `asks/`. The same
 # expression the terminal applies to `?ask=` (MinutesShell.tsx), kept identical on purpose: two
