@@ -289,6 +289,14 @@ class RequestMeetingBot(BaseModel):
     )
     language: Optional[str] = Field(None, description="Optional language code for transcription (e.g., 'en', 'es'). If not specified, auto-detected")
     bot_name: Optional[str] = Field(None, description="Optional custom name for the bot in the meeting")
+    workspace_id: Optional[str] = Field(
+        None,
+        description=(
+            "The shared workspace this meeting belongs to: every member then sees it while it runs and "
+            "gets its write-up. You must be a member. Omitted, a bot an agent sends from a chat belongs "
+            "to the shared workspace that chat is working in; 'personal' keeps the meeting yours alone."
+        ),
+    )
     platform: str = Field("google_meet", description="The meeting platform (e.g., 'google_meet', 'teams', 'zoom', 'jitsi'). Default is 'google_meet'.")
     passcode: Optional[str] = Field(
         None,

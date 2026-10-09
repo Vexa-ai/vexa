@@ -50,6 +50,9 @@ from .service import (
 #: 422 here rather than an asyncpg truncation 500 deep in the spawn path (#843).
 NATIVE_MEETING_ID_MAX_LEN = 255
 
+#: The words that keep a bot's meeting private to the caller, whatever workspace their chat works in.
+PRIVATE_WORKSPACE_WORDS = frozenset({"personal", "desk"})
+
 #: URL-structural characters that must never appear in a native_meeting_id. The id is
 #: interpolated into a URL PATH SEGMENT (`construct_meeting_url` — google_meet/teams) and reused
 #: as the DELETE path param and the dashboard lookup key, so any of these breaks that use (#892):
@@ -271,8 +274,11 @@ def build_router(
         x_user_id: Optional[str] = Header(default=None),
         x_user_limits: Optional[str] = Header(default=None),
         # The caller's workspace memberships, injected by the gateway from identity. Read ONLY to
-        # authorize an explicit `workspace_id` in the body against real membership.
+        # authorize a `workspace_id` — named in the body or defaulted below — against membership.
         x_user_workspaces: Optional[str] = Header(default=None),
+        # The chat's target workspace, on a worker's signed identity. A DEFAULT for `workspace_id`,
+        # never a grant: it binds only a workspace the caller is already a member of.
+        x_user_delegation_target: Optional[str] = Header(default=None),
         x_user_webhook_url: Optional[str] = Header(default=None),
         x_user_webhook_secret: Optional[str] = Header(default=None),
         x_user_webhook_events: Optional[str] = Header(default=None),
@@ -467,13 +473,24 @@ def build_router(
         # api key could publish a meeting into a workspace they are not in, and every member of it
         # would find a stranger's call in their list, on their meeting page and in its live
         # transcript, since `data.workspace_id` is exactly what those surfaces trust.
+        #
+        # A WORKER'S BOT BELONGS TO WHERE ITS CHAT IS WORKING. An agent worker carries its chat's
+        # target workspace on the signed identity; with no `workspace_id` of its own, a bot it sends
+        # is that workspace's meeting when the caller is a member of it — the target may be their own
+        # desk, which is not a membership, and that is a private meeting as before. `personal` (or
+        # `desk`) keeps any bot private explicitly.
         workspace_id = body.get("workspace_id")
-        if workspace_id is not None:
-            if not isinstance(workspace_id, str) or not workspace_id.strip():
-                raise HTTPException(
-                    status_code=422, detail="'workspace_id' must be a non-empty string")
+        member_of = {w.strip() for w in (x_user_workspaces or "").split(",") if w.strip()}
+        if isinstance(workspace_id, str) and workspace_id.strip() in PRIVATE_WORKSPACE_WORDS:
+            workspace_id = None
+        elif workspace_id is None:
+            target = (x_user_delegation_target or "").strip()
+            workspace_id = target if target and target in member_of else None
+        elif not isinstance(workspace_id, str) or not workspace_id.strip():
+            raise HTTPException(
+                status_code=422, detail="'workspace_id' must be a non-empty string")
+        else:
             workspace_id = workspace_id.strip()
-            member_of = {w.strip() for w in (x_user_workspaces or "").split(",") if w.strip()}
             if workspace_id not in member_of:
                 raise HTTPException(
                     status_code=403, detail=f"not a member of workspace '{workspace_id}'")

@@ -1302,6 +1302,45 @@ def test_spawn_refuses_a_workspace_the_caller_is_not_in(monkeypatch):
                               "workspace_id": "team-notes"}).status_code == 403
 
 
+# ── a worker's bot belongs to where its chat is working (the target rides the identity) ─────────
+# An agent worker acting for a person carries its chat's target workspace on the signed identity
+# (`x-user-delegation-target`). A bot it sends with no `workspace_id` of its own is that workspace's
+# meeting when the person is a member of it — the same default agent-api's page writes apply — and
+# `personal` keeps it theirs alone.
+
+def _spawn_as_worker(client, body, workspaces, target):
+    headers = {**HEADERS, "x-user-workspaces": ",".join(workspaces),
+               "x-user-delegation-target": target}
+    return client.post("/bots", headers=headers, json=body)
+
+
+def test_a_workers_bot_belongs_to_the_workspace_its_chat_is_working_in(monkeypatch):
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    r = _spawn_as_worker(_client(), {"platform": "google_meet", "native_meeting_id": "tgt-aaaa-bbb"},
+                         ["team-notes"], "team-notes")
+    assert r.status_code == 201, r.text
+    assert r.json()["data"]["workspace_id"] == "team-notes"
+
+
+def test_a_target_that_is_not_a_shared_workspace_of_theirs_binds_nothing(monkeypatch):
+    """The target can be the person's own desk, which is not a membership. That is a private
+    meeting, exactly as before — never a refusal for a workspace the caller never named."""
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    r = _spawn_as_worker(_client(), {"platform": "google_meet", "native_meeting_id": "desk-aaaa-bbb"},
+                         ["team-notes"], "u_jane")
+    assert r.status_code == 201, r.text
+    assert "workspace_id" not in (r.json().get("data") or {})
+
+
+@pytest.mark.parametrize("word", ["personal", "desk"])
+def test_personal_keeps_a_workers_bot_private(monkeypatch, word):
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    r = _spawn_as_worker(_client(), {"platform": "google_meet", "native_meeting_id": f"{word}-aaaa-bbb",
+                                     "workspace_id": word}, ["team-notes"], "team-notes")
+    assert r.status_code == 201, r.text
+    assert "workspace_id" not in (r.json().get("data") or {})
+
+
 @pytest.mark.parametrize("bad", ["", "   ", 7, [], {}])
 def test_spawn_refuses_a_workspace_id_that_is_not_a_slug(monkeypatch, bad):
     monkeypatch.setenv("ADMIN_TOKEN", SECRET)
