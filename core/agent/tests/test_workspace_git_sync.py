@@ -23,6 +23,14 @@ from control_plane.workspace_git_sync import (
 TOKEN = "ghp_SECRET_token_123"
 
 
+@pytest.fixture(autouse=True)
+def _local_remotes_opted_in(monkeypatch, tmp_path):
+    """These tests sync with LOCAL bare repos, which a deployment refuses unless a self-host operator
+    opts their root in — exactly what this does, for the test's own tmp dir only."""
+    from control_plane.repo_ref import LOCAL_ROOTS_ENV
+    monkeypatch.setenv(LOCAL_ROOTS_ENV, str(tmp_path))
+
+
 def _run(cwd: Path, *a: str) -> str:
     return subprocess.run(["git", *a], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
 
@@ -146,3 +154,19 @@ def test_push_requires_a_token(tmp_path):
     ws = _clone(bare, tmp_path / "ws", seed=True)
     with pytest.raises(ValueError):
         push_origin(ws, token="  ")
+
+
+@pytest.mark.parametrize("planted", ["ext::sh -c touch% /tmp/x", "file:///etc", "/srv/elsewhere/repo.git"])
+def test_a_home_url_rewritten_in_git_config_is_refused_before_any_transfer(tmp_path, planted):
+    """The home URL is read back out of `.git/config`, which a workspace's writers can edit: it must
+    pass the same gate a person's repository reference does, or nothing is sent and nothing fetched."""
+    bare = _bare(tmp_path / "remote.git")
+    ws = _clone(bare, tmp_path / "ws", seed=True)
+    _commit(ws, "local")
+    _run(ws, "remote", "set-url", "origin", planted)
+    with pytest.raises(ValueError):
+        push_origin(ws, token=TOKEN)
+    with pytest.raises(ValueError):
+        pull_origin(ws, token=TOKEN)
+    # the bare remote still has only the seed commit
+    assert _run(bare, "rev-list", "--count", "main") == "1"

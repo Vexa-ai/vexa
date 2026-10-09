@@ -30,9 +30,11 @@ from typing import Optional
 
 from shared.git_redaction import redact
 from shared.adapters import GitPushError, push_with_token
-from shared.gitenv import pinned_git_env, scrubbed_git_env
+from shared.gitenv import transport_env
+from shared.gitexec import run_git
 from shared.token_destination import embed_token
 
+from control_plane.repo_ref import assert_fetchable
 from control_plane.workspace_publish import PUBLISH_REMOTE, _URL_CREDENTIAL_RE, _display_url
 
 log = logging.getLogger(__name__)
@@ -87,11 +89,10 @@ def _git(ws: Path, *args: str, token: Optional[str] = None, check: bool = True,
     ``url`` marks this as a NETWORK op and pins git's transport allow-list to what that remote needs —
     the home remote was written from a repository the subject supplied at attach time, so it is a
     caller-influenced URL even though it is read back out of ``.git/config``."""
-    overrides = {"GIT_ASKPASS": "true", "GIT_TERMINAL_PROMPT": "0", **(ssh_env or {})}
-    proc = subprocess.run(
-        ["git", "-C", str(ws), *args], capture_output=True, text=True,
-        env=pinned_git_env(url, **overrides) if url is not None else scrubbed_git_env(**overrides),
-    )
+    env = {"GIT_ASKPASS": "true", "GIT_TERMINAL_PROMPT": "0", **(ssh_env or {})}
+    if url is not None:
+        env.update(transport_env(url))
+    proc = run_git(ws, *args, env=env)
     if check and proc.returncode != 0:
         raise RemoteSyncError(_redacted(f"git {' '.join(args)} failed: {proc.stderr.strip()}", token))
     return proc
@@ -213,6 +214,10 @@ def push_origin(ws: str | Path, *, token: Optional[str] = None, ssh_env: Optiona
     if home is None:
         raise RemoteSyncError("this workspace has no GitHub home yet — publish or attach a repo first")
     remote, url = home
+    # The home URL is read back out of `.git/config`, which is not ours alone to write: it passes the
+    # same gate a person's repository reference does before anything is sent to it (a ValueError →
+    # API 400). A path on this server is refused unless a self-host operator opted its root in.
+    assert_fetchable(url)
     over_ssh = bool(ssh_env) and _is_ssh_url(url)
     if not token and not over_ssh:
         raise ValueError("a GitHub access token is required")  # bad input (API → 400)
@@ -222,7 +227,8 @@ def push_origin(ws: str | Path, *, token: Optional[str] = None, ssh_env: Optiona
     _git(wsp, "rev-parse", "--verify", "HEAD", token=token, ssh_env=ssh_env)  # at least one commit, or fail loud
     if over_ssh:
         # No remote is written and no credential touches the URL — the key is in the environment.
-        pushed = _git(wsp, "push", "--quiet", url, f"HEAD:refs/heads/{branch}", ssh_env=ssh_env, check=False)
+        pushed = _git(wsp, "push", "--quiet", url, f"HEAD:refs/heads/{branch}", ssh_env=ssh_env,
+                      check=False, url=url)
         if pushed.returncode != 0:
             err = (pushed.stderr or "").strip()
             if "non-fast-forward" in err or "fetch first" in err or "rejected" in err:
@@ -259,6 +265,7 @@ def pull_origin(ws: str | Path, *, token: Optional[str] = None, ssh_env: Optiona
     if home is None:
         raise RemoteSyncError("this workspace has no GitHub home yet — publish or attach a repo first")
     remote, url = home
+    assert_fetchable(url)                       # read back from `.git/config` — see push_origin
     branch = _current_branch(wsp)
     if not branch:
         raise RemoteSyncError("workspace is on a detached HEAD — check out a branch to pull")
