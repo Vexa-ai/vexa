@@ -98,7 +98,7 @@
       "enforced": true,
       "canonical": "core/gateway/contracts/gateway-identity.v1/identity_token.py",
       "how_to_agree": "edit the canonical copy in the contract and vendor it VERBATIM into each package that signs or verifies",
-      "why": "One signer (the gateway) and two verifiers (agent-api, meeting-api) in three separately-built images that may not import each other (P2). A verifier that drifts from its signer refuses every request or, worse, accepts one it should not; the bytes are compared so neither can happen quietly.",
+      "why": "One signer (the gateway, the only holder of the Ed25519 private key) and three verifiers (agent-api, meeting-api, the credential broker, holding the public key) in four separately-built images that may not import each other (P2). A verifier that drifts from its signer refuses every request or, worse, accepts one it should not; the bytes are compared so neither can happen quietly.",
       "sites": [
         {
           "path": "core/gateway/contracts/gateway-identity.v1/identity_token.py"
@@ -111,6 +111,9 @@
         },
         {
           "path": "core/meetings/services/meeting-api/src/meeting_api/identity_token.py"
+        },
+        {
+          "path": "core/agent/services/credential-broker/src/credential_broker/identity_token.py"
         }
       ]
     },

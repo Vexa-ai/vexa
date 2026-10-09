@@ -22,6 +22,9 @@ dependencies = [
     # No SQLAlchemy-async here so no greenlet pin is required (lesson from the identity
     # lane — only pin greenlet when SQLAlchemy-async is in play).
     "pytest-asyncio>=0.23",
+    # gateway-identity.v1: the gateway and meeting-api sources this suite imports sign and verify
+    # with Ed25519 (cryptography). Apache-2.0 OR BSD-3-Clause.
+    "cryptography>=43,<47",
 ]
 
 [tool.uv]

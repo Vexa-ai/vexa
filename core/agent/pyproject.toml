@@ -23,6 +23,9 @@ control-plane = [
     "fastapi>=0.110,<1",
     "python-multipart>=0.0.31,<1",
     "uvicorn[standard]>=0.29,<1",
+    # gateway-identity.v1: verifies the gateway's Ed25519 signature with its public key (control plane only;
+    # the worker never sees an identity token). Apache-2.0 OR BSD-3-Clause.
+    "cryptography>=43,<47",
 ]
 # worker image (claude-in-container) — base only; claude-code is an npm global, not a pip dep.
 worker = []

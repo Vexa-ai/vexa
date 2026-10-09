@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://vexa.ai/contracts/gateway-identity.v1",
   "title": "gateway-identity.v1 — the signed identity the gateway forwards to the services behind it",
-  "description": "The gateway resolves a bearer through identity's /internal/validate and forwards the request with X-Vexa-Identity: \"v1.\" + base64url(claims JSON) + \".\" + base64url(HMAC-SHA256(VEXA_GATEWAY_IDENTITY_SECRET, \"v1.\" + base64url(claims JSON))). agent-api and meeting-api verify the signature in constant time, the issue time and the expiry within a bounded clock skew, and rebuild every x-user-* header from these claims. A request that asserts an x-user-* header without a valid signature, and without the internal tier's X-Internal-Secret, is refused with 401.",
+  "description": "The gateway resolves a bearer through identity's /internal/validate and forwards the request with X-Vexa-Identity: \"v1.\" + base64url(claims JSON) + \".\" + base64url(Ed25519 signature, by the gateway's private key, over \"v1.\" + base64url(claims JSON)). \"v1\" fixes the scheme; nothing is negotiated. agent-api, meeting-api and the credential broker hold only the gateway's public key, so they verify and cannot sign: the signature, then the issue time and the expiry within a bounded clock skew. agent-api and meeting-api rebuild every x-user-* header from these claims and refuse with 401 a request that asserts an x-user-* header without a valid signature and without the internal tier's X-Internal-Secret. The credential broker refuses an agent-role call whose forwarded signature is missing, invalid or names a subject other than the assertion's actor.",
   "$defs": {
     "Claims": {
       "type": "object",
@@ -39,15 +39,29 @@
     },
     "Vector": {
       "type": "object",
-      "description": "A signing test vector: any implementation signing these claims at `now` with `secret` must produce `token`.",
-      "required": ["secret", "now", "ttl_sec", "claims", "token"],
+      "description": "A signing test vector: any implementation signing these claims at `now` with `private_key` must produce `token` (Ed25519 signatures are deterministic), and `public_key` is that key's public half. The pair is RFC 8032 section 7.1 TEST 1, a published test key and never a deployment's.",
+      "required": ["private_key", "public_key", "now", "ttl_sec", "claims", "token"],
       "additionalProperties": false,
       "properties": {
-        "secret": { "type": "string" },
+        "private_key": { "type": "string", "pattern": "^-----BEGIN PRIVATE KEY-----\n", "description": "PKCS#8 PEM, Ed25519" },
+        "public_key": { "type": "string", "pattern": "^-----BEGIN PUBLIC KEY-----\n", "description": "SubjectPublicKeyInfo PEM, Ed25519" },
         "now": { "type": "integer" },
         "ttl_sec": { "type": "integer" },
         "claims": { "type": "object" },
         "token": { "type": "string", "pattern": "^v1\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$" }
+      }
+    },
+    "Refusal": {
+      "type": "object",
+      "description": "A refusal vector: verifying `token` with `public_key` at `now` must fail with `reason`. Covers another key, a tampered payload, algorithm confusion (an HMAC keyed with the public key), a missing signature, another scheme and an over-long lifetime.",
+      "required": ["public_key", "now", "token", "reason", "what"],
+      "additionalProperties": false,
+      "properties": {
+        "public_key": { "type": "string", "pattern": "^-----BEGIN PUBLIC KEY-----\n" },
+        "now": { "type": "integer" },
+        "token": { "type": "string" },
+        "reason": { "enum": ["malformed", "bad_signature", "lifetime_too_long", "not_yet_valid", "expired"] },
+        "what": { "type": "string" }
       }
     }
   }

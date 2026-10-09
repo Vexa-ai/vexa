@@ -3,12 +3,16 @@
  * gate:schema for gateway-identity.v1 — the goldens are the spec (P8).
  *   claims-*  → a signed payload, validated against #/$defs/Claims
  *   vector-*  → a signing vector, validated against #/$defs/Vector, then RE-SIGNED here in a second
- *               language: the token's payload must decode to Claims, and HMAC-SHA256 over
- *               "v1." + payload with the vector's secret must reproduce the token's signature.
+ *               language: Ed25519 over "v1." + payload with the vector's private key must reproduce
+ *               the token's signature byte for byte, the public key must be that key's public half
+ *               and must verify it, and the payload must decode to Claims.
+ *   refused-* → a refusal vector, validated against #/$defs/Refusal, then checked here: the token
+ *               must NOT verify under the vector's public key (or must be refused before a
+ *               signature is checked, for a malformed one or an over-long lifetime).
  * Run: node validate.mjs [--check]
  */
 import Ajv2020 from "ajv/dist/2020.js";
-import { createHmac } from "node:crypto";
+import { createPrivateKey, createPublicKey, sign, verify } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,9 +23,24 @@ const ajv = new Ajv2020({ strict: false, allErrors: true });
 ajv.addSchema(schema);
 const claimsOk = ajv.compile({ $ref: `${schema.$id}#/$defs/Claims` });
 const vectorOk = ajv.compile({ $ref: `${schema.$id}#/$defs/Vector` });
+const refusalOk = ajv.compile({ $ref: `${schema.$id}#/$defs/Refusal` });
 
 const b64u = (buf) => buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 const unb64u = (s) => Buffer.from(s.replace(/-/g, "+").replace(/_/g, "/"), "base64");
+const B64U = /^[A-Za-z0-9_-]+$/;
+
+// The verifier's rules, restated in a second language: v1 only, canonical base64url, exactly a
+// 64-byte Ed25519 signature, the signature checked before the payload is read.
+function verifies(publicPem, token) {
+  const key = createPublicKey(publicPem);
+  if (key.asymmetricKeyType !== "ed25519") throw new Error("the verification key is not Ed25519");
+  const parts = token.split(".");
+  if (parts.length !== 3 || parts[0] !== "v1") return false;
+  if (!B64U.test(parts[1]) || !B64U.test(parts[2])) return false;
+  const sig = unb64u(parts[2]);
+  if (b64u(sig) !== parts[2] || sig.length !== 64) return false;
+  return verify(null, Buffer.from(`${parts[0]}.${parts[1]}`), key, sig);
+}
 
 let failed = 0;
 const files = readdirSync(join(HERE, "golden")).filter((n) => n.endsWith(".json"));
@@ -32,17 +51,33 @@ for (const f of files) {
     console.log(`  ✓ ${f} ≡ Claims`);
   } else if (f.startsWith("vector-")) {
     if (!vectorOk(data)) { console.error(`  ✗ ${f}: ${ajv.errorsText(vectorOk.errors)}`); failed++; continue; }
+    const priv = createPrivateKey(data.private_key);
+    if (priv.asymmetricKeyType !== "ed25519") { console.error(`  ✗ ${f}: private_key is not Ed25519`); failed++; continue; }
+    if (createPublicKey(priv).export({ type: "spki", format: "pem" }) !== data.public_key) {
+      console.error(`  ✗ ${f}: public_key is not the private key's public half`); failed++; continue;
+    }
     const [version, payload, sig] = data.token.split(".");
-    const expect = b64u(createHmac("sha256", data.secret).update(`${version}.${payload}`).digest());
-    if (expect !== sig) { console.error(`  ✗ ${f}: signature does not reproduce`); failed++; continue; }
+    if (b64u(sign(null, Buffer.from(`${version}.${payload}`), priv)) !== sig) {
+      console.error(`  ✗ ${f}: signature does not reproduce`); failed++; continue;
+    }
+    if (!verifies(data.public_key, data.token)) { console.error(`  ✗ ${f}: public_key does not verify the token`); failed++; continue; }
     const claims = JSON.parse(unb64u(payload).toString("utf8"));
     if (!claimsOk(claims)) { console.error(`  ✗ ${f}: payload is not Claims: ${ajv.errorsText(claimsOk.errors)}`); failed++; continue; }
     if (claims.iat !== data.now || claims.exp !== data.now + data.ttl_sec || claims.sub !== data.claims.sub) {
       console.error(`  ✗ ${f}: payload iat/exp/sub disagree with the vector`); failed++; continue;
     }
-    console.log(`  ✓ ${f} ≡ Vector (signature reproduced)`);
+    console.log(`  ✓ ${f} ≡ Vector (Ed25519 signature reproduced and verified)`);
+  } else if (f.startsWith("refused-")) {
+    if (!refusalOk(data)) { console.error(`  ✗ ${f}: ${ajv.errorsText(refusalOk.errors)}`); failed++; continue; }
+    const ok = verifies(data.public_key, data.token);
+    // A correctly signed token refused for its claims (lifetime) verifies here and is refused by
+    // the claim checks the Python verifier applies after the signature; anything else must not.
+    if (ok !== (data.reason === "lifetime_too_long" || data.reason === "expired" || data.reason === "not_yet_valid")) {
+      console.error(`  ✗ ${f}: signature check disagrees with reason ${data.reason}`); failed++; continue;
+    }
+    console.log(`  ✓ ${f} ≡ Refusal (${data.reason})`);
   } else {
-    console.error(`  ✗ ${f}: filename must start with claims- / vector-`); failed++;
+    console.error(`  ✗ ${f}: filename must start with claims- / vector- / refused-`); failed++;
   }
 }
 console.log(failed ? `gateway-identity.v1: ${failed} golden(s) FAILED` : `gateway-identity.v1: ${files.length} goldens conform`);

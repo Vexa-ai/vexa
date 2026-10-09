@@ -16,6 +16,8 @@ dependencies = [
     "pytest-asyncio>=0.23,<2",
     "icalendar>=6,<7",
     "python-dateutil>=2.9,<3",
+    # gateway-identity.v1: verifies the gateway's Ed25519 signature with its public key. Apache-2.0 OR BSD-3-Clause.
+    "cryptography>=43,<47",
 ]
 
 [tool.uv]
