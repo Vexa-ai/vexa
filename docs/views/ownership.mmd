@@ -21,6 +21,11 @@ flowchart LR
   imports_status[("<store>/.imports/{subject}/ (files)")]
   onboarding_research_state[("<store>/.onboarding-research/{sha256(workspace)}/ (files)")]
   rail_order[("agent:rail-order:{subject} (redis key)")]
+  redis_acl_users[("Redis ACL users (vexa-unit-*, vexa-bot-*)")]
+  style redis_acl_users stroke-dasharray: 5 5,stroke-width:3px
+  acl_units_index[("vexa:acl:units (redis hash)")]
+  acl_bots_index[("vexa:acl:bots (redis hash)")]
+  routine_state[("<store>/.routines/ (files)")]
   bot -->|write| segments_stream
   bot -->|write| tc_mutable
   meeting_api -.->|read| segments_stream
@@ -56,3 +61,9 @@ flowchart LR
   agent_api -->|write| imports_status
   agent_api -->|write| onboarding_research_state
   agent_api -->|write| rail_order
+  agent_api -->|write| unit_in
+  agent_api -->|write| redis_acl_users
+  meeting_api -->|write| redis_acl_users
+  agent_api -->|write| acl_units_index
+  meeting_api -->|write| acl_bots_index
+  agent_api -->|write| routine_state

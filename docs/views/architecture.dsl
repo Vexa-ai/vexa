@@ -40,6 +40,7 @@ system meetings  # capture → transcribe → record; owns the raw transcript
   contract sdk-join.v1
   module zoom-sdk-capture
   contract sdk-capture.v1
+  data-asset acl-bots-index [writers: meeting-api]
 
 system agent  # the execution domain: a trigger becomes one governed agent turn over a workspace.v1 git repo; owns no transcript
   service agent-api
@@ -55,11 +56,14 @@ system agent  # the execution domain: a trigger becomes one governed agent turn 
   data-asset credentials-store [writers: credentials-broker]
   service agent-worker
   data-asset out-stream [writers: agent-worker]
-  data-asset unit-in
+  data-asset unit-in [writers: agent-api]
   data-asset va-chat
   data-asset imports-status [writers: agent-api]
   data-asset onboarding-research-state [writers: agent-api]
   data-asset rail-order [writers: agent-api]
+  data-asset redis-acl-users [writers: agent-api, meeting-api]
+  data-asset acl-units-index [writers: agent-api]
+  data-asset routine-state [writers: agent-api]
 
 system gateway-system  # the one public edge (api.v1, ws.v1)
   service conformance
@@ -117,7 +121,7 @@ edges:
   meeting-api -write-> tc-mutable
   meeting-api -write-> segments-table
   meeting-api -write-> tc-stream
-  agent-api -read-> tc-stream
+  agent-api -read-> tc-stream  # the transcription watcher's only action feed (a segment registers the meeting, session_end ends it), and the live view agent-api relays (/api/meeting/stream); the collector writes it only for entries it admitted (transcript.v1 FeedEntry)
   gateway -read-> tc-mutable
   terminal -read-> tc-stream
   terminal -read-> out-stream
@@ -137,13 +141,13 @@ edges:
   meeting-api -req-> admin-api  # GET /internal/calendar-configs discovers secret-gated calendar connections for sync and disconnect cleanup
   meeting-api -req-> service-authority  # optional signed service-authority.v1 admit/continue decision; unset is explicit OSS allow-all, configured failure is closed
   meeting-api -req-> system-webhook  # optional signed terminal webhook.v1 delivery to a boot-frozen operator destination; customer webhook SSRF policy remains separate
-  agent-api -read-> segments-stream  # XREADGROUP agent_copilot (proactive watcher)
+  agent-api -read-> segments-stream  # the transcription watcher's group agent_copilot: XREADGROUP + XACK each raw entry as a hint only, naming which verified per-meeting feed (tc-stream) to read; it acts on nothing it reads here
   agent-api -req-> runtime  # agent-api drives the kernel with Authorization: Bearer RUNTIME_API_TOKEN (runtime.v1 CallerCredential): POST /workloads, GET /workloads and GET /workloads/{id} to spawn and track agent-worker workloads, and POST /schedule, GET /schedule and DELETE /schedule/{job_id} for routine jobs (schedule.v1)
   agent-api -read-> out-stream  # SSE relay (/api/chat, /api/meeting/stream)
   agent-worker -read-> tc-stream  # copilot tails transcript
   agent-worker -write-> out-stream  # XADD cards/notes/deltas
   agent-worker -read-> unit-in  # chat path XREADs interactive input
-  mcp -req-> gateway  # every MCP tool forwards the caller's own bearer (an API key or a worker's delegation token) to the public REST surface
+  mcp -req-> gateway  # every MCP tool forwards the caller's own bearer (an API key or a worker's delegation token) to the public REST surface; for a worker it also sends back the identity the gateway signed onto the /mcp request (X-Vexa-Internal-Mcp-Identity, gateway-identity.v1 re-entry), the only way a delegation token reaches a REST route
   gateway -req-> meeting-api  # proxy /bots /transcripts /meetings /recordings and per-calendar sync
   gateway -req-> agent-api  # proxy /agent/* with the resolved identity signed (gateway-identity.v1)
   gateway -req-> mcp  # proxy /mcp — the ONE assembled MCP server for every bearer, a person's key or a worker's delegation token; POST buffered, GET relayed unbuffered (SSE stream)
@@ -174,7 +178,7 @@ edges:
   agent-worker -req-> gateway  # the worker's toolbelt: /mcp and /agent/friction with its per-dispatch delegation token, which identity resolves as the person it acts for
   mcp -req-> agent-api  # boot assembly: GET /.well-known/mcp-tools.json + /openapi.json — the agent domain's tools join the one MCP surface
   agent-api -req-> meeting-api  # agent-api reads meetings as the caller, X-User-Id (and X-User-Workspaces) over the internal tier (X-Internal-Secret): GET /meetings/{id} (the meeting access lookup behind every meeting-scoped agent route), GET /transcripts/by-id/{id} (a transcript the caller may read), GET /meetings?… (the schedule digest's three bounded queries), POST /meetings/{id}/annotate (the minted meeting's recorder). meeting-api decides access; agent-api holds no meetings data
-  agent-api -req-> admin-api  # agent-api asks identity about a person over the internal tier (X-Internal-Secret): GET /internal/users/by-email/{email} (falling back to GET /admin/users/email/{email} with X-Admin-API-Key) to resolve a share's invitee; POST/DELETE/GET /internal/users/{id}/memberships[/{ws}] (the membership index mirror); GET /internal/users/{id}/model-config; GET /internal/users/{id}/is-admin (the _global tier's writer); GET /internal/users/{id}/bot-context (admin overview); GET /internal/users/{id}/settings (the person's clock)
+  agent-api -req-> admin-api  # agent-api asks identity about a person over the internal tier (X-Internal-Secret): GET /internal/users/by-email/{email} (falling back to GET /admin/users/email/{email} with X-Admin-API-Key) to resolve a share's invitee; POST/DELETE/GET /internal/users/{id}/memberships[/{ws}] (the membership index mirror); GET /internal/users/{id}/model-config; GET /internal/users/{id}/is-admin (the _global tier's writer); GET /internal/users/{id}/bot-context (admin overview); GET/PUT /internal/users/{id}/settings (the person's clock and timezone)
   agent-worker -req-> flows-api  # the worker's temporal block: GET /timeline?format=preamble with the read-only VEXA_FLOWS_TIMELINE_KEY that dispatch stamps only when the deployment minted one (never the operator key); granted by the workload network fences (compose workers network, the Helm workload egress policy)
   bot -req-> meeting-api  # the bot's only calls back: every lifecycle.v1 event to POST /bots/internal/callback/lifecycle and every recording chunk to POST /internal/recordings/upload, each with Authorization: Bearer <MeetingToken> (invocation.v1 token), bound to the bot's own session; meeting-api refuses another session's token with 401
   runtime -req-> agent-api  # a routine's due schedule.v1 job: POST /invocations with the unit.v1 dispatch agent-api compiled and signed (X-Vexa-Dispatch-Signature, HMAC keyed from INTERNAL_API_SECRET); the runtime holds the job opaquely and cannot re-point it at another person or trigger
@@ -183,6 +187,14 @@ edges:
   agent-api -write-> onboarding-research-state  # onboarding research checkpoints (onboarding_research.py)
   agent-api -write-> rail-order  # SET/GET the chat rail order
   claude-plugin -req-> gateway  # the plugin's HTTP MCP server entry: Claude Code calls the gateway's /mcp with the person's Vexa API key; the plugin itself runs no code
+  agent-api -write-> unit-in  # XADD the person's next message to a warm unit, signed with the unit's key
+  agent-api -write-> redis-acl-users  # ACL SETUSER/DELUSER a worker's own user per dispatch; restore after a Redis restart
+  meeting-api -write-> redis-acl-users  # ACL SETUSER/DELUSER a bot's own user per session; restore after a Redis restart
+  agent-api -write-> acl-units-index  # HSET/HDEL the worker users it defined
+  meeting-api -write-> acl-bots-index  # HSET/HDEL the bot users it defined
+  agent-api -write-> routine-state  # routine approvals and the re-signing marker
+  agent-api -req-> flows-api  # the publish edge: POST /events (desk.unscaffolded, claim.proposed) and POST /friction with the operator key (X-Flows-Operator-Key); GET /flows/pages to land the pages of authored flows in _global/flows/
+  agent-api -req-> gateway  # the transcription watcher, with VEXA_BOT_API_KEY: GET /meetings to resolve a meeting row to its native id, and POST /meetings/{platform}/{native}/docs to link the meeting's own page on session end
   bot, agent-worker deployed-in runtime
   gateway, meeting-api, agent-api, admin-api, runtime, redis, postgres, object-store, transcription deployed-in deploy
   flows-api, flows-worker deployed-in deploy

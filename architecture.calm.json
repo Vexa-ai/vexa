@@ -785,7 +785,7 @@
    "unique-id": "segments-stream",
    "node-type": "data-asset",
    "name": "transcription_segments (stream)",
-   "description": "durable raw segment feed (transcript.v1); bot XADDs, collector XREADGROUPs",
+   "description": "durable raw segment feed (transcript.v1); bot XADDs, collector XREADGROUPs Also written, never in a deployment, by the offline eval tools (core/meetings/eval/src/segment_bus.py signs its entries like a bot; core/agent/eval/replay/* bridges), which gate:dataflow does not scan.",
    "controls": {
     "ownership": {
      "description": "single writer",
@@ -848,7 +848,7 @@
    "unique-id": "tc-stream",
    "node-type": "data-asset",
    "name": "tc:meeting:{id} (stream)",
-   "description": "native per-meeting transcript stream the agent worker + terminal SSE read; the collector (meetings) is the single writer (P23)",
+   "description": "native per-meeting transcript stream the agent worker + terminal SSE read; the collector (meetings) is the single writer (P23) Also written, never in a deployment, by the offline eval replay bridges (core/agent/eval/replay/*), which gate:dataflow does not scan.",
    "controls": {
     "ownership": {
      "description": "single writer",
@@ -1204,7 +1204,29 @@
    "unique-id": "unit-in",
    "node-type": "data-asset",
    "name": "unit:{id}:in (stream)",
-   "description": "interactive input stream for warm chat units; agent-worker reads. NO in-repo writer in this carve (input arrives via the hosted control plane)"
+   "description": "a warm unit's input stream: agent-api is its only writer and signs every entry with the unit's own key (unit.v1 InputEntry); the worker runs only entries that verify, and agent-api's pending list shows only those",
+   "controls": {
+    "ownership": {
+     "description": "single writer (P23)",
+     "requirements": [
+      {
+       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "config": {
+        "writers": [
+         "agent-api"
+        ],
+        "match": "unit:.*:in",
+        "op": "xadd"
+       }
+      }
+     ]
+    }
+   },
+   "metadata": [
+    {
+     "contract": "unit.v1"
+    }
+   ]
   },
   {
    "unique-id": "va-chat",
@@ -1533,6 +1555,91 @@
      "path": "core/workspaces"
     }
    ]
+  },
+  {
+   "unique-id": "redis-acl-users",
+   "node-type": "data-asset",
+   "name": "Redis ACL users (vexa-unit-*, vexa-bot-*)",
+   "description": "the Redis server's ACL table: agent-api defines one user per agent-worker unit (vexa-unit-*, its unit's three keys) and meeting-api one per bot session (vexa-bot-*, the segment stream and its meeting's two channels), each removed at the end and swept by age; a restart of Redis is answered by defining them again. Two writers, one each per user-name prefix; with REDIS_WORKLOAD_ACL=shared neither writes",
+   "controls": {
+    "ownership": {
+     "description": "shared writer (P23: one per user, see description)",
+     "requirements": [
+      {
+       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "config": {
+        "writers": [
+         "agent-api",
+         "meeting-api"
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "unique-id": "acl-units-index",
+   "node-type": "data-asset",
+   "name": "vexa:acl:units (redis hash)",
+   "description": "agent-api's index of the worker users it defined: user name -> unit id and grant time; drives the sweep and the restore",
+   "controls": {
+    "ownership": {
+     "description": "single writer (P23)",
+     "requirements": [
+      {
+       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "config": {
+        "writers": [
+         "agent-api"
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "unique-id": "acl-bots-index",
+   "node-type": "data-asset",
+   "name": "vexa:acl:bots (redis hash)",
+   "description": "meeting-api's index of the bot users it defined: user name -> session, meeting and grant time; drives the sweep and the restore",
+   "controls": {
+    "ownership": {
+     "description": "single writer (P23)",
+     "requirements": [
+      {
+       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "config": {
+        "writers": [
+         "meeting-api"
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "unique-id": "routine-state",
+   "node-type": "data-asset",
+   "name": "<store>/.routines/ (files)",
+   "description": "routine state outside every workspace mount: approvals/<subject>.json (the sha-256 of each routine's bytes a person stood behind; only those arm) and dispatch-signature.v1.json (the one-time re-signing marker); agent-api is the only writer (workspace_routines.py, routine_resign.py)",
+   "controls": {
+    "ownership": {
+     "description": "single writer (P23)",
+     "requirements": [
+      {
+       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "config": {
+        "writers": [
+         "agent-api"
+        ]
+       }
+      }
+     ]
+    }
+   }
   }
  ],
  "relationships": [
@@ -1559,7 +1666,10 @@
       "va-chat",
       "imports-status",
       "onboarding-research-state",
-      "rail-order"
+      "rail-order",
+      "redis-acl-users",
+      "acl-units-index",
+      "routine-state"
      ]
     }
    }
@@ -1639,7 +1749,8 @@
       "userdata-blob",
       "sdk-join.v1",
       "zoom-sdk-capture",
-      "sdk-capture.v1"
+      "sdk-capture.v1",
+      "acl-bots-index"
      ]
     }
    }
@@ -1803,7 +1914,8 @@
     {
      "access": "read"
     }
-   ]
+   ],
+   "description": "the transcription watcher's only action feed (a segment registers the meeting, session_end ends it), and the live view agent-api relays (/api/meeting/stream); the collector writes it only for entries it admitted (transcript.v1 FeedEntry)"
   },
   {
    "unique-id": "gateway-reads-mutable",
@@ -2225,7 +2337,7 @@
      }
     }
    },
-   "description": "XREADGROUP agent_copilot (proactive watcher)",
+   "description": "the transcription watcher's group agent_copilot: XREADGROUP + XACK each raw entry as a hint only, naming which verified per-meeting feed (tc-stream) to read; it acts on nothing it reads here",
    "metadata": [
     {
      "access": "read"
@@ -2337,7 +2449,7 @@
      }
     }
    },
-   "description": "every MCP tool forwards the caller's own bearer (an API key or a worker's delegation token) to the public REST surface",
+   "description": "every MCP tool forwards the caller's own bearer (an API key or a worker's delegation token) to the public REST surface; for a worker it also sends back the identity the gateway signed onto the /mcp request (X-Vexa-Internal-Mcp-Identity, gateway-identity.v1 re-entry), the only way a delegation token reaches a REST route",
    "protocol": "HTTPS"
   },
   {
@@ -2946,7 +3058,7 @@
      }
     }
    },
-   "description": "agent-api asks identity about a person over the internal tier (X-Internal-Secret): GET /internal/users/by-email/{email} (falling back to GET /admin/users/email/{email} with X-Admin-API-Key) to resolve a share's invitee; POST/DELETE/GET /internal/users/{id}/memberships[/{ws}] (the membership index mirror); GET /internal/users/{id}/model-config; GET /internal/users/{id}/is-admin (the _global tier's writer); GET /internal/users/{id}/bot-context (admin overview); GET /internal/users/{id}/settings (the person's clock)",
+   "description": "agent-api asks identity about a person over the internal tier (X-Internal-Secret): GET /internal/users/by-email/{email} (falling back to GET /admin/users/email/{email} with X-Admin-API-Key) to resolve a share's invitee; POST/DELETE/GET /internal/users/{id}/memberships[/{ws}] (the membership index mirror); GET /internal/users/{id}/model-config; GET /internal/users/{id}/is-admin (the _global tier's writer); GET /internal/users/{id}/bot-context (admin overview); GET/PUT /internal/users/{id}/settings (the person's clock and timezone)",
    "protocol": "HTTP",
    "metadata": [
     {
@@ -3127,6 +3239,165 @@
    "metadata": [
     {
      "access": "req"
+    }
+   ]
+  },
+  {
+   "unique-id": "aa-unit-in",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "agent-api"
+     },
+     "destination": {
+      "node": "unit-in"
+     }
+    }
+   },
+   "description": "XADD the person's next message to a warm unit, signed with the unit's key",
+   "metadata": [
+    {
+     "access": "write",
+     "contract": "unit.v1"
+    }
+   ]
+  },
+  {
+   "unique-id": "aa-redis-acl",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "agent-api"
+     },
+     "destination": {
+      "node": "redis-acl-users"
+     }
+    }
+   },
+   "description": "ACL SETUSER/DELUSER a worker's own user per dispatch; restore after a Redis restart",
+   "metadata": [
+    {
+     "access": "write"
+    }
+   ]
+  },
+  {
+   "unique-id": "ma-redis-acl",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "meeting-api"
+     },
+     "destination": {
+      "node": "redis-acl-users"
+     }
+    }
+   },
+   "description": "ACL SETUSER/DELUSER a bot's own user per session; restore after a Redis restart",
+   "metadata": [
+    {
+     "access": "write"
+    }
+   ]
+  },
+  {
+   "unique-id": "aa-acl-index",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "agent-api"
+     },
+     "destination": {
+      "node": "acl-units-index"
+     }
+    }
+   },
+   "description": "HSET/HDEL the worker users it defined",
+   "metadata": [
+    {
+     "access": "write"
+    }
+   ]
+  },
+  {
+   "unique-id": "ma-acl-index",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "meeting-api"
+     },
+     "destination": {
+      "node": "acl-bots-index"
+     }
+    }
+   },
+   "description": "HSET/HDEL the bot users it defined",
+   "metadata": [
+    {
+     "access": "write"
+    }
+   ]
+  },
+  {
+   "unique-id": "aa-routine-state",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "agent-api"
+     },
+     "destination": {
+      "node": "routine-state"
+     }
+    }
+   },
+   "description": "routine approvals and the re-signing marker",
+   "metadata": [
+    {
+     "access": "write"
+    }
+   ]
+  },
+  {
+   "unique-id": "aa-flows",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "agent-api"
+     },
+     "destination": {
+      "node": "flows-api",
+      "interface": "flows-http"
+     }
+    }
+   },
+   "description": "the publish edge: POST /events (desk.unscaffolded, claim.proposed) and POST /friction with the operator key (X-Flows-Operator-Key); GET /flows/pages to land the pages of authored flows in _global/flows/",
+   "protocol": "HTTP",
+   "metadata": [
+    {
+     "access": "req",
+     "contract": "flows.v1"
+    }
+   ]
+  },
+  {
+   "unique-id": "aa-gw",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "agent-api"
+     },
+     "destination": {
+      "node": "gateway",
+      "interface": "gateway-rest"
+     }
+    }
+   },
+   "description": "the transcription watcher, with VEXA_BOT_API_KEY: GET /meetings to resolve a meeting row to its native id, and POST /meetings/{platform}/{native}/docs to link the meeting's own page on session end",
+   "protocol": "HTTPS",
+   "metadata": [
+    {
+     "access": "req",
+     "contract": "api.v1"
     }
    ]
   }

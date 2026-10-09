@@ -82,3 +82,5 @@ flowchart LR
   runtime -->|"HTTP"| agent_api
   runtime -->|"HTTP"| meeting_api
   claude_plugin -->|"HTTPS"| gateway
+  agent_api -->|"HTTP"| flows_api
+  agent_api -->|"HTTPS"| gateway
