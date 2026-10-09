@@ -12,11 +12,18 @@ THE SERVED SET is read from source, never restated here: the MCP service's own t
 whose `operation_id` is the tool's name) and every domain's `mcp.tools.v1.json` tool a full
 deployment (identity, meetings, flows, agent) carries.
 
-A REFERENCE is a tool-shaped mention of a name that is a tool somewhere — served, allow-listed, or
-one of the verbs only the dogfood rig serves (`RIG_ONLY`, named here because nothing under `core/`
-reads `deploy/`): `` `name` ``, `` `name(…`` , a bare call `name(…`, or `mcp__vexa__name`.
-Plain English ("propose the first piece", "validate it") is not a reference, and docstrings and
-comments are not prompts. Every reference must be to a served tool.
+Two checks, so a name nobody has listed is still caught:
+
+* An ASK is recognised by its GRAMMAR alone — `mcp__vexa__name`, a backticked call `` `name(…``,
+  "call `name`" / "invoke `name`", or "the `name` tool" — whatever the name is. Every ask must name
+  a served tool; the few code identifiers that grammar also matches are listed in `NOT_TOOL_ASKS`,
+  each with where it is cited, and that list can only shrink.
+* A REFERENCE is a looser tool-shaped mention — a bare `` `name` `` or a bare call `name(…` — of a
+  name that is a tool somewhere: served, allow-listed, or rig-only. Loose forms are too common in
+  prose to check without a vocabulary, so this check needs one.
+
+Plain English ("propose the first piece", "validate it") is neither, and docstrings and comments
+are not prompts.
 
 The worker's allow-list and the harness's result vocabularies are held to the same set, except
 `ALLOWLIST_GAP`: two verbs the harness turns into panel and focus events that only the rig serves
@@ -36,18 +43,30 @@ FULL_DEPLOYMENT = {"identity", "meetings", "flows", "agent"}
 MANIFEST_GLOBS = ("core/*/mcp.tools.v1.json", "core/*/services/*/mcp.tools.v1.json")
 BUILT_IN_SOURCE = REPO / "core/meetings/services/mcp/src/vexa_mcp/app.py"
 ALLOWLIST = REPO / "core/agent/worker/mcp_tools.v1.json"
-#: The verbs only the dogfood rig serves — the surface product prompts drifted onto. A prompt naming
-#: one of these on a standard deployment names a tool that is not there.
-RIG_ONLY = frozenset({
+#: The verbs only the dogfood rig serves that NOTHING under `core/` names — the surface product
+#: prompts once drifted onto. They cannot be derived: the rig lives under `deploy/`, which `core/`
+#: does not read (`test_no_deploy_reads.py`). The rig verbs core still names (the worker's allow-list,
+#: the harness's vocabularies) are derived in `rig_only()`. This list only widens the loose-form
+#: check; the ask grammar catches an unserved name whether it is listed here or not.
+RIG_ONLY_UNNAMED_IN_CORE = frozenset({
     "auth_claim", "auth_link", "bot_config", "bot_say", "bot_schedule", "bot_send", "bot_stop",
     "bots_running", "captions_to_segments", "company_context", "confirm_login", "deeplink",
     "fact_emit", "friction_dump", "friction_fixed", "mark_scaffolded", "meeting_delete",
     "meeting_info", "meeting_participants", "meeting_seed", "meeting_transcript", "meeting_update",
-    "meetings_list", "open_page", "recordings_list", "rehearse", "rehearse_states", "settings",
+    "meetings_list", "recordings_list", "rehearse", "rehearse_states", "settings",
     "start_onboarding", "subject_reset", "transcript_search", "user_ensure", "vexa_overview",
     "vexa_search_docs", "workspace_attach", "workspace_init", "workspace_pull", "workspace_push",
-    "workspace_regime", "workspace_target", "zoom_transcript_to_segments",
+    "workspace_regime", "zoom_transcript_to_segments",
 })
+
+#: Code identifiers the ask grammar matches that are not tools: name -> where it is cited. Each
+#: must still be found somewhere and must not be served; otherwise it leaves this list.
+NOT_TOOL_ASKS = {
+    "admit": "flows' reaction admission, cited by behavior/global/flows/friction_*.md",
+    "build": "a flow pack's entry point `build(reg, db)`, cited by core/flows",
+    "setting": "flows' per-person setting accessor, cited by behavior/global/flows/workspace_invite.md",
+    "ws_file": "flows' workspace-file reader, cited by behavior/global/flows/post_meeting.md",
+}
 
 #: Allow-listed and harness-consumed verbs the edge does not serve yet (Vexa-ai/vexa#1586, #1611).
 ALLOWLIST_GAP = frozenset({"open_page", "workspace_target"})
@@ -84,9 +103,51 @@ def allowlisted() -> set:
     return set(json.loads(ALLOWLIST.read_text())["tools"])
 
 
+HARNESS_VOCABULARIES = ("_BOT_TOOLS", "_TERMS_TOOLS", "_OPEN_TOOLS", "_FOCUS_TOOLS", "_WRITER_TOOLS")
+
+
+def harness_vexa_tools() -> set:
+    """The vexa tools the harness turns into panel events (`llm.tool_events`)."""
+    from llm import tool_events
+
+    return {t.removeprefix("mcp__vexa__") for name in HARNESS_VOCABULARIES
+            for t in getattr(tool_events, name) if t.startswith("mcp__vexa__")}
+
+
+def rig_only() -> set:
+    """The verbs only the rig serves: the ones core names (derived) and the ones it does not."""
+    return ((allowlisted() | harness_vexa_tools()) - served()) | RIG_ONLY_UNNAMED_IN_CORE
+
+
 def vocabulary() -> set:
     """Every name that is a tool somewhere — the names a prompt could mean as a tool."""
-    return served() | allowlisted() | RIG_ONLY
+    return served() | allowlisted() | rig_only()
+
+
+#: How a prompt ASKS for a call, by grammar alone (besides the harness's own `mcp__vexa__` spelling,
+#: which is always an ask): a backticked call, "call / invoke [the] [tool] `name`", "`name` tool".
+_ASK = re.compile(
+    r"`([a-z][a-z0-9_]*)\("
+    r"|\b(?i:call|calls|calling|invoke|invokes|invoking)\s+(?:the\s+)?(?:tool\s+)?`([a-z][a-z0-9_]*)`"
+    r"|`([a-z][a-z0-9_]*)`\s+tool\b")
+
+
+def asks(text: str) -> set:
+    """Every name ``text`` asks the agent to call, whether or not anything knows the name."""
+    text = text or ""
+    found = set(_QUALIFIED.findall(text))
+    bare = _QUALIFIED.sub(lambda m: m.group(1), text)
+    return found | {next(g for g in m.groups() if g) for m in _ASK.finditer(bare)}
+
+
+def unserved_asks(sources, ok: set) -> dict:
+    """name -> where, for every ask in ``sources`` naming neither a served tool nor a known
+    non-tool identifier."""
+    found: dict = {}
+    for where, text in sources:
+        for name in asks(text) - ok - set(NOT_TOOL_ASKS):
+            found.setdefault(name, []).append(where)
+    return found
 
 
 def references(text: str, vocab: set) -> set:
@@ -150,11 +211,28 @@ def test_the_extractor_finds_tool_shaped_mentions_and_ignores_prose():
         {"meeting_transcript"}
 
 
+def test_the_ask_grammar_finds_names_no_list_knows():
+    assert asks("Call `brand_new_tool` with the meeting id.") == {"brand_new_tool"}
+    assert asks("one `brand_new(claims=[...])` call") == {"brand_new"}
+    assert asks("calling the tool `brand_new` first") == {"brand_new"}
+    assert asks("the `brand_new` tool answers") == {"brand_new"}
+    assert asks("then mcp__vexa__brand_new with") == {"brand_new"}
+    assert asks("call `mcp__vexa__brand_new(x)`") == {"brand_new"}
+    assert asks("propose the first piece, then validate it") == set()
+    assert asks("the `slug` field, `opening_text`, and call it done") == set()
+
+
+def test_a_new_unserved_name_fails_the_guard():
+    sources = [("behavior/asks/x.md", "Call `brand_new_tool` with the id."),
+               ("behavior/asks/y.md", "Call `whats_waiting` first.")]
+    assert unserved_asks(sources, {"whats_waiting"}) == {"brand_new_tool": ["behavior/asks/x.md"]}
+
+
 def test_the_served_set_is_the_assembled_edge():
     names = served()
     assert {"get_meeting_transcript", "request_meeting_bot", "whats_waiting",
             "entity_upsert", "transcript_terms"} <= names
-    assert not names & RIG_ONLY
+    assert not names & rig_only()
 
 
 # ── the guard ────────────────────────────────────────────────────────────────────────────────────
@@ -169,6 +247,23 @@ def test_every_tool_a_product_prompt_names_is_served():
         "product prompts name tools a standard deployment does not serve — serve each from its "
         "owning domain's manifest, or name the product tool that does the job:\n"
         + "\n".join(f"  {n}: {', '.join(sorted(set(w))[:6])}" for n, w in sorted(unserved.items())))
+
+
+def test_every_tool_a_product_prompt_asks_for_is_served():
+    unserved = unserved_asks(prompt_sources(), served())
+    assert not unserved, (
+        "product prompts ask for tools a standard deployment does not serve — serve each from its "
+        "owning domain's manifest, name the product tool that does the job, or (only for a code "
+        "identifier that is not a tool) list it in NOT_TOOL_ASKS:\n"
+        + "\n".join(f"  {n}: {', '.join(sorted(set(w))[:6])}" for n, w in sorted(unserved.items())))
+
+
+def test_the_non_tool_list_only_shrinks():
+    """Each entry is still asked for somewhere (else it is dead) and is not served (else it is a
+    tool, and the guard should check it)."""
+    asked = set().union(*(asks(text) for _where, text in prompt_sources()))
+    assert set(NOT_TOOL_ASKS) <= asked, sorted(set(NOT_TOOL_ASKS) - asked)
+    assert not set(NOT_TOOL_ASKS) & served()
 
 
 def test_the_imperative_gate_orders_only_served_verbs():
@@ -188,8 +283,7 @@ def test_the_refusal_detector_names_only_served_verbs():
     assert named <= served(), sorted(named - served())
 
 
-@pytest.mark.parametrize("vocab_name", ["_BOT_TOOLS", "_TERMS_TOOLS", "_OPEN_TOOLS", "_FOCUS_TOOLS",
-                                        "_WRITER_TOOLS"])
+@pytest.mark.parametrize("vocab_name", HARNESS_VOCABULARIES)
 def test_the_harness_acts_only_on_results_of_served_tools(vocab_name):
     from llm import tool_events
 
