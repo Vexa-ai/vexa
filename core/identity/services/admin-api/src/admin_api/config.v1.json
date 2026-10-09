@@ -65,17 +65,27 @@
   },
   {
    "key": "DB_PASSWORD",
-   "class": "defaulted",
-   "default": "postgres",
+   "class": "required-explicit",
    "secret": true,
-   "description": "PostgreSQL password (dev default; change for any non-local deploy)"
+   "description": "PostgreSQL password for the users/tokens store. No default: it read 'postgres' here and in the code, a value published in this repository, so every stack nobody configured shared one database password anyone could read. Unset or a published literal refuses the boot, the same refusal compose's postgres service makes (deploy/compose/docker-compose.yml). Required even when DATABASE_URL overrides the URL.",
+   "forbidden_values": [
+     "postgres",
+     "password",
+     "vexa-internal-secret",
+     "lite-internal-secret",
+     "changeme",
+     "change-me",
+     "CHANGE-ME",
+     "default",
+     "secret"
+   ]
   },
   {
    "key": "DATABASE_URL",
    "class": "defaulted",
    "default": "(derived from DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD)",
    "secret": true,
-   "description": "explicit SQLAlchemy URL override; when unset the URL is built from the DB_* parts. Provided as a lite entrypoint export, not a per-surface env.",
+   "description": "explicit SQLAlchemy URL override; when unset the URL is built from the DB_* parts. Not set by any deploy surface (Lite parses a supplied URL into the DB_* parts instead); DB_PASSWORD is still required at boot when it is set.",
    "targets": []
   },
   {

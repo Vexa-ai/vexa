@@ -481,17 +481,17 @@
         },
         {
           "path": "core/identity/services/admin-api/src/admin_api/config.v1.json",
-          "pattern": "\"forbidden_values\"\\s*:\\s*\\[([^\\]]*)\\]",
+          "pattern": "\"key\"\\s*:\\s*\"(?!DB_PASSWORD\")[A-Z0-9_]+\"[^{}]*?\"forbidden_values\"\\s*:\\s*\\[([^\\]]*)\\]",
           "flags": "m",
           "all": true,
-          "note": "every forbidden_values list in this contract must be the same list"
+          "note": "every forbidden_values list on a secret row of this contract must be the same list; the DB_PASSWORD row carries database-password-placeholders instead"
         },
         {
           "path": "core/meetings/services/meeting-api/src/meeting_api/config.v1.json",
-          "pattern": "\"forbidden_values\"\\s*:\\s*\\[([^\\]]*)\\]",
+          "pattern": "\"key\"\\s*:\\s*\"(?!DB_PASSWORD\")[A-Z0-9_]+\"[^{}]*?\"forbidden_values\"\\s*:\\s*\\[([^\\]]*)\\]",
           "flags": "m",
           "all": true,
-          "note": "every forbidden_values list in this contract must be the same list"
+          "note": "every forbidden_values list on a secret row of this contract must be the same list; the DB_PASSWORD row carries database-password-placeholders instead"
         },
         {
           "path": "core/flows/src/flows_steps/common.py",
@@ -512,6 +512,27 @@
           "path": "core/flows/src/flows_integrations/flows_api.py",
           "pattern": "_FALLBACK_PLACEHOLDERS = \\(([^)]*)\\)",
           "note": "flows-api's fallback when it cannot read the declaration"
+        }
+      ]
+    },
+    {
+      "id": "database-password-placeholders",
+      "fact": "the published values the database password must never hold",
+      "kind": "set",
+      "enforced": true,
+      "canonical": "deploy/compose/docker-compose.yml — the postgres service's refusal (the database itself refuses to start on these)",
+      "how_to_agree": "one list: the internal-secret placeholders plus postgres and password; a value added at the database is added to every service that builds a database URL, or one of them boots on a password the database would have refused",
+      "why": "postgres shipped as the database password's default on every surface, so every stack nobody configured shared one password anyone could read. Compose's postgres service refuses it, and admin-api and meeting-api refuse it at boot (config.v1 forbidden_values); three spellings of one refusal list drift unless they are held together.",
+      "sites": [
+        {
+          "path": "deploy/compose/docker-compose.yml",
+          "pattern": "^\\s*\"\"\\|(postgres\\|[^)\\n]*)\\)\\s*$",
+          "flags": "m"
+        },
+        {
+          "path": "core/identity/services/admin-api/src/admin_api/config.v1.json",
+          "pattern": "\"key\"\\s*:\\s*\"DB_PASSWORD\"[^{}]*?\"forbidden_values\"\\s*:\\s*\\[([^\\]]*)\\]",
+          "flags": "m"
         }
       ]
     },

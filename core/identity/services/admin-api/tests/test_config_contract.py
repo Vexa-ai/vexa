@@ -26,8 +26,8 @@ def test_preflight_refuses_boot_without_internal_api_secret():
 
 
 def test_preflight_passes_when_required_set():
-    # defaulted keys (DB_*, ADMIN_API_TOKEN, LOG_LEVEL, …) never block; only the required one matters.
-    cp.preflight({"INTERNAL_API_SECRET": "a-real-secret"})
+    # defaulted keys (DB_HOST…, ADMIN_API_TOKEN, LOG_LEVEL, …) never block; only the required ones do.
+    cp.preflight({"INTERNAL_API_SECRET": "a-real-secret", "DB_PASSWORD": "a-real-db-password"})
 
 
 def test_db_pool_keys_declared_defaulted():
@@ -53,7 +53,7 @@ def test_preflight_refuses_the_published_placeholder():
     KEY, never the value."""
     for placeholder in ("vexa-internal-secret", "lite-internal-secret", "changeme"):
         with pytest.raises(cp.ConfigError) as ei:
-            cp.preflight({**{}, "INTERNAL_API_SECRET": placeholder})
+            cp.preflight({"DB_PASSWORD": "a-real-db-password", "INTERNAL_API_SECRET": placeholder})
         assert "INTERNAL_API_SECRET" in str(ei.value)
         assert placeholder not in str(ei.value), "a refusal must never echo the value"
 
@@ -80,8 +80,8 @@ def test_the_flows_publish_edge_is_declared_and_never_blocks_the_boot():
     assert "default" not in edge, "a fallback address to publish to, invented by us — absent means absent"
     assert by_key["VEXA_FLOWS_API_KEY"]["secret"] is True
 
-    # The boot with nothing but the one genuinely-required secret. No flows, no key, no error.
-    cp.preflight({"INTERNAL_API_SECRET": "a-real-secret"})
+    # The boot with nothing but the genuinely-required values. No flows, no key, no error.
+    cp.preflight({"INTERNAL_API_SECRET": "a-real-secret", "DB_PASSWORD": "a-real-db-password"})
 
     required = {k["key"] for k in decl["keys"] if k["class"] == "required-explicit"}
     assert not ({"VEXA_FLOWS_API_URL", "VEXA_FLOWS_API_KEY"} & required), \
@@ -99,3 +99,58 @@ def test_the_flows_url_key_matches_meeting_api_and_agent_api():
         "the bare name is retired from the declaration — app/events.py still reads it for one " \
         "release as a deprecated fallback, but it is not a first-class declared key"
     assert by_key["VEXA_FLOWS_API_URL"]["class"] == "publish-edge"
+
+
+# The literals compose's postgres service refuses to start on (deploy/compose/docker-compose.yml):
+# each one is published in this repository, so none of them is a password.
+PUBLISHED_DB_PASSWORDS = ("postgres", "changeme", "change-me", "CHANGE-ME", "default", "secret",
+                          "password")
+REQUIRED = {"INTERNAL_API_SECRET": "a-real-secret", "DB_PASSWORD": "a-real-db-password"}
+
+
+def test_db_password_is_required_explicit_with_no_published_default():
+    entry = {k["key"]: k for k in cp.load_declaration()["keys"]}["DB_PASSWORD"]
+    assert entry["class"] == "required-explicit"
+    assert entry["secret"] is True
+    assert "default" not in entry, "a declared default password is a published password"
+    assert set(PUBLISHED_DB_PASSWORDS) <= set(entry["forbidden_values"])
+
+
+def test_preflight_refuses_a_boot_with_no_db_password():
+    with pytest.raises(cp.ConfigError) as ei:
+        cp.preflight({"INTERNAL_API_SECRET": "a-real-secret"})
+    assert "DB_PASSWORD" in str(ei.value)
+
+
+@pytest.mark.parametrize("published", PUBLISHED_DB_PASSWORDS)
+def test_preflight_refuses_a_published_db_password_without_echoing_it(published):
+    with pytest.raises(cp.ConfigError) as ei:
+        cp.preflight({**REQUIRED, "DB_PASSWORD": published})
+    assert "DB_PASSWORD" in str(ei.value)
+    assert f"'{published}'" not in str(ei.value) and f'"{published}"' not in str(ei.value)
+
+
+def test_the_boot_refuses_the_published_db_password(monkeypatch):
+    """The process, not just the declaration: `build_production_app` runs the preflight before it
+    builds a database URL, so a stack on the published password never connects with it."""
+    from admin_api.__main__ import build_production_app
+
+    monkeypatch.setenv("INTERNAL_API_SECRET", "a-real-secret")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("DB_PASSWORD", "postgres")
+    with pytest.raises(cp.ConfigError):
+        build_production_app()
+    monkeypatch.delenv("DB_PASSWORD")
+    with pytest.raises(cp.ConfigError):
+        build_production_app()
+
+
+def test_the_database_url_has_no_password_fallback(monkeypatch):
+    from admin_api.__main__ import _database_url
+
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("DB_PASSWORD", "a-real-db-password")
+    assert ":a-real-db-password@" in _database_url()
+    monkeypatch.delenv("DB_PASSWORD")
+    with pytest.raises(KeyError):
+        _database_url()

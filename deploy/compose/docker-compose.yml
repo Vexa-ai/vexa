@@ -56,7 +56,7 @@ services:
       - -c
       - |
         case "$$POSTGRES_PASSWORD" in
-          ""|postgres|changeme|change-me|CHANGE-ME|default|secret|password)
+          ""|postgres|password|vexa-internal-secret|lite-internal-secret|changeme|change-me|CHANGE-ME|default|secret)
             echo "postgres: DB_PASSWORD is unset or a value published in the Vexa repository - refusing to start." >&2
             echo "  New install: run deploy/compose/mint-dev-env.sh (make up does), or set DB_PASSWORD in .env (openssl rand -hex 32)." >&2
             echo "  Existing data: make -C deploy/compose rotate-db-password (it sets a new one in .env and inside the database)." >&2

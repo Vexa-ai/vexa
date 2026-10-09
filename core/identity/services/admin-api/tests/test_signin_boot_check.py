@@ -18,6 +18,7 @@ FAKE_URL = "postgresql+asyncpg://u:p@localhost:5432/vexa"
 @pytest.fixture()
 def boot_env(monkeypatch):
     monkeypatch.setenv("INTERNAL_API_SECRET", "a-real-secret")
+    monkeypatch.setenv("DB_PASSWORD", "a-real-db-password")
     monkeypatch.setenv("DATABASE_URL", FAKE_URL)
     monkeypatch.delenv("VEXA_SIGNIN_ALLOW", raising=False)
     monkeypatch.delenv("VEXA_ADMIN_EMAILS", raising=False)

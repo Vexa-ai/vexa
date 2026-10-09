@@ -88,7 +88,8 @@ def _database_url() -> str:
     port = os.getenv("DB_PORT", "5432")
     name = os.getenv("DB_NAME", "vexa")
     user = os.getenv("DB_USER", "postgres")
-    password = os.getenv("DB_PASSWORD", "postgres")
+    # No fallback: the boot preflight has already refused an unset or published DB_PASSWORD.
+    password = os.environ["DB_PASSWORD"]
     return f"postgresql+asyncpg://{user}:{password}@{host}:{port}/{name}"
 
 
