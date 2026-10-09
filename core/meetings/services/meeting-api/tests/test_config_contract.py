@@ -22,6 +22,7 @@ def _admin_token(monkeypatch):
     monkeypatch.setenv("ADMIN_TOKEN", "test-admin-token")
     monkeypatch.setenv("VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE", "/run/vexa-identity/public/key.pem")
     monkeypatch.setenv("RUNTIME_API_TOKEN", "runtime-caller-token-for-tests-0123456789abcdef")
+    monkeypatch.setenv("DB_PASSWORD", "db-password-for-tests-0123456789abcdef")
 
 
 @pytest.fixture(autouse=True)
@@ -49,10 +50,29 @@ def test_declaration_loads_and_is_internally_consistent():
     # are exactly the two keys the original ad-hoc guard checked
     stt_keys = {k["key"] for k in decl["keys"] if k.get("capability") == "stt"}
     assert stt_keys == {"TRANSCRIPTION_SERVICE_URL", "TRANSCRIPTION_SERVICE_TOKEN"}
-    # required-explicit is exactly the A4 boot bar, gateway-identity.v1's verification key and the
-    # runtime caller credential every spawn presents
+    # required-explicit is exactly the A4 boot bar, gateway-identity.v1's verification key, the
+    # runtime caller credential every spawn presents, and the database password
     required = {k["key"] for k in decl["keys"] if k["class"] == "required-explicit"}
-    assert required == {"ADMIN_TOKEN", "VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE", "RUNTIME_API_TOKEN"}
+    assert required == {"ADMIN_TOKEN", "VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE", "RUNTIME_API_TOKEN",
+                        "DB_PASSWORD"}
+
+
+def test_preflight_refuses_a_boot_without_a_real_database_password(monkeypatch):
+    """No default database password: unset, the boot refuses naming DB_PASSWORD; `postgres` — the
+    published value every unconfigured stack once shared, which compose now refuses too — refuses
+    the boot as a placeholder."""
+    decl = {k["key"]: k for k in cp.load_declaration()["keys"]}
+    assert "default" not in decl["DB_PASSWORD"] and decl["DB_PASSWORD"]["secret"] is True
+    assert "postgres" in decl["DB_PASSWORD"]["forbidden_values"]
+    monkeypatch.delenv("DB_PASSWORD")
+    with pytest.raises(cp.ConfigError) as ei:
+        cp.preflight()
+    assert "DB_PASSWORD" in str(ei.value)
+    monkeypatch.setenv("DB_PASSWORD", "postgres")
+    with pytest.raises(cp.ConfigError) as ei:
+        cp.preflight()
+    assert "DB_PASSWORD" in str(ei.value) and "PLACEHOLDER" in str(ei.value)
+    assert "postgres" not in str(ei.value)  # the refusal never echoes the value
 
 
 def test_preflight_refuses_a_boot_that_cannot_reach_the_runtime(monkeypatch):

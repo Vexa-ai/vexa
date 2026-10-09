@@ -63,17 +63,27 @@
   },
   {
    "key": "DB_PASSWORD",
-   "class": "defaulted",
-   "default": "postgres",
+   "class": "required-explicit",
    "secret": true,
-   "description": "PostgreSQL password (dev default; change for any non-local deploy)"
+   "description": "PostgreSQL password. No default: unset, the boot refuses. `postgres`, the value every unconfigured stack once shared, and the other values published in this repository are refused the same way, as compose's postgres service refuses them",
+   "forbidden_values": [
+    "postgres",
+    "password",
+    "vexa-internal-secret",
+    "lite-internal-secret",
+    "changeme",
+    "change-me",
+    "CHANGE-ME",
+    "default",
+    "secret"
+   ]
   },
   {
    "key": "DATABASE_URL",
    "class": "defaulted",
    "default": "(derived from DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD as postgresql+asyncpg://)",
    "secret": true,
-   "description": "explicit async SQLAlchemy URL override; when unset the URL is built from the DB_* parts (lite deliberately sets only DB_* so the asyncpg driver is chosen)",
+   "description": "explicit async SQLAlchemy URL override; when unset the URL is built from the DB_* parts (lite deliberately sets only DB_* so the asyncpg driver is chosen). DB_PASSWORD is required at boot either way",
    "targets": []
   },
   {

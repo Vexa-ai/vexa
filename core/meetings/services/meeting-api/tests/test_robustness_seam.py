@@ -853,6 +853,7 @@ def test_startup_requires_admin_token(monkeypatch):
     monkeypatch.delenv("ADMIN_TOKEN", raising=False)
     monkeypatch.setenv("VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE", "/run/vexa-identity/public/key.pem")
     monkeypatch.setenv("RUNTIME_API_TOKEN", "runtime-caller-token-for-tests-0123456789abcdef")
+    monkeypatch.setenv("DB_PASSWORD", "db-password-for-tests-0123456789abcdef")
     with pytest.raises(RuntimeError) as ei:
         entry._require_config()
     msg = str(ei.value)
