@@ -2,11 +2,11 @@
  "schema_version": 2,
  "release": "v0.12.28",
  "stable_tag": "v0.12.28",
- "candidate_tag": "v0.12.28-rc.3",
+ "candidate_tag": "v0.12.28-rc.5",
  "build_source": "c1d0ef6f0456cc7907e89e0fa911f069597c7297",
- "validation_source": "2b3b00f94ff531fbb4fe9fe5fdd4e817d7120bf3",
+ "validation_source": "d90708c10a23af3ee3905c16514f3940709b85fb",
  "build_run": "https://github.com/Vexa-ai/vexa/actions/runs/37847760812",
- "validation_run": "https://github.com/Vexa-ai/vexa/actions/runs/37851440059",
+ "validation_run": "https://github.com/Vexa-ai/vexa/actions/runs/37909519615",
  "images": {
   "vexaai/v012-admin-api": {
    "class": "prod_deployed",
@@ -26,11 +26,11 @@
     }
    },
    "attestations": true,
-   "evidence": "carried unchanged from v0.12.27 (candidate v0.12.27-rc.5, build run 34051273765 at 71321ad0, validation run 34059966981); no runtime input of this image changed between 71321ad0 and c1d0ef6f0; aliased to v0.12.28-rc.3 by digest and read back",
-   "candidate_tag": "v0.12.28-rc.3",
+   "evidence": "carried unchanged from v0.12.27 (candidate v0.12.27-rc.5, build run 34051273765 at 71321ad0, validation run 34059966981); no runtime input of this image changed between 71321ad0 and c1d0ef6f0; aliased to v0.12.28-rc.5 by digest and read back",
+   "candidate_tag": "v0.12.28-rc.5",
    "build_source": "71321ad0fff535b2b565045d56abe315773710fd",
-   "validation_source": "2b3b00f94ff531fbb4fe9fe5fdd4e817d7120bf3",
-   "validation_run": "https://github.com/Vexa-ai/vexa/actions/runs/37851440059"
+   "validation_source": "d90708c10a23af3ee3905c16514f3940709b85fb",
+   "validation_run": "https://github.com/Vexa-ai/vexa/actions/runs/37909519615"
   },
   "vexaai/v012-runtime": {
    "class": "prod_deployed",
@@ -50,11 +50,11 @@
     }
    },
    "attestations": true,
-   "evidence": "carried unchanged from v0.12.27 (candidate v0.12.27-rc.5, build run 34051273765 at 71321ad0, validation run 34059966981); no runtime input of this image changed between 71321ad0 and c1d0ef6f0; aliased to v0.12.28-rc.3 by digest and read back",
-   "candidate_tag": "v0.12.28-rc.3",
+   "evidence": "carried unchanged from v0.12.27 (candidate v0.12.27-rc.5, build run 34051273765 at 71321ad0, validation run 34059966981); no runtime input of this image changed between 71321ad0 and c1d0ef6f0; aliased to v0.12.28-rc.5 by digest and read back",
+   "candidate_tag": "v0.12.28-rc.5",
    "build_source": "71321ad0fff535b2b565045d56abe315773710fd",
-   "validation_source": "2b3b00f94ff531fbb4fe9fe5fdd4e817d7120bf3",
-   "validation_run": "https://github.com/Vexa-ai/vexa/actions/runs/37851440059"
+   "validation_source": "d90708c10a23af3ee3905c16514f3940709b85fb",
+   "validation_run": "https://github.com/Vexa-ai/vexa/actions/runs/37909519615"
   },
   "vexaai/v012-agent-worker": {
    "class": "oss_only",
@@ -74,11 +74,11 @@
     }
    },
    "attestations": true,
-   "evidence": "carried unchanged from v0.12.27 (candidate v0.12.27-rc.5, build run 34051273765 at 71321ad0, validation run 34059966981); no runtime input of this image changed between 71321ad0 and c1d0ef6f0; aliased to v0.12.28-rc.3 by digest and read back",
-   "candidate_tag": "v0.12.28-rc.3",
+   "evidence": "carried unchanged from v0.12.27 (candidate v0.12.27-rc.5, build run 34051273765 at 71321ad0, validation run 34059966981); no runtime input of this image changed between 71321ad0 and c1d0ef6f0; aliased to v0.12.28-rc.5 by digest and read back",
+   "candidate_tag": "v0.12.28-rc.5",
    "build_source": "71321ad0fff535b2b565045d56abe315773710fd",
-   "validation_source": "2b3b00f94ff531fbb4fe9fe5fdd4e817d7120bf3",
-   "validation_run": "https://github.com/Vexa-ai/vexa/actions/runs/37851440059"
+   "validation_source": "d90708c10a23af3ee3905c16514f3940709b85fb",
+   "validation_run": "https://github.com/Vexa-ai/vexa/actions/runs/37909519615"
   },
   "vexaai/v012-agent-api": {
    "class": "oss_only",
@@ -98,11 +98,11 @@
     }
    },
    "attestations": true,
-   "evidence": "carried unchanged from v0.12.27 (candidate v0.12.27-rc.5, build run 34051273765 at 71321ad0, validation run 34059966981); no runtime input of this image changed between 71321ad0 and c1d0ef6f0; aliased to v0.12.28-rc.3 by digest and read back",
-   "candidate_tag": "v0.12.28-rc.3",
+   "evidence": "carried unchanged from v0.12.27 (candidate v0.12.27-rc.5, build run 34051273765 at 71321ad0, validation run 34059966981); no runtime input of this image changed between 71321ad0 and c1d0ef6f0; aliased to v0.12.28-rc.5 by digest and read back",
+   "candidate_tag": "v0.12.28-rc.5",
    "build_source": "71321ad0fff535b2b565045d56abe315773710fd",
-   "validation_source": "2b3b00f94ff531fbb4fe9fe5fdd4e817d7120bf3",
-   "validation_run": "https://github.com/Vexa-ai/vexa/actions/runs/37851440059"
+   "validation_source": "d90708c10a23af3ee3905c16514f3940709b85fb",
+   "validation_run": "https://github.com/Vexa-ai/vexa/actions/runs/37909519615"
   },
   "vexaai/v012-meeting-api": {
    "class": "prod_deployed",
@@ -122,7 +122,7 @@
     }
    },
    "attestations": true,
-   "evidence": "rebuilt: candidate build run 37847760812 at main c1d0ef6f0 (published as v0.12.28-rc.2), aliased to v0.12.28-rc.3 by digest and read back"
+   "evidence": "rebuilt: candidate build run 37847760812 at main c1d0ef6f0 (published as v0.12.28-rc.2), aliased to v0.12.28-rc.5 by digest and read back"
   },
   "vexaai/v012-gateway": {
    "class": "prod_deployed",
@@ -142,11 +142,11 @@
     }
    },
    "attestations": true,
-   "evidence": "carried unchanged from v0.12.27 (candidate v0.12.27-rc.5, build run 34051273765 at 71321ad0, validation run 34059966981); no runtime input of this image changed between 71321ad0 and c1d0ef6f0; aliased to v0.12.28-rc.3 by digest and read back",
-   "candidate_tag": "v0.12.28-rc.3",
+   "evidence": "carried unchanged from v0.12.27 (candidate v0.12.27-rc.5, build run 34051273765 at 71321ad0, validation run 34059966981); no runtime input of this image changed between 71321ad0 and c1d0ef6f0; aliased to v0.12.28-rc.5 by digest and read back",
+   "candidate_tag": "v0.12.28-rc.5",
    "build_source": "71321ad0fff535b2b565045d56abe315773710fd",
-   "validation_source": "2b3b00f94ff531fbb4fe9fe5fdd4e817d7120bf3",
-   "validation_run": "https://github.com/Vexa-ai/vexa/actions/runs/37851440059"
+   "validation_source": "d90708c10a23af3ee3905c16514f3940709b85fb",
+   "validation_run": "https://github.com/Vexa-ai/vexa/actions/runs/37909519615"
   },
   "vexaai/v012-mcp": {
    "class": "oss_only",
@@ -166,11 +166,11 @@
     }
    },
    "attestations": true,
-   "evidence": "carried unchanged from v0.12.27 (candidate v0.12.27-rc.5, build run 34051273765 at 71321ad0, validation run 34059966981); no runtime input of this image changed between 71321ad0 and c1d0ef6f0; aliased to v0.12.28-rc.3 by digest and read back",
-   "candidate_tag": "v0.12.28-rc.3",
+   "evidence": "carried unchanged from v0.12.27 (candidate v0.12.27-rc.5, build run 34051273765 at 71321ad0, validation run 34059966981); no runtime input of this image changed between 71321ad0 and c1d0ef6f0; aliased to v0.12.28-rc.5 by digest and read back",
+   "candidate_tag": "v0.12.28-rc.5",
    "build_source": "71321ad0fff535b2b565045d56abe315773710fd",
-   "validation_source": "2b3b00f94ff531fbb4fe9fe5fdd4e817d7120bf3",
-   "validation_run": "https://github.com/Vexa-ai/vexa/actions/runs/37851440059"
+   "validation_source": "d90708c10a23af3ee3905c16514f3940709b85fb",
+   "validation_run": "https://github.com/Vexa-ai/vexa/actions/runs/37909519615"
   },
   "vexaai/v012-terminal": {
    "class": "oss_only",
@@ -190,7 +190,7 @@
     }
    },
    "attestations": true,
-   "evidence": "rebuilt: candidate build run 37847760812 at main c1d0ef6f0 (published as v0.12.28-rc.2), aliased to v0.12.28-rc.3 by digest and read back"
+   "evidence": "rebuilt: candidate build run 37847760812 at main c1d0ef6f0 (published as v0.12.28-rc.2), aliased to v0.12.28-rc.5 by digest and read back"
   },
   "vexaai/vexa-bot": {
    "class": "prod_deployed",
@@ -204,31 +204,35 @@
      "config_digest": "sha256:995b4aed3254eb8ac05fd4d3837086c1371cfd9a39d4d34f64afead87c5ce37d"
     }
    },
-   "evidence": "the bot vexa.ai production runs since 2026-10-08T20:41Z (internal estate entry 48, runtime BROWSER_IMAGE); built on bbb from Vexa-ai/vexa#1781 head 2b60c6ce9 (image label org.opencontainers.image.revision), whose tree equals main c1d0ef6f0; published as v0.12.28-zoom.2, aliased to v0.12.28-rc.3 by digest and read back",
-   "candidate_tag": "v0.12.28-rc.3",
+   "evidence": "the bot vexa.ai production runs since 2026-10-08T20:41Z (internal estate entry 48, runtime BROWSER_IMAGE); built on bbb from Vexa-ai/vexa#1781 head 2b60c6ce9 (image label org.opencontainers.image.revision), whose tree equals main c1d0ef6f0; published as v0.12.28-zoom.2, aliased to v0.12.28-rc.5 by digest and read back",
+   "candidate_tag": "v0.12.28-rc.5",
    "build_source": "2b60c6ce943c43ee77a0acaa36bcf5f73ef9e79a",
-   "validation_source": "2b3b00f94ff531fbb4fe9fe5fdd4e817d7120bf3",
-   "validation_run": "https://github.com/Vexa-ai/vexa/actions/runs/37851440059"
+   "validation_source": "d90708c10a23af3ee3905c16514f3940709b85fb",
+   "validation_run": "https://github.com/Vexa-ai/vexa/actions/runs/37909519615"
   },
   "vexaai/vexa-lite": {
    "class": "oss_only",
-   "digest": "sha256:b24594d6d241a3f96f09a1ec288897d8ca9f0c759830d41470d4b6cdf7188666",
+   "digest": "sha256:9eebb534fdab4079baf11af678968ac8d9679e20ce48db206bcf5a62b85eb538",
    "platforms": [
     "linux/amd64",
     "linux/arm64"
    ],
    "platform_manifests": {
     "linux/amd64": {
-     "manifest_digest": "sha256:f4a45f6bdf880fb7f058c5f187c8f4c6a7bc1f894028c58991c39969aa4ad698",
-     "config_digest": "sha256:b66d12726f92f4dc490c7edd978e039ae368787c54c12d131979611979ba9968"
+     "manifest_digest": "sha256:8c73423774ae91ea04cfe59c46fbea4e8ab099bf1c077c2563a2a5cb1ba6b9f3",
+     "config_digest": "sha256:03f53fbab241108e1be3d14f0de2736eb4a126edd702348ec760f93db5c9a85d"
     },
     "linux/arm64": {
-     "manifest_digest": "sha256:16188737b84840041ae73a5280c6e0684de7fc8236f92f1018e16260ad659ac1",
-     "config_digest": "sha256:a37129b47a57a1c1a64584f57ae3f5e24f5968a9500cf2170b24891331f3e8e0"
+     "manifest_digest": "sha256:d817d8c57f4e29d872f31ad6e33ebbc7f64e195015951c965d436ec92a08ee58",
+     "config_digest": "sha256:79c357b69f4a159edd548903a28843a39b0424d95940c3ef79615fd809cb0302"
     }
    },
    "attestations": true,
-   "evidence": "rebuilt: candidate build run 37847760812 at main c1d0ef6f0 (published as v0.12.28-rc.2), aliased to v0.12.28-rc.3 by digest and read back"
+   "evidence": "rebuilt: candidate build run 37909519615 at main d90708c10 (published as v0.12.28-rc.4; main gained #1793, which changes scripts/, a Lite input), tagged v0.12.28-rc.5 by exact manifest and read back",
+   "candidate_tag": "v0.12.28-rc.5",
+   "build_source": "d90708c10a23af3ee3905c16514f3940709b85fb",
+   "validation_source": "d90708c10a23af3ee3905c16514f3940709b85fb",
+   "validation_run": "https://github.com/Vexa-ai/vexa/actions/runs/37909519615"
   },
   "vexaai/v012-flows": {
    "class": "oss_only",
@@ -248,11 +252,11 @@
     }
    },
    "attestations": true,
-   "evidence": "carried unchanged from v0.12.27 (candidate v0.12.27-rc.5, build run 34051273765 at 71321ad0, validation run 34059966981); no runtime input of this image changed between 71321ad0 and c1d0ef6f0; aliased to v0.12.28-rc.3 by digest and read back",
-   "candidate_tag": "v0.12.28-rc.3",
+   "evidence": "carried unchanged from v0.12.27 (candidate v0.12.27-rc.5, build run 34051273765 at 71321ad0, validation run 34059966981); no runtime input of this image changed between 71321ad0 and c1d0ef6f0; aliased to v0.12.28-rc.5 by digest and read back",
+   "candidate_tag": "v0.12.28-rc.5",
    "build_source": "71321ad0fff535b2b565045d56abe315773710fd",
-   "validation_source": "2b3b00f94ff531fbb4fe9fe5fdd4e817d7120bf3",
-   "validation_run": "https://github.com/Vexa-ai/vexa/actions/runs/37851440059"
+   "validation_source": "d90708c10a23af3ee3905c16514f3940709b85fb",
+   "validation_run": "https://github.com/Vexa-ai/vexa/actions/runs/37909519615"
   }
  }
 }
