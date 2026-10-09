@@ -81,7 +81,9 @@ identity (no `delegation`). The `reentry-*` goldens pin the match rule; `validat
 
 `delegation` is present when the bearer was a worker's delegation token (`vxd_`, minted by
 agent-api per dispatch, verified by identity). A service refuses a verb that needs a person in the
-loop when `x-user-regime` is not `human`.
+loop when `x-user-regime` is not `human`. `identity_token.py` carries that rule for every service:
+`is_delegated(headers)` (any delegation header present, an empty one included), `is_unwatched(headers)`
+(delegated, and a regime other than `human`) and `REFUSAL`, the one 403 body a worker reads.
 
 ## Files
 

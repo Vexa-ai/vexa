@@ -86,6 +86,29 @@ DELEGATION_HEADERS = {
     "target": "x-user-delegation-target",
 }
 
+#: The answer a service gives a worker dispatched without a person in the loop when it asks for a
+#: verb that needs one. One body everywhere, so a worker reads one refusal whichever service it hit.
+REFUSAL = {
+    "status": "refused",
+    "reason": "human_session_required",
+    "instruction": "This session runs without a person in the loop. Record what you wanted to do "
+                   "and stop; do not retry it another way.",
+}
+
+
+def is_delegated(headers: Mapping[str, str]) -> bool:
+    """Is the caller a worker acting for a person? Any delegation header marks it, an empty
+    ``x-user-regime`` included: the identity door writes them only from a signed ``delegation``
+    claim, and a person's own credential and the internal tier carry none."""
+    return any(name in headers for name in DELEGATION_HEADERS.values())
+
+
+def is_unwatched(headers: Mapping[str, str]) -> bool:
+    """A delegated worker whose regime is not ``human``: nobody is in the loop this turn. A verb that
+    needs a person refuses it with :data:`REFUSAL`."""
+    regime = (headers.get(DELEGATION_HEADERS["regime"]) or "").strip().lower()
+    return is_delegated(headers) and regime != "human"
+
 #: Ed25519 keys published as test vectors, by their public half. The contract's goldens are made
 #: with them (RFC 8032 section 7.1 TEST 1 signs every vector; TEST 2 is the "another key" refusal),
 #: and anybody can sign with a key whose seed is printed in an RFC, so a deployment configured with
