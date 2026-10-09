@@ -23,16 +23,34 @@ services:
       retries: 5
     volumes:
       - redis-data:/data
-    networks: [vexa]
+    networks: [vexa, bots, workers]   # bots and workers keep their streams here
     restart: unless-stopped
 
   postgres:
     image: postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
+    # NO DEFAULT PASSWORD, and a published one refuses the start. `postgres` shipped here as the
+    # fallback and in .env.example, so every stack nobody configured shared one database password
+    # anyone could read. mint-dev-env.sh (`make up` / `make all`) mints DB_PASSWORD into .env. An
+    # install initialised with the old value must rotate it first — see the refusal message and
+    # https://docs.vexa.ai/deployment#one-time-steps-after-upgrading.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        case "$$POSTGRES_PASSWORD" in
+          ""|postgres|changeme|change-me|CHANGE-ME|default|secret|password)
+            echo "postgres: DB_PASSWORD is unset or a value published in the Vexa repository - refusing to start." >&2
+            echo "  New install: run deploy/compose/mint-dev-env.sh (make up does), or set DB_PASSWORD in .env (openssl rand -hex 32)." >&2
+            echo "  Existing data: make -C deploy/compose rotate-db-password (it sets a new one in .env and inside the database)." >&2
+            exit 1;;
+        esac
+        exec docker-entrypoint.sh "$$@"
+      - --
     command: ["postgres", "-c", "idle_in_transaction_session_timeout=60000"]
     environment:
       - POSTGRES_DB=${DB_NAME:-vexa}
       - POSTGRES_USER=${DB_USER:-postgres}
-      - POSTGRES_PASSWORD=${DB_PASSWORD:-postgres}
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-}
       # The backend operates only UTC time. Pin the DB clock to UTC so func.now()/server_default/
       # onupdate (the naive timestamp columns' server-side values, main's pattern) are guaranteed UTC.
       - TZ=UTC
@@ -75,7 +93,7 @@ services:
       retries: 5
     volumes:
       - storage-data:/srv/vexa-storage
-    networks: [vexa]
+    networks: [vexa, bots]   # an authenticated bot restores its browser session from here
     restart: unless-stopped
 
   storage-init:
@@ -123,7 +141,7 @@ services:
       - DB_PORT=5432
       - DB_NAME=${DB_NAME:-vexa}
       - DB_USER=${DB_USER:-postgres}
-      - DB_PASSWORD=${DB_PASSWORD:-postgres}
+      - DB_PASSWORD=${DB_PASSWORD:-}
       # NO `changeme` FALLBACK (A19). This token mints an API key for ANY user; a stack that came
       # up on the published literal handed the whole account plane to anyone who read the repo.
       # Unset now means UNSET — admin-api's config.v1 refuses the placeholder literals by name and
@@ -237,9 +255,13 @@ services:
       - VEXA_WORKSPACE_MOUNT_TARGET=/workspaces
       - VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH=${VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH:-}
       - LOG_LEVEL=${LOG_LEVEL:-info}
-      # Spawn the bot onto THIS compose network so it resolves meeting-api:8080 (lifecycle callback)
-      # + redis. Must equal the project-prefixed network name (DockerBackend → HostConfig.NetworkMode).
-      - DOCKER_NETWORK=${COMPOSE_PROJECT_NAME:-vexa-v012}_vexa
+      # Spawned workloads never join the control-plane network. A meeting bot joins `bots`
+      # (meeting-api for its callbacks and uploads, redis, storage); an agent worker joins `workers`
+      # (the gateway's /mcp, redis, flows-api, and the opt-in llm-shim / searxng). Neither reaches
+      # the runtime, postgres, admin-api, agent-api or the terminal. Each must equal the
+      # project-prefixed network name (DockerBackend → HostConfig.NetworkMode).
+      - DOCKER_NETWORK=${COMPOSE_PROJECT_NAME:-vexa-v012}_bots
+      - DOCKER_WORKER_NETWORK=${COMPOSE_PROJECT_NAME:-vexa-v012}_workers
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       # THE CREDENTIAL MIRROR, TWO SHAPES. The probe reads the DIRECTORY one first (config.v1
@@ -499,7 +521,7 @@ services:
       - DB_PORT=5432
       - DB_NAME=${DB_NAME:-vexa}
       - DB_USER=${DB_USER:-postgres}
-      - DB_PASSWORD=${DB_PASSWORD:-postgres}
+      - DB_PASSWORD=${DB_PASSWORD:-}
       - REDIS_URL=redis://redis:6379/0
       - RUNTIME_API_URL=http://runtime:8090
       # The runtime caller credential meeting-api presents on every runtime.v1 call. Required; the
@@ -593,7 +615,7 @@ services:
         condition: service_completed_successfully
       identity-keys:
         condition: service_completed_successfully
-    networks: [vexa]
+    networks: [vexa, bots]   # bots post their lifecycle callbacks and uploads here
     restart: unless-stopped
 
   gateway:
@@ -673,7 +695,7 @@ services:
         condition: service_healthy
       identity-keys:
         condition: service_completed_successfully
-    networks: [vexa]
+    networks: [vexa, workers]   # workers reach their toolbelt at /mcp here
     restart: unless-stopped
 
   # ─── gateway-identity.v1: the gateway's signing keypair ─────────────────────────────────────────
@@ -823,7 +845,7 @@ services:
         condition: service_healthy
       admin-api:
         condition: service_healthy
-    networks: [vexa]
+    networks: [vexa, workers]   # workers read the timeline here
     restart: unless-stopped
 
   # flows-mailbox — the inbound mail lane: IMAP poll → `POST /events` on the engine. Same image,
@@ -1373,7 +1395,7 @@ services:
     # PINNED, deliberately: this is a third-party compatibility surface we vouch for, and both
     # dialects move. Bump it on purpose, never implicitly.
     image: ${LLM_SHIM_IMAGE:-litellm/litellm:main-v1.97.0}
-    networks: [vexa]     # MUST match the stack: on the default network the agent cannot resolve it
+    networks: [vexa, workers]     # MUST match the stack: workers resolve it on `workers`
     ports:
       - "127.0.0.1:${LLM_SHIM_PORT:-14000}:4000"
     volumes:
@@ -1457,7 +1479,7 @@ services:
     # bytes, not by a moving tag. Bump it on purpose, never implicitly. (= searxng/searxng:latest
     # at SearXNG 2026.9.5-c7f3080aa.)
     image: ${SEARXNG_IMAGE:-searxng/searxng@sha256:55e1fa15a63ff04e79e213e6aa2837549877b0c6d60757cdb633ae9111cb5fea}
-    networks: [vexa]     # MUST match the stack: on the default network the workers cannot resolve it
+    networks: [vexa, workers]     # MUST match the stack: workers resolve it on `workers`
     ports:
       - "127.0.0.1:${SEARXNG_HOST_PORT:-18481}:8080"
     volumes:
@@ -1498,7 +1520,15 @@ volumes:
   identity-public-key:
 
 networks:
+  # The control plane. No spawned bot or worker joins it.
   vexa:
+    driver: bridge
+  # Where the runtime puts meeting bots (DOCKER_NETWORK): meeting-api, redis and storage only.
+  bots:
+    driver: bridge
+  # Where the runtime puts agent workers (DOCKER_WORKER_NETWORK): the gateway, redis, flows-api and
+  # the opt-in llm-shim / searxng only.
+  workers:
     driver: bridge
   # Connections: agent-api, the terminal and the broker only. internal = no route out, and no
   # worker container joins it.

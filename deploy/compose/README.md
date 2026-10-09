@@ -16,6 +16,16 @@ slim image from `<service>/Dockerfile`:
 | flows-api    | repo root, `core/flows/Dockerfile`     | 18200     | `python -m flows_integrations.flows_api` |
 | flows-mailbox| repo root, `core/flows/Dockerfile`     | —         | `python -m flows_integrations.mailbox` (profile `mailbox`) |
 
+### Networks
+
+The control plane shares the `vexa` network. Nothing the runtime spawns joins it: meeting bots go on
+`bots` (`DOCKER_NETWORK` — meeting-api, redis, storage) and agent workers on `workers`
+(`DOCKER_WORKER_NETWORK` — the gateway, redis, flows-api, and the optional `llm-shim` / `searxng`).
+Neither reaches the runtime, Postgres, admin-api, agent-api or the terminal. A service you add that a
+bot or worker must reach joins the matching network. The runtime's own API requires
+`RUNTIME_API_TOKEN`, which only agent-api and meeting-api hold, and Postgres refuses to start on an
+empty or published `DB_PASSWORD` (`make rotate-db-password` moves an existing install off one).
+
 ### flows, and what it replaces
 
 `flows-api` is the reaction engine's HTTP surface and one of the domains the MCP assembly asks for

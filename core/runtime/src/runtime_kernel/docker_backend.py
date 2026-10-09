@@ -6,8 +6,10 @@ image** (main's has none either). Implements the same sync `Backend` port as `Pr
 kernel's lifecycle is identical regardless of substrate.
 
 Host config (how the spawned container runs) comes from the runtime service's env, not the workload
-env: `DOCKER_NETWORK` puts the bot on the same compose network as redis/meeting-api (without it the
-bot can't reach the stack), and `DOCKER_SHM_SIZE` gives chromium a real `/dev/shm`.
+env: `DOCKER_NETWORK` is the network a meeting bot joins (the one with meeting-api and redis on it —
+without it the bot can't reach the stack), `DOCKER_WORKER_NETWORK` the one an agent worker joins
+(gateway, redis, flows-api; defaults to `DOCKER_NETWORK`), and `DOCKER_SHM_SIZE` gives chromium a
+real `/dev/shm`. Each class reaches only the services on its own network.
 """
 from __future__ import annotations
 
@@ -95,25 +97,35 @@ def _workload_id_from_leaf(leaf: str) -> str:
     return leaf
 
 
-def _stack_network() -> Optional[str]:
-    """The stack-unique compose network every workload this runtime spawns joins (``start()`` sets
-    ``HostConfig.NetworkMode`` from the same env). On a SHARED daemon (two vexa stacks on one host —
-    the release-host layout) the managed label and the name prefix are IDENTICAL across stacks, so
-    the network is THE discriminator that scopes discovery and ``find`` to THIS stack's containers —
-    and it works retroactively for label-less incident-era containers too. Unset ⇒ single-stack
-    deployment, no scoping (docker's default bridge)."""
+def _workload_network(worker: bool) -> Optional[str]:
+    """The network a spawned workload joins: ``DOCKER_WORKER_NETWORK`` for an agent worker (falling
+    back to ``DOCKER_NETWORK``), ``DOCKER_NETWORK`` for everything else. Unset ⇒ docker's default."""
+    if worker:
+        return os.getenv("DOCKER_WORKER_NETWORK") or os.getenv("DOCKER_NETWORK") or None
     return os.getenv("DOCKER_NETWORK") or None
 
 
-def _in_stack_network(network: Optional[str], inspect_body: dict) -> bool:
-    """Whether an INSPECTED container is attached to the stack network (no scoping when unset).
-    Checks both ``HostConfig.NetworkMode`` (what ``start()`` sets) and the live
+def _stack_networks() -> tuple[str, ...]:
+    """The stack-unique compose networks the workloads this runtime spawns join (``start()`` sets
+    ``HostConfig.NetworkMode`` from the same env). On a SHARED daemon (two vexa stacks on one host —
+    the release-host layout) the managed label and the name prefix are IDENTICAL across stacks, so
+    the networks are THE discriminator that scopes discovery and ``find`` to THIS stack's containers —
+    and they work retroactively for label-less incident-era containers too. Empty ⇒ single-stack
+    deployment, no scoping (docker's default bridge)."""
+    nets = [n for n in (_workload_network(False), _workload_network(True)) if n]
+    return tuple(dict.fromkeys(nets))
+
+
+def _in_stack_network(networks: tuple[str, ...], inspect_body: dict) -> bool:
+    """Whether an INSPECTED container is attached to one of the stack networks (no scoping when
+    none is configured). Checks both ``HostConfig.NetworkMode`` (what ``start()`` sets) and the live
     ``NetworkSettings.Networks`` map (covers containers attached by name after create)."""
-    if not network:
+    if not networks:
         return True
-    if (inspect_body.get("HostConfig") or {}).get("NetworkMode") == network:
+    if (inspect_body.get("HostConfig") or {}).get("NetworkMode") in networks:
         return True
-    return network in ((inspect_body.get("NetworkSettings") or {}).get("Networks") or {})
+    attached = (inspect_body.get("NetworkSettings") or {}).get("Networks") or {}
+    return any(n in attached for n in networks)
 
 
 def _socket_url() -> str:
@@ -215,9 +227,10 @@ class DockerBackend:
             raise ValueError("docker backend requires an image")
         name = self._cname(workload_id)
         _leaf, worker_labels = _worker_naming(workload_id)
+        worker = runnable.role == ROLE_WORKER
 
         host_config: dict[str, Any] = {}
-        network = os.getenv("DOCKER_NETWORK")
+        network = _workload_network(worker)
         if network:
             host_config["NetworkMode"] = network
         shm = _shm_bytes()
@@ -247,7 +260,6 @@ class DockerBackend:
         # mounted read-only; API-style provider env (the claude-code runner's ANTHROPIC_*) is copied
         # from the trusted runtime service below. A meeting bot reads no model credential and is
         # given none.
-        worker = runnable.role == ROLE_WORKER
         creds = host_claude_credentials(os.environ) if worker else None
         if creds:
             binds.append(f"{creds}:/root/.claude/.credentials.json:ro")
@@ -313,7 +325,7 @@ class DockerBackend:
         r = self._req("GET", f"/containers/{name}/json")
         if r.status_code != 200:
             return None
-        if not _in_stack_network(_stack_network(), r.json() or {}):
+        if not _in_stack_network(_stack_networks(), r.json() or {}):
             return None  # exists, but it is ANOTHER stack's container — not ours to touch
         return WorkloadHandle(id=workload_id, impl=name)
 
@@ -331,13 +343,13 @@ class DockerBackend:
 
         Returns ``[{workload_id, name, running, exit_code, started_at}, …]``; never raises."""
         found: dict[str, dict] = {}
-        network = _stack_network()
+        networks = _stack_networks()
         try:
             import json as _json
 
             def _filters(spec: dict) -> str:
-                if network:
-                    spec = {**spec, "network": [network]}
+                if networks:
+                    spec = {**spec, "network": list(networks)}
                 return quote(_json.dumps(spec), safe="")
 
             r = self._req("GET", f"/containers/json?all=1&filters={_filters({'label': [f'{MANAGED_LABEL}=true']})}")
@@ -348,7 +360,7 @@ class DockerBackend:
                         found[wid] = self._adoptable(wid, c)
             # Fallback: prefix-named containers WITHOUT the labels (spawned before the labels
             # existed). Compose-owned services can share the prefix — exclude anything compose owns.
-            fallback_qs = f"?all=1&filters={_filters({})}" if network else "?all=1"
+            fallback_qs = f"?all=1&filters={_filters({})}" if networks else "?all=1"
             r = self._req("GET", f"/containers/json{fallback_qs}")
             if r.status_code == 200:
                 for c in r.json():

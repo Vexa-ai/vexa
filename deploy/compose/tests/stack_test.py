@@ -448,13 +448,13 @@ def test_03_real_bot_spawn_joining(stack):
             )
         STATE["bot_container_name"] = appeared
 
-        # Belt-and-suspenders: ensure the bot sits on THIS project's compose network so its lifecycle
+        # Belt-and-suspenders: ensure the bot sits on THIS project's bot network so its lifecycle
         # callback (http://meeting-api:8080/…) + redis can resolve. The runtime already attaches it via
-        # DOCKER_NETWORK=${COMPOSE_PROJECT_NAME}_vexa (connect on an attached container is a no-op error,
+        # DOCKER_NETWORK=${COMPOSE_PROJECT_NAME}_bots (connect on an attached container is a no-op error,
         # swallowed). Named deterministically — the old any-`*_vexa` scan could attach the bot to ANOTHER
         # stack's network on a shared host.
         from conftest import PROJECT
-        subprocess.run(["docker", "network", "connect", f"{PROJECT}_vexa", container_name],
+        subprocess.run(["docker", "network", "connect", f"{PROJECT}_bots", container_name],
                        capture_output=True, timeout=20)
 
         # PROOF (b): the meeting advances to `joining` — the bot's first lifecycle callback lands.

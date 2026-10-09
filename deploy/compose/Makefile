@@ -14,7 +14,7 @@ COMPOSE  = docker compose -p $(PROJECT) -f docker-compose.yml
 REPO_ROOT := $(abspath ../..)
 BOT_IMAGE ?= vexa/vexa-bot:dev
 
-.PHONY: stack-test stack-test-bot stack-test-mock stack-test-v010 dashboard-harness provision-token up dev digest-audit down destroy help build ps logs bot _preflight _bot_check _creds_check _access _storage_note migrate-storage
+.PHONY: stack-test stack-test-bot stack-test-mock stack-test-v010 dashboard-harness provision-token up dev digest-audit down destroy help build ps logs bot _preflight _bot_check _creds_check _access _storage_note migrate-storage rotate-db-password
 
 ## provision-token — mint (idempotently) the self-host dashboard's API token (compose bring-up step 2).
 ## Needs ADMIN_TOKEN (the stack admin secret). Prints ONLY the token, so it pipes into the deploy:
@@ -27,6 +27,24 @@ provision-token:
 	@APORT=$$(grep -E "^ADMIN_API_PORT=" .env 2>/dev/null | head -1 | cut -d= -f2- | sed -E 's/[[:space:]]+#.*$$//; s/[[:space:]]+$$//'); APORT=$${APORT:-18057}; \
 	 ADMIN_TOKEN="$(ADMIN_TOKEN)" EMAIL="$(EMAIL)" SCOPES="$(SCOPES)" \
 	 ADMIN_API_URL="$${ADMIN_API_URL:-http://127.0.0.1:$$APORT}" ./bin/provision-token
+
+## rotate-db-password — give an EXISTING database a fresh password (postgres refuses to start on an
+## unset or published DB_PASSWORD, and an install made from an older .env.example holds `postgres`).
+## Mints the value into .env, starts postgres alone with it (an initialised data directory ignores
+## POSTGRES_PASSWORD), applies it inside the database over the local socket — no old password needed,
+## and the value is never on a command line or printed — then recreates the stack on the new value.
+rotate-db-password:
+	@test -f .env || { echo "no .env here — a new install mints DB_PASSWORD with 'make up'"; exit 1; }
+	@user=$$(grep -E '^DB_USER=' .env | head -1 | cut -d= -f2- | tr -d '[:space:]'); user=$${user:-postgres}; \
+	 new=$$(openssl rand -hex 32); \
+	 if grep -qE '^DB_PASSWORD=' .env; then sed -i.bak "s|^DB_PASSWORD=.*|DB_PASSWORD=$$new|" .env && rm -f .env.bak; \
+	 else echo "DB_PASSWORD=$$new" >> .env; fi; \
+	 $(COMPOSE) up -d --no-build postgres; \
+	 for i in $$(seq 1 30); do $(COMPOSE) exec -T postgres pg_isready -U "$$user" -q && break; sleep 2; done; \
+	 printf "ALTER USER \"%s\" PASSWORD '%s';\n" "$$user" "$$new" \
+	   | $(COMPOSE) exec -T postgres psql -U "$$user" -d postgres -v ON_ERROR_STOP=1 -q; \
+	 $(COMPOSE) up -d --no-build; \
+	 echo "rotated the database password of $$user; the new value is in .env"
 
 ## dashboard-harness — the dashboard FULL-SURFACE proof: send-bot + live WS transcript through the
 ## vendored dashboard, against the real stack + the mock bot (deterministic, no browser/STT/meeting).

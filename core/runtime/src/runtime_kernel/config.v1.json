@@ -84,10 +84,19 @@
       "key": "DOCKER_NETWORK",
       "class": "defaulted",
       "default": "(unset — docker's default bridge)",
-      "description": "network spawned workloads join — compose sets the project network so bots resolve meeting-api/redis by service name",
+      "description": "network a spawned meeting bot joins (and an agent worker too, when DOCKER_WORKER_NETWORK is unset) — compose sets its `bots` network, where only meeting-api, redis and storage sit",
       "targets": [
         "compose",
         "helm"
+      ]
+    },
+    {
+      "key": "DOCKER_WORKER_NETWORK",
+      "class": "defaulted",
+      "default": "(unset — DOCKER_NETWORK)",
+      "description": "network a spawned agent worker joins — compose sets its `workers` network, where only the gateway, redis, flows-api and the opt-in llm-shim / searxng sit. Workload discovery and find() are scoped to both networks",
+      "targets": [
+        "compose"
       ]
     },
     {

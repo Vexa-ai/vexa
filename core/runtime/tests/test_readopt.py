@@ -425,3 +425,25 @@ def test_k8s_discovers_pods_by_label(monkeypatch):
         "workload_id": "mtg-9-dead", "name": "vexa-mtg-9-dead",
         "running": False, "exit_code": 137,
     }
+
+
+def test_docker_discovery_covers_both_workload_networks(monkeypatch):
+    """Bots and workers sit on different stack networks; discovery and find() scope to the UNION
+    (this stack's two networks) and still exclude a foreign stack."""
+    monkeypatch.setenv("DOCKER_NETWORK", "vexa_prod_bots")
+    monkeypatch.setenv("DOCKER_WORKER_NETWORK", "vexa_prod_workers")
+    be, _ = _backend({
+        "vexa-mtg-2-d93eee39": {"labels": dict(LABELS), "running": True, "network": "vexa_prod_bots"},
+        "vexa-worker-58-chat": {
+            "labels": {"runtime.managed": "true", "runtime.workload_id": "agent-58-chat"},
+            "running": True, "network": "vexa_prod_workers",
+        },
+        "vexa-mtg-7-eyeball": {
+            "labels": {"runtime.managed": "true", "runtime.workload_id": "mtg-7-eyeball"},
+            "running": True, "network": "vexa_eyeball_bots",
+        },
+    })
+    ids = sorted(i["workload_id"] for i in be.list_workload_containers())
+    assert ids == ["agent-58-chat", "mtg-2-d93eee39"]
+    assert be.find("agent-58-chat") is not None
+    assert be.find("mtg-7-eyeball") is None

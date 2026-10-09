@@ -240,6 +240,22 @@ value in `deploy/compose/.env` for you; Helm replaces it in the chart-managed Se
 mints a new one when you stop passing the old one. Rotating signs everybody out of the web UI once and
 invalidates sign-in links already sent; API keys are not affected.
 
+**Docker Compose: give the database its own password.** `DB_PASSWORD` no longer defaults to
+`postgres`, and the `postgres` service refuses to start on an empty value or one published in this
+repository. A new install gets one from `make up` / `make all`. An install whose `.env` still holds
+`postgres` rotates it in one step — it writes a new value to `.env`, applies it inside the database,
+and brings the stack back up:
+
+```bash
+make -C deploy/compose rotate-db-password
+```
+
+**Docker Compose: bots and agent workers have networks of their own.** The runtime now starts meeting
+bots on the `bots` network (meeting-api, redis, storage) and agent workers on the `workers` network
+(the gateway, redis, flows-api, and the optional `llm-shim` / `searxng`); neither joins the control
+plane's network. A service you added to the stack that a bot or worker must reach has to join the
+matching network too.
+
 **Clear the transcript feeds of meetings deleted earlier.** Deleting a meeting's transcript now also
 removes its live feed from Redis. Meetings deleted on an earlier release kept that feed at rest (no
 reader serves it). This sweep removes it for every deleted meeting and touches nothing else; add

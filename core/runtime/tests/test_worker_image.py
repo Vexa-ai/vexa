@@ -199,3 +199,51 @@ def test_worker_create_spec_injects_anthropic_route_env(monkeypatch):
     assert env["ANTHROPIC_BASE_URL"] == "https://openrouter.ai/api"
     assert env["ANTHROPIC_MODEL"] == "deepseek/deepseek-v4-pro"
     assert env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "deepseek/deepseek-v4-flash"
+
+
+def _create_payload(monkeypatch, runnable, workload_id):
+    routes = {
+        ("POST", "/containers/create"): FakeResp(201, body={"Id": "cid123"}),
+        ("POST", "/containers/cid123/start"): FakeResp(204),
+    }
+    b, sess = _backend(routes)
+    captured = {}
+    orig = sess.request
+
+    def spy(method, url, **kw):
+        if method == "POST" and "/containers/create" in url:
+            captured.update(kw.get("json", {}))
+        return orig(method, url, **kw)
+
+    sess.request = spy
+    b.start(workload_id, runnable, {})
+    return captured
+
+
+def test_each_workload_class_joins_its_own_network(monkeypatch):
+    """A meeting bot joins DOCKER_NETWORK (meeting-api, redis); an agent worker joins
+    DOCKER_WORKER_NETWORK (gateway, redis, flows-api) — the class comes from the profile."""
+    monkeypatch.setenv("DOCKER_NETWORK", "stack_bots")
+    monkeypatch.setenv("DOCKER_WORKER_NETWORK", "stack_workers")
+    worker = _create_payload(monkeypatch, Runnable(image=TARGET, command=["python", "-m", "worker"],
+                                                   role=ROLE_WORKER), "agent-foo-chat")
+    bot = _create_payload(monkeypatch, Runnable(image="bot:1", role="bot"), "mtg-1-abcdef12")
+    assert worker["HostConfig"]["NetworkMode"] == "stack_workers"
+    assert bot["HostConfig"]["NetworkMode"] == "stack_bots"
+    # without a worker network the worker shares the bot network (single-network deployments)
+    monkeypatch.delenv("DOCKER_WORKER_NETWORK")
+    worker = _create_payload(monkeypatch, Runnable(image=TARGET, role=ROLE_WORKER), "agent-foo-chat")
+    assert worker["HostConfig"]["NetworkMode"] == "stack_bots"
+
+
+def test_a_bot_receives_no_model_credential(monkeypatch, tmp_path):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "model-key")
+    monkeypatch.setenv("HOST_CLAUDE_CREDENTIALS", "/host/.claude/.credentials.json")
+    bot = _create_payload(monkeypatch, Runnable(image="bot:1", role="bot"), "mtg-1-abcdef12")
+    env = dict(item.split("=", 1) for item in bot["Env"])
+    assert "ANTHROPIC_API_KEY" not in env
+    assert not (bot["HostConfig"].get("Binds") or [])
+    worker = _create_payload(monkeypatch, Runnable(image=TARGET, role=ROLE_WORKER), "agent-foo-chat")
+    env = dict(item.split("=", 1) for item in worker["Env"])
+    assert env["ANTHROPIC_API_KEY"] == "model-key"
+    assert "/host/.claude/.credentials.json:/root/.claude/.credentials.json:ro" in worker["HostConfig"]["Binds"]

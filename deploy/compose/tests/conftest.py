@@ -76,6 +76,8 @@ MCP_DELEGATION_SECRET = "gate-delegation-signing-key"
 # The runtime caller credential: the runtime answers only agent-api and meeting-api, and the proof
 # presents it when it reads or tears down a workload directly.
 RUNTIME_API_TOKEN = "gate-runtime-caller-token-0123456789abcdef"
+# postgres refuses an unset or published password.
+DB_PASSWORD = "gate-db-password-0123456789abcdef"
 MINIO_BUCKET = "vexa"
 
 SERVICES = ["redis", "postgres", "storage", "admin-api", "runtime", "meeting-api", "gateway"]
@@ -136,7 +138,7 @@ def _stack_env() -> dict:
         # PUBLISHED :vX.Y.Z tag (with COMPOSE_NO_BUILD=1), so the proof runs against the artifacts.
         "IMAGE_TAG": os.getenv("IMAGE_TAG", "dev"),
         # Pin the project name into the interpolation env too (not just `-p`), so the compose's
-        # DOCKER_NETWORK=${COMPOSE_PROJECT_NAME}_vexa resolves to the SAME network compose creates —
+        # DOCKER_NETWORK=${COMPOSE_PROJECT_NAME}_bots resolves to the SAME network compose creates —
         # the bot must be spawned onto it to reach meeting-api/redis.
         "COMPOSE_PROJECT_NAME": PROJECT,
         "ADMIN_TOKEN": ADMIN_TOKEN,
@@ -144,6 +146,7 @@ def _stack_env() -> dict:
         "NEXTAUTH_SECRET": NEXTAUTH_SECRET,
         "VEXA_MCP_DELEGATION_SECRET": MCP_DELEGATION_SECRET,
         "RUNTIME_API_TOKEN": RUNTIME_API_TOKEN,
+        "DB_PASSWORD": DB_PASSWORD,
         "MINIO_BUCKET": MINIO_BUCKET,
         "BROWSER_IMAGE": os.getenv("BROWSER_IMAGE", "vexaai/vexa-bot:v012"),
         "API_GATEWAY_HOST_PORT": GATEWAY_PORT,
@@ -313,12 +316,12 @@ def stack():
 def _cleanup(s: Stack) -> None:
     # Remove any bot containers the runtime spawned on the HOST daemon (outside the compose project)
     # so `down -v` leaves nothing behind. Scoped to THIS project's network: the runtime attaches every
-    # workload to DOCKER_NETWORK=${COMPOSE_PROJECT_NAME}_vexa, and a bare name=^vexa-mtg- would rm -f
+    # bot to DOCKER_NETWORK=${COMPOSE_PROJECT_NAME}_bots, and a bare name=^vexa-mtg- would rm -f
     # ANOTHER stack's live meeting bots on a shared host (the exact shared-host scenario COMPOSE_PROJECT
     # exists for).
     try:
         names = subprocess.run(
-            ["docker", "ps", "-aq", "--filter", "name=^vexa-mtg-", "--filter", f"network={PROJECT}_vexa"],
+            ["docker", "ps", "-aq", "--filter", "name=^vexa-mtg-", "--filter", f"network={PROJECT}_bots"],
             capture_output=True, text=True, timeout=30,
         ).stdout.split()
         if names:
