@@ -228,8 +228,10 @@ class LiveDoors(Doors):
     # -- verbs ----------------------------------------------------------------------------------
     def require_instance_blank(self) -> dict:
         # Blank = no admin claimed. There is no company-layer state to read any more (founder
-        # ruling 2026-10-08); admin-api answers the admin question over its admin-key door.
-        st, body = _http("GET", f"{ADMIN_API}/admin/instance", self._ak())
+        # ruling 2026-10-08); admin-api answers the admin question on its internal tier
+        # (`GET /internal/instance`, the one door that carries it).
+        st, body = _http("GET", f"{ADMIN_API}/internal/instance",
+                         {"X-Internal-Secret": _internal_secret()})
         if st != 200 or not isinstance(body, dict):
             raise DoorRefused(
                 "could not read the instance state — refusing rather than guessing that a stack "
