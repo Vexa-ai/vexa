@@ -23,6 +23,32 @@ if grep -qE "^VEXA_DISPATCH_SIGNING_KEY=\s*dev-dispatch-signing-key\s*$" "$env_f
   sed -i.bak "s|^VEXA_DISPATCH_SIGNING_KEY=.*|VEXA_DISPATCH_SIGNING_KEY=|" "$env_file" && rm -f "$env_file.bak"
   echo "replacing VEXA_DISPATCH_SIGNING_KEY (a published default)"
 fi
+# The storage root pair (the `storage` service's root key, meeting-api's MINIO_*). The pair this file
+# and compose used to default to is published: an install that ran with it gets a new pair, and the old
+# one is kept as LEGACY_MINIO_* for `make migrate-storage` from an older MinIO that still uses it. The
+# storage service takes its root key from its environment, so the next `up` restarts it with the new
+# pair over the same volume. A value already set and not published is kept; values are never printed.
+storage_published() {
+  case "$1" in ""|vexa-access-key|vexa-secret-key|minioadmin|changeme|change-me|CHANGE-ME|default|secret|password) return 0;; esac
+  return 1
+}
+env_value() { grep -E "^$1=" "$env_file" | head -1 | cut -d= -f2- | sed -E 's/[[:space:]]+#.*$//; s/[[:space:]]+$//'; }
+for key in MINIO_ACCESS_KEY MINIO_SECRET_KEY; do
+  if grep -qE "^${key}=" "$env_file"; then old="$(env_value "$key")"
+  elif [ "$key" = MINIO_ACCESS_KEY ]; then old=vexa-access-key       # compose's old fallback
+  else old=vexa-secret-key; fi
+  storage_published "$old" || { echo "kept ${key}"; continue; }
+  if [ -n "$old" ] && ! grep -qE "^LEGACY_${key}=" "$env_file"; then
+    printf 'LEGACY_%s=%s\n' "$key" "$old" >> "$env_file"
+  fi
+  if [ "$key" = MINIO_ACCESS_KEY ]; then v="vexa-$(openssl rand -hex 12)"; else v="$(mint)"; fi
+  if grep -qE "^${key}=" "$env_file"; then
+    sed -i.bak "s|^${key}=.*|${key}=${v}|" "$env_file" && rm -f "$env_file.bak"
+  else
+    echo "${key}=${v}" >> "$env_file"
+  fi
+  if [ -n "$old" ]; then echo "replacing ${key} (a published default)"; else echo "minted ${key}"; fi
+done
 for key in INTERNAL_API_SECRET RUNTIME_API_TOKEN DB_PASSWORD REDIS_PASSWORD VEXA_MCP_DELEGATION_SECRET \
            VEXA_DISPATCH_SIGNING_KEY VEXA_FLOWS_API_KEY VEXA_FLOWS_TIMELINE_KEY NEXTAUTH_SECRET; do
   if grep -qE "^${key}=\s*$" "$env_file"; then

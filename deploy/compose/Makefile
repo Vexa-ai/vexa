@@ -250,7 +250,8 @@ _creds_check:
 ## run with the meeting-api image's Python). Resumable; deletes nothing; the old volume is only read.
 ## It reads through the old `minio` container while Compose still runs it as an orphan, else through a
 ## temporary MinIO started from that container's image, else LEGACY_MINIO_IMAGE if it is on this
-## machine (nothing is pulled). Credentials default to the .env MINIO_* values, which both servers use.
+## machine (nothing is pulled). The new storage uses the .env MINIO_* pair; the old MinIO the pair
+## mint-dev-env.sh kept as LEGACY_MINIO_* when it replaced a published one, else the same MINIO_* pair.
 ## Guide: docs/docs/upgrade-from-minio.mdx.
 LEGACY_MINIO_CONTAINER ?= $(PROJECT)-minio-1
 LEGACY_MINIO_VOLUME    ?= $(PROJECT)_minio-data
@@ -260,12 +261,14 @@ MIGRATE_BUCKET        ?=
 migrate-storage:
 	@set -e; \
 	envv() { grep -E "^$$1=" .env 2>/dev/null | head -1 | cut -d= -f2- | sed -E 's/[[:space:]]+#.*$$//; s/[[:space:]]+$$//'; }; \
-	AK=$$(envv MINIO_ACCESS_KEY); AK=$${AK:-vexa-access-key}; SK=$$(envv MINIO_SECRET_KEY); SK=$${SK:-vexa-secret-key}; \
+	AK=$$(envv MINIO_ACCESS_KEY); SK=$$(envv MINIO_SECRET_KEY); \
+	[ -n "$$AK" ] && [ -n "$$SK" ] || { echo "no MINIO_ACCESS_KEY / MINIO_SECRET_KEY in .env — run ./mint-dev-env.sh .env (make up does)"; exit 1; }; \
+	LAK=$$(envv LEGACY_MINIO_ACCESS_KEY); LSK=$$(envv LEGACY_MINIO_SECRET_KEY); \
 	BK="$(MIGRATE_BUCKET)"; BK=$${BK:-$$(envv MINIO_BUCKET)}; BK=$${BK:-vexa}; TAG=$$(envv IMAGE_TAG); TAG=$${IMAGE_TAG:-$${TAG:-dev}}; \
 	$(COMPOSE) up -d --no-build storage; \
 	NETWORK=$(PROJECT)_vexa LEGACY_VOLUME=$(LEGACY_MINIO_VOLUME) LEGACY_CONTAINER=$(LEGACY_MINIO_CONTAINER) \
-	LEGACY_IMAGE="$(LEGACY_MINIO_IMAGE)" LEGACY_ACCESS_KEY="$${LEGACY_MINIO_ACCESS_KEY:-$$AK}" \
-	LEGACY_SECRET_KEY="$${LEGACY_MINIO_SECRET_KEY:-$$SK}" LEGACY_BUCKET="$${LEGACY_MINIO_BUCKET:-$$BK}" \
+	LEGACY_IMAGE="$(LEGACY_MINIO_IMAGE)" LEGACY_ACCESS_KEY="$${LEGACY_MINIO_ACCESS_KEY:-$${LAK:-$$AK}}" \
+	LEGACY_SECRET_KEY="$${LEGACY_MINIO_SECRET_KEY:-$${LSK:-$$SK}}" LEGACY_BUCKET="$${LEGACY_MINIO_BUCKET:-$$BK}" \
 	TARGET_ENDPOINT=http://storage:9000 TARGET_ACCESS_KEY="$$AK" TARGET_SECRET_KEY="$$SK" TARGET_BUCKET="$$BK" \
 	STORAGE_VOLUME=$(PROJECT)_storage-data RUN_IMAGE="vexaai/v012-meeting-api:$$TAG" RUN_PYTHON=python \
 	TOOLS_DIR=$(REPO_ROOT)/deploy/storage NAME_PREFIX=$(PROJECT) RETRY_HINT="make -C deploy/compose migrate-storage" \

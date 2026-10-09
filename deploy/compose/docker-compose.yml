@@ -95,13 +95,35 @@ services:
     # server's root credentials. The host port is loopback-only and deliberately not MinIO's 9000,
     # so an upgrading install's old MinIO container can keep running beside it until its recordings
     # are copied (docs: /upgrade-from-minio).
+    #
+    # NO DEFAULT ROOT PAIR, and a published one refuses the start: `vexa-access-key` / `vexa-secret-key`
+    # shipped here as the fallback and in .env.example. mint-dev-env.sh (`make up` / `make all`) mints a
+    # pair into .env, and replaces a published one; versitygw takes its root key from this environment at
+    # start, so the next `up` restarts it with the new pair over the same volume, and the new root reads
+    # every bucket the old one created. Bots reach this service only for an authenticated bot's saved
+    # session, with the scoped account storage-init makes (BOT_S3_*, limited to its own prefix); no bot
+    # or worker is ever given the root pair.
     image: versity/versitygw:v1.8.0@sha256:30292fc2eeacc67a36993b01f7a7a5e3361a19cced0e80c1d71cfa2a4b0a2499
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - mkdir -p /srv/vexa-storage/data /srv/vexa-storage/iam && exec versitygw --port :9000 --health /health --iam-dir /srv/vexa-storage/iam --quiet posix /srv/vexa-storage/data
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        case "$$ROOT_ACCESS_KEY" in
+          ""|vexa-access-key|vexa-secret-key|minioadmin|changeme|change-me|CHANGE-ME|default|secret|password)
+            echo "storage: MINIO_ACCESS_KEY is unset or a value published in the Vexa repository - refusing to start." >&2
+            echo "  Run deploy/compose/mint-dev-env.sh (make up does); it mints a pair into .env, or replaces a published one." >&2
+            exit 1;;
+        esac
+        case "$$ROOT_SECRET_KEY" in
+          ""|vexa-access-key|vexa-secret-key|minioadmin|changeme|change-me|CHANGE-ME|default|secret|password)
+            echo "storage: MINIO_SECRET_KEY is unset or a value published in the Vexa repository - refusing to start." >&2
+            echo "  Run deploy/compose/mint-dev-env.sh (make up does); it mints a pair into .env, or replaces a published one." >&2
+            exit 1;;
+        esac
+        mkdir -p /srv/vexa-storage/data /srv/vexa-storage/iam && exec versitygw --port :9000 --health /health --iam-dir /srv/vexa-storage/iam --quiet posix /srv/vexa-storage/data
     environment:
-      - ROOT_ACCESS_KEY=${MINIO_ACCESS_KEY:-vexa-access-key}
-      - ROOT_SECRET_KEY=${MINIO_SECRET_KEY:-vexa-secret-key}
+      - ROOT_ACCESS_KEY=${MINIO_ACCESS_KEY:-}
+      - ROOT_SECRET_KEY=${MINIO_SECRET_KEY:-}
     ports:
       - "127.0.0.1:${STORAGE_HOST_PORT:-18900}:9000"
     healthcheck:
@@ -133,8 +155,8 @@ services:
       - S3_ACCESS_KEY=${S3_ACCESS_KEY:-}
       - S3_SECRET_KEY=${S3_SECRET_KEY:-}
       - MINIO_ENDPOINT=${MINIO_ENDPOINT:-storage:9000}
-      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-vexa-access-key}
-      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-vexa-secret-key}
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-}
       - MINIO_BUCKET=${MINIO_BUCKET:-vexa}
       - MINIO_SECURE=${MINIO_SECURE:-false}
       - BOT_S3_ENDPOINT=${BOT_S3_ENDPOINT:-}
@@ -610,8 +632,8 @@ services:
       - S3_ACCESS_KEY=${S3_ACCESS_KEY:-}
       - S3_SECRET_KEY=${S3_SECRET_KEY:-}
       - MINIO_ENDPOINT=${MINIO_ENDPOINT:-storage:9000}
-      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-vexa-access-key}
-      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-vexa-secret-key}
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-}
       - MINIO_BUCKET=${MINIO_BUCKET:-vexa}
       - MINIO_SECURE=${MINIO_SECURE:-false}
       - LOG_LEVEL=${LOG_LEVEL:-info}

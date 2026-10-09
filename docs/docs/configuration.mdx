@@ -183,7 +183,7 @@ Compose.
 | Variable | Default | Purpose |
 |---|---|---|
 | `MINIO_ENDPOINT` | `storage:9000` | Where meeting-api stores recordings: `host:port`, or a full `http(s)://` URL. The default is the Compose `storage` service; Lite sets `vexa-lite-storage:9000` itself. Point it at your own S3-compatible store to use that instead. |
-| `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` | `vexa-access-key` / `vexa-secret-key` | The S3 key pair meeting-api uses. In Lite and Compose it is also the storage server's root key pair, so these are the credentials to change. |
+| `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` | none (minted) | The S3 key pair meeting-api uses. In Lite and Compose it is also the bundled storage server's root key pair, so it has no default: the storage refuses to start on an unset pair or on the old published `vexa-access-key` / `vexa-secret-key`, and `make up` / `make lite` mint one into `.env` (replacing a published one). No bot or worker is given this pair. |
 | `MINIO_BUCKET` | `vexa` | Bucket holding recordings; created on bring-up if missing (Compose `storage-init`, Lite `make up`). |
 | `MINIO_SECURE` | `false` | Use `https://` when `MINIO_ENDPOINT` is a bare `host:port`. |
 | `STORAGE_HOST_PORT` | `18900` | Compose only: the storage S3 port on `127.0.0.1` (see [Ports](#ports)). |

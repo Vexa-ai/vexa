@@ -266,6 +266,14 @@ unset `VEXA_DISPATCH_SIGNING_KEY` or on its old default, `dev-dispatch-signing-k
 so a new key changes nothing a running stack depends on. Helm and Lite generate and keep one
 themselves.
 
+**Object storage: the root credentials need values of their own.** The bundled storage refuses to
+start on an unset `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` or on the old defaults `vexa-access-key` /
+`vexa-secret-key`. Compose `make up` / `make all` and Lite `make lite` mint a pair into `.env`, replace
+the old defaults there, and restart the storage with the new pair over the same volume, so existing
+recordings stay readable. If you start Compose with `docker compose` directly, run
+`deploy/compose/mint-dev-env.sh .env` first. The Lite image refuses to start with `MINIO_ENDPOINT` set
+and either value unset or a default.
+
 **Rotate `NEXTAUTH_SECRET` if it was ever a default.** The terminal now requires a secret of at least
 32 bytes that is not published in this repository, and refuses to start otherwise. If your install
 ever ran with the old example value (`dev-nextauth-secret`, or Lite's built-in one), treat it as known:
