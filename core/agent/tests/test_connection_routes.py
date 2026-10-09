@@ -132,3 +132,60 @@ def test_a_caller_without_the_gateway_signature_never_reaches_the_broker(client,
     assert r.status_code == 403
     assert 'signed in through the gateway' in r.json()['detail']
     assert len(broker) == before
+
+
+# ── a setup proposal: every key published, any other refused BY NAME ─────────────────────────────
+TELEGRAM = {'endpoint': 'https://api.telegram.org/bot{secret}/sendMessage', 'scheme': 'telegram',
+            'method': 'POST', 'secret_label': 'Bot token',
+            'fields': [{'name': 'chat_id', 'label': 'Chat ID', 'location': 'body'}]}
+
+
+def test_a_setup_proposal_reaches_the_broker_as_written(client, monkeypatch):
+    sent = []
+
+    def fake(actor, method, path, payload=None, *, identity):
+        sent.append((actor, method, path, payload))
+        if path == '/api/connections':
+            return {'connections': []}
+        return {'connection_id': 'c' * 32, 'status': 'awaiting_user'}
+
+    monkeypatch.setattr(connections, 'call_broker', fake)
+    broker = sent
+    r = client.post('/api/connections/request', headers=HUMAN,
+                    json={'provider': 'custom_secret', 'label': 'Telegram', 'setup': TELEGRAM})
+    assert r.status_code == 200, r.text
+    prepared = [c for c in broker if c[2].endswith('/prepare')]
+    assert prepared and prepared[-1][3] == {'setup': TELEGRAM}
+
+
+@pytest.mark.parametrize('setup,named', [
+    ({**TELEGRAM, 'service': 'Telegram'}, 'setup.service is not a field here (allowed: oauth, '
+                                          'documentation_url, endpoint, header, scheme, method, '
+                                          'secret_label, fields)'),
+    ({**TELEGRAM, 'fields': [{'name': 'chat_id', 'label': 'Chat ID', 'value': '12345'}]},
+     'setup.fields.0.value is not a field here (allowed: name, label, location)'),
+    ({**TELEGRAM, 'scheme': 'basic'}, 'setup.scheme:'),
+])
+def test_a_key_outside_the_setup_is_refused_by_name_and_its_value_is_never_echoed(client, broker,
+                                                                                   setup, named):
+    r = client.post('/api/connections/request', headers=HUMAN,
+                    json={'provider': 'custom_secret', 'label': 'Telegram', 'setup': setup})
+    assert r.status_code == 422
+    detail = r.json()['detail']
+    assert isinstance(detail, str) and named in detail, detail
+    assert '12345' not in detail and "'Telegram'" not in detail
+    assert not [c for c in broker if c[2].endswith('/prepare')], 'nothing reached the broker'
+
+
+def test_the_published_setup_is_closed_and_the_description_names_label_not_service():
+    app = FastAPI()
+    app.include_router(connections.build(subject_of=lambda r: 'u1'))
+    spec = app.openapi()
+    setup = spec['components']['schemas']['ConnectionRequest']['properties']['setup']
+    ref = next(b['$ref'] for b in setup['anyOf'] if '$ref' in b)
+    model = spec['components']['schemas'][ref.rsplit('/', 1)[-1]]
+    assert model['additionalProperties'] is False
+    assert set(model['properties']) == {'oauth', 'documentation_url', 'endpoint', 'header', 'scheme',
+                                        'method', 'secret_label', 'fields'}
+    text = spec['paths']['/api/connections/request']['post']['description']
+    assert 'name the service in label' in text and 'provide a service label' not in text

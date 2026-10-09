@@ -97,6 +97,29 @@ def _resolve_ref(schema: dict, openapi: dict) -> dict:
     return dict((openapi.get("components") or {}).get("schemas", {}).get(name) or {})
 
 
+#: How deep a nested model is inlined. Deeper than any body model here; a self-referencing model
+#: stops at this depth as a plain object rather than recursing forever.
+_INLINE_DEPTH = 6
+
+
+def _inline(schema, openapi: dict, depth: int = 0):
+    """``schema`` with every `$ref` to this domain's own `components.schemas` replaced by the schema
+    it names, all the way down — so an argument whose type is a nested model (an object with its own
+    closed set of keys) travels to this edge's surface WHOLE, keys and `additionalProperties: false`
+    included, instead of arriving as an open object an agent fills by guessing."""
+    if isinstance(schema, list):
+        return [_inline(s, openapi, depth) for s in schema]
+    if not isinstance(schema, dict):
+        return schema
+    if "$ref" in schema:
+        if depth >= _INLINE_DEPTH:
+            return {"type": "object"}
+        resolved = _resolve_ref(schema, openapi)
+        merged = {**resolved, **{k: v for k, v in schema.items() if k != "$ref"}}
+        return _inline(merged, openapi, depth + 1)
+    return {k: _inline(v, openapi, depth) for k, v in schema.items()}
+
+
 def _body_params(op: dict, openapi: dict) -> Dict[str, dict]:
     """The route's JSON request-body fields, by name -> schema — the `requestBody` twin of
     `parameters`. A body with no named `properties` (the untyped `body: dict = Body(...)` shape)
@@ -112,7 +135,7 @@ def _body_params(op: dict, openapi: dict) -> Dict[str, dict]:
     props = schema.get("properties")
     if not isinstance(props, dict):
         return {}
-    return {name: dict(prop_schema or {}) for name, prop_schema in props.items()}
+    return {name: _inline(dict(prop_schema or {}), openapi) for name, prop_schema in props.items()}
 
 
 def verify(assembly: Assembly, openapi_by_domain: Dict[str, dict]) -> List[BoundTool]:

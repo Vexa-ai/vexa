@@ -10,6 +10,7 @@
 | `settings.py` | environment → `Settings`; refuses an unusable configuration at boot |
 | `providers.py` | Google OAuth, Gmail and Calendar adapters — fixed URLs and scopes |
 | `secret_service.py`, `service_oauth.py`, `connection_setup.py` | custom services: prepared setups, public-HTTPS-only execution, provider-neutral OAuth |
+| `setup_schema.py` | the shape of a setup proposal (every allowed key, `extra='forbid'`) and the refusal that names a rejected field; vendored byte for byte to agent-api's `control_plane/connection_setup_schema.py` (`scripts/parity.json`) |
 | `obs.py` | `logevent.v1` lines — names and kinds, never values |
 | `config.v1.json`, `config_preflight.py` | the config contract; the preflight is VENDORED from `deploy/contracts/config.v1/preflight.py` |
 

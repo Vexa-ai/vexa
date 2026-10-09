@@ -1,32 +1,8 @@
 """Declarative setup proposals. Only human submission activates their configuration."""
-from typing import Literal
-from pydantic import BaseModel,ConfigDict,Field
 from . import secret_service
-
-class InputField(BaseModel):
-    model_config=ConfigDict(extra='forbid')
-    name:str=Field(pattern=r'^[A-Za-z][A-Za-z0-9_]{0,39}$')
-    label:str=Field(min_length=1,max_length=80)
-    location:Literal['query','body']='body'
-
-class OAuthSpec(BaseModel):
-    model_config=ConfigDict(extra='forbid')
-    authorization_url:str=Field(max_length=2000)
-    token_url:str=Field(max_length=2000)
-    scopes:list[str]=Field(min_length=1,max_length=30)
-    token_auth:Literal['client_secret_post','client_secret_basic']='client_secret_post'
-
-class SetupSpec(BaseModel):
-    model_config=ConfigDict(extra='forbid')
-    oauth:OAuthSpec|None=None
-    documentation_url:str=Field(default='',max_length=2000)
-    endpoint:str=Field(default='',max_length=2000)
-    header:str=Field(default='Authorization',max_length=64)
-    scheme:Literal['bearer','raw','telegram']='bearer'
-    method:Literal['GET','POST']='GET'
-    secret_label:str=Field(default='API token',min_length=1,max_length=80)
-    fields:list[InputField]=Field(default_factory=list,max_length=10)
-
+# The proposal's SHAPE is `setup_schema` (vendored to agent-api, which publishes it on the agent's
+# tool); what a proposal MEANS is checked here.
+from .setup_schema import InputField, OAuthSpec, SetupSpec  # noqa: F401 — re-exported
 
 def validate(raw):
     s=SetupSpec.model_validate(raw)

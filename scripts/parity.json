@@ -72,6 +72,23 @@
       ]
     },
     {
+      "id": "connection-setup-schema",
+      "fact": "the shape of a custom-service setup proposal",
+      "kind": "file-bytes",
+      "enforced": true,
+      "canonical": "core/agent/services/credential-broker/src/credential_broker/setup_schema.py",
+      "how_to_agree": "edit the broker's copy and vendor it VERBATIM into agent-api",
+      "why": "The credential broker validates and stores a setup proposal; agent-api publishes the same shape on the agent's connection_request tool so an agent sees every allowed key before it writes one, and a key outside it is refused by name. Two images, no shared module, so the copy is byte-compared.",
+      "sites": [
+        {
+          "path": "core/agent/services/credential-broker/src/credential_broker/setup_schema.py"
+        },
+        {
+          "path": "core/agent/control_plane/connection_setup_schema.py"
+        }
+      ]
+    },
+    {
       "id": "credential-broker-assertion",
       "fact": "the credential-broker.v1 assertion signer and verifier (Python)",
       "kind": "file-bytes",

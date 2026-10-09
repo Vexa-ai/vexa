@@ -168,12 +168,47 @@ def _signature(bt: BoundTool) -> inspect.Signature:
         # `requestBody`), never guessed here — see the module docstring for why `embed=True` is
         # unconditional. The vocabulary annotation rides either one: an agent needs the words
         # whichever half of the forward the argument travels in.
-        default = (Body(None, embed=True, description=description, json_schema_extra=vocabulary)
-                   if name in bt.body_params
-                   else Query(None, description=description, json_schema_extra=vocabulary))
+        if name in bt.body_params and _declares_keys(schema):
+            # A NESTED MODEL TRAVELS WHOLE: its keys, their types and `additionalProperties: false`,
+            # exactly as the owning route publishes it (`bind._inline`), so the tool's input schema
+            # tells an agent every key it may write and the MCP refuses any other one by name.
+            default = Body(None, embed=True, description=description,
+                           json_schema_extra=_publish_as(schema, description))
+        elif name in bt.body_params:
+            default = Body(None, embed=True, description=description, json_schema_extra=vocabulary)
+        else:
+            default = Query(None, description=description, json_schema_extra=vocabulary)
         params.append(inspect.Parameter(name, inspect.Parameter.KEYWORD_ONLY,
                                         annotation=annotation, default=default))
     return inspect.Signature(params)
+
+
+def _declares_keys(schema: dict) -> bool:
+    """Is this an object with a closed set of named keys (directly, or as a nullable `anyOf`)?"""
+    if not isinstance(schema, dict):
+        return False
+    if isinstance(schema.get("properties"), dict) and schema.get("additionalProperties") is False:
+        return True
+    return any(_declares_keys(b) for b in (schema.get("anyOf") or schema.get("oneOf") or [])
+               if isinstance(b, dict))
+
+
+def _publish_as(schema: dict, description: Optional[str]):
+    """A `json_schema_extra` that replaces what FastAPI derived from the edge's loose annotation with
+    the owning route's own schema for the argument. Any `enum` inside it is the route's own
+    validation (a `Literal` it enforces), so the edge refuses exactly what the route would — never
+    more (the reason `_vocabulary` keeps a route's SUGGESTED words out of `enum`)."""
+    declared = {k: v for k, v in schema.items() if k != "title"}
+    if description and "description" not in declared:
+        declared["description"] = description
+
+    def replace(generated: dict) -> None:
+        title = generated.get("title")
+        generated.clear()
+        generated.update(declared)
+        if title:
+            generated["title"] = title
+    return replace
 
 
 def _json_type(schema: dict) -> str:

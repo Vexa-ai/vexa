@@ -112,3 +112,22 @@ def test_generic_spec_and_no_get_body():
     assert connection_setup.validate({"endpoint": "https://api.example.com/v1"})["fields"] == []
     with pytest.raises(ValueError):
         connection_setup.validate({"endpoint": "https://api.example.com/v1", "fields": [{"name": "id", "label": "ID"}]})
+
+
+@pytest.mark.parametrize("bad,named", [
+    ({**SPEC, "service": "Telegram"}, "setup.service is not a setup field"),
+    ({**SPEC, "fields": [{"name": "chat_id", "label": "Chat ID", "where": "body"}]},
+     "setup.fields.0.where is not a setup field (allowed: name, label, location)"),
+    ({"endpoint": "https://api.example.test/v1", "oauth": {"authorization_url": "https://a.test/o",
+      "token_url": "https://a.test/t", "scopes": ["r"], "client_id": "x"}},
+     "setup.oauth.client_id is not a setup field (allowed: authorization_url, token_url, scopes, token_auth)"),
+    ({**SPEC, "method": "PUT"}, "setup.method:"),
+    ({**SPEC, "endpoint": "https://other.test/bot{secret}/sendMessage"},
+     "Choose a supported Telegram bot endpoint"),
+])
+def test_a_refused_proposal_names_the_field_and_never_echoes_a_value(signed, connection, bad, named):
+    cid = connection("custom_secret", "Fixture")
+    r = signed("agent", "POST", f"/api/connections/{cid}/prepare", {"setup": bad})
+    assert r.status_code == 422
+    assert named in r.json()["detail"], r.json()["detail"]
+    assert "Telegram\"" not in r.json()["detail"] and "client_id\": \"x" not in r.json()["detail"]

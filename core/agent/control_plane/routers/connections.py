@@ -2,8 +2,43 @@
 import os
 from typing import Literal
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict, Field
 from control_plane import broker_client
+from control_plane.connection_setup_schema import SetupSpec, allowed_keys
+
+
+def _named_refusal(errors) -> str:
+    """A refused request body, one sentence per field, naming it — never echoing what was sent (an
+    agent may have pasted a secret where it should not be). A key outside `setup` names the keys a
+    setup may carry, so the agent can correct it without guessing."""
+    parts = []
+    for e in errors:
+        loc = [p for p in (e.get('loc') or ()) if p != 'body']
+        where = '.'.join(str(p) for p in loc) or 'body'
+        if e.get('type') == 'extra_forbidden':
+            allowed = (allowed_keys(loc[1:]) if loc and loc[0] == 'setup' else None)
+            parts.append(f'{where} is not a field here' +
+                         (f' (allowed: {", ".join(allowed)})' if allowed else ''))
+        else:
+            parts.append(f'{where}: {e.get("msg", "invalid")}')
+    return '; '.join(parts) or 'invalid request'
+
+
+class _NamedRefusalRoute(APIRoute):
+    """These are agent tools: a 422 says WHICH field, in a sentence, without the value sent."""
+
+    def get_route_handler(self):
+        handler = super().get_route_handler()
+
+        async def named(request):
+            try:
+                return await handler(request)
+            except RequestValidationError as exc:
+                return JSONResponse(status_code=422, content={'detail': _named_refusal(exc.errors())})
+        return named
 
 #: gateway-identity.v1's header — the gateway's signature, verified by agent-api's IdentityGuard.
 SIGNED_IDENTITY_HEADER = 'x-vexa-identity'
@@ -13,7 +48,12 @@ class ConnectionRequest(BaseModel):
     provider: Literal['google_email', 'google_calendar', 'custom_secret', 'github']
     label: str = Field(default='',max_length=80)
     new_account: bool = False
-    setup: dict | None = None
+    # THE SHAPE IS PUBLISHED, every key of it (`connection_setup_schema`, the broker's own, vendored):
+    # an agent sees what a setup may carry before it writes one, and a key outside it is refused
+    # here by name rather than at the broker as "invalid setup".
+    setup: SetupSpec | None = Field(default=None, description=(
+        'custom_secret only: the service\'s endpoint and authentication, for the person to review. '
+        'Only the keys listed; the service\'s NAME goes in `label`, never here.'))
 
 
 class AccountRead(BaseModel):
@@ -147,7 +187,7 @@ def signed_identity(request: Request) -> str:
 
 
 def build(*, subject_of, wsr=None, require_person=None, **_):
-    router=APIRouter()
+    router=APIRouter(route_class=_NamedRefusalRoute)
     # A person in the loop: the verbs that read a mailbox, spend a stored credential or ask for
     # consent refuse a worker dispatched without one (`x-user-regime`, carried by the gateway's
     # signed identity for a delegation token). A caller with no regime is a person's own client.
@@ -157,9 +197,10 @@ def build(*, subject_of, wsr=None, require_person=None, **_):
     def request_connection(request: Request, body: ConnectionRequest):
         """Request Gmail, Calendar, GitHub or custom-secret setup in Minutes' trusted Connections panel.
 
-        For custom_secret, provide a service label and prepare setup with endpoint (exact HTTPS URL), header
-        (Authorization or X-API-Key), scheme (bearer/raw/telegram), method (GET/POST),
-        secret_label, and fields=[{name,label,location:query|body}] for missing values.
+        For custom_secret, name the service in label (setup has no service or name key) and put in setup
+        only: endpoint (exact HTTPS URL), header (Authorization or X-API-Key), scheme (bearer/raw/telegram),
+        method (GET/POST), secret_label, documentation_url, oauth, and fields=[{name,label,location:query|body}]
+        for missing values. Any other key is refused and the refusal names it.
         Never put secret values in setup. Derive configuration from provider documentation; never guess endpoints or credentials.
         For OAuth authorization-code services, add oauth={authorization_url,token_url,scopes:[...],token_auth:"client_secret_post"|"client_secret_basic"}, documentation_url, and use scheme=bearer/header=Authorization.
         The shared secure form collects client ID and client secret, shows the redirect URI and starts consent. Never treat an OAuth client secret as an API access token.
@@ -188,7 +229,8 @@ def build(*, subject_of, wsr=None, require_person=None, **_):
         if result is None:
             result=call_broker(actor,'POST','/api/setup',{'provider':body.provider,'label':label},identity=signed)
         if body.setup is not None:
-            call_broker(actor,'POST','/api/connections/'+result['connection_id']+'/prepare',{'setup':body.setup},identity=signed)
+            call_broker(actor,'POST','/api/connections/'+result['connection_id']+'/prepare',
+                        {'setup':body.setup.model_dump(exclude_unset=True)},identity=signed)
         return {'connection_id':result['connection_id'], 'provider':body.provider,
                 'status':'awaiting_user' if body.setup is not None else result['status'], 'ui_action':'open_connections',
                 'instruction':'A setup request was delivered to Minutes; do not claim the panel is visible until the user confirms. The user must review and approve the proposed configuration. OAuth definitions show client ID/client secret and consent; API-key definitions show the secret field. An existing ready credential does not prove this new setup is approved. Do not construct links or call workspace_view for this request. Never paste credentials in chat. Call connections_status after consent; a request is not a connected account.'}

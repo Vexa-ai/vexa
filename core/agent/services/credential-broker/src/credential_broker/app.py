@@ -31,9 +31,9 @@ from urllib.parse import urlsplit
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from . import assertion, connection_setup, identity_token, providers, secret_service, service_oauth
+from . import assertion, connection_setup, identity_token, providers, secret_service, service_oauth, setup_schema
 from .obs import TraceMiddleware, log_event
 from .settings import Settings, google_client
 from .store import Record, Store, StoreUnavailable
@@ -403,8 +403,13 @@ def create_app(broker: Broker) -> FastAPI:
             raise HTTPException(409, "This connection uses OAuth. Preserve its OAuth definition; create a separate connection for an API token.")
         try:
             spec = connection_setup.validate(body.setup)
-        except (ValueError, secret_service.ServiceError):
-            raise HTTPException(422, "Invalid setup specification; supply a public HTTPS endpoint, supported authentication, and required fields") from None
+        except ValidationError as e:
+            # NAME THE FIELD. "Invalid setup" alone sent an agent guessing which of its keys was
+            # wrong; the sentence names each one and never echoes a value.
+            raise HTTPException(422, "Invalid setup specification: " + setup_schema.describe(e)) from None
+        except (ValueError, secret_service.ServiceError) as e:
+            # Both raise only fixed sentences of this package's own (connection_setup, secret_service).
+            raise HTTPException(422, f"Invalid setup specification: {e}") from None
         with b.lock:
             current = b.connection(who, cid)
             previous = json.loads(current["setup_spec"] or "{}")
