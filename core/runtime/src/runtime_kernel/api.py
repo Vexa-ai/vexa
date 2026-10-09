@@ -161,6 +161,9 @@ def create_app(
 
     @app.delete("/workloads/{workload_id}")
     def destroy(workload_id: str):
+        # Potentially multi-second: a reclaim that races a concurrent remover confirms the
+        # container's absence (bounded by RUNTIME_RECLAIM_CONFIRM_SEC) before returning. Sync
+        # route ⇒ it holds one threadpool slot, never the event loop.
         try:
             return dump(rt.destroy(workload_id))
         except KeyError:
