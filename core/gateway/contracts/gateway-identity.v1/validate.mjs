@@ -3,12 +3,14 @@
  * gate:schema for gateway-identity.v1 — the goldens are the spec (P8).
  *   claims-*  → a signed payload, validated against #/$defs/Claims
  *   vector-*  → a signing vector, validated against #/$defs/Vector, then RE-SIGNED here in a second
- *               language: Ed25519 over "v1." + payload with the vector's private key must reproduce
- *               the token's signature byte for byte, the public key must be that key's public half
- *               and must verify it, and the payload must decode to Claims.
+ *               language: Ed25519 over "v1." + payload with the RFC 8032 TEST 1 key (derived below
+ *               from its published seed, never read from a golden) must reproduce the token's
+ *               signature byte for byte, the vector's public key must be that key's public half and
+ *               must verify it, and the payload must decode to Claims.
  *   refused-* → a refusal vector, validated against #/$defs/Refusal, then checked here: the token
  *               must NOT verify under the vector's public key (or must be refused before a
  *               signature is checked, for a malformed one or an over-long lifetime).
+ * No golden may carry private-key material: a PEM private-key header anywhere in one fails.
  * Run: node validate.mjs [--check]
  */
 import Ajv2020 from "ajv/dist/2020.js";
@@ -29,6 +31,18 @@ const b64u = (buf) => buf.toString("base64").replace(/\+/g, "-").replace(/\//g, 
 const unb64u = (s) => Buffer.from(s.replace(/-/g, "+").replace(/_/g, "/"), "base64");
 const B64U = /^[A-Za-z0-9_-]+$/;
 
+// RFC 8032 section 7.1 TEST 1: the published Ed25519 test seed (its "SECRET KEY") the signing vectors
+// are made with. Public test data, and refused at boot by every service that loads an identity key.
+const RFC8032_TEST1_SEED_HEX = "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60";
+// PKCS#8 wraps a raw Ed25519 seed behind this fixed 16-byte DER prefix (RFC 8410).
+const ED25519_PKCS8_PREFIX = Buffer.from("302e020100300506032b657004220420", "hex");
+const TEST1_KEY = createPrivateKey({
+  key: Buffer.concat([ED25519_PKCS8_PREFIX, Buffer.from(RFC8032_TEST1_SEED_HEX, "hex")]),
+  format: "der",
+  type: "pkcs8",
+});
+const PRIVATE_PEM = /-----BEGIN [A-Z ]*PRIVATE KEY-----/;
+
 // The verifier's rules, restated in a second language: v1 only, canonical base64url, exactly a
 // 64-byte Ed25519 signature, the signature checked before the payload is read.
 function verifies(publicPem, token) {
@@ -45,19 +59,19 @@ function verifies(publicPem, token) {
 let failed = 0;
 const files = readdirSync(join(HERE, "golden")).filter((n) => n.endsWith(".json"));
 for (const f of files) {
-  const data = JSON.parse(readFileSync(join(HERE, "golden", f), "utf8"));
+  const text = readFileSync(join(HERE, "golden", f), "utf8");
+  if (PRIVATE_PEM.test(text)) { console.error(`  ✗ ${f}: carries private-key material; derive the key in code`); failed++; continue; }
+  const data = JSON.parse(text);
   if (f.startsWith("claims-")) {
     if (!claimsOk(data)) { console.error(`  ✗ ${f}: ${ajv.errorsText(claimsOk.errors)}`); failed++; continue; }
     console.log(`  ✓ ${f} ≡ Claims`);
   } else if (f.startsWith("vector-")) {
     if (!vectorOk(data)) { console.error(`  ✗ ${f}: ${ajv.errorsText(vectorOk.errors)}`); failed++; continue; }
-    const priv = createPrivateKey(data.private_key);
-    if (priv.asymmetricKeyType !== "ed25519") { console.error(`  ✗ ${f}: private_key is not Ed25519`); failed++; continue; }
-    if (createPublicKey(priv).export({ type: "spki", format: "pem" }) !== data.public_key) {
-      console.error(`  ✗ ${f}: public_key is not the private key's public half`); failed++; continue;
+    if (createPublicKey(TEST1_KEY).export({ type: "spki", format: "pem" }) !== data.public_key) {
+      console.error(`  ✗ ${f}: public_key is not the RFC 8032 TEST 1 public key`); failed++; continue;
     }
     const [version, payload, sig] = data.token.split(".");
-    if (b64u(sign(null, Buffer.from(`${version}.${payload}`), priv)) !== sig) {
+    if (b64u(sign(null, Buffer.from(`${version}.${payload}`), TEST1_KEY)) !== sig) {
       console.error(`  ✗ ${f}: signature does not reproduce`); failed++; continue;
     }
     if (!verifies(data.public_key, data.token)) { console.error(`  ✗ ${f}: public_key does not verify the token`); failed++; continue; }

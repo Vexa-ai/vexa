@@ -78,3 +78,19 @@ def test_the_boot_refuses_a_signing_key_file_that_is_not_the_private_key(tmp_pat
             load_signing_key(path)
         assert "VEXA_GATEWAY_IDENTITY_SIGNING_KEY_FILE" in str(ei.value)
         assert "BEGIN" not in str(ei.value) and "4f4f" not in str(ei.value)
+
+
+def test_the_boot_refuses_the_published_rfc8032_test_key(tmp_path):
+    """gateway-identity.v1 — the contract's signing vectors are made with RFC 8032 TEST 1, whose seed
+    is printed in the RFC. A gateway configured with it signs identities anybody can forge, so the
+    boot refuses it like a missing key, naming the vector and never the key."""
+    from gateway import identity_token
+    from gateway.adapters import load_signing_key
+    from rfc8032 import rfc8032_test1_signing_key
+
+    published = tmp_path / "signing.pem"
+    published.write_bytes(identity_token.private_key_pem(rfc8032_test1_signing_key()))
+    with pytest.raises(cp.ConfigError) as ei:
+        load_signing_key(str(published))
+    assert "VEXA_GATEWAY_IDENTITY_SIGNING_KEY_FILE" in str(ei.value)
+    assert "RFC 8032" in str(ei.value) and "BEGIN" not in str(ei.value)

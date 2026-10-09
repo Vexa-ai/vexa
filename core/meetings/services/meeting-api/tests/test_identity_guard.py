@@ -108,10 +108,11 @@ def test_health_needs_nobody(client):
 
 
 # ── the key split ───────────────────────────────────────────────────────────────────────────────
-@pytest.mark.parametrize("material", ["private", "hmac", "missing"])
+@pytest.mark.parametrize("material", ["private", "hmac", "missing", "published"])
 def test_the_boot_refuses_anything_but_the_gateways_public_key(monkeypatch, tmp_path, material):
     """meeting-api verifies with the public key and nothing else: the private key mounted here
-    could sign identities, and an old shared secret or a missing file verifies nothing."""
+    could sign identities, an old shared secret or a missing file verifies nothing, and a published
+    test key verifies tokens anybody can sign."""
     import meeting_api.__main__ as entry
     from meeting_api.config_preflight import ConfigError
 
@@ -120,6 +121,8 @@ def test_the_boot_refuses_anything_but_the_gateways_public_key(monkeypatch, tmp_
         path.write_bytes(identity_token.private_key_pem(KEY))
     elif material == "hmac":
         path.write_text("4f" * 32)
+    elif material == "published":  # RFC 8032 TEST 1, the contract goldens' key: anybody can sign with it
+        path.write_text(identity_token.PUBLISHED_TEST_KEYS["RFC 8032 section 7.1 TEST 1"])
     monkeypatch.setenv("VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE", str(path))
     with pytest.raises(ConfigError) as e:
         entry._identity_key()

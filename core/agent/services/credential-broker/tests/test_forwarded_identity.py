@@ -88,6 +88,17 @@ def test_an_unusable_identity_key_refuses_agent_calls(signed, broker, tmp_path):
     assert signed("agent", "GET", "/api/connections", actor="u1").status_code == 401
 
 
+def test_a_published_identity_key_refuses_agent_calls(signed, broker, capsys, tmp_path):
+    """RFC 8032 TEST 1 (the gateway-identity.v1 goldens' key) swapped in after boot is refused per
+    use as an unusable key, before any signature is checked against it."""
+    published = tmp_path / "rfc8032-test1.pem"
+    published.write_text(identity_token.PUBLISHED_TEST_KEYS["RFC 8032 section 7.1 TEST 1"])
+    object.__setattr__(broker.settings, "identity_public_key_file", str(published))
+    capsys.readouterr()
+    assert signed("agent", "GET", "/api/connections", actor="u1").status_code == 401
+    assert _events(capsys)[-1]["fields"]["kind"] == "identity_key"
+
+
 def test_the_broker_holds_a_key_that_cannot_sign(keys):
     key = identity_token.read_verify_key(keys["identity"])
     with pytest.raises(TypeError):

@@ -25,7 +25,9 @@ is refused like a forgery.
 
 Keys are PEM: the signing key PKCS#8 (``openssl genpkey -algorithm ed25519``), the verification
 key SubjectPublicKeyInfo (``openssl pkey -pubout``). ``python identity_token.py keygen SIGNING
-PUBLIC`` writes a pair, or derives the public half from a signing key that already exists.
+PUBLIC`` writes a pair, or derives the public half from a signing key that already exists. A key
+published as a test vector (``PUBLISHED_TEST_KEYS``) is refused wherever a service loads the key it
+is configured with, so no deployment can boot with one.
 
 THIS FILE IS VENDORED, byte for byte, into every package that signs or verifies (the gateway,
 agent-api, meeting-api, the credential broker). ``gate:fact-parity`` compares the copies; edit the
@@ -82,6 +84,19 @@ DELEGATION_HEADERS = {
     "regime": "x-user-regime",
     "workspaces": "x-user-delegation-workspaces",
     "target": "x-user-delegation-target",
+}
+
+#: Ed25519 keys published as test vectors, by their public half. The contract's goldens are made
+#: with them (RFC 8032 section 7.1 TEST 1 signs every vector; TEST 2 is the "another key" refusal),
+#: and anybody can sign with a key whose seed is printed in an RFC, so a deployment configured with
+#: one has no key at all. :func:`read_signing_key` and :func:`read_verify_key` (what each service
+#: loads its configured key with) refuse them; :func:`load_signing_key` and :func:`load_verify_key`
+#: parse any Ed25519 key, these included, so the goldens can be checked.
+PUBLISHED_TEST_KEYS = {
+    "RFC 8032 section 7.1 TEST 1":
+        "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=\n-----END PUBLIC KEY-----\n",
+    "RFC 8032 section 7.1 TEST 2":
+        "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAPUAXw+hDiVqStwqnTRt+vJyYLM8uxJaMwM1V8Sr0Zgw=\n-----END PUBLIC KEY-----\n",
 }
 
 _B64U = re.compile(r"[A-Za-z0-9_-]+")
@@ -145,12 +160,29 @@ def _read(path: "str | os.PathLike") -> bytes:
         raise KeyUnavailable("the identity key file is unreadable") from None
 
 
+def published_test_key(key: "Ed25519PrivateKey | Ed25519PublicKey") -> Optional[str]:
+    """The name of the published test vector ``key`` is, or is the private half of; None for any
+    other key."""
+    pem = public_key_pem(key).decode("ascii")
+    return next((name for name, published in PUBLISHED_TEST_KEYS.items() if pem == published), None)
+
+
+def _configured(key):
+    name = published_test_key(key)
+    if name:
+        raise KeyUnavailable(f"the identity key is {name}, a published test key anybody can sign with; "
+                             "generate this deployment's own pair")
+    return key
+
+
 def read_signing_key(path: "str | os.PathLike") -> Ed25519PrivateKey:
-    return load_signing_key(_read(path))
+    """The signing key a deployment configured. A published test key is refused."""
+    return _configured(load_signing_key(_read(path)))
 
 
 def read_verify_key(path: "str | os.PathLike") -> Ed25519PublicKey:
-    return load_verify_key(_read(path))
+    """The verification key a deployment configured. A published test key is refused."""
+    return _configured(load_verify_key(_read(path)))
 
 
 def generate_signing_key() -> Ed25519PrivateKey:

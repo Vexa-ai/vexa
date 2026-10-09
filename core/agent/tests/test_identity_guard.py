@@ -124,10 +124,11 @@ def test_a_request_that_names_nobody_reaches_routes_that_need_nobody(client):
 
 
 # ── the key split: agent-api holds the public key, never one that signs ───────────────────────────
-@pytest.mark.parametrize("material", ["private", "hmac", "missing"])
+@pytest.mark.parametrize("material", ["private", "hmac", "missing", "published"])
 def test_the_boot_refuses_anything_but_the_gateways_public_key(monkeypatch, tmp_path, material):
     """A verifier mounted with the private key could sign identities; an old shared HMAC secret
-    left in place, or no file, verifies nothing. Each refuses the boot, naming the key's name."""
+    left in place, or no file, verifies nothing; a published test key verifies tokens anybody can
+    sign. Each refuses the boot, naming the key's name."""
     from control_plane.config_preflight import ConfigError
 
     path = tmp_path / "key.pem"
@@ -135,6 +136,8 @@ def test_the_boot_refuses_anything_but_the_gateways_public_key(monkeypatch, tmp_
         path.write_bytes(identity_token.private_key_pem(KEY))
     elif material == "hmac":
         path.write_text("4f" * 32)
+    elif material == "published":  # RFC 8032 TEST 1, the contract goldens' key: anybody can sign with it
+        path.write_text(identity_token.PUBLISHED_TEST_KEYS["RFC 8032 section 7.1 TEST 1"])
     monkeypatch.setenv("VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE", str(path))
     monkeypatch.setenv("INTERNAL_API_SECRET", INTERNAL)
     with pytest.raises(ConfigError) as e:

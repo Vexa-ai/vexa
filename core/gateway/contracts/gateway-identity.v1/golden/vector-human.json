@@ -17,7 +17,6 @@
     ]
   },
   "now": 1760000000,
-  "private_key": "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIJ1hsZ3v/VpguoRK9JLsLMREScVpezJpGXA7rAMcrn9g\n-----END PRIVATE KEY-----\n",
   "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=\n-----END PUBLIC KEY-----\n",
   "token": "v1.eyJlbWFpbCI6ImFkYUBleGFtcGxlLmNvbSIsImV4cCI6MTc2MDAwMDA2MCwiaWF0IjoxNzYwMDAwMDAwLCJsaW1pdHMiOjMsInNjb3BlcyI6WyJib3QiLCJ0eCJdLCJzdWIiOiI0MiIsInR5cCI6InZleGEtaWRlbnRpdHkiLCJ3ZWJob29rX2V2ZW50cyI6eyJtZWV0aW5nLmNvbXBsZXRlZCI6dHJ1ZX0sIndlYmhvb2tfc2VjcmV0Ijoid2hzZWMtZXhhbXBsZSIsIndlYmhvb2tfdXJsIjoiaHR0cHM6Ly9ob29rcy5leGFtcGxlLmNvbS92ZXhhIiwid29ya3NwYWNlcyI6WyJ3c183ZjNhIl19.fHRY24nyS_LXhw0MihBwXANHE94V2UqBczRHNRDeG-Gjl1Xtvck7IgATWdEsLpTvwAAY0C3MOpJ-9v2jxYViCw",
   "ttl_sec": 60

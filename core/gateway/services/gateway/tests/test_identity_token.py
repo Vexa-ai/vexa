@@ -1,9 +1,10 @@
 """gateway-identity.v1 — the Ed25519 signer and verifier, against the contract's own goldens (P8).
 
 The vectors in core/gateway/contracts/gateway-identity.v1/golden are re-signed here in Python (validate.mjs
-re-signs them in Node), the refusal vectors are refused with their own reason, and the key split is
-pinned: only the private key signs, a verifier holds the public key and nothing else, and every
-other kind of key — or no key — is refused where it is loaded.
+re-signs them in Node) with the RFC 8032 TEST 1 key derived from its published seed (``rfc8032.py``;
+no golden carries a signing key), the refusal vectors are refused with their own reason, and the key
+split is pinned: only the private key signs, a verifier holds the public key and nothing else, and
+every other kind of key — or no key, or a published test key — is refused where it is loaded.
 """
 import base64
 import hashlib
@@ -11,6 +12,7 @@ import hmac
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -19,6 +21,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec, ed448, rsa, x25519
 
 from gateway import identity_token as it
+from rfc8032 import rfc8032_test1_signing_key
 
 GOLDEN = pathlib.Path(__file__).resolve().parents[3] / "contracts" / "gateway-identity.v1" / "golden"
 KEY = it.generate_signing_key()
@@ -32,7 +35,7 @@ def _golden(name):
 @pytest.mark.parametrize("name", ["vector-human.json", "vector-delegated.json"])
 def test_the_golden_vectors_reproduce(name):
     v = _golden(name)
-    key = it.load_signing_key(v["private_key"])
+    key = rfc8032_test1_signing_key()
     assert it.public_key_pem(key).decode() == v["public_key"]
     assert it.sign(key, v["claims"], now=v["now"], ttl_sec=v["ttl_sec"]) == v["token"]
     claims = it.verify(it.load_verify_key(v["public_key"]), v["token"], now=v["now"] + 1)
@@ -51,6 +54,53 @@ def test_there_are_refusal_vectors_for_every_attack_this_contract_names():
     names = {p.name for p in GOLDEN.glob("refused-*.json")}
     assert {"refused-other-key.json", "refused-tampered.json", "refused-hmac-over-public-key.json",
             "refused-unsigned.json", "refused-other-version.json", "refused-lifetime.json"} <= names
+
+
+# ── published test keys ────────────────────────────────────────────────────────────────────────
+PRIVATE_PEM = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")
+
+
+@pytest.mark.parametrize("name", sorted(p.name for p in GOLDEN.glob("*.json")))
+def test_no_golden_carries_a_signing_key_and_every_golden_key_is_refused_at_boot(name):
+    """The goldens hold public keys only, and each of them is on the denylist every service checks
+    its configured key against, so no deployment can be set up with a key copied from here."""
+    text = (GOLDEN / name).read_text()
+    assert not PRIVATE_PEM.search(text)
+    v = json.loads(text)
+    if "public_key" in v:
+        assert it.published_test_key(it.load_verify_key(v["public_key"])) == "RFC 8032 section 7.1 TEST 1"
+
+
+def test_the_published_test_keys_are_the_rfc_vectors():
+    assert it.published_test_key(rfc8032_test1_signing_key()) == "RFC 8032 section 7.1 TEST 1"
+    assert it.published_test_key(rfc8032_test1_signing_key().public_key()) == "RFC 8032 section 7.1 TEST 1"
+    assert it.published_test_key(KEY) is None and it.published_test_key(PUB) is None
+    for pem in it.PUBLISHED_TEST_KEYS.values():
+        assert it.published_test_key(it.load_verify_key(pem))
+    # TEST 2 is the key the "another key" refusal vector was signed with
+    other = _golden("refused-other-key.json")
+    test2 = it.load_verify_key(it.PUBLISHED_TEST_KEYS["RFC 8032 section 7.1 TEST 2"])
+    assert it.verify(test2, other["token"], now=other["now"])["sub"]
+
+
+@pytest.mark.parametrize("name", sorted(it.PUBLISHED_TEST_KEYS))
+def test_a_published_test_key_is_refused_as_the_configured_key(tmp_path, name):
+    """The signer and every verifier load their configured key through read_signing_key /
+    read_verify_key, which refuse a published key whichever half is mounted, naming the vector and
+    never the key."""
+    public = tmp_path / "public.pem"
+    public.write_text(it.PUBLISHED_TEST_KEYS[name])
+    with pytest.raises(it.KeyUnavailable) as e:
+        it.read_verify_key(public)
+    assert name in str(e.value) and "BEGIN" not in str(e.value)
+    if name == "RFC 8032 section 7.1 TEST 1":
+        signing = tmp_path / "signing.pem"
+        signing.write_bytes(it.private_key_pem(rfc8032_test1_signing_key()))
+        with pytest.raises(it.KeyUnavailable) as e:
+            it.read_signing_key(signing)
+        assert name in str(e.value) and "BEGIN" not in str(e.value)
+        with pytest.raises(it.KeyUnavailable):
+            it.write_keypair(str(signing), str(tmp_path / "healed-public.pem"))
 
 
 # ── the key split ──────────────────────────────────────────────────────────────────────────────

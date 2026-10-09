@@ -39,12 +39,11 @@
     },
     "Vector": {
       "type": "object",
-      "description": "A signing test vector: any implementation signing these claims at `now` with `private_key` must produce `token` (Ed25519 signatures are deterministic), and `public_key` is that key's public half. The pair is RFC 8032 section 7.1 TEST 1, a published test key and never a deployment's.",
-      "required": ["private_key", "public_key", "now", "ttl_sec", "claims", "token"],
+      "description": "A signing test vector: any implementation signing these claims at `now` with the RFC 8032 section 7.1 TEST 1 key must produce `token` (Ed25519 signatures are deterministic), and `public_key` is that key's public half. The signing key is never in a vector: each implementation derives it from the 32-byte seed RFC 8032 publishes. Every service refuses this key at boot.",
+      "required": ["public_key", "now", "ttl_sec", "claims", "token"],
       "additionalProperties": false,
       "properties": {
-        "private_key": { "type": "string", "pattern": "^-----BEGIN PRIVATE KEY-----\n", "description": "PKCS#8 PEM, Ed25519" },
-        "public_key": { "type": "string", "pattern": "^-----BEGIN PUBLIC KEY-----\n", "description": "SubjectPublicKeyInfo PEM, Ed25519" },
+        "public_key": { "type": "string", "pattern": "^-----BEGIN PUBLIC KEY-----\n", "description": "SubjectPublicKeyInfo PEM, Ed25519 (RFC 8032 section 7.1 TEST 1)" },
         "now": { "type": "integer" },
         "ttl_sec": { "type": "integer" },
         "claims": { "type": "object" },
@@ -53,7 +52,7 @@
     },
     "Refusal": {
       "type": "object",
-      "description": "A refusal vector: verifying `token` with `public_key` at `now` must fail with `reason`. Covers another key, a tampered payload, algorithm confusion (an HMAC keyed with the public key), a missing signature, another scheme and an over-long lifetime.",
+      "description": "A refusal vector: verifying `token` with `public_key` at `now` must fail with `reason`. Covers another key (RFC 8032 section 7.1 TEST 2), a tampered payload, algorithm confusion (an HMAC keyed with the public key), a missing signature, another scheme and an over-long lifetime.",
       "required": ["public_key", "now", "token", "reason", "what"],
       "additionalProperties": false,
       "properties": {

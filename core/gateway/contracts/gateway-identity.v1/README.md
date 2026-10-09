@@ -25,7 +25,9 @@ key, an unsigned token and any other scheme are refused like a forgery.
 
 The pair is generated at install on every deploy surface: compose's `identity-keys` one-shot, the
 Helm chart's identity-keys Secret and ConfigMap, the Lite entrypoint (persisted in its state
-directory). Each service refuses to boot without its key, and a verifier refuses a private key.
+directory). Each service refuses to boot without its key, a verifier refuses a private key, and
+every service refuses a published test key (RFC 8032 section 7.1 TEST 1 and TEST 2, the keys the
+goldens are made with; `PUBLISHED_TEST_KEYS`).
 
 ## The door (`IdentityGuard`)
 
@@ -71,5 +73,6 @@ loop when `x-user-regime` is not `human`.
   `core/agent/services/credential-broker/src/credential_broker/`; `gate:fact-parity` compares the
   copies. Edit this one and copy it out.
 - `identity.schema.json` — the claims, the signing-vector shape and the refusal-vector shape.
-- `golden/` — two payloads, two signing vectors and the refusal vectors; `validate.mjs` re-signs and
-  re-verifies them in Node, so the format is pinned in a second language.
+- `golden/` — two payloads, two signing vectors and the refusal vectors, public keys only;
+  `validate.mjs` re-signs and re-verifies them in Node with the RFC 8032 TEST 1 key derived from
+  its published seed, so the format is pinned in a second language.
