@@ -8,8 +8,8 @@ single identifier changed.
 """
 from __future__ import annotations
 
-from control_plane import global_layer
-from control_plane.api_shared import GlobalReadyBody
+from control_plane import global_layer, system_mounts
+from control_plane.api_shared import GlobalReadyBody, require_in_ceiling
 from fastapi import APIRouter, Body, HTTPException, Request
 from fastapi.responses import JSONResponse
 from shared.git_redaction import redact as redact_secrets
@@ -117,6 +117,7 @@ def build(**d) -> APIRouter:
         because those two lines are read out loud to strangers. Admin-only, idempotent, and it
         reports WHY it refused — the caller is an agent mid-conversation with the one person who
         can fix it."""
+        require_in_ceiling(request, system_mounts.GLOBAL_SLUG)
         subject = subject_of(request)
         if not global_layer.is_admin(settings, str(subject)):
             raise HTTPException(status_code=403,

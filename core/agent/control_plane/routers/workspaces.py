@@ -32,7 +32,7 @@ from control_plane.api_shared import (
     WorkspaceInviteBody, WorkspaceMembershipBody, WorkspaceImportBody,
     WorkspacePullBody, WorkspacePurposeBody, WorkspacePushBody, WorkspaceRemoveBody,
     WorkspaceRenameBody, WorkspaceSwapBody, WorkspaceWriteBody, _upload_filename, logger,
-    write_slug)
+    require_in_ceiling, write_slug)
 from control_plane.workspace_attach import (
     CloneError, activate_workspace, active_workspaces, attach_shared_workspace, bind_repository_credential,
     attached_workspaces, create_shared_workspace_dir, create_workspace,
@@ -172,6 +172,7 @@ def build(**d) -> APIRouter:
         if rel.startswith("kg/templates/"):
             raise HTTPException(status_code=403, detail="kg/templates/ holds entity shapes, not records")
         if slug == system_mounts.GLOBAL_SLUG:
+            require_in_ceiling(request, slug)
             if not global_layer.is_admin(settings, str(subject)):
                 raise HTTPException(status_code=403, detail="only an org admin may edit _global")
             target = _writable_global()
@@ -596,6 +597,7 @@ def build(**d) -> APIRouter:
             # the administrator's desk, where nobody else will ever read it. The five files stay
             # thin; the graph they link to lives HERE, written by the one identity that may write
             # here at all — the same test the file route runs two screens up.
+            require_in_ceiling(request, slug)
             if not global_layer.is_admin(settings, str(subject)):
                 raise HTTPException(status_code=403,
                                     detail="only an org admin may write company-tier pages into _global")
@@ -1537,6 +1539,7 @@ def build(**d) -> APIRouter:
 
         This is the credential model: they add our PUBLIC key to their repository; nothing of theirs
         ever travels to us, and the private half is sealed at rest and never leaves this server."""
+        require_in_ceiling(request, slug)
         subject = subject_of(request)
         _manage_dir(subject, slug)
         repo_url = str((body or {}).get("repo") or "")
@@ -1560,6 +1563,7 @@ def build(**d) -> APIRouter:
     @router.post("/api/workspace/{slug}/archive")
     def ws_archive(slug: str, request: Request, body: ArchiveBody = Body(default=ArchiveBody())):
         """Archive (collapse, keep the data) or un-archive one of the caller's own workspaces."""
+        require_in_ceiling(request, slug)
         subject = subject_of(request)
         try:
             set_archived(wsr.root, subject, slug, body.archived)
@@ -1571,6 +1575,7 @@ def build(**d) -> APIRouter:
     @router.delete("/api/workspace/{slug}")
     def ws_delete(slug: str, request: Request):
         """DELETE one of the caller's own workspaces — removes the data irreversibly. Baseline is refused."""
+        require_in_ceiling(request, slug)
         subject = subject_of(request)
         try:
             delete_workspace(wsr.root, subject, slug)
@@ -1590,6 +1595,7 @@ def build(**d) -> APIRouter:
         subject = subject_of(request)
         target = str(body.get("target") or "")
         if target == "_global":
+            require_in_ceiling(request, target)
             if not global_layer.is_admin(settings, str(subject)):
                 raise HTTPException(status_code=403, detail="only an org admin may reset _global")
             # The `_global` the worker mount serves (`system_mounts.global_root`): unset config is the
@@ -1616,6 +1622,7 @@ def build(**d) -> APIRouter:
     def ws_unshare(workspace_id: str, request: Request):
         """UN-SHARE a workspace (owner only) — move it back into the caller's PRIVATE store and drop every
         member's index entry, so it stops being shared (mirror of share-enable). Returns the new private slug."""
+        require_in_ceiling(request, workspace_id)
         subject = subject_of(request)
         try:
             membership_mod.require_role(wsr.root, workspace_id, subject, "owner")
@@ -1642,6 +1649,7 @@ def build(**d) -> APIRouter:
         shared one if needed) and ensure the caller is its owner. Returns the shareable workspace_id — the
         caller then mints invites against it. This is what lets ANY workspace be shared AFTER creation, with
         no share-vs-not decision at create time."""
+        require_in_ceiling(request, slug)
         subject = subject_of(request)
         try:
             workspace_id, promoted = ensure_workspace_shareable(wsr.root, subject, slug)
@@ -1683,6 +1691,7 @@ def build(**d) -> APIRouter:
         The workspace must be shareable (reserved/own-private refused). The token is returned ONCE; only
         its hash is persisted, in the invite store at <root>/.invites/<workspace_id>.json — the one
         file `invites/preview` and `invites/accept` read (Vexa-ai/vexa#1645)."""
+        require_in_ceiling(request, body.workspace_id)
         subject = subject_of(request)
         # AN ADDRESS BINDS THE INVITE (Vexa-ai/vexa#1635). `allowed_emails` names who this is for, so
         # it decides the mode — it is not a hint that a separate flag has to agree with. Asking for
@@ -1790,6 +1799,7 @@ def build(**d) -> APIRouter:
     @router.delete("/api/workspace/invites/{invite_id}")
     def ws_invite_revoke(invite_id: str, request: Request, workspace_id: str):
         """Revoke an invite (owner/contributor of the workspace)."""
+        require_in_ceiling(request, workspace_id)
         subject = subject_of(request)
         try:
             membership_mod.require_role(wsr.root, workspace_id, subject, "contributor")
@@ -1839,6 +1849,7 @@ def build(**d) -> APIRouter:
     @router.delete("/api/workspace/members/{member_subject}")
     def ws_member_remove(member_subject: str, request: Request, workspace_id: str):
         """Remove a member (owner only)."""
+        require_in_ceiling(request, workspace_id)
         subject = subject_of(request)
         try:
             membership_mod.require_role(wsr.root, workspace_id, subject, "owner")
@@ -1850,6 +1861,7 @@ def build(**d) -> APIRouter:
     def ws_member_role(member_subject: str, request: Request, workspace_id: str,
                        body: RoleSetBody = Body(...)):
         """Flip a member's role (owner only) — read <-> read/write permissions."""
+        require_in_ceiling(request, workspace_id)
         subject = subject_of(request)
         try:
             membership_mod.require_role(wsr.root, workspace_id, subject, "owner")
@@ -1907,6 +1919,7 @@ def build(**d) -> APIRouter:
         Where the link GOES is the question this route exists to answer: an address this instance
         already knows gets it handed back for the agent to give them in the chat they are in, and
         every other address is published to the mail carrier. The answer says which happened."""
+        require_in_ceiling(request, body.slug)
         subject = subject_of(request)
         try:
             membership_acts.assert_may_manage(
@@ -1935,6 +1948,7 @@ def build(**d) -> APIRouter:
         four answers: an agent that had to choose a verb before asking would have to guess the answer
         first. The last-owner refusal reaches the person as itself (409) — it is about the workspace,
         not about them, and a generic failure would leave somebody trying it again."""
+        require_in_ceiling(request, body.slug)
         subject = subject_of(request)
         try:
             membership_acts.assert_may_manage(
@@ -1954,6 +1968,7 @@ def build(**d) -> APIRouter:
         """LEAVE a shared workspace — the caller removes THEMSELVES (any role; no owner gate). The
         last-owner guard still applies: a sole creator must unshare or hand off ownership rather than
         orphan the workspace, so their leave is refused (409) with that message."""
+        require_in_ceiling(request, workspace_id)
         subject = subject_of(request)
         if membership_mod.is_member(wsr.root, workspace_id, subject) is None:
             raise HTTPException(status_code=404, detail="not a member of this workspace")

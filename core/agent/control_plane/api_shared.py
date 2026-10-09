@@ -1028,6 +1028,31 @@ def write_slug(request: "Request", asked: Optional[str]) -> Optional[str]:
     return (request.headers.get("x-user-delegation-target") or "").strip() or None
 
 
+def delegation_allows(request: "Request", slug: Optional[str]) -> bool:
+    """May this caller address workspace ``slug``? A worker dispatched without a person carries the
+    dispatch's isolation set (``x-user-delegation-workspaces``); ``*`` — and every caller that is not
+    a delegated worker — is bounded by the account alone. An EMPTY slug, or the caller's own id, is
+    the caller's own workspace and always in scope: the uid decides it, not the caller."""
+    target = (slug or "").strip()
+    ceiling = request.headers.get("x-user-delegation-workspaces")
+    if ceiling is None or ceiling.strip() == "*" or not target:
+        return True
+    if target == (request.headers.get("x-user-id") or "").strip():
+        return True
+    return target in {w.strip() for w in ceiling.split(",") if w.strip()}
+
+
+def require_in_ceiling(request: "Request", *slugs: Optional[str]) -> None:
+    """Refuse (403) any named workspace outside a delegated dispatch's ceiling — the one check every
+    route that names a workspace in its path or body runs before it acts, reads aside."""
+    for slug in slugs:
+        if not delegation_allows(request, slug):
+            raise HTTPException(status_code=403, detail={
+                "refused": "out_of_scope", "workspace": str(slug),
+                "why": "this session was dispatched with access to a named set of workspaces and "
+                       "that is not one of them"})
+
+
 class WorkspaceWriteBody(BaseModel):
     """WRITE one page — the body behind `workspace_write`. Creates the file or replaces it whole."""
     model_config = {"extra": "forbid"}

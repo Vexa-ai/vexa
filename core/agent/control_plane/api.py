@@ -105,6 +105,7 @@ from control_plane.routers import proposals as routers_proposals
 from control_plane.routers import connections as routers_connections
 from control_plane.routers import clock as routers_clock
 from control_plane.routers import workspaces as routers_workspaces
+from control_plane.api_shared import delegation_allows, require_in_ceiling
 from control_plane.api_shared import (logger, _PHASE_WORD, _iso, _provenance_line, _epoch_text, 
     MAX_UPLOAD_BYTES, MEETING_STREAM_TRANSCRIPT_REPLAY, _upload_filename, _truncate_title, 
     _stream_tail_id, CHAT_TURN_HEAD_TTL_SEC, _chat_turn_head_key, _record_chat_turn_head, 
@@ -306,10 +307,7 @@ def create_app(
         the dispatch's isolation set (``x-user-delegation-workspaces``); ``*`` — and every caller
         that is not a delegated worker — is bounded by the account alone. An EMPTY slug is the
         caller's own workspace and always in scope: the uid decides it, not the caller."""
-        ceiling = request.headers.get("x-user-delegation-workspaces")
-        if ceiling is None or ceiling.strip() == "*" or not slug:
-            return True
-        return slug in {w.strip() for w in ceiling.split(",") if w.strip()}
+        return delegation_allows(request, slug)
 
     def _resolve_room(request: Request, subject: str, meeting_id: str,
                       participants: "Optional[list[str]]" = None,
@@ -439,6 +437,8 @@ def create_app(
         # The _global org tier is readable by EVERY subject — it is mounted ro into every worker,
         # so the read API mirrors that; writes still go only through the admin's worker mount.
         if target == system_mounts.GLOBAL_SLUG:
+            if write:  # read by everyone; WRITTEN only inside a delegated dispatch's ceiling
+                require_in_ceiling(request, target)
             g = _global_root()
             if g.exists():
                 return g
