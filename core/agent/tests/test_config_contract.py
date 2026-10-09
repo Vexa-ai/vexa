@@ -320,8 +320,8 @@ def test_the_qwen_lane_dials_are_declared():
 # 106: +1 REDIS_WORKLOAD_ACL — what a spawned worker connects to Redis as.
 # 107: +1 CODEX_HOME — the worker's Codex home, named by the runtime and read by the harness.
 # 106: -1 VEXA_WORKSPACE_MOUNT_SOURCE — the store backing is the runtime's own configuration (it drops
-# the key from every spec), so agent-api no longer reads or stamps it; it moved to `surface_only`
-# while compose and helm still set it.
+# the key from every spec), so agent-api no longer reads, stamps or declares it; compose and helm
+# set it on the runtime only.
 # 105: -1 VEXA_AGENT_DEFAULT_SUBJECT — a test-harness fallback subject; the harness now passes its
 # subject to create_app and the product reads none.
 # 106: +1 VEXA_UNIT_IN_KEY — the unit's input-stream key; the worker runs only entries signed with it.

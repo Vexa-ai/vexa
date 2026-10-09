@@ -49,10 +49,11 @@ the broker's agent or git key does not let a process act for a person it has no 
 
 ## Re-entry: a worker's tool call back into the gateway (`#/$defs/ReentryHeader`)
 
-A worker's delegation token (`vxd_…`, delegation.v1) is admitted on `/mcp` and nowhere else. The
-MCP's tools act by calling back into the gateway's REST routes with the same bearer, so the gateway
-has to tell *the MCP acting on an `/mcp` request it already admitted* from *a worker calling REST
-directly*. It does so with an identity only it can sign:
+A worker's delegation token (`vxd_…`, delegation.v1) is admitted on `/mcp`, on the routes.v1 rows
+marked `delegation` (the friction report its harness files), and on the rows marked `mcp_reentry`
+only when the MCP is the caller. The MCP's tools act by calling back into the gateway's REST routes
+with the same bearer, so the gateway has to tell *the MCP acting on an `/mcp` request it already
+admitted* from *a worker calling REST directly*. It does so with an identity only it can sign:
 
 | | |
 |---|---|

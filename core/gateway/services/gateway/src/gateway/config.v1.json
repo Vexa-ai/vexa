@@ -44,7 +44,7 @@
       "key": "AGENT_API_URL",
       "class": "capability",
       "capability": "agent_domain",
-      "description": "agent control-plane base URL fronted under /api/*. UNSET MEANS THE AGENT DOMAIN IS NOT DEPLOYED (PRD 40.6 no-agents, 40.7 domains are independent): the edge registers no /agent/* route and assembles no agent rows into its scope table, so a request there is 404 \u2014 this deployment does not serve it \u2014 rather than a 401 about a route that is not here. A URL default would assert the domain exists and make its absence unsayable.",
+      "description": "agent control-plane base URL; the edge fronts it under /agent/*, forwarded onto its /api/* (routes.v1 `forward`). UNSET MEANS THE AGENT DOMAIN IS NOT DEPLOYED (PRD 40.6 no-agents, 40.7 domains are independent): the edge registers no /agent/* route and assembles no agent rows into its scope table, so a request there is 404 \u2014 this deployment does not serve it \u2014 rather than a 401 about a route that is not here. A URL default would assert the domain exists and make its absence unsayable.",
       "targets": [
         "compose",
         "helm",
