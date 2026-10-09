@@ -20,6 +20,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from .. import events as _flows_events
+from .. import meeting_token
 from .machine import LifecycleSink
 
 if TYPE_CHECKING:
@@ -696,15 +697,13 @@ def mount_lifecycle(
             return True
         scheme, _, token = (request.headers.get("authorization") or "").partition(" ")
         connection_id = body.get("connection_id") if isinstance(body, dict) else None
-        if scheme.lower() != "bearer" or not token.strip() or not connection_id:
+        if scheme.lower() != "bearer" or not token.strip():
             return False
-        from ..recordings.service import _verify_meeting_token
-
         try:
-            claims = _verify_meeting_token(token.strip(), secret=callback_secret)
-        except ValueError:
+            meeting_token.admit_session(token.strip(), session_uid=connection_id, secret=callback_secret)
+        except meeting_token.InvalidMeetingToken:
             return False
-        return claims.get("session_uid") == connection_id
+        return True
 
     @app.post("/bots/internal/callback/lifecycle")
     async def lifecycle_callback(request: Request) -> JSONResponse:

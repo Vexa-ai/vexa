@@ -9,8 +9,9 @@ eager-creates the `MeetingSession` keyed by the bot's `connectionId`.
   `meeting_api.app.create_app` mounts it).
 - `request_bot(...)` — the spawn flow (the router's core; callable directly in tests).
 - `build_invocation(...)` / `build_workload_spec(...)` / `mint_meeting_token(...)` — the
-  `invocation.v1` / `runtime.v1` builders + the stateless MeetingToken minter. Both builders
-  validate against the sealed schema **at the seam** before anything ships.
+  `invocation.v1` / `runtime.v1` builders + the session-bound MeetingToken minter (re-exported from
+  `meeting_api.meeting_token`). Both builders validate against the sealed schema **at the seam**
+  before anything ships.
 - `MeetingRepo` / `RuntimeClient` ports + `QuotaExceeded` / `MaxBotsExceeded` / `SpawnFailed` /
   `DuplicateMeeting`.
 - `adapters.build_production_router(...)` — wire with real SQLAlchemy + the httpx runtime client.

@@ -56,7 +56,8 @@ def _client_for(repo, storage):
 
 
 def _post_tape(client, *, part, data=TAPE, session_uid=SESSION_UID, fmt="jsonl", auth=None):
-    token = auth or mint_meeting_token(MEETING_ID, USER, "google_meet", "abc", secret=SECRET)
+    token = auth or mint_meeting_token(MEETING_ID, USER, "google_meet", "abc", secret=SECRET,
+                                       session_uid=session_uid)
     return client.post(
         "/internal/recordings/upload",
         headers={"Authorization": f"Bearer {token}"},
@@ -195,7 +196,7 @@ def test_upload_route_still_serves_normal_recording_chunks():
 
     repo, storage = _seeded()
     client = _client_for(repo, storage)
-    token = mint_meeting_token(MEETING_ID, USER, "google_meet", "abc", secret=SECRET)
+    token = mint_meeting_token(MEETING_ID, USER, "google_meet", "abc", secret=SECRET, session_uid=SESSION_UID)
     r = client.post(
         "/internal/recordings/upload",
         headers={"Authorization": f"Bearer {token}"},

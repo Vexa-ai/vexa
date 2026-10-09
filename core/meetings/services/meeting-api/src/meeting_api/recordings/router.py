@@ -20,6 +20,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 
+from ..meeting_token import InvalidMeetingToken, admit_session
 from ..regime import require_person
 from .ports import RecordingRepo, Storage
 from .deletion import MeetingNotTerminal, delete_owned_recording
@@ -27,7 +28,6 @@ from .service import (
     SIGNAL_MEDIA_TYPE,
     InvalidSignalTape,
     SessionNotFound,
-    _verify_meeting_token,
     finalize_master,
     upload_chunk,
     upload_signal_tape,
@@ -101,21 +101,17 @@ def _upload_scope(authorization: Optional[str], session_uid: str,
                   token_secret: Optional[str]) -> Optional[int]:
     """Authenticate one upload. Returns the MeetingToken's meeting id (which the service checks
     against the session's meeting), or ``None`` for the internal tier, which is scoped by the
-    session alone. A MeetingToken bound to a session (``session_uid``) is refused for any other
-    session. Raises 401."""
+    session alone. A MeetingToken admits only the session it is bound to
+    (``meeting_token.admit_session``, the rule the lifecycle callback applies too). Raises 401."""
     bearer = _bearer_token(authorization)
     internal_secret = os.getenv("INTERNAL_API_SECRET") or ""
     if internal_secret and bearer and hmac.compare_digest(bearer.encode(), internal_secret.encode()):
         return None
     try:
-        claims = _verify_meeting_token(bearer, secret=token_secret)
-        meeting_id = int(claims["meeting_id"])
-    except (ValueError, KeyError, TypeError) as e:
+        claims = admit_session(bearer, session_uid=session_uid, secret=token_secret)
+        return int(claims["meeting_id"])
+    except (InvalidMeetingToken, KeyError, TypeError, ValueError) as e:
         raise HTTPException(status_code=401, detail=f"Invalid recording upload token: {e}")
-    bound = claims.get("session_uid")
-    if bound is not None and bound != session_uid:
-        raise HTTPException(status_code=401, detail="Invalid recording upload token: another session's token")
-    return meeting_id
 
 
 def _resolve_user_id(x_user_id: Optional[str]) -> int:

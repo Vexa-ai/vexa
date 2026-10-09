@@ -870,7 +870,7 @@ def test_mint_meeting_token_surfaces_clear_config_error(monkeypatch):
 
     monkeypatch.delenv("ADMIN_TOKEN", raising=False)
     with pytest.raises(ValueError) as ei:
-        mint_meeting_token(1, USER, "google_meet", "x")
+        mint_meeting_token(1, USER, "google_meet", "x", session_uid="conn-1")
     assert "ADMIN_TOKEN" in str(ei.value)
 
 

@@ -13,6 +13,8 @@ an isolated brick behind a port-seam.
 | `bot_spawn/` | `POST /bots` — build the invocation.v1 invocation + mint the MeetingToken + spawn the meeting-bot over runtime.v1, eager-creating the MeetingSession. | `POST /bots` |
 | `collector/` | the **folded-in** transcript backend (was the standalone transcription-collector): api.v1 reads + the `/ws` authorizer + the segments consumer. | `GET /transcripts/…`, `GET /meetings`, `POST /ws/authorize-subscribe` |
 | `recordings/` | chunk upload + finalize → master in `meeting.data` JSONB (recording.v1). | `POST /internal/recordings/upload`, `GET /recordings`, `GET /recordings/{id}/master` |
+| `meeting_token.py` | the MeetingToken, the one credential a bot holds: mint (bound to one session), verify, and `admit_session` — the one admit rule the lifecycle callback and the recording/tape upload both apply. | — |
+| `runtime_signature.py` | verifies the runtime's `X-Runtime-Signature` on `POST /runtime/callback` (HMAC keyed from `RUNTIME_API_TOKEN`). | — |
 | `sessions/` | the `MeetingSession` model + the shared SQLAlchemy mirror (Meeting/Transcription/MeetingSession) every module binds. | — |
 | `recording_codec.py` | the pure master codec — `build_recording_master` (front door) → WebM byte-concat / WAV RIFF header-merge. The Python twin of `recording-codec.ts`, drift-locked by the recording.v1 goldens. | — |
 | `webhooks/` | **O-MTG-2** — outbound delivery behind `WebhookSink`: HMAC, SSRF guard, event-filter, redis retry (webhook.v1). A library brick (lazily exposed). | — |

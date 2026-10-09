@@ -18,7 +18,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 from .media_metadata import seekable_webm
-from typing import Any, Optional
+from typing import Optional
 
 from ..obs import log_event
 from ..recording_codec import build_recording_master
@@ -323,30 +323,3 @@ async def finalize_master(
         return others + [r], master_key
 
     return await repo.mutate_recordings(meeting_id, _stamp)
-
-
-def _verify_meeting_token(token: str, *, secret: Optional[str] = None) -> dict[str, Any]:
-    """Verify a MeetingToken (HS256, ``ADMIN_TOKEN``-signed) and return its claims. Raises
-    ``ValueError`` on a bad signature / expiry (the parent ``verify_meeting_token``)."""
-    import base64
-    import hmac
-    import json
-    import os
-
-    secret = secret if secret is not None else os.environ.get("ADMIN_TOKEN")
-    if not secret:
-        raise ValueError("ADMIN_TOKEN not configured; cannot verify MeetingToken")
-    try:
-        header_b64, payload_b64, sig_b64 = token.split(".")
-    except ValueError:
-        raise ValueError("malformed MeetingToken")
-    signing_input = f"{header_b64}.{payload_b64}".encode("ascii")
-    expected = hmac.new(secret.encode(), signing_input, digestmod="sha256").digest()
-    got = base64.urlsafe_b64decode(sig_b64 + "=" * (-len(sig_b64) % 4))
-    if not hmac.compare_digest(expected, got):
-        raise ValueError("MeetingToken signature mismatch")
-    claims = json.loads(base64.urlsafe_b64decode(payload_b64 + "=" * (-len(payload_b64) % 4)))
-    exp = claims.get("exp")
-    if exp is not None and int(datetime.now(timezone.utc).timestamp()) > int(exp):
-        raise ValueError("MeetingToken expired")
-    return claims

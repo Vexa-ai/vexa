@@ -32,7 +32,7 @@ HEADERS = {"x-user-id": str(USER)}
 # ── unit: invocation + workload spec conform to the sealed contracts ─────────────────────────────
 
 def test_invocation_conforms_to_invocation_v1():
-    token = mint_meeting_token(1, USER, "google_meet", "abc-defg-hij", secret=SECRET)
+    token = mint_meeting_token(1, USER, "google_meet", "abc-defg-hij", secret=SECRET, session_uid="conn-1")
     inv = build_invocation(
         meeting_id=1, platform="google_meet",
         meeting_url="https://meet.google.com/abc-defg-hij", bot_name="VexaBot",
@@ -48,7 +48,7 @@ def test_invocation_carries_stt_creds_when_provided():
     """The bot can only transcribe if the invocation carries the STT URL+token (the mock-bot/dashboard
     validation found these were dropped). When provided they ride the invocation; when not, they are
     omitted (None-stripped) and the bot joins+captures without transcribing."""
-    token = mint_meeting_token(1, USER, "google_meet", "abc-defg-hij", secret=SECRET)
+    token = mint_meeting_token(1, USER, "google_meet", "abc-defg-hij", secret=SECRET, session_uid="conn-1")
     base = dict(meeting_id=1, platform="google_meet", meeting_url="https://meet.google.com/abc-defg-hij",
                 bot_name="VexaBot", token=token, native_meeting_id="abc-defg-hij",
                 connection_id="conn-1", redis_url="redis://redis:6379/0")
@@ -77,7 +77,7 @@ def test_invocation_carries_capture_signal_enabled_and_strips_only_none():
     operator has just turned collection OFF. ``False`` is not ``None``, so it survives the strip;
     this pins that, because the day it stops being true nothing else would notice.
     """
-    token = mint_meeting_token(1, USER, "google_meet", "abc-defg-hij", secret=SECRET)
+    token = mint_meeting_token(1, USER, "google_meet", "abc-defg-hij", secret=SECRET, session_uid="conn-1")
     base = dict(_INV_BASE, token=token)
 
     on = build_invocation(**base, capture_signal_enabled=True)
@@ -95,7 +95,7 @@ def test_invocation_carries_capture_signal_enabled_and_strips_only_none():
 def test_invocation_tape_is_independent_of_recording_enabled():
     """A meeting nobody asked to record still yields a fixture — the two flags are orthogonal, and
     the sealed contract says so ("the transcript/recording paths are unaffected either way")."""
-    token = mint_meeting_token(1, USER, "google_meet", "abc-defg-hij", secret=SECRET)
+    token = mint_meeting_token(1, USER, "google_meet", "abc-defg-hij", secret=SECRET, session_uid="conn-1")
     inv = build_invocation(**dict(_INV_BASE, token=token),
                            recording_enabled=False, capture_signal_enabled=True,
                            recording_upload_url="http://meeting-api:8080/internal/recordings/upload")
@@ -110,7 +110,7 @@ def test_invocation_carries_stt_model_when_provided():
     """#522: a validating OpenAI-compatible backend (Groq, vLLM) needs its served model id on
     every request. The deployment's choice rides the sealed invocation; absent → omitted, and
     the whisper client falls back to whisper-1 (today's wire)."""
-    token = mint_meeting_token(1, USER, "google_meet", "abc-defg-hij", secret=SECRET)
+    token = mint_meeting_token(1, USER, "google_meet", "abc-defg-hij", secret=SECRET, session_uid="conn-1")
     base = dict(meeting_id=1, platform="google_meet", meeting_url="https://meet.google.com/abc-defg-hij",
                 bot_name="VexaBot", token=token, native_meeting_id="abc-defg-hij",
                 connection_id="conn-1", redis_url="redis://redis:6379/0")
@@ -135,10 +135,10 @@ def test_workload_spec_conforms_to_runtime_v1():
 
 
 def test_meeting_token_roundtrips_under_secret():
-    from meeting_api.recordings.service import _verify_meeting_token
+    from meeting_api.meeting_token import verify_meeting_token
 
-    token = mint_meeting_token(42, USER, "google_meet", "abc", secret=SECRET)
-    claims = _verify_meeting_token(token, secret=SECRET)
+    token = mint_meeting_token(42, USER, "google_meet", "abc", secret=SECRET, session_uid="conn-1")
+    claims = verify_meeting_token(token, secret=SECRET)
     assert claims["meeting_id"] == 42
     assert claims["user_id"] == USER
     assert claims["scope"] == "transcribe:write"

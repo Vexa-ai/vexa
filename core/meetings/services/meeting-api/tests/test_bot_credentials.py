@@ -53,9 +53,9 @@ def test_the_invocation_carries_no_service_secret_and_a_session_bound_token():
     inv = _spawn(client, runtime)
     assert "internalSecret" not in inv
     assert INTERNAL not in json.dumps(runtime.specs[-1])
-    from meeting_api.recordings.service import _verify_meeting_token
+    from meeting_api.meeting_token import verify_meeting_token
 
-    claims = _verify_meeting_token(inv["token"], secret=SECRET)
+    claims = verify_meeting_token(inv["token"], secret=SECRET)
     assert claims["session_uid"] == inv["connectionId"]
     assert claims["meeting_id"] == inv["meeting_id"]
 
@@ -81,11 +81,7 @@ def test_a_bots_token_moves_no_other_session():
     r = client.post("/bots/internal/callback/lifecycle", json=_event(theirs["connectionId"]),
                     headers={"Authorization": f"Bearer {mine['token']}"})
     assert r.status_code == 401
-    # a token minted without a session binding names no session at all
-    unbound = mint_meeting_token(theirs["meeting_id"], USER, "google_meet", "cred-b", secret=SECRET)
-    r = client.post("/bots/internal/callback/lifecycle", json=_event(theirs["connectionId"]),
-                    headers={"Authorization": f"Bearer {unbound}"})
-    assert r.status_code == 401
+    # a token bound to no session admits none (test_meeting_token covers it on both doors)
 
 
 def test_the_internal_tier_is_still_admitted():

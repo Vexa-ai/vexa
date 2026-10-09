@@ -54,7 +54,7 @@ async def _spawn(repo, runtime, native_id="abc-defg-hij"):
 # ── unit: build_invocation carries the sealed auth block ─────────────────────────────────────────
 
 def test_build_invocation_carries_auth_block():
-    token = mint_meeting_token(1, USER, "google_meet", "abc-defg-hij", secret=SECRET)
+    token = mint_meeting_token(1, USER, "google_meet", "abc-defg-hij", secret=SECRET, session_uid="conn-1")
     base = dict(meeting_id=1, platform="google_meet",
                 meeting_url="https://meet.google.com/abc-defg-hij", bot_name="VexaBot",
                 token=token, native_meeting_id="abc-defg-hij", connection_id="conn-1",
