@@ -436,3 +436,156 @@ def test_the_operator_read_still_honours_the_stamped_identity(client, identity, 
 def test_the_queue_needs_a_credential(client, identity, queue_subject):
     assert client.get("/queue/waiting", params={"subject": "126"}).status_code == 401
     assert queue_subject == []
+
+
+# ── a worker acting for a person (a delegation token) ────────────────────────────────────────────
+#
+# Identity answers a worker's `vxd_` token with the person it acts for plus `delegation`, the
+# dispatch's ceiling — and only to a resolver that declares it reads one. Flows declares it, carries
+# the delegation on `Caller`, and refuses a worker with nobody in the loop every route
+# `DELEGATED_REACH` classifies PERSON_ONLY. The cases below are GENERATED from that one table.
+
+def _worker_answer(regime, *, uid=126, email="anna@vexa.test"):
+    """What `/internal/validate` answers a declared caller for a worker acting for Anna."""
+    body = {"user_id": uid, "email": email, "scopes": ["bot", "tx"], "is_admin": False,
+            "person_is_admin": False}
+    if regime is not ...:
+        body["delegation"] = {"workspaces": "*"} if regime is None else {"regime": regime,
+                                                                         "workspaces": "*"}
+    return 200, body
+
+
+#: Every regime that leaves nobody in the loop: the sealed unwatched one, an empty one, one identity
+#: does not seal, a missing `regime`, and an answer that lost `delegation` altogether (`...`).
+UNWATCHED = ["autonomous", "", "root", None, ...]
+
+
+@pytest.fixture
+def workers(identity):
+    """Anna's own key, plus one worker token acting for Anna per regime."""
+    table = {"anna-key": (200, {"user_id": 126, "email": "anna@vexa.test", "scopes": ["legacy"]}),
+             "vxd_human": _worker_answer("human"),
+             "vxd_human_upper": _worker_answer(" Human ")}
+    for i, regime in enumerate(UNWATCHED):
+        table[f"vxd_unwatched_{i}"] = _worker_answer(regime)
+    identity.set(table)
+    return identity
+
+
+UNWATCHED_TOKENS = [f"vxd_unwatched_{i}" for i in range(len(UNWATCHED))]
+PERSON_ONLY_ROUTES = sorted(k for k, v in fa.DELEGATED_REACH.items() if v == fa.PERSON_ONLY)
+OPEN_ROUTES = sorted(k for k, v in fa.DELEGATED_REACH.items() if v == fa.OPEN)
+#: A concrete URL for each templated path: Anna's own reaction, the verb that calls off her join.
+PATH_PARAMS = {"reaction_id": "r-anna-uid", "verb": "cancel"}
+
+
+def _url(path):
+    return path.format(**PATH_PARAMS)
+
+
+def _call(client, method, path, token):
+    return client.request(method, _url(path), headers=bearer(token),
+                          json={} if method == "POST" else None)
+
+
+def _subject_routes():
+    """(METHOD, path) of every route a person's credential reaches — the ones whose dependencies
+    include `subject_or_operator` or `timeline_reader`."""
+    from fastapi.routing import APIRoute
+
+    def deps(dependant):
+        for d in dependant.dependencies:
+            yield d.call
+            yield from deps(d)
+
+    doors = {fa.subject_or_operator, fa.timeline_reader}
+    return {(m, r.path) for r in fa.app.routes if isinstance(r, APIRoute)
+            for m in r.methods if doors & set(deps(r.dependant))}
+
+
+def test_every_route_a_person_reaches_is_classified_for_a_worker():
+    """ONE table says what a worker with nobody in the loop may do. A new subject-scoped route that
+    is not in it is refused to such a worker (fail closed) and fails here until it is classified."""
+    assert _subject_routes() == set(fa.DELEGATED_REACH)
+    assert set(fa.DELEGATED_REACH.values()) <= {fa.PERSON_ONLY, fa.OPEN}
+    assert PERSON_ONLY_ROUTES, "steering a reaction acts as the person"
+
+
+def test_flows_declares_to_identity_that_it_reads_a_delegation(monkeypatch):
+    """Identity answers a worker's token only to a resolver that declares it reads `delegation`
+    (identity.v1 AcceptsDelegationHeader). Flows sends it beside its internal secret."""
+    import flows_steps.common as common
+    seen = []
+    monkeypatch.setattr(common, "http", lambda method, url, headers, body=None, timeout=20:
+                        seen.append((method, url, headers, body)) or (200, {}))
+    subject_auth._validate("http://admin-api:8001", "vxd_tok", "the-secret")
+    (method, url, headers, body), = seen
+    assert (method, url, body) == ("POST", "http://admin-api:8001/internal/validate",
+                                   {"token": "vxd_tok"})
+    assert headers[subject_auth.ACCEPTS_DELEGATION_HEADER] == "1"
+    assert headers["X-Internal-Secret"] == "the-secret"
+
+
+def test_the_declaration_is_identitys_sealed_header():
+    root = next(p for p in Path(__file__).resolve().parents if (p / "core" / "identity").is_dir())
+    schema = json.loads(
+        (root / "core/identity/contracts/identity.v1/identity.schema.json").read_text())
+    assert (subject_auth.ACCEPTS_DELEGATION_HEADER
+            == schema["$defs"]["AcceptsDelegationHeader"]["const"])
+
+
+def test_a_workers_caller_carries_its_delegation(monkeypatch, workers):
+    monkeypatch.setenv("VEXA_FLOWS_ADMIN_API_URL", "http://admin-api:8001")
+    caller = subject_auth.resolve("vxd_human", secret="s")
+    assert (caller.kind, caller.uid, caller.email) == ("subject", "126", "anna@vexa.test")
+    assert caller.delegation == {"regime": "human", "workspaces": "*"}
+    assert caller.is_delegated and caller.regime == "human" and not caller.is_unwatched
+    person = subject_auth.resolve("anna-key", secret="s")
+    assert person.delegation is None and not person.is_delegated and not person.is_unwatched
+
+
+@pytest.mark.parametrize("token", UNWATCHED_TOKENS)
+def test_a_worker_with_nobody_in_the_loop_is_unwatched(monkeypatch, workers, token):
+    """`identity_token.is_unwatched`'s rule: delegated, and a regime other than `human` — an empty,
+    unknown or missing one included, and a `vxd_` answer that lost its delegation too."""
+    monkeypatch.setenv("VEXA_FLOWS_ADMIN_API_URL", "http://admin-api:8001")
+    caller = subject_auth.resolve(token, secret="s")
+    assert caller.is_delegated and caller.is_unwatched and caller.uid == "126"
+
+
+@pytest.mark.parametrize("token", UNWATCHED_TOKENS)
+@pytest.mark.parametrize("method,path", PERSON_ONLY_ROUTES)
+def test_a_worker_with_nobody_in_the_loop_is_refused_every_person_only_verb(
+        client, workers, method, path, token):
+    r = _call(client, method, path, token)
+    assert r.status_code == 403, f"{method} {path} as {token} -> {r.status_code}: {r.text[:200]}"
+    assert r.json()["detail"] == subject_auth.REFUSAL
+    assert fa.db.execute(
+        "SELECT status FROM reaction WHERE reaction_id='r-anna-uid'")[0][0] == "admitted"
+
+
+@pytest.mark.parametrize("token", ["vxd_human", "vxd_human_upper", "anna-key"])
+@pytest.mark.parametrize("method,path", PERSON_ONLY_ROUTES)
+def test_a_worker_in_the_loop_and_the_person_are_admitted_to_person_only_verbs(
+        client, workers, method, path, token):
+    r = _call(client, method, path, token)
+    assert r.status_code == 200, f"{method} {path} as {token} -> {r.status_code}: {r.text[:200]}"
+
+
+@pytest.mark.parametrize("token", UNWATCHED_TOKENS)
+@pytest.mark.parametrize("method,path", OPEN_ROUTES)
+def test_a_worker_with_nobody_in_the_loop_still_reads_and_reports(
+        client, workers, monkeypatch, method, path, token):
+    """The OPEN routes are not refused to it — whatever each answers past the door is its own."""
+    monkeypatch.setattr(fa, "fetch_meetings", lambda uid: [])
+    r = _call(client, method, path, token)
+    assert r.status_code not in (401, 503), f"{method} {path} -> {r.status_code}: {r.text[:200]}"
+    detail = r.json().get("detail") if r.headers.get("content-type", "").startswith(
+        "application/json") and isinstance(r.json(), dict) else None
+    assert detail != subject_auth.REFUSAL, f"{method} {path} refused an unwatched worker"
+
+
+def test_the_refusal_is_the_one_every_service_answers_with():
+    """gateway-identity.v1's `REFUSAL`, word for word (gate:fact-parity holds the copy)."""
+    assert subject_auth.REFUSAL["status"] == "refused"
+    assert subject_auth.REFUSAL["reason"] == "human_session_required"

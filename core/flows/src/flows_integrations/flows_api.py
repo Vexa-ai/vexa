@@ -98,8 +98,8 @@ import flows_pages  # noqa: E402 — the page renderer `GET /flows/pages` serves
 from flows_defs import production  # noqa: E402
 from flows_steps.common import (db_url, internal_secret,  # noqa: E402
                                 require_internal_secret, setting)
-from flows_integrations.subject_auth import (Caller, IdentityUnavailable,  # noqa: E402
-                                              SubjectUnknown, resolve)
+from flows_integrations.subject_auth import (REFUSAL, Caller,  # noqa: E402
+                                              IdentityUnavailable, SubjectUnknown, resolve)
 # ALIASED, and it is not style. The route below is also called `list_reactions`, and `def` rebinds
 # the module global — so the route was calling ITSELF, and every authenticated `GET /reactions`
 # answered 500 (`TypeError: list_reactions() got multiple values for argument 'status'`). The 401
@@ -378,14 +378,57 @@ def _bearer(authorization: str, x_api_key: str) -> str:
     return token.strip() if scheme.lower() == "bearer" else ""
 
 
+#: WHAT A WORKER WITH NOBODY IN THE LOOP MAY DO HERE — every route a person's own credential reaches,
+#: classified ONCE. `PERSON_ONLY` acts as the person beyond their own reading (steering a reaction
+#: retries, resumes, wakes or cancels what the person scheduled: a bot sent into a meeting, a mail
+#: sent, a join called off). `OPEN` reads the person's own rows, or files a friction report into
+#: Vexa's own sink — the record `REFUSAL` tells a refused worker to leave. A worker whose regime is
+#: not `human` is refused a `PERSON_ONLY` route with `REFUSAL`; a person, a worker in the `human`
+#: regime and the operator are not. A route that reaches `subject_or_operator` and is missing here
+#: is `PERSON_ONLY` — and `tests/test_subject_bearer.py` fails until it is classified. Operator-only
+#: routes (`auth`) take no person's credential and are not listed.
+PERSON_ONLY, OPEN = "person-only", "open"
+DELEGATED_REACH = {
+    ("GET", "/flows"): OPEN,
+    ("GET", "/flows/pages"): OPEN,
+    ("GET", "/reactions"): OPEN,
+    ("POST", "/reactions/{reaction_id}/{verb}"): PERSON_ONLY,
+    ("GET", "/timeline"): OPEN,
+    ("POST", "/friction"): OPEN,
+    ("GET", "/friction"): OPEN,
+    ("GET", "/queue/waiting"): OPEN,
+    ("GET", "/queue/notices"): OPEN,
+}
+
+
+def _reach(request: Optional[Request]) -> str:
+    """The class of the route this request matched; `PERSON_ONLY` when it cannot be told."""
+    route = request.scope.get("route") if request is not None else None
+    path = getattr(route, "path", None)
+    if not path:
+        return PERSON_ONLY
+    return DELEGATED_REACH.get((request.method.upper(), path), PERSON_ONLY)
+
+
+def _refuse_unwatched(request: Optional[Request], caller: Caller) -> Caller:
+    """403 `REFUSAL` for a worker with nobody in the loop on a `PERSON_ONLY` route; else the caller."""
+    if caller.is_unwatched and _reach(request) != OPEN:
+        raise HTTPException(status_code=403, detail=REFUSAL)
+    return caller
+
+
 def subject_or_operator(x_flows_operator_key: str = Header(default=""),
                         x_flows_admin_key: str = Header(default=""),
                         authorization: str = Header(default=""),
-                        x_api_key: str = Header(default="")) -> Caller:
+                        x_api_key: str = Header(default=""),
+                        request: Request = None) -> Caller:  # noqa: RUF013 — FastAPI injects it
     """WHO IS CALLING — the operator, or one person. The dependency of every subject-scoped route.
 
     The operator key is checked first and short-circuits: it is a local constant-time comparison,
     it is what every existing caller sends, and it must keep working while identity is down.
+
+    A worker acting for a person resolves to that person, carrying its delegation; on a route
+    `DELEGATED_REACH` does not open to it, one with nobody in the loop is refused here.
     """
     presented = _operator_key(x_flows_operator_key, x_flows_admin_key)
     if _same_key(presented, API_KEY):
@@ -405,7 +448,7 @@ def subject_or_operator(x_flows_operator_key: str = Header(default=""),
             "this route needs your Vexa credential (Authorization: Bearer …, or X-API-Key), "
             f"or the operator key in {OPERATOR_HEADER}"))
     try:
-        return resolve(token, secret=INTERNAL_SECRET)
+        caller = resolve(token, secret=INTERNAL_SECRET)
     except SubjectUnknown:
         raise HTTPException(status_code=401, detail="that credential does not identify anyone")
     except IdentityUnavailable as e:
@@ -419,12 +462,14 @@ def subject_or_operator(x_flows_operator_key: str = Header(default=""),
         logger.warning("identity could not answer who a caller is: %s", e)
         raise HTTPException(status_code=503, detail=(
             "identity could not answer who you are — this is our side, not your key"))
+    return _refuse_unwatched(request, caller)
 
 
 def timeline_reader(x_flows_operator_key: str = Header(default=""),
                     x_flows_admin_key: str = Header(default=""),
                     authorization: str = Header(default=""),
-                    x_api_key: str = Header(default="")) -> Caller:
+                    x_api_key: str = Header(default=""),
+                    request: Request = None) -> Caller:  # noqa: RUF013 — FastAPI injects it
     """`GET /timeline` alone: the narrow read-only key opens it, as well as the two tiers above.
 
     THE NARROW KEY IS ITS OWN KIND, not an operator (P20/E1). It used to return
@@ -437,7 +482,8 @@ def timeline_reader(x_flows_operator_key: str = Header(default=""),
     if TIMELINE_KEY and _same_key(_operator_key(x_flows_operator_key, x_flows_admin_key),
                                   TIMELINE_KEY):
         return Caller(kind="timeline")
-    return subject_or_operator(x_flows_operator_key, x_flows_admin_key, authorization, x_api_key)
+    return subject_or_operator(x_flows_operator_key, x_flows_admin_key, authorization, x_api_key,
+                               request)
 
 
 def scoped_subject(caller: Caller, requested: str, *, stamped: str = "") -> str:

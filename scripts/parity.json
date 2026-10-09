@@ -246,7 +246,7 @@
       "enforced": true,
       "canonical": "core/identity/contracts/delegation.v1/delegation.py — PREFIX",
       "how_to_agree": "change the contract's PREFIX and every site in one change",
-      "why": "The gateway decides from the prefix alone that a bearer is a worker's, before identity answers, and refuses it on every route but /mcp. A gateway that spells the prefix differently from the minter admits a worker's token on a person's routes. The two vendored delegation.py copies are held by delegation-token; these are the other places the prefix is written.",
+      "why": "The gateway decides from the prefix alone that a bearer is a worker's, before identity answers, and refuses it on every route but /mcp. A gateway that spells the prefix differently from the minter admits a worker's token on a person's routes. The two vendored delegation.py copies are held by delegation-token; these are the other places the prefix is written. flows-api reads it too: a vxd_ bearer whose identity answer lost its delegation is still a worker's there.",
       "sites": [
         {
           "path": "core/identity/contracts/delegation.v1/delegation.py",
@@ -263,6 +263,10 @@
         {
           "path": "deploy/dogfood/rig/vexa_control_mcp.py",
           "pattern": "^DELEGATION_PREFIX = \"([^\"]+)\""
+        },
+        {
+          "path": "core/flows/src/flows_integrations/subject_auth.py",
+          "pattern": "^DELEGATION_TOKEN_PREFIX = \"([^\"]+)\""
         }
       ]
     },
@@ -286,6 +290,29 @@
         {
           "path": "core/gateway/services/gateway/src/gateway/adapters.py",
           "pattern": "^ACCEPTS_DELEGATION_HEADER = \"([^\"]+)\""
+        },
+        {
+          "path": "core/flows/src/flows_integrations/subject_auth.py",
+          "pattern": "^ACCEPTS_DELEGATION_HEADER = \"([^\"]+)\""
+        }
+      ]
+    },
+    {
+      "id": "flows-person-refusal",
+      "fact": "the refusal a worker with nobody in the loop reads from flows-api (gateway-identity.v1 REFUSAL, human_session_required)",
+      "kind": "prose",
+      "enforced": true,
+      "canonical": "core/gateway/contracts/gateway-identity.v1/identity_token.py — REFUSAL",
+      "how_to_agree": "change the contract's REFUSAL (and its vendored copies, fact identity-token) and flows-api's copy in one change",
+      "why": "agent-api and meeting-api answer an unwatched worker with the vendored identity_token.REFUSAL; flows-api resolves its caller through identity itself, not through the gateway's signed identity, so it does not vendor that file and holds a copy. A reworded copy would teach a worker two instructions for one rule.",
+      "sites": [
+        {
+          "path": "core/gateway/contracts/gateway-identity.v1/identity_token.py",
+          "pattern": "(\"status\": \"refused\",\\s*\"reason\": \"human_session_required\",[\\s\\S]*?another way\\.\")"
+        },
+        {
+          "path": "core/flows/src/flows_integrations/subject_auth.py",
+          "pattern": "(\"status\": \"refused\",\\s*\"reason\": \"human_session_required\",[\\s\\S]*?another way\\.\")"
         }
       ]
     },

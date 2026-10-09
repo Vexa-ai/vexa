@@ -24,10 +24,20 @@ turned a gateway hiccup into "your API key is invalid" for every user at once. `
 records that lesson at the gateway; this is the same rule at flows' door, including the case the
 gateway does not have: identity answering 403 because OUR internal secret is wrong is a deployment
 fault, and telling the person their key is invalid sends them to rotate a key that works.
+
+A WORKER ACTING FOR A PERSON is a fourth answer folded into the first. Identity answers a worker's
+delegation token (`vxd_`) only to a resolver that declares it reads the delegation
+(`ACCEPTS_DELEGATION_HEADER`), and flows does: the person comes back with `delegation` — the
+dispatch's `regime`, `workspaces` and `target` — and `Caller` carries it. A worker whose regime is
+not `human` runs with nobody in the loop (`Caller.is_unwatched`, the rule gateway-identity.v1's
+`identity_token.is_unwatched` states for the services behind the gateway), and flows-api refuses it
+the verbs that act as the person with `REFUSAL`, the body every other service answers it with.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from typing import Optional
 
 import flows_config
 
@@ -36,6 +46,26 @@ VALIDATE_PATH = "/internal/validate"
 #: how long we wait for it. The gateway waits 5s for the same hop; a door check that takes longer
 #: than the call it guards is its own outage.
 TIMEOUT_S = 5.0
+
+#: The header flows sets, to `ACCEPTS_DELEGATION_VALUE`, on that hop to declare that it reads a
+#: delegation answer (identity.v1 `AcceptsDelegationHeader`). Without it identity refuses a worker's
+#: token like one nobody holds.
+ACCEPTS_DELEGATION_HEADER = "x-vexa-internal-accepts-delegation"
+ACCEPTS_DELEGATION_VALUE = "1"
+#: The prefix every delegation token carries (delegation.v1 `PREFIX`). A `vxd_` bearer is a worker's
+#: even if identity's answer lost its `delegation`: that answer cannot turn it into the person's key.
+DELEGATION_TOKEN_PREFIX = "vxd_"
+
+#: What a verb that needs a person in the loop answers a worker running without one — the body
+#: gateway-identity.v1's `identity_token.REFUSAL` is, so a worker reads one refusal whichever service
+#: it hit. flows-api is not behind the gateway's signed identity, so it holds a copy, and
+#: gate:fact-parity holds the copy to the contract's.
+REFUSAL = {
+    "status": "refused",
+    "reason": "human_session_required",
+    "instruction": "This session runs without a person in the loop. Record what you wanted to do "
+                   "and stop; do not retry it another way.",
+}
 
 
 class IdentityUnavailable(Exception):
@@ -69,6 +99,26 @@ class Caller:
     kind: str
     uid: str = ""
     email: str = ""
+    #: A worker's ceiling, as identity answered it (`regime`, `workspaces`, `target`) — present only
+    #: when the credential is a worker's delegation token, `{}` when that answer lost it. `None` is a
+    #: person's own key, the operator key and the timeline key.
+    delegation: Optional[Mapping] = field(default=None, hash=False)
+
+    @property
+    def is_delegated(self) -> bool:
+        """A worker acting for the person `uid` names, not the person."""
+        return self.delegation is not None
+
+    @property
+    def regime(self) -> str:
+        """The dispatch's regime, `""` when it has none. `human` means the person is in the loop."""
+        return str((self.delegation or {}).get("regime") or "").strip().lower()
+
+    @property
+    def is_unwatched(self) -> bool:
+        """A worker whose regime is not `human` — empty, unknown and `autonomous` alike: nobody is in
+        the loop this turn. `identity_token.is_unwatched`'s rule, read from identity's answer."""
+        return self.is_delegated and self.regime != "human"
 
     @property
     def is_admin(self) -> bool:
@@ -103,8 +153,16 @@ def _validate(base: str, token: str, secret: str):
     image grows.
     """
     from flows_steps.common import http
-    return http("POST", f"{base}{VALIDATE_PATH}", {"X-Internal-Secret": secret}, {"token": token},
-                timeout=TIMEOUT_S)
+    headers = {"X-Internal-Secret": secret, ACCEPTS_DELEGATION_HEADER: ACCEPTS_DELEGATION_VALUE}
+    return http("POST", f"{base}{VALIDATE_PATH}", headers, {"token": token}, timeout=TIMEOUT_S)
+
+
+def _delegation_of(token: str, body: Mapping) -> Optional[dict]:
+    """The worker's ceiling, `{}` for a worker's token whose answer lost it, `None` for a person."""
+    dlg = body.get("delegation")
+    if isinstance(dlg, Mapping):
+        return dict(dlg)
+    return {} if token.startswith(DELEGATION_TOKEN_PREFIX) else None
 
 
 def resolve(token: str, *, secret: str = "") -> Caller:
@@ -137,4 +195,5 @@ def resolve(token: str, *, secret: str = "") -> Caller:
     uid = body.get("user_id")
     if uid in (None, ""):
         raise IdentityUnavailable("identity answered 200 with no user_id")
-    return Caller(kind="subject", uid=str(uid), email=str(body.get("email") or ""))
+    return Caller(kind="subject", uid=str(uid), email=str(body.get("email") or ""),
+                  delegation=_delegation_of(token, body))
