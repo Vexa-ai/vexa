@@ -3,4 +3,6 @@
   meeting-api's collector drops any entry that is unsigned, tampered, signed with an expired or
   foreign token, or names a meeting other than the token's. A bot from an earlier release still
   running across the upgrade writes unsigned entries, so its meeting's live transcript stops until
-  the bot is sent again. Tools that write to the stream directly must sign the same way.
+  the bot is sent again: **upgrade between meetings**. Tools that write to the stream directly must
+  sign the same way. agent-api's live-meeting list now follows only what the collector admitted. See
+  [One-time steps after upgrading](/deployment#one-time-steps-after-upgrading).

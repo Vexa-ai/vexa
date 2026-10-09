@@ -232,6 +232,19 @@ procurement review can hold us to is self-hosted with no egress, not a certified
 
 Run these once on an existing install when you move to this release. They are safe to repeat.
 
+**Upgrade between meetings.** A bot now signs every transcript entry it writes, and meeting-api drops
+entries that are not signed. A bot from the previous release still in a call when you upgrade writes
+unsigned entries, so its meeting's live transcript stops (and the meeting leaves the terminal's live
+list) until you send the bot again. Upgrade when no bot is in a meeting, or send those bots again
+afterwards.
+
+**Docker Compose: the dispatch signing key needs a value of its own.** agent-api refuses to boot on an
+unset `VEXA_DISPATCH_SIGNING_KEY` or on its old default, `dev-dispatch-signing-key`. `make up` /
+`make all` mint one into `.env` and replace the old default there. If you start the stack with
+`docker compose` directly, set one first (`openssl rand -hex 32`). Nothing verifies these tokens yet,
+so a new key changes nothing a running stack depends on. Helm and Lite generate and keep one
+themselves.
+
 **Rotate `NEXTAUTH_SECRET` if it was ever a default.** The terminal now requires a secret of at least
 32 bytes that is not published in this repository, and refuses to start otherwise. If your install
 ever ran with the old example value (`dev-nextauth-secret`, or Lite's built-in one), treat it as known:
@@ -284,3 +297,19 @@ docker exec -e REDIS_URL=redis://localhost:6379/0 vexa-lite \
 ```
 
 It prints one JSON line with the number of deleted meetings found and the keys removed.
+
+**Kubernetes rendered with `helm template` (GitOps): supply the generated secrets.** Values the chart
+generates (the runtime caller token, the dispatch signing key, the Redis and database passwords, the
+sign-in secret, the delegation secret, the gateway's signing key and the credential broker's keys) are
+kept across `helm upgrade` by reading the release's own Secrets. A tool that renders with
+`helm template` cannot read them and generates new ones on every render. Supply each from a Secret you
+manage:
+
+- `secrets.existingSecretName`, carrying `RUNTIME_API_TOKEN`, `REDIS_PASSWORD`, `NEXTAUTH_SECRET`,
+  `VEXA_MCP_DELEGATION_SECRET` and `VEXA_DISPATCH_SIGNING_KEY` beside the keys it already carried;
+- `credentialBroker.existingSecret` (losing `store.key` makes every stored credential unreadable);
+- `identity.existingSecret` with `identity.publicKey` (or `identity.signingKey`);
+- `database.existingSecret` (keys `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`; the chart
+  renders no credentials Secret and never rotates this one), or `database.password`.
+
+See [Kubernetes](/deployment-kubernetes) and `deploy/helm/README.md`.

@@ -70,6 +70,21 @@ Docker to build the images. It proves the control plane stands up and `/health` 
 | `networkPolicy.workloads.privateCidrs.ipv4` / `.ipv6`, `networkPolicy.workloads.ipv6` | RFC 1918, CGNAT, link-local, loopback; ULA, link-local, loopback | The ranges a workload may not reach except through the rules above: Pod and Service networks, nodes and the cloud metadata endpoint sit in them. Add your cluster's ranges if they fall outside these. `ipv6: false` leaves out the IPv6 internet rule on a single-stack cluster. |
 | `global.securityContext.deliver` | `true` | Whether the chart delivers a `securityContext` at all — pod-level and container-level, on all 8 workloads. Keep `true` on plain Kubernetes: PSA-restricted namespaces *validate* these fields and refuse a spec without them. Set **`false` on OpenShift**: `restricted-v2` *injects* them (random UID, `runAsNonRoot`, drop ALL, `RuntimeDefault`, `fsGroup`) and is more likely to reject a spec that supplies its own. The vexa-delivery OpenShift provider profile sets it false. |
 
+## Rendering with `helm template` (GitOps)
+
+Values the chart generates (the runtime caller token, the dispatch signing key, the Redis and database
+passwords, the sign-in secret, the delegation secret, the gateway's signing key and the credential
+broker's keys) are kept across `helm upgrade` by reading the release's own Secrets. A tool that renders
+with `helm template` cannot read them and generates new ones on every render, so each sync would change
+them under running services. Supply each from a Secret you manage:
+
+| Value | Secret it comes from |
+|---|---|
+| `secrets.existingSecretName` | the chart's shared Secret: besides `ADMIN_API_TOKEN`, `INTERNAL_API_SECRET` and `TRANSCRIPTION_SERVICE_TOKEN`, it carries `RUNTIME_API_TOKEN`, `REDIS_PASSWORD`, `NEXTAUTH_SECRET`, `VEXA_MCP_DELEGATION_SECRET` and `VEXA_DISPATCH_SIGNING_KEY` |
+| `credentialBroker.existingSecret` | the broker's `agent.key`, `human.key`, `git.key` and `store.key`. Losing `store.key` makes every stored credential unreadable |
+| `identity.existingSecret` + `identity.publicKey` | the gateway's signing key as `signing-key.pem`, and its PEM public key in values (a render cannot derive it from a Secret it cannot read). Or `identity.signingKey` |
+| `database.existingSecret` | keys `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`; the chart renders no credentials Secret and never rotates this one. Or `database.password` |
+
 ## Known boundaries (v0.12)
 
 - **Bot spawn** works on k8s (the bot's config arrives as one env var). **Agent-worker** Pods mount
