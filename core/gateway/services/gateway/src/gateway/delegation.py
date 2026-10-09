@@ -26,11 +26,18 @@ from fastapi import Request, Response
 from . import identity_token
 
 MCP_REENTRY_HEADER = "x-vexa-internal-mcp-identity"
+#: The prefix every delegation token carries — `PREFIX` in the identity domain's `delegation.py`
+#: (admin-api and its agent-api twin), which mint and verify the token. Spelled here once, by name,
+#: so the three sites can be held equal.
+DELEGATION_TOKEN_PREFIX = "vxd_"
 
 
 def is_delegated(client_key: str, user_data: Mapping) -> bool:
-    """Is this caller a worker acting under a delegation, by identity's answer for its bearer?"""
-    return isinstance(user_data.get("delegation"), Mapping) or str(client_key).startswith("vxd_")
+    """Is this caller a worker acting under a delegation? Identity's answer says so (`delegation`),
+    and so does the token's own prefix: an identity answer that lost the ceiling cannot turn a
+    worker's token into a person's key."""
+    return (isinstance(user_data.get("delegation"), Mapping)
+            or str(client_key).startswith(DELEGATION_TOKEN_PREFIX))
 
 
 def delegated_route_response() -> Response:

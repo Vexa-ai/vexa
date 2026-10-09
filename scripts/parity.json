@@ -173,7 +173,7 @@
         },
         {
           "path": "core/gateway/services/gateway/src/gateway/delegation.py",
-          "pattern": "str\\(client_key\\)\\.startswith\\(\"([^\"]+)\"\\)"
+          "pattern": "^DELEGATION_TOKEN_PREFIX = \"([^\"]+)\""
         },
         {
           "path": "deploy/dogfood/rig/vexa_control_mcp.py",
