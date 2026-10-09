@@ -7,7 +7,7 @@
   "deployment": "compose + lite on bbb from v0.12.28-rc.3 (agent station); the bot additionally live on the bbb station Zoom/Meet runs and in vexa.ai production, image vexaai/vexa-bot@sha256:e2398bfac7fa8671c209e996bc6451598b58438c851956ec050a0300f5a5354b (linux/amd64 config sha256:995b4aed3254eb8ac05fd4d3837086c1371cfd9a39d4d34f64afead87c5ce37d)",
   "witness_deployment": {
     "url": "none kept — the station stacks were torn down after the rows passed; the founder walked the bot live on the bbb Zoom/Meet station and it runs in vexa.ai production",
-    "provisioned_by": "agent on bbb, 2026-10-08 21:3x–22:0xZ, from the v0.12.28-rc.3 images (rc.5 differs only in Lite; Lite rows re-run on rc.5: RC5LITE) (work unit DmitriyG228/biz#512)",
+    "provisioned_by": "agent on bbb, 2026-10-08 21:3x–22:0xZ, from the v0.12.28-rc.3 images (rc.5 differs only in Lite; Lite rows re-run on rc.5: L-FRESH PASS and L-UPGRADE PASS (VERIFIED, same sha256) on Lite 9eebb534, 2026-10-09, fills.log section "rc.5 Lite re-run") (work unit DmitriyG228/biz#512)",
     "prevalidated": [
       "L-FRESH PASS: fresh Lite from rc.3 — versitygw storage, 3 front doors, concurrent-bots.sh N=2 (both bots joining, separate profiles, 45 s), recording round trip byte-identical",
       "C-FRESH PASS: fresh Compose from rc.3 on an unedited .env.example — make up minted the three secrets; digest-audit clean; stack-test-bot 25 passed / 18 skipped (opt-in); spawned bot image ID 995b4aed",
@@ -65,7 +65,7 @@
       "pr": "1760",
       "title": "storage: MinIO removed — versitygw for Lite and Compose, your own S3 for Helm (#1759)",
       "visibility": "user-visible",
-      "pass": "a fresh Lite and a fresh Compose come up from the v0.12.28-rc.3 images (rc.5 differs only in Lite; Lite rows re-run on rc.5: RC5LITE) with versitygw storage; a v0.12.27 Lite and Compose holding a recording upgrade, `make migrate-storage` ends VERIFIED, and the recording is served with the same sha256",
+      "pass": "a fresh Lite and a fresh Compose come up from the v0.12.28-rc.3 images (rc.5 differs only in Lite; Lite rows re-run on rc.5: L-FRESH PASS and L-UPGRADE PASS (VERIFIED, same sha256) on Lite 9eebb534, 2026-10-09, fills.log section "rc.5 Lite re-run") with versitygw storage; a v0.12.27 Lite and Compose holding a recording upgrade, `make migrate-storage` ends VERIFIED, and the recording is served with the same sha256",
       "witnessed": "by-proxy",
       "evidence": "bbb station on the exact rc.3 digests, rows L-FRESH, C-FRESH, L-UPGRADE, C-UPGRADE all PASS: ~/dev/biz/drafts/2026-10-08-v0.12.28-station/fills.log (DmitriyG228/biz private); validate-lite + validate-compose green in release-validate run 37851440059 on rc.3",
       "note": "converted from user-visible to by-proxy: the self-host install and upgrade were run by an agent on bbb, not walked by a human. If you would rather walk it, set witnessed:true and write what you saw."
