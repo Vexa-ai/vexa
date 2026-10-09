@@ -8,24 +8,33 @@ single identifier changed.
 """
 from __future__ import annotations
 
+from control_plane import meeting_highlight as meeting_highlight_mod
 from control_plane import meeting_mint as meeting_mint_mod
 from control_plane import meeting_note as meeting_note_mod
 from control_plane import meeting_terms as meeting_terms_mod
+from control_plane import system_mounts
 from control_plane.api_shared import (
-    _decode_sse_cursor, _encode_sse_cursor, _sse, meeting_access_check, transcript_erased)
+    TranscriptTermsBody, _decode_sse_cursor, _encode_sse_cursor, _sse, meeting_access_check,
+    meeting_transcript_reader, transcript_erased)
 from fastapi import APIRouter, Body, HTTPException, Request
 from fastapi.responses import StreamingResponse
+from pathlib import Path
 import json
 
 
 def build(**d) -> APIRouter:
     """The meetings routes, bound to one app's dependencies."""
     router = APIRouter()
+    _entity_mounts = d['_entity_mounts']
     _meeting_note_recorder = d['_meeting_note_recorder']
     _meeting_owner_lookup = d['_meeting_owner_lookup']
+    _meeting_transcript_lookup = d['_meeting_transcript_lookup']
+    _ws_sync = d['_ws_sync']
     live = d['live']
     redis_url = d['redis_url']
+    settings = d['settings']
     subject_of = d['subject_of']
+    workspace_registry = d['workspace_registry']
     wsr = d['wsr']
 
     # THE ONE ACCESS DECISION every route in this file makes: the meeting record this caller may
@@ -33,6 +42,24 @@ def build(**d) -> APIRouter:
     # bound to — meeting-api evaluates all three. Shared with the chat's meeting grounding, which
     # reads the same transcript (see `api_shared.meeting_access_check`).
     _meeting_access = meeting_access_check(_meeting_owner_lookup, wsr.root)
+    # …and the WORDS, read under the same identity and the same access union.
+    _meeting_words = meeting_transcript_reader(_meeting_transcript_lookup, wsr.root)
+
+    def _readable_mounts(subject: str) -> list:
+        """``(workspace_id, slug, path)`` for every workspace this reader can read, DESK FIRST,
+        then the company layer, then the groups they belong to — the precedence a chip resolves in."""
+        def wsid(slug: str) -> str:
+            rec = workspace_registry.by_slug(slug) or _ws_sync(slug) or {}
+            return str(rec.get("id") or slug)
+
+        out = [(wsid(str(subject)), "", wsr.workspace_dir(subject))]
+        if settings is not None:
+            g = system_mounts.global_root(settings, wsr.root)
+            if Path(g).is_dir():
+                out.append((wsid(system_mounts.GLOBAL_SLUG), system_mounts.GLOBAL_SLUG, Path(g)))
+        for m in _entity_mounts(subject):
+            out.append((wsid(m["slug"]), m["slug"], Path(m["path"])))
+        return out
 
     @router.get("/api/meeting/relay-health")
     def meeting_relay_health(request: Request):
@@ -129,9 +156,10 @@ def build(**d) -> APIRouter:
     def publish_meeting_terms(request: Request, body: dict = Body(default={})):
         """One Highlight's publish, ADDED to this meeting's map. Returns the whole map.
 
-        The writer is the ACT — `transcript_terms(..., keep=…)` in the control MCP, the same call
-        whose result the harness turns into the chat's `terms` event. One loop, one write surface:
-        nothing else composes this file, and the canvas only ever reads it.
+        The writer is the ACT — `transcript_terms(..., keep=…)`, the same call whose result the
+        harness turns into the chat's `terms` event; the scan route below publishes through this
+        same `meeting_terms.extend`. One loop, one write surface: nothing else composes this file,
+        and the canvas only ever reads it.
 
         APPEND-ONLY AND IDEMPOTENT (`meeting_terms.merge`): re-running Highlight extends the map,
         the same publish twice changes nothing, and an empty publish is a non-event rather than an
@@ -150,6 +178,37 @@ def build(**d) -> APIRouter:
             raise HTTPException(status_code=422, detail="terms must be a list")
         return meeting_terms_mod.extend(wsr.root, subject, meeting_id, terms,
                                         str((body or {}).get("cursor") or ""))
+    @router.post("/api/meeting/terms/scan")
+    def scan_meeting_terms(request: Request, body: TranscriptTermsBody = Body(...)):
+        """The things a meeting has NAMED so far — people, companies, projects, products — each with
+        where it was said and whether a page for it already exists where you can read it. The verb
+        behind `transcript_terms` and the Highlight button (PRD decision 35).
+
+        TWO CALLS, AND THE SECOND ONE IS THE PUBLISH. First with `meeting_id` (and `since`, the
+        cursor from your last call on this meeting): it lists every candidate and shows nothing to
+        anyone. Pick the ones that matter here, then call again with `keep="Acme, Ana Lima"` — those
+        become chips over the transcript, and stay there on reload. `keep="*"` publishes all of them,
+        which is right only when all of them genuinely matter.
+
+        A term whose `known` is null has no page anywhere you can read. A `502` is a failed READ of
+        the transcript — say that, never that nothing was said.
+
+        Owner-scoped like every route in this file: the caller's own meeting, one shared with them,
+        or one bound to a workspace they belong to; anything else is a 403 before a word is read."""
+        subject = subject_of(request)   # 401 if no (gateway-injected) identity — fail closed
+        meeting_id = body.meeting_id.strip()
+        if _meeting_access(subject, meeting_id) is None:
+            raise HTTPException(status_code=403, detail="not authorized for this meeting")
+        segments = _meeting_words(subject, meeting_id)
+        if segments is None:
+            raise HTTPException(status_code=502, detail={
+                "read_ok": False, "meeting": meeting_id,
+                "error": "the transcript could not be read",
+                "tell_your_person": "Say the READ failed — never that nothing was said."})
+        return meeting_highlight_mod.highlight(
+            root=wsr.root, subject=subject, meeting_id=meeting_id, segments=segments,
+            index=meeting_highlight_mod.entity_index(_readable_mounts(subject)),
+            since=body.since.strip(), keep=body.keep)
     @router.get("/api/meeting/stream")
     def meeting_stream(meeting_id: str, session_uid: str, request: Request):
         """SSE feed for a LIVE meeting: the transcript Stream (`tc:meeting:{id}`), and only that.

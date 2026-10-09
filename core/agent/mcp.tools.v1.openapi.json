@@ -670,6 +670,34 @@
         "title": "TimezoneBody",
         "type": "object"
       },
+      "TranscriptTermsBody": {
+        "additionalProperties": false,
+        "description": "LOOK at what a meeting has named, or PUBLISH the ones that matter \u2014 the body behind\n`transcript_terms`.",
+        "properties": {
+          "keep": {
+            "default": "",
+            "description": "the terms to PUBLISH as chips, comma separated, exactly as the look returned them; `*` for all of them. Omitted, nothing is published \u2014 the first call only looks.",
+            "title": "Keep",
+            "type": "string"
+          },
+          "meeting_id": {
+            "description": "the meeting's row id",
+            "title": "Meeting Id",
+            "type": "string"
+          },
+          "since": {
+            "default": "",
+            "description": "the `cursor` your last call on this meeting returned; only what was said after it is read. Omit it the first time.",
+            "title": "Since",
+            "type": "string"
+          }
+        },
+        "required": [
+          "meeting_id"
+        ],
+        "title": "TranscriptTermsBody",
+        "type": "object"
+      },
       "WorkspaceImportBody": {
         "additionalProperties": false,
         "description": "Import a repository as a new independent workspace using configured credentials.",
@@ -1093,6 +1121,22 @@
           }
         },
         "summary": "Global Ready"
+      }
+    },
+    "/api/meeting/terms/scan": {
+      "post": {
+        "description": "The things a meeting has NAMED so far \u2014 people, companies, projects, products \u2014 each with\nwhere it was said and whether a page for it already exists where you can read it. The verb\nbehind `transcript_terms` and the Highlight button (PRD decision 35).\n\nTWO CALLS, AND THE SECOND ONE IS THE PUBLISH. First with `meeting_id` (and `since`, the\ncursor from your last call on this meeting): it lists every candidate and shows nothing to\nanyone. Pick the ones that matter here, then call again with `keep=\"Acme, Ana Lima\"` \u2014 those\nbecome chips over the transcript, and stay there on reload. `keep=\"*\"` publishes all of them,\nwhich is right only when all of them genuinely matter.\n\nA term whose `known` is null has no page anywhere you can read. A `502` is a failed READ of\nthe transcript \u2014 say that, never that nothing was said.\n\nOwner-scoped like every route in this file: the caller's own meeting, one shared with them,\nor one bound to a workspace they belong to; anything else is a 403 before a word is read.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TranscriptTermsBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "summary": "Scan Meeting Terms"
       }
     },
     "/api/onboarding/research": {

@@ -184,6 +184,25 @@
       "note": "The person's word on proposed claims; the first one they stand behind makes the desk ready (`.scaffolded`)."
     },
     {
+      "name": "transcript_terms",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/meeting/terms/scan"
+      },
+      "arguments": [
+        "meeting_id",
+        "since",
+        "keep"
+      ],
+      "note": "The Highlight layer (PRD decision 35): a first call LOOKS at what the meeting named and whether each has a page this reader can open; a call with `keep` PUBLISHES those as chips, durably. The answer's `emit` is what the harness turns into the chat's `terms` event."
+    },
+    {
       "name": "workspaces",
       "identity": "user",
       "auth": "subject",

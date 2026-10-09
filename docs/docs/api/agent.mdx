@@ -142,6 +142,12 @@ curl -X POST "$AGENT_API/events" -H "Content-Type: application/json" -d '{
   to resume gaplessly. Event types: `transcript`, `retract`, `ping`, `meeting-end`.
 - `GET /api/meeting/relay-health` → typed transcript-relay health (a stale bot key surfaces as
   `native_resolve:{ok:false,kind:"unauthorized"}` rather than silent dead air).
+- `POST /api/meeting/terms/scan` `{ meeting_id, since?, keep? }` → the terms the meeting has named
+  since `since`, each with `known` (the page this reader can open, desk first) or `null`, plus
+  `cursor` and `emit`. Without `keep` it publishes nothing; `keep` (comma separated, `*` for all) adds
+  those terms to the meeting's highlight map, which `GET /api/meeting/terms?meeting_id=` returns.
+  The transcript is read from meeting-api as the caller: `403` for a meeting they cannot read,
+  `502` when the read fails.
 
 **Removed in 0.12** — `POST /api/meeting/start` and `POST /api/meeting/process` return `404`. They
 launched and switched on an in-product "copilot" that turned the live transcript into cleaned notes

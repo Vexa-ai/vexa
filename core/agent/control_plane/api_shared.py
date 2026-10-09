@@ -1089,6 +1089,18 @@ class AssetFetchBody(BaseModel):
                                                   "of the page that shows it.")
 
 
+class TranscriptTermsBody(BaseModel):
+    """LOOK at what a meeting has named, or PUBLISH the ones that matter — the body behind
+    `transcript_terms`."""
+    model_config = {"extra": "forbid"}
+    meeting_id: str = Field(description="the meeting's row id")
+    since: str = Field("", description="the `cursor` your last call on this meeting returned; only "
+                                       "what was said after it is read. Omit it the first time.")
+    keep: str = Field("", description=(
+        "the terms to PUBLISH as chips, comma separated, exactly as the look returned them; `*` for "
+        "all of them. Omitted, nothing is published — the first call only looks."))
+
+
 class GlobalReadyBody(BaseModel):
     """ACCEPT the company layer — the body behind `mark_global_ready`. Both fields are optional: the
     commit is authored by the person whose identity made the call unless these name someone else."""
@@ -1858,6 +1870,67 @@ def _http_meeting_owner_lookup(meeting_api_url: str, internal_secret: str = ""):
     return _lookup
 
 
+def _http_meeting_transcript_lookup(meeting_api_url: str, internal_secret: str = ""):
+    """Build the default TRANSCRIPT read: GET {meeting_api_url}/transcripts/by-id/{id} as the caller.
+    Returns a callable ``(user_id, meeting_id, workspaces=None) -> list | None`` — the meeting's
+    segments, or None when the read did not succeed (absent, not theirs, meeting-api unreachable).
+
+    The same door, identity and access union as `_http_meeting_owner_lookup`: meeting-api decides
+    whether this caller may read the words, and a None here is never mistaken for a quiet room."""
+    import urllib.error
+    import urllib.request
+
+    base = (meeting_api_url or "").rstrip("/")
+
+    def _read(user_id: str, meeting_id: str, workspaces=None) -> "list | None":
+        if not base or not user_id or not str(meeting_id).isdigit():
+            return None
+        headers = {"X-User-Id": str(user_id)}
+        if internal_secret:
+            headers["X-Internal-Secret"] = internal_secret
+        ws = ",".join(str(w).strip() for w in (workspaces or []) if str(w).strip())
+        if ws:
+            headers["X-User-Workspaces"] = ws
+        try:
+            req = urllib.request.Request(f"{base}/transcripts/by-id/{int(meeting_id)}",
+                                         headers=headers)
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                if resp.status != 200:
+                    return None
+                body = json.loads(resp.read().decode() or "null")
+        except urllib.error.HTTPError:
+            return None
+        except Exception:  # noqa: BLE001 — unreachable is a failed read, never an empty one
+            return None
+        segments = body.get("segments") if isinstance(body, dict) else None
+        return list(segments) if isinstance(segments, list) else None
+
+    return _read
+
+
+def caller_workspaces(roster_root, subject: str) -> list[str]:
+    """The workspaces ``subject`` is a member of, READ FROM `policy/members.json` under
+    ``roster_root`` — never from a request header (see `meeting_access_check`). Never raises: a scan
+    that fails narrows meeting access to owner-only, never opens it."""
+    if roster_root is None:
+        return []
+    try:
+        from control_plane.workspace_membership import list_memberships
+        return [str(m["workspace_id"]) for m in list_memberships(roster_root, str(subject))
+                if m.get("workspace_id")]
+    except Exception:  # noqa: BLE001 — fail CLOSED to the owner-only answer
+        return []
+
+
+def meeting_transcript_reader(lookup, roster_root) -> "Callable[[str, object], list | None]":
+    """The meeting's words as ``(subject, meeting_id) -> segments | None``, read AS the caller with
+    their memberships — the transcript twin of `meeting_access_check`."""
+    def _read(subject: str, meeting_id) -> "list | None":
+        return lookup(subject, meeting_id, caller_workspaces(roster_root, subject))
+
+    return _read
+
+
 def meeting_access_check(lookup, roster_root) -> "Callable[[str, object], dict | None]":
     """THE ONE meeting access decision, as a callable ``(subject, meeting_id) -> row | None``.
 
@@ -1877,14 +1950,7 @@ def meeting_access_check(lookup, roster_root) -> "Callable[[str, object], dict |
     called three-arg with a `TypeError` rescue — that rescue would also swallow a genuine TypeError
     raised INSIDE the lookup and silently downgrade it to "not authorized"."""
     def _caller_workspaces(subject: str) -> list[str]:
-        if roster_root is None:
-            return []
-        try:
-            from control_plane.workspace_membership import list_memberships
-            return [str(m["workspace_id"]) for m in list_memberships(roster_root, str(subject))
-                    if m.get("workspace_id")]
-        except Exception:  # noqa: BLE001 — fail CLOSED to the owner-only answer
-            return []
+        return caller_workspaces(roster_root, subject)
 
     try:
         import inspect as _inspect

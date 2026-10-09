@@ -118,7 +118,8 @@ from control_plane.api_shared import (logger, _PHASE_WORD, _iso, _provenance_lin
     MEETING_CHAT_TRANSCRIPT_SEGMENTS, _fold_meeting_transcript, _meeting_grounding, 
     CONTEXT_SENTINEL, _AMBIENT_TAB_KINDS, _ambient_gated, _WORKSPACE_README_LINES, 
     _WORKSPACE_README_CHARS, _fold_workspace_grounding, _enriched_meeting_focus, 
-    _context_grounding, _ROOM_SOURCE, _http_email_subject_lookup, _http_meeting_owner_lookup)  # noqa: F401
+    _context_grounding, _ROOM_SOURCE, _http_email_subject_lookup, _http_meeting_owner_lookup,
+    _http_meeting_transcript_lookup)  # noqa: F401
 
 def create_app(
     dispatcher: Dispatcher,
@@ -131,6 +132,7 @@ def create_app(
     redis_url: Optional[str] = None,
     membership_index: Optional[MembershipIndex] = None,
     meeting_owner_lookup: "Optional[object]" = None,
+    meeting_transcript_lookup: "Optional[object]" = None,
     schedule_source: "Optional[Callable[[str], list]]" = None,
     email_subject_lookup: "Optional[object]" = None,
     meeting_note_recorder: "Optional[object]" = None,
@@ -229,6 +231,9 @@ def create_app(
                               if settings is not None else "")
     # The SSE ownership gate's owner-lookup (P0): default = HTTP to meeting-api; injectable for L2 tests.
     _meeting_owner_lookup = meeting_owner_lookup or _http_meeting_owner_lookup(
+        settings.meeting_api_url if settings is not None else "", _internal_secret_value)
+    # The meeting's words, read as the caller (the Highlight scan): same door, same seam style.
+    _meeting_transcript_lookup = meeting_transcript_lookup or _http_meeting_transcript_lookup(
         settings.meeting_api_url if settings is not None else "", _internal_secret_value)
     # The ambient schedule digest's rows source (context bundle): TTL-cached meeting-api fetch;
     # injectable for L2 tests, same seam style as meeting_owner_lookup.
@@ -1035,7 +1040,8 @@ def create_app(
         _global_root=_global_root, _global_store=_global_store,
         _internal_caller=_internal_caller, _manage_dir=_manage_dir,
         _meeting_note_recorder=_meeting_note_recorder,
-        _meeting_owner_lookup=_meeting_owner_lookup, _member_error=_member_error, _pc=_pc,
+        _meeting_owner_lookup=_meeting_owner_lookup,
+        _meeting_transcript_lookup=_meeting_transcript_lookup, _member_error=_member_error, _pc=_pc,
         _read_target=_read_target, _repo=_repo, _require_shared_write=_require_shared_write,
         _resolve_room=_resolve_room, _scaffold_is_for=_scaffold_is_for,
         _scaffold_recipient_is=_scaffold_recipient_is, _scaffold_view=_scaffold_view,
