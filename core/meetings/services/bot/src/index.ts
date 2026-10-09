@@ -168,7 +168,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
   // lifecycle.v1: HTTP POST to meeting-api when a callback URL is configured; console-only for
   // self-host (no callback). The HTTP sink retries/backs off and never throws out of emit.
   const lifecycle: LifecycleSink = inv.meetingApiCallbackUrl
-    ? createHttpLifecycleSink({ callbackUrl: inv.meetingApiCallbackUrl, internalSecret: inv.internalSecret })
+    ? createHttpLifecycleSink({ callbackUrl: inv.meetingApiCallbackUrl, token: inv.token })
     : consoleLifecycleSink();
 
   // transcript.v1 + acts.v1: redis. Connect LAZILY — constructing the clients does NOT dial

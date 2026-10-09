@@ -62,7 +62,7 @@ function defaultChunkUploader(inv: Invocation, log: (m: string) => void): ChunkU
   const url = inv.recordingUploadUrl;
   const meetingId = inv.meeting_id ?? 0;
   const sessionUid = inv.connectionId ?? '';
-  const token = inv.internalSecret ?? '';
+  const token = inv.token ?? '';  // the session's MeetingToken — the bot's only credential
   const svc = new RecordingService(meetingId, sessionUid);
   return async (seq, isFinal, format, bytes, startedAtMs) => {
     if (!url) {

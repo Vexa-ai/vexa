@@ -159,7 +159,7 @@ async function fileSize(path: string): Promise<number | null> {
  */
 export function streamingTapeUploader(inv: Invocation, url: string, timeoutMs: number): TapeUploader {
   const sessionUid = inv.connectionId ?? '';
-  const token = inv.internalSecret ?? '';
+  const token = inv.token ?? '';  // the session's MeetingToken — the bot's only credential
   const meetingId = inv.meeting_id ?? 0;
 
   return (part, filePath, size) => new Promise<void>((resolve, reject) => {

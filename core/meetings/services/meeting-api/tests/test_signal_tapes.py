@@ -165,8 +165,8 @@ def test_upload_route_accepts_a_signal_tape(monkeypatch):
 
 
 def test_upload_route_accepts_the_internal_secret(monkeypatch):
-    """The bot authenticates its tape with INTERNAL_API_SECRET, the same credential the recording
-    chunks and the lifecycle callback already use — no new secret crosses to the bot for this."""
+    """The internal tier may upload a tape (scoped by its session). A bot never holds it: the bot
+    authenticates with the MeetingToken minted for its session (tests/test_bot_credentials.py)."""
     monkeypatch.setenv("INTERNAL_API_SECRET", INTERNAL)
     repo, storage = _seeded()
     r = _post_tape(_client_for(repo, storage), part="stt", data=STT_TAPE, auth=INTERNAL)

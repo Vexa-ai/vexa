@@ -5,7 +5,7 @@ orchestrator never imports these — it speaks only the port interfaces (`../por
 stays offline-provable; these adapters bind those ports to redis / HTTP.
 
 **Surface (increment 2a — live):**
-- `lifecycle-http.ts` — `createHttpLifecycleSink` → `LifecycleSink`: POST `lifecycle.v1` to `meetingApiCallbackUrl` (`x-internal-secret` header, bounded retry/backoff, never throws out of `emit`). Native `fetch`, no dep.
+- `lifecycle-http.ts` — `createHttpLifecycleSink` → `LifecycleSink`: POST `lifecycle.v1` to `meetingApiCallbackUrl` (`authorization: Bearer <session MeetingToken>`, bounded retry/backoff, never throws out of `emit`). Native `fetch`, no dep.
 - `transcript-redis.ts` — `createRedisTranscriptSink` + `redisClientFrom` → `TranscriptSink`: `XADD transcription_segments` + `PUBLISH tc:meeting:{id}:mutable` (`transcript.v1`).
 - `acts-redis.ts` — `createRedisActsSource` + `redisActsClientFrom` → `ActsSource`: `SUBSCRIBE bot_commands:meeting:{id}` → `parseAct` → handler (`acts.v1`).
 

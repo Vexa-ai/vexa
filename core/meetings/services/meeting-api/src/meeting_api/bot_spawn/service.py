@@ -424,7 +424,6 @@ async def request_bot(
     max_concurrent: Optional[int] = None,
     redis_url: Optional[str] = None,
     meeting_api_url: Optional[str] = None,
-    internal_secret: Optional[str] = None,
     token_secret: Optional[str] = None,
     # Per-user webhook config (the gateway forwards it from identity's /internal/validate). Persisted
     # into meeting.data so the lifecycle callback delivers status_change events with no users-table read.
@@ -768,9 +767,6 @@ async def request_bot(
     # 4. MeetingToken + invocation. connection_id IS the session_uid (parent's connectionId).
     redis_url = redis_url or os.getenv("REDIS_URL", "redis://redis:6379/0")
     meeting_api_url = meeting_api_url or os.getenv("MEETING_API_URL", "http://meeting-api:8080")
-    internal_secret = internal_secret if internal_secret is not None else os.getenv(
-        "INTERNAL_API_SECRET"
-    )
     # STT creds were resolved and gated at step 1b (before the meeting-row write); the resolved
     # transcription_service_url/token/model flow into the invocation below. Without either the bot
     # joins + captures but cannot transcribe — None-safe: omitted from the invocation when unset
@@ -778,8 +774,11 @@ async def request_bot(
     # Token must outlive the bot's max active time (default 4h, see bot deriveMaxActiveMs) or
     # transcription dies mid-meeting when the JWT expires. Default 5h; override per deployment.
     token_ttl_seconds = int(os.getenv("MEETING_TOKEN_TTL_SECONDS") or 18000)
+    # The bot's ONLY credential: its lifecycle callbacks and uploads present this token, bound to
+    # this session (connection_id). No service-tier secret is ever placed in an invocation.
     token = mint_meeting_token(
-        meeting_id, user_id, platform, native_meeting_id, secret=token_secret, ttl_seconds=token_ttl_seconds
+        meeting_id, user_id, platform, native_meeting_id, secret=token_secret,
+        ttl_seconds=token_ttl_seconds, session_uid=connection_id,
     )
     invocation = build_invocation(
         meeting_id=meeting_id,
@@ -795,7 +794,6 @@ async def request_bot(
         transcription_tier=transcription_tier,
         redis_url=redis_url,
         meeting_api_callback_url=f"{meeting_api_url}/bots/internal/callback/lifecycle",
-        internal_secret=internal_secret,
         transcribe_enabled=transcribe_enabled,
         transcription_service_url=transcription_service_url,
         transcription_service_token=transcription_service_token,

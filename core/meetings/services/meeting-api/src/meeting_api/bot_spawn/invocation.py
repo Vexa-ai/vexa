@@ -94,10 +94,14 @@ def mint_meeting_token(
     *,
     ttl_seconds: int = 7200,
     secret: Optional[str] = None,
+    session_uid: Optional[str] = None,
 ) -> str:
     """Mint a stateless MeetingToken (HS256 JWT), signed with ``ADMIN_TOKEN`` (or ``secret``).
 
-    No token table — minted on demand, embedded in the invocation, re-verified at recording upload.
+    No token table — minted on demand, embedded in the invocation, re-verified at recording upload
+    and on the bot's lifecycle callback. ``session_uid`` (the spawn's connection id) binds the token
+    to ONE bot session: the lifecycle callback and the uploads refuse it for any other session. It is
+    the only credential a bot holds.
     """
     secret = secret if secret is not None else os.environ.get("ADMIN_TOKEN")
     if not secret:
@@ -116,6 +120,8 @@ def mint_meeting_token(
         "exp": now + ttl_seconds,
         "jti": str(uuid.uuid4()),
     }
+    if session_uid:
+        payload["session_uid"] = session_uid
     header_b64 = _b64url(json.dumps(header, separators=(",", ":")).encode())
     payload_b64 = _b64url(json.dumps(payload, separators=(",", ":")).encode())
     signing_input = f"{header_b64}.{payload_b64}".encode("ascii")
@@ -142,7 +148,6 @@ def build_invocation(
     redis_url: str,
     automatic_leave: Optional[dict] = None,
     meeting_api_callback_url: Optional[str] = None,
-    internal_secret: Optional[str] = None,
     transcribe_enabled: bool = True,
     recording_enabled: bool = False,
     capture_modes: Optional[list[str]] = None,
@@ -190,7 +195,6 @@ def build_invocation(
         "captureSignalEnabled": capture_signal_enabled,
         "recordingUploadUrl": recording_upload_url,
         "meetingApiCallbackUrl": meeting_api_callback_url,
-        "internalSecret": internal_secret,
         "automaticLeave": automatic_leave,
         # Authenticated-bot mode (sealed invocation.v1 auth block): the bot restores the stored
         # browser session from the userdata store before launch and joins signed-in. Deployment-

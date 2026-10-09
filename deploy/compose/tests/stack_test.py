@@ -437,7 +437,8 @@ def test_03_real_bot_spawn_joining(stack):
                 break
             time.sleep(2)
         if appeared != container_name:
-            _code, wl = http("GET", f"{stack.runtime}/workloads/{workload_id}", timeout=15)
+            _code, wl = http("GET", f"{stack.runtime}/workloads/{workload_id}", headers=stack.runtime_auth,
+                             timeout=15)
             reason = wl.get("stopReason") if isinstance(wl, dict) else wl
             pytest.fail(
                 f"bot container {container_name} did not appear (saw {appeared!r}); "
@@ -486,7 +487,7 @@ def test_03_real_bot_spawn_joining(stack):
         print(f"\n[3/bot] real container {container_name} appeared in docker ps; meeting advanced to joining")
     finally:
         # Stop + clean the bot: destroy the runtime workload (docker rm -f), then belt-and-suspenders.
-        http("DELETE", f"{stack.runtime}/workloads/{workload_id}", timeout=30)
+        http("DELETE", f"{stack.runtime}/workloads/{workload_id}", headers=stack.runtime_auth, timeout=30)
         subprocess.run(["docker", "rm", "-f", container_name], capture_output=True, timeout=30)
 
 
@@ -531,9 +532,12 @@ def test_07_webhook_delivery_outcome_reported(stack):
         """"webhook_events": {"meeting.status_change": true}}'::jsonb """
         f"WHERE id = {meeting_id};"
     )
+    # The proof inserted this session by hand, so no bot holds its MeetingToken: it advances the FSM
+    # as the internal tier, which the callback also admits.
     code, body = post_json(
         f"{stack.meeting_api}/bots/internal/callback/lifecycle",
         {"connection_id": session_uid, "status": "completed", "completion_reason": "stopped"},
+        headers={"X-Internal-Secret": stack.internal_secret},
         timeout=20,
     )
     assert code == 200, f"lifecycle callback: {code} {body!r}"

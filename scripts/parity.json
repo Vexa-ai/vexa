@@ -410,7 +410,7 @@
       "id": "internal-secret-class",
       "fact": "how each service's config contract classes INTERNAL_API_SECRET, and therefore what it does when it is unset",
       "kind": "literal",
-      "decision": "WHETHER ONE ENV VAR MAY HAVE THREE BOOT BEHAVIOURS. Four contracts declare it required-explicit (boot refuses); meeting-api declares it defaulted (boots, and silently stops attaching the internal header); runtime lists it surface_only (never read); the MCP service does not declare it at all, so gate:config-contract cannot see it there. Whether meeting-api's leniency is correct is a product decision about a security boundary — a service that quietly drops an auth header when a secret is missing is a different failure mode from one that refuses to start, and it is not for a gate to choose.",
+      "decision": "WHETHER ONE ENV VAR MAY HAVE THREE BOOT BEHAVIOURS. Four contracts declare it required-explicit (boot refuses); meeting-api declares it defaulted (boots, and admits no internal-tier caller); the MCP service does not declare it at all, so gate:config-contract cannot see it there. Whether meeting-api's leniency is correct is a product decision about a security boundary — a service that quietly drops an auth header when a secret is missing is a different failure mode from one that refuses to start, and it is not for a gate to choose.",
       "why": "F95 was one secret with three names. This is the same secret with three boot behaviours, and each contract argues its own case in its own description field where no reader compares them.",
       "sites": [
         {

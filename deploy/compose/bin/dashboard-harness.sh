@@ -19,6 +19,7 @@ PROJ="${COMPOSE_PROJECT:-vexa-dash}"
 ADMIN="${ADMIN_TOKEN:-gate-admin-token}"
 export IMAGE_TAG=dev COMPOSE_PROJECT_NAME="$PROJ" ADMIN_TOKEN="$ADMIN" \
        INTERNAL_API_SECRET="${INTERNAL_API_SECRET:-gate-internal-secret}" MINIO_BUCKET=vexa \
+       RUNTIME_API_TOKEN="${RUNTIME_API_TOKEN:-$(openssl rand -hex 32)}" \
        NEXTAUTH_SECRET="${NEXTAUTH_SECRET:-$(openssl rand -hex 32)}" \
        BROWSER_IMAGE="${BROWSER_IMAGE:-mock-bot:dev}" DOCKER_GID="${DOCKER_GID:-0}" \
        STORAGE_HOST_PORT="${STORAGE_HOST_PORT:-19000}"

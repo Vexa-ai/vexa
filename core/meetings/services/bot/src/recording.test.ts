@@ -149,7 +149,7 @@ async function main(): Promise<void> {
     const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/internal/recordings/upload`;
 
     const sink = createBotRecordingSink({
-      inv: inv({ connectionId: 'conn-xyz', meeting_id: 42, recordingUploadUrl: url, internalSecret: 's' }),
+      inv: inv({ connectionId: 'conn-xyz', meeting_id: 42, recordingUploadUrl: url, token: 's' }),
     });
     sink.chunk('google_meet/w', 0, false, 'webm', new Uint8Array([1, 2, 3, 4]), 1791460000123);
     sink.chunk('google_meet/w', 1, false, 'webm', new Uint8Array([5, 6]));

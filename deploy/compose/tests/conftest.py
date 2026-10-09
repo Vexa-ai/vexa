@@ -73,6 +73,9 @@ NEXTAUTH_SECRET = "gate-nextauth-secret-0123456789abcdef0123"
 # proof calls meeting-api directly as an internal-tier caller (X-Internal-Secret beside X-User-Id),
 # never as a forged identity.
 MCP_DELEGATION_SECRET = "gate-delegation-signing-key"
+# The runtime caller credential: the runtime answers only agent-api and meeting-api, and the proof
+# presents it when it reads or tears down a workload directly.
+RUNTIME_API_TOKEN = "gate-runtime-caller-token-0123456789abcdef"
 MINIO_BUCKET = "vexa"
 
 SERVICES = ["redis", "postgres", "storage", "admin-api", "runtime", "meeting-api", "gateway"]
@@ -140,6 +143,7 @@ def _stack_env() -> dict:
         "INTERNAL_API_SECRET": INTERNAL_API_SECRET,
         "NEXTAUTH_SECRET": NEXTAUTH_SECRET,
         "VEXA_MCP_DELEGATION_SECRET": MCP_DELEGATION_SECRET,
+        "RUNTIME_API_TOKEN": RUNTIME_API_TOKEN,
         "MINIO_BUCKET": MINIO_BUCKET,
         "BROWSER_IMAGE": os.getenv("BROWSER_IMAGE", "vexaai/vexa-bot:v012"),
         "API_GATEWAY_HOST_PORT": GATEWAY_PORT,
@@ -210,6 +214,11 @@ class Stack:
     admin_token: str = ADMIN_TOKEN
     internal_secret: str = INTERNAL_API_SECRET
     bucket: str = MINIO_BUCKET
+
+    @property
+    def runtime_auth(self) -> dict:
+        """The runtime caller credential, as the headers the runtime requires."""
+        return {"Authorization": f"Bearer {RUNTIME_API_TOKEN}"}
 
     # ---- exec helpers (the docker CLI is our DB + S3 probe; no extra client deps) ----
     def exec(self, service: str, *cmd: str, check: bool = True) -> str:

@@ -265,6 +265,8 @@ def create_app(
         redis,
         transcript_finalizer,
         delivery_ledger,
+        callback_secret=token_secret,
+        internal_secret=internal_secret,
     )
 
     # --- bot_spawn: POST /bots (invocation.v1 + runtime.v1) ---
@@ -380,9 +382,18 @@ def _mount_lifecycle(
     redis: "object" = None,
     transcript_finalizer: "object" = None,
     delivery_ledger: "object" = None,
+    *,
+    callback_secret: Optional[str] = None,
+    internal_secret: Optional[str] = None,
 ) -> None:
     """Register the lifecycle.v1 callback route on the unified app (the lifecycle receiver's
     ``/bots/internal/callback/lifecycle`` handler, sharing the app's TraceMiddleware).
+
+    A bot's callback is authenticated by the MeetingToken minted for ITS session: the token must be
+    signed with ``callback_secret`` (the MeetingToken key, ``ADMIN_TOKEN``) and bound to the
+    event's ``connection_id``. The internal tier (``x-internal-secret``) is also accepted. The
+    production entrypoint always passes ``callback_secret``; ``None`` is the in-process harness,
+    which drives the route directly.
 
     P3a — each FSM advance emits the sealed ``meeting.status_change`` webhook.v1 envelope and
     records the full diagnostics (``status_transition[]`` + forensics in ``rec.data``). The
@@ -991,9 +1002,35 @@ def _mount_lifecycle(
     # DIRECTLY (no HTTP self-POST to 127.0.0.1:PORT). Same instance, same store, same side effects.
     app.state.apply_lifecycle_event = _apply_lifecycle_event
 
+    def _bot_callback_admitted(request: Request, body: object) -> bool:
+        """The event's own session's MeetingToken, or the internal tier."""
+        import hmac
+
+        if callback_secret is None:
+            return True
+        presented = request.headers.get("x-internal-secret") or ""
+        if internal_secret and presented and hmac.compare_digest(presented.encode(), internal_secret.encode()):
+            return True
+        scheme, _, token = (request.headers.get("authorization") or "").partition(" ")
+        connection_id = body.get("connection_id") if isinstance(body, dict) else None
+        if scheme.lower() != "bearer" or not token.strip() or not connection_id:
+            return False
+        from .recordings.service import _verify_meeting_token
+
+        try:
+            claims = _verify_meeting_token(token.strip(), secret=callback_secret)
+        except ValueError:
+            return False
+        return claims.get("session_uid") == connection_id
+
     @app.post("/bots/internal/callback/lifecycle")
     async def lifecycle_callback(request: Request) -> JSONResponse:
         body = await request.json()
+        if not _bot_callback_admitted(request, body):
+            log_event("lifecycle_event_rejected", audience="system", level="warning",
+                      span="lifecycle.callback", fields={"reason": "unauthenticated"})
+            return JSONResponse(status_code=401,
+                                content={"status": "error", "detail": "bot session credential required"})
         status_code, content = await _apply_lifecycle_event(
             body, transition_source=TransitionSource.BOT_CALLBACK
         )

@@ -7,7 +7,7 @@
  * goldens are the spec, P8) with ajv — the same validator the contract's own
  * `validate.mjs` uses, so the bot can NEVER drift from the contract. A parse/validation
  * failure is fatal: the caller maps it to a lifecycle.v1 `failed` / `validation_error`
- * (fail-fast, P14). Secrets ride in this contract (token / internalSecret / S3 keys) —
+ * (fail-fast, P14). Secrets ride in this contract (token / S3 keys) —
  * never logged (P14/P15).
  *
  * `Invocation` is the typed view the rest of the bot depends on. It is a hand-written
@@ -68,7 +68,6 @@ export interface Invocation {
   container_name?: string;
   redisUrl: string;
   meetingApiCallbackUrl?: string;
-  internalSecret?: string;
   // ── transcription ──
   language?: string | null;
   task?: string | null;
