@@ -203,11 +203,13 @@ explicit value, and the postgres-password hook moves an install off them. The sa
 postgres and Lite's entrypoint refuse.
 */}}
 {{- define "vexa.publishedDbPasswords" -}}
-["postgres","changeme","change-me","CHANGE-ME","default","secret","password"]
+["postgres","password","vexa-internal-secret","lite-internal-secret","changeme","change-me","CHANGE-ME","default","secret"]
 {{- end -}}
 
 {{- define "vexa.postgresCredentialsSecretName" -}}
-{{- if .Values.postgres.enabled -}}
+{{- if .Values.database.existingSecret -}}
+{{- .Values.database.existingSecret -}}
+{{- else if .Values.postgres.enabled -}}
 {{- .Values.postgres.credentialsSecretName | default "postgres-credentials" -}}
 {{- else -}}
 {{- required "postgres.credentialsSecretName must name a pre-existing Secret when postgres.enabled=false (keys: POSTGRES_PASSWORD, POSTGRES_USER, POSTGRES_DB)" .Values.postgres.credentialsSecretName -}}

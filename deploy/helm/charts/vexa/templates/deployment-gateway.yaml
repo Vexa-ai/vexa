@@ -135,7 +135,7 @@ spec:
         # gateway-identity.v1: the signing key, here and in no other workload.
         - name: identity-signing-key
           secret:
-            secretName: {{ include "vexa.componentName" (list . "identity-signing-key") }}
+            secretName: {{ .Values.identity.existingSecret | default (include "vexa.componentName" (list . "identity-signing-key")) }}
             defaultMode: 0440
             items:
               - { key: signing-key.pem, path: key.pem }

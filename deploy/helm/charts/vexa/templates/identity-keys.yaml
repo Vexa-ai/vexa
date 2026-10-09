@@ -17,6 +17,20 @@ key and lifts its Ed25519 SubjectPublicKeyInfo — the 12-byte DER prefix 302a30
 the 32-byte key after it. The certificate itself is discarded. A key that is not Ed25519 has no such
 prefix in its certificate, and the render fails naming the fix.
 */}}
+{{- if .Values.identity.existingSecret }}
+{{- /* The operator's Secret holds the private key (key `signing-key.pem`); a render cannot read it,
+so the public key is given beside it. Nothing here is generated. */}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "vexa.componentName" (list . "identity-public-key") }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+data:
+  public-key.pem: |
+    {{- required "identity.publicKey is required with identity.existingSecret — the PEM public key of the Secret's signing-key.pem (`openssl pkey -in signing-key.pem -pubout`)" .Values.identity.publicKey | trim | nindent 4 }}
+{{- else }}
 {{- $signingName := include "vexa.componentName" (list . "identity-signing-key") }}
 {{- $pem := .Values.identity.signingKey | default "" }}
 {{- if not $pem }}
@@ -60,3 +74,4 @@ data:
     -----BEGIN PUBLIC KEY-----
     {{ printf "%s%s" $spki $pub | b64enc }}
     -----END PUBLIC KEY-----
+{{- end }}

@@ -987,4 +987,23 @@ fl="$(awk '/^  name: vexa-vexa-flows-api-ingress$/{f=1} f{print} f&&/^---/{exit}
 if grep -q 'vexa.role: worker' <<< "$fl"; then echo "  OK: flows-api admits the chart's Pods and agent workers"
 else echo "  FAIL: flows-api ingress under the default-deny"; fail=1; fi
 
+# The broker answers readiness on /ready (503 while its store does not), liveness on /health.
+broker="$(awk '/deployment-credential-broker.yaml/{f=1} f{print} f&&/^---/{exit}' <<< "$RENDER")"
+if grep -A2 'readinessProbe:' <<< "$broker" | grep -q 'path: /ready'; then echo "  OK: the broker's readiness is /ready"
+else echo "  FAIL: the broker's readinessProbe is not /ready"; fail=1; fi
+# Every generated secret has a way to stay put under a template-only render (GitOps): an existing
+# Secret the chart reads instead of generating.
+dbx="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set database.existingSecret=my-db)"
+if grep -q '^  name: postgres-credentials$' <<< "$dbx"; then echo "  FAIL: database.existingSecret still renders the credentials Secret"; fail=1
+elif [ "$(grep -cE 'name: "?my-db"?$' <<< "$dbx")" -ge 3 ]; then echo "  OK: database.existingSecret is the bundled database's and every consumer's credentials"
+else echo "  FAIL: database.existingSecret is not wired to the database and its consumers"; fail=1; fi
+idx="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set identity.existingSecret=my-id --set-string identity.publicKey=PUBLIC-KEY-PEM)"
+if grep -q '^  name: vexa-vexa-identity-signing-key$' <<< "$idx"; then echo "  FAIL: identity.existingSecret still renders a generated signing key"; fail=1
+elif grep -q 'secretName: my-id' <<< "$idx" && grep -q 'PUBLIC-KEY-PEM' <<< "$idx"; then
+  echo "  OK: identity.existingSecret is the gateway's signing key, its public key given beside it"
+else echo "  FAIL: identity.existingSecret wiring"; fail=1; fi
+idmiss="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set identity.existingSecret=my-id 2>&1 || true)"
+if grep -q 'identity.publicKey is required with identity.existingSecret' <<< "$idmiss"; then echo "  OK: identity.existingSecret without its public key is refused"
+else echo "  FAIL: identity.existingSecret rendered without a public key"; fail=1; fi
+
 [ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }
