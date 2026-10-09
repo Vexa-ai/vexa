@@ -240,6 +240,11 @@ value in `deploy/compose/.env` for you; Helm replaces it in the chart-managed Se
 mints a new one when you stop passing the old one. Rotating signs everybody out of the web UI once and
 invalidates sign-in links already sent; API keys are not affected.
 
+**Rename the sign-in mail settings if you set `SMTP_*`.** The terminal reads only the deployment's
+mail family: `SMTP_HOST`, `SMTP_PORT`, `SMTP_FROM`, `SMTP_USER`, `SMTP_PASS`, `SMTP_SECURE` and
+`SMTP_TLS_INSECURE` become `VEXA_MAIL_SMTP_HOST`, `_PORT`, `_FROM`, `_USER`, `_PASSWORD`, `_SECURE` and
+`_TLS_INSECURE`. An old name configures nothing, and the sign-in mail goes to the local dev double.
+
 **Docker Compose: give the database its own password.** `DB_PASSWORD` no longer defaults to
 `postgres`, and the `postgres` service refuses to start on an empty value or one published in this
 repository. A new install gets one from `make up` / `make all`. An install whose `.env` still holds

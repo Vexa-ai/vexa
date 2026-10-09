@@ -3,17 +3,16 @@
  *  The terminal used to read seven unprefixed SMTP_* keys that no contract declared, next to the
  *  VEXA_MAIL_SMTP_* family flows already sends through. It now reads the family (declared in
  *  clients/terminal/config.v1.json, held on compose, Helm and Lite by gate:config-contract) and
- *  honours the old names only as a fallback that says so.
+ *  nothing else: an old SMTP_* name configures nothing.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { _resetMailWarnings, mailerConfig } from "../mailer";
+import { mailerConfig } from "../mailer";
 
 const FAMILY = ["HOST", "PORT", "FROM", "USER", "PASSWORD", "SECURE", "TLS_INSECURE"].map((k) => `VEXA_MAIL_SMTP_${k}`);
 const LEGACY = ["SMTP_HOST", "SMTP_PORT", "SMTP_FROM", "SMTP_USER", "SMTP_PASS", "SMTP_SECURE", "SMTP_TLS_INSECURE"];
 
 beforeEach(() => {
   for (const k of [...FAMILY, ...LEGACY]) vi.stubEnv(k, "");
-  _resetMailWarnings();
 });
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -47,20 +46,11 @@ describe("mailerConfig", () => {
     expect(mailerConfig().port).toBe(25);
   });
 
-  it("honours a pre-v0.13.2 SMTP_* name, and says which key to set instead", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    vi.stubEnv("SMTP_HOST", "old-relay.example");
-    vi.stubEnv("SMTP_PASS", "old-pass");
-    const cfg = mailerConfig();
-    expect(cfg.host).toBe("old-relay.example");
-    expect(cfg.pass).toBe("old-pass");
-    expect(warn.mock.calls.map((c) => String(c[0])).join("\n")).toContain("set VEXA_MAIL_SMTP_HOST instead");
-  });
-
-  it("the family wins over an old name set beside it", () => {
-    vi.spyOn(console, "warn").mockImplementation(() => {});
-    vi.stubEnv("SMTP_HOST", "old-relay.example");
-    vi.stubEnv("VEXA_MAIL_SMTP_HOST", "new-relay.example");
-    expect(mailerConfig().host).toBe("new-relay.example");
+  it("an old SMTP_* name configures nothing", () => {
+    for (const k of LEGACY) vi.stubEnv(k, k === "SMTP_PORT" ? "2525" : "old-value");
+    expect(mailerConfig()).toEqual({
+      host: "localhost", port: 1025, from: "Vexa <no-reply@vexa.ai>",
+      user: undefined, pass: undefined, secure: false, insecureTls: false,
+    });
   });
 });

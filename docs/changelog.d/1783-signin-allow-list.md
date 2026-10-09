@@ -16,4 +16,6 @@
   `VEXA_MAIL_SMTP_HOST`, `_PORT`, `_FROM`, `_USER`, `_PASSWORD`, `_SECURE` and `_TLS_INSECURE` — the
   same family flows sends through, which now also speaks TLS and AUTH to a configured relay — on
   compose, Helm (`terminal.mail.*`, `secrets.mailSmtpPassword`) and Lite. The `SMTP_*` names v0.13.0
-  read still work, with a warning naming the key to set instead. A relay set with no port uses 25.
+  and v0.13.1 read are no longer read: **rename them before upgrading** (`SMTP_PASS` becomes
+  `VEXA_MAIL_SMTP_PASSWORD`). A relay set with no port uses 25. See
+  [One-time steps after upgrading](/deployment#one-time-steps-after-upgrading).

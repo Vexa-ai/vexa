@@ -19,8 +19,7 @@
  *    VEXA_MAIL_SMTP_USER / VEXA_MAIL_SMTP_PASSWORD   AUTH LOGIN, only when both are present
  *    VEXA_MAIL_SMTP_SECURE=1        implicit TLS
  *    VEXA_MAIL_SMTP_TLS_INSECURE=1  skip certificate verification — dev only
- *  v0.13.0 and v0.13.1 read the same settings as SMTP_HOST … SMTP_PASS; a deployment still setting
- *  those is honoured, with a warning naming the key to use instead (`legacyMailEnv`).
+ *  These keys are the only source: the defaults above are the declared ones.
  */
 import net from "node:net";
 import tls from "node:tls";
@@ -35,46 +34,19 @@ export interface MailerConfig {
   insecureTls: boolean;
 }
 
-/** The pre-family spelling of each setting, read only when the family key is unset. */
-const LEGACY: Record<string, string> = {
-  VEXA_MAIL_SMTP_HOST: "SMTP_HOST", VEXA_MAIL_SMTP_PORT: "SMTP_PORT", VEXA_MAIL_SMTP_FROM: "SMTP_FROM",
-  VEXA_MAIL_SMTP_USER: "SMTP_USER", VEXA_MAIL_SMTP_PASSWORD: "SMTP_PASS",
-  VEXA_MAIL_SMTP_SECURE: "SMTP_SECURE", VEXA_MAIL_SMTP_TLS_INSECURE: "SMTP_TLS_INSECURE",
-};
-const warned = new Set<string>();
-
-function legacyMailEnv(key: string): string | undefined {
-  const old = LEGACY[key];
-  const value = old ? process.env[old] : undefined;
-  if (value && !warned.has(old)) {
-    warned.add(old);
-    console.warn(`[terminal-mail] ${old} is the pre-v0.13.2 name — set ${key} instead (the deployment's mail family)`);
-  }
-  return value || undefined;
-}
-
-function mailEnv(key: string, current: string | undefined): string | undefined {
-  return current || legacyMailEnv(key);
-}
-
 export function mailerConfig(): MailerConfig {
   const truthy = (v: string | undefined) => v === "1" || v === "true";
-  const host = mailEnv("VEXA_MAIL_SMTP_HOST", process.env.VEXA_MAIL_SMTP_HOST);
-  const port = parseInt(mailEnv("VEXA_MAIL_SMTP_PORT", process.env.VEXA_MAIL_SMTP_PORT) || "", 10);
+  const host = process.env.VEXA_MAIL_SMTP_HOST || undefined;
+  const port = parseInt(process.env.VEXA_MAIL_SMTP_PORT || "", 10);
   return {
     host: host || "localhost",
     port: Number.isFinite(port) && port > 0 ? port : host ? 25 : 1025,
-    from: mailEnv("VEXA_MAIL_SMTP_FROM", process.env.VEXA_MAIL_SMTP_FROM) || "Vexa <no-reply@vexa.ai>",
-    user: mailEnv("VEXA_MAIL_SMTP_USER", process.env.VEXA_MAIL_SMTP_USER),
-    pass: mailEnv("VEXA_MAIL_SMTP_PASSWORD", process.env.VEXA_MAIL_SMTP_PASSWORD),
-    secure: truthy(mailEnv("VEXA_MAIL_SMTP_SECURE", process.env.VEXA_MAIL_SMTP_SECURE)),
-    insecureTls: truthy(mailEnv("VEXA_MAIL_SMTP_TLS_INSECURE", process.env.VEXA_MAIL_SMTP_TLS_INSECURE)),
+    from: process.env.VEXA_MAIL_SMTP_FROM || "Vexa <no-reply@vexa.ai>",
+    user: process.env.VEXA_MAIL_SMTP_USER || undefined,
+    pass: process.env.VEXA_MAIL_SMTP_PASSWORD || undefined,
+    secure: truthy(process.env.VEXA_MAIL_SMTP_SECURE),
+    insecureTls: truthy(process.env.VEXA_MAIL_SMTP_TLS_INSECURE),
   };
-}
-
-/** Test seam: forget which legacy names have been warned about. */
-export function _resetMailWarnings(): void {
-  warned.clear();
 }
 
 type Reply = { code: number; text: string };
