@@ -41,8 +41,8 @@ worker reads meetings through are the ones inside its ceiling.
 signature, constant time (`bad_signature`) → claims are a JSON object (`malformed`) →
 `aud == "vexa-mcp"` (`bad_audience`) → non-empty `sub` (`malformed`) → `now < exp` (`expired`) →
 `jti` not on a denylist (`revoked`). No claim is read before the signature verifies. identity answers
-`401 Invalid delegation: <reason>`, and `401 Invalid delegation: no such user` when `sub` names no
-account.
+`401 Invalid delegation: <reason>`; then `401 Invalid delegation: scope` when the verified `scope` is
+not a `Scope`, and `401 Invalid delegation: no such user` when `sub` names no account.
 
 **Revocation.** A token ends with the unit it was minted for. agent-api records each token's `jti`
 against its unit at dispatch and, once the runtime no longer runs that unit (it completed, idled out,

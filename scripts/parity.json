@@ -1456,14 +1456,28 @@
       ]
     },
     {
-      "id": "routes-scopes",
-      "fact": "the key scopes a routes.v1 row may name",
+      "id": "token-scopes",
+      "fact": "the scopes an API key may carry, and a route may require",
       "kind": "set",
       "enforced": true,
-      "canonical": "core/gateway/contracts/routes.v1/routes.schema.json — Route.scopes items",
-      "how_to_agree": "a new scope is a routes.v1 change and a loader change, in one change",
-      "why": "routes.v1 is the sealed statement of what a manifest may say; routes_manifest.py is what the gateway refuses at boot. A vocabulary the two spell differently is a manifest the gate passes and the edge refuses, or the reverse (architecture pass 4, N50).",
+      "canonical": "core/identity/contracts/identity.v1/identity.schema.json — Scope",
+      "how_to_agree": "a new scope is an identity.v1 change; every list here moves in the same change",
+      "why": "identity mints and validates keys with these scopes, the gateway refuses a route that names another, and the terminal offers and checks them when a person mints a key. Spelled seven times in four places; a scope one list has and another lacks is a key nobody can mint, or a route no key can call, that reads like a decision (architecture pass 4, N50/N51).",
       "sites": [
+        {
+          "path": "core/identity/contracts/identity.v1/identity.schema.json",
+          "pattern": "\"Scope\":\\s*\\{[^}]*?\"enum\":\\s*\\[([^\\]]*)\\]"
+        },
+        {
+          "path": "core/identity/services/admin-api/src/admin_api/token_scope.py",
+          "pattern": "^VALID_SCOPES: Set\\[str\\] = \\{([^}]*)\\}",
+          "flags": "m"
+        },
+        {
+          "path": "core/identity/services/admin-api/src/admin_api/schema/sync.py",
+          "pattern": "^_FULL_TOKEN_SCOPES = \\[([^\\]]*)\\]",
+          "flags": "m"
+        },
         {
           "path": "core/gateway/contracts/routes.v1/routes.schema.json",
           "pattern": "\"scopes\":\\s*\\{[^}]*?\"enum\":\\s*\\[([^\\]]*)\\]"
@@ -1471,6 +1485,16 @@
         {
           "path": "core/gateway/services/gateway/src/gateway/routes_manifest.py",
           "pattern": "^SCOPES = frozenset\\(\\{([^}]*)\\}\\)",
+          "flags": "m"
+        },
+        {
+          "path": "clients/terminal/src/app/api/tokens/route.ts",
+          "pattern": "^const VALID_SCOPES = new Set\\(\\[([^\\]]*)\\]\\)",
+          "flags": "m"
+        },
+        {
+          "path": "clients/terminal/src/surfaces/tokensApi.ts",
+          "pattern": "^export const TOKEN_SCOPES = \\[([^\\]]*)\\] as const",
           "flags": "m"
         }
       ]

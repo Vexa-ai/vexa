@@ -32,7 +32,8 @@ the internal tier (`X-Internal-Secret` = `INTERNAL_API_SECRET`).
 - **Failures** — `503` without an internal secret outside dev mode; `403` on a wrong one; `401`
   `Missing token` · `Invalid token` · `Token expired` · `Delegation tokens are not accepted on this
   deployment` · `Invalid delegation: <reason>` (delegation.v1 `RefusalReason`; `revoked` once the
-  unit the token was minted for has ended) · `Invalid delegation: no such user`. A delegation token
+  unit the token was minted for has ended) · `Invalid delegation: scope` (a verified token whose
+  `scope` is not a delegation.v1 `Scope`) · `Invalid delegation: no such user`. A delegation token
   whose revocation cannot be checked (the store is unreachable) is `503 Delegation revocation store
   unavailable`, never an answer; an API key never reads that store.
 
