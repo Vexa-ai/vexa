@@ -24,7 +24,7 @@ services:
       - -c
       - |
         case "$$REDIS_PASSWORD" in
-          ""|changeme|change-me|CHANGE-ME|default|secret|password)
+          ""|vexa-internal-secret|lite-internal-secret|changeme|change-me|CHANGE-ME|default|secret|password)
             echo "redis: REDIS_PASSWORD is unset or a value published in the Vexa repository - refusing to start." >&2
             echo "  Run deploy/compose/mint-dev-env.sh (make up does), or set REDIS_PASSWORD in .env (openssl rand -hex 32)." >&2
             exit 1;;

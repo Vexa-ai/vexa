@@ -141,6 +141,27 @@ test("a HEADER fact compares field names case-insensitively, and nothing else", 
   assert.equal(asHeader(" X-Vexa-Identity "), "x-vexa-identity");
 });
 
+test("an EXTENDS fact must hold every member of its base", () => {
+  const facts = (extra) => [
+    { id: "base", fact: "the placeholders", kind: "set", enforced: true,
+      sites: [{ path: "a/base.py", pattern: "^BASE = \\(([^)]*)\\)" }] },
+    { id: "db", fact: "the db placeholders", kind: "set", enforced: true, extends: "base",
+      sites: [{ path: "b/db.py", pattern: "^DB = \\(([^)]*)\\)" }], ...extra },
+  ];
+  const ok = fixture(facts(), { "a/base.py": 'BASE = ("changeme", "secret")\n',
+                               "b/db.py": 'DB = ("postgres", "changeme", "secret")\n' });
+  const bad = fixture(facts(), { "a/base.py": 'BASE = ("changeme", "secret")\n',
+                                "b/db.py": 'DB = ("postgres", "changeme")\n' });
+  const unknown = fixture(facts({ extends: "nope" }), { "a/base.py": 'BASE = ("x")\n', "b/db.py": 'DB = ("x")\n' });
+  try {
+    assert.deepEqual(run(ok).errs, []);
+    const e = run(bad).errs;
+    assert.equal(e.length, 1);
+    assert.match(e[0], /lacks secret/);
+    assert.match(run(unknown).errs.join("\n"), /not a set fact/);
+  } finally { for (const r of [ok, bad, unknown]) rmSync(r, { recursive: true, force: true }); }
+});
+
 test("asProse strips the carrier and keeps the apostrophe", () => {
   assert.equal(asProse('> one\n> two'), "one two");
   assert.equal(asProse('"a "\n  "b"'), "a b");

@@ -608,6 +608,7 @@
       "id": "delegation-secret-placeholders",
       "fact": "the values VEXA_MCP_DELEGATION_SECRET may never hold: the internal-secret placeholders plus the key delegation.v1's published vectors are made with",
       "kind": "set",
+      "extends": "placeholder-secrets",
       "enforced": true,
       "canonical": "core/agent/control_plane/config.v1.json — VEXA_MCP_DELEGATION_SECRET (the minter's declaration)",
       "how_to_agree": "change both declarations in one change; a new published test key joins both",
@@ -627,6 +628,7 @@
       "id": "dispatch-key-placeholders",
       "fact": "the values VEXA_DISPATCH_SIGNING_KEY may never hold: the internal-secret placeholders plus its old default, dev-dispatch-signing-key",
       "kind": "set",
+      "extends": "placeholder-secrets",
       "enforced": true,
       "canonical": "core/agent/control_plane/config.v1.json — VEXA_DISPATCH_SIGNING_KEY (the signer's declaration; its boot preflight refuses these)",
       "how_to_agree": "change both in one change; a value the chart accepts must be one agent-api boots with",
@@ -647,6 +649,7 @@
       "id": "database-password-placeholders",
       "fact": "the published values the database password must never hold",
       "kind": "set",
+      "extends": "placeholder-secrets",
       "enforced": true,
       "canonical": "deploy/compose/docker-compose.yml — the postgres service's refusal (the database itself refuses to start on these)",
       "how_to_agree": "one list: the internal-secret placeholders plus postgres and password; a value added at the database is added to every service that builds a database URL, or one of them boots on a password the database would have refused",
@@ -676,6 +679,27 @@
           "path": "deploy/lite/Makefile",
           "pattern": "^\\s*\"\"\\|(postgres\\|[^)\\n]*)\\) \\\\$",
           "note": "`make up` mints a new password when .env holds one of these"
+        },
+        {
+          "path": "deploy/helm/charts/vexa/templates/_helpers.tpl",
+          "pattern": "define \"vexa\\.publishedDbPasswords\" -\\}\\}\\n\\[([^\\]]*)\\]",
+          "note": "the chart's refusal of a bundled database password"
+        }
+      ]
+    },
+    {
+      "id": "redis-password-placeholders",
+      "fact": "the values compose's Redis refuses as REDIS_PASSWORD",
+      "kind": "set",
+      "extends": "placeholder-secrets",
+      "enforced": true,
+      "canonical": "deploy/compose/docker-compose.yml — the redis service's refusal",
+      "how_to_agree": "add a placeholder to placeholder-secrets and every extended list follows; a Redis-only value is added here",
+      "why": "Compose's redis refuses to start on a published password, from a list of its own that had drifted from the base placeholder list (architecture pass 4, S53). One site today; `extends` holds it to the base.",
+      "sites": [
+        {
+          "path": "deploy/compose/docker-compose.yml",
+          "pattern": "case \"\\$\\$REDIS_PASSWORD\" in\\n\\s*\"\"\\|([^)\\n]*)\\)"
         }
       ]
     },
@@ -1372,6 +1396,110 @@
           "sites": [
             "core/meetings/services/meeting-api/src/meeting_api/__main__.py"
           ]
+        }
+      ]
+    },
+    {
+      "id": "workload-managed-label",
+      "fact": "the label every spawned workload carries and the Helm NetworkPolicies select spawned Pods by",
+      "kind": "literal",
+      "enforced": true,
+      "canonical": "core/runtime/src/runtime_kernel/k8s_backend.py — MANAGED_LABEL",
+      "how_to_agree": "rename it in both backends and every NetworkPolicy in one change",
+      "why": "The runtime stamps it and the chart's policies select on it. A rename on one side leaves spawned Pods outside every workload policy, silently, and only under an enforcing CNI, which CI does not have (architecture pass 4, S54).",
+      "sites": [
+        {
+          "path": "core/runtime/src/runtime_kernel/k8s_backend.py",
+          "pattern": "^MANAGED_LABEL = \"([^\"]+)\""
+        },
+        {
+          "path": "core/runtime/src/runtime_kernel/docker_backend.py",
+          "pattern": "^MANAGED_LABEL = \"([^\"]+)\""
+        },
+        {
+          "path": "deploy/helm/charts/vexa/templates/networkpolicy-workloads.yaml",
+          "pattern": "^\\s+([a-z.]+): \"true\"$",
+          "all": true
+        },
+        {
+          "path": "deploy/helm/charts/vexa/templates/networkpolicy.yaml",
+          "pattern": "^\\s+([a-z.]+): \"true\"$",
+          "all": true
+        },
+        {
+          "path": "deploy/helm/charts/vexa/templates/networkpolicy-namespace.yaml",
+          "pattern": "^\\s+([a-z.]+): \"true\"$",
+          "all": true
+        }
+      ]
+    },
+    {
+      "id": "workload-class-label",
+      "fact": "the label key that names a spawned workload's class",
+      "kind": "literal",
+      "enforced": true,
+      "canonical": "core/runtime/src/runtime_kernel/profiles.py — CLASS_LABEL, and the agent profile's \"worker\"",
+      "how_to_agree": "rename the key or the worker value in the profiles, the docker backend's naming and every NetworkPolicy in one change",
+      "why": "A worker is told apart from a bot only by this label: the worker policy selects it, the bot policy and meeting-api's ingress select everything without it. A renamed key or value puts workers under the bot policy, silently (architecture pass 4, S54).",
+      "sites": [
+        {
+          "path": "core/runtime/src/runtime_kernel/profiles.py",
+          "pattern": "^CLASS_LABEL = \"([^\"]+)\""
+        },
+        {
+          "path": "core/runtime/src/runtime_kernel/docker_backend.py",
+          "pattern": "\\{\"([a-z.]+)\": \"worker\""
+        },
+        {
+          "path": "deploy/helm/charts/vexa/templates/networkpolicy-workloads.yaml",
+          "pattern": "^\\s+([a-z.]+): worker$"
+        },
+        {
+          "path": "deploy/helm/charts/vexa/templates/networkpolicy-workloads.yaml",
+          "pattern": "^\\s+- key: ([a-z.]+)\\n\\s+operator: NotIn\\n\\s+values: \\[worker\\]"
+        },
+        {
+          "path": "deploy/helm/charts/vexa/templates/networkpolicy.yaml",
+          "pattern": "^\\s+- key: ([a-z.]+)\\n\\s+operator: NotIn\\n\\s+values: \\[worker\\]"
+        },
+        {
+          "path": "deploy/helm/charts/vexa/templates/networkpolicy-namespace.yaml",
+          "pattern": "^\\s+([a-z.]+): worker$"
+        }
+      ]
+    },
+    {
+      "id": "workload-worker-class",
+      "fact": "the class value of an agent worker, as the runtime stamps it and the NetworkPolicies select it",
+      "kind": "literal",
+      "enforced": true,
+      "canonical": "core/runtime/src/runtime_kernel/profiles.py — the agent profile's labels",
+      "how_to_agree": "rename the value in the profile, the docker backend's naming and every NetworkPolicy in one change",
+      "why": "Every site's pattern names the value itself, so a site that renames it matches nothing and fails here: a renamed worker class would otherwise fall under the bot policy (architecture pass 4, S54).",
+      "sites": [
+        {
+          "path": "core/runtime/src/runtime_kernel/profiles.py",
+          "pattern": "labels=\\{CLASS_LABEL: \"(worker)\"\\}"
+        },
+        {
+          "path": "core/runtime/src/runtime_kernel/docker_backend.py",
+          "pattern": "\\{\"vexa\\.role\": \"(worker)\""
+        },
+        {
+          "path": "deploy/helm/charts/vexa/templates/networkpolicy-workloads.yaml",
+          "pattern": "^\\s+vexa\\.role: (worker)$"
+        },
+        {
+          "path": "deploy/helm/charts/vexa/templates/networkpolicy-workloads.yaml",
+          "pattern": "values: \\[(worker)\\]"
+        },
+        {
+          "path": "deploy/helm/charts/vexa/templates/networkpolicy.yaml",
+          "pattern": "values: \\[(worker)\\]"
+        },
+        {
+          "path": "deploy/helm/charts/vexa/templates/networkpolicy-namespace.yaml",
+          "pattern": "^\\s+vexa\\.role: (worker)$"
         }
       ]
     }

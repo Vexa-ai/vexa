@@ -22,6 +22,7 @@
  *   sites[]       {path, pattern} — `pattern` is a JS regex with exactly ONE capture group; it must
  *                 match exactly once in the file. Zero matches or two is a STALE MANIFEST and fails:
  *                 the manifest cannot quietly stop describing the tree.
+ *   extends       (set facts) the id of a base set fact this one must contain, member for member.
  *   enforced      true  → every site must agree. This is the teeth.
  *                 false → the fact has ALREADY DRIFTED and agreeing needs a decision. The distinct
  *                         values are pinned in `distinct` and `decision` names what must be settled.
@@ -209,6 +210,25 @@ export function checkParity(root = DEFAULT_ROOT) {
       r.errs.push(`${fact.id}: ${h.path}:${h.line} writes "${fact.forbid_elsewhere}" and is not a declared site — read it from ${fact.canonical || "the canonical definition"} instead, or add the site to ${MANIFEST_PATH} and say why a third writer is right.`);
     results.push(r);
     errs.push(...r.errs);
+  }
+  // `extends`: a SET fact that is a base list plus extras (a credential that also refuses its own
+  // published values) must contain every member of the base fact, so the base list can grow in one
+  // place and every extended copy is made to follow. Checked only when both facts are themselves in
+  // agreement; a disagreement is already its own error.
+  const byId = new Map(results.map((r) => [r.id, r]));
+  for (const fact of manifest.facts || []) {
+    if (!fact.extends) continue;
+    const base = (manifest.facts || []).find((f) => f.id === fact.extends);
+    if (!base || base.kind !== "set" || fact.kind !== "set") {
+      errs.push(`${fact.id}: "extends" names "${fact.extends}", which is not a set fact in ${MANIFEST_PATH}`);
+      continue;
+    }
+    const mine = byId.get(fact.id), theirs = byId.get(base.id);
+    if (!mine || !theirs || mine.distinct.length !== 1 || theirs.distinct.length !== 1) continue;
+    const have = new Set(mine.distinct[0].split(" · "));
+    const missing = theirs.distinct[0].split(" · ").filter((v) => !have.has(v));
+    if (missing.length)
+      errs.push(`${fact.id} extends ${base.id} but lacks ${missing.join(", ")}: every value the base list refuses, this list must refuse too`);
   }
   const enforced = (manifest.facts || []).filter((f) => f.enforced);
   const ledger = (manifest.facts || []).filter((f) => !f.enforced);
