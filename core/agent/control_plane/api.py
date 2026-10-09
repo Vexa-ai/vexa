@@ -536,9 +536,12 @@ def _sse(events) -> Iterator[str]:
 
 def _has_custom_model_endpoint(cfg: dict) -> bool:
     """True iff a per-user Settings → Models config actually delivers a credential to the worker.
-    Mirrors overlay_model_config's inertness rule (dispatch.py): only ``mode=custom`` WITH a
-    ``base_url`` stamps auth env; ``api_key`` is optional (a keyless local gateway is legitimate)."""
-    return (cfg.get("mode") or "").strip() == "custom" and bool((cfg.get("base_url") or "").strip())
+    Mirrors overlay_model_config's inertness rule (dispatch.py): only ``mode=custom`` WITH an
+    endpoint stamps auth env; ``api_key`` is optional (a keyless local gateway is legitimate).
+    EITHER endpoint counts — a config that only sets ``harness_base_url`` (the Messages side, the
+    one chat turns actually ride) is not inert (#1666)."""
+    return (cfg.get("mode") or "").strip() == "custom" and bool(
+        (cfg.get("base_url") or "").strip() or (cfg.get("harness_base_url") or "").strip())
 
 
 def _model_creds_error_message() -> str:

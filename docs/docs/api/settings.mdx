@@ -72,13 +72,39 @@ curl "$API_BASE/user/models" -H "X-API-Key: $API_KEY"
   "meeting_model": "gpt-4o-mini",
   "base_url": "https://api.example.com/v1",
   "api_key_set": true,
-  "api_key": "********1f4c"
+  "api_key": "********1f4c",
+  "harness_base_url": "https://messages.example.com",
+  "harness_api_key_set": true,
+  "harness_api_key": "********7b31",
+  "headers_set": true,
+  "headers": "x-provider-session: ********9012"
 }
 ```
 
-The stored credential never leaves in the clear: `api_key` is masked to its last four characters,
-enough to recognize which credential is set, and `api_key_set` states whether one exists at all.
-An unset field reads as `null`.
+The stored credential never leaves in the clear: `api_key` and `harness_api_key` are masked to
+their last four characters, enough to recognize which credential is set, and `*_set` states
+whether one exists at all. `headers` echoes its header **names** with the values masked. An unset
+field reads as `null`.
+
+### `mode: custom` drives two endpoints, not one
+
+A custom configuration feeds **two different wire contracts**, and they are not interchangeable:
+
+| What runs | Request | Auth header | Configured by |
+|---|---|---|---|
+| Agent chat, documents, routines (the Claude Code harness) | `POST {harness_base_url}/v1/messages` | `x-api-key` | `harness_base_url` · `harness_api_key` |
+| Meeting-time summarization (the completion adapters) | `POST {base_url}/chat/completions` | `Authorization: Bearer` | `base_url` · `api_key` |
+
+Each `harness_*` field falls back to its `base_url` / `api_key` twin, so a gateway that serves
+both dialects on one origin with one credential needs nothing beyond `base_url` and `api_key` —
+as before. Set the `harness_*` fields when the gateway serves the two dialects on different
+origins, or wants a different credential on each.
+
+Mind the paths: the completion call appends `/chat/completions` to `base_url` (so `base_url`
+usually ends in `/v1`), while the harness appends `/v1/messages` to `harness_base_url` (so that
+one usually does **not**). An endpoint that serves only `/chat/completions` cannot run agent
+turns at all today — there is no OpenAI-dialect harness — and **Settings → Models → Test** now
+says so instead of passing.
 
 ```bash PUT /user/models
 curl -X PUT "$API_BASE/user/models" \
@@ -99,11 +125,26 @@ Returns the same masked shape as the read, with **200 OK**.
   Model name for meeting-time work, when it should differ from `model`.
 </ParamField>
 <ParamField body="base_url" type="string">
-  OpenAI-compatible endpoint. Must be an `http` or `https` URL with a hostname, or the request
-  returns **422**.
+  OpenAI-compatible endpoint, called as `{base_url}/chat/completions`. Must be an `http` or
+  `https` URL with a hostname, or the request returns **422**.
 </ParamField>
 <ParamField body="api_key" type="string">
-  Credential for that endpoint. Stored, never echoed in the clear.
+  Credential for that endpoint, sent as `Authorization: Bearer`. Stored, never echoed in the clear.
+</ParamField>
+<ParamField body="harness_base_url" type="string">
+  Anthropic Messages endpoint for agent turns, called as `{harness_base_url}/v1/messages`.
+  Defaults to `base_url`. Same URL validation.
+</ParamField>
+<ParamField body="harness_api_key" type="string">
+  Credential for that endpoint, sent as `x-api-key`. Defaults to `api_key`. Stored, never echoed
+  in the clear.
+</ParamField>
+<ParamField body="headers" type="string | object">
+  Extra request headers sent with **both** call shapes — for a gateway that requires a session,
+  routing, organisation or entitlement header of its own. Either `Name: Value` lines or a JSON
+  object of name → value; both are stored as lines. A value that cannot be read as headers
+  returns **422** rather than being stored as a header that never arrives. These never override
+  the auth header.
 </ParamField>
 
 The update is **partial**: only the fields present in the body change. Sending a field as an empty
