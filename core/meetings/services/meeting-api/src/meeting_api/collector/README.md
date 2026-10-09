@@ -20,7 +20,7 @@ conformance.
   a MeetingToken for the meeting it writes for (`auth` + `sig`, transcript.v1 `StreamEntry`); anything
   else is acknowledged and dropped. No background loop — the caller drives it (eval `tick`).
 - **`segment_entry.py`** — transcript.v1's signer, vendored byte for byte from the contract (fact
-  `segment-entry-signer`); `ingest.signed_entry` re-exports it for the tools that publish to the stream.
+  `segment-entry-signer`); the package's front door exports it as `signed_entry` for the tools that publish to the stream.
 - **`erased_feed_sweep.py`** — the one-time operator sweep
   (`python -m meeting_api.collector.erased_feed_sweep [--dry-run]`): erases the Redis transcript keys
   of every meeting whose transcript was deleted, the same keys the delete route erases.

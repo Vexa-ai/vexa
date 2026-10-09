@@ -14,7 +14,7 @@ from typing import Optional
 import pytest
 
 from meeting_api.bot_spawn.invocation import mint_meeting_token
-from meeting_api.collector.ingest import signed_entry
+from meeting_api.collector import signed_entry
 
 SECRET = "segment-entry-secret-for-tests-0123456789abcdef"
 STREAM = "transcription_segments"

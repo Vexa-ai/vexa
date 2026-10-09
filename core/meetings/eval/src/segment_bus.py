@@ -29,7 +29,7 @@ def _redis(redis_url=None):
 
 def publish(lines, meeting_id, native, *, pace_s=0.0, redis_url=None) -> int:
     """XADD each JSON payload line as meeting ``meeting_id``'s session would. Returns the count."""
-    from meeting_api.collector.ingest import signed_entry
+    from meeting_api.collector import signed_entry
     from meeting_api.meeting_token import mint_meeting_token
 
     r = _redis(redis_url)
