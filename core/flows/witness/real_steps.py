@@ -7,9 +7,16 @@ from __future__ import annotations
 import json
 import smtplib
 import subprocess
+import sys
 import time
 import urllib.request
 from email.message import EmailMessage
+from pathlib import Path
+
+# agent-api believes a named person only from the gateway's signature or the internal tier;
+# this harness acts for one the way flows does (`flows_steps.agent.as_person`).
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from flows_steps.agent import as_person  # noqa: E402,F401 — the run_* scripts use rs.as_person
 
 GATEWAY = "http://localhost:18056"
 AGENT_API = "http://localhost:18100"
@@ -94,19 +101,19 @@ def agent_process(subject: str, meeting_id: int, native: str, transcript_text: s
         "[[wikilinks]]. Keep it terse and faithful — record only what was said.\n\nTRANSCRIPT:\n"
         + transcript_text)
     st, body = http("POST", f"{AGENT_API}/api/chat",
-                    {"X-User-Id": subject}, {"prompt": prompt, "session": f"meet-{meeting_id}"},
+                    as_person(subject), {"prompt": prompt, "session": f"meet-{meeting_id}"},
                     timeout=10)
     # SSE streams back on this connection; we don't consume it — completion is observed via git.
 
 
 def workspace_git(subject: str) -> dict:
-    st, body = http("GET", f"{AGENT_API}/api/workspace/git", {"X-User-Id": subject})
+    st, body = http("GET", f"{AGENT_API}/api/workspace/git", as_person(subject))
     return body if st == 200 else {"commits": []}
 
 
 def workspace_file(subject: str, path: str) -> str | None:
     st, body = http("GET", f"{AGENT_API}/api/workspace/file?path={urllib.parse.quote(path)}",
-                    {"X-User-Id": subject})
+                    as_person(subject))
     return body.get("content") if st == 200 and isinstance(body, dict) else None
 
 

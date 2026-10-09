@@ -114,7 +114,7 @@ def main() -> int:
     @reg.step
     def ensure_onboarding(ctx):
         code, _ = rs.http("GET", f"{rs.AGENT_API}/api/workspace/file?path=.scaffolded",
-                          {"X-User-Id": subject()})
+                          rs.as_person(subject()))
         if code == 200:
             say("workspace already set up — no onboarding needed")
             return Done({"already": True})
@@ -167,25 +167,25 @@ def main() -> int:
 
     def _history_len() -> int:
         code, hist = rs.http("GET", f"{rs.AGENT_API}/api/sessions/onboarding/history",
-                             {"X-User-Id": subject()})
+                             rs.as_person(subject()))
         return len(hist) if isinstance(hist, list) else 0
 
     def _latest_agent_reply():
         code, hist = rs.http("GET", f"{rs.AGENT_API}/api/sessions/onboarding/history",
-                             {"X-User-Id": subject()})
+                             rs.as_person(subject()))
         if isinstance(hist, list) and hist and hist[-1].get("role") == "agent" and hist[-1].get("text"):
             return len(hist), hist[-1]["text"].strip()
         return (len(hist) if isinstance(hist, list) else 0), None
 
     def _dispatch_agent(text: str) -> None:
-        rs.http("POST", f"{rs.AGENT_API}/api/chat", {"X-User-Id": subject()},
+        rs.http("POST", f"{rs.AGENT_API}/api/chat", rs.as_person(subject()),
                 {"prompt": text, "session": "onboarding"}, timeout=8)
 
     @reg.step
     def start_onboarding_chat(ctx):
         """NEVER blocks (the 16:14 freeze): dispatch the agent turn and return — the engine's
         Wait does the waiting while the runner keeps polling mail and driving other reactions."""
-        rs.http("POST", f"{rs.AGENT_API}/api/workspace/init", {"X-User-Id": subject()})
+        rs.http("POST", f"{rs.AGENT_API}/api/workspace/init", rs.as_person(subject()))
         kick = EMAIL_ONBOARDING_KICKOFF + ctx.refs["person"]
         if st.get("inbound"):
             kick += "\n\nThey have ALREADY written this — start from it, do not re-ask: " + st.pop("inbound")
@@ -197,7 +197,7 @@ def main() -> int:
     @reg.step
     def converse_until_scaffolded(ctx):
         code, _ = rs.http("GET", f"{rs.AGENT_API}/api/workspace/file?path=.scaffolded",
-                          {"X-User-Id": subject()})
+                          rs.as_person(subject()))
         if code == 200:
             say("agent accepted: .scaffolded written — onboarding complete")
             return Done({"ready": True})
@@ -217,7 +217,7 @@ def main() -> int:
     @reg.step
     def require_workspace(ctx):
         code, _ = rs.http("GET", f"{rs.AGENT_API}/api/workspace/file?path=.scaffolded",
-                          {"X-User-Id": subject()})
+                          rs.as_person(subject()))
         if code == 200:
             return Done({"ready": True})
         if ctx.reaction.attempt % 5 == 1:      # nudge every ~5th check, not every minute

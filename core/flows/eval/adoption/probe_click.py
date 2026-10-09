@@ -20,8 +20,15 @@ import sys
 import time
 import urllib.request
 
+import os
+
 import rig
 from probe import login
+
+# agent-api believes a named person only from the gateway's signature or the internal tier;
+# this harness acts for one the way flows does (`flows_steps.agent.as_person`).
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "src"))
+from flows_steps.agent import as_person  # noqa: E402
 
 EMAIL = sys.argv[1] if len(sys.argv) > 1 else "sim-shr-eng1@rehearsal.test"
 GATEWAY = "http://127.0.0.1:18456"
@@ -130,7 +137,8 @@ req = urllib.request.Request(f"{AGENT_API}/api/chat", method="POST",
                              data=json.dumps({"prompt": prompt,
                                               "session": f"meet-{meeting_id}"}).encode())
 req.add_header("content-type", "application/json")
-req.add_header("X-User-Id", str(uid))
+for _k, _v in as_person(uid).items():
+    req.add_header(_k, _v)
 reply = ""
 try:
     with urllib.request.urlopen(req, timeout=240) as r:

@@ -19,6 +19,9 @@ substitutes for the other, and a change can move one without moving the other.
 - **Everything through the product's own interfaces.** A harness drives the MCP and the HTTP APIs a
   person's client would drive. It does not reach into another service's database or container — if
   it needs something no interface offers, that gap is the finding.
+- **A person is named the way flows names one.** A chat turn or a workspace read at agent-api
+  carries `flows_steps.agent.as_person(uid)` — the person's id over the internal tier — so export
+  the deployment's `INTERNAL_API_SECRET` before a run; a bare `X-User-Id` is refused (`401`).
 - **A score with no artifact behind it is not a score.** Every run writes its mails, notes, turns
   and model proof to a run directory, so any number can be argued with afterwards.
 - **A dimension that cannot fail is decoration.** Prefer a conservative check that reports what it

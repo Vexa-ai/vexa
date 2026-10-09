@@ -20,6 +20,11 @@ from email.message import EmailMessage
 import judge
 import personas
 
+# agent-api believes a named person only from the gateway's signature or the internal tier;
+# this harness acts for one the way flows does (`flows_steps.agent.as_person`).
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "src"))
+from flows_steps.agent import as_person  # noqa: E402
+
 EMAIL = open("/tmp/onb_email").read().strip()
 UID = sys.argv[1] if len(sys.argv) > 1 else "107"
 MAILBOX = "vexa@sim.test"
@@ -42,7 +47,7 @@ def scaffolded():
     try:
         with urllib.request.urlopen(urllib.request.Request(
                 "http://127.0.0.1:18500/api/workspace/file?path=.scaffolded",
-                headers={"X-User-Id": UID}), timeout=20) as r:
+                headers=as_person(UID)), timeout=20) as r:
             return r.status == 200
     except Exception:  # noqa: BLE001
         return False

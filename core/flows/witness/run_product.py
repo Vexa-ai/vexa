@@ -139,10 +139,10 @@ def main() -> int:
     def setup_personal_workspace(ctx):
         reply = ctx.prior["await_human_reply"]["reply"]
         say(f"human replied ({reply[:50]!r}) → scaffolding the personal workspace")
-        rs.http("POST", f"{rs.AGENT_API}/api/workspace/init", {"X-User-Id": subject()})
-        rs.http("PUT", f"{rs.AGENT_API}/api/workspace/file", {"X-User-Id": subject()},
+        rs.http("POST", f"{rs.AGENT_API}/api/workspace/init", rs.as_person(subject()))
+        rs.http("PUT", f"{rs.AGENT_API}/api/workspace/file", rs.as_person(subject()),
                 {"path": "_system/identity.md", "content": f"# Identity\n\n{reply}\n"})
-        rs.http("PUT", f"{rs.AGENT_API}/api/workspace/file", {"X-User-Id": subject()},
+        rs.http("PUT", f"{rs.AGENT_API}/api/workspace/file", rs.as_person(subject()),
                 {"path": ".scaffolded", "content": time.strftime("%Y-%m-%d")})
         rs.send_mail(organizer, "You're set up",
                      f"Workspace ready. Noted: {reply}\nYour first meeting's minutes follow shortly.")
@@ -153,7 +153,7 @@ def main() -> int:
     @reg.step
     def require_workspace(ctx):
         code, _ = rs.http("GET", f"{rs.AGENT_API}/api/workspace/file?path=.scaffolded",
-                          {"X-User-Id": subject()})
+                          rs.as_person(subject()))
         if code == 200:
             return Done({"ready": True})
         rs.send_mail(organizer, "Your minutes are waiting",
