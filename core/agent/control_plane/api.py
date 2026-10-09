@@ -74,7 +74,6 @@ from control_plane.workspace_reader import WorkspaceReader
 
 logger = logging.getLogger("agent_api.api")
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
-MEETING_STREAM_TRANSCRIPT_REPLAY = 80
 MEETING_STREAM_OUTPUT_REPLAY = 160
 # How long the SSE keeps draining after session_end when the copilot HAS written notes but its
 # view_end marker hasn't arrived (the final beat is ~10s of LLM; a dead worker never marks) —
@@ -1856,9 +1855,9 @@ def create_app(
             # guess) tells us processing is complete.
             pkey = f"proc:meeting:{meeting_id}"
             # Resume EXACTLY from the client's last-seen cursors when present (gapless reconnect);
-            # otherwise seed then live-tail (fresh connect). A missing proc cursor (old 2-part id)
+            # otherwise replay transcript history in bounded batches before tailing. A missing proc cursor (old 2-part id)
             # resumes from 0-0 — a full replay the client's upsert-by-id absorbs, never a gap.
-            last = {tkey: resume_t or "$", okey: resume_o or "$", pkey: resume_p or "0-0"}
+            last = {tkey: resume_t or "0-0", okey: resume_o or "$", pkey: resume_p or "0-0"}
             idle = 0
             ending = False        # transcript hit session_end — drain notes/cards before meeting-end
             ending_at = 0.0       # when the drain started (monotonic) — bounds a markerless worker
@@ -1896,20 +1895,6 @@ def create_app(
                 if isinstance(note, dict) and note.get("id") and note.get("text"):
                     yield ({"type": "note", "note": note}, cursor())
 
-            if resume_t is None:   # fresh connect → seed the bounded recent transcript tail
-                seed_rows = list(reversed(r.xrevrange(tkey, count=MEETING_STREAM_TRANSCRIPT_REPLAY) or []))
-                for entry_id, fields in seed_rows:
-                    last[tkey] = entry_id
-                    payload = json.loads(fields.get("payload", "{}"))
-                    if payload.get("type") == "session_end":
-                        ending = True
-                        ending_at = _time.monotonic()
-                        last.pop(tkey, None)
-                        continue
-                    if payload.get("type") == "retract":
-                        yield from retract_event(payload)
-                        continue
-                    yield from seg_events(payload)
             if resume_o is None:   # fresh connect → seed the output (cards/agent-activity) replay
                 output_seed_rows = list(reversed(r.xrevrange(okey, count=MEETING_STREAM_OUTPUT_REPLAY) or []))
                 for entry_id, fields in output_seed_rows:
@@ -1952,11 +1937,12 @@ def create_app(
                             if payload.get("type") == "session_end":
                                 ending = True            # don't end yet — drain the final beat first
                                 ending_at = _time.monotonic()
-                                last.pop(tkey, None)     # session_end is the last transcript entry
-                                break
+                                # Keep the cursor: history may contain a resumed session.
+                                continue
                             if payload.get("type") == "retract":
                                 yield from retract_event(payload)
                                 continue
+                            ending = False
                             yield from seg_events(payload)
                         elif stream == pkey:
                             yield from note_events(fields)
