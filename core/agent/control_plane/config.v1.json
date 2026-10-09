@@ -180,7 +180,7 @@
       "key": "VEXA_RUNNER",
       "class": "defaulted",
       "default": "claude-code",
-      "description": "agent harness stamped onto dispatched workspace turns: claude-code (default) | codex (the Codex app-server) | openai-agent (this repo's own loop over any OpenAI-compatible endpoint). The deployment FLOOR only \u2014 Settings \u2192 Models pins a harness per subject and the dispatch overlay wins. The openai-agent lane is configured by VEXA_LLM_BASE_URL / _API_KEY / _MODEL / _EXTRA_BODY, which the WORKER reads from its dispatch-stamped env: #1415 removed them from the runtime's forward list, so they travel by stamp and never by forwarding",
+      "description": "agent harness stamped onto dispatched workspace turns: claude-code (default) | codex (the Codex app-server) | openai-agent (this repo's own loop over any OpenAI-compatible endpoint). The deployment FLOOR only \u2014 Settings \u2192 Models pins a harness per subject and the dispatch overlay wins. The openai-agent lane is configured by VEXA_LLM_BASE_URL / _API_KEY / _MODEL / _EXTRA_BODY, which the runtime forwards into the worker from its own environment; a per-subject endpoint and extra_body from Settings \u2192 Models are stamped by the dispatch and win",
       "targets": [
         "compose"
       ]
