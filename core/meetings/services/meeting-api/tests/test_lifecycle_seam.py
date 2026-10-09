@@ -545,7 +545,7 @@ def test_no_extra_webhook_envelope_on_idempotent_replay():
     """The idempotent redelivery (no_op) advances NOTHING, so it must NOT add another
     status_change envelope to app.state.status_change_webhooks.
 
-    BUG: app._mount_lifecycle appends the envelope UNCONDITIONALLY (app.py L199-200), BEFORE the
+    BUG: lifecycle.mount.mount_lifecycle appended the envelope UNCONDITIONALLY, BEFORE the
     `change.no_op` guard that gates the persist + ws-publish. So the in-process envelope log
     double-counts a no-op replay even though no real advance (and no real webhook delivery / ws
     publish) occurred. The redis path (test_no_ws_publish_on_idempotent_replay) is correctly gated;
@@ -1340,7 +1340,7 @@ def test_status_change_envelope_log_is_bounded_under_sustained_callbacks():
     BUG (pre-fix): the capture was ``[]`` — its length equalled the number of advances forever.
     Expected: after cap+N genuine advances the capture holds at most the cap, and it holds the most
     RECENT envelopes (ring semantics every reader relies on)."""
-    from meeting_api.app import _ENVELOPE_LOG_CAP
+    from meeting_api.lifecycle.mount import _ENVELOPE_LOG_CAP
 
     repo = InMemoryMeetingRepo()
     app = create_app(meeting_repo=repo)

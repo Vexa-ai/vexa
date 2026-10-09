@@ -1,6 +1,6 @@
 """Lifecycle-callback durability + WS-status publish proofs.
 
-Both behaviours live in the lifecycle-callback nexus (``meeting_api.app._mount_lifecycle``), driven
+Both behaviours live in the lifecycle-callback nexus (``meeting_api.lifecycle.mount.mount_lifecycle``), driven
 here over the unified ``create_app`` via FastAPI ``TestClient`` — the SAME shipped handler prod runs,
 with in-process fakes (no DB, no real redis, no bot). Asserts:
 
