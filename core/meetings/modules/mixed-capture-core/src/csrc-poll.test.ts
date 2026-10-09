@@ -81,11 +81,14 @@ const receiver = (sources: () => ContributingSourceLike[]) => ({
   t += 200; poll.poll();
   check('inside the inactivity window a stale entry is NOT yet a deactivation',
     out.length === 1, JSON.stringify(out));
-  t += 300; poll.poll();   // 500ms > 400ms default
+  t += 550; poll.poll();   // 750ms staleness — just inside the 800ms window
+  check('just inside the window the entry is STILL held open (the boundary, not the middle)',
+    out.length === 1, JSON.stringify(out));
+  t += 100; poll.poll();   // 850ms > 800ms default
   check('past inactiveMs the deactivation is SYNTHESIZED (the transport never sends this edge)',
     out.length === 2 && out[1].active === false && out[1].csrc === 7 && out[1].tMs === t,
     JSON.stringify(out));
-  check('the default inactivity window is 400ms', CSRC_INACTIVE_MS === 400);
+  check('the default inactivity window is 800ms', CSRC_INACTIVE_MS === 800);
 
   // Speaking again is a NEW activation — turns are edges, not a level.
   speaking = true; lastSpoke = t; poll.poll();
@@ -117,7 +120,7 @@ const receiver = (sources: () => ContributingSourceLike[]) => ({
     JSON.stringify(out));
   check('health counts both as active', poll.health().active === 2, JSON.stringify(poll.health()));
   live.delete(11);
-  t += 500; poll.poll();
+  t += 900; poll.poll();
   check('only the source that went quiet deactivates; the other stays open',
     out.length === 3 && out[2].csrc === 11 && out[2].active === false && poll.health().active === 1,
     JSON.stringify(out));
