@@ -24,6 +24,9 @@
   whether the gateway admits the call. One admitted (same person, same delegation) and four refused:
   another person, a wider delegation, the person's own identity, and an API-key bearer.
 
+The gateway's `tests/test_identity_vectors.py` drives the `reentry-*` and `headers-*` vectors
+through `delegation.McpReentry` and `identity_token.headers_from_claims`.
+
 `validate.mjs` re-signs and re-verifies them in Node and fails any golden that carries a PEM
 private key; the gateway's `tests/test_identity_token.py` does the same in Python against its
 vendored copy, which `gate:fact-parity` holds byte-identical to every other.
