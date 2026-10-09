@@ -391,10 +391,10 @@
       "sites": [
         {
           "path": "core/agent/control_plane/config.v1.json",
-          "pattern": "\"forbidden_values\"\\s*:\\s*\\[([^\\]]*)\\]",
+          "pattern": "\"key\"\\s*:\\s*\"(?!VEXA_MCP_DELEGATION_SECRET\")[A-Z0-9_]+\"[^{}]*?\"forbidden_values\"\\s*:\\s*\\[([^\\]]*)\\]",
           "flags": "m",
           "all": true,
-          "note": "every forbidden_values list in this contract must be the same list"
+          "note": "every forbidden_values list in this contract but the delegation secret's (fact delegation-secret-placeholders) must be the same list"
         },
         {
           "path": "core/flows/src/config.v1.json",
@@ -412,7 +412,7 @@
         },
         {
           "path": "core/identity/services/admin-api/src/admin_api/config.v1.json",
-          "pattern": "\"key\"\\s*:\\s*\"(?!DB_PASSWORD\")[A-Z0-9_]+\"[^{}]*?\"forbidden_values\"\\s*:\\s*\\[([^\\]]*)\\]",
+          "pattern": "\"key\"\\s*:\\s*\"(?!DB_PASSWORD\"|VEXA_MCP_DELEGATION_SECRET\")[A-Z0-9_]+\"[^{}]*?\"forbidden_values\"\\s*:\\s*\\[([^\\]]*)\\]",
           "flags": "m",
           "all": true,
           "note": "every forbidden_values list on a secret row of this contract must be the same list; the DB_PASSWORD row carries database-password-placeholders instead"
@@ -448,6 +448,25 @@
           "path": "core/meetings/services/mcp/src/vexa_mcp/manifest.py",
           "pattern": "PLACEHOLDER_KEYS = \\{([^}]*)\\}",
           "note": "the MCP's refusal of a published operator key for an auth: admin tool"
+        }
+      ]
+    },
+    {
+      "id": "delegation-secret-placeholders",
+      "fact": "the values VEXA_MCP_DELEGATION_SECRET may never hold: the internal-secret placeholders plus the key delegation.v1's published vectors are made with",
+      "kind": "set",
+      "enforced": true,
+      "canonical": "core/agent/control_plane/config.v1.json — VEXA_MCP_DELEGATION_SECRET (the minter's declaration)",
+      "how_to_agree": "change both declarations in one change; a new published test key joins both",
+      "why": "agent-api signs every worker's delegation token with this key and admin-api verifies it; the boot preflight of each refuses the declared values. delegation.v1's goldens publish a working key, so a deployment that copied it would accept a token anyone can mint. Both holders must refuse the same list, or one boots with a key the other would refuse. core/agent/tests/test_delegation_vectors.py checks that the vectors' key is on it.",
+      "sites": [
+        {
+          "path": "core/agent/control_plane/config.v1.json",
+          "pattern": "\"key\"\\s*:\\s*\"VEXA_MCP_DELEGATION_SECRET\"[^{}]*?\"forbidden_values\"\\s*:\\s*\\[([^\\]]*)\\]"
+        },
+        {
+          "path": "core/identity/services/admin-api/src/admin_api/config.v1.json",
+          "pattern": "\"key\"\\s*:\\s*\"VEXA_MCP_DELEGATION_SECRET\"[^{}]*?\"forbidden_values\"\\s*:\\s*\\[([^\\]]*)\\]"
         }
       ]
     },

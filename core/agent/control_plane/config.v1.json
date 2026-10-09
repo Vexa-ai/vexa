@@ -459,7 +459,17 @@
         "lite"
       ],
       "capability": "worker_toolbelt",
-      "secret": true
+      "secret": true,
+      "forbidden_values": [
+        "vexa-internal-secret",
+        "lite-internal-secret",
+        "changeme",
+        "change-me",
+        "CHANGE-ME",
+        "default",
+        "secret",
+        "delegation.v1-published-test-vector-key"
+      ]
     },
     {
       "key": "VEXA_SECRETS_KEY",

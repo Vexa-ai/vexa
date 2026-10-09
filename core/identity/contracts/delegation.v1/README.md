@@ -48,4 +48,6 @@ own verifier does.
   `gate:fact-parity` (fact `delegation-token`) compares the three. Edit this one and copy it out.
 - `delegation.schema.json` — the header, the claims, the refusal reasons and the vector shapes.
 - `golden/` — claims, minting vectors and refusal vectors, made with a published test key.
-  `validate.mjs` re-mints and re-verifies them in Node (gate:schema).
+  `validate.mjs` re-mints and re-verifies them in Node (gate:schema), and
+  `core/agent/tests/test_delegation_vectors.py` does the same in Python with the vendored module
+  (gate:python). Every service that loads `VEXA_MCP_DELEGATION_SECRET` refuses that key at boot.

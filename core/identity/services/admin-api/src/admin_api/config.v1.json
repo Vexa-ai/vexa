@@ -184,8 +184,9 @@
    "class": "capability",
    "capability": "agent_delegation",
    "secret": true,
-   "description": "the HS256 key agent-api signs a worker's per-dispatch delegation token with; /internal/validate verifies vxd_ bearers with it. Same value as agent-api's VEXA_MCP_DELEGATION_SECRET; generated at install on every deploy surface.",
-   "targets": ["compose", "helm", "lite"]
+   "description": "the HS256 key agent-api signs a worker's per-dispatch delegation token with; /internal/validate verifies vxd_ bearers with it. Same value as agent-api's VEXA_MCP_DELEGATION_SECRET; generated at install on every deploy surface. The placeholders and the key delegation.v1's published vectors are made with are refused at boot.",
+   "targets": ["compose", "helm", "lite"],
+   "forbidden_values": ["vexa-internal-secret", "lite-internal-secret", "changeme", "change-me", "CHANGE-ME", "default", "secret", "delegation.v1-published-test-vector-key"]
   }
  ]
 }
