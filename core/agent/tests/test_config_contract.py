@@ -276,6 +276,8 @@ def test_the_qwen_lane_dials_are_declared():
 # (ADR-0040) they are plumbed on compose and helm, and gate:config-contract holds them there.
 # 104: +1 VEXA_AGENT_MAX_CHAT_CONTINUATIONS — the bound on VEXA_AGENT_AUTO_CONTINUE_CHAT, and both
 # now plumbed on compose, helm and lite (they were `targets: []`, so no standard install could set them).
+# In the same span VEXA_REQUIRE_GATEWAY_IDENTITY was retired for VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE
+# (one key out, one in, net 0): agent-api believes an x-user-* header only when the gateway signed it.
 # 105: +1 RUNTIME_API_TOKEN — the runtime caller credential every runtime.v1 / schedule.v1 call presents.
 # 106: +1 REDIS_WORKLOAD_ACL — what a spawned worker connects to Redis as.
 # 107: +1 CODEX_HOME — the worker's Codex home, named by the runtime and read by the harness.
