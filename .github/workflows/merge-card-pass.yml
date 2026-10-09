@@ -1,0 +1,126 @@
+# merge-card-pass — make a posted architecture or security pass take effect without a push.
+#
+# The card's pass rows (scripts/merge-card-gate.mjs) read PR comments, but a comment does not
+# trigger merge-card.yml. This workflow could publish a `merge-card` check run on the PR head itself
+# (contribution-rights.yml does that for its own check from an issue_comment run); it RE-RUNS the
+# PR's newest `merge-card` run on the head instead, so merge-card.yml stays the only writer of the
+# `merge-card` check (P23). It re-runs the PR's newest `merge-card-comment` run too, so the sticky
+# card agrees with the check. A re-run keeps its original pull_request / pull_request_review /
+# pull_request_target event, checks out main's script again, re-reads every row, and lands its
+# verdict on the head sha, where branch protection reads it.
+#
+# It picks the run by PR as well as head sha: the card workflows name each run after its PR
+# (run-name), because two PRs can share one head. For the sticky card it takes the newest
+# pull_request_target run: a review-triggered run on a fork PR holds a read-only token and cannot
+# update the card. It never re-runs a run awaiting approval (a fork PR's run that a maintainer has
+# not approved yet). It re-reads the PR head just before each re-run and skips the re-run if the
+# head has moved: the old head's run would only render "Not judged", and in the PR's concurrency
+# group it could cancel the new head's run. It decides nothing: whether a marker counts
+# (maintainer, head sha, waiver) is the card's call. It is fail-soft, because its own job check
+# sits on main's commit: a failure here is a warning.
+name: merge-card-pass
+
+on:
+  issue_comment:
+    types: [created, edited, deleted]
+
+permissions:
+  actions: write        # re-run the head's merge-card and merge-card-comment runs
+  pull-requests: read   # resolve the PR's head sha
+
+# No cancelling concurrency group: these runs belong to main's newest commit, where a cancelled run
+# would mark that commit (the contribution-rights.yml precedent). Two pass comments in a burst
+# each wait for the head's run to settle and re-run it; the second re-run reads both comments.
+
+jobs:
+  rerun:
+    # Open pull requests only, a comment that carries (or, before an edit, carried) a pass marker,
+    # from an account associated with the repo. Anyone else's marker never counts on the card, so
+    # re-running for it would only spend minutes.
+    if: >-
+      ${{
+        github.event.issue.pull_request != null && github.event.issue.state == 'open' &&
+        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) &&
+        (contains(github.event.comment.body, 'vexa-pass:') || contains(github.event.changes.body.from, 'vexa-pass:'))
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Re-run the PR's newest merge-card and merge-card-comment runs on its head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.issue.number }}
+        run: |
+          set -u
+          pr_json=$(gh api "repos/$REPO/pulls/$PR") || { echo "::warning ::merge-card-pass — could not read PR #$PR"; exit 0; }
+          head=$(printf '%s' "$pr_json" | jq -r '.head.sha // ""')
+          head_repo=$(printf '%s' "$pr_json" | jq -r '.head.repo.full_name // ""')
+          head_ref=$(printf '%s' "$pr_json" | jq -r '.head.ref // ""')
+          if ! printf '%s' "$head" | grep -Eqx '[0-9a-f]{40}'; then
+            echo "::warning ::merge-card-pass — PR #$PR has no readable head sha; nothing re-run"
+            exit 0
+          fi
+          # The newest run on the head that judged THIS PR, and what to do with it: rerun, wait (in
+          # flight), or approval (awaiting a maintainer's approval: never re-run). A run named after
+          # its PR (run-name) matches by name. An older run without that name matches by its
+          # pull_requests list or, for a fork run (whose list is empty), by head repository and
+          # branch. merge_group runs belong to the queue, not to a PR's head; $event, when set, is
+          # the only event taken. Tested in scripts/merge-card-gate.test.mjs.
+          pick='[ (.workflow_runs // [])[]
+            | select(.event != "merge_group" and ($event == "" or .event == $event))
+            | select(if (.display_title | test("^merge-card(-comment)?: PR #[0-9]+$"))
+                then .display_title == $title
+                else ([(.pull_requests // [])[].number] | any(. == $pr))
+                  or (((.pull_requests // []) | length) == 0
+                      and .head_repository.full_name == $repo and .head_branch == $ref)
+                end) ]
+            | first // empty
+            | "\(.id) " + (if .conclusion == "action_required" then "approval"
+                elif .status == "completed" then "rerun" else "wait" end)'
+          # A run still in flight may have read the comments before this one landed: wait it out
+          # (each workflow's own timeout is 10 minutes), then re-run so the verdict reads this comment.
+          rerun() {  # $1 = workflow file, $2 = the run-name prefix it gives its runs, $3 = the only event to take ("" = any)
+            local wf=$1 prefix=$2 only=$3 attempt runs now
+            for attempt in $(seq 1 50); do
+              runs=$(gh api "repos/$REPO/actions/workflows/$wf/runs?head_sha=$head&per_page=100") || {
+                echo "::warning ::merge-card-pass — could not list $wf runs on head $head of #$PR; re-run it by hand"
+                return 0
+              }
+              set -- $(printf '%s' "$runs" | jq -r --arg title "$prefix: PR #$PR" --argjson pr "$PR" \
+                --arg repo "$head_repo" --arg ref "$head_ref" --arg event "$only" "$pick")
+              case "${2:-none}" in
+                none)
+                  echo "::warning ::merge-card-pass — no $wf run for #$PR on head $head to re-run; push, or re-run it by hand"
+                  return 0 ;;
+                approval)
+                  echo "::warning ::merge-card-pass — $wf run $1 for #$PR awaits approval; it is not re-run, and once a maintainer approves it, it reads this pass"
+                  return 0 ;;
+                rerun)
+                  # Re-read the head just before re-running: never re-run (or let a re-run cancel) a stale head.
+                  if ! now=$(gh api "repos/$REPO/pulls/$PR"); then
+                    echo "::warning ::merge-card-pass — could not re-read the head of #$PR before re-running $wf; nothing re-run, re-run it by hand"
+                    return 0
+                  fi
+                  now=$(printf '%s' "$now" | jq -r '.head.sha // ""')
+                  if [ -z "$now" ]; then
+                    echo "::warning ::merge-card-pass — could not re-read the head of #$PR before re-running $wf; nothing re-run, re-run it by hand"
+                    return 0
+                  fi
+                  if [ "$now" != "$head" ]; then
+                    echo "::warning ::merge-card-pass — #$PR moved off head $head while this job waited; $wf is not re-run. A pass names one sha: re-post it for the new head"
+                    return 0
+                  fi
+                  if gh api -X POST "repos/$REPO/actions/runs/$1/rerun" >/dev/null; then
+                    echo "re-ran $wf run $1 for #$PR on head $head"
+                  else
+                    echo "::warning ::merge-card-pass — could not re-run $wf run $1; re-run it by hand"
+                  fi
+                  return 0 ;;
+              esac
+              sleep 15
+            done
+            echo "::warning ::merge-card-pass — $wf run for #$PR on head $head did not complete in time; re-run it by hand"
+          }
+          rerun merge-card.yml merge-card ""                              # the required check: this is what gates
+          rerun merge-card-comment.yml merge-card-comment pull_request_target   # the sticky card comment, so it shows the same verdict
