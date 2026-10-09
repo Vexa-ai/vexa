@@ -49,9 +49,9 @@ def _require_config(env: "os._Environ | dict | None" = None) -> None:
 
     ``config.v1.json`` (next to this module) declares every env key the service consumes; the
     vendored shared preflight raises ``ConfigError`` (a ``RuntimeError``) naming every missing
-    *required-explicit* key — today ADMIN_TOKEN, which HS256-signs the MeetingToken every spawn
-    mints (invocation.mint_meeting_token) AND the recordings-upload verifier checks; unset, the
-    deploy would 500 every POST /bots, so it refuses to boot instead. Capability tri-states
+    *required-explicit* key — e.g. ADMIN_TOKEN, the MeetingToken key every spawn mints with and the
+    lifecycle callback and the uploads verify with (meeting_token); unset, the deploy would 500
+    every POST /bots, so it refuses to boot instead. Capability tri-states
     (stt · object_storage, incl. the STT live auth probe) are logged here and exposed on
     ``/health``; they never block boot.
     """
@@ -123,9 +123,9 @@ def build_production_app():
     database_url = _database_url()
     redis_url = os.getenv("REDIS_URL", "redis://redis:6379/0")
     runtime_api_url = os.getenv("RUNTIME_API_URL", "http://runtime:8090")
-    # MeetingToken is HS256-signed (mint) AND verified (recordings upload) with the SAME secret =
-    # ADMIN_TOKEN, exactly like main. (INTERNAL_API_SECRET is for the gateway↔admin-api internal
-    # validation only — a different concern.) None → the recordings verifier falls back to ADMIN_TOKEN.
+    # ADMIN_TOKEN is the MeetingToken key: spawns mint with it; the lifecycle callback and the uploads
+    # admit a bot's token with it (meeting_token). _require_config() refused a boot without it.
+    # INTERNAL_API_SECRET is a different credential, the internal tier (internal_secret below).
     token_secret = os.getenv("ADMIN_TOKEN") or None
 
     engine = build_engine(database_url)  # #635: env-steered pool (pool_pre_ping preserved in the helper)
