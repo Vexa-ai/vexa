@@ -54,7 +54,9 @@ each slice carrying only what the rehearsal proved worth carrying.
   stay with the client they were issued to, and re-ask sign-in admission.
 - **`workspace_write` is a dev double** — agent-api exposes no HTTP write, so this reaches the
   volume directly. That missing endpoint is the real gap behind first-class remote workspaces.
-- **Mail is a double** (mailpit): nothing leaves the host.
+- **Mail is a double** (mailpit): nothing leaves the host. It holds every message sent to anyone,
+  sign-in codes included, so `mail_inbox`/`mail_read` answer the instance admin in their own
+  session and refuse everyone else, delegated workers included.
 
 ## Running it
 

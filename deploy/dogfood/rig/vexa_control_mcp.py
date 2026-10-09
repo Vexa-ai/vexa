@@ -2207,7 +2207,8 @@ mcp = MCPServer(
         "so your person can reshape it in a sentence and a wrong step name is a 400, not a "
         "runtime failure. reactions_list shows runs; reaction_signal "
         "(resume/retry/cancel/wake) steers them; fact_emit feeds events in.\n"
-        "\u2022 MAIL — mail_inbox/mail_read: every message Vexa sent this team, as received.\n"
+        "\u2022 MAIL — mail_inbox/mail_read: every message Vexa sent, as received — the "
+        "instance operator's view only.\n"
         "\u2022 DOCS, NO ACCOUNT NEEDED — vexa_overview() and vexa_search_docs(query) work "
         "anonymously, so 'what is this?' is always answerable.\n"
         "\u2022 SIGN-IN — one question, one code, never leaves this chat: ask which email "
@@ -3589,14 +3590,30 @@ def meeting_seed(native_id: str, title: str, video_id: str,
                        "read_the_words_with": "meeting_transcript(meeting_id=%s, tail=0)" % mid})
 
 
+def _mail_sink_gate(verb: str) -> str:
+    """"" when the caller may read the mail double, else the refusal. The sink holds every message
+    this deployment sent to anyone, sign-in codes and sign-in links included, so it is the
+    instance operator's view: never a delegated worker's, whatever its regime, and never another
+    person's."""
+    what_to_do = ("Only the instance admin, in their own session, reads the mail double. To "
+                  "see what Vexa sent your person, ask them to check their inbox.")
+    if CALL_SCOPE.get() is not None:
+        return json.dumps({"refused": "operator only", "verb": verb, "who": "delegated worker",
+                           "why": "the mail double holds every person's sign-in mail",
+                           "what_to_do": what_to_do})
+    return _operator_gate(verb, what_to_do)[1]
+
+
 @mcp.tool()
 @_anon_guard
 def mail_inbox(limit: int = 20) -> str:
     """Read the mail double. Every message the system has sent, with nothing leaving the
     host — this is the outbound half of the loop and the honest way to check what a flow
-    actually said to a person. Account-scoped: an open inbox would let an agent read the
-    sign-in codes and skip the human."""
-    me()
+    actually said to a person. OPERATOR ONLY: the sink holds every person's mail, sign-in codes
+    included, so it is refused to anyone but the instance admin and to every delegated worker."""
+    refused = _mail_sink_gate("mail_inbox")
+    if refused:
+        return refused
     st, body = _http("GET", f"{MAILPIT}/api/v1/messages?limit={limit}", None)
     if isinstance(body, dict):
         msgs = [{"from": m["From"]["Address"],
@@ -3610,9 +3627,13 @@ def mail_inbox(limit: int = 20) -> str:
 @mcp.tool()
 @_anon_guard
 def mail_read(message_id: str) -> str:
-    """The full body of one sent message — the artifact as the person receives it."""
-    me()
-    st, body = _http("GET", f"{MAILPIT}/api/v1/message/{message_id}", None)
+    """The full body of one sent message — the artifact as the person receives it. OPERATOR
+    ONLY, like mail_inbox."""
+    refused = _mail_sink_gate("mail_read")
+    if refused:
+        return refused
+    st, body = _http("GET", f"{MAILPIT}/api/v1/message/{urllib.parse.quote(str(message_id), safe='')}",
+                     None)
     if isinstance(body, dict):
         return json.dumps({"subject": body.get("Subject"),
                            "text": (body.get("Text") or "")[:6000]})

@@ -294,3 +294,40 @@ def test_the_login_page_escapes_what_it_reflects(monkeypatch, mail):
 
 def test_page_titles_are_escaped():
     assert b"<script>" not in rig._login_page("<p>x</p>", "<script>a</script>.md")
+
+
+# ── the mail double holds everyone's sign-in mail: the operator's view only ─────────────────────
+
+SINK = {"/api/v1/messages": (200, {"total": 1, "messages": [
+    {"From": {"Address": "vexa@vexa.ai"}, "To": [{"Address": "someone@example.com"}],
+     "Subject": "Your Vexa sign-in code: 123456", "ID": "m1"}]}),
+        "/api/v1/message/": (200, {"Subject": "s", "Text": "123456"})}
+
+
+@pytest.mark.parametrize("verb,args", [("mail_inbox", ()), ("mail_read", ("m1",))])
+def test_a_person_who_is_not_the_operator_cannot_read_the_mail_double(monkeypatch, verb, args):
+    http = as_user(monkeypatch, "7", routes=SINK)
+    out = json.loads(tool(verb)(*args))
+    assert out.get("refused") == "operator only", out
+    assert not http.urls("/api/v1/"), "the sink was read"
+
+
+@pytest.mark.parametrize("verb,args", [("mail_inbox", ()), ("mail_read", ("m1",))])
+@pytest.mark.parametrize("regime", ["human", "autonomous"])
+def test_no_delegated_worker_reads_the_mail_double(monkeypatch, verb, args, regime):
+    http = as_user(monkeypatch, "7", admin=True, routes=SINK)
+    rig.CALL_SCOPE.set({"regime": regime, "workspaces": "*"})
+    try:
+        out = json.loads(tool(verb)(*args))
+    finally:
+        rig.CALL_SCOPE.set(None)
+    assert out.get("refused") == "operator only", out
+    assert not http.urls("/api/v1/")
+
+
+def test_the_operator_reads_the_mail_double(monkeypatch):
+    http = as_user(monkeypatch, "7", admin=True, routes=SINK)
+    out = json.loads(tool("mail_inbox")())
+    assert out["messages"][0]["id"] == "m1"
+    tool("mail_read")("../messages")
+    assert http.urls("/api/v1/message/")[-1].endswith("/api/v1/message/..%2Fmessages")
