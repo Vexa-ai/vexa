@@ -1035,6 +1035,8 @@
       "fact": "how many digits a Teams short meeting id (teams.microsoft.com/meet/<id>) may have",
       "kind": "literal",
       "enforced": true,
+      "canonical": "core/meetings/services/meeting-api/src/meeting_api/bot_spawn/service.py — _TEAMS_SHORT_ID (the server that spawns the bot decides what a Teams meeting is)",
+      "how_to_agree": "change the length in all three parsers in one change",
       "decided": "10 to 16 digits: the browser extension now accepts the lengths meeting-api and the MCP's link parser accept, so a link the server takes is one the extension recognises (coordinator, 2026-10-09).",
       "why": "Three parsers in three packages and two languages decide whether a URL is a Teams meeting; nothing compared them and they already disagree at 16 digits (architecture pass 3, S4).",
       "sites": [
