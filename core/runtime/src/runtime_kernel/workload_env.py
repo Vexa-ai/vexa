@@ -185,14 +185,15 @@ def declared_mounts(env: Mapping[str, str]) -> list[dict]:
 
 
 def check_mounts(env: Mapping[str, str], store: StoreConfig) -> None:
-    """Refuse any mount the runtime does not serve. Raises :class:`MountRefused`."""
+    """Refuse any mount the runtime does not serve: every mount's path must sit strictly under the
+    workspace store — one with its own ``source`` too, since that path is where the source is bound —
+    and a ``source`` must be one the runtime was configured to serve. Raises :class:`MountRefused`."""
     for m in declared_mounts(env):
         path = _clean_abs(m["path"], what=f"{MOUNTS_ENV} path")
         source = m.get("source")
-        if source:
-            if not isinstance(source, str) or _clean_abs(source, what=f"{MOUNTS_ENV} source") not in store.extra_sources:
-                raise MountRefused(f"{MOUNTS_ENV}: mount {m.get('slug')!r} names a source this runtime does not serve")
-            continue
+        if source and (not isinstance(source, str)
+                       or _clean_abs(source, what=f"{MOUNTS_ENV} source") not in store.extra_sources):
+            raise MountRefused(f"{MOUNTS_ENV}: mount {m.get('slug')!r} names a source this runtime does not serve")
         if not _strictly_under(path, store.target):
             raise MountRefused(f"{MOUNTS_ENV}: mount {m.get('slug')!r} is outside the workspace store")
     cwd = env.get(WORKSPACE_PATH_ENV)

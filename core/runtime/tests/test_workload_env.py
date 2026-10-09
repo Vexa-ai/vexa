@@ -5,6 +5,7 @@ configuration: a caller's values are dropped, every mount must sit under the run
 and a mount with its own host source must name a source the runtime was configured to allow.
 """
 import json
+import os
 import sys
 
 import pytest
@@ -121,6 +122,21 @@ def test_the_mount_set_agent_api_builds_is_served():
     targets = [b.target for b in workspace_binds(env)]
     assert targets == ["/workspaces/_global", "/workspaces/57", "/workspaces/.attached/57/repo",
                        "/workspaces/.system/57"]
+
+
+@pytest.mark.parametrize("target", [
+    "/root/.ssh",                                        # anywhere outside the store
+    "/var/run/docker.sock",
+    "/workspaces",                                       # the store root itself
+    "/workspacesX/_global",                              # a sibling that shares the prefix
+    "/workspaces/../app",
+])
+def test_an_allowed_source_still_binds_only_inside_the_store(target):
+    """runtime.v1: EVERY mount path sits strictly under the store — a mount naming a source the
+    runtime serves is no exception, because its path is where that source is bound."""
+    with pytest.raises(MountRefused):
+        workload_env({"VEXA_MOUNTS": _mounts(_mount(target, role="global", write=False,
+                                                     source="/srv/vexa-global"))}, STORE)
 
 
 def test_an_unconfigured_global_source_is_refused():
@@ -254,8 +270,13 @@ def test_a_real_child_sees_none_of_the_runtimes_secrets(monkeypatch, tmp_path):
     for k, v in _RUNTIME_ENV.items():
         if k not in ("PATH", "HOME"):
             monkeypatch.setenv(k, v)
-    monkeypatch.setenv("PROCESS_LOG_DIR", str(tmp_path))
-    out = tmp_path / "env.json"
+    monkeypatch.setenv("PROCESS_LOG_DIR", str(tmp_path / "logs"))
+    drop = tmp_path / "drop"                       # under a root runtime the child is another uid
+    drop.mkdir()
+    os.chmod(drop, 0o1777)
+    for d in (tmp_path, tmp_path.parent, tmp_path.parent.parent):
+        os.chmod(d, 0o755)
+    out = drop / "env.json"
     code = f"import json, os; json.dump(dict(os.environ), open({str(out)!r}, 'w'))"
     for name, profile in (("worker", _profiles.agent()), ("bot", _profiles.bot())):
         b = ProcessBackend()
