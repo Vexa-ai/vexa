@@ -8,9 +8,7 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import json
-import os
 import re
-import tempfile
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,6 +18,7 @@ from fastapi import HTTPException
 
 from control_plane.repo_ref import normalize
 from control_plane.workspace_attach import _safe_subject_dir
+from shared.atomic_json import write_json_atomic
 from shared.git_redaction import redact
 
 
@@ -32,19 +31,6 @@ def _store(root: str | Path, subject: str) -> Path:
     path = Path(root) / '.imports' / subject
     path.mkdir(parents=True, exist_ok=True, mode=0o700)
     return path
-
-
-def _write(path: Path, value: dict) -> None:
-    fd, name = tempfile.mkstemp(dir=path.parent, prefix='.status-')
-    try:
-        with os.fdopen(fd, 'w') as out:
-            json.dump(value, out)
-            out.flush()
-            os.fsync(out.fileno())
-        os.replace(name, path)
-    finally:
-        if os.path.exists(name):
-            os.unlink(name)
 
 
 def ssh_form(url: str) -> str | None:
@@ -97,7 +83,7 @@ def status(root: str | Path, subject: str, operation_id: str) -> dict:
             # No worker owns this operation. Do not silently retry an uncertain mutation.
             result.update(status='interrupted', updated_at=_now(),
                           error='Import was interrupted. Check the workspace before retrying.')
-            _write(path, result)
+            write_json_atomic(path, result)
     return result
 
 
@@ -121,12 +107,12 @@ def start(root: str | Path, subject: str, repo: str, ref: str,
             return status(root, subject, operation_id)
     job = {'operation_id': operation_id, 'status': 'queued', 'repo': repo, 'ref': ref,
            'created_at': _now(), 'updated_at': _now()}
-    _write(path, job)
+    write_json_atomic(path, job)
 
     def run():
         try:
             job.update(status='running', updated_at=_now())
-            _write(path, job)
+            write_json_atomic(path, job)
             result = operation()
             job.update(status='completed', result=result, updated_at=_now())
         except HTTPException as exc:
@@ -137,7 +123,7 @@ def start(root: str | Path, subject: str, repo: str, ref: str,
                        error_status=500, updated_at=_now())
         finally:
             try:
-                _write(path, job)
+                write_json_atomic(path, job)
             finally:
                 lock.close()
 

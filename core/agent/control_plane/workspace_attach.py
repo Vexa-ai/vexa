@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
+from shared.atomic_json import write_json_atomic
 from shared.git_redaction import redact
 from control_plane.repo_ref import assert_not_credential, assert_public_host, valid_ref
 from shared.gitenv import pinned_git_env
@@ -260,18 +261,7 @@ def _normalized_active_set(state: dict) -> list[str]:
 
 def _save_state(store: Path, state: dict) -> None:
     store.mkdir(parents=True, exist_ok=True)
-    import tempfile
-    import os
-    fd, temporary = tempfile.mkstemp(dir=store, prefix=".state-")
-    try:
-        with os.fdopen(fd, "w") as output:
-            json.dump(state, output, indent=2, sort_keys=True)
-            output.flush()
-            os.fsync(output.fileno())
-        os.replace(temporary, store / STATE_FILENAME)
-    finally:
-        if os.path.exists(temporary):
-            os.unlink(temporary)
+    write_json_atomic(store / STATE_FILENAME, state, indent=2, sort_keys=True)
 
 
 def attached_workspaces(root: str | Path, subject: str) -> dict:

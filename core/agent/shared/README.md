@@ -16,6 +16,7 @@ nothing here starts a server.
 | `seeding` | materialises a person's workspace from a validated template; the "passes checks" gate for a seed folder |
 | `governance` | the dormant hard-enforcement hook for workspace entity writes |
 | `token_destination` | where a git token may travel: the one rule clone, pull and push obey |
+| `atomic_json` | the one atomic JSON write: a private temp file beside the target, fsynced, then `os.replace` |
 | `git_redaction` · `gitenv` | the P15 scrubber for git output, and the scrubbed environment every git subprocess runs with |
 | `host_claude` | where this container reads the host's Claude subscription credential, resolved at read time |
 | `timeline` | the worker's `now / last / next` block, from flows-api's read-only timeline route |

@@ -12,6 +12,8 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from shared.atomic_json import write_json_atomic
+
 
 class ResearchError(ValueError):
     pass
@@ -37,13 +39,7 @@ class Research:
             yield state
 
     def save(self, state):
-        path = self.directory / ('state-' + uuid.uuid4().hex + '.tmp')
-        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-        with os.fdopen(fd, 'w') as handle:
-            json.dump(state, handle)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(path, self.directory / 'state.json')
+        write_json_atomic(self.directory / 'state.json', state)
 
     def status(self, state):
         if state is None:
