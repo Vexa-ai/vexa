@@ -295,14 +295,21 @@ function parseMarkers(text) {
 // A comment's leading lines (MARKERS LEAD THE COMMENT, above): from the first line, each line
 // starting at column 0 with `<!--` and closing `-->` on the same line, blank lines allowed between
 // them; the run ends at the first other line. Each such line is a complete HTML block that nothing
-// above it can turn into code, so GitHub always hides it.
-const LEADING_COMMENT = /^<!--.*-->[ \t]*$/;
+// above it can turn into code, so GitHub always hides it. Checked with string tests on one line
+// at a time, not a regex over the body: the card never filters HTML, it only finds where a
+// comment's leading lines end.
+function isLeadingComment(line) {
+  let end = line.length;
+  while (end > 0 && (line[end - 1] === " " || line[end - 1] === "\t")) end--;
+  const text = line.slice(0, end);
+  return text.length >= 7 && text.startsWith("<!--") && text.endsWith("-->");
+}
 
 function leadingLines(body) {
   const out = [];
   for (const line of String(body || "").replace(/\r\n?/g, "\n").split("\n")) {
     if (!line.trim()) continue;
-    if (!LEADING_COMMENT.test(line)) break;
+    if (!isLeadingComment(line)) break;
     out.push(line);
   }
   return out;

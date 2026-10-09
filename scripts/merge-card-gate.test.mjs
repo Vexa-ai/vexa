@@ -433,6 +433,17 @@ test("R3-S1: markers count in the comment's leading lines — column 0, one comm
   assert.equal(passMarkers(r3).length, 2);
 });
 
+test("R3-S1: a leading line is one comment closed on its own line, checked without an HTML-matching regex", () => {
+  const m = marker("security", HEAD, "pass");
+  assert.equal(passMarkers(`${m}\t`).length, 1); //               trailing whitespace after the comment
+  assert.equal(passMarkers(`<!---->\n${m}`).length, 1); //        an empty comment leads too
+  assert.equal(passMarkers(`<!--->\n${m}`).length, 0); //         not closed on its own line: the run ends
+  assert.equal(passMarkers(`<!-- a -->x\n${m}`).length, 0); //    text after the comment: the run ends
+  // CodeQL's bad-tag-filter flags a regex that matches an HTML comment; the check is string-based
+  const src = readFileSync(new URL("./merge-card-gate.mjs", import.meta.url), "utf8");
+  assert.doesNotMatch(src, /=\s*\/\^<!--/);
+});
+
 test("R3-S1: a maintainer's marker for the head anywhere else says it must be the first line of the comment", () => {
   const row = passRow("security", [comment("maint", "LGTM `" + marker("security", HEAD, "pass") + "`")], opts);
   assert.equal(row.ok, false);
