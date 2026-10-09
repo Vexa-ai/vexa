@@ -3,7 +3,7 @@
   "domain": "agent",
   "owner": "core/agent",
   "edge": "gateway",
-  "note": "The agent control plane. ABSENT in the no-agents profile (PRD decision 40.6) \u2014 these eight rows and the routes that carry them are simply not there, so a request 404s. The edge registers them from this file: `forward` maps /agent/<path> onto agent-api's /api/<path>, a literal row is a route of its own (`stream` relays server-sent events), and `delegation` admits a worker's own delegation token \u2014 on the friction report its harness files, and nowhere else.",
+  "note": "The agent control plane. ABSENT in the no-agents profile (PRD decision 40.6) \u2014 these rows and the routes that carry them are simply not there, so a request 404s. The edge registers them from this file: `forward` maps /agent/<path> onto agent-api's /api/<path>, every row but the catch-all is a route of its own (`stream` relays server-sent events), `delegation` admits a worker's own delegation token \u2014 on the friction report its harness files, and nowhere else \u2014 and `mcp_reentry` admits it on the MCP's re-entry: one row per route a tool in mcp.tools.v1.json calls, and no other.",
   "presence_env": "AGENT_API_URL",
   "forward": {
     "edge_prefix": "/agent/",
@@ -21,12 +21,129 @@
     },
     {
       "method": "POST",
+      "path": "/agent/chat/name/agent",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/claims",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/claims/verdicts",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "GET",
+      "path": "/agent/connections",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/calendar/events",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/gmail/draft",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/gmail/inbox",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/gmail/read",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/gmail/search",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/gmail/thread",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/request",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/service/call",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "POST",
       "path": "/agent/friction",
       "scopes": [
         "bot",
         "tx"
       ],
       "delegation": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/global/ready",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
     },
     {
       "method": "GET",
@@ -36,6 +153,177 @@
         "tx"
       ],
       "stream": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/meeting/terms/scan",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/onboarding/research",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "GET",
+      "path": "/agent/time",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "PUT",
+      "path": "/agent/time/zone",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/asset",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/entity",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "GET",
+      "path": "/agent/workspace/file",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "PUT",
+      "path": "/agent/workspace/file",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/import",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "GET",
+      "path": "/agent/workspace/import/{operation_id}/status",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/invite",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "GET",
+      "path": "/agent/workspace/members",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/membership",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/move",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/new",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "GET",
+      "path": "/agent/workspace/purpose",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/remove",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "GET",
+      "path": "/agent/workspace/shared",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "GET",
+      "path": "/agent/workspace/tree",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
     },
     {
       "method": "DELETE",

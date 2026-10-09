@@ -10,6 +10,12 @@ serving: only this edge can sign one, it lives a minute, and it must name the sa
 the same delegation as the bearer. The header is in the `x-vexa-internal-` family, so a client
 cannot pass one through this edge to anything behind it.
 
+AND ONLY ON A ROUTE THE MCP'S TOOLS CALL. A valid re-entry proves the MCP is acting on an `/mcp`
+request this edge admitted; it does not prove the route is one an MCP tool calls. That second fact
+is data — `"mcp_reentry": true` on the route's routes.v1 row (`routes_manifest.py`) — and
+`create_app` admits re-entry only where both hold. A valid re-entry on any other row is refused
+like any other delegated REST call.
+
 `create_app` asks this module three questions: is this caller a worker (`is_delegated`), is this
 request the MCP acting on an admitted `/mcp` request (`McpReentry.admits`), and what does
 `/auth/me` say about a worker's admin standing (`reported_admin`). The `/ws` multiplex asks the

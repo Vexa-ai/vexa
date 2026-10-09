@@ -38,9 +38,12 @@ and meeting-api's `/ws/authorize-subscribe` are HTTP hops, not `*.v1` contracts.
 Assembled at boot from each deployed domain's `routes.v1.json` (`src/gateway/routes_manifest.py`);
 the edge declares only its own `/health` and `/auth/me`. A row carries its scopes and, with
 `"delegation": true`, admits a worker's own delegation token (the MCP front door and the agent's
-friction report; `src/gateway/delegation.py`). A domain fronted wholesale (the agent) declares
-`forward` — `{"edge_prefix": "/agent/", "upstream_prefix": "/api/"}` — and the edge registers its
-rows from the manifest without naming any of them.
+friction report; `src/gateway/delegation.py`); with `"mcp_reentry": true` it admits that token
+only on the MCP's re-entry — the rows the MCP's tools call back into, and no others. A domain
+fronted wholesale (the agent) declares `forward` — `{"edge_prefix": "/agent/", "upstream_prefix":
+"/api/"}` — and the edge registers its rows from the manifest without naming any of them: the
+catch-all, and a route of its own for every other row (literal, or with whole-segment `{name}`
+parameters re-encoded like any path parameter).
 
 ## Isolated evaluation
 `tests/` holds unit evals (L2) over `create_app` with in-process fakes injected via `conftest.py`

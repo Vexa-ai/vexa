@@ -12,7 +12,8 @@ The production edge logic, injectable. Modules:
 - **`multiplex.py`** — `run_multiplex`, the `/ws` control loop (subscribe/unsubscribe/ping) and
   its redis fan-in.
 - **`delegation.py`** — where a worker's delegation token is admitted: `/mcp` and the MCP's own
-  re-entry (`McpReentry`), and what `/auth/me` reports about a worker's admin standing.
+  re-entry (`McpReentry`) on the routes declared `"mcp_reentry": true`, and what `/auth/me`
+  reports about a worker's admin standing.
 - **`paths.py`** — path parameters and catch-all tails, re-encoded as opaque segments or refused
   before any downstream hop.
 - **`routes_manifest.py`** — assembles the route table from each deployed domain's `routes.v1.json`.

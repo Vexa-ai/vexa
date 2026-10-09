@@ -3,12 +3,13 @@
   "domain": "gateway",
   "owner": "core/gateway/services/gateway",
   "edge": "gateway",
-  "note": "The edge's OWN two routes, and the only ones it may declare: /health is the LB probe and /auth/me is 'who is this key'. Both are identity-only and forward nothing downstream, which is why they carry no scope \u2014 an empty `scopes` is a DECLARATION of that, never an omission.",
+  "note": "The edge's OWN two routes, and the only ones it may declare: /health is the LB probe and /auth/me is 'who is this key'. Both are identity-only and forward nothing downstream, which is why they carry no scope \u2014 an empty `scopes` is a DECLARATION of that, never an omission. /auth/me carries `mcp_reentry`: the MCP asks it, with a worker's token on its re-entry, before it spends the deployment's operator key on an `auth: admin` tool.",
   "routes": [
     {
       "method": "GET",
       "path": "/auth/me",
-      "scopes": []
+      "scopes": [],
+      "mcp_reentry": true
     },
     {
       "method": "GET",

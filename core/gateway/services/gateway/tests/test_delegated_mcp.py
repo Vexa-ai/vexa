@@ -8,7 +8,8 @@ There is no second upstream for it and no branch that skips authentication or th
 
 It is ADMITTED on `/mcp` only. The MCP's tools call back into the edge with the same bearer and the
 identity the edge signed onto the `/mcp` hop (`X-Vexa-Internal-Mcp-Identity`); that re-entry is
-admitted, and nothing else a worker sends with its token is.
+admitted on the routes the MCP's tools call back into (`"mcp_reentry": true` in their routes.v1
+rows), and nothing else a worker sends with its token is.
 """
 from fastapi.testclient import TestClient
 
@@ -95,6 +96,42 @@ def test_the_mcp_re_entry_resolves_the_same_bearer_on_rest_routes():
     assert claims["sub"] == "42" and claims["delegation"]["regime"] == "autonomous"
     # the marker is an authority header: it never travels past the edge
     assert "x-vexa-internal-mcp-identity" not in fwd
+
+
+def test_a_valid_re_entry_is_refused_on_a_route_the_mcp_does_not_call_back():
+    """Re-entry proves the MCP is acting on an `/mcp` request this edge admitted — not that the
+    route is one an MCP tool calls. A route whose row does not say `"mcp_reentry": true` refuses
+    the worker's bearer even with a valid re-entry identity, before any forward."""
+    client, downstream = _client()
+    routes = [("DELETE", "/meetings/1"), ("POST", "/meetings/1/share"), ("GET", "/meetings/1"),
+              ("POST", "/transcripts/by-id/1/share"), ("GET", "/user/webhook"),
+              ("PUT", "/user/webhook"), ("DELETE", "/recordings/1"), ("POST", "/meetings")]
+    if AGENT_CARRIED:
+        routes += [("GET", "/agent/sessions"), ("POST", "/agent/chat"), ("POST", "/agent/chat/submit"),
+                   ("POST", "/agent/routines"), ("DELETE", "/agent/workspace/tree"),
+                   ("GET", "/agent/workspace/tree/x")]
+    for method, path in routes:
+        r = client.request(method, path, json={}, headers={"X-API-Key": DELEGATED,
+                                                           "X-Vexa-Internal-Mcp-Identity": _reentry()})
+        assert r.status_code == 403, (method, path, r.status_code)
+        assert r.json() == {"detail": "a worker's delegation token is accepted on /mcp only"}
+    assert downstream.last is None
+
+
+def test_a_valid_re_entry_is_admitted_on_the_routes_the_mcp_declares_it_calls_back():
+    client, downstream = _client()
+    routes = [("POST", "/bots"), ("GET", "/bots/status"), ("DELETE", "/bots/google_meet/abc-defg-hij"),
+              ("GET", "/transcripts/google_meet/abc-defg-hij"), ("GET", "/transcripts/by-id/1"),
+              ("POST", "/meetings/1/annotate"), ("GET", "/recordings/5")]
+    if AGENT_CARRIED:
+        routes += [("GET", "/agent/workspace/tree"), ("PUT", "/agent/workspace/file"),
+                   ("GET", "/agent/workspace/import/op-1/status")]
+    for method, path in routes:
+        r = client.request(method, path, json={}, headers={"X-API-Key": DELEGATED,
+                                                           "X-Vexa-Internal-Mcp-Identity": _reentry()})
+        assert r.status_code == 200, (method, path, r.status_code)
+        claims = identity_token.verify(VERIFY_KEY, downstream.last["headers"][identity_token.HEADER])
+        assert claims["sub"] == "42" and claims["delegation"]["regime"] == "autonomous"
 
 
 def test_a_re_entry_marker_must_be_the_edges_own_signature_for_the_same_delegation():

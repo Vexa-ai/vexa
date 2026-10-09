@@ -13,7 +13,9 @@ base — so a tail is only ever a path UNDER the prefix it was matched on. A `.`
 (written plainly or percent-encoded) and an encoded slash or backslash are refused outright (400):
 no client of these routes needs either, and refusing is clearer than re-encoding something that was
 asking to change the path's shape. Every other segment goes through `path_segment`, so whatever
-survives is data in exactly the segment it was sent in.
+survives is data in exactly the segment it was sent in. A forwarded domain's OTHER rows (a literal
+path, or one with `{name}` segments) are held to the same rule (`forwarded_param`,
+`forwarded_target_error`), so a path answers the same whichever of the domain's rows it matched.
 """
 from __future__ import annotations
 
@@ -48,10 +50,30 @@ def path_segment(value: str) -> Tuple[Optional[str], Optional[Response]]:
     return segment, None
 
 
+def forwarded_param(value: str, request: Request) -> Tuple[Optional[str], Optional[Response]]:
+    """A `{name}` segment of a FORWARDED domain's row, held to its catch-all's rule: a `.`/`..`
+    value or an encoded separator anywhere in the target is refused (400) rather than re-encoded,
+    so a row of the domain refuses exactly what its catch-all would. Anything else is
+    `path_segment`."""
+    if _encoded_separator(request) or value in (".", ".."):
+        return None, invalid_path_param_response()
+    return path_segment(value)
+
+
+def _encoded_separator(request: Request) -> bool:
+    return bool(_ENCODED_SEPARATOR.search(request.scope.get("raw_path") or b""))
+
+
+def forwarded_target_error(request: Request) -> Optional[Response]:
+    """The 400 a forwarded domain's row answers when its target carries an encoded separator —
+    Starlette matches on the DECODED path, so `/agent/workspace%2ftree` reaches the literal row
+    `/agent/workspace/tree`, which its catch-all would have refused."""
+    return invalid_path_param_response() if _encoded_separator(request) else None
+
+
 def tail_path(path: str, request: Request) -> Tuple[Optional[str], Optional[Response]]:
     """A catch-all tail, re-encoded segment by segment — or the 400 that refuses its shape."""
-    raw = request.scope.get("raw_path") or b""
-    if _ENCODED_SEPARATOR.search(raw):
+    if _encoded_separator(request):
         return None, invalid_path_param_response()
     out: List[str] = []
     for segment in path.split("/"):

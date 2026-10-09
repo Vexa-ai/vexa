@@ -107,6 +107,39 @@ CASES = [
     ("PUT", "/agent/workspace/swap", "/agent/{path:path}"),
     ("PATCH", "/agent/routines/x/enabled", "/agent/{path:path}"),
     ("DELETE", "/agent/routines/x", "/agent/{path:path}"),
+    # the routes the agent's MCP tools call back into, each a row of its own (`mcp_reentry`)
+    ("POST", "/agent/chat/name/agent", "/agent/chat/name/agent"),
+    ("POST", "/agent/claims", "/agent/claims"),
+    ("POST", "/agent/claims/verdicts", "/agent/claims/verdicts"),
+    ("GET", "/agent/connections", "/agent/connections"),
+    ("POST", "/agent/connections/calendar/events", "/agent/connections/calendar/events"),
+    ("POST", "/agent/connections/gmail/draft", "/agent/connections/gmail/draft"),
+    ("POST", "/agent/connections/gmail/inbox", "/agent/connections/gmail/inbox"),
+    ("POST", "/agent/connections/gmail/read", "/agent/connections/gmail/read"),
+    ("POST", "/agent/connections/gmail/search", "/agent/connections/gmail/search"),
+    ("POST", "/agent/connections/gmail/thread", "/agent/connections/gmail/thread"),
+    ("POST", "/agent/connections/request", "/agent/connections/request"),
+    ("POST", "/agent/connections/service/call", "/agent/connections/service/call"),
+    ("POST", "/agent/global/ready", "/agent/global/ready"),
+    ("POST", "/agent/meeting/terms/scan", "/agent/meeting/terms/scan"),
+    ("POST", "/agent/onboarding/research", "/agent/onboarding/research"),
+    ("GET", "/agent/time", "/agent/time"),
+    ("PUT", "/agent/time/zone", "/agent/time/zone"),
+    ("POST", "/agent/workspace/asset", "/agent/workspace/asset"),
+    ("POST", "/agent/workspace/entity", "/agent/workspace/entity"),
+    ("GET", "/agent/workspace/file", "/agent/workspace/file"),
+    ("PUT", "/agent/workspace/file", "/agent/workspace/file"),
+    ("POST", "/agent/workspace/import", "/agent/workspace/import"),
+    ("GET", "/agent/workspace/import/op-1/status", "/agent/workspace/import/{operation_id}/status"),
+    ("POST", "/agent/workspace/invite", "/agent/workspace/invite"),
+    ("GET", "/agent/workspace/members", "/agent/workspace/members"),
+    ("POST", "/agent/workspace/membership", "/agent/workspace/membership"),
+    ("POST", "/agent/workspace/move", "/agent/workspace/move"),
+    ("POST", "/agent/workspace/new", "/agent/workspace/new"),
+    ("GET", "/agent/workspace/purpose", "/agent/workspace/purpose"),
+    ("POST", "/agent/workspace/remove", "/agent/workspace/remove"),
+    ("GET", "/agent/workspace/shared", "/agent/workspace/shared"),
+    ("GET", "/agent/workspace/tree", "/agent/workspace/tree"),
 
     ("GET", "/mcp", "/mcp"),
     ("POST", "/mcp", "/mcp"),
@@ -306,7 +339,7 @@ def test_matrix_covers_every_declared_route():
 
     Both sides are read from the same build: `ROUTE_SCOPES` is what this build publishes, and
     `CARRIED_CASES` is the rows it can exercise. So this stays an EXACT equality in a build that
-    fronts four domains (63 rows) as much as in one that fronts five (71) — it never degrades to a
+    fronts four domains (63 rows) as much as in one that fronts five (103) — it never degrades to a
     subset check, which would be the one way for a declaration to go unexercised unnoticed."""
     covered = {(method, template) for method, _url, template in CARRIED_CASES}
     assert covered == set(ROUTE_SCOPES), (

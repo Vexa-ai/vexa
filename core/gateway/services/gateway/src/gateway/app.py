@@ -38,7 +38,8 @@ from fastapi import FastAPI, Request, Response, WebSocket
 from . import identity_token, routes_manifest
 from .delegation import McpReentry, delegated_route_response, is_delegated, reported_admin
 from .multiplex import run_multiplex
-from .paths import invalid_path_param_response, path_segment, tail_path
+from .paths import (forwarded_param, forwarded_target_error, invalid_path_param_response,
+                    path_segment, tail_path)
 from fastapi.responses import StreamingResponse
 from fastapi.routing import APIRoute
 
@@ -298,9 +299,10 @@ def create_app(
         if not user_data:
             return Response(content=json.dumps({"detail": "Invalid API key"}),
                             status_code=401, media_type="application/json")
-        # A worker's delegation token is answered here only on the MCP's own re-entry.
+        # A worker's delegation token is answered here only on the MCP's own re-entry, and only
+        # because the edge's manifest declares this an MCP callback route (`"mcp_reentry"`).
         delegated = is_delegated(api_key, user_data)
-        if delegated and not reentry.admits(request, user_data):
+        if delegated and not _admits_mcp_reentry(request, user_data):
             return delegated_route_response()
         is_admin = reported_admin(user_data, delegated=delegated)
         set_user_id(user_data["user_id"])
@@ -318,6 +320,14 @@ def create_app(
     # anti-spoof identity injection live, so REST and SSE scope a request identically.
     reentry = McpReentry(identity_key)
 
+    def _admits_mcp_reentry(request: Request, user_data) -> bool:
+        """Is this a worker's call the MCP makes back into a route its tools call?
+
+        Both halves, always: the re-entry identity proves the MCP is acting on an `/mcp` request
+        this edge admitted, and the row's `"mcp_reentry": true` says this is a route the MCP's
+        tools call. Either alone is not enough — a valid re-entry on any other route is refused."""
+        return _route_key(request) in _assembly.mcp_reentry and reentry.admits(request, user_data)
+
     async def _authorize(method: str, request: Request, *, api_key: Optional[str] = None):
         # ``api_key`` overrides the header lookup for a route whose CLIENT protocol carries the key
         # somewhere else (the MCP transport uses ``Authorization: Bearer``). The resolution, the
@@ -325,8 +335,9 @@ def create_app(
         # A worker's delegation token (`vxd_…`) is resolved like any other bearer: identity verifies
         # it (signature, audience, expiry, the account still existing) and answers with the person it
         # acts for plus the dispatch's ceiling, which rides the signed identity below as
-        # `delegation`. It is ADMITTED only on a row whose manifest says `"delegation": true` or on
-        # the MCP's own re-entry — see `delegation.py`.
+        # `delegation`. It is ADMITTED only on a row whose manifest says `"delegation": true`, or on
+        # a row that says `"mcp_reentry": true` when the request is the MCP's own re-entry — see
+        # `delegation.py`.
         client_key = api_key if api_key is not None else request.headers.get("x-api-key")
         # Fail-closed: a client route with no key is rejected before any downstream call.
         if not client_key:
@@ -366,7 +377,7 @@ def create_app(
 
         if (is_delegated(client_key, user_data)
                 and _route_key(request) not in _assembly.delegation
-                and not reentry.admits(request, user_data)):
+                and not _admits_mcp_reentry(request, user_data)):
             log_event(
                 "request_denied_delegated_route",
                 audience="user",
@@ -925,10 +936,11 @@ def create_app(
 
     # A FORWARDED DOMAIN IS REGISTERED FROM ITS MANIFEST, and this code names none of its routes.
     # `forward` maps `<edge_prefix><path>` onto `<upstream_prefix><path>` at the domain's door; a
-    # literal row is a route of its own — relayed as server-sent events when it says `stream` —
-    # registered BEFORE the prefix's `{path:path}` catch-all so it wins; the catch-all carries the
-    # path/method/query/body verbatim, its tail re-encoded (`paths.py`). What a row admits (its
-    # scopes, a worker's delegation token) is read from the same row by `_authorize`.
+    # row that is not the catch-all is a route of its own — its `{name}` segments re-encoded
+    # (`paths.py`), relayed as server-sent events when it says `stream` — registered BEFORE the
+    # prefix's `{path:path}` catch-all so it wins; the catch-all carries the path/method/query/body
+    # verbatim, its tail re-encoded too. What a row admits (its scopes, a worker's delegation token,
+    # the MCP's re-entry) is read from the same row by `_authorize`.
     #
     # REGISTERED ONLY WHEN THE AGENT DOMAIN IS DEPLOYED: its manifest is loaded on the same
     # condition, so in a no-agents deployment the routes and their declarations are absent together
@@ -941,10 +953,23 @@ def create_app(
         rows = sorted(k for k, d in _assembly.owner_of.items() if d == domain)
 
         def literal(method: str, path: str):
-            url = f"{base_url}{upstream}{path[len(edge):]}"
+            template = f"{base_url}{upstream}{path[len(edge):]}"
+            names = routes_manifest.params_of(path)
             relay = _forward_stream if (method, path) in _assembly.stream else _forward
 
             async def forward_literal(request: Request):
+                # Held to the catch-all's rule (`paths.py`): an encoded separator in the target is a
+                # 400, and a `{name}` segment is filled with what the caller sent, re-encoded as ONE
+                # opaque segment (a `.`/`..` value refused, as the catch-all refuses it).
+                error = forwarded_target_error(request)
+                if error is not None:
+                    return error
+                url = template
+                for name in names:
+                    segment, error = forwarded_param(str(request.path_params.get(name, "")), request)
+                    if error is not None:
+                        return error
+                    url = url.replace("{" + name + "}", segment, 1)
                 return await relay(method, url, request)
             app.add_api_route(path, forward_literal, methods=[method])
 

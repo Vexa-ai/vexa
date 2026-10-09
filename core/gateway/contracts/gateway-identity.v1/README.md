@@ -66,6 +66,10 @@ Anything else is not re-entry, and the call answers 403 like any other delegated
 header, a forged or expired token, another person's identity, a wider delegation, or the person's own
 identity (no `delegation`). The `reentry-*` goldens pin the match rule; `validate.mjs` restates it.
 
+Re-entry that matches is still admitted only on a route the MCP's tools call back into — a route
+whose `routes.v1` row says `"mcp_reentry": true` (gateway `routes_manifest.py`). This contract fixes
+what re-entry IS; which routes accept it is the owning domain's declaration, not part of the header.
+
 ## Claims (`#/$defs/Claims`)
 
 | claim | header it becomes |

@@ -3,7 +3,7 @@
   "domain": "meetings",
   "owner": "core/meetings",
   "edge": "gateway",
-  "note": "Bots, meeting records, transcripts, recordings \u2014 and the two calendar SYNC verbs, which run against the feed meeting-api owns even though the connection itself is identity's.",
+  "note": "Bots, meeting records, transcripts, recordings \u2014 and the two calendar SYNC verbs, which run against the feed meeting-api owns even though the connection itself is identity's. A row with `mcp_reentry` is one the MCP's own meeting tools call back into (core/meetings/services/mcp/src/vexa_mcp/app.py): a worker's token is admitted there on the MCP's re-entry, and on no other row.",
   "presence_env": "MEETING_API_URL",
   "routes": [
     {
@@ -18,49 +18,56 @@
       "path": "/bots",
       "scopes": [
         "bot"
-      ]
+      ],
+      "mcp_reentry": true
     },
     {
       "method": "GET",
       "path": "/bots/status",
       "scopes": [
         "bot"
-      ]
+      ],
+      "mcp_reentry": true
     },
     {
       "method": "DELETE",
       "path": "/bots/{platform}/{native_meeting_id}",
       "scopes": [
         "bot"
-      ]
+      ],
+      "mcp_reentry": true
     },
     {
       "method": "GET",
       "path": "/bots/{platform}/{native_meeting_id}/chat",
       "scopes": [
         "bot"
-      ]
+      ],
+      "mcp_reentry": true
     },
     {
       "method": "PUT",
       "path": "/bots/{platform}/{native_meeting_id}/config",
       "scopes": [
         "bot"
-      ]
+      ],
+      "mcp_reentry": true
     },
     {
       "method": "POST",
       "path": "/bots/{platform}/{native_meeting_id}/speak",
       "scopes": [
         "bot"
-      ]
+      ],
+      "mcp_reentry": true
     },
     {
       "method": "GET",
       "path": "/meetings",
       "scopes": [
         "tx"
-      ]
+      ],
+      "mcp_reentry": true
     },
     {
       "method": "POST",
@@ -95,7 +102,8 @@
       "path": "/meetings/{meeting_id}/annotate",
       "scopes": [
         "tx"
-      ]
+      ],
+      "mcp_reentry": true
     },
     {
       "method": "POST",
@@ -130,7 +138,8 @@
       "path": "/meetings/{platform}/{native_meeting_id}/annotate",
       "scopes": [
         "tx"
-      ]
+      ],
+      "mcp_reentry": true
     },
     {
       "method": "PUT",
@@ -166,7 +175,8 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "mcp_reentry": true
     },
     {
       "method": "DELETE",
@@ -181,7 +191,8 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "mcp_reentry": true
     },
     {
       "method": "GET",
@@ -212,7 +223,8 @@
       "path": "/transcripts/by-id/{meeting_id}",
       "scopes": [
         "tx"
-      ]
+      ],
+      "mcp_reentry": true
     },
     {
       "method": "POST",
@@ -226,7 +238,8 @@
       "path": "/transcripts/search",
       "scopes": [
         "tx"
-      ]
+      ],
+      "mcp_reentry": true
     },
     {
       "method": "POST",
@@ -240,7 +253,8 @@
       "path": "/transcripts/{platform}/{native_meeting_id}",
       "scopes": [
         "tx"
-      ]
+      ],
+      "mcp_reentry": true
     },
     {
       "method": "POST",

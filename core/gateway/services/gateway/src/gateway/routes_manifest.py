@@ -10,10 +10,10 @@ So each domain declares its own routes beside its service, in a `routes.v1.json`
 as the `mcp.tools.v1` manifests and for the same reason: the domain that owns the door behind a
 route is the only one that can say what the route is and what it costs.
 
-    core/meetings/routes.v1.json                   38 rows
+    core/meetings/routes.v1.json                   39 rows
     core/identity/routes.v1.json                   12
     core/meetings/services/mcp/routes.v1.json      12
-    core/agent/routes.v1.json                       8   ← absent in the no-agents profile
+    core/agent/routes.v1.json                      40   ← absent in the no-agents profile
     core/gateway/services/gateway/routes.v1.json    2   the edge's OWN /health and /auth/me
 
 WHAT THIS MODULE REFUSES, and why each is a boot failure rather than a log line — every one of them
@@ -26,13 +26,21 @@ is otherwise found by a person hitting a route that answers wrongly:
 
 A ROW CARRIES ITS POLICY, NOT ONLY ITS SCOPES. `"delegation": true` admits a worker's own
 delegation token on that row (the MCP front door, the agent's friction report); every other row
-refuses it. A domain the edge forwards wholesale declares `"forward": {"edge_prefix",
-"upstream_prefix"}` once, and its rows are then only literals under the edge prefix (`"stream": true`
-for a server-sent-event relay) or the prefix's `{path:path}` catch-all — so the edge registers that
-domain from its manifest and names none of its routes.
+refuses it. `"mcp_reentry": true` admits that token on the row only when the request is the MCP
+acting on an `/mcp` request this edge admitted (`delegation.py`) — the rows the MCP's tools call
+back into, and no others: proof that the MCP is calling is not proof that the MCP calls THIS route.
+A domain the edge forwards wholesale declares `"forward": {"edge_prefix", "upstream_prefix"}` once,
+and its rows are then only paths under the edge prefix — literal, or with whole-segment `{name}`
+parameters (`"stream": true` for a server-sent-event relay) — or the prefix's `{path:path}`
+catch-all, so the edge registers that domain from its manifest and names none of its routes.
 
     delegation that is not a boolean        ->  a flag nobody can read the same way twice
     delegation on an unscoped row           ->  a promise the authorizer never sees
+    mcp_reentry that is not a boolean       ->  the same
+    mcp_reentry beside delegation           ->  a narrower-looking flag on a row that already
+                                                admits the token, doing nothing
+    mcp_reentry on another domain's         ->  a promise nothing reads: only the edge's own
+      unscoped row                              identity read (`/auth/me`) checks it unscoped
     a forward with a malformed prefix       ->  a mapping that rewrites paths nobody declared
     a forwarded row outside its forward     ->  a route the edge would have to serve by name
 
@@ -44,6 +52,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import re
 from dataclasses import dataclass, field
 from typing import Dict, FrozenSet, Iterable, Optional, Set, Tuple
 
@@ -55,6 +64,9 @@ SCOPES = frozenset({"bot", "tx", "browser"})
 METHODS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"})
 
 RouteKey = Tuple[str, str]
+#: The domain whose manifest declares the edge's OWN routes (`/health`, `/auth/me`). Its handlers
+#: read their policy from the table themselves, so it alone may flag an unscoped row.
+EDGE_DOMAIN = "gateway"
 
 
 class ManifestError(Exception):
@@ -71,6 +83,9 @@ class Assembly:
     owner_of: Dict[RouteKey, str] = field(default_factory=dict)
     #: the rows that admit a worker's own delegation token (`"delegation": true`).
     delegation: Set[RouteKey] = field(default_factory=set)
+    #: the rows the MCP's tools call back into, which admit that token on the MCP's re-entry
+    #: (`"mcp_reentry": true`) and only on it.
+    mcp_reentry: Set[RouteKey] = field(default_factory=set)
     #: the literal rows relayed as server-sent events (`"stream": true`).
     stream: Set[RouteKey] = field(default_factory=set)
     #: domain -> (edge_prefix, upstream_prefix), for each domain forwarded wholesale.
@@ -104,6 +119,32 @@ def read(path: pathlib.Path) -> dict:
 
 
 CATCH_ALL = "{path:path}"
+#: One whole path segment that is a parameter: `{name}`, no converter, nothing else beside it. The
+#: edge re-encodes what fills it as one opaque segment (`paths.path_segment`) before it forwards.
+_PARAM_SEGMENT = re.compile(r"^\{([A-Za-z_][A-Za-z0-9_]*)\}$")
+
+
+def params_of(path: str) -> Tuple[str, ...]:
+    """The whole-segment `{name}` parameters of a row template, in order (none for the catch-all)."""
+    return tuple(m.group(1) for m in (_PARAM_SEGMENT.match(s) for s in path.split("/")) if m)
+
+
+def _forwardable(tail: str) -> bool:
+    """A tail a forwarded row may declare: the catch-all, or segments each of which is a literal or
+    one whole `{name}` parameter, no name twice. Anything else (`{id:path}`, `x{id}`) is a route
+    the edge would have to know how to serve by name."""
+    if not tail:
+        return False
+    if tail == CATCH_ALL:
+        return True
+    names = []
+    for segment in tail.split("/"):
+        if "{" in segment or "}" in segment:
+            m = _PARAM_SEGMENT.match(segment)
+            if not m or m.group(1) in names:
+                return False
+            names.append(m.group(1))
+    return True
 
 
 def _prefix(value) -> Optional[str]:
@@ -174,19 +215,32 @@ def assemble(manifests: Iterable[dict]) -> Assembly:
                 out.scopes[key] = scopes
             else:
                 out.unscoped.add(key)
-            if _flag(domain, row, "delegation"):
+            delegation = _flag(domain, row, "delegation")
+            if delegation:
                 if not scopes:
                     raise ManifestError(
                         f"{domain}: {method} {path} is unscoped and cannot admit a delegation — an "
                         "unscoped row never reaches the authorizer that reads the flag")
                 out.delegation.add(key)
+            if _flag(domain, row, "mcp_reentry"):
+                if delegation:
+                    raise ManifestError(
+                        f"{domain}: {method} {path} declares both delegation and mcp_reentry — the "
+                        "row already admits a worker's token, so the narrower flag would do nothing")
+                if not scopes and domain != EDGE_DOMAIN:
+                    raise ManifestError(
+                        f"{domain}: {method} {path} is unscoped and cannot admit the MCP's re-entry "
+                        "— an unscoped row never reaches the authorizer that reads the flag; only "
+                        "the edge's own identity read checks it itself")
+                out.mcp_reentry.add(key)
             stream = _flag(domain, row, "stream")
             if forward:
                 tail = path[len(forward[0]):] if path.startswith(forward[0]) else None
-                if tail is None or not tail or ("{" in tail and tail != CATCH_ALL):
+                if tail is None or not _forwardable(tail):
                     raise ManifestError(
                         f"{domain}: {method} {path} is outside its forward ({forward[0]}…): a "
-                        f"forwarded row is a literal under the prefix or {forward[0]}{CATCH_ALL}")
+                        f"forwarded row is a path under the prefix (literal segments and whole "
+                        f"{{name}} parameters) or {forward[0]}{CATCH_ALL}")
                 if stream and tail == CATCH_ALL:
                     raise ManifestError(f"{domain}: {method} {path} — only a literal row streams")
             elif stream:
