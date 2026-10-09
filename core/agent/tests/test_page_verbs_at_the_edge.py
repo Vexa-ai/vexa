@@ -222,3 +222,15 @@ def test_a_fetched_picture_lands_beside_the_pages_of_the_chats_target(tmp_path, 
     assert r.status_code == 200, r.text
     assert (shared / r.json()["path"]).read_bytes() == PNG
     assert not (desk / "assets").exists()
+
+
+def test_entity_upsert_states_the_cards_sections_and_the_connection_shape(tmp_path):
+    """The agent reads the shape off the argument descriptions, so they are the WRITER's own words —
+    generated from `entities.py` — never a second copy that can name a section the card lacks."""
+    from workspaces.shared import entities as entities_mod
+
+    client, _, _ = _world(tmp_path)
+    props = _body_schema(client.app.openapi(), "POST", "/api/workspace/entity")["properties"]
+    assert entities_mod.tool_sections_text() in props["fields"]["description"]
+    assert entities_mod.tool_connection_text() in props["connections"]["description"]
+

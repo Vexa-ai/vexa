@@ -287,7 +287,7 @@
         "description": "RECORD what was learned about a person, company, meeting, project or decision \u2014 the body\nbehind `entity_upsert`. One call creates `kg/entities/<kind>/<slug>.md` as a card or updates it\nin place; repeating a fact the page already carries writes nothing.",
         "properties": {
           "connections": {
-            "description": "other pages this one links to, both ways: `\"Acme\"` or `{\"name\": \"Acme\", \"relation\": \"works at\", \"reverse\": \"employs\"}`",
+            "description": "other pages this one links to, both ways:\n- `connections` \u2014 `[\"Acme\"]` or `[{\"name\": \"Acme\", \"relation\": \"works at\"}]`: a bare string, or an object whose `name` is the OTHER page, `relation` what the edge means from HERE, `reverse` what it means from THERE (both optional).\n- The keys read are `name`, `relation`, `reverse` and no others: an unknown key is refused by name, never ignored, so a relation you wrote is either recorded or handed back to you.",
             "items": {},
             "title": "Connections",
             "type": "array"
@@ -323,7 +323,7 @@
                 "type": "null"
               }
             ],
-            "description": "facts filed into the kind's sections: person \u2014 role, company, cares_about, relationship; company \u2014 what, people, relationship; meeting \u2014 when, who, participants, decided, committed; project \u2014 what, who, status; decision \u2014 what, why, changes. A field naming another entity links both pages.",
+            "description": "facts filed into the kind's sections, `{field: value}`; a field naming another entity links both pages. The sections and fields, by kind:\n- person: Role and organisation \u00b7 What they care about \u00b7 How we relate  (fields: cares_about, company, relationship, role)\n- company: What it is \u00b7 People \u00b7 Our relationship  (fields: people, relationship, what)\n- meeting: When and who \u00b7 Decided \u00b7 Committed  (fields: committed, decided, participants, when, who)\n- project: What it is \u00b7 Who \u00b7 Status  (fields: status, what, who)\n- decision: What was decided \u00b7 Why \u00b7 What it changes  (fields: changes, what, why)",
             "title": "Fields"
           },
           "kind": {

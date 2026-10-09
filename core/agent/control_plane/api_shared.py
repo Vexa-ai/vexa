@@ -1059,14 +1059,11 @@ class EntityUpsertBody(BaseModel):
     summary: str = Field("", description="the one line under the title; set when the page is "
                                          "created and never overwritten")
     fields: Optional[dict] = Field(None, description=(
-        "facts filed into the kind's sections: person — role, company, cares_about, relationship; "
-        "company — what, people, relationship; meeting — when, who, participants, decided, "
-        "committed; project — what, who, status; decision — what, why, changes. A field naming "
-        "another entity links both pages."))
+        "facts filed into the kind's sections, `{field: value}`; a field naming another entity "
+        "links both pages. The sections and fields, by kind:\n" + entities_mod.tool_sections_text()))
     section: str = Field("", description="the section `facts` are filed into, by its name")
     connections: list = Field(default_factory=list, description=(
-        "other pages this one links to, both ways: `\"Acme\"` or "
-        "`{\"name\": \"Acme\", \"relation\": \"works at\", \"reverse\": \"employs\"}`"))
+        "other pages this one links to, both ways:\n" + entities_mod.tool_connection_text()))
     open_questions: list[str] = Field(default_factory=list, description=(
         "what is not known yet, written as the question — a gap goes here, never on the page as a "
         "guess"))
