@@ -341,3 +341,28 @@ def test_a_message_to_the_caller_reads_and_the_id_stays_one_segment(monkeypatch)
     assert json.loads(tool("mail_read")("m3"))["text"] == "body m3"
     tool("mail_read")("../messages")
     assert http.urls("/api/v1/message/")[-1].endswith("/api/v1/message/..%2Fmessages")
+
+
+@pytest.mark.parametrize("verb,args", [("mail_inbox", ()), ("mail_read", ("m4",))])
+@pytest.mark.parametrize("regime", ["human", "autonomous"])
+def test_a_worker_never_reads_its_person_s_mail(monkeypatch, verb, args, regime):
+    """Even mail addressed to the person it acts for: that mail holds their sign-in codes."""
+    http = _sink_http(monkeypatch, read=SINK_MSGS[3])
+    rig.CALL_SCOPE.set({"regime": regime, "workspaces": "*"})
+    try:
+        out = json.loads(tool(verb)(*args))
+    finally:
+        rig.CALL_SCOPE.set(None)
+    assert out.get("refused") == "delegated", out
+    assert not http.urls("/api/v1/"), "the double was read for a worker"
+
+
+def test_a_worker_token_on_the_call_is_refused_too(monkeypatch):
+    http = _sink_http(monkeypatch, read=SINK_MSGS[3])
+    rig.CALL_TOKEN.set("vxd_header.payload.signature")
+    try:
+        out = json.loads(tool("mail_read")("m4"))
+    finally:
+        rig.CALL_TOKEN.set(None)
+    assert out.get("refused") == "delegated", out
+    assert not http.urls("/api/v1/")

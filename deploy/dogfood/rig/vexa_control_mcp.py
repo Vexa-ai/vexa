@@ -3598,14 +3598,29 @@ def _addressed_to(message: dict) -> list:
 MAIL_SCAN = 500
 
 
+def _mail_refused_to_worker(verb: str) -> str:
+    """The refusal for a delegated (worker) caller, or "" for anyone else. A person's mail holds
+    their sign-in codes and links, so a worker acting for them never reads it, in any regime."""
+    if CALL_SCOPE.get() is None and not _is_delegation_token(CALL_TOKEN.get() or ""):
+        return ""
+    return json.dumps({"refused": "delegated", "verb": verb,
+                       "why": "a person's mail holds their sign-in codes; a worker acting for them "
+                              "does not read it",
+                       "what_to_do": "Ask your person to check their own inbox."})
+
+
 @mcp.tool()
 @_anon_guard
 def mail_inbox(limit: int = 20) -> str:
     """Read the mail double: the messages Vexa sent YOU, with nothing leaving the host — the
     outbound half of the loop and the honest way to check what a flow actually said to your
     person. Account-scoped: only messages addressed to the caller's own address, and nothing when
-    that address is unknown. The double holds every person's mail, sign-in codes included."""
+    that address is unknown. The double holds every person's mail, sign-in codes included, so
+    a delegated worker is refused."""
     me()
+    refused = _mail_refused_to_worker("mail_inbox")
+    if refused:
+        return refused
     mine = (_caller_email() or "").strip().lower()
     if not mine:
         return json.dumps({"total": 0, "messages": []})
@@ -3628,8 +3643,12 @@ def mail_inbox(limit: int = 20) -> str:
 @_anon_guard
 def mail_read(message_id: str) -> str:
     """The full body of one message Vexa sent YOU — the artifact as your person receives it. A
-    message addressed to anyone else does not exist, as far as this tool says."""
+    message addressed to anyone else does not exist, as far as this tool says. A delegated worker
+    is refused."""
     me()
+    refused = _mail_refused_to_worker("mail_read")
+    if refused:
+        return refused
     mine = (_caller_email() or "").strip().lower()
     st, body = _http("GET", f"{MAILPIT}/api/v1/message/{urllib.parse.quote(str(message_id), safe='')}",
                      None)
