@@ -28,12 +28,18 @@
 //       <!-- vexa-pass:architecture sha=<full head sha> verdict=pass -->
 //       <!-- vexa-pass:security sha=<full head sha> verdict=pass -->
 //
-//     Each marker starts its own line, outside code: that is where GitHub's Markdown hides it. A
-//     marker in inline code, a code block, a quote or mid-sentence is shown as text or quotes
-//     someone else, and does not count; code blocks are read over-inclusively, so a misreading can
-//     only fail a row closed (hiddenBlocks). `verdict=waived` also clears the row, but only when the same
-//     marker carries `waived-by=<login>` naming an account with write or admin; the card shows the
-//     waiver as recorded by the commenter and names that account. Bound to the head: a marker for any
+//     MARKERS LEAD THE COMMENT. A marker counts only in the comment's leading lines: from the first
+//     line on, each line starting at column 0 with `<!--` and closing `-->` on the same line, blank
+//     lines allowed between them. GitHub always hides those lines, and nothing above them can open
+//     code. Nothing after the first other line counts, so a marker in prose, code, a quote or a
+//     list never does; the card does not try to read Markdown. A comment that leads with its
+//     marker may quote others below it. A maintainer's marker for the head that stands only below
+//     a comment's leading lines, if it is the newest marker for the head, fails the row and says
+//     it must be the first line of the comment: placement can take a pass away, never grant one.
+//
+//     `verdict=waived` also clears the row, but only when the same marker carries
+//     `waived-by=<login>` naming an account with write or admin; the card shows the waiver as
+//     recorded by the commenter and names that account. Bound to the head: a marker for any
 //     other sha does not count (a new push needs a new pass), and the row says which sha the pass on
 //     record was for. When several maintainer markers name the head, the newest wins, so a later
 //     `verdict=fail` supersedes an earlier pass. Only issue comments are read (not review bodies),
@@ -286,87 +292,27 @@ function parseMarkers(text) {
   return out;
 }
 
-// Where a line's content starts, in columns as GitHub counts them (a tab advances to the next
-// multiple of 4), past any leading whitespace, list markers and quote markers; `quoted` says a `>`
-// was among them.
-function lineLead(line) {
-  let col = 0, i = 0, quoted = false;
-  for (;;) {
-    const ch = line[i];
-    if (ch === " ") { col++; i++; }
-    else if (ch === "\t") { col += 4 - (col % 4); i++; }
-    else if (ch === ">") { quoted = true; col++; i++; }
-    else {
-      const m = /^(?:[-*+]|\d{1,9}[.)])(?=[ \t]|$)/.exec(line.slice(i));
-      if (!m) break;
-      col += m[0].length; i += m[0].length;
-    }
-  }
-  return { col, quoted, rest: line.slice(i) };
-}
+// A comment's leading lines (MARKERS LEAD THE COMMENT, above): from the first line, each line
+// starting at column 0 with `<!--` and closing `-->` on the same line, blank lines allowed between
+// them; the run ends at the first other line. Each such line is a complete HTML block that nothing
+// above it can turn into code, so GitHub always hides it.
+const LEADING_COMMENT = /^<!--.*-->[ \t]*$/;
 
-const indentOf = (line) => lineLead(line.replace(/^([ \t]*).*/, "$1")).col;
-
-// The parts of a comment where GitHub's Markdown hides an HTML comment: HTML blocks, i.e. runs of
-// lines that open with `<!--` at the start of a line (at most three spaces in) and close at the
-// first line holding `-->`, outside code. Block structure is read before inline code, so a line
-// that starts with `<!--` is never inside a code span; inline code, quoted lines, list-marker lines
-// and lines indented four spaces never start a hidden block here.
-//
-// Code blocks are read OVER-INCLUSIVELY, so a misreading can only fail a row closed, never open:
-//   • any line whose content (past indentation, list and quote markers) starts with ``` or ~~~
-//     opens a code block, whatever its indentation;
-//   • a block opened inside a quote ends where the quote ends — the first line without a `>`
-//     (a code block cannot continue lazily) — and that line is read afresh;
-//   • any other block ends only at a closing fence that closes it under every reading of the
-//     list it may sit in: the opener's own column, or, for an opener within three spaces of the
-//     margin, any column from the opener's up to three;
-//   • a line less indented than such an opener may end the list item, and the code block with it,
-//     after which the card cannot tell code from text: nothing after it counts.
-function hiddenBlocks(body) {
-  const blocks = [];
-  let html = null; //    lines of an HTML comment block still open
-  let fence = null; //   { ch, len, col } of an unquoted code block that may still be open
-  let quoted = false; // a code block opened inside a quote
+function leadingLines(body) {
+  const out = [];
   for (const line of String(body || "").replace(/\r\n?/g, "\n").split("\n")) {
-    if (html) {
-      html.push(line);
-      if (line.includes("-->")) { blocks.push(html.join("\n")); html = null; }
-      continue;
-    }
-    if (quoted) {
-      if (lineLead(line).quoted) continue;
-      quoted = false; // the quote, and its code block, ended: read this line afresh
-    }
-    if (fence) {
-      if (!line.trim()) continue;
-      const col = indentOf(line);
-      const close = /^(`{3,}|~{3,})[ \t]*$/.exec(line.trimStart());
-      if (close && close[1][0] === fence.ch && close[1].length >= fence.len && col >= fence.col && col <= Math.max(3, fence.col)) fence = null;
-      else if (col < fence.col) break; // the block's end cannot be placed: nothing after it counts
-      continue;
-    }
-    const lead = lineLead(line);
-    const open = /^(`{3,}|~{3,})/.exec(lead.rest);
-    if (open) {
-      if (lead.quoted) quoted = true;
-      else fence = { ch: open[1][0], len: open[1].length, col: lead.col };
-      continue;
-    }
-    if (/^ {0,3}<!--/.test(line)) {
-      if (line.includes("-->")) blocks.push(line);
-      else html = [line];
-    }
+    if (!line.trim()) continue;
+    if (!LEADING_COMMENT.test(line)) break;
+    out.push(line);
   }
-  if (html) blocks.push(html.join("\n")); // an unclosed comment hides the rest of the comment
-  return blocks;
+  return out;
 }
 
-// Every `<!-- vexa-pass:<kind> key=value … -->` marker in a comment's normal text, in order: only
-// markers in the hidden blocks above. Fields are whitespace-separated key=value tokens; a marker
-// without a sha or a verdict is not a marker. Pure over the raw body so it is unit-testable.
+// Every `<!-- vexa-pass:<kind> key=value … -->` marker in a comment's leading lines, in order.
+// Fields are whitespace-separated key=value tokens; a marker without a sha or a verdict is not a
+// marker. Pure over the raw body so it is unit-testable.
 export function passMarkers(body) {
-  return hiddenBlocks(body).flatMap(parseMarkers);
+  return leadingLines(body).flatMap(parseMarkers);
 }
 
 // The `waived-by=<login>` field of one marker, as a login (leading `@` optional), or null when the
@@ -378,7 +324,7 @@ function waiverLogin(fields) {
 }
 
 const howToPass = (kind) =>
-  `a maintainer (write or admin on the repo) posts a PR comment with \`<!-- vexa-pass:${kind} sha=<full head sha> verdict=pass -->\` at the start of its own line`;
+  `a maintainer (write or admin on the repo) posts a PR comment whose first line is \`<!-- vexa-pass:${kind} sha=<full head sha> verdict=pass -->\``;
 
 // One pass row, pure over the PR's issue comments (the `repos/:repo/issues/:n/comments` shape, in
 // API order = oldest first) and an injected maintainer predicate, so it has no network in its unit
@@ -386,8 +332,7 @@ const howToPass = (kind) =>
 // { ok, state, why } where state is pass | waived | stale | invalid | missing.
 export function passRow(kind, comments, { head, isMaintainer, truncated = false }) {
   const headSha = String(head || "").toLowerCase();
-  const seen = []; // { by, sha, verdict, fields }
-  const misplaced = []; // who wrote a marker of this kind for the head outside the comment's normal text
+  const seen = []; // { by, sha, verdict, fields, placed } in thread order; placed=false: a marker for the head below the leading lines
   for (const c of comments || []) {
     // The card's own sticky comment is skipped by its author, a bot (as merge-card-comment.yml
     // finds it), never by what a comment says: a maintainer's verdict that quotes the card marker
@@ -396,16 +341,20 @@ export function passRow(kind, comments, { head, isMaintainer, truncated = false 
     const body = c?.body || "";
     const by = c?.user?.login;
     if (!by) continue;
-    const counted = passMarkers(body).filter((mk) => mk.kind === kind);
-    for (const mk of counted) seen.push({ ...mk, by });
+    const placed = passMarkers(body).filter((mk) => mk.kind === kind);
+    for (const mk of placed) seen.push({ ...mk, by, placed: true });
+    // A marker for the head only below the leading lines (none of this kind for the head leads the
+    // comment) is recorded as misplaced. A comment that leads with its verdict may quote others below.
     const onHead = (list) => list.filter((mk) => mk.kind === kind && mk.sha.toLowerCase() === headSha).length;
-    if (onHead(parseMarkers(body)) > onHead(counted)) misplaced.push(by);
+    if (!onHead(placed) && onHead(parseMarkers(body))) seen.push({ by, sha: headSha, verdict: null, fields: {}, placed: false });
   }
   const counted = seen.filter((s) => isMaintainer(s.by));
   const onHead = counted.filter((s) => s.sha.toLowerCase() === headSha);
 
   if (onHead.length) {
     const s = onHead[onHead.length - 1]; // newest maintainer verdict on head wins
+    if (!s.placed) // misplaced and newest: it is no verdict, but it takes away any earlier pass
+      return { ok: false, state: "invalid", why: `@${s.by}'s newest ${kind} marker for head ${short(head)} is not at the top of its comment, so it does not count — a marker must be the first line of the comment (markers may fill the first lines; nothing else may come before them)` };
     const count = /^\d+$/.test(s.fields.findings || "") ? ` (${s.fields.findings} finding${s.fields.findings === "1" ? "" : "s"})` : "";
     if (s.verdict === "pass")
       return { ok: true, state: "pass", why: `pass on head ${short(head)} by @${s.by}${count}` };
@@ -421,10 +370,6 @@ export function passRow(kind, comments, { head, isMaintainer, truncated = false 
     return { ok: false, state: "invalid", why: `the newest ${kind} pass on head ${short(head)} (by @${s.by}) is \`verdict=${s.verdict}\`${count} — only \`verdict=pass\`, or \`verdict=waived\` with \`waived-by=\`, clears this row` };
   }
 
-  const placed = [...new Set(misplaced.filter((by) => isMaintainer(by)).map((by) => "@" + by))];
-  if (placed.length)
-    return { ok: false, state: "invalid", why: `${placed.join(", ")} wrote a ${kind} marker for head ${short(head)} where it does not count (in code, a quote or a sentence, or after a code block whose end the card cannot place) — post it at the start of its own line, outside code` };
-
   // Only the newest window of a long thread was read: an older pass may exist but cannot be
   // verified, so the row fails closed. A re-posted pass lands in the window.
   if (truncated)
@@ -437,7 +382,7 @@ export function passRow(kind, comments, { head, isMaintainer, truncated = false 
     return { ok: false, state: "stale", why: `${kind} pass on record is for ${short(s.sha)}, head is ${short(head)} — re-run the ${kind} pass on the current head; ${howToPass(kind)}` };
   }
 
-  const strangers = [...new Set(seen.map((s) => "@" + s.by))];
+  const strangers = [...new Set(seen.filter((s) => s.placed).map((s) => "@" + s.by))];
   const ignored = strangers.length ? ` (${strangers.join(", ")} posted a marker, which does not count — no write or admin on the repo)` : "";
   return { ok: false, state: "missing", why: `no ${kind} pass on head ${short(head)}${ignored} — ${howToPass(kind)}` };
 }

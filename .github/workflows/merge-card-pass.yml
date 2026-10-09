@@ -98,9 +98,17 @@ jobs:
                   return 0 ;;
                 rerun)
                   # Re-read the head just before re-running: never re-run (or let a re-run cancel) a stale head.
-                  now=$(gh api "repos/$REPO/pulls/$PR" | jq -r '.head.sha // ""') || now=""
+                  if ! now=$(gh api "repos/$REPO/pulls/$PR"); then
+                    echo "::warning ::merge-card-pass — could not re-read the head of #$PR before re-running $wf; nothing re-run, re-run it by hand"
+                    return 0
+                  fi
+                  now=$(printf '%s' "$now" | jq -r '.head.sha // ""')
+                  if [ -z "$now" ]; then
+                    echo "::warning ::merge-card-pass — could not re-read the head of #$PR before re-running $wf; nothing re-run, re-run it by hand"
+                    return 0
+                  fi
                   if [ "$now" != "$head" ]; then
-                    echo "::warning ::merge-card-pass — #$PR moved off head $head while this job waited; $wf is not re-run (the new head's own run reads this pass)"
+                    echo "::warning ::merge-card-pass — #$PR moved off head $head while this job waited; $wf is not re-run. A pass names one sha: re-post it for the new head"
                     return 0
                   fi
                   if gh api -X POST "repos/$REPO/actions/runs/$1/rerun" >/dev/null; then

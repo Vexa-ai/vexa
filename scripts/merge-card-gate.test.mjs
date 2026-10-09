@@ -191,9 +191,9 @@ const opts = { head: HEAD, isMaintainer };
 
 test("pass markers: parses kind, full sha, verdict and extra fields; ignores prose that names no marker", () => {
   const body = [
-    "Architecture pass done.",
     marker("architecture", HEAD, "pass"),
     marker("security", HEAD, "pass", "findings=0"),
+    "Architecture pass done.",
     "no marker here: vexa-pass:architecture sha=deadbeef",
   ].join("\n");
   assert.deepEqual(passMarkers(body), [
@@ -310,11 +310,16 @@ test("the merge card's own comment never counts: it is skipped by its bot author
 test("R2-S2: a maintainer's revocation that quotes the card marker is not ignored", () => {
   const thread = [
     comment("maint", marker("security", HEAD, "pass")),
-    comment("maint", `Revoking: the \`${gate.CARD_MARKER}\` comment read a stale run.\n${marker("security", HEAD, "fail")}`),
+    comment("maint", `${marker("security", HEAD, "fail")}\nRevoking: the \`${gate.CARD_MARKER}\` comment read a stale run.`),
   ];
   const row = passRow("security", thread, opts);
   assert.equal(row.ok, false);
   assert.match(row.why, /verdict=fail/);
+  // a revocation written below prose does not count as a verdict, but as the newest marker for the
+  // head it still blocks the earlier pass, and the row says where it has to stand
+  const below = passRow("security", [thread[0], comment("maint", `Revoking.\n${marker("security", HEAD, "fail")}`)], opts);
+  assert.equal(below.ok, false);
+  assert.match(below.why, /first line of the comment/);
   // nor is a maintainer's pass lost for mentioning the card marker
   assert.equal(passRow("architecture", [comment("maint", `${gate.CARD_MARKER}\n${marker("architecture", HEAD, "pass")}`)], opts).ok, true);
 });
@@ -381,6 +386,24 @@ test("S1: a marker in inline code, a fenced or indented block, a quote or mid-se
     "  ```\n" + m + "\n  ```", //                   a fence opened two spaces in: its content may start at the margin
     "- ```\n  x\n```\n" + m + "\n```", //         the list item ends, and a new fence opens at the margin
     "```\n    ```\n" + m + "\n```", //              a closing fence indented four spaces is content, not a close
+    // the round-2 shapes: a marker after code, a quote or a list, which GitHub may hide, still does not count
+    "> ```\n> code\n> ```\n" + m,
+    "> ```\n> code\n" + m,
+    "> ```\n> code\n\n" + m,
+    "1. Do this:\n   ```\n   code\n   ```\n" + m,
+    "```\ncode\n  ```\n" + m,
+    "```\ncode\n```\n" + m,
+    "- item\n  " + m,
+    "intro\r\n" + m,
+    "   " + m, //                          not at column 0
+    // the round-3 probe shapes (R3-S1), each a fail-open under fence pairing
+    "```x `y`\n```\n" + m + "\n```", //                  P1 a backtick in the info string
+    "```npm test``` passes.\n```\n" + m + "\n```", //    P2 a one-line triple-backtick code span
+    "<div>\n```\n</div>\n\n```\n" + m + "\n```", //     P3 an odd fence inside an HTML block
+    "- item\n  <!--\n```\n" + m + "\n```", //             P4 an unclosed HTML comment in a list item
+    "Steps:\n2. ```\n```\n" + m + "\n```", //             P5 `2.` cannot interrupt a paragraph
+    "Steps:\n2. ```\n   ```\n" + m + "\n```", //          P7 the same, closer at column 3
+    "<!--\n" + m + "\n-->", //                            a comment that does not close on its own line
   ];
   for (const body of quoted) {
     assert.deepEqual(passMarkers(body), [], body);
@@ -388,44 +411,40 @@ test("S1: a marker in inline code, a fenced or indented block, a quote or mid-se
   }
 });
 
-test("S1: a marker at the start of its own line counts, beside code that quotes another one", () => {
+test("R3-S1: markers count in the comment's leading lines — column 0, one comment per line — and nowhere after", () => {
+  // a normal pass comment: the markers first, then anything at all
   const body = [
-    "Architecture pass. The marker format is `" + marker("architecture", OLD, "pass") + "`.",
+    marker("architecture", HEAD, "pass"),
     "",
+    marker("security", HEAD, "pass", "findings=0"),
+    "<!-- vexa-agent -->",
+    "Architecture pass. The marker format is `" + marker("architecture", OLD, "pass") + "`.",
     "```",
     marker("architecture", HEAD, "fail"),
     "```",
-    marker("architecture", HEAD, "pass"),
-    "<!-- vexa-agent -->",
+    marker("security", HEAD, "fail"),
   ].join("\n");
-  assert.deepEqual(passMarkers(body).map((x) => [x.sha, x.verdict]), [[HEAD, "pass"]]);
+  assert.deepEqual(passMarkers(body).map((x) => [x.kind, x.verdict]), [["architecture", "pass"], ["security", "pass"]]);
   assert.equal(passRow("architecture", [comment("maint", body)], opts).ok, true);
-  // CRLF line endings, up to three spaces of indentation, and a list item's continuation line
-  assert.equal(passMarkers(`intro\r\n   ${marker("security", HEAD, "pass")}\r\n`).length, 1);
-  assert.equal(passMarkers(`- item\n  ${marker("security", HEAD, "pass")}`).length, 1);
+  // CRLF line endings, leading blank lines, and trailing space after the comment are still the leading run
+  assert.equal(passMarkers(`\r\n  \r\n${marker("security", HEAD, "pass")}  \r\nrest`).length, 1);
+  // the round-3 review's suggested comment counts as written
+  const r3 = [marker("architecture", HEAD, "pass"), marker("security", HEAD, "pass", "findings=1"), "<!-- vexa-agent -->"].join("\n");
+  assert.equal(passMarkers(r3).length, 2);
 });
 
-test("R2-S1: a code block inside a quote, or a closed fence in a list, does not drop the markers after it", () => {
-  const m = marker("architecture", HEAD, "pass");
-  const old = marker("architecture", OLD, "fail");
-  const shapes = [
-    "> ```\n> " + old + "\n> ```\n" + m, //      a fence opened and closed inside a quote
-    "> ```\n> " + old + "\n" + m, //                a quoted fence ends where the quote ends
-    "> ```\n> code\n\n" + m, //                     a blank line ends the quote, and the fence with it
-    "1. Do this:\n   ```\n   " + old + "\n   ```\n" + m, // a fence inside a list item, closed at its own indent
-    "```\n" + old + "\n  ```\n" + m, //            a closing fence may be indented up to three spaces
-  ];
-  for (const body of shapes) {
-    assert.deepEqual(passMarkers(body).map((x) => [x.sha, x.verdict]), [[HEAD, "pass"]], body);
-    assert.equal(passRow("architecture", [comment("maint", body)], opts).ok, true, body);
-  }
-});
-
-test("S1: a maintainer's marker for the head that does not count says where it has to stand", () => {
+test("R3-S1: a maintainer's marker for the head anywhere else says it must be the first line of the comment", () => {
   const row = passRow("security", [comment("maint", "LGTM `" + marker("security", HEAD, "pass") + "`")], opts);
   assert.equal(row.ok, false);
   assert.equal(row.state, "invalid");
-  assert.match(row.why, /start of its own line/);
+  assert.match(row.why, /must be the first line of the comment/);
+  // a misplaced marker newer than a counted pass blocks it: placement never grants, it can only take away
+  const thread = [comment("maint", marker("security", HEAD, "pass")), comment("maint", "Done.\n" + marker("security", HEAD, "pass"))];
+  assert.equal(passRow("security", thread, opts).ok, false);
+  // an older misplaced marker is superseded by a newer one that leads its comment
+  assert.equal(passRow("security", [thread[1], thread[0]], opts).ok, true);
+  // a stranger's misplaced marker changes nothing
+  assert.equal(passRow("security", [thread[0], comment("drive-by", "x\n" + marker("security", HEAD, "fail"))], opts).ok, true);
 });
 
 // ── S2: a long thread is read newest first, and a cut history fails closed ──────────────────────
@@ -693,6 +712,13 @@ test("R2-S3: the head is re-read just before each re-run, and a stale head is ne
   const moved = runPassJob({ pr: [prJson(HEAD), prJson(OLD)], runs });
   assert.deepEqual(moved.reruns, []);
   assert.match(moved.out, /moved/);
+  assert.match(moved.out, /re-post/, "a pass names one sha: the message says to re-post it for the new head");
+  assert.doesNotMatch(moved.out, /reads this pass/, "and never implies the old head's pass carries over");
+  // R3-S3: a failed re-read is reported as a failure, not as a move
+  const unread = runPassJob({ pr: [prJson(HEAD), null], runs });
+  assert.deepEqual(unread.reruns, []);
+  assert.match(unread.out, /could not re-read/);
+  assert.doesNotMatch(unread.out, /moved/);
   // unmoved: one PR read up front, then one before each re-run, each just before its POST
   const steady = runPassJob({ pr: prJson(HEAD), runs });
   assert.deepEqual(steady.reruns, ["21", "22"]);
