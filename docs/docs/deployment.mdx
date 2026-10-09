@@ -242,7 +242,7 @@ refuses what it does not find. None of these mixes works, so do not leave any co
 | the runtime | meeting-api | its workload callbacks are unsigned and refused (401) |
 | agent-api or meeting-api | the runtime | every workload and schedule call is refused (401) |
 | agent-api | the agent worker image (`AGENT_WORKER_IMAGE`) | the worker drops every follow-up message in a chat, silently |
-| the gateway or the MCP service | admin-api | a worker's delegation token is not confined to `/mcp`; run them from one release |
+| the gateway | admin-api | every agent worker's tool call is refused (401); closed, never open (below) |
 
 Where you pin an image apart from the stack's tag, move the pin in the same upgrade.
 
