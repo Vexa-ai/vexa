@@ -363,7 +363,7 @@ test("v0.12.28 canonical packet binds the v0.12.28-rc.5 candidate (schema 2, ele
   );
   assert.equal(
     createHash("sha256").update(raw).digest("hex"),
-    "4c529a4d548f0188ae2528d7289b0dcfae0bf59c99d3f1d360ec09d1194834f4",
+    "4f35cf6205a9f01b3acd22a27579dbab48411ad05bb5c80c1b9ec1f919d75431",
   );
   const map = validateCandidateMap(JSON.parse(raw), "v0.12.28");
   assert.equal(map.schema_version, 2);
