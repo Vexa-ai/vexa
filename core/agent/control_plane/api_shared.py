@@ -127,7 +127,6 @@ def _epoch_text(when) -> str:
         return ""
 
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
-MEETING_STREAM_TRANSCRIPT_REPLAY = 80
 
 
 def _upload_filename(name: str | None) -> str:

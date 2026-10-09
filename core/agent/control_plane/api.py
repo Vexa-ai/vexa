@@ -112,7 +112,7 @@ from control_plane.api_shared import (
     _http_meeting_transcript_lookup)
 # Re-exported for the tests that import them from here.
 from control_plane.api_shared import (  # noqa: F401
-    CONTEXT_SENTINEL, LIVE_SILENCE_TTL_SEC, MEETING_STREAM_TRANSCRIPT_REPLAY, _ambient_gated,
+    CONTEXT_SENTINEL, LIVE_SILENCE_TTL_SEC, _ambient_gated,
     _context_grounding, _decode_sse_cursor, _encode_sse_cursor, _fold_meeting_transcript,
     _has_custom_model_endpoint, _meeting_grounding, _truncate_title)
 from control_plane.bodies import ChatBody, ChatContextBody  # noqa: F401
