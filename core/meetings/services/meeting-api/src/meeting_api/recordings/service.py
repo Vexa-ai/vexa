@@ -31,7 +31,7 @@ from .jsonb import (
     new_recording_numeric_id,
     signal_tape_key,
 )
-from .ports import RecordingRepo, Storage
+from .ports import MeetingErased, RecordingRepo, Storage
 
 # Media content types (parent ``recording_codec._media_content_type``, reduced to the core set).
 _CONTENT_TYPES = {"webm": "video/webm", "wav": "audio/wav", "jsonl": "application/x-ndjson",
@@ -58,6 +58,14 @@ class InvalidSignalTape(Exception):
     """A tape upload named a part or format we do not accept → 422 (never a silent store)."""
 
 
+def _no_session(session_uid: str, is_final: bool) -> dict:
+    """What a chunk gets when its session cannot take it — not known yet, or its meeting's
+    recordings deleted: a non-final chunk is ``pending`` (the bot retries), a final one a 404."""
+    if not is_final:
+        return {"status": "pending"}
+    raise SessionNotFound(f"no MeetingSession for session_uid {session_uid}")
+
+
 async def upload_chunk(
     repo: RecordingRepo,
     storage: Storage,
@@ -78,12 +86,13 @@ async def upload_chunk(
 
     Returns ``{recording_id, media_file_id, storage_path, status, chunk_seq}``. When the session is
     not yet known and the chunk is non-final, returns ``{"status": "pending"}`` (the bot retries).
+    A chunk whose meeting's recordings are deleted gets the same answer, whether the delete landed
+    before the session lookup or while the chunk was being stored; in the second case the stored
+    object is removed again.
     """
     session = await repo.find_session(session_uid)
     if session is None:
-        if not is_final:
-            return {"status": "pending"}
-        raise SessionNotFound(f"no MeetingSession for session_uid {session_uid}")
+        return _no_session(session_uid, is_final)
 
     meeting_id = session["meeting_id"]
     if token_meeting_id is not None and meeting_id != token_meeting_id:
@@ -128,7 +137,14 @@ async def upload_chunk(
         others = [r for r in recs if r.get("id") != rid]
         return others + [payload], (payload, transitioned_)
 
-    rec_payload, transitioned = await repo.mutate_recordings(meeting_id, _fold)
+    try:
+        rec_payload, transitioned = await repo.mutate_recordings(meeting_id, _fold)
+    except MeetingErased:
+        # The meeting's recordings were deleted after the session lookup above, while this chunk was
+        # being stored. The fold was refused under the row lock; the object must not outlive the
+        # delete either (the delete listed the recording's objects before this one existed).
+        await storage.delete(key)
+        return _no_session(session_uid, is_final)
     recording_id = rec_payload["id"]
 
     media_file = next((mf for mf in rec_payload["media_files"] if mf["type"] == media_type), {})
@@ -272,6 +288,7 @@ async def finalize_master(
     rebuild = listed_count > 0 and ((not master_exists) or assembled_count != listed_count)
     normalized = False
     duration = None
+    master_written = False
     repair_metadata = media_format == "webm" and mf.get("seekable_version") != 1
     if rebuild or (master_exists and repair_metadata):
         if master_exists and assembled_count is not None and listed_count > assembled_count:
@@ -292,6 +309,7 @@ async def finalize_master(
             master_bytes, duration = await asyncio.to_thread(seekable_webm, master_bytes)
             normalized = True
         await storage.upload(master_key, master_bytes, content_type=_content_type(media_format))
+        master_written = True
 
     # G3 — stamp the media-file finalized ATOMICALLY (read→modify→write under one row lock), so a late
     # concurrent chunk upload can't clobber the finalized master pointer (the master bytes are already
@@ -322,4 +340,11 @@ async def finalize_master(
         others = [x for x in recs if x.get("id") != recording_id]
         return others + [r], master_key
 
-    return await repo.mutate_recordings(meeting_id, _stamp)
+    try:
+        return await repo.mutate_recordings(meeting_id, _stamp)
+    except MeetingErased:
+        # The meeting's recordings were deleted while this master was being built: nothing is
+        # stamped, and a master this call wrote does not outlive the delete.
+        if master_written:
+            await storage.delete(master_key)
+        return None

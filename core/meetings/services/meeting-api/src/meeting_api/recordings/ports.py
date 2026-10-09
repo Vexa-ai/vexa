@@ -20,6 +20,13 @@ from __future__ import annotations
 from typing import Optional, Protocol, runtime_checkable
 
 
+class MeetingErased(Exception):
+    """``RecordingRepo.mutate_recordings`` refused the write: the meeting row is gone, or it carries
+    an api.v1 ``ArtifactDeletion`` stamp (its recordings are deleted, or being deleted). Decided
+    under the same row lock the write would hold, so nothing folds into a meeting a delete has
+    already claimed — not even a write that passed the earlier session lookup."""
+
+
 @runtime_checkable
 class Storage(Protocol):
     """Object storage for recording chunks + masters (MinIO/S3 in prod)."""
@@ -82,7 +89,10 @@ class RecordingRepo(Protocol):
         """ATOMIC read→modify→write of ``meeting.data['recordings']`` under a SINGLE row lock (G3).
         ``mutator(recordings) -> (new_recordings, result)`` runs while the lock is held — the
         separate ``get_recordings`` + ``put_recordings`` released the lock between read and write, so
-        a concurrent chunk-upload / finalize clobbered the other (lost update). Returns ``result``."""
+        a concurrent chunk-upload / finalize clobbered the other (lost update). Returns ``result``.
+
+        Raises ``MeetingErased`` — without calling ``mutator`` — when the locked row is gone or
+        carries an ``ArtifactDeletion`` stamp."""
         ...
 
     async def owner_of(self, meeting_id: int) -> Optional[int]:

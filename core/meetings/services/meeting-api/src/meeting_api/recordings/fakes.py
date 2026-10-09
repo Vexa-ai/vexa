@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from typing import Optional
 
+from .ports import MeetingErased
+
 
 class InMemoryStorage:
     """A dict-backed ``Storage`` (key → bytes)."""
@@ -83,9 +85,32 @@ class InMemoryRecordingRepo:
         )
         self._sessions[session_uid] = meeting_id
 
+    def erase(self, meeting_id: int, *, state: str = "completed") -> None:
+        """Stamp the meeting the way a typed delete of its transcript and recordings does:
+        ``pending`` while that delete runs, ``completed`` (recordings removed) once it is done."""
+        from datetime import datetime, timezone
+
+        from ..collector.ports import ARTIFACT_DELETION_FIELD, deletion_stamp
+
+        meeting = self._meetings[meeting_id]
+        meeting[ARTIFACT_DELETION_FIELD] = deletion_stamp(
+            state, at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            prior=meeting.get(ARTIFACT_DELETION_FIELD),
+        )
+        if state == "completed":
+            meeting["recordings"] = []
+
+    def _erased(self, meeting_id) -> bool:
+        from ..collector.ports import meeting_is_erased
+
+        return meeting_is_erased(self._meetings.get(meeting_id))
+
     async def find_session(self, session_uid: str) -> Optional[dict]:
+        # The production rule (``adapters.upload_session``): no session on an erased meeting.
         mid = self._sessions.get(session_uid)
-        return {"meeting_id": mid, "session_uid": session_uid} if mid is not None else None
+        if mid is None or self._erased(mid):
+            return None
+        return {"meeting_id": mid, "session_uid": session_uid}
 
     async def get_recordings(self, meeting_id: int) -> list[dict]:
         return list(self._meetings.get(meeting_id, {}).get("recordings", []))
@@ -97,7 +122,11 @@ class InMemoryRecordingRepo:
     async def mutate_recordings(self, meeting_id: int, mutator):
         # Read the LIVE list, apply, write back — synchronously (no await), so it is atomic within the
         # event loop (mirrors the SQL adapter's row-locked read→modify→write; G3).
+        # An erased meeting refuses the write before the mutator runs (``MeetingErased``), as the SQL
+        # adapter decides under its row lock.
         self._meetings.setdefault(meeting_id, {"user_id": None, "recordings": []})
+        if self._erased(meeting_id):
+            raise MeetingErased(meeting_id)
         recordings = list(self._meetings[meeting_id].get("recordings", []))
         new_recordings, result = mutator(recordings)
         self._meetings[meeting_id]["recordings"] = list(new_recordings)

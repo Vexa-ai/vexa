@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Optional
 
 from .jsonb import signal_meeting_prefix
-from .ports import RecordingRepo, Storage
+from .ports import MeetingErased, RecordingRepo, Storage
 
 
 class MeetingNotTerminal(Exception):
@@ -79,7 +79,12 @@ async def delete_owned_recording(
         remaining = [r for r in current if r.get("id") != recording_id]
         return remaining, len(remaining) != len(current)
 
-    await repo.mutate_recordings(meeting_id, _remove)
+    try:
+        await repo.mutate_recordings(meeting_id, _remove)
+    except MeetingErased:
+        # The whole meeting's recordings are being deleted too. That delete owns the metadata now
+        # and removes this entry with the rest; this recording's objects are already gone.
+        pass
     return {
         "status": "deleted",
         "recording_id": recording_id,

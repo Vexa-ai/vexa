@@ -13,7 +13,9 @@ and stamps the JSONB media-file.
 - `upload_chunk(...)` / `finalize_master(...)` — the flow core (callable directly in tests).
 - `apply_chunk_to_recording` / `chunk_storage_key` / `master_storage_key` /
   `new_recording_numeric_id` — the pure JSONB record materializers (no IO/DB).
-- `Storage` / `RecordingRepo` ports + `SessionNotFound`.
+- `Storage` / `RecordingRepo` ports + `SessionNotFound` + `MeetingErased` (`mutate_recordings`
+  refuses a meeting whose recordings are deleted, under its row lock; a chunk or master written
+  meanwhile is removed again).
 - `adapters.build_production_router(...)` — wire with real MinIO/S3 + SQLAlchemy.
 - `fakes` — `InMemoryStorage` / `InMemoryRecordingRepo` (offline drivers).
 

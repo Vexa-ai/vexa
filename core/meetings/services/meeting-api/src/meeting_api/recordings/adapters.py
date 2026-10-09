@@ -141,6 +141,19 @@ def upload_session(session_row, meeting_row) -> Optional[dict]:
     return {"meeting_id": session_row.meeting_id, "session_uid": session_row.session_uid}
 
 
+def writable_meeting_data(meeting_row) -> dict:
+    """A copy of the ``data`` a recordings write may modify, from the meeting row it holds locked —
+    or ``MeetingErased`` when the row is gone or carries an api.v1 ``ArtifactDeletion`` stamp. The
+    same rule as ``upload_session``, applied again under the write's own lock: the session lookup
+    ran before the upload, and a delete may have stamped the row since."""
+    from ..collector.ports import meeting_is_erased
+    from .ports import MeetingErased
+
+    if meeting_row is None or meeting_is_erased(meeting_row.data):
+        raise MeetingErased(getattr(meeting_row, "id", None))
+    return dict(meeting_row.data) if isinstance(meeting_row.data, dict) else {}
+
+
 class SqlAlchemyRecordingRepo:
     """``RecordingRepo`` over a SQLAlchemy-async ``session_factory`` (``meetings`` /
     ``meeting_sessions``; recordings live in ``meetings.data`` JSONB)."""
@@ -192,12 +205,13 @@ class SqlAlchemyRecordingRepo:
     async def mutate_recordings(self, meeting_id, mutator):
         """Atomic read→modify→write under ONE ``SELECT … FOR UPDATE`` row lock (G3). The lock spans the
         whole mutation (held from the read through commit), so concurrent chunk-upload / finalize calls
-        serialize instead of clobbering each other (the old get+put released the lock between)."""
+        serialize instead of clobbering each other (the old get+put released the lock between).
+        An erased meeting raises ``MeetingErased`` before the mutator runs; nothing is committed."""
         from sqlalchemy.orm.attributes import flag_modified
 
         async with self._session_factory() as db:
             m = await self._meeting(db, meeting_id)  # SELECT … FOR UPDATE
-            data = dict(m.data) if isinstance(m.data, dict) else {}
+            data = writable_meeting_data(m)
             recordings = list(data.get("recordings", []))
             new_recordings, result = mutator(recordings)
             data["recordings"] = list(new_recordings)
