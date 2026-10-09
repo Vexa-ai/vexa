@@ -28,6 +28,7 @@ import os
 import sys
 import re
 import shutil
+import stat
 import threading
 import time
 import urllib.error
@@ -172,37 +173,199 @@ def _continuity_root(work: Path) -> Path:
     return work
 
 
+# The legacy continuity below is adopted out of workspaces the model's tools can write, by a worker
+# that may run as root. So nothing there is reached through a link: below a mount root every folder
+# and file is opened by descriptor without following one, a file is read only once ``fstat`` says it
+# is a regular file with no other hard link (whose other name could be anywhere on the volume), and
+# a copy is created exclusively — never written through something already at its name.
+_NOFOLLOW_DIR = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+_NOFOLLOW_FILE = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0)
+_CREATE_NEW = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+#: A legacy session pointer is an id a few dozen bytes long; anything past this is not one.
+_LEGACY_POINTER_MAX_BYTES = 1 << 16
+
+
+def _plain_name(name: str) -> bool:
+    """One path component, usable as a file name under a descriptor: no separator, not ``.``/``..``."""
+    return bool(name) and name not in (".", "..") and not any(c in name for c in "/\\\0")
+
+
+def _nofollow_dir(root: Path, parts: tuple[str, ...], *, create: bool = False) -> int:
+    """A descriptor for the folder ``root/<parts…>``: ``root`` (a mount) opened as given, each part
+    below it without following a link, a missing one made first when ``create``."""
+    fd = os.open(root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0))
+    try:
+        for part in parts:
+            if create:
+                try:
+                    os.mkdir(part, dir_fd=fd)
+                except FileExistsError:
+                    pass
+            nxt = os.open(part, _NOFOLLOW_DIR, dir_fd=fd)
+            os.close(fd)
+            fd = nxt
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def _open_regular(dir_fd: int, name: str) -> int:
+    """A descriptor for regular file ``name`` under ``dir_fd``, opened without following a link —
+    and only when it is a regular file, so a device or a FIFO is never opened — and refused
+    (``OSError``) unless ``fstat`` says it is still that file, with no other hard link."""
+    seen = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+    if not stat.S_ISREG(seen.st_mode):
+        raise OSError(f"{name!r} is not a regular file")
+    fd = os.open(name, _NOFOLLOW_FILE, dir_fd=dir_fd)
+    try:
+        st = os.fstat(fd)
+        if (not stat.S_ISREG(st.st_mode) or st.st_nlink > 1
+                or (st.st_dev, st.st_ino) != (seen.st_dev, seen.st_ino)):
+            raise OSError(f"{name!r} is not a regular file with a single link")
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def _read_legacy_pointer(root: Path, parts: tuple[str, ...], name: str) -> "str | None":
+    """The text of a legacy session pointer at ``root/<parts…>/name``, or None when there is none,
+    it is reached through a link, it is not a regular file, or it is no pointer."""
+    try:
+        dir_fd = _nofollow_dir(root, parts)
+    except OSError:
+        return None
+    try:
+        fd = _open_regular(dir_fd, name)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        log.warning("legacy session pointer %s/%s not adopted: %s", "/".join(parts), name, exc)
+        return None
+    finally:
+        os.close(dir_fd)
+    try:
+        raw = os.read(fd, _LEGACY_POINTER_MAX_BYTES + 1)
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+    if len(raw) > _LEGACY_POINTER_MAX_BYTES:
+        return None
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
+def _write_new_pointer(root: Path, parts: tuple[str, ...], name: str, text: str) -> bool:
+    """Create ``root/<parts…>/name`` holding ``text``; False when something is already there."""
+    dir_fd = _nofollow_dir(root, parts, create=True)
+    try:
+        fd = os.open(name, _CREATE_NEW, 0o666, dir_fd=dir_fd)
+    except FileExistsError:
+        return False
+    finally:
+        os.close(dir_fd)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(text)
+    return True
+
+
+def _adopt_legacy_transcripts(root: Path, chat_root: Path, sid: str) -> None:
+    """Copy every ``.claude/projects/<slug>/<sid>.jsonl`` under ``root`` that ``chat_root`` lacks."""
+    name = f"{sid}.jsonl"
+    try:
+        projects = _nofollow_dir(root, (".claude", "projects"))
+    except OSError:
+        return
+    try:
+        with os.scandir(projects) as it:
+            slugs = sorted(e.name for e in it
+                           if not e.name.startswith(".") and not e.is_symlink()
+                           and e.is_dir(follow_symlinks=False))
+        for slug in slugs:
+            try:
+                slug_fd = os.open(slug, _NOFOLLOW_DIR, dir_fd=projects)
+            except OSError:
+                continue
+            try:
+                src = _open_regular(slug_fd, name)
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                log.warning("legacy transcript %s/%s not adopted: %s", slug, name, exc)
+                continue
+            finally:
+                os.close(slug_fd)
+            try:
+                _copy_new(src, chat_root, (".claude", "projects", slug), name)
+            except OSError as exc:
+                log.warning("legacy transcript %s/%s not adopted: %s", slug, name, exc)
+            finally:
+                os.close(src)
+    finally:
+        os.close(projects)
+
+
+def _copy_new(src: int, root: Path, parts: tuple[str, ...], name: str) -> None:
+    """Copy the open file ``src`` to a new ``root/<parts…>/name``; a name already taken is left be."""
+    dir_fd = _nofollow_dir(root, parts, create=True)
+    try:
+        try:
+            dst = os.open(name, _CREATE_NEW, 0o666, dir_fd=dir_fd)
+        except FileExistsError:
+            return
+        try:
+            with os.fdopen(dst, "wb") as out:
+                while chunk := os.read(src, 1 << 20):
+                    out.write(chunk)
+        except BaseException:
+            try:
+                os.unlink(name, dir_fd=dir_fd)
+            except OSError:
+                pass
+            raise
+    finally:
+        os.close(dir_fd)
+
+
 def _adopt_legacy_continuity(chat_root: Path, work: Path, session: str) -> None:
     """MIGRATE-ON-READ for the continuity-carrier move (ADR-0028's write-side twin): threads recorded
     BEFORE chats anchored to ``_system`` live under the turn's then-cwd. When the anchored pointer is
     absent, adopt the thread — pointer AND transcript — from the first mount dir that has it, so
     moving the carrier never forks a conversation ("this is the first message I'm seeing" on turn 2).
-    Same adoption discipline ``_session_file`` already applies to the legacy single-thread file."""
+    Same adoption discipline ``_session_file`` already applies to the legacy single-thread file.
+
+    Nothing is followed through a link and only regular files are copied (see the block above);
+    the session name and the adopted session id are used as file names only when each is a single
+    plain name. A refused file is logged and the turn runs without it."""
+    if not _plain_name(session):
+        return
     target = chat_root / ".claude" / "sessions" / f"{session}.session"
-    if target.exists():
+    if os.path.lexists(target):
         return
     candidates = [work] + [Path(m["path"]) for m in active_mounts() if m.get("path")]
     for root in candidates:
         if root == chat_root:
             continue
-        src = root / ".claude" / "sessions" / f"{session}.session"
-        try:
-            if not src.exists():
-                continue
-            sid = src.read_text().strip()
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(sid + "\n" if sid else "")
-            # the transcript must move WITH the pointer — a resumed sid whose jsonl is missing under
-            # the new projects link is an alien id (the stale-resume retry silently starts fresh)
-            if sid:
-                for t in (root / ".claude" / "projects").glob(f"*/{sid}.jsonl"):
-                    dst = chat_root / ".claude" / "projects" / t.parent.name / t.name
-                    dst.parent.mkdir(parents=True, exist_ok=True)
-                    if not dst.exists():
-                        shutil.copyfile(t, dst)
-            return
-        except OSError:
+        text = _read_legacy_pointer(root, (".claude", "sessions"), f"{session}.session")
+        if text is None:
             continue
+        sid = text.strip()
+        try:
+            if not _write_new_pointer(chat_root, (".claude", "sessions"), f"{session}.session",
+                                      sid + "\n" if sid else ""):
+                return
+        except OSError as exc:
+            log.warning("legacy session pointer not adopted: %s", exc)
+            continue
+        # the transcript must move WITH the pointer — a resumed sid whose jsonl is missing under
+        # the new projects link is an alien id (the stale-resume retry silently starts fresh)
+        if sid and _plain_name(sid):
+            _adopt_legacy_transcripts(root, chat_root, sid)
+        return
 
 
 # ── the imperative gate (F162, ledger 2026-09-02 14:17Z-14:30Z) ────────────────────────────────────
@@ -1164,14 +1327,17 @@ def _session_file(work: Path, session: str) -> Path:
     so the current conversation isn't lost when sessions go multi (migrate-on-read).
 
     ``.claude/`` here is the FROZEN on-disk continuity-store path (workspace_reader serves chat
-    history from it) — a path contract, not a vendor coupling."""
+    history from it) — a path contract, not a vendor coupling. The legacy file is adopted the way
+    ``_adopt_legacy_continuity`` adopts: never through a link, a regular file only, into a new file."""
     sessions_dir = work / ".claude" / "sessions"
     namespaced = sessions_dir / f"{session}.session"
-    if session == DEFAULT_CHAT_SESSION and not namespaced.exists():
-        legacy = work / ".claude" / ".session"
-        if legacy.exists():
-            sessions_dir.mkdir(parents=True, exist_ok=True)
-            namespaced.write_text(legacy.read_text())
+    if session == DEFAULT_CHAT_SESSION and not os.path.lexists(namespaced):
+        legacy = _read_legacy_pointer(work, (".claude",), ".session")
+        if legacy is not None:
+            try:
+                _write_new_pointer(work, (".claude", "sessions"), namespaced.name, legacy)
+            except OSError as exc:
+                log.warning("legacy session pointer not adopted: %s", exc)
     return namespaced
 
 
