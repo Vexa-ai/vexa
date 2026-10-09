@@ -9,8 +9,10 @@ ResourceQuota admits on — WITHOUT a partial ``kubectl run --overrides`` contai
 merge replaces the generated container wholesale and strips its image, env and command."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 import subprocess
 from typing import Optional
 
@@ -20,7 +22,36 @@ from .mounts import k8s_volume_mounts
 from .profiles import Runnable
 
 MANAGED_LABEL = "runtime.managed"
+#: The workload id rides both a label (selectable, so it must be a valid label value) and an
+#: annotation of the same key (the id verbatim, whatever its shape). Adoption reads the annotation.
 WORKLOAD_ID_LABEL = "runtime.workload_id"
+
+# A workload id is the caller's (a chat unit is `agent-<subject>-chat-scaffold-<token_urlsafe>`:
+# capitals, `_`, past 63 characters), but a Pod name, a container name and a label value are not.
+_DNS1123_LABEL = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
+_LABEL_VALUE = re.compile(r"^[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$")
+_NAME_MAX = 63
+_HASH_LEN = 10
+
+
+def k8s_name(raw: str) -> str:
+    """A Pod or container name for ``raw``: ``raw`` itself when it is already a DNS-1123 label of at
+    most 63 characters (so bots and existing Pods keep their names), else lowercased, reduced to
+    ``[a-z0-9-]``, cut to fit and suffixed with a hash of ``raw``, so two ids that differ only in case
+    or in a dropped character never share a name. Deterministic: a restarted runtime re-derives it."""
+    if len(raw) <= _NAME_MAX and _DNS1123_LABEL.match(raw):
+        return raw
+    base = re.sub(r"-+", "-", re.sub(r"[^a-z0-9-]", "-", raw.lower())).strip("-")
+    digest = hashlib.sha256(raw.encode()).hexdigest()[:_HASH_LEN]
+    base = base[: _NAME_MAX - _HASH_LEN - 1].rstrip("-")
+    return f"{base}-{digest}" if base else digest
+
+
+def k8s_label_value(raw: str) -> str:
+    """A label value for ``raw``: ``raw`` itself when valid, else :func:`k8s_name` of it."""
+    if raw == "" or (len(raw) <= _NAME_MAX and _LABEL_VALUE.match(raw)):
+        return raw
+    return k8s_name(raw)
 
 # The extended-resource name a GPU request carries. Kubernetes requires extended resources on the
 # LIMITS side; the request is set equal to the limit automatically, and a requests-side entry that
@@ -234,7 +265,10 @@ def build_pod(
         "name": name,
         # Adoption labels (the orphaned-live-bot fix): a recreated runtime re-discovers its
         # still-running Pods by this label pair and re-registers them (see the kernel's adopt()).
-        "labels": {MANAGED_LABEL: "true", WORKLOAD_ID_LABEL: workload_id, **runnable.labels},
+        "labels": {MANAGED_LABEL: "true", WORKLOAD_ID_LABEL: k8s_label_value(workload_id),
+                   **runnable.labels},
+        # The id verbatim — the label above may be its safe form.
+        "annotations": {WORKLOAD_ID_LABEL: workload_id},
     }
     if namespace:
         metadata["namespace"] = namespace
@@ -277,7 +311,7 @@ class K8sBackend:
         self._ns = namespace
 
     def _pname(self, workload_id: str) -> str:
-        return f"{self._prefix}{workload_id}"            # must be DNS-1123 (lowercase alnum + '-')
+        return k8s_name(f"{self._prefix}{workload_id}")  # always a DNS-1123 label (the container's too)
 
     def _ns_args(self) -> list[str]:
         return ["-n", self._ns] if self._ns else []
@@ -336,7 +370,10 @@ class K8sBackend:
             out = []
             for pod in json.loads(r.stdout).get("items", []):
                 meta = pod.get("metadata", {})
-                wid = (meta.get("labels") or {}).get(WORKLOAD_ID_LABEL)
+                # The annotation carries the id verbatim; the label may be its safe form (and a Pod
+                # from before the annotation carries only the label, which was then the id itself).
+                wid = ((meta.get("annotations") or {}).get(WORKLOAD_ID_LABEL)
+                       or (meta.get("labels") or {}).get(WORKLOAD_ID_LABEL))
                 if not wid:
                     continue
                 phase = pod.get("status", {}).get("phase")

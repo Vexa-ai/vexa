@@ -33,7 +33,7 @@ from .isolation import (
 from .models import Resources
 from .mounts import mount_set
 from .profiles import Runnable
-from .workload_env import child_environment
+from .workload_env import child_environment, name_component
 
 log = logging.getLogger("runtime_kernel.process")
 
@@ -50,9 +50,9 @@ def _open_log(workload_id: str) -> tuple[str, int]:
     only root controls (made 0700) and the file is opened without following a link, 0600, so no
     child can read another's output or point root's writes elsewhere."""
     log_dir = _log_dir()
-    name = f"{workload_id}.log"
-    if "/" in workload_id or workload_id in (".", ".."):
-        raise OSError(f"workload id {workload_id!r} cannot name a log file")
+    # One file name inside the log dir, whatever the id holds (a chat id carries the client's
+    # session, which may contain `/` or `..`): name_component never yields `/` or a leading `.`.
+    name = f"{name_component(workload_id)}.log"
     if os.geteuid() != 0:
         os.makedirs(log_dir, exist_ok=True)
         path = os.path.join(log_dir, name)

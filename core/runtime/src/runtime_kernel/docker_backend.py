@@ -25,7 +25,7 @@ from .backend import WorkloadHandle
 from .models import Resources
 from .mounts import workspace_binds
 from .profiles import Runnable
-from .workload_env import forwarded_env
+from .workload_env import forwarded_env, name_component
 
 MANAGED_LABEL = "runtime.managed"
 WORKLOAD_ID_LABEL = "runtime.workload_id"
@@ -66,6 +66,13 @@ def _worker_naming(workload_id: str) -> tuple[str, dict[str, str]]:
     else:
         kind = "event"
     return f"worker-{rest}", {"vexa.role": "worker", "vexa.kind": kind}
+
+
+def docker_name(raw: str) -> str:
+    """A container name for ``raw`` (``workload_env.name_component``: unchanged when Docker accepts
+    it, else made valid with a hash of ``raw``). The id itself rides the ``runtime.workload_id``
+    label, which takes any string. Docker has no 63-character limit, so long ids keep their names."""
+    return name_component(raw)
 
 
 def _workload_id_from_leaf(leaf: str) -> str:
@@ -140,7 +147,7 @@ class DockerBackend:
 
     def _cname(self, workload_id: str) -> str:
         leaf, _labels = _worker_naming(workload_id)
-        return f"{self._prefix}{leaf}"
+        return docker_name(f"{self._prefix}{leaf}")
 
     def _req(self, method: str, path: str, *, timeout: int = 30, **kw):
         return self._session.request(method, f"{self._url}{path}", timeout=timeout, **kw)

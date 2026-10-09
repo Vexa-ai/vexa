@@ -20,9 +20,11 @@ Pure and env-driven, so it is exercised offline with plain dicts.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import posixpath
+import re
 from dataclasses import dataclass
 from typing import Iterable, Mapping, Optional
 
@@ -107,6 +109,23 @@ PROCESS_PLUMBING_ENV = (
     "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
     "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "NODE_EXTRA_CA_CERTS",
 )
+
+
+#: What a container name (Docker's own rule) and a single file-name component may be.
+_NAME_COMPONENT = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]+$")
+
+
+def name_component(raw: str) -> str:
+    """``raw`` as one name a substrate accepts — a Docker container name, a log file's name — when a
+    workload id is not one already (a chat id carries whatever session the client sent). Unchanged
+    when valid, so every id the control plane mints today keeps its name; otherwise each run of other
+    characters becomes ``-`` and a hash of ``raw`` is appended, so two ids never share a name. Never
+    contains ``/`` and never starts with ``.``."""
+    if _NAME_COMPONENT.match(raw):
+        return raw
+    base = re.sub(r"[^a-zA-Z0-9_.-]+", "-", raw).strip("-_.")
+    digest = hashlib.sha256(raw.encode()).hexdigest()[:10]
+    return f"{base}-{digest}" if base else f"w-{digest}"
 
 
 def forwarded_env(keys: Iterable[str], parent: Mapping[str, str],
