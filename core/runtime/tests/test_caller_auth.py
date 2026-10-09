@@ -76,6 +76,17 @@ def test_boot_refuses_an_unusable_token(value):
         load_caller_token({"RUNTIME_API_TOKEN": value})
 
 
+def test_every_value_the_declaration_forbids_is_refused_as_published():
+    """The declaration's forbidden_values is the one list: each is refused by name, not by length."""
+    from runtime_kernel import config_preflight as cp
+
+    (entry,) = [k for k in cp.load_declaration()["keys"] if k["key"] == "RUNTIME_API_TOKEN"]
+    assert entry["forbidden_values"]
+    for value in entry["forbidden_values"]:
+        with pytest.raises(CallerTokenError, match="published"):
+            load_caller_token({"RUNTIME_API_TOKEN": value})
+
+
 def test_boot_accepts_a_real_token():
     assert load_caller_token({"RUNTIME_API_TOKEN": TOKEN}) == TOKEN
 

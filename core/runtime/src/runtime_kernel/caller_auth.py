@@ -24,12 +24,15 @@ from fastapi import HTTPException, Request
 TOKEN_ENV = "RUNTIME_API_TOKEN"
 #: A caller token shorter than this is refused at boot (32 hex characters = 128 bits).
 MIN_TOKEN_BYTES = 32
-#: Literals that must never be a deployment's caller token — the placeholder list every service's
-#: config.v1 refuses (the same list the preflight checks; length alone already refuses most).
-PUBLISHED_TOKENS = frozenset({
-    "vexa-internal-secret", "lite-internal-secret", "changeme", "change-me", "CHANGE-ME", "default",
-    "secret",
-})
+
+
+def _published_tokens() -> frozenset[str]:
+    """The literals that must never be the caller token: the ``forbidden_values`` the runtime's
+    config.v1 declaration lists for it (the one list; the boot preflight checks the same)."""
+    from .config_preflight import load_declaration
+
+    entry = next(k for k in load_declaration()["keys"] if k["key"] == TOKEN_ENV)
+    return frozenset(entry.get("forbidden_values") or ())
 
 
 class CallerTokenError(RuntimeError):
@@ -47,7 +50,7 @@ def load_caller_token(env: Optional[Mapping[str, str]] = None) -> str:
             "caller credential. Generate one (`openssl rand -hex 32`) and set the same value on "
             "the runtime, agent-api and meeting-api."
         )
-    if token in PUBLISHED_TOKENS:
+    if token in _published_tokens():
         raise CallerTokenError(f"{TOKEN_ENV} holds a value published in the Vexa repository — generate a real one")
     if len(token.encode("utf-8")) < MIN_TOKEN_BYTES:
         raise CallerTokenError(f"{TOKEN_ENV} must be at least {MIN_TOKEN_BYTES} bytes")
