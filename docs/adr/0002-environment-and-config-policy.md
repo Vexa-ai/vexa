@@ -20,3 +20,15 @@ env, no validation.
 ## Consequences
 - Each workload's env contract is part of its `invocation.v1`; the kernel's `env` stays opaque (P11).
 - `BOT_CONFIG → VEXA_BOT_CONFIG` when `invocation.v1` is sealed.
+
+## Recorded exceptions to the `VEXA_*` name
+
+Each is declared in its service's `config.v1.json`, so `gate:config-contract` still holds it on every
+surface; only the name departs from the rule.
+
+- **`RUNTIME_API_TOKEN`** (2026-10-09, v0.13.2) — the runtime caller credential. One name across its
+  three holders (the runtime, agent-api, meeting-api) and the compose/Helm secret key, so an operator
+  sets one value under one name; agent-api reads it through an explicit alias (`shared/config.py`).
+- **`DOCKER_WORKER_NETWORK`** (2026-10-09, v0.13.2) — the network the docker backend puts agent
+  workers on, beside the runtime's existing `DOCKER_NETWORK` for bots. It joins that unprefixed
+  substrate family rather than splitting it.

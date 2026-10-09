@@ -248,7 +248,7 @@
       "line": 43,
       "from": "terminal",
       "to": "agent",
-      "ruling": "ADR-0037 decision 1 — clients reach ONE edge with a bearer. Not a new door: the terminal's Connections routes have called the credential broker since 0.13.2, and the gate only began counting the door when the broker's keys were given a token (0.13.2 architecture pass, S1). It is direct because the human role key — the authority to consent and store a credential — must live in no process that agent traffic crosses, and today the gateway forwards both. The entry closes when the gateway re-stamps a person's session as the broker's human role (the signed-identity work, M1) and the terminal reaches Connections through GATEWAY_URL only."
+      "ruling": "ADR-0037 decision 1 — clients reach ONE edge with a bearer. A door opened in 0.13.2 by Connections (ADR-0040): the terminal's server calls the credential broker directly, in the human role. It is direct because the human role key — the authority to consent and store a credential — must live in no process that agent traffic crosses, and the gateway carries both. The signed identity (ADR-0041) bound the broker's agent role to the person; it gave the gateway no way to present the human role, so it did not close this. The entry closes when the gateway re-stamps a person's session as the broker's human role and the terminal reaches Connections through GATEWAY_URL only."
     }
   ]
 }
