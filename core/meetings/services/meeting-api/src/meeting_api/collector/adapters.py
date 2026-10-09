@@ -528,6 +528,17 @@ class SqlAlchemyTranscriptStore:
         # read decides which tier of the blob it may carry, so the two can never disagree.
         return await self._merge_live_segments(pg, viewer_is_owner=is_owner)
 
+    async def find_owned_native_meetings(self, user_id, platform, native_meeting_id):
+        from sqlalchemy import select
+        from .models import Meeting
+
+        async with self._session_factory() as db:
+            rows = (await db.execute(select(Meeting).where(
+                Meeting.user_id == user_id, Meeting.platform == platform,
+                Meeting.platform_specific_id == native_meeting_id,
+            ).order_by(Meeting.created_at.desc(), Meeting.id.desc()))).scalars().all()
+            return [self._planned_row(row) for row in rows]
+
     async def list_meetings(self, user_id, *, status=None, platform=None, limit=None, offset=None,
                             member_workspaces=None, list_view=False, meeting_id=None, slim=False,
                             metadata_filter=None):
@@ -771,7 +782,7 @@ class SqlAlchemyTranscriptStore:
                 "speakers": [r[0] for r in rows if isinstance(r[0], str) and r[0].strip()],
             }
 
-    async def bind_workspace(self, user_id, platform, native_meeting_id, workspace_id) -> "Optional[str]":
+    async def bind_workspace(self, user_id, platform, native_meeting_id, workspace_id, *, meeting_id=None) -> "Optional[str]":
         """OWNER-scoped: bind the meeting to a shared workspace (``data.workspace_id``) so its members can
         subscribe to the live transcript feed (authorize_subscribe branch b). Many meetings → one workspace
         (Amendment 6). Returns the bound workspace_id, or None if the caller owns no such meeting."""
@@ -788,6 +799,8 @@ class SqlAlchemyTranscriptStore:
                     Meeting.platform_specific_id == native_meeting_id,
                 ).order_by(Meeting.created_at.desc()).limit(1).with_for_update()
             )
+            if meeting_id is not None:
+                stmt = stmt.where(Meeting.id == meeting_id)
             meeting = (await db.execute(stmt)).scalars().first()
             if not meeting:
                 return None
@@ -1072,7 +1085,7 @@ class SqlAlchemyTranscriptStore:
             flag_modified(meeting, "data")
             await db.commit()
 
-    async def _mutate_docs(self, user_id, platform, native_meeting_id, mutator):
+    async def _mutate_docs(self, user_id, platform, native_meeting_id, mutator, *, meeting_id=None):
         """Owner-scoped atomic read→modify→write of ``meeting.data['docs']`` under ONE
         ``SELECT … FOR UPDATE`` row lock. Returns the updated docs list, or ``None`` when the
         user owns no such meeting."""
@@ -1093,6 +1106,8 @@ class SqlAlchemyTranscriptStore:
                 .limit(1)
                 .with_for_update()
             )
+            if meeting_id is not None:
+                stmt = stmt.where(Meeting.id == meeting_id)
             meeting = (await db.execute(stmt)).scalars().first()
             if not meeting:
                 return None
@@ -1104,17 +1119,17 @@ class SqlAlchemyTranscriptStore:
             await db.commit()
             return docs
 
-    async def connect_doc(self, user_id, platform, native_meeting_id, doc):
+    async def connect_doc(self, user_id, platform, native_meeting_id, doc, *, meeting_id=None):
         return await self._mutate_docs(
-            user_id, platform, native_meeting_id, lambda docs: _upsert_doc(docs, doc)
+            user_id, platform, native_meeting_id, lambda docs: _upsert_doc(docs, doc), meeting_id=meeting_id
         )
 
-    async def disconnect_doc(self, user_id, platform, native_meeting_id, path):
+    async def disconnect_doc(self, user_id, platform, native_meeting_id, path, *, meeting_id=None):
         return await self._mutate_docs(
-            user_id, platform, native_meeting_id, lambda docs: _remove_doc(docs, path)
+            user_id, platform, native_meeting_id, lambda docs: _remove_doc(docs, path), meeting_id=meeting_id
         )
 
-    async def set_intent(self, user_id, platform, native_meeting_id, status, scheduled_at=None):
+    async def set_intent(self, user_id, platform, native_meeting_id, status, scheduled_at=None, *, meeting_id=None):
         """Owner-scoped atomic write of the INTENT status (``idle`` / ``scheduled``) onto the
         ``meetings.status`` column under ONE ``SELECT … FOR UPDATE`` row lock. Stamps / clears
         ``meeting.data['scheduled_at']``. NEVER touches the bot FSM."""
@@ -1135,6 +1150,8 @@ class SqlAlchemyTranscriptStore:
                 .limit(1)
                 .with_for_update()
             )
+            if meeting_id is not None:
+                stmt = stmt.where(Meeting.id == meeting_id)
             meeting = (await db.execute(stmt)).scalars().first()
             if not meeting:
                 return None
