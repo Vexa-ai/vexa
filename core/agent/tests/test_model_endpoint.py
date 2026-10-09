@@ -34,7 +34,8 @@ def test_a_custom_endpoint_never_inherits_the_deployment_token(monkeypatch):
     monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "deployment-oauth")
     env = _overlay({"mode": "custom", "base_url": ALLOWED, "api_key": ""})
     assert env["ANTHROPIC_BASE_URL"] == ALLOWED
-    for key in ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"):
+    for key in ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN",
+                "VEXA_LLM_API_KEY"):
         assert key in env, f"{key} must be stamped (absence is what the backfill fills)"
         assert env[key] == ""
 
@@ -88,6 +89,9 @@ def test_a_non_allowlisted_endpoint_is_refused(url):
     assert model_endpoint.refuse_reason(url, env={}) is not None
     env = _overlay({"mode": "custom", "base_url": url, "api_key": "sk"})
     assert "ANTHROPIC_BASE_URL" not in env, f"{url} must never be stamped"
+    # Refused means the deployment's route applies in full, and the subject's key rides nowhere.
+    assert not any(k.startswith("VEXA_LLM_") for k in env)
+    assert "sk" not in env.values()
 
 
 @pytest.mark.parametrize("url", ["https://api.anthropic.com", "https://openrouter.ai/api/v1",
@@ -186,18 +190,23 @@ def test_the_test_button_probes_a_custom_endpoint_with_the_subjects_own_key():
     assert seen["auth"] == "Bearer "
 
 
-# ── F93: the extra_body stamp exists once ───────────────────────────────────────────────────────
+# ── F93: the route is stamped in one place ──────────────────────────────────────────────────────
 
 def test_extra_body_is_stamped_exactly_once(monkeypatch):
-    """The block was written twice, verbatim, in one function. Harmless today — the second
-    assignment writes the same value — and precisely the shape that stops being harmless the moment
-    one copy is edited."""
+    """The extra_body block was written twice, verbatim, in one function. Harmless while both
+    copies wrote the same value, and precisely the shape that stops being harmless the moment one
+    copy is edited. The whole subject route now has ONE writer, `subject_route_env`: the overlay
+    stamps none of its keys by hand, and the helper names each key once."""
     import inspect
 
     from control_plane import dispatch as d
 
-    src = inspect.getsource(d.overlay_model_config)
-    assert src.count('env["VEXA_LLM_EXTRA_BODY"]') == 1, src
+    route_keys = d.subject_route_env("", "", "")
+    overlay_src = inspect.getsource(d.overlay_model_config)
+    helper_src = inspect.getsource(d.subject_route_env)
+    for key in route_keys:
+        assert f'env["{key}"]' not in overlay_src, f"{key} is stamped outside subject_route_env"
+        assert helper_src.count(f'"{key}"') == 1, key
 
     env = _overlay({"mode": "custom", "base_url": ALLOWED, "api_key": "k",
                     "extra_body": '{"chat_template_kwargs": {"enable_thinking": false}}'})

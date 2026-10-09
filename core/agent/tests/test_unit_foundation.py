@@ -371,10 +371,11 @@ def test_dispatcher_model_config_stamps_reasoning_effort():
 
 
 def test_dispatcher_model_config_custom_mode_stamps_the_one_call_shape(monkeypatch):
-    """mode:custom points the agent harness (ANTHROPIC_*) at the supplied gateway. Dispatch-stamped
-    keys WIN downstream (docker_backend copies its own env only for keys absent here). It used to
-    stamp a SECOND pair (VEXA_LLM_PROVIDER/_BASE_URL/_API_KEY) for the completion adapters — one
-    endpoint, configured twice, in two dialects; PRD decision 34 removed the second consumer."""
+    """mode:custom points the agent harness at the supplied gateway. Dispatch-stamped keys WIN
+    downstream (the runtime forwards its own env only for keys absent here). The completion
+    pipeline's own dials (VEXA_LLM_PROVIDER and friends) stay gone with it (PRD decision 34); the
+    VEXA_LLM_* names the openai-agent harness reads carry the SAME endpoint and key, so a forwarded
+    deployment value can never stand in for them."""
     monkeypatch.setenv("VEXA_MODEL_BASE_URL_ALLOW", "gw.example.com")   # F84: the operator gate
     rt = _FakeRuntime()
     mc = _FakeModelConfig({"mode": "custom", "base_url": "https://gw.example.com",
@@ -385,7 +386,9 @@ def test_dispatcher_model_config_custom_mode_stamps_the_one_call_shape(monkeypat
     assert env["ANTHROPIC_BASE_URL"] == "https://gw.example.com"
     assert env["ANTHROPIC_AUTH_TOKEN"] == "sk-user"
     assert env["VEXA_AGENT_MODEL"] == "qwen3"
-    assert not any(k.startswith("VEXA_LLM_") for k in env)
+    assert {k: v for k, v in env.items() if k.startswith("VEXA_LLM_")} == {
+        "VEXA_LLM_BASE_URL": "https://gw.example.com", "VEXA_LLM_API_KEY": "sk-user",
+        "VEXA_LLM_MODEL": "", "VEXA_LLM_EXTRA_BODY": ""}
 
 
 def test_dispatcher_model_config_subscription_mode_keeps_deployment_credentials(monkeypatch):

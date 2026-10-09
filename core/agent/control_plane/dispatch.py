@@ -378,6 +378,44 @@ MODEL_AUTH_ENV_ALLOWLIST = (
 # that called it, so a worker needs exactly one model credential: the agent harness's.
 
 
+# ── a subject's own endpoint pins the WHOLE model route, here and nowhere else ───────────────
+# A worker's model env has TWO writers. The dispatch stamps what it decided; then the runtime fills
+# every key the spec left ABSENT from the deployment's own environment
+# (`runtime_kernel.workload_env.WORKER_FORWARD_ENV`, `forwarded_env`), the VEXA_LLM_* keys among
+# them. The openai-agent harness reads VEXA_LLM_* BEFORE ANTHROPIC_*, so a subject's endpoint
+# stamped under the ANTHROPIC_* names alone lost to a forwarded deployment VEXA_LLM_BASE_URL: the
+# turn ran on the deployment's model, and with no deployment VEXA_LLM_API_KEY it carried the
+# SUBJECT's key to the DEPLOYMENT's endpoint (F84 from the other side).
+#
+# So the precedence is decided ONCE, by the dispatch: when a subject's endpoint applies, every key
+# either harness reads to choose an endpoint, a credential, a model override or a request dialect
+# is stamped by `subject_route_env`, the empty string included. The runtime never refills a key the
+# spec carries, so nothing of the deployment's route survives into that worker, and neither harness
+# has to know whose value it is reading. Two names for the subject's one endpoint is not the second
+# endpoint decision 34 removed: that was a second CONSUMER, configured separately.
+def subject_route_env(base_url: str, api_key: str, extra_body: str) -> dict[str, str]:
+    """The model route of a worker whose subject's own endpoint applies: every key, every time.
+
+    ``api_key`` and ``extra_body`` are the subject's own, and empty means NONE — never "use the
+    deployment's". The model is not here: it is ``VEXA_AGENT_MODEL``, resolved once by
+    ``overlay_model_config`` under the operator's allowlist, so the openai-agent override
+    ``VEXA_LLM_MODEL`` is pinned empty rather than left for the deployment's value to fill."""
+    return {
+        # the claude CLI (the claude-code harness)
+        "ANTHROPIC_BASE_URL": base_url,
+        "ANTHROPIC_AUTH_TOKEN": api_key,
+        "ANTHROPIC_API_KEY": api_key,
+        "CLAUDE_CODE_OAUTH_TOKEN": "",     # the subscription token has ONE legitimate destination
+        # the openai-agent harness, which reads these before the ANTHROPIC_* names
+        "VEXA_LLM_BASE_URL": base_url,
+        "VEXA_LLM_API_KEY": api_key,
+        "VEXA_LLM_MODEL": "",
+        # Qwen behind vLLM needs {"chat_template_kwargs":{"enable_thinking":false}} or it returns
+        # nothing parseable; another endpoint may refuse those fields. Only the subject knows which.
+        "VEXA_LLM_EXTRA_BODY": extra_body,
+    }
+
+
 def _allowlisted(model: str, allowlist: str) -> bool:
     """The operator's model gate (``VEXA_MODEL_ALLOWLIST``, comma-separated): empty = anything goes."""
     allowed = {m.strip() for m in allowlist.split(",") if m.strip()}
@@ -390,15 +428,15 @@ def overlay_model_config(env: dict[str, str], config: dict, *, allowlist: str = 
     setting, resolved by admin-api) onto the dispatch env — field-by-field over the deployment
     env defaults, which stay the bottom fallback for anything unset.
 
-    ``mode: custom`` points the agent harness at the supplied gateway (an Anthropic-compatible
-    endpoint, e.g. LiteLLM/OpenRouter in front of an open-source model) via
-    ``ANTHROPIC_BASE_URL``/``ANTHROPIC_AUTH_TOKEN``. ONE endpoint, stamped once: the openai-agent
-    harness (decision 37) reads these same two as its documented fallbacks, so there is no second
-    pair in a second dialect — which is what decision 34 removed and must stay removed. ``mode: subscription`` (or unset) keeps the deployment's brokered credential — the mounted
+    ``mode: custom`` points the agent harness at the supplied gateway (e.g. LiteLLM/OpenRouter in
+    front of an open-source model, or a self-hosted vLLM) once it passes the operator gate: the
+    whole model route is stamped by ``subject_route_env``, under the names each harness reads, so
+    the subject's endpoint, key and extra_body apply whatever the deployment's VEXA_LLM_* say.
+    ``mode: subscription`` (or unset) keeps the deployment's brokered credential — the mounted
     Claude Code subscription / deployment key — and only the model names apply.
 
     Dispatch-stamped values WIN downstream (the runtime copies its own env only for keys absent
-    here — docker_backend's ``key not in spawn_env``). Models are gated by the operator's
+    here — ``runtime_kernel.workload_env.forwarded_env``). Models are gated by the operator's
     allowlist: a non-allowlisted model is DROPPED (deployment default applies), never an error —
     a stale pref must not brick a turn."""
     model = (config.get("model") or "").strip()
@@ -450,25 +488,14 @@ def overlay_model_config(env: dict[str, str], config: dict, *, allowlist: str = 
             except Exception:  # noqa: BLE001 — a report is never worth a dispatch
                 logger.warning("model endpoint refusal could not be filed as friction")
         return
-    env["ANTHROPIC_BASE_URL"] = base_url
-    # ALWAYS THE SUBJECT'S OWN CREDENTIAL — the empty string included (F84, SECURITY). The backfill
-    # at the end of `build_unit_env` fills every MODEL_AUTH_ENV_ALLOWLIST key that is still ABSENT
-    # from agent-api's own environment; an explicit "" is not absent. Stamping only a non-empty key
-    # therefore paired the DEPLOYMENT's brokered token with the SUBJECT's endpoint whenever the
-    # subject supplied a URL and no key. Every credential the harness or the claude CLI would put on
-    # that request is pinned here, so a custom endpoint can only ever receive what its own owner set.
-    env["ANTHROPIC_AUTH_TOKEN"] = api_key
-    env["ANTHROPIC_API_KEY"] = api_key
-    env["CLAUDE_CODE_OAUTH_TOKEN"] = ""    # the subscription token has ONE legitimate destination
-    # THE ONE DIAL WITH NO ANTHROPIC-DIALECT EQUIVALENT. Endpoint, credential and model all reach
-    # the openai-agent harness through the ANTHROPIC_*/VEXA_AGENT_MODEL keys above (see
-    # `llm/openai_agent.py` — `VEXA_LLM_BASE_URL or ANTHROPIC_BASE_URL`, and so on). `extra_body`
-    # has no such fallback, and a self-hosted Qwen returns nothing parseable without
-    # {"chat_template_kwargs":{"enable_thinking":false}} — so a per-subject value has to be
-    # stamped under its own name or the admin-api field that writes it does nothing.
-    extra_body = (config.get("extra_body") or "").strip()
-    if extra_body:
-        env["VEXA_LLM_EXTRA_BODY"] = extra_body
+    # ALWAYS THE SUBJECT'S OWN CREDENTIAL — the empty string included (F84, SECURITY). Two writers
+    # fill a key this leaves ABSENT: the backfill at the end of `build_unit_env` (from agent-api's
+    # own environment) and the runtime's forward list (from the deployment's). An explicit "" is not
+    # absent to either. Stamping only a non-empty key therefore paired the DEPLOYMENT's token with
+    # the SUBJECT's endpoint, and stamping only the claude CLI's names paired the SUBJECT's token
+    # with the DEPLOYMENT's openai-agent endpoint. The whole route is pinned in one call, so a
+    # custom endpoint receives only what its owner set, and the owner's key goes nowhere else.
+    env.update(subject_route_env(base_url, api_key, (config.get("extra_body") or "").strip()))
 
 
 def _worker_cwd(root: str, subject: str, mounts: list[dict], target: str = "") -> str:

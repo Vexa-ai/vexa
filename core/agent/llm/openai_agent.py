@@ -90,6 +90,13 @@ and returns nothing parseable) · ``VEXA_AGENT_MAX_TOOL_CALLS`` (+ the per-kind
 ``VEXA_AGENT_MAX_TOOL_CALLS_CHAT`` / ``_JOB`` / ``_ROOM`` / ``_FLOW``) · ``VEXA_AGENT_MAX_TURN_SEC`` ·
 ``VEXA_AGENT_CONTEXT_TOKENS`` · ``VEXA_AGENT_STREAM`` · ``VEXA_SEARCH_URL`` ·
 ``VEXA_SEARCH_DIALECT`` · ``VEXA_SEARCH_API_KEY``.
+
+WHOSE ENDPOINT this is, the deployment's or the subject's own (Settings → Models ``mode: custom``),
+is NOT decided here. The dispatch decides it once and, for a subject's endpoint, stamps every key
+this harness reads for endpoint, credential, model override and extra body
+(``control_plane.dispatch.subject_route_env``); the runtime never refills a key the dispatch
+stamped. So the fallback order in ``OpenAIAgentHarness.__init__`` never mixes the two owners:
+either every key it reads is the subject's, or none is.
 """
 from __future__ import annotations
 

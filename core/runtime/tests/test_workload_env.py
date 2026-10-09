@@ -21,6 +21,7 @@ from runtime_kernel.workload_env import (
     MountRefused,
     StoreConfig,
     child_environment,
+    forwarded_env,
     workload_env,
 )
 
@@ -231,6 +232,22 @@ def test_model_credentials_reach_workers_only():
 def test_a_dispatch_stamped_value_wins_over_the_forwarded_one():
     env = child_environment({"VEXA_AGENT_MODEL": "opus"}, forward=_WORKER_FORWARD, parent=_RUNTIME_ENV)
     assert env["VEXA_AGENT_MODEL"] == "opus"
+
+
+def test_an_explicitly_empty_dispatch_value_is_never_refilled():
+    """A subject's own model endpoint pins the whole route, and "no key" or "no extra body" arrives
+    as an empty string. Refilling it from the deployment's environment would hand the deployment's
+    credential to the subject's endpoint, or the deployment's endpoint the subject's key. Both
+    merges (the process backend's, and docker's spawn_env update) go through ``forwarded_env``."""
+    parent = {**_RUNTIME_ENV, "VEXA_LLM_BASE_URL": "http://deployment:8001/v1",
+              "VEXA_LLM_API_KEY": "deployment-key", "VEXA_LLM_MODEL": "deployment-model",
+              "VEXA_LLM_EXTRA_BODY": '{"x": 1}', "ANTHROPIC_AUTH_TOKEN": "deployment-token"}
+    spec = {"VEXA_LLM_BASE_URL": "https://subject.example/v1", "VEXA_LLM_API_KEY": "",
+            "VEXA_LLM_MODEL": "", "VEXA_LLM_EXTRA_BODY": "", "ANTHROPIC_AUTH_TOKEN": "",
+            "ANTHROPIC_API_KEY": ""}
+    assert forwarded_env(_WORKER_FORWARD, parent, spec).keys().isdisjoint(spec)
+    env = child_environment(spec, forward=_WORKER_FORWARD, parent=parent)
+    assert {k: env[k] for k in spec} == spec
 
 
 def test_a_real_child_sees_none_of_the_runtimes_secrets(monkeypatch, tmp_path):
