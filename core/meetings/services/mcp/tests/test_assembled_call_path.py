@@ -223,6 +223,8 @@ def test_calling_a_json_body_tool_sends_a_json_body_downstream():
     seen = []
 
     def upstream(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/auth/me":  # the edge confirms the caller is the instance admin
+            return httpx.Response(200, json={"user_id": 1, "is_admin": True})
         seen.append(request)
         return httpx.Response(201, json={"name": "n", "version": 1, "status": "active"})
 
@@ -267,6 +269,8 @@ def test_flow_lifecycles_path_parameters_still_substitute():
     seen = []
 
     def upstream(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/auth/me":  # the edge confirms the caller is the instance admin
+            return httpx.Response(200, json={"user_id": 1, "is_admin": True})
         seen.append(request)
         return httpx.Response(200, json={"name": "onboarding", "version": 3, "status": "active"})
 

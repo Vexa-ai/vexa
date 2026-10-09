@@ -175,3 +175,14 @@ def test_the_worker_harness_files_friction_with_its_token_and_that_is_the_only_r
     for method, path in (("GET", "/agent/friction"), ("POST", "/agent/friction/x"),
                          ("POST", "/agent/frictions"), ("DELETE", "/agent/friction")):
         assert client.request(method, path, headers={"X-API-Key": DELEGATED}).status_code == 403, path
+
+
+def test_auth_me_says_whether_the_key_is_the_instance_admins():
+    """The MCP edge asks this before it spends the deployment's operator key on an `auth: admin`
+    tool; the answer is identity's own, and anything but a literal true is no."""
+    for answered, said in ((True, True), (False, False), (None, False), ("true", False)):
+        user = {"user_id": 1, "scopes": ["bot", "tx"], "max_concurrent": 3}
+        if answered is not None:
+            user["is_admin"] = answered
+        client, _ = _client(user=user, key=VALID_KEY)
+        assert client.get("/auth/me", headers={"X-API-Key": VALID_KEY}).json()["is_admin"] is said

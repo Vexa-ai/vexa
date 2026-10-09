@@ -374,6 +374,9 @@ def create_app(
             "email": user_data.get("email", ""),
             "scopes": user_data.get("scopes", []),
             "max_concurrent": user_data.get("max_concurrent", 3),
+            # identity's own answer (`/internal/validate`): the MCP edge asks it before it spends the
+            # deployment's operator key on an `auth: admin` tool.
+            "is_admin": user_data.get("is_admin") is True,
         }
 
     # --- auth + identity prep, shared by the buffered REST proxy (_forward) and the streaming proxy

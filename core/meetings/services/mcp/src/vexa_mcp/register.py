@@ -10,7 +10,9 @@ WHAT TRAVELS: whichever credential the tool's `auth` names, and nothing else (is
 `subject` sends the caller's own, as `X-API-Key`, exactly as the fourteen do — the case this edge
 was built for. `admin` sends the key the DEPLOYMENT holds, in the header the owning domain named,
 and the caller's own credential does NOT travel with it: a door that reads an operator key has no
-use for a person's, and forwarding both would let the weaker one look like it was checked.
+use for a person's, and forwarding both would let the weaker one look like it was checked. Because
+that key is the deployment's, it is spent only for the instance admin calling with their own
+credential, confirmed with the gateway at call time (`_require_instance_admin`).
 `none` sends neither.
 
 There is one authentication path INTO this edge (PRD 40.8) — a bearer in the header, the session
@@ -96,6 +98,34 @@ def register(app: FastAPI, bound: List[BoundTool], base_urls: Dict[str, str], *,
     for bt in bound:
         names.append(_add(app, bt, base_urls[bt.tool.domain], transport, env, gateway_url))
     return names
+
+
+#: The answer to a caller who is not the instance admin speaking for themselves.
+ADMIN_REFUSAL = ("this tool acts with the deployment's own operator key, so only the instance "
+                 "admin, calling with their own credential, may use it")
+
+
+async def _require_instance_admin(caller_key: str, gateway_url: Optional[str],
+                                  transport: Optional[httpx.AsyncBaseTransport]) -> None:
+    """An `auth: admin` tool spends a key the DEPLOYMENT holds, so this edge spends it only for the
+    instance admin calling with their own credential — asked of the gateway at call time (`/auth/me`
+    answers `is_admin` from identity), never read from anything the caller sent. A worker's
+    delegation token is refused there (it is an MCP credential and never an admin's), and so is
+    everything else that is not the admin's own key. No gateway to ask is a refusal too."""
+    if not gateway_url or not caller_key:
+        raise HTTPException(status_code=403, detail=ADMIN_REFUSAL)
+    try:
+        async with httpx.AsyncClient(timeout=TOOL_TIMEOUT_S, transport=transport) as client:
+            r = await client.get(gateway_url.rstrip("/") + "/auth/me",
+                                 headers={"X-API-Key": caller_key})
+    except httpx.RequestError:
+        raise HTTPException(status_code=503, detail="could not confirm who is calling; try again")
+    try:
+        me = r.json() if r.status_code == 200 else {}
+    except Exception:  # noqa: BLE001 — an unreadable answer confirms nothing
+        me = {}
+    if not isinstance(me, dict) or me.get("is_admin") is not True:
+        raise HTTPException(status_code=403, detail=ADMIN_REFUSAL)
 
 
 def _outbound(bt: BoundTool, caller_key: str, env: dict) -> Dict[str, str]:
@@ -207,6 +237,8 @@ def _add(app: FastAPI, bt: BoundTool, base: str,
         key = _caller_key(request)
         if key == "" and bt.tool.identity != "none":
             raise HTTPException(status_code=401, detail="this tool needs your Vexa credential")
+        if bt.tool.auth == "admin":
+            await _require_instance_admin(key, gateway_url, transport)
         raw_body = {}
         if method in ("POST", "PUT", "PATCH"):
             try:
