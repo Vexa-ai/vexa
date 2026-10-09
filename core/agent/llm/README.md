@@ -111,6 +111,12 @@ carries the event vocabulary and the rest.
   feed carries the transcript and nothing else.
 - Session ids are OPAQUE per-harness tokens; an alien/stale id must yield `done.ok=False` (the
   engine's stale-resume retry heals it).
+- **Every harness CLI starts as the tools user** (`ports.harness_identity_kwargs`, user `vexa-tools`
+  in the worker image) wherever the worker runs as root, so the model's tools cannot read the
+  worker's environment through /proc or write its code; the worker hands that user, by group, only
+  the workspaces a turn may write and the harness's own state (`grant_tools_access`). A worker that
+  is not root does not switch and is non-dumpable instead (`harden_worker_process`). A new adapter
+  launches its CLI with those keyword arguments and `harness_subprocess_env()`.
 
 ## Adding a runner
 

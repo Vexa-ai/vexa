@@ -39,6 +39,9 @@ from llm import (
     HarnessPort,
     auth_error_event,
     close_event_stream,
+    grant_tools_access,
+    hand_to_tools,
+    harden_worker_process,
     harness_from_env,
     looks_like_auth_failure,
     preflight_provider_guard,
@@ -1463,6 +1466,7 @@ def mcp_delegation_config(work: Path) -> "tuple[str | None, list[str]]":
         path.chmod(0o600)
     except OSError:  # a store backend that does not carry modes — the attachment still stands
         pass
+    hand_to_tools(path)  # the harness reads it, and runs as the tools user where it can (llm/ports.py)
     # PRINTED, not logged at info: the worker configures no root logger, so an INFO record is dropped,
     # and "was the toolbelt attached?" is the first question asked of a worker's log.
     print(f"vexa MCP toolbelt attached: server={VEXA_MCP_SERVER} url={url}", file=sys.stderr, flush=True)
@@ -1598,6 +1602,12 @@ def run_turn_over_workspace(
     harness = harness or factory()
     chat_root = _continuity_root(work)  # chats are PRIVATE: _system when mounted, never a shared cwd
     harness.prepare(work, chat_root=chat_root)  # harness-specific continuity/skills wiring (durable)
+    # The harness runs as the tools user wherever the worker can switch users (llm/ports.py): hand
+    # that user this turn's writable workspaces and the harness's own state, which prepare just made.
+    home = Path(os.environ.get("HOME", "/tmp"))
+    grant_tools_access([*(m["path"] for m in active_mounts() if m.get("write", True)), work, chat_root,
+                        home / ".claude", home / ".vexa-skills",
+                        Path(os.environ.get("CODEX_HOME") or home / ".codex")])
     if session and session_continuity:
         _adopt_legacy_continuity(chat_root, work, session)  # migrate-on-read: pre-anchoring threads
     sess_file = _session_file(chat_root, session)
@@ -2235,6 +2245,9 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
 def main() -> None:  # pragma: no cover — the container entrypoint (wired in tests via serve())
     import redis
 
+    # Before anything else: no process of this user without CAP_SYS_PTRACE — the model's tools,
+    # wherever they could not be given a user of their own — reads this process's /proc entries.
+    harden_worker_process()
     work = Path(os.environ.get("VEXA_WORKSPACE_PATH", "/workspace"))
     model = os.environ.get("VEXA_AGENT_MODEL") or None
     # Boot preflight (WS1b): if a credential prefix and its base-url host obviously disagree, log a

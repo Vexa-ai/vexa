@@ -39,6 +39,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends git ca-certific
 # --setting-sources says (the launch also passes the same key with --settings).
 RUN mkdir -p /etc/claude-code && \
     printf '%s\n' '{"disableAllHooks": true}' > /etc/claude-code/managed-settings.json
+# The user the model's tools run as (llm/ports.py TOOLS_USER). The worker runs as root where the
+# substrate lets it and starts every harness CLI as this user, so the model's Bash cannot read the
+# worker's environment through /proc or write the worker's code; the worker hands it, by group, only
+# the workspaces a turn may write. Git runs under both users on the same repositories, so neither
+# refuses the other's: safe.directory is system-wide.
+RUN groupadd --system --gid 10001 vexa-tools && \
+    useradd --system --uid 10001 --gid 10001 --home-dir /tmp --no-create-home --shell /usr/sbin/nologin vexa-tools && \
+    git config --system safe.directory '*'
 
 # The worker's own packages (NO control_plane): worker + llm + shared + contracts, copied to /app so
 # `PYTHONPATH=/app` resolves them as top-level imports. llm/ is the provider-agnostic ports module

@@ -22,10 +22,16 @@ This module imports NOTHING from product code — it must stay liftable into a s
 """
 from __future__ import annotations
 
+import ctypes
+import logging
 import os
+import pwd
+import stat
 import subprocess
 from pathlib import Path
 from typing import Callable, Iterable, Iterator, Optional, Protocol
+
+_log = logging.getLogger("llm.ports")
 
 # Env vars that redirect git's repo/worktree/index/object discovery away from cwd. Git HOOKS
 # export GIT_DIR (and friends) into their descendants; a git subprocess inheriting them operates
@@ -83,6 +89,121 @@ def harness_subprocess_env() -> dict[str, str]:
     env = {k: v for k, v in scrubbed_git_env().items() if k not in _HARNESS_SUBPROCESS_DENY_VARS}
     env.setdefault("ENABLE_TOOL_SEARCH", "auto:100")
     return env
+
+
+# ── the model's tools run as a user of their own ──────────────────────────────────────────────
+#
+# A harness CLI runs the model's tools (Bash above all) as its own children. Run as the worker's
+# user, those tools could read the worker's environment through /proc — its Redis credential, its
+# identity token, its input-stream key — and write the worker's own code. So when the worker can
+# switch users (it runs as root: docker, and Kubernetes without an assigned UID), every harness CLI
+# runs as TOOLS_USER instead, and the worker hands that user exactly what a turn needs: its writable
+# workspaces and the harness's own state under HOME, by group (owners stay as they are, so the
+# worker's and agent-api's git keep recognising their repositories). A worker that already runs as
+# someone else (Lite's per-tenant UID, OpenShift's assigned UID) cannot switch and does not try;
+# there the worker makes itself non-dumpable (``harden_worker_process``), which keeps a same-UID
+# child out of its /proc entries all the same.
+
+#: The unprivileged user the model's tools run as (created in core/agent/worker/Dockerfile).
+TOOLS_USER = "vexa-tools"
+
+#: Set when a path a turn needs could not be handed to the tools user: from then on this worker runs
+#: its harness as itself (said loudly), because a harness that cannot write its workspace is worse.
+_tools_off = False
+
+
+def tools_identity() -> Optional[tuple[int, int]]:
+    """``(uid, gid)`` of :data:`TOOLS_USER` when this process can run a harness as that user: it runs
+    as root and the image has the user. None otherwise."""
+    if _tools_off or not hasattr(os, "geteuid") or os.geteuid() != 0:
+        return None
+    try:
+        entry = pwd.getpwnam(TOOLS_USER)
+    except KeyError:
+        return None
+    return entry.pw_uid, entry.pw_gid
+
+
+def harness_identity_kwargs() -> dict:
+    """``subprocess.Popen`` keyword arguments that start a harness as :data:`TOOLS_USER` (no other
+    groups; files it makes are group-writable), or ``{}`` when this process cannot switch."""
+    ident = tools_identity()
+    if ident is None:
+        return {}
+    uid, gid = ident
+    return {"user": uid, "group": gid, "extra_groups": [], "umask": 0o002}
+
+
+def grant_tools_access(paths: Iterable["str | Path"]) -> bool:
+    """Make every directory and file under ``paths`` usable by :data:`TOOLS_USER`'s group — group
+    set to it, group read/write (and search on directories, which also get setgid so new entries
+    keep the group). Symlinks are not followed and read-only mounts are left as they are. When a path
+    cannot be granted, this worker stops switching users (``_tools_off``) and says so, and False is
+    returned; True when there is nothing to do or everything was granted."""
+    global _tools_off
+    ident = tools_identity()
+    if ident is None:
+        return True
+    _uid, gid = ident
+    ok = True
+
+    def grant(p: str, is_dir: bool) -> None:
+        nonlocal ok
+        try:
+            st = os.lstat(p)
+            if stat.S_ISLNK(st.st_mode):
+                return
+            want = stat.S_IRGRP | stat.S_IWGRP | ((stat.S_IXGRP | stat.S_ISGID) if is_dir else 0)
+            if st.st_gid != gid:
+                os.lchown(p, -1, gid)
+            if (st.st_mode & want) != want:
+                os.chmod(p, stat.S_IMODE(st.st_mode) | want)
+        except OSError as exc:
+            if getattr(exc, "errno", None) == 30:    # EROFS: a read-only mount, read access suffices
+                return
+            ok = False
+            _log.error("cannot hand %s to the tools user: %s", p, exc)
+
+    for root in paths:
+        root = str(root)
+        if not root or not os.path.isdir(root) or os.path.islink(root):
+            continue
+        grant(root, True)
+        for dirpath, dirnames, filenames in os.walk(root):
+            for name in dirnames:
+                grant(os.path.join(dirpath, name), True)
+            for name in filenames:
+                grant(os.path.join(dirpath, name), False)
+    if not ok:
+        _tools_off = True
+        _log.error("the model's tools could not be given what this turn needs — from now on this "
+                   "worker runs its harness as itself, with its environment readable to them")
+    return ok
+
+
+def hand_to_tools(path: "str | Path") -> None:
+    """Give one file the worker wrote for the harness (its MCP attachment) to :data:`TOOLS_USER`,
+    keeping its mode. No-op when this process cannot switch users."""
+    ident = tools_identity()
+    if ident is None:
+        return
+    try:
+        os.chown(path, *ident)
+    except OSError as exc:
+        _log.error("cannot hand %s to the tools user: %s", path, exc)
+
+
+def harden_worker_process() -> None:
+    """Make this process non-dumpable: a process of the same user without CAP_SYS_PTRACE (the
+    model's tools, wherever they could not be given a user of their own) can then not read its
+    /proc environment or memory. Linux only; a no-op elsewhere."""
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        PR_SET_DUMPABLE = 4
+        if libc.prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) != 0:
+            _log.warning("prctl(PR_SET_DUMPABLE, 0) failed: errno %d", ctypes.get_errno())
+    except (OSError, AttributeError):
+        pass
 
 
 # A raw process runner: given an argv + a cwd, yield the process's stdout lines. Injected into CLI

@@ -20,7 +20,7 @@ from typing import Callable, Iterable, Iterator, Optional
 # `llm.tool_events` owns them. One vocabulary, three harnesses.
 from llm.tool_events import (_BOT_TOOLS, _TERMS_TOOLS, _WRITER_TOOLS, _bot_artifact,
                              _published_terms, _written_artifact)
-from llm.ports import harness_subprocess_env
+from llm.ports import harness_identity_kwargs, harness_subprocess_env, tools_identity
 
 
 def _short(value: object, n: int = 120) -> str:
@@ -172,6 +172,32 @@ def codex_home() -> Path:
     return Path(configured) if configured else Path(os.environ.get("HOME", "/root")) / ".codex"
 
 
+def _tools_codex_home(ident: "tuple[int, int]") -> Path:
+    """The Codex home for a harness that runs as the tools user. The runtime's ``CODEX_HOME`` holds the
+    subscription ``auth.json`` as a read-only bind of a host file whose mode is the host's, which that
+    user may not be able to read; so it gets a home of its own beside it, holding a copy of the
+    credential (0600, its own) and the same durable sessions link. Without a mounted credential the
+    runtime's home serves as it is."""
+    home = codex_home()
+    auth = home / "auth.json"
+    if not auth.is_file():
+        return home
+    own = home.parent / f"{home.name}-tools"
+    own.mkdir(mode=0o700, exist_ok=True)
+    copy = own / "auth.json"
+    copy.write_bytes(auth.read_bytes())
+    copy.chmod(0o600)
+    sessions = home / "sessions"
+    link = own / "sessions"
+    if sessions.is_symlink() and not link.is_symlink():
+        link.symlink_to(os.readlink(sessions), target_is_directory=True)
+    for p in (own, copy):
+        os.chown(p, *ident)
+    if link.is_symlink():
+        os.lchown(link, *ident)
+    return own
+
+
 def _link_sessions_into_workspace(work: Path) -> None:
     """Keep Codex rollouts durable without moving the subscription auth file into the workspace."""
     # `.claude/` is the frozen, already-ignored agent plumbing root in every existing workspace.
@@ -303,9 +329,14 @@ class CodexHarness:
 
     def _spawn(self, work: Path) -> subprocess.Popen:
         env = harness_subprocess_env()
+        # The app-server — and so the model's tools — run as the tools user, not as the worker.
+        ident = tools_identity()
+        if ident is not None:
+            env["CODEX_HOME"] = str(_tools_codex_home(ident))
         return self._process_factory(
             ["codex", "app-server", "--stdio"], cwd=str(work), stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, env=env,
+            **harness_identity_kwargs(),
         )
 
     def run_turn(self, work: Path, prompt: str, *, allowed_tools: Iterable[str] = (),

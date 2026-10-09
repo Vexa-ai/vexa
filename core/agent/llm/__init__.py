@@ -17,6 +17,9 @@ from llm.ports import (
     HarnessExec,
     HarnessPort,
     close_event_stream,
+    grant_tools_access,
+    hand_to_tools,
+    harden_worker_process,
     run_harness_turn,
 )
 from llm.registry import (
@@ -36,6 +39,9 @@ __all__ = [
     "HarnessExec",
     "HarnessPort",
     "close_event_stream",
+    "grant_tools_access",
+    "hand_to_tools",
+    "harden_worker_process",
     "run_harness_turn",
     "HARNESS_RUNNERS",
     "harness_from_env",

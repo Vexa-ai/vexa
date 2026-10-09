@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Iterable, Iterator, Optional
 
 from llm.errors import looks_like_auth_failure, preflight_provider_guard
-from llm.ports import HarnessExec, close_event_stream, harness_subprocess_env
+from llm.ports import HarnessExec, close_event_stream, harness_identity_kwargs, harness_subprocess_env
 from llm.claude_skills import _link_skills_into_home
 from llm.tool_events import (_BOT_TOOLS, _FOCUS_TOOLS, _OPEN_TOOLS, _TERMS_TOOLS, _WRITER_TOOLS,
                              _bot_artifact, _open_event, _published_terms, _short,
@@ -354,7 +354,7 @@ def _exec_subprocess_stdin(argv: list[str], cwd: str, first_message: str) -> Ite
     global _ACTIVE_STDIN
     proc = subprocess.Popen(argv, cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, text=True, bufsize=1,
-                            env=_cli_env())
+                            env=_cli_env(), **harness_identity_kwargs())
     assert proc.stdout is not None and proc.stdin is not None
     try:
         proc.stdin.write(_user_message_json(first_message) + "\n")
@@ -386,8 +386,10 @@ def _exec_subprocess(argv: list[str], cwd: str) -> Iterator[str]:
     # read/write another tenant's tc:meeting:* / unit:*:in streams, crossing the tenancy boundary the
     # mounts enforce on the filesystem) nor the minted per-dispatch bearer token. It also drops the
     # git repo-discovery redirects (a hook-exported GIT_DIR would re-point the workspace's git ops).
+    # harness_identity_kwargs: the CLI — and so the model's tools — run as the tools user, not as
+    # the worker (llm/ports.py).
     proc = subprocess.Popen(argv, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
-                            env=_cli_env())
+                            env=_cli_env(), **harness_identity_kwargs())
     assert proc.stdout is not None
     try:
         yield from proc.stdout
