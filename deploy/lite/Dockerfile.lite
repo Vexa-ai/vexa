@@ -243,6 +243,9 @@ COPY core/agent/contracts       /app/agent/contracts
 # agent-api answers 503 for its manifest and the MCP service waits on it forever.
 # tests/test_image_by_path_reads.py derives every such read from source.
 COPY core/agent/mcp.tools.v1.json /app/agent/mcp.tools.v1.json
+# The agent domain's route manifest: control_plane/route_policy.py reads it from parents[1] of itself
+# (/app/agent here) to know which verbs need a person in the loop.
+COPY core/agent/routes.v1.json /app/agent/routes.v1.json
 # The portable workspace primitives (workspace_id/workspace_paths/entities/links), moved out of
 # core/agent/shared into their own domain (PRD decision 47, step 2) — both control_plane and
 # worker import them as `workspaces.shared.<module>`.

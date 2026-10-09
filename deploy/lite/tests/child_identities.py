@@ -91,22 +91,32 @@ def descendants(root: int) -> list[int]:
     return out
 
 
+def cmdline(pid: int) -> bytes:
+    with open(f"/proc/{pid}/cmdline", "rb") as f:
+        return f.read()
+
+
 class Watch(threading.Thread):
-    """Records every descendant of the runtime, as often as it can, for as long as it runs."""
+    """Records every process the runtime starts (and everything those start), as often as it can, for
+    as long as it runs. A fork of the runtime that has not exec'd yet still runs the runtime's own code
+    (it drops its identity just before exec), so it is recorded only once it runs something else."""
 
     def __init__(self, root: int) -> None:
         super().__init__(daemon=True)
         self.root, self.seen, self.stop = root, {}, threading.Event()
+        self.own = cmdline(root)
 
     def run(self) -> None:
         while not self.stop.is_set():
             for pid in descendants(self.root):
                 if pid not in self.seen:
                     try:
+                        if cmdline(pid) == self.own:
+                            continue
                         self.seen[pid] = status(pid)
                     except OSError:
                         pass
-            time.sleep(0.01)
+            time.sleep(0.005)
 
 
 def probe_as(uids: list, gid: int, groups: list, others: list) -> list:

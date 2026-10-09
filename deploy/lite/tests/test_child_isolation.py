@@ -57,6 +57,7 @@ def test_each_bot_writes_screenshots_into_its_own_home_and_reaches_pulseaudio():
     assert 'exec 9<"$screenshots"' in BOT_LAUNCH and 'screenshots="${HOME:-/tmp}/screenshots"' in BOT_LAUNCH
     assert BOT_LAUNCH.index('exec 9<') < BOT_LAUNCH.index("exec node")
     assert 'PULSE_SERVER="${PULSE_SERVER:-unix:/run/pulse/native}"' in BOT_LAUNCH
+    assert 'VEXA_CAPTURE_SIGNAL_DIR="${VEXA_CAPTURE_SIGNAL_DIR:-${HOME:-/tmp}/captured-signal}"' in BOT_LAUNCH
     profiles = (ROOT / "core" / "runtime" / "src" / "runtime_kernel" / "profiles.py").read_text()
     assert 'process_groups=("pulse-access",)' in profiles and "usermod -aG pulse-access root" in DOCKERFILE
 
