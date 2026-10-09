@@ -1623,7 +1623,7 @@ class SqlAlchemyTranscriptStore:
                     "state": "pending",
                     "requested_at": prior.get("requested_at")
                     or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                    "scope": "primary_transcript_and_recording_storage",
+                    "scope": "primary_transcript_recording_and_signal_storage",
                     "backup_residuals": "expire_under_deployment_retention_policy",
                 }
                 meeting.data = data
@@ -1659,7 +1659,7 @@ class SqlAlchemyTranscriptStore:
             data["artifact_deletion"] = {
                 "state": "completed",
                 "completed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                "scope": "primary_transcript_and_recording_storage",
+                "scope": "primary_transcript_recording_and_signal_storage",
                 "backup_residuals": "expire_under_deployment_retention_policy",
             }
             meeting.data = data

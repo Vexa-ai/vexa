@@ -886,3 +886,36 @@ def test_annotate_returns_only_what_was_written(client, gateway, auth):
     assert body["title"] == "Acme renewal"
     assert body["native_meeting_id"] == "abc-defg-hij" and body["meeting_db_id"] == 1
     assert "recordings" not in body and "data" not in body and "webhook_url" not in body
+
+
+# --- delete_meeting_artifacts (#116) -----------------------------------------
+# The only tool on this surface that destroys something. What matters here is that it reaches the
+# meeting-scoped erasure route and nothing adjacent: `DELETE /bots/...` merely stops a bot, and
+# sending an erase to it would silently do nothing while reporting success.
+
+def test_delete_meeting_artifacts_path(client, gateway, auth):
+    client.delete(
+        "/meeting-artifacts?platform=google_meet&native_meeting_id=abc-defg-hij", headers=auth
+    )
+    req = gateway.requests[-1]
+    assert (req.method, req.url.path) == ("DELETE", "/meetings/google_meet/abc-defg-hij")
+
+
+def test_delete_meeting_artifacts_accepts_legacy_identity(client, gateway, auth):
+    client.delete("/meeting-artifacts?meeting_platform=teams&meeting_id=9361792952021", headers=auth)
+    assert gateway.requests[-1].url.path == "/meetings/teams/9361792952021"
+
+
+def test_delete_meeting_artifacts_requires_credentials(client):
+    r = client.delete("/meeting-artifacts?platform=google_meet&native_meeting_id=abc-defg-hij")
+    assert r.status_code == 401
+
+
+def test_delete_meeting_artifacts_names_the_tool_when_the_meeting_is_unnamed(client, gateway, auth):
+    r = client.delete("/meeting-artifacts?platform=google_meet", headers=auth)
+    assert r.status_code == 422
+    detail = str(r.json()["detail"])
+    assert "delete_meeting_artifacts" in detail and "native_meeting_id" in detail
+    assert not [q for q in gateway.requests if q.method == "DELETE"], (
+        "an unidentified erase must never reach the gateway"
+    )

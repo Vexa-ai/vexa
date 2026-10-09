@@ -198,6 +198,17 @@ SIGNAL_TAPE_PART_FORMATS = {"botlog": "txt"}
 SIGNAL_PROMOTED_MARKER = "PROMOTED"
 
 
+def signal_meeting_prefix(*, user_id: int, meeting_id: int) -> str:
+    """Every tape one MEETING left, across all of its bot sessions.
+
+    The erasure unit for an owner's deletion request (#116). A meeting can have several sessions —
+    a retry, a re-join, a `continue_meeting` — and each leaves its own tape under its own
+    ``session_uid``; an owner asking for a meeting's artifacts to go means all of them. Bounded by
+    ``user_id`` first, so a deletion can never reach past the owner's own namespace.
+    """
+    return f"{_SIGNAL_PREFIX}/{user_id}/{meeting_id}/"
+
+
 def signal_tape_prefix(*, user_id: int, meeting_id: int, session_uid: str) -> str:
     """The prefix holding ONE bot session's tape (both parts + any promotion marker).
 
