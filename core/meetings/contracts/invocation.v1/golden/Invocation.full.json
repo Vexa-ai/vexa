@@ -8,7 +8,6 @@
   "meeting_id": 42,
   "redisUrl": "redis://redis:6379",
   "meetingApiCallbackUrl": "http://meeting-api:8080/runtime/callback",
-  "internalSecret": "INTERNAL_SECRET_PLACEHOLDER",
   "language": "en",
   "transcribeEnabled": true,
   "transcriptionTier": "realtime",
