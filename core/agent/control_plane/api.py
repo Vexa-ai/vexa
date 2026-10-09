@@ -107,6 +107,7 @@ from control_plane.routers import proposals as routers_proposals
 from control_plane.routers import connections as routers_connections
 from control_plane.routers import clock as routers_clock
 from control_plane.routers import workspaces as routers_workspaces
+from control_plane.routers import sharing as routers_sharing
 from control_plane.ceiling import require_in_ceiling, require_person
 from control_plane.api_shared import (
     logger, _PHASE_WORD, _iso, _provenance_line, _epoch_text, _Sessions, _LiveMeetings)
@@ -1043,7 +1044,7 @@ def create_app(
         require_person=require_person, settings=settings, stream_reader=stream_reader,
         subject_of=subject_of,
         workspace_registry=workspace_registry, workspace_touches=workspace_touches, wsr=wsr)
-    for _r in (routers_health, routers_ingress, routers_chats, routers_routines, routers_admin, routers_meetings, routers_scaffolds, routers_friction, routers_proposals, routers_workspaces, routers_connections, routers_clock):
+    for _r in (routers_health, routers_ingress, routers_chats, routers_routines, routers_admin, routers_meetings, routers_scaffolds, routers_friction, routers_proposals, routers_workspaces, routers_sharing, routers_connections, routers_clock):
         app.include_router(_r.build(**_deps))
 
     return app
