@@ -1079,6 +1079,25 @@
           ]
         }
       ]
+    },
+    {
+      "id": "agent-forward-mapping",
+      "fact": "where the gateway fronts the agent domain: /agent/<path> onto agent-api's /api/<path>",
+      "kind": "prose",
+      "enforced": true,
+      "canonical": "core/agent/routes.v1.json — forward (the gateway registers the domain from it)",
+      "how_to_agree": "change both manifests in one change; the gateway reads routes.v1, the MCP assembler reads mcp.tools.v1",
+      "why": "The gateway forwards /agent/* by routes.v1's mapping and the MCP sends every agent tool back through the gateway by mcp.tools.v1's. Two declarations of one mapping: if they differ, every agent tool call lands on a route the gateway does not serve. This replaces the hard-coded rewrite the architecture pass flagged (S16).",
+      "sites": [
+        {
+          "path": "core/agent/routes.v1.json",
+          "pattern": "\"forward\": (\\{[^}]*\\})"
+        },
+        {
+          "path": "core/agent/mcp.tools.v1.json",
+          "pattern": "\"forward\": (\\{[^}]*\\})"
+        }
+      ]
     }
   ]
 }
