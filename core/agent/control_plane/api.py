@@ -107,7 +107,8 @@ from control_plane.routers import clock as routers_clock
 from control_plane.routers import workspaces as routers_workspaces
 from control_plane.ceiling import require_in_ceiling, require_person
 from control_plane.api_shared import (
-    logger, _PHASE_WORD, _iso, _provenance_line, _epoch_text, _Sessions, _LiveMeetings,
+    logger, _PHASE_WORD, _iso, _provenance_line, _epoch_text, _Sessions, _LiveMeetings)
+from control_plane.peer_lookups import (
     _ROOM_SOURCE, _http_email_subject_lookup, _http_meeting_owner_lookup,
     _http_meeting_transcript_lookup)
 # Re-exported for the tests that import them from here.

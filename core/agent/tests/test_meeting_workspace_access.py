@@ -21,7 +21,7 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from control_plane.api import create_app  # noqa: E402
-from control_plane.api_shared import _http_meeting_owner_lookup  # noqa: E402
+from control_plane.peer_lookups import _http_meeting_owner_lookup  # noqa: E402
 from control_plane.dispatch import Dispatcher  # noqa: E402
 from control_plane.workspace_reader import WorkspaceReader  # noqa: E402
 from shared.config import load_settings  # noqa: E402

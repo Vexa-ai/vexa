@@ -22,8 +22,8 @@ from control_plane.api_shared import (
     CONTEXT_SENTINEL, GLOBAL_TARGET_NOTE,
     _chat_turn_head, _context_grounding, _has_custom_model_endpoint, _is_slug,
     _model_creds_error_message, _record_chat_turn_head, _sse, _stream_tail_id,
-    inbox_pending, logger, meeting_access_check, meeting_binding, target_preamble, toolbelt_preamble,
-    workspace_focus)
+    inbox_pending, logger, meeting_binding, target_preamble, toolbelt_preamble, workspace_focus)
+from control_plane.peer_lookups import meeting_access_check
 from control_plane.bodies import ChatBody, ResetBody, RoutineCreate, RoutineEnabledPatch
 from control_plane.ceiling import refuse_delegated, require_in_ceiling, require_person
 from control_plane.config_preflight import NOT_CONFIGURED, capability_state

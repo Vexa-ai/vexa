@@ -13,9 +13,8 @@ from control_plane import meeting_mint as meeting_mint_mod
 from control_plane import meeting_note as meeting_note_mod
 from control_plane import meeting_terms as meeting_terms_mod
 from control_plane import system_mounts
-from control_plane.api_shared import (
-    _decode_sse_cursor, _encode_sse_cursor, _sse, meeting_access_check,
-    meeting_transcript_reader, transcript_erased)
+from control_plane.api_shared import _decode_sse_cursor, _encode_sse_cursor, _sse, transcript_erased
+from control_plane.peer_lookups import meeting_access_check, meeting_transcript_reader
 from control_plane.bodies import TranscriptTermsBody
 from fastapi import APIRouter, Body, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -41,7 +40,7 @@ def build(**d) -> APIRouter:
     # THE ONE ACCESS DECISION every route in this file makes: the meeting record this caller may
     # read, or None. Owner, transcript-share recipient, or member of the workspace the meeting is
     # bound to — meeting-api evaluates all three. Shared with the chat's meeting grounding, which
-    # reads the same transcript (see `api_shared.meeting_access_check`).
+    # reads the same transcript (see `peer_lookups.meeting_access_check`).
     _meeting_access = meeting_access_check(_meeting_owner_lookup, wsr.root)
     # …and the WORDS, read under the same identity and the same access union.
     _meeting_words = meeting_transcript_reader(_meeting_transcript_lookup, wsr.root)
