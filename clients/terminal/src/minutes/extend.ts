@@ -225,7 +225,7 @@ export function fallbackText(intent: ChatIntent): string {
     ? `\n\nThis is meeting ${intent.meeting}'s own page and the transcript is embedded in it. ` +
       "Read the page first: its frontmatter carries `transcript_cursor`. Read the transcript with " +
       `get_meeting_transcript(meeting_db_id=${intent.meeting}, since_index=<that cursor>) — only what ` +
-      "is new — then rewrite the content BETWEEN the `<!-- meeting:<key>:start -->` / `:end` markers " +
+      "is new; with no cursor, or one that is not a whole number, read it all — then rewrite the content BETWEEN the `<!-- meeting:<key>:start -->` / `:end` markers " +
       "(about · decisions · commitments · people · questions), leave every word outside them alone, " +
       "never touch the `<!-- vexa:transcript … -->` slot, and set `transcript_cursor` to the " +
       "`next_index` that read returned."

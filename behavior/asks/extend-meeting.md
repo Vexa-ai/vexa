@@ -23,8 +23,9 @@ stopped. Then:
 
     get_meeting_transcript(meeting_db_id={{meeting}}, since_index=<that cursor>)
 
-With no cursor yet, read the meeting from the top (leave out `since_index`). Either way keep the
-`next_index` that call returns; it is the cursor you will write back. **Never re-read the whole room when a cursor exists** — the page
+With no cursor yet — or one that is not a whole number, which a page written before carries — read
+the meeting from the top (leave out `since_index`). Either way keep the `next_index` that call
+returns; it is the cursor you will write back. **Never re-read the whole room when a cursor exists** — the page
 already says what was said before it, and a second account of the same ten minutes in a slightly
 different voice is what a reader notices first.
 
