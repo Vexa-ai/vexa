@@ -40,8 +40,9 @@ def _ics(*events: str) -> str:
 
 def _event(uid="uid-1", summary="Weekly sync", start="20260708T150000Z",
            location="https://meet.google.com/abc-defg-hij", rrule=None,
-           status=None, description=None) -> str:
-    lines = [f"BEGIN:VEVENT\r\nUID:{uid}\r\nDTSTAMP:20260701T000000Z\r\nDTSTART:{start}\r\n"
+           status=None, description=None, tzid=None) -> str:
+    dtstart = f"DTSTART;TZID={tzid}:{start}" if tzid else f"DTSTART:{start}"
+    lines = [f"BEGIN:VEVENT\r\nUID:{uid}\r\nDTSTAMP:20260701T000000Z\r\n{dtstart}\r\n"
              f"SUMMARY:{summary}\r\n"]
     if location:
         lines.append(f"LOCATION:{location}\r\n")
@@ -141,6 +142,29 @@ def test_parse_weekly_rrule_imports_only_next_occurrence():
     (ev,) = parsed["events"]
     assert ev["scheduled_at"] == "2026-07-08T15:00:00+00:00"  # today's occurrence, not all of them
     assert len(parsed["events"]) == 1
+
+
+def test_parse_weekly_rrule_keeps_the_events_wall_clock_across_dst():
+    # A weekly meeting created in WINTER (Europe/Madrid = UTC+1) still happens at 15:00 local
+    # in SUMMER (UTC+2), i.e. at 13:00Z - not at 14:00Z. Expanding the rule from a DTSTART that
+    # was already normalised to UTC pins every occurrence to the offset of the FIRST one, so
+    # every summer instance lands an hour late and the auto-join window (lead 120s / grace 600s)
+    # misses the meeting entirely.
+    parsed = parse_ics(_ics(_event(start="20251203T150000", tzid="Europe/Madrid",
+                                   rrule="FREQ=WEEKLY;BYDAY=WE")), now=NOW)
+    (ev,) = parsed["events"]
+    assert ev["scheduled_at"] == "2026-07-08T13:00:00+00:00"
+
+
+def test_parse_exdate_matches_after_a_dst_change():
+    # The same normalisation bug makes EXDATE comparison miss: the cancelled instance is stored
+    # with the correct summer offset while the expansion produces the winter one, so a cancelled
+    # occurrence quietly comes back to life.
+    parsed = parse_ics(_ics(_event(start="20251203T150000", tzid="Europe/Madrid",
+                                   rrule="FREQ=WEEKLY;BYDAY=WE") .replace(
+        "END:VEVENT", "EXDATE;TZID=Europe/Madrid:20260708T150000\r\nEND:VEVENT")), now=NOW)
+    (ev,) = parsed["events"]
+    assert ev["scheduled_at"] == "2026-07-15T13:00:00+00:00"  # the excluded 08.07 is skipped
 
 
 def test_parse_cancelled_event_surfaces_as_cancellation():
