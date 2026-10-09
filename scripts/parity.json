@@ -1380,7 +1380,7 @@
       "enforced": true,
       "canonical": "deploy/helm/charts/vexa/templates/_helpers.tpl — vexa.workspacesDir (the chart renders all three from it); elsewhere each surface writes it twice",
       "how_to_agree": "move the path on every surface in one change; on compose and Lite change both keys together",
-      "why": "agent-api hands the runtime mount paths under its VEXA_WORKSPACES_DIR; the runtime refuses (400) any mount outside its own VEXA_WORKSPACE_MOUNT_TARGET. Written separately, a difference refuses every dispatch. The chart renders both from one helper; compose and Lite write each key by hand, and the runtime's built-in default is the same path. compose's own test holds its pair equal; this holds every surface to one value.",
+      "why": "agent-api hands the runtime mount paths under its VEXA_WORKSPACES_DIR; the runtime refuses (400) any mount outside its own VEXA_WORKSPACE_MOUNT_TARGET. Written separately, a difference refuses every dispatch. The chart renders both from one helper; compose and Lite write each key by hand, and agent-api's and the runtime's built-in defaults are the same path. compose's own test holds its pair equal; this holds every surface to one value.",
       "sites": [
         {
           "path": "deploy/helm/charts/vexa/templates/_helpers.tpl",
@@ -1405,6 +1405,36 @@
         {
           "path": "core/runtime/src/runtime_kernel/workload_env.py",
           "pattern": "^DEFAULT_STORE_TARGET = \"([^\"]+)\""
+        },
+        {
+          "path": "core/agent/shared/config.py",
+          "pattern": "^    workspaces_dir: str = \"([^\"]+)\"",
+          "flags": "m",
+          "note": "agent-api's own default when VEXA_WORKSPACES_DIR is unset (N56)"
+        }
+      ]
+    },
+    {
+      "id": "worker-tools-user",
+      "fact": "the unprivileged user an agent worker runs its harness's tools as",
+      "kind": "literal",
+      "enforced": true,
+      "canonical": "core/agent/worker/Dockerfile — the useradd that creates it",
+      "how_to_agree": "rename the user in the image and in llm/ports.py in one change",
+      "why": "llm/ports.py drops the harness's tool processes to this user by name; the worker image creates it. A name the image does not create is a grant that fails, and the harness then runs as the worker itself (architecture pass 4, N57).",
+      "sites": [
+        {
+          "path": "core/agent/worker/Dockerfile",
+          "pattern": "groupadd --system --gid \\d+ (\\S+) &&"
+        },
+        {
+          "path": "core/agent/worker/Dockerfile",
+          "pattern": "useradd --system --uid \\d+ --gid \\d+ [^\\n]*?nologin (\\S+) &&"
+        },
+        {
+          "path": "core/agent/llm/ports.py",
+          "pattern": "^TOOLS_USER = \"([^\"]+)\"",
+          "flags": "m"
         }
       ]
     },

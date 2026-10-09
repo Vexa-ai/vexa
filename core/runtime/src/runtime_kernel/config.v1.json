@@ -487,7 +487,6 @@
       "key": "ANTHROPIC_BASE_URL",
       "class": "defaulted",
       "default": "(provider default — api.anthropic.com)",
-      "secret": true,
       "description": "endpoint the ANTHROPIC_* credentials authenticate against, brokered into spawned workers"
     },
     {
@@ -536,7 +535,6 @@
       "key": "VEXA_LLM_BASE_URL",
       "class": "defaulted",
       "default": "(adapter default)",
-      "secret": true,
       "description": "openai-agent harness endpoint, forwarded into spawned agent workers when the spec does not set it. A dispatch that applies a subject's own model endpoint stamps it, and a stamped value always wins",
       "targets": [
         "compose"

@@ -1326,13 +1326,24 @@ function gateConfigContract() {
   //    reached nothing. Attribution is by construction impossible here (see CONFIG_LITE_UNADOPTED),
   //    so the rule is: SOME adopted service declares it, or it is listed with the program it serves.
   const declaredAnywhere = new Set();
+  const secrecy = new Map();   // key -> Map(secret flag -> [service])
   for (const svc of CONFIG_ADOPTED) {
     const declPath = join(ROOT, svc.decl);
     if (!existsSync(declPath)) continue;
     const decl = JSON.parse(readFileSync(declPath, "utf8"));
-    for (const k of decl.keys || []) declaredAnywhere.add(k.key);
+    for (const k of decl.keys || []) {
+      declaredAnywhere.add(k.key);
+      if (!secrecy.has(k.key)) secrecy.set(k.key, new Map());
+      const flag = k.secret === true;
+      secrecy.get(k.key).set(flag, [...(secrecy.get(k.key).get(flag) || []), svc.service]);
+    }
     for (const k of decl.surface_only || []) declaredAnywhere.add(k.key);
   }
+  // 6. ONE KEY, ONE SECRECY (architecture pass 4, N56). A setting declared by two services is one
+  //    value an operator sets once; if one declaration calls it a secret and the other does not, one
+  //    service's docs and logs treat it as a credential and the other's print it.
+  for (const [key, flags] of secrecy) if (flags.size > 1)
+    errs.push(`${key}: declared secret by ${flags.get(true).join(", ")} and not by ${flags.get(false).join(", ")} — one setting, one "secret" flag`);
   for (const [key, line] of entrypointExports) {
     if (declaredAnywhere.has(key) || CONFIG_SURFACE_ALLOW.has(key) || key in CONFIG_LITE_UNADOPTED) continue;
     errs.push(`lite: deploy/lite/entrypoint.sh:${line} exports ${key} but no adopted service's config.v1 declares it — declare it on the service that reads it, or list it in CONFIG_LITE_UNADOPTED (scripts/gates.mjs) naming the program it serves`);

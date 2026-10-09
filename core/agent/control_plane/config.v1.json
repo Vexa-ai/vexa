@@ -438,6 +438,7 @@
       "key": "TRANSCRIPTION_SERVICE_TOKEN",
       "class": "defaulted",
       "default": "(unset)",
+      "secret": true,
       "description": "SECRET \u2014 the token paired with TRANSCRIPTION_SERVICE_URL for the on-demand /balance probe (Settings\u2192Models Test). Never logged or echoed; only a pass/fail summary leaves the service",
       "targets": [
         "compose"

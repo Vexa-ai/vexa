@@ -63,8 +63,7 @@
       "key": "VEXA_CONNECTIONS_HUMAN_KEY_FILE",
       "class": "capability",
       "capability": "connections",
-      "description": "File holding the human role's assertion key, the same file the broker verifies with. Mounted into the terminal only: never into agent-api or a worker.",
-      "secret": true,
+      "description": "File holding the human role's assertion key, the same file the broker verifies with. Mounted into the terminal only: never into agent-api or a worker. The path is not the secret; the file is.",
       "targets": ["compose", "helm"]
     },
     {
