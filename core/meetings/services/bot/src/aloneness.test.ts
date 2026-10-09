@@ -2,11 +2,15 @@
 import {
   DEFAULT_ALONE_SILENCE_WINDOW_MS,
   DEFAULT_STREAM_PRESENCE_STALENESS_MS,
+  MAX_CAPTURE_FAULT_MAX_MS,
+  MIN_CAPTURE_FAULT_MAX_MS,
   createDeafCaptureGuardAdapter,
   createRemoteAudioActivityTap,
   createSilenceAlonenessSource,
   deafCaptureGuardAdapter,
+  defaultCaptureFaultMaxMs,
   resolveAloneSilenceWindowMs,
+  resolveCaptureFaultMaxMs,
   silenceAlonenessAdapter,
 } from './aloneness.js';
 
@@ -41,6 +45,7 @@ const quietEnergy = 0.001;
 function fixture(windowMs = 1_000, extra: {
   adapters?: Parameters<typeof createSilenceAlonenessSource>[0]['adapters'];
   onCaptureFault?: () => void;
+  captureFaultMaxMs?: number;
 } = {}) {
   const clock = new FakeClock();
   const scheduler = new FakeScheduler();
@@ -51,6 +56,7 @@ function fixture(windowMs = 1_000, extra: {
     windowMs,
     adapters: extra.adapters,
     onCaptureFault: extra.onCaptureFault,
+    captureFaultMaxMs: extra.captureFaultMaxMs,
     now: clock.now,
     pollMs: 10,
     setInterval: scheduler.setInterval,
@@ -213,9 +219,10 @@ function fixture(windowMs = 1_000, extra: {
     f.logs.some((m) => m.includes('capture-fault suspected') && m.includes('streams=2')),
     JSON.stringify(f.logs));
   check('the guard keeps polling instead of terminating', f.scheduler.activeCount === 1);
-  // ...and it stays held while the fault persists, rather than expiring into a leave.
+  // ...and it stays held for the whole grace, rather than expiring into a leave early (#1673 bounds
+  // that grace; 11s of it is well inside the 60s floor).
   f.clock.advance(10_000); f.scheduler.tick();
-  check('a persisting capture-fault never converts into left_alone', fired === 0);
+  check('a capture-fault inside the grace does not convert into left_alone', fired === 0);
 }
 
 // (b) No connected streams: the room really did empty — today's verdict, unchanged.
@@ -366,6 +373,109 @@ function fixture(windowMs = 1_000, extra: {
   f.clock.advance(1_001); f.scheduler.tick();
   check('#1192 under #887: ready-with-no-frames + live streams withholds left_alone', fired === 0);
   check('…and says so', f.logs.some((l) => l.includes('capture-fault suspected')));
+}
+
+// ── #1673 the hold is BOUNDED: aloneness wins after a grace, whatever the guard suspects ────────
+// #1192's hold was unconditional, and on Teams that made it permanent — the page keeps advertising
+// a remote audio stream after the last human leaves, so presence never goes stale, no frame ever
+// arrives, and the guard re-states the same verdict once a minute forever. Reported from the field
+// on 2026-09-16: window_ms=120000, deaf_for_ms past 600000, bot still `active` after 15 minutes and
+// only removed by an explicit DELETE /bots. Leaving late is recoverable; staying forever is not.
+
+// (k) The reported defect: the Teams timeline, replayed. Presence stays FRESH and POSITIVE the whole
+// time (that is the lie), frames never arrive, and the hold must still end.
+{
+  const f = fixture(1_000, { captureFaultMaxMs: 3_000 });
+  let fired = 0;
+  f.activity.ready();
+  f.activity.observeStreamPresence(1);
+  f.source.onAlone(() => fired++);
+  // every poll the page re-reports its phantom stream, exactly as Teams does
+  for (let i = 0; i < 3; i++) { f.clock.advance(1_000); f.activity.observeStreamPresence(1); f.scheduler.tick(); }
+  check('a capture-fault still holds while inside the bound', fired === 0);   // deaf for 2s of 3s
+  f.clock.advance(1_000); f.activity.observeStreamPresence(1); f.scheduler.tick();
+  check('a capture-fault past the bound resolves left_alone', fired === 1);
+  check('the expiry is stated in the log',
+    f.logs.some((m) => m.includes('capture-fault hold EXPIRED') && m.includes('max_hold_ms=3000')),
+    JSON.stringify(f.logs));
+  check('the expired verdict is terminal, exactly once', f.scheduler.activeCount === 0);
+  f.clock.advance(10_000); f.scheduler.tick();
+  check('…and does not fire twice', fired === 1);
+}
+
+// (l) The bound measures ONE CONTINUOUS fault. A fault that heals restarts the clock, so a second
+// fault much later still gets its full grace rather than inheriting an expired one.
+{
+  const f = fixture(1_000, { adapters: [silenceAlonenessAdapter, createDeafCaptureGuardAdapter({ stalenessMs: 5_000 })], captureFaultMaxMs: 3_000 });
+  let fired = 0;
+  f.activity.ready();
+  f.activity.observeStreamPresence(2);
+  f.source.onAlone(() => fired++);
+  f.clock.advance(2_000); f.activity.observeStreamPresence(2); f.scheduler.tick();
+  check('first fault held', fired === 0);
+  // capture recovers and the room is audible for a long stretch (the silence adapter vetoes)
+  for (let i = 0; i < 10; i++) {
+    f.clock.advance(500);
+    f.activity.observeRemoteEnergy(loudEnergy);
+    f.activity.observeStreamPresence(2);
+    f.scheduler.tick();
+  }
+  check('an audible stretch does not fire', fired === 0);
+  // …then capture dies again. The clock must start from HERE, not from the first fault.
+  f.clock.advance(1_500); f.activity.observeStreamPresence(2); f.scheduler.tick();
+  check('a second, fresh fault gets its own grace rather than an inherited expiry', fired === 0);
+  f.clock.advance(3_000); f.activity.observeStreamPresence(2); f.scheduler.tick();
+  check('…and expires on its own clock', fired === 1);
+}
+
+// (m) A healing capture inside the grace still returns to the ordinary silence rule — the bound
+// adds an expiry, it does not shorten anything that was already working (this is (f) with a bound).
+{
+  const f = fixture(1_000, { adapters: [silenceAlonenessAdapter, createDeafCaptureGuardAdapter({ stalenessMs: 500 })], captureFaultMaxMs: 60_000 });
+  let fired = 0;
+  f.activity.ready();
+  f.activity.observeStreamPresence(2);
+  f.source.onAlone(() => fired++);
+  f.clock.advance(1_000); f.activity.observeStreamPresence(2); f.scheduler.tick();
+  check('fault held', fired === 0);
+  f.activity.observeRemoteEnergy(loudEnergy);
+  f.activity.observeStreamPresence(2);
+  f.clock.advance(999); f.activity.observeStreamPresence(2); f.scheduler.tick();
+  check('recovered capture is not fired on early', fired === 0);
+  f.clock.advance(1); f.activity.observeStreamPresence(0);
+  f.clock.advance(501); f.scheduler.tick();
+  check('a healed capture still returns to the plain silence verdict', fired === 1);
+  check('no expiry was logged on the healed path', !f.logs.some((m) => m.includes('EXPIRED')));
+}
+
+// (n) `BOT_CAPTURE_FAULT_MAX_MS=0` disables the hold outright (pre-#1192 behaviour, for an operator
+// who would rather leave a live meeting than sit in an empty one).
+{
+  const f = fixture(1_000, { captureFaultMaxMs: 0 });
+  let fired = 0;
+  f.activity.ready();
+  f.activity.observeStreamPresence(2);
+  f.source.onAlone(() => fired++);
+  f.clock.advance(1_000); f.scheduler.tick();
+  check('a zero bound means the guard cannot hold at all', fired === 1);
+}
+
+// The bound's own arithmetic: three windows, clamped at both ends, env override wins.
+{
+  check('the default bound is three silence windows', defaultCaptureFaultMaxMs(120_000) === 360_000);
+  check('…floored so a seconds-long window still gives a restart room to land',
+    defaultCaptureFaultMaxMs(1_000) === MIN_CAPTURE_FAULT_MAX_MS && MIN_CAPTURE_FAULT_MAX_MS === 60_000);
+  check('…and capped so a deaf bot is freed inside the quarter-hour',
+    defaultCaptureFaultMaxMs(DEFAULT_ALONE_SILENCE_WINDOW_MS) === MAX_CAPTURE_FAULT_MAX_MS
+    && MAX_CAPTURE_FAULT_MAX_MS === 900_000);
+  check('a nonsense window falls back to the floor', defaultCaptureFaultMaxMs(0) === MIN_CAPTURE_FAULT_MAX_MS);
+  check('env override wins', resolveCaptureFaultMaxMs(120_000, { BOT_CAPTURE_FAULT_MAX_MS: '45000' }) === 45_000);
+  check('env zero disables the hold', resolveCaptureFaultMaxMs(120_000, { BOT_CAPTURE_FAULT_MAX_MS: '0' }) === 0);
+  check('invalid env falls back to the derived default',
+    resolveCaptureFaultMaxMs(120_000, { BOT_CAPTURE_FAULT_MAX_MS: 'nope' }, () => {}) === 360_000);
+  check('a negative env value is rejected',
+    resolveCaptureFaultMaxMs(120_000, { BOT_CAPTURE_FAULT_MAX_MS: '-1' }, () => {}) === 360_000);
+  check('an unset env leaves the derived default', resolveCaptureFaultMaxMs(120_000, {}) === 360_000);
 }
 
 // The guard as a unit: it abstains ('alone' = no objection) on every branch it cannot decide, and
