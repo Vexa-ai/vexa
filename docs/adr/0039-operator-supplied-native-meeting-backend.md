@@ -28,7 +28,9 @@ installation as an automatic exemption from P17.
 - The bot owns the private subprocess and composition root. The process has no
   network address of its own and is not a standalone SDK service.
 - Join and capture use separately sealed `sdk-join.v1` and `sdk-capture.v1` IPC
-  contracts. Runtime validators must reject unknown properties like the schemas.
+  contracts. The runtime's validators are those schemas, compiled at load
+  (`native-meeting/protocol.cjs`), so they refuse exactly what the schemas refuse;
+  `native-meeting/test/protocol.test.mjs` holds them to the goldens.
 - Per-participant frames reuse the channel pipeline and injected STT. Native
   identity appears in `speaker_key`; the optional browser glow source is omitted.
 - Product integration must reuse the bot lifecycle/transcript sinks and existing
@@ -43,7 +45,10 @@ from every default entrypoint and from compose, Helm, Lite and stock dispatch; i
 is reached only from a disposable subprocess behind the sealed `sdk-join.v1` and
 `sdk-capture.v1` contracts; and it is logged in a manifest row
 (`license-exceptions.json`, `operatorSupplied`). `gate:vendor-payload`
-(`scripts/check-vendor-payload.mjs`) proves each condition in CI.
+(`scripts/check-vendor-payload.mjs`) proves the first, second and fourth in CI, and
+of the third that only the declared subprocess loads the addon and that both
+contracts are sealed. That the subprocess speaks exactly those contracts, and is
+disposed of, is held by the runtime's own tests (`native-meeting/test/`).
 
 Only Vexa-owned wrapper source is tracked. The operator downloads the SDK from
 Zoom under Zoom's own terms, which restrict bot and notetaker use, and is

@@ -1,6 +1,6 @@
 # Native meeting process
 
-The bot owns one native meeting session and injects its join port into `@vexa/join/node`. The join module owns admission, waiting, timeout and cancellation. The runtime owns process start, IPC validation and destruction. `leave()` waits for the native ended callback; `dispose()` destroys the process with a bounded forced-exit fallback. Leaving does not dispose the runtime. The composition root stops capture before leaving, then disposes the runtime.
+The bot owns one native meeting session and injects its join port into `@vexa/join/node`. The join module owns admission, waiting, timeout and cancellation. The runtime owns process start, IPC validation and destruction. IPC validation is the sealed `sdk-join.v1` and `sdk-capture.v1` schemas, compiled at load by `protocol.cjs`; the runtime keeps no hand copy of either wire, and `test/protocol.test.mjs` holds it to their goldens. `leave()` waits for the native ended callback; `dispose()` destroys the process with a bounded forced-exit fallback. Leaving does not dispose the runtime. The composition root stops capture before leaving, then disposes the runtime.
 
 `join-probe.mjs` is a joining-only composition root. It reads JoinConfig JSON from stdin, uses `ZOOM_SDK_DIR` and `ZOOM_SDK_ADDON`, reports observed admission and departure, and always disposes the runtime. It does not join audio or request recording. Production bot routing is unchanged. The separate @vexa/zoom-sdk-capture adapter owns conversion to the shared media contract; this joining-only probe does not start it.
 

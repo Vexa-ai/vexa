@@ -1,4 +1,6 @@
-const {validConfig,exact} = require('./protocol.cjs');
+// Every command is checked against the sealed sdk-join.v1 / sdk-capture.v1 schema before it is acted on.
+const {validCommand} = require('./protocol.cjs');
+const capture = require('./capture-protocol.cjs');
 let sdk, started=false, stopping=false, inMeeting=false, capturing=false, captureTimer, mode, pendingFrames=0;
 const emit = (event, done) => {if(process.connected)process.send({version:1,...event}, done);else done?.();};
 const stop=()=>{
@@ -39,11 +41,12 @@ function startCapture(selectedMode){
 process.on('SIGTERM',stop);process.on('SIGINT',stop);process.on('disconnect',stop);
 process.on('message',message=>{
   if(stopping)return;
-  if(exact(message,['version','kind','mode'])&&message.version===1&&message.kind==='capture-start'&&['mixed','per-participant'].includes(message.mode)){startCapture(message.mode);return;}
-  if(exact(message,['version','kind'])&&message.version===1&&message.kind==='capture-stop'){capturing=false;clearInterval(captureTimer);try{sdk?.stopRecording();emit({kind:'capture-state',state:'stopped'});}catch{emit({kind:'capture-failure',code:'capture_stop_failed'});}return;}
-  if(exact(message,['version','kind']) && message.version===1 && message.kind==='stop')return stop();
-  if(exact(message,['version','kind']) && message.version===1 && message.kind==='leave'){call(()=>sdk?.leaveMeeting());return;}
-  if(started || !exact(message,['version','kind','config']) || message.version!==1 || message.kind!=='start' || !validConfig(message.config))return fail('protocol_error');
+  if(capture.validCommand(message)&&message.kind==='capture-start'){startCapture(message.mode);return;}
+  if(capture.validCommand(message)&&message.kind==='capture-stop'){capturing=false;clearInterval(captureTimer);try{sdk?.stopRecording();emit({kind:'capture-state',state:'stopped'});}catch{emit({kind:'capture-failure',code:'capture_stop_failed'});}return;}
+  if(!validCommand(message))return fail('protocol_error');
+  if(message.kind==='stop')return stop();
+  if(message.kind==='leave'){call(()=>sdk?.leaveMeeting());return;}
+  if(started)return fail('protocol_error');
   started=true;
   const config=message.config;
   try {const {ZoomSDK}=require(process.env.ZOOM_SDK_ADDON);sdk=new ZoomSDK();}catch{return fail('runtime_missing');}

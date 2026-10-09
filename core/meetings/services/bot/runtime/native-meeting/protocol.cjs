@@ -1,17 +1,16 @@
-// sdk-join.v1: mirrored by the published JSON schema and golden fixtures.
-const states = ['initializing','authenticating','connecting','waiting_for_host','waiting_room','in_meeting','reconnecting','disconnecting','ended'];
-const failures = ['invalid_config','runtime_missing','native_error','authentication_failed','join_failed','protocol_error','process_exit','timeout','cancelled','left','ended_before_admission'];
-const exact = (v, keys) => v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).every(k => keys.includes(k));
-function validConfig(v) {
-  return exact(v,['meetingId','displayName','jwt','password','onBehalfToken','zak']) &&
-    typeof v.meetingId === 'string' && /^\d{9,11}$/.test(v.meetingId) &&
-    typeof v.displayName === 'string' && v.displayName.length > 0 && v.displayName.length <= 128 &&
-    typeof v.jwt === 'string' && v.jwt.length > 0 && v.jwt.length <= 16384 &&
-    ['password','onBehalfToken','zak'].every(k => v[k] === undefined || (typeof v[k] === 'string' && v[k].length <= 16384));
+// sdk-join.v1 and sdk-capture.v1, compiled from the sealed schemas (P8, ADR-0039). The runtime keeps no
+// hand copy of either wire: every check below is the schema's own, so a reseal changes the runtime with it
+// and the two cannot drift. The schemas are read by path, as src/config.ts reads invocation.v1; the bot
+// image carries core/meetings/contracts beside the bot. test/protocol.test.mjs holds the result to the goldens.
+const {readFileSync}=require('node:fs');
+const {join}=require('node:path');
+const Ajv2020=require('ajv/dist/2020');
+const CONTRACTS=join(__dirname,'..','..','..','..','contracts');
+const ajv=new Ajv2020({strict:true,strictTypes:true});
+for(const name of ['sdk-join.v1','sdk-capture.v1'])ajv.addSchema(JSON.parse(readFileSync(join(CONTRACTS,name,`${name.slice(0,-3)}.schema.json`),'utf8')));
+function compile(name,shape){
+  const validate=ajv.getSchema(`https://vexa.ai/schemas/${name}#/$defs/${shape}`);
+  if(!validate)throw new Error(`${name} has no $defs/${shape}`);
+  return value=>validate(value)===true;
 }
-function validEvent(v) {
-  if (!v || v.version !== 1) return false;
-  if (v.kind === 'state') return exact(v,['version','kind','state']) && states.includes(v.state);
-  return v.kind === 'failure' && exact(v,['version','kind','code','nativeCode']) && failures.includes(v.code) && (v.nativeCode === undefined || Number.isInteger(v.nativeCode));
-}
-module.exports = {states,failures,validConfig,validEvent,exact};
+module.exports={compile,validConfig:compile('sdk-join.v1','Config'),validCommand:compile('sdk-join.v1','Command'),validEvent:compile('sdk-join.v1','Event')};
