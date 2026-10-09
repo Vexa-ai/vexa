@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://vexa.ai/schemas/runtime.v1",
   "title": "runtime.v1",
-  "description": "The workload lifecycle contract between the control plane and the runtime kernel.",
+  "description": "The workload lifecycle contract between the control plane and the runtime kernel. Transport: HTTP. Every route except GET /health requires the caller credential (CallerCredential, as `Authorization: Bearer`). Every non-2xx answer carries an Error.",
   "$defs": {
     "RuntimeState": {
       "description": "The container/execution lifecycle state (NOT the workload's domain status).",
@@ -12,6 +12,23 @@
       "enum": ["completed", "stopped", "idle_timeout", "failed", "oom", "start_failed", "max_lifetime"]
     },
     "Backend": { "enum": ["docker", "k8s", "process"] },
+    "CallerCredential": {
+      "description": "The value of `Authorization: Bearer <token>` on every route except GET /health: the deployment's RUNTIME_API_TOKEN. The runtime, agent-api and meeting-api hold the same value; no workload receives it. Missing or wrong ⇒ 401 with `WWW-Authenticate: Bearer` and an Error that names nothing else, compared in constant time. The runtime refuses to boot when the token is unset, shorter than 32 bytes, or a placeholder published in this repository.",
+      "type": "string",
+      "minLength": 32
+    },
+    "RuntimeOwnedEnvPrefix": {
+      "description": "WorkloadSpec.env keys only the runtime may set: RUNTIME_K8S_* (Pod scheduling and Secret mounts) and VEXA_WORKSPACE_MOUNT_* (the workspace store's backing). A caller-supplied key with one of these prefixes is dropped, not refused. When the spec declares a mount set (VEXA_MOUNTS or VEXA_WORKSPACE_PATH), the runtime injects VEXA_WORKSPACE_MOUNT_TARGET and, when it has one, VEXA_WORKSPACE_MOUNT_SOURCE from its own configuration.",
+      "enum": ["RUNTIME_K8S_", "VEXA_WORKSPACE_MOUNT_"]
+    },
+    "Error": {
+      "description": "The body of every non-2xx answer. 400: an unknown profile; VEXA_MOUNTS that is not a JSON array of objects each with a path; a mount outside the workspace store, or naming a host source this runtime does not serve; VEXA_WORKSPACE_PATH outside the store; a schedule job without request.url or without execute_at|cron. 401: the caller credential is missing or wrong. 404: an unknown workload or job. 422: a body that does not parse as the route's shape. 429: the owner's workload quota is full. 502: the backend could not start the workload; its status is already recorded stopped with stopReason start_failed. 503: the scheduler is not wired.",
+      "type": "object",
+      "required": ["detail"],
+      "properties": {
+        "detail": { "description": "a sentence for a human; never a credential" }
+      }
+    },
     "WorkloadSpec": {
       "description": "The create() input. The kernel runs this as an opaque profile + env.",
       "type": "object",
@@ -20,7 +37,7 @@
       "properties": {
         "workloadId": { "type": "string", "minLength": 1, "description": "caller-assigned id (idempotency key)" },
         "profile": { "type": "string", "minLength": 1, "description": "opaque workload kind, e.g. meeting-bot | agent" },
-        "env": { "type": "object", "additionalProperties": { "type": "string" }, "description": "config-by-env (12-factor); a workload's repo URL + scoped token live here, not as a kernel concept" },
+        "env": { "type": "object", "additionalProperties": { "type": "string" }, "description": "config-by-env (12-factor); a workload's identity, topics and mount set live here, not as a kernel concept. Keys with a RuntimeOwnedEnvPrefix are dropped. VEXA_MOUNTS, when present, is a JSON array of {path, slug?, source?, …}: every path strictly under the runtime's workspace store, and a `source` only one the runtime is configured to serve; otherwise 400" },
         "callbackUrl": { "type": "string", "format": "uri", "description": "where RuntimeEvents are POSTed" },
         "resources": {
           "type": "object",
