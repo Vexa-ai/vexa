@@ -1,10 +1,25 @@
-# calendar_sync — ICS feed → planned meetings
+# calendar_sync — a user's calendar → planned meetings
 
-One concern: turn a user's secret ICS calendar feed into PLANNED meeting rows (intent status
-`scheduled`, complete `data.calendar_sources[].event` provenance) so the Meetings surface shows what's coming and the
-auto-join sweep sends the bot when each meeting starts. No OAuth — the user pastes the
-secret-address ICS URL Google Calendar / Outlook already provide (`PUT /user/calendar`, identity
-domain).
+One concern: turn a user's calendar into PLANNED meeting rows (intent status `scheduled`, complete
+`data.calendar_sources[].event` provenance) so the Meetings surface shows what's coming and the
+auto-join sweep sends the bot when each meeting starts.
+
+**How we learn the calendar is a READER, and there are three.** Everything below the reader — one
+row per UID, adoption by link, occurrence disposition, retirement — is identical in every case,
+because every reader emits the same `{"events": [PlannedEvent], "cancelled_uids": [uid]}`:
+
+| Reader | Input | The caller must |
+|---|---|---|
+| `parse_ics` | secret-address ICS feed text | — (expands RRULEs itself) |
+| `events_from_google` | Google Calendar `events.list` items | pass `singleEvents=true` + `showDeleted=true` |
+| `events_from_microsoft` | Graph `/calendarView` items | send `Prefer: outlook.timezone="UTC"` |
+
+The two API readers key on the series-stable UID (`iCalUID` / `iCalUId`) — the same value the feed
+carries — so **a calendar reconnected from ICS to OAuth adopts its existing rows instead of
+duplicating them.** That migration path is executed in `tests/test_calendar_providers.py`, not
+merely asserted. They also store a BOUNDED per-event snapshot rather than the ICS reader's
+unbounded property copy (`#1213` item 3), and they never read a naive timestamp in the server's
+local zone (`#1316`).
 
 ## Public surface
 - `parse_ics(text, now, horizon_days=14)` → `{"events": [PlannedEvent], "cancelled_uids": […]}`
