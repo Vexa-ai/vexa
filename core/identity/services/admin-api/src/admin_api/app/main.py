@@ -1098,21 +1098,30 @@ def create_app() -> FastAPI:
 
     # --- internal tier: calendar-sync configs — meeting-api's ICS poller discovers every user
     #     with a connected feed over the same X-Internal-Secret edge as /internal/validate. The
-    #     secret URL crosses ONLY this internal hop (never a user-facing response). ---
+    #     secret URL crosses ONLY this internal hop (never a user-facing response). Pages contain
+    #     up to limit users (default 200, max 500), ordered by id, with all their connections.
+    #     next_cursor is an opaque user-id keyset; null marks the final page. ---
     @app.get("/internal/calendar-configs", include_in_schema=False)
-    async def list_calendar_configs(request: Request, db: AsyncSession = Depends(get_db)):
+    async def list_calendar_configs(
+        request: Request, db: AsyncSession = Depends(get_db),
+        limit: int = Query(default=200, ge=1, le=500),
+        cursor: Optional[str] = Query(default=None, max_length=64),
+    ):
         _check_internal(request)
         from sqlalchemy import or_
-        from .calendars import internal_connections
-        rows = (await db.execute(select(User).where(or_(
+        from .calendars import decode_configs_cursor, encode_configs_cursor, internal_connections
+        after = decode_configs_cursor(cursor) if cursor is not None else 0
+        rows = (await db.execute(select(User).where(User.id > after, or_(
             User.data["calendar_ics_url"].astext.isnot(None),
             User.data["calendar_connections"].astext.isnot(None),
-        )))).scalars().all()
+        )).order_by(User.id).limit(limit + 1))).scalars().all()
         configs = []
-        for u in rows:
+        for u in rows[:limit]:
             data = u.data if isinstance(u.data, dict) else {}
             configs.extend(internal_connections(data, u.id))
-        return {"configs": configs}
+        return {"configs": configs, "next_cursor": (
+            encode_configs_cursor(rows[limit - 1].id) if len(rows) > limit else None
+        )}
 
     # --- internal tier: per-user spawn context — the auto-join sweep's stand-in for the headers
     #     the gateway injects on POST /bots (X-User-Limits + webhook config from /internal/validate).
