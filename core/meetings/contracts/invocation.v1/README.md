@@ -6,21 +6,29 @@ transcript egress, `meetingApiCallbackUrl` for the lifecycle.v1 sink) + transcri
 flags + S3/auth.
 
 ## Secrets
-A *config* contract legitimately carries the secrets the bot needs — `token` ·
+A *config* contract legitimately carries the secrets the bot needs — `token` · `redisUrl` ·
 `transcriptionServiceToken` · `s3AccessKey` · `s3SecretKey` are marked **SECRET** and appear as
-**placeholders** in goldens (never real values, P14). (Contrast `transcript.v1`, a *data* contract,
-which carries no auth at all.) The P15 ideal — env carries a secret-store *reference* the bot resolves
-at boot — is deferred; for now the raw fields are faithful to today's wire.
+**placeholders** in goldens (never real values, P14). The P15 ideal — env carries a secret-store
+*reference* the bot resolves at boot — is deferred; for now the raw fields are faithful to today's wire.
+
+**`redisUrl` carries a Redis credential.** By default (per-workload ACL) it is the URL of a Redis user
+meeting-api defines for this session alone, granted exactly: append to `transcription_segments`,
+publish on `tc:meeting:{meeting_id}:mutable`, subscribe to `bot_commands:meeting:{meeting_id}`, and the
+commands `xadd publish subscribe unsubscribe ping quit`. The user is removed when the session ends.
+**With `REDIS_WORKLOAD_ACL=shared`**, a deployment's choice for a Redis that cannot define users,
+`redisUrl` carries meeting-api's own service connection instead: every bot then holds a credential
+that reaches everything meeting-api's does.
 
 ## The bot's credential: `token`
 `token` is the session's **MeetingToken**: an HS256 token meeting-api mints for each spawn and binds
-to the session (`session_uid` = `connectionId`). It is the only credential a bot holds, and it is the
-**transport bearer** on both of the bot's calls back into meeting-api:
+to the session (`session_uid` = `connectionId`). Besides the Redis user in `redisUrl`, it is the only
+credential a bot holds, and it has three uses:
 
-| Call | To | Header |
+| Use | Where | How |
 |---|---|---|
 | every lifecycle.v1 event | `meetingApiCallbackUrl` | `Authorization: Bearer <token>` |
 | every recording upload | `recordingUploadUrl` | `Authorization: Bearer <token>` |
+| every transcript entry | the `transcription_segments` stream | `auth` + `sig` beside the payload (transcript.v1 `StreamEntry`); the token itself never enters Redis |
 
 meeting-api refuses the token for any other session. **`internalSecret` is deprecated and must not be
 set**: no producer sends it and the bot ignores it. It remains in the schema only so a bot can still

@@ -92,6 +92,173 @@
         "pending": { "type": "array", "items": { "$ref": "#/$defs/TranscriptSegment" } },
         "ts": { "type": "string", "format": "date-time" }
       }
+    },
+    "StreamEntry": {
+      "description": "One entry of the transcription_segments Redis stream (bot -> collector): the fields an XADD carries. `payload` is the JSON of one bus message (session_start, transcription, transcript_retract, session_end). `auth` and `sig` prove the session may speak for the meeting the payload names: `auth` is the header.payload of the session's MeetingToken (invocation.v1 `token`, whose claims name the meeting) and `sig` is HMAC-SHA256(key = the whole token, message = the `payload` string) as 64 lowercase hex digits. The collector rebuilds the token from `auth` with the secret that minted it, so the bearer never enters Redis, and acknowledges and drops any entry whose token or signature fails or whose payload `meeting_id` is not the token's. A bot older than v0.13.2 writes no `auth`/`sig`, and its entries are dropped. The signer is segment_entry.py in this folder.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "payload",
+        "auth",
+        "sig"
+      ],
+      "properties": {
+        "payload": {
+          "type": "string",
+          "minLength": 2
+        },
+        "auth": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$"
+        },
+        "sig": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "SignedEntryVector": {
+      "description": "A signing vector: signing `payload` with `token` must give exactly `auth` and `sig`. The token is a fixture, not a minted MeetingToken.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "token",
+        "payload",
+        "auth",
+        "sig"
+      ],
+      "properties": {
+        "token": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$"
+        },
+        "payload": {
+          "type": "string"
+        },
+        "auth": {
+          "type": "string"
+        },
+        "sig": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "FeedEntry": {
+      "description": "One entry of the per-meeting feed `tc:meeting:{meeting_id}`, keyed by the meetings-domain numeric row id (never the native id, which collides across users and rows). The collector is its only writer, and writes it only for bus entries it admitted (StreamEntry), so a reader may act on it: agent-api's transcription watcher registers and ends meetings from it, and the terminal's live view reads it through agent-api. The entry's one field, `payload`, is the JSON of a FeedTranscription, a FeedRetract or a SessionEnd.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "payload"
+      ],
+      "properties": {
+        "payload": {
+          "type": "string",
+          "minLength": 2
+        }
+      }
+    },
+    "FeedSegment": {
+      "description": "One persisted segment as the feed carries it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "speaker",
+        "text",
+        "start",
+        "end",
+        "abs_start_ms",
+        "completed",
+        "language",
+        "segment_id"
+      ],
+      "properties": {
+        "speaker": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1
+        },
+        "start": {
+          "type": "number"
+        },
+        "end": {
+          "type": "number"
+        },
+        "abs_start_ms": {
+          "type": "integer"
+        },
+        "absolute_start_time": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "completed": {
+          "type": "boolean"
+        },
+        "language": {
+          "type": "string"
+        },
+        "segment_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "FeedTranscription": {
+      "description": "A feed entry carrying one persisted, non-empty segment. `session_uid` and `meeting_id` both hold the meeting's native id for display (the row id when no native id resolves); the key the entry sits under is the row id.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "session_uid",
+        "meeting_id",
+        "segments"
+      ],
+      "properties": {
+        "type": {
+          "const": "transcription"
+        },
+        "session_uid": {
+          "type": "string"
+        },
+        "meeting_id": {
+          "type": "string"
+        },
+        "segments": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": {
+            "$ref": "#/$defs/FeedSegment"
+          }
+        }
+      }
+    },
+    "FeedRetract": {
+      "description": "A feed entry withdrawing segments the bot superseded; readers drop them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "segment_ids"
+      ],
+      "properties": {
+        "type": {
+          "const": "retract"
+        },
+        "segment_ids": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          }
+        }
+      }
     }
   }
 }

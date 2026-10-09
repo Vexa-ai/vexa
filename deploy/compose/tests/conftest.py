@@ -10,8 +10,6 @@ module when docker is absent (the green-or-skip contract the gate relies on).
 """
 from __future__ import annotations
 
-import hashlib
-import hmac
 import json
 import os
 import socket
@@ -264,16 +262,16 @@ class Stack:
 
     def xadd_segment_entry(self, payload: str, meeting_id: int) -> str:
         """Append ``payload`` to ``transcription_segments`` as the meeting's own bot session would:
-        signed with a MeetingToken for ``meeting_id`` (``auth`` = its header.payload, ``sig`` =
-        HMAC-SHA256 of the payload keyed with it). The collector drops anything else."""
+        signed with a MeetingToken for ``meeting_id`` by transcript.v1's signer (``_segment_entry.py``,
+        vendored byte for byte). The collector drops anything else."""
+        from _segment_entry import signed_entry
         from _token import mint_meeting_token
 
         token = mint_meeting_token(int(meeting_id), 0, "google_meet", "", secret=self.admin_token,
                                    session_uid=f"segment-writer-{meeting_id}")
-        head, claims, _sig = token.split(".")
-        sig = hmac.new(token.encode(), payload.encode(), hashlib.sha256).hexdigest()
-        return self.redis_cli("XADD", "transcription_segments", "*", "payload", payload,
-                              "auth", f"{head}.{claims}", "sig", sig)
+        fields = signed_entry(token, payload)
+        return self.redis_cli("XADD", "transcription_segments", "*",
+                              *[v for kv in fields.items() for v in kv])
 
     def logs(self, service: str, *, tail: int = 400) -> str:
         return _compose("logs", "--no-color", "--tail", str(tail), service, check=False).stdout

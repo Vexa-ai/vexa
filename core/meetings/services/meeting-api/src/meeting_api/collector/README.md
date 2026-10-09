@@ -14,9 +14,13 @@ conformance.
   `build_router` is the mountable `APIRouter` the unified app composes in (one app, one `/health`);
   `create_app` is the standalone app the conformance harness + this module's tests still drive.
   Identity arrives as the gateway-injected `x-user-id` header (missing → 401).
-- **`ingest` / `consume_segments`** — `ingest.py`. `transcription_segments` stream → `store` →
-  publish `tc:meeting:{id}:mutable`. No background loop — the caller drives it (eval `tick`). The
-  always-on consumer loop is a P3 seam.
+- **`ingest` / `consume_segments` / `reclaim_segments`** — `ingest.py`. `transcription_segments`
+  stream → `store` → publish `tc:meeting:{id}:mutable` and append to the per-meeting feed
+  `tc:meeting:{id}` (transcript.v1 `FeedEntry`). The stream-facing paths admit only an entry signed by
+  a MeetingToken for the meeting it writes for (`auth` + `sig`, transcript.v1 `StreamEntry`); anything
+  else is acknowledged and dropped. No background loop — the caller drives it (eval `tick`).
+- **`segment_entry.py`** — transcript.v1's signer, vendored byte for byte from the contract (fact
+  `segment-entry-signer`); `ingest.signed_entry` re-exports it for the tools that publish to the stream.
 - **`erased_feed_sweep.py`** — the one-time operator sweep
   (`python -m meeting_api.collector.erased_feed_sweep [--dry-run]`): erases the Redis transcript keys
   of every meeting whose transcript was deleted, the same keys the delete route erases.

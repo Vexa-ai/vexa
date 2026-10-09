@@ -30,6 +30,7 @@ import socket
 from datetime import datetime, timezone
 from typing import Optional
 
+from . import segment_entry
 from .ports import RedisBus, TranscriptStore
 
 # Stream / consumer-group defaults (parent ``collector/config.py``).
@@ -171,16 +172,10 @@ def _b64url(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
 
 
-def signed_entry(token: str, payload: str) -> dict:
-    """The stream fields a session writes for ``payload``: the bot's sink (``transcript-redis.ts``
-    ``entryAuth``) in Python, for the tools that publish to the stream the way a bot does. ``token`` is
-    that session's MeetingToken; a value that is not a three-part token signs nothing, and the entry is
-    then dropped like any unsigned one."""
-    parts = (token or "").split(".")
-    if len(parts) != 3 or not all(parts):
-        return {"payload": payload}
-    return {"payload": payload, "auth": f"{parts[0]}.{parts[1]}",
-            "sig": hmac.new(token.encode(), payload.encode(), hashlib.sha256).hexdigest()}
+# The signer is transcript.v1's (``segment_entry.py``, vendored byte for byte): the bot's sink
+# (``transcript-redis.ts`` ``entryAuth``) in Python, for the tools that publish to the stream the way a
+# bot does. Re-exported here, where those tools import it from.
+signed_entry = segment_entry.signed_entry
 
 
 #: The one encoded form a ``sig`` has: an HMAC-SHA256 hexdigest, lowercase, as both signers write it
@@ -218,7 +213,7 @@ def _verify_entry(fields: dict) -> bool:
         token_meeting = int(claims.get("meeting_id"))
     except (ValueError, TypeError, AttributeError):
         return False
-    expected = hmac.new(token.encode(), payload.encode(), hashlib.sha256).hexdigest()
+    expected = segment_entry.signature(token, payload)
     # Both sides are ASCII hex by now; compared as bytes, as compare_digest requires for anything else.
     signed = hmac.compare_digest(expected.encode("ascii"), sig.encode("ascii"))
     return signed and meeting_id == token_meeting

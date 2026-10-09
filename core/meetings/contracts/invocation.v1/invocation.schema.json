@@ -28,7 +28,7 @@
         "connectionId": { "type": "string" },
         "meeting_id": { "type": "integer" },
         "container_name": { "type": "string" },
-        "redisUrl": { "type": "string", "description": "acts.v1 bus + transcript egress" },
+        "redisUrl": { "type": "string", "description": "SECRET — the Redis URL for the acts.v1 command channel and the transcript egress, with credentials. Per-workload ACL (the default) puts a Redis user of the bot's own session in it, granted exactly: append to transcription_segments, publish on tc:meeting:{meeting_id}:mutable, subscribe to bot_commands:meeting:{meeting_id}, and the commands xadd publish subscribe unsubscribe ping quit; the user is removed when the session ends. With REDIS_WORKLOAD_ACL=shared it carries meeting-api's own service connection instead. Placeholder in goldens" },
         "meetingApiCallbackUrl": { "type": "string", "format": "uri", "description": "lifecycle.v1 sink" },
         "internalSecret": { "type": "string", "deprecated": true, "description": "DEPRECATED, MUST NOT be set. A producer from v0.13.2 never sends it and a bot ignores it: the bot authenticates with `token`. It stays in the schema only so a bot can still parse an invocation from an older meeting-api" },
         "language": { "type": ["string", "null"] },

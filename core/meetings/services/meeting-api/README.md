@@ -39,8 +39,13 @@ bot's `invocation.v1` as `token`, so the bot workload is its only holder; it exp
 the two doors above: the lifecycle callback (session = the event's `connection_id`) and the
 recording/tape upload (session = the request's `session_uid`). Both apply one rule,
 `admit_session`: a valid signature, unexpired, and bound to exactly that session. A token for another
-session, or bound to none, is refused, so a bot can move and write only its own session. No
-service-tier secret is ever placed in an invocation. With no `ADMIN_TOKEN` (or no
+session, or bound to none, is refused, so a bot can move and write only its own session. The token's
+third use is the transcript: each `transcription_segments` entry carries `auth` (the token's
+header.payload) and `sig` (HMAC of the payload keyed with the token), and the collector admits only
+entries whose token names the meeting they write for (transcript.v1 `StreamEntry`). The bot's other
+credential is the Redis user in its `redisUrl`, defined for its session alone; with
+`REDIS_WORKLOAD_ACL=shared` the invocation carries meeting-api's own Redis connection instead, the one
+case where a service credential is placed in an invocation. With no `ADMIN_TOKEN` (or no
 `RUNTIME_API_TOKEN` for the runtime callback) a door refuses every caller; only the in-process test
 harness opens them, with `create_app(open_callbacks=True)`.
 
