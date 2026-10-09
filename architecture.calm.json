@@ -2813,10 +2813,10 @@
     {
      "access": "req",
      "contract": "credential-broker.v1",
-     "description": "role agent (Connections routes) and role git (Git credential store); request, list, read, draft, call; no consent, no stored credential returned. Every agent-role call carries the gateway's signed identity (gateway-identity.v1) unchanged, and the broker acts only for the subject it names"
+     "description": "role agent (Connections routes) and role git (Git credential store); request, list, read, draft, call; no consent, no stored credential returned. Every agent-role and git-role call carries the gateway's signed identity (gateway-identity.v1) unchanged, and the broker acts only for the subject it names"
     }
    ],
-   "description": "agent-api to the credential broker, signed role assertions (credential-broker.v1): role agent for the Connections routes (request, list, read, draft, call; no consent, no stored credential returned), each carrying the gateway's X-Vexa-Identity unchanged, and role git for the Git credential store"
+   "description": "agent-api to the credential broker, signed role assertions (credential-broker.v1): role agent for the Connections routes (request, list, read, draft, call; no consent, no stored credential returned) and role git for the Git credential store (the person's own Git credentials and their shared workspaces' deploy keys); every call of either role carries the gateway's X-Vexa-Identity for the person, unchanged, and the broker acts only for the subject it names"
   },
   {
    "unique-id": "terminal-connections",

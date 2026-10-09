@@ -47,7 +47,7 @@ def served_routes(routes, prefix=""):
 #: Routes the service serves that credential-broker.v1 does not list yet, each awaiting the contract
 #: change that adds it. Self-closing: once the contract lists one, the test below fails until it is
 #: removed from here.
-AWAITING_CONTRACT = {("GET", "/ready")}     # readiness probe (store answering); route + `Readiness` shape
+AWAITING_CONTRACT: set = set()
 
 
 def test_registered_routes_equal_the_contract(client):
@@ -77,7 +77,7 @@ def test_request_goldens_are_accepted_by_the_route_models(name):
 
 def test_responses_conform(signed, connection, ready, store, client):
     conforms("Health", client.get("/health").json())
-    conforms("Health", client.get("/ready").json())      # a ready broker answers the Health shape
+    conforms("Readiness", client.get("/ready").json())
     r = signed("agent", "POST", "/api/setup", golden("SetupRequest.custom-secret.json"))
     conforms("ConnectionState", r.json())
     cid = r.json()["connection_id"]

@@ -167,7 +167,7 @@ edges:
   flows-worker -req-> agent-api  # steps reach domains only over their published HTTP surfaces (core/flows/src/flows_steps/common.py) — a domain never knows flows exists
   flows-worker -req-> gateway
   flows-worker -req-> admin-api
-  agent-api -req-> credentials-broker  # agent-api to the credential broker, signed role assertions (credential-broker.v1): role agent for the Connections routes (request, list, read, draft, call; no consent, no stored credential returned), each carrying the gateway's X-Vexa-Identity unchanged, and role git for the Git credential store
+  agent-api -req-> credentials-broker  # agent-api to the credential broker, signed role assertions (credential-broker.v1): role agent for the Connections routes (request, list, read, draft, call; no consent, no stored credential returned) and role git for the Git credential store (the person's own Git credentials and their shared workspaces' deploy keys); every call of either role carries the gateway's X-Vexa-Identity for the person, unchanged, and the broker acts only for the subject it names
   terminal -req-> credentials-broker  # the terminal's server to the credential broker, role human for the identity-validated person (credential-broker.v1): consent, credential save, disconnect, delete
   credentials-broker -req-> credentials-vault
   credentials-broker -write-> credentials-store

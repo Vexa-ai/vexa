@@ -33,8 +33,8 @@ its query, and the SHA-256 of the exact body bytes. The broker accepts an assert
 seconds before to 5 seconds after its own clock, once. Each role has its own key, so a process
 holding the agent key cannot perform a human-only operation.
 
-An **agent-role** request also carries the gateway's signed identity for the person it acts for,
-forwarded by agent-api exactly as the gateway sent it:
+An **agent-role** or **git-role** request also carries the gateway's signed identity for the person
+it acts for, forwarded by agent-api exactly as the gateway sent it:
 
 ```
 X-Vexa-Identity: <gateway-identity.v1 token>
@@ -43,16 +43,28 @@ X-Vexa-Identity: <gateway-identity.v1 token>
 The broker verifies it with the gateway's Ed25519 **public** key (`VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE`)
 and requires its subject (`sub`) to equal the assertion's `actor`. Missing, invalid, expired, or
 signed for anybody else → **401**, the same refusal as a bad assertion. Only the gateway holds the
-private key, so holding the agent key is not enough to act for a person: agent-api can use a
-person's connections only while it is serving a request the gateway signed for that person. The
-`human` role (the terminal resolves the person from the sign-in cookie against identity) and the
-`git` role carry no gateway signature.
+private key, so holding the agent or git key is not enough to act for a person: agent-api can use a
+person's connections and Git credentials only while it is serving a request the gateway signed for
+that person. The `human` role carries no gateway signature: the terminal resolves the person from the
+sign-in cookie against identity.
 
 | Role | Held by | May |
 |---|---|---|
 | `agent` | agent-api, for the person in the forwarded `X-Vexa-Identity` | list, request, prepare, read mail and calendar, create Gmail drafts, call a saved custom service |
 | `human` | the terminal's server routes, for a signed-in person | everything `agent` may, plus store a credential, save an OAuth application, start and complete consent, disconnect, delete |
-| `git` | agent-api's Git credential store | read and write Git credentials named for the asserted actor, nothing else |
+| `git` | agent-api's Git credential store, for the person in the forwarded `X-Vexa-Identity` | read and write that person's Git credentials (`pat/<person>`, `deploy/user-<person>.*`) and the deploy keys of the shared workspaces among the memberships signed with them (`deploy/ws-<id>.*`), nothing else |
+
+## Probes and status codes
+
+`GET /health` (liveness, `Health`) and `GET /ready` (readiness, `Readiness`) take no assertion.
+`/health` stays `ok` while the credential store is down, since a restart does not bring a store back;
+`/ready` answers 503 `unavailable` until the store answers again.
+
+Every other non-2xx answer is an `Error` with a fixed sentence. **409** is a refusal the person can
+act on (reconnect, grant a permission, fix the setup). **502** (an upstream answered unusably) and
+**503** (an upstream cannot be reached or is rate-limiting) are faults to retry later, never a
+request to reconnect. 401 is a missing or bad assertion or signed identity, 403 a role or credential
+name this caller may not use, 422 a body that does not validate.
 
 ## Deliberately not in this contract
 
