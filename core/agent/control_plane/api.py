@@ -97,6 +97,8 @@ from control_plane.workspace_reader import WorkspaceReader
 # `api_shared` so the routers can import them too — see that module's docstring.
 from control_plane.routers import health as routers_health
 from control_plane.routers import chats as routers_chats
+from control_plane.routers import ingress as routers_ingress
+from control_plane.routers import routines as routers_routines
 from control_plane.routers import admin as routers_admin
 from control_plane.routers import meetings as routers_meetings
 from control_plane.routers import scaffolds as routers_scaffolds
@@ -1041,7 +1043,7 @@ def create_app(
         require_person=require_person, settings=settings, stream_reader=stream_reader,
         subject_of=subject_of,
         workspace_registry=workspace_registry, workspace_touches=workspace_touches, wsr=wsr)
-    for _r in (routers_health, routers_chats, routers_admin, routers_meetings, routers_scaffolds, routers_friction, routers_proposals, routers_workspaces, routers_connections, routers_clock):
+    for _r in (routers_health, routers_ingress, routers_chats, routers_routines, routers_admin, routers_meetings, routers_scaffolds, routers_friction, routers_proposals, routers_workspaces, routers_connections, routers_clock):
         app.include_router(_r.build(**_deps))
 
     return app

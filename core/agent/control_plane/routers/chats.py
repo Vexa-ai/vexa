@@ -1,5 +1,6 @@
-"""routers/chats.py — The conversation surface: dispatch, the SSE turn, sessions, the artifact-event sink and
-the routine schedule that wakes agents on a clock.
+"""routers/chats.py — The conversation surface: the SSE turn and its submit-and-leave twin, the chat's
+target, names and order, and sessions. The dispatch doors are `routers/ingress.py`; routines are
+`routers/routines.py`.
 
 Extracted from `api.py`'s `create_app` VERBATIM: the handler bodies below are the same
 bytes, with `@app.` rewritten to `@router.` and nothing else. Everything they close over
@@ -12,31 +13,25 @@ import time
 
 from control_plane import chat_intents
 from control_plane import dispatch as dispatch_mod
-from control_plane import dispatch_sink
 from control_plane import meeting_mint as meeting_mint_mod
-from control_plane import routines as routines_mod
 from control_plane import scaffolds as scaffolds_mod
 from control_plane import global_layer, system_mounts
-from control_plane import workspace_routines as workspace_routines_mod
 from control_plane.api_shared import (
     CONTEXT_SENTINEL, GLOBAL_TARGET_NOTE,
     _chat_turn_head, _context_grounding, _has_custom_model_endpoint, _is_slug,
     _model_creds_error_message, _record_chat_turn_head, _sse, _stream_tail_id,
     inbox_pending, logger, meeting_binding, target_preamble, toolbelt_preamble, workspace_focus)
 from control_plane.peer_lookups import meeting_access_check
-from control_plane.bodies import ChatBody, ResetBody, RoutineCreate, RoutineEnabledPatch
-from control_plane.ceiling import refuse_delegated, require_in_ceiling, require_person
+from control_plane.bodies import ChatBody, ResetBody
+from control_plane.ceiling import refuse_delegated, require_in_ceiling
 from control_plane.config_preflight import NOT_CONFIGURED, capability_state
-from control_plane.events import event_to_invocation
 from control_plane.workspace_attach import active_workspaces, shared_active_mounts
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Body, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 from fastapi.responses import StreamingResponse
-from jsonschema.exceptions import ValidationError
 from shared import chat_label as chat_label_mod
-from shared import delegation as delegation_mod
 from shared import units
 from shared.marks import flow_mark
 
@@ -78,26 +73,11 @@ def build(**d) -> APIRouter:
     _scaffold_view = d['_scaffold_view']
     _schedule_source = d['_schedule_source']
     dispatcher = d['dispatcher']
-    invocations_url = d['invocations_url']
     mindex = d['mindex']
     redis_url = d['redis_url']
     scaffolds = d['scaffolds']
-    scheduler = d['scheduler']
     sess = d['sess']
     settings = d['settings']
-
-    def _internal_secret() -> str:
-        return settings.internal_api_secret.get_secret_value() if settings is not None else ""
-
-    def _sink_caller(request: Request, body) -> str:
-        """Who handed this dispatch over: ``"internal"``, ``"signed"`` (a routine job agent-api
-        composed itself), or ``""`` — refused. See `dispatch_sink.py`."""
-        secret = _internal_secret()
-        if dispatch_sink.internal_caller(secret, request.headers.get("x-internal-secret", "")):
-            return "internal"
-        if dispatch_sink.verify(secret, body, request.headers.get(dispatch_sink.HEADER, "")):
-            return "signed"
-        return ""
 
     def _refuse_delegated(request: Request) -> None:
         """A chat turn is started by a person, never by a worker acting for one: a delegated
@@ -343,23 +323,6 @@ def build(**d) -> APIRouter:
                                      focused, subject, session)
             yield item
 
-    @router.post("/invocations", status_code=202)
-    def invocations(request: Request, invocation: dict = Body(...)):
-        """The dispatcher sink — the internal tier, or a routine job agent-api signed when it compiled
-        it (`dispatch_sink.py`), POSTs a unit.v1 dispatch here. The body names the person the turn
-        runs as, so the CALLER is authenticated before the body is read; nobody else is heard."""
-        caller = _sink_caller(request, invocation)
-        if not caller:
-            raise HTTPException(status_code=401, detail="the dispatch sink takes the internal tier "
-                                                        "or a dispatch agent-api signed")
-        # A signed job is a routine: it never asks for a person in the loop, whatever it says.
-        if caller != "internal" and str(invocation.get("trigger") or "") in delegation_mod.HUMAN_TRIGGERS:
-            raise HTTPException(status_code=403, detail="a signed dispatch runs without a person")
-        try:
-            workload_id = dispatcher.dispatch(invocation)
-        except ValidationError as e:  # non-conformant unit.v1 envelope — fail loud (P18)
-            raise HTTPException(status_code=400, detail=f"invalid unit.v1 dispatch: {e.message}")
-        return {"workload_id": workload_id}
     @router.post("/api/chat")
     def chat(body: ChatBody, request: Request):
         """A chat *now*-dispatch: spawn the isolated container, stream its Stream back as SSE.
@@ -914,119 +877,5 @@ def build(**d) -> APIRouter:
             logger.exception("loading session history failed subject=%s session=%s", subject, session)
             turns = []
         return {"turns": turns}
-    @router.post("/api/routines", status_code=201)
-    def create_routine(body: RoutineCreate, request: Request):
-        # A routine is a dispatch armed for later; an unwatched worker does not arm one.
-        require_person(request)
-        if scheduler is None or not invocations_url:
-            raise HTTPException(status_code=501, detail="scheduler not wired")
-        try:
-            routine = routines_mod.make_routine(
-                subject=subject_of(request), name=body.name, cron=body.cron, prompt=body.prompt,
-            )
-            job_spec = routines_mod.compile_to_job(routine, invocations_url=invocations_url,
-                                                   signing_secret=_internal_secret())
-        except (ValueError, ValidationError) as e:  # bad cron form / non-conformant routine — fail loud
-            raise HTTPException(status_code=400, detail=str(getattr(e, "message", e)))
-        job = scheduler.schedule(job_spec)
-        ran_now = False
-        if body.run_now:
-            # Fire one immediate run via the dispatcher (no HTTP hop) so the author sees a result now.
-            try:
-                dispatcher.dispatch(job_spec["request"]["body"])
-                ran_now = True
-            except Exception:  # noqa: BLE001 — the routine is still scheduled even if the demo run fails
-                ran_now = False
-        return {"routine": routine, "job_id": job.get("job_id"), "ran_now": ran_now}
-    @router.get("/api/routines")
-    def list_routines(request: Request):
-        if scheduler is None:
-            return {"routines": []}
-        cards = workspace_routines_mod.routine_cards_for_subject(
-            subject_of(request),
-            jobs=scheduler.list_jobs(limit=1000),
-            workspaces_dir=wsr.root,
-        )
-        return {"routines": cards}
-    @router.post("/api/routines/{name}/confirm")
-    def confirm_routine(name: str, request: Request):
-        """A PERSON STANDS BEHIND THIS ROUTINE, exactly as its file reads now — the act that arms a
-        routine shown as `pending_confirmation` (`workspace_routines.PENDING`): one written by a
-        worker dispatched without a person, or straight onto the workspace by an agent."""
-        require_person(request)
-        if scheduler is None or not invocations_url:
-            raise HTTPException(status_code=501, detail="scheduler not wired")
-        subject = subject_of(request)
-        try:
-            if workspace_routines_mod.approve_routine_file(subject, name, workspaces_dir=wsr.root) is None:
-                raise HTTPException(status_code=404, detail="unknown routine")
-            result = workspace_routines_mod.reconcile_workspace_routines(
-                subject, scheduler=scheduler, invocations_url=invocations_url,
-                workspaces_dir=wsr.root, signing_secret=_internal_secret())
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
-        return {"ok": True, "name": name, "confirmed": True, "reconcile": result.__dict__}
-
-    @router.patch("/api/routines/{name}/enabled")
-    def set_routine_enabled(name: str, body: RoutineEnabledPatch, request: Request):
-        require_person(request)
-        if scheduler is None or not invocations_url:
-            raise HTTPException(status_code=501, detail="scheduler not wired")
-        subject = subject_of(request)
-        try:
-            # The toggle rewrites one line of the file. It carries an approval across that rewrite;
-            # it does not grant one — a pending routine is armed by `confirm`, not by a switch.
-            path = workspace_routines_mod._safe_routine_path(wsr.root, subject, name)
-            approved = path.is_file() and workspace_routines_mod.routine_file_approved(
-                path, subject=subject, workspaces_dir=wsr.root)
-            workspace_routines_mod.set_routine_file_enabled(
-                subject,
-                name,
-                enabled=body.enabled,
-                workspaces_dir=wsr.root,
-            )
-            if approved:
-                workspace_routines_mod.approve_routine_file(subject, name, workspaces_dir=wsr.root)
-            result = workspace_routines_mod.reconcile_workspace_routines(
-                subject,
-                scheduler=scheduler,
-                invocations_url=invocations_url,
-                workspaces_dir=wsr.root,
-                signing_secret=_internal_secret(),
-            )
-        except FileNotFoundError:
-            raise HTTPException(status_code=404, detail="unknown routine")
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
-        return {
-            "ok": True,
-            "name": name,
-            "enabled": body.enabled,
-            "reconcile": result.__dict__,
-        }
-    @router.delete("/api/routines/{routine_id}")
-    def delete_routine(routine_id: str, request: Request):
-        if scheduler is None:
-            raise HTTPException(status_code=501, detail="scheduler not wired")
-        subject = subject_of(request)
-        for job in scheduler.list_jobs():
-            meta = job.get("metadata") or {}
-            if meta.get("routine_id") == routine_id and meta.get("owner") == subject:
-                scheduler.cancel_job(job["job_id"])
-                return {"ok": True, "routine_id": routine_id}
-        raise HTTPException(status_code=404, detail="unknown routine")
-    @router.post("/events", status_code=202)
-    def events(request: Request, event: dict = Body(...)):
-        # The event names the person it is about; only the internal tier may say who that is.
-        if _sink_caller(request, None) != "internal":
-            raise HTTPException(status_code=401, detail="the event sink takes the internal tier")
-        try:
-            invocation = event_to_invocation(event)
-        except ValidationError as e:
-            raise HTTPException(status_code=400, detail=f"invalid event.v1: {e.message}")
-        except ValueError as e:  # no plan carried — fail loud (P18)
-            raise HTTPException(status_code=422, detail=str(e))
-        workload_id = dispatcher.dispatch(invocation)
-        return {"workload_id": workload_id, "trigger": invocation["trigger"]}
 
     return router
