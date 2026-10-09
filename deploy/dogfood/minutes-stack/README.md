@@ -43,9 +43,10 @@ deployment lock:
 | `host`, `port` | where the server listens; `VEXA_PUBLIC_MCP_URL` is derived from them |
 
 `agent_tools.register(mcp, call=…, guard=…)` takes two explicit ports: `call` reaches
-agent-api as the caller (the rig's `_http` adds `X-Internal-Secret` and the delegation's
-regime and workspace ceiling to every call that names a person — agent-api believes an
-unsigned `X-User-Id` from nothing else) and `guard` is the rig's identity guard. Consent,
+agent-api as the caller THROUGH THE GATEWAY (`/agent/*`) — a worker's delegation token as
+itself, anyone else with the person's own gateway key — so agent-api receives the gateway's
+signed identity and can forward it to the credential broker, which acts for a person on
+nothing else; `guard` is the rig's identity guard. Consent,
 credential use, the regime refusals and the ceiling are agent-api's, not the adapter's.
 
 ### What Minutes needs after the identity change
@@ -55,8 +56,10 @@ credential use, the regime refusals and the ceiling are agent-api's, not the ada
   the rig, or at the gateway's `/mcp` to move them to the assembled surface (which does
   not carry the rig-only tools: `workspace_write`, `entity_upsert`, `propose`, …).
 - Replace `connection_tools`, `time_tools` and `chat_names` in the lock with `agent_tools`.
-- `VEXA_GATEWAY_IDENTITY_SECRET` on gateway, agent-api and meeting-api, and
-  `VEXA_MCP_DELEGATION_SECRET` on admin-api as well as agent-api and this service.
+- The gateway's identity keypair: `VEXA_GATEWAY_IDENTITY_SIGNING_KEY_FILE` on the gateway
+  only, `VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE` on agent-api, meeting-api and the credential
+  broker; and `VEXA_MCP_DELEGATION_SECRET` on admin-api as well as agent-api and this service
+  (admin-api resolves the delegation tokens this service forwards to the gateway).
 - A worker files friction through the gateway (`/agent/friction`, its delegation token),
   derived from `VEXA_MCP_URL`; a worker pointed at the rig keeps the record in its
   fallback log instead.

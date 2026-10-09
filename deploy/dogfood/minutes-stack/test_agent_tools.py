@@ -1,6 +1,8 @@
+import contextvars
 import json
 import unittest
 
+import agent_mcp
 import agent_tools
 
 
@@ -57,6 +59,52 @@ class AgentToolsOnTheRig(unittest.TestCase):
         waiting = agent_tools.with_time_context(lambda: json.dumps({'waiting': []}), call)
         self.assertEqual(waiting.__name__, 'whats_waiting')
         self.assertEqual(json.loads(waiting())['time_context'], {'timezone': 'Europe/Lisbon'})
+
+
+class Rig:
+    """The slice of the rig `agent_call` uses: the caller's credential, the gateway, two doors."""
+    DELEGATION_PREFIX = 'vxd_'
+    GATEWAY = 'http://gateway:8000'
+    AGENT_API = 'http://agent-api:8100'
+
+    def __init__(self, token):
+        self.CALL_TOKEN = contextvars.ContextVar('t', default=None)
+        self.CALL_TOKEN.set(token)
+        self.sent = []
+
+    def me(self):
+        return '7'
+
+    def _http(self, method, url, headers=None, body=None, timeout=40):
+        self.sent.append(('http', method, url, dict(headers or {}), body))
+        return 200, {}
+
+    def _gw_http(self, uid, method, path, body=None, timeout=40):
+        self.sent.append(('gateway-as-person', uid, method, path, body))
+        return 200, {}
+
+
+class AgentCallGoesThroughTheGateway(unittest.TestCase):
+    """The credential broker acts for a person only on the gateway's signature, so the rig reaches
+    agent-api through the gateway — never over the internal tier, never with X-User-Id."""
+
+    def test_a_worker_presents_its_own_delegation_token(self):
+        rig = Rig('vxd_header.payload.signature')
+        agent_mcp.agent_call(rig)('POST', '/api/connections/gmail/search', {'query': 'x'})
+        kind, method, url, headers, body = rig.sent[-1]
+        self.assertEqual((kind, method, url), ('http', 'POST', 'http://gateway:8000/agent/connections/gmail/search'))
+        self.assertEqual(headers, {'X-API-Key': 'vxd_header.payload.signature'})
+        self.assertNotIn('X-User-Id', headers)
+        self.assertNotIn('X-Internal-Secret', headers)
+
+    def test_a_person_goes_as_their_own_gateway_key(self):
+        rig = Rig('vxa_mcp_durable')
+        agent_mcp.agent_call(rig)('GET', '/api/connections')
+        self.assertEqual(rig.sent[-1], ('gateway-as-person', '7', 'GET', '/agent/connections', None))
+
+    def test_only_agent_api_routes(self):
+        with self.assertRaises(ValueError):
+            agent_mcp.agent_call(Rig(''))('GET', '/internal/anything')
 
 
 if __name__ == '__main__':

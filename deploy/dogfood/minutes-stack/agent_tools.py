@@ -9,8 +9,9 @@ refusals and the workspace ceiling are all agent-api's.
 Two explicit ports, supplied by the composition root (agent_mcp.py):
 
   call(method, path, body=None, timeout=...) -> (status, body)
-      agent-api, as the person the current MCP call acts for (X-User-Id over the internal tier,
-      plus the delegation's regime and ceiling — see the rig's `_agent_identity_headers`).
+      agent-api, as the person the current MCP call acts for — through the gateway with the
+      caller's own credential, so agent-api receives the gateway's signed identity (and, for a
+      worker's delegation token, its regime and ceiling) and can hand it to the credential broker.
   guard(fn) -> fn
       the rig's per-call identity guard (anonymous and ghost callers get a hint, not a stack trace).
 """

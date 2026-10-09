@@ -2,8 +2,9 @@
 
 The rig supplies the delegated identity and its own scoped tools. The agent domain's tools
 (Connections, the person's clock, chat naming) are registered from agent_tools.py, which calls
-the same agent-api routes the product's assembled MCP binds; this file is the only place the
-rig's internals are wired into those explicit ports. This process never serves meetings MCP.
+the same agent-api routes the product's assembled MCP binds, through the gateway with the caller's
+own credential; this file is the only place the rig's internals are wired into those explicit
+ports. This process never serves meetings MCP.
 """
 import importlib.util
 import json
@@ -20,11 +21,23 @@ def load(name, path):
 
 
 def agent_call(runtime):
-    """The `call` port: agent-api, as the person the current MCP call acts for. The rig's `_http`
-    adds the internal tier and the delegation's regime and ceiling to every call naming a person."""
+    """The `call` port: agent-api, as the person the current MCP call acts for, THROUGH THE GATEWAY.
+
+    The gateway resolves the caller's own credential and signs that identity (gateway-identity.v1);
+    agent-api verifies it and forwards it to the credential broker, which acts for a person only
+    on that signature — the internal tier does not reach Connections. A worker's delegation token
+    (`vxd_`) goes to the gateway as itself, so identity resolves its regime and workspace ceiling
+    and the gateway signs them; any other caller goes as the person's own gateway key (`_gw_http`,
+    which re-mints once on a revoked key). `/api/x` on agent-api is `/agent/x` at the gateway."""
     def call(method, path, body=None, timeout=60):
-        return runtime._http(method, runtime.AGENT_API + path, {'X-User-Id': runtime.me()}, body,
-                             timeout=timeout)
+        if not path.startswith('/api/'):
+            raise ValueError('agent-api routes are /api/...')
+        route = '/agent/' + path[len('/api/'):]
+        token = (runtime.CALL_TOKEN.get() or '').strip()
+        if token.startswith(runtime.DELEGATION_PREFIX):
+            return runtime._http(method, runtime.GATEWAY + route, {'X-API-Key': token}, body,
+                                 timeout=timeout)
+        return runtime._gw_http(runtime.me(), method, route, body, timeout=timeout)
     return call
 
 
