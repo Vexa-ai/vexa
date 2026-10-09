@@ -97,7 +97,10 @@ sha:
   account posts, edits or deletes a comment carrying a marker, `merge-card-pass.yml` re-runs the
   PR's newest `merge-card` run on the head, and its `merge-card-comment` run so the sticky card
   agrees. It finds the run by PR as well as head sha (each card run is named after its PR, since
-  two PRs can share a head), never re-runs a run awaiting approval, and decides nothing itself.
+  two PRs can share a head), takes the sticky card's `pull_request_target` run, never re-runs a run
+  awaiting approval, re-reads the PR head just before each re-run and skips it if the head moved,
+  and decides nothing itself. The run name is read from the copy of the workflow that ran, so on a
+  base branch without this change the pick falls back to the run's `pull_requests` list.
   - *Alternative considered:* the comment-triggered workflow publishes a `merge-card` check run on
     the head itself, as `contribution-rights.yml` does for its own check from an `issue_comment`
     run. Not taken: the `merge-card` check would then have two writers. With a re-run,
