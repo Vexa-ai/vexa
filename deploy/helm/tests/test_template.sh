@@ -781,6 +781,28 @@ else echo "  FAIL: no generated RUNTIME_API_TOKEN in the chart Secret"; fail=1; 
 refuse_rt="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set secrets.runtimeApiToken=short 2>&1 || true)"
 if grep -q 'secrets.runtimeApiToken must be 32+ bytes' <<< "$refuse_rt"; then echo "  OK: a short secrets.runtimeApiToken is refused"
 else echo "  FAIL: a short secrets.runtimeApiToken rendered"; fail=1; fi
+# The chart's redis requires a password; each of its four clients expands it into its URL.
+redis_dep="$(awk '/deployment-redis.yaml/{f=1} f{print} f&&/^---/{exit}' <<< "$RENDER")"
+if grep -q -- '- "--requirepass"' <<< "$redis_dep" && grep -A1 -- '- "--requirepass"' <<< "$redis_dep" | grep -q '\$(REDIS_PASSWORD)'; then
+  echo "  OK: redis requires a password"
+else echo "  FAIL: redis does not require a password"; fail=1; fi
+n_urls="$(grep -cE 'value: "redis://:\$\(REDIS_PASSWORD\)@vexa-vexa-redis' <<< "$RENDER" || true)"
+if [ "$n_urls" = 4 ]; then echo "  OK: the four redis clients carry the password in their URL"
+else echo "  FAIL: $n_urls redis URL(s) carry the password, want 4"; fail=1; fi
+if grep -qE 'value: "redis://vexa-vexa-redis' <<< "$RENDER"; then
+  echo "  FAIL: a redis URL without the password is rendered"; fail=1
+else echo "  OK: no password-less redis URL"; fi
+for f in deployment-agent-api deployment-gateway deployment-meeting-api deployment-runtime; do
+  block="$(awk "/$f.yaml/{f=1} f{print} f&&/^---/{exit}" <<< "$RENDER")"
+  pw_line="$(grep -n 'name: REDIS_PASSWORD$' <<< "$block" | head -1 | cut -d: -f1)"
+  url_line="$(grep -nE 'name: (VEXA_)?REDIS_URL$' <<< "$block" | head -1 | cut -d: -f1)"
+  if [ -n "$pw_line" ] && [ -n "$url_line" ] && [ "$pw_line" -lt "$url_line" ]; then :
+  else echo "  FAIL: $f does not define REDIS_PASSWORD before its redis URL"; fail=1; fi
+done
+echo "  OK: every redis client defines REDIS_PASSWORD before the URL that expands it"
+refuse_redis="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set secrets.redisPassword=short 2>&1 || true)"
+if grep -q 'secrets.redisPassword must be 32+' <<< "$refuse_redis"; then echo "  OK: a short secrets.redisPassword is refused"
+else echo "  FAIL: a short secrets.redisPassword rendered"; fail=1; fi
 if grep -A1 'name: INTERNAL_API_SECRET$' <<< "$(awk '/deployment-runtime.yaml/{f=1} f{print} f&&/^---/{exit}' <<< "$RENDER")" | grep -q secretKeyRef; then
   echo "  FAIL: the runtime still carries INTERNAL_API_SECRET"; fail=1
 else echo "  OK: the runtime carries no internal-tier secret"; fi

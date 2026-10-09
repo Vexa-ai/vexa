@@ -1250,6 +1250,7 @@ const CONFIG_LITE_UNADOPTED = {
   NEXTAUTH_SECRET: "clients/terminal — NextAuth's signing secret; same",
   JWT_SECRET: "clients/terminal — the session secret; same",
   VEXA_API_KEY: "the lite bootstrap's own key for the smoke calls it makes at start-up; belongs to no service's declaration",
+  REDIS_PASSWORD: "the internal valkey's default-user password ([program:redis] --requirepass); the services receive it inside REDIS_URL, and no adopted service reads it by this name",
   VEXA_LITE_STATE_DIR: "the Lite entrypoint's own state directory (the persisted NEXTAUTH_SECRET and the gateway-identity.v1 keypair); supervisord interpolates it into the gateway's signing-key path and the verifiers' public-key path, and no service reads it",
 };
 function scanEnvReads(dirs) {

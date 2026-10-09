@@ -76,8 +76,9 @@ MCP_DELEGATION_SECRET = "gate-delegation-signing-key"
 # The runtime caller credential: the runtime answers only agent-api and meeting-api, and the proof
 # presents it when it reads or tears down a workload directly.
 RUNTIME_API_TOKEN = "gate-runtime-caller-token-0123456789abcdef"
-# postgres refuses an unset or published password.
+# postgres and redis refuse an unset or published password.
 DB_PASSWORD = "gate-db-password-0123456789abcdef"
+REDIS_PASSWORD = "0123456789abcdef0123456789abcdef"
 MINIO_BUCKET = "vexa"
 
 SERVICES = ["redis", "postgres", "storage", "admin-api", "runtime", "meeting-api", "gateway"]
@@ -147,6 +148,7 @@ def _stack_env() -> dict:
         "VEXA_MCP_DELEGATION_SECRET": MCP_DELEGATION_SECRET,
         "RUNTIME_API_TOKEN": RUNTIME_API_TOKEN,
         "DB_PASSWORD": DB_PASSWORD,
+        "REDIS_PASSWORD": REDIS_PASSWORD,
         "MINIO_BUCKET": MINIO_BUCKET,
         "BROWSER_IMAGE": os.getenv("BROWSER_IMAGE", "vexaai/vexa-bot:v012"),
         "API_GATEWAY_HOST_PORT": GATEWAY_PORT,
@@ -263,7 +265,7 @@ class Stack:
 
     def redis_host_url(self) -> str:
         port = self.redis_host_port
-        return f"redis://127.0.0.1:{port}/0"
+        return f"redis://:{REDIS_PASSWORD}@127.0.0.1:{port}/0"
 
     redis_host_port: int = 0
 

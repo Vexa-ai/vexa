@@ -16,10 +16,13 @@ echo "  Vexa Lite (v0.12) — starting container"
 echo "=============================================="
 
 # ─── Redis (internal by default; an external REDIS_URL is honored) ────────────────────────────────
+# The internal valkey's default user requires a password, minted per boot unless given. The services
+# connect with it; a bot or worker never does — each connects as a Redis user of its own.
+export REDIS_PASSWORD="${REDIS_PASSWORD:-$(python3 -c "import secrets; print(secrets.token_hex(32))")}"
 if [ -z "${REDIS_URL:-}" ]; then
     export REDIS_HOST="${REDIS_HOST:-localhost}"
     export REDIS_PORT="${REDIS_PORT:-6379}"
-    export REDIS_URL="redis://${REDIS_HOST}:${REDIS_PORT}/0"
+    export REDIS_URL="redis://:${REDIS_PASSWORD}@${REDIS_HOST}:${REDIS_PORT}/0"
 fi
 
 # ─── Database — DB_* only. Each service builds its own async URL (postgresql+asyncpg://) from these
@@ -174,7 +177,7 @@ mkdir -p /workspaces /var/lib/redis /var/run/redis
 chmod 777 /workspaces 2>/dev/null || true
 
 echo "Configuration:"
-echo "  - Redis URL:        ${REDIS_URL}"
+echo "  - Redis URL:        $(printf '%s' "$REDIS_URL" | sed -E 's#//[^@/]*@#//***@#')"
 echo "  - Database:         postgresql+asyncpg://${DB_USER}:***@${DB_HOST}:${DB_PORT}/${DB_NAME}"
 echo "  - Transcription:    ${TRANSCRIPTION_SERVICE_URL:-NOT SET (bots capture, no transcript)}"
 echo "  - Object storage:   ${MINIO_ENDPOINT:-NOT SET (recordings disabled)}"

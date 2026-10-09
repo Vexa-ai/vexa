@@ -77,6 +77,7 @@ spec:
               value: {{ .Values.agentApi.globalSystemWorkspaceRef | default "" | quote }}
             - name: VEXA_GLOBAL_ADMIN_SUBJECTS
               value: {{ .Values.agentApi.globalAdminSubjects | default "" | quote }}
+            {{- include "vexa.redisPasswordEnv" . | nindent 12 }}
             - name: VEXA_REDIS_URL
               value: {{ include "vexa.redisUrl" . | quote }}
             # The internal tier agent-api both presents (Lane M) and BELIEVES (_internal_caller,

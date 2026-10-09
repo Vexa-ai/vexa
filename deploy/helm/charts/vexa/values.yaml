@@ -93,6 +93,10 @@ secrets:
   mcpDelegationSecret: ""           # the worker toolbelt: agent-api signs each worker's delegation token,
                                     # identity verifies it. Generated at install like the one above; with
                                     # existingSecretName, carry VEXA_MCP_DELEGATION_SECRET.
+  redisPassword: ""                 # the chart redis's default-user password (REDIS_PASSWORD, 32+ URL-safe
+                                    # chars): the services connect with it, bots and workers never see it.
+                                    # Empty → kept from this release's Secret, else generated; with
+                                    # existingSecretName, carry REDIS_PASSWORD.
   runtimeApiToken: ""               # the runtime caller credential (RUNTIME_API_TOKEN, 32+ bytes): the
                                     # runtime refuses every workload/schedule call without it; only
                                     # agent-api and meeting-api hold it. Empty → kept from this release's

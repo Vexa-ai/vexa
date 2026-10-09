@@ -137,6 +137,13 @@
       "description": "the per-dispatch unit:<id>:out/:in streams the control plane relays (SSE) + the transcript tail"
     },
     {
+      "key": "REDIS_WORKLOAD_ACL",
+      "class": "defaulted",
+      "default": "per-workload",
+      "description": "what a spawned agent worker connects to Redis as. `per-workload`: a Redis user of its own \u2014 its own unit's input stream, output stream and read cursor \u2014 defined at spawn and removed when it ends; the service connection never reaches it. `shared`: the service connection, for a Redis that cannot define users (some managed services); every agent worker can then read and write every other's keys, so it is safe only where every person on the instance trusts every other. The service's own Redis user needs ACL SETUSER/DELUSER for `per-workload`.",
+      "targets": []
+    },
+    {
       "key": "VEXA_WORKSPACES_DIR",
       "class": "defaulted",
       "default": "/workspaces",

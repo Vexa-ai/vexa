@@ -33,12 +33,24 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- printf "%s-%s" (include "vexa.fullname" $root) $component | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
+{{- /* The chart's redis requires a password on its default user; a consumer of this URL carries the
+REDIS_PASSWORD env entry (vexa.redisPasswordEnv) BEFORE it, which Kubernetes expands into $(REDIS_PASSWORD). */ -}}
 {{- define "vexa.redisUrl" -}}
 {{- if .Values.redis.enabled -}}
-{{- printf "redis://%s.%s.svc.%s:%d/0" (include "vexa.componentName" (list . "redis")) .Release.Namespace .Values.global.clusterDomain (.Values.redis.service.port | int) -}}
+{{- printf "redis://:$(REDIS_PASSWORD)@%s.%s.svc.%s:%d/0" (include "vexa.componentName" (list . "redis")) .Release.Namespace .Values.global.clusterDomain (.Values.redis.service.port | int) -}}
 {{- else -}}
 {{- required "redisConfig.url is required when redis.enabled=false" .Values.redisConfig.url -}}
 {{- end -}}
+{{- end -}}
+
+{{- define "vexa.redisPasswordEnv" -}}
+{{- if .Values.redis.enabled }}
+- name: REDIS_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "vexa.adminTokenSecretName" . }}
+      key: REDIS_PASSWORD
+{{- end }}
 {{- end -}}
 
 {{- define "vexa.redisHost" -}}

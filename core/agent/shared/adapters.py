@@ -322,6 +322,14 @@ class RuntimeHttpClient(RuntimePort):
             status = json.loads(r.read())
         return status.get("workloadId", workload_id)
 
+    def live_workloads(self) -> list[str]:
+        """The ids of the workloads the runtime reports starting or running."""
+        req = urllib.request.Request(f"{self._base}/workloads", headers=self._auth, method="GET")
+        with urllib.request.urlopen(req, timeout=self._timeout) as r:
+            rows = json.loads(r.read())
+        return [s["workloadId"] for s in rows
+                if isinstance(s, dict) and s.get("state") in ("starting", "running") and s.get("workloadId")]
+
     def await_done(self, workload_id: str, timeout_sec: float = 0.0) -> str:
         req = urllib.request.Request(f"{self._base}/workloads/{workload_id}", headers=self._auth,
                                      method="GET")

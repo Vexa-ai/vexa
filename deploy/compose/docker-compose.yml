@@ -15,7 +15,25 @@ services:
     # and off source-available Redis ≥7.4 (RSALv2/SSPLv1). Wire-compatible (RESP) — the service
     # name, REDIS_URL, and every consumer stay put; only the engine changes (#653).
     image: valkey/valkey:8-alpine@sha256:081c2f5cb575efc901aa80ff9cdbd1ec6a301682fd35e1ebb4b0990a4a4a8507
-    command: ["valkey-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    # A PASSWORD ON THE DEFAULT USER, and none is no start. The services connect with it; a spawned
+    # bot or worker never sees it — each connects as a Redis user of its own, limited to its own
+    # keys, which agent-api and meeting-api define per spawn (REDIS_WORKLOAD_ACL).
+    # mint-dev-env.sh (`make up` / `make all`) mints REDIS_PASSWORD into .env; hex, so it is URL-safe.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        case "$$REDIS_PASSWORD" in
+          ""|changeme|change-me|CHANGE-ME|default|secret|password)
+            echo "redis: REDIS_PASSWORD is unset or a value published in the Vexa repository - refusing to start." >&2
+            echo "  Run deploy/compose/mint-dev-env.sh (make up does), or set REDIS_PASSWORD in .env (openssl rand -hex 32)." >&2
+            exit 1;;
+        esac
+        exec docker-entrypoint.sh valkey-server --appendonly yes --appendfsync everysec --requirepass "$$REDIS_PASSWORD"
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      # valkey-cli (the healthcheck, `docker compose exec redis valkey-cli`) authenticates with this.
+      - REDISCLI_AUTH=${REDIS_PASSWORD:-}
     healthcheck:
       test: ["CMD", "valkey-cli", "ping"]
       interval: 5s
@@ -221,7 +239,7 @@ services:
       - BOT_SPEAKER_MAX_BUFFER_SEC=${BOT_SPEAKER_MAX_BUFFER_SEC:-}
       - BOT_SPEAKER_IDLE_TIMEOUT_SEC=${BOT_SPEAKER_IDLE_TIMEOUT_SEC:-}
       - VEXA_AGENT_SRC_MOUNT=${VEXA_AGENT_SRC_MOUNT:-}
-      - REDIS_URL=redis://redis:6379/0
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis:6379/0
       # The Runtime brokers model credentials into spawned agents. Subscription credentials may be
       # mounted from the host; API-style Anthropic/OpenRouter env is forwarded from this trusted service.
       - HOST_CLAUDE_CREDENTIALS=${HOST_CLAUDE_CREDENTIALS:-}
@@ -402,7 +420,7 @@ services:
       - ANTHROPIC_DEFAULT_HAIKU_MODEL=${ANTHROPIC_DEFAULT_HAIKU_MODEL:-}
       - VEXA_LOG_LEVEL=${LOG_LEVEL:-info}
       # Stream primitive — the per-dispatch redis Streams the control plane relays (unit:<id>:out → SSE).
-      - VEXA_REDIS_URL=redis://redis:6379/0
+      - VEXA_REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis:6379/0
       # The backing the Runtime binds into the worker as the workspace store (the project-prefixed volume).
       - VEXA_WORKSPACE_MOUNT_SOURCE=${COMPOSE_PROJECT_NAME:-vexa-v012}_agent-workspaces
       # Three-tier mount stack (AMENDMENT 4): the platform-owned GLOBAL SYSTEM workspace (_global) mounted
@@ -522,7 +540,7 @@ services:
       - DB_NAME=${DB_NAME:-vexa}
       - DB_USER=${DB_USER:-postgres}
       - DB_PASSWORD=${DB_PASSWORD:-}
-      - REDIS_URL=redis://redis:6379/0
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis:6379/0
       - RUNTIME_API_URL=http://runtime:8090
       # The runtime caller credential meeting-api presents on every runtime.v1 call. Required; the
       # same value the runtime and agent-api hold. Never placed in a bot invocation.
@@ -649,7 +667,7 @@ services:
       # `.env.example` never set it either. An OPT-OUT (set it empty) is a deployment saying it has
       # no agents; a MISSING default was nobody saying anything and the product answering "no".
       - AGENT_API_URL=${AGENT_API_URL:-http://agent-api:8100}
-      - REDIS_URL=redis://redis:6379/0
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis:6379/0
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET}
       # gateway-identity.v1: the Ed25519 PRIVATE key the gateway signs the identity it resolved with,
       # onto every forward. This is the only service that mounts it; agent-api, meeting-api and the

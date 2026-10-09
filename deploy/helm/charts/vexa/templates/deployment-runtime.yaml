@@ -52,6 +52,7 @@ spec:
             - name: DOCKER_NETWORK
               value: {{ .Values.runtime.dockerNetwork | default "" | quote }}
             {{- end }}
+            {{- include "vexa.redisPasswordEnv" . | nindent 12 }}
             - name: REDIS_URL
               value: {{ include "vexa.redisUrl" . | quote }}
             - name: BROWSER_IMAGE

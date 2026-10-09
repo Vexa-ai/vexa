@@ -145,6 +145,21 @@ def build_production_app():
     segment_bus = RedisStreamBus(redis_client)
     meeting_repo = SqlAlchemyMeetingRepo(session_factory)
 
+    # Each bot connects to Redis as its session's own user (bot_spawn.workload_redis) unless the
+    # deployment chose REDIS_WORKLOAD_ACL=shared. A user outlives no MeetingToken: past its TTL (+1h)
+    # it is removed on the next spawn.
+    bot_redis = None
+    if (os.getenv("REDIS_WORKLOAD_ACL") or "per-workload").strip() == "shared":
+        log.warning("REDIS_WORKLOAD_ACL=shared — every meeting bot connects to Redis with the "
+                    "service credential")
+    else:
+        from .bot_spawn.workload_redis import BotRedisUsers
+
+        bot_redis = BotRedisUsers(
+            redis_client, redis_url, secret=token_secret or "",
+            max_age_sec=float(os.getenv("MEETING_TOKEN_TTL_SECONDS") or 18000) + 3600,
+        )
+
     import httpx
 
     # Every runtime.v1 call carries the runtime caller credential (required-explicit; the runtime
@@ -262,10 +277,12 @@ def build_production_app():
         # without the path; _identity_key() refuses one whose file is not that key.
         identity_key=_identity_key(),
         internal_secret=os.environ.get("INTERNAL_API_SECRET", ""),
+        bot_redis=bot_redis,
     )
 
     _attach_background_loops(
         app, transcript_store, segment_bus, redis_client, meeting_repo, runtime_client,
+        bot_redis=bot_redis,
         service_authority=service_authority,
         system_webhook_sink=system_webhook_sink,
         session_factory=session_factory,
@@ -286,6 +303,7 @@ def _minio_endpoint_url() -> str:
 def _attach_background_loops(
     app, transcript_store, segment_bus, redis_client, meeting_repo=None, runtime=None,
     service_authority=None, system_webhook_sink=None, session_factory=None, storage=None,
+    bot_redis=None,
 ) -> None:
     """Register the FastAPI lifespan that starts/stops the control-plane poll loops.
 
@@ -378,6 +396,21 @@ def _attach_background_loops(
     # SUSTAINED total above this threshold is an orphaned batch (a crashed replica's un-reclaimed
     # PEL) → /health degrades + 503. Default headroom over one in-flight batch (count=10 default).
     app.state.pipeline_pending_alarm = int(os.getenv("PIPELINE_PENDING_ALARM", "100"))
+
+    async def _bot_redis_restore_loop() -> None:
+        # Redis keeps no ACL user across a restart; a live bot's user is defined again from the index
+        # (the password is derived, so the bot's own URL is valid again unchanged).
+        interval = float(os.getenv("BOT_REDIS_RESTORE_INTERVAL_S", "15"))
+        while True:
+            try:
+                restored = await bot_redis.restore()
+                if restored:
+                    log.warning("redis lost %d bot user(s) (a restart?) — defined again", restored)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("bot redis restore failed")
+            await asyncio.sleep(interval)
 
     async def _segment_consumer_loop() -> None:
         # Drain the transcription_segments stream → persist + publish tc:…:mutable.
@@ -600,6 +633,7 @@ def _attach_background_loops(
                 retry_backoff_s=auto_join_backoff,
                 token_secret=os.getenv("ADMIN_TOKEN") or None,
                 redis_url=os.getenv("REDIS_URL"),
+                redis_grant=bot_redis.grant if bot_redis is not None else None,
                 allow_uncapped=auto_join_allow_uncapped,
             )
 
@@ -763,6 +797,8 @@ def _attach_background_loops(
             asyncio.create_task(_auto_join_loop(), name="auto-join"),
             asyncio.create_task(_calendar_sync_loop(), name="calendar-sync"),
             asyncio.create_task(_signal_tape_janitor_loop(), name="signal-tape-janitor"),
+            *([asyncio.create_task(_bot_redis_restore_loop(), name="bot-redis-restore")]
+              if bot_redis is not None else []),
             asyncio.create_task(_ensure_fts_index_once(), name="ensure-fts-index"),
         ]
         log.info("meeting-api background loops started: %s", [t.get_name() for t in tasks])

@@ -277,7 +277,8 @@ def test_the_qwen_lane_dials_are_declared():
 # 104: +1 VEXA_AGENT_MAX_CHAT_CONTINUATIONS — the bound on VEXA_AGENT_AUTO_CONTINUE_CHAT, and both
 # now plumbed on compose, helm and lite (they were `targets: []`, so no standard install could set them).
 # 105: +1 RUNTIME_API_TOKEN — the runtime caller credential every runtime.v1 / schedule.v1 call presents.
-EXPECTED_DECLARED_KEYS = 105
+# 106: +1 REDIS_WORKLOAD_ACL — what a spawned worker connects to Redis as.
+EXPECTED_DECLARED_KEYS = 106
 
 
 def test_connections_keys_are_capabilities_on_real_surfaces():

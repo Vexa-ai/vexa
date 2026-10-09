@@ -256,6 +256,7 @@ def build_router(
     authority=None,
     *,
     transcript_stream_purge: "Optional[Callable[[int], Awaitable[None]]]" = None,
+    redis_grant: "Optional[Callable[[str, int], Awaitable[str]]]" = None,
 ) -> APIRouter:
     """The bot-spawn routes over the injected ``MeetingRepo`` + ``RuntimeClient`` + authority ports.
 
@@ -525,6 +526,7 @@ def build_router(
                 webhook_secret=x_user_webhook_secret,
                 webhook_events=webhook_events,
                 transcript_stream_purge=transcript_stream_purge,
+                redis_grant=redis_grant,
             )
         except TranscriptionNotConfigured as e:
             raise HTTPException(status_code=503, detail=str(e))

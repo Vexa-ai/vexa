@@ -190,6 +190,10 @@ def create_app(
     # (the boot refuses without it); None is the in-process harness, which drives the routes directly.
     identity_key=None,
     internal_secret: Optional[str] = None,
+    # Defines each bot's own Redis user (bot_spawn.workload_redis.BotRedisUsers): spawns hand the bot
+    # that user's URL and a terminal session removes it. None hands bots the service Redis URL — the
+    # in-process harness, and a deployment's explicit REDIS_WORKLOAD_ACL=shared.
+    bot_redis: Optional["object"] = None,
 ) -> FastAPI:
     """Build the unified meeting-api app from the injected ports.
 
@@ -267,6 +271,7 @@ def create_app(
         delivery_ledger,
         callback_secret=token_secret,
         internal_secret=internal_secret,
+        bot_redis=bot_redis,
     )
 
     # --- bot_spawn: POST /bots (invocation.v1 + runtime.v1) ---
@@ -285,6 +290,7 @@ def create_app(
         runtime,
         service_authority,
         transcript_stream_purge=_stream_purge,
+        redis_grant=bot_redis.grant if bot_redis is not None else None,
     ))
 
     # --- user-stop: DELETE /bots/{platform}/{native_meeting_id} (lifecycle/stop.py over redis) ---
@@ -385,6 +391,7 @@ def _mount_lifecycle(
     *,
     callback_secret: Optional[str] = None,
     internal_secret: Optional[str] = None,
+    bot_redis: Optional["object"] = None,
 ) -> None:
     """Register the lifecycle.v1 callback route on the unified app (the lifecycle receiver's
     ``/bots/internal/callback/lifecycle`` handler, sharing the app's TraceMiddleware).
@@ -641,6 +648,14 @@ def _mount_lifecycle(
                 log_event("transcript_finalize_failed", audience="system", level="warning",
                           span="lifecycle.callback",
                           fields={"meeting_id": terminal_meeting_id, "error": str(e)})
+        if terminal_advanced and bot_redis is not None:
+            # The session is over: its bot's Redis user goes with it (best-effort — the grant path
+            # also removes any user older than its MeetingToken).
+            try:
+                await bot_redis.revoke(rec.connection_id)
+            except Exception as e:  # noqa: BLE001
+                log_event("bot_redis_revoke_failed", audience="system", level="warning",
+                          span="lifecycle.callback", fields={"error": type(e).__name__})
         if terminal_advanced and isinstance(meeting_row, dict):
             data = dict(meeting_row.get("data") or {})
             provenance = build_service_provenance({**meeting_row, "data": data})

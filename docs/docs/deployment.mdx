@@ -250,6 +250,12 @@ and brings the stack back up:
 make -C deploy/compose rotate-db-password
 ```
 
+**Docker Compose: Redis requires a password.** `REDIS_PASSWORD` is new and the `redis` service refuses
+to start without one. `make up` / `make all` mint it into `.env` (an existing value is kept); if you
+start the stack with `docker compose` directly, add one first (`openssl rand -hex 32`). Bots and agent
+workers never receive it: each connects as a Redis user of its own that meeting-api and agent-api
+define per spawn.
+
 **Docker Compose: bots and agent workers have networks of their own.** The runtime now starts meeting
 bots on the `bots` network (meeting-api, redis, storage) and agent workers on the `workers` network
 (the gateway, redis, flows-api, and the optional `llm-shim` / `searxng`); neither joins the control

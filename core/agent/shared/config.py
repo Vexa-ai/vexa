@@ -62,6 +62,15 @@ class Settings(BaseSettings):
 
     # ── Stream primitive — the per-dispatch redis Streams (unit:<id>:out / :in) ─
     redis_url: str = "redis://redis:6379/0"
+    # What a WORKER connects to Redis as (control_plane.workload_redis). `per-workload` (the default):
+    # a Redis user of its own unit's three keys and nothing else. `shared`: the service connection
+    # above — only for a Redis that cannot define users, and only where every person on the instance
+    # trusts every other. One name across agent-api and meeting-api, hence the alias.
+    redis_workload_acl: str = Field(
+        default="per-workload",
+        validation_alias=AliasChoices("REDIS_WORKLOAD_ACL"),
+        pattern="^(per-workload|shared)$",
+    )
 
     # ── MVP0 chat runner — claude turn over a per-subject local git workspace ─
     # The chat unit's per-person workspace dirs live here; seeded from the template (CLAUDE.md +

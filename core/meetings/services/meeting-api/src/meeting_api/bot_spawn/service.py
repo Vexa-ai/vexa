@@ -425,6 +425,10 @@ async def request_bot(
     redis_url: Optional[str] = None,
     meeting_api_url: Optional[str] = None,
     token_secret: Optional[str] = None,
+    # Defines the bot's own Redis user and returns the URL it connects with (bot_spawn.
+    # workload_redis). None hands the bot ``redis_url`` (the in-process harness, and a deployment's
+    # explicit REDIS_WORKLOAD_ACL=shared).
+    redis_grant: "Optional[Callable[[str, int], Awaitable[str]]]" = None,
     # Per-user webhook config (the gateway forwards it from identity's /internal/validate). Persisted
     # into meeting.data so the lifecycle callback delivers status_change events with no users-table read.
     webhook_url: Optional[str] = None,
@@ -767,6 +771,21 @@ async def request_bot(
     # 4. MeetingToken + invocation. connection_id IS the session_uid (parent's connectionId).
     redis_url = redis_url or os.getenv("REDIS_URL", "redis://redis:6379/0")
     meeting_api_url = meeting_api_url or os.getenv("MEETING_API_URL", "http://meeting-api:8080")
+    if redis_grant is not None:
+        # The bot connects to Redis as this session's own user — never with the service connection.
+        # A user that cannot be defined fails the spawn (the fallback would be the service credential).
+        try:
+            redis_url = await redis_grant(connection_id, meeting_id)
+        except Exception as e:  # noqa: BLE001
+            reason = "the bot's Redis credential could not be issued"
+            try:
+                await repo.fail_meeting(meeting_id=meeting_id, reason=reason, failure_stage="requested")
+            except Exception:  # noqa: BLE001 — failing the row is best-effort; never mask the cause
+                pass
+            log_event("bot_spawn_failed", audience="system", level="error", span="bots.create",
+                      user_id=user_id, meeting_id=str(meeting_id),
+                      fields={"reason": reason, "error": type(e).__name__})
+            raise SpawnFailed(reason) from e
     # STT creds were resolved and gated at step 1b (before the meeting-row write); the resolved
     # transcription_service_url/token/model flow into the invocation below. Without either the bot
     # joins + captures but cannot transcribe — None-safe: omitted from the invocation when unset

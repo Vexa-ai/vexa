@@ -1118,10 +1118,27 @@ def _build_production_app() -> FastAPI:
         model_config = AdminApiModelConfig(
             settings.admin_api_url, settings.internal_api_secret.get_secret_value(),
         )
+    # Each worker connects to Redis as its unit's own user (control_plane.workload_redis) unless
+    # the deployment chose REDIS_WORKLOAD_ACL=shared. Stale users are swept against the runtime's
+    # live workloads.
+    workload_redis_client = None
+    if settings.redis_workload_acl == "per-workload":
+        import redis as _redis
+
+        from control_plane import workload_redis
+
+        workload_redis_client = _redis.from_url(
+            settings.redis_url, decode_responses=True, socket_connect_timeout=2, socket_timeout=5)
+        workload_redis.start_sweeper(client_factory=lambda: workload_redis_client,
+                                     live_units=runtime.live_workloads,
+                                     secret=settings.internal_api_secret.get_secret_value())
+    else:
+        logger.warning("REDIS_WORKLOAD_ACL=shared — every agent worker connects to Redis with the "
+                       "service credential and can read and write every unit's streams")
     # Lane A: the Dispatcher takes the SAME index so shared workspaces the subject is a member of enter
     # the dispatch mount set (read-only for Slice 1), not just the /active listing.
     dispatcher = Dispatcher(settings, runtime, identity, membership_index=membership_index,
-                            model_config=model_config)
+                            model_config=model_config, workload_redis=workload_redis_client)
     app = create_app(
         dispatcher,
         stream_reader=RedisStreamReader(settings.redis_url),

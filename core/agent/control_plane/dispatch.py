@@ -806,10 +806,15 @@ class Dispatcher:
     through. Validates the envelope at the seam (fail loud, P18), mints the token, and spawns."""
 
     def __init__(self, settings: Settings, runtime: RuntimePort, identity: IdentityPort,
-                 membership_index=None, model_config=None, warm_stream=None) -> None:
+                 membership_index=None, model_config=None, warm_stream=None,
+                 workload_redis=None) -> None:
         self._settings = settings
         self._runtime = runtime
         self._identity = identity
+        # The Redis connection that defines each worker's own Redis user (control_plane.
+        # workload_redis). Production wires it unless the deployment chose REDIS_WORKLOAD_ACL=shared;
+        # None hands the worker the service URL (the in-process harness, and that explicit choice).
+        self._workload_redis = workload_redis
         # Warm delivery (the lost-turn fix): the redis client used to pre-deliver message-trigger
         # prompts to unit:<id>:in and to watch for the worker's turn-accepted ack. Injectable for
         # tests; None → built lazily from settings.redis_url (unreachable redis fails soft into the
@@ -913,6 +918,15 @@ class Dispatcher:
                              model_config=model_config, room=room,
                              scaffold_workspaces=scaffold_workspaces, target=target,
                              friction=self._friction)
+        if self._workload_redis is not None:
+            # The worker connects as its unit's own Redis user, never with the service connection.
+            # A user that cannot be defined refuses the dispatch: the fallback would be the service
+            # credential, which reaches every unit's streams.
+            from control_plane import workload_redis
+
+            env["REDIS_URL"] = workload_redis.grant(
+                self._workload_redis, secret=self._settings.internal_api_secret.get_secret_value(),
+                unit_id=uid, service_url=self._settings.redis_url)
         # WARM DELIVERY (the lost-turn fix). The runtime's create is an IDEMPOTENT TOUCH for a
         # workload that is still starting/running (ADR-0027) — it returns the live status and
         # DISCARDS the spec env, where a chat message's prompt rides. So a message sent while the

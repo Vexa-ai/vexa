@@ -66,6 +66,7 @@ spec:
                 secretKeyRef:
                   name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
                   key: POSTGRES_PASSWORD
+            {{- include "vexa.redisPasswordEnv" . | nindent 12 }}
             - name: REDIS_URL
               value: {{ include "vexa.redisUrl" . | quote }}
             - name: RUNTIME_API_URL
