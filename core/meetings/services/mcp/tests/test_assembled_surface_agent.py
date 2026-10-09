@@ -9,10 +9,9 @@ Mirrors `test_assembled_surface.py` (flows): the manifest used here is THE FILE 
 true by `core/agent/tests/test_mcp_manifest_routes.py`. So the tools assembled here are bound
 against what agent-api really serves — every argument, type and description — not a hand copy.
 
-Three workspace WRITE routes (`PUT /api/workspace/file`, `POST /api/workspace/entity`,
-`POST /api/claims`) are still deliberately NOT tools: each takes a bare `body: dict = Body(...)`,
-which FastAPI publishes with no named `properties` — there is nothing there for `bind.py` to
-derive a schema from (see `core/agent/mcp.tools.v1.json`'s own top-level `note`).
+Every agent route behind a tool takes a NAMED body model, because a bare `body: dict` publishes no
+properties for `bind.py` to derive arguments from — which is what kept the page verbs, the claim
+book and the Highlight scan off this edge until their routes were typed.
 """
 from __future__ import annotations
 
@@ -229,3 +228,45 @@ def test_optional_object_and_list_arguments_are_published_with_their_types():
     assert kind('onboarding_research', 'connection_ids') == 'array'
     assert kind('secret_service_call', 'parameters') == 'object'
     assert kind('gmail_search', 'limit') == 'integer'
+
+
+def test_the_verbs_the_behaviour_prompts_name_reach_agent_api_through_the_gateway():
+    """The page verbs, the claim book, the membership acts and the Highlight scan are what the asks
+    under `behavior/` tell an agent to call. Each forwards to the gateway's `/agent/*` with the
+    caller's own credential, its declared arguments in the body (lists and objects intact) or the
+    query, and nothing else."""
+    from fastapi.testclient import TestClient
+    seen = []
+
+    def upstream(request):
+        seen.append(request)
+        return httpx.Response(200, json={})
+    client = TestClient(_assembled_with(upstream))
+    key = {'x-api-key': 'vxd_a.b.c'}
+
+    client.post('/tools/entity_upsert', headers=key, json={
+        'kind': 'company', 'name': 'Acme', 'facts': ['Acme builds rockets.'],
+        'source': 'the call', 'fields': {'what': 'rockets'}, 'connections': ['Ana Lima']})
+    assert (seen[-1].method, str(seen[-1].url)) == ('POST', 'http://gateway.test/agent/workspace/entity')
+    assert json.loads(seen[-1].content) == {
+        'kind': 'company', 'name': 'Acme', 'facts': ['Acme builds rockets.'], 'source': 'the call',
+        'fields': {'what': 'rockets'}, 'connections': ['Ana Lima']}
+    assert seen[-1].headers['x-api-key'] == 'vxd_a.b.c'
+
+    client.put('/tools/workspace_write', headers=key,
+               json={'path': 'notes/plan.md', 'content': '# Plan\n', 'slug': 'personal'})
+    assert (seen[-1].method, str(seen[-1].url)) == ('PUT', 'http://gateway.test/agent/workspace/file')
+    assert json.loads(seen[-1].content) == {'path': 'notes/plan.md', 'content': '# Plan\n',
+                                            'slug': 'personal'}
+
+    client.post('/tools/validate', headers=key,
+                json={'verdicts': [{'id': 'c001', 'verdict': 'confirmed'}]})
+    assert str(seen[-1].url) == 'http://gateway.test/agent/claims/verdicts'
+    assert json.loads(seen[-1].content) == {'verdicts': [{'id': 'c001', 'verdict': 'confirmed'}]}
+
+    client.post('/tools/transcript_terms', headers=key, json={'meeting_id': '147', 'keep': '*'})
+    assert str(seen[-1].url) == 'http://gateway.test/agent/meeting/terms/scan'
+    assert json.loads(seen[-1].content) == {'meeting_id': '147', 'keep': '*'}
+
+    client.get('/tools/workspace_members', headers=key, params={'workspace_id': 'oenb-c1'})
+    assert str(seen[-1].url) == 'http://gateway.test/agent/workspace/members?workspace_id=oenb-c1'
