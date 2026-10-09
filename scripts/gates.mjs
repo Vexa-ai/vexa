@@ -1154,11 +1154,13 @@ const CONFIG_ADOPTED = [
     // environment stays the backlog it was (CONFIG_LITE_UNADOPTED). Widening the adoption is adding a
     // family here and its keys to the declaration. The sign-in mail family came first: it was a
     // second, unprefixed SMTP family next to flows' declared one, pinned only by a one-off test.
+    // Connections (the broker's human role) came second; its keys target compose and Helm, because
+    // Lite carries no Connections.
     service: "terminal",
     decl: "clients/terminal/config.v1.json",
     preflight: null,
     scan: [], scanTs: ["clients/terminal/src", "clients/terminal/server.mjs"],
-    families: ["VEXA_MAIL_SMTP_"],
+    families: ["VEXA_MAIL_SMTP_", "VEXA_CONNECTIONS_"],
     compose: "terminal", helm: ["deployment-terminal.yaml"], lite: "terminal",
   },
 ];

@@ -51,6 +51,35 @@
       "default": "0",
       "description": "1 = skip the relay's certificate check under VEXA_MAIL_SMTP_SECURE. Development only.",
       "targets": ["compose", "helm", "lite"]
+    },
+    {
+      "key": "VEXA_CONNECTIONS_BROKER_URL",
+      "class": "capability",
+      "capability": "connections",
+      "description": "The credential broker's base URL (credential-broker.v1), which the terminal's server calls in the human role for consent, credential save, disconnect and delete (src/app/api/connections/broker.ts). Compose and the chart point it at the broker they deploy; Lite carries no Connections.",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "VEXA_CONNECTIONS_HUMAN_KEY_FILE",
+      "class": "capability",
+      "capability": "connections",
+      "description": "File holding the human role's assertion key, the same file the broker verifies with. Mounted into the terminal only: never into agent-api or a worker.",
+      "secret": true,
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "VEXA_CONNECTIONS_PUBLIC_ORIGIN",
+      "class": "defaulted",
+      "default": "(unset — the terminal's NEXTAUTH_URL)",
+      "description": "The origin a browser POST to /api/connections must come from. Deployment configuration only, never a forwarded Host header.",
+      "targets": ["compose", "helm"]
     }
-  ]
+  ],
+  "capabilities": {
+    "connections": {
+      "description": "Connections in the browser: a person connects, saves, disconnects and deletes accounts and services through the credential broker",
+      "mode": "all",
+      "when_unconfigured": "every /api/connections route answers 503 with one generic sentence, and the OAuth callback logs a config fault"
+    }
+  }
 }
