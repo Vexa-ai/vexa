@@ -30,7 +30,15 @@ else joins, and the chart ships a NetworkPolicy. Worker containers never hold a 
 The agent role is bound to a person by the gateway, not by agent-api: every agent-role call carries
 the gateway's signed identity, forwarded unchanged, and the broker verifies it with the gateway's
 public key (`VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE`) and refuses the call unless it names the
-assertion's actor. agent-api's keys alone cannot act for anybody.
+assertion's actor. agent-api's agent key alone cannot act for anybody.
+
+**The git role is not bound that way.** A git-role call names its credential (`pat/<owner>`,
+`deploy/<owner>.priv|.pub`), agent-api signs with that owner as the actor, and the broker checks only
+that the two agree; no gateway signature rides it. So whoever holds the git key can read and write
+any person's Git credentials. The key exists only when the opt-in Git store is switched on and is
+mounted into agent-api alone (compose: `VEXA_GIT_STORE_KEY_FILE`, set together with
+`VEXA_GIT_STORE_BROKER_URL`; the chart: `gitStore`): the git role trusts agent-api, and nothing else
+holds the key.
 
 ## Contracts
 

@@ -56,9 +56,9 @@ unconfigured deployment look configured), and it will refuse to compose a mailed
 terminal. Every key it reads is declared in `core/flows/src/config.v1.json` and checked against
 this file by `gate:config-contract`.
 
-**First run needs no setup step.** The first person to sign in becomes the administrator; everyone
-who signs in after them is served at once. There is no company-layer gate (founder ruling
-2026-10-08): `_global` lives in the `agent-workspaces` volume, agent-api creates it empty at boot,
+**First run needs no setup step beyond the admin claim.** The first administrator is whoever signs in
+with the one-time admin claim code (below), or an address in `VEXA_ADMIN_EMAILS`; signing in first
+grants nothing. There is no company-layer gate (founder ruling 2026-10-08): `_global` lives in the `agent-workspaces` volume, agent-api creates it empty at boot,
 and flows act on the world whether or not anybody ever writes it. `VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH`
 is optional — set it only to manage `_global` as a separate host repo.
 

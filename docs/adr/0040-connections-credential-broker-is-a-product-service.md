@@ -65,10 +65,12 @@ rest.
 - **The terminal reaches the broker directly**, past the gateway (ADR-0037 decision 1). It is on the
   dated door backlog: it closes when the gateway re-stamps a person's session as the human role (the
   signed-identity work) and the terminal reaches Connections through `GATEWAY_URL` only.
-- **The agent role authorizes whatever actor agent-api names.** The broker trusts agent-api to have
-  resolved the subject; that is only as strong as agent-api's own identity check, which the signed
-  gateway identity strengthens. The network boundary in decision 5 is what keeps every other
-  process from presenting the agent role at all.
+- **The git role authorizes whatever owner agent-api names.** Since ADR-0041 the agent role is
+  bound to the person by the gateway's signed identity, which the broker verifies and matches to the
+  assertion's actor. The git role carries no such signature: the broker checks only that the actor
+  is the owner in the credential's name, so holding the git key is holding every person's Git
+  credentials. The key exists only with the opt-in Git store and is mounted into agent-api alone;
+  the network boundary in decision 5 keeps every other process from presenting either role.
 - **Key loss is data loss.** Losing the store key makes every stored credential unreadable; people
   reconnect. Rotation without that loss (re-encrypting under a new key) is not built.
 - **Deleted connections keep their encrypted versions** until a retention process removes them;

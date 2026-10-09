@@ -61,8 +61,11 @@ calling itself. The gateway MCP bounds a tool call at 30 s, which is shorter tha
 
 - The gateway has ONE `/mcp` upstream (`MCP_URL`); `AGENT_MCP_URL` is gone. Point
   agent-api's `VEXA_MCP_URL` at this service's own in-network `/mcp` to keep workers on
-  the rig, or at the gateway's `/mcp` to move them to the assembled surface (which does
-  not carry the rig-only tools: `workspace_write`, `entity_upsert`, `propose`, …).
+  the rig, or at the gateway's `/mcp` to move them to the assembled surface. That surface
+  serves the agent domain's tools (`core/agent/mcp.tools.v1.json`: `workspace_write`,
+  `entity_upsert` and `propose` among them) but not the rig-only ones (`open_page`,
+  `workspace_target`, the meeting and auth verbs; `RIG_ONLY` in
+  `core/agent/tests/test_prompt_tools_served.py`).
 - Replace `connection_tools`, `time_tools` and `chat_names` in the lock with `agent_tools`.
 - The gateway's identity keypair: `VEXA_GATEWAY_IDENTITY_SIGNING_KEY_FILE` on the gateway
   only, `VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE` on agent-api, meeting-api and the credential

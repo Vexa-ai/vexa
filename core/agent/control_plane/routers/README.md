@@ -1,6 +1,6 @@
 # agent · control_plane · routers
 
-The 78 HTTP routes agent-api serves, one module per **owner**. `api.py`'s `create_app` was 2,868
+The 124 HTTP routes agent-api serves, one module per **owner**. `api.py`'s `create_app` was 2,868
 lines and held all of them, which is why every lane that touched agent-api touched one file — and
 why the identity boundary was hard to see (seam backlog **B3**).
 
@@ -15,15 +15,16 @@ before.
 
 | module | routes | what it owns |
 |---|---|---|
-| [`health.py`](health.py) | 2 | `/health` and `/api/version` — the two answers that must work when nothing else does. |
-| [`chats.py`](chats.py) | 10 | The conversation surface: `/invocations`, the `/api/chat` SSE turn, `/api/sessions*`, the `/events` artifact sink, and `/api/routines*` — the clock that wakes agents. |
-| [`admin.py`](admin.py) | 7 | The operator's surface: `/api/admin/*` (the hidden panel), `/api/global/*` (the organisation tier), and the two credential self-tests. Internal-tier gated; not a user surface. |
+| [`health.py`](health.py) | 3 | `/health`, `/api/version` and `/.well-known/mcp-tools.json` (the tool manifest the gateway's MCP assembles from) — the answers that must work when nothing else does. |
+| [`chats.py`](chats.py) | 18 | The conversation surface: `/invocations`, the `/api/chat` SSE turn and its `submit`, `pending`, `target`, `reset`, `name` and `order` doors, `/api/sessions*`, the `/events` artifact sink, and `/api/routines*` (create, list, confirm, enable, delete) — the clock that wakes agents. |
+| [`admin.py`](admin.py) | 6 | The operator's surface: `/api/admin/overview` and `/api/admin/probe` (the hidden panel), `/api/global/ready` (the organisation tier), `/api/models`, and the two self-tests (`/api/models/test`, `/api/transcription/test`). |
 | [`meetings.py`](meetings.py) | 7 | The meeting seam: relay health, where a meeting's report lives, the Highlight scan (`transcript_terms`) and the annotation layer it writes and the transcript canvas reads, and the live transcript stream a chat renders beside the conversation. |
-| [`scaffolds.py`](scaffolds.py) | 7 | One record per arrival (PRD §5.5): mint, read, redeem the transcript share — plus the two reads a panel does around it, `/api/links/resolve` and `/api/desk/touch`. |
-| [`friction.py`](friction.py) | 3 | The rough-edges ledger (PRD decision 33). **Kept whole on purpose** — see below. |
+| [`scaffolds.py`](scaffolds.py) | 8 | One record per arrival (PRD §5.5): mint (`/internal/scaffolds`), hand, read, list and share it, and `/internal/has-history` — plus the two reads a panel does around it, `/api/links/resolve` and `/api/desk/touch`. |
+| [`friction.py`](friction.py) | 1 | The rough-edges ledger's write door, `POST /api/friction` (PRD decision 33). **Kept whole on purpose** — see below. |
 | [`connections.py`](connections.py) | 11 | Connections for the agent: request and list a person's connected accounts, read Gmail and Calendar (one typed route per read: `gmail/search`, `gmail/inbox`, `gmail/read`, `gmail/thread`, `calendar/events`), create a Gmail draft, call a saved custom service, and `/api/onboarding/research`. Each is the route behind one tool in `core/agent/mcp.tools.v1.json`, served by the gateway's assembled MCP. Every route signs for the credential broker as the `agent` role through `control_plane/broker_client.py`; none takes or returns a credential, and every one but the status read refuses a worker dispatched without a person (`require_person`). |
+| [`proposals.py`](proposals.py) | 3 | The desk's short list (`shared/proposals.py`): `GET /api/proposals` (open rows, newest first), `POST /api/proposals` (an agent proposing one job) and `POST /api/proposals/resolve` (`ran` or `dismissed`). |
 | [`clock.py`](clock.py) | 2 | The person's clock: `GET /api/time` (`current_time`) and `PUT /api/time/zone` (`timezone_set`). The timezone is identity's fact, read and written at admin-api's `/internal/users/{id}/settings` over the internal tier. |
-| [`workspaces.py`](workspaces.py) | 47 | Everything a workspace is: files, git state, identity, the mount set, attach and swap, sharing, membership, invites, and the credentials that make a remote reachable. |
+| [`workspaces.py`](workspaces.py) | 65 | Everything a workspace is: files, git state, identity, the mount set, attach and swap, sharing, membership, invites, and the credentials that make a remote reachable. |
 
 ## What PRD 40.7 does to this list
 
@@ -33,8 +34,8 @@ therefore on notice, and the split is drawn so that moving one is a **file move,
 
 - **`friction.py`** — the founder's open question right now. `whats_waiting` is moving to flows
   (decision 42.2), and the friction ledger is the other half of the same argument: it is filed by
-  people and by agents, and a `no-agents` deployment still has people. Self-contained, three
-  routes, one store.
+  people and by agents, and a `no-agents` deployment still has people. Self-contained, one
+  route, one store.
 - **`scaffolds.py`** — a scaffold composes an agent's first turn, so it reads as agent-domain; but
   it is minted by **flows** and read by the **terminal**, and the `no-agents` product still mails
   links. Not a decision this refactor makes.
