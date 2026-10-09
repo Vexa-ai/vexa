@@ -30,6 +30,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
+from collections.abc import Mapping
 from contextlib import AsyncExitStack
 from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 from urllib.parse import quote
@@ -190,6 +192,31 @@ def _invalid_path_param_response() -> Response:
     )
 
 
+# A CATCH-ALL TAIL (`/agent/{path:path}`, `/mcp/{path:path}`) is the same hazard as a path param,
+# several segments at a time: Starlette hands it over decoded, and httpx resolves a dot segment
+# against the downstream base — so a tail is only ever a path UNDER the prefix it was matched on.
+# A `.` or `..` segment (written plainly or percent-encoded) and an encoded slash or backslash are
+# refused outright (400): no client of these routes needs either, and refusing is clearer than
+# re-encoding something that was asking to change the path's shape. Every other segment goes
+# through `_path_segment`, so whatever survives is data in exactly the segment it was sent in.
+_ENCODED_SEPARATOR = re.compile(rb"%(?:2f|5c)", re.IGNORECASE)
+
+
+def _tail_path(path: str, request: Request) -> Tuple[Optional[str], Optional[Response]]:
+    raw = request.scope.get("raw_path") or b""
+    if _ENCODED_SEPARATOR.search(raw):
+        return None, _invalid_path_param_response()
+    out: List[str] = []
+    for segment in path.split("/"):
+        if segment in (".", ".."):
+            return None, _invalid_path_param_response()
+        encoded, error = _path_segment(segment)
+        if error is not None:
+            return None, error
+        out.append(encoded or "")
+    return "/".join(out), None
+
+
 def _required_scopes(request: Request, table=None) -> Optional[FrozenSet[str]]:
     """The scopes declared for the route this request MATCHED, or ``None`` when it declares none.
 
@@ -232,6 +259,31 @@ def _is_authority_header(name: str) -> bool:
 def _insufficient_scope_response() -> Response:
     return Response(
         content=json.dumps({"detail": "Insufficient scope for this endpoint"}),
+        status_code=403,
+        media_type="application/json",
+    )
+
+
+# ── A WORKER'S DELEGATION TOKEN IS AN MCP CREDENTIAL ─────────────────────────────────────────────
+# A `vxd_` bearer is minted per dispatch for the worker's toolbelt, and its audience is the MCP. The
+# edge therefore admits it on `/mcp` and nowhere else, so what a worker can do is what the MCP's
+# tools do — not every REST route a person's own key reaches.
+#
+# The MCP's tools act by calling back into this edge with the same bearer. That hop is admitted when
+# it carries, in `MCP_REENTRY_HEADER`, the identity this edge signed onto the `/mcp` forward it is
+# serving: only this edge can sign one, it lives a minute, and it must name the same person under
+# the same delegation as the bearer. The header is in the `x-vexa-internal-` family, so a client
+# cannot pass one through this edge to anything behind it.
+MCP_REENTRY_HEADER = "x-vexa-internal-mcp-identity"
+
+
+def _is_delegated(client_key: str, user_data: Mapping) -> bool:
+    return isinstance(user_data.get("delegation"), Mapping) or str(client_key).startswith("vxd_")
+
+
+def _delegated_route_response() -> Response:
+    return Response(
+        content=json.dumps({"detail": "a worker's delegation token is accepted on /mcp only"}),
         status_code=403,
         media_type="application/json",
     )
@@ -314,6 +366,8 @@ def create_app(
         if not user_data:
             return Response(content=json.dumps({"detail": "Invalid API key"}),
                             status_code=401, media_type="application/json")
+        if _is_delegated(api_key, user_data):
+            return _delegated_route_response()
         set_user_id(user_data["user_id"])
         return {
             "user_id": user_data["user_id"],
@@ -326,14 +380,39 @@ def create_app(
     # (agent chat SSE). Returns (downstream_headers, None) on success, or (None, error_Response) when
     # the caller is rejected (fail-closed). This is the ONE place the key → user resolution and the
     # anti-spoof identity injection live, so REST and SSE scope a request identically.
-    async def _authorize(method: str, request: Request, *, api_key: Optional[str] = None):
+    _reentry_key = identity_key.public_key() if identity_key is not None else None
+
+    def _mcp_reentry(request: Request, user_data: Mapping) -> bool:
+        """Is this request a tool call the MCP is making on behalf of an admitted `/mcp` request?
+
+        True only for an identity this edge signed (verified with its own key's public half), still
+        within its lifetime, naming the same person and the same delegation as the bearer resolved
+        now. Anything else — no token, a forged or expired one, another person's, a person's own
+        identity without the delegation — is not re-entry."""
+        if _reentry_key is None:
+            return False
+        token = (request.headers.get(MCP_REENTRY_HEADER) or "").strip()
+        if not token:
+            return False
+        try:
+            claims = identity_token.verify(_reentry_key, token)
+        except identity_token.IdentityError:
+            return False
+        want = identity_token.claims_from_validation(user_data)
+        return (claims.get("sub") == want.get("sub")
+                and isinstance(want.get("delegation"), dict)
+                and claims.get("delegation") == want.get("delegation"))
+
+    async def _authorize(method: str, request: Request, *, api_key: Optional[str] = None,
+                         delegation_door: bool = False):
         # ``api_key`` overrides the header lookup for a route whose CLIENT protocol carries the key
         # somewhere else (the MCP transport uses ``Authorization: Bearer``). The resolution, the
         # scope check and the identity injection below are the same for every route.
-        # A worker's delegation token (`vxd_…`) is a bearer like any other: identity verifies it
-        # (signature, audience, expiry, the account still existing) and answers with the person it
+        # A worker's delegation token (`vxd_…`) is resolved like any other bearer: identity verifies
+        # it (signature, audience, expiry, the account still existing) and answers with the person it
         # acts for plus the dispatch's ceiling, which rides the signed identity below as
-        # `delegation`. There is no second path for it here.
+        # `delegation`. It is ADMITTED only where ``delegation_door`` is set (the `/mcp` routes) or on
+        # the MCP's own re-entry (`_mcp_reentry`) — see `MCP_REENTRY_HEADER`.
         client_key = api_key if api_key is not None else request.headers.get("x-api-key")
         # Fail-closed: a client route with no key is rejected before any downstream call.
         if not client_key:
@@ -370,6 +449,18 @@ def create_app(
                 media_type="application/json",
                 headers={"Retry-After": "1"},
             )
+
+        if (_is_delegated(client_key, user_data) and not delegation_door
+                and not _mcp_reentry(request, user_data)):
+            log_event(
+                "request_denied_delegated_route",
+                audience="user",
+                level="warning",
+                span="auth",
+                user_id=user_id,
+                fields={"method": method, "path": request.url.path},
+            )
+            return None, _delegated_route_response()
 
         # Scope enforcement — DENY BY DEFAULT. Every proxied route declares its scopes in
         # ROUTE_SCOPES; an undeclared route is refused here rather than forwarded, so the failure
@@ -438,8 +529,10 @@ def create_app(
         return headers, None
 
     # --- the REST proxy: faithful carve of main.forward_request for client (non-admin) routes.
-    async def _forward(method: str, url: str, request: Request, *, api_key: Optional[str] = None) -> Response:
-        headers, error = await _authorize(method, request, api_key=api_key)
+    async def _forward(method: str, url: str, request: Request, *, api_key: Optional[str] = None,
+                       delegation_door: bool = False) -> Response:
+        headers, error = await _authorize(method, request, api_key=api_key,
+                                          delegation_door=delegation_door)
         if error is not None:
             return error
 
@@ -848,9 +941,11 @@ def create_app(
     # after a head is in hand does the body iterator take over; the exit stack keeps the downstream
     # stream open for its life and closes it when the client goes away.
     async def _forward_stream_verbatim(
-        method: str, url: str, request: Request, *, api_key: Optional[str] = None
+        method: str, url: str, request: Request, *, api_key: Optional[str] = None,
+        delegation_door: bool = False,
     ) -> Response:
-        headers, error = await _authorize(method, request, api_key=api_key)
+        headers, error = await _authorize(method, request, api_key=api_key,
+                                          delegation_door=delegation_door)
         if error is not None:
             return error
         content = await request.body()
@@ -913,7 +1008,10 @@ def create_app(
 
         @app.api_route("/agent/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
         async def agent_proxy(path: str, request: Request):
-            return await _forward(request.method, _agent(path), request)
+            tail, error = _tail_path(path, request)
+            if error is not None:
+                return error
+            return await _forward(request.method, _agent(tail), request)
 
     # ---- the MCP front door (#795): the streamable-HTTP transport, fronted at the edge ----
     # MCP streamable-HTTP is ONE endpoint driven by two methods with opposite lifetimes:
@@ -950,24 +1048,35 @@ def create_app(
             return token.strip() or None
         return auth
 
+    # `delegation_door=True` on all four: these are the routes a worker's delegation token is FOR.
     @app.get("/mcp")
     async def mcp_stream(request: Request):
-        return await _forward_stream_verbatim("GET", _mcp("/mcp", request), request, api_key=_mcp_key(request))
+        return await _forward_stream_verbatim("GET", _mcp("/mcp", request), request,
+                                              api_key=_mcp_key(request), delegation_door=True)
 
     @app.get("/mcp/{path:path}")
     async def mcp_stream_path(path: str, request: Request):
+        tail, error = _tail_path(path, request)
+        if error is not None:
+            return error
         return await _forward_stream_verbatim(
-            "GET", _mcp(f"/mcp/{path}", request), request, api_key=_mcp_key(request)
+            "GET", _mcp(f"/mcp/{tail}", request), request, api_key=_mcp_key(request),
+            delegation_door=True,
         )
 
     @app.api_route("/mcp", methods=["POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
     async def mcp_message(request: Request):
-        return await _forward(request.method, _mcp("/mcp", request), request, api_key=_mcp_key(request))
+        return await _forward(request.method, _mcp("/mcp", request), request,
+                              api_key=_mcp_key(request), delegation_door=True)
 
     @app.api_route("/mcp/{path:path}", methods=["POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
     async def mcp_message_path(path: str, request: Request):
+        tail, error = _tail_path(path, request)
+        if error is not None:
+            return error
         return await _forward(
-            request.method, _mcp(f"/mcp/{path}", request), request, api_key=_mcp_key(request)
+            request.method, _mcp(f"/mcp/{tail}", request), request, api_key=_mcp_key(request),
+            delegation_door=True,
         )
 
     # ---- the /ws multiplex (carve of main.websocket_multiplex, main.py:2165-2340) ----
@@ -1061,7 +1170,9 @@ async def run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus) 
         finally:
             await ws.close(code=4503)  # retry later — auth infrastructure unavailable
         return
-    if not user_data:
+    # A worker's delegation token is an MCP credential (`MCP_REENTRY_HEADER` above): it opens no
+    # socket here, so it is answered exactly like a key this edge does not accept.
+    if not user_data or _is_delegated(api_key, user_data):
         try:
             await ws.send_text(json.dumps({"type": "error", "error": "invalid_api_key"}))
         finally:

@@ -36,6 +36,7 @@ from pydantic import BaseModel, Field, PrivateAttr, model_validator
 from . import bind as bind_mod
 from . import discover as discover_mod
 from . import notices as notices_mod
+from . import reentry as reentry_mod
 from . import register as register_mod
 from .link_parser import ParseMeetingLinkResponse, parse_meeting_url
 from .prompts import PROMPTS, get_prompt_result
@@ -656,8 +657,12 @@ def create_app(
         openapi_url="/openapi.json" if _public_docs else None,
     )
 
+    # Every hop here goes to the GATEWAY, so it carries the identity the gateway signed onto the
+    # request being served (`reentry.py`) — what lets the gateway admit a worker's tool call.
+    app.add_middleware(reentry_mod.ReentryMiddleware)
+
     def get_headers(api_key: str) -> Dict[str, str]:
-        return {"X-API-Key": api_key, "Content-Type": "application/json"}
+        return {"X-API-Key": api_key, "Content-Type": "application/json", **reentry_mod.headers()}
 
     async def make_request(
         method: str,
@@ -1355,7 +1360,9 @@ def create_app(
     # ---------------------------
     # MCP mount + prompts
     # ---------------------------
-    mcp = FastApiMCP(app, headers=["authorization", "x-api-key"])
+    # `x-vexa-identity` rides into each tool call so the call back into the gateway can carry it
+    # (`reentry.py`); it is not an argument and no tool reads it.
+    mcp = FastApiMCP(app, headers=["authorization", "x-api-key", reentry_mod.INBOUND_HEADER])
     # Orientation at connect time. FastApiMCP has no `instructions` kwarg, but the lowlevel
     # Server it wraps carries the field the spec defines — a client that connects should not have
     # to infer what Vexa is from nine tool descriptions.

@@ -12,7 +12,7 @@ client over one socket. Python/FastAPI, hexagonal (collaborators injected as por
 |---|---|---|---|
 | **produces** | the world (clients, dashboard) | `api.v1` (OpenAPI 3.1) | REST surface: `/bots`, `/transcripts`, `/meetings`, `/recordings`, `/auth/me`, `/health` |
 | **produces** | the world | `ws.v1` (`/ws`) | subscribe/unsubscribe/ping ↔ `subscribed`/`unsubscribed`/`pong`/`error` + forwarded live frames |
-| **calls** | identity / admin-api | HTTP `/internal/validate` + `/ws/authorize-subscribe` (via `Authorizer` port) | a bearer (API key, or a worker's `vxd_` delegation token) → `{user_id, scopes, max_concurrent, webhook_*, delegation?}`; per-meeting subscribe authz |
+| **calls** | identity / admin-api | HTTP `/internal/validate` + `/ws/authorize-subscribe` (via `Authorizer` port) | a bearer (API key, or a worker's `vxd_` delegation token — admitted on `/mcp` only, plus the MCP's own calls back in that carry the identity this edge signed onto that `/mcp` request as `X-Vexa-Internal-Mcp-Identity`) → `{user_id, scopes, max_concurrent, webhook_*, delegation?}`; per-meeting subscribe authz |
 | **calls** | meeting-api | HTTP forward (via `DownstreamClient` port) | proxied method/path/body + injected `x-user-*` identity headers, signed as `X-Vexa-Identity` ([`gateway-identity.v1`](contracts/gateway-identity.v1)) |
 | **consumes** | redis (per meeting) | channels `tc:meeting:{id}:mutable` · `bm:meeting:{id}:status` · `va:meeting:{id}:chat` (via `RedisBus` port) | raw payloads forwarded verbatim to the subscribed socket |
 | **produces** | observability sink | `logevent.v1` (stdout JSON) | one envelope per log line; `X-Trace-Id` minted at the edge, forwarded downstream |
@@ -35,6 +35,7 @@ L2 unit / L3 in-process integration: `test_health`, `test_proxy` (fail-closed au
 ## Status
 
 - ✅ delivered — fail-closed `x-api-key` auth + `ROUTE_SCOPES` 403 enforcement
+- ✅ delivered — catch-all tails (`/agent/{path}`, `/mcp/{path}`) stay under their prefix: a `.`/`..` segment (plain or encoded) or an encoded slash/backslash is a 400 before any forward; every other segment is re-encoded as data
 - ✅ delivered — CORE REST proxy to meeting-api (verbatim body/status, identity-header injection, 502/504 upstream mapping)
 - ✅ delivered — `/auth/me` caller identity + `/health` liveness
 - ✅ delivered — `/ws` multiplex: subscribe-authz, per-meeting redis fan-in, unsubscribe/ping, error vocabulary

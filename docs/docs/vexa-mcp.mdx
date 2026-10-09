@@ -60,7 +60,8 @@ its domain serves, and the tool's arguments and description are that route's own
 Every agent worker attaches this server, through the gateway's `/mcp`, as its `vexa` toolbelt. Its
 bearer is a delegation token minted for that one dispatch (`vxd_…`, an hour at most); the gateway
 resolves it through identity like an API key — as the person the worker acts for, with scopes `bot` and
-`tx` — and every tool call it makes is checked as theirs. A worker dispatched without a person in the
+`tx` — and every tool call it makes is checked as theirs. The token works on `/mcp` and nowhere else:
+a worker calling the REST API with it directly is refused. A worker dispatched without a person in the
 loop (a routine, a meeting-triggered run) is refused the verbs that need one. There is no second MCP
 server for workers.
 
