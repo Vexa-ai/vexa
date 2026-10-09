@@ -114,13 +114,6 @@
       "targets": []
     },
     {
-      "key": "VEXA_AGENT_DEFAULT_SUBJECT",
-      "class": "defaulted",
-      "default": "(empty \u2014 read by no code)",
-      "description": "RETIRED: agent-api no longer reads it \u2014 a request that names nobody is a 401, and the in-process test harness passes its subject to create_app(default_subject=...). Declared only while shared.config.Settings still carries the agent_default_subject field; remove the two together. No deploy surface sets it",
-      "targets": []
-    },
-    {
       "key": "VEXA_REDIS_URL",
       "class": "defaulted",
       "default": "redis://redis:6379/0",

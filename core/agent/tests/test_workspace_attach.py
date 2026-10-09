@@ -142,7 +142,7 @@ def test_compliant_repo_is_used_as_is(tmp_path):
 
     res = swap_workspace(root, "u1", str(origin), "main")
 
-    assert res.nested is False
+    assert not hasattr(res, "nested")
     assert (root / "u1" / "CLAUDE.md").read_text() == "CUSTOM ROOT"  # used directly
 
 
@@ -153,7 +153,7 @@ def test_plain_repo_becomes_an_independent_root_with_git_intact(tmp_path):
     origin = _make_repo(tmp_path / "plain", "RAW", compliant=False)
     result = activate_workspace(root, "u1", origin, "main")
     ws = workspace_slot_dir(root, "u1", result.slug)
-    assert result.cloned and not result.nested
+    assert result.cloned and not hasattr(result, "nested")
     # a clone is used as it is, so the slot record carries no nesting flag any more
     from control_plane.workspace_attach import attached_workspaces
     assert "nested" not in attached_workspaces(root, "u1")["slots"][result.slug]

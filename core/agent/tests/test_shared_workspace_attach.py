@@ -189,7 +189,7 @@ def test_plain_repository_remains_at_root_with_membership_preserved(tmp_path):
     subprocess.run(["git", "clone", "-q", "--bare", str(plain), str(bare)], check=True, capture_output=True)
 
     r = attach_shared_workspace(tmp_path, "grp-x5", str(bare), "main")
-    assert not r.nested
+    assert not hasattr(r, "nested")
     assert (tmp_path / "grp-x5" / "notes.md").exists()
     assert (tmp_path / "grp-x5" / ".git").is_dir()
     assert m.is_member(tmp_path, "grp-x5", "u_owner") == "owner"

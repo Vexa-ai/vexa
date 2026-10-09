@@ -55,9 +55,6 @@ class Settings(BaseSettings):
     # tier, and a request that names nobody is a 401 — there is no fallback subject. agent-api can
     # verify that signature and cannot make one. The production boot requires it.
     gateway_identity_public_key_file: str = ""
-    # The single-user fallback subject for an app built WITHOUT the identity guard (the in-process
-    # test harness). Ignored whenever the public key is set, which every deployment is.
-    agent_default_subject: str = ""
 
     # ── Stream primitive — the per-dispatch redis Streams (unit:<id>:out / :in) ─
     redis_url: str = "redis://redis:6379/0"

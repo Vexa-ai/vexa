@@ -73,9 +73,6 @@ class SwapResult:
     swapped: bool          # False == requested repo was already the active workspace (no-op)
     cloned: bool           # True == a fresh git clone happened (vs restoring a parked tree)
     parked_slug: Optional[str]  # the slug the previously-active workspace was parked under
-    # Always False: a clone is used as it is, never nested. Kept only because the workspace routes
-    # still return the field.
-    nested: bool = False
 
 
 @dataclass(frozen=True)
@@ -101,7 +98,6 @@ class ActiveResult:
     slug: str
     changed: bool             # False == already in the desired state (idempotent no-op)
     cloned: bool = False      # True == a fresh git clone happened (activate of a never-seen repo)
-    nested: bool = False      # always False — see SwapResult.nested
 
 
 def _slug_dir(root: Path, subject: str, state: dict, slug: str) -> Path:
