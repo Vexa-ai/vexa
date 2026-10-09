@@ -41,11 +41,11 @@ Per request, exactly one of:
 
 ## Forwarded to the credential broker
 
-agent-api forwards the verified `X-Vexa-Identity` unchanged on every agent-role call to the
+agent-api forwards the verified `X-Vexa-Identity` unchanged on every agent- or git-role call to the
 credential broker. The broker verifies it with the same public key and refuses the call when it is
 missing, invalid, or names a subject other than the actor in the broker assertion
 (credential-broker.v1). The internal tier is not accepted there: holding `INTERNAL_API_SECRET` or
-the broker's agent key does not let a process act for a person it has no signature for.
+the broker's agent or git key does not let a process act for a person it has no signature for.
 
 ## Re-entry: a worker's tool call back into the gateway (`#/$defs/ReentryHeader`)
 
