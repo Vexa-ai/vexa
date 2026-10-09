@@ -4,8 +4,9 @@ The published contract between the **control plane** (meeting-api, agent-api) an
 (`runtime`). The control plane asks the kernel to run a *workload*; the kernel runs it on Docker / K8s /
 a child process and reports its lifecycle. **Mechanism, not policy (P11):** the caller names a
 `profile`, `env` and resources. The deployment's profile registry, not the spec, maps a profile to an
-image or command and to a workload class (`bot` or `worker`) that decides how a backend labels and
-fences the workload; nothing in a caller's spec can choose the class.
+image or command and to the profile data every backend applies the same way: the workload's labels,
+the network it joins, the runtime settings forwarded into it, and whether the runtime's credential
+files are mounted. Nothing in a caller's spec can choose them.
 
 ## Transport and authentication
 HTTP. **Every route except `GET /health` requires the caller credential**:
