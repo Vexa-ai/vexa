@@ -29,7 +29,7 @@ from __future__ import annotations
 import pathlib
 import re
 
-# tests/ -> agent/ -> core/ -> repo root (same anchor test_worker_allowlist_manifested.py uses).
+# tests/ -> agent/ -> core/ -> repo root (same anchor test_prompt_tools_served.py uses).
 REPO = pathlib.Path(__file__).resolve().parents[3]
 CONTROL_PLANE_DIR = REPO / "core" / "agent" / "control_plane"
 DOCKERFILE = REPO / "core" / "agent" / "services" / "agent-api" / "Dockerfile"
