@@ -25,7 +25,11 @@ import tempfile
 from typing import Optional
 
 from .backend import WorkloadHandle
-from .isolation import apply_process_isolation, child_env_for, plan_process_isolation, preexec_for
+from .isolation import (
+    HOMES_ROOT, ChildIdentity, IsolationRefused, StagedFile, WorkloadUids, apply_process_isolation,
+    child_env_for, group_ids, make_home, open_trusted_dir, plan_process_isolation, preexec_for,
+    remove_home, sweep_homes,
+)
 from .models import Resources
 from .mounts import mount_set
 from .profiles import Runnable
@@ -39,6 +43,32 @@ _TAIL_BYTES = 4096
 
 def _log_dir() -> str:
     return os.environ.get("PROCESS_LOG_DIR") or os.path.join(tempfile.gettempdir(), "vexa-workloads")
+
+
+def _open_log(workload_id: str) -> tuple[str, int]:
+    """The workload's log file, opened for append. Under a root runtime the directory must be one
+    only root controls (made 0700) and the file is opened without following a link, 0600, so no
+    child can read another's output or point root's writes elsewhere."""
+    log_dir = _log_dir()
+    name = f"{workload_id}.log"
+    if "/" in workload_id or workload_id in (".", ".."):
+        raise OSError(f"workload id {workload_id!r} cannot name a log file")
+    if os.geteuid() != 0:
+        os.makedirs(log_dir, exist_ok=True)
+        path = os.path.join(log_dir, name)
+        return path, os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_CLOEXEC, 0o644)
+    dir_fd = open_trusted_dir(log_dir, create_mode=0o700)
+    try:
+        st = os.fstat(dir_fd)
+        if st.st_uid != 0:
+            raise OSError(f"{log_dir} is not root's")
+        if st.st_mode & 0o077:
+            os.fchmod(dir_fd, 0o700)
+        fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600,
+                     dir_fd=dir_fd)
+    finally:
+        os.close(dir_fd)
+    return os.path.join(os.path.realpath(log_dir), name), fd
 
 
 def _tail(path: str, limit: int = _TAIL_BYTES) -> str:
@@ -74,11 +104,34 @@ def _signal_group(pgid: int, sig: int) -> bool:
 class ProcessBackend:
     name = "process"
 
-    def __init__(self) -> None:
+    def __init__(self, *, homes_root: str = HOMES_ROOT, uids: Optional[WorkloadUids] = None) -> None:
         # Per-workload capture state: workloadId → (log path | None, failure already reported?).
         # Process-local, like the kernel's handle map — absent after a restart, which is fine:
         # exit codes are unobservable without a live handle anyway.
         self._capture: dict[str, dict] = {}
+        self._homes_root = homes_root
+        self._uids = uids or WorkloadUids()
+        if os.geteuid() == 0:
+            removed = sweep_homes(homes_root=homes_root)
+            if removed:
+                log.info("removed %d HOME(s) left by children that are gone", removed)
+
+    def _identity(self, workload_id: str, runnable: Runnable, env: dict[str, str]) -> ChildIdentity:
+        """Who the child runs as under a ROOT runtime — never root. A workspace dispatch runs as its
+        subject's uid on its isolated store; any other workload as a uid of its own with only the
+        groups its profile names. Every child gets a fresh private HOME holding the profile's
+        credential files. Raises when any of it cannot be done: the spawn is refused, never
+        degraded to a root child."""
+        plan = plan_process_isolation(env, euid=0)
+        if plan is not None:
+            plan = apply_process_isolation(plan)
+            uid, groups = plan.uid, plan.groups
+        else:
+            uid, groups = self._uids.acquire(workload_id), group_ids(runnable.process_groups)
+        staged = [StagedFile(source=c.source, home_path=c.home_path)
+                  for c in runnable.credential_files if c.home_path]
+        home, tmp = make_home(uid, uid, homes_root=self._homes_root, staged=staged)
+        return ChildIdentity(uid=uid, gid=uid, groups=tuple(groups), home=home, tmp=tmp)
 
     def start(
         self,
@@ -93,61 +146,75 @@ class ProcessBackend:
         if not runnable.command:
             raise ValueError("process backend requires a command")
         # Workspace mount set (WP-A1.1): the lite/process backend shares the HOST filesystem — there is
-        # nothing to bind, so tenant isolation is POSIX instead (runtime_kernel.isolation): the worker
-        # drops to a per-subject uid, private tiers are 0700-owned, shared workspaces get per-workspace
-        # gids. Unavailable conditions (non-root runtime, non-numeric subject) degrade LOUDLY to the
-        # old shared-trust spawn.
+        # nothing to bind, so tenant isolation is POSIX instead (runtime_kernel.isolation): under a
+        # root runtime every child drops to a non-root uid — its subject's for a workspace dispatch,
+        # its own for anything else — with a fresh private HOME. Anything that stops that refuses
+        # the spawn. A non-root runtime's children run as its own uid (said loudly for a dispatch).
         mounts = mount_set(env)
         if len(mounts) > 1:
             log.info("workload %s: %d active workspace mounts: %s",
                      workload_id, len(mounts), ", ".join(m.get("slug", "?") for m in mounts))
-        preexec = None
         # The child's environment is built from scratch (workload_env.child_environment): host
         # plumbing, the profile's forward list, and the workload's own env. The runtime's own
         # environment — its caller token, and whatever service secrets the host process was started
         # with — never reaches a child.
-        base_env = child_environment(env, forward=runnable.forward_env)
-        child_env = base_env
-        try:
-            iso = plan_process_isolation(env)
-            if iso is not None:
-                iso = apply_process_isolation(iso)
-                preexec = preexec_for(iso)
-                child_env = child_env_for(iso, child_env)
-                log.info("workload %s: POSIX-isolated as uid %d (%d shared group(s))",
-                         workload_id, iso.uid, len(iso.groups))
-        except OSError as e:
-            # a broken store layout must not brick dispatch — but say exactly what didn't apply
-            log.error("workload %s: isolation setup failed (%s) — spawning shared-trust", workload_id, e)
-            preexec = None
-            child_env = base_env
+        child_env = child_environment(env, forward=runnable.forward_env)
+        preexec = None
+        identity: Optional[ChildIdentity] = None
+        if os.geteuid() == 0:
+            try:
+                identity = self._identity(workload_id, runnable, env)
+                preexec = preexec_for(identity)
+            except Exception as e:
+                self._uids.release(workload_id)
+                if identity is not None:
+                    remove_home(identity.home, homes_root=self._homes_root)
+                log.error("workload %s: REFUSED — isolation could not be applied (%s); a root runtime "
+                          "never starts a root child", workload_id, e)
+                raise IsolationRefused(f"isolation could not be applied: {e}") from e
+            child_env = child_env_for(identity, child_env)
+            log.info("workload %s: runs as uid %d (%d supplementary group(s))",
+                     workload_id, identity.uid, len(identity.groups))
+        else:
+            plan_process_isolation(env)          # warns once for a workspace dispatch
         # Capture the child's output to a per-workload file (both streams interleaved, like
-        # `docker logs`). Fail-open: if the log dir is unwritable we fall back to DEVNULL rather
+        # `docker logs`). Fail-open: if the log dir is unusable we fall back to DEVNULL rather
         # than refusing to start the workload.
         log_path: Optional[str] = None
-        out_fh = None
+        out_fd: Optional[int] = None
         try:
-            log_dir = _log_dir()
-            os.makedirs(log_dir, exist_ok=True)
-            log_path = os.path.join(log_dir, f"{workload_id}.log")
-            out_fh = open(log_path, "ab")
-        except OSError as e:
+            log_path, out_fd = _open_log(workload_id)
+        except (OSError, IsolationRefused) as e:
             log.warning("workload %s: cannot capture output (%s) — falling back to DEVNULL", workload_id, e)
             log_path = None
         try:
             proc = subprocess.Popen(
                 runnable.command,
                 env=child_env,
-                stdout=out_fh if out_fh is not None else subprocess.DEVNULL,
-                stderr=subprocess.STDOUT if out_fh is not None else subprocess.DEVNULL,
+                stdout=out_fd if out_fd is not None else subprocess.DEVNULL,
+                stderr=subprocess.STDOUT if out_fd is not None else subprocess.DEVNULL,
                 start_new_session=True,
-                preexec_fn=preexec,   # None = shared-trust (isolation unavailable — logged loudly)
+                preexec_fn=preexec,   # None only under a non-root runtime
             )
+        except Exception:
+            self._uids.release(workload_id)
+            if identity is not None:
+                remove_home(identity.home, homes_root=self._homes_root)
+            raise
         finally:
-            if out_fh is not None:
-                out_fh.close()  # the child holds its own fd; ours would only leak
-        self._capture[workload_id] = {"log_path": log_path, "reported": False, "reaped": False}
+            if out_fd is not None:
+                os.close(out_fd)  # the child holds its own fd; ours would only leak
+        self._capture[workload_id] = {"log_path": log_path, "reported": False, "reaped": False,
+                                      "home": identity.home if identity else None}
         return WorkloadHandle(id=workload_id, impl=proc)
+
+    def _release(self, workload_id: str) -> None:
+        """Give back what the child held: its workload uid and its HOME."""
+        state = self._capture.get(workload_id) or {}
+        home = state.pop("home", None)
+        if home:
+            remove_home(home, homes_root=self._homes_root)
+        self._uids.release(workload_id)
 
     def exit_code(self, h: WorkloadHandle) -> Optional[int]:
         code = h._impl.poll()  # type: ignore[attr-defined]
@@ -168,6 +235,7 @@ class ProcessBackend:
             return
         state["reaped"] = True
         _signal_group(h._impl.pid, signal.SIGKILL)  # type: ignore[attr-defined]
+        self._release(h.id)
 
     def _report_failure(self, workload_id: str, code: int) -> None:
         """Log the failed workload's output tail — once per workload (exit_code is polled)."""
@@ -209,4 +277,5 @@ class ProcessBackend:
             h._impl.wait(timeout=2)  # type: ignore[attr-defined]
         except Exception:
             pass
+        self._release(h.id)
         self._capture.pop(h.id, None)

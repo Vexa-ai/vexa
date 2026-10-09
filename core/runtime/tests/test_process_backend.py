@@ -51,6 +51,24 @@ def _read_pids(*paths) -> list[int]:
     return [int(p.read_text().strip()) for p in paths]
 
 
+def _drop_dir(tmp_path):
+    """A directory any child can write (under a root runtime children run as other uids), with the
+    workload logs kept apart in their own directory."""
+    drop = tmp_path / "drop"
+    drop.mkdir()
+    os.chmod(drop, 0o1777)
+    for d in (tmp_path, tmp_path.parent, tmp_path.parent.parent):   # pytest's own dirs are 0700
+        os.chmod(d, 0o755)
+    return drop
+
+
+def _wait_for(*paths, timeout: float = 20.0) -> None:
+    deadline = time.time() + timeout
+    while not all(p.exists() for p in paths):
+        assert time.time() < deadline, f"the workload never wrote {paths}"
+        time.sleep(0.01)
+
+
 def _start_and_wait(backend: ProcessBackend, workload_id: str, runnable: Runnable):
     h = backend.start(workload_id, runnable, {})
     h._impl.wait(timeout=10)
@@ -151,8 +169,9 @@ def test_self_exit_reaps_whole_group(monkeypatch, tmp_path, caplog):
     """A1 (V1) — a workload that exits on its own leaves NO children. The leader forks two long
     sleeps and exits 1; once exit_code() first observes the exit (plus cleanup), both captured child
     pids are dead. On base (leader-only signal) both sleeps survive — RED."""
-    monkeypatch.setenv("PROCESS_LOG_DIR", str(tmp_path))
-    f1, f2 = tmp_path / "c1.pid", tmp_path / "c2.pid"
+    monkeypatch.setenv("PROCESS_LOG_DIR", str(tmp_path / "logs"))
+    drop = _drop_dir(tmp_path)
+    f1, f2 = drop / "c1.pid", drop / "c2.pid"
     backend = ProcessBackend()
     h = backend.start(
         "w-orphan",
@@ -160,8 +179,7 @@ def test_self_exit_reaps_whole_group(monkeypatch, tmp_path, caplog):
         {},
     )
     h._impl.wait(timeout=10)                     # leader gone; children reparented to PID 1
-    while not (f1.exists() and f2.exists()):
-        time.sleep(0.01)
+    _wait_for(f1, f2)
     child_pids = _read_pids(f1, f2)
     assert all(_alive(p) for p in child_pids)    # precondition: children outlived the leader
 
@@ -177,16 +195,16 @@ def test_stop_path_reaps_whole_group(monkeypatch, tmp_path):
     """A2 (V2) — the kernel.stop() shape (terminate → grace → kill) tears down the whole tree, not
     just the leader. The leader waits on its children (never self-exits), so only a group signal can
     end them. On base (leader-only terminate/kill) both sleeps survive — RED."""
-    monkeypatch.setenv("PROCESS_LOG_DIR", str(tmp_path))
-    f1, f2 = tmp_path / "s1.pid", tmp_path / "s2.pid"
+    monkeypatch.setenv("PROCESS_LOG_DIR", str(tmp_path / "logs"))
+    drop = _drop_dir(tmp_path)
+    f1, f2 = drop / "s1.pid", drop / "s2.pid"
     backend = ProcessBackend()
     h = backend.start(
         "w-stopgrp",
         _sh(f"sleep 600 & echo $! > {f1}; sleep 600 & echo $! > {f2}; wait"),
         {},
     )
-    while not (f1.exists() and f2.exists()):
-        time.sleep(0.01)
+    _wait_for(f1, f2)
     child_pids = _read_pids(f1, f2)
     assert all(_alive(p) for p in child_pids)
 
@@ -225,3 +243,40 @@ def test_workload_env_still_layered_over_process_env(monkeypatch, tmp_path):
     h._impl.wait(timeout=10)
     assert backend.exit_code(h) == 0
     assert "from-spec" in (tmp_path / "w-env.log").read_text()
+
+
+# ── a root runtime never starts a root child (H6/H7 on Lite) ───────────────────────────────────────
+# What a real root runtime does is proven in test_isolation_root.py (run as root). Here the runtime
+# only BELIEVES it is root (geteuid patched): every isolation step that needs root then fails, and the
+# spawn must be refused — never degraded to a child that keeps the runtime's identity.
+
+def _as_root(monkeypatch, tmp_path):
+    import subprocess
+
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    monkeypatch.setenv("PROCESS_LOG_DIR", str(tmp_path / "logs"))
+    spawned: list = []
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: spawned.append(a))
+    return spawned
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="as real root these steps succeed (test_isolation_root.py)")
+@pytest.mark.parametrize("env", [
+    {},                                                         # a bot: its own uid and HOME
+    {"VEXA_WORKSPACE_MOUNT_TARGET": "/workspaces", "VEXA_OWNER": "17",
+     "VEXA_MOUNTS": '[{"slug": "s", "path": "/workspaces/17", "role": "private"}]'},
+    {"VEXA_WORKSPACE_MOUNT_TARGET": "/workspaces", "VEXA_OWNER": "../17",
+     "VEXA_MOUNTS": '[{"slug": "s", "path": "/workspaces/17", "role": "private"}]'},
+    {"VEXA_OWNER": "17", "VEXA_MOUNTS": '[{"slug": "s", "path": "/workspaces/17"}]'},
+])
+def test_a_root_runtime_refuses_a_child_it_cannot_isolate(monkeypatch, tmp_path, caplog, env):
+    from runtime_kernel.isolation import IsolationRefused
+
+    spawned = _as_root(monkeypatch, tmp_path)
+    backend = ProcessBackend(homes_root=str(tmp_path / "homes"))
+    with caplog.at_level(logging.ERROR, logger="runtime_kernel.process"):
+        with pytest.raises(IsolationRefused):
+            backend.start("w-refused", _py("print('ran')"), env)
+    assert spawned == []
+    assert "REFUSED" in caplog.text and "never starts a root child" in caplog.text
+    assert backend._uids._held == {}                            # nothing kept for a refused child

@@ -8,6 +8,7 @@ k8s uses native ``subPath`` + ``readOnly``. The whole-store bind is never emitte
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 
@@ -261,7 +262,10 @@ def test_k8s_start_overlays_runtime_process_scheduling_env(monkeypatch):
 def test_process_backend_reads_the_mount_set_without_binding(tmp_path):
     """The lite/process backend shares the host FS: it materializes NO binds but still resolves the
     mount set (POSIX isolation is its wall — see test_isolation.py). Non-root test run → the isolation
-    plan is unavailable and the spawn degrades loudly to shared-trust, which is exactly this path."""
+    plan is unavailable and the spawn degrades loudly to shared-trust, which is exactly this path.
+    Under a ROOT runtime the same spawn names no subject, so it is refused (test_isolation_root.py
+    covers the isolated spawn)."""
+    from runtime_kernel.isolation import IsolationRefused
     from runtime_kernel.process_backend import ProcessBackend
     mounts = [
         {"slug": "seed", "path": str(tmp_path / "u1"), "primary": True, "write": True},
@@ -269,6 +273,10 @@ def test_process_backend_reads_the_mount_set_without_binding(tmp_path):
     ]
     assert [m["slug"] for m in mount_set(_env(mounts))] == ["seed", "shared-x"]
     b = ProcessBackend()
+    if os.geteuid() == 0:
+        with pytest.raises(IsolationRefused):
+            b.start("rt-mnt", Runnable(command=["true"]), _env(mounts))
+        return
     h = b.start("rt-mnt", Runnable(command=["true"]), _env(mounts))
     try:
         assert h.id == "rt-mnt"
