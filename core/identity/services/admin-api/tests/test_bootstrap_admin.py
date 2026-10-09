@@ -136,11 +136,11 @@ def test_setup_settings_key(client):
 
 # ── no company-layer gate (founder ruling 2026-10-08) ──────────────────────────────────────────
 
-def test_the_global_setup_row_is_written_but_never_read(client):
-    """The key stays writable so an older writer does not 400, and nothing reads it: whatever it
-    says, the instance state is only whether an admin exists."""
-    client.put("/internal/settings/global_setup", headers=_internal(),
-               json={"state": "missing", "company": "Acme GmbH"})
+def test_global_setup_is_no_settings_key_and_the_state_is_only_the_admin(client):
+    """Nothing in the product writes or reads `global_setup` any more, so the settings door does
+    not know the key; the instance state is only whether an admin exists."""
+    assert client.put("/internal/settings/global_setup", headers=_internal(),
+                      json={"state": "missing", "company": "Acme GmbH"}).status_code == 404
     assert client.get("/internal/instance", headers=_internal()).json() == {"admin_exists": False}
     assert client.get("/admin/instance", headers=_admin()).json() == {"admin_exists": False}
     assert client.get("/admin/instance").status_code in (401, 403)

@@ -42,7 +42,10 @@ from . import person_settings as person_settings_mod
 from . import claim_code
 from . import signin_allow
 from . import signin_wire
+from . import platform_settings as platform_settings_mod
 from . import validate as validate_mod
+from .platform_settings import (MODELS_FIELDS, TRANSCRIPTION_FIELDS, apply_config_update,
+                                read_platform_setting, validate_config_fields)
 from .internal_tier import check_internal, check_internal_no_dev_bypass
 
 claim_log = logging.getLogger("admin_api.claim")
@@ -248,61 +251,6 @@ class CalendarPatch(BaseModel):
     model_config = {"extra": "forbid"}
 
 
-# ── model + transcription config (per-user prefs and the platform-wide defaults) ──
-# One vocabulary everywhere: a MODELS config is {mode, model, base_url, api_key}
-# (mode "subscription" = the deployment's brokered credential — the mounted Claude Code
-# subscription or a deployment API key; mode "custom" = a user/operator-supplied
-# Anthropic-/OpenAI-compatible endpoint + key, e.g. a LiteLLM/OpenRouter gateway in front of an
-# open-source model). A TRANSCRIPTION config is {url, token} — the STT service the bot invocation
-# rides. Per-user copies live in users.data["model_prefs"] / ["transcription_prefs"]; the
-# platform defaults live in platform_settings rows "models" / "transcription". Effective config
-# resolves FIELD-BY-FIELD user > platform; the process env stays the bottom fallback downstream
-# (dispatch/bot_spawn only override what is set here).
-MODEL_MODES = ("subscription", "custom")
-# extra_body: server-specific request fields the OpenAI dialect cannot express, as a JSON string.
-# Load-bearing for self-hosted vLLM/Qwen, which returns NO valid JSON unless thinking is disabled
-# via {"chat_template_kwargs": {"enable_thinking": false}} — without this field such an endpoint
-# could only be configured deployment-wide, never through BYOT.
-# effort: the claude-code reasoning-effort pin (low|medium|high|xhigh) — see ModelPrefsUpdate.
-# runner: WHICH HARNESS runs this subject's workspace turns (PRD decision 37). Stored here as an
-# opaque slug and never validated against a list — agent-api's `llm/registry.HARNESS_RUNNERS`
-# is the one authority on what a runner name means, and it drops an unknown one back to the
-# deployment default the way a non-allowlisted model is dropped. A second copy of that
-# vocabulary in this service would be a second thing to keep in step, and the copy that goes
-# stale is always the one furthest from the code that uses it.
-# The copilot's second model dial is deliberately absent — it went with the in-product
-# inference pipeline (PRD decision 34).
-_MODELS_FIELDS = ("mode", "model", "base_url", "api_key", "extra_body", "effort", "runner")
-_TRANSCRIPTION_FIELDS = ("url", "token")
-# "setup" tracks the admin first-run wizard: per-step state ("done" / "skipped") + overall
-# completion — the terminal re-surfaces the wizard until it reads completed. Plain strings,
-# no secrets, admin-gated like the other keys.
-# "global" is the HAND-OFF marker: the admin has left the wizard for the setup chat, and a reload
-# must resume there rather than throwing them back to step 1. It was missing from this tuple, and
-# the omission cost a live blocker on 2026-09-02 — see the write guard below for the whole story.
-_SETUP_FIELDS = ("models", "transcription", "completed", "global")
-# "diagnostics" carries the operator kill switches for capture-side telemetry. Today one field:
-# capture_signal — whether a spawned bot tees its raw captured-signal.v1 stream to durable storage
-# (the offline-replay fixture tape). It is the ONLY control-plane knob on fixture collection, and it
-# is a KILL switch, not an enable switch: absence means ON everywhere (see _resolve_capture_signal).
-# Written as a STRING like every other settings field ("false" to disable, "" to clear back to the
-# default) because _validate_config_fields' one rulebook is string-only.
-_DIAGNOSTICS_FIELDS = ("capture_signal",)
-# "global_setup" was the company-layer instance gate (founder 2026-09-02). Founder ruling
-# 2026-10-08 removed that gate ("let's remove global setup at all so that there is no need to setup
-# global at all - let it be empty with no data - it's fine"); the key stays writable so older
-# writers and existing rows do not 400, and NOTHING READS IT.
-_GLOBAL_SETUP_FIELDS = ("state", "company", "completed_at")
-# "signin" is the admin-edited half of the sign-in allow-list (`allow`: exact addresses and
-# @domain entries). The other half is the deployment's VEXA_SIGNIN_ALLOW; the effective list is the
-# union, and the one reader of it is POST /internal/signin-admission. Validated by its own rulebook
-# (app/signin_allow.py), not _validate_config_fields: an entry is not a free string, and a list of
-# colleagues outgrows the 2048-character bound the other fields carry.
-SETTING_KEYS = {"models": _MODELS_FIELDS, "transcription": _TRANSCRIPTION_FIELDS,
-                "setup": _SETUP_FIELDS, "diagnostics": _DIAGNOSTICS_FIELDS,
-                "global_setup": _GLOBAL_SETUP_FIELDS,
-                signin_allow.SETTING_KEY: signin_allow.SETTING_FIELDS}
-
 # ── the sign-in admission wire, sealed as core/identity/contracts/signin.v1 ─────────────────────────
 # The reason vocabularies are GENERATED from that schema (`signin_wire.py`, the terminal's
 # `signinWire.ts`), so a reason this service returns is one the terminal knows, and one the schema
@@ -356,7 +304,7 @@ class ModelPrefsUpdate(BaseModel):
     model: Optional[str] = None
     base_url: Optional[str] = None
     api_key: Optional[str] = None
-    # extra_body was already in `_MODELS_FIELDS` — so the platform setting carried it and the
+    # extra_body was already in `MODELS_FIELDS` — so the platform setting carried it and the
     # effective-config resolution returned it — but it was NOT in this model, so no per-USER
     # write could ever set it. A field that resolves and cannot be written is a field only the
     # deployment has, silently. It is load-bearing for exactly the case per-user config exists
@@ -378,43 +326,6 @@ def _mask_secret(secret: Optional[str]) -> Optional[str]:
     if not secret:
         return None
     return "********" + (secret[-4:] if len(secret) > 8 else "")
-
-
-def _validate_config_fields(update: dict, *, kind: str) -> dict:
-    """Shared field validation for both the per-user prefs and the platform settings writers
-    (one rulebook, whichever tier writes). Returns the cleaned update dict."""
-    from urllib.parse import urlparse
-
-    cleaned: dict = {}
-    for field, raw in update.items():
-        value = (raw or "").strip() if isinstance(raw, str) else raw
-        if value in (None, ""):
-            cleaned[field] = ""  # explicit clear
-            continue
-        if not isinstance(value, str) or len(value) > 2048:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
-                                detail=f"{field} must be a string under 2048 chars")
-        if field == "mode" and value not in MODEL_MODES:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
-                                detail=f"mode must be one of {sorted(MODEL_MODES)}")
-        if field in ("base_url", "url"):
-            parsed = urlparse(value)
-            if parsed.scheme not in ("http", "https") or not parsed.hostname:
-                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
-                                    detail=f"{field} must be an http(s) URL")
-        cleaned[field] = value
-    return cleaned
-
-
-def _apply_config_update(stored: dict, cleaned: dict) -> dict:
-    """Overlay a cleaned partial update onto a stored config: set non-empty, drop cleared."""
-    out = dict(stored or {})
-    for field, value in cleaned.items():
-        if value == "":
-            out.pop(field, None)
-        else:
-            out[field] = value
-    return out
 
 
 def _resolve_effective(user_cfg: dict, platform_cfg: dict, fields: tuple) -> dict:
@@ -986,9 +897,9 @@ def create_app() -> FastAPI:
     async def _put_user_prefs(update_fields: dict, data_key: str, user: User,
                               db: AsyncSession) -> dict:
         from sqlalchemy.orm import attributes
-        cleaned = _validate_config_fields(update_fields, kind=data_key)
+        cleaned = validate_config_fields(update_fields)
         data = dict(user.data or {})
-        data[data_key] = _apply_config_update(data.get(data_key) or {}, cleaned)
+        data[data_key] = apply_config_update(data.get(data_key) or {}, cleaned)
         if not data[data_key]:
             data.pop(data_key, None)  # fully cleared → back to platform/env defaults
         user.data = data
@@ -1088,7 +999,8 @@ def create_app() -> FastAPI:
         env_valid, _ = signin_allow.env_entries()
         return signin_allow.effective(
             env_valid,
-            (await _platform_setting(signin_allow.SETTING_KEY, db)).get(signin_allow.SETTING_FIELD, ""))
+            (await read_platform_setting(signin_allow.SETTING_KEY, db)).get(
+                signin_allow.SETTING_FIELD, ""))
 
     @app.get("/internal/instance", include_in_schema=False, response_model=InstanceState)
     async def instance_status(request: Request, db: AsyncSession = Depends(get_db)):
@@ -1342,14 +1254,6 @@ def create_app() -> FastAPI:
             configs.extend(internal_connections(data, u.id))
         return {"configs": configs}
 
-    # --- internal tier: per-user spawn context — the auto-join sweep's stand-in for the headers
-    #     the gateway injects on POST /bots (X-User-Limits + webhook config from /internal/validate).
-    #     Same shape /internal/validate returns for those fields, keyed by user id. ---
-    async def _platform_setting(key: str, db: AsyncSession) -> dict:
-        row = await db.get(PlatformSetting, key)
-        return dict(row.value) if row is not None and isinstance(row.value, dict) else {}
-
-
     @app.get("/internal/users/{user_id}/settings", include_in_schema=False)
     async def get_user_settings_internal(user_id: str, request: Request,
                                          db: AsyncSession = Depends(get_db)):
@@ -1458,6 +1362,9 @@ def create_app() -> FastAPI:
         }
 
 
+    # --- internal tier: per-user spawn context — the auto-join sweep's stand-in for the headers
+    #     the gateway injects on POST /bots (X-User-Limits + webhook config from /internal/validate).
+    #     Same shape /internal/validate returns for those fields, keyed by user id. ---
     @app.get("/internal/users/{user_id}/bot-context", include_in_schema=False)
     async def get_bot_context(user_id: str, request: Request, db: AsyncSession = Depends(get_db)):
         check_internal(request)
@@ -1472,7 +1379,7 @@ def create_app() -> FastAPI:
         # unreachable identity, and bot_spawn must default ON in BOTH cases, so it is stated here
         # rather than inferred there.
         resp["capture_signal"] = _resolve_capture_signal(
-            data, await _platform_setting("diagnostics", db)
+            data, await read_platform_setting("diagnostics", db)
         )
         if data.get("webhook_url"):
             resp["webhook_url"] = data["webhook_url"]
@@ -1484,21 +1391,21 @@ def create_app() -> FastAPI:
         # its env-derived TRANSCRIPTION_SERVICE_URL/TOKEN with this when present. The token crosses
         # ONLY this internal hop.
         user_transcription = data.get("transcription_prefs") or {}
-        platform_transcription = await _platform_setting("transcription", db)
+        platform_transcription = await read_platform_setting("transcription", db)
         if user_transcription.get("url"):
             # Selecting a customer endpoint changes the credential owner too. Never fill a
             # missing customer token/model from the platform record: that would disclose a Vexa
             # provider credential to an arbitrary customer-controlled host.
             transcription = {
                 key: user_transcription[key]
-                for key in _TRANSCRIPTION_FIELDS
+                for key in TRANSCRIPTION_FIELDS
                 if user_transcription.get(key) not in (None, "")
             }
         else:
             transcription = _resolve_effective(
                 user_transcription,
                 platform_transcription,
-                _TRANSCRIPTION_FIELDS,
+                TRANSCRIPTION_FIELDS,
             )
         if transcription:
             # Ownership follows the URL that will actually serve this spawn. This non-secret
@@ -1510,72 +1417,7 @@ def create_app() -> FastAPI:
             resp["transcription"] = transcription
         return resp
 
-    # --- internal tier: platform-wide settings (the DB layer under per-user prefs) — written by
-    #     the terminal's ADMIN-GATED settings editor over this edge, read by agent-api/meeting-api.
-    @app.get("/internal/settings/{key}", include_in_schema=False)
-    async def get_platform_setting(key: str, request: Request, db: AsyncSession = Depends(get_db)):
-        check_internal(request)
-        if key not in SETTING_KEYS:
-            raise HTTPException(status.HTTP_404_NOT_FOUND,
-                                detail=f"Unknown setting key. Known: {sorted(SETTING_KEYS)}")
-        body = {"key": key, "value": await _platform_setting(key, db)}
-        if key == signin_allow.SETTING_KEY:
-            # The deployment's half of the allow-list, read-only here, so the admin editing the
-            # settings half sees the whole effective list — and any env entry that can never match
-            # because it is malformed, rather than finding out from a refused colleague.
-            env_valid, env_problems = signin_allow.env_entries()
-            body["env"] = {signin_allow.SETTING_FIELD: ", ".join(env_valid)}
-            body["env_problems"] = env_problems
-        return body
-
-    @app.put("/internal/settings/{key}", include_in_schema=False)
-    async def put_platform_setting(key: str, payload: dict, request: Request,
-                                   db: AsyncSession = Depends(get_db)):
-        """Partial update, same field rules + clear semantics as the user-tier writers."""
-        check_internal(request)
-        fields = SETTING_KEYS.get(key)
-        if fields is None:
-            raise HTTPException(status.HTTP_404_NOT_FOUND,
-                                detail=f"Unknown setting key. Known: {sorted(SETTING_KEYS)}")
-        update = {f: payload.get(f) for f in fields if f in payload}
-        # A WRITE THAT RECOGNISED NOTHING IS AN ERROR, not a no-op with a 200 on it.
-        #
-        # This filter silently drops any field not in `fields`. On 2026-09-02 the first-run wizard
-        # sent {"global": "handoff"} to record that the admin had left the wizard for the setup
-        # chat; "global" was not in _SETUP_FIELDS, so the write stored NOTHING and answered 200.
-        # The client had no way to know. On the next load the marker was absent, the wizard decided
-        # it was still at step 1, rendered its full-screen overlay INSTEAD of the workbench — so the
-        # chat it had just handed off to could never mount — and the admin was returned to the
-        # beginning. From the outside the button "did nothing"; underneath, every layer reported
-        # success. It cost the founder a live rehearsal.
-        #
-        # The lesson generalises past the missing tuple entry: an API that accepts a write, changes
-        # nothing, and says 200 is indistinguishable from one that worked, and no amount of care at
-        # the caller can detect it. So refuse. A partially-recognised write still succeeds (a client
-        # sending a known field plus noise is not the failure this catches); only a write where
-        # NOTHING was understood is refused, and the message names the keys and the vocabulary.
-        if payload and not update:
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST,
-                detail=(f"none of {sorted(payload)} is a field of '{key}'. "
-                        f"Known fields: {list(fields)}"))
-        if key == signin_allow.SETTING_KEY:
-            try:
-                cleaned = {f: signin_allow.normalize_setting(v) for f, v in update.items()}
-            except signin_allow.InvalidAllowList as bad:
-                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
-                                    detail="; ".join(bad.problems))
-        else:
-            cleaned = _validate_config_fields(update, kind=key)
-        row = await db.get(PlatformSetting, key)
-        merged = _apply_config_update(dict(row.value) if row is not None else {}, cleaned)
-        if row is None:
-            row = PlatformSetting(key=key, value=merged)
-        else:
-            row.value = merged
-        db.add(row)
-        await db.commit()
-        return {"key": key, "value": merged}
+    app.include_router(platform_settings_mod.router)  # GET/PUT /internal/settings/{key}
 
     # --- internal tier: the dispatch-time model config — agent-api resolves the subject's
     #     effective model setup (user pref > platform setting) in ONE call. Secrets (api_key)
@@ -1587,8 +1429,8 @@ def create_app() -> FastAPI:
         data = user.data if isinstance(user.data, dict) else {}
         return {"models": _resolve_effective(
             data.get("model_prefs") or {},
-            await _platform_setting("models", db),
-            _MODELS_FIELDS,
+            await read_platform_setting("models", db),
+            MODELS_FIELDS,
         )}
 
     @app.get("/")
