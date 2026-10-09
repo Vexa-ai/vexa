@@ -1,0 +1,2 @@
+# The hosted dashboard (services/dashboard), to be retired: out of the per-dir gates, like the
+# vendored dashboard in ADR-0007. See scripts/gates.mjs walkDirs().
