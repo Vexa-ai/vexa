@@ -30,14 +30,16 @@
 //
 //     Each marker starts its own line, outside code: that is where GitHub's Markdown hides it. A
 //     marker in inline code, a code block, a quote or mid-sentence is shown as text or quotes
-//     someone else, and does not count. `verdict=waived` also clears the row, but only when the same
+//     someone else, and does not count; code blocks are read over-inclusively, so a misreading can
+//     only fail a row closed (hiddenBlocks). `verdict=waived` also clears the row, but only when the same
 //     marker carries `waived-by=<login>` naming an account with write or admin; the card shows the
 //     waiver as recorded by the commenter and names that account. Bound to the head: a marker for any
 //     other sha does not count (a new push needs a new pass), and the row says which sha the pass on
 //     record was for. When several maintainer markers name the head, the newest wins, so a later
 //     `verdict=fail` supersedes an earlier pass. Only issue comments are read (not review bodies),
 //     the newest COMMENT_PAGES × 100 of them: on a longer thread a pass older than that window does
-//     not count and must be re-posted. The card's own sticky comment never counts.
+//     not count and must be re-posted. The card's own sticky comment, a bot's, never counts; it is
+//     skipped by its author, so a maintainer's verdict that mentions the card marker still counts.
 //
 //     SECURITY FINDINGS STAY PRIVATE. The marker and its comment carry only the verdict, a finding
 //     count (`findings=<n>`, optional) and the sha — never a finding, a path, a payload or an
@@ -284,30 +286,73 @@ function parseMarkers(text) {
   return out;
 }
 
+// Where a line's content starts, in columns as GitHub counts them (a tab advances to the next
+// multiple of 4), past any leading whitespace, list markers and quote markers; `quoted` says a `>`
+// was among them.
+function lineLead(line) {
+  let col = 0, i = 0, quoted = false;
+  for (;;) {
+    const ch = line[i];
+    if (ch === " ") { col++; i++; }
+    else if (ch === "\t") { col += 4 - (col % 4); i++; }
+    else if (ch === ">") { quoted = true; col++; i++; }
+    else {
+      const m = /^(?:[-*+]|\d{1,9}[.)])(?=[ \t]|$)/.exec(line.slice(i));
+      if (!m) break;
+      col += m[0].length; i += m[0].length;
+    }
+  }
+  return { col, quoted, rest: line.slice(i) };
+}
+
+const indentOf = (line) => lineLead(line.replace(/^([ \t]*).*/, "$1")).col;
+
 // The parts of a comment where GitHub's Markdown hides an HTML comment: HTML blocks, i.e. runs of
 // lines that open with `<!--` at the start of a line (at most three spaces in) and close at the
-// first line holding `-->`, outside fenced code. Block structure is read before inline code, so a
-// line that starts with `<!--` is never inside a code span. Everything else is excluded: inline code
-// and fenced blocks show the marker as text, a line indented four spaces is code or nested
-// content, and a quoted or list-marker line carries someone else's words or the marker as text. A
-// marker misread here fails its row closed, never open.
+// first line holding `-->`, outside code. Block structure is read before inline code, so a line
+// that starts with `<!--` is never inside a code span; inline code, quoted lines, list-marker lines
+// and lines indented four spaces never start a hidden block here.
+//
+// Code blocks are read OVER-INCLUSIVELY, so a misreading can only fail a row closed, never open:
+//   • any line whose content (past indentation, list and quote markers) starts with ``` or ~~~
+//     opens a code block, whatever its indentation;
+//   • a block opened inside a quote ends where the quote ends — the first line without a `>`
+//     (a code block cannot continue lazily) — and that line is read afresh;
+//   • any other block ends only at a closing fence that closes it under every reading of the
+//     list it may sit in: the opener's own column, or, for an opener within three spaces of the
+//     margin, any column from the opener's up to three;
+//   • a line less indented than such an opener may end the list item, and the code block with it,
+//     after which the card cannot tell code from text: nothing after it counts.
 function hiddenBlocks(body) {
   const blocks = [];
-  let fence = null, html = null;
+  let html = null; //    lines of an HTML comment block still open
+  let fence = null; //   { ch, len, col } of an unquoted code block that may still be open
+  let quoted = false; // a code block opened inside a quote
   for (const line of String(body || "").replace(/\r\n?/g, "\n").split("\n")) {
     if (html) {
       html.push(line);
       if (line.includes("-->")) { blocks.push(html.join("\n")); html = null; }
       continue;
     }
+    if (quoted) {
+      if (lineLead(line).quoted) continue;
+      quoted = false; // the quote, and its code block, ended: read this line afresh
+    }
     if (fence) {
-      const close = line.match(/^ {0,3}(`{3,}|~{3,})[ \t]*$/);
-      if (close && close[1][0] === fence[0] && close[1].length >= fence.length) fence = null;
+      if (!line.trim()) continue;
+      const col = indentOf(line);
+      const close = /^(`{3,}|~{3,})[ \t]*$/.exec(line.trimStart());
+      if (close && close[1][0] === fence.ch && close[1].length >= fence.len && col >= fence.col && col <= Math.max(3, fence.col)) fence = null;
+      else if (col < fence.col) break; // the block's end cannot be placed: nothing after it counts
       continue;
     }
-    // a fence may open on a list item or in a quote; its lines then never start with `<!--`
-    const open = line.match(/^ {0,3}(?:(?:[-*+]|\d{1,9}[.)])[ \t]+|>[ \t]?)*(`{3,}|~{3,})(.*)$/);
-    if (open && !(open[1][0] === "`" && open[2].includes("`"))) { fence = open[1]; continue; }
+    const lead = lineLead(line);
+    const open = /^(`{3,}|~{3,})/.exec(lead.rest);
+    if (open) {
+      if (lead.quoted) quoted = true;
+      else fence = { ch: open[1][0], len: open[1].length, col: lead.col };
+      continue;
+    }
     if (/^ {0,3}<!--/.test(line)) {
       if (line.includes("-->")) blocks.push(line);
       else html = [line];
@@ -344,8 +389,11 @@ export function passRow(kind, comments, { head, isMaintainer, truncated = false 
   const seen = []; // { by, sha, verdict, fields }
   const misplaced = []; // who wrote a marker of this kind for the head outside the comment's normal text
   for (const c of comments || []) {
+    // The card's own sticky comment is skipped by its author, a bot (as merge-card-comment.yml
+    // finds it), never by what a comment says: a maintainer's verdict that quotes the card marker
+    // still counts. No bot or app holds a pass anyway.
+    if (c?.user?.type === "Bot") continue;
     const body = c?.body || "";
-    if (body.includes(CARD_MARKER)) continue; // the card quoting itself is never a pass
     const by = c?.user?.login;
     if (!by) continue;
     const counted = passMarkers(body).filter((mk) => mk.kind === kind);
@@ -375,7 +423,7 @@ export function passRow(kind, comments, { head, isMaintainer, truncated = false 
 
   const placed = [...new Set(misplaced.filter((by) => isMaintainer(by)).map((by) => "@" + by))];
   if (placed.length)
-    return { ok: false, state: "invalid", why: `${placed.join(", ")} wrote a ${kind} marker for head ${short(head)} inside code, a quote or a sentence, where it does not count — post it at the start of its own line, outside code` };
+    return { ok: false, state: "invalid", why: `${placed.join(", ")} wrote a ${kind} marker for head ${short(head)} where it does not count (in code, a quote or a sentence, or after a code block whose end the card cannot place) — post it at the start of its own line, outside code` };
 
   // Only the newest window of a long thread was read: an older pass may exist but cannot be
   // verified, so the row fails closed. A re-posted pass lands in the window.
