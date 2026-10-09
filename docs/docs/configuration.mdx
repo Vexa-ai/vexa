@@ -161,7 +161,8 @@ which is why the runtime variable is the better knob. Direct `joinMeeting` calle
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `DB_NAME` / `DB_USER` / `DB_PASSWORD` | `vexa` / `postgres` / `postgres` | Postgres credentials (metadata). |
+| `DB_NAME` / `DB_USER` | `vexa` / `postgres` | Postgres database and user (metadata). |
+| `DB_PASSWORD` | none on compose and Lite | The Postgres password. Compose's `postgres` service and the Lite entrypoint refuse an unset value or one published in this repository (`postgres` included); `make up` / `make all` / `make lite` mint one into `.env`. The Helm chart still falls back to `postgres` when `database.password` is unset, so set it there. |
 | `POSTGRES_HOST_PORT` | `5458` | Host port mapped to Postgres. |
 | `DB_POOL_SIZE` | `5` | SQLAlchemy async-engine `pool_size` — persistent connections **per pod** — read by admin-api and meeting-api and applied to each service's engine. |
 | `DB_MAX_OVERFLOW` | `10` | SQLAlchemy async-engine `max_overflow` — burst connections above `pool_size`, per pod. Ceiling per pod is `pool_size + max_overflow` (default `15`). |

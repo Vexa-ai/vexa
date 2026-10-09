@@ -87,6 +87,11 @@ Lite reads the repo-root `.env` (via `docker run --env-file`) plus the flags the
 explicitly. Every key in the [configuration reference](/configuration) applies; mind its warning
 about inline `# comments` in `.env` values — it exists because of Lite's `--env-file` semantics.
 
+The database password has no default either. `make lite` mints `DB_PASSWORD` into `.env` and sets it
+on the bundled postgres sidecar on every run. **If you run the Lite image yourself, pass
+`DB_PASSWORD`**: the entrypoint refuses to start on an unset value or one published in this
+repository (`postgres` included).
+
 The terminal's signing secret has no default. Leave `NEXTAUTH_SECRET` unset and the container
 mints one on first boot and keeps it in `/var/lib/vexa/state` (the `vexa-lite-state` volume under
 `make lite`); or set it in `.env` to a value of at least 32 bytes (`openssl rand -hex 32`). The
