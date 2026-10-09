@@ -1,0 +1,29 @@
+{
+  "why": "one route, one owner: the edge composes and cannot arbitrate",
+  "manifest": {
+    "contract": "routes.v1",
+    "domain": "agent",
+    "owner": "core/agent",
+    "edge": "gateway",
+    "forward": {
+      "edge_prefix": "/agent/",
+      "upstream_prefix": "/api/"
+    },
+    "routes": [
+      {
+        "method": "GET",
+        "path": "/agent/x",
+        "scopes": [
+          "tx"
+        ]
+      },
+      {
+        "method": "GET",
+        "path": "/agent/x",
+        "scopes": [
+          "bot"
+        ]
+      }
+    ]
+  }
+}

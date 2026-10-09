@@ -41,6 +41,7 @@ system meetings  # capture → transcribe → record; owns the raw transcript
   module zoom-sdk-capture
   contract sdk-capture.v1
   data-asset acl-bots-index [writers: meeting-api]
+  contract mcp.tools.v1
 
 system agent  # the execution domain: a trigger becomes one governed agent turn over a workspace.v1 git repo; owns no transcript
   service agent-api
@@ -72,6 +73,7 @@ system gateway-system  # the one public edge (api.v1, ws.v1)
   contract logevent.v1
   contract gateway-identity.v1
   contract ws.v1
+  contract routes.v1
 
 system identity  # access + audit; owns the durable DB
   service admin-api
@@ -195,6 +197,9 @@ edges:
   agent-api -write-> routine-state  # routine approvals and the re-signing marker
   agent-api -req-> flows-api  # the publish edge: POST /events (desk.unscaffolded, claim.proposed) and POST /friction with the operator key (X-Flows-Operator-Key); GET /flows/pages to land the pages of authored flows in _global/flows/
   agent-api -req-> gateway  # the transcription watcher, with VEXA_BOT_API_KEY: GET /meetings to resolve a meeting row to its native id, and POST /meetings/{platform}/{native}/docs to link the meeting's own page on session end
+  mcp -req-> flows-api  # boot assembly: GET /.well-known/mcp-tools.json + /openapi.json — the flows domain's tools join the one MCP surface; its operator-keyed tools need the MCP to hold the key its admin_auth names
+  mcp -req-> meeting-api  # boot assembly: GET /.well-known/mcp-tools.json + /openapi.json on the meetings domain's door; a 404 is a deployed domain that publishes no manifest, and contributes no tools
+  mcp -req-> admin-api  # boot assembly: GET /.well-known/mcp-tools.json + /openapi.json on identity's door, always configured; a 404 is a domain that publishes no manifest, and contributes no tools
   bot, agent-worker deployed-in runtime
   gateway, meeting-api, agent-api, admin-api, runtime, redis, postgres, object-store, transcription deployed-in deploy
   flows-api, flows-worker deployed-in deploy

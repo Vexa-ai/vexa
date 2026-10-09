@@ -1,0 +1,21 @@
+{
+  "why": "a verb outside the edge prefix maps onto no route of the domain",
+  "manifest": {
+    "contract": "routes.v1",
+    "domain": "agent",
+    "owner": "core/agent",
+    "edge": "gateway",
+    "forward": {
+      "edge_prefix": "/agent/",
+      "upstream_prefix": "/api/"
+    },
+    "routes": [],
+    "verbs": [
+      {
+        "method": "DELETE",
+        "path": "/api/workspace/x",
+        "person": true
+      }
+    ]
+  }
+}

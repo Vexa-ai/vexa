@@ -1,0 +1,22 @@
+{
+  "why": "a forwarded row's parameters are whole {name} segments; a converter is a route the edge would have to know how to serve",
+  "manifest": {
+    "contract": "routes.v1",
+    "domain": "agent",
+    "owner": "core/agent",
+    "edge": "gateway",
+    "forward": {
+      "edge_prefix": "/agent/",
+      "upstream_prefix": "/api/"
+    },
+    "routes": [
+      {
+        "method": "GET",
+        "path": "/agent/files/{rest:path}/meta",
+        "scopes": [
+          "tx"
+        ]
+      }
+    ]
+  }
+}

@@ -1640,6 +1640,30 @@
      ]
     }
    }
+  },
+  {
+   "unique-id": "routes.v1",
+   "node-type": "contract",
+   "name": "routes.v1",
+   "description": "routes.v1 — sealed contract (gateway): each domain's routes.v1.json, the routes it asks the edge to serve and each row's scopes and policy (delegation, mcp_reentry, stream, forward), and the verbs rows behind a forward that the domain's own service reads (person: agent-api's route_policy); the gateway assembles its table from them, and validate.mjs holds every manifest in the repo",
+   "metadata": [
+    {
+     "path": "core/gateway/contracts/routes.v1",
+     "domain": "gateway"
+    }
+   ]
+  },
+  {
+   "unique-id": "mcp.tools.v1",
+   "node-type": "contract",
+   "name": "mcp.tools.v1",
+   "description": "mcp.tools.v1 — sealed contract (meetings): each domain's MCP tool manifest, served at /.well-known/mcp-tools.json or mounted by a private deployment; who may call each tool, which credential the edge presents to its door, and its route",
+   "metadata": [
+    {
+     "path": "core/meetings/contracts/mcp.tools.v1",
+     "domain": "meetings"
+    }
+   ]
   }
  ],
  "relationships": [
@@ -1685,7 +1709,8 @@
       "api.v1",
       "logevent.v1",
       "gateway-identity.v1",
-      "ws.v1"
+      "ws.v1",
+      "routes.v1"
      ]
     }
    }
@@ -1750,7 +1775,8 @@
       "sdk-join.v1",
       "zoom-sdk-capture",
       "sdk-capture.v1",
-      "acl-bots-index"
+      "acl-bots-index",
+      "mcp.tools.v1"
      ]
     }
    }
@@ -3021,7 +3047,13 @@
     }
    },
    "description": "boot assembly: GET /.well-known/mcp-tools.json + /openapi.json \u2014 the agent domain's tools join the one MCP surface",
-   "protocol": "HTTP"
+   "protocol": "HTTP",
+   "metadata": [
+    {
+     "access": "req",
+     "contract": "mcp.tools.v1"
+    }
+   ]
   },
   {
    "unique-id": "aa-ma",
@@ -3398,6 +3430,72 @@
     {
      "access": "req",
      "contract": "api.v1"
+    }
+   ]
+  },
+  {
+   "unique-id": "mcp-flows-discover",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "mcp"
+     },
+     "destination": {
+      "node": "flows-api",
+      "interface": "flows-http"
+     }
+    }
+   },
+   "description": "boot assembly: GET /.well-known/mcp-tools.json + /openapi.json — the flows domain's tools join the one MCP surface; its operator-keyed tools need the MCP to hold the key its admin_auth names",
+   "protocol": "HTTP",
+   "metadata": [
+    {
+     "access": "req",
+     "contract": "mcp.tools.v1"
+    }
+   ]
+  },
+  {
+   "unique-id": "mcp-ma-discover",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "mcp"
+     },
+     "destination": {
+      "node": "meeting-api",
+      "interface": "meeting-api-rest"
+     }
+    }
+   },
+   "description": "boot assembly: GET /.well-known/mcp-tools.json + /openapi.json on the meetings domain's door; a 404 is a deployed domain that publishes no manifest, and contributes no tools",
+   "protocol": "HTTP",
+   "metadata": [
+    {
+     "access": "req",
+     "contract": "mcp.tools.v1"
+    }
+   ]
+  },
+  {
+   "unique-id": "mcp-admin-discover",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "mcp"
+     },
+     "destination": {
+      "node": "admin-api",
+      "interface": "admin-api-rest"
+     }
+    }
+   },
+   "description": "boot assembly: GET /.well-known/mcp-tools.json + /openapi.json on identity's door, always configured; a 404 is a domain that publishes no manifest, and contributes no tools",
+   "protocol": "HTTP",
+   "metadata": [
+    {
+     "access": "req",
+     "contract": "mcp.tools.v1"
     }
    ]
   }

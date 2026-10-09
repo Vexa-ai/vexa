@@ -1,0 +1,22 @@
+{
+  "contract": "mcp.tools.v1",
+  "domain": "rehearse",
+  "source": "mounted",
+  "depends_on": [
+    "identity"
+  ],
+  "composes": true,
+  "tools": [
+    {
+      "name": "rehearse_run",
+      "identity": "user",
+      "auth": "none",
+      "requires": [
+        "identity",
+        "meetings",
+        "agent"
+      ],
+      "route": null
+    }
+  ]
+}

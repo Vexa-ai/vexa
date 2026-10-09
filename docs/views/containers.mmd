@@ -84,3 +84,6 @@ flowchart LR
   claude_plugin -->|"HTTPS"| gateway
   agent_api -->|"HTTP"| flows_api
   agent_api -->|"HTTPS"| gateway
+  mcp -->|"HTTP"| flows_api
+  mcp -->|"HTTP"| meeting_api
+  mcp -->|"HTTP"| admin_api

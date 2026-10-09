@@ -1,0 +1,12 @@
+{
+  "why": "membership is closed: a manifest for a domain the assembler has never heard of is refused",
+  "manifest": {
+    "contract": "mcp.tools.v1",
+    "domain": "crm",
+    "source": "oss",
+    "depends_on": [
+      "identity"
+    ],
+    "base_url_env": "AGENT_API_URL"
+  }
+}

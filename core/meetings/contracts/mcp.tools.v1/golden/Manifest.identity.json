@@ -1,0 +1,28 @@
+{
+  "contract": "mcp.tools.v1",
+  "domain": "identity",
+  "source": "oss",
+  "depends_on": [],
+  "base_url_env": "ADMIN_API_URL",
+  "entitlement": {
+    "route": {
+      "method": "GET",
+      "path": "/internal/entitlement"
+    },
+    "answers": "may this person act"
+  },
+  "tools": [
+    {
+      "name": "whoami",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/auth/me"
+      }
+    }
+  ]
+}

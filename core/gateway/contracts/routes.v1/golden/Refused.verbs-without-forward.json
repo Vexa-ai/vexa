@@ -1,0 +1,17 @@
+{
+  "why": "verbs map onto the domain's routes through its forward; without one they map onto nothing",
+  "manifest": {
+    "contract": "routes.v1",
+    "domain": "meetings",
+    "owner": "core/meetings",
+    "edge": "gateway",
+    "routes": [],
+    "verbs": [
+      {
+        "method": "DELETE",
+        "path": "/meetings/x",
+        "person": true
+      }
+    ]
+  }
+}

@@ -1295,6 +1295,174 @@
       ]
     },
     {
+      "id": "routes-scopes",
+      "fact": "the key scopes a routes.v1 row may name",
+      "kind": "set",
+      "enforced": true,
+      "canonical": "core/gateway/contracts/routes.v1/routes.schema.json — Route.scopes items",
+      "how_to_agree": "a new scope is a routes.v1 change and a loader change, in one change",
+      "why": "routes.v1 is the sealed statement of what a manifest may say; routes_manifest.py is what the gateway refuses at boot. A vocabulary the two spell differently is a manifest the gate passes and the edge refuses, or the reverse (architecture pass 4, N50).",
+      "sites": [
+        {
+          "path": "core/gateway/contracts/routes.v1/routes.schema.json",
+          "pattern": "\"scopes\":\\s*\\{[^}]*?\"enum\":\\s*\\[([^\\]]*)\\]"
+        },
+        {
+          "path": "core/gateway/services/gateway/src/gateway/routes_manifest.py",
+          "pattern": "^SCOPES = frozenset\\(\\{([^}]*)\\}\\)",
+          "flags": "m"
+        }
+      ]
+    },
+    {
+      "id": "routes-methods",
+      "fact": "the HTTP methods a routes.v1 row may declare",
+      "kind": "set",
+      "enforced": true,
+      "canonical": "core/gateway/contracts/routes.v1/routes.schema.json — Route.method",
+      "how_to_agree": "change the schema and the loader together",
+      "why": "routes.v1 is the sealed statement of what a manifest may say; routes_manifest.py is what the gateway refuses at boot. A vocabulary the two spell differently is a manifest the gate passes and the edge refuses, or the reverse (architecture pass 4, N50).",
+      "sites": [
+        {
+          "path": "core/gateway/contracts/routes.v1/routes.schema.json",
+          "pattern": "\"Route\":[\\s\\S]*?\"method\":\\s*\\{\\s*\"enum\":\\s*\\[([^\\]]*)\\]"
+        },
+        {
+          "path": "core/gateway/services/gateway/src/gateway/routes_manifest.py",
+          "pattern": "^METHODS = frozenset\\(\\{([^}]*)\\}\\)",
+          "flags": "m"
+        }
+      ]
+    },
+    {
+      "id": "routes-verb-methods",
+      "fact": "the HTTP methods a routes.v1 `verbs` row may declare",
+      "kind": "set",
+      "enforced": true,
+      "canonical": "core/gateway/contracts/routes.v1/routes.schema.json — Verb.method",
+      "how_to_agree": "change the schema and agent-api's route_policy.py together",
+      "why": "routes.v1 is the sealed statement of what a verbs row may say; agent-api's route_policy.py is what refuses it at boot. A method one side accepts and the other refuses is a person-only verb that either never boots or is never protected (architecture pass 4, N50).",
+      "sites": [
+        {
+          "path": "core/gateway/contracts/routes.v1/routes.schema.json",
+          "pattern": "\"Verb\":[\\s\\S]*?\"method\":\\s*\\{\\s*\"enum\":\\s*\\[([^\\]]*)\\]"
+        },
+        {
+          "path": "core/agent/control_plane/route_policy.py",
+          "pattern": "^METHODS = frozenset\\(\\{([^}]*)\\}\\)",
+          "flags": "m"
+        }
+      ]
+    },
+    {
+      "id": "mcp-tools-domains",
+      "fact": "the domains an mcp.tools.v1 manifest may be for, or a tool may require",
+      "kind": "set",
+      "enforced": true,
+      "canonical": "core/meetings/contracts/mcp.tools.v1/mcp.tools.schema.json — Manifest.domain",
+      "how_to_agree": "membership is closed: a new domain is an mcp.tools.v1 change and an assembler change, in one change",
+      "why": "mcp.tools.v1 is the sealed statement of what a manifest may say, including a private deployment's mounted one; manifest.py is what the MCP refuses at boot. A vocabulary the two spell differently is a manifest the gate passes and the edge refuses, or the reverse (architecture pass 4, N50).",
+      "sites": [
+        {
+          "path": "core/meetings/contracts/mcp.tools.v1/mcp.tools.schema.json",
+          "pattern": "\"domain\":\\s*\\{\\s*\"enum\":\\s*\\[([^\\]]*)\\]"
+        },
+        {
+          "path": "core/meetings/contracts/mcp.tools.v1/mcp.tools.schema.json",
+          "pattern": "\"requires\":\\s*\\{[^}]*?\"enum\":\\s*\\[([^\\]]*)\\]"
+        },
+        {
+          "path": "core/meetings/contracts/mcp.tools.v1/mcp.tools.schema.json",
+          "pattern": "\"event_v2_owner\":\\s*\\{\\s*\"enum\":\\s*\\[([^\\]]*)\\]"
+        },
+        {
+          "path": "core/meetings/services/mcp/src/vexa_mcp/manifest.py",
+          "pattern": "^DOMAINS = \\{([^}]*)\\}",
+          "flags": "m"
+        }
+      ]
+    },
+    {
+      "id": "mcp-tools-identities",
+      "fact": "who an mcp.tools.v1 tool's caller may be",
+      "kind": "set",
+      "enforced": true,
+      "canonical": "core/meetings/contracts/mcp.tools.v1/mcp.tools.schema.json — Tool.identity",
+      "how_to_agree": "change the schema and the assembler together",
+      "why": "mcp.tools.v1 is the sealed statement of what a manifest may say, including a private deployment's mounted one; manifest.py is what the MCP refuses at boot. A vocabulary the two spell differently is a manifest the gate passes and the edge refuses, or the reverse (architecture pass 4, N50).",
+      "sites": [
+        {
+          "path": "core/meetings/contracts/mcp.tools.v1/mcp.tools.schema.json",
+          "pattern": "\"identity\":\\s*\\{\\s*\"enum\":\\s*\\[([^\\]]*)\\]"
+        },
+        {
+          "path": "core/meetings/services/mcp/src/vexa_mcp/manifest.py",
+          "pattern": "^IDENTITIES = \\{([^}]*)\\}",
+          "flags": "m"
+        }
+      ]
+    },
+    {
+      "id": "mcp-tools-auths",
+      "fact": "which credential the MCP edge may present to a tool's door",
+      "kind": "set",
+      "enforced": true,
+      "canonical": "core/meetings/contracts/mcp.tools.v1/mcp.tools.schema.json — Tool.auth",
+      "how_to_agree": "change the schema and the assembler together",
+      "why": "mcp.tools.v1 is the sealed statement of what a manifest may say, including a private deployment's mounted one; manifest.py is what the MCP refuses at boot. A vocabulary the two spell differently is a manifest the gate passes and the edge refuses, or the reverse (architecture pass 4, N50).",
+      "sites": [
+        {
+          "path": "core/meetings/contracts/mcp.tools.v1/mcp.tools.schema.json",
+          "pattern": "\"auth\":\\s*\\{\\s*\"enum\":\\s*\\[([^\\]]*)\\]"
+        },
+        {
+          "path": "core/meetings/services/mcp/src/vexa_mcp/manifest.py",
+          "pattern": "^AUTHS = \\{([^}]*)\\}",
+          "flags": "m"
+        }
+      ]
+    },
+    {
+      "id": "mcp-tools-methods",
+      "fact": "the HTTP methods an mcp.tools.v1 route may use",
+      "kind": "set",
+      "enforced": true,
+      "canonical": "core/meetings/contracts/mcp.tools.v1/mcp.tools.schema.json — Route.method",
+      "how_to_agree": "change the schema and the assembler together",
+      "why": "mcp.tools.v1 is the sealed statement of what a manifest may say, including a private deployment's mounted one; manifest.py is what the MCP refuses at boot. A vocabulary the two spell differently is a manifest the gate passes and the edge refuses, or the reverse (architecture pass 4, N50).",
+      "sites": [
+        {
+          "path": "core/meetings/contracts/mcp.tools.v1/mcp.tools.schema.json",
+          "pattern": "\"method\":\\s*\\{\\s*\"enum\":\\s*\\[([^\\]]*)\\]"
+        },
+        {
+          "path": "core/meetings/services/mcp/src/vexa_mcp/manifest.py",
+          "pattern": "^METHODS = \\{([^}]*)\\}",
+          "flags": "m"
+        }
+      ]
+    },
+    {
+      "id": "mcp-tools-credential-arguments",
+      "fact": "the argument names an MCP tool may never take",
+      "kind": "set",
+      "enforced": true,
+      "canonical": "core/meetings/contracts/mcp.tools.v1/mcp.tools.schema.json — CredentialArgument",
+      "how_to_agree": "change the schema and the assembler together",
+      "why": "mcp.tools.v1 is the sealed statement of what a manifest may say, including a private deployment's mounted one; manifest.py is what the MCP refuses at boot. A vocabulary the two spell differently is a manifest the gate passes and the edge refuses, or the reverse (architecture pass 4, N50). This list is what keeps a credential out of a tool's argument list, and so out of every transcript.",
+      "sites": [
+        {
+          "path": "core/meetings/contracts/mcp.tools.v1/mcp.tools.schema.json",
+          "pattern": "\"CredentialArgument\":\\s*\\{\\s*\"enum\":\\s*\\[([^\\]]*)\\]"
+        },
+        {
+          "path": "core/meetings/services/mcp/src/vexa_mcp/manifest.py",
+          "pattern": "^CREDENTIAL_ARGUMENTS = \\{([^}]*)\\}",
+          "flags": "m"
+        }
+      ]
+    },
+    {
       "id": "bot-redis-stream",
       "fact": "the stream a meeting bot appends its transcript to, as the bot writes it, the collector reads it and the bot's Redis user is granted it",
       "kind": "literal",
