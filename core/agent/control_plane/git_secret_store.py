@@ -3,6 +3,11 @@
 Only the trusted control plane holds the git service signing key. MCP and the
 browser have no endpoint that returns values. Existing local entries migrate on
 first use; a confirmed remote tombstone prevents resurrecting a deleted key.
+
+The broker serves the git role only for the person the gateway signed for, so each
+call is made as the person the request being served acts for: the subject and the
+gateway's signature that `broker_client.ForwardedIdentity` holds. Outside such a
+request there is nobody to act for, and nothing is sent.
 """
 import os
 import re
@@ -26,13 +31,15 @@ def _call(name, action, value=None):
     if not NAME.fullmatch(name) or '..' in name:
         raise ValueError('Invalid Git credential name')
     path = '/api/internal/git-secret'
-    actor = name.split('/', 1)[1].removesuffix('.priv').removesuffix('.pub')
+    subject, identity = broker_client.forwarded()
     try:
+        if not identity:
+            raise broker_client.fault('identity_missing', role='git', method='POST', path=path)
         r = broker_client.request(
             base_url=os.environ.get('VEXA_GIT_STORE_BROKER_URL', ''),
             key_file=os.environ.get('VEXA_GIT_STORE_KEY_FILE', ''),
-            role='git', actor=actor, method='POST', path=path,
-            payload={'name': name, 'action': action, 'value': value}, timeout=10)
+            role='git', actor=subject, method='POST', path=path,
+            payload={'name': name, 'action': action, 'value': value}, timeout=10, identity=identity)
         if r.status_code != 200:
             raise broker_client.fault('http_%d' % r.status_code, role='git', method='POST', path=path, status=r.status_code)
         result = broker_client.json_of(r, role='git', method='POST', path=path)
@@ -40,7 +47,9 @@ def _call(name, action, value=None):
                 result.get('value') is not None and not isinstance(result['value'], str):
             raise broker_client.fault('parse', role='git', method='POST', path=path, status=r.status_code)
         return result
-    except broker_client.BrokerFault:
+    except broker_client.BrokerFault as exc:
+        if exc.kind == 'identity_missing':
+            raise GitStoreUnavailable('Git credentials are used only for a person signed in through the gateway') from None
         raise GitStoreUnavailable('Git credential store unavailable; retry when Connections is healthy') from None
 
 def get(root,name,*,key_env=''):

@@ -4,10 +4,12 @@ Two callers share it: `routers/connections.py` (role `agent`) and `git_secret_st
 `git`). Each names its own door and key — the two roles stay separate keys, held by this process
 alone — and this module signs with the vendored contract signer (`broker_assertion.py`).
 
-An agent-role request also carries the gateway's signed identity (gateway-identity.v1
+Every request, in either role, also carries the gateway's signed identity (gateway-identity.v1
 `X-Vexa-Identity`) for the person it acts for, forwarded exactly as agent-api received it: the
-broker verifies it with the gateway's public key and refuses an agent-role call without it, so the
-agent key alone cannot act for anybody.
+broker verifies it with the gateway's public key and refuses the call without it, so neither key
+alone acts for anybody. The connection routes read it off their request; `ForwardedIdentity` holds
+it for the life of a request so the Git store, which is called deep inside workspace operations,
+can forward it too (`forwarded()`).
 
 A failure is a `BrokerFault` with a `kind` — `config` (no door or no usable key), `transport` (the
 broker did not answer), `http_<status>` (it answered with a refusal), `parse` (it answered with
@@ -20,7 +22,8 @@ import json
 import logging
 import re
 import uuid
-from typing import Any, Optional
+from contextvars import ContextVar
+from typing import Any, Optional, Tuple
 
 import httpx
 
@@ -46,6 +49,45 @@ def fault(kind: str, *, role: str, method: str, path: str, status: Optional[int]
                             "method": method, "route": route_of(path), "status": status},
                            separators=(",", ":")))
     return BrokerFault(kind, status)
+
+
+#: The person the request being served acts for, as the gateway signed them: (subject, token).
+_FORWARDED: ContextVar[Tuple[str, str]] = ContextVar("broker_forwarded_identity", default=("", ""))
+_TOKEN_HEADER = identity_token.HEADER.encode("latin-1")
+_SUBJECT_HEADER = identity_token.CLAIM_HEADERS["sub"].encode("latin-1")
+
+
+class ForwardedIdentity:
+    """ASGI: hold the request's gateway-signed person for the broker calls made while serving it.
+
+    Installed inside `IdentityGuard`, so what it holds has passed the guard: the token verified,
+    and `x-user-id` rebuilt from its claims. A request without both (the internal tier, a probe)
+    holds nothing, and a git-role call made for it is refused before anything is sent. The context
+    is the request's; a thread a request starts sees it only when started under
+    `contextvars.copy_context()`. The same shape as the MCP edge's `reentry.py`."""
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") not in ("http", "websocket"):
+            return await self.app(scope, receive, send)
+        token = subject = ""
+        for name, value in scope.get("headers") or ():
+            if name.lower() == _TOKEN_HEADER:
+                token = value.decode("latin-1").strip()
+            elif name.lower() == _SUBJECT_HEADER:
+                subject = value.decode("latin-1").strip()
+        held = _FORWARDED.set((subject, token) if subject and token else ("", ""))
+        try:
+            return await self.app(scope, receive, send)
+        finally:
+            _FORWARDED.reset(held)
+
+
+def forwarded() -> Tuple[str, str]:
+    """``(subject, token)`` for the request being served, or ``("", "")`` outside one."""
+    return _FORWARDED.get()
 
 
 def request(*, base_url: str, key_file: str, role: str, actor: str, method: str, path: str,

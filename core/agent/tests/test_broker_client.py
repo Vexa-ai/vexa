@@ -82,12 +82,18 @@ def test_connections_requests_are_signed_as_the_agent_for_the_exact_request(keys
         verified(req, keys["git"])          # the git key cannot have produced it
 
 
-def test_git_store_signs_as_the_git_role_for_the_owner(keys, broker):
+@pytest.fixture
+def person(monkeypatch):
+    """The signed person the request being served acts for (broker_client.ForwardedIdentity)."""
+    monkeypatch.setattr(broker_client, "forwarded", lambda: ("7", "signed-7"))
+
+
+def test_git_store_signs_as_the_git_role_for_the_signed_person(keys, broker, person):
     broker["handler"] = lambda req: httpx.Response(200, json={"found": True, "value": "fixture"})
     assert git_secret_store._call("deploy/user-7.priv", "get") == {"found": True, "value": "fixture"}
     claims = verified(broker["sent"][-1], keys["git"])
-    assert (claims["role"], claims["actor"]) == ("git", "user-7")
-    assert "x-vexa-identity" not in broker["sent"][-1].headers
+    assert (claims["role"], claims["actor"]) == ("git", "7")
+    assert broker["sent"][-1].headers["x-vexa-identity"] == "signed-7"
     assert json.loads(broker["sent"][-1].content) == {"name": "deploy/user-7.priv", "action": "get", "value": None}
 
 
@@ -172,7 +178,7 @@ def test_short_key_never_signs(tmp_path, monkeypatch, broker, caplog):
     (lambda req: httpx.Response(503, json={"detail": "Credential store unavailable"}), "http_503"),
     (lambda req: httpx.Response(200, json={"found": "yes"}), "parse"),
 ])
-def test_git_store_faults_raise_unavailable_never_absent(keys, broker, caplog, handler, kind):
+def test_git_store_faults_raise_unavailable_never_absent(keys, broker, person, caplog, handler, kind):
     broker["handler"] = handler
     caplog.set_level(logging.WARNING)
     with pytest.raises(git_secret_store.GitStoreUnavailable):
