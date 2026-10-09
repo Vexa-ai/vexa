@@ -17,7 +17,7 @@ from typing import Optional
 from .backend import WorkloadHandle
 from .models import Resources
 from .mounts import k8s_volume_mounts
-from .profiles import ROLE_WORKER, Runnable
+from .profiles import Runnable
 from .workload_env import CODEX_HOME_ENV, WORKER_CODEX_HOME
 
 MANAGED_LABEL = "runtime.managed"
@@ -90,7 +90,8 @@ def _stop_grace_sec() -> int:
         return 30
 
 
-def pod_overrides(env: dict[str, str], *, container_name: str, worker: bool = False) -> Optional[dict]:
+def pod_overrides(env: dict[str, str], *, container_name: str,
+                  credential_mounts: bool = False) -> Optional[dict]:
     """The env-derived OVERLAY ``build_pod`` merges onto a spawned Pod's spec. It carries two
     independent seams:
 
@@ -103,16 +104,16 @@ def pod_overrides(env: dict[str, str], *, container_name: str, worker: bool = Fa
     The overlay is built whenever EITHER seam is present; returns None only when neither is (nothing
     to merge). Building it for scheduling alone is load-bearing: a plain meeting bot has no workspace
     PVC, so a volumes-only early return would silently drop its tolerations and re-create the bug.
-    ``worker`` (the profile's class, never the spec) decides whether the runtime's credential-file
-    Secrets are mounted: agent workers only. Pure/env-driven → unit-tested offline (no kubectl)."""
+    ``credential_mounts`` (the profile's, never the spec's) decides whether the runtime's
+    credential-file Secrets are mounted. Pure/env-driven → unit-tested offline (no kubectl)."""
     pvc = env.get("VEXA_WORKSPACE_MOUNT_SOURCE")
     root = env.get("VEXA_WORKSPACE_MOUNT_TARGET")
     volumes, volume_mounts = k8s_volume_mounts(env, pvc_name=pvc or "", store_target=root or "")
     tolerations = _scheduling_json(env, TOLERATIONS_ENV, list)
     node_selector = _scheduling_json(env, NODE_SELECTOR_ENV, dict)
-    # credential files go to AGENT WORKERS only (the agent profile's class); a meeting bot never
-    # needs a model credential and must not carry one
-    secret_mounts = _scheduling_json(env, SECRET_MOUNTS_ENV, list) if worker else None
+    # credential files go only to a workload whose profile asks for them; a meeting bot never needs
+    # a model credential and must not carry one
+    secret_mounts = _scheduling_json(env, SECRET_MOUNTS_ENV, list) if credential_mounts else None
     for i, sm in enumerate(secret_mounts or ()):
         if not (isinstance(sm, dict) and sm.get("secret") and sm.get("mountPath")):
             raise ValueError(f"{SECRET_MOUNTS_ENV}[{i}] must be {{secret, mountPath[, file]}}, got {sm!r}")
@@ -213,9 +214,9 @@ def build_pod(
     Pure and env-driven ⇒ the whole manifest is asserted offline, with no cluster and no kubectl.
     (``kubectl run --dry-run=client`` is NOT a viable generator here: v1.34 performs API discovery
     before generating and exits 1 with no output when no server is reachable.)"""
-    if runnable.role == ROLE_WORKER and CODEX_HOME_ENV not in env:
-        # The worker's Codex home is the runtime's to name (workload_env.WORKER_CODEX_HOME): a
-        # credential Secret is mounted at <it>/auth.json, and the worker and the CLI read CODEX_HOME.
+    if runnable.credential_mounts and CODEX_HOME_ENV not in env:
+        # The Codex home is the runtime's to name (workload_env.WORKER_CODEX_HOME): a credential
+        # Secret is mounted at <it>/auth.json, and the worker and the CLI read CODEX_HOME.
         env = {**env, CODEX_HOME_ENV: WORKER_CODEX_HOME}
     container: dict = {
         "name": name,
@@ -234,8 +235,7 @@ def build_pod(
         "name": name,
         # Adoption labels (the orphaned-live-bot fix): a recreated runtime re-discovers its
         # still-running Pods by this label pair and re-registers them (see the kernel's adopt()).
-        "labels": {MANAGED_LABEL: "true", WORKLOAD_ID_LABEL: workload_id,
-                   **_role_labels(runnable)},
+        "labels": {MANAGED_LABEL: "true", WORKLOAD_ID_LABEL: workload_id, **runnable.labels},
     }
     if namespace:
         metadata["namespace"] = namespace
@@ -253,7 +253,7 @@ def build_pod(
 
     overlay_source = env if overlay_env is None else overlay_env
     overlay = (pod_overrides(overlay_source, container_name=name,
-                             worker=runnable.role == ROLE_WORKER) or {}).get("spec", {})
+                             credential_mounts=runnable.credential_mounts) or {}).get("spec", {})
     for key in ("volumes", "tolerations", "nodeSelector"):
         if overlay.get(key):
             pod["spec"][key] = overlay[key]
@@ -264,19 +264,6 @@ def build_pod(
             if key != "name":
                 container[key] = value
     return pod
-
-
-#: The label naming a workload's class — ``worker`` (an agent worker) or ``bot`` (a meeting bot) —
-#: taken from the PROFILE that runs it, never from the caller's workload id. The chart's
-#: NetworkPolicies key on it: meeting-api admits runtime-managed pods for their lifecycle callbacks
-#: and uploads EXCEPT workers, which act through the gateway and have no business on an internal
-#: service, and each class has its own egress policy.
-ROLE_LABEL = "vexa.role"
-
-
-def _role_labels(runnable: Runnable) -> dict:
-    """``{vexa.role: <class>}`` from the profile's runnable; nothing for a classless test runnable."""
-    return {ROLE_LABEL: runnable.role} if runnable.role else {}
 
 
 class K8sBackend:

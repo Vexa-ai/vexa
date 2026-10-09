@@ -5,8 +5,19 @@ The core **kernel**: it spawns and supervises isolated workloads through the `ru
 lifecycle over a pluggable Backend (process / Docker / K8s), and runs a redis-backed `Scheduler`
 that holds `schedule.v1` HTTP-call jobs in a sorted set and HTTP-POSTs them when due. **Mechanism,
 not policy (P11):** a `profile` is an opaque name — the kernel knows docker/k8s/process, not what a
-"bot" or "agent" *is*. Python because this is the runtime/tooling ecosystem and the control plane
-(meeting-api, agent-api) consumes it as a library/seam.
+"bot" or "agent" *is*. What a kind of workload is given beyond its spec is **profile data**
+(`profiles.Runnable`): its labels, the runtime setting naming the network it joins, the runtime
+settings forwarded into it, and whether the runtime's credential files are mounted into it. Every
+backend applies that data the same way; only the deployment registry (`default_registry`, the
+`meeting-bot` and `agent` profiles) fills it in. Python because this is the runtime/tooling ecosystem
+and the control plane (meeting-api, agent-api) consumes it as a library/seam.
+
+**What a caller may not decide.** Every route but `/health` requires the caller credential
+(`RUNTIME_API_TOKEN`, held by agent-api, meeting-api and the runtime). A spec's env never carries the
+store backing or Pod scheduling (`VEXA_WORKSPACE_MOUNT_*`, `RUNTIME_K8S_*` are dropped); every mount in
+its set must sit under the runtime's own store target (`VEXA_WORKSPACE_MOUNT_TARGET`), and a mount with
+its own host source must name one of `RUNTIME_EXTRA_MOUNT_SOURCES`. The runtime signs every
+`RuntimeEvent` callback (`X-Runtime-Signature`).
 
 ## Seams
 | Direction | Neighbour | Via | What crosses |

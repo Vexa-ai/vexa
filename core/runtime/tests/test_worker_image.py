@@ -12,7 +12,9 @@ These never touch a real daemon: the unix-socket session is faked so we can asse
 from __future__ import annotations
 
 from runtime_kernel.docker_backend import DockerBackend
-from runtime_kernel.profiles import ROLE_WORKER, Runnable
+from runtime_kernel.profiles import Runnable
+
+import _profiles
 
 
 class FakeResp:
@@ -135,7 +137,7 @@ def test_worker_create_spec_uses_worker_image():
     sess.request = spy
     h = b.start(
         "agent-foo-chat",
-        Runnable(image=TARGET, command=["python", "-m", "worker"], role=ROLE_WORKER),
+        _profiles.agent(TARGET),
         {"VEXA_X": "y"},
     )
     assert captured["Image"] == TARGET
@@ -162,7 +164,7 @@ def test_worker_dev_mount_is_first_on_pythonpath(monkeypatch):
         return orig(method, url, **kw)
 
     sess.request = spy
-    b.start("agent-hot-chat", Runnable(image=TARGET, command=["python", "-m", "worker"], role=ROLE_WORKER), {})
+    b.start("agent-hot-chat", _profiles.agent(TARGET), {})
 
     assert "/host/core/agent:/app/src/agent_api:ro" in captured["HostConfig"]["Binds"]
     env = dict(item.split("=", 1) for item in captured["Env"])
@@ -191,7 +193,7 @@ def test_worker_create_spec_injects_anthropic_route_env(monkeypatch):
     sess.request = spy
     b.start(
         "agent-foo-chat",
-        Runnable(image=TARGET, command=["python", "-m", "worker"], role=ROLE_WORKER),
+        _profiles.agent(TARGET),
         {"ANTHROPIC_AUTH_TOKEN": "dispatch-wins"},
     )
     env = dict(item.split("=", 1) for item in captured["Env"])
@@ -225,25 +227,24 @@ def test_each_workload_class_joins_its_own_network(monkeypatch):
     DOCKER_WORKER_NETWORK (gateway, redis, flows-api) — the class comes from the profile."""
     monkeypatch.setenv("DOCKER_NETWORK", "stack_bots")
     monkeypatch.setenv("DOCKER_WORKER_NETWORK", "stack_workers")
-    worker = _create_payload(monkeypatch, Runnable(image=TARGET, command=["python", "-m", "worker"],
-                                                   role=ROLE_WORKER), "agent-foo-chat")
-    bot = _create_payload(monkeypatch, Runnable(image="bot:1", role="bot"), "mtg-1-abcdef12")
+    worker = _create_payload(monkeypatch, _profiles.agent(TARGET), "agent-foo-chat")
+    bot = _create_payload(monkeypatch, _profiles.bot("bot:1"), "mtg-1-abcdef12")
     assert worker["HostConfig"]["NetworkMode"] == "stack_workers"
     assert bot["HostConfig"]["NetworkMode"] == "stack_bots"
     # without a worker network the worker shares the bot network (single-network deployments)
     monkeypatch.delenv("DOCKER_WORKER_NETWORK")
-    worker = _create_payload(monkeypatch, Runnable(image=TARGET, role=ROLE_WORKER), "agent-foo-chat")
+    worker = _create_payload(monkeypatch, _profiles.agent(TARGET), "agent-foo-chat")
     assert worker["HostConfig"]["NetworkMode"] == "stack_bots"
 
 
 def test_a_bot_receives_no_model_credential(monkeypatch, tmp_path):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "model-key")
     monkeypatch.setenv("HOST_CLAUDE_CREDENTIALS", "/host/.claude/.credentials.json")
-    bot = _create_payload(monkeypatch, Runnable(image="bot:1", role="bot"), "mtg-1-abcdef12")
+    bot = _create_payload(monkeypatch, _profiles.bot("bot:1"), "mtg-1-abcdef12")
     env = dict(item.split("=", 1) for item in bot["Env"])
     assert "ANTHROPIC_API_KEY" not in env
     assert not (bot["HostConfig"].get("Binds") or [])
-    worker = _create_payload(monkeypatch, Runnable(image=TARGET, role=ROLE_WORKER), "agent-foo-chat")
+    worker = _create_payload(monkeypatch, _profiles.agent(TARGET), "agent-foo-chat")
     env = dict(item.split("=", 1) for item in worker["Env"])
     assert env["ANTHROPIC_API_KEY"] == "model-key"
     assert "/host/.claude/.credentials.json:/root/.claude/.credentials.json:ro" in worker["HostConfig"]["Binds"]
@@ -260,15 +261,15 @@ def test_the_codex_credential_lands_where_the_worker_looks(monkeypatch):
     from runtime_kernel.workload_env import CODEX_HOME_ENV, WORKER_CODEX_HOME
 
     monkeypatch.setenv("HOST_CODEX_CREDENTIALS", "/host/.codex/auth.json")
-    worker = _create_payload(monkeypatch, Runnable(image=TARGET, role=ROLE_WORKER), "agent-foo-chat")
+    worker = _create_payload(monkeypatch, _profiles.agent(TARGET), "agent-foo-chat")
     env = dict(item.split("=", 1) for item in worker["Env"])
     assert env[CODEX_HOME_ENV] == WORKER_CODEX_HOME
     assert f"/host/.codex/auth.json:{WORKER_CODEX_HOME}/auth.json:ro" in worker["HostConfig"]["Binds"]
-    bot = _create_payload(monkeypatch, Runnable(image="bot:1", role="bot"), "mtg-1-abcdef12")
+    bot = _create_payload(monkeypatch, _profiles.bot("bot:1"), "mtg-1-abcdef12")
     assert CODEX_HOME_ENV not in dict(item.split("=", 1) for item in bot["Env"])
 
     pod = build_pod(name="vexa-agent-x", workload_id="agent-x", namespace=None, resources=None,
-                    runnable=Runnable(image="img", role=ROLE_WORKER), env={})
+                    runnable=_profiles.agent("img"), env={})
     pod_env = {e["name"]: e["value"] for e in pod["spec"]["containers"][0]["env"]}
     assert pod_env[CODEX_HOME_ENV] == WORKER_CODEX_HOME
 

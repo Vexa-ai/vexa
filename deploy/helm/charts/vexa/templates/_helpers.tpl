@@ -53,6 +53,15 @@ REDIS_PASSWORD env entry (vexa.redisPasswordEnv) BEFORE it, which Kubernetes exp
 {{- end }}
 {{- end -}}
 
+{{/*
+The workspace store's path inside agent-api and inside every worker — agent-api's VEXA_WORKSPACES_DIR,
+its store mountPath, and the runtime's VEXA_WORKSPACE_MOUNT_TARGET. They must be equal, or every
+dispatch is refused, so all three are rendered from here.
+*/}}
+{{- define "vexa.workspacesDir" -}}
+/workspaces
+{{- end -}}
+
 {{- define "vexa.redisHost" -}}
 {{- if .Values.redis.enabled -}}
 {{- printf "%s.%s.svc.%s" (include "vexa.componentName" (list . "redis")) .Release.Namespace .Values.global.clusterDomain -}}

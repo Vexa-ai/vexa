@@ -267,11 +267,13 @@ services:
       - RUNTIME_API_TOKEN=${RUNTIME_API_TOKEN:-}
       # The workspace store as the RUNTIME serves it: what backs it (the named volume agent-api also
       # mounts) and where it sits inside a worker. A workload spec cannot move either; every mount a
-      # spec declares must sit under the target, and the only out-of-store source it may name is the
-      # _global tier below.
+      # spec declares must sit under the target. The target must equal agent-api's
+      # VEXA_WORKSPACES_DIR and its mount of agent-workspaces (deploy/compose/tests hold them equal).
+      # The only out-of-store source a spec may name is agent-api's _global tier, when an operator
+      # keeps it outside the store (RUNTIME_EXTRA_MOUNT_SOURCES).
       - VEXA_WORKSPACE_MOUNT_SOURCE=${COMPOSE_PROJECT_NAME:-vexa-v012}_agent-workspaces
       - VEXA_WORKSPACE_MOUNT_TARGET=/workspaces
-      - VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH=${VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH:-}
+      - RUNTIME_EXTRA_MOUNT_SOURCES=${VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH:-}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       # Spawned workloads never join the control-plane network. A meeting bot joins `bots`
       # (meeting-api for its callbacks and uploads, redis, storage); an agent worker joins `workers`

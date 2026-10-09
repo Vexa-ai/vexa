@@ -92,7 +92,7 @@ def _start_ticker(scheduler) -> None:
     threading.Thread(target=_loop, name="scheduler-tick", daemon=True).start()
 
 
-def _build_backend():
+def _build_backend(network_envs: tuple[str, ...] = ()):
     """Select the spawn backend from ``RUNTIME_BACKEND`` (default ``docker``). compose/desktop run
     ``docker`` (host socket API); a k8s deployment runs ``k8s`` (spawns Pods via kubectl under the
     runtime's ServiceAccount/RBAC — see deploy/helm runtime RBAC). ``process`` is the no-container
@@ -109,7 +109,7 @@ def _build_backend():
         return ProcessBackend()
     from .docker_backend import DockerBackend
 
-    return DockerBackend()
+    return DockerBackend(network_envs=network_envs)
 
 
 def _kernel_grace_sec() -> float:
@@ -133,7 +133,7 @@ def build_production_app():
     from .caller_auth import load_caller_token
     from .config_preflight import preflight
     from .kernel import Runtime
-    from .profiles import apply_command_overrides, default_registry, worker_image_for
+    from .profiles import apply_command_overrides, default_registry, network_envs, worker_image_for
     from .workload_env import StoreConfig
 
     # config.v1 boot preflight (ADR-0026): RUNTIME_API_TOKEN is required-explicit and must not hold a
@@ -147,7 +147,9 @@ def build_production_app():
     # The workspace store as this runtime serves it — from its own env, never from a spec.
     workspace_store = StoreConfig.from_env()
 
-    backend = _build_backend()
+    # The networks the profiles' workloads join scope docker discovery; they are profile data and do
+    # not depend on the images resolved below.
+    backend = _build_backend(network_envs(default_registry()))
     # The agent worker is its OWN image (core/agent/worker/Dockerfile — claude-code + node + the
     # `worker` package), NOT a rename of the agent-api image. With the Docker backend we ensure that
     # image is present up front — pulling it when absent, since the socket create API never

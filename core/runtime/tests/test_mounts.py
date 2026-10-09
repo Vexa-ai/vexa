@@ -14,7 +14,9 @@ import pytest
 from runtime_kernel.mounts import MountBind, k8s_volume_mounts, mount_set, workspace_binds
 from runtime_kernel.docker_backend import DockerBackend  # for the docker bind-string shape
 from runtime_kernel.k8s_backend import build_pod, pod_overrides
-from runtime_kernel.profiles import ROLE_WORKER, Runnable
+from runtime_kernel.profiles import Runnable
+
+import _profiles
 
 
 def _env(mounts=None, *, source="agent-workspaces", target="/workspaces", path="/workspaces/u1"):
@@ -284,7 +286,7 @@ def test_k8s_secret_mounts_reach_agent_worker_pods_read_only():
     mounted read-only at the harness's credential path."""
     env = {**_env(source="vexa-agent-workspaces"), "VEXA_UNIT_ID": "u-1",
            "RUNTIME_K8S_SECRET_MOUNTS": _SM}
-    spec = pod_overrides(env, container_name="w", worker=True)["spec"]
+    spec = pod_overrides(env, container_name="w", credential_mounts=True)["spec"]
     assert {"name": "cred-0-codex-auth", "secret": {"secretName": "codex-auth"}} in spec["volumes"]
     assert {"name": "cred-0-codex-auth", "mountPath": "/tmp/.codex", "readOnly": True} \
         in spec["containers"][0]["volumeMounts"]
@@ -300,7 +302,7 @@ def test_k8s_secret_mounts_malformed_entry_fails_loud():
     import pytest
     with pytest.raises(ValueError):
         pod_overrides({"RUNTIME_K8S_SECRET_MOUNTS": '[{"secret": "x"}]'}, container_name="w",
-                      worker=True)
+                      credential_mounts=True)
 
 
 def test_k8s_submitted_container_survives_the_mount_overlay():
@@ -313,7 +315,7 @@ def test_k8s_submitted_container_survives_the_mount_overlay():
     env = {**_env(source="vexa-agent-workspaces"), "VEXA_UNIT_ID": "u-1", "FOO": "bar"}
     pod = build_pod(
         name="w", workload_id="w", namespace=None, resources=None,
-        runnable=Runnable(image="img:1", command=["python", "-m", "worker"], role=ROLE_WORKER),
+        runnable=_profiles.agent("img:1"),
         env=env,
         overlay_env={**env, "RUNTIME_K8S_SECRET_MOUNTS": _SM},
     )
@@ -338,6 +340,6 @@ def test_k8s_secret_mount_file_uses_subpath_and_keeps_dir_writable():
     env = {**_env(source="vexa-agent-workspaces"), "VEXA_UNIT_ID": "u-1",
            "RUNTIME_K8S_SECRET_MOUNTS":
                '[{"secret": "codex-auth", "mountPath": "/tmp/.codex/auth.json", "file": "auth.json"}]'}
-    c = pod_overrides(env, container_name="w", worker=True)["spec"]["containers"][0]
+    c = pod_overrides(env, container_name="w", credential_mounts=True)["spec"]["containers"][0]
     assert {"name": "cred-0-codex-auth", "mountPath": "/tmp/.codex/auth.json",
             "readOnly": True, "subPath": "auth.json"} in c["volumeMounts"]

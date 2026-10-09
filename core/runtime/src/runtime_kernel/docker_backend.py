@@ -5,11 +5,12 @@ The runtime talks to the mounted `/var/run/docker.sock` directly — there is **
 image** (main's has none either). Implements the same sync `Backend` port as `ProcessBackend`, so the
 kernel's lifecycle is identical regardless of substrate.
 
-Host config (how the spawned container runs) comes from the runtime service's env, not the workload
-env: `DOCKER_NETWORK` is the network a meeting bot joins (the one with meeting-api and redis on it —
-without it the bot can't reach the stack), `DOCKER_WORKER_NETWORK` the one an agent worker joins
-(gateway, redis, flows-api; defaults to `DOCKER_NETWORK`), and `DOCKER_SHM_SIZE` gives chromium a
-real `/dev/shm`. Each class reaches only the services on its own network.
+Host config (how the spawned container runs) comes from the runtime service's env and the workload's
+profile, never from the workload env: a profile names the runtime setting that holds its network
+(``Runnable.network_env`` — `DOCKER_WORKER_NETWORK` for the agent profile), and `DOCKER_NETWORK` is
+the network of every workload whose profile names none (a meeting bot: meeting-api and redis). Each
+kind of workload reaches only the services on its own network. `DOCKER_SHM_SIZE` gives chromium a
+real `/dev/shm`.
 """
 from __future__ import annotations
 
@@ -23,8 +24,8 @@ import requests_unixsocket
 from .backend import WorkloadHandle
 from .models import Resources
 from .mounts import workspace_binds
-from .profiles import ROLE_WORKER, Runnable
-from .workload_env import CODEX_HOME_ENV, WORKER_CODEX_HOME, forwarded_worker_env
+from .profiles import Runnable
+from .workload_env import CODEX_HOME_ENV, WORKER_CODEX_HOME, forwarded_env
 
 MANAGED_LABEL = "runtime.managed"
 WORKLOAD_ID_LABEL = "runtime.workload_id"
@@ -97,22 +98,22 @@ def _workload_id_from_leaf(leaf: str) -> str:
     return leaf
 
 
-def _workload_network(worker: bool) -> Optional[str]:
-    """The network a spawned workload joins: ``DOCKER_WORKER_NETWORK`` for an agent worker (falling
-    back to ``DOCKER_NETWORK``), ``DOCKER_NETWORK`` for everything else. Unset ⇒ docker's default."""
-    if worker:
-        return os.getenv("DOCKER_WORKER_NETWORK") or os.getenv("DOCKER_NETWORK") or None
+def _workload_network(network_env: Optional[str]) -> Optional[str]:
+    """The network a spawned workload joins: the value of its profile's ``network_env`` setting,
+    falling back to ``DOCKER_NETWORK``. Unset ⇒ docker's default."""
+    if network_env and os.getenv(network_env):
+        return os.getenv(network_env)
     return os.getenv("DOCKER_NETWORK") or None
 
 
-def _stack_networks() -> tuple[str, ...]:
+def _stack_networks(network_envs: tuple[str, ...] = ()) -> tuple[str, ...]:
     """The stack-unique compose networks the workloads this runtime spawns join (``start()`` sets
     ``HostConfig.NetworkMode`` from the same env). On a SHARED daemon (two vexa stacks on one host —
     the release-host layout) the managed label and the name prefix are IDENTICAL across stacks, so
     the networks are THE discriminator that scopes discovery and ``find`` to THIS stack's containers —
     and they work retroactively for label-less incident-era containers too. Empty ⇒ single-stack
     deployment, no scoping (docker's default bridge)."""
-    nets = [n for n in (_workload_network(False), _workload_network(True)) if n]
+    nets = [n for n in (_workload_network(None), *(_workload_network(k) for k in network_envs)) if n]
     return tuple(dict.fromkeys(nets))
 
 
@@ -151,8 +152,11 @@ def _shm_bytes() -> Optional[int]:
 class DockerBackend:
     name = "docker"
 
-    def __init__(self, name_prefix: str = "vexa-") -> None:
+    def __init__(self, name_prefix: str = "vexa-", network_envs: tuple[str, ...] = ()) -> None:
+        """``network_envs``: the runtime settings naming the networks its profiles' workloads join
+        besides ``DOCKER_NETWORK`` (``profiles.network_envs``) — what discovery is scoped by."""
         self._prefix = name_prefix
+        self._network_envs = tuple(network_envs)
         self._url = _socket_url()
         self._session = requests_unixsocket.Session()
 
@@ -227,10 +231,9 @@ class DockerBackend:
             raise ValueError("docker backend requires an image")
         name = self._cname(workload_id)
         _leaf, worker_labels = _worker_naming(workload_id)
-        worker = runnable.role == ROLE_WORKER
 
         host_config: dict[str, Any] = {}
-        network = _workload_network(worker)
+        network = _workload_network(runnable.network_env)
         if network:
             host_config["NetworkMode"] = network
         shm = _shm_bytes()
@@ -256,47 +259,49 @@ class DockerBackend:
         if api_mounts:
             host_config["Mounts"] = api_mounts
 
-        # The Runtime BROKERS model credentials into agent WORKERS. Subscription credentials are
-        # mounted read-only; API-style provider env (the claude-code runner's ANTHROPIC_*) is copied
-        # from the trusted runtime service below. A meeting bot reads no model credential and is
-        # given none.
-        creds = host_claude_credentials(os.environ) if worker else None
+        # The Runtime BROKERS model credentials into the workloads whose profile asks for them.
+        # Subscription credentials are mounted read-only; API-style provider env (the claude-code
+        # runner's ANTHROPIC_*) rides the profile's forward list below. A profile that asks for none
+        # (a meeting bot) is given none.
+        creds = host_claude_credentials(os.environ) if runnable.credential_mounts else None
         if creds:
             binds.append(f"{creds}:/root/.claude/.credentials.json:ro")
-        codex_creds = os.getenv("HOST_CODEX_CREDENTIALS") if worker else None
+        codex_creds = os.getenv("HOST_CODEX_CREDENTIALS") if runnable.credential_mounts else None
         if codex_creds:
             binds.append(f"{codex_creds}:{WORKER_CODEX_HOME}/auth.json:ro")
-        # DEV hot-mount (parallels the dev.yml service hot-reload): bind the HOST agent_api source over
-        # the image's baked copy so a SPAWNED worker runs the latest worker.py with NO image rebuild —
-        # the next spawn picks up the change. Host path (daemon-resolved); set only in dev.
-        dev_src = os.getenv("VEXA_AGENT_SRC_MOUNT") if worker else None
+        # DEV hot-mount (parallels the dev.yml service hot-reload): bind a HOST source tree over the
+        # image's baked copy so a SPAWNED workload runs the latest code with NO image rebuild — the
+        # next spawn picks up the change. Host path (daemon-resolved); set only in dev.
+        source_mount = runnable.source_mount
+        dev_src = os.getenv(source_mount.env) if source_mount else None
         if dev_src:
-            binds.append(f"{dev_src}:/app/src/agent_api:ro")
+            binds.append(f"{dev_src}:{source_mount.target}:ro")
         if binds:
             host_config["Binds"] = binds
 
         spawn_env = dict(env)
         if dev_src:
-            # The worker image normally imports its baked packages from /app. Put the whole hot
-            # agent source tree first or the bind above is decorative: `python -m worker` otherwise
-            # resolves /app/worker and silently runs stale code.
-            spawn_env["PYTHONPATH"] = "/app/src/agent_api:/app"
-        if worker:
-            # The Runtime BROKERS model credentials and worker dials into agent workers (never into
-            # meeting bots, which read none). A dispatch-stamped value wins.
-            spawn_env.update(forwarded_worker_env(os.environ, spawn_env))
+            # The image normally imports its baked packages from /app. Put the whole hot source tree
+            # first or the bind above is decorative: `python -m worker` otherwise resolves
+            # /app/worker and silently runs stale code.
+            spawn_env["PYTHONPATH"] = source_mount.pythonpath
+        # The profile's forward list: model credentials and dials from the runtime's own
+        # environment. A dispatch-stamped value wins.
+        spawn_env.update(forwarded_env(runnable.forward_env, os.environ, spawn_env))
+        if runnable.credential_mounts:
             spawn_env.setdefault(CODEX_HOME_ENV, WORKER_CODEX_HOME)
 
         payload: dict[str, Any] = {
             "Image": runnable.image,
             "Env": [f"{k}={v}" for k, v in spawn_env.items()],
-            "Labels": {MANAGED_LABEL: "true", WORKLOAD_ID_LABEL: workload_id, **worker_labels},
+            "Labels": {MANAGED_LABEL: "true", WORKLOAD_ID_LABEL: workload_id, **worker_labels,
+                       **runnable.labels},
             "HostConfig": host_config,
         }
         if dev_src:
             # `python -m worker` prepends its cwd to sys.path ahead of PYTHONPATH. Start inside the
             # mounted tree as well, or /app/worker still wins despite the PYTHONPATH above.
-            payload["WorkingDir"] = "/app/src/agent_api"
+            payload["WorkingDir"] = source_mount.target
         if runnable.command:
             payload["Cmd"] = list(runnable.command)
 
@@ -326,7 +331,7 @@ class DockerBackend:
         r = self._req("GET", f"/containers/{name}/json")
         if r.status_code != 200:
             return None
-        if not _in_stack_network(_stack_networks(), r.json() or {}):
+        if not _in_stack_network(_stack_networks(self._network_envs), r.json() or {}):
             return None  # exists, but it is ANOTHER stack's container — not ours to touch
         return WorkloadHandle(id=workload_id, impl=name)
 
@@ -344,7 +349,7 @@ class DockerBackend:
 
         Returns ``[{workload_id, name, running, exit_code, started_at}, …]``; never raises."""
         found: dict[str, dict] = {}
-        networks = _stack_networks()
+        networks = _stack_networks(self._network_envs)
         try:
             import json as _json
 

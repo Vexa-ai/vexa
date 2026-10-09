@@ -916,4 +916,23 @@ if ! grep -q 'name: vexa-vexa-credential-broker-keys' <<< "$EXT" && [ "$(grep -c
   echo "  OK: existingSecret replaces the generated keys on all three consumers"
 else echo "  FAIL: existingSecret wiring"; fail=1; fi
 
+# agent-api's VEXA_WORKSPACES_DIR, its store mountPath and the runtime's VEXA_WORKSPACE_MOUNT_TARGET
+# are one path: the runtime refuses every mount outside its target, so a difference refuses every dispatch.
+aa_block="$(awk '/deployment-agent-api.yaml/{f=1} f{print} f&&/^---/{exit}' <<< "$RENDER")"
+rt_block="$(awk '/deployment-runtime.yaml/{f=1} f{print} f&&/^---/{exit}' <<< "$RENDER")"
+ws_dir="$(grep -A1 'name: VEXA_WORKSPACES_DIR$' <<< "$aa_block" | sed -n 's/.*value: "\(.*\)"/\1/p')"
+ws_target="$(grep -A1 'name: VEXA_WORKSPACE_MOUNT_TARGET$' <<< "$rt_block" | sed -n 's/.*value: "\(.*\)"/\1/p')"
+ws_mount="$(grep -B1 'mountPath: ' <<< "$aa_block" | grep -A1 'name: workspaces$' | sed -n 's/.*mountPath: //p')"
+if [ -n "$ws_dir" ] && [ "$ws_dir" = "$ws_target" ] && [ "$ws_dir" = "$ws_mount" ]; then
+  echo "  OK: agent-api's workspace dir, its store mount and the runtime's mount target agree ($ws_dir)"
+else echo "  FAIL: workspace dir '$ws_dir', store mount '$ws_mount', runtime target '$ws_target'"; fail=1; fi
+# The runtime serves no out-of-store mount source unless agent-api's _global tier is configured.
+if grep -A1 'name: RUNTIME_EXTRA_MOUNT_SOURCES$' <<< "$rt_block" | grep -q 'value: ""'; then :
+else echo "  FAIL: the runtime serves an out-of-store mount source nobody configured"; fail=1; fi
+glob_rt="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set agentApi.globalSystemWorkspacePath=/srv/global \
+  | awk '/deployment-runtime.yaml/{f=1} f{print} f&&/^---/{exit}')"
+if grep -A1 'name: RUNTIME_EXTRA_MOUNT_SOURCES$' <<< "$glob_rt" | grep -q 'value: "/srv/global"'; then
+  echo "  OK: the runtime serves agent-api's _global tier as its one out-of-store mount source"
+else echo "  FAIL: agentApi.globalSystemWorkspacePath does not reach RUNTIME_EXTRA_MOUNT_SOURCES"; fail=1; fi
+
 [ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }

@@ -128,10 +128,10 @@
       ]
     },
     {
-      "key": "VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH",
+      "key": "RUNTIME_EXTRA_MOUNT_SOURCES",
       "class": "defaulted",
-      "default": "(unset — the _global tier lives in the store; no out-of-store mount source is served)",
-      "description": "the one host path a spec's mount may name as its own `source`: the _global organisation tier when it is provisioned OUTSIDE the workspace store (the same value agent-api is given). Any other mount source refuses the create (400)",
+      "default": "(unset — no out-of-store mount source is served)",
+      "description": "comma-separated absolute host paths, outside the workspace store, that a workload's mount set may name as a mount source; any other source is refused. Compose and Helm set it to agent-api's separately managed _global tier when an operator configures one",
       "targets": [
         "compose",
         "helm"

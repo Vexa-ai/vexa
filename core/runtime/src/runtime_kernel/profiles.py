@@ -18,22 +18,53 @@ from __future__ import annotations
 import os
 import shlex
 from dataclasses import dataclass, field, replace
-from typing import Optional
+from typing import Mapping, Optional
 
 from .models import Resources
+from .workload_env import WORKER_FORWARD_ENV
 
 
-#: The workload classes a profile declares. A backend labels and provisions a workload by its
-#: profile's class — never by anything in the caller's spec (the workload id included).
-ROLE_WORKER = "worker"   # an agent worker: model credentials brokered in, no internal service reach
-ROLE_BOT = "bot"         # a meeting bot: reaches meeting-api for its callbacks, holds no model credential
+#: The label a workload's class rides on, on every substrate (container labels, Pod labels). The
+#: chart's NetworkPolicies select on it. Its values are profile data (``default_registry``) — never
+#: taken from the caller's spec or workload id.
+CLASS_LABEL = "vexa.role"
+
+
+@dataclass(frozen=True)
+class SourceMount:
+    """A development hot-mount: the host path in the runtime setting ``env`` is bound read-only at
+    ``target`` (container backends), which becomes the working directory and heads ``pythonpath``."""
+
+    env: str
+    target: str
+    pythonpath: str
 
 
 @dataclass(frozen=True)
 class Runnable:
+    """How to run one kind of workload, and what the runtime gives it beyond its spec.
+
+    Everything past ``image``/``command`` is profile data that every backend applies the same way, so
+    no backend knows what kind of workload it is starting: which labels it carries, which network it
+    joins, which of the runtime's own settings are forwarded into it, and whether the runtime's
+    credential files are mounted into it."""
+
     image: Optional[str] = None
     command: Optional[list[str]] = None
-    role: Optional[str] = None
+    #: Labels the workload carries on its substrate.
+    labels: Mapping[str, str] = field(default_factory=dict)
+    #: The runtime setting naming the container network this workload joins. Unset, or empty in the
+    #: runtime's environment ⇒ ``DOCKER_NETWORK``.
+    network_env: Optional[str] = None
+    #: Settings forwarded from the runtime's own environment into the workload, unless the spec
+    #: already sets them.
+    forward_env: tuple[str, ...] = ()
+    #: The runtime mounts its configured credential files into the workload (docker: the host's
+    #: model subscription files; k8s: the ``RUNTIME_K8S_SECRET_MOUNTS`` Secrets) and tells the harness
+    #: where they are (``CODEX_HOME``).
+    credential_mounts: bool = False
+    #: A development hot-mount the docker backend applies when its runtime setting is set.
+    source_mount: Optional[SourceMount] = None
 
 
 @dataclass(frozen=True)
@@ -76,6 +107,13 @@ class ProfileRegistry:
 
     def names(self) -> list[str]:
         return list(self._profiles)
+
+
+def network_envs(registry: "ProfileRegistry") -> tuple[str, ...]:
+    """The runtime settings naming the networks this registry's workloads join (besides
+    ``DOCKER_NETWORK``) — what the docker backend scopes discovery by."""
+    keys = (registry.get(n).runnable.network_env for n in registry.names())
+    return tuple(dict.fromkeys(k for k in keys if k))
 
 
 def worker_image_for(agent_image: str) -> str:
@@ -169,7 +207,9 @@ def default_registry() -> ProfileRegistry:
                 runnable=Runnable(
                     image=browser_image,
                     command=None,
-                    role=ROLE_BOT,
+                    # A meeting bot joins DOCKER_NETWORK (meeting-api for its callbacks and uploads,
+                    # redis for its streams) and is given no model credential.
+                    labels={CLASS_LABEL: "bot"},
                 ),
                 idle_timeout_sec=0,  # 0 ⇒ managed externally; enforcement skips it
                 base_env=bot_tuning_env,
@@ -184,7 +224,14 @@ def default_registry() -> ProfileRegistry:
                 runnable=Runnable(
                     image=agent_worker_image,
                     command=["python", "-m", "worker"],
-                    role=ROLE_WORKER,
+                    # An agent worker joins its own network (gateway, redis, flows-api — no internal
+                    # service), and the runtime brokers model credentials and dials into it.
+                    labels={CLASS_LABEL: "worker"},
+                    network_env="DOCKER_WORKER_NETWORK",
+                    forward_env=WORKER_FORWARD_ENV,
+                    credential_mounts=True,
+                    source_mount=SourceMount(env="VEXA_AGENT_SRC_MOUNT", target="/app/src/agent_api",
+                                             pythonpath="/app/src/agent_api:/app"),
                 ),
                 idle_timeout_sec=300,
                 max_lifetime_sec=3600,

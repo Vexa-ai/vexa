@@ -61,8 +61,9 @@ spec:
               value: "http://{{ include "vexa.componentName" (list . "meeting-api") }}:{{ .Values.meetingApi.service.port }}"
             - name: VEXA_AGENT_PROFILE
               value: "agent"
+            # Equal to the runtime's VEXA_WORKSPACE_MOUNT_TARGET and to the store's mountPath below.
             - name: VEXA_WORKSPACES_DIR
-              value: "/workspaces"
+              value: {{ include "vexa.workspacesDir" . | quote }}
             # The workspace store backing the runtime binds into spawned workers. On k8s the PVC name
             # is the contract; full worker mounting needs RWX storage (see README — follow-up).
             - name: VEXA_WORKSPACE_MOUNT_SOURCE
@@ -193,7 +194,7 @@ spec:
             {{- end }}
           volumeMounts:
             - name: workspaces
-              mountPath: /workspaces
+              mountPath: {{ include "vexa.workspacesDir" . }}
             - name: identity-public-key
               mountPath: /run/vexa-identity/public
               readOnly: true

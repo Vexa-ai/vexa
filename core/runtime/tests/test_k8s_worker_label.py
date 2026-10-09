@@ -7,8 +7,8 @@ the workload. The caller's workload id plays no part: an agent-profile Pod is a 
 is called, and a bot is a bot even when its id starts with `agent-`.
 """
 from runtime_kernel import default_registry
-from runtime_kernel.k8s_backend import ROLE_LABEL, build_pod
-from runtime_kernel.profiles import Runnable
+from runtime_kernel.k8s_backend import build_pod
+from runtime_kernel.profiles import CLASS_LABEL as ROLE_LABEL, Runnable
 
 
 def _labels(workload_id: str, runnable: Runnable) -> dict:

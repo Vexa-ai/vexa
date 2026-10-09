@@ -12,8 +12,8 @@ own configuration:
 * the store backing is injected from the runtime's process env (:class:`StoreConfig`) whenever the
   spec declares a mount set;
 * every mount in the set must sit strictly under the store root, and a mount carrying its own host
-  ``source`` must name one of the sources the runtime was configured to allow (the ``_global``
-  organisation tier, when it lives outside the store). Anything else refuses the spec with
+  ``source`` must name one of the out-of-store sources the runtime was configured to serve
+  (``RUNTIME_EXTRA_MOUNT_SOURCES``). Anything else refuses the spec with
   :class:`MountRefused` — a 400 at the API, before any substrate call.
 
 Pure and env-driven, so it is exercised offline with plain dicts.
@@ -24,31 +24,34 @@ import json
 import os
 import posixpath
 from dataclasses import dataclass
-from typing import Mapping, Optional
+from typing import Iterable, Mapping, Optional
 
 #: Spec env keys only the runtime may set. A caller-supplied value is discarded.
 RUNTIME_OWNED_PREFIXES = ("RUNTIME_K8S_", "VEXA_WORKSPACE_MOUNT_")
 
 STORE_SOURCE_ENV = "VEXA_WORKSPACE_MOUNT_SOURCE"
 STORE_TARGET_ENV = "VEXA_WORKSPACE_MOUNT_TARGET"
-#: The one out-of-store mount source a deployment may configure (agent-api's ``_global`` tier).
-GLOBAL_SOURCE_ENV = "VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH"
+#: The out-of-store host paths a mount may name as its ``source`` (comma-separated absolute paths).
+#: A deployment sets it to whatever it keeps outside the store — today the ``_global`` organisation
+#: tier when an operator manages that as a separate host repository.
+EXTRA_SOURCES_ENV = "RUNTIME_EXTRA_MOUNT_SOURCES"
 DEFAULT_STORE_TARGET = "/workspaces"
 
 MOUNTS_ENV = "VEXA_MOUNTS"
 WORKSPACE_PATH_ENV = "VEXA_WORKSPACE_PATH"
 
-#: Where an agent worker's Codex harness keeps its state and finds its subscription credential
-#: (``auth.json``). The ONE definition: the docker backend binds the credential to
-#: ``<WORKER_CODEX_HOME>/auth.json``, both container backends hand the worker ``CODEX_HOME`` with this
-#: value, and the worker (llm/codex.py) and the Codex CLI read ``CODEX_HOME``. Under the worker
-#: image's ``HOME=/tmp`` so a worker of any UID can write it (the image creates it world-writable).
+#: Where a workload's Codex harness keeps its state and finds its subscription credential
+#: (``auth.json``) when the runtime mounts credentials into it (``Runnable.credential_mounts``). The
+#: ONE definition: the docker backend binds the credential to ``<WORKER_CODEX_HOME>/auth.json``, both
+#: container backends hand the workload ``CODEX_HOME`` with this value, and the worker (llm/codex.py)
+#: and the Codex CLI read ``CODEX_HOME``. Under the worker image's ``HOME=/tmp`` so a worker of any
+#: UID can write it (the image creates it world-writable).
 WORKER_CODEX_HOME = "/tmp/.codex"
 CODEX_HOME_ENV = "CODEX_HOME"
 
 #: Deployment dials and model credentials the runtime forwards from its OWN environment into an
-#: agent WORKER (the runtime brokers model credentials). A value the dispatch already stamped wins.
-#: Meeting bots receive none of these: they read no model credential.
+#: agent worker (the runtime brokers model credentials) — the agent profile's ``forward_env``. A value
+#: the dispatch already stamped wins. Meeting bots receive none of these: they read no model credential.
 WORKER_FORWARD_ENV = (
     # The harness runner selection and its gate. What remains of the completion dials is read by the
     # openai-agent HARNESS inside the worker (decision 37), so it is forwarded.
@@ -90,8 +93,8 @@ WORKER_FORWARD_ENV = (
     "ANTHROPIC_DEFAULT_HAIKU_MODEL",
 )
 
-#: What a CHILD PROCESS (the process backend) inherits from the runtime's environment besides the
-#: worker forward list: what any program needs to run on this host (paths, locale, display and
+#: What a CHILD PROCESS (the process backend) inherits from the runtime's environment besides its
+#: profile's forward list: what any program needs to run on this host (paths, locale, display and
 #: audio, the browser install, proxies and CA bundles). Never product configuration and never a
 #: service credential — those reach a child only through its own spec.
 PROCESS_PLUMBING_ENV = (
@@ -106,22 +109,21 @@ PROCESS_PLUMBING_ENV = (
 )
 
 
-def forwarded_worker_env(parent: Mapping[str, str], env: Mapping[str, str]) -> dict[str, str]:
-    """The :data:`WORKER_FORWARD_ENV` values ``parent`` (the runtime's environment) holds that the
-    workload ``env`` does not already set."""
-    return {k: parent[k] for k in WORKER_FORWARD_ENV if parent.get(k) and k not in env}
+def forwarded_env(keys: Iterable[str], parent: Mapping[str, str],
+                  env: Mapping[str, str]) -> dict[str, str]:
+    """The ``keys`` values ``parent`` (the runtime's environment) holds that the workload ``env``
+    does not already set."""
+    return {k: parent[k] for k in keys if parent.get(k) and k not in env}
 
 
-def child_environment(env: Mapping[str, str], *, worker: bool,
+def child_environment(env: Mapping[str, str], *, forward: Iterable[str] = (),
                       parent: Optional[Mapping[str, str]] = None) -> dict[str, str]:
     """A child process's COMPLETE environment, built from scratch: host plumbing from ``parent``,
-    the worker forward list (agent workers only), then the workload's own ``env``. Nothing else of
-    the runtime's environment — its caller token, any service secret it was started with — reaches
-    the child."""
+    the profile's ``forward`` keys, then the workload's own ``env``. Nothing else of the runtime's
+    environment — its caller token, any service secret it was started with — reaches the child."""
     parent = os.environ if parent is None else parent
     out = {k: parent[k] for k in PROCESS_PLUMBING_ENV if k in parent}
-    if worker:
-        out.update(forwarded_worker_env(parent, env))
+    out.update(forwarded_env(forward, parent, env))
     out.update(env)
     return out
 
@@ -135,7 +137,8 @@ class StoreConfig:
     """The runtime's own view of the workspace store. ``source`` is what backs it on the substrate
     (a host path or named volume for docker, the PVC claim name for k8s, nothing for the process
     backend, which shares the filesystem); ``target`` is where it sits inside a workload;
-    ``extra_sources`` are the out-of-store host paths a mount may name as its ``source``."""
+    ``extra_sources`` are the out-of-store host paths a mount may name as its ``source``
+    (``RUNTIME_EXTRA_MOUNT_SOURCES``)."""
 
     source: str = ""
     target: str = DEFAULT_STORE_TARGET
@@ -145,11 +148,11 @@ class StoreConfig:
     def from_env(cls, env: Optional[Mapping[str, str]] = None) -> "StoreConfig":
         env = os.environ if env is None else env
         target = (env.get(STORE_TARGET_ENV) or "").strip() or DEFAULT_STORE_TARGET
-        global_src = (env.get(GLOBAL_SOURCE_ENV) or "").strip()
+        extra = [p.strip() for p in (env.get(EXTRA_SOURCES_ENV) or "").split(",") if p.strip()]
         return cls(
             source=(env.get(STORE_SOURCE_ENV) or "").strip(),
             target=_clean_abs(target, what=STORE_TARGET_ENV),
-            extra_sources=(_clean_abs(global_src, what=GLOBAL_SOURCE_ENV),) if global_src else (),
+            extra_sources=tuple(dict.fromkeys(_clean_abs(p, what=EXTRA_SOURCES_ENV) for p in extra)),
         )
 
 

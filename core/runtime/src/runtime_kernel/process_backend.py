@@ -28,7 +28,7 @@ from .backend import WorkloadHandle
 from .isolation import apply_process_isolation, child_env_for, plan_process_isolation, preexec_for
 from .models import Resources
 from .mounts import mount_set
-from .profiles import ROLE_WORKER, Runnable
+from .profiles import Runnable
 from .workload_env import child_environment
 
 log = logging.getLogger("runtime_kernel.process")
@@ -103,10 +103,10 @@ class ProcessBackend:
                      workload_id, len(mounts), ", ".join(m.get("slug", "?") for m in mounts))
         preexec = None
         # The child's environment is built from scratch (workload_env.child_environment): host
-        # plumbing, the worker forward list for an agent worker, and the workload's own env. The
-        # runtime's own environment — its caller token, and whatever service secrets the host
-        # process was started with — never reaches a child.
-        base_env = child_environment(env, worker=runnable.role == ROLE_WORKER)
+        # plumbing, the profile's forward list, and the workload's own env. The runtime's own
+        # environment — its caller token, and whatever service secrets the host process was started
+        # with — never reaches a child.
+        base_env = child_environment(env, forward=runnable.forward_env)
         child_env = base_env
         try:
             iso = plan_process_isolation(env)

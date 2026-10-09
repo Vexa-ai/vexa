@@ -27,6 +27,7 @@ from _caller import TOKEN, caller_client
 from runtime_kernel.backend import WorkloadHandle
 from runtime_kernel.docker_backend import DockerBackend
 from runtime_kernel.models import RuntimeState, WorkloadSpec, WorkloadStatus
+from runtime_kernel.profiles import default_registry, network_envs
 from runtime_kernel.store import InMemoryStore, WorkloadRecord
 
 
@@ -113,7 +114,8 @@ class FakeDockerSession:
 
 
 def _backend(containers: dict[str, dict]) -> tuple[DockerBackend, FakeDockerSession]:
-    be = DockerBackend()
+    # the shipped profiles' network settings, as build_production_app passes them
+    be = DockerBackend(network_envs=network_envs(default_registry()))
     fake = FakeDockerSession(containers)
     be._session = fake  # inject the fake socket
     return be, fake

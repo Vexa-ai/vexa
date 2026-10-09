@@ -14,7 +14,9 @@ from runtime_kernel.api import create_app
 from runtime_kernel.k8s_backend import build_pod
 from runtime_kernel.mounts import workspace_binds
 from runtime_kernel.process_backend import ProcessBackend
-from runtime_kernel.profiles import ROLE_BOT, ROLE_WORKER, Runnable
+from dataclasses import replace
+
+from runtime_kernel.profiles import Runnable
 from runtime_kernel.workload_env import (
     MountRefused,
     StoreConfig,
@@ -22,6 +24,7 @@ from runtime_kernel.workload_env import (
     workload_env,
 )
 
+import _profiles
 from _caller import TOKEN, caller_client
 
 STORE = StoreConfig(source="vexa_agent-workspaces", target="/workspaces",
@@ -72,7 +75,7 @@ def test_a_spec_cannot_add_runtime_scheduling_or_secret_mounts_to_a_pod():
     env = workload_env({"RUNTIME_K8S_SECRET_MOUNTS": '[{"secret": "vexa-secrets", "mountPath": "/s"}]'},
                        STORE)
     pod = build_pod(name="vexa-agent-x", workload_id="agent-x", namespace=None, resources=None,
-                    runnable=Runnable(image="img", role=ROLE_WORKER), env=env)
+                    runnable=_profiles.agent("img"), env=env)
     assert "volumes" not in pod["spec"]
 
 
@@ -129,8 +132,8 @@ def test_an_unconfigured_global_source_is_refused():
 def test_store_config_reads_the_runtime_env():
     cfg = StoreConfig.from_env({"VEXA_WORKSPACE_MOUNT_SOURCE": "pvc-x",
                                 "VEXA_WORKSPACE_MOUNT_TARGET": "/workspaces/",
-                                "VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH": "/srv/g"})
-    assert cfg == StoreConfig(source="pvc-x", target="/workspaces", extra_sources=("/srv/g",))
+                                "RUNTIME_EXTRA_MOUNT_SOURCES": "/srv/g, /srv/h/ ,"})
+    assert cfg == StoreConfig(source="pvc-x", target="/workspaces", extra_sources=("/srv/g", "/srv/h"))
     assert StoreConfig.from_env({}) == StoreConfig(source="", target="/workspaces", extra_sources=())
 
 
@@ -158,7 +161,7 @@ class _RecordingBackend:
 
 def test_a_refused_mount_is_a_400_that_reaches_nothing():
     backend = _RecordingBackend()
-    rt = Runtime(backend=backend, profiles={"agent": Runnable(command=["true"], role=ROLE_WORKER)},
+    rt = Runtime(backend=backend, profiles={"agent": replace(_profiles.agent(), command=["true"])},
                  workspace_store=STORE)
     client = caller_client(create_app(rt, caller_token=TOKEN))
     r = client.post("/workloads", json={"workloadId": "agent-1", "profile": "agent", "env": {
@@ -169,7 +172,7 @@ def test_a_refused_mount_is_a_400_that_reaches_nothing():
 
 def test_the_backend_receives_the_runtime_owned_env():
     backend = _RecordingBackend()
-    rt = Runtime(backend=backend, profiles={"agent": Runnable(command=["true"], role=ROLE_WORKER)},
+    rt = Runtime(backend=backend, profiles={"agent": replace(_profiles.agent(), command=["true"])},
                  workspace_store=STORE)
     client = caller_client(create_app(rt, caller_token=TOKEN))
     r = client.post("/workloads", json={"workloadId": "agent-1", "profile": "agent", "env": {
@@ -206,23 +209,27 @@ def _leaks(env: dict) -> list[str]:
                                      or k.startswith("ADMIN_")) and k in _RUNTIME_ENV)
 
 
+_WORKER_FORWARD = _profiles.agent().forward_env
+_BOT_FORWARD = _profiles.bot().forward_env
+
+
 def test_no_service_secret_reaches_a_child_process():
-    for worker in (True, False):
-        env = child_environment({"VEXA_UNIT_ID": "u1"}, worker=worker, parent=_RUNTIME_ENV)
+    for forward in (_WORKER_FORWARD, _BOT_FORWARD):
+        env = child_environment({"VEXA_UNIT_ID": "u1"}, forward=forward, parent=_RUNTIME_ENV)
         assert _leaks(env) == []
         assert env["PATH"] == "/usr/bin:/bin" and env["DISPLAY"] == ":99"
         assert env["VEXA_UNIT_ID"] == "u1"
 
 
 def test_model_credentials_reach_workers_only():
-    worker = child_environment({}, worker=True, parent=_RUNTIME_ENV)
-    bot = child_environment({}, worker=False, parent=_RUNTIME_ENV)
+    worker = child_environment({}, forward=_WORKER_FORWARD, parent=_RUNTIME_ENV)
+    bot = child_environment({}, forward=_BOT_FORWARD, parent=_RUNTIME_ENV)
     assert worker["ANTHROPIC_API_KEY"] == "model-credential" and worker["VEXA_AGENT_MODEL"] == "sonnet"
     assert "ANTHROPIC_API_KEY" not in bot and "VEXA_AGENT_MODEL" not in bot
 
 
 def test_a_dispatch_stamped_value_wins_over_the_forwarded_one():
-    env = child_environment({"VEXA_AGENT_MODEL": "opus"}, worker=True, parent=_RUNTIME_ENV)
+    env = child_environment({"VEXA_AGENT_MODEL": "opus"}, forward=_WORKER_FORWARD, parent=_RUNTIME_ENV)
     assert env["VEXA_AGENT_MODEL"] == "opus"
 
 
@@ -233,9 +240,9 @@ def test_a_real_child_sees_none_of_the_runtimes_secrets(monkeypatch, tmp_path):
     monkeypatch.setenv("PROCESS_LOG_DIR", str(tmp_path))
     out = tmp_path / "env.json"
     code = f"import json, os; json.dump(dict(os.environ), open({str(out)!r}, 'w'))"
-    for role in (ROLE_WORKER, ROLE_BOT):
+    for name, profile in (("worker", _profiles.agent()), ("bot", _profiles.bot())):
         b = ProcessBackend()
-        h = b.start(f"w-{role}", Runnable(command=[sys.executable, "-c", code], role=role), {"MARKER": "1"})
+        h = b.start(f"w-{name}", replace(profile, command=[sys.executable, "-c", code]), {"MARKER": "1"})
         h._impl.wait(timeout=20)
         seen = json.loads(out.read_text())
         assert seen["MARKER"] == "1"
