@@ -10,7 +10,7 @@ What a proposal MEANS — a public HTTPS endpoint, Telegram's three endpoints, O
 is the broker's `connection_setup.validate`, not this file. This file is the vocabulary: every key a
 proposal may carry, and nothing else (`extra='forbid'` all the way down).
 """
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -27,7 +27,7 @@ class OAuthSpec(BaseModel):
     model_config = ConfigDict(extra='forbid')
     authorization_url: str = Field(max_length=2000)
     token_url: str = Field(max_length=2000)
-    scopes: list[str] = Field(min_length=1, max_length=30)
+    scopes: list[Annotated[str, Field(min_length=1, max_length=300)]] = Field(min_length=1, max_length=30)
     token_auth: Literal['client_secret_post', 'client_secret_basic'] = 'client_secret_post'
 
 
