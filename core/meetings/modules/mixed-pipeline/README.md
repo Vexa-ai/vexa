@@ -39,6 +39,17 @@ ONNX).
 Each legacy segmentation **turn** is transcribed over the shared engine
 ([`buffer`](../buffer/) LocalAgreement confirm + [`whisper`](../whisper/) stt.v1,
 injected). Names are **derived too**, but cheaply:
+A start-hint for a NEW name can also CUT the open turn (`hintCutsTurns`, on where the hint is the
+server's own voice verdict for a named participant — Jitsi's dominant speaker): the segmenter finds no edge
+when a speaker takes over without a pause or with a similar voice, and the takeover's first words would
+otherwise commit under the previous name. The cut lands `hintCutLagMs` before the hint; the turn it
+opens — and every other turn on such a platform — is not held by the short-UI-switch guard, whose
+premise (a tile flip with no acoustic backing) is the opposite of a hint that IS the edge; on Jitsi
+every "Speaker" row after a quick switch was that guard. A turn is named over the audio it
+TRANSCRIBED (reclaimed start → last STT window end), not its bare segmenter span: a turn opened and
+closed in one instant still carries seconds of speech, and a name looked up over its empty span found
+nothing but slack. A fragment under 1.5 s the confidence gate still leaves unnamed at close takes the
+name with the most lit time over it on such platforms.
 [`ClusterNameBinder`](src/cluster-name-binder.ts) picks the max-overlap **lit hint**
 over the turn span (`recordHint` — Zoom active-speaker DOM, Teams captions /
 voice-outline), each lag-corrected. A turn with no overlapping hint yet publishes

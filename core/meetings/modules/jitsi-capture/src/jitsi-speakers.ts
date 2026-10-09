@@ -29,7 +29,8 @@ export interface JitsiSpeakersOptions {
    *  tMs = wall-clock at emit. */
   onSpeaking: (name: string, id: string, isEnd: boolean, tMs: number) => void;
   log?: (msg: string) => void;
-  /** Poll interval (ms). Default 400 — dominant-speaker changes are second-scale. */
+  /** Poll interval (ms). Default 200 — the app's dominant speaker moves within ~0.2 s of a new
+   *  voice (measured live, 2026-09-24), and every poll interval is added to the hint's lag. */
   pollMs?: number;
   /** Re-assert interval for a STILL-dominant speaker (ms). Default 2000 — the
    *  binder's heartbeat contract (must beat its open-turn grace). */
@@ -131,7 +132,7 @@ export function createJitsiSpeakers(opts: JitsiSpeakersOptions): JitsiSpeakers {
     changes++;
   };
 
-  const poll = setInterval(tick, opts.pollMs ?? 400);
+  const poll = setInterval(tick, opts.pollMs ?? 200);
   tick();
 
   return {
