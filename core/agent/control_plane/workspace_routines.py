@@ -19,6 +19,7 @@ from typing import Optional
 
 import yaml
 
+from control_plane import routine_resign
 from control_plane import routines as routines_mod
 from shared.ports import SchedulerPort
 
@@ -494,6 +495,15 @@ def start_workspace_routine_reconciler(
         return None
 
     def reconcile_once() -> None:
+        # Routines armed before dispatches were signed (`routine_resign.py`): re-armed once, here,
+        # because this loop keeps retrying until the scheduler answers — a boot-time call would be
+        # lost to a runtime that is still starting.
+        try:
+            routine_resign.resign_unsigned_routines(
+                scheduler, invocations_url=invocations_url, signing_secret=signing_secret,
+                store_root=workspaces_dir)
+        except Exception:
+            log.exception("re-signing routines armed before dispatch signing failed; retrying next pass")
         try:
             results = reconcile_all_workspace_routines(
                 scheduler=scheduler,
