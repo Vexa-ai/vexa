@@ -10,5 +10,6 @@ imports host symbols only from [`_host.ts`](_host.ts) (the one seam back to the 
 | `browser-args.ts` | canonical Chromium launch flags (`JOIN_BROWSER_ARGS`) |
 | `googlemeet/` · `msteams/` · `zoom/` · `jitsi/` | per-platform join · admission · leave · removal · selectors |
 | `shared/` | cross-platform helpers (the debug/escalation view) |
+| `phone/` | dial-in (`tel:`/`sip:`) addresses — the one platform with NO join flow; flag `VEXA_PHONE_PLATFORM` |
 
 Depends on `playwright` + Node builtins only (gate:isolation).

@@ -7,7 +7,7 @@ with jitsi as the newest row. Pure string logic — no app, no DB.
 from __future__ import annotations
 
 from meeting_api.bot_spawn.service import construct_meeting_url
-from meeting_api.collector.meeting_link import find_meeting_link, parse_meeting_url
+from meeting_api.collector.meeting_link import find_meeting_link, parse_meeting_url, parse_phone_url
 
 
 class TestParseJitsi:
@@ -219,3 +219,80 @@ class TestTeamsThreadIdIsBounded:
         start = time.monotonic()
         assert parse_meeting_url(f"https://teams.microsoft.com/l/meetup-join/{payload}") is None
         assert time.monotonic() - start < 2.0
+
+
+class TestPhoneDialIn:
+    """The dial-in (phone) platform — the Local room case: a conference speakerphone calls a
+    number and the call IS the meeting, with no web meeting anywhere. Feature-flagged behind
+    ``VEXA_PHONE_PLATFORM``; the flag is the whole blast radius."""
+
+    def test_flag_unset_parses_nothing(self, monkeypatch):
+        monkeypatch.delenv("VEXA_PHONE_PLATFORM", raising=False)
+        assert parse_meeting_url("tel:+15551234567") is None
+        assert parse_meeting_url("sip:room-3@calls.example.org") is None
+        assert parse_phone_url("tel:+15551234567") is None
+
+    def test_flag_unset_leaves_the_web_platforms_untouched(self, monkeypatch):
+        monkeypatch.delenv("VEXA_PHONE_PLATFORM", raising=False)
+        assert parse_meeting_url("https://meet.google.com/abc-defg-hij") == ("google_meet", "abc-defg-hij")
+        assert parse_meeting_url("https://meet.jit.si/VexaStandup") == ("jitsi", "VexaStandup")
+        assert parse_meeting_url("https://zoom.us/j/12345678901") == ("zoom", "12345678901")
+
+    def test_tel_parses_to_e164(self, monkeypatch):
+        monkeypatch.setenv("VEXA_PHONE_PLATFORM", "1")
+        assert parse_meeting_url("tel:+15551234567") == ("phone", "+15551234567")
+
+    def test_visual_separators_are_stripped(self, monkeypatch):
+        monkeypatch.setenv("VEXA_PHONE_PLATFORM", "1")
+        assert parse_meeting_url("tel:+1 (555) 123-4567") == ("phone", "+15551234567")
+
+    def test_missing_plus_is_canonicalized(self, monkeypatch):
+        monkeypatch.setenv("VEXA_PHONE_PLATFORM", "1")
+        assert parse_meeting_url("tel:15551234567") == ("phone", "+15551234567")
+
+    def test_pin_rides_into_the_address(self, monkeypatch):
+        monkeypatch.setenv("VEXA_PHONE_PLATFORM", "1")
+        assert parse_meeting_url("tel:+15551234567;pin=482913") == ("phone", "+15551234567:482913")
+
+    def test_sip_uri_parses_to_user_at_host(self, monkeypatch):
+        monkeypatch.setenv("VEXA_PHONE_PLATFORM", "1")
+        assert parse_meeting_url("sip:room-3@calls.example.org") == ("phone", "room-3@calls.example.org")
+
+    def test_sips_is_the_same_identity_as_sip(self, monkeypatch):
+        """TLS is a trunk concern, never an identity one — a room must not change id the day
+        the trunk turns on TLS, or its history splits in two."""
+        monkeypatch.setenv("VEXA_PHONE_PLATFORM", "1")
+        assert parse_meeting_url("sips:room-3@calls.example.org") == parse_meeting_url("sip:room-3@calls.example.org")
+
+    def test_sip_host_is_lowercased_user_part_is_not(self, monkeypatch):
+        monkeypatch.setenv("VEXA_PHONE_PLATFORM", "1")
+        assert parse_meeting_url("sip:Room-3@Calls.Example.ORG") == ("phone", "Room-3@calls.example.org")
+
+    def test_a_mangled_uri_yields_nothing_rather_than_a_plausible_address(self, monkeypatch):
+        monkeypatch.setenv("VEXA_PHONE_PLATFORM", "1")
+        assert parse_meeting_url("tel:+12") is None
+        assert parse_meeting_url("tel:+1555CALLME") is None
+        assert parse_meeting_url("sip:room-3") is None
+        assert parse_meeting_url("sip:room-3@localhost") is None
+        assert parse_meeting_url("tel:+15551234567;pin=abc") is None
+
+    def test_a_bare_number_is_not_a_dial_in_uri(self, monkeypatch):
+        """A bare 9–11 digit string is already Zoom's id shape; only an explicit scheme means
+        dial-in, or every Zoom id pasted without its URL would become a phone call."""
+        monkeypatch.setenv("VEXA_PHONE_PLATFORM", "1")
+        assert parse_meeting_url("12345678901") == ("zoom", "12345678901")
+
+    def test_a_web_link_is_never_read_as_dial_in(self, monkeypatch):
+        monkeypatch.setenv("VEXA_PHONE_PLATFORM", "1")
+        assert parse_meeting_url("https://meet.google.com/abc-defg-hij") == ("google_meet", "abc-defg-hij")
+        assert parse_meeting_url("https://teams.microsoft.com/meet/9361792952021") == ("teams", "9361792952021")
+
+    def test_free_text_scan_never_imports_a_dial_in_number(self, monkeypatch):
+        """A calendar invite carries a phone number in every signature block and in the dial-in
+        fallback of every WEB meeting. Scanning free text for tel: would import footers as
+        rooms, so find_meeting_link stays http(s)-only even with the flag on."""
+        monkeypatch.setenv("VEXA_PHONE_PLATFORM", "1")
+        assert find_meeting_link("Dial in: tel:+15551234567 — or join https://meet.jit.si/Standup") == (
+            "jitsi", "Standup", "https://meet.jit.si/Standup",
+        )
+        assert find_meeting_link("Call the office on tel:+15551234567") is None

@@ -15,6 +15,11 @@ Id formats (mirrors the dashboard join-form):
                   ``VEXA_JITSI_HOSTS``-declared deployments always; *jitsi* / meet-labelled
                   hosts on pasted links only. The room name is deployment-scoped, so the raw
                   URL rides alongside as ``meeting_url`` — never reconstructed from the id.
+  * phone       → the dial-in ADDRESS of a ``tel:`` / ``sip:`` URI (E.164, or ``user@host``,
+                  plus a ``;pin=`` when one rides along). The Local room case: a conference
+                  speakerphone calls a number and the call IS the meeting — no web meeting
+                  exists. Gated on ``VEXA_PHONE_PLATFORM``; unset, a dial-in URI parses to
+                  ``None`` exactly as it did before the platform existed.
 """
 from __future__ import annotations
 
@@ -35,6 +40,13 @@ _TEAMS_SHORT = re.compile(r"/meet/([^/?#]+)", re.IGNORECASE)
 # A Jitsi room is the URL path's single segment; permissive by design (jitsi accepts nearly any
 # room string) but excludes separators/whitespace so a mangled URL never yields a bogus room.
 _JITSI_ROOM = re.compile(r"^[^/?#\s]+$")
+# Dial-in. E.164 after RFC 3966 visual separators are stripped; a SIP user/host pair kept
+# deliberately narrow so a mangled URI never yields a plausible-looking address.
+_TEL_E164 = re.compile(r"^\+?\d{4,15}$")
+_SIP_USER = re.compile(r"^[^@\s:;/?#]+$")
+_SIP_HOST = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$")
+_PHONE_PIN = re.compile(r"^\d{2,12}$")
+_PHONE_SCHEMES = ("tel", "sip", "sips")
 # Zoom's own two join paths, on a host that does not say "zoom" — see the hosted-domain branch in
 # ``parse_meeting_url``. Anchored and digit-exact so nothing else can match it.
 _ZOOM_HOSTED_PATH = re.compile(r"^/(?:meeting|j)/(\d{10,11})/?$", re.IGNORECASE)
@@ -71,6 +83,60 @@ def _configured_jitsi_hosts() -> set[str]:
     return {h.strip().lower() for h in raw.split(",") if h.strip()}
 
 
+def _phone_platform_enabled() -> bool:
+    """Is the dial-in platform on for this deployment (``VEXA_PHONE_PLATFORM``)? Read per call,
+    so tests and reloads see the live env — the same rule ``VEXA_JITSI_HOSTS`` follows."""
+    return os.getenv("VEXA_PHONE_PLATFORM", "").strip().lower() in {"1", "true"}
+
+
+def parse_phone_url(raw: str) -> Optional[str]:
+    """A ``tel:`` / ``sip:`` / ``sips:`` URI → its canonical dial-in ADDRESS, or ``None``.
+
+        tel:+1 (555) 123-4567          → "+15551234567"
+        tel:+15551234567;pin=482913    → "+15551234567:482913"
+        sip:room-3@calls.example.org   → "room-3@calls.example.org"
+
+    The address is what you DIAL — stable, knowable before any call exists. It is not yet a
+    call: a DID hosts every call the room ever makes, so the inbound-call handler appends the
+    trunk's Call-ID before this becomes a meeting's ``native_meeting_id`` (the join layer's
+    ``phoneNativeMeetingId`` is the same rule on the TypeScript side). A pasted dial-in URI
+    therefore names a ROOM, the way a jitsi link names a room rather than a conversation.
+    """
+    if not _phone_platform_enabled():
+        return None
+    value = (raw or "").strip()
+    scheme, sep, rest = value.partition(":")
+    if not sep or scheme.lower() not in _PHONE_SCHEMES:
+        return None
+
+    address_part, *param_parts = rest.split(";")
+    params = {}
+    for part in param_parts:
+        key, eq, val = part.partition("=")
+        if eq:
+            params[key.strip().lower()] = val.strip()
+    pin = params.get("pin")
+    if pin is not None and not _PHONE_PIN.match(pin):
+        return None
+    suffix = f":{pin}" if pin else ""
+
+    if scheme.lower() == "tel":
+        number = re.sub(r"[\s().-]", "", address_part)
+        if not _TEL_E164.match(number):
+            return None
+        return (number if number.startswith("+") else f"+{number}") + suffix
+
+    # sip: / sips: — the transport difference (TLS) is a trunk concern, never an identity one,
+    # so a room does not change id the day the trunk turns on TLS.
+    user, at, host = address_part.rpartition("@")
+    if not at or not user:
+        return None
+    host = host.lower()
+    if not _SIP_USER.match(user) or not _SIP_HOST.match(host) or "." not in host:
+        return None
+    return f"{user}@{host}{suffix}"
+
+
 def parse_meeting_url(raw: str, *, generic_hosts: bool = True) -> Optional[tuple[str, str]]:
     """Parse a pasted meeting URL (or bare id) → ``(platform, native_meeting_id)``, or ``None``
     when nothing valid can be extracted. Accepts the same inputs the terminal's
@@ -83,6 +149,13 @@ def parse_meeting_url(raw: str, *, generic_hosts: bool = True) -> Optional[tuple
     value = (raw or "").strip()
     if not value:
         return None
+
+    # Dial-in first: a tel:/sip: URI has no hostname to inspect and belongs to no web platform.
+    # Gated inside parse_phone_url, so with VEXA_PHONE_PLATFORM unset this is a None check and
+    # every branch below behaves exactly as it did before the phone platform existed.
+    phone = parse_phone_url(value)
+    if phone:
+        return ("phone", phone)
 
     # Bare Google Meet code, e.g. "abc-defg-hij"
     if _GMEET_ID.match(value.lower()):
@@ -170,7 +243,12 @@ def parse_meeting_url(raw: str, *, generic_hosts: bool = True) -> Optional[tuple
 
 def find_meeting_link(text: str) -> Optional[tuple[str, str, str]]:
     """Scan free text (an ICS LOCATION/DESCRIPTION) for the FIRST recognizable meeting URL →
-    ``(platform, native_meeting_id, url)``, or ``None``. Only http(s) URLs are considered."""
+    ``(platform, native_meeting_id, url)``, or ``None``. Only http(s) URLs are considered.
+
+    Dial-in URIs are deliberately NOT scanned here. A calendar invitation carries a phone
+    number in almost every signature block and in the dial-in fallback of every WEB meeting,
+    so a free-text ``tel:`` scan would import a Zoom invite as a phone meeting and a footer as
+    a room. A dial-in address enters through a DELIBERATELY pasted link, never inference."""
     if not text:
         return None
     for m in re.finditer(r"https?://[^\s<>\"']+", text):
