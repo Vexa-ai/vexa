@@ -95,7 +95,7 @@ const PAST_CAP = 8;
 /** The past feed: each meeting's newest finished run, newest first, day-grouped. */
 export function pastFeed(groups: MeetingGroup[], cap: number = PAST_CAP): PastDay[] {
   const entries: PastEntry[] = groups
-    .filter((g) => g.pastRuns[0] && (g.pastRuns[0].has_recording || g.pastRuns[0].start_time))
+    .filter((g) => g.pastRuns[0] && (g.pastRuns[0].has_capture || g.pastRuns[0].start_time))
     .map((g) => ({ run: g.pastRuns[0], group: g }))
     .sort((a, b) => (b.run.start_time ?? "").localeCompare(a.run.start_time ?? ""))
     .slice(0, cap);
@@ -224,7 +224,7 @@ function PastLine({ m }: { m: MeetingMock }) {
   const [line, setLine] = useState<string>("");
   useEffect(() => {
     let on = true;
-    if (!m.has_recording) { setLine(""); return; }
+    if (!m.has_capture) { setLine(""); return; }
     fetchDurableTranscript(m.id)
       .then((t) => {
         if (!on) return;
@@ -233,7 +233,7 @@ function PastLine({ m }: { m: MeetingMock }) {
       })
       .catch(() => {});
     return () => { on = false; };
-  }, [m.id, m.has_recording]);
+  }, [m.id, m.has_capture]);
   const dur = (() => {
     if (!m.start_time || !m.end_time) return "";
     const min = Math.round((new Date(m.end_time).getTime() - new Date(m.start_time).getTime()) / 60000);
@@ -244,14 +244,20 @@ function PastLine({ m }: { m: MeetingMock }) {
   return <>{[when, dur, line].filter(Boolean).join(" · ")}</>;
 }
 
+/** The ONE deviation phrase a past row may carry. "nothing captured" is a failure report — it says
+ *  the bot did not record the meeting — so it is reserved for a run the core says captured nothing.
+ *  A captured run offers its recap until the user has opened it, then goes quiet. */
+export function pastPhrase(run: MeetingMock, unreviewed: boolean): { text: string; color: string } | null {
+  if (!run.has_capture) return { text: "nothing captured", color: "var(--t3)" };
+  return unreviewed ? { text: "recap ready", color: "var(--accent)" } : null;
+}
+
 function PastRow({ e, reviewedIds }: { e: PastEntry; reviewedIds: Set<string> }) {
   const run = e.run;
   const layout = useService(LayoutServiceId);
   const open = () => { markReviewed(run.id); layout.openTab(meetingTab(run)); };
   const unreviewed = !reviewedIds.has(run.id);
-  const phrase = run.has_recording
-    ? (unreviewed ? { text: "recap ready", color: "var(--accent)" } : null)
-    : { text: "nothing captured", color: "var(--t3)" };
+  const phrase = pastPhrase(run, unreviewed);
   return (
     <div onClick={open}
       style={{ display: "grid", gridTemplateColumns: "auto 1fr auto", alignItems: "center", gap: 10,

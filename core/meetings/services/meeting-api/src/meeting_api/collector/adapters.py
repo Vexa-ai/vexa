@@ -535,7 +535,7 @@ class SqlAlchemyTranscriptStore:
         from sqlalchemy.dialects.postgresql import JSONB
 
         from .models import Meeting
-        from .projection import DEFAULT_LIST_LIMIT, LIST_PIN_STATUSES, project_list_data
+        from .projection import DEFAULT_LIST_LIMIT, LIST_PIN_STATUSES, has_capture, project_list_data
 
         async with self._session_factory() as db:
             # ACCESS = owner OR transcript-share viewer OR member of the bound workspace. Shared meetings
@@ -670,6 +670,10 @@ class SqlAlchemyTranscriptStore:
                     # (hoisted the same way as `_meeting_projection_from_row` in app.py).
                     "completion_reason": (m.data or {}).get("completion_reason") if isinstance(m.data, dict) else None,
                     "failure_stage": (m.data or {}).get("failure_stage") if isinstance(m.data, dict) else None,
+                    # Capture as a scalar. `LIST_OMIT_KEYS` drops the heavy evidence (`recordings`)
+                    # from the list, so this is where a list consumer reads whether the meeting
+                    # captured anything — "recap ready" versus "nothing captured" on a row.
+                    "has_capture": has_capture(m.data),
                     "shared": not is_owner,   # surfaced via a share/membership, not owned by the caller
                     "created_at": _iso_utc(m.created_at),
                     "updated_at": _iso_utc(m.updated_at),
