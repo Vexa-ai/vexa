@@ -437,7 +437,7 @@
       "class": "capability",
       "capability": "model_inference",
       "secret": true,
-      "description": "DOCKER-HOST path to Codex subscription auth (~/.codex/auth.json); mounted read-only into spawned codex-runner workers at /root/.codex/auth.json",
+      "description": "DOCKER-HOST path to Codex subscription auth (~/.codex/auth.json); mounted read-only into spawned agent workers at /tmp/.codex/auth.json (WORKER_CODEX_HOME), or copied to ~/.codex/auth.json in a process-backend child's private HOME",
       "targets": [
         "compose"
       ]

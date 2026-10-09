@@ -7,7 +7,8 @@ Conforms to `runtime.v1` (and `schedule.v1` for the scheduler). Files:
 - `profiles` — the opaque-profile → Runnable registry (P11) + the real `meeting-bot` / `agent` profiles.
   A Runnable carries what its kind of workload is given beyond its spec (labels, network setting,
   forwarded settings, credential files and settings, host groups, Pod placement) as data; no backend
-  branches on a kind of workload or names a harness. `configured_credentials` is the one place that
+  names a harness. One residue: `docker_backend._worker_naming` renames an `agent-…` workload's
+  container to `worker-…` and labels it, keying on agent-api's id scheme. `configured_credentials` is the one place that
   maps the operator's credential settings to files.
 - `pod_scheduling` — a profile's Pod placement on Kubernetes (node selector, tolerations, priority class,
   image pull secrets), read from `RUNTIME_K8S_BOT_*` / `RUNTIME_K8S_AGENT_WORKER_*` and validated at boot.

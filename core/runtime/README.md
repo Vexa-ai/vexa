@@ -38,8 +38,7 @@ its own host source must name one of `RUNTIME_EXTRA_MOUNT_SOURCES`. The runtime 
 · RuntimeEvent + RuntimeState/StopReason enums) and
 [`core/runtime/contracts/schedule.v1`](contracts/schedule.v1) (ScheduleJob · Request · Retry).
 **Consumes:** none — it is the bottom of the stack; callers reference its `*.v1` by path.
-Both seal into the registry [`contracts.seal.json`](../../contracts.seal.json) (`schedule.v1`
-unsealed until `pnpm seal:contracts`). Schemas live next to each contract — not restated here.
+Both are sealed in the registry [`contracts.seal.json`](../../contracts.seal.json). Schemas live next to each contract — not restated here.
 
 ## Isolated evaluation
 `tests/` runs L1 contract (goldens ≡ schema), L2 unit (faked Backend/Store, `fakeredis` + `FakeClock`
