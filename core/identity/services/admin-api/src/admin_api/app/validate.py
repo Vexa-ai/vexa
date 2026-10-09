@@ -47,7 +47,7 @@ class ValidateRequest(BaseModel):
 
 class DelegationCeiling(BaseModel):
     """The dispatch's ceiling, copied from the delegation token's `scope` and `target`."""
-    regime: str                                   # "human" | "autonomous" as minted
+    regime: Literal["human", "autonomous"]        # as minted (delegation.regime_for_trigger)
     workspaces: Union[Literal["*"], List[str]]    # "*" (human regime) or the isolation set
     target: Optional[str] = None                  # the chat's default workspace; omitted when none
 
@@ -112,19 +112,30 @@ async def _validate_delegation(token: str, db: AsyncSession) -> Dict[str, Any]:
         uid = int(str(claims["sub"]))
     except (TypeError, ValueError):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Invalid delegation: malformed")
+    ceiling = _ceiling(claims.get("scope"))
     user = (await db.execute(select(User).where(User.id == uid))).scalar_one_or_none()
     if user is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Invalid delegation: no such user")
-    scope = claims.get("scope") if isinstance(claims.get("scope"), dict) else {}
     resp = identity_of(user, scopes=list(DELEGATED_SCOPES), is_admin=False)
-    resp["delegation"] = {"regime": str(scope.get("regime") or ""),
-                          "workspaces": scope.get("workspaces") if scope.get("workspaces") == "*"
-                          else [str(w) for w in (scope.get("workspaces") or [])]}
+    resp["delegation"] = ceiling
     if claims.get("target"):
         resp["delegation"]["target"] = str(claims["target"])
     resp["person_is_admin"] = signin_allow.is_admin(
         user.email, user.data, signin_allow.admin_emails()[0])
     return resp
+
+
+def _ceiling(scope: Any) -> Dict[str, Any]:
+    """A signed token's `scope` as the sealed ceiling (identity.v1 ValidateDelegation), or a 401: a
+    regime outside `human`/`autonomous`, or workspaces that are neither `"*"` nor a list of slugs,
+    describe no ceiling the services behind the gateway could enforce."""
+    scope = scope if isinstance(scope, dict) else {}
+    regime, workspaces = scope.get("regime"), scope.get("workspaces")
+    if regime not in ("human", "autonomous") or not (
+            workspaces == "*" or (isinstance(workspaces, list)
+                                  and all(isinstance(w, str) for w in workspaces))):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Invalid delegation: scope")
+    return {"regime": regime, "workspaces": workspaces}
 
 
 router = APIRouter()
