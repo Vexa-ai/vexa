@@ -16,7 +16,9 @@ bytes. An assertion is accepted for 30 seconds after `at` (5 seconds of clock sk
 
 Each role signs with its own key. A key file holds at least 32 bytes; surrounding whitespace is
 stripped, so a key generated as hex text and saved with a trailing newline reads the same in both
-languages. Stdlib only: this module is vendored into images that must not grow a dependency.
+languages. A key file holding one of the golden vectors' fixture keys (`PUBLISHED_KEYS`) is refused:
+anybody who has read this repository can sign with it. Stdlib only: this module is vendored into
+images that must not grow a dependency.
 """
 from __future__ import annotations
 
@@ -39,6 +41,13 @@ MIN_KEY_BYTES = 32
 _FIELDS = ("role", "actor", "session", "at", "nonce", "method", "path", "body")
 _TEXT_LIMIT = 160
 _PATH_LIMIT = 16384
+#: The fixed fixture keys the contract's signing vectors (golden/SignedAssertionVector.*.json) are
+#: made with. Published in this repository, so never a deployment's key: load_key refuses them.
+PUBLISHED_KEYS = frozenset({
+    b"fixture-agent-key-not-a-deployment-secret-0001",
+    b"fixture-human-key-not-a-deployment-secret-0001",
+    b"fixture-git-key-not-a-deployment-secret-000001",
+})
 
 
 class AssertionRefused(ValueError):
@@ -52,11 +61,16 @@ class AssertionRefused(ValueError):
 
 
 class KeyUnavailable(ValueError):
-    """A role key is missing, unreadable or shorter than MIN_KEY_BYTES (a configuration fault)."""
+    """A role key is missing, unreadable, shorter than MIN_KEY_BYTES or published (a configuration
+    fault)."""
+
+
+class PublishedKey(KeyUnavailable):
+    """A role key file holds one of PUBLISHED_KEYS, a fixture key from the contract's goldens."""
 
 
 def load_key(path: "str | Path") -> bytes:
-    """Read one role key file. Refuses a short key rather than signing with it."""
+    """Read one role key file. Refuses a short key, or a published one, rather than signing with it."""
     if not path:
         raise KeyUnavailable("no key file configured")
     try:
@@ -65,6 +79,8 @@ def load_key(path: "str | Path") -> bytes:
         raise KeyUnavailable("key file unreadable") from None
     if len(key) < MIN_KEY_BYTES:
         raise KeyUnavailable("key shorter than %d bytes" % MIN_KEY_BYTES)
+    if key in PUBLISHED_KEYS:
+        raise PublishedKey("key published in the credential-broker.v1 test vectors")
     return key
 
 

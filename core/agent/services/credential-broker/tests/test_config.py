@@ -9,7 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from conftest import write_keys
-from credential_broker import assertion, main, settings as settings_module
+from credential_broker import assertion, identity_token, main, settings as settings_module
 from credential_broker.config_preflight import ConfigError
 
 SRC = Path(settings_module.__file__).parent
@@ -74,3 +74,29 @@ def test_configured_environment_serves_with_the_encrypted_store(tmp_path, capsys
     assert "STORE-CANARY-SECRET" not in out
     stored = [json.loads(l) for l in out.splitlines() if '"connection_audit"' in l and '"stored"' in l]
     assert stored and stored[-1]["fields"]["action"] == "credential.store" and stored[-1]["fields"]["store"] == "local"
+
+
+def test_boot_refuses_the_published_rfc8032_identity_key(tmp_path):
+    """gateway-identity.v1's goldens are made with RFC 8032 TEST 1, whose seed is printed in the RFC.
+    A broker verifying with its public half would accept identities anybody can sign."""
+    published = tmp_path / "rfc8032-test1.pem"
+    published.write_text(identity_token.PUBLISHED_TEST_KEYS["RFC 8032 section 7.1 TEST 1"])
+    env, _ = env_for(tmp_path, VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE=str(published))
+    with pytest.raises(ConfigError) as e:
+        main.build_app(env)
+    assert "VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE" in str(e.value) and "RFC 8032" in str(e.value)
+    assert "BEGIN" not in str(e.value)
+
+
+@pytest.mark.parametrize("role", ["agent", "human", "git"])
+def test_boot_refuses_a_role_key_published_in_the_contract_vectors(tmp_path, role):
+    """credential-broker.v1's SignedAssertionVector goldens carry fixed fixture keys. A role key
+    file still holding one would accept assertions anybody who read the repository can sign."""
+    published = sorted(assertion.PUBLISHED_KEYS)[0]
+    path = tmp_path / f"published-{role}.key"
+    path.write_bytes(published + b"\n")
+    env, _ = env_for(tmp_path, **{f"VEXA_CONNECTIONS_{role.upper()}_KEY_FILE": str(path)})
+    with pytest.raises(ConfigError) as e:
+        main.build_app(env)
+    assert f"VEXA_CONNECTIONS_{role.upper()}_KEY_FILE" in str(e.value)
+    assert published.decode() not in str(e.value), "a refusal must never echo the key"

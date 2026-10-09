@@ -12,7 +12,7 @@ from typing import Mapping, Optional
 
 from fastapi import FastAPI
 
-from . import identity_token
+from . import assertion, identity_token
 from .app import Broker, create_app
 from .config_preflight import ConfigError, preflight
 from .obs import log_event
@@ -44,6 +44,17 @@ def build_app(env: Optional[Mapping[str, str]] = None) -> FastAPI:
         identity_token.read_verify_key(settings.identity_public_key_file)
     except identity_token.KeyUnavailable as e:
         raise ConfigError(f"credential-broker refuses to boot: VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE — {e}") from None
+    # credential-broker.v1: a role key file holding a fixture key from the contract's goldens would
+    # accept assertions anybody can sign, so it stops the boot. Any other unusable role key is still
+    # refused per use, as before.
+    for role, path in settings.key_files.items():
+        try:
+            assertion.load_key(path)
+        except assertion.PublishedKey as e:
+            raise ConfigError(f"credential-broker refuses to boot: VEXA_CONNECTIONS_{role.upper()}_KEY_FILE — {e}; "
+                              "generate this deployment's own key (`openssl rand -hex 32`)") from None
+        except assertion.KeyUnavailable:
+            pass
     store = build_store(settings)
     log_event("broker_started", fields={"store": store.name, "git_store": bool(settings.key_files.get("git")),
                                         "google_oauth": bool(settings.google_client_id and settings.product_redirect)})

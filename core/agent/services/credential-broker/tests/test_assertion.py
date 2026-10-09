@@ -81,6 +81,18 @@ def test_claim_tampering_breaks_the_signature():
     assert e.value.kind == "signature"
 
 
+@pytest.mark.parametrize("vector", VECTORS, ids=lambda p: p.stem)
+def test_every_golden_key_is_published_and_never_loads_as_a_deployment_key(vector, tmp_path):
+    """The vectors' keys are fixed fixture values in a public repository. Each is on PUBLISHED_KEYS,
+    so a key file still holding one is refused wherever a role key is loaded (the broker, agent-api)."""
+    key = json.loads(vector.read_text())["key"].encode()
+    assert key in assertion.PUBLISHED_KEYS
+    p = tmp_path / "k"
+    p.write_bytes(b"  " + key + b"\n")
+    with pytest.raises(assertion.PublishedKey):
+        assertion.load_key(p)
+
+
 def test_short_keys_never_sign(tmp_path):
     p = tmp_path / "k"
     p.write_text("too-short")
