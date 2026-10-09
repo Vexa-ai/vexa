@@ -23,6 +23,7 @@ from fastapi.responses import JSONResponse
 
 from . import assertion, identity_token, providers, routes_connections, routes_git
 from .broker import Broker, route_of
+from .faults import UpstreamFault
 from .obs import TraceMiddleware, log_event
 
 
@@ -37,9 +38,16 @@ def create_app(broker: Broker) -> FastAPI:
         return JSONResponse({"detail": "Invalid request fields"}, 422)
 
     @app.exception_handler(providers.ProviderError)
-    async def provider_failure(request, exc):
-        b.fault("provider", "refused", route=route_of(request.url.path))
+    async def provider_refusal(request, exc):
+        # The person can act on it (reconnect, grant a permission, fix an argument).
+        b.refused("provider", "refused", route_of(request.url.path))
         return JSONResponse({"detail": str(exc)}, 409)
+
+    @app.exception_handler(UpstreamFault)
+    async def upstream_fault(request, exc):
+        # Google or a custom service is down or answered unusably: 503/502, never a reconnect.
+        b.fault(exc.source, exc.kind, route=route_of(request.url.path))
+        return JSONResponse({"detail": str(exc)}, exc.status)
 
     @app.middleware("http")
     async def boundaries(request: Request, call_next):

@@ -2,6 +2,7 @@
 import base64, http.client, json, time
 from urllib.parse import urlencode, quote
 from . import secret_service as transport
+from .faults import UpstreamFault
 
 
 def exchange(spec, app, *, code=None, verifier=None, redirect=None, refresh=None):
@@ -19,6 +20,8 @@ def exchange(spec, app, *, code=None, verifier=None, redirect=None, refresh=None
     try:
         conn.request('POST',u.path,body=urlencode(form).encode(),headers=headers)
         response=conn.getresponse()
+        if response.status==429 or response.status>=500:
+            raise UpstreamFault('service','rate_limited' if response.status==429 else 'bad_answer','OAuth token endpoint is unavailable; try again later')
         if response.status!=200:raise transport.ServiceError('OAuth exchange failed; check application credentials, registered redirect and consent')
         raw=response.read(65537)
         if len(raw)>65536:raise transport.ServiceError('OAuth response too large')
@@ -30,8 +33,10 @@ def exchange(spec, app, *, code=None, verifier=None, redirect=None, refresh=None
         return {'access_token':result['access_token'],'refresh_token':result.get('refresh_token') or refresh,
                 'expires_at':time.time()+max(0,int(result['expires_in'])) if 'expires_in' in result else None,
                 'granted_scope':result.get('scope')}
-    except (OSError,http.client.HTTPException,ValueError,TypeError,KeyError):
-        raise transport.ServiceError('OAuth exchange unavailable; try again') from None
+    except OSError:
+        raise UpstreamFault('service','unreachable','OAuth token endpoint could not be reached; try again later') from None
+    except (http.client.HTTPException,ValueError,TypeError,KeyError):
+        raise UpstreamFault('service','bad_answer','OAuth token endpoint answered with an unusable response; try again later') from None
     finally:conn.close()
 
 

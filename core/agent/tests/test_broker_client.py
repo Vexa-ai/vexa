@@ -114,6 +114,32 @@ def test_connection_faults_are_typed_and_logged_without_values(keys, broker, cap
     assert "PRIVATE" not in text and "fixture-agent-key" not in text
 
 
+@pytest.mark.parametrize("status,sentence", [
+    (503, "Account read is unavailable; the provider could not be reached"),
+    (502, "Account read is unavailable; the provider answered with an unreadable response"),
+])
+def test_an_upstream_outage_keeps_its_status_and_is_never_a_reconnect(keys, broker, caplog, status, sentence):
+    """The broker answers 502/503 when Google, a custom service or its own store is down. That is
+    an outage the person cannot fix, so it is not passed through as the 409 the person acts on,
+    and the agent is told not to ask for a reconnect."""
+    broker["handler"] = lambda req: httpx.Response(status, json={"detail": sentence})
+    caplog.set_level(logging.WARNING)
+    with pytest.raises(HTTPException) as exc:
+        connections.call_broker("u1", "POST", "/api/connections/" + "c" * 32 + "/read", {"action": "gmail.search"}, identity="signed-u1")
+    assert exc.value.status_code == status
+    assert exc.value.detail.startswith(sentence)
+    assert "not an authorization problem" in exc.value.detail and "do not ask the person to reconnect" in exc.value.detail
+    assert faults(caplog)[-1]["kind"] == f"http_{status}"
+
+
+def test_an_outage_without_a_sentence_still_says_what_it_is(keys, broker):
+    broker["handler"] = lambda req: httpx.Response(503, text="PRIVATE")
+    with pytest.raises(HTTPException) as exc:
+        connections.call_broker("u1", "GET", "/api/connections", identity="signed-u1")
+    assert exc.value.status_code == 503 and "PRIVATE" not in exc.value.detail
+    assert "not an authorization problem" in exc.value.detail
+
+
 def test_refusals_the_person_can_act_on_pass_through(keys, broker):
     broker["handler"] = lambda req: httpx.Response(409, json={"detail": "Matching connection is not ready"})
     with pytest.raises(HTTPException) as exc:

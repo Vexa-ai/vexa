@@ -1,6 +1,11 @@
-"""Human-configured HTTPS credential use. DNS is validated and pinned per request."""
+"""Human-configured HTTPS credential use. DNS is validated and pinned per request.
+
+A refusal the person can act on (a bad endpoint, a private address, a redirect) is `ServiceError`.
+A service that cannot be reached or answers unreadably is `faults.UpstreamFault` (source `service`).
+"""
 import base64,http.client,ipaddress,json,re,socket,ssl
 from urllib.parse import urlsplit,quote
+from .faults import UpstreamFault
 
 class ServiceError(Exception):pass
 
@@ -32,7 +37,12 @@ def public_addresses(host):
         ips=list(dict.fromkeys(item[4][0] for item in socket.getaddrinfo(host,443,type=socket.SOCK_STREAM)))
         if not ips or any(not ipaddress.ip_address(ip).is_global or ipaddress.ip_address(ip).is_multicast or ipaddress.ip_address(ip).is_reserved for ip in ips):raise ServiceError('Service must resolve only to public addresses')
         return ips
-    except (OSError,ValueError):raise ServiceError('Service address unavailable') from None
+    except socket.gaierror as e:
+        # A name that does not exist is the configuration's to fix; a resolver that did not answer is an outage.
+        if e.errno==socket.EAI_NONAME:raise ServiceError('Service host name does not resolve; check the configured endpoint') from None
+        raise UpstreamFault('service','unreachable','Service address could not be resolved; retry later') from None
+    except OSError:raise UpstreamFault('service','unreachable','Service address could not be resolved; retry later') from None
+    except ValueError:raise ServiceError('Service address unavailable') from None
 
 class PinnedHTTPS(http.client.HTTPSConnection):
     def __init__(self,host,ip):super().__init__(host,443,timeout=15,context=ssl.create_default_context());self.ip=ip
@@ -83,5 +93,6 @@ def execute(config, parameters, body=None):
         try:content=json.loads(text)
         except ValueError:content=text
         return {'http_status':response.status,'content':content,'untrusted_content':True}
-    except (OSError,http.client.HTTPException):raise ServiceError('Service request failed; do not automatically retry a POST') from None
+    except OSError:raise UpstreamFault('service','unreachable','Service could not be reached; do not automatically retry a POST') from None
+    except http.client.HTTPException:raise UpstreamFault('service','bad_answer','Service answered with an unreadable response; do not automatically retry a POST') from None
     finally:conn.close()

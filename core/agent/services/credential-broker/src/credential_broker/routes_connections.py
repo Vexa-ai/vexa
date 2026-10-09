@@ -5,6 +5,9 @@ connection.
   application), consent (authorize and the Google callback), disconnect and delete.
 * Use — account reads, Gmail drafts and custom-service calls, each audited before it acts.
 
+An upstream's refusal (`ProviderError`, `ServiceError`) answers 409; an upstream that is down or
+answers unusably (`faults.UpstreamFault`) answers 502/503 through the app's handler.
+
 No route returns a stored credential. Errors are fixed sentences and never echo input.
 """
 from __future__ import annotations
@@ -23,6 +26,7 @@ from pydantic import ValidationError
 
 from . import connection_setup, providers, secret_service, service_oauth, setup_schema
 from .broker import Broker, destination_host
+from .faults import UpstreamFault
 from .models import (AccountReadBody, CustomCallBody, CustomSecretBody, GmailDraftBody, OAuthApplicationBody,
                      PreparedSetupBody, SetupBody)
 
@@ -228,8 +232,13 @@ def build(b: Broker) -> APIRouter:
                 b.audit(who, cid, "oauth.authorize", "stored", receipt_id=saved.receipt, version=saved.version)
                 b.sql("UPDATE connections SET status=?,version=?,account=? WHERE id=?", ("ready", saved.version, account, cid))
             except (providers.ProviderError, HTTPException, secret_service.ServiceError):
-                b.fault("oauth", "exchange_refused", route="/api/auth/callback/google")
+                b.refused("oauth", "exchange_refused", "/api/auth/callback/google")
                 b.audit(who, cid, "oauth.authorize", "refused")
+                return {"connection_id": cid, "status": "refused"}
+            except UpstreamFault as exc:
+                # The consent did not complete because the token endpoint was down: a fault, typed.
+                b.fault(exc.source, exc.kind, route="/api/auth/callback/google")
+                b.audit(who, cid, "oauth.authorize", "failed")
                 return {"connection_id": cid, "status": "refused"}
         return {"connection_id": cid, "status": "connected"}
 
@@ -271,7 +280,7 @@ def build(b: Broker) -> APIRouter:
                 value = b.must_get(cid, row["version"])["value"]
                 b.audit(who, cid, "credential.read", "retrieved", operation=operation, version=row["version"])
                 value = b.refreshed(who, cid, row, value, operation)
-            except (providers.ProviderError, HTTPException):
+            except (providers.ProviderError, UpstreamFault, HTTPException):
                 b.audit(who, cid, body.action, "failed", operation=operation, version=row["version"])
                 raise
         # Token rotation is serialized; independent account reads must not hold the global lock.
@@ -279,7 +288,7 @@ def build(b: Broker) -> APIRouter:
             result = providers.read_account(row["provider"], value, **body.model_dump())
             b.audit(who, cid, body.action, "success", operation=operation, version=row["version"])
             return {"operation_id": operation, "source": row["provider"], "untrusted_content": True, **result}
-        except (providers.ProviderError, HTTPException):
+        except (providers.ProviderError, UpstreamFault, HTTPException):
             b.audit(who, cid, body.action, "failed", operation=operation, version=row["version"])
             raise
 
@@ -311,7 +320,7 @@ def build(b: Broker) -> APIRouter:
             b.sql("INSERT INTO draft_requests VALUES (?,?,?,?,?)", (body.request_id, who["actor"], cid, fingerprint, ""))
             try:
                 result = providers.create_gmail_draft(value, body.recipient, body.subject, body.body)
-            except providers.ProviderError:
+            except (providers.ProviderError, UpstreamFault):
                 b.audit(who, cid, "gmail.draft", "unknown", operation=body.request_id)
                 raise
             b.sql("UPDATE draft_requests SET result=? WHERE id=?", (json.dumps(result), body.request_id))
@@ -351,9 +360,12 @@ def build(b: Broker) -> APIRouter:
             else:
                 result = secret_service.execute(value, body.parameters, body.body)
         except secret_service.ServiceError as e:
-            b.fault("service", "refused", route="/api/connections/{cid}/call")
+            b.refused("service", "refused", "/api/connections/{cid}/call")
             b.audit(who, cid, "service.call", "failed", operation=operation)
             raise HTTPException(409, str(e)) from None
+        except UpstreamFault:
+            b.audit(who, cid, "service.call", "failed", operation=operation)
+            raise
         b.audit(who, cid, "service.call", "complete", operation=operation)
         return {"operation_id": operation, **result}
 

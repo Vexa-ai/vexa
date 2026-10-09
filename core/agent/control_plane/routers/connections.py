@@ -87,11 +87,11 @@ class CustomCall(BaseModel):
 def call_broker(actor, method, path, payload=None, *, identity):
     """One broker request as the agent role (credential-broker.v1), signed by the shared client.
 
-    ``identity`` is the gateway's signature over ``actor`` (gateway-identity.v1 ``X-Vexa-Identity``),
-    forwarded unchanged: the broker verifies it with the gateway's public key and acts for
-    ``actor`` only when it names them, so holding the agent key is not enough to act for anybody.
-    A refusal the person can act on (400/404/409/422) passes through with the broker's fixed
-    sentence. Anything else is a typed fault, logged by broker_client, and answered 503."""
+    ``identity`` is the gateway's signature over ``actor`` (gateway-identity.v1), forwarded
+    unchanged; the broker acts for ``actor`` only when it names them. A refusal the person can act
+    on (400/404/409/422) passes through with the broker's sentence. An outage (the broker's 502/503:
+    Google, a custom service or its store down) keeps its status and says not to reconnect.
+    Anything else is a typed fault, logged by broker_client, and answered 503."""
     try:
         response = broker_client.request(
             base_url=os.environ.get('VEXA_CONNECTIONS_BROKER_URL', ''),
@@ -102,8 +102,11 @@ def call_broker(actor, method, path, payload=None, *, identity):
         if response.status_code in (400, 404, 409, 422):
             detail = broker_client.json_of(response, role='agent', method=method, path=path).get('detail')
             raise HTTPException(response.status_code, detail if isinstance(detail, str) else 'Invalid connection request')
-        raise broker_client.fault('http_%d' % response.status_code, role='agent', method=method, path=path,
-                                  status=response.status_code)
+        fault = broker_client.fault('http_%d' % response.status_code, role='agent', method=method, path=path,
+                                    status=response.status_code)
+        if response.status_code in (502, 503):
+            raise HTTPException(response.status_code, broker_client.outage_sentence(response))
+        raise fault
     except broker_client.BrokerFault as exc:
         if exc.kind == 'config':
             raise HTTPException(503, 'Connections are not configured on this deployment') from None
@@ -173,13 +176,10 @@ _STATUS_FIELDS = ('id', 'provider', 'label', 'status', 'created', 'account', 'se
 
 
 def signed_identity(request: Request) -> str:
-    """The gateway's signature over the person this request acts for (gateway-identity.v1).
-
-    agent-api's IdentityGuard has verified it and left it on the request; it is forwarded to the
-    broker unchanged, and the broker verifies it again and acts only for the subject it names. A
-    caller that reached agent-api over the internal tier carries none — the internal tier is
-    agent-api's own credential, and the broker does not let agent-api name a person on its own say
-    — so it is refused here, with a sentence, rather than as an opaque broker fault."""
+    """The gateway's signature over the person this request acts for (gateway-identity.v1), as
+    agent-api's IdentityGuard verified it; the broker verifies it again. An internal-tier caller
+    carries none, and the broker never lets agent-api name a person on its own say, so it is
+    refused here with a sentence rather than as an opaque broker fault."""
     token = (request.headers.get(SIGNED_IDENTITY_HEADER) or '').strip()
     if not token:
         raise HTTPException(403, 'Connections act only for a person signed in through the gateway')

@@ -4,6 +4,10 @@ Provider URLs and scopes are reviewed constants, never caller arguments. The OAu
 (client id and secret) belongs to the operator and arrives from deployment configuration; user
 tokens belong in the credential store. The catalog holds the three providers a product caller can
 create: Gmail, Google Calendar, and a custom secret.
+
+A refusal the person can act on is `ProviderError` (answered 409). Google being unreachable, rate
+limiting, or answering with something unusable is `faults.UpstreamFault` (502/503): reconnecting
+does not fix an outage, so it is never reported as if it would.
 """
 from __future__ import annotations
 
@@ -16,6 +20,8 @@ from html.parser import HTMLParser
 from urllib.parse import urlencode
 
 import httpx
+
+from .faults import UpstreamFault
 
 CATALOG = {
     "custom_secret": {"label": "Custom secret", "method": "secret"},
@@ -32,7 +38,16 @@ READ_SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
 
 
 class ProviderError(Exception):
-    """A sanitized user-facing failure; never retains a provider response body."""
+    """A sanitized refusal the person can act on; never retains a provider response body."""
+
+
+#: httpx failures where no answer arrived at all: the provider is unreachable, not refusing.
+_NO_ANSWER = (httpx.TimeoutException, httpx.NetworkError, httpx.ProxyError)
+
+
+def _fault_for_status(status: int, message: str) -> UpstreamFault:
+    """A non-refusal HTTP answer: 429 is a rate limit, anything else (5xx, unexpected) a bad answer."""
+    return UpstreamFault("provider", "rate_limited" if status == 429 else "bad_answer", message)
 
 
 def family(provider: str) -> str:
@@ -62,12 +77,14 @@ def tokens(provider: str, client: dict, *, code=None, verifier=None, redirect=No
                 return tokens(provider, client, code=code, verifier=verifier, redirect=redirect,
                               refresh=refresh, http=session)
         response = http.post(TOKEN[item["family"]], data=form)
+        if response.status_code == 429 or response.status_code >= 500:
+            raise _fault_for_status(response.status_code, "Provider authorization is unavailable; try again later")
         if response.status_code != 200:
             raise ProviderError("Authorization failed; reconnect this account")
         result = response.json()
         access = result.get("access_token")
         if not isinstance(access, str) or not access or result.get("token_type", "").lower() != "bearer":
-            raise ProviderError("Provider did not return a usable authorization")
+            raise UpstreamFault("provider", "bad_answer", "Provider did not return a usable authorization; try again later")
         # Providers may omit scope on refresh; initial consent must prove the requested grants.
         required = {s.lower() for s in item["scopes"]}
         granted = {s.lower() for s in result.get("scope", "").split()}
@@ -76,8 +93,10 @@ def tokens(provider: str, client: dict, *, code=None, verifier=None, redirect=No
         return {"access_token": access, "refresh_token": result.get("refresh_token") or refresh,
                 "expires_at": time.time() + max(0, int(result.get("expires_in", 0))),
                 "scope": result.get("scope", "")}
-    except (httpx.HTTPError, ValueError, TypeError):
-        raise ProviderError("Provider authorization is unavailable; try connecting again") from None
+    except _NO_ANSWER:
+        raise UpstreamFault("provider", "unreachable", "Provider authorization is unavailable; try again later") from None
+    except (httpx.HTTPError, ValueError, TypeError, AttributeError):
+        raise UpstreamFault("provider", "bad_answer", "Provider authorization is unavailable; try again later") from None
 
 
 def refresh(provider: str, client: dict, value: dict) -> dict:
@@ -105,12 +124,12 @@ class _Text(HTMLParser):
             self.text.append(data)
 
 
+#: The answers that are refusals the person can act on. Any other non-200 answer is a fault.
 _PROVIDER_STATUS = {
     400: "Provider rejected the request arguments; check query, page token and date range",
     401: "Authorization rejected; reconnect this account",
     403: "Provider refused access; check granted scopes and API enablement",
     404: "Requested message or calendar was not found",
-    429: "Provider rate limit reached; retry later",
 }
 
 
@@ -132,17 +151,22 @@ def read_account(provider, value, action, *, query="", message_id="", time_min="
         try:
             with http.stream("GET", url, params=params,
                              headers={"Authorization": "Bearer " + value["access_token"]}) as response:
+                if response.status_code in _PROVIDER_STATUS:
+                    raise ProviderError(_PROVIDER_STATUS[response.status_code])
+                if response.status_code == 429:
+                    raise _fault_for_status(429, "Provider rate limit reached; retry later")
                 if response.status_code != 200:
-                    raise ProviderError(_PROVIDER_STATUS.get(response.status_code,
-                                                             "Provider temporarily unavailable; retry later"))
+                    raise _fault_for_status(response.status_code, "Provider temporarily unavailable; retry later")
                 raw = b""
                 for chunk in response.iter_bytes():
                     raw += chunk
                     if len(raw) > 2_000_000:
                         raise ProviderError("Provider response too large; narrow the request")
                 return json.loads(raw)
+        except _NO_ANSWER:
+            raise UpstreamFault("provider", "unreachable", "Account read is unavailable; the provider could not be reached") from None
         except (httpx.HTTPError, ValueError, KeyError, TypeError):
-            raise ProviderError("Account read is unavailable") from None
+            raise UpstreamFault("provider", "bad_answer", "Account read is unavailable; the provider answered with an unreadable response") from None
 
     base = "https://gmail.googleapis.com/gmail/v1/users/me/messages"
 
@@ -237,15 +261,19 @@ def create_gmail_draft(value, recipient, subject, body, *, http=None):
         response = http.post("https://gmail.googleapis.com/gmail/v1/users/me/drafts",
                              headers={"Authorization": "Bearer " + value["access_token"]},
                              json={"message": {"raw": raw}})
-        if response.status_code not in (200, 201):
+        if response.status_code in (400, 401, 403):
             raise ProviderError("Draft creation failed; check account permissions")
+        if response.status_code not in (200, 201):
+            raise _fault_for_status(response.status_code, "Draft outcome unknown; check Gmail Drafts before retrying")
         data = response.json()
         if not data.get("id"):
-            raise ProviderError("Draft outcome unknown; do not retry automatically")
+            raise UpstreamFault("provider", "bad_answer", "Draft outcome unknown; do not retry automatically")
         return {"draft_id": data["id"], "message_id": data.get("message", {}).get("id"),
                 "status": "draft_created", "sent": False}
-    except (httpx.HTTPError, ValueError):
-        raise ProviderError("Draft outcome unknown; check Gmail Drafts before retrying") from None
+    except _NO_ANSWER:
+        raise UpstreamFault("provider", "unreachable", "Draft outcome unknown; check Gmail Drafts before retrying") from None
+    except (httpx.HTTPError, ValueError, AttributeError):
+        raise UpstreamFault("provider", "bad_answer", "Draft outcome unknown; check Gmail Drafts before retrying") from None
 
 
 def account_email(provider, value, *, http=None):

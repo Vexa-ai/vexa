@@ -160,7 +160,14 @@ class Broker:
 
     @staticmethod
     def fault(source: str, kind: str, **fields) -> None:
+        """Something failed that the person cannot fix: a dependency down, misconfigured, or
+        answering unusably."""
         log_event("broker_fault", level="warning", fields={"source": source, "kind": kind, **fields})
+
+    @staticmethod
+    def refused(source: str, kind: str, route: str) -> None:
+        """An upstream refused, and the answer tells the person what to do. Not a fault."""
+        log_event("upstream_refused", level="warning", fields={"source": source, "kind": kind, "route": route})
 
     def pkce(self, state: str):
         verifier = base64.urlsafe_b64encode(hmac.new(self.hmac_key, state.encode(), hashlib.sha256).digest()).decode().rstrip("=")

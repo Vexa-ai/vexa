@@ -76,6 +76,18 @@ def request(*, base_url: str, key_file: str, role: str, actor: str, method: str,
         raise fault("transport", role=role, method=method, path=path) from None
 
 
+def outage_sentence(response: httpx.Response) -> str:
+    """What to say about a broker 502/503 (an upstream or its store is down): the broker's own fixed
+    sentence when it sent one, and that it is an outage — never a reason to reconnect. A body that
+    is not the broker's sentence is dropped, never echoed."""
+    try:
+        detail = response.json().get("detail")
+    except (ValueError, AttributeError):
+        detail = None
+    return ((detail if isinstance(detail, str) else "The connected service is unavailable") +
+            " — an outage, not an authorization problem: retry later, and do not ask the person to reconnect.")
+
+
 def json_of(response: httpx.Response, *, role: str, method: str, path: str) -> Any:
     try:
         return response.json()

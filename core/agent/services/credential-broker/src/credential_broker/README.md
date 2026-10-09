@@ -14,6 +14,7 @@
 | `store.py` | the store port: `LocalEncryptedStore` (AES-256-GCM, default) and `OpenBaoStore` (KV v2) |
 | `settings.py` | environment → `Settings`; refuses an unusable configuration at boot |
 | `providers.py` | Google OAuth, Gmail and Calendar adapters — fixed URLs and scopes |
+| `faults.py` | `UpstreamFault`: Google or a custom service unreachable, rate-limiting or answering unusably — 503/502 and a typed `broker_fault` line, never a refusal the person is told to fix |
 | `secret_service.py`, `service_oauth.py`, `connection_setup.py` | custom services: prepared setups, public-HTTPS-only execution, provider-neutral OAuth |
 | `setup_schema.py` | the shape of a setup proposal (every allowed key, `extra='forbid'`) and the refusal that names a rejected field; vendored byte for byte to agent-api's `control_plane/connection_setup_schema.py` (`scripts/parity.json`) |
 | `obs.py` | `logevent.v1` lines — names and kinds, never values |

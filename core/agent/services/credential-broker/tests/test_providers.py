@@ -7,6 +7,7 @@ import httpx
 import pytest
 
 from credential_broker import providers
+from credential_broker.faults import UpstreamFault
 from conftest import GOOGLE
 
 
@@ -91,9 +92,13 @@ def test_failed_exchange_is_refused_not_raised(signed, connection, capsys):
 
 
 def test_tokens_sanitized_and_scopes_checked():
-    for data in [{"access_token": "secret", "token_type": "Bearer", "scope": "wrong", "expires_in": 3600}, {"error": "secret-echo"}]:
+    # A grant without the requested scopes is the person's to fix (a refusal); a 200 without a
+    # usable token is the provider answering badly (a fault). Neither echoes the body.
+    for data, raised in [({"access_token": "secret", "token_type": "Bearer", "scope": "wrong", "expires_in": 3600},
+                          providers.ProviderError),
+                         ({"error": "secret-echo"}, UpstreamFault)]:
         http = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, json=data)))
-        with pytest.raises(providers.ProviderError) as err:
+        with pytest.raises(raised) as err:
             providers.tokens("google_email", GOOGLE, code="fixture-code", http=http)
         assert "secret" not in str(err.value)
 

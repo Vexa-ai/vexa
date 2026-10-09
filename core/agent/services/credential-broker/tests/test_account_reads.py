@@ -58,7 +58,7 @@ def test_both_providers_forward_and_return_cursor(provider, action, extra):
 
 
 @pytest.mark.parametrize("code,fragment", [(400, "arguments"), (401, "Authorization"), (403, "scopes"),
-                                           (404, "not found"), (429, "rate limit"), (503, "temporarily")])
+                                           (404, "not found")])
 def test_provider_failures_are_classified_without_body_leak(code, fragment):
     with httpx.Client(transport=httpx.MockTransport(lambda req: httpx.Response(code, text="PRIVATE"))) as c:
         with pytest.raises(providers.ProviderError) as e:
