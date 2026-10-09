@@ -32,7 +32,7 @@ from fastapi import APIRouter, Body, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 from fastapi.responses import StreamingResponse
 from shared import chat_label as chat_label_mod
-from shared import units
+from shared import unit_input, units
 from shared.marks import flow_mark
 
 #: How the terminal names a meeting's own agent session — `meet-<row id>`. The `/api/sessions`
@@ -85,6 +85,11 @@ def build(**d) -> APIRouter:
         refuse_delegated(request, reason="delegated_dispatch",
                          instruction="A chat turn is started by the person, not by an agent acting for "
                                      "them. Say what you would ask and stop; do not retry it another way.")
+
+    def _unit_key(unit_id: str) -> str:
+        """The unit's input key, the one the dispatcher signs that unit's entries with."""
+        secret = settings.internal_api_secret if settings is not None else None
+        return unit_input.unit_key(secret.get_secret_value() if secret else "", unit_id)
 
     def _toolbelt_configured() -> bool:
         return bool(settings is not None and (settings.mcp_url or "").strip()
@@ -374,7 +379,7 @@ def build(**d) -> APIRouter:
         except Exception:  # noqa: BLE001 — an unreadable generation is the id it always had
             gen = 0
         unit_id = units.chat_unit_id(subject, session, gen)
-        return {"pending": inbox_pending(redis_url, unit_id),
+        return {"pending": inbox_pending(redis_url, unit_id, _unit_key(unit_id)),
                 "cursor": _stream_tail_id(redis_url, units.output_topic(unit_id)) or ""}
 
     def _chat(body: ChatBody, request: Request, *, stream: bool):
@@ -728,7 +733,7 @@ def build(**d) -> APIRouter:
             # rows from this list rather than from what it remembers, which is what makes a reload,
             # another device and a swapped container agree.
             return {"ok": True, "id": body.turn_id or "", "session": session, "unit": unit_id,
-                    "pending": inbox_pending(redis_url, unit_id),
+                    "pending": inbox_pending(redis_url, unit_id, _unit_key(unit_id)),
                     "cursor": _stream_tail_id(redis_url, units.output_topic(unit_id)) or ""}
         return StreamingResponse(
             _sse(_binding_watch(stream_reader.read(unit_id, resume=resume), subject, session)),

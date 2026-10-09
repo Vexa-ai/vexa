@@ -232,6 +232,20 @@ procurement review can hold us to is self-hosted with no egress, not a certified
 
 Run these once on an existing install when you move to this release. They are safe to repeat.
 
+**Upgrade every component to this release together.** Several connections between Vexa's own
+components now carry a signature or credential that an older peer does not send, and the newer side
+refuses what it does not find. None of these mixes works, so do not leave any component behind:
+
+| If this is older than v0.13.2 | Under a v0.13.2 | What happens |
+|---|---|---|
+| the bot image (`BROWSER_IMAGE`, `runtime.browserImage`) | meeting-api | its lifecycle callbacks and uploads are refused (401) and its transcript entries are dropped |
+| the runtime | meeting-api | its workload callbacks are unsigned and refused (401) |
+| agent-api or meeting-api | the runtime | every workload and schedule call is refused (401) |
+| agent-api | the agent worker image (`AGENT_WORKER_IMAGE`) | the worker drops every follow-up message in a chat, silently |
+| the gateway or the MCP service | admin-api | a worker's delegation token is not confined to `/mcp`; run them from one release |
+
+Where you pin an image apart from the stack's tag, move the pin in the same upgrade.
+
 **Upgrade between meetings.** A bot now signs every transcript entry it writes, and meeting-api drops
 entries that are not signed. A bot from the previous release still in a call when you upgrade writes
 unsigned entries, so its meeting's live transcript stops (and the meeting leaves the terminal's live

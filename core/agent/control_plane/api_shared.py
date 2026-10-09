@@ -34,7 +34,7 @@ from control_plane import meeting_steering
 from control_plane import schedule_digest as schedule_digest_mod
 from control_plane import routines as routines_mod
 from control_plane.config_preflight import NOT_CONFIGURED, capability_state, missing_capability_keys
-from shared import units
+from shared import unit_input, units
 from control_plane import workspace_routines as workspace_routines_mod
 from control_plane import link_resolver as link_resolver_mod
 from control_plane import workspace_ids as ids_mod
@@ -181,8 +181,12 @@ INBOX_PENDING_MAX_AGE_SEC = 3600
 INBOX_PENDING_MAX_ROWS = 200
 
 
-def inbox_pending(redis_url: "str | None", unit_id: str) -> list[dict]:
+def inbox_pending(redis_url: "str | None", unit_id: str, key: str) -> list[dict]:
     """Everything submitted to this chat that its worker has not taken yet, oldest first.
+
+    Only entries signed with the unit's input key (``key``, ``shared.unit_input``) are listed: the
+    worker runs nothing else, so an unsigned or forged entry is not queued for anybody and must not
+    show as if it were. No key lists nothing.
 
     Best-effort by construction: no redis, an unreachable one, a stream that has never existed — all
     answer "nothing queued". A chat that cannot read its inbox shows no queued rows, which is what it
@@ -206,10 +210,9 @@ def inbox_pending(redis_url: "str | None", unit_id: str) -> list[dict]:
     for entry_id, fields in rows or []:
         if cursor and entry_id == cursor:
             continue                      # the entry the worker is on — taken, not queued
-        try:
-            msg = json.loads(fields.get("turn", "{}"))
-        except (TypeError, ValueError):
-            continue
+        msg = unit_input.verified_turn(key, fields or {})
+        if msg is None:
+            continue                      # unsigned, forged or another unit's: the worker refuses it
         meta = msg.get("inbox")
         if not isinstance(meta, dict):
             continue

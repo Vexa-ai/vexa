@@ -134,3 +134,16 @@ def test_agent_api_signs_what_it_delivers_with_the_key_it_hands_the_worker():
 def test_the_key_never_reaches_the_model_harness(monkeypatch):
     monkeypatch.setenv(unit_input.KEY_ENV, "aa" * 32)
     assert unit_input.KEY_ENV not in harness_subprocess_env()
+
+
+def test_the_contract_vector_is_this_module():
+    """unit.v1's InputVector, minted here and re-derived in Node by the contract's validate.mjs."""
+    from pathlib import Path
+
+    golden = (Path(__file__).resolve().parents[1] / "contracts" / "unit.v1" / "golden"
+              / "InputVector.chat-follow-up.json")
+    v = json.loads(golden.read_text())
+    assert unit_input.unit_key(v["secret"], v["unit_id"]) == v["key"]
+    entry = {"turn": v["turn"], "sig": v["sig"]}
+    assert unit_input.verified_turn(v["key"], entry) == json.loads(v["turn"])
+    assert unit_input.signed_entry(v["key"], json.loads(v["turn"])) == entry

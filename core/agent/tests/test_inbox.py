@@ -157,22 +157,31 @@ def test_a_row_stops_being_pending_when_the_worker_takes_it(client, fake_redis):
 
 
 def test_what_the_inbox_view_refuses_to_call_pending(fake_redis):
-    """Two filters, both about not inventing a queue nobody is in: an entry from a build that had no
-    inbox, and an entry so old that the only explanation is a worker that never ran."""
+    """Filters about not inventing a queue nobody is in: an entry from a build that had no inbox, an
+    entry so old that the only explanation is a worker that never ran, and an entry the worker would
+    refuse — unsigned, or signed with another unit's key."""
+    from shared import unit_input
+
+    key, other = "22" * 32, "33" * 32
     topic = units.input_topic("u-x")
-    fake_redis.xadd(topic, {"turn": json.dumps({"type": "message", "prompt": "old build"})})
-    fake_redis.xadd(topic, {"turn": json.dumps({"type": "message", "prompt": "stale", "inbox": {
-        "id": "c-old", "display": "stale", "at": time.time() - api_shared.INBOX_PENDING_MAX_AGE_SEC - 60}})})
-    fake_redis.xadd(topic, {"turn": json.dumps({"type": "message", "prompt": "live", "inbox": {
-        "id": "c-new", "display": "live", "at": time.time()}})})
-    assert [p["id"] for p in api_shared.inbox_pending("redis://fake", "u-x")] == ["c-new"]
+    fake_redis.xadd(topic, unit_input.signed_entry(key, {"type": "message", "prompt": "old build"}))
+    fake_redis.xadd(topic, unit_input.signed_entry(key, {"type": "message", "prompt": "stale", "inbox": {
+        "id": "c-old", "display": "stale", "at": time.time() - api_shared.INBOX_PENDING_MAX_AGE_SEC - 60}}))
+    fake_redis.xadd(topic, {"turn": json.dumps({"type": "message", "prompt": "unsigned", "inbox": {
+        "id": "c-unsigned", "display": "unsigned", "at": time.time()}})})
+    fake_redis.xadd(topic, unit_input.signed_entry(other, {"type": "message", "prompt": "forged", "inbox": {
+        "id": "c-forged", "display": "forged", "at": time.time()}}))
+    fake_redis.xadd(topic, unit_input.signed_entry(key, {"type": "message", "prompt": "live", "inbox": {
+        "id": "c-new", "display": "live", "at": time.time()}}))
+    assert [p["id"] for p in api_shared.inbox_pending("redis://fake", "u-x", key)] == ["c-new"]
+    assert api_shared.inbox_pending("redis://fake", "u-x", "") == []
 
 
 def test_no_redis_is_an_empty_inbox_and_never_an_error():
     """A chat that cannot read its inbox shows what it showed before one existed. It must never be
     the thing that fails the surface asking it."""
-    assert api_shared.inbox_pending("", "u-x") == []
-    assert api_shared.inbox_pending(None, "u-x") == []
+    assert api_shared.inbox_pending("", "u-x", "22" * 32) == []
+    assert api_shared.inbox_pending(None, "u-x", "22" * 32) == []
 
 
 def test_a_submission_never_moves_the_streaming_turn_s_head(client, fake_redis):

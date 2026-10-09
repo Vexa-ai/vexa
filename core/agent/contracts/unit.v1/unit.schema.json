@@ -120,6 +120,58 @@
         "context": { "$ref": "#/$defs/Context" },
         "start": { "$ref": "#/$defs/Start" }
       }
+    },
+    "InputEntry": {
+      "description": "One entry of a live unit's input stream unit:<id>:in, where agent-api (its only writer) puts the person's next message for a warm worker. `turn` is the message as a JSON string; `sig` is HMAC-SHA256(key = the unit's input key, message = the `turn` string) as 64 lowercase hex digits. The unit key is HMAC-SHA256(INTERNAL_API_SECRET, \"vexa-unit-input.v1:\" + unit id), hex; agent-api derives it per unit and hands it to that unit's worker as VEXA_UNIT_IN_KEY, and no other worker holds it. A worker runs only entries whose signature holds under its key, and runs none when it has no key. The chat's pending list shows only verifying entries. A worker from v0.13.2 under an agent-api from before it finds every follow-up unsigned and drops it: upgrade agent-api and the worker image together.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "turn",
+        "sig"
+      ],
+      "properties": {
+        "turn": {
+          "type": "string",
+          "minLength": 2
+        },
+        "sig": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "InputVector": {
+      "description": "A unit-input vector: the unit key derived from `secret` and `unit_id` must be `key`, and signing `turn` with it must give `sig`. The secret is a fixture.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "secret",
+        "unit_id",
+        "key",
+        "turn",
+        "sig"
+      ],
+      "properties": {
+        "secret": {
+          "type": "string",
+          "minLength": 1
+        },
+        "unit_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "key": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "turn": {
+          "type": "string"
+        },
+        "sig": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
     }
   }
 }

@@ -416,6 +416,25 @@
       ]
     },
     {
+      "id": "unit-input-label",
+      "fact": "the key-derivation label of a unit's input-stream key (unit.v1 InputEntry)",
+      "kind": "literal",
+      "enforced": true,
+      "canonical": "core/agent/shared/unit_input.py — _LABEL",
+      "how_to_agree": "a new label is a new envelope version: change unit_input.py, unit.v1 and its vector in one change, and re-seal",
+      "why": "agent-api signs and the worker verifies with one module, but the contract's validate.mjs restates the derivation to re-derive the vector; a label that differs there leaves the vector proving a scheme nobody runs.",
+      "sites": [
+        {
+          "path": "core/agent/shared/unit_input.py",
+          "pattern": "^_LABEL = b\"([^\"]+)\""
+        },
+        {
+          "path": "core/agent/contracts/unit.v1/validate.mjs",
+          "pattern": "^const UNIT_INPUT_LABEL = \"([^\"]+)\""
+        }
+      ]
+    },
+    {
       "id": "machinery-mark",
       "fact": "the machinery mark — the literal that hides a composed opening's prompt bubble",
       "kind": "literal",

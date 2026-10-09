@@ -25,6 +25,25 @@ The envelope carries *why + what + who + where*, **never domain bytes** (transcr
 `transcript.v1`; emails/docs ride as opaque `SourceRef`s). Every optional field is present from day one;
 MVPs **populate** them — they must never re-cut this envelope. No tenancy beyond `subject` (ADR-0003).
 
-**Status: UNSEALED** (in development) — not yet pinned in `contracts.seal.json`; `gate:schema` validates
-its goldens, `gate:contract-version` reports it unsealed. Sealed via `pnpm seal:contracts` on a
-`lane:contract` review at the end of the Foundation phase.
+## The live unit's input stream (`InputEntry`)
+A warm unit takes the person's next message from `unit:<id>:in`. agent-api is the stream's only writer,
+and Redis cannot say who wrote an entry, so each entry is signed:
+
+| Field | Value |
+|---|---|
+| `turn` | the message, as a JSON string |
+| `sig` | HMAC-SHA256 of the `turn` string, keyed with the unit's input key, 64 lowercase hex digits |
+
+The unit key is HMAC-SHA256(`INTERNAL_API_SECRET`, `"vexa-unit-input.v1:" + <unit id>`), hex. agent-api
+derives it per unit and hands it to that unit's worker as `VEXA_UNIT_IN_KEY`; no other worker holds it.
+A worker runs only entries that verify under its key, and none when it has no key; the chat's pending
+list shows only verifying entries too. The implementation is `core/agent/shared/unit_input.py`;
+`InputVector.chat-follow-up.json` pins it, and `validate.mjs` re-derives it in Node.
+
+**Upgrade agent-api and the worker image together** (v0.13.2 or later on both). A v0.13.2 worker under
+an older agent-api finds every follow-up unsigned and drops it, silently. Compose's
+`AGENT_WORKER_IMAGE` can pin the worker apart from agent-api; when it is pinned, move it in the same
+upgrade.
+
+**Status: sealed** in `contracts.seal.json` (gate:contract-version). An additive change re-seals with
+`pnpm seal:contracts` in a `lane:contract` PR; a breaking one is `unit.v2`.
