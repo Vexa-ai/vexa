@@ -25,6 +25,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import socket
 from datetime import datetime, timezone
 from typing import Optional
@@ -182,14 +183,30 @@ def signed_entry(token: str, payload: str) -> dict:
             "sig": hmac.new(token.encode(), payload.encode(), hashlib.sha256).hexdigest()}
 
 
+#: The one encoded form a ``sig`` has: an HMAC-SHA256 hexdigest, lowercase, as both signers write it
+#: (``signed_entry`` here, ``createHmac(...).digest('hex')`` in the bot's sink).
+_SIG_FORM = re.compile(r"[0-9a-f]{64}")
+
+
 def _admitted(fields: dict) -> bool:
     """Whether a stream entry was written by a session whose MeetingToken names the meeting the
-    entry speaks for. Never raises."""
+    entry speaks for. Never raises: an entry that cannot be parsed or verified is refused, and the
+    callers acknowledge a refused entry like any other — a malformed one must not abort the batch
+    and come back on every reclaim."""
+    try:
+        return _verify_entry(fields)
+    except Exception:  # noqa: BLE001 — any fault reading an entry is a refusal, never a stalled batch
+        return False
+
+
+def _verify_entry(fields: dict) -> bool:
     from ..meeting_token import verify_meeting_token
 
     auth, sig, payload = fields.get("auth"), fields.get("sig"), fields.get("payload")
     secret = os.environ.get("ADMIN_TOKEN")
     if not (isinstance(auth, str) and isinstance(sig, str) and isinstance(payload, str) and secret):
+        return False
+    if not _SIG_FORM.fullmatch(sig):
         return False
     if auth.count(".") != 1:
         return False
@@ -202,7 +219,9 @@ def _admitted(fields: dict) -> bool:
     except (ValueError, TypeError, AttributeError):
         return False
     expected = hmac.new(token.encode(), payload.encode(), hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, sig) and meeting_id == token_meeting
+    # Both sides are ASCII hex by now; compared as bytes, as compare_digest requires for anything else.
+    signed = hmac.compare_digest(expected.encode("ascii"), sig.encode("ascii"))
+    return signed and meeting_id == token_meeting
 
 
 def _log_refused(message_id: str) -> None:
