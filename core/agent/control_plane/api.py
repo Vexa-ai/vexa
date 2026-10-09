@@ -34,7 +34,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from jsonschema.exceptions import ValidationError
 from pydantic import BaseModel
 
-from control_plane import identity_token
+from control_plane import broker_client, identity_token
 from control_plane import meeting_mint as meeting_mint_mod
 from control_plane import meeting_room
 from control_plane import meeting_steering
@@ -209,6 +209,9 @@ def create_app(
     # the boot here, naming the fault and never the key.
     _identity_key_file = settings.gateway_identity_public_key_file if settings is not None else ""
     _identity_guarded = bool(_identity_key_file)
+    # Holds the guard-verified person for the broker calls made while serving the request (the Git
+    # credential store acts only for that person). Added first, so it sits INSIDE the guard.
+    app.add_middleware(broker_client.ForwardedIdentity)
     if _identity_guarded:
         try:
             _identity_key = identity_token.read_verify_key(_identity_key_file)

@@ -135,3 +135,54 @@ def test_installed_inside_the_guard_it_holds_the_signed_subject_not_an_asserted_
     claims = broker_assertion.verify(req.headers[broker_assertion.HEADER], key_for=lambda role: broker["key"],
                                      method="POST", path="/api/internal/git-secret", body=req.content)
     assert claims["actor"] == "u1" and req.headers["x-vexa-identity"] == token
+
+
+def test_the_shipped_app_installs_the_holder_inside_the_identity_guard(monkeypatch, tmp_path):
+    """agent-api's own `create_app` holds the signed person for the Git store, and holds it INSIDE
+    the guard, so what it holds is what the guard verified."""
+    from control_plane import identity_token
+    from control_plane.api import create_app
+    from control_plane.dispatch import Dispatcher
+    from shared.config import load_settings
+
+    key = identity_token.generate_signing_key()
+    public = tmp_path / "identity-public-key.pem"
+    public.write_bytes(identity_token.public_key_pem(key))
+    monkeypatch.setenv("VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE", str(public))
+    monkeypatch.setenv("INTERNAL_API_SECRET", "agent-test-internal-secret")
+    monkeypatch.setenv("VEXA_WORKSPACES_DIR", str(tmp_path / "ws"))
+
+    class _Runtime:
+        def spawn(self, workload_id, profile, env):
+            return workload_id
+
+    class _Identity:
+        def mint(self, subject, launcher, workspaces, tools):
+            return "tok"
+
+    app = create_app(Dispatcher(load_settings(), _Runtime(), _Identity()))
+    order = [m.cls for m in app.user_middleware]          # outermost first
+    assert broker_client.ForwardedIdentity in order
+    assert order.index(identity_token.IdentityGuard) < order.index(broker_client.ForwardedIdentity)
+
+
+def test_a_repository_import_s_thread_keeps_the_request_s_signed_person(tmp_path, broker):
+    """The import runs in a thread of its own; it carries the request's context, so its Git
+    credential reads still act for the person who asked."""
+    from control_plane import workspace_import
+
+    seen = []
+    done = threading.Event()
+
+    def operation():
+        seen.append(broker_client.forwarded())
+        done.set()
+        return {"slug": "x"}
+
+    held = broker_client._FORWARDED.set(("u1", SIGNED))
+    try:
+        workspace_import.start(tmp_path, "u1", "https://example.com/r.git", "main", operation)
+    finally:
+        broker_client._FORWARDED.reset(held)
+    assert done.wait(5)
+    assert seen == [("u1", SIGNED)]

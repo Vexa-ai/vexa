@@ -5,6 +5,7 @@ retry identity. Credentials stay in the operation closure, never in a job receip
 """
 from __future__ import annotations
 
+import contextvars
 import fcntl
 import hashlib
 import json
@@ -127,7 +128,10 @@ def start(root: str | Path, subject: str, repo: str, ref: str,
             finally:
                 lock.close()
 
-    worker = threading.Thread(target=run, name='workspace-import', daemon=True)
+    # The request's context travels with the work, so the Git credential reads it makes still
+    # act for the person who asked (broker_client.ForwardedIdentity).
+    worker = threading.Thread(target=contextvars.copy_context().run, args=(run,),
+                              name='workspace-import', daemon=True)
     try:
         worker.start()
     except Exception:
