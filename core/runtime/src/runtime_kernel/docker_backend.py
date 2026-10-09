@@ -24,7 +24,7 @@ from .backend import WorkloadHandle
 from .models import Resources
 from .mounts import workspace_binds
 from .profiles import ROLE_WORKER, Runnable
-from .workload_env import forwarded_worker_env
+from .workload_env import CODEX_HOME_ENV, WORKER_CODEX_HOME, forwarded_worker_env
 
 MANAGED_LABEL = "runtime.managed"
 WORKLOAD_ID_LABEL = "runtime.workload_id"
@@ -265,7 +265,7 @@ class DockerBackend:
             binds.append(f"{creds}:/root/.claude/.credentials.json:ro")
         codex_creds = os.getenv("HOST_CODEX_CREDENTIALS") if worker else None
         if codex_creds:
-            binds.append(f"{codex_creds}:/root/.codex/auth.json:ro")
+            binds.append(f"{codex_creds}:{WORKER_CODEX_HOME}/auth.json:ro")
         # DEV hot-mount (parallels the dev.yml service hot-reload): bind the HOST agent_api source over
         # the image's baked copy so a SPAWNED worker runs the latest worker.py with NO image rebuild —
         # the next spawn picks up the change. Host path (daemon-resolved); set only in dev.
@@ -285,6 +285,7 @@ class DockerBackend:
             # The Runtime BROKERS model credentials and worker dials into agent workers (never into
             # meeting bots, which read none). A dispatch-stamped value wins.
             spawn_env.update(forwarded_worker_env(os.environ, spawn_env))
+            spawn_env.setdefault(CODEX_HOME_ENV, WORKER_CODEX_HOME)
 
         payload: dict[str, Any] = {
             "Image": runnable.image,

@@ -247,3 +247,30 @@ def test_a_bot_receives_no_model_credential(monkeypatch, tmp_path):
     env = dict(item.split("=", 1) for item in worker["Env"])
     assert env["ANTHROPIC_API_KEY"] == "model-key"
     assert "/host/.claude/.credentials.json:/root/.claude/.credentials.json:ro" in worker["HostConfig"]["Binds"]
+
+
+def test_the_codex_credential_lands_where_the_worker_looks(monkeypatch):
+    """One Codex home: the credential is bound to <WORKER_CODEX_HOME>/auth.json and the worker is
+    told CODEX_HOME=<WORKER_CODEX_HOME> — the variable the harness and the Codex CLI read — on both
+    container backends; the worker image creates that directory writable by any UID."""
+    import pathlib
+    import re
+
+    from runtime_kernel.k8s_backend import build_pod
+    from runtime_kernel.workload_env import CODEX_HOME_ENV, WORKER_CODEX_HOME
+
+    monkeypatch.setenv("HOST_CODEX_CREDENTIALS", "/host/.codex/auth.json")
+    worker = _create_payload(monkeypatch, Runnable(image=TARGET, role=ROLE_WORKER), "agent-foo-chat")
+    env = dict(item.split("=", 1) for item in worker["Env"])
+    assert env[CODEX_HOME_ENV] == WORKER_CODEX_HOME
+    assert f"/host/.codex/auth.json:{WORKER_CODEX_HOME}/auth.json:ro" in worker["HostConfig"]["Binds"]
+    bot = _create_payload(monkeypatch, Runnable(image="bot:1", role="bot"), "mtg-1-abcdef12")
+    assert CODEX_HOME_ENV not in dict(item.split("=", 1) for item in bot["Env"])
+
+    pod = build_pod(name="vexa-agent-x", workload_id="agent-x", namespace=None, resources=None,
+                    runnable=Runnable(image="img", role=ROLE_WORKER), env={})
+    pod_env = {e["name"]: e["value"] for e in pod["spec"]["containers"][0]["env"]}
+    assert pod_env[CODEX_HOME_ENV] == WORKER_CODEX_HOME
+
+    dockerfile = (pathlib.Path(__file__).resolve().parents[3] / "core" / "agent" / "worker" / "Dockerfile").read_text()
+    assert re.search(rf"mkdir -p -m 1777 {re.escape(WORKER_CODEX_HOME)}\b", dockerfile)

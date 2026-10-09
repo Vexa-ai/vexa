@@ -278,7 +278,8 @@ def test_the_qwen_lane_dials_are_declared():
 # now plumbed on compose, helm and lite (they were `targets: []`, so no standard install could set them).
 # 105: +1 RUNTIME_API_TOKEN — the runtime caller credential every runtime.v1 / schedule.v1 call presents.
 # 106: +1 REDIS_WORKLOAD_ACL — what a spawned worker connects to Redis as.
-EXPECTED_DECLARED_KEYS = 106
+# 107: +1 CODEX_HOME — the worker's Codex home, named by the runtime and read by the harness.
+EXPECTED_DECLARED_KEYS = 107
 
 
 def test_connections_keys_are_capabilities_on_real_surfaces():

@@ -18,6 +18,7 @@ from .backend import WorkloadHandle
 from .models import Resources
 from .mounts import k8s_volume_mounts
 from .profiles import ROLE_WORKER, Runnable
+from .workload_env import CODEX_HOME_ENV, WORKER_CODEX_HOME
 
 MANAGED_LABEL = "runtime.managed"
 WORKLOAD_ID_LABEL = "runtime.workload_id"
@@ -212,6 +213,10 @@ def build_pod(
     Pure and env-driven ⇒ the whole manifest is asserted offline, with no cluster and no kubectl.
     (``kubectl run --dry-run=client`` is NOT a viable generator here: v1.34 performs API discovery
     before generating and exits 1 with no output when no server is reachable.)"""
+    if runnable.role == ROLE_WORKER and CODEX_HOME_ENV not in env:
+        # The worker's Codex home is the runtime's to name (workload_env.WORKER_CODEX_HOME): a
+        # credential Secret is mounted at <it>/auth.json, and the worker and the CLI read CODEX_HOME.
+        env = {**env, CODEX_HOME_ENV: WORKER_CODEX_HOME}
     container: dict = {
         "name": name,
         "image": runnable.image,

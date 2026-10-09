@@ -127,10 +127,13 @@ the repository or workspace:
    ```
 
 3. Rebuild `agent-worker` after changing the pinned Codex version, then recreate `runtime` and
-   `agent-api`. The runtime bind-mounts only that file at `/root/.codex/auth.json:ro` in each worker.
+   `agent-api`. The runtime bind-mounts only that file at `$CODEX_HOME/auth.json:ro` in each worker
+   and names `CODEX_HOME` (`/tmp/.codex`, `runtime_kernel.workload_env.WORKER_CODEX_HOME`); the
+   adapter and the Codex CLI read the same variable. On Kubernetes mount the Secret there
+   (`RUNTIME_K8S_SECRET_MOUNTS` with `mountPath: /tmp/.codex/auth.json`, `file: auth.json`).
 
 The adapter keeps rollout history under the private continuity mount's already-ignored
-`.claude/codex/sessions/`; the subscription auth file stays in `/root/.codex` and is never copied,
+`.claude/codex/sessions/`; the subscription auth file stays in `$CODEX_HOME` and is never copied,
 staged, emitted, or returned through the workspace API. `VEXA_CODEX_MODEL` is optional; leaving it
 empty uses the subscription account's Codex default and deliberately ignores an inherited
 `claude-*` model pin.

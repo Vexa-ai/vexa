@@ -276,7 +276,7 @@ def test_process_backend_reads_the_mount_set_without_binding(tmp_path):
 
 # ── k8s: file-shaped credential mounts for agent workers (the codex seam) ─────
 
-_SM = '[{"secret": "codex-auth", "mountPath": "/root/.codex"}]'
+_SM = '[{"secret": "codex-auth", "mountPath": "/tmp/.codex"}]'
 
 
 def test_k8s_secret_mounts_reach_agent_worker_pods_read_only():
@@ -286,7 +286,7 @@ def test_k8s_secret_mounts_reach_agent_worker_pods_read_only():
            "RUNTIME_K8S_SECRET_MOUNTS": _SM}
     spec = pod_overrides(env, container_name="w", worker=True)["spec"]
     assert {"name": "cred-0-codex-auth", "secret": {"secretName": "codex-auth"}} in spec["volumes"]
-    assert {"name": "cred-0-codex-auth", "mountPath": "/root/.codex", "readOnly": True} \
+    assert {"name": "cred-0-codex-auth", "mountPath": "/tmp/.codex", "readOnly": True} \
         in spec["containers"][0]["volumeMounts"]
 
 
@@ -322,7 +322,7 @@ def test_k8s_submitted_container_survives_the_mount_overlay():
     env_names = {e["name"] for e in c["env"]}
     assert "FOO" in env_names and "RUNTIME_K8S_SECRET_MOUNTS" not in env_names
     paths = {vm["mountPath"] for vm in c["volumeMounts"]}
-    assert "/workspaces/u1" in paths and "/root/.codex" in paths
+    assert "/workspaces/u1" in paths and "/tmp/.codex" in paths
 
 
 def test_k8s_pod_overrides_needs_no_image():
@@ -337,7 +337,7 @@ def test_k8s_secret_mount_file_uses_subpath_and_keeps_dir_writable():
     keeps sqlite state under ~/.codex; a whole-dir read-only mount killed its app-server on launch)."""
     env = {**_env(source="vexa-agent-workspaces"), "VEXA_UNIT_ID": "u-1",
            "RUNTIME_K8S_SECRET_MOUNTS":
-               '[{"secret": "codex-auth", "mountPath": "/root/.codex/auth.json", "file": "auth.json"}]'}
+               '[{"secret": "codex-auth", "mountPath": "/tmp/.codex/auth.json", "file": "auth.json"}]'}
     c = pod_overrides(env, container_name="w", worker=True)["spec"]["containers"][0]
-    assert {"name": "cred-0-codex-auth", "mountPath": "/root/.codex/auth.json",
+    assert {"name": "cred-0-codex-auth", "mountPath": "/tmp/.codex/auth.json",
             "readOnly": True, "subPath": "auth.json"} in c["volumeMounts"]

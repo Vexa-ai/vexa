@@ -164,6 +164,14 @@ def _mcp_config(path: Optional[str], allowed_tools: Iterable[str]) -> dict:
     return {"mcp_servers": selected} if selected else {}
 
 
+def codex_home() -> Path:
+    """Where Codex keeps its state and its subscription ``auth.json``: ``CODEX_HOME`` (the runtime
+    names it for every worker it spawns, and the Codex CLI reads the same variable), else
+    ``$HOME/.codex``."""
+    configured = (os.environ.get("CODEX_HOME") or "").strip()
+    return Path(configured) if configured else Path(os.environ.get("HOME", "/root")) / ".codex"
+
+
 def _link_sessions_into_workspace(work: Path) -> None:
     """Keep Codex rollouts durable without moving the subscription auth file into the workspace."""
     # `.claude/` is the frozen, already-ignored agent plumbing root in every existing workspace.
@@ -171,7 +179,7 @@ def _link_sessions_into_workspace(work: Path) -> None:
     # visible to the turn's commit-all path.
     ws_sessions = work / ".claude" / "codex" / "sessions"
     ws_sessions.mkdir(parents=True, exist_ok=True)
-    home_codex = Path(os.environ.get("HOME", "/root")) / ".codex"
+    home_codex = codex_home()
     home_codex.mkdir(parents=True, exist_ok=True)
     link = home_codex / "sessions"
     try:
@@ -226,7 +234,7 @@ class CodexHarness:
         if any((os.environ.get(key) or "").strip()
                for key in ("OPENAI_API_KEY", "CODEX_API_KEY")):
             return None
-        auth = Path(os.environ.get("HOME", "/root")) / ".codex" / "auth.json"
+        auth = codex_home() / "auth.json"
         try:
             if auth.is_file() and json.loads(auth.read_text(encoding="utf-8")):
                 return None

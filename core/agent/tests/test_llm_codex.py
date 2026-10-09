@@ -203,3 +203,25 @@ def test_a_failed_codex_item_moves_nothing():
     evs = _completed({"type": "fileChange", "id": "i5", "status": "failed",
                       "changes": [{"path": "/workspaces/u_1/notes/a.md"}]})
     assert [e["type"] for e in evs] == ["tool-result"]
+
+
+def test_codex_reads_its_home_from_codex_home_not_home(tmp_path: Path, monkeypatch):
+    """The runtime mounts the subscription credential at $CODEX_HOME/auth.json and names CODEX_HOME;
+    the worker image's HOME is elsewhere. The preflight and the session link follow CODEX_HOME."""
+    from llm import codex as codex_mod
+
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    (codex_home / "auth.json").write_text(json.dumps({"tokens": {"access_token": "x"}}))
+    monkeypatch.setenv("HOME", str(tmp_path / "elsewhere"))
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    for k in ("OPENAI_API_KEY", "CODEX_API_KEY"):
+        monkeypatch.delenv(k, raising=False)
+    assert codex_mod.codex_home() == codex_home
+    assert CodexHarness().preflight() is None
+    work = tmp_path / "ws"
+    CodexHarness().prepare(work)
+    assert (codex_home / "sessions").is_symlink()
+    monkeypatch.delenv("CODEX_HOME")
+    assert codex_mod.codex_home() == tmp_path / "elsewhere" / ".codex"
+    assert CodexHarness().preflight() is not None        # nothing at $HOME/.codex/auth.json

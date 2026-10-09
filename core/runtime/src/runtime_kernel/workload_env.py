@@ -38,6 +38,14 @@ DEFAULT_STORE_TARGET = "/workspaces"
 MOUNTS_ENV = "VEXA_MOUNTS"
 WORKSPACE_PATH_ENV = "VEXA_WORKSPACE_PATH"
 
+#: Where an agent worker's Codex harness keeps its state and finds its subscription credential
+#: (``auth.json``). The ONE definition: the docker backend binds the credential to
+#: ``<WORKER_CODEX_HOME>/auth.json``, both container backends hand the worker ``CODEX_HOME`` with this
+#: value, and the worker (llm/codex.py) and the Codex CLI read ``CODEX_HOME``. Under the worker
+#: image's ``HOME=/tmp`` so a worker of any UID can write it (the image creates it world-writable).
+WORKER_CODEX_HOME = "/tmp/.codex"
+CODEX_HOME_ENV = "CODEX_HOME"
+
 #: Deployment dials and model credentials the runtime forwards from its OWN environment into an
 #: agent WORKER (the runtime brokers model credentials). A value the dispatch already stamped wins.
 #: Meeting bots receive none of these: they read no model credential.

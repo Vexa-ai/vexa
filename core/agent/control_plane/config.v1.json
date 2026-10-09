@@ -293,6 +293,13 @@
       ]
     },
     {
+      "key": "CODEX_HOME",
+      "class": "defaulted",
+      "default": "($HOME/.codex)",
+      "description": "the worker's Codex home: state, and the subscription auth.json the runtime mounts there. The runtime names it for every worker it spawns (runtime_kernel.workload_env.WORKER_CODEX_HOME) and the Codex CLI reads the same variable, so the mount and the read cannot disagree",
+      "targets": []
+    },
+    {
       "key": "ANTHROPIC_API_KEY",
       "class": "capability",
       "capability": "model_inference",
