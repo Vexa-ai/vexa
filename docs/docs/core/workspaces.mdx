@@ -85,8 +85,9 @@ Code: `runtime_kernel/mounts.py` (`workspace_binds`, `k8s_volume_mounts`),
 - **Light default seed** (✅): a new workspace seeds from the light `default` template (**not** FINOS —
   `DEFAULT_TEMPLATE`/`default_template` flipped), whose **`README.md` is a human onboarding-dashboard**
   ("what's in here and what matters"), not developer docs. Convention: **the README is every
-  workspace's dashboard**, kept current by the agent (stated in the seed `CLAUDE.md`). FINOS stays an
-  opt-in template (`VEXA_DEFAULT_TEMPLATE=finos`).
+  workspace's dashboard**, kept current by the agent (stated in the seed `CLAUDE.md`). `default` is
+  the one template that ships (`behavior/workspaces/default`); `VEXA_DEFAULT_TEMPLATE` names another
+  subdirectory of `VEXA_WORKSPACE_SEEDS_DIR` if you add one, and the worker loads that template's skills.
 - **First-view / landing** (✅, `firstView.ts` + `Workbench.resolveFirstView`) — on login the pinned
   first tab is chosen by what's shared: **nothing → own README-onboarding**, **shared workspace → that
   workspace's README**, **shared meeting → the meeting**, **meeting + workspace → the workspace README

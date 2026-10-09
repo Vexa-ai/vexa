@@ -283,7 +283,7 @@ does not know or handed back as a link (owner) · `POST /api/workspace/membershi
 when the derived index could not be read.
 
 `POST /api/workspace/shared/{workspace_id}/attach` `{ repo?, ref?, slug?, token? }` →
-`{ workspace_id, active, repo, ref, attached, cloned, parked, nested, state }` — contributor or owner
+`{ workspace_id, active, repo, ref, attached, cloned, parked, state }` — contributor or owner
 only; the current tree is parked, and `policy/` is carried into the new one so an attach cannot lock
 the group out · `GET /api/workspace/shared/{workspace_id}/attached` → the attachment view plus `home`
 (`remote`, `url`, `branch`, `ahead`, `behind`) and `credential`, which says what kind of credential
@@ -295,7 +295,7 @@ exists and never its value · `POST /api/workspace/shared/{workspace_id}/active`
 `GET /api/workspace/active` →
 `{ subject, active: [{ slug, repo, ref, role, path, write, primary, name }], index_degraded }` — the
 ordered set the next dispatch mounts ·
-`POST /api/workspace/activate` `{ repo?, ref?, slug?, token? }` → `{ subject, slug, changed, cloned, nested }`,
+`POST /api/workspace/activate` `{ repo?, ref?, slug?, token? }` → `{ subject, slug, changed, cloned }`,
 additive: nothing else is parked ·
 `POST /api/workspace/new` `{ name? }` → `201 { subject, slug, changed, added }` (blank, seeded) ·
 `POST /api/workspace/deactivate` `{ slug }` → `{ subject, slug, changed }` — parks it, never destroys ·

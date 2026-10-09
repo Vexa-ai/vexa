@@ -203,10 +203,9 @@ that makes it real (P9: an ungated rule is aspirational). Foundations:
 | **Multi-tenant attribution** | the copilot **does** dispatch on live meetings; what is pre-M2 is *who it is attributed to* — the watcher starts with the default `subject = "u_live"` (`control_plane/api.py:2342` passes no `subject=` → `transcription_watcher.py:216`, whose docstring calls it a "PRE-M2 placeholder"), so every armed copilot lands on one subject instead of the meeting's owner | pass the real meeting owner at `transcription_watcher.start` before M2 ships | Auth spine · M2 |
 | **P9 / P6 — one front door** | `_resolve_user_id` is duplicated across four meeting-api routers (`collector` · `bot_spawn` · `lifecycle` · `recordings`) | fold identity resolution into the shared `identity` front door | cleanup |
 
-<Note>`subject_of` (`control_plane/api.py`) has no fallback subject in a deployed agent-api: with the
-gateway's public key configured (every deployment — the boot requires it), a request that names
-nobody is a `401`. `VEXA_AGENT_DEFAULT_SUBJECT` applies only to an app built without the identity guard,
-which is the in-process test harness.</Note>
+<Note>`subject_of` (`control_plane/api.py`) has no fallback subject in a deployed agent-api: a request
+that names nobody is a `401`. agent-api reads no `VEXA_AGENT_DEFAULT_SUBJECT`; the in-process test
+harness, which builds the app without the identity guard, passes its subject to `create_app`.</Note>
 
 ## Data at rest (encryption)
 

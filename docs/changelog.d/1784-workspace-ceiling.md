@@ -4,4 +4,6 @@
   checked where the workspace is resolved rather than route by route, including identity, activate,
   swap, import, rename, sharing, invites, members, reset, the chat target and the desk touch.
   Publishing, pushing, pulling and detaching a Git remote also need a person in the chat. A generated
-  test calls every route that names a workspace as such a worker.
+  test calls every route that names a workspace as such a worker. agent-api and meeting-api now read
+  one rule for "is a person in the loop": an identity whose regime header is present but empty
+  counts as a worker with nobody watching, where agent-api used to let it through.

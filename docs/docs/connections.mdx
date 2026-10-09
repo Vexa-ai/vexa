@@ -21,8 +21,12 @@ keep the person's key away from them.
 | Keys | generated once by `connections-keys` into four volumes | the `<release>-credential-broker-keys` Secret, generated once |
 | Who can reach it | agent-api and the terminal, on the internal `connections` network | agent-api and terminal Pods, by NetworkPolicy |
 
+The broker answers two probes without a key: `GET /health` (the process is up) and `GET /ready`,
+which answers `503` while its credential store does not, so a readiness check sends it no traffic
+it would refuse.
+
 Each service holds only its own key. agent-api signs as the **agent**: it can request a connection
-and use one. The terminal signs as the **human**, for the person signed in: only it can consent,
+and use one, and only for the person whose request the gateway signed. The terminal signs as the **human**, for the person signed in: only it can consent,
 save a credential, disconnect or delete. Agent workers hold no key and cannot reach the broker.
 
 Credentials are encrypted with AES-256-GCM. The encryption key lives apart from the state volume,
@@ -100,7 +104,7 @@ To keep credentials in an OpenBao or Vault you already run, set the backend to `
 | | Compose (`.env`) | Helm |
 |---|---|---|
 | Backend | `VEXA_CONNECTIONS_STORE=openbao` | `credentialBroker.store.backend: openbao` |
-| Address | `VEXA_CONNECTIONS_OPENBAO_ADDR=https://openbao.example:8200` | `credentialBroker.openbao.address` |
+| Address | `VEXA_CONNECTIONS_OPENBAO_ADDR=https://openbao.example:8200` (https; plain http only to this host's loopback) | `credentialBroker.openbao.address` |
 | Token | `VEXA_CONNECTIONS_OPENBAO_TOKEN_FILE` (mount the file into the broker) | `credentialBroker.openbao.tokenSecret` (a Secret with key `token`) |
 | Mount | `VEXA_CONNECTIONS_OPENBAO_MOUNT=connections` | `credentialBroker.openbao.mount` |
 
@@ -125,6 +129,7 @@ Every broker failure is logged as one JSON line with `"event":"broker_fault"`, a
 | `config` | agent-api, terminal | the broker URL or this service's key is not set or not readable |
 | `transport` | agent-api, terminal | the broker did not answer |
 | `http_401` | agent-api, terminal | the broker refused the signature: the two sides hold different keys, or clocks differ by more than 30 seconds |
-| `http_503` | agent-api, terminal | the broker could not reach its store; see the broker's own `store` fault |
+| `http_503` | agent-api, terminal | the broker could not reach its store (see the broker's own `store` fault), or Google or a custom service is down or rate-limiting |
+| `http_502` | agent-api, terminal | Google or a custom service answered with something unusable |
 | `expired`, `signature`, `replay` | broker (`assertion_refused`) | a request was refused before any route ran |
 | `transport`, `integrity`, `config` | broker (`source: store`) | the store is unreachable, a stored version did not decrypt (wrong store key), or the backend is misconfigured |
