@@ -10,7 +10,7 @@ serving on a placeholder — so they are supplied here BEFORE the import, exactl
 conftest does. `VEXA_FLOWS_DB_URL` matters most, and it is a syntactically-real but UNREACHABLE
 Postgres DSN (`127.0.0.1:1`, the same "never a service" convention the rig's conftest uses for its
 offline doors) rather than an offline dialect: `flows.db_from_url` now refuses anything that is not
-`postgres://`/`postgresql://` (SqliteDB — the old offline double — moved to a TEST fixture,
+a Postgres scheme, such as `postgresql+pg8000://` (SqliteDB — the old offline double — moved to a TEST fixture,
 `sqlite_double.py`, and is never reachable through a URL any more), and `postgres_db` is LAZY — the
 engine is created but does not connect, and the schema is applied on first real use, not at
 construction. So this module composes and this gate passes with no database running anywhere: the
@@ -38,7 +38,7 @@ _ENV = {"VEXA_FLOWS_API_KEY": "test-flows-key",
         # UNREACHABLE on purpose (port 1 is never a service) — proves the import touches no
         # network. A real Postgres DSN shape is required: unset or `sqlite://` both refuse at
         # `db_from_url` now (Postgres is the only production dialect).
-        "VEXA_FLOWS_DB_URL": "postgresql+psycopg://health-gate:unreachable@127.0.0.1:1/flows"}
+        "VEXA_FLOWS_DB_URL": "postgresql+pg8000://health-gate:unreachable@127.0.0.1:1/flows"}
 _saved = {k: os.environ.get(k) for k in _ENV}
 os.environ.update(_ENV)
 try:

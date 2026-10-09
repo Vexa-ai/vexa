@@ -33,7 +33,7 @@ import flows_config
 # whichever module imports first wins, and these tests read constants back off the LIVE module.
 _ENV = {"VEXA_FLOWS_API_KEY": "test-flows-key-preflight",
         "INTERNAL_API_SECRET": "test-internal-secret",
-        "VEXA_FLOWS_DB_URL": "postgresql+psycopg://preflight:unreachable@127.0.0.1:1/flows"}
+        "VEXA_FLOWS_DB_URL": "postgresql+pg8000://preflight:unreachable@127.0.0.1:1/flows"}
 _saved = {k: os.environ.get(k) for k in _ENV}
 os.environ.update(_ENV)
 try:
@@ -61,7 +61,7 @@ def _good_env() -> dict:
     for entry in _declaration()["keys"]:
         if entry.get("class") == "required-explicit":
             env[entry["key"]] = f"real-{entry['key'].lower().replace('_', '-')}"
-    env["VEXA_FLOWS_DB_URL"] = "postgresql+psycopg://flows:pw@db:5432/flows"
+    env["VEXA_FLOWS_DB_URL"] = "postgresql+pg8000://flows:pw@db:5432/flows"
     env["VEXA_FLOWS_ADMIN_API_URL"] = "http://admin-api:8057"
     return env
 

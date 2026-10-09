@@ -69,13 +69,15 @@ spec:
               # may have created it in the meantime / ahead of time) before refusing loudly.
               import os
               from sqlalchemy import create_engine, text
+              from flows.db import translate_pg8000_url as translate_url
               name = os.environ["FLOWS_DB_NAME"]
               admin_url = (
-                  "postgresql+psycopg://" + os.environ["DB_USER"] + ":" + os.environ["DB_PASSWORD"]
+                  "postgresql+pg8000://" + os.environ["DB_USER"] + ":" + os.environ["DB_PASSWORD"]
                   + "@" + os.environ["DB_HOST"] + ":" + os.environ["DB_PORT"] + "/" + os.environ["DB_NAME"]
                   + "?sslmode=" + os.environ["DB_SSL_MODE"]
               )
-              e = create_engine(admin_url, isolation_level="AUTOCOMMIT")
+              url, connect_args = translate_url(admin_url)
+              e = create_engine(url, isolation_level="AUTOCOMMIT", connect_args=connect_args)
               with e.connect() as c:
                   exists = c.execute(text("SELECT 1 FROM pg_database WHERE datname=:n"), {"n": name}).first()
                   if not exists:
@@ -128,7 +130,7 @@ spec:
           command: ["/bin/sh", "-c"]
           args:
             - |
-              export VEXA_FLOWS_DB_URL="postgresql+psycopg://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${FLOWS_DB_NAME}?sslmode=${DB_SSL_MODE}"
+              export VEXA_FLOWS_DB_URL="postgresql+pg8000://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${FLOWS_DB_NAME}?sslmode=${DB_SSL_MODE}"
               exec python -m flows_worker
           envFrom:
             - secretRef:
@@ -226,13 +228,15 @@ spec:
             - |
               import os
               from sqlalchemy import create_engine, text
+              from flows.db import translate_pg8000_url as translate_url
               name = os.environ["FLOWS_DB_NAME"]
               admin_url = (
-                  "postgresql+psycopg://" + os.environ["DB_USER"] + ":" + os.environ["DB_PASSWORD"]
+                  "postgresql+pg8000://" + os.environ["DB_USER"] + ":" + os.environ["DB_PASSWORD"]
                   + "@" + os.environ["DB_HOST"] + ":" + os.environ["DB_PORT"] + "/" + os.environ["DB_NAME"]
                   + "?sslmode=" + os.environ["DB_SSL_MODE"]
               )
-              e = create_engine(admin_url, isolation_level="AUTOCOMMIT")
+              url, connect_args = translate_url(admin_url)
+              e = create_engine(url, isolation_level="AUTOCOMMIT", connect_args=connect_args)
               with e.connect() as c:
                   exists = c.execute(text("SELECT 1 FROM pg_database WHERE datname=:n"), {"n": name}).first()
                   if not exists:
@@ -282,7 +286,7 @@ spec:
           command: ["/bin/sh", "-c"]
           args:
             - |
-              export VEXA_FLOWS_DB_URL="postgresql+psycopg://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${FLOWS_DB_NAME}?sslmode=${DB_SSL_MODE}"
+              export VEXA_FLOWS_DB_URL="postgresql+pg8000://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${FLOWS_DB_NAME}?sslmode=${DB_SSL_MODE}"
               exec python -m flows_integrations.mailbox
           envFrom:
             - secretRef:
@@ -367,13 +371,15 @@ spec:
             - |
               import os
               from sqlalchemy import create_engine, text
+              from flows.db import translate_pg8000_url as translate_url
               name = os.environ["FLOWS_DB_NAME"]
               admin_url = (
-                  "postgresql+psycopg://" + os.environ["DB_USER"] + ":" + os.environ["DB_PASSWORD"]
+                  "postgresql+pg8000://" + os.environ["DB_USER"] + ":" + os.environ["DB_PASSWORD"]
                   + "@" + os.environ["DB_HOST"] + ":" + os.environ["DB_PORT"] + "/" + os.environ["DB_NAME"]
                   + "?sslmode=" + os.environ["DB_SSL_MODE"]
               )
-              e = create_engine(admin_url, isolation_level="AUTOCOMMIT")
+              url, connect_args = translate_url(admin_url)
+              e = create_engine(url, isolation_level="AUTOCOMMIT", connect_args=connect_args)
               with e.connect() as c:
                   exists = c.execute(text("SELECT 1 FROM pg_database WHERE datname=:n"), {"n": name}).first()
                   if not exists:
@@ -423,7 +429,7 @@ spec:
           command: ["/bin/sh", "-c"]
           args:
             - |
-              export VEXA_FLOWS_DB_URL="postgresql+psycopg://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${FLOWS_DB_NAME}?sslmode=${DB_SSL_MODE}"
+              export VEXA_FLOWS_DB_URL="postgresql+pg8000://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${FLOWS_DB_NAME}?sslmode=${DB_SSL_MODE}"
               exec python -m flows_integrations.flows_api
           ports:
             - containerPort: 18200

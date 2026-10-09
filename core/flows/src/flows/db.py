@@ -2,6 +2,9 @@
 SQLAlchemy is the CONNECTION layer, imported lazily so an import-only caller — a liveness probe,
 gate:health — never needs it to be reachable; statements stay explicit SQL).
 
+Use `postgresql+pg8000://`: pg8000 is pure Python, needs no libpq, and is BSD-3-Clause
+(Category A), keeping the shipped driver free of LGPL dependencies.
+
 Production is Postgres, and ONLY Postgres (2026-09-03): claiming uses `FOR UPDATE SKIP LOCKED`,
 which is a Postgres-only clause, so there never was a second dialect this engine could actually
 run on. `postgres_db()` is lazy in two senses — the SQLAlchemy engine connects on first use, and
@@ -17,8 +20,10 @@ exported from the product package (`flows.SqliteDB`) was importable by anything 
 from __future__ import annotations
 
 import json
+import ssl
 from pathlib import Path
 from typing import Any, Optional, Protocol
+from urllib.parse import parse_qsl, urlsplit, urlunsplit
 
 SCHEMA = (Path(__file__).resolve().parents[2] / "schema.sql").read_text()
 
@@ -40,6 +45,53 @@ class UnsupportedDialect(ValueError):
     """
 
 
+def translate_pg8000_url(url: str) -> tuple[str, dict]:
+    """Adapt the operator's URL contract to pg8000; translation is the engine's job.
+
+    Only the `+pg8000` driver is translated. Remove `sslmode`, preserve other query
+    parameters, and return SQLAlchemy `connect_args` with these SSL semantics:
+
+    - absent, allow, prefer: {} — try SSL, fall back to plaintext.
+    - disable: {"ssl_context": False} — never SSL.
+    - require: an SSL context with certificate and hostname verification disabled.
+    - verify-ca, verify-full: the system CA context with hostname verification;
+      verify-ca is deliberately treated as verify-full.
+    - any other value: ValueError naming the invalid value.
+    """
+    parts = urlsplit(url)
+    if not parts.scheme.endswith("+pg8000"):
+        return url, {}
+
+    mode = None
+    query = []
+    for field in parts.query.split("&"):
+        pair = parse_qsl(field, keep_blank_values=True)
+        if pair and pair[0][0] == "sslmode":
+            mode = pair[0][1]
+        else:
+            query.append(field)
+    # libpq is case-insensitive here and treats an empty value as "not set"; the Helm template
+    # emits `?sslmode=${DB_SSL_MODE}` verbatim, so both shapes are operator input, not defects.
+    mode = mode.strip().lower() if mode is not None else None
+    if not mode:
+        clean_url = urlunsplit(parts._replace(query="&".join(query))) if mode == "" else url
+        return clean_url, {}
+
+    clean_url = urlunsplit(parts._replace(query="&".join(query)))
+    if mode in ("allow", "prefer"):
+        return clean_url, {}
+    if mode == "disable":
+        return clean_url, {"ssl_context": False}
+    if mode not in ("require", "verify-ca", "verify-full"):
+        raise ValueError(f"Unsupported sslmode: {mode!r}")
+
+    context = ssl.create_default_context()
+    if mode == "require":
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+    return clean_url, {"ssl_context": context}
+
+
 def postgres_db(url: str):  # pragma: no cover — production composition; lazy import by design
     """The Postgres adapter. `create_engine` itself is already lazy (no connection until first
     query); what this function adds is making SCHEMA APPLICATION lazy too, behind a one-shot
@@ -51,7 +103,8 @@ def postgres_db(url: str):  # pragma: no cover — production composition; lazy 
     claim) pays for the schema application once; every caller after it is free."""
     from sqlalchemy import create_engine, text
 
-    engine = create_engine(url, pool_pre_ping=True)
+    url, connect_args = translate_pg8000_url(url)
+    engine = create_engine(url, pool_pre_ping=True, connect_args=connect_args)
 
     class _Pg:
         dialect = "postgres"
@@ -92,8 +145,8 @@ def db_from_url(url: str):
     (`db_from_url(db_url())`), kept as a function rather than each site calling `postgres_db`
     directly so the choice of adapter stays a property of the CONFIGURATION, not the caller.
 
-    Postgres is the only production dialect: a `postgres://`/`postgresql://` URL (its
-    `+driver` variants included, e.g. `postgresql+psycopg://`) gets `postgres_db`; anything else
+    Postgres is the only production dialect: a `postgres`/`postgresql*` scheme
+    (use `postgresql+pg8000://` for the shipped driver) gets `postgres_db`; anything else
     is refused by name. There is no second branch — the offline/storm dialect (`SqliteDB`) is a
     test double now (`core/flows/tests/sqlite_double.py`), and a test constructs it directly
     rather than routing a `sqlite://` URL through here."""

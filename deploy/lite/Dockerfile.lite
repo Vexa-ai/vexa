@@ -130,11 +130,11 @@ RUN mkdir -p /var/log/supervisor /var/lib/redis /var/run/redis /workspaces
 #    `--python 3.12` pins the interpreter to match every compose image's `FROM python:3.12-slim`.
 #    The base's system python can lag requires-python >=3.11, so an unpinned
 #    `uv venv` would auto-download the newest managed CPython (3.14) — whose stack fails at boot
-#    (SQLAlchemy's psycopg dialect import). Pinning keeps Lite on the same interpreter as compose/helm.
+#    (SQLAlchemy dialect imports; flows uses pg8000). Pinning keeps Lite on the same interpreter as compose/helm.
 # admin-api
 COPY core/identity/services/admin-api/pyproject.toml core/identity/services/admin-api/uv.lock /tmp/admin/
 RUN cd /tmp/admin && uv venv --python 3.12 /opt/venvs/admin \
- && UV_PROJECT_ENVIRONMENT=/opt/venvs/admin uv sync --frozen --no-install-project \
+ && UV_PROJECT_ENVIRONMENT=/opt/venvs/admin uv sync --frozen --no-install-project --no-dev \
  && uv pip install --python /opt/venvs/admin/bin/python "uvicorn[standard]==0.34.0" "sqlalchemy[asyncio]==2.0.36" "asyncpg==0.30.0"
 # runtime
 COPY core/runtime/pyproject.toml core/runtime/uv.lock /tmp/runtime/
