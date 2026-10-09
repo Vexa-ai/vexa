@@ -146,6 +146,7 @@ Outgrow lite? Switch to [compose](../compose/README.md) — same images, same co
 | Shared X11 display | bots share one Xvfb (`:99`) — best for one browser session at a time |
 | Ephemeral redis | internal redis is in-container; mount `/var/lib/redis` for persistence |
 | Agent ↔ gateway | the agent control plane listens on `:8100`, but it believes a user only from the gateway's signature (`X-Vexa-Identity`) or the internal tier — reach it through the gateway's `/agent/*` with an API key |
+| Identity keypair | generated on first boot into `$VEXA_LITE_STATE_DIR/identity` (default `/var/lib/vexa/state`; mount the `vexa-lite-state` volume to keep it across re-creating the container). Every Lite program runs as root in one container, so the private key is separated from the agent workers by its file mode, not by a process boundary |
 
 ## Smoke probe — "is this install actually working?"
 

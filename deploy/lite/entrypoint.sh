@@ -70,9 +70,6 @@ export ADMIN_API_TOKEN="${ADMIN_API_TOKEN:-${ADMIN_TOKEN:-$(python3 -c "import s
 # internal tier (F95). A random per-boot value keeps the one-command quickstart working and is
 # nobody's to guess; set INTERNAL_API_SECRET explicitly when something outside talks in.
 export INTERNAL_API_SECRET="${INTERNAL_API_SECRET:-$(python3 -c "import secrets; print(secrets.token_hex(32))")}"
-# gateway-identity.v1 — the gateway signs the identity it resolved and agent-api and meeting-api verify it;
-# all three refuse to boot without it. Same terms as the internal tier: minted per boot unless set.
-export VEXA_GATEWAY_IDENTITY_SECRET="${VEXA_GATEWAY_IDENTITY_SECRET:-$(python3 -c "import secrets; print(secrets.token_hex(32))")}"
 # The worker toolbelt: agent-api signs each worker's delegation token, admin-api verifies it.
 export VEXA_MCP_DELEGATION_SECRET="${VEXA_MCP_DELEGATION_SECRET:-$(python3 -c "import secrets; print(secrets.token_hex(32))")}"
 export DEFAULT_BOT_NAME="${DEFAULT_BOT_NAME:-Vexa}"
@@ -153,6 +150,18 @@ export TERMINAL_PUBLIC_URL="${TERMINAL_PUBLIC_URL:-http://localhost:3001}"
 # and links valid. Mount a volume there, or pass NEXTAUTH_SECRET (`openssl rand -hex 32`), to keep it
 # across re-creating the container.
 lite_state_dir="${VEXA_LITE_STATE_DIR:-/var/lib/vexa/state}"
+export VEXA_LITE_STATE_DIR="$lite_state_dir"
+# gateway-identity.v1 — the gateway signs the identity it resolved with an Ed25519 PRIVATE key;
+# agent-api and meeting-api verify with the PUBLIC key and cannot sign. The pair is generated on the
+# first boot into $VEXA_LITE_STATE_DIR/identity (0700, the private key 0600) and reused on every
+# later one, so a restart keeps it; mount a volume there to keep it across re-creating the
+# container. supervisord names the signing key to [program:gateway] alone and the public key to
+# agent-api and meeting-api. Every Lite program is a root process in one container, so the file
+# mode, not a mount, is what keeps the agent workers (non-root) away from it. Delete
+# identity/signing-key.pem and restart to rotate. Prints which file it wrote, never a key.
+mkdir -p -m 0700 "$lite_state_dir/identity"
+/opt/venvs/gateway/bin/python /app/gateway/src/gateway/identity_token.py keygen \
+    "$lite_state_dir/identity/signing-key.pem" "$lite_state_dir/identity/public-key.pem"
 export NEXTAUTH_SECRET="${NEXTAUTH_SECRET:-$(/usr/local/bin/persisted-secret "$lite_state_dir/nextauth-secret")}"
 # Read by no Lite program; minted per boot like the internal tier so no published value is exported.
 export JWT_SECRET="${JWT_SECRET:-$(python3 -c "import secrets; print(secrets.token_hex(32))")}"
