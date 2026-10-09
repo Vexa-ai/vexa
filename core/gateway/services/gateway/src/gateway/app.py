@@ -10,7 +10,7 @@ behavior is the v0.12 carve of the deployed ``services/api-gateway/main.py``:
     refused at request time and refuses to build at all,
   * the CORE proxy routes — each forwards its method to the matching downstream URL and returns
     the downstream body + status VERBATIM (main.py:450-831, 367),
-  * the ``/ws`` multiplex control loop + redis pub/sub fan-in — subscribe → Subscribed ack;
+  * the ``/ws`` multiplex control loop + redis pub/sub fan-in (``multiplex.py``) — subscribe → Subscribed ack;
     unsubscribe → Unsubscribed ack AND stop the fan-in; ping → pong; the invalid_json /
     unknown_action / invalid_subscribe_payload / invalid_unsubscribe_payload / missing_api_key
     error vocabulary; raw redis payloads forwarded over ``tc:…:mutable`` / ``bm:…:status`` /
@@ -27,20 +27,18 @@ spans (preserved from the carve so gate:tracing stays green).
 """
 from __future__ import annotations
 
-import asyncio
 import json
-import os
-import re
-from collections.abc import Mapping
 from contextlib import AsyncExitStack
-from typing import Dict, FrozenSet, List, Optional, Set, Tuple
-from urllib.parse import quote
+from typing import Dict, FrozenSet, List, Optional, Tuple
 
 import httpx  # the downstream adapter's transport errors are mapped to 502/504 (not leaked as a 500)
 
-from fastapi import FastAPI, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, Response, WebSocket
 
 from . import identity_token, routes_manifest
+from .delegation import McpReentry, delegated_route_response, is_delegated, reported_admin
+from .multiplex import run_multiplex
+from .paths import invalid_path_param_response, path_segment, tail_path
 from fastapi.responses import StreamingResponse
 from fastapi.routing import APIRoute
 
@@ -166,55 +164,7 @@ _DEFAULT_MCP_URL = "http://mcp:8010"
 _MCP_HEADERS = ("mcp-session-id", "mcp-protocol-version")
 
 
-# Path params reach a handler URL-DECODED (Starlette resolves %3F/%23/%2E before the route sees
-# them), so interpolating one raw into a downstream URL lets a caller graft a query string, a
-# fragment or a dot-segment onto the hop — ``%2E%2E`` walks /user/calendars/{id} back up to
-# admin-api's /user. Every param is re-encoded as ONE opaque segment before it is interpolated.
-# Control characters (NUL, CR, LF) are refused here instead: httpx raises ``InvalidURL`` for them,
-# which is NOT a ``RequestError`` and would escape the 502/504 mapping as a gateway 500.
-def _path_segment(value: str) -> Tuple[Optional[str], Optional[Response]]:
-    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value):
-        return None, _invalid_path_param_response()
-    segment = quote(value, safe="")
-    # ``quote`` leaves "." alone (it is unreserved), but httpx RESOLVES a dot-only segment against
-    # the base path — "/user/calendars/.." becomes admin-api's "/user". Percent-encode it so the
-    # id stays data; "%2E%2E" survives httpx untouched and decodes back to ".." downstream.
-    if segment and set(segment) == {"."}:
-        segment = segment.replace(".", "%2E")
-    return segment, None
-
-
-def _invalid_path_param_response() -> Response:
-    return Response(
-        content=json.dumps({"detail": "invalid path parameter"}),
-        status_code=400,
-        media_type="application/json",
-    )
-
-
-# A CATCH-ALL TAIL (`/agent/{path:path}`, `/mcp/{path:path}`) is the same hazard as a path param,
-# several segments at a time: Starlette hands it over decoded, and httpx resolves a dot segment
-# against the downstream base — so a tail is only ever a path UNDER the prefix it was matched on.
-# A `.` or `..` segment (written plainly or percent-encoded) and an encoded slash or backslash are
-# refused outright (400): no client of these routes needs either, and refusing is clearer than
-# re-encoding something that was asking to change the path's shape. Every other segment goes
-# through `_path_segment`, so whatever survives is data in exactly the segment it was sent in.
-_ENCODED_SEPARATOR = re.compile(rb"%(?:2f|5c)", re.IGNORECASE)
-
-
-def _tail_path(path: str, request: Request) -> Tuple[Optional[str], Optional[Response]]:
-    raw = request.scope.get("raw_path") or b""
-    if _ENCODED_SEPARATOR.search(raw):
-        return None, _invalid_path_param_response()
-    out: List[str] = []
-    for segment in path.split("/"):
-        if segment in (".", ".."):
-            return None, _invalid_path_param_response()
-        encoded, error = _path_segment(segment)
-        if error is not None:
-            return None, error
-        out.append(encoded or "")
-    return "/".join(out), None
+# Path params and catch-all tails are re-encoded (or refused) in `paths.py` before any hop.
 
 
 def _required_scopes(request: Request, table=None) -> Optional[FrozenSet[str]]:
@@ -264,29 +214,7 @@ def _insufficient_scope_response() -> Response:
     )
 
 
-# ── A WORKER'S DELEGATION TOKEN IS AN MCP CREDENTIAL ─────────────────────────────────────────────
-# A `vxd_` bearer is minted per dispatch for the worker's toolbelt, and its audience is the MCP. The
-# edge therefore admits it on `/mcp` and nowhere else, so what a worker can do is what the MCP's
-# tools do — not every REST route a person's own key reaches.
-#
-# The MCP's tools act by calling back into this edge with the same bearer. That hop is admitted when
-# it carries, in `MCP_REENTRY_HEADER`, the identity this edge signed onto the `/mcp` forward it is
-# serving: only this edge can sign one, it lives a minute, and it must name the same person under
-# the same delegation as the bearer. The header is in the `x-vexa-internal-` family, so a client
-# cannot pass one through this edge to anything behind it.
-MCP_REENTRY_HEADER = "x-vexa-internal-mcp-identity"
-
-
-def _is_delegated(client_key: str, user_data: Mapping) -> bool:
-    return isinstance(user_data.get("delegation"), Mapping) or str(client_key).startswith("vxd_")
-
-
-def _delegated_route_response() -> Response:
-    return Response(
-        content=json.dumps({"detail": "a worker's delegation token is accepted on /mcp only"}),
-        status_code=403,
-        media_type="application/json",
-    )
+# A worker's delegation token is an MCP credential: where it is admitted is `delegation.py`.
 
 
 def create_app(
@@ -366,19 +294,11 @@ def create_app(
         if not user_data:
             return Response(content=json.dumps({"detail": "Invalid API key"}),
                             status_code=401, media_type="application/json")
-        # identity's own answer (`/internal/validate`): the MCP edge asks it before it spends the
-        # deployment's operator key on an `auth: admin` tool. A worker's delegation token is answered
-        # here only on the MCP's own re-entry, and it is the admin only when the person it acts for
-        # is the instance admin AND that person is in the loop (regime `human`); an unwatched run
-        # never is, whoever it acts for.
-        if _is_delegated(api_key, user_data):
-            if not _mcp_reentry(request, user_data):
-                return _delegated_route_response()
-            dlg = user_data.get("delegation") if isinstance(user_data.get("delegation"), Mapping) else {}
-            is_admin = (str(dlg.get("regime") or "") == "human"
-                        and user_data.get("person_is_admin") is True)
-        else:
-            is_admin = user_data.get("is_admin") is True
+        # A worker's delegation token is answered here only on the MCP's own re-entry.
+        delegated = is_delegated(api_key, user_data)
+        if delegated and not reentry.admits(request, user_data):
+            return delegated_route_response()
+        is_admin = reported_admin(user_data, delegated=delegated)
         set_user_id(user_data["user_id"])
         return {
             "user_id": user_data["user_id"],
@@ -392,28 +312,7 @@ def create_app(
     # (agent chat SSE). Returns (downstream_headers, None) on success, or (None, error_Response) when
     # the caller is rejected (fail-closed). This is the ONE place the key → user resolution and the
     # anti-spoof identity injection live, so REST and SSE scope a request identically.
-    _reentry_key = identity_key.public_key() if identity_key is not None else None
-
-    def _mcp_reentry(request: Request, user_data: Mapping) -> bool:
-        """Is this request a tool call the MCP is making on behalf of an admitted `/mcp` request?
-
-        True only for an identity this edge signed (verified with its own key's public half), still
-        within its lifetime, naming the same person and the same delegation as the bearer resolved
-        now. Anything else — no token, a forged or expired one, another person's, a person's own
-        identity without the delegation — is not re-entry."""
-        if _reentry_key is None:
-            return False
-        token = (request.headers.get(MCP_REENTRY_HEADER) or "").strip()
-        if not token:
-            return False
-        try:
-            claims = identity_token.verify(_reentry_key, token)
-        except identity_token.IdentityError:
-            return False
-        want = identity_token.claims_from_validation(user_data)
-        return (claims.get("sub") == want.get("sub")
-                and isinstance(want.get("delegation"), dict)
-                and claims.get("delegation") == want.get("delegation"))
+    reentry = McpReentry(identity_key)
 
     async def _authorize(method: str, request: Request, *, api_key: Optional[str] = None,
                          delegation_door: bool = False):
@@ -424,7 +323,7 @@ def create_app(
         # it (signature, audience, expiry, the account still existing) and answers with the person it
         # acts for plus the dispatch's ceiling, which rides the signed identity below as
         # `delegation`. It is ADMITTED only where ``delegation_door`` is set (the `/mcp` routes) or on
-        # the MCP's own re-entry (`_mcp_reentry`) — see `MCP_REENTRY_HEADER`.
+        # the MCP's own re-entry — see `delegation.py`.
         client_key = api_key if api_key is not None else request.headers.get("x-api-key")
         # Fail-closed: a client route with no key is rejected before any downstream call.
         if not client_key:
@@ -462,8 +361,8 @@ def create_app(
                 headers={"Retry-After": "1"},
             )
 
-        if (_is_delegated(client_key, user_data) and not delegation_door
-                and not _mcp_reentry(request, user_data)):
+        if (is_delegated(client_key, user_data) and not delegation_door
+                and not reentry.admits(request, user_data)):
             log_event(
                 "request_denied_delegated_route",
                 audience="user",
@@ -472,7 +371,7 @@ def create_app(
                 user_id=user_id,
                 fields={"method": method, "path": request.url.path},
             )
-            return None, _delegated_route_response()
+            return None, delegated_route_response()
 
         # Scope enforcement — DENY BY DEFAULT. Every proxied route declares its scopes in
         # ROUTE_SCOPES; an undeclared route is refused here rather than forwarded, so the failure
@@ -563,7 +462,7 @@ def create_app(
         except httpx.InvalidURL:
             # Not a RequestError: without this arm an unparseable hop URL surfaces as a gateway 500
             # even though the fault is in what the CALLER put in the path.
-            return _invalid_path_param_response()
+            return invalid_path_param_response()
         except httpx.TimeoutException:
             return Response(content=json.dumps({"detail": "upstream timeout"}),
                             status_code=504, media_type="application/json")
@@ -872,28 +771,28 @@ def create_app(
 
     @app.patch("/user/calendars/{calendar_id}")
     async def update_user_calendar(calendar_id: str, request: Request):
-        segment, error = _path_segment(calendar_id)
+        segment, error = path_segment(calendar_id)
         if error is not None:
             return error
         return await _forward("PATCH", _admin(f"/user/calendars/{segment}"), request)
 
     @app.delete("/user/calendars/{calendar_id}")
     async def delete_user_calendar(calendar_id: str, request: Request):
-        segment, error = _path_segment(calendar_id)
+        segment, error = path_segment(calendar_id)
         if error is not None:
             return error
         return await _forward("DELETE", _admin(f"/user/calendars/{segment}"), request)
 
     @app.get("/user/calendars/{calendar_id}/sync")
     async def get_calendar_connection_sync(calendar_id: str, request: Request):
-        segment, error = _path_segment(calendar_id)
+        segment, error = path_segment(calendar_id)
         if error is not None:
             return error
         return await _forward("GET", _meeting(f"/user/calendars/{segment}/sync"), request)
 
     @app.post("/user/calendars/{calendar_id}/sync")
     async def run_calendar_connection_sync(calendar_id: str, request: Request):
-        segment, error = _path_segment(calendar_id)
+        segment, error = path_segment(calendar_id)
         if error is not None:
             return error
         return await _forward("POST", _meeting(f"/user/calendars/{segment}/sync"), request)
@@ -1047,7 +946,7 @@ def create_app(
 
         @app.api_route("/agent/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
         async def agent_proxy(path: str, request: Request):
-            tail, error = _tail_path(path, request)
+            tail, error = tail_path(path, request)
             if error is not None:
                 return error
             # The one REST door a worker's delegation token opens besides `/mcp`: the worker harness
@@ -1099,7 +998,7 @@ def create_app(
 
     @app.get("/mcp/{path:path}")
     async def mcp_stream_path(path: str, request: Request):
-        tail, error = _tail_path(path, request)
+        tail, error = tail_path(path, request)
         if error is not None:
             return error
         return await _forward_stream_verbatim(
@@ -1114,7 +1013,7 @@ def create_app(
 
     @app.api_route("/mcp/{path:path}", methods=["POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
     async def mcp_message_path(path: str, request: Request):
-        tail, error = _tail_path(path, request)
+        tail, error = tail_path(path, request)
         if error is not None:
             return error
         return await _forward(
@@ -1143,268 +1042,3 @@ def create_app(
         )
 
     return app
-
-
-async def run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus) -> None:
-    """The ``/ws`` control loop + fan-in, carved verbatim from main.websocket_multiplex.
-
-    PUBLIC (P2 follow-up): the conformance ws-harness drives this directly to exercise the SHIPPED
-    multiplex against its fakes — exposed on the front door (``gateway.run_multiplex``) so the
-    harness no longer reaches for a private (the P1-flagged smell).
-
-    guard (PRE-accept, opt-in) → accept → authenticate (missing key → error + close 4401) →
-      loop over client frames:
-      subscribe   → authorize, register a redis fan-in per meeting, ack ``subscribed``;
-      unsubscribe → cancel the fan-in task(s), ack ``unsubscribed`` (stops forwarding);
-      ping        → ``pong``;
-      otherwise   → an ``error`` frame (invalid_json / unknown_action / invalid_*_payload).
-    Each subscription fans in ``tc:meeting:{id}:mutable`` / ``bm:meeting:{id}:status`` /
-    ``va:meeting:{id}:chat`` and forwards every raw payload to the socket (main.py:2204).
-    """
-    # --- optional WS guard hook (GUARD_WS_ENABLED, default false) ---
-    # HTTP SecurityMiddleware does not intercept /ws (Starlette middleware is HTTP-only).
-    # When the toggle is on, resolve the client IP via the same trusted-proxies XFF logic
-    # as guard's HTTP path and deny over-limit/banned IPs at connect. Opt-in: the default
-    # (false) leaves the WS path unchanged so the conformance harness observes zero change.
-    #
-    # PRE-ACCEPT: the full guard check (whitelist/blacklist/ban/rate-limit) runs BEFORE
-    # ``ws.accept()`` so a banned IP never gets a WebSocket upgrade. On denial, close with
-    # 4401 BEFORE accept — Starlette forwards the pre-accept ``websocket.close`` unchanged
-    # (its state machine accepts ``websocket.close`` while CONNECTING); uvicorn (0.51 here)
-    # turns that into an HTTP 403 to the upgrade request (no upgrade, no frames). A data
-    # frame (send_text) cannot be sent before accept, so the rejection is the close alone —
-    # the client sees the 403, not an ip_blocked JSON frame.
-    from .ratelimit import env_truthy
-
-    if env_truthy(os.getenv("GUARD_WS_ENABLED")):
-        from .edge_guard import ws_guard_check
-
-        if not ws_guard_check(ws):
-            await ws.close(code=4401)  # pre-accept reject → HTTP 403 to the upgrade
-            return
-
-    await ws.accept()
-
-    api_key = ws.headers.get("x-api-key") or ws.query_params.get("api_key")
-    if not api_key:
-        try:
-            await ws.send_text(json.dumps({"type": "error", "error": "missing_api_key"}))
-        finally:
-            await ws.close(code=4401)  # Unauthorized
-        return
-
-    # Connect-time identity resolve (Track G — meeting-status-ws §C.2). Today connect only checked
-    # the key was PRESENT and resolved user_id per-subscribe; now we resolve the key to a user up
-    # front (the SAME resolver /auth/me + the proxy use — ports.py resolve / app.py:96-99,119-125)
-    # so we can auto-subscribe the socket to its USER-SCOPED channel. Fail-closed like the proxy:
-    # a present-but-invalid key → invalid_api_key + close 4401, not a silently half-open socket.
-    try:
-        user_data = await authorizer.resolve(api_key)
-    except AuthUnavailable as e:
-        # #495: resolve() now RAISES when the validation hop is unreachable/faulted. On the REST
-        # surface that becomes a 503; on this already-accepted socket the truthful equivalent is a
-        # typed error frame + a distinct retryable close code (4503 ≈ HTTP 503), NOT 4401 (which
-        # asserts the key is bad) and NOT an uncaught raise (which drops the socket 1006/1011 with
-        # no signal). A valid key must not be told it is invalid because our auth path is down.
-        log_event("auth_infra_unavailable", audience="system", level="error", span="ws",
-                  fields={"reason": type(e).__name__, "detail": str(e)})
-        try:
-            await ws.send_text(json.dumps({"type": "error", "error": "auth_unavailable"}))
-        finally:
-            await ws.close(code=4503)  # retry later — auth infrastructure unavailable
-        return
-    # A worker's delegation token is an MCP credential (`MCP_REENTRY_HEADER` above): it opens no
-    # socket here, so it is answered exactly like a key this edge does not accept.
-    if not user_data or _is_delegated(api_key, user_data):
-        try:
-            await ws.send_text(json.dumps({"type": "error", "error": "invalid_api_key"}))
-        finally:
-            await ws.close(code=4401)  # Unauthorized
-        return
-    user_id = user_data["user_id"]
-    set_user_id(user_id)
-
-    sub_tasks: Dict[Tuple, asyncio.Task] = {}
-    subscribed_meetings: Set[Tuple] = set()
-
-    async def fan_in(channels: List[str]):
-        pubsub = redis.pubsub()
-        await pubsub.subscribe(*channels)
-        try:
-            async for message in pubsub.listen():
-                if message.get("type") != "message":
-                    continue
-                data = message.get("data")
-                try:
-                    await ws.send_text(data)  # forward the raw redis payload (main.py:2204)
-                except Exception:
-                    break
-        finally:
-            try:
-                await pubsub.unsubscribe(*channels)
-                await pubsub.close()
-            except Exception:
-                pass
-
-    async def subscribe_meeting(platform: str, native_id: str, user_id, meeting_id):
-        key = (platform, native_id, user_id)
-        if key in subscribed_meetings:
-            return
-        subscribed_meetings.add(key)
-        channels = [
-            f"tc:meeting:{meeting_id}:mutable",
-            f"bm:meeting:{meeting_id}:status",
-            f"va:meeting:{meeting_id}:chat",
-        ]
-        sub_tasks[key] = asyncio.create_task(fan_in(channels))
-
-    async def unsubscribe_meeting(platform: str, native_id: str, user_id):
-        key = (platform, native_id, user_id)
-        task = sub_tasks.pop(key, None)
-        if task:
-            task.cancel()
-        subscribed_meetings.discard(key)
-
-    # Auto-subscribe the authed socket to its USER scope (Track G — meeting-status-ws §C.2). The
-    # user-scoped redis channel `u:{user_id}:meetings` carries every meeting.status frame for this
-    # user (the publisher mirrors each bm:meeting:{id}:status onto it — §C.3). No client `subscribe`
-    # frame is needed: the identity is resolved at connect. This reuses the SAME verbatim `fan_in`
-    # path as the per-meeting channels — the gateway is a thin raw forwarder for the user channel
-    # exactly as it is for tc:/bm:/va:. Per-meeting subscriptions below are unchanged.
-    #
-    # AND to every workspace this identity is a member of — `w:{workspace_id}:meetings`, carrying the
-    # status frames of meetings BOUND to that workspace. A bot requested inside a workspace makes the
-    # workspace's meeting, so its transitions belong to every member's list, not only the requester's.
-    # The membership list comes from the SAME connect-time identity resolve as `user_id` above
-    # (`user_data["workspaces"]`, which identity builds from `users.data.memberships[]`), so a client
-    # cannot name a workspace it does not belong to — it sends no subscribe frame at all. Membership
-    # is therefore evaluated per CONNECTION: a member added mid-session picks the channel up on their
-    # next connect, which is the same freshness the rest of this socket's identity already has.
-    user_channel = f"u:{user_id}:meetings"
-    member_channels = [
-        f"w:{str(w).strip()}:meetings"
-        for w in (user_data.get("workspaces") or [])
-        if str(w).strip()
-    ]
-    user_sub_task = asyncio.create_task(fan_in([user_channel, *member_channels]))
-
-    try:
-        while True:
-            try:
-                raw = await ws.receive_text()
-            except WebSocketDisconnect:
-                break
-
-            try:
-                msg = json.loads(raw)
-            except Exception:
-                await ws.send_text(json.dumps({"type": "error", "error": "invalid_json"}))
-                continue
-            # Syntactically-valid but NON-OBJECT JSON ([1,2,3], 42, "x", null): guard before `.get()`,
-            # else AttributeError escapes run_multiplex and KILLS the socket — a trivial public-edge DoS.
-            if not isinstance(msg, dict):
-                await ws.send_text(json.dumps({"type": "error", "error": "invalid_json"}))
-                continue
-
-            action = msg.get("action")
-            if action == "subscribe":
-                meetings = msg.get("meetings", None)
-                if not isinstance(meetings, list):
-                    await ws.send_text(json.dumps({
-                        "type": "error", "error": "invalid_subscribe_payload",
-                        "details": "'meetings' must be a non-empty list"}))
-                    continue
-                if len(meetings) == 0:
-                    await ws.send_text(json.dumps({
-                        "type": "error", "error": "invalid_subscribe_payload",
-                        "details": "'meetings' list cannot be empty"}))
-                    continue
-                payload_meetings = []
-                for m in meetings:
-                    if isinstance(m, dict):
-                        plat = str(m.get("platform", "")).strip()
-                        nid = str(m.get("native_id", "")).strip()
-                        if plat and nid:
-                            payload_meetings.append({"platform": plat, "native_meeting_id": nid})
-                if not payload_meetings:
-                    await ws.send_text(json.dumps({
-                        "type": "error", "error": "invalid_subscribe_payload",
-                        "details": "no valid meeting objects"}))
-                    continue
-
-                # The downstream authorize hop must never crash the socket: a RAISE → authorization_call_failed
-                # frame + continue; a non-200 (errors carried, nothing authorized) → authorization_service_error
-                # frame, NOT a misleading empty `subscribed` ack that hides the auth backend being down.
-                try:
-                    result = await authorizer.authorize_subscribe(api_key, payload_meetings)
-                except Exception as e:  # noqa: BLE001 — surface as a protocol error, keep the socket alive
-                    await ws.send_text(json.dumps({
-                        "type": "error", "error": "authorization_call_failed", "details": str(e)}))
-                    continue
-                authorized = result.get("authorized") or []
-                auth_errors = result.get("errors") or []
-                if not authorized and auth_errors:
-                    first = str(auth_errors[0])
-                    code = ("authorization_call_failed"
-                            if first.startswith("authorization_call_failed")
-                            else "authorization_service_error")
-                    await ws.send_text(json.dumps({"type": "error", "error": code, "details": first}))
-                    continue
-                subscribed: List[Dict[str, str]] = []
-                for item in authorized:
-                    plat = item.get("platform"); nid = item.get("native_id")
-                    user_id = item.get("user_id"); meeting_id = item.get("meeting_id")
-                    if plat and nid and user_id and meeting_id:
-                        await subscribe_meeting(plat, nid, user_id, meeting_id)
-                        subscribed.append({"platform": plat, "native_id": nid})
-                await ws.send_text(json.dumps({"type": "subscribed", "meetings": subscribed}))
-
-            elif action == "unsubscribe":
-                meetings = msg.get("meetings", None)
-                if not isinstance(meetings, list):
-                    await ws.send_text(json.dumps({
-                        "type": "error", "error": "invalid_unsubscribe_payload",
-                        "details": "'meetings' must be a list"}))
-                    continue
-                unsubscribed: List[Dict[str, str]] = []
-                errors: List[str] = []
-                for idx, m in enumerate(meetings):
-                    if not isinstance(m, dict):
-                        errors.append(f"meetings[{idx}] must be an object")
-                        continue
-                    plat = str(m.get("platform", "")).strip()
-                    nid = str(m.get("native_id", "")).strip()
-                    if not plat or not nid:
-                        errors.append(f"meetings[{idx}] missing 'platform' or 'native_id'")
-                        continue
-                    matching_key = None
-                    for key in subscribed_meetings:
-                        if key[0] == plat and key[1] == nid:
-                            matching_key = key
-                            break
-                    if matching_key:
-                        await unsubscribe_meeting(plat, nid, matching_key[2])
-                        unsubscribed.append({"platform": plat, "native_id": nid})
-                    else:
-                        errors.append(f"meetings[{idx}] not currently subscribed")
-                if errors and not unsubscribed:
-                    await ws.send_text(json.dumps({
-                        "type": "error", "error": "invalid_unsubscribe_payload", "details": errors}))
-                    continue
-                await ws.send_text(json.dumps({"type": "unsubscribed", "meetings": unsubscribed}))
-
-            elif action == "ping":
-                await ws.send_text(json.dumps({"type": "pong"}))
-            else:
-                await ws.send_text(json.dumps({"type": "error", "error": "unknown_action"}))
-    except WebSocketDisconnect:
-        pass
-    finally:
-        user_sub_task.cancel()  # Track G — tear down the user-scope fan-in on disconnect.
-        for task in sub_tasks.values():
-            task.cancel()
-
-
-# Backward-compatible private alias (kept so any existing internal reference still resolves; the
-# public name ``run_multiplex`` is the front door the conformance harness now imports).
-_run_multiplex = run_multiplex

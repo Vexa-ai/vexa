@@ -13,7 +13,7 @@ import asyncio
 import json
 from typing import Optional
 
-from gateway.app import _run_multiplex
+from gateway.multiplex import _run_multiplex
 from gateway.ports import AuthUnavailable
 from conftest import FakeAuthorizer, FakeRedis
 
@@ -72,7 +72,7 @@ class FakeWebSocket:
 # _run_multiplex catches WebSocketDisconnect from starlette; our FakeWebSocket raises WSClosed,
 # which is NOT that type — so the loop's receive_text() must translate. We patch by feeding a
 # disconnect through the queue draining + close_when_drained semantics instead.
-import gateway.app as gw_app
+import gateway.multiplex as gw_app
 from starlette.websockets import WebSocketDisconnect
 
 

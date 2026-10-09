@@ -172,7 +172,7 @@
           "pattern": "^const PREFIX = \"([^\"]+)\""
         },
         {
-          "path": "core/gateway/services/gateway/src/gateway/app.py",
+          "path": "core/gateway/services/gateway/src/gateway/delegation.py",
           "pattern": "str\\(client_key\\)\\.startswith\\(\"([^\"]+)\"\\)"
         },
         {
