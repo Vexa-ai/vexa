@@ -226,6 +226,11 @@ COPY core/agent/control_plane   /app/agent/control_plane
 COPY core/agent/worker          /app/agent/worker
 COPY core/agent/llm             /app/agent/llm
 COPY core/agent/contracts       /app/agent/contracts
+# The agent domain's MCP tool manifest. routers/health.py serves it from parents[2] of itself —
+# /app/agent here — so it rides its own COPY (the agent-api image does the same); without it
+# agent-api answers 503 for its manifest and the MCP service waits on it forever.
+# tests/test_image_by_path_reads.py derives every such read from source.
+COPY core/agent/mcp.tools.v1.json /app/agent/mcp.tools.v1.json
 # The portable workspace primitives (workspace_id/workspace_paths/entities/links), moved out of
 # core/agent/shared into their own domain (PRD decision 47, step 2) — both control_plane and
 # worker import them as `workspaces.shared.<module>`.
