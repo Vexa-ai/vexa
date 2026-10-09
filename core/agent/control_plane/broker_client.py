@@ -24,7 +24,7 @@ from typing import Any, Optional
 
 import httpx
 
-from control_plane import broker_assertion
+from control_plane import broker_assertion, identity_token
 
 log = logging.getLogger(__name__)
 _CID = re.compile(r"/[a-f0-9]{32}(?=/|$)")
@@ -48,10 +48,6 @@ def fault(kind: str, *, role: str, method: str, path: str, status: Optional[int]
     return BrokerFault(kind, status)
 
 
-#: gateway-identity.v1's header: the gateway's signature over the person, forwarded unchanged.
-IDENTITY_HEADER = "X-Vexa-Identity"
-
-
 def request(*, base_url: str, key_file: str, role: str, actor: str, method: str, path: str,
             payload: Any = None, timeout: float = 60, identity: str = "") -> httpx.Response:
     """Sign and send one request. Returns the broker's response whatever its status; raises
@@ -70,7 +66,7 @@ def request(*, base_url: str, key_file: str, role: str, actor: str, method: str,
         with httpx.Client(timeout=timeout, follow_redirects=False, trust_env=False) as client:
             headers = {broker_assertion.HEADER: header, "Content-Type": "application/json"}
             if identity:
-                headers[IDENTITY_HEADER] = identity
+                headers[identity_token.HEADER] = identity
             return client.request(method, base_url.rstrip("/") + path, content=body, headers=headers)
     except httpx.HTTPError:
         raise fault("transport", role=role, method=method, path=path) from None

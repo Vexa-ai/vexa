@@ -6,7 +6,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict, Field
-from control_plane import broker_client
+from control_plane import broker_client, identity_token
 from control_plane.connection_setup_schema import SetupSpec, allowed_keys
 
 
@@ -39,9 +39,6 @@ class _NamedRefusalRoute(APIRoute):
             except RequestValidationError as exc:
                 return JSONResponse(status_code=422, content={'detail': _named_refusal(exc.errors())})
         return named
-
-#: gateway-identity.v1's header — the gateway's signature, verified by agent-api's IdentityGuard.
-SIGNED_IDENTITY_HEADER = 'x-vexa-identity'
 
 class ConnectionRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
@@ -180,7 +177,7 @@ def signed_identity(request: Request) -> str:
     agent-api's IdentityGuard verified it; the broker verifies it again. An internal-tier caller
     carries none, and the broker never lets agent-api name a person on its own say, so it is
     refused here with a sentence rather than as an opaque broker fault."""
-    token = (request.headers.get(SIGNED_IDENTITY_HEADER) or '').strip()
+    token = (request.headers.get(identity_token.HEADER) or '').strip()
     if not token:
         raise HTTPException(403, 'Connections act only for a person signed in through the gateway')
     return token

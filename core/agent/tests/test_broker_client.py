@@ -178,3 +178,13 @@ def test_git_store_faults_raise_unavailable_never_absent(keys, broker, caplog, h
     with pytest.raises(git_secret_store.GitStoreUnavailable):
         git_secret_store._call("pat/2", "get")
     assert faults(caplog)[-1]["kind"] == kind and faults(caplog)[-1]["role"] == "git"
+
+
+def test_the_identity_header_names_come_from_the_vendored_contract_file():
+    """gateway-identity.v1's header names live in the vendored `identity_token.py`; the broker's two
+    callers import them instead of spelling them again."""
+    import re
+    for module in (broker_client, connections):
+        source = Path(module.__file__).read_text()
+        literals = re.findall(r"""['"](x-vexa-identity|x-user-[a-z-]+)['"]""", source, re.I)
+        assert not literals, (module.__name__, literals)

@@ -191,14 +191,6 @@
           "pattern": "^HEADER = \"([^\"]+)\""
         },
         {
-          "path": "core/agent/control_plane/broker_client.py",
-          "pattern": "^IDENTITY_HEADER = \"([^\"]+)\""
-        },
-        {
-          "path": "core/agent/control_plane/routers/connections.py",
-          "pattern": "^SIGNED_IDENTITY_HEADER = '([^']+)'"
-        },
-        {
           "path": "core/meetings/services/mcp/src/vexa_mcp/reentry.py",
           "pattern": "^INBOUND_HEADER = \"([^\"]+)\""
         }
