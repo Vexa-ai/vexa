@@ -336,10 +336,11 @@ services:
       # `INTERNAL_API_SECRET` and marks `VEXA_INTERNAL_API_SECRET` DEPRECATED ("no deploy surface
       # sets it on agent-api any more"), so the A19 fix rides the spelling this service reads.
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-}
-      # gateway-identity.v1: the key that verifies the gateway's X-Vexa-Identity. agent-api believes an
-      # x-user-* header only with that signature (or from the internal tier above) and refuses to
-      # boot without it. mint-dev-env.sh generates it beside INTERNAL_API_SECRET.
-      - VEXA_GATEWAY_IDENTITY_SECRET=${VEXA_GATEWAY_IDENTITY_SECRET:-}
+      # gateway-identity.v1: the gateway's PUBLIC key, which verifies its X-Vexa-Identity. agent-api
+      # believes an x-user-* header only with that signature (or from the internal tier above), can
+      # check it and cannot make one, and forwards it unchanged to the credential broker. Written by
+      # the `identity-keys` one-shot; this service mounts the public half only.
+      - VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE=/run/vexa-identity/public/key.pem
       # The post-meeting room resolves a participant's email to a subject through admin-api. There
       # is no narrow door yet — the internal-secret tier exposes no by-email lookup, and
       # GET /admin/users/email/{email} sits behind this much broader credential, which can also
@@ -450,6 +451,8 @@ services:
       # The agent and git role keys, and nothing else of the broker's (Connections).
       - connections-agent-key:/run/vexa-connections/agent:ro
       - connections-git-key:/run/vexa-connections/git:ro
+      # gateway-identity.v1: the gateway's public key (never the signing key).
+      - identity-public-key:/run/vexa-identity/public:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8100/health').status==200 else 1)"]
       interval: 10s
@@ -461,6 +464,8 @@ services:
       runtime:
         condition: service_healthy
       connections-keys:
+        condition: service_completed_successfully
+      identity-keys:
         condition: service_completed_successfully
     # `connections` reaches the credential broker; spawned workers join `vexa` only and cannot.
     networks: [vexa, connections]
@@ -485,9 +490,10 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - RUNTIME_API_URL=http://runtime:8090
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET}
-      # gateway-identity.v1: verifies the gateway's X-Vexa-Identity — the owner, bot limit, memberships and
-      # webhook meeting-api reads come from that signature (or the internal tier), never a bare header.
-      - VEXA_GATEWAY_IDENTITY_SECRET=${VEXA_GATEWAY_IDENTITY_SECRET:-}
+      # gateway-identity.v1: the gateway's PUBLIC key — the owner, bot limit, memberships and webhook
+      # meeting-api reads come from a signature it verifies (or the internal tier), never a bare
+      # header. Written by `identity-keys`; mounted read-only below, public half only.
+      - VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE=/run/vexa-identity/public/key.pem
       # The bot's display name in the meeting. The terminal omits bot_name on join, so this is what
       # participants see; set DEFAULT_BOT_NAME in .env and restart meeting-api (no terminal rebuild).
       - DEFAULT_BOT_NAME=${DEFAULT_BOT_NAME:-Vexa}
@@ -551,6 +557,8 @@ services:
       - MINIO_BUCKET=${MINIO_BUCKET:-vexa}
       - MINIO_SECURE=${MINIO_SECURE:-false}
       - LOG_LEVEL=${LOG_LEVEL:-info}
+    volumes:
+      - identity-public-key:/run/vexa-identity/public:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/health').status==200 else 1)"]
       interval: 10s
@@ -566,6 +574,8 @@ services:
       runtime:
         condition: service_healthy
       storage-init:
+        condition: service_completed_successfully
+      identity-keys:
         condition: service_completed_successfully
     networks: [vexa]
     restart: unless-stopped
@@ -603,9 +613,11 @@ services:
       - AGENT_API_URL=${AGENT_API_URL:-http://agent-api:8100}
       - REDIS_URL=redis://redis:6379/0
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET}
-      # gateway-identity.v1: the gateway signs the identity it resolved onto every forward with this key;
-      # agent-api and meeting-api verify it. Required — mint-dev-env.sh generates it.
-      - VEXA_GATEWAY_IDENTITY_SECRET=${VEXA_GATEWAY_IDENTITY_SECRET:-}
+      # gateway-identity.v1: the Ed25519 PRIVATE key the gateway signs the identity it resolved with,
+      # onto every forward. This is the only service that mounts it; agent-api, meeting-api and the
+      # credential broker get the public half and can verify but never sign. Written once by the
+      # `identity-keys` one-shot below.
+      - VEXA_GATEWAY_IDENTITY_SIGNING_KEY_FILE=/run/vexa-identity/signing/key.pem
       - LOG_LEVEL=${LOG_LEVEL:-info}
       # fastapi-guard edge layer (edge_guard.py): per-IP throttle + auto-ban at the edge.
       # ON by default with generous limits (owner ruling — protection that ships dark protects
@@ -632,6 +644,9 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+    volumes:
+      # gateway-identity.v1: the signing key, mounted here and nowhere else.
+      - identity-signing-key:/run/vexa-identity/signing:ro
     init: true
     depends_on:
       admin-api:
@@ -640,8 +655,32 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      identity-keys:
+        condition: service_completed_successfully
     networks: [vexa]
     restart: unless-stopped
+
+  # ─── gateway-identity.v1: the gateway's signing keypair ─────────────────────────────────────────
+  # One-shot: generates an Ed25519 keypair the first time the stack starts and leaves it alone
+  # afterwards — an existing signing key is kept and its public half rewritten from it, so a lost
+  # public volume heals. The PRIVATE key goes to `identity-signing-key`, which only the gateway
+  # mounts; the PUBLIC key to `identity-public-key`, which agent-api, meeting-api and the credential
+  # broker mount read-only. No other service mounts either. Same image as the gateway: the
+  # generator is the gateway's own vendored gateway-identity.v1 module. To rotate, remove
+  # `identity-signing-key` and restart the stack (the four services then reload the new pair).
+  identity-keys:
+    build:
+      context: ../..
+      dockerfile: core/gateway/services/gateway/Dockerfile
+    image: vexaai/v012-gateway:${IMAGE_TAG:-dev}
+    user: "0:0"
+    command: ["python", "/app/src/gateway/identity_token.py", "keygen",
+              "/keys/signing/key.pem", "/keys/public/key.pem"]
+    volumes:
+      - identity-signing-key:/keys/signing
+      - identity-public-key:/keys/public
+    network_mode: none
+    restart: "no"
 
   # flows-api — the reaction engine's HTTP surface, and one of the domains the MCP assembly asks
   # for a tool manifest (PRD decision 40).
@@ -1265,12 +1304,16 @@ services:
       - VEXA_CONNECTIONS_GOOGLE_CLIENT_ID=${VEXA_CONNECTIONS_GOOGLE_CLIENT_ID:-}
       - VEXA_CONNECTIONS_GOOGLE_CLIENT_SECRET=${VEXA_CONNECTIONS_GOOGLE_CLIENT_SECRET:-}
       - VEXA_CONNECTIONS_PRODUCT_REDIRECT=${VEXA_CONNECTIONS_PRODUCT_REDIRECT:-}
+      # gateway-identity.v1: an agent-role call must carry the gateway's signature over the person,
+      # forwarded by agent-api; the broker verifies it with this public key and cannot sign.
+      - VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE=/run/vexa-identity/public/key.pem
     volumes:
       - connections-state:/state
       - connections-agent-key:/run/vexa-connections/agent:ro
       - connections-human-key:/run/vexa-connections/human:ro
       - connections-git-key:/run/vexa-connections/git:ro
       - connections-store-key:/run/vexa-connections/store:ro
+      - identity-public-key:/run/vexa-identity/public:ro
     read_only: true
     tmpfs: [/tmp]
     cap_drop: [ALL]
@@ -1283,6 +1326,8 @@ services:
       start_period: 10s
     depends_on:
       connections-keys:
+        condition: service_completed_successfully
+      identity-keys:
         condition: service_completed_successfully
     # `connections` is internal: only agent-api and the terminal join it, so a worker container
     # cannot open a socket to the broker. `connections-egress` is the broker's own way out to
@@ -1432,6 +1477,9 @@ volumes:
   connections-human-key:
   connections-git-key:
   connections-store-key:
+  # gateway-identity.v1: the gateway's signing key (the gateway only) and its public half.
+  identity-signing-key:
+  identity-public-key:
 
 networks:
   vexa:

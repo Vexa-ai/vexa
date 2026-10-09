@@ -17,7 +17,7 @@ if grep -qE "^NEXTAUTH_SECRET=\s*(dev-nextauth-secret|vexa-dev-nextauth-secret|v
   sed -i.bak "s|^NEXTAUTH_SECRET=.*|NEXTAUTH_SECRET=|" "$env_file" && rm -f "$env_file.bak"
   echo "replacing NEXTAUTH_SECRET (a published default)"
 fi
-for key in INTERNAL_API_SECRET VEXA_GATEWAY_IDENTITY_SECRET VEXA_MCP_DELEGATION_SECRET \
+for key in INTERNAL_API_SECRET VEXA_MCP_DELEGATION_SECRET \
            VEXA_FLOWS_API_KEY VEXA_FLOWS_TIMELINE_KEY NEXTAUTH_SECRET; do
   if grep -qE "^${key}=\s*$" "$env_file"; then
     v="$(mint)"

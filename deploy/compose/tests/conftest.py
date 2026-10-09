@@ -68,10 +68,10 @@ ADMIN_TOKEN = "gate-admin-token"
 INTERNAL_API_SECRET = "gate-internal-secret"
 # Compose requires NEXTAUTH_SECRET for the whole file, whichever services a test brings up.
 NEXTAUTH_SECRET = "gate-nextauth-secret-0123456789abcdef0123"
-# gateway-identity.v1: the gateway signs the identity it resolved and meeting-api / agent-api verify it; the
-# services refuse to boot without the key. The proof calls meeting-api directly as an internal-tier
-# caller (X-Internal-Secret beside X-User-Id), never as a forged identity.
-GATEWAY_IDENTITY_SECRET = "gate-identity-signing-key"
+# gateway-identity.v1: the gateway signs the identity it resolved with an Ed25519 key the stack's
+# `identity-keys` one-shot generates, and meeting-api / agent-api verify it with the public half. The
+# proof calls meeting-api directly as an internal-tier caller (X-Internal-Secret beside X-User-Id),
+# never as a forged identity.
 MCP_DELEGATION_SECRET = "gate-delegation-signing-key"
 MINIO_BUCKET = "vexa"
 
@@ -139,7 +139,6 @@ def _stack_env() -> dict:
         "ADMIN_TOKEN": ADMIN_TOKEN,
         "INTERNAL_API_SECRET": INTERNAL_API_SECRET,
         "NEXTAUTH_SECRET": NEXTAUTH_SECRET,
-        "VEXA_GATEWAY_IDENTITY_SECRET": GATEWAY_IDENTITY_SECRET,
         "VEXA_MCP_DELEGATION_SECRET": MCP_DELEGATION_SECRET,
         "MINIO_BUCKET": MINIO_BUCKET,
         "BROWSER_IMAGE": os.getenv("BROWSER_IMAGE", "vexaai/vexa-bot:v012"),
