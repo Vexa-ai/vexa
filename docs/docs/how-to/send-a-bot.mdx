@@ -135,6 +135,10 @@ two modes:
   independently, and every segment carries the detected code in its `language` field.
 - **Forced (`language: "es"`)** — every STT call is pinned to that language; every segment carries it.
 
+A self-hosted deployment can make *forced* the default: `TRANSCRIPTION_LANGUAGE=ru` pins every bot
+whose request omits `language`, and an explicit `language` on the request still wins (see
+[Configuration](/configuration#transcription-stt)).
+
 Detection is **per window** (one STT call, a few seconds of one speaker's audio), not per word:
 code-switching *within* a window takes the window's language; switching between utterances lands on
 the segment boundary. A window whose language could not be determined has `language: null`.

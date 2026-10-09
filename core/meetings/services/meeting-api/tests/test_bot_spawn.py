@@ -685,6 +685,50 @@ async def test_request_bot_env_transcription_model_rides_invocation(monkeypatch)
     assert "transcriptionModel" not in inv
 
 
+async def test_request_bot_env_transcription_language_is_the_default(monkeypatch):
+    """``TRANSCRIPTION_LANGUAGE`` pins every spawn that does not name a language (Whisper's
+    per-window auto-detect mislabels short windows of a single-language meeting); an explicit
+    ``language`` on the request wins; unset → the field is omitted and the STT auto-detects."""
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt-env.vexa.ai")
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_TOKEN", "tok-env")
+    monkeypatch.delenv("ADMIN_API_URL", raising=False)
+
+    async def spawn(**kw):
+        repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
+        await request_bot(repo, runtime, user_id=USER, platform="google_meet",
+                          native_meeting_id="abc-defg-hij", redis_url="redis://redis:6379/0",
+                          token_secret=SECRET, **kw)
+        return json.loads(runtime.specs[0]["env"]["BOT_CONFIG"])
+
+    monkeypatch.setenv("TRANSCRIPTION_LANGUAGE", "ru")
+    assert (await spawn())["language"] == "ru"
+    assert (await spawn(language="en"))["language"] == "en"
+
+    monkeypatch.delenv("TRANSCRIPTION_LANGUAGE", raising=False)
+    assert "language" not in await spawn()
+
+
+async def test_request_bot_env_transcription_language_survives_configured_backend(monkeypatch):
+    """The language names the meeting's speech, not the backend: unlike the env token/model, it
+    still applies when Settings configures the STT endpoint."""
+    from meeting_api.bot_spawn import service as spawn_service
+
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt-env.vexa.ai")
+    monkeypatch.setenv("TRANSCRIPTION_LANGUAGE", "ru")
+
+    async def fake_resolve(user_id):
+        return {"transcription": {"url": "https://stt-mine.example.com", "provider": "customer"}}
+
+    monkeypatch.setattr(spawn_service, "_fetch_bot_context", fake_resolve)
+    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
+    await request_bot(repo, runtime, user_id=USER, platform="google_meet",
+                      native_meeting_id="abc-defg-hij", redis_url="redis://redis:6379/0",
+                      token_secret=SECRET)
+    inv = json.loads(runtime.specs[0]["env"]["BOT_CONFIG"])
+    assert inv["transcriptionServiceUrl"] == "https://stt-mine.example.com"
+    assert inv["language"] == "ru"
+
+
 # ── route: meeting_url passthrough is SSRF-validated at entry (jitsi/zoom, TAKE on #543) ─────────
 #
 # platform=jitsi (and zoom) carries an arbitrary caller URL straight to the bot's browser.
