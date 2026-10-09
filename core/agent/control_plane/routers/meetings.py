@@ -15,6 +15,7 @@ from control_plane import meeting_terms as meeting_terms_mod
 from control_plane import system_mounts
 from control_plane.api_shared import _decode_sse_cursor, _encode_sse_cursor, _sse, transcript_erased
 from control_plane.peer_lookups import meeting_access_check, meeting_transcript_reader
+from control_plane.ceiling import reads_within
 from control_plane.bodies import TranscriptTermsBody
 from fastapi import APIRouter, Body, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -45,9 +46,15 @@ def build(**d) -> APIRouter:
     # …and the WORDS, read under the same identity and the same access union.
     _meeting_words = meeting_transcript_reader(_meeting_transcript_lookup, wsr.root)
 
-    def _readable_mounts(subject: str) -> list:
+    def _within(request: Request):
+        """The workspaces this request may read through a person-wide set: a delegated dispatch's
+        ceiling (`ceiling.reads_within`), every workspace for a caller with none."""
+        return lambda slug: reads_within(request, slug)
+
+    def _readable_mounts(subject: str, request: Request) -> list:
         """``(workspace_id, slug, path)`` for every workspace this reader can read, DESK FIRST,
-        then the company layer, then the groups they belong to — the precedence a chip resolves in."""
+        then the company layer, then the groups they belong to — the precedence a chip resolves in.
+        The groups are the ones inside a delegated dispatch's ceiling (`_entity_mounts`)."""
         def wsid(slug: str) -> str:
             rec = workspace_registry.by_slug(slug) or _ws_sync(slug) or {}
             return str(rec.get("id") or slug)
@@ -57,7 +64,7 @@ def build(**d) -> APIRouter:
             g = system_mounts.global_root(settings, wsr.root)
             if Path(g).is_dir():
                 out.append((wsid(system_mounts.GLOBAL_SLUG), system_mounts.GLOBAL_SLUG, Path(g)))
-        for m in _entity_mounts(subject):
+        for m in _entity_mounts(subject, request):
             out.append((wsid(m["slug"]), m["slug"], Path(m["path"])))
         return out
 
@@ -94,7 +101,7 @@ def build(**d) -> APIRouter:
         Both are `""` for every report written before the widget existed, and that absence is what
         keeps those meetings on the two-page room they have today instead of losing the transcript."""
         subject = subject_of(request)   # 401 if no (gateway-injected) identity — fail closed
-        row = _meeting_access(subject, meeting_id)
+        row = _meeting_access(subject, meeting_id, within=_within(request))
         if row is None:
             raise HTTPException(status_code=403, detail="not authorized for this meeting")
         return meeting_note_mod.describe(wsr.root, subject, row)
@@ -118,7 +125,7 @@ def build(**d) -> APIRouter:
         ints and this creates a file on a DESK."""
         subject = subject_of(request)   # 401 if no (gateway-injected) identity — fail closed
         meeting_id = str((body or {}).get("meeting_id") or (body or {}).get("meeting") or "").strip()
-        row = _meeting_access(subject, meeting_id)
+        row = _meeting_access(subject, meeting_id, within=_within(request))
         if row is None:
             raise HTTPException(status_code=403, detail="not authorized for this meeting")
         return meeting_mint_mod.mint(wsr.root, subject, row,
@@ -148,7 +155,7 @@ def build(**d) -> APIRouter:
         `/api/meeting/stream` below, and for the same reason: row ids are sequential ints, and this
         answers with what was said on somebody's DESK."""
         subject = subject_of(request)   # 401 if no (gateway-injected) identity — fail closed
-        row = _meeting_access(subject, meeting_id)
+        row = _meeting_access(subject, meeting_id, within=_within(request))
         if row is None:
             raise HTTPException(status_code=403, detail="not authorized for this meeting")
         return meeting_terms_mod.read(wsr.root, subject, meeting_id)
@@ -170,7 +177,7 @@ def build(**d) -> APIRouter:
         annotates, so one publish is one object rather than a query string beside a payload."""
         subject = subject_of(request)   # 401 if no (gateway-injected) identity — fail closed
         meeting_id = str((body or {}).get("meeting_id") or (body or {}).get("meeting") or "").strip()
-        row = _meeting_access(subject, meeting_id)
+        row = _meeting_access(subject, meeting_id, within=_within(request))
         if row is None:
             raise HTTPException(status_code=403, detail="not authorized for this meeting")
         terms = (body or {}).get("terms")
@@ -197,9 +204,9 @@ def build(**d) -> APIRouter:
         or one bound to a workspace they belong to; anything else is a 403 before a word is read."""
         subject = subject_of(request)   # 401 if no (gateway-injected) identity — fail closed
         meeting_id = body.meeting_id.strip()
-        if _meeting_access(subject, meeting_id) is None:
+        if _meeting_access(subject, meeting_id, within=_within(request)) is None:
             raise HTTPException(status_code=403, detail="not authorized for this meeting")
-        segments = _meeting_words(subject, meeting_id)
+        segments = _meeting_words(subject, meeting_id, within=_within(request))
         if segments is None:
             raise HTTPException(status_code=502, detail={
                 "read_ok": False, "meeting": meeting_id,
@@ -207,7 +214,7 @@ def build(**d) -> APIRouter:
                 "tell_your_person": "Say the READ failed — never that nothing was said."})
         return meeting_highlight_mod.highlight(
             root=wsr.root, subject=subject, meeting_id=meeting_id, segments=segments,
-            index=meeting_highlight_mod.entity_index(_readable_mounts(subject)),
+            index=meeting_highlight_mod.entity_index(_readable_mounts(subject, request)),
             since=body.since.strip(), keep=body.keep)
     @router.get("/api/meeting/stream")
     def meeting_stream(meeting_id: str, session_uid: str, request: Request):
@@ -244,7 +251,7 @@ def build(**d) -> APIRouter:
         # second rule invented at this route. A caller who is neither owner, share recipient nor member
         # is refused exactly as before.
         subject = subject_of(request)  # 401 if no (gateway-injected) identity — fail closed
-        owned = _meeting_access(subject, meeting_id)
+        owned = _meeting_access(subject, meeting_id, within=_within(request))
         if owned is None:
             # Absent row, or a row this caller has no claim on → refuse (404-equivalent, no stream opened).
             raise HTTPException(status_code=403, detail="not authorized for this meeting")

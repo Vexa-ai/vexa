@@ -617,7 +617,7 @@ def build(**d) -> APIRouter:
             # the facts in `## Timeline`, which is the shape the migration produces anyway.
             result = entities_mod.upsert_entity(
                 target, kind, name, facts, source,
-                mounts=_entity_mounts(subject), dates=body.dates,
+                mounts=_entity_mounts(subject, request), dates=body.dates,
                 summary=summary,
                 fields=body.fields,
                 section=body.section.strip(),

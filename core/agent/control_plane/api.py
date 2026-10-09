@@ -109,7 +109,7 @@ from control_plane.routers import clock as routers_clock
 from control_plane.routers import workspaces as routers_workspaces
 from control_plane.routers import sharing as routers_sharing
 from control_plane import route_policy
-from control_plane.ceiling import require_in_ceiling
+from control_plane.ceiling import reads_within, require_in_ceiling
 from control_plane.api_shared import (
     logger, _PHASE_WORD, _iso, _provenance_line, _epoch_text, _Sessions, _LiveMeetings)
 from control_plane.peer_lookups import (
@@ -808,14 +808,20 @@ def create_app(
         into ONE row with a counter."""
         return (request.headers.get("x-user-id") or "").strip()
 
-    def _entity_mounts(subject: str) -> list:
+    def _entity_mounts(subject: str, request: Request) -> list:
         """`[{slug, path}]` for every workspace this subject has mounted — their own actives plus
-        the shared ones their membership grants. Read for ONE purpose: to know which OTHER
-        workspace already holds a page for a name, so the link into it can be written by id.
+        the shared ones their membership grants — that ``request`` may read under a delegated
+        dispatch's ceiling (`ceiling.reads_within`; the subject's own desk is always in it). Read
+        for ONE purpose: to know which OTHER workspace already holds a page for a name, so the link
+        into it can be written by id.
 
         Fails soft to an empty list, which is the single-workspace behaviour: an entity write must
         never fail because the mount table could not be read."""
         out: list = []
+        try:
+            desk = Path(wsr.workspace_dir(subject)).resolve()
+        except ValueError:
+            return out
         try:
             mounts = active_workspaces(wsr.root, subject)
         except Exception:  # noqa: BLE001
@@ -825,7 +831,7 @@ def create_app(
         except Exception:  # noqa: BLE001
             pass
         for m in mounts:
-            if m.path:
+            if m.path and (Path(m.path).resolve() == desk or reads_within(request, m.slug)):
                 out.append({"slug": m.slug, "path": m.path})
         return out
 

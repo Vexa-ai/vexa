@@ -89,7 +89,8 @@ person it acts for, scopes `bot` + `tx`, and the dispatch's ceiling (regime, wor
 gateway signs that onto the forward. A worker dispatched without a person in the loop is refused the
 verbs that need one (reading a mailbox, spending a stored credential, loading a repository,
 deleting, resetting or archiving a workspace, changing who it is shared with, recording the person's
-verdict on a claim), and a workspace outside its isolation set. agent-api's list of those verbs is the `verbs` rows of
+verdict on a claim), and a workspace outside its isolation set — which also bounds what it reads
+across the person's workspaces. agent-api's list of those verbs is the `verbs` rows of
 `core/agent/routes.v1.json`.
 
 The full public surface, grouped by **what it protects** — this is the real attack surface, and what the

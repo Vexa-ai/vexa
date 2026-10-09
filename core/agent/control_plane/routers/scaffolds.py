@@ -14,7 +14,7 @@ from control_plane import system_mounts
 from control_plane import workspace_ids as ids_mod
 from control_plane.api_shared import logger
 from control_plane.bodies import ScaffoldHandBody, ScaffoldMintBody
-from control_plane.ceiling import require_in_ceiling
+from control_plane.ceiling import reads_within, require_in_ceiling
 from fastapi import APIRouter, Body, HTTPException, Request
 from workspaces.shared import workspace_paths as wpaths
 
@@ -379,6 +379,7 @@ def build(**d) -> APIRouter:
         slug = str(body.get("slug") or "").strip() or None
         return {"results": link_resolver_mod.resolve_many(
             [str(r) for r in refs], subject=subject_of(request), root=wsr.root,
-            registry=workspace_registry, here=_ws_here(request, slug), is_member=_ws_is_member)}
+            registry=workspace_registry, here=_ws_here(request, slug), is_member=_ws_is_member,
+            within=lambda ws: reads_within(request, ws))}
 
     return router

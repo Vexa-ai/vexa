@@ -206,11 +206,18 @@ def caller_workspaces(roster_root, subject: str) -> list[str]:
         return []
 
 
+def _bounded(workspaces: list[str], within) -> list[str]:
+    """``workspaces`` narrowed to the ones ``within`` admits — a delegated dispatch's ceiling
+    (`ceiling.reads_within`). ``None`` is a caller with no ceiling: the person's whole set."""
+    return list(workspaces) if within is None else [w for w in workspaces if within(w)]
+
+
 def meeting_transcript_reader(lookup, roster_root) -> "Callable[[str, object], list | None]":
-    """The meeting's words as ``(subject, meeting_id) -> segments | None``, read AS the caller with
-    their memberships — the transcript twin of `meeting_access_check`."""
-    def _read(subject: str, meeting_id) -> "list | None":
-        return lookup(subject, meeting_id, caller_workspaces(roster_root, subject))
+    """The meeting's words as ``(subject, meeting_id, *, within=None) -> segments | None``, read AS
+    the caller with their memberships — the transcript twin of `meeting_access_check`, bounded the
+    same way by ``within``."""
+    def _read(subject: str, meeting_id, *, within=None) -> "list | None":
+        return lookup(subject, meeting_id, _bounded(caller_workspaces(roster_root, subject), within))
 
     return _read
 
@@ -228,8 +235,12 @@ def meeting_access_check(lookup, roster_root) -> "Callable[[str, object], dict |
     who may read a transcript. The membership scan NEVER RAISES — a scan that fails narrows access
     to owner-only, never opens it.
 
+    ``within`` narrows those workspaces for a caller acting under a delegated dispatch's ceiling
+    (`ceiling.reads_within`): a meeting reachable only through a workspace outside it is not
+    readable this way. ``None`` is a caller with no ceiling.
+
     ``lookup`` is an INJECTED seam, always called as ``(subject, meeting_id, workspaces)``."""
-    def _access(subject: str, meeting_id) -> "dict | None":
-        return lookup(subject, meeting_id, caller_workspaces(roster_root, subject))
+    def _access(subject: str, meeting_id, *, within=None) -> "dict | None":
+        return lookup(subject, meeting_id, _bounded(caller_workspaces(roster_root, subject), within))
 
     return _access

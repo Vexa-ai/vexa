@@ -94,19 +94,28 @@ def _find(root: Path, ref: Ref) -> Optional[str]:
 
 
 def resolve(ref_text: str, *, subject: str, root, registry: ids_mod.WorkspaceRegistry,
-            here: Optional[dict] = None, is_member=None) -> dict:
+            here: Optional[dict] = None, is_member=None, within=None) -> dict:
     """One ref → ``{ref, title, url, access, workspace}``.
 
     ``here`` is the reader's CURRENT workspace record (from the registry), used for the
     in-workspace ``[[Title]]`` form. Passing ``None`` for it is legitimate — a reader whose own
     workspace has no id yet — and the in-workspace form then resolves to a relative path with no
-    canonical URL, which is exactly what it was before ids existed."""
+    canonical URL, which is exactly what it was before ids existed.
+
+    ``within`` (a slug -> bool) is a delegated dispatch's ceiling (`ceiling.reads_within`): a
+    workspace outside it answers `not-yours` to this reader, whatever the account could read.
+    ``None`` is a reader with no ceiling."""
     ref = parse_ref(ref_text)
     if ref.workspace is None:
         rec, access = here, (ids_mod.ACCESS_READABLE if here else ids_mod.ACCESS_GONE)
     else:
         rec = registry.get(ref.workspace)
         access = ids_mod.access_for(rec, subject, root=root, is_member=is_member)
+        if rec and within is not None and not within(str(rec.get("slug") or "")):
+            # Outside the ceiling: answered as a workspace this reader does not have, read nowhere.
+            return {"ref": ref_text, "title": humanize(ref.target), "url": None,
+                    "access": ids_mod.ACCESS_NOT_YOURS if access == ids_mod.ACCESS_READABLE else access,
+                    "workspace": rec.get("name"), "writable": False}
 
     out = {"ref": ref_text, "title": humanize(ref.target), "url": None, "access": access,
            "workspace": (rec or {}).get("name"),
@@ -136,7 +145,8 @@ def resolve(ref_text: str, *, subject: str, root, registry: ids_mod.WorkspaceReg
 
 
 def resolve_many(refs, *, subject: str, root, registry: ids_mod.WorkspaceRegistry,
-                 here: Optional[dict] = None, is_member=None, limit: int = 200) -> list[dict]:
+                 here: Optional[dict] = None, is_member=None, limit: int = 200,
+                 within=None) -> list[dict]:
     """A page's worth of refs in one round trip — the shape the panel actually needs.
 
     Capped: a document is rendered one screen at a time and a request that could ask for ten
@@ -146,5 +156,5 @@ def resolve_many(refs, *, subject: str, root, registry: ids_mod.WorkspaceRegistr
         key = str(r)
         if key not in seen:
             seen[key] = resolve(key, subject=subject, root=root, registry=registry,
-                                here=here, is_member=is_member)
+                                here=here, is_member=is_member, within=within)
     return list(seen.values())

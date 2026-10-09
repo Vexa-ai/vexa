@@ -17,6 +17,9 @@ This module is the one place agent-api reads those headers, by the names the ven
   `refuse_delegated` for a verb no delegated caller may use at all;
 - `delegation_allows` / `require_in_ceiling` — the workspace ceiling, applied by every resolver of a
   named workspace before it resolves anything;
+- `reads_within` — the same ceiling on a read that walks a person-wide set (their memberships, their
+  mounts, the workspaces a link names) instead of one named workspace: the set is narrowed to what
+  the resolvers would let this caller read;
 - `write_slug` — where a page verb acts when the caller names no workspace.
 
 Which verbs need a person is not decided here: `route_policy.py` reads it from `routes.v1.json`
@@ -96,6 +99,19 @@ def delegation_allows(request: "Request", slug: Optional[str]) -> bool:
     if target == (request.headers.get(SUBJECT_HEADER) or "").strip():
         return True
     return target in {w.strip() for w in ceiling.split(",") if w.strip()}
+
+
+#: The workspaces every subject reads, so a read is never held to a ceiling over them: the company
+#: layer, mounted read-only into every worker (`_read_target` holds only a WRITE there to it).
+READ_BY_EVERYONE = frozenset({"_global"})
+
+
+def reads_within(request: "Request", slug: Optional[str]) -> bool:
+    """May this caller READ workspace ``slug`` under its dispatch's ceiling? The rule the
+    named-workspace resolvers apply on a read, for the routes that walk a person-wide set — the
+    person's memberships, their mounts, the workspaces a page's links name — rather than resolve
+    one named workspace. A caller with no ceiling reads everything its account does, as before."""
+    return (slug or "").strip() in READ_BY_EVERYONE or delegation_allows(request, slug)
 
 
 def is_delegated(request: "Request") -> bool:

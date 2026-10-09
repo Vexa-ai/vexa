@@ -8,8 +8,9 @@ The agent control plane: the FastAPI app (`api.py`) and orchestration that dispa
   peer lookups) and includes the routers. `routers/` holds the routes, one module per owner (see
   [`routers/README.md`](routers/README.md)).
 - `ceiling.py` — where a caller may act and whether a person is in the loop: the delegated
-  dispatch's workspace ceiling (`require_in_ceiling`, `write_slug`), the one person-in-the-loop rule
-  (`is_delegated`, `is_unwatched`, `require_person`, `REFUSAL`), and the one logged refusal.
+  dispatch's workspace ceiling (`require_in_ceiling`, `write_slug`, and `reads_within` for a read
+  across the person's whole set of workspaces), the one person-in-the-loop rule (`is_delegated`,
+  `is_unwatched`, `require_person`, `REFUSAL`), and the one logged refusal.
 - `route_policy.py` — which verbs need a person in the loop. They are the `verbs` rows of
   `core/agent/routes.v1.json` marked `"person": true`; `PERSON_GATE`, an app-level dependency,
   applies `require_person` to the route a request matched. A route never asks for it in its body,

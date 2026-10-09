@@ -23,7 +23,7 @@ from control_plane.api_shared import logger
 from control_plane.bodies import (
     InviteAcceptBody, InviteCreateBody, RoleSetBody, SharedNewBody, WorkspaceInviteBody,
     WorkspaceMembershipBody)
-from control_plane.ceiling import require_in_ceiling
+from control_plane.ceiling import reads_within, require_in_ceiling
 from control_plane.workspace_attach import (
     create_shared_workspace_dir, ensure_workspace_private, ensure_workspace_shareable,
     workspace_slot_dir)
@@ -223,6 +223,8 @@ def build(**d) -> APIRouter:
         if found is None:
             raise HTTPException(status_code=404, detail="invalid invite")
         target_ws = found[0]
+        # The token names its workspace; a delegated dispatch joins only one inside its ceiling.
+        require_in_ceiling(request, target_ws)
         try:
             result = membership_mod.accept_invite(
                 wsr.root, target_ws, token=body.token, subject=subject, subject_email=subject_email,
@@ -437,6 +439,9 @@ def build(**d) -> APIRouter:
         for row in membership_mod.list_memberships(wsr.root, subject):
             if row["workspace_id"] not in seen:
                 rows.append(row)
+        # A delegated dispatch lists only the workspaces inside its ceiling (`ceiling.reads_within`);
+        # a person with no delegation sees every membership, as before.
+        rows = [r for r in rows if reads_within(request, str(r.get("workspace_id") or ""))]
         return {"memberships": rows, "index_degraded": degraded}
 
     return router
