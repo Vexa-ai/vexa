@@ -1010,8 +1010,8 @@
       "id": "teams-meeting-id-length",
       "fact": "how many digits a Teams short meeting id (teams.microsoft.com/meet/<id>) may have",
       "kind": "literal",
-      "enforced": false,
-      "decision": "WHICH LENGTHS A TEAMS SHORT MEETING ID HAS. meeting-api and the MCP's link parser accept 10 to 16 digits; the browser extension accepts 10 to 15, so a 16-digit link the server takes is one the extension does not recognise as a meeting. Agreeing means knowing what Teams issues, which is evidence about the platform, not something this gate can pick.",
+      "enforced": true,
+      "decided": "10 to 16 digits: the browser extension now accepts the lengths meeting-api and the MCP's link parser accept, so a link the server takes is one the extension recognises (coordinator, 2026-10-09).",
       "why": "Three parsers in three packages and two languages decide whether a URL is a Teams meeting; nothing compared them and they already disagree at 16 digits (architecture pass 3, S4).",
       "sites": [
         {
@@ -1029,21 +1029,6 @@
           "pattern": "\\\\/meet\\\\/\\(\\\\d\\{(\\d+,\\d+)\\}\\)",
           "all": true,
           "note": "the path and the hash forms"
-        }
-      ],
-      "answers": [
-        {
-          "value": "10,15",
-          "sites": [
-            "clients/extension/src/meeting.ts"
-          ]
-        },
-        {
-          "value": "10,16",
-          "sites": [
-            "core/meetings/services/mcp/src/vexa_mcp/link_parser.py",
-            "core/meetings/services/meeting-api/src/meeting_api/bot_spawn/service.py"
-          ]
         }
       ]
     },
