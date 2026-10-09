@@ -558,6 +558,9 @@ chrome.action.onClicked.addListener((tab) => {
         state.error = `tab audio: ${chrome.runtime.lastError?.message || 'no stream id'}`; broadcastStatus(); return;
       }
       tabStreamId = id;
+      // A session auto-started on this tab before the click has no tab audio yet; the stream
+      // id expires within seconds, so attach the captor now instead of waiting for a Start.
+      if (isActive(state.status) && state.tabId === tab.id && isMixed(state.platform)) startTabAudio();
     });
   }
 });
