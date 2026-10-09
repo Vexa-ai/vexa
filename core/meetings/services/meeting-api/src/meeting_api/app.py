@@ -186,9 +186,12 @@ def create_app(
     # in-process harness, and a deployment's explicit REDIS_WORKLOAD_ACL=shared.
     bot_redis: Optional["object"] = None,
     # The runtime caller credential: a /runtime/callback must carry the runtime's signature over its
-    # event, keyed from it (runtime_signature). The production entrypoint always passes it; None is
-    # the in-process harness, which drives the route directly.
+    # event, keyed from it (runtime_signature). The production entrypoint always passes it.
     runtime_callback_token: Optional[str] = None,
+    # The in-process harness's explicit opt-in to drive the bot and runtime callbacks with no key
+    # wired. Without it, a callback door whose key (token_secret / runtime_callback_token) is unset
+    # refuses every caller with 401. The production entrypoint never sets it.
+    open_callbacks: bool = False,
 ) -> FastAPI:
     """Build the unified meeting-api app from the injected ports.
 
@@ -268,6 +271,7 @@ def create_app(
         internal_secret=internal_secret,
         bot_redis=bot_redis,
         runtime_callback_token=runtime_callback_token,
+        open_callbacks=open_callbacks,
     )
 
     # --- bot_spawn: POST /bots (invocation.v1 + runtime.v1) ---

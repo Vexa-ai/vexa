@@ -128,7 +128,7 @@ def test_lifecycle_publish_failure_is_surfaced_but_not_fatal():
     repo = InMemoryMeetingRepo()
     runtime = FakeRuntimeClient()
     bad_redis = ExplodingRedis()
-    app = create_app(meeting_repo=repo, runtime=runtime, command_publisher=bad_redis, redis=bad_redis)
+    app = create_app(open_callbacks=True, meeting_repo=repo, runtime=runtime, command_publisher=bad_redis, redis=bad_redis)
     client = TestClient(app)
 
     # Spawn so the session_uid → meeting mapping exists (the callback persists by session_uid).

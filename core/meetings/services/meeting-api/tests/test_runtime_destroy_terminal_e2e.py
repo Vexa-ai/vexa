@@ -104,7 +104,7 @@ def test_runtime_destroy_completes_stopping_after_only_joining_e2e():
         repo = _ReaperRepo()
         m = await _seed(repo)   # requested; the joining callback then sets store = JOINING, DB = joining
         redis = _StreamRedis()
-        app = create_app(meeting_repo=repo, redis=redis)
+        app = create_app(open_callbacks=True, meeting_repo=repo, redis=redis)
         async with _asgi(app) as c:
             # The bot's only lifecycle event lands: joining. In-process FSM record → JOINING.
             r = await c.post(LIFECYCLE, json={"connection_id": "sess-uid", "status": "joining"})
@@ -140,7 +140,7 @@ def test_runtime_destroy_completes_stopping_after_active_e2e():
         m = await _seed(repo)  # requested → the callbacks walk it up to active
         repo._meetings[m["id"]]["data"]["transcription_provider"] = "none"
         redis = _StreamRedis()
-        app = create_app(meeting_repo=repo, redis=redis)
+        app = create_app(open_callbacks=True, meeting_repo=repo, redis=redis)
         async with _asgi(app) as c:
             for st, timestamp in (
                 ("joining", "2026-07-30T16:26:00.000Z"),
@@ -188,7 +188,7 @@ def test_runtime_destroy_with_invalid_time_does_not_fabricate_provenance():
         repo = _ReaperRepo()
         m = await _seed(repo)
         repo._meetings[m["id"]]["data"]["transcription_provider"] = "none"
-        app = create_app(meeting_repo=repo)
+        app = create_app(open_callbacks=True, meeting_repo=repo)
         async with _asgi(app) as c:
             for status, timestamp in (
                 ("joining", "2026-07-30T16:26:00.000Z"),
@@ -231,7 +231,7 @@ def test_runtime_destroy_fails_pre_active_e2e():
         repo = _ReaperRepo()
         m = await _seed(repo)  # requested → callbacks walk it to awaiting_admission
         redis = _StreamRedis()
-        app = create_app(meeting_repo=repo, redis=redis)
+        app = create_app(open_callbacks=True, meeting_repo=repo, redis=redis)
         async with _asgi(app) as c:
             for st in ("joining", "awaiting_admission"):
                 assert (await c.post(LIFECYCLE, json={"connection_id": "sess-uid", "status": st})).status_code == 200
@@ -261,7 +261,7 @@ def test_runtime_destroy_pre_active_before_admission_is_join_failure_e2e(callbac
         repo = _ReaperRepo()
         m = await _seed(repo)
         redis = _StreamRedis()
-        app = create_app(meeting_repo=repo, redis=redis)
+        app = create_app(open_callbacks=True, meeting_repo=repo, redis=redis)
         async with _asgi(app) as c:
             for st in callbacks:
                 assert (await c.post(LIFECYCLE, json={"connection_id": "sess-uid", "status": st})).status_code == 200
@@ -295,7 +295,7 @@ def test_runtime_destroy_noop_on_already_terminal_e2e():
         repo = _ReaperRepo()
         m = await _seed(repo)
         redis = _StreamRedis()
-        app = create_app(meeting_repo=repo, redis=redis)
+        app = create_app(open_callbacks=True, meeting_repo=repo, redis=redis)
         async with _asgi(app) as c:
             for st in ("joining", "active", "completed"):
                 ev = {"connection_id": "sess-uid", "status": st}
@@ -319,7 +319,7 @@ def test_runtime_nonterminal_state_does_not_advance_e2e():
     async def scenario():
         repo = _ReaperRepo()
         m = await _seed(repo)
-        app = create_app(meeting_repo=repo)
+        app = create_app(open_callbacks=True, meeting_repo=repo)
         async with _asgi(app) as c:
             for st in ("joining", "active"):
                 assert (await c.post(LIFECYCLE, json={"connection_id": "sess-uid", "status": st})).status_code == 200

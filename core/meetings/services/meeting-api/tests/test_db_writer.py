@@ -327,7 +327,7 @@ async def _terminal_app_and_stores(redis_c):
     async def _finalizer(meeting_id: int) -> None:
         await finalize_meeting(redis_c, store, meeting_id)
 
-    app = create_app(transcript_store=store, meeting_repo=repo, transcript_finalizer=_finalizer)
+    app = create_app(open_callbacks=True, transcript_store=store, meeting_repo=repo, transcript_finalizer=_finalizer)
     return TestClient(app), store
 
 

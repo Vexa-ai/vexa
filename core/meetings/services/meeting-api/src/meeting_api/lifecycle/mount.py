@@ -61,15 +61,18 @@ def mount_lifecycle(
     internal_secret: Optional[str] = None,
     bot_redis: Optional["object"] = None,
     runtime_callback_token: Optional[str] = None,
+    open_callbacks: bool = False,
 ) -> None:
     """Register the lifecycle.v1 callback route on the unified app (the lifecycle receiver's
     ``/bots/internal/callback/lifecycle`` handler, sharing the app's TraceMiddleware).
 
     A bot's callback is authenticated by the MeetingToken minted for ITS session: the token must be
     signed with ``callback_secret`` (the MeetingToken key, ``ADMIN_TOKEN``) and bound to the
-    event's ``connection_id``. The internal tier (``x-internal-secret``) is also accepted. The
-    production entrypoint always passes ``callback_secret``; ``None`` is the in-process harness,
-    which drives the route directly.
+    event's ``connection_id`` (``meeting_token.admit_session``). The internal tier
+    (``x-internal-secret``) is also accepted. A runtime callback must carry the runtime's signature,
+    keyed from ``runtime_callback_token``. A door whose key is not wired refuses every callback (401,
+    logged) unless ``open_callbacks`` is set — the in-process harness's explicit opt-in to drive the
+    routes without credentials. The production entrypoint wires both keys and never sets it.
 
     P3a — each FSM advance emits the sealed ``meeting.status_change`` webhook.v1 envelope and
     records the full diagnostics (``status_transition[]`` + forensics in ``rec.data``). The
@@ -686,31 +689,33 @@ def mount_lifecycle(
     # DIRECTLY (no HTTP self-POST to 127.0.0.1:PORT). Same instance, same store, same side effects.
     app.state.apply_lifecycle_event = _apply_lifecycle_event
 
-    def _bot_callback_admitted(request: Request, body: object) -> bool:
-        """The event's own session's MeetingToken, or the internal tier."""
+    def _bot_callback_refusal(request: Request, body: object) -> Optional[str]:
+        """None when the event's own session's MeetingToken or the internal tier is presented;
+        otherwise the reason it is refused."""
         import hmac
 
-        if callback_secret is None:
-            return True
         presented = request.headers.get("x-internal-secret") or ""
         if internal_secret and presented and hmac.compare_digest(presented.encode(), internal_secret.encode()):
-            return True
+            return None
+        if not callback_secret:
+            return None if open_callbacks else "no_credential_configured"
         scheme, _, token = (request.headers.get("authorization") or "").partition(" ")
         connection_id = body.get("connection_id") if isinstance(body, dict) else None
         if scheme.lower() != "bearer" or not token.strip():
-            return False
+            return "unauthenticated"
         try:
             meeting_token.admit_session(token.strip(), session_uid=connection_id, secret=callback_secret)
         except meeting_token.InvalidMeetingToken:
-            return False
-        return True
+            return "unauthenticated"
+        return None
 
     @app.post("/bots/internal/callback/lifecycle")
     async def lifecycle_callback(request: Request) -> JSONResponse:
         body = await request.json()
-        if not _bot_callback_admitted(request, body):
+        refusal = _bot_callback_refusal(request, body)
+        if refusal is not None:
             log_event("lifecycle_event_rejected", audience="system", level="warning",
-                      span="lifecycle.callback", fields={"reason": "unauthenticated"})
+                      span="lifecycle.callback", fields={"reason": refusal})
             return JSONResponse(status_code=401,
                                 content={"status": "error", "detail": "bot session credential required"})
         status_code, content = await _apply_lifecycle_event(
@@ -746,15 +751,20 @@ def mount_lifecycle(
             body = await request.json()
         except Exception:  # noqa: BLE001
             body = {}
-        if runtime_callback_token is not None:
+        refusal = None
+        if runtime_callback_token:
             from .. import runtime_signature
 
             if not runtime_signature.verify(runtime_callback_token, body,
                                             request.headers.get(runtime_signature.HEADER) or ""):
-                log_event("runtime_callback_rejected", audience="system", level="warning",
-                          span="runtime.callback", fields={"reason": "unsigned"})
-                return JSONResponse(status_code=401, content={"status": "error",
-                                                              "detail": "runtime signature required"})
+                refusal = "unsigned"
+        elif not open_callbacks:
+            refusal = "no_credential_configured"
+        if refusal is not None:
+            log_event("runtime_callback_rejected", audience="system", level="warning",
+                      span="runtime.callback", fields={"reason": refusal})
+            return JSONResponse(status_code=401, content={"status": "error",
+                                                          "detail": "runtime signature required"})
         workload_id = body.get("workloadId") or body.get("workload_id")
         state = body.get("state")
         log_event(

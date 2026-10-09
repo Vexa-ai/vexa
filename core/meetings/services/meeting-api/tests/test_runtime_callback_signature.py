@@ -42,3 +42,28 @@ def test_an_unsigned_or_forged_callback_is_refused():
 def test_a_signed_callback_is_accepted():
     r = _client().post("/runtime/callback", json=EVENT, headers={runtime_signature.HEADER: SIGNATURE})
     assert r.status_code == 200 and r.json()["status"] == "accepted"
+
+
+def test_a_refused_callback_moves_no_meeting():
+    """The 401 is not only an answer: an unsigned or forged terminal callback leaves the meeting it
+    names exactly where it was, and the same event signed ends it."""
+    import asyncio
+
+    repo = InMemoryMeetingRepo()
+
+    async def seed():
+        m = await repo.create_meeting(user_id=1, platform="google_meet", native_meeting_id="m1", data={})
+        await repo.create_session(meeting_id=m["id"], session_uid="sess-uid")
+        await repo.set_bot_container(meeting_id=m["id"], bot_container_id=EVENT["workloadId"])
+        repo.set_status(m["id"], "joining")
+        return m
+
+    meeting = asyncio.run(seed())
+    client = TestClient(create_app(meeting_repo=repo, runtime=FakeRuntimeClient(), runtime_callback_token=TOKEN))
+    forged = runtime_signature.sign("another-token-of-similar-length-0123456789ab", EVENT)
+    for headers in ({}, {runtime_signature.HEADER: forged}, {runtime_signature.HEADER: "v1=" + "0" * 64}):
+        assert client.post("/runtime/callback", json=EVENT, headers=headers).status_code == 401
+        assert repo._meetings[meeting["id"]]["status"] == "joining"
+    assert client.post("/runtime/callback", json=EVENT,
+                       headers={runtime_signature.HEADER: SIGNATURE}).status_code == 200
+    assert repo._meetings[meeting["id"]]["status"] == "failed"

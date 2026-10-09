@@ -19,7 +19,7 @@ INTERNAL = "meeting-test-internal-secret"
 
 @pytest.fixture
 def client():
-    return TestClient(create_app(identity_key=KEY.public_key(), internal_secret=INTERNAL))
+    return TestClient(create_app(open_callbacks=True, identity_key=KEY.public_key(), internal_secret=INTERNAL))
 
 
 def _signed(sub: str, **claims) -> dict:

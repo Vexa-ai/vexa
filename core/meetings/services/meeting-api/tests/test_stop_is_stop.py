@@ -59,6 +59,7 @@ def _at(offset_s: int = 0):
 
 def _app(repo, runtime=None, publisher=None):
     return create_app(
+        open_callbacks=True,
         meeting_repo=repo,
         runtime=runtime if runtime is not None else FakeRuntimeClient(),
         command_publisher=publisher if publisher is not None else InMemoryCommandPublisher(),
