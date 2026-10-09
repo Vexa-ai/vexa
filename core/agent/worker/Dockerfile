@@ -54,7 +54,7 @@ COPY core/agent/contracts ./contracts
 COPY core/workspaces/__init__.py ./workspaces/__init__.py
 COPY core/workspaces/shared ./workspaces/shared
 # The registry of per-person workspace templates the worker seeds new workspaces from (Phase 3) +
-# the tool registry. workspace-seeds/<name>/ — one validated seed per subdir (today: default, finos).
+# the tool registry. workspace-seeds/<name>/ — one validated seed per subdir (the repo ships `default`).
 COPY behavior/workspaces ./workspace-seeds
 COPY core/agent/tools-seed ./tools-seed
 
