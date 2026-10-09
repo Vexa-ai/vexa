@@ -878,8 +878,10 @@ exact 0 'dev-dispatch-signing-key' "no published VEXA_DISPATCH_SIGNING_KEY in th
 # The admin list is admin-api's (VEXA_ADMIN_EMAILS); an install that still sets it in the terminal's
 # extraEnv, as this chart once said to, keeps its admins on upgrade.
 admin_emails() {  # admin_emails <helm args...> → the value admin-api's VEXA_ADMIN_EMAILS renders to
+  # awk reads the whole render: a reader that stops early SIGPIPEs helm, and under pipefail that
+  # failed this script (exit 141) whenever the render outran the pipe buffer.
   helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "$@" \
-    | awk '/name: vexa-vexa-admin-api$/{d=1} d && /name: VEXA_ADMIN_EMAILS/{getline; print; exit}' \
+    | awk '/name: vexa-vexa-admin-api$/{d=1} d && !done && /name: VEXA_ADMIN_EMAILS/{getline; print; done=1}' \
     | sed -E 's/.*value: "?([^"]*)"?/\1/'
 }
 check_admins() {  # check_admins <label> <want> <helm args...>
@@ -966,12 +968,16 @@ for bad in postgres POSTGRES changeme short-but-not-published; do
 done
 echo "  OK: an explicit published or short database.password is refused"
 good="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
-if helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set database.password="$good" | grep -q "POSTGRES_PASSWORD: \"$good\""; then
+# Render first, then search: `helm … | grep -q` stops reading at the first match, SIGPIPEs helm, and
+# under pipefail reports the match as a failure (and a refusal as a pass).
+good_render="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set database.password="$good")"
+if grep -q "POSTGRES_PASSWORD: \"$good\"" <<< "$good_render"; then
   echo "  OK: an explicit 32+ byte database.password is used as given"
 else echo "  FAIL: an explicit database.password was not rendered"; fail=1; fi
 # The rotation hook renders only on an upgrade whose live Secret holds a published value (lookup);
 # an offline render never sees one, so it renders none. Its run is proven on a live cluster.
-if helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --is-upgrade | grep -q 'postgres-password'; then
+upgrade_render="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --is-upgrade)"
+if grep -q 'postgres-password' <<< "$upgrade_render"; then
   echo "  FAIL: the postgres-password hook rendered without a published live Secret"; fail=1
 else echo "  OK: no postgres-password hook without a published live Secret"; fi
 
