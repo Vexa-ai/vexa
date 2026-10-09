@@ -107,3 +107,18 @@ def test_a_worker_without_a_person_cannot_change_the_timezone(monkeypatch):
     r = c.put('/api/time/zone', headers={'X-User-Id': '7', 'X-User-Regime': 'autonomous'},
               json={'timezone': 'Europe/Lisbon'})
     assert r.status_code == 403 and not ident.requests
+
+
+# ── the clock rides every turn that holds the toolbelt ───────────────────────────────────────────
+# `whats_waiting` once carried a fresh clock as `time_context` on the dogfood rig. On a standard
+# deployment `whats_waiting` is flows' read model and the clock is agent-api's `current_time`, so
+# the turn is told — every turn whose worker can call it — that the time is a tool, not a guess.
+
+def test_a_turn_with_the_toolbelt_is_told_the_clock_is_current_time():
+    from control_plane.api_shared import toolbelt_preamble
+
+    said = toolbelt_preamble("s-123")
+    assert "`current_time`" in said and "`timezone_set`" in said
+    assert "timezone_required" in said
+    # …and the naming ask it rides with is unchanged
+    assert 'Current chat session: "s-123"' in said and "call chat_name" in said

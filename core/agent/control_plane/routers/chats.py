@@ -21,7 +21,8 @@ from control_plane.api_shared import (
     CONTEXT_SENTINEL, GLOBAL_TARGET_NOTE, ChatBody, ResetBody, RoutineCreate, RoutineEnabledPatch,
     _chat_turn_head, _context_grounding, _has_custom_model_endpoint, _is_slug,
     _model_creds_error_message, _record_chat_turn_head, _sse, _stream_tail_id,
-    inbox_pending, logger, meeting_access_check, meeting_binding, target_preamble, workspace_focus)
+    inbox_pending, logger, meeting_access_check, meeting_binding, target_preamble, toolbelt_preamble,
+    workspace_focus)
 from control_plane.config_preflight import NOT_CONFIGURED, capability_state
 from control_plane.events import event_to_invocation
 from control_plane.workspace_attach import active_workspaces, shared_active_mounts
@@ -559,15 +560,12 @@ def build(**d) -> APIRouter:
         # and therefore in front of the sentinel below, so the person's half stays exactly their
         # words (F47): this is machinery, and machinery never renders as somebody's speech.
         prompt = _target_line(subject, session, _target) + prompt
-        # The naming ask names a TOOL, so it rides only a turn whose worker gets the toolbelt that
-        # serves it (`chat_name` on the assembled MCP — the `worker_toolbelt` capability). A turn
-        # without one is never told to call something it does not have.
+        # The naming ask and the clock name TOOLS, so they ride only a turn whose worker gets the
+        # toolbelt that serves them (`chat_name` and `current_time` on the assembled MCP — the
+        # `worker_toolbelt` capability). A turn without one is never told to call something it
+        # does not have.
         if _toolbelt_configured():
-            import json
-            prompt = (f"Current chat session: {json.dumps(session)}. Once the task is clear, call chat_name "
-                      "with this session and a concise 3–7 word task title describing the actual objective "
-                      "(for example, ‘Connect personal calendar’). Do not copy the raw opening message, "
-                      "include secrets, or narrate naming. A human-chosen title is protected.\n" + prompt)
+            prompt = toolbelt_preamble(session) + prompt
         # Mark the grounding→user boundary. Every branch returns `<grounding> + body.prompt`, so the
         # user's words are the exact suffix; the sentinel goes right before them.
         #

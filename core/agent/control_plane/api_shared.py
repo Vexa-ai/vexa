@@ -1290,6 +1290,23 @@ GLOBAL_TARGET_NOTE = ("The company layer is thin: the five files at its root, an
                       "documents belong on a desk or in an ordinary workspace, never here.")
 
 
+def toolbelt_preamble(session: str) -> str:
+    """The asks that name a TOOL, so they ride only a turn whose worker holds the toolbelt that
+    serves them (the `worker_toolbelt` capability): name the chat, and read the clock.
+
+    THE CLOCK IS A TOOL, NOT A GUESS. A conversation's timestamps are stale the moment they are
+    written, and a model left to infer "today" from them answers relative dates wrong. On the
+    dogfood rig the queue (`whats_waiting`) carried a fresh clock; on a standard deployment the
+    queue is flows' and the clock is `current_time`, so the turn is told so on every turn."""
+    return (f"Current chat session: {json.dumps(session)}. Once the task is clear, call chat_name "
+            "with this session and a concise 3–7 word task title describing the actual objective "
+            "(for example, ‘Connect personal calendar’). Do not copy the raw opening message, "
+            "include secrets, or narrate naming. A human-chosen title is protected.\n"
+            "For the date or time — now, today, anything relative — call `current_time`; never infer "
+            "it from earlier messages. If it answers `timezone_required`, ask the person their "
+            "timezone and save it with `timezone_set`.\n")
+
+
 def target_preamble(target: str, others: "list[str] | None" = None, note: str = "") -> str:
     """The turn's target line, or ``""`` when there is no target to name.
 
