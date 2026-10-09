@@ -173,6 +173,11 @@ migrate-storage: preflight storage-up
 ## `docker run` are QUOTED for the same reason. `$$CLAUDE_MOUNT` is the deliberate exception: it
 ## carries multiple argv words and MUST stay unquoted — do not "fix" it.
 ##
+## The database password lives in .env (DB_PASSWORD), never as a default: an unset or published value
+## is replaced by a minted one written back to .env, and every `up` sets the .env value on the postgres
+## sidecar over its local socket (ALTER USER), so a volume created with the old published password
+## moves to it without a separate step. The value is never printed.
+##
 ## Note this recipe does NOT `-e` the spawn-default flags (TRANSCRIBE_ENABLED/RECORDING_ENABLED);
 ## they ride `--env-file`, where an empty value must keep the default. That is enforced in code
 ## (bot_spawn/env_flags.py), not here — compose's `${VAR:-true}` has no `--env-file` equivalent.
@@ -185,6 +190,14 @@ up: preflight storage-up
 	TX_TOKEN=$$(envv TRANSCRIPTION_SERVICE_TOKEN); \
 	IMAGE_TAG=$$(envv IMAGE_TAG); IMAGE_TAG=$${IMAGE_TAG:-v012}; \
 	IMG=$$(docker image inspect $(LOCAL_TAG) >/dev/null 2>&1 && echo $(LOCAL_TAG) || echo $(DOCKERHUB_USER)/$(IMAGE_NAME):$$IMAGE_TAG); \
+	DB_PW=$$(envv DB_PASSWORD); \
+	case "$$DB_PW" in \
+		""|postgres|changeme|change-me|CHANGE-ME|default|secret|password) \
+			DB_PW=$$(openssl rand -hex 32); \
+			if grep -qE '^DB_PASSWORD=' "$(ENV_FILE)"; then sed -i.bak "s|^DB_PASSWORD=.*|DB_PASSWORD=$$DB_PW|" "$(ENV_FILE)" && rm -f "$(ENV_FILE).bak"; \
+			else printf '\nDB_PASSWORD=%s\n' "$$DB_PW" >> "$(ENV_FILE)"; fi; \
+			echo "  Minted a database password into $(ENV_FILE) (DB_PASSWORD)";; \
+	esac; \
 	CLAUDE_CREDS="$$HOME/.claude/.credentials.json"; \
 	if [ -f "$$CLAUDE_CREDS" ]; then \
 		echo "  Detected Claude subscription credentials — mounting into container"; \
@@ -196,12 +209,15 @@ up: preflight storage-up
 	if ! docker ps -q -f name=$(PG_CONTAINER) | grep -q .; then \
 		docker rm -f $(PG_CONTAINER) 2>/dev/null || true; \
 		docker run -d --name $(PG_CONTAINER) --network $(NETWORK) --restart unless-stopped \
-			-e POSTGRES_DB=vexa -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres \
+			-e POSTGRES_DB=vexa -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD="$$DB_PW" \
 			-e TZ=UTC -e PGTZ=UTC \
 			-v $(PG_VOLUME):/var/lib/postgresql/data \
 			$(PG_IMAGE) -c idle_in_transaction_session_timeout=60000 > /dev/null; \
 		for i in $$(seq 1 24); do docker exec $(PG_CONTAINER) pg_isready -U postgres -d vexa -q 2>/dev/null && break; sleep 2; done; \
-	fi; echo "  ✓ PostgreSQL ready"; \
+	fi; \
+	printf "ALTER USER postgres PASSWORD '%s';\n" "$$(printf '%s' "$$DB_PW" | sed "s/'/''/g")" \
+		| docker exec -i $(PG_CONTAINER) psql -U postgres -d vexa -v ON_ERROR_STOP=1 -q >/dev/null; \
+	echo "  ✓ PostgreSQL ready"; \
 	if [ -n "$(LOCAL_STT)" ]; then \
 		echo "Starting local CPU STT ($(WHISPER_CONTAINER), $(WHISPER_MODEL))..."; \
 		if ! docker ps -q -f name=$(WHISPER_CONTAINER) | grep -q .; then \
@@ -222,7 +238,7 @@ up: preflight storage-up
 		--env-file $(ENV_FILE) \
 		-v $(STATE_VOLUME):/var/lib/vexa/state \
 		-p $(HOST_GATEWAY_PORT):8056 -p $(HOST_TERMINAL_PORT):3001 -p $(HOST_AGENT_PORT):8100 \
-		-e DB_HOST=$(PG_CONTAINER) -e DB_PORT=5432 -e DB_NAME=vexa -e DB_USER=postgres -e DB_PASSWORD=postgres \
+		-e DB_HOST=$(PG_CONTAINER) -e DB_PORT=5432 -e DB_NAME=vexa -e DB_USER=postgres -e DB_PASSWORD="$$DB_PW" \
 		-e ADMIN_API_TOKEN="$$ADMIN_TK" -e ADMIN_TOKEN="$$ADMIN_TK" \
 		-e TRANSCRIPTION_SERVICE_URL="$$TX_URL" -e TRANSCRIPTION_SERVICE_TOKEN="$$TX_TOKEN" \
 		-e MINIO_ENDPOINT=$(STORAGE_CONTAINER):9000 -e MINIO_ACCESS_KEY="$(MINIO_ACCESS_KEY)" \
@@ -252,7 +268,9 @@ init-db:
 	@echo "  ✓ Schema converges in-process on service startup"
 
 ## test — probe the published front doors. Each door gets up to TEST_WAIT_SECONDS to answer: on first
-## boot provision-key.sh restarts the dashboard and terminal once the self-host key is minted.
+## boot provision-key.sh restarts the dashboard and terminal once the self-host key is minted. Then
+## read every process's environment inside the container (tests/program_environments.py): the
+## runtime caller credential is held by the runtime, agent-api and meeting-api and nothing else.
 TEST_WAIT_SECONDS ?= 120
 test:
 	@FAIL=0; for ep in "$(HOST_GATEWAY_PORT):gateway" "$(HOST_AGENT_PORT):agent-api" "$(HOST_TERMINAL_PORT):terminal"; do \
@@ -262,7 +280,9 @@ test:
 			[ $$WAITED -ge $(TEST_WAIT_SECONDS) ] && break; sleep 5; WAITED=$$((WAITED + 5)); \
 		done; \
 		if [ $$OK = 1 ]; then echo "  ✓ $$NAME (:$$PORT)"; else echo "  ✗ $$NAME not responding after $(TEST_WAIT_SECONDS)s (:$$PORT)"; FAIL=1; fi; \
-	done; exit $$FAIL
+	done; \
+	docker exec -i $(APP_CONTAINER) python3 - < "$(ROOT)/deploy/lite/tests/program_environments.py" || FAIL=1; \
+	exit $$FAIL
 
 ## down — stop + remove app + sidecars + network (volumes persist; `docker volume rm vexa-lite-pgdata vexa-lite-storagedata` to wipe).
 ## A MinIO sidecar left by an older Lite (LEGACY_MINIO_CONTAINER) and its volume are not touched.

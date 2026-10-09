@@ -270,19 +270,20 @@ COPY licenses/onnx-community-pyannote-segmentation-3.0.LICENSE.txt /opt/hf-cache
 COPY --from=terminal-builder /app/terminal /app/terminal
 
 # ── Launchers, supervisor config, entrypoint ──────────────────────────────────────────────────────
-COPY deploy/lite/bin/vexa-bot-launch deploy/lite/bin/vexa-agent-worker deploy/lite/bin/vexa-runtime deploy/lite/bin/setup-pulseaudio-sinks.sh deploy/lite/bin/provision-key.sh deploy/lite/bin/persisted-secret /usr/local/bin/
+COPY deploy/lite/bin/vexa-bot-launch deploy/lite/bin/vexa-agent-worker deploy/lite/bin/vexa-runtime deploy/lite/bin/setup-pulseaudio-sinks.sh deploy/lite/bin/provision-key.sh deploy/lite/bin/render-supervisord deploy/lite/bin/persisted-secret /usr/local/bin/
+# The supervisor config is a template: the entrypoint renders the copy supervisord runs (see CMD).
 COPY deploy/lite/supervisord.conf /etc/supervisor/conf.d/vexa.conf
 COPY deploy/lite/entrypoint.sh /entrypoint.sh
 RUN chmod +x /usr/local/bin/vexa-bot-launch /usr/local/bin/vexa-agent-worker /usr/local/bin/vexa-runtime \
       /usr/local/bin/setup-pulseaudio-sinks.sh /usr/local/bin/provision-key.sh \
-      /usr/local/bin/persisted-secret /entrypoint.sh
+      /usr/local/bin/persisted-secret /usr/local/bin/render-supervisord /entrypoint.sh
 
 # ── Env defaults (every var supervisord interpolates must be SET; entrypoint derives the rest) ────
 ENV LOG_LEVEL=info \
     RUNTIME_BACKEND=process \
     BOT_COMMAND=/usr/local/bin/vexa-bot-launch \
     AGENT_WORKER_COMMAND=/usr/local/bin/vexa-agent-worker \
-    DB_HOST=localhost DB_PORT=5432 DB_NAME=vexa DB_USER=postgres DB_PASSWORD=postgres \
+    DB_HOST=localhost DB_PORT=5432 DB_NAME=vexa DB_USER=postgres \
     REDIS_HOST=localhost REDIS_PORT=6379 \
     ADMIN_API_TOKEN= INTERNAL_API_SECRET= \
     TRANSCRIPTION_SERVICE_URL= TRANSCRIPTION_SERVICE_TOKEN= \
@@ -302,4 +303,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
     CMD curl -sf http://localhost:8056/health > /dev/null || exit 1
 
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["supervisord", "-n", "-c", "/etc/supervisor/conf.d/vexa.conf"]
+CMD ["supervisord", "-n", "-c", "/run/vexa/supervisord.conf"]

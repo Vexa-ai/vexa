@@ -33,7 +33,16 @@ export DB_HOST="${DB_HOST:-localhost}"
 export DB_PORT="${DB_PORT:-5432}"
 export DB_NAME="${DB_NAME:-vexa}"
 export DB_USER="${DB_USER:-postgres}"
-export DB_PASSWORD="${DB_PASSWORD:-postgres}"
+# The database password has no default: the old one, `postgres`, is published in this repository.
+# `make -C deploy/lite up` mints one into the repo-root .env and sets it on its postgres sidecar; with
+# your own database, pass that database's password. Refused like compose's postgres refuses it.
+case "${DB_PASSWORD:-}" in
+    ""|postgres|changeme|change-me|CHANGE-ME|default|secret|password)
+        echo "ERROR: DB_PASSWORD is unset or a value published in the Vexa repository - refusing to start." >&2
+        echo "  make -C deploy/lite up mints one; with your own database, pass -e DB_PASSWORD=<its password>." >&2
+        exit 1;;
+esac
+export DB_PASSWORD="${DB_PASSWORD}"
 
 # ─── Defaults for every var supervisord interpolates (empty is fine; must be SET) ─────────────────
 export LOG_LEVEL="${LOG_LEVEL:-info}"
@@ -73,9 +82,12 @@ export ADMIN_API_TOKEN="${ADMIN_API_TOKEN:-${ADMIN_TOKEN:-$(python3 -c "import s
 # internal tier (F95). A random per-boot value keeps the one-command quickstart working and is
 # nobody's to guess; set INTERNAL_API_SECRET explicitly when something outside talks in.
 export INTERNAL_API_SECRET="${INTERNAL_API_SECRET:-$(python3 -c "import secrets; print(secrets.token_hex(32))")}"
-# The runtime caller credential: the runtime refuses every workload/schedule call without it, and
-# only agent-api and meeting-api are given it (supervisord). Minted per boot like the internal tier.
-export RUNTIME_API_TOKEN="${RUNTIME_API_TOKEN:-$(python3 -c "import secrets; print(secrets.token_hex(32))")}"
+# The runtime caller credential: the runtime refuses every workload/schedule call without it. It is
+# NOT exported — every supervisord program inherits supervisord's environment — but rendered into the
+# environment= of the runtime, agent-api and meeting-api only (bin/render-supervisord, below). Minted
+# per boot like the internal tier; pass RUNTIME_API_TOKEN to fix it.
+runtime_api_token="${RUNTIME_API_TOKEN:-$(python3 -c "import secrets; print(secrets.token_hex(32))")}"
+unset RUNTIME_API_TOKEN
 # The worker toolbelt: agent-api signs each worker's delegation token, admin-api verifies it.
 export VEXA_MCP_DELEGATION_SECRET="${VEXA_MCP_DELEGATION_SECRET:-$(python3 -c "import secrets; print(secrets.token_hex(32))")}"
 export DEFAULT_BOT_NAME="${DEFAULT_BOT_NAME:-Vexa}"
@@ -203,6 +215,16 @@ fi
 case "$*" in
     *supervisord*) /usr/local/bin/provision-key.sh & ;;
 esac
+
+# The supervisor config supervisord runs: the shipped template with the runtime caller credential in
+# place, root-only. Refuses (and the container stops) on a credential that is short or not URL-safe.
+case "$*" in
+    *supervisord*)
+        printf '%s' "$runtime_api_token" \
+            | python3 /usr/local/bin/render-supervisord /etc/supervisor/conf.d/vexa.conf /run/vexa/supervisord.conf \
+            || exit 1 ;;
+esac
+unset runtime_api_token
 
 echo "Starting services via supervisord..."
 exec "$@"

@@ -111,6 +111,8 @@ The repo-root `.env` (auto-seeded from `deploy/compose/.env` if present, else mi
 | `TRANSCRIPTION_MODEL` | — | STT model id sent on every request — required by backends that validate it (Groq `whisper-large-v3-turbo`, vLLM's served name). Unset → `whisper-1` |
 | `ADMIN_TOKEN` | minted per boot | admin API token (the stack's shared admin secret). It used to default to the published literal `changeme`; the entrypoint now mints a random one per boot when you set none, and admin-api/meeting-api refuse any published placeholder outright. Set it when something OUTSIDE the container has to present it. |
 | `IMAGE_TAG` | `latest` | the `vexaai/vexa-lite` tag to pull (a local `vexa-lite:dev` build wins) |
+| `DB_PASSWORD` | minted by `make up` | the database password. There is no default: `make up` mints one into `.env` when it is unset or a published value (`postgres`), and sets it on the postgres sidecar on every run — so a volume created with the old `postgres` password moves to it without a separate step. Running the image yourself, pass your database's password; the entrypoint refuses to start without one. |
+| `RUNTIME_API_TOKEN` | minted per boot | the runtime caller credential. Not exported to the container's programs: the entrypoint renders it into the environment of the runtime, agent-api and meeting-api only (a root-only copy of the supervisor config at `/run/vexa/supervisord.conf`). `make test` checks that no other process holds it. |
 
 `make` variables (not `.env`) for the bundled local STT: `LOCAL_STT=1` (off by default),
 `WHISPER_MODEL` (`Systran/faster-whisper-tiny.en`), `WHISPER_IMAGE`, `HOST_STT_PORT` (`8083`). When
