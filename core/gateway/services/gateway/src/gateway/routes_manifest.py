@@ -13,7 +13,7 @@ route is the only one that can say what the route is and what it costs.
     core/meetings/routes.v1.json                   38 rows
     core/identity/routes.v1.json                   12
     core/meetings/services/mcp/routes.v1.json      12
-    core/agent/routes.v1.json                       7   ← absent in the no-agents profile
+    core/agent/routes.v1.json                       8   ← absent in the no-agents profile
     core/gateway/services/gateway/routes.v1.json    2   the edge's OWN /health and /auth/me
 
 WHAT THIS MODULE REFUSES, and why each is a boot failure rather than a log line — every one of them
@@ -24,6 +24,18 @@ is otherwise found by a person hitting a route that answers wrongly:
     a scope name outside the vocabulary     ->  a typo'd scope is an empty set is a DENY-ALL
     a manifest for an absent domain         ->  the table describing a service that is not there
 
+A ROW CARRIES ITS POLICY, NOT ONLY ITS SCOPES. `"delegation": true` admits a worker's own
+delegation token on that row (the MCP front door, the agent's friction report); every other row
+refuses it. A domain the edge forwards wholesale declares `"forward": {"edge_prefix",
+"upstream_prefix"}` once, and its rows are then only literals under the edge prefix (`"stream": true`
+for a server-sent-event relay) or the prefix's `{path:path}` catch-all — so the edge registers that
+domain from its manifest and names none of its routes.
+
+    delegation that is not a boolean        ->  a flag nobody can read the same way twice
+    delegation on an unscoped row           ->  a promise the authorizer never sees
+    a forward with a malformed prefix       ->  a mapping that rewrites paths nobody declared
+    a forwarded row outside its forward     ->  a route the edge would have to serve by name
+
 DENY-BY-DEFAULT SURVIVES THE MOVE. The assembled table is still exhaustive and still enforced as
 such by `create_app`: a registered route that no manifest declares refuses to build. What changed
 is only WHO writes the declaration down.
@@ -33,7 +45,7 @@ from __future__ import annotations
 import json
 import pathlib
 from dataclasses import dataclass, field
-from typing import Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
+from typing import Dict, FrozenSet, Iterable, Optional, Set, Tuple
 
 CONTRACT = "routes.v1"
 #: The scope vocabulary `docs/docs/authentication.mdx` defines. A manifest may not invent one: an
@@ -57,6 +69,12 @@ class Assembly:
     #: which domain declared each row, so a duplicate can name BOTH sides and an operator reading
     #: the refusal knows which two files to open.
     owner_of: Dict[RouteKey, str] = field(default_factory=dict)
+    #: the rows that admit a worker's own delegation token (`"delegation": true`).
+    delegation: Set[RouteKey] = field(default_factory=set)
+    #: the literal rows relayed as server-sent events (`"stream": true`).
+    stream: Set[RouteKey] = field(default_factory=set)
+    #: domain -> (edge_prefix, upstream_prefix), for each domain forwarded wholesale.
+    forwards: Dict[str, Tuple[str, str]] = field(default_factory=dict)
 
 
 def manifest_paths(repo_root: pathlib.Path) -> Dict[str, pathlib.Path]:
@@ -85,6 +103,37 @@ def read(path: pathlib.Path) -> dict:
     return doc
 
 
+CATCH_ALL = "{path:path}"
+
+
+def _prefix(value) -> Optional[str]:
+    """An absolute path prefix that ends at a segment boundary, or None."""
+    if isinstance(value, str) and value.startswith("/") and value.endswith("/") and "{" not in value:
+        return value
+    return None
+
+
+def _forward(domain: str, doc: dict) -> Optional[Tuple[str, str]]:
+    raw = doc.get("forward")
+    if raw is None:
+        return None
+    edge = _prefix(raw.get("edge_prefix")) if isinstance(raw, dict) else None
+    upstream = _prefix(raw.get("upstream_prefix")) if isinstance(raw, dict) else None
+    if not (edge and upstream):
+        raise ManifestError(
+            f"{domain}: forward must be {{\"edge_prefix\": \"/x/\", \"upstream_prefix\": \"/y/\"}} — two "
+            f"absolute prefixes that end at a segment (got {raw!r})")
+    return edge, upstream
+
+
+def _flag(domain: str, row: dict, name: str) -> bool:
+    value = row.get(name, False)
+    if not isinstance(value, bool):
+        raise ManifestError(f"{domain}: {row.get('method')} {row.get('path')} — {name} must be "
+                            f"true or false (got {value!r})")
+    return value
+
+
 def assemble(manifests: Iterable[dict]) -> Assembly:
     """The union of what the DEPLOYED domains serve, or `ManifestError`.
 
@@ -98,6 +147,9 @@ def assemble(manifests: Iterable[dict]) -> Assembly:
     for doc in manifests:
         domain = doc["domain"]
         rows = doc.get("routes") or []
+        forward = _forward(domain, doc)
+        if forward:
+            out.forwards[domain] = forward
         for row in rows:
             method = str(row.get("method", "")).upper()
             path = str(row.get("path", ""))
@@ -122,6 +174,26 @@ def assemble(manifests: Iterable[dict]) -> Assembly:
                 out.scopes[key] = scopes
             else:
                 out.unscoped.add(key)
+            if _flag(domain, row, "delegation"):
+                if not scopes:
+                    raise ManifestError(
+                        f"{domain}: {method} {path} is unscoped and cannot admit a delegation — an "
+                        "unscoped row never reaches the authorizer that reads the flag")
+                out.delegation.add(key)
+            stream = _flag(domain, row, "stream")
+            if forward:
+                tail = path[len(forward[0]):] if path.startswith(forward[0]) else None
+                if tail is None or not tail or ("{" in tail and tail != CATCH_ALL):
+                    raise ManifestError(
+                        f"{domain}: {method} {path} is outside its forward ({forward[0]}…): a "
+                        f"forwarded row is a literal under the prefix or {forward[0]}{CATCH_ALL}")
+                if stream and tail == CATCH_ALL:
+                    raise ManifestError(f"{domain}: {method} {path} — only a literal row streams")
+            elif stream:
+                raise ManifestError(f"{domain}: {method} {path} — stream applies to a forwarded "
+                                    "domain's literal rows only")
+            if stream:
+                out.stream.add(key)
         out.domains[domain] = len(rows)
     return out
 

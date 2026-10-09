@@ -101,6 +101,7 @@ CASES = [
 
     ("POST", "/agent/chat", "/agent/chat"),
     ("GET", "/agent/meeting/stream", "/agent/meeting/stream"),
+    ("POST", "/agent/friction", "/agent/friction"),
     ("GET", "/agent/sessions", "/agent/{path:path}"),
     ("POST", "/agent/routines", "/agent/{path:path}"),
     ("PUT", "/agent/workspace/swap", "/agent/{path:path}"),
@@ -305,7 +306,7 @@ def test_matrix_covers_every_declared_route():
 
     Both sides are read from the same build: `ROUTE_SCOPES` is what this build publishes, and
     `CARRIED_CASES` is the rows it can exercise. So this stays an EXACT equality in a build that
-    fronts four domains (62 rows) as much as in one that fronts five (69) — it never degrades to a
+    fronts four domains (63 rows) as much as in one that fronts five (71) — it never degrades to a
     subset check, which would be the one way for a declaration to go unexercised unnoticed."""
     covered = {(method, template) for method, _url, template in CARRIED_CASES}
     assert covered == set(ROUTE_SCOPES), (

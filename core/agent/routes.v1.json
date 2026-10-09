@@ -3,8 +3,12 @@
   "domain": "agent",
   "owner": "core/agent",
   "edge": "gateway",
-  "note": "The agent control plane. ABSENT in the no-agents profile (PRD decision 40.6) \u2014 these seven rows and the routes that carry them are simply not there, so a request 404s.",
+  "note": "The agent control plane. ABSENT in the no-agents profile (PRD decision 40.6) \u2014 these eight rows and the routes that carry them are simply not there, so a request 404s. The edge registers them from this file: `forward` maps /agent/<path> onto agent-api's /api/<path>, a literal row is a route of its own (`stream` relays server-sent events), and `delegation` admits a worker's own delegation token \u2014 on the friction report its harness files, and nowhere else.",
   "presence_env": "AGENT_API_URL",
+  "forward": {
+    "edge_prefix": "/agent/",
+    "upstream_prefix": "/api/"
+  },
   "routes": [
     {
       "method": "POST",
@@ -12,7 +16,17 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "stream": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/friction",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "delegation": true
     },
     {
       "method": "GET",
@@ -20,7 +34,8 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "stream": true
     },
     {
       "method": "DELETE",

@@ -167,20 +167,24 @@ _MCP_HEADERS = ("mcp-session-id", "mcp-protocol-version")
 # Path params and catch-all tails are re-encoded (or refused) in `paths.py` before any hop.
 
 
+def _route_key(request: Request) -> Optional[Tuple[str, str]]:
+    """(method, route TEMPLATE) of the route this request matched — the key every manifest row uses.
+
+    The matched template (``request.scope["route"].path``), not the request path, so
+    ``/user/calendars/{id}`` is one declaration instead of a prefix that also swallows whatever
+    route is added beside it next."""
+    path = getattr(request.scope.get("route"), "path", None)
+    return (request.method.upper(), path) if path else None
+
+
 def _required_scopes(request: Request, table=None) -> Optional[FrozenSet[str]]:
     """The scopes declared for the route this request MATCHED, or ``None`` when it declares none.
 
-    Resolved from the matched route's template (``request.scope["route"].path``) rather than from
-    the request path, so ``/user/calendars/{id}`` is one declaration instead of a prefix that also
-    swallows whatever route is added beside it next. ``None`` means DENY: the caller of this
-    function fails closed, so a route that reaches ``_authorize`` without a declaration answers 403
-    instead of forwarding.
+    ``None`` means DENY: the caller of this function fails closed, so a route that reaches
+    ``_authorize`` without a declaration answers 403 instead of forwarding.
     """
-    route = request.scope.get("route")
-    path = getattr(route, "path", None)
-    if not path:
-        return None
-    return (ROUTE_SCOPES if table is None else table).get((request.method.upper(), path))
+    key = _route_key(request)
+    return (ROUTE_SCOPES if table is None else table).get(key) if key else None
 
 
 # ── the authority-header strip (F95) ─────────────────────────────────────────────
@@ -314,15 +318,14 @@ def create_app(
     # anti-spoof identity injection live, so REST and SSE scope a request identically.
     reentry = McpReentry(identity_key)
 
-    async def _authorize(method: str, request: Request, *, api_key: Optional[str] = None,
-                         delegation_door: bool = False):
+    async def _authorize(method: str, request: Request, *, api_key: Optional[str] = None):
         # ``api_key`` overrides the header lookup for a route whose CLIENT protocol carries the key
         # somewhere else (the MCP transport uses ``Authorization: Bearer``). The resolution, the
         # scope check and the identity injection below are the same for every route.
         # A worker's delegation token (`vxd_…`) is resolved like any other bearer: identity verifies
         # it (signature, audience, expiry, the account still existing) and answers with the person it
         # acts for plus the dispatch's ceiling, which rides the signed identity below as
-        # `delegation`. It is ADMITTED only where ``delegation_door`` is set (the `/mcp` routes) or on
+        # `delegation`. It is ADMITTED only on a row whose manifest says `"delegation": true` or on
         # the MCP's own re-entry — see `delegation.py`.
         client_key = api_key if api_key is not None else request.headers.get("x-api-key")
         # Fail-closed: a client route with no key is rejected before any downstream call.
@@ -361,7 +364,8 @@ def create_app(
                 headers={"Retry-After": "1"},
             )
 
-        if (is_delegated(client_key, user_data) and not delegation_door
+        if (is_delegated(client_key, user_data)
+                and _route_key(request) not in _assembly.delegation
                 and not reentry.admits(request, user_data)):
             log_event(
                 "request_denied_delegated_route",
@@ -440,10 +444,9 @@ def create_app(
         return headers, None
 
     # --- the REST proxy: faithful carve of main.forward_request for client (non-admin) routes.
-    async def _forward(method: str, url: str, request: Request, *, api_key: Optional[str] = None,
-                       delegation_door: bool = False) -> Response:
-        headers, error = await _authorize(method, request, api_key=api_key,
-                                          delegation_door=delegation_door)
+    async def _forward(method: str, url: str, request: Request, *, api_key: Optional[str] = None
+                       ) -> Response:
+        headers, error = await _authorize(method, request, api_key=api_key)
         if error is not None:
             return error
 
@@ -815,13 +818,9 @@ def create_app(
     async def get_user_transcription(request: Request):
         return await _forward("GET", _admin("/user/transcription"), request)
 
-    # ---- the AGENT domain (P20·Stage 2): the gateway fronts agent-api under the canonical /agent/*
-    # prefix so the SAME edge resolves key → user and injects X-User-Id; agent-api derives `subject`
-    # from it (never the client). The terminal therefore talks ONLY to the gateway (one authenticated
-    # edge, clean SoC). _agent() maps the public /agent/<path> to agent-api's internal /api/<path>.
-    def _agent(path: str) -> str:
-        return f"{agent_api_url}/api/{path}"
-
+    # ---- the AGENT domain (P20·Stage 2): fronted wholesale under the prefix its manifest declares
+    # (`forward`), so the SAME edge resolves key → user and injects X-User-Id; agent-api derives
+    # `subject` from it (never the client). The terminal therefore talks ONLY to the gateway.
     # The agent SSE routes (chat turn · live meeting feed) must be STREAMED, not buffered like the JSON
     # routes — so they get their own forward, declared BEFORE the catch-all so they win. Identity is
     # injected by the SAME _authorize the buffered proxy uses (so the streamed turn is scoped identically).
@@ -880,10 +879,8 @@ def create_app(
     # stream open for its life and closes it when the client goes away.
     async def _forward_stream_verbatim(
         method: str, url: str, request: Request, *, api_key: Optional[str] = None,
-        delegation_door: bool = False,
     ) -> Response:
-        headers, error = await _authorize(method, request, api_key=api_key,
-                                          delegation_door=delegation_door)
+        headers, error = await _authorize(method, request, api_key=api_key)
         if error is not None:
             return error
         content = await request.body()
@@ -926,34 +923,45 @@ def create_app(
             body(), status_code=upstream.status_code, media_type=media_type, headers=relayed
         )
 
-    # The agent domain lives under the canonical /agent/* prefix (peer to the meetings domain). The SSE
-    # routes (chat turn · live meeting feed) are STREAMED and declared BEFORE the catch-all so they win;
-    # everything else (sessions · history · routines · workspace tree/file/git/upload · models) is
-    # request/response JSON → the buffered _forward, with X-User-Id injected. All carry the path/method/
-    # query/body verbatim to agent-api's matching /api/<path> via _agent().
+    # A FORWARDED DOMAIN IS REGISTERED FROM ITS MANIFEST, and this code names none of its routes.
+    # `forward` maps `<edge_prefix><path>` onto `<upstream_prefix><path>` at the domain's door; a
+    # literal row is a route of its own — relayed as server-sent events when it says `stream` —
+    # registered BEFORE the prefix's `{path:path}` catch-all so it wins; the catch-all carries the
+    # path/method/query/body verbatim, its tail re-encoded (`paths.py`). What a row admits (its
+    # scopes, a worker's delegation token) is read from the same row by `_authorize`.
     #
-    # REGISTERED ONLY WHEN THE AGENT DOMAIN IS DEPLOYED. `core/agent/routes.v1.json` declares
-    # these seven rows and is loaded on the same condition, so in a no-agents deployment the
-    # routes and their declarations are absent together and `/agent/anything` is a 404.
+    # REGISTERED ONLY WHEN THE AGENT DOMAIN IS DEPLOYED: its manifest is loaded on the same
+    # condition, so in a no-agents deployment the routes and their declarations are absent together
+    # and `/agent/anything` is a 404.
+    def _register_forwarded(domain: str, base_url: str) -> None:
+        if domain not in _assembly.forwards:
+            raise routes_manifest.ManifestError(
+                f"{domain} is fronted wholesale but its routes.v1.json declares no forward")
+        edge, upstream = _assembly.forwards[domain]
+        rows = sorted(k for k, d in _assembly.owner_of.items() if d == domain)
+
+        def literal(method: str, path: str):
+            url = f"{base_url}{upstream}{path[len(edge):]}"
+            relay = _forward_stream if (method, path) in _assembly.stream else _forward
+
+            async def forward_literal(request: Request):
+                return await relay(method, url, request)
+            app.add_api_route(path, forward_literal, methods=[method])
+
+        for method, path in rows:
+            if not path.endswith(routes_manifest.CATCH_ALL):
+                literal(method, path)
+        catch_all = sorted(m for m, p in rows if p.endswith(routes_manifest.CATCH_ALL))
+        if catch_all:
+            async def forward_tail(path: str, request: Request):
+                tail, error = tail_path(path, request)
+                if error is not None:
+                    return error
+                return await _forward(request.method, f"{base_url}{upstream}{tail}", request)
+            app.add_api_route(edge + routes_manifest.CATCH_ALL, forward_tail, methods=catch_all)
+
     if _agent_present:
-        @app.post("/agent/chat")
-        async def agent_chat(request: Request):
-            return await _forward_stream("POST", _agent("chat"), request)
-
-        @app.get("/agent/meeting/stream")
-        async def agent_meeting_stream(request: Request):
-            return await _forward_stream("GET", _agent("meeting/stream"), request)
-
-        @app.api_route("/agent/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
-        async def agent_proxy(path: str, request: Request):
-            tail, error = tail_path(path, request)
-            if error is not None:
-                return error
-            # The one REST door a worker's delegation token opens besides `/mcp`: the worker harness
-            # files what went wrong in a turn straight to `/agent/friction` (`worker/friction.py`),
-            # recorded as a report from the person the worker acts for and nothing else.
-            friction = request.method == "POST" and tail == "friction"
-            return await _forward(request.method, _agent(tail), request, delegation_door=friction)
+        _register_forwarded("agent", agent_api_url)
 
     # ---- the MCP front door (#795): the streamable-HTTP transport, fronted at the edge ----
     # MCP streamable-HTTP is ONE endpoint driven by two methods with opposite lifetimes:
@@ -990,11 +998,12 @@ def create_app(
             return token.strip() or None
         return auth
 
-    # `delegation_door=True` on all four: these are the routes a worker's delegation token is FOR.
+    # The MCP manifest declares every row `"delegation": true`: these are the routes a worker's
+    # delegation token is FOR.
     @app.get("/mcp")
     async def mcp_stream(request: Request):
         return await _forward_stream_verbatim("GET", _mcp("/mcp", request), request,
-                                              api_key=_mcp_key(request), delegation_door=True)
+                                              api_key=_mcp_key(request))
 
     @app.get("/mcp/{path:path}")
     async def mcp_stream_path(path: str, request: Request):
@@ -1002,14 +1011,12 @@ def create_app(
         if error is not None:
             return error
         return await _forward_stream_verbatim(
-            "GET", _mcp(f"/mcp/{tail}", request), request, api_key=_mcp_key(request),
-            delegation_door=True,
-        )
+            "GET", _mcp(f"/mcp/{tail}", request), request, api_key=_mcp_key(request))
 
     @app.api_route("/mcp", methods=["POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
     async def mcp_message(request: Request):
         return await _forward(request.method, _mcp("/mcp", request), request,
-                              api_key=_mcp_key(request), delegation_door=True)
+                              api_key=_mcp_key(request))
 
     @app.api_route("/mcp/{path:path}", methods=["POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
     async def mcp_message_path(path: str, request: Request):
@@ -1017,9 +1024,7 @@ def create_app(
         if error is not None:
             return error
         return await _forward(
-            request.method, _mcp(f"/mcp/{tail}", request), request, api_key=_mcp_key(request),
-            delegation_door=True,
-        )
+            request.method, _mcp(f"/mcp/{tail}", request), request, api_key=_mcp_key(request))
 
     # ---- the /ws multiplex (carve of main.websocket_multiplex, main.py:2165-2340) ----
     @app.websocket("/ws")

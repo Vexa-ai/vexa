@@ -34,6 +34,14 @@ talk directly — they meet **here**, over published contracts (`api.v1`, `ws.v1
 **Consumes:** its own `api.v1`/`ws.v1` shapes by-path at the edge; admin-api's `/internal/validate`
 and meeting-api's `/ws/authorize-subscribe` are HTTP hops, not `*.v1` contracts.
 
+## Route table and policy
+Assembled at boot from each deployed domain's `routes.v1.json` (`src/gateway/routes_manifest.py`);
+the edge declares only its own `/health` and `/auth/me`. A row carries its scopes and, with
+`"delegation": true`, admits a worker's own delegation token (the MCP front door and the agent's
+friction report; `src/gateway/delegation.py`). A domain fronted wholesale (the agent) declares
+`forward` — `{"edge_prefix": "/agent/", "upstream_prefix": "/api/"}` — and the edge registers its
+rows from the manifest without naming any of them.
+
 ## Isolated evaluation
 `tests/` holds unit evals (L2) over `create_app` with in-process fakes injected via `conftest.py`
 (fake `Authorizer`, recording `DownstreamClient`, in-process `RedisBus`): `test_health`,
