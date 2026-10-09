@@ -603,7 +603,6 @@ def build(**d) -> APIRouter:
             # the administrator's desk, where nobody else will ever read it. The five files stay
             # thin; the graph they link to lives HERE, written by the one identity that may write
             # here at all — the same test the file route runs two screens up.
-            require_in_ceiling(request, slug)
             if not global_layer.is_admin(settings, str(subject)):
                 raise HTTPException(status_code=403,
                                     detail="only an org admin may write company-tier pages into _global")
@@ -1010,6 +1009,7 @@ def build(**d) -> APIRouter:
     def ws_id_by_slug(slug: str, request: Request):
         """The identity of a workspace addressed the OLD way — by slug. What the terminal calls to
         put a NAME where it used to print a directory name (F49: the chat header read `126`)."""
+        require_in_ceiling(request, slug)
         subject = subject_of(request)
         # Private attached roots resolve within their owner's slots, never as
         # instance-wide desks in the global registry.
@@ -1022,12 +1022,18 @@ def build(**d) -> APIRouter:
         access = ids_mod.access_for(rec, subject, root=wsr.root, is_member=_ws_is_member)
         return ids_mod.view(rec, access, writable=ids_mod.writable_for(
             rec, subject, root=wsr.root, is_member=_ws_is_member))
+    def _id_in_ceiling(request: Request, workspace_id: str) -> None:
+        """The ceiling names workspaces by slug; the id routes name one by id, so ask by both."""
+        known = workspace_registry.get(workspace_id) or {}
+        require_in_ceiling(request, str(known.get("slug") or workspace_id))
+
     @router.get("/api/workspaces/{workspace_id}")
     def ws_id_resolve(workspace_id: str, request: Request):
         """`{id, name, kind, access}` for one workspace id, from THIS reader's point of view.
 
         Never 404s and never 403s: `not-yours` and `gone` are ANSWERS (decision 26.3), and a status
         code would make the client render an error where the design says render a greyed chip."""
+        _id_in_ceiling(request, workspace_id)
         subject = subject_of(request)
         rec = workspace_registry.get(workspace_id)
         access = ids_mod.access_for(rec, subject, root=wsr.root, is_member=_ws_is_member)
@@ -1046,9 +1052,7 @@ def build(**d) -> APIRouter:
         AUDITED: who, old, new, when, kept on the record (capped) and logged. A rename is the one
         operation whose whole point is that nothing else changes, which means the only way to see
         that it happened at all is to have written it down."""
-        # The ceiling names workspaces by slug; this route names one by id, so ask by both.
-        known = workspace_registry.get(workspace_id) or {}
-        require_in_ceiling(request, str(known.get("slug") or workspace_id))
+        _id_in_ceiling(request, workspace_id)
         subject = subject_of(request)
         try:
             rec = ids_mod.rename_audited(
@@ -1086,6 +1090,7 @@ def build(**d) -> APIRouter:
         Mounting is by-folder (``<root>/<subject>`` is what the next dispatch mounts), so the swapped
         tree takes effect on the subject's next turn — no dispatch change needed."""
         require_person(request)      # loads a repository with the person's saved git credentials
+        require_in_ceiling(request, body.slug)
         subject = subject_of(request)
         repo = _repo(body.repo)      # 422 before any git process exists
         key = deploy_keys_mod.workspace_key(subject=subject)
@@ -1180,6 +1185,7 @@ def build(**d) -> APIRouter:
         credential_workspace optionally reuses the deploy key of a workspace you own.
         """
         require_person(request)      # loads a repository with the person's saved git credentials
+        require_in_ceiling(request, body.credential_workspace)
         subject = subject_of(request)
         repo = _repo(body.repo)
         try:
@@ -1244,6 +1250,7 @@ def build(**d) -> APIRouter:
     def ws_activate(request: Request, body: WorkspaceActivateBody = Body(default=WorkspaceActivateBody())):
         """ADD a workspace to the active set WITHOUT parking the others (the additive counterpart of swap).
         Clones/restores the target if needed. Idempotent — an already-active workspace is a no-op."""
+        require_in_ceiling(request, body.slug)
         subject = subject_of(request)
         repo = _repo(body.repo)      # 422 before any git process exists
         key = deploy_keys_mod.workspace_key(subject=subject)
@@ -1280,6 +1287,7 @@ def build(**d) -> APIRouter:
         """REMOVE a workspace from the active set (park it — never destroyed). The private baseline can be
         switched off too (sets ``baseline_hidden``; its home tree is untouched, re-activate to switch it back
         on). Idempotent — an already-off / not-active slug is a no-op."""
+        require_in_ceiling(request, body.slug)
         subject = subject_of(request)
         try:
             result = deactivate_workspace(wsr.root, subject, body.slug)
@@ -1294,7 +1302,11 @@ def build(**d) -> APIRouter:
         ``remote_url`` skips creation (pre-created/empty repo). Re-publish = plain push (fast-forward
         or a clear error on divergence — never a force push). The token is used server-side for this
         call only and never stored; every error is token-redacted (P15)."""
+        require_person(request)      # spends the person's git credential and changes where the tree syncs
         subject = subject_of(request)
+        # slug → any workspace the caller can manage (own parked slot or shared membership, resolved
+        # + permission-checked by _manage_dir); omitted keeps the legacy seed target.
+        ws_dir = _manage_dir(request, body.slug) if body.slug else None
         remote_url = (body.remote_url or "").strip()
         if remote_url and not wcreds.is_https(remote_url):
             raise HTTPException(status_code=400, detail="publish pushes only to an https:// repository URL")
@@ -1310,10 +1322,7 @@ def build(**d) -> APIRouter:
             result = publish_workspace(
                 wsr.root, subject,
                 token=token, repo_name=body.repo_name, private=body.private,
-                org=body.org or None, remote_url=body.remote_url or None,
-                # slug → any workspace the caller can manage (own parked slot or shared membership,
-                # resolved + permission-checked by _manage_dir); omitted keeps the legacy seed target.
-                ws_dir=_manage_dir(subject, body.slug) if body.slug else None,
+                org=body.org or None, remote_url=body.remote_url or None, ws_dir=ws_dir,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc) or "invalid subject")
@@ -1331,6 +1340,7 @@ def build(**d) -> APIRouter:
     def ws_rename(request: Request, body: WorkspaceRenameBody = Body(...)):
         """Rename a workspace slot — a DISPLAY label only. The slug and the parked tree are unchanged, so
         swap-back and repo re-attach keep matching. Pass an empty ``name`` to clear the label."""
+        require_in_ceiling(request, body.slug)
         subject = subject_of(request)
         try:
             return rename_workspace(wsr.root, subject, body.slug, body.name)
@@ -1377,9 +1387,8 @@ def build(**d) -> APIRouter:
         widening it here would be a seam change nobody asked for, and
         `test_shared_workspace_attach.py` pins that 404. Every WRITE (push · pull · detach) stays on
         ``_manage_dir``, untouched, so this adds no way to change anything."""
-        subject = subject_of(request)
         ws = (_read_target(request, slug) if slug == system_mounts.GLOBAL_SLUG
-              else _manage_dir(subject, slug))
+              else _manage_dir(request, slug))
         s = remote_status(ws)
         return {
             "has_home": s.has_home, "remote": s.remote, "url": s.url, "branch": s.branch,
@@ -1390,8 +1399,9 @@ def build(**d) -> APIRouter:
         """Push a workspace's current branch to its GitHub home (origin for attached clones, vexa-publish
         for published vexa-born), fast-forward only — NEVER a force push. The token authenticates the push
         and is never stored; a diverged remote fails loud (pull first). Every error is token-redacted (P15)."""
+        require_person(request)      # spends the person's git credential
         subject = subject_of(request)
-        ws = _manage_dir(subject, body.slug)
+        ws = _manage_dir(request, body.slug)
         home = remote_status(ws)
         key = _workspace_key(subject, body.slug)
         try:
@@ -1412,8 +1422,9 @@ def build(**d) -> APIRouter:
         """Fetch + FAST-FORWARD a workspace from its GitHub home. A divergence (local commits the remote
         lacks) is refused — no merge/rebase/force — so it is resolved deliberately. The token (optional for
         public repos) is used for the fetch only and never stored (P15)."""
+        require_person(request)      # spends the person's git credential
         subject = subject_of(request)
-        ws = _manage_dir(subject, body.slug)
+        ws = _manage_dir(request, body.slug)
         # A pull REWRITES the tree, so on a shared workspace it is a write: viewers are refused here even
         # though they may read the same workspace through _manage_dir.
         _require_shared_write(subject, body.slug)
@@ -1446,8 +1457,9 @@ def build(**d) -> APIRouter:
 
         The RECEIPT is the returned pair plus the log line — the two facts a person needs afterwards
         are *which remote went* and *what its URL was*, and neither survives in git once it is gone."""
+        require_person(request)      # changes where the tree syncs
         subject = subject_of(request)
-        ws = _manage_dir(subject, body.slug)
+        ws = _manage_dir(request, body.slug)
         _require_shared_write(subject, body.slug)
         try:
             gone = detach_home(ws)
@@ -1464,15 +1476,13 @@ def build(**d) -> APIRouter:
     def ws_purpose_get(request: Request, slug: Optional[str] = None):
         """Read a workspace's PURPOSE one-liner (default = the caller's primary; ``slug`` = one of their
         own or shared workspaces). ``""`` when unset."""
-        subject = subject_of(request)
-        ws = _manage_dir(subject, slug)
+        ws = _manage_dir(request, slug)
         return {"purpose": read_purpose(ws)}
     @router.post("/api/workspace/purpose")
     def ws_purpose_set(request: Request, body: WorkspacePurposeBody = Body(default=WorkspacePurposeBody())):
         """Set (or clear) a workspace's PURPOSE — stored in the workspace + committed so it travels when
         shared and feeds the mount preamble. Returns the normalized purpose actually stored."""
-        subject = subject_of(request)
-        ws = _manage_dir(subject, body.slug)
+        ws = _manage_dir(request, body.slug)
         return {"purpose": write_purpose(ws, body.purpose)}
     @router.post("/api/workspace/shared/{workspace_id}/attach")
     def ws_shared_attach(workspace_id: str, request: Request, body: SharedAttachBody = Body(default=SharedAttachBody())):
@@ -1514,6 +1524,7 @@ def build(**d) -> APIRouter:
     def ws_shared_attached(workspace_id: str, request: Request):
         """A shared workspace's attachment view — the active slug and the parked trees available to swap
         back to, plus its GitHub home. Any member may read it (it says WHAT is mounted, never a credential)."""
+        require_in_ceiling(request, workspace_id)
         subject = subject_of(request)
         try:
             membership_mod.require_role(wsr.root, workspace_id, subject, "viewer")
@@ -1537,7 +1548,7 @@ def build(**d) -> APIRouter:
         """This workspace's PUBLIC deploy key (null when none has been generated). The private half has
         no read path at all — it is sealed in the credential store and materialized only for one git op."""
         subject = subject_of(request)
-        _manage_dir(subject, slug)          # authorization: own slot, or a workspace they belong to
+        _manage_dir(request, slug)          # authorization: own slot, or a workspace they belong to
         key = _workspace_key(subject, slug)
         pub = deploy_keys_mod.public_key(wsr.root, key)
         return {"slug": slug, "public_key": pub, "fingerprint": deploy_keys_mod.fingerprint(pub),
@@ -1549,9 +1560,8 @@ def build(**d) -> APIRouter:
 
         This is the credential model: they add our PUBLIC key to their repository; nothing of theirs
         ever travels to us, and the private half is sealed at rest and never leaves this server."""
-        require_in_ceiling(request, slug)
         subject = subject_of(request)
-        _manage_dir(subject, slug)
+        _manage_dir(request, slug)
         repo_url = str((body or {}).get("repo") or "")
         try:
             prompt = wcreds.deploy_key_prompt(wsr.root, key=_workspace_key(subject, slug), repo_url=repo_url)
@@ -1605,8 +1615,8 @@ def build(**d) -> APIRouter:
         import subprocess as _sp
         subject = subject_of(request)
         target = str(body.get("target") or "")
+        require_in_ceiling(request, None if target == "personal" else target)
         if target == "_global":
-            require_in_ceiling(request, target)
             if not global_layer.is_admin(settings, str(subject)):
                 raise HTTPException(status_code=403, detail="only an org admin may reset _global")
             # The `_global` the worker mount serves (`system_mounts.global_root`): unset config is the
@@ -1821,6 +1831,7 @@ def build(**d) -> APIRouter:
     @router.get("/api/workspace/invites")
     def ws_invites_list(request: Request, workspace_id: str):
         """List a workspace's invites (owner/contributor). Hashes are never surfaced."""
+        require_in_ceiling(request, workspace_id)
         subject = subject_of(request)
         try:
             membership_mod.require_role(wsr.root, workspace_id, subject, "contributor")
@@ -1834,6 +1845,7 @@ def build(**d) -> APIRouter:
         a person as reader). Readable by a contributor or owner. Opportunistically records the
         CALLER's own verified email onto their member row (self-healing for members granted before
         emails were stored) so the roster shows human labels, not opaque subject ids."""
+        require_in_ceiling(request, workspace_id)
         subject = subject_of(request)
         try:
             membership_mod.require_role(wsr.root, workspace_id, subject, "contributor")

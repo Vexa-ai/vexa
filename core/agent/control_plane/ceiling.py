@@ -78,14 +78,15 @@ DESK_ALIASES = frozenset({"personal", "desk"})
 
 def write_slug(request: "Request", asked: Optional[str]) -> Optional[str]:
     """The workspace a page verb acts in: the caller's explicit `slug`, else the chat's target, else
-    the desk (``None``). The target is a DEFAULT, never a grant — every route still authorizes the
-    resolved slug exactly as it would one the caller had typed."""
+    the desk (``None``). The target is a DEFAULT, never a grant: the resolved slug is held to a
+    delegated dispatch's ceiling here, and every route still authorizes it exactly as it would one
+    the caller had typed."""
     named = (asked or "").strip()
     if named in DESK_ALIASES:
         return None
-    if named:
-        return named
-    return (request.headers.get(TARGET_HEADER) or "").strip() or None
+    resolved = named or (request.headers.get(TARGET_HEADER) or "").strip() or None
+    require_in_ceiling(request, resolved)
+    return resolved
 
 
 def delegation_allows(request: "Request", slug: Optional[str]) -> bool:

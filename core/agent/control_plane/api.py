@@ -105,7 +105,7 @@ from control_plane.routers import proposals as routers_proposals
 from control_plane.routers import connections as routers_connections
 from control_plane.routers import clock as routers_clock
 from control_plane.routers import workspaces as routers_workspaces
-from control_plane.ceiling import delegation_allows, require_in_ceiling, require_person
+from control_plane.ceiling import require_in_ceiling, require_person
 from control_plane.api_shared import (logger, _PHASE_WORD, _iso, _provenance_line, _epoch_text, 
     MAX_UPLOAD_BYTES, MEETING_STREAM_TRANSCRIPT_REPLAY, _upload_filename, _truncate_title, 
     _stream_tail_id, CHAT_TURN_HEAD_TTL_SEC, _chat_turn_head_key, _record_chat_turn_head, 
@@ -425,11 +425,7 @@ def create_app(
         # THE DISPATCH'S CEILING, for a worker dispatched without a person: a named workspace must be
         # in the isolation set it was granted. Checked before any resolution, so a workspace outside
         # the set is refused the same way whether or not it exists.
-        if target and target != subject and not delegation_allows(request, target):
-            raise HTTPException(status_code=403, detail={
-                "refused": "out_of_scope", "workspace": target,
-                "why": "this session was dispatched with access to a named set of workspaces and "
-                       "that is not one of them"})
+        require_in_ceiling(request, target)
         mounts = active_workspaces(wsr.root, subject)  # own actives (real .attached paths); may raise ValueError
         try:
             mounts = mounts + shared_active_mounts(wsr.root, subject, mindex.list(subject))
@@ -509,11 +505,14 @@ def create_app(
                     return d
         raise HTTPException(status_code=403, detail="not authorized for this workspace")
 
-    def _manage_dir(subject: str, slug: Optional[str]) -> Path:
+    def _manage_dir(request: Request, slug: Optional[str]) -> Path:
         """Resolve a workspace dir for a MANAGEMENT op (git sync, purpose) — unlike ``_read_target`` this
         also reaches the caller's PARKED slots (a workspace need not be mounted to manage it). Own slots
         first (active or parked); a slug that isn't one of them but IS a shared workspace the caller belongs
-        to resolves to the shared dir. Neither path can ever reach another user's private workspace."""
+        to resolves to the shared dir. Neither path can ever reach another user's private workspace. A
+        named workspace outside a delegated dispatch's ceiling is refused before anything resolves."""
+        require_in_ceiling(request, slug)
+        subject = subject_of(request)
         try:
             return workspace_dir_for(wsr.root, subject, slug)
         except ValueError:
@@ -885,7 +884,9 @@ def create_app(
         """The reader's CURRENT workspace record — the one an in-workspace `[[Title]]` resolves in.
 
         A slug the caller may not read resolves to None rather than to that workspace: the ref
-        would otherwise be answered out of somebody else's tree because the READER named it."""
+        would otherwise be answered out of somebody else's tree because the READER named it. A slug
+        outside a delegated dispatch's ceiling is refused."""
+        require_in_ceiling(request, slug)
         subject = subject_of(request)
         rec = workspace_registry.by_slug(slug) if slug else workspace_registry.by_slug(str(subject))
         if rec is None and slug:
