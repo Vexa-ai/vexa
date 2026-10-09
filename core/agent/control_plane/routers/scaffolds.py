@@ -12,7 +12,8 @@ from control_plane import link_resolver as link_resolver_mod
 from control_plane import scaffolds as scaffolds_mod
 from control_plane import system_mounts
 from control_plane import workspace_ids as ids_mod
-from control_plane.api_shared import ScaffoldHandBody, ScaffoldMintBody, logger
+from control_plane.api_shared import logger
+from control_plane.bodies import ScaffoldHandBody, ScaffoldMintBody
 from fastapi import APIRouter, Body, HTTPException, Request
 from workspaces.shared import workspace_paths as wpaths
 

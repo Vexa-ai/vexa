@@ -24,15 +24,16 @@ from control_plane import workspace_credentials as wcreds
 from control_plane import workspace_ids as ids_mod
 from control_plane import workspace_membership as membership_mod
 from control_plane import workspace_routines as workspace_routines_mod
-from control_plane.api_shared import (
+from control_plane.api_shared import MAX_UPLOAD_BYTES, _upload_filename, logger
+from control_plane.bodies import (
     ArchiveBody, AssetFetchBody, ClaimVerdictsBody, ClaimsProposeBody, EntityUpsertBody,
     GitTokenBody, InviteAcceptBody,
-    InviteCreateBody, MAX_UPLOAD_BYTES,
+    InviteCreateBody,
     RoleSetBody, SharedActiveBody, SharedAttachBody, SharedNewBody, WorkspaceActivateBody,
     WorkspaceDeactivateBody, WorkspaceMoveBody, WorkspaceNewBody, WorkspacePublishBody,
     WorkspaceInviteBody, WorkspaceMembershipBody, WorkspaceImportBody,
     WorkspacePullBody, WorkspacePurposeBody, WorkspacePushBody, WorkspaceRemoveBody,
-    WorkspaceRenameBody, WorkspaceSwapBody, WorkspaceWriteBody, _upload_filename, logger)
+    WorkspaceRenameBody, WorkspaceSwapBody, WorkspaceWriteBody)
 from control_plane.ceiling import is_unwatched, require_in_ceiling, require_person, write_slug
 from control_plane.workspace_attach import (
     CloneError, activate_workspace, active_workspaces, attach_shared_workspace, bind_repository_credential,

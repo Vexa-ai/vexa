@@ -14,8 +14,9 @@ from control_plane import meeting_note as meeting_note_mod
 from control_plane import meeting_terms as meeting_terms_mod
 from control_plane import system_mounts
 from control_plane.api_shared import (
-    TranscriptTermsBody, _decode_sse_cursor, _encode_sse_cursor, _sse, meeting_access_check,
+    _decode_sse_cursor, _encode_sse_cursor, _sse, meeting_access_check,
     meeting_transcript_reader, transcript_erased)
+from control_plane.bodies import TranscriptTermsBody
 from fastapi import APIRouter, Body, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pathlib import Path

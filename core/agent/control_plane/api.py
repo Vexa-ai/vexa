@@ -106,21 +106,16 @@ from control_plane.routers import connections as routers_connections
 from control_plane.routers import clock as routers_clock
 from control_plane.routers import workspaces as routers_workspaces
 from control_plane.ceiling import require_in_ceiling, require_person
-from control_plane.api_shared import (logger, _PHASE_WORD, _iso, _provenance_line, _epoch_text, 
-    MAX_UPLOAD_BYTES, MEETING_STREAM_TRANSCRIPT_REPLAY, _upload_filename, _truncate_title, 
-    _stream_tail_id, CHAT_TURN_HEAD_TTL_SEC, _chat_turn_head_key, _record_chat_turn_head, 
-    _chat_turn_head, _Sessions, LIVE_SILENCE_TTL_SEC, _LiveMeetings, ChatContextBody, ChatBody, 
-    ScaffoldMintBody, ScaffoldHandBody, ResetBody, RoutineCreate, RoutineEnabledPatch, 
-    WorkspaceSwapBody, WorkspacePublishBody, WorkspaceRenameBody, WorkspacePushBody, 
-    GitTokenBody, WorkspacePullBody, WorkspacePurposeBody, InviteCreateBody, InviteAcceptBody, 
-    RoleSetBody, SharedNewBody, SharedAttachBody, SharedActiveBody, ArchiveBody, 
-    WorkspaceActivateBody, WorkspaceNewBody, WorkspaceDeactivateBody, _encode_sse_cursor, 
-    _decode_sse_cursor, _sse, _has_custom_model_endpoint, _model_creds_error_message, 
-    MEETING_CHAT_TRANSCRIPT_SEGMENTS, _fold_meeting_transcript, _meeting_grounding, 
-    CONTEXT_SENTINEL, _AMBIENT_TAB_KINDS, _ambient_gated, _WORKSPACE_README_LINES, 
-    _WORKSPACE_README_CHARS, _fold_workspace_grounding, _enriched_meeting_focus, 
-    _context_grounding, _ROOM_SOURCE, _http_email_subject_lookup, _http_meeting_owner_lookup,
-    _http_meeting_transcript_lookup)  # noqa: F401
+from control_plane.api_shared import (
+    logger, _PHASE_WORD, _iso, _provenance_line, _epoch_text, _Sessions, _LiveMeetings,
+    _ROOM_SOURCE, _http_email_subject_lookup, _http_meeting_owner_lookup,
+    _http_meeting_transcript_lookup)
+# Re-exported for the tests that import them from here.
+from control_plane.api_shared import (  # noqa: F401
+    CONTEXT_SENTINEL, LIVE_SILENCE_TTL_SEC, MEETING_STREAM_TRANSCRIPT_REPLAY, _ambient_gated,
+    _context_grounding, _decode_sse_cursor, _encode_sse_cursor, _fold_meeting_transcript,
+    _has_custom_model_endpoint, _meeting_grounding, _truncate_title)
+from control_plane.bodies import ChatBody, ChatContextBody  # noqa: F401
 
 def create_app(
     dispatcher: Dispatcher,

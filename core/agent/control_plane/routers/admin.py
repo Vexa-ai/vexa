@@ -9,7 +9,7 @@ single identifier changed.
 from __future__ import annotations
 
 from control_plane import global_layer, system_mounts
-from control_plane.api_shared import GlobalReadyBody
+from control_plane.bodies import GlobalReadyBody
 from control_plane.ceiling import require_in_ceiling
 from fastapi import APIRouter, Body, HTTPException, Request
 from fastapi.responses import JSONResponse
