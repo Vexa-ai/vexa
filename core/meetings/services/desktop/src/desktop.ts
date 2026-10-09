@@ -84,6 +84,16 @@ export function upsertSegment(segments: TranscriptSegment[], seg: TranscriptSegm
   const i = segments.findIndex((x) => x.segment_id === seg.segment_id);
   if (i >= 0) segments[i] = seg; else segments.push(seg);
 }
+/** Lanes of the mixed platforms. The mix and the local mic each run their OWN
+ *  ChunkedTranscriber, and both number turns from `turn:0:0`, so the mic lane carries a
+ *  prefix to keep its segment_ids distinct in the one per-meeting store. */
+export type MixedLane = 'mix' | 'mic';
+export function mixedLaneSegment(c: ChunkSegment, speaker: string, completed: boolean, lane: MixedLane = 'mix'): TranscriptSegment {
+  return {
+    segment_id: lane === 'mic' ? `mic:${c.segmentId}` : c.segmentId,
+    speaker, text: c.text, start: c.startMs / 1000, end: c.endMs / 1000, language: c.language, completed,
+  };
+}
 export interface DesktopOptions { ingestPort?: number; gatewayPort?: number; txUrl?: string; txToken?: string; quiet?: boolean; recordingsDir?: string; noSignalMs?: number; canAccess?: CanAccess; }
 export interface Desktop { ingestPort: number; gatewayPort: number; recordingsDir: string; close(): Promise<void>; }
 
@@ -170,9 +180,6 @@ export async function startDesktop(opts: DesktopOptions = {}): Promise<Desktop> 
   // Mixed lane: a ChunkedTranscriber emit (speaker + confirmed/pending ChunkSegment batches) → the
   // same transcript.v1 envelope. Confirmed + pending MUST travel together (a confirm with empty
   // pending deletes the client's draft block). ChunkSegment start/endMs are audio-time ms.
-  const toTx = (c: ChunkSegment, speaker: string, completed: boolean): TranscriptSegment => ({
-    segment_id: c.segmentId, speaker, text: c.text, start: c.startMs / 1000, end: c.endMs / 1000, language: c.language, completed,
-  });
   const broadcastBatch = (key: string, speaker: string, confirmed: TranscriptSegment[], pending: TranscriptSegment[]) => {
     const m = meetings.get(key);
     for (const s of confirmed) persist(m, s);
@@ -379,17 +386,17 @@ export async function startDesktop(opts: DesktopOptions = {}): Promise<Desktop> 
     if (isMixed && txClient) {
       tc = await ChunkedTranscriber.create({
         language: lang, transcribe,
-        publish: (sp, conf, pend) => { const s = showSp(sp); broadcastBatch(key, s, conf.map((c) => toTx(c, s, true)), pend.map((c) => toTx(c, s, false))); },
-        publishPending: (sp, pend) => { const s = showSp(sp); broadcastBatch(key, s, [], pend.map((c) => toTx(c, s, false))); },
+        publish: (sp, conf, pend) => { const s = showSp(sp); broadcastBatch(key, s, conf.map((c) => mixedLaneSegment(c, s, true)), pend.map((c) => mixedLaneSegment(c, s, false))); },
+        publishPending: (sp, pend) => { const s = showSp(sp); broadcastBatch(key, s, [], pend.map((c) => mixedLaneSegment(c, s, false))); },
         clearPending: (sp) => broadcastBatch(key, showSp(sp), [], []),
-        rename: (_old, next, segs) => { const s = showSp(next); broadcastBatch(key, s, segs.map((c) => toTx(c, s, true)), []); },
+        rename: (_old, next, segs) => { const s = showSp(next); broadcastBatch(key, s, segs.map((c) => mixedLaneSegment(c, s, true)), []); },
         log: (m) => log(`  ${m}`),
         onError: (e) => reportFault(key, e),   // P18: STT/engine fault → observable health frame
       });
       micTc = await ChunkedTranscriber.create({
         language: lang, transcribe,
-        publish: (_s, conf, pend) => broadcastBatch(key, 'You', conf.map((c) => toTx(c, 'You', true)), pend.map((c) => toTx(c, 'You', false))),
-        publishPending: (_s, pend) => broadcastBatch(key, 'You', [], pend.map((c) => toTx(c, 'You', false))),
+        publish: (_s, conf, pend) => broadcastBatch(key, 'You', conf.map((c) => mixedLaneSegment(c, 'You', true, 'mic')), pend.map((c) => mixedLaneSegment(c, 'You', false, 'mic'))),
+        publishPending: (_s, pend) => broadcastBatch(key, 'You', [], pend.map((c) => mixedLaneSegment(c, 'You', false, 'mic'))),
         clearPending: () => broadcastBatch(key, 'You', [], []),
         rename: () => { /* the local mic is always "You" */ },
         log: () => { /* quiet */ },
