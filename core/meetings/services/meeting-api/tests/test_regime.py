@@ -71,3 +71,14 @@ def test_a_person_s_own_credential_and_the_internal_tier_reach_the_route(client,
 def test_reads_stay_open_to_an_unwatched_worker(client):
     r = client.get("/meetings", headers=_signed(regime="autonomous", workspaces=["ws_1"]))
     assert r.status_code == 200
+
+
+@pytest.mark.parametrize("method,path,body", GATED)
+def test_a_present_but_empty_regime_counts_as_delegated(client, method, path, body):
+    """The rule agent-api's `ceiling.is_delegated` shares: the regime header present with nothing in
+    it marks a delegated identity, and an empty regime is not `human`, so the verb is refused (the
+    closed direction). The gateway never signs an empty regime; only the internal tier can send one."""
+    headers = {"X-User-Id": "7", "X-Internal-Secret": INTERNAL, "x-user-regime": ""}
+    r = _send(client, method, path, body, headers)
+    assert r.status_code == 403, r.text
+    assert r.json()["detail"] == REFUSAL
