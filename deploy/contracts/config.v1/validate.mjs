@@ -4,8 +4,8 @@
  * LIVE per-service declarations that live next to each adopted service's code) against
  * config.schema.json. The goldens are the spec (P8). Beyond the schema, the referential rules the
  * schema cannot express are checked here: every `capability`-classed key names a declared
- * capability, every declared capability has at least one member key, probe url/auth/path keys are
- * declared keys, and key/surface_only names are unique.
+ * capability, every declared capability has at least one member key, probe url/auth/model/path keys
+ * are declared keys, and key/surface_only names are unique.
  * Run: node validate.mjs [--check] [--file PATH]...
  */
 import Ajv2020 from "ajv/dist/2020.js";
@@ -54,7 +54,8 @@ for (const f of files) {
   for (const [c, n] of Object.entries(members)) if (!n) errs.push(`capability "${c}" has no member keys`);
   for (const [c, cap] of Object.entries(caps)) {
     const probe = cap.probe || {};
-    for (const ref of [probe.http?.url_key, probe.http?.auth_key, probe.file?.path_key]) {
+    for (const ref of [probe.http?.url_key, probe.http?.auth_key, probe.http?.payload_model_key,
+      probe.file?.path_key]) {
       if (ref && !seen.has(ref)) errs.push(`capability "${c}" probe references undeclared key ${ref}`);
     }
   }
