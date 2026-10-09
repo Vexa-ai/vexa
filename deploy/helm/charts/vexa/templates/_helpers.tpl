@@ -197,6 +197,15 @@ moves to its digest (A12). One resolver, six call sites. */}}
 {{- end -}}
 {{- end -}}
 
+{{/*
+The database passwords published in this repository — the bundled database refuses them as an
+explicit value, and the postgres-password hook moves an install off them. The same list compose's
+postgres and Lite's entrypoint refuse.
+*/}}
+{{- define "vexa.publishedDbPasswords" -}}
+["postgres","changeme","change-me","CHANGE-ME","default","secret","password"]
+{{- end -}}
+
 {{- define "vexa.postgresCredentialsSecretName" -}}
 {{- if .Values.postgres.enabled -}}
 {{- .Values.postgres.credentialsSecretName | default "postgres-credentials" -}}

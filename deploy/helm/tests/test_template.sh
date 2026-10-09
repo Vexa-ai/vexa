@@ -929,10 +929,31 @@ else echo "  FAIL: workspace dir '$ws_dir', store mount '$ws_mount', runtime tar
 # The runtime serves no out-of-store mount source unless agent-api's _global tier is configured.
 if grep -A1 'name: RUNTIME_EXTRA_MOUNT_SOURCES$' <<< "$rt_block" | grep -q 'value: ""'; then :
 else echo "  FAIL: the runtime serves an out-of-store mount source nobody configured"; fail=1; fi
-glob_rt="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set agentApi.globalSystemWorkspacePath=/srv/global \
-  | awk '/deployment-runtime.yaml/{f=1} f{print} f&&/^---/{exit}')"
+glob_render="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set agentApi.globalSystemWorkspacePath=/srv/global)"
+glob_rt="$(awk '/deployment-runtime.yaml/{f=1} f{print} f&&/^---/{exit}' <<< "$glob_render")"
 if grep -A1 'name: RUNTIME_EXTRA_MOUNT_SOURCES$' <<< "$glob_rt" | grep -q 'value: "/srv/global"'; then
   echo "  OK: the runtime serves agent-api's _global tier as its one out-of-store mount source"
 else echo "  FAIL: agentApi.globalSystemWorkspacePath does not reach RUNTIME_EXTRA_MOUNT_SOURCES"; fail=1; fi
+
+# The bundled database's password: no published default; an explicit value must be 32+ bytes and not
+# published; empty generates one (an existing Secret's value is kept by lookup, live-tested on a cluster).
+pg_pw="$(awk '/^  name: postgres-credentials$/{f=1} f&&/^  POSTGRES_PASSWORD: /{print $2; exit}' <<< "$RENDER" | tr -d '"')"
+if [ "${#pg_pw}" -ge 32 ] && [ "$pg_pw" != "postgres" ]; then echo "  OK: the bundled database gets a generated password"
+else echo "  FAIL: the bundled database password is '${pg_pw:0:8}…' (${#pg_pw} chars)"; fail=1; fi
+for bad in postgres POSTGRES changeme short-but-not-published; do
+  out="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set database.password="$bad" 2>&1 || true)"
+  if grep -q 'database.password must be 32+ bytes and not a value published' <<< "$out"; then :
+  else echo "  FAIL: database.password=$bad rendered"; fail=1; fi
+done
+echo "  OK: an explicit published or short database.password is refused"
+good="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+if helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set database.password="$good" | grep -q "POSTGRES_PASSWORD: \"$good\""; then
+  echo "  OK: an explicit 32+ byte database.password is used as given"
+else echo "  FAIL: an explicit database.password was not rendered"; fail=1; fi
+# The rotation hook renders only on an upgrade whose live Secret holds a published value (lookup);
+# an offline render never sees one, so it renders none. Its run is proven on a live cluster.
+if helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --is-upgrade | grep -q 'postgres-password'; then
+  echo "  FAIL: the postgres-password hook rendered without a published live Secret"; fail=1
+else echo "  OK: no postgres-password hook without a published live Secret"; fi
 
 [ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }

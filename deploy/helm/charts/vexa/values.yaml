@@ -138,7 +138,11 @@ database:
   port: 5432
   name: "vexa"
   user: "postgres"
-  password: "postgres"
+  # The bundled database's password. Empty (the default): generated at install and kept across
+  # upgrades; an install still on the old published `postgres` is moved to a new one after its next
+  # upgrade (the postgres-password hook). Set it only with 32+ bytes (`openssl rand -hex 32`), and
+  # always when a GitOps tool renders the chart (it cannot read the existing Secret).
+  password: ""
   sslMode: "disable"
 
 redisConfig:
