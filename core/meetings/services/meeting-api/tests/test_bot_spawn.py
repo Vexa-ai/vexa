@@ -1222,3 +1222,35 @@ async def test_spawn_threads_capture_signal_from_bot_context(monkeypatch, ctx, e
                       token_secret=SECRET)
     inv = json.loads(runtime.specs[0]["env"]["BOT_CONFIG"])
     assert inv["captureSignalEnabled"] is expected
+
+
+@pytest.mark.parametrize("value", [None, "1000", "120000", "45000"])
+async def test_transcription_request_timeout_env_mapping(monkeypatch, value):
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt-env.vexa.ai")
+    monkeypatch.delenv("ADMIN_API_URL", raising=False)
+    if value is None:
+        monkeypatch.delenv("TRANSCRIPTION_REQUEST_TIMEOUT_MS", raising=False)
+    else:
+        monkeypatch.setenv("TRANSCRIPTION_REQUEST_TIMEOUT_MS", value)
+    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
+    await request_bot(repo, runtime, user_id=USER, platform="google_meet",
+                      native_meeting_id="abc-defg-hij", redis_url="redis://redis:6379/0",
+                      token_secret=SECRET)
+    inv = json.loads(runtime.specs[0]["env"]["BOT_CONFIG"])
+    if value is None:
+        assert "transcriptionRequestTimeoutMs" not in inv
+    else:
+        assert inv["transcriptionRequestTimeoutMs"] == int(value)
+
+
+@pytest.mark.parametrize("value", ["", "999", "120001", "1.5", "nan", "abc"])
+async def test_invalid_transcription_request_timeout_prevents_spawn(monkeypatch, value):
+    from meeting_api.bot_spawn.ports import TranscriptionNotConfigured
+    monkeypatch.setenv("TRANSCRIPTION_REQUEST_TIMEOUT_MS", value)
+    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
+    with pytest.raises(TranscriptionNotConfigured, match="TRANSCRIPTION_REQUEST_TIMEOUT_MS"):
+        await request_bot(repo, runtime, user_id=USER, platform="google_meet",
+                          native_meeting_id="abc-defg-hij", redis_url="redis://redis:6379/0",
+                          token_secret=SECRET)
+    assert not runtime.specs
+    assert not repo._meetings

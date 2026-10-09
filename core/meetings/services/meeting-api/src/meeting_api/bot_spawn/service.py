@@ -467,6 +467,17 @@ async def request_bot(
     transcription_service_url = os.getenv("TRANSCRIPTION_SERVICE_URL") or None
     transcription_service_token = os.getenv("TRANSCRIPTION_SERVICE_TOKEN") or None
     transcription_model = os.getenv("TRANSCRIPTION_MODEL") or None
+    raw_timeout = os.getenv("TRANSCRIPTION_REQUEST_TIMEOUT_MS")
+    transcription_request_timeout_ms = None
+    if raw_timeout is not None:
+        try:
+            transcription_request_timeout_ms = int(raw_timeout)
+            if not 1000 <= transcription_request_timeout_ms <= 120000:
+                raise ValueError
+        except ValueError:
+            raise TranscriptionNotConfigured(
+                "TRANSCRIPTION_REQUEST_TIMEOUT_MS must be an integer between 1000 and 120000"
+            ) from None
     bot_context = await _fetch_bot_context(user_id)
     configured = _transcription_from_context(bot_context)
     # O-TEL-1 fixture collection, resolved from the SAME best-effort lookup (one hop, two readers).
@@ -761,6 +772,7 @@ async def request_bot(
         transcription_service_url=transcription_service_url,
         transcription_service_token=transcription_service_token,
         transcription_model=transcription_model,
+        transcription_request_timeout_ms=transcription_request_timeout_ms,
         recording_enabled=recording_enabled,
         capture_modes=(["audio", "video"] if recording_enabled else None),
         # O-TEL-1: the tape is INDEPENDENT of recording_enabled — a meeting the user never asked to
