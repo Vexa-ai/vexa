@@ -6,9 +6,13 @@ Conforms to `runtime.v1` (and `schedule.v1` for the scheduler). Files:
 - `backend` — the Backend port; `process_backend` / `docker_backend` / `k8s_backend` implement it.
 - `profiles` — the opaque-profile → Runnable registry (P11) + the real `meeting-bot` / `agent` profiles.
   A Runnable carries what its kind of workload is given beyond its spec (labels, network setting,
-  forwarded settings, credential mounts) as data; no backend branches on a kind of workload.
+  forwarded settings, credential files and settings, host groups, Pod placement) as data; no backend
+  branches on a kind of workload or names a harness. `configured_credentials` is the one place that
+  maps the operator's credential settings to files.
 - `pod_scheduling` — a profile's Pod placement on Kubernetes (node selector, tolerations, priority class,
   image pull secrets), read from `RUNTIME_K8S_BOT_*` / `RUNTIME_K8S_AGENT_WORKER_*` and validated at boot.
+- `isolation` — the identity of every process-backend child under a root runtime: subject uid or a
+  per-workload uid, a fresh private HOME, the store's ownership — never root, never through a link.
 - `store` — the WorkloadStore port (persistence): `InMemoryStore` (default) + `RedisStore` (durable).
 - `clock` — the Clock port (`SystemClock` / `FakeClock`) so enforcement + scheduler are deterministic.
 - `kernel` — the lifecycle orchestrator over the store; quotas via `count_for_owner`.

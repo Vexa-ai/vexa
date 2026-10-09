@@ -135,7 +135,7 @@ def test_file_probe_reads_the_directory_mirror_through_an_inode_swap(tmp_path):
 def test_worker_credential_bind_falls_back_to_the_directory():
     """The worker bind is created fresh at every spawn, so it never went stale — but a deployment
     that configures only HOST_CLAUDE_DIR must still produce an authenticated worker."""
-    from runtime_kernel.docker_backend import host_claude_credentials as hcc
+    from runtime_kernel.profiles import host_claude_credentials as hcc
 
     assert hcc({}) is None
     assert hcc({"HOST_CLAUDE_CREDENTIALS": "/h/.claude/.credentials.json"}) == "/h/.claude/.credentials.json"

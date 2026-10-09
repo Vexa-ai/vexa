@@ -7,9 +7,13 @@ that holds `schedule.v1` HTTP-call jobs in a sorted set and HTTP-POSTs them when
 not policy (P11):** a `profile` is an opaque name — the kernel knows docker/k8s/process, not what a
 "bot" or "agent" *is*. What a kind of workload is given beyond its spec is **profile data**
 (`profiles.Runnable`): its labels, the runtime setting naming the network it joins, the runtime
-settings forwarded into it, and whether the runtime's credential files are mounted into it. Every
+settings forwarded into it, the credential files it receives and where (`credential_files`,
+`credential_env`), and the host groups a process-backend child joins (`process_groups`). Every
 backend applies that data the same way; only the deployment registry (`default_registry`, the
-`meeting-bot` and `agent` profiles) fills it in. Python because this is the runtime/tooling ecosystem
+`meeting-bot` and `agent` profiles) fills it in — it is the one place that turns the operator's
+`HOST_CLAUDE_CREDENTIALS` / `HOST_CLAUDE_DIR` / `HOST_CODEX_CREDENTIALS` into files a harness reads.
+One residue: the docker backend still renames an `agent-…` workload's container to `worker-…` and
+labels its kind (`_worker_naming`), which keys on agent-api's id scheme. Python because this is the runtime/tooling ecosystem
 and the control plane (meeting-api, agent-api) consumes it as a library/seam.
 
 **What a caller may not decide.** Every route but `/health` requires the caller credential
@@ -52,6 +56,12 @@ uv run pytest -q
   named-volume stores; `:ro` roles enforced); k8s = per-mount `subPath`+`readOnly` volumeMounts; process
   (lite) = per-subject uid + per-shared-workspace gids, 0700 tiers, default-deny sweep. A worker's
   filesystem contains ONLY its dispatch's mounts; no opt-out.
+- ✅ delivered — **no child of a root process backend is root**: a workspace dispatch runs as its
+  subject's uid (a canonical number below 100000 arithmetically, any other plain name from a
+  root-owned registry), any other workload (a meeting bot) as a uid of its own with only its
+  profile's `process_groups`, every child with a fresh private HOME and `no_new_privs`. A child that
+  cannot be isolated is refused, never started as root. Root's filesystem work never follows a link
+  (`O_NOFOLLOW` opens on directory fds, an fd walk for re-owning a tree, hard-linked files left alone).
 - ✅ delivered — group-scoped teardown on the process backend: each workload leads its own process
   group (`start_new_session=True`), and every ending path (observed self-exit, kill, cleanup, stop)
   signals the whole group — a self-exiting or stopped bot never strands its child tree. Declared

@@ -25,35 +25,13 @@ from .backend import WorkloadHandle
 from .models import Resources
 from .mounts import workspace_binds
 from .profiles import Runnable
-from .workload_env import CODEX_HOME_ENV, WORKER_CODEX_HOME, forwarded_env
+from .workload_env import forwarded_env
 
 MANAGED_LABEL = "runtime.managed"
 WORKLOAD_ID_LABEL = "runtime.workload_id"
 _COMPOSE_LABEL = "com.docker.compose.project"
 
 logger = logging.getLogger("runtime_kernel.docker_backend")
-
-
-#: The claude CLI's own filename inside ``~/.claude``.
-CLAUDE_CREDENTIALS_FILENAME = ".credentials.json"
-
-
-def host_claude_credentials(env: Optional[Any] = None) -> Optional[str]:
-    """The DOCKER-HOST path of the claude subscription credential to broker into a spawned worker.
-
-    ``HOST_CLAUDE_CREDENTIALS`` (the file) wins when set; otherwise it is derived from
-    ``HOST_CLAUDE_DIR`` (the host's ``~/.claude``), which is the mount shape that survives a token
-    refresh — the CLI replaces ``.credentials.json`` by ``rename(2)``, i.e. with a NEW INODE, and a
-    single-FILE bind is pinned to the inode it was created with. A worker bind is created fresh at
-    every spawn so it was never the half that went stale, but a deployment that configures only the
-    directory must still produce an authenticated worker. ``None`` = no subscription file
-    configured (an API-style key may still be brokered as env)."""
-    env = os.environ if env is None else env
-    explicit = (env.get("HOST_CLAUDE_CREDENTIALS") or "").strip()
-    if explicit:
-        return explicit
-    host_dir = (env.get("HOST_CLAUDE_DIR") or "").strip()
-    return f"{host_dir.rstrip('/')}/{CLAUDE_CREDENTIALS_FILENAME}" if host_dir else None
 
 
 def _stop_grace_sec() -> int:
@@ -259,16 +237,13 @@ class DockerBackend:
         if api_mounts:
             host_config["Mounts"] = api_mounts
 
-        # The Runtime BROKERS model credentials into the workloads whose profile asks for them.
-        # Subscription credentials are mounted read-only; API-style provider env (the claude-code
-        # runner's ANTHROPIC_*) rides the profile's forward list below. A profile that asks for none
-        # (a meeting bot) is given none.
-        creds = host_claude_credentials(os.environ) if runnable.credential_mounts else None
-        if creds:
-            binds.append(f"{creds}:/root/.claude/.credentials.json:ro")
-        codex_creds = os.getenv("HOST_CODEX_CREDENTIALS") if runnable.credential_mounts else None
-        if codex_creds:
-            binds.append(f"{codex_creds}:{WORKER_CODEX_HOME}/auth.json:ro")
+        # The Runtime BROKERS model credentials into the workloads whose profile asks for them: the
+        # profile's credential files are mounted read-only where it says. API-style provider env
+        # rides the profile's forward list below. A profile that asks for none (a meeting bot) is
+        # given none.
+        if runnable.credential_mounts:
+            for cred in runnable.credential_files:
+                binds.append(f"{cred.source}:{cred.target}:ro")
         # DEV hot-mount (parallels the dev.yml service hot-reload): bind a HOST source tree over the
         # image's baked copy so a SPAWNED workload runs the latest code with NO image rebuild — the
         # next spawn picks up the change. Host path (daemon-resolved); set only in dev.
@@ -289,7 +264,8 @@ class DockerBackend:
         # environment. A dispatch-stamped value wins.
         spawn_env.update(forwarded_env(runnable.forward_env, os.environ, spawn_env))
         if runnable.credential_mounts:
-            spawn_env.setdefault(CODEX_HOME_ENV, WORKER_CODEX_HOME)
+            for key, value in runnable.credential_env.items():
+                spawn_env.setdefault(key, value)
 
         payload: dict[str, Any] = {
             "Image": runnable.image,

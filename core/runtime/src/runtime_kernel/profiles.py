@@ -23,7 +23,7 @@ from typing import Mapping, Optional
 from . import pod_scheduling
 from .models import Resources
 from .pod_scheduling import PodScheduling
-from .workload_env import WORKER_FORWARD_ENV
+from .workload_env import CODEX_HOME_ENV, WORKER_CODEX_HOME, WORKER_FORWARD_ENV
 
 
 #: The label a workload's class rides on, on every substrate (container labels, Pod labels). The
@@ -40,6 +40,20 @@ class SourceMount:
     env: str
     target: str
     pythonpath: str
+
+
+@dataclass(frozen=True)
+class CredentialFile:
+    """A credential file the runtime hands to a workload whose profile asks for credentials.
+
+    ``source`` is the file as the runtime's substrate sees it (a docker-host path the daemon binds;
+    a path the process backend reads). ``target`` is where a container workload finds it (absolute).
+    ``home_path`` is where a process-backend child finds it, relative to its private HOME; empty means
+    the file is for containers only."""
+
+    source: str
+    target: str
+    home_path: str = ""
 
 
 @dataclass(frozen=True)
@@ -61,15 +75,23 @@ class Runnable:
     #: Settings forwarded from the runtime's own environment into the workload, unless the spec
     #: already sets them.
     forward_env: tuple[str, ...] = ()
-    #: The runtime mounts its configured credential files into the workload (docker: the host's
-    #: model subscription files; k8s: the ``RUNTIME_K8S_SECRET_MOUNTS`` Secrets) and tells the harness
-    #: where they are (``CODEX_HOME``).
+    #: The workload receives the runtime's configured credentials: ``credential_files`` and
+    #: ``credential_env`` below, and on k8s the ``RUNTIME_K8S_SECRET_MOUNTS`` Secrets. A profile
+    #: without it (a meeting bot) is given none.
     credential_mounts: bool = False
     #: A development hot-mount the docker backend applies when its runtime setting is set.
     source_mount: Optional[SourceMount] = None
     #: Where the k8s backend places this workload's Pods (node selector, tolerations, priority
     #: class, image pull secrets) — operator configuration read at boot, never from a spec.
     scheduling: PodScheduling = field(default_factory=PodScheduling)
+    #: The credential files the runtime hands this workload (see :class:`CredentialFile`).
+    credential_files: tuple[CredentialFile, ...] = ()
+    #: Settings a container workload that receives credentials is given, unless its spec sets them
+    #: (where its harness finds the files). A process-backend child has a private HOME instead.
+    credential_env: Mapping[str, str] = field(default_factory=dict)
+    #: The host groups a process-backend child joins besides its own (by name; one the host lacks is
+    #: skipped). Container backends ignore it.
+    process_groups: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -186,6 +208,44 @@ _SCHEDULING_ENV_PREFIX = {
 
 def _profile_scheduling(profile: str) -> PodScheduling:
     return pod_scheduling.from_env(_SCHEDULING_ENV_PREFIX[profile], os.environ)
+#: The claude CLI's credential file, relative to its config directory (``~/.claude``).
+CLAUDE_CREDENTIALS_FILENAME = ".credentials.json"
+
+
+def host_claude_credentials(env: Optional[Mapping[str, str]] = None) -> Optional[str]:
+    """The path of the claude subscription credential the operator configured, as the runtime's
+    substrate sees it (a docker-host path for docker, an in-container path for the process backend).
+
+    ``HOST_CLAUDE_CREDENTIALS`` (the file) wins when set; otherwise it is derived from
+    ``HOST_CLAUDE_DIR`` (the host's ``~/.claude``), which is the mount shape that survives a token
+    refresh — the CLI replaces ``.credentials.json`` by ``rename(2)``, i.e. with a NEW INODE, and a
+    single-FILE bind is pinned to the inode it was created with. ``None`` = no subscription file
+    configured (an API-style key may still be brokered as env)."""
+    env = os.environ if env is None else env
+    explicit = (env.get("HOST_CLAUDE_CREDENTIALS") or "").strip()
+    if explicit:
+        return explicit
+    host_dir = (env.get("HOST_CLAUDE_DIR") or "").strip()
+    return f"{host_dir.rstrip('/')}/{CLAUDE_CREDENTIALS_FILENAME}" if host_dir else None
+
+
+def configured_credentials(env: Optional[Mapping[str, str]] = None) -> tuple[CredentialFile, ...]:
+    """The model-subscription files the operator configured for the runtime to hand to workers —
+    the one place that knows which harness reads which file: the claude CLI's credential
+    (``HOST_CLAUDE_CREDENTIALS`` / ``HOST_CLAUDE_DIR``) and the Codex ``auth.json``
+    (``HOST_CODEX_CREDENTIALS``, inside ``WORKER_CODEX_HOME`` in a container, ``~/.codex`` for a
+    process-backend child)."""
+    env = os.environ if env is None else env
+    files: list[CredentialFile] = []
+    claude = host_claude_credentials(env)
+    if claude:
+        files.append(CredentialFile(source=claude, target=f"/root/.claude/{CLAUDE_CREDENTIALS_FILENAME}",
+                                    home_path=f".claude/{CLAUDE_CREDENTIALS_FILENAME}"))
+    codex = (env.get("HOST_CODEX_CREDENTIALS") or "").strip()
+    if codex:
+        files.append(CredentialFile(source=codex, target=f"{WORKER_CODEX_HOME}/auth.json",
+                                    home_path=".codex/auth.json"))
+    return tuple(files)
 
 
 def default_registry() -> ProfileRegistry:
@@ -230,6 +290,9 @@ def default_registry() -> ProfileRegistry:
                     # redis for its streams) and is given no model credential.
                     labels={CLASS_LABEL: "bot"},
                     scheduling=_profile_scheduling("meeting-bot"),
+                    # As a process-backend child it plays and records through the host's system
+                    # PulseAudio, which admits members of this group only.
+                    process_groups=("pulse-access",),
                 ),
                 idle_timeout_sec=0,  # 0 ⇒ managed externally; enforcement skips it
                 base_env=bot_tuning_env,
@@ -250,6 +313,10 @@ def default_registry() -> ProfileRegistry:
                     network_env="DOCKER_WORKER_NETWORK",
                     forward_env=WORKER_FORWARD_ENV,
                     credential_mounts=True,
+                    credential_files=configured_credentials(),
+                    # The Codex home is the runtime's to name: a credential is mounted at
+                    # <it>/auth.json, and the worker and the Codex CLI read CODEX_HOME.
+                    credential_env={CODEX_HOME_ENV: WORKER_CODEX_HOME},
                     source_mount=SourceMount(env="VEXA_AGENT_SRC_MOUNT", target="/app/src/agent_api",
                                              pythonpath="/app/src/agent_api:/app"),
                     scheduling=_profile_scheduling("agent"),
