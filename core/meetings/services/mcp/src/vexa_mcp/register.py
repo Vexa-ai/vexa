@@ -317,20 +317,23 @@ def _add(app: FastAPI, bt: BoundTool, base: str,
         else:
             body = raw_body
 
-        via_gateway = bt.tool.domain == "agent" and bool(gateway_url)
         headers = _outbound(bt, key, env)
-        if via_gateway:
-            # Back through the gateway: carry the identity it signed onto this request, so it can
-            # admit a worker's tool call (`reentry.py`). Never sent to a domain directly.
+        if bt.tool.forward and gateway_url:
+            # Back through the gateway, at the path the domain's `forward` declares, carrying the
+            # identity the gateway signed onto this request so it can admit a worker's tool call
+            # (`reentry.py`). Never sent to a domain directly.
+            edge, upstream = bt.tool.forward
+            url = gateway_url.rstrip("/") + edge + path[len(upstream):]
             headers.update(reentry_mod.headers())
+        else:
+            url = f"{base}{path}"
         try:
             # The forward crosses the gateway, whose buffered leg allows 30 s; a tool that waits
             # less than its own door gives up on calls the door would have answered (a mailbox
             # read through the credential broker is routinely several seconds).
             async with httpx.AsyncClient(timeout=TOOL_TIMEOUT_S, transport=transport) as client:
                 r = await client.request(
-                    method, (gateway_url.rstrip("/")+"/agent/"+path.removeprefix("/api/")
-                             if via_gateway else f"{base}{path}"),
+                    method, url,
                     headers=headers,
                     params=params or None,
                     json=body if method in ("POST", "PUT", "PATCH") else None)

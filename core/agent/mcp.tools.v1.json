@@ -8,7 +8,11 @@
   "depends_on": [
     "identity"
   ],
-  "note": "ADR-0037 / PRD decision 40.5 \u2014 the agent domain's cut at the assembled edge: every tool an agent has here is a route agent-api serves, bound by `bind.py` from the route's own OpenAPI (`parameters` and a named pydantic `requestBody`). The gateway's one MCP server serves them to a person's own client and to a cloud worker alike; a worker's delegation token reaches them as the person it acts for, and the routes that need a person in the loop refuse it when it was dispatched without one. The page verbs default an omitted `slug` to the chat's target, which the worker's signed identity carries as `x-user-delegation-target`.",
+  "forward": {
+    "edge_prefix": "/agent/",
+    "upstream_prefix": "/api/"
+  },
+  "note": "ADR-0037 / PRD decision 40.5 \u2014 the agent domain's cut at the assembled edge: every tool an agent has here is a route agent-api serves, bound by `bind.py` from the route's own OpenAPI (`parameters` and a named pydantic `requestBody`). The gateway's one MCP server serves them to a person's own client and to a cloud worker alike; a worker's delegation token reaches them as the person it acts for, and the routes that need a person in the loop refuse it when it was dispatched without one. The page verbs default an omitted `slug` to the chat's target, which the worker's signed identity carries as `x-user-delegation-target`. The gateway fronts this domain wholesale, so `forward` (the same mapping as `routes.v1.json`'s) sends each tool call back through the gateway at /agent/<path> rather than to agent-api directly.",
   "tools": [
     {
       "name": "workspace_tree",
