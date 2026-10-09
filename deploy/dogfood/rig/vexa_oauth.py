@@ -17,11 +17,17 @@ Identity on the consent screen is PROVEN, the same way every other rig door prov
 person types the address, a 6-digit code is mailed to it (`_issue_email_code`), and only the code
 coming back issues anything (`_redeem_email_code`). The account is then found or created only for
 an address the instance's sign-in admission admits (`_account_for`). The authorization request is
-bound to a `redirect_uri` the client registered, exactly.
+bound to a `redirect_uri` the client registered, exactly; registration accepts only https or
+loopback redirect URIs, and the consent screen names the host the person is sent back to.
 
-`VEXA_RIG_OAUTH_ENABLED=0` (also `false`/`no`/`off`) turns the whole surface off without a code
-change: every OAuth path answers 404, the 401 stops advertising the metadata, and tokens this
-server issued stop resolving. Unset, it is on.
+Refresh tokens expire (`REFRESH_TTL`) and ROTATE: a refresh retires the access token and refresh
+token it was presented with, re-asks the instance's sign-in admission, and refuses a client other
+than the one the grant was made to.
+
+THE SWITCH IS OFF UNLESS TURNED ON. `VEXA_RIG_OAUTH_ENABLED=1` (also `true`/`yes`/`on`) opens this
+surface and every other rig sign-in door (`/login`, start_onboarding, auth_link). Off, every OAuth
+path answers 404, the 401 stops advertising the metadata, and tokens this server issued stop
+resolving.
 
 Endpoints are served over HTTP for the local rig. The spec requires HTTPS for anything that is not
 localhost; this must sit behind TLS before it leaves the tunnel.
@@ -30,6 +36,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
 import html
 import json
 import os
@@ -49,13 +56,15 @@ CODES = "oauth/codes"
 TOKENS = "oauth/tokens"
 CODE_TTL = 60          # seconds; an authorization code is single-use and short-lived
 TOKEN_TTL = 8 * 3600
+REFRESH_TTL = 30 * 24 * 3600   # a refresh token's life; each refresh issues a new one
 PENDING_TTL = 15 * 60  # seconds an authorization request waits for its emailed code
 ENABLED_ENV = "VEXA_RIG_OAUTH_ENABLED"
 
 
 def enabled() -> bool:
-    """The operator's kill switch: the OAuth surface is on unless `VEXA_RIG_OAUTH_ENABLED` says off."""
-    return os.environ.get(ENABLED_ENV, "1").strip().lower() not in ("0", "false", "no", "off")
+    """The operator's switch over every rig sign-in door: on only when `VEXA_RIG_OAUTH_ENABLED`
+    says so. Unset, empty or anything else is off."""
+    return os.environ.get(ENABLED_ENV, "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def _load(name: str) -> dict:
@@ -83,6 +92,38 @@ def _html(status: int, markup: str):
 
 
 # --------------------------------------------------------------------------- redirect uri
+_LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "::1")
+
+
+def _acceptable_redirect(uri) -> bool:
+    """A redirect URI this server will send a person (and their authorization code) to: https to a
+    named host, or plain http to this machine's loopback, with no userinfo and no fragment. A
+    custom scheme or a plain-http host elsewhere carries the code where nobody can vouch for it."""
+    if not isinstance(uri, str) or not uri or len(uri) > 2048 or "#" in uri:
+        return False
+    if any(ord(ch) <= 32 or ch == "\\" for ch in uri):
+        return False
+    try:
+        u = urllib.parse.urlsplit(uri)
+        host = u.hostname or ""
+        u.port  # noqa: B018 — raises on a malformed port
+    except ValueError:
+        return False
+    if not host or u.username is not None or u.password is not None:
+        return False
+    if u.scheme == "https":
+        return True
+    return u.scheme == "http" and host in _LOOPBACK_HOSTS
+
+
+def _redirect_host(uri: str) -> str:
+    """The host:port a consent screen names, so the person sees where the code goes."""
+    try:
+        return urllib.parse.urlsplit(uri).netloc
+    except ValueError:
+        return ""
+
+
 def _registered_redirect(client: dict, requested: str) -> str | None:
     """The redirect URI this request may use: `requested` only when it EXACTLY matches one the
     client registered; with none requested, the client's single registered URI. Otherwise None."""
@@ -111,6 +152,15 @@ def resolve_token(tok: str, canonical: str) -> dict | None:
     return rec
 
 
+def _dead(rec, now: float) -> bool:
+    """A token record nothing can use any more: its access token and its refresh token have both
+    expired. A record from before refresh tokens expired gets `REFRESH_TTL` from its access expiry."""
+    if not isinstance(rec, dict):
+        return True
+    refresh_exp = rec.get("refresh_exp", rec.get("exp", 0) + REFRESH_TTL)
+    return rec.get("exp", 0) < now and refresh_exp < now
+
+
 _PAGE = """<!doctype html><meta charset="utf-8"><title>Authorize Vexa</title>
 <style>
  body{{margin:0;background:#F5F6F2;color:#141716;font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
@@ -131,6 +181,7 @@ _PAGE = """<!doctype html><meta charset="utf-8"><title>Authorize Vexa</title>
   <h1>Authorize Vexa</h1>
   <p><b>{client}</b> is asking to use your Vexa account — your meetings, the knowledge your
      team builds, and the flows that run automatically.</p>
+  <p>If you allow it, you are sent back to <b>{redirect}</b>.</p>
   <div class="who">{resource}</div>
   {body}
 </div>"""
@@ -155,6 +206,7 @@ _CODE_STEP = """{note}<p>A 6-digit code is on its way to <b>{email}</b>.</p>
 def _consent(p: dict, body: str):
     """One consent page. Every value that came from a client or a person is escaped."""
     return _PAGE.format(client=html.escape(p.get("client_name") or "an MCP client"),
+                        redirect=html.escape(_redirect_host(p.get("redirect_uri") or "")),
                         resource=html.escape(p.get("resource") or ""), body=body)
 
 
@@ -236,12 +288,24 @@ async def handle(scope, receive, send, canonical: str) -> bool:
         except Exception:
             await reply(_j(400, {"error": "invalid_client_metadata"}))
             return True
+        if not isinstance(req, dict):
+            await reply(_j(400, {"error": "invalid_client_metadata"}))
+            return True
+        uris = req.get("redirect_uris")
+        if (not isinstance(uris, list) or not 1 <= len(uris) <= 10
+                or not all(_acceptable_redirect(u) for u in uris)):
+            await reply(_j(400, {"error": "invalid_redirect_uri",
+                                 "error_description": "redirect_uris must be https URIs, or http "
+                                                      "to localhost, 127.0.0.1 or [::1]"}))
+            return True
+        name = req.get("client_name")
+        name = name.strip()[:80] if isinstance(name, str) and name.strip() else "an MCP client"
         cid = "vexa-client-" + secrets.token_urlsafe(12)
         rec = {
             "client_id": cid,
             "client_id_issued_at": int(time.time()),
-            "redirect_uris": req.get("redirect_uris") or [],
-            "client_name": req.get("client_name") or "an MCP client",
+            "redirect_uris": uris,
+            "client_name": name,
             "grant_types": ["authorization_code", "refresh_token"],
             "response_types": ["code"],
             "token_endpoint_auth_method": "none",   # public client; PKCE is the protection
@@ -262,6 +326,8 @@ async def handle(scope, receive, send, canonical: str) -> bool:
                 await reply(_j(400, {"error": "invalid_client"}))
                 return True
             redirect_uri = _registered_redirect(client, q.get("redirect_uri", ""))
+            if redirect_uri is not None and not _acceptable_redirect(redirect_uri):
+                redirect_uri = None             # a client registered before the rule existed
             if redirect_uri is None:
                 # Never redirect to an address the client did not register: answer here instead.
                 await reply(_j(400, {"error": "invalid_request",
@@ -294,7 +360,7 @@ async def handle(scope, receive, send, canonical: str) -> bool:
         # code. The address is bound to the request at the first step; the second reads it from
         # there, never from the form, so a code proves the address the request was made for.
         from vexa_control_mcp import (NOT_ADMITTED, _account_for, _issue_email_code,
-                                      _redeem_email_code)
+                                      _plausible_email, _redeem_email_code)
         form = dict(urllib.parse.parse_qsl((await body_bytes()).decode()))
         rid = form.get("rid", "")
         pend = _load(CODES)
@@ -307,14 +373,14 @@ async def handle(scope, receive, send, canonical: str) -> bool:
 
         if "code" not in form:
             email = (form.get("email") or "").strip().lower()
-            if "@" not in email or email.startswith("@") or email.endswith("@"):
+            if not _plausible_email(email):
                 await reply(_html(400, _email_step(p, rid)))
                 return True
             p["email"] = email
             pend["pending:" + rid] = p
             _save(CODES, pend)
             issued = _issue_email_code(email)
-            if issued.get("refused") == "budget":
+            if issued.get("refused") in ("budget", "source", "address"):
                 await reply(_html(429, _message(p, "Too many sign-in codes were sent just now. "
                                                         "Wait a minute and start again.")))
                 return True
@@ -370,19 +436,41 @@ async def handle(scope, receive, send, canonical: str) -> bool:
         gt = form.get("grant_type")
 
         if gt == "refresh_token":
-            toks = _load(TOKENS)
-            old = next((v for k, v in toks.items()
-                        if v.get("refresh") == form.get("refresh_token")), None)
-            if not old:
+            presented = form.get("refresh_token") or ""
+            asked_client = form.get("client_id") or ""
+            now = time.time()
+            taken: dict = {}
+
+            def _take(toks):
+                # Expired grants go; the one presented is RETIRED here, under the lock, whether or
+                # not a new one is issued below — a refresh token is good for one refresh.
+                for k in [k for k, v in toks.items() if _dead(v, now)]:
+                    del toks[k]
+                key = next((k for k, v in toks.items() if presented and hmac.compare_digest(
+                    str(v.get("refresh") or ""), presented)), None)
+                if key is not None:
+                    taken["old"] = toks.pop(key)
+                return toks
+
+            rig_secrets.update(TOKENS, _take)
+            old = taken.get("old")
+            if (not old or old.get("refresh_exp", old.get("exp", 0) + REFRESH_TTL) < now
+                    or (asked_client and old.get("client_id")
+                        and asked_client != old["client_id"])):
                 await reply(_j(400, {"error": "invalid_grant"}))
                 return True
+            from vexa_control_mcp import _signin_admitted
+            if not old.get("email") or not _signin_admitted(old["email"]):
+                await reply(_j(400, {"error": "invalid_grant",
+                                     "error_description": "this address may no longer sign in"}))
+                return True
             new = secrets.token_urlsafe(32)
-            toks[new] = {**old, "exp": time.time() + TOKEN_TTL,
-                         "refresh": secrets.token_urlsafe(32)}
-            _save(TOKENS, toks)
+            rec = {**old, "exp": now + TOKEN_TTL, "refresh": secrets.token_urlsafe(32),
+                   "refresh_exp": now + REFRESH_TTL}
+            rig_secrets.update(TOKENS, lambda toks: toks.update({new: rec}) or toks)
             await reply(_j(200, {"access_token": new, "token_type": "Bearer",
-                                 "expires_in": TOKEN_TTL,
-                                 "refresh_token": toks[new]["refresh"]}))
+                                 "expires_in": TOKEN_TTL, "scope": rec.get("scope", ""),
+                                 "refresh_token": rec["refresh"]}))
             return True
 
         c = codes.pop(form.get("code", ""), None)
@@ -394,6 +482,9 @@ async def handle(scope, receive, send, canonical: str) -> bool:
             await reply(_j(400, {"error": "invalid_grant",
                                  "error_description": "code expired"}))
             return True
+        if form.get("client_id") and form["client_id"] != c.get("client_id"):
+            await reply(_j(400, {"error": "invalid_grant"}))
+            return True
         verifier = form.get("code_verifier", "")
         chal = base64.urlsafe_b64encode(
             hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
@@ -403,20 +494,28 @@ async def handle(scope, receive, send, canonical: str) -> bool:
             return True
 
         tok = secrets.token_urlsafe(32)
-        toks = _load(TOKENS)
-        toks[tok] = {
-            "uid": c["uid"], "email": c["email"],
+        now = time.time()
+        rec = {
+            "uid": c["uid"], "email": c["email"], "client_id": c.get("client_id", ""),
             # RFC 8707: bind the token to the resource it was requested for, so it cannot be
             # replayed at a different service.
             "aud": form.get("resource") or c.get("resource") or canonical,
             "scope": c.get("scope", ""),
-            "exp": time.time() + TOKEN_TTL,
+            "exp": now + TOKEN_TTL,
             "refresh": secrets.token_urlsafe(32),
+            "refresh_exp": now + REFRESH_TTL,
         }
-        _save(TOKENS, toks)
+
+        def _issue(toks):
+            for k in [k for k, v in toks.items() if _dead(v, now)]:
+                del toks[k]
+            toks[tok] = rec
+            return toks
+
+        rig_secrets.update(TOKENS, _issue)
         await reply(_j(200, {"access_token": tok, "token_type": "Bearer",
-                             "expires_in": TOKEN_TTL, "scope": toks[tok]["scope"],
-                             "refresh_token": toks[tok]["refresh"]}))
+                             "expires_in": TOKEN_TTL, "scope": rec["scope"],
+                             "refresh_token": rec["refresh"]}))
         return True
 
     return False

@@ -347,6 +347,17 @@ def _regime_set(uid: str, rec: dict) -> None:
     rig_secrets.update(REGIMES_STORE, lambda d: d.update({str(uid): rec}) or d)
 LOGIN_TTL = 900
 
+# EVERY SIGN-IN DOOR THIS SERVER OPENS SITS BEHIND ONE SWITCH, AND IT IS OFF UNLESS TURNED ON:
+# `VEXA_RIG_OAUTH_ENABLED=1` (`vexa_oauth.enabled`). The doors are the OAuth surface, the `/login`
+# page (with `/login/claim` and `/start`), and the start_onboarding/confirm_login and
+# auth_link/auth_claim tools. Each mints a credential for an address on the strength of a mailed
+# code, so a public host that does not mean to be a sign-in surface must not be one by default.
+SIGNIN_OFF_JSON = json.dumps({
+    "error": "sign-in through this server is switched off",
+    "what_to_do": "Your person signs in to Vexa on the web and connects with their own "
+                  "credential. Do not retry this call.",
+})
+
 # The welcome every sign-in response hands the agent, whichever door the person came through.
 # Three beats, not five, and only capabilities that work today. Anything listed here is a promise
 # made in the first thirty seconds of the relationship, so a beat for a broken path is an invented
@@ -368,6 +379,23 @@ def _logins() -> dict:
 
 def _logins_save(d: dict) -> None:
     rig_secrets.write(LOGINS_STORE, d)
+
+
+def _login_update(h: str, fields: dict, create: bool = False) -> None:
+    """Merge `fields` into one login record under the store's lock (creating it when `create`),
+    and drop expired records. A whole-map save from a stale read would undo a concurrent sign-in."""
+    now = time.time()
+
+    def _fn(d):
+        for k in [k for k, v in d.items() if not isinstance(v, dict) or v.get("exp", 0) <= now]:
+            del d[k]
+        if h in d:
+            d[h].update(fields)
+        elif create:
+            d[h] = dict(fields)
+        return d
+
+    rig_secrets.update(LOGINS_STORE, _fn)
 
 
 #: The admission reasons a rig door accepts. admin-api also admits the sign-in that claims an
@@ -750,6 +778,10 @@ def _md_html(md: str) -> str:
 
 
 def _login_page(inner: str, title: str = "Connect to Vexa") -> bytes:
+    """One page of the rig's own HTML. `inner` is markup the caller built (and escaped); `title` is
+    text — a file name on the viewer — so it is escaped here."""
+    import html as _html
+    title = _html.escape(title)
     return (f"""<!doctype html><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1"><title>{title}</title>
 <style>{TERMINAL_CSS}</style>
@@ -765,20 +797,82 @@ _F_BTN = ""
 
 #: Sign-in codes this process will MAIL per window, across all addresses (R-D11). `start_onboarding`
 #: takes no account, so per-address throttling alone left one anonymous caller able to mail an
-#: arbitrary list; this is the only "source" a stateless MCP tool can see.
+#: arbitrary list. It is the ceiling, not the only limit: see the per-source and per-address caps.
 CODE_BUDGET = int(os.environ.get("VEXA_RIG_CODE_BUDGET", "20"))
 CODE_BUDGET_WINDOW_S = int(os.environ.get("VEXA_RIG_CODE_WINDOW_S", "600"))
 _CODE_SENDS: list = []
 
+#: Codes one SOURCE may have mailed per `CODE_BUDGET_WINDOW_S`. Below the ceiling, so one caller
+#: cannot spend everyone's budget and lock every sign-in out. A source is only counted when this
+#: server can tell callers apart (`_client_source`); behind a proxy it was not told how to read,
+#: every caller is the proxy and the ceiling and per-address caps are what remain.
+CODE_SOURCE_BUDGET = int(os.environ.get("VEXA_RIG_CODE_SOURCE_BUDGET", "5"))
+_SOURCE_SENDS: dict = {}
 
-def _code_budget() -> bool:
-    """True when there is budget to mail one more code, and spends it. False when there is not."""
+#: Per ADDRESS, cumulative across every code issued in `CODE_ADDRESS_WINDOW_S`, whichever door
+#: issued it: how many codes may be mailed to it, and how many wrong codes may be tried against
+#: it. Re-requesting a code starts a new code, never a new count.
+CODE_ADDRESS_ISSUE_CAP = int(os.environ.get("VEXA_RIG_CODE_ADDRESS_CAP", "5"))
+CODE_ADDRESS_FAIL_CAP = int(os.environ.get("VEXA_RIG_CODE_ADDRESS_FAILS", "10"))
+CODE_ADDRESS_WINDOW_S = int(os.environ.get("VEXA_RIG_CODE_ADDRESS_WINDOW_S", "3600"))
+#: Wrong tries one code survives.
+CODE_TRIES = 5
+
+#: The request header carrying the caller's address, set by the proxy in front of this server
+#: (e.g. `cf-connecting-ip`). Read ONLY when the TCP peer is loopback or private, i.e. that proxy.
+CLIENT_ADDRESS_HEADER = (os.environ.get("VEXA_RIG_CLIENT_ADDRESS_HEADER") or "").strip().lower()
+#: Who is calling, for the per-source budget. Set by `_Auth` on every HTTP request.
+CALL_SOURCE = contextvars.ContextVar("vexa_call_source", default="")
+
+
+def _client_source(scope) -> str:
+    """The caller's address, or "" when this server cannot tell callers apart.
+
+    A public TCP peer is the caller. A loopback or private peer is a proxy, and the caller is then
+    the last entry of `CLIENT_ADDRESS_HEADER` — trusted from that hop only, never from the public
+    internet, where anyone can send the header."""
+    import ipaddress
+    peer = str((scope.get("client") or ("",))[0] or "")
+    try:
+        ip = ipaddress.ip_address(peer)
+    except ValueError:
+        return ""
+    if not (ip.is_loopback or ip.is_private):
+        return str(ip)
+    if not CLIENT_ADDRESS_HEADER:
+        return ""
+    for k, v in scope.get("headers") or []:
+        if k.decode("latin-1").lower() == CLIENT_ADDRESS_HEADER:
+            try:
+                return str(ipaddress.ip_address(v.decode("latin-1").split(",")[-1].strip()))
+            except ValueError:
+                return ""
+    return ""
+
+
+def _mail_budget(source: str = "") -> str:
+    """Spend one mailed code from the ceiling and from `source`'s share. Returns "" when spent, else
+    which budget is exhausted ("budget" or "source"); nothing is spent then."""
     now = time.time()
-    _CODE_SENDS[:] = [t for t in _CODE_SENDS if t > now - CODE_BUDGET_WINDOW_S]
+    cut = now - CODE_BUDGET_WINDOW_S
+    _CODE_SENDS[:] = [t for t in _CODE_SENDS if t > cut]
+    for k in [k for k, v in _SOURCE_SENDS.items() if not any(t > cut for t in v)]:
+        del _SOURCE_SENDS[k]
+    mine = [t for t in _SOURCE_SENDS.get(source, []) if t > cut] if source else []
+    if source and len(mine) >= CODE_SOURCE_BUDGET:
+        return "source"
     if len(_CODE_SENDS) >= CODE_BUDGET:
-        return False
+        return "budget"
     _CODE_SENDS.append(now)
-    return True
+    if source:
+        _SOURCE_SENDS[source] = mine + [now]
+    return ""
+
+
+def _plausible_email(email: str) -> bool:
+    """Shape only — an address the doors will mail. Capped at RFC 5321's 254 characters."""
+    return (bool(email) and len(email) <= 254 and "@" in email and not email.startswith("@")
+            and not email.endswith("@") and not any(ch.isspace() or ord(ch) < 32 for ch in email))
 
 
 def _send_code(email: str, code: str) -> str | None:
@@ -1489,6 +1583,17 @@ class _Auth:
             return await self.app(scope, receive, send)
 
         path0 = scope.get("path", "")
+        CALL_SOURCE.set(_client_source(scope))
+
+        # The sign-in pages are doors too, behind the same switch as the tools (`SIGNIN_OFF_JSON`).
+        if (not vexa_oauth.enabled()
+                and (path0 in ("/", "") or path0.startswith(("/login", "/start")))):
+            b = _login_page("<p>Sign-in on this page is switched off.</p>", "Not here")
+            await send({"type": "http.response.start", "status": 404, "headers": [
+                (b"content-type", b"text/html; charset=utf-8"),
+                (b"content-length", str(len(b)).encode())]})
+            await send({"type": "http.response.body", "body": b})
+            return
 
         # ONE FETCH, THREE STEPS. The whole cold path for someone who already signed in on the
         # web. A small model cannot reconstruct a procedure out of a thousand-word bootstrap —
@@ -1577,23 +1682,42 @@ class _Auth:
                 await send({"type": "http.response.body", "body": b})
                 return
 
+            # THE ADDRESS IS BOUND AT STEP 2, AND EVERY LATER STEP READS IT FROM THE RECORD: a code
+            # signs in the address it was mailed to and no other. It is issued and redeemed by
+            # `_issue_email_code` / `_redeem_email_code`, the pair every other door uses: keyed to
+            # the address, wrong tries counted cumulatively per address, the mail budget spent. A
+            # step-3 form naming a different address is refused. Every value this page reflects is
+            # escaped.
+            import html as _html
+            esc = _html.escape
             h = form.get("h") or q.get("h") or ""
             email = (form.get("email") or "").strip().lower()
             code = form.get("code") or ""
+            agent_note = ("<p style='color:#666;font-size:14px'>Your agent sent you here — "
+                          "approve and it carries on by itself.</p>" if h else
+                          "<p style='color:#666;font-size:14px'>Two steps: your email, then "
+                          "a 6-digit code we send to it. You leave with your agent connected "
+                          "to your meetings.</p>")
 
-            if scope.get("method") != "POST" or not email:
-                # step 1: the form. Same page whether the person started here or from a link.
-                agent_note = ("<p style='color:#666;font-size:14px'>Your agent sent you here — "
-                              "approve and it carries on by itself.</p>" if h else
-                              "<p style='color:#666;font-size:14px'>Two steps: your email, then "
-                              "a 6-digit code we send to it. You leave with your agent connected "
-                              "to your meetings.</p>")
-                await page(f"""{agent_note}
-<form method=post action="{base}/login">
-<input type=hidden name=h value="{h}">
+            def email_form(note=agent_note):
+                return f"""{note}
+<form method=post action="{esc(base)}/login">
+<input type=hidden name=h value="{esc(h)}">
 <label>The email your calendar invites come from</label>
 <input name=email type=email autofocus {_F_IN}>
-<button {_F_BTN}>Send me the code</button></form>""")
+<button {_F_BTN}>Send me the code</button></form>"""
+
+            def code_form(note=""):
+                return f"""{note}
+<form method=post action="{esc(base)}/login">
+<input type=hidden name=h value="{esc(h)}">
+<label>The 6-digit code from that email</label>
+<input name=code inputmode=numeric autocomplete=one-time-code autofocus {_F_IN}>
+<button {_F_BTN}>Sign in</button></form>"""
+
+            if scope.get("method") != "POST" or not (email or code):
+                # step 1: the form. Same page whether the person started here or from a link.
+                await page(email_form())
                 return
 
             d = _logins()
@@ -1603,45 +1727,56 @@ class _Auth:
                 return
 
             if not code:
-                # step 2: send the code
-                import secrets as _s
-                if not h:
-                    h = _s.token_urlsafe(16)
-                    d[h] = {"exp": time.time() + LOGIN_TTL, "page_first": True}
-                rec = d[h]
-                c = f"{_s.randbelow(1000000):06d}"
-                rec.update(email=email, email_code=c,
-                           code_exp=time.time() + LOGIN_TTL, tries=0)
-                err = _send_code(email, c)
-                _logins_save(d)
-                if err:
-                    await page(f"<p>Could not send the code ({err}). Try again in a minute.</p>",
+                # step 2: mail a code to the address, and bind the address to this sign-in
+                if not _plausible_email(email):
+                    await page(email_form("<p>That is not an email address — try again.</p>"))
+                    return
+                if h and d[h].get("token"):
+                    await page("<p>That link is used — start over.</p>", "Link used")
+                    return
+                issued = _issue_email_code(email)
+                refused = issued.get("refused")
+                if refused in ("budget", "source", "address"):
+                    await page("<p>Too many sign-in codes were sent just now. Wait a while and "
+                               "start again.</p>", "Slow down")
+                    return
+                if refused == "mail":
+                    print(f"[login] could not mail a sign-in code: {issued.get('detail')}",
+                          flush=True)
+                    await page("<p>Could not send the code. Try again in a minute.</p>",
                                "Mail trouble")
                     return
-                await page(f"""<p>A 6-digit code is on its way to <b>{email}</b>.</p>
-<form method=post action="{base}/login">
-<input type=hidden name=h value="{h}"><input type=hidden name=email value="{email}">
-<label>The 6-digit code from that email</label>
-<input name=code inputmode=numeric autofocus {_F_IN}>
-<button {_F_BTN}>Sign in</button></form>""", "Check your email")
+                # "sent", or "already-sent": a code from the last few minutes is still in that
+                # inbox, and it is the one to type.
+                if not h:
+                    import secrets as _s
+                    h = _s.token_urlsafe(16)
+                    _login_update(h, {"exp": time.time() + LOGIN_TTL, "page_first": True,
+                                      "email": email}, create=True)
+                else:
+                    _login_update(h, {"email": email})
+                await page(code_form(f"<p>A 6-digit code is on its way to <b>{esc(email)}</b>.</p>"),
+                           "Check your email")
                 return
 
-            # step 3: verify, mint, deliver
-            rec = d.get(h) or {}
-            digits = "".join(ch for ch in code if ch.isdigit())
-            if time.time() > rec.get("code_exp", 0) or rec.get("tries", 0) >= 5:
+            # step 3: the code proves the address bound at step 2, and only that address
+            rec = d.get(h) if h else None
+            bound = (rec or {}).get("email") or ""
+            if not bound or rec.get("token"):
                 await page("<p>That code expired — start over.</p>", "Expired")
                 return
-            if digits != rec.get("email_code"):
-                rec["tries"] = rec.get("tries", 0) + 1
-                _logins_save(d)
-                await page(f"""<p>Wrong code — check the email again.</p>
-<form method=post action="{base}/login">
-<input type=hidden name=h value="{h}"><input type=hidden name=email value="{email}">
-<input name=code inputmode=numeric autofocus {_F_IN}>
-<button {_F_BTN}>Sign in</button></form>""", "Not quite")
+            if email and email != bound:
+                await page("<p>That code was sent to a different address — start over.</p>",
+                           "Start over")
                 return
-            uid, existed = _account_for(email)
+            checked = _redeem_email_code(bound, code)
+            if checked.get("error") == "wrong":
+                await page(code_form("<p>Wrong code — check the email again.</p>"), "Not quite")
+                return
+            if not checked.get("ok"):
+                await page("<p>That code expired — start over.</p>", "Expired")
+                return
+            uid, existed = _account_for(bound)
             if uid is None and existed == NOT_ADMITTED:
                 await page("<p>This address can't sign in here. Ask the person who runs this "
                            "Vexa to add it.</p>", "Not allowed")
@@ -1650,26 +1785,25 @@ class _Auth:
                 await page("<p>Something broke on our side. Tell your agent to "
                            "report_friction().</p>", "Our fault")
                 return
-            tok = _mint_token(uid, email)
-            rec.update(token=tok, uid=uid)
-            rec.pop("email_code", None)
-            _logins_save(d)
+            tok = _mint_token(uid, bound)
+            _login_update(h, {"token": tok, "uid": uid})
             if not rec.get("page_first"):
                 await page("""<p><b>Approved — go back to your agent.</b> It picks the
 connection up by itself within a few seconds; nothing else to do here.</p>""", "Approved")
                 return
+            setup = esc(f"{CANONICAL}?c={h}")
             await page(f"""<p><b>You're in{"" if not existed else " — same account as before"}.</b>
 This is your Vexa address. Give it to your agent — it carries your sign-in, so treat
 it like a password.</p>
-<pre style="background:#f4f4f2;padding:14px;border-radius:8px;font-size:13px;white-space:pre-wrap">{CANONICAL}?c={h}</pre>
+<pre style="background:#f4f4f2;padding:14px;border-radius:8px;font-size:13px;white-space:pre-wrap">{setup}</pre>
 <p style="font-size:15px;margin-top:18px">Wherever your agent keeps its connectors:</p>
 <ul style="font-size:14px;color:#333;line-height:1.85;padding-left:20px;margin:8px 0 0">
 <li><b>Claude desktop, Cowork, claude.ai</b> — Settings → Connectors → Add custom connector,
     transport HTTP, that URL</li>
-<li><b>Claude Code</b> — <code>claude mcp add --transport http vexa "{CANONICAL}?c={h}" -s
+<li><b>Claude Code</b> — <code>claude mcp add --transport http vexa "{setup}" -s
     user</code></li>
-<li><b>Codex</b> — <code>codex mcp add vexa -- npx -y mcp-remote "{CANONICAL}?c={h}"</code></li>
-<li><b>Cursor</b> — <code>{{"vexa": {{"url": "{CANONICAL}?c={h}"}}}}</code> in
+<li><b>Codex</b> — <code>codex mcp add vexa -- npx -y mcp-remote "{setup}"</code></li>
+<li><b>Cursor</b> — <code>{{"vexa": {{"url": "{setup}"}}}}</code> in
     <code>.cursor/mcp.json</code></li>
 </ul>
 <p style="font-size:15px;margin-top:20px">Then say:</p>
@@ -1702,10 +1836,12 @@ working.</p>""", "Connected")
                              {"X-User-Id": rec["uid"]})
             content = (body or {}).get("content") if isinstance(body, dict) else None
             if st != 200 or content is None:
-                b = _login_page(f"<p>No file at <code>{fpath}</code> in this workspace.</p>",
-                                "Not found")
+                import html as _html
+                b = _login_page(f"<p>No file at <code>{_html.escape(fpath)}</code> in this "
+                                "workspace.</p>", "Not found")
                 status = 404
             else:
+                import html as _h2
                 name = fpath.rsplit("/", 1)[-1]
                 if fpath.endswith((".md", ".markdown")):
                     body_md = content
@@ -1713,16 +1849,14 @@ working.</p>""", "Connected")
                     if body_md.startswith("---"):
                         parts = body_md.split("---", 2)
                         if len(parts) == 3:
-                            import html as _h2
                             meta = ('<pre style="font-size:11.5px;color:var(--t3)">'
                                     + _h2.escape(parts[1].strip()) + "</pre>")
                             body_md = parts[2]
-                    inner = (f'<p class=path>{fpath}</p>' + meta
+                    inner = (f'<p class=path>{_h2.escape(fpath)}</p>' + meta
                              + f'<div class="card doc">{_md_html(body_md)}</div>')
                 else:
-                    import html as _html
-                    inner = (f'<p class=path>{fpath}</p>'
-                             f'<pre>{_html.escape(content)}</pre>')
+                    inner = (f'<p class=path>{_h2.escape(fpath)}</p>'
+                             f'<pre>{_h2.escape(content)}</pre>')
                 b = _login_page(inner, name)
                 status = 200
             await send({"type": "http.response.start", "status": status, "headers": [
@@ -1800,7 +1934,9 @@ working.</p>""", "Connected")
                 elif _c in _tokens():
                     tok = _c
                 else:
-                    _rec = _logins().get(_c)
+                    # A login record is a sign-in door's output, so it promotes only while the
+                    # doors are open (`SIGNIN_OFF_JSON`).
+                    _rec = _logins().get(_c) if vexa_oauth.enabled() else None
                     if _rec and _rec.get("token"):
                         _token_put(_c, {"uid": _rec["uid"], "email": _rec["email"],
                                         "via": "setup-url"})
@@ -4835,6 +4971,8 @@ def auth_link() -> str:
     """Sign your person in with ONE CLICK-AND-A-CODE on a page, instead of relaying the code
     through the chat. Returns a link: give it to them, then poll auth_claim(handle) every few
     seconds until the token arrives. NO ACCOUNT NEEDED to call this."""
+    if not vexa_oauth.enabled():
+        return SIGNIN_OFF_JSON
     import secrets as _s
     h = _s.token_urlsafe(16)
     d = _logins()
@@ -4856,6 +4994,8 @@ def auth_claim(handle: str) -> str:
     """Second half of auth_link(): returns pending until the person approves, then the token.
     Register it on the connection (header, or ?c=<token> on the address) and reconnect — it is
     the connection's credential, never a call argument."""
+    if not vexa_oauth.enabled():
+        return SIGNIN_OFF_JSON
     d = _logins()
     rec = d.get(handle)
     if not rec:
@@ -5791,62 +5931,120 @@ def vexa_search_docs(query: str, hits: int = 5) -> str:
                        "source": "https://docs.vexa.ai/llms-full.txt"})[:14000]
 
 
+def _spend_code(rec: dict) -> None:
+    """Drop a code from its address record, keeping the address's cumulative ledger."""
+    for k in ("code", "exp", "tries"):
+        rec.pop(k, None)
+
+
+def _address_ledger(d: dict, now: float) -> None:
+    """Prune every address record to its window; drop records with no live code and no history."""
+    cut = now - CODE_ADDRESS_WINDOW_S
+    for addr in list(d):
+        rec = d[addr] if isinstance(d[addr], dict) else {}
+        rec["issued"] = [t for t in rec.get("issued", []) if t > cut]
+        rec["failed"] = [t for t in rec.get("failed", []) if t > cut]
+        if rec.get("code") and now > rec.get("exp", 0) + CODE_ADDRESS_WINDOW_S:
+            _spend_code(rec)
+        if not rec.get("code") and not rec["issued"] and not rec["failed"]:
+            del d[addr]
+        else:
+            d[addr] = rec
+
+
 def _issue_email_code(email: str) -> dict:
     """Mail a fresh 6-digit sign-in code to `email` — the mailbox proof every rig sign-in door
-    takes (start_onboarding here, the OAuth consent screen in vexa_oauth). One of:
-    `{"sent": True}`, `{"refused": "budget"}` (the process-wide mail budget is spent),
-    `{"refused": "already-sent"}` (a live code is already in that inbox; reminting would invalidate
-    it), `{"refused": "mail", "detail": ...}`. NO ACCOUNT IS CREATED HERE (R-D11)."""
+    takes (`/login`, start_onboarding, the OAuth consent screen in vexa_oauth). One of:
+    `{"sent": True}`; `{"refused": "already-sent"}` (a live code is already in that inbox; reminting
+    would invalidate it); `{"refused": "address"}` (that address's codes or wrong tries for the
+    window are spent); `{"refused": "source"}` / `{"refused": "budget"}` (this caller's share, or
+    the process-wide ceiling, of mailed codes is spent); `{"refused": "mail", "detail": ...}`.
+    NO ACCOUNT IS CREATED HERE (R-D11).
+
+    The address record is checked and written under the store's lock, and it keeps a CUMULATIVE
+    ledger (codes mailed, wrong tries) that outlives each code. Asking again therefore never
+    resets a count: guessing is bounded per address, not per request."""
     import secrets
-    if not _code_budget():
-        # RATE-LIMITED BY SOURCE (R-D11). These doors need no account, so the only source this
-        # server can see is itself: a process-wide budget on codes MAILED. Without it, one
-        # anonymous caller in a loop makes us the mailer for an address list.
-        return {"refused": "budget"}
-    live = rig_secrets.read(EMAIL_CODES_STORE).get(email)
-    if live and time.time() < live.get("exp", 0) and live.get("tries", 0) < 5:
-        return {"refused": "already-sent"}
-    code = f"{secrets.randbelow(1000000):06d}"
-    rig_secrets.update(EMAIL_CODES_STORE, lambda d: d.update(
-        {email: {"code": code, "exp": time.time() + LOGIN_TTL, "tries": 0}}) or d)
-    err = _send_code(email, code)
+    now = time.time()
+    out: dict = {}
+
+    def _claim(d):
+        _address_ledger(d, now)
+        rec = d.get(email) or {"issued": [], "failed": []}
+        if rec.get("code") and now < rec.get("exp", 0) and rec.get("tries", 0) < CODE_TRIES:
+            out["refused"] = "already-sent"
+        elif (len(rec["issued"]) >= CODE_ADDRESS_ISSUE_CAP
+              or len(rec["failed"]) >= CODE_ADDRESS_FAIL_CAP):
+            out["refused"] = "address"
+        else:
+            # RATE-LIMITED BY SOURCE (R-D11). These doors need no account, so without a budget
+            # one anonymous caller in a loop makes us the mailer for an address list.
+            why = _mail_budget(CALL_SOURCE.get() or "")
+            if why:
+                out["refused"] = why
+            else:
+                out["code"] = f"{secrets.randbelow(1000000):06d}"
+                rec.update(code=out["code"], exp=now + LOGIN_TTL, tries=0,
+                           issued=rec["issued"] + [now])
+                d[email] = rec
+        return d
+
+    rig_secrets.update(EMAIL_CODES_STORE, _claim)
+    if "code" not in out:
+        return {"refused": out.get("refused", "budget")}
+    err = _send_code(email, out["code"])
     if err:
+        # A code nobody received must not sit in the record answering "already sent" for fifteen
+        # minutes. The mailing still counts against the address.
+        def _unsend(d):
+            rec = d.get(email)
+            if rec and rec.get("code") == out["code"]:
+                _spend_code(rec)
+            return d
+        rig_secrets.update(EMAIL_CODES_STORE, _unsend)
         return {"refused": "mail", "detail": err}
     return {"sent": True}
 
 
 def _redeem_email_code(email: str, code) -> dict:
     """Check the code mailed to `email`, and SPEND it on success. One of: `{"ok": True}`,
-    `{"error": "none"}` (no code pending), `{"error": "expired"}`, `{"error": "too-many"}` (five
-    wrong tries; the code is dropped), `{"error": "wrong", "attempts_left": n}`."""
-    digits = "".join(ch for ch in str(code) if ch.isdigit())
-    rec = rig_secrets.read(EMAIL_CODES_STORE).get(email)
-    if not rec:
-        return {"error": "none"}
+    `{"error": "none"}` (no code pending), `{"error": "expired"}`, `{"error": "too-many"}` (the
+    code's or the address's wrong tries are spent; the code is dropped),
+    `{"error": "wrong", "attempts_left": n}`. Checked and counted under the store's lock, so
+    parallel guesses cannot outrun the count."""
+    # ASCII digits only: `str.isdigit` also admits other scripts' digits, which no code contains.
+    digits = "".join(ch for ch in str(code) if ch in "0123456789")
+    now = time.time()
+    out: dict = {}
 
-    def _drop(d):
-        d.pop(email, None)
+    def _check(d):
+        _address_ledger(d, now)
+        rec = d.get(email)
+        if not rec or not rec.get("code"):
+            out["error"] = "none"
+        elif now > rec.get("exp", 0):
+            _spend_code(rec)
+            out["error"] = "expired"
+        elif rec.get("tries", 0) >= CODE_TRIES or len(rec["failed"]) >= CODE_ADDRESS_FAIL_CAP:
+            _spend_code(rec)
+            out["error"] = "too-many"
+        elif not hmac.compare_digest(digits, str(rec["code"])):
+            rec["tries"] = int(rec.get("tries", 0)) + 1
+            rec["failed"] = rec["failed"] + [now]
+            left = min(CODE_TRIES - rec["tries"], CODE_ADDRESS_FAIL_CAP - len(rec["failed"]))
+            if left <= 0:
+                _spend_code(rec)
+            out.update(error="wrong", attempts_left=max(0, left))
+        else:
+            # SINGLE USE. Proven: whoever supplied this code can read that mailbox — so it is
+            # spent here, under the store's lock, BEFORE the account is touched. A code that
+            # survived its own success is a second sign-in for anyone who saw it in a transcript.
+            _spend_code(rec)
+            out["ok"] = True
         return d
 
-    if time.time() > rec["exp"]:
-        rig_secrets.update(EMAIL_CODES_STORE, _drop)
-        return {"error": "expired"}
-    if rec["tries"] >= 5:
-        rig_secrets.update(EMAIL_CODES_STORE, _drop)
-        return {"error": "too-many"}
-    if not hmac.compare_digest(digits, str(rec["code"])):
-        def _bump(d):
-            r = d.get(email)
-            if r:
-                r["tries"] = int(r.get("tries", 0)) + 1
-            return d
-        tries = int(rig_secrets.update(EMAIL_CODES_STORE, _bump).get(email, {}).get("tries", 5))
-        return {"error": "wrong", "attempts_left": max(0, 5 - tries)}
-    # SINGLE USE. Proven: whoever supplied this code can read that mailbox — so it is spent here,
-    # under the store's lock, BEFORE the account is touched. A code that survived its own success
-    # is a second sign-in for anyone who saw it in a transcript.
-    rig_secrets.update(EMAIL_CODES_STORE, _drop)
-    return {"ok": True}
+    rig_secrets.update(EMAIL_CODES_STORE, _check)
+    return out
 
 
 @mcp.tool()
@@ -5858,8 +6056,10 @@ def start_onboarding(email: str) -> str:
     The code is the whole proof: no form, no password, no browser.
 
     Works for new AND returning people -- same two steps either way."""
+    if not vexa_oauth.enabled():
+        return SIGNIN_OFF_JSON
     email = (email or "").strip().lower()
-    if "@" not in email or email.startswith("@") or email.endswith("@"):
+    if not _plausible_email(email):
         return json.dumps({"error": "that is not an email address"})
     # NO ACCOUNT IS CREATED HERE (R-D11). It used to POST /admin/users before any code was
     # verified, so an unauthenticated caller minted platform accounts for addresses it did not
@@ -5867,10 +6067,10 @@ def start_onboarding(email: str) -> str:
     # oracle for the whole user table. The account is created in confirm_login, once the code
     # coming back proves the caller can read that mailbox.
     issued = _issue_email_code(email)
-    if issued.get("refused") == "budget":
+    if issued.get("refused") in ("budget", "source", "address"):
         return json.dumps({
-            "error": "too many sign-in codes have been sent from this server just now",
-            "what_to_do": "Wait a minute and call start_onboarding(email) again. If your person "
+            "error": "too many sign-in codes have been sent just now",
+            "what_to_do": "Wait a while and call start_onboarding(email) again. If your person "
                           "already has a code from the last few minutes, use that one.",
         })
     if issued.get("refused") == "already-sent":
@@ -5913,6 +6113,8 @@ def confirm_login(email: str, code: str) -> str:
     `?c=<token>` on the address for a client that cannot set one — and reconnect. It
     authenticates the CONNECTION, so it takes effect on the next session. Say that plainly and
     once; do not promise the tools work this turn, because they do not."""
+    if not vexa_oauth.enabled():
+        return SIGNIN_OFF_JSON
     email = (email or "").strip().lower()
     checked = _redeem_email_code(email, code)
     if checked.get("error") == "none":

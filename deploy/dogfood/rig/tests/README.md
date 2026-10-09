@@ -66,6 +66,13 @@ and gate 13 with the route it guards
 returns before the dispatch). The `pkill` defect was behavioural — the string was in plain sight and
 looked fine — so reading the file would not have caught it.
 
+## The sign-in doors (added 2026-10-09)
+
+| file | holds |
+|---|---|
+| `test_signin_doors.py` | `/login` signs in only the address its code was mailed to, bound at step 2, and refuses a step-3 form naming another; every door (`/`, `/login`, `/login/claim`, `/start`, the onboarding and auth-link tools) is off unless `VEXA_RIG_OAUTH_ENABLED=1`; codes and wrong tries are capped per address cumulatively, so asking again resets nothing; mailing is capped per caller as well as globally; everything a page reflects is escaped |
+| `test_oauth_consent.py` | the consent screen: proof by mailed code, admission, exact redirect match; registration takes only https or loopback redirect URIs and the screen names the redirect host; refresh tokens expire, rotate, stay with their client and re-ask admission |
+
 ## One authentication path (added 2026-09-03, founder ruling)
 
 `test_single_auth_path.py` holds the removal of the `/do` GET bridge and the `token=` call
