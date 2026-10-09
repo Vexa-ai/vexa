@@ -8,14 +8,13 @@ the payload names — what the bot's sink writes (``transcript-redis.ts`` ``entr
 """
 from __future__ import annotations
 
-import hashlib
-import hmac
 import json
 from typing import Optional
 
 import pytest
 
 from meeting_api.bot_spawn.invocation import mint_meeting_token
+from meeting_api.collector.ingest import signed_entry
 
 SECRET = "segment-entry-secret-for-tests-0123456789abcdef"
 STREAM = "transcription_segments"
@@ -34,11 +33,7 @@ def token_for(meeting_id: int, *, secret: str = SECRET, ttl_seconds: int = 3600)
 
 def signed_fields(data: dict, *, token: Optional[str] = None) -> dict:
     """The stream fields a bot writes for ``data`` (the payload dict)."""
-    payload = json.dumps(data)
-    token = token or token_for(int(data["meeting_id"]))
-    header, claims, _sig = token.split(".")
-    return {"payload": payload, "auth": f"{header}.{claims}",
-            "sig": hmac.new(token.encode(), payload.encode(), hashlib.sha256).hexdigest()}
+    return signed_entry(token or token_for(int(data["meeting_id"])), json.dumps(data))
 
 
 async def signed_xadd(bus, data: dict, *, token: Optional[str] = None, stream: str = STREAM) -> str:

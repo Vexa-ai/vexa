@@ -3,22 +3,22 @@
 
 The self-hosted counterpart of vexa_cloud_bridge.py: instead of Vexa Cloud's hosted bot + REST, we run
 our own ``vexaai/vexa-bot`` via the local meeting-api (POST /bots), and the bot publishes its live
-transcript to OUR redis stream ``transcription_segments`` (the same wire 0.11's collector consumes). This
-bridge tails that stream with a DEDICATED consumer group (so it never steals from the collector), and for
-the one meeting it owns:
+transcript to OUR redis stream ``transcription_segments``. Every bot appends to that one stream, and
+only meeting-api's collector can check that an entry was signed by the meeting's own bot; it writes
+what it admitted to ``tc:meeting:{meeting_id}``. So this bridge reads THAT feed, never the raw stream,
+for the one meeting it owns:
 
-    our bot ──(transcription_segments)──▶ redis ──┬─▶ meeting-api collector (postgres + hash)
-                                                  └─▶ THIS bridge ──(tc:meeting:{native})──▶ terminal
+    our bot ──(transcription_segments)──▶ meeting-api collector ──(tc:meeting:{meeting_id})──▶ THIS bridge
+                                                                         ──(tc:meeting:{native})──▶ terminal
                        (no dispatch — PRD decision 34: the transcript IS the product surface)
 
-A new transcript SOURCE is config, not a new consumer — the canonical Integration primitive. One meeting
-per process: we filter ``transcription_segments`` by the numeric meeting_id POST /bots returns, and fan
-each COMPLETED segment onto ``tc:meeting:{native_id}`` (skipping live drafts → a clean growing feed).
+One meeting per process: the numeric meeting_id POST /bots returns (or ``--meeting-id``) names the feed,
+and each segment is fanned onto ``tc:meeting:{native_id}`` (identical drafts skipped).
 
     VEXA_API_KEY=... python own_bot_bridge.py --meeting-url https://meet.google.com/abc-defg-hij
 
 Env: VEXA_API_KEY (the stack API key; never logged). Flags: --gateway (POST /bots sink), --agent-api
-(dispatch sink), --redis, --subject, --bot-name, --no-bot, --idle-end N.
+(dispatch sink), --redis, --subject, --bot-name, --no-bot (needs --meeting-id), --idle-end N.
 """
 from __future__ import annotations
 
@@ -72,7 +72,6 @@ def main() -> None:
 
     r = redislib.from_url(args.redis, decode_responses=True, socket_keepalive=True, health_check_interval=10)
     out_stream = f"tc:meeting:{native_id}"
-    SRC = "transcription_segments"
 
     # 1) launch OUR bot via the local meeting-api (gateway) — returns the numeric meeting_id we filter on
     meeting_id = args.meeting_id
@@ -84,15 +83,13 @@ def main() -> None:
         meeting_id = str(res.get("id") or res.get("meeting_id") or "")
         print(f"[bridge] our bot requested → meeting_id={meeting_id} status={res.get('status')}", flush=True)
 
-    # 2) tail transcription_segments via a DEDICATED group (never steal from the collector); fan THIS
-    #    meeting's completed segments onto tc:meeting:{native_id}.
-    group, consumer = "ei_copilot_bridge", "bridge-1"
-    try:
-        r.xgroup_create(SRC, group, id="0", mkstream=True)
-    except redislib.ResponseError as e:
-        if "BUSYGROUP" not in str(e):
-            raise
-    print(f"[bridge] consuming {SRC} (group={group}) for meeting_id={meeting_id or '*'} → {out_stream}", flush=True)
+    # 2) follow the collector's verified feed for THIS meeting (only entries its own bot signed reach
+    #    it) and fan its segments onto tc:meeting:{native_id}.
+    if not meeting_id.isdigit():
+        raise SystemExit("no numeric meeting_id to follow — pass --meeting-id with --no-bot")
+    src = f"tc:meeting:{meeting_id}"
+    last = "0-0"
+    print(f"[bridge] following {src} (the collector's verified feed) → {out_stream}", flush=True)
 
     final_done: set[str] = set()    # segment_ids already finalized → never re-emit
     last_text: dict[str, str] = {}  # segment_id → last draft text (skip identical re-emits)
@@ -103,18 +100,16 @@ def main() -> None:
             print("[bridge] idle-end reached", flush=True)
             break
         try:
-            resp = r.xreadgroup(group, consumer, {SRC: ">"}, count=50, block=4000)
+            resp = r.xread({src: last}, count=50, block=4000)
         except (redislib.exceptions.TimeoutError, redislib.exceptions.ConnectionError):
-            continue  # blocking XREADGROUP can raise on its own block window — just loop
+            continue  # blocking XREAD can raise on its own block window — just loop
         for _s, entries in resp or []:
             for msg_id, fields in entries:
-                r.xack(SRC, group, msg_id)
+                last = msg_id
                 try:
                     p = json.loads(fields.get("payload") or "{}")
                 except Exception:
                     continue
-                if meeting_id and str(p.get("meeting_id")) != meeting_id:
-                    continue  # another meeting sharing the stream
                 t = p.get("type")
                 if t == "session_end":
                     r.xadd(out_stream, {"payload": json.dumps({"type": "session_end", "uid": native_id})})

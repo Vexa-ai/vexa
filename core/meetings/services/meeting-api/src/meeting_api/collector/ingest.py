@@ -170,6 +170,18 @@ def _b64url(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
 
 
+def signed_entry(token: str, payload: str) -> dict:
+    """The stream fields a session writes for ``payload``: the bot's sink (``transcript-redis.ts``
+    ``entryAuth``) in Python, for the tools that publish to the stream the way a bot does. ``token`` is
+    that session's MeetingToken; a value that is not a three-part token signs nothing, and the entry is
+    then dropped like any unsigned one."""
+    parts = (token or "").split(".")
+    if len(parts) != 3 or not all(parts):
+        return {"payload": payload}
+    return {"payload": payload, "auth": f"{parts[0]}.{parts[1]}",
+            "sig": hmac.new(token.encode(), payload.encode(), hashlib.sha256).hexdigest()}
+
+
 def _admitted(fields: dict) -> bool:
     """Whether a stream entry was written by a session whose MeetingToken names the meeting the
     entry speaks for. Never raises."""

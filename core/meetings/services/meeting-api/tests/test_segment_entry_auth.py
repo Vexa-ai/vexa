@@ -17,7 +17,7 @@ import pytest
 
 from meeting_api.collector import consume_segments
 from meeting_api.collector.fakes import FakeRedisBus, InMemoryTranscriptStore
-from meeting_api.collector.ingest import CONSUMER_GROUP, STREAM_NAME, _admitted, reclaim_segments
+from meeting_api.collector.ingest import CONSUMER_GROUP, STREAM_NAME, _admitted, reclaim_segments, signed_entry
 
 from _segment_auth import admin_token, signed_fields, signed_xadd, token_for  # noqa: F401
 
@@ -103,3 +103,8 @@ def test_the_signature_matches_the_bots_vector():
     token = "eyJhbGciOiJIUzI1NiJ9.eyJtZWV0aW5nX2lkIjo0Mn0.c2lnbmF0dXJl"
     sig = hmac.new(token.encode(), b'{"type":"transcription","meeting_id":42}', hashlib.sha256).hexdigest()
     assert sig == "ea8b616bd36e85dbc3f3c5aeb36f7bc2391f6a759d425355abfef2430516963d"
+    # the Python signer the publishing tools use writes the bot's fields
+    fields = signed_entry(token, '{"type":"transcription","meeting_id":42}')
+    assert fields == {"payload": '{"type":"transcription","meeting_id":42}',
+                      "auth": "eyJhbGciOiJIUzI1NiJ9.eyJtZWV0aW5nX2lkIjo0Mn0", "sig": sig}
+    assert signed_entry("not-a-token", "{}") == {"payload": "{}"}
