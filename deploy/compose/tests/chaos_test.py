@@ -140,6 +140,17 @@ def test_chaos_redis_refused_then_restored_no_restart(stack):
     time.sleep(45)
     _compose("start", "redis")
     assert _wait_redis_dependents_healthy(stack), "meeting-api /health never recovered after redis restart"
+    # A restarted Redis has lost every bot's ACL user until meeting-api defines it again, and the bot
+    # re-subscribes to its command channel only then: the bot recovering IS part of what this proves.
+    m = _meeting(stack, user_id, native_id)
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        out = stack.redis_cli("PUBSUB", "NUMSUB", f"bot_commands:meeting:{m['id']}").split()
+        if len(out) >= 2 and out[-1].isdigit() and int(out[-1]) >= 1:
+            break
+        time.sleep(1)
+    else:
+        raise AssertionError("the bot never re-subscribed to its command channel after the redis restart")
 
     _stop_bot(stack, user_id, native_id)
     term = _wait_meeting(stack, user_id, native_id, statuses={"completed", "failed"}, timeout=90)

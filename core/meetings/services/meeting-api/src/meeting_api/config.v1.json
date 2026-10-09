@@ -99,8 +99,8 @@
   {
    "key": "BOT_REDIS_RESTORE_INTERVAL_S",
    "class": "defaulted",
-   "default": "15",
-   "description": "how often (s) meeting-api defines again any bot Redis user Redis no longer has — it keeps none across a restart, so a live bot's credential would otherwise stay refused until its meeting ended",
+   "default": "1",
+   "description": "how often (s) meeting-api checks whether Redis is a new process (one INFO) and, when it is, defines again every bot Redis user — Redis keeps none across a restart, so a live bot's credential would otherwise stay refused until its meeting ended",
    "targets": []
   },
   {

@@ -33,6 +33,11 @@ class FakeAsyncRedis:
         self.fail = fail
         self.users: dict[str, list[str]] = {}
         self.index: dict[str, str] = {}
+        self.run_id = "r1"
+
+    async def info(self, section):
+        assert section == "server"
+        return {"run_id": self.run_id}
 
     async def execute_command(self, *args):
         if self.fail:
@@ -104,6 +109,18 @@ async def test_restore_defines_again_what_redis_lost_with_the_same_password():
     assert await _users(r).restore() == 1
     assert r.users[user_for("conn-a")] == acl_rules(42, urlsplit(url).password)
     assert await _users(r).restore() == 0
+
+
+async def test_a_redis_restart_is_noticed_on_the_next_tick():
+    r = FakeAsyncRedis()
+    users = _users(r)
+    await users.grant("conn-a", 42)
+    assert await users.restore_if_restarted() == 0          # first look: nothing lost
+    r.users.clear()
+    assert await users.restore_if_restarted() == 0          # same process: one INFO, nothing else
+    r.run_id = "r2"                                         # a restart
+    assert await users.restore_if_restarted() == 1
+    assert user_for("conn-a") in r.users
 
 
 # ── the spawn and the session's end ─────────────────────────────────────────────────────────────

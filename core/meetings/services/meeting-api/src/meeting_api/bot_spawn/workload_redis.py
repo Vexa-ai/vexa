@@ -77,6 +77,7 @@ class BotRedisUsers:
         self._r = client
         self._url = service_url
         self._secret = secret
+        self._run_id: Optional[str] = None
         self._max_age = max_age_sec
         self._now = now or time.time
 
@@ -109,6 +110,18 @@ class BotRedisUsers:
             await self._r.execute_command(
                 "ACL", "SETUSER", user, *acl_rules(meeting_id, password_for(self._secret, connection_id)))
             restored += 1
+        return restored
+
+    async def restore_if_restarted(self) -> int:
+        """:meth:`restore` the moment Redis is a new process (its ``run_id`` changed) — a live bot's
+        subscription is down until its user exists again, so this runs on a short tick and costs one
+        ``INFO`` when nothing happened."""
+        info = await self._r.info("server")
+        run_id = (info or {}).get("run_id")
+        if run_id == self._run_id:
+            return 0
+        restored = await self.restore()
+        self._run_id = run_id
         return restored
 
     async def _index(self) -> dict[str, tuple[str, int, float]]:

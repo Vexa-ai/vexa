@@ -142,22 +142,27 @@ def restore(client, *, secret: str) -> int:
 
 
 def start_sweeper(*, client_factory: Callable[[], object], live_units: Callable[[], Iterable[str]],
-                  secret: str, restore_interval_sec: float = 15.0,
+                  secret: str, restore_interval_sec: float = 1.0,
                   sweep_interval_sec: float = 600.0) -> Optional[threading.Event]:
-    """In a daemon thread: :func:`restore` every ``restore_interval_sec`` and :func:`sweep` every
-    ``sweep_interval_sec``. A sweep that cannot read the runtime's workloads deletes nothing.
-    Returns the stop event."""
+    """In a daemon thread: every ``restore_interval_sec``, :func:`restore` when Redis is a new process
+    (its ``run_id`` changed — one ``INFO`` otherwise), and :func:`sweep` every ``sweep_interval_sec``.
+    A sweep that cannot read the runtime's workloads deletes nothing. Returns the stop event."""
     if restore_interval_sec <= 0:
         return None
     stop = threading.Event()
 
     def loop() -> None:
         last_sweep = time.monotonic()
+        run_id = None
         while not stop.wait(restore_interval_sec):
             try:
-                restored = restore(client_factory(), secret=secret)
-                if restored:
-                    logger.warning("redis lost %d worker user(s) (a restart?) — defined again", restored)
+                client = client_factory()
+                current = (client.info("server") or {}).get("run_id")
+                if current != run_id:
+                    restored = restore(client, secret=secret)
+                    run_id = current
+                    if restored:
+                        logger.warning("redis lost %d worker user(s) (a restart) — defined again", restored)
             except Exception:  # noqa: BLE001
                 logger.exception("workload redis restore failed")
             if time.monotonic() - last_sweep < sweep_interval_sec:

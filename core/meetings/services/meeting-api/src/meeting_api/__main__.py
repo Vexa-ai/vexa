@@ -401,10 +401,10 @@ def _attach_background_loops(
     async def _bot_redis_restore_loop() -> None:
         # Redis keeps no ACL user across a restart; a live bot's user is defined again from the index
         # (the password is derived, so the bot's own URL is valid again unchanged).
-        interval = float(os.getenv("BOT_REDIS_RESTORE_INTERVAL_S", "15"))
+        interval = float(os.getenv("BOT_REDIS_RESTORE_INTERVAL_S", "1"))
         while True:
             try:
-                restored = await bot_redis.restore()
+                restored = await bot_redis.restore_if_restarted()
                 if restored:
                     log.warning("redis lost %d bot user(s) (a restart?) — defined again", restored)
             except asyncio.CancelledError:
