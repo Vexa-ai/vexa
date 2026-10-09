@@ -12,6 +12,7 @@ from fastapi import APIRouter, Body, HTTPException, Request
 from jsonschema.exceptions import ValidationError
 
 from control_plane import dispatch_sink
+from control_plane.ceiling import refusal, refused
 from control_plane.events import event_to_invocation
 from shared import delegation as delegation_mod
 
@@ -35,6 +36,10 @@ def build(**d) -> APIRouter:
             return "signed"
         return ""
 
+    def _refuse(request: Request, status: int, reason: str, instruction: str) -> HTTPException:
+        """A refusal in the shape every other one has, logged once (`ceiling.refused`)."""
+        return refused(request, status, refusal(reason, instruction), reason=reason)
+
     @router.post("/invocations", status_code=202)
     def invocations(request: Request, invocation: dict = Body(...)):
         """The dispatcher sink — the internal tier, or a routine job agent-api signed when it compiled
@@ -42,11 +47,12 @@ def build(**d) -> APIRouter:
         runs as, so the CALLER is authenticated before the body is read; nobody else is heard."""
         caller = _sink_caller(request, invocation)
         if not caller:
-            raise HTTPException(status_code=401, detail="the dispatch sink takes the internal tier "
-                                                        "or a dispatch agent-api signed")
+            raise _refuse(request, 401, "internal_tier_required",
+                          "the dispatch sink takes the internal tier or a dispatch agent-api signed")
         # A signed job is a routine: it never asks for a person in the loop, whatever it says.
         if caller != "internal" and str(invocation.get("trigger") or "") in delegation_mod.HUMAN_TRIGGERS:
-            raise HTTPException(status_code=403, detail="a signed dispatch runs without a person")
+            raise _refuse(request, 403, "signed_dispatch_runs_unwatched",
+                          "a signed dispatch runs without a person")
         try:
             workload_id = dispatcher.dispatch(invocation)
         except ValidationError as e:  # non-conformant unit.v1 envelope — fail loud (P18)
@@ -56,7 +62,7 @@ def build(**d) -> APIRouter:
     def events(request: Request, event: dict = Body(...)):
         # The event names the person it is about; only the internal tier may say who that is.
         if _sink_caller(request, None) != "internal":
-            raise HTTPException(status_code=401, detail="the event sink takes the internal tier")
+            raise _refuse(request, 401, "internal_tier_required", "the event sink takes the internal tier")
         try:
             invocation = event_to_invocation(event)
         except ValidationError as e:

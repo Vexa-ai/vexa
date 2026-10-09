@@ -121,7 +121,7 @@ def test_a_request_that_names_nobody_reaches_routes_that_need_nobody(client):
     # the route authenticates the dispatcher on its own terms (`dispatch_sink.py`) — its refusal,
     # never the guard's
     r = client.post("/invocations", json={})
-    assert r.status_code == 401 and "dispatch sink" in r.json()["detail"]
+    assert r.status_code == 401 and r.json()["detail"]["reason"] == "internal_tier_required"
     r = client.post("/invocations", json={}, headers={"X-Internal-Secret": INTERNAL})
     assert r.status_code == 400
 
