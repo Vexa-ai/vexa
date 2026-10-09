@@ -5,7 +5,7 @@
  * Usage: node scripts/gates.mjs [readme|isolation|isolation-py|exports|graph|graph-py|schema|
  *                                contract-version|config-contract|python|stack|node|health|access|
  *                                tracing|replay|telemetry|eval|licenses|compose|execution-env|
- *                                lite-makefile|domain-doors|fact-parity|all]
+ *                                lite-makefile|domain-doors|fact-parity|vendor-payload|all]
  */
 import { readdirSync, existsSync, readFileSync, writeFileSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -19,6 +19,7 @@ import { execSync, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { checkDomainDoors, ALLOW_PATH as DOORS_ALLOW } from "./check-domain-doors.mjs";
 import { checkParity, MANIFEST_PATH as PARITY_MANIFEST } from "./check-parity.mjs";
+import { checkVendorPayload, NATIVE_DIR } from "./check-vendor-payload.mjs";
 
 const ROOT = process.cwd();
 const SKIP = new Set(["node_modules", "dist", ".turbo", "__pycache__", "test-results", "playwright-report", "coverage"]);
@@ -1577,7 +1578,7 @@ function gateDomainDoors() {
   return true;
 }
 
-const GATES = { readme: gateReadme, "lite-makefile": gateLiteMakefile, "docs-version": gateDocsVersion, dataflow: gateDataflow, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, "config-contract": gateConfigContract, "db-schema": gateDbSchema, "db-budget": gateDbBudget, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, "image-licenses": gateImageLicenses, "runtime-parity": gateRuntimeParity, compose: gateCompose, "execution-env": gateExecutionEnv, "test-isolation": gateTestIsolation, "arch-report": gateArchReport, parity: gateParity, "compose-stress": gateComposeStress, "compose-chaos": gateComposeChaos, "eval-baseline": gateEvalBaseline, "contract-conformance": gateContractConformance, "domain-doors": gateDomainDoors, "fact-parity": gateFactParity };
+const GATES = { readme: gateReadme, "lite-makefile": gateLiteMakefile, "docs-version": gateDocsVersion, dataflow: gateDataflow, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, "config-contract": gateConfigContract, "db-schema": gateDbSchema, "db-budget": gateDbBudget, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, "image-licenses": gateImageLicenses, "runtime-parity": gateRuntimeParity, compose: gateCompose, "execution-env": gateExecutionEnv, "test-isolation": gateTestIsolation, "arch-report": gateArchReport, parity: gateParity, "compose-stress": gateComposeStress, "compose-chaos": gateComposeChaos, "eval-baseline": gateEvalBaseline, "contract-conformance": gateContractConformance, "domain-doors": gateDomainDoors, "fact-parity": gateFactParity, "vendor-payload": gateVendorPayload };
 // gate:fact-parity (P23 — one writer per fact) — the generalisation of the ONE control case in this
 // repository. `config_preflight.py` is vendored byte-identically into seven packages and has never
 // drifted, because check 2 of gate:config-contract fails the build on byte-inequality. Every other
@@ -1598,6 +1599,21 @@ function gateFactParity() {
   if (!(res.manifest.facts || []).length) { console.log("  ✓ gate:fact-parity — no parity manifest yet (green-on-empty)"); return true; }
   if (res.errs.length) return fail([`fact-parity (P23, one writer per fact) — facts written twice that disagree:`, ...res.errs.map((e) => "   " + e)]);
   console.log(`  ✓ gate:fact-parity — ${res.enforced.length} enforced fact(s) agree across ${res.enforced.reduce((n, f) => n + f.sites.length, 0)} site(s) · ${res.ledger.length} on the drift ledger, each pinned and naming its pending decision (\`node scripts/check-parity.mjs --ledger\`)`);
+  return true;
+}
+
+// gate:vendor-payload (P17, ADR-0039) — the optional operator-supplied native meeting runtime is not a
+// dependency, and P17 allows it only on conditions this gate proves: no tracked payload; the
+// native-sdk-exclusion block, deny-by-default under native-meeting/native/, byte-identical in .gitignore
+// and both image build contexts (a parity fact); no manifest, image recipe or workflow that fetches or
+// builds it; nothing a stock install runs that names it; and every library a binding.gyp links logged in
+// license-exceptions.json. The rule and its reasons live in scripts/check-vendor-payload.mjs.
+function gateVendorPayload() {
+  let res;
+  try { res = checkVendorPayload(ROOT); }
+  catch (e) { return fail([`vendor-payload: the checker itself failed — ${errText(e).slice(0, 800)}`]); }
+  if (res.errs.length) return fail([`vendor-payload (P17, ADR-0039) — the optional native runtime leaked into what Vexa ships:`, ...res.errs.map((e) => "   " + e)]);
+  console.log(`  ✓ gate:vendor-payload — ${res.tracked} tracked file(s), no native payload · ${NATIVE_DIR}/ denies by default in .gitignore and both build contexts (${res.probes} probes ignored, ${res.reincluded} source file(s) re-included) · ${res.scanned} stock file(s) and ${res.installers} manifest(s) name no native path · linked ${res.linked.join(", ") || "nothing"}, each logged`);
   return true;
 }
 

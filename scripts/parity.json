@@ -702,6 +702,29 @@
         "deploy",
         "clients"
       ]
+    },
+    {
+      "id": "native-sdk-exclusion",
+      "fact": "what of the optional operator-supplied native meeting SDK may never enter git or an image build context",
+      "kind": "literal",
+      "enforced": true,
+      "canonical": ".gitignore",
+      "how_to_agree": "edit the native-sdk-exclusion block in all three files in one change; the blocks are byte-identical",
+      "why": "The SDK, its headers, its bundled Qt and the compiled wrapper are operator files (P17, ADR-0039). Git reads .gitignore, the bot, meeting-api and gateway images read the root .dockerignore, and the Lite image reads deploy/lite/Dockerfile.lite.dockerignore, so the same exclusion is written three times. Before this fact the two dockerignores each said they mirrored a nested .gitignore, and nothing checked it. gate:vendor-payload requires this fact, and proves on the .gitignore copy that the block denies by default under native-meeting/native/.",
+      "sites": [
+        {
+          "path": ".gitignore",
+          "pattern": "^# >>> native-sdk-exclusion[^\\n]*\\n([\\s\\S]*?)^# <<< native-sdk-exclusion"
+        },
+        {
+          "path": ".dockerignore",
+          "pattern": "^# >>> native-sdk-exclusion[^\\n]*\\n([\\s\\S]*?)^# <<< native-sdk-exclusion"
+        },
+        {
+          "path": "deploy/lite/Dockerfile.lite.dockerignore",
+          "pattern": "^# >>> native-sdk-exclusion[^\\n]*\\n([\\s\\S]*?)^# <<< native-sdk-exclusion"
+        }
+      ]
     }
   ]
 }

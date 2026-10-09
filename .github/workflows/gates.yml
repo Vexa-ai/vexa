@@ -50,11 +50,13 @@ jobs:
       - run: pnpm gate:config-contract
       - run: pnpm gate:domain-doors
       - run: pnpm gate:fact-parity
+      - run: pnpm gate:vendor-payload
       - run: pnpm gate:db-schema
       - run: pnpm gate:db-budget
       - run: pnpm gate:dataflow
       - run: pnpm gate:calm
       - run: pnpm gate:licenses
+      - run: pnpm gate:image-licenses
       # Tests OF the gate scripts (the instruments the steps above trust). scripts/ is not a
       # workspace package, so `pnpm test` — turbo run test — never reaches it: this step is the
       # only lane these files run in. Kept here, beside the gates they cover, rather than in the

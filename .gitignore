@@ -36,3 +36,21 @@ releases/*/HANDOFF.md
 
 # local shim config (may carry a hosted-gateway key)
 deploy/compose/llm-shim/config.local.yaml
+
+# Optional operator-supplied native meeting SDK (P17, ADR-0039): its archive, headers, libraries,
+# bundled Qt and the compiled wrapper are operator files. They never enter git or an image build
+# context, even when a local checkout holds them. Everything under native-meeting/native/ is denied
+# unless re-included by name below.
+# >>> native-sdk-exclusion (P17 · ADR-0039 · byte-identical in .gitignore, .dockerignore, deploy/lite/Dockerfile.lite.dockerignore; scripts/parity.json · gate:vendor-payload)
+core/meetings/services/bot/runtime/native-meeting/native/*
+!core/meetings/services/bot/runtime/native-meeting/native/README.md
+!core/meetings/services/bot/runtime/native-meeting/native/binding.gyp
+!core/meetings/services/bot/runtime/native-meeting/native/zoom_wrapper.cpp
+core/meetings/services/bot/runtime/native-meeting/**/zoom_meeting_sdk
+core/meetings/services/bot/runtime/native-meeting/**/sdk
+core/meetings/services/bot/runtime/native-meeting/**/build
+core/meetings/services/bot/runtime/native-meeting/**/*.node
+core/meetings/services/bot/runtime/native-meeting/**/*.so
+core/meetings/services/bot/runtime/native-meeting/**/*.so.*
+core/meetings/services/bot/runtime/native-meeting/**/*.tar.*
+# <<< native-sdk-exclusion
