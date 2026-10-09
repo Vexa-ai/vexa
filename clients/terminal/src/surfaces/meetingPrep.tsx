@@ -26,6 +26,7 @@ import { createSharedWorkspace, listSharedMemberships, listWorkspaceTree, mintIn
 import { findBriefNote, isExampleNote } from "./briefNote";
 import { manageTabDescriptor } from "./workspaceManage";
 import { defaultBotName } from "./defaultBotName";
+import { platformSlug, resolveSendAddress, meetingUrlField } from "./meetingSendUrl";
 import { ASK_CHAT_EVENT } from "../canvas/actions";
 
 const field = {
@@ -172,6 +173,10 @@ function MeetingPrepTab({ params }: TabProps) {
   const m: MeetingMock | undefined = found ?? (isDraft ? DRAFT_M : undefined);
   const readOnly = !!m?.shared;
   const isIntent = m?.live_status === "idle" || m?.live_status === "scheduled";
+  // Can the bot be ADDRESSED for this row? A native id is not enough: zoom/jitsi have no
+  // server-side URL template, so a row with no stored link is unsendable and the button says so
+  // rather than offering a send whose only answer is a 422 (#1681).
+  const sendAddress = resolveSendAddress(platformSlug(m?.platform ?? ""), m?.native_id, m?.meeting_url);
 
   const [title, setTitle] = useState("");
   const [link, setLink] = useState("");
@@ -239,12 +244,14 @@ function MeetingPrepTab({ params }: TabProps) {
 
   const sendNow = async () => {
     if (!m?.native_id) return;
+    // Zoom/jitsi cannot be addressed by meeting id alone — meeting-api has no URL template for them
+    // and refuses the spawn 422. Say so here rather than round-tripping to find out (#1681).
+    if (!sendAddress.ok) { setErr(sendAddress.reason); setDenial(null); return; }
     setBusy(true); setErr(null); setDenial(null);
     try {
-      const platformSlug = m.platform === "Google Meet" ? "google_meet" : m.platform.toLowerCase().replace(/\s+/g, "_");
       const r = await fetch("/api/bots", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ platform: platformSlug, native_meeting_id: m.native_id, ...(m.meeting_url ? { meeting_url: m.meeting_url } : {}), bot_name: defaultBotName() }),
+        body: JSON.stringify({ platform: platformSlug(m.platform), native_meeting_id: m.native_id, ...meetingUrlField(sendAddress), bot_name: defaultBotName() }),
       });
       // The body used to be read as raw TEXT and rethrown as a bare Error, so a denial payload
       // reached the presenter JSON-shaped and came out as "Something went wrong". Read it as the
@@ -484,9 +491,11 @@ function MeetingPrepTab({ params }: TabProps) {
             </button>
           )}
           {!readOnly && (
-            <button disabled={busy || !m.native_id} onClick={() => void sendNow()}
-              title={m.native_id ? "Send the bot now instead of waiting" : "Attach a meeting link first"}
-              style={{ background: "none", border: "none", color: m.native_id ? "var(--accent)" : "var(--t3)", fontSize: 12, fontWeight: 600, cursor: m.native_id ? "pointer" : "default", padding: 0, borderBottom: `1px dotted ${m.native_id ? "var(--accent)" : "var(--t3)"}` }}>
+            <button disabled={busy || !m.native_id || !sendAddress.ok} onClick={() => void sendNow()}
+              title={!m.native_id ? "Attach a meeting link first"
+                : !sendAddress.ok ? sendAddress.reason
+                : "Send the bot now instead of waiting"}
+              style={{ background: "none", border: "none", color: m.native_id && sendAddress.ok ? "var(--accent)" : "var(--t3)", fontSize: 12, fontWeight: 600, cursor: m.native_id && sendAddress.ok ? "pointer" : "default", padding: 0, borderBottom: `1px dotted ${m.native_id && sendAddress.ok ? "var(--accent)" : "var(--t3)"}` }}>
               Send notetaker now
             </button>
           )}
