@@ -157,7 +157,42 @@ test("every linked native library has a manifest row, and the optional runtime's
   });
 });
 
+test("a Makefile or shell script that fetches or builds the payload fails, as a manifest does", () => withFixture({
+  "deploy/lite/Makefile": "sdk:\n\tcurl -o sdk.tar.xz https://example.invalid/zoom_meeting_sdk.tar.xz\n",
+  "tools/build-native.sh": "#!/bin/sh\nnode-gyp rebuild\n",
+}, (root) => {
+  const e = errsOf(root);
+  assert.ok(e.some((x) => x.startsWith("fetched: deploy/lite/Makefile:2")), e.join("\n"));
+  assert.ok(e.some((x) => x.startsWith("fetched: tools/build-native.sh:2")), e.join("\n"));
+}));
+
+test("only the declared subprocess loads a native addon", () => withFixture({
+  [`${dirname(NATIVE_DIR)}/worker.cjs`]: "const {ZoomSDK}=require(process.env.ZOOM_SDK_ADDON);\n",
+  "core/meetings/services/bot/src/sneaky.ts": "const m = require('./build/Release/zoom_sdk_wrapper.node');\n",
+  "tools/also.mjs": "process.dlopen(module, '/opt/x.node');\n",
+}, (root) => {
+  const e = errsOf(root).filter((x) => x.startsWith("reached:"));
+  assert.equal(e.length, 2, e.join("\n"));
+  assert.ok(e.some((x) => x.includes("core/meetings/services/bot/src/sneaky.ts:1")));
+  assert.ok(e.some((x) => x.includes("tools/also.mjs:1")));
+  assert.equal(checkVendorPayload(root).loaders, 1, "the subprocess's own load is counted, not refused");
+}));
+
+test("the bot manifest may name only its sanctioned mentions of the native path", () => {
+  withFixture({ "core/meetings/services/bot/package.json": JSON.stringify({ name: "bot", dependencies: { "@vexa/zoom-sdk-capture": "workspace:*" },
+    scripts: { test: "node --test runtime/native-meeting/test/*.test.mjs" } }, null, 2) }, (root) => {
+    assert.deepEqual(errsOf(root), []);
+  });
+  withFixture({ "core/meetings/services/bot/package.json": JSON.stringify({ name: "bot", dependencies: { "@vexa/join": "workspace:*" },
+    scripts: { start: "node runtime/native-meeting/join-probe.mjs" } }, null, 2) }, (root) => {
+    assert.ok(errsOf(root).some((x) => x.startsWith("unreferenced: core/meetings/services/bot/package.json") && x.includes("native-meeting")));
+  });
+});
+
 test("payload names and linked libraries are read the way the gate claims", () => {
+  assert.equal(isPayload(`${NATIVE_DIR}/zoom-meeting-sdk-linux_x86_64-6.7.2.tar.xz`), "native SDK archive");
+  assert.equal(isPayload("downloads/zoom-meeting-sdk.zip"), "native SDK archive");
+  assert.equal(isPayload("docs/assets/diagram.zip"), null);
   assert.equal(isPayload("a/b/zoom_sdk_wrapper.node"), "compiled Node addon (.node)");
   assert.equal(isPayload("lib/libQt5Core.so.5"), "shared object (.so)");
   assert.equal(isPayload("a/libmeetingsdk.so"), "native meeting SDK library (libmeetingsdk*)");

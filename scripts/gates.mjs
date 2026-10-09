@@ -1606,11 +1606,13 @@ function gateFactParity() {
 }
 
 // gate:vendor-payload (P17, ADR-0039) — the optional operator-supplied native meeting runtime is not a
-// dependency, and P17 allows it only on conditions this gate proves: no tracked payload; the
-// native-sdk-exclusion block, deny-by-default under native-meeting/native/, byte-identical in .gitignore
-// and both image build contexts (a parity fact); no manifest, image recipe or workflow that fetches or
-// builds it; nothing a stock install runs that names it; and every library a binding.gyp links logged in
-// license-exceptions.json. The rule and its reasons live in scripts/check-vendor-payload.mjs.
+// dependency, and P17 allows it only on conditions this gate proves: no tracked payload (archives
+// included); the native-sdk-exclusion block, deny-by-default under native-meeting/native/, byte-identical
+// in .gitignore and both image build contexts (a parity fact); no manifest, image recipe, workflow,
+// Makefile or shell script that fetches or builds it; only the declared subprocess loads an addon;
+// nothing a stock install runs or declares names it, bar named and reasoned mentions; and every library a
+// binding.gyp links logged in license-exceptions.json. The rule and its reasons live in
+// scripts/check-vendor-payload.mjs.
 function gateVendorPayload() {
   let res;
   try { res = checkVendorPayload(ROOT); }

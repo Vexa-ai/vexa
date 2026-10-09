@@ -17,12 +17,17 @@
  *                 holds. The block DENIES BY DEFAULT under `native-meeting/native/` (a list of names
  *                 admits an SDK unpacked under any other name; security pass 3, D-11) and re-includes only
  *                 tracked, non-payload files. Git must ignore payload-shaped and unknown names there.
- *   fetched       no package manifest, image recipe or workflow names the payload or builds the wrapper,
- *                 so nothing Vexa runs downloads or compiles it.
+ *   fetched       no package manifest, image recipe, workflow, Makefile or shell script names the payload or
+ *                 builds the wrapper, so nothing Vexa runs downloads or compiles it.
+ *   reached       only the declared subprocess (the `operatorSupplied` row's `subprocess`) loads a native
+ *                 addon: no other tracked code `require`s a `.node` file, the wrapper, or the addon path
+ *                 from `ZOOM_SDK_ADDON`, and none calls `process.dlopen`.
  *   unreferenced  nothing a stock install builds or runs names the native path: the bot's `src/`, its
- *                 image recipe and entrypoint, meeting-api and runtime sources (stock dispatch), Compose,
- *                 Helm and Lite. The exclusion block, and comments in the ignore files that carry it,
- *                 are the one sanctioned mention and are skipped.
+ *                 package manifest, image recipe and entrypoint, meeting-api and runtime sources (stock
+ *                 dispatch), Compose, Helm and Lite. The exclusion block, and comments in the ignore files
+ *                 that carry it, are skipped; so is each entry of `SANCTIONED`, a named mention with its
+ *                 reason (the bot's manifest declares the vendor-neutral capture decoder the operator-run
+ *                 probes resolve through it).
  *   logged        every native library a tracked `binding.gyp` links has a row in
  *                 `license-exceptions.json`: `operatorSupplied` for the optional runtime, `categoryB` for a
  *                 weak-copyleft library. An `operatorSupplied` row names the sealed contracts its
@@ -60,6 +65,8 @@ export function isPayload(path) {
   if (name === "zoom_sdk.h") return "native meeting SDK header (zoom_sdk.h)";
   if (extname(name) === ".node") return "compiled Node addon (.node)";
   if (/\.so(\.\d+)*$/.test(name)) return "shared object (.so)";
+  if (/\.(zip|tgz|tar|tar\.(gz|xz|bz2|zst))$/i.test(name) && (/zoom|meeting.?sdk/i.test(name) || p.startsWith(`${NATIVE_DIR}/`)))
+    return "native SDK archive";
   return null;
 }
 
@@ -67,6 +74,7 @@ export function isPayload(path) {
 export const PATH_NEEDLES = /native-meeting|zoom_sdk_wrapper|zoom_wrapper|meetingsdk|zoom_meeting_sdk|zoom_sdk\.h|qt_libs|ZOOM_SDK_|@vexa\/zoom-sdk-capture|@vexa\/join\/node|sdk-join\.v1|sdk-capture\.v1/;
 export const REFERENCE_SCOPES = [
   "core/meetings/services/bot/src/",
+  "core/meetings/services/bot/package.json",
   "core/meetings/services/bot/Dockerfile",
   "core/meetings/services/bot/Dockerfile.mock",
   "core/meetings/services/bot/entrypoint.sh",
@@ -76,9 +84,21 @@ export const REFERENCE_SCOPES = [
   "deploy/helm/",
   "deploy/lite/",
 ];
+// A mention of the native path in a stock file that is a reviewed decision, not wiring: the file, the
+// one name it may carry, and why. Anything else in the file is still checked.
+export const SANCTIONED = [
+  { path: "core/meetings/services/bot/package.json", needle: "@vexa/zoom-sdk-capture",
+    reason: "the vendor-neutral TypeScript decoder of sdk-capture.v1 frames, which the operator-run probes under native-meeting/ resolve through the bot package; it links nothing, and no stock entrypoint imports it (the bot's src/ is in scope)" },
+  { path: "core/meetings/services/bot/package.json", needle: "runtime/native-meeting/test/*.test.mjs",
+    reason: "the bot's test scripts run the native path's offline tests (its IPC and contracts, with a fake addon); they load no SDK and are no entrypoint" },
+];
+// What loads a native addon: a `require` of a `.node` file, of the wrapper, or of the addon path the
+// operator configures, and `process.dlopen`.
+export const ADDON_LOAD = /require\(\s*(?:process\.env\.ZOOM_SDK_ADDON|[^)]*(?:\.node|zoom_sdk_wrapper)[^)]*)\)|process\.dlopen\s*\(/;
+const isCode = (p) => /\.(js|mjs|cjs|ts|tsx)$/.test(p) && !/(^|\/)(tests?|__tests__)\//.test(p) && !/\.(test|spec)\.[cm]?[jt]sx?$/.test(p);
 // Names that mean "the payload itself, or the build of the wrapper", in a manifest that installs things.
 export const PAYLOAD_NEEDLES = /meetingsdk|zoom_meeting_sdk|zoom_sdk_wrapper|zoom_sdk\.h|qt_libs|binding\.gyp|node-gyp/;
-const isInstaller = (p) => /(^|\/)(package\.json|pyproject\.toml|Dockerfile[^/]*)$/.test(p) || p.startsWith(".github/workflows/");
+const isInstaller = (p) => /(^|\/)(package\.json|pyproject\.toml|Dockerfile[^/]*|Makefile[^/]*|[^/]*\.mk|[^/]*\.sh)$/.test(p) || p.startsWith(".github/workflows/");
 // Prose about the path is not wiring of it.
 const PROSE = /\.(md|mdx)$/;
 
@@ -180,12 +200,28 @@ export function checkVendorPayload(root = DEFAULT_ROOT) {
     if (ignoreFile) text = withoutBlock(text);
     if (referenceScope) scanned++;
     if (installer) installers++;
+    const sanctioned = SANCTIONED.filter((s) => s.path === p).map((s) => s.needle);
     text.split("\n").forEach((line, i) => {
       if (ignoreFile && line.trimStart().startsWith("#")) return;
+      if (sanctioned.some((n) => line.includes(n)) && !line.replace(new RegExp(sanctioned.map((n) => n.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")).join("|"), "g"), "").match(PATH_NEEDLES)) return;
       const ref = referenceScope && line.match(PATH_NEEDLES);
       if (ref) errs.push(`unreferenced: ${p}:${i + 1} names the native path (\`${ref[0]}\`). The optional runtime is off by default and absent from every stock entrypoint and deployment (P17, ADR-0039).`);
       const got = installer && line.match(PAYLOAD_NEEDLES);
       if (got) errs.push(`fetched: ${p}:${i + 1} names the native payload or its build (\`${got[0]}\`). Vexa never downloads, installs or compiles the optional runtime; the operator does (P17, ADR-0039).`);
+    });
+  }
+
+  // reached: only the declared subprocess loads a native addon
+  const subprocesses = new Set((() => { try { return (JSON.parse(read(EXCEPTIONS_FILE) || "{}").operatorSupplied || []).map((r) => r.subprocess).filter(Boolean); } catch { return []; } })());
+  let loaders = 0;
+  for (const p of tracked.filter(isCode)) {
+    if (p.startsWith("scripts/check-vendor-payload")) continue;
+    const text = read(p);
+    if (text === null) continue;
+    text.split("\n").forEach((line, i) => {
+      if (!ADDON_LOAD.test(line)) return;
+      if (subprocesses.has(p)) { loaders++; return; }
+      errs.push(`reached: ${p}:${i + 1} loads a native addon (\`${line.match(ADDON_LOAD)[0]}\`). Only the declared subprocess may (${[...subprocesses].join(", ") || "none declared"}): the optional runtime is reached from a disposable child process only (P17, ADR-0039).`);
     });
   }
 
@@ -213,7 +249,7 @@ export function checkVendorPayload(root = DEFAULT_ROOT) {
       errs.push(`logged: operatorSupplied row "${id}" names subprocess ${r.subprocess}, which is not a tracked file.`);
   }
 
-  return { errs, tracked: tracked.length, reincluded, probes: PROBES.length, scanned, installers, linked: [...new Set(linked)].sort(), operatorSupplied: (exceptions.operatorSupplied || []).length };
+  return { errs, tracked: tracked.length, reincluded, probes: PROBES.length, scanned, installers, loaders, linked: [...new Set(linked)].sort(), operatorSupplied: (exceptions.operatorSupplied || []).length };
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
