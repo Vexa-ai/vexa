@@ -37,9 +37,11 @@ def test_the_entrypoint_refuses_an_unset_or_published_password():
 
 
 def test_the_refused_values_are_composes():
+    """One list: compose's postgres, the entrypoint and `make up` (which replaces such a value)."""
     compose = re.search(r'case "\$\$POSTGRES_PASSWORD" in\n\s*(\S+)\)', COMPOSE.read_text()).group(1)
     lite = re.search(r"^\s*(\S+)\)$", _refusal_block(), flags=re.M).group(1)
-    assert lite == compose
+    make = re.search(r'case "\$\$DB_PW" in \\\n\s*(\S+)\)', (LITE / "Makefile").read_text()).group(1)
+    assert lite == compose == make
 
 
 def test_no_lite_surface_carries_a_literal_password():
