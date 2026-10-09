@@ -956,4 +956,35 @@ if helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --is-upgrade
   echo "  FAIL: the postgres-password hook rendered without a published live Secret"; fail=1
 else echo "  OK: no postgres-password hook without a published live Secret"; fi
 
+# N-7: the namespace default-deny, both directions, with explicit allows for the chart's Pods.
+np_doc() { awk -v n="name: $1" '$0 ~ "^  "n"$"{f=1} f{print} f&&/^---/{exit}' <<< "$RENDER"; }
+dd="$(np_doc vexa-vexa-default-deny)"
+if grep -q '^  podSelector: {}$' <<< "$dd" && grep -q 'policyTypes: \[Ingress, Egress\]' <<< "$dd"; then
+  echo "  OK: a namespace-wide default-deny, ingress and egress"
+else echo "  FAIL: no namespace-wide default-deny"; fail=1; fi
+for c in gateway terminal admin-api mcp postgres redis agent-api meeting-api runtime; do
+  pol="$(np_doc "vexa-vexa-$c-ingress")"
+  if grep -q "app.kubernetes.io/component: $c$" <<< "$pol"; then :
+  else echo "  FAIL: no ingress allow for $c under the default-deny"; fail=1; fi
+done
+echo "  OK: every serving component has an explicit ingress allow"
+pg="$(np_doc vexa-vexa-postgres-ingress)"
+if grep -q 'values: \[admin-api, meeting-api, pgbouncer, migrations\]' <<< "$pg" \
+   && ! grep -qE 'runtime.managed|component: (gateway|runtime|agent-api|mcp|terminal)$' <<< "$pg"; then
+  echo "  OK: only the database's credential holders reach postgres"
+else echo "  FAIL: postgres admits more than its credential holders"; fail=1; fi
+cpe="$(np_doc vexa-vexa-control-plane-egress)"
+if grep -q 'values:' <<< "$cpe" && grep -A3 'operator: NotIn' <<< "$cpe" | grep -q -- '- redis' \
+   && grep -A1 'except:' <<< "$cpe" | grep -q -- '- 169.254.0.0/16'; then
+  echo "  OK: control-plane egress leaves out postgres and redis and the metadata range"
+else echo "  FAIL: control-plane egress"; fail=1; fi
+if grep -q -- '- 10.0.0.0/8' <<< "$cpe"; then echo "  FAIL: control-plane egress refuses private ranges by default"; fail=1; fi
+off="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set networkPolicy.defaultDeny.enabled=false)"
+if grep -q 'name: vexa-vexa-default-deny' <<< "$off"; then echo "  FAIL: defaultDeny.enabled=false still renders the default-deny"; fail=1
+else echo "  OK: networkPolicy.defaultDeny.enabled=false renders no default-deny"; fi
+fl_render="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true)"
+fl="$(awk '/^  name: vexa-vexa-flows-api-ingress$/{f=1} f{print} f&&/^---/{exit}' <<< "$fl_render")"
+if grep -q 'vexa.role: worker' <<< "$fl"; then echo "  OK: flows-api admits the chart's Pods and agent workers"
+else echo "  FAIL: flows-api ingress under the default-deny"; fail=1; fi
+
 [ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }

@@ -1,0 +1,253 @@
+{{- if and .Values.networkPolicy.enabled .Values.networkPolicy.defaultDeny.enabled }}
+{{- /*
+THE NAMESPACE DEFAULT: NOTHING IN, NOTHING OUT, EXCEPT WHAT A POLICY ALLOWS.
+
+`default-deny` selects every Pod in the release's namespace, so a Pod no policy below names — another
+application's, or one added by hand — takes no connection and makes none. Install Vexa in a namespace
+of its own, or give those Pods their own policies.
+
+What the chart's Pods are allowed (the per-service policies in networkpolicy.yaml,
+networkpolicy-workloads.yaml and networkpolicy-credential-broker.yaml add to these):
+
+  INGRESS
+    gateway, terminal, dashboard     from anywhere, on their own port — they are the front doors
+    admin-api, mcp, pgbouncer        from the chart's Pods
+    flows-api                        from the chart's Pods and agent workers (the timeline)
+    agent-api, meeting-api, runtime  their own policies (named callers only)
+    credential-broker                its own policy (agent-api and the terminal)
+    postgres                         from the services that hold its credentials: admin-api,
+                                     meeting-api, pgbouncer, the flows tier, the migrations Job
+    redis                            from the chart's Pods and the Pods the runtime spawns
+    everything above                 + networkPolicy.controlPlane.extraIngress (a monitoring scraper)
+
+  EGRESS
+    postgres, redis                  nothing
+    every other chart Pod            DNS; the chart's Pods; and any address outside
+                                     networkPolicy.controlPlane.egressExcept (the cloud metadata
+                                     range by default) — databases, object stores, model providers,
+                                     STT, mail and webhook targets live wherever the operator keeps
+                                     them, and the Kubernetes API (runtime, the postgres-password
+                                     hook) sits on a private address
+    the Pods the runtime spawns      their own policies (networkpolicy-workloads.yaml)
+
+All of this is inert without a CNI that enforces NetworkPolicy.
+*/}}
+{{- $sel := include "vexa.selectorLabels" . | fromYaml }}
+{{- $cp := .Values.networkPolicy.controlPlane }}
+{{- $flows := list "flows-worker" "flows-api" "flows-mailbox" }}
+{{- $chartPods := list (dict "podSelector" (dict "matchLabels" $sel)) (dict "podSelector" (dict "matchExpressions" (list (dict "key" "app.kubernetes.io/component" "operator" "In" "values" $flows)))) }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "vexa.componentName" (list . "default-deny") }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+{{- /* egress of every chart Pod but the two datastores */}}
+{{- $egressSelectors := list (dict "matchLabels" $sel "matchExpressions" (list (dict "key" "app.kubernetes.io/component" "operator" "NotIn" "values" (list "postgres" "redis")))) (dict "matchExpressions" (list (dict "key" "app.kubernetes.io/component" "operator" "In" "values" $flows))) }}
+{{- range $i, $podSelector := $egressSelectors }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "vexa.componentName" (list $ (ternary "control-plane-egress" "flows-egress" (eq $i 0))) }}
+  labels:
+    {{- include "vexa.labels" $ | nindent 4 }}
+spec:
+  podSelector:
+    {{- toYaml $podSelector | nindent 4 }}
+  policyTypes: [Egress]
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - to:
+        {{- toYaml $chartPods | nindent 8 }}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            {{- with $cp.egressExcept.ipv4 }}
+            except:
+              {{- toYaml . | nindent 14 }}
+            {{- end }}
+        {{- if $.Values.networkPolicy.workloads.ipv6 }}
+        - ipBlock:
+            cidr: ::/0
+            {{- with $cp.egressExcept.ipv6 }}
+            except:
+              {{- toYaml . | nindent 14 }}
+            {{- end }}
+        {{- end }}
+    {{- with $cp.extraEgress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+---
+{{- end }}
+{{- /* the front doors */}}
+{{- range $door := list (dict "c" "gateway" "on" $.Values.gateway.enabled "port" 8000) (dict "c" "terminal" "on" $.Values.terminal.enabled "port" 3000) (dict "c" "dashboard" "on" $.Values.dashboard.enabled "port" 3000) }}
+{{- if $door.on }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "vexa.componentName" (list $ (printf "%s-ingress" $door.c)) }}
+  labels:
+    {{- include "vexa.labels" $ | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- toYaml $sel | nindent 6 }}
+      app.kubernetes.io/component: {{ $door.c }}
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - port: {{ $door.port }}
+          protocol: TCP
+---
+{{- end }}
+{{- end }}
+{{- /* internal services the chart's own Pods call */}}
+{{- range $svc := list (dict "c" "admin-api" "on" $.Values.adminApi.enabled "port" 8001) (dict "c" "mcp" "on" $.Values.mcp.enabled "port" 8010) (dict "c" "pgbouncer" "on" $.Values.pgbouncer.enabled "port" 5432) }}
+{{- if $svc.on }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "vexa.componentName" (list $ (printf "%s-ingress" $svc.c)) }}
+  labels:
+    {{- include "vexa.labels" $ | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- toYaml $sel | nindent 6 }}
+      app.kubernetes.io/component: {{ $svc.c }}
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - port: {{ $svc.port }}
+          protocol: TCP
+      from:
+        {{- toYaml $chartPods | nindent 8 }}
+---
+{{- end }}
+{{- end }}
+{{- if .Values.flows.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "vexa.componentName" (list . "flows-api-ingress") }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: flows-api
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - port: 18200
+          protocol: TCP
+      from:
+        {{- toYaml $chartPods | nindent 8 }}
+        - podSelector:
+            matchLabels:
+              runtime.managed: "true"
+              vexa.role: worker
+---
+{{- end }}
+{{- if .Values.postgres.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "vexa.componentName" (list . "postgres-ingress") }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- toYaml $sel | nindent 6 }}
+      app.kubernetes.io/component: postgres
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - port: 5432
+          protocol: TCP
+      from:
+        - podSelector:
+            matchLabels:
+              {{- toYaml $sel | nindent 14 }}
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values: [admin-api, meeting-api, pgbouncer, migrations]
+        - podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values: {{ $flows | toJson }}
+        {{- with .Values.networkPolicy.postgres.extraFrom }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+---
+{{- end }}
+{{- if .Values.redis.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "vexa.componentName" (list . "redis-ingress") }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- toYaml $sel | nindent 6 }}
+      app.kubernetes.io/component: redis
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - port: 6379
+          protocol: TCP
+      from:
+        {{- toYaml $chartPods | nindent 8 }}
+        - podSelector:
+            matchLabels:
+              runtime.managed: "true"
+---
+{{- end }}
+{{- if and (include "vexa.credentialBrokerEnabled" .) (not .Values.credentialBroker.networkPolicy.enabled) }}
+{{- /* the broker's own policy is off: it still answers the chart's Pods */}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "vexa.componentName" (list . "credential-broker-ingress") }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- toYaml $sel | nindent 6 }}
+      app.kubernetes.io/component: credential-broker
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        {{- toYaml $chartPods | nindent 8 }}
+---
+{{- end }}
+{{- with .Values.networkPolicy.controlPlane.extraIngress }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "vexa.componentName" (list $ "control-plane-extra-ingress") }}
+  labels:
+    {{- include "vexa.labels" $ | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- toYaml $sel | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    {{- toYaml . | nindent 4 }}
+{{- end }}
+{{- end }}

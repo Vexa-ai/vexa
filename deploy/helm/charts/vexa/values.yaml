@@ -220,6 +220,26 @@ mcp:
 # NetworkPolicy.
 networkPolicy:
   enabled: true
+  # A namespace-wide default-deny (both directions) with explicit allows for the chart's Pods
+  # (templates/networkpolicy-namespace.yaml). It also denies every Pod in the namespace that is not
+  # the chart's, so install Vexa in a namespace of its own or give those Pods their own policies.
+  defaultDeny:
+    enabled: true
+  controlPlane:
+    # The chart's Pods (all but postgres and redis) may reach DNS, each other, and any address outside
+    # these ranges — external databases, object stores, model providers, STT, mail, webhooks and the
+    # Kubernetes API sit wherever the cluster puts them. The default keeps them off the cloud metadata
+    # range; empty it if a control-plane Pod authenticates through the metadata server (GKE Workload
+    # Identity, EKS Pod Identity), or add your private ranges to tighten it.
+    egressExcept:
+      ipv4: [169.254.0.0/16]
+      ipv6: ["fe80::/10"]
+    extraEgress: []
+    # NetworkPolicy ingress rules added to every chart Pod — e.g. a Prometheus in another namespace.
+    extraIngress: []
+  postgres:
+    # More callers of the bundled database (e.g. the adoption panel's Grafana), as NetworkPolicy peers.
+    extraFrom: []
   agentApi:
     extraFrom: []
   meetingApi:
