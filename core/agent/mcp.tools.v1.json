@@ -500,7 +500,8 @@
         "message_id",
         "connection_id"
       ],
-      "note": "The same door as gmail_read, under the name the inbox tool pairs with."
+      "alias_of": "gmail_read",
+      "note": "An alias of gmail_read (the same door), under the name the inbox tool pairs with."
     },
     {
       "name": "gmail_draft_create",

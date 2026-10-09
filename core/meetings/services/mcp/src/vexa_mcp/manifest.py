@@ -197,6 +197,7 @@ def validate(doc: dict) -> dict:
         else:
             if route.get("method") not in METHODS or not str(route.get("path", "")).startswith("/"):
                 raise ManifestError(f"{domain}/{name}: route needs a method and an absolute path")
+    _check_aliases(domain, doc.get("tools") or [])
     forward = forward_of(doc)
     if forward:
         for t in doc.get("tools") or []:
@@ -210,6 +211,34 @@ def validate(doc: dict) -> dict:
         if not isinstance(ent, dict) or not ent.get("route") or not ent.get("answers"):
             raise ManifestError(f"{domain}: entitlement needs a route and what it answers")
     return doc
+
+
+def _check_aliases(domain: str, tools: list) -> None:
+    """One route, one name — a second name for a route declares `alias_of` the first one and takes
+    exactly its arguments, so the two cannot drift into two different tools on one door."""
+    first: Dict[tuple, dict] = {}
+    by_name = {t.get("name"): t for t in tools}
+    for t in tools:
+        route = t.get("route") or {}
+        key = (route.get("method"), route.get("path"))
+        alias = t.get("alias_of")
+        if alias is not None:
+            target = by_name.get(alias)
+            if (alias == t.get("name") or target is None
+                    or (target.get("route") or {}) != route
+                    or list(target.get("arguments") or []) != list(t.get("arguments") or [])
+                    or target.get("alias_of") is not None):
+                raise ManifestError(
+                    f"{domain}/{t.get('name')}: alias_of must name another, non-alias tool on the "
+                    f"same route with the same arguments (got {alias!r})")
+            continue
+        if route and key in first:
+            raise ManifestError(
+                f"{domain}: {first[key]['name']!r} and {t.get('name')!r} are bound to the same route "
+                f"{key[0]} {key[1]} — declare the second as \"alias_of\": {first[key]['name']!r} if "
+                "the second name is deliberate")
+        if route:
+            first[key] = t
 
 
 def _prefix(value) -> Optional[str]:
