@@ -22,7 +22,7 @@ Python because the agent domain is the LLM/tooling + runtime ecosystem (P13).
 | consumes | terminal | `GET /api/workspace/{tree,file,git}` | workspace tree, file content, git state |
 | calls | runtime kernel | `runtime.v1` (Dispatcher → RuntimePort) | the worker container `env` (repo URL + scoped token) |
 | calls | gateway / meeting-api | `POST /bots`, `DELETE /bots/{platform}/{native_id}` | forward our self-hosted bot in/out of a meeting |
-| consumes | self-hosted bots | redis stream `transcription_segments` | live segments, tailed by `transcription_watcher` |
+| consumes | self-hosted bots | redis stream `transcription_segments` | tailed by `transcription_watcher` as a hint only: an entry names which meeting's verified feed to read |
 | reads | terminal | redis stream `tc:meeting:{uid}` | per-meeting transcript wire (drafts + finals); meeting-api's collector is the single writer (P23) |
 
 ## Contracts
@@ -51,7 +51,7 @@ uv run pytest -q        # uv manages this package's own venv/deps
 - ✅ delivered — `/api/routines` CRUD → `schedule.v1` cron jobs
 - ✅ delivered — `/events` generic ingress (`event.v1` → `unit.v1`)
 - ✅ delivered — `/api/meeting/{bot,stop,stream}`, `/api/meetings/live` live-meeting surface
-- ✅ delivered — `transcription_watcher`: register the live meeting off `transcription_segments`
+- ✅ delivered — `transcription_watcher`: register the live meeting and end it from the collector's verified `tc:meeting:{row}` feed (raw `transcription_segments` entries only say which feed to read)
 - ✅ delivered — `/api/workspace/{tree,file,git}` reads
 - ✅ delivered — in-container worker (`serve`)
 - ✅ delivered — multi-session chat: real conversation threads keyed `agent-{subject}-chat-{session}`

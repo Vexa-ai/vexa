@@ -1,8 +1,15 @@
 """transcription_watcher.py — the agent's IN-PROCESS inbound watch over the live transcript.
 
-It runs ONE daemon thread (``_run_arm``): tail ``transcription_segments`` purely as a TRIGGER to do the
-jobs only the agent-api can do — REGISTER the live meeting under its meetings-domain numeric ROW id, and
-on ``session_end`` drop it and connect the meeting's kg doc.
+It runs ONE daemon thread (``_run_arm``) to do the jobs only the agent-api can do — REGISTER the live
+meeting under its meetings-domain numeric ROW id, and on ``session_end`` drop it and connect the
+meeting's kg doc.
+
+WHAT IT BELIEVES. Every bot appends to the one ``transcription_segments`` stream, and only the collector
+can tell which entries a meeting's own bot signed (it holds the secret that minted the session token).
+So a raw entry here is a HINT and nothing more: its ``meeting_id`` names which verified feed to read.
+Every action is taken from ``tc:meeting:{row}``, the per-meeting feed the collector writes only for
+entries it admitted — a segment there registers the meeting, its ``session_end`` marker ends it. An
+entry that names a meeting nobody signed for leads to a feed with nothing new in it, and nothing happens.
 
 It no longer dispatches anything. PRD decision 34 removed the in-product inference pipeline, and this
 loop's other half was its arbiter: it armed and kept alive a per-meeting "copilot" worker while a
@@ -31,6 +38,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from collections import OrderedDict
 
 from shared import units
 
@@ -209,9 +217,88 @@ def start(redis_url: str, dispatcher, live, *, subject: str = "u_live") -> threa
     return t
 
 
+# ── following the verified feed ──────────────────────────────────────────────────────────────────
+FOLLOW_SEC = 120.0      # a meeting is followed this long after the last raw entry that named it
+HINT_SKEW_MS = 2000     # read the verified feed from a little before the hint (one redis clock)
+MAX_FOLLOWED = 512      # bound on meetings followed at once; the oldest-hinted is let go first
+MAX_CURSORS = 4096      # bound on remembered read positions (kept after a follow ends)
+
+
+def _verified_feed(mid: str) -> str:
+    """The collector's per-meeting feed: only entries it admitted reach it (P23, single writer)."""
+    return f"tc:meeting:{mid}"
+
+
+def _id_key(entry_id: str) -> "tuple[int, int]":
+    ms, _, seq = str(entry_id).partition("-")
+    try:
+        return int(ms), int(seq or 0)
+    except ValueError:
+        return 0, 0
+
+
+class _Follow:
+    """Which verified feeds the watcher reads, and from where. ``cursors`` is the last entry read per
+    row id (kept after a follow ends, so a meeting followed again never re-reads what it acted on);
+    ``until`` is the follow deadline per row id."""
+
+    def __init__(self) -> None:
+        self.cursors: "OrderedDict[str, str]" = OrderedDict()
+        self.until: dict[str, float] = {}
+
+    def hint(self, fields: dict, entry_id: str, now: float) -> None:
+        """A raw ``transcription_segments`` entry named a meeting. Proof of nothing: it only says which
+        verified feed to read, from just before this entry's time."""
+        try:
+            p = json.loads(fields.get("payload") or "{}")
+        except (TypeError, ValueError):
+            return
+        mid = str(p.get("meeting_id") or "") if isinstance(p, dict) else ""
+        if not mid.isdigit():
+            return  # the collector keys its feed by the numeric row id; nothing else can be verified
+        ms, _ = _id_key(entry_id)
+        start = f"{max(0, ms - HINT_SKEW_MS)}-0"
+        kept = self.cursors.get(mid)
+        self.cursors[mid] = kept if kept and _id_key(kept) > _id_key(start) else start
+        self.cursors.move_to_end(mid)
+        self.until[mid] = now + FOLLOW_SEC
+        while len(self.until) > MAX_FOLLOWED:
+            self.until.pop(min(self.until, key=self.until.get))
+        while len(self.cursors) > MAX_CURSORS:
+            oldest = next((k for k in self.cursors if k not in self.until), None)
+            if oldest is None:
+                break
+            self.cursors.pop(oldest)
+
+    def expire(self, now: float) -> None:
+        for mid in [m for m, t in self.until.items() if t < now]:
+            self.until.pop(mid, None)
+
+
+def _drain(r, follow: _Follow, live, subject: str, keymap: dict) -> None:
+    """Read what the collector admitted for every followed meeting since its cursor, and act on it."""
+    if not follow.until:
+        return
+    resp = r.xread({_verified_feed(m): follow.cursors[m] for m in follow.until}, count=200)
+    for stream, entries in resp or []:
+        mid = str(stream).rsplit(":", 1)[-1]
+        for entry_id, fields in entries:
+            follow.cursors[mid] = entry_id
+            try:
+                payload = json.loads((fields or {}).get("payload") or "{}")
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(payload, dict):
+                continue
+            _handle(live, subject, mid, payload, keymap)
+            if payload.get("type") == "session_end":
+                follow.until.pop(mid, None)
+
+
 def _run_arm(redis_url: str, dispatcher, live, subject: str, keymap: dict) -> None:
-    """Inbound watch → key on the row id, register live, drop on session_end. Does NOT write the
-    transcript carrier — meeting-api's collector owns ``tc:meeting:{row_id}`` (P23/P0)."""
+    """Raw entries name meetings; the collector's verified feed says what happened in them. Register
+    live, drop on session_end. Does NOT write the transcript carrier — meeting-api's collector owns
+    ``tc:meeting:{row_id}`` (P23/P0)."""
     import redis as redislib
 
     r = redislib.from_url(redis_url, decode_responses=True, socket_keepalive=True, health_check_interval=10)
@@ -221,98 +308,97 @@ def _run_arm(redis_url: str, dispatcher, live, subject: str, keymap: dict) -> No
     except redislib.exceptions.ResponseError as e:
         if "BUSYGROUP" not in str(e):
             raise
-    first_seen: dict[str, float] = {}   # numeric meeting_id → first segment time (resolve-grace window)
-    logger.info("transcription watcher up — consuming %s (group=%s)", SRC, GROUP)
+    follow = _Follow()
+    logger.info("transcription watcher up — consuming %s (group=%s) as hints; acting on tc:meeting:*",
+                SRC, GROUP)
 
     while True:
         try:
-            resp = r.xreadgroup(GROUP, "agent-api", {SRC: ">"}, count=50, block=5000)
+            # While anything is followed, wake often enough to see the collector's write land.
+            resp = r.xreadgroup(GROUP, "agent-api", {SRC: ">"}, count=50,
+                                block=1000 if follow.until else 5000)
         except (redislib.exceptions.TimeoutError, redislib.exceptions.ConnectionError):
             continue
         except Exception:  # noqa: BLE001 — a watcher must never die on a bad frame
             logger.exception("xreadgroup failed; retrying")
             time.sleep(1)
             continue
+        now = time.monotonic()
         for _stream, entries in resp or []:
             for msg_id, fields in entries:
                 try:
                     r.xack(SRC, GROUP, msg_id)
-                    _handle(r, dispatcher, live, subject, json.loads(fields.get("payload") or "{}"),
-                            keymap, first_seen)
+                    follow.hint(fields, msg_id, now)
                 except Exception:  # noqa: BLE001
                     logger.exception("bad transcription frame; skipping")
+        try:
+            _drain(r, follow, live, subject, keymap)
+        except (redislib.exceptions.TimeoutError, redislib.exceptions.ConnectionError):
+            continue
+        except Exception:  # noqa: BLE001 — a watcher must never die on a bad frame
+            logger.exception("reading the verified transcript feed failed; retrying")
+        follow.expire(now)
 
 
-RESOLVE_GRACE_SEC = 6.0  # how long to wait for a native id before falling back to the numeric key
+def _platform(mid: str) -> str:
+    """The platform label for display: the gateway's answer when it was already looked up, else the
+    default the watcher has always used. The verified feed does not carry it."""
+    cached = _native.get(mid)
+    return cached[1] if cached else "google_meet"
 
 
-def _handle(r, dispatcher, live, subject, p, keymap, first_seen) -> None:
-    # P0 (cross-tenant leak fix): the TRANSCRIPT CARRIER keys on the numeric ROW id `mid` — NOT the
-    # native Meet code. The native id is NOT unique (it collides across DIFFERENT
-    # users and across ONE user's re-sends of the same link), so keying transcript data by it leaked one
-    # user's transcript to another and hydrated the wrong row. The bot stamps a NUMERIC meeting_id (the
-    # meetings-domain row id, unique per run) on every segment, so we can key on it IMMEDIATELY — no
-    # resolve-grace wait, no gateway round-trip on the hot path.
-    #
-    # The native code is still resolved (best-effort) but ONLY for DISPLAY: the kg doc (`_record_meeting_doc`),
-    # the human-readable title, and the `native_id` field on the live entry / meeting_ref. A resolution
-    # miss no longer diverges the carrier key (that is `mid`, always present) — it only degrades display,
-    # so the P18 relay-health fault is still reported (display only) but the transcript never leaks/starves.
-    mid = str(p.get("meeting_id") or p.get("uid") or "")
-    if not mid:
-        return
-    # PREFER the native id stamped on the segment by its producer (the bot knows it from its invocation).
-    # The gateway lookup is only a labeled fallback for older bots that don't stamp it — and now purely a
-    # DISPLAY concern (the carrier keys on `mid` regardless).
-    stamped = p.get("native_meeting_id") or p.get("native_id")
-    if stamped:
-        resolved = (str(stamped), p.get("platform") or "google_meet")
-    else:
-        resolved = _resolve_native(mid)
-    native, platform = resolved if resolved else (mid, p.get("platform") or "google_meet")
-    if resolved is None and p.get("type") != "session_end":
-        # DISPLAY-only divergence: the terminal still keys transcript data on the row id `mid`
-        # (correct + isolated) — only the human-readable native code/title is unavailable until the
-        # gateway row surfaces. Report it (P18) but do NOT hold or fork the meeting.
-        _report_fault("native_resolve", "unresolved_display",
-                      f"meeting {mid}: native id not resolved yet — transcript keyed on row id "
-                      f"tc:meeting:{mid} (correct); the human-readable native code/title is pending")
-    # The routing key is the numeric ROW id, frozen once per meeting_id (mid is stable, so this is
-    # trivially stable — kept for structural parity with the reap path below).
+def _handle(live, subject: str, mid: str, p: dict, keymap: dict) -> None:
+    """Act on ONE entry of meeting ``mid``'s VERIFIED feed (``tc:meeting:{mid}``, the collector's).
+
+    P0 (cross-tenant leak fix): everything keys on the numeric ROW id ``mid`` — NOT the native Meet
+    code, which collides across DIFFERENT users and across ONE user's re-sends. The native code is for
+    DISPLAY only: the kg doc, the human-readable title and the ``native_id`` field. The collector writes
+    it into the feed (``session_uid`` on a segment, ``uid`` on the end marker), falling back to the row
+    id when it knows none; then the gateway lookup is tried, and a miss only degrades the display."""
+    kind = p.get("type")
+    # The routing key is the numeric ROW id, frozen once per meeting_id (kept for structural parity
+    # with the reap path below).
     key = keymap.get(mid)
     if key is None:
         key = keymap[mid] = mid
-    kind = p.get("type")
-    if kind == "transcription":  # P18 liveness: record that segments ARE arriving (distinct from relayed)
-        with _HEALTH_LOCK:
-            ing = _relay_health["ingest"]
-            ing["last_segment_at"] = time.time()
-            ing["segments"] = int(ing.get("segments", 0)) + 1
-    out_stream = f"tc:meeting:{key}"
     if kind == "session_end":
-        # The collector emits the session_end MARKER onto tc:meeting:{row_id} (P23/P0, single writer);
-        # the agent only does its OWN bookkeeping here — drop the live row (by the row-id key we
-        # registered it under), clear keymap, connect the kg doc (native, for display).
+        # The collector wrote this marker for an end the meeting's own bot signed. The agent only does
+        # its OWN bookkeeping: drop the live row, clear keymap, connect the kg doc (native, for display).
+        native = str(p.get("uid") or mid)
         live.drop(key)
         keymap.pop(mid, None)
-        first_seen.pop(mid, None)
         logger.info("meeting %s ended", key)
         # Connect this meeting's own kg doc ref to the meeting — from here, so the user key stays
         # out of any isolated worker container.
-        _record_meeting_doc(native, platform, subject)
+        _record_meeting_doc(native, _platform(mid), subject)
         return
     if kind != "transcription":
-        return
+        return  # a retract marker, or anything this loop has no job for
+    native = str(p.get("session_uid") or p.get("meeting_id") or mid)
+    if native == mid:
+        resolved = _resolve_native(mid)
+        if resolved is not None:
+            native = resolved[0]
+        else:
+            # DISPLAY-only divergence: the terminal still keys transcript data on the row id `mid`
+            # (correct + isolated) — only the human-readable native code/title is unavailable until the
+            # gateway row surfaces. Report it (P18) but do NOT hold or fork the meeting.
+            _report_fault("native_resolve", "unresolved_display",
+                          f"meeting {mid}: native id not resolved yet — transcript keyed on row id "
+                          f"tc:meeting:{mid} (correct); the human-readable native code/title is pending")
+    platform = _platform(mid)
+    with _HEALTH_LOCK:  # P18 liveness: record that segments ARE arriving (distinct from relayed)
+        ing = _relay_health["ingest"]
+        ing["last_segment_at"] = time.time()
+        ing["segments"] = int(ing.get("segments", 0)) + 1
 
-    # Keep the terminal's live feed fresh on EVERY batch (a cheap dict write) so an agent-api restart
-    # can't drop the meeting from the list — it reappears on the first segment. session_uid == the ROW
-    # id `mid` too, so the terminal's SSE subscribes with the same id the transcript carrier
-    # (tc:meeting:{mid}) is keyed by.
+    # Keep the terminal's live feed fresh on EVERY verified segment (a cheap dict write) so an
+    # agent-api restart can't drop the meeting from the list — it reappears on the next segment.
+    # session_uid == the ROW id `mid` too, so the terminal's SSE subscribes with the same id the
+    # transcript carrier (tc:meeting:{mid}) is keyed by.
     live.add({
         "meeting_id": key, "session_uid": key, "native_id": native, "platform": platform,
         "title": _title(platform, native),
         # The meetings-domain ROW id (unique per meeting run) — the ROUTING key itself.
-        "numeric_meeting_id": mid if mid.isdigit() else None,
+        "numeric_meeting_id": mid,
     })
-
-
