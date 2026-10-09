@@ -99,7 +99,7 @@
       "visibility": "user-visible",
       "pass": "on a live Zoom call the bot on this exact image keeps the speech: words arrive live over /ws and the transcript reads right with one speaker",
       "witnessed": true,
-      "observation": "DRAFT FOR THE FOUNDER TO CONFIRM — 2026-10-07 21:31-21:40Z, founder-hosted Zoom on the bbb station, single speaker, bot image config 995b4aed (= vexaai/vexa-bot@sha256:e2398bfa, the rc.3 bot): candidate kept 88.8% of the uncapped reference words vs 75.7% for the previous bot; founder in chat ~21:38Z: \"looks good to me when one speaker\". Record: ~/dev/biz/drafts/2026-10-07-zoom-starved-1781-staging-fills.md. Starved-page behaviour proven offline on the production tape of meeting 31849 (recall 91.5% vs 21.8%). In production on the same digest since 2026-10-08T20:41Z (estate entry 48).",
+      "observation": "2026-10-07 21:31-21:40Z, founder-hosted Zoom on the bbb station, single speaker, bot image config 995b4aed (= vexaai/vexa-bot@sha256:e2398bfa, the rc.3 bot): candidate kept 88.8% of the uncapped reference words vs 75.7% for the previous bot; founder in chat ~21:38Z: \"looks good to me when one speaker\". Record: ~/dev/biz/drafts/2026-10-07-zoom-starved-1781-staging-fills.md. Starved-page behaviour proven offline on the production tape of meeting 31849 (recall 91.5% vs 21.8%). In production on the same digest since 2026-10-08T20:41Z (estate entry 48). Founder-hosted Zoom test in production 2026-10-08 21:16-21:19Z (meeting 32021) on the same digest at 1 CPU: transcript kept.",
       "platform": "zoom"
     },
     {
@@ -124,5 +124,5 @@
       "evidence": "scripts/merge-card-gate.test.mjs and scripts/gates.test.mjs (changed by the PR); it changes scripts/, a Lite input, so Lite was rebuilt at d90708c10 (run 37909519615) and the packet moved to v0.12.28-rc.5; the CI gate itself runs on every PR"
     }
   ],
-  "signed_off": false
+  "signed_off": true
 }

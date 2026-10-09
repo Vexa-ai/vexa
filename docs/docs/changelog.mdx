@@ -1163,26 +1163,13 @@ fix(gates): every gate failure now prints its diagnostic — an empty stdout Buf
   minutes to answer, so the terminal's first-boot restart no longer fails the first run.
   See [Deployment](/deployment).
 
-- **Zoom: per-track capture keeps one clock (#1778).** Capture time comes from a shared
-  epoch-anchored monotonic clock instead of a count of delivered samples, so delayed callbacks no
-  longer accumulate timestamp drift, and shared-channel transcription keeps the retained audio
-  timeline after full-text confirmation. Capture gaps over one second emit rate-limited diagnostic
-  observations.
+- **Zoom: complete transcripts on busy calls (#1781).** Every Zoom turn is captured in full, even
+  when the bot's page is under heavy load, and each turn is finalized from all of its audio.
 
-- **Zoom: transcripts of a starved call keep their timestamps and long turns keep their words (#1774).**
-  Segment times now come from each captured frame's own timestamp, so speech late in a long turn is no
-  longer placed tens of seconds early. A pause of up to 2 s no longer splits a Zoom turn, and a turn
-  that reaches the 30 s limit is cut at a quiet moment instead of losing the audio after its last request.
+- **Zoom: precise timing (#1781, #1778).** Segments are timed from the captured audio on one shared
+  clock. Short pauses no longer split a turn, and long turns break at a natural pause.
 
-- **Zoom: a starved bot page no longer drops most of a call's speech (#1774).** Zoom's per-track
-  frames carry capture-callback timestamps, and the per-channel lane read late or lost callbacks as a
-  break in speech, discarding the buffered audio every few seconds; a turn's close could also
-  finalize a transcript that missed its last words. The lane now measures that gap between
-  consecutive frames, and finalizes each Zoom turn from a request that covers all of its audio.
-
-- **Live transcripts: a superseded draft is withdrawn (#1778).** When stable speech confirms at a
-  shifted audio onset, the older per-channel draft is retracted, so an earlier paragraph no longer
-  reappears as the live tail.
+- **Live transcripts: a steadier live view (#1778).** The live tail always shows the latest draft.
 
 ## Versioning
 
