@@ -443,6 +443,11 @@
           "path": "core/flows/src/flows_integrations/flows_api.py",
           "pattern": "_FALLBACK_PLACEHOLDERS = \\(([^)]*)\\)",
           "note": "flows-api's fallback when it cannot read the declaration"
+        },
+        {
+          "path": "core/meetings/services/mcp/src/vexa_mcp/manifest.py",
+          "pattern": "PLACEHOLDER_KEYS = \\{([^}]*)\\}",
+          "note": "the MCP's refusal of a published operator key for an auth: admin tool"
         }
       ]
     },

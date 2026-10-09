@@ -70,7 +70,7 @@ METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
 AUTHS = {"subject", "admin", "none"}
 #: Published literals a stock deploy surface once supplied — the same refusal list flows-api and the
 #: services' `config.v1` keep. A key that is in this repository authenticates nobody and everybody.
-PLACEHOLDER_KEYS = {"changeme", "change-me", "default", "secret", "vexa-internal-secret",
+PLACEHOLDER_KEYS = {"changeme", "change-me", "CHANGE-ME", "default", "secret", "vexa-internal-secret",
                     "lite-internal-secret"}
 
 

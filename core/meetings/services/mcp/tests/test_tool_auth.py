@@ -101,11 +101,12 @@ def test_the_same_manifest_assembles_when_the_deployment_holds_the_key():
     assert a.tools[0].auth == "admin"
 
 
-def test_a_placeholder_is_not_holding_the_key():
+@pytest.mark.parametrize("placeholder", sorted(m.PLACEHOLDER_KEYS))
+def test_a_placeholder_is_not_holding_the_key(placeholder):
     """A published literal authenticates nobody and everybody — the same refusal list flows-api and
-    the services' config.v1 already keep."""
+    the services' config.v1 already keep (fact placeholder-secrets), CHANGE-ME included."""
     with pytest.raises(m.ManifestError) as e:
-        m.assemble([ADMIN_MANIFEST], deployed=DEPLOYED, env={"VEXA_MCP_FLOWS_ADMIN_KEY": "changeme"})
+        m.assemble([ADMIN_MANIFEST], deployed=DEPLOYED, env={"VEXA_MCP_FLOWS_ADMIN_KEY": placeholder})
     assert "flows_retire" in str(e.value)
 
 
