@@ -8,3 +8,10 @@
   a worker sees, never where they come from or how its Pod is scheduled. On Lite the runtime starts
   from a cleared environment and builds each bot's and worker's environment from scratch, and spawned
   Pods no longer mount a ServiceAccount token. See [Configuration](/configuration#secrets--identity).
+- **Helm: the runtime and the Pods it spawns are fenced (#1784).** New NetworkPolicies (on with
+  `networkPolicy.enabled`) admit only agent-api and meeting-api to the runtime, give spawned bots and
+  workers no inbound connection, and let them reach only DNS, public addresses and their own
+  dependencies — workers the gateway, redis and flows-api; bots meeting-api and redis. **If your bots
+  reach an STT service, S3 or proxy on a private address, or your workers an in-cluster LLM endpoint,
+  add it** with `networkPolicy.workloads.bot.extraEgress` / `networkPolicy.workloads.worker.extraEgress`
+  before upgrading. See [Kubernetes](/deployment-kubernetes).

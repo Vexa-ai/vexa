@@ -733,10 +733,57 @@ if grep -q 'runtime.managed: "true"' <<< "$np_meeting" && grep -A2 'key: vexa.ro
 else
   echo "  FAIL: meeting-api NetworkPolicy does not admit bot callbacks while excluding workers"; fail=1
 fi
+# The runtime admits its two callers only; spawned workloads take no inbound connection and reach
+# only what their class needs, never a private address outside those rules.
+np_rt="$(awk '/name: vexa-vexa-runtime-ingress/{p=1} p{print} p&&/^---/{exit}' <<< "$RENDER")"
+np_worker="$(awk '/name: vexa-vexa-worker-egress/{p=1} p{print} p&&/^---/{exit}' <<< "$RENDER")"
+np_bot="$(awk '/name: vexa-vexa-bot-egress/{p=1} p{print} p&&/^---/{exit}' <<< "$RENDER")"
+np_wl_in="$(awk '/name: vexa-vexa-workloads-ingress/{p=1} p{print} p&&/^---/{exit}' <<< "$RENDER")"
+if [ "$(grep -c 'app.kubernetes.io/component:' <<< "$np_rt")" = 3 ] \
+    && grep -q 'component: agent-api$' <<< "$np_rt" && grep -q 'component: meeting-api$' <<< "$np_rt" \
+    && ! grep -q 'runtime.managed' <<< "$np_rt"; then
+  echo "  OK: the runtime admits agent-api and meeting-api only"
+else echo "  FAIL: runtime ingress NetworkPolicy is not agent-api + meeting-api only"; fail=1; fi
+if grep -q 'runtime.managed: "true"' <<< "$np_wl_in" && ! grep -q '^  ingress:' <<< "$np_wl_in"; then
+  echo "  OK: spawned workloads take no inbound connection"
+else echo "  FAIL: spawned workloads accept inbound connections"; fail=1; fi
+for c in gateway redis; do
+  if grep -q "component: $c\$" <<< "$np_worker"; then echo "  OK: workers reach $c"
+  else echo "  FAIL: worker egress does not allow $c"; fail=1; fi
+done
+for c in meeting-api redis; do
+  if grep -q "component: $c\$" <<< "$np_bot"; then echo "  OK: bots reach $c"
+  else echo "  FAIL: bot egress does not allow $c"; fail=1; fi
+done
+for pair in "worker:meeting-api" "worker:runtime" "worker:admin-api" "worker:agent-api" "worker:postgres" \
+            "bot:gateway" "bot:runtime" "bot:admin-api" "bot:agent-api" "bot:postgres"; do
+  cls="${pair%%:*}"; c="${pair#*:}"; body="$np_worker"; [ "$cls" = bot ] && body="$np_bot"
+  if grep -q "component: $c\$" <<< "$body"; then echo "  FAIL: $cls egress allows $c"; fail=1
+  else echo "  OK: ${cls}s cannot reach $c"; fi
+done
+for body in "$np_worker" "$np_bot"; do
+  if grep -q -- '- 10.0.0.0/8' <<< "$body" && grep -q -- '- 169.254.0.0/16' <<< "$body"; then :
+  else echo "  FAIL: workload egress does not exclude the private and metadata ranges"; fail=1; fi
+done
+echo "  OK: workload internet egress excludes the private and metadata ranges"
 np_off="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set networkPolicy.enabled=false)"
-if grep -qE 'name: vexa-vexa-(agent|meeting)-api-ingress' <<< "$np_off"; then
-  echo "  FAIL: networkPolicy.enabled=false still renders the agent-api/meeting-api policies"; fail=1
-else echo "  OK: networkPolicy.enabled=false renders neither agent-api nor meeting-api policy"; fi
+if grep -qE 'name: vexa-vexa-(agent-api|meeting-api|runtime|workloads)-ingress|name: vexa-vexa-(worker|bot)-egress' <<< "$np_off"; then
+  echo "  FAIL: networkPolicy.enabled=false still renders a policy"; fail=1
+else echo "  OK: networkPolicy.enabled=false renders none of the policies"; fi
+# The runtime caller credential reaches the runtime and its two callers, nothing else.
+holders="$(awk '/^# Source: /{src=$3} /key: RUNTIME_API_TOKEN$/{print src}' <<< "$RENDER" | sort -u | tr '\n' ' ')"
+if [ "$holders" = "vexa/templates/deployment-agent-api.yaml vexa/templates/deployment-meeting-api.yaml vexa/templates/deployment-runtime.yaml " ]; then
+  echo "  OK: RUNTIME_API_TOKEN reaches the runtime, agent-api and meeting-api only"
+else echo "  FAIL: RUNTIME_API_TOKEN holders are: $holders"; fail=1; fi
+rt_secret="$(awk '/^  RUNTIME_API_TOKEN: /{print $2}' <<< "$RENDER" | tr -d '"')"
+if [ "${#rt_secret}" -ge 32 ]; then echo "  OK: an empty secrets.runtimeApiToken renders a generated token"
+else echo "  FAIL: no generated RUNTIME_API_TOKEN in the chart Secret"; fail=1; fi
+refuse_rt="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set secrets.runtimeApiToken=short 2>&1 || true)"
+if grep -q 'secrets.runtimeApiToken must be 32+ bytes' <<< "$refuse_rt"; then echo "  OK: a short secrets.runtimeApiToken is refused"
+else echo "  FAIL: a short secrets.runtimeApiToken rendered"; fail=1; fi
+if grep -A1 'name: INTERNAL_API_SECRET$' <<< "$(awk '/deployment-runtime.yaml/{f=1} f{print} f&&/^---/{exit}' <<< "$RENDER")" | grep -q secretKeyRef; then
+  echo "  FAIL: the runtime still carries INTERNAL_API_SECRET"; fail=1
+else echo "  OK: the runtime carries no internal-tier secret"; fi
 
 refuse() {  # refuse <label> <expected-message-regex> <helm args...>
   local label="$1" want="$2" out; shift 2
