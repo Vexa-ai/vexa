@@ -694,6 +694,10 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
     for _var in ("VEXA_FLOWS_API_URL", "VEXA_FLOWS_TIMELINE_KEY"):
         if os.environ.get(_var):
             env[_var] = os.environ[_var]
+    # The workspace template this deployment seeds from. The worker resolves its platform skills (and
+    # any workspace it seeds itself) from it, against its own seeds root (shared.seeding).
+    if (settings.default_template or "").strip():
+        env["VEXA_DEFAULT_TEMPLATE"] = settings.default_template.strip()
     if settings.agent_model:
         env["VEXA_AGENT_MODEL"] = settings.agent_model
     # The chat-continuation dials the openai-agent harness reads (shared/config.py). Always stamped,

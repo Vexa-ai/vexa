@@ -57,3 +57,40 @@ def test_agent_api_neither_reads_nor_declares_the_store_backing():
     # a surface that still sets it is documented drift, not a key this service reads
     surface_only = {k["key"]: k["reason"] for k in decl.get("surface_only") or []}
     assert "runtime" in surface_only["VEXA_WORKSPACE_MOUNT_SOURCE"]
+
+
+# ── the configured workspace template reaches the worker ─────────────────────────────────────────
+
+def test_the_dispatch_stamps_the_configured_template(tmp_path):
+    assert _env(tmp_path, default_template="acme")["VEXA_DEFAULT_TEMPLATE"] == "acme"
+    assert _env(tmp_path)["VEXA_DEFAULT_TEMPLATE"] == "default"
+
+
+def test_the_worker_loads_the_stamped_templates_skills(tmp_path, monkeypatch):
+    """The worker resolves its platform skills — and any workspace it seeds itself — from the
+    template agent-api stamped, against its OWN seeds root."""
+    from llm.claude_skills import _governed_skills_dir
+    from shared.seeding import resolve_seed_dir
+
+    seeds = tmp_path / "seeds"
+    for name in ("default", "acme"):
+        (seeds / name / "skills" / "brief").mkdir(parents=True)
+        (seeds / name / "skills" / "brief" / "SKILL.md").write_text(name)
+    monkeypatch.delenv("VEXA_WORKSPACE_SEED_DIR", raising=False)
+    monkeypatch.setenv("VEXA_WORKSPACE_SEEDS_DIR", str(seeds))
+    monkeypatch.delenv("VEXA_DEFAULT_TEMPLATE", raising=False)
+    assert _governed_skills_dir() == seeds / "default" / "skills"
+    monkeypatch.setenv("VEXA_DEFAULT_TEMPLATE", "acme")
+    assert _governed_skills_dir() == seeds / "acme" / "skills"
+    assert resolve_seed_dir() == seeds / "acme"
+    # an explicit template still wins over the environment, and the explicit seed dir over both
+    assert resolve_seed_dir("other") == seeds / "other"
+    monkeypatch.setenv("VEXA_WORKSPACE_SEED_DIR", str(tmp_path / "pinned"))
+    assert resolve_seed_dir("other") == tmp_path / "pinned"
+
+
+def test_the_declared_template_default_is_the_code_default():
+    from shared.seeding import DEFAULT_TEMPLATE
+
+    row = next(k for k in cp.load_declaration()["keys"] if k["key"] == "VEXA_DEFAULT_TEMPLATE")
+    assert row["default"] == Settings.model_fields["default_template"].default == DEFAULT_TEMPLATE

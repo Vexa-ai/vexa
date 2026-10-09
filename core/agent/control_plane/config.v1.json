@@ -163,8 +163,8 @@
     {
       "key": "VEXA_DEFAULT_TEMPLATE",
       "class": "defaulted",
-      "default": "finos",
-      "description": "which workspace template new subjects are seeded from",
+      "default": "default",
+      "description": "which workspace template new subjects are seeded from (a subdir of VEXA_WORKSPACE_SEEDS_DIR). agent-api stamps it into every worker, which loads that template's skills and seeds from it",
       "targets": []
     },
     {

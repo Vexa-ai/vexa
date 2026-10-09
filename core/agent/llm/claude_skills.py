@@ -18,8 +18,9 @@ import yaml
 
 
 def _governed_skills_dir() -> Optional[Path]:
-    """The platform's governed skills: the ``skills/`` of the workspace seed this deployment ships
-    (``shared.seeding.resolve_seed_dir`` — read-only in the image). None when the seed has none."""
+    """The platform's governed skills: the ``skills/`` of the workspace template this deployment
+    seeds from — ``VEXA_DEFAULT_TEMPLATE``, stamped by the dispatch — under the image's read-only
+    seeds root (``shared.seeding.resolve_seed_dir``). None when the template has none."""
     from shared.seeding import resolve_seed_dir
 
     skills = resolve_seed_dir() / "skills"

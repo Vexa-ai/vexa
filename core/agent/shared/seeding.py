@@ -38,13 +38,17 @@ def resolve_seed_dir(template: "str | None" = None, *, seeds_root: "str | Path |
        overrides selection entirely.
     2. ``<seeds_root>/<template>`` — pick a named template out of the registry root. ``seeds_root``
        falls back to ``VEXA_WORKSPACE_SEEDS_DIR`` then ``/app/workspace-seeds``; ``template`` falls back
-       to ``default``.
+       to ``VEXA_DEFAULT_TEMPLATE`` then ``default``.
+
+    A WORKER reads the template from ``VEXA_DEFAULT_TEMPLATE``, which agent-api stamps into every
+    dispatch from its own setting, so the skills a turn loads and any workspace the worker seeds come
+    from the template the deployment chose — resolved against the worker's own seeds root.
     """
     explicit = os.environ.get("VEXA_WORKSPACE_SEED_DIR")
     if explicit:
         return Path(explicit)
     root = Path(seeds_root or os.environ.get("VEXA_WORKSPACE_SEEDS_DIR", DEFAULT_SEEDS_ROOT))
-    return root / (template or DEFAULT_TEMPLATE)
+    return root / (template or os.environ.get("VEXA_DEFAULT_TEMPLATE") or DEFAULT_TEMPLATE)
 
 
 def list_templates(seeds_root: "str | Path | None" = None) -> list[str]:

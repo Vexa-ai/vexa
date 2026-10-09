@@ -78,7 +78,9 @@ class Settings(BaseSettings):
     # Registry of workspace templates (workspace-seeds/<name>/); `default_template` selects one.
     # `seeding.resolve_seed_dir` is the selection seam (honors the VEXA_WORKSPACE_SEED_DIR override).
     workspace_seeds_dir: str = "/app/workspace-seeds"
-    default_template: str = "default"  # light ready-to-go scaffold (README = onboarding-dashboard); override with VEXA_DEFAULT_TEMPLATE=finos for the FINOS KG seed
+    # The template new workspaces are seeded from. Stamped into every worker (dispatch.build_unit_env)
+    # so the worker's skills and any workspace it seeds come from the same template.
+    default_template: str = "default"
     # ── three-tier mount stack (AMENDMENT 4) — the GLOBAL SYSTEM tier (_global) ──
     # The platform-owned, READ-ONLY _global workspace mounted into EVERY worker (behaviour/skills/tools).
     # A host path / repo dir, or EMPTY = the in-store `<workspaces_dir>/_global`, created empty at boot
