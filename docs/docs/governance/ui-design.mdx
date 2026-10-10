@@ -172,6 +172,7 @@ gate fails when a file goes up, and when a file went down without its budget bei
 | Surface | What changed | Inline-style budget |
 |---|---|---|
 | Composer and conversation | context chips → `Chip` in a one-line `ChipRow` with a "+N" chip (no dashed "+ schedule", no uppercase "FOCUS"); attach, dictate, send and stop → `IconButton`; below 400px the effort levels move into the "⋯" menu; references in the text → `Tag`; workspace paths in answers → `EntityChip` (no longer mono blue code); external links → `ExternalLink`; commit and rejection → `Badge`; files a turn wrote → `EntityChip`; **sources → `SourceList`** (below) | `chat.tsx` 202 → 124 · `Markdown.tsx` 62 → 46 · `agent-window.tsx` 112 → 88 |
+| Chat list | rows on the ui-kit row (selected = fill, weight and bar); live is the success colour with its time, not accent; "held" → `Badge` ("Held"); the write target → a muted `Tag`; the "All N" pill → underline `Tabs` "Active / All" in the header; delete → `ConfirmDialog` ("Delete chat") instead of the two-click × → ✓; the icon strip and the account menu on `IconButton` and the menu classes | `Rail.tsx` 57 → 0 · `AccountBadge.tsx` 26 → 0 |
 
 ### Sources
 
