@@ -100,9 +100,10 @@ services:
     # shipped here as the fallback and in .env.example. mint-dev-env.sh (`make up` / `make all`) mints a
     # pair into .env, and replaces a published one; versitygw takes its root key from this environment at
     # start, so the next `up` restarts it with the new pair over the same volume, and the new root reads
-    # every bucket the old one created. Bots reach this service only for an authenticated bot's saved
-    # session, with the scoped account storage-init makes (BOT_S3_*, limited to its own prefix); no bot
-    # or worker is ever given the root pair.
+    # every bucket the old one created. Bots reach this service only to restore an authenticated bot's
+    # saved session, with the scoped account storage-init makes (BOT_S3_*, read-only on its own
+    # prefix); a bot's rotated session comes back through meeting-api. No bot or worker is ever given
+    # the root pair.
     image: versity/versitygw:v1.8.0@sha256:30292fc2eeacc67a36993b01f7a7a5e3361a19cced0e80c1d71cfa2a4b0a2499
     entrypoint:
       - /bin/sh
@@ -140,7 +141,8 @@ services:
     # Checks the endpoint meeting-api uses (deploy/storage/storage_init.py, with its Python + boto3):
     # ensures the bucket exists and PUTs/GETs/DELETEs a probe under .vexa-storage-init/, comparing bytes.
     # Any failure holds meeting-api back. When authenticated bots point BOT_S3_ENDPOINT here, also
-    # creates their scoped account and bucket policy limited to BOT_USERDATA_S3_PATH, then proves it.
+    # creates their scoped account and a bucket policy that makes it read-only on
+    # BOT_USERDATA_S3_PATH, then proves it (list/read allowed; write, delete and the rest denied).
     build:
       context: ../..
       dockerfile: core/meetings/services/meeting-api/Dockerfile
@@ -603,7 +605,9 @@ services:
       - RECORDING_ENABLED=${RECORDING_ENABLED:-true}
       # Authenticated-bot mode (deployment-scoped): when true, every spawned bot restores the
       # provisioned browser session (make login) from the userdata store and joins signed-in.
-      # BOT_S3_* are SCOPED userdata credentials — never the deployment's admin S3 creds.
+      # BOT_S3_* are the bots' READ-ONLY userdata pair — never the deployment's admin S3 creds; a
+      # spawn refuses a pair sharing either half with MINIO_* / S3_*. A bot's rotated session comes
+      # back through meeting-api (PUT /internal/browser-session/…), written with MINIO_* here.
       # Docs: /authenticated-bots.
       - BOT_AUTHENTICATED=${BOT_AUTHENTICATED:-false}
       - BOT_USERDATA_S3_PATH=${BOT_USERDATA_S3_PATH:-}

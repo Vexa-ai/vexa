@@ -383,7 +383,11 @@ meetingApi:
   systemWebhookTimeoutSeconds: "10"
   # Authenticated-bot mode (deployment-scoped; docs: /authenticated-bots): botAuthenticated "true"
   # makes every spawned bot restore the provisioned browser session and join signed-in. The BOT_S3
-  # values are SCOPED userdata-store credentials, never the deployment's admin S3 creds.
+  # values are the bots' READ-ONLY userdata-store pair (create it in your object store with
+  # s3:ListBucket on the prefix and s3:GetObject on <prefix>/* — nothing else), never the deployment's
+  # admin S3 creds: meeting-api refuses to spawn when either half equals the S3 credentials it holds.
+  # A bot's rotated session comes back through meeting-api, which writes it with ITS S3 credentials
+  # (the s3 existingSecret) at botS3Endpoint/botS3Bucket — those must be able to write the prefix.
   botAuthenticated: "false"
   botUserdataS3Path: ""
   botS3Endpoint: ""

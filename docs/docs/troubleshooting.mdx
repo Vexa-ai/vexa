@@ -39,7 +39,16 @@ Applies only to deployments with `BOT_AUTHENTICATED=true` (see
   log names the step and endpoint; the meeting fails rather than joining signed-out. Fix the config
   and respawn.
 - **503 on `POST /bots`** — `BOT_AUTHENTICATED` is set but `BOT_USERDATA_S3_PATH` /
-  `BOT_S3_ENDPOINT` / `BOT_S3_BUCKET` are incomplete. The error names what is missing.
+  `BOT_S3_ENDPOINT` / `BOT_S3_BUCKET` are incomplete, or half of `BOT_S3_*` equals the storage's
+  root pair or `S3_*`. The error names what is missing or which variables match.
+- **`make login` refuses before opening the browser** — set `LOGIN_S3_ACCESS_KEY` /
+  `LOGIN_S3_SECRET_KEY` to a pair that can write the userdata prefix (on Compose, `.env`'s
+  `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY`); the bots' `BOT_S3_*` pair is read-only.
+- **`session write-back failed` in the bot log** — `meeting-api` refused or could not store the
+  rotated session: 403 when the bot is no longer the live authenticated bot (a later spawn
+  superseded it, or its meeting ended more than ten minutes earlier), 422 when the profile held a
+  file outside the session profile, 502 when meeting-api's own S3 credentials cannot write
+  `BOT_S3_BUCKET`. The stored session stays at the last good write.
 - **409 "authenticated session in use"** — one stored session runs one bot at a time; the message
   names the meeting holding it. Wait for it to finish, stop it, or provision another identity.
 - **The session decayed (signed-out on join)** — re-provision with `make login`; the next spawn

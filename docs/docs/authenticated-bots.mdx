@@ -16,19 +16,23 @@ to a server-side (RTMS) lane that would not need browser auth at all.
 
 ## 1. Provision the session — `make login`
 
-Provisioning opens a browser, a human signs in **once**, and the session's auth-essential subset
-(~200 KB: cookies, local/session storage, login data, preferences — never cache or history) is
-uploaded to your deployment's userdata storage.
+Provisioning opens a browser, a human signs in **once**, and the session profile — the
+auth-essential subset of the browser profile (~200 KB: cookies, local/session storage, login data,
+preferences — never cache, history or extensions) — is uploaded to your deployment's userdata
+storage.
 
 ```bash
 export BOT_USERDATA_S3_PATH=userdata/bot-identity-1   # a dedicated prefix per bot identity
 export BOT_S3_ENDPOINT=http://localhost:18900         # compose: the storage service's loopback port
 export BOT_S3_BUCKET=vexa
-export BOT_S3_ACCESS_KEY=...                          # SCOPED userdata credentials — see security
-export BOT_S3_SECRET_KEY=...
+export LOGIN_S3_ACCESS_KEY=...                        # a pair that can WRITE the prefix — on Compose,
+export LOGIN_S3_SECRET_KEY=...                        # .env's MINIO_ACCESS_KEY / MINIO_SECRET_KEY
 
 make login          # AUTH_PLATFORM=google (default) | teams | zoom
 ```
+
+The upload needs a key pair that can write the prefix. The bots' own pair (`BOT_S3_*`, below) is
+read-only and cannot upload; `make login` refuses to start without `LOGIN_S3_*`.
 
 The command opens the platform's sign-in page (headed on a desktop; inside a container, attach via
 the provisioning browser's VNC on `:6080`), waits for you to finish signing in, **confirms** the
@@ -51,7 +55,7 @@ BOT_AUTHENTICATED=true
 BOT_USERDATA_S3_PATH=userdata/bot-identity-1
 BOT_S3_ENDPOINT=http://storage:9000      # as reachable FROM the bot containers
 BOT_S3_BUCKET=vexa
-BOT_S3_ACCESS_KEY=...
+BOT_S3_ACCESS_KEY=...                    # the bots' READ-ONLY pair — see security
 BOT_S3_SECRET_KEY=...
 ```
 
@@ -59,7 +63,9 @@ With the knob set, each bot restores the stored session into its own ephemeral b
 before launch and joins as the signed-in account — no guest-name entry, no lobby knock where the
 account has access. If the knob is set but the storage config is incomplete, `POST /bots` refuses
 with a 503 naming what's missing — a half-configured deployment never silently spawns anonymous
-bots. If the session store is unreachable at spawn time, the bot fails loud with a typed
+bots. It also refuses with a 503 when either half of `BOT_S3_*` equals the storage's root pair
+(`MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY`) or `S3_ACCESS_KEY` / `S3_SECRET_KEY`: that pair rides
+every bot, so it must never be a key that can reach the whole store. If the session store is unreachable at spawn time, the bot fails loud with a typed
 `session-restore` error naming the step and endpoint — it never joins signed-out on a failed
 restore.
 
@@ -74,9 +80,12 @@ each).
 
 Google rotates session cookies continuously during use and re-challenges state that looks stale.
 A stored session that is only ever *read* decays with every restore. Vexa therefore closes the
-round trip: **restore freshest → use → write back**. On every clean bot teardown, the rotated
-session is uploaded back to the userdata prefix, so the next spawn restores the freshest state
-instead of a decaying snapshot.
+round trip: **restore freshest → use → write back**. On every clean bot teardown, the bot hands its
+rotated session back to `meeting-api` with the session token it already holds, and `meeting-api`
+writes it to the userdata prefix, so the next spawn restores the freshest state instead of a
+decaying snapshot. `meeting-api` accepts the write-back only from the live authenticated bot (the
+newest session spawned on the identity, within ten minutes of its meeting ending) and only the
+session profile's files; anything else is refused and the stored session is left as it was.
 
 The boundary, stated honestly: write-back runs on **clean teardown only**. A hard-killed bot
 (SIGKILL, node crash) never reaches it — the durable copy simply stays at the last successful
@@ -124,25 +133,35 @@ s3://<BOT_S3_BUCKET>/<BOT_USERDATA_S3_PATH>/browser-data/
 ```
 
 - **The stored session IS a credential.** Anyone who can read the prefix can be the account.
-  Create **dedicated S3 credentials scoped to the userdata prefix** for `BOT_S3_ACCESS_KEY` /
-  `BOT_S3_SECRET_KEY` — never reuse the deployment's admin S3 credentials.
-- **The boundary, stated honestly:** the S3 credentials ride the bot's invocation into the bot
-  container's environment (that is how the bot restores and writes back). Anyone with `docker
-  inspect` on the bot host, or read access to the runtime API, can see them — which is exactly why
-  they must be scoped to the userdata prefix and nothing else. Secret *values* are never printed
-  in bot logs.
+  Create **dedicated, read-only S3 credentials scoped to the userdata prefix** for
+  `BOT_S3_ACCESS_KEY` / `BOT_S3_SECRET_KEY` (list + get on the prefix, nothing else) — never the
+  deployment's admin S3 credentials; `POST /bots` refuses a pair that shares either half with them.
+- **Bots never write the stored session.** A bot restores with its read-only pair and hands its
+  rotated session to `meeting-api`, which writes it with its own storage credentials (`S3_*`, else
+  `MINIO_*`) at `BOT_S3_ENDPOINT` / `BOT_S3_BUCKET` — so those must be credentials that can write
+  that prefix. Only the session profile's files are accepted (cookies, login data, preferences,
+  web data, local/session storage); the same list bounds what a bot restores.
+- **The boundary, stated honestly:** the read-only S3 credentials ride the bot's invocation into the
+  bot container's environment (that is how the bot restores). Anyone with `docker inspect` on the bot
+  host, or read access to the runtime API, can see them — which is exactly why they must be
+  read-only and scoped to the userdata prefix. Secret *values* are never printed in bot logs.
 - The session subset is not otherwise encrypted at rest beyond what your S3 storage provides; on
   Compose that is versitygw, which writes it as plain files in the `storage-data` volume.
 
 ## Availability by deployment surface
 
 - **Compose** — supported as above; the in-stack `storage` service (versitygw) is the userdata
-  store. Choose a key pair for `BOT_S3_ACCESS_KEY` / `BOT_S3_SECRET_KEY` (different from
-  `MINIO_ACCESS_KEY`) and set `BOT_S3_ENDPOINT=http://storage:9000`: on bring-up, `storage-init`
-  creates that account, attaches a bucket policy that limits it to `BOT_USERDATA_S3_PATH`, and
-  checks the limit (its own prefix readable and writable; recordings and other prefixes denied).
-  If the check fails it exits 1, and `docker compose up` does not start meeting-api.
+  store. Choose a key pair for `BOT_S3_ACCESS_KEY` / `BOT_S3_SECRET_KEY` (sharing neither half with
+  `MINIO_*`) and set `BOT_S3_ENDPOINT=http://storage:9000`: on bring-up, `storage-init` creates that
+  account, attaches a bucket policy that makes it read-only on `BOT_USERDATA_S3_PATH`, and checks
+  the limit (its own prefix listable and readable; writing or deleting there, recordings and other
+  prefixes denied). If the check fails it exits 1, and `docker compose up` does not start
+  meeting-api. `meeting-api` writes the session back with the storage's own pair, and `make login`
+  uploads with it (`LOGIN_S3_*` = `.env`'s `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY`).
 - **Kubernetes/Helm** — set the same `BOT_AUTHENTICATED` / `BOT_*` env on the meeting-api
-  deployment (values → env); point the S3 vars at storage the bot pods can reach.
+  deployment (values → env); point the S3 vars at storage the bot pods can reach. The chart does
+  not create the bots' account: create it in your object store **read-only** on the userdata
+  prefix (`s3:ListBucket` with an `s3:prefix` condition, `s3:GetObject` on `<prefix>/*`), and make
+  sure meeting-api's own S3 credentials can write that prefix — they store the write-back.
 - **Lite** — the single-container build does not package a userdata store or the provisioning
   flow; authenticated mode is not available on Lite today.

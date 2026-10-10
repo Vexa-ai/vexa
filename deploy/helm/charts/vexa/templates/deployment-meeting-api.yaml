@@ -171,7 +171,8 @@ spec:
               value: /etc/vexa/s3/config
             - name: LOG_LEVEL
               value: {{ .Values.meetingApi.logLevel | default "info" | quote }}
-            # Authenticated-bot mode (deployment-scoped) — docs: /authenticated-bots.
+            # Authenticated-bot mode (deployment-scoped) — docs: /authenticated-bots. BOT_S3_* is the
+            # bots' read-only pair; the write-back is stored with the MINIO_* pair above.
             - name: BOT_AUTHENTICATED
               value: {{ .Values.meetingApi.botAuthenticated | default "false" | quote }}
             - name: BOT_USERDATA_S3_PATH

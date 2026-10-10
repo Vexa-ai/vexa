@@ -9,8 +9,11 @@ Runs inside the meeting-api image, which already carries boto3. Safe to re-run.
    .vexa-storage-init/. Every endpoint must pass, including operator-managed S3 stores.
 3. Authenticated bots configured against this storage (BOT_S3_ENDPOINT on the storage host, with
    BOT_S3_ACCESS_KEY / BOT_S3_SECRET_KEY / BOT_USERDATA_S3_PATH) -> create or update that scoped
-   account, attach a bucket policy that limits it to its own prefix, and prove the limit: its own
-   prefix is readable and writable, everything else in the bucket is denied.
+   account, attach a bucket policy that makes it READ-ONLY on its own prefix, and prove the limit:
+   its own prefix is listable and readable, writing or deleting there is denied, everything else in
+   the bucket is denied. Every bot carries this pair, so no bot can change the stored session; a
+   bot's rotated session reaches the store only through meeting-api (which writes with this
+   storage's own pair and accepts only the session profile's files).
 
 Exit codes: 0 ready - 1 the stack must not start (message says why).
 """
@@ -178,27 +181,36 @@ def ensure_scoped_account(endpoint: str, root_ak: str, root_sk: str, ak: str, sk
     return "updated"
 
 
+#: What the bots' account may do, and nothing more: list and read its own prefix.
+BOT_USERDATA_ACTIONS = ("s3:ListBucket", "s3:GetObject")
+
+
 def userdata_policy(bucket: str, prefix: str, principal: str) -> dict:
+    """The bots' account: READ-ONLY on ``<prefix>/``. No PutObject, no DeleteObject — a bot restores
+    the stored session and never writes it (meeting-api does, with this storage's own pair)."""
     return {
         "Version": "2012-10-17",
         "Statement": [
             {"Sid": "VexaBotUserdataList", "Effect": "Allow", "Principal": {"AWS": [principal]},
              "Action": ["s3:ListBucket"], "Resource": [f"arn:aws:s3:::{bucket}"],
              "Condition": {"StringLike": {"s3:prefix": [f"{prefix}/*"]}}},
-            {"Sid": "VexaBotUserdataObjects", "Effect": "Allow", "Principal": {"AWS": [principal]},
-             "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+            {"Sid": "VexaBotUserdataRead", "Effect": "Allow", "Principal": {"AWS": [principal]},
+             "Action": ["s3:GetObject"],
              "Resource": [f"arn:aws:s3:::{bucket}/{prefix}/*"]},
         ],
     }
 
 
 def prove_scope(endpoint: str, ak: str, sk: str, bucket: str, prefix: str, root) -> list[str]:
-    """Own prefix: allowed. A probe outside it and listings of recordings/ and the bucket: denied."""
+    """Own prefix: list and read allowed, write and delete denied. A probe outside it and listings of
+    recordings/ and the bucket: denied. The probes are written by root and removed by root."""
     c = client(endpoint, ak, sk)
     nonce = uuid4().hex
     other = f".vexa-storage-init/{nonce}/scope"
     root.put_object(Bucket=bucket, Key=other, Body=b"not yours")
     probe = f"{prefix}/.vexa-scope-check-{nonce}"
+    root.put_object(Bucket=bucket, Key=probe, Body=b"stored session")
+    new_key = f"{prefix}/.vexa-scope-check-{nonce}-new"
     bad: list[str] = []
 
     def allowed(label, fn):
@@ -214,18 +226,27 @@ def prove_scope(endpoint: str, ak: str, sk: str, bucket: str, prefix: str, root)
         except ClientError:
             pass
 
-    allowed("put own prefix", lambda: c.put_object(Bucket=bucket, Key=probe, Body=b"ok"))
     allowed("get own prefix", lambda: c.get_object(Bucket=bucket, Key=probe)["Body"].read())
     allowed("list own prefix", lambda: c.list_objects_v2(Bucket=bucket, Prefix=f"{prefix}/"))
-    allowed("delete own prefix", lambda: c.delete_object(Bucket=bucket, Key=probe))
+    denied("overwrite an object in own prefix", lambda: c.put_object(Bucket=bucket, Key=probe, Body=b"x"))
+    denied("create an object in own prefix", lambda: c.put_object(Bucket=bucket, Key=new_key, Body=b"x"))
+    denied("delete an object in own prefix", lambda: c.delete_object(Bucket=bucket, Key=probe))
     denied("list recordings/", lambda: c.list_objects_v2(Bucket=bucket, Prefix="recordings/"))
     denied("list the whole bucket", lambda: c.list_objects_v2(Bucket=bucket))
     denied("get an object outside own prefix", lambda: c.get_object(Bucket=bucket, Key=other)["Body"].read())
     denied("overwrite an object outside own prefix", lambda: c.put_object(Bucket=bucket, Key=other, Body=b"x"))
     denied("delete an object outside own prefix", lambda: c.delete_object(Bucket=bucket, Key=other))
-    if root.get_object(Bucket=bucket, Key=other)["Body"].read() != b"not yours":
-        bad.append("an object outside own prefix changed during the check")
-    root.delete_object(Bucket=bucket, Key=other)
+    for key, body, where in ((other, b"not yours", "outside"), (probe, b"stored session", "in")):
+        try:
+            if root.get_object(Bucket=bucket, Key=key)["Body"].read() != body:
+                bad.append(f"an object {where} own prefix changed during the check")
+        except ClientError:
+            bad.append(f"an object {where} own prefix was removed during the check")
+    for key in (other, probe, new_key):
+        try:
+            root.delete_object(Bucket=bucket, Key=key)
+        except ClientError:
+            pass
     return bad
 
 
@@ -251,8 +272,15 @@ def main() -> int:
     if not prefix:
         say("STOP: BOT_S3_* point at this storage but BOT_USERDATA_S3_PATH is empty; the scoped account needs its own prefix.")
         return 1
-    if bot_ak == root_ak:
+    # Neither half of the bots' pair may be a root pair's (this storage's or an operator S3's):
+    # meeting-api refuses such a spawn too. Names only — never a value.
+    root_access = {v for v in (root_ak, os.getenv("S3_ACCESS_KEY", "")) if v}
+    root_secret = {v for v in (root_sk, os.getenv("S3_SECRET_KEY", "")) if v}
+    if bot_ak in root_access:
         say("STOP: BOT_S3_ACCESS_KEY is the storage root key. Authenticated bots need their own scoped key pair.")
+        return 1
+    if bot_sk in root_secret:
+        say("STOP: BOT_S3_SECRET_KEY is a storage root secret. Authenticated bots need their own scoped key pair.")
         return 1
     rc = client(storage_ep, root_ak, root_sk)
     if not wait_ready(rc, f"storage at {storage_ep}"):
@@ -269,7 +297,7 @@ def main() -> int:
     if bad:
         say("STOP: the scoped userdata account is not limited as required: " + "; ".join(bad))
         return 1
-    say(f"scoped userdata account limited to s3://{bot_bucket}/{prefix}/ (own prefix allowed; recordings and the rest denied)")
+    say(f"scoped userdata account read-only on s3://{bot_bucket}/{prefix}/ (list and read allowed; writes, recordings and the rest denied)")
     return 0
 
 
