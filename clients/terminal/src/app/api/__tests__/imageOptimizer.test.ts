@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { isImageOptimizerPath, refuseImageOptimizer } from "../imageOptimizer.mjs";
 
-const SERVER = fileURLToPath(new URL("../../../server.mjs", import.meta.url));
+const SERVER = fileURLToPath(new URL("../../../../server.mjs", import.meta.url));
 
 function fakeRes() {
   const headers: Record<string, string> = {};
