@@ -7,9 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
-import stat
 from pathlib import Path
 from typing import Iterator, Optional
 
@@ -111,77 +109,22 @@ _TURNS_SIDECAR = "{session}.turns.jsonl"
 # subject's chat into this one's history. Below the workspace root nothing is reached through a
 # link: each folder is opened without following one, a file only when it is a regular file with no
 # other hard link.
-_DIR_NOFOLLOW = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
-_FILE_NOFOLLOW = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0)
 #: A session pointer is an id a few dozen bytes long.
 _POINTER_MAX_BYTES = 1 << 16
 _PLAIN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,199}")
 
 
-def _open_dirs(ws: Path, parts: "tuple[str, ...]") -> int:
-    """A descriptor for ``ws/<parts…>``: ``ws`` as given, each part below it never through a link."""
-    fd = os.open(ws, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0))
-    try:
-        for part in parts:
-            nxt = os.open(part, _DIR_NOFOLLOW, dir_fd=fd)
-            os.close(fd)
-            fd = nxt
-    except BaseException:
-        os.close(fd)
-        raise
-    return fd
-
-
 def _read_under(ws: Path, parts: "tuple[str, ...]", name: str,
                 max_bytes: Optional[int] = None) -> Optional[str]:
-    """The UTF-8 text of ``ws/<parts…>/name`` read without following a link, or None (missing, a
-    link anywhere below ``ws``, not a regular file with a single link, over ``max_bytes``)."""
-    try:
-        dir_fd = _open_dirs(ws, parts)
-    except OSError:
-        return None
-    try:
-        fd = os.open(name, _FILE_NOFOLLOW, dir_fd=dir_fd)
-    except OSError:
-        return None
-    finally:
-        os.close(dir_fd)
-    try:
-        st = os.fstat(fd)
-        if not stat.S_ISREG(st.st_mode) or st.st_nlink > 1:
-            return None
-        if max_bytes is not None and st.st_size > max_bytes:
-            return None
-        with os.fdopen(fd, "rb") as fh:
-            fd = -1
-            raw = fh.read() if max_bytes is None else fh.read(max_bytes + 1)
-    except OSError:
-        return None
-    finally:
-        if fd >= 0:
-            os.close(fd)
-    if max_bytes is not None and len(raw) > max_bytes:
-        return None
-    try:
-        return raw.decode("utf-8")
-    except UnicodeDecodeError:
-        return None
+    """The UTF-8 text of ``ws/<parts…>/name`` read without following a link (``workspace_paths``), or
+    None (missing, a link anywhere below ``ws``, not a regular file with a single link, over
+    ``max_bytes``)."""
+    return wpaths.read_text_inside(ws, "/".join((*parts, name)), max_bytes=max_bytes)
 
 
 def _real_subdirs(ws: Path, parts: "tuple[str, ...]") -> Iterator[str]:
     """Names of the folders directly in ``ws/<parts…>`` that are folders, not links to one."""
-    try:
-        dir_fd = _open_dirs(ws, parts)
-    except OSError:
-        return
-    try:
-        with os.scandir(dir_fd) as it:
-            names = sorted(e.name for e in it if e.is_dir(follow_symlinks=False))
-    except OSError:
-        names = []
-    finally:
-        os.close(dir_fd)
-    yield from names
+    yield from wpaths.list_dirs_inside(ws, "/".join(parts))
 
 # The write-back phase runs in the SAME harness session as the turn it follows, so its prompt and
 # its reply are in this transcript. The phase declares itself with this mark — ONE literal now, in
@@ -360,19 +303,23 @@ class WorkspaceReader:
         ws = self._guard_under_root(base)
         if not ws.exists():
             return []
+
+        def skip(rel: str) -> bool:
+            name = rel.rsplit("/", 1)[-1]
+            return name in _ALWAYS_HIDDEN or (not hidden and name.startswith("."))
+
         out: list[str] = []
-        for p in sorted(ws.rglob("*")):
-            parts = p.relative_to(ws).parts
+        # by descriptor, following no link (``workspace_paths.walk_files_inside``): a linked folder
+        # is neither entered nor listed, a linked file is not a file of this workspace
+        for rel in sorted(wpaths.walk_files_inside(ws, skip_dir=skip), key=lambda r: r.split("/")):
+            parts = rel.split("/")
             if any(part in _ALWAYS_HIDDEN for part in parts):
                 continue
             if not hidden and any(part.startswith(".") for part in parts):
                 continue
-            if p.is_file():
-                rel = str(p.relative_to(ws))
-                if not hidden and (rel.startswith(_RESERVED_PREFIXES)
-                                   or _is_template_doc(ws, Path(rel).as_posix())):
-                    continue
-                out.append(rel)
+            if not hidden and (rel.startswith(_RESERVED_PREFIXES) or _is_template_doc(ws, rel)):
+                continue
+            out.append(rel)
         return out
 
     def read(self, subject: str, path: str) -> Optional[str]:
@@ -637,17 +584,18 @@ class WorkspaceReader:
         if "/" in session or "\\" in session or session in ("", ".", ".."):
             raise ValueError("invalid session")
         removed = False
-        targets: list[Path] = []
+        targets: list[tuple[Path, str]] = []
         # every continuity root the pointer may live in (_system, home — extra mount dirs are not
         # needed here: dropping the indexed thread only has to cover the anchored locations)
         for ws in self._continuity_roots(subject):
-            targets.append(ws / ".claude" / "sessions" / f"{session}.session")
+            targets.append((ws, f".claude/sessions/{session}.session"))
             if session == "main":
-                targets.append(ws / ".claude" / ".session")
-        for f in targets:
-            if f.exists() and f.is_file():
-                f.unlink()
-                removed = True
+                targets.append((ws, ".claude/.session"))
+        for ws, rel in targets:
+            # by descriptor (``workspace_paths.unlink_inside``): `.claude` is the tools user's to
+            # write, so a link planted at it or at `sessions` is never followed to remove a file
+            # elsewhere; a link at the pointer itself is removed as the link
+            removed = wpaths.unlink_inside(ws, rel) or removed
         return removed
 
     def git_state(self, subject: str) -> dict:

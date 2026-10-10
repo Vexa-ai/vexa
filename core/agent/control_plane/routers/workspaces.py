@@ -54,6 +54,7 @@ from shared.gitexec import run_git
 from shared.seeding import resolve_seed_dir, seed_workspace, validate_seed
 from typing import Optional
 import hashlib
+import stat as stat_mod
 import os
 
 
@@ -478,14 +479,17 @@ def build(**d) -> APIRouter:
         slug = write_slug(request, body.slug)
         target = _movable_dir(request, subject, rel, slug)
         try:
-            f = wpaths.resolve_inside(target, rel)
+            # CHECK ONCE, ACT ON WHAT WAS CHECKED: the removal goes through the located root and
+            # link-free path by descriptor, so a link swapped in after the check removes nothing
+            # outside this workspace (``workspace_paths.unlink_inside``)
+            froot, frel = wpaths.locate_inside(target, rel)
         except wpaths.PathRefused as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from None
-        if f.is_dir():
+        st = wpaths.stat_inside(froot, frel) if frel else None
+        if not frel or (st is not None and stat_mod.S_ISDIR(st.st_mode)):
             raise HTTPException(status_code=400, detail="that is a folder — this removes one page")
-        if not f.is_file():
+        if st is None or not stat_mod.S_ISREG(st.st_mode) or not wpaths.unlink_inside(froot, frel):
             raise HTTPException(status_code=404, detail="not found")
-        f.unlink()
         sha = _commit(target, [rel, *_kg_index_after(target, rel)],
                       f"{target.name}: {rel} — removed"[:72])
         return {"path": rel, "deleted": True, "workspace": slug or "", "commit": sha}

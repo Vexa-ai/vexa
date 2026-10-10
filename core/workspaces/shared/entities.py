@@ -23,7 +23,6 @@ guard exists to refuse. ``aliases``/``created``/``sources`` are added on top; no
 from __future__ import annotations
 
 import datetime as _dt
-import os
 import re
 import unicodedata
 from pathlib import Path
@@ -262,23 +261,23 @@ def workspace_docs(root) -> set:
     workspace and not only of the entity tree. Bounded on purpose — hidden and vendored directories
     are pruned and the walk stops at ``_DOC_LIMIT`` files — because this runs on every entity write,
     and a workspace with a repository checked into it must not turn one upsert into a tree scan."""
-    base = Path(root)
     out: set = set()
-    if not base.is_dir():
-        return out
-    entities = str(base / ENTITIES_DIR)
+
+    def skip(rel: str) -> bool:
+        name = rel.rsplit("/", 1)[-1]
+        return name.startswith(".") or name in _DOC_SKIP_DIRS or rel == ENTITIES_DIR
+
     seen = 0
-    for dirpath, dirnames, filenames in os.walk(base):
-        dirnames[:] = [d for d in dirnames if not d.startswith(".") and d not in _DOC_SKIP_DIRS]
-        if dirpath == entities or dirpath.startswith(entities + os.sep):
+    # by descriptor, following no link (``workspace_paths.walk_files_inside``): a linked folder is not
+    # entered and a linked page is not a page of this workspace
+    for rel in _wp.walk_files_inside(root, skip_dir=skip):
+        f = rel.rsplit("/", 1)[-1]
+        if not f.endswith(".md"):
             continue
-        for f in filenames:
-            if not f.endswith(".md"):
-                continue
-            seen += 1
-            if seen > _DOC_LIMIT:
-                return out
-            out.add(slugify(f[:-3]))
+        seen += 1
+        if seen > _DOC_LIMIT:
+            return out
+        out.add(slugify(f[:-3]))
     out.discard("")
     return out
 

@@ -111,7 +111,9 @@ def workspace_write_lock(work_dir: Path, timeout: float = WRITE_LOCK_TIMEOUT_S):
     git_dir = work_dir / ".git"
     lock_path = (git_dir if git_dir.exists() else work_dir) / ".vexa-writer.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+    # never through a link at the lock's name (beside the tree there is no `.git` to keep it ours)
+    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0),
+                 0o600)
     try:
         start = time.monotonic()
         while True:
