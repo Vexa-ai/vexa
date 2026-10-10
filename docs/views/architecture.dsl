@@ -26,6 +26,7 @@ system meetings  # capture → transcribe → record; owns the raw transcript
   contract invocation.v1
   contract lifecycle.v1
   contract service-authority.v1
+  contract session-profile.v1
   contract transcript.v1
   contract webhook.v1
   service transcription
@@ -136,7 +137,7 @@ edges:
   terminal -read-> out-stream
   bot -write-> recording-blob
   bot -read-> userdata-blob  # restore the stored session before launch, with the bots' read-only key pair (BOT_S3_*: Get + List on the userdata prefix and nothing else); the bot never writes the store — its rotated session goes back through meeting-api (bot-session-writeback)
-  bot -req-> meeting-api  # an authenticated bot's rotated browser session, on clean teardown: PUT /internal/browser-session/{session_uid} with Authorization: Bearer <MeetingToken> (the invocation.v1 session token) admitted for exactly that session_uid, and only from the live authenticated bot — the newest session spawned on the deployment's identity, of the token's meeting, live or ended under 600 s; anything else is refused (401/403). Carrier: a JSON body {files: [{path, data (base64)}]} whose every path is one the session-profile.v1 profile names (remote-browser's, a byte-identical copy in meeting-api's session_profile), size-bounded per file and in total
+  bot -req-> meeting-api  # an authenticated bot's rotated browser session, on clean teardown: session-profile.v1's route, PUT /internal/browser-session/{session_uid}, at the URL meeting-api names in the bot's invocation (invocation.v1 sessionWritebackUrl, sent only in authenticated mode; the bot derives none), with Authorization: Bearer <MeetingToken> (the invocation.v1 session token) admitted for exactly that session_uid, and only from the live authenticated bot — the newest session spawned on the deployment's identity, of the token's meeting, live or ended under 600 s; anything else is refused (401/403). Carrier: a session-profile.v1 WritebackBody {files: [{path, data (base64)}]} whose every path is one the contract's SessionProfile names, size-bounded per file and in total; remote-browser and meeting-api each read a verbatim copy of the contract
   meeting-api -write-> userdata-blob  # stores an admitted session write-back with meeting-api's own storage credentials (S3_*, else MINIO_*) at BOT_S3_ENDPOINT / BOT_S3_BUCKET under BOT_USERDATA_S3_PATH; the bots' key pair stays read-only
   remote-browser -write-> userdata-blob  # provisioning login uploads the confirmed signed-in session
   gateway -read-> recording-blob
