@@ -22,6 +22,7 @@ from .backend import WorkloadHandle
 from .models import Resources
 from .mounts import k8s_volume_mounts
 from .profiles import Runnable
+from .workload_env import forwarded_env
 
 MANAGED_LABEL = "runtime.managed"
 #: Which runtime spawned the Pod (the Helm release); adoption selects on it, so two releases in one
@@ -363,6 +364,10 @@ class K8sBackend:
         if not runnable.image:
             raise ValueError("k8s backend requires an image")
         name = self._pname(workload_id)
+        # The profile's forward list (the worker's model, its dials and caps), from the runtime's own
+        # environment, exactly as the docker and process backends forward it: a key the spec
+        # already carries is never refilled.
+        env = {**env, **forwarded_env(runnable.forward_env, os.environ, env)}
         # The workspace mount set and the runtime's OWN scheduling constraints both shape the Pod.
         # The latter live in the runtime's PROCESS env (the chart sets them on the runtime
         # Deployment), not in the per-workload spec.env — which is built per-workload by different
