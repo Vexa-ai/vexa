@@ -32,6 +32,7 @@ import time
 from pathlib import Path
 from typing import Callable, Iterable, Optional
 
+from control_plane.workspace_attach import _slot
 from shared.gitexec import run_git
 from workspaces.shared import workspace_paths as wpaths
 from workspaces.shared.workspace_id import (KINDS, TOUCHES_FILE, VEXA_DIR, WORKSPACE_JSON,
@@ -291,6 +292,45 @@ def _commit_identity(ws_dir: Path) -> None:
         logger.info("could not commit the workspace identity in %s: %s", ws_dir, exc)
 
 
+def workspace_dir(root, slug) -> Optional[Path]:
+    """``<root>/<slug>`` for a slug that can name a top-level workspace, else None.
+
+    The org tier (``_global``), or ONE name under the workspace naming rule
+    (``workspace_attach._slot``: alphanumeric first, no separator, never a dotname) that is not a
+    reserved system name. So the platform's own directories at the store root (``.attached``,
+    ``.system``, ``.attached-shared``, a staging directory) and anything a volume brings
+    (``lost+found``) are never a workspace, whoever names them."""
+    s = str(slug or "").strip()
+    if s == GLOBAL_SLUG:
+        return Path(root) / GLOBAL_SLUG
+    if s in _SKIP_SLUGS:
+        return None
+    try:
+        return _slot(Path(root), s)
+    except KeyError:
+        return None
+
+
+def addressable(record: Optional[dict], root) -> bool:
+    """A registry record that names a workspace a slug can address: its slug passes
+    :func:`workspace_dir`, and its tree is ``<root>/<slug>`` (or ``_global``'s, or a tree in its
+    owner's private store). A record failing this is answered ``gone`` and dropped at startup."""
+    if not record:
+        return False
+    named = workspace_dir(root, record.get("slug"))
+    if named is None:
+        return False
+    if record.get("slug") == GLOBAL_SLUG or private_owner(record, root) is not None:
+        return True
+    d = record.get("dir")
+    if not d:
+        return True
+    try:
+        return Path(str(d)).resolve() == named.resolve()
+    except OSError:
+        return False
+
+
 def sync_workspace(root, slug: str, *, registry: WorkspaceRegistry, kind: Optional[str] = None,
                    name: Optional[str] = None, owner: Optional[str] = None,
                    ws_dir=None, created: Optional[str] = None) -> Optional[dict]:
@@ -301,8 +341,16 @@ def sync_workspace(root, slug: str, *, registry: WorkspaceRegistry, kind: Option
     restore, promote, un-share — it reads the identity out of the tree that is now in place. A
     parked tree brings its id back with it; a freshly cloned repo that already carries
     ``.vexa/workspace.json`` keeps ITS id, and the registry re-points to the new slug. That is how
-    an attached repo stays the same workspace instead of becoming a new one wearing its name."""
-    d = Path(ws_dir) if ws_dir is not None else Path(root) / slug
+    an attached repo stays the same workspace instead of becoming a new one wearing its name.
+
+    For the acts above only: ``slug`` comes from the platform (a created or moved tree, or the
+    caller's own subject), never straight from a request. A lookup that missed uses
+    :func:`resolve_slug`, which mints and registers nothing. A slug outside the naming rule is
+    refused here too (None), so no path registers one."""
+    named = workspace_dir(root, slug)
+    if named is None:
+        return None
+    d = Path(ws_dir) if ws_dir is not None else named
     if not d.is_dir():
         return None
     kind = (kind or classify(d)).strip().lower()
@@ -330,6 +378,29 @@ def sync_workspace(root, slug: str, *, registry: WorkspaceRegistry, kind: Option
     })
 
 
+def resolve_slug(root, slug: str, *, registry: WorkspaceRegistry) -> Optional[dict]:
+    """A lookup by slug that missed the registry: re-point the record the tree at ``<root>/<slug>``
+    already carries, or None. Never mints an id and never registers a new record — naming a
+    workspace in a request is not an act that creates one.
+
+    The tree's own ``.vexa/workspace.json`` must name an id the registry already holds, and that
+    record must not still point at another tree that exists (a lookup does not move a workspace
+    away from where it is)."""
+    d = workspace_dir(root, slug)
+    if d is None or not d.is_dir():
+        return None
+    found = read_workspace_json(d)
+    if not found:
+        return None
+    rec = registry.get(str(found.get("id") or ""))
+    if rec is None:
+        return None
+    prev = rec.get("dir")
+    if prev and Path(str(prev)) != d and Path(str(prev)).is_dir():
+        return None
+    return registry.put({**rec, "slug": str(slug).strip(), "dir": str(d)})
+
+
 def rename(registry: WorkspaceRegistry, workspace_id: str, name: str) -> Optional[dict]:
     """Set a workspace's display name. The id and every link into it are untouched — which is the
     single behaviour decision 26 was asked for."""
@@ -351,9 +422,15 @@ def migrate(root, registry: WorkspaceRegistry, *, created: Optional[str] = None)
     slot inside somebody's attach store would resolve links to a tree nobody can open. Minting it
     now is what makes the id survive the swap that brings it back."""
     rootp = Path(root)
-    out = {"indexed": [], "minted": [], "parked_minted": []}
+    out = {"indexed": [], "minted": [], "parked_minted": [], "dropped": []}
     if not rootp.is_dir():
         return out
+    # A record no slug can address (a platform directory registered by name, say) is dropped: its
+    # links then answer `gone`, which is what such a record should always have answered.
+    for rec in registry.all():
+        if not addressable(rec, rootp):
+            registry.forget(str(rec.get("id")))
+            out["dropped"].append(rec.get("id"))
     day = created or _dt.date.today().isoformat()
     for d in sorted(rootp.iterdir()):
         if not d.is_dir() or d.name.startswith(".") or d.name in _SKIP_SLUGS:
@@ -427,6 +504,8 @@ def access_for(record: Optional[dict], subject: str, *, root=None,
     d = record.get("dir")
     if d and not Path(d).is_dir():
         return ACCESS_GONE
+    if root is not None and not addressable(record, root):
+        return ACCESS_GONE              # a platform directory, or a row pointing somewhere else
     owner = private_owner(record, root)
     if owner is not None:               # a tree in its owner's private store: theirs alone
         return ACCESS_READABLE if str(subject or "").strip() == owner else ACCESS_NOT_YOURS

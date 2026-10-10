@@ -84,6 +84,7 @@ def build(**d) -> APIRouter:
     _workspace_key = d['_workspace_key']
     _ws_is_member = d['_ws_is_member']
     _ws_sync = d['_ws_sync']
+    _ws_lookup = d['_ws_lookup']
     mindex = d['mindex']
     settings = d['settings']
     subject_of = d['subject_of']
@@ -1017,7 +1018,7 @@ def build(**d) -> APIRouter:
         if slot is not None and slug not in (own.get("active"), "seed") and workspace_slot_dir(wsr.root, subject, slug).is_dir():
             return {"id": slug, "slug": slug, "name": slot.get("name") or slug,
                     "kind": "private", "access": "readable", "writable": True}
-        rec = workspace_registry.by_slug(slug) or _ws_sync(slug)
+        rec = workspace_registry.by_slug(slug) or _ws_lookup(slug)
         access = ids_mod.access_for(rec, subject, root=wsr.root, is_member=_ws_is_member)
         return ids_mod.view(rec, access, writable=ids_mod.writable_for(
             rec, subject, root=wsr.root, is_member=_ws_is_member))

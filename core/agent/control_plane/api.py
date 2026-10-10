@@ -451,7 +451,8 @@ def create_app(
         # at all, by construction, precisely so nothing can reach it this way.
         if not write and subject:
             rec = workspace_registry.by_slug(target)
-            if rec and rec.get("kind") == "desk" and ids_mod.private_owner(rec, wsr.root) is None:
+            if (rec and rec.get("kind") == "desk" and ids_mod.addressable(rec, wsr.root)
+                    and ids_mod.private_owner(rec, wsr.root) is None):
                 d = Path(str(rec.get("dir") or ""))
                 if d.is_dir():
                     return d
@@ -867,11 +868,21 @@ def create_app(
     def _ws_sync(slug: str, **kw):
         """Re-point the registry at a workspace that just moved. Best-effort by design: a failure
         here costs a stale row that the next startup migration repairs, and it must never fail the
-        act that moved the workspace."""
+        act that moved the workspace. Only for an act that created or moved a tree (or the caller's
+        own desk): a slug a request names goes through `_ws_lookup`."""
         try:
             return ids_mod.sync_workspace(wsr.root, slug, registry=workspace_registry, **kw)
         except Exception as exc:  # noqa: BLE001
             logger.warning("workspace-id sync failed for %s: %s: %s", slug, type(exc).__name__, exc)
+            return None
+
+    def _ws_lookup(slug: str):
+        """A slug a request names that the registry does not know: re-point the record its tree
+        already carries, or None. Registers nothing (`workspace_ids.resolve_slug`)."""
+        try:
+            return ids_mod.resolve_slug(wsr.root, slug, registry=workspace_registry)
+        except Exception as exc:  # noqa: BLE001 — a lookup that fails is a miss, never a 500
+            logger.warning("workspace-id lookup failed for %s: %s", slug, type(exc).__name__)
             return None
 
     def _ws_here(request: Request, slug: Optional[str]):
@@ -884,7 +895,7 @@ def create_app(
         subject = subject_of(request)
         rec = workspace_registry.by_slug(slug) if slug else workspace_registry.by_slug(str(subject))
         if rec is None and slug:
-            rec = _ws_sync(slug)
+            rec = _ws_lookup(slug)
         if rec is None and not slug:
             rec = _ws_sync(str(subject), kind="desk", owner=str(subject))
         if rec is None:
@@ -987,7 +998,7 @@ def create_app(
         _resolve_room=_resolve_room, _scaffold_is_for=_scaffold_is_for,
         _scaffold_recipient_is=_scaffold_recipient_is, _scaffold_view=_scaffold_view,
         _schedule_source=_schedule_source, _workspace_key=_workspace_key, _ws_here=_ws_here,
-        _ws_is_member=_ws_is_member, _ws_sync=_ws_sync, dispatcher=dispatcher,
+        _ws_is_member=_ws_is_member, _ws_sync=_ws_sync, _ws_lookup=_ws_lookup, dispatcher=dispatcher,
         invocations_url=invocations_url, live=live, mindex=mindex,
         redis_url=redis_url, scaffolds=scaffolds, scheduler=scheduler, sess=sess,
         settings=settings, stream_reader=stream_reader,
