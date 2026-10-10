@@ -1,0 +1,86 @@
+# Dependency review: a pull request may not add a runtime dependency with a HIGH or CRITICAL advisory,
+# or under a licence outside FINOS Categories A and B. LGPL is not on the list: FINOS lists it as
+# Category X. The repository's own reviewed exceptions (license-exceptions.json) are enforced by
+# gate:licenses; this check reads GitHub's dependency graph for the diff of the pull request only.
+name: Dependency review
+
+on:
+  pull_request:                       # every base: main and the 0.13 line
+
+permissions:
+  contents: read
+
+jobs:
+  dependency-review:
+    runs-on: ubuntu-latest
+    steps:
+      # No checkout: the action reads the dependency graph diff through the API.
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: high
+          fail-on-scopes: runtime
+          comment-summary-in-pr: never
+          # FINOS Category A (and common SPDX spellings) and Category B (MPL, EPL, CDDL, OFL).
+          allow-licenses: >-
+            0BSD,
+            Apache-2.0,
+            BlueOak-1.0.0,
+            BSD-2-Clause,
+            BSD-3-Clause,
+            BSD-3-Clause-Clear,
+            CC0-1.0,
+            CC-BY-4.0,
+            CDDL-1.0,
+            CDDL-1.1,
+            EPL-1.0,
+            EPL-2.0,
+            ISC,
+            MIT,
+            MIT-0,
+            MPL-1.1,
+            MPL-2.0,
+            OFL-1.1,
+            PSF-2.0,
+            Python-2.0,
+            Unlicense,
+            WTFPL,
+            Zlib
+          # Reviewed exceptions, by package (security/known-advisories.md § Dependency review):
+          #  - typing-extensions is PSF-2.0 (its own license_expression); GitHub's detector reads the PSF
+          #    licence file's history section and reports GPL-1.0-or-later.
+          #  - libvips behind sharp (LGPL-3.0-or-later, and the win32/wasm builds that bundle it) is the
+          #    logged Category-B exception in license-exceptions.json: the bot images load it through
+          #    @huggingface/transformers; the terminal's runtime tree drops it. Open against FINOS, which
+          #    lists LGPL as Category X.
+          #  - json-schema, uri-js and bowser appear only in services/dashboard (below).
+          allow-dependencies-licenses: >-
+            pkg:pypi/typing-extensions,
+            pkg:npm/%40img/sharp-libvips-darwin-arm64,
+            pkg:npm/%40img/sharp-libvips-darwin-x64,
+            pkg:npm/%40img/sharp-libvips-linux-arm,
+            pkg:npm/%40img/sharp-libvips-linux-arm64,
+            pkg:npm/%40img/sharp-libvips-linux-ppc64,
+            pkg:npm/%40img/sharp-libvips-linux-riscv64,
+            pkg:npm/%40img/sharp-libvips-linux-s390x,
+            pkg:npm/%40img/sharp-libvips-linux-x64,
+            pkg:npm/%40img/sharp-libvips-linuxmusl-arm64,
+            pkg:npm/%40img/sharp-libvips-linuxmusl-x64,
+            pkg:npm/%40img/sharp-wasm32,
+            pkg:npm/%40img/sharp-win32-arm64,
+            pkg:npm/%40img/sharp-win32-ia32,
+            pkg:npm/%40img/sharp-win32-x64,
+            pkg:npm/json-schema,
+            pkg:npm/uri-js,
+            pkg:npm/bowser
+          # services/dashboard is the retiring 0.10 dashboard: off by default, outside the gates
+          # (ADR-0007), not built by this line's release, and excluded from OSV-Scanner for the same
+          # reason. Dependency review cannot exclude a path, so its advisories are allowed by ID here;
+          # every shipped lockfile stays guarded by OSV-Scanner, which carries no such entry.
+          allow-ghsas: >-
+            GHSA-22p9-wv53-3rq4, GHSA-28wg-ghj8-5hjv, GHSA-2v37-7h3g-55p8, GHSA-2x7j-588g-ccc2,
+            GHSA-2xp9-vwfh-vxw4, GHSA-68fv-2mgg-jv7q, GHSA-6g55-p6wh-862q, GHSA-6gpp-xcg3-4w24,
+            GHSA-7rqj-j65f-68wh, GHSA-89xv-2m56-2m9x, GHSA-c8x8-7fp4-3x9w, GHSA-cjq9-62q9-8jv4,
+            GHSA-f88m-g3jw-g9cj, GHSA-j95f-988m-3j2f, GHSA-m99w-x7hq-7vfj, GHSA-p293-qw3h-jr36,
+            GHSA-p6gq-j5cr-w38f, GHSA-p9j2-gv94-2wf4, GHSA-r28c-9q8g-f849, GHSA-r7g4-qg5f-qqm2,
+            GHSA-rgj7-g3m4-5g8c, GHSA-v245-v573-v5vm, GHSA-v53p-9fqp-m79j, GHSA-vcvr-r3jv-pc5j,
+            GHSA-wq5f-xc86-pv6w, GHSA-xmf8-cvqr-rfgj

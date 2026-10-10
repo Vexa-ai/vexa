@@ -984,6 +984,29 @@ jobs:
   # dispatches release-validate standalone, where the identity IS enforced. The consequence
   # for this workflow's conclusion is the point: release-images is red when the build or the
   # published artifacts are wrong, and green when they are not.
+  # Trivy over every image this run built (image-cve-scan.yml): fixed CRITICAL/HIGH advisories in
+  # Vexa's own images. Report-only for now (blocking: false), in parallel with validate and never in
+  # its way: today's findings are in the base layers (Debian packages in node:22-slim, the Go stdlib
+  # of the kubectl the runtime bakes, npm's bundled packages), which a base refresh fixes and a code
+  # change cannot. Flip blocking to true once a run reports none.
+  scan-images:
+    needs: [preflight, build, build-bot]
+    if: >-
+      ${{
+        always() &&
+        needs.preflight.result == 'success' &&
+        needs.preflight.outputs.reuse_candidate != 'true' &&
+        needs.build.result == 'success'
+      }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/image-cve-scan.yml
+    with:
+      build-matrix: ${{ needs.preflight.outputs.build_matrix }}
+      tag: ${{ needs.preflight.outputs.version }}
+      images: ${{ needs.build-bot.result == 'success' && format('["vexaai/vexa-bot:{0}"]', needs.preflight.outputs.version) || '[]' }}
+      blocking: false
+
   validate:
     needs: [preflight, build, build-bot, alias-candidate, sbom]
     if: >-
