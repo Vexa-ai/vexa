@@ -4,9 +4,9 @@
     {
       "package": "@img/sharp-libvips",
       "license": "LGPL-3.0-or-later",
-      "reason": "libvips native binary behind `sharp`. LGPL is weak copyleft; it is used unmodified and dynamically linked (a separate .dylib/.so loaded at runtime, never statically bundled into our JS), so it qualifies as FINOS/ASF Category B. It enters transitively via @huggingface/transformers' IMAGE pipeline; Vexa's mixed lane is AUDIO-only and never instantiates it.",
-      "disposition": "Logged exception AND pruned from the deployment artifact (`--no-optional` / omit @img/sharp-*), so no LGPL binary ships.",
-      "scope": "@vexa/mixed-pipeline (transitive, build-time only)",
+      "reason": "libvips native binary behind `sharp`. LGPL is weak copyleft; it is used unmodified and dynamically linked (a separate prebuilt .so/.dylib that sharp's binding loads at runtime, never statically bundled into our JS), so it qualifies as FINOS/ASF Category B. Two routes bring it in. (1) @vexa/mixed-pipeline → @huggingface/transformers, which lists sharp as a hard dependency and imports it at module scope (dist/transformers.node.mjs), so sharp and its platform libvips binary are installed and loaded wherever the mixed lane runs; the lane is AUDIO-only and never calls an image function. (2) clients/terminal → next, as an optional dependency that only the image optimizer loads; the terminal turns the optimizer off (next.config.ts images.unoptimized).",
+      "disposition": "Logged exception. Ships unmodified in vexaai/vexa-bot and in vexaai/vexa-lite's bot tree (route 1: sharp cannot be dropped without breaking the transformers import). Removed from the terminal's runtime tree in vexaai/v012-terminal (clients/terminal/Dockerfile, deps-prod) and in vexaai/vexa-lite (terminal-builder); gate:image-licenses holds that removal and the optimizer setting together.",
+      "scope": "@vexa/mixed-pipeline (bot runtime: vexaai/vexa-bot, vexaai/vexa-lite); clients/terminal (build stage only, removed from the runtime tree)",
       "approved": "ADR-0004"
     },
     {
@@ -14,7 +14,7 @@
       "license": "MPL-2.0",
       "reason": "Native CSS transform/minification engine used by the Next/Tailwind toolchain. MPL applies to the unmodified dependency files, not to Vexa source or generated CSS.",
       "disposition": "Logged exception; dependency remains an isolated build/runtime package managed by pnpm.",
-      "scope": "frontend build pipeline and Next CSS handling",
+      "scope": "terminal build only (devDependency via @tailwindcss/postcss); absent from every runtime image",
       "approved": "ADR-0004"
     },
     {

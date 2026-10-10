@@ -36,11 +36,13 @@ data, not prose.
 
 **Transitive pruning is part of the policy.** Prefer deps with clean trees; where an optional transitive
 dep drags in an encumbered licence for a feature we don't use, prune it at packaging. *Known case:* the
-`@img/sharp-libvips-*` native binary (**LGPL-3.0**) enters via `sharp` ← `@huggingface/transformers`'s
-**image** pipeline — Vexa's mixed lane is **audio-only** and never loads it. It is logged as a Category-B
-exception (`license-exceptions.json`: LGPL, dynamically linked, unmodified — compliant) **and** pruned
-from the deployment artifact (`--no-optional`), so no LGPL binary ships. Audit (2026-06-18): **112 of 113
-npm deps are Category A**; this is the only non-permissive one.
+`@img/sharp-libvips-*` native binary (**LGPL-3.0**) behind `sharp`. The terminal gets it as an optional
+dependency of `next` that only the image optimizer loads; the optimizer is off
+(`clients/terminal/next.config.ts`), so both terminal runtime trees remove `sharp` and `@img/*`, and
+`gate:image-licenses` holds the two together. The bot gets it through `@huggingface/transformers`, which
+imports `sharp` at module scope, so it cannot be pruned there: it ships unmodified and dynamically linked
+in `vexaai/vexa-bot` and `vexaai/vexa-lite`, logged as a Category-B exception
+(`license-exceptions.json`), though the mixed lane is **audio-only** and never calls an image function.
 
 **Baked artifacts are covered outside the dependency gate.** `gate:licenses` scans the resolved
 *dependency* tree; it cannot see bytes baked into an image that are not npm/pip deps — notably model

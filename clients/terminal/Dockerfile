@@ -60,10 +60,16 @@ RUN npm run build && rm -rf .next/cache
 # next.config.ts at runtime and npm-installs its own at BOOT when it's absent. `npm i typescript`
 # here CANNOT provide it: NODE_ENV=production makes npm silently omit anything matching a
 # devDependency. So it is COPIED from the build stage — the exact compiler `next build` ran with.
+#
+# sharp is not shipped. It is an optional dependency of next that only the image optimizer loads,
+# and next.config.ts turns the optimizer off (`/_next/image` answers 404 before sharp is required),
+# so the runtime tree drops sharp and its @img/* natives, among them the LGPL-3.0-or-later libvips
+# binary. Removed by name rather than with `--omit=optional`: next's platform SWC binary is
+# optional too, and the server needs it at runtime to compile next.config.ts.
 FROM node:22-slim AS deps-prod
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+RUN npm ci --omit=dev && rm -rf node_modules/sharp node_modules/@img && npm cache clean --force
 COPY --from=build /app/node_modules/typescript ./node_modules/typescript
 
 # deps-dev: the build stage already holds the full npm ci tree.

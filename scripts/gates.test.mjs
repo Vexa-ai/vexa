@@ -326,6 +326,29 @@ test("image-licenses RED: an undeclared Dockerfile FROM pin reds", () => {
   assert.match(r.out, /somevendor\/unaudited:1\.2/);
 });
 
+const TERMINAL_DOCKERFILE = "clients/terminal/Dockerfile";
+const TERMINAL_NEXT_CONFIG = "clients/terminal/next.config.ts";
+const SHARP_PRUNE = " && rm -rf node_modules/sharp node_modules/@img";
+
+test("image-licenses RED: the terminal image keeping sharp (LGPL libvips) reds", () => {
+  const r = withEdited(TERMINAL_DOCKERFILE, SHARP_PRUNE, "", () => runGate("image-licenses"));
+  assert.equal(r.green, false, "the terminal's runtime tree kept sharp and the gate stayed green");
+  assert.match(r.out, /clients\/terminal\/Dockerfile \(deps-prod\) ships sharp/);
+});
+
+test("image-licenses RED: Lite's terminal tree keeping sharp reds", () => {
+  const r = withEdited(LITE, SHARP_PRUNE, "", () => runGate("image-licenses"));
+  assert.equal(r.green, false, "Lite's terminal-builder kept sharp and the gate stayed green");
+  assert.match(r.out, /Dockerfile\.lite \(terminal-builder\) ships sharp/);
+});
+
+test("image-licenses RED: the terminal's image optimizer turned back on reds", () => {
+  const r = withEdited(TERMINAL_NEXT_CONFIG, "  images: { unoptimized: true },\n", "",
+    () => runGate("image-licenses"));
+  assert.equal(r.green, false, "the optimizer came back on while the images remove sharp, and the gate stayed green");
+  assert.match(r.out, /unoptimized/);
+});
+
 test("runtime-parity RED: the bare `apt install` form (not just apt-get) is caught too", () => {
   // A contributor who writes `apt install redis-server` (no -get) must not bypass the #636 guard.
   const inject = "RUN apt install -y redis-server\nFROM mcr.microsoft.com/playwright:v1.56.0-noble AS final";

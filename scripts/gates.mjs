@@ -641,6 +641,30 @@ function gateImageLicenses() {
   if (existsSync(lite) && /\bapt(?:-get)? install\b[^&]*?\bredis-server\b/.test(readFileSync(lite, "utf8")))
     bad.push("Lite bakes `apt install redis-server` (jammy 6.0.16 — no XAUTOCLAIM, the #653 parity trap). Use the Valkey source-build stage (BSD-3, XAUTOCLAIM) instead.");
 
+  // (4) The terminal ships without sharp. next loads sharp, and through it the LGPL-3.0-or-later
+  //     @img/sharp-libvips-* binary, only for the image optimizer; clients/terminal/next.config.ts
+  //     turns the optimizer off, and every stage that assembles the terminal's runtime node_modules
+  //     removes sharp and @img/* by name after its production install. The two halves are checked
+  //     together because each is a regression without the other: sharp removed with the optimizer
+  //     on breaks /_next/image, sharp kept with the optimizer off ships a binary nothing loads.
+  const SHARP_PRUNE = /rm -rf node_modules\/sharp node_modules\/@img(?:\s|$)/m;
+  const stageText = (text, stage) => {
+    const at = text.search(new RegExp(`^FROM[ \\t]+\\S+[ \\t]+AS[ \\t]+${stage}[ \\t]*$`, "mi"));
+    if (at < 0) return null;
+    const rest = text.slice(at);
+    const next = rest.slice(1).search(/^FROM[ \t]/m);
+    return next < 0 ? rest : rest.slice(0, next + 1);
+  };
+  for (const [file, stage] of [[join("clients", "terminal", "Dockerfile"), "deps-prod"], [join("deploy", "lite", "Dockerfile.lite"), "terminal-builder"]]) {
+    if (!existsSync(join(ROOT, file))) continue;
+    const body = stageText(readFileSync(join(ROOT, file), "utf8"), stage);
+    if (body === null) bad.push(`${file}: no \`${stage}\` stage — this gate cannot see where the terminal's runtime node_modules are assembled; update gate:image-licenses with the new stage`);
+    else if (!SHARP_PRUNE.test(body)) bad.push(`${file} (${stage}) ships sharp and @img/sharp-libvips-* (LGPL-3.0-or-later) in the terminal's runtime tree — remove them after the production install (\`rm -rf node_modules/sharp node_modules/@img\`); the terminal's image optimizer is off, so nothing loads them`);
+  }
+  const termConfig = join(ROOT, "clients", "terminal", "next.config.ts");
+  if (existsSync(termConfig) && !/\bimages:\s*\{\s*unoptimized:\s*true\b/.test(readFileSync(termConfig, "utf8")))
+    bad.push("clients/terminal/next.config.ts no longer sets `images: { unoptimized: true }` — the terminal images remove sharp, which the image optimizer needs. Turn the optimizer back off, or keep sharp and log the LGPL libvips binary it ships in license-exceptions.json");
+
   if (bad.length) return fail(bad);
   console.log(`  ✓ gate:image-licenses — ${foundImages.size} pinned image(s) + ${(man.bundled || []).length} bundled component(s) declared & audited${flagged.length ? ` (${flagged.length} non-A by logged reason: ${flagged.join("; ")})` : ""}`);
   return true;

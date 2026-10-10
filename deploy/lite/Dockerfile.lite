@@ -58,7 +58,9 @@ COPY clients/terminal/package.json clients/terminal/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY clients/terminal/ ./
 # next build needs the dev deps (typescript/tailwind); prune them after so the runtime tree is lean.
-RUN npm run build && npm prune --omit=dev
+# sharp and its @img/* natives (LGPL libvips among them) go too: next loads sharp only for the image
+# optimizer, which the terminal's next.config.ts turns off (same as clients/terminal/Dockerfile).
+RUN npm run build && npm prune --omit=dev && rm -rf node_modules/sharp node_modules/@img
 
 # -----------------------------------------------------------------------------
 # Stage 2c: valkey-builder — build valkey-server + valkey-cli from source on the SAME glibc
