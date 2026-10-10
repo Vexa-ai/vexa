@@ -29,9 +29,10 @@ dependencies = [
     # x-real-ip, etc.) in the default excluded-header set, which skips only the ssrf detection
     # category for them, so an internal address in X-Forwarded-For no longer trips an SSRF
     # auto-ban on the proxy or the client; every other detection category still scans them.
-    # The lock sits on fastapi-guard 8.0.2 / guard-core 4.1.0: 8.0.2 floors guard-core>=4.1.0,
+    # The lock sits on fastapi-guard 8.0.3 / guard-core 4.1.0: 8.0.2 floors guard-core>=4.1.0,
     # resolves per-route config through Starlette's trailing-slash redirect, and gives
-    # middleware-generated 403/429 pages an explicit text/plain Content-Type; 4.1.0 is the
+    # middleware-generated 403/429 pages an explicit text/plain Content-Type (8.0.3 is the
+    # Guard-Core org metadata release, no code changes); 4.1.0 is the
     # exempt_ips release the 8.0.2 floor tracks (no gateway config uses exempt_ips, so inert
     # here) and lands the recon leading-separator gate plus the binary-upload scan fixes from
     # 4.0.3-4.0.5 (inert while enable_penetration_detection stays False).
