@@ -44,11 +44,14 @@ DATA + APIs only.
 """
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import logging
+import os
 import re
 import secrets
+import stat
 import threading
 import time
 import urllib.parse
@@ -384,22 +387,98 @@ def _ws_dir(root: Path, workspace_id: str) -> Path:
     return ws
 
 
+# The policy files sit in the work tree, which the model's tools may write during a turn. So below
+# the workspace root nothing is reached through a link: each folder is opened without following one,
+# the file is read only when it is a regular file with no other hard link, and a write creates a new
+# file and renames it over the name — a link planted at the file is replaced, never written through,
+# and a link planted at a folder refuses the write. A list that cannot be read that way is empty:
+# no members, never somebody else's.
+_DIR_NOFOLLOW = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+_FILE_NOFOLLOW = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0)
+_CREATE_NEW = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+
+
+def _policy_dir_fd(ws: Path, parts: "list[str]", *, create: bool = False) -> int:
+    """A descriptor for ``ws/<parts…>``: ``ws`` (already traversal-guarded) as given, each part below
+    it opened without following a link; a missing one (``ws`` included) made first when ``create``."""
+    if create:
+        Path(ws).mkdir(parents=True, exist_ok=True)
+    fd = os.open(ws, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0))
+    try:
+        for part in parts:
+            if create:
+                try:
+                    os.mkdir(part, 0o755, dir_fd=fd)
+                except FileExistsError:
+                    pass
+            nxt = os.open(part, _DIR_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = nxt
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
 def _read_json_list(ws: Path, rel: str) -> list[dict]:
-    f = ws / rel
-    if not f.exists():
+    *parts, name = rel.split("/")
+    try:
+        dir_fd = _policy_dir_fd(ws, parts)
+    except FileNotFoundError:
+        return []
+    except OSError as exc:
+        log.warning("%s in %s not read (%s); treating as empty", rel, ws, exc.strerror or exc)
         return []
     try:
-        data = json.loads(f.read_text())
+        fd = os.open(name, _FILE_NOFOLLOW, dir_fd=dir_fd)
+    except FileNotFoundError:
+        return []
+    except OSError as exc:
+        log.warning("%s in %s not read (%s); treating as empty", rel, ws, exc.strerror or exc)
+        return []
+    finally:
+        os.close(dir_fd)
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_nlink > 1:
+            log.warning("%s in %s is not a regular file with a single link; treating as empty", rel, ws)
+            return []
+        with os.fdopen(fd, "rb") as fh:
+            fd = -1
+            data = json.loads(fh.read())
         return data if isinstance(data, list) else []
     except (OSError, ValueError):
         log.warning("could not parse %s in %s; treating as empty", rel, ws)
         return []
+    finally:
+        if fd >= 0:
+            os.close(fd)
 
 
 def _write_json_list(ws: Path, rel: str, rows: list[dict]) -> None:
-    f = ws / rel
-    f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(json.dumps(rows, indent=2, sort_keys=False) + "\n")
+    *parts, name = rel.split("/")
+    try:
+        dir_fd = _policy_dir_fd(ws, parts, create=True)
+    except OSError as exc:
+        if exc.errno in (errno.ELOOP, errno.ENOTDIR):
+            raise MembershipError(f"{'/'.join(parts)} in this workspace is not a plain folder",
+                                  status=409) from exc
+        raise
+    try:
+        tmp = f".{name}.{os.getpid()}.{threading.get_ident()}.{time.monotonic_ns()}.tmp"
+        fd = os.open(tmp, _CREATE_NEW, 0o644, dir_fd=dir_fd)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(json.dumps(rows, indent=2, sort_keys=False) + "\n")
+            os.replace(tmp, name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+        except BaseException:
+            try:
+                os.unlink(tmp, dir_fd=dir_fd)
+            except OSError:
+                pass
+            raise
+    finally:
+        os.close(dir_fd)
 
 
 # ── the invite store (outside every workspace mount — see INVITE_STORE_DIR above) ────────────────
