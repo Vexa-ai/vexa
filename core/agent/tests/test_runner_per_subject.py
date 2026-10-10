@@ -21,9 +21,11 @@ def test_a_subject_config_with_a_runner_wins_over_the_dispatch_default():
     assert env["VEXA_RUNNER"] == "openai-agent"
 
 
-def test_the_qwen_dials_reach_the_worker_together():
+def test_the_qwen_dials_reach_the_worker_together(monkeypatch):
     """The whole decision-37 target in one config: our harness, the CCC endpoint, the model, and
-    the extra_body without which vLLM/Qwen returns no valid JSON at all."""
+    the extra_body without which vLLM/Qwen returns no valid JSON at all. The CCC box is a LAN
+    address, so its operator names it in the endpoint allow-list (the dogfood env does)."""
+    monkeypatch.setenv("VEXA_MODEL_BASE_URL_ALLOW", "192.168.1.6")
     env = _base()
     overlay_model_config(env, {
         "runner": "openai-agent", "mode": "custom",

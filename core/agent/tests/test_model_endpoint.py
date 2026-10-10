@@ -96,10 +96,18 @@ def test_a_non_allowlisted_endpoint_is_refused(url):
     assert "sk" not in env.values()
 
 
-@pytest.mark.parametrize("url", ["https://api.anthropic.com", "https://openrouter.ai/api/v1",
-                                 "http://192.168.1.6:8001/v1"])
-def test_the_default_allow_list_admits_the_three_known_gateways(url):
+@pytest.mark.parametrize("url", ["https://api.anthropic.com", "https://openrouter.ai/api/v1"])
+def test_the_default_allow_list_admits_the_two_hosted_gateways(url):
     assert model_endpoint.refuse_reason(url, env={}) is None
+
+
+def test_no_private_address_is_a_product_default():
+    """A LAN inference box is one deployment's, named by its operator — the default list carries no
+    address a subject could reach only on somebody's private network."""
+    assert all(not model_endpoint._needs_literal(h) for h in model_endpoint.DEFAULT_ALLOW)
+    assert model_endpoint.refuse_reason("http://192.168.1.6:8001/v1", env={}) is not None
+    assert model_endpoint.refuse_reason("http://192.168.1.6:8001/v1",
+                                        env={"VEXA_MODEL_BASE_URL_ALLOW": "192.168.1.6"}) is None
 
 
 def test_the_deployments_own_gateway_is_always_allowed():

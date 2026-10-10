@@ -438,6 +438,9 @@ services:
       # serves an invited-by-address route and agent-api stops holding a second DB credential.
       - VEXA_MEETINGS_DB_URL=${MEETINGS_DB_URL:-}
       - VEXA_AGENT_MODEL=${VEXA_AGENT_MODEL:-}
+      # Where a person's Settings → Models endpoint may point (model_endpoint.py). Interpolated so a
+      # stack started with its own --env-file (deploy/dogfood) sets it from that file too.
+      - VEXA_MODEL_BASE_URL_ALLOW=${VEXA_MODEL_BASE_URL_ALLOW:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       # ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL come from env_file (below), NOT environment: — an
       # `environment:` entry interpolates the AMBIENT SHELL first, so a host `export ANTHROPIC_BASE_URL`

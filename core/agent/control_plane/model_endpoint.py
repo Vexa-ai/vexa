@@ -19,7 +19,7 @@ The fix is two rules, and both are enforced here rather than at the call sites:
      gateway gets an empty key and the deployment's token stays home.
   2. **The endpoint must be allow-listed** (``VEXA_MODEL_BASE_URL_ALLOW``, comma-separated host
      globs). Unset, the default is the deployment's own configured gateway host(s) plus
-     ``api.anthropic.com``, ``openrouter.ai`` and the CCC box. Loopback, link-local and private
+     ``api.anthropic.com`` and ``openrouter.ai``. Loopback, link-local and private
      addresses — and single-label docker service names like ``redis`` — need an EXACT literal entry;
      a wildcard never reaches them, because ``*`` is a statement about the public internet and not
      a decision to expose the deployment's own network.
@@ -41,8 +41,9 @@ from urllib.parse import urlsplit
 ALLOW_ENV = "VEXA_MODEL_BASE_URL_ALLOW"
 
 #: The default allow-list when the operator has set none: the two hosted gateways a custom endpoint
-#: legitimately points at, and the CCC inference box this deployment's openai-agent lane runs on.
-DEFAULT_ALLOW = ("api.anthropic.com", "openrouter.ai", "192.168.1.6")
+#: legitimately points at. A deployment's own private inference box is named by its operator, in
+#: ``VEXA_MODEL_BASE_URL_ALLOW`` — never shipped as a product default.
+DEFAULT_ALLOW = ("api.anthropic.com", "openrouter.ai")
 
 #: The deployment's OWN endpoints, always allowed regardless of the operator list: a subject naming
 #: the host this deployment already sends its credential to adds exactly zero exposure, and refusing
