@@ -79,6 +79,13 @@ opens directly. When the link cannot be used, the terminal says why instead of o
 4. **The owner sees and edits access.** `GET /meetings/{id}/access` returns readers, pending invites,
    links, the workspace and the recording setting, without tokens or hashes. `DELETE …/viewers/{user}`,
    `DELETE …/share/{grant}` and `PATCH …/access` change it under the meeting row's lock.
+   **Readers from before the roster.** Someone who redeemed a share before meeting-api kept
+   `share_viewers` is known only by id. On the owner's first access view, meeting-api asks identity
+   for their address over the internal tier (`GET /internal/users/{id}/email`, `X-Internal-Secret`),
+   once per reader, and writes the roster entry a redeem writes today, including the invite they came
+   in through where the record shows it. That invite then stops showing as pending, and removing them
+   withdraws it. When they joined is not recorded, so it stays empty. If identity cannot answer, they
+   stay listed by id and are still removable.
 5. **The invite email.** With `notify: true`, meeting-api hands one `meeting.shared` fact per
    address to flows (`meeting_api/events.py`, the existing publish edge, bounded and best-effort).
    flows' `meeting_share` renders `behavior/mail/meeting-share.md` and appends the link it composes
@@ -133,6 +140,9 @@ stop the bot or see other readers. The roster (`transcript_viewers`, `share_view
 and the grants are stripped from every response to anyone but the owner, and the grants are stripped
 from the owner's responses too.
 
+identity's `GET /internal/users/{id}/email` answers only the internal tier and only `{id, email}`;
+meeting-api calls it only on the owner's own access view, for readers already on that meeting.
+
 **How each hop enforces it.** The gateway authenticates the key and signs the caller's identity and
 email onto the hop. meeting-api trusts only that signature, or the internal secret for agent-api's
 as-the-caller lookups, and decides access itself. agent-api never decides meeting access locally. The
@@ -163,6 +173,11 @@ recording reads without the owner's permission; and every read by a person who w
 - `core/meetings/services/meeting-api/tests/test_bot_spawn.py::test_spawn_refuses_to_bind_into_a_workspace_the_caller_only_reads`
 - `core/identity/services/admin-api/tests/test_writable_workspaces.py::test_a_viewer_membership_is_readable_but_not_writable`
 - `core/flows/tests/test_meeting_share_mail.py::test_no_address_or_no_token_refuses_and_sends_nothing`
+- Readers from before the roster (`test_meeting_share_access.py`):
+  - `test_the_owners_first_view_names_a_legacy_reader_and_settles_their_invite`
+  - `test_removing_a_backfilled_reader_withdraws_their_invite_and_keeps_them_out`
+  - `test_the_backfill_never_runs_for_a_non_owner`
+- `core/identity/services/admin-api/tests/test_internal_user_email.py::test_anyone_else_is_refused`
 - `core/agent/tests/test_meeting_share_live_revoke.py`:
   - `test_outsider_cannot_open_the_live_stream`
   - `test_removed_invitee_is_cut_off_mid_stream_with_an_explicit_event`

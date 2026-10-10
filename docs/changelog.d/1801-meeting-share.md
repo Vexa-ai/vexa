@@ -15,3 +15,7 @@
   `writable_workspaces` (gateway-identity.v1 and identity.v1, additive), and meeting-api refuses with
   `403` a bind into a workspace the caller can only view or does not belong to — the bind route,
   planned meetings and `POST /bots` alike.
+- **Readers who joined before the roster are named (#1801).** On the owner's first access view,
+  meeting-api backfills each such reader's address from identity (new internal-only
+  `GET /internal/users/{id}/email`) and links the invite they used, so it no longer shows as pending
+  and removing them withdraws it.
