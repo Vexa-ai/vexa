@@ -5,8 +5,7 @@ would not expire, would carry the whole account into an unwatched routine, and c
 without rotating the person's own key. The dispatch already knows WHO it acts for and WHY it fired,
 so agent-api mints a credential that says only that and expires with the worker: its lifetime is the
 chat warm window plus one turn (1800 s by default, ``VEXA_MCP_DELEGATION_TTL_SEC``), a worker still
-running at two thirds of that is handed a fresh one, and the token is revoked when the worker's unit
-ends.
+running at half of that is handed a fresh one, and the token is revoked when the worker's unit ends.
 
 THE TOKEN. A compact HS256 JWS, the same signing idiom as ``adapters.LocalIdentityMinter``'s dispatch
 token, with a ``vxd_`` prefix so a verifier can tell it from an API key WITHOUT trying to parse it:

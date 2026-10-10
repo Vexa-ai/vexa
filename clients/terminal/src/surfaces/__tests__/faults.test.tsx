@@ -50,6 +50,10 @@ const KINDS: [Fault, string][] = [
    "Agent service · failed (500)"],
   [{ source: "gateway", kind: "unreachable", status: null, detail: "the terminal could not reach the Vexa gateway" },
    "Vexa gateway · unreachable"],
+  [{ source: "vexa-tools", kind: "access_expired", status: 401,
+     detail: "This turn ran past its tool access, which expired at 10:30:00 UTC; the Vexa tool calls it made after that were refused.",
+     remedy: "Send it again: the next turn starts with fresh tool access." },
+   "Vexa tools · tool access expired (401)"],
 ];
 
 describe("a typed fault renders who failed, what kind, the detail and the remedy", () => {

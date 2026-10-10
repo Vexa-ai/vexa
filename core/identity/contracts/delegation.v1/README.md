@@ -54,11 +54,11 @@ cannot read the store, so an unreadable store never reads as "not revoked"; API 
 `gate:fact-parity` (fact `delegation-revocation-key`). `verify_delegation(…, revoked=…)` remains the
 in-module form; the dogfood rig's own verifier passes one.
 
-**Refresh.** A unit still running when two thirds of its token's life has passed is handed a new
-token: the same `sub`, `scope` and `target`, a new `jti` and a full lifetime, minted by agent-api from
-its own record of the current one (`core/agent/control_plane/delegation_refresh.py`). The worker picks
-it up before its next turn. The replaced token is revoked after a 300 s overlap; a unit that has
-ended is never refreshed.
+**Refresh.** A unit still running when half of its token's life has passed is handed a new token:
+the same `sub`, `scope` and `target`, a new `jti` and a full lifetime, minted by agent-api from its own
+record of the current one (`core/agent/control_plane/delegation_refresh.py`). The worker picks it up
+before its next turn. The replaced token is not revoked while the unit runs; it ends at its own `exp`,
+or with the unit. A unit that has ended is never refreshed.
 
 ## Files
 

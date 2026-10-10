@@ -73,6 +73,7 @@ from shared import unit_input
 # THE JOB RUNNER (Vexa-ai/vexa#1584) — a long act that does not hold the chat. It sits above the
 # harness on purpose, so `serve` gets background work for every runner rather than one adapter's.
 from worker import jobs as worker_jobs
+from worker import tool_access
 from worker.friction import (disbelieved_capability, fallback_session, friction_preamble,
                              mcp_unreachable,
                              report as report_friction, scan_turn, spawn_gap, use_token_source)
@@ -2592,10 +2593,13 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
     use_token_source(refresh_delegation.current)
 
     def _fresh(fn):
-        """``fn`` with the attachment brought up to date first."""
+        """``fn`` with the attachment brought up to date first, and its events watched for a vexa
+        tool call refused after the token it attached with expired (``worker.tool_access``): that
+        turn ends with a typed fault rather than quietly without its tools."""
         def call(*args, **kwargs):
             refresh_delegation()
-            return fn(*args, **kwargs)
+            exp = tool_access.token_exp(refresh_delegation.current())
+            return tool_access.watch(fn(*args, **kwargs), exp)
         return call
 
     room = room_run()
