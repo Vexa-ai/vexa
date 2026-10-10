@@ -342,8 +342,7 @@ def _agent_git(uid: str, method: str, path: str, body=None, timeout: int = 40):
     unbounded, and its own token is admitted at the gateway on `/mcp` only, whose tools do not
     include these verbs. Against a broker-backed store agent-api then refuses it (no signed person),
     which is the closed answer."""
-    delegated = CALL_SCOPE.get() is not None or _is_delegation_token(CALL_TOKEN.get() or "")
-    if delegated:
+    if _delegated_call():
         return _http(method, f"{AGENT_API}{path}", {"X-User-Id": uid}, body, timeout)
     try:
         edge, up = _agent_forward()
@@ -538,13 +537,20 @@ def _internal_headers() -> dict:
 
 def _agent_identity_headers() -> dict:
     """What a call to agent-api that names a person carries besides `X-User-Id`: the internal
-    tier, and — on a delegated call — the dispatch's regime and workspace ceiling."""
+    tier, and — on a delegated call — the dispatch's regime and workspace ceiling.
+
+    A delegated call always carries both headers. When its scope names no regime or no workspaces
+    they go EMPTY, which agent-api reads as an unwatched worker bounded to its own workspace
+    (`ceiling.is_unwatched`, `ceiling.delegation_allows`); leaving them off would read as the person."""
     h = {"X-Internal-Secret": INTERNAL_SECRET}
+    if not _delegated_call():
+        return h
     scope = CALL_SCOPE.get()
-    if isinstance(scope, dict) and scope.get("regime"):
-        h["X-User-Regime"] = str(scope["regime"])
-        ws = scope.get("workspaces")
-        h["X-User-Delegation-Workspaces"] = "*" if ws == "*" else ",".join(str(w) for w in (ws or []))
+    scope = scope if isinstance(scope, dict) else {}
+    h["X-User-Regime"] = str(scope.get("regime") or "")
+    ws = scope.get("workspaces")
+    h["X-User-Delegation-Workspaces"] = "*" if ws == "*" else ",".join(
+        str(w) for w in (ws if isinstance(ws, list) else []))
     return h
 
 
@@ -969,6 +975,19 @@ REVOKED_FILE = HOME / ".storm/mcp-delegation-revoked.json"
 # verb needs it, never threaded through signatures.
 CALL_SCOPE = contextvars.ContextVar("vexa_call_scope", default=None)
 
+# WHETHER THIS REQUEST IS A DELEGATED WORKER'S — the verified `delegated` flag, set where the
+# delegation token was verified. A worker is identified by this flag, never by whether its token
+# happened to carry a `scope` claim: a delegation minted without one is still a worker, and must be
+# refused what a worker is refused rather than be served as the person it acts for.
+CALL_DELEGATED = contextvars.ContextVar("vexa_call_delegated", default=False)
+
+
+def _delegated_call() -> bool:
+    """True when this request was authenticated by a verified delegation token. A bearer in the
+    delegation dialect, verified or not, is never served as a person either."""
+    return (CALL_DELEGATED.get() is True or CALL_SCOPE.get() is not None
+            or _is_delegation_token(CALL_TOKEN.get() or ""))
+
 # THE CHAT'S TARGET WORKSPACE for THIS request (Vexa-ai/vexa#1611) — the slug a write verb with no
 # `slug` of its own defaults to. Rides the delegation token as its own claim, beside `scope` and
 # deliberately not inside it: a scope is a CEILING and this is a DEFAULT, and a default stored where
@@ -1119,9 +1138,14 @@ def _regime_of(scope) -> str:
     return str((scope or {}).get("regime") or "").strip().lower() if isinstance(scope, dict) else ""
 
 
-def _regime_forbids(verb: str, scope) -> str:
-    """Why ``verb`` is refused under this delegation's regime, or "" when it may proceed."""
-    if verb not in HUMAN_ONLY_VERBS or scope is None:
+def _regime_forbids(verb: str, scope, delegated: bool | None = None) -> str:
+    """Why ``verb`` is refused under this delegation's regime, or "" when it may proceed.
+
+    ``delegated`` says whether the caller is a worker at all; it defaults to "has a scope". A worker
+    whose delegation names no regime is not in the human regime, so a human-only verb is refused."""
+    if delegated is None:
+        delegated = scope is not None
+    if verb not in HUMAN_ONLY_VERBS or not delegated:
         return ""
     return "" if _regime_of(scope) == HUMAN_REGIME else HUMAN_ONLY_VERBS[verb]
 
@@ -1181,6 +1205,7 @@ def _subject_raw():
             except _DelegationRefused:
                 return None
             CALL_SCOPE.set(claims.get("scope"))
+            CALL_DELEGATED.set(True)
             CALL_TARGET.set(str(claims.get("target") or "").strip())
             return str(claims["sub"])
     return None
@@ -1399,7 +1424,7 @@ def _anon_guard(fn):
         # REGIME, enforced in the same one place, for the same reason (R-D06). Decision 7 said the
         # autonomous client does not speak in a room and does not delete meetings; until now that
         # sentence lived in a markdown file and the token's own `regime` claim was only printed.
-        why = _regime_forbids(fn.__name__, scope)
+        why = _regime_forbids(fn.__name__, scope, _delegated_call())
         if why:
             return json.dumps({
                 "refused": "regime",
@@ -1410,7 +1435,7 @@ def _anon_guard(fn):
                                     "wanted to do and stop; do not retry it and do not look for "
                                     "another route to it.",
             })
-        if slug and scope is not None and not _scope_allows(scope, slug):
+        if slug and _delegated_call() and not _scope_allows(scope, slug):
             return json.dumps({
                 "refused": "out_of_scope",
                 "workspace": slug,
@@ -2107,6 +2132,7 @@ working.</p>""", "Connected")
         # Only a delegated session carries a scope; every other auth path leaves it None, which the
         # guard reads as "unscoped" and lets through exactly as before.
         CALL_SCOPE.set((sub or {}).get("scope"))
+        CALL_DELEGATED.set((sub or {}).get("delegated") is True)
         # …and only a delegated session carries a TARGET (Vexa-ai/vexa#1611). Empty everywhere else,
         # which the guard reads as "no default" — a direct caller's `slug=""` still means their own
         # desk, exactly as it always has.
@@ -3648,7 +3674,7 @@ MAIL_SCAN = 500
 def _mail_refused_to_worker(verb: str) -> str:
     """The refusal for a delegated (worker) caller, or "" for anyone else. A person's mail holds
     their sign-in codes and links, so a worker acting for them never reads it, in any regime."""
-    if CALL_SCOPE.get() is None and not _is_delegation_token(CALL_TOKEN.get() or ""):
+    if not _delegated_call():
         return ""
     return json.dumps({"refused": "delegated", "verb": verb,
                        "why": "a person's mail holds their sign-in codes; a worker acting for them "
