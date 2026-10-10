@@ -1,0 +1,183 @@
+---
+title: "Terminal UI design"
+description: "How the Vexa terminal looks and lays out: principles, the responsive shell, design tokens, primitives, the /design catalogue, and the gates that hold them."
+---
+
+> The terminal's design system — sibling of [Architecture](/governance/architecture). That book
+> governs how the software is built; this page governs how the terminal **looks and behaves on
+> screen**: which pane gives way first when the window narrows, which colour means what, what a
+> button is. Same discipline: a rule that can be checked is a test, not a sentence (P9).
+>
+> The code lives in `clients/terminal/src/ui-kit/` (`layout/`, `primitives/`, `format/`).
+
+---
+
+## 1. Principles
+
+1. **Surfaces compose primitives; primitives own the look.** A surface decides *what* appears and
+   *where*, never colour, size, radius, padding, border, shadow or state styling.
+2. **One accent, one meaning: "this is the one / do this".** Accent marks the primary action, the
+   selected item and focus. Live is green, danger is red, attention is amber, information is blue.
+   A badge never wears accent.
+3. **Hierarchy comes from colour, then weight, then size.** Make the secondary quieter rather than
+   the primary louder.
+4. **Chrome recedes and the work advances.** Rails, headers and toolbars use secondary text and
+   quiet surfaces; only the conversation and the document use primary text at full weight.
+5. **The primary task never loses space to a secondary one.** As the window narrows, side panes
+   collapse before the conversation shrinks below its minimum (§2).
+6. **Static is a badge; interactive is a chip.** They never share a shape.
+7. **Every interactive element shows where focus is, can be reached by keyboard, and is at least
+   24×24 px** (WCAG 2.2 SC 2.4.7, 2.5.8).
+8. **Every state is earned and every failure is loud.** Status reflects observed reality (P21);
+   errors sit beside their cause, name the fix and keep the user's input (P18).
+9. **Text never breaks mid-word.** It wraps at spaces; a long unbreakable token truncates with an
+   ellipsis and gives the full value on hover and focus.
+10. **If it is not in the catalogue, it does not exist.** A new primitive, variant or token lands
+    in `/design` in the same PR.
+
+---
+
+## 2. The responsive shell
+
+The Minutes shell has three panes: the **rail** (chat list), the **conversation**, and the
+**pages** panel (documents and entities). The conversation is protected.
+
+| Mode | Window | Rail | Conversation | Pages |
+|---|---|---|---|---|
+| **wide** | ≥ 1440 | docked, 240 (drag 200–320) | at least 560 | docked, 480 (drag 320 to the lesser of 60% of the window and what leaves the conversation 560) |
+| **desktop** | 1200–1439 | docked, 240 (drag 200–280) | at least 480 | docked, 400 (drag 320 to what leaves the conversation 480) |
+| **compact** | 960–1199 | a 48px icon strip; opens as a drawer over the conversation | at least 440 | docked, 360 (drag 320 up) |
+| **narrow** | 720–959 | strip and drawer | full width | a **sheet** over the conversation from the right (480 or 90% of the window), opened from the header |
+| **single** | below 720 | a drawer, opened from the header's menu control | full width | a full-screen sheet with a back control |
+
+- **The collapse order is fixed:** the rail goes first, then the pages panel.
+- **What the reader asked for and what fits are separate.** Hiding a pane is a preference and is
+  remembered. A mode folding a pane is not, and never overwrites the preference, so widening the
+  window brings the reader's layout back.
+- **Both side panes resize** with a splitter: drag it, or focus it and use ←/→ (16px), Shift+←/→
+  (64px), Home/End (the bounds), Enter or a double-click (the default). Widths are remembered **per
+  mode**, clamped to what the window allows when read, and never discarded.
+- **Inside a pane, components answer to the pane's width, not the window's** (container queries):
+  - the metadata table stacks its labels above its values below 360px;
+  - the composer toolbar never wraps — below 560px the effort control is an icon, below 400px
+    attach and dictate move into a "⋯" menu, and the model and send controls are always visible;
+  - the chat header's workspace chips fold into one "Writes to …" menu below 520px;
+  - the pages tab strip scrolls, fades at an edge with tabs beyond it, and shows an overflow
+    control listing every tab whenever one is out of view.
+- **Nothing scrolls sideways.** A horizontal scrollbar on a pane is a defect; only code blocks and
+  wide tables scroll inside their own frame.
+- **Nothing breaks mid-word.** Dates are single units ("2026-10-09" never splits at its hyphen);
+  emails, URLs and IDs truncate with an ellipsis (paths and IDs in the middle, so both ends stay
+  readable) and show the full value in their tooltip.
+
+### Before and after (app.dev, pages panel open)
+
+| Window | Before: rail · conversation · pages | After |
+|---|---|---|
+| 1440 | 240 · 960 · 240, two panes scrolling sideways | wide: 240 · 720 · 480 |
+| 1024 | 240 · 544 · 240 | compact: 48 · 616 · 360 |
+| 820 | 240 · **340** · 240; composer toolbar on two rows | narrow: 48 · 772, pages as a sheet |
+| 640 | 240 · **160** · 240; composer text box 92px | single: 640, rail and pages as overlays |
+
+---
+
+## 3. Text, dates and truncation
+
+- The default is `overflow-wrap: break-word`. `overflow-wrap: anywhere` and `word-break: break-all`
+  are allowed only in the code and secret-display primitives.
+- Dates render through **one formatter** (`ui-kit/format/date.ts`): relative within seven days
+  ("6:29 PM", "Yesterday 6:29 PM", "Thu"), absolute beyond ("Oct 8"; the year only when it is not
+  this year). A date-only value is a calendar day in every time zone. Full precision is in the
+  tooltip and in `<time dateTime>`.
+- Every flex child that holds text has `min-width: 0`; every pane root clips sideways overflow.
+
+---
+
+## How it works
+
+1. **The layout is one pure function.** `shellLayout(viewportWidth, prefs, storedWidths)` in
+   `ui-kit/layout/shellLayout.ts` returns the mode, each pane's form (`railKind`: docked, strip or
+   drawer; `pagesKind`: docked, collapsed, sheet or fullscreen), the three grid columns, the widths
+   and the splitter bounds. It writes nothing.
+2. **One hook feeds it and is the only writer of the layout's state.** `useShellLayout` (same
+   folder) measures the shell's own box with a `ResizeObserver`, reads and writes
+   `localStorage["vexa.shell.v1"]` = `{ prefs: { railOpen, pagesOpen }, widths: { <mode>: { rail,
+   pages } } }`, and holds the transient drawer and sheet state, which closes when the mode changes.
+   A profile with no `vexa.shell.v1` is seeded once from the old keys
+   (`vexa.minutes.railCollapsed`, `vexa.minutes.pagesCollapsed`, `vexa.minutes.pagesW`); nothing
+   writes the old keys any more.
+3. **The shell renders the result.** `minutes/MinutesShell.tsx` sets `grid-template-columns` from
+   the layout, puts the rail docked, as a `RailStrip` plus a `Drawer`, or as a `Drawer` alone, and
+   wraps the pages panel in a `Sheet`. A `Sheet` is one element with three forms — `inline`
+   (`display: contents`, so the panel sits in the grid), `overlay` and `fullscreen` — so crossing a
+   breakpoint never remounts the panel and an unsaved edit survives it.
+4. **Overlays are modal dialogs.** An open drawer or sheet moves focus in, traps Tab, closes on Esc
+   or a scrim click, and returns focus to the control that opened it. A closed one stays mounted
+   but `inert`.
+5. **Opening a document reveals the panel.** In a docked mode a folded panel unfolds. Where the
+   panel is a sheet, it opens only when the reader asked (a link they clicked), never for a page
+   the agent wrote while they were typing.
+6. **Pane-internal behaviour is CSS container queries.** Pane roots are `.vx-pane` (an inline-size
+   container that clips sideways overflow); the composer toolbar is `.vx-container`. `Fold` renders
+   both forms of a control and the stylesheet shows one; `KeyValue` is its own container.
+7. **Styles are global, prefixed, and gathered once.** Each primitive's CSS (`vx-` classes) lives
+   beside it; `ui-kit/styles.css` imports them, and `app/globals.css` imports that, because Next's
+   App Router admits global CSS only from the root layout.
+8. **Everything is exported from `ui-kit/index.tsx`**, the folder's one front door. Surfaces
+   (`minutes/`, `surfaces/`) import from it and never deep-import.
+
+**Configuration.** Per browser only: `vexa.shell.v1` (layout) and `vexa.terminal.theme` (theme).
+Neither is sent to a server.
+
+**Limits.**
+- The shell measures its own width, so a layout at 200% zoom is the layout of half the width — by
+  design (WCAG 1.4.4): the shell changes mode instead of overflowing.
+- Container queries need a current evergreen browser (Chrome, Edge, Safari and Firefox have shipped
+  them since 2023).
+- In single mode the rail has no strip; the header's menu control is the only way to the chat list.
+
+**What the user sees when something fails.**
+- If `localStorage` is unavailable (a private window, blocked site data), the layout falls back to
+  its defaults on every load and still works; widths and folds are not remembered.
+- A stored width the window cannot fit is clamped, not reset; widening the window restores it.
+
+---
+
+## Why it complies
+
+### Architecture
+
+| Rule | How this meets it | Gate |
+|---|---|---|
+| **P1** package by domain | `ui-kit` is the terminal's shared presentational leaf; primitives are named for UI concepts; surfaces stay grouped by domain (`minutes/`, `surfaces/`) | review |
+| **P2** couple through contracts, **P3** acyclic | `ui-kit` imports React, `lucide-react` and its own files only; it never imports `minutes/`, `surfaces/` or `canvas/` | `gate:isolation` (the terminal's folder-cycle check) |
+| **P6** one front door | layout, primitives and the formatter are exported only from `src/ui-kit/index.tsx`; `minutes/` and `surfaces/` import from there | `gate:exports`; ungated inside the terminal: reviewed |
+| **P9** mechanically enforced | the layout rules are a unit sweep (`shellLayout.test.ts`, 320–2560px, every preference) and a browser sweep (`scripts/layout-sweep.mjs`, L1–L3) | `gate:node` (vitest); the browser sweep runs on bbb and is attached to the PR |
+| **P12** every folder self-documents | `ui-kit/layout/`, `ui-kit/primitives/` and `ui-kit/format/` each carry a README | `gate:readme` |
+| **P17** licence-clean | no new dependency. `lucide-react` (ISC) was already in the lockfile; Playwright (Apache-2.0) is not a terminal dependency — the sweep runs where it is installed | `gate:licenses` |
+| **P18** fail loud | a storage failure degrades to defaults (the shell still renders) and is never thrown into the page; nothing is swallowed into a wrong layout | `layoutPrimitives.test.tsx` ("storage that throws still yields a working layout") |
+| **P23** one writer per carrier | `vexa.shell.v1` is written only by `useShellLayout`; the old keys are read once and never written | ungated: reviewed |
+
+### Security
+
+- **Access.** The layout holds no user data and calls no API: it is widths and two booleans in the
+  reader's own browser. What a pane shows is unchanged and still authorised where it was (P20
+  `canAccess` at the server).
+- **Links.** `Truncate` renders a link only for `http:`, `https:` and `mailto:`; any other scheme is
+  text, and external links open with `rel="noopener noreferrer"`. Test: `keyValue.test.tsx`, "an
+  unsafe scheme is text, never a link".
+- **Injection.** The metadata table renders values as text and nested tables, never as HTML and
+  never through `JSON.stringify` into markup. Test: `entityProperties.test.tsx`, "does not execute
+  links or markup from metadata".
+- **Personal data.** Nothing about the layout enters a URL or leaves the browser.
+
+---
+
+## Gates
+
+| ID | Rule | Test | Status |
+|---|---|---|---|
+| L-unit | every width 320–2560 × every preference: columns add up, the conversation is at least its mode's floor, the rail folds before the pages panel, an auto-collapse never writes a preference, stored widths are clamped not discarded | `src/ui-kit/__tests__/shellLayout.test.ts` | **have** (rides `gate:node`) |
+| L1–L3 | in a browser at 640–1920 in both themes: no pane scrolls sideways, the conversation meets its floor, the composer toolbar is one row, a tab strip that hides a tab shows its overflow control | `clients/terminal/scripts/layout-sweep.mjs` | **have** (run on bbb; attached to the PR; CI later) |
+| KV | no `overflow-wrap: anywhere` in the metadata table; stacked below 360px; dates and long tokens are single units | `src/ui-kit/__tests__/keyValue.test.tsx` | **have** |
+| A8 | the splitter, sheet and menu follow their WAI-ARIA patterns | `src/ui-kit/__tests__/layoutPrimitives.test.tsx` | **have** |

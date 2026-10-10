@@ -28,7 +28,7 @@ describe("OKF entity properties", () => {
   const html = renderToStaticMarkup(<EntityProperties source={source} />);
   expect(html).toContain('aria-label="Entity properties"');
   expect(html).toContain('href="https://example.test"');
-  expect(html).toContain("prospect"); expect(html).toContain("2026-10-08T13:00:00Z");
+  expect(html).toContain("prospect"); expect(html).toContain('dateTime="2026-10-08T13:00:00.000Z"');
  });
  it("does not execute links or markup from metadata", () => {
   const html = renderToStaticMarkup(<EntityProperties source={'---\ntype: person\nresource: "javascript:alert(1)"\ntitle: "<script>bad</script>"\n---\n'} />);

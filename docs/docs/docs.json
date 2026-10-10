@@ -144,6 +144,7 @@
           "governance/index",
           "governance/architecture",
           "governance/arch-compliance",
+          "governance/ui-design",
           "governance/delivery",
           "governance/contributor-rights"
         ]

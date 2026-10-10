@@ -1,0 +1,114 @@
+/* The shell's layout primitives (guidelines §3). Global, `vx-` prefixed, imported once through
+ * src/ui-kit/styles.css — Next's App Router admits global CSS only from the root layout, so the
+ * primitives' stylesheets are gathered there rather than imported per component. */
+
+/* A pane root: its own inline-size container (so components respond to THE PANE, §3.3), and never
+ * a sideways scroller (§3.4: a horizontal scrollbar on a pane is a defect). */
+.vx-pane {
+  container-type: inline-size;
+  overflow-x: clip;
+  min-width: 0;
+}
+
+/* A component that answers to its OWN width (the composer toolbar): a container, nothing else. */
+.vx-container {
+  container-type: inline-size;
+}
+
+/* ── Splitter ─────────────────────────────────────────────────────────────────────────────── */
+.vx-splitter {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  z-index: 20;
+  cursor: col-resize;
+  display: flex;
+  justify-content: center;
+  touch-action: none;
+  outline: none;
+}
+.vx-splitter-line {
+  width: 1px;
+  align-self: stretch;
+  background: transparent;
+}
+.vx-splitter:hover .vx-splitter-line,
+.vx-splitter:focus-visible .vx-splitter-line,
+:root[data-resizing] .vx-splitter .vx-splitter-line {
+  background: var(--accent);
+}
+.vx-splitter:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--accent);
+  border-radius: 2px;
+}
+:root[data-resizing],
+:root[data-resizing] * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
+/* ── Sheet / Drawer ───────────────────────────────────────────────────────────────────────── */
+.vx-sheet[data-form="inline"] {
+  display: contents;
+}
+.vx-sheet[data-form="overlay"],
+.vx-sheet[data-form="fullscreen"] {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+  visibility: hidden;
+  outline: none;
+}
+.vx-sheet[data-form="overlay"][data-side="right"] { right: 0; transform: translateX(100%); }
+.vx-sheet[data-form="overlay"][data-side="left"] { left: 0; transform: translateX(-100%); }
+.vx-sheet[data-form="fullscreen"] { left: 0; right: 0; width: 100%; transform: translateX(100%); }
+.vx-sheet[data-open] {
+  visibility: visible;
+  transform: none !important;
+}
+/* The pane inside fills the overlay: its last block (the body) takes the remaining height. */
+.vx-sheet[data-form="overlay"] > *,
+.vx-sheet[data-form="fullscreen"] > * { flex: none; min-width: 0; }
+.vx-sheet[data-form="overlay"] > :last-child,
+.vx-sheet[data-form="fullscreen"] > :last-child { flex: 1 1 0%; min-height: 0; }
+.vx-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 29;
+  background: rgba(0, 0, 0, 0.32);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .vx-sheet[data-form="overlay"],
+  .vx-sheet[data-form="fullscreen"] {
+    transition: transform 240ms cubic-bezier(.2, .8, .2, 1), visibility 240ms;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .vx-sheet[data-form="overlay"],
+  .vx-sheet[data-form="fullscreen"] { transform: none; opacity: 0; transition: opacity 120ms, visibility 120ms; }
+  .vx-sheet[data-open] { opacity: 1; }
+}
+
+/* ── The rail's icon strip ────────────────────────────────────────────────────────────────── */
+.vx-rail-strip {
+  grid-row: 1 / 3;
+  grid-column: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding-top: 10px;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--bg);
+  border-right: 1px solid var(--line);
+}

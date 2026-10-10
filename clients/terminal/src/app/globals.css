@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "../ui-kit/styles.css";
 
 /*
  * Terminal design tokens — ported verbatim from public/prototype.html so the React shell and the

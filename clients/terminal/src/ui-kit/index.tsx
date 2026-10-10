@@ -91,3 +91,25 @@ export function Checkbox({ checked, onChange, disabled = false, label, title, si
     </span>
   );
 }
+
+// ── layout and primitives (terminal design guidelines §3–§4). The ONE front door (P6): surfaces
+//    import these from "ui-kit", never from the files below.
+export { shellLayout, shellMode, BREAKPOINTS, MODES, STRIP_W, EDGE_W, DRAWER_W, SHEET_MAX, DEFAULT_PREFS, clampWidth } from "./layout/shellLayout";
+export type { ShellLayout, ShellMode, ShellPrefs, StoredWidths, RailKind, PagesKind, Pane, Bounds } from "./layout/shellLayout";
+export { useShellLayout, readShellStore, writeShellStore, SHELL_KEY } from "./layout/useShellLayout";
+export type { ShellControls, ShellStore } from "./layout/useShellLayout";
+export { Splitter, splitterKey, SPLITTER_STEP, SPLITTER_BIG_STEP } from "./layout/Splitter";
+export { Sheet } from "./layout/Sheet";
+export type { SheetForm } from "./layout/Sheet";
+export { Drawer } from "./layout/Drawer";
+export { Menu } from "./primitives/Menu";
+export type { MenuItem, MenuProps } from "./primitives/Menu";
+export { KeyValue, kvValue, humanizeKey, isEmptyValue } from "./primitives/KeyValue";
+export type { KeyValueItem } from "./primitives/KeyValue";
+export { Truncate, displayUrl, splitForMiddle } from "./primitives/Truncate";
+export { DateText } from "./primitives/DateText";
+export { Fold, FOLD_AT } from "./primitives/Fold";
+export type { FoldAt } from "./primitives/Fold";
+export { OverflowStrip } from "./primitives/OverflowStrip";
+export type { StripItem } from "./primitives/OverflowStrip";
+export { formatDate, fullDate, isoDate, parseDate, looksLikeDate } from "./format/date";

@@ -27,7 +27,7 @@
 import type { CSSProperties } from "react";
 import { useEffect, useRef, useState } from "react";
 import { MeetingPageHeader } from "./MeetingPageHeader";
-import { Icon } from "../ui-kit";
+import { Icon, OverflowStrip } from "../ui-kit";
 import { copyText } from "../ui-kit/ContextMenu";
 import { DocMetaContext } from "../ui-kit/docRefs";
 import { MdxDoc } from "../ui-kit/MdxDoc";
@@ -98,6 +98,10 @@ function crumbLabel(seg: string, i: number, all: string[]): string | null {
   return seg;
 }
 
+/** A tab's identity in the strip, and the name it shows (a desk's slug is its owner's number). */
+const tabKey = (pg: Page) => `${pg.slug ?? ""}|${pg.path}`;
+const tabName = (pg: Page) => (/^\d+$/.test(pg.label) ? "personal" : pg.label);
+
 /** A directory listing the breadcrumb navigated to: the folders and files directly under `prefix`. */
 export type Listing = { slug?: string; prefix: string; dirs: string[]; files: string[] };
 
@@ -119,6 +123,8 @@ export function PagesPanel(p: {
    *  anything at all. */
   notice?: string | null;
   onCollapse?: () => void;
+  /** The fold control's name where folding really closes a sheet ("Back to the conversation"). */
+  collapseLabel?: string;
 }) {
   // THE TRANSCRIPT TAB IS NOT A DOCUMENT. It renders the meeting canvas the workbench registers —
   // the same component a meetings-list click opens, which fetches by row id and streams live
@@ -190,7 +196,9 @@ export function PagesPanel(p: {
 
   return (
     <>
-      <div style={{ ...header, gridRow: 1, gridColumn: 3, gap: 6, flexWrap: "nowrap", minWidth: 0, overflowX: "auto", borderLeft: "1px solid var(--line)" }}>
+      {/* The header band never scrolls sideways (guidelines §3.4): the tab strip inside it does,
+          with a fade and an overflow menu, and everything else here is a fixed-size control. */}
+      <div className="vx-pane" data-pane="pages-header" style={{ ...header, gridRow: 1, gridColumn: 3, gap: 6, flexWrap: "nowrap", minWidth: 0, borderLeft: "1px solid var(--line)", padding: "0 10px" }}>
         {/* where you have BEEN, at the panel's left edge — the reading order of a document surface
             starts here (Obsidian, and the old terminal, both put them exactly there). */}
         {/* the navigator's toggle — the panel's leftmost control, because the rail it opens is the
@@ -203,7 +211,10 @@ export function PagesPanel(p: {
         </button>
         <button data-nav="back" aria-label="Back" title="Back (⌘/Ctrl + [)" disabled={!p.canBack} onClick={p.onBack} style={navBtn(!!p.canBack)}>‹</button>
         <button data-nav="forward" aria-label="Forward" title="Forward (⌘/Ctrl + ])" disabled={!p.canForward} onClick={p.onForward} style={navBtn(!!p.canForward)}>›</button>
-        <div style={{ flex: "1 1 0%", minWidth: 0, display: "flex", alignItems: "center", gap: 6, overflowX: "auto", overflowY: "hidden", paddingLeft: 2 }}>
+        {/* NO HIDDEN TABS (guidelines §3.3): the strip fades at an edge with tabs beyond it, and an
+            overflow control lists every tab whenever one is not fully in view. */}
+        <OverflowStrip label="tabs" activeKey={(() => { const a = p.pages.find(tabOn); return a ? tabKey(a) : undefined; })()}
+          items={p.pages.map((pg) => ({ key: tabKey(pg), label: tabName(pg), onSelect: () => p.onOpen(pg) }))}>
         {p.pages.map((pg) => {
           const on = tabOn(pg);
           // KEPT = a tab. Everything else in the strip is the one preview slot, and it renders in
@@ -211,10 +222,10 @@ export function PagesPanel(p: {
           // open next, and that is worth knowing before you navigate away from it.
           const kept = !!pg.pinned || !!pg.desk;
           return (
-            <span key={`${pg.slug ?? ""}|${pg.path}`} style={{ ...tabBox, display: "inline-flex", alignItems: "center", background: on ? "var(--accentbg)" : surface.raised, border: `1px solid ${on ? "var(--accent)" : "transparent"}`, borderRadius: 6 }}>
+            <span key={tabKey(pg)} data-strip-key={tabKey(pg)} style={{ ...tabBox, display: "inline-flex", alignItems: "center", background: on ? "var(--accentbg)" : surface.raised, border: `1px solid ${on ? "var(--accent)" : "transparent"}`, borderRadius: 6 }}>
               <button data-tab data-kept={kept ? "" : undefined} onClick={() => p.onOpen(pg)} title={pg.slug ? `${pg.slug} › ${pg.path}` : pg.path}
                 style={{ ...ty.chip, ...tabLabel, fontStyle: kept ? undefined : "italic", color: on ? "var(--accent)" : "var(--t2)", background: "transparent", border: "none", padding: "3px 3px 3px 10px", cursor: "pointer" }}>
-                {/^\d+$/.test(pg.label) ? "personal" : pg.label}
+                {tabName(pg)}
               </button>
               {/* THE PIN, ON THE TAB. The chat's home carries none: it is a product default rather
                   than something the reader asked for, so there is no decision here to offer. Nor
@@ -248,14 +259,14 @@ export function PagesPanel(p: {
             </span>
           );
         })}
-        </div>
+        </OverflowStrip>
         {/* Edit/Cancel/Save used to sit here, competing with the tabs for the same 46px. They are
             DOCUMENT controls, so they moved down into the doc header's utility group with the rest
             of them — which leaves this row to do the one job it is named for. */}
         {/* outside the tab scroller (`flex: none`), so it never scrolls out of reach */}
-        {p.onCollapse && <CollapseButton side="right" onClick={p.onCollapse} />}
+        {p.onCollapse && <CollapseButton side="right" onClick={p.onCollapse} label={p.collapseLabel} />}
       </div>
-      <div style={{ gridRow: 2, gridColumn: 3, display: "flex", minHeight: 0, minWidth: 0, background: surface.pages, borderLeft: "1px solid var(--line)" }}>
+      <div className="vx-pane" data-pane="pages" style={{ gridRow: 2, gridColumn: 3, flex: "1 1 0%", display: "flex", minHeight: 0, minWidth: 0, background: surface.pages, borderLeft: "1px solid var(--line)" }}>
         {/* The rail sits INSIDE the panel, under the shared header band — beside the open file, the
             way the founder's reference has it. `onOpenTab` is this panel's own open route, so an
             explicit open-in-tab lands on the chat record exactly like a link click does; a plain
@@ -315,9 +326,11 @@ export function PagesPanel(p: {
             so the screen said it twice. What is left is the FOLDER TRAIL — the question this row
             answers, and the only part of it you can click. A folder LISTING has no header above it,
             so there the last segment is the folder you are standing in and it stays. */}
-        {!canvas && (!doc || trail.length > 0) && <div title={fullPath} style={{ flex: "none", display: "flex", alignItems: "center", gap: 0, padding: "7px 20px 6px", borderBottom: "1px solid var(--line)", fontFamily: "var(--mono)", fontSize: 11, color: "var(--t3)", overflowX: "auto", whiteSpace: "nowrap" }}>
+        {!canvas && (!doc || trail.length > 0) && <div title={fullPath} data-crumb style={{ flex: "none", display: "flex", alignItems: "center", gap: 0, padding: "7px 20px 6px", borderBottom: "1px solid var(--line)", fontFamily: "var(--mono)", fontSize: 11, color: "var(--t3)", overflow: "hidden", whiteSpace: "nowrap", minWidth: 0 }}>
+          {/* A long trail never scrolls the panel sideways: the FIRST segment keeps its width and
+              the rest give way with an ellipsis; the whole path is the row's tooltip. */}
           {trail.map(({ i, label: c }) => (
-            <span key={i} style={{ flex: "none" }}>
+            <span key={i} style={{ flex: i === 0 ? "none" : "0 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>
               {i > 0 && <span style={{ opacity: 0.6 }}>{SEP}</span>}
               <button style={crumbBtn} title={i === 0 ? `List ${c}` : `List ${crumbs.slice(1, i + 1).join("/")}`}
                 onClick={() => nav(i)}
@@ -327,7 +340,7 @@ export function PagesPanel(p: {
           ))}
           {!doc && <>
             {trail.length > 0 && <span style={{ flex: "none", opacity: 0.6 }}>{SEP}</span>}
-            <span style={{ flex: "none", color: "var(--t1)", fontWeight: 600 }}>{leaf}</span>
+            <span style={{ flex: "0 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", color: "var(--t1)", fontWeight: 600 }}>{leaf}</span>
           </>}
         </div>}
         <div ref={docBox} data-doc-body style={{ ...ty.body, position: "relative", flex: 1, overflowY: canvas ? "hidden" : "auto", padding: canvas || (mode === "edit" && !listing) ? 0 : "18px 20px 40px", minHeight: 0, lineHeight: 1.6, color: "var(--t1)", display: canvas || (mode === "edit" && !listing) ? "flex" : undefined }}>
