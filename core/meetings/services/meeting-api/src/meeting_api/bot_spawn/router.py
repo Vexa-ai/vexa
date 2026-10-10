@@ -39,6 +39,7 @@ from .ports import (
     TranscriptionNotConfigured,
 )
 from .invocation import SPAWNABLE_PLATFORMS
+from .transcription_language import LanguageRefused
 from .service import (
     DuplicateMeeting,
     construct_meeting_url,
@@ -510,7 +511,10 @@ def build_router(
                 passcode=passcode,
                 meeting_url=meeting_url,
                 teams_base_host=teams_base_host,
+                # transcription-language.v1 SpawnFields: request_bot checks them first and resolves
+                # them against the person's and the deployment's defaults.
                 language=body.get("language"),
+                allowed_languages=body.get("allowed_languages"),
                 task=body.get("task"),
                 transcription_tier=body.get("transcription_tier", "realtime"),
                 recording_enabled=_resolve_recording_enabled(body.get("recording_enabled")),
@@ -528,6 +532,8 @@ def build_router(
                 transcript_stream_purge=transcript_stream_purge,
                 redis_grant=redis_grant,
             )
+        except LanguageRefused as e:
+            raise HTTPException(status_code=422, detail=str(e))
         except TranscriptionNotConfigured as e:
             raise HTTPException(status_code=503, detail=str(e))
         except AuthSessionNotConfigured as e:

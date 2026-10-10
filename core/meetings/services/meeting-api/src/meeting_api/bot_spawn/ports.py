@@ -51,6 +51,15 @@ class MeetingRepo(Protocol):
         the caller de-duplicates on the ``stop_requested`` flag rather than on status."""
         ...
 
+    async def find_active_rows_bound(
+        self, platform: str, native_meeting_id: str, workspace_ids: list[str]
+    ) -> list[dict]:
+        """Every non-terminal row for ``(platform, native_id)`` bound (``data.workspace_id``) to one
+        of ``workspace_ids``, whoever owns it, newest first. The live language change reads it to
+        find a meeting a workspace editor may change; the caller checks the role, this only scopes
+        the rows to workspaces the caller is a member of."""
+        ...
+
     async def find_active_by_userdata(self, userdata_s3_path: str) -> Optional[dict]:
         """Any user's ACTIVE meeting whose spawn carried this ``userdata_s3_path``
         (``meeting.data.auth_userdata_path``), or ``None``. The per-identity serialization

@@ -158,8 +158,12 @@ def create_app(
     # lifecycle store
     meeting_store: Optional[MeetingStore] = None,
     token_secret: Optional[str] = None,
-    # user-stop (DELETE /bots) redis command publisher
+    # user-stop (DELETE /bots) and live-change (PUT /bots/.../config) redis command publisher
     command_publisher: Optional["object"] = None,
+    # the caller's role in a meeting's workspace, for the live language change (lifecycle.
+    # reconfigure_router.WorkspaceRoles). None → identity's admin-api from ADMIN_API_URL /
+    # INTERNAL_API_SECRET, or, without them, a reader that confirms no member's role.
+    workspace_roles: Optional["object"] = None,
     # per-user webhook delivery sink (WebhookSink) — delivers meeting.status_change on each FSM advance
     webhook_sink: Optional["object"] = None,
     # operator-owned terminal callback — boot-frozen destination, never user/meeting input
@@ -309,6 +313,13 @@ def create_app(
     # The stop router also gets the runtime client so a stop can directly tear down a still-booting bot's
     # workload (the leave command alone is fire-and-forget — a booting bot may never receive it → orphan).
     app.include_router(build_stop_router(meeting_repo, command_publisher, runtime))
+
+    # --- live language change: PUT /bots/{platform}/{native_meeting_id}/config (acts.v1 reconfigure,
+    #     transcription-language.v1) over the same command bus ---
+    from .lifecycle.reconfigure_router import build_reconfigure_router, workspace_roles_from_env
+
+    app.include_router(build_reconfigure_router(
+        meeting_repo, command_publisher, workspace_roles or workspace_roles_from_env()))
 
     # Resolve the shared recording storage before mounting the collector: completed-meeting erasure
     # uses this same port to delete objects before its transcript/JSONB finalization.
