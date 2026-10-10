@@ -8,4 +8,5 @@ the `$def` validated against `../transcript.schema.json` by `../validate.mjs` (r
 MeetingToken): `validate.mjs` re-signs it in Node, and the bot's `transcript-redis.test.ts` and
 meeting-api's `test_segment_entry_auth.py` pin the same signature. `StreamEntry.signed.json` is the
 entry that vector produces. The `Feed*` goldens and `FeedEntry.*` are the per-meeting feed: a
-`FeedEntry`'s `payload` must parse to a `FeedTranscription`, a `FeedRetract` or a `SessionEnd`.
+`FeedEntry`'s `payload` must parse to a `FeedTranscription`, a `FeedRetract`, a `FeedSessionStart` or a
+`SessionEnd`.

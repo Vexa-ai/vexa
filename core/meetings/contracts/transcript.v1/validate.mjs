@@ -38,7 +38,7 @@ for (const f of files) {
   }
   if (shape === "FeedEntry") {
     let inner; try { inner = JSON.parse(data.payload); } catch { inner = null; }
-    const as = { transcription: "FeedTranscription", retract: "FeedRetract", session_end: "SessionEnd" }[inner?.type];
+    const as = { transcription: "FeedTranscription", retract: "FeedRetract", session_start: "FeedSessionStart", session_end: "SessionEnd" }[inner?.type];
     const check = as && ajv.compile({ $ref: `${schema.$id}#/$defs/${as}` });
     if (!check || !check(inner)) { console.error(`  ✗ ${f}: payload is not a feed entry${check ? ": " + ajv.errorsText(check.errors) : ""}`); failed++; continue; }
   }

@@ -889,7 +889,7 @@ class _ResumedSessionRedis:
         if self._reads == 1:
             return [("tc:meeting:m1", [("1-0", {"payload": _j.dumps({"type": "session_end"})})])]
         if self._reads == 2:
-            return [("tc:meeting:m1", [("2-0", {"payload": _j.dumps({"type": "session_start", "uid": "m1"})})])]
+            return [("tc:meeting:m1", [("2-0", {"payload": _j.dumps({"type": "session_start", "session_uid": "m1"})})])]
         if self._reads == 3:
             return [("tc:meeting:m1", [("3-0", {"payload": _j.dumps(
                 {"type": "transcription", "segments": [{"speaker": "J", "text": "still live", "start": 9, "segment_id": "s9"}]})})])]

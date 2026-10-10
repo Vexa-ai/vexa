@@ -660,7 +660,7 @@ def mount_lifecycle(
                 try:
                     await redis.xadd(
                         f"tc:meeting:{meeting_row_id}",
-                        {"type": "session_start", "uid": str(native or meeting_row_id)},
+                        {"type": "session_start", "session_uid": str(native or meeting_row_id)},
                     )
                 except Exception as e:  # noqa: BLE001 — best-effort; the seed also resets on new segments
                     log_event("meeting_session_start_marker_failed", audience="system", level="warning",
