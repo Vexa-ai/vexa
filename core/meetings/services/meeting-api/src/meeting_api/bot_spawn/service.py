@@ -551,7 +551,8 @@ async def request_bot(
     #     configured knob must never spawn a bot that silently joins anonymous. Env vocabulary
     #     matches the provisioning CLI: BOT_USERDATA_S3_PATH + BOT_S3_{ENDPOINT,BUCKET,ACCESS_KEY,
     #     SECRET_KEY} (the bots' READ-ONLY userdata pair — it rides the invocation env into the bot
-    #     container, so it may read the session and nothing else). auth_session_config also refuses a pair that reuses
+    #     container, so it may read the session and nothing else; a bot's write-back goes through
+    #     meeting-api's session_profile route). auth_session_config also refuses a pair that reuses
     #     either half of a storage root pair (MINIO_* / S3_*), before any row or bot exists.
     auth_cfg = auth_session_config()
     authenticated = auth_cfg is not None
@@ -689,15 +690,17 @@ async def request_bot(
                     fields={"active": active, "cap": max_concurrent},
                 )
                 raise MaxBotsExceeded(user_id, max_concurrent)
-        row = await repo.reopen_meeting(
-            meeting_id=reused_row["id"],
-            data_patch={
-                "transcribe_enabled": transcribe_enabled,
-                "recording_enabled": recording_enabled,
-                "transcription_provider": transcription_provider,
-                "service_authority": authority_record,
-            },
-        )
+        reopen_patch: dict[str, Any] = {
+            "transcribe_enabled": transcribe_enabled,
+            "recording_enabled": recording_enabled,
+            "transcription_provider": transcription_provider,
+            "service_authority": authority_record,
+        }
+        # A continued run in authenticated mode is an authenticated run: it carries the identity key
+        # the per-identity serialization and the session write-back both match on.
+        if authenticated and auth_userdata_path:
+            reopen_patch["auth_userdata_path"] = auth_userdata_path
+        row = await repo.reopen_meeting(meeting_id=reused_row["id"], data_patch=reopen_patch)
     else:
         meeting_data: dict[str, Any] = {}
         if constructed_url:

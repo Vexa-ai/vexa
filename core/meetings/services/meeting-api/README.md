@@ -23,6 +23,7 @@ and stays in their ecosystem (FastAPI + redis + DB).
 | spawns-over | runtime kernel | `runtime.v1` (`RuntimeClient.create_workload`) | the meeting-bot workload (carries the `invocation.v1` BOT_CONFIG + MeetingToken); every call presents `RUNTIME_API_TOKEN` |
 | consumes | meeting-bot | `POST /bots/internal/callback/lifecycle` | `lifecycle.v1` `LifecycleEvent` → FSM advance + DB persist. Admitted by the event's own session's MeetingToken (see below) or the internal tier (`X-Internal-Secret`); anything else is a `401` |
 | consumes | meeting-bot | `POST /internal/recordings/upload` | recording chunks and signal tapes for the session named by `session_uid`. Admitted by that session's MeetingToken or the internal tier (`Bearer <INTERNAL_API_SECRET>`) |
+| consumes | meeting-bot | `PUT /internal/browser-session/{session_uid}` | an authenticated bot's rotated browser session (`src/meeting_api/session_profile`). Admitted only by that session's MeetingToken, only while it is the live authenticated bot (the newest session spawned on `BOT_USERDATA_S3_PATH`, its meeting live or ended < 10 min), only SESSION_PROFILE files; stored with meeting-api's own S3 credentials. The bots' `BOT_S3_*` pair is read-only |
 | consumes | runtime kernel | `POST /runtime/callback` | workload state/terminal ACK (CC5 synthetic `failed`). Admitted only with the runtime's `X-Runtime-Signature`, an HMAC over the event keyed from `RUNTIME_API_TOKEN` (`src/meeting_api/runtime_signature.py`) |
 | calls (optional) | operator service authority | `service-authority.v1` over signed HTTP | allow/deny before spawn and at each one-minute active-service boundary; no hosted billing data |
 | consumes | transcription worker | redis stream `transcription_segments` | raw `transcript.v1` segments → DB |
@@ -37,8 +38,9 @@ with `ADMIN_TOKEN`, minted by `POST /bots` for ONE bot session and bound to it: 
 claim is the spawn's `connection_id`, the id the eager `MeetingSession` is keyed by. It rides the
 bot's `invocation.v1` as `token`, so the bot workload is its only holder; it expires after
 `MEETING_TOKEN_TTL_SECONDS` (default 5 h). The bot presents it as `Authorization: Bearer <token>` on
-the two doors above: the lifecycle callback (session = the event's `connection_id`) and the
-recording/tape upload (session = the request's `session_uid`). Both apply one rule,
+the doors above: the lifecycle callback (session = the event's `connection_id`), the
+recording/tape upload (session = the request's `session_uid`) and, in authenticated mode, the
+browser-session write-back (session = the path's `session_uid`). Both apply one rule,
 `admit_session`: a valid signature, unexpired, and bound to exactly that session. A token for another
 session, or bound to none, is refused, so a bot can move and write only its own session. The token's
 third use is the transcript: each `transcription_segments` entry carries `auth` (the token's

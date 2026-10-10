@@ -27,7 +27,6 @@
 import {
   launchPersistentBrowser,
   syncBrowserDataFromS3,
-  syncBrowserDataToS3,
   cleanStaleLocks,
   getAuthenticatedBrowserArgs,
   makeEphemeralProfileDir,
@@ -43,6 +42,7 @@ import type { BotRecordingSink } from './recording.js';
 import type { TelemetrySink } from './ports.js';
 import type { RemoteAudioActivityTap } from './aloneness.js';
 import { createTtsPlayback } from './tts-playback.js';
+import { writeBackSession } from './session-writeback.js';
 
 /** Float32 PCM → base64 of its little-endian bytes — the EXACT codec wire payload, so a stored
  *  captured-signal.v1 frame round-trips through @vexa/capture-codec (encode→decode→same PCM). */
@@ -572,7 +572,8 @@ export interface BrowserSession {
 export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
   // Every bot gets its OWN profile dir — concurrent bots sharing one dir die on Chromium's
   // SingletonLock (#478: joining → failed <1s, "Opening in existing browser session").
-  // Authenticated: restore the S3 userdata into this bot's dir before launch (index.ts:2313–2347).
+  // Authenticated: restore the stored session into this bot's dir before launch (index.ts:2313–2347),
+  // with the deployment's read-only userdata key — the session profile only (SESSION_PROFILE).
   const dataDir = makeEphemeralProfileDir();
   const s3Config = {
     userdataS3Path: inv.userdataS3Path,
@@ -660,12 +661,17 @@ export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
       await context.close().catch(() => { /* best-effort */ });
       // Write-back on clean teardown (#725): Google rotates session cookies during use, so the
       // durable copy is refreshed from the LIVE profile dir after the context flushes — the next
-      // spawn restores the freshest state instead of a decaying snapshot. Clean teardown only:
-      // a SIGKILL never reaches close(), so a hard-killed meeting keeps the last durable copy.
-      // Failures are attributed warnings, bounded per upload — teardown never hangs on S3.
+      // spawn restores the freshest state instead of a decaying snapshot. The bot's userdata key is
+      // read-only: the session profile goes to meeting-api (MeetingToken), which stores only
+      // SESSION_PROFILE paths and only from the live authenticated session. Clean teardown only: a
+      // SIGKILL never reaches close(), so a hard-killed meeting keeps the last durable copy.
+      // Failures are attributed warnings, one bounded attempt — teardown never hangs on it.
       if (inv.authenticated && inv.userdataS3Path) {
         try {
-          syncBrowserDataToS3(s3Config, dataDir);
+          const r = await writeBackSession(inv, dataDir);
+          console.log(r.skipped
+            ? `[bot] session write-back skipped: ${r.skipped}`
+            : `[bot] session write-back: ${r.sent} session file(s) accepted by meeting-api`);
         } catch (e) {
           console.error(`[bot] session write-back failed (durable copy stays at last restore): ${String(e)}`);
         }

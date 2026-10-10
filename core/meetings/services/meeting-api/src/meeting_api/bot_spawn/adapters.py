@@ -137,6 +137,31 @@ class SqlAlchemyMeetingRepo:
             m = (await db.execute(stmt)).scalars().first()
             return _row_to_dict(m) if m else None
 
+    async def latest_auth_session(self, userdata_s3_path) -> Optional[dict]:
+        from sqlalchemy import select
+
+        from ..sessions.models import Meeting, MeetingSession
+
+        async with self._session_factory() as db:
+            stmt = (
+                select(MeetingSession.session_uid, Meeting.id, Meeting.status, Meeting.end_time,
+                       Meeting.updated_at)
+                .join(Meeting, MeetingSession.meeting_id == Meeting.id)
+                .where(Meeting.data["auth_userdata_path"].astext == userdata_s3_path)
+                .order_by(MeetingSession.session_start_time.desc(), MeetingSession.id.desc())
+                .limit(1)
+            )
+            row = (await db.execute(stmt)).first()
+            if row is None:
+                return None
+            return {
+                "meeting_id": row.id,
+                "session_uid": row.session_uid,
+                "status": row.status,
+                "end_time": _iso_utc(row.end_time),
+                "updated_at": _iso_utc(row.updated_at),
+            }
+
     async def find_latest(self, user_id, platform, native_meeting_id) -> Optional[dict]:
         from sqlalchemy import select
 

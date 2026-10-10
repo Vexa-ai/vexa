@@ -338,6 +338,10 @@ def create_app(
         recording_repo = _recordings_fakes().InMemoryRecordingRepo()
     app.include_router(_recordings.build_router(recording_repo, storage, token_secret=token_secret))
 
+    # --- session_profile: PUT /internal/browser-session/{session_uid} — the authenticated bot's write-back ---
+    from .session_profile import build_router as _build_session_profile_router
+    app.include_router(_build_session_profile_router(meeting_repo, token_secret=token_secret))
+
     # --- webhooks: GET /webhooks/deliveries — the per-user delivery history the dashboard reads (#841) ---
     app.include_router(_build_webhooks_router(delivery_ledger))
 
