@@ -139,3 +139,12 @@ describe("G2r — the design budgets only go down (G2 inline style keys, G1 raw 
     expect(countBanned(`const o = { color: "red" };`)).toBe(0);
   });
 });
+
+describe("planted budget violations are caught (Phase 3a)", () => {
+  it("a new raw colour, a one-off font size and a removed focus ring each count", () => {
+    expect(countColours(`<span style={{ color: "#ff0000" }} />`)).toBe(1);
+    expect(countColours(`/* #ffffff in a comment */ const ok = 1;`)).toBe(0);
+    expect(countBanned(`const a = <span style={{ fontSize: 17 }} />;`)).toBe(1);
+    expect(countOutlineNone(`<input style={{ outline: "none" }} />`)).toBe(1);
+  });
+});

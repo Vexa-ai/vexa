@@ -15,7 +15,7 @@ function* files(dir: string): Generator<string> {
     else if (/\.(tsx?|css)$/.test(name) && !/\.test\.tsx?$/.test(name)) yield p;
   }
 }
-const SOURCES = [...files(SRC)].map((f) => ({ rel: f.slice(SRC.length + 1), text: readFileSync(f, "utf8").replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, "") }));
+const SOURCES = [...files(SRC)].map((f) => ({ rel: f.slice(SRC.length + 1), text: readFileSync(f, "utf8").replace(/\/\*[\s\S]*?\*\/|(^|[^:"'`])\/\/[^\n]*/g, "$1") }));   // a URL's "//" is not a comment
 
 describe("G12 — no browser dialogs", () => {
   const PROMPT_ALLOW = new Set(["surfaces/meeting.tsx"]);   // the schedule-time prompt: a DateTimePicker replaces it in Phase 3
@@ -94,4 +94,16 @@ describe("G10 — no raw HTML injection", () => {
     const bad = SOURCES.filter((s) => !ALLOW.has(s.rel) && /dangerouslySetInnerHTML/.test(s.text)).map((s) => s.rel);
     expect(bad).toEqual([]);
   });
+});
+
+describe("planted violations are caught (the gate goes red, Phase 3a)", () => {
+  // The same patterns the guards above use, run on a planted line each — a guard that cannot see
+  // its own violation is green by construction.
+  it("G12 sees a browser dialog", () => { expect(/window\.(confirm|alert)\s*\(/.test(`if (window.confirm("x")) go();`)).toBe(true); });
+  it("G9 sees a raw new-tab link, URL and all", () => {
+    expect(/<a\b[^>]*target=["{]?["']?_blank/.test(`<a href="https://example.com" target="_blank">x</a>`)).toBe(true);
+  });
+  it("G10 sees raw HTML injection", () => { expect(/dangerouslySetInnerHTML/.test(`<div dangerouslySetInnerHTML={{ __html: x }} />`)).toBe(true); });
+  it("G4 sees a mid-word break", () => { expect(/overflow-?[wW]rap\s*:\s*["']?anywhere/.test(`style={{ overflowWrap: "anywhere" }}`)).toBe(true); });
+  it("G6 sees a literal-duration transition", () => { expect(/\b\d+(\.\d+)?m?s\b/.test("transition: opacity .12s ease;") && !/var\(--dur-/.test("transition: opacity .12s ease;")).toBe(true); });
 });
