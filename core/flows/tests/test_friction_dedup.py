@@ -167,6 +167,25 @@ def test_a_counter_whose_report_was_deleted_starts_over(api):
     assert _reports(flows_api, client)[0]["occurrences"] == 1
 
 
+def test_a_young_counter_is_not_restarted_while_its_first_report_may_be_in_flight(api):
+    """Deny: inside `STALE_AFTER_S` a missing reaction means "not admitted yet", not "deleted", so
+    a repeat is counted and never admits a second reaction for the same edge."""
+    flows_api, client = api
+    fid = "fr_inflight"
+    key = friction_dedup.dedup_key(uid="126", tool="gmail_search", what_happened=REFUSAL,
+                                   what_i_tried="", now=flows_api.clock.now())
+    # the first report has upserted but not yet admitted its reaction (nor been marked)
+    assert friction_dedup.record_occurrence(flows_api.db, key=key, friction_id=fid, uid="126",
+                                            now=flows_api.clock.now()) == (fid, 1)
+    b = _post(flows_api, client, tool="gmail_search", what_happened=REFUSAL).json()
+    assert b["recorded"] is False and b["duplicate_of"] == fid
+    assert _reactions(flows_api) == 0
+    # past the in-flight window an unmarked counter with no reaction is stale: the next report files
+    flows_api.clock.advance(friction_dedup.STALE_AFTER_S)
+    c = _post(flows_api, client, tool="gmail_search", what_happened=REFUSAL).json()
+    assert c["recorded"] is True and _reactions(flows_api) == 1
+
+
 def test_a_report_filed_once_reads_occurrences_one(api):
     flows_api, client = api
     _post(flows_api, client, tool="x", what_happened="it broke")
@@ -201,3 +220,37 @@ def test_dedup_key_changes_with_each_part():
     for change in ({"uid": "127"}, {"tool": "u"}, {"what_happened": "y"},
                    {"now": HOUR_START + 3600}):
         assert friction_dedup.dedup_key(**{**base, **change}) != k, change
+
+
+def test_texts_differing_only_in_a_urlsafe_handle_fold():
+    a = friction_dedup.reason_key("token Zk3_aQ9-bR2xYp7LmN4wQe was rejected by the bridge")
+    b = friction_dedup.reason_key("token Qa9-Lm2_xY7pR4tB8nW1cE was rejected by the bridge")
+    assert a == b == "text:token was rejected by the bridge"
+
+
+def test_labelled_ids_uuids_and_numbers_fold_but_keep_their_label():
+    a = friction_dedup.reason_key(
+        "refresh failed jti=8c2f1a9e for session_id: chat-abc, request "
+        "3f2b8c1e-9d4a-4b6f-8e2a-1c5d7f9a0b3e after 3 tries")
+    b = friction_dedup.reason_key(
+        "refresh failed jti=JtX_77 for session_id: chat-zzz, request "
+        "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee after 12 tries")
+    assert a == b == "text:refresh failed jti for session_id request after tries"
+
+
+def test_two_genuinely_different_failures_stay_apart():
+    """Deny: normalisation must not fold failures that are different in kind — different wording,
+    a different error code, or a different refusal reason."""
+    pairs = [
+        ("draft 8f3a9c21d0 could not be found", "calendar 8f3a9c21d0 returned an empty list"),
+        ("error code: invalid_grant", "error code: access_denied"),
+        ('{"reason": "human_session_required"}', '{"reason": "opaque_limit"}'),
+        ("the page was invalid: expected a table", "the page was invalid: expected a list"),
+    ]
+    for a, b in pairs:
+        assert friction_dedup.reason_key(a) != friction_dedup.reason_key(b), (a, b)
+
+
+def test_a_snake_case_word_is_not_mistaken_for_a_handle():
+    assert friction_dedup.reason_key("workspace_not_provisioned_yet for this person") \
+        == "text:workspace_not_provisioned_yet for this person"

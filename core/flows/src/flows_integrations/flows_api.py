@@ -1279,6 +1279,8 @@ def report_friction(
     # refuses: the reporter stops filing, and nobody learns anything. `admit()` returns how many
     # reactions it created; 0 means no flow matched `friction.reported` (or this exact report was
     # already filed), and the caller is told that in the same field it already reads.
+    if created:
+        friction_dedup.mark_admitted(db, key=dkey, friction_id=fid)
     if not created:
         friction_dedup.forget(db, key=dkey)   # nothing to fold repeats into — let the next try admit
         logger.error(

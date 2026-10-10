@@ -102,6 +102,7 @@ CREATE TABLE IF NOT EXISTS friction_occurrence (
 	occurrences INTEGER NOT NULL, 
 	first_seen DOUBLE PRECISION NOT NULL, 
 	last_seen DOUBLE PRECISION NOT NULL, 
+	admitted INTEGER NOT NULL, 
 	PRIMARY KEY (dedup_key)
 );
 

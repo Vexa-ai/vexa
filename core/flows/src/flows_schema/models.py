@@ -191,5 +191,8 @@ class FrictionOccurrence(Base):
     occurrences: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     first_seen: Mapped[float] = mapped_column(Double, nullable=False)
     last_seen: Mapped[float] = mapped_column(Double, nullable=False)
+    # 1 once the first report's reaction was admitted. Until then a missing reaction means "still
+    # being admitted", not "deleted" — see `friction_dedup.record_occurrence`.
+    admitted: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     # ONE index, on the join column the read side uses (see MailTurn on why only one).
     __table_args__ = (Index("friction_occurrence_by_id", "friction_id"),)

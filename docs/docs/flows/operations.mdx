@@ -117,7 +117,9 @@ The first report still answers `{"id": "fr_…", "recorded": true, …}`. `frict
 /friction`) returns `occurrences` (1 for a report filed once) and `last_seen` on every report. The
 rig's `friction_dump` adds up `occurrences` in each group, so a group's count is the number of
 reports filed, not the number of rows. The rig's `report_friction` passes the duplicate fields
-through to the agent unchanged.
+through to the agent unchanged. So does agent-api's `POST /api/friction` forward (used by the worker's
+auto-filer and the terminal's "Report this"): a folded repeat answers `recorded: false` with
+`duplicate_of`, `occurrences` and `instruction`.
 
 **Two reports are "the same" when all four of these match:**
 
@@ -125,7 +127,7 @@ through to the agent unchanged.
 |---|---|
 | subject | the caller's credential (or the operator-stamped `X-User-Id`), never the body |
 | tool | `tool` as sent, trimmed and lowercased |
-| reason | the refusal reason token when `what_happened` has one: either labelled (`"reason": "human_session_required"`, `reason=…`) or a known token found anywhere in the text. Otherwise `what_happened` is normalised by removing URLs, emails, timestamps, UUIDs, prefixed ids (`fr_…`), hex runs, quoted handles and digits, then collapsing case and punctuation. If `what_happened` is empty, `what_i_tried` is used instead |
+| reason | the refusal reason token when `what_happened` has one: either labelled (`"reason": "human_session_required"`, `reason=…`) or a known token found anywhere in the text. Otherwise `what_happened` is normalised by removing URLs, emails, timestamps, UUIDs, prefixed ids (`fr_…`), the value of an id label (`jti=…`, `message_id: …`, `token=…`; the label is kept), opaque url-safe handles (16+ characters with a digit or mixed case, such as a 22-character token), hex runs, quoted handles and digits, then collapsing case and punctuation. Error codes (`code: invalid_grant`) and snake_case words are kept, so different failures stay apart. If `what_happened` is empty, `what_i_tried` is used instead |
 | hour | the UTC hour of arrival (`floor(epoch / 3600)`) |
 
 **Limits.**
@@ -147,7 +149,9 @@ through to the agent unchanged.
   existing note. The counter is then dropped, so the next report tries to file again and is not
   counted against a row that does not exist.
 - If an operator deleted the original report's row, the next repeat starts a new report rather than
-  counting against one nobody can read.
+  counting against one nobody can read. A counter whose first report has not yet been marked
+  admitted is treated as still in progress for 60 seconds (`STALE_AFTER_S`), so a repeat arriving
+  while the first is being admitted is counted, not admitted a second time.
 
 ### How it works
 
@@ -158,11 +162,15 @@ through to the agent unchanged.
    `[uid, tool, reason, hour]`, so the stored key contains none of the report's text.
 3. `friction_dedup.record_occurrence` runs a single atomic upsert on `friction_occurrence`:
    `INSERT … ON CONFLICT (dedup_key) DO UPDATE SET occurrences = occurrences + 1, last_seen = now
-   RETURNING friction_id, occurrences`. If two first reports arrive at the same moment, only one of
-   them gets `occurrences = 1`.
+   RETURNING friction_id, occurrences, first_seen`. If several first reports arrive at the same
+   moment, only one of them gets `occurrences = 1`. This is verified on real Postgres 16 with eight
+   simultaneous reports (`test_friction_dedup_postgres.py`, run when `FLOWS_TEST_PG_URL` is set).
+   Restarting a stale counter is a compare-and-swap on the old id, so concurrent restarts also
+   admit only one report.
 4. If `occurrences == 1`, the route admits a `friction.reported` reaction as before
-   (`source_event_id = friction-<friction_id>`). If admission creates nothing, `friction_dedup.forget`
-   drops the counter.
+   (`source_event_id = friction-<friction_id>`) and then sets the counter's `admitted` flag
+   (`friction_dedup.mark_admitted`). If admission creates nothing, `friction_dedup.forget` drops the
+   counter.
 5. If `occurrences > 1`, the route admits nothing and answers with `duplicate_of`, `occurrences` and
    `instruction`.
 6. `flows_timeline.friction_for_subject` (the read model behind `GET /friction`) reads the page of
@@ -213,11 +221,18 @@ schema file is unchanged.
   never report text.
 - **Deny tests** (`core/flows/tests/test_friction_dedup.py`):
   `test_a_different_uid_never_increments_another_s_report`,
-  `test_a_counter_whose_report_was_deleted_starts_over`.
+  `test_a_counter_whose_report_was_deleted_starts_over`,
+  `test_a_young_counter_is_not_restarted_while_its_first_report_may_be_in_flight`,
+  `test_two_genuinely_different_failures_stay_apart`.
   Behaviour tests: `test_ten_identical_reports_are_one_reaction_with_occurrences_ten`,
   `test_a_duplicate_answer_tells_the_reporter_to_stop`, `test_a_different_tool_is_a_separate_row`,
   `test_a_different_reason_is_a_separate_row`, `test_the_same_report_in_the_next_utc_hour_is_a_new_row`,
-  `test_ids_and_timestamps_in_the_text_do_not_defeat_the_key`. Rig:
+  `test_ids_and_timestamps_in_the_text_do_not_defeat_the_key`,
+  `test_texts_differing_only_in_a_urlsafe_handle_fold`,
+  `test_labelled_ids_uuids_and_numbers_fold_but_keep_their_label`. Real Postgres
+  (`test_friction_dedup_postgres.py`): `test_simultaneous_first_reports_admit_exactly_one_reaction_on_postgres`,
+  `test_a_different_uid_is_a_separate_row_on_postgres`. agent-api
+  (`core/agent/tests/test_friction.py`): `test_a_folded_duplicate_is_passed_through_as_not_recorded`. Rig:
   `deploy/dogfood/rig/tests/test_friction.py::test_friction_dump_sums_folded_occurrences_rather_than_counting_rows`,
   `test_report_friction_passes_a_duplicate_answer_through`.
 
