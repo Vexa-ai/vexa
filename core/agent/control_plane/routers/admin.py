@@ -176,7 +176,7 @@ def build(**d) -> APIRouter:
         rejected tokens, and the zero-balance-external-account case that 402s every segment."""
         from control_plane import config_test as _ct
         subject = subject_of(request)
-        url, token, source, provider = "", "", "env", ""
+        configured: dict = {}
         settings = dispatcher.settings
         admin = (settings.admin_api_url or "").rstrip("/")
         if admin:  # same internal edge bot_spawn uses (bot-context carries the resolved override)
@@ -187,17 +187,14 @@ def build(**d) -> APIRouter:
                                            settings.internal_api_secret.get_secret_value()})
                 with _ur.urlopen(req, timeout=5) as r:
                     body = json.loads(r.read())
-                t = body.get("transcription") or {}
-                if t.get("url") or t.get("token"):
-                    url, token, source = t.get("url") or "", t.get("token") or "", "settings"
-                    provider = str(t.get("provider") or "")
+                configured = body.get("transcription") or {}
             except Exception:
                 pass  # fall through to env — the probe result still says what was tested
-        if not url:
-            url = os.environ.get("TRANSCRIPTION_SERVICE_URL", "")
-            token = token or os.environ.get("TRANSCRIPTION_SERVICE_TOKEN", "")
-        elif not token:
-            token = os.environ.get("TRANSCRIPTION_SERVICE_TOKEN", "")
+        # ONE URL, ITS OWN TOKEN: the pair a bot spawned now would use. A person's URL never gets
+        # the deployment's token, and a person's token never goes to the deployment's URL.
+        url, token, source, provider = _ct.transcription_route(configured, {
+            "TRANSCRIPTION_SERVICE_URL": os.environ.get("TRANSCRIPTION_SERVICE_URL", ""),
+            "TRANSCRIPTION_SERVICE_TOKEN": os.environ.get("TRANSCRIPTION_SERVICE_TOKEN", "")})
         if provider == "customer":     # the person's own endpoint: held to the outbound URL guard
             return _ct.run_customer_transcription_test(url, token, source)
         return _ct.run_transcription_test(url, token, source)

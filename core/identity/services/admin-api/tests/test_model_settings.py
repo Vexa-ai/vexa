@@ -121,6 +121,33 @@ def test_model_config_resolves_user_over_platform(client):
     assert client.get("/internal/users/999999/model-config", headers=_internal()).status_code == 404
 
 
+def test_a_persons_own_endpoint_never_inherits_the_platform_credential(client):
+    """A person who names their OWN endpoint brings its credential: the operator's platform key (and
+    its server-specific request fields) are for the operator's endpoint and never fill the gap —
+    the rule bot-context already applies to a person's transcription URL."""
+    uid, tok = _user_token(client, email="own-endpoint@vexa.ai")
+    client.put("/internal/settings/models", headers=_internal(),
+               json={"mode": "custom", "base_url": "https://gw.operator.example/v1",
+                     "api_key": "operator-platform-key", "extra_body": '{"operator": true}',
+                     "model": "operator-model"})
+    client.put("/user/models", headers={"X-API-Key": tok},
+               json={"mode": "custom", "base_url": "https://own.person.example/v1"})
+    models = client.get(f"/internal/users/{uid}/model-config", headers=_internal()).json()["models"]
+    assert models["base_url"] == "https://own.person.example/v1"
+    assert "api_key" not in models and "extra_body" not in models
+    assert "operator-platform-key" not in str(models)
+
+    client.put("/user/models", headers={"X-API-Key": tok}, json={"api_key": "person-own-key"})
+    models = client.get(f"/internal/users/{uid}/model-config", headers=_internal()).json()["models"]
+    assert models["api_key"] == "person-own-key"
+
+    # no endpoint of their own: the operator's endpoint with the operator's key, as before
+    client.put("/user/models", headers={"X-API-Key": tok}, json={"base_url": "", "api_key": ""})
+    models = client.get(f"/internal/users/{uid}/model-config", headers=_internal()).json()["models"]
+    assert models["base_url"] == "https://gw.operator.example/v1"
+    assert models["api_key"] == "operator-platform-key"
+
+
 def test_bot_context_carries_effective_transcription(client):
     uid, tok = _user_token(client, email="stt@vexa.ai")
     # nothing configured → no transcription key at all (bot_spawn keeps its env)

@@ -363,6 +363,26 @@ def _resolve_effective(user_cfg: dict, platform_cfg: dict, fields: tuple) -> dic
     return out
 
 
+#: The models fields that belong to an endpoint: its credential and its server-specific request
+#: fields. They follow the endpoint's owner, never the field-by-field merge.
+_ENDPOINT_BOUND_MODEL_FIELDS = ("api_key", "extra_body")
+
+
+def _effective_models(user_cfg: dict, platform_cfg: dict) -> dict:
+    """The person's effective Settings → Models: user over platform, field by field — except that a
+    person who names their OWN endpoint (``base_url``) brings that endpoint's credential and request
+    fields too. Those are never filled from the platform record, which holds the operator's for the
+    operator's endpoint; the same rule bot-context applies to a person's transcription URL."""
+    out = _resolve_effective(user_cfg, platform_cfg, MODELS_FIELDS)
+    if str(user_cfg.get("base_url") or "").strip():
+        for field in _ENDPOINT_BOUND_MODEL_FIELDS:
+            if user_cfg.get(field):
+                out[field] = user_cfg[field]
+            else:
+                out.pop(field, None)
+    return out
+
+
 _FLAG_FALSE = ("false", "0", "no", "off")
 _FLAG_TRUE = ("true", "1", "yes", "on")
 
@@ -1467,10 +1487,9 @@ def create_app() -> FastAPI:
         check_internal(request)
         user = await _load_user(user_id, db)
         data = user.data if isinstance(user.data, dict) else {}
-        return {"models": _resolve_effective(
+        return {"models": _effective_models(
             data.get("model_prefs") or {},
             await read_platform_setting("models", db),
-            MODELS_FIELDS,
         )}
 
     @app.get("/")

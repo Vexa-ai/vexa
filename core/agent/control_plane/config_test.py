@@ -329,6 +329,21 @@ def _guarded_probe(endpoint: str, token: str) -> tuple:
         return r.status_code, r.text
 
 
+def transcription_route(configured: Optional[dict], env: dict) -> tuple[str, str, str, str]:
+    """``(url, token, source, provider)`` — the backend a bot spawned now would use and the one
+    credential it would carry, by bot_spawn's rule: a configured URL (Settings, resolved by
+    admin-api's bot-context) brings its own token, empty meaning none — never the deployment's; with
+    no configured URL the deployment's URL and token apply, and a configured token alone is not used
+    (bot_spawn does not use it either). The Test button probes exactly this pair. ``env`` is the
+    deployment's ``TRANSCRIPTION_SERVICE_URL`` / ``_TOKEN``, read by the caller."""
+    cfg = configured if isinstance(configured, dict) else {}
+    url = str(cfg.get("url") or "").strip()
+    if url:
+        return url, str(cfg.get("token") or ""), "settings", str(cfg.get("provider") or "")
+    return (str(env.get("TRANSCRIPTION_SERVICE_URL") or "").strip(),
+            str(env.get("TRANSCRIPTION_SERVICE_TOKEN") or "").strip(), "env", "")
+
+
 def run_customer_transcription_test(url: str, token: str, source: str, get: HttpGet = _guarded_get,
                                     probe: TranscribeProbe = _guarded_probe,
                                     resolver=None) -> dict:
