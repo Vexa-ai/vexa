@@ -114,7 +114,7 @@ function InviteGate({ children }: { children: ReactNode }) {
       if (!token) return;
       try {
         const r = await acceptTranscriptShare(token);
-        if (r?.meeting_id != null) localStorage.setItem("vexa.openMeeting", String(r.meeting_id));
+        if (r?.meeting_id != null) stashSharedMeeting(r.meeting_id);
       } catch (e) { console.error("scaffold transcript share redeem failed:", e); }
     })();
   }, [scaffold]);
@@ -142,7 +142,7 @@ function InviteGate({ children }: { children: ReactNode }) {
     if (!tshare) return;
     acceptTranscriptShare(tshare)
       .then((r) => {
-        if (r?.meeting_id != null) localStorage.setItem("vexa.openMeeting", String(r.meeting_id));
+        if (r?.meeting_id != null) stashSharedMeeting(r.meeting_id);
         if (!invite) window.location.replace(window.location.pathname);
       })
       .catch((e) => setShareRefused(shareRefusalSentence(e)));
@@ -166,6 +166,17 @@ function InviteGate({ children }: { children: ReactNode }) {
   const decline = () => window.location.replace(window.location.pathname);
 
   return <InviteConsent token={invite} onProceed={proceed} onDecline={decline} busy={redeeming} />;
+}
+
+/** After a share redeems, open THAT meeting. Each shell reads its own key: the workbench consumes
+ *  `vexa.openMeeting`; the minutes shell opens a meeting from `vexa.openMeetingRef` (a row id is a
+ *  valid ref there), which is also what holds its first-room boot back. Found live: a shared link
+ *  opened in the minutes product redeemed correctly and then landed on the reader's last chat. */
+export function stashSharedMeeting(meetingId: number | string): void {
+  try {
+    localStorage.setItem("vexa.openMeeting", String(meetingId));
+    if (minutesOnly()) localStorage.setItem("vexa.openMeetingRef", String(meetingId));
+  } catch { /* locked-down storage: the meeting is still in their list */ }
 }
 
 /** Why a meeting share link did not open, in the reader's words. The server's codes (`not_allowed`,

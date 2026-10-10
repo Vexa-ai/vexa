@@ -157,3 +157,16 @@ describe("a recipient whose access ends", () => {
     expect(h.latestIssue?.kind).toBe("access");
   });
 });
+
+describe("arriving through a share link opens that meeting in either shell", () => {
+  afterEach(() => { vi.unstubAllEnvs(); localStorage.clear(); });
+  it("the workbench key always, and the minutes shell's ref in the minutes product", async () => {
+    const { stashSharedMeeting } = await import("../../app/App");
+    stashSharedMeeting(13);
+    expect(localStorage.getItem("vexa.openMeeting")).toBe("13");
+    expect(localStorage.getItem("vexa.openMeetingRef")).toBeNull();
+    vi.stubEnv("NEXT_PUBLIC_TERMINAL_MODE", "minutes");
+    stashSharedMeeting(14);
+    expect(localStorage.getItem("vexa.openMeetingRef")).toBe("14");
+  });
+});
