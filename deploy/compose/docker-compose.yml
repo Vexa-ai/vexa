@@ -1445,7 +1445,7 @@ services:
     profiles: ["llm-shim"]
     # PINNED, deliberately: this is a third-party compatibility surface we vouch for, and both
     # dialects move. Bump it on purpose, never implicitly.
-    image: ${LLM_SHIM_IMAGE:-litellm/litellm:main-v1.97.0}
+    image: ${LLM_SHIM_IMAGE:-litellm/litellm:v1.97.2@sha256:200baef4b77d3f15cabab3d3202f8fe993ae695e1c0f3ef1f5c9592f91239df8}
     networks: [vexa, workers]     # MUST match the stack: workers resolve it on `workers`
     ports:
       - "127.0.0.1:${LLM_SHIM_PORT:-14000}:4000"
