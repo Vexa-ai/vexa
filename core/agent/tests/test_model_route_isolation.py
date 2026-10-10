@@ -145,7 +145,7 @@ def test_a_self_hosted_qwen_entry_runs_keyless_on_its_own_endpoint(monkeypatch, 
     assert worker["VEXA_RUNNER"] == "openai-agent"
     assert worker["VEXA_LLM_BASE_URL"] == "http://10.0.0.5:8000/v1"
     assert worker["VEXA_AGENT_MODEL"] == "Qwen/Qwen3-32B" and worker["VEXA_LLM_MODEL"] == ""
-    assert worker["VEXA_AGENT_CONTEXT_TOKENS"] == "32768"
+    assert worker["VEXA_AGENT_CONTEXT_TOKENS"] == str(32768 - 8192)    # the window less the answer
     _no_foreign_credential(worker)
     for request in _turn(monkeypatch, tmp_path, worker):
         assert request["url"] == "http://10.0.0.5:8000/v1/chat/completions"
@@ -334,3 +334,33 @@ def test_an_effort_the_model_does_not_offer_refuses_the_turn_typed(monkeypatch, 
     f = exc.value.as_dict()
     assert (f["source"], f["kind"], f["model"]) == ("model-provider", "effort_unsupported", choice)
     assert exc.value.http_status == 422
+
+
+# ── the context budget is the model's own window, never an empty stamp (app.dev, 2026-10-10) ───
+
+@pytest.mark.parametrize("backend", ["process", "docker", "k8s"])
+def test_an_unpicked_chat_runs_on_the_default_entrys_window(monkeypatch, tmp_path, backend):
+    """No pick: the catalog's default (qwen3-32b, a 32768 window) decides the budget."""
+    worker = _worker(monkeypatch, tmp_path, backend, choice="")
+    assert worker["VEXA_AGENT_CONTEXT_TOKENS"] == str(32768 - 8192)
+
+
+@pytest.mark.parametrize("backend", ["process", "docker"])
+def test_an_entry_with_no_window_never_erases_the_deployments_budget(monkeypatch, tmp_path, backend):
+    """An entry that names no window leaves the key to the deployment: the runtime's forwarded
+    VEXA_AGENT_CONTEXT_TOKENS reaches the worker, never an empty stamp that wins over it."""
+    worker = _worker(monkeypatch, tmp_path, backend, choice="or-sonnet")
+    assert worker["VEXA_AGENT_CONTEXT_TOKENS"] == "24000"        # the deployment's, from _deployment()
+
+
+def test_the_route_never_stamps_an_empty_context_budget(monkeypatch, tmp_path):
+    for choice in ("qwen3-32b", "or-sonnet", "claude", ""):
+        spec = _spec(monkeypatch, tmp_path, choice=choice)
+        assert spec.get("VEXA_AGENT_CONTEXT_TOKENS", "unset") != "", choice
+
+
+def test_an_entrys_output_cap_is_the_room_kept_for_the_answer():
+    from control_plane.dispatch import context_budget
+    assert context_budget(131072) == 131072 - 8192
+    assert context_budget(131072, 4096) == 131072 - 4096
+    assert context_budget(None) is None

@@ -533,6 +533,19 @@ _CLAUDE_TIERS = ("ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL",
                  "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL")
 
 
+#: Room kept for the model's answer when the entry names no output cap of its own.
+_ANSWER_RESERVE = 8192
+
+
+def context_budget(window: Optional[int], max_output_tokens: Optional[int] = None) -> Optional[int]:
+    """The request-size budget a model's context ``window`` allows: the window less room for the
+    answer (the entry's own output cap, else ``_ANSWER_RESERVE``). ``None`` when no window is known."""
+    if not window:
+        return None
+    reserve = max_output_tokens or _ANSWER_RESERVE
+    return max(window // 2, window - reserve)
+
+
 def route_env(route: "model_providers.ModelRoute") -> dict[str, str]:
     """A catalog route as the worker env — every key, every time.
 
@@ -570,8 +583,16 @@ def route_env(route: "model_providers.ModelRoute") -> dict[str, str]:
     if route.provider_model:
         env["VEXA_AGENT_MODEL"] = route.provider_model
     env["VEXA_AGENT_STREAM"] = "1" if route.capabilities.streaming else "0"
-    env["VEXA_AGENT_CONTEXT_TOKENS"] = (str(route.capabilities.context_tokens)
-                                        if route.capabilities.context_tokens else "")
+    # THE CONTEXT BUDGET — the chosen model's own window, less room for its answer. NEVER STAMPED
+    # EMPTY: a stamped key wins over the runtime's forwarded one, so an empty value here erased the
+    # deployment's VEXA_AGENT_CONTEXT_TOKENS and the worker fell back to its own default (seen on
+    # app.dev: every unpicked chat's worker carried `VEXA_AGENT_CONTEXT_TOKENS=`). An entry that
+    # names no window leaves the key out, so the deployment's value applies.
+    budget = context_budget(route.capabilities.context_tokens, route.max_output_tokens)
+    if budget:
+        env["VEXA_AGENT_CONTEXT_TOKENS"] = str(budget)
+    else:
+        env.pop("VEXA_AGENT_CONTEXT_TOKENS", None)
     # THE EFFORT, stamped every time, empty included: the claude CLI's --effort for this route (a
     # level the adapter has checked), or nothing — never a level left over from the deployment or
     # from Settings → Models riding into a model that did not offer it. On openai-agent the
