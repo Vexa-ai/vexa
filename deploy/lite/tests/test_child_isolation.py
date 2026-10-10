@@ -85,6 +85,55 @@ def test_the_display_needs_a_cookie_only_bots_can_read():
     assert 'XAUTHORITY="${XAUTHORITY:-/run/vexa/display/Xauthority}"' in BOT_LAUNCH
 
 
+def test_roots_runtime_directory_gets_its_mode_before_anything_writes_there():
+    """/run/vexa holds the rendered supervisor config, Valkey's config and the self-host keys. Its mode
+    is set (not just at creation: a restarted container keeps the directory) before the first write."""
+    line = "mkdir -p /run/vexa && chown root:root /run/vexa && chmod 0711 /run/vexa"
+    assert line in ENTRYPOINT
+    first = ENTRYPOINT.index(line)
+    for writer in ("/usr/local/bin/display-cookie", "/usr/local/bin/provision-key.sh",
+                   "python3 /usr/local/bin/render-supervisord", "/run/vexa/vnc", "/run/vexa/valkey.conf"):
+        assert first < ENTRYPOINT.index(writer), writer
+    assert "chmod -R go-rwx /run/vexa/*" in ENTRYPOINT[first:ENTRYPOINT.index("/usr/local/bin/display-cookie")]
+    assert "mkdir -p -m 0700 /run/vexa\n" not in ENTRYPOINT
+
+
+def test_the_self_host_keys_are_written_root_only_over_an_earlier_file(tmp_path):
+    """provision-key.sh writes the minted keys under umask 077 and renames them over any key.env a
+    previous boot left (which may be world-readable): the result is 0600 whatever was there."""
+    script = (LITE / "bin" / "provision-key.sh").read_text()
+    body = script.split('if [ -n "$TOKS" ]; then\n', 1)[1].split("    supervisorctl", 1)[0]
+    assert "/run/vexa/key.env" in body
+    body = body.replace("/run/vexa", str(tmp_path))
+    old = tmp_path / "key.env"
+    old.write_text("VEXA_API_KEY=old\n")
+    old.chmod(0o644)
+    subprocess.run(["bash", "-c", body], env={"PATH": "/usr/bin:/bin", "TOKS": "VEXA_API_KEY=new"},
+                   check=True)
+    assert old.read_text() == "VEXA_API_KEY=new\n"
+    assert (old.stat().st_mode & 0o777) == 0o600
+    assert not (tmp_path / "key.env.new").exists()
+
+
+def test_the_cookie_step_makes_no_parent_directory_of_its_own(tmp_path, monkeypatch):
+    import grp
+    import importlib.machinery
+    import importlib.util
+    import os
+
+    import pytest
+
+    loader = importlib.machinery.SourceFileLoader("display_cookie", str(LITE / "bin" / "display-cookie"))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+    group = grp.getgrgid(os.getgid()).gr_name
+    monkeypatch.setattr(os, "chown", lambda *a: None)
+    with pytest.raises(FileNotFoundError):
+        mod.main(["display-cookie", str(tmp_path / "run" / "display" / "Xauthority"), "99", group])
+    assert not (tmp_path / "run").exists()
+
+
 def test_the_cookie_file_is_root_and_the_display_groups_only(tmp_path, monkeypatch):
     import grp
     import importlib.machinery

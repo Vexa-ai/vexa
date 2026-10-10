@@ -33,7 +33,10 @@ def main(argv):
     path, number, group = argv[1], argv[2].encode(), argv[3]
     gid = grp.getgrnam(group).gr_gid
     directory = os.path.dirname(path)
-    os.makedirs(directory, mode=0o750, exist_ok=True)
+    try:
+        os.mkdir(directory, 0o750)              # its parent is the entrypoint's, made with its own mode
+    except FileExistsError:
+        pass
     os.chown(directory, 0, gid)
     os.chmod(directory, 0o750)
     cookie = secrets.token_bytes(16)

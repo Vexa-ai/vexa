@@ -219,6 +219,13 @@ export JWT_SECRET="${JWT_SECRET:-$(python3 -c "import secrets; print(secrets.tok
 # worker's HOME; no child reads it here).
 mkdir -p /var/lib/vexa/host-claude && chmod 0700 /var/lib/vexa/host-claude 2>/dev/null || true
 
+# Root's runtime directory (the rendered supervisor config, Valkey's config, the self-host keys), its
+# mode set at every start, before anything writes into it: a restarted container keeps the directory
+# and whatever mode it had. Others may pass through it to the display's directory, never list it, and
+# every file already in it is root's alone (the display step below re-grants its own).
+mkdir -p /run/vexa && chown root:root /run/vexa && chmod 0711 /run/vexa
+chmod -R go-rwx /run/vexa/*  2>/dev/null || true
+
 # The shared X display: Xvfb runs with access control on, so only a holder of its cookie can open it —
 # root's programs and the vexa-display group, which the runtime gives to meeting bots and not to
 # agent workers. A fresh cookie every start (bin/display-cookie; never printed).
@@ -287,7 +294,6 @@ esac
 unset runtime_api_token
 # Valkey's password reaches it in a root-only config file, never on its command line: every process
 # in the container can read any process's command line.
-mkdir -p -m 0700 /run/vexa
 ( umask 077; printf 'requirepass "%s"\n' "$(printf '%s' "$REDIS_PASSWORD" | sed 's/[\\"]/\\&/g')" > /run/vexa/valkey.conf )
 
 echo "Starting services via supervisord..."

@@ -7,9 +7,10 @@ start children through the runtime the way agent-api and meeting-api do, and che
   group;
 * a dispatch whose subject cannot be mapped is refused, and starts nothing;
 * as each identity a child ran with: no other process's environment is readable, nor root's state
-  (the rendered supervisor config, Valkey's config and data, the signing key, the workload logs, the
-  VNC password, the mounted model credential), and the browser install and the workspace store are
-  not writable;
+  (root's runtime directory, the rendered supervisor config, Valkey's config and data, the self-host
+  API keys, the signing key, the workload logs, the VNC password, the mounted model credential), and
+  the browser install and the workspace store are not writable; and for every uid at once, each of
+  those paths is root's with no group or other read or write bit;
 * the shared X display: a worker identity can neither read its cookie nor open it; a bot identity
   can; nothing opens it without the cookie. The VNC port (and its noVNC bridge) is closed, or asks
   for a password;
@@ -41,7 +42,8 @@ CONF = "/etc/supervisor/conf.d/vexa.conf"
 XAUTH = "/run/vexa/display/Xauthority"
 X_SOCKET = "/tmp/.X11-unix/X99"
 UID_BASE, SUBJECT_UID_BASE, WORKLOAD_UID_BASE = 100000, 1_000_000_000, 1_500_000_000
-ROOT_ONLY = ["/run/vexa/supervisord.conf", "/run/vexa/valkey.conf", "/var/lib/redis",
+ROOT_ONLY = ["/run/vexa", "/run/vexa/supervisord.conf", "/run/vexa/valkey.conf", "/run/vexa/key.env",
+             "/var/lib/redis",
              "/var/lib/vexa/state/identity/signing-key.pem", "/var/lib/vexa/state/nextauth-secret",
              "/var/lib/vexa-runtime/logs", "/run/vexa/vnc", "/var/lib/vexa/host-claude"]
 NOT_WRITABLE = ["/ms-playwright", "/workspaces", "/app", "/usr/local/bin"]
@@ -313,6 +315,20 @@ def prompt_check(token: str) -> tuple:
     return failures, "the turn's prompt was on no command line while its CLI ran" if cli_seen else ""
 
 
+def loose_modes() -> list:
+    """Each root-only path as the filesystem holds it, for every uid at once: root's, and neither its
+    group nor others may read or write it (a directory may let others pass through)."""
+    out = []
+    for path in ROOT_ONLY:
+        try:
+            st = os.lstat(path)
+        except FileNotFoundError:
+            continue
+        if st.st_uid != 0 or st.st_mode & 0o066:
+            out.append(f"{path} is mode {oct(st.st_mode & 0o7777)}, uid {st.st_uid}")
+    return out
+
+
 def secret_values() -> list:
     values = []
     for pid in (1, runtime_pid()):
@@ -375,6 +391,9 @@ def main() -> int:
     for ids, gid, groups in identities:
         bot = ids[0] >= WORKLOAD_UID_BASE
         failures += [f"uid {ids[0]}: {b}" for b in probe_as(list(ids), gid, list(groups), others, bot)]
+    failures += [f"root-only path open to others: {m}" for m in loose_modes()]
+    if not os.path.exists("/run/vexa/key.env"):
+        notes.append("self-host keys not minted on this boot (VEXA_API_KEY supplied?): key.env not checked")
     secrets_ = secret_values()
     for pid in others:
         try:
