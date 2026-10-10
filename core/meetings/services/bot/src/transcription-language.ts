@@ -165,6 +165,23 @@ export function observationOf(s: LanguageSetting, cause: LanguageObservation['ca
   return { language: s.language, allowedLanguages: [...s.allowedLanguages], cause };
 }
 
+/** OpenAI's own endpoint reports the detected language by English name ("german"); faster-whisper
+ *  and most compatible servers report the code. Both read as the code, so a restricted bot on an
+ *  OpenAI endpoint does not re-run every window. */
+const LANGUAGE_NAMES: Readonly<Record<string, string>> = {
+  english: 'en', german: 'de', french: 'fr', spanish: 'es', italian: 'it', dutch: 'nl',
+  portuguese: 'pt', polish: 'pl', czech: 'cs', swedish: 'sv', danish: 'da', norwegian: 'no',
+  finnish: 'fi', russian: 'ru', ukrainian: 'uk', turkish: 'tr', arabic: 'ar', hebrew: 'he',
+  hindi: 'hi', japanese: 'ja', korean: 'ko', chinese: 'zh', greek: 'el', hungarian: 'hu',
+  romanian: 'ro', slovak: 'sk', slovenian: 'sl', croatian: 'hr', serbian: 'sr', bulgarian: 'bg',
+};
+
+/** The detected language as a code, whichever form the backend reported it in. */
+export function detectedCode(language: unknown): string {
+  const raw = typeof language === 'string' ? language.trim().toLowerCase() : '';
+  return LANGUAGE_NAMES[raw] ?? raw;
+}
+
 /** The STT round-trip as the transcription client exposes it. */
 export type SttCall = (pcm: Float32Array, language?: string, prompt?: string) => Promise<TranscriptionResult>;
 
@@ -189,7 +206,7 @@ export function languageAwareTranscribe(
     const pinned = pinnedLanguage(setting);
     if (pinned || modeOf(setting) === 'auto') return stt(pcm, pinned, prompt);
     const result = await stt(pcm, undefined, prompt);
-    const detected = typeof result.language === 'string' ? result.language.trim().toLowerCase() : '';
+    const detected = detectedCode(result.language);
     if (setting.allowedLanguages.includes(detected)) return result;
     const fallback = fallbackLanguage(setting)!;
     fallbacks++;

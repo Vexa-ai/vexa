@@ -63,6 +63,12 @@ const quiet = () => { /* swallow the fallback log line in unit cases */ };
   check('restricted: an in-list detection is kept without a second call',
     inList.calls.length === 1 && inList.calls[0] === undefined && ri.language === 'en' && ti.fallbacks === 0, JSON.stringify(inList.calls));
 
+  const byName = fakeStt('german');
+  const tn = languageAwareTranscribe(byName.stt, createLanguageControl({ allowedLanguages: ['de', 'en'] }), quiet);
+  await tn(PCM);
+  check('restricted: a detection reported by English name ("german") counts as its code — no re-run',
+    byName.calls.length === 1 && tn.fallbacks === 0, JSON.stringify(byName.calls));
+
   const outWithLang = fakeStt('fr');
   const lines: string[] = [];
   const to = languageAwareTranscribe(outWithLang.stt, createLanguageControl({ language: 'en', allowedLanguages: ['de', 'en'] }), (l) => lines.push(l));
