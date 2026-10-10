@@ -49,7 +49,7 @@ from typing import Iterable, Optional
 # ONE closed set, defined where it is written and imported where it is read. Two copies of a
 # frontmatter contract is the same drift in miniature: the writer gains a key, the reader never
 # hears about it, and the section quietly stops showing a whole class of fact.
-from workspaces.shared.entities import DATE_FIELDS, ENTITIES_DIR, KINDS, split_frontmatter
+from workspaces.shared.entities import DATE_FIELDS, ENTITIES_DIR, KINDS, entity_pages, split_frontmatter
 from workspaces.shared.links import format_ref
 
 MEETING_KIND = "meeting"
@@ -83,16 +83,13 @@ def _epoch(value: str) -> Optional[float]:
     return (dt if dt.tzinfo else dt.replace(tzinfo=UTC)).timestamp()
 
 
-def read_page(path: Path, *, workspace: str = "", home: bool = True) -> dict:
-    """`{title, slug, path, workspace, home, <date fields>}` — epochs, absent keys omitted.
+def page_record(raw: str, path: Path, *, workspace: str = "", home: bool = True) -> dict:
+    """`{title, slug, path, workspace, home, <date fields>}` from a page's text, already read
+    nofollow by the caller (`entities.entity_pages`) — epochs, absent keys omitted.
 
     `workspace`/`home` ride along so the renderer can form the right link without a second read:
     a card on this desk is `[[Title]]`, a card in another mounted workspace is
     `[[ws:<workspace-id>/<entity-id>]]` (PRD decision 26.2)."""
-    try:
-        raw = path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return {}
     fm, _body = split_frontmatter(raw)
     out: dict = {"path": str(path), "title": path.stem, "slug": path.stem,
                  "workspace": workspace, "home": home}
@@ -135,18 +132,14 @@ def dated_pages(where, *, kinds: Iterable[str] = KINDS, home_id: str = "") -> li
     decision page. Order is not decided here."""
     out: list[dict] = []
     for mount in _roots(where):
-        base = Path(mount["path"]) / ENTITIES_DIR
-        if not base.is_dir():
-            continue
+        root = Path(mount["path"])
         home = mount["home"] or (bool(home_id) and mount["id"] == home_id) or not mount["id"]
         for kind in kinds:
-            folder = base / kind
-            if not folder.is_dir():
-                continue
-            for f in sorted(folder.glob("*.md")):
-                if f.name == "index.md":
-                    continue
-                page = read_page(f, workspace=mount["id"], home=home)
+            # NOFOLLOW (`entities.entity_pages`): every mount is a work tree the model's tools can
+            # write, so a linked kind folder or page never folds somebody else's dates in here.
+            for name, raw, _mtime in entity_pages(root, kind):
+                f = root / ENTITIES_DIR / kind / name
+                page = page_record(raw, f, workspace=mount["id"], home=home)
                 if page and any(k in page for k in DATE_FIELDS):
                     page["kind"] = kind
                     out.append(page)

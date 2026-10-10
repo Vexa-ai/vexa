@@ -79,30 +79,29 @@ class EntityMalformed(EntityRefused):
     working unchanged; the endpoint, which wants the finer answer, catches this one first."""
 
 
+def entity_pages(root, kind: str):
+    """``(filename, text, mtime)`` for each ``*.md`` page directly in ``kg/entities/<kind>``, reached
+    without following a link. Yields nothing when ``kg``, ``entities`` or ``<kind>`` is a symlink
+    (the whole directory is somebody else's then), and skips a page that is a link or not a regular
+    file — so a planted link can never fold another tenant's page into this workspace's name index,
+    ``INDEX.md``, the desk README or the dated-pages view. ``index.md`` (the generated listing) is
+    skipped. Text is decoded with errors replaced, as every reader of a page here always did."""
+    rel_dir = f"{ENTITIES_DIR}/{kind}"
+    for name in _wp.list_files_inside(root, rel_dir, suffix=".md"):
+        if name == "index.md":
+            continue
+        rel = f"{rel_dir}/{name}"
+        data = _wp.read_bytes_inside(root, rel)
+        if data is None:
+            continue
+        st = _wp.stat_inside(root, rel)
+        yield name, data.decode("utf-8", errors="replace"), (st.st_mtime if st else 0.0)
+
+
 def _kind_entries(root, kind: str):
-    """``(filename, text)`` for each ``*.md`` directly in ``kg/entities/<kind>``, reached without
-    following a link. Yields nothing when ``kg``, ``entities`` or ``<kind>`` is a symlink (the whole
-    directory is somebody else's then), and skips a leaf that is a link or not a regular file — so a
-    planted link can never fold another tenant's page into this workspace's name index or INDEX.md.
-    ``index.md`` (the generated listing) is skipped as before."""
-    parts = (*ENTITIES_DIR.split("/"), kind)
-    try:
-        dfd = _wp.dir_fd_inside(root, parts)
-    except (OSError, _wp.PathRefused):
-        return
-    try:
-        with os.scandir(dfd) as it:
-            names = sorted(e.name for e in it
-                           if e.name.endswith(".md") and e.name != "index.md"
-                           and e.is_file(follow_symlinks=False))
-    except OSError:
-        names = []
-    finally:
-        os.close(dfd)
-    for name in names:
-        text = _wp.read_text_inside(root, f"{ENTITIES_DIR}/{kind}/{name}")
-        if text is not None:
-            yield name, text
+    """``(filename, text)`` — :func:`entity_pages` without the mtime."""
+    for name, text, _mtime in entity_pages(root, kind):
+        yield name, text
 
 
 def slugify(name: str) -> str:
@@ -944,7 +943,7 @@ def link_back(root, target_name: str, from_name: str, relation: str) -> "str | N
     if not plan:
         return None
     rel, text = plan
-    (Path(root) / rel).write_text(text, encoding="utf-8")
+    _wp.write_text_inside(root, rel, text)    # nofollow: never into another tree through a link
     return rel
 
 
@@ -1530,23 +1529,21 @@ def _last_updated(text: str, fallback: str) -> str:
 
 def index_rows(root) -> list[tuple[str, str, str, str]]:
     root = Path(root)
-    base = root / ENTITIES_DIR
     rows: list[tuple[str, str, str, str]] = []
     for kind in KINDS:
-        for fname, text in _kind_entries(root, kind):
-            f = base / kind / fname
+        for fname, text, mtime_s in entity_pages(root, kind):
             fm, _ = split_frontmatter(text)
             # `kg/templates/` is not the only place a shape can hide: a doc whose frontmatter says
             # `template: true` is a SHAPE wherever it sits, and the kg-links rule already forbids
             # citing one. Listing it here would put it back in front of the model on every turn.
             if (_fm_get(fm, "template") or "").lower() == "true":
                 continue
-            title = _fm_get(fm, "title") or f.stem
+            title = _fm_get(fm, "title") or fname[:-3]
             try:
-                mtime = _dt.date.fromtimestamp(f.stat().st_mtime).isoformat()
-            except OSError:
+                mtime = _dt.date.fromtimestamp(mtime_s).isoformat() if mtime_s else ""
+            except (OSError, ValueError, OverflowError):
                 mtime = ""
-            rows.append((kind, title, f"{ENTITIES_DIR}/{kind}/{f.name}", _last_updated(text, mtime)))
+            rows.append((kind, title, f"{ENTITIES_DIR}/{kind}/{fname}", _last_updated(text, mtime)))
     return rows
 
 

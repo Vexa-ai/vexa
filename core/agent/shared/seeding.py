@@ -10,10 +10,10 @@ seeding in the seed-consolidation phase.)
 from __future__ import annotations
 
 import os
-import shutil
 from pathlib import Path
 
 from shared.gitexec import run_git
+from workspaces.shared import workspace_paths as wpaths
 
 # A folder may serve as a workspace seed only if it carries these — the minimum a workspace needs to be
 # governable. CLAUDE.md is the auto-loaded root memory/contract every turn reads; without it the
@@ -114,13 +114,17 @@ def seed_workspace(ws: Path, seed_dir: "Path | None") -> Path:
     if seed_dir and seed_dir.exists():
         # File-by-file rather than copytree, so the page exclusions above are actually applied —
         # a directory copy cannot skip one document inside a tree it is copying wholesale.
+        # Each write is nofollow (`workspace_paths`): a tree without `.git` can still hold what a
+        # tool put there, and a link in it is replaced at a file or refused at a directory — the
+        # template is never written through it as root.
         for src, rel in _seed_pairs(seed_dir):
-            dst = ws / rel
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dst)
+            try:
+                wpaths.copy_file_inside(src, ws, rel)
+            except wpaths.PathRefused:
+                continue
         # `kg/entities/` must EXIST and be empty: the agent writes entities into it, and a missing
         # directory is a different failure from an empty one.
-        (ws / "kg" / "entities").mkdir(parents=True, exist_ok=True)
+        os.close(wpaths.dir_fd_inside(ws, ("kg", "entities"), create=True))
     # run_git: nothing the repository could name runs, and a hook-exported GIT_DIR cannot re-point
     # init/add/commit at another repo — see shared/gitexec.py.
     for args in (("init", "-q"), ("config", "user.email", "agent@vexa"), ("config", "user.name", "vexa-agent")):

@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 import contracts
+from workspaces.shared import workspace_paths as wpaths
 
 
 @dataclass
@@ -92,7 +93,8 @@ def apply_tool_grant(
     allowed += grant.allowed_tools
     if not grant.has_mcp:
         return allowed, None
-    (ws / ".claude").mkdir(parents=True, exist_ok=True)
-    mcp_path = ws / ".claude" / "mcp.json"
-    mcp_path.write_text(json.dumps(grant.mcp_config()))
+    # nofollow, as the delegation attachment is: a `.claude` planted as a link is removed (never a
+    # real directory), and the config is a new file renamed into place, never written through
+    wpaths.unlink_inside(Path(ws), ".claude")
+    mcp_path = wpaths.write_text_inside(Path(ws), ".claude/mcp.json", json.dumps(grant.mcp_config()))
     return allowed, str(mcp_path)
