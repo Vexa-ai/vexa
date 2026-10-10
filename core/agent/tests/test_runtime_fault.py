@@ -255,3 +255,47 @@ def test_the_chat_route_answers_a_runtime_fault_rather_than_letting_it_climb():
     assert "except RuntimeFault as fault" in src
     api = (ROOT / "control_plane/api.py").read_text()
     assert "@app.exception_handler(RuntimeFault)" in api
+
+
+# ── S67: a list answer that is not a list of workloads is an error, never "nothing is live" ─────
+
+@pytest.mark.parametrize("body", [
+    {"workloads": [{"workloadId": "u-1", "state": "running"}]},   # an envelope, not the list
+    {"detail": "ok"},
+    "running",
+    None,
+    [{"workloadId": "u-1", "state": "running"}, "u-2"],             # one row that is not a workload
+    [{"id": "u-1", "state": "running"}],
+    [{"workloadId": "u-1"}],
+])
+def test_a_list_answer_that_is_not_workloads_is_bad_response_not_empty(runtime, body):
+    runtime.outcome["next"] = json.dumps(body).encode()
+    with pytest.raises(RuntimeFault) as caught:
+        runtime.live_workloads()
+    assert (caught.value.op, caught.value.kind) == ("list", "bad_response")
+
+
+def test_a_real_list_still_answers_the_live_set(runtime):
+    runtime.outcome["next"] = json.dumps([
+        {"workloadId": "u-1", "state": "running"}, {"workloadId": "u-2", "state": "starting"},
+        {"workloadId": "u-3", "state": "stopped"}]).encode()
+    assert runtime.live_workloads() == ["u-1", "u-2"]
+    runtime.outcome["next"] = b"[]"
+    assert runtime.live_workloads() == []
+
+
+def test_neither_sweeper_acts_on_an_unreadable_live_set(runtime):
+    """The two unit-end sweepers act on what is ABSENT from the live set: read as empty, an
+    unreadable answer would revoke every token and delete every worker's Redis user."""
+    import fakeredis
+
+    from control_plane import delegation_revocation as dr
+
+    runtime.outcome["next"] = json.dumps({"workloads": []}).encode()
+    store = fakeredis.FakeRedis(decode_responses=True)
+    t = 10_000_000.0
+    dr.record(store, unit_id="u-live", jti="j-live", exp=int(t) + 900, now=t - 600)
+    with pytest.raises(RuntimeFault):
+        dr.sweep(store, runtime.live_workloads, now=t)
+    assert not store.exists(dr.revoked_key("j-live"))
+    assert store.hexists(dr.unit_key("u-live"), "j-live")

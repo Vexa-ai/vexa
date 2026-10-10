@@ -624,3 +624,39 @@ test("licenses RED: a Cat X package in the terminal's npm lock is forbidden", ()
   assert.equal(r.green, false, "the terminal's npm lock was not read");
   assert.match(r.out, /FORBIDDEN \(Cat X\) LGPL-3\.0-only: zod/);
 });
+
+// ── gate:dataflow sees key-value writes, and refuses an op it cannot see (S60, ADR-0042) ───────────
+
+// Change the sandbox's chart, re-seal it and regenerate its projection (so only the change is
+// under test, not the seal), run fn, then put the chart back the same way.
+function withChart(edit, fn) {
+  const file = join(ROOT, "architecture.calm.json");
+  const original = readFileSync(file, "utf8");
+  const reseal = () => {
+    execFileSync("node", ["scripts/gates.mjs", "seal-arch"], { cwd: ROOT, stdio: "pipe" });
+    execFileSync("node", ["scripts/arch-dsl.mjs", "--write"], { cwd: ROOT, stdio: "pipe" });
+  };
+  writeFileSync(file, edit(original));
+  try {
+    reseal();
+    return fn();
+  } finally {
+    writeFileSync(file, original);
+    reseal();
+  }
+}
+
+test("dataflow: SET/HSET/SADD carriers are seen and attributed to the service whose code writes them", () => {
+  const { green, out } = runGate("dataflow");
+  assert.ok(green, out);
+  for (const carrier of ["delegation-revoked", "delegation-records", "delegation-current", "unit-delegation", "unit-fault"])
+    assert.match(out, new RegExp(`${carrier}<-\\{agent-api\\}`), `${carrier} not detected as written by agent-api:\n${out}`);
+});
+
+test("dataflow RED: a carrier whose op the gate cannot grep for is refused, not passed unseen", () => {
+  const { green, out } = withChart(
+    (s) => s.replace('"match": "fault_key\\\\(",\n        "op": "set"', '"match": "fault_key\\\\(",\n        "op": "frobnicate"'),
+    () => runGate("dataflow"));
+  assert.equal(green, false, out);
+  assert.match(out, /carrier unit-fault: op 'frobnicate' is not one gate:dataflow can see/);
+});

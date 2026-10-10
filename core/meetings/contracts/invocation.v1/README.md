@@ -22,12 +22,13 @@ that reaches everything meeting-api's does.
 ## The bot's credential: `token`
 `token` is the session's **MeetingToken**: an HS256 token meeting-api mints for each spawn and binds
 to the session (`session_uid` = `connectionId`). Besides the Redis user in `redisUrl`, it is the only
-credential a bot holds, and it has three uses:
+credential a bot holds, and it has four uses, three of them HTTP doors:
 
 | Use | Where | How |
 |---|---|---|
 | every lifecycle.v1 event | `meetingApiCallbackUrl` | `Authorization: Bearer <token>` |
 | every recording upload | `recordingUploadUrl` | `Authorization: Bearer <token>` |
+| an authenticated bot's session write-back (clean teardown) | `sessionWritebackUrl` | `Authorization: Bearer <token>`, body session-profile.v1 `WritebackBody` |
 | every transcript entry | the `transcription_segments` stream | `auth` + `sig` beside the payload (transcript.v1 `StreamEntry`); the token itself never enters Redis |
 
 meeting-api refuses the token for any other session. **`internalSecret` is deprecated and must not be
@@ -39,6 +40,18 @@ it sends none, so every callback and upload of an older bot is refused (401) and
 leave `requested`/`joining`. Compose's `BROWSER_IMAGE` and the chart's `runtime.browserImage` can pin
 the bot apart from the control plane; when either is pinned, move it to v0.13.2 or later in the same
 upgrade as meeting-api.
+
+## The authenticated bot: `authenticated` and `sessionWritebackUrl`
+In a deployment's authenticated mode, meeting-api sends `authenticated` with the read-only userdata
+store (`userdataS3Path`, `s3*`), from which the bot restores the
+[session-profile.v1](../session-profile.v1) profile before launch, and `sessionWritebackUrl`, the
+meeting-api URL (this session's uid included) the bot PUTs its rotated session to on clean teardown.
+The bot reads the URL from here and builds none: an invocation without it gets no write-back.
+
+**Fields added in v0.13.2 that an older bot refuses.** The schema sets `additionalProperties: false`,
+so a bot older than v0.13.2 refuses at boot an invocation that carries `transcriptionServiceOwner`
+(sent only as `customer`) or `sessionWritebackUrl` (sent only in authenticated mode). Both follow the
+minimum bot version above: upgrade bots and meeting-api together.
 
 ## Shape
 `Invocation` (`$defs`): required `platform · meetingUrl · botName · redisUrl`; everything else optional.

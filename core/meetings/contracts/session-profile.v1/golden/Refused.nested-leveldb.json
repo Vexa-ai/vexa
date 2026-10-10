@@ -1,0 +1,11 @@
+{
+  "why": "only a LevelDB dir's direct files are in the profile",
+  "body": {
+    "files": [
+      {
+        "path": "Default/Session Storage/sub/000001.log",
+        "data": "eA=="
+      }
+    ]
+  }
+}

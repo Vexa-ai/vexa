@@ -113,12 +113,18 @@ def build_invocation(
     s3_bucket: Optional[str] = None,
     s3_access_key: Optional[str] = None,
     s3_secret_key: Optional[str] = None,
+    session_writeback_url: Optional[str] = None,
 ) -> dict:
     """Assemble the bot's ``invocation.v1`` Invocation (the parent's ``BOT_CONFIG``).
 
     ``None`` values are stripped (the parent strips them before serializing). The result is
     validated against the sealed schema — a malformed invocation never ships.
+
+    ``session_writeback_url`` rides only beside ``authenticated``: it is where the bot PUTs its
+    session-profile.v1 write-back, and a bot older than v0.13.2 refuses an invocation carrying it.
     """
+    if session_writeback_url is not None and not authenticated:
+        raise ValueError("sessionWritebackUrl is sent only in authenticated mode")
     invocation: dict[str, Any] = {
         "platform": platform,
         "meetingUrl": meeting_url,
@@ -160,6 +166,9 @@ def build_invocation(
         "s3Bucket": s3_bucket,
         "s3AccessKey": s3_access_key,
         "s3SecretKey": s3_secret_key,
+        # The authenticated bot's session write-back sink (session-profile.v1's route, this session's
+        # uid in the path). The bot reads it from here and derives no URL from the others.
+        "sessionWritebackUrl": session_writeback_url,
     }
     invocation = {k: v for k, v in invocation.items() if v is not None}
     conforms_invocation(invocation)

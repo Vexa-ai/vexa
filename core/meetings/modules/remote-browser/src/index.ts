@@ -10,8 +10,8 @@
  *   2. launchPersistentBrowser({dataDir}) + validateLoggedIn() — restore + confirm.
  *
  * Backends: S3 (syncBrowserData{To,From}S3 — production) or local (save/loadSessionLocal), both
- * limited to SESSION_PROFILE (session-profile.v1.json); readSessionProfile builds the body of a
- * bot's write-back, which goes through meeting-api, never to the store directly.
+ * limited to SESSION_PROFILE (the session-profile.v1 contract's profile); readSessionProfile builds
+ * the body of a bot's write-back, which goes through meeting-api, never to the store directly.
  * Carved from vexa-bot/core/src/{s3-sync.ts, browser-session.ts, constans.ts}; the bot
  * now imports these instead of re-declaring them (one-way rule: services import bricks).
  */

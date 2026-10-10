@@ -53,3 +53,51 @@ def test_the_routes_answer_422_and_dispatch_nothing(sink, path, session):  # noq
     r = client.post(path, json={"prompt": "hi", "session": session}, headers=person)
     assert r.status_code == 422, r.text
     assert runtime.spawned == []
+
+
+# ── S70: every other door that takes a session — query, path, naming bodies, the rail order ──────
+
+# Encoded where the value travels in a URL, so the route (not the client) sees the hostile text.
+_QUERY_REFUSED = ["..%2F..%2Fescape", "a%2Fb", "x" * 300, "a%20b", ".hidden", "chat%3A1"]
+
+
+def _person():
+    return {identity_token.HEADER: identity_token.sign(KEY, {"sub": "7"})}
+
+
+@pytest.mark.parametrize("session", _QUERY_REFUSED)
+def test_the_pending_list_refuses_a_session_outside_the_bound(sink, session):  # noqa: F811
+    client, _ = sink
+    r = client.get(f"/api/chat/pending?session={session}", headers=_person())
+    assert r.status_code == 422, r.text
+
+
+@pytest.mark.parametrize("session", ["x" * 300, ".hidden", "-lead", "chat%3A1", "a%20b", "%2E%2E"])
+def test_the_history_path_refuses_a_session_outside_the_bound(sink, session):  # noqa: F811
+    client, _ = sink
+    r = client.get(f"/api/sessions/{session}/history", headers=_person())
+    assert r.status_code == 422, r.text
+
+
+@pytest.mark.parametrize("path", ["/api/chat/name", "/api/chat/name/agent"])
+@pytest.mark.parametrize("session", ["../../escape", "a/b", "x" * 129, "a b", "chat:1"])
+def test_the_naming_bodies_refuse_a_session_outside_the_bound(sink, path, session):  # noqa: F811
+    client, _ = sink
+    r = client.post(path, json={"session": session, "title": "A title"}, headers=_person())
+    assert r.status_code == 422, r.text
+
+
+@pytest.mark.parametrize("session", ["../../escape", "x" * 300, "a b"])
+def test_the_rail_order_and_the_target_refuse_a_session_outside_the_bound(sink, session):  # noqa: F811
+    client, _ = sink
+    r = client.put("/api/chat/order", json={"order": ["main", session]}, headers=_person())
+    assert r.status_code == 422, r.text
+    r = client.post("/api/chat/target", json={"session": session, "workspace": ""}, headers=_person())
+    assert r.status_code == 422, r.text
+
+
+@pytest.mark.parametrize("session", ["main", "chat-lq3x9k2a", "meet-104", str(uuid.uuid4())])
+def test_a_produced_session_still_reaches_those_doors(sink, session):  # noqa: F811
+    client, _ = sink
+    assert client.get(f"/api/sessions/{session}/history", headers=_person()).status_code != 422
+    assert client.put("/api/chat/order", json={"order": [session]}, headers=_person()).status_code != 422

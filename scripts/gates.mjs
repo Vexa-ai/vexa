@@ -983,9 +983,12 @@ function gateDataflow() {
   for (const r of [...required].sort()) if (!modelPaths.has(r)) errs.push(`completeness: '${r}' exists on disk but is not registered in architecture.calm.json`);
   for (const n of nodes) for (const m of (n.metadata || [])) if (m.path && !existsSync(join(ROOT, m.path))) errs.push(`completeness: node '${n["unique-id"]}' points at missing path '${m.path}'`);
 
-  // path -> owning node (longest-prefix wins)
-  const paths = nodes.filter((n) => (n.metadata || []).some((m) => m.path))
-    .map((n) => ({ id: n["unique-id"], path: n.metadata.find((m) => m.path).path }))
+  // path -> owning node (longest-prefix wins). EVERY path a node names counts, not only its first:
+  // a service whose image is built from code outside its own directory (agent-api's is
+  // core/agent/control_plane) names that code too, so its writes are attributed to it and not to
+  // the domain around it.
+  const paths = nodes.flatMap((n) => (n.metadata || []).filter((m) => m.path)
+    .map((m) => ({ id: n["unique-id"], path: m.path })))
     .sort((a, b) => b.path.length - a.path.length);
   const ownerOf = (f) => (paths.find((p) => f.startsWith(p.path)) || {}).id;
   const grepFiles = (re) => {
@@ -1012,7 +1015,16 @@ function gateDataflow() {
   // attributable, so this is REPORT-ONLY: it prints the detected ownership map and a soft note on any
   // literal undeclared writer, but never hard-fails (precise cross-language attribution is out of scope
   // for a static gate; (b) render-only is the enforcing check for reader re-derivation).
-  const opRe = { xadd: "x[aA]dd", publish: "publish", "db-write": "session\\.add|INSERT INTO|\\.insert\\(" };
+  // KEY-VALUE WRITES ARE SEEN TOO (S60). A carrier that is a Redis key, hash or set — a revocation
+  // record, a published credential, a recorded fault — is written with SET/HSET/SADD, and an op this
+  // map did not name was grepped as its own literal, which finds nothing and reads as "no writer
+  // to diff": green because unseen (ADR-0042). `kv-write` is any of the key-value writes, for a
+  // carrier written with more than one of them.
+  const opRe = {
+    xadd: "x[aA]dd", publish: "publish", "db-write": "session\\.add|INSERT INTO|\\.insert\\(",
+    set: "\\.set\\(", hset: "\\.hset\\(", sadd: "\\.sadd\\(",
+    "kv-write": "\\.(set|hset|sadd|hdel|srem|delete|expire)\\(",
+  };
   const grepLines = (re) => {
     try { return execSync(`grep -rnE ${JSON.stringify(re)} --include=*.py --include=*.ts --include=*.tsx core clients 2>/dev/null | grep -vE 'node_modules|/dist/|\\.test\\.|/tests/|/eval/' || true`,
       { cwd: ROOT, encoding: "utf8" }).split("\n").filter(Boolean); } catch { return []; }
@@ -1022,9 +1034,11 @@ function gateDataflow() {
     const own = (n.controls || {}).ownership; if (!own) continue;
     for (const req of (own.requirements || [])) {
       const { writers = [], match, op } = req.config || {}; if (!match) continue;
+      // An op this gate cannot grep for is refused, not grepped as its own literal (ADR-0042).
+      if (!opRe[op]) { errs.push(`carrier ${n["unique-id"]}: op '${op}' is not one gate:dataflow can see (${Object.keys(opRe).join(", ")})`); continue; }
       if (writers.length > 1) shared.push(`${n["unique-id"]}[${writers.join("+")}]`);
       const mre = new RegExp(match);
-      const actual = new Set(grepLines(opRe[op] || op)
+      const actual = new Set(grepLines(opRe[op])
         .filter((l) => mre.test(l.replace(/^[^:]*:\d+:/, "")))
         .map((l) => ownerOf(l.split(":")[0])).filter(Boolean));
       if (actual.size) report.push(`${n["unique-id"]}<-{${[...actual].join(",")}}`);

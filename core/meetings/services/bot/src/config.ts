@@ -98,6 +98,8 @@ export interface Invocation {
   s3Bucket?: string;
   s3AccessKey?: string;
   s3SecretKey?: string;
+  /** where the authenticated bot PUTs its session-profile.v1 write-back (sent only in authenticated mode) */
+  sessionWritebackUrl?: string;
 }
 
 /** Thrown when VEXA_BOT_CONFIG is missing / not JSON / off-contract. The composition root

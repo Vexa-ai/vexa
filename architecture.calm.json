@@ -95,6 +95,9 @@
    "metadata": [
     {
      "path": "core/agent/services/agent-api"
+    },
+    {
+     "path": "core/agent/control_plane"
     }
    ],
    "interfaces": [
@@ -679,6 +682,18 @@
    "metadata": [
     {
      "path": "core/meetings/contracts/service-authority.v1",
+     "domain": "meetings"
+    }
+   ]
+  },
+  {
+   "unique-id": "session-profile.v1",
+   "node-type": "contract",
+   "name": "session-profile.v1",
+   "description": "session-profile.v1 \u2014 sealed: what an authenticated bot's stored browser session may hold (the profile, with its size and count limits) and the write-back route and body; remote-browser and meeting-api each read a verbatim copy (gate:fact-parity session-profile-contract) (meetings)",
+   "metadata": [
+    {
+     "path": "core/meetings/contracts/session-profile.v1",
      "domain": "meetings"
     }
    ]
@@ -1595,7 +1610,7 @@
    "unique-id": "redis-acl-users",
    "node-type": "data-asset",
    "name": "Redis ACL users (vexa-unit-*, vexa-bot-*)",
-   "description": "the Redis server's ACL table: agent-api defines one user per agent-worker unit (vexa-unit-*, its unit's three keys) and meeting-api one per bot session (vexa-bot-*, the segment stream and its meeting's two channels), each removed at the end and swept by age; a restart of Redis is answered by defining them again. Two writers, one each per user-name prefix; with REDIS_WORKLOAD_ACL=shared neither writes",
+   "description": "the Redis server's ACL table: agent-api defines one user per agent-worker unit (vexa-unit-*, its unit's four keys: unit:{id}:in and unit:{id}:delegation read-only, unit:{id}:out and unit:{id}:cursor read-write) and meeting-api one per bot session (vexa-bot-*, the segment stream and its meeting's two channels), each removed at the end and swept by age; a restart of Redis is answered by defining them again. Two writers, one each per user-name prefix; with REDIS_WORKLOAD_ACL=shared neither writes",
    "controls": {
     "ownership": {
      "description": "shared writer (P23: one per user, see description)",
@@ -1628,6 +1643,131 @@
         "writers": [
          "agent-api"
         ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "unique-id": "delegation-revoked",
+   "node-type": "data-asset",
+   "name": "vexa:delegation:revoked:{jti} (redis key)",
+   "description": "a revoked delegation token, kept as long as the token would have lived: agent-api writes it when the token's unit ends (control_plane/delegation_revocation.py); identity (admin-api) reads it for every verified vxd_ bearer and refuses the token, and answers 503 while it cannot read the store. The key name is held on both sides by fact delegation-revocation-key (ADR-0045)",
+   "controls": {
+    "ownership": {
+     "description": "single writer (P23)",
+     "requirements": [
+      {
+       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "config": {
+        "writers": [
+         "agent-api"
+        ],
+        "match": "vexa:delegation:revoked:|revoked_key\\(",
+        "op": "set"
+       }
+      }
+     ]
+    }
+   },
+   "metadata": [
+    {
+     "contract": "delegation.v1"
+    }
+   ]
+  },
+  {
+   "unique-id": "delegation-records",
+   "node-type": "data-asset",
+   "name": "vexa:delegation:units + vexa:delegation:unit:{id} (redis set + hash)",
+   "description": "agent-api's record of the delegation tokens each unit holds (jti -> exp and mint time), written before the spawn and at each refresh, read by the reaper that revokes them when the unit ends (control_plane/delegation_revocation.py)",
+   "controls": {
+    "ownership": {
+     "description": "single writer (P23)",
+     "requirements": [
+      {
+       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "config": {
+        "writers": [
+         "agent-api"
+        ],
+        "match": "UNITS_KEY|unit_key\\(",
+        "op": "kv-write"
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "unique-id": "delegation-current",
+   "node-type": "data-asset",
+   "name": "vexa:delegation:current:{id} (redis key)",
+   "description": "the token a live unit currently holds, as agent-api minted it; the half-life refresh re-mints from it (control_plane/delegation_refresh.py). No worker's Redis user can reach it",
+   "controls": {
+    "ownership": {
+     "description": "single writer (P23)",
+     "requirements": [
+      {
+       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "config": {
+        "writers": [
+         "agent-api"
+        ],
+        "match": "CURRENT_PREFIX",
+        "op": "set"
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "unique-id": "unit-delegation",
+   "node-type": "data-asset",
+   "name": "unit:{id}:delegation (redis key)",
+   "description": "a live unit's current delegation token, published by agent-api at dispatch and at each half-life refresh; the worker reads it before every turn, write-back and job and rewrites its MCP attachment (worker/engine.py DelegationRefresh). Its Redis user may read it and not write it (%R~). A credential delivered through Redis after boot: the P7 departure ADR-0045 records",
+   "controls": {
+    "ownership": {
+     "description": "single writer (P23)",
+     "requirements": [
+      {
+       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "config": {
+        "writers": [
+         "agent-api"
+        ],
+        "match": "delegation_key\\(",
+        "op": "set"
+       }
+      }
+     ]
+    }
+   },
+   "metadata": [
+    {
+     "contract": "delegation.v1"
+    }
+   ]
+  },
+  {
+   "unique-id": "unit-fault",
+   "node-type": "data-asset",
+   "name": "unit:{id}:fault (redis key)",
+   "description": "the typed fault that stopped a unit's spawn (the runtime refused it, or could not be reached), recorded by agent-api and read back by agent-api's SSE relay and pending list; cleared by the next spawn, and never written on the unit's out-stream (control_plane/unit_faults.py)",
+   "controls": {
+    "ownership": {
+     "description": "single writer (P23)",
+     "requirements": [
+      {
+       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "config": {
+        "writers": [
+         "agent-api"
+        ],
+        "match": "fault_key\\(",
+        "op": "set"
        }
       }
      ]
@@ -1729,7 +1869,12 @@
       "rail-order",
       "redis-acl-users",
       "acl-units-index",
-      "routine-state"
+      "routine-state",
+      "delegation-revoked",
+      "delegation-records",
+      "delegation-current",
+      "unit-delegation",
+      "unit-fault"
      ]
     }
    }
@@ -1797,6 +1942,7 @@
       "invocation.v1",
       "lifecycle.v1",
       "service-authority.v1",
+      "session-profile.v1",
       "transcript.v1",
       "webhook.v1",
       "transcription",
@@ -2103,7 +2249,7 @@
      }
     }
    },
-   "description": "an authenticated bot's rotated browser session, on clean teardown: PUT /internal/browser-session/{session_uid} with Authorization: Bearer <MeetingToken> (the invocation.v1 session token) admitted for exactly that session_uid, and only from the live authenticated bot — the newest session spawned on the deployment's identity, of the token's meeting, live or ended under 600 s; anything else is refused (401/403). Carrier: a JSON body {files: [{path, data (base64)}]} whose every path is one the session-profile.v1 profile names (remote-browser's, a byte-identical copy in meeting-api's session_profile), size-bounded per file and in total",
+   "description": "an authenticated bot's rotated browser session, on clean teardown: session-profile.v1's route, PUT /internal/browser-session/{session_uid}, at the URL meeting-api names in the bot's invocation (invocation.v1 sessionWritebackUrl, sent only in authenticated mode; the bot derives none), with Authorization: Bearer <MeetingToken> (the invocation.v1 session token) admitted for exactly that session_uid, and only from the live authenticated bot — the newest session spawned on the deployment's identity, of the token's meeting, live or ended under 600 s; anything else is refused (401/403). Carrier: a session-profile.v1 WritebackBody {files: [{path, data (base64)}]} whose every path is one the contract's SessionProfile names, size-bounded per file and in total; remote-browser and meeting-api each read a verbatim copy of the contract",
    "protocol": "HTTP",
    "metadata": [
     {
@@ -3424,6 +3570,139 @@
     }
    },
    "description": "HSET/HDEL the worker users it defined",
+   "metadata": [
+    {
+     "access": "write"
+    }
+   ]
+  },
+  {
+   "unique-id": "aa-delegation-revoked",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "agent-api"
+     },
+     "destination": {
+      "node": "delegation-revoked"
+     }
+    }
+   },
+   "description": "SET revoked:<jti> for the token's remaining life when the runtime no longer runs its unit",
+   "metadata": [
+    {
+     "access": "write"
+    }
+   ]
+  },
+  {
+   "unique-id": "admin-delegation-revoked",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "admin-api"
+     },
+     "destination": {
+      "node": "delegation-revoked"
+     }
+    }
+   },
+   "description": "EXISTS revoked:<jti> for every verified vxd_ bearer; a store it cannot read refuses the token (503), API keys never read it",
+   "metadata": [
+    {
+     "access": "read"
+    }
+   ]
+  },
+  {
+   "unique-id": "aa-delegation-records",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "agent-api"
+     },
+     "destination": {
+      "node": "delegation-records"
+     }
+    }
+   },
+   "description": "HSET/SADD a token's jti against its unit before the spawn and at each refresh; HDEL/SREM as tokens are revoked or expire",
+   "metadata": [
+    {
+     "access": "write"
+    }
+   ]
+  },
+  {
+   "unique-id": "aa-delegation-current",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "agent-api"
+     },
+     "destination": {
+      "node": "delegation-current"
+     }
+    }
+   },
+   "description": "SET the unit's current token at dispatch and at each refresh, and GET it to re-mint",
+   "metadata": [
+    {
+     "access": "write"
+    }
+   ]
+  },
+  {
+   "unique-id": "aa-unit-delegation",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "agent-api"
+     },
+     "destination": {
+      "node": "unit-delegation"
+     }
+    }
+   },
+   "description": "SET the unit's current token for its worker at dispatch and at each half-life refresh",
+   "metadata": [
+    {
+     "access": "write"
+    }
+   ]
+  },
+  {
+   "unique-id": "aw-unit-delegation",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "agent-worker"
+     },
+     "destination": {
+      "node": "unit-delegation"
+     }
+    }
+   },
+   "description": "GET before every turn, write-back and job; read-only to its Redis user",
+   "metadata": [
+    {
+     "access": "read"
+    }
+   ]
+  },
+  {
+   "unique-id": "aa-unit-fault",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "agent-api"
+     },
+     "destination": {
+      "node": "unit-fault"
+     }
+    }
+   },
+   "description": "SET the typed fault a refused spawn ended in; GET it for the SSE relay and the pending list; DEL on the next spawn",
    "metadata": [
     {
      "access": "write"

@@ -1,7 +1,9 @@
 """``PUT /internal/browser-session/{session_uid}`` — an authenticated bot's session write-back.
 
-The bots' storage key is read-only, so this route is the only way a bot's rotated session reaches
-the store. Four checks, in this order, each before the next does any work:
+The route is the session-profile.v1 contract's ``x-routes`` row (``SESSION_WRITEBACK_ROUTE`` is read
+from it); the bot reaches it at the URL the spawn puts in its invocation (invocation.v1
+``sessionWritebackUrl``). The bots' storage key is read-only, so this route is the only way a bot's
+rotated session reaches the store. Four checks, in this order, each before the next does any work:
 
 1. **The MeetingToken** — ``Authorization: Bearer <token>`` admitted for exactly ``session_uid``
    (``meeting_token.admit_session``, the rule the lifecycle callback and the uploads apply). 401.
@@ -30,10 +32,8 @@ from fastapi import APIRouter, Header, HTTPException, Request
 from ..bot_spawn import AuthSessionConfig, AuthSessionNotConfigured, auth_session_config
 from ..meeting_token import InvalidMeetingToken, admit_session
 from ..obs import log_event
-from .profile import MAX_BODY_BYTES, InvalidSessionProfile, parse_profile_upload
+from .profile import MAX_BODY_BYTES, SESSION_WRITEBACK_ROUTE, InvalidSessionProfile, parse_profile_upload
 from .writer import S3SessionWriter, SessionWriter
-
-SESSION_WRITEBACK_ROUTE = "/internal/browser-session/{session_uid}"
 
 #: How long after its meeting ended a session may still write back. The bot's teardown runs after
 #: its terminal callback (pipeline stop, tape upload, then the browser closes), so the write-back

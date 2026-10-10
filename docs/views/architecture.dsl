@@ -26,6 +26,7 @@ system meetings  # capture → transcribe → record; owns the raw transcript
   contract invocation.v1
   contract lifecycle.v1
   contract service-authority.v1
+  contract session-profile.v1
   contract transcript.v1
   contract webhook.v1
   service transcription
@@ -67,6 +68,11 @@ system agent  # the execution domain: a trigger becomes one governed agent turn 
   data-asset redis-acl-users [writers: agent-api, meeting-api]
   data-asset acl-units-index [writers: agent-api]
   data-asset routine-state [writers: agent-api]
+  data-asset delegation-revoked [writers: agent-api]
+  data-asset delegation-records [writers: agent-api]
+  data-asset delegation-current [writers: agent-api]
+  data-asset unit-delegation [writers: agent-api]
+  data-asset unit-fault [writers: agent-api]
 
 system gateway-system  # the one public edge (api.v1, ws.v1)
   service conformance
@@ -132,7 +138,7 @@ edges:
   terminal -read-> out-stream
   bot -write-> recording-blob
   bot -read-> userdata-blob  # restore the stored session before launch, with the bots' read-only key pair (BOT_S3_*: Get + List on the userdata prefix and nothing else); the bot never writes the store — its rotated session goes back through meeting-api (bot-session-writeback)
-  bot -req-> meeting-api  # an authenticated bot's rotated browser session, on clean teardown: PUT /internal/browser-session/{session_uid} with Authorization: Bearer <MeetingToken> (the invocation.v1 session token) admitted for exactly that session_uid, and only from the live authenticated bot — the newest session spawned on the deployment's identity, of the token's meeting, live or ended under 600 s; anything else is refused (401/403). Carrier: a JSON body {files: [{path, data (base64)}]} whose every path is one the session-profile.v1 profile names (remote-browser's, a byte-identical copy in meeting-api's session_profile), size-bounded per file and in total
+  bot -req-> meeting-api  # an authenticated bot's rotated browser session, on clean teardown: session-profile.v1's route, PUT /internal/browser-session/{session_uid}, at the URL meeting-api names in the bot's invocation (invocation.v1 sessionWritebackUrl, sent only in authenticated mode; the bot derives none), with Authorization: Bearer <MeetingToken> (the invocation.v1 session token) admitted for exactly that session_uid, and only from the live authenticated bot — the newest session spawned on the deployment's identity, of the token's meeting, live or ended under 600 s; anything else is refused (401/403). Carrier: a session-profile.v1 WritebackBody {files: [{path, data (base64)}]} whose every path is one the contract's SessionProfile names, size-bounded per file and in total; remote-browser and meeting-api each read a verbatim copy of the contract
   meeting-api -write-> userdata-blob  # stores an admitted session write-back with meeting-api's own storage credentials (S3_*, else MINIO_*) at BOT_S3_ENDPOINT / BOT_S3_BUCKET under BOT_USERDATA_S3_PATH; the bots' key pair stays read-only
   remote-browser -write-> userdata-blob  # provisioning login uploads the confirmed signed-in session
   gateway -read-> recording-blob
@@ -198,6 +204,13 @@ edges:
   agent-api -write-> redis-acl-users  # ACL SETUSER/DELUSER a worker's own user per dispatch; restore after a Redis restart
   meeting-api -write-> redis-acl-users  # ACL SETUSER/DELUSER a bot's own user per session; restore after a Redis restart
   agent-api -write-> acl-units-index  # HSET/HDEL the worker users it defined
+  agent-api -write-> delegation-revoked  # SET revoked:<jti> for the token's remaining life when the runtime no longer runs its unit
+  admin-api -read-> delegation-revoked  # EXISTS revoked:<jti> for every verified vxd_ bearer; a store it cannot read refuses the token (503), API keys never read it
+  agent-api -write-> delegation-records  # HSET/SADD a token's jti against its unit before the spawn and at each refresh; HDEL/SREM as tokens are revoked or expire
+  agent-api -write-> delegation-current  # SET the unit's current token at dispatch and at each refresh, and GET it to re-mint
+  agent-api -write-> unit-delegation  # SET the unit's current token for its worker at dispatch and at each half-life refresh
+  agent-worker -read-> unit-delegation  # GET before every turn, write-back and job; read-only to its Redis user
+  agent-api -write-> unit-fault  # SET the typed fault a refused spawn ended in; GET it for the SSE relay and the pending list; DEL on the next spawn
   meeting-api -write-> acl-bots-index  # HSET/HDEL the bot users it defined
   agent-api -write-> routine-state  # routine approvals and the re-signing marker
   agent-api -req-> flows-api  # the publish edge: POST /events (desk.unscaffolded, claim.proposed) and POST /friction with the operator key (X-Flows-Operator-Key); GET /flows/pages to land the pages of authored flows in _global/flows/

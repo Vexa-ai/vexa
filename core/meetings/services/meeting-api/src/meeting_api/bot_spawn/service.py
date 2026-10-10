@@ -827,6 +827,10 @@ async def request_bot(
         s3_bucket=auth_s3.get("s3_bucket"),
         s3_access_key=auth_s3.get("s3_access_key"),
         s3_secret_key=auth_s3.get("s3_secret_key"),
+        # session-profile.v1's write-back route on this meeting-api, for this session only. Sent only
+        # in authenticated mode: an older bot refuses the field, and an anonymous bot has no session.
+        session_writeback_url=(f"{meeting_api_url}/internal/browser-session/{connection_id}"
+                               if authenticated else None),
         # Explicit caller windows win; otherwise omit everyoneLeftTimeout so the bot's
         # silence-window module default applies (the lobby window stays forgiving for
         # human-in-the-loop dashboard joins).
