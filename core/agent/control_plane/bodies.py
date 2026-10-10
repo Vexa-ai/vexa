@@ -153,6 +153,10 @@ class ChatModelBody(BaseModel):
                                          description="the chat session; the default chat when absent")
     model: str = Field(max_length=64, description="a model id from GET /api/models/catalog; "
                                                   "empty puts the chat back on your default")
+    effort: Optional[str] = Field(default=None, max_length=16,
+                                  description="an effort level the model lists in its "
+                                              "capabilities.reasoning_efforts; empty or absent runs "
+                                              "it at its default_effort")
 
 
 class RoutineCreate(BaseModel):

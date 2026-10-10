@@ -145,3 +145,56 @@ def test_an_inline_credential_is_refused_and_never_quoted(mutate):
 ])
 def test_each_adapter_refuses_what_it_does_not_take(mutate, expect):
     assert any(expect in p for p in _refused(_with(mutate))), _refused(_with(mutate))
+
+
+# ── effort levels: offered only where the adapter can send them (founder 2026-10-10) ──────────
+
+def _model(decl, mid):
+    return next(m for m in decl["models"] if m["id"] == mid)
+
+
+@pytest.mark.parametrize("mid, efforts, said", [
+    # a Qwen enable_thinking toggle is on or off — none and high, nothing between
+    ("qwen3-32b", ["none", "low", "high"], "cannot send effort level(s) low as chat_template_kwargs.enable_thinking"),
+    # OpenRouter's reasoning.effort stops at xhigh
+    ("or-sonnet", ["high", "max"], "cannot send effort level(s) max as reasoning.effort"),
+    # the claude CLI's --effort has no "none"
+    ("claude", ["none", "low"], "cannot send effort level(s) none as the claude CLI's --effort"),
+])
+def test_a_level_the_adapter_cannot_send_is_refused_at_boot(mid, efforts, said):
+    def mutate(d):
+        caps = _model(d, mid).setdefault("capabilities", {})
+        caps["reasoning_efforts"] = efforts
+        caps.pop("default_effort", None)
+    assert any(said in p for p in _refused(_with(mutate)))
+
+
+def test_a_default_effort_must_be_one_of_the_models_levels():
+    problems = _refused(_with(lambda d: _model(d, "or-sonnet")["capabilities"].update(default_effort="xhigh")))
+    assert any("default_effort 'xhigh' is not one of its reasoning_efforts" in p for p in problems)
+    problems = _refused(_with(lambda d: _model(d, "claude").update(capabilities={"default_effort": "low"})))
+    assert any("default_effort is set but reasoning_efforts is not" in p for p in problems)
+
+
+def test_effort_on_a_custom_entry_and_effort_control_off_openai_compatible_are_refused():
+    problems = _refused(_with(lambda d: (
+        _model(d, "mine").update(capabilities={"reasoning_efforts": ["low"]}),
+        _model(d, "claude").update(effort_control="reasoning_effort"))))
+    assert any("model 'mine': effort on a custom entry is the person's own setting" in p for p in problems)
+    assert any("model 'claude': 'effort_control' is read only by the openai_compatible adapter" in p
+               for p in problems)
+
+
+def test_openrouter_on_claude_code_offers_no_effort_control():
+    problems = _refused(_with(lambda d: d["providers"]["openrouter"].update(harness="claude-code")))
+    assert any("use harness: openai-agent for effort control" in p for p in problems)
+
+
+def test_an_effort_level_outside_the_vocabulary_is_a_schema_refusal():
+    problems = _refused(_with(lambda d: _model(d, "claude")["capabilities"].update(reasoning_efforts=["turbo"])))
+    assert any("reasoning_efforts/0" in p for p in problems)
+
+
+def test_max_output_tokens_must_be_a_positive_count():
+    problems = _refused(_with(lambda d: _model(d, "claude").update(max_output_tokens=0)))
+    assert any("max_output_tokens" in p for p in problems)

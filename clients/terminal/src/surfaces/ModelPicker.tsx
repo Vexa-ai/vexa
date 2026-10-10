@@ -6,11 +6,16 @@
  *  renders nothing at all on a deployment with no catalog, where the model is the operator's.
  *
  *  A pick the server refuses (gone from the catalog, not open to this person, an own endpoint not
- *  set) is shown as the server's own sentence; the stored pick is left as it was. */
+ *  set) is shown as the server's own sentence; the stored pick is left as it was.
+ *
+ *  THE EFFORT SELECTOR sits beside the chip and exists only while the chat's model lists effort
+ *  levels (`capabilities.reasoning_efforts`): a model with no effort control gets no control, never
+ *  a selector that does nothing. Changing the model clears the effort pick — a level belongs to the
+ *  model it was picked for. A level the server refuses comes back as its typed fault's sentence. */
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { Icon } from "../ui-kit";
 import { presentError } from "./apiClient";
-import { effectiveModel, getModelCatalog, setChatModel, setDefaultModel, type ModelEntry, type ModelList } from "./modelsApi";
+import { effectiveModel, effortsOf, getModelCatalog, setChatModel, setDefaultModel, type Effort, type ModelEntry, type ModelList } from "./modelsApi";
 
 const chip: CSSProperties = {
   height: 30, maxWidth: 190, minWidth: 0, flex: "none", display: "inline-flex", alignItems: "center", gap: 5,
@@ -69,7 +74,7 @@ export function ModelPicker({ session }: { session: string }) {
     setError(null);
     try {
       const r = await setChatModel(session, id);
-      setList((l) => (l ? { ...l, selected: r.model } : l));
+      setList((l) => (l ? { ...l, selected: r.model, selected_effort: null } : l));
     } catch (e) {
       setError(presentError(e).headline);
     }
@@ -85,8 +90,33 @@ export function ModelPicker({ session }: { session: string }) {
     }
   };
 
+  const pickEffort = async (level: Effort | "") => {
+    setError(null);
+    try {
+      const r = await setChatModel(session, list.selected ?? "", level);
+      setList((l) => (l ? { ...l, selected_effort: r.effort ?? null } : l));
+    } catch (e) {
+      setError(presentError(e).headline);
+    }
+  };
+
   const label = stale ? "Model unavailable" : current?.display_name ?? "Model";
+  const efforts = stale ? [] : effortsOf(current);
+  const effortDefault = current?.capabilities.default_effort ?? null;
+  const effortValue = list.selected_effort ?? effortDefault ?? "";
   return (
+    <div style={{ display: "flex", alignItems: "center", gap: 6, flex: "none", minWidth: 0 }}>
+    {efforts.length > 0 && (
+      <select aria-label="Effort for this chat" data-effort-picker value={effortValue}
+        title={`Reasoning effort for ${label}`}
+        onChange={(e) => void pickEffort(e.target.value as Effort | "")}
+        style={{ ...chip, maxWidth: 120, appearance: "auto" }}>
+        {!effortDefault && <option value="">effort: default</option>}
+        {efforts.map((lvl) => (
+          <option key={lvl} value={lvl}>effort: {lvl}{lvl === effortDefault ? " (default)" : ""}</option>
+        ))}
+      </select>
+    )}
     <div ref={ref} data-model-picker style={{ position: "relative", flex: "none", minWidth: 0 }}>
       <button type="button" aria-label="Model for this chat" aria-haspopup="menu" aria-expanded={open}
         title={stale ? "This chat's model is no longer offered — pick another" : `This chat runs on ${label}`}
@@ -137,6 +167,7 @@ export function ModelPicker({ session }: { session: string }) {
           </div>
         </div>
       )}
+    </div>
     </div>
   );
 }

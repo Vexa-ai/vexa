@@ -75,11 +75,13 @@ ModelList):
   "models": [
     { "id": "qwen3-32b", "display_name": "Qwen 3 32B (self-hosted)", "provider": "lab-vllm",
       "adapter": "openai_compatible", "harness": "openai-agent",
-      "capabilities": { "tool_calling": true, "streaming": true, "context_tokens": 32768 },
+      "capabilities": { "tool_calling": true, "streaming": true, "context_tokens": 32768,
+                        "reasoning_efforts": ["none", "high"], "default_effort": "none" },
       "access": "everyone", "default": true }
   ],
   "default": "qwen3-32b",
-  "selected": null
+  "selected": null,
+  "selected_effort": null
 }
 ```
 
@@ -90,12 +92,20 @@ ModelList):
   organisation's, else the catalog's default.
 - **`selected`** is the named chat's own pick (`null` means the chat follows the default). It is
   present only when `session` is given.
+- **`capabilities.reasoning_efforts`** lists the effort levels a chat may pick for that model, and
+  is empty when the model has no effort control. **`default_effort`** is the level it runs at until
+  the chat picks one.
+- **`selected_effort`** is the named chat's own effort pick (`null` means the model's
+  `default_effort`). It is present with `selected`.
 - **No catalog:** the deployment returns `{"models": [], "default": null}`.
 
-`POST /api/chat/model` with body `{ "session": "<chat>", "model": "<id>" }` returns
-`{ "ok": true, "session", "model", "changed" }`.
+`POST /api/chat/model` with body `{ "session": "<chat>", "model": "<id>", "effort": "<level>" }`
+returns `{ "ok": true, "session", "model", "effort", "changed" }`.
 
 - It pins the chat to a model. `"model": ""` puts the chat back on the default.
+- `effort` is optional. It is checked against the model the chat will run on (the pick, else the
+  default) and stored with it; absent or empty runs the model at its `default_effort`. Changing
+  the model without an `effort` clears the effort pick.
 - The pick takes effect on the chat's next turn, which starts a fresh agent.
 - A pick the next turn could not run is refused and not stored:
 
@@ -104,6 +114,7 @@ ModelList):
   | `422` | the model is not in the catalog |
   | `403` | an admins-only model, for anyone else |
   | `409` | an own-endpoint model, for someone with no endpoint set |
+  | `422` | an effort level the model does not offer (`effort_unsupported`) |
 
   Each refusal is `{ "detail", "fault" }`, and `fault` is the [typed fault](#chat-streamed) below.
 
@@ -151,8 +162,8 @@ A chat whose model cannot run, for example because it was removed from the catal
 before anything starts. The answer is `{ "detail", "fault" }` with
 `fault: { source: "model-provider", kind, provider, model, status: null, detail, remedy }`.
 
-- **`kind`** is one of `unknown_model`, `not_permitted`, `not_configured`, `credential_missing` or
-  `endpoint_refused`.
+- **`kind`** is one of `unknown_model`, `not_permitted`, `not_configured`, `credential_missing`,
+  `endpoint_refused` or `effort_unsupported` (a stored effort level the model no longer offers).
 - **The record's shape** is the one a failed provider call (`unpaid`, `unauthorized`,
   `rate_limited`, `unavailable`, `refused`) carries on the turn's `done` frame.
 - **No substitution:** the turn never runs on another model instead.
@@ -174,7 +185,7 @@ body of a refused dispatch: `{ detail, fault }` with `503` when the agent runtim
 | `source` | `kind` |
 |---|---|
 | `runtime` | `spawn_refused`, `quota_exceeded`, `unauthorized`, `refused`, `not_found`, `unreachable`, `unavailable`, `bad_response` |
-| `model-provider` | `unpaid`, `unauthorized`, `rate_limited`, `unavailable`, `refused`, `unknown_model`, `not_permitted`, `not_configured`, `credential_missing`, `endpoint_refused` |
+| `model-provider` | `unpaid`, `unauthorized`, `rate_limited`, `unavailable`, `refused`, `unknown_model`, `not_permitted`, `not_configured`, `credential_missing`, `endpoint_refused`, `effort_unsupported` |
 | `vexa-tools` | `access_expired` |
 | `agent-worker` | `tools_unconfined`, `credential_conflict` |
 | `agent-api` | `internal`, `unavailable` |

@@ -570,10 +570,11 @@ def build(**d) -> APIRouter:
         # turn its pick, and the dispatch runs it on the person's default.
         try:
             _model = sess.model(subject, session)
+            _effort = sess.effort(subject, session)
         except Exception:  # noqa: BLE001
             logger.warning("chat model unreadable for subject=%s session=%s — this turn runs on "
                            "the person's default", subject, session)
-            _model = ""
+            _model, _effort = "", ""
         # THE TARGET WORKSPACE, IN FRONT OF THE ASK (Vexa-ai/vexa#1611). Every turn, including the
         # ones nobody typed — a flow's kick and a routine's wake write somewhere too, and the
         # founder's failure was a turn that did not know where. It goes in FRONT of the grounding
@@ -726,6 +727,9 @@ def build(**d) -> APIRouter:
                         # WHICH MODEL — the chat's pick, a catalog id or "" — resolved through the
                         # provider port inside the dispatch, the one place a route is decided.
                         model=_model,
+                        # …AT WHICH EFFORT — the chat's pick, checked again against the model
+                        # in the dispatch (a catalog may have changed since it was stored).
+                        effort=_effort,
                         # WHAT A QUEUED ROW SHOWS (Vexa-ai/vexa#1610), stamped on the inbox entry
                         # itself so the record a person reads and the record the worker takes are
                         # the same object. Written for every turn, not only a submission: a chat
@@ -862,20 +866,25 @@ def build(**d) -> APIRouter:
         subject = subject_of(request)
         session = str(body.session or "").strip() or units.DEFAULT_CHAT_SESSION
         mid = str(body.model or "").strip()
+        effort = str(body.effort or "").strip()
         catalog = dispatcher.catalog
-        if mid:
+        if mid or effort:
             if catalog.empty:
                 raise HTTPException(status_code=409, detail="this deployment offers no model "
                                                             "catalog; its model is set by the operator")
             ctx = dispatch_mod.route_context(dispatcher.resolve_model_config(subject) or {},
                                              allowlist=settings.model_allowlist)
             try:
-                catalog.choose(mid, ctx, admin=lambda: dispatcher.is_admin(subject))
+                # The effort is checked against the model it will run on — the pick, else the
+                # person's default — so a stored effort is always one the next turn can send.
+                catalog.choose_with_effort(mid, effort, ctx,
+                                           admin=lambda: dispatcher.is_admin(subject))
             except model_providers.ModelChoiceFault as fault:
                 return JSONResponse(status_code=fault.http_status,
                                     content={"detail": fault.sentence(), "fault": fault.as_dict()})
-        changed = sess.set_model(subject, session, mid)
-        return {"ok": True, "session": session, "model": mid or None, "changed": changed}
+        changed = sess.set_model(subject, session, mid, effort)
+        return {"ok": True, "session": session, "model": mid or None, "effort": effort or None,
+                "changed": changed}
     @router.post("/api/chat/reset")
     def chat_reset(body: ResetBody, request: Request):
         """Drop a conversation thread: remove it from the index AND delete its continuity file so a

@@ -90,6 +90,7 @@ export const KIND_LABEL: Readonly<Record<FaultKind, string>> = {
   not_configured: "model not set up for you",
   credential_missing: "provider credential not set",
   endpoint_refused: "your endpoint is not allowed",
+  effort_unsupported: "effort level not offered",
   unauthorized: "credential refused",
   internal: "failed",
   access_expired: "tool access expired",

@@ -15,7 +15,7 @@ worker's environment (`route_env`) in the one place a worker's route has always 
 |---|---|
 | `parse(raw, env)` / `load(env)` | the catalog, or `CatalogError` naming every problem — refused whole, at boot, never quoting a value |
 | `Catalog` | `.route(pick, ctx, admin=)` (the port, end to end) · `.choose(...)` · `.listing(...)` (`models.v1` ModelList) · `.default_for(...)` · `.empty` |
-| `ModelRoute` | harness · endpoint · credential source and value (never in a repr) · key header · model at the provider · extra body · capabilities |
+| `ModelRoute` | harness · endpoint · credential source and value (never in a repr) · key header · model at the provider · extra body (with the effort written in its provider's field, on openai-agent) · capabilities · effort (claude-code `--effort`) · max output tokens |
 | `ModelProviderPort` | what an adapter implements: `kind`, `fields`, `check`, `harness`, `available`, `route` |
 | `RouteContext` | what an adapter may consult: the person's Settings → Models, secret resolution, the operator gates, the deployment's harness and model — injected, never read from the process by an adapter |
 | `ModelChoiceFault` | a pick that cannot run, typed (`source: model-provider` + `kind`), naming the model and the provider |

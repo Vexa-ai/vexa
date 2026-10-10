@@ -572,6 +572,15 @@ def route_env(route: "model_providers.ModelRoute") -> dict[str, str]:
     env["VEXA_AGENT_STREAM"] = "1" if route.capabilities.streaming else "0"
     env["VEXA_AGENT_CONTEXT_TOKENS"] = (str(route.capabilities.context_tokens)
                                         if route.capabilities.context_tokens else "")
+    # THE EFFORT, stamped every time, empty included: the claude CLI's --effort for this route (a
+    # level the adapter has checked), or nothing — never a level left over from the deployment or
+    # from Settings → Models riding into a model that did not offer it. On openai-agent the
+    # adapter has already written the level into VEXA_LLM_EXTRA_BODY in its provider's own field.
+    env["VEXA_AGENT_EFFORT"] = route.effort if route.harness == "claude-code" else ""
+    # THE ENTRY'S OUTPUT CAP, when it names one. Absent, the deployment's own
+    # VEXA_AGENT_MAX_OUTPUT_TOKENS (forwarded by the runtime) applies, or the harness's default.
+    if route.max_output_tokens:
+        env["VEXA_AGENT_MAX_OUTPUT_TOKENS"] = str(route.max_output_tokens)
     return env
 
 
@@ -594,7 +603,7 @@ def route_context(model_config: Optional[dict], *, allowlist: str = "",
 def apply_model_route(env: dict[str, str], model_config: Optional[dict], *,
                       catalog: Optional["model_providers.Catalog"] = None, choice: str = "",
                       admin=False, allowlist: str = "", friction=None, subject: str = "",
-                      session: str = "") -> Optional["model_providers.ModelRoute"]:
+                      session: str = "", effort: str = "") -> Optional["model_providers.ModelRoute"]:
     """THE ONE PLACE A WORKER'S MODEL ROUTE IS DECIDED, with or without a catalog.
 
     No catalog: the person's Settings → Models overlays the deployment env exactly as it always has
@@ -614,7 +623,7 @@ def apply_model_route(env: dict[str, str], model_config: Optional[dict], *,
     ctx = route_context(cfg, allowlist=allowlist, deployment_runner=env.get("VEXA_RUNNER", ""),
                         deployment_model=env.get("VEXA_AGENT_MODEL", ""))
     try:
-        route = catalog.route(choice, ctx, admin=admin)
+        route = catalog.route(choice, ctx, admin=admin, effort=effort)
     except model_providers.ModelChoiceFault as fault:
         logger.warning(json.dumps({"event": "model_choice_refused", "source": fault.source,
                                    "kind": fault.kind, "model": fault.model,
@@ -629,13 +638,10 @@ def apply_model_route(env: dict[str, str], model_config: Optional[dict], *,
                 logger.warning("model endpoint refusal could not be filed as friction")
         raise
     env.update(route_env(route))
-    effort = (cfg.get("effort") or "").strip()
-    if effort:
-        env["VEXA_AGENT_EFFORT"] = effort
     logger.info(json.dumps({"event": "model_route", "model": route.model_id,
                             "provider": route.provider, "adapter": route.adapter,
                             "harness": route.harness, "credential": route.credential_source,
-                            "subject": subject}))
+                            "effort": route.effort, "subject": subject}))
     return route
 
 
@@ -730,7 +736,7 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
                    target: str = "",
                    entry_nonce: str = "", friction=None,
                    catalog: Optional["model_providers.Catalog"] = None,
-                   model_choice: str = "", admin=False) -> dict[str, str]:
+                   model_choice: str = "", admin=False, effort_choice: str = "") -> dict[str, str]:
     """Map a ``unit.v1`` dispatch to the worker's ``runtime.v1`` env (12-factor, P7). The minted token +
     the workspace LIST + the per-dispatch Stream topics travel here; the runtime injects them opaquely."""
     identity = invocation["identity"]
@@ -887,7 +893,7 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
     # defaults to "main" for a non-message trigger, so this is never empty.
     apply_model_route(env, model_config, catalog=catalog, choice=model_choice, admin=admin,
                       allowlist=settings.model_allowlist, friction=friction, subject=subject,
-                      session=chat_session(invocation))
+                      session=chat_session(invocation), effort=effort_choice)
     # The chat conversation thread (default "main") — the worker namespaces its continuity session file
     # by this so multiple threads coexist in the one user workspace. Meeting/digest paths ignore it.
     if invocation["trigger"] == "message":
@@ -1053,7 +1059,8 @@ class Dispatcher:
 
     def dispatch(self, invocation: dict, *, room: Optional[dict] = None,
                  scaffold_workspaces: Optional[list[str]] = None,
-                 target: str = "", inbox: Optional[dict] = None, model: str = "") -> str:
+                 target: str = "", inbox: Optional[dict] = None, model: str = "",
+                 effort: str = "") -> str:
         """Validate + spawn. Returns the workload id. Raises on a non-conformant envelope (P18).
 
         ``inbox`` — WHAT A QUEUED ROW SHOWS (Vexa-ai/vexa#1610). The pre-delivered stream entry IS
@@ -1117,6 +1124,7 @@ class Dispatcher:
                              model_config=model_config, room=room,
                              scaffold_workspaces=scaffold_workspaces, target=target,
                              friction=self._friction, catalog=self._catalog, model_choice=model,
+                             effort_choice=effort,
                              admin=lambda: self.is_admin(identity["subject"]))
         self._record_delegation(uid, env)
         if self._workload_redis is not None:

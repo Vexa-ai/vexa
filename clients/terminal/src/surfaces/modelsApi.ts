@@ -5,9 +5,17 @@
  *  that chat's own pick. It carries no endpoint and no credential, so nothing here ever holds one.
  *  A pick is stored per chat by agent-api (`POST /api/chat/model`), which refuses one the next turn
  *  could not run with a typed fault; the person's default is a Settings → Models field
- *  (`default_model`, admin-api, through the same `/api/user/models` edge the settings form uses). */
+ *  (`default_model`, admin-api, through the same `/api/user/models` edge the settings form uses).
+ *
+ *  EFFORT, per chat, beside the model: each model lists the levels it offers
+ *  (`capabilities.reasoning_efforts`, empty when it has no effort control) and the one it runs at
+ *  until the chat picks (`default_effort`). The pick is stored with the model, so changing the model
+ *  clears it. */
 import { getJson } from "./apiClient";
 import { setModelPrefs } from "./settingsApi";
+
+/** The effort vocabulary (`models.v1#/$defs/ReasoningEffort`). */
+export type Effort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 export type ModelEntry = {
   id: string;
@@ -15,7 +23,12 @@ export type ModelEntry = {
   provider: string;
   adapter: "openai_compatible" | "openrouter" | "anthropic" | "custom";
   harness: string;
-  capabilities: { tool_calling: boolean; streaming: boolean; context_tokens?: number | null };
+  capabilities: {
+    tool_calling: boolean; streaming: boolean; context_tokens?: number | null;
+    /** the levels a chat may pick for this model; absent or empty = no effort control */
+    reasoning_efforts?: Effort[];
+    default_effort?: Effort | null;
+  };
   access: "everyone" | "admins";
   default: boolean;
 };
@@ -26,6 +39,8 @@ export type ModelList = {
   default: string | null;
   /** the named chat's own pick; null = it follows the default */
   selected?: string | null;
+  /** the named chat's own effort pick; null = the model's default_effort */
+  selected_effort?: Effort | null;
 };
 
 export async function getModelCatalog(session?: string): Promise<ModelList> {
@@ -33,11 +48,18 @@ export async function getModelCatalog(session?: string): Promise<ModelList> {
   return getJson<ModelList>(`/api/models/catalog${q}`, { cache: "no-store" });
 }
 
-/** Pin one chat to a model; `""` puts it back on the person's default. */
-export async function setChatModel(session: string, model: string): Promise<{ session: string; model: string | null; changed: boolean }> {
+/** Pin one chat to a model at an effort level; `""` puts it back on the person's default model,
+ *  and an empty effort on the model's own default level. */
+export async function setChatModel(session: string, model: string, effort = ""): Promise<{ session: string; model: string | null; effort?: Effort | null; changed: boolean }> {
   return getJson(`/api/chat/model`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session, model }),
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(effort ? { session, model, effort } : { session, model }),
   });
+}
+
+/** The levels a model offers — empty when it has no effort control. */
+export function effortsOf(m: ModelEntry | null): Effort[] {
+  return m?.capabilities.reasoning_efforts ?? [];
 }
 
 /** The model new and unpicked chats run on, for this person (Settings → Models `default_model`). */

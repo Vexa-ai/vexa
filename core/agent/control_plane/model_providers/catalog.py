@@ -30,7 +30,7 @@ import re
 from typing import Callable, Iterable, Mapping, Optional, Union
 
 from contracts import validate_model_catalog_errors
-from control_plane.model_providers.adapters import ADAPTERS
+from control_plane.model_providers.adapters import ADAPTERS, common
 from control_plane.model_providers.port import (
     NOT_CONFIGURED, NOT_PERMITTED, UNKNOWN_MODEL, ModelChoiceFault, ModelRoute, RouteContext,
 )
@@ -256,11 +256,31 @@ class Catalog:
                 remedy="Ask an operator to offer one in the model catalog.")
         return self._by_id[fallback]
 
-    def route(self, explicit: str, ctx: RouteContext, *, admin: AdminCheck) -> ModelRoute:
-        """The port, end to end: the chosen model, resolved by its provider's adapter."""
+    def effort(self, model: Mapping, picked: str = "") -> str:
+        """The effort ``model`` runs at: the chat's own pick, else the entry's ``default_effort``,
+        else ``""`` (the provider's own default). Checked, not trusted: a pick the model does not
+        offer, or its adapter cannot send, is a typed ``effort_unsupported`` refusal."""
+        provider = self._providers[model["provider"]]
+        adapter = self._adapter(model)
+        caps = model.get("capabilities") or {}
+        chosen = str(picked or "").strip() or str(caps.get("default_effort") or "")
+        return common.check_effort(chosen, model, model["provider"],
+                                   adapter.efforts(provider, model))
+
+    def choose_with_effort(self, explicit: str, effort: str, ctx: RouteContext, *,
+                           admin: AdminCheck) -> tuple[dict, str]:
+        """``choose`` and ``effort`` together — what a pick is checked against before it is
+        stored, so a stored pick is always one the next turn can run."""
         m = self.choose(explicit, ctx, admin=admin)
+        return m, self.effort(m, effort)
+
+    def route(self, explicit: str, ctx: RouteContext, *, admin: AdminCheck,
+              effort: str = "") -> ModelRoute:
+        """The port, end to end: the chosen model at the chosen effort, resolved by its provider's
+        adapter."""
+        m, level = self.choose_with_effort(explicit, effort, ctx, admin=admin)
         provider = self._providers[m["provider"]]
-        return self._adapter(m).route(m, m["provider"], provider, ctx)
+        return self._adapter(m).route(m, m["provider"], provider, ctx, effort=level)
 
     def entry(self, model_id: str, ctx: RouteContext) -> Optional[dict]:
         """One model as a person sees it (``models.v1#/$defs/ModelListEntry``), or None."""
@@ -274,15 +294,22 @@ class Catalog:
                 "adapter": provider["adapter"], "harness": adapter.harness(provider, ctx),
                 "capabilities": {"tool_calling": bool(caps.get("tool_calling", True)),
                                  "streaming": bool(caps.get("streaming", True)),
-                                 "context_tokens": caps.get("context_tokens")},
+                                 "context_tokens": caps.get("context_tokens"),
+                                 # only levels the adapter can send — the boot check already
+                                 # refused a catalog listing any other, so this is belt and braces
+                                 "reasoning_efforts": [e for e in common.declared_efforts(m)
+                                                       if e in adapter.efforts(provider, m)],
+                                 "default_effort": caps.get("default_effort")},
                 "access": m.get("access", "everyone"), "default": bool(m.get("default"))}
 
     def listing(self, ctx: RouteContext, *, admin: AdminCheck,
-                selected: Optional[str] = None, with_selected: bool = False) -> dict:
+                selected: Optional[str] = None, with_selected: bool = False,
+                selected_effort: Optional[str] = None) -> dict:
         """``models.v1#/$defs/ModelList`` for one person — what ``GET /api/models/catalog`` serves.
         Carries no endpoint, credential or request setting: those never leave agent-api."""
         out: dict = {"models": [self.entry(m["id"], ctx) for m in self.visible(ctx, admin=admin)],
                      "default": self.default_for(ctx, admin=admin)}
         if with_selected:
             out["selected"] = (selected or "").strip() or None
+            out["selected_effort"] = (selected_effort or "").strip() or None
         return out

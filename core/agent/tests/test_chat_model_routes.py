@@ -131,7 +131,7 @@ def test_picking_a_model_stores_it_and_the_chat_lists_it(stack):
     c = stack["client"]
     r = c.post("/api/chat/model", json={"session": "s1", "model": "claude"}, headers=_as(MEMBER))
     assert r.status_code == 200 and r.json() == {"ok": True, "session": "s1", "model": "claude",
-                                                 "changed": True}
+                                                 "effort": None, "changed": True}
     assert c.get("/api/models/catalog?session=s1", headers=_as(MEMBER)).json()["selected"] == "claude"
     row = next(x for x in c.get("/api/sessions", headers=_as(MEMBER)).json()["sessions"]
                if x["session"] == "s1")
@@ -189,7 +189,7 @@ def test_an_unpicked_chat_runs_on_the_persons_default(stack):
     assert _turn(stack["client"], MEMBER).status_code == 200
     env = stack["runtime"].envs[-1]
     assert (env["VEXA_RUNNER"], env["VEXA_AGENT_MODEL"], env["ANTHROPIC_BASE_URL"]) == (
-        "claude-code", "claude-sonnet-4-5", "")
+        "claude-code", "claude-sonnet-4-6", "")
 
 
 def test_a_pick_that_can_no_longer_run_refuses_the_turn_with_a_typed_fault(stack):
@@ -283,3 +283,53 @@ def test_a_chat_session_id_is_bounded_where_it_enters(stack):
     assert c.post("/api/chat/model", json={"session": bad, "model": "claude"},
                   headers=_as(MEMBER)).status_code == 422
     assert c.get(f"/api/models/catalog?session={bad}", headers=_as(MEMBER)).status_code == 422
+
+
+# ── the effort level, picked per chat (founder 2026-10-10) ─────────────────────────────────────
+
+def test_the_listing_offers_effort_levels_only_on_a_model_that_has_them(stack):
+    body = stack["client"].get("/api/models/catalog?session=s1", headers=_as(ADMIN)).json()
+    caps = {m["id"]: m["capabilities"] for m in body["models"]}
+    assert caps["claude"]["reasoning_efforts"] == ["low", "medium", "high", "xhigh", "max"]
+    assert caps["or-sonnet"]["default_effort"] == "medium"
+    assert body["selected_effort"] is None
+
+
+def test_an_effort_pick_is_stored_with_the_model_and_runs_on_the_next_turn(stack):
+    c = stack["client"]
+    r = c.post("/api/chat/model", json={"session": "s1", "model": "claude", "effort": "high"},
+               headers=_as(MEMBER))
+    assert r.status_code == 200 and r.json()["effort"] == "high"
+    listing = c.get("/api/models/catalog?session=s1", headers=_as(MEMBER)).json()
+    assert (listing["selected"], listing["selected_effort"]) == ("claude", "high")
+    assert _turn(c, MEMBER).status_code == 200
+    assert stack["runtime"].envs[-1]["VEXA_AGENT_EFFORT"] == "high"
+
+
+def test_changing_only_the_effort_forces_a_fresh_worker(stack):
+    c, sess = stack["client"], stack["sessions"]
+    c.post("/api/chat/model", json={"session": "s1", "model": "claude", "effort": "low"}, headers=_as(MEMBER))
+    assert sess.take_mount_generation(MEMBER, "s1") == 1
+    r = c.post("/api/chat/model", json={"session": "s1", "model": "claude", "effort": "max"}, headers=_as(MEMBER))
+    assert r.json()["changed"] is True and sess.take_mount_generation(MEMBER, "s1") == 2
+
+
+@pytest.mark.parametrize("model, effort", [("claude", "none"), ("qwen3-32b", "medium"),
+                                           ("claude", "turbo")])
+def test_an_effort_the_model_cannot_take_is_refused_at_pick_time_and_not_stored(stack, model, effort):
+    c = stack["client"]
+    r = c.post("/api/chat/model", json={"session": "s1", "model": model, "effort": effort},
+               headers=_as(MEMBER))
+    assert r.status_code == 422
+    fault = r.json()["fault"]
+    assert (fault["source"], fault["kind"], fault["model"]) == ("model-provider", "effort_unsupported", model)
+    assert stack["sessions"].effort(MEMBER, "s1") == "" and stack["sessions"].model(MEMBER, "s1") == ""
+
+
+def test_an_effort_with_no_model_is_checked_against_the_persons_default(stack):
+    """`model: ""` follows the default (qwen3-32b: none or high); the effort is checked against it."""
+    c = stack["client"]
+    bad = c.post("/api/chat/model", json={"session": "s1", "model": "", "effort": "low"}, headers=_as(MEMBER))
+    assert bad.status_code == 422 and bad.json()["fault"]["model"] == "qwen3-32b"
+    ok = c.post("/api/chat/model", json={"session": "s1", "model": "", "effort": "high"}, headers=_as(MEMBER))
+    assert ok.status_code == 200 and stack["sessions"].effort(MEMBER, "s1") == "high"

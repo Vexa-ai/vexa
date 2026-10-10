@@ -9,7 +9,12 @@
       "capabilities": {
         "tool_calling": true,
         "streaming": true,
-        "context_tokens": 32768
+        "context_tokens": 32768,
+        "reasoning_efforts": [
+          "none",
+          "high"
+        ],
+        "default_effort": "none"
       },
       "access": "everyone",
       "default": true
@@ -23,12 +28,21 @@
       "capabilities": {
         "tool_calling": true,
         "streaming": true,
-        "context_tokens": null
+        "context_tokens": null,
+        "reasoning_efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "default_effort": null
       },
       "access": "everyone",
       "default": false
     }
   ],
   "default": "qwen3-32b",
-  "selected": "claude"
+  "selected": "claude",
+  "selected_effort": "high"
 }

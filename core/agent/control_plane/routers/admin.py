@@ -46,23 +46,30 @@ def build(**d) -> APIRouter:
         """The models you may pick on this deployment (``models.v1`` ModelList): each one's name,
         provider, harness and capabilities — never an endpoint or a credential — plus the model you
         run on before you pick (``default``). Name a chat (``session``) to also get that chat's own
-        pick (``selected``; null when it follows your default). An empty list means the deployment
+        pick (``selected``; null when it follows your default) and its effort pick
+        (``selected_effort``; null when it runs at the model's ``default_effort``). Each model lists
+        the effort levels you may pick for it (``capabilities.reasoning_efforts``, empty when it has
+        no effort control). An empty list means the deployment
         declares no catalog, and its model is the operator's to set."""
         subject = subject_of(request)
         catalog = dispatcher.catalog
         with_selected = session is not None
-        selected = None
+        selected = selected_effort = None
         if with_selected:
+            name = str(session).strip() or units.DEFAULT_CHAT_SESSION
             try:
-                selected = sess.model(subject, str(session).strip() or units.DEFAULT_CHAT_SESSION)
+                selected = sess.model(subject, name)
+                selected_effort = sess.effort(subject, name)
             except Exception:  # noqa: BLE001 — an unreadable pick is the default
-                selected = None
+                selected = selected_effort = None
         if catalog.empty:
-            return {"models": [], "default": None, **({"selected": None} if with_selected else {})}
+            return {"models": [], "default": None,
+                    **({"selected": None, "selected_effort": None} if with_selected else {})}
         ctx = dispatch_mod.route_context(dispatcher.resolve_model_config(subject) or {},
                                          allowlist=settings.model_allowlist)
         return catalog.listing(ctx, admin=lambda: dispatcher.is_admin(subject),
-                               selected=selected, with_selected=with_selected)
+                               selected=selected, with_selected=with_selected,
+                               selected_effort=selected_effort)
     @router.get("/api/admin/overview")
     def admin_overview(request: Request):
         """Read-only infra + pipeline introspection for the terminal's hidden admin panel: every

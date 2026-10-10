@@ -4,15 +4,24 @@
       "adapter": "openai_compatible",
       "base_url": "http://10.0.0.5:8000/v1",
       "auth": "none",
-      "extra_body": { "chat_template_kwargs": { "enable_thinking": false } }
+      "extra_body": {
+        "chat_template_kwargs": {
+          "enable_thinking": false
+        }
+      }
     },
     "openrouter": {
       "adapter": "openrouter",
       "auth": "secret",
       "secret_ref": "env:OPENROUTER_API_KEY"
     },
-    "anthropic": { "adapter": "anthropic", "auth": "subscription" },
-    "own": { "adapter": "custom" }
+    "anthropic": {
+      "adapter": "anthropic",
+      "auth": "subscription"
+    },
+    "own": {
+      "adapter": "custom"
+    }
   },
   "models": [
     {
@@ -20,22 +29,54 @@
       "display_name": "Qwen 3 32B (self-hosted)",
       "provider": "lab-vllm",
       "model": "Qwen/Qwen3-32B",
-      "capabilities": { "tool_calling": true, "streaming": true, "context_tokens": 32768 },
-      "default": true
+      "capabilities": {
+        "tool_calling": true,
+        "streaming": true,
+        "context_tokens": 32768,
+        "reasoning_efforts": [
+          "none",
+          "high"
+        ],
+        "default_effort": "none"
+      },
+      "default": true,
+      "effort_control": "enable_thinking"
     },
     {
       "id": "or-sonnet",
       "display_name": "Claude Sonnet via OpenRouter",
       "provider": "openrouter",
       "model": "anthropic/claude-sonnet-4.5",
-      "access": "admins"
+      "access": "admins",
+      "capabilities": {
+        "reasoning_efforts": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "default_effort": "medium"
+      },
+      "max_output_tokens": 8192
     },
     {
       "id": "claude",
       "display_name": "Claude (subscription)",
       "provider": "anthropic",
-      "model": "claude-sonnet-4-5"
+      "model": "claude-sonnet-4-6",
+      "capabilities": {
+        "reasoning_efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      }
     },
-    { "id": "mine", "display_name": "My endpoint", "provider": "own" }
+    {
+      "id": "mine",
+      "display_name": "My endpoint",
+      "provider": "own"
+    }
   ]
 }

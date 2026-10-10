@@ -119,7 +119,19 @@ The route itself was already decided in one place: `dispatch.overlay_model_confi
    - **No silent replacement.** An explicit pick is never silently replaced by another model. A
      stale default is skipped and logged, because a stored preference must never stop a turn.
 
-8. **The Test button probes the entry through the same port.** `GET /api/models/test?model=<id>`
+8. **Effort is per chat, and each adapter maps it or refuses it.** An entry lists the effort
+   levels it offers (`capabilities.reasoning_efforts`, `default_effort`) in one vocabulary
+   (`none` … `max`). The port gains `efforts(provider, model)`, the levels the adapter can send,
+   and `route(..., effort)` writes the level into the provider's own field: OpenRouter's
+   `reasoning.effort`, the OpenAI `reasoning_effort` or a Qwen `chat_template_kwargs.enable_thinking`
+   (chosen per entry by `effort_control`), or the claude CLI's `--effort` (`VEXA_AGENT_EFFORT`).
+   A level the adapter cannot send is refused at boot; a pick the model does not offer is the typed
+   fault `effort_unsupported`. The pick is stored with the chat's model and cleared when the model
+   changes. On a catalog route the effort comes only from the catalog, so a Settings → Models effort
+   never reaches a model that did not offer it. An entry may also set `max_output_tokens`, which
+   the route stamps as `VEXA_AGENT_MAX_OUTPUT_TOKENS`.
+
+9. **The Test button probes the entry through the same port.** `GET /api/models/test?model=<id>`
    resolves the route the dispatch would stamp, then probes it in its own dialect with exactly its
    own credential, at the URL the harness posts to.
 

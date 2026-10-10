@@ -69,6 +69,9 @@ def test_openai_compatible_with_a_secret_and_a_model_level_extra_body():
 def test_openrouter_on_whichever_harness_the_provider_declares(harness, base):
     decl = json.loads(json.dumps(EXAMPLE))
     decl["providers"]["openrouter"]["harness"] = harness
+    # the CLI on OpenRouter offers no effort control (the adapter refuses levels at boot)
+    or_sonnet = next(m for m in decl["models"] if m["id"] == "or-sonnet")
+    or_sonnet.pop("capabilities", None)
     r = _catalog(decl).route("or-sonnet", _ctx(), admin=True)
     assert (r.harness, r.base_url, r.credential_source) == (harness, base, CRED_SECRET)
     assert r.credential == ENV["OPENROUTER_API_KEY"] and r.auth_header == "bearer"
@@ -206,7 +209,8 @@ def test_a_member_sees_the_golden_listing():
 
 
 def test_a_chats_listing_carries_its_own_pick():
-    listing = _catalog().listing(_ctx(), admin=False, selected="claude", with_selected=True)
+    listing = _catalog().listing(_ctx(), admin=False, selected="claude", with_selected=True,
+                                 selected_effort="high")
     validate_model_list(listing)
     assert listing == json.loads((GOLDEN / "ModelList.chat.json").read_text())
 

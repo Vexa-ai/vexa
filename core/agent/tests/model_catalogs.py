@@ -9,6 +9,7 @@ ENV = {"OPENROUTER_API_KEY": "operator-openrouter-test-value",
        "ANTHROPIC_DIRECT_KEY": "operator-anthropic-test-value"}
 
 #: The two worked examples the docs and the deploy values carry, plus one of each other kind.
+#: The contract's golden (``models.v1/golden/Catalog.self-hosted-and-openrouter.json``), verbatim.
 EXAMPLE = {
     "providers": {
         "lab-vllm": {"adapter": "openai_compatible", "base_url": "http://10.0.0.5:8000/v1",
@@ -22,12 +23,16 @@ EXAMPLE = {
     "models": [
         {"id": "qwen3-32b", "display_name": "Qwen 3 32B (self-hosted)", "provider": "lab-vllm",
          "model": "Qwen/Qwen3-32B",
-         "capabilities": {"tool_calling": True, "streaming": True, "context_tokens": 32768},
-         "default": True},
+         "capabilities": {"tool_calling": True, "streaming": True, "context_tokens": 32768,
+                          "reasoning_efforts": ["none", "high"], "default_effort": "none"},
+         "default": True, "effort_control": "enable_thinking"},
         {"id": "or-sonnet", "display_name": "Claude Sonnet via OpenRouter",
-         "provider": "openrouter", "model": "anthropic/claude-sonnet-4.5", "access": "admins"},
+         "provider": "openrouter", "model": "anthropic/claude-sonnet-4.5", "access": "admins",
+         "capabilities": {"reasoning_efforts": ["low", "medium", "high"], "default_effort": "medium"},
+         "max_output_tokens": 8192},
         {"id": "claude", "display_name": "Claude (subscription)", "provider": "anthropic",
-         "model": "claude-sonnet-4-5"},
+         "model": "claude-sonnet-4-6",
+         "capabilities": {"reasoning_efforts": ["low", "medium", "high", "xhigh", "max"]}},
         {"id": "mine", "display_name": "My endpoint", "provider": "own"},
     ],
 }

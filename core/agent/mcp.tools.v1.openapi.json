@@ -1287,7 +1287,7 @@
     },
     "/api/models/catalog": {
       "get": {
-        "description": "The models you may pick on this deployment (``models.v1`` ModelList): each one's name,\nprovider, harness and capabilities \u2014 never an endpoint or a credential \u2014 plus the model you\nrun on before you pick (``default``). Name a chat (``session``) to also get that chat's own\npick (``selected``; null when it follows your default). An empty list means the deployment\ndeclares no catalog, and its model is the operator's to set.",
+        "description": "The models you may pick on this deployment (``models.v1`` ModelList): each one's name,\nprovider, harness and capabilities \u2014 never an endpoint or a credential \u2014 plus the model you\nrun on before you pick (``default``). Name a chat (``session``) to also get that chat's own\npick (``selected``; null when it follows your default) and its effort pick\n(``selected_effort``; null when it runs at the model's ``default_effort``). Each model lists\nthe effort levels you may pick for it (``capabilities.reasoning_efforts``, empty when it has\nno effort control). An empty list means the deployment\ndeclares no catalog, and its model is the operator's to set.",
         "parameters": [
           {
             "in": "query",

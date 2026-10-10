@@ -587,28 +587,34 @@ class _Sessions:
         rec["last_active"] = self._now()
         return True
 
-    def set_model(self, subject: str, session: str, model: str) -> bool:
-        """PIN this chat to one model of the operator's catalog, and say whether that changed
-        anything. THE ONE WRITER of ``model``.
+    def set_model(self, subject: str, session: str, model: str, effort: str = "") -> bool:
+        """PIN this chat to one model of the operator's catalog, at one effort level, and say
+        whether that changed anything. THE ONE WRITER of ``model`` and ``effort``.
 
         ``model`` is a catalog id the caller has already checked against the catalog and the
         person's access, or ``""`` — the person's default, which is what an unpicked chat runs on
-        rather than a second name for it. A value that is not even shaped like an id is REFUSED.
+        rather than a second name for it. ``effort`` is a level the caller has checked against that
+        model, or ``""`` — the model's own default. They are written together because an effort
+        means something only for the model it was picked for. A value that is not even shaped like
+        an id or a level is REFUSED.
 
         IT RAISES THE STALE-MOUNTS SEMAPHORE, for the reason ``set_target`` does. The route is baked
-        into the container at spawn — the worker reads its harness, endpoint, credential and model
-        from its environment, once — so a warm worker would keep answering on the old model for its
-        whole window. A new unit id is the cure; ``take_mount_generation`` hands the next fresh turn
-        one. A REAL CHANGE ONLY: re-picking the model in force costs nobody a cold start."""
+        into the container at spawn — the worker reads its harness, endpoint, credential, model and
+        effort from its environment, once — so a warm worker would keep answering on the old model
+        for its whole window. A new unit id is the cure; ``take_mount_generation`` hands the next
+        fresh turn one. A REAL CHANGE ONLY: re-picking what is in force costs nobody a cold start."""
         mid = str(model or "").strip()
+        eff = str(effort or "").strip()
         if mid and not model_providers.is_model_id(mid):
+            return False
+        if eff and eff not in model_providers.EFFORTS:
             return False
         if self._redis is not None:
             mkey = self._meta_key(subject, session)
             meta = self._redis.hgetall(mkey) or {}
-            if (meta.get("model") or "").strip() == mid:
+            if (meta.get("model") or "").strip() == mid and (meta.get("effort") or "").strip() == eff:
                 return False
-            self._redis.hset(mkey, mapping={"model": mid, "mounts_stale": "1",
+            self._redis.hset(mkey, mapping={"model": mid, "effort": eff, "mounts_stale": "1",
                                             "last_active": str(self._now())})
             self._redis.sadd(self._ids_key(subject), session)
             return True
@@ -617,9 +623,10 @@ class _Sessions:
             rec = {"created": self._now(), "last_active": self._now(), "title": session,
                    "touched": False}
             self._mem[subject][session] = rec
-        if str(rec.get("model") or "").strip() == mid:
+        if str(rec.get("model") or "").strip() == mid and str(rec.get("effort") or "").strip() == eff:
             return False
         rec["model"] = mid
+        rec["effort"] = eff
         rec["mounts_stale"] = True
         rec["last_active"] = self._now()
         return True
@@ -630,6 +637,13 @@ class _Sessions:
             meta = self._redis.hgetall(self._meta_key(subject, session)) or {}
             return (meta.get("model") or "").strip()
         return str((self._mem.get(subject, {}).get(session) or {}).get("model") or "").strip()
+
+    def effort(self, subject: str, session: str) -> str:
+        """This chat's own effort pick, or ``""`` for the model's default."""
+        if self._redis is not None:
+            meta = self._redis.hgetall(self._meta_key(subject, session)) or {}
+            return (meta.get("effort") or "").strip()
+        return str((self._mem.get(subject, {}).get(session) or {}).get("effort") or "").strip()
 
     def target(self, subject: str, session: str) -> str:
         """This chat's target workspace slug, or ``""`` for the person's own desk."""

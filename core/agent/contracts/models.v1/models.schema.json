@@ -38,8 +38,21 @@
         "admins"
       ]
     },
+    "ReasoningEffort": {
+      "description": "A reasoning-effort level, the one vocabulary every adapter maps onto its provider's own control: none — no reasoning · minimal · low · medium · high · xhigh · max. An adapter offers only the levels it can express (the claude CLI's --effort takes low…max; OpenRouter's reasoning.effort and the OpenAI reasoning_effort field take none…xhigh; a Qwen chat_template_kwargs.enable_thinking toggle takes none and high).",
+      "type": "string",
+      "enum": [
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
     "Capabilities": {
-      "description": "What the model can do on this route. streaming and context_tokens reach the openai-agent harness; a model without tool calling cannot drive an agent turn and is refused at boot.",
+      "description": "What the model can do on this route. streaming and context_tokens reach the openai-agent harness; a model without tool calling cannot drive an agent turn and is refused at boot. reasoning_efforts lists the effort levels a person may pick for it (absent: the model has no effort control), default_effort the one a chat runs on until it picks.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -53,6 +66,17 @@
           "type": "integer",
           "minimum": 1024,
           "maximum": 10000000
+        },
+        "reasoning_efforts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ReasoningEffort"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "default_effort": {
+          "$ref": "#/$defs/ReasoningEffort"
         }
       }
     },
@@ -149,6 +173,20 @@
         "extra_body": {
           "$ref": "#/$defs/ExtraBody"
         },
+        "max_output_tokens": {
+          "description": "The output-token cap this model's requests ask for (claude-code: CLAUDE_CODE_MAX_OUTPUT_TOKENS; openai-agent: max_tokens). Absent: the deployment's VEXA_AGENT_MAX_OUTPUT_TOKENS, else the harness's own default.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        },
+        "effort_control": {
+          "description": "openai_compatible only: the request field a picked effort is sent as — reasoning_effort (the default; the OpenAI field) or enable_thinking (chat_template_kwargs.enable_thinking, a Qwen behind vLLM: none turns thinking off, high turns it on).",
+          "type": "string",
+          "enum": [
+            "reasoning_effort",
+            "enable_thinking"
+          ]
+        },
         "access": {
           "$ref": "#/$defs/Access"
         },
@@ -223,7 +261,9 @@
           "additionalProperties": false,
           "required": [
             "tool_calling",
-            "streaming"
+            "streaming",
+            "reasoning_efforts",
+            "default_effort"
           ],
           "properties": {
             "tool_calling": {
@@ -236,6 +276,22 @@
               "type": [
                 "integer",
                 "null"
+              ]
+            },
+            "reasoning_efforts": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ReasoningEffort"
+              }
+            },
+            "default_effort": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/ReasoningEffort"
+                },
+                {
+                  "type": "null"
+                }
               ]
             }
           }
@@ -250,7 +306,7 @@
       }
     },
     "ModelList": {
-      "description": "GET /api/models: the models the caller may pick. default is the model the caller runs on before picking (their own default, else the catalog's, else the first listed; null when the list is empty). selected is the named chat's own pick, present when the request named a chat (null: the chat follows the default).",
+      "description": "GET /api/models: the models the caller may pick. default is the model the caller runs on before picking (their own default, else the catalog's, else the first listed; null when the list is empty). selected is the named chat's own pick, present when the request named a chat (null: the chat follows the default). selected_effort is the named chat's own effort pick, present with selected (null: the model's default_effort, or none when it has no effort control).",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -278,6 +334,16 @@
           "oneOf": [
             {
               "$ref": "#/$defs/ModelId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "selected_effort": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/ReasoningEffort"
             },
             {
               "type": "null"

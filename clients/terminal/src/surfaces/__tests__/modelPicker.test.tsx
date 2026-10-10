@@ -114,3 +114,69 @@ describe("the model picker", () => {
     expect(calls.find((c) => c.method === "POST")?.body).toEqual({ session: "s1", model: "" });
   });
 });
+
+// ── the effort selector (founder 2026-10-10): only for a model that lists effort levels ───────
+
+const WITH_EFFORT: ModelList = {
+  models: [
+    { ...MEMBER.models[0], capabilities: { ...MEMBER.models[0].capabilities, reasoning_efforts: [], default_effort: null } },
+    { ...MEMBER.models[1], capabilities: { ...MEMBER.models[1].capabilities,
+      reasoning_efforts: ["low", "medium", "high", "xhigh", "max"], default_effort: "medium" } },
+  ],
+  default: "qwen3-32b",
+  selected: null,
+  selected_effort: null,
+};
+
+const effortSelect = () => document.querySelector("[data-effort-picker]") as HTMLSelectElement | null;
+
+describe("the effort selector", () => {
+  it("is absent while the chat's model has no effort control", async () => {
+    stub(WITH_EFFORT);
+    render(<ModelPicker session="s1" />);
+    await chip();
+    expect(effortSelect()).toBeNull();
+  });
+
+  it("appears beside the chip for a model that lists levels, on its default level", async () => {
+    stub({ ...WITH_EFFORT, selected: "claude" });
+    render(<ModelPicker session="s1" />);
+    await chip();
+    const sel = effortSelect()!;
+    expect(sel).not.toBeNull();
+    expect([...sel.options].map((o) => o.value)).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(sel.value).toBe("medium");
+  });
+
+  it("posts the level with the chat's model, and shows the chat's own pick", async () => {
+    const calls = stub({ ...WITH_EFFORT, selected: "claude", selected_effort: "high" });
+    render(<ModelPicker session="s1" />);
+    await chip();
+    expect(effortSelect()!.value).toBe("high");
+    fireEvent.change(effortSelect()!, { target: { value: "max" } });
+    await waitFor(() => expect(calls.some((c) => c.method === "POST")).toBe(true));
+    expect(calls.find((c) => c.method === "POST")!.body).toEqual({ session: "s1", model: "claude", effort: "max" });
+  });
+
+  it("a level the server refuses shows its typed fault's sentence", async () => {
+    stub({ ...WITH_EFFORT, selected: "claude" }, {
+      "POST /api/chat/model": () => new Response(JSON.stringify({
+        detail: "Claude (subscription) offers the effort levels low, medium — not max. Pick one of those levels, or another model.",
+        fault: { source: "model-provider", kind: "effort_unsupported", provider: "anthropic", model: "claude",
+                 status: null, detail: "Claude (subscription) offers the effort levels low, medium — not max.",
+                 remedy: "Pick one of those levels, or another model." } }), { status: 422 }),
+    });
+    render(<ModelPicker session="s1" />);
+    await chip();
+    fireEvent.change(effortSelect()!, { target: { value: "max" } });
+    expect((await screen.findByRole("alert")).textContent).toMatch(/not max/);
+  });
+
+  it("goes away when the chat moves to a model with no effort control", async () => {
+    stub({ ...WITH_EFFORT, selected: "claude" });
+    render(<ModelPicker session="s1" />);
+    fireEvent.click(await chip());
+    fireEvent.click(document.querySelector('[data-model-id="qwen3-32b"]')!);
+    await waitFor(() => expect(effortSelect()).toBeNull());
+  });
+});

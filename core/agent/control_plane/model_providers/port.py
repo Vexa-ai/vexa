@@ -49,11 +49,19 @@ CREDENTIAL_MISSING = _V.CREDENTIAL_MISSING
 #: The person's own endpoint cannot carry the turn (``model_endpoint.route_refusal``).
 ENDPOINT_REFUSED = _V.ENDPOINT_REFUSED
 
-KINDS = (UNKNOWN_MODEL, NOT_PERMITTED, NOT_CONFIGURED, CREDENTIAL_MISSING, ENDPOINT_REFUSED)
+#: The effort level picked is not one this model offers, or not one its adapter can express.
+EFFORT_UNSUPPORTED = _V.EFFORT_UNSUPPORTED
+
+KINDS = (UNKNOWN_MODEL, NOT_PERMITTED, NOT_CONFIGURED, CREDENTIAL_MISSING, ENDPOINT_REFUSED,
+         EFFORT_UNSUPPORTED)
 
 #: What agent-api answers its caller for each kind. Never 500: agent-api did not break.
 _HTTP_STATUS = {UNKNOWN_MODEL: 422, NOT_PERMITTED: 403, NOT_CONFIGURED: 409,
-                CREDENTIAL_MISSING: 503, ENDPOINT_REFUSED: 409}
+                CREDENTIAL_MISSING: 503, ENDPOINT_REFUSED: 409, EFFORT_UNSUPPORTED: 422}
+
+#: The effort vocabulary (``models.v1#/$defs/ReasoningEffort``), in increasing order. Each adapter
+#: maps it onto its provider's own control and offers only the levels that control can express.
+EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
 
 # Where a route's credential comes from.
 CRED_NONE = "none"                  # a keyless endpoint: every credential name is stamped empty
@@ -112,10 +120,16 @@ class Capabilities:
     tool_calling: bool = True
     streaming: bool = True
     context_tokens: Optional[int] = None
+    #: The effort levels a person may pick for this model; ``()`` = it has no effort control.
+    reasoning_efforts: tuple[str, ...] = ()
+    #: The level a chat runs on until it picks one; ``None`` = the provider's own default.
+    default_effort: Optional[str] = None
 
     def as_dict(self) -> dict:
         return {"tool_calling": self.tool_calling, "streaming": self.streaming,
-                "context_tokens": self.context_tokens}
+                "context_tokens": self.context_tokens,
+                "reasoning_efforts": list(self.reasoning_efforts),
+                "default_effort": self.default_effort}
 
 
 @dataclass(frozen=True)
@@ -136,6 +150,12 @@ class ModelRoute:
     auth_header: str = "bearer"
     #: The credential's value. Never in a repr, a log line, or anything the browser receives.
     credential: str = field(default="", repr=False)
+    #: The effort level this route runs at, in the shared vocabulary; ``""`` = the provider's
+    #: default. On claude-code it is the CLI's ``--effort`` (``VEXA_AGENT_EFFORT``); on openai-agent
+    #: the adapter has already written it into ``extra_body`` in its provider's own field.
+    effort: str = ""
+    #: The entry's output-token cap; ``None`` = the deployment's ``VEXA_AGENT_MAX_OUTPUT_TOKENS``.
+    max_output_tokens: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -182,7 +202,15 @@ class ModelProviderPort(Protocol):
         person-specific half of visibility (``custom`` needs their own endpoint)."""
         ...
 
+    def efforts(self, provider: Mapping, model: Mapping) -> tuple[str, ...]:
+        """The effort levels this adapter can express for ``model`` on ``provider`` — ``()`` when it
+        has no way to send one. The catalog refuses at boot an entry that lists any other level,
+        and a pick of one is a typed ``effort_unsupported`` refusal: never silently ignored."""
+        ...
+
     def route(self, model: Mapping, provider_key: str, provider: Mapping,
-              ctx: RouteContext) -> ModelRoute:
-        """The route ``model`` runs on. Raises :class:`ModelChoiceFault` when it cannot run."""
+              ctx: RouteContext, effort: str = "") -> ModelRoute:
+        """The route ``model`` runs on at ``effort`` (``""``: the provider's default) — the effort
+        mapped onto the provider's own control. Raises :class:`ModelChoiceFault` when it cannot
+        run."""
         ...

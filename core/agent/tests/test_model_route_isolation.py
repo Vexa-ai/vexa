@@ -86,14 +86,14 @@ def _isolate(monkeypatch, env: dict) -> None:
 
 
 def _spec(monkeypatch, tmp_path, *, choice="", model_config=None, catalog=None, admin=True,
-          **settings) -> dict:
+          effort="", **settings) -> dict:
     agent_api, _ = _deployment()
     _isolate(monkeypatch, agent_api)
     settings.setdefault("agent_model", "claude-sonnet-5")
     return build_unit_env(load_settings(workspaces_dir=str(tmp_path), **settings), _INV,
                           unit_id="unit-1", token="tok", model_config=model_config,
                           catalog=parse(json.dumps(EXAMPLE), ENV) if catalog is None else catalog,
-                          model_choice=choice, admin=admin)
+                          model_choice=choice, admin=admin, effort_choice=effort)
 
 
 def _worker(monkeypatch, tmp_path, backend="process", **kw) -> dict:
@@ -173,6 +173,9 @@ def test_an_openrouter_entry_on_claude_code_pins_every_tier_to_the_chosen_model(
                                                                                  tmp_path):
     decl = json.loads(json.dumps(EXAMPLE))
     decl["providers"]["openrouter"]["harness"] = "claude-code"
+    # the CLI on OpenRouter offers no effort control (the adapter refuses levels at boot)
+    or_sonnet = next(m for m in decl["models"] if m["id"] == "or-sonnet")
+    or_sonnet.pop("capabilities", None)
     worker = _worker(monkeypatch, tmp_path, choice="or-sonnet", catalog=parse(json.dumps(decl), ENV))
     assert worker["VEXA_RUNNER"] == "claude-code"
     assert worker["ANTHROPIC_BASE_URL"] == "https://openrouter.ai/api"
@@ -266,3 +269,68 @@ def test_a_refused_own_endpoint_files_the_friction_it_always_filed(monkeypatch, 
                        catalog=parse(json.dumps(EXAMPLE), ENV), model_choice="mine")
     assert reports and reports[0]["kind"] == "refusal"
     assert PERSON_KEY not in json.dumps(reports)
+
+
+# ── the effort level, on the wire, per adapter (founder 2026-10-10) ─────────────────────────────
+
+def test_openrouter_sends_the_effort_as_reasoning_effort_and_the_entrys_output_cap(monkeypatch, tmp_path):
+    worker = _worker(monkeypatch, tmp_path, choice="or-sonnet")          # default_effort: medium
+    assert worker["VEXA_AGENT_MAX_OUTPUT_TOKENS"] == "8192" and worker["VEXA_AGENT_EFFORT"] == ""
+    for request in _turn(monkeypatch, tmp_path, worker):
+        assert request["body"]["reasoning"] == {"effort": "medium"}
+        assert request["body"]["max_tokens"] == 8192
+    picked = _worker(monkeypatch, tmp_path, choice="or-sonnet", effort="high")
+    for request in _turn(monkeypatch, tmp_path, picked):
+        assert request["body"]["reasoning"] == {"effort": "high"}
+
+
+@pytest.mark.parametrize("effort, thinking", [("", False), ("none", False), ("high", True)])
+def test_a_qwen_toggle_sends_the_effort_as_enable_thinking(monkeypatch, tmp_path, effort, thinking):
+    worker = _worker(monkeypatch, tmp_path, choice="qwen3-32b", effort=effort)
+    for request in _turn(monkeypatch, tmp_path, worker):
+        assert request["body"]["chat_template_kwargs"] == {"enable_thinking": thinking}
+        assert "reasoning_effort" not in request["body"]
+
+
+def test_an_openai_compatible_entry_sends_the_openai_reasoning_effort_field(monkeypatch, tmp_path):
+    decl = json.loads(json.dumps(EXAMPLE))
+    qwen = next(m for m in decl["models"] if m["id"] == "qwen3-32b")
+    qwen.pop("effort_control")
+    qwen["capabilities"].update(reasoning_efforts=["low", "high"], default_effort="low")
+    worker = _worker(monkeypatch, tmp_path, choice="qwen3-32b", effort="high",
+                     catalog=parse(json.dumps(decl), ENV))
+    for request in _turn(monkeypatch, tmp_path, worker):
+        assert request["body"]["reasoning_effort"] == "high"
+
+
+def test_the_claude_cli_receives_the_effort_as_its_effort_flag(monkeypatch, tmp_path):
+    from llm.claude_code import ClaudeCodeHarness
+    worker = _worker(monkeypatch, tmp_path, choice="claude", effort="xhigh")
+    assert worker["VEXA_RUNNER"] == "claude-code" and worker["VEXA_AGENT_EFFORT"] == "xhigh"
+    _isolate(monkeypatch, worker)
+    argvs: list[list[str]] = []
+
+    def fake_cli(argv, cwd):
+        argvs.append(list(argv))
+        yield json.dumps({"type": "result", "subtype": "success", "result": "ok", "session_id": "s"})
+
+    list(ClaudeCodeHarness(exec_fn=fake_cli).run_turn(tmp_path, "hi"))
+    argv = argvs[0]
+    assert argv[argv.index("--effort") + 1] == "xhigh"
+
+
+def test_no_effort_rides_into_a_route_whose_model_did_not_offer_it(monkeypatch, tmp_path):
+    """A person's Settings → Models effort (or the deployment's) never reaches a catalog route: on
+    a model with no effort control, nothing is sent; on one with levels, only the picked level."""
+    worker = _worker(monkeypatch, tmp_path, choice="claude", model_config={"effort": "max"})
+    assert worker["VEXA_AGENT_EFFORT"] == ""
+
+
+@pytest.mark.parametrize("choice, effort", [("claude", "none"), ("or-sonnet", "xhigh"),
+                                            ("qwen3-32b", "medium")])
+def test_an_effort_the_model_does_not_offer_refuses_the_turn_typed(monkeypatch, tmp_path, choice, effort):
+    with pytest.raises(ModelChoiceFault) as exc:
+        _spec(monkeypatch, tmp_path, choice=choice, effort=effort)
+    f = exc.value.as_dict()
+    assert (f["source"], f["kind"], f["model"]) == ("model-provider", "effort_unsupported", choice)
+    assert exc.value.http_status == 422

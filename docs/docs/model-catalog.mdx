@@ -78,10 +78,38 @@ chosen model, so background calls go to that model too.
 | `display_name` | What people see in the picker. |
 | `provider` | A key of `providers`. |
 | `model` | The model's id at the provider. A `custom` model has none, because the person sets it. |
-| `capabilities` | `tool_calling` (must be true: every harness is an agent loop), `streaming` (default true), `context_tokens` (the openai-agent harness trims history to it). |
+| `capabilities` | `tool_calling` (must be true: every harness is an agent loop), `streaming` (default true), `context_tokens` (the openai-agent harness trims history to it), `reasoning_efforts` and `default_effort` (see [Effort levels](#effort-levels)). |
 | `extra_body` | Request fields merged over the provider's, for the openai-agent harness. |
+| `max_output_tokens` | The output-token cap this model's requests ask for. Absent: the deployment's `VEXA_AGENT_MAX_OUTPUT_TOKENS`, else the harness's own default (the claude CLI asks for 32000, which OpenRouter refuses on a small balance with a 402). |
+| `effort_control` | `openai_compatible` only: `reasoning_effort` (default) or `enable_thinking`. See [Effort levels](#effort-levels). |
 | `access` | `everyone` (default) or `admins`. An admins-only model is not shown to, and is refused for, anyone else. |
 | `default` | `true` on at most one model: the one people run on before they pick. |
+
+### Effort levels
+
+A model can offer an effort level, picked per chat beside the model. List the levels in
+`capabilities.reasoning_efforts`, and optionally the one a chat starts at in `default_effort`.
+A model without `reasoning_efforts` has no effort control, and the picker shows none for it.
+
+The levels are one vocabulary: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. Each
+adapter sends them in its provider's own field and accepts only the levels that field can carry:
+
+| Adapter | Sent as | Levels it can send |
+|---|---|---|
+| `openrouter` (openai-agent harness) | `reasoning.effort` | `none` … `xhigh` |
+| `openrouter` (claude-code harness) | — | none: declare efforts on an openai-agent OpenRouter provider |
+| `openai_compatible`, `effort_control: reasoning_effort` | `reasoning_effort` | `none` … `xhigh` |
+| `openai_compatible`, `effort_control: enable_thinking` | `chat_template_kwargs.enable_thinking` (a Qwen behind vLLM) | `none` (off), `high` (on) |
+| `anthropic` | the claude CLI's `--effort` | `low` … `max` |
+| `custom` | the person's own Settings → Models effort | not declared in the catalog |
+
+A catalog that lists a level its adapter cannot send is refused at boot. A chat that picks a level
+its model does not offer is refused with the typed fault `effort_unsupported`, and the pick is not
+stored. A level is never dropped silently.
+
+The claude CLI decides per model whether it sends the effort at all. Measured on CLI 2.1.293:
+`claude-sonnet-4-6` and `claude-opus-4-6` carry every level, `claude-opus-4-5` sends `max` as
+`high`, and `claude-sonnet-4-5` ignores the flag. List levels only for a model that takes them.
 
 ### Credentials are references, never values
 
@@ -172,6 +200,8 @@ A catalog is never half-applied.
   - It takes effect on the chat's next message, which starts a fresh agent on that model.
   - "Use … for new chats" makes the current model the person's default.
   - "Follow my default" un-pins the chat.
+- **Effort.** When the chat's model lists effort levels, an effort selector sits beside the model
+  chip. Changing the model clears the effort pick, so the chat runs at the new model's default.
 - **Defaults.** A chat nobody picked for runs on the person's default, else the organisation's,
   else the catalog's `default`, else the first model the person may use.
   - The person sets theirs with "Use … for new chats", or under Settings → Models → Default model,

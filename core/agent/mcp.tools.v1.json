@@ -588,7 +588,7 @@
         "method": "GET",
         "path": "/api/models/catalog"
       },
-      "note": "The models this person may pick per chat (models.v1 ModelList, ADR-0043) and the one they run on before picking. Read-only; picking is the person's, in the terminal."
+      "note": "The models this person may pick per chat (models.v1 ModelList, ADR-0043), the one they run on before picking, and the effort levels each model offers (capabilities.reasoning_efforts, empty when it has none). Read-only; picking is the person's, in the terminal."
     },
     {
       "name": "timezone_set",

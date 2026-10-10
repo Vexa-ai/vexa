@@ -18,6 +18,13 @@ from control_plane.model_providers.port import (
 
 KIND = "anthropic"
 HARNESS = "claude-code"
+#: The claude CLI's ``--effort`` levels (CLI 2.1.293: low, medium, high, xhigh, max). Measured
+#: against a mock endpoint, the CLI sends Anthropic's ``output_config.effort`` — but only for a
+#: model it knows takes one: claude-sonnet-4-6 and claude-opus-4-6 carry every level,
+#: claude-opus-4-5 carries max as high, and claude-sonnet-4-5 gets a fixed thinking budget whatever
+#: the flag says. The CLI is the one that decides, so the catalog lists levels only for a model
+#: that takes them all (docs/docs/model-catalog.mdx says which).
+EFFORTS = ("low", "medium", "high", "xhigh", "max")
 ENDPOINT = "https://api.anthropic.com"
 
 
@@ -39,25 +46,34 @@ class AnthropicAdapter:
             problems.append("'extra_body' reaches only the openai-agent harness; Anthropic models "
                             "run on claude-code")
         problems += [p for m in models if (p := common.needs_model(m))]
+        problems += common.no_effort_control(KIND, models)
+        for m in models:
+            problems += common.effort_problems(KIND, m, EFFORTS, "the claude CLI's --effort")
         return problems
 
     def harness(self, provider: Mapping, ctx: Optional[RouteContext] = None) -> str:
         return HARNESS
 
+    def efforts(self, provider: Mapping, model: Mapping) -> tuple[str, ...]:
+        return EFFORTS
+
     def available(self, ctx: RouteContext) -> bool:
         return True
 
     def route(self, model: Mapping, provider_key: str, provider: Mapping,
-              ctx: RouteContext) -> ModelRoute:
+              ctx: RouteContext, effort: str = "") -> ModelRoute:
+        effort = common.check_effort(effort, model, provider_key, EFFORTS)
+        cap = common.max_output_tokens(model)
         if common.auth_of(provider, default="subscription") == "secret":
             return ModelRoute(
                 model_id=str(model["id"]), provider=provider_key, adapter=KIND, harness=HARNESS,
                 base_url=ENDPOINT, credential_source=CRED_SECRET,
                 credential=common.secret_value(str(model["id"]), provider_key, provider, ctx),
                 provider_model=str(model["model"]), extra_body="",
-                capabilities=common.capabilities(model), auth_header="x-api-key")
+                capabilities=common.capabilities(model), auth_header="x-api-key",
+                effort=effort, max_output_tokens=cap)
         return ModelRoute(
             model_id=str(model["id"]), provider=provider_key, adapter=KIND, harness=HARNESS,
             base_url="", credential_source=CRED_SUBSCRIPTION, credential="",
             provider_model=str(model["model"]), extra_body="",
-            capabilities=common.capabilities(model))
+            capabilities=common.capabilities(model), effort=effort, max_output_tokens=cap)

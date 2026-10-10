@@ -1,0 +1,9 @@
+{
+  "source": "model-provider",
+  "kind": "effort_unsupported",
+  "provider": "openrouter",
+  "model": "or-sonnet",
+  "status": null,
+  "detail": "Claude Sonnet via OpenRouter offers the effort levels low, medium, high — not xhigh.",
+  "remedy": "Pick one of those levels, or another model."
+}

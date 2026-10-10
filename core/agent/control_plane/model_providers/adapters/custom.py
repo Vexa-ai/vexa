@@ -31,7 +31,11 @@ class CustomAdapter:
 
     def check(self, provider: Mapping, models: list[Mapping]) -> list[str]:
         problems = common.unexpected_fields(KIND, provider, self.fields)
+        problems += common.no_effort_control(KIND, models)
         for m in models:
+            if common.declared_efforts(m) or (m.get("capabilities") or {}).get("default_effort"):
+                problems.append(f"model {m.get('id')!r}: effort on a custom entry is the person's "
+                                "own setting (Settings → Models), not the catalog's")
             for f in ("model", "extra_body"):
                 if f in m:
                     problems.append(f"model {m.get('id')!r}: {f!r} is the person's own setting on a "
@@ -47,10 +51,14 @@ class CustomAdapter:
     def available(self, ctx: RouteContext) -> bool:
         return model_endpoint.has_custom_endpoint(dict(ctx.subject_config or {}))
 
+    def efforts(self, provider: Mapping, model: Mapping) -> tuple[str, ...]:
+        return ()           # the person's own Settings → Models effort, never a chat pick
+
     def route(self, model: Mapping, provider_key: str, provider: Mapping,
-              ctx: RouteContext) -> ModelRoute:
+              ctx: RouteContext, effort: str = "") -> ModelRoute:
         cfg = dict(ctx.subject_config or {})
         model_id = str(model["id"])
+        common.check_effort(effort, model, provider_key, ())
         base_url = model_endpoint.custom_base_url(cfg)
         if not base_url:
             raise ModelChoiceFault(
@@ -75,4 +83,6 @@ class CustomAdapter:
             credential_source=CRED_SUBJECT, credential=key,
             provider_model=own if own and ctx.model_allowed(own) else ctx.deployment_model,
             extra_body=str(cfg.get("extra_body") or "").strip(),
-            capabilities=common.capabilities(model))
+            capabilities=common.capabilities(model),
+            effort=str(cfg.get("effort") or "").strip(),
+            max_output_tokens=common.max_output_tokens(model))
