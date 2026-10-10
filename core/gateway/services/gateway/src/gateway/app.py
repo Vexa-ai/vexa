@@ -683,6 +683,12 @@ def create_app(
     async def export_meeting_bundle(meeting_id: int, request: Request):
         return await _forward_meeting(request)
 
+    # The same export with a parts archive as the body: the meeting's workspace tree and notes page,
+    # which the owner's client fetched from the agent domain, placed into the bundle by meeting-api.
+    @app.post("/meetings/{meeting_id}/export")
+    async def export_meeting_bundle_with_parts(meeting_id: int, request: Request):
+        return await _forward_meeting(request)
+
     # Edit / delete a PLANNED meeting by ROW id (owner-scoped; meeting-api refuses FSM rows with 409).
     @app.patch("/meetings/{meeting_id}")
     async def patch_planned_meeting(meeting_id: int, request: Request):
