@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import stat
 import subprocess
 from pathlib import Path
@@ -205,7 +206,8 @@ def parse_stream_json(lines: Iterable[str]) -> Iterator[dict]:
                 }
                 if done["ok"] and api_error and str(reply or "").strip() in ("", api_error.strip()):
                     done["ok"] = False      # a "success" whose only answer was the provider's refusal
-                fault = (_provider_fault(str(reply or "") or api_error, sdk_error, model_id)
+                fault = (_provider_fault(str(reply or "") or api_error, sdk_error, model_id,
+                                         status=obj.get("api_error_status"))
                          if not done["ok"] else None)
                 if not done["ok"] and looks_like_auth_failure(reply):
                     # The CLI's own auth text ("Not logged in · Please run /login") is an internal of
@@ -247,19 +249,36 @@ def parse_stream_json(lines: Iterable[str]) -> Iterator[dict]:
         close_event_stream(lines)
 
 
+#: The CLI's own wording for a provider's refusal: ``API Error: 402 <the provider's message>``.
+_API_ERROR_TEXT = re.compile(r"^\s*api error:\s*\d{3}\b", re.IGNORECASE)
+
+
 def _is_api_error(obj: dict, text: str) -> bool:
     """Is this assistant text block the CLI relaying a provider failure, not the model speaking?
-    The CLI marks its own synthetic messages: an SDK ``error`` label, or the ``<synthetic>`` model."""
-    if obj.get("error"):
+
+    Measured on CLI 2.1.293 against an endpoint answering OpenRouter's 402: the CLI emits ONE
+    assistant message with ``model: "<synthetic>"``, ``error: "unknown"`` and
+    ``is_api_error_message: true`` whose text is ``API Error: 402 <message>``, then a ``result``
+    with ``is_error: true`` and ``api_error_status: 402``. Any of its marks is enough; the bare
+    ``API Error: <status>`` prefix is read too, so a build that drops the marks still cannot put
+    the provider's text in the chat as if the agent had said it."""
+    if obj.get("error") or obj.get("is_api_error_message") is True:
+        return True
+    if _API_ERROR_TEXT.match(str(text)):
         return True
     model = str((obj.get("message") or {}).get("model") or "")
     return model == "<synthetic>" and str(text).lstrip().lower().startswith("api error")
 
 
-def _provider_fault(text: str, sdk_error: str, model: str) -> "provider_faults.ProviderFault | None":
-    """The typed fault for what the CLI reported, against the endpoint it was pointed at."""
+def _provider_fault(text: str, sdk_error: str, model: str,
+                    status: object = None) -> "provider_faults.ProviderFault | None":
+    """The typed fault for what the CLI reported, against the endpoint it was pointed at. ``status``
+    is the result's ``api_error_status`` when the CLI wrote one — the provider's HTTP status, read
+    as such rather than out of the prose."""
     host = provider_host()
-    return provider_faults.classify(text=text or None, sdk_error=sdk_error or None, model=model,
+    code = status if isinstance(status, int) and not isinstance(status, bool) and status >= 400 else None
+    return provider_faults.classify(status=code, text=text or None, sdk_error=sdk_error or None,
+                                    model=model,
                                     provider=host if host != "unknown" else "api.anthropic.com")
 
 

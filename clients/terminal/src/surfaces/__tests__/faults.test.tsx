@@ -37,15 +37,15 @@ const KINDS: [Fault, string][] = [
   [{ source: "model-provider", kind: "unpaid", status: 402, provider: "openrouter.ai", model: "anthropic/claude-sonnet-4",
      detail: "Insufficient credits. Add more using https://openrouter.ai/settings/credits",
      remedy: "Add credit at openrouter.ai, or choose another model under Settings → Models." },
-   "Model provider (openrouter.ai) · out of credit (402)"],
+   "Model provider · out of credits (402)"],
   [{ source: "model-provider", kind: "unauthorized", status: 401, provider: "openrouter.ai", detail: "User not found.", remedy: "Check the API key." },
-   "Model provider (openrouter.ai) · credential refused (401)"],
+   "Model provider · credential refused (401)"],
   [{ source: "model-provider", kind: "rate_limited", status: 429, provider: "api.anthropic.com", remedy: "Wait a moment and send it again." },
-   "Model provider (api.anthropic.com) · rate limited (429)"],
+   "Model provider · rate limited (429)"],
   [{ source: "model-provider", kind: "unavailable", status: null, provider: "api.anthropic.com", detail: "ConnectTimeout" },
-   "Model provider (api.anthropic.com) · unavailable"],
+   "Model provider · unavailable"],
   [{ source: "model-provider", kind: "refused", status: 400, provider: "openrouter.ai", detail: "invalid model id" },
-   "Model provider (openrouter.ai) · refused the request (400)"],
+   "Model provider · refused the request (400)"],
   [{ source: "agent-api", kind: "internal", status: 500, detail: "the agent service failed while taking this message" },
    "Agent service · failed (500)"],
   [{ source: "gateway", kind: "unreachable", status: null, detail: "the terminal could not reach the Vexa gateway" },
@@ -89,7 +89,7 @@ describe("a typed fault renders who failed, what kind, the detail and the remedy
   });
 
   it("spells the one-line form the rows use", () => {
-    expect(faultHeadline(KINDS[8][0])).toBe("Model provider (openrouter.ai) · out of credit (402)");
+    expect(faultHeadline(KINDS[8][0])).toBe("Model provider · out of credits (402)");
     expect(faultLine(KINDS[0][0])).toBe(
       "Agent runtime · could not start your agent (502) — a previous agent for this chat is still registered");
   });
