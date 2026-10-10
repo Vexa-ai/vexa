@@ -51,6 +51,7 @@ a.vx-trunc:hover { text-decoration: underline; }
 .vx-kv-list-item { min-width: 0; max-width: 100%; display: inline-flex; }
 .vx-kv-list-item:not(:last-child)::after { content: ","; }
 .vx-kv-more {
+  min-height: 24px;
   margin-top: 6px;
   background: none;
   border: none;

@@ -107,20 +107,26 @@ async function main() {
   const browser = await chromium.launch();
   const results = [];
   let failed = false;
+  // A FRESH LOAD PER WIDTH. Resizing one page is the realistic path, but a headless browser on a
+  // loaded host may render no frames at all (requestAnimationFrame never fires — seen on the bbb
+  // runner), and then neither resize events nor ResizeObserver are delivered: the page keeps the
+  // layout of its first width. Loading at each width measures what that width renders; resizing a
+  // live page is covered by the unit sweep and by checking app.dev in a real browser.
   for (const theme of ["dark", "light"]) {
     const ctx = await browser.newContext({ viewport: { width: widths[0], height: 900 }, colorScheme: theme });
-    const page = await ctx.newPage();
-    await page.addInitScript((t) => { try { localStorage.setItem("vexa.terminal.theme", t); } catch { /* */ } }, theme);
-    await page.goto(url, { waitUntil: "networkidle" });
+    await ctx.addInitScript((t) => { try { localStorage.setItem("vexa.terminal.theme", t); } catch { /* */ } }, theme);
     for (const w of widths) {
+      const page = await ctx.newPage();
       await page.setViewportSize({ width: w, height: 900 });
-      await page.waitForTimeout(350);
+      await page.goto(url, { waitUntil: "networkidle" });
+      await page.waitForTimeout(400);
       const r = await page.evaluate(MEASURE);
       r.theme = theme;
       results.push(r);
       const bad = !r.L1.ok || !r.L3.ok || !r.tabs.ok;
       failed ||= bad;
-      console.log(`${bad ? "✗" : "✓"} ${theme.padEnd(5)} ${String(w).padStart(4)}  mode=${r.shellMode ?? r.mode}  chat=${r.chat}  textarea=${r.textarea}  toolbarRows=${r.L3.toolbarRows}  L1=${r.L1.ok ? "ok" : r.L1.sideways.join("; ") || "doc wider than viewport"}  L2 small=${r.L2.small}  tabs=${r.tabs.ok ? "ok" : "hidden without control"}`);
+      console.log(`${bad ? "✗" : "✓"} ${theme.padEnd(5)} ${String(w).padStart(4)}  mode=${r.shellMode ?? r.mode}  cols=${r.cols}  chat=${r.chat}  textarea=${r.textarea}  toolbarRows=${r.L3.toolbarRows}  L1=${r.L1.ok ? "ok" : JSON.stringify(r.L1)}  L2 small=${r.L2.small}  tabs=${r.tabs.ok ? "ok" : "hidden without control"}`);
+      await page.close();
     }
     await ctx.close();
   }

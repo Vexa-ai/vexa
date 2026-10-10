@@ -10,8 +10,11 @@ import { TokensSection } from "./sections/Tokens";
 import { FixtureShell, ShellSection } from "./sections/Shell";
 
 export function Catalogue() {
-  const [view, setView] = useState<string | null>(null);
+  // CLIENT-ONLY: the catalogue renders relative dates and measures the window, neither of which
+  // the server can know, so it paints after mount rather than hydrating a guess.
+  const [view, setView] = useState<string | null | undefined>(undefined);
   useEffect(() => { setView(new URLSearchParams(window.location.search).get("view")); }, []);
+  if (view === undefined) return null;
   if (view === "shell") return <div className="vx-cat-fill"><FixtureShell fill /></div>;
   const sections = [
     { id: "tokens", title: "Tokens" },

@@ -94,13 +94,13 @@ export function useShellLayout(rootRef: RefObject<HTMLElement | null>, opts: { l
     if (!el) return;
     const measure = () => { const w = el.getBoundingClientRect().width; if (w > 0) setVw(Math.round(w)); };
     measure();
-    if (typeof ResizeObserver === "undefined") {
-      window.addEventListener("resize", measure);
-      return () => window.removeEventListener("resize", measure);
-    }
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
+    // Both: the observer catches the shell's own box changing (a parent resizing it), and the
+    // window event is the dependable signal for the viewport itself — a headless browser driven by
+    // the layout sweep resized the window without the observer firing.
+    window.addEventListener("resize", measure);
+    const ro = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    ro?.observe(el);
+    return () => { window.removeEventListener("resize", measure); ro?.disconnect(); };
   }, [rootRef]);
 
   const stored = useMemo<StoredWidths>(() => {
