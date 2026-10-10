@@ -23,8 +23,10 @@ deploys the same control plane as the Compose stack, with the runtime pointed at
 | RBAC for the k8s spawn backend | Role/RoleBinding scoped to Pod create/watch/delete |
 | NetworkPolicy for agent-api, meeting-api, the runtime and spawned Pods | on by default (`networkPolicy.enabled`): only the gateway, the MCP service, the runtime, flows, the terminal and (for meeting-api) agent-api and meeting bots reach agent-api and meeting-api; only agent-api and meeting-api reach the runtime. Spawned bots and workers take no inbound connection and reach only DNS, addresses outside `networkPolicy.workloads.privateCidrs`, and their own dependencies — workers the gateway, redis and flows-api, bots meeting-api and redis. **An STT service, LLM endpoint, S3 or proxy your bots or workers reach on a private address must be added** with `networkPolicy.workloads.bot.extraEgress` / `.worker.extraEgress`. Spawned Pods mount no ServiceAccount token. Needs a CNI that enforces NetworkPolicy |
 
-The chart sets no pod security context by default and the service images run as root; set
-`global.podSecurityContext` / `global.securityContext` to run as a non-root UID.
+The gateway, admin-api, meeting-api (and the migrations Job), MCP, terminal and flows images run as
+uid 10001, and their pods set `runAsNonRoot` with that uid and `fsGroup`. The runtime and agent-api
+run as root (the runtime starts workloads; agent-api moves workspace trees other uids write);
+`global.podSecurityContext` / `global.securityContext` apply on top.
 Containers have all capabilities dropped, with PodDisruptionBudgets on the control plane and
 rolling updates that never take the last replica down.
 

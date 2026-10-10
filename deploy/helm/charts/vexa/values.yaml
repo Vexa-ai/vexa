@@ -35,8 +35,16 @@ global:
   #       whenUnsatisfiable: ScheduleAnyway
   topologySpreadConstraints: []
   podSecurityContext: {}
-  # Hardened defaults: block privilege escalation, drop all caps. Images run non-root via their
-  # Dockerfile USER. Override per-component only if a workload genuinely needs a cap back.
+  # Hardened defaults: block privilege escalation, drop all caps. Override per-component only if a
+  # workload genuinely needs a cap back.
+  #
+  # Who runs as root: gateway, admin-api, meeting-api (and the migrations Job), mcp, terminal and
+  # flows run as uid 10001 — their Dockerfile USER — and their pods also set runAsNonRoot with that
+  # uid (`vexa.nonRootPodSecurityContext`). The credential broker runs as 10001 and the dashboard as
+  # its own user. The runtime and agent-api run as root: the runtime holds the container engine and,
+  # in the process backend, starts each workload as a distinct uid; agent-api moves workspace trees
+  # that root-run workers and per-subject uids write. Agent workers start as root and run every tool
+  # as the tools uid. scripts/image-user.test.mjs holds each Dockerfile to this.
   #
   # `deliver` is the OpenShift switch, and it gates BOTH securityContext blocks (pod-level and
   # container-level) on every workload this chart renders. It exists because the two platforms

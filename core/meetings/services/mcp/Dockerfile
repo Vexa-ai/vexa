@@ -27,6 +27,12 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # 3) The shipped source (src/ is on PYTHONPATH; the package is not pip-installed).
 COPY src ./src
 
+# An unprivileged user runs the service: it writes nothing outside /tmp, and reads its mounted keys
+# through the group the deploy surfaces give it (compose's key one-shot, the chart's fsGroup).
+RUN groupadd --system --gid 10001 vexa \
+ && useradd --system --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin vexa
+USER 10001:10001
+
 EXPOSE 8010
 # python -m vexa_mcp → uvicorn over create_app() (GATEWAY_URL / HOST / PORT from env).
 CMD ["python", "-m", "vexa_mcp"]

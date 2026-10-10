@@ -433,6 +433,20 @@ securityContext:
 {{- end -}}
 {{- end -}}
 
+{{/*
+The pod securityContext for a workload whose image runs as the unprivileged uid 10001 (its
+Dockerfile USER: gateway, admin-api, meeting-api, mcp, terminal, flows): the global pod context plus
+runAsNonRoot, that uid and gid, and fsGroup 10001 so a Secret it mounts group-readable (the
+gateway's signing key, 0440) is readable by it. The global values win where both are set (an
+OpenShift range, say). Same `deliver` gate as vexa.podSecurityContext.
+*/}}
+{{- define "vexa.nonRootPodSecurityContext" -}}
+{{- if eq (include "vexa.securityContextDeliver" .) "true" -}}
+securityContext:
+  {{- toYaml (merge (deepCopy (.Values.global.podSecurityContext | default dict)) (dict "runAsNonRoot" true "runAsUser" 10001 "runAsGroup" 10001 "fsGroup" 10001)) | nindent 2 }}
+{{- end -}}
+{{- end -}}
+
 {{- define "vexa.containerSecurityContext" -}}
 {{- if eq (include "vexa.securityContextDeliver" .) "true" -}}
 {{- $sc := omit (.Values.global.securityContext | default dict) "deliver" -}}

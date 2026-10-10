@@ -49,6 +49,7 @@ spec:
     metadata:
       labels: {app.kubernetes.io/component: flows-worker}
     spec:
+      {{- include "vexa.nonRootPodSecurityContext" . | nindent 6 }}
       {{- /* the ensure-db bootstrap only has work to do when the flows tables live in a database
       OTHER than the application's own — when flows.databaseName == database.name they already
       live in a database that is guaranteed to exist (F-D5 follow-up: compose already runs this
@@ -224,6 +225,7 @@ spec:
     metadata:
       labels: {app.kubernetes.io/component: flows-mailbox}
     spec:
+      {{- include "vexa.nonRootPodSecurityContext" . | nindent 6 }}
       {{- /* F192 — the SAME ensure-db initContainer flows-worker carries above: every Deployment
       that opens VEXA_FLOWS_DB_URL must be able to create the database it opens, not rely on
       flows-worker's pod happening to have won the startup race first (k8s makes no promise
@@ -382,6 +384,7 @@ spec:
     metadata:
       labels: {app.kubernetes.io/component: flows-api}
     spec:
+      {{- include "vexa.nonRootPodSecurityContext" . | nindent 6 }}
       {{- /* F192 — see the identical block on flows-worker above (reconciled the same way as
       flows-mailbox's — merge of #1505/F192 with #1509/F-D5): every Deployment that opens
       VEXA_FLOWS_DB_URL must be able to create the database it opens itself, not rely on

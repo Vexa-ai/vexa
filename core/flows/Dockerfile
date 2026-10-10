@@ -28,4 +28,10 @@ ENV PYTHONPATH=/app/src \
 # default: the worker; override command for the other two processes:
 #   python -m flows_integrations.mailbox   ·   python -m flows_integrations.flows_api
 WORKDIR /app/src
+# An unprivileged user runs the service: it writes nothing outside /tmp, and reads its mounted keys
+# through the group the deploy surfaces give it (compose's key one-shot, the chart's fsGroup).
+RUN groupadd --system --gid 10001 vexa \
+ && useradd --system --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin vexa
+USER 10001:10001
+
 CMD ["python", "-m", "flows_worker"]

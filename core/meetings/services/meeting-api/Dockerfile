@@ -50,6 +50,12 @@ COPY core/runtime/contracts/schedule.v1/schedule.schema.json        ./runtime/co
 # edge rows that reach it, from the same walk-up.
 COPY core/meetings/routes.v1.json                                   ./meetings/routes.v1.json
 
+# An unprivileged user runs the service: it writes nothing outside /tmp, and reads its mounted keys
+# through the group the deploy surfaces give it (compose's key one-shot, the chart's fsGroup).
+RUN groupadd --system --gid 10001 vexa \
+ && useradd --system --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin vexa
+USER 10001:10001
+
 EXPOSE 8080
 # python -m meeting_api → create_app(real adapters) + the lifespan-driven background loops.
 CMD ["python", "-m", "meeting_api"]

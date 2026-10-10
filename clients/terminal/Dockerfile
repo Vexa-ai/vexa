@@ -124,6 +124,12 @@ COPY server.mjs next.config.ts tsconfig.json ./
 # rather than the build context, where it is absent on a clean clone.
 COPY --from=build /app/next-env.d.ts ./
 COPY src ./src
+# An unprivileged user runs the service: it writes nothing outside /tmp, and reads its mounted keys
+# through the group the deploy surfaces give it (compose's key one-shot, the chart's fsGroup).
+RUN groupadd --system --gid 10001 vexa \
+ && useradd --system --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin vexa
+USER 10001:10001
+
 EXPOSE 3000
 # `npm start` === PORT=3000 NODE_ENV=production node server.mjs
 CMD ["node", "server.mjs"]

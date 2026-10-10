@@ -759,14 +759,16 @@ services:
   # broker mount read-only. No other service mounts either. Same image as the gateway: the
   # generator is the gateway's own vendored gateway-identity.v1 module. To rotate, remove
   # `identity-signing-key` and restart the stack (the four services then reload the new pair).
+  # The gateway runs as uid 10001 (its Dockerfile USER), so the signing key is handed to that uid —
+  # still 0600, still mounted by the gateway alone; re-applied on every start, so a key an older
+  # stack wrote as root is handed over too.
   identity-keys:
     build:
       context: ../..
       dockerfile: core/gateway/services/gateway/Dockerfile
     image: vexaai/v012-gateway:${IMAGE_TAG:-dev}
     user: "0:0"
-    command: ["python", "/app/src/gateway/identity_token.py", "keygen",
-              "/keys/signing/key.pem", "/keys/public/key.pem"]
+    command: ["sh", "-c", "python /app/src/gateway/identity_token.py keygen /keys/signing/key.pem /keys/public/key.pem && chown 10001:10001 /keys/signing/key.pem"]
     volumes:
       - identity-signing-key:/keys/signing
       - identity-public-key:/keys/public
