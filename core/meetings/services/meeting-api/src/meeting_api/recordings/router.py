@@ -115,6 +115,22 @@ def _upload_scope(authorization: Optional[str], session_uid: str,
         raise HTTPException(status_code=401, detail=f"Invalid recording upload token: {e}")
 
 
+def _attachment_name(rec: dict, mf: dict) -> str:
+    """The filename a ``?download=1`` read is saved under: ``meeting-<id>-<date>-<type>.<ext>``.
+
+    Built only from server-owned fields (ids, the recording's ``created_at`` date and the media
+    file's own ``format``), never from anything the caller sent, so the header cannot be steered.
+    The extension is the real container's; an unknown format falls back to ``bin`` rather than
+    lying about what the bytes are."""
+    fmt = str(mf.get("format") or "")
+    ext = fmt if fmt.isalnum() and len(fmt) <= 8 else "bin"
+    kind = "video" if mf.get("type") == "video" else "audio"
+    date = str(rec.get("created_at") or "")[:10]
+    date_part = f"-{date}" if len(date) == 10 and date[4] == "-" and date[7] == "-" and \
+        date.replace("-", "").isdigit() else ""
+    return f"meeting-{int(rec['meeting_id'])}{date_part}-{kind}.{ext}"
+
+
 def _resolve_user_id(x_user_id: Optional[str]) -> int:
     if not x_user_id:
         raise HTTPException(status_code=401, detail="Missing user identity")
@@ -399,6 +415,9 @@ def build_router(
         media_file_id: int,
         request: Request,
         type: str = "audio",
+        download: bool = Query(default=False, description=(
+            "Ask for the bytes as a file to save: adds `Content-Disposition: attachment`. Same "
+            "ownership check as playback; nothing else about the answer changes.")),
         x_user_id: Optional[str] = Header(default=None),
     ):
         # Stream the finalized master bytes from object storage (recordings P3). The player fetches
@@ -452,13 +471,20 @@ def build_router(
             full_body = await storage.get(storage_path)
             total = len(full_body)
 
+        # A save, not a play: the same owner-scoped bytes, marked as a file. Set only on request so
+        # the <audio> element's reads stay inline.
+        disposition = (
+            {"Content-Disposition": f'attachment; filename="{_attachment_name(rec, mf)}"'}
+            if download else {}
+        )
+
         rng = _parse_range(range_header, total)  # may raise 416
         if rng is None:
             data = full_body if full_body is not None else await storage.get(storage_path)
             return Response(
                 content=data,
                 media_type=content_type,
-                headers={"Accept-Ranges": "bytes", "Content-Length": str(len(data))},
+                headers={"Accept-Ranges": "bytes", "Content-Length": str(len(data)), **disposition},
             )
 
         start, end = rng
@@ -477,6 +503,7 @@ def build_router(
                 "Accept-Ranges": "bytes",
                 "Content-Range": f"bytes {start}-{end}/{total}",
                 "Content-Length": str(len(slice_bytes)),
+                **disposition,
             },
         )
 

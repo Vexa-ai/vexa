@@ -3,6 +3,7 @@ import type { CSSProperties } from "react";
 
 const PATHS: Record<string, string> = {
   trash: "M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7",
+  download: "M12 3v12M7 10l5 5 5-5M4 21h16",
   radio: "M16.2 7.8a6 6 0 0 1 0 8.4M19.1 4.9a10 10 0 0 1 0 14.2M7.8 16.2a6 6 0 0 1 0-8.4M4.9 19.1a10 10 0 0 1 0-14.2M12 10a2 2 0 1 0 0 4 2 2 0 0 0 0-4",
   msg: "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z",
   panel: "M3 3h18v18H3zM9 3v18",
