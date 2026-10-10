@@ -141,12 +141,24 @@ def apply_chunk_to_recording(
     return rec_payload, status_transitioned
 
 
+#: The media a bot uploads as recording chunks, and their formats: an audio stream (WAV, or Opus in
+#: WebM), the video capture (WebM, Matroska or MP4). Both are path segments of a chunk's object key, so
+#: only these values reach one; the upload route refuses anything else before it reads the body.
+RECORDING_MEDIA_TYPES = ("audio", "video")
+RECORDING_MEDIA_FORMATS = ("wav", "webm", "mkv", "mp4")
+
+
 def chunk_storage_key(
     *, user_id: int, recording_id: int, session_uid: str, media_type: str, media_format: str,
     chunk_seq: int,
 ) -> str:
     """The object key for one uploaded chunk (parent's scheme — ``media_type`` in the path keeps
-    audio/video from colliding at ``chunk_seq=0``)."""
+    audio/video from colliding at ``chunk_seq=0``). ``media_type`` and ``media_format`` MUST be in
+    ``RECORDING_MEDIA_TYPES`` / ``RECORDING_MEDIA_FORMATS``."""
+    if media_type not in RECORDING_MEDIA_TYPES:
+        raise ValueError(f"unknown recording media_type; known: {list(RECORDING_MEDIA_TYPES)}")
+    if media_format not in RECORDING_MEDIA_FORMATS:
+        raise ValueError(f"unknown recording media_format; known: {list(RECORDING_MEDIA_FORMATS)}")
     return (
         f"recordings/{user_id}/{recording_id}/{session_uid}/{media_type}/"
         f"{chunk_seq:06d}.{media_format}"

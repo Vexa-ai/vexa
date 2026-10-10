@@ -81,15 +81,12 @@ class RecordingRepo(Protocol):
         """The current ``meeting.data['recordings']`` list (under the same read the writer locks)."""
         ...
 
-    async def put_recordings(self, meeting_id: int, recordings: list[dict]) -> None:
-        """Persist the updated ``meeting.data['recordings']`` list (the row-locked write-back)."""
-        ...
-
     async def mutate_recordings(self, meeting_id: int, mutator):
         """ATOMIC read→modify→write of ``meeting.data['recordings']`` under a SINGLE row lock (G3).
-        ``mutator(recordings) -> (new_recordings, result)`` runs while the lock is held — the
-        separate ``get_recordings`` + ``put_recordings`` released the lock between read and write, so
-        a concurrent chunk-upload / finalize clobbered the other (lost update). Returns ``result``.
+        ``mutator(recordings) -> (new_recordings, result)`` runs while the lock is held — a separate
+        read and write-back (the port's old ``put_recordings``, now gone) released the lock between
+        them, so a concurrent chunk-upload / finalize clobbered the other (lost update). It is the
+        only write of the list. Returns ``result``.
 
         Raises ``MeetingErased`` — without calling ``mutator`` — when the locked row is gone or
         carries an ``ArtifactDeletion`` stamp."""

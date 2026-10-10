@@ -191,17 +191,6 @@ class SqlAlchemyRecordingRepo:
             data = m.data if isinstance(m.data, dict) else {}
             return list(data.get("recordings", []))
 
-    async def put_recordings(self, meeting_id, recordings):
-        from sqlalchemy.orm.attributes import flag_modified
-
-        async with self._session_factory() as db:
-            m = await self._meeting(db, meeting_id)
-            data = dict(m.data) if isinstance(m.data, dict) else {}
-            data["recordings"] = list(recordings)
-            m.data = data
-            flag_modified(m, "data")
-            await db.commit()
-
     async def mutate_recordings(self, meeting_id, mutator):
         """Atomic read→modify→write under ONE ``SELECT … FOR UPDATE`` row lock (G3). The lock spans the
         whole mutation (held from the read through commit), so concurrent chunk-upload / finalize calls

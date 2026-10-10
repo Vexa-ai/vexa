@@ -24,6 +24,7 @@ from ..meeting_token import InvalidMeetingToken, admit_session
 from ..regime import require_person
 from .ports import RecordingRepo, Storage
 from .deletion import MeetingNotTerminal, delete_owned_recording
+from .jsonb import RECORDING_MEDIA_FORMATS, RECORDING_MEDIA_TYPES
 from .service import (
     SIGNAL_MEDIA_TYPE,
     InvalidSignalTape,
@@ -244,6 +245,13 @@ def build_router(
             except SessionNotFound as e:
                 raise HTTPException(status_code=404, detail=str(e))
             return JSONResponse(content=receipt)
+        # Both become path segments of the chunk's object key: only the media a bot records reach it.
+        if media_type not in RECORDING_MEDIA_TYPES or media_format not in RECORDING_MEDIA_FORMATS:
+            raise HTTPException(
+                status_code=422,
+                detail=(f"media_type must be one of {list(RECORDING_MEDIA_TYPES)} (or {SIGNAL_MEDIA_TYPE!r} "
+                        f"for a signal tape) and media_format one of {list(RECORDING_MEDIA_FORMATS)}"),
+            )
         chunk_seq = chunk_seq if chunk_seq is not None else int(meta.get("chunk_seq", 0) or 0)
         is_final = is_final if is_final is not None else bool(meta.get("is_final", True))
         duration_seconds = duration_seconds if duration_seconds is not None else meta.get("duration_seconds")

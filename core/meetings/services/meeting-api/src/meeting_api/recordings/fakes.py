@@ -115,10 +115,6 @@ class InMemoryRecordingRepo:
     async def get_recordings(self, meeting_id: int) -> list[dict]:
         return list(self._meetings.get(meeting_id, {}).get("recordings", []))
 
-    async def put_recordings(self, meeting_id: int, recordings: list[dict]) -> None:
-        self._meetings.setdefault(meeting_id, {"user_id": None, "recordings": []})
-        self._meetings[meeting_id]["recordings"] = list(recordings)
-
     async def mutate_recordings(self, meeting_id: int, mutator):
         # Read the LIVE list, apply, write back — synchronously (no await), so it is atomic within the
         # event loop (mirrors the SQL adapter's row-locked read→modify→write; G3).
