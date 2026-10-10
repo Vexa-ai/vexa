@@ -644,8 +644,9 @@ terminal:
   # through, so set this to your ingress or balancer addresses there.
   trustedProxies: ""
   # The mail relay the emailed sign-in link goes through — the deployment's VEXA_MAIL_SMTP_* family.
-  # Empty host: no link is delivered. secure "1" = implicit TLS (:465; STARTTLS is not supported);
-  # user + secrets.mailSmtpPassword = AUTH LOGIN; tlsInsecure "1" skips the certificate check (dev only).
+  # Empty host: no link is delivered. STARTTLS is used whenever the relay offers it (:587); secure "1" =
+  # implicit TLS (:465); user + secrets.mailSmtpPassword = AUTH LOGIN, sent only over TLS (a relay that
+  # offers neither is refused); tlsInsecure "1" skips the certificate check (dev only).
   mail:
     smtpHost: ""
     smtpPort: ""          # empty = 25

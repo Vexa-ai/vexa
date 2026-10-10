@@ -14,10 +14,28 @@ from flows_steps import emailx
 
 
 class _Conn:
+    #: whether a plain relay advertises STARTTLS after EHLO; the fixture sets it per case
+    offers_starttls = False
+
     def __init__(self, *a, **kw):
         self.args, self.kw, self.logins, self.closed = a, kw, [], False
+        self.encrypted = "context" in kw          # SMTP_SSL: encrypted from the first byte
+        self.starttls_context = None
+        self.events: list[str] = []
+
+    def ehlo(self):
+        self.events.append("ehlo")
+
+    def has_extn(self, name):
+        return name.lower() == "starttls" and self.offers_starttls and not self.encrypted
+
+    def starttls(self, context=None):
+        self.events.append("starttls")
+        self.starttls_context = context
+        self.encrypted = True
 
     def login(self, user, password):
+        self.events.append("login-encrypted" if self.encrypted else "login-PLAINTEXT")
         if password == "wrong":
             raise RuntimeError("535 auth failed")
         self.logins.append((user, password))
@@ -38,6 +56,7 @@ def relay(monkeypatch):
         made["tls"] = _Conn(*a, **kw)
         return made["tls"]
 
+    monkeypatch.setattr(_Conn, "offers_starttls", False)
     monkeypatch.setattr(emailx.smtplib, "SMTP", plain)
     monkeypatch.setattr(emailx.smtplib, "SMTP_SSL", tls)
     for k in ("SECURE", "TLS_INSECURE", "USER", "PASSWORD"):
@@ -71,6 +90,7 @@ def test_tls_insecure_is_only_the_certificate_check(relay, monkeypatch):
 
 
 def test_a_refused_login_closes_the_connection_and_says_so(relay, monkeypatch):
+    monkeypatch.setattr(_Conn, "offers_starttls", True)
     monkeypatch.setenv("VEXA_MAIL_SMTP_USER", "relay-user")
     monkeypatch.setenv("VEXA_MAIL_SMTP_PASSWORD", "wrong")
     with pytest.raises(RuntimeError, match="535"):
@@ -82,3 +102,37 @@ def test_unset_host_is_still_gmail(relay, monkeypatch):
     monkeypatch.delenv("VEXA_MAIL_SMTP_HOST")
     conn, gmail_login = emailx._smtp()
     assert conn is relay["tls"] and conn.args == ("smtp.gmail.com", 465) and gmail_login
+
+
+# ── credentials only over an encrypted connection (A-12 / F-1) ─────────────────────────────────
+
+def test_credentials_are_refused_on_a_relay_that_offers_no_encryption(relay, monkeypatch):
+    monkeypatch.setenv("VEXA_MAIL_SMTP_USER", "relay-user")
+    monkeypatch.setenv("VEXA_MAIL_SMTP_PASSWORD", "relay-pass")
+    with pytest.raises(RuntimeError, match="unencrypted"):
+        emailx._smtp()
+    conn = relay["plain"]
+    assert conn.logins == [] and "login-PLAINTEXT" not in conn.events and conn.closed
+
+
+def test_a_relay_that_offers_starttls_is_upgraded_with_a_verified_certificate_before_login(relay, monkeypatch):
+    monkeypatch.setattr(_Conn, "offers_starttls", True)
+    monkeypatch.setenv("VEXA_MAIL_SMTP_USER", "relay-user")
+    monkeypatch.setenv("VEXA_MAIL_SMTP_PASSWORD", "relay-pass")
+    conn, _ = emailx._smtp()
+    assert conn.events == ["ehlo", "starttls", "ehlo", "login-encrypted"]
+    assert conn.starttls_context.verify_mode == ssl.CERT_REQUIRED
+    assert conn.logins == [("relay-user", "relay-pass")]
+
+
+def test_without_credentials_a_relay_that_offers_starttls_is_still_upgraded(relay, monkeypatch):
+    monkeypatch.setattr(_Conn, "offers_starttls", True)
+    conn, _ = emailx._smtp()
+    assert conn.events == ["ehlo", "starttls", "ehlo"] and conn.encrypted
+
+
+def test_tls_insecure_reaches_starttls_too_and_only_the_check(relay, monkeypatch):
+    monkeypatch.setattr(_Conn, "offers_starttls", True)
+    monkeypatch.setenv("VEXA_MAIL_SMTP_TLS_INSECURE", "1")
+    conn, _ = emailx._smtp()
+    assert conn.encrypted and conn.starttls_context.verify_mode == ssl.CERT_NONE
