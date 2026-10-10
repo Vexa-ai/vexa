@@ -6,8 +6,10 @@
  *  `MAGIC_LINK_RATE_WINDOW_SECONDS` (default 900). The client address is the one `server.mjs` stamps
  *  (`./clientAddress.mjs`).
  *
- *  ⚠ PROCESS-LOCAL, like the jti ledger in `magicToken.ts`: each terminal replica keeps its own
- *  counts. The map is swept as it is used and capped, so it cannot grow without bound.
+ *  ⚠ PROCESS-LOCAL: each terminal replica keeps its own counts, so with N replicas a client gets up
+ *  to N times each limit. (The record of which links were USED is not local: admin-api keeps it in
+ *  the service Redis — `magicToken.ts`, `redeemMagicToken`.) The map is swept as it is used and
+ *  capped, so it cannot grow without bound.
  */
 
 const MAX_KEYS = 50_000;

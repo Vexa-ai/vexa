@@ -630,7 +630,7 @@
       "key": "VEXA_AGENT_MAX_OUTPUT_TOKENS",
       "class": "defaulted",
       "default": "(unset \u2014 each harness's own default)",
-      "description": "every harness: the output-token cap a model request asks for. claude-code receives it as CLAUDE_CODE_MAX_OUTPUT_TOKENS and openai-agent sends it as max_tokens; empty keeps each harness's own default (the claude CLI asks for 32000, which a provider that prices the allowance up front refuses on a small balance with a 402)",
+      "description": "every harness: the output-token cap a model request asks for. claude-code receives it as CLAUDE_CODE_MAX_OUTPUT_TOKENS and openai-agent sends it as max_tokens; codex does not read it: Codex 0.146.0 has no setting for the model's output cap (its own max_output_tokens fields are per-tool exec budgets), so a Codex turn asks for Codex's default; empty keeps each harness's own default (the claude CLI asks for 32000, which a provider that prices the allowance up front refuses on a small balance with a 402)",
       "targets": [
         "compose"
       ]
@@ -944,7 +944,7 @@
     "connections": {
       "description": "Connections: the agent can request, list and use a person's connected accounts and services through the credential broker, without ever receiving a credential",
       "mode": "all",
-      "when_unconfigured": "every /api/connections* and /api/onboarding/research route answers 503 'Connections are not configured on this deployment'; the agent's connection tools report the same sentence"
+      "when_unconfigured": "every /api/connections* route answers 503 'Connections are not configured on this deployment', and so does /api/onboarding/research for `start` and `next`, which reach the broker; its `status` and `ack` answer from the research already stored. The agent's connection tools report the same sentence"
     },
     "git_credential_broker": {
       "description": "Git tokens and deploy keys are kept in the credential broker instead of this service's own encrypted store",

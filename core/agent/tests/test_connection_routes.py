@@ -200,3 +200,47 @@ def test_an_outage_choosing_the_mailbox_is_not_reported_as_a_missing_one(monkeyp
     r = TestClient(_app()).post('/api/connections/gmail/draft', headers=HUMAN,
                              json={'request_id': 'req-00000001', 'recipient': 'a@b.example', 'subject': 's', 'body': 'b'})
     assert r.status_code == 503 and 'outage' in r.json()['detail']
+
+
+def test_without_a_broker_research_status_still_answers_and_the_contract_says_so(monkeypatch, tmp_path):
+    """`control_plane/config.v1.json` said every onboarding research call answers 503 with no broker;
+    `status` reads the research already stored and answers, and only the calls that reach the broker
+    (`start`, `next`) answer 503."""
+    import json
+    from pathlib import Path
+
+    from control_plane.workspace_reader import WorkspaceReader
+    for k in ('VEXA_CONNECTIONS_URL', 'VEXA_CREDENTIAL_BROKER_URL', 'VEXA_CONNECTIONS_AGENT_KEY_FILE'):
+        monkeypatch.delenv(k, raising=False)
+    (tmp_path / 'u1').mkdir()
+    app = FastAPI(dependencies=[route_policy.PERSON_GATE])
+    app.include_router(connections.build(subject_of=lambda r: r.headers['x-user-id'],
+                                         wsr=WorkspaceReader(str(tmp_path))))
+    c = TestClient(app)
+    assert c.post('/api/onboarding/research', json={'action': 'status'}, headers=HUMAN).status_code == 200
+    r = c.post('/api/onboarding/research', json={'action': 'start', 'connection_ids': ['a' * 32]},
+               headers=HUMAN)
+    assert r.status_code == 503
+    decl = json.loads((Path(connections.__file__).resolve().parents[1] / 'config.v1.json').read_text())
+    said = decl['capabilities']['connections']['when_unconfigured']
+    assert '`status`' in said and 'every /api/connections* and /api/onboarding/research' not in said
+
+
+def test_the_connection_providers_are_exactly_the_brokers_catalog(client):
+    """agent-api accepted `github` and answered it with a stand-in `connection_id: git`, but the
+    broker's catalog has no such provider: a request agent-api accepts must be one the broker can set
+    up, and anything else is refused by name."""
+    import ast
+    import json
+    import typing
+    from pathlib import Path
+
+    src = (Path(connections.__file__).resolve().parents[2] / 'services' / 'credential-broker' / 'src'
+           / 'credential_broker' / 'providers.py').read_text()
+    catalog = next(n for n in ast.parse(src).body
+                   if isinstance(n, ast.Assign) and getattr(n.targets[0], 'id', '') == 'CATALOG')
+    broker = {k.value for k in catalog.value.keys}
+    accepted = set(typing.get_args(connections.ConnectionRequest.model_fields['provider'].annotation))
+    assert accepted == broker
+    r = client.post('/api/connections/request', json={'provider': 'github'}, headers=HUMAN)
+    assert r.status_code == 422 and 'provider' in json.dumps(r.json())
