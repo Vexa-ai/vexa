@@ -6,8 +6,8 @@
         "properties": {
           "session": {
             "description": "the current chat session, as the turn context states it",
-            "maxLength": 300,
             "minLength": 1,
+            "pattern": "^([A-Za-z0-9][A-Za-z0-9._-]{0,127})?$",
             "title": "Session",
             "type": "string"
           },
