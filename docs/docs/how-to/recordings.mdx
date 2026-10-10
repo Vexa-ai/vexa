@@ -48,6 +48,18 @@ curl -H "X-API-Key: $API_KEY" \
   "$API_BASE/recordings/42/media/<media_file_id>/raw" -o meeting-42.audio
 ```
 
+### Save it as a file
+
+Add `download=1` to get the same bytes marked as a file to save
+(`Content-Disposition: attachment`, named `meeting-<meeting_id>-<date>-audio.<ext>` with the real
+container's extension). Ownership is checked exactly as for playback. In the terminal, this is the
+download icon at the end of the meeting page's player row (tooltip **Download audio**).
+
+```bash
+curl -OJ -H "X-API-Key: $API_KEY" \
+  "$API_BASE/recordings/42/media/<media_file_id>/raw?type=audio&download=1"
+```
+
 ### Range requests (playback and seek)
 
 The `/raw` endpoint honours HTTP `Range` — a partial request returns `206 Partial Content` carrying

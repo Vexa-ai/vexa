@@ -11,6 +11,7 @@
  *  actionable badges under the relevant block. RAW mode passes neither, so it stays plain text. */
 
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { splitTextIntoSpans, type SpanEntity } from "./inlineSpans";
 import { useMeetingPlayback, seekMeeting, segmentSeconds } from "../minutes/meetingPlayback";
 import { playbackTime } from "../minutes/RecordingPlayer";
@@ -164,6 +165,15 @@ export function LiveTranscriptEngine({
   renderText?: (text: string) => React.ReactNode;
 }) {
   const playback = useMeetingPlayback(meetingId);
+  // "Play from m:ss" is drawn here, not as a native `title`: a native tooltip floats wherever the
+  // browser puts it (it landed on the page header's buttons). This one sits just above the line of
+  // text under the pointer, horizontally at the pointer.
+  const [tip, setTip] = useState<{ text: string; x: number; y: number } | null>(null);
+  const placeTip = (e: React.MouseEvent<HTMLElement>, text: string) => {
+    const rects = Array.from(e.currentTarget.getClientRects());
+    const line = rects.find(r => e.clientY >= r.top && e.clientY <= r.bottom) ?? rects[0];
+    setTip({ text, x: e.clientX, y: line ? line.top : e.clientY });
+  };
   const timed = segments.filter(s => s.completed !== false).map(s => ({ segment: s, timing: segmentSeconds(s, playback.originMs) }));
   // Explicit ends keep silence unhighlighted; start-only transcripts advance at the next passage.
   const active = playback.time === null ? undefined : [...timed].reverse().find(item => {
@@ -179,7 +189,8 @@ export function LiveTranscriptEngine({
       role={canSeek ? "button" : undefined} tabIndex={canSeek ? 0 : undefined}
       aria-label={canSeek ? `Play from ${playbackTime(timing!.start)}: ${s.text}` : undefined}
       aria-current={current ? "true" : undefined}
-      title={canSeek ? `Play from ${playbackTime(timing!.start)}` : undefined}
+      onMouseMove={canSeek ? e => placeTip(e, `Play from ${playbackTime(timing!.start)}`) : undefined}
+      onMouseLeave={canSeek ? () => setTip(null) : undefined}
       style={{ cursor: canSeek ? "pointer" : undefined, borderRadius: 3, background: current ? "color-mix(in srgb, var(--blue) 20%, transparent)" : undefined }}
       onClick={e => {
         if (!canSeek || window.getSelection()?.toString()) return;
@@ -294,6 +305,12 @@ export function LiveTranscriptEngine({
           {signalBadges(true)}
         </div>
       )}
+      {tip && typeof document !== "undefined" && createPortal(
+        <div role="tooltip" data-transcript-tip style={{ position: "fixed", left: tip.x, top: tip.y - 4, transform: "translate(-50%, -100%)",
+          zIndex: 70, pointerEvents: "none", whiteSpace: "nowrap", fontSize: 12, padding: "3px 8px", borderRadius: 6,
+          background: "var(--panel2)", color: "var(--t1)", border: "1px solid var(--line2)", boxShadow: "0 4px 14px rgba(0,0,0,.25)" }}>
+          {tip.text}
+        </div>, document.body)}
     </div>
   );
 }
