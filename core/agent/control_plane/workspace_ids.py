@@ -32,7 +32,7 @@ import time
 from pathlib import Path
 from typing import Callable, Iterable, Optional
 
-from control_plane.workspace_attach import _slot
+from control_plane.workspace_attach import STORE_DIRNAME, _slot
 from shared.gitexec import run_git
 from workspaces.shared import workspace_paths as wpaths
 from workspaces.shared.workspace_id import (KINDS, TOUCHES_FILE, VEXA_DIR, WORKSPACE_JSON,
@@ -295,9 +295,9 @@ def _commit_identity(ws_dir: Path) -> None:
 def workspace_dir(root, slug) -> Optional[Path]:
     """``<root>/<slug>`` for a slug that can name a top-level workspace, else None.
 
-    The org tier (``_global``), or ONE name under the workspace naming rule
-    (``workspace_attach._slot``: alphanumeric first, no separator, never a dotname) that is not a
-    reserved system name. So the platform's own directories at the store root (``.attached``,
+    The org tier (``_global``), or ONE name under the workspace name rule as a slot
+    (``workspace_attach._slot``: ``workspace_paths.is_workspace_name`` with ``tier=False`` — no
+    separator, never a dotname, never a tier) that is not a reserved system name. So the platform's own directories at the store root (``.attached``,
     ``.system``, ``.attached-shared``, a staging directory) and anything a volume brings
     (``lost+found``) are never a workspace, whoever names them."""
     s = str(slug or "").strip()
@@ -443,7 +443,7 @@ def migrate(root, registry: WorkspaceRegistry, *, created: Optional[str] = None)
         if not had:
             out["minted"].append(rec)
     # The attach store: `<root>/.attached/<subject>/<slug>` — one level of subject, one of slug.
-    store = rootp / ".attached"
+    store = rootp / STORE_DIRNAME
     if store.is_dir():
         for subject_dir in sorted(p for p in store.iterdir() if p.is_dir()):
             for slot in sorted(p for p in subject_dir.iterdir() if p.is_dir() and not p.name.startswith(".")):
@@ -469,10 +469,10 @@ def private_owner(record: Optional[dict], root=None) -> Optional[str]:
     ``<root>/<subject>``, and a tree parked in their store is not that."""
     owner = str((record or {}).get("owner") or "").strip()
     d = (record or {}).get("dir")
-    if not owner or not d or root is None or "/" in owner or owner.startswith("."):
+    if not d or root is None or not wpaths.is_workspace_name(owner):
         return None
     try:
-        store = (Path(root) / ".attached" / owner).resolve()
+        store = (Path(root) / STORE_DIRNAME / owner).resolve()
         return owner if store in Path(str(d)).resolve().parents else None
     except OSError:
         return None

@@ -44,6 +44,8 @@ from . import claim_code
 from . import signin_allow
 from . import signin_wire
 from . import platform_settings as platform_settings_mod
+from . import provider_subjects as provider_subjects_mod
+from . import signin_links as signin_links_mod
 from . import validate as validate_mod
 from .platform_settings import (MODELS_FIELDS, TRANSCRIPTION_FIELDS, apply_config_update,
                                 read_platform_setting, validate_config_fields)
@@ -298,6 +300,13 @@ class AdminClaimResponse(BaseModel):
     claimed: bool
     admin_exists: bool
     why: signin_wire.ClaimReason
+
+
+class ProviderSubjectBindRequest(BaseModel):
+    """signin.v1 ``ProviderSubjectBindRequest``."""
+    model_config = {"extra": "forbid"}
+
+    subject: str = Field(pattern=provider_subjects_mod.SUBJECT_RE.pattern)
 
 
 class ClaimCodeCheckRequest(BaseModel):
@@ -1032,6 +1041,7 @@ def create_app() -> FastAPI:
         }
 
     app.include_router(validate_mod.router)  # POST /internal/validate — the gateway's authz oracle
+    app.include_router(signin_links_mod.router)  # POST /internal/signin-links/redeem — a link signs in once
 
     async def _load_user(
         user_id: str,
@@ -1382,6 +1392,32 @@ def create_app() -> FastAPI:
         await db.refresh(user)
         return person_settings_mod.read_person_facts(
             user.data if isinstance(user.data, dict) else {})
+
+    @app.put("/internal/users/{user_id}/provider-subject", include_in_schema=False)
+    async def put_provider_subject(user_id: str, payload: ProviderSubjectBindRequest, request: Request,
+                                   db: AsyncSession = Depends(get_db)):
+        """BIND this account to the OAuth identity signing in to it (signin.v1
+        ``ProviderSubjectBindRequest``; rule in ``app/provider_subjects.py``). The terminal asks on
+        every Google or Microsoft sign-in, after the account is found or created and before a token
+        is minted: the first sign-in through a provider records its stable subject, a later one
+        with the same subject passes, and one with another subject is refused with 409 and changes
+        nothing. Internal tier without the dev-mode escape: it writes one named person's account."""
+        check_internal_no_dev_bypass(request)
+        from sqlalchemy.orm import attributes
+
+        user = await _load_user(user_id, db, for_update=True)
+        data = user.data if isinstance(user.data, dict) else {}
+        try:
+            new_data, bound = provider_subjects_mod.bind(data, payload.subject)
+        except provider_subjects_mod.Mismatch as m:
+            raise HTTPException(status.HTTP_409_CONFLICT,
+                                detail=f"this account is bound to another {m.args[0]} identity")
+        if bound == "first":
+            user.data = new_data
+            attributes.flag_modified(user, "data")
+            db.add(user)
+            await db.commit()
+        return {"bound": bound}
 
     @app.post("/admin/users/{user_id}/settings/import", include_in_schema=False,
               dependencies=[Depends(verify_admin_token)])

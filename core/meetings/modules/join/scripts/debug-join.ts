@@ -71,6 +71,9 @@ if (!isMeetUrl && !isTeamsUrl && !isZoomUrl) {
       // reproduces the vexa-bot image's browser byte-for-byte — no drift.
       args: [
         ...getJoinBrowserArgs(),
+        // Chromium will not sandbox a browser running as root (this harness's container); the bot
+        // makes the same call in @vexa/remote-browser's launch.
+        ...(process.getuid?.() === 0 ? ["--no-sandbox", "--disable-setuid-sandbox"] : []),
         "--remote-debugging-port=9222", // CDP for the agent to attach
       ],
     });

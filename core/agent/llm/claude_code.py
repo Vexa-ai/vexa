@@ -18,6 +18,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
+import stat
 import subprocess
 from pathlib import Path
 from typing import Iterable, Iterator, Optional
@@ -25,7 +27,9 @@ from typing import Iterable, Iterator, Optional
 from llm.errors import looks_like_auth_failure, preflight_provider_guard, provider_host
 from llm import fault_wire
 from llm import faults as provider_faults
-from llm.ports import HarnessExec, close_event_stream, harness_identity_kwargs, harness_subprocess_env
+from llm import workspace_paths as wpaths
+from llm.ports import (HarnessExec, close_event_stream, harness_identity_kwargs, harness_subprocess_env,
+                       max_output_tokens)
 from llm.claude_skills import _link_skills_into_home
 from llm.tool_events import (_BOT_TOOLS, _FOCUS_TOOLS, _OPEN_TOOLS, _TERMS_TOOLS, _WRITER_TOOLS,
                              _bot_artifact, _open_event, _published_terms, _short,
@@ -202,7 +206,8 @@ def parse_stream_json(lines: Iterable[str]) -> Iterator[dict]:
                 }
                 if done["ok"] and api_error and str(reply or "").strip() in ("", api_error.strip()):
                     done["ok"] = False      # a "success" whose only answer was the provider's refusal
-                fault = (_provider_fault(str(reply or "") or api_error, sdk_error, model_id)
+                fault = (_provider_fault(str(reply or "") or api_error, sdk_error, model_id,
+                                         status=obj.get("api_error_status"))
                          if not done["ok"] else None)
                 if not done["ok"] and looks_like_auth_failure(reply):
                     # The CLI's own auth text ("Not logged in · Please run /login") is an internal of
@@ -244,19 +249,35 @@ def parse_stream_json(lines: Iterable[str]) -> Iterator[dict]:
         close_event_stream(lines)
 
 
+#: The CLI's own wording for a provider's refusal: ``API Error: 402 <the provider's message>``.
+_API_ERROR_TEXT = re.compile(r"^\s*api error:\s*\d{3}\b", re.IGNORECASE)
+
+
 def _is_api_error(obj: dict, text: str) -> bool:
     """Is this assistant text block the CLI relaying a provider failure, not the model speaking?
-    The CLI marks its own synthetic messages: an SDK ``error`` label, or the ``<synthetic>`` model."""
-    if obj.get("error"):
+
+    Measured on CLI 2.1.293 against an endpoint answering OpenRouter's 402: the CLI emits ONE
+    assistant message with ``model: "<synthetic>"``, ``error: "unknown"`` and
+    ``is_api_error_message: true`` whose text is ``API Error: 402 <message>``, then a ``result``
+    with ``is_error: true`` and ``api_error_status: 402``. Any of its marks is enough; the bare
+    ``API Error: <status>`` prefix is read too, so a build that drops the marks still cannot put
+    the provider's text in the chat as if the agent had said it."""
+    if obj.get("error") or obj.get("is_api_error_message") is True:
+        return True
+    if _API_ERROR_TEXT.match(str(text)):
         return True
     model = str((obj.get("message") or {}).get("model") or "")
     return model == "<synthetic>" and str(text).lstrip().lower().startswith("api error")
 
 
-def _provider_fault(text: str, sdk_error: str, model: str) -> "provider_faults.ProviderFault | None":
-    """The typed fault for what the CLI reported, against the endpoint it was pointed at."""
-    return provider_faults.classify(text=text or None, sdk_error=sdk_error or None, model=model,
-                                    provider=provider_host())
+def _provider_fault(text: str, sdk_error: str, model: str,
+                    status: object = None) -> "provider_faults.ProviderFault | None":
+    """The typed fault for what the CLI reported, against the endpoint it was pointed at. ``status``
+    is the result's ``api_error_status`` when the CLI wrote one — the provider's HTTP status, read
+    as such rather than out of the prose."""
+    code = status if isinstance(status, int) and not isinstance(status, bool) and status >= 400 else None
+    return provider_faults.classify(status=code, text=text or None, sdk_error=sdk_error or None,
+                                    model=model, provider=provider_host())
 
 
 #: The settings every launch adds on top of the user scope: no hooks run in the worker.
@@ -372,6 +393,11 @@ def _cli_env() -> dict[str, str]:
     workspace's ``CLAUDE.md`` loading as project memory."""
     env = harness_subprocess_env()
     env["CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD"] = "1"
+    # THE OUTPUT CAP (`llm.ports.max_output_tokens`). The CLI asks for 32000 output tokens unless
+    # told otherwise; the deployment's one dial is mapped onto the CLI's own variable here.
+    cap = max_output_tokens()
+    if cap is not None:
+        env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = str(cap)
     return env
 
 
@@ -469,32 +495,15 @@ def _exec_subprocess(argv: list[str], cwd: str) -> Iterator[str]:
         _reap(proc)
 
 
-_DIR_NOFOLLOW = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
-
-
 def _nofollow_dirs(base: Path, *names: str) -> Optional[Path]:
-    """``base/names…``, each level created if absent and then opened through the verified fd of the
-    level above with ``O_NOFOLLOW``: ``None`` when any level is a link or not a directory. ``base``
-    itself (the mount root, HOME) is the deployment's, and is made if it does not exist yet."""
+    """``base/names…``, each level created if absent and opened through the level above without
+    following a link (``workspace_paths.dir_fd_inside``): ``None`` when any level is a link or not a
+    directory. ``base`` itself (the mount root, HOME) is the deployment's, and is made if absent."""
     try:
-        base.mkdir(parents=True, exist_ok=True)
-        fd = os.open(base, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0))
-    except OSError:
+        os.close(wpaths.dir_fd_inside(base, names, create=True))
+    except (OSError, wpaths.PathRefused):
         return None
-    try:
-        for name in names:
-            try:
-                os.mkdir(name, dir_fd=fd)
-            except FileExistsError:
-                pass
-            nfd = os.open(name, _DIR_NOFOLLOW, dir_fd=fd)
-            os.close(fd)
-            fd = nfd
-        return base.joinpath(*names)
-    except OSError:
-        return None
-    finally:
-        os.close(fd)
+    return base.joinpath(*names)
 
 
 def _link_chat_into_workspace(work: Path) -> None:
@@ -624,12 +633,14 @@ class ClaudeCodeHarness:
         _link_skills_into_home(work)
 
     def transcript_bytes(self, work: Path, session_id: str) -> int:
+        """The stored size of this session's transcript under ``work/.claude/projects``, reached
+        without following a link (``workspace_paths``): a linked folder or file is not this chat's."""
         total = 0
-        for path in (work / ".claude" / "projects").glob(f"*/{session_id}.jsonl"):
-            try:
-                total += path.stat().st_size
-            except OSError:
-                continue
+        name = f"{session_id}.jsonl"
+        for slug in wpaths.list_dirs_inside(work, ".claude/projects", allow=(".claude",)):
+            st = wpaths.stat_inside(work, f".claude/projects/{slug}/{name}", allow=(".claude",))
+            if st is not None and stat.S_ISREG(st.st_mode):
+                total += st.st_size
         return total
 
     def preflight(self) -> Optional[str]:

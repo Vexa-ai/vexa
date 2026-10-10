@@ -221,29 +221,47 @@ def _tools_codex_home(ident: "tuple[int, int]") -> Path:
 
 
 def _link_sessions_into_workspace(work: Path) -> None:
-    """Keep Codex rollouts durable without moving the subscription auth file into the workspace."""
+    """Keep Codex rollouts durable without moving the subscription auth file into the workspace.
+
+    Both sides are trees the tools user can write — the continuity root, and ``CODEX_HOME`` (granted
+    for the turn) — so nothing here acts by name: the workspace side is made folder by folder without
+    following a link, and the ``sessions`` entry in ``CODEX_HOME`` is looked at, removed and created
+    relative to that folder's descriptor. A link anywhere on the workspace side skips the link (the
+    turn still runs, without durable rollouts)."""
     # `.claude/` is the frozen, already-ignored agent plumbing root in every existing workspace.
     # Nest Codex state there so upgrading an old workspace cannot make continuity files/symlinks
     # visible to the turn's commit-all path.
-    ws_sessions = work / ".claude" / "codex" / "sessions"
-    ws_sessions.mkdir(parents=True, exist_ok=True)
-    home_codex = codex_home()
-    home_codex.mkdir(parents=True, exist_ok=True)
-    link = home_codex / "sessions"
     try:
-        if link.is_symlink():
-            if os.readlink(link) == str(ws_sessions):
-                return
-            link.unlink()
-        elif link.is_dir():
-            if any(link.iterdir()):
-                return
-            link.rmdir()
-        elif link.exists():
-            return
-        link.symlink_to(ws_sessions, target_is_directory=True)
+        os.close(wpaths.dir_fd_inside(work, (".claude", "codex", "sessions"), create=True))
+    except (OSError, wpaths.PathRefused):
+        return
+    ws_sessions = work / ".claude" / "codex" / "sessions"
+    try:
+        home_fd = wpaths.dir_fd_inside(codex_home(), (), create=True)
+    except (OSError, wpaths.PathRefused):
+        return
+    try:
+        try:
+            st = os.stat("sessions", dir_fd=home_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            st = None
+        if st is not None:
+            if stat.S_ISLNK(st.st_mode):
+                if os.readlink("sessions", dir_fd=home_fd) == str(ws_sessions):
+                    return
+                os.unlink("sessions", dir_fd=home_fd)
+            elif stat.S_ISDIR(st.st_mode):
+                try:
+                    os.rmdir("sessions", dir_fd=home_fd)   # empty only: nothing can be lost
+                except OSError:
+                    return
+            else:
+                return                                    # some other object — don't clobber
+        os.symlink(str(ws_sessions), "sessions", target_is_directory=True, dir_fd=home_fd)
     except OSError:
         pass
+    finally:
+        os.close(home_fd)
 
 
 class _RpcFailure(RuntimeError):
@@ -344,12 +362,14 @@ class CodexHarness:
         _link_sessions_into_workspace(chat_root or work)
 
     def transcript_bytes(self, work: Path, session_id: str) -> int:
+        """The stored size of this thread's rollouts, walked by descriptor without following a link
+        (``workspace_paths.walk_files_inside``)."""
         total = 0
-        for path in (work / ".claude" / "codex" / "sessions").rglob(f"*{session_id}*.jsonl"):
-            try:
-                total += path.stat().st_size
-            except OSError:
-                pass
+        for rel in wpaths.walk_files_inside(work, ".claude/codex/sessions", allow=(".claude",)):
+            name = rel.rsplit("/", 1)[-1]
+            if session_id in name and name.endswith(".jsonl"):
+                st = wpaths.stat_inside(work, rel, allow=(".claude",))
+                total += st.st_size if st is not None else 0
         return total
 
     def preflight(self) -> Optional[str]:

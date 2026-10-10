@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import logging
 import os
-import stat
 import tempfile
 from pathlib import Path
 from typing import Optional
@@ -63,11 +62,9 @@ WORKSPACE_SKILLS_MAX_BYTES = 64 << 20
 #: How many folders deep a workspace skill may nest below its own.
 WORKSPACE_SKILL_MAX_DEPTH = 16
 
-_O_CLOEXEC = getattr(os, "O_CLOEXEC", 0)
-#: A folder below a workspace's ``skills/``: opened as a directory, never through a link.
-_DIR_FLAGS = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW | _O_CLOEXEC
-#: A file below it: never through a link, and ``O_NONBLOCK`` so opening a FIFO never waits.
-_FILE_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | _O_CLOEXEC
+# Every folder and file below a workspace's ``skills/`` is opened through ``workspace_paths``
+# (``open_dir_at`` / ``open_regular_at`` / ``CREATE_NEW``): never through a link, a file only when it
+# is a regular file with no other hard link. The budget and the entry rules are this module's own.
 
 
 def _frontmatter_key(key: object) -> str:
@@ -148,18 +145,9 @@ def _open_dir(name: str, dir_fd: int) -> int:
     """A descriptor for folder ``name`` under ``dir_fd``, opened without following a link.
     ``FileNotFoundError`` when there is none; ``_EntryRefused`` when it is anything but a folder."""
     try:
-        fd = os.open(name, _DIR_FLAGS, dir_fd=dir_fd)
-    except FileNotFoundError:
-        raise
-    except OSError as exc:
-        raise _EntryRefused(f"{name!r} is not a folder ({exc.strerror})") from exc
-    try:
-        if not stat.S_ISDIR(os.fstat(fd).st_mode):
-            raise _EntryRefused(f"{name!r} is not a folder")
-    except BaseException:
-        os.close(fd)
-        raise
-    return fd
+        return wpaths.open_dir_at(dir_fd, name)
+    except wpaths.PathRefused as exc:
+        raise _EntryRefused(str(exc)) from exc
 
 
 def _read_file(name: str, dir_fd: int, budget: _Budget) -> "tuple[bytes, int]":
@@ -169,21 +157,11 @@ def _read_file(name: str, dir_fd: int, budget: _Budget) -> "tuple[bytes, int]":
     anywhere on the volume). ``FileNotFoundError`` when there is none; ``_EntryRefused`` when it is
     not such a file; ``_SkillRefused`` when it would pass the turn's budget."""
     try:
-        seen = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
-        if not stat.S_ISREG(seen.st_mode):
-            raise _EntryRefused(f"{name!r} is not a regular file")
-        fd = os.open(name, _FILE_FLAGS, dir_fd=dir_fd)
-    except FileNotFoundError:
-        raise
-    except OSError as exc:
-        raise _EntryRefused(f"{name!r} is not a regular file ({exc.strerror})") from exc
+        fd = wpaths.open_regular_at(dir_fd, name)
+    except wpaths.PathRefused as exc:
+        raise _EntryRefused(str(exc)) from exc
     try:
         st = os.fstat(fd)
-        if (not stat.S_ISREG(st.st_mode)
-                or (st.st_dev, st.st_ino) != (seen.st_dev, seen.st_ino)):
-            raise _EntryRefused(f"{name!r} is not a regular file")
-        if st.st_nlink > 1:
-            raise _EntryRefused(f"{name!r} has another hard link")
         if budget.files < 1 or st.st_size > budget.bytes:
             raise _SkillRefused("the workspace's skills are past what one turn stages")
         chunks: list[bytes] = []
@@ -205,7 +183,7 @@ def _read_file(name: str, dir_fd: int, budget: _Budget) -> "tuple[bytes, int]":
 
 def _write_new(path: Path, data: bytes, mode: int) -> None:
     """Create ``path`` holding ``data``; never opens anything already there."""
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | _O_CLOEXEC, mode)
+    fd = os.open(path, wpaths.CREATE_NEW, mode)
     try:
         view = memoryview(data)
         while view:
@@ -310,18 +288,14 @@ def _assemble_skills(stage: Path, work: Path) -> None:
                 (stage / d.name).symlink_to(d, target_is_directory=True)
                 taken.add(d.name)
     try:
-        work_fd = os.open(work, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | _O_CLOEXEC)
-    except OSError:
-        return
-    try:
-        own = _open_dir("skills", work_fd)
+        own = wpaths.dir_fd_inside(work, ("skills",))
     except FileNotFoundError:
         return
-    except _EntryRefused as exc:
+    except (OSError, wpaths.PathRefused) as exc:
+        if not os.path.lexists(Path(work) / "skills"):
+            return
         _log.warning("workspace skills not staged: %s", exc)
         return
-    finally:
-        os.close(work_fd)
     budget = _Budget()
     try:
         with os.scandir(own) as it:

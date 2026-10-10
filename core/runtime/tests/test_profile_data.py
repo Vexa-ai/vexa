@@ -14,6 +14,8 @@ import re
 import sys
 import tokenize
 
+import pytest
+
 from runtime_kernel.k8s_backend import build_pod
 from runtime_kernel.process_backend import ProcessBackend
 from runtime_kernel.profiles import CredentialFile, Runnable
@@ -140,7 +142,45 @@ def test_the_shipped_agent_profile_carries_the_configured_credentials(monkeypatc
         CredentialFile("/host/.codex/auth.json", f"{WORKER_CODEX_HOME}/auth.json", ".codex/auth.json"),
     )
     assert agent.credential_env == {CODEX_HOME_ENV: WORKER_CODEX_HOME}
-    assert not bot.credential_mounts and bot.credential_files == () and bot.process_groups == ("vexa-display",)
+    assert not bot.credential_mounts and bot.credential_files == () and bot.process_groups == ()
+    # only a meeting bot may create user namespaces (its browser's sandbox); a worker may not
+    assert bot.user_namespaces is True and agent.user_namespaces is False
+
+
+def test_a_bot_starts_without_the_profile_when_it_cannot_be_read(monkeypatch):
+    """The profile ships in the runtime package; were it missing, a meeting still gets its bot (whose
+    browser then says it runs unsandboxed), and the runtime says why."""
+    import _profiles
+    from runtime_kernel import docker_backend
+
+    monkeypatch.setattr(docker_backend, "_PROFILE_CACHE", {})
+    monkeypatch.setattr(docker_backend, "container_profile", lambda: (_ for _ in ()).throw(OSError(2, "missing")))
+    bot = _create_payload(monkeypatch, _profiles.bot("bot:1"), "mtg-2")["HostConfig"]
+    assert bot["SecurityOpt"] == ["no-new-privileges"]
+
+
+def test_the_process_backend_refuses_user_namespaces_to_every_child_but_a_bot(monkeypatch, tmp_path):
+    from runtime_kernel import process_backend as pb
+
+    seen = []
+    monkeypatch.setattr(pb.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(pb, "sweep_homes", lambda **_: 0)
+    monkeypatch.setattr(pb.ProcessBackend, "_identity",
+                        lambda self, wid, runnable, env: pb.ChildIdentity(4242, 4242, (), str(tmp_path), str(tmp_path)))
+    monkeypatch.setattr(pb, "preexec_for", lambda identity, *, user_namespaces: seen.append(user_namespaces) or (lambda: None))
+    monkeypatch.setattr(pb, "_open_log", lambda wid: (None, None))
+
+    class Done(Exception):
+        pass
+
+    def popen(*_a, **_k):
+        raise Done()
+    monkeypatch.setattr(pb.subprocess, "Popen", popen)
+    backend = pb.ProcessBackend(homes_root=str(tmp_path))
+    for runnable in (Runnable(command=["true"]), Runnable(command=["true"], user_namespaces=True)):
+        with pytest.raises(Done):
+            backend.start("w", runnable, {})
+    assert seen == [False, True]
 
 
 def test_the_process_backend_stages_credential_files_only_for_a_profile_that_asks(monkeypatch, tmp_path):
@@ -168,5 +208,13 @@ def test_docker_drops_every_capability_but_the_profiles(monkeypatch):
     bot = _create_payload(monkeypatch, _profiles.bot("bot:1"), "mtg-1")["HostConfig"]
     worker = _create_payload(monkeypatch, _profiles.agent("img"), "agent-1-chat")["HostConfig"]
     for hc in (bot, worker):
-        assert hc["CapDrop"] == ["ALL"] and hc["SecurityOpt"] == ["no-new-privileges"]
+        assert hc["CapDrop"] == ["ALL"] and hc["SecurityOpt"][0] == "no-new-privileges"
     assert "CapAdd" not in bot and worker["CapAdd"] == list(WORKER_CAPABILITIES)
+    # Only the bot's own container runs under the profile that allows user namespaces (Chromium's
+    # sandbox); the worker keeps the daemon's default.
+    assert worker["SecurityOpt"] == ["no-new-privileges"]
+    (seccomp,) = [o for o in bot["SecurityOpt"] if o.startswith("seccomp=")]
+    profile = json.loads(seccomp[len("seccomp="):])
+    assert profile["defaultAction"] == "SCMP_ACT_ERRNO"
+    assert any(sorted(r["names"]) == ["chroot", "clone", "unshare"] and r["action"] == "SCMP_ACT_ALLOW"
+               and r.get("excludes") == {"caps": ["CAP_SYS_ADMIN"]} for r in profile["syscalls"])

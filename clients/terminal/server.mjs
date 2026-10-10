@@ -80,7 +80,7 @@ const handle = app.getRequestHandler();
 await app.prepare();
 
 // The client address routes may trust (rate limits): the TCP peer, or the address a proxy appended
-// to X-Forwarded-For when the peer is a private or TERMINAL_TRUSTED_PROXIES address.
+// to X-Forwarded-For when the peer is loopback or a TERMINAL_TRUSTED_PROXIES address or range.
 const TRUSTED_PROXIES = trustedProxies(process.env);
 
 const server = createServer((req, res) => {

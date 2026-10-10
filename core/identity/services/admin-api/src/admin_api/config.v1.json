@@ -218,7 +218,7 @@
    "class": "defaulted",
    "default": "redis://redis:6379/0",
    "secret": true,
-   "description": "the service Redis, where agent-api revokes a worker's delegation token when its unit ends (vexa:delegation:revoked:<jti>, app/delegation_revocation.py). /internal/validate reads it for every vxd_ bearer and refuses the token with 503 when it cannot, so an unreachable or wrong URL costs workers their toolbelt and never admits a revoked token; API keys never read it. On Lite the entrypoint's export reaches admin-api the way every supervisord program inherits it.",
+   "description": "the service Redis, where agent-api revokes a worker's delegation token when its unit ends (vexa:delegation:revoked:<jti>, app/delegation_revocation.py), and where admin-api records each redeemed emailed sign-in link until it expires (vexa:signin-link:redeemed:<jti>, app/signin_links.py). /internal/validate reads it for every vxd_ bearer and refuses the token with 503 when it cannot, so an unreachable or wrong URL costs workers their toolbelt and never admits a revoked token; API keys never read it. /internal/signin-links/redeem answers 503 when it cannot write, and the terminal refuses that sign-in. On Lite the entrypoint's export reaches admin-api the way every supervisord program inherits it.",
    "targets": ["compose", "helm"]
   }
  ]

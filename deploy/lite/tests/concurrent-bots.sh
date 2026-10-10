@@ -12,7 +12,8 @@
 #   deploy/lite/tests/concurrent-bots.sh # then prove N bots launch concurrently
 #
 # PASS = all N bots reach `joining` and their browsers stay alive through the
-# window, each on its OWN profile dir, zero SingletonLock signatures.
+# window, each on its OWN profile dir and its OWN X display (no bot can capture
+# another's screen), zero SingletonLock signatures.
 #
 # Posting the attestation (optional, from a checkout with `gh` authed):
 #   POST_STATUS=1 GIT_SHA=<released sha> deploy/lite/tests/concurrent-bots.sh
@@ -116,6 +117,12 @@ done
 dirs=$(X bash -c 'ls -d /tmp/browser-data-* 2>/dev/null | wc -l')
 [ "$dirs" -ge "$N_BOTS" ] || die "expected ≥$N_BOTS per-bot profile dirs, found $dirs"
 echo "per-bot profile dirs: $dirs ✓"
+# 3b) each bot on its OWN X display, served by its own Xvfb as its own uid; no bot can open or capture
+#     another's screen, and a uid without a cookie opens none (tests/bot_displays.py, run as root inside)
+docker exec -i "$APP" python3 - < "$(dirname "$0")/bot_displays.py" || die "bots' X displays are not isolated"
+# 3c) each bot's browser sandboxed, holding none of the bot's environment; only bots (and the runtime
+#     that starts them) may create user namespaces (tests/bot_browsers.py)
+docker exec -i "$APP" python3 - < "$(dirname "$0")/bot_browsers.py" || die "bots' browsers are not sandboxed"
 
 # 4) the live-transcript SSE stream AUTHORIZES for the meeting's OWNER (#585 regression).
 #    agent-api owner-scopes /agent/meeting/stream by calling meeting-api GET /meetings/{id}; on lite

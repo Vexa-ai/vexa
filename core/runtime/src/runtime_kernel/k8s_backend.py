@@ -312,11 +312,14 @@ def build_pod(
     runnable.scheduling.apply(pod["spec"])
     # Hardening, last so no overlay replaces it: every capability dropped but the ones the profile
     # keeps (the operator may narrow them per class, e.g. to none under OpenShift's restricted SCC),
-    # no privilege escalation, the runtime's default seccomp profile, and non-root where the image
-    # runs as one.
+    # no privilege escalation, the runtime's default seccomp profile unless the operator names the
+    # class's own (meeting bots: the node-installed profile Chromium's sandbox needs), and non-root
+    # where the image runs as one.
     keep = runnable.capabilities if runnable.scheduling.capabilities is None else runnable.scheduling.capabilities
+    seccomp = ({"type": "Localhost", "localhostProfile": runnable.scheduling.seccomp_profile}
+               if runnable.scheduling.seccomp_profile else {"type": "RuntimeDefault"})
     security: dict = {"allowPrivilegeEscalation": False, "capabilities": {"drop": ["ALL"]},
-                      "seccompProfile": {"type": "RuntimeDefault"}}
+                      "seccompProfile": seccomp}
     if keep:
         security["capabilities"]["add"] = list(keep)
     if runnable.run_as_non_root:

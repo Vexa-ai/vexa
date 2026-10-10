@@ -179,6 +179,14 @@ spec:
               value: {{ if kindIs "invalid" $bot.capabilities }}""{{ else }}{{ $bot.capabilities | toJson | quote }}{{ end }}
             - name: RUNTIME_K8S_AGENT_WORKER_CAPABILITIES
               value: {{ if kindIs "invalid" $worker.capabilities }}""{{ else }}{{ $worker.capabilities | toJson | quote }}{{ end }}
+            # The Localhost seccomp profile each class's containers run under (empty: RuntimeDefault).
+            # Bots: the profile that lets Chromium build its sandbox, installed on the nodes
+            # (runtime.botSandbox; daemonset-bot-seccomp.yaml).
+            {{- $sandbox := .Values.runtime.botSandbox | default dict }}
+            - name: RUNTIME_K8S_BOT_SECCOMP_PROFILE
+              value: {{ if $sandbox.enabled }}{{ $sandbox.localhostProfile | default "vexa/seccomp-userns.json" | quote }}{{ else }}{{ $bot.seccompProfile | default "" | quote }}{{ end }}
+            - name: RUNTIME_K8S_AGENT_WORKER_SECCOMP_PROFILE
+              value: {{ $worker.seccompProfile | default "" | quote }}
             # A toleration with no key, or for a control-plane/system taint, is refused unless this
             # is true (runtime-wide and per class alike).
             - name: RUNTIME_K8S_ALLOW_BROAD_TOLERATIONS

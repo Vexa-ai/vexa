@@ -8,7 +8,8 @@ not policy (P11):** a `profile` is an opaque name — the kernel knows docker/k8
 "bot" or "agent" *is*. What a kind of workload is given beyond its spec is **profile data**
 (`profiles.Runnable`): its labels, the runtime setting naming the network it joins, the runtime
 settings forwarded into it, the credential files it receives and where (`credential_files`,
-`credential_env`), and the host groups a process-backend child joins (`process_groups`). Every
+`credential_env`), the host groups a process-backend child joins (`process_groups`), and whether
+it may create user namespaces (`user_namespaces`: a meeting bot, for its browser's sandbox). Every
 backend applies that data the same way; only the deployment registry (`default_registry`, the
 `meeting-bot` and `agent` profiles) fills it in — it is the one place that turns the operator's
 `HOST_CLAUDE_CREDENTIALS` / `HOST_CLAUDE_DIR` / `HOST_CODEX_CREDENTIALS` into files a harness reads.
@@ -58,7 +59,8 @@ uv run pytest -q
 - ✅ delivered — **no child of a root process backend is root**: a workspace dispatch runs as its
   subject's uid (a canonical number below 100000 arithmetically, any other plain name from a
   root-owned registry), any other workload (a meeting bot) as a uid of its own with only its
-  profile's `process_groups`, every child with a fresh private HOME and `no_new_privs`. A child that
+  profile's `process_groups`, every child with a fresh private HOME and `no_new_privs`, and every
+  child but a meeting bot under a seccomp filter refusing it a user namespace (`userns.py`). A child that
   cannot be isolated is refused, never started as root. Root's filesystem work never follows a link
   (`O_NOFOLLOW` opens on directory fds, an fd walk for re-owning a tree, hard-linked files left alone).
 - ✅ delivered — group-scoped teardown on the process backend: each workload leads its own process

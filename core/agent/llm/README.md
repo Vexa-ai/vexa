@@ -33,6 +33,11 @@ trivial fakes.
   each opened without following a link: a link, a FIFO or a hard-linked file is left out, and a
   skill whose `skills/` folder, skill folder or `SKILL.md` is a link, or that holds a second
   `SKILL.md` below its top, is not staged. Part of the `claude-code` adapter.
+- **Vendored guards** (byte-identical copies, because this module imports no product code):
+  `ssrf.py`, the outbound URL guard the web tools fetch through (`deploy/contracts/outbound-url.v1/ssrf.py`,
+  parity fact `outbound-url-guard`),
+  and `workspace_paths.py`, the one way the harnesses read and write inside a work tree without
+  following a link (`core/workspaces/shared/workspace_paths.py`, parity fact `workspace-paths`).
 - **Panel events**: `tool_events.py` — the closed tool vocabularies and the event a successful
   result earns (a write opens its file, a bot send opens the transcript, `open_page`, chips, a
   workspace joining the chat). Imported by all three harnesses so a turn paints the same screen
@@ -95,6 +100,7 @@ carries the event vocabulary and the rest.
 | `VEXA_LLM_EXTRA_BODY` | JSON object merged into EVERY openai-agent request | `{}` |
 | `VEXA_AGENT_MAX_TOOL_CALLS` / `VEXA_AGENT_MAX_TURN_SEC` | openai-agent per-turn budget | 40 / 900 |
 | `VEXA_AGENT_CONTEXT_TOKENS` | openai-agent context ceiling (trims oldest tool results first) | 24000 |
+| `VEXA_AGENT_MAX_OUTPUT_TOKENS` | every harness: output-token cap per request — claude-code receives it as `CLAUDE_CODE_MAX_OUTPUT_TOKENS`, openai-agent sends it as `max_tokens` (wins over `VEXA_LLM_EXTRA_BODY`) | unset → each harness's default (claude CLI: 32000) |
 | `VEXA_AGENT_STREAM` | openai-agent SSE streaming (`0` = one blocking request) | `1` |
 | `VEXA_SEARCH_URL` | operator-supplied search endpoint for `WebSearch` | empty → `WebSearch` is not attached |
 | `VEXA_SEARCH_DIALECT` | wire format of that endpoint: `searxng` \| `brave` | `searxng` |

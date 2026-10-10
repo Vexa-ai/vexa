@@ -53,8 +53,8 @@ On the stack host (never a laptop — container workloads run on `bbb`):
 
 ```bash
 cd deploy/dogfood
-cp env.dogfood.example .env.dogfood     # then fill every CHANGE-ME
-make up                                 # pulls published images, starts the stock stack
+cp env.dogfood.example .env.dogfood     # then set what is yours (URLs, mail relay); leave secrets empty
+make up                                 # mints every empty secret into .env.dogfood, then starts the stock stack
 make key EMAIL=you@example.com          # mint an API key — prints only the token
 sudo cp nginx/mcp.dev.vexa.ai.conf /etc/nginx/sites-available/mcp.dev.vexa.ai
 sudo ln -s /etc/nginx/sites-available/mcp.dev.vexa.ai /etc/nginx/sites-enabled/mcp.dev.vexa.ai.conf

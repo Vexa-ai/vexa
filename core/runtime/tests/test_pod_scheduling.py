@@ -283,9 +283,28 @@ def test_spawned_pods_drop_every_capability_but_the_profiles(monkeypatch):
         assert sc["allowPrivilegeEscalation"] is False
         assert sc["capabilities"]["drop"] == ["ALL"]
         assert sc["seccompProfile"] == {"type": "RuntimeDefault"}
-        assert "runAsNonRoot" not in sc                      # both shipped images start as root
+    assert bot["runAsNonRoot"] is True                       # the bot image runs as a non-root uid
+    assert "runAsNonRoot" not in worker                      # the worker image starts as root
     assert "add" not in bot["capabilities"]
     assert worker["capabilities"]["add"] == list(WORKER_CAPABILITIES)
+
+
+def test_bot_pods_run_under_the_node_installed_profile_the_operator_names(monkeypatch):
+    """The chart installs the user-namespace profile on the nodes and names it for meeting bots: their
+    Pods run under it (Localhost), and only theirs. A path that is not a plain relative one is
+    refused at boot."""
+    monkeypatch.setenv("RUNTIME_K8S_BOT_SECCOMP_PROFILE", "vexa/seccomp-userns.json")
+    bot = _pod("meeting-bot")["spec"]["containers"][0]["securityContext"]
+    worker = _pod("agent")["spec"]["containers"][0]["securityContext"]
+    assert bot["seccompProfile"] == {"type": "Localhost", "localhostProfile": "vexa/seccomp-userns.json"}
+    assert worker["seccompProfile"] == {"type": "RuntimeDefault"}
+    monkeypatch.setenv("RUNTIME_K8S_BOT_SECCOMP_PROFILE", "operator/vexa/bot-userns.json")   # the SPO's path shape
+    assert _pod("meeting-bot")["spec"]["containers"][0]["securityContext"]["seccompProfile"]["localhostProfile"] \
+        == "operator/vexa/bot-userns.json"
+    for bad in ("/etc/x.json", "../x.json", "vexa/../x.json", "a b.json", "vexa//x.json", "x" * 300):
+        monkeypatch.setenv("RUNTIME_K8S_BOT_SECCOMP_PROFILE", bad)
+        with pytest.raises(ValueError):
+            default_registry()
 
 
 def test_the_operator_narrows_a_class_capabilities(monkeypatch):

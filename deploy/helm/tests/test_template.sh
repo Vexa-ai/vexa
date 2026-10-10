@@ -155,6 +155,38 @@ check_hard "$RENDER_HARD" RUNTIME_K8S_BOT_CAPABILITIES '"[\"KILL\"]"'
 check_hard "$RENDER_HARD" RUNTIME_K8S_ALLOW_BROAD_TOLERATIONS '"true"'
 [ "$hard_ok" -eq 1 ] && echo "  OK: spawned-Pod capabilities, broad-toleration opt-in and the release instance render" || fail=1
 
+# Meeting bots' Chromium sandbox (runtime.botSandbox): bot Pods name the Localhost profile that
+# allows user namespaces for their container only, and a DaemonSet installs it on the nodes from
+# the runtime image — root only to write the kubelet's directory: no capability, no escalation, a
+# read-only root filesystem, no API token. Off: RuntimeDefault, no DaemonSet. Installer off (the
+# OpenShift / Security Profiles Operator route): the named path, no DaemonSet. A path that leaves
+# the kubelet's seccomp root does not render.
+sb_ok=1
+check_sb() { local got; got="$(envval "$2" "$1")"; [ "$got" = "$3" ] || { echo "  FAIL: $2 — want $3 got '${got}'"; sb_ok=0; }; }
+DS="$(awk 'BEGIN{RS="\n---\n"} /kind: DaemonSet/ && /component: bot-seccomp/' <<< "$RENDER")"
+check_sb "$RENDER" RUNTIME_K8S_BOT_SECCOMP_PROFILE '"vexa/seccomp-userns.json"'
+check_sb "$RENDER" RUNTIME_K8S_AGENT_WORKER_SECCOMP_PROFILE '""'
+for want in 'automountServiceAccountToken: false' 'runAsUser: 0' 'allowPrivilegeEscalation: false' \
+            'readOnlyRootFilesystem: true' 'drop: \["ALL"\]' 'path: "/var/lib/kubelet/seccomp"' \
+            'type: DirectoryOrCreate' 'cp /app/src/runtime_kernel/seccomp-userns.json' \
+            'dest="/host-seccomp/vexa/seccomp-userns.json"' 'image: "vexaai/v012-runtime:'; do
+  grep -qE -- "$want" <<< "$DS" || { echo "  FAIL: bot-seccomp DaemonSet lacks: $want"; sb_ok=0; }
+done
+grep -qE 'privileged: true|hostNetwork|hostPID|add:' <<< "$DS" && { echo "  FAIL: bot-seccomp DaemonSet is privileged"; sb_ok=0; }
+RENDER_SB_OFF="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set runtime.botSandbox.enabled=false)"
+check_sb "$RENDER_SB_OFF" RUNTIME_K8S_BOT_SECCOMP_PROFILE '""'
+grep -q 'component: bot-seccomp' <<< "$RENDER_SB_OFF" && { echo "  FAIL: a DaemonSet with the sandbox off"; sb_ok=0; }
+RENDER_SB_SPO="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" \
+  --set runtime.botSandbox.installer.enabled=false --set runtime.botSandbox.localhostProfile=operator/vexa/bot-userns.json)"
+check_sb "$RENDER_SB_SPO" RUNTIME_K8S_BOT_SECCOMP_PROFILE '"operator/vexa/bot-userns.json"'
+grep -q 'component: bot-seccomp' <<< "$RENDER_SB_SPO" && { echo "  FAIL: a DaemonSet with the installer off"; sb_ok=0; }
+grep -q 'component: bot-seccomp' <<< "$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set runtime.backend=docker)" \
+  && { echo "  FAIL: a DaemonSet on the docker backend"; sb_ok=0; }
+if helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set runtime.botSandbox.localhostProfile=../etc/x.json >/dev/null 2>&1; then
+  echo "  FAIL: a profile path outside the kubelet's seccomp root rendered"; sb_ok=0
+fi
+[ "$sb_ok" -eq 1 ] && echo "  OK: bot Pods name the user-namespace profile; its installer is unprivileged but root; off and SPO routes render none" || fail=1
+
 # #770: pod topology spread. Empty default (values-test sets nothing) must render NOTHING — the
 # field is optional, so a no-spread chart is byte-identical to a chart without it (single-node /
 # k3s installs keep working). This is the red→green control direction: nothing here, everything
@@ -1154,5 +1186,17 @@ if grep -A4 -E '^[[:space:]]+- name: OPENROUTER_API_KEY$' <<< "$mc" | grep -q 'n
    && grep -A5 -E '^[[:space:]]+- name: OPENROUTER_API_KEY$' <<< "$mc" | grep -q 'key: openrouter'; then
   echo "  OK: models.catalogSecrets delivers each secret_ref from its Secret"
 else echo "  FAIL: models.catalogSecrets"; fail=1; fi
+# The terminal believes X-Forwarded-For only from the proxies it is told about. ClusterIP (only the
+# ingress and pods reach it): the in-cluster ranges. Any other Service type: nothing by default.
+tp() { grep -A1 'name: TERMINAL_TRUSTED_PROXIES' <<< "$1" | sed -n 's/.*value: //p'; }
+if [ "$(tp "$RENDER")" = '"10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,fc00::/7"' ]; then
+  echo "  OK: terminal trusts the in-cluster ranges behind a ClusterIP Service"
+else echo "  FAIL: terminal TERMINAL_TRUSTED_PROXIES behind ClusterIP: $(tp "$RENDER")"; fail=1; fi
+tlb="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set terminal.service.type=LoadBalancer)"
+if [ "$(tp "$tlb")" = '""' ]; then echo "  OK: a LoadBalancer terminal trusts no proxy unless one is named"
+else echo "  FAIL: LoadBalancer terminal TERMINAL_TRUSTED_PROXIES: $(tp "$tlb")"; fail=1; fi
+tnamed="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set terminal.service.type=LoadBalancer --set terminal.trustedProxies=203.0.113.10)"
+if [ "$(tp "$tnamed")" = '"203.0.113.10"' ]; then echo "  OK: terminal.trustedProxies is passed through as named"
+else echo "  FAIL: named TERMINAL_TRUSTED_PROXIES: $(tp "$tnamed")"; fail=1; fi
 
 [ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }

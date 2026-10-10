@@ -57,6 +57,16 @@ def _needs_login() -> bool:
     return not flows_config.get("VEXA_MAIL_SMTP_HOST")
 
 
+def _tls_context() -> ssl.SSLContext:
+    """The certificate check every encrypted relay connection makes — implicit TLS and STARTTLS
+    alike. VEXA_MAIL_SMTP_TLS_INSECURE turns off only the check, never the encryption."""
+    ctx = ssl.create_default_context()
+    if flows_config.get_bool("VEXA_MAIL_SMTP_TLS_INSECURE"):
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+    return ctx
+
+
 def _smtp():
     """Where mail actually goes.
 
@@ -66,28 +76,41 @@ def _smtp():
 
     A SET HOST IS THE DEPLOYMENT'S RELAY, the one the terminal's sign-in mail uses too (the
     VEXA_MAIL_SMTP_* family is one setting for every sender), so it is spoken to the same way:
-    implicit TLS when VEXA_MAIL_SMTP_SECURE is on, AUTH LOGIN when VEXA_MAIL_SMTP_USER and
-    VEXA_MAIL_SMTP_PASSWORD are both set — the relay connection comes back already authenticated.
+    implicit TLS when VEXA_MAIL_SMTP_SECURE is on; otherwise STARTTLS whenever the relay offers it
+    (RFC 3207, certificate verified); AUTH LOGIN when VEXA_MAIL_SMTP_USER and VEXA_MAIL_SMTP_PASSWORD
+    are both set — the relay connection comes back already authenticated.
+
+    CREDENTIALS NEVER CROSS AN UNENCRYPTED CONNECTION: with a user and password set, a relay that
+    offers neither implicit TLS nor STARTTLS is refused before AUTH, and the connection is closed.
     """
     if _needs_login():
         return smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=20), True
     host, port = flows_config.get("VEXA_MAIL_SMTP_HOST"), flows_config.get_int("VEXA_MAIL_SMTP_PORT")
-    if flows_config.get_bool("VEXA_MAIL_SMTP_SECURE"):
-        ctx = ssl.create_default_context()
-        if flows_config.get_bool("VEXA_MAIL_SMTP_TLS_INSECURE"):
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
-        conn = smtplib.SMTP_SSL(host, port, timeout=20, context=ctx)
-    else:
-        conn = smtplib.SMTP(host, port, timeout=20)
     user = flows_config.get("VEXA_MAIL_SMTP_USER")
     password = flows_config.get("VEXA_MAIL_SMTP_PASSWORD")
-    if user and password:
-        try:
+    if flows_config.get_bool("VEXA_MAIL_SMTP_SECURE"):
+        conn = smtplib.SMTP_SSL(host, port, timeout=20, context=_tls_context())
+        encrypted = True
+    else:
+        conn = smtplib.SMTP(host, port, timeout=20)
+        encrypted = False
+    try:
+        if not encrypted:
+            conn.ehlo()
+            if conn.has_extn("starttls"):
+                conn.starttls(context=_tls_context())
+                conn.ehlo()
+                encrypted = True
+        if user and password:
+            if not encrypted:
+                raise RuntimeError(
+                    f"refusing to send SMTP credentials to {host}:{port} over an unencrypted "
+                    "connection — the relay offers no STARTTLS (set VEXA_MAIL_SMTP_SECURE=1 for an "
+                    "implicit-TLS endpoint)")
             conn.login(user, password)
-        except BaseException:
-            conn.close()
-            raise
+    except BaseException:
+        conn.close()
+        raise
     return conn, False
 
 

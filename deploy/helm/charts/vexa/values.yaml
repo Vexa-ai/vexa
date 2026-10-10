@@ -532,6 +532,31 @@ runtime:
       # null keeps the profile's own (CHOWN, DAC_OVERRIDE, FOWNER, FSETID, KILL, SETGID, SETUID: a
       # root worker gives the model's tools a user of their own). OpenShift restricted SCC: [].
       capabilities: null
+      # A Localhost seccomp profile (relative to the kubelet's seccomp root) the class's containers
+      # run under instead of RuntimeDefault. Empty keeps RuntimeDefault.
+      seccompProfile: ""
+  # Chromium's sandbox for meeting bots. The bot's browser renders pages nobody here controls, and
+  # its sandbox is built on user namespaces, which the container runtime's default seccomp profile
+  # refuses. With this on, bot Pods (non-root) run under a Localhost profile that allows them for
+  # the bot's container only: Docker Engine's default profile plus that one rule
+  # (runtime_kernel/seccomp-userns.json in the runtime image; Apache-2.0, see THIRD_PARTY_LICENSES.md).
+  # Off: RuntimeDefault, and each bot logs that its browser runs without its sandbox.
+  botSandbox:
+    enabled: true
+    # The profile as bot Pods name it, under the kubelet's seccomp root.
+    localhostProfile: vexa/seccomp-userns.json
+    # A DaemonSet (the runtime image, root, no capabilities, read-only root filesystem) writes the
+    # profile to <kubeletSeccompDir>/<localhostProfile> on every node bots may run on, through a
+    # hostPath. It needs a namespace that admits a hostPath volume (Pod Security "privileged"; not
+    # "baseline"/"restricted"). Turn it off where node files are managed elsewhere — on OpenShift a
+    # MachineConfig, or the Security Profiles Operator (then set localhostProfile to the path it
+    # installs, operator/<namespace>/<name>.json) — and see the chart README for the SCC bot Pods need.
+    installer:
+      enabled: true
+      kubeletSeccompDir: /var/lib/kubelet/seccomp
+      resources:
+        requests: { cpu: 5m, memory: 16Mi }
+        limits:   { cpu: 50m, memory: 64Mi }
   # Per-component override of global.topologySpreadConstraints (same shape). Applies to the runtime
   # Deployment's OWN pods (not the bot/agent Pods it spawns — those carry runtime.tolerations/
   # nodeSelector via the RUNTIME_K8S_* env below). Omit `labelSelector` and the runtime's own pod
@@ -647,9 +672,16 @@ terminal:
   # security, OAuth callbacks, and the emailed sign-in link, which is built only from it — empty, the
   # terminal sends no link). Empty for cluster-internal / port-forward access.
   publicUrl: ""
+  # Proxies whose X-Forwarded-For names the client, for the sign-in link's per-client rate limit:
+  # addresses or CIDR ranges, comma-separated. Empty = the in-cluster private ranges while the
+  # Service is ClusterIP (only the ingress controller and other pods can reach it then), and nothing
+  # for any other Service type — an L4 load balancer or a node port passes the caller's own header
+  # through, so set this to your ingress or balancer addresses there.
+  trustedProxies: ""
   # The mail relay the emailed sign-in link goes through — the deployment's VEXA_MAIL_SMTP_* family.
-  # Empty host: no link is delivered. secure "1" = implicit TLS (:465; STARTTLS is not supported);
-  # user + secrets.mailSmtpPassword = AUTH LOGIN; tlsInsecure "1" skips the certificate check (dev only).
+  # Empty host: no link is delivered. STARTTLS is used whenever the relay offers it (:587); secure "1" =
+  # implicit TLS (:465); user + secrets.mailSmtpPassword = AUTH LOGIN, sent only over TLS (a relay that
+  # offers neither is refused); tlsInsecure "1" skips the certificate check (dev only).
   mail:
     smtpHost: ""
     smtpPort: ""          # empty = 25

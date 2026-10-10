@@ -290,6 +290,24 @@
       ]
     },
     {
+      "key": "RUNTIME_K8S_BOT_SECCOMP_PROFILE",
+      "class": "defaulted",
+      "default": "(unset — the container runtime's default profile, under which a bot's browser runs without Chromium's sandbox)",
+      "description": "k8s backend: a Localhost seccomp profile every SPAWNED meeting-bot container runs under, as a path relative to the kubelet's seccomp root (the chart installs runtime_kernel/seccomp-userns.json at vexa/seccomp-userns.json and sets this, so the bot's Chromium can build its sandbox). Validated at boot (a plain relative path). Never taken from a workload spec",
+      "targets": [
+        "helm"
+      ]
+    },
+    {
+      "key": "RUNTIME_K8S_AGENT_WORKER_SECCOMP_PROFILE",
+      "class": "defaulted",
+      "default": "(unset — the container runtime's default profile)",
+      "description": "k8s backend: a Localhost seccomp profile every SPAWNED agent-worker container runs under instead of RuntimeDefault, as a path relative to the kubelet's seccomp root. Validated at boot. Never taken from a workload spec",
+      "targets": [
+        "helm"
+      ]
+    },
+    {
       "key": "RUNTIME_K8S_ALLOW_BROAD_TOLERATIONS",
       "class": "defaulted",
       "default": "false",
@@ -601,6 +619,15 @@
       "class": "defaulted",
       "default": "24000",
       "description": "openai-agent harness: estimated-token ceiling on a request; forwarded into spawned workers",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_AGENT_MAX_OUTPUT_TOKENS",
+      "class": "defaulted",
+      "default": "(unset \u2014 each harness's own default)",
+      "description": "every harness: the output-token cap a model request asks for (claude-code receives it as CLAUDE_CODE_MAX_OUTPUT_TOKENS, openai-agent sends it as max_tokens); empty keeps each harness's own default (the claude CLI asks for 32000). Forwarded into spawned workers",
       "targets": [
         "compose"
       ]

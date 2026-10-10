@@ -1255,7 +1255,16 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
             }));
           },
           onRejected: () => patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, rejected: "workspace.v1 violation — reverted" })),
-          onModelFailure: (reply) => patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, text: (t.text ?? "") + (t.text ? "\n\n" : "") + `Model inference failed${reply ? `: ${reply}` : "."}` })),
+          // ONE FAILURE SURFACE PER TURN. A server one release behind sends no `fault`, and its
+          // failed reply is often the very text the turn already streamed (the CLI's `API Error:
+          // 402 …` arrived as a delta, then again as the reply). Said once is enough: the failure
+          // line does not repeat words already on screen.
+          onModelFailure: (reply) => patchAgentTurn(key, agentId, (t) => {
+            const said = (t.text ?? "").trim();
+            const r = (reply ?? "").trim();
+            const repeat = !!r && !!said && said.endsWith(r);
+            return { ...t, status: null, text: (t.text ?? "") + (t.text ? "\n\n" : "") + `Model inference failed${r && !repeat ? `: ${r}` : "."}` };
+          }),
           // A TYPED FAULT ENDED THE TURN (P18): the runtime would not start the agent, or the model
           // provider refused it. It renders as its own block — who failed, what kind, the detail,
           // the remedy — never as "Internal Server Error" or a provider's JSON in the reply. A turn

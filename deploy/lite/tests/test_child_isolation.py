@@ -3,8 +3,9 @@
 The runtime starts every bot and agent worker as a non-root uid of its own (core/runtime isolation.py;
 its tests run the real drop as root). The image's part: the browser install, the workspace store and
 Valkey's data are not theirs to write or read, the tools user the harness looks for exists, each bot
-reaches the system PulseAudio and writes its screenshots into its own HOME, and Valkey's password is
-never on a command line. The live counterpart is ``child_identities.py`` (``make -C deploy/lite test``).
+brings up its own X display and audio daemon and writes its screenshots into its own HOME, and
+Valkey's password is never on a command line. The live counterparts are ``child_identities.py``
+(``make -C deploy/lite test``) and ``bot_displays.py`` (run by ``tests/concurrent-bots.sh``).
 """
 from __future__ import annotations
 
@@ -38,7 +39,8 @@ def test_the_tools_user_is_the_worker_images():
 
 
 def test_valkeys_password_is_in_a_root_only_file_not_on_its_command_line():
-    (command,) = re.findall(r"^command=/usr/local/bin/valkey-server (.*)$", SUPERVISORD, flags=re.M)
+    (command,) = re.findall(r"^command=/usr/local/bin/no-user-namespaces /usr/local/bin/valkey-server (.*)$",
+                            SUPERVISORD, flags=re.M)
     assert "requirepass" not in command and command.startswith("/run/vexa/valkey.conf ")
     block = re.search(r"^\( umask 077; printf 'requirepass.*$", ENTRYPOINT, flags=re.M).group(0)
     assert "/run/vexa/valkey.conf" in block
@@ -75,47 +77,168 @@ def test_each_bot_runs_its_own_audio_daemon_and_no_shared_one_exists():
         assert f'"{key}"' not in plumbing, key
 
 
-def test_the_display_needs_a_cookie_only_bots_can_read():
-    (xvfb,) = re.findall(r"^command=Xvfb (.*)$", SUPERVISORD, flags=re.M)
-    assert "-ac" not in xvfb.split() and "-auth /run/vexa/display/Xauthority" in xvfb and "-nolisten tcp" in xvfb
-    assert "/usr/local/bin/display-cookie /run/vexa/display/Xauthority 99 vexa-display" in ENTRYPOINT
-    assert "groupadd --system vexa-display" in DOCKERFILE
-    profiles = (ROOT / "core" / "runtime" / "src" / "runtime_kernel" / "profiles.py").read_text()
-    assert 'process_groups=("vexa-display",)' in profiles
-    assert 'XAUTHORITY="${XAUTHORITY:-/run/vexa/display/Xauthority}"' in BOT_LAUNCH
+def test_roots_runtime_directory_gets_its_mode_before_anything_writes_there():
+    """/run/vexa holds the rendered supervisor config, Valkey's config and the self-host keys. Its mode
+    is set (not just at creation: a restarted container keeps the directory) before the first write."""
+    line = "mkdir -p /run/vexa && chown root:root /run/vexa && chmod 0700 /run/vexa"
+    assert line in ENTRYPOINT
+    first = ENTRYPOINT.index(line)
+    for writer in ("/usr/local/bin/provision-key.sh", "python3 /usr/local/bin/render-supervisord",
+                   "/run/vexa/valkey.conf"):
+        assert first < ENTRYPOINT.index(writer), writer
+    assert "chmod -R go-rwx /run/vexa/*" in ENTRYPOINT[first:ENTRYPOINT.index("/usr/local/bin/provision-key.sh")]
+    assert "mkdir -p -m 0700 /run/vexa\n" not in ENTRYPOINT
 
 
-def test_the_cookie_file_is_root_and_the_display_groups_only(tmp_path, monkeypatch):
-    import grp
+def test_the_self_host_keys_are_written_root_only_over_an_earlier_file(tmp_path):
+    """provision-key.sh writes the minted keys under umask 077 and renames them over any key.env a
+    previous boot left (which may be world-readable): the result is 0600 whatever was there."""
+    script = (LITE / "bin" / "provision-key.sh").read_text()
+    body = script.split('if [ -n "$TOKS" ]; then\n', 1)[1].split("    supervisorctl", 1)[0]
+    assert "/run/vexa/key.env" in body
+    body = body.replace("/run/vexa", str(tmp_path))
+    old = tmp_path / "key.env"
+    old.write_text("VEXA_API_KEY=old\n")
+    old.chmod(0o644)
+    subprocess.run(["bash", "-c", body], env={"PATH": "/usr/bin:/bin", "TOKS": "VEXA_API_KEY=new"},
+                   check=True)
+    assert old.read_text() == "VEXA_API_KEY=new\n"
+    assert (old.stat().st_mode & 0o777) == 0o600
+    assert not (tmp_path / "key.env.new").exists()
+
+
+def _bot_display():
     import importlib.machinery
     import importlib.util
-    import os
 
-    loader = importlib.machinery.SourceFileLoader("display_cookie", str(LITE / "bin" / "display-cookie"))
+    loader = importlib.machinery.SourceFileLoader("bot_display", str(LITE / "bin" / "bot-display"))
     spec = importlib.util.spec_from_loader(loader.name, loader)
     mod = importlib.util.module_from_spec(spec)
     loader.exec_module(mod)
-    group = grp.getgrgid(os.getgid()).gr_name
-    monkeypatch.setattr(os, "chown", lambda *a: None)
-    monkeypatch.setattr(os, "fchown", lambda *a: None)
-    path = tmp_path / "display" / "Xauthority"
-    assert mod.main(["display-cookie", str(path), "99", group]) == 0
+    return mod
+
+
+def test_each_bot_starts_its_own_display_and_no_shared_one_exists():
+    """No Xvfb under supervisord: the bot launcher starts one as the bot's uid, on a display number
+    Xvfb picks itself, access control on, the cookie in the bot's HOME, no TCP; it checks the display's
+    sockets are that Xvfb's before the bot runs, and a dead display takes the bot's group with it."""
+    assert "[program:xvfb]" not in SUPERVISORD and "[program:fluxbox]" not in SUPERVISORD
+    assert "Xvfb" not in SUPERVISORD.split("[group:vexa]")[1] and ":99" not in SUPERVISORD
+    (xvfb,) = re.findall(r"^\s*Xvfb (.*)$", BOT_LAUNCH, flags=re.M)
+    args = xvfb.split()
+    assert "-displayfd" in args and "-nolisten" in args and args[args.index("-nolisten") + 1] == "tcp"
+    assert "-ac" not in args and '-auth "$XAUTHORITY"' in xvfb and not re.search(r"\s:\d", xvfb)
+    assert 'x11_dir="$home/x11"' in BOT_LAUNCH and 'mkdir -p -m 0700 "$x11_dir"' in BOT_LAUNCH
+    assert 'export XAUTHORITY="$x11_dir/Xauthority"' in BOT_LAUNCH
+    assert '/usr/local/bin/bot-display cookie "$XAUTHORITY" || exit 1' in BOT_LAUNCH
+    check = '/usr/local/bin/bot-display check "$display" "$(cat "$x11_dir/xvfb.pid")" || exit 1'
+    assert check in BOT_LAUNCH
+    assert BOT_LAUNCH.index("Xvfb ") < BOT_LAUNCH.index(check) < BOT_LAUNCH.index('export DISPLAY=":$display"')
+    assert BOT_LAUNCH.index('export DISPLAY=":$display"') < BOT_LAUNCH.index("exec node")
+    assert 'wait "$!"\n    kill -KILL 0' in BOT_LAUNCH
+    assert "/run/vexa/display" not in BOT_LAUNCH and ":99" not in BOT_LAUNCH
+    assert "/run/vexa/display" not in ENTRYPOINT and "vexa-display" not in DOCKERFILE + ENTRYPOINT
+    assert "rm -rf /tmp/.X11-unix /tmp/.X*-lock\nmkdir -m 1777 /tmp/.X11-unix" in ENTRYPOINT
+    profiles = (ROOT / "core" / "runtime" / "src" / "runtime_kernel" / "profiles.py").read_text()
+    assert "vexa-display" not in profiles
+    smoke = (LITE / "tests" / "concurrent-bots.sh").read_text()
+    assert 'python3 - < "$(dirname "$0")/bot_displays.py" || die' in smoke
+
+
+def test_a_bots_cookie_is_its_own_and_fits_any_display_number(tmp_path):
+    mod = _bot_display()
+    home = tmp_path / "x11"
+    home.mkdir(mode=0o700)
+    path = home / "Xauthority"
+    assert mod.main(["bot-display", "cookie", str(path)]) == 0
     data = path.read_bytes()
-    assert data.count(b"MIT-MAGIC-COOKIE-1") == 2 and (path.stat().st_mode & 0o777) == 0o640
-    assert (path.parent.stat().st_mode & 0o777) == 0o750
+    assert (path.stat().st_mode & 0o777) == 0o600
+    # one entry: family wild, empty address, EMPTY display number (so any), the cookie's name, 16 bytes
+    assert data[:2] == b"\xff\xff" and data[2:6] == b"\0\0\0\0"
+    assert data[6:8] == b"\0\x12" and data[8:26] == b"MIT-MAGIC-COOKIE-1" and data[26:28] == b"\0\x10"
+    assert len(data) == 44
     first = data
-    mod.main(["display-cookie", str(path), "99", group])
+    mod.main(["bot-display", "cookie", str(path)])
     assert path.read_bytes() != first                      # a new cookie every start
 
 
-def test_vnc_is_off_by_default_loopback_and_password_protected():
-    (x11vnc,) = re.findall(r"^command=x11vnc (.*)$", SUPERVISORD, flags=re.M)
-    assert "-nopw" not in x11vnc and "-passwdfile /run/vexa/vnc/passwd" in x11vnc and "-localhost" in x11vnc
-    (websockify,) = re.findall(r"^command=websockify (.*)$", SUPERVISORD, flags=re.M)
-    assert "127.0.0.1:6080" in websockify
-    assert SUPERVISORD.count("autostart=%(ENV_VEXA_LITE_VNC)s") == 2
-    assert 'export VEXA_LITE_VNC="${VEXA_LITE_VNC:-false}"' in ENTRYPOINT
-    assert "unset VEXA_LITE_VNC_PASSWORD" in ENTRYPOINT
+def test_a_bots_cookie_goes_only_into_its_own_closed_directory(tmp_path):
+    import pytest
+
+    mod = _bot_display()
+    loose = tmp_path / "loose"
+    loose.mkdir()
+    loose.chmod(0o755)
+    assert mod.main(["bot-display", "cookie", str(loose / "Xauthority")]) == 1
+    assert not (loose / "Xauthority").exists()
+    with pytest.raises(FileNotFoundError):                 # no parent is made with a default mode
+        mod.main(["bot-display", "cookie", str(tmp_path / "missing" / "Xauthority")])
+    assert not (tmp_path / "missing").exists()
+
+
+def _listen(address: str):
+    import socket
+
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.bind(address)
+    s.listen(4)
+    return s
+
+
+def test_the_display_check_takes_only_the_bots_own_x_server(tmp_path):
+    """Both sockets answered by this process (standing in for the bot's Xvfb): accepted. A wrong pid,
+    a socket directory not owned as required, no abstract socket, or an abstract socket another
+    process took first: refused."""
+    import os
+    import sys
+
+    import pytest
+
+    if not sys.platform.startswith("linux"):
+        pytest.skip("abstract sockets and SO_PEERCRED are Linux's")
+    mod = _bot_display()
+    sock_dir = tmp_path / "x11-unix"
+    sock_dir.mkdir()
+    sock_dir.chmod(0o1777)
+    me, n, pid = os.getuid(), "7", str(os.getpid())
+    path = str(sock_dir / f"X{n}")
+    path_sock = _listen(path)
+    try:
+        assert mod.check(n, pid, str(sock_dir), me) == 1                 # no abstract socket
+        abstract = _listen("\0" + path)
+        assert mod.check(n, pid, str(sock_dir), me) == 0
+        assert mod.check(n, str(os.getpid() + 1), str(sock_dir), me) == 1
+        assert mod.check(n, pid, str(sock_dir), me + 1) == 1             # directory not the owner's
+        abstract.close()
+        ready_r, ready_w = os.pipe()
+        done_r, done_w = os.pipe()
+        child = os.fork()
+        if child == 0:                                 # another process takes the abstract name
+            squat = _listen("\0" + path)
+            os.write(ready_w, b"1")
+            os.read(done_r, 1)
+            squat.close()
+            os._exit(0)
+        os.read(ready_r, 1)
+        try:
+            assert mod.peer("\0" + path)[0] == child
+            assert mod.check(n, pid, str(sock_dir), me) == 1
+        finally:
+            os.write(done_w, b"1")
+            os.waitpid(child, 0)
+    finally:
+        path_sock.close()
+
+
+def test_there_is_no_vnc_view():
+    """No shared screen, so nothing to view: no x11vnc or noVNC program, package or switch. The image
+    has no x11vnc at all, so the join module's escalation view never starts in Lite."""
+    for name in ("x11vnc", "websockify", "VEXA_LITE_VNC"):
+        assert name not in SUPERVISORD, name
+    packages = DOCKERFILE.split("apt-get install", 1)[1].split("apt-get clean", 1)[0]
+    for name in ("x11vnc", "novnc", "websockify"):
+        assert name not in packages, name
+    assert "VEXA_LITE_VNC" not in ENTRYPOINT and "/run/vexa/vnc" not in ENTRYPOINT
     assert "EXPOSE 8056 3001 8100\n" in DOCKERFILE
 
 
@@ -136,3 +259,48 @@ def test_workload_logs_live_beside_the_homes_not_in_tmp():
 def test_the_live_check_runs_in_make_test():
     makefile = (LITE / "Makefile").read_text()
     assert 'tests/child_identities.py" || FAIL=1' in makefile
+
+
+def test_the_container_profile_is_dockers_default_plus_user_namespaces():
+    """seccomp-userns.json (the runtime's; the same file bot containers and Pods run under): Docker's default profile (deny by default; clone3 answered ENOSYS; namespaces
+    behind CAP_SYS_ADMIN) with one rule more — clone and unshare for a process without that
+    capability, so a meeting bot's Chromium can build its sandbox — and `make up` runs Lite under it."""
+    import json
+
+    profile = json.loads((ROOT / "core/runtime/src/runtime_kernel/seccomp-userns.json").read_text())
+    assert profile["defaultAction"] == "SCMP_ACT_ERRNO"
+    ours = [r for r in profile["syscalls"] if r.get("comment", "").startswith("Vexa:")]
+    assert len(ours) == 1
+    (rule,) = ours
+    assert sorted(rule["names"]) == ["chroot", "clone", "unshare"] and rule["action"] == "SCMP_ACT_ALLOW"
+    assert rule["excludes"] == {"caps": ["CAP_SYS_ADMIN"]} and "args" not in rule
+    clone3 = [r for r in profile["syscalls"] if r["names"] == ["clone3"]]
+    assert clone3 and clone3[0]["action"] == "SCMP_ACT_ERRNO" and clone3[0]["errnoRet"] == 38
+    others = [r for r in profile["syscalls"] if r is not rule and "unshare" in r["names"]]
+    assert others and all(r.get("includes", {}).get("caps") == ["CAP_SYS_ADMIN"] for r in others)
+    makefile = (LITE / "Makefile").read_text()
+    assert '--security-opt seccomp="$(ROOT)/core/runtime/src/runtime_kernel/seccomp-userns.json"' in makefile
+
+
+def test_every_service_but_the_runtime_is_refused_user_namespaces():
+    commands, program = {}, None
+    for line in SUPERVISORD.splitlines():
+        if line.startswith("["):
+            program = line[len("[program:"):-1] if line.startswith("[program:") else None
+        elif program and line.startswith("command="):
+            commands[program] = line[len("command="):]
+    assert set(commands) >= {"redis", "admin-api", "runtime", "agent-api", "meeting-api", "gateway", "mcp", "terminal"}
+    for name, command in commands.items():
+        wrapped = command.startswith("/usr/local/bin/no-user-namespaces ")
+        assert wrapped == (name != "runtime"), name
+    wrapper = (LITE / "bin" / "no-user-namespaces").read_text()
+    assert 'USERNS = "/app/runtime/src/runtime_kernel/userns.py"' in wrapper
+    assert "COPY core/runtime/src /app/runtime/src" in DOCKERFILE and "bin/no-user-namespaces" in DOCKERFILE
+    assert wrapper.index("refuse_user_namespaces()") < wrapper.index("os.execvp")
+    profiles = (ROOT / "core" / "runtime" / "src" / "runtime_kernel" / "profiles.py").read_text()
+    assert profiles.count("user_namespaces=True") == 1
+
+
+def test_the_bots_browser_checks_run_with_the_concurrent_bots():
+    smoke = (LITE / "tests" / "concurrent-bots.sh").read_text()
+    assert 'python3 - < "$(dirname "$0")/bot_browsers.py" || die' in smoke

@@ -85,6 +85,13 @@ old 0.10 line and incompatible with this stack's `lifecycle.v1`) on demand and t
 agent worker (`vexaai/v012-agent-worker:v012`, a `build-only` compose profile); neither is a
 long-running compose service.
 
+Each bot container is created by the runtime, not by compose, so its hardening is set there (the
+Docker API's `HostConfig`, the fields compose's `cap_drop`/`security_opt` set): every capability
+dropped, `no-new-privileges`, and a seccomp profile that lets the bot's Chromium build its sandbox
+(`core/runtime/src/runtime_kernel/seccomp-userns.json`: Docker's default profile plus user
+namespaces, for the bot's own container only). The bot image runs as a non-root uid (10002), which
+Chromium's sandbox requires; each bot logs `Chromium runs with its sandbox`, or why it does not.
+
 ## Usage
 
 ```bash

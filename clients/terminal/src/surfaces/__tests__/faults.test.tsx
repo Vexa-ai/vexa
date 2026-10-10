@@ -37,31 +37,31 @@ const KINDS: [Fault, string][] = [
   [{ source: "model-provider", kind: "unpaid", status: 402, provider: "openrouter.ai", model: "anthropic/claude-sonnet-4",
      detail: "Insufficient credits. Add more using https://openrouter.ai/settings/credits",
      remedy: "Add credit at openrouter.ai, or choose another model under Settings → Models." },
-   "Model provider (openrouter.ai) · out of credit (402)"],
+   "Model provider · out of credits (402)"],
   [{ source: "model-provider", kind: "unauthorized", status: 401, provider: "openrouter.ai", detail: "User not found.", remedy: "Check the API key." },
-   "Model provider (openrouter.ai) · credential refused (401)"],
+   "Model provider · credential refused (401)"],
   [{ source: "model-provider", kind: "rate_limited", status: 429, provider: "api.anthropic.com", remedy: "Wait a moment and send it again." },
-   "Model provider (api.anthropic.com) · rate limited (429)"],
+   "Model provider · rate limited (429)"],
   [{ source: "model-provider", kind: "unavailable", status: null, provider: "api.anthropic.com", detail: "ConnectTimeout" },
-   "Model provider (api.anthropic.com) · unavailable"],
+   "Model provider · unavailable"],
   [{ source: "model-provider", kind: "refused", status: 400, provider: "openrouter.ai", detail: "invalid model id" },
-   "Model provider (openrouter.ai) · refused the request (400)"],
+   "Model provider · refused the request (400)"],
   // the chat's model pick, refused by agent-api before any request (ADR-0043)
   [{ source: "model-provider", kind: "unknown_model", status: null, provider: "", model: "retired-model",
      detail: "The model 'retired-model' is not offered on this deployment any more.", remedy: "Pick another model for this chat." },
    "Model provider · model no longer offered"],
   [{ source: "model-provider", kind: "not_permitted", status: null, provider: "openrouter", model: "or-sonnet",
      detail: "Claude Sonnet via OpenRouter is open to admins only on this deployment.", remedy: "Pick another model for this chat." },
-   "Model provider (openrouter) · model not open to you"],
+   "Model provider · model not open to you"],
   [{ source: "model-provider", kind: "not_configured", status: null, provider: "own", model: "mine",
      detail: "My endpoint runs on your own endpoint, and you have not set one." },
-   "Model provider (own) · model not set up for you"],
+   "Model provider · model not set up for you"],
   [{ source: "model-provider", kind: "credential_missing", status: null, provider: "openrouter", model: "or-sonnet",
      detail: "The credential for openrouter (env:OPENROUTER_API_KEY) is not set on this deployment." },
-   "Model provider (openrouter) · provider credential not set"],
+   "Model provider · provider credential not set"],
   [{ source: "model-provider", kind: "endpoint_refused", status: null, provider: "own", model: "mine",
      detail: "Your endpoint is not allowed on this deployment." },
-   "Model provider (own) · your endpoint is not allowed"],
+   "Model provider · your endpoint is not allowed"],
   [{ source: "agent-api", kind: "internal", status: 500, detail: "the agent service failed while taking this message" },
    "Agent service · failed (500)"],
   [{ source: "gateway", kind: "unreachable", status: null, detail: "the terminal could not reach the Vexa gateway" },
@@ -105,7 +105,7 @@ describe("a typed fault renders who failed, what kind, the detail and the remedy
   });
 
   it("spells the one-line form the rows use", () => {
-    expect(faultHeadline(KINDS[8][0])).toBe("Model provider (openrouter.ai) · out of credit (402)");
+    expect(faultHeadline(KINDS[8][0])).toBe("Model provider · out of credits (402)");
     expect(faultLine(KINDS[0][0])).toBe(
       "Agent runtime · could not start your agent (502) — a previous agent for this chat is still registered");
   });

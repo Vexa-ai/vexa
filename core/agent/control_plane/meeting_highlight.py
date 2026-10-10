@@ -22,6 +22,7 @@ from typing import Callable, Iterable, Optional
 
 from control_plane import meeting_terms as meeting_terms_mod
 from shared import terms as terms_mod
+from workspaces.shared import workspace_paths as wpaths
 
 #: The words in `keep` that publish everything the look found.
 KEEP_ALL = frozenset({"*", "all"})
@@ -35,10 +36,11 @@ def entity_files(root: Path) -> list[str]:
     """Every `kg/entities/<kind>/<name>.md` under one workspace root, workspace-relative. The TREE,
     never `kg/INDEX.md`: the index can be one write behind, and a stale index is a chip saying "no
     page yet" about a page written thirty seconds ago."""
-    base = root / "kg" / "entities"
-    if not base.is_dir():
-        return []
-    return sorted(p.relative_to(root).as_posix() for p in base.glob("*/*.md") if p.is_file())
+    # by descriptor, following no link (``workspace_paths``): a linked kind folder or page is not
+    # this workspace's, and its names never become chips here
+    return sorted(f"kg/entities/{kind}/{name}"
+                  for kind in wpaths.list_dirs_inside(root, "kg/entities")
+                  for name in wpaths.list_files_inside(root, f"kg/entities/{kind}", suffix=".md"))
 
 
 def entity_index(mounts: Iterable[tuple[str, str, Path]]) -> list[dict]:

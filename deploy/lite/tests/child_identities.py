@@ -2,30 +2,27 @@
 start children through the runtime the way agent-api and meeting-api do, and check what each one is.
 
 * an agent worker for a numeric subject, one for a named subject, a meeting bot: every process the
-  runtime starts (and everything those start) runs with no uid or gid 0 anywhere, no_new_privs set; a
-  worker as its subject's uid with no extra group, a bot as a uid of its own with only the display
-  group;
+  runtime starts (and everything those start) runs with no uid or gid 0 anywhere, no_new_privs set,
+  and no supplementary group; a worker as its subject's uid, a bot as a uid of its own;
 * a dispatch whose subject cannot be mapped is refused, and starts nothing;
 * as each identity a child ran with: no other process's environment is readable, nor root's state
-  (the rendered supervisor config, Valkey's config and data, the signing key, the workload logs, the
-  VNC password, the mounted model credential), and the browser install and the workspace store are
-  not writable;
-* the shared X display: a worker identity can neither read its cookie nor open it; a bot identity
-  can; nothing opens it without the cookie. The VNC port (and its noVNC bridge) is closed, or asks
-  for a password;
+  (root's runtime directory, the rendered supervisor config, Valkey's config and data, the self-host
+  API keys, the signing key, the workload logs, the VNC password, the mounted model credential), and
+  the browser install and the workspace store are not writable; and for every uid at once, each of
+  those paths is root's with no group or other read or write bit;
+* there is no shared X display (each bot starts its own: tests/bot_displays.py checks those, with two
+  bots running) and nothing answers on the VNC or noVNC port;
 * when a chat turn can start (model credentials configured), the turn's prompt appears on no
   process's command line while its CLI runs;
 * no process in the container carries a service secret on its command line.
 
 Stdlib only; runs as root; never prints a value. Exits 1 naming what failed.
 """
-import grp
 import json
 import os
 import re
 import secrets
 import socket
-import struct
 import subprocess
 import sys
 import threading
@@ -38,12 +35,11 @@ ADMIN = "http://127.0.0.1:8001"
 GATEWAY = "http://127.0.0.1:8056"
 RENDERED = "/run/vexa/supervisord.conf"
 CONF = "/etc/supervisor/conf.d/vexa.conf"
-XAUTH = "/run/vexa/display/Xauthority"
-X_SOCKET = "/tmp/.X11-unix/X99"
 UID_BASE, SUBJECT_UID_BASE, WORKLOAD_UID_BASE = 100000, 1_000_000_000, 1_500_000_000
-ROOT_ONLY = ["/run/vexa/supervisord.conf", "/run/vexa/valkey.conf", "/var/lib/redis",
+ROOT_ONLY = ["/run/vexa", "/run/vexa/supervisord.conf", "/run/vexa/valkey.conf", "/run/vexa/key.env",
+             "/var/lib/redis",
              "/var/lib/vexa/state/identity/signing-key.pem", "/var/lib/vexa/state/nextauth-secret",
-             "/var/lib/vexa-runtime/logs", "/run/vexa/vnc", "/var/lib/vexa/host-claude"]
+             "/var/lib/vexa-runtime/logs", "/var/lib/vexa/host-claude"]
 NOT_WRITABLE = ["/ms-playwright", "/workspaces", "/app", "/usr/local/bin"]
 SECRET_NAME = re.compile(r"SECRET|TOKEN|PASSWORD|_KEY$")
 WATCH_SECONDS = 20
@@ -144,38 +140,7 @@ class Watch(threading.Thread):
             time.sleep(0.005)
 
 
-# ── the display and VNC, as seen by an identity ───────────────────────────────────────────────────
-
-def x_cookie(data: bytes):
-    """The MIT-MAGIC-COOKIE-1 data of an X authority file."""
-    i = 0
-    while i + 2 <= len(data):
-        i += 2                                        # family
-        fields = []
-        for _ in range(4):
-            (n,) = struct.unpack(">H", data[i:i + 2])
-            fields.append(data[i + 2:i + 2 + n])
-            i += 2 + n
-        if fields[2] == b"MIT-MAGIC-COOKIE-1":
-            return fields[3]
-    return None
-
-
-def x_open(cookie) -> int:
-    """The X server's answer to a connection setup on the shared display: 1 opened, 0 refused, -1 no
-    server reachable."""
-    name, data = (b"MIT-MAGIC-COOKIE-1", cookie) if cookie else (b"", b"")
-    pad = lambda b: b + b"\0" * (-len(b) % 4)       # noqa: E731
-    req = b"l\0" + struct.pack("<HHHH", 11, 0, len(name), len(data)) + b"\0\0" + pad(name) + pad(data)
-    try:
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
-            s.settimeout(5)
-            s.connect(X_SOCKET)
-            s.sendall(req)
-            return 1 if s.recv(1) == b"\x01" else 0
-    except OSError:
-        return -1
-
+# ── VNC, as seen by an identity ──────────────────────────────────────────────────────────────────
 
 def vnc_open(port: int) -> str:
     """'closed', 'password' (only authenticated security types), or 'OPEN' (no authentication)."""
@@ -230,19 +195,9 @@ def probe_as(uids: list, gid: int, groups: list, others: list, bot: bool) -> lis
                     bad.append(f"wrote into {path}")
                 except OSError:
                     pass
-            try:
-                cookie = x_cookie(open(XAUTH, "rb").read())
-            except (PermissionError, FileNotFoundError):
-                cookie = None
-            if x_open(None) == 1:
-                bad.append("opened the display without its cookie")
-            if bot and (cookie is None or x_open(cookie) != 1):
-                bad.append("a bot could not open the display with its cookie")
-            if not bot and cookie is not None:
-                bad.append("a worker read the display's cookie")
             for port in (5900, 6080):
-                if vnc_open(port) == "OPEN":
-                    bad.append(f"reached the display over VNC on :{port} with no password")
+                if vnc_open(port) != "closed":
+                    bad.append(f"something answers on the VNC port :{port}")
         except Exception as e:                       # noqa: BLE001 — reported, never raised
             bad.append(f"probe error {type(e).__name__}")
         os.write(w, json.dumps(bad).encode())
@@ -313,6 +268,20 @@ def prompt_check(token: str) -> tuple:
     return failures, "the turn's prompt was on no command line while its CLI ran" if cli_seen else ""
 
 
+def loose_modes() -> list:
+    """Each root-only path as the filesystem holds it, for every uid at once: root's, and neither its
+    group nor others may read or write it (a directory may let others pass through)."""
+    out = []
+    for path in ROOT_ONLY:
+        try:
+            st = os.lstat(path)
+        except FileNotFoundError:
+            continue
+        if st.st_uid != 0 or st.st_mode & 0o066:
+            out.append(f"{path} is mode {oct(st.st_mode & 0o7777)}, uid {st.st_uid}")
+    return out
+
+
 def secret_values() -> list:
     values = []
     for pid in (1, runtime_pid()):
@@ -360,21 +329,22 @@ def main() -> int:
         failures.append("no process ran as the numeric subject's uid")
     if not any(SUBJECT_UID_BASE <= u < WORKLOAD_UID_BASE for u in uids):
         failures.append("no process ran as the named subject's uid")
-    display = grp.getgrnam("vexa-display").gr_gid
     bots = [st for st in seen.values() if st["uids"][0] >= WORKLOAD_UID_BASE]
     if not bots:
         failures.append("no process ran as a workload uid (the bot)")
-    for st in bots:
-        if st["groups"] != [display]:
-            failures.append(f"a bot process ({st['name']}) has groups other than vexa-display")
     for st in seen.values():
-        if st["uids"][0] < WORKLOAD_UID_BASE and st["groups"]:
-            failures.append(f"a worker process ({st['name']}) holds supplementary groups {st['groups']}")
+        if st["groups"]:
+            failures.append(f"a child process ({st['name']}) holds supplementary groups {st['groups']}")
+    if os.path.exists("/tmp/.X11-unix/X99") or os.path.exists("/tmp/.X99-lock"):
+        failures.append("a shared display :99 exists")
     others = pids()
     identities = {(tuple(st["uids"]), st["gids"][0], tuple(st["groups"])) for st in seen.values()}
     for ids, gid, groups in identities:
         bot = ids[0] >= WORKLOAD_UID_BASE
         failures += [f"uid {ids[0]}: {b}" for b in probe_as(list(ids), gid, list(groups), others, bot)]
+    failures += [f"root-only path open to others: {m}" for m in loose_modes()]
+    if not os.path.exists("/run/vexa/key.env"):
+        notes.append("self-host keys not minted on this boot (VEXA_API_KEY supplied?): key.env not checked")
     secrets_ = secret_values()
     for pid in others:
         try:
@@ -390,8 +360,8 @@ def main() -> int:
             print(f"  ✗ child identities: {f}", file=sys.stderr)
         return 1
     print(f"  ✓ child identities: {len(seen)} spawned processes, {len(identities)} identities — none root, "
-          "none can read another process's environment or root's state; only bots open the display; "
-          "VNC closed or password-protected; refused dispatch started nothing; no secret on any command line")
+          "none can read another process's environment or root's state, none holds a group; no shared "
+          "display, no VNC; refused dispatch started nothing; no secret on any command line")
     for note in notes:
         print(f"  ✓ {note}" if "skipped" not in note else f"  · {note}")
     return 0

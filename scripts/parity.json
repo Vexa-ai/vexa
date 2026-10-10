@@ -2102,6 +2102,23 @@
           "pattern": "^\\| `gateway` \\| ([^|\\n]*) \\|$"
         }
       ]
+    },
+    {
+      "id": "moby-profiles-licence",
+      "fact": "the licence of the seccomp profile derived from Docker's (moby/profiles, Apache-2.0)",
+      "kind": "file-bytes",
+      "enforced": true,
+      "canonical": "licenses/moby-profiles.LICENSE.txt",
+      "how_to_agree": "copy the verbatim upstream licence beside the profile in the runtime package, so every image that carries core/runtime/src carries its licence",
+      "why": "runtime_kernel/seccomp-userns.json is Docker Engine's default profile with one rule added. licenses/ holds the verbatim upstream text (THIRD_PARTY_LICENSES.md); the runtime image's build context is core/runtime, so the copy that travels with the bytes must live there.",
+      "sites": [
+        {
+          "path": "licenses/moby-profiles.LICENSE.txt"
+        },
+        {
+          "path": "core/runtime/src/runtime_kernel/seccomp-userns.LICENSE.txt"
+        }
+      ]
     }
   ]
 }

@@ -66,7 +66,7 @@ class Settings(BaseSettings):
     # ── Stream primitive — the per-dispatch redis Streams (unit:<id>:out / :in) ─
     redis_url: str = "redis://redis:6379/0"
     # What a WORKER connects to Redis as (control_plane.workload_redis). `per-workload` (the default):
-    # a Redis user of its own unit's three keys and nothing else. `shared`: the service connection
+    # a Redis user of its own unit's four keys (input, output, read cursor, delegation token) and nothing else. `shared`: the service connection
     # above — only for a Redis that cannot define users, and only where every person on the instance
     # trusts every other. One name across agent-api and meeting-api, hence the alias.
     redis_workload_acl: str = Field(

@@ -146,6 +146,44 @@ async function internalRequest<T>(path: string, init: RequestInit = {}): Promise
   }
 }
 
+// ── OAuth sign-ins: the account's bound provider subject ───────────────────────────────────────
+
+/** Bind account `userId` to the OAuth subject signing in to it (`PUT
+ *  /internal/users/{id}/provider-subject`, signin.v1 `ProviderSubjectBindRequest`). The first sign-in
+ *  through a provider records the subject; a later one must carry the same.
+ *
+ *  `bound` only on a 200 that says `first` or `same`; a 409 is `mismatch` (the account belongs to
+ *  another identity of that provider); anything else is `unavailable`, which refuses the sign-in. */
+export async function bindProviderSubject(
+  userId: string | number,
+  subject: string,
+): Promise<"bound" | "mismatch" | "unavailable"> {
+  const res = await internalRequest<{ bound?: unknown }>(
+    `/internal/users/${encodeURIComponent(String(userId))}/provider-subject`,
+    { method: "PUT", body: JSON.stringify({ subject }) },
+  );
+  if (res.ok) return res.data?.bound === "first" || res.data?.bound === "same" ? "bound" : "unavailable";
+  return res.status === 409 ? "mismatch" : "unavailable";
+}
+
+// ── emailed sign-in links: the shared single-use record ─────────────────────────────────────────
+
+/** Record that the sign-in link `jti` is being redeemed (`POST /internal/signin-links/redeem`,
+ *  signin.v1 `SigninLinkRedeemRequest`). admin-api keeps the record in the service Redis until
+ *  `expiresAt`, for every terminal replica at once.
+ *
+ *  `first` only on a 200 whose body says `first: true`; a 409 is `used` (a replay, or a link past its
+ *  expiry); anything else — no internal edge configured, admin-api unreachable, its store down — is
+ *  `unavailable`, which the caller must treat as a refusal. */
+export async function redeemSigninLink(jti: string, expiresAt: number): Promise<"first" | "used" | "unavailable"> {
+  const res = await internalRequest<{ first?: unknown }>("/internal/signin-links/redeem", {
+    method: "POST",
+    body: JSON.stringify({ jti, expires_at: expiresAt }),
+  });
+  if (res.ok) return res.data?.first === true ? "first" : "unavailable";
+  return res.status === 409 ? "used" : "unavailable";
+}
+
 // ── instance state ──────────────────────────────────────────────────────────────
 //    admin-api owns the truth and answers it over the SAME internal door `internalRequest()` already
 //    uses (VEXA_ADMIN_API_URL + X-Internal-Secret). There used to be a second fact here, the
@@ -655,6 +693,7 @@ export type SigninRefused = { ok: false; status: number; error: string; refused:
  *  forget. */
 export async function findOrCreateUserToken(
   email: string,
+  opts: { subject?: string } = {},
 ): Promise<{ ok: true; user: AdminUser; token: string } | SigninRefused | { ok: false; status: number; error: string; refused?: undefined }> {
   const admission = await signinAdmission(email);
   if (!admission.admitted) {
@@ -678,6 +717,19 @@ export async function findOrCreateUserToken(
     justCreated = true;
   } else {
     return { ok: false, status: found.status || 503, error: found.error || "Failed to look up user" };
+  }
+
+  // AN OAUTH SIGN-IN IS BOUND TO ITS PROVIDER SUBJECT (providerIdentity.ts), before anything is
+  // minted: the first sign-in through a provider records it on the account, and a later one with a
+  // different subject — another account the same tenant administrator gave this address — is refused.
+  if (opts.subject) {
+    const binding = await bindProviderSubject(user.id, opts.subject);
+    if (binding === "mismatch") {
+      return { ok: false, status: 403, error: "this account is bound to another identity of that provider", refused: "not-allowed" };
+    }
+    if (binding !== "bound") {
+      return { ok: false, status: 503, error: "the account's provider binding could not be checked", refused: "unavailable" };
+    }
   }
 
   // Mint the login token with a stable `terminal-login` name so it is distinguishable from

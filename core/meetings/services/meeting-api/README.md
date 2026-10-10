@@ -34,16 +34,19 @@ and stays in their ecosystem (FastAPI + redis + DB).
 ### The session token (MeetingToken)
 
 The one credential a meeting bot holds (`src/meeting_api/meeting_token.py`). An HS256 JWT signed
-with `ADMIN_TOKEN`, minted by `POST /bots` for ONE bot session and bound to it: its `session_uid`
-claim is the spawn's `connection_id`, the id the eager `MeetingSession` is keyed by. It rides the
-bot's `invocation.v1` as `token`, so the bot workload is its only holder; it expires after
-`MEETING_TOKEN_TTL_SECONDS` (default 5 h). The bot presents it as `Authorization: Bearer <token>` on
-the doors above: the lifecycle callback (session = the event's `connection_id`), the
-recording/tape upload (session = the request's `session_uid`) and, in authenticated mode, the
-browser-session write-back (session = the path's `session_uid`). Both apply one rule,
-`admit_session`: a valid signature, unexpired, and bound to exactly that session. A token for another
-session, or bound to none, is refused, so a bot can move and write only its own session. The token's
-third use is the transcript: each `transcription_segments` entry carries `auth` (the token's
+with the MeetingToken key, which is derived from `ADMIN_TOKEN` (HMAC-SHA256 of it under the label
+`vexa/meeting-token/v1`, fact `meeting-token-key-label`) and is never the admin secret itself. It is
+minted by `POST /bots` for ONE bot session and bound to it: its `session_uid` claim is the spawn's
+`connection_id`, the id the eager `MeetingSession` is keyed by, and it carries `exp`, the
+MeetingToken's own `aud` and `scope`. It rides the bot's `invocation.v1` as `token`, so the bot
+workload is its only holder; it expires after `MEETING_TOKEN_TTL_SECONDS` (default 5 h). The bot
+presents it as `Authorization: Bearer <token>` on the three doors above: the lifecycle callback
+(session = the event's `connection_id`), the recording/tape upload (session = the request's
+`session_uid`) and, in authenticated mode, the browser-session write-back (session = the path's
+`session_uid`). All three apply one rule, `admit_session`: a valid signature, an `exp` not passed, the
+MeetingToken's `aud` and `scope` (each required), and bound to exactly that session. A token for
+another session, or bound to none, is refused, so a bot can move and write only its own session. The
+token's fourth use is the transcript: each `transcription_segments` entry carries `auth` (the token's
 header.payload) and `sig` (HMAC of the payload keyed with the token), and the collector admits only
 entries whose token names the meeting they write for (transcript.v1 `StreamEntry`). The bot's other
 credential is the Redis user in its `redisUrl`, defined for its session alone; with

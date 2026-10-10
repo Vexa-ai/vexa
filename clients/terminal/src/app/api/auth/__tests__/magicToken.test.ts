@@ -1,30 +1,34 @@
 /** Magic-link tokens — the signed emailed door.
  *
  *  These are the four properties the whole scheme rests on: only WE can mint one (signature), a
- *  stale one stops working (expiry), a link works exactly ONCE (jti ledger), and the `next=` a
+ *  stale one stops working (expiry), a link works exactly ONCE (admin-api's shared record of used jtis), and the `next=` a
  *  link carries can never point off-site (open-redirect guard). Everything else in the flow is
  *  plumbing around them.
  */
 import { createHmac } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+vi.mock("../adminApi", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../adminApi")>()),
+  // admin-api's single-use record for links, held in memory (./linkLedgerDouble.ts)
+  redeemSigninLink: (jti: string, expiresAt: number) => linkLedger.redeem(jti, expiresAt),
+}));
 import {
   DEFAULT_TTL_SECONDS,
   MAX_TTL_SECONDS,
-  _resetJtiLedger,
-  consumeJti,
   mintMagicToken,
   redeemMagicToken,
   safeNext,
   ttlSeconds,
   verifyMagicToken,
 } from "../magicToken";
+import { linkLedger } from "./linkLedgerDouble";
 
 function b64url(buf: Buffer): string {
   return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
 beforeEach(() => {
-  _resetJtiLedger();
+  linkLedger.reset();
   vi.stubEnv("MAGIC_LINK_SECRET", "");
   vi.stubEnv("NEXTAUTH_SECRET", "test-signing-secret-0123456789abcdef");
   vi.stubEnv("MAGIC_LINK_TTL_SECONDS", "");
@@ -152,42 +156,54 @@ describe("mint / verify", () => {
   });
 });
 
-describe("single use (the jti ledger)", () => {
-  it("redeems once, then refuses the same link as used", () => {
+describe("single use (admin-api's shared record)", () => {
+  it("redeems once, then refuses the same link as used", async () => {
     const minted = mintMagicToken("someone@example.com");
     expect(minted.ok).toBe(true);
     if (!minted.ok) return;
-    expect(redeemMagicToken(minted.token)).toMatchObject({ ok: true, email: "someone@example.com" });
-    expect(redeemMagicToken(minted.token)).toEqual({ ok: false, reason: "used" });
-    expect(redeemMagicToken(minted.token)).toEqual({ ok: false, reason: "used" });
+    expect(await redeemMagicToken(minted.token)).toMatchObject({ ok: true, email: "someone@example.com" });
+    expect(await redeemMagicToken(minted.token)).toEqual({ ok: false, reason: "used" });
+    expect(await redeemMagicToken(minted.token)).toEqual({ ok: false, reason: "used" });
   });
 
-  it("two DIFFERENT links are independent (the ledger keys on jti, not on the address)", () => {
+  it("two DIFFERENT links are independent (the record keys on jti, not on the address)", async () => {
     const a = mintMagicToken("someone@example.com");
     const b = mintMagicToken("someone@example.com");
     expect(a.ok && b.ok).toBe(true);
     if (!a.ok || !b.ok) return;
     expect(a.jti).not.toBe(b.jti);
-    expect(redeemMagicToken(a.token).ok).toBe(true);
-    expect(redeemMagicToken(b.token).ok).toBe(true);
+    expect((await redeemMagicToken(a.token)).ok).toBe(true);
+    expect((await redeemMagicToken(b.token)).ok).toBe(true);
   });
 
-  it("verifyMagicToken does NOT burn the jti — only redeem does", () => {
+  it("verifyMagicToken does NOT burn the jti — only redeem does", async () => {
     const minted = mintMagicToken("someone@example.com");
     expect(minted.ok).toBe(true);
     if (!minted.ok) return;
     expect(verifyMagicToken(minted.token).ok).toBe(true);
     expect(verifyMagicToken(minted.token).ok).toBe(true);
-    expect(redeemMagicToken(minted.token).ok).toBe(true);
+    expect((await redeemMagicToken(minted.token)).ok).toBe(true);
   });
 
-  it("forgets a jti once its token could no longer verify anyway (the ledger is bounded)", () => {
-    const now = 1_700_000_000_000;
-    const expiresAt = Math.floor(now / 1000) + 60;
-    expect(consumeJti("jti-1", expiresAt, now)).toBe(true);
-    expect(consumeJti("jti-1", expiresAt, now)).toBe(false);
-    // Past the expiry the sweep drops it — harmless, because verification refuses it first.
-    expect(consumeJti("jti-1", expiresAt, now + 120_000)).toBe(true);
+  it("a link redeemed by ANOTHER process is used here too", async () => {
+    const minted = mintMagicToken("someone@example.com");
+    if (!minted.ok) throw new Error("mint failed");
+    await linkLedger.redeem(minted.jti, minted.expiresAt);
+    expect(await redeemMagicToken(minted.token)).toEqual({ ok: false, reason: "used" });
+  });
+
+  it("an unreachable record refuses, and does not spend the link", async () => {
+    const minted = mintMagicToken("someone@example.com");
+    if (!minted.ok) throw new Error("mint failed");
+    linkLedger.down = true;
+    expect(await redeemMagicToken(minted.token)).toEqual({ ok: false, reason: "unavailable" });
+    linkLedger.down = false;
+    expect((await redeemMagicToken(minted.token)).ok).toBe(true);
+  });
+
+  it("a link that does not verify never reaches the record", async () => {
+    linkLedger.down = true;                     // would answer "unavailable" if it were asked
+    expect(await redeemMagicToken("garbage")).toEqual({ ok: false, reason: "malformed" });
   });
 });
 

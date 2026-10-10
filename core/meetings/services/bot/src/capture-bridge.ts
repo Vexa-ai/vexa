@@ -31,6 +31,9 @@ import {
   getAuthenticatedBrowserArgs,
   makeEphemeralProfileDir,
   removeProfileDir,
+  restrictNavigation,
+  authenticatedNavigationDomains,
+  type AuthPlatform,
   type Page,
   type BrowserContext,
 } from '@vexa/remote-browser';
@@ -569,6 +572,13 @@ export interface BrowserSession {
  * remote-browser auth args, so the page the JoinDriver receives is configured identically to
  * what @vexa/join expects.  // L4 (O6/VM): live-validated against a real meeting.
  */
+/** The stored-session platform behind each meeting platform (Jitsi has none). */
+const AUTH_PLATFORM: Partial<Record<Invocation['platform'], AuthPlatform>> = {
+  google_meet: 'google',
+  teams: 'teams',
+  zoom: 'zoom',
+};
+
 export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
   // Every bot gets its OWN profile dir — concurrent bots sharing one dir die on Chromium's
   // SingletonLock (#478: joining → failed <1s, "Opening in existing browser session").
@@ -595,6 +605,13 @@ export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
   // join args win on conflict (later wins in Chromium arg parsing).
   const args = [...getAuthenticatedBrowserArgs(), ...getJoinBrowserArgs()];
   const { context, page } = await launchPersistentBrowser({ dataDir, args });
+
+  // An authenticated browser carries the deployment's stored session: it navigates only to the
+  // meeting's host and the platform's own domains (sign-in included). Set before the first
+  // navigation; a guest browser is not restricted (a Jitsi meeting may be on any host).
+  if (inv.authenticated) {
+    await restrictNavigation(context, authenticatedNavigationDomains(AUTH_PLATFORM[inv.platform] ?? null, inv.meetingUrl));
+  }
 
   // Voice-agent gate the page reads to decide whether to keep the mic hot (production parity).
   await context.addInitScript(`window.__vexa_voice_agent_enabled = ${!!inv.voiceAgentEnabled};`);

@@ -44,20 +44,19 @@ DATA + APIs only.
 """
 from __future__ import annotations
 
-import errno
 import hashlib
 import json
 import logging
-import os
 import re
 import secrets
-import stat
 import threading
 import time
 import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional, Protocol
+
+from workspaces.shared import workspace_paths as wpaths
 
 log = logging.getLogger(__name__)
 
@@ -385,7 +384,7 @@ def _ws_dir(root: Path, workspace_id: str) -> Path:
     id would name a tree inside a store (``.attached/<subject>/<slot>``) — a private workspace that is
     nobody's shared workspace, whatever a ``policy/members.json`` left inside it says."""
     wid = str(workspace_id or "")
-    if not wid or "/" in wid or "\\" in wid or wid.startswith("."):
+    if not wpaths.is_workspace_name(wid):               # the one workspace name rule
         raise MembershipError("invalid workspace id", status=400)
     root = Path(root).resolve()
     ws = (root / workspace_id).resolve()
@@ -395,97 +394,29 @@ def _ws_dir(root: Path, workspace_id: str) -> Path:
 
 
 # The policy files sit in the work tree, which the model's tools may write during a turn. So below
-# the workspace root nothing is reached through a link: each folder is opened without following one,
-# the file is read only when it is a regular file with no other hard link, and a write creates a new
-# file and renames it over the name — a link planted at the file is replaced, never written through,
-# and a link planted at a folder refuses the write. A list that cannot be read that way is empty:
-# no members, never somebody else's.
-_DIR_NOFOLLOW = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
-_FILE_NOFOLLOW = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0)
-_CREATE_NEW = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
-
-
-def _policy_dir_fd(ws: Path, parts: "list[str]", *, create: bool = False) -> int:
-    """A descriptor for ``ws/<parts…>``: ``ws`` (already traversal-guarded) as given, each part below
-    it opened without following a link; a missing one (``ws`` included) made first when ``create``."""
-    if create:
-        Path(ws).mkdir(parents=True, exist_ok=True)
-    fd = os.open(ws, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0))
-    try:
-        for part in parts:
-            if create:
-                try:
-                    os.mkdir(part, 0o755, dir_fd=fd)
-                except FileExistsError:
-                    pass
-            nxt = os.open(part, _DIR_NOFOLLOW, dir_fd=fd)
-            os.close(fd)
-            fd = nxt
-    except BaseException:
-        os.close(fd)
-        raise
-    return fd
-
-
+# the workspace root nothing is reached through a link (``workspace_paths``): each folder is opened
+# without following one, the file is read only when it is a regular file with no other hard link,
+# and a write creates a new file and renames it over the name — a link planted at the file is
+# replaced, never written through, and a link planted at a folder refuses the write. A list that
+# cannot be read that way is empty: no members, never somebody else's.
 def _read_json_list(ws: Path, rel: str) -> list[dict]:
-    *parts, name = rel.split("/")
-    try:
-        dir_fd = _policy_dir_fd(ws, parts)
-    except FileNotFoundError:
-        return []
-    except OSError as exc:
-        log.warning("%s in %s not read (%s); treating as empty", rel, ws, exc.strerror or exc)
+    raw = wpaths.read_bytes_inside(ws, rel)
+    if raw is None:
         return []
     try:
-        fd = os.open(name, _FILE_NOFOLLOW, dir_fd=dir_fd)
-    except FileNotFoundError:
-        return []
-    except OSError as exc:
-        log.warning("%s in %s not read (%s); treating as empty", rel, ws, exc.strerror or exc)
-        return []
-    finally:
-        os.close(dir_fd)
-    try:
-        st = os.fstat(fd)
-        if not stat.S_ISREG(st.st_mode) or st.st_nlink > 1:
-            log.warning("%s in %s is not a regular file with a single link; treating as empty", rel, ws)
-            return []
-        with os.fdopen(fd, "rb") as fh:
-            fd = -1
-            data = json.loads(fh.read())
-        return data if isinstance(data, list) else []
-    except (OSError, ValueError):
+        data = json.loads(raw)
+    except ValueError:
         log.warning("could not parse %s in %s; treating as empty", rel, ws)
         return []
-    finally:
-        if fd >= 0:
-            os.close(fd)
+    return data if isinstance(data, list) else []
 
 
 def _write_json_list(ws: Path, rel: str, rows: list[dict]) -> None:
-    *parts, name = rel.split("/")
     try:
-        dir_fd = _policy_dir_fd(ws, parts, create=True)
-    except OSError as exc:
-        if exc.errno in (errno.ELOOP, errno.ENOTDIR):
-            raise MembershipError(f"{'/'.join(parts)} in this workspace is not a plain folder",
-                                  status=409) from exc
-        raise
-    try:
-        tmp = f".{name}.{os.getpid()}.{threading.get_ident()}.{time.monotonic_ns()}.tmp"
-        fd = os.open(tmp, _CREATE_NEW, 0o644, dir_fd=dir_fd)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                fh.write(json.dumps(rows, indent=2, sort_keys=False) + "\n")
-            os.replace(tmp, name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
-        except BaseException:
-            try:
-                os.unlink(tmp, dir_fd=dir_fd)
-            except OSError:
-                pass
-            raise
-    finally:
-        os.close(dir_fd)
+        wpaths.write_text_inside(ws, rel, json.dumps(rows, indent=2, sort_keys=False) + "\n")
+    except wpaths.PathRefused as exc:
+        raise MembershipError(f"{rel.rsplit('/', 1)[0]} in this workspace is not a plain folder",
+                              status=409) from exc
 
 
 # ── the invite store (outside every workspace mount — see INVITE_STORE_DIR above) ────────────────
@@ -496,7 +427,7 @@ def invites_path(root: Path, workspace_id: str) -> Path:
     function and no other, so "persisted somewhere the preview does not read" is not a state this
     code can be in. Traversal-guarded on the workspace id for the same reason ``_ws_dir`` is."""
     slug = str(workspace_id or "").strip()
-    if not slug or "/" in slug or "\\" in slug or slug in (".", ".."):
+    if not wpaths.is_workspace_name(slug):              # the one workspace name rule
         raise MembershipError("invalid workspace id", status=400)
     root = Path(root).resolve()
     path = (root / INVITE_STORE_DIR / f"{slug}.json").resolve()
@@ -544,23 +475,9 @@ def strip_policy(ws: Path, *, commit_fn: Optional[CommitFn] = None) -> list[str]
     inside would still name people who no longer have access. Each file is removed through the policy
     folder's descriptor, never through a link; the removal is committed (as the platform, unless
     ``commit_fn`` says otherwise) so the tree's history records it. The relative paths removed."""
-    try:
-        dir_fd = _policy_dir_fd(Path(ws), [POLICY_DIR])
-    except FileNotFoundError:
-        return []
-    except OSError as exc:      # a link where the policy folder should be: nothing in it is read
-        log.warning("%s in %s is not a plain folder (%s); nothing stripped", POLICY_DIR, ws, exc.strerror or exc)
-        return []
-    removed: list[str] = []
-    try:
-        for rel in (MEMBERS_FILE, LEGACY_INVITES_FILE):
-            try:
-                os.unlink(rel.split("/", 1)[1], dir_fd=dir_fd)
-                removed.append(rel)
-            except FileNotFoundError:
-                pass
-    finally:
-        os.close(dir_fd)
+    # each removed through the folders' descriptors (``workspace_paths.unlink_inside``): a link where
+    # the policy folder should be removes nothing, and a link at a file is removed itself
+    removed = [rel for rel in (MEMBERS_FILE, LEGACY_INVITES_FILE) if wpaths.unlink_inside(Path(ws), rel)]
     if removed:
         _commit(commit_fn or policy_commit, Path(ws), "unshare: the member list leaves with the group")
     return removed

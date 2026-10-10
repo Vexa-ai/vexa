@@ -54,9 +54,10 @@ PRIVATE_ROLE = "private"
 # the membership index + authoritatively re-checked against the workspace's own policy/members.json. Write
 # access is gated by the member's role (contributor/owner write; viewer is read-only).
 SHARED_ROLE = "shared"
-# THE WORKSPACE NAMING RULE: one name, starting alphanumeric — so never a separator, never a dotname,
-# never ``.`` or ``..``. Every slug and every shared workspace id this module joins onto a path meets it.
-_WORKSPACE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$")
+# THE WORKSPACE NAME RULE is ``workspace_paths.is_workspace_name`` — one name, never a separator, never
+# a dotname, never ``.`` or ``..``. Every slug and every shared workspace id this module joins onto a
+# path meets it, and never as a platform tier (``tier=False``): ``_global`` and ``_system`` are not
+# slots, attachable trees or shareable workspaces.
 
 # Inject the actual clone for tests (a local file repo, no network). Signature: (repo_url, ref, dest, token).
 CloneFn = Callable[[str, str, Path, Optional[str]], None]
@@ -109,11 +110,11 @@ def _slot(store: Path, slug: Optional[str]) -> Path:
     """``store/<slug>`` for a slug that names ONE slot of this store, or ``KeyError``.
 
     Every path this module builds from a slug goes through here. A slug is one name under the
-    workspace naming rule (``_WORKSPACE_ID_RE``: no separator, no leading dot, so never ``.`` or
+    workspace name rule (``workspace_paths.is_workspace_name``: no separator, no leading dot, so never ``.`` or
     ``..``), and the joined path must still resolve inside ``store`` — the subject's own store, or
     the one shared workspace's store. Anything else is not a workspace of this store."""
     s = (slug or "").strip()
-    if not _WORKSPACE_ID_RE.fullmatch(s):
+    if not wpaths.is_workspace_name(s, tier=False):
         raise KeyError(s)
     try:
         wpaths.resolve_inside(store, s)
@@ -272,7 +273,7 @@ def _normalized_active_set(state: dict) -> list[str]:
     for slug in state.get("active_set", []):
         if not isinstance(slug, str) or slug in ordered:
             continue
-        if slug == seed_slot or (slug in state.get("slots", {}) and _WORKSPACE_ID_RE.fullmatch(slug)):
+        if slug == seed_slot or (slug in state.get("slots", {}) and wpaths.is_workspace_name(slug, tier=False)):
             ordered.append(slug)
     return ordered
 
@@ -529,7 +530,7 @@ def ensure_workspace_shareable(root: str | Path, subject: str, slug: str) -> tup
 
     rootp = Path(root).resolve()
     _safe_subject_dir(rootp, subject)
-    if not _WORKSPACE_ID_RE.fullmatch(slug or ""):
+    if not wpaths.is_workspace_name(slug or "", tier=False):
         raise KeyError(slug)
     store = _store(rootp, subject)
     state = _load_state(store)
@@ -608,7 +609,7 @@ def ensure_workspace_private(root: str | Path, subject: str, workspace_id: str) 
     After this, the workspace is private again — other members lose access (its top-level path is gone)."""
     rootp = Path(root).resolve()
     _safe_subject_dir(rootp, subject)
-    if not _WORKSPACE_ID_RE.fullmatch(workspace_id or ""):
+    if not wpaths.is_workspace_name(workspace_id or "", tier=False):
         raise KeyError(workspace_id)
     ws = (rootp / workspace_id).resolve()
     if not ws.exists() or rootp not in ws.parents:
@@ -647,7 +648,7 @@ def shared_active_mounts(root: str | Path, subject: str, memberships: list[dict]
     mounts: list[ActiveMount] = []
     for entry in memberships:
         ws_id = (entry.get("workspace_id") or "").strip() if isinstance(entry, dict) else ""
-        if (not ws_id or ws_id == subject or ws_id.startswith(".") or "/" in ws_id or "\\" in ws_id
+        if (not wpaths.is_workspace_name(ws_id) or ws_id == subject
                 or ws_id in membership.RESERVED_SLUGS):
             continue  # own baseline / reserved / dot-namespaced / not one name are never shared mounts
         if ws_id in hidden:
@@ -944,7 +945,7 @@ def shared_store(root: str | Path, workspace_id: str) -> Path:
 
 def _safe_workspace_id(workspace_id: str) -> str:
     wid = (workspace_id or "").strip()
-    if not _WORKSPACE_ID_RE.fullmatch(wid) or wid in ("seed", SEED_BACKUP_SLOT):
+    if not wpaths.is_workspace_name(wid, tier=False) or wid in ("seed", SEED_BACKUP_SLOT):
         raise ValueError("invalid workspace id")
     return wid
 

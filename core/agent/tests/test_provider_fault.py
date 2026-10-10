@@ -51,8 +51,8 @@ def test_unpaid_names_the_provider_and_how_to_pay_it():
     f = faults.classify(status=402, text=json.dumps(OPENROUTER_402), provider="openrouter.ai")
     assert f.kind == "unpaid"
     assert f.detail.startswith("Insufficient credits")
-    assert "Add credit at openrouter.ai" in f.remedy
-    assert "out of credit (402)" in f.sentence()
+    assert "Add credits at openrouter.ai" in f.remedy
+    assert "out of credits (402)" in f.sentence()
     assert set(f.as_dict()) == {"source", "kind", "provider", "model", "status", "detail", "remedy"}
 
 
@@ -115,7 +115,7 @@ def test_claude_code_ends_a_402_turn_with_a_typed_unpaid_fault(openrouter):
         "model": "anthropic/claude-sonnet-4", "status": 402,
         "detail": done["fault"]["detail"], "remedy": done["fault"]["remedy"]}
     assert done["fault"]["detail"].startswith("Insufficient credits")
-    assert "Add credit at openrouter.ai" in done["fault"]["remedy"]
+    assert "Add credits at openrouter.ai" in done["fault"]["remedy"]
     assert "out of credit" in done["reply"]
 
 

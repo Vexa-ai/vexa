@@ -166,17 +166,14 @@ def entity_slug_index(root, *, workspace_id: str, kinds=None, slugify=None) -> d
 
     Built by ``entity_upsert`` for each of the OTHER mounted workspaces, so a rewrite is a dict
     lookup rather than a directory walk per link."""
-    from pathlib import Path
-
     from workspaces.shared.entities import ENTITIES_DIR, KINDS
 
-    base = Path(root) / ENTITIES_DIR
+    from workspaces.shared import workspace_paths as wpaths
+
     out: dict = {}
     for kind in (kinds or KINDS):
-        d = base / kind
-        if not d.is_dir():
-            continue
-        for f in d.glob("*.md"):
-            if f.name != "index.md":
-                out.setdefault(f.stem, workspace_id)
+        # by descriptor, following no link: a linked kind folder or page is not this workspace's
+        for name in wpaths.list_files_inside(root, f"{ENTITIES_DIR}/{kind}", suffix=".md"):
+            if name != "index.md":
+                out.setdefault(name[:-3], workspace_id)
     return out

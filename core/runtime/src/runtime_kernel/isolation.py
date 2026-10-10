@@ -47,6 +47,7 @@ import threading
 from dataclasses import dataclass, field, replace
 from typing import Callable, Iterable, Mapping, Optional
 
+from . import userns
 from .mounts import mount_set
 
 logger = logging.getLogger("runtime_kernel.isolation")
@@ -666,13 +667,22 @@ def _no_new_privs() -> Callable[[], None]:
     return _set
 
 
-def preexec_for(identity: ChildIdentity) -> Callable[[], None]:
+def preexec_for(identity: ChildIdentity, *, user_namespaces: bool = False) -> Callable[[], None]:
     """The Popen ``preexec_fn`` dropping the forked child to ``identity`` (groups → gid → uid, in that
     order — after setuid the process can no longer change groups), then proving the drop: a child
-    that still holds uid 0 or gid 0 anywhere raises, and Popen fails the spawn."""
+    that still holds uid 0 or gid 0 anywhere raises, and Popen fails the spawn. Unless its profile
+    says it may (``user_namespaces``: a meeting bot, for Chromium's sandbox), the child then loses
+    the ability to create a user namespace, for itself and all it starts (runtime_kernel.userns); a
+    machine without that filter refuses the spawn."""
     if identity.uid == 0 or identity.gid == 0:
         raise IsolationRefused("refusing to run a child as root")
     no_new_privs = _no_new_privs()
+    refuse_userns: Optional[Callable[[], None]] = None
+    if not user_namespaces:
+        try:
+            refuse_userns = userns.refusal()
+        except OSError as e:
+            raise IsolationRefused(f"cannot refuse the child user namespaces here ({e})") from e
 
     def _drop() -> None:
         os.setgroups(list(identity.groups))
@@ -683,6 +693,8 @@ def preexec_for(identity: ChildIdentity) -> Callable[[], None]:
         if 0 in uids or 0 in gids or 0 in os.getgroups():
             raise OSError(errno.EPERM, "the child still holds root")
         no_new_privs()
+        if refuse_userns is not None:
+            refuse_userns()
     return _drop
 
 

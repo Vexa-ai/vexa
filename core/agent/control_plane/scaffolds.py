@@ -496,7 +496,7 @@ def group_state(workspaces_root: str | Path, group_slug: str) -> str:
     is the client's rule: the client already holds the meetings list, the server would have to fetch
     it, and what the preset actually branches on is whether there is group memory to build ON."""
     g = str(group_slug or "")
-    if not g or "/" in g or "\\" in g or g.startswith("."):
+    if not wpaths.is_workspace_name(g):
         return "absent"                 # not one workspace name: bound to nothing
     root = Path(workspaces_root) / g
     if not root.is_dir():

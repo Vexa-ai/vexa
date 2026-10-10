@@ -278,7 +278,8 @@ def test_the_qwen_lane_dials_are_declared():
     declared = {k["key"] for k in cp.load_declaration()["keys"]}
     assert {"VEXA_LLM_BASE_URL", "VEXA_LLM_API_KEY", "VEXA_LLM_MODEL", "VEXA_LLM_EXTRA_BODY",
             "VEXA_AGENT_MODEL", "VEXA_AGENT_STREAM", "VEXA_AGENT_MAX_TOOL_CALLS",
-            "VEXA_AGENT_MAX_TURN_SEC", "VEXA_AGENT_CONTEXT_TOKENS", "VEXA_MOUNTS",
+            "VEXA_AGENT_MAX_TURN_SEC", "VEXA_AGENT_CONTEXT_TOKENS", "VEXA_AGENT_MAX_OUTPUT_TOKENS",
+            "VEXA_MOUNTS",
             "VEXA_RUNNER"} <= declared
 
 
@@ -328,7 +329,9 @@ def test_the_qwen_lane_dials_are_declared():
 # 107: +1 VEXA_MODEL_ROUTE — the dispatch's mark on a worker routed to the person's own endpoint.
 # 106: -1 VEXA_MEETINGS_DB_URL — it served invited_meetings only, which nothing called; both went.
 # 107: +1 VEXA_MODEL_CATALOG — the operator's model catalog (ADR-0043, models.v1 Catalog).
-EXPECTED_DECLARED_KEYS = 107
+# 108: +1 VEXA_AGENT_MAX_OUTPUT_TOKENS — the output cap every harness reads (claude-code maps it onto
+# CLAUDE_CODE_MAX_OUTPUT_TOKENS, openai-agent sends it as max_tokens).
+EXPECTED_DECLARED_KEYS = 108
 
 
 def test_connections_keys_are_capabilities_on_real_surfaces():

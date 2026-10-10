@@ -683,3 +683,129 @@ def test_remove_tree_unlinks_a_link_and_never_empties_its_target(tmp_path, outsi
     wpaths.remove_tree(tree)
     assert not tree.exists() and (outside / "keep.txt").exists()
     wpaths.remove_tree(store / "absent")                     # absent is a no-op
+
+
+# ── removals and listings by name (arch pass 6, S58) ─────────────────────────────────────────────
+
+def test_page_removal_acts_on_what_it_checked_not_on_a_link_swapped_in(monkeypatch, tmp_path, outside):
+    """`POST /api/workspace/remove` (the MCP's `workspace_delete`) resolved the path, then removed it
+    by name: a folder swapped for a link between the two made root delete the file it points at."""
+    from tests.test_delegation_ceiling_verbs import PERSON, _build, _person
+    client = _build(monkeypatch, tmp_path)
+    r = client.put("/api/workspace/file", json={"path": "sub/f.md", "content": "mine"}, headers=_person())
+    assert r.status_code == 200, r.text
+    desk = (tmp_path / "workspaces" / PERSON).resolve()
+    victim = outside / "f.md"
+    victim.write_text("theirs")
+    real_resolve = Path.resolve
+    swapped = {"done": False}
+
+    def racing_resolve(self, *a, **kw):
+        out = real_resolve(self, *a, **kw)
+        if not swapped["done"] and str(self).endswith("sub/f.md"):
+            swapped["done"] = True
+            os.rename(desk / "sub", desk / "sub-real")
+            os.symlink(outside, desk / "sub")
+        return out
+
+    monkeypatch.setattr(Path, "resolve", racing_resolve)
+    client.post("/api/workspace/remove", json={"path": "sub/f.md"}, headers=_person())
+    monkeypatch.setattr(Path, "resolve", real_resolve)
+    assert swapped["done"] and victim.read_text() == "theirs"
+
+
+def test_dropping_a_chat_never_removes_a_pointer_through_a_link(tmp_path, outside):
+    """The chat-session drop removed `.claude/sessions/<s>.session` by name after an `exists()`: a
+    `.claude` or `sessions` the tools user linked elsewhere made root delete another chat's pointer."""
+    from control_plane.workspace_reader import WorkspaceReader
+    root = (tmp_path / "workspaces").resolve()
+    (outside / "sessions").mkdir()
+    victim = outside / "sessions" / "s1.session"
+    victim.write_text("their-session\n")
+    (root / "u1").mkdir(parents=True)
+    _link(root / "u1" / ".claude", outside)
+    (root / ".system" / "u2" / ".claude").mkdir(parents=True)
+    _link(root / ".system" / "u2" / ".claude" / "sessions", outside / "sessions")
+    reader = WorkspaceReader(str(root))
+    assert reader.drop_session("u1", "s1") is False
+    assert reader.drop_session("u2", "s1") is False
+    assert victim.read_text() == "their-session\n"
+
+
+def test_listings_of_a_work_tree_do_not_reach_through_a_link(tmp_path, outside):
+    """The entity chips index, the cross-workspace slug index, the document-name scan, the Workspace
+    tree and the harnesses' transcript sizes each listed a work tree by name, following a linked
+    folder into another tree."""
+    from control_plane import meeting_highlight
+    from control_plane.workspace_reader import WorkspaceReader
+    from llm.claude_code import ClaudeCodeHarness
+    from llm.codex import CodexHarness
+    from workspaces.shared import entities, links
+    (outside / "person").mkdir()
+    (outside / "person" / "eve-secret.md").write_text("x")
+    (outside / "doc-secret.md").write_text("x")
+    (outside / "projects" / "slug").mkdir(parents=True)
+    (outside / "projects" / "slug" / "sid.jsonl").write_text("x" * 5000)
+    (outside / "codex").mkdir()
+    (outside / "codex" / "rollout-sid.jsonl").write_text("x" * 5000)
+    root = (tmp_path / "workspaces").resolve()
+    ws = root / "u1"
+    (ws / "kg" / "entities").mkdir(parents=True)
+    _link(ws / "kg" / "entities" / "person", outside / "person")
+    _link(ws / "notes", outside)
+    (ws / ".claude").mkdir()
+    _link(ws / ".claude" / "projects", outside / "projects")
+    (ws / ".claude" / "codex").mkdir()
+    _link(ws / ".claude" / "codex" / "sessions", outside / "codex")
+    assert not any("eve-secret" in p for p in meeting_highlight.entity_files(ws))
+    assert "eve-secret" not in links.entity_slug_index(ws, workspace_id="w1")
+    assert "doc-secret" not in entities.workspace_docs(ws)
+    assert not any("secret" in p for p in WorkspaceReader(str(root)).tree_at(ws))
+    assert ClaudeCodeHarness().transcript_bytes(ws, "sid") == 0
+    assert CodexHarness().transcript_bytes(ws, "sid") == 0
+
+
+def test_the_codex_sessions_link_is_not_made_through_a_linked_folder(monkeypatch, tmp_path, outside):
+    from llm import codex
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
+    work = tmp_path / "work"
+    work.mkdir()
+    _link(work / ".claude", outside)
+    codex._link_sessions_into_workspace(work)
+    assert not (outside / "codex").exists()                  # nothing made through the link
+    assert not os.path.lexists(tmp_path / "codex-home" / "sessions")
+
+
+# ── one workspace name rule (arch pass 6, S69) ───────────────────────────────────────────────────
+
+_NAMES_OK = ["58", "u_priya", "acme-1a2b3c", "a.b", "x" * 121]
+_NAMES_BAD = ["", ".", "..", ".attached", "a/b", "a\\b", "a b", "x" * 122, "/etc", "a\0b",
+              "lost+found", "dmitry@vexa.ai"]
+
+
+@pytest.mark.parametrize("name", _NAMES_OK + _NAMES_BAD + ["_global"])
+def test_every_spelling_of_the_workspace_name_rule_answers_the_same(tmp_path, name):
+    """The rule had six spellings that disagreed (a backslash, any length, a leading dot). Each site
+    now asks `workspace_paths.is_workspace_name`; a name it refuses is refused at every one."""
+    from control_plane import api_shared, scaffolds, workspace_ids, workspace_membership
+    from workspaces.shared import workspace_paths as wpaths
+    ok = wpaths.is_workspace_name(name)
+    assert ok == (name in _NAMES_OK or name == "_global")
+    assert api_shared._is_slug(name) is ok
+    assert (scaffolds.group_state(tmp_path, name) != "absent") is ok
+    try:
+        workspace_membership._ws_dir(tmp_path, name)
+        member_ok = True
+    except workspace_membership.MembershipError:
+        member_ok = False
+    assert member_ok is ok
+    try:
+        workspace_membership.invites_path(tmp_path, name)
+        invites_ok = True
+    except workspace_membership.MembershipError:
+        invites_ok = False
+    assert invites_ok is ok
+    rec = {"owner": name, "dir": str(tmp_path / ".attached" / name / "slot")}
+    assert (workspace_ids.private_owner(rec, root=tmp_path) == name) is (ok and name != "")
+    # a platform tier is a name, but never a slot, an attachable tree or a shareable workspace
+    assert wpaths.is_workspace_name(name, tier=False) is (ok and not name.startswith("_"))

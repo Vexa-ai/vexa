@@ -833,12 +833,13 @@ def meeting_binding(ev: object) -> "tuple[str, str] | None":
 
 
 def _is_slug(wid: str) -> bool:
-    """A workspace slug is ONE path segment and never a dot-namespaced reserved one.
+    """A workspace slug, by THE workspace name rule (``workspace_paths.is_workspace_name``, its one
+    owner): one path segment, never a dotname, never a separator.
 
-    ONE spelling, shared by everything that takes a slug off a stream or a request and stores it
-    durably (``workspace_focus`` below, ``_Sessions.set_target``). A focus or a target aimed at a
-    guess is worse than none: it survives into every later turn of the chat."""
-    return bool(wid) and "/" not in wid and not wid.startswith(".")
+    Used by everything here that takes a slug off a stream or a request and stores it durably
+    (``workspace_focus`` below, ``_Sessions.set_target``). A focus or a target aimed at a guess is
+    worse than none: it survives into every later turn of the chat."""
+    return wpaths.is_workspace_name(wid)
 
 
 def workspace_focus(ev: object) -> "str | None":

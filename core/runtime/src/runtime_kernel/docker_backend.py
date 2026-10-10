@@ -25,6 +25,7 @@ from .backend import WorkloadHandle
 from .models import Resources
 from .mounts import workspace_binds
 from .profiles import Runnable
+from .userns import container_profile
 from .workload_env import forwarded_env, name_component
 
 MANAGED_LABEL = "runtime.managed"
@@ -32,6 +33,21 @@ WORKLOAD_ID_LABEL = "runtime.workload_id"
 _COMPOSE_LABEL = "com.docker.compose.project"
 
 logger = logging.getLogger("runtime_kernel.docker_backend")
+
+_PROFILE_CACHE: dict[str, str] = {}
+
+
+def _userns_profile() -> str:
+    """The user-namespace seccomp profile (runtime_kernel/seccomp-userns.json) for the Docker API, read
+    once. Unreadable → empty, said loudly: the bot then starts under the daemon's default profile."""
+    if "profile" not in _PROFILE_CACHE:
+        try:
+            _PROFILE_CACHE["profile"] = container_profile()
+        except (OSError, ValueError) as e:
+            logger.error("seccomp profile for meeting bots unreadable (%s): their browsers will run "
+                         "without Chromium's sandbox", e)
+            _PROFILE_CACHE["profile"] = ""
+    return _PROFILE_CACHE["profile"]
 
 
 def _stop_grace_sec() -> int:
@@ -223,6 +239,13 @@ class DockerBackend:
         host_config: dict[str, Any] = {"CapDrop": ["ALL"], "SecurityOpt": ["no-new-privileges"]}
         if runnable.capabilities:
             host_config["CapAdd"] = list(runnable.capabilities)
+        # A workload whose profile may create user namespaces (a meeting bot: Chromium's sandbox is
+        # built on one) runs under the profile that allows it, in its own container only. Without
+        # the file the bot still starts; its browser then says it runs unsandboxed.
+        if runnable.user_namespaces:
+            profile = _userns_profile()
+            if profile:
+                host_config["SecurityOpt"].append(f"seccomp={profile}")
         network = _workload_network(runnable.network_env)
         if network:
             host_config["NetworkMode"] = network

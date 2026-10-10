@@ -43,8 +43,8 @@ const SPAWN_REFUSED = {
 };
 const UNPAID = {
   source: "model-provider", kind: "unpaid", status: 402, provider: "openrouter.ai", model: "anthropic/claude-sonnet-4",
-  detail: "Insufficient credits. Add more using https://openrouter.ai/settings/credits",
-  remedy: "Add credit at openrouter.ai, or choose another model under Settings → Models.",
+  detail: "This request requires more credits, or fewer max_tokens. You requested up to 32000 tokens, but can only afford 4857.",
+  remedy: "Add credits at openrouter.ai, lower the model's output cap (VEXA_AGENT_MAX_OUTPUT_TOKENS), or choose another model under Settings → Models.",
 };
 
 const container = () => createContainer([
@@ -155,9 +155,36 @@ describe("a model provider out of credit", () => {
     await act(async () => { stream.calls[0].cb.onFault?.(UNPAID as never, "out of credit" as never); stream.calls[0].finish(); });
     const block = await screen.findByRole("alert");
     expect(block.getAttribute("data-fault-kind")).toBe("unpaid");
-    expect(block.textContent).toContain("Model provider (openrouter.ai) · out of credit (402)");
-    expect(block.textContent).toContain("Insufficient credits");
-    expect(block.textContent).toContain("Add credit at openrouter.ai");
+    expect(block.textContent).toContain("Model provider · out of credits (402)");
+    expect(block.textContent).toContain("can only afford 4857");
+    expect(block.textContent).toContain("Add credits at openrouter.ai");
     expect(document.body.textContent).not.toContain("Model inference failed");
+  });
+
+  it("is said ONCE: one block, the provider's words once, no raw `API Error`, no account link", async () => {
+    mountChat();
+    await say("hi");
+    await waitFor(() => expect(stream.calls.length).toBe(1));
+    await act(async () => { stream.calls[0].cb.onFault?.(UNPAID as never, "The model provider (openrouter.ai) is out of credits (402)." as never); stream.calls[0].finish(); });
+    expect(await screen.findAllByRole("alert")).toHaveLength(1);
+    const body = document.body.textContent ?? "";
+    expect(body.split("can only afford 4857").length - 1).toBe(1);
+    expect(body).not.toContain("API Error");
+    expect(body).not.toMatch(/https?:\/\/|settings\/keys/);
+  });
+
+  it("a server one release behind (no fault) does not repeat the text the turn already streamed", async () => {
+    mountChat();
+    await say("hi");
+    await waitFor(() => expect(stream.calls.length).toBe(1));
+    const raw = "API Error: 402 This request requires more credits, or fewer max_tokens.";
+    await act(async () => {
+      stream.calls[0].cb.onDelta(raw as never);
+      stream.calls[0].cb.onModelFailure(raw as never);
+      stream.calls[0].finish();
+    });
+    const body = document.body.textContent ?? "";
+    expect(body.split("API Error: 402").length - 1).toBe(1);
+    expect(body).toContain("Model inference failed.");
   });
 });

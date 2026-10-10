@@ -27,8 +27,6 @@ import logging
 import os
 import sys
 import re
-import shutil
-import stat
 import threading
 import time
 import urllib.error
@@ -55,6 +53,7 @@ from llm import jobs as llm_jobs
 from llm.ports import tools_identity
 from llm.errors import _AUTH_SIGNATURE_RE  # noqa: F401 — re-exported for the worker.worker shim
 from shared.seeding import resolve_seed_dir, seed_workspace, validate_seed
+from workspaces.shared import workspace_paths as wpaths
 from shared.marks import UNWRITTEN_MARK
 # PRD decision 31 §1 — WHERE THIS PERSON IS IN TIME, on every dispatch (used in the preamble list
 # in `run_turn_over_workspace`). Imported rather than written here: the work is an HTTP read and a
@@ -178,15 +177,16 @@ def _continuity_root(work: Path) -> Path:
 
 
 # The legacy continuity below is adopted out of workspaces the model's tools can write, by a worker
-# that may run as root. So nothing there is reached through a link: below a mount root every folder
-# and file is opened by descriptor without following one, a file is read only once ``fstat`` says it
-# is a regular file with no other hard link (whose other name could be anywhere on the volume), and
-# a copy is created exclusively — never written through something already at its name.
-_NOFOLLOW_DIR = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
-_NOFOLLOW_FILE = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0)
-_CREATE_NEW = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+# that may run as root. So nothing there is reached through a link: everything goes through
+# ``workspace_paths`` — below a mount root every folder and file is opened by descriptor without
+# following one, a file is read only when it is a regular file with no other hard link (whose other
+# name could be anywhere on the volume), and a copy is created exclusively — never written through
+# something already at its name.
 #: A legacy session pointer is an id a few dozen bytes long; anything past this is not one.
 _LEGACY_POINTER_MAX_BYTES = 1 << 16
+#: Everything here sits under `.claude/`, which no caller-supplied path may reach
+#: (`workspace_paths.RESERVED_DIRS`); this is the platform's own reach into it.
+_PLUMBING = (".claude",)
 
 
 def _plain_name(name: str) -> bool:
@@ -194,78 +194,16 @@ def _plain_name(name: str) -> bool:
     return bool(name) and name not in (".", "..") and not any(c in name for c in "/\\\0")
 
 
-def _nofollow_dir(root: Path, parts: tuple[str, ...], *, create: bool = False) -> int:
-    """A descriptor for the folder ``root/<parts…>``: ``root`` (a mount) opened as given, each part
-    below it without following a link, a missing one made first when ``create``."""
-    fd = os.open(root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0))
-    try:
-        for part in parts:
-            if create:
-                try:
-                    os.mkdir(part, dir_fd=fd)
-                except FileExistsError:
-                    pass
-            nxt = os.open(part, _NOFOLLOW_DIR, dir_fd=fd)
-            os.close(fd)
-            fd = nxt
-    except BaseException:
-        os.close(fd)
-        raise
-    return fd
-
-
-def _open_regular(dir_fd: int, name: str) -> int:
-    """A descriptor for regular file ``name`` under ``dir_fd``, opened without following a link —
-    and only when it is a regular file, so a device or a FIFO is never opened — and refused
-    (``OSError``) unless ``fstat`` says it is still that file, with no other hard link."""
-    seen = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
-    if not stat.S_ISREG(seen.st_mode):
-        raise OSError(f"{name!r} is not a regular file")
-    fd = os.open(name, _NOFOLLOW_FILE, dir_fd=dir_fd)
-    try:
-        st = os.fstat(fd)
-        if (not stat.S_ISREG(st.st_mode) or st.st_nlink > 1
-                or (st.st_dev, st.st_ino) != (seen.st_dev, seen.st_ino)):
-            raise OSError(f"{name!r} is not a regular file with a single link")
-    except BaseException:
-        os.close(fd)
-        raise
-    return fd
+def _under(parts: tuple[str, ...], name: str) -> str:
+    return "/".join((*parts, name))
 
 
 def _read_text_nofollow(root: Path, parts: tuple[str, ...], name: str, max_bytes: int,
                         what: str) -> "str | None":
-    """The UTF-8 text of ``root/<parts…>/name``, or None when there is none, it is reached through a
-    link, it is not a regular file with a single link, it is over ``max_bytes`` or not UTF-8."""
-    try:
-        dir_fd = _nofollow_dir(root, parts)
-    except OSError:
-        return None
-    try:
-        fd = _open_regular(dir_fd, name)
-    except FileNotFoundError:
-        return None
-    except OSError as exc:
-        log.warning("%s %s/%s not read: %s", what, "/".join(parts), name, exc)
-        return None
-    finally:
-        os.close(dir_fd)
-    try:
-        chunks, size = [], 0
-        while size <= max_bytes and (chunk := os.read(fd, min(1 << 20, max_bytes + 1 - size))):
-            chunks.append(chunk)
-            size += len(chunk)
-        raw = b"".join(chunks)
-    except OSError:
-        return None
-    finally:
-        os.close(fd)
-    if len(raw) > max_bytes:
-        return None
-    try:
-        return raw.decode("utf-8")
-    except UnicodeDecodeError:
-        return None
+    """The UTF-8 text of ``root/<parts…>/name`` (``workspace_paths.read_text_inside``), or None when
+    there is none, it is reached through a link, it is not a regular file with a single link, it is
+    over ``max_bytes`` or not UTF-8."""
+    return wpaths.read_text_inside(root, _under(parts, name), max_bytes=max_bytes, allow=_PLUMBING)
 
 
 def _read_legacy_pointer(root: Path, parts: tuple[str, ...], name: str) -> "str | None":
@@ -276,114 +214,42 @@ def _read_legacy_pointer(root: Path, parts: tuple[str, ...], name: str) -> "str 
 
 
 def _replace_nofollow(root: Path, parts: tuple[str, ...], name: str, text: str) -> None:
-    """Make ``root/<parts…>/name`` a new regular file holding ``text``: the folders are reached
-    without following a link (missing ones made), the text goes to a new file created exclusively
-    beside it, and that file is renamed over the name — so whatever was at the name, a link
-    included, is replaced, never written through. Raises ``OSError``."""
-    dir_fd = _nofollow_dir(root, parts, create=True)
+    """Make ``root/<parts…>/name`` a new regular file holding ``text`` (``write_text_inside``):
+    whatever was at the name, a link included, is replaced, never written through. Raises
+    ``OSError``, including when a folder on the way is a link."""
     try:
-        tmp = f".{name}.{os.getpid()}.{threading.get_ident()}.{time.monotonic_ns()}.tmp"
-        fd = os.open(tmp, _CREATE_NEW, 0o666, dir_fd=dir_fd)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                fh.write(text)
-            os.replace(tmp, name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
-        except BaseException:
-            try:
-                os.unlink(tmp, dir_fd=dir_fd)
-            except OSError:
-                pass
-            raise
-    finally:
-        os.close(dir_fd)
+        wpaths.write_text_inside(root, _under(parts, name), text, allow=_PLUMBING)
+    except wpaths.PathRefused as exc:
+        raise OSError(f"{'/'.join(parts)} is not a plain folder here") from exc
 
 
 def _unlink_nofollow(root: Path, parts: tuple[str, ...], name: str) -> None:
     """Remove ``root/<parts…>/name`` (a link is removed itself), reached without following a link."""
-    try:
-        dir_fd = _nofollow_dir(root, parts)
-    except OSError:
-        return
-    try:
-        os.unlink(name, dir_fd=dir_fd)
-    except FileNotFoundError:
-        pass
-    except OSError as exc:
-        log.warning("%s/%s not removed: %s", "/".join(parts), name, exc)
-    finally:
-        os.close(dir_fd)
+    wpaths.unlink_inside(root, _under(parts, name), allow=_PLUMBING)
 
 
 def _write_new_pointer(root: Path, parts: tuple[str, ...], name: str, text: str) -> bool:
     """Create ``root/<parts…>/name`` holding ``text``; False when something is already there."""
-    dir_fd = _nofollow_dir(root, parts, create=True)
     try:
-        fd = os.open(name, _CREATE_NEW, 0o666, dir_fd=dir_fd)
-    except FileExistsError:
-        return False
-    finally:
-        os.close(dir_fd)
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        f.write(text)
-    return True
+        return wpaths.write_new_inside(root, _under(parts, name), text, allow=_PLUMBING)
+    except wpaths.PathRefused as exc:
+        raise OSError(f"{'/'.join(parts)} is not a plain folder here") from exc
 
 
 def _adopt_legacy_transcripts(root: Path, chat_root: Path, sid: str) -> None:
     """Copy every ``.claude/projects/<slug>/<sid>.jsonl`` under ``root`` that ``chat_root`` lacks."""
     name = f"{sid}.jsonl"
-    try:
-        projects = _nofollow_dir(root, (".claude", "projects"))
-    except OSError:
-        return
-    try:
-        with os.scandir(projects) as it:
-            slugs = sorted(e.name for e in it
-                           if not e.name.startswith(".") and not e.is_symlink()
-                           and e.is_dir(follow_symlinks=False))
-        for slug in slugs:
-            try:
-                slug_fd = os.open(slug, _NOFOLLOW_DIR, dir_fd=projects)
-            except OSError:
-                continue
-            try:
-                src = _open_regular(slug_fd, name)
-            except FileNotFoundError:
-                continue
-            except OSError as exc:
-                log.warning("legacy transcript %s/%s not adopted: %s", slug, name, exc)
-                continue
-            finally:
-                os.close(slug_fd)
-            try:
-                _copy_new(src, chat_root, (".claude", "projects", slug), name)
-            except OSError as exc:
-                log.warning("legacy transcript %s/%s not adopted: %s", slug, name, exc)
-            finally:
-                os.close(src)
-    finally:
-        os.close(projects)
-
-
-def _copy_new(src: int, root: Path, parts: tuple[str, ...], name: str) -> None:
-    """Copy the open file ``src`` to a new ``root/<parts…>/name``; a name already taken is left be."""
-    dir_fd = _nofollow_dir(root, parts, create=True)
-    try:
+    for slug in wpaths.list_dirs_inside(root, ".claude/projects", allow=_PLUMBING):
+        if slug.startswith("."):
+            continue
+        rel = f".claude/projects/{slug}/{name}"
+        raw = wpaths.read_bytes_inside(root, rel, allow=_PLUMBING)
+        if raw is None:
+            continue
         try:
-            dst = os.open(name, _CREATE_NEW, 0o666, dir_fd=dir_fd)
-        except FileExistsError:
-            return
-        try:
-            with os.fdopen(dst, "wb") as out:
-                while chunk := os.read(src, 1 << 20):
-                    out.write(chunk)
-        except BaseException:
-            try:
-                os.unlink(name, dir_fd=dir_fd)
-            except OSError:
-                pass
-            raise
-    finally:
-        os.close(dir_fd)
+            wpaths.write_new_inside(chat_root, rel, raw, allow=_PLUMBING)
+        except (OSError, wpaths.PathRefused) as exc:
+            log.warning("legacy transcript %s/%s not adopted: %s", slug, name, exc)
 
 
 def _adopt_legacy_continuity(chat_root: Path, work: Path, session: str) -> None:

@@ -1286,8 +1286,10 @@ services:
       # The emailed sign-in link is built ONLY from it (never from request headers): empty, the
       # terminal sends no link. Setting an https:// value also flips auth cookies to Secure.
       - NEXTAUTH_URL=${NEXTAUTH_URL:-}
-      # Public proxy addresses whose X-Forwarded-For names the client, for the sign-in link's per-client
-      # rate limit (private and loopback peers, e.g. a proxy on this host, are trusted already).
+      # Proxies whose X-Forwarded-For names the client, for the sign-in link's per-client rate limit:
+      # addresses or CIDR ranges, comma-separated. Only these and loopback are believed. A reverse proxy
+      # on this host reaches the container from the compose network's gateway, so name it (for example
+      # the network's /16, or 172.16.0.0/12); unset, every client behind it shares one limit.
       - TERMINAL_TRUSTED_PROXIES=${TERMINAL_TRUSTED_PROXIES:-}
       # OAuth login providers (NextAuth). Each provider self-gates on its creds: set BOTH the id and
       # secret to expose that sign-in button on the login page; leave empty to hide it (the dev

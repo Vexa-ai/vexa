@@ -123,6 +123,43 @@ applies when it does not.
 Enforcement is **Kubernetes-only**. The docker and process backends accept the same resource intent
 and do not act on it — they have no admission controller to satisfy, and no parity is claimed.
 
+## The meeting bots' browser sandbox
+
+A meeting bot's Chromium renders pages nobody here controls. Chromium's sandbox (each renderer in
+its own user, PID and network namespace, under seccomp-bpf) is what keeps a compromised page inside
+its renderer, and it is built on **user namespaces**, which the container runtime's default seccomp
+profile refuses. So, with `runtime.botSandbox.enabled` (the default):
+
+- bot Pods run as a non-root uid (`runAsNonRoot`; the bot image's own, or the one OpenShift assigns)
+  under a **Localhost** seccomp profile, `runtime.botSandbox.localhostProfile`
+  (`vexa/seccomp-userns.json`): Docker Engine's default profile with one rule added, letting the
+  bot's container create user namespaces. Agent workers and the chart's own Pods keep
+  `RuntimeDefault`;
+- a DaemonSet (`<release>-bot-seccomp`) writes that file to the kubelet's seccomp root on every node
+  bots may land on (it follows `runtime.workloadScheduling.meetingBot` placement), copied from the
+  runtime image. It runs as root only to write that root-owned directory: no capability, no
+  privilege escalation, a read-only root filesystem, no API token. It needs a namespace that admits
+  a `hostPath` volume (Pod Security `privileged`).
+
+Each bot logs `Chromium runs with its sandbox`, or why it runs without (as root; or no usable
+sandbox, e.g. under `RuntimeDefault` with `botSandbox.enabled=false`).
+
+**OpenShift.** `restricted-v2` admits only `runtime/default` seccomp and no `hostPath`, so:
+
+1. Install the profile on the nodes yourself: a `MachineConfig` writing
+   `/var/lib/kubelet/seccomp/vexa/seccomp-userns.json` (the file is `runtime_kernel/seccomp-userns.json`
+   in the runtime image), or the Security Profiles Operator with a `SeccompProfile` of that content —
+   then set `runtime.botSandbox.localhostProfile` to the path it installs
+   (`operator/<namespace>/<name>.json`). Set `runtime.botSandbox.installer.enabled=false`.
+2. Give the ServiceAccount the bot Pods run as (the namespace's `default`, unless the runtime is
+   configured otherwise) an SCC like `restricted-v2` whose `seccompProfiles` also lists
+   `localhost/<that path>`. Bots keep `restricted-v2`'s random UID, `allowPrivilegeEscalation: false`
+   and no capabilities; the bot image runs under any UID (`HOME=/tmp`).
+3. RHCOS allows unprivileged user namespaces by default (`user.max_user_namespaces` > 0).
+
+Without these, set `runtime.botSandbox.enabled=false`: bots then run under `runtime/default`, and
+their browsers run unsandboxed (said in each bot's log).
+
 ## Validate (no cluster)
 
 ```bash

@@ -76,6 +76,10 @@ WORKER_FORWARD_ENV = (
     "VEXA_AGENT_MAX_TURN_SEC",
     "VEXA_AGENT_CONTEXT_TOKENS",
     "VEXA_AGENT_STREAM",
+    # THE OUTPUT CAP, read by every harness (claude-code maps it onto CLAUDE_CODE_MAX_OUTPUT_TOKENS,
+    # openai-agent sends it as max_tokens). A provider that prices the allowance up front refuses a
+    # small balance the CLI's 32000-token default.
+    "VEXA_AGENT_MAX_OUTPUT_TOKENS",
     # The worker's reach onto the open web (WebSearch/WebFetch). THE ENDPOINT IS THE OPERATOR'S —
     # nothing search-shaped ships with this product — so it arrives as deployment env and is
     # forwarded like every other worker-read dial.
@@ -98,9 +102,8 @@ WORKER_FORWARD_ENV = (
 #: What a CHILD PROCESS (the process backend) inherits from the runtime's environment besides its
 #: profile's forward list: what any program needs to run on this host (paths, locale, the browser
 #: install, proxies and CA bundles). Never product configuration and never a service credential —
-#: those reach a child only through its own spec. Never the display or an audio server either: a
-#: workload that needs them (a meeting bot) names its own in its launcher, and its profile's
-#: ``process_groups`` decide whether it may open them.
+#: those reach a child only through its own spec. Never a display or an audio server either: a
+#: workload that needs them (a meeting bot) starts its own in its launcher.
 PROCESS_PLUMBING_ENV = (
     "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TERM", "TZ", "TMPDIR",
     "LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE",

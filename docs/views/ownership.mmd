@@ -21,6 +21,7 @@ flowchart LR
   imports_status[("<store>/.imports/{subject}/ (files)")]
   onboarding_research_state[("<store>/.onboarding-research/{sha256(workspace)}/ (files)")]
   rail_order[("agent:rail-order:{subject} (redis key)")]
+  signin_link_redeemed[("vexa:signin-link:redeemed:{jti} (redis key)")]
   redis_acl_users[("Redis ACL users (vexa-unit-*, vexa-bot-*)")]
   style redis_acl_users stroke-dasharray: 5 5,stroke-width:3px
   acl_units_index[("vexa:acl:units (redis hash)")]
@@ -67,6 +68,7 @@ flowchart LR
   agent_api -->|write| imports_status
   agent_api -->|write| onboarding_research_state
   agent_api -->|write| rail_order
+  admin_api -->|write| signin_link_redeemed
   agent_api -->|write| unit_in
   agent_api -->|write| redis_acl_users
   meeting_api -->|write| redis_acl_users

@@ -45,7 +45,7 @@ function packageNamed(doc, name) {
 
 test("Lite final-stage apt packages are represented in the emitted SPDX", () => {
   const doc = emitSbom();
-  for (const name of ["ffmpeg", "x11vnc", "pulseaudio", "postgresql-client"]) {
+  for (const name of ["ffmpeg", "xvfb", "pulseaudio", "postgresql-client"]) {
     const pkg = packageNamed(doc, name);
     assert(pkg, `${name} is installed in the Lite final image but absent from the SPDX`);
     assert.equal(pkg.licenseDeclared, "NOASSERTION");
@@ -80,4 +80,15 @@ test("a package only the terminal's npm lock carries is inventoried", () => {
   } finally {
     writeFileSync(lockPath, original);
   }
+});
+
+test("the vendored, modified moby seccomp profile is in the SPDX with its licence", () => {
+  const doc = emitSbom();
+  const pkg = doc.packages.find((entry) => entry.name === "moby/profiles seccomp/default.json");
+  assert(pkg, "the vendored seccomp profile is absent from the SPDX");
+  assert.equal(pkg.licenseDeclared, "Apache-2.0");
+  assert.match(pkg.comment, /core\/runtime\/src\/runtime_kernel\/seccomp-userns\.json/);
+  assert(doc.relationships.some(
+    (edge) => edge.relatedSpdxElement === pkg.SPDXID && edge.relationshipType === "CONTAINS",
+  ));
 });

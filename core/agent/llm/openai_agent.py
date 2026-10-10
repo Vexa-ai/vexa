@@ -122,7 +122,7 @@ from llm import faults as provider_faults
 from llm.tool_events import (_BOT_TOOLS, _FOCUS_TOOLS, _OPEN_TOOLS, _TERMS_TOOLS, _WRITER_TOOLS, _bot_artifact,
                              _open_event, _published_terms, _short, _workspace_focus,
                              _written_artifact)
-from llm.ports import harness_subprocess_env
+from llm.ports import harness_subprocess_env, max_output_tokens
 from llm import jobs, web_tools
 from llm import workspace_paths as wpaths
 
@@ -1363,6 +1363,11 @@ class OpenAIAgentHarness:
         """One `chat/completions` round trip. Yields ``message-delta`` events while the text
         streams, then a single ``{"__final__": <assistant message>}``."""
         body = {**self._extra, "model": model, "messages": messages}   # reserved keys always win
+        cap = max_output_tokens()
+        if cap is not None:
+            # THE OUTPUT CAP (`llm.ports.max_output_tokens`) — a deployment dial, so it wins over a
+            # `max_tokens` in VEXA_LLM_EXTRA_BODY like the other reserved keys.
+            body["max_tokens"] = cap
         if specs:
             body["tools"] = specs
             body["tool_choice"] = "auto"

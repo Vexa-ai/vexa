@@ -81,7 +81,7 @@ export const KIND_LABEL: Readonly<Record<FaultKind, string>> = {
   unavailable: "unavailable",
   bad_response: "answered unreadably",
   not_found: "agent not found",
-  unpaid: "out of credit",
+  unpaid: "out of credits",
   rate_limited: "rate limited",
   refused: "refused the request",
   // the chat's model pick, refused by agent-api before any request (`control_plane/model_providers`)
@@ -101,10 +101,11 @@ export const KIND_LABEL: Readonly<Record<FaultKind, string>> = {
 const label = (table: Readonly<Record<string, string>>, key: string): string | undefined =>
   Object.prototype.hasOwnProperty.call(table, key) ? table[key] : undefined;
 
-/** WHO failed, in words. An unknown source is named as itself rather than hidden. */
+/** WHO failed, in words. An unknown source is named as itself rather than hidden. The provider's
+ *  host is not part of it: the headline reads `Model provider · out of credits (402)`, and the
+ *  remedy line already says where to act ("Add credits at openrouter.ai…"). */
 export function faultSource(f: Fault): string {
-  const base = label(SOURCE_LABEL, f.source) ?? f.source;
-  return f.source === "model-provider" && f.provider && f.provider !== "unknown" ? `${base} (${f.provider})` : base;
+  return label(SOURCE_LABEL, f.source) ?? f.source;
 }
 
 /** WHAT KIND of failure, in words, with the status beside it when there was one. */
@@ -113,7 +114,7 @@ export function faultKind(f: Fault): string {
   return typeof f.status === "number" && f.status > 0 ? `${base} (${f.status})` : base;
 }
 
-/** The headline a fault renders under: `Model provider (openrouter.ai) · out of credit (402)`. */
+/** The headline a fault renders under: `Model provider · out of credits (402)`. */
 export function faultHeadline(f: Fault): string {
   return `${faultSource(f)} · ${faultKind(f)}`;
 }

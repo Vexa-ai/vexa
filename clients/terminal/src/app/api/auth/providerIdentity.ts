@@ -13,10 +13,14 @@
  *    refused. A tenant named by domain rather than id is single-tenant at the authority and is not
  *    compared again here.
  *
- *  The stable subject (`google:<sub>`, `microsoft:<tid>:<oid>`) is returned with the email for logging
- *  and for binding an account to it. Binding is not enforced yet: admin-api has no route that stores a
- *  provider subject on a user, so an account is still found by its (verified) email alone.
+ *  The stable subject (`google:<sub>`, `microsoft:<tid>:<oid>`) is returned with the email, and the
+ *  account is BOUND to it (`findOrCreateUserToken` → admin-api `PUT /internal/users/{id}/provider-subject`):
+ *  the first sign-in through a provider records the subject, and a later one with another subject is
+ *  refused — so inside a pinned tenant, an administrator who writes somebody's address into another
+ *  user's `email` does not reach that account.
  */
+
+import { isWellFormedEmail } from "./emailAddress";
 
 export type ProviderIdentity =
   | { ok: true; email: string; subject: string }
@@ -24,7 +28,6 @@ export type ProviderIdentity =
 
 const MULTI_TENANT = new Set(["", "common", "organizations", "consumers"]);
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 type Claims = Record<string, unknown>;
 
@@ -49,7 +52,7 @@ export function jwtClaims(token: unknown): Claims | null {
 
 function emailOf(claims: Claims): string | null {
   const email = str(claims.email).toLowerCase();
-  return EMAIL.test(email) ? email : null;
+  return isWellFormedEmail(email) ? email : null;
 }
 
 function google(profile: Claims | undefined): ProviderIdentity {
