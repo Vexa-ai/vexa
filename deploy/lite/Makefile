@@ -187,7 +187,7 @@ migrate-storage: preflight storage-up
 ## lost — which once shipped `docker run … $IMG` with an EMPTY image (vexa-lite never created,
 ## every front door down). Keep all commentary OUT of the recipe body; annotate here instead.
 ##
-## The container runs under seccomp.json: Docker's default profile with one rule added, so an
+## The container runs under the runtime's seccomp-userns.json: Docker's default profile with one rule added, so an
 ## unprivileged process may create a user namespace — what Chromium's sandbox is built on, for the
 ## pages a meeting bot renders. Every service but the runtime runs under bin/no-user-namespaces, and
 ## the runtime takes the ability away from every child but a meeting bot, so only bots' browsers
@@ -290,7 +290,7 @@ up: preflight storage-up
 	echo "Starting Vexa Lite ($$IMG)..."; \
 	docker rm -f $(APP_CONTAINER) 2>/dev/null || true; \
 	docker run -d --name $(APP_CONTAINER) --shm-size=2g --network $(NETWORK) --restart unless-stopped \
-		--security-opt seccomp="$(ROOT)/deploy/lite/seccomp.json" \
+		--security-opt seccomp="$(ROOT)/core/runtime/src/runtime_kernel/seccomp-userns.json" \
 		--env-file $(ENV_FILE) \
 		-v $(STATE_VOLUME):/var/lib/vexa/state \
 		-p $(HOST_GATEWAY_PORT):8056 -p $(HOST_TERMINAL_PORT):3001 -p $(HOST_AGENT_PORT):8100 \

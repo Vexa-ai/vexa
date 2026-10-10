@@ -727,11 +727,12 @@
 		},
 		{
 			"names": [
+				"chroot",
 				"clone",
 				"unshare"
 			],
 			"action": "SCMP_ACT_ALLOW",
-			"comment": "Vexa Lite: the one change from Docker Engine 29.6.2's default profile. An unprivileged process may create a user namespace, which Chromium's sandbox needs; the Lite runtime refuses it to every child but a meeting bot, and the entrypoint to every service.",
+			"comment": "Vexa: the one change from Docker Engine 29.6.2's default profile. A process without CAP_SYS_ADMIN may create the user namespace Chromium's sandbox is built on, and chroot inside it (the kernel still requires the capability in the caller's own namespace). Only meeting bots run under it: their own containers (compose, Helm), and in Lite the one container, where the runtime takes it from every other child and bin/no-user-namespaces from every service.",
 			"excludes": {
 				"caps": [
 					"CAP_SYS_ADMIN"

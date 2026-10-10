@@ -101,7 +101,7 @@ linux = pytest.mark.skipif(not sys.platform.startswith("linux") or userns.machin
 def test_the_installed_filter_takes_user_namespaces_away_for_good():
     if _in_child(_unshare_user) != 0:
         pytest.skip("this process may not create a user namespace anyway (Docker's default profile); "
-                    "run under deploy/lite/seccomp.json to see the filter take it away")
+                    "run under runtime_kernel/seccomp-userns.json to see the filter take it away")
     assert _in_child(_filtered_then(_unshare_user)) == errno.EPERM
 
     def grandchild() -> int:                     # inherited by everything the process starts

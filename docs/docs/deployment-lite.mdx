@@ -75,7 +75,7 @@ Bots and agent workers are **not** supervisord programs — the runtime spawns t
 processes, one per meeting and per agent dispatch. Each bot brings up its own virtual display and
 audio daemon as its own user, with a display cookie only it holds, so no bot can see or drive
 another's meeting. There is no shared screen, and so no VNC view. Each bot's browser runs with
-Chromium's sandbox: `make lite` starts the container under `deploy/lite/seccomp.json` (Docker's
+Chromium's sandbox: `make lite` starts the container under `core/runtime/src/runtime_kernel/seccomp-userns.json` (Docker's
 default seccomp profile plus the user namespaces the sandbox needs, which only the bots keep).
 Inspect a running deployment with:
 

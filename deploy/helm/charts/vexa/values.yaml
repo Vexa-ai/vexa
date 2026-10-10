@@ -497,6 +497,31 @@ runtime:
       # null keeps the profile's own (CHOWN, DAC_OVERRIDE, FOWNER, FSETID, KILL, SETGID, SETUID: a
       # root worker gives the model's tools a user of their own). OpenShift restricted SCC: [].
       capabilities: null
+      # A Localhost seccomp profile (relative to the kubelet's seccomp root) the class's containers
+      # run under instead of RuntimeDefault. Empty keeps RuntimeDefault.
+      seccompProfile: ""
+  # Chromium's sandbox for meeting bots. The bot's browser renders pages nobody here controls, and
+  # its sandbox is built on user namespaces, which the container runtime's default seccomp profile
+  # refuses. With this on, bot Pods (non-root) run under a Localhost profile that allows them for
+  # the bot's container only: Docker Engine's default profile plus that one rule
+  # (runtime_kernel/seccomp-userns.json in the runtime image; Apache-2.0, see THIRD_PARTY_LICENSES.md).
+  # Off: RuntimeDefault, and each bot logs that its browser runs without its sandbox.
+  botSandbox:
+    enabled: true
+    # The profile as bot Pods name it, under the kubelet's seccomp root.
+    localhostProfile: vexa/seccomp-userns.json
+    # A DaemonSet (the runtime image, root, no capabilities, read-only root filesystem) writes the
+    # profile to <kubeletSeccompDir>/<localhostProfile> on every node bots may run on, through a
+    # hostPath. It needs a namespace that admits a hostPath volume (Pod Security "privileged"; not
+    # "baseline"/"restricted"). Turn it off where node files are managed elsewhere — on OpenShift a
+    # MachineConfig, or the Security Profiles Operator (then set localhostProfile to the path it
+    # installs, operator/<namespace>/<name>.json) — and see the chart README for the SCC bot Pods need.
+    installer:
+      enabled: true
+      kubeletSeccompDir: /var/lib/kubelet/seccomp
+      resources:
+        requests: { cpu: 5m, memory: 16Mi }
+        limits:   { cpu: 50m, memory: 64Mi }
   # Per-component override of global.topologySpreadConstraints (same shape). Applies to the runtime
   # Deployment's OWN pods (not the bot/agent Pods it spawns — those carry runtime.tolerations/
   # nodeSelector via the RUNTIME_K8S_* env below). Omit `labelSelector` and the runtime's own pod
