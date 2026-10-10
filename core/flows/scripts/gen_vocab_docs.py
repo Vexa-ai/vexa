@@ -45,15 +45,28 @@ def render(steps: dict) -> str:
 
 
 def registry_steps() -> dict:
+    """The FULL product's steps — every domain present, no operator pack — whatever the caller's
+    shell holds. Which steps register depends on configuration (`domain_present` reads the door
+    attributes; `VEXA_FLOWS_DEFS_EXTRA` adds packs), so without pinning it a regen from a bare
+    shell silently dropped the agent half from the page, and one from a stack's env added a pack."""
+    import os
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tests"))
     from flows import Registry
     from flows_defs import production
+    from flows_steps import common
     from sqlite_double import SqliteDB
 
-    reg = Registry()
-    production.build(reg, SqliteDB())
-    return reg.steps
+    saved = (common.AGENT_API, common.MEETINGS_API, os.environ.pop(production.DEFS_EXTRA_ENV, None))
+    common.AGENT_API, common.MEETINGS_API = "http://agent.invalid", "http://meetings.invalid"
+    try:
+        reg = Registry()
+        production.build(reg, SqliteDB())
+        return dict(reg.steps)
+    finally:
+        common.AGENT_API, common.MEETINGS_API = saved[0], saved[1]
+        if saved[2] is not None:
+            os.environ[production.DEFS_EXTRA_ENV] = saved[2]
 
 
 if __name__ == "__main__":

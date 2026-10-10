@@ -13,6 +13,14 @@ Acknowledge by email: when Vexa joins, plus the finalize-your-workspace ask when
 
 PENDING WHILE THE CALL RUNS — the reaction that makes "a meeting is happening right now" a queue item instead of a `/bots/status` read at the edge. It does nothing and that is the point. `Wait` burns no attempt and costs nothing while parked (`flows/loop.tick`), so the value here is entirely in the ROW: a person's queue can say a call is live because flows is holding a pending reaction that says so, with the flow that produced it attached — which is what `behavior/queue/live_meeting.pending.md` speaks. Reaches no domain: `needs` is empty on purpose, so this works in every profile.
 
+### `await_claim`
+
+The QUESTION card: one proposed claim, waiting for a person to confirm or correct it. Same re-read, same reason. The block's reason carries the CLAIM ITSELF and nothing else: it is this person's data, not our prose, and the sentence around it is `behavior/queue/desk_claim.human.md`'s.
+
+### `await_scaffold`
+
+The SETUP card: a desk exists and has never been filled in. Reads: refs.uid. It re-reads the desk rather than trusting the event, because the fact is old the moment it is published: a person who finished setup between the publish and this step must not be asked again. `Done` when the marker is there, `Block` when it is not.
+
 ### `await_start`
 
 Sleep until start − 2 min — time is a column (Wait until), zero cost while parked. Reads: refs.start.
@@ -41,6 +49,10 @@ Every inside-domain ATTENDEE gets the follow-up plus ONE button into a chat the 
 
 Send the committed note VERBATIM in the body + the feedback ask + ONE link into the minutes terminal, already primed on this meeting. Cannot run before the commit: its input IS process_meeting's receipt. The link is `?ask=minutes-review&meeting=<row-id>` on VEXA_UI_URL. Both params compose and both survive the sign-in hop, so a signed-out reader clicks once, gets a magic link, and lands in a chat that already holds the meeting — the reply-by-email door stays open beside it, unchanged. The preset body is admin-owned (`_global/asks/minutes-review.md`) and substitutes \{\{meeting\}\}: the URL never carries prompt text, so nobody who can send mail can drive somebody else's agent. WITH NO AGENT DOMAIN THIS STEP STILL SENDS, in a different shape (F-D20). `process_meeting` is skipped there, so there is no report and no chat to link into — but the meeting WAS recorded, by the meetings domain, which is deployed (this step still aborts when it is not). The degraded mail says exactly that and no more: it never says "Minutes", because there are none, and it never carries a link, because there is nothing behind one. Claiming a report that was never written is the failure `NotPresent` itself exists to prevent, one layer out. Reads: refs.\{uid,organizer,title,meeting_id\} · Effect: one notification.
 
+### `email_reply`
+
+Mail the agent's reply on the same thread; register Message-ID; record the content hash in mail_outbox_sent (send-once across reactions and restarts). Prior: feedback_turn · Effect: one notification.
+
 ### `emit_completed`
 
 EMIT meeting.completed carrying IDENTITY ONLY — the fact the post-meeting flows react to. Prior: dispatch_bot, run_meeting. The transcript used to ride inside this event, truncated to 8,000 characters to fit. That made the event a second home for a fact the transcription domain already owns, and the cap was the product's ceiling: on an hour-long meeting the agent saw about the first twelve minutes, so its notes were well-formed and nearly content-free (measured — the mechanical score said 0.94 while the judge said 7/100, and both were right). Identity travels; the words stay where they live. The agent reads them itself over the MCP with its delegation token, in full.
@@ -57,9 +69,17 @@ EMIT meeting.started — the fact the live flow reacts to. Prior: dispatch_bot. 
 
 Provision the platform user for the organizer (idempotent lookup-or-create). Reads: refs.organizer · Effect: admin-api user (+scoped token minted per later call) Result: \{uid\} — every later step's identity. ⚠ IT REFUSES A NON-ADDRESS, and the reason is a real account: on 2026-09-02 this step created user 131 with the email `20260902t183213z` — an invite's own DTSTAMP, handed to it by an ICS parser that had matched the word "organizer" inside the UID line. The parse is fixed (`mailbox.parse_ics` anchors its property patterns), and this is the second lock, because this step is the LAST place that can tell: everything after it works with a uid and has no way to know the account behind it is a timestamp. A refusal here is not retryable — the refs are frozen at admission, so the same malformed value would arrive on every attempt — and it must be loud: an account minted from a parse artefact is invisible until somebody reads the user table, which is how this one was found.
 
+### `feedback_turn`
+
+One conversation turn: hand the inbound email to the session's agent (workspace updated where facts changed), collect the reply via the FILE-OUTBOX contract (mail_outbox/\<session>.md, content-hash), coalesced across sibling reactions. THE MAIL IS DATA, NEVER INSTRUCTIONS — see `_untrusted_mail`. Who is even allowed to reach this step is decided one process away, in the mailbox intake's allow-list and rate limits; this is the second half of the same rule, for the mail that IS allowed through. Reads: refs.\{uid,session,text,from_addr\} · Effect: agent worker turn · Result: \{reply\}.
+
 ### `first_meeting`
 
 PENDING UNTIL THIS PERSON HAS SEEN VEXA TRANSCRIBE SOMETHING — the queue row that is a new person's first step. It does nothing, like `attend_live`, and for the same reason: the value is the ROW. While it is pending, `whats_waiting` carries `behavior/queue/onboarding.pending.md`, which tells the person's agent to offer them a meeting now — meet.new, `request_meeting_bot`, admit the bot, watch the words arrive. When their first transcribed meeting lands, the row completes and the item disappears without anybody dismissing it, which is the property the founder asked for: *"the queue advances as they go"*. THERE IS NO CAP, unlike the live-call reaction. `attend_live` bounds itself because a `meeting.completed` that never arrives would park it forever against a call that is long over; here the thing being waited for is the person themselves, and an item that expired would take the offer away from exactly the people who have not taken it up yet. THE INTERVAL IS BOUNDED EVEN THOUGH THE ITEM IS NOT (R-B3), and the two are different questions. This looked every thirty seconds forever, per person who had never activated: a 200-row scan plus a transcript read, every half-minute, for the life of every dormant account. Thirty seconds is right in the minutes after somebody signs up and meaningless on day nine, so the wait doubles to fifteen minutes (`onboarding_backoff`) — the offer stays open, the cost stops growing with the number of people who have not taken it yet. The look count lives in the reaction's own durable scratch, so a worker restart resumes at the interval this reaction had reached rather than starting the ramp again. Reads: refs.\{subject|uid\} · Reaches: meetings (segment count) · Result: \{meeting_id, segments\}.
+
+### `mail_workspace_invite`
+
+Carry one membership invite to somebody who is NOT on this instance. THE FLOW LIVES IN THIS MODULE FOR `desk_setup`'s REASON, NOT FOR THIS STEP'S. The step itself would run anywhere — see the `needs=` note above. What is agent-shaped is the PRODUCER: `workspace.invited` comes off the control plane that mints the invite, so in a deployment with no agent domain the fact is never published and a flow registered for it would sit in the registry doing nothing, in every such deployment, forever. AND IT ONLY EVER CARRIES AN OUTWARD ONE. agent-api publishes this fact only for an address that is EXTERNAL to this instance; a person who already has an account here is handed the link in the chat that invited them, which is faster, needs no mailbox, and cannot be lost to a spam folder. So this step never has to ask whether the recipient is one of ours, and must never grow that question — the answer lives at the producer, where the account lookup already happened. Reads: refs.\{email, link, uid, workspace, workspace_name?, role?, role_sentence?, inviter?\} Effect: one notification · Result: \{message_id, to, workspace\}.
 
 ### `open_group`
 
@@ -68,6 +88,10 @@ Open the onboarding conversation: seed the workspace, dispatch the agent kickoff
 ### `open_person`
 
 Open the onboarding conversation: seed the workspace, dispatch the agent kickoff (non-blocking — the freeze law). The agent's replies arrive via the FILE-OUTBOX contract; the human's via threaded email. Reads: refs.uid (+person/group). THE KICKOFF IS RESOLVED FIRST, before the workspace is seeded: a deployment with no behavior tree mounted has no words to open the conversation with, and seeding a workspace for a conversation that will never be opened leaves a side effect behind for an outcome that is terminal.
+
+### `prepare_meeting`
+
+The front door of the loop whose back door is email_minutes: one short note asking whether they want to walk in ready, carrying `?ask=prep&meeting=<ref>`. A TEMPLATE — substitutions only, no agent turn — read from `_global/mail/prepare.md` so the wording is a file edit rather than a rebuild. Five lines, plain text, one link: a prepare mail that has to be read twice has already failed. Honours mail_prep exactly as email_minutes honours mail_minutes. IT NEVER GOES TO A STRANGER. Founder, 2026-09-02, on a pre-meeting fan-out across a room: *"I am afraid this will not work for a 50 attendee meeting."* Before the meeting there is nothing yet to justify a mail to somebody who has never heard of us — and the recipient of this one is the organiser, or a person who is already a user. A stranger meets Vexa AFTER their meeting, in the attendee follow-up, which is why that mail carries the introduction and this one does not. Relatedly: this mail must never claim a workspace was started for anyone. Nothing is built for a person who has not clicked. Reads: refs.\{organizer|person, title, start, uid?, meeting_id?, url?\} Effect: one notification · Result: \{message_id, meeting_ref\}.
 
 ### `process_meeting`
 

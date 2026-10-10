@@ -57,3 +57,14 @@ def test_the_page_generated_from_the_registry_has_no_bare_mdx_syntax():
 
 def test_the_committed_page_has_no_bare_mdx_syntax():
     assert bare_mdx_syntax(gen.OUT.read_text()) == []
+
+
+def test_the_committed_page_is_what_the_registry_generates():
+    """Docs must stay true: a step added, removed or re-documented without regenerating the page
+    fails here, naming the fix."""
+    expected = gen.render(gen.registry_steps())
+    committed = gen.OUT.read_text()
+    assert committed == expected, (
+        "docs/docs/flows/vocabulary.mdx is stale against the step registry's docstrings — "
+        "run `make vocab-docs` in core/flows and commit the regenerated page"
+    )
