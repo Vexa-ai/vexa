@@ -177,9 +177,12 @@ async def _validate_delegation(token: str, db: AsyncSession) -> Dict[str, Any]:
     if "workspaces" in resp:
         resp["workspaces"] = [w for w in resp["workspaces"] if delegation_mod.ceiling_reads(
             ceiling["workspaces"], w, subject=str(uid))]
+    # The WRITE set is narrowed by the ceiling's own rule (`ceiling_allows`), never by the read
+    # result: reads also include what every subject reads (`_global`), and a worker must not be
+    # able to put a meeting into `_global` because its person happens to edit it (R1801-7).
     if "writable_workspaces" in resp:
-        reachable = set(resp.get("workspaces") or [])
-        resp["writable_workspaces"] = [w for w in resp["writable_workspaces"] if w in reachable]
+        resp["writable_workspaces"] = [w for w in resp["writable_workspaces"] if delegation_mod.ceiling_allows(
+            ceiling["workspaces"], w, subject=str(uid))]
     resp["delegation"] = ceiling
     if claims.get("target"):
         resp["delegation"]["target"] = str(claims["target"])

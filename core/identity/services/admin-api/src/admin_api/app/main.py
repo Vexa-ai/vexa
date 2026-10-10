@@ -1228,7 +1228,8 @@ def create_app() -> FastAPI:
     @app.get("/internal/users/{user_id}/email", include_in_schema=False)
     async def internal_user_email(user_id: int, request: Request,
                                   db: AsyncSession = Depends(get_db)):
-        check_internal(request)
+        # NO DEV-MODE BYPASS: this reads one named person's address by path id (R1801-9).
+        check_internal_no_dev_bypass(request)
         user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
         if not user or not user.email:
             raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found")

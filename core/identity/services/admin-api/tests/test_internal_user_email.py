@@ -44,3 +44,18 @@ def test_anyone_else_is_refused(client, headers):
     r = client.get("/internal/users/33/email", headers=headers)
     assert r.status_code in (401, 403)
     assert "reader@example.test" not in r.text
+
+
+
+def test_dev_mode_does_not_open_the_door(monkeypatch):
+    """R1801-9: a person's address by path id is not readable without the secret, dev mode or not."""
+    monkeypatch.setenv("DEV_MODE", "true")
+    monkeypatch.setenv("INTERNAL_API_SECRET", INTERNAL)
+    app = create_app()
+    user = User(id=33, email="reader@example.test", max_concurrent_bots=1, data={})
+
+    async def _db():
+        yield _Session({33: user})
+    app.dependency_overrides[get_db] = _db
+    resp = TestClient(app).get("/internal/users/33/email")
+    assert resp.status_code in (401, 403) and "reader@example.test" not in resp.text
