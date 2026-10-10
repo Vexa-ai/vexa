@@ -1073,8 +1073,14 @@ def _build_production_app() -> FastAPI:
 
         delegation_store = _redis.from_url(
             settings.redis_url, decode_responses=True, socket_connect_timeout=2, socket_timeout=5)
-        delegation_revocation.start_reaper(client_factory=lambda: delegation_store,
-                                           live_units=runtime.live_workloads)
+        from control_plane import delegation_refresh
+
+        # The same sweep replaces a live unit's token before it expires (delegation_refresh), so a
+        # warm unit keeps its vexa MCP past one token's life; an ended unit is never refreshed.
+        delegation_revocation.start_reaper(
+            client_factory=lambda: delegation_store, live_units=runtime.live_workloads,
+            refresher=delegation_refresh.Refresher(settings.mcp_delegation_secret.get_secret_value(),
+                                                   settings.delegation_ttl_sec))
     # Lane A: the Dispatcher takes the SAME index so shared workspaces the subject is a member of enter
     # the dispatch mount set (read-only for Slice 1), not just the /active listing.
     dispatcher = Dispatcher(settings, runtime, identity, membership_index=membership_index,

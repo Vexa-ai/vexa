@@ -22,7 +22,7 @@ import contracts
 from control_plane.workspace_attach import SEED_SLOT, active_workspaces, shared_active_mounts
 from control_plane.workspace_membership import reconciled_memberships
 from control_plane.workspace_purpose import read_purpose
-from control_plane import delegation_revocation, global_layer
+from control_plane import delegation_refresh, delegation_revocation, global_layer
 from control_plane import model_endpoint
 from control_plane import unit_faults
 from control_plane.meeting_room import group_desk_mount, resolve_desks
@@ -1053,6 +1053,16 @@ class Dispatcher:
             env.pop("VEXA_MCP_DELEGATION_TOKEN", None)
             logger.exception("delegation token for unit=%s could not be recorded for revocation — "
                              "the worker runs WITHOUT the vexa MCP", uid)
+            return
+        # Published as the unit's CURRENT token too, which the reaper re-mints from before it
+        # expires and the worker reads before each turn (control_plane.delegation_refresh). A
+        # publish that fails costs only the refresh: the worker still boots with this token.
+        try:
+            delegation_refresh.publish(self._delegation_store, unit_id=uid, token=token,
+                                       exp=int(claims["exp"]))
+        except Exception:  # noqa: BLE001 — the token stands; only its replacement is lost
+            logger.warning("delegation token for unit=%s could not be published for refresh — the "
+                           "unit keeps its tools until this token expires", uid, exc_info=True)
 
     def _revoke_ended_incarnation(self, uid: str) -> None:
         """A unit id is reused: a chat thread dispatches every turn to the same id, and a new

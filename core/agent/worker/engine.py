@@ -75,7 +75,7 @@ from shared import unit_input
 from worker import jobs as worker_jobs
 from worker.friction import (disbelieved_capability, fallback_session, friction_preamble,
                              mcp_unreachable,
-                             report as report_friction, scan_turn, spawn_gap)
+                             report as report_friction, scan_turn, spawn_gap, use_token_source)
 
 log = logging.getLogger("agent_api.worker")
 
@@ -1643,6 +1643,85 @@ def _file_spawn_gap(url: str, token: str) -> None:
         log.warning("friction: could not file the spawn gap (%s)", e)
 
 
+def write_mcp_config(path: Path, url: str, token: str) -> None:
+    """Write the vexa MCP attachment: one HTTP server, the delegation token in its header. Replaced
+    atomically (a temp file beside it, then ``os.replace``), because a refresh rewrites it while a
+    background job's harness may be starting and reading it. 0600, and handed to the tools user the
+    harness runs as where it can (llm/ports.py)."""
+    cfg = {"mcpServers": {VEXA_MCP_SERVER: {
+        "type": "http", "url": url, "headers": {"Authorization": f"Bearer {token}"},
+    }}}
+    tmp = path.with_name(path.name + ".next")
+    tmp.write_text(json.dumps(cfg))
+    try:
+        tmp.chmod(0o600)
+    except OSError:  # a store backend that does not carry modes — the attachment still stands
+        pass
+    hand_to_tools(tmp)
+    os.replace(tmp, path)
+
+
+class DelegationRefresh:
+    """The worker's half of the token refresh (``control_plane.delegation_refresh``).
+
+    agent-api replaces a live unit's delegation token before it expires and publishes the new one at
+    ``shared.units.delegation_key(unit)`` — a key this worker's Redis user may read and not write.
+    Called before every turn, write-back and job: when the published token differs from the one in
+    the attachment, the attachment is rewritten, so the harness that turn starts attaches with the
+    new token. Every harness reads the attachment when its turn starts (``claude -p --mcp-config``,
+    the Codex app server, the OpenAI loop), so nothing restarts.
+
+    The token is held here rather than in this process's environment: :meth:`take` removes it from
+    ``os.environ`` at boot, so the harness subprocesses (built from it, ``llm.ports``) do not inherit
+    it. ``current`` is what the friction report presents (``worker.friction.use_token_source``).
+
+    A read that fails, or finds nothing, keeps the attachment as it is: the token in it stays good
+    until it expires or the unit ends."""
+
+    def __init__(self, client, key: str, *, path: "str | None", url: str, token: str) -> None:
+        self._client = client
+        self._key = key
+        self._path = Path(path) if path else None
+        self._url = url
+        self._token = token
+        self._lock = threading.Lock()
+
+    @staticmethod
+    def take() -> str:
+        """The boot token, removed from this process's environment."""
+        return (os.environ.pop("VEXA_MCP_DELEGATION_TOKEN", "") or "").strip()
+
+    def current(self) -> str:
+        return self._token
+
+    def __call__(self) -> bool:
+        """True when the attachment was rewritten with a newer token."""
+        if not self._token:
+            return False  # this dispatch was handed no toolbelt; nothing to keep fresh
+        try:
+            value = self._client.get(self._key)
+        except Exception as e:  # noqa: BLE001 — the attachment stands until its token expires
+            log.warning("delegation token refresh unread (%s) — keeping the current attachment",
+                        type(e).__name__)
+            return False
+        fresh = (value.decode() if isinstance(value, bytes) else str(value or "")).strip()
+        if not fresh or fresh == self._token:
+            return False
+        with self._lock:
+            if fresh == self._token:
+                return False
+            if self._path is not None:
+                try:
+                    write_mcp_config(self._path, self._url, fresh)
+                except OSError as e:
+                    log.warning("delegation token refresh not written (%s) — keeping the current "
+                                "attachment", e)
+                    return False
+            self._token = fresh
+        print("vexa MCP toolbelt token refreshed", file=sys.stderr, flush=True)
+        return True
+
+
 def mcp_delegation_config(work: Path) -> "tuple[str | None, list[str]]":
     """Materialize the worker's AUTHENTICATED vexa MCP attachment → (mcp-config path, extra allow-set).
 
@@ -1678,9 +1757,6 @@ def mcp_delegation_config(work: Path) -> "tuple[str | None, list[str]]":
                                                 ("VEXA_MCP_DELEGATION_TOKEN", token)) if not v))
         _file_spawn_gap(url, token)
         return None, []
-    cfg = {"mcpServers": {VEXA_MCP_SERVER: {
-        "type": "http", "url": url, "headers": {"Authorization": f"Bearer {token}"},
-    }}}
     d = _delegation_dir(work)
     if d is None:
         log.warning("no writable directory for the vexa MCP delegation config — running this turn "
@@ -1688,12 +1764,7 @@ def mcp_delegation_config(work: Path) -> "tuple[str | None, list[str]]":
         _file_spawn_gap(url, token)
         return None, []
     path = d / "mcp.json"
-    path.write_text(json.dumps(cfg))
-    try:
-        path.chmod(0o600)
-    except OSError:  # a store backend that does not carry modes — the attachment still stands
-        pass
-    hand_to_tools(path)  # the harness reads it, and runs as the tools user where it can (llm/ports.py)
+    write_mcp_config(path, url, token)
     # PRINTED, not logged at info: the worker configures no root logger, so an INFO record is dropped,
     # and "was the toolbelt attached?" is the first question asked of a worker's log.
     print(f"vexa MCP toolbelt attached: server={VEXA_MCP_SERVER} url={url}", file=sys.stderr, flush=True)
@@ -2511,6 +2582,22 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
     # must enter the allow-set too or every tool call would stall on a permission prompt that no
     # human is there to answer.
     mcp_cfg, mcp_tools = mcp_delegation_config(work)
+    # THE TOKEN IS KEPT FRESH, AND OUT OF THE ENVIRONMENT (control_plane.delegation_refresh). It
+    # leaves os.environ here, so no harness subprocess inherits it; the attachment is rewritten
+    # before each turn whenever agent-api has published a newer one for this unit.
+    refresh_delegation = DelegationRefresh(
+        client, shared_units.delegation_key(shared_units.unit_of_topic(os.environ["VEXA_UNIT_IN_TOPIC"])),
+        path=mcp_cfg, url=(os.environ.get("VEXA_MCP_URL") or "").strip(),
+        token=DelegationRefresh.take())
+    use_token_source(refresh_delegation.current)
+
+    def _fresh(fn):
+        """``fn`` with the attachment brought up to date first."""
+        def call(*args, **kwargs):
+            refresh_delegation()
+            return fn(*args, **kwargs)
+        return call
+
     room = room_run()
     if room:
         mcp_tools = room_toolbelt(mcp_tools)
@@ -2554,9 +2641,9 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
 
     serve(
         client, out_topic=out_topic, in_topic=os.environ["VEXA_UNIT_IN_TOPIC"],
-        turn=lambda prompt: run_turn_over_workspace(work, prompt, model=model,
-                                                    allowed_tools=chat_tools, session=session,
-                                                    mcp_config=mcp_cfg, harness=chat_harness),
+        turn=_fresh(lambda prompt: run_turn_over_workspace(work, prompt, model=model,
+                                                           allowed_tools=chat_tools, session=session,
+                                                           mcp_config=mcp_cfg, harness=chat_harness)),
         # SAME session on purpose: the phase has to see what the turn just saw, and a fresh
         # session would have to be told the whole conversation to ask one bookkeeping question.
         # Small budget by TOOLSET rather than by a step cap the harness does not expose.
@@ -2568,10 +2655,10 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
         # `active_mounts()` PASSED EXPLICITLY (F196/F198/F200) — the same call `writeback_
         # candidates` used moments earlier to decide which desk(s) had anything missing, so the
         # workspace this prompt names cannot silently be a second, disagreeing read of it.
-        writeback=lambda candidates: run_turn_over_workspace(
+        writeback=_fresh(lambda candidates: run_turn_over_workspace(
             work, writeback_prompt(candidates, active_mounts()), model=model,
             allowed_tools=[*WRITEBACK_TOOLS, *mcp_tools], session=session,
-            mcp_config=mcp_cfg, harness=chat_harness),
+            mcp_config=mcp_cfg, harness=chat_harness)),
         # A BACKGROUND JOB'S TURN, and the one line of difference that matters:
         # `session_continuity=False`. A job runs its OWN harness session — it does not resume the
         # conversation, does not move the continuity pointer and does not append to the transcript
@@ -2584,7 +2671,7 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
         # running beside it in this same process keeps the per-turn budget it always had. The
         # harness reads it (`llm/jobs.in_job`) to pick a budget that fits an act rather than a
         # sentence: the founder's OeNB job ran 72 steps and then died on a 40-call turn budget.
-        job=_job_turn,
+        job=_fresh(_job_turn),
         # The register that makes "a restart cancels them and the chat is told" true. It sits beside
         # the session pointers, under the private continuity root, which is already outside the
         # workspace commit — and is therefore SHARED by every chat this person has, which is why

@@ -510,7 +510,7 @@
       "key": "VEXA_MCP_DELEGATION_TTL_SEC",
       "class": "defaulted",
       "default": "(unset \u2014 VEXA_CHAT_IDLE_TIMEOUT_SEC + 900, i.e. 1800 at the defaults)",
-      "description": "lifetime in seconds (at least 60) of a minted MCP delegation token. The token is revoked when its unit ends (control_plane/delegation_revocation.py); this is the bound when that never happens. The default covers a unit that runs one turn (900 s, the openai-agent harness's per-turn ceiling) and then its warm window. The worker reads its token once, at boot, and nothing refreshes it, so a warm unit kept alive past this loses the vexa MCP until it idles out and the next turn respawns it",
+      "description": "lifetime in seconds (at least 60) of a minted MCP delegation token. The token is revoked when its unit ends (control_plane/delegation_revocation.py); this is the bound when that never happens. The default covers a unit that runs one turn (900 s, the openai-agent harness's per-turn ceiling) and then its warm window. A unit still running when two thirds of this has passed is handed a new token (control_plane/delegation_refresh.py), which its worker picks up before its next turn; the replaced token is revoked 300 s later",
       "targets": []
     },
     {

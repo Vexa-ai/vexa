@@ -55,11 +55,14 @@ class FakeRedis:
 def test_the_rules_name_the_units_three_keys_and_nothing_else():
     rules = wr.acl_rules("agent-7-chat-a*b", "pw")
     assert rules[:3] == ["reset", "on", ">pw"]
+    # …its delegation token too, READ-ONLY like its input: agent-api publishes it, the worker reads it.
     assert [r for r in rules if "~" in r] == [
-        "%R~unit:agent-7-chat-a\\*b:in", "~unit:agent-7-chat-a\\*b:out", "~unit:agent-7-chat-a\\*b:cursor"]
+        "%R~unit:agent-7-chat-a\\*b:in", "~unit:agent-7-chat-a\\*b:out", "~unit:agent-7-chat-a\\*b:cursor",
+        "%R~unit:agent-7-chat-a\\*b:delegation"]
     legacy = wr.acl_rules("agent-7-chat-a*b", "pw", read_only_input=False)
     assert [r for r in legacy if "~" in r] == [
-        "~unit:agent-7-chat-a\\*b:in", "~unit:agent-7-chat-a\\*b:out", "~unit:agent-7-chat-a\\*b:cursor"]
+        "~unit:agent-7-chat-a\\*b:in", "~unit:agent-7-chat-a\\*b:out", "~unit:agent-7-chat-a\\*b:cursor",
+        "~unit:agent-7-chat-a\\*b:delegation"]
     assert "resetchannels" in rules and "-@all" in rules
     assert sorted(r[1:] for r in rules if r.startswith("+")) == sorted(wr.WORKER_COMMANDS)
     assert not any(r.startswith("&") or r in ("+@all", "~*", "allkeys", "allchannels") for r in rules)

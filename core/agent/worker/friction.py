@@ -52,6 +52,17 @@ TIMEOUT_S = 3.0
 FALLBACK_LOG = Path(os.environ.get("TMPDIR", "/tmp")) / "vexa-friction.jsonl"
 
 
+#: Where the current delegation token is read once the worker has taken it out of its environment
+#: (``worker.engine.DelegationRefresh``, which keeps it fresh); None reads the environment.
+_TOKEN_SOURCE: "Callable[[], str] | None" = None
+
+
+def use_token_source(source: "Callable[[], str] | None") -> None:
+    """Read the delegation token from ``source`` from now on (None: the environment again)."""
+    global _TOKEN_SOURCE
+    _TOKEN_SOURCE = source
+
+
 def _edge() -> "tuple[str, str]":
     """``(gateway base, delegation token)`` — empty strings when the dispatch handed over none.
 
@@ -60,7 +71,8 @@ def _edge() -> "tuple[str, str]":
     ``/agent`` surface, and the record stays in the fallback log."""
     url = (os.environ.get("VEXA_MCP_URL") or "").strip().rstrip("/")
     base = url[: -len("/mcp")] if url.endswith("/mcp") else ""
-    return base, (os.environ.get("VEXA_MCP_DELEGATION_TOKEN") or "").strip()
+    token = _TOKEN_SOURCE() if _TOKEN_SOURCE is not None else os.environ.get("VEXA_MCP_DELEGATION_TOKEN")
+    return base, (token or "").strip()
 
 
 def fallback_session() -> str:

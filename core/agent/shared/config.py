@@ -150,8 +150,8 @@ class Settings(BaseSettings):
     # How long that delegation token lives. The token is REVOKED when its unit ends
     # (control_plane.delegation_revocation); this is the bound for when that never happens. Unset ⇒
     # the chat worker's warm window plus one whole turn (`delegation_ttl_sec`), which covers a unit
-    # that runs one turn and idles out. There is no refresh: the worker reads its token once, at boot,
-    # so a warm unit that outlives it loses the vexa MCP until it idles out and the next turn respawns.
+    # that runs one turn and idles out. A unit that stays warm longer is handed a new token before
+    # this one expires (control_plane.delegation_refresh), which its worker picks up before each turn.
     mcp_delegation_ttl_sec: Optional[int] = Field(default=None, ge=60)
 
     # ── secrets (never logged, committed, or in goldens) — P14 / P15 ─────────

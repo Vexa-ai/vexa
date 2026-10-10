@@ -18,7 +18,9 @@ held equal on both sides by gate:fact-parity (fact ``delegation-revocation-key``
 WHAT AGENT-API KEEPS so that it knows which tokens a unit holds:
 
     vexa:delegation:units                 the unit ids with a token recorded
-    vexa:delegation:unit:<unit id>        hash  jti -> "<exp>|<minted at>", expiring with its last token
+    vexa:delegation:unit:<unit id>        hash  jti -> "<exp>|<minted at>[|<revoke at>]", expiring
+                                          with its last token; ``revoke at`` marks a token a refresh
+                                          replaced (``control_plane.delegation_refresh``)
 
 * :func:`record` — at dispatch, before the spawn: the token's ``jti`` against its unit. A token that
   cannot be recorded could never be revoked, so the dispatcher withholds it (``Dispatcher``).
@@ -30,7 +32,11 @@ WHAT AGENT-API KEEPS so that it knows which tokens a unit holds:
   reports the unit's previous incarnation ended, because a unit id is REUSED (a chat thread keeps
   its id across warm windows): once the next incarnation is running, the sweep sees the id as live
   and would leave the old incarnation's token alone until the id ended again.
-* :func:`start_reaper` — the sweep, in a daemon thread.
+* :func:`supersede` — a refresh replaced a live unit's token: the old one is revoked by the sweep
+  once ``revoke at`` has passed (a short overlap, so a turn already holding it can finish).
+* :func:`start_reaper` — the sweep, in a daemon thread. For a unit still live it also runs the
+  refresher it is given (``delegation_refresh``), so a warm unit's token is replaced before it
+  expires; a unit the runtime no longer runs is never refreshed.
 
 A token minted less than ``GRACE_SEC`` ago is never revoked: its spawn may not have reached the
 runtime yet, so "not live" says nothing about it. A sweep that cannot read the runtime's workloads
@@ -43,12 +49,18 @@ import threading
 import time
 from typing import Callable, Iterable, Optional
 
+from shared.units import delegation_key
+
 logger = logging.getLogger("agent_api.delegation_revocation")
 
 #: The key identity checks: ``REVOKED_PREFIX + jti`` (gate:fact-parity, ``delegation-revocation-key``).
 REVOKED_PREFIX = "vexa:delegation:revoked:"
 UNITS_KEY = "vexa:delegation:units"
 UNIT_PREFIX = "vexa:delegation:unit:"
+#: The token a live unit currently holds, as agent-api minted it — agent-api's own record, the one a
+#: refresh re-mints from. The worker reads its copy at ``shared.units.delegation_key`` instead, a
+#: key its Redis user may read and not write (``workload_redis``).
+CURRENT_PREFIX = "vexa:delegation:current:"
 #: A token younger than this is never revoked: its dispatch may not have reached the runtime yet.
 GRACE_SEC = 120
 #: How often the reaper compares the recorded units with the runtime's live set.
@@ -74,22 +86,37 @@ def _text(value) -> str:
 
 
 def _entry(value) -> "tuple[int, float]":
-    """``"<exp>|<minted at>"`` → ``(exp, minted_at)``; an unreadable entry reads as expired."""
-    exp, _, minted = _text(value).partition("|")
+    """``"<exp>|<minted at>[|<revoke at>]"`` → ``(exp, minted_at)``; an unreadable entry reads as
+    expired."""
+    parts = _text(value).split("|")
     try:
-        return int(exp), float(minted)
-    except ValueError:
+        return int(parts[0]), float(parts[1])
+    except (ValueError, IndexError):
         return 0, 0.0
 
 
-def record(client, *, unit_id: str, jti: str, exp: int, now: Optional[float] = None) -> None:
+def _revoke_at(value) -> Optional[float]:
+    """When a superseded token is due for revocation, or None for one nothing replaced."""
+    parts = _text(value).split("|")
+    try:
+        return float(parts[2]) if len(parts) > 2 and parts[2] else None
+    except ValueError:
+        return None
+
+
+def record(client, *, unit_id: str, jti: str, exp: int, now: Optional[float] = None,
+           awaiting_spawn: bool = True) -> None:
     """Remember that ``unit_id`` holds the token ``jti`` (expiring at ``exp``).
-    Raises :class:`RevocationError` when the store cannot be written."""
+    Raises :class:`RevocationError` when the store cannot be written.
+
+    ``awaiting_spawn=False`` is a token minted for a unit already running (a refresh): no spawn is
+    on its way, so it is recorded as past the grace and is revoked as soon as the unit is gone."""
     t = time.time() if now is None else now
     if not jti:
         raise RevocationError("a delegation token without a jti cannot be revoked")
+    minted = t if awaiting_spawn else t - GRACE_SEC
     try:
-        client.hset(unit_key(unit_id), jti, f"{int(exp)}|{t}")
+        client.hset(unit_key(unit_id), jti, f"{int(exp)}|{minted}")
         # The record outlives every token in it and no longer: it is only ever extended, so a token
         # minted under a shorter lifetime never cuts an earlier one's record short.
         remaining = max(1, int(exp - t))
@@ -131,19 +158,43 @@ def revoke_unit(client, unit_id: str, *, now: Optional[float] = None,
     return revoked
 
 
-def prune(client, unit_id: str, *, now: Optional[float] = None) -> None:
-    """Drop a live unit's expired tokens — there is nothing left to revoke on them."""
+def supersede(client, unit_id: str, jti: str, *, revoke_at: float) -> bool:
+    """Mark the token ``jti`` of a live unit as replaced: the sweep revokes it once ``revoke_at``
+    has passed. False when the unit holds no such token."""
+    key = unit_key(unit_id)
+    value = client.hget(key, jti)
+    if value is None:
+        return False
+    exp, minted = _entry(value)
+    client.hset(key, jti, f"{exp}|{minted}|{revoke_at}")
+    return True
+
+
+def prune(client, unit_id: str, *, now: Optional[float] = None) -> int:
+    """For a live unit: drop its expired tokens (nothing is left to revoke on them) and revoke the
+    ones a refresh replaced whose overlap has passed. Returns how many were revoked."""
     t = time.time() if now is None else now
     key = unit_key(unit_id)
+    revoked = 0
     for jti, value in (client.hgetall(key) or {}).items():
-        if _entry(value)[0] <= t:
+        exp = _entry(value)[0]
+        due = _revoke_at(value)
+        if exp <= t:
+            client.hdel(key, _text(jti))
+        elif due is not None and due <= t:
+            if revoke(client, jti=_text(jti), exp=exp, now=t):
+                revoked += 1
             client.hdel(key, _text(jti))
     _forget_if_empty(client, unit_id)
+    return revoked
 
 
 def _forget_if_empty(client, unit_id: str) -> None:
+    """A unit that holds no token any more is forgotten, and so is the token published for it
+    (``delegation_refresh.publish``): nothing it names is still good."""
     if not client.hlen(unit_key(unit_id)):
         client.srem(UNITS_KEY, unit_id)
+        client.delete(CURRENT_PREFIX + unit_id, delegation_key(unit_id))
 
 
 def has_revocable(client, unit_id: str, *, now: Optional[float] = None,
@@ -158,9 +209,16 @@ def has_revocable(client, unit_id: str, *, now: Optional[float] = None,
     return False
 
 
+#: ``refresher(client, unit_id, now)`` — replaces a live unit's token when it is due
+#: (``delegation_refresh.Refresher``). Called only for units the runtime still runs.
+Refresher = Callable[[object, str, float], object]
+
+
 def sweep(client, live_units: Callable[[], Iterable[str]], *, now: Optional[float] = None,
-          grace_sec: float = GRACE_SEC) -> int:
-    """Revoke the tokens of every recorded unit the runtime no longer runs. Returns how many.
+          grace_sec: float = GRACE_SEC, refresher: Optional[Refresher] = None) -> int:
+    """Revoke the tokens of every recorded unit the runtime no longer runs, and the replaced tokens
+    of live units whose overlap has passed. Returns how many. A live unit is then offered to
+    ``refresher``; a unit the runtime does not run never is.
 
     The recorded units are read BEFORE the live set, so a unit recorded after this sweep began is
     not in the snapshot; one recorded just before it is protected by the grace."""
@@ -172,14 +230,21 @@ def sweep(client, live_units: Callable[[], Iterable[str]], *, now: Optional[floa
     revoked = 0
     for unit in units:
         if unit in live:
-            prune(client, unit, now=t)
+            revoked += prune(client, unit, now=t)
+            if refresher is not None:
+                try:
+                    refresher(client, unit, t)
+                except Exception:  # noqa: BLE001 — one unit's refresh never stops the sweep
+                    logger.warning("delegation refresh failed for unit=%s; retried next sweep", unit,
+                                   exc_info=True)
         else:
             revoked += revoke_unit(client, unit, now=t, grace_sec=grace_sec)
     return revoked
 
 
 def start_reaper(*, client_factory: Callable[[], object], live_units: Callable[[], Iterable[str]],
-                 interval_sec: float = REAP_INTERVAL_SEC) -> Optional[threading.Event]:
+                 interval_sec: float = REAP_INTERVAL_SEC,
+                 refresher: Optional[Refresher] = None) -> Optional[threading.Event]:
     """Run :func:`sweep` every ``interval_sec`` in a daemon thread. Returns the stop event."""
     if interval_sec <= 0:
         return None
@@ -188,7 +253,7 @@ def start_reaper(*, client_factory: Callable[[], object], live_units: Callable[[
     def loop() -> None:
         while not stop.wait(interval_sec):
             try:
-                revoked = sweep(client_factory(), live_units)
+                revoked = sweep(client_factory(), live_units, refresher=refresher)
                 if revoked:
                     logger.info("delegation reaper revoked %d token(s) of ended units", revoked)
             except Exception:  # noqa: BLE001 — the next tick tries again; nothing was dropped

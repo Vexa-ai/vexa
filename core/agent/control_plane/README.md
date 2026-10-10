@@ -37,8 +37,17 @@ lifetime, which identity's `/internal/validate` refuses. A unit id is reused acr
 the dispatch that starts a unit's next container also revokes the previous container's token when the
 runtime reports it ended. Tokens younger than 120 s are never revoked (their spawn may still be on
 its way), and a sweep that cannot read the runtime revokes nothing. The token's lifetime,
-`VEXA_MCP_DELEGATION_TTL_SEC`, defaults to the chat warm window plus one turn (1800 s): nothing
-refreshes a running worker's token, so a unit kept warm past it loses the vexa MCP until it idles out.
+`VEXA_MCP_DELEGATION_TTL_SEC`, defaults to the chat warm window plus one turn (1800 s).
+
+`delegation_refresh.py`. The same sweep keeps a LIVE unit's token fresh: once two thirds of its life
+has passed, agent-api mints a new one for the same person, regime, ceiling and target (new `jti`),
+from its own record of the current token (`vexa:delegation:current:<unit id>`), records it for
+revocation and publishes it at `unit:<id>:delegation`, which the worker's Redis user may read and not
+write (`workload_redis.py`). The worker reads that key before every turn, write-back and job and
+rewrites its MCP attachment (`worker/engine.py` `DelegationRefresh`), so a unit kept warm keeps its
+tools; it holds the token outside its environment, so no harness subprocess inherits it. The replaced
+token is revoked 300 s later, so a turn already running with it can finish. A unit the runtime no
+longer runs is never refreshed, and a refreshed token is revoked on the first sweep after its unit ends.
 
 ## Workspace membership + invites + roles (Lane M — the access layer for shared workspaces)
 

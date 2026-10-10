@@ -1,9 +1,11 @@
 """workload_redis.py — the Redis user an agent worker connects as.
 
-A worker talks to Redis for exactly three keys of its own unit: it reads ``unit:<id>:in``, appends to
-``unit:<id>:out`` and records how far it has read in ``unit:<id>:cursor``. It is given a Redis user
-that can do that and nothing else — no other key, no pub/sub channel, no admin command, and only
-read access to its own input stream (agent-api is that stream's one writer) — instead of the service
+A worker talks to Redis for exactly four keys of its own unit: it reads ``unit:<id>:in``, appends to
+``unit:<id>:out``, records how far it has read in ``unit:<id>:cursor``, and reads its current
+delegation token at ``unit:<id>:delegation`` (agent-api replaces it before it expires,
+``delegation_refresh``). It is given a Redis user that can do that and nothing else — no other key,
+no pub/sub channel, no admin command, and only read access to its own input stream (agent-api is that
+stream's one writer) and to its delegation key (agent-api publishes it) — instead of the service
 connection agent-api itself uses. Every other unit's streams, every meeting's transcript
 feed and every service key stay out of its reach, whatever runs inside the worker.
 
@@ -30,7 +32,7 @@ import time
 from typing import Callable, Iterable, Optional
 from urllib.parse import quote, urlsplit, urlunsplit
 
-from shared.units import inbox_cursor_key, input_topic, output_topic
+from shared.units import delegation_key, inbox_cursor_key, input_topic, output_topic
 
 logger = logging.getLogger("agent_api.workload_redis")
 
@@ -42,7 +44,7 @@ MODE_SHARED = "shared"
 _LABEL = b"vexa-workload-redis.v1"
 #: The commands a worker sends. Connection-level ones (AUTH, and CLIENT SETINFO which redis-py
 #: tolerates being refused) need no grant.
-WORKER_COMMANDS = ("xadd", "xread", "xrange", "xrevrange", "set", "ping")
+WORKER_COMMANDS = ("xadd", "xread", "xrange", "xrevrange", "set", "get", "ping")
 #: A user younger than this is never swept: its dispatch may not have reached the runtime yet.
 SWEEP_GRACE_SEC = 15 * 60
 
@@ -73,13 +75,17 @@ def unit_keys(unit_id: str) -> tuple[str, str, str]:
 
 
 def acl_rules(unit_id: str, password: str, *, read_only_input: bool = True) -> list[str]:
-    """The ``ACL SETUSER`` rules for one unit's worker, from a clean slate. The input stream is
-    read-only to it (``%R~``, a Redis 7 / Valkey key permission); ``read_only_input=False`` is the
-    form for a server without key permissions, where the pattern grants read and write."""
+    """The ``ACL SETUSER`` rules for one unit's worker, from a clean slate. The input stream and the
+    delegation key are read-only to it (``%R~``, a Redis 7 / Valkey key permission): agent-api writes
+    both. ``read_only_input=False`` is the form for a server without key permissions, where the
+    pattern grants read and write (the refresh re-mints from agent-api's own record, never from the
+    worker's copy, so a worker writing its copy changes nothing but its own attachment)."""
     inp, out, cursor = unit_keys(unit_id)
+    read_only = "%R~" if read_only_input else "~"
     return (["reset", "on", f">{password}"]
-            + [("%R~" if read_only_input else "~") + _glob_literal(inp)]
+            + [read_only + _glob_literal(inp)]
             + [f"~{_glob_literal(k)}" for k in (out, cursor)]
+            + [read_only + _glob_literal(delegation_key(unit_id))]
             + ["resetchannels", "-@all"]
             + [f"+{c}" for c in WORKER_COMMANDS])
 

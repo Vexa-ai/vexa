@@ -172,6 +172,16 @@ def input_topic(unit_id: str) -> str:
     return f"unit:{unit_id}:in"
 
 
+def delegation_key(unit_id: str) -> str:
+    """WHERE A LIVE UNIT'S CURRENT DELEGATION TOKEN IS PUBLISHED for its worker.
+
+    agent-api replaces a warm unit's token before it expires (``control_plane.delegation_refresh``)
+    and writes the new one here; the worker reads it before each turn and rewrites its MCP
+    attachment, so a unit alive past one token's life keeps its tools without a restart. The
+    worker's Redis user may read this key and not write it (``control_plane.workload_redis``)."""
+    return f"unit:{unit_id}:delegation"
+
+
 def unit_of_topic(topic: str) -> str:
     """The unit id inside ``unit:<id>:in`` / ``unit:<id>:out`` — the inverse of the two above.
 
