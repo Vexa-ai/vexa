@@ -293,7 +293,10 @@ def build(b: Broker) -> APIRouter:
                 raise
         # Token rotation is serialized; independent account reads must not hold the global lock.
         try:
-            result = providers.read_account(row["provider"], value, **body.model_dump())
+            # The connected address comes from the broker's own row (Gmail's profile answer at
+            # consent), never from the body: AccountReadBody forbids extra fields.
+            result = providers.read_account(row["provider"], value, account=row.get("account") or "",
+                                            **body.model_dump())
             b.audit(who, cid, body.action, "success", operation=operation, version=row["version"])
             return {"operation_id": operation, "source": row["provider"], "untrusted_content": True, **result}
         except (providers.ProviderError, UpstreamFault, HTTPException):

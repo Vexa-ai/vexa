@@ -89,6 +89,31 @@ carry their own state, and the terminal routes them to the broker. Enable the Gm
 Google Calendar API on the client's project. The broker asks for read-only Calendar access, and for
 Gmail read plus draft creation; Vexa never sends mail.
 
+## Links to messages and events (`web_url`)
+
+Every Gmail message or thread item that `gmail_search`, `gmail_read`, `gmail_thread`, `mail_inbox`
+and `mail_read` return, and every event `calendar_events` returns, can carry a `web_url`: the address
+that opens it in the browser. When the agent gives a person a link to an email or an event, it uses
+that field and nothing else. It never builds a Gmail or Calendar address itself.
+
+- **Gmail:** `https://mail.google.com/mail/u/<connected address>/#all/<thread id>`. The address is the
+  mailbox the person connected, so a person with several Google accounts lands in the right one, not
+  in whichever account the browser lists first (`/u/0/`). Characters such as `+` are percent-encoded
+  (`robin.vale%2Bwork@example.test`). The thread id is used; the message id only when Google gave no
+  thread id.
+- **Calendar:** Google's own link for the event (`htmlLink`), passed on only when it is an `https`
+  address on `calendar.google.com` or `www.google.com`.
+
+Limits:
+
+- The link opens in the browser account that matches the address. If the browser is not signed in
+  to that Google account, Google asks the person to sign in first; nothing about Vexa changes that.
+- A Gmail item has no `web_url` when the broker holds no address for the connection (Google did not
+  return one at consent). Reconnecting the account in the Connections panel records it again. The
+  agent then gives no link rather than a guessed one.
+- A Calendar event has no `web_url` when Google's link is missing or points anywhere else.
+- `web_url` is read-only metadata. The tool does not take an account, an index or a URL as input.
+
 ## Custom services
 
 A person, or their agent, can prepare a custom connection: an HTTPS endpoint and how the key is
@@ -180,6 +205,25 @@ Three callers reach the broker, each with its own role key. The broker checks a 
 4. For a custom service, the broker refuses the save until every host that will receive a credential
    has been confirmed (see below), then encrypts and stores it.
 
+**A read returns a link (`web_url`):**
+
+1. At consent the broker asks Gmail for the connected address (`users/me/profile`) and records it
+   in the connection's `account` column. This is the only writer of that value; no route lets a
+   caller set it.
+2. On a read (`/api/connections/{id}/read`) the broker loads the row, passes its `account` to the
+   provider adapter (`providers.read_account`), and the adapter builds each Gmail item's `web_url`
+   with `providers.gmail_web_url`: fixed host, the address percent-encoded, the Gmail id checked
+   against `[a-zA-Z0-9_-]{1,128}`. With no recorded address it builds none.
+3. For Calendar, `providers.calendar_web_url` keeps an event's `htmlLink` only when it parses as
+   `https` on `calendar.google.com` or `www.google.com` with no port or user info.
+4. agent-api returns the broker's answer as it is; it adds, removes or rewrites no link. The shape is
+   `credential-broker.v1` `AccountReadResponse` (`AccountReadMessage.web_url`,
+   `AccountReadEvent.web_url`), optional and back-compatible.
+5. Every read tool's description (the agent-api docstrings published in `mcp.tools.v1.openapi.json`,
+   the notes in `core/agent/mcp.tools.v1.json`, the dogfood adapter's tools) and the worker's
+   per-turn reference rules (`worker/engine.py` `kg_links_preamble`) say: link only with `web_url`,
+   never construct a provider URL. There is no configuration.
+
 **agent-api uses a Git credential** (only with `VEXA_GIT_STORE_BROKER_URL` set): `git_secret_store.py`
 signs a `git` assertion for the person the current request acts for and forwards the gateway's
 signature. The broker serves only `pat/<person>`, `deploy/user-<person>.*`, and `deploy/ws-<id>.*`
@@ -236,6 +280,8 @@ Either way a write keeps the new version and the one before it; delete destroys 
 | P15 (secrets behind a port, brokered access) | Credentials sit behind the `Store` port with two adapters. The agent gets results, never the credential. | ungated: reviewed |
 | P18 (fail loud) | Every failure is a typed `broker_fault` line (`source`, `kind`), never a value. `/ready` answers 503 while the store does not. An outage stays a 502 or 503 and is never reported as "reconnect". | `gate:python` (`test_health.py`, `test_upstream_faults.py`) |
 | P20 (authorize every access) | Every route checks the role and the owner; see below. | `gate:python` (deny tests below) |
+| P23, P20 for `web_url` | The connected address has one writer, the broker at consent, and is read from its own row; the agent cannot name an account in a read (the body forbids extra fields). | `gate:python` (`test_web_url.py`, agent-api `test_web_url_passthrough.py`) |
+| P4, P8 for `web_url` | An optional field of `credential-broker.v1` `AccountReadResponse`, with a pattern for each provider and goldens; back-compatible and re-sealed. | `gate:schema`, `gate:contract-version` |
 
 ### Security
 
@@ -256,6 +302,9 @@ Either way a write keeps the new version and the one before it; delete destroys 
 - **Outbound calls** go only to public addresses, with DNS pinned and no redirects, and the key is
   redacted from responses.
 - **Consent** starts only from the human role, is single-use, and is bound to the person and session.
+- **Links are built by the broker.** A `web_url` names the address recorded at consent, never an
+  account index and never a value from the caller; a Calendar link survives only on a Google Calendar
+  host. Without a recorded address no Gmail link is built.
 
 Deny tests, all in `core/agent/services/credential-broker/tests/` unless named otherwise:
 
@@ -267,6 +316,7 @@ Deny tests, all in `core/agent/services/credential-broker/tests/` unless named o
 | No person in the loop | `test_unwatched_regime.py`: `test_a_worker_without_a_person_is_refused`, `test_a_worker_without_a_person_may_list` |
 | Owner sealed in the credential | `test_owner_sealed.py`: `test_a_connection_reassigned_in_the_metadata_does_not_hand_over_its_credential`, `test_a_reassigned_oauth_application_does_not_start_a_consent`, `test_a_record_without_an_owner_is_refused_once_owners_are_sealed` |
 | Host confirmation | `test_endpoint_host_confirmation.py`: `test_an_oauth_save_needs_the_service_endpoint_host_confirmed_too`, `test_a_new_service_endpoint_host_is_confirmed_again` |
+| Provider links built by the broker | `test_web_url.py`: `test_gmail_web_url_names_the_connected_account_not_an_index`, `test_gmail_web_url_percent_encodes_the_account_address`, `test_gmail_web_url_is_omitted_without_a_recorded_account`, `test_gmail_web_url_refuses_an_id_that_is_not_a_gmail_id`, `test_calendar_html_link_with_a_non_google_host_is_dropped`, `test_route_builds_web_url_from_the_brokers_recorded_account`, `test_caller_cannot_name_the_account_for_web_url` · `core/agent/tests/test_web_url_passthrough.py`: `test_agent_api_passes_the_brokers_web_url_through_unchanged`, `test_a_read_tool_cannot_be_given_an_account_for_the_link`, `test_every_read_tool_description_forbids_constructing_a_provider_url`, `test_the_worker_reference_rules_forbid_constructing_a_provider_url` · `deploy/dogfood/minutes-stack/test_agent_tools.py`: `test_account_read_tools_forbid_constructing_a_provider_url` |
 | Outbound destinations | `test_secret_service.py`: `test_private_mixed_multicast_and_linklocal_refused`, `test_endpoint_and_header_injection_refused`, `test_fixed_endpoint_pinned_ip_redirect_and_secret_redaction` |
 | Git credentials by signed person and membership | `test_git_identity.py`: `test_another_persons_credentials_are_refused`, `test_a_shared_workspace_key_needs_the_signed_membership`, `test_naming_the_owner_as_the_actor_is_no_longer_enough`, `test_a_call_without_the_gateway_signature_is_refused` |
 | agent-api side | `core/agent/tests/test_connections.py`: `test_unconfigured_broker_fails_closed`, `test_multiple_accounts_require_selection_and_cannot_select_foreign_account` · `core/agent/tests/test_git_store_identity.py`: `test_without_a_signed_person_nothing_is_sent`, `test_outside_any_request_the_store_refuses` · `core/agent/tests/test_git_broker_store.py`: `test_unavailable_never_falls_back_or_deletes` |

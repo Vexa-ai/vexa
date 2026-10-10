@@ -376,7 +376,7 @@
         "new_account",
         "setup"
       ],
-      "note": "Opens the trusted Connections panel for Gmail, Calendar or a custom secret (Git tokens are added by the person in Connections → Git, not requested). Secrets are entered there, never in chat. Refused for a worker dispatched without a person."
+      "note": "Opens the trusted Connections panel for Gmail, Calendar or a custom secret (Git tokens are added by the person in Connections \u2192 Git, not requested). Secrets are entered there, never in chat. Refused for a worker dispatched without a person."
     },
     {
       "name": "connections_status",
@@ -409,7 +409,8 @@
         "limit",
         "connection_id",
         "page_token"
-      ]
+      ],
+      "note": "Link to a message or event only with its web_url; never construct a provider URL."
     },
     {
       "name": "gmail_read",
@@ -426,7 +427,8 @@
       "arguments": [
         "message_id",
         "connection_id"
-      ]
+      ],
+      "note": "Link to a message or event only with its web_url; never construct a provider URL."
     },
     {
       "name": "gmail_thread",
@@ -445,7 +447,8 @@
         "connection_id",
         "limit",
         "page_token"
-      ]
+      ],
+      "note": "Link to a message or event only with its web_url; never construct a provider URL."
     },
     {
       "name": "calendar_events",
@@ -465,7 +468,8 @@
         "limit",
         "connection_id",
         "page_token"
-      ]
+      ],
+      "note": "Link to a message or event only with its web_url; never construct a provider URL."
     },
     {
       "name": "mail_inbox",
@@ -482,7 +486,8 @@
       "arguments": [
         "limit",
         "connection_id"
-      ]
+      ],
+      "note": "Link to a message or event only with its web_url; never construct a provider URL."
     },
     {
       "name": "mail_read",
@@ -501,7 +506,7 @@
         "connection_id"
       ],
       "alias_of": "gmail_read",
-      "note": "An alias of gmail_read (the same door), under the name the inbox tool pairs with."
+      "note": "An alias of gmail_read (the same door), under the name the inbox tool pairs with. Link to a message or event only with its web_url; never construct a provider URL."
     },
     {
       "name": "gmail_draft_create",
