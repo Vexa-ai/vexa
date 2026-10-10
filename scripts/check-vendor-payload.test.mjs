@@ -189,10 +189,37 @@ test("the bot manifest may name only its sanctioned mentions of the native path"
   });
 });
 
+test("a sanctioned mention exempts only itself: the same line building the wrapper still fails fetched", () => {
+  // R5-M3: a line carrying a SANCTIONED needle used to be skipped whole, so `fetched` never saw a
+  // `node-gyp` chained after the sanctioned test path.
+  withFixture({ "core/meetings/services/bot/package.json": JSON.stringify({ name: "bot",
+    scripts: { test: "node --test runtime/native-meeting/test/*.test.mjs && node-gyp rebuild" } }, null, 2) }, (root) => {
+    const e = errsOf(root);
+    assert.ok(e.some((x) => x.startsWith("fetched: core/meetings/services/bot/package.json") && x.includes("node-gyp")), e.join(" | "));
+  });
+  withFixture({ "core/meetings/services/bot/package.json": JSON.stringify({ name: "bot", dependencies: { "@vexa/zoom-sdk-capture": "workspace:*" },
+    scripts: { build: "npx node-gyp configure && echo @vexa/zoom-sdk-capture" } }, null, 2) }, (root) => {
+    assert.ok(errsOf(root).some((x) => x.startsWith("fetched: core/meetings/services/bot/package.json") && x.includes("node-gyp")));
+  });
+});
+
+test("libraries and archives of every platform fail when tracked, and any archive under native-meeting/ (D-11)", () => withFixture({}, (root) => {
+  const root2 = dirname(NATIVE_DIR);
+  const paths = [`${root2}/vendor/libmeetingsdk-copy.dylib`, `${root2}/prebuilt/zoom.dll`, `${root2}/prebuilt/libwrap.a`,
+    `${root2}/sdk-6.7.2.tar.xz`, `${root2}/bundle.zip`, "tools/elsewhere/libx.dylib"];
+  for (const p of paths) track(root, p);
+  const e = errsOf(root).filter((x) => x.startsWith("tracked:"));
+  for (const p of paths) assert.ok(e.some((x) => x.includes(p)), `${p} must be named: ${e.join(" | ")}`);
+}));
+
 test("payload names and linked libraries are read the way the gate claims", () => {
   assert.equal(isPayload(`${NATIVE_DIR}/zoom-meeting-sdk-linux_x86_64-6.7.2.tar.xz`), "native SDK archive");
   assert.equal(isPayload("downloads/zoom-meeting-sdk.zip"), "native SDK archive");
   assert.equal(isPayload("docs/assets/diagram.zip"), null);
+  assert.equal(isPayload(`${dirname(NATIVE_DIR)}/docs/diagram.zip`), "native SDK archive");
+  assert.equal(isPayload("lib/libQt5Core.5.dylib"), "shared library (.dylib)");
+  assert.equal(isPayload("bin/zoom_sdk.dll"), "shared library (.dll)");
+  assert.equal(isPayload("lib/libwrap.a"), "static library (.a)");
   assert.equal(isPayload("a/b/zoom_sdk_wrapper.node"), "compiled Node addon (.node)");
   assert.equal(isPayload("lib/libQt5Core.so.5"), "shared object (.so)");
   assert.equal(isPayload("a/libmeetingsdk.so"), "native meeting SDK library (libmeetingsdk*)");

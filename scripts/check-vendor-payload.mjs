@@ -8,9 +8,11 @@
  * entrypoint and from compose, Helm, Lite and stock dispatch; it is reached only from a disposable
  * subprocess behind sealed contracts; and it is logged in a manifest row. Each clause is a check here:
  *
- *   tracked       no tracked file is a native payload: a shared object (`.so`, `.so.N`), a compiled
- *                 Node addon (`.node`), the SDK library (`libmeetingsdk*`), its header (`zoom_sdk.h`) or
- *                 its bundled Qt tree (`qt_libs`). Repository-wide, from `git ls-files`.
+ *   tracked       no tracked file is a native payload: a shared object (`.so`, `.so.N`, `.dylib`, `.dll`),
+ *                 a static library (`.a`), a compiled Node addon (`.node`), the SDK library
+ *                 (`libmeetingsdk*`), its header (`zoom_sdk.h`) or its bundled Qt tree (`qt_libs`), anywhere;
+ *                 and any archive under the native runtime's tree (`native-meeting/`). Repository-wide,
+ *                 from `git ls-files`.
  *   excluded      the `native-sdk-exclusion` block is present in `.gitignore`, the root `.dockerignore`
  *                 and `deploy/lite/Dockerfile.lite.dockerignore`, and the three are one fact:
  *                 `scripts/parity.json` carries it as an ENFORCED fact over exactly those files, and it
@@ -65,7 +67,10 @@ export function isPayload(path) {
   if (name === "zoom_sdk.h") return "native meeting SDK header (zoom_sdk.h)";
   if (extname(name) === ".node") return "compiled Node addon (.node)";
   if (/\.so(\.\d+)*$/.test(name)) return "shared object (.so)";
-  if (/\.(zip|tgz|tar|tar\.(gz|xz|bz2|zst))$/i.test(name) && (/zoom|meeting.?sdk/i.test(name) || p.startsWith(`${NATIVE_DIR}/`)))
+  if (/\.dylib$/i.test(name)) return "shared library (.dylib)";
+  if (/\.dll$/i.test(name)) return "shared library (.dll)";
+  if (/\.a$/.test(name)) return "static library (.a)";
+  if (/\.(zip|tgz|tar|tar\.(gz|xz|bz2|zst)|7z|xz|gz)$/i.test(name) && (/zoom|meeting.?sdk/i.test(name) || p.startsWith(`${NATIVE_ROOT}/`)))
     return "native SDK archive";
   return null;
 }
@@ -200,10 +205,14 @@ export function checkVendorPayload(root = DEFAULT_ROOT) {
     if (ignoreFile) text = withoutBlock(text);
     if (referenceScope) scanned++;
     if (installer) installers++;
+    // A sanctioned mention is cut out of its line, and BOTH checks run on what is left: the mention
+    // exempts itself and nothing else on the line, so a sanctioned test path chained to a wrapper
+    // build (`… && node-gyp rebuild`) still fails `fetched`.
     const sanctioned = SANCTIONED.filter((s) => s.path === p).map((s) => s.needle);
-    text.split("\n").forEach((line, i) => {
-      if (ignoreFile && line.trimStart().startsWith("#")) return;
-      if (sanctioned.some((n) => line.includes(n)) && !line.replace(new RegExp(sanctioned.map((n) => n.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")).join("|"), "g"), "").match(PATH_NEEDLES)) return;
+    const sanctionedRe = sanctioned.length ? new RegExp(sanctioned.map((n) => n.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")).join("|"), "g") : null;
+    text.split("\n").forEach((raw, i) => {
+      if (ignoreFile && raw.trimStart().startsWith("#")) return;
+      const line = sanctionedRe ? raw.replace(sanctionedRe, "") : raw;
       const ref = referenceScope && line.match(PATH_NEEDLES);
       if (ref) errs.push(`unreferenced: ${p}:${i + 1} names the native path (\`${ref[0]}\`). The optional runtime is off by default and absent from every stock entrypoint and deployment (P17, ADR-0039).`);
       const got = installer && line.match(PAYLOAD_NEEDLES);
