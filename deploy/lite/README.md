@@ -119,6 +119,8 @@ The repo-root `.env` (auto-seeded from `deploy/compose/.env` if present, else mi
 |---|---|---|
 | `TRANSCRIPTION_SERVICE_URL` / `_TOKEN` | — | STT endpoint + key, shared by the bot transcript pipeline and the terminal composer mic (dictation `/api/stt`). Unset → bots capture, no transcript; composer mic returns 503 "not configured" |
 | `TRANSCRIPTION_MODEL` | — | STT model id sent on every request — required by backends that validate it (Groq `whisper-large-v3-turbo`, vLLM's served name). Unset → `whisper-1` |
+| `DEFAULT_TRANSCRIPTION_LANGUAGE` | — | The language bots transcribe in when neither the request nor the person says (e.g. `de`). See [Transcription language](https://docs.vexa.ai/how-to/transcription-language) |
+| `DEFAULT_TRANSCRIPTION_ALLOWED_LANGUAGES` | — | Codes detection is restricted to, comma-separated, no spaces (e.g. `de,en`) |
 | `ADMIN_TOKEN` | minted per boot | admin API token (the stack's shared admin secret). It used to default to the published literal `changeme`; the entrypoint now mints a random one per boot when you set none, and admin-api/meeting-api refuse any published placeholder outright. Set it when something OUTSIDE the container has to present it. |
 | `IMAGE_TAG` | `latest` | the `vexaai/vexa-lite` tag to pull (a local `vexa-lite:dev` build wins) |
 | `DB_PASSWORD` | minted by `make up` | the database password. There is no default: `make up` mints one into `.env` when it is unset or a published value (`postgres`), and sets it on the postgres sidecar on every run — so a volume created with the old `postgres` password moves to it without a separate step. Running the image yourself, pass your database's password; the entrypoint refuses to start without one. |
