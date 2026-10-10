@@ -52,8 +52,8 @@ curl -H "X-API-Key: $API_KEY" \
 
 Add `download=1` to get the same bytes marked as a file to save
 (`Content-Disposition: attachment`, named `meeting-<meeting_id>-<date>-audio.<ext>` with the real
-container's extension). Ownership is checked exactly as for playback. In the terminal, the meeting
-page's **Download audio** button does this.
+container's extension). Ownership is checked exactly as for playback. In the terminal, this is the
+download icon at the end of the meeting page's player row (tooltip **Download audio**).
 
 ```bash
 curl -OJ -H "X-API-Key: $API_KEY" \

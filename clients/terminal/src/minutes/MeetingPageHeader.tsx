@@ -28,9 +28,14 @@ export function MeetingPageHeader({ meetingId, body, path }: { meetingId: string
   // Bind to the document's meeting, never the currently selected chat or another live call.
   const meeting = meetings.find(m => m.id === meetingId || m.native_id === meetingId);
   const { title, metadata } = meetingHeader(body, meeting);
+  // ONE header row: the title, then platform · date · status muted beside it (each truncates, the
+  // full text on hover). Delete lives in the document header's icon group (PagesPanel), so the
+  // controls below are just the player row.
   return <div style={{ flex: "1 1 auto", minWidth: 0 }}>
-    <div data-doc-name title={path} style={{ ...ty.title, fontSize: 13.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</div>
-    {metadata && <div data-meeting-metadata style={{ ...ty.meta, marginTop: 3, color: "var(--t3)", overflowWrap: "anywhere" }}>{metadata}</div>}
-    <MeetingControls meetingId={meetingId} />
+    <div style={{ display: "flex", alignItems: "baseline", gap: 8, minWidth: 0 }}>
+      <div data-doc-name title={path} style={{ ...ty.title, fontSize: 13.5, flex: "0 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</div>
+      {metadata && <div data-meeting-metadata title={metadata} style={{ ...ty.meta, flex: "0 10 auto", minWidth: 0, color: "var(--t3)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{metadata}</div>}
+    </div>
+    <MeetingControls meetingId={meetingId} showDelete={false} />
   </div>;
 }

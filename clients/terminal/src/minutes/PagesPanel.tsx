@@ -27,6 +27,7 @@
 import type { CSSProperties } from "react";
 import { useEffect, useRef, useState } from "react";
 import { MeetingPageHeader } from "./MeetingPageHeader";
+import { MeetingDeleteButton } from "./MeetingControls";
 import { Icon } from "../ui-kit";
 import { copyText } from "../ui-kit/ContextMenu";
 import { DocMetaContext } from "../ui-kit/docRefs";
@@ -298,6 +299,7 @@ export function PagesPanel(p: {
                   style={iconBtn(false)} onMouseEnter={litIcon} onMouseLeave={dimIcon(false)}>
                   <Icon name="edit" size={14} />
                 </button>
+                {docMeeting && <MeetingDeleteButton meetingId={docMeeting} size="header" />}
               </>
             : <>
                 {saveError && <span data-doc-act="save-error" role="alert" title={saveError}
