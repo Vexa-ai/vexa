@@ -52,6 +52,7 @@ from llm import (
     run_harness_turn,
 )
 from llm import jobs as llm_jobs
+from llm.ports import tools_identity
 from llm.errors import _AUTH_SIGNATURE_RE  # noqa: F401 — re-exported for the worker.worker shim
 from shared.seeding import resolve_seed_dir, seed_workspace, validate_seed
 from shared.marks import UNWRITTEN_MARK
@@ -1601,39 +1602,24 @@ def room_toolbelt(tools: list[str]) -> list[str]:
     return [t for t in tools if not (t.startswith(prefix) and t[len(prefix):] in LIVE_MEETING_VERBS)]
 
 
-def _delegation_dir(work: Path) -> "Path | None":
-    """The first usable BASE directory for the delegation credential, or None. The caller writes
-    ``<base>/.claude/mcp.json`` NOFOLLOW under it (``mcp_delegation_config``), so a link planted at
-    ``.claude`` cannot redirect the write.
+def _mount_roots(work: Path) -> "list[Path]":
+    """Every directory this dispatch mounted — its workspace, its continuity root and each active
+    mount. A per-dispatch secret is never written under any of them (``shared.private_dir``)."""
+    roots = [work, _continuity_root(work)]
+    roots += [Path(m["path"]) for m in active_mounts() if m.get("path")]
+    return roots
 
-    Three bases, in order, each keeping the two properties that matter — the file must not be
-    committable, and it must be private to this subject:
 
-      1. ``<cwd>`` — its ``.claude`` is gitignored by the workspace seed. The normal answer.
-      2. the PRIVATE SYSTEM tier — read-write by contract (it is where chat continuity already
-         anchors), private, and outside every desk the turn may commit.
-      3. a per-subject directory under the system temp dir — outside every mount, so no `git add`
-         can reach it, and gone when the container is.
-
-    Returning None is the honest floor: a turn with no toolbelt is a turn that will say so when it
-    is asked to read a transcript, and the grounding gate then fails LOUDLY. A turn that never
-    starts says nothing at all."""
-    import tempfile
-    # Each candidate is a BASE whose own ``.claude/mcp.json`` the config is written to. The base is
-    # the trusted mount root (``work``/``_system``) or a per-container tmp dir; ``.claude`` and the
-    # file under it are reached nofollow by the writer, so a link the tools user planted at
-    # ``.claude`` can never redirect the credential (see ``mcp_delegation_config``).
-    candidates = [work, _continuity_root(work),
-                  Path(tempfile.gettempdir()) / f"vexa-{work.name}"]
-    seen: set[Path] = set()
-    for cand in candidates:
-        if cand in seen:
-            continue
-        seen.add(cand)
-        if not cand.is_dir() and cand != candidates[-1]:
-            continue                      # a mount that is not there; the tmp base is made below
-        return cand
-    return None
+def _remove_legacy_attachment(work: Path) -> None:
+    """An older worker wrote the attachment at ``.claude/mcp.json`` inside its workspace (or its
+    continuity root). Remove one left there, without following a link, so a token it held does not
+    stay readable in a mount after this worker no longer writes there."""
+    from workspaces.shared import workspace_paths as wpaths
+    for base in {work, _continuity_root(work)}:
+        try:
+            wpaths.unlink_inside(base, ".claude/mcp.json", allow=(".claude",))
+        except OSError:
+            pass
 
 
 def _file_spawn_gap(url: str, token: str) -> None:
@@ -1660,15 +1646,15 @@ def write_mcp_config(path: Path, url: str, token: str) -> None:
     cfg = {"mcpServers": {VEXA_MCP_SERVER: {
         "type": "http", "url": url, "headers": {"Authorization": f"Bearer {token}"},
     }}}
-    # NOFOLLOW, every time (the refresh rewrites this on every turn). `path` is `<base>/.claude/
-    # mcp.json` and `.claude` is in a work tree the model's tools can write: the write goes to a NEW
-    # file with a random name created O_EXCL under a `.claude` opened O_NOFOLLOW, is fchmod'd 0600
-    # and fchown'd to the tools user through its own descriptor, and only then renamed over the
-    # name — so a link at `.claude`, at `mcp.json`, or at a predictable temp name is never written
-    # through, chmod'd or chown'd, and the file is never visible at its name owned by root.
+    # NOFOLLOW, every time (the refresh rewrites this on every turn). `path` is a file in this
+    # worker's private secrets directory (`shared.private_dir`), outside every mount: the write goes
+    # to a NEW file with a random name created O_EXCL, is fchmod'd 0600 and fchown'd to the tools
+    # user through its own descriptor, and only then renamed over the name — so a link at
+    # `mcp.json` or at a predictable temp name is never written through, chmod'd or chown'd, and the
+    # file is never visible at its name owned by anyone but the user that reads it.
     from workspaces.shared import workspace_paths as wpaths
     path = Path(path)
-    wpaths.write_text_inside(path.parent.parent, f"{path.parent.name}/{path.name}", json.dumps(cfg),
+    wpaths.write_text_inside(path.parent, path.name, json.dumps(cfg),
                              mode=0o600, before_replace=hand_fd_to_tools)
 
 
@@ -1745,17 +1731,16 @@ def mcp_delegation_config(work: Path) -> "tuple[str | None, list[str]]":
     setup-link dialect), but a credential in a query string leaks into every access log and proxy trace
     it passes through, and this one crosses a public hostname.
 
-    It is written under ``.claude/`` because that directory is GITIGNORED in the workspace seed — the
-    post-turn ``git add -A`` in ``run_harness_turn`` commits every changed mount, so a credential
-    written anywhere else in the workspace would be committed and synced to the workspace store. The
-    file is chmod 600 for the same reason the env var is not echoed: it is a bearer credential.
+    IT IS WRITTEN OUTSIDE EVERY MOUNT (``shared.private_dir``). The working directory is usually a
+    desk, a shared workspace or ``_global``, which other people read through agent-api's file routes
+    and every turn commits; a token written there (it was ``.claude/mcp.json``) could be read by
+    anyone who can read that workspace. The attachment lives in a directory this process makes for
+    it — 0700, or 0711 with the file 0600 and given to the tools user when the harness runs as that
+    user — and the harness is pointed at it by path (``--mcp-config``). One an older worker left in
+    the workspace is removed.
 
-    WHERE it goes has FALLBACKS, because on 2026-09-02 this function killed the process. The cwd was
-    a read-only mount, ``mkdir`` raised ``OSError: [Errno 30] Read-only file system``, nothing caught
-    it, and the worker exited(1) before the model ever ran — while the caller sat polling for a reply
-    that could not come. The mount mode is fixed in ``dispatch.py``; this is the belt, and it is the
-    more important half: **the LOCATION of a credential is never worth a turn.** See
-    ``_delegation_dir``.
+    A directory that cannot be made private is never worth a turn: the turn runs without the
+    toolbelt, says so, and files the gap.
     """
     url = (os.environ.get("VEXA_MCP_URL") or "").strip()
     token = (os.environ.get("VEXA_MCP_DELEGATION_TOKEN") or "").strip()
@@ -1768,25 +1753,15 @@ def mcp_delegation_config(work: Path) -> "tuple[str | None, list[str]]":
                                                 ("VEXA_MCP_DELEGATION_TOKEN", token)) if not v))
         _file_spawn_gap(url, token)
         return None, []
+    from shared import private_dir
     from workspaces.shared import workspace_paths as wpaths
-    base = _delegation_dir(work)
-    if base is None:
-        log.warning("no writable directory for the vexa MCP delegation config — running this turn "
-                    "WITHOUT the toolbelt rather than not at all")
-        _file_spawn_gap(url, token)
-        return None, []
-    # THE CREDENTIAL IS WRITTEN NOFOLLOW (`write_mcp_config`). `.claude` sits in a work tree the
-    # model's tools can write, and the tools user owns `mcp.json` once it is handed over, so a later
-    # turn can leave `.claude` or `mcp.json` a symlink. A `.claude` planted as a SYMLINK is removed
-    # first (the link itself, never its target — `unlink_inside` leaves a real directory alone), so
-    # the fresh `.claude` the write makes is this workspace's own and the turn still gets its toolbelt.
-    wpaths.unlink_inside(base, ".claude")
-    path = base / ".claude" / "mcp.json"
+    _remove_legacy_attachment(work)
     try:
+        base = private_dir.make(refuse_under=_mount_roots(work), reader=tools_identity())
+        path = base / "mcp.json"
         write_mcp_config(path, url, token)
-    except (wpaths.PathRefused, OSError) as e:
-        log.warning("vexa MCP delegation config not written at %s (%s) — running WITHOUT the toolbelt",
-                    base, e)
+    except (private_dir.NotPrivate, wpaths.PathRefused, OSError) as e:
+        log.warning("vexa MCP delegation config not written (%s) — running WITHOUT the toolbelt", e)
         _file_spawn_gap(url, token)
         return None, []
     # PRINTED, not logged at info: the worker configures no root logger, so an INFO record is dropped,
@@ -1804,12 +1779,11 @@ def _mcp_endpoint(mcp_config: str) -> "tuple[str, dict] | None":
     ``VEXA_MCP_URL`` that could in principle disagree with it (or be unset, on a caller that built
     the file some other way — the delegation seam is not the only writer of this shape, `shared.
     tools.ToolGrant` is another)."""
-    # NOFOLLOW (`<base>/.claude/mcp.json`): the attachment sits in a tree the model's tools can
-    # write; a link swapped in at it must not make this preflight call a URL with headers from
-    # somebody else's file.
+    # NOFOLLOW: a link swapped in at the attachment must not make this preflight call a URL with
+    # headers from somebody else's file.
     from workspaces.shared import workspace_paths as wpaths
     p = Path(mcp_config)
-    raw = wpaths.read_text_inside(p.parent.parent, f"{p.parent.name}/{p.name}")
+    raw = wpaths.read_text_inside(p.parent, p.name)
     try:
         cfg = json.loads(raw) if raw is not None else None
     except ValueError:

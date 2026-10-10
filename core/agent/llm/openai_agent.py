@@ -150,6 +150,11 @@ def _parse_extra_body(raw: object) -> dict:
 
 log = logging.getLogger(__name__)
 
+#: Chat transcripts sit under `.claude/projects`, which no caller-supplied path may reach
+#: (`workspace_paths.RESERVED_DIRS`) — the model's own Read/Write/Glob included; this is the
+#: harness's own reach into it.
+_PLUMBING = (".claude",)
+
 # ── budgets ──────────────────────────────────────────────────────────────────────────────────────
 # Defaults chosen against the CCC node's sizing table: ~29 concurrent requests at 24k context, and
 # this product's turns are prefill-dominated (input is ~95% of the tokens moved). A turn that grows
@@ -500,8 +505,8 @@ def _load_mcp(mcp_config: Optional[str], *, http_client: Optional[httpx.Client] 
     index: dict[str, tuple[_MCPServer, str]] = {}
     if not mcp_config:
         return servers, index
-    p = Path(mcp_config)     # `<base>/.claude/mcp.json`, read nofollow — see `engine._mcp_endpoint`
-    text = wpaths.read_text_inside(p.parent.parent, f"{p.parent.name}/{p.name}")
+    p = Path(mcp_config)     # the private attachment, read nofollow — see `engine._mcp_endpoint`
+    text = wpaths.read_text_inside(p.parent, p.name)
     try:
         if text is None:
             raise OSError("not a plain file here")
@@ -875,29 +880,30 @@ class _Transcript:
         self.path = self.dir / self.name
 
     def _rel(self) -> str:
-        if wpaths.is_file_inside(self.root, self._own):
+        if wpaths.is_file_inside(self.root, self._own, allow=_PLUMBING):
             return self._own
         # the sid may have been written under another cwd-slug (a mount that moved) — accept it
-        for slug in wpaths.list_dirs_inside(self.root, self._PROJECTS):
+        for slug in wpaths.list_dirs_inside(self.root, self._PROJECTS, allow=_PLUMBING):
             cand = f"{self._PROJECTS}/{slug}/{self.name}"
-            if wpaths.is_file_inside(self.root, cand):
+            if wpaths.is_file_inside(self.root, cand, allow=_PLUMBING):
                 return cand
         return self._own
 
     def exists(self) -> bool:
-        return wpaths.is_file_inside(self.root, self._rel())
+        return wpaths.is_file_inside(self.root, self._rel(), allow=_PLUMBING)
 
     def append(self, record: dict) -> None:
         try:
             wpaths.append_text_inside(self.root, self._rel(),
-                                      json.dumps(record, ensure_ascii=False, default=str) + "\n")
+                                      json.dumps(record, ensure_ascii=False, default=str) + "\n",
+                                      allow=_PLUMBING)
         except (OSError, ValueError) as exc:   # ValueError: a link in the way (PathRefused)
             log.warning("could not append to the session transcript (%s) — history will be short", exc)
 
     def messages(self) -> list[dict]:
         """The prior conversation as OpenAI messages (from the ``oa`` field), or [] if unreadable."""
         out: list[dict] = []
-        raw = wpaths.read_text_inside(self.root, self._rel())
+        raw = wpaths.read_text_inside(self.root, self._rel(), allow=_PLUMBING)
         if raw is None:
             return out
         for line in raw.splitlines():
@@ -1102,8 +1108,8 @@ class OpenAIAgentHarness:
     def transcript_bytes(self, work: Path, session_id: str) -> int:
         total = 0
         name = f"{session_id}.jsonl"
-        for slug in wpaths.list_dirs_inside(work, ".claude/projects"):
-            st = wpaths.stat_inside(work, f".claude/projects/{slug}/{name}")
+        for slug in wpaths.list_dirs_inside(work, ".claude/projects", allow=_PLUMBING):
+            st = wpaths.stat_inside(work, f".claude/projects/{slug}/{name}", allow=_PLUMBING)
             if st is not None and stat.S_ISREG(st.st_mode):      # the entry itself; a link is no size
                 total += st.st_size
         return total

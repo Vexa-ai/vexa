@@ -43,7 +43,10 @@ from typing import Optional
 
 #: Directories no caller-supplied path may reach into. ``allow=(".git",)`` opens one for a route
 #: that owns it — nothing does today; the parameter exists so a future one need not weaken the rule.
-RESERVED_DIRS = (".git", ".vexa")
+#: ``.claude`` is the agent's own plumbing in a work tree — chat continuity, harness state, and once
+#: a worker's tool credential — never a page: no file, upload or move route reaches it, and the
+#: platform's own reads and writes there say ``allow=(".claude",)``.
+RESERVED_DIRS = (".git", ".vexa", ".claude")
 
 
 class PathRefused(ValueError):
@@ -123,7 +126,7 @@ def is_inside(root, path: str, *, allow=()) -> bool:
 #
 # ``resolve_inside`` above answers about a CALLER-supplied path and refuses one that leaves the
 # workspace. These helpers are for the other half: a path the PLATFORM fixes (``PURPOSE``,
-# ``.claude/mcp.json``, ``kg/entities/<kind>/<slug>.md``, ``.vexa/workspace.json``) that agent-api or
+# ``.claude/jobs/<id>.json``, ``kg/entities/<kind>/<slug>.md``, ``.vexa/workspace.json``) that agent-api or
 # the worker — running as root — reads or writes inside a work tree the model's tools can also write
 # during a turn. A plain ``open``/``read_text``/``write_text`` follows a symlink the tools user plants
 # at the file or at any directory above it, so the root process can be redirected to read another

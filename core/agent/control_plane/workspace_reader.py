@@ -52,10 +52,11 @@ def _block_text(content) -> str:
         )
     return ""
 
-# `.git` is pure plumbing — huge/noisy, never useful in the Files tree — so it's hidden
-# unconditionally. Everything else dot-prefixed (`.claude` + any dotfile/dotdir) is hidden by
+# `.git` is pure plumbing — huge/noisy, never useful in the Files tree — and `.claude` is the agent's
+# own (chat continuity, harness state): both are hidden unconditionally, as every file route refuses
+# a path into them (`workspace_paths.RESERVED_DIRS`). Everything else dot-prefixed is hidden by
 # default but surfaced when the caller opts in via ``hidden=True``.
-_ALWAYS_HIDDEN = {".git"}
+_ALWAYS_HIDDEN = {".git", ".claude"}
 
 # TEMPLATES ARE NOT RECORDS. `kg/templates/` holds the SHAPE of an entity — a skeleton with
 # `<Full Name>` where a name goes — and every prose file in the workspace says it is never
@@ -353,8 +354,8 @@ class WorkspaceReader:
     def tree_at(self, base: Path, hidden: bool = False) -> list[str]:
         """Sorted relative paths of the files under ``base`` (any workspace dir under the store root).
 
-        Always excludes ``.git`` internals. By default also excludes ``.claude`` and any other
-        dotfile/dotdir; pass ``hidden=True`` to include those. ``.git`` stays hidden either way.
+        Always excludes ``.git`` and ``.claude``. By default also excludes any other dotfile/dotdir;
+        pass ``hidden=True`` to include those. ``.git`` and ``.claude`` stay hidden either way.
         """
         ws = self._guard_under_root(base)
         if not ws.exists():

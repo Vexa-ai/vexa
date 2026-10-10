@@ -38,6 +38,10 @@ from workspaces.shared import workspace_paths as wpaths
 
 log = logging.getLogger("agent_api.worker")
 
+#: The register sits under `.claude/`, which no caller-supplied path may reach
+#: (`workspace_paths.RESERVED_DIRS`); this is the platform's own reach into it.
+_PLUMBING = (".claude",)
+
 #: How the lines read. A job's whole visible surface is three sentences, so they are written here
 #: rather than composed at three call sites — and never by a model: the acknowledgement is the one
 #: thing that must arrive before any model has been asked anything.
@@ -283,9 +287,9 @@ class JobRunner:
         out: list[dict] = []
         if self._root is None:
             return out
-        for name in wpaths.list_files_inside(self._root, self._rel, suffix=".json"):
+        for name in wpaths.list_files_inside(self._root, self._rel, suffix=".json", allow=_PLUMBING):
             try:
-                rec = json.loads(wpaths.read_text_inside(self._root, f"{self._rel}/{name}") or "")
+                rec = json.loads(wpaths.read_text_inside(self._root, f"{self._rel}/{name}", allow=_PLUMBING) or "")
             except ValueError:
                 rec = {}
             if not isinstance(rec, dict):
@@ -350,14 +354,14 @@ class JobRunner:
         try:
             wpaths.write_text_inside(self._root, f"{self._rel}/{job_id}.json",
                                      json.dumps({"job_id": job_id, "kind": kind, "target": target,
-                                                 "session": self._session}))
+                                                 "session": self._session}), allow=_PLUMBING)
         except (OSError, ValueError) as exc:   # ValueError: a link on the way (PathRefused)
             log.warning("could not record job %s (%s) — a restart will not report it", job_id, exc)
 
     def _drop(self, name: str) -> None:
         if self._root is not None:
-            wpaths.unlink_inside(self._root, f"{self._rel}/{name}")
+            wpaths.unlink_inside(self._root, f"{self._rel}/{name}", allow=_PLUMBING)
 
     def _forget(self, job_id: str) -> None:
         if self._root is not None:
-            wpaths.unlink_inside(self._root, f"{self._rel}/{job_id}.json")
+            wpaths.unlink_inside(self._root, f"{self._rel}/{job_id}.json", allow=_PLUMBING)

@@ -156,8 +156,8 @@ def _mcp_config(path: Optional[str], allowed_tools: Iterable[str]) -> dict:
     """
     if not path:
         return {}
-    p = Path(path)           # `<base>/.claude/mcp.json`, read nofollow — see `engine._mcp_endpoint`
-    text = wpaths.read_text_inside(p.parent.parent, f"{p.parent.name}/{p.name}")
+    p = Path(path)           # the private attachment, read nofollow — see `engine._mcp_endpoint`
+    text = wpaths.read_text_inside(p.parent, p.name)
     try:
         raw = json.loads(text) if text is not None else {}
     except (ValueError, TypeError):

@@ -82,8 +82,8 @@ def apply_tool_grant(
     ws: Path, tools: Iterable[str], registry: Optional[ToolRegistry]
 ) -> "tuple[list[str], Optional[str]]":
     """Resolve a unit's toolbelt (unit.v1.tools names) onto a workspace → (--allowedTools, an injected
-    .mcp.json path or None). The mcp config is written under ``.claude/`` so it is never staged/committed
-    by the governance layer. Defaults to Read/Write/Edit; unknown tools are fail-closed (dropped).
+    .mcp.json path or None). The mcp config is written outside the workspace (``shared.private_dir``),
+    so it is never staged, committed or read through a file route. Defaults to Read/Write/Edit; unknown tools are fail-closed (dropped).
     (The single place a tool grant becomes real for a turn — used by the worker's chat/meeting runners.)"""
     allowed = ["Read", "Write", "Edit"]
     names = list(tools)
@@ -93,8 +93,10 @@ def apply_tool_grant(
     allowed += grant.allowed_tools
     if not grant.has_mcp:
         return allowed, None
-    # nofollow, as the delegation attachment is: a `.claude` planted as a link is removed (never a
-    # real directory), and the config is a new file renamed into place, never written through
-    wpaths.unlink_inside(Path(ws), ".claude")
-    mcp_path = wpaths.write_text_inside(Path(ws), ".claude/mcp.json", json.dumps(grant.mcp_config()))
+    # OUTSIDE THE WORKSPACE, as the delegation attachment is (`shared.private_dir`): an MCP server's
+    # `env` can carry a credential, and the workspace is read through every file route. The config
+    # is a new 0600 file renamed into place in a 0700 directory of this process's own.
+    from shared import private_dir
+    base = private_dir.make(refuse_under=(Path(ws),))
+    mcp_path = wpaths.write_text_inside(base, "mcp.json", json.dumps(grant.mcp_config()), mode=0o600)
     return allowed, str(mcp_path)
