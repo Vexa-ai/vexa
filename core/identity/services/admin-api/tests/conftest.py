@@ -62,11 +62,16 @@ def redis_client():
 
 
 class FakeRevocationStore:
-    """The service Redis as `/internal/validate` sees it: the revoked-token keys agent-api writes
-    (app/delegation_revocation.py). `down` makes every read fail like an unreachable Redis."""
+    """The service Redis as `/internal/validate` sees it: the live and revoked keys agent-api writes
+    (app/delegation_revocation.py). Every token a test mints reads as recorded live by agent-api,
+    unless the test `evict`s its live key or `revoke`s it. `down` makes every read fail like an
+    unreachable Redis."""
+
+    LIVE = "vexa:delegation:live:"
 
     def __init__(self):
         self.keys: set[str] = set()
+        self.not_live: set[str] = set()
         self.down = False
         self.reads = 0
 
@@ -74,11 +79,18 @@ class FakeRevocationStore:
         from admin_api.app import delegation_revocation
 
         self.keys.add(delegation_revocation.REVOKED_PREFIX + jti)
+        self.not_live.add(jti)
+
+    def evict(self, jti: str) -> None:
+        """The live key gone without a revocation: evicted, expired early, or never written."""
+        self.not_live.add(jti)
 
     async def exists(self, key: str) -> int:
         self.reads += 1
         if self.down:
             raise ConnectionError("redis down")
+        if key.startswith(self.LIVE):
+            return int(key[len(self.LIVE):] not in self.not_live)
         return int(key in self.keys)
 
 

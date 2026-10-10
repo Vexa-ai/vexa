@@ -138,7 +138,9 @@ async def _validate_delegation(token: str, db: AsyncSession) -> Dict[str, Any]:
         jti = claims.get("jti")
         if not isinstance(jti, str) or not jti:
             raise delegation_mod.Malformed("delegation token names no jti")
-        if await revocation.is_revoked(jti):
+        # Admitted only while agent-api's live record exists and no revocation does: an evicted or
+        # never-written record refuses the token (delegation_revocation.is_admitted).
+        if not await revocation.is_admitted(jti):
             raise delegation_mod.Revoked("delegation token has been revoked")
     except delegation_mod.DelegationError as e:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail=f"Invalid delegation: {e.reason}")

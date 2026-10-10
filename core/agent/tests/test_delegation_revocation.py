@@ -109,6 +109,27 @@ def test_a_token_that_cannot_be_recorded_is_never_handed_out(tmp_path, caplog):
     assert "could not be recorded for revocation" in caplog.text
 
 
+# ── identity admits a token only while agent-api holds it live ──────────────────────────────────
+
+def test_a_dispatch_holds_its_token_live_for_the_tokens_life(tmp_path):
+    store = _store()
+    _, env = _dispatch(tmp_path, store)
+    claims = _claims(env)
+    key = dr.live_key(claims["jti"])
+    assert key == "vexa:delegation:live:" + claims["jti"]
+    assert store.get(key) == "1"
+    assert 0 < store.ttl(key) <= claims["exp"] - claims["iat"]
+
+
+def test_ending_the_unit_takes_the_tokens_live_record_with_it(tmp_path):
+    store = _store()
+    _, env = _dispatch(tmp_path, store)
+    jti = _claims(env)["jti"]
+    assert dr.sweep(store, lambda: [], now=time.time() + dr.GRACE_SEC + 1) == 1
+    assert not store.exists(dr.live_key(jti))
+    assert store.exists(dr.revoked_key(jti))
+
+
 # ── THE UNIT-END PATH: mint → the unit stops → the jti is in the store, for the token's remaining life
 
 def test_mint_then_end_the_unit_and_its_token_is_revoked_for_its_remaining_life(tmp_path):

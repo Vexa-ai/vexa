@@ -27,6 +27,12 @@ without its tools because time passed; and nothing fails quietly.
    (`admin_api/app/delegation_revocation.py`). The key name is held equal on both sides by the
    `delegation-revocation-key` parity fact.
 
+   agent-api also holds `vexa:delegation:live:<jti>` from recording a token until it revokes it
+   (deleted) or the token expires, and identity admits a verified token only while that key exists
+   and no revocation does. A denylist alone fails open — a revoked key the store evicted, or a token
+   never recorded, would read as "not revoked" — so the positive record makes a lost key refuse the
+   token. Held equal on both sides by the `delegation-live-key` parity fact.
+
 2. **Identity fails closed when it cannot read the store.** A `vxd_` bearer is answered `503` while
    Redis cannot be read; it never reads as "not revoked". API keys never touch the store.
 
