@@ -22,7 +22,8 @@ import subprocess
 from pathlib import Path
 from typing import Iterable, Iterator, Optional
 
-from llm.errors import looks_like_auth_failure, preflight_provider_guard
+from llm.errors import looks_like_auth_failure, preflight_provider_guard, provider_host
+from llm import faults as provider_faults
 from llm.ports import HarnessExec, close_event_stream, harness_identity_kwargs, harness_subprocess_env
 from llm.claude_skills import _link_skills_into_home
 from llm.tool_events import (_BOT_TOOLS, _FOCUS_TOOLS, _OPEN_TOOLS, _TERMS_TOOLS, _WRITER_TOOLS,
@@ -61,6 +62,14 @@ def parse_stream_json(lines: Iterable[str]) -> Iterator[dict]:
     pending_opens: set[str] = set()
     # callIds of in-flight `workspace_new` calls — same discipline again (Vexa-ai/vexa#1603).
     pending_focus: set[str] = set()
+    # THE PROVIDER'S FAILURE, WHEREVER THE CLI PUT IT (P18). The CLI reports a provider refusal —
+    # OpenRouter's 402, out of credit — as a synthetic assistant message (`API Error: 402 {…}`,
+    # sometimes labelled `error: "billing_error"`), then a `result` with `is_error`; and when it dies
+    # before the stream starts it prints the reason as plain text, which used to be skipped as a
+    # malformed line. All three are kept here, bounded, and read by `_provider_fault` below.
+    api_error, sdk_error, model_id = "", "", ""
+    stray: list[str] = []
+    saw_result = False
     try:
         for raw in lines:
             raw = raw.strip()
@@ -69,8 +78,14 @@ def parse_stream_json(lines: Iterable[str]) -> Iterator[dict]:
             try:
                 obj = json.loads(raw)
             except json.JSONDecodeError:
+                obj = None
+            if not isinstance(obj, dict):
+                stray.append(raw[:500])      # plain stderr/stdout text: kept, never shown raw
+                del stray[:-20]
                 continue
             t = obj.get("type")
+            if t == "system" and obj.get("subtype") == "init" and obj.get("model"):
+                model_id = str(obj["model"])
             if t == "stream_event":
                 event = obj.get("event", {}) or {}
                 if event.get("type") == "content_block_delta":
@@ -82,6 +97,11 @@ def parse_stream_json(lines: Iterable[str]) -> Iterator[dict]:
                 for block in obj.get("message", {}).get("content", []) or []:
                     bt = block.get("type")
                     if bt == "text" and block.get("text"):
+                        if _is_api_error(obj, block["text"]):
+                            # The provider's refusal, not the agent's words: it becomes the turn's
+                            # typed fault below instead of a raw `API Error: 402 {json}` bubble.
+                            api_error, sdk_error = block["text"], str(obj.get("error") or "")
+                            continue
                         if not streamed_partial:  # no partials → emit the whole block (back-compat)
                             yield {"type": "message-delta", "text": block["text"]}
                     elif bt == "tool_use":
@@ -171,6 +191,7 @@ def parse_stream_json(lines: Iterable[str]) -> Iterator[dict]:
                                 "focus": True,
                             }
             elif t == "result":
+                saw_result = True
                 reply = obj.get("result", "")
                 done = {
                     "type": "done",
@@ -178,6 +199,10 @@ def parse_stream_json(lines: Iterable[str]) -> Iterator[dict]:
                     "sessionId": obj.get("session_id"),
                     "ok": obj.get("is_error") is not True and obj.get("subtype") != "error",
                 }
+                if done["ok"] and api_error and str(reply or "").strip() in ("", api_error.strip()):
+                    done["ok"] = False      # a "success" whose only answer was the provider's refusal
+                fault = (_provider_fault(str(reply or "") or api_error, sdk_error, model_id)
+                         if not done["ok"] else None)
                 if not done["ok"] and looks_like_auth_failure(reply):
                     # The CLI's own auth text ("Not logged in · Please run /login") is an internal of
                     # THIS adapter — /login doesn't exist for an API consumer. Rewrite to the
@@ -189,7 +214,26 @@ def parse_stream_json(lines: Iterable[str]) -> Iterator[dict]:
                         "ANTHROPIC_AUTH_TOKEN or CLAUDE_CODE_OAUTH_TOKEN, "
                         "or configure a model under Settings → Models."
                     )
+                    if fault is not None and fault.status is None:
+                        # No status to read means the CLI's own wording — which is exactly the
+                        # text this branch exists to keep off the person's screen.
+                        fault = provider_faults.ProviderFault(
+                            kind=fault.kind, provider=fault.provider, model=fault.model,
+                            detail="the model credential is missing or expired",
+                            remedy=done["reply"])
+                elif fault is not None:
+                    done["detail"] = _short(reply, 200)
+                    done["reply"] = fault.sentence()
+                if fault is not None:
+                    done["fault"] = fault.as_dict()
                 yield done
+        if not saw_result:
+            # THE CLI DIED WITHOUT A RESULT. A provider failure it printed as text (or as its
+            # synthetic message) still ends the turn, typed — never a turn that just stops.
+            fault = _provider_fault(api_error or "\n".join(stray), sdk_error, model_id)
+            if fault is not None:
+                yield {"type": "done", "reply": fault.sentence(), "sessionId": None, "ok": False,
+                       "fault": fault.as_dict()}
     finally:
         # THE KILL HAPPENS HERE, on every interpreter. `lines` is `_exec_subprocess`'s generator and
         # its `finally` is what reaps the CLI child; a `for` loop hands that last hop to refcount
@@ -197,6 +241,22 @@ def parse_stream_json(lines: Iterable[str]) -> Iterator[dict]:
         # phase's budget then stopped READING the process without stopping it. Closing explicitly is
         # what makes the budget's stop a kill rather than a hope.
         close_event_stream(lines)
+
+
+def _is_api_error(obj: dict, text: str) -> bool:
+    """Is this assistant text block the CLI relaying a provider failure, not the model speaking?
+    The CLI marks its own synthetic messages: an SDK ``error`` label, or the ``<synthetic>`` model."""
+    if obj.get("error"):
+        return True
+    model = str((obj.get("message") or {}).get("model") or "")
+    return model == "<synthetic>" and str(text).lstrip().lower().startswith("api error")
+
+
+def _provider_fault(text: str, sdk_error: str, model: str) -> "provider_faults.ProviderFault | None":
+    """The typed fault for what the CLI reported, against the endpoint it was pointed at."""
+    host = provider_host()
+    return provider_faults.classify(text=text or None, sdk_error=sdk_error or None, model=model,
+                                    provider=host if host != "unknown" else "api.anthropic.com")
 
 
 #: The settings every launch adds on top of the user scope: no hooks run in the worker.

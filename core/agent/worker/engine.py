@@ -1881,8 +1881,10 @@ def run_turn_over_workspace(
     # stale session id) — heal it by running the same prompt with no session. `reason` is what says
     # this is NOT that case (F89): a turn that stopped on its own budget also reports ok=False, and
     # re-running it from scratch would burn the budget again and answer no better.
+    # …and neither is `fault` (P18): a provider that refused the turn (402, out of credit) refused it
+    # whatever the session — healing it would drop the chat's resume pointer and ask twice.
     if (resume and first is not None and first.get("type") == "done"
-            and not first.get("ok", True) and not first.get("reason")):
+            and not first.get("ok", True) and not first.get("reason") and not first.get("fault")):
         if sess_file.exists():
             sess_file.unlink()
         # The refused-resume turn is ABANDONED here — reap its CLI now rather than leaving a second

@@ -13,6 +13,9 @@ from llm.errors import (
     preflight_provider_guard,
     provider_host,
 )
+# THE MODEL PROVIDER'S TYPED FAULT (P18) — one shape for every harness and provider adapter.
+from llm.faults import ProviderError, ProviderFault
+from llm.faults import classify as classify_provider_failure
 from llm.ports import (
     HarnessExec,
     HarnessPort,
@@ -36,6 +39,9 @@ __all__ = [
     "model_error_event",
     "preflight_provider_guard",
     "provider_host",
+    "ProviderError",
+    "ProviderFault",
+    "classify_provider_failure",
     "HarnessExec",
     "HarnessPort",
     "close_event_stream",

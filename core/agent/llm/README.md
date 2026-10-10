@@ -126,6 +126,13 @@ no subject endpoint, or a refused one, nothing is stamped and the table above ap
   `commit` and the `model-error` / `auth-error` builders in `errors.py`) are FROZEN — the terminal
   reducer and SSE relay consume them field-for-field. They describe the AGENT harness; a meeting's
   feed carries the transcript and nothing else.
+- **A provider failure ends the turn TYPED** (P18): `faults.py` is the one model-provider fault —
+  `ProviderFault{source: "model-provider", kind, provider, model, status, detail, remedy}`, `kind` one
+  of `unpaid` (402) · `unauthorized` (401/403) · `rate_limited` (429) · `unavailable` (5xx, timeout)
+  · `refused` (other 4xx). Every harness and provider adapter builds it with `faults.classify` and puts
+  it on the failed `done` as `fault` (additive); import it, never define a second one. A first
+  `done` that carries a `fault` is never "healed" as a stale resume — the provider refused the turn,
+  not the session.
 - Session ids are OPAQUE per-harness tokens; an alien/stale id must yield `done.ok=False` (the
   engine's stale-resume retry heals it).
 - **Every harness CLI starts as the tools user** (`ports.harness_identity_kwargs`, user `vexa-tools`

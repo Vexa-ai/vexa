@@ -115,6 +115,7 @@ import httpx
 
 from llm import jobs as llm_jobs
 from llm.errors import LLMAuthError, LLMConfigError, LLMError
+from llm import faults as provider_faults
 # The panel/chip/transcript vocabularies are shared (`llm.tool_events`), imported rather than copied:
 # the terminal must render an openai-agent turn identically, and two copies of a closed vocabulary drift.
 from llm.tool_events import (_BOT_TOOLS, _FOCUS_TOOLS, _OPEN_TOOLS, _TERMS_TOOLS, _WRITER_TOOLS, _bot_artifact,
@@ -1003,6 +1004,21 @@ def trim_messages(messages: list[dict], budget: int) -> tuple[list[dict], int]:
 
 # ── the harness ─────────────────────────────────────────────────────────────────────────────────
 
+def _failed_done(reply: str, sid: str, exc: BaseException, *, keep_reply: bool = False) -> dict:
+    """The ``done`` a failed turn ends on. A provider failure the adapter could type carries it as
+    ``fault`` (``llm.faults``, P18) — additive, so the frozen ``done`` shape is unchanged for every
+    consumer that does not read it. Its ``reply`` becomes the fault's own sentence (unless the
+    exception's text is already the actionable one), so even a client that renders only the reply
+    says who failed and what to do instead of a raw status line and a JSON body."""
+    done: dict = {"type": "done", "reply": reply, "sessionId": sid, "ok": False}
+    fault = provider_faults.fault_of(exc)
+    if fault is not None:
+        done["fault"] = fault.as_dict()
+        if not keep_reply:
+            done["reply"] = fault.sentence()
+    return done
+
+
 class OpenAIAgentHarness:
     """``HarnessPort`` adapter: our own agent loop over an OpenAI-compatible endpoint."""
 
@@ -1080,10 +1096,10 @@ class OpenAIAgentHarness:
             yield from self._loop(Path(work), prompt, set(allowed_tools), session, sid, model,
                                   mcp_config)
         except (LLMConfigError, LLMAuthError) as exc:
-            yield {"type": "done", "reply": str(exc), "sessionId": sid, "ok": False}
+            # Their own text already names the variable to set — it stays the reply.
+            yield _failed_done(str(exc), sid, exc, keep_reply=True)
         except LLMError as exc:
-            yield {"type": "done", "reply": f"Model inference failed: {exc}", "sessionId": sid,
-                   "ok": False}
+            yield _failed_done(f"Model inference failed: {exc}", sid, exc)
 
     # -- the loop ---------------------------------------------------------------------------
     def _loop(self, work: Path, prompt: str, allow: set[str], resume: Optional[str], sid: str,
@@ -1314,7 +1330,7 @@ class OpenAIAgentHarness:
                                      headers=headers) as r:
                 if r.status_code >= 400:
                     r.read()
-                    self._raise_http(r)
+                    self._raise_http(r, model)
                 for line in r.iter_lines():
                     line = (line or "").strip()
                     if not line.startswith("data:"):
@@ -1334,8 +1350,15 @@ class OpenAIAgentHarness:
                     err = chunk.get("error")
                     if err:
                         detail = err.get("message") if isinstance(err, dict) else str(err)
-                        raise LLMError(f"{self._base} streamed an error frame: "
+                        code = err.get("code") if isinstance(err, dict) else None
+                        fault = provider_faults.classify(
+                            status=code if isinstance(code, int) else None, text=detail or err,
+                            provider=self._host(), model=model)
+                        exc = LLMError(f"{self._base} streamed an error frame: "
                                        f"{_short(detail or err, 300)}")
+                        if fault is not None:
+                            exc.fault = fault
+                        raise exc
                     delta = ((chunk.get("choices") or [{}])[0] or {}).get("delta") or {}
                     if delta.get("content"):
                         acc_text += delta["content"]
@@ -1352,7 +1375,7 @@ class OpenAIAgentHarness:
                         if fn.get("arguments"):
                             slot["function"]["arguments"] += fn["arguments"]
         except httpx.HTTPError as exc:
-            raise LLMError(f"agent transport failure against {self._base}: {exc}") from exc
+            raise self._transport_error(exc, model) from exc
         # F90: A STREAM THAT SAID NOTHING is a failure, not an empty answer. A truncated connection,
         # a model that emitted only reasoning tokens (the Qwen thinking case VEXA_LLM_EXTRA_BODY
         # exists to switch off), a `[DONE]` with no content — all reached `done.ok=True` with an
@@ -1370,9 +1393,9 @@ class OpenAIAgentHarness:
         try:
             r = self._client.post(f"{self._base}/chat/completions", json=body, headers=headers)
         except httpx.HTTPError as exc:
-            raise LLMError(f"agent transport failure against {self._base}: {exc}") from exc
+            raise self._transport_error(exc, str(body.get("model") or "")) from exc
         if r.status_code >= 400:
-            self._raise_http(r)
+            self._raise_http(r, str(body.get("model") or ""))
         try:
             msg = ((r.json().get("choices") or [{}])[0] or {}).get("message") or {}
         except (ValueError, AttributeError, TypeError) as exc:
@@ -1383,13 +1406,37 @@ class OpenAIAgentHarness:
         yield {"__final__": {"role": "assistant", "content": text,
                              **({"tool_calls": msg["tool_calls"]} if msg.get("tool_calls") else {})}}
 
-    def _raise_http(self, r: httpx.Response) -> None:
+    def _host(self) -> str:
+        return provider_faults.provider_host(self._base) if self._base else "unknown"
+
+    def _raise_http(self, r: httpx.Response, model: str = "") -> None:
+        """The provider's refusal, TYPED (P18): the status read into a ``ProviderFault`` that rides
+        on the exception, and from there onto the turn's ``done`` (see ``_failed_done``)."""
         detail = (r.text or "")[:300]
+        fault = provider_faults.classify(status=r.status_code, text=r.text or "",
+                                         provider=self._host(), model=model)
         if r.status_code in (401, 403):
-            raise LLMAuthError(
+            exc: LLMError = LLMAuthError(
                 f"{r.status_code} from {self._base}: {detail} — set VEXA_LLM_API_KEY for this "
                 f"endpoint, or point VEXA_LLM_BASE_URL at one that needs no credential")
-        raise LLMError(f"{r.status_code} from {self._base}: {detail}")
+        else:
+            exc = LLMError(f"{r.status_code} from {self._base}: {detail}")
+        if fault is not None:
+            exc.fault = fault
+        raise exc
+
+    def _transport_error(self, exc: httpx.HTTPError, model: str) -> LLMError:
+        """No answer at all — refused, reset, timed out — is the provider being UNAVAILABLE."""
+        fault = provider_faults.classify(text=str(exc) or type(exc).__name__, transport=True,
+                                         provider=self._host(), model=model)
+        if fault is not None and not fault.detail:
+            fault = provider_faults.ProviderFault(
+                kind=fault.kind, provider=fault.provider, model=fault.model, status=None,
+                detail=type(exc).__name__, remedy=fault.remedy)
+        err = LLMError(f"agent transport failure against {self._base}: {exc}")
+        if fault is not None:
+            err.fault = fault
+        return err
 
 
 def _tool_calls_of(msg: dict) -> list[dict]:
