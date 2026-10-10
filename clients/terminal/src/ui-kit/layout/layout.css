@@ -172,3 +172,21 @@
 .vx-listing-entry { color: var(--text-2); font-family: var(--font-mono); font-size: var(--text-mono-sm); border-radius: var(--radius-md); }
 .vx-listing-entry[data-file] { color: var(--text-1); }
 .vx-listing-entry:hover { background: var(--surface-2); }
+
+/* ── the file navigator (minutes/Navigator.tsx) ──────────────────────────────────────────── */
+.vx-nav { flex: none; width: 236px; display: flex; flex-direction: column; min-height: 0; background: var(--surface-0); border-right: 1px solid var(--border-subtle); }
+.vx-nav-search { flex: none; display: flex; align-items: center; gap: var(--space-1_5); padding: var(--space-2) var(--space-2) var(--space-1_5); color: var(--text-3); }
+.vx-nav-filter { flex: 1 1 0%; height: var(--control-xs); font-size: var(--text-xs); padding: 0 var(--space-2); }
+.vx-nav-note { padding: var(--space-1) var(--space-2); font-size: var(--text-xs); color: var(--text-3); line-height: 1.45; }
+.vx-nav-list { flex: 1; min-height: 0; overflow-y: auto; padding: 0 var(--space-1_5) var(--space-3); }
+.vx-nav-group { padding: var(--space-2) 0 var(--space-1); }
+.vx-nav-group > .vx-label { padding: 0 var(--space-1_5) var(--space-1); }
+.vx-nav-entry { padding-left: calc(6px + var(--depth, 0) * 11px); height: 26px; font-size: var(--text-sm); color: var(--text-2); }
+.vx-nav-entry[data-file] { color: var(--text-1); }
+.vx-nav-entry:hover { background: var(--surface-2); }
+.vx-nav-ws { font-weight: var(--weight-medium); color: var(--text-1); }
+.vx-nav-caret { flex: none; color: var(--text-3); }
+.vx-nav-caret[data-open] { transform: rotate(90deg); }
+.vx-nav-row .vx-row2-actions { position: absolute; right: 2px; top: 50%; transform: translateY(-50%); padding: 0; }
+.vx-nav-row:not(:hover):not(:focus-within) .vx-row2-actions { pointer-events: none; }
+@media (prefers-reduced-motion: no-preference) { .vx-nav-caret { transition: transform var(--dur-fast) var(--ease-out); } }
