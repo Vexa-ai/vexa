@@ -504,6 +504,18 @@
    ]
   },
   {
+   "unique-id": "models.v1",
+   "node-type": "contract",
+   "name": "models.v1",
+   "description": "models.v1 \u2014 sealed/published contract (agent): the operator's model catalog (VEXA_MODEL_CATALOG) and the per-person list agent-api serves the terminal and the MCP",
+   "metadata": [
+    {
+     "path": "core/agent/contracts/models.v1",
+     "domain": "agent"
+    }
+   ]
+  },
+  {
    "unique-id": "unit.v1",
    "node-type": "contract",
    "name": "unit.v1",
@@ -1691,6 +1703,7 @@
       "routine.v1",
       "task.v1",
       "tool.v1",
+      "models.v1",
       "unit.v1",
       "credential-broker.v1",
       "credentials-broker",

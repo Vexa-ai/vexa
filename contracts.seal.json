@@ -2,6 +2,7 @@
   "core/agent/contracts/credential-broker.v1": "bcae0413d65cb2e36cd42ea8a2b87b4236aab83c68ac5ffba1341558e0d3dc37",
   "core/agent/contracts/event.v1": "f154a49d0589274140fb584e680b34a12e47f8cf3b1491cfc077d47e019f71f8",
   "core/agent/contracts/invoke.v1": "9a38b01616a8cb25b8e34db9a4a539f9cdc237a731fb67ebf4f361c081897982",
+  "core/agent/contracts/models.v1": "61281a217f46b09f34aa86ae3e5846c5f69230ae2dd0ed5950b9d48de4064c7a",
   "core/agent/contracts/proactive-card.v1": "cb9f8df76cea7667dec8f6ea5fdbc6fe4f6c9ed518fd3369c9f75e6fcf7b8a88",
   "core/agent/contracts/routine.v1": "0ef13353d8d71145fb6190d7f4c17f7aed3db74062b65c5119416bde0b704bd8",
   "core/agent/contracts/task.v1": "12575c8f7e31d3510cddead4fec7a3d5bea93cf8c4b60643fbcf02b3c8b85a26",
