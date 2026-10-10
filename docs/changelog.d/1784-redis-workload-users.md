@@ -6,5 +6,5 @@
   stream and its own meeting's two channels; agent-api and meeting-api define them per spawn, remove
   them when the work ends, and define them again after a Redis restart. A Redis that cannot define
   users can opt out with `REDIS_WORKLOAD_ACL=shared`, which is safe only where every person on the
-  instance trusts every other. With your own Redis, the services' user needs `ACL SETUSER`,
+  instance trusts every other; agent-api and meeting-api both refuse to start on any other value. With your own Redis, the services' user needs `ACL SETUSER`,
   `ACL DELUSER` and `ACL GETUSER`. See [Configuration](/configuration#secrets--identity).

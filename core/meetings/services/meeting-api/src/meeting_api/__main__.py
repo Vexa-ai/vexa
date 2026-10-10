@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 from contextlib import asynccontextmanager
 
 log = logging.getLogger("meeting_api.entrypoint")
@@ -58,6 +59,31 @@ def _require_config(env: "os._Environ | dict | None" = None) -> None:
     from .config_preflight import preflight
 
     preflight(env)
+
+
+# What a meeting bot connects to Redis as. The accepted values are the ones agent-api's settings
+# validate (`redis_workload_acl`, pattern ^(per-workload|shared)$ in core/agent/shared/config.py) —
+# one switch across both services, held equal by the parity fact `redis-workload-acl-modes`.
+_REDIS_WORKLOAD_ACL = re.compile(r"^(per-workload|shared)$")
+
+
+def _redis_workload_acl(env: "os._Environ | dict | None" = None) -> str:
+    """``REDIS_WORKLOAD_ACL``, or refuse the boot (S51).
+
+    Unset or empty is the default, ``per-workload``. Any other value that is not one of the two modes
+    raises — a typo must not quietly read as the default, which is what agent-api already refuses and
+    what this service used to do: it compared the value to ``"shared"`` and treated everything else,
+    ``Shared`` and ``share`` included, as ``per-workload``."""
+    from .config_preflight import ConfigError
+
+    env = os.environ if env is None else env
+    raw = env.get("REDIS_WORKLOAD_ACL")
+    value = (raw or "per-workload").strip()
+    if not _REDIS_WORKLOAD_ACL.match(value):
+        raise ConfigError(
+            f"REDIS_WORKLOAD_ACL={raw!r} is not a mode meeting-api knows — set `per-workload` (each "
+            "meeting bot its own Redis user, the default) or `shared` (the service connection)")
+    return value
 
 
 def _identity_key():
@@ -110,6 +136,7 @@ async def _sync_user_calendars(store, redis_client, user_id: int, configs: list,
 def build_production_app():
     """Wire the unified meeting-api with the real adapters + the lifespan-driven loops."""
     _require_config()  # A4: refuse to boot a misconfigured deploy (no ADMIN_TOKEN → every spawn 500s).
+    workload_acl = _redis_workload_acl()  # S51: an unknown mode refuses the boot, as agent-api's does
 
     import redis.asyncio as aioredis
     from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -149,7 +176,7 @@ def build_production_app():
     # deployment chose REDIS_WORKLOAD_ACL=shared. A user outlives no MeetingToken: past its TTL (+1h)
     # it is removed on the next spawn.
     bot_redis = None
-    if (os.getenv("REDIS_WORKLOAD_ACL") or "per-workload").strip() == "shared":
+    if workload_acl == "shared":
         log.warning("REDIS_WORKLOAD_ACL=shared — every meeting bot connects to Redis with the "
                     "service credential")
     else:

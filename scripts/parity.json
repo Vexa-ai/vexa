@@ -1772,11 +1772,12 @@
     },
     {
       "id": "redis-workload-acl-modes",
-      "fact": "the values REDIS_WORKLOAD_ACL accepts, and what each service does with another",
-      "kind": "literal",
-      "enforced": false,
-      "decision": "WHETHER meeting-api REFUSES AN UNKNOWN REDIS_WORKLOAD_ACL. agent-api validates the key against per-workload|shared and refuses to boot on anything else; meeting-api compares it to the exact string 'shared' and treats every other value, a typo included, as per-workload. Align meeting-api with agent-api (refuse at boot), then make this fact enforced over the two captured value lists. Routed to the R4 agent worker with the code dedupe (S51).",
-      "why": "One switch, two services, two parsers: a value one service refuses the other silently reads as the default (architecture pass 4, S51).",
+      "fact": "the values REDIS_WORKLOAD_ACL accepts",
+      "kind": "set",
+      "enforced": true,
+      "canonical": "core/agent/shared/config.py — redis_workload_acl's pattern",
+      "how_to_agree": "change agent-api's settings pattern and meeting-api's _REDIS_WORKLOAD_ACL in one change; both services refuse to boot on any other value",
+      "why": "One switch, two services, two parsers: a value one service refused the other silently read as the default (architecture pass 4, S51). meeting-api now validates against the same set and refuses an unknown value at boot, as agent-api does.",
       "sites": [
         {
           "path": "core/agent/shared/config.py",
@@ -1784,21 +1785,7 @@
         },
         {
           "path": "core/meetings/services/meeting-api/src/meeting_api/__main__.py",
-          "pattern": "\\(os\\.getenv\\(\"REDIS_WORKLOAD_ACL\"\\) or \"per-workload\"\\)\\.strip\\(\\) == \"([^\"]+)\""
-        }
-      ],
-      "answers": [
-        {
-          "value": "per-workload|shared",
-          "sites": [
-            "core/agent/shared/config.py"
-          ]
-        },
-        {
-          "value": "shared",
-          "sites": [
-            "core/meetings/services/meeting-api/src/meeting_api/__main__.py"
-          ]
+          "pattern": "^_REDIS_WORKLOAD_ACL = re\\.compile\\(r\"\\^\\(([^)]*)\\)\\$\"\\)"
         }
       ]
     },
