@@ -18,12 +18,16 @@ permissions:
   issues: read
   checks: write
 
-# issue_comment and check_run runs belong to the default branch's newest commit, so each gets its
-# own group: a cancelled run there would mark that commit. PR and merge-group runs belong to the
-# evaluated head and supersede each other. The merge queue re-evaluates rights on its own head.
+# Every run that publishes the rights check for one pull request — its own events, a comment on it,
+# a DCO result on its head — joins ONE queue for that pull request and is never cancelled mid-run:
+# runs finish in order, and a newer event replaces only a run still waiting, so the last check
+# published is the one that read the latest comments and body. (An issue_comment or check_run run
+# belongs to the default branch's newest commit, where a cancelled run would mark that commit.)
+# dco-range runs (pull_request) and merge-group runs belong to the evaluated head and supersede
+# each other. The merge queue re-evaluates rights on its own head.
 concurrency:
-  group: contribution-rights-${{ github.event_name }}-${{ github.event.pull_request.number || github.event.merge_group.head_sha || github.run_id }}
-  cancel-in-progress: true
+  group: contribution-rights-${{ (github.event_name == 'pull_request' && 'range') || (github.event_name == 'merge_group' && 'queue') || 'rights' }}-${{ github.event.pull_request.number || github.event.issue.number || github.event.check_run.pull_requests[0].number || github.event.merge_group.head_sha || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
 
 jobs:
   evaluate:
