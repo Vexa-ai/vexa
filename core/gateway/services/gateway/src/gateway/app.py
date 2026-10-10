@@ -170,6 +170,12 @@ _DEFAULT_MCP_URL = "http://mcp:8010"
 # request; drop it at the edge and the session can never be bound. Passed through on BOTH legs.
 _MCP_HEADERS = ("mcp-session-id", "mcp-protocol-version")
 
+#: The meeting-bundle hop's own deadline (`_forward_meeting_bundle`): a bundle is one file of up to
+#: hundreds of MB, so the buffered leg's 30 s total would cap it at whatever a link moves in 30 s.
+#: Connecting and getting a pool slot stay as tight as anywhere; reading and writing may pause for
+#: up to ten minutes between chunks (a slow uplink, a recording master being assembled).
+BUNDLE_TIMEOUT = httpx.Timeout(connect=10.0, read=600.0, write=600.0, pool=10.0)
+
 
 # Every hop's path is built from what the request MATCHED, never interpolated raw: a meetings row's
 # target is its manifest row's (`_meeting_target`), a forwarded domain's literal row and catch-all
@@ -562,6 +568,51 @@ def create_app(
             return error
         return await _forward(request.method, url, request)
 
+    # A MEETING BUNDLE IS ONE FILE OF UP TO HUNDREDS OF MB, and it is the only meetings traffic that
+    # is. Its three rows ride a streamed forward instead of the buffered one: the request body is
+    # relayed as it arrives (never read into this process), the response is relayed chunk by chunk
+    # with its Content-Length and Content-Disposition, and the hop carries its own deadline,
+    # `BUNDLE_TIMEOUT`, in place of the buffered leg's 30 s — scoped to these routes alone, so no
+    # other route's fault detection loosens. Authorization, the target and the identity it carries
+    # are the buffered forward's, unchanged.
+    async def _forward_meeting_bundle(request: Request) -> Response:
+        url, error = _meeting_target(request)
+        if error is not None:
+            return error
+        headers, error = await _authorize(request.method, request)
+        if error is not None:
+            return error
+        content = request.stream() if request.method == "POST" else None
+        stack = AsyncExitStack()
+        try:
+            upstream = await stack.enter_async_context(downstream.open_stream(
+                request.method, url, headers=headers, params=dict(request.query_params) or None,
+                content=content, timeout=BUNDLE_TIMEOUT))
+        except httpx.InvalidURL:
+            await stack.aclose()
+            return invalid_path_param_response()
+        except httpx.TimeoutException:
+            await stack.aclose()
+            return Response(content=json.dumps({"detail": "upstream timeout"}),
+                            status_code=504, media_type="application/json")
+        except httpx.RequestError as e:
+            await stack.aclose()
+            return Response(content=json.dumps({"detail": f"upstream unreachable: {type(e).__name__}"}),
+                            status_code=502, media_type="application/json")
+        log_event("downstream_stream_opened", audience="system", level="debug", span="proxy",
+                  fields={"method": request.method, "path": url, "downstream_status": upstream.status_code})
+
+        async def body():
+            async with stack:  # closes the downstream stream when the client goes away
+                async for chunk in upstream.aiter_bytes():
+                    yield chunk
+
+        up = upstream.headers
+        relayed = {k: up[k] for k in ("content-length", "content-disposition", "x-content-type-options",
+                                     "cache-control") if k in up}
+        return StreamingResponse(body(), status_code=upstream.status_code,
+                                 media_type=up.get("content-type") or "application/json", headers=relayed)
+
     # ---- CORE routes (each forwards to the matching downstream path, per main's route table) ----
     @app.get("/bots")
     async def list_bots(request: Request):
@@ -670,7 +721,7 @@ def create_app(
     # it and writes nothing). A literal segment, so it is never matched as a row id.
     @app.post("/meetings/import")
     async def import_meeting_bundle(request: Request):
-        return await _forward_meeting(request)
+        return await _forward_meeting_bundle(request)
 
     # Single meeting — forwards to meeting-api's GET /meetings/{id} (the meeting-detail page reads it).
     @app.get("/meetings/{meeting_id}")
@@ -681,13 +732,13 @@ def create_app(
     # Content-Disposition pass through verbatim.
     @app.get("/meetings/{meeting_id}/export")
     async def export_meeting_bundle(meeting_id: int, request: Request):
-        return await _forward_meeting(request)
+        return await _forward_meeting_bundle(request)
 
     # The same export with a parts archive as the body: the meeting's workspace tree and notes page,
     # which the owner's client fetched from the agent domain, placed into the bundle by meeting-api.
     @app.post("/meetings/{meeting_id}/export")
     async def export_meeting_bundle_with_parts(meeting_id: int, request: Request):
-        return await _forward_meeting(request)
+        return await _forward_meeting_bundle(request)
 
     # Edit / delete a PLANNED meeting by ROW id (owner-scoped; meeting-api refuses FSM rows with 409).
     @app.patch("/meetings/{meeting_id}")

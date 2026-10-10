@@ -58,12 +58,17 @@ class HttpxDownstreamClient:
         )
 
     @asynccontextmanager
-    async def open_stream(self, method, url, *, headers=None, params=None, content=None):
+    async def open_stream(self, method, url, *, headers=None, params=None, content=None,
+                          timeout=None):
         """Open a streaming downstream request and yield the response HEAD (status + headers)
         while the body is still arriving. The httpx stream is a context manager; it stays open
-        for the life of this block so the gateway can relay each chunk as it arrives."""
+        for the life of this block so the gateway can relay each chunk as it arrives.
+
+        ``content`` may be an async iterator (a request body relayed as it arrives). ``timeout``,
+        when given, replaces the streaming leg's own for this one request (the bundle hop's)."""
+        extra = {"timeout": timeout} if timeout is not None else {}
         async with self._stream_client.stream(
-            method, url, headers=headers, params=params or None, content=content
+            method, url, headers=headers, params=params or None, content=content, **extra
         ) as resp:
             yield resp
 

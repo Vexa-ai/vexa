@@ -45,7 +45,9 @@ fronted wholesale (the agent) declares `forward` — `{"edge_prefix": "/agent/",
 catch-all, and a route of its own for every other row (literal, or with whole-segment `{name}`
 parameters re-encoded like any path parameter). A meetings row is forwarded to its own path on
 meeting-api, or to the `"upstream"` it names (`/user/webhook/deliveries` is meeting-api's
-`/webhooks/deliveries`); every `{name}` in that target is filled under the same rule as a forwarded
+`/webhooks/deliveries`); the three meeting-bundle rows (`GET`/`POST /meetings/{meeting_id}/export`,
+`POST /meetings/import`) are relayed as streams in both directions under their own deadline
+(`BUNDLE_TIMEOUT`), every other meetings row through the buffered forward; every `{name}` in that target is filled under the same rule as a forwarded
 row (`paths.forwarded_param`), and `{platform}` must be an api.v1 `Platform`. meeting-api reads the
 same rows to check, on the route a request matched, the scopes this edge checked
 (`meeting_api/route_scopes.py`). `mcp_reentry` is refused on a `{path:path}` catch-all.

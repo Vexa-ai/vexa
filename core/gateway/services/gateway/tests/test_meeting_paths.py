@@ -14,6 +14,8 @@ TestClient (httpx) normalises dot segments out of a URL before it sends one.
 """
 from __future__ import annotations
 
+import asyncio
+
 import json
 import pathlib
 import typing
@@ -63,9 +65,15 @@ async def _send(app, method: str, raw_target: str) -> int:
         "client": ("127.0.0.1", 50000), "server": ("testserver", 80),
     }
     sent = []
+    delivered = []
 
     async def receive():
-        return {"type": "http.request", "body": b"{}", "more_body": False}
+        # The body once, then nothing until the server is done — what uvicorn does. A streamed
+        # response listens for a disconnect while it sends, and must not be handed the body again.
+        if not delivered:
+            delivered.append(True)
+            return {"type": "http.request", "body": b"{}", "more_body": False}
+        await asyncio.Event().wait()
 
     async def send(message):
         sent.append(message)
