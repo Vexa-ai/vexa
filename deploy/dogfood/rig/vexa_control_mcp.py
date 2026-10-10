@@ -4645,7 +4645,7 @@ def transcript_terms(meeting_id: str = "", since: str = "", keep: str = "",
     def _at(g):
         return g.get("absolute_start_time") or g.get("start")
 
-    fresh = [g for g in raw if str(_at(g) or "") > str(since)] if since else raw
+    fresh = mod.segments_since(raw, since)
     segments = [{"id": _at(g), "at": _at(g), "text": (g.get("text") or "").strip()}
                 for g in fresh if (g.get("text") or "").strip()]
     cursor = str(_at(raw[-1])) if raw else (since or "")
@@ -4685,6 +4685,8 @@ def transcript_terms(meeting_id: str = "", since: str = "", keep: str = "",
         "cursor": cursor,
         "since": since or "",
         "scanned_segments": len(segments),
+        "transcript_segments": len(raw),
+        "cursor_note": mod.cursor_note(raw, fresh, since),
         "terms": found,
         "known_count": len(known),
         "unknown_count": len(found) - len(known),
