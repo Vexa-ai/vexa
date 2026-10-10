@@ -923,10 +923,17 @@ def _mail_budget(source: str = "") -> str:
     return ""
 
 
+#: ONE mailbox and nothing else: a local part of RFC 5322 `atext` characters and dots, a single "@",
+#: and a dotted domain of letters, digits and hyphens. No list separator, quote, bracket, colon or
+#: whitespace fits, so the string names exactly one recipient wherever it becomes a `To` header.
+_EMAIL_SHAPE = re.compile(
+    r"[A-Za-z0-9!#$%&'*+/=?^_`{|}~.-]+"
+    r"@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+")
+
+
 def _plausible_email(email: str) -> bool:
-    """Shape only — an address the doors will mail. Capped at RFC 5321's 254 characters."""
-    return (bool(email) and len(email) <= 254 and "@" in email and not email.startswith("@")
-            and not email.endswith("@") and not any(ch.isspace() or ord(ch) < 32 for ch in email))
+    """Shape only — the single address the doors will mail. Capped at RFC 5321's 254 characters."""
+    return isinstance(email, str) and len(email) <= 254 and _EMAIL_SHAPE.fullmatch(email) is not None
 
 
 def _send_code(email: str, code: str) -> str | None:

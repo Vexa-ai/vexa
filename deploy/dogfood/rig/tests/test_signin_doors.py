@@ -139,6 +139,35 @@ def test_a_code_mailed_by_another_door_still_proves_only_its_own_address(monkeyp
     assert "You're in" not in body and _minted() == {}
 
 
+# ── a code goes to exactly one address ───────────────────────────────────────────────────────────
+
+#: Strings that are not a single mailbox. Each one was accepted by the old shape check, which
+#: refused only whitespace, control characters and a leading or trailing "@".
+NOT_ONE_ADDRESS = ["me@example.com,other@example.com", "me@example.com;other@example.com",
+                   "<me@example.com>,<other@example.com>", "me@example.com,", '"me"@example.com',
+                   "me@@example.com", "me@example", "me@example.com>"]
+
+
+@pytest.mark.parametrize("email", NOT_ONE_ADDRESS)
+def test_the_shape_check_accepts_one_address_only(email):
+    assert not rig._plausible_email(email)
+
+
+@pytest.mark.parametrize("email", ["me@example.com", "Me.Name+tag@mail.example.co.uk",
+                                   "o'neil@example.com"])
+def test_an_ordinary_address_is_still_one(email):
+    assert rig._plausible_email(email)
+
+
+@pytest.mark.parametrize("email", NOT_ONE_ADDRESS[:3])
+def test_no_door_mails_a_code_to_a_list_of_addresses(monkeypatch, mail, email):
+    _http(monkeypatch)
+    _, body = page("POST", "/login", form={"email": email})
+    assert "not an email address" in body
+    assert "error" in json.loads(tool("start_onboarding")(email))
+    assert mail == [], "a sign-in code was mailed to a list of recipients"
+
+
 # ── the switch: every door is off unless turned on ───────────────────────────────────────────────
 
 @pytest.mark.parametrize("value", [None, "0", "", "off"])
@@ -285,7 +314,11 @@ def test_the_login_page_escapes_what_it_reflects(monkeypatch, mail):
 
     hostile = '"><img/src=x/onerror=alert(1)>@example.com'
     _, body = page("POST", "/login", form={"email": hostile})
-    assert "<img" not in body and "&lt;img" in body
+    assert "<img" not in body                  # not one address: refused, never reflected
+    # One address can still carry characters HTML must escape, and the code page reflects it.
+    reflected = "o'neil&co@example.com"
+    _, body = page("POST", "/login", form={"email": reflected})
+    assert reflected not in body and "&amp;co@example.com" in body
 
     monkeypatch.setattr(rig, "_send_code", lambda email, code: "<script>boom</script>")
     _, body = page("POST", "/login", form={"email": "else@example.com"})
