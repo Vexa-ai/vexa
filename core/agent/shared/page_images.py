@@ -38,6 +38,7 @@ from urllib.parse import urljoin
 import httpx
 
 from shared import asset_source as assets
+from shared import ssrf
 
 #: ONE address's whole check. Deliberately much shorter than `asset_source.FETCH_TIMEOUT` (20s):
 #: that one is a download the reader pressed a button for and is watching, this one is a gate in
@@ -110,6 +111,8 @@ def _probe(cli: httpx.Client, method: str, url: str,
             return _Answer(None, "", guard)
         try:
             r = cli.request(method, target, headers=headers, timeout=VERIFY_TIMEOUT)
+        except ssrf.SSRFError as exc:
+            return _Answer(None, "", f"refusing {target}: {exc}")
         except httpx.HTTPError as exc:
             return _Answer(None, "", f"could not reach {url}: {type(exc).__name__}")
         location = r.headers.get("location")
@@ -137,7 +140,7 @@ def image_refusal(url: str, *, client: Optional[httpx.Client] = None,
     if refusal:
         return refusal
     own = client is None
-    cli = client or httpx.Client(timeout=VERIFY_TIMEOUT, follow_redirects=False)
+    cli = client or assets.outbound_client(VERIFY_TIMEOUT)
     try:
         a = _probe(cli, "HEAD", url, resolve)
         # the host answered about the METHOD, or said nothing about the file — ask again properly

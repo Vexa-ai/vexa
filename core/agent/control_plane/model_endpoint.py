@@ -32,10 +32,11 @@ would not use. There is now one function (`has_custom_endpoint`) and all three i
 from __future__ import annotations
 
 import fnmatch
-import ipaddress
 import os
 from typing import Mapping, Optional
 from urllib.parse import urlsplit
+
+from shared import ssrf
 
 #: The operator's gate. Comma-separated host globs (``fnmatch``: ``*.example.com``, ``vllm-*``).
 ALLOW_ENV = "VEXA_MODEL_BASE_URL_ALLOW"
@@ -101,16 +102,12 @@ def allowed_patterns(env: Optional[Mapping[str, str]] = None) -> list[str]:
 
 def _needs_literal(host: str) -> bool:
     """Hosts a wildcard must never reach: loopback, link-local (cloud metadata), private and
-    reserved ranges, and single-label names — which is what every docker service on our own compose
+    reserved ranges in any notation (``shared/ssrf.py`` reads an IPv6 address for the IPv4 address
+    it carries), and single-label names — which is what every docker service on our own compose
     network is called (``redis``, ``admin-api``, ``runtime``)."""
-    if host in ("localhost",) or host.endswith(".localhost"):
-        return True
-    try:
-        ip = ipaddress.ip_address(host)
-    except ValueError:
-        return "." not in host          # a bare service name, not a public FQDN
-    return bool(ip.is_loopback or ip.is_link_local or ip.is_private
-                or ip.is_reserved or ip.is_unspecified or ip.is_multicast)
+    if ssrf.literal_address(host) is not None:
+        return ssrf.is_blocked_ip(host)
+    return ssrf.is_blocked_hostname(host)
 
 
 def refuse_reason(base_url: str, env: Optional[Mapping[str, str]] = None) -> Optional[str]:

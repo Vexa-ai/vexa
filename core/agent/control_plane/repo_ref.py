@@ -51,12 +51,12 @@ every answer, pin the connection), which is a different mechanism than a string 
 """
 from __future__ import annotations
 
-import ipaddress
 import os
 import re
 from pathlib import Path
 from typing import Optional
 
+from shared import ssrf
 from shared.git_redaction import TOKEN_PREFIXES, looks_like_token
 
 #: The one sentence a person sees when they paste a credential where a repository goes. It says what
@@ -142,24 +142,6 @@ def _bare_host(host: str) -> str:
     return h
 
 
-def _unwrapped(ip: ipaddress._BaseAddress) -> ipaddress._BaseAddress:
-    """The IPv4 address an IPv6 address is carrying, if it is carrying one.
-
-    ``::ffff:127.0.0.1`` is loopback written as IPv6, and ``IPv6Address.is_loopback`` is False for it —
-    the flag describes ``::1``, not what the address maps to. Same for 6to4 and Teredo. Unwrap first,
-    then ask the question, so the answer does not depend on which notation the caller chose."""
-    mapped = getattr(ip, "ipv4_mapped", None)
-    if mapped is not None:
-        return mapped
-    sixtofour = getattr(ip, "sixtofour", None)
-    if sixtofour is not None:
-        return sixtofour
-    teredo = getattr(ip, "teredo", None)
-    if teredo:
-        return teredo[1]
-    return ip
-
-
 def _host_is_internal(host: str) -> bool:
     """Is this host somewhere only the SERVER can reach — i.e. would fetching it be a request the
     caller could not have made themselves?
@@ -172,10 +154,12 @@ def _host_is_internal(host: str) -> bool:
     Two rules, and the second is the one that catches a service name:
 
     * a literal IP (in any notation) that is loopback, private, link-local, reserved, multicast or
-      unspecified — ``127.0.0.1``, ``10.0.0.5``, ``169.254.169.254``, ``::1``, ``::ffff:127.0.0.1``;
+      unspecified — ``127.0.0.1``, ``10.0.0.5``, ``169.254.169.254``, ``::1``, ``::ffff:127.0.0.1``,
+      ``64:ff9b::a9fe:a9fe`` — read by the one outbound URL guard, ``shared/ssrf.py``;
     * a BARE LABEL — a name with no dot. Every public and company git host is fully qualified; an
       unqualified name resolves only inside the deployment's own network, which is the whole class
-      ``admin-api``, ``redis`` and ``meeting-api`` belong to. ``localhost`` included.
+      ``admin-api``, ``redis`` and ``meeting-api`` belong to. ``localhost`` (and ``*.localhost``)
+      and the cloud metadata names included.
 
     A DOTTED name is left alone even when it is obviously internal (``git.internal:8080`` is an
     accepted self-hosted mirror in this codebase's own fixtures): a name with a dot is one somebody
@@ -184,12 +168,9 @@ def _host_is_internal(host: str) -> bool:
     h = _bare_host(host)
     if not h:
         return True
-    try:
-        ip = _unwrapped(ipaddress.ip_address(h))
-    except ValueError:
-        return "." not in h               # a bare label: only resolvable inside the deployment
-    return bool(ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_reserved
-                or ip.is_multicast or ip.is_unspecified)
+    if ssrf.literal_address(h) is not None:
+        return ssrf.is_blocked_ip(h)
+    return ssrf.is_blocked_hostname(h)    # a bare label: only resolvable inside the deployment
 
 
 def _checked_host(host: str) -> str:

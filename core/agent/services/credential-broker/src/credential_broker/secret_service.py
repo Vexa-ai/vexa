@@ -3,9 +3,10 @@
 A refusal the person can act on (a bad endpoint, a private address, a redirect) is `ServiceError`.
 A service that cannot be reached or answers unreadably is `faults.UpstreamFault` (source `service`).
 """
-import base64,http.client,ipaddress,json,re,socket,ssl
+import base64,http.client,json,re,socket,ssl
 from urllib.parse import urlsplit,quote
 from .faults import UpstreamFault
+from .ssrf import is_blocked_ip
 
 class ServiceError(Exception):pass
 
@@ -35,7 +36,7 @@ def configure(secret, endpoint, header, scheme, method):
 def public_addresses(host):
     try:
         ips=list(dict.fromkeys(item[4][0] for item in socket.getaddrinfo(host,443,type=socket.SOCK_STREAM)))
-        if not ips or any(not ipaddress.ip_address(ip).is_global or ipaddress.ip_address(ip).is_multicast or ipaddress.ip_address(ip).is_reserved for ip in ips):raise ServiceError('Service must resolve only to public addresses')
+        if not ips or any(is_blocked_ip(ip) for ip in ips):raise ServiceError('Service must resolve only to public addresses')
         return ips
     except socket.gaierror as e:
         # A name that does not exist is the configuration's to fix; a resolver that did not answer is an outage.

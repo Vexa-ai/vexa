@@ -21,14 +21,13 @@ called a plug point: a registry of classes would be a framework for two entries.
 
 ``WebFetch`` needs no backend and is therefore ALWAYS attached. It carries the guard search does not
 need: a URL the model chose is an outbound destination a non-operator picked, so it is refused when it
-resolves to loopback, link-local (cloud metadata), private or reserved space — the SSRF shape
-``control_plane/model_endpoint.py`` refuses for a subject-pinned model endpoint. That module is NOT
-imported: the worker image ships `worker/`, `llm/`, `shared/` and `contracts/` and deliberately not
-`control_plane/`, so importing it would be an ImportError in the only process that runs this code.
-The rule is re-stated here in stdlib ``ipaddress``, and the one exemption is the operator's own
-``VEXA_SEARCH_URL`` host — a search endpoint on the deployment's private network is a destination the
-operator chose, and refusing to read a result page from the endpoint we just queried is a rule with
-no threat behind it.
+resolves to loopback, link-local (cloud metadata), private or reserved space. The address rule is
+``llm/ssrf.py`` — the one outbound URL guard, vendored byte for byte into every image that fetches a
+URL somebody else chose (``scripts/parity.json``, ``outbound-url-guard``) — and every fetch goes out
+through a transport that re-checks the host at connect time and dials the address it checked. The
+one exemption is the operator's own ``VEXA_SEARCH_URL`` host — a search endpoint on the
+deployment's private network is a destination the operator chose, and refusing to read a result
+page from the endpoint we just queried is a rule with no threat behind it.
 
 Both tools obey the harness's existing discipline rather than inventing their own: the loop counts
 every call against ``VEXA_AGENT_MAX_TOOL_CALLS`` and trims every result to ``_TOOL_RESULT_MAX_CHARS``,
@@ -38,17 +37,17 @@ wall clock.
 """
 from __future__ import annotations
 
-import ipaddress
 import json
 import logging
 import os
 import re
-import socket
 from html import unescape
 from typing import Callable, Optional
 from urllib.parse import urljoin, urlsplit
 
 import httpx
+
+from llm import ssrf
 
 log = logging.getLogger(__name__)
 
@@ -154,18 +153,28 @@ _DIALECTS: dict[str, Callable[[httpx.Client, str, str, int, str], list[dict]]] =
 
 # ── the SSRF guard (WebFetch only; the search endpoint is the operator's own choice) ─────────────
 
-def _blocked_ip(addr: str) -> bool:
-    try:
-        ip = ipaddress.ip_address(addr)
-    except ValueError:
-        return True                     # unreadable is not the same as safe
-    return bool(ip.is_loopback or ip.is_link_local or ip.is_private or ip.is_reserved
-                or ip.is_unspecified or ip.is_multicast)
-
-
 def _resolve(host: str) -> list[str]:
     """Every address ``host`` resolves to. Separate function so a test can play DNS."""
-    return sorted({info[4][0] for info in socket.getaddrinfo(host, None)})
+    return ssrf.resolve_host(host)
+
+
+class _FetchTransport(httpx.BaseTransport):
+    """Pinned for every host (``ssrf.build_pinned_sync_transport``) except the operator's own search
+    endpoint — the same one exemption ``fetch_refusal`` makes."""
+
+    def __init__(self) -> None:
+        self._pinned = ssrf.build_pinned_sync_transport()
+        self._plain = httpx.HTTPTransport()
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        own = _host(search_url())
+        if own and request.url.host.lower() == own:
+            return self._plain.handle_request(request)
+        return self._pinned.handle_request(request)
+
+    def close(self) -> None:
+        self._pinned.close()
+        self._plain.close()
 
 
 def fetch_refusal(url: str, resolve: Optional[Callable[[str], list[str]]] = None) -> Optional[str]:
@@ -188,25 +197,21 @@ def fetch_refusal(url: str, resolve: Optional[Callable[[str], list[str]]] = None
     # service name, the operator named it themselves, and the search tool already talks to it.
     if host and host == _host(search_url()):
         return None
-    if host == "localhost" or host.endswith(".localhost"):
-        return f"WebFetch refuses {host!r} — the open web only, never this deployment's own network"
-    try:
-        ipaddress.ip_address(host)
-    except ValueError:
-        if "." not in host:
-            return (f"WebFetch refuses the single-label host {host!r} — that is an internal service "
-                    "name, not a public site")
+    if ssrf.literal_address(host) is None:
+        if ssrf.is_blocked_hostname(host):
+            return (f"WebFetch refuses {host!r} — an internal service name, not a public site; the "
+                    "open web only, never this deployment's own network")
         try:
             addrs = resolve(host)
         except OSError as exc:
             return f"WebFetch could not resolve {host!r} ({type(exc).__name__})"
         if not addrs:
             return f"WebFetch could not resolve {host!r}"
-        if any(_blocked_ip(a) for a in addrs):
+        if any(ssrf.is_blocked_ip(a) for a in addrs):
             return (f"WebFetch refuses {host!r} — it resolves into loopback/link-local/private "
                     "address space, which is this deployment's own network and not the open web")
         return None
-    if _blocked_ip(host):
+    if ssrf.is_blocked_ip(host):
         return (f"WebFetch refuses {host!r} — loopback/link-local/private/reserved addresses are "
                 "this deployment's own network, not the open web")
     return None
@@ -250,9 +255,12 @@ def _charset(content_type: str) -> str:
 
 # ── the two tools ───────────────────────────────────────────────────────────────────────────────
 
-def _client(existing: Optional[httpx.Client], timeout: float) -> tuple[httpx.Client, bool]:
+def _client(existing: Optional[httpx.Client], timeout: float, *,
+            pinned: bool = False) -> tuple[httpx.Client, bool]:
     if existing is not None:
         return existing, False
+    if pinned:
+        return httpx.Client(timeout=timeout, follow_redirects=False, transport=_FetchTransport()), True
     return httpx.Client(timeout=timeout, follow_redirects=False), True
 
 
@@ -300,7 +308,7 @@ def web_fetch(url: str, max_chars: int = DEFAULT_FETCH_CHARS, *,
         cap = max(200, min(int(max_chars or DEFAULT_FETCH_CHARS), MAX_FETCH_CHARS))
     except (TypeError, ValueError):
         cap = DEFAULT_FETCH_CHARS
-    cli, own = _client(client, FETCH_TIMEOUT)
+    cli, own = _client(client, FETCH_TIMEOUT, pinned=True)
     try:
         for hop in range(MAX_REDIRECTS + 1):
             refusal = fetch_refusal(target, resolve)
@@ -323,6 +331,8 @@ def web_fetch(url: str, max_chars: int = DEFAULT_FETCH_CHARS, *,
                         if len(buf) >= MAX_BODY_BYTES:
                             truncated = True
                             break
+            except ssrf.SSRFError as exc:
+                return False, f"WebFetch refuses {target!r} — {exc}"
             except httpx.HTTPError as exc:
                 return False, f"WebFetch failed: {type(exc).__name__}: {exc}"
             mime = ctype.split(";")[0].strip().lower()

@@ -8,7 +8,11 @@ import pytest
 from credential_broker import secret_service
 
 
-@pytest.mark.parametrize("ips", [("127.0.0.1",), ("169.254.169.254",), ("224.0.0.1",), ("8.8.8.8", "10.0.0.1"), ("::1",)])
+@pytest.mark.parametrize("ips", [("127.0.0.1",), ("169.254.169.254",), ("224.0.0.1",), ("8.8.8.8", "10.0.0.1"), ("::1",),
+                                 # an IPv6 address carrying an internal IPv4 one reaches it
+                                 ("::ffff:127.0.0.1",), ("::ffff:169.254.169.254",), ("::10.0.0.1",),
+                                 ("64:ff9b::a9fe:a9fe",), ("2002:a9fe:a9fe::1",), ("2001:0:4136:e378:8000:63bf:3fff:fdd2",),
+                                 ("100.100.100.200",), ("fd00:ec2::254",)])
 def test_private_mixed_multicast_and_linklocal_refused(ips):
     with patch.object(socket, "getaddrinfo", return_value=[(0, 0, 0, "", (ip, 443)) for ip in ips]):
         with pytest.raises(secret_service.ServiceError):

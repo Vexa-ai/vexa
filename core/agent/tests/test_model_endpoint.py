@@ -110,6 +110,14 @@ def test_no_private_address_is_a_product_default():
                                         env={"VEXA_MODEL_BASE_URL_ALLOW": "192.168.1.6"}) is None
 
 
+@pytest.mark.parametrize("host", ["[::ffff:127.0.0.1]", "[::ffff:169.254.169.254]", "[64:ff9b::a9fe:a9fe]",
+                                  "[2002:a9fe:a9fe::1]", "[::10.0.0.1]", "[fd00:ec2::254]", "100.100.100.200",
+                                  "2130706433", "metadata.google.internal", "a.localhost"])
+def test_a_wildcard_never_reaches_an_internal_address_in_any_notation(host):
+    env = {"VEXA_MODEL_BASE_URL_ALLOW": "*"}
+    assert model_endpoint.refuse_reason(f"http://{host}:8001/v1", env=env) is not None
+
+
 def test_the_deployments_own_gateway_is_always_allowed():
     env = {"ANTHROPIC_BASE_URL": "https://gw.example.test/v1"}
     assert model_endpoint.refuse_reason("https://gw.example.test/v1", env=env) is None

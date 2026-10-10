@@ -130,6 +130,32 @@
       ]
     },
     {
+      "id": "outbound-url-guard",
+      "fact": "whether a server may fetch a URL somebody else supplied: the address lists, the IPv6 forms read for the IPv4 address they carry, and the connection pinned to the checked address",
+      "kind": "file-bytes",
+      "enforced": true,
+      "canonical": "core/meetings/services/meeting-api/src/meeting_api/webhooks/ssrf.py",
+      "how_to_agree": "edit the canonical copy and copy it VERBATIM over every other site",
+      "why": "Six spellings of this rule existed (meeting-api's webhook guard, agent-api's asset fetch, the worker's WebFetch, the model-endpoint gate, the repository host check, the credential broker), each reading a different subset of address notations. Five separately-built images fetch user-supplied URLs and may not import each other (P2), so the module is vendored and byte-compared.",
+      "sites": [
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/webhooks/ssrf.py"
+        },
+        {
+          "path": "core/identity/services/admin-api/src/admin_api/app/ssrf.py"
+        },
+        {
+          "path": "core/agent/shared/ssrf.py"
+        },
+        {
+          "path": "core/agent/llm/ssrf.py"
+        },
+        {
+          "path": "core/agent/services/credential-broker/src/credential_broker/ssrf.py"
+        }
+      ]
+    },
+    {
       "id": "credential-broker-assertion-fields",
       "fact": "the claims a credential-broker.v1 assertion binds, in the Python signer, the TypeScript signer and the contract's validator",
       "kind": "set",
