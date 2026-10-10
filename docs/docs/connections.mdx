@@ -142,13 +142,15 @@ broker's sentence and what to do:
 | `reason` | Means | What happens |
 |---|---|---|
 | `reconnect_required` | The provider no longer accepts the stored authorization, or a permission is missing (409). | The agent calls `connection_request`, which opens the Connections panel, where the person signs in again. |
-| `store_unavailable` | This deployment's credential store does not answer, or refuses the broker: an expired or revoked OpenBao token, or a wrong store key (503). | An outage of this deployment. The agent says so. Reconnecting cannot help: a new sign-in is stored in the same place. |
+| `store_unavailable` | This deployment's credential store does not answer, or refuses the broker: an expired or revoked OpenBao token, or a wrong store key (503). | An outage of this deployment. The agent says the account is connected, that this is an outage, and that reconnecting will not fix it: a new sign-in is stored in the same place. `connection_request` does not open the panel while the store is down; it answers the same reason. |
 | `broker_unreachable` | agent-api cannot reach the broker, it is not configured, or it refused agent-api itself (503). | An outage of this deployment; the agent says so and does not ask for a reconnect. |
 | `provider_error` | Google or the service refused for another reason (409), or is down or answering badly (502 or 503). | The agent reports the sentence. Reconnecting does not help. |
 
 When a person asks the agent to connect or reconnect an account ("connect gmail"), the agent calls
-`connection_request`. If the account is already connected and the failure is one that a reconnect
-does not fix, the agent says that instead of retrying.
+`connection_request`, unless the failure is one a reconnect does not fix: then it says the account is
+connected, what is failing, and that reconnecting will not help. It never retries the failed call.
+Before opening the panel, agent-api asks the broker's `/ready`; while the credential store is down the
+panel is not opened, whatever the agent decided.
 
 ### Fault lines
 
@@ -196,7 +198,9 @@ Three callers reach the broker, each with its own role key. The broker checks a 
    `INSTRUCTIONS`) and adds `broker_unreachable` when the broker gives no answer of its own. Every
    account tool's description names the same rule (`FAILURE_RULE`), and every dispatch carries it
    (`worker/engine.py` `connections_preamble`), so the agent calls `connection_request` only when a
-   reconnect can help.
+   reconnect can help. `connection_request` itself checks the broker's `/ready` first
+   (`broker_client.store_ready`) and, while the store is unavailable, opens nothing and answers
+   `store_unavailable`.
 
 **Readiness:** `/ready` asks the store whether it answers this broker (`Store.healthy`). The local
 store opens its file; OpenBao reads the readiness path with the broker's token. A store that does
@@ -307,5 +311,5 @@ Deny tests, all in `core/agent/services/credential-broker/tests/` unless named o
 | Outbound destinations | `test_secret_service.py`: `test_private_mixed_multicast_and_linklocal_refused`, `test_endpoint_and_header_injection_refused`, `test_fixed_endpoint_pinned_ip_redirect_and_secret_redaction` |
 | Git credentials by signed person and membership | `test_git_identity.py`: `test_another_persons_credentials_are_refused`, `test_a_shared_workspace_key_needs_the_signed_membership`, `test_naming_the_owner_as_the_actor_is_no_longer_enough`, `test_a_call_without_the_gateway_signature_is_refused` |
 | agent-api side | `core/agent/tests/test_connections.py`: `test_unconfigured_broker_fails_closed`, `test_multiple_accounts_require_selection_and_cannot_select_foreign_account` · `core/agent/tests/test_git_store_identity.py`: `test_without_a_signed_person_nothing_is_sent`, `test_outside_any_request_the_store_refuses` · `core/agent/tests/test_git_broker_store.py`: `test_unavailable_never_falls_back_or_deletes` |
-| Failures typed, outages never answered as a reconnect | `test_error_reasons.py`: `test_every_reconnect_sentence_is_listed`, `test_an_expired_authorization_is_reconnect_required`, `test_a_store_that_does_not_answer_is_store_unavailable`, `test_a_provider_outage_is_provider_error` · `test_store_readiness.py`: `test_an_expired_or_revoked_token_is_unhealthy`, `test_ready_fails_loud_on_a_dead_store_token` · `core/agent/tests/test_broker_client.py`: `test_the_brokers_reason_reaches_the_agent_with_what_to_do`, `test_a_store_outage_is_never_answered_as_a_reconnect` · `core/agent/tests/test_connection_reasons.py`: `test_a_gmail_tool_failure_names_its_reason_and_what_to_do`, `test_every_account_tool_carries_the_one_failure_rule` |
+| Failures typed, outages never answered as a reconnect | `test_error_reasons.py`: `test_every_reconnect_sentence_is_listed`, `test_an_expired_authorization_is_reconnect_required`, `test_a_store_that_does_not_answer_is_store_unavailable`, `test_a_provider_outage_is_provider_error` · `test_store_readiness.py`: `test_an_expired_or_revoked_token_is_unhealthy`, `test_ready_fails_loud_on_a_dead_store_token` · `core/agent/tests/test_broker_client.py`: `test_the_brokers_reason_reaches_the_agent_with_what_to_do`, `test_a_store_outage_is_never_answered_as_a_reconnect` · `core/agent/tests/test_connection_reasons.py`: `test_a_gmail_tool_failure_names_its_reason_and_what_to_do`, `test_every_account_tool_carries_the_one_failure_rule`, `test_the_panel_is_not_opened_while_the_credential_store_is_down` · `core/agent/tests/test_chat_eval.py` (the `connect-gmail` case; run live with `core/agent/eval/chat_eval.py`) |
 | Terminal side | `clients/terminal/src/app/api/connections/__tests__/routes.test.ts`: "refuses cross origin and caller-chosen identity", "arbitrary proxy routes and destinations refused", "custom secret submission projects no credential back to the UI and carries the host confirmation" |
