@@ -1,0 +1,8 @@
+{
+  "source": "runtime",
+  "kind": "quota_exceeded",
+  "op": "spawn",
+  "status": 429,
+  "detail": "you already have as many agents running as you are allowed",
+  "remedy": "Retry when one of your running agents has finished."
+}

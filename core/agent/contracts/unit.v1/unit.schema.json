@@ -172,6 +172,109 @@
           "pattern": "^[0-9a-f]{64}$"
         }
       }
+    },
+    "FaultSource": {
+      "description": "WHO failed (`Fault.source`). `runtime` — the agent runtime agent-api asks to start a worker (core/agent/shared/runtime_fault.py) · `model-provider` — the model's provider refused the turn (core/agent/llm/faults.py) · `vexa-tools` — the turn's Vexa tool access was refused (core/agent/worker/tool_access.py) · `agent-worker` — the worker would not start the turn in the environment it was given (core/agent/worker/tool_access.py, core/agent/llm/claude_code.py) · `agent-api` / `gateway` — the terminal's chat proxy got no typed answer from them (clients/terminal/src/app/api/chat/route.ts).",
+      "enum": ["runtime", "model-provider", "vexa-tools", "agent-worker", "agent-api", "gateway"]
+    },
+    "RuntimeFaultKind": {
+      "description": "spawn_refused — the runtime answered that it could not start the workload (runtime.v1 502, or 409) · quota_exceeded — the person's workload quota is full (429) · unauthorized — the runtime refused agent-api's caller credential (401/403) · refused — another 4xx · not_found — the runtime does not know the workload (404) · unreachable — no HTTP answer at all · unavailable — another server error · bad_response — a 2xx body that is not runtime.v1.",
+      "enum": ["spawn_refused", "quota_exceeded", "unauthorized", "refused", "not_found", "unreachable", "unavailable", "bad_response"]
+    },
+    "ModelProviderFaultKind": {
+      "description": "unpaid — out of credit or quota (402, or the provider's own words) · unauthorized — the credential was refused (401/403) · rate_limited — 429 · unavailable — 5xx, 529, a timeout or a transport failure · refused — any other 4xx.",
+      "enum": ["unpaid", "unauthorized", "rate_limited", "unavailable", "refused"]
+    },
+    "VexaToolsFaultKind": {
+      "description": "access_expired — the turn ran past its delegation token, and the Vexa tool calls it made after that were refused.",
+      "enum": ["access_expired"]
+    },
+    "AgentWorkerFaultKind": {
+      "description": "tools_unconfined — a path the turn needs could not be handed to the user the model's tools run as, so the turn was not started (core/agent/worker/tool_access.py) · credential_conflict — the turn runs on the person's own model endpoint, and the worker's environment holds another model credential it could not remove, so the turn was not started (core/agent/llm/claude_code.py).",
+      "enum": ["tools_unconfined", "credential_conflict"]
+    },
+    "AgentApiFaultKind": {
+      "description": "internal — agent-api answered a 5xx with no typed fault · unavailable — it answered 502/503/504 with none.",
+      "enum": ["internal", "unavailable"]
+    },
+    "GatewayFaultKind": {
+      "description": "unreachable — the terminal could not reach the gateway at all.",
+      "enum": ["unreachable"]
+    },
+    "FaultRuntimeOp": {
+      "description": "Which runtime call failed (runtime faults only).",
+      "enum": ["spawn", "status", "list"]
+    },
+    "Fault": {
+      "description": "A dependency's typed failure (P18): WHO failed (`source`) and HOW (`kind`, closed per source — the `$def` named `<Source>FaultKind`), one safe sentence (`detail`) and what a person can do about it (`remedy`). Carried as `fault` on a failed `DoneFrame`, on an `ErrorFrame`, on a `DispatchRefusal`, and on a blocked inbox row. A runtime fault names its `op`; a model-provider fault names the `provider` host and the `model` (\"\" when unknown). `at` is present only on a fault agent-api recorded against a chat unit (`unit:<id>:fault`). The kind vocabularies are generated into every side that names one (`gen-faults.mjs`).",
+      "type": "object",
+      "required": ["source", "kind"],
+      "additionalProperties": false,
+      "properties": {
+        "source": { "$ref": "#/$defs/FaultSource" },
+        "kind": { "type": "string", "pattern": "^[a-z][a-z_]*[a-z]$" },
+        "status": { "type": ["integer", "null"], "minimum": 100, "maximum": 599, "description": "the dependency's HTTP status, or null when it gave none (a timeout, a refused connection)" },
+        "detail": { "type": "string", "description": "one safe sentence — never the dependency's raw text, never a secret" },
+        "remedy": { "type": "string", "description": "one line a person (or their operator) can act on, or \"\"" },
+        "provider": { "type": "string", "description": "model-provider only: the host the request went to, or \"unknown\"" },
+        "model": { "type": "string", "description": "model-provider only: the model id, or \"\"" },
+        "op": { "$ref": "#/$defs/FaultRuntimeOp" },
+        "at": { "type": "number", "description": "a recorded fault only: when agent-api recorded it, in seconds since the epoch" }
+      },
+      "allOf": [
+        { "if": { "properties": { "source": { "const": "runtime" } } },
+          "then": { "required": ["op"], "properties": { "kind": { "$ref": "#/$defs/RuntimeFaultKind" } } } },
+        { "if": { "properties": { "source": { "const": "model-provider" } } },
+          "then": { "required": ["provider", "model"], "properties": { "kind": { "$ref": "#/$defs/ModelProviderFaultKind" } } } },
+        { "if": { "properties": { "source": { "const": "vexa-tools" } } },
+          "then": { "properties": { "kind": { "$ref": "#/$defs/VexaToolsFaultKind" } } } },
+        { "if": { "properties": { "source": { "const": "agent-worker" } } },
+          "then": { "properties": { "kind": { "$ref": "#/$defs/AgentWorkerFaultKind" } } } },
+        { "if": { "properties": { "source": { "const": "agent-api" } } },
+          "then": { "properties": { "kind": { "$ref": "#/$defs/AgentApiFaultKind" } } } },
+        { "if": { "properties": { "source": { "const": "gateway" } } },
+          "then": { "properties": { "kind": { "$ref": "#/$defs/GatewayFaultKind" } } } },
+        { "if": { "not": { "properties": { "source": { "const": "runtime" } } } },
+          "then": { "not": { "required": ["op"] } } },
+        { "if": { "not": { "properties": { "source": { "const": "model-provider" } } } },
+          "then": { "not": { "anyOf": [ { "required": ["provider"] }, { "required": ["model"] } ] } } }
+      ]
+    },
+    "DoneFrame": {
+      "description": "A turn's last UnitEvent on the worker's out-stream (`unit:<id>:out`), relayed unchanged to the chat stream. The frozen fields are `reply`, `sessionId` and `ok`; `fault` is additive. A `done` that carries a fault is a failed turn: `ok` is false, and `reply` is the fault as one sentence for a client that reads only the reply.",
+      "type": "object",
+      "required": ["type", "reply", "sessionId", "ok"],
+      "properties": {
+        "type": { "const": "done" },
+        "reply": { "type": "string" },
+        "sessionId": { "type": ["string", "null"] },
+        "ok": { "type": "boolean" },
+        "detail": { "type": "string" },
+        "fault": { "$ref": "#/$defs/Fault" }
+      },
+      "if": { "required": ["fault"] },
+      "then": { "properties": { "ok": { "const": false } } }
+    },
+    "ErrorFrame": {
+      "description": "A chat-stream `error` frame: agent-api's relay answering an attach to a unit whose spawn failed, or the terminal's proxy answering for an upstream that gave no stream. `message` is the sentence an older client shows on its own.",
+      "type": "object",
+      "required": ["type", "message"],
+      "properties": {
+        "type": { "const": "error" },
+        "message": { "type": "string" },
+        "status": { "type": ["integer", "null"] },
+        "fault": { "$ref": "#/$defs/Fault" }
+      }
+    },
+    "DispatchRefusal": {
+      "description": "The JSON body agent-api answers a refused dispatch with — 503 when the runtime is down or full (`unreachable`, `unavailable`, `quota_exceeded`), 502 for every other runtime kind, never 500. `detail` stays a sentence for every client that reads only that; `fault` is the typed half.",
+      "type": "object",
+      "required": ["detail", "fault"],
+      "additionalProperties": false,
+      "properties": {
+        "detail": { "type": "string" },
+        "fault": { "$ref": "#/$defs/Fault" }
+      }
     }
   }
 }

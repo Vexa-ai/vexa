@@ -1949,6 +1949,120 @@
           "pattern": "^\\s+vexa\\.role: (worker)$"
         }
       ]
+    },
+    {
+      "id": "fault-kinds-runtime",
+      "fact": "the kinds a `runtime` fault may carry, in unit.v1 and in the public agent API reference",
+      "kind": "set",
+      "enforced": true,
+      "canonical": "core/agent/contracts/unit.v1/unit.schema.json — $defs.RuntimeFaultKind",
+      "how_to_agree": "a kind is added in the schema (then `node core/agent/contracts/unit.v1/gen-faults.mjs` and `pnpm seal:contracts`) and in the docs row, in one change",
+      "why": "The code sides do not spell kinds: each imports a vocabulary gen-faults.mjs writes from the schema, and validate.mjs --check (gate:schema) fails on drift. The reference page is prose no generator writes, so it is held here, or a kind ships that the documentation never names (architecture pass 6, S65).",
+      "sites": [
+        {
+          "path": "core/agent/contracts/unit.v1/unit.schema.json",
+          "pattern": "\"RuntimeFaultKind\": \\{[^{}]*?\"enum\": \\[([^\\]]*)\\]"
+        },
+        {
+          "path": "docs/docs/api/agent.mdx",
+          "pattern": "^\\| `runtime` \\| ([^|\\n]*) \\|$"
+        }
+      ]
+    },
+    {
+      "id": "fault-kinds-model-provider",
+      "fact": "the kinds a `model-provider` fault may carry, in unit.v1 and in the public agent API reference",
+      "kind": "set",
+      "enforced": true,
+      "canonical": "core/agent/contracts/unit.v1/unit.schema.json — $defs.ModelProviderFaultKind",
+      "how_to_agree": "a kind is added in the schema (then `node core/agent/contracts/unit.v1/gen-faults.mjs` and `pnpm seal:contracts`) and in the docs row, in one change",
+      "why": "The code sides do not spell kinds: each imports a vocabulary gen-faults.mjs writes from the schema, and validate.mjs --check (gate:schema) fails on drift. The reference page is prose no generator writes, so it is held here, or a kind ships that the documentation never names (architecture pass 6, S65).",
+      "sites": [
+        {
+          "path": "core/agent/contracts/unit.v1/unit.schema.json",
+          "pattern": "\"ModelProviderFaultKind\": \\{[^{}]*?\"enum\": \\[([^\\]]*)\\]"
+        },
+        {
+          "path": "docs/docs/api/agent.mdx",
+          "pattern": "^\\| `model-provider` \\| ([^|\\n]*) \\|$"
+        }
+      ]
+    },
+    {
+      "id": "fault-kinds-vexa-tools",
+      "fact": "the kinds a `vexa-tools` fault may carry, in unit.v1 and in the public agent API reference",
+      "kind": "set",
+      "enforced": true,
+      "canonical": "core/agent/contracts/unit.v1/unit.schema.json — $defs.VexaToolsFaultKind",
+      "how_to_agree": "a kind is added in the schema (then `node core/agent/contracts/unit.v1/gen-faults.mjs` and `pnpm seal:contracts`) and in the docs row, in one change",
+      "why": "The code sides do not spell kinds: each imports a vocabulary gen-faults.mjs writes from the schema, and validate.mjs --check (gate:schema) fails on drift. The reference page is prose no generator writes, so it is held here, or a kind ships that the documentation never names (architecture pass 6, S65).",
+      "sites": [
+        {
+          "path": "core/agent/contracts/unit.v1/unit.schema.json",
+          "pattern": "\"VexaToolsFaultKind\": \\{[^{}]*?\"enum\": \\[([^\\]]*)\\]"
+        },
+        {
+          "path": "docs/docs/api/agent.mdx",
+          "pattern": "^\\| `vexa-tools` \\| ([^|\\n]*) \\|$"
+        }
+      ]
+    },
+    {
+      "id": "fault-kinds-agent-worker",
+      "fact": "the kinds a `agent-worker` fault may carry, in unit.v1 and in the public agent API reference",
+      "kind": "set",
+      "enforced": true,
+      "canonical": "core/agent/contracts/unit.v1/unit.schema.json — $defs.AgentWorkerFaultKind",
+      "how_to_agree": "a kind is added in the schema (then `node core/agent/contracts/unit.v1/gen-faults.mjs` and `pnpm seal:contracts`) and in the docs row, in one change",
+      "why": "The code sides do not spell kinds: each imports a vocabulary gen-faults.mjs writes from the schema, and validate.mjs --check (gate:schema) fails on drift. The reference page is prose no generator writes, so it is held here, or a kind ships that the documentation never names (architecture pass 6, S65).",
+      "sites": [
+        {
+          "path": "core/agent/contracts/unit.v1/unit.schema.json",
+          "pattern": "\"AgentWorkerFaultKind\": \\{[^{}]*?\"enum\": \\[([^\\]]*)\\]"
+        },
+        {
+          "path": "docs/docs/api/agent.mdx",
+          "pattern": "^\\| `agent-worker` \\| ([^|\\n]*) \\|$"
+        }
+      ]
+    },
+    {
+      "id": "fault-kinds-agent-api",
+      "fact": "the kinds a `agent-api` fault may carry, in unit.v1 and in the public agent API reference",
+      "kind": "set",
+      "enforced": true,
+      "canonical": "core/agent/contracts/unit.v1/unit.schema.json — $defs.AgentApiFaultKind",
+      "how_to_agree": "a kind is added in the schema (then `node core/agent/contracts/unit.v1/gen-faults.mjs` and `pnpm seal:contracts`) and in the docs row, in one change",
+      "why": "The code sides do not spell kinds: each imports a vocabulary gen-faults.mjs writes from the schema, and validate.mjs --check (gate:schema) fails on drift. The reference page is prose no generator writes, so it is held here, or a kind ships that the documentation never names (architecture pass 6, S65).",
+      "sites": [
+        {
+          "path": "core/agent/contracts/unit.v1/unit.schema.json",
+          "pattern": "\"AgentApiFaultKind\": \\{[^{}]*?\"enum\": \\[([^\\]]*)\\]"
+        },
+        {
+          "path": "docs/docs/api/agent.mdx",
+          "pattern": "^\\| `agent-api` \\| ([^|\\n]*) \\|$"
+        }
+      ]
+    },
+    {
+      "id": "fault-kinds-gateway",
+      "fact": "the kinds a `gateway` fault may carry, in unit.v1 and in the public agent API reference",
+      "kind": "set",
+      "enforced": true,
+      "canonical": "core/agent/contracts/unit.v1/unit.schema.json — $defs.GatewayFaultKind",
+      "how_to_agree": "a kind is added in the schema (then `node core/agent/contracts/unit.v1/gen-faults.mjs` and `pnpm seal:contracts`) and in the docs row, in one change",
+      "why": "The code sides do not spell kinds: each imports a vocabulary gen-faults.mjs writes from the schema, and validate.mjs --check (gate:schema) fails on drift. The reference page is prose no generator writes, so it is held here, or a kind ships that the documentation never names (architecture pass 6, S65).",
+      "sites": [
+        {
+          "path": "core/agent/contracts/unit.v1/unit.schema.json",
+          "pattern": "\"GatewayFaultKind\": \\{[^{}]*?\"enum\": \\[([^\\]]*)\\]"
+        },
+        {
+          "path": "docs/docs/api/agent.mdx",
+          "pattern": "^\\| `gateway` \\| ([^|\\n]*) \\|$"
+        }
+      ]
     }
   ]
 }

@@ -1,9 +1,9 @@
 """faults.py — the MODEL PROVIDER's failure vocabulary: one typed fault, one shape (P18, ADR-0010).
 
-THE ONE PLACE A PROVIDER FAILURE IS NAMED. Every harness (claude-code, openai-agent, and any provider
-adapter added later) translates its provider's failure into :class:`ProviderFault` and hands it to
-the turn's stream on the ``done`` event, as ``done.fault``. Import it from here; do not define a
-second one.
+THE ONE PLACE A PROVIDER FAILURE IS NAMED. Every harness (claude-code, codex, openai-agent, and any
+provider adapter added later) translates its provider's failure into :class:`ProviderFault` and hands
+it to the turn's stream on the ``done`` event, as ``done.fault``. Import it from here; do not define a
+second one. The shape and the ``kind`` vocabulary are unit.v1's ``Fault`` (``core/agent/contracts/unit.v1``).
 
 The shape is STABLE — the terminal renders it field for field::
 
@@ -33,16 +33,22 @@ import re
 from dataclasses import asdict, dataclass
 from typing import Optional
 
+from llm import fault_wire
 from llm.errors import LLMError, provider_host
 
-SOURCE = "model-provider"
+# THE VOCABULARY IS unit.v1's, NOT THIS MODULE'S (S65). `llm/fault_wire.py` is generated from
+# core/agent/contracts/unit.v1/unit.schema.json — this brick's own copy, since llm/ imports nothing
+# from product code — and gate:schema fails when it drifts. A kind is added there, never here.
+_V = fault_wire.ModelProvider
 
-UNPAID = "unpaid"
-UNAUTHORIZED = "unauthorized"
-RATE_LIMITED = "rate_limited"
-UNAVAILABLE = "unavailable"
-REFUSED = "refused"
-KINDS = (UNPAID, UNAUTHORIZED, RATE_LIMITED, UNAVAILABLE, REFUSED)
+SOURCE = _V.SOURCE
+
+UNPAID = _V.UNPAID
+UNAUTHORIZED = _V.UNAUTHORIZED
+RATE_LIMITED = _V.RATE_LIMITED
+UNAVAILABLE = _V.UNAVAILABLE
+REFUSED = _V.REFUSED
+KINDS = _V.KINDS
 
 _WHAT = {
     UNPAID: "is out of credit",
@@ -170,16 +176,21 @@ def status_in(text: object) -> Optional[int]:
 
 def classify(*, status: Optional[int] = None, text: object = None, provider: Optional[str] = None,
              model: Optional[str] = None, sdk_error: Optional[str] = None,
-             transport: bool = False) -> Optional[ProviderFault]:
+             transport: bool = False, kind: Optional[str] = None) -> Optional[ProviderFault]:
     """The typed fault for one provider failure, or None when nothing here says it is one.
 
     ``status`` — the HTTP status, when the adapter has it · ``text`` — the provider's / CLI's own
     words · ``sdk_error`` — the claude CLI's error label · ``transport`` — the request never got
-    an answer (connect error, timeout). ``provider`` defaults to the configured endpoint's host."""
+    an answer (connect error, timeout) · ``kind`` — one of :data:`KINDS` the adapter already read
+    from its vendor's own error label (codex's ``codexErrorInfo``); a status still wins over it.
+    ``provider`` defaults to the configured endpoint's host."""
     host = provider or provider_host()
+    hint = kind if kind in KINDS else None
     kind = None
     if status is not None:
         kind = kind_for_status(int(status))
+    if kind is None:
+        kind = hint
     if kind is None and sdk_error:
         kind = _SDK_ERROR.get(str(sdk_error))
     if kind is None and text:

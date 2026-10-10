@@ -21,6 +21,7 @@ from typing import Callable, Iterable, Iterator, Optional
 # `llm.tool_events` owns them. One vocabulary, three harnesses.
 from llm.tool_events import (_BOT_TOOLS, _TERMS_TOOLS, _WRITER_TOOLS, _bot_artifact,
                              _published_terms, _written_artifact)
+from llm import faults as provider_faults
 from llm import workspace_paths as wpaths
 from llm.ports import harness_identity_kwargs, harness_subprocess_env, tools_identity
 
@@ -246,7 +247,81 @@ def _link_sessions_into_workspace(work: Path) -> None:
 
 
 class _RpcFailure(RuntimeError):
-    pass
+    """A JSON-RPC call the app server answered with an error, or a stream that ended early. ``error``
+    is the server's own error object, when there was one, for :func:`_turn_fault`."""
+
+    def __init__(self, message: str, error: object = None) -> None:
+        super().__init__(message)
+        self.error = error
+
+
+# ── a failed turn ends TYPED (P18, S66) ─────────────────────────────────────────────────────────
+#: Codex's own error label (app-server v2 ``TurnError.codexErrorInfo``) → the provider-fault kind it
+#: names. A label for one of Codex's OWN limits (``sessionBudgetExceeded``, ``contextWindowExceeded``,
+#: ``sandboxError``, ``other``…) names none, and the error's text is read instead.
+_CODEX_ERROR_KIND = {
+    "usageLimitExceeded": provider_faults.UNPAID,
+    "rateLimitExceeded": provider_faults.RATE_LIMITED,
+    "serverOverloaded": provider_faults.UNAVAILABLE,
+    "internalServerError": provider_faults.UNAVAILABLE,
+    "unauthorized": provider_faults.UNAUTHORIZED,
+    "badRequest": provider_faults.REFUSED,
+}
+#: The ``codexErrorInfo`` variants that say the request never got a whole answer. Each may carry the
+#: upstream's ``httpStatusCode``, which then names the kind.
+_CODEX_TRANSPORT = ("httpConnectionFailed", "responseStreamConnectionFailed",
+                    "responseStreamDisconnected", "responseTooManyFailedAttempts")
+
+
+def _codex_provider() -> str:
+    """The host a Codex turn's model requests go to: the OpenAI API for a key, else the ChatGPT
+    backend a subscription signs in to."""
+    if any((os.environ.get(key) or "").strip() for key in ("OPENAI_API_KEY", "CODEX_API_KEY")):
+        return "api.openai.com"
+    return "chatgpt.com"
+
+
+def _turn_fault(error: object, model: str = "") -> "Optional[provider_faults.ProviderFault]":
+    """The typed provider fault for a failed Codex turn — ``turn.error`` (``{message,
+    codexErrorInfo, additionalDetails}``) or a JSON-RPC error — or None when nothing in it names one.
+    Nothing here is Codex's raw text: ``faults.classify`` keeps only a safe ``detail``."""
+    err = error if isinstance(error, dict) else {"message": str(error or "")}
+    info = err.get("codexErrorInfo")
+    if info is None and isinstance(err.get("data"), dict):
+        info = err["data"].get("codexErrorInfo")
+    status: Optional[int] = None
+    kind: Optional[str] = None
+    transport = False
+    if isinstance(info, str):
+        kind = _CODEX_ERROR_KIND.get(info)
+    elif isinstance(info, dict):
+        for name in _CODEX_TRANSPORT:
+            if name not in info:
+                continue
+            transport = True
+            variant = info.get(name)
+            code = variant.get("httpStatusCode") if isinstance(variant, dict) else None
+            if isinstance(code, int) and not isinstance(code, bool) and provider_faults.kind_for_status(code):
+                status = code
+    text = " ".join(str(err.get(k)) for k in ("message", "additionalDetails")
+                    if isinstance(err.get(k), str) and err.get(k).strip())
+    return provider_faults.classify(status=status, text=text or None, provider=_codex_provider(),
+                                    model=model, kind=kind, transport=transport)
+
+
+def _failed_done(model_reply: str, failure: str, session: Optional[str], error: object,
+                 model: str) -> dict:
+    """The ``done`` a failed Codex turn ends on, carrying ``fault`` when the failure is the model
+    provider's. Whatever the model already said stays the reply; with nothing said, the reply is the
+    fault's sentence (its own words, ``failure``, move to ``detail``) — or, untyped, those words."""
+    done: dict = {"type": "done", "reply": model_reply or failure, "sessionId": session, "ok": False}
+    fault = _turn_fault(error, model)
+    if fault is not None:
+        done["fault"] = fault.as_dict()
+        if not model_reply.strip():
+            done["detail"] = _short(failure, 200)
+            done["reply"] = fault.sentence()
+    return done
 
 
 ProcessFactory = Callable[..., subprocess.Popen]
@@ -328,7 +403,7 @@ class CodexHarness:
             if message.get("id") != request_id:
                 continue
             if message.get("error"):
-                raise _RpcFailure(_short(message["error"], 240))
+                raise _RpcFailure(_short(message["error"], 240), message["error"])
             return message.get("result") or {}
 
     def inject_user_message(self, text: str) -> bool:
@@ -366,6 +441,7 @@ class CodexHarness:
         proc = self._spawn(work)
         reply_parts: list[str] = []
         thread_id = session
+        codex_model = ""
         with self._lock:
             self._proc = proc
             self._thread_id = session
@@ -423,7 +499,7 @@ class CodexHarness:
                 message = self._read(proc)
                 if message.get("id") == request_id:
                     if message.get("error"):
-                        raise _RpcFailure(_short(message["error"], 240))
+                        raise _RpcFailure(_short(message["error"], 240), message["error"])
                     turn = (message.get("result") or {}).get("turn") or {}
                     with self._lock:
                         self._turn_id = turn.get("id")
@@ -435,12 +511,16 @@ class CodexHarness:
                     ok = turn.get("status") == "completed"
                     error = turn.get("error") or {}
                     reply = _final_reply(turn, reply_parts)
-                    if not ok and not reply:
-                        reply = error.get("message") or f"Codex turn {turn.get('status', 'failed')}"
-                    yield {"type": "done", "reply": reply, "sessionId": thread_id, "ok": ok}
+                    if ok:
+                        yield {"type": "done", "reply": reply, "sessionId": thread_id, "ok": True}
+                        return
+                    said = error.get("message") if isinstance(error, dict) else None
+                    failure = str(said or f"Codex turn {turn.get('status', 'failed')}")
+                    yield _failed_done(reply, failure, thread_id, error, codex_model)
                     return
         except _RpcFailure as exc:
-            yield {"type": "done", "reply": str(exc), "sessionId": thread_id, "ok": False}
+            yield _failed_done("", str(exc), thread_id,
+                               exc.error if exc.error is not None else str(exc), codex_model)
         finally:
             with self._lock:
                 self._proc = None

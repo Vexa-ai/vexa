@@ -97,14 +97,31 @@ Returns **Server-Sent Events**; each `data:` line is one frame:
 | `tool-result` | `callId`, `ok`, `summary` |
 | `commit` | `sha` |
 | `rejected` | `violations` |
-| `done` | `reply`, `sessionId`, `ok` (+ `detail` when a failure's raw provider text was rewritten) |
-| `error` | `message` — the turn was refused before dispatch (e.g. no model credential configured); actionable, names what to set |
+| `done` | `reply`, `sessionId`, `ok` (+ `detail` when a failure's raw provider text was rewritten, + `fault` when the turn failed typed) |
+| `error` | `message` — the turn was refused before dispatch (e.g. no model credential configured); actionable, names what to set (+ `fault` when a dependency refused it) |
 
 ```bash POST /api/chat  (SSE)
 curl -N -X POST "$API_BASE/agent/chat" -H "Content-Type: application/json" \
   -H "X-API-Key: $VEXA_API_KEY" \
   -d '{"prompt":"Record that Acme renewed."}'
 ```
+
+**Typed faults.** A failure says who failed and how, as
+`fault: { source, kind, status, detail, remedy }` on a failed `done`, on an `error` frame, and on the
+body of a refused dispatch: `{ detail, fault }` with `503` when the agent runtime is down or full
+(`unreachable`, `unavailable`, `quota_exceeded`) and `502` for its other kinds — never `500`. A
+`runtime` fault adds `op` (`spawn` · `status` · `list`); a `model-provider` fault adds `provider` and
+`model`. `detail` is one safe sentence and `remedy` what to do about it. The shape and the kinds are
+`Fault` in the contract [`unit.v1`](https://github.com/Vexa-ai/vexa/tree/main/core/agent/contracts/unit.v1):
+
+| `source` | `kind` |
+|---|---|
+| `runtime` | `spawn_refused`, `quota_exceeded`, `unauthorized`, `refused`, `not_found`, `unreachable`, `unavailable`, `bad_response` |
+| `model-provider` | `unpaid`, `unauthorized`, `rate_limited`, `unavailable`, `refused` |
+| `vexa-tools` | `access_expired` |
+| `agent-worker` | `tools_unconfined`, `credential_conflict` |
+| `agent-api` | `internal`, `unavailable` |
+| `gateway` | `unreachable` |
 
 `POST /api/chat/reset` `{ session? }` → `{ "ok": true }` · `GET /api/sessions` →
 `{ "sessions": [...] }` · `GET /api/sessions/{session}/history` → `{ "turns": [...] }` (tolerant — a
