@@ -8,4 +8,8 @@ it differs; a date-only value is a calendar day in every time zone), `fullDate` 
 `isoDate` (`<time dateTime>`), `parseDate`, `looksLikeDate`. Pure: `now`, `locale` and `timeZone`
 are parameters. Rendered through the `DateText` primitive.
 
+`contrast.ts` — WCAG 2.2 contrast (`contrastRatio`, alpha colours blended over the surface), used by
+the contrast gate and the catalogue's live ratios. `tokens.ts` — `parseTokens(css)`: the token
+stylesheet (`src/app/tokens.css`) as a resolved name → value map per theme.
+
 **Dependencies.** `Intl.DateTimeFormat` only.

@@ -1,0 +1,216 @@
+/*
+ * THE TERMINAL'S DESIGN TOKENS — the one writer of every visual value (terminal design guidelines
+ * §2; docs/docs/governance/ui-design.mdx). Colour, type, space, size, radius, elevation, motion and
+ * layers are defined here and nowhere else; primitives read these variables, and surfaces reach
+ * them only through primitives (or, until they migrate, through the old names aliased below).
+ *
+ * Dark is the primary theme (`:root`); light overrides on `:root[data-theme="light"]`, which
+ * `app/theme.ts` sets. Every text-on-surface pair declared in `tokens.pairs.json` is held to WCAG
+ * 2.2 AA by `ui-kit/__tests__/tokenContrast.test.ts` in both themes — the gate is the authority,
+ * not the hex values.
+ *
+ * Semantic roles, not layout names: `--surface-0…3` (deepest to most raised), `--text-1…3`, one
+ * `-text` variant per status colour for use AS TEXT, and `--border-subtle` (decoration) apart from
+ * `--border-control` (the only border allowed to identify a control, ≥ 3:1 — WCAG 1.4.11).
+ */
+
+:root {
+  color-scheme: dark;
+
+  /* ── surfaces (Radix steps 1–5) ──────────────────────────────────────────────────────────── */
+  --surface-0: #0e0e11;                 /* the deepest well: rails, pages panel */
+  --surface-1: #1a1b20;                 /* the focal plane: conversation, default card */
+  --surface-2: #222329;                 /* raised: selected row, input, chip */
+  --surface-3: #2b2c34;                 /* hover and pressed fills */
+  --surface-overlay: #26272e;           /* menus, popovers, dialogs — lighter than base in dark (HIG) */
+
+  /* ── borders ─────────────────────────────────────────────────────────────────────────────── */
+  --border-subtle: rgba(255, 255, 255, 0.09);   /* decorative separators only */
+  --border: rgba(255, 255, 255, 0.16);          /* card outlines, dividers inside controls */
+  --border-control: rgba(255, 255, 255, 0.36);  /* a control's only boundary: ≥ 3:1 */
+
+  /* ── text ────────────────────────────────────────────────────────────────────────────────── */
+  --text-1: #ededf0;
+  --text-2: #b4b4bd;
+  --text-3: #94949e;                    /* was #65656f: 2.4–3.3:1, the most-used text colour, failed AA */
+  --text-disabled: #65656f;             /* disabled only (WCAG-exempt) */
+
+  /* ── accent: "this is the one / do this" ─────────────────────────────────────────────────── */
+  --accent: #d8855c;
+  --accent-hover: #e2946d;
+  --on-accent: #241008;
+  --accent-text: #e09a76;               /* accent used AS TEXT */
+  --accent-tint: rgba(216, 133, 92, 0.14);
+  --focus-ring: var(--accent);
+
+  /* ── status: a fill, a text variant, a tint ──────────────────────────────────────────────── */
+  --danger: #e0645e;
+  --danger-text: #ee8a85;
+  --danger-tint: rgba(224, 100, 94, 0.12);
+  --warning: #d9a13c;
+  --warning-text: #e3b25a;
+  --warning-tint: rgba(217, 161, 60, 0.14);
+  --on-warning: #1a1200;
+  --success: #48b787;                   /* live, done, connected */
+  --success-text: #5fc99a;
+  --success-tint: rgba(72, 183, 135, 0.14);
+  --on-success: #08110c;
+  --info: #6ea8fe;
+  --info-text: #8dbbff;
+  --info-tint: rgba(110, 168, 254, 0.14);
+  --meeting: #b08cf0;                   /* meeting entities only */
+  --meeting-text: #c4a6f5;
+  --meeting-tint: rgba(176, 140, 240, 0.14);
+  --scrim: rgba(0, 0, 0, 0.32);
+
+  /* ── type ────────────────────────────────────────────────────────────────────────────────── */
+  --font-sans: var(--font-geist-sans, -apple-system), BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono, ui-monospace), "SF Mono", Menlo, monospace;
+  --text-xs: 12px;      --leading-xs: 16px;
+  --text-sm: 13px;      --leading-sm: 18px;
+  --text-md: 14px;      --leading-md: 20px;
+  --text-lg: 16px;      --leading-lg: 24px;
+  --text-xl: 20px;      --leading-xl: 28px;
+  --text-2xl: 24px;     --leading-2xl: 32px;
+  --text-mono-sm: 12px; --leading-mono-sm: 16px;
+  --text-mono-md: 13px; --leading-mono-md: 20px;
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+
+  /* ── space (4px grid) ────────────────────────────────────────────────────────────────────── */
+  --space-0: 0px;
+  --space-0_5: 2px;
+  --space-1: 4px;
+  --space-1_5: 6px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+  --space-16: 64px;
+
+  /* ── control heights, icons ──────────────────────────────────────────────────────────────── */
+  --control-xs: 24px;
+  --control-sm: 28px;
+  --control-md: 32px;
+  --icon-sm: 14px;
+  --icon-md: 16px;
+
+  /* ── radius ──────────────────────────────────────────────────────────────────────────────── */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+  --radius-full: 9999px;
+
+  /* ── elevation ───────────────────────────────────────────────────────────────────────────── */
+  --shadow-0: none;
+  --shadow-1: 0 8px 24px rgba(0, 0, 0, 0.32);   /* popover, menu */
+  --shadow-2: 0 16px 48px rgba(0, 0, 0, 0.45);  /* dialog, sheet */
+  --shadow-3: 0 8px 28px rgba(0, 0, 0, 0.38);   /* toast */
+
+  /* ── motion ──────────────────────────────────────────────────────────────────────────────── */
+  --dur-fast: 120ms;
+  --dur-base: 180ms;
+  --dur-slow: 240ms;
+  --ease-out: cubic-bezier(.2, .8, .2, 1);
+
+  /* ── layers ──────────────────────────────────────────────────────────────────────────────── */
+  --z-base: 0;
+  --z-sticky: 10;
+  --z-splitter: 20;
+  --z-drawer: 30;
+  --z-popover: 40;
+  --z-modal: 50;
+  --z-toast: 60;
+  --z-tooltip: 70;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --surface-0: #ffffff;
+  --surface-1: #eeeef2;
+  --surface-2: #f7f7f9;
+  --surface-3: #e6e6eb;
+  --surface-overlay: #ffffff;
+  --border-subtle: rgba(0, 0, 0, 0.10);
+  --border: rgba(0, 0, 0, 0.16);
+  --border-control: rgba(0, 0, 0, 0.46);
+  --text-1: #1a1a1f;
+  --text-2: #4f4f58;
+  --text-3: #64646e;                    /* was #8a8a94: 2.8–3.4:1 */
+  --text-disabled: #a1a1aa;
+  --accent: #ad5d35;                    /* was #c06a3f: white on it read 3.9:1 */
+  --accent-hover: #9e4f28;
+  --on-accent: #ffffff;
+  --accent-text: #9e4f28;
+  --accent-tint: rgba(173, 93, 53, 0.12);
+  --danger: #c9403a;
+  --danger-text: #b3322c;
+  --danger-tint: rgba(201, 64, 58, 0.10);
+  --warning: #b8811f;
+  --warning-text: #865c10;
+  --warning-tint: rgba(184, 129, 31, 0.12);
+  --on-warning: #ffffff;
+  --success: #2f9e72;
+  --success-text: #1b6e4e;
+  --success-tint: rgba(47, 158, 114, 0.12);
+  --on-success: #ffffff;
+  --info: #3b73d6;
+  --info-text: #2d5fb8;
+  --info-tint: rgba(59, 115, 214, 0.12);
+  --meeting: #8b5fd6;
+  --meeting-text: #6e45c0;
+  --meeting-tint: rgba(139, 95, 214, 0.12);
+  --scrim: rgba(0, 0, 0, 0.24);
+  --shadow-1: 0 8px 24px rgba(0, 0, 0, 0.14);
+  --shadow-2: 0 16px 48px rgba(0, 0, 0, 0.18);
+  --shadow-3: 0 8px 28px rgba(0, 0, 0, 0.16);
+}
+
+/* Motion stops under reduced motion: every duration token collapses, so anything timed by a token
+ * stops moving without its own media query. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-fast: 0ms;
+    --dur-base: 0ms;
+    --dur-slow: 0ms;
+  }
+}
+
+/*
+ * THE OLD NAMES, AS ALIASES (until the surfaces migrate, guidelines §11 Phase 2). Each resolves to
+ * its semantic token, so an unmigrated surface follows the token — including the contrast fixes —
+ * without being edited. New code uses the semantic names; `designGuards` will retire these.
+ */
+:root {
+  --bg: var(--surface-0);
+  --sidebar: var(--surface-1);
+  --rail: var(--surface-1);
+  --panel: var(--surface-2);
+  --panel2: var(--surface-3);
+  --line: var(--border-subtle);
+  --line2: var(--border);
+  --t1: var(--text-1);
+  --t2: var(--text-2);
+  --t3: var(--text-3);
+  --accentbg: var(--accent-tint);
+  --dangerbg: var(--danger-tint);
+  --warn: var(--warning);
+  --warnbg: var(--warning-tint);
+  --on-warn: var(--on-warning);
+  --green: var(--success);
+  --greenbg: var(--success-tint);
+  --on-green: var(--on-success);
+  --blue: var(--info);
+  --bluebg: var(--info-tint);
+  --violet: var(--meeting);
+  --violetbg: var(--meeting-tint);
+  --r: var(--radius-lg);
+  --r2: var(--radius-xl);
+  --sans: var(--font-sans);
+  --mono: var(--font-mono);
+}

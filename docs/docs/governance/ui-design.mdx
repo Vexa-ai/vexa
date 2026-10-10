@@ -24,7 +24,7 @@ description: "How the Vexa terminal looks and lays out: principles, the responsi
 4. **Chrome recedes and the work advances.** Rails, headers and toolbars use secondary text and
    quiet surfaces; only the conversation and the document use primary text at full weight.
 5. **The primary task never loses space to a secondary one.** As the window narrows, side panes
-   collapse before the conversation shrinks below its minimum (§2).
+   collapse before the conversation shrinks below its minimum (§3).
 6. **Static is a badge; interactive is a chip.** They never share a shape.
 7. **Every interactive element shows where focus is, can be reached by keyboard, and is at least
    24×24 px** (WCAG 2.2 SC 2.4.7, 2.5.8).
@@ -37,7 +37,52 @@ description: "How the Vexa terminal looks and lays out: principles, the responsi
 
 ---
 
-## 2. The responsive shell
+## 2. Design tokens
+
+All visual values live in one file, `clients/terminal/src/app/tokens.css` — the only writer of
+colour, type, space, radius, elevation, motion and layer values. Dark is the primary theme; light
+overrides it under `data-theme="light"`.
+
+**Colour roles.** Every surface has a text pair, and every status colour has a separate `-text`
+variant for use as text.
+
+| Role | Use |
+|---|---|
+| `--surface-0` … `--surface-3` | the deepest well (rails, pages panel) → the focal plane (conversation) → raised (selected row, input, chip) → hover and pressed |
+| `--surface-overlay` | menus, popovers, dialogs (lighter than the base in dark mode) |
+| `--border-subtle` / `--border` / `--border-control` | decoration only / card outlines / **the only border allowed to identify a control** (at least 3:1) |
+| `--text-1` / `--text-2` / `--text-3` / `--text-disabled` | primary / secondary and chrome labels / tertiary: timestamps, metadata, placeholders / disabled only |
+| `--accent`, `--accent-hover`, `--on-accent`, `--accent-text`, `--accent-tint`, `--focus-ring` | the primary action, the selected item, focus — never a badge |
+| `--danger`, `--warning`, `--success`, `--info`, `--meeting` (each with `-text` and `-tint`) | destructive and errors only; attention; live, done, connected; information and links in content; meeting entities only |
+
+**Contrast is fixed at the token level.** The old tertiary text (`--t3`, the most-used text colour)
+read 2.4–3.4:1 and failed WCAG AA on every surface; `--text-3` is at least 4.6:1 on all four
+surfaces in both themes. The light accent was darkened so white text on it reads 4.8:1 (it was
+3.9:1). The contrast gate recomputes every declared pair (`src/app/tokens.pairs.json`) in both
+themes on every run; the hex values are starting points and the gate is the authority.
+
+**Type.** Geist Sans for text and Geist Mono for code, IDs, keys and paths. Six sizes:
+`--text-xs` 12/16 (the floor), `--text-sm` 13/18 (dense lists, controls), `--text-md` 14/20 (body),
+`--text-lg` 16/24 (section titles), `--text-xl` 20/28 (page titles), `--text-2xl` 24/32 (empty-state
+headlines only); weights 400, 500 and 600. No uppercase eyebrow labels.
+
+**Space, size, radius, elevation, motion, layers.** A 4px grid (`--space-0` … `--space-16`);
+control heights 24, 28 and 32 (`--control-xs/sm/md`); radii 4, 6, 10 and 14 plus full
+(`--radius-sm/md/lg/xl/full`); three shadows (`--shadow-1` menus, `--shadow-2` dialogs and sheets,
+`--shadow-3` toasts); three durations (`--dur-fast/base/slow`, all zero under reduced motion) and one
+easing; eight layers (`--z-base` … `--z-tooltip`).
+
+**Old names stay as aliases.** `--bg`, `--sidebar`, `--panel`, `--panel2`, `--line`, `--line2`,
+`--t1`–`--t3`, `--green`, `--blue`, `--violet`, `--warn` and the rest resolve to their semantic
+token, so a surface not yet migrated follows the tokens — including the contrast fixes — without
+being edited. New code uses the semantic names.
+
+**Tailwind** reads the tokens only: `@theme inline` in `globals.css` maps the colour roles onto
+Tailwind's namespace after `--color-*: initial` removes its default palette.
+
+---
+
+## 3. The responsive shell
 
 The Minutes shell has three panes: the **rail** (chat list), the **conversation**, and the
 **pages** panel (documents and entities). The conversation is protected.
@@ -81,7 +126,7 @@ The Minutes shell has three panes: the **rail** (chat list), the **conversation*
 
 ---
 
-## 3. Text, dates and truncation
+## 4. Text, dates and truncation
 
 - The default is `overflow-wrap: break-word`. `overflow-wrap: anywhere` and `word-break: break-all`
   are allowed only in the code and secret-display primitives.
@@ -95,35 +140,41 @@ The Minutes shell has three panes: the **rail** (chat list), the **conversation*
 
 ## How it works
 
-1. **The layout is one pure function.** `shellLayout(viewportWidth, prefs, storedWidths)` in
+1. **Tokens.** `src/app/tokens.css` defines every visual value for the dark theme on `:root` and
+   the light overrides on `:root[data-theme="light"]`; `app/theme.ts` sets the attribute and is the
+   only code that reads the theme. `globals.css` imports `tokens.css` and maps it onto Tailwind with
+   `@theme inline`. The root layout loads Geist through `geist/font/sans` and `geist/font/mono`,
+   which set `--font-geist-sans` and `--font-geist-mono`; `--font-sans` and `--font-mono` read them
+   (with the system stacks as fallback).
+2. **The layout is one pure function.** `shellLayout(viewportWidth, prefs, storedWidths)` in
    `ui-kit/layout/shellLayout.ts` returns the mode, each pane's form (`railKind`: docked, strip or
    drawer; `pagesKind`: docked, collapsed, sheet or fullscreen), the three grid columns, the widths
    and the splitter bounds. It writes nothing.
-2. **One hook feeds it and is the only writer of the layout's state.** `useShellLayout` (same
+3. **One hook feeds it and is the only writer of the layout's state.** `useShellLayout` (same
    folder) measures the shell's own box with a `ResizeObserver`, reads and writes
    `localStorage["vexa.shell.v1"]` = `{ prefs: { railOpen, pagesOpen }, widths: { <mode>: { rail,
    pages } } }`, and holds the transient drawer and sheet state, which closes when the mode changes.
    A profile with no `vexa.shell.v1` is seeded once from the old keys
    (`vexa.minutes.railCollapsed`, `vexa.minutes.pagesCollapsed`, `vexa.minutes.pagesW`); nothing
    writes the old keys any more.
-3. **The shell renders the result.** `minutes/MinutesShell.tsx` sets `grid-template-columns` from
+4. **The shell renders the result.** `minutes/MinutesShell.tsx` sets `grid-template-columns` from
    the layout, puts the rail docked, as a `RailStrip` plus a `Drawer`, or as a `Drawer` alone, and
    wraps the pages panel in a `Sheet`. A `Sheet` is one element with three forms — `inline`
    (`display: contents`, so the panel sits in the grid), `overlay` and `fullscreen` — so crossing a
    breakpoint never remounts the panel and an unsaved edit survives it.
-4. **Overlays are modal dialogs.** An open drawer or sheet moves focus in, traps Tab, closes on Esc
+5. **Overlays are modal dialogs.** An open drawer or sheet moves focus in, traps Tab, closes on Esc
    or a scrim click, and returns focus to the control that opened it. A closed one stays mounted
    but `inert`.
-5. **Opening a document reveals the panel.** In a docked mode a folded panel unfolds. Where the
+6. **Opening a document reveals the panel.** In a docked mode a folded panel unfolds. Where the
    panel is a sheet, it opens only when the reader asked (a link they clicked), never for a page
    the agent wrote while they were typing.
-6. **Pane-internal behaviour is CSS container queries.** Pane roots are `.vx-pane` (an inline-size
+7. **Pane-internal behaviour is CSS container queries.** Pane roots are `.vx-pane` (an inline-size
    container that clips sideways overflow); the composer toolbar is `.vx-container`. `Fold` renders
    both forms of a control and the stylesheet shows one; `KeyValue` is its own container.
-7. **Styles are global, prefixed, and gathered once.** Each primitive's CSS (`vx-` classes) lives
+8. **Styles are global, prefixed, and gathered once.** Each primitive's CSS (`vx-` classes) lives
    beside it; `ui-kit/styles.css` imports them, and `app/globals.css` imports that, because Next's
    App Router admits global CSS only from the root layout.
-8. **Everything is exported from `ui-kit/index.tsx`**, the folder's one front door. Surfaces
+9. **Everything is exported from `ui-kit/index.tsx`**, the folder's one front door. Surfaces
    (`minutes/`, `surfaces/`) import from it and never deep-import.
 
 **Configuration.** Per browser only: `vexa.shell.v1` (layout) and `vexa.terminal.theme` (theme).
@@ -154,9 +205,9 @@ Neither is sent to a server.
 | **P6** one front door | layout, primitives and the formatter are exported only from `src/ui-kit/index.tsx`; `minutes/` and `surfaces/` import from there | `gate:exports`; ungated inside the terminal: reviewed |
 | **P9** mechanically enforced | the layout rules are a unit sweep (`shellLayout.test.ts`, 320–2560px, every preference) and a browser sweep (`scripts/layout-sweep.mjs`, L1–L3) | `gate:node` (vitest); the browser sweep runs on bbb and is attached to the PR |
 | **P12** every folder self-documents | `ui-kit/layout/`, `ui-kit/primitives/` and `ui-kit/format/` each carry a README | `gate:readme` |
-| **P17** licence-clean | no new dependency. `lucide-react` (ISC) was already in the lockfile; Playwright (Apache-2.0) is not a terminal dependency — the sweep runs where it is installed | `gate:licenses` |
+| **P17** licence-clean | no new dependency. `geist` (the Geist fonts, SIL OFL-1.1, FINOS Category B) was already a dependency and is logged as an exception in `license-exceptions.json` — served unmodified as web fonts; `lucide-react` (ISC) was already in the lockfile; Playwright (Apache-2.0) is not a terminal dependency — the sweep runs where it is installed | `gate:licenses` |
 | **P18** fail loud | a storage failure degrades to defaults (the shell still renders) and is never thrown into the page; nothing is swallowed into a wrong layout | `layoutPrimitives.test.tsx` ("storage that throws still yields a working layout") |
-| **P23** one writer per carrier | `vexa.shell.v1` is written only by `useShellLayout`; the old keys are read once and never written | ungated: reviewed |
+| **P23** one writer per carrier | colour and size values are written only in `tokens.css`; `vexa.shell.v1` only by `useShellLayout`; the theme only by `theme.ts` | G3 and G7 for tokens (`designTokens.test.ts`); ungated for the layout store and theme: reviewed |
 
 ### Security
 
@@ -177,6 +228,9 @@ Neither is sent to a server.
 
 | ID | Rule | Test | Status |
 |---|---|---|---|
+| G7 | every declared text pair ≥ 4.5:1 and boundary pair (control border, focus ring, selected bar) ≥ 3:1, in both themes | `src/ui-kit/__tests__/designTokens.test.ts` | **have** |
+| G3 | every `var(--x)` in the terminal resolves to a token that exists; no colour behind a `var()` fallback | same file | **have** |
+| G1 | no raw colour outside `tokens.css` and an allowlist | same file (counted) and `src/surfaces/__tests__/colorTokens.test.ts` (hex in style colour properties, now including `minutes/`) | **report only** for the count; the hex-in-style check fails |
 | L-unit | every width 320–2560 × every preference: columns add up, the conversation is at least its mode's floor, the rail folds before the pages panel, an auto-collapse never writes a preference, stored widths are clamped not discarded | `src/ui-kit/__tests__/shellLayout.test.ts` | **have** (rides `gate:node`) |
 | L1–L3 | in a browser at 640–1920 in both themes: no pane scrolls sideways, the conversation meets its floor, the composer toolbar is one row, a tab strip that hides a tab shows its overflow control | `clients/terminal/scripts/layout-sweep.mjs` | **have** (run on bbb; attached to the PR; CI later) |
 | KV | no `overflow-wrap: anywhere` in the metadata table; stacked below 360px; dates and long tokens are single units | `src/ui-kit/__tests__/keyValue.test.tsx` | **have** |

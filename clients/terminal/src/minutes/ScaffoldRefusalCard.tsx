@@ -24,7 +24,7 @@ export function ScaffoldRefusalCard({ refusal, signedInAs, onDismiss }: {
   return (
     <div role="alert" data-scaffold-refusal={refusal.reason}
       style={{ flex: "none", margin: "12px 14px 0", padding: "12px 14px", borderRadius: 8,
-        border: "1px solid var(--line)", background: "var(--bg2, var(--bg))" }}>
+        border: "1px solid var(--line)", background: "var(--surface-0)" }}>
       <div style={{ ...ty.title, fontSize: 13.5, color: "var(--t1)", marginBottom: 4 }}>{c.title}</div>
       <div data-refusal="body" style={{ ...ty.body, color: "var(--t3)", lineHeight: 1.55 }}>{c.body}</div>
       <div style={{ display: "flex", gap: 8, marginTop: 10 }}>

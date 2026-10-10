@@ -21,7 +21,7 @@
   top: 0;
   bottom: 0;
   width: 8px;
-  z-index: 20;
+  z-index: var(--z-splitter);
   cursor: col-resize;
   display: flex;
   justify-content: center;
@@ -39,7 +39,7 @@
   background: var(--accent);
 }
 .vx-splitter:focus-visible {
-  box-shadow: inset 0 0 0 2px var(--accent);
+  box-shadow: inset 0 0 0 2px var(--focus-ring);
   border-radius: 2px;
 }
 :root[data-resizing],
@@ -57,14 +57,14 @@
   position: absolute;
   top: 0;
   bottom: 0;
-  z-index: 30;
+  z-index: var(--z-drawer);
   display: flex;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  background: var(--bg);
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+  background: var(--surface-0);
+  box-shadow: var(--shadow-2);
   visibility: hidden;
   outline: none;
 }
@@ -83,24 +83,24 @@
 .vx-scrim {
   position: absolute;
   inset: 0;
-  z-index: 29;
-  background: rgba(0, 0, 0, 0.32);
+  z-index: calc(var(--z-drawer) - 1);
+  background: var(--scrim);
 }
 /* Visibility flips at once on open (so focus can move in on the same frame) and only after the
  * slide on close (so the panel does not vanish mid-slide). */
 @media (prefers-reduced-motion: no-preference) {
   .vx-sheet[data-form="overlay"],
   .vx-sheet[data-form="fullscreen"] {
-    transition: transform 240ms cubic-bezier(.2, .8, .2, 1), visibility 0s linear 240ms;
+    transition: transform var(--dur-slow) var(--ease-out), visibility 0s linear var(--dur-slow);
   }
   .vx-sheet[data-open] {
-    transition: transform 240ms cubic-bezier(.2, .8, .2, 1), visibility 0s;
+    transition: transform var(--dur-slow) var(--ease-out), visibility 0s;
   }
 }
 @media (prefers-reduced-motion: reduce) {
   .vx-sheet[data-form="overlay"],
-  .vx-sheet[data-form="fullscreen"] { transform: none; opacity: 0; transition: opacity 120ms, visibility 0s linear 120ms; }
-  .vx-sheet[data-open] { opacity: 1; transition: opacity 120ms, visibility 0s; }
+  .vx-sheet[data-form="fullscreen"] { transform: none; opacity: 0; transition: opacity var(--dur-fast), visibility 0s linear var(--dur-fast); }
+  .vx-sheet[data-open] { opacity: 1; transition: opacity var(--dur-fast), visibility 0s; }
 }
 
 /* ── The rail's icon strip ────────────────────────────────────────────────────────────────── */
@@ -114,6 +114,6 @@
   padding-top: 10px;
   min-width: 0;
   overflow: hidden;
-  background: var(--bg);
-  border-right: 1px solid var(--line);
+  background: var(--surface-0);
+  border-right: 1px solid var(--border-subtle);
 }
