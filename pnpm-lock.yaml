@@ -110,6 +110,9 @@ importers:
       remark-gfm:
         specifier: ^4.0.1
         version: 4.0.1
+      sharp:
+        specifier: link:../../core/meetings/modules/no-image-backend
+        version: link:../../core/meetings/modules/no-image-backend
       sonner:
         specifier: ^2.0.7
         version: 2.0.7(react-dom@19.2.7(react@19.2.7))(react@19.2.7)

@@ -73,6 +73,23 @@
       ]
     },
     {
+      "id": "no-image-backend-terminal",
+      "fact": "the sharp stand-in, in the pnpm tree and in the terminal's npm tree",
+      "kind": "file-bytes",
+      "enforced": true,
+      "canonical": "core/meetings/modules/no-image-backend/src/index.cjs",
+      "how_to_agree": "edit the module's copy and vendor it VERBATIM into clients/terminal/no-image-backend",
+      "why": "Both trees replace sharp so that nothing installs libvips (LGPL, FINOS Category X): pnpm-workspace.yaml links the module, and the terminal's npm project, whose build context is clients/terminal alone, carries its own copy (package.json \"sharp\": \"file:./no-image-backend\"). One stand-in, so one typed fault, in two places.",
+      "sites": [
+        {
+          "path": "core/meetings/modules/no-image-backend/src/index.cjs"
+        },
+        {
+          "path": "clients/terminal/no-image-backend/src/index.cjs"
+        }
+      ]
+    },
+    {
       "id": "connection-setup-schema",
       "fact": "the shape of a custom-service setup proposal",
       "kind": "file-bytes",

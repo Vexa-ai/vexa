@@ -1,7 +1,9 @@
 # Dependency review: a pull request may not add a runtime dependency with a HIGH or CRITICAL advisory,
 # or under a licence outside FINOS Categories A and B. LGPL is not on the list: FINOS lists it as
-# Category X. The repository's own reviewed exceptions (license-exceptions.json) are enforced by
-# gate:licenses; this check reads GitHub's dependency graph for the diff of the pull request only.
+# Category X, and so does ADR-0004. gate:licenses fails if `allow-licenses` names a licence its
+# classifier does not put in Category A or B. The repository's own reviewed exceptions
+# (license-exceptions.json) are enforced by gate:licenses; this check reads GitHub's dependency graph
+# for the diff of the pull request only.
 name: Dependency review
 
 on:
@@ -48,10 +50,10 @@ jobs:
           # Reviewed exceptions, by package (security/known-advisories.md § Dependency review):
           #  - typing-extensions is PSF-2.0 (its own license_expression); GitHub's detector reads the PSF
           #    licence file's history section and reports GPL-1.0-or-later.
-          #  - libvips behind sharp (LGPL-3.0-or-later, and the win32/wasm builds that bundle it) is left in
-          #    two npm locks: the terminal's (its build stage installs it, its runtime tree removes it) and
-          #    the retiring dashboard's, whose image optimizer uses it (license-exceptions.json,
-          #    security/known-advisories.md). The pnpm tree loads core/meetings/modules/no-image-backend.
+          #  - libvips behind sharp (LGPL-3.0-or-later, Category X, and the win32/wasm builds that bundle
+          #    it) is left only in the retiring dashboard's npm lock, which this line does not build and
+          #    whose image optimizer uses it (security/known-advisories.md). The pnpm tree and the
+          #    terminal's npm project both load the no-image-backend stand-in.
           #  - json-schema 0.4.0 (the dashboard, via @ai-sdk/provider) declares "(AFL-2.1 OR BSD-3-Clause)"
           #    and is taken under BSD-3-Clause; GitHub's detector reads its licence files as AND.
           allow-dependencies-licenses: >-

@@ -342,6 +342,14 @@ test("image-licenses RED: the terminal image keeping sharp (LGPL libvips) reds",
   assert.match(r.out, /clients\/terminal\/Dockerfile \(deps-prod\) ships sharp/);
 });
 
+test("image-licenses RED: libvips back in the terminal's npm lock reds", () => {
+  const r = withEdited("clients/terminal/package-lock.json", `    "node_modules/sharp": {`,
+    `    "node_modules/@img/sharp-libvips-linux-x64": {\n      "version": "1.3.4",\n      "license": "LGPL-3.0-or-later",\n      "optional": true\n    },\n    "node_modules/sharp": {`,
+    () => runGate("image-licenses"));
+  assert.equal(r.green, false, "a locked libvips sailed through");
+  assert.match(r.out, /clients\/terminal\/package-lock\.json locks @img\/sharp-libvips-linux-x64/);
+});
+
 test("image-licenses RED: Lite's terminal tree keeping sharp reds", () => {
   const r = withEdited(LITE, SHARP_PRUNE, "", () => runGate("image-licenses"));
   assert.equal(r.green, false, "Lite's terminal-builder kept sharp and the gate stayed green");
@@ -529,9 +537,55 @@ test("licenses RED: a Python package under a Cat X licence is FORBIDDEN", () => 
   assert.match(r.out, /FORBIDDEN \(Cat X\) GPL-3\.0-only/);
 });
 
-test("licenses RED: an AND expression is as restrictive as its worst term (Apache-2.0 AND LGPL is Cat B)", () => {
+test("licenses RED: an AND expression is as restrictive as its worst term (Apache-2.0 AND MPL is Cat B)", () => {
   const key = firstKey("h11==");
-  const r = withEdited(PY_INDEX, `"${key}": "MIT"`, `"${key}": "Apache-2.0 AND LGPL-3.0-or-later"`, () => runGate("licenses"));
-  assert.equal(r.green, false, "an AND with an LGPL term was read as Cat A from its leading term");
-  assert.match(r.out, /Cat-B Apache-2\.0 AND LGPL-3\.0-or-later needs a license-exceptions\.json categoryB row/);
+  const r = withEdited(PY_INDEX, `"${key}": "MIT"`, `"${key}": "Apache-2.0 AND MPL-2.0"`, () => runGate("licenses"));
+  assert.equal(r.green, false, "an AND with an MPL term was read as Cat A from its leading term");
+  assert.match(r.out, /Cat-B Apache-2\.0 AND MPL-2\.0 needs a license-exceptions\.json categoryB row/);
+});
+
+// ── S71: one LGPL category, FINOS's ─────────────────────────────────────────────────────────────
+// FINOS lists LGPL-2.1 and LGPL-3.0 as Category X and CDDL and OFL-1.1 as Category B. The classifier
+// used to put LGPL in B (so a logged row admitted it) and OFL in A; dependency review already used
+// FINOS's list, and nothing held the two together.
+
+test("licenses RED: LGPL is Category X, so no exception row admits it", () => {
+  const key = firstKey("h11==");
+  const r = withEdited(PY_INDEX, `"${key}": "MIT"`, `"${key}": "LGPL-2.1-or-later"`, () => runGate("licenses"));
+  assert.equal(r.green, false, "an LGPL package passed");
+  assert.match(r.out, /FORBIDDEN \(Cat X\) LGPL-2\.1-or-later/);
+  const and = withEdited(PY_INDEX, `"${key}": "MIT"`, `"${key}": "Apache-2.0 AND LGPL-3.0-or-later"`, () => runGate("licenses"));
+  assert.match(and.out, /FORBIDDEN \(Cat X\) Apache-2\.0 AND LGPL-3\.0-or-later/);
+});
+
+test("licenses RED: CDDL is Category B and needs a logged row", () => {
+  const key = firstKey("h11==");
+  const r = withEdited(PY_INDEX, `"${key}": "MIT"`, `"${key}": "CDDL-1.0"`, () => runGate("licenses"));
+  assert.equal(r.green, false, "a CDDL package passed with no logged row");
+  assert.match(r.out, /Cat-B CDDL-1\.0 needs a license-exceptions\.json categoryB row/);
+});
+
+test("licenses RED: a categoryB row may not hold an LGPL licence", () => {
+  const r = withEdited("license-exceptions.json", `"license": "MPL-2.0",\n      "reason": "Native CSS`,
+    `"license": "LGPL-3.0-only",\n      "reason": "Native CSS`, () => runGate("licenses"));
+  assert.equal(r.green, false, "an LGPL row sat in categoryB");
+  assert.match(r.out, /categoryB row "lightningcss" is LGPL-3\.0-only, Cat X/);
+});
+
+test("licenses RED: dependency review may not allow a licence the classifier calls Cat X", () => {
+  const r = withEdited(".github/workflows/dependency-review.yml", "            0BSD,\n",
+    "            0BSD,\n            LGPL-3.0-only,\n", () => runGate("licenses"));
+  assert.equal(r.green, false, "dependency review admitted LGPL and the gate stayed green");
+  assert.match(r.out, /dependency-review\.yml allows LGPL-3\.0-only, which this classifier puts in Cat X/);
+});
+
+// ── S73: the terminal's npm lock is in the gate ─────────────────────────────────────────────────
+// Its images install with `npm ci` from clients/terminal/package-lock.json, which pnpm's index does
+// not read. Before S73 this plant was green.
+
+test("licenses RED: a Cat X package in the terminal's npm lock is forbidden", () => {
+  const r = withEdited("clients/terminal/package-lock.json",
+    /("node_modules\/zod": \{[^}]*?"license": ")MIT(")/, "$1LGPL-3.0-only$2", () => runGate("licenses"));
+  assert.equal(r.green, false, "the terminal's npm lock was not read");
+  assert.match(r.out, /FORBIDDEN \(Cat X\) LGPL-3\.0-only: zod/);
 });

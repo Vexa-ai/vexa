@@ -22,6 +22,7 @@ import { checkParity, MANIFEST_PATH as PARITY_MANIFEST } from "./check-parity.mj
 import { checkVendorPayload, NATIVE_DIR } from "./check-vendor-payload.mjs";
 import { checkPythonLicenses, INDEX_FILE as PY_LICENSE_INDEX } from "./check-python-licenses.mjs";
 import { collectPinnedImages } from "./pinned-images.mjs";
+import { npmLockInventory } from "./npm-locks.mjs";
 
 const ROOT = process.cwd();
 const SKIP = new Set(["node_modules", "dist", ".turbo", "__pycache__", "test-results", "playwright-report", "coverage"]);
@@ -432,14 +433,17 @@ function gateEvalBaseline() {
 // npm: pnpm's built-in licence index (no added dependency to vet — itself a P17 win). Python: every
 // package a Dockerfile installs, from the uv.lock it syncs and the pip lines it runs, against the
 // reviewed python-licenses.json (scripts/check-python-licenses.mjs). Cat A (permissive) passes;
-// Cat B (LGPL/MPL/EPL) must be listed in license-exceptions.json; Cat X (GPL/AGPL/SSPL/BSL/…) and
-// any unclassified licence fail the build. B is checked before X so LGPL never trips the GPL match.
+// Cat B (MPL/EPL/CDDL/OFL) must be listed in license-exceptions.json; Cat X (GPL/LGPL/AGPL/SSPL/BSL/…)
+// and any unclassified licence fail the build.
 // FINOS licence classifier (ADR-0004), shared by gate:licenses (npm/py deps) and gate:image-licenses
-// (baked apt packages + pinned container images). B is tested before X so LGPL never trips the GPL
-// match. Cat X is where Redis ≥7.4's RSALv2/SSPLv1 lands — the exact class #653 keeps out of our images.
-const LICENSE_A = [/^MIT/, /^Apache-2\.0/i, /^BSD\b/, /^BSD-/, /^ISC/, /^0BSD/, /^Unlicense/, /^CC0-/, /^CC-BY-/, /^Python-2\.0/, /^PSF-2\.0$/, /^PostgreSQL$/i, /^BlueOak/, /^Zlib/i, /^MIT-0/, /^WTFPL/i, /^SIL OPEN FONT LICENSE/i];
-const LICENSE_B = [/LGPL/i, /^MPL/i, /^EPL/i];                                    // weak copyleft — needs a logged exception
-const LICENSE_X = [/(^|[^L])GPL/i, /AGPL/i, /SSPL/i, /\bBSL\b/i, /Business Source/i, /Elastic-/i, /Commons.?Clause/i, /Proprietary/i, /UNLICENSED/, /\bRSALv?\d/i, /Redis Source Available/i];
+// (baked apt packages + pinned container images). The categories are FINOS's own list
+// (community.finos.org, "License Categories"): LGPL is Category X there, beside GPL and AGPL, and CDDL
+// and OFL are Category B. Cat X is also where Redis ≥7.4's RSALv2/SSPLv1 lands — the exact class #653
+// keeps out of our images. `.github/workflows/dependency-review.yml`'s allow-list is held to this
+// classifier by scripts/gates.test.mjs: every licence it allows must classify A or B here.
+const LICENSE_A = [/^MIT/, /^Apache-2\.0/i, /^BSD\b/, /^BSD-/, /^ISC/, /^0BSD/, /^Unlicense/, /^CC0-/, /^CC-BY-/, /^Python-2\.0/, /^PSF-2\.0$/, /^PostgreSQL$/i, /^BlueOak/, /^Zlib/i, /^MIT-0/, /^WTFPL/i];
+const LICENSE_B = [/^MPL/i, /^EPL/i, /^CDDL/i, /^OFL-/i, /^SIL OPEN FONT LICENSE/i];   // weak copyleft — needs a logged exception
+const LICENSE_X = [/GPL/i, /AGPL/i, /SSPL/i, /\bBSL\b/i, /Business Source/i, /Elastic-/i, /Commons.?Clause/i, /Proprietary/i, /UNLICENSED/, /\bRSALv?\d/i, /Redis Source Available/i];
 // One licence NAME, matched whole. → "A" | "B" | "X" | "?"; see classifyLicense for expressions.
 function classifyTerm(lic) {
   if (LICENSE_A.some((re) => re.test(lic))) return "A";
@@ -457,7 +461,7 @@ function classifyTerm(lic) {
 // because the general one subsumes it.
 //
 // AN `AND` BINDS US TO EVERY TERM AT ONCE, so a conjunction is as restrictive as its most restrictive
-// term: `MPL-2.0 AND MIT` (tqdm) is Cat B, `Apache-2.0 AND LGPL-3.0-or-later` is Cat B, and a term
+// term: `MPL-2.0 AND MIT` (tqdm) is Cat B, `Apache-2.0 AND LGPL-3.0-or-later` is Cat X, and a term
 // nobody has classified leaves the whole conjunction unclassified. Matched as a whole string, the
 // leading term decided alone — `Apache-2.0 AND LGPL-3.0-or-later` read as Cat A.
 const CAT_RANK = { A: 0, B: 1, "?": 2, X: 3 };
@@ -471,6 +475,19 @@ function classifyLicense(lic) {
   if (terms.length < 2) return classifyConjunction(String(lic));
   const cats = terms.map(classifyConjunction);
   return cats.includes("A") ? "A" : cats.includes("B") ? "B" : cats.includes("X") ? "X" : "?";
+}
+
+// Every licence `.github/workflows/dependency-review.yml` allows, classified here. → error strings.
+function dependencyReviewDrift(root) {
+  const wf = join(root, ".github", "workflows", "dependency-review.yml");
+  if (!existsSync(wf)) return [];
+  const m = readFileSync(wf, "utf8").match(/^\s*allow-licenses:\s*>-?\s*\n((?:[ \t]+[^\s#][^\n]*\n?)+)/m);
+  if (!m) return [`${rel(wf)}: no \`allow-licenses\` list found — the gate cannot hold it to the classifier`];
+  const ids = m[1].split(/[,\s]+/).map((t) => t.trim()).filter(Boolean);
+  return ids
+    .map((id) => [id, classifyLicense(id)])
+    .filter(([, cat]) => cat !== "A" && cat !== "B")
+    .map(([id, cat]) => `${rel(wf)} allows ${id}, which this classifier puts in Cat ${cat} — dependency review must admit FINOS Categories A and B only`);
 }
 
 function gateLicenses() {
@@ -487,6 +504,20 @@ function gateLicenses() {
   // not run since the lockfile grew). "Cannot read the tree" is a FAILURE, not green-on-empty — the
   // gate has verified nothing.
   if (data?.error) return fail([`\`pnpm licenses list\` could not read the dependency tree: ${data.error.message ?? data.error.code ?? "unknown error"}`]);
+  // THE npm PROJECTS OUTSIDE THE pnpm TREE (scripts/npm-locks.mjs). The terminal's images install from
+  // clients/terminal/package-lock.json with `npm ci`, whose overrides differ from pnpm's, so the pnpm
+  // index does not describe them (S73). Each such lock is folded into the same index and classified by
+  // the same rules, exceptions included.
+  let lockInv;
+  try { lockInv = npmLockInventory(ROOT); }
+  catch (e) { return fail([`npm lockfiles: could not be read — ${errText(e).slice(0, 400)}`]); }
+  let lockAdded = 0;
+  for (const p of lockInv.packages) {
+    const list = (data[p.license] ||= []);
+    if (list.some((q) => q.name === p.name)) continue;
+    list.push({ name: p.name, versions: [p.version], from: p.locks });
+    lockAdded++;
+  }
   const exFile = join(ROOT, "license-exceptions.json");
   const exFileData = existsSync(exFile) ? JSON.parse(readFileSync(exFile, "utf8")) : {};
   // npm rows only: a `"ecosystem": "pypi"` row is the Python half's, matched by exact name there.
@@ -499,6 +530,12 @@ function gateLicenses() {
   const listedIn = (list, name) => list.some((e) => name === e.package || name.startsWith(e.package));
   const excepted = (name) => listedIn(exceptions, name);
   const bad = [], flagged = [];
+  // A categoryB row holds FINOS Category B only. LGPL is Category X (ADR-0004, amended 2026-10-10), so an
+  // LGPL row here would be a Cat X licence admitted by exception, which P17 forbids.
+  for (const r of exFileData.categoryB || []) {
+    const cat = classifyLicense(r.license || "");
+    if (cat !== "B") bad.push(`license-exceptions.json categoryB row "${r.package}" is ${r.license || "(no licence)"}, Cat ${cat} — a categoryB row may hold Category B only (MPL/EPL/CDDL/OFL)`);
+  }
   for (const [lic, pkgs] of Object.entries(data)) {
     const names = pkgs.map((p) => p.name);
     const cat = classifyLicense(lic);
@@ -518,13 +555,17 @@ function gateLicenses() {
     }
     bad.push(`unclassified licence "${lic}": ${names.join(", ")} — classify it in scripts/gates.mjs or replace the dep`);
   }
+  // DEPENDENCY REVIEW READS THE SAME CATEGORIES. Its `allow-licenses` list is the pull-request-time
+  // copy of this policy (GitHub's dependency graph, the diff only); every licence it admits must be
+  // Cat A or B here, so the two can never disagree about a category again (S71: they did about LGPL).
+  bad.push(...dependencyReviewDrift(ROOT));
   let py;
   try { py = checkPythonLicenses(ROOT, classifyLicense); }
   catch (e) { return fail([...bad, `Python licences: the checker itself failed — ${errText(e).slice(0, 800)}`]); }
   bad.push(...py.errs);
   if (bad.length) return fail(bad);
   const total = Object.values(data).reduce((n, p) => n + p.length, 0);
-  console.log(`  ✓ gate:licenses — ${total} npm deps OSS-clean (Cat A${flagged.length ? `; ${flagged.length} by logged exception: ${flagged.join("; ")}` : ""})`);
+  console.log(`  ✓ gate:licenses — ${total} npm deps OSS-clean, ${lockAdded} of them only in ${lockInv.locks.join(", ") || "no npm lockfile"} (Cat A${flagged.length ? `; ${flagged.length} by logged exception: ${flagged.join("; ")}` : ""})`);
   console.log(`  ✓ gate:licenses — ${py.total} Python packages from ${py.installs} install line(s) in ${py.dockerfiles} Dockerfile(s) OSS-clean against ${PY_LICENSE_INDEX} (Cat A${py.flagged.length ? `; ${py.flagged.length} by logged exception: ${py.flagged.join("; ")}` : ""})`);
   return true;
 }
@@ -618,6 +659,20 @@ function gateImageLicenses() {
       bad.push(`pnpm-lock.yaml locks ${natives.join(", ")} — libvips (LGPL-3.0-or-later) is back in the bot images. sharp must resolve to the stand-in: pnpm-workspace.yaml overrides "sharp": "link:./core/meetings/modules/no-image-backend"`);
     if (!/^ {2}sharp: link:(?:\.\/)?core\/meetings\/modules\/no-image-backend$/m.test(lockText))
       bad.push("pnpm-lock.yaml does not override sharp with core/meetings/modules/no-image-backend — the real sharp, and libvips with it, would install for @huggingface/transformers");
+  }
+
+  // (6) …and the terminal's npm lock, which every terminal image installs from (`npm ci`), carries
+  //     none either: package.json points sharp at its own stand-in (clients/terminal/no-image-backend,
+  //     byte-held to the bot's by the parity fact no-image-backend-terminal), so no stage, build
+  //     stages included, downloads libvips.
+  const termLock = join(ROOT, "clients", "terminal", "package-lock.json");
+  if (existsSync(termLock)) {
+    const pk = JSON.parse(readFileSync(termLock, "utf8")).packages || {};
+    const natives = Object.keys(pk).filter((k) => /(^|\/)node_modules\/@img\/sharp-/.test(k));
+    if (natives.length)
+      bad.push(`clients/terminal/package-lock.json locks ${natives.map((k) => k.replace(/^.*node_modules\//, "")).join(", ")} — libvips (LGPL, FINOS Category X) is back in the terminal's installs. sharp must resolve to the stand-in: package.json "sharp": "file:./no-image-backend" with the override "$sharp"`);
+    if (pk["node_modules/sharp"]?.resolved !== "no-image-backend" || pk["node_modules/sharp"]?.link !== true)
+      bad.push("clients/terminal/package-lock.json does not resolve sharp to ./no-image-backend — the real sharp, and libvips with it, would install for next");
   }
 
   if (bad.length) return fail(bad);

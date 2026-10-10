@@ -55,11 +55,12 @@ RUN cd /build && node core/meetings/services/bot/warm-hf-cache.mjs || echo "[bot
 FROM mcr.microsoft.com/playwright:v1.56.0-noble AS terminal-builder
 WORKDIR /app/terminal
 COPY clients/terminal/package.json clients/terminal/package-lock.json ./
+COPY clients/terminal/no-image-backend ./no-image-backend
 RUN npm ci --no-audit --no-fund
 COPY clients/terminal/ ./
 # next build needs the dev deps (typescript/tailwind); prune them after so the runtime tree is lean.
-# sharp and its @img/* natives (LGPL libvips among them) go too: next loads sharp only for the image
-# optimizer, which the terminal's next.config.ts turns off (same as clients/terminal/Dockerfile).
+# sharp goes too: it resolves to the terminal's stand-in (no libvips is installed), and next loads it
+# only for the image optimizer, which next.config.ts turns off (same as clients/terminal/Dockerfile).
 RUN npm run build && npm prune --omit=dev && rm -rf node_modules/sharp node_modules/@img
 
 # -----------------------------------------------------------------------------

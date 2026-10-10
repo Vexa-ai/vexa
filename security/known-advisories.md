@@ -31,16 +31,17 @@ archive with it at runtime.
 
 [`.github/workflows/dependency-review.yml`](../.github/workflows/dependency-review.yml) fails a pull
 request that adds a runtime dependency with a HIGH or CRITICAL advisory, or one licensed outside FINOS
-Categories A and B (LGPL is Category X there). Its reviewed exceptions:
+Categories A and B (LGPL is Category X there, and in ADR-0004 since 2026-10-10). `gate:licenses` holds its
+`allow-licenses` list to the same classifier. Its reviewed exceptions:
 
 - **`typing-extensions`** is PSF-2.0 (its own `license_expression`); GitHub's licence detector reads the
   history section of the PSF licence file and reports GPL-1.0-or-later.
 - **libvips behind `sharp`** (`@img/sharp-libvips-*`, and the `@img/sharp-wasm32` / `@img/sharp-win32-*`
-  builds that bundle it; LGPL-3.0-or-later) remains in two npm locks outside the pnpm tree:
-  `clients/terminal/package-lock.json`, installed by the terminal's build stage and removed from its
-  runtime tree, and `services/dashboard/package-lock.json`, the retiring 0.10 dashboard whose `next/image`
-  uses it ([`license-exceptions.json`](../license-exceptions.json)). The pnpm tree, and so the bot and
-  Lite, load `core/meetings/modules/no-image-backend` instead.
+  builds that bundle it; LGPL-3.0-or-later, Category X) remains only in
+  `services/dashboard/package-lock.json`, the retiring 0.10 dashboard, which this line does not build and
+  whose `next/image` uses it. The pnpm tree, and so the bot and Lite, load
+  `core/meetings/modules/no-image-backend` instead, and the terminal's npm project loads its byte-identical
+  copy (`clients/terminal/no-image-backend`), so neither installs libvips in any stage.
 - **`json-schema`** 0.4.0 (the dashboard, through `@ai-sdk/provider`) declares `(AFL-2.1 OR BSD-3-Clause)`
   and is taken under BSD-3-Clause; GitHub's detector reads its licence files as an AND.
 

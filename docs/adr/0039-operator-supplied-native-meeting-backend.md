@@ -2,7 +2,9 @@
 
 Status: **Accepted** · 2026-10-09 · founder decision: the SDK is not a dependency but an option; an
 operator who needs it downloads it. Amends P17 in `docs/docs/governance/architecture.mdx` and records a
-Category B licence decision (Qt5Core) under [ADR-0004](0004-open-source-dependency-and-license-policy.md).
+licence decision (Qt5Core) under [ADR-0004](0004-open-source-dependency-and-license-policy.md).
+Amended 2026-10-10: Qt5Core is LGPL, which FINOS lists as Category X, so it is logged as part of the
+operator-supplied runtime, not as a Category B exception.
 
 Issue: [Retrieve named transcripts from native meetings — integrate the operator-supplied SDK backend](https://github.com/Vexa-ai/vexa/issues/1772).
 
@@ -52,8 +54,9 @@ disposed of, is held by the runtime's own tests (`native-meeting/test/`).
 
 Only Vexa-owned wrapper source is tracked. The operator downloads the SDK from
 Zoom under Zoom's own terms, which restrict bot and notetaker use, and is
-responsible for that licence. The wrapper links Qt5Core (LGPL-3.0), logged as a
-Category B exception and never shipped by Vexa. Missing external files fail
+responsible for that licence. The wrapper links Qt5Core (LGPL-3.0, FINOS Category
+X), logged as part of that operator-supplied runtime (`license-exceptions.json`,
+`operatorSupplied`) and never shipped by Vexa. Missing external files fail
 explicitly. Enabling stock dispatch, or claiming support, needs its own decision.
 
 Operator app credentials are backend secrets; users authorize separately via
