@@ -1,0 +1,13 @@
+# Build context for services/dashboard/Dockerfile (context = repository root).
+# BuildKit reads this file instead of the repository-root .dockerignore, so the
+# dashboard build gets exactly what its Dockerfile copies and nothing else.
+*
+!deploy/helm/charts/vexa/Chart.yaml
+!packages/transcript-rendering/package.json
+!packages/transcript-rendering/dist
+!services/dashboard
+services/dashboard/node_modules
+services/dashboard/.next
+services/dashboard/.env
+services/dashboard/.env.*
+services/dashboard/src/lib/release-version.generated.json

@@ -3,5 +3,12 @@
   "effectiveAfterPullRequest": 1008,
   "verifiers": [
     "DmitriyG228"
-  ]
+  ],
+  "contributors": {
+    "DmitriyG228": {
+      "path": "independent",
+      "declared": "2026-08-14",
+      "source": "maintainer standing declaration; reaffirmed 2026-10-02"
+    }
+  }
 }

@@ -1,11 +1,19 @@
 # merge-card — choke point 1 of the delivery constitution, enforced. MAIN accepts a PR only when
-# BOTH its value and its diff are accepted (the merge bar): value-fsm green + `state: value-signed`
-# (value), and a fresh non-author review approval (diff). This is a required status check on main
-# (added to branch protection alongside `gates`), so the merge queue will not merge without it.
+# every row of its card is accepted (the merge bar): value (value-fsm green + `state: value-signed`),
+# diff (the author holds the commit bit, or a fresh non-author review approval), acceptance (when
+# the PR closes an issue), and, on EVERY PR, a maintainer's architecture pass and security pass
+# recorded for the head (PR-comment markers; the format is in scripts/merge-card-gate.mjs). This is
+# a required status check on main (added to branch protection alongside `gates`), so the merge
+# queue will not merge without it.
 #
 # Runs on pull_request + pull_request_review (PR-entry) and merge_group (the queue re-check, where
-# the PR number is parsed from the queue ref). See scripts/merge-card-gate.mjs and ADR-0029.
+# the PR number is parsed from the queue ref). A comment does not trigger it: merge-card-pass.yml
+# re-runs it when a pass is posted, and finds the run to re-run by the run-name below. See
+# scripts/merge-card-gate.mjs and ADR-0030 (ADR-0029 is its release-time sibling).
 name: merge-card
+# Names each run after the PR it judges: GitHub's run list names every open PR that shares a head,
+# so this is how merge-card-pass.yml tells two PRs on one head apart. merge_group keeps the plain name.
+run-name: "${{ github.event.pull_request && format('merge-card: PR #{0}', github.event.pull_request.number) || 'merge-card' }}"
 
 on:
   pull_request:
@@ -34,19 +42,23 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      # Pin to main so the gate runs TRUSTED code, never a PR branch's version of the script.
-      # (For pull_request the workflow definition already comes from the base branch; this pins
-      # the checked-out script too.) The gate inspects PR state via the API, not the tree.
+      # Check out main so the gate runs main's script, never a PR branch's version of it. This pins
+      # the script only. The workflow definition (this file) is not pinned: GitHub runs a
+      # pull_request or pull_request_review event with the version of this file in the PR's merge
+      # commit (refs/pull/N/merge, the base branch plus the PR's changes), and a merge_group event
+      # with the version in the merge group commit. The gate inspects PR state via the API, not the tree.
       - uses: actions/checkout@v4
         with: { ref: main }
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
-      - name: Value AND diff accepted (the merge card)
+      - name: Every card row accepted (the merge card)
         env:
           GITHUB_REPOSITORY: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
           PR_NUMBERS: ${{ github.event.pull_request.number }}
           MERGE_GROUP_REF: ${{ github.event.merge_group.head_ref }}
+          # The head this run's check is posted for; empty in merge_group (the script's THE HEAD).
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -o pipefail   # the script's non-zero exit must fail the check, not be masked by tee
           node scripts/merge-card-gate.mjs | tee -a "$GITHUB_STEP_SUMMARY"
