@@ -66,6 +66,11 @@ system agent  # the execution domain: a trigger becomes one governed agent turn 
   data-asset redis-acl-users [writers: agent-api, meeting-api]
   data-asset acl-units-index [writers: agent-api]
   data-asset routine-state [writers: agent-api]
+  data-asset delegation-revoked [writers: agent-api]
+  data-asset delegation-records [writers: agent-api]
+  data-asset delegation-current [writers: agent-api]
+  data-asset unit-delegation [writers: agent-api]
+  data-asset unit-fault [writers: agent-api]
 
 system gateway-system  # the one public edge (api.v1, ws.v1)
   service conformance
@@ -197,6 +202,13 @@ edges:
   agent-api -write-> redis-acl-users  # ACL SETUSER/DELUSER a worker's own user per dispatch; restore after a Redis restart
   meeting-api -write-> redis-acl-users  # ACL SETUSER/DELUSER a bot's own user per session; restore after a Redis restart
   agent-api -write-> acl-units-index  # HSET/HDEL the worker users it defined
+  agent-api -write-> delegation-revoked  # SET revoked:<jti> for the token's remaining life when the runtime no longer runs its unit
+  admin-api -read-> delegation-revoked  # EXISTS revoked:<jti> for every verified vxd_ bearer; a store it cannot read refuses the token (503), API keys never read it
+  agent-api -write-> delegation-records  # HSET/SADD a token's jti against its unit before the spawn and at each refresh; HDEL/SREM as tokens are revoked or expire
+  agent-api -write-> delegation-current  # SET the unit's current token at dispatch and at each refresh, and GET it to re-mint
+  agent-api -write-> unit-delegation  # SET the unit's current token for its worker at dispatch and at each half-life refresh
+  agent-worker -read-> unit-delegation  # GET before every turn, write-back and job; read-only to its Redis user
+  agent-api -write-> unit-fault  # SET the typed fault a refused spawn ended in; GET it for the SSE relay and the pending list; DEL on the next spawn
   meeting-api -write-> acl-bots-index  # HSET/HDEL the bot users it defined
   agent-api -write-> routine-state  # routine approvals and the re-signing marker
   agent-api -req-> flows-api  # the publish edge: POST /events (desk.unscaffolded, claim.proposed) and POST /friction with the operator key (X-Flows-Operator-Key); GET /flows/pages to land the pages of authored flows in _global/flows/
