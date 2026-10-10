@@ -332,11 +332,25 @@ class RuntimeHttpClient(RuntimePort):
         return status.get("workloadId", workload_id) if isinstance(status, dict) else workload_id
 
     def live_workloads(self) -> list[str]:
-        """The ids of the workloads the runtime reports starting or running."""
+        """The ids of the workloads the runtime reports starting or running.
+
+        AN ANSWER THAT IS NOT A LIST OF WORKLOADS IS AN ERROR, never "nothing is live" (P18, P21).
+        Both unit-end sweepers read this set and act on what is ABSENT from it — the delegation
+        reaper revokes those units' tokens, the Redis ACL sweeper deletes their workers' users — so
+        reading an unreadable answer as empty would end every live worker's tools and Redis access
+        at once. A body that is not a list, or a row that is not a workload, raises the runtime's
+        ``bad_response`` fault; both sweepers skip a sweep that raises."""
         req = urllib.request.Request(f"{self._base}/workloads", headers=self._auth, method="GET")
         rows = self._call("list", req)
-        return [s["workloadId"] for s in (rows if isinstance(rows, list) else [])
-                if isinstance(s, dict) and s.get("state") in ("starting", "running") and s.get("workloadId")]
+        if not isinstance(rows, list):
+            raise runtime_fault.from_bad_body(
+                "list", ValueError(f"GET /workloads answered {type(rows).__name__}, not a list"))
+        bad = [s for s in rows if not (isinstance(s, dict) and isinstance(s.get("workloadId"), str)
+                                       and s.get("workloadId") and isinstance(s.get("state"), str))]
+        if bad:
+            raise runtime_fault.from_bad_body(
+                "list", ValueError(f"GET /workloads answered {len(bad)} row(s) that are not workloads"))
+        return [s["workloadId"] for s in rows if s["state"] in ("starting", "running")]
 
     def await_done(self, workload_id: str, timeout_sec: float = 0.0) -> str:
         req = urllib.request.Request(f"{self._base}/workloads/{workload_id}", headers=self._auth,
