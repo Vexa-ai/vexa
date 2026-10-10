@@ -21,6 +21,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { AUTH_COOKIE, USER_INFO_COOKIE, findOrCreateUserToken, mintFirstVisitScaffold } from "../adminApi";
 import { redeemMagicToken, safeNext } from "../magicToken";
 import { SIGNIN_NOT_ALLOWED, SIGNIN_UNAVAILABLE } from "../../../signinRefusal";
+import { signinMethodEnabled } from "../oidcConfig.mjs";
 
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
@@ -100,6 +101,11 @@ async function arrival(target: string, email: string, userId: string | number): 
 }
 
 export async function GET(request: NextRequest) {
+  // CLOSED BY THE OPERATOR (`VEXA_SIGNIN_METHODS` without `email`): a link minted before the door was
+  // closed signs nobody in after it.
+  if (!signinMethodEnabled("email")) {
+    return page("Email sign-in is not offered here", "Sign in with one of the options on the sign-in page.", 404, "Back to sign-in");
+  }
   const token = request.nextUrl.searchParams.get("t") || "";
   const target = safeNext(request.nextUrl.searchParams.get("next"));
 

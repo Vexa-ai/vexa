@@ -24,6 +24,8 @@ OID_A = "99999999-8888-7777-6666-555555555555"
 OID_B = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 MS_A = f"microsoft:{TENANT}:{OID_A}"
 MS_B = f"microsoft:{TENANT}:{OID_B}"
+OIDC_A = "oidc:" + "a" * 64
+OIDC_B = "oidc:" + "0123456789abcdef" * 4
 
 
 # ── the rule ──────────────────────────────────────────────────────────────────────────────────
@@ -47,8 +49,17 @@ def test_providers_are_bound_independently():
     assert bound == "first" and data["provider_subjects"] == {"microsoft": MS_A, "google": "google:1234567890"}
 
 
+def test_a_generic_oidc_subject_binds_and_another_is_refused():
+    data, bound = ps.bind({"provider_subjects": {"microsoft": MS_A}}, OIDC_A)
+    assert bound == "first" and data["provider_subjects"] == {"microsoft": MS_A, "oidc": OIDC_A}
+    assert ps.bind(data, OIDC_A)[1] == "same"
+    with pytest.raises(ps.Mismatch):
+        ps.bind(data, OIDC_B)
+
+
 @pytest.mark.parametrize("subject", ["", "microsoft:x:y", f"microsoft:{TENANT}", "github:1", "google:",
-                                     "google:a b", f"MICROSOFT:{TENANT}:{OID_A}"])
+                                     "google:a b", f"MICROSOFT:{TENANT}:{OID_A}", "oidc:", "oidc:" + "a" * 63,
+                                     "oidc:" + "A" * 64, "oidc:" + "a" * 65, "oidc:ZiV3uFjC0b8xQB0/2pF5Nk8="])
 def test_only_the_subjects_the_terminal_makes_are_accepted(subject):
     with pytest.raises(ValueError):
         ps.bind({}, subject)
@@ -116,6 +127,14 @@ def test_the_door_binds_once_then_answers_same(door):
     assert user.data["provider_subjects"] == {"microsoft": MS_A} and db.commits == 1
     same = _put(c, MS_A)
     assert same.status_code == 200 and same.json() == {"bound": "same"} and db.commits == 1
+
+
+def test_the_door_refuses_another_oidc_identity_and_changes_nothing(door):
+    user = User(id=7, email="ana@example.com", data={"provider_subjects": {"oidc": OIDC_A}})
+    c, db = door(user)
+    assert _put(c, OIDC_B).status_code == 409
+    assert user.data == {"provider_subjects": {"oidc": OIDC_A}} and db.commits == 0
+    assert _put(c, OIDC_A).json() == {"bound": "same"}
 
 
 def test_the_door_refuses_another_identity_and_changes_nothing(door):

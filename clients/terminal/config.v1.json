@@ -79,6 +79,77 @@
       "default": "(unset — the terminal's NEXTAUTH_URL)",
       "description": "The origin a browser POST to /api/connections must come from. Deployment configuration only, never a forwarded Host header.",
       "targets": ["compose", "helm"]
+    },
+    {
+      "key": "VEXA_OIDC_ISSUER",
+      "class": "capability",
+      "capability": "oidc_signin",
+      "description": "The issuer URL of the instance's own OpenID Connect provider (ADFS, Keycloak, any OIDC issuer), https only; its discovery document is <issuer>/.well-known/openid-configuration (src/app/api/auth/oidcConfig.mjs). Set, the sign-in card offers the OIDC button, and the terminal refuses to start unless the client id and secret (and a readable CA file, when one is named) are set too. Redirect URI to register at the provider: <public URL>/api/auth/callback/oidc.",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "VEXA_OIDC_CLIENT_ID",
+      "class": "capability",
+      "capability": "oidc_signin",
+      "description": "The client id the provider issued to the terminal; the ID token's audience must be this value.",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "VEXA_OIDC_CLIENT_SECRET",
+      "class": "capability",
+      "capability": "oidc_signin",
+      "description": "The client secret for VEXA_OIDC_CLIENT_ID (confidential client). Helm feeds it from an existing Secret (terminal.oidc.existingSecret).",
+      "secret": true,
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "VEXA_OIDC_SCOPES",
+      "class": "defaulted",
+      "default": "openid email profile",
+      "description": "The scopes requested, space-separated; must include openid. ADFS issues the application's claim rules into the ID token only when allatclaims is requested as well.",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "VEXA_OIDC_DISPLAY_NAME",
+      "class": "defaulted",
+      "default": "Single sign-on",
+      "description": "The sign-in button's label: \"Continue with <name>\".",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "VEXA_OIDC_CA_FILE",
+      "class": "defaulted",
+      "default": "(unset — Node's public roots)",
+      "description": "Path to a PEM bundle with the CA chain the provider's TLS certificate is issued under (an internal PKI). Added to Node's public roots for the OIDC requests (discovery, token, keys); unreadable or holding no certificate, the terminal refuses to start. Helm mounts it from a ConfigMap or Secret (terminal.oidc.caBundle).",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "VEXA_OIDC_EMAIL_CLAIM",
+      "class": "defaulted",
+      "default": "email",
+      "description": "The ID-token claim that carries the person's address (for example upn on ADFS). Claims are read from the verified ID token only; the userinfo endpoint is never called.",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "VEXA_OIDC_NAME_CLAIM",
+      "class": "defaulted",
+      "default": "name",
+      "description": "The ID-token claim that carries the display name; absent, given_name and family_name are joined, else the address is used.",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "VEXA_OIDC_REQUIRE_EMAIL_VERIFIED",
+      "class": "defaulted",
+      "default": "0",
+      "description": "1 = refuse a sign-in unless the ID token says email_verified: true. Off by default because the issuer is the operator's own directory (ADFS emits no such claim); turn it on for a provider where people set their own address.",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "VEXA_SIGNIN_METHODS",
+      "class": "defaulted",
+      "default": "(unset — every configured method)",
+      "description": "Which sign-in doors this instance offers: a comma-separated subset of google, microsoft, oidc, email. A method left out is not registered (its routes refuse), not merely hidden. An unknown entry, or oidc without VEXA_OIDC_ISSUER, refuses to start.",
+      "targets": ["compose", "helm"]
     }
   ],
   "capabilities": {
@@ -86,6 +157,11 @@
       "description": "Connections in the browser: a person connects, saves, disconnects and deletes accounts and services through the credential broker",
       "mode": "all",
       "when_unconfigured": "every /api/connections route answers 503 with one generic sentence, and the OAuth callback logs a config fault"
+    },
+    "oidc_signin": {
+      "description": "Sign-in through the instance's own OpenID Connect provider (ADFS, Keycloak)",
+      "mode": "all",
+      "when_unconfigured": "no OIDC button is offered and /api/auth/callback/oidc completes nothing; a partial configuration refuses to start the terminal"
     }
   }
 }

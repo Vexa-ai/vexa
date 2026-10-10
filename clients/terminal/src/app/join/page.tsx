@@ -50,6 +50,7 @@
  */
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { signIn } from "next-auth/react";
+import { providersFrom } from "../AuthGate";
 import {
   boundAddress,
   inviteSentence,
@@ -64,7 +65,7 @@ import {
 } from "./joinState";
 
 type Phase = "loading" | "preview" | "refused" | "joining" | "joined";
-type Providers = { google: boolean; microsoft: boolean };
+type Providers = { google: boolean; microsoft: boolean; oidc: string | null };
 
 /** The token out of `?i=`. Read from `window.location` rather than `useSearchParams` so this page
  *  needs no Suspense boundary — the same call `/w/[...ref]` makes for the same reason.
@@ -86,7 +87,9 @@ export default function JoinPage() {
   const [why, setWhy] = useState<RefusalKind>("unknown");
   const [token, setToken] = useState("");
   const [signedIn, setSignedIn] = useState(false);
-  const [providers, setProviders] = useState<Providers>({ google: false, microsoft: false });
+  const [providers, setProviders] = useState<Providers>({ google: false, microsoft: false, oidc: null });
+  // The emailed link is drawn unless the instance says the operator closed it (VEXA_SIGNIN_METHODS).
+  const [emailLink, setEmailLink] = useState(true);
   const [email, setEmail] = useState("");
   const [sent, setSent] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
@@ -147,7 +150,11 @@ export default function JoinPage() {
     // treats it. A deploy with no OAuth creds has the emailed link and that is a complete door.
     fetch("/api/auth/providers", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : {}))
-      .then((p: Record<string, unknown>) => active && setProviders({ google: !!p.google, microsoft: !!p.microsoft }))
+      .then((p: Record<string, unknown>) => active && setProviders(providersFrom(p)))
+      .catch(() => undefined);
+    fetch("/api/auth/instance", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : {}))
+      .then((d: { email_link?: boolean }) => active && setEmailLink(d.email_link !== false))
       .catch(() => undefined);
 
     void (async () => {
@@ -269,8 +276,13 @@ export default function JoinPage() {
                     Continue with Microsoft
                   </button>
                 )}
+                {providers.oidc && (
+                  <button onClick={() => signIn("oidc", { callbackUrl: returnPath(token) })} style={oauthBtn}>
+                    Continue with {providers.oidc}
+                  </button>
+                )}
 
-                <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {emailLink && <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                   <div style={{ fontSize: 11, color: "var(--t3)", lineHeight: 1.4 }}>
                     {locked
                       ? "This invite is for this address. We’ll email it a sign-in link."
@@ -293,7 +305,7 @@ export default function JoinPage() {
                   <button type="submit" disabled={sending} style={submitBtn}>
                     {sending ? "Sending…" : "Email me a sign-in link"}
                   </button>
-                </form>
+                </form>}
                 {error && <div style={{ fontSize: 11.5, color: "var(--danger, #ef4444)" }} data-testid="join-error">{error}</div>}
               </>
             )}

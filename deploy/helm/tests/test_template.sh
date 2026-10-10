@@ -1262,4 +1262,39 @@ if [ -z "$loose" ] && grep -q 'app.kubernetes.io/component: flows-api' <<< "$flo
   echo "  OK: every policy, Service and Pod template naming a flows component also names this release"
 else echo "  FAIL: flows matched by component alone:"; echo "$loose" | head -40; fail=1; fi
 
+# ── Generic OIDC sign-in (ADFS / Keycloak) — terminal.oidc + terminal.signinMethods ────────────────
+# Off by default: no VEXA_OIDC_* and no CA volume. On: issuer + client id as values, the client secret
+# ONLY through the operator's existing Secret, the CA bundle mounted from a ConfigMap or a Secret, and
+# a half-filled block refuses to render.
+TERM_DEFAULT="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --show-only templates/deployment-terminal.yaml)"
+if grep -q 'VEXA_OIDC_' <<< "$TERM_DEFAULT" || grep -q 'oidc-ca' <<< "$TERM_DEFAULT" || grep -q 'VEXA_SIGNIN_METHODS' <<< "$TERM_DEFAULT"; then
+  echo "  FAIL: OIDC env or CA volume rendered with terminal.oidc unset"; fail=1
+else echo "  OK: no OIDC wiring by default"; fi
+TERM_OIDC="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --show-only templates/deployment-terminal.yaml \
+  --set terminal.oidc.issuer=https://adfs.example.test/adfs --set terminal.oidc.clientId=vexa-terminal \
+  --set terminal.oidc.existingSecret=vexa-oidc --set terminal.oidc.scopes='openid email profile allatclaims' \
+  --set terminal.oidc.caBundle.configMap=corp-ca --set terminal.signinMethods=oidc)"
+for want in 'name: VEXA_OIDC_ISSUER' 'value: "https://adfs.example.test/adfs"' 'name: VEXA_OIDC_CLIENT_ID' \
+            'value: "openid email profile allatclaims"' 'name: VEXA_OIDC_CA_FILE' 'value: /etc/vexa-oidc/ca/ca.pem' \
+            'mountPath: /etc/vexa-oidc/ca' 'name: "corp-ca"' 'path: ca.pem' 'name: VEXA_SIGNIN_METHODS' 'value: "oidc"'; do
+  if grep -qF -- "$want" <<< "$TERM_OIDC"; then echo "  OK: oidc renders $want"; else echo "  FAIL: oidc render lacks $want"; fail=1; fi
+done
+if awk '/name: VEXA_OIDC_CLIENT_SECRET/{f=1;next} f&&/secretKeyRef:/{s=1} f&&s&&/name: "vexa-oidc"/{n=1} f&&s&&/key: "client-secret"/{k=1} f&&/- name:/{exit} END{exit !(n&&k)}' <<< "$TERM_OIDC"; then
+  echo "  OK: the OIDC client secret comes from the existing Secret"
+else echo "  FAIL: VEXA_OIDC_CLIENT_SECRET is not a secretKeyRef to terminal.oidc.existingSecret"; fail=1; fi
+TERM_OIDC_SECRET_CA="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --show-only templates/deployment-terminal.yaml \
+  --set terminal.oidc.issuer=https://kc.example.test/realms/corp --set terminal.oidc.clientId=vexa-terminal \
+  --set terminal.oidc.existingSecret=vexa-oidc --set terminal.oidc.caBundle.secret=corp-ca-secret --set terminal.oidc.caBundle.key=chain.pem)"
+if grep -qF 'secretName: "corp-ca-secret"' <<< "$TERM_OIDC_SECRET_CA" && grep -qF 'key: "chain.pem"' <<< "$TERM_OIDC_SECRET_CA"; then
+  echo "  OK: the OIDC CA bundle can come from a Secret"
+else echo "  FAIL: terminal.oidc.caBundle.secret did not mount"; fail=1; fi
+for bad in "--set terminal.oidc.issuer=https://x.test --set terminal.oidc.clientId=c" \
+           "--set terminal.oidc.issuer=https://x.test --set terminal.oidc.existingSecret=s" \
+           "--set terminal.oidc.issuer=https://x.test --set terminal.oidc.clientId=c --set terminal.oidc.existingSecret=s --set terminal.oidc.caBundle.configMap=a --set terminal.oidc.caBundle.secret=b"; do
+  # shellcheck disable=SC2086
+  if helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" $bad >/dev/null 2>&1; then
+    echo "  FAIL: a half-filled terminal.oidc rendered: $bad"; fail=1
+  else echo "  OK: refused to render: $bad"; fi
+done
+
 [ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }

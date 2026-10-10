@@ -118,14 +118,65 @@ spec:
               value: {{ .Values.terminal.mail.secure | default "" | toString | quote }}
             - name: VEXA_MAIL_SMTP_TLS_INSECURE
               value: {{ .Values.terminal.mail.tlsInsecure | default "" | toString | quote }}
+            {{- with .Values.terminal.oidc }}
+            {{- if .issuer }}
+            {{- if not .existingSecret }}
+            {{- fail "terminal.oidc.issuer is set: terminal.oidc.existingSecret must name the Secret holding the client secret" }}
+            {{- end }}
+            {{- if not .clientId }}
+            {{- fail "terminal.oidc.issuer is set: terminal.oidc.clientId is required" }}
+            {{- end }}
+            {{- if and .caBundle.configMap .caBundle.secret }}
+            {{- fail "terminal.oidc.caBundle: name a configMap or a secret, not both" }}
+            {{- end }}
+            # Generic OIDC sign-in (ADFS, Keycloak) — clients/terminal/config.v1.json, VEXA_OIDC_*.
+            # Redirect URI to register at the provider: <publicUrl>/api/auth/callback/oidc.
+            - name: VEXA_OIDC_ISSUER
+              value: {{ .issuer | quote }}
+            - name: VEXA_OIDC_CLIENT_ID
+              value: {{ .clientId | quote }}
+            - name: VEXA_OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .existingSecret | quote }}
+                  key: {{ .existingSecretKey | default "client-secret" | quote }}
+            - name: VEXA_OIDC_SCOPES
+              value: {{ .scopes | default "" | quote }}
+            - name: VEXA_OIDC_DISPLAY_NAME
+              value: {{ .displayName | default "" | quote }}
+            - name: VEXA_OIDC_EMAIL_CLAIM
+              value: {{ .emailClaim | default "" | quote }}
+            - name: VEXA_OIDC_NAME_CLAIM
+              value: {{ .nameClaim | default "" | quote }}
+            - name: VEXA_OIDC_REQUIRE_EMAIL_VERIFIED
+              value: {{ .requireEmailVerified | default "" | toString | quote }}
+            {{- if or .caBundle.configMap .caBundle.secret }}
+            - name: VEXA_OIDC_CA_FILE
+              value: /etc/vexa-oidc/ca/ca.pem
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.terminal.signinMethods }}
+            # Which sign-in doors are offered (google, microsoft, oidc, email); the rest are not registered.
+            - name: VEXA_SIGNIN_METHODS
+              value: {{ .Values.terminal.signinMethods | quote }}
+            {{- end }}
             {{- with .Values.terminal.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
-          {{- if include "vexa.credentialBrokerEnabled" . }}
+          {{- $oidcCa := and .Values.terminal.oidc.issuer (or .Values.terminal.oidc.caBundle.configMap .Values.terminal.oidc.caBundle.secret) }}
+          {{- if or (include "vexa.credentialBrokerEnabled" .) $oidcCa }}
           volumeMounts:
+            {{- if include "vexa.credentialBrokerEnabled" . }}
             - name: connections-keys
               mountPath: /run/vexa-connections
               readOnly: true
+            {{- end }}
+            {{- if $oidcCa }}
+            - name: oidc-ca
+              mountPath: /etc/vexa-oidc/ca
+              readOnly: true
+            {{- end }}
           {{- end }}
           startupProbe:
             httpGet:
@@ -150,8 +201,10 @@ spec:
             timeoutSeconds: 5
           resources:
             {{- toYaml .Values.terminal.resources | nindent 12 }}
-      {{- if include "vexa.credentialBrokerEnabled" . }}
+      {{- $oidcCa := and .Values.terminal.oidc.issuer (or .Values.terminal.oidc.caBundle.configMap .Values.terminal.oidc.caBundle.secret) }}
+      {{- if or (include "vexa.credentialBrokerEnabled" .) $oidcCa }}
       volumes:
+        {{- if include "vexa.credentialBrokerEnabled" . }}
         # The human role key only.
         - name: connections-keys
           secret:
@@ -159,6 +212,23 @@ spec:
             defaultMode: 0444
             items:
               - { key: human.key, path: human/key }
+        {{- end }}
+        {{- if $oidcCa }}
+        # The OIDC provider's CA chain (an internal PKI), added to the public roots for OIDC requests.
+        {{- with .Values.terminal.oidc.caBundle }}
+        - name: oidc-ca
+          {{- if .configMap }}
+          configMap:
+            name: {{ .configMap | quote }}
+          {{- else }}
+          secret:
+            secretName: {{ .secret | quote }}
+          {{- end }}
+            defaultMode: 0444
+            items:
+              - { key: {{ .key | default "ca.crt" | quote }}, path: ca.pem }
+        {{- end }}
+        {{- end }}
       {{- end }}
       {{- with .Values.global.nodeSelector }}
       nodeSelector:
