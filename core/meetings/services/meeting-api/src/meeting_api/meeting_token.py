@@ -6,14 +6,16 @@ the admin secret itself, so the key that signs a bot's credential is not the key
 and no new secret has to be distributed: meeting-api is the only service that mints or verifies a
 MeetingToken. ``bot_spawn`` mints one per bot session, bound to that session's connection id (claim
 ``session_uid``), and places it in the bot's invocation. The bot presents it as
-``Authorization: Bearer <token>`` on the only two doors it calls:
+``Authorization: Bearer <token>`` on the only three doors it calls:
 
   * the lifecycle callback (``lifecycle.mount``), where the session is the event's
     ``connection_id``;
   * the recording chunk and signal-tape upload (``recordings.router``), where the session is the
-    request's ``session_uid``.
+    request's ``session_uid``;
+  * an authenticated bot's session write-back (``session_profile``), where the session is the
+    path's ``session_uid``.
 
-Both doors admit a token through :func:`admit_session`, one rule: a valid signature, an ``exp`` that
+Every door admits a token through :func:`admit_session`, one rule: a valid signature, an ``exp`` that
 has not passed, the MeetingToken's own ``aud`` and ``scope``, and bound to exactly the session the
 request names. A token bound to another session, or bound to
 none, is refused. The internal tier (a trusted service, not a bot) is a separate credential each

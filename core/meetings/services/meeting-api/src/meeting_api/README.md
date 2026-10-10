@@ -14,7 +14,7 @@ an isolated brick behind a port-seam.
 | `collector/` | the **folded-in** transcript backend (was the standalone transcription-collector): api.v1 reads + the `/ws` authorizer + the segments consumer. | `GET /transcripts/…`, `GET /meetings`, `POST /ws/authorize-subscribe` |
 | `recordings/` | chunk upload + finalize → master in `meeting.data` JSONB (recording.v1). | `POST /internal/recordings/upload`, `GET /recordings`, `GET /recordings/{id}/master` |
 | `session_profile/` | an authenticated bot's browser-session write-back: the live authenticated bot's MeetingToken only, SESSION_PROFILE files only, stored with meeting-api's own S3 credentials (the bots' `BOT_S3_*` pair is read-only). | `PUT /internal/browser-session/{session_uid}` |
-| `meeting_token.py` | the MeetingToken, the one credential a bot holds: mint (bound to one session), verify, and `admit_session` — the one admit rule the lifecycle callback and the recording/tape upload both apply. | — |
+| `meeting_token.py` | the MeetingToken, the one credential a bot holds: mint (bound to one session), verify, and `admit_session` — the one admit rule the lifecycle callback, the recording/tape upload and the authenticated session write-back all apply. | — |
 | `runtime_signature.py` | verifies the runtime's `X-Runtime-Signature` on `POST /runtime/callback` (HMAC keyed from `RUNTIME_API_TOKEN`). | — |
 | `sessions/` | the `MeetingSession` model + the shared SQLAlchemy mirror (Meeting/Transcription/MeetingSession) every module binds. | — |
 | `recording_codec.py` | the pure master codec — `build_recording_master` (front door) → WebM byte-concat / WAV RIFF header-merge. The Python twin of `recording-codec.ts`, drift-locked by the recording.v1 goldens. | — |
