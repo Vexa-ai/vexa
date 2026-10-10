@@ -115,10 +115,13 @@ _STATUS_IN_TEXT = re.compile(
     r"internal server error|bad gateway|service unavailable|gateway timeout)",
     re.IGNORECASE | re.MULTILINE)
 
+_UNPAID_WORDS = re.compile(r"insufficient (?:credits?|balance|funds)|credit balance is too low|"
+                           r"out of credits?|payment required|billing|add (?:more )?credits|"
+                           r"quota exceeded.*billing|exceeded your current quota|insufficient_quota",
+                           re.IGNORECASE)
+
 _PHRASES = (
-    (UNPAID, re.compile(r"insufficient (?:credits?|balance|funds)|credit balance is too low|"
-                        r"out of credits?|payment required|billing|add (?:more )?credits|"
-                        r"quota exceeded.*billing|exceeded your current quota", re.IGNORECASE)),
+    (UNPAID, _UNPAID_WORDS),
     (RATE_LIMITED, re.compile(r"rate[ _-]?limit|too many requests", re.IGNORECASE)),
     (UNAUTHORIZED, re.compile(r"\bunauthori[sz]ed\b|invalid[ _-]*(?:x-)?api[ _-]*key|invalid[ _-]*bearer|"
                               r"authentication[ _-]*(?:error|failed)|no auth credentials|"
@@ -186,6 +189,11 @@ def classify(*, status: Optional[int] = None, text: object = None, provider: Opt
             kind = next((k for k, rx in _PHRASES if rx.search(str(text))), None)
     if kind is None and transport:
         kind = UNAVAILABLE
+    # NOT EVERY PROVIDER SAYS "UNPAID" WITH A 402. Anthropic answers an empty balance with a 400
+    # ("Your credit balance is too low…") and OpenAI with a 429 (`insufficient_quota`) — both read as
+    # something the person could fix by waiting or rewording, which they cannot. Their words win.
+    if kind in (REFUSED, RATE_LIMITED, UNAUTHORIZED) and text and _UNPAID_WORDS.search(str(text)):
+        kind = UNPAID
     if kind is None:
         return None
     detail = safe_detail(text) if text else ""

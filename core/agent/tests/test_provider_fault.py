@@ -56,6 +56,17 @@ def test_unpaid_names_the_provider_and_how_to_pay_it():
     assert set(f.as_dict()) == {"source", "kind", "provider", "model", "status", "detail", "remedy"}
 
 
+@pytest.mark.parametrize("status, said", [
+    (400, '{"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too '
+          'low to access the Anthropic API."}}'),
+    (429, '{"error":{"message":"You exceeded your current quota, please check your plan and billing '
+          'details.","type":"insufficient_quota"}}'),
+])
+def test_an_empty_balance_is_unpaid_whatever_status_the_provider_chose(status, said):
+    f = faults.classify(status=status, text=said, provider="api.anthropic.com")
+    assert (f.kind, f.status) == ("unpaid", status)
+
+
 def test_a_timeout_with_no_status_is_unavailable():
     f = faults.classify(text="ConnectTimeout", transport=True, provider="openrouter.ai")
     assert f.kind == "unavailable" and f.status is None
