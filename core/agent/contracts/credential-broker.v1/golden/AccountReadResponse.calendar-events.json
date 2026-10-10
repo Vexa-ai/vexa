@@ -14,7 +14,7 @@
         "dateTime": "2026-10-09T09:15:00Z"
       },
       "location": null,
-      "htmlLink": "https://calendar.example.test/event?eid=evt1",
+      "htmlLink": "https://www.google.com/calendar/event?eid=ZXZ0MQ",
       "status": "confirmed",
       "attendees": [
         {
@@ -31,7 +31,8 @@
       "recurringEventId": null,
       "originalStartTime": null,
       "updated": "2026-10-01T00:00:00Z",
-      "attendeesOmitted": null
+      "attendeesOmitted": null,
+      "web_url": "https://www.google.com/calendar/event?eid=ZXZ0MQ"
     }
   ],
   "has_more": false,

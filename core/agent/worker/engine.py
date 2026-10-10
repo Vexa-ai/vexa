@@ -412,6 +412,8 @@ def kg_links_preamble(mounts: "list[dict] | None" = None) -> str:
         " with no entity id, `[[ws:<workspace-id>/<path>]]`.\n"
         "- Don't write `[[wikilinks]]` for things that have no entity doc (they render as inert"
         " 'not found' chips) — create the entity first, or use plain text.\n"
+        "- Link to an email, thread or calendar event only with the `web_url` its account tool"
+        " returned; never construct a provider URL. No `web_url`, no link.\n"
         "- `kg/templates/` and any doc whose frontmatter carries `template: true` are SHAPES, not"
         " records: never list them as entities or meetings, never `[[wikilink]]` them, never cite"
         " them in a brief and never count them as prior context. If you hold nothing on a subject,"

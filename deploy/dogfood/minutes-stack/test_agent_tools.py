@@ -85,6 +85,16 @@ class AgentToolsOnTheRig(unittest.TestCase):
         agent_tools.with_time_context(lambda: '{}', call)()
         self.assertEqual(named[-1][0], 'current_time')
 
+    def test_account_read_tools_forbid_constructing_a_provider_url(self):
+        """No provider link may be built by the agent: every mail/calendar read tool says so, and
+        the broker's web_url reaches the agent unchanged."""
+        rule = 'Link to a message or event only with its web_url; never construct a provider URL.'
+        url = 'https://mail.google.com/mail/u/robin.vale%2Bwork@example.test/#all/t1'
+        tools, _, _ = registered({('POST', '/api/connections/gmail/read'): (200, {'message': {'id': 'm1', 'web_url': url}})})
+        for name in ('gmail_search', 'gmail_read', 'gmail_thread', 'calendar_events', 'mail_inbox', 'mail_read'):
+            self.assertIn(rule, ' '.join(tools[name].__doc__.split()), name)
+        self.assertEqual(json.loads(tools['gmail_read']('m1'))['message']['web_url'], url)
+
     def test_whats_waiting_carries_the_clock(self):
         _, _, call = registered({('GET', '/api/time'): (200, {'timezone': 'Europe/Lisbon'})})
         waiting = agent_tools.with_time_context(lambda: json.dumps({'waiting': []}), call)
