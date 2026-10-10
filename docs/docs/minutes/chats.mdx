@@ -56,21 +56,29 @@ still have finished; reopen the page to see.*
 
 ### Suggestions in an empty chat
 
-An empty chat shows up to 10 **Suggestions**, in this order:
+An empty chat shows up to **four** suggestions. Each one names a real thing and does it in one click.
+They are ranked by how useful they are right now:
 
-| Suggestion | When |
-|---|---|
-| *Catch me up on `<meeting>` — live now* | a meeting is live |
-| *Prep me for `<meeting>` at `<time>`* | a meeting starts within two hours |
-| *What came out of `<meeting>`?* | the newest finished meeting has nothing written about it |
-| *Review N new item(s)* | there are new items in the rail |
-| *My email is …, set up a workspace for me* | your desk is new |
-| items your agents proposed | each with **×** (*Not now*) to dismiss it |
-| *Connect Google, so I can create meetings for you* · *Paste a meeting link* | always, last |
+| Suggestion | When it shows | A click |
+|---|---|---|
+| *Catch up: `<meeting>`, live now* | a meeting is live | asks for a catch-up in this chat, bound to that meeting |
+| *Prep: `<meeting>`, today 3:00 PM* | a meeting starts later today, or within two hours | asks for a brief |
+| *Recap: `<meeting>`, yesterday 3:00 PM* | the newest meeting from the last 7 days that nobody has asked about | asks for decisions, owners and open items |
+| *2 meetings to review: `<name>`, `<name>`* | the rail is hiding new rows (the same count as its **All** filter) | shows the hidden rows |
+| items your agents proposed | an agent filed a job for you | runs the job; **×** (*Not now*) dismisses it |
+| *My email is …, set up a workspace for me* | your desk has nothing in it | starts setup |
+| *Connect Google Calendar* · *Reconnect Gmail* · *Finish connecting …* | a Google connection is missing, disconnected, or waiting for your consent | opens **Connections** on that account |
+| *Send Vexa to a meeting* | there is room in the row | opens a field: paste a Google Meet, Zoom, Teams or Jitsi link and press **Send bot** |
 
-Pressing a suggestion sends it in the same chat. A meeting suggestion binds the chat to that meeting,
-or opens that meeting's own chat if this one already belongs to another meeting. A used suggestion is
-not offered again in that chat.
+A meeting is named by its title. A meeting with no title is named by its platform, for example
+*Google Meet call*, and always with when it happened. The raw meeting code is never shown.
+
+When nothing is waiting, the chat shows one line, *Nothing is waiting for you. Ask me anything, or send
+Vexa to a meeting.*, and the send action.
+
+Pressing a suggestion acts in the same chat. A meeting suggestion binds the chat to that meeting, or
+opens that meeting's own chat if this one already belongs to another meeting. A used suggestion is not
+offered again in that chat. Opening **Connections** or the paste field does not use the suggestion up.
 
 ### Links in replies
 
@@ -102,6 +110,7 @@ happens when a long turn reaches its tool-call limit is in [Long agent turns](/a
 
 | You see | Why | What to do |
 |---|---|---|
+| *That isn't a Google Meet, Zoom, Teams or Jitsi link…* | the pasted text is not a meeting link the bot can join | check the link; your text stays in the field |
 | *That message did not reach your agent — nothing was lost on your side, please send it again.* | the server could not hand the message to the agent | send it again |
 | *No model credentials are configured, so the agent cannot run…* | the deployment has no model provider | an operator adds one ([model credentials](/model-credentials-licensing)) |
 | a red block *`<Source>` · `<kind>`* with **Retry** | a dependency failed; the turn ended with a typed fault | read the remedy line; retry |
@@ -111,7 +120,7 @@ happens when a long turn reaches its tool-call limit is in [Long agent turns](/a
 | *Lost the connection to that background job…* | the stream dropped during a job | reopen the page |
 
 Other limits: a chat id is 1–128 letters, digits, `.`, `_` or `-`; the queue lists at most 200 waiting
-messages and none older than an hour; a chat shows at most 10 suggestions. A chat turn is started by a
+messages and none older than an hour; a chat shows at most 4 suggestions. A chat turn is started by a
 person: an agent acting for someone cannot start one.
 
 ## How it works
@@ -133,6 +142,25 @@ person: an agent acting for someone cannot start one.
    reports `job-started`, progress and `job-done` or `job-failed` on the chat's stream, and ends the
    chat turn at once so the chat can answer.
 
+### Empty-chat suggestions
+
+1. **Read.** On load the terminal reads four things it already has a route for: the meetings list, the
+   chat list (`GET /api/sessions`), your desk's facts (`GET /api/workspace/desk`) and short list
+   (`GET /api/proposals`), and your connections (`GET /api/connections/list`, metadata only: provider,
+   label, status). It re-reads connections when the tab regains focus or a consent window reports back.
+2. **Decide.** One pure function, `proposals()` in `clients/terminal/src/minutes/proposals.ts`, ranks the
+   suggestions and cuts the row to four. It makes no request and asks no model.
+3. **Name.** A meeting is named by its title; with none, by its platform, plus a relative time
+   (`relativeWhen`). The fallback title the meetings list builds from the meeting code is never shown.
+4. **Connections.** `connectionGap()` reads the broker's statuses: `ready` shows nothing, `disconnected`
+   offers **Reconnect**, `awaiting_user` offers **Finish connecting**, and no Google Calendar at all offers
+   **Connect Google Calendar**. If the list has not loaded, nothing is offered.
+5. **Act.** A click goes through `applyProposal()`: a meeting or job suggestion sends a turn in this chat,
+   review flips the rail filter, a connect suggestion opens the Connections panel, and the send action
+   opens a paste field. A pasted link is checked by the same parser the meetings list uses
+   (`parseMeetingInput`) before it becomes your message; the agent then sends the bot with
+   `request_meeting_bot`.
+
 ### Who writes what
 
 | Data | Single writer | Where |
@@ -143,7 +171,9 @@ person: an agent acting for someone cannot start one.
 | Turn output and job events | the agent worker | the chat unit's output stream; agent-api only relays it |
 | Inbox position | the agent worker | the chat unit's cursor |
 | Job records | the agent worker | the chat's working folder |
-| Suggestions | agent-api | `.vexa/proposals.json` on your desk |
+| Suggestions filed by agents | agent-api | `.vexa/proposals.json` on your desk |
+| Connection status | credential broker | the broker's database; the terminal only reads it |
+| The ranked suggestion row | nobody: it is derived in the browser on each render and never stored | — |
 | Open tabs, view, unsent copies | your browser | `localStorage` |
 
 ### Routes
@@ -158,6 +188,7 @@ person: an agent acting for someone cannot start one.
 | `GET`, `PUT /api/chat/order` | `GET`, `PUT /api/chat/order` |
 | `GET /api/sessions`, `/api/sessions/{id}/history` | the same paths |
 | `GET`, `POST /api/proposals`, `POST /api/proposals/resolve` | the same paths |
+| `GET /api/connections/list` | the credential broker's `GET /api/connections` (terminal server only) |
 
 `/agent/chat` is a streamed route of its own in `core/agent/routes.v1.json`; the others pass through the
 gateway's `/agent/*` forward. The request and event shapes are in [the agent API](/api/agent).
@@ -176,8 +207,9 @@ gateway's `/agent/*` forward. The request and event shapes are in [the agent API
 | **P2** contracts · **P6** one front door | the browser calls only the terminal's `/api/*`; the terminal calls only the gateway | `gate:isolation`, `gate:exports`, `gate:domain-doors` |
 | **P18** fail loud | a refused spawn, a provider refusal or a gateway outage ends as a typed fault (`source` + `kind`) shown in the chat; the terminal never passes a bare *Internal Server Error*; a blocked queue says what blocked it; a failed job posts a line | `gate:fault-surfacing` (under `gate:node` and `gate:python`) |
 | **P20** authorize every access | the user is the signed identity; the target must be a workspace you can write; suggestions are your own desk's | deny tests below |
-| **P21** state from evidence | the activity line and job rows come from the worker's events, not from the button press | ungated: reviewed |
-| **P23** one writer per carrier | agent-api is the inbox's only writer; the worker is the output stream's only writer and agent-api relays it unchanged | `gate:dataflow` |
+| **P21** state from evidence | the activity line and job rows come from the worker's events, not from the button press. The connect suggestion reads the broker's own status, never a deployment flag, and offers nothing while that status is unknown | `proposals.test.ts` ("hidden when Google Calendar and Gmail are connected", "hidden while the list has not answered"); otherwise ungated: reviewed |
+| **P23** one writer per carrier | agent-api is the inbox's only writer; the worker is the output stream's only writer and agent-api relays it unchanged. The suggestion row is derived, never stored, and re-derives nobody's data: connection status stays the broker's | `gate:dataflow` |
+| **P18** fail loud (suggestions) | an unreadable connections list shows no connect suggestion rather than a wrong one; a bad pasted link is refused beside the field with your text kept | `proposalChips.test.tsx` ("anything else is refused beside the field, with the input kept") |
 
 ### Security
 
@@ -193,6 +225,10 @@ the workspaces of the chat that dispatched it. Only an org admin can target the 
 - A message composed by Vexa or dispatched by a flow is marked, and never shown as your words.
 - An agent acting for someone cannot start a chat turn.
 - Job events carry their chat's id, so one chat's job never shows in another.
+- Suggestions read only your own meetings, desk and connections. The connections list returns
+  metadata (provider, label, status), never a token or any mail or calendar content, and only the
+  signed-in person's rows. Connecting still happens in the Connections panel, on your click.
+- A pasted meeting link is sent only after it parses as a Google Meet, Zoom, Teams or Jitsi link.
 
 **Deny tests.**
 
@@ -208,6 +244,8 @@ the workspaces of the chat that dispatched it. Only an org admin can target the 
 | `core/agent/tests/test_chat_runtime_fault.py` · `test_a_refused_spawn_on_api_chat_is_a_typed_502_not_internal_server_error`, `test_queued_rows_behind_the_refusal_say_they_are_blocked_and_by_what` | typed faults and blocked queues |
 | `core/agent/tests/test_inbox.py` · `test_ten_submissions_during_a_job_all_execute_in_order` | nothing is dropped |
 | `core/agent/tests/test_proposals.py` · `test_the_list_is_the_callers_own_never_a_desk_named_in_the_body` | suggestions |
+| `core/agent/services/credential-broker/tests/test_identity.py` · `test_agent_requests_but_cannot_consent_or_read_other_users`; `clients/terminal/src/app/api/connections/__tests__/routes.test.ts` · "refuses cross origin and caller-chosen identity" | the connections list is your own |
+| `clients/terminal/src/minutes/__tests__/proposalChips.test.tsx` · "anything else is refused beside the field, with the input kept" | the paste field |
 | `core/agent/tests/test_flow_turn_label.py` · `test_agent_api_marks_a_flow_dispatch_from_the_headers_flows_sends`, `test_half_a_header_is_no_mark` | turn labels |
 | `clients/terminal/src/app/api/__tests__/chatProxyFaults.test.ts` · "never passes a bare 'Internal Server Error' through…" | the proxy's fault floor |
 | `clients/terminal/src/surfaces/__tests__/inbox.test.ts` · "a refused submission is not silently acknowledged" | the client's queue |

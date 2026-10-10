@@ -16,10 +16,11 @@ import type { MeetingMock } from "../../surfaces/meetingModel";
 import type { DeskProposal } from "../../surfaces/proposalsApi";
 import type { DeskFacts } from "../../surfaces/workspaceApi";
 import type { Chat } from "../chats";
-import { applyProposal, isUnlabeled, jtbdProposal, KICK, needsSetup, PREP_WINDOW_MS, PROPOSALS_MAX, proposals, setupProposal, standingProposals } from "../proposals";
+import { applyProposal, connectionGap, EMPTY_LINE, emptyLine, isUnlabeled, jtbdProposal, KICK, linkProposal, meetingName, needsSetup, PROPOSALS_MAX, proposals, RECAP_WINDOW_MS, relativeWhen, SEND_BOT, setupProposal, type ConnectionRow } from "../proposals";
 import { ONBOARDING_GROUNDING, ONBOARDING_REPLY_SEP } from "../../platform";
 
-const NOW = Date.UTC(2026, 8, 1, 12, 0, 0);            // a fixed "now" — nothing here reads the clock
+const NOW = new Date(2026, 8, 1, 12, 0, 0).getTime();  // a fixed LOCAL noon — nothing here reads the clock,
+                                                       // and "today"/"yesterday" hold in any time zone
 const at = (mins: number) => new Date(NOW + mins * 60000).toISOString();
 
 const meeting = (id: string, title: string, live_status: string, startMins: number): MeetingMock =>
@@ -50,7 +51,7 @@ const labels = (ps: { label: string }[]) => ps.map((p) => p.label);
 const kinds = (ps: { kind: string }[]) => ps.map((p) => p.kind);
 /** THE TWO STANDING ACTS ARE ALWAYS AT THE END (#1614), so the rules above are read without them.
  *  They get their own describe below; every other test here is about what this account makes true. */
-const STANDING_KINDS = ["meet", "link"];
+const STANDING_KINDS = ["link"];
 const derived = <T extends { kind: string }>(ps: T[]): T[] =>
   ps.filter((p) => !STANDING_KINDS.includes(p.kind));
 
@@ -63,7 +64,7 @@ describe("rule 1 — a meeting running right now", () => {
   it("offers a catch-up naming the meeting, bound to it, with the read-first kick", () => {
     const [p] = run([LIVE], [touched("main")]);
     expect(p.kind).toBe("catch-up");
-    expect(p.label).toBe("Catch me up on Standup — live now");   // the title's own qualifier is dropped
+    expect(p.label).toBe("Catch up: Standup, live now");   // the title's own qualifier is dropped
     expect(p.meetingId).toBe("m-live");
     expect(p.kick).toBe(KICK["catch-up"]);
   });
@@ -77,17 +78,23 @@ describe("rule 1 — a meeting running right now", () => {
 });
 
 describe("rule 2 — a meeting starting soon", () => {
-  it("offers prep, naming the meeting and its clock time", () => {
+  it("offers prep, naming the meeting and when it is", () => {
     const [p] = run([SOON], [touched("main")]);
     expect(p.kind).toBe("prep");
-    expect(p.label).toContain("Prep me for Acme at ");
+    expect(p.label).toBe(`Prep: Acme, ${relativeWhen(NOW + 75 * 60000, NOW)}`);
+    expect(p.label).toContain("today");
     expect(p.meetingId).toBe("m-prep");
     expect(p.kick).toBe(KICK.prep);
   });
 
-  it("a meeting beyond the two-hour window does not fire it", () => {
-    const later = meeting("m-late", "Board", "scheduled", PREP_WINDOW_MS / 60000 + 1);
-    expect(kinds(run([later], [touched("main")]))).not.toContain("prep");
+  it("a meeting later TODAY fires it, even five hours out", () => {
+    const later = meeting("m-late", "Board", "scheduled", 5 * 60);
+    expect(kinds(run([later], [touched("main")]))).toContain("prep");
+  });
+
+  it("a meeting tomorrow afternoon does not", () => {
+    const tomorrow = meeting("m-tmrw", "Board", "scheduled", 26 * 60);
+    expect(kinds(run([tomorrow], [touched("main")]))).not.toContain("prep");
   });
 
   it("a scheduled meeting whose start has already passed is late, not soon", () => {
@@ -104,7 +111,7 @@ describe("rule 2 — a meeting starting soon", () => {
   it("a `scheduled_at`-only meeting still resolves — a meeting that has not run has no start_time", () => {
     const planned = { id: "m-plan", title: "Kickoff", status: "past", live_status: "scheduled",
       scheduled_at: at(30) } as unknown as MeetingMock;
-    expect(run([planned], [touched("main")])[0].label).toContain("Prep me for Kickoff at ");
+    expect(run([planned], [touched("main")])[0].label).toContain("Prep: Kickoff, today");
   });
 });
 
@@ -112,7 +119,8 @@ describe("rule 3 — the newest held meeting nobody has written about", () => {
   it("offers the outcome question, bound to the meeting", () => {
     const [p] = run([HELD], [touched("main")]);
     expect(p.kind).toBe("outcome");
-    expect(p.label).toBe("What came out of Fernhill Loyalty Card?");
+    expect(p.label).toBe(`Recap: Fernhill Loyalty Card, ${relativeWhen(NOW - 1500 * 60000, NOW)}`);
+    expect(p.label).toContain("yesterday");
     expect(p.meetingId).toBe("m-post");
     expect(p.kick).toBe(KICK.outcome);
   });
@@ -127,6 +135,11 @@ describe("rule 3 — the newest held meeting nobody has written about", () => {
     expect(kinds(run([HELD], [touched("main"), opened]))).toContain("outcome");
   });
 
+  it("a meeting held more than a week ago is history, not a recap chip", () => {
+    const old = meeting("m-old", "Kickoff", "completed", -(RECAP_WINDOW_MS / 60000) - 60);
+    expect(kinds(run([old], [touched("main")]))).not.toContain("outcome");
+  });
+
   it("the NEWEST unwritten held meeting wins", () => {
     const older = meeting("m-old", "Kickoff", "completed", -9000);
     expect(run([older, HELD], [touched("main")])[0].meetingId).toBe("m-post");
@@ -137,14 +150,14 @@ describe("rule 4 — the pile the rail is hiding", () => {
   it("counts the untouched auto-created chats and creates nothing", () => {
     const [p] = run([], [touched("main"), untouched("a"), untouched("b")]);
     expect(p.kind).toBe("review");
-    expect(p.label).toBe("Review 2 new items");
+    expect(p.label).toBe("2 chats to review: a, b");
     expect(p.count).toBe(2);
     expect(p.kick).toBeUndefined();      // the chip flips a filter; it asks nothing
     expect(p.meetingId).toBeUndefined();
   });
 
   it("says `item`, singular, for one", () => {
-    expect(run([], [touched("main"), untouched("a")])[0].label).toBe("Review 1 new item");
+    expect(run([], [touched("main"), untouched("a")])[0].label).toBe("1 chat to review: a");
   });
 
   it("counts the same rows the rail's own filter hides — a held meeting with no chat is one of them", () => {
@@ -217,11 +230,9 @@ describe("rule 5 — the workspace has never been set up", () => {
 });
 
 describe("priority + the cap", () => {
-  it("the derived rules come first, in rule order, when everything fires at once", () => {
-    // ALL of them now that the row holds ten (#1614). Under the old three-chip cap `review` and the
-    // setup chip were cut here — which is exactly the thing a cap should not silently decide.
-    const ps = derived(run([LIVE, SOON, HELD], [touched("main"), untouched("a")], BLANK));
-    expect(kinds(ps)).toEqual(["catch-up", "prep", "outcome", "review", "setup"]);
+  it("ranked by usefulness, four at most: now, today, just ended, waiting — setup gaps last", () => {
+    const ps = run([LIVE, SOON, HELD], [touched("main"), untouched("a")], BLANK);
+    expect(kinds(ps)).toEqual(["catch-up", "prep", "outcome", "review"]);
   });
 
   it("a rule that does not fire promotes the ones below it", () => {
@@ -229,17 +240,15 @@ describe("priority + the cap", () => {
     expect(kinds(ps)).toEqual(["catch-up", "outcome", "review"]);
   });
 
-  it("never more than ten, whatever the state", () => {
+  it("never more than four, whatever the state", () => {
     const desk = Array.from({ length: 12 }, (_, n) => item(`i${n}`, `Job ${n}`));
     const ps = proposals([LIVE, SOON, HELD], [untouched("a"), untouched("b")], BLANK, NOW, null, desk);
     expect(ps).toHaveLength(PROPOSALS_MAX);
   });
 
-  it("the standing acts SURVIVE the cap — that is what standing means", () => {
-    const desk = Array.from({ length: 30 }, (_, n) => item(`i${n}`, `Job ${n}`));
-    const ps = proposals([LIVE, SOON, HELD], [untouched("a")], BLANK, NOW, null, desk);
-    expect(ps).toHaveLength(PROPOSALS_MAX);
-    expect(kinds(ps).slice(-2)).toEqual(["meet", "link"]);
+  it("the send act takes a free slot, and never pushes a meeting that needs you off the row", () => {
+    expect(kinds(run([LIVE], [touched("main")]))).toEqual(["catch-up", "link"]);
+    expect(kinds(run([LIVE, SOON, HELD], [touched("main"), untouched("a")]))).not.toContain("link");
   });
 
   it("every chip carries a distinct key", () => {
@@ -282,36 +291,104 @@ describe("rule 6 — the short list other agents wrote", () => {
   });
 });
 
-describe("the standing acts — always there", () => {
-  it("both of them close every row, whatever this account looks like", () => {
-    for (const c of [[], [touched("main")], [untouched("a"), untouched("b")]]) {
-      for (const m of [[], [LIVE], [LIVE, SOON, HELD]]) {
-        expect(kinds(proposals(m, c, null, NOW)).slice(-2)).toEqual(["meet", "link"]);
-      }
+describe("meeting names — a title and a time, never a raw code", () => {
+  const CODE = { id: "m-c", title: "Google Meet · rhw-qwts-fvi", native_id: "rhw-qwts-fvi", platform: "Google Meet",
+    live_status: "completed", status: "past", start_time: at(-1500) } as unknown as MeetingMock;
+
+  it("a meeting with no title is named by its platform and when it happened — the code is gone", () => {
+    const [p] = run([CODE], [touched("main")]);
+    expect(p.label).toBe(`Recap: Google Meet call, ${relativeWhen(NOW - 1500 * 60000, NOW)}`);
+    expect(p.label).not.toContain("rhw-qwts-fvi");
+  });
+
+  it("a title somebody gave it wins", () => {
+    expect(meetingName({ ...CODE, title: "Campbell sync", title_custom: "Campbell sync" })).toBe("Campbell sync");
+  });
+
+  it("the review chip names its meetings the same way", () => {
+    const ps = run([CODE], [touched("main")]);
+    const review = ps.find((p) => p.kind === "review");
+    expect(review?.label).toBe("1 meeting to review: Google Meet call");
+    expect(review?.label).not.toContain("rhw-qwts-fvi");
+  });
+
+  it("relative time: today, yesterday, tomorrow, a weekday, then a date", () => {
+    expect(relativeWhen(NOW + 60 * 60000, NOW)).toMatch(/^today /);
+    expect(relativeWhen(NOW - 24 * 3600000, NOW)).toMatch(/^yesterday /);
+    expect(relativeWhen(NOW + 24 * 3600000, NOW)).toMatch(/^tomorrow /);
+    expect(relativeWhen(NOW - 30 * 86400000, NOW)).not.toMatch(/today|yesterday|:/);
+    expect(relativeWhen(0, NOW)).toBe("");
+  });
+});
+
+describe("the connect chip — only when a connection is missing or broken", () => {
+  const conn = (provider: string, status: string, id = provider): ConnectionRow => ({ id, provider, status });
+  const withConns = (c: ConnectionRow[] | null) => proposals([], [touched("main")], FINISHED, NOW, null, [], c);
+
+  it("hidden when Google Calendar and Gmail are connected — the founder's case", () => {
+    expect(kinds(withConns([conn("google_email", "ready"), conn("google_calendar", "ready")]))).not.toContain("connect");
+    expect(connectionGap([conn("google_calendar", "ready")])).toBeNull();
+  });
+
+  it("hidden while the list has not answered — unknown fails closed", () => {
+    expect(kinds(withConns(null))).not.toContain("connect");
+  });
+
+  it("offered when there is no calendar connection at all", () => {
+    const p = connectionGap([conn("google_email", "ready")]);
+    expect(p?.label).toBe("Connect Google Calendar");
+    expect(p?.provider).toBe("google_calendar");
+    expect(p?.connectionId).toBeUndefined();
+  });
+
+  it("a disconnected one asks to RECONNECT that connection", () => {
+    const p = connectionGap([conn("google_calendar", "ready"), conn("google_email", "disconnected", "abc")]);
+    expect(p?.label).toBe("Reconnect Gmail");
+    expect(p?.connectionId).toBe("abc");
+  });
+
+  it("an unfinished consent asks to finish it", () => {
+    expect(connectionGap([conn("google_calendar", "awaiting_user")])?.label).toBe("Finish connecting Google Calendar");
+  });
+
+  it("a click opens the Connections panel on that provider and touches no chat", () => {
+    const p = connectionGap([conn("google_email", "disconnected", "abc"), conn("google_calendar", "ready")])!;
+    expect(applyProposal(p, chat({ id: "x", label: "New chat" }), [], NOW))
+      .toEqual({ act: "connect", provider: "google_email", connectionId: "abc" });
+  });
+
+  it("the old deployment-flag chip is unreachable", () => {
+    for (const c of [null, [], [conn("google_calendar", "ready")]]) {
+      expect(labels(withConns(c as ConnectionRow[] | null)).join("|")).not.toContain("so I can create meetings");
     }
   });
+});
 
-  it("with Google connected the act creates the Meet and sends the bot in one go", () => {
-    const [meet] = standingProposals(true);
-    expect(meet.label).toBe("Create a Google Meet and put Vexa in it");
-    expect(meet.kick).toContain("send the Vexa bot into it");
+describe("send Vexa to a meeting — a real act", () => {
+  it("the chip says nothing on its own: a click opens the paste field", () => {
+    expect(SEND_BOT.kick).toBeUndefined();
+    expect(applyProposal(SEND_BOT, chat({ id: "x" }), [], NOW)).toEqual({ act: "paste" });
   });
 
-  it("without it the act is CONNECT GOOGLE, said plainly — never a Meet it cannot make", () => {
-    const [meet] = standingProposals(false);
-    expect(meet.label).toBe("Connect Google, so I can create meetings for you");
-    expect(meet.label).not.toContain("Create a Google Meet");
-    expect(meet.kick).toContain("Tell me what is missing");
+  it("a pasted link becomes the person's own turn, naming the tool", () => {
+    const p = linkProposal(" https://meet.google.com/abc-defg-hij ");
+    expect(p.say).toBe("Send Vexa to https://meet.google.com/abc-defg-hij");
+    expect(p.kick).toContain("request_meeting_bot");
+    const e = applyProposal(p, chat({ id: "x", label: "New chat" }), [], NOW);
+    expect(e?.act === "run" && e.chat.id).toBe("x");
+    expect(e?.act === "run" && e.say).toBe(p.say);
+  });
+});
+
+describe("nothing useful — a short line, not filler", () => {
+  it("an account with nothing to say about gets the line and the send act only", () => {
+    const ps = run([], [touched("main")]);
+    expect(kinds(ps)).toEqual(["link"]);
+    expect(emptyLine(ps)).toBe(EMPTY_LINE);
   });
 
-  it("the deployment default is the honest branch — nothing here can create a Meet yet", () => {
-    expect(labels(proposals([], [], null, NOW))).toContain("Connect Google, so I can create meetings for you");
-  });
-
-  it("pasting a link is the act that already works", () => {
-    const link = standingProposals(false)[1];
-    expect(link.label).toBe("Paste a meeting link");
-    expect(link.say).toContain("I'll paste the link");
+  it("the line is not shown when something real is on offer", () => {
+    expect(emptyLine(run([LIVE], [touched("main")]))).toBeNull();
   });
 });
 
@@ -333,7 +410,7 @@ describe("F36 — nothing is padded in behind the rules", () => {
     const ps = proposals([LIVE, SOON, HELD], [touched("main"), untouched("a")], BLANK, NOW,
                          "ada@example.com", [item("a", "The migration doc")]);
     for (const p of ps) {
-      expect(["catch-up", "prep", "outcome", "review", "setup", "jtbd", "meet", "link"]).toContain(p.kind);
+      expect(["catch-up", "prep", "outcome", "review", "setup", "jtbd", "connect", "link"]).toContain(p.kind);
     }
   });
 
