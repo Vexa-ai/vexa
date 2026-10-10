@@ -126,7 +126,31 @@ The Minutes shell has three panes: the **rail** (chat list), the **conversation*
 
 ---
 
-## 4. Text, dates and truncation
+## 4. Primitives
+
+Every primitive lives in `clients/terminal/src/ui-kit/primitives/`, is exported from
+`src/ui-kit/index.tsx`, reads only tokens, and appears in the `/design` catalogue. Each interactive
+one implements rest, hover, **focus-visible** (a 2px ring with a 2px offset), pressed, selected
+(never colour alone), disabled and loading.
+
+| Primitive | Rule |
+|---|---|
+| `Button` | `primary` (at most one per view), `secondary`, `ghost`, `danger` (a destructive dialog's confirm only), `danger-ghost`; 28 or 32px; verb-first sentence-case labels |
+| `IconButton` | 24, 28 or 32px; an accessible name is required by its type and shown as a tooltip; `pressed` → `aria-pressed`; lucide icons, never text glyphs |
+| `Input`, `Textarea` | label above the field; 32px; control border; error line linked through `aria-describedby` |
+| `Menu`, `Select`, `Popover` | the WAI-ARIA menu pattern: arrows, Home/End, typeahead, Enter, Esc returns focus to the trigger |
+| `Badge`, `Tag` | static: radius 4, never clickable, never accent |
+| `Chip`, `EntityChip` | interactive: radius 6, 24px, a border; remove is a named `×` button; entity chips carry a type icon |
+| `Tabs`, `OverflowStrip` | roving tabindex; strips fade and list hidden tabs in an overflow menu |
+| `Breadcrumb` | sans, chevron separators; the middle collapses into "…" past four segments |
+| `ListRow`, `PanelHeader`, `Card` | 28/44px rows; selected = fill, weight 500 and a 2px accent bar; 44px panel headers; an interactive card is one button |
+| `Dialog`, `ConfirmDialog` | focus trap, Esc, focus return, titled; the confirm names the act; irreversible acts can require typing a name. Replaces `window.confirm` |
+| `EmptyState`, `Skeleton`, `ErrorState` | loading, empty, error and content look different; an error states what, why, the fix and the verbatim detail |
+| `Tooltip`, `Toaster` | a tooltip is supplementary to the trigger's own name; toasts only for completed background outcomes or Undo |
+| `KeyValue`, `Truncate`, `DateText`, `SourceList` | see §5 |
+| `ExternalLink`, `Code`, `SecretReveal` | see Security below |
+
+## 5. Text, dates and truncation
 
 - The default is `overflow-wrap: break-word`. `overflow-wrap: anywhere` and `word-break: break-all`
   are allowed only in the code and secret-display primitives.
@@ -221,6 +245,15 @@ Neither is sent to a server.
   never through `JSON.stringify` into markup. Test: `entityProperties.test.tsx`, "does not execute
   links or markup from metadata".
 - **Personal data.** Nothing about the layout enters a URL or leaves the browser.
+- **Secrets.** `SecretReveal` shows a token masked until the reader presses Show, copies only on an
+  explicit press, and never puts the value in `title`, `aria-label`, `data-*`, a URL or storage.
+  Tests: `primitives.test.tsx`, "masked until revealed" and "never renders the value into title,
+  aria-label or data attributes".
+- **External links.** `ExternalLink` allows `http:` and `https:` only and always sets
+  `rel="noopener noreferrer"`; any other scheme renders as text. Test: `primitives.test.tsx`,
+  "refuses javascript: and data: schemes".
+- **Destructive acts.** `ConfirmDialog` names the act on its button and can require typing the
+  name; it is the replacement for `window.confirm` as surfaces migrate.
 
 ---
 
@@ -234,4 +267,5 @@ Neither is sent to a server.
 | L-unit | every width 320–2560 × every preference: columns add up, the conversation is at least its mode's floor, the rail folds before the pages panel, an auto-collapse never writes a preference, stored widths are clamped not discarded | `src/ui-kit/__tests__/shellLayout.test.ts` | **have** (rides `gate:node`) |
 | L1–L3 | in a browser at 640–1920 in both themes: no pane scrolls sideways, the conversation meets its floor, the composer toolbar is one row, a tab strip that hides a tab shows its overflow control | `clients/terminal/scripts/layout-sweep.mjs` | **have** (run on bbb; attached to the PR; CI later) |
 | KV | no `overflow-wrap: anywhere` in the metadata table; stacked below 360px; dates and long tokens are single units | `src/ui-kit/__tests__/keyValue.test.tsx` | **have** |
-| A8 | the splitter, sheet and menu follow their WAI-ARIA patterns | `src/ui-kit/__tests__/layoutPrimitives.test.tsx` | **have** |
+| A8 | the splitter, sheet, menu, tabs, dialog and fields follow their WAI-ARIA patterns | `src/ui-kit/__tests__/layoutPrimitives.test.tsx`, `primitives.test.tsx` | **have** |
+| S1, S2 | secrets never in attributes; external links scheme-checked | `primitives.test.tsx` | **have** (primitive level; the guards that ban raw use land with the surface migration) |

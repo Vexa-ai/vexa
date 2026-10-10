@@ -3,3 +3,4 @@
  * class here is `vx-` prefixed and reads only the CSS variables the terminal defines. */
 @import "./layout/layout.css";
 @import "./primitives/primitives.css";
+@import "./primitives/controls.css";
