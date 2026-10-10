@@ -77,6 +77,13 @@
       ]
     },
     {
+      "method": "POST",
+      "path": "/meetings/import",
+      "scopes": [
+        "tx"
+      ]
+    },
+    {
       "method": "DELETE",
       "path": "/meetings/{meeting_id}",
       "scopes": [
@@ -93,6 +100,13 @@
     {
       "method": "PATCH",
       "path": "/meetings/{meeting_id}",
+      "scopes": [
+        "tx"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/meetings/{meeting_id}/export",
       "scopes": [
         "tx"
       ]
