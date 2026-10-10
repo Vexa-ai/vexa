@@ -166,10 +166,14 @@ def test_a_registry_of_another_owner_refuses(store):
     reg = store / iso.UID_REGISTRY
     reg.write_text("{}")
     os.chmod(reg, 0o600)
+    other = 1234 if ME == 0 else 0                # whoever the store's owner is not
+    if ME == 0:
+        os.chown(reg, other, other)
     fd = open_trusted_dir(str(store), owner=ME)
     try:
-        with pytest.raises(IsolationRefused):     # the store's owner is root, the file is ours
-            iso._allocate(fd, iso.UID_REGISTRY, "alice", SUBJECT_UID_BASE, iso.SUBJECT_UID_LIMIT, owner=0)
+        with pytest.raises(IsolationRefused):
+            iso._allocate(fd, iso.UID_REGISTRY, "alice", SUBJECT_UID_BASE, iso.SUBJECT_UID_LIMIT,
+                          owner=ME if ME == 0 else other)
     finally:
         os.close(fd)
 

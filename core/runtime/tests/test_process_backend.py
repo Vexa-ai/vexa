@@ -78,7 +78,14 @@ def _start_and_wait(backend: ProcessBackend, workload_id: str, runnable: Runnabl
 # ── the log dir seam ──────────────────────────────────────────────────────────────────────────────
 def test_log_dir_defaults_under_tempdir(monkeypatch):
     monkeypatch.delenv("PROCESS_LOG_DIR", raising=False)
+    monkeypatch.setattr(os, "geteuid", lambda: 501)
     assert _log_dir() == os.path.join(tempfile.gettempdir(), "vexa-workloads")
+
+
+def test_a_root_runtimes_log_dir_is_never_the_shared_tmp(monkeypatch):
+    monkeypatch.delenv("PROCESS_LOG_DIR", raising=False)
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    assert _log_dir() == "/var/lib/vexa-runtime/logs"
 
 
 def test_log_dir_env_override(monkeypatch, tmp_path):

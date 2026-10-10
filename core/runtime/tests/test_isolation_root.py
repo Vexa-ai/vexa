@@ -79,6 +79,14 @@ def _run(lab, workload_id: str, runnable: Runnable, env: dict) -> dict:
     return json.loads(line[len("REPORT "):])
 
 
+def test_credential_files_are_not_staged_for_a_profile_that_does_not_ask(lab):
+    cred = lab["root"] / "cred.json"
+    cred.write_text('{"t": 1}')
+    runnable = Runnable(command=_cmd(REPORT), credential_files=(
+        CredentialFile(source=str(cred), target="/unused", home_path=".claude/.credentials.json"),))
+    assert _run(lab, "w-nocred", runnable, _env(lab))["cred"] is None
+
+
 def test_a_workspace_dispatch_runs_as_its_subject_never_root(lab):
     r = _run(lab, "w-17", Runnable(command=_cmd(REPORT)), _env(lab))
     assert r["uids"] == [UID_BASE + 17] * 3 and r["gids"] == [UID_BASE + 17] * 3
@@ -109,7 +117,7 @@ def test_the_profiles_credential_files_land_in_the_childs_own_home(lab):
     cred = lab["root"] / "cred.json"
     cred.write_text('{"t": 1}')
     os.chmod(cred, 0o600)
-    runnable = Runnable(command=_cmd(REPORT), credential_files=(
+    runnable = Runnable(command=_cmd(REPORT), credential_mounts=True, credential_files=(
         CredentialFile(source=str(cred), target="/unused", home_path=".claude/.credentials.json"),))
     r = _run(lab, "w-cred", runnable, _env(lab))
     assert r["cred"] == '{"t": 1}'
