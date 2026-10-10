@@ -134,7 +134,7 @@ The route itself was already decided in one place: `dispatch.overlay_model_confi
   check is skipped when a catalog exists, because every provider's secret resolved at boot.
 - **A route is fixed for a worker's life.** A changed catalog or default reaches a warm chat at its
   next cold start; a pick reaches it at the next turn.
-- **Two follow-ups are not in this ADR:**
+- **Two follow-ups are left for 0.13.3:**
   - a per-routine model: a `model` field on `routine.v1` and `unit.v1` needs a re-seal;
   - provider-required HTTP headers (#1667).
 
