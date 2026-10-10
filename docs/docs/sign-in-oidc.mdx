@@ -1,0 +1,281 @@
+---
+title: "Sign-in with your own identity provider (OIDC)"
+description: "Let people sign in to the Terminal through your organisation's ADFS, Keycloak or any OpenID Connect provider."
+---
+
+The Terminal can send people to your organisation's own identity provider (IdP) to sign in: ADFS,
+Keycloak, or any provider that speaks OpenID Connect. You give it an **issuer URL**, a **client id**
+and a **client secret**, and the sign-in card shows one more button, labelled the way you choose
+("Continue with Corporate login").
+
+It sits next to the other doors: Google, Microsoft Entra and the emailed sign-in link. You can offer
+it alone.
+
+<Note>
+The provider vouches for **who** the person is. Whether they may use this instance is decided as for
+every other door: an existing user, an admin, or an address on the sign-in allow-list. See
+[Who may sign in to the terminal](/authentication#who-may-sign-in-to-the-terminal).
+</Note>
+
+## Checklist for your identity-provider team
+
+Hand this section to the people who run your IdP. Fill in `<terminal URL>` first: it is the address
+people type to reach the Terminal (the chart's `terminal.publicUrl`), for example
+`https://vexa.example.com`.
+
+### ADFS (Windows Server 2016 or later)
+
+1. **Create an application group.** AD FS Management → Application Groups → Add Application Group →
+   template **Server application accessing a web API**. Name it, for example, `Vexa Terminal`.
+2. **Server application.**
+   - Note the **client identifier** ADFS generates. This is the client id.
+   - **Redirect URI:** `<terminal URL>/api/auth/callback/oidc`, exactly, with no trailing slash.
+   - Choose **Generate a shared secret** and copy it. This is the client secret; ADFS shows it once.
+3. **Web API.**
+   - **Identifier:** the same client identifier as in step 2. The ID token's audience is then the
+     client id, which is what the Terminal checks.
+   - **Access control policy:** who may use the application, for example a security group of the
+     people who will use Vexa. Permit everyone only if the sign-in allow-list will do the narrowing.
+   - **Permitted scopes:** `openid`, `email`, `profile` and **`allatclaims`**.
+4. **Claim rules.** On the Web API → Issuance Transform Rules, add **Send LDAP Attributes as Claims**
+   from Active Directory:
+   - `E-Mail-Addresses` → outgoing claim type `E-Mail Address`. This is what the Terminal reads as
+     the person's address.
+   - `Display-Name` → outgoing claim type `Name`. This is the name the Terminal shows.
+
+   ADFS puts these claims in the **ID token** only when the request carries the `allatclaims` scope
+   (step 3 permits it; the Terminal asks for it once you set the scopes below). ADFS's userinfo
+   endpoint returns only `sub`, so the Terminal never uses it.
+5. **Send the Vexa operator:**
+   - the **issuer URL**: `https://<adfs host>/adfs`. Check it against the `issuer` field of
+     `https://<adfs host>/adfs/.well-known/openid-configuration`; the two must match character for
+     character;
+   - the **client id** and, through your secret channel, the **client secret**;
+   - the **CA chain** that issued the ADFS service certificate, as PEM, if it is your internal PKI.
+     Root first or last does not matter; include the intermediates.
+6. **Network.** The Terminal's server talks to ADFS directly, on HTTPS (443): the discovery document,
+   the signing keys and the token endpoint. The **Terminal pod** needs egress to the ADFS host. The
+   person's browser needs to reach ADFS too, as it does for any other ADFS sign-in.
+
+Settings for the Terminal with ADFS:
+
+| Setting | Value |
+|---|---|
+| Issuer | `https://<adfs host>/adfs` |
+| Scopes | `openid email profile allatclaims` |
+| Email claim | `email` (default). If your rule issues the UPN instead, `upn`. |
+| Name claim | `name` (default) |
+| Require `email_verified` | off (ADFS does not issue it) |
+
+### Keycloak
+
+1. In your realm: **Clients → Create client**, type **OpenID Connect**.
+2. **Client authentication:** on (a confidential client). **Standard flow:** on. Others off.
+3. **Valid redirect URIs:** `<terminal URL>/api/auth/callback/oidc`.
+4. **Credentials** tab: copy the client secret.
+5. **Advanced → Proof Key for Code Exchange:** `S256` (the Terminal always sends PKCE).
+6. Send the Vexa operator the issuer URL (`https://<keycloak host>/realms/<realm>`), the client id,
+   the secret and, for an internal PKI, the CA chain.
+
+Keycloak includes `email`, `email_verified` and `name` in the ID token by default. If people can set
+their own address in your realm, turn on **Require `email_verified`** below.
+
+## Configure the Terminal
+
+### Helm
+
+Create the Secret holding the client secret first; the chart never takes it as a value:
+
+```bash
+kubectl -n vexa create secret generic vexa-oidc --from-literal=client-secret='<client secret>'
+```
+
+For an internal PKI, put the CA chain in a ConfigMap (or a Secret):
+
+```bash
+kubectl -n vexa create configmap corp-ca --from-file=ca.crt=./corp-ca-chain.pem
+```
+
+Then in your values:
+
+```yaml
+terminal:
+  publicUrl: https://vexa.example.com          # required: the redirect URI is built from it
+  oidc:
+    issuer: https://adfs.example.com/adfs
+    clientId: "<client id>"
+    existingSecret: vexa-oidc                  # the Secret above
+    existingSecretKey: client-secret
+    scopes: "openid email profile allatclaims" # ADFS; leave empty for Keycloak
+    displayName: Corporate login               # the button reads "Continue with Corporate login"
+    emailClaim: ""                             # empty = email
+    nameClaim: ""                              # empty = name
+    requireEmailVerified: ""                   # "1" to require email_verified: true
+    caBundle:
+      configMap: corp-ca                       # or secret: <name>; not both
+      key: ca.crt
+  signinMethods: oidc                          # only the OIDC button; "oidc,email" keeps the emailed link
+```
+
+`helm template` refuses to render when `issuer` is set without `clientId` or `existingSecret`, or
+when the CA bundle names both a ConfigMap and a Secret. The chart mounts the bundle read-only at
+`/etc/vexa-oidc/ca/ca.pem` and points `VEXA_OIDC_CA_FILE` at it.
+
+On OpenShift nothing else changes: the volume is a plain ConfigMap or Secret volume, and the
+Terminal runs as the same non-root user.
+
+### Docker Compose
+
+Set the keys in `deploy/compose/.env`:
+
+```bash
+NEXTAUTH_URL=https://vexa.example.com
+VEXA_OIDC_ISSUER=https://adfs.example.com/adfs
+VEXA_OIDC_CLIENT_ID=<client id>
+VEXA_OIDC_CLIENT_SECRET=<client secret>
+VEXA_OIDC_SCOPES=openid email profile allatclaims
+VEXA_OIDC_DISPLAY_NAME=Corporate login
+VEXA_SIGNIN_METHODS=oidc
+VEXA_OIDC_CA_FILE=/etc/vexa-oidc/ca.pem
+```
+
+and mount the CA bundle in `deploy/compose/docker-compose.override.yml`:
+
+```yaml
+services:
+  terminal:
+    volumes:
+      - ./corp-ca-chain.pem:/etc/vexa-oidc/ca.pem:ro
+```
+
+### Every setting
+
+| Key (Helm value) | Default | Meaning |
+|---|---|---|
+| `VEXA_OIDC_ISSUER` (`terminal.oidc.issuer`) | unset: no OIDC button | The issuer URL, `https://` only. The discovery document is `<issuer>/.well-known/openid-configuration`. |
+| `VEXA_OIDC_CLIENT_ID` (`clientId`) | — | Required with an issuer. The ID token's audience must be this value. |
+| `VEXA_OIDC_CLIENT_SECRET` (`existingSecret` / `existingSecretKey`) | — | Required with an issuer. |
+| `VEXA_OIDC_SCOPES` (`scopes`) | `openid email profile` | Space-separated; must include `openid`. |
+| `VEXA_OIDC_DISPLAY_NAME` (`displayName`) | `Single sign-on` | The button label after "Continue with". |
+| `VEXA_OIDC_CA_FILE` (`caBundle`) | Node's public roots | A PEM bundle, **added** to the public roots for the requests to the IdP. |
+| `VEXA_OIDC_EMAIL_CLAIM` (`emailClaim`) | `email` | The ID-token claim that holds the address. |
+| `VEXA_OIDC_NAME_CLAIM` (`nameClaim`) | `name` | The ID-token claim for the display name; falls back to `given_name family_name`, then to the address. |
+| `VEXA_OIDC_REQUIRE_EMAIL_VERIFIED` (`requireEmailVerified`) | off | `1`: refuse unless the ID token says `email_verified: true`. |
+| `VEXA_SIGNIN_METHODS` (`terminal.signinMethods`) | every configured door | A comma-separated subset of `google`, `microsoft`, `oidc`, `email`. |
+
+**The redirect URI is fixed:** `<terminal URL>/api/auth/callback/oidc`. The provider id `oidc` does
+not change with the display name.
+
+## Showing only some doors
+
+`VEXA_SIGNIN_METHODS=oidc` leaves the OIDC button alone on the card. `oidc,email` keeps the emailed
+link as a fallback. A door left out is closed on the server, not only hidden:
+
+- a Google or Microsoft provider left out is not registered, so its callback completes nothing;
+- with `email` left out, `/api/auth/request-link` and `/api/auth/redeem` answer `404`, and a link
+  mailed before the change no longer signs anyone in.
+
+## Limits
+
+- **Claims come from the ID token only.** The userinfo endpoint is never called. A claim your
+  provider puts only in userinfo or only in the access token is not seen.
+- **The address is the account key.** Accounts are matched by email address. The first OIDC sign-in
+  to an account binds it to that person's identity at that issuer; a later OIDC sign-in with the same
+  address but another identity is refused (see below).
+- **One OIDC provider per instance.**
+- **Changing the issuer URL** (another IdP, or a different spelling of the same one) makes every
+  bound account refuse OIDC sign-in, because the binding includes the issuer. Plan an issuer change
+  together with Vexa support.
+- **Signing out of the Terminal does not sign out of the IdP.** The next click on the button may sign
+  the same person in without a password prompt, as with any single sign-on.
+- **The client authenticates with the shared secret** (`client_secret_basic`). Certificate-based
+  client authentication (`private_key_jwt`) is not supported.
+
+## What people see when something is wrong
+
+| Situation | What happens |
+|---|---|
+| The address is not admitted (not an existing user, not an admin, not on the allow-list) | Back on the sign-in card with one sentence: they cannot sign in here. Nothing is created. |
+| The ID token has no address in the configured claim, or comes from another issuer | Back on the card: the provider did not verify the address. The Terminal log names the reason (`[terminal-auth] oidc sign-in refused: …`). |
+| The account is bound to another identity at this issuer | Refused with the same sentence as "not admitted". |
+| The Terminal cannot reach the IdP, or does not trust its certificate (missing or wrong CA chain) | The button returns to the card with `?error=OAuthSignin` before the browser ever leaves; the Terminal log carries the TLS or network error. Check egress and `VEXA_OIDC_CA_FILE`. |
+| The redirect URI is not registered exactly | The IdP shows its own error page (ADFS: MSIS9224 or similar) and never returns. |
+| admin-api is unreachable | New sign-ins are refused; existing sessions keep working. |
+| The issuer is set but the client id, secret or CA file is missing or unreadable, or `VEXA_SIGNIN_METHODS` names an unknown door | The Terminal does not start. Its log says `refusing to start:` and names the key. |
+
+## How it works
+
+1. **Button.** The sign-in card asks NextAuth (`/api/auth/providers`) which providers exist. The
+   `oidc` provider is registered only when `VEXA_OIDC_ISSUER` is set and `VEXA_SIGNIN_METHODS`
+   allows it (`clients/terminal/src/app/api/auth/oidcConfig.mjs`).
+2. **Discovery.** On the first OIDC request the Terminal's server fetches
+   `<issuer>/.well-known/openid-configuration` and the provider's signing keys, over TLS checked
+   against the public roots plus `VEXA_OIDC_CA_FILE`.
+3. **Authorization.** The browser is sent to the IdP's authorization endpoint with the client id, the
+   scopes, the fixed redirect URI, a PKCE `S256` challenge, `state` and `nonce`. The verifier, state
+   and nonce stay in short-lived httpOnly cookies.
+4. **Callback.** The IdP returns the browser to `/api/auth/callback/oidc` with a code. The server
+   exchanges it at the token endpoint with the client secret and the PKCE verifier, and verifies the
+   ID token: signature against the IdP's keys, `iss`, `aud` (the client id), expiry, and the nonce.
+5. **Identity.** `providerIdentity.ts` takes the verified ID token's claims: `iss` must equal the
+   configured issuer, `sub` must be present, the address is read from the configured claim (and
+   `email_verified` checked when required). The binding subject is
+   `oidc:<sha256 of issuer and sub>`.
+6. **Admission and account.** `findOrCreateUserToken` asks admin-api whether the address may sign in
+   (`POST /internal/signin-admission`, `signin.v1`), finds or creates the user, and binds the subject
+   (`PUT /internal/users/{id}/provider-subject`). A different subject already bound for `oidc` is
+   refused.
+7. **Session.** The Terminal mints a `terminal-login` key and sets its httpOnly `vexa-token` and
+   `vexa-user-info` cookies, exactly as after Google, Microsoft or the emailed link.
+
+**Who writes what.** The IdP owns the person's identity and claims. admin-api is the only writer of
+users, tokens, the allow-list, the admin claim and the bindings (`users.data.provider_subjects`).
+The Terminal stores nothing but its session cookies and NextAuth's short-lived handshake cookies.
+
+**Contracts and routes.** `signin.v1` between the Terminal and admin-api (its
+`ProviderSubjectBindRequest` accepts the `oidc:` subject); the OIDC protocol between the Terminal and
+the IdP; NextAuth's `/api/auth/signin/oidc` and `/api/auth/callback/oidc` in the Terminal.
+
+**Configuration.** Declared in `clients/terminal/config.v1.json` (the `VEXA_OIDC_*` family and
+`VEXA_SIGNIN_METHODS`), set by `deploy/compose/docker-compose.yml` and by the chart's
+`templates/deployment-terminal.yaml` from `values.yaml` `terminal.oidc` and `terminal.signinMethods`.
+
+## Why it complies
+
+**Architecture**
+
+| Rule | How this design meets it | Enforced by |
+|---|---|---|
+| P2, P4: couple through sealed contracts | The Terminal reaches admin-api only through `signin.v1`. The new subject shape widens one pattern additively; a golden pins it and the contract is resealed. admin-api's rule and the schema's pattern are asserted equal. | `gate:schema`, `gate:contract-version`, `test_the_rule_and_the_sealed_shape_agree` |
+| P5: adapt at the boundary | The IdP's vocabulary (issuer, `sub`, claim names) is translated in `providerIdentity.ts` into the one shape every door produces: a verified address and a subject. Nothing downstream knows OIDC exists. | review |
+| P6: one front door | admin-api is called only through `adminApi.ts`. | `gate:domain-doors` |
+| P14: config is a validated contract | Every new key is declared in `config.v1.json`, present on the compose and Helm surfaces, and read nowhere undeclared. The client secret is a `secret` key, fed by Helm from an existing Secret only. | `gate:config-contract`, `gate:helm` |
+| P18: fail loud | A partial OIDC configuration, an unreadable CA file or an unknown door stops the Terminal at boot with the key named; the chart refuses to render a half-filled block. A runtime TLS or network fault is logged and shown as a refused sign-in, never a silent success. | `oidcSignin.test.ts` "the server refuses to start on a half-configured provider"; `gate:helm` refusal cases |
+| P20: default-deny | The callback accepts only the three known providers; an identity is refused unless every check passes; admission refuses unless admin-api answers yes. | deny tests below |
+| P23: one writer per carrier | admin-api remains the only writer of users and bindings; the Terminal holds no list. | `gate:dataflow` |
+
+**Security**
+
+- **Authentication at the IdP, authorization here.** The IdP proves the person; admin-api decides
+  admission, exactly as for every other door. An OIDC sign-in cannot skip the allow-list or the
+  admin claim, because both are asked inside `findOrCreateUserToken`.
+- **Token checks.** The authorization-code flow with PKCE (`S256`), `state` and `nonce`; the ID token
+  is verified against the IdP's published keys, the issuer, the audience (our client id) and expiry
+  before any claim is read. The issuer is compared again against configuration.
+- **TLS.** Every request to the IdP is HTTPS, checked against the public roots plus only the CA
+  bundle the operator supplied. There is no switch to skip certificate checks.
+- **Account binding.** The first OIDC sign-in binds the account to `oidc:<sha256(issuer, sub)>`; a
+  different identity with the same address is refused. An administrator of the IdP who edits a
+  user's email therefore does not reach another person's existing account.
+- **Secrets.** The client secret comes from the environment (Helm: an existing Secret) and is never
+  logged; the startup refusal names keys, not values.
+- **Closed doors stay closed.** A method left out of `VEXA_SIGNIN_METHODS` is not registered or
+  answers `404`.
+
+Deny tests:
+
+| Where | Tests |
+|---|---|
+| `clients/terminal/src/app/api/auth/__tests__/oidcSignin.test.ts` | "refuses a token from another issuer before asking admin-api"; "an address the allow-list does not admit is refused (and so is another identity for a bound account)"; "refuses an oidc callback when the provider is not configured"; "refuses an unknown provider outright"; the `refuses %s` identity cases (other issuer, no issuer, no subject, no email, malformed email, unverified email when required); the `refuses %s` configuration cases (http issuer, missing client id or secret, scopes without `openid`, unreadable CA); "the server refuses to start on a half-configured provider"; "request-link and redeem answer 404, and the instance says email_link: false"; "VEXA_SIGNIN_METHODS=oidc removes configured Google and Microsoft providers" |
+| `core/identity/services/admin-api/tests/test_provider_subjects.py` | `test_a_generic_oidc_subject_binds_and_another_is_refused`, `test_the_door_refuses_another_oidc_identity_and_changes_nothing`, `test_only_the_subjects_the_terminal_makes_are_accepted` (malformed `oidc:` subjects) |
+| `deploy/helm/tests/test_template.sh` | "no OIDC wiring by default"; "the OIDC client secret comes from the existing Secret"; the three "refused to render" cases |
