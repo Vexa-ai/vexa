@@ -45,6 +45,15 @@ def destination_host(spec: dict) -> str:
         return ""
 
 
+def unwatched(claims: dict) -> bool:
+    """A delegated identity (a worker's) whose regime is not ``human``: nobody is in the loop. An
+    identity with a ``delegation`` claim of any other shape counts as unwatched (fail closed)."""
+    if "delegation" not in claims:
+        return False
+    dlg = claims["delegation"]
+    return not (isinstance(dlg, dict) and str(dlg.get("regime") or "").strip().lower() == "human")
+
+
 class Broker:
     def __init__(self, settings: Settings, store: Store) -> None:
         self.settings = settings
@@ -197,7 +206,10 @@ class Broker:
             return False
 
     @staticmethod
-    def identity(request: Request, roles: set) -> dict:
+    def identity(request: Request, roles: set, *, unwatched_ok: bool = False) -> dict:
+        """The verified caller, refused unless its role is in ``roles``. An agent-role call whose
+        signed identity is a worker running without a person in the loop is refused too, unless the
+        route says ``unwatched_ok`` (listing connections, which reads no credential)."""
         who = getattr(request.state, "who", None)
         if not who:
             raise HTTPException(401, "Product identity refused")
@@ -205,6 +217,10 @@ class Broker:
             log_event("role_refused", level="warning", user_id=who["actor"],
                       fields={"role": who["role"], "route": route_of(request.url.path)})
             raise HTTPException(403, "Human setup required")
+        if who["role"] == "agent" and who.get("unwatched") and not unwatched_ok:
+            log_event("regime_refused", level="warning", user_id=who["actor"],
+                      fields={"route": route_of(request.url.path)})
+            raise HTTPException(403, "This session runs without a person in the loop")
         return who
 
     def connection(self, who: dict, cid: str) -> dict:

@@ -36,7 +36,7 @@ def build(b: Broker) -> APIRouter:
 
     @router.get("/api/connections")
     def connection_list(request: Request):
-        who = b.identity(request, {"agent", "human"})
+        who = b.identity(request, {"agent", "human"}, unwatched_ok=True)
         rows = b.sql("SELECT id,provider,label,status,created,setup_request,account,setup_spec,oauth_app_version,approved_host"
                      " FROM connections WHERE actor=? AND status!='deleted' ORDER BY created DESC",
                      (who["actor"],), rows=True)

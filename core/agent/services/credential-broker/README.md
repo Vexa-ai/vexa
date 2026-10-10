@@ -86,5 +86,7 @@ line.
 - ✅ delivered — retention: a write keeps the current version and the one before it; delete destroys
   every stored version of a connection's credential and OAuth application, disconnect destroys the
   credential (the application stays, for reconnecting). Backups the deployment took keep what they hold.
+- ✅ delivered — each connection record is sealed to its owner inside the encrypted value, and every
+  read checks it; the agent role serves a worker only with a person in the loop (listing excepted)
 - ⬜ planned — provider-side revocation on disconnect
 - ⬜ planned — more than one replica (state is SQLite on one volume; the chart pins `replicas: 1`)
