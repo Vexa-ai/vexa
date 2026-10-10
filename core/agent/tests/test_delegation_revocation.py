@@ -17,6 +17,7 @@ import pytest
 from control_plane import delegation_revocation as dr
 from control_plane import dispatch
 from shared import delegation
+from shared.units import delegation_key
 from shared.config import DELEGATION_TTL_MARGIN_SEC, load_settings
 
 SECRET = "test-delegation-secret"
@@ -128,6 +129,28 @@ def test_ending_the_unit_takes_the_tokens_live_record_with_it(tmp_path):
     assert dr.sweep(store, lambda: [], now=time.time() + dr.GRACE_SEC + 1) == 1
     assert not store.exists(dr.live_key(jti))
     assert store.exists(dr.revoked_key(jti))
+
+
+def test_with_a_shared_redis_credential_no_token_is_written_to_redis(tmp_path):
+    """REDIS_WORKLOAD_ACL=shared: every worker can read every key, so the token a unit is handed
+    exists only in its own environment — recorded by jti, never stored as a value."""
+    store = _store()
+    rt = _Runtime()
+    dispatch.Dispatcher(_settings(tmp_path, redis_workload_acl="shared"), rt, _Identity(),
+                        delegation_store=store).dispatch(INV)
+    token = rt.spawned[-1]["VEXA_MCP_DELEGATION_TOKEN"]
+    assert store.exists(dr.live_key(_claims(rt.spawned[-1])["jti"]))
+    for key in store.scan_iter("*"):
+        if store.type(key) == "string":
+            assert store.get(key) != token, key
+        elif store.type(key) == "hash":
+            assert token not in store.hvals(key), key
+
+
+def test_with_per_workload_credentials_the_token_is_published_for_refresh(tmp_path):
+    store = _store()
+    uid, env = _dispatch(tmp_path, store)
+    assert store.get(dr.CURRENT_PREFIX + uid) == env["VEXA_MCP_DELEGATION_TOKEN"]
 
 
 # ── THE UNIT-END PATH: mint → the unit stops → the jti is in the store, for the token's remaining life

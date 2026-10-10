@@ -1063,6 +1063,11 @@ class Dispatcher:
         # Published as the unit's CURRENT token too, which the reaper re-mints from before it
         # expires and the worker reads before each turn (control_plane.delegation_refresh). A
         # publish that fails costs only the refresh: the worker still boots with this token.
+        # REDIS_WORKLOAD_ACL=shared gives every worker the service connection, so a token in Redis
+        # would be readable by every other unit: there it is never published, and the unit keeps
+        # this token (and its tools) until its exp, unrefreshed.
+        if self._settings.redis_workload_acl == "shared":
+            return
         try:
             delegation_refresh.publish(self._delegation_store, unit_id=uid, token=token,
                                        exp=int(claims["exp"]))
