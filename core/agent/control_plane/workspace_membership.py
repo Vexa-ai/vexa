@@ -528,6 +528,44 @@ def _write_invites(root: Path, workspace_id: str, rows: list[dict]) -> None:
     store.write_text(json.dumps(rows, indent=2, sort_keys=False) + "\n")
 
 
+def drop_invites(root: Path, workspace_id: str) -> bool:
+    """Remove a workspace's invite store, so no invite minted for it can be redeemed. True when there
+    was one. For a workspace that stopped being a group (un-share)."""
+    try:
+        invites_path(root, workspace_id).unlink()
+        return True
+    except FileNotFoundError:
+        return False
+
+
+def strip_policy(ws: Path, *, commit_fn: Optional[CommitFn] = None) -> list[str]:
+    """Remove the member list (and the legacy in-tree invite list) from a tree that is no longer a
+    shared workspace — un-share moves it into its owner's private store, where a member list left
+    inside would still name people who no longer have access. Each file is removed through the policy
+    folder's descriptor, never through a link; the removal is committed (as the platform, unless
+    ``commit_fn`` says otherwise) so the tree's history records it. The relative paths removed."""
+    try:
+        dir_fd = _policy_dir_fd(Path(ws), [POLICY_DIR])
+    except FileNotFoundError:
+        return []
+    except OSError as exc:      # a link where the policy folder should be: nothing in it is read
+        log.warning("%s in %s is not a plain folder (%s); nothing stripped", POLICY_DIR, ws, exc.strerror or exc)
+        return []
+    removed: list[str] = []
+    try:
+        for rel in (MEMBERS_FILE, LEGACY_INVITES_FILE):
+            try:
+                os.unlink(rel.split("/", 1)[1], dir_fd=dir_fd)
+                removed.append(rel)
+            except FileNotFoundError:
+                pass
+    finally:
+        os.close(dir_fd)
+    if removed:
+        _commit(commit_fn or policy_commit, Path(ws), "unshare: the member list leaves with the group")
+    return removed
+
+
 def workspaces_with_invites(root: Path) -> list[str]:
     """Every shareable workspace id that has invites to look at — store files first, then any
     workspace still on the legacy in-tree file. Sorted and de-duplicated; reserved and dot-prefixed

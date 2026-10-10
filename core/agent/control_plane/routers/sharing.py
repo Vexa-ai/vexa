@@ -72,9 +72,12 @@ def build(**d) -> APIRouter:
                 mindex.remove(m.get("subject"), workspace_id)
             except Exception:  # noqa: BLE001
                 pass
+        membership_mod.drop_invites(wsr.root, workspace_id)   # …and no pending invite reopens it
         # The tree moved into the caller's private store and stopped being a group. Its id did NOT
         # change — un-sharing is an administrative act, not a new workspace — so every link into it
-        # keeps resolving, and for everyone else it now answers `not-yours`, which is the truth.
+        # keeps resolving, and for everyone else it now answers `not-yours`, which is the truth: a
+        # tree in its owner's private store is theirs alone (`workspace_ids.private_owner`), whatever
+        # kind its record carries.
         _ws_sync(new_slug, kind="desk", owner=subject,
                  ws_dir=workspace_slot_dir(wsr.root, subject, new_slug))
         return {"slug": new_slug}
