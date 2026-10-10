@@ -59,3 +59,35 @@ def redis_client():
         client.ping()
         yield client
         client.close()
+
+
+class FakeRevocationStore:
+    """The service Redis as `/internal/validate` sees it: the revoked-token keys agent-api writes
+    (app/delegation_revocation.py). `down` makes every read fail like an unreachable Redis."""
+
+    def __init__(self):
+        self.keys: set[str] = set()
+        self.down = False
+        self.reads = 0
+
+    def revoke(self, jti: str) -> None:
+        from admin_api.app import delegation_revocation
+
+        self.keys.add(delegation_revocation.REVOKED_PREFIX + jti)
+
+    async def exists(self, key: str) -> int:
+        self.reads += 1
+        if self.down:
+            raise ConnectionError("redis down")
+        return int(key in self.keys)
+
+
+@pytest.fixture(autouse=True)
+def revocation_store(monkeypatch):
+    """Every test answers delegation tokens against an empty in-memory store, never a real Redis; a
+    test that needs a revoked token or a dead store asks for this fixture."""
+    from admin_api.app import delegation_revocation
+
+    store = FakeRevocationStore()
+    monkeypatch.setattr(delegation_revocation, "_client", store)
+    return store

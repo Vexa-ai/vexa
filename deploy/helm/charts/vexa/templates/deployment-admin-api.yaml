@@ -69,6 +69,11 @@ spec:
                 secretKeyRef:
                   name: {{ include "vexa.adminTokenSecretName" . }}
                   key: VEXA_MCP_DELEGATION_SECRET
+            # agent-api revokes a worker's delegation token here when its unit ends; /internal/validate
+            # refuses a vxd_ bearer it cannot check against it (API keys never read it).
+            {{- include "vexa.redisPasswordEnv" . | nindent 12 }}
+            - name: REDIS_URL
+              value: {{ include "vexa.redisUrl" . | quote }}
             - name: LOG_LEVEL
               value: {{ .Values.adminApi.logLevel | default "info" | quote }}
             - name: VEXA_SIGNIN_ALLOW

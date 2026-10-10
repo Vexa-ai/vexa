@@ -36,6 +36,7 @@ from sqlalchemy.future import select
 
 from .. import delegation as delegation_mod
 from ..schema.models import APIToken, User
+from . import delegation_revocation as revocation
 from . import signin_allow
 from .db import get_db
 from .internal_tier import check_internal
@@ -53,6 +54,10 @@ ACCEPTS_DELEGATION_VALUE = "1"
 #: The refusal for a bearer nobody answers to — and for a delegation token presented by a caller that
 #: did not declare it reads one. One string, so the two cannot be told apart.
 INVALID_TOKEN = "Invalid token"
+
+#: The refusal for a delegation token when the revocation store cannot be read (503): whether the
+#: token's unit ended cannot be known, so the token is not answered for. API keys are unaffected.
+DELEGATION_REVOCATION_UNAVAILABLE = "Delegation revocation store unavailable"
 
 
 def accepts_delegation(request: Request) -> bool:
@@ -129,8 +134,17 @@ async def _validate_delegation(token: str, db: AsyncSession) -> Dict[str, Any]:
                             detail="Delegation tokens are not accepted on this deployment")
     try:
         claims = delegation_mod.verify_delegation(secret, token)
+        # Revoked when the unit it was minted for ended; asked only once the signature verified.
+        jti = claims.get("jti")
+        if not isinstance(jti, str) or not jti:
+            raise delegation_mod.Malformed("delegation token names no jti")
+        if await revocation.is_revoked(jti):
+            raise delegation_mod.Revoked("delegation token has been revoked")
     except delegation_mod.DelegationError as e:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail=f"Invalid delegation: {e.reason}")
+    except revocation.Unavailable:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail=DELEGATION_REVOCATION_UNAVAILABLE)
     try:
         uid = int(str(claims["sub"]))
     except (TypeError, ValueError):

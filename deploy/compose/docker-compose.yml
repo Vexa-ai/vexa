@@ -193,6 +193,9 @@ services:
       # identity resolves a worker's delegation token (vxd_) in /internal/validate, so the gateway and
       # flows authenticate a worker's tool calls without holding this key (agent_delegation).
       - VEXA_MCP_DELEGATION_SECRET=${VEXA_MCP_DELEGATION_SECRET:-}
+      # agent-api revokes a worker's delegation token here when its unit ends; /internal/validate
+      # refuses a vxd_ bearer it cannot check against it (API keys never read it).
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis:6379/0
       - LOG_LEVEL=${LOG_LEVEL:-info}
       # Who may sign in to the terminal, besides existing users and admins: comma-separated exact
       # addresses and @domain entries ("@example.com,alice@example.org"). Empty = nobody new once an

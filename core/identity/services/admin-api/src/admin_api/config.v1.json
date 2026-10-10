@@ -212,6 +212,14 @@
    "description": "the HS256 key agent-api signs a worker's per-dispatch delegation token with; /internal/validate verifies vxd_ bearers with it. Same value as agent-api's VEXA_MCP_DELEGATION_SECRET; generated at install on every deploy surface. The placeholders and the key delegation.v1's published vectors are made with are refused at boot.",
    "targets": ["compose", "helm", "lite"],
    "forbidden_values": ["vexa-internal-secret", "lite-internal-secret", "changeme", "change-me", "CHANGE-ME", "default", "secret", "delegation.v1-published-test-vector-key"]
+  },
+  {
+   "key": "REDIS_URL",
+   "class": "defaulted",
+   "default": "redis://redis:6379/0",
+   "secret": true,
+   "description": "the service Redis, where agent-api revokes a worker's delegation token when its unit ends (vexa:delegation:revoked:<jti>, app/delegation_revocation.py). /internal/validate reads it for every vxd_ bearer and refuses the token with 503 when it cannot, so an unreachable or wrong URL costs workers their toolbelt and never admits a revoked token; API keys never read it. On Lite the entrypoint's export reaches admin-api the way every supervisord program inherits it.",
+   "targets": ["compose", "helm"]
   }
  ]
 }
