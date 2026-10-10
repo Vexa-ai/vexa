@@ -62,8 +62,8 @@ sudo nginx -t && sudo systemctl reload nginx
 ```
 
 `make up` refuses to run while `CHANGE-ME` remains in the env file. This stack is internet-reachable
-through nginx, and the compose dev defaults (`ADMIN_TOKEN=dev-admin-token`, `DB_PASSWORD=postgres`)
-are not acceptable on something with a public hostname. `make up` also never builds: it pulls the
+through nginx, and the compose dev defaults this file once mirrored (`ADMIN_TOKEN=dev-admin-token`,
+`DB_PASSWORD=postgres`, both now refused by the services) are not acceptable on something with a public hostname. `make up` also never builds: it pulls the
 published, release-validated tag, because a dogfood stack running a local source build proves
 nothing about the release.
 

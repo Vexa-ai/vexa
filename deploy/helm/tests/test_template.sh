@@ -913,6 +913,29 @@ for weak in dev-dispatch-signing-key DEV-DISPATCH-SIGNING-KEY CHANGE-ME short-ke
 done
 exact 0 'dev-dispatch-signing-key' "no published VEXA_DISPATCH_SIGNING_KEY in the default render"
 
+# ADMIN_API_TOKEN has no published default either: it was `CHANGE_ME`, and admin-api, meeting-api and
+# flows now refuse that and every other value this repository published for the admin key. Empty
+# generates one (and an upgrade keeps the release Secret's, by lookup), a published value refuses.
+admin_token() {  # admin_token <helm args...> → the ADMIN_API_TOKEN the chart's Secret renders
+  helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "$@" --show-only templates/secret.yaml \
+    | sed -nE 's/^  ADMIN_API_TOKEN: "(.*)"$/\1/p' | head -1
+}
+AGEN="$(admin_token)"
+if [ "${#AGEN}" -ge 32 ] && [ "$AGEN" != "CHANGE_ME" ]; then
+  echo "  OK: an empty secrets.adminApiToken renders a generated ${#AGEN}-character token"
+else echo "  FAIL: empty secrets.adminApiToken rendered '${AGEN:0:8}…'"; fail=1; fi
+[ "$(admin_token)" != "$AGEN" ] && echo "  OK: each render without a release Secret mints its own admin token" \
+  || { echo "  FAIL: two renders minted the same ADMIN_API_TOKEN"; fail=1; }
+[ "$(admin_token --set secrets.adminApiToken=$GIVEN)" = "$GIVEN" ] && echo "  OK: a given secrets.adminApiToken is used as is" \
+  || { echo "  FAIL: a given secrets.adminApiToken did not render"; fail=1; }
+for weak in CHANGE_ME changeme dev-admin-token test-admin-token ci-admin-token your-secret token; do
+  refuse "secrets.adminApiToken=$weak" 'secrets\.adminApiToken is a value published in the Vexa repository' \
+    -f "$CHART/values-test.yaml" --set "secrets.adminApiToken=$weak"
+done
+grep -q 'adminApiToken: ""' "$CHART/values.yaml" && echo "  OK: values.yaml ships no admin token" \
+  || { echo "  FAIL: values.yaml ships a default secrets.adminApiToken"; fail=1; }
+exact 0 '^  ADMIN_API_TOKEN: "(CHANGE_ME|test-admin-token)"$' "no published ADMIN_API_TOKEN in the default render"
+
 # The admin list is admin-api's (VEXA_ADMIN_EMAILS); an install that still sets it in the terminal's
 # extraEnv, as this chart once said to, keeps its admins on upgrade.
 admin_emails() {  # admin_emails <helm args...> → the value admin-api's VEXA_ADMIN_EMAILS renders to

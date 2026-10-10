@@ -18,7 +18,8 @@ global:
   imagePullPolicy: IfNotPresent
 
 secrets:
-  adminApiToken: "test-admin-token"
+  # Empty: the chart generates one (`test-admin-token` is a published value the services refuse).
+  adminApiToken: ""
   # A RENDER fixture, never a running value — and deliberately not the old published literal:
   # `vexa-internal-secret` is on every service's forbidden-values list now (F95) and a boot
   # holding it refuses to start.

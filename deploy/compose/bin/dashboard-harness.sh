@@ -16,7 +16,7 @@ export PATH="$HOME/.local/bin:$PATH"
 if ! docker info >/dev/null 2>&1; then echo "  ↳ dashboard-harness — docker not available → skip"; exit 0; fi
 
 PROJ="${COMPOSE_PROJECT:-vexa-dash}"
-ADMIN="${ADMIN_TOKEN:-gate-admin-token}"
+ADMIN="${ADMIN_TOKEN:-$(openssl rand -hex 32)}"
 export IMAGE_TAG=dev COMPOSE_PROJECT_NAME="$PROJ" ADMIN_TOKEN="$ADMIN" \
        INTERNAL_API_SECRET="${INTERNAL_API_SECRET:-gate-internal-secret}" MINIO_BUCKET=vexa \
        RUNTIME_API_TOKEN="${RUNTIME_API_TOKEN:-$(openssl rand -hex 32)}" \

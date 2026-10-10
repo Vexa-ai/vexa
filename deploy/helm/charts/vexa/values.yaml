@@ -88,7 +88,10 @@ vexaEnv: "development"
 
 secrets:
   existingSecretName: ""
-  adminApiToken: "CHANGE_ME"        # admin-api auth + MeetingToken signing (== meeting-api ADMIN_TOKEN)
+  adminApiToken: ""                 # admin-api auth; meeting-api (ADMIN_TOKEN) derives the MeetingToken key
+                                    # from it. Never a published value (the old default CHANGE_ME is
+                                    # refused). Empty → kept from this release's Secret, else generated;
+                                    # with existingSecretName, carry ADMIN_API_TOKEN.
   internalApiSecret: ""             # REQUIRED, no default (F95): the internal tier every service
                                     # presents AND believes — `openssl rand -hex 32`
   transcriptionServiceToken: ""     # funded STT token threaded into spawned bots

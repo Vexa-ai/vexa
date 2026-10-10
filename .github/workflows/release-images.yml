@@ -693,8 +693,8 @@ jobs:
           echo "✓ $REF identity + offline pyannote bake green on linux/amd64"
       - name: Boot Lite and prove front doors plus concurrent bots
         run: |
-          printf 'ADMIN_TOKEN=ci-admin-token\nTRANSCRIPTION_SERVICE_URL=\nTRANSCRIPTION_SERVICE_TOKEN=\nIMAGE_TAG=%s\n' \
-            "$VERSION" > .env
+          printf 'ADMIN_TOKEN=%s\nTRANSCRIPTION_SERVICE_URL=\nTRANSCRIPTION_SERVICE_TOKEN=\nIMAGE_TAG=%s\n' \
+            "$(openssl rand -hex 32)" "$VERSION" > .env
           make -C deploy/lite up init-db
           for i in $(seq 1 10); do
             if make -C deploy/lite test; then break; fi
@@ -704,7 +704,7 @@ jobs:
             }
             sleep 15
           done
-          ADMIN_TOKEN=ci-admin-token deploy/lite/tests/concurrent-bots.sh
+          ADMIN_TOKEN="$(sed -n 's/^ADMIN_TOKEN=//p' .env)" deploy/lite/tests/concurrent-bots.sh
       - name: Lite state on failure
         if: failure()
         run: |
@@ -776,8 +776,8 @@ jobs:
           echo "✓ $REF identity green on native linux/arm64"
       - name: Boot Lite and prove native arm64 front doors
         run: |
-          printf 'ADMIN_TOKEN=ci-admin-token\nTRANSCRIPTION_SERVICE_URL=\nTRANSCRIPTION_SERVICE_TOKEN=\nIMAGE_TAG=%s\n' \
-            "$VERSION" > .env
+          printf 'ADMIN_TOKEN=%s\nTRANSCRIPTION_SERVICE_URL=\nTRANSCRIPTION_SERVICE_TOKEN=\nIMAGE_TAG=%s\n' \
+            "$(openssl rand -hex 32)" "$VERSION" > .env
           make -C deploy/lite up init-db
           for i in $(seq 1 10); do
             if make -C deploy/lite test; then break; fi

@@ -74,11 +74,42 @@ def test_the_environment_this_file_calls_good_actually_passes():
 
 
 def test_the_declaration_forbids_seven_placeholders_on_every_secret_key():
-    """The list this service's code used to re-type as four."""
+    """The list this service's code used to re-type as four. The admin key carries those seven and
+    every value this repository shipped for the admin key (below)."""
     for entry in _declaration()["keys"]:
         if entry.get("secret") and entry.get("class") == "required-explicit":
+            if entry["key"] == "VEXA_FLOWS_ADMIN_KEY":
+                assert set(entry["forbidden_values"]) == set(PUBLISHED_ADMIN_TOKENS)
+                continue
             assert len(entry["forbidden_values"]) == 7, entry["key"]
             assert "vexa-internal-secret" in entry["forbidden_values"]
+
+
+#: Every value this repository has shipped for the admin key, on any surface: compose's .env.example
+#: (dev-admin-token) and its old fallbacks, the chart's values (CHANGE_ME) and test values, CI, the
+#: dashboard harness, the dashboard's placeholders and the old docs' examples. Held here by hand, so a
+#: value dropped from the declaration fails this file rather than booting.
+PUBLISHED_ADMIN_TOKENS = (
+    "vexa-internal-secret", "lite-internal-secret", "changeme", "change-me", "CHANGE-ME", "default",
+    "secret", "dev-admin-token", "CHANGE_ME", "ci-admin-token", "gate-admin-token", "test-admin-token",
+    "test-admin-token-t3", "vexa-admin-token", "vexa-admin-token-2024", "token", "strong-random-token",
+    "your-secret", "your-secret-token", "your-secret-admin-token", "your-secure-admin-token",
+    "your-admin-token", "your-admin-api-token", "your_admin_api_token", "your_admin_api_key",
+    "your_admin_api_key_here", "YOUR_ADMIN_KEY", "YOUR_ADMIN_API_KEY", "YOUR_ADMIN_TOKEN_FROM_DOTENV",
+    "admin-secret", "admin-key", "test-admin-key",
+)
+
+
+@pytest.mark.parametrize("published", PUBLISHED_ADMIN_TOKENS)
+def test_an_admin_key_on_a_published_literal_refuses_to_boot(published):
+    """VEXA_FLOWS_ADMIN_KEY is admin-api's admin key under flows' name: it mints platform accounts and
+    full-scope gateway tokens, so any value this repository published for it refuses the boot."""
+    env = _good_env() | {"VEXA_FLOWS_ADMIN_KEY": published}
+    with pytest.raises(config_preflight.ConfigError) as e:
+        config_preflight.preflight(env)
+    assert "VEXA_FLOWS_ADMIN_KEY" in str(e.value)
+    if published not in ("token", "secret", "default"):  # words the refusal's own prose uses
+        assert published not in str(e.value), "the refusal echoed the value"
 
 
 @pytest.mark.parametrize("placeholder", ["vexa-internal-secret", "lite-internal-secret",

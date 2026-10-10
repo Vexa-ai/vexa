@@ -33,7 +33,7 @@ from meeting_api.bot_spawn.fakes import FakeRuntimeClient, InMemoryMeetingRepo
 from meeting_api.collector.fakes import InMemoryTranscriptStore
 from meeting_api.collector.ingest import consume_segments, ingest
 
-SECRET = "test-admin-token"
+SECRET = "admin-key-for-tests-0123456789abcdef"  # not a published value: the boot refuses those
 USER = 7
 LIFECYCLE_ENDPOINT = "/bots/internal/callback/lifecycle"
 

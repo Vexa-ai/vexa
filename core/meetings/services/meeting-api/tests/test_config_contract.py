@@ -19,7 +19,7 @@ HEADERS = {"x-user-id": "7"}
 
 @pytest.fixture(autouse=True)
 def _admin_token(monkeypatch):
-    monkeypatch.setenv("ADMIN_TOKEN", "test-admin-token")
+    monkeypatch.setenv("ADMIN_TOKEN", "admin-key-for-tests-0123456789abcdef")
     monkeypatch.setenv("VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE", "/run/vexa-identity/public/key.pem")
     monkeypatch.setenv("RUNTIME_API_TOKEN", "runtime-caller-token-for-tests-0123456789abcdef")
     monkeypatch.setenv("DB_PASSWORD", "db-password-for-tests-0123456789abcdef")
@@ -116,6 +116,40 @@ def test_preflight_refuses_to_boot_without_admin_token(monkeypatch):
     with pytest.raises(cp.ConfigError) as ei:
         cp.preflight()
     assert "ADMIN_TOKEN" in str(ei.value), "the boot error must NAME the missing required key"
+
+
+#: Every value this repository has shipped for the admin key, on any surface: compose's .env.example
+#: (dev-admin-token) and its old fallbacks, the chart's values (CHANGE_ME) and test values, CI, the
+#: dashboard harness, the dashboard's placeholders and the old docs' examples. Held here by hand, so a
+#: value dropped from the declaration fails this test rather than booting.
+PUBLISHED_ADMIN_TOKENS = (
+    "vexa-internal-secret", "lite-internal-secret", "changeme", "change-me", "CHANGE-ME", "default",
+    "secret", "dev-admin-token", "CHANGE_ME", "ci-admin-token", "gate-admin-token", "test-admin-token",
+    "test-admin-token-t3", "vexa-admin-token", "vexa-admin-token-2024", "token", "strong-random-token",
+    "your-secret", "your-secret-token", "your-secret-admin-token", "your-secure-admin-token",
+    "your-admin-token", "your-admin-api-token", "your_admin_api_token", "your_admin_api_key",
+    "your_admin_api_key_here", "YOUR_ADMIN_KEY", "YOUR_ADMIN_API_KEY", "YOUR_ADMIN_TOKEN_FROM_DOTENV",
+    "admin-secret", "admin-key", "test-admin-key",
+)
+
+
+def test_the_admin_token_declaration_forbids_every_published_value():
+    decl = {k["key"]: k for k in cp.load_declaration()["keys"]}
+    assert set(PUBLISHED_ADMIN_TOKENS) <= set(decl["ADMIN_TOKEN"]["forbidden_values"])
+
+
+@pytest.mark.parametrize("published", PUBLISHED_ADMIN_TOKENS)
+def test_preflight_refuses_every_published_admin_token(monkeypatch, published):
+    """The admin key is the MeetingToken key's root: a value this repository published is no secret,
+    so the boot refuses it by name — with surrounding whitespace too — and never echoes it."""
+    for value in (published, f" {published} "):
+        monkeypatch.setenv("ADMIN_TOKEN", value)
+        with pytest.raises(cp.ConfigError) as ei:
+            cp.preflight()
+        said = str(ei.value)
+        assert "ADMIN_TOKEN" in said and "PLACEHOLDER" in said
+        if published not in ("token", "secret", "default"):  # words the refusal's own prose uses
+            assert published not in said, "a refusal must never echo the value"
 
 
 def test_preflight_reports_capability_rows(monkeypatch):

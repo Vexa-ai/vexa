@@ -992,7 +992,7 @@ jobs:
           || { echo "::error title=offline-bake::vexaai/vexa-lite:$VERSION shipped with an EMPTY or broken /opt/hf-cache — the pyannote-segmentation-3.0 model did not bake (the lite warm degrades gracefully on HF rate-limit). This image would stall on the first Zoom/Teams diarization. Re-run the lite build with HuggingFace reachable."; exit 1; }
       - name: Point lite at the published image
         run: |
-          printf 'ADMIN_TOKEN=ci-admin-token\nTRANSCRIPTION_SERVICE_URL=\nTRANSCRIPTION_SERVICE_TOKEN=\nIMAGE_TAG=%s\n' "$VERSION" > .env
+          printf 'ADMIN_TOKEN=%s\nTRANSCRIPTION_SERVICE_URL=\nTRANSCRIPTION_SERVICE_TOKEN=\nIMAGE_TAG=%s\n' "$(openssl rand -hex 32)" "$VERSION" > .env
       # Pulls nothing any more — the pre-pull step above left vexaai/vexa-lite:$VERSION and the
       # three sidecar images resident (#715).
       - name: Bring lite up (from the pre-pulled vexaai/vexa-lite:$VERSION)
@@ -1011,7 +1011,7 @@ jobs:
       # The script itself waits for the /bots route to answer non-5xx before spawning
       # (the v0.12.1 maiden run failed here with a 502: gateway up, meeting-api not yet).
       - name: Concurrent-bots smoke (the #478 class — ≥2 bots, per-bot profile dirs)
-        run: ADMIN_TOKEN=ci-admin-token deploy/lite/tests/concurrent-bots.sh
+        run: ADMIN_TOKEN="$(sed -n 's/^ADMIN_TOKEN=//p' .env)" deploy/lite/tests/concurrent-bots.sh
       - name: Lite state on failure
         if: failure()
         run: |
@@ -1101,7 +1101,7 @@ jobs:
           echo "✓ arm64 identity probes green (bot excluded)"
       - name: Point lite at the published image
         run: |
-          printf 'ADMIN_TOKEN=ci-admin-token\nTRANSCRIPTION_SERVICE_URL=\nTRANSCRIPTION_SERVICE_TOKEN=\nIMAGE_TAG=%s\n' "$VERSION" > .env
+          printf 'ADMIN_TOKEN=%s\nTRANSCRIPTION_SERVICE_URL=\nTRANSCRIPTION_SERVICE_TOKEN=\nIMAGE_TAG=%s\n' "$(openssl rand -hex 32)" "$VERSION" > .env
       - name: Bring lite up (pulls vexaai/vexa-lite:$VERSION arm64)
         run: make -C deploy/lite up init-db
       - name: Probe the front doors (make test exits non-zero on failure)

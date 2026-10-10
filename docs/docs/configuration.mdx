@@ -119,8 +119,9 @@ and the Lite entrypoint (persisted in its state directory). To bring your own, g
 `openssl pkey -in signing-key.pem -pubout -out public-key.pem`.
 
 Neither has a default any more. Both services **refuse to boot** on a placeholder literal
-(`changeme`, `vexa-internal-secret`, `lite-internal-secret`, `default`, `secret`, …): a value
-published in this repository is not a secret, and a stack running on one comes up green while
+(`changeme`, `vexa-internal-secret`, `lite-internal-secret`, `default`, `secret`, …, and for
+`ADMIN_TOKEN` every value this repository ever shipped for it, such as `dev-admin-token` and
+`CHANGE_ME`): a value published in this repository is not a secret, and a stack running on one comes up green while
 anyone who read the repo can mint an API key for any account. Generate each with
 `openssl rand -hex 32` and set the same `ADMIN_TOKEN` on every service that shares the tier.
 | `VEXA_DISPATCH_SIGNING_KEY` | — (required) | agent-api signs each dispatch's identity token with it, and refuses to boot on an unset key, on the old default `dev-dispatch-signing-key`, or on a placeholder. `make all` mints one; Helm (which also wants 32+ bytes) and Lite generate and keep one when none is given; by hand `openssl rand -hex 32`. |

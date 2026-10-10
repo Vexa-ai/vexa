@@ -266,6 +266,21 @@ unset `VEXA_DISPATCH_SIGNING_KEY` or on its old default, `dev-dispatch-signing-k
 so a new key changes nothing a running stack depends on. Helm and Lite generate and keep one
 themselves.
 
+**The admin key needs a value of its own.** admin-api, meeting-api and flows refuse to boot on an
+`ADMIN_TOKEN` (`ADMIN_API_TOKEN`, Helm `secrets.adminApiToken`) holding any value this repository ever
+shipped for it: Compose's `dev-admin-token`, the chart's `CHANGE_ME`, `changeme`, and the CI, test and
+old documentation examples (the full list is each service's `config.v1.json`). **Compose:** `make up` /
+`make all` mint one into `.env` and replace a published one there; if you start the stack with
+`docker compose` directly, run `deploy/compose/mint-dev-env.sh .env` first. **Helm:** leave
+`secrets.adminApiToken` empty and the chart keeps the value its Secret already holds, or replaces a
+published one with a generated one. An explicit published value refuses the render, and that includes
+the old default `CHANGE_ME`, which `helm upgrade --reuse-values` carries over: pass
+`--set secrets.adminApiToken=` (or a value of your own). Read the new value with
+`kubectl -n <namespace> get secret <release>-vexa-secrets -o jsonpath='{.data.ADMIN_API_TOKEN}' | base64 -d`.
+With `secrets.existingSecretName`, put a real `ADMIN_API_TOKEN` in that Secret. **Lite** mints one per
+boot unless you set one. Anything that called the admin API with the old value (provisioning scripts,
+`make provision-token`) needs the new one; API keys already minted keep working.
+
 **Object storage: the root credentials need values of their own.** The bundled storage refuses to
 start on an unset `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` or on the old defaults `vexa-access-key` /
 `vexa-secret-key`. Compose `make up` / `make all` and Lite `make lite` mint a pair into `.env`, replace

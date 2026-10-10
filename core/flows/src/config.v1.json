@@ -49,7 +49,7 @@
     {
       "key": "VEXA_FLOWS_ADMIN_KEY",
       "class": "required-explicit",
-      "description": "admin-api's admin key, under the name flows reads it by. It opens `ensure_platform_user` and mints gateway tokens, so it is refused the same way as the internal secret rather than defaulting to a literal.",
+      "description": "admin-api's admin key, under the name flows reads it by. It opens `ensure_platform_user` and mints gateway tokens, so it is refused the same way as the internal secret rather than defaulting to a literal, plus every default and example this repository has shipped for the admin key (fact admin-token-placeholders).",
       "secret": true,
       "targets": [
         "compose"
@@ -61,7 +61,32 @@
         "change-me",
         "CHANGE-ME",
         "default",
-        "secret"
+        "secret",
+        "dev-admin-token",
+        "CHANGE_ME",
+        "ci-admin-token",
+        "gate-admin-token",
+        "test-admin-token",
+        "test-admin-token-t3",
+        "vexa-admin-token",
+        "vexa-admin-token-2024",
+        "token",
+        "strong-random-token",
+        "your-secret",
+        "your-secret-token",
+        "your-secret-admin-token",
+        "your-secure-admin-token",
+        "your-admin-token",
+        "your-admin-api-token",
+        "your_admin_api_token",
+        "your_admin_api_key",
+        "your_admin_api_key_here",
+        "YOUR_ADMIN_KEY",
+        "YOUR_ADMIN_API_KEY",
+        "YOUR_ADMIN_TOKEN_FROM_DOTENV",
+        "admin-secret",
+        "admin-key",
+        "test-admin-key"
       ]
     },
     {

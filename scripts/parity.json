@@ -571,10 +571,10 @@
         },
         {
           "path": "core/flows/src/config.v1.json",
-          "pattern": "\"forbidden_values\"\\s*:\\s*\\[([^\\]]*)\\]",
+          "pattern": "\"key\"\\s*:\\s*\"(?!VEXA_FLOWS_ADMIN_KEY\")[A-Z0-9_]+\"[^{}]*?\"forbidden_values\"\\s*:\\s*\\[([^\\]]*)\\]",
           "flags": "m",
           "all": true,
-          "note": "every forbidden_values list in this contract must be the same list"
+          "note": "every forbidden_values list in this contract but the admin key's (fact admin-token-placeholders) must be the same list"
         },
         {
           "path": "core/gateway/services/gateway/src/gateway/config.v1.json",
@@ -585,17 +585,17 @@
         },
         {
           "path": "core/identity/services/admin-api/src/admin_api/config.v1.json",
-          "pattern": "\"key\"\\s*:\\s*\"(?!DB_PASSWORD\"|VEXA_MCP_DELEGATION_SECRET\")[A-Z0-9_]+\"[^{}]*?\"forbidden_values\"\\s*:\\s*\\[([^\\]]*)\\]",
+          "pattern": "\"key\"\\s*:\\s*\"(?!DB_PASSWORD\"|VEXA_MCP_DELEGATION_SECRET\"|ADMIN_API_TOKEN\")[A-Z0-9_]+\"[^{}]*?\"forbidden_values\"\\s*:\\s*\\[([^\\]]*)\\]",
           "flags": "m",
           "all": true,
-          "note": "every forbidden_values list on a secret row of this contract must be the same list; the DB_PASSWORD row carries database-password-placeholders instead"
+          "note": "every forbidden_values list on a secret row of this contract must be the same list; the DB_PASSWORD row carries database-password-placeholders instead, and the ADMIN_API_TOKEN row admin-token-placeholders"
         },
         {
           "path": "core/meetings/services/meeting-api/src/meeting_api/config.v1.json",
-          "pattern": "\"key\"\\s*:\\s*\"(?!DB_PASSWORD\")[A-Z0-9_]+\"[^{}]*?\"forbidden_values\"\\s*:\\s*\\[([^\\]]*)\\]",
+          "pattern": "\"key\"\\s*:\\s*\"(?!DB_PASSWORD\"|ADMIN_TOKEN\")[A-Z0-9_]+\"[^{}]*?\"forbidden_values\"\\s*:\\s*\\[([^\\]]*)\\]",
           "flags": "m",
           "all": true,
-          "note": "every forbidden_values list on a secret row of this contract must be the same list; the DB_PASSWORD row carries database-password-placeholders instead"
+          "note": "every forbidden_values list on a secret row of this contract must be the same list; the DB_PASSWORD row carries database-password-placeholders instead, and the ADMIN_TOKEN row admin-token-placeholders"
         },
         {
           "path": "core/flows/src/flows_steps/common.py",
@@ -662,6 +662,45 @@
           "path": "deploy/helm/charts/vexa/templates/secret.yaml",
           "pattern": "\\$publishedDispatchKeys := list ([^}]*?) \\}\\}",
           "note": "the chart's refusal of an explicit secrets.dispatchSigningKey"
+        }
+      ]
+    },
+    {
+      "id": "admin-token-placeholders",
+      "fact": "the values the admin key (ADMIN_TOKEN · ADMIN_API_TOKEN · VEXA_FLOWS_ADMIN_KEY · secrets.adminApiToken) may never hold: the internal-secret placeholders plus every default and example this repository has shipped for the admin key",
+      "kind": "set",
+      "extends": "placeholder-secrets",
+      "enforced": true,
+      "canonical": "core/identity/services/admin-api/src/admin_api/config.v1.json — ADMIN_API_TOKEN (the key's owner; its boot preflight refuses these)",
+      "how_to_agree": "one list for one key under four names: a published value found for the admin key joins every site in one change",
+      "why": "The admin key mints an API key for any user, and meeting-api derives the MeetingToken key from it. It shipped as dev-admin-token in compose's .env.example and as CHANGE_ME in the chart's values, and CI, the dashboard harness, the test chart values and the old docs carried more literals; none of them refused anywhere, because the three declarations only carried the internal-secret placeholders. admin-api, meeting-api and flows refuse the declared values at boot, flows refuses them again where it uses the key, the chart refuses an explicit secrets.adminApiToken on the same list and replaces a release Secret still holding one, and mint-dev-env.sh replaces one found in .env. Six copies of one list drift unless they are held together; a value one of them accepts and another refuses is a stack that boots half-way.",
+      "sites": [
+        {
+          "path": "core/identity/services/admin-api/src/admin_api/config.v1.json",
+          "pattern": "\"key\"\\s*:\\s*\"ADMIN_API_TOKEN\"[^{}]*?\"forbidden_values\"\\s*:\\s*\\[([^\\]]*)\\]"
+        },
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/config.v1.json",
+          "pattern": "\"key\"\\s*:\\s*\"ADMIN_TOKEN\"[^{}]*?\"forbidden_values\"\\s*:\\s*\\[([^\\]]*)\\]"
+        },
+        {
+          "path": "core/flows/src/config.v1.json",
+          "pattern": "\"key\"\\s*:\\s*\"VEXA_FLOWS_ADMIN_KEY\"[^{}]*?\"forbidden_values\"\\s*:\\s*\\[([^\\]]*)\\]"
+        },
+        {
+          "path": "core/flows/src/flows_steps/common.py",
+          "pattern": "ADMIN_KEY_PLACEHOLDERS = \\(([^)]*)\\)",
+          "note": "flows' refusal where it uses the key (require_admin_key)"
+        },
+        {
+          "path": "deploy/helm/charts/vexa/templates/secret.yaml",
+          "pattern": "\\$publishedAdminTokens := list ([^}]*?) \\}\\}",
+          "note": "the chart's refusal of an explicit secrets.adminApiToken, and of a release Secret still holding one"
+        },
+        {
+          "path": "deploy/compose/mint-dev-env.sh",
+          "pattern": "admin_published\\(\\) \\{\\n  case \"\\$1\" in ([^)]*)\\) return 0;;",
+          "note": "`make up` replaces an .env ADMIN_TOKEN holding one of these"
         }
       ]
     },

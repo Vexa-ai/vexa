@@ -64,7 +64,9 @@ MEETING_API_URL = f"http://127.0.0.1:{MEETING_API_HOST_PORT}"
 RUNTIME_URL = f"http://127.0.0.1:{RUNTIME_HOST_PORT}"
 
 # Env the stack boots with — pinned so the test knows the secrets it must present.
-ADMIN_TOKEN = "gate-admin-token"
+# Not `gate-admin-token`: that value shipped as the dashboard harness's fallback, and every service now
+# refuses a value published for the admin key (fact admin-token-placeholders).
+ADMIN_TOKEN = "gate-admin-key-0123456789abcdef0123456789abcdef"
 INTERNAL_API_SECRET = "gate-internal-secret"
 # Compose requires NEXTAUTH_SECRET for the whole file, whichever services a test brings up.
 NEXTAUTH_SECRET = "gate-nextauth-secret-0123456789abcdef0123"

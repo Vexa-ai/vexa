@@ -58,6 +58,46 @@ def test_preflight_refuses_the_published_placeholder():
         assert placeholder not in str(ei.value), "a refusal must never echo the value"
 
 
+#: Every value this repository has shipped for the admin key, on any surface: compose's .env.example
+#: (dev-admin-token) and its old fallbacks, the chart's values (CHANGE_ME) and test values, CI, the
+#: dashboard harness, the dashboard's placeholders and the old docs' examples. Held here by hand, so a
+#: value dropped from the declaration fails this test rather than booting.
+PUBLISHED_ADMIN_TOKENS = (
+    "vexa-internal-secret", "lite-internal-secret", "changeme", "change-me", "CHANGE-ME", "default",
+    "secret", "dev-admin-token", "CHANGE_ME", "ci-admin-token", "gate-admin-token", "test-admin-token",
+    "test-admin-token-t3", "vexa-admin-token", "vexa-admin-token-2024", "token", "strong-random-token",
+    "your-secret", "your-secret-token", "your-secret-admin-token", "your-secure-admin-token",
+    "your-admin-token", "your-admin-api-token", "your_admin_api_token", "your_admin_api_key",
+    "your_admin_api_key_here", "YOUR_ADMIN_KEY", "YOUR_ADMIN_API_KEY", "YOUR_ADMIN_TOKEN_FROM_DOTENV",
+    "admin-secret", "admin-key", "test-admin-key",
+)
+
+
+def test_the_admin_token_declaration_forbids_every_published_value():
+    decl = {k["key"]: k for k in cp.load_declaration()["keys"]}
+    assert set(PUBLISHED_ADMIN_TOKENS) <= set(decl["ADMIN_API_TOKEN"]["forbidden_values"])
+
+
+@pytest.mark.parametrize("published", PUBLISHED_ADMIN_TOKENS)
+def test_preflight_refuses_every_published_admin_token(published):
+    """The admin key mints an API key for any user. Unset is allowed (the admin surface answers 500),
+    but a value this repository published is no secret: the boot refuses it by name and never
+    echoes it."""
+    for value in (published, f" {published} "):
+        with pytest.raises(cp.ConfigError) as ei:
+            cp.preflight({"DB_PASSWORD": "a-real-db-password", "INTERNAL_API_SECRET": "a-real-secret",
+                          "ADMIN_API_TOKEN": value})
+        said = str(ei.value)
+        assert "ADMIN_API_TOKEN" in said
+        if published not in ("token", "secret", "default"):  # words the refusal's own prose uses
+            assert published not in said, "a refusal must never echo the value"
+
+
+def test_preflight_keeps_a_real_admin_token():
+    cp.preflight({"DB_PASSWORD": "a-real-db-password", "INTERNAL_API_SECRET": "a-real-secret",
+                  "ADMIN_API_TOKEN": "0123456789abcdef" * 4})
+
+
 def test_the_flows_publish_edge_is_declared_and_never_blocks_the_boot():
     """PRD decision 42 item 2 — A PUBLISH EDGE IS NOT A DEPENDENCY, proven at the boot layer.
 

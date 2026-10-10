@@ -168,7 +168,7 @@ jobs:
         if: steps.scope.outputs.hit == '1'
         run: |
           {
-            echo "ADMIN_TOKEN=ci-admin-token"
+            echo "ADMIN_TOKEN=$(openssl rand -hex 32)"
             echo "INTERNAL_API_SECRET=$(openssl rand -hex 32)"
             echo "TRANSCRIPTION_SERVICE_URL="
             echo "TRANSCRIPTION_SERVICE_TOKEN="
@@ -187,7 +187,7 @@ jobs:
           exit 1
       - name: Concurrent-bots smoke (the #478 class + the #585 stream-authz guard)
         if: steps.scope.outputs.hit == '1'
-        run: ADMIN_TOKEN=ci-admin-token deploy/lite/tests/concurrent-bots.sh
+        run: ADMIN_TOKEN="$(sed -n 's/^ADMIN_TOKEN=//p' .env)" deploy/lite/tests/concurrent-bots.sh
       - name: Present the lite-leg row (job summary)
         if: always() && steps.scope.outputs.hit == '1'
         run: |
