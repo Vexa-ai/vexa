@@ -26,13 +26,18 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { SpeakerStreamManagerConfig } from '@vexa/gmeet-pipeline';
 
-export type Platform = 'google_meet' | 'zoom' | 'teams' | 'jitsi';
+// 'discord' never actually boots THIS bot — it is a wholly separate first-party Python service
+// (core/meetings/services/discord-bot) that speaks invocation.v1/transcript.v1/lifecycle.v1/acts.v1
+// directly, with no browser/Playwright capture lane at all. It rides this union only so the type
+// mirrors the sealed invocation.v1 Platform enum exactly (config.ts's own contract, above).
+export type Platform = 'google_meet' | 'zoom' | 'teams' | 'jitsi' | 'discord';
 export type TranscriptionTier = 'realtime' | 'deferred';
 
 /** True for platforms that ride the MIXED capture lane (one combined WebRTC audio
  *  stream + pyannote separation); google_meet rides the per-channel gmeet lane.
  *  The ONE predicate the browser hook, the capture bridge, and the pipeline pick
- *  must all agree on — never restate it inline. */
+ *  must all agree on — never restate it inline. 'discord' is neither: it never reaches this
+ *  predicate (no browser capture pipeline runs for it), so it falls through to false. */
 export function isMixedLanePlatform(p: Platform | string): boolean {
   return p === 'zoom' || p === 'teams' || p === 'jitsi';
 }

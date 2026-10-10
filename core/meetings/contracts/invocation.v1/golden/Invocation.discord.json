@@ -1,0 +1,7 @@
+{
+  "platform": "discord",
+  "meetingUrl": null,
+  "botName": "Vexa",
+  "nativeMeetingId": "222222222222222222",
+  "redisUrl": "redis://redis:6379"
+}
