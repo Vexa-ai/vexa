@@ -405,6 +405,10 @@ services:
       # it); `production` makes an unset VEXA_SECRETS_KEY a refusal naming the fix.
       - VEXA_SECRETS_KEY=${VEXA_SECRETS_KEY:-}
       - VEXA_ENV=${VEXA_ENV:-development}
+      # Self-hosted git hosts and the provider each runs, so a typed token is presented the way the
+      # host expects: `gitlab.example.com=gitlab,git.example.org=basic:svc-user`. Unlisted hosts keep
+      # GitHub's bare-token form. A malformed value stops agent-api at boot.
+      - VEXA_GIT_PROVIDERS=${VEXA_GIT_PROVIDERS:-}
       # Lane M: the users.data.memberships[] index mirror over the admin-api internal edge
       # (policy/members.json in the workspace git repo stays authoritative; this is the listing cache).
       - VEXA_ADMIN_API_URL=http://admin-api:8001

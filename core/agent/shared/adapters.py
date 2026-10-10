@@ -31,7 +31,7 @@ from shared.gitenv import transport_env
 from shared.gitexec import run_git
 from shared.models import WorkspaceWrite
 from shared.ports import IdentityPort, RuntimePort, SchedulerPort, StreamReader, VcsPort, WorkspacePort
-from shared import runtime_fault
+from shared import git_provider, runtime_fault
 from shared.token_destination import embed_token
 from workspaces.shared import workspace_paths as wpaths
 
@@ -152,8 +152,16 @@ def push_with_token(work_dir: str | Path, remote_url: str, ref: str, token: str 
     # (and fails loud if the remote needs it).
     auth_url = embed_token(remote_url, token)
 
+    # Every spelling of the credential that can appear in git's text: the token as given, its password
+    # half, and the userinfo the URL actually carried (percent-encoded, provider-shaped).
+    known = sorted({k for k in ((token or "").strip(), git_provider.secret_of(token),
+                                git_provider.userinfo(remote_url, token) if token else "") if k},
+                   key=len, reverse=True)
+
     def redact(text: str) -> str:
-        return text.replace(token, "***") if token else text
+        for k in known:
+            text = text.replace(k, "***")
+        return text
 
     try:
         # (Re-)point the dedicated remote at the authenticated URL — `set-url` on a re-publish,

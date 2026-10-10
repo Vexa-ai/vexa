@@ -12,7 +12,9 @@ Two questions, answered here and nowhere else:
   embedded for any URL the first rule allows.
 
 ``embed_token`` is the only place a token is written into a URL. Both rules parse with ``urlsplit``;
-a prefix test and a string split disagree with it on mixed case, stray whitespace and userinfo.
+a prefix test and a string split disagree with it on mixed case, stray whitespace and userinfo. The
+SHAPE of the userinfo — the bare token GitHub takes, ``oauth2:<token>`` for GitLab, ``<user>:<token>``
+for a named account — is ``shared.git_provider``'s answer, not this module's.
 
 Lives in ``shared`` because the push mechanic (``shared/adapters.py``) and the control plane's clone
 and pull (``control_plane/workspace_attach.py``, ``control_plane/workspace_git_sync.py``) both need it,
@@ -22,6 +24,8 @@ from __future__ import annotations
 
 from typing import Optional
 from urllib.parse import SplitResult, urlsplit
+
+from shared import git_provider
 
 
 def _split(url: str) -> Optional[SplitResult]:
@@ -59,10 +63,13 @@ def saved_token_may_reach(url: str) -> bool:
 
 
 def embed_token(url: str, token: Optional[str]) -> str:
-    """``url`` with ``token`` as its userinfo, for one network op — or ``url`` unchanged when there is no
-    token or ``url`` may not carry one (see :func:`may_carry_token`). The caller never persists the
+    """``url`` carrying ``token`` in its userinfo, for one network op — or ``url`` unchanged when there
+    is no token or ``url`` may not carry one (see :func:`may_carry_token`). The userinfo is shaped for
+    the host's provider (``git_provider.userinfo``): the bare token for GitHub, ``oauth2:<token>`` for
+    a GitLab host, ``<user>:<token>`` when the token names its account. The caller never persists the
     result: it is passed to git as an argument or reset straight after the op."""
+    token = (token or "").strip()
     if not token or not may_carry_token(url):
         return url
     parts = _split(url)
-    return parts._replace(netloc=f"{token}@{parts.netloc}").geturl()
+    return parts._replace(netloc=f"{git_provider.userinfo(url, token)}@{parts.netloc}").geturl()

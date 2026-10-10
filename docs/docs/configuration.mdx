@@ -222,6 +222,7 @@ Point the agent at your own model so no inference leaves the network.
 | `HOST_CLAUDE_CREDENTIALS` | — | Host path to Claude credentials mounted into agent containers (see below). |
 | `VEXA_MCP_URL` | the gateway's `/mcp` | The MCP server each agent worker attaches as its `vexa` toolbelt — the gateway's one assembled MCP server on every shipped surface. |
 | `VEXA_MCP_DELEGATION_SECRET` | generated at install | Signs each worker's short-lived delegation token (agent-api) and verifies it (admin-api, where the gateway resolves it). Empty: workers run without vexa tools, and every spawn says so in its log. |
+| `VEXA_GIT_PROVIDERS` | — | Self-hosted git hosts and their provider: comma-separated `<host>=github\|gitlab\|basic:<username>`. Decides how a typed token is sent (`oauth2:<token>` for GitLab, `<username>:<token>` for basic) and lets publish create on a `gitlab` host. Helm: `agentApi.gitProviders`. A malformed value stops agent-api at boot. |
 | `VEXA_ALLOW_LOCAL_REPO_ROOT` | — | `os.pathsep`-separated directories a workspace repo may be attached from as a local path (`POST /agent/workspace/swap`). Unset refuses local paths. |
 
 ### Claude subscription credentials (`HOST_CLAUDE_CREDENTIALS`)

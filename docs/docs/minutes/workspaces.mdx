@@ -89,6 +89,56 @@ Access uses your saved GitHub token, or a **deploy key**: under Connections, pre
 key**, then **Add it on GitHub →** and add the public key to the repository *with write access*. Vexa
 generates the key; you never paste a private key, and the private half never leaves the server.
 
+### Repositories on GitLab or another self-hosted server
+
+A repository on your company's own git server attaches the same way. Two things differ from GitHub.
+
+**The address can be nested.** GitLab keeps projects in groups and subgroups, so paste the full address:
+`https://git.example.com/platform/tools/notes.git` or `git@git.example.com:platform/tools/notes.git`.
+Any depth up to 22 segments (a group, 20 subgroups and the project) is accepted. On `github.com` the
+address is still exactly `owner/repo`.
+
+**The credential.** Use one of these:
+
+- **A deploy key** (recommended). Paste the `git@…` address, press **Use this deploy key**, and add the
+  public key in the project under *Settings → Repository → Deploy keys* with **Grant write
+  permissions**. When your operator registered the host as GitLab, Vexa links you straight to that page.
+- **An access token typed for this one call.** A GitLab personal, project or group access token with
+  `read_repository` (and `write_repository` to push). Type it as `oauth2:<token>`, or as
+  `<username>:<token>` for a server that wants a named account. A bare token works too when your
+  operator registered the host (see below). Your **saved** token is a GitHub credential and is only
+  ever sent to `github.com`, so it is never used here.
+
+**Publishing a new repository to GitLab.** `POST /api/workspace/publish` with `host` set to a GitLab
+host your operator registered creates the project there — in your own namespace, or in the group named
+by `org`, nested groups included (`"org": "platform/tools"`) — and pushes the workspace. The token needs
+the `api` scope. Any other host is refused with a message naming it; create the repository there yourself
+and publish with its address as `remote_url`. The publish dialog in Minutes creates on GitHub.
+
+#### For operators: register your git hosts
+
+Tell agent-api which provider each self-hosted host runs, so a bare token is sent in the form that host
+expects. Unlisted hosts keep GitHub's form, exactly as before.
+
+| Provider | A token is sent as | Use for |
+|---|---|---|
+| `github` | `https://<token>@host/…` | GitHub Enterprise Server |
+| `gitlab` | `https://oauth2:<token>@host/…` | GitLab (self-managed or dedicated); also enables publish-create on that host |
+| `basic:<username>` | `https://<username>:<token>@host/…` | Gitea, Bitbucket Server and other servers that want a named account |
+
+Helm (`values.yaml`):
+
+```yaml
+agentApi:
+  gitProviders: "git.example.com=gitlab,code.example.org=basic:svc-vexa"
+```
+
+With `helm --set`, escape the commas (`--set-string agentApi.gitProviders='git.example.com=gitlab\,code.example.org=basic:svc-vexa'`).
+Docker Compose reads the same setting as `VEXA_GIT_PROVIDERS` from `.env`. A malformed entry
+stops agent-api at boot with a message naming it. The host must be a dotted name agent-api can reach;
+when the server's TLS certificate comes from a company CA, add that CA to the agent-api image's trust
+store, because tokens are only ever sent over `https`.
+
 ### Connect your accounts
 
 Open **Connections** from your account menu (bottom of the rail). An agent can also ask you to connect
@@ -122,6 +172,9 @@ How an operator runs the credential broker behind this page is in [Connections](
 | *cannot remove the last owner* | a workspace needs an owner | add another owner first |
 | *That page is in …, a workspace you do not have access to.* · *That link points at a workspace that is no longer here.* | a `/w/` link you cannot open; Minutes never shows your desk instead | ask for access |
 | *Repository access failed. Check the repository URL and credential.* | the clone was refused | check the address, token or deploy key |
+| *That is not a repository. Use https://github.com/owner/repo, …* | the address has an empty segment, `.`/`..`, a GitLab page path (`/-/…`), more than 22 segments, or more than `owner/repo` on `github.com` | paste the project's clone address |
+| *Vexa can create a repository on GitHub, or on a GitLab host this deployment registered …* (`422`) | publish was asked to create a repository on another host | create it there and publish with `remote_url` |
+| *GitLab on … rejected the token (HTTP 401)* · *GitLab group … was not found, or the token cannot see it* | the token lacks the `api` scope, or the group path is wrong | check the token's scopes and the `org` group path |
 | *Import interrupted. Check the workspace before retrying.* | the import stopped part-way | check what arrived, then retry |
 | *Allow popups for Minutes, then try again.* · *Authorization was not completed.* | Google consent did not finish | allow pop-ups and retry |
 | *Connections unavailable. Please try again.* | the credential service did not answer | try again; an operator checks the broker |
@@ -149,7 +202,23 @@ write. A connection label is at most 80 characters.
    polls `GET /api/workspace/import/{op}/status`. Deploy keys are `GET`/`POST
    /api/workspace/{slug}/deploy-key`; the saved token is `GET`/`POST /api/workspace/git-token` (only a
    masked value comes back).
-6. **Connections.** The terminal's `/api/connections/*` routes call the credential broker as the
+   - The address is checked first, before any git process exists: the terminal's `repoRef.ts` and
+     agent-api's `control_plane/repo_ref.py` accept the same shapes, nested GitLab paths included, and
+     refuse the same ones; agent-api also refuses a host only it could reach.
+   - The credential is resolved in `control_plane/workspace_credentials.py`: the workspace's deploy key
+     for an `ssh` address, else a token typed for this call, else the saved token for `github.com` only.
+   - A token is written into the clone, pull or push URL in exactly one place,
+     `shared/token_destination.py`, and only for an `https` address. The shape of that userinfo comes
+     from `shared/git_provider.py`: the token as typed when it names an account (`oauth2:…`,
+     `<user>:…`), else by the operator's provider map, else GitHub's bare form. After a clone the
+     stored `origin` is reset to the token-free address.
+6. **Publish.** `POST /api/workspace/publish` decides where a new repository would be created before it
+   reads any credential (`creation_host` in `control_plane/workspace_publish.py`): `github.com`, or a
+   host registered as `gitlab`; anything else answers `422`. On GitLab it resolves the group with
+   `GET /api/v4/namespaces/<group path>` and creates the project with `POST /api/v4/projects`, sending
+   the token only in the `PRIVATE-TOKEN` header and refusing redirects, then pushes over the same
+   token-scrubbed remote as every other push.
+7. **Connections.** The terminal's `/api/connections/*` routes call the credential broker as the
    signed-in person. Agents use their own `connection_request` route, which can request a setup but
    never read a credential.
 
@@ -174,12 +243,14 @@ write. A connection label is at most 80 characters.
 | `POST /api/workspace/invites/accept` | agent-api, through the gateway |
 | `POST /api/workspace/import`, `GET /api/workspace/import/{op}/status` | agent-api, through the gateway |
 | `GET`, `POST /api/workspace/{slug}/deploy-key`, `/api/workspace/git-token` | agent-api, through the gateway |
+| `POST /api/workspace/publish` `{ …, host? }`, `POST /api/workspace/push`, `POST /api/workspace/pull` | agent-api, through the gateway; agent-api then calls the git host (and GitLab's `/api/v4` for a create) |
 | `GET /api/connections/list`, `POST /api/connections/…` | the credential broker, as the person |
 | agent tools `workspace_invite`, `workspace_membership` | agent-api `/api/workspace/invite`, membership routes |
 
 ### Configuration
 
-`VEXA_UI_URL` on agent-api (no invite is made without it). The terminal's connections routes read
+`VEXA_UI_URL` on agent-api (no invite is made without it). `VEXA_GIT_PROVIDERS` on agent-api (Helm
+`agentApi.gitProviders`) registers self-hosted git hosts; it is validated when agent-api starts. The terminal's connections routes read
 `VEXA_CONNECTIONS_BROKER_URL`, `VEXA_CONNECTIONS_HUMAN_KEY_FILE` and `VEXA_CONNECTIONS_PUBLIC_ORIGIN`;
 the broker itself is set up as in [Connections](/connections).
 
@@ -196,6 +267,10 @@ the broker itself is set up as in [Connections](/connections).
 | **P20** authorize every access | roles are checked on every membership and repository route; invites check the verified email | deny tests below |
 | **P21** state from evidence | an import is done only when it reports `completed`; a connection request is not a connected account | ungated: reviewed |
 | **P23** one writer per carrier | agent-api writes rosters, invites and import status; the broker writes credentials | `gate:dataflow` |
+| **P14** config is a validated contract | `VEXA_GIT_PROVIDERS` is declared in agent-api's `config.v1.json`, surfaced on Helm and Compose, and parsed at boot by `shared/config.py`, which refuses a malformed entry | `gate:config-contract` |
+| **P15** secrets (git tokens) | a token is put into a URL only by `token_destination.embed_token`, only over `https`, and never persisted: the clone's `origin` and the push remote are reset token-free; the GitLab API gets it in a header, never a URL; errors are scrubbed of the token, its password half and the URL form it took | ungated: reviewed; deny tests below |
+| **P18** fail loud | a host publish cannot create on is a typed `UnsupportedHostError` (`422`) naming the host and the alternative; a bad provider map stops the boot; GitLab answers are translated into named refusals (taken name, rejected token, missing group, redirect) | ungated: reviewed |
+| no duplication | the address rule lives in `repo_ref.py` with one twin in the terminal, held to the same cases by both test suites; the token shape lives only in `git_provider.py` | ungated: reviewed |
 
 ### Security
 
@@ -209,6 +284,12 @@ shared, and only the administrator manages the company workspace.
   are used once under a lock, so two people cannot redeem the same invite.
 - A restricted invite is checked against the email the gateway verified, not one the browser sends.
 - The invite preview grants nothing and does not say whether a workspace exists.
+- A repository address is a whitelist: plain path segments only, never empty, `.`, `..` or `-`, at
+  most 22 deep, exactly two on `github.com`; a host only agent-api could reach is refused, nested path
+  or not.
+- A saved token goes only to `https://github.com/`. A token for another host is typed for one call and
+  travels only over `https`. Publish sends a token to an API only on `github.com` or a host the operator
+  registered as GitLab, and never follows a redirect with it.
 - Deploy keys are generated server-side; the private half is sealed at rest and written to a
   permission-`0600` file only for the length of one git operation.
 - Connection routes accept only the deployment's own origin and a closed set of actions. The terminal
@@ -234,6 +315,9 @@ shared, and only the administrator manages the company workspace.
 | `clients/terminal/src/minutes/__tests__/workspaceStrip.test.tsx` · "gives a READER the one act that is theirs, and no others"; `memberActs.test.tsx` · "renders no membership control for somebody who is not an owner here" | the front page's buttons |
 | `clients/terminal/src/minutes/__tests__/workspaceDeepLink.test.ts` · "never falls back to the desk — a refusal carries no page at all" | `/w/` links |
 | `clients/terminal/src/minutes/__tests__/attachRepo.test.tsx` · "rejects credentials pasted into the repository field before sending" | attach |
+| `core/agent/tests/test_git_gitlab_remotes.py` · `test_a_path_that_is_not_a_plain_nested_name_is_refused`, `test_the_deepest_gitlab_path_is_accepted_and_one_deeper_is_not`, `test_a_nested_path_still_passes_the_host_gate`; `clients/terminal/src/surfaces/__tests__/repoRef.test.ts` · "refuses %s, which is not a plain nested name" | nested paths |
+| `core/agent/tests/test_git_gitlab_remotes.py` · `test_no_provider_puts_a_token_on_a_cleartext_or_ssh_url`, `test_a_clone_presents_oauth2_and_persists_no_credential`, `test_a_push_error_never_carries_any_spelling_of_the_token`, `test_a_malformed_provider_map_stops_the_boot` | token shapes |
+| `core/agent/tests/test_git_gitlab_remotes.py` · `test_create_on_an_unregistered_host_is_refused_by_name`, `test_create_never_aims_at_a_deployment_internal_or_malformed_host`, `test_publish_to_an_unsupported_host_touches_nothing`, `test_gitlab_create_resolves_the_nested_group_and_sends_the_token_only_in_a_header`, `test_gitlab_create_does_not_follow_a_redirect`, `test_the_publish_route_refuses_an_unsupported_host_before_reading_a_credential`; `test_saved_token_destination.py` · `test_the_saved_token_goes_nowhere_else` | publish |
 
 ## Related
 

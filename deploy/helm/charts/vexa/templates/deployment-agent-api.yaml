@@ -130,6 +130,9 @@ spec:
               value: {{ .Values.vexaEnv | default "development" | quote }}
             - name: VEXA_AGENT_MODEL
               value: {{ .Values.models.agentModel | default "" | quote }}
+            # Self-hosted git hosts → provider (github · gitlab · basic:<user>); see values.yaml.
+            - name: VEXA_GIT_PROVIDERS
+              value: {{ .Values.agentApi.gitProviders | default "" | quote }}
             - name: VEXA_AGENT_AUTO_CONTINUE_CHAT
               value: {{ .Values.agentApi.autoContinueChat | toString | quote }}
             - name: VEXA_AGENT_MAX_CHAT_CONTINUATIONS
