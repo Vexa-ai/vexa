@@ -709,6 +709,27 @@ def create_app(
     async def mint_transcript_share_by_id(meeting_id: int, request: Request):
         return await _forward_meeting(request)
 
+    # The OWNER's side of a share: who can read this meeting, the recording setting, and taking
+    # access back — a grant (an invite or a link) or one reader. Row-id addressed like the mint above;
+    # meeting-api owner-scopes every one (404 for a meeting that is not the caller's). The `int`
+    # meeting id keeps `PATCH /meetings/42/access` off the pair route, whose first segment is a
+    # platform name.
+    @app.get("/meetings/{meeting_id}/access")
+    async def get_meeting_access(meeting_id: int, request: Request):
+        return await _forward_meeting(request)
+
+    @app.patch("/meetings/{meeting_id}/access")
+    async def set_meeting_access(meeting_id: int, request: Request):
+        return await _forward_meeting(request)
+
+    @app.delete("/meetings/{meeting_id}/share/{grant_id}")
+    async def revoke_meeting_share(meeting_id: int, grant_id: str, request: Request):
+        return await _forward_meeting(request)
+
+    @app.delete("/meetings/{meeting_id}/viewers/{viewer_id}")
+    async def remove_meeting_viewer(meeting_id: int, viewer_id: int, request: Request):
+        return await _forward_meeting(request)
+
     # Import a transcript into a meeting the caller owns — "this already happened, here are its
     # words" — and complete it. Row-id addressed like the mint above; same _forward, so the same
     # key→identity resolution (X-User-Id) the meeting-api route scopes on.
