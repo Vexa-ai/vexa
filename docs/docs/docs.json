@@ -52,6 +52,7 @@
         "group": "How-to: Agents",
         "pages": [
           "how-to/chat-workspace",
+          "how-to/chat-attachments",
           "how-to/workspace-files",
           "how-to/daily-brief",
           "how-to/email-triage"
