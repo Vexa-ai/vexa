@@ -67,11 +67,11 @@ function ConfigForm({ fields, load, save, note }: {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8, maxWidth: 460 }}>
-      {note && <div style={{ fontSize: 11, color: "var(--t3)", lineHeight: 1.5 }}>{note}</div>}
-      {err && <div role="alert" style={{ fontSize: 11.5, color: "var(--danger)" }}>⚠ {err}</div>}
+      {note && <div className="t-xs c-3 lh-snug">{note}</div>}
+      {err && <div role="alert" className="t-xs c-danger">⚠ {err}</div>}
       {fields.map((f) => (f.showIf && !f.showIf(values)) ? null : (
-        <label key={f.key} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--t2)" }}>
-          <span style={{ width: 110, flex: "none", color: "var(--t3)" }}>{f.label}</span>
+        <label key={f.key} className="t-xs c-2" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span className="c-3" style={{ width: 110, flex: "none" }}>{f.label}</span>
           {f.options ? (
             <select value={values[f.key] ?? ""}
               onChange={(e) => { setSaved(false); setValues((v) => ({ ...v, [f.key]: e.target.value })); }}
@@ -91,7 +91,7 @@ function ConfigForm({ fields, load, save, note }: {
           style={{ ...btn, background: dirty ? "var(--accent)" : "var(--panel2)", color: dirty ? "var(--on-accent)" : "var(--t3)", border: dirty ? "none" : btn.border, opacity: busy ? 0.5 : 1 }}>
           {busy ? "Saving…" : "Save"}
         </button>
-        {saved && <span style={{ fontSize: 11.5, color: "var(--green)" }}>Saved — next agent turn uses it</span>}
+        {saved && <span className="t-xs c-success">Saved — next agent turn uses it</span>}
       </div>
     </div>
   );
@@ -112,19 +112,19 @@ function TestRow({ label, run }: { label: string; run: () => Promise<ConfigTestR
   };
   const provenance = res ? [res.mode, res.source && `via ${res.source}`].filter(Boolean).join(" · ") : "";
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 4, maxWidth: 460, marginTop: 6 }}>
+    <div className="mt-1_5" style={{ display: "flex", flexDirection: "column", gap: 4, maxWidth: 460 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
         <button disabled={busy} onClick={() => void doTest()}
           style={{ ...btn, opacity: busy ? 0.5 : 1 }}>
           {busy ? "Testing…" : label}
         </button>
         {res && (
-          <span style={{ fontSize: 11.5, color: res.ok ? "var(--green)" : "var(--danger)" }}>
-            {res.ok ? "✓" : "✗"} {provenance && <span style={{ color: "var(--t3)" }}>[{provenance}] </span>}
+          <span className="t-xs" style={{ color: res.ok ? "var(--green)" : "var(--danger)" }}>
+            {res.ok ? "✓" : "✗"} {provenance && <span className="c-3">[{provenance}] </span>}
             {res.summary}
           </span>
         )}
-        {err && <span role="alert" style={{ fontSize: 11.5, color: "var(--danger)" }}>⚠ test failed: {err}</span>}
+        {err && <span role="alert" className="t-xs c-danger">⚠ test failed: {err}</span>}
       </div>
     </div>
   );
@@ -190,7 +190,7 @@ export function ModelsSection() {
 
   return (
     <div>
-      <div style={{ fontSize: 11, color: "var(--t3)", lineHeight: 1.5, marginBottom: 12, maxWidth: 460 }}>
+      <div className="t-xs c-3 lh-snug mb-3" style={{ maxWidth: 460 }}>
         Which model the agent runs on, and which transcription service meeting bots use. There is
         one model: the agent&rsquo;s — meetings themselves run no inference. Provider
         &ldquo;subscription&rdquo; rides the deployment&rsquo;s Claude credentials; &ldquo;custom&rdquo; points at your own
@@ -199,7 +199,7 @@ export function ModelsSection() {
       </div>
       <div style={head}>Your models</div>
       {catalog.length > 0 && (
-        <div style={{ fontSize: 11, color: "var(--t3)", lineHeight: 1.5, marginBottom: 6, maxWidth: 460 }}>
+        <div className="t-xs c-3 lh-snug mb-1_5" style={{ maxWidth: 460 }}>
           This deployment offers a model catalog: each chat picks its model in the composer, and new
           chats start on your default model. The endpoint fields below are your own endpoint&rsquo;s.
         </div>
@@ -213,7 +213,7 @@ export function ModelsSection() {
         save={async (u) => asStrings(await setTranscriptionPrefs(u))} />
       <TestRow label="Test transcription backend" run={testTranscription} />
       {globalAdmin && <>
-        <div style={{ ...head, marginTop: 22, color: "var(--accent)" }}>Global defaults (admin — every user without own settings)</div>
+        <div className="mt-5 c-accent" style={{ ...head }}>Global defaults (admin — every user without own settings)</div>
         <ConfigForm key={`global-${catalog.length}`} fields={[...globalCatalogFields, ...modelFields]}
           load={async () => (await getGlobalSetting("models")) ?? {}}
           save={(u) => setGlobalSetting("models", u)} />
@@ -264,39 +264,39 @@ export function SigninSection() {
   const envEntries = loaded ? allowLines(loaded.env).split("\n").filter(Boolean) : [];
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10, maxWidth: 460 }}>
-      <div style={{ fontSize: 11, color: "var(--t3)", lineHeight: 1.5 }}>
+      <div className="t-xs c-3 lh-snug">
         Existing users and admins can always sign in. Everyone else needs to be on this list —
-        an exact address (<span style={{ fontFamily: "var(--mono)" }}>alice@example.com</span>) or a whole
-        domain (<span style={{ fontFamily: "var(--mono)" }}>@example.com</span>), one per line. Anybody else
+        an exact address (<span className="f-mono">alice@example.com</span>) or a whole
+        domain (<span className="f-mono">@example.com</span>), one per line. Anybody else
         is refused at every door, and the email form never tells them so.
       </div>
-      {err && <div role="alert" style={{ fontSize: 11.5, color: "var(--danger)" }}>⚠ {err}</div>}
+      {err && <div role="alert" className="t-xs c-danger">⚠ {err}</div>}
       <textarea
         aria-label="Allowed addresses and domains"
         value={text}
         rows={6}
         placeholder={"@example.com\nalice@example.org"}
         onChange={(e) => { setSaved(false); setText(e.target.value); }}
-        style={{ ...field, fontFamily: "var(--mono)", resize: "vertical" }}
+        className="f-mono" style={{ ...field, resize: "vertical" }}
       />
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
         <button disabled={busy || !dirty} onClick={() => void save()}
           style={{ ...btn, background: dirty ? "var(--accent)" : "var(--panel2)", color: dirty ? "var(--on-accent)" : "var(--t3)", border: dirty ? "none" : btn.border, opacity: busy ? 0.5 : 1 }}>
           {busy ? "Saving…" : "Save"}
         </button>
-        {saved && <span style={{ fontSize: 11.5, color: "var(--green)" }}>Saved — applies to the next sign-in</span>}
+        {saved && <span className="t-xs c-success">Saved — applies to the next sign-in</span>}
       </div>
-      <div style={{ fontSize: 11, color: "var(--t3)", lineHeight: 1.5, marginTop: 6 }}>
-        Also allowed by this deployment&rsquo;s <span style={{ fontFamily: "var(--mono)" }}>VEXA_SIGNIN_ALLOW</span>
+      <div className="t-xs c-3 lh-snug mt-1_5">
+        Also allowed by this deployment&rsquo;s <span className="f-mono">VEXA_SIGNIN_ALLOW</span>
         {envEntries.length ? ":" : " — nothing set."}
       </div>
       {envEntries.length > 0 && (
-        <div style={{ fontSize: 11.5, fontFamily: "var(--mono)", color: "var(--t2)", lineHeight: 1.6 }}>
+        <div className="t-xs f-mono c-2 lh-normal">
           {envEntries.map((e) => <div key={e}>{e}</div>)}
         </div>
       )}
       {loaded && loaded.envProblems.length > 0 && (
-        <div role="alert" style={{ fontSize: 11, color: "var(--danger)", lineHeight: 1.5 }}>
+        <div role="alert" className="t-xs c-danger lh-snug">
           These deployment entries never match anything: {loaded.envProblems.join("; ")}
         </div>
       )}
@@ -315,10 +315,10 @@ function AccountSection() {
     return () => { on = false; };
   }, []);
   return (
-    <div style={{ fontSize: 12.5, color: "var(--t2)", lineHeight: 1.9 }}>
-      <div><span style={{ color: "var(--t3)" }}>Signed in as</span> <span style={{ color: "var(--t1)" }}>{user?.name || user?.email || "…"}</span></div>
-      {user?.email && <div><span style={{ color: "var(--t3)" }}>Email</span> <span style={{ fontFamily: "var(--mono)" }}>{user.email}</span></div>}
-      <div style={{ color: "var(--t3)", marginTop: 6 }}>Theme and sign-out live next to your name in the footer.</div>
+    <div className="t-xs c-2 lh-normal">
+      <div><span className="c-3">Signed in as</span> <span className="c-1">{user?.name || user?.email || "…"}</span></div>
+      {user?.email && <div><span className="c-3">Email</span> <span className="f-mono">{user.email}</span></div>}
+      <div className="c-3 mt-1_5">Theme and sign-out live next to your name in the footer.</div>
     </div>
   );
 }
@@ -343,19 +343,17 @@ function SettingsView() {
   };
   return (
     <div style={{ height: "100%", display: "flex", minHeight: 0 }}>
-      <div style={{ width: 160, flex: "none", borderRight: "1px solid var(--line)", padding: "14px 8px", background: "var(--sidebar)" }}>
-        <div style={{ fontSize: 15, fontWeight: 700, color: "var(--t1)", padding: "0 8px 10px" }}>Settings</div>
+      <div className="bd-r pt-3 pr-2 pb-3 pl-2 bg-1" style={{ width: 160, flex: "none" }}>
+        <div className="t-md fw-600 c-1 pt-0 pr-2 pb-2 pl-2">Settings</div>
         {SECTIONS.filter((s) => admin || !s.adminOnly).map((s) => (
           <button key={s.id} onClick={() => setSection(s.id)}
-            style={{ display: "flex", alignItems: "center", gap: 7, width: "100%", textAlign: "left", fontSize: 12.5,
-              padding: "6px 9px", borderRadius: 7, border: "none", cursor: "pointer",
-              color: section === s.id ? "var(--t1)" : "var(--t2)", background: section === s.id ? "var(--panel2)" : "transparent" }}>
+            className="t-xs pt-1_5 pr-2 pb-1_5 pl-2 r-md bd-none" style={{ display: "flex", alignItems: "center", gap: 7, width: "100%", textAlign: "left", cursor: "pointer", color: section === s.id ? "var(--t1)" : "var(--t2)", background: section === s.id ? "var(--panel2)" : "transparent" }}>
             <Icon name={s.icon} size={13} />{s.label}
           </button>
         ))}
       </div>
-      <div style={{ flex: 1, overflowY: "auto", padding: "18px 22px", minWidth: 0 }}>
-        <div style={{ fontSize: 13.5, fontWeight: 600, color: "var(--t1)", marginBottom: 12 }}>
+      <div className="pt-4 pr-5 pb-4 pl-5" style={{ flex: 1, overflowY: "auto", minWidth: 0 }}>
+        <div className="t-sm fw-600 c-1 mb-3">
           {SECTIONS.find((s) => s.id === section)?.label}
         </div>
         {bodies[section]}

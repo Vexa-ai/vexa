@@ -175,7 +175,20 @@ gate fails when a file goes up, and when a file went down without its budget bei
 | Chat list | rows on the ui-kit row (selected = fill, weight and bar); live is the success colour with its time, not accent; "held" → `Badge` ("Held"); the write target → a muted `Tag`; the "All N" pill → underline `Tabs` "Active / All" in the header; delete → `ConfirmDialog` ("Delete chat") instead of the two-click × → ✓; the icon strip and the account menu on `IconButton` and the menu classes | `Rail.tsx` 57 → 0 · `AccountBadge.tsx` 26 → 0 |
 | Pages panel and entity view | document tabs on the `document` skin (the tab in front joins the page; no accent border; lucide pin and close); navigation, copy and edit → `IconButton`; Save/Cancel → `Button`; one `Breadcrumb` (sans, chevrons, middle collapses) instead of the mono trail; folder listings on the row classes; empty states → `EmptyState`; the workspace front page's nested scroller → its 1/8-screen cap plus "Show more"; its facts and the policy lenses on the metadata table's rules (label column, stacked below 360px; no uppercase); policy values → `Badge` ("On" / "Off"); every inline reference — wikilinks, document paths, workspace names, cross-workspace links — one entity chip (radius 6, type icon, no per-type fill, no dashed border); the header's workspace chips → `Chip`, the target reading "Writes to …" with a pen icon | `PagesPanel.tsx` 80 → 0 · `WorkspaceReadmePanel.tsx` 130 → 111 · `docLinks.tsx` 49 → 16 · `WsLink.tsx` 15 → 1 · `policyDoc.tsx` 86 → 74 · `ContextBar.tsx` 52 → 31 · `Navigator.tsx` 53 → 0 (the file tree on the row classes, lucide carets, depth as an indent token) · `MdxDoc.tsx` 107 → 54 and `Markdown.tsx` 46 → 37 (both renderers share one `.vx-prose` stylesheet: headings on the type scale, lists, quotes, tables that scroll inside their own frame, external links through `ExternalLink`) |
 | Meetings | uppercase eyebrows → `SectionLabel` (sentence case); the meeting phase → a `Badge` earned from the observed state — "Live" (success, with its dot), "Connecting…" and "Reconnecting…" (warning, with a spinner), "Recap" (meeting colour); document kinds → `Tag`; deleting a planned meeting → `ConfirmDialog` ("Delete meeting") instead of `window.confirm`. The meeting page header and player are being reworked on Vexa-ai/vexa#1798 and move onto primitives once that lands | `meeting.tsx` 353 → 292 |
+| Settings, admin, calendar connections (codemod) | static type, colour, space, radius and border literals onto the token utilities, snapped to the scale | `settings.tsx`, `admin.tsx`, `calendarConnections.tsx` — see the budget file |
 | Settings, admin, workspaces, auth | every remaining `window.confirm` (delete and stop-sharing a workspace, twice each) → `useConfirm`, a `ConfirmDialog` that names the act; deleting a workspace requires typing its name; the one-time API token → `SecretReveal` (masked until shown, never in an attribute); every keyboard-focused field shows a 2px focus ring — the sign-in inputs, the join field, filters and forms had none; form buttons on the `Button` classes | `tokens.tsx` 70 → 47 |
+
+### Token utilities and the codemod
+
+A surface that is not rebuilt on a primitive still reaches its type, colour, space, radius and
+border through **token utilities** (`ui-kit/primitives/utilities.css`): `t-xs`…`t-2xl`,
+`fw-400/500/600`, `c-1/2/3` and the status text colours, `bg-0`…`bg-3` and the tints, `bd` /
+`bd-strong`, `r-sm/md/lg/xl/full`, and padding and margin on the 4px grid (`p-2`, `px`-free
+`pt-1_5`, `ml-auto`, …). Every class reads a token. `clients/terminal/scripts/design-codemod.mjs`
+moves static inline style literals onto them, **snapping each value to the scale** (37 font sizes
+onto 6, paddings onto the grid, radii onto five steps); expressions and component props are left
+alone, so behaviour does not change. The snapping is deliberate — it is how a surface comes onto
+the scale — and the diff is reviewed visually.
 
 ### Sources
 
