@@ -100,15 +100,17 @@ value.
 ## Setting it
 
 <Tabs>
-  <Tab title="Compose">
-    In `deploy/compose/.env`, put the catalog on one line and each secret on its own line:
+  <Tab title="Compose and Lite">
+    In `.env` (`deploy/compose/.env` for compose; the repository-root `.env` that
+    `make -C deploy/lite up` reads for Lite), put the catalog on one line and each secret on its own
+    line:
 
     ```dotenv
     VEXA_MODEL_CATALOG={"providers":{"lab-vllm":{"adapter":"openai_compatible","base_url":"http://10.0.0.5:8000/v1","auth":"none","extra_body":{"chat_template_kwargs":{"enable_thinking":false}}},"openrouter":{"adapter":"openrouter","auth":"secret","secret_ref":"env:OPENROUTER_API_KEY"}},"models":[{"id":"qwen3-32b","display_name":"Qwen 3 32B (self-hosted)","provider":"lab-vllm","model":"Qwen/Qwen3-32B","capabilities":{"tool_calling":true,"streaming":true,"context_tokens":32768},"default":true},{"id":"or-sonnet","display_name":"Claude Sonnet via OpenRouter","provider":"openrouter","model":"anthropic/claude-sonnet-4.5"}]}
     OPENROUTER_API_KEY=<your OpenRouter key>
     ```
 
-    Then recreate agent-api.
+    Then recreate agent-api (compose), or the container (Lite).
   </Tab>
   <Tab title="Helm">
     Write the catalog as values. Each `secret_ref` is delivered from a Secret you manage:
