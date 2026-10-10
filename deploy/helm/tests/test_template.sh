@@ -1273,10 +1273,10 @@ else echo "  OK: no OIDC wiring by default"; fi
 TERM_OIDC="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --show-only templates/deployment-terminal.yaml \
   --set terminal.oidc.issuer=https://adfs.example.test/adfs --set terminal.oidc.clientId=vexa-terminal \
   --set terminal.oidc.existingSecret=vexa-oidc --set terminal.oidc.scopes='openid email profile allatclaims' \
-  --set terminal.oidc.caBundle.configMap=corp-ca --set terminal.signinMethods=oidc)"
+  --set terminal.oidc.caBundle.configMap=corp-ca --set terminal.signinMethods=oidc --set terminal.oidc.resource=vexa-terminal)"
 for want in 'name: VEXA_OIDC_ISSUER' 'value: "https://adfs.example.test/adfs"' 'name: VEXA_OIDC_CLIENT_ID' \
             'value: "openid email profile allatclaims"' 'name: VEXA_OIDC_CA_FILE' 'value: /etc/vexa-oidc/ca/ca.pem' \
-            'mountPath: /etc/vexa-oidc/ca' 'name: "corp-ca"' 'path: ca.pem' 'name: VEXA_SIGNIN_METHODS' 'value: "oidc"'; do
+            'mountPath: /etc/vexa-oidc/ca' 'name: "corp-ca"' 'path: ca.pem' 'name: VEXA_SIGNIN_METHODS' 'value: "oidc"' 'name: VEXA_OIDC_RESOURCE'; do
   if grep -qF -- "$want" <<< "$TERM_OIDC"; then echo "  OK: oidc renders $want"; else echo "  FAIL: oidc render lacks $want"; fail=1; fi
 done
 if awk '/name: VEXA_OIDC_CLIENT_SECRET/{f=1;next} f&&/secretKeyRef:/{s=1} f&&s&&/name: "vexa-oidc"/{n=1} f&&s&&/key: "client-secret"/{k=1} f&&/- name:/{exit} END{exit !(n&&k)}' <<< "$TERM_OIDC"; then

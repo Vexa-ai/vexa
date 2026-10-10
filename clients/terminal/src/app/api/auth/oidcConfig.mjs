@@ -68,7 +68,7 @@ export function pemCertificates(text) {
 /**
  * @typedef {Record<string, string | undefined>} Env
  * @typedef {{ enabled: true, issuer: string, wellKnown: string, clientId: string, clientSecret: string,
- *   scopes: string, displayName: string, emailClaim: string, nameClaim: string,
+ *   scopes: string, resource: string, displayName: string, emailClaim: string, nameClaim: string,
  *   requireEmailVerified: boolean, ca: string[] | null }} OidcEnabled
  * @typedef {{ enabled: false, problem?: string }} OidcDisabled
  */
@@ -102,6 +102,12 @@ export function oidcConfig(env = process.env, readFile = readFileSync) {
   const scopes = str(env.VEXA_OIDC_SCOPES) || DEFAULT_SCOPES;
   if (!scopes.split(/\s+/).includes("openid")) return fail("VEXA_OIDC_SCOPES must include openid");
 
+  // ADFS applies a relying party's claim rules to the tokens of the RESOURCE the request names; with
+  // none it falls back to its userinfo resource, whose tokens carry none of them. So an ADFS operator
+  // names the Web API here (usually its identifier is the client id). Other providers ignore it.
+  const resource = str(env.VEXA_OIDC_RESOURCE);
+  if (resource && /\s/.test(resource)) return fail("VEXA_OIDC_RESOURCE must not contain spaces");
+
   const emailClaim = str(env.VEXA_OIDC_EMAIL_CLAIM) || "email";
   const nameClaim = str(env.VEXA_OIDC_NAME_CLAIM) || "name";
   for (const [key, v] of [["VEXA_OIDC_EMAIL_CLAIM", emailClaim], ["VEXA_OIDC_NAME_CLAIM", nameClaim]]) {
@@ -132,6 +138,7 @@ export function oidcConfig(env = process.env, readFile = readFileSync) {
     clientId,
     clientSecret,
     scopes,
+    resource,
     displayName: str(env.VEXA_OIDC_DISPLAY_NAME) || DEFAULT_DISPLAY_NAME,
     emailClaim,
     nameClaim,

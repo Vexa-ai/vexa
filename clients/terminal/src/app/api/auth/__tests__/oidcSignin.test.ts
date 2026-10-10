@@ -69,7 +69,7 @@ beforeEach(() => {
   findOrCreateUserToken.mockReset();
   findOrCreateUserToken.mockResolvedValue({ ok: true, token: "tok", user: { id: 7, email: "ana.lopez@corp.example" } });
   for (const k of ["VEXA_OIDC_ISSUER", "VEXA_OIDC_CLIENT_ID", "VEXA_OIDC_CLIENT_SECRET", "VEXA_OIDC_SCOPES",
-                   "VEXA_OIDC_DISPLAY_NAME", "VEXA_OIDC_CA_FILE", "VEXA_OIDC_EMAIL_CLAIM", "VEXA_OIDC_NAME_CLAIM",
+                   "VEXA_OIDC_DISPLAY_NAME", "VEXA_OIDC_CA_FILE", "VEXA_OIDC_RESOURCE", "VEXA_OIDC_EMAIL_CLAIM", "VEXA_OIDC_NAME_CLAIM",
                    "VEXA_OIDC_REQUIRE_EMAIL_VERIFIED", "VEXA_SIGNIN_METHODS", "GOOGLE_CLIENT_ID",
                    "GOOGLE_CLIENT_SECRET", "MICROSOFT_CLIENT_ID", "MICROSOFT_CLIENT_SECRET"]) vi.stubEnv(k, "");
 });
@@ -152,8 +152,16 @@ describe("the provider", () => {
     });
     expect([...(p.checks as string[])].sort()).toEqual(["nonce", "pkce", "state"]);
     expect(p.httpOptions).toBeUndefined();
+    expect((p.authorization as { params: Record<string, string> }).params.resource).toBeUndefined();
     const profile = (p.profile as (c: Record<string, unknown>) => Record<string, unknown>)(adfsClaims());
     expect(profile).toEqual({ id: adfsClaims().sub, email: "Ana.Lopez@Corp.Example", name: "Ana Lopez" });
+  });
+
+  it("names the ADFS resource on the authorization request when one is configured", async () => {
+    stubEnv({ ...BASE_ENV, VEXA_OIDC_RESOURCE: "vexa-terminal" });
+    const p = (await loadAuthOptions()).providers.find((x) => x.id === "oidc") as unknown as { authorization: { params: Record<string, string> } };
+    expect(p.authorization.params).toEqual({ scope: "openid email profile", resource: "vexa-terminal" });
+    expect(oidcConfig({ ...BASE_ENV, VEXA_OIDC_RESOURCE: "a b" })).toMatchObject({ enabled: false, problem: expect.stringMatching(/RESOURCE/) });
   });
 
   it("adds a custom CA to the public roots rather than replacing them", async () => {

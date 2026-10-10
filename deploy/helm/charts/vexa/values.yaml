@@ -667,6 +667,7 @@ terminal:
     existingSecret: ""
     existingSecretKey: client-secret
     scopes: ""                # empty = "openid email profile"; ADFS: "openid email profile allatclaims"
+    resource: ""              # ADFS: the Web API identifier (usually = clientId); others: leave empty
     displayName: ""           # the button reads "Continue with <displayName>"; empty = "Single sign-on"
     emailClaim: ""            # empty = "email" (ADFS without an email rule: "upn")
     nameClaim: ""             # empty = "name"

@@ -142,6 +142,8 @@ spec:
                   key: {{ .existingSecretKey | default "client-secret" | quote }}
             - name: VEXA_OIDC_SCOPES
               value: {{ .scopes | default "" | quote }}
+            - name: VEXA_OIDC_RESOURCE
+              value: {{ .resource | default "" | quote }}
             - name: VEXA_OIDC_DISPLAY_NAME
               value: {{ .displayName | default "" | quote }}
             - name: VEXA_OIDC_EMAIL_CLAIM

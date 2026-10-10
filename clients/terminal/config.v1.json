@@ -110,6 +110,13 @@
       "targets": ["compose", "helm"]
     },
     {
+      "key": "VEXA_OIDC_RESOURCE",
+      "class": "defaulted",
+      "default": "(unset — no resource parameter)",
+      "description": "Sent as `resource` on the authorization request. ADFS applies a relying party's claim rules only to the tokens of the resource the request names; set it to the application group's Web API identifier (usually the client id). Other providers ignore it.",
+      "targets": ["compose", "helm"]
+    },
+    {
       "key": "VEXA_OIDC_DISPLAY_NAME",
       "class": "defaulted",
       "default": "Single sign-on",

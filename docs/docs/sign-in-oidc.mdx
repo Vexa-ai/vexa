@@ -43,9 +43,9 @@ people type to reach the Terminal (the chart's `terminal.publicUrl`), for exampl
      the person's address.
    - `Display-Name` → outgoing claim type `Name`. This is the name the Terminal shows.
 
-   ADFS puts these claims in the **ID token** only when the request carries the `allatclaims` scope
-   (step 3 permits it; the Terminal asks for it once you set the scopes below). ADFS's userinfo
-   endpoint returns only `sub`, so the Terminal never uses it.
+   ADFS puts these claims in the **ID token** only when the request names this Web API as its
+   resource and carries the `allatclaims` scope; the Terminal sends both once the settings below are
+   in place. ADFS's userinfo endpoint returns only `sub`, so the Terminal never uses it.
 5. **Send the Vexa operator:**
    - the **issuer URL**: `https://<adfs host>/adfs`. Check it against the `issuer` field of
      `https://<adfs host>/adfs/.well-known/openid-configuration`; the two must match character for
@@ -63,6 +63,7 @@ Settings for the Terminal with ADFS:
 |---|---|
 | Issuer | `https://<adfs host>/adfs` |
 | Scopes | `openid email profile allatclaims` |
+| Resource | the Web API identifier from step 3 (the client id) |
 | Email claim | `email` (default). If your rule issues the UPN instead, `upn`. |
 | Name claim | `name` (default) |
 | Require `email_verified` | off (ADFS does not issue it) |
@@ -107,6 +108,7 @@ terminal:
     existingSecret: vexa-oidc                  # the Secret above
     existingSecretKey: client-secret
     scopes: "openid email profile allatclaims" # ADFS; leave empty for Keycloak
+    resource: "<client id>"                    # ADFS: the Web API identifier; leave empty for Keycloak
     displayName: Corporate login               # the button reads "Continue with Corporate login"
     emailClaim: ""                             # empty = email
     nameClaim: ""                              # empty = name
@@ -134,6 +136,7 @@ VEXA_OIDC_ISSUER=https://adfs.example.com/adfs
 VEXA_OIDC_CLIENT_ID=<client id>
 VEXA_OIDC_CLIENT_SECRET=<client secret>
 VEXA_OIDC_SCOPES=openid email profile allatclaims
+VEXA_OIDC_RESOURCE=<client id>
 VEXA_OIDC_DISPLAY_NAME=Corporate login
 VEXA_SIGNIN_METHODS=oidc
 VEXA_OIDC_CA_FILE=/etc/vexa-oidc/ca.pem
@@ -156,6 +159,7 @@ services:
 | `VEXA_OIDC_CLIENT_ID` (`clientId`) | — | Required with an issuer. The ID token's audience must be this value. |
 | `VEXA_OIDC_CLIENT_SECRET` (`existingSecret` / `existingSecretKey`) | — | Required with an issuer. |
 | `VEXA_OIDC_SCOPES` (`scopes`) | `openid email profile` | Space-separated; must include `openid`. |
+| `VEXA_OIDC_RESOURCE` (`resource`) | unset | Sent as `resource` on the authorization request. ADFS: the Web API identifier, so its claim rules apply. |
 | `VEXA_OIDC_DISPLAY_NAME` (`displayName`) | `Single sign-on` | The button label after "Continue with". |
 | `VEXA_OIDC_CA_FILE` (`caBundle`) | Node's public roots | A PEM bundle, **added** to the public roots for the requests to the IdP. |
 | `VEXA_OIDC_EMAIL_CLAIM` (`emailClaim`) | `email` | The ID-token claim that holds the address. |
@@ -184,8 +188,9 @@ link as a fallback. A door left out is closed on the server, not only hidden:
   address but another identity is refused (see below).
 - **One OIDC provider per instance.**
 - **Changing the issuer URL** (another IdP, or a different spelling of the same one) makes every
-  bound account refuse OIDC sign-in, because the binding includes the issuer. Plan an issuer change
-  together with Vexa support.
+  bound account refuse OIDC sign-in, because the binding includes the issuer. On ADFS the same is
+  true of a **new client id**: ADFS gives each application its own `sub` for the same person. Plan
+  either change together with Vexa support.
 - **Signing out of the Terminal does not sign out of the IdP.** The next click on the button may sign
   the same person in without a password prompt, as with any single sign-on.
 - **The client authenticates with the shared secret** (`client_secret_basic`). Certificate-based
@@ -212,7 +217,7 @@ link as a fallback. A door left out is closed on the server, not only hidden:
    `<issuer>/.well-known/openid-configuration` and the provider's signing keys, over TLS checked
    against the public roots plus `VEXA_OIDC_CA_FILE`.
 3. **Authorization.** The browser is sent to the IdP's authorization endpoint with the client id, the
-   scopes, the fixed redirect URI, a PKCE `S256` challenge, `state` and `nonce`. The verifier, state
+   scopes, the `resource` when one is configured, the fixed redirect URI, a PKCE `S256` challenge, `state` and `nonce`. The verifier, state
    and nonce stay in short-lived httpOnly cookies.
 4. **Callback.** The IdP returns the browser to `/api/auth/callback/oidc` with a code. The server
    exchanges it at the token endpoint with the client secret and the PKCE verifier, and verifies the

@@ -53,7 +53,7 @@ function oidcProviders() {
       wellKnown: cfg.wellKnown,
       clientId: cfg.clientId,
       clientSecret: cfg.clientSecret,
-      authorization: { params: { scope: cfg.scopes } },
+      authorization: { params: { scope: cfg.scopes, ...(cfg.resource ? { resource: cfg.resource } : {}) } },
       idToken: true,
       checks: ["pkce", "state", "nonce"] as ("pkce" | "state" | "nonce")[],
       ...(cfg.ca ? { httpOptions: { ca: [...rootCertificates, ...cfg.ca], timeout: 10000 } } : {}),
