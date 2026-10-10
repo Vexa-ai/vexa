@@ -14,8 +14,9 @@
  * from `python-licenses.json`, an index of `name==version → SPDX` read from PyPI's metadata for the
  * exact locked version (`license_expression`, else a recognisable `license` field, else the licence
  * classifiers, joined with AND when there are several, which is the restrictive reading). The index is
- * data a human can review and correct: `--refresh` only fills keys that are missing, and never rewrites
- * a recorded one. A locked version with no row fails the gate, so a bump is re-read before it ships.
+ * data a human can review and correct: `--refresh` fills keys that are missing, drops rows for versions
+ * no image installs any more, and never rewrites a row that still ships. A locked version with no row
+ * fails the gate, so a bump is re-read before it ships.
  *
  * LIMIT: a row is the licence the PACKAGE declares. Native libraries a binary wheel bundles (the
  * `<package>.libs/` directory auditwheel writes) can be under other licences, and nothing in the
@@ -386,10 +387,15 @@ async function refresh(root) {
     index.licenses[key] = res.ok ? spdxFromPyPI((await res.json()).info) : `UNKNOWN (PyPI ${res.status})`;
     console.log(`  + ${key}: ${index.licenses[key]}`);
   }
+  // Rows for versions no image installs any more are dropped; a row that still ships is never rewritten.
+  const stale = Object.keys(index.licenses).filter((k) => !needed.has(k));
+  for (const k of stale) delete index.licenses[k];
+  const live = new Set(pipKeys.map((p) => p.key));
+  for (const k of Object.keys(index.installs)) if (!live.has(k)) delete index.installs[k];
   const sorted = (o) => Object.fromEntries(Object.entries(o).sort(([a], [b]) => a.localeCompare(b)));
   const out = { _comment: index._comment, licenses: sorted(index.licenses), installs: sorted(index.installs) };
   writeFileSync(join(root, INDEX_FILE), JSON.stringify(out, null, 2) + "\n");
-  console.log(`${INDEX_FILE}: ${missing.length} row(s) added, ${Object.keys(out.licenses).length} total`);
+  console.log(`${INDEX_FILE}: ${missing.length} row(s) added, ${stale.length} no longer shipped dropped, ${Object.keys(out.licenses).length} total`);
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {

@@ -16,7 +16,7 @@ dependencies = [
     "fastapi-guard>=7.2,<8.0",
     # gateway-identity.v1: the gateway signs the identity it resolved with an Ed25519 private key
     # (OpenSSL through cryptography). Apache-2.0 OR BSD-3-Clause.
-    "cryptography>=43,<47",
+    "cryptography>=50.0.1,<51",
 ]
 
 [dependency-groups]

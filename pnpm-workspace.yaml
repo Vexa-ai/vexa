@@ -32,26 +32,40 @@ overrides:
   # reader) + the incomplete-fix follow-up: next pins postcss 8.4.31 exactly; 8.5.x is
   # API-compatible.
   "postcss@<8.5.23": ">=8.5.23"
-  # GHSA-xcpc-8h2w-3j85: crafted-ZIP 4 GB allocation in adm-zip <0.6.0,
-  # reached only in onnxruntime-node's postinstall unpack of its own runtime archive.
-  "adm-zip@<0.6.0": ">=0.6.0"
+  # adm-zip <0.6.1: GHSA-xcpc-8h2w-3j85, GHSA-7q85-xj36-vmfc, GHSA-rcw4-f5rp-g42v (allocation and
+  # decompression-bomb DoS), GHSA-8238-w5pm-2374, GHSA-c6fg-446q-cg94, GHSA-p634-w6r4-rjp2,
+  # GHSA-j5f4-cc29-5x44 (SUID bits kept) and GHSA-vwc7-r8mq-g2x9 (extraction follows symlinks).
+  # Reached only in onnxruntime-node's postinstall unpack of its own runtime archive
+  # (security/known-advisories.md). Held to ^0.6.
+  "adm-zip@<0.6.1": "^0.6.1"
   # nanoid <3.3.18: custom/non-secure generators can loop indefinitely. Enters via postcss.
   # Held to ^3 — nanoid 4+ is ESM-only and postcss requires the 3.x CJS build.
   "nanoid@<3.3.18": "^3.3.18"
-  # fast-uri >=3.0.0 <3.1.6: six host-confusion / SSRF advisories. Enters via ajv,
-  # ajv-formats and dependency-cruiser. Held to ^3 — 4.x is a major ajv has not adopted.
-  "fast-uri@>=3.0.0 <3.1.6": "^3.1.6"
-  # brace-expansion <1.1.18: three DoS-via-expansion advisories. Only the 1.x line is
-  # affected here (via minimatch under puppeteer-extra-plugin-stealth in the join and
-  # remote-browser modules); 2.x is untouched by this selector.
-  "brace-expansion@1": ">=1.1.18"
-  # sharp <0.35.0: inherited libvips vulnerabilities. Enters via @huggingface/transformers'
-  # IMAGE pipeline, which the audio-only mixed lane never instantiates (ADR-0004). 0.35 keeps
-  # the @img/sharp-libvips-* split, so the Category-B exception below stays valid as written.
-  "sharp@<0.35.0": ">=0.35.0"
+  # fast-uri >=3.0.0 <3.1.8: host-confusion / SSRF advisories (GHSA-hrr3-gc8f-f4qj and six
+  # earlier). Enters via ajv, ajv-formats and dependency-cruiser. Held to ^3 — 4.x is a major ajv
+  # has not adopted.
+  "fast-uri@>=3.0.0 <3.1.8": "^3.1.8"
+  # brace-expansion 1.x <1.1.21: DoS via expansion and recursion (GHSA-6j4f-fj2g-mc7p,
+  # GHSA-q2hr-2g5m-vwhr, GHSA-qhr7-859c-m2p7 and earlier). Only the 1.x line is in the tree (via
+  # minimatch@3 under puppeteer-extra-plugin-stealth in the join and remote-browser modules), and
+  # it is held to ^1: minimatch@3 calls the 1.x default export, which 5.x replaces with a named one.
+  "brace-expansion@1": "^1.1.21"
+  # sharp <0.35.5: inherited libvips, libheif and librsvg vulnerabilities (GHSA-f88m-g3jw-g9cj,
+  # GHSA-rgj7-g3m4-5g8c, GHSA-wq5f-xc86-pv6w). Enters via @huggingface/transformers, which imports
+  # it at module scope; the audio-only mixed lane never calls an image function (ADR-0004). 0.35
+  # keeps the @img/sharp-libvips-* split, so the Category-B exception stays valid as written.
+  "sharp@<0.35.5": "^0.35.5"
   # protobufjs >=7.5.0 <=7.6.4: DoS via infinite loop. Enters via onnxruntime-web under
   # @huggingface/transformers. Held to ^7 — 8.x is a major bump transformers has not adopted.
   "protobufjs@>=7.5.0 <7.6.5": "^7.6.5"
-  # undici >=7.0.0 <7.29.0: one high + four moderate advisories. Dev-only here (jsdom under
-  # vitest in the terminal and join packages), but Dependabot scores the lockfile, not the scope.
-  "undici@>=7.0.0 <7.29.0": "^7.29.0"
+  # undici >=7.0.0 <7.29.1: GHSA-w293-vg96-wgc3 and GHSA-rfgv-xxqx-mfg5 (high) and earlier ones.
+  # Dev-only here (jsdom under vitest in the terminal and join packages), but Dependabot scores
+  # the lockfile, not the scope.
+  "undici@>=7.0.0 <7.29.1": "^7.29.1"
+  # source-map-js <1.2.2: event-loop DoS through an indexed source map (GHSA-68fv-2mgg-jv7q).
+  # Enters via postcss (next, tailwind) and css-tree (jsdom).
+  "source-map-js@<1.2.2": "^1.2.2"
+  # dompurify <3.4.16: two IN_PLACE sanitiser bypasses (GHSA-6688-9rhm-gjv2, GHSA-p98j-92pf-mc4p).
+  # Enters via mermaid in the terminal's diagram rendering. Taken under Apache-2.0 of its
+  # (MPL-2.0 OR Apache-2.0) licence.
+  "dompurify@<3.4.16": "^3.4.16"
