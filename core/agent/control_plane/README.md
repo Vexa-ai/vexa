@@ -67,6 +67,9 @@ caller or with the internal secret, never with a credential of its own:
   `meeting_highlight.py` (what it has named, and which names have a page), `meeting_terms.py` (the
   annotation layer over its transcript), `meeting_steering.py` (per-state preambles for meeting chat
   turns), `schedule_digest.py` (the schedule as a prompt block).
+- `meeting_bundle.py` (+ `routers/meeting_bundle.py`) — a meeting's workspace tree and page in and out of a
+  meeting-bundle.v1: the parts archive for an owner's export, and the restore after an import. The
+  codec is `shared/meeting_bundle_codec.py`, vendored verbatim from the contract.
 
 **Workspaces**
 - `workspace_reader.py`, `workspace_ids.py` (id → where it is now), `workspace_purpose.py`,

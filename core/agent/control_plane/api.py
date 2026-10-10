@@ -110,6 +110,7 @@ from control_plane.routers import connections as routers_connections
 from control_plane.routers import clock as routers_clock
 from control_plane.routers import workspaces as routers_workspaces
 from control_plane.routers import sharing as routers_sharing
+from control_plane.routers import meeting_bundle as routers_meeting_bundle
 from control_plane import route_policy
 from control_plane.ceiling import reads_within, require_in_ceiling
 from control_plane.api_shared import (
@@ -1004,7 +1005,7 @@ def create_app(
         settings=settings, stream_reader=stream_reader,
         subject_of=subject_of,
         workspace_registry=workspace_registry, workspace_touches=workspace_touches, wsr=wsr)
-    for _r in (routers_health, routers_ingress, routers_chats, routers_routines, routers_admin, routers_meetings, routers_scaffolds, routers_friction, routers_proposals, routers_workspaces, routers_sharing, routers_connections, routers_clock):
+    for _r in (routers_health, routers_ingress, routers_chats, routers_routines, routers_admin, routers_meetings, routers_scaffolds, routers_friction, routers_proposals, routers_workspaces, routers_sharing, routers_connections, routers_clock, routers_meeting_bundle):
         app.include_router(_r.build(**_deps))
     # A `verbs` row naming a route this app does not serve protects nothing — refuse the boot.
     route_policy.assert_served(app.routes)

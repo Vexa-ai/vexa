@@ -76,6 +76,8 @@ def _entries(reason: str, *keys: str) -> dict:
 
 #: ``<path under core/>::<function qualname>`` → why what it touches is not a work tree.
 ALLOW = {
+    "agent/shared/meeting_bundle_codec.py::_read_bounded":
+        "opens a member of an in-memory zip archive (zipfile.ZipFile.open), never a file by name",
     **_entries(_OPERATOR,
                "agent/control_plane/broker_assertion.py::load_key",
                "agent/control_plane/config_preflight.py::load_declaration",
@@ -92,6 +94,7 @@ ALLOW = {
                "agent/shared/seeding.py::list_templates",
                "agent/shared/seeding.py::_seed_pairs",
                "agent/shared/tools.py::ToolRegistry.from_dir",
+               "agent/shared/meeting_bundle_codec.py::_schema",
                "agent/worker/engine.py::<module>"),
     **_entries(_STORE,
                "agent/control_plane/secret_store.py::read_key",
@@ -121,6 +124,7 @@ ALLOW = {
                "agent/control_plane/workspace_import.py::_store",
                "agent/control_plane/workspace_import.py::status",
                "agent/control_plane/workspace_import.py::start",
+               "agent/control_plane/meeting_bundle.py::restore",
                "agent/control_plane/workspace_membership.py::read_invites",
                "agent/control_plane/workspace_membership.py::_write_invites",
                "agent/control_plane/workspace_membership.py::drop_invites",

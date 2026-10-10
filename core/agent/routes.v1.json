@@ -566,6 +566,11 @@
       "method": "POST",
       "path": "/agent/workspace/{workspace_id}/leave",
       "person": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/meeting/bundle-restore",
+      "person": true
     }
   ]
 }
