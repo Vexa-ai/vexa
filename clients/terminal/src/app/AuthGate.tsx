@@ -274,7 +274,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
             <img src="/vexa-logo.svg" alt="Vexa" width={28} height={28} style={{ borderRadius: 8, display: "block", flex: "none" }} />
             <div style={{ fontSize: 15, fontWeight: 600, color: "var(--t1)" }}>{SESSION_ENDED_HEADLINE}</div>
           </div>
-          <div style={{ fontSize: 12, color: "var(--t3)", lineHeight: 1.5 }}>
+          <div className="vx-auth-text">
             This device was signed out. Signing in again brings you back to where you were.
           </div>
           <button
@@ -329,13 +329,13 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
         ) : (
           <>
             {notice && (
-              <div role="alert" data-testid="signin-notice" style={{ fontSize: 12, color: "var(--danger)", lineHeight: 1.5 }}>
+              <div role="alert" data-testid="signin-notice" className="vx-field-error">
                 {notice}
               </div>
             )}
             {needCode ? (
               <form onSubmit={submitCode} data-testid="claim-code" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                <div style={{ fontSize: 12, color: "var(--t3)", lineHeight: 1.5 }}>
+                <div className="vx-auth-text">
                   This Vexa instance has no administrator yet. To claim it, enter the one-time claim code
                   from the admin-api log; whoever signs in with it becomes the admin and can configure
                   models, transcription, and other users.
@@ -348,50 +348,43 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
                   value={claimCode}
                   onChange={(e) => setClaimCode(e.target.value)}
                   placeholder="XXXX-XXXX-XXXX-XXXX"
-                  style={{
-                    background: "var(--panel2)", border: "1px solid var(--line2)", borderRadius: 7,
-                    padding: "9px 10px", color: "var(--t1)", fontSize: 13, outline: "none", fontFamily: "var(--mono, monospace)",
-                  }}
+                  aria-label="Claim code"
+                  className="vx-input vx-auth-input" data-mono=""
                 />
-                {error && <div style={{ fontSize: 11, color: "var(--danger)", lineHeight: 1.4 }}>{error}</div>}
+                {error && <div role="alert" className="vx-field-error">{error}</div>}
                 <button
                   type="submit"
                   disabled={!claimCode.trim() || submitting}
-                  style={{
-                    background: claimCode.trim() ? "var(--accent)" : "var(--panel2)",
-                    color: claimCode.trim() ? "var(--on-accent)" : "var(--t3)",
-                    border: "none", borderRadius: 7, padding: "9px 10px", fontSize: 13, fontWeight: 600,
-                    cursor: claimCode.trim() && !submitting ? "pointer" : "default",
-                  }}
+                  className="vx-btn vx-auth-btn" data-variant="primary" data-size="md"
                 >
                   {submitting ? "Checking…" : "Continue"}
                 </button>
-                <button type="button" onClick={() => { setPlainSignIn(true); setError(null); }} style={gateQuietBtn}>
+                <button type="button" onClick={() => { setPlainSignIn(true); setError(null); }} className="vx-auth-quiet">
                   Already have an account here? Sign in
                 </button>
               </form>
             ) : claiming ? (
-              <div style={{ fontSize: 12, color: "var(--t3)", lineHeight: 1.5 }}>
+              <div className="vx-auth-text">
                 Code accepted. Sign in now — this sign-in becomes the administrator. If you use the
                 emailed link, open it in this browser.
               </div>
             ) : (
-              <div style={{ fontSize: 12, color: "var(--t3)", lineHeight: 1.5 }}>Sign in to continue.</div>
+              <div className="vx-auth-text">Sign in to continue.</div>
             )}
 
             {!needCode && providers.google && (
-              <button onClick={() => signIn("google", { callbackUrl: destination() })} style={oauthBtn}>
+              <button onClick={() => signIn("google", { callbackUrl: destination() })} className="vx-btn vx-auth-btn" data-variant="secondary" data-size="md">
                 <GoogleMark /> Continue with Google
               </button>
             )}
             {!needCode && providers.microsoft && (
-              <button onClick={() => signIn("microsoft", { callbackUrl: destination() })} style={oauthBtn}>
+              <button onClick={() => signIn("microsoft", { callbackUrl: destination() })} className="vx-btn vx-auth-btn" data-variant="secondary" data-size="md">
                 <MicrosoftMark /> Continue with Microsoft
               </button>
             )}
 
             {!needCode && <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              <div style={{ fontSize: 11, color: "var(--t3)", lineHeight: 1.4 }}>
+              <div className="vx-auth-text">
                 {hasOAuth
                   ? "Or get a sign-in link by email."
                   : "Enter your email and we\u2019ll send you a sign-in link."}
@@ -403,21 +396,14 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="you@company.com"
-                style={{
-                  background: "var(--panel2)", border: "1px solid var(--line2)", borderRadius: 7,
-                  padding: "9px 10px", color: "var(--t1)", fontSize: 13, outline: "none",
-                }}
+                aria-label="Email address"
+                className="vx-input vx-auth-input"
               />
-              {error && <div style={{ fontSize: 11, color: "var(--danger)", lineHeight: 1.4 }}>{error}</div>}
+              {error && <div role="alert" className="vx-field-error">{error}</div>}
               <button
                 type="submit"
                 disabled={!email.trim() || submitting}
-                style={{
-                  background: email.trim() ? "var(--accent)" : "var(--panel2)",
-                  color: email.trim() ? "var(--on-accent)" : "var(--t3)",
-                  border: "none", borderRadius: 7, padding: "9px 10px", fontSize: 13, fontWeight: 600,
-                  cursor: email.trim() && !submitting ? "pointer" : "default",
-                }}
+                className="vx-btn vx-auth-btn" data-variant="primary" data-size="md"
               >
                 {submitting ? "Sending…" : "Send me a link"}
               </button>
@@ -459,10 +445,6 @@ function GateShell({ testId, title, children }: { testId: string; title: string;
   );
 }
 
-const gateQuietBtn: React.CSSProperties = {
-  background: "none", border: "none", color: "var(--t3)", fontSize: 11.5,
-  cursor: "pointer", padding: 0, alignSelf: "flex-start", textDecoration: "underline",
-};
 
 /** The instance has no administrator and this person is signed in.
  *
@@ -525,32 +507,21 @@ function ClaimInstanceCard({ email, onSignOut }: { email: string | null; onSignO
         onChange={(e) => setCode(e.target.value)}
         placeholder="XXXX-XXXX-XXXX-XXXX"
         aria-label="Claim code"
-        style={{
-          background: "var(--panel2)", border: "1px solid var(--line2)", borderRadius: 7,
-          padding: "9px 10px", color: "var(--t1)", fontSize: 13, outline: "none", fontFamily: "var(--mono, monospace)",
-        }}
+        className="vx-input vx-auth-input" data-mono=""
       />
-      {error && <div role="alert" style={{ fontSize: 11.5, color: "var(--danger)", lineHeight: 1.45 }}>{error}</div>}
+      {error && <div role="alert" className="vx-field-error">{error}</div>}
       <button
         onClick={() => void claim()}
         disabled={busy || !code.trim()}
-        style={{
-          background: "var(--accent)", color: "var(--on-accent)", border: "none", borderRadius: 7,
-          padding: "10px 12px", fontSize: 13, fontWeight: 600, cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1,
-        }}
+        className="vx-btn vx-auth-btn" data-variant="primary" data-size="md" aria-busy={busy || undefined}
       >
         {busy ? "Claiming\u2026" : "Claim this instance"}
       </button>
-      <button onClick={onSignOut} style={gateQuietBtn}>Not you? Sign out</button>
+      <button onClick={onSignOut} className="vx-auth-quiet">Not you? Sign out</button>
     </GateShell>
   );
 }
 
-const oauthBtn: React.CSSProperties = {
-  display: "flex", alignItems: "center", justifyContent: "center", gap: 10,
-  background: "var(--panel2)", color: "var(--t1)", border: "1px solid var(--line2)",
-  borderRadius: 7, padding: "10px 10px", fontSize: 13, fontWeight: 600, cursor: "pointer",
-};
 
 /** Google's multicolor "G" brand mark. */
 function GoogleMark() {

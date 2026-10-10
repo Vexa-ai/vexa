@@ -2,7 +2,7 @@
   "_comment": "G2r ratchet (terminal design guidelines §8): per file, how many banned style keys (colour, type, spacing, border, radius, shadow, z-index, motion) inline styles still write. Enforced by src/ui-kit/__tests__/styleBudget.test.ts: a count may only go down, and a lowered count must be written here in the same commit (UPDATE_STYLE_BUDGET=1). A file not listed has a budget of zero. Deleted when every file reaches zero (Phase 3a).",
   "files": {
     "app/App.tsx": 51,
-    "app/AuthGate.tsx": 148,
+    "app/AuthGate.tsx": 64,
     "app/debug/teams-pipeline/page.tsx": 37,
     "app/debug/transcript/page.tsx": 40,
     "app/design/sections/Tokens.tsx": 8,

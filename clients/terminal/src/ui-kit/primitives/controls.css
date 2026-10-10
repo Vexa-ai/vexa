@@ -231,3 +231,12 @@ span.vx-label { display: inline; }
   outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
 }
+
+/* ── the sign-in gate (app/AuthGate.tsx) ─────────────────────────────────────────────────── */
+.vx-auth-input { height: 36px; }
+.vx-auth-input[data-mono] { font-family: var(--font-mono); }
+.vx-auth-btn { width: 100%; height: 36px; gap: var(--space-2); }
+.vx-auth-text { font-size: var(--text-sm); color: var(--text-3); line-height: 1.5; }
+.vx-auth-quiet { align-self: flex-start; background: none; border: none; padding: 0; font: inherit; font-size: var(--text-xs); color: var(--text-3); text-decoration: underline; cursor: pointer; }
+.vx-auth-quiet:hover { color: var(--text-1); }
+.vx-auth-quiet:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
