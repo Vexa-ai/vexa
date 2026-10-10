@@ -14,9 +14,15 @@ and is data plus a little code: the harnesses it can drive, the declaration fiel
 
 A refusal is a :class:`ModelChoiceFault` (P18): typed (``source`` + ``kind``), attributed (the model
 and the provider), and carrying a sentence the person can act on. It is decided before any request
-is made, so it never names an upstream's words. The shape is the one every model-provider failure
-travels in — the harnesses' ``llm.faults.ProviderFault`` is its worker-side sibling — so a client
-renders a refused choice and a failed provider call the same way.
+is made, so it never names an upstream's words.
+
+ONE FAULT SHAPE FOR THE MODEL PROVIDER, TWO PRODUCERS. A provider call that fails is
+``llm.faults.ProviderFault`` — the harness classifies it inside the worker. A pick that cannot run
+fails here, in agent-api, before any call, and agent-api's image carries no ``llm/`` (the worker's
+module, kept liftable). So this class produces the SAME record — ``source: model-provider`` and the
+same keys, ``status`` always ``None`` — and its kinds are the ones only agent-api can decide.
+``tests/test_model_provider_port.py`` holds the two key sets and the source equal, and the terminal
+renders both through ``surfaces/faults.ts``.
 """
 from __future__ import annotations
 

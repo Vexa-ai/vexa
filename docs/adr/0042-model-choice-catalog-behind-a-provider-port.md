@@ -101,15 +101,23 @@ The route itself was already decided in one place: `dispatch.overlay_model_confi
    - Delegated jobs run in the chat's worker and inherit its route. Routines and events run on the
      person's default catalog id. No run takes a free-form model name.
 
-7. **Failures are typed and attributed** (P18). A pick that cannot run raises `ModelChoiceFault`
-   before anything is spawned. The kinds are `unknown_model`, `not_permitted`, `not_configured`,
-   `credential_missing` and `endpoint_refused`.
-   - The chat answers it as `{detail, fault}`.
-   - The fault uses the harnesses' `model-provider` key set: `source`, `kind`, `provider`, `model`,
-     `status`, `detail`, `remedy`. One client renderer therefore serves a refused pick and a failed
-     provider call.
-   - An explicit pick is never silently replaced by another model.
-   - A stale default is skipped and logged, because a stored preference must never stop a turn.
+7. **Failures are typed and attributed** (P18), in the model provider's one fault shape.
+   - **A provider call that fails** is `llm.faults.ProviderFault`. The harness classifies it in the
+     worker (`unpaid`, `unauthorized`, `rate_limited`, `unavailable`, `refused`), naming the host and
+     the model at the provider. A catalog route changes nothing here: the route's endpoint and model
+     are what the harness reads.
+   - **A pick that cannot run** fails earlier, in agent-api, before any call: `ModelChoiceFault`,
+     raised before anything is spawned. Its kinds are the ones only agent-api can decide:
+     `unknown_model`, `not_permitted`, `not_configured`, `credential_missing` and
+     `endpoint_refused`.
+   - **One shape, two producers.** agent-api's image carries no `llm/`, so it produces the same
+     record: `source: model-provider` and the same keys (`kind`, `provider`, `model`, `status` as
+     `null`, `detail`, `remedy`). A test holds the two key sets and the source equal, and no kind is
+     shared. The chat answers a refused pick as `{detail, fault}`, the shape the chat proxy already
+     turns into the stream's `error` event, and the terminal renders both producers through
+     `surfaces/faults.ts`.
+   - **No silent replacement.** An explicit pick is never silently replaced by another model. A
+     stale default is skipped and logged, because a stored preference must never stop a turn.
 
 8. **The Test button probes the entry through the same port.** `GET /api/models/test?model=<id>`
    resolves the route the dispatch would stamp, then probes it in its own dialect with exactly its

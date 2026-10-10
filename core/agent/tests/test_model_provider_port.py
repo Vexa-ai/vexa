@@ -213,3 +213,26 @@ def test_no_listing_ever_carries_an_endpoint_or_a_credential():
     for leaked in ("10.0.0.5", "openrouter.ai", "gateway.example.com", "sk-", "env:", "extra_body",
                    "enable_thinking"):
         assert leaked not in text, leaked
+
+
+# ── the fault shape is the model provider's one shape ───────────────────────────────────────────
+
+def test_a_refused_pick_travels_in_the_model_providers_fault_shape():
+    """One record for "the model could not run", whoever decided it: the harness after a provider
+    call (`llm.faults.ProviderFault`) or agent-api before one. Same source, same keys — so the
+    terminal's one renderer (`surfaces/faults.ts`) reads both, and no client learns a second shape."""
+    from llm.faults import SOURCE, ProviderFault
+
+    refused = ModelChoiceFault(NOT_PERMITTED, model="or-sonnet", provider="openrouter",
+                               detail="x", remedy="y").as_dict()
+    failed = ProviderFault(kind="unpaid", provider="openrouter.ai", model="m").as_dict()
+    assert set(refused) == set(failed)
+    assert refused["source"] == failed["source"] == SOURCE
+    assert refused["status"] is None
+
+
+def test_the_pick_kinds_never_shadow_a_providers_kinds():
+    from llm.faults import KINDS as PROVIDER_KINDS
+    from control_plane.model_providers import KINDS as PICK_KINDS
+
+    assert not set(PICK_KINDS) & set(PROVIDER_KINDS)
