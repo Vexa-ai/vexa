@@ -133,7 +133,7 @@ def _http_detail(body) -> str:
 
 
 def mint_transcript_share(uid: str, meeting_id, email: str,
-                          expires_in_sec: int = 30 * 86400) -> str:
+                          expires_in_sec: int = 30 * 86400, *, requires_grant: str = "") -> str:
     """A RESTRICTED transcript share grant for ONE attendee — the capability that makes the
     meeting visible to them. Returns the token, or RAISES ``ShareMintError``. Never ``None``.
 
@@ -163,7 +163,10 @@ def mint_transcript_share(uid: str, meeting_id, email: str,
     st, body = http("POST", f"{meetings_door()}/meetings/{meeting_id}/share",
                     {"X-API-Key": user_api_key(str(uid))},
                     {"mode": "restricted", "allowed_emails": [email],
-                     "expires_in_sec": int(expires_in_sec)})
+                     "expires_in_sec": int(expires_in_sec),
+                     # A send-time mint for an invite the owner made (R1801-12): meeting-api refuses
+                     # with 409 if that invite was withdrawn, or its person removed, since.
+                     **({"requires_grant": requires_grant} if requires_grant else {})})
     token = body.get("token") if isinstance(body, dict) else None
     try:
         code = int(st)

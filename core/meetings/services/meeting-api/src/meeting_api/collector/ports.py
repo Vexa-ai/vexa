@@ -152,6 +152,7 @@ class TranscriptStore(Protocol):
     async def mint_transcript_share_by_id(
         self, user_id: int, meeting_id: int, *,
         mode: str = "open", allowed_emails: "Optional[list]" = None, expires_in_sec: int = 86400,
+        requires_grant: "Optional[str]" = None,
     ) -> "Optional[dict]":
         """OWNER-scoped mint addressed by the ROW id — the identity a meeting always has. Same grant and
         same one-time token as the pair-keyed mint; ``None`` when the row is unknown OR not the caller's."""
@@ -170,8 +171,12 @@ class TranscriptStore(Protocol):
         """Invite mails this owner handed over since ``since_iso`` (the hourly cap's count)."""
         ...
 
+    async def share_unnamed_due(self, user_id: int, meeting_id: int) -> "list":
+        """OWNER-scoped: unnamed readers worth asking identity about now (misses are remembered)."""
+        ...
+
     async def backfill_share_roster(self, user_id: int, meeting_id: int,
-                                    emails: "dict[int, str]") -> "Optional[dict]":
+                                    emails: "dict[int, str]", misses=()) -> "Optional[dict]":
         """OWNER-scoped, one-time per reader: name the readers who redeemed before the roster
         existed, from ``{user_id: address}``. Answers the access view; ``None`` for a row that is
         not the caller's."""

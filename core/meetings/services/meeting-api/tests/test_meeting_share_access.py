@@ -468,3 +468,55 @@ def test_a_reader_without_recording_permission_sees_no_recording_metadata():
     assert client.get(f"/transcripts/by-id/{mid}", headers=_h(OWNER)).json()["recordings"] == rec
     client.patch(f"/meetings/{mid}/access", json={"recording": True}, headers=_h(OWNER))
     assert client.get(f"/transcripts/by-id/{mid}", headers=_h(INVITEE)).json()["recordings"] == rec
+
+
+# ── R1801-12: the send-time mint carries out an invite that must still stand ─────────────────────
+def _send_time_mint(client, mid, grant_id, email=INVITEE_EMAIL):
+    return client.post(f"/meetings/{mid}/share", headers=_h(OWNER),
+                       json={"mode": "restricted", "allowed_emails": [email],
+                             "requires_grant": grant_id})
+
+
+def test_a_send_time_mint_works_while_the_invite_stands():
+    store, mid, client = _setup()
+    grant = _invite(client, mid)
+    r = _send_time_mint(client, mid, grant["id"])
+    assert r.status_code == 200 and r.json()["token"]
+
+
+def test_an_invite_withdrawn_between_publish_and_send_mints_nothing():
+    store, mid, client = _setup()
+    grant = _invite(client, mid)
+    client.delete(f"/meetings/{mid}/share/{grant['id']}", headers=_h(OWNER))   # withdrawn
+    before = len(store._meetings[mid]["data"]["share_grants"])
+    r = _send_time_mint(client, mid, grant["id"])
+    assert r.status_code == 409 and r.json()["detail"] == "the invite was withdrawn"
+    assert len(store._meetings[mid]["data"]["share_grants"]) == before, "no link was minted"
+
+
+def test_a_person_removed_between_publish_and_send_gets_no_link():
+    store, mid, client = _setup()
+    grant = _invite(client, mid)
+    client.post("/transcripts/share/accept", json={"token": grant["token"]}, headers=_h(INVITEE, INVITEE_EMAIL))
+    client.delete(f"/meetings/{mid}/viewers/{INVITEE}", headers=_h(OWNER))     # removal revokes it
+    assert _send_time_mint(client, mid, grant["id"]).status_code == 409
+
+
+def test_a_send_time_mint_cannot_be_redirected_to_another_address():
+    store, mid, client = _setup()
+    grant = _invite(client, mid)
+    assert _send_time_mint(client, mid, grant["id"], email="someone-else@example.test").status_code == 409
+    assert _send_time_mint(client, mid, "0123456789abcdef").status_code == 409   # no such invite
+    assert client.post(f"/meetings/{mid}/share", headers=_h(OWNER),
+                       json={"mode": "restricted", "allowed_emails": [INVITEE_EMAIL],
+                             "requires_grant": "../x"}).status_code == 422
+
+
+def test_a_reader_identity_cannot_name_is_not_asked_about_on_every_view():
+    """R1801-11: a miss is remembered; the next owner views do not call identity again for it."""
+    lookup, calls = _lookup({})
+    store, mid, client, _ = _legacy_setup(lookup)
+    for _ in range(3):
+        client.get(f"/meetings/{mid}/access", headers=_h(OWNER))
+    assert calls == [INVITEE]
+    assert "share_name_misses" not in client.get(f"/meetings/{mid}", headers=_h(INVITEE)).json().get("data", {})

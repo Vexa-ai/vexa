@@ -332,12 +332,16 @@ class InMemoryTranscriptStore:
         self._meetings[mid]["data"]["workspace_id"] = workspace_id
         return workspace_id
 
-    def _mint_share_on(self, mid, mode, allowed_emails, expires_in_sec):
+    def _mint_share_on(self, mid, mode, allowed_emails, expires_in_sec, requires_grant=None):
         """The grant, once, for both address shapes — mirrors the SqlAlchemy store's ``_mint_share_on``."""
+        from . import share_access
         from .adapters import _build_share_grant
 
         if mid is None or mid not in self._meetings:
             return None
+        if requires_grant and not share_access.grant_still_live(
+                self._meetings[mid]["data"], requires_grant, allowed_emails):
+            return {"error": "withdrawn"}
         grant, secret = _build_share_grant(mode, allowed_emails, expires_in_sec)
         self._meetings[mid]["data"].setdefault("share_grants", []).append(grant)
         return {"id": grant["id"], "token": f"{mid}.{secret}",
@@ -349,7 +353,8 @@ class InMemoryTranscriptStore:
                                    mode, allowed_emails, expires_in_sec)
 
     async def mint_transcript_share_by_id(self, user_id, meeting_id, *,
-                                          mode="open", allowed_emails=None, expires_in_sec=86400):
+                                          mode="open", allowed_emails=None, expires_in_sec=86400,
+                                          requires_grant=None):
         """Owner-scoped by primary key. A row that is not this caller's reads exactly like one that
         does not exist — the store never tells a non-owner that an id is taken."""
         try:
@@ -359,7 +364,7 @@ class InMemoryTranscriptStore:
         row = self._meetings.get(mid)
         if row is None or row.get("user_id") != user_id:
             return None
-        return self._mint_share_on(mid, mode, allowed_emails, expires_in_sec)
+        return self._mint_share_on(mid, mode, allowed_emails, expires_in_sec, requires_grant)
 
     async def redeem_transcript_share(self, user_id, user_email, token):
         from .adapters import _sha, validate_transcript_grant
@@ -414,13 +419,19 @@ class InMemoryTranscriptStore:
                     n += 1
         return n
 
-    async def backfill_share_roster(self, user_id, meeting_id, emails):
+    async def backfill_share_roster(self, user_id, meeting_id, emails, misses=()):
         from . import share_access
 
         def edit(d, mid, owner):
             share_access.backfill_roster(d, emails, owner_id=owner)
+            share_access.record_name_misses(d, misses)
             return share_access.access_view(d, meeting_id=mid, owner_id=owner)
         return self._owned_row_edit(user_id, meeting_id, edit)
+
+    async def share_unnamed_due(self, user_id, meeting_id):
+        from . import share_access
+        return self._owned_row_edit(user_id, meeting_id,
+                                    lambda d, mid, owner: share_access.unnamed_due(d, owner_id=owner)) or []
 
     async def get_share_access(self, user_id, meeting_id):
         from . import share_access

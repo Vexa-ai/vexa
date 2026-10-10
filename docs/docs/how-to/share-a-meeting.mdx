@@ -58,7 +58,8 @@ your desk one tab away. When the link cannot be used, the terminal says why inst
   sends nothing, and the dialog says the email could not be sent; the copied link still works.
 - **Putting a meeting in a workspace takes edit access there.** A member who can only view a
   workspace cannot bind a meeting to it — the dialog, a planned meeting and a bot sent into the
-  workspace are all refused with *you need edit access*. A new occurrence of a calendar series joins
+  workspace are all refused with *you need edit access*, and an agent worker running with nobody in
+  the loop cannot bind a meeting at all. A new occurrence of a calendar series joins
   the series' workspace only while you can still edit it; otherwise it is created private.
 - **One email per invite, 30 per hour.** Each invite email goes to exactly one address, and an owner
   can have at most 30 sent in an hour across all their meetings; past that the dialog says so and the
@@ -103,12 +104,15 @@ your desk one tab away. When the link cannot be used, the terminal says why inst
    once per reader, and writes the roster entry a redeem writes today, including the invite they came
    in through where the record shows it. That invite then stops showing as pending, and removing them
    withdraws it. When they joined is not recorded, so it stays empty. If identity cannot answer, they
-   stay listed by id and are still removable.
+   stay listed by id and are still removable, and that reader is not asked about again for a day.
+   At most 25 readers are looked up per view, concurrently.
 5. **The invite email.** With `notify: true` — only for a grant restricted to exactly one address, and
    at most 30 per owner per hour — meeting-api hands one `meeting.shared` fact to flows
    (`meeting_api/events.py`, the existing publish edge, bounded and best-effort). The fact carries **no
    token**: the meeting, the address, the owner and the grant's id. flows' `meeting_share` mints that
-   person's own restricted link at send time, as the owner, through meeting-api's share mint, renders
+   person's own restricted link at send time, as the owner, through meeting-api's share mint — naming
+   the owner's grant (`requires_grant`), so meeting-api refuses the mint with `409` if that invite was
+   withdrawn, or its person removed, after the owner pressed Invite; then no mail goes out — renders
    `behavior/mail/meeting-share.md` (the owner's title cut to one plain line of at most 200
    characters) and appends the link it composes from its own `VEXA_UI_URL` (`/?tshare=…`). No producer
    and no template writes a URL, and no working token is stored outside meeting-api's hashes. The mint
@@ -175,7 +179,9 @@ non-member, or an identity without the write claim — fail closed); a share ema
 or for a meeting the caller does not own; redeeming a restricted invite from another address; redeeming a revoked or expired
 grant; redeeming any grant minted before the redeemer was removed; owner routes called by anyone else;
 recording reads — and recording metadata — without the owner's permission; an invite entry that is not
-exactly one address; a share email to a list, or past the owner's hourly cap; and every read by a
+exactly one address; a share email to a list, or past the owner's hourly cap; a send-time link for an invite that was
+withdrawn, or whose person was removed, since it was made; a workspace bind by an unwatched worker;
+and every read by a
 person who was never invited.
 
 **The deny tests that prove it.**
@@ -197,6 +203,8 @@ person who was never invited.
   - `test_a_link_off_removes_its_readers_but_not_one_who_also_holds_a_live_invite`
   - `test_a_link_off_removes_a_reader_whose_redeem_left_no_attribution`
   - `test_a_reader_without_recording_permission_sees_no_recording_metadata`
+- Send-time mint (`test_meeting_share_access.py`): `test_an_invite_withdrawn_between_publish_and_send_mints_nothing`, `test_a_person_removed_between_publish_and_send_gets_no_link`, `test_a_send_time_mint_cannot_be_redirected_to_another_address`; and `core/flows/tests/test_meeting_share_mail.py::test_an_invite_withdrawn_between_publish_and_send_sends_nothing`
+- `test_workspace_bind_requires_write.py::test_an_unwatched_worker_cannot_bind_even_where_it_could_write`
 - `core/meetings/services/meeting-api/tests/test_calendar_sync.py::test_a_new_occurrence_does_not_inherit_a_workspace_its_owner_can_no_longer_write`
 - `core/meetings/services/meeting-api/tests/test_workspace_bind_requires_write.py`:
   - `test_the_bind_route_refuses_a_caller_who_cannot_write` (viewer, non-member, no claim)

@@ -759,7 +759,8 @@ class SqlAlchemyTranscriptStore:
             await db.commit()
             return workspace_id
 
-    async def _mint_share_on(self, stmt, *, mode, allowed_emails, expires_in_sec) -> "Optional[dict]":
+    async def _mint_share_on(self, stmt, *, mode, allowed_emails, expires_in_sec,
+                             requires_grant=None) -> "Optional[dict]":
         """Mint a grant onto whichever ONE row ``stmt`` selects. The two public mints differ only in
         how they address the meeting; everything after the row is identical."""
         from sqlalchemy.orm.attributes import flag_modified
@@ -768,6 +769,9 @@ class SqlAlchemyTranscriptStore:
             meeting = (await db.execute(stmt)).scalars().first()
             if not meeting:
                 return None
+            if requires_grant and not share_access.grant_still_live(
+                    meeting.data if isinstance(meeting.data, dict) else {}, requires_grant, allowed_emails):
+                return {"error": "withdrawn"}
             grant, secret = _build_share_grant(mode, allowed_emails, expires_in_sec)
             data = dict(meeting.data) if isinstance(meeting.data, dict) else {}
             data["share_grants"] = list(data.get("share_grants", [])) + [grant]
@@ -801,7 +805,8 @@ class SqlAlchemyTranscriptStore:
             mode=mode, allowed_emails=allowed_emails, expires_in_sec=expires_in_sec)
 
     async def mint_transcript_share_by_id(self, user_id, meeting_id, *,
-                                          mode="open", allowed_emails=None, expires_in_sec=86400) -> "Optional[dict]":
+                                          mode="open", allowed_emails=None, expires_in_sec=86400,
+                                          requires_grant=None) -> "Optional[dict]":
         """OWNER-scoped mint addressed by the ROW's primary key — the identity that always exists.
 
         Same grant, same hash-at-rest, same one-time token shape as the pair-keyed mint above; the
@@ -821,7 +826,8 @@ class SqlAlchemyTranscriptStore:
             select(Meeting).where(
                 Meeting.id == mid, Meeting.user_id == user_id,
             ).limit(1).with_for_update(),
-            mode=mode, allowed_emails=allowed_emails, expires_in_sec=expires_in_sec)
+            mode=mode, allowed_emails=allowed_emails, expires_in_sec=expires_in_sec,
+            requires_grant=requires_grant)
 
     async def redeem_transcript_share(self, user_id, user_email, token) -> "Optional[dict]":
         """Redeem a transcript share token (any authenticated user) → grants THIS user subscribe access to
@@ -880,13 +886,22 @@ class SqlAlchemyTranscriptStore:
                 {"uid": int(user_id), "since": str(since_iso)})).scalar()
         return int(n or 0)
 
-    async def backfill_share_roster(self, user_id, meeting_id, emails) -> "Optional[dict]":
+    async def backfill_share_roster(self, user_id, meeting_id, emails, misses=()) -> "Optional[dict]":
         """OWNER-scoped, ONE-TIME per reader: name readers who redeemed before the roster existed
-        (``share_access.backfill_roster``), under the row lock, and answer the access view."""
-        return await self._owned_row_edit(
+        (``share_access.backfill_roster``), remember the ones identity could not name, under the row
+        lock, and answer the access view."""
+        def edit(data, m):
+            share_access.backfill_roster(data, emails, owner_id=m.user_id)
+            share_access.record_name_misses(data, misses)
+            return share_access.access_view(data, meeting_id=m.id, owner_id=m.user_id)
+        return await self._owned_row_edit(user_id, meeting_id, edit)
+
+    async def share_unnamed_due(self, user_id, meeting_id) -> "list":
+        """OWNER-scoped read: unnamed readers worth asking identity about now."""
+        out = await self._owned_row_edit(
             user_id, meeting_id,
-            lambda data, m: (share_access.backfill_roster(data, emails, owner_id=m.user_id),
-                             share_access.access_view(data, meeting_id=m.id, owner_id=m.user_id))[1])
+            lambda data, m: share_access.unnamed_due(data, owner_id=m.user_id), write=False)
+        return out or []
 
     async def _owned_row_edit(self, user_id, meeting_id, edit, *, write: bool = True):
         """Run ``edit(data, meeting)`` on the caller's OWN row ``meeting_id`` under its row lock and

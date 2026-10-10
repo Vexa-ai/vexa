@@ -24,7 +24,7 @@ Runs when **`meeting.shared`** happens, in 1 step. This page is written from the
 
 Mail one person the link to a meeting its owner shared with them.
 
-- **reads:** refs.{email, uid, meeting_id, title?, inviter?}
+- **reads:** refs.{email, uid, meeting_id, grant_id, title?, inviter?}
 - **effect:** one restricted grant, one notification
 - **result:** {message_id, to, meeting_id}
 - **domains:** without **meetings** the reaction ends there, saying so
@@ -55,7 +55,11 @@ def mail_meeting_share(ctx: StepCtx):
     The title is the owner's words and is ONE bounded line of plain text (R1801-2) — cut again
     here, whatever the producer sent.
 
-    Reads: refs.{email, uid, meeting_id, title?, inviter?}
+    THE INVITE MUST STILL STAND when the mail goes out (R1801-12): the mint names the owner's
+    grant (`refs.grant_id`), and meeting-api refuses it with 409 if that invite was withdrawn —
+    or its person removed — since the fact was published. Then nothing is sent.
+
+    Reads: refs.{email, uid, meeting_id, grant_id, title?, inviter?}
     Effect: one restricted grant, one notification · Result: {message_id, to, meeting_id}."""
     to = str(ctx.refs.get("email") or "").strip()
     uid = str(ctx.refs.get("uid") or "").strip()
@@ -66,9 +70,17 @@ def mail_meeting_share(ctx: StepCtx):
             f"{'no address' if not to else 'an address'}, {'no owner' if not uid else 'an owner'} "
             f"and {'no meeting' if not meeting_id else 'a meeting'} — a share mail needs all three.",
             retryable=False)
+    grant_id = str(ctx.refs.get("grant_id") or "").strip()
     try:
-        token = mt.mint_transcript_share(uid, meeting_id, to, expires_in_sec=30 * 86400)
+        token = mt.mint_transcript_share(uid, meeting_id, to, expires_in_sec=30 * 86400,
+                                         requires_grant=grant_id)
     except mt.ShareMintError as e:
+        # WITHDRAWN BETWEEN PUBLISH AND SEND (R1801-12): the owner revoked this invite, or removed
+        # the person, after pressing Invite. That is the owner's decision being honoured, not a
+        # failure — nothing is sent, and the reaction says why.
+        if str(getattr(e, "status", "")) == "409":
+            return Done({"to": to, "meeting_id": meeting_id, "sent": False,
+                         "reason": "the invite was withdrawn before the mail went out"})
         # The owner deleted the meeting, or it is no longer theirs: a 4xx is a fact and is not
         # retried; a 5xx/429 is the platform having a moment and is. No token is in the text.
         raise StepError(f"no link could be minted for the share of meeting {meeting_id}: {e}",

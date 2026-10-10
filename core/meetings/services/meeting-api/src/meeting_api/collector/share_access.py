@@ -90,6 +90,37 @@ def unnamed_readers(data: dict, *, owner_id: int) -> "list[int]":
     return [u for u in (data.get("transcript_viewers") or []) if u != owner_id and u not in known]
 
 
+#: How long a reader identity could not name is left alone before the owner's view asks again
+#: (R1801-11): a subject with no address must not cost an identity call on every view, for ever.
+NAME_RETRY_SEC = 24 * 3600
+
+
+def unnamed_due(data: dict, *, owner_id: int) -> "list[int]":
+    """The unnamed readers worth asking identity about NOW — those not asked, unsuccessfully, within
+    the last ``NAME_RETRY_SEC``."""
+    misses = data.get("share_name_misses") if isinstance(data.get("share_name_misses"), dict) else {}
+    cutoff = datetime.now(timezone.utc).timestamp() - NAME_RETRY_SEC
+    due = []
+    for uid in unnamed_readers(data, owner_id=owner_id):
+        at = _parse(misses.get(str(uid)))
+        if at is None or at.timestamp() < cutoff:
+            due.append(uid)
+    return due
+
+
+def record_name_misses(data: dict, uids) -> bool:
+    """Remember readers identity could not name, so the next views skip them for a while."""
+    uids = [str(u) for u in uids]
+    if not uids:
+        return False
+    misses = dict(data.get("share_name_misses") or {})
+    now = _now_iso()
+    for u in uids:
+        misses[u] = now
+    data["share_name_misses"] = misses
+    return True
+
+
 def backfill_roster(data: dict, emails: "dict[int, str]", *, owner_id: int) -> bool:
     """ONE-TIME, per reader: give each unnamed reader the roster entry a redeem writes today.
 
@@ -227,6 +258,24 @@ def remove_viewer(data: dict, viewer_id: int) -> bool:
     removed.append({"user_id": viewer_id, "at": _now_iso()})
     data["share_removed"] = removed
     return True
+
+
+def grant_still_live(data: dict, grant_id: str, emails) -> bool:
+    """Is the invite ``grant_id`` still standing, for exactly these addresses? (R1801-12)
+
+    The invite mail mints its link at SEND time, which can be minutes after the owner pressed
+    Invite. A send-time mint therefore names the grant it is carrying out, and is refused unless
+    that grant is still live — not revoked (withdrawn, or revoked by removing the person) and not
+    expired — and is addressed to the same people. A withdrawal between publish and send then
+    produces no working link at all."""
+    want = sorted(str(e).lower() for e in (emails or []))
+    for g in data.get("share_grants") or []:
+        if g.get("id") != grant_id:
+            continue
+        if g.get("revoked") or _expired(g) or g.get("mode") != "restricted":
+            return False
+        return sorted(str(e).lower() for e in (g.get("allowed_emails") or [])) == want
+    return False
 
 
 def stamp_mail(data: dict, grant_id: str) -> bool:

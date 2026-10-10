@@ -44,8 +44,9 @@ def _ctx(refs):
 
 
 def _mint(minted):
-    def mint(uid, meeting_id, email, expires_in_sec=0):
+    def mint(uid, meeting_id, email, expires_in_sec=0, *, requires_grant=""):
         minted.append((uid, meeting_id, email))
+        assert requires_grant == REFS["grant_id"], "the send-time mint names the invite it carries out"
         return MINTED
     return mint
 
@@ -163,3 +164,19 @@ def test_a_broken_agent_door_is_still_an_error_not_an_absence(monkeypatch):
     monkeypatch.setattr(mailtext, "ws_file", broken)
     with pytest.raises(ConnectionError):
         mailtext.render("meeting-share", "7", {"inviter": "a", "title": "b"})
+
+
+
+def test_an_invite_withdrawn_between_publish_and_send_sends_nothing(rig, monkeypatch):
+    """R1801-12: the owner revoked the invite (or removed the person) after pressing Invite. The
+    send-time mint is refused by meeting-api (409), so no link exists and nothing is mailed — and
+    the reaction finishes saying why rather than retrying."""
+    reg, ch = rig
+
+    def withdrawn(uid, meeting_id, email, expires_in_sec=0, *, requires_grant=""):
+        raise production.mt.ShareMintError(meeting_id=meeting_id, identity=email, status=409,
+                                           detail="the invite was withdrawn", retryable=False)
+    monkeypatch.setattr(production.mt, "mint_transcript_share", withdrawn)
+    out = reg.steps["mail_meeting_share"](_ctx(dict(REFS)))
+    assert isinstance(out, Done) and out.result["sent"] is False
+    assert ch.sent == []

@@ -113,6 +113,7 @@ OWNER_ONLY_KEYS = frozenset({
     # (`share_access`). The owner manages these through `GET /meetings/{id}/access`.
     "share_viewers",
     "share_removed",
+    "share_name_misses",
 })
 
 # What a NON-OWNER's response drops explicitly: both tiers. Kept as one name because that is the

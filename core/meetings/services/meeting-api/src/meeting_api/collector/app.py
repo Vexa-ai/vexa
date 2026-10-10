@@ -704,16 +704,20 @@ def build_router(
         unnamed = [p["user_id"] for p in view.get("people", []) if not p.get("email")]
         lookup = reader_email if reader_email is not None else _reader_directory.from_env()
         if unnamed and lookup is not None:
-            emails = {}
-            for uid in unnamed[:_reader_directory.MAX_LOOKUPS]:
-                email = await lookup(uid)
-                if email:
-                    emails[uid] = email
-            if emails:
-                view = await store.backfill_share_roster(user_id, meeting_id, emails) or view
+            # BOUNDED (R1801-11): at most MAX_LOOKUPS readers per view, asked CONCURRENTLY, and a
+            # reader identity could not name is remembered and left alone for a day rather than
+            # costing a call on every view for ever.
+            due = (await store.share_unnamed_due(user_id, meeting_id))[:_reader_directory.MAX_LOOKUPS]
+            if due:
+                import asyncio as _asyncio
+                answers = await _asyncio.gather(*(lookup(uid) for uid in due))
+                emails = {uid: e for uid, e in zip(due, answers) if e}
+                misses = [uid for uid, e in zip(due, answers) if not e]
+                view = await store.backfill_share_roster(user_id, meeting_id, emails, misses) or view
                 log_event("meeting_share_roster_backfilled", audience="system",
                           span="meetings.share.backfill", user_id=user_id,
                           meeting_id=str(meeting_id), fields={"named": len(emails),
+                                                              "missed": len(misses),
                                                               "unnamed": len(unnamed)})
         return JSONResponse(content=view)
 
@@ -1309,6 +1313,13 @@ def build_router(
             payload = {}
         mode, emails, ttl = _share_payload(payload)
         notify = _notify_payload(payload, mode, emails)
+        # A SEND-TIME MINT names the invite it carries out (R1801-12): the invite mail mints the
+        # recipient's link when it is sent, and must produce none if the owner withdrew that invite
+        # — or removed the person — after pressing Invite.
+        requires_grant = payload.get("requires_grant") if isinstance(payload, dict) else None
+        if requires_grant is not None and (not isinstance(requires_grant, str)
+                                           or not re.fullmatch(r"[0-9a-f]{16}", requires_grant)):
+            raise HTTPException(status_code=422, detail="'requires_grant' is not a grant id")
         if notify:
             # THE HOURLY CAP is checked before anything is minted, so a refusal changes nothing.
             since = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
@@ -1318,7 +1329,10 @@ def build_router(
                     "Copy the link instead, or try again later."))
         minted = await store.mint_transcript_share_by_id(
             user_id, meeting_id, mode=mode, allowed_emails=emails, expires_in_sec=ttl,
+            requires_grant=requires_grant,
         )
+        if isinstance(minted, dict) and minted.get("error") == "withdrawn":
+            raise HTTPException(status_code=409, detail="the invite was withdrawn")
         if minted is None:
             log_event(
                 "transcript_share_mint_failed", audience="system", level="warning",
