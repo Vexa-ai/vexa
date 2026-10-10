@@ -8,13 +8,14 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import { ProposalChips } from "../ProposalChips";
-import { jtbdProposal, standingProposals, type Proposal } from "../proposals";
+import { connectionGap, EMPTY_LINE, jtbdProposal, SEND_BOT, type Proposal } from "../proposals";
 
 afterEach(() => cleanup());
 
 const JOB = jtbdProposal({ id: "row-1", source: "meeting:97", source_label: "Pilot sync",
                            act: "The migration doc, by Friday" });
-const [MEET, LINK] = standingProposals(false);
+const CONNECT = connectionGap([])!;
+const LINK = SEND_BOT;
 
 const row = (items: Proposal[], onPick = vi.fn(), onDismiss = vi.fn()) => {
   render(<ProposalChips items={items} onPick={onPick} onDismiss={onDismiss} />);
@@ -34,10 +35,15 @@ describe("what the row shows", () => {
     expect(chip.textContent).toContain("Pilot sync");
   });
 
-  it("the standing acts carry no source and no ×", () => {
-    row([MEET, LINK]);
+  it("derived acts carry no source and no ×", () => {
+    row([CONNECT, LINK]);
     expect(screen.queryByRole("button", { name: /^Dismiss:/ })).toBeNull();
-    expect(screen.getByText("Paste a meeting link")).toBeTruthy();
+    expect(screen.getByText("Send Vexa to a meeting")).toBeTruthy();
+  });
+
+  it("with nothing useful, a short friendly line instead of filler", () => {
+    render(<ProposalChips items={[LINK]} line={EMPTY_LINE} onPick={vi.fn()} />);
+    expect(screen.getByText(EMPTY_LINE)).toBeTruthy();
   });
 });
 
@@ -65,9 +71,48 @@ describe("picking and dismissing are two different verbs", () => {
   });
 
   it("every chip is tagged with its kind, so the row is readable from the DOM", () => {
-    row([JOB, MEET, LINK]);
+    row([JOB, CONNECT, LINK]);
     const kinds = Array.from(document.querySelectorAll("[data-proposal]"))
       .map((el) => el.getAttribute("data-proposal"));
-    expect(kinds).toEqual(["jtbd", "meet", "link"]);
+    expect(kinds).toEqual(["jtbd", "connect", "link"]);
+  });
+});
+
+describe("send Vexa to a meeting — the chip opens a paste field", () => {
+  const open = () => {
+    const onPick = vi.fn(), onSendLink = vi.fn();
+    render(<ProposalChips items={[LINK]} onPick={onPick} onSendLink={onSendLink} />);
+    fireEvent.click(screen.getByText("Send Vexa to a meeting"));
+    return { onPick, onSendLink };
+  };
+
+  it("a click opens the field and says nothing to the agent", () => {
+    const { onPick, onSendLink } = open();
+    expect(screen.getByRole("textbox", { name: "Meeting link" })).toBeTruthy();
+    expect(onPick).not.toHaveBeenCalled();
+    expect(onSendLink).not.toHaveBeenCalled();
+  });
+
+  it("a valid link is sent", async () => {
+    const { onSendLink } = open();
+    fireEvent.change(screen.getByRole("textbox", { name: "Meeting link" }), { target: { value: "https://meet.google.com/abc-defg-hij" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send bot" }));
+    await vi.waitFor(() => expect(onSendLink).toHaveBeenCalledWith("https://meet.google.com/abc-defg-hij"));
+  });
+
+  it("anything else is refused beside the field, with the input kept", async () => {
+    const { onSendLink } = open();
+    const box = screen.getByRole("textbox", { name: "Meeting link" }) as HTMLInputElement;
+    fireEvent.change(box, { target: { value: "not a link" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send bot" }));
+    await vi.waitFor(() => expect(screen.getByRole("alert").textContent).toContain("isn't a Google Meet"));
+    expect(onSendLink).not.toHaveBeenCalled();
+    expect(box.value).toBe("not a link");
+  });
+
+  it("Cancel brings the chips back", () => {
+    open();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByText("Send Vexa to a meeting")).toBeTruthy();
   });
 });

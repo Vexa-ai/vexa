@@ -47,7 +47,8 @@ import { artifactsFromTokens, artifactViewEffect, boundMeetingView, isRetiredNot
 import { fetchMeetingNote, fetchMeetingNotePath } from "./meetingNote";
 import { deskPanelPages } from "./deskPanel";
 import { reportOpened } from "./deskTouch";
-import { applyProposal, proposals, type Proposal } from "./proposals";
+import { applyProposal, emptyLine, linkProposal, proposals, type ConnectionRow, type Proposal } from "./proposals";
+import { CONNECTIONS_OPEN } from "./connectionEvents";
 import { listProposals, resolveProposal, type DeskProposal } from "../surfaces/proposalsApi";
 import { ProposalChips } from "./ProposalChips";
 import { EdgeHandle, EDGE_W } from "./Collapse";
@@ -218,17 +219,24 @@ export function MinutesShell() {
   // existed — `listProposals` never throws, deliberately.
   const [deskItems, setDeskItems] = useState<DeskProposal[]>([]);
   useEffect(() => { void listProposals().then(setDeskItems); }, []);
-  // Can this deployment CREATE a Google Meet? It decides which of the two standing acts is offered
-  // — the Meet itself, or "connect Google" said plainly (`app/api/googleMeet.ts` names what is
-  // missing). False until the config answers, so the honest branch is the one that flickers in.
-  const [googleMeet, setGoogleMeet] = useState(false);
+  // THE PERSON'S OWN CONNECTIONS (founder, 2026-10-10) — the connect chip shows only when one is
+  // missing or broken, read off the broker's statuses. It used to read a DEPLOYMENT flag
+  // (`/api/config` → `google.meet`, false everywhere) and so offered "Connect Google" to someone who
+  // had connected Gmail and Calendar. `null` until the list answers, and null offers nothing.
+  // Re-read when the tab regains focus and when a consent window reports back.
+  const [connections, setConnections] = useState<ConnectionRow[] | null>(null);
   useEffect(() => {
     let live = true;
-    void fetch("/api/config", { cache: "no-store" })
+    const load = () => void fetch("/api/connections/list", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
-      .then((d) => { if (live) setGoogleMeet(!!(d?.google as { meet?: boolean } | undefined)?.meet); })
+      .then((d) => { if (live && d && Array.isArray(d.connections)) setConnections(d.connections as ConnectionRow[]); })
       .catch(() => undefined);
-    return () => { live = false; };
+    load();
+    const onVis = () => { if (!document.hidden) load(); };
+    document.addEventListener("visibilitychange", onVis);
+    const channel = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("vexa:connection-consent") : null;
+    if (channel) channel.onmessage = () => load();
+    return () => { live = false; document.removeEventListener("visibilitychange", onVis); channel?.close(); };
   }, []);
   // The signed-in address — the ONE fact the setup chip puts in the person's mouth, so they never
   // type what we already know. Same seam the account badge reads; unknown simply drops the clause.
@@ -633,6 +641,12 @@ export function MinutesShell() {
     const current = chatsRef.current.find((c) => c.id === sel.chatId) ?? draftRef.current ?? null;
     const eff = applyProposal(p, current, meetings);
     if (!eff) return;
+    // Neither of these says anything or touches a chat, so neither spends the offer.
+    if (eff.act === "paste") return;                           // ProposalChips opens the field itself
+    if (eff.act === "connect") {
+      window.dispatchEvent(new CustomEvent(CONNECTIONS_OPEN, { detail: { provider: eff.provider, connection_id: eff.connectionId } }));
+      return;
+    }
     // A JOB LEAVES THE LIST WHEN ITS ACT RUNS (#1614). Locally first, so the row cannot re-offer it
     // while the close is in flight, and the close itself is fire-and-forget: a failed one costs a
     // chip that comes back on the next load, never a click that did nothing.
@@ -667,8 +681,8 @@ export function MinutesShell() {
    *  list and one capability flag. Pure, so the row is decided in the render that draws it — no model
    *  call and no effect; the one fetch this needs (`listProposals`) is a plain file read done once. */
   const chips = useMemo(
-    () => proposals(meetings, allChats, desk, Date.now(), email, deskItems, googleMeet),
-    [meetings, allChats, desk, email, deskItems, googleMeet]);
+    () => proposals(meetings, allChats, desk, Date.now(), email, deskItems, connections),
+    [meetings, allChats, desk, email, deskItems, connections]);
   /** THE PERSON SAYING NO. It closes the row on the server and drops it here, and — unlike a pick —
    *  it does NOT spend the offer: the rest of the list is still worth having. */
   const dismissProposal = (p: Proposal) => {
@@ -1586,7 +1600,9 @@ export function MinutesShell() {
         )}
         <div style={{ flex: 1, minHeight: 0 }}>
           <Chat params={{ session }} emptyExtra={<ProposalChips items={shownChips}
-            onPick={(p) => void runProposal(p)} onDismiss={dismissProposal} />} />
+            line={shownChips.length ? emptyLine(shownChips) : null}
+            onPick={(p) => void runProposal(p)} onDismiss={dismissProposal}
+            onSendLink={(url) => void runProposal(linkProposal(url))} />} />
         </div>
       </main>
       </div>

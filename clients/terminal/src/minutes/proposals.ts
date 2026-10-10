@@ -1,29 +1,30 @@
-/** PROPOSALS — what an empty chat offers: the person's SHORT LIST.
+/** PROPOSALS — what an empty chat offers: at most FOUR things, each specific, current and one
+ *  click from a real result.
  *
- *  Founder, 2026-09-06 (Vexa-ai/vexa#1614), on the new-chat empty state:
+ *  History: #1614 (2026-09-06) asked for a short list of up to ten, with two "standing" acts on every
+ *  row. The founder met that row on app.dev on 2026-10-10 and said it "does not make sense":
  *
- *      *"let's see what we want to have here: create ad hoc google meet meeting; whatever, that is
- *      a short list that is updated by other agents when they see something as JTBD, can have up to
- *      10 items"*
+ *    · "What came out of Google Meet · rhw-qwts-fvi?" — the meeting had no title, so the chip
+ *      printed the platform and the raw code, with nothing saying WHEN it happened;
+ *    · "Review 2 new items" — never said what the items were;
+ *    · "Connect Google, so I can create meetings for you" — offered to someone who HAD connected
+ *      Google, because the chip read a deployment flag (`/api/config` → `google.meet`, false
+ *      everywhere) instead of the person's own connections;
+ *    · "Paste a meeting link" — an instruction, not an act: clicking it asked the agent to ask for
+ *      a link.
  *
- *  A chat with nothing in it is a blank page, and a blank page asks the reader to invent the first
- *  move. The row makes it instead, from three different KINDS of truth:
+ *  So every chip now answers three questions on its face — WHAT (a meeting by its name, never a raw
+ *  code), WHEN (relative time), and WHAT HAPPENS ON CLICK (a real result) — and the row is ranked:
  *
- *  1. **Derived** — what is true of this account right now, read straight off the meetings list, the
- *     chat list and the server's answer about this desk. Pure, no fetch, no clock of its own.
- *  2. **Written by other agents** — the desk's short list (`.vexa/proposals.json`, via
- *     `surfaces/proposalsApi`): a job an agent SAW while doing something else and filed with its
- *     source. Newest first, and rendered from state — the fetch is one plain file read, never a turn.
- *  3. **Standing** — always there, true of everybody: create a Meet, paste a meeting link. They are
- *     appended LAST and are never crowded out by the cap, because "always there" is what standing
- *     means.
+ *    1. a meeting running now                  → catch up on it
+ *    2. a meeting later today (or within 2 h)  → prep for it
+ *    3. a meeting that just ended (≤ 7 days), nobody has written about it → recap it
+ *    4. items waiting: the rail's hidden rows, NAMED; then the jobs other agents filed
+ *    5. setup gaps: an empty desk; a Google connection that is missing or broken (broker status)
+ *    6. send Vexa to a meeting — opens a paste field in place; only if there is room
  *
- *  The derived rules are a PRIORITY ORDER, not a menu: what is happening right now beats what is
- *  about to, which beats what just happened, which beats the pile nobody has read. Ten, not three
- *  (#1614), and the cap is applied to 1 + 2 so that 3 always fits.
- *
- *  Every chip carries the whole of its own behaviour: which meeting to open (`meetingId`) and the
- *  one line to say on arrival (`kick`). The shell reads those; it never re-derives them. */
+ *  Nothing pads the row (F36). When nothing in 1–5 fires, the row is the send act plus one short
+ *  line (`emptyLine`) rather than filler. */
 import { ONBOARDING_GROUNDING, ONBOARDING_REPLY_SEP } from "../platform";
 import { meetingPhase, type MeetingMock } from "../surfaces/meetingModel";
 import type { DeskProposal } from "../surfaces/proposalsApi";
@@ -31,7 +32,7 @@ import type { DeskFacts } from "../surfaces/workspaceApi";
 import { isPlaceholderLabel, meetingTitle, meetingWhen, railRows, visibleRows, type Chat } from "./chats";
 
 /** What a chip DOES, which is also what the shell switches on. */
-export type ProposalKind = "catch-up" | "prep" | "outcome" | "review" | "setup" | "jtbd" | "meet" | "link";
+export type ProposalKind = "catch-up" | "prep" | "outcome" | "review" | "setup" | "jtbd" | "connect" | "link";
 
 export type Proposal = {
   id: string;           // stable across renders — the React key, and what a test names
@@ -46,14 +47,21 @@ export type Proposal = {
   source?: string;      // jtbd — WHERE the job was seen, in human words. Rendered beside the act,
                         // because an item somebody else wrote has to say what it came from.
   itemId?: string;      // jtbd — the store row this chip is, so a click or a dismiss can close it
+  provider?: string;    // connect — the broker provider the Connections panel opens on
+  connectionId?: string;// connect — the broken connection to repair (absent = a new one)
 };
 
-/** The whole row, at most this many. The founder's number: *"can have up to 10 items"* (#1614). */
-export const PROPOSALS_MAX = 10;
+/** The whole row, at most this many (founder, 2026-10-10: "up to four, ranked by usefulness"). */
+export const PROPOSALS_MAX = 4;
 
-/** "Starting soon" is two hours. Long enough that a chip appears before you go looking, short
- *  enough that it is about the next thing rather than the day. */
+/** "Starting soon" when it is not today any more (just after midnight) — two hours. */
 export const PREP_WINDOW_MS = 2 * 60 * 60 * 1000;
+
+/** "Just ended": a held meeting older than this is history, not something to recap from a chip. */
+export const RECAP_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** The one line an empty chat shows when nothing above fires. Friendly, short, and true. */
+export const EMPTY_LINE = "Nothing is waiting for you. Ask me anything, or send Vexa to a meeting.";
 
 /** The kicks. Each names the reading the agent must do FIRST — a recap written without the
  *  transcript is the failure mode these chips exist to avoid. */
@@ -63,27 +71,55 @@ export const KICK = {
   outcome: "Tell me what came out of this meeting — decisions, owners, open items. Read the transcript first.",
 } as const;
 
-// ── DELETED 2026-09-02 (F36): GROUP_PROPOSAL, "Create a group for daily meetings" ─────────────
-//
-//  The garnish — a STANDING suggestion that padded the row to three whenever fewer rules fired. It
-//  was the button the founder found sitting under a chat he had never created, and it is the exact
-//  shape his ruling names: **buttons are scaffolded intents, not defaults.** A chip that comes from
-//  a scaffold or from live state (a meeting running now, a desk nobody has ever written in)
-//  says something true about this account; one that appears because the row looked short says
-//  nothing, and reads as the product asking to be used. So the pad is gone with it: fewer than three
-//  chips is a correct answer, and none at all is the correct answer for an account with nothing to
-//  say about.
+// ── naming a meeting ─────────────────────────────────────────────────────────────────
 
-/** A clock, in the reader's own locale. Never a date: the chip only ever names a time inside the
- *  next two hours. */
+/** Is this title one somebody GAVE the meeting, or the list's own platform·code fallback
+ *  (`surfaces/liveMeetings.ts`: "Google Meet · abc-defg-hij", "Untitled meeting")? */
+function hasRealTitle(m: MeetingMock): boolean {
+  if ((m.title_custom ?? "").trim()) return true;
+  const t = String(m.title ?? "").trim();
+  if (!t || t === "Untitled meeting") return false;
+  return !(m.native_id && t.includes(m.native_id));
+}
+
+/** A meeting's name for a chip — its title, or "<Platform> call" when it has none. NEVER the raw
+ *  meeting code: a code identifies a room, not a conversation anybody remembers. */
+export function meetingName(m: MeetingMock): string {
+  if (hasRealTitle(m)) return meetingTitle({ ...m, title: (m.title_custom ?? "").trim() || m.title });
+  const p = String(m.platform ?? "").trim();
+  const platform = p === "google_meet" ? "Google Meet" : p === "zoom" ? "Zoom" : p === "teams" ? "Teams"
+    : p === "jitsi" ? "Jitsi" : p;
+  return platform ? `${platform} call` : "Untitled meeting";
+}
+
 function clock(ms: number): string {
   try { return new Date(ms).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }); }
   catch { return ""; }
 }
 
+const dayStart = (ms: number) => { const d = new Date(ms); d.setHours(0, 0, 0, 0); return d.getTime(); };
+
+/** WHEN, relative to now (design guidelines §5.3): "today 3:00 PM", "yesterday 3:00 PM",
+ *  "tomorrow 9:30 AM", "Thu 3:00 PM" within a week, "Oct 8" beyond — the year only when it is not
+ *  this one. 0 (unknown) → "". */
+export function relativeWhen(ms: number, now: number = Date.now()): string {
+  if (!ms) return "";
+  try {
+    const days = Math.round((dayStart(ms) - dayStart(now)) / 86400000);
+    if (days === 0) return `today ${clock(ms)}`;
+    if (days === -1) return `yesterday ${clock(ms)}`;
+    if (days === 1) return `tomorrow ${clock(ms)}`;
+    const d = new Date(ms);
+    if (Math.abs(days) < 7) return `${d.toLocaleDateString(undefined, { weekday: "short" })} ${clock(ms)}`;
+    return d.getFullYear() === new Date(now).getFullYear()
+      ? d.toLocaleDateString(undefined, { month: "short", day: "numeric" })
+      : d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+  } catch { return ""; }
+}
+
 /** When a meeting sits on the timeline. `start_time` is the rail's own answer; a purely SCHEDULED
- *  meeting has not started, so it only ever carries `scheduled_at` — and that is exactly the row
- *  the prep rule is about. 0 = unknown, and unknown never fires a time-bounded rule. */
+ *  meeting has not started, so it only ever carries `scheduled_at`. 0 = unknown, and unknown never
+ *  fires a time-bounded rule. */
 function startsAt(m: MeetingMock): number {
   const started = meetingWhen(m);
   if (started) return started;
@@ -91,44 +127,65 @@ function startsAt(m: MeetingMock): number {
   return Number.isFinite(planned) ? planned : 0;
 }
 
-/** THE STANDING ACTS — always there, true of everybody (#1614: *"standing — always there"*).
+/** "<name>, <when>" — the when dropped when unknown, never an empty comma. */
+const named = (m: MeetingMock, now: number) => {
+  const w = relativeWhen(startsAt(m), now);
+  return w ? `${meetingName(m)}, ${w}` : meetingName(m);
+};
+
+// ── setup gaps: the person's own connections, as the broker reports them ─────────────
+
+/** One row of `GET /api/connections/list` (the broker's `/api/connections`, metadata only). */
+export type ConnectionRow = { id: string; provider: string; label?: string; status: string };
+
+const PROVIDER_NAME: Record<string, string> = { google_calendar: "Google Calendar", google_email: "Gmail" };
+
+/** A connect chip — ONLY when a connection is missing or broken, read off the broker's statuses:
  *
- *  `meet` HAS TWO BRANCHES AND ONLY ONE OF THEM EXISTS TODAY. The founder's shape: *"when a Google
- *  account is connected it creates the Meet and sends the bot in one act; when not, the act is
- *  'connect Google' first, said plainly"*. Nothing in this product can create a Meet yet — there is
- *  no Google API client in the repository and the OAuth client is a sign-in provider with no
- *  calendar scope (`app/api/googleMeet.ts` names the three missing pieces) — so `googleMeet` is
- *  false everywhere and the connect branch is what ships. SAID PLAINLY is the whole requirement: the
- *  chip does not offer to make a Meet and then explain that it cannot.
+ *    · `null` (the list has not answered, or could not be read) → nothing. A chip offering to connect
+ *      what may well be connected is the exact lie the founder met; unknown fails closed.
+ *    · a Google connection the broker reports `disconnected` → "Reconnect <it>"
+ *    · one stuck at `awaiting_user` with no ready twin → "Finish connecting <it>"
+ *    · no Google Calendar at all → "Connect Google Calendar" — the one connection the meeting jobs
+ *      above read (upcoming meetings). Gmail is not offered unprompted.
+ *    · otherwise (everything `ready`) → nothing.
  *
- *  `link` is the act that already works: `request_meeting_bot` puts the bot in any meeting whose
- *  link you hand it, so the chip opens that conversation rather than pretending to be a form. */
-export function standingProposals(googleMeet: boolean): Proposal[] {
-  const meet: Proposal = googleMeet
-    ? {
-        id: "meet", kind: "meet", label: "Create a Google Meet and put Vexa in it",
-        say: "Create an ad hoc Google Meet and put Vexa in it.",
-        kick: "Create an ad hoc Google Meet for me now and send the Vexa bot into it. Give me the "
-          + "link when it is in.",
-        title: "New meeting",
-      }
-    : {
-        id: "meet", kind: "meet", label: "Connect Google, so I can create meetings for you",
-        say: "Connect my Google account so you can create meetings for me.",
-        kick: "I want you to be able to create an ad hoc Google Meet and put Vexa in it. That needs "
-          + "a Google account connected first. Tell me what is missing and what I have to do.",
-        title: "Connect Google",
-      };
-  return [
-    meet,
-    {
-      id: "link", kind: "link", label: "Paste a meeting link",
-      say: "Put Vexa in a meeting — I'll paste the link.",
-      kick: "I want Vexa in a meeting. Ask me for the link, then send the bot in and tell me when "
-        + "it has been admitted.",
-      title: "Put Vexa in a meeting",
-    },
-  ];
+ *  The click opens the Connections panel on that provider; consent happens there, on a human click. */
+export function connectionGap(rows: ConnectionRow[] | null): Proposal | null {
+  if (!rows) return null;
+  const google = rows.filter((r) => r.provider in PROVIDER_NAME);
+  const ready = new Set(google.filter((r) => r.status === "ready").map((r) => r.provider));
+  const chip = (provider: string, label: string, connectionId?: string): Proposal =>
+    ({ id: `connect:${provider}`, kind: "connect", label, provider, connectionId });
+  for (const provider of ["google_calendar", "google_email"]) {
+    if (ready.has(provider)) continue;
+    const broken = google.find((r) => r.provider === provider && r.status === "disconnected");
+    if (broken) return chip(provider, `Reconnect ${PROVIDER_NAME[provider]}`, broken.id);
+    const pending = google.find((r) => r.provider === provider && r.status === "awaiting_user");
+    if (pending) return chip(provider, `Finish connecting ${PROVIDER_NAME[provider]}`, pending.id);
+  }
+  if (!ready.has("google_calendar")) return chip("google_calendar", "Connect Google Calendar");
+  return null;
+}
+
+// ── send Vexa to a meeting ───────────────────────────────────────────────────────────
+
+/** The chip that OPENS a paste field in place (`ProposalChips`). It carries no kick: nothing is said
+ *  until there is a link to say it about. */
+export const SEND_BOT: Proposal = { id: "link", kind: "link", label: "Send Vexa to a meeting" };
+
+/** The pasted link, as the turn the chip fires. The person's own words render ("Send Vexa to …");
+ *  the kick names the tool, so the agent acts rather than asks again. Only ever built from a link
+ *  `parseMeetingInput` accepted. */
+export function linkProposal(url: string): Proposal {
+  const u = url.trim();
+  return {
+    id: "link", kind: "link", label: SEND_BOT.label,
+    say: `Send Vexa to ${u}`,
+    kick: `Send the Vexa bot to this meeting now: ${u}\nUse request_meeting_bot with that link, then `
+      + "tell me when it has been admitted.",
+    title: "Vexa in a meeting",
+  };
 }
 
 /** One row of the desk's short list, as a chip.
@@ -153,33 +210,13 @@ export function jtbdProposal(item: DeskProposal): Proposal {
   };
 }
 
-/**
- *  1. a meeting running RIGHT NOW              → catch me up on it
- *  2. a meeting starting inside two hours      → prep me for it
- *  3. the newest held meeting nobody wrote in  → what came out of it
- *  4. rows the rail's filter is hiding         → review them (flip the chip, create nothing)
- *  5. a desk with nothing ever written in it   → set it up
- *  6. the short list other agents wrote        → the job, newest first, with its source
- *  …then the standing acts, which the cap never crowds out.
+
+/** The row, decided. Pure: meetings, chats, the desk's facts, its short list and the person's
+ *  connections in; at most four chips out, ranked (see the file head).
  *
- *  …and NOTHING is padded in behind them (F36). Every rule above reads live state; a chip that
- *  appeared only because the row had space left was a default, and defaults are what the founder
- *  ruled out. What stands at the end stands for a different reason: #1614 asks for those two on
- *  every empty chat, by name.
- *
- *  `desk` is the server's answer about this person's desk (`GET /api/workspace/desk`), `null` until
- *  it arrives. `needsSetup` below is the whole of rule 5 and says why it is not the `.scaffolded`
- *  probe this used to be. `email` is the signed-in address, and it only ever reaches rule 5's chip.
- *  `items` is the desk's short list, already ordered by the store. `googleMeet` picks the standing
- *  Meet act's branch.
- *
- *  ⚠ ON RULE 5 AND #1614. The founder's #1614 text says the setup chip *"goes (it belongs to the
- *  arrival, #1613's third part)"*. #1613's third part landed first and kept the chip here with its
- *  derivation repaired: `needsSetup` now reads the FILES, so the stale offer he actually met — over
- *  a desk that had been running for forty minutes — cannot happen again. Both intents are kept: the
- *  defect is fixed where #1613 fixed it, and this row is the short list #1614 asked for. Deleting
- *  the chip outright is a founder call, not a merge decision — it is asked on the issue.
- */
+ *  `desk` is `GET /api/workspace/desk` (null until it answers); `email` only ever reaches the setup
+ *  chip; `items` is the desk's short list, already ordered by the store; `connections` is the
+ *  broker's list (null until it answers — and null offers no connect chip). */
 export function proposals(
   meetings: MeetingMock[],
   chats: Chat[],
@@ -187,7 +224,7 @@ export function proposals(
   now: number = Date.now(),
   email?: string | null,
   items: DeskProposal[] = [],
-  googleMeet: boolean = false,
+  connections: ConnectionRow[] | null = null,
 ): Proposal[] {
   const out: Proposal[] = [];
 
@@ -195,54 +232,76 @@ export function proposals(
   const live = meetings.filter((m) => meetingPhase(m) === "live").sort((a, b) => startsAt(b) - startsAt(a))[0];
   if (live) out.push({
     id: `catch-up:${live.id}`, kind: "catch-up", meetingId: String(live.id),
-    label: `Catch me up on ${meetingTitle(live)} — live now`, kick: KICK["catch-up"],
+    label: `Catch up: ${meetingName(live)}, live now`, kick: KICK["catch-up"],
   });
 
-  // 2 — the SOONEST meeting inside the window. A meeting whose start has already passed but which
-  // has not begun is not "starting soon" any more; it is late, and a chip cannot fix that.
+  // 2 — the SOONEST meeting still ahead today, or inside two hours (which covers just after
+  // midnight). A start that has passed without the meeting beginning is late, not upcoming.
   const soon = meetings
     .filter((m) => meetingPhase(m) === "prep")
     .map((m) => ({ m, at: startsAt(m) }))
-    .filter(({ at }) => at > 0 && at >= now && at - now <= PREP_WINDOW_MS)
+    .filter(({ at }) => at > 0 && at >= now && (dayStart(at) === dayStart(now) || at - now <= PREP_WINDOW_MS))
     .sort((a, b) => a.at - b.at)[0];
   if (soon) out.push({
     id: `prep:${soon.m.id}`, kind: "prep", meetingId: String(soon.m.id),
-    label: `Prep me for ${meetingTitle(soon.m)} at ${clock(soon.at)}`, kick: KICK.prep,
+    label: `Prep: ${named(soon.m, now)}`, kick: KICK.prep,
   });
 
-  // 3 — held, and nobody has written about it. TOUCHED is the test, not "has a chat": opening a
-  // meeting materialises an untouched chat, and merely opening it is not having asked anything.
+  // 3 — just ended, and nobody has written about it. TOUCHED is the test, not "has a chat": opening
+  // a meeting materialises an untouched chat, and merely opening it is not having asked anything.
   const spokenFor = new Set(chats.filter((c) => c.touched && c.meeting).map((c) => c.meeting as string));
   const held = meetings
     .filter((m) => meetingPhase(m) === "post" && !spokenFor.has(String(m.id)))
+    .filter((m) => { const t = startsAt(m); return t > 0 && now - t <= RECAP_WINDOW_MS; })
     .sort((a, b) => startsAt(b) - startsAt(a))[0];
   if (held) out.push({
     id: `outcome:${held.id}`, kind: "outcome", meetingId: String(held.id),
-    label: `What came out of ${meetingTitle(held)}?`, kick: KICK.outcome,
+    label: `Recap: ${named(held, now)}`, kick: KICK.outcome,
   });
 
-  // 4 — the same number the rail's own "All" chip shows, computed the same way, because two
-  // different counts for one pile is how a surface starts lying. No chat is created and nothing is
-  // asked: the chip only flips the filter.
-  const rows = railRows(chats, meetings, now);
-  const hidden = rows.length - visibleRows(rows, false).length;
-  if (hidden > 0) out.push({
-    id: "review", kind: "review", count: hidden,
-    label: `Review ${hidden} new item${hidden === 1 ? "" : "s"}`,
-  });
-
-  // 5 — nothing has ever been written in this person's desk. The chip is their own first sentence.
-  if (needsSetup(desk)) out.push(setupProposal(email));
-
-  // 6 — what other agents put on this desk. Newest first is the store's own order; nothing here
-  // re-sorts it, because `since` is the FIRST sighting and the server is the one that knows it.
+  // 4 — waiting. The rail's hidden pile, with the SAME count its "All" chip shows (two counts for one
+  // pile is how a surface starts lying) — but now saying what is in it. The click only flips the
+  // filter. Then the jobs other agents filed, in the store's order.
+  const review = reviewProposal(chats, meetings, now);
+  if (review) out.push(review);
   for (const item of items) out.push(jtbdProposal(item));
 
-  // THE STANDING ACTS SURVIVE THE CAP. Everything above is what happens to be true today; these two
-  // are what this product is for, and a row that dropped them because a busy week filled it would
-  // be a product hiding its own front door on exactly the days somebody needs it.
-  const standing = standingProposals(googleMeet);
-  return [...out.slice(0, Math.max(0, PROPOSALS_MAX - standing.length)), ...standing];
+  // 5 — setup gaps: a desk nothing was ever written in; a Google connection missing or broken.
+  if (needsSetup(desk)) out.push(setupProposal(email));
+  const gap = connectionGap(connections);
+  if (gap) out.push(gap);
+
+  // 6 — the send act, when there is room. It is a real act (it opens a paste field), so it is
+  // never filler; but it does not push a meeting that needs you off the row.
+  const top = out.slice(0, PROPOSALS_MAX);
+  return top.length < PROPOSALS_MAX ? [...top, SEND_BOT] : top;
+}
+
+/** Rule 4's chip: "2 meetings to review: Campbell sync, Google Meet call". Names the first two
+ *  rows and counts the rest, so the reader knows what they are being asked to look at. */
+export function reviewProposal(chats: Chat[], meetings: MeetingMock[], now: number = Date.now()): Proposal | null {
+  const rows = railRows(chats, meetings, now);
+  const visible = new Set(visibleRows(rows, false).map((r) => r.key));
+  const hidden = rows.filter((r) => !visible.has(r.key));
+  if (!hidden.length) return null;
+  const byId = new Map(meetings.map((m) => [String(m.id), m] as const));
+  const nameOf = (r: (typeof rows)[number]) => {
+    const m = r.meetingId ? byId.get(r.meetingId) : undefined;
+    return m ? meetingName(m) : (isPlaceholderLabel(r.label) ? "Untitled chat" : r.label);
+  };
+  const n = hidden.length;
+  const allMeetings = hidden.every((r) => r.meetingId && byId.has(r.meetingId));
+  const noMeetings = hidden.every((r) => !r.meetingId);
+  const noun = allMeetings ? (n === 1 ? "meeting" : "meetings")
+    : noMeetings ? (n === 1 ? "chat" : "chats") : "meetings and chats";
+  const names = hidden.slice(0, 2).map(nameOf).join(", ");
+  const more = n > 2 ? ` +${n - 2}` : "";
+  return { id: "review", kind: "review", count: n, label: `${n} ${noun} to review: ${names}${more}` };
+}
+
+/** The line under an empty chat: shown only when nothing but the send act is on offer. */
+export function emptyLine(chips: Proposal[]): string | null {
+  return chips.every((p) => p.kind === "link") ? EMPTY_LINE : null;
 }
 
 /** MAY WE OFFER TO SET THIS PERSON UP? (Vexa-ai/vexa#1613.)
@@ -308,6 +367,11 @@ export const isUnlabeled = isPlaceholderLabel;
 export type ProposalEffect =
   /** review — flip the rail's own filter. Touches no chat, names none, relabels nothing. */
   | { act: "filter" }
+  /** connect — open the Connections panel on that provider (and that connection, to repair it).
+   *  Touches no chat; consent is a human click inside the panel. */
+  | { act: "connect"; provider: string; connectionId?: string }
+  /** link with no link yet — open the paste field in place. Touches no chat, says nothing. */
+  | { act: "paste" }
   /** the chip acts IN `chat` — same id as the one in front, already touched, named and rebound. */
   | { act: "run"; chat: Chat; kick?: string; say?: string }
   /** the chat in front may not be rebound (structural, or bound to a DIFFERENT meeting) — open the
@@ -332,6 +396,8 @@ export function applyProposal(
   now: number = Date.now(),
 ): ProposalEffect | null {
   if (p.kind === "review") return { act: "filter" };
+  if (p.kind === "connect") return { act: "connect", provider: p.provider ?? "google_calendar", connectionId: p.connectionId };
+  if (p.kind === "link" && !p.kick) return { act: "paste" };
   const touch = (c: Chat): Chat => ({ ...c, touched: true, lastActivityAt: now });
 
   if (p.meetingId) {
