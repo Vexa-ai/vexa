@@ -54,6 +54,10 @@ class SessionNotFound(Exception):
     """The upload's ``session_uid`` matches no MeetingSession AND it is the final chunk → 404."""
 
 
+class _RecordingDeleted(Exception):
+    """The chunk's recording is being deleted, or was deleted after the chunk looked it up."""
+
+
 class InvalidSignalTape(Exception):
     """A tape upload named a part or format we do not accept → 422 (never a silent store)."""
 
@@ -125,6 +129,11 @@ async def upload_chunk(
         ex = next(
             (r for r in recs if r.get("session_uid") == session_uid and r.get("source") == "bot"), None
         )
+        # A per-recording delete marks the entry (``deletion_pending``) before it erases the objects,
+        # then removes it. A chunk that meets either state is not folded: the entry would come back
+        # holding an object the delete has already listed past.
+        if (ex is not None and ex.get("deletion_pending")) or (ex is None and existing_rec is not None):
+            raise _RecordingDeleted
         rid = ex["id"] if ex else recording_id
         payload, transitioned_ = apply_chunk_to_recording(
             ex,
@@ -139,6 +148,9 @@ async def upload_chunk(
 
     try:
         rec_payload, transitioned = await repo.mutate_recordings(meeting_id, _fold)
+    except _RecordingDeleted:
+        await storage.delete(key)
+        return _no_session(session_uid, is_final)
     except MeetingErased:
         # The meeting's recordings were deleted after the session lookup above, while this chunk was
         # being stored. The fold was refused under the row lock; the object must not outlive the
