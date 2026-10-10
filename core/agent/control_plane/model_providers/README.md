@@ -61,7 +61,10 @@ worker's environment (`route_env`) in the one place a worker's route has always 
 5. **The worker env.** `dispatch.route_env` stamps the whole route, every key every time, empty
    included: endpoint, the one credential under the header its provider expects, the model, the
    harness, the extra body, `VEXA_AGENT_EFFORT`, `VEXA_AGENT_MAX_OUTPUT_TOKENS` when the entry sets
-   one. The runtime forwards it (`WORKER_FORWARD_ENV`; a stamped key wins over the deployment's),
+   one, and `VEXA_AGENT_CONTEXT_TOKENS` as the entry's `context_tokens` less room for the answer
+   (`dispatch.context_budget`). A key the route cannot fill is left out, never stamped empty, so the
+   deployment's forwarded value applies (`test_an_entry_with_no_window_never_erases_the_deployments_budget`,
+   `test_the_route_never_stamps_an_empty_context_budget`). The runtime forwards it (`WORKER_FORWARD_ENV`; a stamped key wins over the deployment's),
    and the harness in the worker reads it. With no catalog, step 4 is the unchanged Settings →
    Models overlay.
 
