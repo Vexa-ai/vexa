@@ -44,10 +44,13 @@ def route_of(path: str) -> str:
     return _CID.sub("/{cid}", path.split("?", 1)[0])
 
 
-def fault(kind: str, *, role: str, method: str, path: str, status: Optional[int] = None) -> BrokerFault:
-    log.warning(json.dumps({"event": "broker_fault", "source": "credential-broker", "kind": kind, "role": role,
-                            "method": method, "route": route_of(path), "status": status},
-                           separators=(",", ":")))
+def fault(kind: str, *, role: str, method: str, path: str, status: Optional[int] = None,
+          reason: Optional[str] = None) -> BrokerFault:
+    line = {"event": "broker_fault", "source": "credential-broker", "kind": kind, "role": role,
+            "method": method, "route": route_of(path), "status": status}
+    if reason:
+        line["reason"] = reason
+    log.warning(json.dumps(line, separators=(",", ":")))
     return BrokerFault(kind, status)
 
 
@@ -112,6 +115,26 @@ def request(*, base_url: str, key_file: str, role: str, actor: str, method: str,
             return client.request(method, base_url.rstrip("/") + path, content=body, headers=headers)
     except httpx.HTTPError:
         raise fault("transport", role=role, method=method, path=path) from None
+
+
+def store_ready(*, base_url: str, timeout: float = 5) -> Optional[bool]:
+    """Whether the broker's credential store answers it (the broker's unauthenticated ``/ready``):
+    True, False when the broker says its store is unavailable, None when the broker itself gives no
+    usable answer (the caller's own request then reports that)."""
+    if not base_url:
+        return None
+    try:
+        with httpx.Client(timeout=timeout, follow_redirects=False, trust_env=False) as client:
+            response = client.get(base_url.rstrip("/") + "/ready")
+    except httpx.HTTPError:
+        return None
+    if response.status_code == 200:
+        return True
+    try:
+        body = response.json()
+    except ValueError:
+        return None
+    return False if response.status_code == 503 and body.get("reason") == "store_unavailable" else None
 
 
 def outage_sentence(response: httpx.Response) -> str:

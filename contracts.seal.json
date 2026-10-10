@@ -1,5 +1,5 @@
 {
-  "core/agent/contracts/credential-broker.v1": "c6afe059007a18434369214e58708a31b04b01033761888ec044c5c869fa43cb",
+  "core/agent/contracts/credential-broker.v1": "690998cb2ab430686b61e520e52526cfa54a361a0dcaa073758877507c0febd1",
   "core/agent/contracts/event.v1": "f154a49d0589274140fb584e680b34a12e47f8cf3b1491cfc077d47e019f71f8",
   "core/agent/contracts/invoke.v1": "9a38b01616a8cb25b8e34db9a4a539f9cdc237a731fb67ebf4f361c081897982",
   "core/agent/contracts/proactive-card.v1": "cb9f8df76cea7667dec8f6ea5fdbc6fe4f6c9ed518fd3369c9f75e6fcf7b8a88",

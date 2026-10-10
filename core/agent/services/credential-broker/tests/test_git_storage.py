@@ -38,5 +38,5 @@ def test_invalid_names_refused(signed, name):
 def test_store_failure_is_not_absence(signed, store, capsys):
     store.fail = "transport"
     r = git(signed, "get")
-    assert r.status_code == 503 and r.json() == {"detail": "Credential store unavailable"}
+    assert r.status_code == 503 and r.json() == {"detail": "Credential store unavailable", "reason": "store_unavailable"}
     assert '"source":"store","kind":"transport"' in capsys.readouterr().out

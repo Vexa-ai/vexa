@@ -25,6 +25,7 @@ from fastapi import HTTPException, Request
 from . import assertion, identity_token, metadata, providers
 from .obs import log_event
 from .settings import Settings, google_client
+from .reasons import store_unavailable
 from .store import Record, Store, StoreUnavailable
 
 _CID = re.compile(r"/[a-f0-9]{32}(?=/|$)")
@@ -113,7 +114,7 @@ class Broker:
             return self.store.put(path, data, cas=cas)
         except StoreUnavailable as exc:
             self.fault("store", exc.kind)
-            raise HTTPException(503, "Credential store unavailable") from None
+            raise store_unavailable() from None
 
     def get(self, path: str, *, version: Optional[int] = None, owner: Optional[str] = None) -> Optional[Record]:
         try:
@@ -122,17 +123,17 @@ class Broker:
             record = self.store.get(path, version=version)
         except StoreUnavailable as exc:
             self.fault("store", exc.kind)
-            raise HTTPException(503, "Credential store unavailable") from None
+            raise store_unavailable() from None
         if owner is not None and record is not None and record.data.get("owner") != str(owner):
             self.fault("store", "owner_mismatch")
-            raise HTTPException(503, "Credential store unavailable")
+            raise store_unavailable()
         return record
 
     def must_get(self, path: str, version: int, *, owner: str) -> dict:
         record = self.get(path, version=version, owner=owner)
         if record is None:
             self.fault("store", "missing")
-            raise HTTPException(503, "Credential store unavailable")
+            raise store_unavailable()
         return record.data
 
     def remove(self, path: str) -> None:
@@ -141,7 +142,7 @@ class Broker:
             self.store.delete(path)
         except StoreUnavailable as exc:
             self.fault("store", exc.kind)
-            raise HTTPException(503, "Credential store unavailable") from None
+            raise store_unavailable() from None
 
     def seal_owners(self) -> None:
         """Once per state directory: bring records written before owners were sealed into line.
