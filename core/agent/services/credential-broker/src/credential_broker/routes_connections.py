@@ -248,11 +248,13 @@ def build(b: Broker) -> APIRouter:
         with b.lock:
             b.connection(who, cid)
             b.audit(who, cid, "connection.disconnect", "requested")
-            b.sql("UPDATE connections SET status=? WHERE id=?", ("disconnected", cid))
+            # Every stored version of the account's credential is destroyed first; a store that
+            # does not answer leaves the connection as it was (503), to be retried. An OAuth
+            # application stays, so the person can reconnect. No provider-side revoke is implied.
+            b.remove(cid)
+            b.sql("UPDATE connections SET status=?,version=0 WHERE id=?", ("disconnected", cid))
             b.sql("DELETE FROM oauth_states WHERE connection=?", (cid,))
-            # Disables broker use immediately. Stored versions are retained under the
-            # deployment's retention policy; no provider-side revoke is implied.
-            b.audit(who, cid, "connection.disconnect", "disabled")
+            b.audit(who, cid, "connection.disconnect", "disabled_and_credential_removed")
         return {"connection_id": cid, "status": "disconnected"}
 
     @router.post("/api/connections/{cid}/delete")
@@ -261,7 +263,10 @@ def build(b: Broker) -> APIRouter:
         with b.lock:
             b.connection(who, cid)
             b.audit(who, cid, "connection.delete", "requested")
-            b.sql("UPDATE connections SET status=? WHERE id=?", ("deleted", cid))
+            # The credential and the OAuth application, every stored version, before the row says so.
+            b.remove(cid)
+            b.remove("oauth-app-" + cid)
+            b.sql("UPDATE connections SET status=?,version=0,oauth_app_version=0 WHERE id=?", ("deleted", cid))
             b.sql("DELETE FROM oauth_states WHERE connection=?", (cid,))
             b.audit(who, cid, "connection.delete", "disabled_and_removed")
         return {"connection_id": cid, "status": "deleted"}

@@ -58,6 +58,12 @@ class FakeStore:
             return None
         return Record(data=versions[n - 1], version=n, receipt=uuid.uuid4().hex)
 
+    def delete(self, path: str) -> None:
+        self.calls.append(("delete", path))
+        if self.fail:
+            raise StoreUnavailable(self.fail)
+        self.rows.pop(path, None)
+
     def healthy(self) -> bool:
         return not self.fail
 

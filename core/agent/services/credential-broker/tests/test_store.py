@@ -81,6 +81,9 @@ def test_openbao_kv2_layout_and_versions(tmp_path):
     def handler(req):
         seen.append(req)
         assert req.headers["x-vault-token"] == "fixture-openbao-token"
+        if req.method == "POST" and "/metadata/" in req.url.path:
+            assert json.loads(req.content) == {"max_versions": 2}
+            return httpx.Response(204)
         if req.method == "POST":
             body = json.loads(req.content)
             assert body["options"] == {"cas": 0}
@@ -92,6 +95,7 @@ def test_openbao_kv2_layout_and_versions(tmp_path):
     s = openbao(tmp_path, handler)
     assert s.put("git/pat/2", {"value": "v"}, cas=0).version == 1
     assert seen[0].url.path == "/v1/connections/data/git/pat/2"
+    assert seen[1].url.path == "/v1/connections/metadata/git/pat/2"
     r = s.get("git/pat/2", version=1)
     assert r.data == {"value": "v"} and r.receipt == "r2"
     assert s.get("missing") is None

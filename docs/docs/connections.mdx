@@ -97,6 +97,10 @@ shows the host the secret will be sent to, flags a host that is not a known prov
 service's own documentation site, and on the first save to a new host asks the person to type it.
 The broker sends only to public addresses, refuses redirects, and redacts the key from responses.
 
+Deleting a connection destroys every stored version of its credential and OAuth application;
+disconnecting destroys the credential and keeps the application for reconnecting. Otherwise a
+credential keeps its current version and the one before it. Backups you take keep what they hold.
+
 ## Using your own OpenBao
 
 To keep credentials in an OpenBao or Vault you already run, set the backend to `openbao`:
@@ -109,7 +113,8 @@ To keep credentials in an OpenBao or Vault you already run, set the backend to `
 | Mount | `VEXA_CONNECTIONS_OPENBAO_MOUNT=connections` | `credentialBroker.openbao.mount` |
 
 The mount is KV version 2, and the token's policy needs `create`, `update` and `read` on
-`<mount>/data/*`. The broker reads the token file on every request, so a renewed token takes effect
+`<mount>/data/*`, plus `update` and `delete` on `<mount>/metadata/*` (version retention, and
+deleting a connection). The broker reads the token file on every request, so a renewed token takes effect
 without a restart. Vexa does not ship OpenBao; it is MPL-2.0 software you run yourself.
 
 ## Git credentials in the broker (optional)

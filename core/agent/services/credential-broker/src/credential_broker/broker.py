@@ -94,6 +94,14 @@ class Broker:
             raise HTTPException(503, "Credential store unavailable")
         return record.data
 
+    def remove(self, path: str) -> None:
+        """Destroy every stored version of ``path``."""
+        try:
+            self.store.delete(path)
+        except StoreUnavailable as exc:
+            self.fault("store", exc.kind)
+            raise HTTPException(503, "Credential store unavailable") from None
+
     # ── identity ──────────────────────────────────────────────────────────────────────────
     def key_for(self, role: str) -> bytes:
         return assertion.load_key(self.settings.key_files.get(role, ""))

@@ -83,6 +83,8 @@ line.
   Deployment + Service + PVC + Secret + NetworkPolicy (0.13.2)
 - ✅ delivered — local AES-256-GCM store (default) and OpenBao KV v2 store (optional)
 - ✅ delivered — Gmail, Google Calendar and custom-secret connections; Git credential store
-- ⬜ planned — provider-side revocation on disconnect, and a retention job that destroys stored
-  versions of deleted connections (today they are kept, encrypted, under the deployment's backups)
+- ✅ delivered — retention: a write keeps the current version and the one before it; delete destroys
+  every stored version of a connection's credential and OAuth application, disconnect destroys the
+  credential (the application stays, for reconnecting). Backups the deployment took keep what they hold.
+- ⬜ planned — provider-side revocation on disconnect
 - ⬜ planned — more than one replica (state is SQLite on one volume; the chart pins `replicas: 1`)
