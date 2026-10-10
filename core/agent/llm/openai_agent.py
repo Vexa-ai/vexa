@@ -120,7 +120,7 @@ from llm import faults as provider_faults
 # The panel/chip/transcript vocabularies are shared (`llm.tool_events`), imported rather than copied:
 # the terminal must render an openai-agent turn identically, and two copies of a closed vocabulary drift.
 from llm.tool_events import (_BOT_TOOLS, _FOCUS_TOOLS, _OPEN_TOOLS, _TERMS_TOOLS, _WRITER_TOOLS, _bot_artifact,
-                             _open_event, _published_terms, _short, _workspace_focus,
+                             _open_event, _published_terms, _short, _workspace_focus, _FETCH_TOOLS, _fetched_source,
                              _written_artifact)
 from llm.ports import harness_subprocess_env, max_output_tokens
 from llm import jobs, web_tools
@@ -1537,6 +1537,10 @@ def _panel_events(call: dict, ok: bool, out: str) -> list[dict]:
                            "focus": True})
     elif name in _TERMS_TOOLS:
         ev = _published_terms(out)
+        if ev:
+            events.append(ev)
+    elif name in _FETCH_TOOLS:
+        ev = _fetched_source(call["args"], out)
         if ev:
             events.append(ev)
     elif name in _BOT_TOOLS:

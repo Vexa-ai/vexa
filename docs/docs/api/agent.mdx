@@ -99,6 +99,7 @@ Returns **Server-Sent Events**; each `data:` line is one frame:
 | `message-delta` | `text` |
 | `tool-call` | `tool`, `args`, `callId` |
 | `tool-result` | `callId`, `ok`, `summary` |
+| `sources` | `items`: `[{ url, title? }]` — a page the turn successfully fetched (`WebFetch`), one per frame; a client merges a turn's items by `url` and renders them as the answer's citations. Only `http`/`https` URLs. |
 | `commit` | `sha` |
 | `rejected` | `violations` |
 | `done` | `reply`, `sessionId`, `ok` (+ `detail` when a failure's raw provider text was rewritten, + `fault` when the turn failed typed) |
