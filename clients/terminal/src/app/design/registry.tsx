@@ -8,7 +8,7 @@ import { Bell, FileText, Pin, Plus, Search, X } from "lucide-react";
 import {
   Badge, Breadcrumb, Button, Card, Checkbox, Chip, ChipRow, Code, ConfirmDialog, DateText, Dialog, Drawer, EmptyState, EntityChip,
   ErrorState, ExternalLink, Fold, Icon, IconButton, Input, Kbd, KeyValue, ListRow, Menu, OverflowStrip, PanelHeader,
-  Popover, SecretReveal, Select, Sheet, Skeleton, SourceList, Spinner, Splitter, StatusDot, Tabs, Tag, Textarea, Toaster,
+  Popover, SecretReveal, SectionLabel, Select, Sheet, Skeleton, SourceList, Spinner, Splitter, StatusDot, Tabs, Tag, Textarea, Toaster,
   Tooltip, Truncate, kvValue, toast,
 } from "../../ui-kit";
 import { EMAIL, PATH_LONG, PROPERTIES, SOURCES, TABS, TOKEN, URL_LONG, WORKSPACE, PERSON, COMPANY } from "./fixtures";
@@ -93,6 +93,8 @@ export const REGISTRY: Entry[] = [
       <Row><EntityChip kind="person" onOpen={() => {}}>{PERSON}</EntityChip><EntityChip kind="company" onOpen={() => {}}>{COMPANY}</EntityChip><EntityChip kind="meeting" onOpen={() => {}}>Weekly sync</EntityChip><EntityChip kind="doc" onOpen={() => {}}>Rollout plan</EntityChip></Row></> },
   { id: "chip-row", title: "ChipRow", components: ["ChipRow"], note: "One line of chips; \"+N\" says how many are out of view and opens the row.", widths: [320, 480],
     demo: () => <ChipRow label="context chips">{["Schedule · today", "In meeting · Weekly sync", "Workspace · Example workspace", "Today"].map((c) => <Chip key={c} onRemove={() => {}} removeLabel={`Remove ${c}`}>{c}</Chip>)}</ChipRow> },
+  { id: "section-label", title: "SectionLabel", components: ["SectionLabel"], note: "The one section label: 12px, weight 500, tertiary, sentence case — no uppercase eyebrows.",
+    demo: () => <div className="vx-cat-col"><SectionLabel as="div">Share session</SectionLabel><SectionLabel as="div">Attendees</SectionLabel></div> },
   { id: "fields", title: "Input, Textarea", components: ["Input", "Textarea"], note: "Label above; the error is linked by aria-describedby.",
     demo: () => <div className="vx-cat-col"><Input label="Workspace name" placeholder="e.g. Example workspace" /><Input label="Email" defaultValue="not-an-email" error="Enter an email address, like name@example.com" /><Textarea label="Notes" hint="Markdown is fine." /></div> },
   { id: "menu", title: "Menu, Select, Popover", components: ["Menu", "Select", "Popover"], note: "Arrows, Home/End, typeahead; Esc returns focus to the trigger.",

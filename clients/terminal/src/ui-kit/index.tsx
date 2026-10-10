@@ -118,6 +118,7 @@ export type { ButtonVariant } from "./primitives/Button";
 export { Spinner, StatusDot, Kbd } from "./primitives/Spinner";
 export type { Tone } from "./primitives/Spinner";
 export { Badge, Tag, Chip, EntityChip } from "./primitives/Chip";
+export { SectionLabel } from "./primitives/SectionLabel";
 export { ChipRow } from "./primitives/ChipRow";
 export { Input, Textarea } from "./primitives/Field";
 export { Select } from "./primitives/Select";

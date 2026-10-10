@@ -12,7 +12,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { registerTab, type TabProps } from "../contributions";
 import { useService, ASK_CHAT_EVENT } from "../platform";
 import { LayoutServiceId } from "../workbench/layout";
-import { Icon } from "../ui-kit";
+import { ConfirmDialog, Icon } from "../ui-kit";
 import { MdxDoc } from "../ui-kit/MdxDoc";
 import { DateTimePicker } from "../ui-kit/DateTimePicker";
 import { copyText } from "../ui-kit/ContextMenu";
@@ -31,7 +31,7 @@ const field = {
   fontSize: 12.5, padding: "6px 8px", background: "var(--panel)", border: "1px solid var(--line)",
   borderRadius: 7, color: "var(--t1)", outline: "none",
 } as const;
-const label = { fontSize: 10.5, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".06em", fontWeight: 600 } as const;
+// (field labels use the ui-kit `.vx-label`: sentence case, no uppercase eyebrow — guidelines §2.2)
 
 /** THE BRIEF (prep-v3, owner-locked): the workspace README rendered as the page's stage — ONE doc,
  *  team-facing, always the next occurrence's brief. A SEEDED stub never renders as content (bloat
@@ -317,7 +317,13 @@ function MeetingPrepTab({ params }: TabProps) {
   const remove = async () => {
     if (!m) return;
     if (isDraft) { layout.closeTab(PREP_DRAFT_TAB_ID); return; }   // nothing persisted — just discard the draft
-    if (typeof window !== "undefined" && !window.confirm("Delete this planned meeting?")) return;
+    setConfirmDelete(true);
+  };
+  // DELETE ASKS IN A DIALOG, NOT window.confirm (guidelines §4.11, S7): the button names the act.
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const doRemove = async () => {
+    if (!m) return;
+    setConfirmDelete(false);
     setBusy(true);
     try { await deletePlannedMeeting(m.id); refreshMeetings(); layout.closeTab(`prep:${m.id}`); }
     catch (e) { setErr(presentError(e).headline); }
@@ -356,6 +362,9 @@ function MeetingPrepTab({ params }: TabProps) {
 
   return (
     <div style={{ width: "100%", height: "100%", overflow: "auto", boxSizing: "border-box", padding: "24px 28px" }}>
+      <ConfirmDialog open={confirmDelete} title="Delete this planned meeting?" confirmLabel="Delete meeting"
+        consequence="This planned meeting is removed from your meetings." busy={busy}
+        onCancel={() => setConfirmDelete(false)} onConfirm={() => void doRemove()} />
       <div style={{ maxWidth: 640 }}>
         {/* TITLE-FIRST hero (prep-v3 carve): no status pills — the page you're on IS the state.
             Title editable in place, honest placeholder, never the "platform · (no link)" fallback. */}
@@ -405,7 +414,7 @@ function MeetingPrepTab({ params }: TabProps) {
         {/* no link yet → the input is the honest primary control; with a link it lives in ⋯ */}
         {!readOnly && (!m.meeting_url || moreOpen) && (
           <div style={{ display: "flex", flexDirection: "column", gap: 4, margin: "8px 0 4px", maxWidth: 420 }}>
-            <span style={label}>Meeting link</span>
+            <span className="vx-label">Meeting link</span>
             <input value={link} disabled={busy} placeholder="https://meet.google.com/…"
               onChange={(e) => setLink(e.target.value)}
               onBlur={() => { if ((m.meeting_url ?? "") !== link.trim()) void patch({ meeting_url: link.trim() || null }); }}
@@ -417,7 +426,7 @@ function MeetingPrepTab({ params }: TabProps) {
         {(m.attendees?.length ?? 0) > 0 && (
           <div style={{ margin: "0 0 22px" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "0 0 8px" }}>
-              <span style={label}>Attendees</span>
+              <span className="vx-label">Attendees</span>
               <span style={{ flex: 1, height: 1, background: "var(--line)" }} />
             </div>
             <div style={{ display: "flex", gap: 7, flexWrap: "wrap", alignItems: "center" }}>

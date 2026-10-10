@@ -159,7 +159,7 @@
 .vx-doctab:hover .vx-doctab-act, .vx-doctab:focus-within .vx-doctab-act, .vx-doctab[data-active] .vx-doctab-act, .vx-doctab-act[aria-pressed="true"] { opacity: 1; }
 .vx-doctab-act:hover { color: var(--text-1); background: var(--surface-3); }
 .vx-doctab-label:focus-visible, .vx-doctab-act:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
-.vx-doc-head { flex: none; display: flex; align-items: center; gap: var(--space-1); min-height: 44px; padding: 0 var(--space-3) 0 var(--space-5); border-bottom: 1px solid var(--border-subtle); min-width: 0; }
+.vx-doc-head { flex: none; display: flex; flex-wrap: wrap; row-gap: var(--space-1); align-items: center; gap: var(--space-1); min-height: 44px; padding: var(--space-1_5) var(--space-3) var(--space-1_5) var(--space-5); border-bottom: 1px solid var(--border-subtle); min-width: 0; }
 .vx-doc-name { flex: 0 1 auto; min-width: 0; font-size: var(--text-md); font-weight: var(--weight-semibold); color: var(--text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .vx-doc-error { flex: 0 1 auto; min-width: 0; font-size: var(--text-xs); color: var(--danger-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .vx-doc-crumb { flex: none; padding: var(--space-1_5) var(--space-5); border-bottom: 1px solid var(--border-subtle); min-width: 0; }

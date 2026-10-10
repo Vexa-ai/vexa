@@ -41,7 +41,7 @@
     "surfaces/calendarConnections.tsx": 63,
     "surfaces/chat.tsx": 124,
     "surfaces/entities.tsx": 42,
-    "surfaces/meeting.tsx": 353,
+    "surfaces/meeting.tsx": 292,
     "surfaces/meetingPrep.tsx": 226,
     "surfaces/meetingsOnboarding.tsx": 117,
     "surfaces/ModelPicker.tsx": 40,

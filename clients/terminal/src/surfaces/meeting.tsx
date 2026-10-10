@@ -8,7 +8,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useService } from "../platform";
 import { LayoutServiceId, type TabDescriptor } from "../workbench/layout";
 import { registerList, registerTab, registerCommand, type TabProps } from "../contributions";
-import { Icon } from "../ui-kit";
+import { Badge, Icon, SectionLabel, Spinner, Tag } from "../ui-kit";
 import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
 import { MEETING_CANVAS_CONTENT_INSET, MeetingCanvasView } from "../canvas/MeetingCanvasView";
 import { type MeetingMock } from "./meetingModel";
@@ -72,7 +72,7 @@ function ShareSessionButton({ platform, native }: { platform: string; native: st
       </button>
       {open && (
         <div style={{ position: "absolute", top: "100%", right: 0, marginTop: 6, width: 280, background: "var(--panel)", border: "1px solid var(--line2)", borderRadius: 10, boxShadow: "0 8px 28px rgba(0,0,0,.32)", padding: 12, zIndex: 50, display: "flex", flexDirection: "column", gap: 8 }}>
-          <div style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em" }}>Share session</div>
+          <SectionLabel as="div">Share session</SectionLabel>
           <div style={{ display: "flex", gap: 6 }}>
             <select value={mode} disabled={busy} onChange={(e) => { setMode(e.target.value); setLink(null); }} style={{ ...fieldStyle, flex: 1 }}>
               <option value="open">anyone with link</option>
@@ -128,7 +128,7 @@ function ConnectedDocChip({ doc }: { doc: ConnectedDoc }) {
       onMouseLeave={(e) => { e.currentTarget.style.background = "var(--panel)"; e.currentTarget.style.borderColor = "var(--line)"; }}>
       <span style={{ width: 5, height: 5, borderRadius: "50%", background: "var(--blue)", flex: "none" }} />
       <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
-      {doc.kind && <span style={{ fontSize: 9.5, color: "var(--t3)", fontFamily: "var(--mono)", textTransform: "uppercase", letterSpacing: ".04em" }}>{doc.kind}</span>}
+      {doc.kind && <Tag>{doc.kind[0].toUpperCase() + doc.kind.slice(1)}</Tag>}
     </button>
   );
 }
@@ -174,13 +174,13 @@ function ConnectedDocsPanel({ docs }: { docs: ConnectedDoc[] }) {
   return (
     <div style={{ marginTop: 22 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "0 2px 10px" }}>
-        <span style={{ fontSize: 10.5, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".07em", fontWeight: 600 }}>Connected</span>
+        <SectionLabel>Connected</SectionLabel>
         <span style={{ fontSize: 10.5, color: "var(--t3)", fontFamily: "var(--mono)" }}>{docs.length}</span>
         <span style={{ flex: 1, height: 1, background: "var(--line)" }} />
       </div>
       {groups.map((g) => (
         <div key={g.kind} style={{ marginBottom: 10 }}>
-          {groups.length > 1 && <div style={{ fontSize: 10, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".05em", margin: "0 2px 6px" }}>{g.kind}</div>}
+          {groups.length > 1 && <SectionLabel as="div">{g.kind[0].toUpperCase() + g.kind.slice(1)}</SectionLabel>}
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>{g.docs.map((d, i) => <ConnectedDocChip key={`${d.path}-${i}`} doc={d} />)}</div>
         </div>
       ))}
@@ -234,7 +234,7 @@ function ConnectedPanel({ native, docs }: { native: string; docs?: ConnectedDoc[
   return (
     <div style={{ marginTop: 22 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "0 2px 10px" }}>
-        <span style={{ fontSize: 10.5, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".07em", fontWeight: 600 }}>Connected</span>
+        <SectionLabel>Connected</SectionLabel>
         {state.status === "present" && state.links.length > 0 && <span style={{ fontSize: 10.5, color: "var(--t3)", fontFamily: "var(--mono)" }}>{state.links.length}</span>}
         <span style={{ flex: 1, height: 1, background: "var(--line)" }} />
       </div>
@@ -632,7 +632,7 @@ function CalendarSyncButton({ variant = "icon" }: { variant?: "icon" | "row" }) 
       )}
       {open && (
         <div style={{ position: "absolute", top: "100%", right: 0, marginTop: 6, width: 300, background: "var(--panel)", border: "1px solid var(--line2)", borderRadius: 10, boxShadow: "0 8px 28px rgba(0,0,0,.32)", padding: 12, zIndex: 50, display: "flex", flexDirection: "column", gap: 8 }}>
-          <div style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em" }}>
+          <div className="vx-label">
             {connected ? `calendars · ${cals?.length ?? 0} of ${MAX_CALENDARS}` : "calendar sync"}
           </div>
           {connected ? (
@@ -750,7 +750,7 @@ function MeetingsList() {
   return (
     <div style={{ padding: "8px" }}>
       <div style={{ display: "flex", alignItems: "center", padding: "6px 4px 6px" }}>
-        <span style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em", flex: 1 }}>meetings</span>
+        <span className="vx-label vx-grow">Meetings</span>
         {!minutesOnly() && <CalendarSyncButton />}
       </div>
       {/* MINUTES: meetings arrive by INVITATION — no paste-a-link, no bot button, no calendar
@@ -991,13 +991,16 @@ function MeetingTab({ params }: TabProps) {
             was designed for and stays legible at every width below it. */}
         <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 12, rowGap: 8, fontSize: 13, minWidth: 0 }}>
           <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 9, rowGap: 6, minWidth: 0 }}>
+            {/* THE PHASE IS A BADGE EARNED FROM OBSERVED STATE (guidelines §5.4, P21): "Live" only
+                on the live signal, with its dot and word; the interim states are warning-toned with
+                a spinner; the recap is the meeting colour. Sentence case, never uppercase. */}
             {header === "live"
-              ? <span style={{ display: "inline-flex", alignItems: "center", gap: 6, color: "var(--green)", fontWeight: 600, letterSpacing: ".04em", fontSize: 11, textTransform: "uppercase", flex: "none" }}><span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--green)", boxShadow: "0 0 0 3px var(--greenbg)" }} />Live</span>
+              ? <Badge tone="success" dot>Live</Badge>
               : header === "reconnecting"
-                ? <span style={{ display: "inline-flex", alignItems: "center", gap: 6, color: "var(--accent)", fontWeight: 600, letterSpacing: ".04em", fontSize: 11, textTransform: "uppercase", flex: "none" }} title="Live connection lost — the last known state may be stale"><span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--accent)", boxShadow: "0 0 0 3px var(--accentbg)" }} />Reconnecting…</span>
+                ? <span title="Live connection lost — the last known state may be stale"><Badge tone="warning"><Spinner size={14} />Reconnecting…</Badge></span>
                 : header === "recap"
-                  ? <span style={{ display: "inline-flex", alignItems: "center", color: "var(--violet)", background: "var(--violetbg)", fontWeight: 600, letterSpacing: ".06em", fontSize: 10.5, textTransform: "uppercase", borderRadius: 999, padding: "2px 9px", flex: "none" }}>Recap</span>
-                  : <span style={{ fontSize: 11, color: "var(--t3)", fontWeight: 600, letterSpacing: ".04em", textTransform: "uppercase", flex: "none" }}>Connecting…</span>}
+                  ? <Badge tone="meeting">Recap</Badge>
+                  : <Badge tone="warning"><Spinner size={14} />Connecting…</Badge>}
             <span style={{ width: 3, height: 3, borderRadius: "50%", background: "var(--t3)", flex: "none" }} />
             <span style={{ color: "var(--t1)", fontWeight: 550, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m ? (m.title_custom ?? (m.native_id ?? m.title).replace(/^Google Meet · /, "")) : "Meeting"}</span>
             {m && <span style={{ color: "var(--t3)", flex: "none", fontSize: 12 }}>{m.platform}</span>}

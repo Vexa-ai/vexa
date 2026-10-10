@@ -214,3 +214,6 @@
 .vx-chip-add:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .vx-ws-gone { color: var(--text-2); }
 .vx-inline-chip[data-static] { cursor: default; }
+.vx-label { display: block; margin: 0; font-size: var(--text-xs); font-weight: var(--weight-medium); color: var(--text-3); letter-spacing: 0; text-transform: none; }
+span.vx-label { display: inline; }
+.vx-grow { flex: 1; min-width: 0; }
