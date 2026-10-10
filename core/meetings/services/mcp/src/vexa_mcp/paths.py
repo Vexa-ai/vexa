@@ -10,12 +10,14 @@ through `path_segment` — the one place that decides what it becomes — before
     encoded `%2F` is encoded again (`%252F`) and stays data;
   * a dot-only segment (`.`, `..`) is percent-encoded too. `quote` leaves `.` alone — it is
     unreserved — and httpx RESOLVES a dot segment against the path before the request goes out, so
-    `/bots/google_meet/..` would otherwise leave as `/bots`. Encoded, it arrives as the literal id
-    it was sent as.
+    `/bots/google_meet/..` would otherwise leave as `/bots`. Encoded, it reaches the gateway inside
+    the route the tool named.
 
-The gateway applies the same rule to the path parameters it forwards (`gateway/paths.py`
-`path_segment`); this is the MCP's half of it, on the hop that reaches the gateway in the first
-place.
+This is the MCP's half, on the hop that reaches the gateway. The gateway decodes the value and holds
+it to the forwarded-row rule on every meetings row and every forwarded domain's row
+(`gateway/paths.py` `forwarded_param`): a `.`/`..` value, or an encoded `/` or `\`, is refused there
+with a 400, and any other value is re-encoded into the one segment it arrived in on the gateway's own
+hop. A `platform` outside the meeting platforms is refused at both doors.
 """
 from __future__ import annotations
 

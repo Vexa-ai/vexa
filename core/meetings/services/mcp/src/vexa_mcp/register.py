@@ -293,8 +293,9 @@ def _add(app: FastAPI, bt: BoundTool, base: str,
             # ONE SEGMENT OF THE TOOL'S OWN ROUTE AND NOTHING ELSE (`paths.py`): every character
             # but the unreserved ones percent-encoded, `/` included, and a dot-only value encoded
             # too, so neither a separator nor a `.`/`..` segment httpx would resolve survives. The
-            # request stays under the route the manifest declared, and a traversal attempt arrives
-            # as a literal id the route 404s.
+            # request reaches the gateway under the route the manifest declared; there a dot-only
+            # value or a separator is refused with a 400, and any other value goes on as one
+            # literal segment (`gateway/paths.py` `forwarded_param`).
             path = path.replace("{" + name + "}", path_segment(value))
 
         params = {n: argument[n] for n in query_declared if argument.get(n) is not None}
