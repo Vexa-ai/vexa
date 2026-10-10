@@ -4,7 +4,7 @@
     {
       "package": "@img/sharp-libvips",
       "license": "LGPL-3.0-or-later",
-      "reason": "libvips native binary behind `sharp`. LGPL is weak copyleft; it would be used unmodified and dynamically linked (a separate prebuilt .so/.dylib that sharp's binding loads at runtime), which ADR-0004 treats as Category B; FINOS lists LGPL as Category X. It reaches the npm lock of clients/terminal only, as an optional dependency of next that only the image optimizer loads; the terminal turns the optimizer off (next.config.ts images.unoptimized). The pnpm tree has none: @huggingface/transformers' sharp is overridden by @vexa/no-image-backend (pnpm-workspace.yaml).",
+      "reason": "libvips native binary behind `sharp`. LGPL is weak copyleft; it would be used unmodified and dynamically linked (a separate prebuilt .so/.dylib that sharp's binding loads at runtime), which ADR-0004 treats as Category B; FINOS lists LGPL as Category X. It reaches two npm locks outside the pnpm tree, as an optional dependency of next that only the image optimizer loads: clients/terminal, which turns the optimizer off (next.config.ts images.unoptimized), and the retiring 0.10 dashboard (services/dashboard, not built by this line), whose next/image uses it. The pnpm tree has none: @huggingface/transformers' sharp is overridden by @vexa/no-image-backend (pnpm-workspace.yaml).",
       "disposition": "Logged exception for the terminal's build stage only. Not in any runtime image: clients/terminal/Dockerfile (deps-prod) and Lite's terminal-builder remove sharp and @img/*, and vexaai/vexa-bot and vexa-lite's bot tree load the stand-in. gate:image-licenses holds all three.",
       "scope": "clients/terminal (npm lock, build stage only)",
       "approved": "ADR-0004"

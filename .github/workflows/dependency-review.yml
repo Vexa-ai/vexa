@@ -48,10 +48,10 @@ jobs:
           # Reviewed exceptions, by package (security/known-advisories.md § Dependency review):
           #  - typing-extensions is PSF-2.0 (its own license_expression); GitHub's detector reads the PSF
           #    licence file's history section and reports GPL-1.0-or-later.
-          #  - libvips behind sharp (LGPL-3.0-or-later, and the win32/wasm builds that bundle it) is left
-          #    only in the terminal's npm lock, installed by its build stage and removed from its runtime
-          #    tree (license-exceptions.json); the pnpm tree loads core/meetings/modules/no-image-backend.
-          #  - json-schema, uri-js and bowser appear only in services/dashboard (below).
+          #  - libvips behind sharp (LGPL-3.0-or-later, and the win32/wasm builds that bundle it) is left in
+          #    two npm locks: the terminal's (its build stage installs it, its runtime tree removes it) and
+          #    the retiring dashboard's, whose image optimizer uses it (license-exceptions.json,
+          #    security/known-advisories.md). The pnpm tree loads core/meetings/modules/no-image-backend.
           allow-dependencies-licenses: >-
             pkg:pypi/typing-extensions,
             pkg:npm/%40img/sharp-libvips-darwin-arm64,
@@ -67,19 +67,4 @@ jobs:
             pkg:npm/%40img/sharp-wasm32,
             pkg:npm/%40img/sharp-win32-arm64,
             pkg:npm/%40img/sharp-win32-ia32,
-            pkg:npm/%40img/sharp-win32-x64,
-            pkg:npm/json-schema,
-            pkg:npm/uri-js,
-            pkg:npm/bowser
-          # services/dashboard is the retiring 0.10 dashboard: off by default, outside the gates
-          # (ADR-0007), not built by this line's release, and excluded from OSV-Scanner for the same
-          # reason. Dependency review cannot exclude a path, so its advisories are allowed by ID here;
-          # every shipped lockfile stays guarded by OSV-Scanner, which carries no such entry.
-          allow-ghsas: >-
-            GHSA-22p9-wv53-3rq4, GHSA-28wg-ghj8-5hjv, GHSA-2v37-7h3g-55p8, GHSA-2x7j-588g-ccc2,
-            GHSA-2xp9-vwfh-vxw4, GHSA-68fv-2mgg-jv7q, GHSA-6g55-p6wh-862q, GHSA-6gpp-xcg3-4w24,
-            GHSA-7rqj-j65f-68wh, GHSA-89xv-2m56-2m9x, GHSA-c8x8-7fp4-3x9w, GHSA-cjq9-62q9-8jv4,
-            GHSA-f88m-g3jw-g9cj, GHSA-j95f-988m-3j2f, GHSA-m99w-x7hq-7vfj, GHSA-p293-qw3h-jr36,
-            GHSA-p6gq-j5cr-w38f, GHSA-p9j2-gv94-2wf4, GHSA-r28c-9q8g-f849, GHSA-r7g4-qg5f-qqm2,
-            GHSA-rgj7-g3m4-5g8c, GHSA-v245-v573-v5vm, GHSA-v53p-9fqp-m79j, GHSA-vcvr-r3jv-pc5j,
-            GHSA-wq5f-xc86-pv6w, GHSA-xmf8-cvqr-rfgj
+            pkg:npm/%40img/sharp-win32-x64
