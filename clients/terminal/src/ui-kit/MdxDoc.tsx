@@ -19,6 +19,7 @@ import { EntityProperties, entityProperties } from "./EntityProperties";
 import { Markdown, stripHtmlComments } from "./Markdown";
 import { DocImage } from "./docImages";
 import { MermaidDiagram, isMermaidFence } from "./docDiagrams";
+import { ExternalLink } from "./primitives/Links";
 import { Icon } from "./index";
 import {
   Card, CardGroup, DocMetaContext, DocNavContext, DocPath, ENTITY_CHIP, DEFAULT_ENTITY_CHIP, InternalLink,
@@ -112,9 +113,11 @@ function fencedCode(children: ReactNode): { lang: string; source: string } | nul
   return { lang, source: props.children.replace(/\n$/, "") };
 }
 
-const HEADING_SIZE: Record<number, number> = { 1: 18, 2: 16, 3: 14.5, 4: 13.5 };
+// PROSE LOOKS ARE ONE STYLESHEET (`.vx-prose` in ui-kit/primitives/prose.css, guidelines §2.2):
+// headings on the type scale, 72ch measure, lists, quotes, tables, code. The elements below stay
+// plain; only behaviour (links, fences) is decided here.
 const h = (lvl: number) => ({ children }: { children?: ReactNode }) => (
-  <div style={{ fontSize: HEADING_SIZE[lvl], fontWeight: 600, color: "var(--t1)", lineHeight: 1.3, margin: lvl <= 2 ? "12px 0 6px" : "10px 0 4px" }}>{children}</div>
+  <div className="vx-prose-h" data-level={lvl}>{children}</div>
 );
 
 const htmlComponents = {
@@ -124,15 +127,15 @@ const htmlComponents = {
   // out of a customer's document. DocImage does neither: workspace paths load through the scoped
   // asset route, remote ones render as an offer to fetch them in.
   img: DocImage,
-  p: ({ children }: { children?: ReactNode }) => <p style={{ margin: "0 0 8px", lineHeight: 1.6 }}>{children}</p>,
+  p: ({ children }: { children?: ReactNode }) => <p>{children}</p>,
   a: ({ href, children }: { href?: string; children?: ReactNode }) => {
     // Meeting deep-link (`?meeting=<id>`, relative or absolute) → open the meeting canvas (transcript +
     // recording) in-app, no reload. The same URL also cold-opens the meeting via App.tsx (portable).
     const mref = href?.match(/[?&]meeting=([^&#]+)/);
     if (mref) {
       const ref = decodeURIComponent(mref[1]);
-      return <span role="link" onClick={() => window.dispatchEvent(new CustomEvent(OPEN_MEETING_EVENT, { detail: { ref } }))}
-        style={{ color: "var(--blue)", textDecoration: "underline", cursor: "pointer" }}>{children}</span>;
+      const open = () => window.dispatchEvent(new CustomEvent(OPEN_MEETING_EVENT, { detail: { ref } }));
+      return <span role="link" tabIndex={0} className="vx-link vx-link-inline" onClick={open} onKeyDown={(e) => { if (e.key === "Enter") open(); }}>{children}</span>;
     }
     // Workspace-internal link (no scheme, not an anchor) → navigate the doc pane in place
     // (or open a tab outside a doc pane), same path the Wikilink chip uses. Relative hrefs
@@ -140,12 +143,11 @@ const htmlComponents = {
     if (href && isInternalHref(href)) return <InternalLink href={href}>{children}</InternalLink>;
     // external: only http(s) and #anchors keep a live href — javascript:/data:/;
     // //host from untrusted docs render as inert text
-    const safeHref = href && (/^https?:/i.test(href) || href.startsWith("#")) ? href : undefined;
-    if (!safeHref) return <span style={{ color: "var(--blue)" }}>{children}</span>;
-    return <a href={safeHref} target="_blank" rel="noreferrer noopener" style={{ color: "var(--blue)", textDecoration: "underline" }}>{children}</a>;
+    if (href?.startsWith("#")) return <a className="vx-link vx-link-inline" href={href}>{children}</a>;
+    return <ExternalLink href={href ?? ""}>{children}</ExternalLink>;
   },
   code: ({ children }: { children?: ReactNode }) => (
-    <code style={{ fontFamily: "var(--mono)", fontSize: "0.88em", background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 4, padding: "0.5px 5px", color: "var(--t1)" }}>{children}</code>
+    <code className="vx-code">{children}</code>
   ),
   // A FENCE CAN BE A PICTURE (#1617). Markdown gives a fenced block to `pre` wrapping a `code`
   // whose class names the language, so this is the only seam where ```mermaid can be told from
@@ -155,25 +157,14 @@ const htmlComponents = {
     const fence = fencedCode(children);
     if (fence && isMermaidFence(fence.lang)) return <MermaidDiagram source={fence.source} />;
     return (
-      <pre style={{ fontFamily: "var(--mono)", fontSize: 12, background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 8, padding: "9px 11px", margin: "6px 0 10px", overflowX: "auto", lineHeight: 1.5, color: "var(--t1)" }}>{children}</pre>
+      <pre className="vx-code-block">{children}</pre>
     );
   },
-  ul: ({ children }: { children?: ReactNode }) => <ul style={{ margin: "4px 0 8px", paddingLeft: 20, display: "flex", flexDirection: "column", gap: 2 }}>{children}</ul>,
-  ol: ({ children }: { children?: ReactNode }) => <ol style={{ margin: "4px 0 8px", paddingLeft: 20, display: "flex", flexDirection: "column", gap: 2 }}>{children}</ol>,
-  li: ({ children }: { children?: ReactNode }) => <li style={{ lineHeight: 1.55 }}>{children}</li>,
-  blockquote: ({ children }: { children?: ReactNode }) => (
-    <blockquote style={{ borderLeft: "3px solid var(--line2)", paddingLeft: 12, margin: "6px 0 8px", color: "var(--t2)", lineHeight: 1.55 }}>{children}</blockquote>
-  ),
-  hr: () => <hr style={{ border: "none", borderTop: "1px solid var(--line)", margin: "12px 0" }} />,
-  table: ({ children }: { children?: ReactNode }) => (
-    <table style={{ width: "100%", borderCollapse: "collapse", margin: "6px 0 10px", color: "var(--t1)", lineHeight: 1.45 }}>{children}</table>
-  ),
-  th: ({ children, style }: { children?: ReactNode; style?: CSSProperties }) => (
-    <th style={{ background: "var(--panel)", border: "1px solid var(--line2)", padding: "6px 9px", color: "var(--t1)", fontWeight: 600, ...style }}>{children}</th>
-  ),
-  td: ({ children, style }: { children?: ReactNode; style?: CSSProperties }) => (
-    <td style={{ border: "1px solid var(--line)", padding: "6px 9px", color: "var(--t2)", verticalAlign: "top", ...style }}>{children}</td>
-  ),
+  // a wide table scrolls inside its own frame, never the page (guidelines §3.4)
+  table: ({ children }: { children?: ReactNode }) => <div className="vx-prose-table" data-allow-hscroll=""><table>{children}</table></div>,
+  // GFM column alignment arrives as `style={{ textAlign }}` — layout, kept
+  th: ({ children, style }: { children?: ReactNode; style?: CSSProperties }) => <th style={style ? { textAlign: style.textAlign } : undefined}>{children}</th>,
+  td: ({ children, style }: { children?: ReactNode; style?: CSSProperties }) => <td style={style ? { textAlign: style.textAlign } : undefined}>{children}</td>,
 };
 
 export const MDX_COMPONENTS = { ...htmlComponents, ViewSource, Note, Warning, Card, CardGroup, Steps, Step, Tabs, Tab, Wikilink, DocPath, WorkspaceRef };
@@ -446,7 +437,7 @@ function MdxBody({ children, style }: { children: string; style?: CSSProperties 
   }
   const Content = state.Content;
   return (
-    <div style={{ color: "var(--t1)", ...style }}>
+    <div className="vx-prose" style={style}>
       <Content components={MDX_COMPONENTS} />
     </div>
   );

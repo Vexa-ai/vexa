@@ -246,8 +246,8 @@ export function Markdown({ children, style }: { children: string; style?: React.
   const flushList = (items: string[], ordered: boolean) => {
     const Tag = ordered ? "ol" : "ul";
     blocks.push(
-      <Tag key={key++} style={{ margin: "4px 0 8px", paddingLeft: 20, display: "flex", flexDirection: "column", gap: 2 }}>
-        {items.map((it, j) => <li key={j} style={{ lineHeight: 1.55 }}>{inline(it)}</li>)}
+      <Tag key={key++}>
+        {items.map((it, j) => <li key={j}>{inline(it)}</li>)}
       </Tag>,
     );
   };
@@ -304,7 +304,7 @@ export function Markdown({ children, style }: { children: string; style?: React.
       const buf: string[] = [];
       while (i < lines.length && /^\s*>/.test(lines[i])) { buf.push(lines[i].replace(/^\s*>\s?/, "")); i++; }
       blocks.push(
-        <blockquote key={key++} style={{ borderLeft: "3px solid var(--line2)", paddingLeft: 12, margin: "6px 0 8px", color: "var(--t2)", lineHeight: 1.55 }}>
+        <blockquote key={key++}>
           {inline(buf.join("\n"))}
         </blockquote>,
       );
@@ -399,5 +399,5 @@ export function Markdown({ children, style }: { children: string; style?: React.
     );
   }
 
-  return <div style={{ color: "var(--t1)", ...style }}>{blocks}</div>;
+  return <div className="vx-prose" style={style}>{blocks}</div>;
 }
