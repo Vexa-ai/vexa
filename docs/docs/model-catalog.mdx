@@ -172,9 +172,11 @@ A catalog is never half-applied.
   - It takes effect on the chat's next message, which starts a fresh agent on that model.
   - "Use … for new chats" makes the current model the person's default.
   - "Follow my default" un-pins the chat.
-- **Defaults.** A chat nobody picked for runs on the person's default
-  (Settings → Models `default_model`), else the organisation's (the same field on the admin's
-  platform settings), else the catalog's `default`, else the first model the person may use.
+- **Defaults.** A chat nobody picked for runs on the person's default, else the organisation's,
+  else the catalog's `default`, else the first model the person may use.
+  - The person sets theirs with "Use … for new chats", or under Settings → Models → Default model,
+    which lists the catalog's models.
+  - The organisation's default is the same selector in an admin's global settings.
 - **Autonomous runs.** Routines and other runs nobody starts by typing use the person's default.
   Background jobs a chat starts run on that chat's model.
 

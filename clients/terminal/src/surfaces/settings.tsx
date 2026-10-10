@@ -12,6 +12,7 @@ import { Icon } from "../ui-kit";
 import { GitHubTokenCard, TokensPanel } from "./tokens";
 import { ApiError, presentError } from "./apiClient";
 import { CalendarConnectionsPanel } from "./calendarConnections";
+import { getModelCatalog, type ModelEntry } from "./modelsApi";
 import { allowLines, getModelPrefs, setModelPrefs, getTranscriptionPrefs, setTranscriptionPrefs, getGlobalSetting, setGlobalSetting, getSigninAllow, setSigninAllow, testModels, testTranscription, type ConfigTestResult, type SigninAllow } from "./settingsApi";
 
 type SectionId = "calendar" | "models" | "tokens" | "github" | "signin" | "account";
@@ -129,17 +130,35 @@ function TestRow({ label, run }: { label: string; run: () => Promise<ConfigTestR
   );
 }
 
+/** The "Default model" selector (ADR-0043): one option per model of the deployment's catalog that
+ *  this person may pick — the list agent-api serves, never typed — plus "inherit", which defers to
+ *  the level below (the organisation's default, then the catalog's). No catalog: no field. */
+export function defaultModelField(models: ModelEntry[], inherit: string) {
+  return {
+    key: "default_model", label: "Default model",
+    options: [{ value: "", label: inherit }, ...models.map((m) => ({ value: m.id, label: m.display_name }))],
+  };
+}
+
 /** Models — which LLM the agent runs on and which STT backend the bot transcribes with; your own
  *  settings first, the deployment-wide defaults below for admins. Empty fields = the level below
  *  decides (global settings, then the deployment env). */
-function ModelsSection() {
+export function ModelsSection() {
   const [globalAdmin, setGlobalAdmin] = useState(false);
+  const [catalog, setCatalog] = useState<ModelEntry[]>([]);
   useEffect(() => {
     let on = true;
     // Admin probe: the global card renders only when /api/admin/settings answers (404 = not admin).
     getGlobalSetting("models").then((v) => on && setGlobalAdmin(v !== null)).catch(() => undefined);
+    // The deployment's model catalog, as agent-api serves it to THIS person (empty = no catalog).
+    getModelCatalog().then((l) => on && setCatalog(Array.isArray(l?.models) ? l.models : []))
+      .catch(() => undefined);
     return () => { on = false; };
   }, []);
+  const catalogFields = catalog.length
+    ? [defaultModelField(catalog, "Organisation default")] : [];
+  const globalCatalogFields = catalog.length
+    ? [defaultModelField(catalog, "Catalog default")] : [];
 
   const modelFields = [
     { key: "mode", label: "Provider", options: [
@@ -179,7 +198,14 @@ function ModelsSection() {
         models). Empty fields inherit the deployment defaults.
       </div>
       <div style={head}>Your models</div>
-      <ConfigForm fields={modelFields} load={async () => asStrings(await getModelPrefs())}
+      {catalog.length > 0 && (
+        <div style={{ fontSize: 11, color: "var(--t3)", lineHeight: 1.5, marginBottom: 6, maxWidth: 460 }}>
+          This deployment offers a model catalog: each chat picks its model in the composer, and new
+          chats start on your default model. The endpoint fields below are your own endpoint&rsquo;s.
+        </div>
+      )}
+      <ConfigForm key={`own-${catalog.length}`} fields={[...catalogFields, ...modelFields]}
+        load={async () => asStrings(await getModelPrefs())}
         save={async (u) => asStrings(await setModelPrefs(u))} />
       <TestRow label="Test model credentials" run={testModels} />
       <div style={head}>Your transcription backend</div>
@@ -188,7 +214,8 @@ function ModelsSection() {
       <TestRow label="Test transcription backend" run={testTranscription} />
       {globalAdmin && <>
         <div style={{ ...head, marginTop: 22, color: "var(--accent)" }}>Global defaults (admin — every user without own settings)</div>
-        <ConfigForm fields={modelFields} load={async () => (await getGlobalSetting("models")) ?? {}}
+        <ConfigForm key={`global-${catalog.length}`} fields={[...globalCatalogFields, ...modelFields]}
+          load={async () => (await getGlobalSetting("models")) ?? {}}
           save={(u) => setGlobalSetting("models", u)} />
         <div style={head}>Global transcription backend</div>
         <ConfigForm fields={transcriptionFields} load={async () => (await getGlobalSetting("transcription")) ?? {}}
