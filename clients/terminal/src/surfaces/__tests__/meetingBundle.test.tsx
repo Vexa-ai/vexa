@@ -125,3 +125,12 @@ describe("Import meeting dialog", () => {
     expect((screen.getByRole("button", { name: "Import" }) as HTMLButtonElement).disabled).toBe(true);
   });
 });
+
+describe("upload progress", () => {
+  it("reports the phase's progress through to the end with an injected transport", async () => {
+    const seen: number[] = [];
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({ ...PREVIEW }), { status: 200 }));
+    await previewImport(new Blob(["x"]), fetcher as unknown as typeof fetch, (f) => seen.push(f));
+    expect(seen.at(-1)).toBe(1);
+  });
+});

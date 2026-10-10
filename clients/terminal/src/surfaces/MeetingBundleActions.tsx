@@ -100,29 +100,33 @@ function ImportDialog({ onClose }: { onClose: () => void }) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [over, setOver] = useState(false);
+  // What is moving right now, and how much of it has gone: a 100 MB file is sent up to three times
+  // (the preview, the import, the restore), and each is a visible phase, never a silent wait.
+  const [phase, setPhase] = useState<{ label: string; fraction: number } | null>(null);
+  const track = (label: string) => (fraction: number) => setPhase({ label, fraction });
 
   const choose = useCallback(async (f: File | undefined) => {
     if (!f) return;
     setFile(f); setPreview(null); setDone(null); setError(""); setBusy(true);
-    try { setPreview(await previewImport(f)); }
+    try { setPreview(await previewImport(f, fetch, track("Checking the file"))); }
     catch (e) { setError(describe(e)); }
-    finally { setBusy(false); }
+    finally { setBusy(false); setPhase(null); }
   }, []);
   const confirm = async () => {
     if (!file) return;
     setBusy(true); setError("");
     try {
-      const result = await confirmImport(file);
+      const result = await confirmImport(file, fetch, track("Importing"));
       setDone(result); refreshMeetings();
       // The meeting has landed; the agent domain now lands what it owns from the same file. A
       // refusal there is shown — the meeting stays imported either way.
       if (result.handoff.workspace_files > 0 || result.handoff.notes_page) {
-        try { setRestored(await restoreParts(file, result.meeting_id)); }
+        try { setRestored(await restoreParts(file, result.meeting_id, fetch, track("Restoring the workspace and page"))); }
         catch (e) { setError(`The meeting was imported, but its workspace and notes page were not: ${describe(e)}`); }
       }
     }
     catch (e) { setError(describe(e)); }
-    finally { setBusy(false); }
+    finally { setBusy(false); setPhase(null); }
   };
   const onDrop = (e: DragEvent) => { e.preventDefault(); setOver(false); void choose(e.dataTransfer.files?.[0]); };
 
@@ -133,6 +137,8 @@ function ImportDialog({ onClose }: { onClose: () => void }) {
       {restored?.workspace && <div>Workspace restored: {restored.workspace.files} files in &ldquo;{restored.workspace.slug}&rdquo;.</div>}
       {restored?.notes_page && <div>{restored.notes_page.written ? "The meeting\u2019s page is on your desk." : "Your desk already had this meeting\u2019s page; it was kept."}</div>}
       {error && <div role="alert" style={{ marginTop: 8, fontSize: 12, color: "var(--danger)" }}>{error}</div>}
+      {busy && phase && <div role="status" style={{ ...note, marginTop: 8 }}>{phase.label}… {Math.round(phase.fraction * 100)}%
+        <progress value={phase.fraction} max={1} style={{ display: "block", width: "100%", marginTop: 6 }} /></div>}
       <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 14 }}><button style={button} onClick={onClose}>Done</button></div>
     </div> : <>
       <label data-bundle-drop onDragOver={e => { e.preventDefault(); setOver(true); }} onDragLeave={() => setOver(false)} onDrop={onDrop}
@@ -141,7 +147,10 @@ function ImportDialog({ onClose }: { onClose: () => void }) {
         <input type="file" accept=".zip,application/zip" aria-label="Meeting bundle file" style={{ display: "none" }}
           onChange={e => void choose(e.target.files?.[0])} />
       </label>
-      {busy && <div role="status" style={{ ...note, marginTop: 10 }}>{preview ? "Importing…" : "Checking the file…"}</div>}
+      {busy && <div role="status" style={{ ...note, marginTop: 10 }}>
+        {phase ? `${phase.label}… ${Math.round(phase.fraction * 100)}%` : preview ? "Importing…" : "Checking the file…"}
+        {phase && <progress value={phase.fraction} max={1} style={{ display: "block", width: "100%", marginTop: 6 }} />}
+      </div>}
       {preview && <div style={{ marginTop: 12 }}><PreviewCard p={preview} /></div>}
       {error && <div role="alert" style={{ marginTop: 10, fontSize: 12, color: "var(--danger)" }}>{error}</div>}
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>

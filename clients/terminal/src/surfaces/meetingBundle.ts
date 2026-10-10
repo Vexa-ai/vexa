@@ -133,38 +133,62 @@ export function saveBlob(blob: Blob, filename: string): void {
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
-async function post(file: Blob, dryRun: boolean, fetcher: typeof fetch): Promise<Response> {
-  return fetcher(`/api/meetings/import${dryRun ? "?dry_run=true" : ""}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/zip" },
-    body: file,
+/** Upload progress, as a fraction of the file sent. */
+export type UploadProgress = (fraction: number) => void;
+
+// The fetch this module was loaded with: only through the browser's own fetch is an upload swapped
+// for XMLHttpRequest — the one browser API that reports upload progress. An injected fetcher (a test,
+// a caller with its own transport) is always used as given.
+const NATIVE_FETCH: typeof fetch | undefined = typeof fetch === "function" ? fetch : undefined;
+
+function xhrSend(url: string, body: Blob, onProgress: UploadProgress): Promise<Response> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+    xhr.setRequestHeader("Content-Type", "application/zip");
+    xhr.upload.onprogress = (e) => { if (e.lengthComputable && e.total) onProgress(Math.min(1, e.loaded / e.total)); };
+    xhr.onload = () => {
+      onProgress(1);
+      resolve(new Response(xhr.responseText, {
+        status: xhr.status,
+        headers: { "Content-Type": xhr.getResponseHeader("Content-Type") || "application/json" },
+      }));
+    };
+    xhr.onerror = () => reject(new Error("the upload failed before the server answered"));
+    xhr.onabort = () => reject(new Error("the upload was cancelled"));
+    xhr.send(body);
   });
 }
 
+async function sendZip(url: string, body: Blob, fetcher: typeof fetch, onProgress?: UploadProgress): Promise<Response> {
+  if (onProgress && fetcher === NATIVE_FETCH && typeof XMLHttpRequest !== "undefined") {
+    return xhrSend(url, body, onProgress);
+  }
+  const r = await fetcher(url, { method: "POST", headers: { "Content-Type": "application/zip" }, body });
+  onProgress?.(1);
+  return r;
+}
+
 /** What importing `file` would create — nothing is written. Refused locally when it is plainly too big. */
-export async function previewImport(file: Blob, fetcher: typeof fetch = fetch): Promise<BundlePreview> {
+export async function previewImport(file: Blob, fetcher: typeof fetch = fetch, onProgress?: UploadProgress): Promise<BundlePreview> {
   if (file.size > MAX_BUNDLE_BYTES) {
     throw new BundleError(413, "too_large", `The file is ${file.size} bytes; the limit is ${MAX_BUNDLE_BYTES}.`);
   }
-  const r = await post(file, true, fetcher);
+  const r = await sendZip("/api/meetings/import?dry_run=true", file, fetcher, onProgress);
   if (!r.ok) throw await failure(r);
   return await r.json() as BundlePreview;
 }
 
 /** Import `file` for real. */
-export async function confirmImport(file: Blob, fetcher: typeof fetch = fetch): Promise<ImportResult> {
-  const r = await post(file, false, fetcher);
+export async function confirmImport(file: Blob, fetcher: typeof fetch = fetch, onProgress?: UploadProgress): Promise<ImportResult> {
+  const r = await sendZip("/api/meetings/import", file, fetcher, onProgress);
   if (!r.ok) throw await failure(r);
   return await r.json() as ImportResult;
 }
 
 /** Land the bundle's workspace and page for the meeting `confirmImport` just created from it. */
-export async function restoreParts(file: Blob, meetingId: number, fetcher: typeof fetch = fetch): Promise<RestoreResult> {
-  const r = await fetcher(`/api/meeting/bundle-restore?meeting_id=${meetingId}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/zip" },
-    body: file,
-  });
+export async function restoreParts(file: Blob, meetingId: number, fetcher: typeof fetch = fetch, onProgress?: UploadProgress): Promise<RestoreResult> {
+  const r = await sendZip(`/api/meeting/bundle-restore?meeting_id=${meetingId}`, file, fetcher, onProgress);
   if (!r.ok) throw await failure(r);
   return await r.json() as RestoreResult;
 }
