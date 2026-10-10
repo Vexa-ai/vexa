@@ -36,7 +36,7 @@ def _catalog(decl=EXAMPLE, env=ENV):
 
 def _ctx(cfg=None, env=ENV, refuse=None, allowed=None):
     return RouteContext(subject_config=cfg or {}, secret=secret_from_env(env),
-                        endpoint_refusal=refuse or (lambda _u: None),
+                        endpoint_refusal=refuse or (lambda *_a: None),
                         model_allowed=allowed or (lambda _m: True),
                         deployment_runner="claude-code", deployment_model="deployment-model")
 
@@ -104,17 +104,20 @@ def test_custom_keeps_the_deployment_model_when_the_persons_is_not_allowlisted()
 
 def test_custom_refuses_an_endpoint_the_operator_gate_refuses():
     with pytest.raises(ModelChoiceFault) as exc:
-        _catalog().route("mine", _ctx(OWN, refuse=lambda _u: "host not allow-listed"), admin=False)
+        _catalog().route("mine", _ctx(OWN, refuse=lambda *_a: "host not allow-listed"), admin=False)
     assert exc.value.kind == ENDPOINT_REFUSED
     assert "sk-person" not in json.dumps(exc.value.as_dict())
 
 
 def test_a_keyless_own_endpoint_runs_on_openai_agent_and_never_on_claude_code():
-    keyless = dict(OWN, api_key="")
-    assert _catalog().route("mine", _ctx(keyless), admin=False).credential == ""
+    from control_plane import model_endpoint
+
+    keyless = dict(OWN, api_key="", base_url="https://openrouter.ai/api/v1")   # allow-listed
+    rule = model_endpoint.route_refusal
+    assert _catalog().route("mine", _ctx(keyless, refuse=rule), admin=False).credential == ""
     with pytest.raises(ModelChoiceFault) as exc:
-        _catalog().route("mine", _ctx(dict(keyless, runner="claude-code")), admin=False)
-    assert exc.value.kind == NOT_CONFIGURED
+        _catalog().route("mine", _ctx(dict(keyless, runner="claude-code"), refuse=rule), admin=False)
+    assert exc.value.kind == ENDPOINT_REFUSED and "API key" in exc.value.detail
 
 
 def test_a_missing_secret_is_a_typed_refusal_naming_the_reference_not_the_value():

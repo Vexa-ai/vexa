@@ -144,8 +144,10 @@ class RouteContext:
     subject_config: Mapping = field(default_factory=dict)
     #: A ``secret_ref`` → its value, ``""`` when the reference resolves to nothing.
     secret: Callable[[str], str] = lambda _ref: ""
-    #: The operator gate on a person's own endpoint: ``None`` = admitted, else the reason it is not.
-    endpoint_refusal: Callable[[str], Optional[str]] = lambda _url: None
+    #: The rule on a person's own endpoint — ``(base_url, api_key, harness)`` → ``None`` when it may
+    #: carry the turn, else why not (``model_endpoint.route_refusal``: the operator gate, and the
+    #: person's own key on a harness that would otherwise sign in from its config directory).
+    endpoint_refusal: Callable[[str, str, str], Optional[str]] = lambda _url, _key, _harness: None
     #: ``VEXA_MODEL_ALLOWLIST`` as a predicate — still the gate on a person's own free-form model
     #: name, and on nothing the operator declared.
     model_allowed: Callable[[str], bool] = lambda _model: True

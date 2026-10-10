@@ -57,23 +57,17 @@ class CustomAdapter:
                 NOT_CONFIGURED, model=model_id, provider=provider_key,
                 detail="This model runs on your own endpoint, and you have not set one.",
                 remedy="Set a custom endpoint under Settings → Models, or pick another model.")
-        refusal = ctx.endpoint_refusal(base_url)
+        harness = self.harness(provider, ctx)
+        key = str(cfg.get("api_key") or "").strip()
+        # THE SAME RULE THE PRE-CATALOG ROUTE ASKS (`model_endpoint.route_refusal`): the operator's
+        # gate on the endpoint, and on claude-code the person's own key — that CLI signs in from its
+        # config directory when it has none, and anything there is the deployment's.
+        refusal = ctx.endpoint_refusal(base_url, key, harness)
         if refusal:
             raise ModelChoiceFault(
                 ENDPOINT_REFUSED, model=model_id, provider=provider_key,
-                detail=f"Your endpoint is not allowed on this deployment: {refusal}.",
-                remedy="Point Settings → Models at an allowed endpoint, or pick another model.")
-        harness = self.harness(provider, ctx)
-        key = str(cfg.get("api_key") or "").strip()
-        if harness == "claude-code" and not key:
-            # The claude CLI on an endpoint with no key of its own falls back to whatever credential
-            # its home holds, and that is the deployment's, never the person's. The openai-agent
-            # harness has no such fallback, so a keyless endpoint is fine there.
-            raise ModelChoiceFault(
-                NOT_CONFIGURED, model=model_id, provider=provider_key,
-                detail="Your endpoint has no API key, and the claude-code harness needs one.",
-                remedy="Add the endpoint's key under Settings → Models, choose the openai-agent "
-                       "harness, or pick another model.")
+                detail=f"Your endpoint cannot carry this turn: {refusal}.",
+                remedy="Fix it under Settings → Models, or pick another model.")
         own = str(cfg.get("model") or "").strip()
         return ModelRoute(
             model_id=model_id, provider=provider_key, adapter=KIND,

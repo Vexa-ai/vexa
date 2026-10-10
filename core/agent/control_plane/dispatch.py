@@ -585,7 +585,7 @@ def route_context(model_config: Optional[dict], *, allowlist: str = "",
     return model_providers.RouteContext(
         subject_config=dict(model_config or {}),
         secret=model_providers.secret_from_env(os.environ if env is None else env),
-        endpoint_refusal=model_endpoint.refuse_reason,
+        endpoint_refusal=model_endpoint.route_refusal,
         model_allowed=lambda m: _allowlisted(m, allowlist),
         deployment_runner=deployment_runner or units.deployment_runner(),
         deployment_model=deployment_model)
