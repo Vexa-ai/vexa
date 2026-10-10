@@ -272,10 +272,16 @@ COPY core/agent/contracts/unit.v1/unit.schema.json                /app/agent/age
 COPY core/agent/contracts/routine.v1/routine.schema.json          /app/agent/agent/contracts/routine.v1/routine.schema.json
 COPY core/agent/contracts/event.v1/event.schema.json              /app/agent/agent/contracts/event.v1/event.schema.json
 COPY core/agent/contracts/tool.v1/tool.schema.json                /app/agent/agent/contracts/tool.v1/tool.schema.json
+COPY core/agent/contracts/models.v1/models.schema.json            /app/agent/agent/contracts/models.v1/models.schema.json
 # Build-time guard: the curated /app/agent tree must import as the worker the launcher execs
 # (vexa-agent-worker → `python -m worker`). Catches an incomplete copy — the exact bug class that
 # shipped a tree without llm/ and killed every chat dispatch — at build time, not first dispatch.
 RUN cd /app/agent && PYTHONPATH=/app/agent /opt/venvs/agent/bin/python -c "import worker.worker"
+# …and as the agent-api supervisord serves: every contract its loader reads by path is in the tree.
+# The model catalog's schema was the one missing (ADR-0043), and agent-api exited at import on every
+# Lite boot — catalog set or not, because the loader reads the schema when the module loads.
+RUN cd /app/agent && PYTHONPATH=/app/agent /opt/venvs/agent/bin/python -c "from contracts import loader; [loader._load(v) for k, v in vars(loader).items() if k.startswith('_') and k.endswith('_SCHEMA')]" \
+ && PYTHONPATH=/app/agent /opt/venvs/agent/bin/python -c "from control_plane.model_providers import parse; assert parse('').empty"
 
 # ── Bot workspace (built tree) — placed at /app so the bot resolves /app/browser-utils.global.js
 #    and its package-relative schema/deps exactly as in the bot container. The runtime spawns it

@@ -173,6 +173,9 @@ jobs:
             echo "TRANSCRIPTION_SERVICE_URL="
             echo "TRANSCRIPTION_SERVICE_TOKEN="
           } > .env
+      - name: agent-api loads with the model catalog unset and set (ADR-0043)
+        if: steps.scope.outputs.hit == '1'
+        run: deploy/lite/tests/model-catalog-boot.sh vexa-lite:dev
       - name: Bring lite up from the PR-built image
         if: steps.scope.outputs.hit == '1'
         run: make -C deploy/lite up init-db
