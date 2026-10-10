@@ -37,6 +37,8 @@ const MAX_TOTAL = 1024 * 1024 * 1024;
 const MAX_JSON = 32 * 1024 * 1024;
 const MAX_WORKSPACE_FILE = 16 * 1024 * 1024;
 const MAX_RATIO = 200;
+const MAX_NOTES = 1024 * 1024;
+const MAX_PARTS = 256 * 1024 * 1024;
 const RATIO_FLOOR = 1024 * 1024;
 const ENTRY = new RegExp(schema.$defs.EntryPath.pattern);
 
@@ -83,7 +85,15 @@ function entryProblem(e) {
   return null;
 }
 
-const capFor = (n) => (n.endsWith(".json") && !n.includes("/") ? MAX_JSON : n.startsWith("workspace/") ? MAX_WORKSPACE_FILE : MAX_TOTAL);
+const capFor = (n) => (n === "notes.md" ? MAX_NOTES : n.endsWith(".json") && !n.includes("/") ? MAX_JSON : n.startsWith("workspace/") ? MAX_WORKSPACE_FILE : MAX_TOTAL);
+
+/** notes.md is UTF-8 text with no NUL — a page, never a binary in disguise. */
+function checkNotes(bytes) {
+  if (bytes.length > MAX_NOTES) refuse("too_large", "notes.md");
+  let text;
+  try { text = new TextDecoder("utf-8", { fatal: true }).decode(bytes); } catch { refuse("invalid_part", "notes.md is not UTF-8 text"); }
+  if (text.includes("\u0000")) refuse("invalid_part", "notes.md contains a NUL byte");
+}
 
 function readEntry(buf, e, cap) {
   const p = e.offset;
@@ -107,9 +117,7 @@ const MAGIC = {
   mp4: (b) => b.toString("latin1", 4, 8) === "ftyp",
 };
 
-/** Accept (returns a summary) or throw Refused — the same rules, in the same order, as the Python codec. */
-export function readBundle(buf) {
-  if (buf.length > MAX_BUNDLE_BYTES) refuse("too_large", `${buf.length} bytes`);
+function checkedEntries(buf) {
   const entries = centralDirectory(buf);
   if (entries.length > MAX_ENTRIES) refuse("too_large", `${entries.length} entries`);
   const seen = new Map();
@@ -125,6 +133,26 @@ export function readBundle(buf) {
     if (e.method === 8 && e.usize > RATIO_FLOOR && e.usize > MAX_RATIO * Math.max(e.csize, 1)) refuse("too_large", `${e.name} inflates more than ${MAX_RATIO}:1`);
   }
   if (total > MAX_TOTAL) refuse("too_large", `inflates to ${total} bytes`);
+  return seen;
+}
+
+/** The parts archive an export takes: only workspace/** and notes.md, under the bundle's entry rules. */
+export function readParts(buf) {
+  if (buf.length > MAX_PARTS) refuse("too_large", `${buf.length} bytes`);
+  const seen = checkedEntries(buf);
+  let files = 0, notes = false;
+  for (const [n, e] of seen) {
+    if (n === "notes.md") { checkNotes(readEntry(buf, e, MAX_NOTES)); notes = true; }
+    else if (n.startsWith("workspace/")) { readEntry(buf, e, MAX_WORKSPACE_FILE); files++; }
+    else refuse("manifest_mismatch", `${n} is not a part an export takes`);
+  }
+  return { workspace_files: files, notes_page: notes };
+}
+
+/** Accept (returns a summary) or throw Refused — the same rules, in the same order, as the Python codec. */
+export function readBundle(buf) {
+  if (buf.length > MAX_BUNDLE_BYTES) refuse("too_large", `${buf.length} bytes`);
+  const seen = checkedEntries(buf);
   if (!seen.has("manifest.json")) refuse("not_a_bundle", "no manifest.json");
   const manifest = json("manifest.json", readEntry(buf, seen.get("manifest.json"), MAX_JSON));
   if (manifest?.contract !== "meeting-bundle.v1") refuse("unsupported_version", `contract ${manifest?.contract}`);
@@ -138,7 +166,7 @@ export function readBundle(buf) {
   if (unlisted.length) refuse("manifest_mismatch", `unlisted: ${unlisted.slice(0, 5)}`);
   const missing = [...listed.keys()].filter((n) => !seen.has(n));
   if (missing.length) refuse("manifest_mismatch", `missing: ${missing.slice(0, 5)}`);
-  const roleOf = { "meeting.json": "meeting", "transcript.json": "transcript", "annotations.json": "annotations" };
+  const roleOf = { "meeting.json": "meeting", "transcript.json": "transcript", "annotations.json": "annotations", "notes.md": "notes" };
   for (const [p, f] of listed) { const want = roleOf[p] ?? p.split("/")[0]; if (f.role !== want) refuse("manifest_mismatch", `${p} role ${f.role}`); }
   for (const req of ["meeting.json", "transcript.json"]) if (!listed.has(req)) refuse("manifest_mismatch", `missing ${req}`);
   const blobs = new Map();
@@ -147,6 +175,7 @@ export function readBundle(buf) {
     if (data.length !== f.bytes || createHash("sha256").update(data).digest("hex") !== f.sha256) refuse("hash_mismatch", `${p}`);
     blobs.set(p, data);
   }
+  if (blobs.has("notes.md")) checkNotes(blobs.get("notes.md"));
   const meeting = json("meeting.json", blobs.get("meeting.json"));
   const transcript = json("transcript.json", blobs.get("transcript.json"));
   const annotations = blobs.has("annotations.json") ? json("annotations.json", blobs.get("annotations.json")) : { metadata: {}, notes: null };
@@ -166,8 +195,8 @@ export function readBundle(buf) {
   return { bundle_id: manifest.bundle_id, segments: transcript.segments.length, media: meeting.media.length, files: listed.size };
 }
 
-function verdict(path) {
-  try { return { ok: true, summary: readBundle(readFileSync(path)) }; }
+function verdict(path, reader = readBundle) {
+  try { return { ok: true, summary: reader(readFileSync(path)) }; }
   catch (e) { if (e instanceof Refused) return { ok: false, code: e.code, detail: e.message }; throw e; }
 }
 
@@ -208,5 +237,17 @@ for (const vec of vectors) {
   else console.log(`  ✓ refused/${vec.bundle} → ${vec.code}`);
 }
 for (const z of zips) { console.error(`  ✗ refused/${z} has no row in refused.json`); failed++; }
+// The parts archive: every zip in golden/parts/ is accepted unless refused.json names its code.
+const P = join(G, "parts");
+const partRows = existsSync(join(P, "refused.json")) ? JSON.parse(readFileSync(join(P, "refused.json"), "utf8")) : [];
+const partCodes = new Map(partRows.map((r) => [r.bundle, r.code]));
+for (const r of partRows) if (!vv(r)) { console.error(`  ✗ parts/refused.json row: ${ajv.errorsText(vv.errors)}`); failed++; }
+for (const f of existsSync(P) ? readdirSync(P).filter((n) => n.endsWith(".zip")).sort() : []) {
+  checked++;
+  const v = verdict(join(P, f), readParts);
+  const want = partCodes.get(f);
+  if (want ? (v.ok || v.code !== want) : !v.ok) { console.error(`  ✗ parts/${f}: expected ${want ?? "ACCEPT"}, got ${v.ok ? "ACCEPT" : v.code}`); failed++; }
+  else console.log(`  ✓ parts/${f} → ${want ?? "accepted"}`);
+}
 console.log(failed ? `meeting-bundle.v1: ${failed} FAILED` : `meeting-bundle.v1: ${checked} golden(s) conform`);
 process.exit(failed ? 1 : 0);

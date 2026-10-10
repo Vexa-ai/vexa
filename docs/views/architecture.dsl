@@ -45,6 +45,7 @@ system meetings  # capture → transcribe → record; owns the raw transcript
   data-asset acl-bots-index [writers: meeting-api]
   contract mcp.tools.v1
   data-asset meeting-bundle-file [writers: meeting-api]
+  data-asset meeting-bundle-parts [writers: agent-api]
 
 system agent  # the execution domain: a trigger becomes one governed agent turn over a workspace.v1 git repo; owns no transcript
   service agent-api
@@ -226,6 +227,9 @@ edges:
   mcp -req-> admin-api  # boot assembly: GET /.well-known/mcp-tools.json + /openapi.json on identity's door, always configured; a 404 is a domain that publishes no manifest, and contributes no tools
   meeting-api -write-> meeting-bundle-file  # GET /meetings/{meeting_id}/export — the owner's whole meeting as a meeting-bundle.v1 zip
   meeting-api -read-> meeting-bundle-file  # POST /meetings/import — validate a meeting-bundle.v1 zip (manifest, every hash, paths, sizes) and land it as a new meeting the importer owns
+  agent-api -write-> meeting-bundle-parts  # GET /api/meeting/bundle-parts — the owner's bound workspace tree (never its roster or policy) and the meeting's page
+  meeting-api -read-> meeting-bundle-parts  # POST /meetings/{meeting_id}/export — the parts placed into the bundle
+  agent-api -read-> meeting-bundle-file  # POST /api/meeting/bundle-restore — the bundle's workspace part as a new private workspace of the importer and its notes page on their desk, re-bound to the imported meeting
   bot, agent-worker deployed-in runtime
   gateway, meeting-api, agent-api, admin-api, runtime, redis, postgres, object-store, transcription deployed-in deploy
   flows-api, flows-worker deployed-in deploy

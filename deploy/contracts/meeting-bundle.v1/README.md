@@ -14,6 +14,7 @@ manifest.json          required — what is inside, with a SHA-256 per file
 meeting.json           required — #/$defs/Meeting
 transcript.json        required — #/$defs/Transcript
 annotations.json       optional — #/$defs/Annotations (absent ≡ {"metadata": {}, "notes": null})
+notes.md               optional — the meeting's page: UTF-8 markdown, ≤ 1 MiB, no NUL
 media/<name>.<fmt>     optional — recordings; fmt ∈ webm · wav · mkv · mp4
 workspace/<path>       optional — files of the meeting's workspace, as a tree
 ```
@@ -33,7 +34,7 @@ workspace/<path>       optional — files of the meeting's workspace, as a tree
 
 - **`files` lists every entry except `manifest.json`, and nothing else.** `role` is fixed by the path:
   `meeting.json` → `meeting`, `transcript.json` → `transcript`, `annotations.json` → `annotations`,
-  `media/…` → `media`, `workspace/…` → `workspace`.
+  `notes.md` → `notes`, `media/…` → `media`, `workspace/…` → `workspace`.
 - **`bundle_id`** is minted per export; importers use it to detect a re-import.
 - **`source`** is provenance only — an opaque deployment id (stable per deployment, not an address)
   and the meeting's id there. An importer never reuses either as an id.
@@ -42,6 +43,13 @@ workspace/<path>       optional — files of the meeting's workspace, as a tree
 - `participants` are display names only.
 - Every object is closed (`additionalProperties: false`): a field the schema does not name — a user
   id, a storage path, a URL — makes the part invalid. That is how "nothing deployment-bound" is held.
+
+## The parts archive
+
+Inside Vexa, a meeting's workspace and page belong to the agent domain, which writes them as a
+**parts archive** for the owner's client to hand to the bundle's writer: a zip of `workspace/…` and
+`notes.md` entries only, no manifest, the same entry rules and caps as a bundle, at most 256 MiB.
+Anything else in it is refused (`manifest_mismatch`). Goldens: [`golden/parts/`](golden/parts/).
 
 ## Versioning
 
@@ -81,8 +89,12 @@ from the declared format, not from the file. Render all text as text.
 
 ## Who implements it
 
-meeting-api's `meeting_api/bundle` module is the exporter (`GET /meetings/{meeting_id}/export`) and
-the importer (`POST /meetings/import`). `core/meetings/services/meeting-api/tests/test_meeting_bundle_contract.py`
+[`bundle_codec.py`](bundle_codec.py) is the codec (write and read the bundle and the parts archive),
+standard library plus `jsonschema`. It is vendored VERBATIM, with the schema beside it, into
+meeting-api (`meeting_api/bundle/codec.py`) and agent-api (`shared/meeting_bundle_codec.py`);
+`gate:fact-parity` holds the copies byte-identical. meeting-api's `meeting_api/bundle` module is the
+exporter (`GET`/`POST /meetings/{meeting_id}/export`) and the importer (`POST /meetings/import`);
+agent-api's `control_plane/meeting_bundle.py` writes the parts and restores them. `core/meetings/services/meeting-api/tests/test_meeting_bundle_contract.py`
 holds both to these goldens: the exporter's output is byte-for-byte `golden/bundles/transcript-only.zip`,
 and the importer refuses every refused golden with the code `validate.mjs` gives it.
 

@@ -34,6 +34,7 @@ flowchart LR
   acl_bots_index[("vexa:acl:bots (redis hash)")]
   routine_state[("<store>/.routines/ (files)")]
   meeting_bundle_file[("meeting bundle (portable file)")]
+  meeting_bundle_parts[("meeting bundle parts (workspace tree + notes page)")]
   bot -->|write| segments_stream
   bot -->|write| tc_mutable
   meeting_api -.->|read| segments_stream
@@ -88,3 +89,6 @@ flowchart LR
   agent_api -->|write| routine_state
   meeting_api -->|write| meeting_bundle_file
   meeting_api -.->|read| meeting_bundle_file
+  agent_api -->|write| meeting_bundle_parts
+  meeting_api -.->|read| meeting_bundle_parts
+  agent_api -.->|read| meeting_bundle_file

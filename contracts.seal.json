@@ -33,6 +33,6 @@
   "core/workspaces/contracts/workspace.v1": "4069d5a747914765ba2d4f2d4cf0968916be1208137f845a3f1691a241f7f20f",
   "deploy/contracts/config.v1": "813bf5b3ab9b3d6dfb19960ae0960b51dbca163101f80dca3f2279c517e081f4",
   "deploy/contracts/execution-targets.v1": "0c644571b7823024aa2e7ec6a135a55202233155c6c60eef79f1f4ec063e6375",
-  "deploy/contracts/meeting-bundle.v1": "866d2ed0a6ffe4b01919a3ff52cb7094380011bedf4d49cdfe58049a7eec94cd",
+  "deploy/contracts/meeting-bundle.v1": "18656371f4e612ea2fb82cddd93747892d99ddf43d1ba9fd31e9b3481da9dd9c",
   "deploy/contracts/outbound-url.v1": "d0c41fa489c991e8053a6ec3172567852dd6e9fc23cf58b890eeb5c52163ba0e"
 }

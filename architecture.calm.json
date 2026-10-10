@@ -1914,6 +1914,32 @@
      "contract": "meeting-bundle.v1"
     }
    ]
+  },
+  {
+   "unique-id": "meeting-bundle-parts",
+   "node-type": "data-asset",
+   "name": "meeting bundle parts (workspace tree + notes page)",
+   "description": "the agent domain's half of a meeting-bundle.v1 export: the bound workspace's tree and the meeting's page on the owner's desk, as one zip agent-api writes for the owner's client, which hands it to meeting-api's POST /meetings/{meeting_id}/export to place in the bundle",
+   "controls": {
+    "ownership": {
+     "description": "single writer: agent-api",
+     "requirements": [
+      {
+       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "config": {
+        "writers": [
+         "agent-api"
+        ]
+       }
+      }
+     ]
+    }
+   },
+   "metadata": [
+    {
+     "contract": "meeting-bundle.v1"
+    }
+   ]
   }
  ],
  "relationships": [
@@ -2036,7 +2062,8 @@
       "sdk-capture.v1",
       "acl-bots-index",
       "mcp.tools.v1",
-      "meeting-bundle-file"
+      "meeting-bundle-file",
+      "meeting-bundle-parts"
      ]
     }
    }
@@ -4025,6 +4052,66 @@
     }
    },
    "description": "POST /meetings/import — validate a meeting-bundle.v1 zip (manifest, every hash, paths, sizes) and land it as a new meeting the importer owns",
+   "metadata": [
+    {
+     "access": "read",
+     "contract": "meeting-bundle.v1"
+    }
+   ]
+  },
+  {
+   "unique-id": "agent-writes-bundle-parts",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "agent-api"
+     },
+     "destination": {
+      "node": "meeting-bundle-parts"
+     }
+    }
+   },
+   "description": "GET /api/meeting/bundle-parts — the owner's bound workspace tree (never its roster or policy) and the meeting's page",
+   "metadata": [
+    {
+     "access": "write",
+     "contract": "meeting-bundle.v1"
+    }
+   ]
+  },
+  {
+   "unique-id": "ma-reads-bundle-parts",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "meeting-api"
+     },
+     "destination": {
+      "node": "meeting-bundle-parts"
+     }
+    }
+   },
+   "description": "POST /meetings/{meeting_id}/export — the parts placed into the bundle",
+   "metadata": [
+    {
+     "access": "read",
+     "contract": "meeting-bundle.v1"
+    }
+   ]
+  },
+  {
+   "unique-id": "agent-reads-bundle",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "agent-api"
+     },
+     "destination": {
+      "node": "meeting-bundle-file"
+     }
+    }
+   },
+   "description": "POST /api/meeting/bundle-restore — the bundle's workspace part as a new private workspace of the importer and its notes page on their desk, re-bound to the imported meeting",
    "metadata": [
     {
      "access": "read",

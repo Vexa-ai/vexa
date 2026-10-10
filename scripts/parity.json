@@ -213,6 +213,46 @@
       ]
     },
     {
+      "id": "meeting-bundle-codec",
+      "fact": "how a meeting-bundle.v1 archive and its parts archive are written and read: the path grammar, the entry and size rules, the manifest and hash checks, and the refusal codes",
+      "kind": "file-bytes",
+      "enforced": true,
+      "canonical": "deploy/contracts/meeting-bundle.v1/bundle_codec.py",
+      "how_to_agree": "edit the canonical copy in the contract directory and copy it VERBATIM over every other site; the meeting-api and agent-api bundle tests and validate.mjs must stay green",
+      "why": "meeting-api writes and reads the bundle (meeting, transcript, annotations, media) and agent-api writes the parts archive and reads the bundle's workspace and notes parts. The two may not import each other (P2), and two readers of one format that disagree about a path or a cap are how a bundle one side accepts lands on the other. So the codec is vendored and byte-compared, with its canonical copy beside the schema.",
+      "sites": [
+        {
+          "path": "deploy/contracts/meeting-bundle.v1/bundle_codec.py"
+        },
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/bundle/codec.py"
+        },
+        {
+          "path": "core/agent/shared/meeting_bundle_codec.py"
+        }
+      ]
+    },
+    {
+      "id": "meeting-bundle-schema",
+      "fact": "the sealed meeting-bundle.v1 schema each vendored codec reads from beside itself",
+      "kind": "file-bytes",
+      "enforced": true,
+      "canonical": "deploy/contracts/meeting-bundle.v1/meeting-bundle.schema.json",
+      "how_to_agree": "change the contract's schema (a version bump or a reviewed re-seal) and copy it VERBATIM beside every vendored codec",
+      "why": "The codec validates every part against the schema at runtime and is vendored into two images that do not carry the contract directory; a copy beside each keeps the image self-contained and this fact keeps the copies the sealed one.",
+      "sites": [
+        {
+          "path": "deploy/contracts/meeting-bundle.v1/meeting-bundle.schema.json"
+        },
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/bundle/meeting-bundle.schema.json"
+        },
+        {
+          "path": "core/agent/shared/meeting-bundle.schema.json"
+        }
+      ]
+    },
+    {
       "id": "credential-broker-assertion-fields",
       "fact": "the claims a credential-broker.v1 assertion binds, in the Python signer, the TypeScript signer and the contract's validator",
       "kind": "set",

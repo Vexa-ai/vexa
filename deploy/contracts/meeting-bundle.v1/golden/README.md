@@ -8,3 +8,4 @@ identical bytes.
   and one refusal body).
 - [`bundles/`](bundles/) — bundles every importer must accept.
 - [`refused/`](refused/) — bundles every importer must refuse, with the code `refused/refused.json` names.
+- [`parts/`](parts/) — the parts archive (workspace tree + notes page) an export takes, accepted and refused.

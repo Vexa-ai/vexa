@@ -40,6 +40,11 @@
     "why": "bytes that are not a zip archive"
   },
   {
+    "bundle": "notes-not-text.zip",
+    "code": "invalid_part",
+    "why": "a notes.md part that is binary, not UTF-8 text"
+  },
+  {
     "bundle": "symlink.zip",
     "code": "unsafe_entry",
     "why": "an entry that is a symbolic link"

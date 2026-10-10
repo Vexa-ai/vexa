@@ -53,7 +53,7 @@
         "role": {
           "type": "string",
           "pattern": "^[a-z][a-z_]{0,31}$",
-          "description": "meeting · transcript · annotations · media · workspace. The role must agree with the path (meeting.json, transcript.json, annotations.json, media/…, workspace/…)."
+          "description": "meeting · transcript · annotations · notes · media · workspace. The role must agree with the path (meeting.json, transcript.json, annotations.json, notes.md, media/…, workspace/…)."
         },
         "bytes": {"type": "integer", "minimum": 0},
         "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
@@ -62,7 +62,7 @@
     "EntryPath": {
       "type": "string",
       "maxLength": 512,
-      "pattern": "^(meeting\\.json|transcript\\.json|annotations\\.json|media/[A-Za-z0-9][A-Za-z0-9_-]{0,63}\\.(webm|wav|mkv|mp4)|workspace/([A-Za-z0-9_][A-Za-z0-9._ -]{0,127}/){0,15}[A-Za-z0-9_][A-Za-z0-9._ -]{0,127})$",
+      "pattern": "^(meeting\\.json|transcript\\.json|annotations\\.json|notes\\.md|media/[A-Za-z0-9][A-Za-z0-9_-]{0,63}\\.(webm|wav|mkv|mp4)|workspace/([A-Za-z0-9_][A-Za-z0-9._ -]{0,127}/){0,15}[A-Za-z0-9_][A-Za-z0-9._ -]{0,127})$",
       "description": "Relative, forward-slash, no '.' or '..' segment, no leading slash, no backslash, no drive letter. manifest.json itself is the one entry not listed."
     },
     "Meeting": {
