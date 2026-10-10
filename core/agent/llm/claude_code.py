@@ -614,8 +614,8 @@ class ClaudeCodeHarness:
         without following a link (``workspace_paths``): a linked folder or file is not this chat's."""
         total = 0
         name = f"{session_id}.jsonl"
-        for slug in wpaths.list_dirs_inside(work, ".claude/projects"):
-            st = wpaths.stat_inside(work, f".claude/projects/{slug}/{name}")
+        for slug in wpaths.list_dirs_inside(work, ".claude/projects", allow=(".claude",)):
+            st = wpaths.stat_inside(work, f".claude/projects/{slug}/{name}", allow=(".claude",))
             if st is not None and stat.S_ISREG(st.st_mode):
                 total += st.st_size
         return total

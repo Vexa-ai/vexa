@@ -365,10 +365,10 @@ class CodexHarness:
         """The stored size of this thread's rollouts, walked by descriptor without following a link
         (``workspace_paths.walk_files_inside``)."""
         total = 0
-        for rel in wpaths.walk_files_inside(work, ".claude/codex/sessions"):
+        for rel in wpaths.walk_files_inside(work, ".claude/codex/sessions", allow=(".claude",)):
             name = rel.rsplit("/", 1)[-1]
             if session_id in name and name.endswith(".jsonl"):
-                st = wpaths.stat_inside(work, rel)
+                st = wpaths.stat_inside(work, rel, allow=(".claude",))
                 total += st.st_size if st is not None else 0
         return total
 

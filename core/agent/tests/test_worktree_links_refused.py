@@ -778,8 +778,9 @@ def test_the_codex_sessions_link_is_not_made_through_a_linked_folder(monkeypatch
 
 # ── one workspace name rule (arch pass 6, S69) ───────────────────────────────────────────────────
 
-_NAMES_OK = ["58", "u_priya", "acme-1a2b3c", "dmitry@vexa.ai", "a.b", "x" * 128]
-_NAMES_BAD = ["", ".", "..", ".attached", "a/b", "a\\b", "a b", "x" * 129, "/etc", "a\0b"]
+_NAMES_OK = ["58", "u_priya", "acme-1a2b3c", "a.b", "x" * 121]
+_NAMES_BAD = ["", ".", "..", ".attached", "a/b", "a\\b", "a b", "x" * 122, "/etc", "a\0b",
+              "lost+found", "dmitry@vexa.ai"]
 
 
 @pytest.mark.parametrize("name", _NAMES_OK + _NAMES_BAD + ["_global"])

@@ -184,6 +184,9 @@ def _continuity_root(work: Path) -> Path:
 # something already at its name.
 #: A legacy session pointer is an id a few dozen bytes long; anything past this is not one.
 _LEGACY_POINTER_MAX_BYTES = 1 << 16
+#: Everything here sits under `.claude/`, which no caller-supplied path may reach
+#: (`workspace_paths.RESERVED_DIRS`); this is the platform's own reach into it.
+_PLUMBING = (".claude",)
 
 
 def _plain_name(name: str) -> bool:
@@ -200,7 +203,7 @@ def _read_text_nofollow(root: Path, parts: tuple[str, ...], name: str, max_bytes
     """The UTF-8 text of ``root/<parts…>/name`` (``workspace_paths.read_text_inside``), or None when
     there is none, it is reached through a link, it is not a regular file with a single link, it is
     over ``max_bytes`` or not UTF-8."""
-    return wpaths.read_text_inside(root, _under(parts, name), max_bytes=max_bytes)
+    return wpaths.read_text_inside(root, _under(parts, name), max_bytes=max_bytes, allow=_PLUMBING)
 
 
 def _read_legacy_pointer(root: Path, parts: tuple[str, ...], name: str) -> "str | None":
@@ -215,20 +218,20 @@ def _replace_nofollow(root: Path, parts: tuple[str, ...], name: str, text: str) 
     whatever was at the name, a link included, is replaced, never written through. Raises
     ``OSError``, including when a folder on the way is a link."""
     try:
-        wpaths.write_text_inside(root, _under(parts, name), text)
+        wpaths.write_text_inside(root, _under(parts, name), text, allow=_PLUMBING)
     except wpaths.PathRefused as exc:
         raise OSError(f"{'/'.join(parts)} is not a plain folder here") from exc
 
 
 def _unlink_nofollow(root: Path, parts: tuple[str, ...], name: str) -> None:
     """Remove ``root/<parts…>/name`` (a link is removed itself), reached without following a link."""
-    wpaths.unlink_inside(root, _under(parts, name))
+    wpaths.unlink_inside(root, _under(parts, name), allow=_PLUMBING)
 
 
 def _write_new_pointer(root: Path, parts: tuple[str, ...], name: str, text: str) -> bool:
     """Create ``root/<parts…>/name`` holding ``text``; False when something is already there."""
     try:
-        return wpaths.write_new_inside(root, _under(parts, name), text)
+        return wpaths.write_new_inside(root, _under(parts, name), text, allow=_PLUMBING)
     except wpaths.PathRefused as exc:
         raise OSError(f"{'/'.join(parts)} is not a plain folder here") from exc
 
@@ -236,15 +239,15 @@ def _write_new_pointer(root: Path, parts: tuple[str, ...], name: str, text: str)
 def _adopt_legacy_transcripts(root: Path, chat_root: Path, sid: str) -> None:
     """Copy every ``.claude/projects/<slug>/<sid>.jsonl`` under ``root`` that ``chat_root`` lacks."""
     name = f"{sid}.jsonl"
-    for slug in wpaths.list_dirs_inside(root, ".claude/projects"):
+    for slug in wpaths.list_dirs_inside(root, ".claude/projects", allow=_PLUMBING):
         if slug.startswith("."):
             continue
         rel = f".claude/projects/{slug}/{name}"
-        raw = wpaths.read_bytes_inside(root, rel)
+        raw = wpaths.read_bytes_inside(root, rel, allow=_PLUMBING)
         if raw is None:
             continue
         try:
-            wpaths.write_new_inside(chat_root, rel, raw)
+            wpaths.write_new_inside(chat_root, rel, raw, allow=_PLUMBING)
         except (OSError, wpaths.PathRefused) as exc:
             log.warning("legacy transcript %s/%s not adopted: %s", slug, name, exc)
 

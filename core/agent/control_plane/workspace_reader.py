@@ -111,6 +111,9 @@ _TURNS_SIDECAR = "{session}.turns.jsonl"
 # other hard link.
 #: A session pointer is an id a few dozen bytes long.
 _POINTER_MAX_BYTES = 1 << 16
+#: The continuity files sit under `.claude/`, which no caller-supplied path may reach
+#: (`workspace_paths.RESERVED_DIRS`); these are the platform's own reads of it.
+_PLUMBING = (".claude",)
 _PLAIN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,199}")
 
 
@@ -119,12 +122,12 @@ def _read_under(ws: Path, parts: "tuple[str, ...]", name: str,
     """The UTF-8 text of ``ws/<parts…>/name`` read without following a link (``workspace_paths``), or
     None (missing, a link anywhere below ``ws``, not a regular file with a single link, over
     ``max_bytes``)."""
-    return wpaths.read_text_inside(ws, "/".join((*parts, name)), max_bytes=max_bytes)
+    return wpaths.read_text_inside(ws, "/".join((*parts, name)), max_bytes=max_bytes, allow=_PLUMBING)
 
 
 def _real_subdirs(ws: Path, parts: "tuple[str, ...]") -> Iterator[str]:
     """Names of the folders directly in ``ws/<parts…>`` that are folders, not links to one."""
-    yield from wpaths.list_dirs_inside(ws, "/".join(parts))
+    yield from wpaths.list_dirs_inside(ws, "/".join(parts), allow=_PLUMBING)
 
 # The write-back phase runs in the SAME harness session as the turn it follows, so its prompt and
 # its reply are in this transcript. The phase declares itself with this mark — ONE literal now, in
@@ -595,7 +598,7 @@ class WorkspaceReader:
             # by descriptor (``workspace_paths.unlink_inside``): `.claude` is the tools user's to
             # write, so a link planted at it or at `sessions` is never followed to remove a file
             # elsewhere; a link at the pointer itself is removed as the link
-            removed = wpaths.unlink_inside(ws, rel) or removed
+            removed = wpaths.unlink_inside(ws, rel, allow=_PLUMBING) or removed
         return removed
 
     def git_state(self, subject: str) -> dict:

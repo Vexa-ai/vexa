@@ -68,12 +68,13 @@ REFUSAL = "that path is not inside this workspace"
 # ── the workspace name ───────────────────────────────────────────────────────────────────────────
 #: THE WORKSPACE NAME RULE, owned here: what a workspace, a slug, a slot, a desk or a shared
 #: workspace id may be called when it is joined onto a path or kept as a name. ONE path segment of
-#: letters, digits and ``. _ @ + -``, at most 128 characters, starting with a letter, a digit or
-#: ``_`` — so never a separator, never a dot-name (the stores' own namespace), never ``.`` or ``..``.
+#: letters, digits and ``. _ -``, at most 121 characters, starting with a letter, a digit or ``_``
+#: — so never a separator, never a dot-name (the stores' own namespace), never ``.`` or ``..``, and
+#: never what a volume brings (``lost+found``).
 #: The leading ``_`` is the platform's tiers (``_global``, ``_system``); a caller for which a tier is
 #: never the answer says ``tier=False``. Which names are RESERVED for the platform beyond that is
 #: each caller's own question (``workspace_membership.RESERVED_SLUGS``).
-_WORKSPACE_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._@+-]{0,127}")
+_WORKSPACE_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._-]{0,120}")
 
 
 def is_workspace_name(name: object, *, tier: bool = True) -> bool:
