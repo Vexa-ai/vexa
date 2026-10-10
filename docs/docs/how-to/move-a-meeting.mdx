@@ -114,8 +114,12 @@ person importing the same file gets their own copy.
   with none of its members. Share it again from there if you want to.
 - **A transcript is required**: a bundle with no segments is refused.
 - A meeting with a bot still in it cannot be exported (`409`) — export it after it ends.
-- Through the gateway the request must complete within its 30-second upstream timeout, which
-  bounds how large a recording a single request can carry on a slow link.
+- A bundle travels as a stream through the gateway in both directions — the upload is relayed as
+  it arrives and the download chunk by chunk — so a slow link costs time, not success: either side
+  may pause for up to ten minutes between chunks. meeting-api still holds one bundle in memory while
+  it checks or writes it, which is what the 512 MiB cap bounds.
+- The Terminal shows the progress of every transfer: the download, and each upload (the preview,
+  the import, and the workspace restore each send the file once).
 
 ## What you see when it is refused
 
@@ -148,7 +152,10 @@ refused rather than produced without it).
 2. **Export request.** The Terminal's export route (its own, so the bytes are never re-encoded) calls
    the gateway's `GET /meetings/{meeting_id}/export`, or `POST` with the parts as the body. The
    gateway checks the key holds `tx` against the `core/meetings/routes.v1.json` row and forwards
-   with the signed identity.
+   with the signed identity — for these three bundle routes as a STREAM (`_forward_meeting_bundle`):
+   the body relayed as it arrives, the answer chunk by chunk with its length and file name, under
+   the bundle hop's own deadline (`BUNDLE_TIMEOUT`, ten minutes between chunks) instead of the
+   buffered leg's 30 s, which every other route keeps.
 3. **Owner check.** meeting-api re-checks the scope against the same row, then reads the meeting
    through the transcript store's access union and requires that the caller is the owner.
 4. **Assembly.** meeting-api checks the parts archive (the same entry rules and caps as a bundle,
