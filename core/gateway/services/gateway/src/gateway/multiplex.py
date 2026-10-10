@@ -29,6 +29,13 @@ TRANSCRIPT_ROUTE = ("GET", "/transcripts/{platform}/{native_meeting_id}")
 STATUS_ROUTES = (("GET", "/meetings"), ("GET", "/bots/status"))
 
 
+#: How often an open socket re-authorizes what it already streams (see `_reauthorize`). A reader the
+#: owner removed stops receiving that meeting within about this long.
+WS_REAUTH_INTERVAL_SEC = 15.0
+#: Consecutive failed authorize hops after which per-meeting subscriptions are dropped (fail closed).
+WS_REAUTH_MAX_FAILURES = 2
+
+
 def _assembled_scopes() -> dict:
     """The full-profile route table (`gateway.app.ROUTE_SCOPES`) — for a caller that names none."""
     from .app import ROUTE_SCOPES
@@ -188,12 +195,91 @@ async def run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus, 
     # is therefore evaluated per CONNECTION: a member added mid-session picks the channel up on their
     # next connect, which is the same freshness the rest of this socket's identity already has.
     user_channel = f"u:{user_id}:meetings"
-    member_channels = [
-        f"w:{str(w).strip()}:meetings"
-        for w in (user_data.get("workspaces") or [])
-        if str(w).strip()
-    ]
+
+    def member_channels_of(data: dict) -> List[str]:
+        return [f"w:{str(w).strip()}:meetings" for w in (data.get("workspaces") or []) if str(w).strip()]
+
+    member_channels = member_channels_of(user_data)
     user_sub_task = asyncio.create_task(fan_in([user_channel, *member_channels]))
+
+    # LIVE RE-AUTHORIZATION. Authorization used to happen once, at subscribe; a reader the owner
+    # removed mid-meeting kept the transcript flowing until they disconnected. Every
+    # WS_REAUTH_INTERVAL_SEC this re-asks the SAME authorizer hop the subscribe used (meeting-api's
+    # one access union) for everything this socket streams, and stops whatever no longer passes —
+    # with a `subscription_revoked` frame, never silently. The identity is re-resolved on the same
+    # tick so a workspace membership that ended stops that workspace's status channel too.
+    state = {"member_channels": member_channels, "user_sub_task": user_sub_task, "failures": 0}
+
+    async def _reauthorize_once() -> bool:
+        """One re-authorization pass. False when the socket was closed (the key is gone)."""
+        try:
+            fresh = await authorizer.resolve(api_key)
+        except AuthUnavailable:
+            fresh = user_data  # cannot tell right now; the subscription check below still runs
+        if not fresh or is_delegated(api_key, fresh):
+            try:
+                await ws.send_text(json.dumps({"type": "error", "error": "invalid_api_key"}))
+            finally:
+                await ws.close(code=4401)
+            return False
+        channels = member_channels_of(fresh)
+        if channels != state["member_channels"]:
+            state["user_sub_task"].cancel()
+            state["member_channels"] = channels
+            state["user_sub_task"] = asyncio.create_task(fan_in([user_channel, *channels]))
+        keys = list(subscribed_meetings)
+        if not keys:
+            return True
+        refs = [{"platform": k[0], "native_meeting_id": k[1]} for k in keys]
+        try:
+            result = await authorizer.authorize_subscribe(api_key, refs)
+            errors = [str(e) for e in (result.get("errors") or [])]
+            hop_failed = any(e.startswith(("authorization_call_failed", "authorization_service_error",
+                                           "authorization_unavailable")) for e in errors)
+        except Exception:  # noqa: BLE001 — a failed hop is a failed hop, not a crash
+            result, hop_failed = {}, True
+        if hop_failed:
+            state["failures"] += 1
+            log_event("ws_reauthorize_failed", audience="system", level="warning", span="ws",
+                      user_id=user_id, fields={"failures": state["failures"]})
+            if state["failures"] < WS_REAUTH_MAX_FAILURES:
+                return True
+            for k in keys:
+                await unsubscribe_meeting(*k)
+            await ws.send_text(json.dumps({
+                "type": "error", "error": "authorization_call_failed",
+                "details": "access to the subscribed meetings could not be re-confirmed; subscribe again"}))
+            state["failures"] = 0
+            return True
+        state["failures"] = 0
+        still = {(a.get("platform"), a.get("native_id")) for a in (result.get("authorized") or [])}
+        for k in keys:
+            if (k[0], k[1]) in still:
+                continue
+            await unsubscribe_meeting(*k)
+            log_event("ws_subscription_revoked", audience="user", span="ws", user_id=user_id,
+                      fields={"platform": k[0], "native_id": k[1]})
+            await ws.send_text(json.dumps({"type": "error", "error": "subscription_revoked",
+                                           "details": {"platform": k[0], "native_id": k[1]}}))
+        return True
+
+    async def _reauthorize_loop():
+        try:
+            while True:
+                await asyncio.sleep(WS_REAUTH_INTERVAL_SEC)
+                if not await _reauthorize_once():
+                    return
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001 — surfaced, then the socket is closed rather than left unchecked
+            log_event("ws_reauthorize_crashed", audience="system", level="error", span="ws",
+                      user_id=user_id, fields={"detail": str(e)})
+            try:
+                await ws.close(code=1011)
+            except Exception:
+                pass
+
+    reauth_task = asyncio.create_task(_reauthorize_loop())
 
     try:
         while True:
@@ -316,7 +402,8 @@ async def run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus, 
     except WebSocketDisconnect:
         pass
     finally:
-        user_sub_task.cancel()  # Track G — tear down the user-scope fan-in on disconnect.
+        reauth_task.cancel()
+        state["user_sub_task"].cancel()  # Track G — tear down the user-scope fan-in on disconnect.
         for task in sub_tasks.values():
             task.cancel()
 
