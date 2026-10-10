@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import stat
 import subprocess
 from pathlib import Path
 from typing import Iterable, Iterator, Optional
@@ -25,6 +26,7 @@ from typing import Iterable, Iterator, Optional
 from llm.errors import looks_like_auth_failure, preflight_provider_guard, provider_host
 from llm import fault_wire
 from llm import faults as provider_faults
+from llm import workspace_paths as wpaths
 from llm.ports import HarnessExec, close_event_stream, harness_identity_kwargs, harness_subprocess_env
 from llm.claude_skills import _link_skills_into_home
 from llm.tool_events import (_BOT_TOOLS, _FOCUS_TOOLS, _OPEN_TOOLS, _TERMS_TOOLS, _WRITER_TOOLS,
@@ -470,32 +472,15 @@ def _exec_subprocess(argv: list[str], cwd: str) -> Iterator[str]:
         _reap(proc)
 
 
-_DIR_NOFOLLOW = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
-
-
 def _nofollow_dirs(base: Path, *names: str) -> Optional[Path]:
-    """``base/names…``, each level created if absent and then opened through the verified fd of the
-    level above with ``O_NOFOLLOW``: ``None`` when any level is a link or not a directory. ``base``
-    itself (the mount root, HOME) is the deployment's, and is made if it does not exist yet."""
+    """``base/names…``, each level created if absent and opened through the level above without
+    following a link (``workspace_paths.dir_fd_inside``): ``None`` when any level is a link or not a
+    directory. ``base`` itself (the mount root, HOME) is the deployment's, and is made if absent."""
     try:
-        base.mkdir(parents=True, exist_ok=True)
-        fd = os.open(base, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0))
-    except OSError:
+        os.close(wpaths.dir_fd_inside(base, names, create=True))
+    except (OSError, wpaths.PathRefused):
         return None
-    try:
-        for name in names:
-            try:
-                os.mkdir(name, dir_fd=fd)
-            except FileExistsError:
-                pass
-            nfd = os.open(name, _DIR_NOFOLLOW, dir_fd=fd)
-            os.close(fd)
-            fd = nfd
-        return base.joinpath(*names)
-    except OSError:
-        return None
-    finally:
-        os.close(fd)
+    return base.joinpath(*names)
 
 
 def _link_chat_into_workspace(work: Path) -> None:
@@ -625,12 +610,14 @@ class ClaudeCodeHarness:
         _link_skills_into_home(work)
 
     def transcript_bytes(self, work: Path, session_id: str) -> int:
+        """The stored size of this session's transcript under ``work/.claude/projects``, reached
+        without following a link (``workspace_paths``): a linked folder or file is not this chat's."""
         total = 0
-        for path in (work / ".claude" / "projects").glob(f"*/{session_id}.jsonl"):
-            try:
-                total += path.stat().st_size
-            except OSError:
-                continue
+        name = f"{session_id}.jsonl"
+        for slug in wpaths.list_dirs_inside(work, ".claude/projects"):
+            st = wpaths.stat_inside(work, f".claude/projects/{slug}/{name}")
+            if st is not None and stat.S_ISREG(st.st_mode):
+                total += st.st_size
         return total
 
     def preflight(self) -> Optional[str]:
