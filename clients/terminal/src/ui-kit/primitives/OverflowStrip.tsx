@@ -45,8 +45,15 @@ export function OverflowStrip({ label, items, activeKey, children }: {
   }, [measure]);
   useEffect(() => {
     if (!activeKey) return;
-    const el = scroller.current?.querySelector<HTMLElement>(`[data-strip-key="${activeKey.replace(/["\\]/g, "\\$&")}"]`);
-    el?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+    // Scroll THIS strip only. `scrollIntoView` also scrolls every scrollable ancestor — and on a
+    // phone, with the pages panel a closed off-screen sheet, it scrolled the whole shell sideways
+    // and pushed the conversation off the left edge (founder, 2026-10-10, 412px Android).
+    const box = scroller.current;
+    const el = box?.querySelector<HTMLElement>(`[data-strip-key="${activeKey.replace(/["\\]/g, "\\$&")}"]`);
+    if (!box || !el) return;
+    const left = el.offsetLeft - box.offsetLeft, right = left + el.offsetWidth;
+    if (left < box.scrollLeft) box.scrollLeft = left;
+    else if (right > box.scrollLeft + box.clientWidth) box.scrollLeft = right - box.clientWidth;
   }, [activeKey]);
 
   return (

@@ -154,6 +154,18 @@ describe("OverflowStrip", () => {
     spy.mockRestore();
   });
 
+  it("never scrolls an ANCESTOR to show the active tab (the 412px phone defect: it scrolled the shell sideways)", () => {
+    const proto = Element.prototype as unknown as { scrollIntoView?: unknown };
+    const had = proto.scrollIntoView;
+    const spy = vi.fn();
+    proto.scrollIntoView = spy;
+    const items = ["a", "b"].map((k) => ({ key: k, label: k, onSelect: () => {} }));
+    const { rerender } = render(<OverflowStrip label="tabs" activeKey="a" items={items}>{items.map((i) => <span key={i.key} data-strip-key={i.key}>{i.key}</span>)}</OverflowStrip>);
+    rerender(<OverflowStrip label="tabs" activeKey="b" items={items}>{items.map((i) => <span key={i.key} data-strip-key={i.key}>{i.key}</span>)}</OverflowStrip>);
+    expect(spy).not.toHaveBeenCalled();
+    proto.scrollIntoView = had;
+  });
+
   it("no control when everything fits", () => {
     render(<OverflowStrip label="tabs" items={[{ key: "a", label: "A", onSelect: () => {} }]}><span data-strip-key="a">A</span></OverflowStrip>);
     expect(screen.queryByRole("button")).toBeNull();

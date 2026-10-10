@@ -137,3 +137,27 @@ describe("splitter bounds", () => {
     }
   });
 });
+
+describe("phones (founder report 2026-10-10, Android Chrome at 412px)", () => {
+  // portrait 360 / 390 / 412 and their landscape widths: below 720 the conversation is the whole
+  // window and the side panes are overlays that take no column at all.
+  for (const vw of [360, 375, 390, 412, 430]) {
+    it(`${vw}px portrait: the conversation is the full width; rail and pages take no column`, () => {
+      for (const prefs of ALL_PREFS) {
+        const L = shellLayout(vw, prefs);
+        expect(L.mode).toBe("single");
+        expect(L.columns).toBe(`0px minmax(0, 1fr) 0px`);
+        expect(L.widths.chat).toBe(vw);
+        expect(L.railKind).toBe("drawer");
+        expect(L.pagesKind).toBe("fullscreen");
+      }
+    });
+  }
+  for (const vw of [740, 844, 915]) {
+    it(`${vw}px landscape: narrow mode, the strip and the conversation fill the window`, () => {
+      const L = shellLayout(vw);
+      expect(L.widths.rail + L.widths.chat).toBe(vw);
+      expect(L.widths.pages).toBe(0);
+    });
+  }
+});

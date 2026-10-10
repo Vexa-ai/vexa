@@ -1517,7 +1517,7 @@ export function MinutesShell() {
 
   return (
     <div ref={shellRef} data-shell-mode={L.mode} data-rail={L.railKind} data-pages={L.pagesKind}
-      style={{ position: "relative", display: "grid", gridTemplateColumns: L.columns, gridTemplateRows: `${T.headerH}px 1fr`, height: "100%", minHeight: 0, minWidth: 0, overflow: "hidden", background: surface.rail }}>
+      style={{ position: "relative", display: "grid", gridTemplateColumns: L.columns, gridTemplateRows: `${T.headerH}px 1fr`, height: "100%", minHeight: 0, minWidth: 0, overflow: "clip", background: surface.rail }}>
       {L.railKind === "docked" ? railBody(false)
         : L.railKind === "strip" ? <RailStrip open={shell.drawerOpen} onOpen={() => shell.setRailOpen(true)} onNewChat={startDraft} />
         : null}

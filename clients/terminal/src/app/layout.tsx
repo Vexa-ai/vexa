@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { Analytics } from "./AnalyticsScript";
 // Geist Sans and Geist Mono (SIL OFL 1.1, served unmodified as web fonts; logged as a Category B
@@ -10,6 +10,14 @@ export const metadata: Metadata = {
   title: "Vexa Terminal",
   description:
     "AI-first knowledge-worker terminal — Claude Code × Outlook on Vexa's meeting-bot + agentic-runtime backend.",
+};
+
+/** On a phone the soft keyboard RESIZES the page (rather than sliding over it), so the composer at the
+ *  foot of a full-height shell stays above the keyboard while the reader types. */
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  interactiveWidget: "resizes-content",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

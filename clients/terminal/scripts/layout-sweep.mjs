@@ -3,7 +3,11 @@
  * layout-sweep — the terminal's L1–L3 layout proof (terminal design guidelines §8), run in a real
  * browser at each width in both themes.
  *
- *   node scripts/layout-sweep.mjs <url> [--widths 640,720,820,960,1024,1200,1440,1920] [--json out.json]
+ *   node scripts/layout-sweep.mjs <url> [--widths 360,390,412,640,…,1920] [--json out.json] [--mobile]
+ *
+ * `--mobile` adds Playwright's phone devices (Pixel 7, iPhone 14, both orientations) with touch and a
+ * mobile user agent — the 2026-10-10 phone defect (the whole shell scrolled 145px sideways) only
+ * showed there.
  *
  * <url> is a page that renders the Minutes shell: the fixture shell at `/design#shell` (no sign-in,
  * fixtures only), or a signed-in page whose browser context the caller provides. It needs
@@ -73,12 +77,18 @@ export const MEASURE = () => {
     const hides = sc && sc.scrollWidth > sc.clientWidth + 1;
     return { hides, control: !!s.querySelector("[data-strip-more]") };
   });
+  // The shell must never be scrolled: in single and narrow modes the conversation starts at x=0.
+  const shell = document.querySelector("[data-shell-mode]");
+  const shellScrolled = shell ? shell.scrollLeft !== 0 : false;
+  const convLeft = conv ? Math.round(conv.getBoundingClientRect().left) : null;
+  const convOffscreen = conv ? (conv.getBoundingClientRect().left < -1 || conv.getBoundingClientRect().right > vw + 1) : false;
   const cols = (() => { const sh = document.querySelector("[data-shell-mode]"); return sh ? getComputedStyle(sh).gridTemplateColumns : null; })();
   return {
     vw, mode, floor, cols,
     shellMode: document.querySelector("[data-shell-mode]")?.getAttribute("data-shell-mode") ?? null,
     chat, textarea: textarea ? Math.round(textarea.getBoundingClientRect().width) : null,
-    L1: { ok: sideways.length === 0 && !docWide, sideways, docWide },
+    convLeft, shellScrolled,
+    L1: { ok: sideways.length === 0 && !docWide && !shellScrolled && !convOffscreen, sideways, docWide, shellScrolled, convOffscreen },
     L2: { small: small.length, examples: small.slice(0, 8) },
     L3: { ok: (chat === null || chat >= floor) && (toolbarRows === null || toolbarRows <= 1), toolbarRows },
     tabs: { ok: strips.every((s) => !s.hides || s.control), strips },
@@ -90,7 +100,7 @@ async function main() {
   const url = args.find((a) => !a.startsWith("--"));
   if (!url) { console.error("usage: layout-sweep.mjs <url> [--widths a,b,c] [--json out.json]"); process.exit(2); }
   const arg = (k) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : undefined; };
-  const widths = (arg("--widths") ?? "640,720,820,960,1024,1200,1440,1920").split(",").map(Number);
+  const widths = (arg("--widths") ?? "360,390,412,640,720,820,960,1024,1200,1440,1920").split(",").map(Number);
   let chromium;
   try { ({ chromium } = await import("playwright")); }
   catch { console.error("Playwright is not installed here. Run this where it is (set NODE_PATH), see the header."); process.exit(2); }
@@ -113,6 +123,24 @@ async function main() {
       console.log(`${bad ? "✗" : "✓"} ${theme.padEnd(5)} ${String(w).padStart(4)}  mode=${r.shellMode ?? r.mode}  chat=${r.chat}  textarea=${r.textarea}  toolbarRows=${r.L3.toolbarRows}  L1=${r.L1.ok ? "ok" : r.L1.sideways.join("; ") || "doc wider than viewport"}  L2 small=${r.L2.small}  tabs=${r.tabs.ok ? "ok" : "hidden without control"}`);
     }
     await ctx.close();
+  }
+  if (args.includes("--mobile")) {
+    const { devices } = await import("playwright");
+    for (const name of ["Pixel 7", "Pixel 7 landscape", "iPhone 14", "iPhone 14 landscape"]) {
+      const d = devices[name];
+      if (!d) continue;
+      const ctx = await browser.newContext({ ...d });
+      const page = await ctx.newPage();
+      await page.goto(url, { waitUntil: "networkidle" });
+      await page.waitForTimeout(500);
+      const r = await page.evaluate(MEASURE);
+      r.device = name;
+      results.push(r);
+      const bad = !r.L1.ok || !r.L3.ok || !r.tabs.ok;
+      failed ||= bad;
+      console.log(`${bad ? "✗" : "✓"} ${name.padEnd(20)} ${r.vw}px mode=${r.shellMode ?? r.mode} chat=${r.chat} convLeft=${r.convLeft} shellScrolled=${r.shellScrolled} L1=${r.L1.ok ? "ok" : JSON.stringify(r.L1)}`);
+      await ctx.close();
+    }
   }
   await browser.close();
   const out = arg("--json");
