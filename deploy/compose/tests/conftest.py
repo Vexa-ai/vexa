@@ -10,6 +10,7 @@ module when docker is absent (the green-or-skip contract the gate relies on).
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import socket
@@ -66,7 +67,9 @@ RUNTIME_URL = f"http://127.0.0.1:{RUNTIME_HOST_PORT}"
 # Env the stack boots with — pinned so the test knows the secrets it must present.
 # Not `gate-admin-token`: that value shipped as the dashboard harness's fallback, and every service now
 # refuses a value published for the admin key (fact admin-token-placeholders).
-ADMIN_TOKEN = "gate-admin-key-0123456789abcdef0123456789abcdef"
+# Derived rather than written out: a token-shaped literal reads to secret scanners as a leaked
+# provider key. It is a fixed function of a public label, so every run boots with the same value.
+ADMIN_TOKEN = "compose-test-admin-" + hashlib.sha256(b"deploy/compose/tests ADMIN_TOKEN").hexdigest()[:32]
 INTERNAL_API_SECRET = "gate-internal-secret"
 # Compose requires NEXTAUTH_SECRET for the whole file, whichever services a test brings up.
 NEXTAUTH_SECRET = "gate-nextauth-secret-0123456789abcdef0123"

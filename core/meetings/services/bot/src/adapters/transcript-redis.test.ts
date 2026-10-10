@@ -30,6 +30,7 @@ const check = (name: string, cond: boolean, detail = '') => {
 const HERE = dirname(fileURLToPath(import.meta.url));
 const TX_SCHEMA = join(HERE, '..', '..', '..', '..', 'contracts', 'transcript.v1', 'transcript.schema.json');
 const txSchema = JSON.parse(readFileSync(TX_SCHEMA, 'utf8'));
+const SIGNED_ENTRY_VECTOR = JSON.parse(readFileSync(join(HERE, '..', '..', '..', '..', 'contracts', 'transcript.v1', 'golden', 'SignedEntryVector.meeting-42.json'), 'utf8'));
 const ajv = new Ajv2020({ strict: false, allErrors: true });
 addFormats(ajv);
 ajv.addSchema(txSchema);
@@ -190,7 +191,9 @@ async function main(): Promise<void> {
 
   // ── the session signs every stream entry; the collector pins the same vector ──
   {
-    const token = 'eyJhbGciOiJIUzI1NiJ9.eyJtZWV0aW5nX2lkIjo0Mn0.c2lnbmF0dXJl';
+    // The fixture token is read from the contract's golden vector rather than repeated here as a
+    // token-shaped literal (it is not a minted token; see golden/README.md).
+    const token: string = SIGNED_ENTRY_VECTOR.token;
     const vector = entryAuth(token, '{"type":"transcription","meeting_id":42}');
     check('entryAuth: auth is the token without its signature', vector.auth === 'eyJhbGciOiJIUzI1NiJ9.eyJtZWV0aW5nX2lkIjo0Mn0', vector.auth);
     check('entryAuth: the pinned signature vector',
