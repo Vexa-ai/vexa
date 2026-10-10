@@ -35,14 +35,29 @@ def route_of(path: str) -> str:
     return _CID.sub("/{cid}", path.split("?", 1)[0])
 
 
-def destination_host(spec: dict) -> str:
-    """The host a human's secret is sent to for a prepared setup: the token endpoint for OAuth
-    (it receives the client secret), otherwise the service endpoint (it receives the key)."""
-    url = (spec.get("oauth") or {}).get("token_url") if spec.get("oauth") else spec.get("endpoint", "")
+def _host(url: str) -> str:
     try:
         return (urlsplit(url or "").hostname or "").lower()
     except ValueError:
         return ""
+
+
+def destination_host(spec: dict) -> str:
+    """The host a human's secret is sent to for a prepared setup: the token endpoint for OAuth
+    (it receives the client secret), otherwise the service endpoint (it receives the key)."""
+    return _host((spec.get("oauth") or {}).get("token_url") if spec.get("oauth") else spec.get("endpoint", ""))
+
+
+def credential_hosts(spec: dict) -> list[str]:
+    """Every host a prepared setup sends a credential to, each of which a human confirms (M3).
+
+    For OAuth that is the token endpoint (the client secret and the authorization code) and the
+    service endpoint (the person's access token, on every call); otherwise the service endpoint
+    alone. In order, without repeats."""
+    hosts = [destination_host(spec)]
+    if spec.get("oauth"):
+        hosts.append(_host(spec.get("endpoint", "")))
+    return [h for i, h in enumerate(hosts) if h and h not in hosts[:i]]
 
 
 def unwatched(claims: dict) -> bool:

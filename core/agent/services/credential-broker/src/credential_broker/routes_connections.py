@@ -25,7 +25,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import ValidationError
 
 from . import connection_setup, providers, secret_service, service_oauth, setup_schema
-from .broker import Broker, destination_host
+from .broker import Broker, credential_hosts
 from .faults import UpstreamFault
 from .models import (AccountReadBody, CustomCallBody, CustomSecretBody, GmailDraftBody, OAuthApplicationBody,
                      PreparedSetupBody, SetupBody)
@@ -95,15 +95,17 @@ def build(b: Broker) -> APIRouter:
             b.sql("DELETE FROM oauth_states WHERE connection=?", (cid,))
         return {"connection_id": cid, "status": row["status"], "setup": spec}
 
-    def require_confirmation(row: dict, host: str, confirmed: str) -> None:
-        """M3: the first human save that sends a secret to a host must name that host back.
+    def require_confirmation(row: dict, hosts: list, confirmed: set) -> None:
+        """M3: the first human save that sends a credential to a host must name that host back —
+        every such host: for OAuth both the token endpoint and the service endpoint.
 
         A prepared setup can come from the agent, and the agent reads third-party text. The
-        terminal shows the destination host as the dominant element of the form and asks the
-        person to type it; the broker refuses the save without it, so a UI defect cannot skip it."""
-        if not host or host == (row.get("approved_host") or ""):
-            return
-        if confirmed.strip().lower() != host:
+        terminal shows each destination host as a dominant element of the form and asks the person
+        to type it; the broker refuses the save without it, so a UI defect cannot skip it.
+        ``approved_host`` holds the hosts last approved, space-separated."""
+        approved = set((row.get("approved_host") or "").split())
+        typed = {c.strip().lower() for c in confirmed if c}
+        if any(h not in approved and h not in typed for h in hosts):
             raise HTTPException(409, "Confirm the destination host before saving")
 
     @router.post("/api/connections/{cid}/custom-secret")
@@ -116,7 +118,7 @@ def build(b: Broker) -> APIRouter:
         if spec.get("oauth"):
             raise HTTPException(409, "Use the secure OAuth application form")
         if spec:
-            require_confirmation(row, destination_host(spec), body.confirmed_host)
+            require_confirmation(row, credential_hosts(spec), {body.confirmed_host})
         value = body.value
         if not value and row["status"] == "ready":
             saved_config = b.must_get(cid, row["version"], owner=who["actor"])["value"]
@@ -137,7 +139,7 @@ def build(b: Broker) -> APIRouter:
                 if spec["scheme"] == "telegram" and "chat_id" in body.fields and \
                         not re.fullmatch(r"-?[0-9]+|@[A-Za-z0-9_]{5,}", body.fields["chat_id"]):
                     raise secret_service.ServiceError("Enter the Telegram chat ID or channel username; do not use an email address")
-                host = destination_host(spec)
+                host = " ".join(credential_hosts(spec))
             else:
                 config = secret_service.configure(value, body.endpoint, body.header, body.scheme, body.method)
                 host = (urlsplit(body.endpoint).hostname or "").lower() if body.endpoint else ""
@@ -168,14 +170,14 @@ def build(b: Broker) -> APIRouter:
                 spec = connection_setup.validate(spec)
             except (ValueError, secret_service.ServiceError):
                 raise HTTPException(422, "Invalid OAuth definition") from None
-            host = destination_host(spec)
-            require_confirmation(row, host, body.confirmed_host)
+            hosts = credential_hosts(spec)
+            require_confirmation(row, hosts, {body.confirmed_host, *body.confirmed_hosts})
             b.audit(who, cid, "oauth.application", "requested")
             saved = b.put("oauth-app-" + cid, {"value": {"client_id": body.client_id, "client_secret": body.client_secret, "spec": spec}},
                           owner=who["actor"])
             b.audit(who, cid, "oauth.application", "stored", receipt_id=saved.receipt, version=saved.version)
             b.sql("UPDATE connections SET oauth_app_version=?,status='awaiting_user',approved_host=? WHERE id=?",
-                  (saved.version, host, cid))
+                  (saved.version, " ".join(hosts), cid))
             b.sql("DELETE FROM oauth_states WHERE connection=?", (cid,))
         return {"connection_id": cid, "status": "awaiting_user"}
 

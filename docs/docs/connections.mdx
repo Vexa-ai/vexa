@@ -93,9 +93,10 @@ Gmail read plus draft creation; Vexa never sends mail.
 
 A person, or their agent, can prepare a custom connection: an HTTPS endpoint and how the key is
 presented, or a full OAuth application. Only the person can save the secret, in the panel. The panel
-shows the host the secret will be sent to, flags a host that is not a known provider or the
-service's own documentation site, and on the first save to a new host asks the person to type it.
-The broker sends only to public addresses, refuses redirects, and redacts the key from responses.
+shows every host a credential will be sent to (for OAuth, the token endpoint and the service
+endpoint that receives the access token), flags a host that is not a known provider, and on the
+first save to a new host asks the person to type it; the broker refuses the save otherwise. The
+broker sends only to public addresses, refuses redirects, and redacts the key from responses.
 
 Deleting a connection destroys every stored version of its credential and OAuth application;
 disconnecting destroys the credential and keeps the application for reconnecting. Otherwise a

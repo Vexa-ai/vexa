@@ -1,10 +1,11 @@
 /** M3: where a secret entered in the Connections panel is sent, made the thing the person reads.
  *
  * A prepared setup can come from the agent, and the agent reads third-party text (mail, calendar,
- * documents). So the panel shows the destination host as the dominant element of the form, warns
- * when it does not belong to a known provider or to the service's own documentation, and on the
- * first save to a host the person has not approved asks them to type it. The broker refuses that
- * save without the typed host, so the check does not rest on this file alone. */
+ * documents). So the panel shows each destination host as a dominant element of the form, warns
+ * when it is not a known provider, and on the first save to a host the person has not approved asks
+ * them to type it. Nothing the setup itself names (its documentation URL included) makes a host
+ * recognised: the setup may be the agent's. The broker refuses the save without every typed host,
+ * so the check does not rest on this file alone. */
 
 /** Hosts of widely used APIs. A warning aid, not an allow-list: an unknown host can be saved once
  *  the person types it. */
@@ -21,21 +22,13 @@ export function hostOf(url: string | undefined | null): string {
   try { return new URL(url.replace('{secret}', 'x')).hostname.toLowerCase(); } catch { return ''; }
 }
 
-/** The last two DNS labels: enough to tell `api.example.com` belongs with `docs.example.com`. */
-function site(host: string): string {
-  return host.split('.').slice(-2).join('.');
+/** True only for a known provider API, by exact host. */
+export function hostIsRecognised(host: string): boolean {
+  return !!host && KNOWN_PROVIDER_HOSTS.includes(host);
 }
 
-/** True when the host is a known provider API, or shares its site with the documentation URL the
- *  setup names. */
-export function hostIsRecognised(host: string, documentationUrl?: string): boolean {
-  if (!host) return false;
-  if (KNOWN_PROVIDER_HOSTS.includes(host)) return true;
-  const docs = hostOf(documentationUrl);
-  return !!docs && site(docs) === site(host);
-}
-
-/** A first save to this host needs the person to type it back. */
+/** A first save to this host needs the person to type it back. `approvedHost` is the broker's
+ *  `approved_host`: the hosts last approved, space-separated. */
 export function needsConfirmation(host: string, approvedHost?: string): boolean {
-  return !!host && host !== (approvedHost || '').toLowerCase();
+  return !!host && !(approvedHost || '').toLowerCase().split(/\s+/).includes(host);
 }

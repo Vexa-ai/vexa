@@ -59,6 +59,14 @@ test('custom secret submission projects no credential back to the UI and carries
  expect((await POST(request('a'.repeat(32)+'/custom-secret',{value:'x',actor:'other'}))).status).toBe(400);
  expect((await POST(request('a'.repeat(32)+'/custom-secret',{value:'x',confirmed_host:7}))).status).toBe(400);
 });
+test('an OAuth application save carries every typed host, and nothing else',async()=>{
+ vi.mocked(brokerCall).mockResolvedValue({connection_id:'a'.repeat(32),status:'awaiting_user'});
+ const body={client_id:'id',client_secret:'s',setup_request:'r',confirmed_host:'tokens.example.test',confirmed_hosts:['api.example.test']};
+ expect((await POST(request('a'.repeat(32)+'/oauth-application',body))).status).toBe(200);
+ expect(vi.mocked(brokerCall).mock.calls.at(-1)![2]).toMatchObject({confirmed_hosts:['api.example.test']});
+ for (const bad of [{confirmed_hosts:'api.example.test'},{confirmed_hosts:[7]},{confirmed_hosts:['a','b','c','d','e']}])
+  expect((await POST(request('a'.repeat(32)+'/oauth-application',{...body,...bad}))).status).toBe(400);
+});
 test('an actionable broker refusal reaches the person; anything else is one generic line',async()=>{
  vi.mocked(brokerCall).mockRejectedValueOnce(new BrokerFault('http_409',409,'Confirm the destination host before saving'));
  const r=await POST(request('a'.repeat(32)+'/oauth-application',{client_id:'id',client_secret:'s',setup_request:'r'}));

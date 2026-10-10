@@ -169,27 +169,49 @@ test('a known provider is not flagged but is still confirmed on first use',async
  expect(screen.queryByRole('alert')).toBeNull();
  expect(screen.getByLabelText('Confirm destination host')).toBeTruthy();
 });
-test('the documentation site counts as recognised, and an approved host needs no second confirmation',async()=>{
- panelWith(prepared({approved_host:'api.example.com',setup:{endpoint:'https://api.example.com/v1',method:'GET',secret_label:'API key',fields:[],documentation_url:'https://docs.example.com'}}));
+test('a documentation URL the setup names does not make its host recognised',async()=>{
+ // The setup, its documentation URL included, may be the agent's: only the known list recognises.
+ panelWith(prepared({setup:{endpoint:'https://api.collector.test/v1',method:'GET',secret_label:'API key',fields:[],documentation_url:'https://docs.collector.test/api'}}));
+ expect((await screen.findByLabelText('Destination host')).textContent).toBe('api.collector.test');
+ expect(screen.getByRole('alert').textContent).toContain('not a known provider');
+});
+test('two labels are not a site: a shared public suffix recognises nothing',async()=>{
+ panelWith(prepared({setup:{endpoint:'https://collector.co.uk/v1',method:'GET',secret_label:'API key',fields:[],documentation_url:'https://docs.co.uk'}}));
+ expect((await screen.findByLabelText('Destination host')).textContent).toBe('collector.co.uk');
+ expect(screen.getByRole('alert').textContent).toContain('not a known provider');
+});
+test('an approved host needs no second confirmation',async()=>{
+ panelWith(prepared({approved_host:'api.example.com',setup:{endpoint:'https://api.example.com/v1',method:'GET',secret_label:'API key',fields:[]}}));
  expect((await screen.findByLabelText('Destination host')).textContent).toBe('api.example.com');
- expect(screen.queryByRole('alert')).toBeNull();
  expect(screen.queryByLabelText('Confirm destination host')).toBeNull();
  fireEvent.change(screen.getByLabelText('API key'),{target:{value:'k'}});
  expect((screen.getByRole('button',{name:'Save securely'}) as HTMLButtonElement).disabled).toBe(false);
 });
-test('an OAuth application names the token host that receives the client secret and confirms it',async()=>{
+test('an OAuth application names and confirms both hosts that receive a credential',async()=>{
  const fetch=panelWith(prepared({setup:{endpoint:'https://api.example.com/data',method:'GET',secret_label:'Unused',fields:[],
   oauth:{authorization_url:'https://login.example.com/authorize',token_url:'https://tokens.elsewhere.test/token',scopes:['read']}}}));
  expect((await screen.findByLabelText('Destination host')).textContent).toBe('tokens.elsewhere.test');
  expect(screen.getByText(/Your client secret will be sent to/)).toBeTruthy();
+ expect(screen.getByLabelText('Service endpoint host').textContent).toBe('api.example.com');
+ expect(screen.getByText(/access token will be sent to/)).toBeTruthy();
  fireEvent.change(screen.getByLabelText('Client ID'),{target:{value:'id'}});
  fireEvent.change(screen.getByLabelText('Client secret'),{target:{value:'s'}});
  const save=screen.getByRole('button',{name:'Save application securely'}) as HTMLButtonElement;
  expect(save.disabled).toBe(true);
  fireEvent.change(screen.getByLabelText('Confirm destination host'),{target:{value:'tokens.elsewhere.test'}});
+ expect(save.disabled).toBe(true);           // the service endpoint host is not confirmed yet
+ fireEvent.change(screen.getByLabelText('Confirm service endpoint host'),{target:{value:'api.example.com'}});
+ expect(save.disabled).toBe(false);
  fireEvent.click(save);
  await waitFor(()=>expect(fetch.mock.calls.some(([p])=>p.endsWith('/oauth-application'))).toBe(true));
- expect(JSON.parse(fetch.mock.calls.find(([p])=>p.endsWith('/oauth-application'))![1].body)).toMatchObject({confirmed_host:'tokens.elsewhere.test'});
+ expect(JSON.parse(fetch.mock.calls.find(([p])=>p.endsWith('/oauth-application'))![1].body)).toMatchObject({confirmed_host:'tokens.elsewhere.test',confirmed_hosts:['api.example.com']});
+});
+test('approved OAuth hosts are not confirmed again',async()=>{
+ panelWith(prepared({approved_host:'tokens.elsewhere.test api.example.com',setup:{endpoint:'https://api.example.com/data',method:'GET',secret_label:'Unused',fields:[],
+  oauth:{authorization_url:'https://login.example.com/authorize',token_url:'https://tokens.elsewhere.test/token',scopes:['read']}}}));
+ expect((await screen.findByLabelText('Destination host')).textContent).toBe('tokens.elsewhere.test');
+ expect(screen.queryByLabelText('Confirm destination host')).toBeNull();
+ expect(screen.queryByLabelText('Confirm service endpoint host')).toBeNull();
 });
 test('an endpoint the person types is shown but not re-confirmed',async()=>{
  panelWith({id:'c'.repeat(32),provider:'custom_secret',label:'Service',status:'awaiting_user'});

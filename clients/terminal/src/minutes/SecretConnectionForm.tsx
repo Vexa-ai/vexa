@@ -16,7 +16,7 @@ export function SecretConnectionForm({onSave,busy,setup,hasCredential=false,appr
  const trusted=!prepared||hostConfirmed(host,approvedHost,confirmed);
  const input=cs.input;
  return <form onSubmit={async e=>{e.preventDefault();if(!trusted)return;try{await onSave(prepared?{value,fields,...(host?{confirmed_host:confirmed.trim().toLowerCase()||host}:{})}:{value,endpoint,header,scheme,method});}finally{setValue('');}}}>
-  {host&&<DestinationHost host={host} role="Your secret will be sent to" documentationUrl={setup?.documentation_url} approvedHost={prepared?approvedHost:host} confirmed={confirmed} onConfirm={setConfirmed}/>}
+  {host&&<DestinationHost host={host} role="Your secret will be sent to" approvedHost={prepared?approvedHost:host} confirmed={confirmed} onConfirm={setConfirmed}/>}
   <label style={ty.meta}>{prepared?setup!.secret_label:"Secret value"}<textarea aria-label={prepared?setup!.secret_label:"Secret value"} required={!hasCredential} value={value} onChange={e=>setValue(e.target.value)} autoComplete="off" spellCheck={false} maxLength={65536} style={{...input,WebkitTextSecurity:'disc'} as React.CSSProperties}/></label>
   {hasCredential&&<p style={ty.meta}>Your saved credential will be reused. Enter a replacement only if it changed.</p>}
   {prepared?<>
