@@ -37,7 +37,8 @@ flowchart LR
   terminal -.->|read| tc_stream
   terminal -.->|read| out_stream
   bot -->|write| recording_blob
-  bot -.->|read-write| userdata_blob
+  bot -.->|read| userdata_blob
+  meeting_api -->|write| userdata_blob
   remote_browser -->|write| userdata_blob
   gateway -.->|read| recording_blob
   bot -.->|read| bot_commands

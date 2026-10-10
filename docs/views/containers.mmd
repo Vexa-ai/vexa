@@ -45,6 +45,7 @@ flowchart LR
   dashboard["dashboard (deprecated)"]
   credentials_vault["OpenBao (optional)"]
   meeting_api -->|"write"| segments_table
+  bot -->|"HTTP"| meeting_api
   bot -->|"HTTPS"| transcription
   meeting_api -->|"JDBC"| postgres
   meeting_api -->|"HTTPS"| object_store

@@ -36,7 +36,7 @@ system meetings  # capture → transcribe → record; owns the raw transcript
   data-asset bot-commands [writers: meeting-api]
   database segments-table [writers: meeting-api]
   data-asset recording-blob [writers: bot, meeting-api]
-  data-asset userdata-blob [writers: remote-browser, bot]
+  data-asset userdata-blob [writers: remote-browser, meeting-api]
   contract sdk-join.v1
   module zoom-sdk-capture
   contract sdk-capture.v1
@@ -128,7 +128,9 @@ edges:
   terminal -read-> tc-stream
   terminal -read-> out-stream
   bot -write-> recording-blob
-  bot -read-write-> userdata-blob  # restore session before launch (read) + write rotated session back on clean teardown (write)
+  bot -read-> userdata-blob  # restore the stored session before launch, with the bots' read-only key pair (BOT_S3_*: Get + List on the userdata prefix and nothing else); the bot never writes the store — its rotated session goes back through meeting-api (bot-session-writeback)
+  bot -req-> meeting-api  # an authenticated bot's rotated browser session, on clean teardown: PUT /internal/browser-session/{session_uid} with Authorization: Bearer <MeetingToken> (the invocation.v1 session token) admitted for exactly that session_uid, and only from the live authenticated bot — the newest session spawned on the deployment's identity, of the token's meeting, live or ended under 600 s; anything else is refused (401/403). Carrier: a JSON body {files: [{path, data (base64)}]} whose every path is one the session-profile.v1 profile names (remote-browser's, a byte-identical copy in meeting-api's session_profile), size-bounded per file and in total
+  meeting-api -write-> userdata-blob  # stores an admitted session write-back with meeting-api's own storage credentials (S3_*, else MINIO_*) at BOT_S3_ENDPOINT / BOT_S3_BUCKET under BOT_USERDATA_S3_PATH; the bots' key pair stays read-only
   remote-browser -write-> userdata-blob  # provisioning login uploads the confirmed signed-in session
   gateway -read-> recording-blob
   bot -call-> transcription  # audio -> first-party STT via TRANSCRIPTION_SERVICE_URL
@@ -182,7 +184,7 @@ edges:
   agent-api -req-> meeting-api  # agent-api reads meetings as the caller, X-User-Id (and X-User-Workspaces) over the internal tier (X-Internal-Secret): GET /meetings/{id} (the meeting access lookup behind every meeting-scoped agent route), GET /transcripts/by-id/{id} (a transcript the caller may read), GET /meetings?… (the schedule digest's three bounded queries), POST /meetings/{id}/annotate (the minted meeting's recorder). meeting-api decides access; agent-api holds no meetings data
   agent-api -req-> admin-api  # agent-api asks identity about a person over the internal tier (X-Internal-Secret): GET /internal/users/by-email/{email} (falling back to GET /admin/users/email/{email} with X-Admin-API-Key) to resolve a share's invitee; POST/DELETE/GET /internal/users/{id}/memberships[/{ws}] (the membership index mirror); GET /internal/users/{id}/model-config; GET /internal/users/{id}/is-admin (the _global tier's writer); GET /internal/users/{id}/bot-context (admin overview); GET/PUT /internal/users/{id}/settings (the person's clock and timezone)
   agent-worker -req-> flows-api  # the worker's temporal block: GET /timeline?format=preamble with the read-only VEXA_FLOWS_TIMELINE_KEY that dispatch stamps only when the deployment minted one (never the operator key); granted by the workload network fences (compose workers network, the Helm workload egress policy)
-  bot -req-> meeting-api  # the bot's only calls back: every lifecycle.v1 event to POST /bots/internal/callback/lifecycle and every recording chunk to POST /internal/recordings/upload, each with Authorization: Bearer <MeetingToken> (invocation.v1 token), bound to the bot's own session; meeting-api refuses another session's token with 401
+  bot -req-> meeting-api  # the bot's calls back: every lifecycle.v1 event to POST /bots/internal/callback/lifecycle and every recording chunk to POST /internal/recordings/upload, each with Authorization: Bearer <MeetingToken> (invocation.v1 token), bound to the bot's own session; meeting-api refuses another session's token with 401. An authenticated bot's session write-back is the third call, on its own edge (bot-session-writeback)
   runtime -req-> agent-api  # a routine's due schedule.v1 job: POST /invocations with the unit.v1 dispatch agent-api compiled and signed (X-Vexa-Dispatch-Signature, HMAC keyed from INTERNAL_API_SECRET); the runtime holds the job opaquely and cannot re-point it at another person or trigger
   runtime -req-> meeting-api  # every RuntimeEvent for a bot workload to its callbackUrl, POST /runtime/callback, signed X-Runtime-Signature (runtime.v1 CallbackSignature, keyed from RUNTIME_API_TOKEN); meeting-api refuses an unsigned or forged callback with 401
   agent-api -write-> imports-status  # repository import status (workspace_import.py)

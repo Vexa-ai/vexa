@@ -1056,17 +1056,17 @@
    "unique-id": "userdata-blob",
    "node-type": "data-asset",
    "name": "userdata bucket (blob)",
-   "description": "authenticated-bot browser sessions (auth-essential profile subset): remote-browser's provisioning login uploads the signed-in session; the bot restores it before launch and writes the rotated session back on clean teardown",
+   "description": "authenticated-bot browser sessions (the session-profile.v1 subset): remote-browser's provisioning login uploads the signed-in session; the bot restores it before launch with a read-only key pair, and its rotated session comes back on clean teardown through meeting-api, which writes it",
    "controls": {
     "ownership": {
-     "description": "two writers by design: remote-browser=provisioning upload, bot=write-back on teardown",
+     "description": "two writers by design: remote-browser=provisioning upload, meeting-api=the authenticated bot's session write-back (session_profile); no bot holds a credential that writes it",
      "requirements": [
       {
        "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
        "config": {
         "writers": [
          "remote-browser",
-         "bot"
+         "meeting-api"
         ]
        }
       }
@@ -2045,11 +2045,52 @@
      }
     }
    },
-   "description": "restore session before launch (read) + write rotated session back on clean teardown (write)",
+   "description": "restore the stored session before launch, with the bots' read-only key pair (BOT_S3_*: Get + List on the userdata prefix and nothing else); the bot never writes the store — its rotated session goes back through meeting-api (bot-session-writeback)",
    "protocol": "HTTPS",
    "metadata": [
     {
-     "access": "read-write"
+     "access": "read"
+    }
+   ]
+  },
+  {
+   "unique-id": "bot-session-writeback",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "bot"
+     },
+     "destination": {
+      "node": "meeting-api",
+      "interface": "meeting-api-rest"
+     }
+    }
+   },
+   "description": "an authenticated bot's rotated browser session, on clean teardown: PUT /internal/browser-session/{session_uid} with Authorization: Bearer <MeetingToken> (the invocation.v1 session token) admitted for exactly that session_uid, and only from the live authenticated bot — the newest session spawned on the deployment's identity, of the token's meeting, live or ended under 600 s; anything else is refused (401/403). Carrier: a JSON body {files: [{path, data (base64)}]} whose every path is one the session-profile.v1 profile names (remote-browser's, a byte-identical copy in meeting-api's session_profile), size-bounded per file and in total",
+   "protocol": "HTTP",
+   "metadata": [
+    {
+     "access": "req"
+    }
+   ]
+  },
+  {
+   "unique-id": "ma-session-writeback-userdata",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "meeting-api"
+     },
+     "destination": {
+      "node": "userdata-blob"
+     }
+    }
+   },
+   "description": "stores an admitted session write-back with meeting-api's own storage credentials (S3_*, else MINIO_*) at BOT_S3_ENDPOINT / BOT_S3_BUCKET under BOT_USERDATA_S3_PATH; the bots' key pair stays read-only",
+   "protocol": "HTTPS",
+   "metadata": [
+    {
+     "access": "write"
     }
    ]
   },
@@ -3132,7 +3173,7 @@
      }
     }
    },
-   "description": "the bot's only calls back: every lifecycle.v1 event to POST /bots/internal/callback/lifecycle and every recording chunk to POST /internal/recordings/upload, each with Authorization: Bearer <MeetingToken> (invocation.v1 token), bound to the bot's own session; meeting-api refuses another session's token with 401",
+   "description": "the bot's calls back: every lifecycle.v1 event to POST /bots/internal/callback/lifecycle and every recording chunk to POST /internal/recordings/upload, each with Authorization: Bearer <MeetingToken> (invocation.v1 token), bound to the bot's own session; meeting-api refuses another session's token with 401. An authenticated bot's session write-back is the third call, on its own edge (bot-session-writeback)",
    "protocol": "HTTP",
    "metadata": [
     {
