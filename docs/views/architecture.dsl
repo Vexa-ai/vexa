@@ -53,6 +53,7 @@ system agent  # the execution domain: a trigger becomes one governed agent turn 
   contract routine.v1
   contract task.v1
   contract tool.v1
+  contract models.v1
   contract unit.v1
   contract credential-broker.v1
   service credentials-broker

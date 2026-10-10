@@ -130,6 +130,25 @@ spec:
               value: {{ .Values.vexaEnv | default "development" | quote }}
             - name: VEXA_AGENT_MODEL
               value: {{ .Values.models.agentModel | default "" | quote }}
+            {{- with .Values.models.catalog }}
+            # The model catalog (models.v1 Catalog, ADR-0043): the providers and models people pick
+            # per chat. Refused whole at boot when anything in it is wrong. It holds no credential:
+            # each provider's secret_ref (env:VEXA_MODEL_SECRET_<NAME>) is delivered below from models.catalogSecrets.
+            - name: VEXA_MODEL_CATALOG
+              value: {{ toJson . | quote }}
+            {{- end }}
+            {{- range .Values.models.catalogSecrets }}
+            {{- $env := required "models.catalogSecrets[].env is required" .env }}
+            {{- if not (regexMatch "^VEXA_MODEL_SECRET_[A-Z0-9_]+$" $env) }}
+            {{- fail (printf "models.catalogSecrets[].env %q must be VEXA_MODEL_SECRET_<NAME>: a catalog secret never shares a name with agent-api's own variables" $env) }}
+            {{- end }}
+            # Its own Secret, named explicitly: never the chart's shared admin-token Secret.
+            - name: {{ $env }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "models.catalogSecrets[].secretName is required (the Secret holding this provider key)" .secretName }}
+                  key: {{ .key | default $env }}
+            {{- end }}
             - name: VEXA_AGENT_AUTO_CONTINUE_CHAT
               value: {{ .Values.agentApi.autoContinueChat | toString | quote }}
             - name: VEXA_AGENT_MAX_CHAT_CONTINUATIONS

@@ -122,6 +122,7 @@ CASES = [
     ("POST", "/agent/connections/service/call", "/agent/connections/service/call"),
     ("POST", "/agent/global/ready", "/agent/global/ready"),
     ("POST", "/agent/meeting/terms/scan", "/agent/meeting/terms/scan"),
+    ("GET", "/agent/models/catalog", "/agent/models/catalog"),
     ("POST", "/agent/onboarding/research", "/agent/onboarding/research"),
     ("GET", "/agent/time", "/agent/time"),
     ("PUT", "/agent/time/zone", "/agent/time/zone"),

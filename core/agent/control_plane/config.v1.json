@@ -188,6 +188,17 @@
       ]
     },
     {
+      "key": "VEXA_MODEL_CATALOG",
+      "class": "defaulted",
+      "default": "(empty \u2014 no catalog: every turn runs on VEXA_AGENT_MODEL / VEXA_RUNNER and each person's Settings \u2192 Models)",
+      "description": "the operator's model catalog (ADR-0043): one JSON object validated against core/agent/contracts/models.v1 Catalog \u2014 the providers this deployment reaches (each naming its adapter: openai_compatible, openrouter, anthropic, custom) and the models people pick per chat in the terminal. Refused WHOLE at boot, every problem named and no value quoted. Holds no credential: a provider's secret_ref (env:VEXA_MODEL_SECRET_<NAME>) names a variable in agent-api's environment, delivered by the deploy surface's secret store (compose .env, Helm models.catalogSecrets)",
+      "targets": [
+        "compose",
+        "helm",
+        "lite"
+      ]
+    },
+    {
       "key": "VEXA_MODEL_ROUTE",
       "class": "defaulted",
       "default": "(unset \u2014 the deployment's own route)",

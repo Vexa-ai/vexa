@@ -337,6 +337,9 @@ class ModelPrefsUpdate(BaseModel):
     extra_body: Optional[str] = None
     effort: Optional[str] = None  # claude-code reasoning-effort pin (low|medium|high|xhigh); empty = unset
     runner: Optional[str] = None  # the harness that runs workspace turns; empty = the deployment's
+    # the model-catalog id (ADR-0043) new and unpicked chats run on; empty = the organisation's
+    # default, else the catalog's
+    default_model: Optional[str] = None
 
 
 class TranscriptionPrefsUpdate(BaseModel):
@@ -663,7 +666,7 @@ def create_app() -> FastAPI:
         return {"mode": prefs.get("mode"), "model": prefs.get("model"),
                 "base_url": prefs.get("base_url"),
                 "effort": prefs.get("effort"), "runner": prefs.get("runner"),
-                "extra_body": prefs.get("extra_body"),
+                "extra_body": prefs.get("extra_body"), "default_model": prefs.get("default_model"),
                 "api_key_set": bool(prefs.get("api_key")),
                 "api_key": _mask_secret(prefs.get("api_key"))}
 
@@ -1003,6 +1006,7 @@ def create_app() -> FastAPI:
             "base_url": prefs.get("base_url"),
             "effort": prefs.get("effort"),
             "runner": prefs.get("runner"),
+            "default_model": prefs.get("default_model"),
             "api_key_set": bool(prefs.get("api_key")),
             "api_key": _mask_secret(prefs.get("api_key")),
         }

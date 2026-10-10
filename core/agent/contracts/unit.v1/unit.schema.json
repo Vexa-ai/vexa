@@ -182,8 +182,8 @@
       "enum": ["spawn_refused", "quota_exceeded", "unauthorized", "refused", "not_found", "unreachable", "unavailable", "bad_response"]
     },
     "ModelProviderFaultKind": {
-      "description": "unpaid — out of credit or quota (402, or the provider's own words) · unauthorized — the credential was refused (401/403) · rate_limited — 429 · unavailable — 5xx, 529, a timeout or a transport failure · refused — any other 4xx.",
-      "enum": ["unpaid", "unauthorized", "rate_limited", "unavailable", "refused"]
+      "description": "A provider call that failed: unpaid — out of credit or quota (402, or the provider's own words) · unauthorized — the credential was refused (401/403) · rate_limited — 429 · unavailable — 5xx, 529, a timeout or a transport failure · refused — any other 4xx. A chat's model pick that agent-api refused before any call (ADR-0043; `provider` is then the catalog's provider key and `model` the catalog id): unknown_model — not in the catalog · not_permitted — an admins-only model, for anyone else · not_configured — an own-endpoint model with no endpoint set, or a catalog offering this person nothing · credential_missing — the provider's secret_ref is not set · endpoint_refused — the person's own endpoint cannot carry the turn · effort_unsupported — the effort level picked is not one this model offers, or not one its provider's adapter can express.",
+      "enum": ["unpaid", "unauthorized", "rate_limited", "unavailable", "refused", "unknown_model", "not_permitted", "not_configured", "credential_missing", "endpoint_refused", "effort_unsupported"]
     },
     "VexaToolsFaultKind": {
       "description": "access_expired — the turn ran past its delegation token, and the Vexa tool calls it made after that were refused.",
