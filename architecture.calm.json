@@ -2611,6 +2611,22 @@
    "protocol": "HTTPS"
   },
   {
+   "unique-id": "ma-admin-writable",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "meeting-api"
+     },
+     "destination": {
+      "node": "admin-api",
+      "interface": "admin-api-rest"
+     }
+    }
+   },
+   "description": "GET /internal/users/{id}/memberships (X-Internal-Secret), read once per calendar sync run: a new occurrence of a calendar series inherits the series' workspace only while its owner still holds contributor or owner there (R1801-3); an unanswered lookup is 'may write nowhere' and the occurrence is created private (calendar_sync/runner.py, collector/reader_directory.py)",
+   "protocol": "HTTPS"
+  },
+  {
    "unique-id": "ma-service-authority",
    "relationship-type": {
     "connects": {

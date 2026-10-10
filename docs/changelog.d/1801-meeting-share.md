@@ -19,3 +19,10 @@
   meeting-api backfills each such reader's address from identity (new internal-only
   `GET /internal/users/{id}/email`) and links the invite they used, so it no longer shows as pending
   and removing them withdraws it.
+- **Sharing hardened after review (#1801).** An open `/ws` subscription is re-checked by the meeting row
+  it streams; invite emails go to one plain address each, at most 30 per owner per hour, with the
+  title as one bounded line and no token in the email fact (flows mints the link at send time);
+  turning a link off removes exactly the readers it admitted; a calendar series' new occurrence keeps
+  its workspace only while its owner can still edit it; the terminal stream re-checks every 10 s and
+  notices a deleted transcript; a worker's write set is bounded by its ceiling; the identity email
+  lookup has no dev-mode bypass; readers without recording permission see no recording metadata.
