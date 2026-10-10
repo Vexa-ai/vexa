@@ -129,6 +129,7 @@
    "key": "REDIS_URL",
    "class": "defaulted",
    "default": "redis://redis:6379/0",
+   "secret": true,
    "description": "the transcription_segments stream + bm:meeting:{id}:status pub/sub + bot-command channel backing"
   },
   {

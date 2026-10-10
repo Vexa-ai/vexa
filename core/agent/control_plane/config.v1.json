@@ -855,6 +855,7 @@
     {
       "key": "REDIS_URL",
       "class": "defaulted",
+      "secret": true,
       "default": "(unset in agent-api \u2014 the runtime injects the worker's connection per dispatch)",
       "description": "the WORKER's redis connection (its unit:<id>:in/out Streams). Runtime-injected per dispatch and deliberately withheld from the model's own subprocess (llm/ports._HARNESS_SUBPROCESS_DENY_VARS) \u2014 a Bash tool holding it reaches another tenant's keys (mandatory in the WORKER, which refuses to run without it; agent-api stamps it and never reads it)",
       "targets": []

@@ -54,6 +54,7 @@
     {
       "key": "REDIS_URL",
       "class": "capability",
+      "secret": true,
       "capability": "scheduler",
       "description": "backing for the durable schedule.v1 cron store; unset ⇒ no scheduler is constructed"
     },

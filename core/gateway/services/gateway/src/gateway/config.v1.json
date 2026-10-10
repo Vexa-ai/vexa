@@ -66,6 +66,7 @@
       "key": "REDIS_URL",
       "class": "defaulted",
       "default": "redis://redis:6379/0",
+      "secret": true,
       "description": "pub/sub bus backing the /ws fan-in"
     },
     {
