@@ -22,7 +22,7 @@ from control_plane.api_shared import (
     CONTEXT_SENTINEL, GLOBAL_TARGET_NOTE,
     _chat_turn_head, _context_grounding, _has_custom_model_endpoint, _is_slug,
     _model_creds_error_message, _record_chat_turn_head, _sse, _stream_tail_id,
-    inbox_pending, inbox_withdraw, logger, meeting_binding, target_preamble, toolbelt_preamble, workspace_focus)
+    inbox_pending, inbox_withdraw, logger, turns_taken_after, meeting_binding, target_preamble, toolbelt_preamble, workspace_focus)
 from control_plane.peer_lookups import meeting_access_check
 from control_plane.bodies import CHAT_SESSION_PATTERN, ChatBody, ResetBody, SessionId
 from control_plane.ceiling import refuse_delegated, require_in_ceiling
@@ -374,7 +374,8 @@ def build(**d) -> APIRouter:
 
     @router.get("/api/chat/pending")
     def chat_pending(request: Request,
-                     session: Annotated[str | None, Query(pattern=CHAT_SESSION_PATTERN)] = None):
+                     session: Annotated[str | None, Query(pattern=CHAT_SESSION_PATTERN)] = None,
+                     after: Annotated[str | None, Query(pattern=r"^\d{1,20}-\d{1,20}$")] = None):
         """WHAT THIS CHAT HAS SUBMITTED AND ITS AGENT HAS NOT TAKEN YET (Vexa-ai/vexa#1610).
 
         The inbox is the in-topic and the worker publishes how far it has read, so this is a read of
@@ -383,7 +384,13 @@ def build(**d) -> APIRouter:
 
         `cursor` is the output Stream's tail right now — where a client with nothing open should
         attach to watch the queue run. A client that already has a stream has an exact cursor of its
-        own and should use that one instead."""
+        own and should use that one instead.
+
+        `after` — that exact cursor, when the client has one — adds `taken`: how many turns the
+        worker has started since it. A message submitted mid-turn is taken the instant the turn in
+        front of it ends, so by the time a client whose view just closed asks, it is no longer
+        pending; `taken` is what tells that client there is an answer running that it has not seen,
+        and that it should attach from its cursor and watch it."""
         subject = subject_of(request)
         session = session or units.DEFAULT_CHAT_SESSION
         try:
@@ -397,6 +404,7 @@ def build(**d) -> APIRouter:
         blocked = next((p["blocked"] for p in pending if p.get("blocked")), None)
         return {"pending": pending,
                 "cursor": _stream_tail_id(redis_url, units.output_topic(unit_id)) or "",
+                **({"taken": turns_taken_after(redis_url, unit_id, after)} if after else {}),
                 **({"fault": blocked} if blocked else {})}
 
     def _chat(body: ChatBody, request: Request, *, stream: bool):
@@ -555,8 +563,15 @@ def build(**d) -> APIRouter:
         # would strand its own reconnect on a unit nobody spawned, so a reconnect (`Last-Event-ID`)
         # reads the generation as it stands and re-attaches to the unit it was watching; only a
         # fresh turn lowers the stale-mounts flag and steps the generation.
+        #
+        # …AND A SUBMISSION READS TOO. It is sent while a turn is running (that is the only time the
+        # terminal submits instead of streaming), so stepping the generation here would put it on a
+        # unit nobody spawned — a second worker, a second output Stream, and an answer written where
+        # the view the person is watching never looks. A model change or a new workspace made
+        # mid-turn therefore applies from the next turn the person starts on an idle chat; the
+        # submission queues behind the running turn on the unit that is running it.
         try:
-            _gen = (sess.mount_gen(subject, session) if resume
+            _gen = (sess.mount_gen(subject, session) if (resume or not stream)
                     else sess.take_mount_generation(subject, session))
         except Exception:  # noqa: BLE001
             logger.warning("mount generation unreadable for subject=%s session=%s — this turn keeps "

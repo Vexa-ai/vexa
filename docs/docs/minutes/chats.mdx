@@ -32,6 +32,13 @@ You never have to wait. A message you send during a turn goes straight to the ag
 at the foot of the chat as *queued · … · queued behind the current turn*. Queued messages run in the
 order you sent them. A reload does not lose them: the list is read back from the server.
 
+Every queued message is answered, and the answer appears in its own reply under your message, even
+when the agent starts on it while it is still finishing the previous reply. If your chat was already
+idle when the agent started it, the chat attaches to it and shows it the same way.
+
+A model change, or a new workspace the agent created, takes effect from the next message you send
+when the chat is idle. A message you send while a turn runs queues on the agent that is running.
+
 If the agent cannot take a message, the row turns red: *blocked — `<source>` · `<kind>` — `<detail>`*,
 with **Retry**. If the network dropped the message before the server saw it, your browser keeps a copy
 and re-sends it when the chat is idle or the page reloads.
@@ -128,8 +135,18 @@ person: an agent acting for someone cannot start one.
    worker. It then relays the worker's output stream back to the browser as server-sent events. A
    reconnect resumes from the last event it saw; nothing is dispatched twice.
 4. **Queue.** A message sent mid-turn goes to `/api/chat/submit`, which runs the same steps without
-   streaming. `/api/chat/pending` lists what is still waiting, and whether the queue is blocked and why.
-5. **Jobs.** For `create`, `extend` and `extend_transcript`, the worker runs the act on its own thread,
+   streaming, on the chat's running worker (it never moves the chat to a new one). `/api/chat/pending`
+   lists what is still waiting, and whether the queue is blocked and why. Given `after=<cursor>`, it
+   also says how many turns the agent has started since that point of the output stream (`taken`).
+5. **One view, every turn that starts on it.** The worker can take the next message while it is still
+   finishing a turn's write-back, so two turns can be on the output stream at once. agent-api keeps a
+   view open until every turn that started on it has ended. The browser routes each event to its turn
+   by `turn_id`, so a second turn gets its own reply under the message it answers.
+6. **Catch up.** When a view ends, the browser asks `/api/chat/pending` with the last event it read.
+   If something is still queued, or a turn started after that event, it attaches from that event and
+   shows it. It asks again when a mid-turn submission is acknowledged, because the turn in front may
+   have ended while the submission was in flight.
+7. **Jobs.** For `create`, `extend` and `extend_transcript`, the worker runs the act on its own thread,
    reports `job-started`, progress and `job-done` or `job-failed` on the chat's stream, and ends the
    chat turn at once so the chat can answer.
 
@@ -174,7 +191,7 @@ gateway's `/agent/*` forward. The request and event shapes are in [the agent API
 | Rule | How this design meets it | Gate |
 |---|---|---|
 | **P2** contracts · **P6** one front door | the browser calls only the terminal's `/api/*`; the terminal calls only the gateway | `gate:isolation`, `gate:exports`, `gate:domain-doors` |
-| **P18** fail loud | a refused spawn, a provider refusal or a gateway outage ends as a typed fault (`source` + `kind`) shown in the chat; the terminal never passes a bare *Internal Server Error*; a blocked queue says what blocked it; a failed job posts a line | `gate:fault-surfacing` (under `gate:node` and `gate:python`) |
+| **P18** fail loud | a refused spawn, a provider refusal or a gateway outage ends as a typed fault (`source` + `kind`) shown in the chat; the terminal never passes a bare *Internal Server Error*; a blocked queue says what blocked it; a failed job posts a line; a message the agent took is always watched: a view stays open until every turn that started on it has ended, and an idle chat attaches to a turn that started after what it read, so an answer never goes to a stream nobody reads | `gate:fault-surfacing` (under `gate:node` and `gate:python`); the race tests below |
 | **P20** authorize every access | the user is the signed identity; the target must be a workspace you can write; suggestions are your own desk's | deny tests below |
 | **P21** state from evidence | the activity line and job rows come from the worker's events, not from the button press | ungated: reviewed |
 | **P23** one writer per carrier | agent-api is the inbox's only writer; the worker is the output stream's only writer and agent-api relays it unchanged | `gate:dataflow` |
@@ -207,6 +224,9 @@ the workspaces of the chat that dispatched it. Only an org admin can target the 
 | `core/agent/tests/test_delegation_ceiling_verbs.py` · `test_a_workspace_outside_the_ceiling_is_refused_and_nothing_changes` | the agent's ceiling |
 | `core/agent/tests/test_chat_runtime_fault.py` · `test_a_refused_spawn_on_api_chat_is_a_typed_502_not_internal_server_error`, `test_queued_rows_behind_the_refusal_say_they_are_blocked_and_by_what` | typed faults and blocked queues |
 | `core/agent/tests/test_inbox.py` · `test_ten_submissions_during_a_job_all_execute_in_order` | nothing is dropped |
+| `core/agent/tests/test_answer_while_busy.py` · `test_a_view_stays_open_for_the_turn_that_began_before_the_one_in_front_completed`, `test_pending_says_a_turn_was_taken_after_the_cursor_the_chat_read_to`, `test_pending_refuses_a_cursor_that_is_not_a_stream_id`, `test_a_submission_does_not_step_the_mount_generation` | a mid-turn message is answered where the chat is looking; a malformed cursor is refused |
+| `clients/terminal/src/surfaces/__tests__/answerWhileBusy.test.tsx` · "is watched even when the worker took it before the chat looked", "is watched when the turn in front ended while the submission was still in flight", "is answered in its own bubble, below the message, when it streams on the same view" | the client never leaves an answer unwatched |
+| `clients/terminal/src/surfaces/__tests__/chatStream.test.ts` · "never folds another turn into this one when nobody claims it", "a view the chat no longer owns skips the later turn" | one turn's events never render as another's |
 | `core/agent/tests/test_proposals.py` · `test_the_list_is_the_callers_own_never_a_desk_named_in_the_body` | suggestions |
 | `core/agent/tests/test_flow_turn_label.py` · `test_agent_api_marks_a_flow_dispatch_from_the_headers_flows_sends`, `test_half_a_header_is_no_mark` | turn labels |
 | `clients/terminal/src/app/api/__tests__/chatProxyFaults.test.ts` · "never passes a bare 'Internal Server Error' through…" | the proxy's fault floor |

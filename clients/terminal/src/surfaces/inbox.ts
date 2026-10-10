@@ -38,8 +38,12 @@ export type InboxItem = {
   blocked?: unknown;
 };
 
-/** `fault` — the same block once, for a view that wants a single banner rather than N rows. */
-export type InboxView = { pending: InboxItem[]; cursor: string; fault?: Fault | null };
+/** `fault` — the same block once, for a view that wants a single banner rather than N rows.
+ *  `taken` — present only when the read named an `after` cursor: how many turns the worker has
+ *  STARTED since that cursor. A message submitted mid-turn is taken the instant the turn in front of
+ *  it ends, so it is gone from `pending` before a view that just closed can ask; `taken` is what says
+ *  "there is an answer running that you have not seen" (`turnsToWatch`). */
+export type InboxView = { pending: InboxItem[]; cursor: string; fault?: Fault | null; taken?: number };
 
 /** What the client sends. Deliberately the same fields a streamed turn sends: one composition path
  *  on the server means one set of arguments here. */
@@ -105,10 +109,41 @@ export function newSubmissionId(): string {
 }
 
 function view(data: unknown): InboxView {
-  const d = (data ?? {}) as { pending?: unknown; cursor?: unknown; fault?: unknown };
+  const d = (data ?? {}) as { pending?: unknown; cursor?: unknown; fault?: unknown; taken?: unknown };
   const pending = Array.isArray(d.pending) ? (d.pending as InboxItem[]) : [];
   const fault = readFault(d.fault);
-  return { pending, cursor: typeof d.cursor === "string" ? d.cursor : "", ...(fault ? { fault } : {}) };
+  const taken = typeof d.taken === "number" && d.taken > 0 ? { taken: d.taken } : {};
+  return { pending, cursor: typeof d.cursor === "string" ? d.cursor : "", ...(fault ? { fault } : {}), ...taken };
+}
+
+/** Is Stream id `a` strictly after `b`? Redis ids are `<ms>-<seq>`; "" is before everything. Never
+ *  compared as strings: `9-0` < `10-0` is the whole reason this exists. */
+export function streamIdAfter(a: string, b: string): boolean {
+  const parse = (id: string): [number, number] | null => {
+    const m = /^(\d+)-(\d+)$/.exec(id || "");
+    return m ? [Number(m[1]), Number(m[2])] : null;
+  };
+  const pa = parse(a);
+  if (!pa) return false;
+  const pb = parse(b);
+  if (!pb) return true;
+  return pa[0] > pb[0] || (pa[0] === pb[0] && pa[1] > pb[1]);
+}
+
+/** SHOULD AN IDLE CHAT ATTACH, and where is the queue head it attaches for? (the founder,
+ *  2026-10-10: *"sometimes chat does not answer if asked while it's not yet answered"*).
+ *
+ *  Two answers, either of which means "yes": something can still RUN (a runnable pending row), or
+ *  something already STARTED after the last event this chat read (`taken`). The second is the one
+ *  that used to be missing — the worker takes a mid-turn message within milliseconds of the turn in
+ *  front of it ending, so a chat that only watched what was PENDING found nothing and watched
+ *  nothing, while the answer streamed to nobody. The returned `head` is what bounds the attach to one
+ *  view per thing: the pending row's entry, or the cursor the taken turns started after. */
+export function turnsToWatch(v: InboxView, cursor: string): { head: string } | null {
+  const next = runnable(v.pending);
+  if (next.length) return { head: next[0].entry };
+  if (cursor && (v.taken ?? 0) > 0) return { head: `after:${cursor}` };
+  return null;
 }
 
 /** Is anything on this list going to RUN? A queue whose every row is blocked has nothing to watch,
@@ -156,11 +191,13 @@ export async function submitToInbox(s: Submission, fetchImpl: typeof fetch = fet
   return view(await r.json());
 }
 
-/** What this chat has submitted and its agent has not taken yet. Never throws: a chat that cannot
+/** What this chat has submitted and its agent has not taken yet — and, given `after` (the last
+ *  output-Stream id this chat read), how many turns started since. Never throws: a chat that cannot
  *  read its inbox shows no queued rows, which is what it showed before one existed. */
-export async function fetchPending(session: string, fetchImpl: typeof fetch = fetch): Promise<InboxView> {
+export async function fetchPending(session: string, fetchImpl: typeof fetch = fetch, after = ""): Promise<InboxView> {
   try {
-    const r = await fetchImpl(`/api/chat/pending?session=${encodeURIComponent(session)}`);
+    const q = `session=${encodeURIComponent(session)}${after ? `&after=${encodeURIComponent(after)}` : ""}`;
+    const r = await fetchImpl(`/api/chat/pending?${q}`);
     if (!r.ok) return EMPTY;
     return view(await r.json());
   } catch {
@@ -175,9 +212,12 @@ export async function fetchPending(session: string, fetchImpl: typeof fetch = fe
  *  saying nothing about it would leave a message that exists only in this browser's storage — the
  *  caller draws it as a blocked row, with the fault, so the person can see it and retry it. */
 export async function flushOutbox(session: string, fetchImpl: typeof fetch = fetch,
-                                  onRefused?: (s: Submission, fault: Fault) => void): Promise<string[]> {
+                                  onRefused?: (s: Submission, fault: Fault) => void,
+                                  inFlight?: (id: string) => boolean): Promise<string[]> {
   const sent: string[] = [];
   for (const s of readOutbox(session)) {
+    // A copy whose POST is still out is not unsent — re-sending it could run it twice.
+    if (inFlight?.(s.id)) continue;
     try {
       await submitToInbox(s, fetchImpl);
       sent.push(s.id);

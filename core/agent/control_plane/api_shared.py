@@ -232,6 +232,50 @@ def inbox_pending(redis_url: "str | None", unit_id: str, key: str) -> list[dict]
     return out
 
 
+#: How far past a client's cursor `turns_taken_after` looks. A chat writes a few hundred events per
+#: turn at most; a client that has been away for longer than this has nothing exact to resume anyway.
+TURNS_TAKEN_SCAN_MAX = 2000
+
+
+def turns_taken_after(redis_url: "str | None", unit_id: str, after: str) -> int:
+    """How many turns this chat's worker has TAKEN since ``after`` — a cursor on the unit's output
+    Stream that a client has read up to. Counted off the worker's own ``turn-accepted`` events.
+
+    WHY THE PENDING LIST IS NOT ENOUGH (the founder, 2026-10-10: *"sometimes chat does not answer if
+    asked while it's not yet answered"*). A message submitted while a turn runs leaves the inbox the
+    moment the worker takes it — and the worker takes it within milliseconds of the turn in front
+    finishing. A client whose view of that turn had just closed asked "is anything queued?", heard
+    "no", and watched nothing: the answer was written to a Stream nobody was reading. "Pending"
+    answers *what is waiting*; this answers *what started after the last thing I saw*, which is the
+    question a client that just went idle actually has.
+
+    Best-effort like the inbox reader: no redis, an unreadable one, or a malformed cursor count as
+    zero — a chat that cannot tell watches what it would have watched before this existed."""
+    if not redis_url or not after:
+        return 0
+    try:
+        import redis
+
+        r = redis.from_url(redis_url, decode_responses=True)
+        rows = r.xrange(units.output_topic(unit_id), min=after, max="+", count=TURNS_TAKEN_SCAN_MAX)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("could not read the output stream for unit=%s: %s", unit_id, exc)
+        return 0
+    taken = 0
+    for entry_id, fields in rows or []:
+        if entry_id == after:
+            continue                      # inclusive range (no Redis 6.2 dependency): drop the cursor
+        try:
+            ev = json.loads((fields or {}).get("event") or "{}")
+        except (TypeError, ValueError):
+            continue
+        # A turn the WORKER started carries its `turn_id`. The injected-steering ack carries only a
+        # nonce and starts nothing new, so it is not counted.
+        if isinstance(ev, dict) and ev.get("type") == "turn-accepted" and ev.get("turn_id"):
+            taken += 1
+    return taken
+
+
 def inbox_withdraw(redis_url: "str | None", unit_id: str, key: str, item_id: str) -> int:
     """Take back what is still QUEUED under the id its client gave it; the count withdrawn.
 

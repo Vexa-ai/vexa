@@ -19,6 +19,9 @@ import { readFault, type Fault } from "./faults";
 /** A parsed SSE event off the chat stream. `type` is the discriminator; other fields are per-type. */
 export type ChatStreamEvent = {
   type: string;
+  /** the worker's id for the turn this event belongs to (`t0`, `t1`, …) — absent on frames the
+   *  server composes itself. What lets one view carry two turns without merging them (`onTurn`). */
+  turn_id?: string;
   text?: string;
   tool?: string;
   sha?: string;
@@ -178,6 +181,17 @@ export type ChatStreamCallbacks = {
    *  reason: a turn being taken is exactly the moment something LEAVES the session's inbox, so this
    *  is when the queued rows are worth re-reading). Optional; existing callers need not implement it. */
   onAccepted?: () => void;
+  /** WHICH TURN THE NEXT EVENTS BELONG TO (the founder, 2026-10-10: *"sometimes chat does not answer
+   *  if asked while it's not yet answered"*). One view can carry more than one turn: the worker
+   *  finishes a turn's write-back AFTER its `done`, on a thread, and takes the next message — one
+   *  the person submitted while this view was open — in the meantime, so that turn streams on this
+   *  same connection before the first one's `turn-complete`. Called whenever the routing changes:
+   *  `isNew` is a turn this view saw begin after its first; the caller returns `true` to give it its
+   *  own agent bubble (it is the person's next answer) or `false` when another view of this chat
+   *  already owns it, in which case this view skips every event of that turn. `isNew: false` names
+   *  a turn already routed here, to switch back to it (the first turn's trailing steps).
+   *  Optional: a caller with no `onTurn` is never handed a second turn's events. */
+  onTurn?: (turnId: string, isNew: boolean) => boolean;
   /** the live phase changed (or a heartbeat fired while quiet) — drive a verbose status line. `null`
    *  clears it. Optional so existing callers/tests need not implement it. */
   onStatus?: (phase: ChatPhase | null) => void;
@@ -351,6 +365,47 @@ export async function streamChatTurn(
   // reads the same Stream and must never fold a foreign job's steps into its own.
   const myJobs = new Set<string>();
   let turnDone = false;
+  // THE TURNS THIS VIEW CARRIES (see `onTurn`). `ownTurns` is every turn routed to a bubble here,
+  // `openTurns` the ones whose `turn-complete` has not arrived, `routed` the one events go to now.
+  //
+  // The FIRST turn this view meets is its own, whatever the event — a fresh send's begins with its
+  // `turn-accepted`, an attach was opened to watch a turn already under way. A LATER turn is
+  // adopted only on its own `turn-accepted` (seen beginning here, so it is the next thing this chat
+  // asked) and only if `onTurn` says this view is the one to render it; anything else carrying a
+  // turn id this view does not render is skipped.
+  const ownTurns = new Set<string>();
+  const openTurns = new Set<string>();
+  const skippedTurns = new Set<string>();
+  let routed = "";
+  /** Is this event's turn one this view renders? Routes it, and adopts a newly begun turn. */
+  const routeTurn = (ev: ChatStreamEvent): boolean => {
+    const tid = typeof ev.turn_id === "string" ? ev.turn_id : "";
+    if (!tid) return true;                       // composed by the server, or an older worker: as before
+    if (skippedTurns.has(tid)) return false;
+    if (!ownTurns.has(tid)) {
+      const first = ownTurns.size === 0;
+      if (!first && ev.type !== "turn-accepted") return false;
+      if (!first) {
+        const mine = cb.onTurn ? cb.onTurn(tid, true) : false;
+        if (!mine) { skippedTurns.add(tid); return false; }
+      } else {
+        cb.onTurn?.(tid, false);
+      }
+      ownTurns.add(tid);
+      if (ev.type === "turn-accepted") openTurns.add(tid);
+      routed = tid;
+      return true;
+    }
+    if (tid !== routed) { routed = tid; cb.onTurn?.(tid, false); }
+    return true;
+  };
+  /** A turn's end is the VIEW's end only when no other turn routed here is still running. */
+  const endsView = (ev: ChatStreamEvent): boolean => {
+    const tid = typeof ev.turn_id === "string" ? ev.turn_id : "";
+    if (!tid) return true;
+    for (const t of openTurns) if (t !== tid) return false;
+    return true;
+  };
 
   cb.onStarting();
   cb.onStatus?.("connecting");
@@ -524,6 +579,7 @@ export async function streamChatTurn(
           }
           continue;
         }
+        if (!routeTurn(ev)) continue;
         switch (ev.type) {
           // The worker's liveness ack — emitted the moment a turn is picked up (warm or cold), long
           // before the first model token. Flips the heartbeat "Starting agent" → "Working"
@@ -579,10 +635,12 @@ export async function streamChatTurn(
             }
             break;
           case "commit":
-            terminal = true; cb.onCommit(ev.sha);
+            if (endsView(ev)) terminal = true;
+            cb.onCommit(ev.sha);
             break;
           case "rejected":
-            terminal = true; cb.onRejected();
+            if (endsView(ev)) terminal = true;
+            cb.onRejected();
             break;
           case "turn-complete":
             // …unless this turn spawned a job. The turn IS over — that is why the job exists — but
@@ -591,10 +649,13 @@ export async function streamChatTurn(
             // same two lines, on the server side.
             turnDone = true;
             if (typeof ev.steps === "number") cb.onSteps?.(ev.steps);
-            if (myJobs.size === 0) terminal = true;
+            // A `turn-complete` naming no turn (server-composed, or an older worker) ends them all.
+            if (typeof ev.turn_id === "string" && ev.turn_id) openTurns.delete(ev.turn_id);
+            else openTurns.clear();
+            if (myJobs.size === 0 && openTurns.size === 0) terminal = true;
             break;
           case "done": {
-            terminal = true;
+            if (endsView(ev)) terminal = true;
             // A FAILED TURN THAT NAMES ITS FAULT (P18) — the provider's 402, its refused key. It
             // is rendered as what it is, not as "Model inference failed: <the provider's JSON>".
             const doneFault = ev.ok === false && cb.onFault ? readFault(ev.fault) : null;

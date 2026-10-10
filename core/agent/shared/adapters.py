@@ -414,7 +414,8 @@ class LocalIdentityMinter(IdentityPort):
 
 class RedisStreamReader(StreamReader):
     """Dev-tier ``StreamReader`` — ``XREAD`` a dispatch's output Stream ``unit:<id>:out`` and yield each
-    UnitEvent until a terminal event (``done`` / ``turn-complete``) or an idle give-up. ``redis`` is
+    UnitEvent until every turn accepted on the view has reached ``turn-complete`` (and every job it
+    watched start has ended), or an idle give-up. ``redis`` is
     imported LAZILY (the unit tests inject a fake reader)."""
 
     def __init__(self, redis_url: str, *, block_ms: int = 15000, idle_giveup_ms: int = 600000) -> None:
@@ -448,6 +449,16 @@ class RedisStreamReader(StreamReader):
         # With no job in play both lines are dead weight and the behaviour is exactly what it was.
         open_jobs: set[str] = set()
         turn_done = False
+        # …AND A TURN CAN OUTLIVE THE NEXT ONE'S START. The worker's write-back trailer (F161) runs
+        # a turn's paperwork AFTER its `done` and BEFORE its `turn-complete`, on a thread, so the
+        # serve loop is already taking the next message: on this Stream turn t2 is accepted, streams
+        # and may even finish before t1's `turn-complete` arrives. A view that closed on that first
+        # `turn-complete` cut off the turn the person had just asked for — the founder's "chat does
+        # not answer if asked while it's not yet answered". So every turn ACCEPTED on this view is
+        # open until its own `turn-complete`, and the view closes only when none is. A view resumed
+        # mid-turn never saw that turn's `turn-accepted`; its `turn-complete` still closes the view,
+        # exactly as before, when nothing else is open.
+        open_turns: set[str] = set()
         while True:
             resp = client.xread({topic: last_id}, count=50, block=self._block)
             if not resp:
@@ -475,9 +486,15 @@ class RedisStreamReader(StreamReader):
                         open_jobs.add(str(ev["job_id"]))
                     elif kind in ("job-done", "job-failed"):
                         open_jobs.discard(str(ev.get("job_id") or ""))
+                    elif kind == "turn-accepted" and ev.get("turn_id"):
+                        open_turns.add(str(ev["turn_id"]))
                     elif kind == "turn-complete":
                         turn_done = True
-                    if turn_done and not open_jobs:
+                        if ev.get("turn_id"):
+                            open_turns.discard(str(ev["turn_id"]))
+                        else:
+                            open_turns.clear()   # a completion naming no turn ends them all
+                    if turn_done and not open_jobs and not open_turns:
                         return
 
 
