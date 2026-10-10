@@ -671,8 +671,8 @@
     {
       "key": "VEXA_AGENT_CONTEXT_TOKENS",
       "class": "defaulted",
-      "default": "24000",
-      "description": "openai-agent harness: estimated-token ceiling on a request; forwarded into spawned workers",
+      "default": "131072",
+      "description": "openai-agent harness: estimated-token budget on a request, deployment-wide; a model route's own window stamped by the dispatch wins over it; forwarded into spawned workers",
       "targets": [
         "compose"
       ]

@@ -729,8 +729,8 @@
     {
       "key": "VEXA_AGENT_CONTEXT_TOKENS",
       "class": "defaulted",
-      "default": "24000",
-      "description": "openai-agent harness: estimated-token ceiling on the request. A SIZING RULE on a shared inference box rather than a nicety \u2014 a 24k-context request is about 1/29th of the CCC KV cache and an unbounded turn evicts everybody else",
+      "default": "131072",
+      "description": "openai-agent harness: estimated-token budget on a request, a deployment-wide value. With a model catalog the dispatch stamps the chosen model's own window less room for its answer, which wins; an entry with no window leaves this value in force. Over it, the history is compacted quietly (oldest tool results first, never a person's message or the latest exchange)",
       "targets": [
         "compose"
       ]

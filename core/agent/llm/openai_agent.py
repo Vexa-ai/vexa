@@ -48,9 +48,11 @@ configured: no search engine ships with this product, which is a licence decisio
 self-hosted one is AGPL-3.0) as much as a deployment one. `WebFetch` needs no backend, is therefore
 always attached, and refuses any URL that resolves into the deployment's own network.
 
-SIZING (CCC-Inference-Deployment): the KV cache holds ~29 requests at 24k context, so the loop
-keeps a whole-turn time budget and trims context (oldest tool results first) to stay under
-``VEXA_AGENT_CONTEXT_TOKENS``. Chat call windows continue automatically by default, at most
+CONTEXT: the request is kept under ``VEXA_AGENT_CONTEXT_TOKENS`` — the chosen model's own window,
+stamped by the dispatch, or the deployment's value, else a 131072-token default. Only when a chat
+outgrows it is the history compacted (oldest tool results first, then old tool exchanges, then old
+replies shortened; never a person's message and never the latest exchange), and the turn says so
+quietly in its activity line, never in its reply. Chat call windows continue automatically by default, at most
 ``VEXA_AGENT_MAX_CHAT_CONTINUATIONS`` times (default 4) inside the whole-turn clock;
 ``VEXA_AGENT_AUTO_CONTINUE_CHAT=0`` restores the hard call cap for operators who require it.
 
@@ -156,10 +158,12 @@ log = logging.getLogger(__name__)
 _PLUMBING = (".claude",)
 
 # ── budgets ──────────────────────────────────────────────────────────────────────────────────────
-# Defaults chosen against the CCC node's sizing table: ~29 concurrent requests at 24k context, and
-# this product's turns are prefill-dominated (input is ~95% of the tokens moved). A turn that grows
-# its own context without a ceiling is a turn that evicts everybody else's.
-_DEFAULT_CONTEXT_TOKENS = 24_000
+# THE CONTEXT BUDGET IS THE MODEL'S WINDOW (founder 2026-10-10). The dispatch stamps the chosen
+# model's own window, less room for its answer (`control_plane.dispatch.route_env`); a deployment
+# may set VEXA_AGENT_CONTEXT_TOKENS for every model. This default applies only when neither is
+# known, and is a large window rather than a small ceiling: the old 24k default dropped dozens of a
+# chat's messages on a model with a 131k window. Trimming is a quiet fallback, not the answer.
+_DEFAULT_CONTEXT_TOKENS = 131_072
 _DEFAULT_MAX_TOOL_CALLS = 40
 _DEFAULT_MAX_TURN_SEC = 900.0
 #: A CHAT turn that reaches its per-window call budget continues into a fresh window
@@ -994,19 +998,29 @@ def prune_orphans(messages: list[dict]) -> tuple[list[dict], int]:
 
 
 def trim_messages(messages: list[dict], budget: int) -> tuple[list[dict], int]:
-    """Fit ``messages`` under ``budget`` estimated tokens. Returns (messages, trimmed_count).
+    """Fit ``messages`` under ``budget`` estimated tokens by COMPACTING the history. Returns
+    (messages, compacted_count).
 
-    Order of sacrifice, oldest first: tool RESULTS (replaced by a stub, so the model still sees that
-    the call happened), then whole oldest EXCHANGES, and only then the head of the first user
-    message. The LAST user message is never touched — it is the ask, and a turn that trims the ask
-    answers a question nobody put.
+    A quiet fallback, not the answer: the budget is the model's own window, so this runs only on a
+    chat that has outgrown it. Order, oldest first, and only what lies before the latest exchange
+    (the last person message and everything after it; within the current turn, only tool results
+    older than its newest tool round):
+
+      1. tool RESULTS are replaced by a stub, so the model still sees that the call happened;
+      2. whole tool EXCHANGES (an assistant call and the results that answered it) are dropped;
+      3. the agent's earlier replies are shortened to their opening.
+
+    A PERSON'S MESSAGE IS NEVER TOUCHED, nor anything in the latest exchange (founder 2026-10-10):
+    a history that loses what the person said is not a summary of the conversation. If the person's
+    own words alone exceed the window the request goes as it is, and the provider's refusal is the
+    typed fault the turn ends on.
 
     "Exchange", not "message" (F88): dropping an assistant turn without the ``tool`` messages that
     answered it — or a ``tool`` message without its caller — produces a request every
     OpenAI-compatible server rejects with a 400, and the malformation is WRITTEN TO THE TRANSCRIPT,
     so a resumed session reproduced it on every later turn. `prune_orphans` runs first and
     unconditionally, healing transcripts the old trimmer already broke; its removals are not counted
-    as trimming because they buy no context, they only make the request sendable."""
+    as compaction because they buy no context, they only make the request sendable."""
     msgs, healed = prune_orphans([dict(m) for m in messages])
     if healed:
         log.warning("dropped %d orphaned tool message(s) from the session transcript — an "
@@ -1014,37 +1028,48 @@ def trim_messages(messages: list[dict], budget: int) -> tuple[list[dict], int]:
     if _est_tokens(msgs) <= budget:
         return msgs, 0
     trimmed = 0
-    for m in msgs:                                     # 1) oldest tool results → stub
-        if _est_tokens(msgs) <= budget:
+
+    def latest() -> int:
+        return max((i for i, m in enumerate(msgs) if m.get("role") == "user"), default=len(msgs))
+
+    def newest_round() -> int:
+        """Where the latest tool round starts: the last call the agent made, else the person's."""
+        return max((i for i, m in enumerate(msgs) if _call_ids(m)), default=latest())
+
+    for i, m in enumerate(msgs):                       # 1) oldest tool results → stub
+        if _est_tokens(msgs) <= budget or i >= max(latest(), newest_round()):
             break
         if m.get("role") == "tool" and m.get("content") != _TRIM_STUB:
             m["content"] = _TRIM_STUB
             trimmed += 1
-    last_user = max((i for i, m in enumerate(msgs) if m.get("role") == "user"), default=0)
-    while _est_tokens(msgs) > budget:                  # 2) drop oldest non-final EXCHANGES
+    while _est_tokens(msgs) > budget:                  # 2) drop oldest tool EXCHANGES
+        cut = latest()
         drop: Optional[set[int]] = None
-        for i, m in enumerate(msgs):
-            if i == 0 or i == last_user or m.get("role") == "system":
+        for i, m in enumerate(msgs[:cut]):
+            if not _call_ids(m):
                 continue
             group = _exchange(msgs, i)
-            if 0 in group or last_user in group or any(msgs[j].get("role") == "system"
-                                                       for j in group):
-                continue                               # the group is anchored — try the next one
+            if any(j >= cut or msgs[j].get("role") in ("user", "system") for j in group):
+                continue
             drop = group
             break
         if not drop:
             break
         msgs = [m for i, m in enumerate(msgs) if i not in drop]
         trimmed += len(drop)
-        last_user = max((i for i, m in enumerate(msgs) if m.get("role") == "user"), default=0)
-    if _est_tokens(msgs) > budget and len(msgs) > 1:   # 3) last resort: head-truncate the opener
-        head = msgs[0]
-        content = str(head.get("content") or "")
-        keep = max(1000, budget * 2)
-        if len(content) > keep:
-            head["content"] = content[:keep] + "\n\n[…trimmed to fit the turn's context budget]"
+    for i, m in enumerate(msgs):                       # 3) shorten the agent's earlier replies
+        if _est_tokens(msgs) <= budget or i >= latest():
+            break
+        content = m.get("content")
+        if m.get("role") == "assistant" and isinstance(content, str) and len(content) > 600 \
+                and not content.endswith(_SHORTENED):
+            m["content"] = content[:400] + _SHORTENED
             trimmed += 1
     return msgs, trimmed
+
+
+#: What an earlier agent reply that was shortened to fit ends with.
+_SHORTENED = "\n\n[…earlier reply shortened to fit the model's context]"
 
 
 # ── the harness ─────────────────────────────────────────────────────────────────────────────────
@@ -1333,9 +1358,10 @@ class OpenAIAgentHarness:
                 # harness is the only thing that knows the turn did not finish its own reasoning;
                 # the client's job is to render a control and post the instruction back.
                 done["act"] = {"label": _CONTINUE_LABEL, "instruction": _CONTINUE_INSTRUCTION}
-            elif trimmed_total:
-                done["reason"] = (f"context-trimmed: {trimmed_total} message(s) dropped to stay "
-                                  f"inside the turn's {ctx_budget}-token budget")
+            if trimmed_total:
+                # QUIETLY: a count the client shows as a muted note in the turn's activity line —
+                # never the reply text, never `reason` (which renders as the turn's stop line).
+                done["compacted"] = trimmed_total
             yield done
         finally:
             for srv in servers:
