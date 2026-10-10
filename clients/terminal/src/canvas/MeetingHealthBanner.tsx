@@ -27,7 +27,8 @@ const TONE: Record<Exclude<MeetingHealthKind, "ok">, { color: string; bg: string
 
 // The two things that can go wrong on the wire between the bot and this pane. Neither is a model:
 // one is the connection, the other is a frame that would not decode.
-function issueLabel(kind: "stream" | "parse"): string {
+function issueLabel(kind: "stream" | "parse" | "access"): string {
+  if (kind === "access") return "Access removed";
   return kind === "parse" ? "Unreadable transcript frame" : "Bot feed error";
 }
 

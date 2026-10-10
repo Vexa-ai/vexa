@@ -15,7 +15,7 @@ import { useSyncExternalStore } from "react";
 export interface LiveSegment { speaker: string; text: string; t?: number; tsMs?: number; id?: string; completed?: boolean }
 /** A feed fault worth telling the reader about: the stream dropped, or an event would not parse.
  *  `model` is deliberately NOT a kind — the product produces no model events any more. */
-export interface LiveStreamIssue { kind: "stream" | "parse"; message: string; status?: number; at: number }
+export interface LiveStreamIssue { kind: "stream" | "parse" | "access"; message: string; status?: number; at: number }
 export interface LiveState {
   transcript: LiveSegment[];
   issues: LiveStreamIssue[];
@@ -146,6 +146,12 @@ function connect(e: Entry, meetingId: string, sessionUid: string): void {
     }
     else if (ev.type === "stream-error") addIssue({ kind: "stream", message: ev.message || "Meeting stream error", status: ev.status });
     else if (ev.type === "meeting-end") { s.ended = true; clearWatchdog(e); es.close(); e.es = undefined; }
+    // The owner removed this reader (or turned the share off) while they watched: the server ended
+    // the stream on purpose. Say so, and do not reconnect into a refusal.
+    else if (ev.type === "access-revoked") {
+      addIssue({ kind: "access", message: ev.message || "You no longer have access to this meeting.", status: 403 });
+      s.ended = true; clearWatchdog(e); es.close(); e.es = undefined;
+    }
     // card / note / model-error / message-delta were the copilot's half of this feed and no
     // longer exist; anything unrecognised (pings, retired event names) is ignored.
     else return;

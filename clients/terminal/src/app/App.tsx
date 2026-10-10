@@ -17,6 +17,7 @@ import { minutesOnly } from "./mode";
 import { VersionBar } from "./VersionBar";
 import { registry } from "../contributions";
 import { AuthGate } from "./AuthGate";
+import { ApiError, presentError } from "../surfaces/apiClient";
 import { OnboardingGate } from "./OnboardingGate";
 import { acceptInvite, acceptTranscriptShare, previewInvite, type InvitePreview } from "../surfaces/workspaceApi";
 import { redeemScaffoldShare } from "../minutes/scaffold";
@@ -131,14 +132,23 @@ function InviteGate({ children }: { children: ReactNode }) {
 
   // Transcript share redeems silently (no consent surface). Clean the URL after — unless an invite is also
   // present, in which case the invite flow owns the reload.
+  //
+  // A REFUSED share is said, not swallowed (P18). It used to log to the console and reload into the
+  // ordinary workbench, so a person whose invite was for another address, or had been withdrawn,
+  // landed on an empty Vexa with no idea why. Now the refusal stays on screen, in words, until they
+  // continue.
+  const [shareRefused, setShareRefused] = useState<string | null>(null);
   useEffect(() => {
     if (!tshare) return;
     acceptTranscriptShare(tshare)
-      .then((r) => { if (r?.meeting_id != null) localStorage.setItem("vexa.openMeeting", String(r.meeting_id)); })
-      .catch((e) => console.error("transcript share redeem failed:", e))
-      .finally(() => { if (!invite) window.location.replace(window.location.pathname); });
+      .then((r) => {
+        if (r?.meeting_id != null) localStorage.setItem("vexa.openMeeting", String(r.meeting_id));
+        if (!invite) window.location.replace(window.location.pathname);
+      })
+      .catch((e) => setShareRefused(shareRefusalSentence(e)));
   }, [tshare, invite]);
 
+  if (shareRefused) return <ShareRefused message={shareRefused} onContinue={() => window.location.replace(window.location.pathname)} />;
   if (!invite) return <>{children}</>;
 
   const proceed = async () => {
@@ -156,6 +166,29 @@ function InviteGate({ children }: { children: ReactNode }) {
   const decline = () => window.location.replace(window.location.pathname);
 
   return <InviteConsent token={invite} onProceed={proceed} onDecline={decline} busy={redeeming} />;
+}
+
+/** Why a meeting share link did not open, in the reader's words. The server's codes (`not_allowed`,
+ *  `revoked`, `expired`, an unknown token) each get a sentence; anything else falls to the presenter. */
+export function shareRefusalSentence(e: unknown): string {
+  const detail = e instanceof ApiError ? (e.detail || "").trim() : "";
+  if (detail === "not_allowed") return "This meeting was shared with a different email address. Sign in with the address the invite was sent to.";
+  if (detail === "revoked") return "The owner has withdrawn this share, or removed your access.";
+  if (detail === "expired") return "This share link has expired. Ask the owner for a new one.";
+  if (e instanceof ApiError && e.status === 404) return "This share link is not valid. Ask the owner for a new one.";
+  return presentError(e).headline;
+}
+
+function ShareRefused({ message, onContinue }: { message: string; onContinue: () => void }) {
+  return (
+    <div style={{ height: "100vh", background: "var(--bg)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <div role="alert" style={{ width: "100%", maxWidth: 440, background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 14, padding: "26px 26px 24px" }}>
+        <div style={{ fontSize: 16, color: "var(--t1)", marginBottom: 8 }}>This meeting could not be opened</div>
+        <div style={{ fontSize: 13, color: "var(--t2)", lineHeight: 1.5, marginBottom: 20 }}>{message}</div>
+        <button onClick={onContinue} style={{ padding: "9px 16px", borderRadius: 8, fontSize: 13, cursor: "pointer", border: "1px solid var(--line)", background: "transparent", color: "var(--t2)" }}>Continue to Vexa</button>
+      </div>
+    </div>
+  );
 }
 
 /** Pre-join CONSENT screen (shown right AFTER login, when a link carries ?invite=). Fetches a read-only

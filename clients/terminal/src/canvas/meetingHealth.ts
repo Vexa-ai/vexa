@@ -58,7 +58,9 @@ export function meetingHealth(
   const reconnects = d.reconnects ?? 0;
   const staleForMs = d.lastTranscriptAt != null ? Math.max(0, now - d.lastTranscriptAt) : undefined;
 
-  // Clean end wins over everything — never cry "stalled" for a meeting that ended on purpose.
+  // Losing access is not a clean end: the meeting may still be running, the reader was removed.
+  if (latestIssue?.kind === "access") return { kind: "error", reconnects, latestIssue, staleForMs };
+  // Clean end wins over everything else — never cry "stalled" for a meeting that ended on purpose.
   if (d.ended) return { kind: "ended", reconnects, latestIssue, staleForMs };
 
   if (!live) return { kind: "ok", reconnects, latestIssue, staleForMs };
