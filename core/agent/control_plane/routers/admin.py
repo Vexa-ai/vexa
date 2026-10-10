@@ -207,7 +207,9 @@ def build(**d) -> APIRouter:
             except model_providers.ModelChoiceFault as fault:
                 return {"ok": False, "summary": fault.sentence(), "mode": "catalog",
                         "route": "catalog", "fault": fault.as_dict()}
-            return _ct.run_route_test(route)
+            # The endpoint's own words and address are an operator's; anyone else gets the
+            # verdict and the typed fault (``config_test.run_route_test``).
+            return _ct.run_route_test(route, admin=dispatcher.is_admin(subject))
         cfg: dict = {}
         mc = getattr(dispatcher, "_model_config", None)
         if mc is not None:

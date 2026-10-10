@@ -5,8 +5,8 @@ resolves in. It is the contract's golden (`models.v1/golden/Catalog.self-hosted-
 as a dict; `test_model_catalog` holds the two equal."""
 from __future__ import annotations
 
-ENV = {"OPENROUTER_API_KEY": "operator-openrouter-test-value",
-       "ANTHROPIC_DIRECT_KEY": "operator-anthropic-test-value"}
+ENV = {"VEXA_MODEL_SECRET_OPENROUTER": "operator-openrouter-test-value",
+       "VEXA_MODEL_SECRET_ANTHROPIC": "operator-anthropic-test-value"}
 
 #: The two worked examples the docs and the deploy values carry, plus one of each other kind.
 #: The contract's golden (``models.v1/golden/Catalog.self-hosted-and-openrouter.json``), verbatim.
@@ -16,7 +16,7 @@ EXAMPLE = {
                      "auth": "none",
                      "extra_body": {"chat_template_kwargs": {"enable_thinking": False}}},
         "openrouter": {"adapter": "openrouter", "auth": "secret",
-                       "secret_ref": "env:OPENROUTER_API_KEY"},
+                       "secret_ref": "env:VEXA_MODEL_SECRET_OPENROUTER"},
         "anthropic": {"adapter": "anthropic", "auth": "subscription"},
         "own": {"adapter": "custom"},
     },

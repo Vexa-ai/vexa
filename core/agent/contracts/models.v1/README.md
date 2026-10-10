@@ -11,7 +11,7 @@ A `Catalog` declares **providers** (one per endpoint the deployment reaches, eac
 **adapter** that resolves it) and **models** on them (a catalog `id`, a display name, the model's id
 at the provider, capabilities — including the effort levels a chat may pick (`reasoning_efforts`,
 `default_effort`) — an optional `max_output_tokens`, who may pick it, and at most one default). A credential is only ever
-a reference — `secret_ref: env:NAME` — never a value; agent-api refuses a catalog with anything
+a reference — `secret_ref: env:VEXA_MODEL_SECRET_<NAME>` — never a value; agent-api refuses a catalog with anything
 credential-shaped written inline, and names the field rather than the value when it does.
 
 A `ModelList` is one person's view: only the models they may pick (an `admins` model is absent for

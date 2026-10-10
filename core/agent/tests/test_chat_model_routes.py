@@ -116,7 +116,7 @@ def test_the_own_endpoint_model_appears_once_the_person_has_one(stack):
 
 def test_the_listing_never_carries_an_endpoint_or_a_key(stack):
     text = stack["client"].get("/api/models/catalog", headers=_as(ADMIN)).text
-    for leaked in ("10.0.0.5", "openrouter.ai", ENV["OPENROUTER_API_KEY"], "env:", "extra_body"):
+    for leaked in ("10.0.0.5", "openrouter.ai", ENV["VEXA_MODEL_SECRET_OPENROUTER"], "env:", "extra_body"):
         assert leaked not in text
 
 
@@ -230,7 +230,7 @@ def test_the_test_button_probes_the_chosen_entry_through_the_port(stack, monkeyp
     assert out["ok"] is True and out["model"] == "or-sonnet" and out["provider"] == "openrouter"
     url, body, headers = sent[-1]
     assert url == "https://openrouter.ai/api/v1/chat/completions"
-    assert headers == {"Authorization": f"Bearer {ENV['OPENROUTER_API_KEY']}"}
+    assert headers == {"Authorization": f"Bearer {ENV['VEXA_MODEL_SECRET_OPENROUTER']}"}
     assert body["model"] == "anthropic/claude-sonnet-4.5"
 
 
@@ -258,11 +258,11 @@ def test_the_probe_speaks_each_routes_own_dialect_with_its_own_credential():
 
     decl = json.loads(json.dumps(EXAMPLE))
     decl["providers"]["anthropic"] = {"adapter": "anthropic", "auth": "secret",
-                                      "secret_ref": "env:ANTHROPIC_DIRECT_KEY"}
+                                      "secret_ref": "env:VEXA_MODEL_SECRET_ANTHROPIC"}
     config_test.run_route_test(_route("claude", decl), post=post)
     url, _body, headers = sent[-1]
     assert url == "https://api.anthropic.com/v1/messages"
-    assert headers["x-api-key"] == ENV["ANTHROPIC_DIRECT_KEY"] and "Authorization" not in headers
+    assert headers["x-api-key"] == ENV["VEXA_MODEL_SECRET_ANTHROPIC"] and "Authorization" not in headers
 
 
 def test_the_subscription_entry_is_tested_by_its_credential_file(tmp_path):
@@ -275,6 +275,44 @@ def test_a_rejected_credential_names_the_model_and_provider():
     out = config_test.run_route_test(_route("or-sonnet"), post=lambda *a: (401, "no"))
     assert out["ok"] is False and out["status"] == 401
     assert out["summary"].startswith("or-sonnet via openrouter:")
+
+
+ENDPOINT_BODY = '{"error":{"message":"upstream gw-7.internal.example rejected: quota for team lab exceeded"}}'
+
+
+@pytest.mark.parametrize("status, kind", [(402, "unpaid"), (401, "unauthorized"), (500, "unavailable"),
+                                          (400, "refused")])
+def test_a_member_never_sees_the_operator_endpoints_body_or_address(status, kind):
+    """The Test button on an operator's model, for someone who is not an instance admin: the
+    verdict and the typed fault, never what the endpoint said nor where it is."""
+    out = config_test.run_route_test(_route("qwen3-32b"), post=lambda *a: (status, ENDPOINT_BODY),
+                                     admin=False)
+    text = json.dumps(out)
+    assert out["ok"] is False and out["fault"]["kind"] == kind and out["fault"]["status"] == status
+    assert out["fault"]["source"] == "model-provider" and out["fault"]["model"] == "qwen3-32b"
+    for leaked in ("gw-7", "quota for team", "10.0.0.5"):
+        assert leaked not in text, leaked
+
+
+def test_an_unreachable_operator_endpoint_is_typed_for_a_member_without_its_address():
+    def boom(*a):
+        raise OSError("connect to 10.0.0.5:8000 refused")
+    out = config_test.run_route_test(_route("qwen3-32b"), post=boom, admin=False)
+    assert out["fault"]["kind"] == "unavailable" and "10.0.0.5" not in json.dumps(out)
+
+
+def test_an_admin_still_sees_the_endpoints_own_words():
+    out = config_test.run_route_test(_route("qwen3-32b"), post=lambda *a: (400, ENDPOINT_BODY))
+    assert "quota for team lab" in out["summary"] and "fault" not in out
+
+
+def test_the_test_route_hides_the_body_from_a_member_and_shows_it_to_an_admin(stack, monkeypatch):
+    monkeypatch.setattr(config_test, "_post", lambda *a: (400, ENDPOINT_BODY))
+    c = stack["client"]
+    member = c.get("/api/models/test?model=qwen3-32b", headers=_as(MEMBER)).json()
+    admin = c.get("/api/models/test?model=qwen3-32b", headers=_as(ADMIN)).json()
+    assert "quota for team" not in json.dumps(member) and member["fault"]["kind"] == "refused"
+    assert "quota for team" in admin["summary"]
 
 
 def test_a_chat_session_id_is_bounded_where_it_enters(stack):

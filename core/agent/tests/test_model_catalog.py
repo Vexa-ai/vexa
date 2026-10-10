@@ -89,7 +89,7 @@ def test_a_model_that_cannot_call_tools_is_refused():
 
 def test_an_unset_secret_reference_is_refused_at_boot():
     problems = _refused(EXAMPLE, env={})
-    assert any("secret_ref env:OPENROUTER_API_KEY is not set" in p for p in problems)
+    assert any("secret_ref env:VEXA_MODEL_SECRET_OPENROUTER is not set" in p for p in problems)
 
 
 def test_every_problem_is_named_at_once():
@@ -198,3 +198,20 @@ def test_an_effort_level_outside_the_vocabulary_is_a_schema_refusal():
 def test_max_output_tokens_must_be_a_positive_count():
     problems = _refused(_with(lambda d: _model(d, "claude").update(max_output_tokens=0)))
     assert any("max_output_tokens" in p for p in problems)
+
+
+# ── R1797-1: a catalog may name only its own secrets, never agent-api's ───────────────────────
+
+@pytest.mark.parametrize("name", ["INTERNAL_API_SECRET", "VEXA_INTERNAL_API_SECRET", "DATABASE_URL",
+                                  "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "VEXA_MODEL_SECRET_"])
+def test_a_secret_ref_outside_the_catalog_prefix_is_refused_even_when_it_is_set(name):
+    env = {**ENV, name: "agent-api-own-value"}
+    problems = _refused(_with(lambda d: d["providers"]["openrouter"].update(secret_ref=f"env:{name}")), env)
+    assert any("secret_ref must name a variable VEXA_MODEL_SECRET_<NAME>" in p for p in problems)
+    assert not any("agent-api-own-value" in p for p in problems)
+
+
+def test_the_resolver_never_reads_a_variable_outside_the_prefix():
+    from control_plane.model_providers import secret_from_env
+    resolve = secret_from_env({"INTERNAL_API_SECRET": "x", "VEXA_MODEL_SECRET_OR": "k"})
+    assert resolve("env:INTERNAL_API_SECRET") == "" and resolve("env:VEXA_MODEL_SECRET_OR") == "k"

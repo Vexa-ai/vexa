@@ -17,7 +17,7 @@ stays out of the log). The rules this module owns:
   * no two models share an ``id``; at most one is the ``default``; every model's ``provider`` is
     declared;
   * nothing secret-shaped is written inline — a credential is a ``secret_ref`` and nothing else —
-    and every ``secret_ref`` resolves in agent-api's environment;
+    and every ``secret_ref`` names a ``VEXA_MODEL_SECRET_*`` variable set in agent-api's environment;
   * every model can call tools: each harness is an agent loop, and a model that cannot is one no
     turn could use.
 """
@@ -90,7 +90,7 @@ def _inline_secrets(node, at: list) -> list[str]:
         for k, v in node.items():
             if k != "secret_ref" and _SECRET_NAME.search(str(k)):
                 out.append(f"{_path(at + [k])}: a credential is never written into the catalog — "
-                           "declare it as the provider's secret_ref (env:NAME)")
+                           "declare it as the provider's secret_ref (env:VEXA_MODEL_SECRET_<NAME>)")
             else:
                 out += _inline_secrets(v, at + [k])
     elif isinstance(node, list):
@@ -98,16 +98,26 @@ def _inline_secrets(node, at: list) -> list[str]:
             out += _inline_secrets(v, at + [i])
     elif isinstance(node, str) and _SECRET_VALUE.search(node):
         out.append(f"{_path(at)}: holds a credential-shaped value — declare a secret_ref "
-                   "(env:NAME) on the provider instead")
+                   "(env:VEXA_MODEL_SECRET_<NAME>) on the provider instead")
     return out
 
 
+#: The only variables a ``secret_ref`` may name (R1797-1). agent-api's environment holds its own
+#: secrets too — the internal API secret, the database URL, the deployment's model credentials — and
+#: a catalog entry that could name one would send it, as a bearer token, to whatever endpoint that
+#: entry declares. A dedicated prefix keeps the two sets apart by construction, and the Helm chart
+#: refuses to deliver anything else. These operator-named variables sit outside
+#: `gate:config-contract`'s declared keys on purpose: the prefix is their contract.
+SECRET_PREFIX = "VEXA_MODEL_SECRET_"
+
+
 def secret_from_env(env: Mapping[str, str]) -> Callable[[str], str]:
-    """``secret_ref`` → value, read from ``env`` at call time (``env:NAME``). Unknown schemes and
-    unset names resolve to ``""``, which the adapter turns into a typed refusal."""
+    """``secret_ref`` → value, read from ``env`` at call time (``env:VEXA_MODEL_SECRET_<NAME>``).
+    Unknown schemes, names without the prefix and unset names resolve to ``""``, which the adapter
+    turns into a typed refusal."""
     def resolve(ref: str) -> str:
         scheme, _, name = str(ref or "").partition(":")
-        if scheme != "env" or not name:
+        if scheme != "env" or not name.startswith(SECRET_PREFIX) or len(name) == len(SECRET_PREFIX):
             return ""
         return (env.get(name) or "").strip()
     return resolve
@@ -157,7 +167,11 @@ def parse(raw: Optional[str], env: Optional[Mapping[str, str]] = None) -> "Catal
         on_it = [m for m in models if m.get("provider") == key]
         problems += [f"providers/{key}: {msg}" for msg in adapter.check(p, on_it)]
         ref = p.get("secret_ref")
-        if isinstance(ref, str) and ref.startswith("env:") and not resolve(ref):
+        if isinstance(ref, str) and (not ref.startswith(f"env:{SECRET_PREFIX}") or ref == f"env:{SECRET_PREFIX}"):
+            problems.append(f"providers/{key}: secret_ref must name a variable "
+                            f"{SECRET_PREFIX}<NAME> — a catalog may not reach agent-api's own "
+                            "secrets")
+        elif isinstance(ref, str) and not resolve(ref):
             problems.append(f"providers/{key}: secret_ref {ref} is not set in agent-api's "
                             "environment")
     if problems:

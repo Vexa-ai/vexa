@@ -247,7 +247,7 @@ def run_models_test(config: dict, env: Optional[dict] = None,
 
 
 def run_route_test(route, creds_path: Optional[str] = None,
-                   post: Optional[HttpPost] = None) -> dict:
+                   post: Optional[HttpPost] = None, *, admin: bool = True) -> dict:
     """The Test button for one model of the catalog: the route the dispatch would stamp for it,
     resolved by the same provider port, probed in that route's own dialect with exactly that route's
     credential — the same URL the harness posts to, so a green here is the request a turn makes.
@@ -257,11 +257,21 @@ def run_route_test(route, creds_path: Optional[str] = None,
     * claude-code — a 1-token ``POST {base_url}/v1/messages``, the key under the header the
       provider expects (bearer for a gateway, ``x-api-key`` for Anthropic's own API).
 
-    A ``custom`` route is the person's own endpoint and keeps its own probe (both dialects)."""
+    A ``custom`` route is the person's own endpoint and keeps its own probe (both dialects).
+
+    WHO SEES THE ENDPOINT'S OWN WORDS (``admin``). An operator's endpoint answers a failed probe
+    with its own body and the Test button used to show up to 200 characters of it — and the
+    endpoint's address — to any signed-in person, while the catalog listing withholds both. For
+    anyone but an instance admin, an operator route's failure is the typed ``model-provider`` fault
+    with no body and no address; the person's own endpoint (``custom``) is theirs and keeps its
+    detail."""
     from control_plane import model_providers as mp
 
     post = post or _post          # resolved per call, never bound once at import
     model = route.provider_model
+    operator = route.credential_source in (mp.CRED_SECRET, mp.CRED_NONE)   # an endpoint of the operator's
+    if operator and not admin:
+        return _quiet_route_test(route, creds_path, post)
     if route.credential_source == mp.CRED_SUBSCRIPTION:
         out = test_subscription_credentials(creds_path)
     elif route.credential_source == mp.CRED_SUBJECT:
@@ -292,6 +302,42 @@ def run_route_test(route, creds_path: Optional[str] = None,
     out.update(mode="catalog", route="catalog", model=route.model_id, provider=route.provider,
                harness=route.harness)
     return out
+
+
+def _status_kind(status: Optional[int]) -> str:
+    """The provider-call kind a probe's HTTP status means (unit.v1 ``ModelProviderFaultKind``)."""
+    from shared.fault_wire import ModelProvider as V
+    if status is None:
+        return V.UNAVAILABLE
+    if status == 402:
+        return V.UNPAID
+    if status in (401, 403):
+        return V.UNAUTHORIZED
+    if status == 429:
+        return V.RATE_LIMITED
+    if status >= 500 or status == 408:
+        return V.UNAVAILABLE
+    return V.REFUSED
+
+
+def _quiet_route_test(route, creds_path: Optional[str], post: HttpPost) -> dict:
+    """An operator route's Test, for a person who is not an instance admin: the same probe, the
+    verdict and a typed fault — never the endpoint's body or address."""
+    from shared.fault_wire import ModelProvider as V
+    admin_view = run_route_test(route, creds_path, post, admin=True)
+    out = {"mode": "catalog", "route": "catalog", "model": route.model_id,
+           "provider": route.provider, "harness": route.harness}
+    if admin_view.get("ok"):
+        return {"ok": True, "summary": f"{route.model_id} via {route.provider}: the model answered.",
+                **out}
+    status = admin_view.get("status") if isinstance(admin_view.get("status"), int) else None
+    fault = {"source": V.SOURCE, "kind": _status_kind(status), "provider": route.provider,
+             "model": route.model_id, "status": status,
+             "detail": (f"The model's provider answered HTTP {status}." if status
+                        else "The model's provider could not be reached."),
+             "remedy": "Ask an operator to check this model's provider, or pick another model."}
+    return {"ok": False, "summary": f"{route.model_id} via {route.provider}: {fault['detail']}",
+            "fault": fault, **({"status": status} if status else {}), **out}
 
 
 def _probe(post: HttpPost, url: str, body: dict, headers: dict, base: str, model: str) -> dict:

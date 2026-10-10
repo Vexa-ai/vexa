@@ -21,7 +21,7 @@ from test_runtime_environment import ENTRYPOINT, RUNTIME_SRC, _launcher, _render
 CATALOG = {"providers": {"lab-vllm": {"adapter": "openai_compatible", "base_url": "http://10.0.0.5:8000/v1",
                                       "auth": "none"},
                          "openrouter": {"adapter": "openrouter", "auth": "secret",
-                                        "secret_ref": "env:OPENROUTER_API_KEY"}},
+                                        "secret_ref": "env:VEXA_MODEL_SECRET_OPENROUTER"}},
            "models": [{"id": "qwen3-32b", "display_name": "Qwen 3 32B (self-hosted)",
                        "provider": "lab-vllm", "model": "Qwen/Qwen3-32B", "default": True},
                       {"id": "or-sonnet", "display_name": "Claude Sonnet via OpenRouter",
@@ -54,7 +54,7 @@ def test_agent_api_inherits_the_catalog_and_does_not_override_it():
 
 def test_neither_the_catalog_nor_a_catalog_secret_reaches_the_runtime():
     _cmd, inherited = _rendered_programs()["runtime"]
-    inherited = {**inherited, "OPENROUTER_API_KEY": "a-catalog-secret", "PATH": "/usr/bin",
+    inherited = {**inherited, "VEXA_MODEL_SECRET_OPENROUTER": "a-catalog-secret", "PATH": "/usr/bin",
                  "HOME": "/root", "PYTHONPATH": str(RUNTIME_SRC)}
     env = _launcher().runtime_environment(inherited, str(RUNTIME_SRC))
     assert "VEXA_MODEL_CATALOG" not in env

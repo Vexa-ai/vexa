@@ -39,7 +39,7 @@ class OpenRouterAdapter:
         if harness not in ENDPOINTS:
             problems.append(f"'harness' must be one of {sorted(ENDPOINTS)}")
         if common.auth_of(provider, default="secret") != "secret" or not provider.get("secret_ref"):
-            problems.append("OpenRouter needs a key: set auth: secret and secret_ref: env:NAME")
+            problems.append("OpenRouter needs a key: set auth: secret and secret_ref: env:VEXA_MODEL_SECRET_<NAME>")
         if harness == "claude-code" and (provider.get("extra_body")
                                          or any(m.get("extra_body") for m in models)):
             problems.append("'extra_body' reaches only the openai-agent harness; this provider "

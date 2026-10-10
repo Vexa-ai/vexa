@@ -1,6 +1,6 @@
 # ADR 0043 — Model choice: an operator-declared catalog behind a provider port, picked per chat
 
-**Status:** proposed · 2026-10-10 · for v0.13.2 ([#1796](https://github.com/Vexa-ai/vexa/issues/1796)) ·
+**Status:** accepted · 2026-10-10 · for v0.13.2 ([#1796](https://github.com/Vexa-ai/vexa/issues/1796)) ·
 applies P4, P5, P14, P18, P20 and P23 · keeps the route invariants of
 [#1783](https://github.com/Vexa-ai/vexa/issues/1783)
 
@@ -57,8 +57,11 @@ The route itself was already decided in one place: `dispatch.overlay_model_confi
    - **models**, each with a catalog id, a display name, the id at the provider, capabilities,
      `access` (`everyone` or `admins`) and at most one `default`.
 
-   A credential is only ever `secret_ref: env:NAME`: a variable in agent-api's environment, filled
-   from the deployment's secret store (Helm `secretKeyRef`, compose `.env`).
+   A credential is only ever `secret_ref: env:VEXA_MODEL_SECRET_<NAME>`: a variable in agent-api's
+   environment, filled from the deployment's secret store (Helm `models.catalogSecrets`, each from a
+   Secret the operator names; compose `.env`). The prefix keeps a catalog from naming agent-api's own
+   secrets, and the Helm chart refuses any other name. These operator-named variables sit outside
+   `gate:config-contract`'s declared keys: the prefix is their contract.
 
    agent-api refuses a catalog **whole, at boot**, and names every problem without quoting a value:
    - an unknown adapter;

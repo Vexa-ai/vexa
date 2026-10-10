@@ -31,7 +31,7 @@ from tests.model_catalogs import ENV, EXAMPLE
 
 REPO = Path(__file__).resolve().parents[3]
 
-OPERATOR_KEY = ENV["OPENROUTER_API_KEY"]
+OPERATOR_KEY = ENV["VEXA_MODEL_SECRET_OPENROUTER"]
 PERSON_KEY = "sk-person-own-key"
 DEPLOYMENT_SECRETS = ("deployment-oauth", "deployment-llm-key", "deployment-anthropic-token")
 DEPLOYMENT_QWEN = "http://192.0.2.10:8001/v1"
@@ -132,7 +132,7 @@ def _turn(monkeypatch, tmp_path, worker: dict) -> list[dict]:
 
 def _no_foreign_credential(worker: dict, *, allowed: tuple[str, ...] = ()) -> None:
     values = set(worker.values())
-    for secret in DEPLOYMENT_SECRETS + (OPERATOR_KEY, PERSON_KEY, ENV["ANTHROPIC_DIRECT_KEY"]):
+    for secret in DEPLOYMENT_SECRETS + (OPERATOR_KEY, PERSON_KEY, ENV["VEXA_MODEL_SECRET_ANTHROPIC"]):
         if secret not in allowed:
             assert secret not in values, f"{secret!r} reached a route it does not belong to"
 
@@ -205,12 +205,12 @@ def test_the_subscription_entry_sends_the_subscription_to_anthropic_and_nowhere_
 def test_an_anthropic_api_key_goes_as_the_api_key_to_anthropic(monkeypatch, tmp_path):
     decl = json.loads(json.dumps(EXAMPLE))
     decl["providers"]["anthropic"] = {"adapter": "anthropic", "auth": "secret",
-                                      "secret_ref": "env:ANTHROPIC_DIRECT_KEY"}
+                                      "secret_ref": "env:VEXA_MODEL_SECRET_ANTHROPIC"}
     worker = _worker(monkeypatch, tmp_path, choice="claude", catalog=parse(json.dumps(decl), ENV))
     assert worker["ANTHROPIC_BASE_URL"] == "https://api.anthropic.com"
-    assert worker["ANTHROPIC_API_KEY"] == ENV["ANTHROPIC_DIRECT_KEY"]
+    assert worker["ANTHROPIC_API_KEY"] == ENV["VEXA_MODEL_SECRET_ANTHROPIC"]
     assert worker["ANTHROPIC_AUTH_TOKEN"] == "" and worker["CLAUDE_CODE_OAUTH_TOKEN"] == ""
-    _no_foreign_credential(worker, allowed=(ENV["ANTHROPIC_DIRECT_KEY"],))
+    _no_foreign_credential(worker, allowed=(ENV["VEXA_MODEL_SECRET_ANTHROPIC"],))
 
 
 # ── 2. the person's key goes to the person's endpoint, and nothing else does ────────────────────

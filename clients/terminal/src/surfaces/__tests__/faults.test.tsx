@@ -57,7 +57,7 @@ const KINDS: [Fault, string][] = [
      detail: "My endpoint runs on your own endpoint, and you have not set one." },
    "Model provider · model not set up for you"],
   [{ source: "model-provider", kind: "credential_missing", status: null, provider: "openrouter", model: "or-sonnet",
-     detail: "The credential for openrouter (env:OPENROUTER_API_KEY) is not set on this deployment." },
+     detail: "The credential for openrouter (env:VEXA_MODEL_SECRET_OPENROUTER) is not set on this deployment." },
    "Model provider · provider credential not set"],
   [{ source: "model-provider", kind: "endpoint_refused", status: null, provider: "own", model: "mine",
      detail: "Your endpoint is not allowed on this deployment." },

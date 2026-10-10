@@ -55,10 +55,10 @@ def test_openai_compatible_self_hosted_qwen():
 
 def test_openai_compatible_with_a_secret_and_a_model_level_extra_body():
     decl = json.loads(json.dumps(EXAMPLE))
-    decl["providers"]["lab-vllm"].update(auth="secret", secret_ref="env:LAB_TOKEN")
+    decl["providers"]["lab-vllm"].update(auth="secret", secret_ref="env:VEXA_MODEL_SECRET_LAB")
     decl["models"][0]["extra_body"] = {"top_p": 0.9}
-    r = _catalog(decl, {**ENV, "LAB_TOKEN": "lab-secret"}).route("qwen3-32b", _ctx(
-        env={**ENV, "LAB_TOKEN": "lab-secret"}), admin=False)
+    r = _catalog(decl, {**ENV, "VEXA_MODEL_SECRET_LAB": "lab-secret"}).route("qwen3-32b", _ctx(
+        env={**ENV, "VEXA_MODEL_SECRET_LAB": "lab-secret"}), admin=False)
     assert (r.credential_source, r.credential, r.auth_header) == (CRED_SECRET, "lab-secret", "bearer")
     assert json.loads(r.extra_body) == {"chat_template_kwargs": {"enable_thinking": False},
                                         "top_p": 0.9}
@@ -74,7 +74,7 @@ def test_openrouter_on_whichever_harness_the_provider_declares(harness, base):
     or_sonnet.pop("capabilities", None)
     r = _catalog(decl).route("or-sonnet", _ctx(), admin=True)
     assert (r.harness, r.base_url, r.credential_source) == (harness, base, CRED_SECRET)
-    assert r.credential == ENV["OPENROUTER_API_KEY"] and r.auth_header == "bearer"
+    assert r.credential == ENV["VEXA_MODEL_SECRET_OPENROUTER"] and r.auth_header == "bearer"
     assert r.provider_model == "anthropic/claude-sonnet-4.5"
 
 
@@ -87,10 +87,10 @@ def test_anthropic_on_the_deployments_subscription_names_no_endpoint_and_no_key(
 def test_anthropic_by_api_key_sends_it_as_the_api_key_header():
     decl = json.loads(json.dumps(EXAMPLE))
     decl["providers"]["anthropic"] = {"adapter": "anthropic", "auth": "secret",
-                                      "secret_ref": "env:ANTHROPIC_DIRECT_KEY"}
+                                      "secret_ref": "env:VEXA_MODEL_SECRET_ANTHROPIC"}
     r = _catalog(decl).route("claude", _ctx(), admin=False)
     assert (r.base_url, r.credential, r.auth_header) == ("https://api.anthropic.com",
-                                                         ENV["ANTHROPIC_DIRECT_KEY"], "x-api-key")
+                                                         ENV["VEXA_MODEL_SECRET_ANTHROPIC"], "x-api-key")
 
 
 def test_custom_is_the_persons_own_endpoint_key_model_body_and_harness():
@@ -130,12 +130,12 @@ def test_a_missing_secret_is_a_typed_refusal_naming_the_reference_not_the_value(
     fault = exc.value.as_dict()
     assert (fault["source"], fault["kind"], fault["model"], fault["provider"]) == (
         "model-provider", CREDENTIAL_MISSING, "or-sonnet", "openrouter")
-    assert "env:OPENROUTER_API_KEY" in fault["detail"]
+    assert "env:VEXA_MODEL_SECRET_OPENROUTER" in fault["detail"]
 
 
 def test_a_route_never_shows_its_credential_in_a_repr():
     r = _catalog().route("or-sonnet", _ctx(), admin=True)
-    assert ENV["OPENROUTER_API_KEY"] not in repr(r)
+    assert ENV["VEXA_MODEL_SECRET_OPENROUTER"] not in repr(r)
 
 
 # ── per person: which entry ─────────────────────────────────────────────────────────────────────

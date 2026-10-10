@@ -211,7 +211,8 @@ models:
   # The model catalog (VEXA_MODEL_CATALOG, ADR-0043; docs: https://docs.vexa.ai/model-catalog): the
   # models people pick per chat in the terminal. Empty = no catalog — every turn runs on agentModel
   # and each person's Settings → Models, as before. A credential is never written here: a provider
-  # names a variable (secret_ref: env:NAME) and catalogSecrets delivers it from a Secret.
+  # names a variable (secret_ref: env:VEXA_MODEL_SECRET_<NAME>, the only names allowed) and
+  # catalogSecrets delivers it from a Secret you name.
   # Two worked examples, a self-hosted Qwen 3 and one OpenRouter model:
   #
   #   catalog:
@@ -224,7 +225,7 @@ models:
   #       openrouter:
   #         adapter: openrouter
   #         auth: secret
-  #         secret_ref: env:OPENROUTER_API_KEY
+  #         secret_ref: env:VEXA_MODEL_SECRET_OPENROUTER
   #     models:
   #       - id: qwen3-32b
   #         display_name: Qwen 3 32B (self-hosted)
@@ -238,8 +239,8 @@ models:
   #         model: anthropic/claude-sonnet-4.5
   #         access: admins
   #   catalogSecrets:
-  #     - env: OPENROUTER_API_KEY     # the name secret_ref uses
-  #       secretName: model-keys      # default: the chart's own Secret
+  #     - env: VEXA_MODEL_SECRET_OPENROUTER     # the name secret_ref uses
+  #       secretName: model-keys      # required: the Secret holding the key (never the admin-token Secret)
   #       key: openrouter             # default: the env name
   catalog: {}
   catalogSecrets: []

@@ -13,7 +13,7 @@
     "openrouter": {
       "adapter": "openrouter",
       "auth": "secret",
-      "secret_ref": "env:OPENROUTER_API_KEY"
+      "secret_ref": "env:VEXA_MODEL_SECRET_OPENROUTER"
     },
     "anthropic": {
       "adapter": "anthropic",

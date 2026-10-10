@@ -165,7 +165,7 @@ export VEXA_BOT_API_KEY="${VEXA_BOT_API_KEY:-}"
 export VEXA_AGENT_MODEL="${VEXA_AGENT_MODEL:-}"
 # The model catalog (ADR-0043): the models people pick per chat, one JSON object on one line of .env,
 # exactly as in compose. agent-api inherits it from supervisord and refuses a bad one at boot. A
-# provider's secret_ref (env:NAME) names a variable set in .env too, which agent-api inherits the same
+# provider's secret_ref (env:VEXA_MODEL_SECRET_<NAME>) names a variable set in .env too, which agent-api inherits the same
 # way; the runtime starts from a cleared environment, so no worker or bot sees either.
 export VEXA_MODEL_CATALOG="${VEXA_MODEL_CATALOG:-}"
 # HOST_CLAUDE_CREDENTIALS (config.v1 `model_inference`): path of a claude credentials JSON as seen

@@ -112,9 +112,9 @@
           ]
         },
         "secret_ref": {
-          "description": "A REFERENCE to the credential, never the value: env:NAME names a variable in agent-api's environment, delivered from the deployment's secret store.",
+          "description": "A REFERENCE to the credential, never the value: env:VEXA_MODEL_SECRET_<NAME> names a variable in agent-api's environment, delivered from the deployment's secret store. Only that prefix: a catalog can never name one of agent-api's own secrets.",
           "type": "string",
-          "pattern": "^env:[A-Z][A-Z0-9_]{0,127}$"
+          "pattern": "^env:VEXA_MODEL_SECRET_[A-Z0-9_]{1,110}$"
         },
         "extra_body": {
           "$ref": "#/$defs/ExtraBody"
