@@ -62,8 +62,8 @@ function StatusLine({ status }: { status: TurnStatus }) {
   const quiet = !alert && secs >= 30;
   const color = alert ? "var(--accent)" : "var(--t3)";
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4, fontSize: 12, color, fontFamily: "var(--mono)" }}>
-      <span className="vx-op-spin" style={{ width: 11, height: 11, borderRadius: "50%", border: "1.5px solid var(--line2)", borderTopColor: color, flex: "none" }} />
+    <div className="mt-1 t-xs f-mono" style={{ display: "flex", alignItems: "center", gap: 8, color }}>
+      <span className="vx-op-spin r-full" style={{ width: 11, height: 11, border: "1.5px solid var(--line2)", borderTopColor: color, flex: "none" }} />
       <span data-turn-status>{quiet ? "still working" : PHASE_LABEL[status.phase]}{secs >= 2 ? ` · ${secs}s` : ""}{alert ? "" : "…"}</span>
     </div>
   );
@@ -73,7 +73,7 @@ export const opIcon: Record<string, string> = { read: "file", search: "search", 
 
 /** render [[wikilinks]] in agent/insight prose as accented spans (click wiring lives in the entity rail) */
 function linkify(text: string): ReactNode[] {
-  return text.split(/(\[\[[^\]]+\]\])/).map((p, i) => (p.startsWith("[[") ? <span key={i} style={{ color: "var(--blue)" }}>{p}</span> : <span key={i}>{p}</span>));
+  return text.split(/(\[\[[^\]]+\]\])/).map((p, i) => (p.startsWith("[[") ? <span key={i} className="c-info">{p}</span> : <span key={i}>{p}</span>));
 }
 
 /** A finished turn's text, with its SOURCES as a citation list (guidelines §4.17): the structured
@@ -94,11 +94,11 @@ function OpRow({ op }: { op: Op }) {
   const running = op.status === "running";
   const color = op.status === "error" ? "var(--danger)" : op.status === "done" ? "var(--green)" : "var(--accent)";
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, flex: "0 1 auto", fontFamily: "var(--mono)", fontSize: 11.5, lineHeight: 1.5, color: running ? "var(--t1)" : "var(--t2)" }}>
+    <div className="f-mono t-xs lh-snug" style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, flex: "0 1 auto", color: running ? "var(--t1)" : "var(--t2)" }}>
       <span style={{ width: 13, flex: "none", display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
         {op.status === "done" ? <Icon name="check" size={13} style={{ color }} />
           : op.status === "error" ? <Icon name="x" size={13} style={{ color }} />
-          : <span className="vx-op-spin" style={{ width: 11, height: 11, borderRadius: "50%", border: "1.5px solid var(--line2)", borderTopColor: color, flex: "none" }} />}
+          : <span className="vx-op-spin r-full" style={{ width: 11, height: 11, border: "1.5px solid var(--line2)", borderTopColor: color, flex: "none" }} />}
       </span>
       <Icon name={op.icon} size={12} style={{ color: "var(--t3)", flex: "none" }} />
       <span style={{ minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{op.label}</span>
@@ -116,8 +116,8 @@ function FileChip({ path }: { path: string }) {
 // ── the act a stopped turn offers — one control, in the bubble it belongs to (Vexa-ai/vexa#1622) ──
 function StoppedLine({ stopped, onContinue }: { stopped: TurnStopped; onContinue?: () => void }) {
   return (
-    <div style={{ marginTop: 9, display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-      <span style={{ fontSize: 11, color: "var(--t2)", fontFamily: "var(--mono)", display: "inline-flex", alignItems: "center", gap: 6, background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 6, padding: "3px 8px" }}>
+    <div className="mt-2" style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+      <span className="t-xs c-2 f-mono bg-3 bd r-md pt-0_5 pr-2 pb-0_5 pl-2" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
         <Icon name="zap" size={12} style={{ color: "var(--accent)" }} />{stopped.line}
       </span>
       {stopped.act && onContinue && (
@@ -125,7 +125,7 @@ function StoppedLine({ stopped, onContinue }: { stopped: TurnStopped; onContinue
           data-continue-act
           onClick={onContinue}
           title={stopped.act.instruction}
-          style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, fontFamily: "var(--mono)", color: "var(--blue)", background: "var(--bluebg)", border: "none", borderRadius: 6, padding: "3px 10px", cursor: "pointer" }}>
+          className="t-xs f-mono c-info bg-info-tint bd-none r-md pt-0_5 pr-2 pb-0_5 pl-2" style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
           {stopped.act.label}
         </button>
       )}
@@ -144,15 +144,15 @@ export function FaultBlock({ failed, onRetry }: { failed: TurnFault; onRetry?: (
   const f = failed.fault;
   return (
     <div role="alert" data-fault-source={f.source} data-fault-kind={f.kind}
-      style={{ marginTop: 9, maxWidth: 680, border: "1px solid var(--danger)", background: "var(--dangerbg)", borderRadius: 8, padding: "8px 11px", fontSize: 12.5, lineHeight: 1.5, color: "var(--t1)" }}>
-      <div data-fault-headline style={{ display: "flex", alignItems: "center", gap: 7, fontWeight: 650, color: "var(--danger)" }}>
+      className="mt-2 bd-danger bg-danger-tint r-md pt-2 pr-3 pb-2 pl-3 t-xs lh-snug c-1" style={{ maxWidth: 680 }}>
+      <div data-fault-headline className="fw-600 c-danger" style={{ display: "flex", alignItems: "center", gap: 7 }}>
         <Icon name="x" size={12} />{faultHeadline(f)}
       </div>
-      {f.detail && <div data-fault-detail style={{ marginTop: 3 }}>{sentence(f.detail)}</div>}
-      {f.remedy && <div data-fault-remedy style={{ marginTop: 3, color: "var(--t2)" }}>{f.remedy}</div>}
+      {f.detail && <div data-fault-detail className="mt-0_5">{sentence(f.detail)}</div>}
+      {f.remedy && <div data-fault-remedy className="mt-0_5 c-2">{f.remedy}</div>}
       {failed.retry && onRetry && (
         <button data-fault-retry onClick={onRetry}
-          style={{ marginTop: 7, display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, fontFamily: "var(--mono)", color: "var(--blue)", background: "var(--bluebg)", border: "none", borderRadius: 6, padding: "3px 10px", cursor: "pointer" }}>
+          className="mt-1_5 t-xs f-mono c-info bg-info-tint bd-none r-md pt-0_5 pr-2 pb-0_5 pl-2" style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
           Retry
         </button>
       )}
@@ -176,26 +176,26 @@ export function Conversation({ turns, busy, empty, onContinue }: {
       {turns.map((t, i) => {
         if (t.role === "user") {
           const queued = t.id.startsWith("q-");   // typed mid-turn; fires when the current turn ends
-          return <div key={t.id} style={{ marginBottom: 16 }}>
+          return <div key={t.id} className="mb-4">
             <div style={{ ...bubble, opacity: queued ? 0.55 : 1 }}>{t.text}</div>
-            {queued && <div style={{ textAlign: "right", fontSize: 10, color: "var(--t3)", fontFamily: "var(--mono)", marginTop: 3 }}>queued</div>}
+            {queued && <div className="t-xs c-3 f-mono mt-0_5" style={{ textAlign: "right" }}>queued</div>}
           </div>;
         }
         if (t.role === "insight") return (
-          <div key={t.id} style={{ display: "flex", gap: 10, marginBottom: 14 }}>
+          <div key={t.id} className="mb-3" style={{ display: "flex", gap: 10 }}>
             <Icon name="spark" size={15} style={{ color: "var(--accent)", marginTop: 1, flex: "none" }} />
-            <div>{t.t && <span style={{ fontSize: 11, color: "var(--t3)", fontFamily: "var(--mono)" }}>{t.t}</span>}
-              <div style={{ fontSize: 13.5, color: "var(--t1)", lineHeight: 1.55, marginTop: 2 }}>{linkify(t.text)}</div></div>
+            <div>{t.t && <span className="t-xs c-3 f-mono">{t.t}</span>}
+              <div className="t-sm c-1 lh-normal mt-0_5">{linkify(t.text)}</div></div>
           </div>
         );
         const last = i === turns.length - 1;
         return (
-          <div key={t.id} style={{ marginBottom: 18 }}>
+          <div key={t.id} className="mb-4">
             {t.ops.length > 0 && (
               // ONE line, updated in place: the CURRENT (last) op + a step count — a long tool run
               // must not grow the transcript vertically (founder ruling 2026-08-22).
               // A long step label ellipsizes; it never widens the conversation (guidelines §3.4).
-              <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, margin: "0 0 10px 5px" }}>
+              <div className="mt-0 mr-0 mb-2 ml-1" style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
                 <OpRow op={t.ops[t.ops.length - 1]} />
                 {/* F66: the count ticks from the FIRST step. It used to appear only at two, so the
                     one number that proves a long turn is moving was hidden exactly when the reader
@@ -212,7 +212,7 @@ export function Conversation({ turns, busy, empty, onContinue }: {
                 })()}
               </div>
             )}
-            {t.text && <div style={{ fontSize: 13.5, color: "var(--t1)", lineHeight: 1.6, maxWidth: 680 }}>
+            {t.text && <div className="t-sm c-1 lh-normal" style={{ maxWidth: 680 }}>
               {/* Mintlify-grade rendering in the OUTPUT too: finished turns compile as MDX (Note/Card/
                   Steps/Tabs + wikilinks, safe plain-markdown fallback); the still-streaming turn uses the
                   light parser and upgrades on completion. */}
@@ -229,7 +229,7 @@ export function Conversation({ turns, busy, empty, onContinue }: {
             })()}
             {busy && last && (t.status
               ? <StatusLine status={t.status} />
-              : (!t.text && !t.failed && <div style={{ fontSize: 13.5, color: "var(--t3)" }}>…</div>))}
+              : (!t.text && !t.failed && <div className="t-sm c-3">…</div>))}
             {t.commit && (
               <div className="vx-turn-meta"><Badge tone="success"><Icon name="git" size={12} />Committed · <code className="vx-tabular">{t.commit.slice(0, 7)}</code></Badge></div>
             )}
@@ -250,11 +250,11 @@ export function AgentWindow({ top, scrollRef, children, composer, actions }: {
   top?: ReactNode; scrollRef?: RefObject<HTMLDivElement | null>; children: ReactNode; composer: ReactNode; actions?: ReactNode;
 }) {
   return (
-    <div style={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0, background: "var(--rail)" }}>
+    <div className="bg-1" style={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
       {top}
-      <div ref={scrollRef} style={{ flex: 1, overflowY: "auto", minHeight: 0, padding: "18px 22px" }}>{children}</div>
-      <div style={{ borderTop: "1px solid var(--line)", padding: "12px 22px 14px", flex: "none" }}>
-        <div style={{ maxWidth: 760, margin: "0 auto", display: "flex", flexDirection: "column", gap: 9 }}>
+      <div ref={scrollRef} className="pt-4 pr-5 pb-4 pl-5" style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>{children}</div>
+      <div className="bd-t pt-3 pr-5 pb-3 pl-5" style={{ flex: "none" }}>
+        <div className="mt-0 mr-auto mb-0 ml-auto" style={{ maxWidth: 760, display: "flex", flexDirection: "column", gap: 9 }}>
           {composer}
           {actions}
         </div>

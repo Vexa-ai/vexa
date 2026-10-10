@@ -33,30 +33,21 @@ export function ServiceDenialPanel({
       data-testid="service-denial-panel"
       data-denial-code={code}
       data-denial-reason={reason}
-      style={{
-        display: "flex", flexDirection: "column", gap: 5,
-        marginTop: 6, padding: "8px 10px", borderRadius: 7,
-        background: "var(--warnbg)",
-        border: `1px solid color-mix(in srgb, ${fg} 40%, transparent)`,
-      }}
+      className="mt-1_5 pt-2 pr-2 pb-2 pl-2 r-md bg-warning-tint" style={{ display: "flex", flexDirection: "column", gap: 5, border: `1px solid color-mix(in srgb, ${fg} 40%, transparent)` }}
     >
-      <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 600, color: fg, lineHeight: 1.45 }}>
+      <span className="t-xs fw-600 lh-snug" style={{ display: "flex", alignItems: "center", gap: 6, color: fg }}>
         <Icon name="alert" size={12} style={{ color: fg, flex: "none" }} />
         {headline}
       </span>
-      <span style={{ fontSize: 11, color: "var(--t3)", fontFamily: "var(--mono, monospace)" }}>{detail}</span>
+      <span className="t-xs c-3 f-mono">{detail}</span>
       {(actionUrl || onRetry) && (
-        <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 2, flexWrap: "wrap" }}>
+        <div className="mt-0_5" style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
           {actionUrl && (
             <a
               href={actionUrl}
               target="_blank"
               rel="noreferrer"
-              style={{
-                background: "var(--accent)", color: "var(--on-accent)", borderRadius: 6,
-                padding: "4px 10px", fontSize: 11.5, fontWeight: 600, textDecoration: "none",
-                wordBreak: "break-all",
-              }}
+              className="bg-accent c-on-accent r-md pt-1 pr-2 pb-1 pl-2 t-xs fw-600" style={{ textDecoration: "none", wordBreak: "break-all" }}
             >
               {actionUrl}
             </a>
@@ -65,10 +56,7 @@ export function ServiceDenialPanel({
             <button
               type="button"
               onClick={onRetry}
-              style={{
-                background: "transparent", color: "var(--t2)", border: "1px solid var(--line2)",
-                borderRadius: 6, padding: "4px 10px", fontSize: 11.5, fontWeight: 600, cursor: "pointer",
-              }}
+              className="bg-none c-2 bd-strong r-md pt-1 pr-2 pb-1 pl-2 t-xs fw-600" style={{ cursor: "pointer" }}
             >
               Try again
             </button>

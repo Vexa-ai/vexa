@@ -233,7 +233,7 @@ function Act(p: {
   if (p.armed === p.id) {
     return (
       <span data-ws-confirm={p.id} style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-        <span style={{ ...ty.meta, color: "var(--t2)" }}>{p.sentence}</span>
+        <span className="c-2" style={{ ...ty.meta }}>{p.sentence}</span>
         <button data-ws-act-confirm={p.id} disabled={p.busy} onClick={p.onRun}
           className="vx-btn" data-variant={p.danger ? "danger" : "secondary"} aria-busy={p.busy || undefined}>
           {p.busy ? "…" : "Confirm"}
@@ -255,11 +255,9 @@ function Act(p: {
 function CommitRow(p: { c: GitCommit; open: boolean; diff: string | null; onOpen: () => void }) {
   const files = p.c.files ?? [];
   return (
-    <div data-ws-commit={p.c.sha} style={{ marginBottom: 3 }}>
+    <div data-ws-commit={p.c.sha} className="mb-0_5">
       <button onClick={p.onOpen} title={`${files.length} file(s)`}
-        style={{ ...ty.body, display: "block", width: "100%", textAlign: "left",
-                 background: p.open ? surface.raisedHi : "transparent", border: "none",
-                 borderRadius: 6, padding: "3px 5px", cursor: "pointer", color: "var(--t1)" }}>
+        className="bd-none r-md pt-0_5 pr-1 pb-0_5 pl-1 c-1" style={{ ...ty.body, display: "block", width: "100%", textAlign: "left", background: p.open ? surface.raisedHi : "transparent", cursor: "pointer" }}>
         <span style={{ display: "flex", gap: 7, alignItems: "baseline", minWidth: 0 }}>
           <span style={{ ...ty.mono, flex: "none" }}>{p.c.sha}</span>
           <span style={{ flex: "1 1 0%", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.c.msg}</span>
@@ -272,9 +270,7 @@ function CommitRow(p: { c: GitCommit; open: boolean; diff: string | null; onOpen
         )}
       </button>
       {p.open && (
-        <pre data-ws-diff style={{ ...ty.mono, whiteSpace: "pre-wrap", wordBreak: "break-word", margin: "3px 0 8px",
-                                   padding: 8, borderRadius: 6, background: "var(--bg)", border: "1px solid var(--line)",
-                                   color: "var(--t2)", maxHeight: 260, overflow: "auto" }}>
+        <pre data-ws-diff className="mt-0_5 mr-0 mb-2 ml-0 p-2 r-md bg-0 bd c-2" style={{ ...ty.mono, whiteSpace: "pre-wrap", wordBreak: "break-word", maxHeight: 260, overflow: "auto" }}>
           {p.diff ?? "…"}
         </pre>
       )}
@@ -301,7 +297,7 @@ function Section(p: { id: string; name: string; first?: boolean; children: React
 function Avatars(p: { people: { key: string; name: string; you: boolean }[] }) {
   if (!p.people.length) return null;
   return (
-    <span data-ws-avatars aria-hidden style={{ display: "inline-flex", flex: "none", paddingLeft: 6, alignSelf: "center" }}>
+    <span data-ws-avatars aria-hidden className="pl-1_5" style={{ display: "inline-flex", flex: "none", alignSelf: "center" }}>
       {p.people.map((a) => (
         <span key={a.key} data-ws-avatar={a.key} title={a.name} style={avatarS}>{initialsOf(a.name)}</span>
       ))}
@@ -394,7 +390,7 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string; title?: s
   if (failed) {
     return (
       <div data-ws-readme data-ws-state="failed" role="alert" style={{ ...box, borderColor: "var(--danger)" }}>
-        <div style={{ ...ty.body, color: "var(--danger)" }}>Could not read this workspace: {failed}</div>
+        <div className="c-danger" style={{ ...ty.body }}>Could not read this workspace: {failed}</div>
       </div>
     );
   }
@@ -408,9 +404,9 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string; title?: s
         aria-label="Reading this workspace">
         <div style={{ ...stripS }}>
           <span style={{ ...barS(96), height: 8, opacity: 0.7 }} />
-          <span style={{ ...barS("48%"), height: 15, margin: "3px 0 6px" }} />
+          <span className="mt-0_5 mr-0 mb-1_5 ml-0" style={{ ...barS("48%"), height: 15 }} />
           <span style={barS("72%")} />
-          <span style={{ ...barS("54%"), marginTop: 6 }} />
+          <span className="mt-1_5" style={{ ...barS("54%") }} />
         </div>
       </div>
     );
@@ -517,7 +513,7 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string; title?: s
           <span style={saidS}>
             {people && <span data-ws-line="where">{people}</span>}
             {pageCount(facts.pages) && <>
-              {people && <span aria-hidden style={{ color: "var(--t3)" }}>{" · "}</span>}
+              {people && <span aria-hidden className="c-3">{" · "}</span>}
               <span data-ws-pages>{pageCount(facts.pages)}</span>
             </>}
             {pill && <>{" "}<span data-ws-pill style={pillS}>
@@ -529,7 +525,7 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string; title?: s
               (#1632). History is the disclosure — it opens the sections #1628 built, it is the only
               one a reader gets, and it is the icon alone: it is the act nobody needs a word for,
               and its name is in `aria-label` and the tooltip where a word costs no room. */}
-          <span data-ws-acts style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap", flex: "none", marginLeft: "auto" }}>
+          <span data-ws-acts className="ml-auto" style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap", flex: "none" }}>
             {acts.map((a) => {
               const isHistory = a.id === "history";
               return (
@@ -589,12 +585,12 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string; title?: s
 
       <Section id="people" name="People" first>
           {facts.kind === "desk" && (
-            <div data-ws-members="desk" style={{ ...ty.body, color: "var(--t2)", lineHeight: 1.5 }}>
+            <div data-ws-members="desk" className="c-2 lh-snug" style={{ ...ty.body }}>
               Its owner writes it. The company&apos;s agents read it for meetings the owner is in.
             </div>
           )}
           {facts.kind === "global" && (
-            <div data-ws-members="global" style={{ ...ty.body, color: "var(--t2)", lineHeight: 1.5 }}>
+            <div data-ws-members="global" className="c-2 lh-snug" style={{ ...ty.body }}>
               Everybody here reads it. The administrator writes it, plus any editor they name.
             </div>
           )}
@@ -627,7 +623,7 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string; title?: s
                     </div>
                   ))
                 : (
-                  <div style={{ ...ty.body, color: "var(--t2)", lineHeight: 1.5 }}>
+                  <div className="c-2 lh-snug" style={{ ...ty.body }}>
                     You are {facts.myRole ? `a ${roleLabel(facts.myRole)}` : "a member"} here. The full
                     member list is shown to contributors and owners.
                   </div>
@@ -640,7 +636,7 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string; title?: s
                   agent asks for, and there is nothing this page could ask that it would not ask
                   better — the roles need a sentence each, and a select box has nowhere to put one. */}
               {owner && (
-                <div style={{ marginTop: 7 }}>
+                <div className="mt-1_5">
                   <button data-ws-act="member-add" className="vx-btn" data-variant="secondary"
                     onClick={() => { postIntent({ kind: "member_add", workspace: facts.slug }); }}>
                     Add a member…
@@ -663,7 +659,7 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string; title?: s
       {facts.kind === "group" && (
         <Section id="meetings" name="Meetings">
           {facts.meetings.length === 0 ? (
-            <div data-ws-meetings="none" style={{ ...ty.body, color: "var(--t2)", lineHeight: 1.5 }}>
+            <div data-ws-meetings="none" className="c-2 lh-snug" style={{ ...ty.body }}>
               No meetings belong to this workspace yet. A bot sent from a chat here joins as this
               group&apos;s, and everyone in it sees the call while it runs.
             </div>
@@ -674,7 +670,7 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string; title?: s
                   <Icon name="cal" size={12} style={{ color: "var(--t3)" }} />
                   <span style={{ ...valS, flex: "0 1 auto" }}>{m.title}</span>
                   {m.live && (
-                    <span data-ws-meeting-live style={{ ...ty.meta, flex: "none", color: "var(--t1)" }}>
+                    <span data-ws-meeting-live className="c-1" style={{ ...ty.meta, flex: "none" }}>
                       live now
                     </span>
                   )}
@@ -696,13 +692,13 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string; title?: s
           that simply has no remote. The red line now fires only on a failure and says what failed. */}
       <Section id="repo" name="Repo">
           {facts.remoteFailure && (
-            <div data-ws-github-failed role="alert" style={{ ...ty.body, color: "var(--danger)", lineHeight: 1.5 }}>
+            <div data-ws-github-failed role="alert" className="c-danger lh-snug" style={{ ...ty.body }}>
               Could not read the GitHub state: {facts.remoteFailure}
             </div>
           )}
           {!facts.remoteFailure && remote && !remote.has_home && (
             <div data-ws-github="unattached">
-              <div style={{ ...ty.body, color: "var(--t2)", lineHeight: 1.5 }}>No repo attached.</div>
+              <div className="c-2 lh-snug" style={{ ...ty.body }}>No repo attached.</div>
               {/* The affordance is the EXISTING flow, opened where the reader already is — and it is
                   offered only where it can work. The company layer is mounted read-only into every
                   worker and is not one of `attachTargets`' targets, so an "Attach a repo…" button on
@@ -713,7 +709,7 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string; title?: s
                 </button>
               )}
               {owner && facts.kind === "global" && (
-                <div style={{ ...ty.meta, marginTop: 4 }}>
+                <div className="mt-1" style={{ ...ty.meta }}>
                   The company layer is not attached through this flow — it is mounted read-only into every worker.
                 </div>
               )}
@@ -722,16 +718,16 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string; title?: s
           {!facts.remoteFailure && remote?.has_home && (
             <>
               <Fact k="remote" name="Remote">
-                <span style={{ ...ty.mono, color: "var(--t2)" }}>{remote.url ?? remote.remote}</span>
+                <span className="c-2" style={{ ...ty.mono }}>{remote.url ?? remote.remote}</span>
               </Fact>
               <Fact k="branch" name="Branch">
                 <span style={ty.mono}>{remote.branch ?? "—"}</span>
-                <span style={{ ...ty.meta, marginLeft: 8 }}>
+                <span className="ml-2" style={{ ...ty.meta }}>
                   {remote.tracked ? `${remote.ahead} ahead · ${remote.behind} behind` : "never fetched — ahead/behind unknown"}
                 </span>
               </Fact>
               {owner && (
-                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 7 }}>
+                <div className="mt-1_5" style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                   <button data-ws-act="sync" className="vx-btn" data-variant="secondary" onClick={() => void run(async () => {
                     const s = await gitRemoteStatus(sync(syncSlug));
                     setFacts({ ...facts, remote: s, remoteFailure: null });
@@ -767,7 +763,7 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string; title?: s
 
       {/* HISTORY — ten, then *more*, in both scopes (#1628 point 4). */}
       <Section id="history" name="History">
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
+          <div className="mb-1_5" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             <button data-ws-history-filter aria-pressed={thisPage}
               onClick={() => { setThisPage((v) => !v); setShown(HISTORY_PAGE); }}
               className="vx-btn vx-toggle" data-variant="secondary">
@@ -797,9 +793,9 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string; title?: s
 
       {/* THE RECEIPT of whatever was last done here, and everything that could not be read. Both are
           statements of fact and both live at the foot, where a person looks after acting. */}
-      {said && <div data-ws-said role="status" style={{ ...ty.meta, marginTop: 8, color: "var(--t2)" }}>{said}</div>}
+      {said && <div data-ws-said role="status" className="mt-2 c-2" style={{ ...ty.meta }}>{said}</div>}
       {facts.notes.map((n) => (
-        <div key={n} data-ws-note style={{ ...ty.meta, marginTop: 5, color: "var(--danger)" }}>{n}</div>
+        <div key={n} data-ws-note className="mt-1 c-danger" style={{ ...ty.meta }}>{n}</div>
       ))}
 
 

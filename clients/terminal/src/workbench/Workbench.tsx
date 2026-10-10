@@ -36,7 +36,7 @@ function ThemeToggle() {
   const day = theme === "light";
   return (
     <button onClick={toggle} title={day ? "Switch to dark mode" : "Switch to day mode"}
-      style={{ flex: "none", display: "flex", alignItems: "center", padding: 4, borderRadius: 6, background: "none", border: "none", color: "var(--t3)", cursor: "pointer" }}>
+      className="p-1 r-md bg-none bd-none c-3" style={{ flex: "none", display: "flex", alignItems: "center", cursor: "pointer" }}>
       <Icon name={day ? "moon" : "sun"} size={15} />
     </button>
   );
@@ -61,7 +61,7 @@ function TabHost(props: IDockviewPanelProps) {
     return () => d.dispose();
   }, [props.api]);
   useEffect(() => { if (active) layout.setActiveTab(kind ? { kind, params: params.p ?? {} } : null); }, [active, kind, layout, params.p]);
-  if (!Comp) return <div style={{ padding: 24, color: "var(--t3)", fontSize: 13 }}>Unknown tab kind: {kind}</div>;
+  if (!Comp) return <div className="p-6 c-3 t-sm">Unknown tab kind: {kind}</div>;
   return <Comp id={props.api.id} params={params.p ?? {}} active={active} />;
 }
 const dvComponents = { tab: TabHost };
@@ -124,8 +124,7 @@ function TabHeader(props: IDockviewPanelHeaderProps) {
         onClick={(e) => { e.stopPropagation(); if (pinned) layout.unpinTab(props.api.id); else layout.pinTab(props.api.id); }}
         onMouseEnter={(e) => { e.currentTarget.style.opacity = "1"; }}
         onMouseLeave={(e) => { e.currentTarget.style.opacity = pinned ? "1" : "0.45"; }}
-        style={{ display: "flex", alignItems: "center", marginRight: 5, cursor: "pointer",
-          color: pinned ? "var(--blue)" : "var(--t3)", opacity: pinned ? 1 : 0.45 }}>
+        className="mr-1" style={{ display: "flex", alignItems: "center", cursor: "pointer", color: pinned ? "var(--blue)" : "var(--t3)", opacity: pinned ? 1 : 0.45 }}>
         <Icon name="pin" size={11} />
       </span>
       <span className="dv-default-tab-content" style={{ fontStyle: preview ? "italic" : "normal" }}>{title}</span>
@@ -179,22 +178,22 @@ function LeftPane() {
   useEffect(() => { if (activeList === "files") markUpdatesSeen(newestRef.current || Math.floor(Date.now() / 1000)); }, [activeList]);
   const seg = (on: boolean): CSSProperties => ({ display: "flex", alignItems: "center", gap: 6, padding: "5px 9px", borderRadius: 7, fontSize: 12.5, cursor: "pointer", border: "none", color: on ? "var(--t1)" : "var(--t2)", background: on ? "var(--panel2)" : "transparent", flex: "none", whiteSpace: "nowrap" });
   return (
-    <div style={{ height: "100%", display: "flex", flexDirection: "column", background: "var(--sidebar)", borderRight: "1px solid var(--line)", minHeight: 0 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 9, padding: "12px 14px 8px", flex: "none" }}>
+    <div className="bg-1 bd-r" style={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
+      <div className="pt-3 pr-3 pb-2 pl-3" style={{ display: "flex", alignItems: "center", gap: 9, flex: "none" }}>
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/vexa-logo.svg" alt="Vexa" width={24} height={24} style={{ borderRadius: 7, display: "block", flex: "none" }} />
-        <span style={{ fontSize: 13, fontWeight: 500, color: "var(--t1)" }}>Vexa <span style={{ fontWeight: 400, color: "var(--t3)" }}>terminal</span></span>
+        <img src="/vexa-logo.svg" alt="Vexa" width={24} height={24} className="r-md" style={{ display: "block", flex: "none" }} />
+        <span className="t-sm fw-500 c-1">Vexa <span className="fw-400 c-3">terminal</span></span>
       </div>
       {/* stacked vertically — every list is visible at any sidebar width (no horizontal
           overflow/scroll), matching the file-tree rows below */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 2, padding: "2px 8px 8px", borderBottom: "1px solid var(--line)", flex: "none" }}>
+      <div className="pt-0_5 pr-2 pb-2 pl-2 bd-b" style={{ display: "flex", flexDirection: "column", gap: 2, flex: "none" }}>
         {lists.map((l) => (
           <button key={l.id} style={seg(l.id === active?.id)}
             onClick={() => { layout.setActiveList(l.id); if (l.centerTab) layout.openTab(l.centerTab); }} title={l.label}>
             <Icon name={l.icon} size={13} />{l.label}
             {l.id === "files" && badge > 0 && (
               <span title={`${badge} new update${badge > 1 ? "s" : ""} from other members`}
-                style={{ marginLeft: "auto", background: "var(--accent)", color: "var(--bg)", fontSize: 10, fontWeight: 700, borderRadius: 9, minWidth: 16, textAlign: "center", padding: "0 5px", lineHeight: "16px", flex: "none" }}>
+                className="ml-auto bg-accent t-xs fw-600 r-lg pt-0 pr-1 pb-0 pl-1" style={{ color: "var(--bg)", minWidth: 16, textAlign: "center", lineHeight: "16px", flex: "none" }}>
                 {badge}
               </span>
             )}
@@ -235,20 +234,20 @@ function UserProfile() {
   };
 
   return (
-    <div style={{ padding: "8px 12px", borderTop: "1px solid var(--line)", display: "flex", alignItems: "center", gap: 9, flex: "none" }}>
-      <div style={{ width: 26, height: 26, borderRadius: "50%", background: "var(--panel2)", color: "var(--t1)", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 600, fontSize: 11, flex: "none" }}>{initials}</div>
-      <div style={{ minWidth: 0, flex: 1, lineHeight: 1.25 }}>
-        <div style={{ fontSize: 12.5, fontWeight: 500, color: "var(--t1)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</div>
-        {email && <div style={{ fontSize: 11, color: "var(--t3)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{email}</div>}
+    <div className="pt-2 pr-3 pb-2 pl-3 bd-t" style={{ display: "flex", alignItems: "center", gap: 9, flex: "none" }}>
+      <div className="r-full bg-3 c-1 fw-600 t-xs" style={{ width: 26, height: 26, display: "flex", alignItems: "center", justifyContent: "center", flex: "none" }}>{initials}</div>
+      <div className="lh-tight" style={{ minWidth: 0, flex: 1 }}>
+        <div className="t-xs fw-500 c-1" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</div>
+        {email && <div className="t-xs c-3" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{email}</div>}
       </div>
       <button type="button" title="Settings"
         onClick={() => layout.openTab({ id: "settings", title: "Settings", kind: "settings", params: {} })}
-        style={{ flex: "none", background: "transparent", border: "none", color: "var(--t3)", cursor: "pointer", display: "flex", padding: 4, borderRadius: 6 }}>
+        className="bg-none bd-none c-3 p-1 r-md" style={{ flex: "none", cursor: "pointer", display: "flex" }}>
         <Icon name="gear" size={15} />
       </button>
       <ThemeToggle />
       <button type="button" title="Sign out" onClick={signOut}
-        style={{ flex: "none", background: "transparent", border: "none", color: "var(--t3)", cursor: "pointer", display: "flex", padding: 4, borderRadius: 6 }}>
+        className="bg-none bd-none c-3 p-1 r-md" style={{ flex: "none", cursor: "pointer", display: "flex" }}>
         <Icon name="logout" size={15} />
       </button>
     </div>
@@ -258,7 +257,7 @@ function UserProfile() {
 // ── RIGHT pane: persistent chat singleton ────────────────────────────────────────
 function RightPane() {
   return (
-    <div style={{ height: "100%", display: "flex", flexDirection: "column", background: "var(--rail)", borderLeft: "1px solid var(--line)", minHeight: 0 }}>
+    <div className="bg-1 bd-l" style={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
       <div style={{ flex: 1, minHeight: 0 }}>
         <Chat />
       </div>
@@ -562,11 +561,11 @@ export function Workbench() {
   };
 
   return (
-    <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: "var(--bg)", color: "var(--t1)" }}>
-      <div style={{ height: 38, display: "flex", alignItems: "center", gap: 12, padding: "0 12px", borderBottom: "1px solid var(--line)", background: "var(--sidebar)", flex: "none" }}>
-        <button aria-label="Toggle left" onClick={() => layout.toggleLeft()} style={{ background: "none", border: "none", color: "var(--t3)", cursor: "pointer", display: "flex" }}><Icon name="panel" size={16} /></button>
+    <div className="bg-0 c-1" style={{ height: "100vh", display: "flex", flexDirection: "column" }}>
+      <div className="pt-0 pr-3 pb-0 pl-3 bd-b bg-1" style={{ height: 38, display: "flex", alignItems: "center", gap: 12, flex: "none" }}>
+        <button aria-label="Toggle left" onClick={() => layout.toggleLeft()} className="bg-none bd-none c-3" style={{ cursor: "pointer", display: "flex" }}><Icon name="panel" size={16} /></button>
         <div style={{ flex: 1, display: "flex", justifyContent: "center", minWidth: 0 }}><OpsNotice /></div>
-        <button aria-label="Toggle right" onClick={() => layout.toggleRight()} style={{ background: "none", border: "none", color: "var(--t3)", cursor: "pointer", display: "flex", transform: "scaleX(-1)" }}><Icon name="panel" size={16} /></button>
+        <button aria-label="Toggle right" onClick={() => layout.toggleRight()} className="bg-none bd-none c-3" style={{ cursor: "pointer", display: "flex", transform: "scaleX(-1)" }}><Icon name="panel" size={16} /></button>
       </div>
 
       <div style={{ flex: 1, minHeight: 0 }}>
@@ -609,9 +608,9 @@ export function Workbench() {
         })()}
       </div>
 
-      <footer style={{ height: 24, flex: "none", background: "var(--sidebar)", borderTop: "1px solid var(--line)", display: "flex", alignItems: "center", fontSize: 11.5, color: "var(--t2)" }}>
+      <footer className="bg-1 bd-t t-xs c-2" style={{ height: 24, flex: "none", display: "flex", alignItems: "center" }}>
         <div style={{ flex: 1 }} />
-        <button onClick={() => layout.resetLayout()} style={{ padding: "0 10px", height: "100%", background: "none", border: "none", color: "var(--t3)", cursor: "pointer" }} title="Reset layout">reset layout</button>
+        <button onClick={() => layout.resetLayout()} className="pt-0 pr-2 pb-0 pl-2 bg-none bd-none c-3" style={{ height: "100%", cursor: "pointer" }} title="Reset layout">reset layout</button>
       </footer>
 
       <CommandPalette />

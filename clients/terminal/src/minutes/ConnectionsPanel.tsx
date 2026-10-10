@@ -97,52 +97,52 @@ export function ConnectionsPanel({onOpenChange,onModeChange}:{onOpenChange?:(ope
   const selected=focus?rows.find(c=>focus.id?c.id===focus.id:c.provider===focus.provider&&(!focus.label||c.label===focus.label)):undefined;
   const providerNames:Record<string,string>={google_email:'Gmail',google_calendar:'Google Calendar',custom_secret:'Custom secret',github:'Git repositories'};
   const title=focus?'Connect '+(selected?.label||focus.label||providerNames[focus.provider]):'Connections';
-  return <section role={mode==='page'?'region':'dialog'} aria-label="Connections" data-connections-surface={mode} data-connections-panel style={{...ty.body,gridColumn:mode==='page'?'2 / 4':3,gridRow:'1 / span 2',minWidth:0,minHeight:0,display:'flex',flexDirection:'column',background:mode==='page'?surface.pages:surface.center,color:'var(--t1)',borderLeft:'1px solid var(--line)',lineHeight:1.5}}>
-    <header style={{display:'flex',alignItems:'center',justifyContent:'space-between',height:T.headerH,boxSizing:'border-box',flex:'none',padding:'0 16px',borderBottom:'1px solid var(--line)'}}>
-      <h2 style={{...ty.title,margin:0}}>{title}</h2>
-      {mode==='page'&&focus&&<button style={{...button,marginLeft:'auto',marginRight:8}} onClick={()=>select(null)}>All connections</button>}
-      <button aria-label="Close connections" onClick={()=>setOpen(false)} style={{...button,padding:'4px 10px',background:'transparent'}}>×</button>
+  return <section role={mode==='page'?'region':'dialog'} aria-label="Connections" data-connections-surface={mode} data-connections-panel className="c-1 bd-l lh-snug" style={{ ...ty.body, gridColumn:mode==='page'?'2 / 4':3, gridRow:'1 / span 2', minWidth:0, minHeight:0, display:'flex', flexDirection:'column', background:mode==='page'?surface.pages:surface.center }}>
+    <header className="pt-0 pr-4 pb-0 pl-4 bd-b" style={{ display:'flex', alignItems:'center', justifyContent:'space-between', height:T.headerH, boxSizing:'border-box', flex:'none' }}>
+      <h2 className="m-0" style={{ ...ty.title }}>{title}</h2>
+      {mode==='page'&&focus&&<button className="ml-auto mr-2" style={{ ...button }} onClick={()=>select(null)}>All connections</button>}
+      <button aria-label="Close connections" onClick={()=>setOpen(false)} className="pt-1 pr-2 pb-1 pl-2 bg-none" style={{ ...button }}>×</button>
     </header>
     <div style={{flex:1,minHeight:0,overflowY:"auto",padding:mode==='page'?32:20}}>
-    <div style={{maxWidth:960,margin:0}}>
-    <p style={{...ty.lens,margin:'0 0 8px'}}>{mode==='page'?'Your accounts & services':'Secure setup'}</p>
-    <p style={{...ty.body,color:'var(--t2)',margin:'0 0 24px',maxWidth:640}}>{mode==='page'?'Manage the accounts your agents can use.':'Complete this connection to continue with your agent.'} Credentials stay private in the secure store.</p>
-    {error&&<p role="alert" style={{padding:12,border:'1px solid var(--danger)',borderRadius:8,color:'var(--t1)'}}>{error}</p>}
-    {authorizing&&<p role="status" style={{...ty.body,padding:12,background:'var(--panel)',borderRadius:8}}>Finish authorization in the provider window. This panel updates when you return.</p>}
+    <div className="m-0" style={{ maxWidth:960 }}>
+    <p className="mt-0 mr-0 mb-2 ml-0" style={{ ...ty.lens }}>{mode==='page'?'Your accounts & services':'Secure setup'}</p>
+    <p className="c-2 mt-0 mr-0 mb-6 ml-0" style={{ ...ty.body, maxWidth:640 }}>{mode==='page'?'Manage the accounts your agents can use.':'Complete this connection to continue with your agent.'} Credentials stay private in the secure store.</p>
+    {error&&<p role="alert" className="p-3 bd-danger r-md c-1">{error}</p>}
+    {authorizing&&<p role="status" className="p-3 bg-2 r-md" style={{ ...ty.body }}>Finish authorization in the provider window. This panel updates when you return.</p>}
     <div style={{display:'grid',gridTemplateColumns:'minmax(0, 1fr)',gap:0,alignItems:'start'}}>
     {(!focus||focus.provider==='github')&&<GitConnection />}
     {(['google_email','google_calendar','custom_secret'] as const).filter(provider=>!focus||provider===focus.provider).map(provider=>{
       const connections=focus?(selected?[selected]:[]):rows.filter(c=>c.provider===provider);
       const label=(provider==='custom_secret'&&focus?(selected?.label||focus.label):undefined)||({google_email:'Gmail',google_calendar:'Google Calendar',custom_secret:'Custom secret'}[provider]);
       return <section key={provider} style={cs.card}>
-        <h3 style={{...ty.title,margin:'0 0 6px'}}>{label}</h3>
-        <p style={{...ty.body,color:'var(--t2)',margin:'0 0 16px'}}>{provider==='custom_secret'?'Store any secret privately. Optionally configure an HTTPS API where the agent can use it.':provider==='google_email'?'Read email and save drafts. Minutes does not send mail.':'Read calendar events.'}</p>
+        <h3 className="mt-0 mr-0 mb-1_5 ml-0" style={{ ...ty.title }}>{label}</h3>
+        <p className="c-2 mt-0 mr-0 mb-4 ml-0" style={{ ...ty.body }}>{provider==='custom_secret'?'Store any secret privately. Optionally configure an HTTPS API where the agent can use it.':provider==='google_email'?'Read email and save drafts. Minutes does not send mail.':'Read calendar events.'}</p>
 
-        {connections.map(c=><div key={c.id} style={{borderTop:'1px solid var(--line)',padding:'12px 0'}}>
+        {connections.map(c=><div key={c.id} className="bd-t pt-3 pr-0 pb-3 pl-0">
           <div style={{display:'flex',alignItems:'flex-start',gap:16}}>
           <details open={focus?true:undefined} style={{flex:1,minWidth:0}}>
-          <summary style={{cursor:'pointer',...ty.bodyStrong,marginBottom:12}}>{c.label}{c.account&&<span style={{...ty.meta,display:'block',marginTop:4}}>{c.account}</span>}
-          <span data-connection-status={c.status} style={{...ty.meta,display:'block',marginTop:6,color:c.status==='ready'&&!(c.setup?.oauth&&!c.application_configured)?'var(--green)':'var(--t3)'}}>{c.setup?.oauth&&!c.application_configured?'Setup changes need approval':c.status==='ready'?'● Connected':c.status==='disconnected'?'Disconnected':'Ready to connect · your consent is required'}</span></summary>
+          <summary className="mb-3" style={{ cursor:'pointer', ...ty.bodyStrong }}>{c.label}{c.account&&<span className="mt-1" style={{ ...ty.meta, display:'block' }}>{c.account}</span>}
+          <span data-connection-status={c.status} className="mt-1_5" style={{ ...ty.meta, display:'block', color:c.status==='ready'&&!(c.setup?.oauth&&!c.application_configured)?'var(--green)':'var(--t3)' }}>{c.setup?.oauth&&!c.application_configured?'Setup changes need approval':c.status==='ready'?'● Connected':c.status==='disconnected'?'Disconnected':'Ready to connect · your consent is required'}</span></summary>
           {c.setup?.oauth?<OAuthConnectionForm key={c.id+String(c.setup_request)} setup={c.setup} approvedHost={c.approved_host} configured={!!c.application_configured} ready={c.status==='ready'} busy={busy} onAuthorize={()=>void run(()=>authorize(c))} onSave={async body=>{setBusy(true);setError('');try{await call(c.id+'/oauth-application',{...body,setup_request:c.setup_request});const d=await call('list');setRows(d.connections.filter(supported));}catch(e){setError((e as Error).message);throw e;}finally{setBusy(false);}}}/>:provider==='custom_secret'&&c.status==='ready'&&editing!==c.id?<button style={button} onClick={()=>setEditing(c.id)}>Edit connection</button>:provider==='custom_secret'?<SecretConnectionForm key={c.id+String(c.setup_request)} setup={c.setup} approvedHost={c.approved_host} hasCredential={c.status==='ready'} busy={busy} onSave={async body=>{await run(async()=>{await call(c.id+'/custom-secret',{...body,setup_request:c.setup_request||''});setEditing(null);const d=await call('list');setRows(d.connections.filter(supported));});}}/>:<button disabled={busy} style={{...button,...cs.primary,width:mode==='panel'?'100%':undefined}} onClick={()=>void run(()=>authorize(c))}>{c.status==='ready'?(c.provider==='google_email'?'Enable drafts / reconnect':'Reconnect with Google'):'Continue with Google'}</button>}
-          {c.status==='ready'&&<button disabled={busy} style={{...button,marginTop:8,marginLeft:mode==='page'?8:0,width:mode==='panel'?'100%':undefined}} onClick={()=>void run(async()=>{await call(c.id+'/disconnect',{});const d=await call('list');setRows(d.connections.filter(supported));})}>Disconnect</button>}
+          {c.status==='ready'&&<button disabled={busy} className="mt-2" style={{ ...button, marginLeft:mode==='page'?8:0, width:mode==='panel'?'100%':undefined }} onClick={()=>void run(async()=>{await call(c.id+'/disconnect',{});const d=await call('list');setRows(d.connections.filter(supported));})}>Disconnect</button>}
           </details>
-          <button aria-label={'Delete '+c.label+' connection'} disabled={busy} style={{...button,background:'transparent',color:'var(--danger)',padding:'5px 9px'}} onClick={()=>setDeleting(c.id)}>Delete</button>
+          <button aria-label={'Delete '+c.label+' connection'} disabled={busy} className="bg-none c-danger pt-1 pr-2 pb-1 pl-2" style={{ ...button }} onClick={()=>setDeleting(c.id)}>Delete</button>
           </div>
-          {deleting===c.id&&<div role="alert" style={{...ty.body,marginTop:12,padding:12,background:surface.raised}}>
+          {deleting===c.id&&<div role="alert" className="mt-3 p-3" style={{ ...ty.body, background:surface.raised }}>
             Remove this connection and stop agent access? Audit history is retained.
-            <div style={{display:'flex',gap:8,marginTop:8}}><button disabled={busy} style={{...button,color:'var(--danger)'}} onClick={()=>void run(async()=>{await call(c.id+'/delete',{});setRows(prev=>prev.filter(row=>row.id!==c.id));setDeleting(null);if(focus){select(null);if(mode==='panel')setOpen(false);}})}>Delete connection</button><button disabled={busy} style={button} onClick={()=>setDeleting(null)}>Cancel</button></div>
+            <div className="mt-2" style={{ display:'flex', gap:8 }}><button disabled={busy} className="c-danger" style={{ ...button }} onClick={()=>void run(async()=>{await call(c.id+'/delete',{});setRows(prev=>prev.filter(row=>row.id!==c.id));setDeleting(null);if(focus){select(null);if(mode==='panel')setOpen(false);}})}>Delete connection</button><button disabled={busy} style={button} onClick={()=>setDeleting(null)}>Cancel</button></div>
           </div>}
         </div>)}
         {focus&&!selected&&<p role="status">Preparing connection…</p>}
         {!focus&&<>
-        <label style={{...ty.meta,display:'block',marginBottom:6}}>Connection label</label>
-        <input aria-label={label+' account label'} placeholder="e.g. Personal or Work" value={labels[provider]||''} onChange={e=>setLabels({...labels,[provider]:e.target.value})} maxLength={80} style={{...ty.body,boxSizing:'border-box',width:mode==='page'?280:'100%',maxWidth:'100%',padding:10,border:'1px solid var(--line2)',borderRadius:8,background:'var(--sidebar)',color:'var(--t1)',marginBottom:8}}/>
+        <label className="mb-1_5" style={{ ...ty.meta, display:'block' }}>Connection label</label>
+        <input aria-label={label+' account label'} placeholder="e.g. Personal or Work" value={labels[provider]||''} onChange={e=>setLabels({...labels,[provider]:e.target.value})} maxLength={80} className="p-2 bd-strong r-md bg-1 c-1 mb-2" style={{ ...ty.body, boxSizing:'border-box', width:mode==='page'?280:'100%', maxWidth:'100%' }}/>
         <button disabled={busy} style={{...button,display:'block'}} onClick={()=>void run(()=>connect(provider))}>{connections.length?'Add another '+label+' account':'Connect '+label}</button>
         </>}
       </section>;
     })}
     </div>
-    {(!focus||['google_email','google_calendar'].includes(focus.provider))&&<p style={{...ty.meta,lineHeight:1.6}}>Google’s draft permission also permits sending at the provider level; Minutes exposes draft creation only. Google authorization opens in a secure popup. Your Minutes workspace stays open.</p>}
+    {(!focus||['google_email','google_calendar'].includes(focus.provider))&&<p className="lh-normal" style={{ ...ty.meta }}>Google’s draft permission also permits sending at the provider level; Minutes exposes draft creation only. Google authorization opens in a secure popup. Your Minutes workspace stays open.</p>}
     </div></div>
   </section>;
 }

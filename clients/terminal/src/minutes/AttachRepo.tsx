@@ -142,48 +142,48 @@ export function AttachRepo(p: { workspaceId?: string; embedded?: boolean; onClos
     <div data-attach="backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) p.onClose(); }}
       style={p.embedded ? {} : { position: "fixed", inset: 0, zIndex: 60, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,.38)" }}>
       <div ref={dialog} role={p.embedded ? "region" : "dialog"} aria-modal={p.embedded ? undefined : true} aria-label="Load an existing repository"
-        style={{ width: p.embedded ? "100%" : 500, boxSizing: "border-box", maxWidth: "92vw", maxHeight: "86vh", overflowY: "auto", padding: 14, background: "var(--sidebar)", border: "1px solid var(--line2)", borderRadius: 10, boxShadow: "0 8px 24px rgba(0,0,0,.35)" }}>
+        className="p-3 bg-1 bd-strong r-lg" style={{ width: p.embedded ? "100%" : 500, boxSizing: "border-box", maxWidth: "92vw", maxHeight: "86vh", overflowY: "auto", boxShadow: "0 8px 24px rgba(0,0,0,.35)" }}>
 
         {busy && <p role="status">{progress}</p>}
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+        <div className="mb-1" style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <Icon name="git" size={14} style={{ color: "var(--accent)" }} />
           <span style={{ ...ty.title, flex: 1 }}>Load an existing repository</span>
           <button aria-label="Close" onClick={p.onClose}
-            style={{ background: "transparent", border: "none", color: "var(--t3)", cursor: "pointer", display: "flex", padding: 2 }}>
+            className="bg-none bd-none c-3 p-0_5" style={{ cursor: "pointer", display: "flex" }}>
             <Icon name="x" size={14} />
           </button>
         </div>
-        <div style={{ ...ty.meta, lineHeight: 1.5, marginBottom: 12 }}>
+        <div className="lh-snug mb-3" style={{ ...ty.meta }}>
           Import a repository as its own workspace. Personal and your other workspaces stay unchanged.
         </div>
 
         {error && (
-          <div role="alert" data-attach="error" style={{ ...cardS, marginBottom: 12, borderColor: "var(--danger)" }}>
-            <div style={{ ...ty.body, color: "var(--danger)" }}>⚠ {error.headline}</div>
+          <div role="alert" data-attach="error" className="mb-3" style={{ ...cardS, borderColor: "var(--danger)" }}>
+            <div className="c-danger" style={{ ...ty.body }}>⚠ {error.headline}</div>
             {error.verbatim && (
               <pre data-attach="detail"
-                style={{ ...ty.mono, whiteSpace: "pre-wrap", wordBreak: "break-all", userSelect: "text", margin: "8px 0 0", color: "var(--t2)", lineHeight: 1.5 }}>{error.verbatim}</pre>
+                className="mt-2 mr-0 mb-0 ml-0 c-2 lh-snug" style={{ ...ty.mono, whiteSpace: "pre-wrap", wordBreak: "break-all", userSelect: "text" }}>{error.verbatim}</pre>
             )}
           </div>
         )}
 
         {done ? (
           <div data-attach="result" style={cardS}>
-            <div style={{ ...ty.bodyStrong, color: "var(--t1)", display: "flex", alignItems: "center", gap: 7 }}>
+            <div className="c-1" style={{ ...ty.bodyStrong, display: "flex", alignItems: "center", gap: 7 }}>
               <Icon name="check" size={14} style={{ color: "var(--accent)" }} />{done}
             </div>
-            <button data-attach="close" onClick={() => { window.location.assign(workspacePath(importedWorkspace)); }} style={{ ...btnS, marginTop: 10 }}>Open workspace</button>
+            <button data-attach="close" onClick={() => { window.location.assign(workspacePath(importedWorkspace)); }} className="mt-2" style={{ ...btnS }}>Open workspace</button>
           </div>
         ) : (
           <>
-            <div style={{ marginBottom: 10 }}>
+            <div className="mb-2">
               <label htmlFor="attach-target" style={labelS}>Load into</label>
               <select id="attach-target" data-attach="target" value={target} disabled style={fieldS}>
                 {targets.map((t) => <option key={t.value || "personal"} value={t.value}>{t.label}</option>)}
               </select>
             </div>
 
-            <div style={{ marginBottom: 10 }}>
+            <div className="mb-2">
               <label htmlFor="attach-repo" style={labelS}>Repository</label>
               <input id="attach-repo" data-attach="repo" autoFocus value={repo} disabled={busy}
                 aria-invalid={repoIssue ? true : undefined}
@@ -200,53 +200,53 @@ export function AttachRepo(p: { workspaceId?: string; embedded?: boolean; onClos
                 placeholder="git@github.com:acme/kg.git" style={{ ...fieldS, borderColor: repoIssue ? "var(--danger)" : "var(--line)" }} />
               {repoIssue && (
                 <div id="attach-repo-issue" data-attach="repo-issue" role="alert"
-                  style={{ ...ty.meta, color: "var(--danger)", marginTop: 5, lineHeight: 1.45 }}>{repoIssue}</div>
+                  className="c-danger mt-1 lh-snug" style={{ ...ty.meta }}>{repoIssue}</div>
               )}
             </div>
 
-            <div style={{ marginBottom: 12 }}>
+            <div className="mb-3">
               <label htmlFor="attach-ref" style={labelS}>Branch</label>
               <input id="attach-ref" data-attach="ref" value={ref} disabled={busy}
                 onChange={(e) => setRef(e.target.value)} style={fieldS} />
             </div>
 
-            {p.embedded ? <div style={{ ...cardS, marginBottom: 12 }}>
+            {p.embedded ? <div className="mb-3" style={{ ...cardS }}>
               <div style={labelS}>SSH deploy key (optional)</div>
-              <div style={{ ...ty.meta, lineHeight: 1.5, marginBottom: 8 }}>
+              <div className="lh-snug mb-2" style={{ ...ty.meta }}>
                 {key?.public_key
                   ? `${targetLabel} has a deploy key${key.fingerprint ? ` — ${key.fingerprint}` : ""}. It has to be on the repository before an ssh remote will answer.`
                   : "Nothing to paste. We generate a key for this workspace; you add our public half to your repository, and the private half never leaves this server."}
               </div>
-              {keyNote && <div style={{ ...ty.meta, color: "var(--danger)", marginBottom: 8 }}>{keyNote}</div>}
+              {keyNote && <div className="c-danger mb-2" style={{ ...ty.meta }}>{keyNote}</div>}
               <button data-attach="usekey" onClick={() => void makeKey()} disabled={keyBusy} style={{ ...btnS, opacity: keyBusy ? 0.6 : 1 }}>
                 <Icon name="key" size={13} />{keyBusy ? "Generating…" : "Use this deploy key"}
               </button>
 
               {key?.public_key && (
-                <div data-attach="pubkey-block" style={{ marginTop: 10 }}>
+                <div data-attach="pubkey-block" className="mt-2">
                   <code data-attach="pubkey" tabIndex={0}
-                    style={{ ...ty.mono, display: "block", userSelect: "all", wordBreak: "break-all", color: "var(--t1)", background: "var(--bg)", border: "1px solid var(--line)", borderRadius: 6, padding: 8, lineHeight: 1.5 }}>{key.public_key}</code>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 8, flexWrap: "wrap" }}>
+                    className="c-1 bg-0 bd r-md p-2 lh-snug" style={{ ...ty.mono, display: "block", userSelect: "all", wordBreak: "break-all" }}>{key.public_key}</code>
+                  <div className="mt-2" style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                     <button data-attach="copykey" onClick={() => { void copyText(key.public_key ?? ""); setCopied(true); }} style={btnS}>
                       <Icon name="copy" size={12} />{copied ? "copied" : "Copy"}
                     </button>
                     {/* Only when the server gave us one — a settings URL we guessed would 404 on the
                         person, which is worse than making them find the page themselves. */}
                     {key.add_at && (
-                      <a data-attach="addat" href={key.add_at} target="_blank" rel="noreferrer" style={{ ...ty.meta, color: "var(--accent)" }}>
+                      <a data-attach="addat" href={key.add_at} target="_blank" rel="noreferrer" className="c-accent" style={{ ...ty.meta }}>
                         Add it on GitHub →
                       </a>
                     )}
                     <span style={{ ...ty.meta }}>Add as {key.add_as}.</span>
                   </div>
-                  {key.then && <div style={{ ...ty.meta, marginTop: 6 }}>Then {key.then}.</div>}
+                  {key.then && <div className="mt-1_5" style={{ ...ty.meta }}>Then {key.then}.</div>}
                 </div>
               )}
 
             </div> : <p style={ty.meta}>Uses your saved connection. <button onClick={() => { p.onClose(); window.dispatchEvent(new CustomEvent(CONNECTIONS_OPEN, { detail: { provider: "github" } })); }} style={linkS}>Manage Git connection</button></p>}
 
             <button data-attach="submit" onClick={() => void attach()} disabled={busy || !repo.trim() || !!repoIssue}
-              style={{ ...btnS, background: "var(--accent)", color: "var(--on-accent)", border: "none", opacity: busy || !repo.trim() || repoIssue ? 0.5 : 1 }}>
+              className="bg-accent c-on-accent bd-none" style={{ ...btnS, opacity: busy || !repo.trim() || repoIssue ? 0.5 : 1 }}>
               {busy ? "Loading…" : "Attach"}
             </button>
           </>

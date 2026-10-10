@@ -505,7 +505,7 @@ export function InternalLink({ href, children }: { href: string; children?: Reac
   const path = href.startsWith("/") ? href : normalizeDocPath(href.replace(/^\.\//, ""), meta.path);
   return (
     <span role="link" onClick={() => openEntity({ path })}
-      style={{ color: "var(--blue)", textDecoration: "underline", cursor: "pointer" }}>{children}</span>
+      className="c-info" style={{ textDecoration: "underline", cursor: "pointer" }}>{children}</span>
   );
 }
 
@@ -526,18 +526,18 @@ export function Card({ title, icon, href, children }: { title?: string; icon?: s
   };
   return (
     <div onClick={clickable ? open : undefined} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
-      style={{ border: `1px solid ${hover && clickable ? "var(--line2)" : "var(--line)"}`, borderRadius: 10, background: hover && clickable ? "var(--panel2)" : "var(--panel)", padding: "12px 14px", cursor: clickable ? "pointer" : undefined, minWidth: 0 }}>
+      className="r-lg pt-3 pr-3 pb-3 pl-3" style={{ border: `1px solid ${hover && clickable ? "var(--line2)" : "var(--line)"}`, background: hover && clickable ? "var(--panel2)" : "var(--panel)", cursor: clickable ? "pointer" : undefined, minWidth: 0 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: children ? 6 : 0 }}>
-        {icon && <span style={{ color: "var(--blue)" }}><Icon name={icon} size={14} /></span>}
-        <span style={{ fontWeight: 600, color: "var(--t1)", fontSize: 13.5 }}>{title}</span>
+        {icon && <span className="c-info"><Icon name={icon} size={14} /></span>}
+        <span className="fw-600 c-1 t-sm">{title}</span>
       </div>
-      <div style={{ color: "var(--t2)", fontSize: 13, lineHeight: 1.5 }}>{children}</div>
+      <div className="c-2 t-sm lh-snug">{children}</div>
     </div>
   );
 }
 
 export function CardGroup({ cols = 2, children }: { cols?: number; children?: ReactNode }) {
-  return <div style={{ display: "grid", gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`, gap: 10, margin: "8px 0 12px" }}>{children}</div>;
+  return <div className="mt-2 mr-0 mb-3 ml-0" style={{ display: "grid", gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`, gap: 10 }}>{children}</div>;
 }
 
 /** True when an href points inside the workspace (no scheme, not an anchor, not //host). */

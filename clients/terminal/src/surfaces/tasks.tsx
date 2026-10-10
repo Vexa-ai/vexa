@@ -23,12 +23,12 @@ function frontmatter(text: string): Record<string, string> {
 function TaskRow({ task }: { task: Task }) {
   const nav = usePreviewPinTab<HTMLDivElement>(taskDocTab(task.path));
   return (
-    <div onClick={nav.onClick} onDoubleClick={nav.onDoubleClick} style={{ display: "flex", alignItems: "flex-start", gap: 9, padding: "7px 9px", borderRadius: 6, cursor: "pointer" }}
+    <div onClick={nav.onClick} onDoubleClick={nav.onDoubleClick} className="pt-1_5 pr-2 pb-1_5 pl-2 r-md" style={{ display: "flex", alignItems: "flex-start", gap: 9, cursor: "pointer" }}
       onMouseEnter={(e) => (e.currentTarget.style.background = "var(--panel2)")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
       <div style={cb(task.state === "done")}>✓</div>
       <div style={{ flex: 1 }}>
-        <div style={{ fontSize: 13, color: task.state === "done" ? "var(--t3)" : "var(--t1)", textDecoration: task.state === "done" ? "line-through" : "none" }}>{task.title}</div>
-        <div style={{ display: "flex", gap: 8, marginTop: 3, fontSize: 11.5, color: "var(--t3)" }}>
+        <div className="t-sm" style={{ color: task.state === "done" ? "var(--t3)" : "var(--t1)", textDecoration: task.state === "done" ? "line-through" : "none" }}>{task.title}</div>
+        <div className="mt-0_5 t-xs c-3" style={{ display: "flex", gap: 8 }}>
           {task.priority && <span style={{ color: PRIO[task.priority] ?? "var(--t2)" }}>{task.priority}</span>}
           {task.due && <span>due {task.due}</span>}
         </div>
@@ -53,10 +53,10 @@ function TasksList() {
   })(); }, []);
 
   return (
-    <div style={{ padding: "8px" }}>
-      <div style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em", padding: "6px 4px 6px" }}>tasks</div>
+    <div className="p-2">
+      <div className="t-xs c-3 pt-1_5 pr-1 pb-1_5 pl-1" style={{ textTransform: "uppercase", letterSpacing: ".04em" }}>tasks</div>
       {tasks.map((t) => <TaskRow key={t.path} task={t} />)}
-      {tasks.length === 0 && <div style={{ padding: "8px 4px", color: "var(--t3)", fontSize: 12 }}>No tasks yet — ask the agent in Chat.</div>}
+      {tasks.length === 0 && <div className="pt-2 pr-1 pb-2 pl-1 c-3 t-xs">No tasks yet — ask the agent in Chat.</div>}
     </div>
   );
 }

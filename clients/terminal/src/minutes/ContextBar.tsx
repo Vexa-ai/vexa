@@ -151,16 +151,16 @@ export function ContextBar(p: {
   const phase = p.sel.kind === "meeting" ? p.flavor.split(" · ")[1] : undefined;
 
   return (
-    <div className="vx-pane" data-pane="header" style={{ ...header, gridRow: 1, gridColumn: 2, gap: 8, padding: "0 12px 0 16px" }}>
+    <div className="vx-pane pt-0 pr-3 pb-0 pl-4" data-pane="header" style={{ ...header, gridRow: 1, gridColumn: 2, gap: 8 }}>
       {p.leading}
-      <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--green)", flex: "none" }} />
+      <span className="r-full bg-success" style={{ width: 7, height: 7, flex: "none" }} />
       <div style={{ ...ty.title, flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 4 }}>
-        <span style={{ color: "var(--t3)", fontWeight: 400, whiteSpace: "nowrap", flex: "none" }}>{p.sel.kind === "meeting" ? "Meeting" : "Chat"} › </span><ChatName key={p.sel.chatId} label={p.sel.label} onRename={p.onRename} />
+        <span className="c-3 fw-400" style={{ whiteSpace: "nowrap", flex: "none" }}>{p.sel.kind === "meeting" ? "Meeting" : "Chat"} › </span><ChatName key={p.sel.chatId} label={p.sel.label} onRename={p.onRename} />
       </div>
-      {phase && <span data-flavor-badge style={{ ...ty.meta, flex: "none", color: "var(--t2)", background: surface.raised, borderRadius: 4, padding: "1px 6px", lineHeight: "18px", whiteSpace: "nowrap" }}>{phase[0].toUpperCase() + phase.slice(1)}</span>}
+      {phase && <span data-flavor-badge className="c-2 r-sm pt-0 pr-1_5 pb-0 pl-1_5" style={{ ...ty.meta, flex: "none", background: surface.raised, lineHeight: "18px", whiteSpace: "nowrap" }}>{phase[0].toUpperCase() + phase.slice(1)}</span>}
 
       <Fold at={520} wide={
-      <div ref={box} style={{ position: "relative", marginLeft: "auto", display: "flex", alignItems: "center", gap: 5, flex: "none" }}>
+      <div ref={box} className="ml-auto" style={{ position: "relative", display: "flex", alignItems: "center", gap: 5, flex: "none" }}>
         {set.map((w) => {
           // NO TARGET IS THE DESK. One spelling of the default, here as everywhere: the record
           // stores an absence and this is where the absence becomes a chip somebody can see.
@@ -205,7 +205,7 @@ export function ContextBar(p: {
           onClick={() => setPicking((v) => !v)}
           className="vx-chip vx-chip-add" data-ghost=""><Plus size={14} strokeWidth={1.75} aria-hidden /></button>
         {picking && (
-          <div role="menu" style={{ position: "absolute", top: "calc(100% + 6px)", right: 0, zIndex: 30, minWidth: 200, background: "var(--sidebar)", border: "1px solid var(--line2)", borderRadius: 10, padding: 6, boxShadow: "0 8px 24px rgba(0,0,0,.35)" }}>
+          <div role="menu" className="bg-1 bd-strong r-lg p-1_5" style={{ position: "absolute", top: "calc(100% + 6px)", right: 0, zIndex: 30, minWidth: 200, boxShadow: "0 8px 24px rgba(0,0,0,.35)" }}>
             {/* THE ADMIN'S ONE EXTRA ANSWER (#1616), above the memberships because it is the one
                 workspace in the list nobody had to be invited to. */}
             {offerGlobal && (
@@ -217,7 +217,7 @@ export function ContextBar(p: {
               </button>
             )}
             {addable.length === 0 && !offerGlobal
-              ? <div style={{ ...ty.meta, padding: "6px 8px", lineHeight: 1.5 }}>No other workspace to add. New ones are made in conversation.</div>
+              ? <div className="pt-1_5 pr-2 pb-1_5 pl-2 lh-snug" style={{ ...ty.meta }}>No other workspace to add. New ones are made in conversation.</div>
               : addable.map((id) => (
                   <button key={id} role="menuitem" onClick={() => { p.onAddWorkspace(id); setPicking(false); }}
                     style={menuItem}
@@ -227,7 +227,7 @@ export function ContextBar(p: {
             {p.onAttachRepo && (
               <button role="menuitem" data-ctx="attach"
                 onClick={() => { p.onAttachRepo?.(undefined); setPicking(false); }}
-                style={{ ...ty.chip, display: "block", width: "100%", textAlign: "left", background: "transparent", border: "none", borderTop: "1px solid var(--line)", borderRadius: 0, padding: "7px 8px", marginTop: 5, color: "var(--t2)", cursor: "pointer" }}
+                className="bg-none bd-none bd-t r-0 pt-1_5 pr-2 pb-1_5 pl-2 mt-1 c-2" style={{ ...ty.chip, display: "block", width: "100%", textAlign: "left", cursor: "pointer" }}
                 onMouseEnter={(e) => { e.currentTarget.style.background = surface.raised; }}
                 onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>Attach existing repo…</button>
             )}
