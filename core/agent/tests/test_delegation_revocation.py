@@ -162,17 +162,60 @@ def _meeting_inv(subject):
                                                        "platform": "google_meet"}}}
 
 
-def test_a_second_dispatch_of_another_person_never_replaces_a_units_current_token(tmp_path):
+def test_a_second_dispatch_of_another_person_to_a_running_unit_publishes_neither_token(tmp_path):
     """A meeting's unit id is keyed on the meeting: a later dispatch for someone else reaching the same
-    unit does not publish its token to the worker already running there."""
+    running unit neither publishes its token to the worker there nor leaves the first person's."""
     store = _store()
     rt = _Runtime()
     d = dispatch.Dispatcher(_settings(tmp_path), rt, _Identity(), delegation_store=store)
     uid = d.dispatch(_meeting_inv("u_jane"))
     jane = rt.spawned[-1]["VEXA_MCP_DELEGATION_TOKEN"]
     assert d.dispatch(_meeting_inv("u_bob")) == uid
-    assert store.get(dr.CURRENT_PREFIX + uid) == jane
-    assert store.get(delegation_key(uid)) == jane
+    bob = rt.spawned[-1]["VEXA_MCP_DELEGATION_TOKEN"]
+    for key in (dr.CURRENT_PREFIX + uid, delegation_key(uid)):
+        assert store.get(key) not in (jane, bob), key
+
+
+def test_a_unit_respawned_for_another_person_within_the_grace_never_hands_over_the_first_token(tmp_path):
+    """Unit X runs for A and ends; within the spawn grace it is respawned for B. B's worker boots with
+    B's token and reads the unit's published token before each turn: that is B's, never A's."""
+    store = _store()
+    rt = _Runtime()
+    d = dispatch.Dispatcher(_settings(tmp_path), rt, _Identity(), delegation_store=store)
+    uid = d.dispatch(_meeting_inv("u_jane"))
+    jane = rt.spawned[-1]["VEXA_MCP_DELEGATION_TOKEN"]
+    rt.state = "stopped"  # A's container ended; B's dispatch spawns the next incarnation
+    assert d.dispatch(_meeting_inv("u_bob")) == uid
+    bob_env = rt.spawned[-1]
+    assert _claims(bob_env)["sub"] == "u_bob"
+    assert store.get(delegation_key(uid)) == bob_env["VEXA_MCP_DELEGATION_TOKEN"] != jane
+    assert store.get(dr.CURRENT_PREFIX + uid) == bob_env["VEXA_MCP_DELEGATION_TOKEN"]
+
+
+def test_a_respawn_for_another_person_whose_runtime_state_is_unknown_gets_no_published_token(tmp_path):
+    store = _store()
+    rt = _Runtime()
+    d = dispatch.Dispatcher(_settings(tmp_path), rt, _Identity(), delegation_store=store)
+    uid = d.dispatch(_meeting_inv("u_jane"))
+    jane = rt.spawned[-1]["VEXA_MCP_DELEGATION_TOKEN"]
+    rt.state = "unknown"
+    d.dispatch(_meeting_inv("u_bob"))
+    assert store.get(delegation_key(uid)) is None and store.get(dr.CURRENT_PREFIX + uid) is None
+    assert jane not in (store.get(delegation_key(uid)), store.get(dr.CURRENT_PREFIX + uid))
+
+
+def test_a_token_that_cannot_be_withdrawn_is_not_handed_to_the_next_person(tmp_path, monkeypatch):
+    store = _store()
+    rt = _Runtime()
+    d = dispatch.Dispatcher(_settings(tmp_path), rt, _Identity(), delegation_store=store)
+    d.dispatch(_meeting_inv("u_jane"))
+    from control_plane import delegation_refresh
+
+    def broken(*a, **k):
+        raise ConnectionError("redis down")
+    monkeypatch.setattr(delegation_refresh, "withdraw", broken)
+    d.dispatch(_meeting_inv("u_bob"))
+    assert "VEXA_MCP_DELEGATION_TOKEN" not in rt.spawned[-1]
 
 
 def test_a_second_dispatch_of_the_same_person_still_publishes(tmp_path):
