@@ -326,8 +326,9 @@ def test_the_qwen_lane_dials_are_declared():
 # subject to create_app and the product reads none.
 # 106: +1 VEXA_UNIT_IN_KEY — the unit's input-stream key; the worker runs only entries signed with it.
 # 107: +1 VEXA_MODEL_ROUTE — the dispatch's mark on a worker routed to the person's own endpoint.
-# 108: +1 VEXA_MODEL_CATALOG — the operator's model catalog (ADR-0043, models.v1 Catalog).
-EXPECTED_DECLARED_KEYS = 108
+# 106: -1 VEXA_MEETINGS_DB_URL — it served invited_meetings only, which nothing called; both went.
+# 107: +1 VEXA_MODEL_CATALOG — the operator's model catalog (ADR-0043, models.v1 Catalog).
+EXPECTED_DECLARED_KEYS = 107
 
 
 def test_connections_keys_are_capabilities_on_real_surfaces():

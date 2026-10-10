@@ -428,15 +428,6 @@
       ]
     },
     {
-      "key": "VEXA_MEETINGS_DB_URL",
-      "class": "defaulted",
-      "default": "(unset \u2014 a first-visit scaffold reports no invited meetings rather than guessing)",
-      "description": "Read-only DSN for the meetings database, used for ONE question: which meetings is this email address invited to, read off data.attendees. It is the only record that knows somebody was invited BEFORE they ever signed in, which is exactly the case a first visit is \u2014 an owner-keyed lookup answers 'none' for the person this exists to serve. Unset, invited_meetings is absent from the scaffold and the opening says nothing about meetings rather than asserting there are none; emptiness and ignorance are different sentences to somebody reading their first screen. Delete this key once meeting-api serves an invited-by-address route, so agent-api stops holding a second database credential.",
-      "targets": [
-        "compose"
-      ]
-    },
-    {
       "key": "VEXA_ALLOW_LOCAL_REPO_ROOT",
       "class": "defaulted",
       "default": "(unset)",
