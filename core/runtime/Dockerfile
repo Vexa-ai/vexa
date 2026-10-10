@@ -5,7 +5,7 @@
 # DOCKER_NETWORK. The K8sBackend (RUNTIME_BACKEND=k8s, used by deploy/helm) shells out to `kubectl`,
 # which is why the static binary below is bundled — inert for the docker/process paths.
 # Build context: runtime/ (pyproject.toml + uv.lock + src/).
-FROM python:3.12-slim
+FROM python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f
 
 # kubectl — only invoked by the K8sBackend (RUNTIME_BACKEND=k8s). Pinned static binary, verified against
 # the release's published SHA-256; harmless for the default docker/process backends. Arch-aware so the
