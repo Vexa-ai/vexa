@@ -179,8 +179,8 @@ describe("a model provider out of credit", () => {
     await waitFor(() => expect(stream.calls.length).toBe(1));
     const raw = "API Error: 402 This request requires more credits, or fewer max_tokens.";
     await act(async () => {
-      stream.calls[0].cb.onDelta(raw as never);
-      stream.calls[0].cb.onModelFailure(raw as never);
+      stream.calls[0].cb.onDelta?.(raw as never);
+      stream.calls[0].cb.onModelFailure?.(raw as never);
       stream.calls[0].finish();
     });
     const body = document.body.textContent ?? "";
