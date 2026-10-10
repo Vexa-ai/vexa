@@ -30,7 +30,7 @@
   "devDependencies": {
     "@types/node": "^20.0.0",
     "@vexa/capture-codec": "workspace:*",
-    "esbuild": "^0.25.0",
+    "esbuild": "^0.28.1",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0"
   }

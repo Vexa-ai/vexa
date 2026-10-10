@@ -98,7 +98,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 # noVNC (browser view) · postgres client (pg_isready) · git (agent governance ops).
 # The cache/stream store is Valkey, copied from valkey-builder below — NOT jammy apt's redis-server
 # (6.0.16, no XAUTOCLAIM, the #653 parity gap).
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# `apt-get upgrade` takes the Ubuntu archive's security updates (OpenSSL, GnuPG) since the Playwright
+# base's snapshot without moving the browser it pins.
+RUN apt-get update && apt-get upgrade -y --no-install-recommends && apt-get install -y --no-install-recommends \
       python3 python3-pip python3-venv python3-dev build-essential \
       supervisor postgresql-client \
       xvfb fluxbox x11vnc novnc python3-websockify \

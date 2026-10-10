@@ -7,13 +7,17 @@
 # Build context: runtime/ (pyproject.toml + uv.lock + src/).
 FROM python:3.12-slim
 
-# kubectl — only invoked by the K8sBackend (RUNTIME_BACKEND=k8s). Pinned static binary; harmless for
-# the default docker/process backends. Arch-aware so the image builds on amd64 and arm64 hosts.
-ARG KUBECTL_VERSION=v1.31.4
+# kubectl — only invoked by the K8sBackend (RUNTIME_BACKEND=k8s). Pinned static binary, verified against
+# the release's published SHA-256; harmless for the default docker/process backends. Arch-aware so the
+# image builds on amd64 and arm64 hosts. A supported release built with a supported Go (1.35.9: Go 1.26):
+# the K8sBackend uses only `create -f -`, `get pod` and `delete pod`, core v1 calls every cluster serves.
+ARG KUBECTL_VERSION=v1.35.9
 RUN set -eux; \
     apt-get update && apt-get install -y --no-install-recommends ca-certificates curl; \
     arch="$(dpkg --print-architecture)"; case "$arch" in amd64) karch=amd64;; arm64) karch=arm64;; *) karch="$arch";; esac; \
-    curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${karch}/kubectl" -o /usr/local/bin/kubectl; \
+    base="https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${karch}/kubectl"; \
+    curl -fsSL "$base" -o /usr/local/bin/kubectl; \
+    echo "$(curl -fsSL "$base.sha256")  /usr/local/bin/kubectl" | sha256sum -c -; \
     chmod +x /usr/local/bin/kubectl; \
     apt-get purge -y curl; apt-get autoremove -y; rm -rf /var/lib/apt/lists/*
 

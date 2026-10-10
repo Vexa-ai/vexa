@@ -986,9 +986,9 @@ jobs:
   # published artifacts are wrong, and green when they are not.
   # Trivy over every image this run built (image-cve-scan.yml): fixed CRITICAL/HIGH advisories in
   # Vexa's own images. Report-only for now (blocking: false), in parallel with validate and never in
-  # its way: today's findings are in the base layers (Debian packages in node:22-slim, the Go stdlib
-  # of the kubectl the runtime bakes, npm's bundled packages), which a base refresh fixes and a code
-  # change cannot. Flip blocking to true once a run reports none.
+  # its way. What is left is upstream of us: kubectl's Go (1.26.8; the fix is 1.26.9, in no kubectl
+  # release yet) in the runtime, and npm's bundled packages in agent-worker and Lite, where the agent's
+  # tools may run npm. Flip blocking to true once a run reports none.
   scan-images:
     needs: [preflight, build, build-bot]
     if: >-
