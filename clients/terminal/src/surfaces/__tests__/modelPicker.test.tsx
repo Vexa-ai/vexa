@@ -60,9 +60,12 @@ describe("the model picker", () => {
   it("shows the chat's model — its default until picked — and exactly the models it was sent", async () => {
     stub(MEMBER);
     render(<ModelPicker session="s1" />);
-    expect((await chip()).textContent).toContain("Qwen 3 32B (self-hosted)");
+    // the chip is the short name as plain text; the parenthetical is the menu's muted second line
+    expect((await chip()).textContent).toBe("Qwen 3 32B");
     fireEvent.click(await chip());
     const items = screen.getAllByRole("menuitemradio");
+    expect(items[0].textContent).toContain("self-hosted");
+    expect(items[1].textContent).toContain("subscription");
     expect(items.map((i) => i.getAttribute("data-model-id"))).toEqual(["qwen3-32b", "claude"]);
     expect(items[0].getAttribute("aria-checked")).toBe("true");
     expect(screen.getByRole("menu").textContent).toContain("32k");
@@ -73,9 +76,9 @@ describe("the model picker", () => {
     const calls = stub(MEMBER);
     render(<ModelPicker session="s1" />);
     fireEvent.click(await chip());
-    fireEvent.click(screen.getByText("Claude (subscription)"));
+    fireEvent.click(document.querySelector('[data-model-id="claude"]')!);
     await waitFor(() => expect((screen.getByRole("button", { name: "Model for this chat" })).textContent)
-      .toContain("Claude (subscription)"));
+      .toBe("Claude"));
     expect(calls.find((c) => c.method === "POST")).toEqual(
       { url: "/api/chat/model", method: "POST", body: { session: "s1", model: "claude" } });
   });
@@ -89,9 +92,9 @@ describe("the model picker", () => {
     });
     render(<ModelPicker session="s1" />);
     fireEvent.click(await chip());
-    fireEvent.click(screen.getByText("Claude (subscription)"));
+    fireEvent.click(document.querySelector('[data-model-id="claude"]')!);
     expect((await screen.findByRole("alert")).textContent).toBeTruthy();
-    expect((await chip()).textContent).toContain("Qwen 3 32B (self-hosted)");
+    expect((await chip()).textContent).toBe("Qwen 3 32B");
   });
 
   it("a pick that is no longer offered says so on the chip", async () => {
@@ -104,7 +107,7 @@ describe("the model picker", () => {
     const calls = stub({ ...MEMBER, selected: "claude" });
     render(<ModelPicker session="s1" />);
     fireEvent.click(await chip());
-    fireEvent.click(screen.getByText("Use Claude (subscription) for new chats"));
+    fireEvent.click(screen.getByText("Use for new chats"));
     await waitFor(() => expect(calls.some((c) => c.method === "PUT")).toBe(true));
     expect(calls.find((c) => c.method === "PUT")).toEqual(
       { url: "/api/user/models", method: "PUT", body: { default_model: "claude" } });
@@ -128,7 +131,17 @@ const WITH_EFFORT: ModelList = {
   selected_effort: null,
 };
 
-const effortSelect = () => document.querySelector("[data-effort-picker]") as HTMLSelectElement | null;
+/** The effort control: a text button whose `data-effort` is the level in force ("" = default). */
+const effortButton = () => document.querySelector("[data-effort-picker]") as HTMLButtonElement | null;
+const effortSelect = () => {
+  const b = effortButton();
+  return b && { value: b.getAttribute("data-effort") ?? "", text: b.textContent ?? "" };
+};
+/** Pick a level the way a person does: open the menu, click the level. */
+function pickLevel(level: string) {
+  fireEvent.click(effortButton()!);
+  fireEvent.click(document.querySelector(`[data-effort-level="${level}"]`)!);
+}
 
 describe("the effort selector", () => {
   it("is absent while the chat's model has no effort control", async () => {
@@ -144,8 +157,11 @@ describe("the effort selector", () => {
     await chip();
     const sel = effortSelect()!;
     expect(sel).not.toBeNull();
-    expect([...sel.options].map((o) => o.value)).toEqual(["low", "medium", "high", "xhigh", "max"]);
     expect(sel.value).toBe("medium");
+    expect(sel.text).toBe("Medium");                    // plain text, no "effort:" prefix
+    fireEvent.click(effortButton()!);
+    expect([...document.querySelectorAll("[data-effort-level]")].map((o) => o.getAttribute("data-effort-level")))
+      .toEqual(["low", "medium", "high", "xhigh", "max"]);
   });
 
   it("posts the level with the chat's model, and shows the chat's own pick", async () => {
@@ -153,7 +169,7 @@ describe("the effort selector", () => {
     render(<ModelPicker session="s1" />);
     await chip();
     expect(effortSelect()!.value).toBe("high");
-    fireEvent.change(effortSelect()!, { target: { value: "max" } });
+    pickLevel("max");
     await waitFor(() => expect(calls.some((c) => c.method === "POST")).toBe(true));
     expect(calls.find((c) => c.method === "POST")!.body).toEqual({ session: "s1", model: "claude", effort: "max" });
   });
@@ -168,7 +184,7 @@ describe("the effort selector", () => {
     });
     render(<ModelPicker session="s1" />);
     await chip();
-    fireEvent.change(effortSelect()!, { target: { value: "max" } });
+    pickLevel("max");
     expect((await screen.findByRole("alert")).textContent).toMatch(/not max/);
   });
 
@@ -212,7 +228,7 @@ describe("an effort picked in a new chat", () => {
 
     rerender(<ModelPicker session="new-chat" />);          // the new chat's read is still in flight
     await waitFor(() => expect(calls.filter((c) => c.method === "GET")).toHaveLength(2));
-    fireEvent.change(effortSelect()!, { target: { value: "high" } });
+    pickLevel("high");
     await waitFor(() => expect(calls.some((c) => c.method === "POST")).toBe(true));
     // the pick is for THIS chat, on the model it follows — never the previous chat's pick
     expect(calls.find((c) => c.method === "POST")!.body).toEqual({ session: "new-chat", model: "", effort: "high" });
@@ -222,5 +238,41 @@ describe("an effort picked in a new chat", () => {
     await act(async () => { releaseNewChat(new Response(JSON.stringify(newChat), { status: 200 })); });
     await new Promise((r) => setTimeout(r, 20));
     expect(effortSelect()!.value).toBe("high");
+  });
+});
+
+
+// ── the keyboard: a menu, not a native select, so a keyboard pick always fires ────────────────
+
+describe("the picker's menus from the keyboard", () => {
+  it("ArrowDown opens the effort menu on the level in force, arrows move, Enter picks it", async () => {
+    const calls = stub({ ...WITH_EFFORT, selected: "claude" });
+    render(<ModelPicker session="s1" />);
+    await chip();
+    fireEvent.keyDown(effortButton()!, { key: "ArrowDown" });
+    const menu = await screen.findByRole("menu", { name: "Effort for this chat" });
+    expect(document.activeElement?.getAttribute("data-effort-level")).toBe("medium");   // the default, checked
+    fireEvent.keyDown(menu, { key: "ArrowDown" });
+    expect(document.activeElement?.getAttribute("data-effort-level")).toBe("high");
+    fireEvent.keyDown(menu, { key: "End" });
+    expect(document.activeElement?.getAttribute("data-effort-level")).toBe("max");
+    fireEvent.keyDown(menu, { key: "ArrowDown" });                                        // wraps
+    expect(document.activeElement?.getAttribute("data-effort-level")).toBe("low");
+    // Enter on a focused button is its click — the pick fires, every time
+    fireEvent.click(document.activeElement as HTMLElement);
+    await waitFor(() => expect(calls.some((c) => c.method === "POST")).toBe(true));
+    expect(calls.find((c) => c.method === "POST")!.body).toEqual({ session: "s1", model: "claude", effort: "low" });
+    await waitFor(() => expect(effortSelect()!.text).toBe("Low"));
+  });
+
+  it("Escape closes a menu and gives the focus back to its button", async () => {
+    stub(MEMBER);
+    render(<ModelPicker session="s1" />);
+    fireEvent.click(await chip());
+    const menu = screen.getByRole("menu", { name: "Model for this chat" });
+    expect(document.activeElement?.getAttribute("data-model-id")).toBe("qwen3-32b");
+    fireEvent.keyDown(menu, { key: "Escape" });
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(document.activeElement).toBe(await chip());
   });
 });
