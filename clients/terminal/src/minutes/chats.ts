@@ -254,7 +254,7 @@ const statusOf = (phase: MeetingPhase | null): Row["status"] =>
  *  one. The live lift is what makes the stated consequence true.) No buckets: this is one flat list.
  *
  *  Sorting and LABELLING part company on one point: a meeting row is labelled with the MEETING's own
- *  time, never the chat's last activity, because "Blue Light Card · today" would be a plain lie about
+ *  time, never the chat's last activity, because "Fernhill Loyalty Card · today" would be a plain lie about
  *  a meeting held on Monday. Reading a row is not the meeting moving.
  *
  *  ⚠ `claimed` IS THE WHOLE DEDUP, and Vexa-ai/vexa#1597 is what made it fire for the case it was

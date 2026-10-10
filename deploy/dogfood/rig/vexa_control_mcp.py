@@ -2229,7 +2229,7 @@ mcp = MCPServer(
         "is fetch_asset(url) first and `![alt](assets/<name>)` second — never a remote URL "
         "on the page.\n"
         # WHO IS IN A GROUP, beside the verbs that change what is IN one (Vexa-ai/vexa#1632). Its own
-        # bullet rather than a clause on TEAM MEMORY: a person asking "add Marvin to this workspace"
+        # bullet rather than a clause on TEAM MEMORY: a person asking "add Quentin to this workspace"
         # is not asking about files, and a verb buried mid-sentence about pages is a verb the model
         # does not reach for. The founder's ruling is that this is a CONVERSATION \u2014 the front
         # page's button queues an act and there is no form behind it \u2014 so the order is ask,
@@ -2828,7 +2828,7 @@ def entity_upsert(kind: str, name: str, facts: list[str] = [], source: str = "",
       - project: What it is · Who · Status  (fields: status, what, who)
       - decision: What was decided · Why · What it changes  (fields: changes, what, why)
 
-    - `fields` — `{"role": "Chairs the TSC", "company": "[[Sony Pictures Imageworks]]"}`. Each key
+    - `fields` — `{"role": "Chairs the TSC", "company": "[[Brightwater Picture Studios]]"}`. Each key
       above files into its section. A field that names another entity also draws the link BOTH ways:
       giving a person a `company` adds them to that company's page too.
 
@@ -2837,8 +2837,8 @@ def entity_upsert(kind: str, name: str, facts: list[str] = [], source: str = "",
     without a page gets one NOW.
 
     - `kind` — person | company | meeting | project | decision
-    - `name` — what the page is about, as a person would say it ("Cottalango Leon", "Sony Pictures
-      Imageworks"). It becomes the title `[[wikilinks]]` resolve to.
+    - `name` — what the page is about, as a person would say it ("Robin Vale", "Brightwater Picture
+      Studios"). It becomes the title `[[wikilinks]]` resolve to.
     - `facts` — one short sentence each, only what was SAID or READ. Write other entities inside a
       fact as `[[Their Name]]`; the result tells you which of those have no page yet, and those are
       your next calls. Pass `section="<one of the section names above>"` to file them, or leave it
@@ -3242,7 +3242,7 @@ def workspaces() -> str:
 def workspace_target(slug: str = "") -> str:
     """Point this conversation's writes at a workspace — call it when the person SAYS SO.
 
-    *"work in the OeNB workspace"*, *"let's collect this into ILM from now on"*, *"back to my
+    *"work in the Example Bank workspace"*, *"let's collect this into Copperline from now on"*, *"back to my
     desk"*. From then on `entity_upsert`, `workspace_write` and a plain file write land there
     without anybody naming it again, the header chip shows it, and it survives a reload and a
     second window. `slug=""` puts it back on their own desk.
@@ -3423,7 +3423,7 @@ def captions_to_segments(video_id: str, max_minutes: int = 45) -> str:
 def zoom_transcript_to_segments(name: str, path: str) -> str:
     """Convert a Zoom/LFX machine transcript into segments, keeping the REAL speaker labels.
 
-    Lines look like `[00:00:10.620 --> 00:00:12.689] Cottalango Leon (Sony Pictures Imageworks):
+    Lines look like `[00:00:10.620 --> 00:00:12.689] Robin Vale (Brightwater Picture Studios):
     text`. Unlike YouTube auto-captions this carries genuine diarization and company
     affiliations, so it exercises attribution the way a real capture does. Consecutive lines
     from one speaker are merged into a turn."""
@@ -4586,7 +4586,7 @@ def transcript_terms(meeting_id: str = "", since: str = "", keep: str = "",
          anyone yet. Read the list and pick the ones that matter here: a company in the deal, a
          person nobody has a page for, a product name that was decided on. Drop the ones that are
          just capitalised words.
-      2. `transcript_terms(meeting_id, since, keep="Acme, Cottalango Leon")` — PUBLISH. Exactly those
+      2. `transcript_terms(meeting_id, since, keep="Acme, Robin Vale")` — PUBLISH. Exactly those
          become chips in the transcript. `keep="*"` publishes everything, which is right only when
          everything genuinely matters.
 

@@ -99,13 +99,13 @@ def test_a_key_without_an_env_half_answers_key_and_value_only(door):
 
 
 def test_the_signin_read_carries_the_env_half_and_its_problems(door, monkeypatch):
-    monkeypatch.setenv("VEXA_SIGNIN_ALLOW", "@oenb.at,typo.example")
+    monkeypatch.setenv("VEXA_SIGNIN_ALLOW", "@bank.example,typo.example")
     c, _ = door({"signin": {"allow": "alice@example.com"}})
     body = c.get("/internal/settings/signin", headers=H).json()
     assert set(body) == {"key", "value", "env", "env_problems"}
     assert body["key"] == "signin"
     assert body["value"] == {"allow": "alice@example.com"}
-    assert body["env"] == {"allow": "@oenb.at"}
+    assert body["env"] == {"allow": "@bank.example"}
     assert len(body["env_problems"]) == 1 and "typo.example" in body["env_problems"][0]
 
 
@@ -117,11 +117,11 @@ def test_the_signin_read_with_no_env_states_an_empty_half(door):
 
 def test_a_write_answers_key_and_value_only_and_each_key_keeps_its_own_rulebook(door):
     c, db = door()
-    r = c.put("/internal/settings/signin", headers=H, json={"allow": "Alice@Example.com\n@OENB.at"})
-    assert r.json() == {"key": "signin", "value": {"allow": "alice@example.com, @oenb.at"}}
-    r = c.put("/internal/settings/signin", headers=H, json={"allow": "x, oenb.at"})
-    assert r.status_code == 422 and "@oenb.at" in r.json()["detail"]
-    assert db.rows["signin"].value == {"allow": "alice@example.com, @oenb.at"}
+    r = c.put("/internal/settings/signin", headers=H, json={"allow": "Alice@Example.com\n@BANK.example"})
+    assert r.json() == {"key": "signin", "value": {"allow": "alice@example.com, @bank.example"}}
+    r = c.put("/internal/settings/signin", headers=H, json={"allow": "x, bank.example"})
+    assert r.status_code == 422 and "@bank.example" in r.json()["detail"]
+    assert db.rows["signin"].value == {"allow": "alice@example.com, @bank.example"}
     r = c.put("/internal/settings/models", headers=H, json={"base_url": "ftp://nope"})
     assert r.status_code == 422 and "base_url" in r.json()["detail"]
 

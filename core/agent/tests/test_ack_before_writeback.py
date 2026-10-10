@@ -86,7 +86,7 @@ def test_second_messages_ack_does_not_wait_on_the_first_turns_writeback(monkeypa
     server = threading.Thread(
         target=engine.serve,
         kwargs=dict(stream=stream, out_topic="out", in_topic="in", turn=turn,
-                    start={"entrypoint": {"inline": "who is Olga Avramenko?"}},
+                    start={"entrypoint": {"inline": "who is Nora Quill?"}},
                     idle_ms=50, writeback=writeback),
         daemon=True, name="serve-under-test",
     )
@@ -146,7 +146,7 @@ def test_a_worker_with_no_second_message_still_completes_its_writeback_before_ex
 
     stream = FakeStream([])  # nothing queued — the very next xread is the idle timeout
     engine.serve(stream, out_topic="out", in_topic="in", turn=turn,
-                start={"entrypoint": {"inline": "who is Olga Avramenko?"}},
+                start={"entrypoint": {"inline": "who is Nora Quill?"}},
                 idle_ms=1, writeback=writeback)
 
     assert ran_writeback.is_set(), "serve() returned before its own trailer's write-back had run"

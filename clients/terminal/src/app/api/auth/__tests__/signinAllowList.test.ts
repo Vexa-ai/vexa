@@ -117,7 +117,7 @@ const minted = () => calls.filter((c) => c.startsWith("POST") && c.includes("/to
 
 beforeEach(() => {
   _resetLinkRateLimits();
-  world = { users: new Set(["member@example.com"]), admins: new Set(["boss@example.com"]), adminEmails: [], allow: ["@oenb.at", "alice@example.org"], admission: "up" };
+  world = { users: new Set(["member@example.com"]), admins: new Set(["boss@example.com"]), adminEmails: [], allow: ["@bank.example", "alice@example.org"], admission: "up" };
   calls = [];
   cookieJar = {};
   sendMail.mockClear();
@@ -232,7 +232,7 @@ describe("who IS admitted", () => {
   });
 
   it("an address on the allow-list by DOMAIN entry, and by EXACT entry", async () => {
-    const domain = await clickLinkFor("anna@oenb.at");
+    const domain = await clickLinkFor("anna@bank.example");
     expect(domain.status).toBe(302);
     expect(domain.cookies.get("vexa-token")?.value).toBe("minted-tok");
     expect(await oauth("alice@example.org", "microsoft")).toBe(true);
@@ -375,6 +375,6 @@ describe("the first admin claim still works", () => {
     world.admins.clear();
     world.users.clear();
     expect(await oauth("stranger@evil.example")).toBe("/?error=SigninNotAllowed");
-    expect(await oauth("anna@oenb.at")).toBe(true);
+    expect(await oauth("anna@bank.example")).toBe(true);
   });
 });

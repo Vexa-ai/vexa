@@ -7,8 +7,8 @@ TZID:Customized Time Zone
 END:VTIMEZONE
 BEGIN:VEVENT
 DTSTART;TZID="Customized Time Zone":20300901T110000
-UID:custom-tz-0001@oenb.at
-ORGANIZER:mailto:anna.bank@oenb.at
+UID:custom-tz-0001@bank.example
+ORGANIZER:mailto:anna.bank@bank.example
 SUMMARY:Hand-built zone
 LOCATION:https://meet.google.com/cus-tomz-one
 END:VEVENT

@@ -56,13 +56,13 @@ def test_prep_grounding_reads_no_stream_and_names_the_workspace(monkeypatch):
     ctx, tools, prompt = _meeting_grounding(
         {"kind": "meeting",
          "platform": "google_meet", "native_id": "abc-defg-hij", "meeting_id": 46,
-         "status": "scheduled", "title": "OeNB pilot discussion",
-         "scheduled_at": "2026-07-13T10:00:00Z", "workspace_id": "oenb-1424e3"},
+         "status": "scheduled", "title": "Example Bank pilot discussion",
+         "scheduled_at": "2026-07-13T10:00:00Z", "workspace_id": "bank-1424e3"},
         session="main", prompt="build the agenda", redis_url=None)
     assert ctx == {"kind": "none", "session": "main"} and tools == []
-    assert "PREPARE" in prompt and "OeNB pilot discussion" in prompt
+    assert "PREPARE" in prompt and "Example Bank pilot discussion" in prompt
     assert "scheduled for 2026-07-13T10:00:00Z" in prompt
-    assert 'oenb-1424e3' in prompt
+    assert 'bank-1424e3' in prompt
     assert "there is no transcript" in prompt.lower() or "has not happened yet" in prompt
     assert prompt.endswith("build the agenda")
 

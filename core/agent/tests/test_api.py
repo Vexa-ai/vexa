@@ -606,7 +606,7 @@ def test_session_history_parses_turns(tmp_path):
     (ws / ".claude" / "sessions" / "main.session").write_text("sid-1\n")
     _write_transcript(ws, "sid-1", [
         {"type": "mode", "mode": "default"},                                # meta — skip
-        {"type": "user", "message": {"role": "user", "content": "research DTCC"}},
+        {"type": "user", "message": {"role": "user", "content": "research Northwind Labs"}},
         {"type": "assistant", "message": {"role": "assistant", "content": [
             {"type": "thinking", "thinking": "hmm"},                        # ignored
             {"type": "text", "text": "Looking it up. "},
@@ -627,7 +627,7 @@ def test_session_history_parses_turns(tmp_path):
     turns = reader.history("u_jane", "main")
 
     assert [t["role"] for t in turns] == ["user", "agent", "user"]
-    assert turns[0] == {"role": "user", "text": "research DTCC"}
+    assert turns[0] == {"role": "user", "text": "research Northwind Labs"}
     # the two assistant lines (split by a tool_result round-trip) fold into ONE agent turn
     assert turns[1]["text"] == "Looking it up. Done."
     assert [o["label"] for o in turns[1]["ops"]] == ["read", "search"]
@@ -1038,7 +1038,7 @@ def test_workspace_desk_reports_the_state_not_the_marker(tmp_path):
 
     # THE FOUNDER'S CASE: a desk somebody has worked in, and no marker anywhere near it
     (workspaces / "u_jane" / "kg" / "entities" / "company").mkdir(parents=True)
-    (workspaces / "u_jane" / "kg" / "entities" / "company" / "oenb.md").write_text("# OeNB\n")
+    (workspaces / "u_jane" / "kg" / "entities" / "company" / "examplebank.md").write_text("# Example Bank\n")
     body = c.get("/api/workspace/desk", headers=h).json()
     assert body["state"] == "warm" and body["scaffolded"] is False
 

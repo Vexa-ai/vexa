@@ -100,11 +100,11 @@ def test_neither_field_can_close_the_mark_early():
 # ── 2 · the explore chip: the composed opening #1588 left unmarked ───────────────────────────────
 
 def test_the_explore_chip_is_marked_and_reads_as_the_word_they_clicked():
-    prefix = chat_intents.act_prefix({"kind": "explore", "term": "Kaar Tech",
+    prefix = chat_intents.act_prefix({"kind": "explore", "term": "Northwind Labs",
                                       "meeting": "41", "segment": "s7"})
     assert prefix.startswith("[vexa-act:")
-    assert act_label("grounding\n\n" + prefix + "[explore] They clicked **Kaar Tech** …") \
-        == "Explore: Kaar Tech"
+    assert act_label("grounding\n\n" + prefix + "[explore] They clicked **Northwind Labs** …") \
+        == "Explore: Northwind Labs"
 
 
 def test_a_job_kind_keeps_the_job_mark_and_a_silent_one_stays_silent():
@@ -197,12 +197,12 @@ def test_half_a_header_is_no_mark(client):
 
 def test_an_explore_press_reaches_the_worker_marked_and_with_the_admins_words(client):
     r = client.post("/api/chat", headers={"X-User-Id": "u1"},
-                    json={"prompt": "Explore: Kaar Tech", "session": "main",
-                          "intent": {"kind": "explore", "term": "Kaar Tech", "meeting": "41"}})
+                    json={"prompt": "Explore: Northwind Labs", "session": "main",
+                          "intent": {"kind": "explore", "term": "Northwind Labs", "meeting": "41"}})
     assert r.status_code == 200
     prompt = _dispatched_prompt(client)
-    assert act_label(prompt) == "Explore: Kaar Tech"
-    assert "[explore] They clicked **Kaar Tech** in meeting 41." in prompt
+    assert act_label(prompt) == "Explore: Northwind Labs"
+    assert "[explore] They clicked **Northwind Labs** in meeting 41." in prompt
 
 
 def test_a_job_intent_keeps_its_own_mark_even_when_a_flow_header_rides_along(client):

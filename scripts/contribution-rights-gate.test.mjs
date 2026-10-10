@@ -111,7 +111,7 @@ test("corporate path requires a designated current-head receipt", () => {
 test("verifier identity is case-insensitive but receipt format is strict", () => {
   const corporate = pr({ body: body("corporate") });
   assert.equal(evaluatePullRequest(corporate, [decision({ login: "RIGHTS-VERIFIER" })], config).ok, true);
-  assert.equal(evaluatePullRequest(corporate, [decision({ receipt: "sony-email" })], config).ok, false);
+  assert.equal(evaluatePullRequest(corporate, [decision({ receipt: "corp-email" })], config).ok, false);
 });
 
 test("a decision for another PR cannot authorize this PR", () => {

@@ -33,7 +33,7 @@ export VEXA_MAILPIT_LOOKBACK_S=300
 # The attendee fan-out's allow-list. The sim org's own domains, PLUS the rehearsal domain — without
 # it every follow-up to an @rehearse.test attendee is filtered and the flow reports success having
 # mailed nobody (the F3 defect, exactly).
-export VEXA_FLOWS_ATTENDEE_DOMAINS="rehearse.test,rehearsal.test,imageworks.example,bank.example"
+export VEXA_FLOWS_ATTENDEE_DOMAINS="rehearse.test,rehearsal.test,studio.example,bank.example"
 
 # LANE-SCOPED KILLS ONLY. '-m flows_worker' is the FOUNDER lane's argv and must never appear here;
 # the sim worker keeps its renamed argv0 for the same reason, so the founder lane's own pkill

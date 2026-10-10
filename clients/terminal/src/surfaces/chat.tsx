@@ -1232,7 +1232,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
             updateChatState(key, (s) => ({ ...s, jobs: stepJob(s.jobs, jobId, step) }));
           },
           // STILL GOING, IN A FRESH WINDOW (Vexa-ai/vexa#1613). A long act that reached its
-          // per-window tool-call budget used to die there — the founder's OeNB job ran 72 steps
+          // per-window tool-call budget used to die there — the founder's Example Bank job ran 72 steps
           // and then said it had failed. It now checkpoints and continues, and the row it already
           // has says so. No step is counted: nothing was done, something was RESUMED.
           onJobProgress: (jobId, line) => {
@@ -1694,8 +1694,8 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
 
   // THE INPUT FIELD IS FOR TYPING. F66's second half — "working · 18 steps · entity_upsert" beside
   // the stop button — is GONE (founder ruling 2026-09-06, Vexa-ai/vexa#1587, on a screenshot of the
-  // composer reading `working · 1 step · james-spadafora.md` while the chat above already said
-  // `Reading · james-spadafora.md · 1 step` and `Working…`): *"working · 2 steps · whats_waiting —
+  // composer reading `working · 1 step · james-hollister.md` while the chat above already said
+  // `Reading · james-hollister.md · 1 step` and `Working…`): *"working · 2 steps · whats_waiting —
   // remove that from the input field"*. A running turn — and a running job — is told ONCE, in the
   // chat, where the step rows are (`JobRows` below, and the turn's own op line in agent-window).
   // The stop control stays: that is a handle, not narration.

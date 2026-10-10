@@ -32,9 +32,9 @@ ME = "126"
 ROW = "147"
 SEGMENTS = [
     {"start": 1.0, "absolute_start_time": "2026-10-09T10:00:01Z", "speaker": "Ana",
-     "text": "Kaar Tech came back on the pricing."},
+     "text": "Northwind Labs came back on the pricing."},
     {"start": 5.0, "absolute_start_time": "2026-10-09T10:00:05Z", "speaker": "Ben",
-     "text": "Cottalango Leon is the one who signs it."},
+     "text": "Robin Vale is the one who signs it."},
 ]
 
 
@@ -67,7 +67,7 @@ def world(tmp_path):
                  json={"path": "notes.md", "content": "my desk"}).status_code == 200
     a = c.post("/api/workspace/shared/new", headers=_me(), json={"name": "Alpha"}).json()["workspace_id"]
     b = c.post("/api/workspace/shared/new", headers=_me(), json={"name": "Beta"}).json()["workspace_id"]
-    for slug, kind, name in ((a, "company", "Kaar Tech"), (b, "person", "Cottalango Leon")):
+    for slug, kind, name in ((a, "company", "Northwind Labs"), (b, "person", "Robin Vale")):
         r = c.post("/api/workspace/entity", headers=_me(), json={
             "slug": slug, "kind": kind, "name": name, "facts": ["Named on the call."],
             "source": "the call"})
@@ -91,14 +91,14 @@ def test_transcript_terms_reads_nothing_from_outside_the_ceiling(world):
     assert asked and all(b not in ws for ws in asked), asked
     assert all(a in ws for ws in asked), "the workspace inside the ceiling is still asked with"
     known = {t["term"]: t["known"] for t in r.json()["terms"]}
-    assert known["Kaar Tech"] is not None
-    assert known["Cottalango Leon"] is None
+    assert known["Northwind Labs"] is not None
+    assert known["Robin Vale"] is None
 
     asked.clear()
     r = c.post("/api/meeting/terms/scan", headers=_me(), json={"meeting_id": ROW})
     assert all({a, b} <= set(ws) for ws in asked), asked
     known = {t["term"]: t["known"] for t in r.json()["terms"]}
-    assert known["Kaar Tech"] is not None and known["Cottalango Leon"] is not None
+    assert known["Northwind Labs"] is not None and known["Robin Vale"] is not None
 
 
 def test_entity_upsert_links_only_into_the_ceiling(world):
@@ -106,18 +106,18 @@ def test_entity_upsert_links_only_into_the_ceiling(world):
     reg = c.app.state.workspace_registry
     a_id, b_id = reg.by_slug(a)["id"], reg.by_slug(b)["id"]
     body = {"kind": "person", "name": "Ana Lima", "source": "the call",
-            "facts": ["Met [[Kaar Tech]] about [[Cottalango Leon]]."]}
+            "facts": ["Met [[Northwind Labs]] about [[Robin Vale]]."]}
     r = c.post("/api/workspace/entity", headers=_worker(a), json=body)
     assert r.status_code == 200, r.text
     out = r.json()
-    assert "Cottalango Leon" in out["links_missing"]
+    assert "Robin Vale" in out["links_missing"]
     page = c.get("/api/workspace/file", headers=_me(), params={"path": out["path"]}).json()["content"]
     assert f"ws:{a_id}/" in page and f"ws:{b_id}/" not in page
 
     r = c.post("/api/workspace/entity", headers=_me(),
                json={**body, "name": "Ben Ode"})
     out = r.json()
-    assert "Cottalango Leon" not in out["links_missing"]
+    assert "Robin Vale" not in out["links_missing"]
     page = c.get("/api/workspace/file", headers=_me(), params={"path": out["path"]}).json()["content"]
     assert f"ws:{b_id}/" in page
 
@@ -125,13 +125,13 @@ def test_entity_upsert_links_only_into_the_ceiling(world):
 def test_links_resolve_answers_not_yours_outside_the_ceiling(world):
     c, a, b, _ = world
     reg = c.app.state.workspace_registry
-    a_ref, b_ref = f"ws:{reg.by_slug(a)['id']}/kaar-tech", f"ws:{reg.by_slug(b)['id']}/cottalango-leon"
+    a_ref, b_ref = f"ws:{reg.by_slug(a)['id']}/northwind-labs", f"ws:{reg.by_slug(b)['id']}/robin-vale"
     worker = {r["ref"]: r for r in c.post("/api/links/resolve", headers=_worker(a),
                                           json={"refs": [a_ref, b_ref]}).json()["results"]}
     assert worker[a_ref]["access"] == ACCESS_READABLE and worker[a_ref]["url"]
     assert worker[b_ref]["access"] == ACCESS_NOT_YOURS
     assert worker[b_ref]["url"] is None and "path" not in worker[b_ref]
-    assert worker[b_ref]["title"] == "Cottalango Leon"     # derived from the ref, never read
+    assert worker[b_ref]["title"] == "Robin Vale"     # derived from the ref, never read
     mine = {r["ref"]: r for r in c.post("/api/links/resolve", headers=_me(),
                                         json={"refs": [a_ref, b_ref]}).json()["results"]}
     assert mine[b_ref]["access"] == ACCESS_READABLE and mine[b_ref]["url"]

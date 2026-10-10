@@ -151,15 +151,22 @@ def main() -> int:
             return datetime.datetime(d.year, d.month, d.day, hour,
                                      tzinfo=datetime.timezone.utc).timestamp()
 
+        # The group's person cards in the order the fixtures named them. The README check below
+        # touches the first one: which person that is comes from the fixture library, never from
+        # this file, so the replay names nobody of its own.
+        person_cards: list[str] = []
+
         def play(truth: dict, *, delivered: bool) -> None:
             """One meeting, the way decision 22 says a group meeting lands: the PEOPLE and the
             COMPANIES go on the GROUP desk (the run actively maintains it), and the person's own
             desk gets the meeting entity — whose links therefore point across."""
             nonlocal written
             for person in truth["people"]:
-                upsert_entity(group, "person", person,
-                              [f"Attended the DNA TSC meeting on {truth['date']}."],
-                              f"the {truth['date']} transcript", today=truth["date"])
+                card = upsert_entity(group, "person", person,
+                                     [f"Attended the DNA TSC meeting on {truth['date']}."],
+                                     f"the {truth['date']} transcript", today=truth["date"])
+                if card.get("path") and card["path"] not in person_cards:
+                    person_cards.append(card["path"])
             for org in truth["orgs"]:
                 upsert_entity(group, "company", org,
                               [f"Represented at the DNA TSC on {truth['date']}."],
@@ -205,7 +212,7 @@ def main() -> int:
         upsert_entity(desk, "meeting", "DNA TSC next", ["Booked in the series."], "the invite",
                       today=second["date"], dates={"scheduled_at": when_next})
         upsert_entity(desk, "decision", "Sign the ASWF CLA",
-                      ["SPI asked for the standard shape rather than an authorisation letter."],
+                      ["Brightwater asked for the standard shape rather than an authorisation letter."],
                       f"the {second['date']} transcript", today=second["date"],
                       dates={"due_at": at(second["date"]) + 7 * 86400})
 
@@ -215,16 +222,15 @@ def main() -> int:
         desk_readme.update_readme(
             desk, mounts=[{"path": str(desk), "id": desk_id}, {"path": str(group), "id": group_id}],
             workspaces=[{"id": group_id, "name": "Digital Naming Authority"}],
-            touches=[{"workspace": group_id,
-                      "path": "kg/entities/person/cottalango-leon.md", "at": 9e9}],
-            home_id=desk_id, name="olga@spi.com", now=at(second["date"], 18))
+            touches=[{"workspace": group_id, "path": person_cards[0], "at": 9e9}],
+            home_id=desk_id, name="nora@studio.example", now=at(second["date"], 18))
         readme = (desk / desk_readme.README).read_text()
         now_block = readme.split("## Now", 1)[1].split("<!-- desk:now:end -->", 1)[0]
         report["readme"] = {
             "links_to_group_cards": readme.count(f"[[ws:{group_id}/"),
             "pinned_is_untouched": desk_readme.PINNED_HINT in readme,
             "most_used_card_is_first": (readme.split("## People")[1].strip().splitlines() or [""])[0]
-                                       == f"- [[ws:{group_id}/cottalango-leon]]",
+                                       == f"- [[ws:{group_id}/{pathlib.PurePosixPath(person_cards[0]).stem}]]",
         }
         report["now"] = {
             "next_meeting": "[[DNA TSC next]]" in now_block,

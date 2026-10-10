@@ -1,7 +1,7 @@
 """L2: IMAGES ON PAGES — the asset door (Vexa-ai/vexa#1612).
 
 Founder, 2026-09-06, on a customer workspace README the agent had written: *"we want to be able
-images"*. The page rendered `![OeNB logo](…)` as alt text and a broken-image icon. The rule that
+images"*. The page rendered `![Example Bank logo](…)` as alt text and a broken-image icon. The rule that
 answers it is about WHERE THE BYTES LIVE, so that is what these tests are about:
 
 * **a page's picture comes through the page's own door** — the same owner- and membership-scoped
@@ -70,9 +70,9 @@ def _public(_host):
 # ── reading one ─────────────────────────────────────────────────────────────────────────────────
 
 def test_a_relative_image_is_served_as_bytes_with_the_media_type_its_name_claims(tmp_path):
-    _write(tmp_path, "u_jane", "assets/oenb-logo.png", PNG)
+    _write(tmp_path, "u_jane", "assets/bank-logo.png", PNG)
     r = _app(tmp_path).get("/api/workspace/asset",
-                           params={"subject": "u_jane", "path": "assets/oenb-logo.png"})
+                           params={"subject": "u_jane", "path": "assets/bank-logo.png"})
     assert r.status_code == 200
     assert r.content == PNG                       # verbatim: not re-encoded, not JSON-wrapped
     assert r.headers["content-type"].startswith("image/png")
@@ -137,24 +137,24 @@ def test_an_unchanged_asset_revalidates_instead_of_downloading_again(tmp_path):
 
 def test_a_fetched_asset_is_stored_under_assets_with_its_source_recorded(tmp_path, monkeypatch):
     monkeypatch.setattr(assets, "fetch_asset",
-                        lambda url, **_kw: (PNG, "image/png", "https://oenb.at/logo.png"))
+                        lambda url, **_kw: (PNG, "image/png", "https://bank.example/logo.png"))
     r = _app(tmp_path).post("/api/workspace/asset",
                             params={"subject": "u_jane"},
-                            json={"url": "https://oenb.at/logo.png"})
+                            json={"url": "https://bank.example/logo.png"})
     assert r.status_code == 200
     stored = r.json()["path"]
     assert stored == "assets/logo.png"
     assert (tmp_path / "u_jane" / stored).read_bytes() == PNG
     index = (tmp_path / "u_jane" / assets.SOURCES_INDEX).read_text()
-    assert "assets/logo.png" in index and "https://oenb.at/logo.png" in index
+    assert "assets/logo.png" in index and "https://bank.example/logo.png" in index
 
 
 def test_a_fetch_names_the_path_it_was_asked_for_and_puts_a_bare_name_in_assets(tmp_path, monkeypatch):
     monkeypatch.setattr(assets, "fetch_asset",
                         lambda url, **_kw: (PNG, "image/png", "https://x.example/pic"))
     r = _app(tmp_path).post("/api/workspace/asset", params={"subject": "u_jane"},
-                            json={"url": "https://x.example/pic", "path": "oenb-logo.png"})
-    assert r.json()["path"] == "assets/oenb-logo.png"
+                            json={"url": "https://x.example/pic", "path": "bank-logo.png"})
+    assert r.json()["path"] == "assets/bank-logo.png"
 
 
 def test_a_refused_url_is_a_named_400_not_a_silent_empty_asset(tmp_path):
@@ -166,7 +166,7 @@ def test_a_refused_url_is_a_named_400_not_a_silent_empty_asset(tmp_path):
 
 
 def test_a_remote_that_answered_badly_is_ITS_status_and_not_ours(tmp_path, monkeypatch):
-    """Vexa-ai/vexa#1624 — the reader who pressed the offer on the OeNB logo was shown `400: …
+    """Vexa-ai/vexa#1624 — the reader who pressed the offer on the Example Bank logo was shown `400: …
     answered 404`, our code for their request with the remote's buried in a sentence. The request
     was fine; the dependency failed. 424 carries the upstream code as a field, so the client can
     say *the site answered 404* in words instead of printing two status codes at a person."""

@@ -78,7 +78,7 @@ def queued_line(kind: str, target: str, ahead: int) -> str:
     """A SECOND ACT ON THE SAME PAGE IS QUEUED, NEVER REFUSED (Vexa-ai/vexa#1610).
 
     The founder dropped several Extend acts with their own instruction lines onto one page while a
-    job ran and read *"There is already something running on oenb-b5e60c/README.md — I'll finish
+    job ran and read *"There is already something running on bank-b5e60c/README.md — I'll finish
     that one first"* twice. That sentence was true and the instruction it declined was gone: nothing
     held it, so pressing again was the only way to get it done, and only the person knew that."""
     behind = "the one running" if ahead <= 1 else f"{ahead} on the same page"

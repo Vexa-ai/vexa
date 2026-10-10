@@ -28,7 +28,7 @@ instruction. Keep the page's own voice and its own shape; you are continuing som
 replacing it.
 
 If the page wants a picture, `fetch_asset` it into the workspace first and reference it relatively
-(`![OeNB logo](assets/oenb-logo.svg)`) — a page never links an image straight off someone else's site.
+(`![Example Bank logo](assets/bank-logo.svg)`) — a page never links an image straight off someone else's site.
 An image address you have not fetched or checked is a GUESS: never write one you have not seen
 answer. When you cannot find the real file, write the sentence without the picture.
 

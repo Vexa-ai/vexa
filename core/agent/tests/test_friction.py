@@ -344,7 +344,7 @@ def test_a_budget_stop_names_the_budget_the_count_and_the_last_tool():
          "kind": "chat", "tool": "mcp__vexa__entity_upsert", "seconds": 91.2},
         {"type": "tool-result", "callId": "2", "tool": "Write", "ok": False,
          "summary": "not run: the turn hit its tool-call budget"},
-    ], session="pchat-mtpuq2r0", subject="126", workspace="oenb-b5e60c")
+    ], session="pchat-mtpuq2r0", subject="126", workspace="bank-b5e60c")
     assert len(recs) == 1
     rec = recs[0]
     assert rec["happened"].startswith(
@@ -352,7 +352,7 @@ def test_a_budget_stop_names_the_budget_the_count_and_the_last_tool():
     assert "not run" not in rec["happened"]
     assert "``" not in rec["tried"] and "40 tool calls for a chat turn" in rec["tried"]
     assert rec["kind"] == "unfulfilled" and rec["auto"] is True
-    assert rec["session"] == "pchat-mtpuq2r0" and rec["context"]["workspace"] == "oenb-b5e60c"
+    assert rec["session"] == "pchat-mtpuq2r0" and rec["context"]["workspace"] == "bank-b5e60c"
     assert "VEXA_AGENT_MAX_TOOL_CALLS_CHAT" in rec["would_help"]
 
 

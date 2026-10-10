@@ -17,15 +17,15 @@ import score as S  # noqa: E402
 # ── bare names ───────────────────────────────────────────────────────────────────────────────────
 
 def test_a_bare_multi_word_name_is_counted():
-    assert S.unlinked_names("Cottalango Leon agreed to chair it.") == ["Cottalango Leon"]
+    assert S.unlinked_names("Robin Vale agreed to chair it.") == ["Robin Vale"]
 
 
 def test_a_wikilinked_name_is_not():
-    assert S.unlinked_names("[[Cottalango Leon]] agreed to chair it.") == []
+    assert S.unlinked_names("[[Robin Vale]] agreed to chair it.") == []
 
 
 def test_a_markdown_linked_name_is_not():
-    assert S.unlinked_names("[Cottalango Leon](kg/entities/person/x.md) agreed.") == []
+    assert S.unlinked_names("[Robin Vale](kg/entities/person/x.md) agreed.") == []
 
 
 def test_sentence_initial_words_do_not_fire():
@@ -34,18 +34,18 @@ def test_sentence_initial_words_do_not_fire():
 
 
 def test_headings_and_code_fences_are_formatting_not_mentions():
-    note = "## Open Items\n\n```\nSony Pictures Imageworks\n```\n"
+    note = "## Open Items\n\n```\nBrightwater Picture Studios\n```\n"
     assert S.unlinked_names(note) == []
 
 
 def test_frontmatter_is_not_prose():
-    assert S.unlinked_names("---\ntitle: Sony Pictures Imageworks\n---\n\nAll agreed.\n") == []
+    assert S.unlinked_names("---\ntitle: Brightwater Picture Studios\n---\n\nAll agreed.\n") == []
 
 
 def test_the_dimension_falls_as_names_are_left_dead():
-    clean = {"note": "[[Olga Avramenko]] will chair."}
-    dirty = {"note": "Olga Avramenko, Cottalango Leon, Sony Pictures Imageworks, "
-                     "Blue Light Card and Kaar Tech all agreed."}
+    clean = {"note": "[[Nora Quill]] will chair."}
+    dirty = {"note": "Nora Quill, Robin Vale, Brightwater Picture Studios, "
+                     "Fernhill Loyalty Card and Northwind Labs all agreed."}
     assert S.d_names_linked(clean)[0] == 1.0
     assert S.d_names_linked(dirty)[0] == 0.0
     assert S.d_names_linked({"note": ""})[0] == 0.0

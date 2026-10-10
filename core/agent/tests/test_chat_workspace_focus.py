@@ -1,7 +1,7 @@
 """A WORKSPACE CREATED FROM A CHAT JOINS THAT CHAT (Vexa-ai/vexa#1603).
 
 Founder walk, 2026-09-06. In a desk chat he asked for *"a new workspace where we will collect
-everything we know about ILM"*; the agent created the shared workspace `industrial-light-magic-…`.
+everything we know about Copperline"*; the agent created the shared workspace `copperline-effects-…`.
 He then asked to *"collect all the knowledge from all sources we have into this new one"*, and the
 agent answered:
 
@@ -48,7 +48,7 @@ from shared import units
 from shared.config import load_settings
 
 
-CREATED = {"created": "industrial-light-magic-4040f4", "name": "Industrial Light and Magic",
+CREATED = {"created": "copperline-effects-4040f4", "name": "Copperline Effects",
            "you_are": "owner"}
 
 
@@ -56,8 +56,8 @@ CREATED = {"created": "industrial-light-magic-4040f4", "name": "Industrial Light
 
 def test_a_successful_create_becomes_a_focus_event_naming_the_workspace():
     assert _workspace_focus(json.dumps(CREATED)) == {
-        "type": "focus", "workspace": "industrial-light-magic-4040f4",
-        "name": "Industrial Light and Magic"}
+        "type": "focus", "workspace": "copperline-effects-4040f4",
+        "name": "Copperline Effects"}
 
 
 def test_the_event_claims_no_access_because_it_is_not_the_thing_that_knows():
@@ -90,7 +90,7 @@ def test_the_name_is_optional_and_never_invented():
 
 def _use(tool, cid="c1"):
     return json.dumps({"type": "assistant", "message": {"content": [
-        {"type": "tool_use", "name": tool, "input": {"name": "ILM"}, "id": cid}]}})
+        {"type": "tool_use", "name": tool, "input": {"name": "Copperline"}, "id": cid}]}})
 
 
 def _result(payload, cid="c1", err=False):
@@ -106,7 +106,7 @@ def _events(lines):
 def test_claude_code_emits_the_focus_after_its_tool_result():
     evs = _events([_use("mcp__vexa__workspace_new"), _result(CREATED)])
     assert [e["type"] for e in evs] == ["tool-call", "tool-result", "focus"]
-    assert evs[-1]["workspace"] == "industrial-light-magic-4040f4"
+    assert evs[-1]["workspace"] == "copperline-effects-4040f4"
 
 
 def test_a_failed_create_moves_nothing():
@@ -135,7 +135,7 @@ def test_the_worker_is_allowed_to_call_it():
 def test_openai_agent_derives_the_same_event_from_the_same_result():
     """Both runners read one result through one function — a surface convention written twice is a
     convention that is right in one runner."""
-    call = {"id": "c1", "name": "mcp__vexa__workspace_new", "args": {"name": "ILM"}}
+    call = {"id": "c1", "name": "mcp__vexa__workspace_new", "args": {"name": "Copperline"}}
     assert _panel_events(call, True, json.dumps(CREATED)) == [_workspace_focus(json.dumps(CREATED))]
     assert _panel_events(call, False, json.dumps(CREATED)) == []
 
@@ -189,9 +189,9 @@ def _index_cases():
 
 def test_a_created_workspace_joins_the_chats_focus():
     for sess in _index_cases():
-        sess.upsert("u1", "pchat-abc", title="a workspace for ILM")
-        assert sess.add_workspace("u1", "pchat-abc", "grp-ilm") is True
-        assert sess.list("u1")[0]["workspaces"] == ["grp-ilm"]
+        sess.upsert("u1", "pchat-abc", title="a workspace for Copperline")
+        assert sess.add_workspace("u1", "pchat-abc", "grp-copperline") is True
+        assert sess.list("u1")[0]["workspaces"] == ["grp-copperline"]
 
 
 def test_it_is_ADDITIVE_because_the_turn_knows_one_member_not_the_set():
@@ -199,22 +199,22 @@ def test_it_is_ADDITIVE_because_the_turn_knows_one_member_not_the_set():
     one place it made, so restating from it would drop every other mount the chat had."""
     for sess in _index_cases():
         sess.upsert("u1", "s", workspaces=["_global", "u_priya"])
-        sess.add_workspace("u1", "s", "grp-ilm")
-        assert sess.list("u1")[0]["workspaces"] == ["_global", "u_priya", "grp-ilm"]
+        sess.add_workspace("u1", "s", "grp-copperline")
+        assert sess.list("u1")[0]["workspaces"] == ["_global", "u_priya", "grp-copperline"]
 
 
 def test_creating_the_same_workspace_twice_changes_nothing():
     for sess in _index_cases():
-        sess.add_workspace("u1", "s", "grp-ilm")
-        assert sess.add_workspace("u1", "s", "grp-ilm") is False
-        assert sess.list("u1")[0]["workspaces"] == ["grp-ilm"]
+        sess.add_workspace("u1", "s", "grp-copperline")
+        assert sess.add_workspace("u1", "s", "grp-copperline") is False
+        assert sess.list("u1")[0]["workspaces"] == ["grp-copperline"]
 
 
 def test_the_focus_does_not_disturb_what_the_rail_already_reads():
     for sess in _index_cases():
         sess.upsert("u1", "s", title="First prompt", scaffold={"kind": "first-visit", "id": "SC1"},
                     touched=True, meeting="118")
-        sess.add_workspace("u1", "s", "grp-ilm")
+        sess.add_workspace("u1", "s", "grp-copperline")
         row = sess.list("u1")[0]
         assert row["title"] == "First prompt" and row["touched"] is True
         assert row["scaffold"] == {"kind": "first-visit", "id": "SC1"} and row["meeting"] == "118"
@@ -231,8 +231,8 @@ def test_a_chat_that_never_made_a_workspace_keeps_the_unit_id_it_always_had():
 
 def test_the_generation_steps_once_on_the_turn_AFTER_the_create():
     for sess in _index_cases():
-        sess.upsert("u1", "s", title="a workspace for ILM")
-        sess.add_workspace("u1", "s", "grp-ilm")
+        sess.upsert("u1", "s", title="a workspace for Copperline")
+        sess.add_workspace("u1", "s", "grp-copperline")
         # mid-turn the id must NOT move: the turn that made it is still streaming, and its own
         # reconnect has to find the unit it is watching.
         assert sess.mount_gen("u1", "s") == 0
@@ -245,7 +245,7 @@ def test_the_generation_steps_once_on_the_turn_AFTER_the_create():
 
 def test_a_second_workspace_steps_it_again():
     for sess in _index_cases():
-        sess.add_workspace("u1", "s", "grp-ilm")
+        sess.add_workspace("u1", "s", "grp-copperline")
         assert sess.take_mount_generation("u1", "s") == 1
         sess.add_workspace("u1", "s", "grp-vfx")
         assert sess.take_mount_generation("u1", "s") == 2
@@ -304,7 +304,7 @@ def test_the_next_turns_mount_set_carries_the_new_workspace_read_write(tmp_path)
     settings = load_settings(workspaces_dir=str(root),
                              global_system_workspace_path=str(root / "_global"),
                              internal_api_secret="s", ui_url="https://app.example.test", redis_url="")
-    wid = create_shared_workspace_dir(root, "Industrial Light and Magic")
+    wid = create_shared_workspace_dir(root, "Copperline Effects")
     ensure_owner(root, wid, "175", index=InMemoryMembershipIndex())
     mounts = build_mount_set(settings, "175", [{"workspace_id": wid, "role": "owner"}])
     made = next((m for m in mounts if m["slug"] == wid), None)
@@ -322,7 +322,7 @@ INTERNAL = "internal-tier-secret-for-tests"
 
 CREATE_TURN = [
     {"type": "message-delta", "text": "Making it now."},
-    {"type": "focus", "workspace": "grp-ilm", "name": "Industrial Light and Magic"},
+    {"type": "focus", "workspace": "grp-copperline", "name": "Copperline Effects"},
     {"type": "turn-complete"},
 ]
 
@@ -375,7 +375,7 @@ def _client(stack, events):
     return TestClient(app)
 
 
-def _turn(client, session, prompt="a new workspace for everything we know about ILM"):
+def _turn(client, session, prompt="a new workspace for everything we know about Copperline"):
     return client.post("/api/chat", json={"prompt": prompt, "session": session},
                        headers={"X-User-Id": "u_priya"})
 
@@ -385,14 +385,14 @@ def test_a_turn_that_creates_a_workspace_focuses_it_on_THAT_chats_session(stack)
     assert _turn(client, "pchat-abc").status_code == 200
     rows = client.get("/api/sessions", headers={"X-User-Id": "u_priya"}).json()["sessions"]
     assert rows[0]["session"] == "pchat-abc"
-    assert rows[0]["workspaces"] == ["grp-ilm"]
+    assert rows[0]["workspaces"] == ["grp-copperline"]
 
 
 def test_the_client_still_gets_every_event_it_always_got(stack):
     """A READ, not a reroute. The client updates the chip and mounts the panel off this same event;
     the index write is what makes the focus outlive this browser."""
     body = _turn(_client(stack, CREATE_TURN), "pchat-abc").text
-    assert '"type": "focus"' in body and '"workspace": "grp-ilm"' in body
+    assert '"type": "focus"' in body and '"workspace": "grp-copperline"' in body
     assert "Making it now." in body and "turn-complete" in body
 
 
@@ -427,7 +427,7 @@ def test_the_focus_lands_on_the_session_that_CREATED_never_on_whatever_is_in_fro
     _turn(quiet, "pchat-bystander", prompt="something else")
     rows = {r["session"]: r for r in
             client.get("/api/sessions", headers={"X-User-Id": "u_priya"}).json()["sessions"]}
-    assert rows["pchat-maker"]["workspaces"] == ["grp-ilm"]
+    assert rows["pchat-maker"]["workspaces"] == ["grp-copperline"]
     assert rows["pchat-bystander"]["workspaces"] == []
 
 
@@ -440,7 +440,7 @@ def test_an_index_that_refuses_the_write_does_not_cost_the_person_their_turn(sta
     stack["sessions"] = _Broken()
     r = _turn(_client(stack, CREATE_TURN), "pchat-abc")
     assert r.status_code == 200
-    assert '"workspace": "grp-ilm"' in r.text and "turn-complete" in r.text
+    assert '"workspace": "grp-copperline"' in r.text and "turn-complete" in r.text
 
 
 # ── and the same walk's other half: the bubble shows the person's words ──────────────────────────

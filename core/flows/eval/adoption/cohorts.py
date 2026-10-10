@@ -1,6 +1,6 @@
 """Cohorts — which meetings a person could plausibly be IN, and therefore be written to about.
 
-Revolution 1's §4 was contaminated by the instrument, not by the product: SPI coordinators,
+Revolution 1's §4 was contaminated by the instrument, not by the product: Brightwater coordinators,
 artists and supervisors were handed the minutes of an ASWF TSC governance meeting they had
 never attended, and ignored them for exactly that — "not my show, not my dailies", "not a word
 about my shots". That is the harness attaching the wrong meeting to the wrong person. A touch
@@ -11,7 +11,7 @@ So every fixture carries a COHORT, every person belongs to one, and a touch is o
 generated for a person whose cohort matches the meeting.
 
   insider     the DNA/ASWF working-group world — pipeline engineers, studio technology, TDs,
-              the Cottalango/Olga-shaped people who are actually in the TSC. The recorded DNA
+              the Robin/Nora-shaped people who are actually in the TSC. The recorded DNA
               fixtures belong here, and to nobody else.
   production  the people the pilot is actually for — coordinators, production managers,
               supervisors, department artists. Their meeting is DAILIES, per show, per
@@ -91,7 +91,7 @@ if __name__ == "__main__":
 
     import org as O
     import personas as P
-    o = O.build(sys.argv[1] if len(sys.argv) > 1 else "spi",
+    o = O.build(sys.argv[1] if len(sys.argv) > 1 else "studio",
                 int(sys.argv[2]) if len(sys.argv) > 2 else 2000)
     P.assign(o)
     st = stats(o)

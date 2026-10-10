@@ -605,7 +605,7 @@ def member_verbs_preamble() -> str:
 
     Named BESIDE `workspace_write` — the issue says *"the turn's prompt naming the verbs beside
     `workspace_write`"* — so it is appended to that preamble rather than shipped as a block of its
-    own: a person asking *"add Marvin to this workspace"* is asking about the same surface as a
+    own: a person asking *"add Quentin to this workspace"* is asking about the same surface as a
     person asking to move a page, and two separate sections would let a turn read one and not the
     other.
 
@@ -975,7 +975,7 @@ def _writeback_workspace_note(mounts: "list[dict] | None" = None) -> str:
 def image_rule() -> str:
     """THE ONE LINE ABOUT PICTURES, wherever a page is written (Vexa-ai/vexa#1624).
 
-    Founder, 2026-09-06, on the OeNB README: the page carried a Wikimedia address the agent had
+    Founder, 2026-09-06, on the Example Bank README: the page carried a Wikimedia address the agent had
     invented, and it answers 404. `shared/page_images.py` catches that on the way in — the reference
     never reaches the page — but a rule that only exists as an enforcement teaches nothing: the
     agent's next turn writes the same guess, has it removed again, and never learns why the picture
@@ -1272,7 +1272,7 @@ def should_write_back(prompt: str, tool_calls: int, *, min_tokens: int | None = 
        that. This is the gate that removes the phase from exactly the turns that need it least;
     3. cheap on BOTH counts — no tool call AND the person said very little. Either signal alone is a
        turn that can have learned something: a long message carries facts with no tool call, and a
-       short one ("who is Olga?") can pull a whole dossier through one. The floor is on the PERSON's
+       short one ("who is Nora?") can pull a whole dossier through one. The floor is on the PERSON's
        words, never on the agent's reply;
     4. **nothing to write** — `candidates` empty. Passing `None` skips this gate (the caller has not
        run the pre-pass), which is only the tests and the legacy call shape.
@@ -2320,7 +2320,7 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
         # ⚠ THE TOOL RESULTS ARE NOT AVAILABLE HERE, and the version that thought they were invented
         # people. What reaches this seam is `llm.tool_events._short(content, 80)` — an 80-character
         # PREVIEW — so a name straddling the cut arrives as a fragment. Measured on a second turn
-        # over a populated desk, the pre-pass proposed "James Spadaf", "James Spad", "Technical
+        # over a populated desk, the pre-pass proposed "James Hollis", "James Holl", "Technical
         # Stee" and "DNA TSC Inaugural Meetin": none has a page, none ever would, and each one
         # dragged a model call it was supposed to prevent — 2 of 2 turns, exactly the gate failing
         # open. A truncated string is not a source of names. It may confirm one; it may never
@@ -2674,7 +2674,7 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
         # is set on the thread that iterates it — the job's own thread — and the chat turn
         # running beside it in this same process keeps the per-turn budget it always had. The
         # harness reads it (`llm/jobs.in_job`) to pick a budget that fits an act rather than a
-        # sentence: the founder's OeNB job ran 72 steps and then died on a 40-call turn budget.
+        # sentence: the founder's Example Bank job ran 72 steps and then died on a 40-call turn budget.
         job=_fresh(_job_turn),
         # The register that makes "a restart cancels them and the chat is told" true. It sits beside
         # the session pointers, under the private continuity root, which is already outside the

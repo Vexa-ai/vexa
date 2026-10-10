@@ -29,7 +29,7 @@ from zoneinfo import ZoneInfo  # noqa: E402
 
 from flows_integrations.mailbox import parse_ics  # noqa: E402
 
-ME = "vexa@oenb.at"
+ME = "vexa@bank.example"
 
 
 def _exchange(*, tzid="W. Europe Standard Time", extra_lines=(), description=None) -> str:
@@ -50,11 +50,11 @@ def _exchange(*, tzid="W. Europe Standard Time", extra_lines=(), description=Non
         f"TZID:{tzid}",
         "END:VTIMEZONE",
         "BEGIN:VEVENT",
-        'ORGANIZER;CN="Huber, Tobias":MAILTO:Tobias.Huber@oenb.at',
+        'ORGANIZER;CN="Huber, Lennart":MAILTO:Lennart.Huber@bank.example',
         'ATTENDEE;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE;CN="Smith, Anna":'
-        "MAILTO:Anna.Smith@oenb.at",
-        "ATTENDEE;ROLE=OPT-PARTICIPANT;CN=Ben Meier:MAILTO:ben.meier@oenb.at",
-        "ATTENDEE;ROLE=REQ-PARTICIPANT;CN=Vexa Minutes:MAILTO:vexa@oenb.at",
+        "MAILTO:Anna.Smith@bank.example",
+        "ATTENDEE;ROLE=OPT-PARTICIPANT;CN=Ben Meier:MAILTO:ben.meier@bank.example",
+        "ATTENDEE;ROLE=REQ-PARTICIPANT;CN=Vexa Minutes:MAILTO:vexa@bank.example",
         f"DESCRIPTION:{desc}",
         "UID:040000008200E00074C5B7101A82E00800000000A1B2C3",
         f"DTSTART;TZID={tzid}:20300902T140000",
@@ -72,7 +72,7 @@ def test_an_exchange_invite_parses_at_all():
     Time'`. Not a None, not a quarantine — a raise, on the pilot's only invite shape."""
     ev = parse_ics(_exchange(), self_addr=ME)
     assert ev is not None, "the Exchange invite did not parse"
-    assert ev["organizer"] == "tobias.huber@oenb.at"
+    assert ev["organizer"] == "lennart.huber@bank.example"
     assert ev["title"] == "Planning"
     assert ev["url"].startswith("https://teams.microsoft.com/l/meetup-join/")
 
@@ -107,21 +107,21 @@ def test_exchange_attendees_and_their_directory_names():
     """Uppercase `MAILTO:`, addresses lowercased, our own mailbox never an attendee, and a `CN`
     quoted because it holds a comma — unquoted, "Smith" is all a reader gets of the name."""
     ev = parse_ics(_exchange(), self_addr=ME)
-    assert ev["participants"] == ["anna.smith@oenb.at", "ben.meier@oenb.at"], \
+    assert ev["participants"] == ["anna.smith@bank.example", "ben.meier@bank.example"], \
         "the Exchange ATTENDEE lines did not yield the room (our own address must be absent)"
-    assert ev["participant_names"] == {"anna.smith@oenb.at": "Smith, Anna",
-                                       "ben.meier@oenb.at": "Ben Meier"}
+    assert ev["participant_names"] == {"anna.smith@bank.example": "Smith, Anna",
+                                       "ben.meier@bank.example": "Ben Meier"}
 
 
 def test_a_folded_exchange_attendee_line_is_one_attendee():
     """Exchange folds at 75 octets, and the parameter train ahead of a long address means the fold
     routinely lands mid-line. Unfolded wrongly, one person becomes zero or two."""
     folded = _exchange().replace(
-        "ATTENDEE;ROLE=OPT-PARTICIPANT;CN=Ben Meier:MAILTO:ben.meier@oenb.at",
-        "ATTENDEE;ROLE=OPT-PARTICIPANT;CN=Ben Mei\r\n er:MAILTO:ben.meier@oe\r\n nb.at")
+        "ATTENDEE;ROLE=OPT-PARTICIPANT;CN=Ben Meier:MAILTO:ben.meier@bank.example",
+        "ATTENDEE;ROLE=OPT-PARTICIPANT;CN=Ben Mei\r\n er:MAILTO:ben.meier@ba\r\n nk.example")
     ev = parse_ics(folded, self_addr=ME)
-    assert "ben.meier@oenb.at" in ev["participants"]
-    assert ev["participant_names"]["ben.meier@oenb.at"] == "Ben Meier"
+    assert "ben.meier@bank.example" in ev["participants"]
+    assert ev["participant_names"]["ben.meier@bank.example"] == "Ben Meier"
 
 
 # ── the per-meeting opt-out (PRD §16.2 item 3) ──────────────────────────────────────────────────
@@ -183,7 +183,7 @@ def test_a_recorded_exchange_message_routes_as_an_invite():
     called it died on the message rather than deciding anything about it."""
     kind, ev = _routed()
     assert kind == "invite", kind
-    assert ev["organizer"] == "tobias.huber@example.test"
+    assert ev["organizer"] == "lennart.huber@example.test"
 
 
 def test_the_exchange_invite_becomes_the_exact_invite_received_refs():
@@ -192,7 +192,7 @@ def test_the_exchange_invite_becomes_the_exact_invite_received_refs():
     uppercase MAILTO, a comma inside a quoted CN, and a Windows zone on both DTSTART and VTIMEZONE."""
     _, ev = _routed()
     assert ev == {
-        "organizer": "tobias.huber@example.test",
+        "organizer": "lennart.huber@example.test",
         "url": "https://teams.microsoft.com/l/meetup-join/"
                "19%3ameeting_ZmE0MjJkNmEt%40thread.v2/0",
         "start": datetime(2030, 9, 2, 14, 0, 0,

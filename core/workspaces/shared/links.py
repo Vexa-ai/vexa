@@ -57,7 +57,7 @@ class Ref:
 def _form_of(target: str) -> str:
     """Entity id or path? A path is the one with structure in it — a slash, or a file extension.
 
-    Entity ids are slugs (`olga-avramenko`), which carry neither. The test is on the SHAPE and not
+    Entity ids are slugs (`nora-quill`), which carry neither. The test is on the SHAPE and not
     on a lookup, because the writer of the link and the reader of it are in different processes and
     the writer's directory listing is not available to the reader."""
     t = str(target or "")

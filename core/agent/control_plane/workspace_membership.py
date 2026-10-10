@@ -74,8 +74,8 @@ MEMBERS_FILE = f"{POLICY_DIR}/members.json"
 # ``policy/`` to its pre-turn state, deleting every invite that had been minted while the turn ran.
 # The workspace's own history said it out loud, once per mint:
 #
-#     policy: mint invite 41cdb3b6a5841ffc (contributor) for oenb-b5e60c     19:28:08
-#     oenb-b5e60c: policy/invites.json — removed                             19:28:09
+#     policy: mint invite 41cdb3b6a5841ffc (contributor) for bank-b5e60c     19:28:08
+#     bank-b5e60c: policy/invites.json — removed                             19:28:09
 #
 # The write-back is fixed (``llm/ports._policy_anchor``), and that fix alone would have been enough
 # to stop the deletion. It is not enough to stop the CLASS: a file inside a workspace mount is inside

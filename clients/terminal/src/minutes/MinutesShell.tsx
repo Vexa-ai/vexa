@@ -1252,7 +1252,7 @@ export function MinutesShell() {
 
   // ── A WORKSPACE MADE FROM THIS CHAT IS IN THIS CHAT (Vexa-ai/vexa#1603) ──────────────────────
   //
-  //  The founder asked for *"a new workspace where we will collect everything we know about ILM"*.
+  //  The founder asked for *"a new workspace where we will collect everything we know about Copperline"*.
   //  The agent made it — and then had to tell him *"the new workspace isn't in my native mount
   //  stack (it's reached via the workspace_* tools)"*. *"not native workspace??"*.
   //
@@ -1275,12 +1275,12 @@ export function MinutesShell() {
       // …AND IT BECOMES WHERE THIS CHAT WRITES (Vexa-ai/vexa#1611). A `focus` says "this workspace
       // is where this conversation is working", which has always meant both halves — it joins the
       // set, and it takes the target. `workspace_target` emits the same event for the same reason,
-      // so *"work in the OeNB workspace"* and *"make me a workspace for OeNB"* land identically.
+      // so *"work in the Example Bank workspace"* and *"make me a workspace for Example Bank"* land identically.
       // The mount goes in first, above, because `chooseTarget` refuses a target the chat is not
       // over — the record and the server both make that refusal, so the order is load-bearing.
       setChatTargetRef.current(wid, { justMounted: true });
       // The label is the workspace's HUMAN name when the create knew one — a tab reading
-      // `industrial-light-magic-4040f4` is the slug leaking into a place names belong (F49).
+      // `copperline-effects-4040f4` is the slug leaking into a place names belong (F49).
       if (!readerChoseFocus.current) {
         openPage({ path: "README.md", slug: wid, label: d.name?.trim() || wid } as Page);
       }

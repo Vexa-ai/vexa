@@ -48,17 +48,17 @@ describe("normalizeDocPath", () => {
 
 describe("entitySlug", () => {
   it("slugifies titles the way entity files are named", () => {
-    expect(entitySlug("James Spadafora")).toBe("james-spadafora");
+    expect(entitySlug("James Hollister")).toBe("james-hollister");
     expect(entitySlug("Meeting 96088138284")).toBe("meeting-96088138284");
   });
 });
 
 describe("resolveDocRef — wikilinks", () => {
   it("resolves inside the doc's OWN (shared) workspace first — the dead-link bug", async () => {
-    trees["dna"] = ["kg/entities/person/james-spadafora.md"];
+    trees["dna"] = ["kg/entities/person/james-hollister.md"];
     trees[""] = [];
-    const r = await resolveDocRef({ wikilink: "James Spadafora" }, { path: "README.md", slug: "dna" });
-    expect(r).toEqual({ path: "kg/entities/person/james-spadafora.md", slug: "dna", type: "person" });
+    const r = await resolveDocRef({ wikilink: "James Hollister" }, { path: "README.md", slug: "dna" });
+    expect(r).toEqual({ path: "kg/entities/person/james-hollister.md", slug: "dna", type: "person" });
   });
   it("falls back to the home workspace, then the mounted active set", async () => {
     trees["dna"] = [];
@@ -86,12 +86,12 @@ describe("resolveDocRef — wikilinks", () => {
     expect(treeReads).toBeGreaterThan(1);   // it did not trust the cached miss
   });
   it("resolves organisation entities from the mandatory _global tier even though it is not in /workspace/active", async () => {
-    trees["_global"] = ["kg/entities/company/oesterreichische-nationalbank.md"];
+    trees["_global"] = ["kg/entities/company/example-bank.md"];
     active = [{ slug: "personal" }];
     trees["personal"] = [];
-    const r = await resolveDocRef({ wikilink: "Oesterreichische Nationalbank" }, {});
+    const r = await resolveDocRef({ wikilink: "Example Bank" }, {});
     expect(r).toEqual({
-      path: "kg/entities/company/oesterreichische-nationalbank.md",
+      path: "kg/entities/company/example-bank.md",
       slug: "_global",
       type: "company",
     });

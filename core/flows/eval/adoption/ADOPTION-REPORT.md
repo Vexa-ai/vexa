@@ -76,7 +76,7 @@ seed** — the cheapest complete answer.
 | **H1** the artifact loop dominates | **held** | 5–10× the null on peak active in both cohorts; without it adoption travels only through organizers |
 | **H2** presence is free but weak | **half refuted** | multiplies strongly (+23pp on mail) — but *nearly replaces* mail for coordinators (83.3% presence-only). Its solo blocker is `trust_quality` |
 | **H3** value is the retention coefficient | **held** | retention tracks touch quality; the personal variant holds (ret90 0.82) where shared bleeds (0.31) |
-| **H4** control is the SPI gate | **unmeasured** | sharing default ON shipped; opt-out/deletion visibility never put in front of a persona |
+| **H4** control is the Brightwater gate | **unmeasured** | sharing default ON shipped; opt-out/deletion visibility never put in front of a persona |
 | **H5** groups compound, and matter with size | **unmeasured** | group leg still unproven; no arm tested it |
 | **H6** approval pull | **unmeasured** | out of scope, as planned |
 | **H7** friction halves | **held** | every removed step moved a stage: the capability (0 → visible), the placement (33 → 83%), the platform parse (0 → 10 s) |
@@ -95,7 +95,7 @@ Calendar reality (holidays, timezones, skipped meetings); the terminal UI beyond
 provisioning and the tenant admitting the bot; anyone telling a colleague out loud; transcription
 quality. Quality enters only through what the mails actually say. The production cohort's dailies
 are **generated** (`synthetic: true`) — no recorded dailies exists, so those numbers are about
-dailies-*shaped* input, not about SPI. Sample sizes are small (n=48 per arm at best) and
+dailies-*shaped* input, not about Brightwater. Sample sizes are small (n=48 per arm at best) and
 run-to-run variance was measured at **±10pp**.
 
 ## Calibration plan

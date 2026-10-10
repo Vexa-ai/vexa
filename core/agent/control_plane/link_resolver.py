@@ -24,7 +24,7 @@ from workspaces.shared.links import Ref, canonical_url, parse_ref
 from workspaces.shared.workspace_paths import PathRefused, is_inside, relative_parts
 
 # Titles a resolver may show for a page it is not allowed to open. Deriving one from the ref is the
-# ONLY honest option: the id `olga-avramenko` becomes "Olga Avramenko", which is what the writer
+# ONLY honest option: the id `nora-quill` becomes "Nora Quill", which is what the writer
 # typed before the rewrite. Reading the real title would mean reading a workspace this reader has
 # no claim on, which is the thing the access state exists to prevent.
 _WORD = re.compile(r"[-_]+")

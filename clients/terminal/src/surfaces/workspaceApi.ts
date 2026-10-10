@@ -254,7 +254,7 @@ export async function unshareWorkspace(workspaceId: string): Promise<{ slug: str
 /** POINT A CHAT'S WRITES at one of its workspaces (Vexa-ai/vexa#1611) — the header chip's click.
  *
  *  `workspace: ""` is the person's own desk, which is the default rather than a second name for it.
- *  The AGENT does not come through here: when the person says *"work in the OeNB workspace"* it
+ *  The AGENT does not come through here: when the person says *"work in the Example Bank workspace"* it
  *  calls `workspace_target`, whose result becomes a `focus` event agent-api reads on the way past.
  *  One field, one writer per side, and the two halves of "where does this chat write" cannot
  *  disagree about a chat neither of them saw last. */

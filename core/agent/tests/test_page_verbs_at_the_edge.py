@@ -37,7 +37,7 @@ from tests.test_api import _FakeIdentity, _FakeRuntime
 AGENT = Path(__file__).resolve().parents[1]
 MANIFEST = json.loads((AGENT / "mcp.tools.v1.json").read_text())
 JANE = "u_jane"
-SHARED = "oenb-c1"
+SHARED = "bank-c1"
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
 
 #: name -> (method, path, the arguments the prompts pass)

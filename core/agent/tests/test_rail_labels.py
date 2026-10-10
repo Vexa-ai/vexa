@@ -47,14 +47,14 @@ INTERNAL = "internal-tier-secret-for-tests"
 # Each of these is `_truncate_title(<the composed prompt>)`: one line, cut at 60. The cut is the
 # reason two of them cannot be repaired into a sentence — it landed inside the machinery.
 STORED_ACTIVE_CONTEXT = "Active context: the user is viewing the workspace file kg/e…"
-STORED_JOB = "[vexa-job:extend:personal/kg/entities/person/james-spadafo…"
+STORED_JOB = "[vexa-job:extend:personal/kg/entities/person/james-hollist…"
 STORED_MINUTES = "[minutes-review] Someone clicked through from an extract em…"
 STORED_PREP = "[prep] They clicked through from a prepare email about **DN…"
 
 # …and the same Active-context turn as it reaches the ROUTE, before anything cuts it.
 LIVE_ACTIVE_CONTEXT = (
     "Active context: the user is viewing the workspace file kg/entities/person/"
-    "james-spadafora.md. Read it with your Read tool if relevant.\n\n---\nwhat did we decide?")
+    "james-hollister.md. Read it with your Read tool if relevant.\n\n---\nwhat did we decide?")
 
 PREP_ASK = """---
 label: prepare
@@ -102,15 +102,15 @@ def test_a_block_the_cut_landed_inside_yields_no_name_rather_than_a_wrong_one():
 
 
 def test_an_act_is_named_by_what_the_person_pressed():
-    whole = job_mark("extend", "personal/kg/entities/person/james-spadafora.md") + "[extend] They pressed…"
-    assert chat_label.chat_label(whole) == "Extend: personal/kg/entities/person/james-spadafora.md"
+    whole = job_mark("extend", "personal/kg/entities/person/james-hollister.md") + "[extend] They pressed…"
+    assert chat_label.chat_label(whole) == "Extend: personal/kg/entities/person/james-hollister.md"
 
 
 def test_an_act_whose_mark_the_cut_bisected_is_still_named():
     """`marks.read_job_mark` refuses a mark with no closing `]` and must keep refusing — it reads the
     RECORD. This reads a string that has already been truncated, which is a display problem, and it
     is the only reason the founder's Extend row can carry a name at all."""
-    assert chat_label.chat_label(STORED_JOB) == "Extend: personal/kg/entities/person/james-spadafo…"
+    assert chat_label.chat_label(STORED_JOB) == "Extend: personal/kg/entities/person/james-hollist…"
 
 
 def test_the_ask_that_composed_a_prompt_names_itself_in_its_first_bracket():
@@ -239,7 +239,7 @@ def test_the_founders_rail_reads_as_names(client, stack):
     for i in range(4):
         assert labels[f"pchat-ctx{i}"] == ""
     # the act, the two asks
-    assert labels["pchat-job"] == "Extend: personal/kg/entities/person/james-spadafo…"
+    assert labels["pchat-job"] == "Extend: personal/kg/entities/person/james-hollist…"
     assert labels["pchat-min"] == "minutes"
     assert labels["pchat-prep"] == "prepare"
     # the rows that were already names — unchanged, to the character
@@ -324,6 +324,6 @@ def test_a_machinery_title_is_replaced_by_the_next_turn(client, stack):
 
 def test_a_name_already_on_a_row_is_still_written_once_and_never_again(client, stack):
     """Including a rename a person made. The latch is relaxed for machinery, not removed."""
-    stack["sessions"].upsert("u_dmitry", "pchat-named", title="Pricing for Kaar")
+    stack["sessions"].upsert("u_dmitry", "pchat-named", title="Pricing for Northwind")
     assert _turn(client, "pchat-named", "and what about the DNA call?").status_code == 200
-    assert stack["sessions"].list("u_dmitry")[0]["title"] == "Pricing for Kaar"
+    assert stack["sessions"].list("u_dmitry")[0]["title"] == "Pricing for Northwind"

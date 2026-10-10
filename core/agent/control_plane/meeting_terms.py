@@ -69,7 +69,7 @@ MAX_TERM_CHARS = 120
 
 def _key(term) -> str:
     """The identity of a surface form: whitespace-folded and case-insensitive, the same key the
-    client's `mergeTerms` uses. "Kaar Tech" published twice, or once as "kaar tech", is one chip."""
+    client's `mergeTerms` uses. "Northwind Labs" published twice, or once as "northwind labs", is one chip."""
     return " ".join(str(term or "").split()).casefold()
 
 

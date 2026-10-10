@@ -56,7 +56,7 @@ _OPEN_TOOLS = frozenset({
 
 
 # A WORKSPACE MADE FROM THIS CONVERSATION JOINS IT (Vexa-ai/vexa#1603). The founder asked for *"a
-# new workspace where we will collect everything we know about ILM"*, got one, and was then told
+# new workspace where we will collect everything we know about Copperline"*, got one, and was then told
 # *"the new workspace isn't in my native mount stack (it's reached via the workspace_* tools)"* —
 # *"not native workspace??"*. Creating a place IS the act of bringing it into the room; reaching it
 # through the tools afterwards is the defect. So the create emits its own event, exactly as a send
@@ -68,7 +68,7 @@ _OPEN_TOOLS = frozenset({
 # put every listing, read and purpose-edit into somebody's focus.
 #
 # …AND SO DOES THE VERB THAT MOVES THE TARGET (Vexa-ai/vexa#1611). `workspace_target` is what an
-# agent calls when the person says *"work in the OeNB workspace"*; it emits the SAME event, because
+# agent calls when the person says *"work in the Example Bank workspace"*; it emits the SAME event, because
 # a `focus` says "this workspace is where this conversation is working" and that has always meant
 # both halves — it is in the chat's mount set, and it is the one writes go to. Two event kinds for
 # one sentence is how a chip and a record come to disagree.

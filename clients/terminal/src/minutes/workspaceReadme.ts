@@ -1,7 +1,7 @@
 /** WHAT A WORKSPACE'S FRONT PAGE KNOWS — the facts behind `WorkspaceReadmePanel`, as pure functions
  *  plus one loader (Vexa-ai/vexa#1623).
  *
- *  Founder, 2026-09-06, on the OeNB workspace's `README.md` open in the preview: *"ok click we want
+ *  Founder, 2026-09-06, on the Example Bank workspace's `README.md` open in the preview: *"ok click we want
  *  to open the workspace readme — if it's a workspace readme we want to have data: shared with whom,
  *  controls like github sync, git history lookup, etc."* A workspace's README is not a page that
  *  happens to be called README: it is the workspace's front page, and the workspace's own facts

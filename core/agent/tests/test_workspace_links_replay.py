@@ -62,14 +62,14 @@ def test_the_replay_reads_a_truth_sidecar_without_a_yaml_dependency(tmp_path):
     mod = _load()
     (tmp_path / "x.truth.yaml").write_text(
         'date: 2026-03-02\n'
-        'present: ["Cottalango Leon (Sony Pictures Imageworks)", "Sam Richards"]\n'
+        'present: ["Robin Vale (Brightwater Picture Studios)", "Jordan Reyes"]\n'
         'decided:\n'
         '  - "TSC membership and commit privileges are separate grants"\n'
         'committed:\n'
         '  - "Circulate the charter"\n')
     t = mod.read_truth(tmp_path / "x.truth.yaml")
     assert t["date"] == "2026-03-02"
-    assert t["people"] == ["Cottalango Leon", "Sam Richards"]
-    assert t["orgs"] == ["Sony Pictures Imageworks"]
+    assert t["people"] == ["Robin Vale", "Jordan Reyes"]
+    assert t["orgs"] == ["Brightwater Picture Studios"]
     assert t["decided"] == ["TSC membership and commit privileges are separate grants"]
     assert t["committed"] == ["Circulate the charter"]

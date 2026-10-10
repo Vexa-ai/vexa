@@ -1,6 +1,6 @@
 /** THE ADMIN CAN AIM A CHAT AT THE COMPANY LAYER (Vexa-ai/vexa#1616) — the client half.
  *
- *  Founder, 2026-09-06 15:20Z, as the admin, looking at the header's `+` menu (it offered `OeNB`
+ *  Founder, 2026-09-06 15:20Z, as the admin, looking at the header's `+` menu (it offered `Example Bank`
  *  and "Attach existing repo…"):
  *
  *      *"as admin i should just have global as option to choose here as workspace to write to"*
@@ -27,7 +27,7 @@ import { COMPANY_WORD } from "../vocabulary";
 // wins, the caller's fallback comes next, and the slug is the last resort nobody should ever see.
 // `_global` is absent here on purpose — the tier has no name until the setup conversation writes
 // the company's, and that gap is exactly where a chip would print `_global` without a fallback.
-const NAMED: Record<string, string> = { "oenb-4040f6": "Austrian National Bank" };
+const NAMED: Record<string, string> = { "bank-4040f6": "Example Bank" };
 vi.mock("../../ui-kit/WsLink", () => ({
   WorkspaceName: ({ slug, fallback }: { slug: string; fallback?: string }) =>
     <span>{NAMED[slug] ?? fallback ?? slug}</span>,
@@ -35,10 +35,10 @@ vi.mock("../../ui-kit/WsLink", () => ({
 
 afterEach(cleanup);
 
-const OENB = "oenb-4040f6";
+const BANK = "bank-4040f6";
 
-const sel = (target?: string, workspaces = ["personal", "_global", OENB]) => ({
-  kind: "chat" as const, chatId: "c1", label: "OeNB onboarding", workspaces, target,
+const sel = (target?: string, workspaces = ["personal", "_global", BANK]) => ({
+  kind: "chat" as const, chatId: "c1", label: "Example Bank onboarding", workspaces, target,
 });
 
 function bar(opts: {
@@ -114,12 +114,12 @@ describe("the + menu offers the company layer, to the admin and to nobody else",
 
   it("lists it above the workspaces somebody was invited to", () => {
     const { container, openMenu } = bar({
-      admin: true, workspaces: ["personal"], memberships: [{ workspace_id: OENB, role: "owner" }],
+      admin: true, workspaces: ["personal"], memberships: [{ workspace_id: BANK, role: "owner" }],
     });
     openMenu();
     const items = [...container.querySelectorAll('[role="menuitem"]')].map((n) => n.textContent);
     expect(items[0]).toBe(COMPANY_WORD);
-    expect(items).toContain("Austrian National Bank");
+    expect(items).toContain("Example Bank");
   });
 });
 
@@ -134,7 +134,7 @@ describe("the chip is on screen exactly while the chat writes there", () => {
   it("stays hidden for the admin while the chat writes somewhere else", () => {
     // The rail's rule, one level in: nearly every chat writes to the desk, so a chip saying so on
     // nearly every chat is chrome. The case that is NOT ordinary is the information.
-    const { container } = bar({ admin: true, target: OENB });
+    const { container } = bar({ admin: true, target: BANK });
     expect(chipFor(container, GLOBAL_MOUNT)).toBeNull();
   });
 
@@ -174,9 +174,9 @@ describe("the chip is on screen exactly while the chat writes there", () => {
 
   it("leaves every other chip exactly as it was", () => {
     const { container, onSetTarget } = bar({ admin: true, target: GLOBAL_MOUNT });
-    fireEvent.click(container.querySelector(`[data-ws-target="${OENB}"]`) as HTMLElement);
-    expect(onSetTarget).toHaveBeenCalledWith(OENB);
-    expect(chipFor(container, OENB).querySelector('[aria-label^="Remove"]')).toBeTruthy();
+    fireEvent.click(container.querySelector(`[data-ws-target="${BANK}"]`) as HTMLElement);
+    expect(onSetTarget).toHaveBeenCalledWith(BANK);
+    expect(chipFor(container, BANK).querySelector('[aria-label^="Remove"]')).toBeTruthy();
   });
 });
 
@@ -184,7 +184,7 @@ describe("the chip is on screen exactly while the chat writes there", () => {
 
 describe("which chips a chat shows", () => {
   it("hides both implicit mounts by default — the ruling this issue narrows, not the one it undoes", () => {
-    expect(focusSet(["personal", "_global", "_system", OENB])).toEqual(["personal", OENB]);
+    expect(focusSet(["personal", "_global", "_system", BANK])).toEqual(["personal", BANK]);
   });
 
   it("adds the company layer for an admin aimed at it", () => {
@@ -205,7 +205,7 @@ describe("which chips a chat shows", () => {
 
   it("adds nothing for a non-admin, and nothing for an admin aimed elsewhere", () => {
     expect(focusSet(["personal", "_global"], { admin: false, target: GLOBAL_MOUNT })).toEqual(["personal"]);
-    expect(focusSet(["personal", "_global"], { admin: true, target: OENB })).toEqual(["personal"]);
+    expect(focusSet(["personal", "_global"], { admin: true, target: BANK })).toEqual(["personal"]);
   });
 });
 

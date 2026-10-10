@@ -147,8 +147,8 @@ describe("an artifact navigates DURING the turn", () => {
 /** NO STATUS TEXT IN THE COMPOSER WHILE A TURN RUNS (Vexa-ai/vexa#1587).
  *
  *  Founder, 2026-09-06, on a screenshot of the input field reading
- *  `working · 1 step · james-spadafora.md` while the chat above already showed
- *  `Reading · james-spadafora.md · 1 step` and `Working…`:
+ *  `working · 1 step · james-hollister.md` while the chat above already showed
+ *  `Reading · james-hollister.md · 1 step` and `Working…`:
  *
  *      "working · 2 steps · whats_waiting — remove that from the input field"
  *

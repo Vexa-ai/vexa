@@ -255,7 +255,7 @@ def composed_kind_label(kind: str) -> str:
 
 
 def act_label(text: str) -> "str | None":
-    """THE ONE LINE AN ACT RENDERS AS — ``Extend: kg/entities/person/james-spadafora.md`` — or None
+    """THE ONE LINE AN ACT RENDERS AS — ``Extend: kg/entities/person/james-hollister.md`` — or None
     when this prompt is not one.
 
     THE PERSON SEES THE LABEL, NEVER THE MACHINERY (Vexa-ai/vexa#1588). Pressing Extend sends an

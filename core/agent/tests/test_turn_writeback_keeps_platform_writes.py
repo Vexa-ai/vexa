@@ -3,8 +3,8 @@
 Founder, 2026-09-07, opening an invite the agent had minted a minute earlier: **"This invite link is
 not valid. Ask whoever sent it for a new one."** The workspace's git log said it once per mint::
 
-    8dfff9b 19:28:08  policy: mint invite 41cdb3b6a5841ffc (contributor) for oenb-b5e60c
-    1a452f9 19:28:09  oenb-b5e60c: policy/invites.json — removed
+    8dfff9b 19:28:08  policy: mint invite 41cdb3b6a5841ffc (contributor) for bank-b5e60c
+    1a452f9 19:28:09  bank-b5e60c: policy/invites.json — removed
 
 The mint is agent-api writing its own store DURING the turn. The removal one second later is the
 turn's write-back: it captured HEAD before the turn, rebuilt the whole `policy/` subtree from that

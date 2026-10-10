@@ -31,7 +31,7 @@ async function settle(expected = 0): Promise<void> {
 
 const WORLD = {
   "/api/workspace/active": { subject: "126", active: [] },
-  "/api/workspaces/by-slug/126": { id: "aaaaaaaaaa", name: "olga@spi.com", kind: "desk", slug: "126", access: "readable" },
+  "/api/workspaces/by-slug/126": { id: "aaaaaaaaaa", name: "nora@studio.example", kind: "desk", slug: "126", access: "readable" },
   "/api/workspaces/by-slug/grp": { id: "bbbbbbbbbb", name: "ASWF DNA Project", kind: "group", slug: "grp", access: "readable" },
   "/api/desk/touch": { recorded: true },
 };
@@ -47,11 +47,11 @@ afterEach(() => vi.restoreAllMocks());
 describe("reportOpened", () => {
   it("reports the workspace ID and the path, never the slug", async () => {
     routes(WORLD);
-    reportOpened("grp", "kg/entities/person/cottalango-leon.md");
+    reportOpened("grp", "kg/entities/person/robin-vale.md");
     await settle(1);
     expect(posts()).toHaveLength(1);
     expect(JSON.parse(String((posts()[0][1] as RequestInit).body)))
-      .toEqual({ workspace: "bbbbbbbbbb", path: "kg/entities/person/cottalango-leon.md" });
+      .toEqual({ workspace: "bbbbbbbbbb", path: "kg/entities/person/robin-vale.md" });
   });
 
   it("resolves the reader's OWN desk when no slug is given", async () => {

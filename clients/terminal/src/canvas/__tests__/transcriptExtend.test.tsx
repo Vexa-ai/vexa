@@ -55,7 +55,7 @@ const meetingRow = () => ({
 });
 
 const ROOM = [
-  { id: "s1", speaker: "Jane", text: "we looked at Kaar Tech last week", tsMs: AT, completed: true },
+  { id: "s1", speaker: "Jane", text: "we looked at Northwind Labs last week", tsMs: AT, completed: true },
   { id: "s2", speaker: "Ravi", text: SAID, tsMs: AT + 9000, completed: true },
 ];
 

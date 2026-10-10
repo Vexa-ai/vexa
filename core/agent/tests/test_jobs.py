@@ -328,7 +328,7 @@ def test_a_boot_never_reports_another_chats_job(tmp_path):
     gate = threading.Event()
     a_sink = _Sink()
     a = JobRunner(emit=a_sink, turn=_slow_turn(gate), register_dir=tmp_path / "jobs", session="chat-a")
-    running = a.spawn("extend", "oenb/README.md", "Extend it.")
+    running = a.spawn("extend", "examplebank/README.md", "Extend it.")
     record = tmp_path / "jobs" / f"{running['job_id']}.json"
     assert record.exists()
 

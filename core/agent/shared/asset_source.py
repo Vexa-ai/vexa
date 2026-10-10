@@ -3,7 +3,7 @@ as, the guarded fetch that brings a remote one INTO the workspace, and the index
 it came from.
 
 Founder, 2026-09-06, on a customer workspace README the agent wrote: *"we want to be able images"* —
-the page showed `![OeNB logo](…)` as alt text and a broken-image icon (Vexa-ai/vexa#1612). The rule
+the page showed `![Example Bank logo](…)` as alt text and a broken-image icon (Vexa-ai/vexa#1612). The rule
 that fixes it is not "allow images", it is **where the bytes live**: a page's image is a file in the
 workspace, served by the same owner- and membership-scoped read route the page itself came from. A
 customer's browser must never be told to go and get a picture from a third party because a document

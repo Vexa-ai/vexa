@@ -32,7 +32,7 @@ def main() -> int:
     ap.add_argument("--transcribe-s", type=float, default=40.0)
     a = ap.parse_args()
 
-    organizer = "marvin@bank.com"        # in production: parsed From: of the invite email
+    organizer = "quentin@bank.com"        # in production: parsed From: of the invite email
     start_at = time.time() + a.start_in
     ADMIN = {"X-Admin-API-Key": "changeme"}
     st: dict = {}
@@ -119,12 +119,12 @@ def main() -> int:
     @reg.step
     def research_person(ctx):
         say("researching the organizer from the email (name+company lookup)")
-        return Done({"guess": {"name": "Marvin", "company": "Bank"}})
+        return Done({"guess": {"name": "Quentin", "company": "Bank"}})
 
     @reg.step
     def ask_one_question(ctx):
         rs.send_mail(organizer, "One question before your first minutes",
-                     "You look like Marvin at Bank — correct? What's your role, and what do you "
+                     "You look like Quentin at Bank — correct? What's your role, and what do you "
                      "want Vexa to pay attention to in your meetings? Just reply to this email.")
         say("ONE onboarding question → Mailpit — ANSWER IT IN CHAT (I'll relay)")
         return Done({})
@@ -208,7 +208,7 @@ def main() -> int:
         # the human's chat reply resumes the blocked onboarding reaction
         if REPLY_FILE.exists() and REPLY_FILE.read_text().strip():
             for (rid,) in db.execute("SELECT reaction_id FROM reaction WHERE status='blocked'"):
-                resume(db, rid, actor="marvin@bank.com", clock=clock, reason="email reply")
+                resume(db, rid, actor="quentin@bank.com", clock=clock, reason="email reply")
         if not tick(db, reg, clock):
             rows = db.execute("SELECT status FROM reaction")
             if rows and all(r[0] in ("done", "failed", "cancelled") for r in rows):

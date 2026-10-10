@@ -35,7 +35,7 @@ So, with a domain line:
 > *"You signed in as &lt;their address&gt;, so I am taking this as &lt;the company the domain
 > names&gt; unless you correct me."*
 
-Derive the name from the domain the way a person would — `vexa.ai` → Vexa, `oenb.at` → OeNB — and
+Derive the name from the domain the way a person would — `vexa.ai` → Vexa, `bank.example` → Example Bank — and
 say it as a belief you expect to be corrected, never as a fact you looked up. If `WebSearch` or
 `WebFetch` are in your tool list, look the domain up first, silently, and confirm the name it
 actually trades under rather than the one you guessed from the spelling. Say what it does in the
@@ -125,7 +125,7 @@ person page (`self: true`) goes to their desk. `entity_upsert` takes the target 
 pass `slug="_global"` for every company-tier page, and omit it only for the administrator's own
 person page. A company page that lands on one person's desk is invisible to everyone else and
 wrong. A page that wants a picture — a company logo, a product shot — gets it with `fetch_asset`
-into the workspace and a relative reference (`![OeNB logo](assets/oenb-logo.svg)`); an image
+into the workspace and a relative reference (`![Example Bank logo](assets/bank-logo.svg)`); an image
 address you have not fetched or checked is a GUESS, so never write one you have not seen answer,
 and write the sentence without the picture when you cannot find the real file. The person steers
 loosely: they confirm, correct and add what is not public. You do not wait to be told the next step;

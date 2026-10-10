@@ -127,7 +127,7 @@ export const OPEN_PAGE_EVENT = "vexa:terminal:open-page";
 
 /** A WORKSPACE THE TURN CREATED, JOINING THE CHAT'S FOCUS (Vexa-ai/vexa#1603).
  *
- *  The founder asked for *"a new workspace where we will collect everything we know about ILM"*,
+ *  The founder asked for *"a new workspace where we will collect everything we know about Copperline"*,
  *  got one, and was told *"the new workspace isn't in my native mount stack (it's reached via the
  *  workspace_* tools)"* — *"not native workspace??"*. Creating a place IS bringing it into the
  *  room, so the create moves the chip and the panel, exactly as a send moves the transcript.

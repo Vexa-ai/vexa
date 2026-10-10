@@ -146,7 +146,7 @@ def test_the_mount_description_says_desk():
 # ── F51 — the write-back phase is bookkeeping, not conversation ─────────────────────────────────
 
 def test_the_writeback_prompt_declares_itself_in_the_record():
-    prompt = engine.writeback_prompt(["Marvin Ostroff"])
+    prompt = engine.writeback_prompt(["Quentin Doe"])
     assert engine.WRITEBACK_MARK in prompt
     assert engine.MACHINERY_MARK in prompt
 
@@ -163,7 +163,7 @@ def test_a_phase_exchange_never_renders_as_conversation(tmp_path):
         {"type": "assistant", "message": {"role": "assistant",
                                           "content": [{"type": "text", "text": "Here is the brief."}]}},
         # the phase, in the same session
-        {"type": "user", "message": {"role": "user", "content": engine.writeback_prompt(["Marvin"])}},
+        {"type": "user", "message": {"role": "user", "content": engine.writeback_prompt(["Quentin"])}},
         {"type": "assistant", "message": {"role": "assistant",
                                           "content": [{"type": "text", "text": ""}]}},
         {"type": "user", "message": {"role": "user", "content": "Continue from where you left off."}},

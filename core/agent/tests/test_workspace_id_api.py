@@ -71,8 +71,8 @@ def _world(root: Path):
     _init_ws(root, "grp")
     idx = m.InMemoryMembershipIndex()
     m.ensure_owner(root, "grp", "126", index=idx)
-    upsert_entity(root / "grp", "person", "Cottalango Leon", ["Chairs the TSC."], "the meeting")
-    upsert_entity(root / "126", "person", "Olga Avramenko", ["Attends."], "the meeting")
+    upsert_entity(root / "grp", "person", "Robin Vale", ["Chairs the TSC."], "the meeting")
+    upsert_entity(root / "126", "person", "Nora Quill", ["Attends."], "the meeting")
     return _client(root, idx)
 
 
@@ -98,10 +98,10 @@ def test_init_names_the_desk_after_the_address_that_signed_in(tmp_path, monkeypa
     (seed / "CLAUDE.md").write_text("governance root\n")
     monkeypatch.setenv("VEXA_WORKSPACE_SEED_DIR", str(seed))
     c = _client(tmp_path / "root")
-    r = c.post("/api/workspace/init", headers={**_h("126"), "X-User-Email": "olga@spi.com"})
+    r = c.post("/api/workspace/init", headers={**_h("126"), "X-User-Email": "nora@studio.example"})
     assert r.status_code == 201, r.text
     body = c.get("/api/workspaces/by-slug/126", headers=_h("126")).json()
-    assert body["name"] == "olga@spi.com" and body["kind"] == "desk"
+    assert body["name"] == "nora@studio.example" and body["kind"] == "desk"
     assert body["access"] == ids.ACCESS_READABLE
 
 
@@ -140,14 +140,14 @@ def test_resolve_a_page_of_refs_in_one_round_trip(tmp_path):
     c = _world(tmp_path)
     gid = c.get("/api/workspaces/by-slug/grp", headers=_h("126")).json()["id"]
     did127 = c.get("/api/workspaces/by-slug/127", headers=_h("127")).json()["id"]
-    refs = [f"ws:{gid}/cottalango-leon", f"ws:{did127}/whoever", "ws:zzzzzzzzzz/gone",
-            "Olga Avramenko"]
+    refs = [f"ws:{gid}/robin-vale", f"ws:{did127}/whoever", "ws:zzzzzzzzzz/gone",
+            "Nora Quill"]
     out = c.post("/api/links/resolve", headers=_h("126"), json={"refs": refs}).json()["results"]
     by_ref = {r["ref"]: r for r in out}
 
-    ok = by_ref[f"ws:{gid}/cottalango-leon"]
-    assert ok["access"] == ids.ACCESS_READABLE and ok["title"] == "Cottalango Leon"
-    assert ok["url"] == f"/w/{gid}/kg/entities/person/cottalango-leon.md"
+    ok = by_ref[f"ws:{gid}/robin-vale"]
+    assert ok["access"] == ids.ACCESS_READABLE and ok["title"] == "Robin Vale"
+    assert ok["url"] == f"/w/{gid}/kg/entities/person/robin-vale.md"
 
     # A COLLEAGUE'S DESK IS READABLE (founder ruling 2026-09-02) and is never writable. It is a
     # ref to a page nobody has written, so it comes back `missing` — readable and not there, which
@@ -156,9 +156,9 @@ def test_resolve_a_page_of_refs_in_one_round_trip(tmp_path):
     assert other["access"] == ids.ACCESS_READABLE and other["writable"] is False
     assert by_ref["ws:zzzzzzzzzz/gone"]["access"] == ids.ACCESS_GONE
 
-    mine = by_ref["Olga Avramenko"]
-    assert mine["access"] == ids.ACCESS_READABLE and mine["title"] == "Olga Avramenko"
-    assert mine["url"].endswith("/kg/entities/person/olga-avramenko.md")
+    mine = by_ref["Nora Quill"]
+    assert mine["access"] == ids.ACCESS_READABLE and mine["title"] == "Nora Quill"
+    assert mine["url"].endswith("/kg/entities/person/nora-quill.md")
 
 
 def test_naming_a_group_you_are_not_in_as_here_does_not_open_it(tmp_path):
@@ -168,14 +168,14 @@ def test_naming_a_group_you_are_not_in_as_here_does_not_open_it(tmp_path):
     test below asserts, and the reason this guard is worth keeping distinct from it.)"""
     c = _world(tmp_path)
     out = c.post("/api/links/resolve", headers=_h("127"),
-                 json={"refs": ["Cottalango Leon"], "slug": "grp"}).json()["results"]
+                 json={"refs": ["Robin Vale"], "slug": "grp"}).json()["results"]
     assert out[0]["access"] == ids.ACCESS_GONE and out[0]["url"] is None
 
 
 def test_naming_a_colleagues_desk_as_here_resolves_and_stays_read_only(tmp_path):
     c = _world(tmp_path)
     out = c.post("/api/links/resolve", headers=_h("127"),
-                 json={"refs": ["Olga Avramenko"], "slug": "126"}).json()["results"]
+                 json={"refs": ["Nora Quill"], "slug": "126"}).json()["results"]
     assert out[0]["access"] == ids.ACCESS_READABLE and out[0]["writable"] is False
 
 
@@ -186,9 +186,9 @@ def test_a_colleague_may_READ_another_desk_through_the_file_api(tmp_path):
     `not-yours`; after it, saying `readable` and then 403-ing the click would be worse than either
     answer alone."""
     c = _world(tmp_path)
-    r = c.get("/api/workspace/file?path=kg/entities/person/olga-avramenko.md&slug=126",
+    r = c.get("/api/workspace/file?path=kg/entities/person/nora-quill.md&slug=126",
               headers=_h("127"))
-    assert r.status_code == 200 and "Olga Avramenko" in r.json()["content"]
+    assert r.status_code == 200 and "Nora Quill" in r.json()["content"]
     assert c.get("/api/workspace/tree?slug=126", headers=_h("127")).status_code == 200
 
 
@@ -219,12 +219,12 @@ def test_a_touch_is_filed_under_the_callers_own_desk_and_mirrored_for_the_worker
     c = _world(tmp_path)
     gid = c.get("/api/workspaces/by-slug/grp", headers=_h("126")).json()["id"]
     r = c.post("/api/desk/touch", headers=_h("126"),
-               json={"workspace": gid, "path": "kg/entities/person/cottalango-leon.md"})
+               json={"workspace": gid, "path": "kg/entities/person/robin-vale.md"})
     assert r.status_code == 202 and r.json() == {"recorded": True}
 
     rows = read_touches(tmp_path / "126")
     assert rows and rows[0]["workspace"] == gid
-    assert rows[0]["path"] == "kg/entities/person/cottalango-leon.md"
+    assert rows[0]["path"] == "kg/entities/person/robin-vale.md"
     # excluded from git, so the turn's `git add -A` cannot commit a new version every turn
     assert f"/{TOUCHES_FILE}" in (tmp_path / "126" / ".git" / "info" / "exclude").read_text()
 
@@ -257,14 +257,14 @@ def test_the_desk_readme_orders_by_what_was_touched(tmp_path):
     did = c.get("/api/workspaces/by-slug/126", headers=_h("126")).json()["id"]
     upsert_entity(tmp_path / "grp", "person", "Aaa First", ["x"], "s")
     c.post("/api/desk/touch", headers=_h("126"),
-           json={"workspace": gid, "path": "kg/entities/person/cottalango-leon.md"})
+           json={"workspace": gid, "path": "kg/entities/person/robin-vale.md"})
 
     desk_readme.update_readme(
         tmp_path / "126",
         mounts=[{"path": str(tmp_path / "126"), "id": did}, {"path": str(tmp_path / "grp"), "id": gid}],
         home_id=did, touches=read_touches(tmp_path / "126"))
     people = (tmp_path / "126" / "README.md").read_text().split("## People")[1]
-    assert people.strip().splitlines()[0] == f"- [[ws:{gid}/cottalango-leon]]"
+    assert people.strip().splitlines()[0] == f"- [[ws:{gid}/robin-vale]]"
 
 
 # ── rename (founder ruling 2026-09-02: the group's owner, and admins; audited) ───────────────────
@@ -272,7 +272,7 @@ def test_the_desk_readme_orders_by_what_was_touched(tmp_path):
 def test_the_groups_owner_renames_it_and_every_link_survives(tmp_path):
     c = _world(tmp_path)
     gid = c.get("/api/workspaces/by-slug/grp", headers=_h("126")).json()["id"]
-    ref = f"ws:{gid}/cottalango-leon"
+    ref = f"ws:{gid}/robin-vale"
     before = c.post("/api/links/resolve", headers=_h("126"), json={"refs": [ref]}).json()["results"][0]
 
     r = c.post(f"/api/workspaces/{gid}/rename", headers=_h("126"),
@@ -300,7 +300,7 @@ def test_a_non_owner_may_not_rename_and_an_unknown_id_is_404(tmp_path):
 def test_a_desk_cannot_be_renamed_by_its_owner_through_the_route(tmp_path):
     c = _world(tmp_path)
     did = c.get("/api/workspaces/by-slug/126", headers=_h("126")).json()["id"]
-    r = c.post(f"/api/workspaces/{did}/rename", headers=_h("126"), json={"name": "Olga"})
+    r = c.post(f"/api/workspaces/{did}/rename", headers=_h("126"), json={"name": "Nora"})
     assert r.status_code == 403 and "admin" in r.json()["detail"]
 
 
@@ -324,15 +324,15 @@ def test_the_entity_endpoint_writes_a_cross_workspace_link_in_id_form(tmp_path):
     gid = c.get("/api/workspaces/by-slug/grp", headers=_h("126")).json()["id"]
     r = c.post("/api/workspace/entity", headers=_h("126"), json={
         "kind": "meeting", "name": "DNA TSC 2026-03-02",
-        "facts": ["[[Cottalango Leon]] chaired it."], "source": "the transcript"})
+        "facts": ["[[Robin Vale]] chaired it."], "source": "the transcript"})
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["links_rewritten"] == [["Cottalango Leon", f"[[ws:{gid}/cottalango-leon]]"]]
+    assert body["links_rewritten"] == [["Robin Vale", f"[[ws:{gid}/robin-vale]]"]]
     page = (tmp_path / "126" / body["path"]).read_text()
-    assert f"[[ws:{gid}/cottalango-leon]]" in page
+    assert f"[[ws:{gid}/robin-vale]]" in page
     # and the written link resolves back, for this reader
     out = c.post("/api/links/resolve", headers=_h("126"),
-                 json={"refs": [f"ws:{gid}/cottalango-leon"]}).json()["results"]
+                 json={"refs": [f"ws:{gid}/robin-vale"]}).json()["results"]
     assert out[0]["access"] == ids.ACCESS_READABLE
 
 
@@ -341,7 +341,7 @@ def test_the_entity_endpoint_writes_a_cross_workspace_link_in_id_form(tmp_path):
 def test_a_link_written_before_a_rename_still_resolves_after_it(tmp_path):
     c = _world(tmp_path)
     gid = c.get("/api/workspaces/by-slug/grp", headers=_h("126")).json()["id"]
-    ref = f"ws:{gid}/cottalango-leon"
+    ref = f"ws:{gid}/robin-vale"
     before = c.post("/api/links/resolve", headers=_h("126"), json={"refs": [ref]}).json()["results"][0]
 
     # rename the group in the registry — the act decision 26 exists to survive

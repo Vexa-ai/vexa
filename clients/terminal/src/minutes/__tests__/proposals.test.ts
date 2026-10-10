@@ -28,7 +28,7 @@ const meeting = (id: string, title: string, live_status: string, startMins: numb
 
 const LIVE = meeting("m-live", "Standup — daily", "active", -12);
 const SOON = meeting("m-prep", "Acme — pricing review", "scheduled", 75);
-const HELD = meeting("m-post", "Blue Light Card — discovery", "completed", -1500);
+const HELD = meeting("m-post", "Fernhill Loyalty Card — discovery", "completed", -1500);
 
 const chat = (over: Partial<Chat> & { id: string }): Chat => ({
   label: over.id, workspaces: ["personal", "_global"], artifacts: [],
@@ -112,7 +112,7 @@ describe("rule 3 — the newest held meeting nobody has written about", () => {
   it("offers the outcome question, bound to the meeting", () => {
     const [p] = run([HELD], [touched("main")]);
     expect(p.kind).toBe("outcome");
-    expect(p.label).toBe("What came out of Blue Light Card?");
+    expect(p.label).toBe("What came out of Fernhill Loyalty Card?");
     expect(p.meetingId).toBe("m-post");
     expect(p.kick).toBe(KICK.outcome);
   });
@@ -273,8 +273,8 @@ describe("rule 6 — the short list other agents wrote", () => {
   });
 
   it("an item whose source has no name still says where it came from", () => {
-    const p = jtbdProposal({ id: "z", source: "page:kg/entities/company/oenb.md", act: "Find a source" });
-    expect(p.kick).toContain("page:kg/entities/company/oenb.md");
+    const p = jtbdProposal({ id: "z", source: "page:kg/entities/company/examplebank.md", act: "Find a source" });
+    expect(p.kick).toContain("page:kg/entities/company/examplebank.md");
   });
 
   it("an empty list changes nothing — the row is what it was before the store existed", () => {
@@ -390,7 +390,7 @@ describe("applyProposal — a chip acts in the chat it renders in", () => {
   });
 
   it("a meeting that already has a chat with history does NOT divert the click into it", () => {
-    const other = chat({ id: "meet-m-post", meeting: "m-post", label: "Blue Light Card", touched: true });
+    const other = chat({ id: "meet-m-post", meeting: "m-post", label: "Fernhill Loyalty Card", touched: true });
     const e = applyProposal(outcome(), NEW, [HELD], NOW);
     expect(e?.act === "run" && e.chat.id).toBe(NEW.id);
     expect(e?.act === "run" && e.chat.id).not.toBe(other.id);
@@ -408,7 +408,7 @@ describe("applyProposal — a chip acts in the chat it renders in", () => {
   // that survives is the one below, about a chat bound to a DIFFERENT meeting.)
 
   it("nor is a chat that belongs to a DIFFERENT meeting — its id is that meeting's session", () => {
-    const held = chat({ id: "meet-m-post", meeting: "m-post", label: "Blue Light Card" });
+    const held = chat({ id: "meet-m-post", meeting: "m-post", label: "Fernhill Loyalty Card" });
     expect(applyProposal(catchUp(), held, [LIVE], NOW)?.act).toBe("open");
   });
 

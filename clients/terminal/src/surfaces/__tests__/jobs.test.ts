@@ -251,9 +251,9 @@ describe("streamChatTurn — a turn that spawns a job", () => {
   it("a job event from session A never renders in chat B", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(sseResponse([
       // everything chat A's job produces, arriving on a connection that belongs to chat B
-      ev({ type: "job-started", job_id: "j-a", kind: "extend", target: "oenb-b5e60c", session: "chat-a", line: "Extending oenb-b5e60c — I'll say when it's there." }, "1-0"),
+      ev({ type: "job-started", job_id: "j-a", kind: "extend", target: "bank-b5e60c", session: "chat-a", line: "Extending bank-b5e60c — I'll say when it's there." }, "1-0"),
       ev({ type: "tool-call", tool: "Read", job_id: "j-a", session: "chat-a" }, "2-0"),
-      ev({ type: "job-failed", job_id: "j-a", session: "chat-a", line: "Extending oenb-b5e60c failed: the turn stopped early: tool-call budget" }, "3-0"),
+      ev({ type: "job-failed", job_id: "j-a", session: "chat-a", line: "Extending bank-b5e60c failed: the turn stopped early: tool-call budget" }, "3-0"),
       ev({ type: "message-delta", text: "mine", turn_id: "t1" }, "4-0"),
       ev({ type: "turn-complete", turn_id: "t1" }, "5-0"),
     ]));
@@ -272,19 +272,19 @@ describe("streamChatTurn — a turn that spawns a job", () => {
 
   it("the chat that OWNS the job still renders every bit of it", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(sseResponse([
-      ev({ type: "job-started", job_id: "j-a", kind: "extend", target: "oenb-b5e60c", session: "chat-a", line: "Extending oenb-b5e60c — I'll say when it's there." }, "1-0"),
+      ev({ type: "job-started", job_id: "j-a", kind: "extend", target: "bank-b5e60c", session: "chat-a", line: "Extending bank-b5e60c — I'll say when it's there." }, "1-0"),
       ev({ type: "turn-complete", turn_id: "t1" }, "2-0"),
       ev({ type: "tool-call", tool: "Read", job_id: "j-a", session: "chat-a" }, "3-0"),
-      ev({ type: "job-done", job_id: "j-a", ok: true, session: "chat-a", line: "oenb-b5e60c — extended." }, "4-0"),
+      ev({ type: "job-done", job_id: "j-a", ok: true, session: "chat-a", line: "bank-b5e60c — extended." }, "4-0"),
     ]));
     const { state, cb } = recorder();
 
     await streamChatTurn({ prompt: "Extend it", session: "chat-a", active: undefined }, cb,
       { fetchImpl: fetchImpl as unknown as typeof fetch, signal: new AbortController().signal, ...noWait });
 
-    expect(state.jobStarted.map((j) => j.target)).toEqual(["oenb-b5e60c"]);
+    expect(state.jobStarted.map((j) => j.target)).toEqual(["bank-b5e60c"]);
     expect(state.jobSteps).toEqual(["Read"]);
-    expect(state.jobEnded).toEqual([{ jobId: "j-a", ok: true, line: "oenb-b5e60c — extended." }]);
+    expect(state.jobEnded).toEqual([{ jobId: "j-a", ok: true, line: "bank-b5e60c — extended." }]);
   });
 
   it("an UNSTAMPED job still renders — the stamp removes doubt, it does not create it", () => {
@@ -300,10 +300,10 @@ describe("streamChatTurn — a turn that spawns a job", () => {
 
   it("a job that reached a window budget reports progress instead of dying", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(sseResponse([
-      ev({ type: "job-started", job_id: "j-1", kind: "extend", target: "oenb", session: "s1" }, "1-0"),
+      ev({ type: "job-started", job_id: "j-1", kind: "extend", target: "examplebank", session: "s1" }, "1-0"),
       ev({ type: "turn-complete", turn_id: "t1" }, "2-0"),
       ev({ type: "job-progress", job_id: "j-1", session: "s1", window: 2, calls: 160, line: "160 steps so far — continuing (window 2)" }, "3-0"),
-      ev({ type: "job-done", job_id: "j-1", ok: true, session: "s1", line: "oenb — extended." }, "4-0"),
+      ev({ type: "job-done", job_id: "j-1", ok: true, session: "s1", line: "examplebank — extended." }, "4-0"),
     ]));
     const { state, cb } = recorder();
 
@@ -312,7 +312,7 @@ describe("streamChatTurn — a turn that spawns a job", () => {
 
     expect(state.jobNotes).toEqual(["160 steps so far — continuing (window 2)"]);
     expect(state.jobSteps).toEqual([]);            // nothing was DONE — something was resumed
-    expect(state.jobEnded).toEqual([{ jobId: "j-1", ok: true, line: "oenb — extended." }]);
+    expect(state.jobEnded).toEqual([{ jobId: "j-1", ok: true, line: "examplebank — extended." }]);
   });
 
   it("a refusal is the turn's own line — no chip, nothing to wait for", async () => {

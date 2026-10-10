@@ -25,16 +25,16 @@ def seg(i, text, at=None):
 
 def test_it_finds_the_names_a_room_said_in_the_order_they_were_said():
     rows = extract_terms([
-        seg(1, "Kaar Tech came back on the pricing."),
-        seg(2, "Cottalango Leon is the one who signs it."),
+        seg(1, "Northwind Labs came back on the pricing."),
+        seg(2, "Robin Vale is the one who signs it."),
     ])
-    assert [r["term"] for r in rows] == ["Kaar Tech", "Cottalango Leon"]
+    assert [r["term"] for r in rows] == ["Northwind Labs", "Robin Vale"]
     assert rows[0]["segments"] == [1]
     assert rows[0]["first_at"] == "2026-09-02T10:01:00Z"
 
 
 def test_one_name_said_twice_is_one_term_carrying_both_lines():
-    rows = extract_terms([seg(1, "Kaar Tech asked."), seg(2, "I told Kaar Tech no.")])
+    rows = extract_terms([seg(1, "Northwind Labs asked."), seg(2, "I told Northwind Labs no.")])
     assert len(rows) == 1
     assert rows[0]["segments"] == [1, 2]
 
@@ -54,19 +54,19 @@ def test_a_short_spelling_folds_into_the_long_one_and_keeps_its_line():
     """`entities._drop_prefixes` DROPS the short spelling — right for choosing which page to write,
     wrong here: the short one is a real occurrence in a real line, and dropping the segment would
     make the chip's provenance start after the person did."""
-    rows = extract_terms([seg(1, "James Spad said so."), seg(2, "James Spadafora confirmed it.")])
-    assert [r["term"] for r in rows] == ["James Spadafora"]
+    rows = extract_terms([seg(1, "James Holl said so."), seg(2, "James Hollister confirmed it.")])
+    assert [r["term"] for r in rows] == ["James Hollister"]
     assert rows[0]["segments"] == [2, 1]
     # the earlier sighting wins the timestamp — it IS when the thing was first named
     assert rows[0]["first_at"] == "2026-09-02T10:01:00Z"
 
 
 def test_a_chain_of_prefixes_folds_onto_the_longest_not_onto_the_next_one_up():
-    """A first-match fold would put "James" onto "James Spad", which is itself folded away — and its
+    """A first-match fold would put "James" onto "James Holl", which is itself folded away — and its
     line would vanish with it. The bug is invisible from the output shape; only the count shows it."""
-    rows = extract_terms([seg(1, "James Spa is here."), seg(2, "James Spad is here."),
-                          seg(3, "James Spadafora is here.")])
-    assert [r["term"] for r in rows] == ["James Spadafora"]
+    rows = extract_terms([seg(1, "James Hol is here."), seg(2, "James Holl is here."),
+                          seg(3, "James Hollister is here.")])
+    assert [r["term"] for r in rows] == ["James Hollister"]
     assert sorted(rows[0]["segments"]) == [1, 2, 3]
 
 
@@ -78,11 +78,11 @@ def test_an_empty_room_is_no_terms_not_an_error():
 def test_a_sentence_opener_is_not_part_of_a_name():
     """⚠ THE MEASURED ONE. Over the 677 segments of the DNA TSC transcript of 2026-03-02 the
     notes-tuned extractor returned 28 candidates and EIGHT were speech, not names: "But I'll",
-    "So I'm", "Like I've", "So Cameron", "That's John", "And Tommy", "On DNA", "Our TAC". Prose does
+    "So I'm", "Like I've", "So Cameron", "That's John", "And Gabe", "On DNA", "Our TAC". Prose does
     not open sentences with a capitalised function word; a transcript is nothing but sentence
     openings. Stripping the lead took the same meeting to 18 candidates, none of that shape."""
     said = ["But I'll take it.", "So I'm on it.", "Like I've said.", "So Cameron agreed.",
-            "That's John's call.", "And Tommy will do it.", "On DNA we agreed.", "Our TAC met."]
+            "That's John's call.", "And Gabe will do it.", "On DNA we agreed.", "Our TAC met."]
     assert extract_terms([seg(i, t) for i, t in enumerate(said)]) == []
 
 
@@ -101,8 +101,8 @@ def test_the_two_word_floor_holds_after_a_strip():
 
 def test_the_index_reads_entity_pages_and_nothing_else():
     rows = index_entries("w-desk", "", [
-        "kg/entities/company/kaar-tech.md",
-        "kg/entities/person/cottalango-leon.md",
+        "kg/entities/company/northwind-labs.md",
+        "kg/entities/person/robin-vale.md",
         "kg/entities/company/index.md",          # the generated listing is not an entity
         "kg/templates/person.md",                # a SHAPE is not a record
         "kg/entities/spaceship/x.md",            # not one of the five kinds
@@ -110,21 +110,21 @@ def test_the_index_reads_entity_pages_and_nothing_else():
         "README.md",
     ])
     assert [(r["entity_id"], r["kind"]) for r in rows] == [
-        ("kaar-tech", "company"), ("cottalango-leon", "person")]
+        ("northwind-labs", "company"), ("robin-vale", "person")]
     assert rows[0]["workspace_id"] == "w-desk"
-    assert rows[0]["path"] == "kg/entities/company/kaar-tech.md"
+    assert rows[0]["path"] == "kg/entities/company/northwind-labs.md"
 
 
 def test_a_term_with_a_page_is_known_and_carries_its_kind():
-    index = index_entries("w-desk", "", ["kg/entities/company/kaar-tech.md"])
-    rows = match_known(extract_terms([seg(1, "Kaar Tech came back.")]), index)
-    assert rows[0]["known"] == {"workspace_id": "w-desk", "entity_id": "kaar-tech",
-                                "path": "kg/entities/company/kaar-tech.md"}
+    index = index_entries("w-desk", "", ["kg/entities/company/northwind-labs.md"])
+    rows = match_known(extract_terms([seg(1, "Northwind Labs came back.")]), index)
+    assert rows[0]["known"] == {"workspace_id": "w-desk", "entity_id": "northwind-labs",
+                                "path": "kg/entities/company/northwind-labs.md"}
     assert rows[0]["kind"] == "company"
 
 
 def test_a_term_with_no_page_anywhere_is_known_null_and_carries_no_kind():
-    rows = match_known(extract_terms([seg(1, "Kaar Tech came back.")]), [])
+    rows = match_known(extract_terms([seg(1, "Northwind Labs came back.")]), [])
     assert rows[0]["known"] is None
     assert "kind" not in rows[0]
 
@@ -159,8 +159,8 @@ def _result(payload, cid="c1", err=False, as_blocks=True):
         {"type": "tool_result", "tool_use_id": cid, "is_error": err, "content": content}]}})
 
 
-LOOKED = {"meeting": "41", "cursor": "c9", "terms": [{"term": "Kaar Tech", "known": None}], "emit": []}
-PUBLISHED = {"meeting": "41", "cursor": "c9", "emit": [{"term": "Kaar Tech", "known": None}]}
+LOOKED = {"meeting": "41", "cursor": "c9", "terms": [{"term": "Northwind Labs", "known": None}], "emit": []}
+PUBLISHED = {"meeting": "41", "cursor": "c9", "emit": [{"term": "Northwind Labs", "known": None}]}
 
 
 def test_a_bare_lookup_publishes_nothing():
@@ -174,7 +174,7 @@ def test_the_publish_emits_the_terms_event_after_its_result():
     evs = list(parse_stream_json(iter([_use("mcp__vexa__transcript_terms"), _result(PUBLISHED)])))
     terms = [e for e in evs if e["type"] == "terms"]
     assert terms == [{"type": "terms", "meeting": "41", "cursor": "c9",
-                      "terms": [{"term": "Kaar Tech", "known": None}]}]
+                      "terms": [{"term": "Northwind Labs", "known": None}]}]
     kinds = [e["type"] for e in evs]
     assert kinds.index("tool-result") < kinds.index("terms")
 

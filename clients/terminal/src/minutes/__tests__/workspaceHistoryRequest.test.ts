@@ -16,7 +16,7 @@ import { readWorkspaceHistory } from "../../surfaces/workspaceApi";
 
 const answer = (over: Record<string, unknown> = {}) => ({
   ok: true, status: 200,
-  json: async () => ({ slug: "oenb-b5e60c", branch: "main", path: null, limit: 11, commits: [], ...over }),
+  json: async () => ({ slug: "bank-b5e60c", branch: "main", path: null, limit: 11, commits: [], ...over }),
 });
 
 /** Every URL the call reached for, in order. */
@@ -32,17 +32,17 @@ describe("the history request", () => {
   it("carries `path` when the reader asked for this page only", async () => {
     const seen = watchFetch();
 
-    await readWorkspaceHistory("oenb-b5e60c", { path: "README.md", limit: 11 });
+    await readWorkspaceHistory("bank-b5e60c", { path: "README.md", limit: 11 });
 
-    expect(seen).toEqual(["/api/workspaces/oenb-b5e60c/git/history?path=README.md&limit=11"]);
+    expect(seen).toEqual(["/api/workspaces/bank-b5e60c/git/history?path=README.md&limit=11"]);
   });
 
   it("carries no `path` at all when it is the whole workspace — never an empty one", async () => {
     const seen = watchFetch();
 
-    await readWorkspaceHistory("oenb-b5e60c", { limit: 11 });
+    await readWorkspaceHistory("bank-b5e60c", { limit: 11 });
 
-    expect(seen).toEqual(["/api/workspaces/oenb-b5e60c/git/history?limit=11"]);
+    expect(seen).toEqual(["/api/workspaces/bank-b5e60c/git/history?limit=11"]);
     expect(seen[0]).not.toContain("path=");
   });
 
@@ -58,6 +58,6 @@ describe("the history request", () => {
     // "nothing ever happened in this workspace" is a claim, and a malformed body is not evidence for it.
     vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ slug: "x" }) })) as unknown as typeof fetch);
 
-    await expect(readWorkspaceHistory("oenb-b5e60c", { path: "README.md" })).rejects.toThrow(/commits/);
+    await expect(readWorkspaceHistory("bank-b5e60c", { path: "README.md" })).rejects.toThrow(/commits/);
   });
 });

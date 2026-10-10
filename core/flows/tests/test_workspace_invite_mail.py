@@ -373,10 +373,10 @@ def test_the_invite_is_addressed_to_the_invitee_and_never_to_the_inviter(monkeyp
     So: the recipient is `email` and it tracks `email`, while `uid` and `inviter` move under it
     without ever becoming the address."""
     reg, ch = _rig(monkeypatch)
-    refs = dict(REFS, email="marvin@example.test", uid="176", inviter="admin@example.test")
+    refs = dict(REFS, email="quentin@example.test", uid="176", inviter="admin@example.test")
     reg.steps["mail_workspace_invite"](_ctx(refs))
 
-    assert [m["to"] for m in ch.sent] == ["marvin@example.test"]
+    assert [m["to"] for m in ch.sent] == ["quentin@example.test"]
     # the inviter appears in the SUBJECT (it is their invitation) and nowhere in the addressing
     assert "admin@example.test" in ch.sent[0]["subject"]
     assert ch.sent[0]["to"] != refs["inviter"] and ch.sent[0]["to"] != refs["uid"]

@@ -6,9 +6,9 @@
  *  slug, so the link keeps working after a rename: that is the whole decision, expressed as a route.
  *
  *  ⚠ …AND IT ACCEPTS A SLUG TOO (Vexa-ai/vexa#1643). The admin opened
- *  `/w/oenb-b5e60c/README.md` — a shared workspace of his own, addressed the way every other
+ *  `/w/bank-b5e60c/README.md` — a shared workspace of his own, addressed the way every other
  *  surface in the product still spells a workspace — and the route did not recognise it as a route
- *  at all: `oenb-b5e60c` is not ten characters of base32, so the parse returned null, the page
+ *  at all: `bank-b5e60c` is not ten characters of base32, so the parse returned null, the page
  *  dispatched nothing, and the terminal opened on whatever it opens on. A URL that silently is not
  *  a URL is the worst of the three answers available; the other two (open it, or say why not) are
  *  both better, and which one applies is the SERVER's to say.
@@ -31,7 +31,7 @@ export const WORKSPACE_ROUTE_PREFIX = "/w/";
 /** A workspace id: 10 chars of lowercase base32 (see `shared/workspace_id.py`). */
 const ID_RE = /^[a-z2-7]{10}$/;
 
-/** A workspace SLUG — the directory a workspace lives in today (`126`, `oenb-b5e60c`, `_global`).
+/** A workspace SLUG — the directory a workspace lives in today (`126`, `bank-b5e60c`, `_global`).
  *  Deliberately narrow: letters, digits, `_`, `.` and `-`, never leading with a dot, so no dot-
  *  namespaced tree (`.system`, `.attached`) and no `.`/`..` can be spelled as one. It is a NAME
  *  test and not an authorization: a slug that passes here and means nothing to the registry comes

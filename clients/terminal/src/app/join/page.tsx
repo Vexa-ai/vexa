@@ -11,7 +11,7 @@
  *
  *    1. PREVIEW, before any sign-in. `GET /api/join/preview?i=` is capability-gated by the token
  *       itself — whoever holds the link may see what they are being invited to — so the card can
- *       say *"Dmitry invited you to OeNB as a contributor: you can read and write its pages"*
+ *       say *"Dmitry invited you to Example Bank as a contributor: you can read and write its pages"*
  *       to somebody who has no account here yet. Asking a stranger to sign in to find out what
  *       they are signing in FOR is how an invite reads as a phish.
  *    2. SIGN IN, with this instance's own door — the emailed link and whatever OAuth the deploy

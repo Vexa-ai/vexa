@@ -7,12 +7,10 @@ Everything the simulator does afterwards walks that graph.
 
 Generic in size, structure and cadence; a PROFILE supplies all three. Two profiles ship:
 
-  spi   Sony Pictures Imageworks — the target org (founder 2026-09-02: "take SPI as a target
-        … as insiders to DNA, as research target, to be native to the fixtures"). Working size
-        1,300. NOTE THE ASSUMPTION: public reporting puts SPI at ~700 *production* staff at
-        peak; Twenty's 5,000 is the Sony Pictures umbrella. 1,300 is the founder's working
-        number and is used as given — it is not a headcount claim.
-  bank  a 1,300-person central bank — the first profile written, kept as a second profile so
+  studio  Brightwater Picture Studios — a fictional VFX studio, native to the fixtures.
+          Working size 1,300 is the founder's working number and is used as given — it is
+          not a headcount claim.
+  bank    a 1,300-person regulated bank — the first profile written, kept as a second profile so
         a lever's sign can be checked against a different meeting graph.
 
 Seeded: `build(...)` is a pure function of (profile, headcount, seed). Same inputs, same org.
@@ -80,17 +78,17 @@ class Org:
 
 # ── names ────────────────────────────────────────────────────────────────────────────────────
 _FIRST = {
-    "spi": ["Cameron", "Priya", "Marcus", "Yuki", "Elena", "Tomas", "Aisha", "Dev", "Ruth",
+    "studio": ["Cameron", "Priya", "Marcus", "Yuki", "Elena", "Tomas", "Aisha", "Dev", "Ruth",
             "Kenji", "Sofia", "Andre", "Mei", "Liam", "Nadia", "Oscar", "Farah", "Jonas",
             "Ravi", "Claire", "Ben", "Ingrid", "Hugo", "Talia", "Sam", "Noor", "Victor",
             "Hana", "Diego", "Maya", "Leo", "Zara", "Owen", "Iris"],
-    "bank": ["Marvin", "Tobias", "Anna", "Lukas", "Sophie", "Felix", "Julia", "Stefan",
+    "bank": ["Quentin", "Lennart", "Anna", "Lukas", "Sophie", "Felix", "Julia", "Stefan",
              "Katrin", "Michael", "Elena", "Christoph", "Barbara", "Andreas", "Petra",
              "Martin", "Claudia", "Thomas", "Sabine", "Georg", "Ines", "Peter", "Nina",
              "Wolfgang", "Eva", "Johannes", "Marlene", "David", "Theresa", "Simon"],
 }
 _LAST = {
-    "spi": ["Tran", "Okafor", "Lindqvist", "Nakamura", "Rossi", "Duarte", "Khan", "Mehta",
+    "studio": ["Tran", "Okafor", "Lindqvist", "Nakamura", "Rossi", "Duarte", "Khan", "Mehta",
             "Bell", "Sato", "Alvarez", "Dubois", "Chen", "Murphy", "Haddad", "Novak",
             "Iyer", "Beaulieu", "Kim", "Santos", "Wright", "Berg", "Moreau", "Levi",
             "Park", "Costa", "Wallace", "Ito", "Silva", "Grant"],
@@ -115,16 +113,16 @@ def _names(rng: random.Random, n: int, pool: str) -> list[str]:
     return out
 
 
-# ── SPI ──────────────────────────────────────────────────────────────────────────────────────
-# Grounded in the 2026-08-18 DNA dev check-in (Cottalango Leon, SPI): the pilot is "actual
+# ── Brightwater ──────────────────────────────────────────────────────────────────────────────
+# Grounded in the 2026-08-18 DNA dev check-in (Robin Vale, Brightwater): the pilot is "actual
 # coordinators and production managers using it as their main tool", 3-5 of them, one show
 # under NDA; dailies review "runs 30 min" and coordinators have "a couple of minutes to do
 # everything" before the next; the big reviews carry "hundreds of people" and run "to three
 # hours". The DNA product is the *Dailies Notes Assistant* — so DAILIES is the dominant
 # recurring meeting, per show, per department, daily.
-SPI_DEPTS = ["Layout", "Animation", "Lighting", "FX", "Compositing", "Character/Modeling"]
-SPI_SHOW_MIX = 0.78        # share of headcount on shows; the rest is studio function
-SPI_STUDIO = [             # name, weight, kind
+VFX_DEPTS = ["Layout", "Animation", "Lighting", "FX", "Compositing", "Character/Modeling"]
+VFX_SHOW_MIX = 0.78        # share of headcount on shows; the rest is studio function
+VFX_STUDIO = [             # name, weight, kind
     ("Pipeline & Engineering", 34, "eng"),
     ("Production Management", 16, "prodman"),
     ("Studio Technology", 12, "eng"),
@@ -136,10 +134,10 @@ SPI_STUDIO = [             # name, weight, kind
 ]
 
 
-def _build_spi(rng, headcount, org_people, teams, add):
+def _build_vfx(rng, headcount, org_people, teams, add):
     """Shows, each with coordinators / production managers / supervisors / department artists;
     plus the studio functions. Returns dept_meta."""
-    n_show_people = round(headcount * SPI_SHOW_MIX)
+    n_show_people = round(headcount * VFX_SHOW_MIX)
     n_shows = max(2, round(n_show_people / 160))     # ~160 crew per show at 1.3k -> 6 shows
     show_names = [f"Show {chr(65+i)}" for i in range(n_shows)]
     per_show = n_show_people // n_shows
@@ -165,8 +163,8 @@ def _build_spi(rng, headcount, org_people, teams, add):
         # the departments on this show: a supervisor + artists
         art_budget = per_show - len(office)
         dept_units: dict[str, list[int]] = {}
-        for i, d in enumerate(SPI_DEPTS):
-            size = max(3, art_budget // len(SPI_DEPTS) + (1 if i < art_budget % len(SPI_DEPTS) else 0))
+        for i, d in enumerate(VFX_DEPTS):
+            size = max(3, art_budget // len(VFX_DEPTS) + (1 if i < art_budget % len(VFX_DEPTS) else 0))
             tname = f"{sname} / {d}"
             members = []
             org_people.append((pid, sname, tname, "supervisor"))
@@ -176,12 +174,12 @@ def _build_spi(rng, headcount, org_people, teams, add):
                 members.append(pid); pid += 1
             teams[tname] = members
             dept_units[d] = members
-        _SPI_SHOWS.append((sname, managers, coords, dept_units))
+        _VFX_SHOWS.append((sname, managers, coords, dept_units))
 
     # studio functions
     rest = headcount - pid
-    tw = sum(w for _, w, _ in SPI_STUDIO)
-    for fname, w, kind in SPI_STUDIO:
+    tw = sum(w for _, w, _ in VFX_STUDIO)
+    for fname, w, kind in VFX_STUDIO:
         dept_meta[fname] = (kind, kind in ("exec", "staff"))
         size = max(2, round(rest * w / tw))
         remaining = size
@@ -204,13 +202,13 @@ def _build_spi(rng, headcount, org_people, teams, add):
     return dept_meta
 
 
-_SPI_SHOWS: list = []
+_VFX_SHOWS: list = []
 
 
-def _spi_meetings(rng, org: "Org", add, teams):
+def _vfx_meetings(rng, org: "Org", add, teams):
     """DAILIES first — daily, per show, per department. Then the production meeting, the
     supervisor sync, 1:1s, the pipeline dev check-in, and the cross-studio TSC (external)."""
-    for sname, managers, coords, dept_units in _SPI_SHOWS:
+    for sname, managers, coords, dept_units in _VFX_SHOWS:
         office = teams[f"{sname} / Production Office"]
         lead_pm = managers[0]
         for i, (d, members) in enumerate(dept_units.items()):
@@ -240,7 +238,7 @@ def _spi_meetings(rng, org: "Org", add, teams):
     for p in org.people:
         by_dept.setdefault(p.dept, []).append(p)
 
-    for fname, _w, kind in SPI_STUDIO:
+    for fname, _w, kind in VFX_STUDIO:
         members = by_dept.get(fname, [])
         if not members:
             continue
@@ -354,12 +352,12 @@ def _bank_meetings(rng, org, add, teams, dept_meta):
             [host] + rng.sample(peers, min(3, len(peers))), 0.3, external=True)
 
 
-DOMAIN = {"spi": "imageworks.example", "bank": "bank.example"}
+DOMAIN = {"studio": "studio.example", "bank": "bank.example"}
 
 
-def build(profile: str = "spi", headcount: int = HEADCOUNT, seed: int = 7) -> Org:
-    global _SPI_SHOWS
-    _SPI_SHOWS = []
+def build(profile: str = "studio", headcount: int = HEADCOUNT, seed: int = 7) -> Org:
+    global _VFX_SHOWS
+    _VFX_SHOWS = []
     rng = random.Random(seed)
     raw: list[tuple] = []
     teams: dict[str, list[int]] = {}
@@ -371,8 +369,8 @@ def build(profile: str = "spi", headcount: int = HEADCOUNT, seed: int = 7) -> Or
         meetings.append(Meeting(f"m{mid[0]}", kind, title, organizer,
                                 sorted(set(attendees)), per_week, external))
 
-    if profile == "spi":
-        dept_meta = _build_spi(rng, headcount, raw, teams, add)
+    if profile == "studio":
+        dept_meta = _build_vfx(rng, headcount, raw, teams, add)
     elif profile == "bank":
         dept_meta = _build_bank(rng, headcount, raw, teams, add)
     else:
@@ -383,8 +381,8 @@ def build(profile: str = "spi", headcount: int = HEADCOUNT, seed: int = 7) -> Or
     people = [Person(pid, names[pid], f"p{pid}@{dom}", dept, team, role)
               for pid, dept, team, role in raw]
     org = Org(people, meetings, teams, profile)
-    if profile == "spi":
-        _spi_meetings(rng, org, add, teams)
+    if profile == "studio":
+        _vfx_meetings(rng, org, add, teams)
     else:
         _bank_meetings(rng, org, add, teams, dept_meta)
     org.meetings = meetings
@@ -422,6 +420,6 @@ def stats(org: Org) -> dict:
 
 if __name__ == "__main__":
     import sys
-    prof = sys.argv[1] if len(sys.argv) > 1 else "spi"
+    prof = sys.argv[1] if len(sys.argv) > 1 else "studio"
     hc = int(sys.argv[2]) if len(sys.argv) > 2 else HEADCOUNT
     print(json.dumps(stats(build(prof, hc)), indent=1))

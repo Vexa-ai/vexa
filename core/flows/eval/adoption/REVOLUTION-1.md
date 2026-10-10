@@ -15,13 +15,13 @@
 | the note and the per-attendee blocks | one real agent turn per meeting | |
 | the chat after a click | the deployed agent over agent-api | |
 | the people, personas and decisions | | Haiku, one call per touch |
-| the org, its meeting graph, the calendar | | generated, SPI-shaped |
+| the org, its meeting graph, the calendar | | generated, Brightwater-shaped |
 
 **Active** is strict, per the founder's tightening: in the trailing 14 days the person **opened** a Vexa mail **and** took a **UI action** — clicked into the terminal, sent a chat turn, replied to the mail, or put the mailbox on a meeting they own. Delivered mail scores zero; an open alone is *reached*, not active.
 
-## 1. The org — SPI, native to the fixtures
+## 1. The org — Brightwater, native to the fixtures
 
-Working size **2,000** (founder's number). *Assumption stated:* public reporting puts SPI at ~700 **production** staff at peak and Twenty's 5,000 is the Sony Pictures umbrella — the size is a parameter, not a headcount claim.
+Working size **2,000** (founder's number). *Assumption stated:* the size is a parameter, not a headcount claim.
 
 - 2,000 people · 131 units · 933 meeting series · 822 occurrences/week · 5.28 meetings per person per week
 - reachable at all (in any non-external meeting): **2,000**
@@ -129,4 +129,4 @@ Abandonment, verbatim:
 
 ## 6. What v0 does not model
 
-Calendar reality (holidays, timezones, meetings people skip); the terminal UI beyond the click; IT provisioning and the tenant admitting the bot; anybody telling a colleague out loud; transcription quality. Quality enters only through what the mails actually say. The organizer's invite is admitted as a direct fact rather than a parsed ICS — the inbound mailbox double landed on a sibling branch during this run and feeds the founder's lane, not the sim's. The fixture is a DNA/ASWF working session, not a dailies review: no dailies transcript exists yet, and the personas judge CONTENT, so this is the single biggest gap between this measurement and SPI's real pilot.
+Calendar reality (holidays, timezones, meetings people skip); the terminal UI beyond the click; IT provisioning and the tenant admitting the bot; anybody telling a colleague out loud; transcription quality. Quality enters only through what the mails actually say. The organizer's invite is admitted as a direct fact rather than a parsed ICS — the inbound mailbox double landed on a sibling branch during this run and feeds the founder's lane, not the sim's. The fixture is a DNA/ASWF working session, not a dailies review: no dailies transcript exists yet, and the personas judge CONTENT, so this is the single biggest gap between this measurement and Brightwater's real pilot.

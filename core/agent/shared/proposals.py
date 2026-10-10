@@ -16,7 +16,7 @@ one item and moves on.
 
 FOUR FIELDS, and the schema is the contract:
 
-    source   where the job was SEEN — `meeting:97`, `page:kg/entities/company/oenb.md`. Half of the
+    source   where the job was SEEN — `meeting:97`, `page:kg/entities/company/examplebank.md`. Half of the
              dedup key, and the thing the chip shows so the person knows why they are being asked.
     act      the one line. It is what the chip says and what gets said into the chat on a click.
     since    when it was FIRST seen, ISO-8601 UTC. The list is newest-first on this, and an item

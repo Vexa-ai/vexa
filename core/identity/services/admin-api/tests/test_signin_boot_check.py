@@ -42,10 +42,10 @@ def test_unset_lists_boot(boot_env):
 
 
 def test_a_malformed_allow_list_entry_refuses_the_boot_and_names_it(boot_env):
-    boot_env.setenv("VEXA_SIGNIN_ALLOW", "@example.com, oenb.at")
+    boot_env.setenv("VEXA_SIGNIN_ALLOW", "@example.com, bank.example")
     with pytest.raises(ConfigError) as refused:
         _boot()
-    assert "VEXA_SIGNIN_ALLOW" in str(refused.value) and "oenb.at" in str(refused.value)
+    assert "VEXA_SIGNIN_ALLOW" in str(refused.value) and "bank.example" in str(refused.value)
 
 
 def test_a_domain_or_a_typo_in_the_admin_list_refuses_the_boot(boot_env):

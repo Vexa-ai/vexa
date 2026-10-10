@@ -298,7 +298,7 @@ def build(**d) -> APIRouter:
         …AND IT BECOMES THE ONE THIS CHAT WRITES TO (Vexa-ai/vexa#1611). A `focus` event says *"this
         workspace is where this conversation is working"*, which is two consequences of one fact: it
         joins the mount set (`add_workspace`) and it becomes the target (`set_target`). That is why
-        `workspace_target` — the verb an agent calls when the person says *"work in the OeNB
+        `workspace_target` — the verb an agent calls when the person says *"work in the Example Bank
         workspace"* — emits the SAME event rather than a second kind: a workspace already in the set
         adds nothing and moves the target, a brand-new one does both, and there is one vocabulary
         for "where are we working" instead of two that can drift apart.
@@ -783,7 +783,7 @@ def build(**d) -> APIRouter:
         """SET this chat's target workspace — the person clicking a chip in the header
         (Vexa-ai/vexa#1611).
 
-        The AGENT does not come through here. When the person says *"work in the OeNB workspace"*
+        The AGENT does not come through here. When the person says *"work in the Example Bank workspace"*
         the agent calls `workspace_target`, whose result the harness turns into a `focus` event, and
         `_binding_watch` writes it on the way past — the same one writer that records a created
         workspace. Two routes to one field would be two writers, and the chip and the record would

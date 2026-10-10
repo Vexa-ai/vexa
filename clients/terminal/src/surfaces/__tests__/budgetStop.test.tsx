@@ -1,7 +1,7 @@
 /** A TURN THAT RAN OUT OF BUDGET SAYS SO, AND OFFERS TO CARRY ON (Vexa-ai/vexa#1622).
  *
  *  Four friction reports were auto-filed from the founder's own chats on 2026-09-06 — three in a row
- *  in one conversation, while he built the OeNB workspace. Each turn spent its 40-call budget and
+ *  in one conversation, while he built the Example Bank workspace. Each turn spent its 40-call budget and
  *  ENDED, and the chat rendered a finished turn: no line, no affordance, nothing saying the work had
  *  stopped halfway. So he re-typed his instruction into the same wall, three times.
  *
@@ -93,7 +93,7 @@ describe("a turn that hits its tool-call budget", () => {
   it("ends with a visible line naming the budget and the count", async () => {
     mountChat();
     await act(async () => {
-      window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, { detail: { prompt: "build the OeNB workspace" } }));
+      window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, { detail: { prompt: "build the Example Bank workspace" } }));
     });
     await waitFor(() => expect(stream.calls.length).toBe(1));
 
@@ -108,7 +108,7 @@ describe("a turn that hits its tool-call budget", () => {
 
   it("offers a Continue act that re-submits the SAME TARGET with 'continue where you stopped'", async () => {
     mountChat();
-    await act(async () => { postIntent({ kind: "extend", workspace: "oenb-b5e60c", path: "README.md" }); });
+    await act(async () => { postIntent({ kind: "extend", workspace: "bank-b5e60c", path: "README.md" }); });
     await waitFor(() => expect(stream.calls.length).toBe(1));
     await stopAtBudget();
 
@@ -119,7 +119,7 @@ describe("a turn that hits its tool-call budget", () => {
     // makes the worker queue it behind anything still working on that page (Vexa-ai/vexa#1610).
     await waitFor(() => expect(stream.calls.length).toBe(2));
     expect(stream.calls[1].req.intent).toEqual({
-      kind: "extend", workspace: "oenb-b5e60c", path: "README.md",
+      kind: "extend", workspace: "bank-b5e60c", path: "README.md",
       instruction: "continue where you stopped",
     });
     expect(stream.calls[1].req.prompt).toContain("continue where you stopped");

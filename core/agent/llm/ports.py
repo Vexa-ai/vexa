@@ -381,8 +381,8 @@ _POLICY_DIR = "policy"
 # Founder, 2026-09-07, opening an invite the agent had minted a minute earlier: *"This invite link is
 # not valid. Ask whoever sent it for a new one."* The workspace's own history said why, twice an hour:
 #
-#     8dfff9b 19:28:08  policy: mint invite 41cdb3b6a5841ffc (contributor) for oenb-b5e60c
-#     1a452f9 19:28:09  oenb-b5e60c: policy/invites.json — removed
+#     8dfff9b 19:28:08  policy: mint invite 41cdb3b6a5841ffc (contributor) for bank-b5e60c
+#     1a452f9 19:28:09  bank-b5e60c: policy/invites.json — removed
 #
 # The mint is agent-api, writing its own store during the turn. The removal one second later is THIS
 # file: the guard captured HEAD before the turn, rebuilt the whole `policy/` subtree from it after,
@@ -699,7 +699,7 @@ def _commit_mount(work: Path, *, message: str, author: Optional[tuple[str, str]]
     # NEVER RECORD A DELETION OF A `policy/` PATH THIS TURN DID NOT MAKE (Vexa-ai/vexa#1645).
     # `git add -A` stages the tree AS IT FINDS IT, so anything another writer's file happened not to
     # be at that instant is committed as a deletion by whichever turn runs next — which is exactly how
-    # `oenb-b5e60c: policy/invites.json — removed` came to sit one second after every mint. The policy
+    # `bank-b5e60c: policy/invites.json — removed` came to sit one second after every mint. The policy
     # guard is the only thing here entitled to remove a `policy/` path and it says which ones it did;
     # every other staged deletion under `policy/` is put back, in the index and on disk, so the commit
     # carries the platform's tree and the next turn does not re-stage the same removal.

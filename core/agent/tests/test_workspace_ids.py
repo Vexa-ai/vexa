@@ -84,7 +84,7 @@ def test_classify_reads_the_roster_not_the_name(tmp_path):
     assert ids.classify(_ws(tmp_path, "aswf-dna-project-b7b2ee", members=True)) == "group"
     # the shape of the live instance's names is NOT the rule: a numeric group and a worded desk
     assert ids.classify(_ws(tmp_path, "42", members=True)) == "group"
-    assert ids.classify(_ws(tmp_path, "olgas-notes")) == "desk"
+    assert ids.classify(_ws(tmp_path, "noras-notes")) == "desk"
 
 
 # ── the registry ─────────────────────────────────────────────────────────────────────────────────
@@ -375,9 +375,9 @@ def test_a_desk_owner_may_not_rename_their_desk_but_an_admin_may(tmp_path):
     ids.migrate(tmp_path, reg)
     desk = reg.by_slug("126")
     with pytest.raises(ids.RenameRefused):
-        ids.rename_audited(reg, desk["id"], "Olga", by="126", root=tmp_path)
-    out = ids.rename_audited(reg, desk["id"], "Olga", by="admin1", is_admin=True, root=tmp_path)
-    assert out["name"] == "Olga" and out["renames"][-1]["by"] == "admin1"
+        ids.rename_audited(reg, desk["id"], "Nora", by="126", root=tmp_path)
+    out = ids.rename_audited(reg, desk["id"], "Nora", by="admin1", is_admin=True, root=tmp_path)
+    assert out["name"] == "Nora" and out["renames"][-1]["by"] == "admin1"
 
 
 def test_rename_refuses_an_empty_name_and_an_unknown_id(tmp_path):

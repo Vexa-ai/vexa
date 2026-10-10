@@ -206,7 +206,7 @@ needed no new terminal plumbing**; it needed the job's commit not to be swallowe
 `openai_agent`'s loop carries a hard per-turn budget — max tool calls, max wall seconds — sized
 against the CCC node (`llm/openai_agent.py`, SIZING). That sizing is about how much of the box ONE
 request may hold at once, and says nothing about how many times a piece of work may come back for
-another one. Jobs were billed as turns: the founder's OeNB job ran 72 steps and then died on the
+another one. Jobs were billed as turns: the founder's Example Bank job ran 72 steps and then died on the
 40-call budget, with everything it had already written sitting on disk.
 
 So a job gets its own budget, and reaching it is a **checkpoint rather than a death**:
@@ -258,7 +258,7 @@ move may not be "more of the same". What ends a budget-exhausted turn is therefo
 
 > **The defect, in the founder's own chats.** Four friction reports auto-filed on 2026-09-06
 > (13:40Z, 13:50Z, 13:58Z in `pchat-mtpuq2r0`; 14:10Z in `pchat-mtpvz23p`), three of them
-> consecutive: each turn spent its 40 calls building the OeNB workspace and **ended looking
+> consecutive: each turn spent its 40 calls building the Example Bank workspace and **ended looking
 > finished**, so he re-typed the instruction into the same wall. One press replaces that.
 
 The auto-filed record was malformed in its own right and is fixed with it
@@ -292,7 +292,7 @@ there is nothing here for them to honour.
 > **This section reverses the original #1584 rule, and the founder's own session is why.**
 > `Vexa-ai/vexa#1610`, 2026-09-06 13:50Z: he dropped several Extend acts — **each carrying its own
 > instruction line** — onto one page while a job ran, and the chat answered *"There is already
-> something running on `oenb-b5e60c/README.md` — I'll finish that one first"* twice. Every refusal
+> something running on `bank-b5e60c/README.md` — I'll finish that one first"* twice. Every refusal
 > was true. Every instruction it declined was then held by nobody, and only the person who typed it
 > knew that. *"i drop new tasks to that chat, can i be sure everything submitted there is actually
 > processed?"*

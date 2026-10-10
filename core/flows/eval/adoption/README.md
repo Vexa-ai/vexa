@@ -24,7 +24,7 @@ simulator would only recite its own priors.
 
 | | |
 |---|---|
-| `org.py` | the org generator — people, units, and the **meeting graph**. Profiles: `spi` (Sony Pictures Imageworks; dailies are the dominant recurring meeting) and `bank`. Size, structure and cadence are parameters. |
+| `org.py` | the org generator — people, units, and the **meeting graph**. Profiles: `studio` (Brightwater Picture Studios, fictional; dailies are the dominant recurring meeting) and `bank`. Size, structure and cadence are parameters. |
 | `personas.py` | the seven personas, the role/department skews, and the answer schema |
 | `judge.py` | one Haiku call per touch, and the persona side of the agent conversation |
 | `sample.py` | harvest real mail → judge → `rates.json`; and the real 3-turn chat with the deployed agent |
@@ -46,7 +46,7 @@ are per-identity safe. It never deletes a mailpit message.
     ~/.storm/sim-flows-up.sh                 # the isolated lane
     python3 probe4.py shared                 # end-to-end: does an attendee get anything?
     python3 sample.py                        # -> $SIM_RUN_DIR/rates.json
-    python3 sim.py rates.json spi 2000,20000,200000
+    python3 sim.py rates.json studio 2000,20000,200000
 
 ## What this does NOT model
 

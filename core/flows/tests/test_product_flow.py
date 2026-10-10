@@ -31,8 +31,8 @@ def product_rig():
     return db, reg, clock, world
 
 
-REFS = {"meeting": "m-first", "inviter": "marvin@bank.com",
-        "participants": ["marvin@bank.com", "lena@bank.com", "out@other.io"],
+REFS = {"meeting": "m-first", "inviter": "quentin@bank.com",
+        "participants": ["quentin@bank.com", "lena@bank.com", "out@other.io"],
         "start_time": 1_000_000.0 + 3600}
 
 
@@ -53,9 +53,9 @@ def test_first_meeting_queues_until_onboarding_finishes():
     _pump(db, reg, clock, world, 300)
 
     # organizer notified + bot scheduled + onboarding sub-flow spawned and ASKING
-    assert ("marvin@bank.com", "scheduled") in world.emails
-    assert world.research == ["marvin@bank.com"]
-    assert ("marvin@bank.com", "onboarding-question") in world.emails
+    assert ("quentin@bank.com", "scheduled") in world.emails
+    assert world.research == ["quentin@bank.com"]
+    assert ("quentin@bank.com", "onboarding-question") in world.emails
     onb = {f: st for f, st in db.execute("SELECT flow, status FROM reaction WHERE flow='onboard_by_email'")}
     assert onb == {"onboard_by_email": "blocked"}          # waiting on the human
 
@@ -66,16 +66,16 @@ def test_first_meeting_queues_until_onboarding_finishes():
     gated = db.execute("SELECT status FROM reaction WHERE flow='post_meeting_gated'")[0][0]
     assert gated == "retrying"
     assert world.commits == []                             # NO summary before the workspace exists
-    assert world.followups.count("marvin@bank.com") >= 2   # follow-ups went out on cadence
+    assert world.followups.count("quentin@bank.com") >= 2   # follow-ups went out on cadence
 
     # the human finally answers the onboarding question → workspace completes → queue drains
     rid = db.execute("SELECT reaction_id FROM reaction WHERE flow='onboard_by_email'")[0][0]
-    resume(db, rid, actor="marvin@bank.com", clock=clock, reason="yes — Marvin, treasury lead")
+    resume(db, rid, actor="quentin@bank.com", clock=clock, reason="yes — Quentin, treasury lead")
     _pump(db, reg, clock, world, 2 * 3600)
 
-    assert "marvin@bank.com" in world.workspaces_ready
+    assert "quentin@bank.com" in world.workspaces_ready
     assert world.commits == ["sha-m-first"]                # the FIRST meeting got processed after all
-    assert ("marvin@bank.com", "sha-m-first") in world.emails
+    assert ("quentin@bank.com", "sha-m-first") in world.emails
     assert ("lena@bank.com", "sha-m-first") in world.emails
     assert not any(r == "out@other.io" for r, _ in world.emails)
     ends = {f: st for f, st in db.execute("SELECT flow, status FROM reaction")}
@@ -84,7 +84,7 @@ def test_first_meeting_queues_until_onboarding_finishes():
 
 def test_known_person_skips_onboarding_entirely():
     db, reg, clock, world = product_rig()
-    world.workspaces_ready.add("marvin@bank.com")          # returning user
+    world.workspaces_ready.add("quentin@bank.com")          # returning user
     admit(db, reg, clock, source_event_id="inv-2", event_type="invite.received", subject_refs=REFS)
     _pump(db, reg, clock, world, 4 * 3600)
     assert db.execute("SELECT COUNT(*) FROM reaction WHERE flow='onboard_by_email'")[0][0] == 0
@@ -94,10 +94,10 @@ def test_known_person_skips_onboarding_entirely():
 
 def test_duplicate_invite_and_duplicate_webhook_still_one_of_everything():
     db, reg, clock, world = product_rig()
-    world.workspaces_ready.add("marvin@bank.com")
+    world.workspaces_ready.add("quentin@bank.com")
     for _ in range(3):
         admit(db, reg, clock, source_event_id="inv-3", event_type="invite.received", subject_refs=REFS)
     _pump(db, reg, clock, world, 4 * 3600)
     assert world.bots_dispatched == ["m-first"]
     assert world.commits == ["sha-m-first"]
-    assert world.emails.count(("marvin@bank.com", "sha-m-first")) == 1
+    assert world.emails.count(("quentin@bank.com", "sha-m-first")) == 1

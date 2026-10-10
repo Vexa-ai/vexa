@@ -19,7 +19,7 @@ export interface InvitePreview {
   workspace_id: string;
   /** Its canonical id, when the registry knows it. The front page is `/w/<id>`. */
   id?: string | null;
-  /** The human name — "OeNB", not `oenb-a1b2c3`. Falls back to the slug server-side. */
+  /** The human name — "Example Bank", not `bank-a1b2c3`. Falls back to the slug server-side. */
   name?: string | null;
   purpose?: string | null;
   role: string;
@@ -75,7 +75,7 @@ export function inviterName(sharedBy?: string | null): string {
 }
 
 /** The one sentence at the top of the card:
- *  *Dmitry invited you to OeNB as a contributor: you can read and write its pages.* */
+ *  *Dmitry invited you to Example Bank as a contributor: you can read and write its pages.* */
 export function inviteSentence(p: InvitePreview): string {
   const where = (p.name || p.workspace_id || "a workspace").trim();
   return `${inviterName(p.shared_by)} invited you to ${where} as a ${p.role}: ${roleSentence(p.role)}.`;

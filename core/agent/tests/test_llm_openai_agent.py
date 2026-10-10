@@ -242,7 +242,7 @@ def _not_a_job():
 
 
 def test_a_job_gets_its_own_tool_call_budget(tmp_path, monkeypatch, _not_a_job):
-    """The founder's OeNB job ran 72 steps and then died on the 40-call PER-TURN budget."""
+    """The founder's Example Bank job ran 72 steps and then died on the 40-call PER-TURN budget."""
     monkeypatch.setenv("VEXA_AGENT_MAX_TOOL_CALLS", "1")
     monkeypatch.setenv("VEXA_AGENT_JOB_MAX_TOOL_CALLS", "3")
     script = [_msg("", [("a", "Glob", {"pattern": "*"})]),
@@ -341,7 +341,7 @@ def _plain_turn(monkeypatch):
 
 def _never_stops(tool="Glob"):
     """A MODEL THAT NEVER STOPS. `_server` clamps to the last scripted message, so one message
-    carrying a tool call is replayed for ever — the founder's OeNB turns in miniature."""
+    carrying a tool call is replayed for ever — the founder's Example Bank turns in miniature."""
     return _server([_msg("working on it", [("c1", tool, {"pattern": "*"})])])
 
 

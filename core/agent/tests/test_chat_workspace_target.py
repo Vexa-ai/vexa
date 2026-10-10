@@ -93,23 +93,23 @@ def test_a_chat_with_no_target_writes_to_the_persons_own_desk():
 
 def test_setting_the_target_records_it_and_says_it_changed():
     for sess in _index_cases():
-        sess.upsert("u1", "s", workspaces=["oenb-4040f6"])
-        assert sess.set_target("u1", "s", "oenb-4040f6") is True
-        assert sess.target("u1", "s") == "oenb-4040f6"
-        assert sess.list("u1")[0]["target"] == "oenb-4040f6"
+        sess.upsert("u1", "s", workspaces=["bank-4040f6"])
+        assert sess.set_target("u1", "s", "bank-4040f6") is True
+        assert sess.target("u1", "s") == "bank-4040f6"
+        assert sess.list("u1")[0]["target"] == "bank-4040f6"
 
 
 def test_setting_the_same_target_twice_changes_nothing():
     """A REAL CHANGE ONLY — the flag it raises costs a container cold start, so a re-selection of
     what is already in force must not."""
     for sess in _index_cases():
-        sess.set_target("u1", "s", "oenb-4040f6")
-        assert sess.set_target("u1", "s", "oenb-4040f6") is False
+        sess.set_target("u1", "s", "bank-4040f6")
+        assert sess.set_target("u1", "s", "bank-4040f6") is False
 
 
 def test_the_empty_string_puts_the_writes_back_on_the_desk():
     for sess in _index_cases():
-        sess.set_target("u1", "s", "oenb-4040f6")
+        sess.set_target("u1", "s", "bank-4040f6")
         assert sess.set_target("u1", "s", "") is True
         assert sess.target("u1", "s") == ""
         assert sess.list("u1")[0]["target"] is None
@@ -124,7 +124,7 @@ def test_a_target_aimed_at_a_guess_is_refused():
         assert sess.set_target("u1", "s", "grp/../_global") is False
         assert sess.set_target("u1", "s", ".system") is False
         assert sess.target("u1", "s") == ""
-    assert _is_slug("oenb-4040f6") is True
+    assert _is_slug("bank-4040f6") is True
     assert _is_slug("a/b") is False and _is_slug(".system") is False and _is_slug("") is False
 
 
@@ -132,13 +132,13 @@ def test_the_target_is_a_DIFFERENT_question_from_the_mount_set():
     """`workspaces` is reach, `target` is where the work lands. Moving one never moves the other —
     which is the whole distinction the founder's sentence draws."""
     for sess in _index_cases():
-        sess.upsert("u1", "s", workspaces=["_global", "oenb-4040f6", "grp-ilm"])
-        sess.set_target("u1", "s", "oenb-4040f6")
+        sess.upsert("u1", "s", workspaces=["_global", "bank-4040f6", "grp-copperline"])
+        sess.set_target("u1", "s", "bank-4040f6")
         row = sess.list("u1")[0]
-        assert row["workspaces"] == ["_global", "oenb-4040f6", "grp-ilm"]
-        assert row["target"] == "oenb-4040f6"
+        assert row["workspaces"] == ["_global", "bank-4040f6", "grp-copperline"]
+        assert row["target"] == "bank-4040f6"
         sess.add_workspace("u1", "s", "grp-vfx")
-        assert sess.list("u1")[0]["target"] == "oenb-4040f6", "adding a mount is not moving the work"
+        assert sess.list("u1")[0]["target"] == "bank-4040f6", "adding a mount is not moving the work"
 
 
 def test_moving_the_target_gets_the_next_turn_a_fresh_container():
@@ -147,9 +147,9 @@ def test_moving_the_target_gets_the_next_turn_a_fresh_container():
     token's default `slug` are baked into the container at spawn. A warm worker keeps both for its
     whole 15-minute window — so without this the chip would move and the writes would not."""
     for sess in _index_cases():
-        sess.upsert("u1", "s", workspaces=["oenb-4040f6"])
+        sess.upsert("u1", "s", workspaces=["bank-4040f6"])
         assert sess.take_mount_generation("u1", "s") == 0
-        sess.set_target("u1", "s", "oenb-4040f6")
+        sess.set_target("u1", "s", "bank-4040f6")
         assert sess.mount_gen("u1", "s") == 0, "mid-turn the id must not move under a live stream"
         assert sess.take_mount_generation("u1", "s") == 1
         assert sess.take_mount_generation("u1", "s") == 1, "the turn after reuses the warm unit"
@@ -168,7 +168,7 @@ def test_the_target_does_not_disturb_what_the_rail_already_reads():
     for sess in _index_cases():
         sess.upsert("u1", "s", title="First prompt", scaffold={"kind": "first-visit", "id": "SC1"},
                     touched=True, meeting="118")
-        sess.set_target("u1", "s", "oenb-4040f6")
+        sess.set_target("u1", "s", "bank-4040f6")
         row = sess.list("u1")[0]
         assert row["title"] == "First prompt" and row["touched"] is True
         assert row["scaffold"] == {"kind": "first-visit", "id": "SC1"} and row["meeting"] == "118"
@@ -179,9 +179,9 @@ def test_the_target_does_not_disturb_what_the_rail_already_reads():
 def test_the_line_is_the_founders_sentence():
     """Verbatim from the issue, because the whole point is that the agent is TOLD rather than left
     to infer — *"how to softly reinforce that?"* was answered with context, not a rule to repeat."""
-    out = target_preamble("OeNB", ["Priya's desk", "ILM"])
-    assert ("target workspace: OeNB — writes go here unless asked otherwise; "
-            "Priya's desk, ILM are mounted to read; write there only on an explicit ask with its "
+    out = target_preamble("Example Bank", ["Priya's desk", "Copperline"])
+    assert ("target workspace: Example Bank — writes go here unless asked otherwise; "
+            "Priya's desk, Copperline are mounted to read; write there only on an explicit ask with its "
             "purpose.") in out
 
 
@@ -195,19 +195,19 @@ def test_with_nothing_else_mounted_the_read_clause_is_dropped():
 def test_the_line_names_workspaces_never_slugs():
     """#1585/#1602's rule. The caller resolves the names; this function does no lookup, which is
     exactly why it cannot accidentally render an id."""
-    out = target_preamble("Austrian National Bank", ["Priya's desk"])
-    assert "oenb-4040f6" not in out and "Austrian National Bank" in out
+    out = target_preamble("Example Bank", ["Priya's desk"])
+    assert "bank-4040f6" not in out and "Example Bank" in out
 
 
 def test_the_target_is_never_also_listed_as_readable():
     """It is where writes go; saying it is also "mounted to read" would be true and useless, and it
     is the one name in the line that must not be ambiguous."""
-    out = target_preamble("OeNB", ["OeNB", "ILM"])
-    assert out.count("OeNB") == 1
+    out = target_preamble("Example Bank", ["Example Bank", "Copperline"])
+    assert out.count("Example Bank") == 1
 
 
 def test_no_target_name_means_no_line_at_all():
-    assert target_preamble("") == "" and target_preamble("   ", ["ILM"]) == ""
+    assert target_preamble("") == "" and target_preamble("   ", ["Copperline"]) == ""
 
 
 # ── 3. the tools default to it ───────────────────────────────────────────────────────────────────
@@ -226,7 +226,7 @@ def store(tmp_path):
     return root
 
 
-def _owned(store, name="Austrian National Bank"):
+def _owned(store, name="Example Bank"):
     wid = create_shared_workspace_dir(store, name)
     ensure_owner(store, wid, "175", index=InMemoryMembershipIndex())
     return wid, [{"workspace_id": wid, "role": "owner"}]
@@ -306,7 +306,7 @@ def test_the_worker_is_told_the_target_and_only_when_there_is_one(store):
     subject's own baseline, so the worker cannot derive this from the mount shape."""
     settings = _settings(store)
     assert "VEXA_TARGET_WORKSPACE" not in _env(settings)
-    assert _env(settings, target="oenb-4040f6")["VEXA_TARGET_WORKSPACE"] == "oenb-4040f6"
+    assert _env(settings, target="bank-4040f6")["VEXA_TARGET_WORKSPACE"] == "bank-4040f6"
 
 
 def test_the_delegation_token_carries_the_target_as_the_tools_default(store):
@@ -318,19 +318,19 @@ def test_the_delegation_token_carries_the_target_as_the_tools_default(store):
         "mcp_url": "https://mcp.example.test/mcp",
         "mcp_delegation_secret": settings.mcp_delegation_secret.__class__("a-secret-for-tests"),
     })
-    env = _env(settings, target="oenb-4040f6")
+    env = _env(settings, target="bank-4040f6")
     claims = delegation.verify_delegation("a-secret-for-tests", env["VEXA_MCP_DELEGATION_TOKEN"])
-    assert claims["target"] == "oenb-4040f6"
+    assert claims["target"] == "bank-4040f6"
 
 
 def test_the_target_is_a_default_and_never_a_grant(store):
     """It sits BESIDE `scope`, deliberately not inside it: a scope is a ceiling, this is a default,
     and a default stored where a permission lives becomes a grant the first time somebody reads it
     as one."""
-    tok = delegation.mint_delegation("k", subject="175", regime="human", target="oenb-4040f6")
+    tok = delegation.mint_delegation("k", subject="175", regime="human", target="bank-4040f6")
     claims = delegation.verify_delegation("k", tok)
     assert claims["scope"] == {"regime": "human", "workspaces": "*"}
-    assert "oenb-4040f6" not in json.dumps(claims["scope"])
+    assert "bank-4040f6" not in json.dumps(claims["scope"])
 
 
 def test_a_chat_with_no_target_mints_the_token_it_always_did():
@@ -343,13 +343,13 @@ def test_the_mount_stack_the_model_reads_marks_the_target():
     operation belongs under. Two sentences, one fact, and neither derives it independently."""
     mounts = [{"slug": "_global", "path": "/workspaces/_global", "role": "global", "write": False},
               {"slug": "175", "path": "/workspaces/175", "role": "private", "write": True},
-              {"slug": "oenb-4040f6", "path": "/workspaces/oenb-4040f6", "role": "shared",
+              {"slug": "bank-4040f6", "path": "/workspaces/bank-4040f6", "role": "shared",
                "write": True}]
     plain = engine.mounts_preamble(mounts)
     assert "this chat's target" not in plain
 
-    marked = engine.mounts_preamble(mounts, "oenb-4040f6")
-    line = next(ln for ln in marked.splitlines() if "/workspaces/oenb-4040f6" in ln)
+    marked = engine.mounts_preamble(mounts, "bank-4040f6")
+    line = next(ln for ln in marked.splitlines() if "/workspaces/bank-4040f6" in ln)
     assert "this chat's target: writes go here unless asked otherwise" in line
     assert "/workspaces/175" in marked, "the desk is still declared — it is readable, not gone"
     assert "THE TARGET MARKED ABOVE WINS" in marked
@@ -357,20 +357,20 @@ def test_the_mount_stack_the_model_reads_marks_the_target():
 
 # ── 4. moving it: one writer on each side ────────────────────────────────────────────────────────
 
-TARGETED = {"targeted": "oenb-4040f6", "role": "owner"}
-CREATED = {"created": "grp-ilm", "name": "Industrial Light and Magic"}
+TARGETED = {"targeted": "bank-4040f6", "role": "owner"}
+CREATED = {"created": "grp-copperline", "name": "Copperline Effects"}
 
 
 def test_the_verb_that_moves_the_target_emits_the_focus_event():
     """ONE VOCABULARY. A `focus` says *"this workspace is where this conversation is working"*, and
     that has always meant both halves — it is in the mount set, and it is where writes go. Two event
     kinds for one sentence is how a chip and a record come to disagree."""
-    assert _workspace_focus(json.dumps(TARGETED)) == {"type": "focus", "workspace": "oenb-4040f6"}
+    assert _workspace_focus(json.dumps(TARGETED)) == {"type": "focus", "workspace": "bank-4040f6"}
     assert "mcp__vexa__workspace_target" in _FOCUS_TOOLS
 
 
 def test_a_refused_target_moves_nothing():
-    assert _workspace_focus(json.dumps({"refused": "read_only", "workspace": "oenb"})) is None
+    assert _workspace_focus(json.dumps({"refused": "read_only", "workspace": "examplebank"})) is None
     assert _workspace_focus(json.dumps({"targeted": ""})) is None
     assert _workspace_focus(json.dumps({"targeted": "grp/../_global"})) is None
 
@@ -379,7 +379,7 @@ def test_the_harness_emits_it_after_the_tool_result_and_only_on_success():
     def _use(cid="c1"):
         return json.dumps({"type": "assistant", "message": {"content": [
             {"type": "tool_use", "name": "mcp__vexa__workspace_target",
-             "input": {"slug": "oenb-4040f6"}, "id": cid}]}})
+             "input": {"slug": "bank-4040f6"}, "id": cid}]}})
 
     def _result(payload, err=False):
         return json.dumps({"type": "user", "message": {"content": [
@@ -388,7 +388,7 @@ def test_the_harness_emits_it_after_the_tool_result_and_only_on_success():
 
     ok = list(parse_stream_json(iter([_use(), _result(TARGETED)])))
     assert [e["type"] for e in ok] == ["tool-call", "tool-result", "focus"]
-    assert ok[-1]["workspace"] == "oenb-4040f6"
+    assert ok[-1]["workspace"] == "bank-4040f6"
     bad = list(parse_stream_json(iter([_use(), _result(TARGETED, err=True)])))
     assert [e["type"] for e in bad] == ["tool-call", "tool-result"]
 
@@ -407,8 +407,8 @@ def test_the_worker_is_allowed_to_call_it():
 INTERNAL = "internal-tier-secret-for-tests"
 
 TARGET_TURN = [
-    {"type": "message-delta", "text": "Working in OeNB from now on."},
-    {"type": "focus", "workspace": "oenb-4040f6", "name": "Austrian National Bank"},
+    {"type": "message-delta", "text": "Working in Example Bank from now on."},
+    {"type": "focus", "workspace": "bank-4040f6", "name": "Example Bank"},
     {"type": "turn-complete"},
 ]
 QUIET_TURN = [{"type": "turn-complete"}]
@@ -457,7 +457,7 @@ def _client(stack, events):
     return TestClient(app)
 
 
-def _turn(client, session, prompt="work in the OeNB workspace"):
+def _turn(client, session, prompt="work in the Example Bank workspace"):
     return client.post("/api/chat", json={"prompt": prompt, "session": session},
                        headers={"X-User-Id": "u_priya"})
 
@@ -471,34 +471,34 @@ def test_a_turn_that_targets_a_workspace_records_it_on_THAT_chats_session(stack)
     assert _turn(client, "pchat-abc").status_code == 200
     row = client.get("/api/sessions", headers={"X-User-Id": "u_priya"}).json()["sessions"][0]
     assert row["session"] == "pchat-abc"
-    assert row["target"] == "oenb-4040f6"
+    assert row["target"] == "bank-4040f6"
     # BOTH HALVES of one event: it is in the focus AND it is where writes go.
-    assert row["workspaces"] == ["oenb-4040f6"]
+    assert row["workspaces"] == ["bank-4040f6"]
 
 
 def test_the_client_still_gets_every_event_it_always_got(stack):
     """A READ, not a reroute. The chip moves off this same event; the index write is what makes it
     outlive this browser."""
     body = _turn(_client(stack, TARGET_TURN), "pchat-abc").text
-    assert '"type": "focus"' in body and '"workspace": "oenb-4040f6"' in body
-    assert "Working in OeNB from now on." in body and "turn-complete" in body
+    assert '"type": "focus"' in body and '"workspace": "bank-4040f6"' in body
+    assert "Working in Example Bank from now on." in body and "turn-complete" in body
 
 
 def test_the_next_turn_is_told_the_target_and_dispatched_with_it(stack):
     client = _client(stack, TARGET_TURN)
     _turn(client, "pchat-abc")
     quiet = _client(stack, QUIET_TURN)
-    _turn(quiet, "pchat-abc", prompt="collect everything we know about OeNB")
-    assert "target workspace: oenb-4040f6 — writes go here unless asked otherwise" in _sent_prompt(stack)
-    assert stack["runtime"].envs[-1]["VEXA_TARGET_WORKSPACE"] == "oenb-4040f6"
+    _turn(quiet, "pchat-abc", prompt="collect everything we know about Example Bank")
+    assert "target workspace: bank-4040f6 — writes go here unless asked otherwise" in _sent_prompt(stack)
+    assert stack["runtime"].envs[-1]["VEXA_TARGET_WORKSPACE"] == "bank-4040f6"
 
 
 def test_the_persons_own_words_are_still_exactly_their_own_words(stack):
     """The line is MACHINERY and goes in front of the sentinel — F47's rule, and the reason the
     founder's bubble ever read `Active context: the u…` back at him."""
     client = _client(stack, QUIET_TURN)
-    _turn(client, "pchat-abc", prompt="collect everything we know about OeNB")
-    assert engine.human_half(_sent_prompt(stack)) == "collect everything we know about OeNB"
+    _turn(client, "pchat-abc", prompt="collect everything we know about Example Bank")
+    assert engine.human_half(_sent_prompt(stack)) == "collect everything we know about Example Bank"
 
 
 def test_a_chat_that_has_chosen_nothing_is_told_it_writes_to_the_desk(stack):
@@ -517,10 +517,10 @@ def test_the_desk_stays_readable_from_a_chat_targeting_somewhere_else(stack):
     _turn(quiet, "pchat-abc", prompt="and note this on my desk")
     line = _sent_prompt(stack)
     head, sep, rest = line.partition(" — writes go here unless asked otherwise; ")
-    assert sep and head.endswith("target workspace: oenb-4040f6")
+    assert sep and head.endswith("target workspace: bank-4040f6")
     readable = rest.split(" are mounted to read")[0]
     # The desk is NAMED as readable — whatever the registry calls it — and is not the target.
-    assert readable and "oenb-4040f6" not in readable
+    assert readable and "bank-4040f6" not in readable
     assert "write there only on an explicit ask with its purpose" in line
 
 
@@ -564,12 +564,12 @@ def test_an_index_that_refuses_the_write_does_not_cost_the_person_their_turn(sta
     stack["sessions"] = _Broken()
     r = _turn(_client(stack, TARGET_TURN), "pchat-abc")
     assert r.status_code == 200
-    assert '"workspace": "oenb-4040f6"' in r.text and "turn-complete" in r.text
+    assert '"workspace": "bank-4040f6"' in r.text and "turn-complete" in r.text
 
 
 def test_the_focus_event_still_means_what_it_meant():
     """Vexa-ai/vexa#1603's contract is untouched — reading a workspace is not joining one, and
     writing into one is not either."""
-    assert workspace_focus({"type": "focus", "workspace": "oenb-4040f6"}) == "oenb-4040f6"
+    assert workspace_focus({"type": "focus", "workspace": "bank-4040f6"}) == "bank-4040f6"
     assert workspace_focus({"type": "artifact", "workspace": "x", "path": "README.md"}) is None
-    assert _workspace_focus(json.dumps(CREATED))["workspace"] == "grp-ilm"
+    assert _workspace_focus(json.dumps(CREATED))["workspace"] == "grp-copperline"

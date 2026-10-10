@@ -268,5 +268,5 @@ def test_the_verbs_the_behaviour_prompts_name_reach_agent_api_through_the_gatewa
     assert str(seen[-1].url) == 'http://gateway.test/agent/meeting/terms/scan'
     assert json.loads(seen[-1].content) == {'meeting_id': '147', 'keep': '*'}
 
-    client.get('/tools/workspace_members', headers=key, params={'workspace_id': 'oenb-c1'})
-    assert str(seen[-1].url) == 'http://gateway.test/agent/workspace/members?workspace_id=oenb-c1'
+    client.get('/tools/workspace_members', headers=key, params={'workspace_id': 'bank-c1'})
+    assert str(seen[-1].url) == 'http://gateway.test/agent/workspace/members?workspace_id=bank-c1'

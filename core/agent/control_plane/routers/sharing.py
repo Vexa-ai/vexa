@@ -189,7 +189,7 @@ def build(**d) -> APIRouter:
                 shared_by = m["email"]
                 break
         # THE WORKSPACE'S NAME, not its directory. The join card's whole job is one sentence a person
-        # recognises — *"Dmitry invited you to OeNB as a contributor"* — and `oenb-a1b2c3` is not a
+        # recognises — *"Dmitry invited you to Example Bank as a contributor"* — and `bank-a1b2c3` is not a
         # name anybody was told. Read-only: `by_slug` alone, never the `_ws_sync` fallback the id
         # routes use, because this route is reachable without a session and must not write.
         rec = workspace_registry.by_slug(wsid) or {}

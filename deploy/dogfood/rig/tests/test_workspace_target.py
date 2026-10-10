@@ -18,7 +18,7 @@ from conftest import as_user, tool
 import vexa_control_mcp as rig
 
 
-TARGET = "oenb-4040f6"
+TARGET = "bank-4040f6"
 
 
 def _write(**kw):
@@ -26,7 +26,7 @@ def _write(**kw):
 
 
 def _upsert(**kw):
-    return json.loads(tool("entity_upsert")(kind="company", name="OeNB", facts=["a fact"],
+    return json.loads(tool("entity_upsert")(kind="company", name="Example Bank", facts=["a fact"],
                                             source="the meeting", **kw))
 
 
@@ -67,8 +67,8 @@ def test_a_named_workspace_beats_the_target_and_does_not_move_it(monkeypatch):
     available to read and even to write, if explicit ask and purpose"*."""
     http = as_user(monkeypatch, "7", routes={"/api/workspace/file": (200, {})})
     rig.CALL_TARGET.set(TARGET)
-    _write(slug="grp-ilm")
-    assert _bodies(http, "/api/workspace/file")[0]["slug"] == "grp-ilm"
+    _write(slug="grp-copperline")
+    assert _bodies(http, "/api/workspace/file")[0]["slug"] == "grp-copperline"
     assert rig.CALL_TARGET.get() == TARGET, "one write elsewhere is not a change of target"
 
 

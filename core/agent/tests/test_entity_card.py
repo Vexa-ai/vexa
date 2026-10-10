@@ -52,7 +52,7 @@ def test_a_summary_somebody_already_wrote_is_never_overwritten(tmp_path):
 
 
 def test_a_field_lands_in_its_section_not_in_the_log(tmp_path):
-    r = E.upsert_entity(tmp_path, "person", "Olga Avramenko", [], "the TSC call",
+    r = E.upsert_entity(tmp_path, "person", "Nora Quill", [], "the TSC call",
                         fields={"role": "Chairs the TSC", "cares_about": "Public-first process"})
     text = read(tmp_path, r["path"])
     role = text.split("## Role and organisation")[1].split("##")[0]
@@ -64,7 +64,7 @@ def test_a_field_lands_in_its_section_not_in_the_log(tmp_path):
 
 
 def test_a_plain_fact_goes_to_the_named_section_or_to_the_timeline(tmp_path):
-    filed = E.upsert_entity(tmp_path, "meeting", "2026-03-02 TSC", ["Tommy was confirmed as chair."],
+    filed = E.upsert_entity(tmp_path, "meeting", "2026-03-02 TSC", ["Gabe was confirmed as chair."],
                             "the transcript", today="2026-09-02", section="Decided")
     assert filed["filed"] == {"Decided": 1}
     loose = E.upsert_entity(tmp_path, "meeting", "2026-03-16 TSC", ["Someone said something."],
@@ -129,11 +129,11 @@ def test_a_link_to_a_page_that_does_not_exist_is_reported_never_minted(tmp_path)
 
 
 def test_a_meeting_links_its_participants_both_ways(tmp_path):
-    E.upsert_entity(tmp_path, "person", "Olga Avramenko", [], "s", fields={"role": "chair"})
+    E.upsert_entity(tmp_path, "person", "Nora Quill", [], "s", fields={"role": "chair"})
     r = E.upsert_entity(tmp_path, "meeting", "2026-03-02 TSC", [], "the transcript",
-                        fields={"participants": ["[[Olga Avramenko]]"]})
-    assert "- [[Olga Avramenko]] — attendee" in read(tmp_path, r["path"])
-    assert "— attended" in read(tmp_path, "kg/entities/person/olga-avramenko.md")
+                        fields={"participants": ["[[Nora Quill]]"]})
+    assert "- [[Nora Quill]] — attendee" in read(tmp_path, r["path"])
+    assert "— attended" in read(tmp_path, "kg/entities/person/nora-quill.md")
 
 
 # ── migration ────────────────────────────────────────────────────────────────────────────────────
@@ -193,11 +193,11 @@ def test_the_same_call_twice_writes_nothing_the_second_time(tmp_path):
 def test_render_is_a_fixed_point(tmp_path):
     """Parse → render must not move a page it has already rendered. A renderer that is not a fixed
     point rewrites every page on every turn, and the diff of a workspace stops meaning anything."""
-    E.upsert_entity(tmp_path, "person", "Olga Avramenko", ["a dated thing"], "a source",
+    E.upsert_entity(tmp_path, "person", "Nora Quill", ["a dated thing"], "a source",
                     today="2026-09-02", summary="Chairs the TSC.",
                     fields={"role": "chair", "cares_about": "process"},
                     open_questions=["Where do they sit?"])
-    p = tmp_path / "kg/entities/person/olga-avramenko.md"
+    p = tmp_path / "kg/entities/person/nora-quill.md"
     once = p.read_text()
     fm, body = E.split_frontmatter(once)
     assert E.render_card(E.parse_card(body), "person", fm) == once

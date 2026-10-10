@@ -22,7 +22,7 @@
 #
 # ADDRESSES. Every address in every recipe resolves under $VEXA_REHEARSE_DOMAIN (default
 # rehearse.test) and the engine refuses anything else BEFORE the first door is touched. This is
-# the whole safety story: the founder's identities, `_global`, the DNA and OeNB groups cannot be
+# the whole safety story: the founder's identities, `_global`, the DNA and Example Bank groups cannot be
 # named by a recipe, because the domain check runs over the interpolated arguments.
 #
 # IDEMPOTENCE is by derived identity, never by a marker file: the ICS UID and the meeting's

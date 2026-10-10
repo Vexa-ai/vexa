@@ -51,12 +51,12 @@ def test_the_claimed_admin_is_admitted():
 
 
 def test_a_domain_entry_admits_exactly_that_domain():
-    allow = ["@oenb.at"]
-    assert _decide("anna@oenb.at", allow=allow) == (True, sa.WHY_ALLOW_LIST)
-    assert _decide("ANNA@OENB.AT", allow=allow) == (True, sa.WHY_ALLOW_LIST)
+    allow = ["@bank.example"]
+    assert _decide("anna@bank.example", allow=allow) == (True, sa.WHY_ALLOW_LIST)
+    assert _decide("ANNA@BANK.EXAMPLE", allow=allow) == (True, sa.WHY_ALLOW_LIST)
     # lookalikes and subdomains are not that domain
-    for other in ("anna@sub.oenb.at", "anna@evil-oenb.at", "anna@oenb.at.evil.com",
-                  "oenb.at@evil.com", "anna@oenb.atx"):
+    for other in ("anna@sub.bank.example", "anna@evil-bank.example", "anna@bank.example.evil.com",
+                  "bank.example@evil.com", "anna@bank.examplex"):
         assert _decide(other, allow=allow) == (False, sa.WHY_NOT_ALLOWED), other
 
 
@@ -78,7 +78,7 @@ def test_an_unclaimed_instance_admits_the_sign_in_that_holds_the_claim_code():
     # …and the code opens nothing once the instance is claimed or a list is configured
     assert _decide("first@anywhere.net", admin_exists=True, code=True) == (False, sa.WHY_NOT_ALLOWED)
     assert _decide("first@anywhere.net", admin_exists=False, code=True,
-                   allow=["@oenb.at"]) == (False, sa.WHY_NOT_ALLOWED)
+                   allow=["@bank.example"]) == (False, sa.WHY_NOT_ALLOWED)
     assert _decide("first@anywhere.net", admin_exists=False, code=True,
                    admin_emails=["owner@example.com"]) == (False, sa.WHY_NOT_ALLOWED)
 
@@ -97,8 +97,8 @@ def test_a_configured_admin_list_closes_the_unclaimed_door():
 def test_a_configured_allow_list_closes_the_unclaimed_door():
     """VEXA_SIGNIN_ALLOW (or the settings half) is set: only those addresses, claimed or not."""
     assert _decide("stranger@anywhere.net", admin_exists=False,
-                   allow=["@oenb.at"]) == (False, sa.WHY_NOT_ALLOWED)
-    assert _decide("anna@oenb.at", admin_exists=False, allow=["@oenb.at"]) == (True, sa.WHY_ALLOW_LIST)
+                   allow=["@bank.example"]) == (False, sa.WHY_NOT_ALLOWED)
+    assert _decide("anna@bank.example", admin_exists=False, allow=["@bank.example"]) == (True, sa.WHY_ALLOW_LIST)
 
 
 def test_who_may_claim_the_admin_role():
@@ -109,13 +109,13 @@ def test_who_may_claim_the_admin_role():
     assert sa.may_claim("first@anywhere.net", admin_claimed=True, allow=[],
                         code_ok=True) == (False, sa.CLAIM_ADMIN_EXISTS)
     # VEXA_ADMIN_EMAILS names the admins: nobody claims, not even an allowed address with the code
-    assert sa.may_claim("anna@oenb.at", admin_claimed=False, allow=["@oenb.at"],
+    assert sa.may_claim("anna@bank.example", admin_claimed=False, allow=["@bank.example"],
                         admins=["owner@example.com"], code_ok=True) == (False, sa.CLAIM_ADMIN_EXISTS)
     # an allow-list is configured: only an address on it, and still only with the code
-    assert sa.may_claim("stranger@anywhere.net", admin_claimed=False, allow=["@oenb.at"],
+    assert sa.may_claim("stranger@anywhere.net", admin_claimed=False, allow=["@bank.example"],
                         code_ok=True) == (False, sa.CLAIM_NOT_ALLOWED)
-    assert sa.may_claim("anna@oenb.at", admin_claimed=False, allow=["@oenb.at"]) == (False, sa.CLAIM_BAD_CODE)
-    assert sa.may_claim("anna@oenb.at", admin_claimed=False, allow=["@oenb.at"],
+    assert sa.may_claim("anna@bank.example", admin_claimed=False, allow=["@bank.example"]) == (False, sa.CLAIM_BAD_CODE)
+    assert sa.may_claim("anna@bank.example", admin_claimed=False, allow=["@bank.example"],
                         code_ok=True) == (True, sa.CLAIMED)
 
 
@@ -141,24 +141,24 @@ def test_a_non_address_is_refused_even_on_an_unclaimed_instance():
 
 
 def test_the_env_and_the_settings_lists_merge(monkeypatch):
-    monkeypatch.setenv("VEXA_SIGNIN_ALLOW", "@oenb.at, alice@example.com")
+    monkeypatch.setenv("VEXA_SIGNIN_ALLOW", "@bank.example, alice@example.com")
     env_valid, problems = sa.env_entries()
-    assert env_valid == ["@oenb.at", "alice@example.com"] and problems == []
+    assert env_valid == ["@bank.example", "alice@example.com"] and problems == []
     allow = sa.effective(env_valid, "bob@example.net\n@partner.example, alice@example.com")
-    assert allow == ["@oenb.at", "alice@example.com", "bob@example.net", "@partner.example"]
-    for ok in ("x@oenb.at", "alice@example.com", "bob@example.net", "y@partner.example"):
+    assert allow == ["@bank.example", "alice@example.com", "bob@example.net", "@partner.example"]
+    for ok in ("x@bank.example", "alice@example.com", "bob@example.net", "y@partner.example"):
         assert _decide(ok, allow=allow)[0] is True, ok
     assert _decide("carol@example.com", allow=allow) == (False, sa.WHY_NOT_ALLOWED)
 
 
 def test_an_invalid_env_entry_never_matches_and_is_reported(monkeypatch):
-    """`oenb.at` without the @ is a typo, not a domain: guessing it into one would widen the list
+    """`bank.example` without the @ is a typo, not a domain: guessing it into one would widen the list
     the operator wrote. It is reported instead."""
-    monkeypatch.setenv("VEXA_SIGNIN_ALLOW", "oenb.at,ok@example.com")
+    monkeypatch.setenv("VEXA_SIGNIN_ALLOW", "bank.example,ok@example.com")
     env_valid, problems = sa.env_entries()
     assert env_valid == ["ok@example.com"]
-    assert len(problems) == 1 and "@oenb.at" in problems[0]
-    assert _decide("anna@oenb.at", allow=env_valid) == (False, sa.WHY_NOT_ALLOWED)
+    assert len(problems) == 1 and "@bank.example" in problems[0]
+    assert _decide("anna@bank.example", allow=env_valid) == (False, sa.WHY_NOT_ALLOWED)
 
 
 def test_unset_env_is_an_empty_list(monkeypatch):
@@ -167,12 +167,12 @@ def test_unset_env_is_an_empty_list(monkeypatch):
 
 
 def test_a_settings_write_is_canonicalised_and_all_or_nothing():
-    assert sa.normalize_setting(" Alice@Example.com ,\n@OENB.at;alice@example.com ") == \
-        "alice@example.com, @oenb.at"
+    assert sa.normalize_setting(" Alice@Example.com ,\n@BANK.example;alice@example.com ") == \
+        "alice@example.com, @bank.example"
     assert sa.normalize_setting("") == ""
     assert sa.normalize_setting(["a@b.co", "@c.co"]) == "a@b.co, @c.co"
     with pytest.raises(sa.InvalidAllowList) as bad:
-        sa.normalize_setting("ok@example.com, oenb.at, @nodot, x@@y.z, *")
+        sa.normalize_setting("ok@example.com, bank.example, @nodot, x@@y.z, *")
     # every problem at once — one per bad entry, the good one not among them
     assert len(bad.value.problems) == 4
     assert not any("ok@example.com" in p for p in bad.value.problems)
@@ -279,9 +279,9 @@ def test_admission_admits_an_existing_user_and_the_admin(make_client):
 
 
 def test_admission_reads_the_env_and_the_settings_lists_together(make_client, monkeypatch):
-    monkeypatch.setenv("VEXA_SIGNIN_ALLOW", "@oenb.at")
+    monkeypatch.setenv("VEXA_SIGNIN_ALLOW", "@bank.example")
     c = make_client(FakeDB(signin_allow="alice@example.com"))
-    assert _ask(c, "anna@oenb.at").json() == {"admitted": True, "why": "allow-list"}
+    assert _ask(c, "anna@bank.example").json() == {"admitted": True, "why": "allow-list"}
     assert _ask(c, "alice@example.com").json() == {"admitted": True, "why": "allow-list"}
     assert _ask(c, "bob@example.com").json() == {"admitted": False, "why": "not-allowed"}
 
@@ -325,10 +325,10 @@ def test_admission_admits_an_address_the_deployment_names_as_admin(make_client, 
 
 def test_admission_on_an_unclaimed_instance_with_an_allow_list_admits_only_the_list(make_client, monkeypatch):
     """The security requirement on #1784: a configured list closes the unclaimed door."""
-    monkeypatch.setenv("VEXA_SIGNIN_ALLOW", "@oenb.at")
+    monkeypatch.setenv("VEXA_SIGNIN_ALLOW", "@bank.example")
     c = make_client(FakeDB(admin_exists=False))
     assert _ask(c, "stranger@anywhere.net").json() == {"admitted": False, "why": "not-allowed"}
-    assert _ask(c, "anna@oenb.at").json() == {"admitted": True, "why": "allow-list"}
+    assert _ask(c, "anna@bank.example").json() == {"admitted": True, "why": "allow-list"}
 
 
 def test_admission_on_an_unclaimed_instance_with_admin_emails_admits_only_them(make_client, monkeypatch):
@@ -362,22 +362,22 @@ def _claim(client, user_id, code=None):
 
 
 def test_the_claim_is_decided_here_with_the_same_lists(make_client, monkeypatch, plain_rows):
-    db = FakeDB(users={"stranger@anywhere.net", "anna@oenb.at"}, admin_exists=False)
+    db = FakeDB(users={"stranger@anywhere.net", "anna@bank.example"}, admin_exists=False)
     code = _live_code(db)
     c = make_client(db)
     ids = {u.email: u.id for u in db.users.values()}
     # an allow-list is configured: the first admin is one of its people, code or not
-    monkeypatch.setenv("VEXA_SIGNIN_ALLOW", "@oenb.at")
+    monkeypatch.setenv("VEXA_SIGNIN_ALLOW", "@bank.example")
     assert _claim(c, ids["stranger@anywhere.net"], code) == \
         {"claimed": False, "admin_exists": False, "why": "not-allowed"}
     # VEXA_ADMIN_EMAILS names the admins: nobody claims
     monkeypatch.setenv("VEXA_ADMIN_EMAILS", "owner@example.com")
-    assert _claim(c, ids["anna@oenb.at"], code) == \
+    assert _claim(c, ids["anna@bank.example"], code) == \
         {"claimed": False, "admin_exists": True, "why": "admin-exists"}
     monkeypatch.delenv("VEXA_ADMIN_EMAILS")
-    r = _claim(c, ids["anna@oenb.at"], code)
+    r = _claim(c, ids["anna@bank.example"], code)
     assert r == {"claimed": True, "admin_exists": True, "why": "claimed"}
-    assert db.users["anna@oenb.at"].data == {"is_admin": True}
+    assert db.users["anna@bank.example"].data == {"is_admin": True}
 
 
 def test_no_code_no_claim(make_client, plain_rows):
@@ -463,11 +463,11 @@ def test_the_settings_door_canonicalises_the_list(make_client):
     db = FakeDB()
     c = make_client(db)
     r = c.put("/internal/settings/signin", headers={"X-Internal-Secret": SECRET},
-              json={"allow": "Alice@Example.com\n@OENB.at"})
+              json={"allow": "Alice@Example.com\n@BANK.example"})
     assert r.status_code == 200, r.text
-    assert r.json()["value"] == {"allow": "alice@example.com, @oenb.at"}
+    assert r.json()["value"] == {"allow": "alice@example.com, @bank.example"}
     # …and the admission reads what was written
-    assert _ask(c, "anna@oenb.at").json()["admitted"] is True
+    assert _ask(c, "anna@bank.example").json()["admitted"] is True
     # clearing it is the empty string, as for every other settings field
     r = c.put("/internal/settings/signin", headers={"X-Internal-Secret": SECRET}, json={"allow": ""})
     assert r.json()["value"] == {}
@@ -477,18 +477,18 @@ def test_the_settings_door_refuses_a_bad_entry_and_stores_nothing(make_client):
     db = FakeDB(signin_allow="keep@example.com")
     c = make_client(db)
     r = c.put("/internal/settings/signin", headers={"X-Internal-Secret": SECRET},
-              json={"allow": "new@example.com, oenb.at"})
+              json={"allow": "new@example.com, bank.example"})
     assert r.status_code == 422
-    assert "@oenb.at" in r.json()["detail"]
+    assert "@bank.example" in r.json()["detail"]
     assert db.rows["signin"].value == {"allow": "keep@example.com"}
 
 
 def test_the_settings_read_shows_the_env_half_and_its_problems(make_client, monkeypatch):
-    monkeypatch.setenv("VEXA_SIGNIN_ALLOW", "@oenb.at,typo.example")
+    monkeypatch.setenv("VEXA_SIGNIN_ALLOW", "@bank.example,typo.example")
     c = make_client(FakeDB(signin_allow="alice@example.com"))
     body = c.get("/internal/settings/signin", headers={"X-Internal-Secret": SECRET}).json()
     assert body["value"] == {"allow": "alice@example.com"}
-    assert body["env"] == {"allow": "@oenb.at"}
+    assert body["env"] == {"allow": "@bank.example"}
     assert len(body["env_problems"]) == 1 and "typo.example" in body["env_problems"][0]
 
 

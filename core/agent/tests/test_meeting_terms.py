@@ -54,41 +54,41 @@ def unknown(term: str, *segments: str) -> dict:
 # ── the merge: a second Highlight ADDS ────────────────────────────────────────────────────────────
 
 def test_a_second_publish_adds_and_never_removes():
-    out = meeting_terms.merge([unknown("Kaar Tech")], [unknown("Blue Light Card")])
-    assert [t["term"] for t in out] == ["Kaar Tech", "Blue Light Card"]
+    out = meeting_terms.merge([unknown("Northwind Labs")], [unknown("Fernhill Loyalty Card")])
+    assert [t["term"] for t in out] == ["Northwind Labs", "Fernhill Loyalty Card"]
 
 
 def test_the_same_term_twice_is_one_row_however_it_was_spelled():
     """One chip, and the LATER spelling wins — the same rule as the client's `mergeTerms`. The
     casing is cosmetic either way: the renderer matches case-insensitively and draws the words the
     transcript actually used, never the stored spelling."""
-    out = meeting_terms.merge([unknown("Kaar Tech")], [unknown("kaar   tech")])
-    assert len(out) == 1 and out[0]["term"] == "kaar tech"
+    out = meeting_terms.merge([unknown("Northwind Labs")], [unknown("northwind   labs")])
+    assert len(out) == 1 and out[0]["term"] == "northwind labs"
 
 
 def test_a_later_answer_about_known_wins_including_a_later_null():
-    assert meeting_terms.merge([unknown("Kaar Tech")], [known("Kaar Tech")])[0]["known"]
+    assert meeting_terms.merge([unknown("Northwind Labs")], [known("Northwind Labs")])[0]["known"]
     # the page could have been deleted; a chip that stays solid over a page that is gone is the
     # "opens nothing" failure the link resolver already refuses
-    assert meeting_terms.merge([known("Kaar Tech")], [unknown("Kaar Tech")])[0]["known"] is None
+    assert meeting_terms.merge([known("Northwind Labs")], [unknown("Northwind Labs")])[0]["known"] is None
 
 
 def test_a_publish_that_answers_less_does_not_erase_what_was_already_answered():
     """`kind` and `first_at` are absent from a row the publisher had nothing new to say about — the
     earlier answer must survive, or a re-press would strip a chip's colour and its provenance."""
-    out = meeting_terms.merge([known("Kaar Tech")], [{"term": "Kaar Tech", "known": None}])
+    out = meeting_terms.merge([known("Northwind Labs")], [{"term": "Northwind Labs", "known": None}])
     assert out[0]["kind"] == "company"
     assert out[0]["first_at"] == "2026-09-06T11:00:00Z"
 
 
 def test_segments_union_because_a_since_scoped_publish_only_carries_the_new_stretch():
-    out = meeting_terms.merge([unknown("Kaar Tech", "s1", "s2")], [unknown("Kaar Tech", "s2", "s9")])
+    out = meeting_terms.merge([unknown("Northwind Labs", "s1", "s2")], [unknown("Northwind Labs", "s2", "s9")])
     assert out[0]["segments"] == ["s1", "s2", "s9"]
 
 
 def test_the_stored_shape_is_closed():
     """The route takes JSON from a caller and this file is read straight back into a render loop."""
-    out = meeting_terms.merge([], [{"term": "Kaar Tech", "known": None, "onclick": "alert(1)",
+    out = meeting_terms.merge([], [{"term": "Northwind Labs", "known": None, "onclick": "alert(1)",
                                     "segments": "not-a-list"}])
     assert set(out[0]) == {"term", "known"}
 
@@ -109,42 +109,42 @@ def test_an_unhighlighted_meeting_answers_an_empty_map_not_a_failure(tmp_path):
 
 
 def test_the_map_round_trips_which_is_the_whole_point_of_the_route(tmp_path):
-    meeting_terms.extend(tmp_path, JANE, ROW, [known("Kaar Tech"), unknown("Blue Light Card")], "c9")
+    meeting_terms.extend(tmp_path, JANE, ROW, [known("Northwind Labs"), unknown("Fernhill Loyalty Card")], "c9")
     back = meeting_terms.read(tmp_path, JANE, ROW)
-    assert [t["term"] for t in back["terms"]] == ["Kaar Tech", "Blue Light Card"]
+    assert [t["term"] for t in back["terms"]] == ["Northwind Labs", "Fernhill Loyalty Card"]
     assert back["cursor"] == "c9"
 
 
 def test_a_second_highlight_extends_the_stored_map(tmp_path):
-    meeting_terms.extend(tmp_path, JANE, ROW, [unknown("Kaar Tech")], "c9")
-    out = meeting_terms.extend(tmp_path, JANE, ROW, [unknown("Blue Light Card")], "c12")
-    assert [t["term"] for t in out["terms"]] == ["Kaar Tech", "Blue Light Card"]
+    meeting_terms.extend(tmp_path, JANE, ROW, [unknown("Northwind Labs")], "c9")
+    out = meeting_terms.extend(tmp_path, JANE, ROW, [unknown("Fernhill Loyalty Card")], "c12")
+    assert [t["term"] for t in out["terms"]] == ["Northwind Labs", "Fernhill Loyalty Card"]
     assert out["cursor"] == "c12"
 
 
 def test_publishing_the_same_thing_twice_does_not_even_touch_the_file(tmp_path):
-    meeting_terms.extend(tmp_path, JANE, ROW, [known("Kaar Tech")], "c9")
+    meeting_terms.extend(tmp_path, JANE, ROW, [known("Northwind Labs")], "c9")
     path = tmp_path / JANE / meeting_terms.TERMS_DIR / f"{ROW}.json"
     before = path.read_bytes(), path.stat().st_mtime_ns
-    out = meeting_terms.extend(tmp_path, JANE, ROW, [known("Kaar Tech")], "c9")
+    out = meeting_terms.extend(tmp_path, JANE, ROW, [known("Northwind Labs")], "c9")
     assert (path.read_bytes(), path.stat().st_mtime_ns) == before
     assert len(out["terms"]) == 1
 
 
 def test_an_empty_publish_is_a_non_event_and_does_not_move_the_cursor(tmp_path):
-    meeting_terms.extend(tmp_path, JANE, ROW, [unknown("Kaar Tech")], "c9")
+    meeting_terms.extend(tmp_path, JANE, ROW, [unknown("Northwind Labs")], "c9")
     out = meeting_terms.extend(tmp_path, JANE, ROW, [], "c99")
-    assert [t["term"] for t in out["terms"]] == ["Kaar Tech"]
+    assert [t["term"] for t in out["terms"]] == ["Northwind Labs"]
     assert out["cursor"] == "c9"
 
 
 def test_a_publish_without_a_cursor_leaves_the_one_the_server_issued(tmp_path):
-    meeting_terms.extend(tmp_path, JANE, ROW, [unknown("Kaar Tech")], "c9")
+    meeting_terms.extend(tmp_path, JANE, ROW, [unknown("Northwind Labs")], "c9")
     assert meeting_terms.extend(tmp_path, JANE, ROW, [unknown("Acme")], "")["cursor"] == "c9"
 
 
 def test_two_meetings_do_not_share_a_map(tmp_path):
-    meeting_terms.extend(tmp_path, JANE, ROW, [unknown("Kaar Tech")], "c9")
+    meeting_terms.extend(tmp_path, JANE, ROW, [unknown("Northwind Labs")], "c9")
     assert meeting_terms.read(tmp_path, JANE, "148")["terms"] == []
 
 
@@ -152,7 +152,7 @@ def test_the_map_is_kept_out_of_the_desks_history(tmp_path):
     """A file the worker's post-turn `git add -A` would commit once per Highlight — see
     `workspace_ids.mirror_touches`, which excludes the touch log for the same reason."""
     (tmp_path / JANE / ".git" / "info").mkdir(parents=True)
-    meeting_terms.extend(tmp_path, JANE, ROW, [unknown("Kaar Tech")], "c9")
+    meeting_terms.extend(tmp_path, JANE, ROW, [unknown("Northwind Labs")], "c9")
     assert f"/{meeting_terms.TERMS_DIR}/" in (tmp_path / JANE / ".git" / "info" / "exclude").read_text()
 
 
@@ -166,7 +166,7 @@ def test_a_map_that_cannot_be_parsed_costs_the_chips_never_the_transcript(tmp_pa
 @pytest.mark.parametrize("bad", ["../../etc", "..", "a/b", ".vexa", "", "  "])
 def test_a_caller_supplied_id_never_becomes_a_path(tmp_path, bad):
     assert meeting_terms.read(tmp_path, JANE, bad)["terms"] == []
-    meeting_terms.extend(tmp_path, JANE, bad, [unknown("Kaar Tech")], "c9")
+    meeting_terms.extend(tmp_path, JANE, bad, [unknown("Northwind Labs")], "c9")
     assert not list(tmp_path.rglob("*.json"))
 
 
@@ -203,25 +203,25 @@ def test_the_canvas_reads_an_empty_map_before_anybody_highlights(client):
 def test_publish_then_read_is_the_reload(client):
     """The act publishes; a browser that knows nothing about the turn asks and gets the same map."""
     pub = client.post("/api/meeting/terms", headers={"X-User-Id": JANE},
-                      json={"meeting_id": ROW, "cursor": "c9", "terms": [known("Kaar Tech")]})
+                      json={"meeting_id": ROW, "cursor": "c9", "terms": [known("Northwind Labs")]})
     assert pub.status_code == 200 and pub.json()["cursor"] == "c9"
     got = client.get(f"/api/meeting/terms?meeting_id={ROW}", headers={"X-User-Id": JANE}).json()
-    assert [t["term"] for t in got["terms"]] == ["Kaar Tech"]
-    assert got["terms"][0]["known"]["path"] == "kg/entities/company/kaar-tech.md"
+    assert [t["term"] for t in got["terms"]] == ["Northwind Labs"]
+    assert got["terms"][0]["known"]["path"] == "kg/entities/company/northwind-labs.md"
 
 
 def test_a_second_publish_through_the_route_adds(client):
     client.post("/api/meeting/terms", headers={"X-User-Id": JANE},
-                json={"meeting_id": ROW, "cursor": "c9", "terms": [unknown("Kaar Tech")]})
+                json={"meeting_id": ROW, "cursor": "c9", "terms": [unknown("Northwind Labs")]})
     client.post("/api/meeting/terms", headers={"X-User-Id": JANE},
-                json={"meeting_id": ROW, "cursor": "c12", "terms": [unknown("Blue Light Card")]})
+                json={"meeting_id": ROW, "cursor": "c12", "terms": [unknown("Fernhill Loyalty Card")]})
     got = client.get(f"/api/meeting/terms?meeting_id={ROW}", headers={"X-User-Id": JANE}).json()
-    assert [t["term"] for t in got["terms"]] == ["Kaar Tech", "Blue Light Card"]
+    assert [t["term"] for t in got["terms"]] == ["Northwind Labs", "Fernhill Loyalty Card"]
 
 
 def test_another_tenant_can_neither_read_nor_write_this_meetings_map(client):
     client.post("/api/meeting/terms", headers={"X-User-Id": JANE},
-                json={"meeting_id": ROW, "cursor": "c9", "terms": [unknown("Kaar Tech")]})
+                json={"meeting_id": ROW, "cursor": "c9", "terms": [unknown("Northwind Labs")]})
     assert client.get(f"/api/meeting/terms?meeting_id={ROW}",
                       headers={"X-User-Id": "u_mallory"}).status_code == 403
     assert client.post("/api/meeting/terms", headers={"X-User-Id": "u_mallory"},
@@ -236,7 +236,7 @@ def test_a_publish_without_terms_is_refused_rather_than_guessed(client):
 
 def test_the_map_is_a_file_beside_the_meeting_and_not_the_transcript(client, tmp_path):
     client.post("/api/meeting/terms", headers={"X-User-Id": JANE},
-                json={"meeting_id": ROW, "cursor": "c9", "terms": [known("Kaar Tech")]})
+                json={"meeting_id": ROW, "cursor": "c9", "terms": [known("Northwind Labs")]})
     written = sorted(p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*") if p.is_file())
     # The desk gained the map and nothing else — no transcript, no page, nothing a person opens.
     # Both files are under the machinery dot-dir (`.vexa/workspace.json` is the desk's own identity).

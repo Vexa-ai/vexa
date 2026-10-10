@@ -86,7 +86,7 @@ def test_step_lines_pass_through_prose_and_the_tab_do_not():
 
 def _serve(stream, turn, writeback):
     serve(stream, out_topic="out", in_topic="in", turn=turn,
-          start={"entrypoint": {"inline": "who is Olga Avramenko?"}}, idle_ms=1,
+          start={"entrypoint": {"inline": "who is Nora Quill?"}}, idle_ms=1,
           writeback=writeback)
 
 
@@ -156,14 +156,14 @@ def test_every_dispatch_carries_the_rule_and_the_index(tmp_path):
     from workspaces.shared import entities as E
     desk = tmp_path / "desk-1"
     desk.mkdir()
-    E.upsert_entity(desk, "person", "Olga Avramenko", ["Chairs the TSC."], "the call",
+    E.upsert_entity(desk, "person", "Nora Quill", ["Chairs the TSC."], "the call",
                     today="2026-09-02")
     E.write_index(desk, "desk-1")
     txt = engine.entity_index_preamble([{"slug": "desk-1", "path": str(desk), "write": True}])
     assert "A name without a page gets one NOW" in txt
     assert "Facts carry a source" in txt
     assert "kg/MISSING.md`, never invented" in txt
-    assert "Olga Avramenko" in txt and "kg/entities/person/olga-avramenko.md" in txt
+    assert "Nora Quill" in txt and "kg/entities/person/nora-quill.md" in txt
 
 
 def test_the_index_renders_live_when_the_file_has_never_been_written(tmp_path):

@@ -104,7 +104,7 @@ def _touches_for(meeting, org_state, is_seeded, attendee_followup: str):
 
 
 SEED_STRATEGIES = {
-    # (i) the pilot as it stands — Cottalango's "3-5 coordinators and production managers
+    # (i) the pilot as it stands — Robin's "3-5 coordinators and production managers
     #     using it as their main tool", picked without regard to WHAT they organize.
     "pilot_random": "3-5 coordinators/PMs, chosen at random",
     # (ii) structure: one coordinator per SHOW. A show's dailies are organized by its
@@ -301,7 +301,7 @@ if __name__ == "__main__":
     import org as O
     import personas as P
     rates = Rates.load(sys.argv[1] if len(sys.argv) > 1 else "rates.json")
-    prof = sys.argv[2] if len(sys.argv) > 2 else "spi"
+    prof = sys.argv[2] if len(sys.argv) > 2 else "studio"
     for n in [int(x) for x in (sys.argv[3].split(",") if len(sys.argv) > 3 else ["2000"])]:
         o = O.build(prof, n)
         P.assign(o)

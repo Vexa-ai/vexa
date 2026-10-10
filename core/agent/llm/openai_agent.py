@@ -57,7 +57,7 @@ keeps a whole-turn time budget and trims context (oldest tool results first) to 
 A JOB IS NOT A TURN (Vexa-ai/vexa#1613). The sizing above is about how much of the box ONE request
 may hold at once — context and concurrency — and says nothing about how many times a piece of work
 may come back for another one. An expand-in-every-direction job routinely needs more round trips
-than a chat turn does: the founder's OeNB job ran 72 steps and then died on the 40-call per-turn
+than a chat turn does: the founder's Example Bank job ran 72 steps and then died on the 40-call per-turn
 budget, with everything it had already written on disk. So a job gets its own, larger budget
 (``VEXA_AGENT_JOB_MAX_TOOL_CALLS``, per window) and, on reaching it, does not fail: the pages it
 wrote are already committed, it says how far it got, and it CONTINUES IN A FRESH WINDOW over the
@@ -77,7 +77,7 @@ sets only the old name behaves exactly as it did.
 
 WHAT A TURN THAT SPENDS ITS BUDGET NOW DOES, which is the defect this issue is actually about: it
 SAYS SO. Four friction reports were auto-filed from the founder's own chats on 2026-09-06 while he
-built the OeNB workspace — three in a row in one conversation — because the chat showed a finished
+built the Example Bank workspace — three in a row in one conversation — because the chat showed a finished
 turn and he re-prompted into the same wall each time. The `done` event therefore carries the line
 (*stopped at the tool-call budget after N of M steps*), the step count, and the Continue act the
 person presses to queue "continue where you stopped" back onto the same target. A job checkpoints
@@ -162,7 +162,7 @@ _DEFAULT_MAX_TURN_SEC = 900.0
 _DEFAULT_AUTO_CONTINUE_CHAT = True
 _DEFAULT_MAX_CHAT_CONTINUATIONS = 4
 #: A BACKGROUND JOB's budgets (Vexa-ai/vexa#1613) — per WINDOW for the calls, whole-job for the
-#: clock. 160 is four turns' worth: above the 72 steps the OeNB job reached before it was killed,
+#: clock. 160 is four turns' worth: above the 72 steps the Example Bank job reached before it was killed,
 #: and low enough that one job cannot hold the box indefinitely between checkpoints.
 _DEFAULT_JOB_MAX_TOOL_CALLS = 160
 _DEFAULT_JOB_MAX_TURN_SEC = 3600.0

@@ -1,4 +1,4 @@
-From: "Huber, Tobias" <Tobias.Huber@Example.test>
+From: "Huber, Lennart" <Lennart.Huber@Example.test>
 To: vexa@example.com
 Subject: Planning
 Message-ID: <A1B2C3D4E5F6@example.test>
@@ -33,7 +33,7 @@ TZOFFSETTO:+0200
 END:DAYLIGHT
 END:VTIMEZONE
 BEGIN:VEVENT
-ORGANIZER;CN="Huber, Tobias":MAILTO:Tobias.Huber@Example.test
+ORGANIZER;CN="Huber, Lennart":MAILTO:Lennart.Huber@Example.test
 ATTENDEE;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE;CN="Smith, An
  na":MAILTO:Anna.Smith@Example.test
 ATTENDEE;ROLE=OPT-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE;CN=Ben Meier:M

@@ -42,7 +42,7 @@ export const MOCK_MEETINGS: MeetingMock[] = [
     native_id: "mock-live", start_time: iso(-12),
   } as unknown as MeetingMock,
   {
-    id: -103, title: "Blue Light Card — discovery", status: "past", live_status: "completed",
+    id: -103, title: "Fernhill Loyalty Card — discovery", status: "past", live_status: "completed",
     native_id: "mock-post", start_time: iso(-1500),
   } as unknown as MeetingMock,
 ];
@@ -66,7 +66,7 @@ Hold list price and offer annual commit, or discount to close this quarter.
 - Is the 500-seat number real or aspirational?
 `;
 
-const MINUTES = `# Blue Light Card — discovery
+const MINUTES = `# Fernhill Loyalty Card — discovery
 
 **Held yesterday · 48 minutes · 4 participants**
 
@@ -83,7 +83,7 @@ const MINUTES = `# Blue Light Card — discovery
 - No date set for the pilot start.
 `;
 
-const TRANSCRIPT_POST = `# Transcript — Blue Light Card — discovery
+const TRANSCRIPT_POST = `# Transcript — Fernhill Loyalty Card — discovery
 
 **14:02** · Abdul: Thanks for making time. I want to be upfront that we cannot talk commercials
 until security has been through it.

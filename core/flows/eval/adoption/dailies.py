@@ -11,7 +11,7 @@ ORG (its shows, departments, people and their roles), in the exact shape the DNA
 the same replay path seeds them. Every one carries `synthetic: true` in its meeting meta and
 lives under `~/dna-fixtures/synthetic/`, which is private and never enters a vexa checkout.
 
-What they are NOT: evidence about SPI. They are a plausible dailies-shaped meeting, and any
+What they are NOT: evidence about Brightwater. They are a plausible dailies-shaped meeting, and any
 number measured on them is a number about the product's behaviour on dailies-shaped input.
 """
 from __future__ import annotations
@@ -170,7 +170,7 @@ def main():
     import personas as P
     n_days = int(sys.argv[1]) if len(sys.argv) > 1 else 2
     size = int(sys.argv[2]) if len(sys.argv) > 2 else 2000
-    o = O.build("spi", size)
+    o = O.build("studio", size)
     P.assign(o)
     shows = sorted({p.dept for p in o.people if p.dept.startswith("Show ")})
     depts = ["Animation", "Lighting", "Compositing"]

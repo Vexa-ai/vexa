@@ -2,7 +2,7 @@
 
 The founder pressed Extend in the minutes panel and the chat painted the whole composed `[extend]`
 preset back at him as a grey bubble in his own voice — its "Expand means EVERY direction" section
-and all. An earlier Extend had shown `Extend: kg/entities/person/james-spadafora.md`.
+and all. An earlier Extend had shown `Extend: kg/entities/person/james-hollister.md`.
 
 The two halves of a turn diverge here and only here: the PROMPT is the composed preset, complete,
 because that is what the agent has to read; the DISPLAY is the short label, because that is what the
@@ -26,7 +26,7 @@ from shared.marks import MACHINERY_MARK, act_label, job_mark, read_job_mark  # n
 # What the server actually composes for an Extend — the preset body, its heading, and the section
 # the founder read back at himself.
 PRESET = (
-    "[extend] Go further on kg/entities/person/james-spadafora.md.\n\n"
+    "[extend] Go further on kg/entities/person/james-hollister.md.\n\n"
     "## Expand means EVERY direction\n"
     "Not just the next paragraph: the people, the companies, the decisions, the open threads.\n"
 )
@@ -40,13 +40,13 @@ def _composed(kind: str, target: str) -> str:
 
 
 def test_the_label_is_the_verb_and_the_page():
-    assert act_label(_composed("extend", "kg/entities/person/james-spadafora.md")) \
-        == "Extend: kg/entities/person/james-spadafora.md"
+    assert act_label(_composed("extend", "kg/entities/person/james-hollister.md")) \
+        == "Extend: kg/entities/person/james-hollister.md"
     assert act_label(_composed("create", "kg/plan.md")) == "Create: kg/plan.md"
 
 
 def test_the_label_carries_none_of_the_preset():
-    label = act_label(_composed("extend", "kg/entities/person/james-spadafora.md"))
+    label = act_label(_composed("extend", "kg/entities/person/james-hollister.md"))
     assert "Expand means EVERY direction" not in label
     assert "[extend]" not in label
     assert "\n" not in label
@@ -119,7 +119,7 @@ def test_the_history_reader_serves_the_label_over_a_record_already_written(tmp_p
     from worker import engine
 
     ws = _thread(tmp_path, "u_dmitry")
-    composed = _composed("extend", "kg/entities/person/james-spadafora.md")
+    composed = _composed("extend", "kg/entities/person/james-hollister.md")
     _transcript(ws, "sid-1", [
         {"type": "user", "message": {"role": "user", "content": composed}},
         {"type": "assistant", "message": {"role": "assistant",
@@ -129,7 +129,7 @@ def test_the_history_reader_serves_the_label_over_a_record_already_written(tmp_p
     engine.record_user_text(ws, "main", composed, engine.human_half(composed))
 
     turns = WorkspaceReader(str(tmp_path)).history("u_dmitry", "main")
-    assert turns[0]["user_text"] == "Extend: kg/entities/person/james-spadafora.md"
+    assert turns[0]["user_text"] == "Extend: kg/entities/person/james-hollister.md"
     assert "Expand means EVERY direction" not in turns[0]["user_text"]
     # `text` stays the stored prompt — the terminal's shape filters read the RECORD, not the label
     assert turns[0]["text"] == composed

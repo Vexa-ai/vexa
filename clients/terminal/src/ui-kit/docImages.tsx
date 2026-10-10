@@ -11,7 +11,7 @@
  *
  *  So there are exactly two renders:
  *
- *   - a WORKSPACE path (`assets/oenb-logo.svg`, `./chart.png`) resolves against the doc's own
+ *   - a WORKSPACE path (`assets/bank-logo.svg`, `./chart.png`) resolves against the doc's own
  *     directory and workspace and loads through the asset route. A path with nothing behind it says
  *     so in words rather than showing the browser's broken-image glyph, which is indistinguishable
  *     from a bug in us;
@@ -21,7 +21,7 @@
  *     written in. Nothing is loaded from the remote host until somebody asks for it.
  *
  *  AND WHEN THE OFFER FAILS, IT IS STILL THE PRODUCT (Vexa-ai/vexa#1624). Founder, the same day, on
- *  the OeNB README: the agent had written a Wikimedia address that answers 404, and pressing the
+ *  the Example Bank README: the agent had written a Wikimedia address that answers 404, and pressing the
  *  offer printed the route and both status codes in red. A reader cannot act on a stack trace. So
  *  the failure is one sentence about the picture — *This image does not exist at that address (the
  *  site answered 404)* — and the two moves that exist from there: **Find it**, which queues a
@@ -74,7 +74,7 @@ const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 /** TAKE THE PICTURE OUT AND LEAVE THE PAGE (Vexa-ai/vexa#1624) — what "Remove the link" writes.
  *
  *  The whole reference goes: `![alt](src)` and `<img src="src">`, everywhere they appear, not just
- *  the address inside them, because a `![OeNB logo]()` is a broken picture wearing a different
+ *  the address inside them, because a `![Example Bank logo]()` is a broken picture wearing a different
  *  glyph. Everything around it stays — the sentence was not the mistake, the address was — and the
  *  only tidying is the hole itself: a trailing space, and the blank line a picture on a line of its
  *  own leaves behind. Sibling of `rewriteImageReference`, and exported for the same reason. */
@@ -100,7 +100,7 @@ export function findItInstruction(alt: string | undefined, src: string): string 
 
 /** THE FAILED FETCH, IN WORDS (Vexa-ai/vexa#1624).
  *
- *  The reader who pressed the offer on the OeNB logo was shown, in red: *Could not fetch it:
+ *  The reader who pressed the offer on the Example Bank logo was shown, in red: *Could not fetch it:
  *  /api/workspace/asset → 400: https://upload.wikimedia.org/… answered 404.* That is a route, two
  *  status codes and a URL — the operator channel, printed at a person, who can only read it as "the
  *  button is broken". What actually happened is one sentence long and the route now carries the

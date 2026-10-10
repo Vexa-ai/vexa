@@ -77,7 +77,7 @@ function preview(selection: string): string {
  *  quotation of what was highlighted. */
 export function compactLabel(intent: ChatIntent): string {
   // A CHIP CLICKED IN A TRANSCRIPT SHOWS THE WORDS, not the meeting it was said in: the person is
-  // looking at the room already, and "Explore: Kaar Tech (meeting 41, segment …)" spends the whole
+  // looking at the room already, and "Explore: Northwind Labs (meeting 41, segment …)" spends the whole
   // label on the two facts they can see.
   if (intent.kind === "explore") return `Explore: ${intent.term}`;
   // Highlight is silent (decision 35.2) and never reaches a bubble; the label exists only so a

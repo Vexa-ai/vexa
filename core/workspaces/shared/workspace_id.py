@@ -16,7 +16,7 @@ The server registry (``control_plane/workspace_ids.py``) is the *derived* half �
 now — and it is rebuildable from the files by walking the root. The file is authoritative for the
 same reason ``policy/members.json`` is: it survives a store loss and it can be read offline.
 
-WHY 10 CHARS OF BASE32. The id is written by hand into prose (``[[ws:k4m9x2q7bd/olga-avramenko]]``)
+WHY 10 CHARS OF BASE32. The id is written by hand into prose (``[[ws:k4m9x2q7bd/nora-quill]]``)
 and read out of a URL, so it has to be short enough to type and unambiguous enough to read back.
 Ten characters of the lowercase RFC-4648 alphabet is 50 bits — birthday-safe past any number of
 workspaces a deployment will ever hold — with no case to get wrong and no ``0/O`` or ``1/l`` pair,

@@ -41,9 +41,9 @@ JANE = "u_jane"
 ROW = "147"
 SEGMENTS = [
     {"start": 1.0, "absolute_start_time": "2026-10-09T10:00:01Z", "speaker": "Ana",
-     "text": "Kaar Tech came back on the pricing."},
+     "text": "Northwind Labs came back on the pricing."},
     {"start": 5.0, "absolute_start_time": "2026-10-09T10:00:05Z", "speaker": "Ben",
-     "text": "Cottalango Leon is the one who signs it."},
+     "text": "Robin Vale is the one who signs it."},
 ]
 
 
@@ -51,7 +51,7 @@ SEGMENTS = [
 def world(tmp_path):
     desk = tmp_path / JANE
     (desk / "kg/entities/company").mkdir(parents=True)
-    (desk / "kg/entities/company/kaar-tech.md").write_text("# Kaar Tech\n")
+    (desk / "kg/entities/company/northwind-labs.md").write_text("# Northwind Labs\n")
     reads: list = []
     state = {"down": False}
 
@@ -89,10 +89,10 @@ def test_a_look_lists_every_term_and_publishes_nothing(world):
     assert r.status_code == 200, r.text
     body = r.json()
     assert reads == [(JANE, ROW)], "the transcript is read as the caller"
-    assert [t["term"] for t in body["terms"]] == ["Kaar Tech", "Cottalango Leon"]
+    assert [t["term"] for t in body["terms"]] == ["Northwind Labs", "Robin Vale"]
     known = {t["term"]: t["known"] for t in body["terms"]}
-    assert known["Kaar Tech"]["path"] == "kg/entities/company/kaar-tech.md"
-    assert known["Cottalango Leon"] is None
+    assert known["Northwind Labs"]["path"] == "kg/entities/company/northwind-labs.md"
+    assert known["Robin Vale"] is None
     assert body["emit"] == [] and body["published"] == 0 and body["stored"] is None
     assert body["cursor"] == "2026-10-09T10:00:05Z"
     assert _published_terms(json.dumps(body)) is None, "a look must not paint a chip"
@@ -102,28 +102,28 @@ def test_a_look_lists_every_term_and_publishes_nothing(world):
 
 def test_keep_publishes_exactly_those_and_they_survive_a_reload(world):
     client, _, _ = world
-    r = _scan(client, keep="kaar tech, Nobody Said This")
+    r = _scan(client, keep="northwind labs, Nobody Said This")
     body = r.json()
-    assert [t["term"] for t in body["emit"]] == ["Kaar Tech"]
+    assert [t["term"] for t in body["emit"]] == ["Northwind Labs"]
     assert body["stored"] is True
     assert body["keep_not_found"] == ["nobody said this"]
     event = _published_terms(json.dumps(body))
     assert event == {"type": "terms", "meeting": ROW, "cursor": "2026-10-09T10:00:05Z",
                      "terms": body["emit"]}
     got = client.get(f"/api/meeting/terms?meeting_id={ROW}", headers={"X-User-Id": JANE}).json()
-    assert [t["term"] for t in got["terms"]] == ["Kaar Tech"]
+    assert [t["term"] for t in got["terms"]] == ["Northwind Labs"]
 
 
 def test_keep_star_publishes_all_of_them(world):
     client, _, _ = world
     assert [t["term"] for t in _scan(client, keep="*").json()["emit"]] == \
-        ["Kaar Tech", "Cottalango Leon"]
+        ["Northwind Labs", "Robin Vale"]
 
 
 def test_since_reads_only_what_was_said_after_the_cursor(world):
     client, _, _ = world
     body = _scan(client, since="2026-10-09T10:00:01Z").json()
-    assert [t["term"] for t in body["terms"]] == ["Cottalango Leon"]
+    assert [t["term"] for t in body["terms"]] == ["Robin Vale"]
     assert body["scanned_segments"] == 1
 
 

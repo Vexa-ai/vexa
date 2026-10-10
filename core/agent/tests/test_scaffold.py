@@ -426,7 +426,7 @@ def test_the_rail_row_is_named_by_the_record_never_by_the_machinery(client, stac
 def test_company_domain_reads_a_real_address_and_refuses_a_placeholder():
     from control_plane.scaffolds import company_domain
     assert company_domain("dmitry@vexa.ai") == "vexa.ai"
-    assert company_domain("Marvin@OeNB.at") == "oenb.at"
+    assert company_domain("Quentin@Bank.example") == "bank.example"
     assert company_domain("a.b+tag@sub.acme.co.uk") == "sub.acme.co.uk"
     # a placeholder is NOT a company, and "" is how the preset learns to ask cold instead
     for addr in ("vexa@storm.test", "x@rehearsal.test", "y@example.com", "z@localhost",

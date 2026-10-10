@@ -41,7 +41,7 @@ ENTITIES_PREFIX = "kg/entities/"
 # `candidate_names` was tuned on written NOTES and is right there. Run over the 677 segments of the
 # DNA TSC transcript of 2026-03-02 it returned 28 candidates, of which EIGHT were artefacts of
 # SPEECH rather than names: "But I'll", "So I'm", "Like I've", "So Cameron", "That's John",
-# "And Tommy", "On DNA", "Our TAC". Every one is the same shape — a sentence opens with a
+# "And Gabe", "On DNA", "Our TAC". Every one is the same shape — a sentence opens with a
 # capitalised function word, the next word is also capitalised, and two capitalised words in a row
 # is exactly what the extractor is looking for. Prose does not begin sentences that way; people do,
 # constantly, and a transcript is nothing but sentence openings.
@@ -94,7 +94,7 @@ def extract_terms(segments) -> list[dict]:
     A name that is a PREFIX of a longer one MERGES INTO IT rather than being dropped. ``entities``
     drops it, and is right to for its purpose (it is choosing which page to write, and the longer
     spelling is the page). Here the short spelling is a real occurrence in a real line: "James" at
-    minute two and "James Spadafora" at minute nine are one chip and BOTH lines. Dropping the early
+    minute two and "James Hollister" at minute nine are one chip and BOTH lines. Dropping the early
     segment would silently make the chip's provenance start nine minutes after the person did.
     """
     order: list[str] = []
@@ -128,7 +128,7 @@ def _merge_prefixes(rows: list[dict]) -> list[dict]:
     terms = [r["term"] for r in rows]
     out: list[dict] = []
     for row in rows:
-        # The LONGEST match, not the first: with "James" ⊂ "James Spad" ⊂ "James Spadafora" a
+        # The LONGEST match, not the first: with "James" ⊂ "James Holl" ⊂ "James Hollister" a
         # first-match fold would put "James" onto a row that is itself folded away, and its
         # sightings would vanish with it. Folding straight onto the longest spelling makes the
         # chain flat and the operation order-independent.

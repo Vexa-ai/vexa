@@ -180,7 +180,7 @@ def build(**d) -> APIRouter:
                        tool: str = "") -> list[str]:
         """VERIFY EVERY EXTERNAL IMAGE ADDRESS BEFORE IT REACHES A PAGE (Vexa-ai/vexa#1624).
 
-        The OeNB README carried `![OeNB logo](https://upload.wikimedia.org/…/ÖNB_Logo.svg)`, an
+        The Example Bank README carried `![Example Bank logo](https://upload.wikimedia.org/…/Example_Bank_Logo.svg)`, an
         address the agent invented and nobody ever requested; it answers 404. This is the two
         page-writing doors — `workspace_write` (PUT /api/workspace/file) and `entity_upsert` — asking
         the question the writer did not: does this address answer, with an image? A dead one is cut
@@ -263,7 +263,7 @@ def build(**d) -> APIRouter:
     @router.get("/api/workspace/asset")
     def ws_asset(request: Request, path: str, slug: Optional[str] = None,
                  if_none_match: Optional[str] = Header(default=None, alias="If-None-Match")):
-        """SERVE one workspace file AS ITSELF — the route `![logo](assets/oenb-logo.svg)` renders
+        """SERVE one workspace file AS ITSELF — the route `![logo](assets/bank-logo.svg)` renders
         through (Vexa-ai/vexa#1612).
 
         The scoping is `ws_file`'s, deliberately and to the letter: a page and the pictures in it
@@ -402,7 +402,7 @@ def build(**d) -> APIRouter:
     # ── REMOVING AND MOVING A PAGE (Vexa-ai/vexa#1621) ───────────────────────────────────────────
     #
     # Founder, session 176, 13:36Z: *"remove from personal"* — and there was no verb for it. The
-    # agent moving the OeNB dossier off the desk had `workspace_write`, which creates or overwrites,
+    # agent moving the Example Bank dossier off the desk had `workspace_write`, which creates or overwrites,
     # and two read-only routes; so it collapsed each of the seven pages to a one-line pointer and had
     # to report that "removed" meant "collapsed". The files stayed on the desk (friction
     # `fr_a373e9448d2909a6`).

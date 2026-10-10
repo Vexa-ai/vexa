@@ -1,7 +1,7 @@
 """page_images.py — AN IMAGE ADDRESS AN AGENT DID NOT CHECK IS A GUESS (Vexa-ai/vexa#1624).
 
-Founder, 2026-09-06, on the OeNB workspace README: the page carried
-``![OeNB logo](https://upload.wikimedia.org/wikipedia/commons/8/8c/%C3%96NB_Logo.svg)``. Pressing
+Founder, 2026-09-06, on the Example Bank workspace README: the page carried
+``![Example Bank logo](https://upload.wikimedia.org/wikipedia/commons/8/8c/Example_Bank_Logo.svg)``. Pressing
 *Fetch into the workspace* answered, in red, that the address had returned **404**. Nobody had ever
 requested it: the agent wrote a plausible Wikimedia path and moved on. A guessed URL is not a small
 error — it is a picture the reader will never see, in a document written for a customer, wearing an

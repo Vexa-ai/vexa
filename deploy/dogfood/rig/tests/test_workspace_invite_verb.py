@@ -1,6 +1,6 @@
 """An invite is BOUND TO AN ADDRESS, and the argument list is what enforces it (Vexa-ai/vexa#1635).
 
-The founder said *share it with Marvin*; the agent called `workspace_invite` with no address, got a
+The founder said *share it with Quentin*; the agent called `workspace_invite` with no address, got a
 link "for anyone who redeems it", and handed it over. That was possible because `emails` defaulted
 to `""` — the verb could mint a key to a customer workspace without anybody naming who it was for,
 and nothing downstream could tell that link from an intended one.

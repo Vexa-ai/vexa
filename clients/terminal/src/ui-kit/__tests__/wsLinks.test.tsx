@@ -33,10 +33,10 @@ afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe("the grammar", () => {
   it("parses the cross-workspace forms and leaves the in-workspace one alone", () => {
-    expect(parseWsRef(`ws:${ID}/olga-avramenko`)).toEqual({ workspace: ID, target: "olga-avramenko" });
+    expect(parseWsRef(`ws:${ID}/nora-quill`)).toEqual({ workspace: ID, target: "nora-quill" });
     expect(parseWsRef(`ws:${ID}/kg/notes/2026-03-02.md`))
       .toEqual({ workspace: ID, target: "kg/notes/2026-03-02.md" });
-    expect(parseWsRef("Olga Avramenko")).toBeNull();
+    expect(parseWsRef("Nora Quill")).toBeNull();
   });
   it("refuses a ref whose workspace is not an id — the server says what a bad ref means", () => {
     expect(parseWsRef("ws:oops/x")).toBeNull();
@@ -51,17 +51,17 @@ describe("the grammar", () => {
     expect(isWorkspaceId("short")).toBe(false);
   });
   it("humanizes a target for the reader who cannot open it", () => {
-    expect(humanize("olga-avramenko")).toBe("Olga Avramenko");
-    expect(humanize("kg/entities/person/cottalango-leon.md")).toBe("Cottalango Leon");
+    expect(humanize("nora-quill")).toBe("Nora Quill");
+    expect(humanize("kg/entities/person/robin-vale.md")).toBe("Robin Vale");
   });
 });
 
 
 describe("the canonical URL", () => {
   it("round-trips and ignores what a mail client appends", () => {
-    const u = canonicalUrl(ID, "kg/entities/person/olga-avramenko.md");
-    expect(u).toBe(`/w/${ID}/kg/entities/person/olga-avramenko.md`);
-    expect(parseCanonicalUrl(u)).toEqual({ workspace: ID, target: "kg/entities/person/olga-avramenko.md" });
+    const u = canonicalUrl(ID, "kg/entities/person/nora-quill.md");
+    expect(u).toBe(`/w/${ID}/kg/entities/person/nora-quill.md`);
+    expect(parseCanonicalUrl(u)).toEqual({ workspace: ID, target: "kg/entities/person/nora-quill.md" });
     expect(parseCanonicalUrl(`${u}?utm=mail#top`)).toEqual(parseCanonicalUrl(u));
     expect(parseCanonicalUrl("/workspaces/x/README.md")).toBeNull();
   });
@@ -110,9 +110,9 @@ describe("resolution", () => {
   it("a failed request is `gone`, never a rejection at a renderer", async () => {
     fetchMock = vi.fn(async () => { throw new Error("offline"); });
     globalThis.fetch = fetchMock as unknown as typeof fetch;
-    const r = await resolveLink(`ws:${ID}/olga-avramenko`);
+    const r = await resolveLink(`ws:${ID}/nora-quill`);
     expect(r.access).toBe("gone");
-    expect(r.title).toBe("Olga Avramenko");       // the last thing we know — what the writer typed
+    expect(r.title).toBe("Nora Quill");       // the last thing we know — what the writer typed
   });
   it("a ref the server did not answer is `gone` too, never undefined", async () => {
     mockJson({ results: [] });
@@ -123,41 +123,41 @@ describe("resolution", () => {
 
 describe("the chip", () => {
   it("readable — opens the page, named by its title now", async () => {
-    mockJson({ results: [{ ref: `ws:${ID}/cottalango-leon`, title: "Cottalango Leon",
-      url: `/w/${ID}/kg/entities/person/cottalango-leon.md`, access: "readable",
-      path: "kg/entities/person/cottalango-leon.md", slug: "grp", workspace: "ASWF DNA Project" }] });
-    render(<WsLink refText={`ws:${ID}/cottalango-leon`} />);
+    mockJson({ results: [{ ref: `ws:${ID}/robin-vale`, title: "Robin Vale",
+      url: `/w/${ID}/kg/entities/person/robin-vale.md`, access: "readable",
+      path: "kg/entities/person/robin-vale.md", slug: "grp", workspace: "ASWF DNA Project" }] });
+    render(<WsLink refText={`ws:${ID}/robin-vale`} />);
     const chip = await screen.findByRole("link");
-    expect(chip.textContent).toContain("Cottalango Leon");
+    expect(chip.textContent).toContain("Robin Vale");
     expect(chip.getAttribute("title")).toContain("ASWF DNA Project");
   });
 
   it("not-yours — greyed, says whose it is, and does NOT invite a click", async () => {
-    mockJson({ results: [{ ref: `ws:${ID}/cottalango-leon`, title: "Cottalango Leon", url: null,
+    mockJson({ results: [{ ref: `ws:${ID}/robin-vale`, title: "Robin Vale", url: null,
       access: "not-yours", workspace: "ASWF DNA Project" }] });
-    render(<WsLink refText={`ws:${ID}/cottalango-leon`} />);
+    render(<WsLink refText={`ws:${ID}/robin-vale`} />);
     const chip = await screen.findByTitle(/you don't have/i);
-    expect(chip.textContent).toContain("Cottalango Leon");
+    expect(chip.textContent).toContain("Robin Vale");
     expect(chip.getAttribute("title")).toContain("ASWF DNA Project");
     expect(screen.queryByRole("link")).toBeNull();
     expect(chip.getAttribute("aria-disabled")).toBe("true");
   });
 
   it("gone — the last known title, as plain text, with nothing to click", async () => {
-    mockJson({ results: [{ ref: `ws:${ID}/cottalango-leon`, title: "Cottalango Leon", url: null,
+    mockJson({ results: [{ ref: `ws:${ID}/robin-vale`, title: "Robin Vale", url: null,
       access: "gone", workspace: null }] });
-    const { container } = render(<WsLink refText={`ws:${ID}/cottalango-leon`} />);
-    // The RESOLVING state also reads "Cottalango Leon" (humanized from the ref), so waiting on the
+    const { container } = render(<WsLink refText={`ws:${ID}/robin-vale`} />);
+    // The RESOLVING state also reads "Robin Vale" (humanized from the ref), so waiting on the
     // text would assert about the wrong frame — wait for the icon to go, which only `gone` does.
     await waitFor(() => expect(container.querySelector("svg")).toBeNull());
-    expect(container.textContent).toBe("Cottalango Leon");
+    expect(container.textContent).toBe("Robin Vale");
     expect(screen.queryByRole("link")).toBeNull();
   });
 
   it("shows the human name while it resolves, never the raw id", async () => {
     mockJson({ results: [] });
-    const { container } = render(<WsLink refText={`ws:${ID}/olga-avramenko`} />);
-    expect(container.textContent).toContain("Olga Avramenko");
+    const { container } = render(<WsLink refText={`ws:${ID}/nora-quill`} />);
+    expect(container.textContent).toContain("Nora Quill");
     expect(container.textContent).not.toContain(ID);
   });
 });
@@ -165,10 +165,10 @@ describe("the chip", () => {
 
 describe("a workspace's name, where its slug used to print (F49)", () => {
   it("renders the registry name once it lands", async () => {
-    mockJson({ id: ID, name: "olga@spi.com", kind: "desk", slug: "126", access: "readable" });
+    mockJson({ id: ID, name: "nora@studio.example", kind: "desk", slug: "126", access: "readable" });
     render(<WorkspaceName slug="126" />);
     expect(screen.getByText("126")).toBeTruthy();               // honest first paint: the slug
-    await waitFor(() => expect(screen.getByText("olga@spi.com")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("nora@studio.example")).toBeTruthy());
     expect(String(calls()[0][0])).toBe("/api/workspaces/by-slug/126");
   });
   it("keeps the slug when the lookup fails — a worse label, never a blank one", async () => {

@@ -2,7 +2,7 @@
 
 `Vexa-ai/vexa#1610`. The founder, dropping several Extend acts with their own instruction lines onto
 one page while a job ran (the chat answered *"There is already something running on
-oenb-b5e60c/README.md — I'll finish that one first"* twice):
+bank-b5e60c/README.md — I'll finish that one first"* twice):
 
 > *"i drop new tasks to that chat, can i be sure everything submitted there is actually processed?"*
 

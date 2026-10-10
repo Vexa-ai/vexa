@@ -207,7 +207,7 @@ def test_no_preset_hard_codes_a_persons_or_a_companys_name():
     `_global/README.md`) and the two domain→name derivation EXAMPLES in `setup-global.md`, which are
     the founder's own current wording on the volume.
     """
-    forbidden = ("Marvin", "ASWF", "DNA TSC")
+    forbidden = ("Quentin", "ASWF", "DNA TSC")
     for f in sorted(BEHAVIOR_ASKS.glob("*.md")):
         text = f.read_text(encoding="utf-8")
         for name in forbidden:

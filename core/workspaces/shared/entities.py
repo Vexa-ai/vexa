@@ -195,7 +195,7 @@ def wikilinks(texts) -> list[str]:
 
 # ── a wikilink can be a REFERENCE, not a name (Vexa-ai/vexa#1620) ────────────────────────────────
 #
-# ⚠ MEASURED 2026-09-06, fr_e96aa977edd14de8. A research job wrote the OeNB org chart to
+# ⚠ MEASURED 2026-09-06, fr_e96aa977edd14de8. A research job wrote the Example Bank org chart to
 # `structure.md` and linked it from every person page it produced as `[[structure]]`. The write-back
 # read the link as a person nobody had paged and asked for a page called "Structure": every wikilink
 # was a person/company chip, and a link to a DOCUMENT is not that.
@@ -330,7 +330,7 @@ def _today(today: str | None) -> str:
 # ── cross-workspace links (PRD decision 26.3) ────────────────────────────────────────────────────
 #
 # The agent mounts several workspaces at once and writes about a person who has a page in one of the
-# others. Written as `[[Olga Avramenko]]` that link resolves by TITLE, in whichever mount the reader
+# others. Written as `[[Nora Quill]]` that link resolves by TITLE, in whichever mount the reader
 # searches first, and it dies the moment either workspace is renamed. Written as
 # `[[ws:<workspace-id>/<entity-id>]]` it is two ids, and ids do not move.
 #
@@ -1079,8 +1079,8 @@ def upsert_entity(root, kind: str, name: str, facts=(), source: str = "", *,
     fm, body = split_frontmatter(raw)
 
     # THE REWRITE HAPPENS BEFORE IDEMPOTENCY IS TESTED, and the order is load-bearing: a fact
-    # re-stated next turn arrives as `[[Olga Avramenko]]` and is already stored as
-    # `[[ws:k4m…/olga-avramenko]]`, so comparing the raw forms would append it a second time.
+    # re-stated next turn arrives as `[[Nora Quill]]` and is already stored as
+    # `[[ws:k4m…/nora-quill]]`, so comparing the raw forms would append it a second time.
     field_lines = {f: _as_lines(v) for f, v in fields.items()}
     flat = list(facts) + [v for vals in field_lines.values() for v in vals] + open_questions
     linked = wikilinks(flat)                        # the names as the caller wrote them
@@ -1227,12 +1227,12 @@ def upsert_entity(root, kind: str, name: str, facts=(), source: str = "", *,
 # than keeping a second regex. Two spellings of "what counts as a name" is how a scorer ends up
 # measuring something the product never looked for.
 
-# A capitalised RUN of two or more words — "Sony Pictures Imageworks", "Cottalango Leon". Single
+# A capitalised RUN of two or more words — "Brightwater Picture Studios", "Robin Vale". Single
 # capitalised words are deliberately not counted: at the start of a sentence every word is one, and
 # a rule that fires on "The" and "Monday" is about English, not about the knowledge graph.
 #
-# `and` and `the` are NOT intra-name particles, and the first version had them: it read "Blue Light
-# Card and Kaar Tech" as ONE name, undercounting by exactly the amount a note listing several dead
+# `and` and `the` are NOT intra-name particles, and the first version had them: it read "Fernhill Loyalty
+# Card and Northwind Labs" as ONE name, undercounting by exactly the amount a note listing several dead
 # names does.
 #
 # THE CONNECTOR IS `[ \t]+`, NOT `\s+` (F202/F203/F204/F205). `\s` matches a newline, so the old
@@ -1392,7 +1392,7 @@ def _tokens(slug: str) -> list:
 def _contains_aligned(big: str, small: str) -> bool:
     """Is ``small`` inside ``big``, meeting one of its edges at a token boundary?
 
-    "nb-governing-board" sits inside "oenb-governing-board": the dropped "Oe" cuts the first token
+    "bank-governing-board" sits inside "examplebank-governing-board": the dropped "Example" cuts the first token
     mid-word, so a token test cannot see it and a prefix test cannot either — but the two slugs END
     together. Requiring ONE aligned edge is what separates that from "ana-lee" inside "diana-leeds",
     where the overlap meets no boundary at either end and the two names are simply different
@@ -1409,13 +1409,13 @@ def _shadows(slug: str, known: str) -> bool:
     """Does a page keyed ``known`` already cover the name whose slug is ``slug``?
 
     ⚠ MEASURED 2026-09-06, fr_e805ab2ab6675bff (Vexa-ai/vexa#1620): the phase offered
-    "NB Governing Board" while `kg/entities/project/oenb-governing-board.md` sat on the desk. The
-    "Oe" was dropped somewhere upstream, and every test this function had — exact slug, then a
+    "Bank Governing Board" while `kg/entities/project/examplebank-governing-board.md` sat on the desk. The
+    "Example" was dropped somewhere upstream, and every test this function had — exact slug, then a
     prefix — compares from the LEFT, which is precisely the end that was damaged.
 
     Three ways, in the order they cost anything: the same slug; one slug contained in the other with
     an aligned edge — a truncation ("zenith-si" in "zenith-sig", F204) or a dropped prefix
-    ("nb-governing-board" in "oenb-governing-board"); and one slug's TOKENS a subset of the other's,
+    ("bank-governing-board" in "examplebank-governing-board"); and one slug's TOKENS a subset of the other's,
     which catches the same near-duplicate when the words are reordered.
 
     BOTH CONTAINMENT TESTS NEED TWO TOKENS ON THE CONTAINED SIDE. Without that floor a one-word page
@@ -1472,13 +1472,13 @@ def missing_names(roots, texts, *, limit: int = 8) -> list[str]:
 def _drop_prefixes(names: list[str]) -> list[str]:
     """Drop a name that is a PREFIX of another one in the same list — the longer spelling wins.
 
-    "James Spad" beside "James Spadafora" is one person and one page, and truncation only ever
+    "James Holl" beside "James Hollister" is one person and one page, and truncation only ever
     produces the shorter. Deliberately a plain prefix rather than a word-boundary one: the cut that
-    matters here lands MID-WORD ("James Spadaf"), which a word-boundary test does not see.
+    matters here lands MID-WORD ("James Hollis"), which a word-boundary test does not see.
 
     The trade, stated: "John Smith" in a turn that also names "John Smithson" is dropped, and no
     lexical rule can tell those two cases apart. That costs one page not written this turn — it is
-    written the next time the name appears on its own — against a permanent `james-spadaf.md` that
+    written the next time the name appears on its own — against a permanent `james-hollis.md` that
     nothing will ever link to or clean up. Order is preserved, so the first mention still leads."""
     out = []
     for n in names:
