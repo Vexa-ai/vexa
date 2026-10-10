@@ -203,7 +203,9 @@ def run_models_test(config: dict, env: Optional[dict] = None,
                                    post=post, extra_body=route["VEXA_LLM_EXTRA_BODY"])
         out["mode"], out["route"] = "custom", "subject"
     elif cfg_url:
-        reason = model_endpoint.refuse_reason(cfg_url) or "the endpoint is not admitted"
+        runner = route.get("VEXA_RUNNER") or (env.get("VEXA_RUNNER") or "").strip() or "claude-code"
+        reason = (model_endpoint.route_refusal(cfg_url, str(cfg.get("api_key") or ""), runner)
+                  or "the endpoint is not admitted")
         out = _result(False, f"Refused before any request was made: {reason}")
         out["mode"], out["route"] = "custom", "subject"
     else:

@@ -102,7 +102,9 @@ Returns the same masked shape as the read, with **200 OK**.
   returns **422**.
 </ParamField>
 <ParamField body="api_key" type="string">
-  Credential for that endpoint. Stored, never echoed in the clear.
+  Credential for that endpoint. Stored, never echoed in the clear. On the `claude-code` harness a
+  custom `base_url` needs it: without a key of your own the endpoint is not used, your turns run on
+  the deployment's route, and the refusal is recorded. `openai-agent` runs on a keyless endpoint.
 </ParamField>
 <ParamField body="extra_body" type="string">
   Request fields the OpenAI dialect cannot express, as a JSON string — a self-hosted vLLM/Qwen

@@ -536,6 +536,47 @@ def _link_chat_into_workspace(work: Path) -> None:
         pass  # best-effort; a fresh turn still works, just without cross-turn resume
 
 
+#: The dispatch's mark on a worker whose model route is the person's OWN endpoint
+#: (``control_plane.dispatch.subject_route_env``). Present on that route and on no other.
+SUBJECT_ROUTE_ENV = "VEXA_MODEL_ROUTE"
+#: The CLI's credential file, relative to its config directory — where the runtime stages the
+#: deployment's subscription in a process-backend HOME (``runtime_kernel.profiles``, a test holds
+#: the two equal).
+CREDENTIAL_FILE = ".credentials.json"
+
+
+def cli_credential_path() -> Path:
+    """Where the CLI reads a stored credential in a worker: its config directory, ``$HOME/.claude``
+    (nothing sets another one — neither the dispatch nor the runtime forwards one)."""
+    return Path(os.environ.get("HOME", "/root")) / ".claude" / CREDENTIAL_FILE
+
+
+def clear_deployment_credential() -> Optional[str]:
+    """On the person's own route, leave the CLI no stored credential: ``None`` when there is none
+    left to find, else the reason the turn cannot start.
+
+    Every key the CLI reads from its environment is the person's on this route (the dispatch stamps
+    them, the empty string included), but a CLI with no key of its own signs in with the file in its
+    config directory, and anything there is the deployment's. The file is this workload's own copy, so
+    it is removed for the rest of the worker's life; a file that cannot be removed stops the turn
+    before the CLI starts. On every other route the file is the credential the turn runs on and is
+    left alone."""
+    if os.environ.get(SUBJECT_ROUTE_ENV) != "subject":
+        return None
+    path = cli_credential_path()
+    try:
+        path.unlink()           # a link is removed itself, never followed
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        logger.warning("could not remove the stored model credential at %s: %s", path, exc)
+    if os.path.lexists(path):
+        return ("This turn runs on your own model endpoint, and the agent's environment still holds "
+                "another model credential it could not remove. The turn was not started; an "
+                "operator must not mount a model credential into the agent's config directory.")
+    return None
+
+
 class ClaudeCodeHarness:
     """``HarnessPort`` adapter for the Claude Code CLI. ``exec_fn`` is injectable for tests."""
 
@@ -547,6 +588,10 @@ class ClaudeCodeHarness:
     def run_turn(self, work: Path, prompt: str, *, allowed_tools: Iterable[str] = (),
                  session: Optional[str] = None, model: Optional[str] = None,
                  mcp_config: Optional[str] = None) -> Iterator[dict]:
+        refused = clear_deployment_credential()
+        if refused:
+            yield {"type": "done", "reply": refused, "sessionId": session, "ok": False}
+            return
         effort = os.environ.get("VEXA_AGENT_EFFORT") or None
         argv = build_argv(prompt, allowed_tools=allowed_tools, session=session, model=model,
                           mcp_config=mcp_config, stdin_mode=True, effort=effort, workspace=str(work))

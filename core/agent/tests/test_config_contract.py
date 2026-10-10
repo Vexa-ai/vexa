@@ -325,7 +325,8 @@ def test_the_qwen_lane_dials_are_declared():
 # 105: -1 VEXA_AGENT_DEFAULT_SUBJECT — a test-harness fallback subject; the harness now passes its
 # subject to create_app and the product reads none.
 # 106: +1 VEXA_UNIT_IN_KEY — the unit's input-stream key; the worker runs only entries signed with it.
-EXPECTED_DECLARED_KEYS = 106
+# 107: +1 VEXA_MODEL_ROUTE — the dispatch's mark on a worker routed to the person's own endpoint.
+EXPECTED_DECLARED_KEYS = 107
 
 
 def test_connections_keys_are_capabilities_on_real_surfaces():
