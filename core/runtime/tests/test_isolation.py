@@ -41,6 +41,7 @@ def store(tmp_path):
     """A store root the test owns, with real (symlink-free) ancestors."""
     root = tmp_path / "store"
     root.mkdir()
+    os.chmod(root, 0o755)          # what the store root is in production, whatever the host's umask
     return root.resolve()
 
 

@@ -783,7 +783,7 @@ def test_the_stdin_exec_delivers_the_prompt_and_keeps_it_off_the_command_line(mo
         "text = msg['message']['content'][0]['text']\n"
         "cmd = open('/proc/self/cmdline','rb').read().decode() if __import__('os').path.exists('/proc/self/cmdline') else ' '.join(sys.argv)\n"
         "print(json.dumps({'type': 'result', 'subtype': 'success', 'is_error': False, 'result': text,"
-        " 'in_cmdline': 'TURN-TEXT' in cmd, 'session_id': 's'}), flush=True)\n"
+        " 'in_cmdline': text in cmd, 'session_id': 's'}), flush=True)\n"
     )
     for injectable in (False, True):
         lines = list(claude_code._exec_subprocess_stdin([sys.executable, "-c", script], str(tmp_path),
