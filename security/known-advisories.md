@@ -47,8 +47,9 @@ Categories A and B (LGPL is Category X there, and in ADR-0004 since 2026-10-10).
 
 ## Third-party images (Trivy)
 
-Allow file: [`.github/trivy-ignore-third-party.yaml`](../.github/trivy-ignore-third-party.yaml), used only for the images
-Vexa's deploy surfaces pin ([`scripts/pinned-images.mjs`](../scripts/pinned-images.mjs)), never for
+Allow file: [`.github/trivy-ignore-third-party.yaml`](../.github/trivy-ignore-third-party.yaml), used only for the
+third-party images the repository pins ([`scripts/pinned-images.mjs`](../scripts/pinned-images.mjs): every compose
+file and Helm chart under `deploy/`, every tracked Dockerfile's base, `docker run` in `deploy/` scripts), never for
 Vexa's own images. Each entry is a fixed CRITICAL or HIGH advisory inside an upstream image, scoped by
 package URL to the package it was found in, and expires on 2026-12-31. Produced from a Trivy 0.74.0 scan
 on 2026-10-10.
@@ -60,5 +61,10 @@ on 2026-10-10.
 | `mcr.microsoft.com/playwright:v1.56.0-noble` | Base of `vexa-lite` and `vexa-bot` | npm's bundled `tar`, `glob`, `minimatch`, `brace-expansion`, `picomatch`, `sigstore`, `pacote`, `ip-address`; Ubuntu OpenSSL and GnuPG | npm runs only while those images build. Moving the base moves the browser the bot joins meetings with, which is a release decision. |
 | `litellm/litellm:v1.97.2` | `llm-shim`, off by default (Compose profile) | Python and Wolfi packages in LiteLLM's image | No LiteLLM release scanned that day is free of them; the shim is bumped on purpose with its configuration. |
 | `fedirz/faster-whisper-server:latest-cpu` | Lite `LOCAL_STT`, opt-in | Python and Ubuntu packages | The image is no longer maintained upstream (the project continues as speaches). Replacing the sidecar is a separate change. |
+| `node:22-trixie-slim` (by digest) | Base of the terminal and of the mock-bot CI image | npm's bundled `brace-expansion`, `pacote`, `ip-address`, `picomatch`, `sigstore` | The terminal's runtime stage removes npm, and the built terminal image scans clean (`image-cve-scan.yml`). The mock bot is a CI test image, never published; it moved off `node:20-slim` (6 critical, 33 high) for this base. |
+| `nginx:alpine` | Transcription stack load balancer (`deploy/transcription`) | Alpine `libexpat`, `pcre2`, `tiff` | Not fixed in the upstream image yet; the floating tag takes the fix on the next pull. |
+| `axllent/mailpit:latest` | Dogfood rig mail catcher, 127.0.0.1 only | Go standard library and `golang.org/x/net` in the binary | A development tool on the rig host, never part of a deployment. |
+| `python:3.10-slim` | Base of the operator-built CPU transcription image | `wheel`, `jaraco.context` shipped with the base's packaging tools | Vexa publishes no transcription image; the operator's build inherits them. Part of the transcription image decision (S72). |
+| `nvidia/cuda:12.3.2-cudnn9-runtime-ubuntu22.04` | Base of the operator-built GPU transcription image | Ubuntu 22.04 OpenSSL and GnuPG | As above; moving the CUDA base is part of the transcription image decision (S72). |
 
-`valkey/valkey`, `edoburu/pgbouncer` and `searxng/searxng` had no fixed CRITICAL or HIGH finding.
+`valkey/valkey`, `edoburu/pgbouncer`, `searxng/searxng` and `python:3.12-slim` (the base of every Python service image) had no fixed CRITICAL or HIGH finding.

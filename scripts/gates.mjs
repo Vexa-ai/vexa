@@ -573,9 +573,9 @@ function gateLicenses() {
 // gate:image-licenses (P17, #653) — the packaging-side complement to gate:licenses. That gate scans the
 // npm/py DEPENDENCY tree; it is blind to two license surfaces the project actually ships, the class the
 // #653 audit exposed — "the thing we ship is not the thing the gate checks":
-//   (1) third-party container images our deploy surfaces PIN (compose/helm `image:` refs, Lite Dockerfile
-//       FROM refs, and Lite Makefile `*_IMAGE` variables) — user-pulled
-//       sidecars. Each is DECLARED in image-licenses.json; an undeclared pin fails (the "green gate ships
+//   (1) third-party container images the repository PINS (scripts/pinned-images.mjs: every compose file
+//       and Helm chart under deploy/, every tracked Dockerfile's FROM, `docker run` in deploy/ scripts and
+//       Makefiles, Makefile `*_IMAGE` variables) — user-pulled sidecars and base images. Each is DECLARED in image-licenses.json; an undeclared pin fails (the "green gate ships
 //       an un-audited component" hole); a non-permissive licence (e.g. a source-available Redis ≥7.4
 //       RSALv2/SSPL, or AGPL MinIO) requires a logged `reason`, so it is a reviewed decision, never silent.
 //   (2) components BAKED INTO a published vexaai/* image (`bundled`) — redistribution, so strict: Cat A
@@ -591,7 +591,7 @@ function gateImageLicenses() {
   const declaredImages = new Map((man.images || []).map((e) => [e.name, e]));
   const bad = [], flagged = [];
 
-  // (1) third-party image pins across the deploy-owned forms (scripts/pinned-images.mjs, which the
+  // (1) third-party image pins, discovered across the repository (scripts/pinned-images.mjs, which the
   //     CVE-scanning workflow reads too, so the scanned list and the audited list are one list).
   const foundImages = collectPinnedImages(ROOT);
 

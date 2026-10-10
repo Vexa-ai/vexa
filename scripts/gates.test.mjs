@@ -332,6 +332,41 @@ test("image-licenses RED: an undeclared Dockerfile FROM pin reds", () => {
   assert.match(r.out, /somevendor\/unaudited:1\.2/);
 });
 
+// ── S75: the pinned list is discovered, not listed ──────────────────────────────────────────────
+// pinned-images.mjs read compose's main file, the vexa chart and the Lite Dockerfile only, so the
+// transcription stack, the dogfood rig and every other Dockerfile's base were neither licence-audited
+// nor CVE-scanned. Each plant below was green before.
+
+test("image-licenses RED: an undeclared image in the transcription compose reds", () => {
+  const r = withEdited("deploy/transcription/docker-compose.yml", "image: nginx:alpine", "image: somevendor/unaudited:1.2",
+    () => runGate("image-licenses"));
+  assert.equal(r.green, false, "the transcription stack's image was not read");
+  assert.match(r.out, /undeclared pinned image "somevendor\/unaudited:1\.2" in deploy\/transcription\/docker-compose\.yml/);
+});
+
+test("image-licenses RED: an undeclared base in a service Dockerfile reds, ARG defaults resolved", () => {
+  const f = "core/identity/services/admin-api/Dockerfile";
+  const r = withEdited(f, "FROM python:3.12-slim", "ARG BASE=somevendor/unaudited:1.2\nFROM ${BASE}",
+    () => runGate("image-licenses"));
+  assert.equal(r.green, false, "a service Dockerfile's base was not read");
+  assert.match(r.out, /undeclared pinned image "somevendor\/unaudited:1\.2" in core\/identity\/services\/admin-api\/Dockerfile/);
+});
+
+test("image-licenses RED: an undeclared image a deploy script runs reds", () => {
+  const r = withEdited("deploy/dogfood/rig/rig.sh", "axllent/mailpit:latest", "somevendor/unaudited:1.2",
+    () => runGate("image-licenses"));
+  assert.equal(r.green, false, "the dogfood rig's docker run image was not read");
+  assert.match(r.out, /undeclared pinned image "somevendor\/unaudited:1\.2" in deploy\/dogfood\/rig\/rig\.sh/);
+});
+
+test("pinned images: the list carries every surface, and an image built here is first-party", () => {
+  const refs = JSON.parse(execFileSync("node", [join(ROOT, "scripts", "pinned-images.mjs"), "--json"], { cwd: ROOT, encoding: "utf8" }));
+  for (const ref of ["nginx:alpine", "python:3.12-slim", "axllent/mailpit:latest", "valkey/valkey"])
+    assert(refs.some((r) => r.startsWith(ref)), `${ref} is missing from the pinned list`);
+  assert(!refs.some((r) => r.startsWith("mock-bot")), "mock-bot:dev is built by this repository, not pulled");
+  assert(!refs.some((r) => r.startsWith("node:20-alpine")), "the gate-ignored dashboard's base was read");
+});
+
 const TERMINAL_DOCKERFILE = "clients/terminal/Dockerfile";
 const TERMINAL_NEXT_CONFIG = "clients/terminal/next.config.ts";
 const SHARP_PRUNE = " && rm -rf node_modules/sharp node_modules/@img";
