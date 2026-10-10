@@ -16,8 +16,9 @@ function blocks(css: string): { dark: string[]; light: string[] } {
     let j = open + 1; depth = 1;
     while (j < clean.length && depth > 0) { if (clean[j] === "{") depth++; else if (clean[j] === "}") depth--; j++; }
     const body = clean.slice(open + 1, j - 1);
-    if (selector === ":root") out.dark.push(body);
-    else if (selector === ':root[data-theme="light"]') out.light.push(body);
+    const sel = selector.replace(/\s+/g, " ");
+    if (sel === ":root" || sel === ':root, [data-theme="dark"]' || sel === ":root, [data-theme]") out.dark.push(body);
+    else if (sel === ':root[data-theme="light"], [data-theme="light"]' || sel === ':root[data-theme="light"]') out.light.push(body);
     // at-rules (@media …) are skipped whole: reduced-motion overrides are not a theme
     i = j;
   }

@@ -23,9 +23,9 @@ const MODES: ShellMode[] = ["wide", "desktop", "compact", "narrow", "single"];
  *  wrong type is dropped rather than trusted; a width is kept whatever its size, because clamping is
  *  the layout's job and a width chosen on a wide monitor must come back as the widest this window
  *  allows, not as the default. */
-export function readShellStore(fallback?: () => Partial<ShellStore> | null): ShellStore {
+export function readShellStore(fallback?: () => Partial<ShellStore> | null, key: string = SHELL_KEY): ShellStore {
   let raw: string | null = null;
-  try { raw = localStorage.getItem(SHELL_KEY); } catch { /* storage unavailable: defaults */ }
+  try { raw = localStorage.getItem(key); } catch { /* storage unavailable: defaults */ }
   if (raw === null) {
     const legacy = (() => { try { return fallback?.() ?? null; } catch { return null; } })();
     return { prefs: { ...DEFAULT_PREFS, ...(legacy?.prefs ?? {}) }, widths: legacy?.widths ?? {} };
@@ -53,8 +53,8 @@ export function readShellStore(fallback?: () => Partial<ShellStore> | null): She
   return { prefs, widths };
 }
 
-export function writeShellStore(s: ShellStore): void {
-  try { localStorage.setItem(SHELL_KEY, JSON.stringify(s)); } catch { /* storage unavailable: this session only */ }
+export function writeShellStore(s: ShellStore, key: string = SHELL_KEY): void {
+  try { localStorage.setItem(key, JSON.stringify(s)); } catch { /* storage unavailable: this session only */ }
 }
 
 export type ShellControls = {
@@ -79,8 +79,11 @@ export type ShellControls = {
 };
 
 /** `rootRef` is the shell's own box; its width is the viewport the layout is computed for. */
-export function useShellLayout(rootRef: RefObject<HTMLElement | null>, opts: { legacy?: () => Partial<ShellStore> | null } = {}): ShellControls {
-  const [store, setStore] = useState<ShellStore>(() => readShellStore(opts.legacy));
+/** `storageKey` lets a second shell (the design catalogue's fixture) keep its own store, so playing
+ *  with the catalogue never rearranges the reader's real layout. */
+export function useShellLayout(rootRef: RefObject<HTMLElement | null>, opts: { legacy?: () => Partial<ShellStore> | null; storageKey?: string } = {}): ShellControls {
+  const key = opts.storageKey ?? SHELL_KEY;
+  const [store, setStore] = useState<ShellStore>(() => readShellStore(opts.legacy, key));
   const [vw, setVw] = useState<number>(() => (typeof window === "undefined" ? 1440 : window.innerWidth));
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -113,8 +116,8 @@ export function useShellLayout(rootRef: RefObject<HTMLElement | null>, opts: { l
   useEffect(() => { if (layout.railKind === "docked") setDrawerOpen(false); }, [layout.railKind]);
 
   const update = useCallback((fn: (s: ShellStore) => ShellStore) => {
-    setStore((s) => { const n = fn(s); if (n !== s) writeShellStore(n); return n; });
-  }, []);
+    setStore((s) => { const n = fn(s); if (n !== s) writeShellStore(n, key); return n; });
+  }, [key]);
 
   const railDocks = layout.mode === "wide" || layout.mode === "desktop";
   const pagesDock = layout.pagesKind === "docked" || layout.pagesKind === "collapsed";

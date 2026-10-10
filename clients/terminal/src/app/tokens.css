@@ -5,7 +5,8 @@
  * them only through primitives (or, until they migrate, through the old names aliased below).
  *
  * Dark is the primary theme (`:root`); light overrides on `:root[data-theme="light"]`, which
- * `app/theme.ts` sets. Every text-on-surface pair declared in `tokens.pairs.json` is held to WCAG
+ * `app/theme.ts` sets. Any element carrying `data-theme` switches its own subtree (the catalogue
+ * renders dark and light side by side this way). Every text-on-surface pair declared in `tokens.pairs.json` is held to WCAG
  * 2.2 AA by `ui-kit/__tests__/tokenContrast.test.ts` in both themes — the gate is the authority,
  * not the hex values.
  *
@@ -14,7 +15,8 @@
  * `--border-control` (the only border allowed to identify a control, ≥ 3:1 — WCAG 1.4.11).
  */
 
-:root {
+:root,
+[data-theme="dark"] {
   color-scheme: dark;
 
   /* ── surfaces (Radix steps 1–5) ──────────────────────────────────────────────────────────── */
@@ -129,7 +131,8 @@
   --z-tooltip: 70;
 }
 
-:root[data-theme="light"] {
+:root[data-theme="light"],
+[data-theme="light"] {
   color-scheme: light;
   --surface-0: #ffffff;
   --surface-1: #eeeef2;
@@ -185,8 +188,12 @@
  * THE OLD NAMES, AS ALIASES (until the surfaces migrate, guidelines §11 Phase 2). Each resolves to
  * its semantic token, so an unmigrated surface follows the token — including the contrast fixes —
  * without being edited. New code uses the semantic names; `designGuards` will retire these.
+ *
+ * Declared on every theme root (`[data-theme]`), not only on <html>, so an element that sets its
+ * own theme — the catalogue's side-by-side frames — re-resolves the aliases against its tokens.
  */
-:root {
+:root,
+[data-theme] {
   --bg: var(--surface-0);
   --sidebar: var(--surface-1);
   --rail: var(--surface-1);

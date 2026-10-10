@@ -74,8 +74,9 @@ describe("G3 — every token reference resolves", () => {
     const missing: string[] = [];
     for (const s of SOURCES) {
       if (s.rel === "app/tokens.css") continue;
-      for (const m of s.text.matchAll(/var\((--[\w-]+)/g)) {
+      for (const m of s.text.matchAll(/var\((--[\w-]+)(\$\{)?/g)) {
         const n = m[1];
+        if (m[2]) continue;   // a name built at runtime (`var(--text-${size})`): the catalogue's scales
         if (T.defined.has(n) || definedElsewhere.has(n) || definedInline.has(n) || EXTERNAL.test(n)) continue;
         missing.push(`${s.rel}: ${n}`);
       }

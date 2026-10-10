@@ -162,6 +162,31 @@ one implements rest, hover, **focus-visible** (a 2px ring with a 2px offset), pr
 
 ---
 
+## The design catalogue
+
+`/design` renders every token and primitive as it really renders, from placeholder fixtures:
+
+- **Tokens** — every colour role with its contrast ratio computed in the page from the live
+  variables (the same function the contrast gate runs), the type scale, radii, shadows and spacing.
+- **Every primitive** — one section per registry entry, in dark and light side by side, some at
+  pane widths 320, 480 and 720 so container-query behaviour is visible. Each section carries
+  `data-gallery="<id>"` for scripted screenshots.
+- **The responsive shell** — the same layout machinery the Minutes shell runs, around placeholder
+  panes, in a box with a width slider. `/design?view=shell` renders it full screen; that is what the
+  layout sweep loads. It keeps its own layout store (`vexa.shell.catalogue`), so playing with it
+  never rearranges the reader's real layout.
+
+**When it is served.** Always in development. In a production build only when the operator sets
+`VEXA_TERMINAL_DESIGN_CATALOGUE=1` (set it on development and staging; leave it unset on
+production) — otherwise `/design` is a 404. It is `noindex, nofollow`, analytics skip it, and it
+needs no sign-in because it holds no user data.
+
+**Use.** A pull request that changes the UI attaches `/design` screenshots of the entries it
+touched, in both themes; a new primitive gets its registry entry (`src/app/design/registry.tsx`) in
+the same pull request — the coverage gate fails otherwise.
+
+---
+
 ## How it works
 
 1. **Tokens.** `src/app/tokens.css` defines every visual value for the dark theme on `:root` and
@@ -200,9 +225,14 @@ one implements rest, hover, **focus-visible** (a 2px ring with a 2px offset), pr
    App Router admits global CSS only from the root layout.
 9. **Everything is exported from `ui-kit/index.tsx`**, the folder's one front door. Surfaces
    (`minutes/`, `surfaces/`) import from it and never deep-import.
+10. **The catalogue** (`src/app/design/`) imports the same primitives through the same front door
+    and renders `registry.tsx` with `fixtures.ts`. `page.tsx` reads `VEXA_TERMINAL_DESIGN_CATALOGUE`
+    per request (`gate.ts`) and answers 404 when it is off.
 
-**Configuration.** Per browser only: `vexa.shell.v1` (layout) and `vexa.terminal.theme` (theme).
-Neither is sent to a server.
+**Configuration.** `VEXA_TERMINAL_DESIGN_CATALOGUE` (server environment; `1` serves `/design` in a
+production build — see [Configuration](/configuration)). Per browser only: `vexa.shell.v1` (layout),
+`vexa.shell.catalogue` (the catalogue's fixture shell) and `vexa.terminal.theme` (theme); none is
+sent to a server.
 
 **Limits.**
 - The shell measures its own width, so a layout at 200% zoom is the layout of half the width — by
@@ -215,6 +245,7 @@ Neither is sent to a server.
 - If `localStorage` is unavailable (a private window, blocked site data), the layout falls back to
   its defaults on every load and still works; widths and folds are not remembered.
 - A stored width the window cannot fit is clamped, not reset; widening the window restores it.
+- With the catalogue disabled, `/design` is a 404.
 
 ---
 
@@ -228,13 +259,19 @@ Neither is sent to a server.
 | **P2** couple through contracts, **P3** acyclic | `ui-kit` imports React, `lucide-react` and its own files only; it never imports `minutes/`, `surfaces/` or `canvas/` | `gate:isolation` (the terminal's folder-cycle check) |
 | **P6** one front door | layout, primitives and the formatter are exported only from `src/ui-kit/index.tsx`; `minutes/` and `surfaces/` import from there | `gate:exports`; ungated inside the terminal: reviewed |
 | **P9** mechanically enforced | the layout rules are a unit sweep (`shellLayout.test.ts`, 320–2560px, every preference) and a browser sweep (`scripts/layout-sweep.mjs`, L1–L3) | `gate:node` (vitest); the browser sweep runs on bbb and is attached to the PR |
-| **P12** every folder self-documents | `ui-kit/layout/`, `ui-kit/primitives/` and `ui-kit/format/` each carry a README | `gate:readme` |
+| **P12** every folder self-documents | `ui-kit/layout/`, `ui-kit/primitives/`, `ui-kit/format/`, `app/design/` and `app/design/sections/` each carry a README | `gate:readme` |
+| **P14** config by env | the catalogue's one switch is `VEXA_TERMINAL_DESIGN_CATALOGUE`, read per request; documented in [Configuration](/configuration) | ungated: reviewed |
 | **P17** licence-clean | no new dependency. `geist` (the Geist fonts, SIL OFL-1.1, FINOS Category B) was already a dependency and is logged as an exception in `license-exceptions.json` — served unmodified as web fonts; `lucide-react` (ISC) was already in the lockfile; Playwright (Apache-2.0) is not a terminal dependency — the sweep runs where it is installed | `gate:licenses` |
 | **P18** fail loud | a storage failure degrades to defaults (the shell still renders) and is never thrown into the page; nothing is swallowed into a wrong layout | `layoutPrimitives.test.tsx` ("storage that throws still yields a working layout") |
 | **P23** one writer per carrier | colour and size values are written only in `tokens.css`; `vexa.shell.v1` only by `useShellLayout`; the theme only by `theme.ts` | G3 and G7 for tokens (`designTokens.test.ts`); ungated for the layout store and theme: reviewed |
 
 ### Security
 
+- **The catalogue.** `/design` renders fixtures only and imports nothing that could reach user data
+  — no API client, no session, no auth, no `fetch` — so there is nothing to authorise; it is off in
+  production unless the operator turns it on. Tests: `designCatalogue.test.tsx`, "imports only the
+  ui-kit front door, its own files, React, lucide and Next", "fixtures are placeholders", and "is on
+  outside production, and in production only with the flag".
 - **Access.** The layout holds no user data and calls no API: it is widths and two booleans in the
   reader's own browser. What a pane shows is unchanged and still authorised where it was (P20
   `canAccess` at the server).
@@ -268,4 +305,6 @@ Neither is sent to a server.
 | L1–L3 | in a browser at 640–1920 in both themes: no pane scrolls sideways, the conversation meets its floor, the composer toolbar is one row, a tab strip that hides a tab shows its overflow control | `clients/terminal/scripts/layout-sweep.mjs` | **have** (run on bbb; attached to the PR; CI later) |
 | KV | no `overflow-wrap: anywhere` in the metadata table; stacked below 360px; dates and long tokens are single units | `src/ui-kit/__tests__/keyValue.test.tsx` | **have** |
 | A8 | the splitter, sheet, menu, tabs, dialog and fields follow their WAI-ARIA patterns | `src/ui-kit/__tests__/layoutPrimitives.test.tsx`, `primitives.test.tsx` | **have** |
+| G13 | every component the ui-kit exports has a catalogue entry; every entry renders in both themes | `src/app/__tests__/designCatalogue.test.tsx` | **have** |
+| G11 | `src/app/design/**` imports only the ui-kit front door, its own files, React, lucide and Next | same file | **have** |
 | S1, S2 | secrets never in attributes; external links scheme-checked | `primitives.test.tsx` | **have** (primitive level; the guards that ban raw use land with the surface migration) |
