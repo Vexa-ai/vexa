@@ -140,7 +140,7 @@ def test_the_shipped_agent_profile_carries_the_configured_credentials(monkeypatc
         CredentialFile("/host/.codex/auth.json", f"{WORKER_CODEX_HOME}/auth.json", ".codex/auth.json"),
     )
     assert agent.credential_env == {CODEX_HOME_ENV: WORKER_CODEX_HOME}
-    assert not bot.credential_mounts and bot.credential_files == () and bot.process_groups == ("vexa-display",)
+    assert not bot.credential_mounts and bot.credential_files == () and bot.process_groups == ()
 
 
 def test_the_process_backend_stages_credential_files_only_for_a_profile_that_asks(monkeypatch, tmp_path):

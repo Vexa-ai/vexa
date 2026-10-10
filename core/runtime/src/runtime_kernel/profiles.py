@@ -302,10 +302,9 @@ def default_registry() -> ProfileRegistry:
                     # A meeting bot joins DOCKER_NETWORK (meeting-api for its callbacks and uploads,
                     # redis for its streams) and is given no model credential.
                     labels={CLASS_LABEL: "bot"},
+                    # As a process-backend child it joins no host group: it brings up its own
+                    # display and audio server (deploy/lite/bin/vexa-bot-launch).
                     scheduling=_profile_scheduling("meeting-bot"),
-                    # As a process-backend child it opens the host's shared display, which admits
-                    # the members of this group only (its audio server is its own).
-                    process_groups=("vexa-display",),
                 ),
                 idle_timeout_sec=0,  # 0 ⇒ managed externally; enforcement skips it
                 base_env=bot_tuning_env,

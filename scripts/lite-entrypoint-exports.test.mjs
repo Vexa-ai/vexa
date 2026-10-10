@@ -5,8 +5,9 @@
 // The entrypoint's exports reach every Lite program, so the gate holds each to a declaration (or to
 // CONFIG_LITE_UNADOPTED, naming the program it serves). Its parser matched only `export` at column 0,
 // so a key exported from a branch — indented under an `if`, after a `case` label, after `&&` — was
-// invisible to it: VEXA_LITE_VNC shipped that way, undeclared. These rows plant each shape in this
-// file's own copy of the tree (scripts/test-tree.mjs) and run the real gate over it.
+// invisible to it: a switch exported after a `case` label once shipped that way, undeclared. These
+// rows plant each shape in this file's own copy of the tree (scripts/test-tree.mjs) and run the real
+// gate over it.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -55,13 +56,7 @@ test("an export the gate must see is found wherever it stands, and named by line
   assert.doesNotMatch(r.out, /VEXA_ZZ_IN_A_COMMENT/);
 });
 
-test("the shipped entrypoint's exports are all declared, the VNC switch included", () => {
+test("the shipped entrypoint's exports are all declared", () => {
   const r = runGate();
   assert.equal(r.green, true, r.out);
-  const gates = readFileSync(join(ROOT, "scripts", "gates.mjs"), "utf8");
-  const unadopted = gates.split("const CONFIG_LITE_UNADOPTED = {")[1].split("\n};")[0];
-  for (const key of ["VEXA_LITE_VNC", "VEXA_LITE_VNC_PASSWORD"]) {
-    assert.match(unadopted, new RegExp(`^\\s+${key}: "`, "m"), `${key} is not declared`);
-  }
-  assert.match(unadopted, /VEXA_LITE_VNC_PASSWORD: "SECRET/);
 });

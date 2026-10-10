@@ -1316,8 +1316,6 @@ const CONFIG_LITE_UNADOPTED = {
   VEXA_LITE_STATE_DIR: "the Lite entrypoint's own state directory (the persisted NEXTAUTH_SECRET and the gateway-identity.v1 keypair); supervisord interpolates it into the gateway's signing-key path and the verifiers' public-key path, and no service reads it",
   REDIS_HOST: "the Lite entrypoint's own part of the internal REDIS_URL it composes (an operator may point it elsewhere); every service receives REDIS_URL, and none reads this",
   REDIS_PORT: "the same, the port part of the internal REDIS_URL; no service reads it",
-  VEXA_LITE_VNC: "the debug browser view's switch (true|false, default false); supervisord interpolates it into [program:x11vnc] and [program:websockify] autostart, and the entrypoint writes the VNC password file only when it is true; no service reads it",
-  VEXA_LITE_VNC_PASSWORD: "SECRET — the debug browser view's password; the entrypoint alone reads it, writes it to the root-only /run/vexa/vnc/passwd that [program:x11vnc] reads, and unsets it before supervisord starts, so no program inherits it; minted into the state volume when unset",
 };
 function scanEnvReads(dirs) {
   const found = new Map(); // key -> first "file" it was seen in

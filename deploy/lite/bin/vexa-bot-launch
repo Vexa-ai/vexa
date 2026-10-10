@@ -3,26 +3,52 @@
 # Vexa Lite — meeting-bot launcher (process backend)
 # =============================================================================
 # The runtime kernel (RUNTIME_BACKEND=process) execs this once per meeting via the
-# meeting-bot profile (BOT_COMMAND). Unlike the bot's own container entrypoint, it does
-# NOT bring up Xvfb — supervisord owns the one shared display for the whole container.
-# The bot's full constructor arrives in the inherited env as VEXA_BOT_CONFIG (invocation.v1);
-# we just run the worker.
+# meeting-bot profile (BOT_COMMAND). Like the bot's own container entrypoint, it brings up the
+# bot's display and audio, then runs the worker. The bot's full constructor arrives in the
+# inherited env as VEXA_BOT_CONFIG (invocation.v1).
 #
-# The runtime starts each bot as a uid of its own (never root) with a private HOME and only the
-# vexa-display group, which reads the display's cookie. Everything else this bot touches is its own:
+# The runtime starts each bot as a uid of its own (never root, no supplementary group) with a
+# private HOME. Everything this bot touches is its own:
+#  * its OWN X display: an Xvfb run as this uid on a display number it picks itself, with access
+#    control on and a fresh cookie in this HOME (bin/bot-display cookie), so no other bot, no agent
+#    worker and no service can open it — see, record or drive it. Before the bot runs, both of the
+#    display's sockets are checked to be this Xvfb's (bin/bot-display check); if the display dies,
+#    the bot's whole process group goes with it;
 #  * its OWN PulseAudio daemon, socket in its HOME (0700), with the tts_sink → virtual_mic graph the
 #    bot's speak path expects (the same graph the bot image's entrypoint builds), muted, and no module
 #    loading once it is up — no other bot can reach it, and no bot's audio reaches another's mic;
 #  * its checkpoint screenshots: the join module writes /app/storage/screenshots, a link in the image
 #    to /proc/self/fd/9, which is this bot's own $HOME/screenshots;
 #  * its captured-signal recording, in its HOME.
-# The daemon is in the bot's process group, so the runtime's group teardown ends it with the bot.
+# The display, its window manager and the audio daemon are in the bot's process group, so the
+# runtime's group teardown ends them with the bot.
 set -u
 
-export DISPLAY="${DISPLAY:-:99}"
-export XAUTHORITY="${XAUTHORITY:-/run/vexa/display/Xauthority}"
 home="${HOME:-/tmp}"
 export VEXA_CAPTURE_SIGNAL_DIR="${VEXA_CAPTURE_SIGNAL_DIR:-$home/captured-signal}"
+
+x11_dir="$home/x11"
+mkdir -p -m 0700 "$x11_dir"
+export XAUTHORITY="$x11_dir/Xauthority"
+/usr/local/bin/bot-display cookie "$XAUTHORITY" || exit 1
+rm -f "$x11_dir/ready" "$x11_dir/xvfb.pid"
+mkfifo -m 0600 "$x11_dir/ready" || exit 1
+(
+    Xvfb -displayfd 3 -screen 0 1920x1080x24 -auth "$XAUTHORITY" -nolisten tcp +extension GLX +render -noreset \
+        3>"$x11_dir/ready" &
+    echo "$!" > "$x11_dir/xvfb.pid"
+    wait "$!"
+    kill -KILL 0
+) &
+display=""
+read -r -t 20 display < "$x11_dir/ready"
+case "$display" in
+    ""|*[!0-9]*) echo "[vexa-bot-launch] the bot's X display did not start" >&2; exit 1;;
+esac
+for _ in $(seq 1 50); do [ -s "$x11_dir/xvfb.pid" ] && break; sleep 0.1; done
+/usr/local/bin/bot-display check "$display" "$(cat "$x11_dir/xvfb.pid")" || exit 1
+export DISPLAY=":$display"
+fluxbox >/dev/null 2>&1 &
 
 pulse_dir="$home/pulse"
 mkdir -p -m 0700 "$pulse_dir"

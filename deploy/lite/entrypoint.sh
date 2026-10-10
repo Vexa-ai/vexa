@@ -221,32 +221,16 @@ mkdir -p /var/lib/vexa/host-claude && chmod 0700 /var/lib/vexa/host-claude 2>/de
 
 # Root's runtime directory (the rendered supervisor config, Valkey's config, the self-host keys), its
 # mode set at every start, before anything writes into it: a restarted container keeps the directory
-# and whatever mode it had. Others may pass through it to the display's directory, never list it, and
-# every file already in it is root's alone (the display step below re-grants its own).
-mkdir -p /run/vexa && chown root:root /run/vexa && chmod 0711 /run/vexa
+# and whatever mode it had. Nothing but root reads it, and every file already in it is root's alone.
+mkdir -p /run/vexa && chown root:root /run/vexa && chmod 0700 /run/vexa
 chmod -R go-rwx /run/vexa/*  2>/dev/null || true
 
-# The shared X display: Xvfb runs with access control on, so only a holder of its cookie can open it —
-# root's programs and the vexa-display group, which the runtime gives to meeting bots and not to
-# agent workers. A fresh cookie every start (bin/display-cookie; never printed).
-/usr/local/bin/display-cookie /run/vexa/display/Xauthority 99 vexa-display
-
-# The debug browser view (x11vnc + noVNC) is OFF unless VEXA_LITE_VNC=true. On, it listens on the
-# container's loopback only and asks for a password: VEXA_LITE_VNC_PASSWORD, else one minted on the
-# first boot and kept in $VEXA_LITE_STATE_DIR/vnc-password (read it with docker exec; never printed).
-# Every process in the container shares the loopback, so the password is what keeps bots and workers
-# off the display. VNC passwords are 8 characters at most.
-case "${VEXA_LITE_VNC:-false}" in
-    true|false) export VEXA_LITE_VNC="${VEXA_LITE_VNC:-false}";;
-    *) echo "ERROR: VEXA_LITE_VNC must be true or false." >&2; exit 1;;
-esac
-mkdir -p -m 0700 /run/vexa/vnc
-if [ "$VEXA_LITE_VNC" = true ]; then
-    vnc_password="${VEXA_LITE_VNC_PASSWORD:-$(/usr/local/bin/persisted-secret "${VEXA_LITE_STATE_DIR:-/var/lib/vexa/state}/vnc-password")}"
-    ( umask 077; printf '%s\n' "$vnc_password" > /run/vexa/vnc/passwd )
-    unset vnc_password
-fi
-unset VEXA_LITE_VNC_PASSWORD
+# No shared X display: each meeting bot starts its own (bin/vexa-bot-launch), as its own uid, with a
+# cookie only it holds. Their sockets go in /tmp/.X11-unix, which must be root's and sticky so no bot
+# can remove or replace another's; it is made afresh at every start, with any lock or socket a
+# previous run left.
+rm -rf /tmp/.X11-unix /tmp/.X*-lock
+mkdir -m 1777 /tmp/.X11-unix
 
 # Workspace store for the agent (shared dir; the worker runs in-process, no volume bind). Writable by
 # root alone: every agent worker runs as its subject's own uid, and the runtime hands each subject its

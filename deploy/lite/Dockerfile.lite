@@ -95,8 +95,8 @@ RUN curl -fsSL "https://github.com/valkey-io/valkey/archive/refs/tags/${VALKEY_V
 FROM mcr.microsoft.com/playwright:v1.56.0-noble AS final
 ENV DEBIAN_FRONTEND=noninteractive
 
-# System stack: Python (the 5 services) · supervisor · X11/audio (Xvfb/fluxbox/pulse) ·
-# noVNC (browser view) · postgres client (pg_isready) · git (agent governance ops).
+# System stack: Python (the 5 services) · supervisor · X11/audio (Xvfb/fluxbox/pulse, one set per bot) ·
+# postgres client (pg_isready) · git (agent governance ops). No VNC: there is no shared screen to view.
 # The cache/stream store is Valkey, copied from valkey-builder below — NOT jammy apt's redis-server
 # (6.0.16, no XAUTOCLAIM, the #653 parity gap).
 # `apt-get upgrade` takes the Ubuntu archive's security updates (OpenSSL, GnuPG) since the Playwright
@@ -104,7 +104,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get upgrade -y --no-install-recommends && apt-get install -y --no-install-recommends \
       python3 python3-pip python3-venv python3-dev build-essential \
       supervisor postgresql-client \
-      xvfb fluxbox x11vnc novnc python3-websockify \
+      xvfb fluxbox \
       pulseaudio xdotool xclip socat ffmpeg libsndfile1 \
       curl git ca-certificates \
  && usermod -aG pulse-access root 2>/dev/null || true \
@@ -141,11 +141,8 @@ RUN chmod -R a+rX,go-w /ms-playwright
 # a worker that is not root never switches; the user exists so the harness finds it either way.
 RUN groupadd --system --gid 10001 vexa-tools \
  && useradd --system --uid 10001 --gid 10001 --home-dir /tmp --no-create-home --shell /usr/sbin/nologin vexa-tools
-# The group that may open the shared X display (it reads the cookie bin/display-cookie writes at each
-# start). The runtime gives it to meeting bots, never to agent workers. The mounted model credential's
-# directory is root's alone.
-RUN groupadd --system vexa-display \
- && install -d -m 0700 /var/lib/vexa/host-claude
+# The mounted model credential's directory is root's alone.
+RUN install -d -m 0700 /var/lib/vexa/host-claude
 
 # ── Python venvs — one per service (avoids cross-service dependency-pin conflicts). Each mirrors
 #    that service's Dockerfile (uv sync --frozen --no-dev + the production-only ASGI/DB extras). ───
@@ -300,12 +297,12 @@ COPY licenses/onnx-community-pyannote-segmentation-3.0.LICENSE.txt /opt/hf-cache
 COPY --from=terminal-builder /app/terminal /app/terminal
 
 # ── Launchers, supervisor config, entrypoint ──────────────────────────────────────────────────────
-COPY deploy/lite/bin/vexa-bot-launch deploy/lite/bin/vexa-agent-worker deploy/lite/bin/vexa-runtime deploy/lite/bin/display-cookie deploy/lite/bin/provision-key.sh deploy/lite/bin/render-supervisord deploy/lite/bin/persisted-secret /usr/local/bin/
+COPY deploy/lite/bin/vexa-bot-launch deploy/lite/bin/vexa-agent-worker deploy/lite/bin/vexa-runtime deploy/lite/bin/bot-display deploy/lite/bin/provision-key.sh deploy/lite/bin/render-supervisord deploy/lite/bin/persisted-secret /usr/local/bin/
 # The supervisor config is a template: the entrypoint renders the copy supervisord runs (see CMD).
 COPY deploy/lite/supervisord.conf /etc/supervisor/conf.d/vexa.conf
 COPY deploy/lite/entrypoint.sh /entrypoint.sh
 RUN chmod +x /usr/local/bin/vexa-bot-launch /usr/local/bin/vexa-agent-worker /usr/local/bin/vexa-runtime \
-      /usr/local/bin/display-cookie /usr/local/bin/provision-key.sh \
+      /usr/local/bin/bot-display /usr/local/bin/provision-key.sh \
       /usr/local/bin/persisted-secret /usr/local/bin/render-supervisord /entrypoint.sh
 
 # ── Env defaults (every var supervisord interpolates must be SET; entrypoint derives the rest) ────
@@ -326,8 +323,7 @@ ENV LOG_LEVEL=info \
     TERMINAL_PUBLIC_URL=http://localhost:3001 \
     NEXTAUTH_SECRET= JWT_SECRET=
 
-# Front doors: gateway (8056) · terminal (3001) · agent control plane (8100). The debug browser view
-# (noVNC, 6080) is off by default and loopback-only when on (VEXA_LITE_VNC).
+# Front doors: gateway (8056) · terminal (3001) · agent control plane (8100).
 EXPOSE 8056 3001 8100
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \

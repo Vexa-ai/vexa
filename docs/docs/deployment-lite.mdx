@@ -70,11 +70,11 @@ One supervisord tree runs the services a compose deployment spreads across conta
 | **gateway** (`:8056`), **terminal** (`:3001`), **agent-api** (`:8100`) | the three published front doors |
 | **meeting-api, admin-api, runtime** | loopback-only (`127.0.0.1`) — reach them with `docker exec` |
 | **valkey** | in-container Redis-compatible store, loopback-only |
-| **Xvfb · fluxbox** | the shared virtual display bots run on; opening it needs a cookie only meeting bots can read (each bot also runs its own audio daemon) |
-| **x11vnc · noVNC** | the debug browser view — off unless you set `VEXA_LITE_VNC=true`; then loopback-only on `:6080` and password-protected (`VEXA_LITE_VNC_PASSWORD`, else minted into the state volume as `vnc-password`) |
 
 Bots and agent workers are **not** supervisord programs — the runtime spawns them as child
-processes, one per meeting and per agent dispatch. Inspect a running deployment with:
+processes, one per meeting and per agent dispatch. Each bot brings up its own virtual display and
+audio daemon as its own user, with a display cookie only it holds, so no bot can see or drive
+another's meeting. There is no shared screen, and so no VNC view. Inspect a running deployment with:
 
 ```bash
 docker logs -f vexa-lite                            # all service logs go to stdout
@@ -150,8 +150,6 @@ gateway's `/health` (30s interval, 120s start period).
 
 ## Limits vs compose and Kubernetes
 
-- **One shared display.** Bots share a single Xvfb — best for one browser session at a time.
-  Compose isolates bots in containers; the Helm chart gives each bot its own Pod.
 - **Ephemeral Valkey.** In-container with no volume by default.
 - **Agent API is not gateway-fronted.** Clients reach `:8100` directly; gateway-fronting is
   roadmap.
