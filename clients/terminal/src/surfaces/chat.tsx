@@ -11,7 +11,8 @@ import { LayoutServiceId, type ActiveTab } from "../workbench/layout";
 import { registerCommand, type TabProps } from "../contributions";
 import { meetingsOnly } from "../app/mode";
 import { AgentWindow, Conversation, opIcon, type Turn, type Op } from "../workbench/agent-window";
-import { Icon } from "../ui-kit";
+import { Fold, Icon, Menu } from "../ui-kit";
+import { Ellipsis } from "lucide-react";
 import { ReportTurn } from "./ReportThis";
 import { invalidateDocLinkCaches } from "../ui-kit/docLinks";
 import { startStreamingDictation, type StreamingDictation } from "../ui-kit/micDictation";
@@ -1738,7 +1739,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
         style={{ border: "1px solid var(--line2)", borderRadius: 14, background: "var(--panel)", padding: "10px 10px 6px 12px", display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}
       >
         {((advertiseFocus && contextRef) || (!minutesOnly() && (ambientEligible || includeSchedule === true)) || (bundleFocus && (bundleFocus.kind === "workspace" || bundleFocus.kind === "today"))) && (
-          <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0, flexWrap: "wrap" }}>
+          <div data-composer-context style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0, flexWrap: "nowrap", overflow: "hidden" }}>
             {/* ambient schedule chip — the context bundle's always-visible half: on = the agent
                 sees today's schedule; × turns it off; ghost chip re-adds. HIDDEN in minutes mode
                 for now (founder 2026-08-22) — the context still flows, the chip just doesn't. */}
@@ -1804,8 +1805,10 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
         />
         {/* THE CLAUDE CODE COMPOSER (founder 2026-10-10): the text on top at full width, growing
             with what is typed; under it one toolbar — attach and dictate as quiet icons on the
-            left, the chat's model and effort as plain text and send on the right. The toolbar
-            wraps at narrow widths and the model name truncates before anything else gives. */}
+            left, the chat's model and effort as plain text and send on the right. THE TOOLBAR NEVER
+            WRAPS (guidelines §3.3): it answers to the composer's own width — below 560px the
+            effort shows as an icon, below 400px attach and dictate move into a "⋯" menu — and the
+            model and send controls are always visible. */}
         <textarea
           ref={inputRef}
           value={value}
@@ -1824,7 +1827,8 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
           rows={2}
           style={{ width: "100%", boxSizing: "border-box", background: "none", border: "none", outline: "none", color: "var(--t1)", fontSize: 14, lineHeight: "20px", minWidth: 0, minHeight: 44, maxHeight: MAX_TEXTAREA_HEIGHT, resize: "none", overflowY: "hidden", padding: "2px 2px", margin: 0, fontFamily: "inherit" }}
         />
-        <div data-composer-toolbar style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 4, minWidth: 0 }}>
+        <div data-composer-toolbar className="vx-container" style={{ display: "flex", alignItems: "center", flexWrap: "nowrap", gap: 4, minWidth: 0 }}>
+          <Fold at={400} wide={<>
           <button type="button" aria-label="Attach files" title="Attach files" disabled={busy || uploading} onClick={() => fileInputRef.current?.click()}
             style={{ background: "transparent", color: "var(--t3)", border: "none", width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", cursor: busy || uploading ? "default" : "pointer", flex: "none", opacity: busy || uploading ? 0.6 : 1 }}>
             <Icon name="plus" size={16} />
@@ -1845,6 +1849,14 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
               ? <span className="vx-op-spin" style={{ width: 12, height: 12, border: "2px solid var(--line2)", borderTopColor: "var(--t2)", borderRadius: "50%", display: "block" }} />
               : <Icon name="mic" size={15} />}
           </button>
+          </>} narrow={
+            <Menu label="More composer actions" placement="top" triggerData={{ "data-composer-more": "" }}
+              trigger={<Ellipsis size={16} strokeWidth={1.75} aria-hidden />}
+              items={[
+                { key: "attach", label: "Attach files", icon: <Icon name="plus" size={14} />, disabled: busy || uploading, onSelect: () => fileInputRef.current?.click() },
+                { key: "mic", label: mic === "rec" ? "Stop recording" : mic === "stt" ? "Transcribing…" : "Dictate", icon: <Icon name="mic" size={14} />, disabled: uploading || mic === "stt", onSelect: () => void toggleMic() },
+              ]} />
+          } />
           <div style={{ flex: "1 1 auto", minWidth: 0, display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 4 }}>
             {/* THE MODEL THIS CHAT RUNS ON, AND ITS EFFORT (ADR-0043) — beside send, because the next
                 turn is when a pick takes effect. Absent on a deployment with no catalog. */}

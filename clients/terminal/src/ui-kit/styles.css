@@ -1,0 +1,6 @@
+/* The ui-kit's stylesheets, gathered in one place. globals.css imports this file once; Next's App
+ * Router admits global CSS only from the root layout, so primitives cannot import their own. Every
+ * class here is `vx-` prefixed and reads only the CSS variables the terminal defines. */
+@import "./layout/layout.css";
+@import "./primitives/primitives.css";
+@import "./primitives/controls.css";

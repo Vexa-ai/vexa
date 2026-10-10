@@ -107,7 +107,7 @@ export function ConnectionsPanel({onOpenChange,onModeChange}:{onOpenChange?:(ope
     <div style={{maxWidth:960,margin:0}}>
     <p style={{...ty.lens,margin:'0 0 8px'}}>{mode==='page'?'Your accounts & services':'Secure setup'}</p>
     <p style={{...ty.body,color:'var(--t2)',margin:'0 0 24px',maxWidth:640}}>{mode==='page'?'Manage the accounts your agents can use.':'Complete this connection to continue with your agent.'} Credentials stay private in the secure store.</p>
-    {error&&<p role="alert" style={{padding:12,border:'1px solid #c65d46',borderRadius:8,color:'var(--t1)'}}>{error}</p>}
+    {error&&<p role="alert" style={{padding:12,border:'1px solid var(--danger)',borderRadius:8,color:'var(--t1)'}}>{error}</p>}
     {authorizing&&<p role="status" style={{...ty.body,padding:12,background:'var(--panel)',borderRadius:8}}>Finish authorization in the provider window. This panel updates when you return.</p>}
     <div style={{display:'grid',gridTemplateColumns:'minmax(0, 1fr)',gap:0,alignItems:'start'}}>
     {(!focus||focus.provider==='github')&&<GitConnection />}

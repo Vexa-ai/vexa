@@ -27,16 +27,16 @@ import { ContextBar, GLOBAL_MOUNT } from "./ContextBar";
 import { ConnectionsPanel, CONNECTIONS_CLOSE } from "./ConnectionsPanel";
 import { PagesPanel, type Listing } from "./PagesPanel";
 import {
-  bindMeeting, chatForRow, chatsFromSessions, hideChat, loadChats, loadCollapsed, loadHidden, loadRailAll, markTouched,
+  bindMeeting, chatForRow, chatsFromSessions, hideChat, legacyShellStore, loadChats, loadHidden, loadRailAll, markTouched,
   meetingChatId, meetingTitle, mergeChats, nameChat, nameFromTurn,
   newChat, railRows, readRailOwner, resetChats, setTarget, writeRailOwner,
-  removeChat, saveChats, saveCollapsed, saveRailAll, upsertChat, visibleRows, artifactKey,
+  removeChat, saveChats, saveRailAll, upsertChat, visibleRows, artifactKey,
   forgetHistory, orderHistory, stripForRecord, togglePinned, touchHistory, withHome,
   type Artifact, type Chat as ChatRec, type Row } from "./chats";
 import { listSessions } from "../surfaces/sessionsApi";
 import { resolveDocRef } from "../ui-kit/docLinks";
 import { SURFACE_RECORD_LIVE, syncSurface } from "../surfaces/surfaceSync";
-import { Rail } from "./Rail";
+import { Rail, RailStrip } from "./Rail";
 import { ScaffoldRefusalCard } from "./ScaffoldRefusalCard";
 import { meetingPhase, type MeetingMock } from "../surfaces/meetingModel";
 import { scaffoldToChat, type Scaffold, type ScaffoldRefusal } from "./scaffold";
@@ -50,9 +50,10 @@ import { reportOpened } from "./deskTouch";
 import { applyProposal, proposals, type Proposal } from "./proposals";
 import { listProposals, resolveProposal, type DeskProposal } from "../surfaces/proposalsApi";
 import { ProposalChips } from "./ProposalChips";
-import { EdgeHandle, EDGE_W } from "./Collapse";
+import { EdgeHandle, ShellToggle } from "./Collapse";
+import { Drawer, Sheet, Splitter, useShellLayout } from "../ui-kit";
 import { MOCK_CHATS, MOCK_MEETINGS, mockBody, mockOn } from "./mockPhases";
-import { T, maxPagesW, surface, type as ty } from "./tokens";
+import { T, surface, type as ty } from "./tokens";
 import { LayoutServiceId } from "../workbench/layout";
 import type { Page, Sel } from "./types";
 
@@ -304,55 +305,24 @@ export function MinutesShell() {
     setChats((prev) => { const next = fn(prev); if (next !== prev) saveChats(next); return next; });
   }, []);
 
-  // BOTH side columns fold away, independently, and the choice persists per side (founder,
-  // 2026-09-01). Collapse never writes `pagesW`, so reopening the panel restores the width the
-  // reader dragged it to — the two controls share a column and no state.
+  // THE SHELL'S LAYOUT IS ONE PURE FUNCTION (terminal design guidelines §3.1, ui-kit/layout).
+  // Both side columns still fold away by the reader's choice (founder, 2026-09-01) — that choice is
+  // `prefs`, persisted — but what FITS is now the layout's call: as the window narrows the rail
+  // folds to a strip and opens as a drawer, then the pages panel becomes a sheet, and the
+  // conversation never shrinks below its floor. An auto-collapse never writes a preference, so
+  // widening the window brings the reader's layout back. Widths are remembered per mode, clamped on
+  // read and never discarded (the rule the old `vexa.minutes.pagesW` kept, carried over).
   const [attachTo, setAttachTo] = useState<{ id?: string } | null>(null);
-  const [railCollapsed, setRailCollapsed] = useState<boolean>(() => loadCollapsed("left"));
-  const [pagesCollapsed, setPagesCollapsed] = useState<boolean>(() => loadCollapsed("right"));
+  const shellRef = useRef<HTMLDivElement | null>(null);
+  const shell = useShellLayout(shellRef, { legacy: legacyShellStore });
+  const L = shell.layout;
   const [connectionsMode,setConnectionsMode] = useState<'page'|'panel'|null>(null);
   const connectionsOpen=connectionsMode!==null;
-  const rightCollapsed=pagesCollapsed&&!connectionsOpen;
-  const collapseRail = (v: boolean) => { setRailCollapsed(v); saveCollapsed("left", v); };
-  const collapsePages = (v: boolean) => { setPagesCollapsed(v); saveCollapsed("right", v); };
-
-  // The pages panel is DRAGGABLE — a document panel whose width is the reader's call.
-  const [pagesW, setPagesW] = useState<number>(() => {
-    const n = Number(localStorage.getItem("vexa.minutes.pagesW"));
-    const cap = maxPagesW(window.innerWidth);
-    // CLAMP a stored width, never discard it: a width chosen on a wide monitor should come back as
-    // the widest this window allows, not silently reset to the default the next time you open a laptop.
-    return Number.isFinite(n) && n >= T.pagesMin ? Math.min(n, cap) : Math.min(T.pagesDefault, cap);
-  });
-  const dragging = useRef(false);
-  useEffect(() => {
-    const move = (e: MouseEvent) => {
-      if (!dragging.current) return;
-      e.preventDefault();
-      const cap = maxPagesW(window.innerWidth);
-      setPagesW(Math.min(cap, Math.max(T.pagesMin, window.innerWidth - e.clientX)));
-    };
-    const up = () => {
-      if (!dragging.current) return;
-      dragging.current = false;
-      document.body.style.cursor = ""; document.body.style.userSelect = "";
-      setPagesW((w) => { try { localStorage.setItem("vexa.minutes.pagesW", String(w)); } catch { /* ignore */ } return w; });
-    };
-    window.addEventListener("mousemove", move);
-    window.addEventListener("mouseup", up);
-    return () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
-  }, []);
-  useEffect(() => {
-    const onResize = () => setPagesW((w) => Math.min(maxPagesW(window.innerWidth), Math.max(T.pagesMin, w)));
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, []);
-  const startDrag = () => { dragging.current = true; document.body.style.cursor = "col-resize"; document.body.style.userSelect = "none"; };
-  const nudge = (d: number) => setPagesW((w) => {
-    const n = Math.min(maxPagesW(window.innerWidth), Math.max(T.pagesMin, w + d));
-    try { localStorage.setItem("vexa.minutes.pagesW", String(n)); } catch { /* ignore */ }
-    return n;
-  });
+  // `openPage` is a stable callback; it reaches the CURRENT layout controls through this ref.
+  // Is the pages panel on screen — docked, or an open sheet? (The surface record reports it.)
+  const pagesVisible = L.pagesKind === "docked" || shell.sheetOpen;
+  const revealPages = useRef(shell.revealPages);
+  revealPages.current = shell.revealPages;
 
   const mountSet = useCallback(async (wanted: string[]) => {
     // Mount every shared workspace in the chat's set; park the rest. personal/_global/_system
@@ -823,15 +793,17 @@ export function MinutesShell() {
    *  about the agent's own writes here, and it is the same rule. */
   const readerChoseFocus = useRef(false);
 
-  const openPage = useCallback((pg: Page) => {
+  const openPage = useCallback((pg: Page, byReader = false) => {
     const e: Artifact = { kind: pg.kind, path: pg.path, slug: pg.slug, label: pg.label };
     // What this person actually opens is the desk README's ordering signal — and the only place
     // that knows it is here. Fire-and-forget; a usage signal is never worth a millisecond of the
     // document they asked for. (The seam worker's panel-view-slot lands the same one line.)
     if (pg.kind !== "meeting") reportOpened(pg.slug, pg.path);
-    // A folded-away panel is the other way a link click "does nothing": the tab opens into a 22px
-    // column nobody can see. Asking for a document unfolds the column it lands in.
-    setPagesCollapsed(false); saveCollapsed("right", false);
+    // A folded-away panel is the other way a link click "does nothing": the tab opens into a
+    // column nobody can see. Asking for a document unfolds the column it lands in — and, where the
+    // panel is a sheet, opens the sheet when the READER asked (a link they clicked), never for a
+    // page the agent wrote while they were typing.
+    revealPages.current(byReader);
     // standard history semantics: navigating after going BACK truncates the forward branch, and
     // re-opening the document already in front is not a navigation at all.
     setHist((h) => {
@@ -859,7 +831,7 @@ export function MinutesShell() {
   /** PIN A PAGE. The amendment folded "open in tab" into this: the strip is history, so everything
    *  you open is already in it, and the only extra thing worth asking for is that one STAYS. */
   const openPinned = useCallback((pg: Page) => {
-    openPage(pg);
+    openPage(pg, true);
     setPages((prev) => prev.map((x) => artifactKey(x) === artifactKey(pg) ? { ...x, pinned: true } : x));
   }, [openPage]);
 
@@ -888,7 +860,7 @@ export function MinutesShell() {
     const onView = (e: Event) => {
       const d = (e as CustomEvent<ViewSlot>).detail;
       if (!d?.path) return;
-      openPage({ path: d.path, slug: d.workspace, label: d.label });
+      openPage({ path: d.path, slug: d.workspace, label: d.label }, true);
     };
     window.addEventListener(VIEW_NAVIGATE_EVENT, onView);
     return () => window.removeEventListener(VIEW_NAVIGATE_EVENT, onView);
@@ -1098,7 +1070,7 @@ export function MinutesShell() {
       // NEVER A DEAD CLICK: an unresolved link opens its canonical path anyway, so the panel
       // answers with the empty state instead of the click vanishing (pageForDocRef).
       const pg = pageForDocRef(d, r);
-      if (pg) openPage(pg);
+      if (pg) openPage(pg, true);
     };
     const onMeeting = (e: Event) => {
       const ref = (e as CustomEvent<{ ref?: string }>).detail?.ref;
@@ -1107,7 +1079,7 @@ export function MinutesShell() {
       const m = meetings.find((x) => (x as { native_id?: string }).native_id === native || String(x.id) === ref);
       // same rule: a ref with no row behind it opens the meeting's notes page rather than nothing —
       // and asks the list for the row, so the next render of that ref can do better than the notes.
-      if (m) void openMeeting(m); else { ensureMeetingKnown(native); openPage(pageForMeetingRef(ref)); }
+      if (m) void openMeeting(m); else { ensureMeetingKnown(native); openPage(pageForMeetingRef(ref), true); }
     };
     // A CLICK IS THE READER CHOOSING. Both of these arrive from something the person pressed in
     // the conversation, so from here on an artifact appends behind them rather than in front.
@@ -1243,7 +1215,7 @@ export function MinutesShell() {
       const pg = pageForArtifact(d);
       if (!pg) return;
       readerChoseFocus.current = true;
-      openPage(pg);
+      openPage(pg, true);
     };
     window.addEventListener(OPEN_PAGE_EVENT, onOpen);
     return () => window.removeEventListener(OPEN_PAGE_EVENT, onOpen);
@@ -1361,9 +1333,9 @@ export function MinutesShell() {
         history: ordered.filter((a) => !a.pinned && !a.desk).map((a) => ({ ...ref(a), at: a.at ?? 0 })),
         pins: ordered.filter((a) => a.pinned || a.desk).map(ref),
       },
-      navigator: { open: !pagesCollapsed, workspace: docSlug ?? null },
+      navigator: { open: pagesVisible, workspace: docSlug ?? null },
     });
-  }, [sel.chatId, sel.kind, sel.meetingId, selMeeting, pages, docPath, docSlug, pagesCollapsed]);
+  }, [sel.chatId, sel.kind, sel.meetingId, selMeeting, pages, docPath, docSlug, pagesVisible]);
 
 
   // `?ask=<preset>` — the emailed link. App.tsx stashed the name; resolve it to an ADMIN-AUTHORED
@@ -1531,17 +1503,41 @@ export function MinutesShell() {
     })();
   }, []);
 
+  // THE RAIL, in whichever form fits: docked in the grid, or inside the drawer the strip (or the
+  // header's menu control, in single mode) opens. Selecting a chat from the drawer closes it — the
+  // reader came for the conversation, not the list.
+  const railBody = (inDrawer: boolean) => (
+    <Rail rows={shownRows} hidden={hiddenCount} all={all} onAll={toggleAll}
+      selKey={selKey} onSelect={(r) => { if (inDrawer) shell.closeOverlays(); void openRow(r); }}
+      onNewChat={() => { if (inDrawer) shell.closeOverlays(); startDraft(); }} onDeleteChat={deleteChat} onMove={reorder}
+      onCollapse={() => shell.setRailOpen(false)} collapseLabel={inDrawer ? "Close the chat list" : undefined} />
+  );
+  const pagesOverlay = L.pagesKind === "sheet" || L.pagesKind === "fullscreen";
+  const sheetForm = L.pagesKind === "sheet" ? "overlay" : L.pagesKind === "fullscreen" ? "fullscreen" : "inline";
+
   return (
-    <div style={{ position: "relative", display: "grid", gridTemplateColumns: `${railCollapsed ? EDGE_W : T.railW}px minmax(0, 1fr) ${rightCollapsed ? EDGE_W : pagesW}px`, gridTemplateRows: `${T.headerH}px 1fr`, height: "100%", minHeight: 0, background: surface.rail }}>
-      {railCollapsed
-        ? <EdgeHandle side="left" onClick={() => collapseRail(false)} />
-        : <Rail rows={shownRows} hidden={hiddenCount} all={all} onAll={toggleAll}
-            selKey={selKey} onSelect={(r) => void openRow(r)}
-            onNewChat={startDraft} onDeleteChat={deleteChat} onMove={reorder}
-            onCollapse={() => collapseRail(true)} />}
+    <div ref={shellRef} data-shell-mode={L.mode} data-rail={L.railKind} data-pages={L.pagesKind}
+      style={{ position: "relative", display: "grid", gridTemplateColumns: L.columns, gridTemplateRows: `${T.headerH}px 1fr`, height: "100%", minHeight: 0, minWidth: 0, overflow: "clip", background: surface.rail }}>
+      {L.railKind === "docked" ? railBody(false)
+        : L.railKind === "strip" ? <RailStrip open={shell.drawerOpen} onOpen={() => shell.setRailOpen(true)} onNewChat={startDraft} />
+        : null}
+      {L.railKind !== "docked" && (
+        <Drawer open={shell.drawerOpen} onClose={() => shell.setRailOpen(false)} width={L.widths.drawer} label="Chats">
+          {railBody(true)}
+        </Drawer>
+      )}
+      {L.railKind === "docked" && L.bounds.rail && (
+        <Splitter label="Resize chat list" value={L.widths.rail} bounds={L.bounds.rail} grows="right"
+          onPreview={(w) => shell.previewWidth("rail", w)} onCommit={(w) => shell.commitWidth("rail", w)}
+          style={{ left: L.widths.rail - 4 }} />
+      )}
       {orderError && <div role="alert" style={{position:"absolute",bottom:10,left:10,zIndex:50}}>{orderError}</div>}
-      <div style={{display:connectionsMode==='page'?"none":"contents"}}>
+      <div style={{display:connectionsMode==='page'&&!pagesOverlay?"none":"contents"}}>
       <ContextBar sel={sel} onRename={draft?.id === sel.chatId ? undefined : renameChat} flavor={flavor} memberships={memberships}
+        leading={L.railKind === "drawer"
+          ? <ShellToggle kind="rail" open={shell.drawerOpen} onClick={() => shell.setRailOpen(!shell.drawerOpen)} /> : undefined}
+        trailing={pagesOverlay
+          ? <ShellToggle kind="pages" open={shell.sheetOpen} onClick={() => shell.setPagesOpen(!shell.sheetOpen)} /> : undefined}
         onAddWorkspace={(id) => setWorkspaces((ws) => ws.includes(id) ? ws : [...ws, id])}
         onRemoveWorkspace={(id) => {
           setWorkspaces((ws) => ws.filter((w) => w !== id));
@@ -1565,7 +1561,7 @@ export function MinutesShell() {
           setWorkspaces((ws) => (ws.includes(GLOBAL_MOUNT) ? ws : [...ws, GLOBAL_MOUNT]));
           chooseTarget(GLOBAL_MOUNT, { justMounted: true });
           readerChoseFocus.current = true;
-          openPage({ path: "README.md", slug: GLOBAL_MOUNT, label: COMPANY_WORD } as Page);
+          openPage({ path: "README.md", slug: GLOBAL_MOUNT, label: COMPANY_WORD } as Page, true);
         }}
         onAttachRepo={(id) => setAttachTo({ id })} />
       {/* Wrapped rather than a bare id so "the desk" (id undefined) is still an OPEN dialog — a
@@ -1574,7 +1570,7 @@ export function MinutesShell() {
         <AttachRepo workspaceId={attachTo.id} onClose={() => setAttachTo(null)}
           onAttached={(id) => { if (id) setWorkspaces((ws) => ws.includes(id) ? ws : [...ws, id]); }} />
       )}
-      <main style={{ gridRow: 2, gridColumn: 2, minWidth: 0, minHeight: 0, background: surface.center, display: "flex", flexDirection: "column" }}>
+      <main className="vx-pane" data-pane="conversation" style={{ gridRow: 2, gridColumn: 2, minWidth: 0, minHeight: 0, background: surface.center, display: "flex", flexDirection: "column" }}>
         {/* A SCAFFOLD THAT WOULD NOT OPEN STATES ITSELF. Someone who clicked a real link and landed
             on an empty conversation cannot tell a spent invitation from a broken product — and the
             second reading is the one they take. So: whose it is, and what to do about it. It sits
@@ -1590,29 +1586,33 @@ export function MinutesShell() {
         </div>
       </main>
       </div>
-      {/* the pages panel's resize handle — a real separator: 11px hit area, a hairline that
-          lights up on hover/focus, and arrow keys for anyone not dragging. A collapsed panel has no
-          width to drag, so the separator goes with it. */}
-      {!rightCollapsed && connectionsMode!=='page' && <div role="separator" aria-orientation="vertical" aria-label="Resize pages panel" tabIndex={0}
-        onMouseDown={startDrag}
-        onKeyDown={(e) => { if (e.key === "ArrowLeft") { e.preventDefault(); nudge(24); } if (e.key === "ArrowRight") { e.preventDefault(); nudge(-24); } }}
-        onMouseEnter={(e) => { (e.currentTarget.firstElementChild as HTMLElement).style.background = "var(--accent)"; }}
-        onMouseLeave={(e) => { if (!dragging.current) (e.currentTarget.firstElementChild as HTMLElement).style.background = "transparent"; }}
-        onFocus={(e) => { (e.currentTarget.firstElementChild as HTMLElement).style.background = "var(--accent)"; }}
-        onBlur={(e) => { (e.currentTarget.firstElementChild as HTMLElement).style.background = "transparent"; }}
-        style={{ position: "absolute", top: 0, bottom: 0, right: pagesW - 5, width: 11, cursor: "col-resize", zIndex: 5, display: "flex", justifyContent: "center", outline: "none" }}>
-        <span style={{ width: 1, alignSelf: "stretch", background: "transparent", transition: "background .12s" }} />
-      </div>}
-      <ConnectionsPanel onModeChange={setConnectionsMode} />
+      {/* the pages panel's resize handle — a docked panel only: a folded or overlaid one has no
+          edge to drag. */}
+      {L.pagesKind === "docked" && L.bounds.pages && !connectionsOpen && (
+        <Splitter label="Resize pages panel" value={L.widths.pages} bounds={L.bounds.pages} grows="left"
+          onPreview={(w) => shell.previewWidth("pages", w)} onCommit={(w) => shell.commitWidth("pages", w)}
+          style={{ right: L.widths.pages - 4 }} />
+      )}
+      {/* CONNECTIONS take the pages panel's place: docked in its column, or — where the panel is a
+          sheet — as a sheet of their own. One element either way, so it never remounts. */}
+      <Sheet form={connectionsOpen && pagesOverlay ? (connectionsMode === "page" ? "fullscreen" : sheetForm) : "inline"}
+        open={connectionsOpen} onClose={() => window.dispatchEvent(new Event(CONNECTIONS_CLOSE))}
+        width={L.widths.sheet} label="Connections" dataPane="connections">
+        <ConnectionsPanel onModeChange={setConnectionsMode} />
+      </Sheet>
       <div style={{display:connectionsOpen?"none":"contents"}} aria-hidden={connectionsOpen||undefined}>
-      {pagesCollapsed
-        ? <EdgeHandle side="right" onClick={() => collapsePages(false)} />
-        : <PagesPanel pages={pages} docPath={docPath} docSlug={docSlug} docKind={docKind}
-            onTogglePin={togglePin} onOpen={(pg) => { readerChoseFocus.current = true; openPage(pg); }} onClose={closeTab}
-            listing={listing} onNavigate={(slug, prefix) => void navigate(slug, prefix)}
-            canBack={canBack} canForward={canForward} onBack={goBack} onForward={goForward}
-            body={docBody} notice={notice} onSaved={() => setDocNonce((n) => n + 1)}
-            onCollapse={() => collapsePages(true)} />}
+      {L.pagesKind === "collapsed"
+        ? <EdgeHandle side="right" onClick={() => shell.setPagesOpen(true)} />
+        : <Sheet form={sheetForm} open={shell.sheetOpen} onClose={() => shell.setPagesOpen(false)}
+            width={L.widths.sheet} label="Pages" dataPane="pages">
+            <PagesPanel pages={pages} docPath={docPath} docSlug={docSlug} docKind={docKind}
+              onTogglePin={togglePin} onOpen={(pg) => { readerChoseFocus.current = true; openPage(pg, true); }} onClose={closeTab}
+              listing={listing} onNavigate={(slug, prefix) => void navigate(slug, prefix)}
+              canBack={canBack} canForward={canForward} onBack={goBack} onForward={goForward}
+              body={docBody} notice={notice} onSaved={() => setDocNonce((n) => n + 1)}
+              onCollapse={() => shell.setPagesOpen(false)}
+              collapseLabel={pagesOverlay ? "Back to the conversation" : undefined} />
+          </Sheet>}
       </div>
     </div>
   );

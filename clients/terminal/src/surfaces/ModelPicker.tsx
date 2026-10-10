@@ -22,7 +22,8 @@
  *  set, an effort the model does not offer) is shown as the server's own sentence; the stored pick
  *  is left as it was. */
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
-import { Icon } from "../ui-kit";
+import { Fold, Icon } from "../ui-kit";
+import { Gauge } from "lucide-react";
 import { presentError } from "./apiClient";
 import { effectiveModel, effortsOf, getModelCatalog, setChatModel, setDefaultModel, type Effort, type ModelEntry, type ModelList } from "./modelsApi";
 
@@ -207,7 +208,7 @@ export function ModelPicker({ session }: { session: string }) {
   const name = stale ? "Model unavailable" : current ? splitDisplayName(current.display_name).short : "Model";
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 2, minWidth: 0, flex: "0 1 auto", position: "relative" }}>
-      <div data-model-picker style={{ minWidth: 0, display: "flex" }}>
+      <div data-model-picker style={{ minWidth: 56, display: "flex" }}>
         <TextMenu open={open} setOpen={(v) => { setOpen(v); if (v) setEffortOpen(false); }} buttonLabel="Model for this chat"
           title={stale ? "This chat's model is no longer offered — pick another" : `This chat runs on ${current?.display_name ?? "the default model"}`}
           danger={stale} data={{}} label={name} width={280}>
@@ -248,7 +249,10 @@ export function ModelPicker({ session }: { session: string }) {
       {efforts.length > 0 && (
         <TextMenu open={effortOpen} setOpen={(v) => { setEffortOpen(v); if (v) setOpen(false); }} buttonLabel="Effort for this chat"
           title={`Reasoning effort for ${name}`} data={{ "data-effort-picker": "", "data-effort": effortValue }}
-          label={effortValue ? EFFORT_LABEL[effortValue] : "Default effort"} width={190}>
+          // Below 560px of composer the effort is an icon (its name stays the button's title and
+          // accessible name), so the model's name keeps the room (guidelines §3.3).
+          label={<Fold at={560} wide={effortValue ? EFFORT_LABEL[effortValue] : "Default effort"}
+            narrow={<Gauge size={14} strokeWidth={1.75} aria-hidden />} />} width={190}>
           {!effortDefault && (
             <button type="button" role="menuitemradio" aria-checked={effortValue === ""} data-effort-level=""
               onClick={() => { setEffortOpen(false); void pickEffort(""); }} style={item}>

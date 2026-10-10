@@ -29,6 +29,9 @@ export function Analytics() {
   }, [pathname]);
 
   if (!GA_ID) return null;
+  // The design catalogue is excluded from analytics (it is a fixture page for builders, not a
+  // product surface; terminal design guidelines §9).
+  if (pathname?.startsWith("/design")) return null;
   return (
     <>
       <Script src={`https://www.googletagmanager.com/gtag/js?id=${GA_ID}`} strategy="afterInteractive" />

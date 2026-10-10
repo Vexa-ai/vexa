@@ -1,6 +1,6 @@
 "use client";
 import { parseDocument } from "yaml";
-import type { ReactNode } from "react";
+import { KeyValue, isEmptyValue, kvValue } from "./primitives/KeyValue";
 
 /** Parse entity properties independently of policy documents' scalar attribute contract. */
 export function entityProperties(source: string): Record<string, unknown> | null {
@@ -15,26 +15,16 @@ export function entityProperties(source: string): Record<string, unknown> | null
   } catch { return null; }
 }
 
-function valueView(value: unknown): ReactNode {
-  if (Array.isArray(value)) return <span style={{ display: "inline-flex", flexWrap: "wrap", gap: "3px 10px" }}>
-    {value.map((v, i) => <span key={i}>{valueView(v)}</span>)}
-  </span>;
-  if (value && typeof value === "object") return <span style={{ whiteSpace: "pre-wrap" }}>{JSON.stringify(value, null, 2)}</span>;
-  const text = String(value ?? "");
-  if (/^https?:\/\/[^\s]+$/i.test(text)) return <a href={text} target="_blank" rel="noopener noreferrer" style={{ color: "var(--blue)", overflowWrap: "anywhere" }}>{text}</a>;
-  return text;
-}
-
+/** A page's properties, as the shared metadata table (guidelines §4.16). The table owns the
+ *  layout — stacked below 360px of pane width, two columns above — and renders each value by its
+ *  type, so nothing here breaks a word: this file used to set overflow-wrap to "anywhere" on both
+ *  columns, which split a domain as "car eers" and a date as "2026-10- 09" in a 240px panel. */
 export function EntityProperties({ source }: { source: string }) {
   const properties = entityProperties(source);
   if (!properties) return null;
-  const rows = Object.entries(properties).filter(([, v]) => v !== null && v !== "" && v !== undefined);
+  const items = Object.entries(properties).filter(([, v]) => !isEmptyValue(v))
+    .map(([key, value]) => ({ key, value: kvValue(value) }));
   return <section aria-label="Entity properties" data-entity-properties style={{ marginBottom: 20, paddingBottom: 14, borderBottom: "1px solid var(--line)" }}>
-    <dl style={{ margin: 0, display: "grid", gridTemplateColumns: "minmax(80px, 120px) minmax(0, 1fr)", gap: "5px 14px", fontSize: 12, lineHeight: 1.5 }}>
-      {rows.map(([key, value]) => <div key={key} style={{ display: "contents" }}>
-        <dt style={{ color: "var(--t3)", overflowWrap: "anywhere" }}>{key.replaceAll("_", " ")}</dt>
-        <dd style={{ margin: 0, color: "var(--t2)", overflowWrap: "anywhere" }}>{valueView(value)}</dd>
-      </div>)}
-    </dl>
+    <KeyValue items={items} />
   </section>;
 }

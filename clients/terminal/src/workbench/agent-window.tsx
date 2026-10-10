@@ -79,14 +79,14 @@ function OpRow({ op }: { op: Op }) {
   const running = op.status === "running";
   const color = op.status === "error" ? "var(--danger)" : op.status === "done" ? "var(--green)" : "var(--accent)";
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8, fontFamily: "var(--mono)", fontSize: 11.5, lineHeight: 1.5, color: running ? "var(--t1)" : "var(--t2)" }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, flex: "0 1 auto", fontFamily: "var(--mono)", fontSize: 11.5, lineHeight: 1.5, color: running ? "var(--t1)" : "var(--t2)" }}>
       <span style={{ width: 13, flex: "none", display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
         {op.status === "done" ? <Icon name="check" size={13} style={{ color }} />
           : op.status === "error" ? <Icon name="x" size={13} style={{ color }} />
           : <span className="vx-op-spin" style={{ width: 11, height: 11, borderRadius: "50%", border: "1.5px solid var(--line2)", borderTopColor: color, flex: "none" }} />}
       </span>
       <Icon name={op.icon} size={12} style={{ color: "var(--t3)", flex: "none" }} />
-      <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{op.label}</span>
+      <span style={{ minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{op.label}</span>
     </div>
   );
 }
@@ -185,7 +185,8 @@ export function Conversation({ turns, busy, empty, onContinue }: {
             {t.ops.length > 0 && (
               // ONE line, updated in place: the CURRENT (last) op + a step count — a long tool run
               // must not grow the transcript vertically (founder ruling 2026-08-22).
-              <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "0 0 10px 5px" }}>
+              // A long step label ellipsizes; it never widens the conversation (guidelines §3.4).
+              <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, margin: "0 0 10px 5px" }}>
                 <OpRow op={t.ops[t.ops.length - 1]} />
                 {/* F66: the count ticks from the FIRST step. It used to appear only at two, so the
                     one number that proves a long turn is moving was hidden exactly when the reader

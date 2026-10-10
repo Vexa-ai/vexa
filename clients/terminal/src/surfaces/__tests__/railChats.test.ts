@@ -17,7 +17,7 @@ import {
   visibleRows, whenShort, forgetHistory, touchHistory, withHome, stripForRecord, PREVIEW_CAP,
   type Chat, type LegacyProject,
 } from "../../minutes/chats";
-import { T, maxPagesW } from "../../minutes/tokens";
+import { shellLayout } from "../../ui-kit";
 
 const T0 = Date.UTC(2026, 8, 1, 12, 0, 0);          // a fixed "now" — nothing here reads the clock
 const at = (mins: number) => new Date(T0 + mins * 60000).toISOString();
@@ -171,27 +171,22 @@ describe("visibleRows — one chip: touched + live/upcoming, or everything", () 
   });
 });
 
-describe("maxPagesW — the pages panel's range, one place both bounds meet", () => {
-  it("wants 60% of the viewport", () => {
-    expect(maxPagesW(2560)).toBe(1536);
+describe("the pages panel's range — now shellLayout's, one place every bound meets", () => {
+  const max = (vw: number) => shellLayout(vw).bounds.pages?.max;
+  it("wants 60% of a wide viewport", () => {
+    expect(max(2560)).toBe(1536);
   });
 
-  it("but never squeezes the conversation below its floor — the cap binds on a SMALL window", () => {
-    // F61 narrowed the rail 397 → 240, which gave 157px back: at 1440 the 60% want now FITS, where
-    // it used to be clipped by the conversation floor. That is the founder's change paying off, so
-    // the invariant is asserted where it still bites rather than deleted.
-    expect(maxPagesW(1440)).toBe(Math.round(1440 * 0.6));
-    expect(maxPagesW(1280)).toBe(1280 - T.railW - T.chatMin);
-    expect(maxPagesW(1280)).toBeLessThan(1280 * 0.6);
+  it("but never squeezes the conversation below its floor — the cap binds on a smaller window", () => {
+    // At 1440 the 60% want (864) is clipped by the wide-mode conversation floor (560).
+    expect(max(1440)).toBe(1440 - 240 - 560);
+    expect(max(1280)).toBe(1280 - 240 - 480);
+    expect(max(1280)!).toBeLessThan(1280 * 0.6);
   });
 
-  it("never returns less than the minimum, however small the window", () => {
-    expect(maxPagesW(600)).toBe(T.pagesMin);
-    expect(maxPagesW(320)).toBe(T.pagesMin);
-  });
-
-  it("respects the absolute ceiling on a very wide screen", () => {
-    expect(maxPagesW(6000)).toBe(T.pagesMax);
+  it("below the docking widths there is no range at all — the panel is a sheet", () => {
+    expect(max(820)).toBeUndefined();
+    expect(shellLayout(820).pagesKind).toBe("sheet");
   });
 });
 

@@ -16,6 +16,7 @@ import { useChatActive } from "../surfaces/chatActivity";
 import type { Row } from "./chats";
 import { AccountBadge } from "./AccountBadge";
 import { CollapseButton } from "./Collapse";
+import { PanelLeft, Plus } from "lucide-react";
 import { T, row, surface, type as ty } from "./tokens";
 import { WorkspaceName } from "../ui-kit/WsLink";
 
@@ -63,6 +64,8 @@ export function Rail(p: {
   selKey: string | null; onSelect: (r: Row) => void;
   onNewChat: () => void; onDeleteChat: (chatId: string) => void;
   onCollapse?: () => void;
+  /** The fold control's name when folding really means closing the drawer. */
+  collapseLabel?: string;
   onMove?: (from: string, to: string) => void;
 }) {
   const [deleting, setDeleting] = useState<Row | null>(null);
@@ -115,14 +118,14 @@ export function Rail(p: {
               if (armed) { setDeleting(null); p.onDeleteChat(r.chatId as string); }
               else setDeleting(r);
             }}
-            style={{ position: "absolute", right: 3, top: "50%", transform: "translateY(-50%)", opacity: armed ? 1 : 0, transition: "opacity .12s", background: "transparent", border: "none", color: armed ? "var(--red, #e57373)" : "var(--t3)", cursor: "pointer", fontSize: 13, lineHeight: 1, padding: "2px 4px", fontFamily: "var(--sans)" }}>{armed ? "✓" : "×"}</button>
+            style={{ position: "absolute", right: 3, top: "50%", transform: "translateY(-50%)", opacity: armed ? 1 : 0, transition: "opacity .12s", background: "transparent", border: "none", color: armed ? "var(--danger)" : "var(--t3)", cursor: "pointer", fontSize: 13, lineHeight: 1, padding: "2px 4px", fontFamily: "var(--sans)" }}>{armed ? "✓" : "×"}</button>
         )}
       </div>
     );
   };
 
   return (
-    <nav style={{ gridRow: "1 / 3", gridColumn: 1, borderRight: "1px solid var(--line)", background: surface.rail, display: "flex", flexDirection: "column", minHeight: 0 }} aria-label="Chats">
+    <nav className="vx-pane" data-pane="rail" style={{ gridRow: "1 / 3", gridColumn: 1, borderRight: "1px solid var(--line)", background: surface.rail, display: "flex", flexDirection: "column", minHeight: 0 }} aria-label="Chats">
       <div style={{ height: T.headerH, flex: "none", display: "flex", alignItems: "center", gap: 8, padding: "0 10px", borderBottom: "1px solid var(--line)" }}>
         <span style={{ ...ty.title, flex: 1, minWidth: 0 }}>Chats</span>
         <button aria-pressed={p.all} style={chipS(p.all)} onClick={() => p.onAll(!p.all)}
@@ -131,7 +134,7 @@ export function Rail(p: {
         </button>
         <button title="New chat" aria-label="New chat" onClick={p.onNewChat}
           style={{ ...row.ghostPlus, marginLeft: 0, fontSize: 17, color: "var(--t2)" }}>+</button>
-        {p.onCollapse && <CollapseButton side="left" onClick={p.onCollapse} />}
+        {p.onCollapse && <CollapseButton side="left" onClick={p.onCollapse} label={p.collapseLabel} />}
       </div>
 
       <div style={{ flex: 1, overflowY: "auto", padding: "10px", display: "flex", flexDirection: "column", gap: 2 }}>
@@ -143,6 +146,26 @@ export function Rail(p: {
           WHO is here, not of which chat is in front, so they sit at the foot of the column and
           fold away with it. */}
       <AccountBadge />
+    </nav>
+  );
+}
+
+/** THE RAIL, FOLDED (guidelines §3.1): a 48px icon strip — open the chat list, start a chat. Where
+ *  the rail cannot dock (compact and narrow windows) the first opens it as a drawer over the
+ *  conversation; where it can, it docks it again. Either way the reader's own choice is untouched. */
+export function RailStrip({ open, onOpen, onNewChat }: { open: boolean; onOpen: () => void; onNewChat: () => void }) {
+  const btn: CSSProperties = {
+    width: 32, height: 32, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 6,
+    border: "none", background: "transparent", color: "var(--t2)", cursor: "pointer", padding: 0, flex: "none",
+  };
+  return (
+    <nav className="vx-rail-strip" data-pane="rail-strip" aria-label="Chats">
+      <button style={btn} aria-label="Show the chat list" title="Show the chat list" aria-expanded={open} data-expand="left" onClick={onOpen}>
+        <PanelLeft size={16} strokeWidth={1.75} aria-hidden />
+      </button>
+      <button style={btn} aria-label="New chat" title="New chat" onClick={onNewChat}>
+        <Plus size={16} strokeWidth={1.75} aria-hidden />
+      </button>
     </nav>
   );
 }
