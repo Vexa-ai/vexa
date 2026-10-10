@@ -39,6 +39,7 @@
         "transcriptionServiceUrl": { "type": "string", "description": "stt endpoint" },
         "transcriptionServiceToken": { "type": "string", "description": "SECRET; placeholder in goldens" },
         "transcriptionModel": { "type": ["string", "null"], "description": "stt model id sent as the OpenAI-compatible `model` form part; unset → whisper-1" },
+        "transcriptionServiceOwner": { "enum": ["vexa", "customer"], "description": "who operates transcriptionServiceUrl. `customer` (the person's own Settings endpoint) holds every bot request to it to the outbound URL guard: refused when it names or resolves to an internal or private address, and dialled at the checked address. Absent or `vexa`: the deployment's own endpoint, which may be private. Sent by a meeting-api from v0.13.2, and only as `customer`; a bot older than v0.13.2 refuses an invocation that carries it" },
         "recordingEnabled": { "type": "boolean" },
         "captureSignalEnabled": { "type": "boolean", "description": "tee the raw captured-signal.v1 stream (audio frames + speaker events) to durable storage for offline replay (O-TEL-1); the transcript/recording paths are unaffected either way" },
         "captureModes": { "type": "array", "items": { "type": "string" } },

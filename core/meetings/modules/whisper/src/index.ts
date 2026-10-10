@@ -16,4 +16,5 @@ export type {
   TranscriptionFaultKind,
 } from './transcription-client.js';
 export { isLowConfidenceSegment } from './confidence.js';
+export { SsrfError, isBlockedIp, isBlockedHostname, validateUrl, guardedLookup } from './url-guard.js';
 export { setLogger } from './log.js';

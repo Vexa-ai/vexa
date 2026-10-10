@@ -77,6 +77,7 @@ export interface Invocation {
   transcriptionServiceUrl?: string;
   transcriptionServiceToken?: string;
   transcriptionModel?: string | null;
+  transcriptionServiceOwner?: 'vexa' | 'customer';
   // ── recording ──
   recordingEnabled?: boolean;
   captureSignalEnabled?: boolean;

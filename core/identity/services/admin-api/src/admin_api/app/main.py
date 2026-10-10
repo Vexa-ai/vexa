@@ -982,7 +982,18 @@ def create_app() -> FastAPI:
     async def set_user_transcription(update: TranscriptionPrefsUpdate,
                                      user: User = Depends(get_current_user_for_update),
                                      db: AsyncSession = Depends(get_db)):
-        """Set the caller's transcription backend override. ``token`` is a SECRET — masked on read."""
+        """Set the caller's transcription backend override. ``token`` is a SECRET — masked on read.
+
+        A person's own endpoint is a destination this deployment's bots send meeting audio to, so it
+        is held to the outbound URL guard: an internal or private address is refused here (422) and
+        by the bot at every request. The deployment's own STT (env or platform setting) is not."""
+        url = (update.url or "").strip()
+        if url:
+            from .ssrf import SSRFError, validate_url
+            try:
+                validate_url(url, what="url", resolve=False)
+            except SSRFError as exc:
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
         await _put_user_prefs(update.model_dump(exclude_unset=True), "transcription_prefs", user, db)
         return await get_user_transcription(user)
 

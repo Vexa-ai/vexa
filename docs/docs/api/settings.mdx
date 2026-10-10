@@ -154,7 +154,11 @@ curl -X PUT "$API_BASE/user/transcription" \
 ```
 
 <ParamField body="url" type="string">
-  Transcription endpoint. Must be an `http` or `https` URL with a hostname.
+  Transcription endpoint. Must be an `http` or `https` URL with a hostname, on a public address:
+  your bots send meeting audio to it, so a loopback, private, link-local or metadata address, or a
+  host name only this deployment resolves, is refused with `422` — and a bot refuses it too, at
+  every request. A deployment's own transcription service (its environment or platform setting)
+  may be private.
 </ParamField>
 <ParamField body="token" type="string">
   Credential for that endpoint. Masked on every read-back, exactly like the model credential.

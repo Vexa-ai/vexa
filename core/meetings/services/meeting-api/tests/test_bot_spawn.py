@@ -118,6 +118,12 @@ def test_invocation_carries_stt_model_when_provided():
     conforms_invocation(inv)
     assert inv["transcriptionModel"] == "whisper-large-v3-turbo"
     assert "transcriptionModel" not in build_invocation(**base)
+    # the endpoint's owner is stated only when it is the customer's
+    owned = build_invocation(**base, transcription_service_owner="customer")
+    conforms_invocation(owned)
+    assert owned["transcriptionServiceOwner"] == "customer"
+    for owner in (None, "vexa"):
+        assert "transcriptionServiceOwner" not in build_invocation(**base, transcription_service_owner=owner)
 
 
 def test_workload_spec_conforms_to_runtime_v1():
@@ -525,6 +531,7 @@ async def test_request_bot_configured_transcription_backend_overrides_env(monkey
     assert inv["transcriptionServiceUrl"] == "https://stt-mine.example.com"
     assert "transcriptionServiceToken" not in inv  # env token does NOT leak to the custom backend
     assert "transcriptionModel" not in inv  # env model names the ENV backend's model — same rule
+    assert inv["transcriptionServiceOwner"] == "customer"  # the bot holds it to the outbound guard
     row = next(iter(repo._meetings.values()))
     assert row["data"]["transcription_provider"] == "customer"
 
@@ -544,6 +551,7 @@ async def test_request_bot_env_transcription_stays_without_settings(monkeypatch)
     inv = json.loads(runtime.specs[0]["env"]["BOT_CONFIG"])
     assert inv["transcriptionServiceUrl"] == "https://stt-env.vexa.ai"
     assert inv["transcriptionServiceToken"] == "tok-env"
+    assert "transcriptionServiceOwner" not in inv  # the deployment's own endpoint: not held to the guard
     row = next(iter(repo._meetings.values()))
     assert row["data"]["transcription_provider"] == "vexa"
 
