@@ -15,7 +15,7 @@ through `path_segment` — the one place that decides what it becomes — before
 
 This is the MCP's half, on the hop that reaches the gateway. The gateway decodes the value and holds
 it to the forwarded-row rule on every meetings row and every forwarded domain's row
-(`gateway/paths.py` `forwarded_param`): a `.`/`..` value, or an encoded `/` or `\`, is refused there
+(`gateway/paths.py` `forwarded_param`): a `.`/`..` value, or an encoded slash or backslash, is refused there
 with a 400, and any other value is re-encoded into the one segment it arrived in on the gateway's own
 hop. A `platform` outside the meeting platforms is refused at both doors.
 """
