@@ -17,13 +17,14 @@ from __future__ import annotations
 
 import logging
 import os
-import shutil
 import stat
 import tempfile
 from pathlib import Path
 from typing import Optional
 
 import yaml
+
+from llm import workspace_paths as wpaths
 
 _log = logging.getLogger("llm.claude_skills")
 
@@ -285,7 +286,7 @@ def _stage_workspace_skill(skills_fd: int, name: str, dst: Path, taken: set,
             _write_new(dst / "SKILL.md", text.encode("utf-8"), 0o644)
             _copy_entries(src, dst, budget, name, 0)
         except BaseException:
-            shutil.rmtree(dst, ignore_errors=True)
+            wpaths.remove_tree(dst, ignore_errors=True)
             raise
         staged = True
     finally:
@@ -339,7 +340,7 @@ def _assemble_skills(stage: Path, work: Path) -> None:
                 _log.warning("workspace skill %r not staged: %s", name, exc)
             except Exception:  # noqa: BLE001 — one unreadable skill, not all of them
                 _log.warning("workspace skill %r not staged", name, exc_info=True)
-                shutil.rmtree(stage / name, ignore_errors=True)
+                wpaths.remove_tree(stage / name, ignore_errors=True)
     finally:
         os.close(own)
 
@@ -381,6 +382,6 @@ def _link_skills_into_home(work: Path) -> None:
         link.symlink_to(stage, target_is_directory=True)
         for old in stages.iterdir():
             if old != stage and old.name.startswith("turn-") and not old.is_symlink():
-                shutil.rmtree(old, ignore_errors=True)
+                wpaths.remove_tree(old, ignore_errors=True)
     except Exception:  # noqa: BLE001 — best-effort: the turn runs, without skills
         pass

@@ -1369,8 +1369,8 @@ def _ensure_repo(work: Path) -> None:
     if problems:
         log.warning("workspace seed %s unavailable (%s) — bootstrapping a bare workspace",
                     seed_dir, "; ".join(problems))
-        work.mkdir(parents=True, exist_ok=True)
-        (work / "CLAUDE.md").write_text(_FALLBACK_MEMORY_MD)
+        from workspaces.shared import workspace_paths as wpaths
+        wpaths.write_text_inside(work, "CLAUDE.md", _FALLBACK_MEMORY_MD)   # nofollow, creates `work`
         seed_workspace(work, None)             # git init + commit over the fallback root
     else:
         seed_workspace(work, seed_dir)         # copy the validated template → git init → commit
@@ -1803,9 +1803,15 @@ def _mcp_endpoint(mcp_config: str) -> "tuple[str, dict] | None":
     ``VEXA_MCP_URL`` that could in principle disagree with it (or be unset, on a caller that built
     the file some other way — the delegation seam is not the only writer of this shape, `shared.
     tools.ToolGrant` is another)."""
+    # NOFOLLOW (`<base>/.claude/mcp.json`): the attachment sits in a tree the model's tools can
+    # write; a link swapped in at it must not make this preflight call a URL with headers from
+    # somebody else's file.
+    from workspaces.shared import workspace_paths as wpaths
+    p = Path(mcp_config)
+    raw = wpaths.read_text_inside(p.parent.parent, f"{p.parent.name}/{p.name}")
     try:
-        cfg = json.loads(Path(mcp_config).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        cfg = json.loads(raw) if raw is not None else None
+    except ValueError:
         return None
     servers = cfg.get("mcpServers") if isinstance(cfg, dict) else None
     if not isinstance(servers, dict) or not servers:
@@ -2111,7 +2117,8 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
           harness: HarnessPort | None = None, writeback: TurnFn | None = None,
           tools: "list[str] | None" = None, job: TurnFn | None = None,
           jobs_dir: "Path | None" = None, jobs_session: str = "",
-          inbox_cursor: "str | None" = None, in_key: "str | None" = None) -> None:
+          inbox_cursor: "str | None" = None, in_key: "str | None" = None,
+          jobs_root: "Path | None" = None) -> None:
     """Run the entrypoint turn (if any), then serve interactive messages on ``in_topic`` until idle.
 
     Only stream entries signed with this unit's input key run (``shared/unit_input.py``; ``in_key``,
@@ -2194,7 +2201,7 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
     # which is every test and every deployment that has not wired one.
     _jobs = None if job is None else worker_jobs.JobRunner(
         emit=lambda ev: stream.xadd(out_topic, {"event": json.dumps(ev)}),
-        turn=job, register_dir=jobs_dir, session=jobs_session)
+        turn=job, register_dir=jobs_dir, session=jobs_session, register_root=jobs_root)
 
     def _spawn_from_tool(kind: str, target: str, brief: str) -> "tuple[bool, str]":
         """`spawn_job`'s answer to the model — and since Vexa-ai/vexa#1610 it is always an ACCEPTED
@@ -2703,6 +2710,7 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
         # workspace commit — and is therefore SHARED by every chat this person has, which is why
         # each record and each event carries the session that owns it.
         jobs_dir=_continuity_root(work) / ".claude" / "jobs",
+        jobs_root=_continuity_root(work),     # the register is read and written nofollow under it
         jobs_session=session,
         # WHERE THIS WORKER SAYS HOW FAR IT HAS READ (Vexa-ai/vexa#1610). Derived from the in-topic
         # rather than handed in as a second environment variable: both sides can already compute it,

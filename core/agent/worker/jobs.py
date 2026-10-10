@@ -34,6 +34,8 @@ import uuid
 from pathlib import Path
 from typing import Callable, Iterator, NamedTuple, Optional
 
+from workspaces.shared import workspace_paths as wpaths
+
 log = logging.getLogger("agent_api.worker")
 
 #: How the lines read. A job's whole visible surface is three sentences, so they are written here
@@ -137,10 +139,24 @@ class JobRunner:
     """
 
     def __init__(self, *, emit: Callable[[dict], None], turn: Callable[[str], Iterator[dict]],
-                 register_dir: Optional[Path] = None, session: str = "") -> None:
+                 register_dir: Optional[Path] = None, session: str = "",
+                 register_root: Optional[Path] = None) -> None:
         self._emit = emit
         self._turn = turn
         self._dir = Path(register_dir) if register_dir else None
+        # THE REGISTER LIVES IN A WORK TREE THE MODEL'S TOOLS CAN WRITE (`<_system>/.claude/jobs`),
+        # so every read, write and delete of it goes through `workspace_paths` relative to the trusted
+        # root it sits under, never through a link planted at `.claude`, `jobs` or a record.
+        # `register_root` names that root; without one the register's own parent is taken.
+        self._root: Optional[Path] = None
+        self._rel = ""
+        if self._dir is not None:
+            root = Path(register_root) if register_root else self._dir.parent
+            try:
+                self._rel = self._dir.relative_to(root).as_posix()
+                self._root = root
+            except ValueError:
+                self._root, self._rel = self._dir.parent, self._dir.name
         self._session = str(session or "")
         self._lock = threading.Lock()
         self._running: dict[str, _Job] = {}          # target → the job in flight
@@ -265,22 +281,24 @@ class JobRunner:
         a name, is from an older build: it is cleaned up in silence, because there is nothing
         truthful to say about whose chat it belonged to."""
         out: list[dict] = []
-        if self._dir is None or not self._dir.exists():
+        if self._root is None:
             return out
-        for path in sorted(self._dir.glob("*.json")):
+        for name in wpaths.list_files_inside(self._root, self._rel, suffix=".json"):
             try:
-                rec = json.loads(path.read_text())
-            except (OSError, ValueError):
+                rec = json.loads(wpaths.read_text_inside(self._root, f"{self._rel}/{name}") or "")
+            except ValueError:
+                rec = {}
+            if not isinstance(rec, dict):
                 rec = {}
             owner = str(rec.get("session") or "")
             if self._session and owner != self._session:
                 if owner:
                     continue                   # another chat's job — not ours to report or remove
-                self._drop(path)               # pre-owner record: cleaned up, never announced
+                self._drop(name)               # pre-owner record: cleaned up, never announced
                 continue
-            self._drop(path)
+            self._drop(name)
             kind, target = str(rec.get("kind") or ""), str(rec.get("target") or "")
-            ev = self._own({"type": "job-failed", "job_id": str(rec.get("job_id") or path.stem),
+            ev = self._own({"type": "job-failed", "job_id": str(rec.get("job_id") or name[:-5]),
                             "kind": kind, "target": target, "line": restarted_line(kind, target)})
             self._emit(ev)
             out.append(ev)
@@ -327,26 +345,19 @@ class JobRunner:
 
     # -- the on-disk register ----------------------------------------------------------------
     def _note(self, job_id: str, kind: str, target: str) -> None:
-        if self._dir is None:
+        if self._root is None:
             return
         try:
-            self._dir.mkdir(parents=True, exist_ok=True)
-            (self._dir / f"{job_id}.json").write_text(
-                json.dumps({"job_id": job_id, "kind": kind, "target": target,
-                            "session": self._session}))
-        except OSError as exc:
+            wpaths.write_text_inside(self._root, f"{self._rel}/{job_id}.json",
+                                     json.dumps({"job_id": job_id, "kind": kind, "target": target,
+                                                 "session": self._session}))
+        except (OSError, ValueError) as exc:   # ValueError: a link on the way (PathRefused)
             log.warning("could not record job %s (%s) — a restart will not report it", job_id, exc)
 
-    def _drop(self, path: Path) -> None:
-        try:
-            path.unlink()
-        except OSError:
-            pass
+    def _drop(self, name: str) -> None:
+        if self._root is not None:
+            wpaths.unlink_inside(self._root, f"{self._rel}/{name}")
 
     def _forget(self, job_id: str) -> None:
-        if self._dir is None:
-            return
-        try:
-            (self._dir / f"{job_id}.json").unlink(missing_ok=True)
-        except OSError:
-            pass
+        if self._root is not None:
+            wpaths.unlink_inside(self._root, f"{self._rel}/{job_id}.json")
