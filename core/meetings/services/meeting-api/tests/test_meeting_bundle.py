@@ -298,3 +298,47 @@ def test_the_two_routes_are_sealed_in_the_meetings_manifest():
     table = route_scopes.ROUTE_SCOPES
     assert table[("GET", "/meetings/{meeting_id}/export")] == frozenset({"tx"})
     assert table[("POST", "/meetings/import")] == frozenset({"tx"})
+
+
+# ── notes and the agent domain's parts ──────────────────────────────────────────────────────────
+def test_free_text_notes_round_trip(a, b):
+    a.store._meetings[a.mid]["data"]["notes"] = "Follow up with Grace on the numbers."
+    archive = _export(a, a.mid).content
+    assert json.loads(_parts(archive)["annotations.json"])["notes"] == "Follow up with Grace on the numbers."
+    preview = _import(b, archive, dry_run=True).json()
+    assert preview["annotations"]["notes"] is True
+    new_id = _import(b, archive).json()["meeting_id"]
+    assert b.store._meetings[new_id]["data"]["notes"] == "Follow up with Grace on the numbers."
+    back = _parts(_export(b, new_id, uid=IMPORTER).content)
+    assert json.loads(back["annotations.json"])["notes"] == "Follow up with Grace on the numbers."
+
+
+def test_an_export_places_the_workspace_and_notes_page_it_is_handed(a, b):
+    parts = (G.GOLDEN / "parts" / "workspace-and-notes.zip").read_bytes()
+    r = a.client.post(f"/meetings/{a.mid}/export", content=parts,
+                      headers={**_h(OWNER), "content-type": "application/zip"})
+    assert r.status_code == 200, r.text
+    inside = _parts(r.content)
+    assert inside["notes.md"] == G.NOTES_PAGE
+    assert inside["workspace/notes/agenda.md"] == dict(G.WORKSPACE)["workspace/notes/agenda.md"]
+    manifest = json.loads(inside["manifest.json"])
+    roles = {f["path"]: f["role"] for f in manifest["files"]}
+    assert roles["notes.md"] == "notes" and roles["workspace/notes/agenda.md"] == "workspace"
+    # On import, meeting-api lands the meeting and names what the agent domain restores.
+    preview = _import(b, r.content, dry_run=True).json()
+    assert preview["handoff"] == {"workspace_files": 2, "notes_page": True}
+
+
+def test_an_export_with_parts_is_still_owner_only(a):
+    parts = (G.GOLDEN / "parts" / "workspace-and-notes.zip").read_bytes()
+    for uid, status in ((STRANGER, 404), (VIEWER, 403)):
+        r = a.client.post(f"/meetings/{a.mid}/export", content=parts, headers=_h(uid))
+        assert r.status_code == status
+
+
+@pytest.mark.parametrize("name", sorted(G.REFUSED_PARTS))
+def test_a_malicious_parts_archive_is_refused(a, name):
+    r = a.client.post(f"/meetings/{a.mid}/export",
+                      content=(G.GOLDEN / "parts" / f"{name}.zip").read_bytes(), headers=_h(OWNER))
+    assert r.status_code == 422
+    assert r.json()["detail"]["code"] == G.REFUSED_PARTS[name][0]

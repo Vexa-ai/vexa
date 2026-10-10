@@ -1379,7 +1379,7 @@ class SqlAlchemyTranscriptStore:
             return {"status": "created", "index": name}
 
     async def annotate_meeting(self, user_id, meeting_id, *, title=None,
-                               metadata=None) -> "Optional[dict]":
+                               metadata=None, notes=None) -> "Optional[dict]":
         """Caller-owned annotations on a row in ANY status (see ports.annotate_meeting).
 
         Modelled on ``attach_calendar_source``, not on ``update_planned_meeting``: nothing written
@@ -1433,6 +1433,13 @@ class SqlAlchemyTranscriptStore:
                 if reason:
                     return {"error": "metadata_too_large", "detail": reason}
                 data["metadata"] = merged
+
+            if notes is not None:
+                touched = True
+                if notes:
+                    data["notes"] = str(notes)[:200000]
+                else:
+                    data.pop("notes", None)
 
             if touched:
                 meeting.data = data

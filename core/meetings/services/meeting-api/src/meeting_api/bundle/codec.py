@@ -1,11 +1,16 @@
 """meeting-bundle.v1 — write and read the portable meeting file. PURE: bytes in, bytes or a parsed
-bundle out; no store, no storage, no HTTP.
+bundle out; no store, no storage, no HTTP. Standard library plus ``jsonschema``.
 
-The contract is ``deploy/contracts/meeting-bundle.v1`` (schema, goldens, README). This module is
-its Python implementation on both sides: ``write_bundle`` is the only exporter and ``read_bundle``
-is the only importer's front gate. The conformance test holds both to the same goldens the Node
-validator re-derives, so a bundle this module writes is a bundle any importer reading the contract
-accepts, and a bundle the goldens say is refused is refused here with the same code.
+THE CANONICAL COPY lives in the contract, ``deploy/contracts/meeting-bundle.v1/bundle_codec.py``,
+beside its schema. It is vendored VERBATIM, with the schema beside it, into each service that reads
+or writes a bundle — meeting-api (the meeting, transcript, annotations and media) and agent-api
+(the workspace and notes-page parts) — because those two may not import each other (P2).
+``gate:fact-parity`` holds the copies byte-identical (scripts/parity.json).
+
+``write_bundle`` / ``read_bundle`` are the bundle; ``write_parts`` / ``read_parts`` are the PARTS
+archive, the workspace tree and the meeting's notes page that agent-api hands meeting-api (through
+the person's client) to place inside an export. The conformance tests hold both directions to the
+goldens the Node validator re-derives.
 
 What ``read_bundle`` refuses, before a single byte reaches a store (each a :class:`BundleRefused`
 carrying one contract ``Refusal`` code):
@@ -51,6 +56,8 @@ MAX_ENTRIES = 2001                             # manifest + 2000 listed files
 MAX_TOTAL_UNCOMPRESSED = 1024 * 1024 * 1024    # every entry, inflated
 MAX_JSON_PART_BYTES = 32 * 1024 * 1024         # meeting / transcript / annotations / manifest
 MAX_WORKSPACE_FILE_BYTES = 16 * 1024 * 1024
+MAX_NOTES_PAGE_BYTES = 1024 * 1024             # notes.md, the meeting's page (UTF-8 markdown)
+MAX_PARTS_BYTES = 256 * 1024 * 1024            # the parts archive as handed to an export
 MAX_INFLATION_RATIO = 200                      # deflated entries over 1 MiB
 _RATIO_FLOOR = 1024 * 1024
 
@@ -67,13 +74,18 @@ MEDIA_CONTENT_TYPES = {
 
 # The path grammar is the schema's EntryPath, compiled once and applied to every entry NAME.
 _ENTRY_PATH = re.compile(
-    r"^(meeting\.json|transcript\.json|annotations\.json"
+    r"^(meeting\.json|transcript\.json|annotations\.json|notes\.md"
     r"|media/[A-Za-z0-9][A-Za-z0-9_-]{0,63}\.(webm|wav|mkv|mp4)"
     r"|workspace/([A-Za-z0-9_][A-Za-z0-9._ -]{0,127}/){0,15}[A-Za-z0-9_][A-Za-z0-9._ -]{0,127})$"
 )
+def is_bundle_path(path: str) -> bool:
+    """True when ``path`` is a name a bundle may hold (the schema's EntryPath)."""
+    return bool(_ENTRY_PATH.match(path))
+
+
 _ROLE_FOR = (("meeting.json", "meeting"), ("transcript.json", "transcript"),
-             ("annotations.json", "annotations"))
-KNOWN_ROLES = frozenset({"meeting", "transcript", "annotations", "media", "workspace"})
+             ("annotations.json", "annotations"), ("notes.md", "notes"))
+KNOWN_ROLES = frozenset({"meeting", "transcript", "annotations", "notes", "media", "workspace"})
 # A deterministic archive: every entry carries the same stamp, so the same input is the same bytes.
 _ZIP_EPOCH = (1980, 1, 1, 0, 0, 0)
 # Text is stored as text and rendered as text; what is removed is what no transcript needs and
@@ -114,7 +126,7 @@ class ParsedBundle:
     annotations: dict
     media: list = field(default_factory=list)          # [MediaBlob]
     workspace: list = field(default_factory=list)      # [(path, bytes)]
-    skipped: list = field(default_factory=list)        # roles a newer MINOR added, by path
+    notes_page: Optional[str] = None                   # notes.md, the meeting's page
 
     @property
     def bundle_id(self) -> str:
@@ -122,18 +134,13 @@ class ParsedBundle:
 
 
 # ── schema ──────────────────────────────────────────────────────────────────────────────────────
-_SCHEMA_REL = Path("deploy") / "contracts" / "meeting-bundle.v1" / "meeting-bundle.schema.json"
+_SCHEMA_FILE = "meeting-bundle.schema.json"
 
 
 @lru_cache(maxsize=1)
 def _schema() -> dict:
-    """The sealed schema, found by walking up from this file: the repository in a checkout, `/app`
-    in the image (its Dockerfile copies the schema to the same relative path)."""
-    for parent in Path(__file__).resolve().parents:
-        candidate = parent / _SCHEMA_REL
-        if candidate.is_file():
-            return json.loads(candidate.read_text(encoding="utf-8"))
-    raise RuntimeError(f"meeting-bundle.v1 schema not found by path: {_SCHEMA_REL}")
+    """The sealed schema: the byte-identical copy beside this file (vendored with it)."""
+    return json.loads(Path(__file__).with_name(_SCHEMA_FILE).read_text(encoding="utf-8"))
 
 
 @lru_cache(maxsize=8)
@@ -191,6 +198,8 @@ def write_bundle(
     exported_at: str,
     deployment_id: str,
     source_meeting_id: int,
+    workspace: "list[tuple[str, bytes]]" = (),
+    notes_page: Optional[bytes] = None,
 ) -> bytes:
     """The archive for one meeting. Deterministic: the same inputs give the same bytes (entries in a
     fixed order, one fixed timestamp), which is what lets the goldens be byte-for-byte."""
@@ -203,8 +212,15 @@ def write_bundle(
         ("transcript.json", "transcript", _canonical(transcript), zipfile.ZIP_DEFLATED),
         ("annotations.json", "annotations", _canonical(annotations), zipfile.ZIP_DEFLATED),
     ]
+    if notes_page is not None:
+        _check_notes(notes_page)
+        parts.append(("notes.md", "notes", notes_page, zipfile.ZIP_DEFLATED))
     for blob in media:
         parts.append((blob.path, "media", blob.data, zipfile.ZIP_STORED))
+    for path, data in sorted(workspace):
+        if not path.startswith("workspace/") or not _ENTRY_PATH.match(path):
+            raise ValueError(f"not a workspace path a bundle may hold: {path!r}")
+        parts.append((path, "workspace", data, zipfile.ZIP_DEFLATED))
     manifest = {
         "contract": CONTRACT,
         "format_version": FORMAT_VERSION,
@@ -219,17 +235,67 @@ def write_bundle(
     reason = conform("Manifest", manifest)
     if reason:
         raise ValueError(f"export produced a non-conforming Manifest: {reason}")
+    return _zip([("manifest.json", _canonical(manifest), zipfile.ZIP_DEFLATED)]
+                + [(p, b, m) for p, _r, b, m in parts])
+
+
+def _zip(entries) -> bytes:
     out = io.BytesIO()
     with zipfile.ZipFile(out, "w") as zf:
-        for name, data, method in [("manifest.json", _canonical(manifest), zipfile.ZIP_DEFLATED)] + [
-            (p, b, m) for p, _r, b, m in parts
-        ]:
+        for name, data, method in entries:
             info = zipfile.ZipInfo(name, date_time=_ZIP_EPOCH)
             info.compress_type = method
             info.external_attr = (stat.S_IFREG | 0o644) << 16
             info.create_system = 3
             zf.writestr(info, data)
     return out.getvalue()
+
+
+def _check_notes(data: bytes) -> str:
+    """notes.md is UTF-8 text, at most 1 MiB, with no NUL — a page, never a binary in disguise."""
+    if len(data) > MAX_NOTES_PAGE_BYTES:
+        raise BundleRefused("too_large", f"notes.md is {len(data)} bytes (max {MAX_NOTES_PAGE_BYTES})")
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        raise BundleRefused("invalid_part", "notes.md is not UTF-8 text")
+    if "\x00" in text:
+        raise BundleRefused("invalid_part", "notes.md contains a NUL byte")
+    return text
+
+
+# ── the parts archive: what agent-api hands an export ─────────────────────────────────────────
+def write_parts(workspace: "list[tuple[str, bytes]]", notes_page: Optional[bytes]) -> bytes:
+    """The workspace tree and the notes page as one deterministic zip — no manifest: it is not a
+    bundle, only the two parts the bundle's writer places into one."""
+    entries = []
+    if notes_page is not None:
+        _check_notes(notes_page)
+        entries.append(("notes.md", notes_page, zipfile.ZIP_DEFLATED))
+    for path, data in sorted(workspace):
+        if not path.startswith("workspace/") or not _ENTRY_PATH.match(path):
+            raise ValueError(f"not a workspace path a bundle may hold: {path!r}")
+        entries.append((path, data, zipfile.ZIP_DEFLATED))
+    return _zip(entries)
+
+
+def read_parts(raw: bytes) -> "tuple[list, Optional[bytes]]":
+    """``(workspace [(path, bytes)], notes_page bytes | None)`` from a parts archive, under the same
+    entry rules and caps as a bundle, or :class:`BundleRefused`."""
+    if len(raw) > MAX_PARTS_BYTES:
+        raise BundleRefused("too_large", f"the parts archive is {len(raw)} bytes (max {MAX_PARTS_BYTES})")
+    zf, infos = _open_checked(raw)
+    workspace, notes = [], None
+    for info in infos:
+        name = info.filename
+        if name == "notes.md":
+            notes = _read_bounded(zf, info, MAX_NOTES_PAGE_BYTES)
+            _check_notes(notes)
+        elif name.startswith("workspace/"):
+            workspace.append((name, _read_bounded(zf, info, MAX_WORKSPACE_FILE_BYTES)))
+        else:
+            raise BundleRefused("manifest_mismatch", f"{name!r} is not a part an export takes")
+    return sorted(workspace), notes
 
 
 # ── read ────────────────────────────────────────────────────────────────────────────────────────
@@ -255,6 +321,8 @@ def _entry_problem(info: zipfile.ZipInfo) -> Optional[tuple]:
 
 
 def _cap_for(name: str) -> int:
+    if name == "notes.md":
+        return MAX_NOTES_PAGE_BYTES
     if name.endswith(".json") and "/" not in name:
         return MAX_JSON_PART_BYTES
     if name.startswith("workspace/"):
@@ -299,10 +367,8 @@ def _load_json(name: str, data: bytes):
         raise BundleRefused("invalid_part", f"{name} is not UTF-8 JSON: {e}")
 
 
-def read_bundle(raw: bytes) -> ParsedBundle:
-    """Validate an archive end to end and return its parts, or raise :class:`BundleRefused`."""
-    if len(raw) > MAX_BUNDLE_BYTES:
-        raise BundleRefused("too_large", f"the bundle is {len(raw)} bytes (max {MAX_BUNDLE_BYTES})")
+def _open_checked(raw: bytes) -> "tuple[zipfile.ZipFile, list]":
+    """The archive and its entries, every entry having passed the header rules and the caps."""
     try:
         zf = zipfile.ZipFile(io.BytesIO(raw))
         infos = zf.infolist()
@@ -329,6 +395,15 @@ def read_bundle(raw: bytes) -> ParsedBundle:
             raise BundleRefused("too_large", f"{info.filename!r} inflates more than {MAX_INFLATION_RATIO}:1")
     if total > MAX_TOTAL_UNCOMPRESSED:
         raise BundleRefused("too_large", f"the bundle inflates to {total} bytes (max {MAX_TOTAL_UNCOMPRESSED})")
+    return zf, infos
+
+
+def read_bundle(raw: bytes) -> ParsedBundle:
+    """Validate an archive end to end and return its parts, or raise :class:`BundleRefused`."""
+    if len(raw) > MAX_BUNDLE_BYTES:
+        raise BundleRefused("too_large", f"the bundle is {len(raw)} bytes (max {MAX_BUNDLE_BYTES})")
+    zf, infos = _open_checked(raw)
+    seen = {i.filename for i in infos}
     if "manifest.json" not in seen:
         raise BundleRefused("not_a_bundle", "the archive has no manifest.json")
 
@@ -404,5 +479,7 @@ def read_bundle(raw: bytes) -> ParsedBundle:
         raise BundleRefused("manifest_mismatch", f"meeting.json declares media the bundle lacks: {undelivered}")
 
     workspace = sorted((p, blobs[p]) for p in listed if p.startswith("workspace/"))
+    notes_page = _check_notes(blobs["notes.md"]) if "notes.md" in blobs else None
     return ParsedBundle(manifest=manifest, meeting=meeting, transcript=transcript,
-                        annotations=annotations, media=media, workspace=workspace)
+                        annotations=annotations, media=media, workspace=workspace,
+                        notes_page=notes_page)

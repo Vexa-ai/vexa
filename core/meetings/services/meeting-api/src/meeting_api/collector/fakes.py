@@ -600,7 +600,7 @@ class InMemoryTranscriptStore:
         which is exactly the property that makes skipping the real build safe."""
         return {"status": "skipped", "reason": "in-memory store"}
 
-    async def annotate_meeting(self, user_id, meeting_id, *, title=None, metadata=None):
+    async def annotate_meeting(self, user_id, meeting_id, *, title=None, metadata=None, notes=None):
         """Caller-owned annotations on a row in ANY status — mirrors the adapter. No status check:
         nothing written here is read by the dispatch pipeline, so there is no FSM to fight."""
         m = self._meetings.get(meeting_id)
@@ -632,6 +632,11 @@ class InMemoryTranscriptStore:
             if reason:
                 return {"error": "metadata_too_large", "detail": reason}
             data["metadata"] = merged
+        if notes is not None:
+            if notes:
+                data["notes"] = str(notes)[:200000]
+            else:
+                data.pop("notes", None)
         return self._planned_row(meeting_id)
 
     async def update_planned_meeting(self, user_id, meeting_id, updates):

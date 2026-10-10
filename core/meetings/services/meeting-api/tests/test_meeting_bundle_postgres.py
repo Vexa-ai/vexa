@@ -85,6 +85,7 @@ class Deployment:
                         status="completed", start_time=datetime(2026, 10, 2, 10, 0, 0),
                         end_time=datetime(2026, 10, 2, 10, 20, 0),
                         data={"title": "Postgres round trip", "metadata": {"ticket": "PG-1"},
+                              "notes": "Notes written on deployment A.",
                               "transcript_viewers": [OTHER], "webhook_secret": "whsec_pg",
                               "recordings": [{"id": 700000000001, "user_id": OWNER, "session_uid": "sess-pg",
                                               "source": "bot", "status": "completed",
@@ -128,6 +129,7 @@ async def test_round_trip_between_two_postgres_deployments():
         row = (await b.client.get(f"/meetings/{new_id}", headers={"x-user-id": str(IMPORTER)})).json()
         assert row["status"] == "completed" and row["user_id"] == IMPORTER
         assert row["data"]["metadata"]["ticket"] == "PG-1"
+        assert row["data"]["notes"] == "Notes written on deployment A."
         assert row["data"]["metadata"]["imported_from"]["source_meeting_id"] == mid
         assert "transcript_viewers" not in row["data"] and "webhook_secret" not in row["data"]
         assert (await b.client.get(f"/meetings/{new_id}", headers={"x-user-id": str(OTHER)})).status_code == 404

@@ -7,10 +7,12 @@ zip as a new meeting owned by the importer. The format is the sealed contract
 
 ## Front door (`__init__.py`)
 - `build_router(store, recording_repo, storage, finalize=, log_event=, secret=)` —
-  `GET /meetings/{meeting_id}/export[?media=false]` and `POST /meetings/import[?dry_run=true]`, mounted
-  by `meeting_api.app.create_app`.
-- `write_bundle` / `read_bundle` (`codec.py`) — the pure codec: bytes in, bytes or a validated
-  `ParsedBundle` out; every refusal is a `BundleRefused` carrying one contract code.
+  `GET`/`POST /meetings/{meeting_id}/export[?media=false]` (POST takes the agent domain's parts
+  archive: the workspace tree and the meeting's page) and `POST /meetings/import[?dry_run=true]`,
+  mounted by `meeting_api.app.create_app`.
+- `write_bundle` / `read_bundle`, `write_parts` / `read_parts` (`codec.py`) — the pure codec, vendored
+  VERBATIM from `deploy/contracts/meeting-bundle.v1/bundle_codec.py` with the schema beside it
+  (`gate:fact-parity`); every refusal is a `BundleRefused` carrying one contract code.
 - `export_meeting` / `import_bundle` (`service.py`) — the flows over the ports meeting-api already
   owns: the transcript store, the recording repo and object storage.
 
@@ -21,9 +23,10 @@ zip as a new meeting owned by the importer. The format is the sealed contract
 - **Import:** body read under a cap → `read_bundle` (entry names and headers, sizes and inflation,
   manifest and version, listing, hashes, schemas, media signatures) → duplicate check on
   `imported_bundle_id` → planned row (auto-join off) → recordings into storage under the importer's
-  own prefix + `data.recordings` → annotations with `imported_from` provenance → the transcript
+  own prefix + `data.recordings` → annotations and notes with `imported_from` provenance → the transcript
   through the transcript-import write, which completes the row. A failure before completion deletes
-  the row and the objects written for it.
+  the row and the objects written for it. The workspace and the page are named in the preview's
+  `handoff`; the agent domain restores them (`POST /agent/meeting/bundle-restore`).
 
 ## Depends on
 `collector.transcript_import` (segment normalization, session uid), `recordings` (front door:

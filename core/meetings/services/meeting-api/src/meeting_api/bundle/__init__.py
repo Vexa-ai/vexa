@@ -7,7 +7,8 @@ README written for third parties). This module is its one exporter and one impor
 
   * ``build_router(store, recording_repo, storage, ...)`` — ``GET /meetings/{meeting_id}/export`` and
     ``POST /meetings/import`` (the unified app mounts them);
-  * ``write_bundle`` / ``read_bundle`` — the pure codec (bytes in, bytes or a validated bundle out);
+  * ``write_bundle`` / ``read_bundle``, ``write_parts`` / ``read_parts`` (``codec.py``, vendored verbatim
+    from the contract's ``bundle_codec.py``) — the pure codec (bytes in, bytes or a validated bundle out);
   * ``export_meeting`` / ``import_bundle`` — the flows over the transcript store, the recording repo
     and object storage, the ports meeting-api already owns (no new table, no new store method);
   * ``BundleRefused`` — every refusal, carrying one contract ``Refusal`` code.
@@ -21,7 +22,9 @@ from .codec import (
     MediaBlob,
     ParsedBundle,
     read_bundle,
+    read_parts,
     write_bundle,
+    write_parts,
 )
 from .router import build_router
 from .service import ExportError, deployment_id, export_meeting, import_bundle
@@ -38,5 +41,7 @@ __all__ = [
     "export_meeting",
     "import_bundle",
     "read_bundle",
+    "read_parts",
     "write_bundle",
+    "write_parts",
 ]

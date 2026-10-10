@@ -13,12 +13,13 @@ import json
 import os
 import shutil
 import subprocess
+from pathlib import Path
 from datetime import datetime, timezone
 
 import pytest
 
 import bundle_goldens as G
-from meeting_api.bundle import BundleRefused, deployment_id, export_meeting, read_bundle
+from meeting_api.bundle import BundleRefused, deployment_id, export_meeting, read_bundle, read_parts
 from meeting_api.bundle.codec import conform
 from meeting_api.collector.fakes import InMemoryTranscriptStore
 from meeting_api.recordings import finalize_master
@@ -51,6 +52,32 @@ def test_refused_table_names_every_refused_golden():
                     (json.dumps(rows, indent=2) + "\n").encode())
     for row in rows:
         assert conform("RefusedVector", row) is None
+
+
+def test_golden_parts_are_what_the_writer_produces():
+    _check_or_write(G.GOLDEN / "parts" / "workspace-and-notes.zip", G.golden_parts())
+    rows = [{"bundle": f"{n}.zip", "code": c, "why": w} for n, (c, w) in sorted(G.REFUSED_PARTS.items())]
+    _check_or_write(G.GOLDEN / "parts" / "refused.json", (json.dumps(rows, indent=2) + "\n").encode())
+    for name in G.REFUSED_PARTS:
+        _check_or_write(G.GOLDEN / "parts" / f"{name}.zip", G.refused_bundle(name))
+
+
+def test_the_parts_reader_accepts_the_golden_and_refuses_the_refused():
+    workspace, notes = read_parts((G.GOLDEN / "parts" / "workspace-and-notes.zip").read_bytes())
+    assert workspace == sorted(G.WORKSPACE) and notes == G.NOTES_PAGE
+    for name, (code, _why) in G.REFUSED_PARTS.items():
+        with pytest.raises(BundleRefused) as refused:
+            read_parts((G.GOLDEN / "parts" / f"{name}.zip").read_bytes())
+        assert refused.value.code == code, refused.value.detail
+
+
+def test_the_vendored_codec_and_schema_are_the_contracts_bytes():
+    """The canonical copy lives in the contract; this service's copy is byte-identical (the same
+    fact gate:fact-parity holds across every site)."""
+    here = Path(__file__).resolve().parents[1] / "src" / "meeting_api" / "bundle"
+    assert (here / "codec.py").read_bytes() == (G.CONTRACT_DIR / "bundle_codec.py").read_bytes()
+    assert (here / "meeting-bundle.schema.json").read_bytes() == \
+        (G.CONTRACT_DIR / "meeting-bundle.schema.json").read_bytes()
 
 
 def test_golden_deployment_id_is_the_derivation():

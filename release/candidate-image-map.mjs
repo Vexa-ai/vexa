@@ -77,7 +77,6 @@ export const RUNTIME_INPUTS_BY_IMAGE = {
     "core/meetings/contracts/webhook.v1/webhook.schema.json",
     "core/runtime/contracts/runtime.v1/runtime.schema.json",
     "core/runtime/contracts/schedule.v1/schedule.schema.json",
-    "deploy/contracts/meeting-bundle.v1/meeting-bundle.schema.json",
   ],
   "vexaai/v012-gateway": [
     ".dockerignore",

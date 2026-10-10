@@ -17,7 +17,7 @@ import zipfile
 from hashlib import sha256
 from pathlib import Path
 
-from meeting_api.bundle import MediaBlob, write_bundle
+from meeting_api.bundle import MediaBlob, write_bundle, write_parts
 
 CONTRACT_DIR = next(p / "deploy" / "contracts" / "meeting-bundle.v1"
                     for p in Path(__file__).resolve().parents
@@ -61,17 +61,38 @@ def meeting(media: list) -> dict:
 
 ANNOTATIONS = {"metadata": {"project": "release-0.13", "tags": ["sync", "weekly"]}, "notes": None}
 
+# The agent half: a workspace tree and the meeting's page.
+WORKSPACE = [
+    ("workspace/notes/agenda.md", b"# Agenda\n\n1. Release checklist\n2. Migration plan\n"),
+    ("workspace/kg/entities/person/ada.md", b"# Ada\n\nRuns the release.\n"),
+]
+NOTES_PAGE = (b"---\ntype: meeting\nmeeting: 4242\ntitle: Release sync\n---\n\n# Release sync\n\n"
+              b"<!-- vexa:transcript meeting=4242 -->\n\n<!-- meeting:decisions:start -->\n- ship 0.13\n"
+              b"<!-- meeting:decisions:end -->\n")
+
 
 def golden_bundle(name: str) -> bytes:
     media = []
     if name == "with-audio":
         media = [MediaBlob(path="media/recording-1-audio.webm", type="audio", format="webm",
                            duration_seconds=15.0, data=WEBM_AUDIO)]
+    if name == "with-workspace-and-notes":
+        return write_bundle(
+            meeting=meeting([]), transcript={"segments": SEGMENTS},
+            annotations={**ANNOTATIONS, "notes": "Follow up on the migration plan."},
+            media=[], bundle_id=BUNDLE_ID[:-1] + "7", exported_at=EXPORTED_AT,
+            deployment_id=_golden_deployment_id(), source_meeting_id=SOURCE_MEETING_ID,
+            workspace=WORKSPACE, notes_page=NOTES_PAGE)
     return write_bundle(
         meeting=meeting(media), transcript={"segments": SEGMENTS}, annotations=ANNOTATIONS,
         media=media, bundle_id=BUNDLE_ID if name == "transcript-only" else BUNDLE_ID[:-1] + "6",
         exported_at=EXPORTED_AT, deployment_id=_golden_deployment_id(), source_meeting_id=SOURCE_MEETING_ID,
     )
+
+
+def golden_parts() -> bytes:
+    """The parts archive agent-api hands an export (golden/parts/workspace-and-notes.zip)."""
+    return write_parts(WORKSPACE, NOTES_PAGE)
 
 
 def _golden_deployment_id() -> str:
@@ -80,7 +101,7 @@ def _golden_deployment_id() -> str:
     return deployment_id(GOLDEN_SECRET)
 
 
-GOOD = ("transcript-only", "with-audio")
+GOOD = ("transcript-only", "with-audio", "with-workspace-and-notes")
 
 
 # ── refused ─────────────────────────────────────────────────────────────────────────────────────
@@ -155,6 +176,13 @@ def refused_bundle(name: str) -> bytes:
                            duration_seconds=1.0, data=b"MZ\x90\x00 an executable, not a webm")]
         m = ("media/recording-1-audio.webm", "media", media[0].data)
         return _archive(_parts(meeting_doc=meeting(media), extra=[m]))
+    if name == "notes-not-text":
+        notes = ("notes.md", "notes", b"\x89PNG\r\n\x1a\n\x00\x00 binary, not a page")
+        return _archive(parts + [notes])
+    if name == "parts-foreign-entry":
+        return _zip([("notes.md", NOTES_PAGE, {}), ("meeting.json", b"{}", {})])
+    if name == "parts-zip-slip":
+        return _zip([("workspace/../../etc/passwd", b"x", {})])
     if name == "deployment-bound-field":
         leaky = {**meeting([]), "user_id": 7, "storage_path": "recordings/7/1/x/audio/master.webm"}
         return _archive(_parts(meeting_doc=leaky))
@@ -175,4 +203,11 @@ REFUSED = {
     "missing-manifest": ("not_a_bundle", "a zip without manifest.json"),
     "fake-media": ("unsafe_media", "a media part whose bytes are not the container its name claims"),
     "deployment-bound-field": ("invalid_part", "meeting.json carrying a user id and a storage path"),
+    "notes-not-text": ("invalid_part", "a notes.md part that is binary, not UTF-8 text"),
+}
+
+#: Parts archives an export must refuse (golden/parts/refused.json).
+REFUSED_PARTS = {
+    "parts-foreign-entry": ("manifest_mismatch", "a parts archive carrying something other than workspace/ and notes.md"),
+    "parts-zip-slip": ("unsafe_path", "a workspace entry that climbs out with '..'"),
 }

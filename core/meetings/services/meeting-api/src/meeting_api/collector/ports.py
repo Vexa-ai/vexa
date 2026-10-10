@@ -383,6 +383,7 @@ class TranscriptStore(Protocol):
         self, user_id: int, meeting_id: int, *,
         title: Optional[str] = None,
         metadata: "Optional[dict]" = None,
+        notes: Optional[str] = None,
     ) -> Optional[dict]:
         """Attach the CALLER's own annotations to a row in ANY status — including one the bot FSM
         owns, and including one already completed.
@@ -404,6 +405,10 @@ class TranscriptStore(Protocol):
         name. It is the join key between a Vexa meeting and everything else the caller knows —
         a CRM record, a ticket, its own summary — and it is queryable through
         ``list_meetings(metadata_filter=...)``.
+
+        ``notes`` replaces ``data.notes`` (the meeting's free-text notes; an empty string clears
+        them). No route takes it: it is the meeting-bundle import restoring the notes a bundle
+        carries, through the one writer of the row's description.
 
         Returns the updated row (``list_meetings`` shape), or ``None`` when the user owns no such
         row (→ 404). Never returns a conflict: there is no state in which annotating is refused."""

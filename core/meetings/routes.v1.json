@@ -113,6 +113,13 @@
     },
     {
       "method": "POST",
+      "path": "/meetings/{meeting_id}/export",
+      "scopes": [
+        "tx"
+      ]
+    },
+    {
+      "method": "POST",
       "path": "/meetings/{meeting_id}/annotate",
       "scopes": [
         "tx"

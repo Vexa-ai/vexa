@@ -132,9 +132,15 @@ async def export_meeting(
     store, recording_repo, storage, *,
     user_id: int, meeting_id: int, secret: Optional[str], include_media: bool = True,
     member_workspaces: "Optional[set]" = None,
+    parts: "Optional[tuple]" = None,
     finalize: Callable, now: Optional[datetime] = None, bundle_id: Optional[str] = None,
 ) -> "tuple[bytes, str]":
-    """``(archive bytes, suggested filename)`` for one meeting the caller owns, or :class:`ExportError`."""
+    """``(archive bytes, suggested filename)`` for one meeting the caller owns, or :class:`ExportError`.
+
+    ``parts`` is ``(workspace [(path, bytes)], notes_page bytes | None)`` from a parts archive
+    (``codec.read_parts``): the meeting's workspace tree and its page, which agent-api owns and the
+    person's client hands over. They are placed in the bundle as given; meeting-api never reads the
+    agent domain itself (P9)."""
     rows = await store.list_meetings(user_id, meeting_id=meeting_id,
                                      member_workspaces=set(member_workspaces or ()))
     row = next((r for r in rows if r.get("id") == meeting_id), None)
@@ -195,6 +201,7 @@ async def export_meeting(
         meeting=meeting, transcript={"segments": segments}, annotations=annotations, media=media,
         bundle_id=bundle_id or str(uuid.uuid4()), exported_at=_iso(when),
         deployment_id=deployment_id(secret), source_meeting_id=meeting_id,
+        workspace=(parts[0] if parts else ()), notes_page=(parts[1] if parts else None),
     )
     slug = "".join(c if c.isalnum() else "-" for c in (title or f"meeting-{meeting_id}").lower()).strip("-")[:60]
     return archive, f"{slug or 'meeting'}.meeting-bundle.zip"
@@ -203,12 +210,11 @@ async def export_meeting(
 def preview(parsed: ParsedBundle, duplicate_of: Optional[int]) -> dict:
     """What an import would create, shown before anything is written."""
     meeting, segs = parsed.meeting, parsed.transcript["segments"]
-    skipped = []
-    if parsed.workspace:
-        skipped.append({"part": "workspace", "files": len(parsed.workspace),
-                        "reason": "meeting import does not restore an attached workspace"})
-    if parsed.annotations.get("notes"):
-        skipped.append({"part": "notes", "reason": "meeting import does not restore free-text notes"})
+    # The workspace tree and the notes page are the AGENT domain's to restore (it owns workspaces and
+    # desks); this import lands the meeting, and the person's client then hands the same file to
+    # agent-api's restore. Named here so the preview shows the whole bundle, not the half this
+    # service writes.
+    handoff = {"workspace_files": len(parsed.workspace), "notes_page": parsed.notes_page is not None}
     return {
         "bundle_id": parsed.bundle_id,
         "format_version": parsed.manifest["format_version"],
@@ -220,8 +226,9 @@ def preview(parsed: ParsedBundle, duplicate_of: Optional[int]) -> dict:
         "speakers": sorted({s["speaker"] for s in segs if s.get("speaker")}),
         "media": [{"path": m.path, "type": m.type, "format": m.format, "bytes": len(m.data),
                    "duration_seconds": m.duration_seconds} for m in parsed.media],
-        "annotations": {"metadata_keys": sorted(parsed.annotations["metadata"].keys())},
-        "skipped": skipped,
+        "annotations": {"metadata_keys": sorted(parsed.annotations["metadata"].keys()),
+                        "notes": bool(parsed.annotations.get("notes"))},
+        "handoff": handoff,
         "duplicate_of": duplicate_of,
     }
 
@@ -302,7 +309,8 @@ async def import_bundle(
             "participants": meeting["participants"][:100],
         }
         metadata = {**parsed.annotations["metadata"], PROVENANCE_KEY: provenance, BUNDLE_ID_KEY: parsed.bundle_id}
-        annotated = await store.annotate_meeting(user_id, mid, title=title, metadata=metadata)
+        notes = clean_text(parsed.annotations.get("notes"), 200000) if parsed.annotations.get("notes") else None
+        annotated = await store.annotate_meeting(user_id, mid, title=title, metadata=metadata, notes=notes)
         if annotated is None or annotated.get("error"):
             raise BundleRefused("invalid_part", (annotated or {}).get("detail")
                                 or "annotations could not be stored on the new meeting")
@@ -332,7 +340,7 @@ async def import_bundle(
     log_event("meeting_bundle_imported", audience="user", span="meetings.bundle.import",
               user_id=user_id, meeting_id=str(mid),
               fields={"bundle_id": parsed.bundle_id, "segments": len(segments),
-                      "media": len(parsed.media), "skipped": [s["part"] for s in view["skipped"]]})
+                      "media": len(parsed.media), "handoff": view["handoff"]})
     return {"imported": True, "meeting_id": mid, "status": "completed",
             "start_time": result.get("start_time"), "end_time": result.get("end_time"), **view,
             "duplicate_of": None}
