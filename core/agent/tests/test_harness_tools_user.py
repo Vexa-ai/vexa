@@ -123,9 +123,11 @@ def test_a_path_that_cannot_be_handed_over_stops_the_switch(as_root, monkeypatch
 
 def test_the_mcp_attachment_is_handed_to_the_tools_user(as_root, monkeypatch, tmp_path):
     calls = []
-    monkeypatch.setattr(ports.os, "chown", lambda p, uid, gid: calls.append((str(p), uid, gid)))
+    monkeypatch.setattr(ports.os, "chown",
+                        lambda p, uid, gid, **kw: calls.append((str(p), uid, gid, kw)))
     ports.hand_to_tools(tmp_path / "mcp.json")
-    assert calls == [(str(tmp_path / "mcp.json"), *as_root)]
+    # the credential file is chowned WITHOUT following a link raced in at its name
+    assert calls == [(str(tmp_path / "mcp.json"), *as_root, {"follow_symlinks": False})]
 
 
 def test_the_worker_makes_itself_non_dumpable(monkeypatch):

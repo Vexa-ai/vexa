@@ -224,12 +224,17 @@ def read_bytes_inside(root, rel: str, *, max_bytes: Optional[int] = None, allow=
 
 
 def write_text_inside(root, rel: str, text: str, *, mode: int = 0o644, allow=(),
-                      make_parents: bool = True) -> Path:
+                      make_parents: bool = True, before_replace=None) -> Path:
     """Write ``text`` to the FIXED path ``root/<rel>``, creating a NEW file and renaming it into
     place so a symlink already at the name is replaced rather than written through, and with no
     directory component on the path followed through a link. Raises :class:`PathRefused` when a
     component is a link (or ``rel`` is absolute / escapes / names a reserved dir not in ``allow``).
-    Returns the file's path."""
+
+    ``before_replace``, when given, is called with the new file's own descriptor after it is written
+    and before it is renamed into place — e.g. to ``fchown`` a credential to the user that will read
+    it, so it is never visible at its name owned by anyone else. The new file's name is random and
+    created ``O_EXCL``, so nothing at a predictable temp name is ever written through. Returns the
+    file's path."""
     parts = relative_parts(rel, allow=allow)
     *dirs, name = parts
     dir_fd = dir_fd_inside(root, dirs, create=make_parents)
@@ -237,9 +242,15 @@ def write_text_inside(root, rel: str, text: str, *, mode: int = 0o644, allow=(),
         tmp = f".{name}.{os.getpid()}.{threading.get_ident()}.{time.monotonic_ns()}.tmp"
         fd = os.open(tmp, _CREATE_NEW, mode, dir_fd=dir_fd)
         try:
-            os.fchmod(fd, mode)          # exact mode regardless of umask (a credential may be 0o600)
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                fh.write(text)
+            try:
+                os.fchmod(fd, mode)      # exact mode regardless of umask (a credential may be 0o600)
+                view = memoryview(text.encode("utf-8"))
+                while view:
+                    view = view[os.write(fd, view):]
+                if before_replace is not None:
+                    before_replace(fd)
+            finally:
+                os.close(fd)
             os.replace(tmp, name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
         except BaseException:
             try:

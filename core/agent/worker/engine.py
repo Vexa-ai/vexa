@@ -41,7 +41,7 @@ from llm import (
     auth_error_event,
     close_event_stream,
     grant_tools_access,
-    hand_to_tools,
+    hand_fd_to_tools,
     show_tools,
     harden_worker_process,
     harness_from_env,
@@ -659,6 +659,7 @@ def entity_index_preamble(mounts: list[dict]) -> str:
     has never been upserted still sees what it holds instead of being told nothing exists."""
     from workspaces.shared.entities import INDEX_PATH, render_index
     from workspaces.shared.workspace_id import workspace_id_of
+    from workspaces.shared import workspace_paths as wpaths
 
     blocks: list[str] = []
     for m in mounts:
@@ -667,8 +668,11 @@ def entity_index_preamble(mounts: list[dict]) -> str:
         root = Path(str(m.get("path") or ""))
         slug = str(m.get("slug") or root.name)
         try:
-            f = root / INDEX_PATH
-            listing = f.read_text(encoding="utf-8", errors="replace") if f.exists() else ""
+            # FIXED path in a work tree the model's tools can write: never read through a link
+            # planted at `kg` or `kg/INDEX.md` — its bytes go straight into the turn prompt, so a
+            # link to another tenant's file or to the worker's own /proc would exfiltrate into the
+            # model's context. A missing or redirected index just renders live from the directory.
+            listing = wpaths.read_text_inside(root, INDEX_PATH) or ""
             if not listing.strip():
                 listing = render_index(root, slug)
         except OSError:
@@ -716,14 +720,16 @@ def global_context_preamble(mounts: list[dict]) -> str:
     mount = next((m for m in mounts if m.get("role") == "global" or m.get("slug") == "_global"), None)
     if not mount:
         return ""
+    from workspaces.shared import workspace_paths as wpaths
     root = Path(str(mount["path"]))
     remaining = _GLOBAL_CONTEXT_MAX_CHARS
     sections: list[str] = []
     for name in _GLOBAL_CONTEXT_FILES:
         path = root / name
-        try:
-            content = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeError):
+        # `_global` is read-only except on an admin's turn, where the admin's tools could plant a
+        # link here; this content is folded into every subject's prompt, so read it nofollow.
+        content = wpaths.read_text_inside(root, name)
+        if content is None:
             continue
         # A seed placeholder nobody wrote (it carries UNWRITTEN_MARK, see shared/marks.py) is
         # not organisation context: `_global` may stay unwritten for good (founder ruling
@@ -1595,14 +1601,16 @@ def room_toolbelt(tools: list[str]) -> list[str]:
 
 
 def _delegation_dir(work: Path) -> "Path | None":
-    """The first writable home for the delegation credential, or None.
+    """The first usable BASE directory for the delegation credential, or None. The caller writes
+    ``<base>/.claude/mcp.json`` NOFOLLOW under it (``mcp_delegation_config``), so a link planted at
+    ``.claude`` cannot redirect the write.
 
-    Three candidates, in order, each keeping the two properties that matter — the file must not be
+    Three bases, in order, each keeping the two properties that matter — the file must not be
     committable, and it must be private to this subject:
 
-      1. ``<cwd>/.claude`` — gitignored by the workspace seed. The normal answer.
-      2. the PRIVATE SYSTEM tier's ``.claude`` — read-write by contract (it is where chat
-         continuity already anchors), private, and outside every desk the turn may commit.
+      1. ``<cwd>`` — its ``.claude`` is gitignored by the workspace seed. The normal answer.
+      2. the PRIVATE SYSTEM tier — read-write by contract (it is where chat continuity already
+         anchors), private, and outside every desk the turn may commit.
       3. a per-subject directory under the system temp dir — outside every mount, so no `git add`
          can reach it, and gone when the container is.
 
@@ -1610,21 +1618,20 @@ def _delegation_dir(work: Path) -> "Path | None":
     is asked to read a transcript, and the grounding gate then fails LOUDLY. A turn that never
     starts says nothing at all."""
     import tempfile
-    candidates = [work / ".claude", _continuity_root(work) / ".claude",
-                  Path(tempfile.gettempdir()) / f"vexa-{work.name}" / ".claude"]
+    # Each candidate is a BASE whose own ``.claude/mcp.json`` the config is written to. The base is
+    # the trusted mount root (``work``/``_system``) or a per-container tmp dir; ``.claude`` and the
+    # file under it are reached nofollow by the writer, so a link the tools user planted at
+    # ``.claude`` can never redirect the credential (see ``mcp_delegation_config``).
+    candidates = [work, _continuity_root(work),
+                  Path(tempfile.gettempdir()) / f"vexa-{work.name}"]
     seen: set[Path] = set()
     for cand in candidates:
         if cand in seen:
             continue
         seen.add(cand)
-        try:
-            cand.mkdir(parents=True, exist_ok=True)
-            probe = cand / ".w"
-            probe.write_text("")          # mkdir succeeds on an existing dir under a ro mount
-            probe.unlink()
-            return cand
-        except OSError as e:
-            log.warning("delegation config dir %s unusable (%s) — trying the next candidate", cand, e)
+        if not cand.is_dir() and cand != candidates[-1]:
+            continue                      # a mount that is not there; the tmp base is made below
+        return cand
     return None
 
 
@@ -1652,14 +1659,16 @@ def write_mcp_config(path: Path, url: str, token: str) -> None:
     cfg = {"mcpServers": {VEXA_MCP_SERVER: {
         "type": "http", "url": url, "headers": {"Authorization": f"Bearer {token}"},
     }}}
-    tmp = path.with_name(path.name + ".next")
-    tmp.write_text(json.dumps(cfg))
-    try:
-        tmp.chmod(0o600)
-    except OSError:  # a store backend that does not carry modes — the attachment still stands
-        pass
-    hand_to_tools(tmp)
-    os.replace(tmp, path)
+    # NOFOLLOW, every time (the refresh rewrites this on every turn). `path` is `<base>/.claude/
+    # mcp.json` and `.claude` is in a work tree the model's tools can write: the write goes to a NEW
+    # file with a random name created O_EXCL under a `.claude` opened O_NOFOLLOW, is fchmod'd 0600
+    # and fchown'd to the tools user through its own descriptor, and only then renamed over the
+    # name — so a link at `.claude`, at `mcp.json`, or at a predictable temp name is never written
+    # through, chmod'd or chown'd, and the file is never visible at its name owned by root.
+    from workspaces.shared import workspace_paths as wpaths
+    path = Path(path)
+    wpaths.write_text_inside(path.parent.parent, f"{path.parent.name}/{path.name}", json.dumps(cfg),
+                             mode=0o600, before_replace=hand_fd_to_tools)
 
 
 class DelegationRefresh:
@@ -1714,7 +1723,7 @@ class DelegationRefresh:
             if self._path is not None:
                 try:
                     write_mcp_config(self._path, self._url, fresh)
-                except OSError as e:
+                except (OSError, ValueError) as e:   # ValueError: a planted link (PathRefused)
                     log.warning("delegation token refresh not written (%s) — keeping the current "
                                 "attachment", e)
                     return False
@@ -1758,14 +1767,27 @@ def mcp_delegation_config(work: Path) -> "tuple[str | None, list[str]]":
                                                 ("VEXA_MCP_DELEGATION_TOKEN", token)) if not v))
         _file_spawn_gap(url, token)
         return None, []
-    d = _delegation_dir(work)
-    if d is None:
+    from workspaces.shared import workspace_paths as wpaths
+    base = _delegation_dir(work)
+    if base is None:
         log.warning("no writable directory for the vexa MCP delegation config — running this turn "
                     "WITHOUT the toolbelt rather than not at all")
         _file_spawn_gap(url, token)
         return None, []
-    path = d / "mcp.json"
-    write_mcp_config(path, url, token)
+    # THE CREDENTIAL IS WRITTEN NOFOLLOW (`write_mcp_config`). `.claude` sits in a work tree the
+    # model's tools can write, and the tools user owns `mcp.json` once it is handed over, so a later
+    # turn can leave `.claude` or `mcp.json` a symlink. A `.claude` planted as a SYMLINK is removed
+    # first (the link itself, never its target — `unlink_inside` leaves a real directory alone), so
+    # the fresh `.claude` the write makes is this workspace's own and the turn still gets its toolbelt.
+    wpaths.unlink_inside(base, ".claude")
+    path = base / ".claude" / "mcp.json"
+    try:
+        write_mcp_config(path, url, token)
+    except (wpaths.PathRefused, OSError) as e:
+        log.warning("vexa MCP delegation config not written at %s (%s) — running WITHOUT the toolbelt",
+                    base, e)
+        _file_spawn_gap(url, token)
+        return None, []
     # PRINTED, not logged at info: the worker configures no root logger, so an INFO record is dropped,
     # and "was the toolbelt attached?" is the first question asked of a worker's log.
     print(f"vexa MCP toolbelt attached: server={VEXA_MCP_SERVER} url={url}", file=sys.stderr, flush=True)

@@ -334,3 +334,45 @@ class _StubHarness:
 
     def preflight(self):
         return None
+
+
+# ── seam 2, link safety: the credential is never written through a planted .claude link ──────────
+
+def test_the_delegation_credential_is_not_written_through_a_planted_claude_link(tmp_path, monkeypatch):
+    """`.claude` sits in a work tree the model's tools can write (and a prior turn's `hand_to_tools`
+    hands them `mcp.json` itself), so a turn can replace `.claude` — or `.claude/mcp.json` — with a
+    link to another directory. The worker must write the Bearer token to THIS workspace's own
+    `.claude/mcp.json`, never through the link into the attacker's target."""
+    import os
+    from pathlib import Path
+    from worker.engine import mcp_delegation_config
+    work = tmp_path / "work"
+    work.mkdir()
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    os.symlink(victim, work / ".claude", target_is_directory=True)   # the planted link
+    monkeypatch.setenv("VEXA_MCP_URL", "https://rig.example/mcp")
+    monkeypatch.setenv("VEXA_MCP_DELEGATION_TOKEN", d.mint_delegation(SECRET, subject="58"))
+    path, tools = mcp_delegation_config(work)
+    assert path is not None and tools                                 # the turn still gets its toolbelt
+    assert not (victim / "mcp.json").exists()                        # nothing written through the link
+    assert not (work / ".claude").is_symlink()                       # the link was replaced
+    assert json.loads((work / ".claude" / "mcp.json").read_text())["mcpServers"]
+    import stat as _stat
+    assert _stat.S_IMODE((work / ".claude" / "mcp.json").stat().st_mode) == 0o600
+
+
+def test_a_planted_mcp_json_link_is_replaced_not_written_through(tmp_path, monkeypatch):
+    import os
+    from worker.engine import mcp_delegation_config
+    work = tmp_path / "work"
+    (work / ".claude").mkdir(parents=True)
+    victim = tmp_path / "victim.json"
+    victim.write_text("OLD")
+    os.symlink(victim, work / ".claude" / "mcp.json")
+    monkeypatch.setenv("VEXA_MCP_URL", "https://rig.example/mcp")
+    monkeypatch.setenv("VEXA_MCP_DELEGATION_TOKEN", d.mint_delegation(SECRET, subject="58"))
+    mcp_delegation_config(work)
+    assert victim.read_text() == "OLD"                               # the token did not land here
+    f = work / ".claude" / "mcp.json"
+    assert not f.is_symlink() and json.loads(f.read_text())["mcpServers"]

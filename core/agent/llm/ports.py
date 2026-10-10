@@ -291,14 +291,32 @@ def show_tools(paths: Iterable["str | Path"]) -> bool:
 
 def hand_to_tools(path: "str | Path") -> None:
     """Give one file the worker wrote for the harness (its MCP attachment) to :data:`TOOLS_USER`,
-    keeping its mode. No-op when this process cannot switch users."""
+    keeping its mode. No-op when this process cannot switch users. The chown does NOT follow a link:
+    the caller writes this file (a Bearer credential) NOFOLLOW, but the tools user could race a
+    symlink in at the name before this runs — chowning the link itself is harmless, chowning its
+    target would hand a root-owned file away."""
     ident = tools_identity()
     if ident is None:
         return
     try:
-        os.chown(path, *ident)
+        os.chown(path, *ident, follow_symlinks=False)
     except OSError as exc:
         _log.error("cannot hand %s to the tools user: %s", path, exc)
+
+
+def hand_fd_to_tools(fd: int) -> None:
+    """Give an OPEN file to :data:`TOOLS_USER` through its descriptor (``fchown``) — for a file the
+    worker writes nofollow and renames into place (``workspace_paths.write_text_inside`` passes the
+    new file's fd here before the rename), so the credential is never visible at its name owned by
+    anyone but the user that reads it, and no path is resolved at all. No-op when this process
+    cannot switch users."""
+    ident = tools_identity()
+    if ident is None:
+        return
+    try:
+        os.fchown(fd, *ident)
+    except OSError as exc:
+        _log.error("cannot hand an open file to the tools user: %s", exc)
 
 
 def harden_worker_process() -> None:
