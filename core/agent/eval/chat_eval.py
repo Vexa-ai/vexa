@@ -15,7 +15,7 @@ what counts as a pass. The model's next step is scored:
     VEXA_EVAL_BASE_URL=https://openrouter.ai/api/v1 VEXA_EVAL_API_KEY=... VEXA_EVAL_MODEL=... \\
         python3 core/agent/eval/chat_eval.py connect-gmail [--runs 3]
 
-Any OpenAI-compatible chat completions endpoint works. Nothing running is touched: no stack, no
+Any OpenAI-compatible chat completions endpoint works; the key is optional for an open one. Nothing running is touched: no stack, no
 broker, no workspace. Scoring is `score()`, which `tests/test_chat_eval.py` holds offline.
 """
 from __future__ import annotations
@@ -94,8 +94,8 @@ def score(case: dict, variant: str, reply: dict) -> tuple[bool, str]:
 
 def _complete(base: str, key: str, model: str, msgs: list[dict], tools: list[dict]) -> dict:
     body = json.dumps({"model": model, "messages": msgs, "tools": tools, "max_tokens": 400}).encode()
-    req = urllib.request.Request(base.rstrip("/") + "/chat/completions", data=body, method="POST",
-                                 headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"})
+    headers = {"Content-Type": "application/json", **({"Authorization": f"Bearer {key}"} if key else {})}
+    req = urllib.request.Request(base.rstrip("/") + "/chat/completions", data=body, method="POST", headers=headers)
     with urllib.request.urlopen(req, timeout=120) as r:
         return json.loads(r.read())["choices"][0]["message"]
 
@@ -106,10 +106,11 @@ def main(argv=None) -> int:
     ap.add_argument("--runs", type=int, default=1)
     args = ap.parse_args(argv)
     base, key, model = (os.environ.get(k, "") for k in ("VEXA_EVAL_BASE_URL", "VEXA_EVAL_API_KEY", "VEXA_EVAL_MODEL"))
-    if not (base and key and model):
-        print("set VEXA_EVAL_BASE_URL, VEXA_EVAL_API_KEY and VEXA_EVAL_MODEL", file=sys.stderr)
+    if not (base and model):
+        print("set VEXA_EVAL_BASE_URL and VEXA_EVAL_MODEL (and VEXA_EVAL_API_KEY unless the endpoint is open)",
+              file=sys.stderr)
         return 2
-    sys.path.insert(0, str(AGENT))
+    sys.path[:0] = [str(AGENT), str(AGENT.parent)]   # core/agent, and core/ for `workspaces`
     from worker.engine import connections_preamble
 
     case = load_case(args.case)
@@ -118,9 +119,13 @@ def main(argv=None) -> int:
     failed = 0
     for variant in case["variants"]:
         for run in range(args.runs):
-            ok, why = score(case, variant, _complete(base, key, model, messages(case, variant, system), tools))
+            reply = _complete(base, key, model, messages(case, variant, system), tools)
+            ok, why = score(case, variant, reply)
             failed += not ok
-            print(json.dumps({"case": case["case"], "variant": variant, "run": run + 1, "pass": ok, "why": why}))
+            calls = [{"name": c["function"]["name"], "arguments": c["function"].get("arguments")}
+                     for c in (reply.get("tool_calls") or [])]
+            print(json.dumps({"case": case["case"], "variant": variant, "run": run + 1, "pass": ok, "why": why,
+                              "tool_calls": calls, "text": (reply.get("content") or "")[:600]}))
     return 1 if failed else 0
 
 
