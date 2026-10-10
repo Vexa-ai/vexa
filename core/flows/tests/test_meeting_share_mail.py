@@ -96,3 +96,35 @@ def test_no_address_or_no_token_refuses_and_sends_nothing(rig, missing):
     assert not e.value.retryable
     assert REFS["token"] not in str(e.value)
     assert ch.sent == []
+
+
+def test_the_mail_goes_out_on_a_deployment_with_no_agent_domain(monkeypatch):
+    """The step reaches no domain, and neither may its wording: with no agent-api there is no
+    `_global` to read, which is an empty company layer — the baked template and "this
+    organisation" — not a failed send. Found live on a stack with flows and meetings but no agent
+    door configured for flows: the step retried on `AgentDomainAbsent` and the mail never left."""
+    # The class `mailtext` itself catches: other suites reload `flows_steps.common`, so a fresh
+    # import here could name a different class object than the one the module under test holds.
+    def absent(*_a, **_k):
+        raise mailtext.AgentDomainAbsent("no agent domain here")
+    monkeypatch.setenv("VEXA_UI_URL", UI)
+    reg = Registry()
+    production.build(reg, _StubDB())
+    ch = FakeChannel()
+    notify_mod.use(ch)
+    monkeypatch.setattr(mailtext, "ws_file", absent)
+    monkeypatch.setattr(policies, "ws_file", absent)
+    try:
+        out = reg.steps["mail_meeting_share"](_ctx(dict(REFS)))
+    finally:
+        notify_mod.use(None)
+    assert isinstance(out, Done) and ch.sent[0]["subject"] == "anna@bank.test shared Weekly sync with you"
+    assert mailtext.COMPANY_UNSET in ch.sent[0]["body"]
+
+
+def test_a_broken_agent_door_is_still_an_error_not_an_absence(monkeypatch):
+    def broken(*_a, **_k):
+        raise ConnectionError("agent-api refused")
+    monkeypatch.setattr(mailtext, "ws_file", broken)
+    with pytest.raises(ConnectionError):
+        mailtext.render("meeting-share", "7", {"inviter": "a", "title": "b"})
