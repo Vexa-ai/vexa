@@ -35,13 +35,49 @@ export function hostAllowed(host: string, domains: readonly string[]): boolean {
   return domains.some((d) => h === d || h.endsWith(`.${d}`));
 }
 
-/** The domains an authenticated browser may navigate to: the platform's, plus the meeting's own host. */
+export class MeetingHostRefused extends Error {
+  constructor(message: string) { super(message); this.name = 'MeetingHostRefused'; }
+}
+
+/**
+ * The domains an authenticated browser may navigate to: the platform's own, and nothing the caller
+ * names. The meeting URL is checked against them — its host must be one of the platform's domains
+ * or a subdomain of one (a Zoom tenant's `<org>.zoom.us`, Teams on `teams.microsoft.com` /
+ * `teams.live.com`) — and an authenticated session for a platform with no stored-session domains
+ * (Jitsi) is refused. Throws {@link MeetingHostRefused}; the host never widens the list.
+ */
 export function authenticatedNavigationDomains(platform: AuthPlatform | null, meetingUrl: string | null): string[] {
-  const domains = [...(platform ? AUTH_NAVIGATION_DOMAINS[platform] : [])];
-  try {
-    if (meetingUrl) domains.push(new URL(meetingUrl).hostname.toLowerCase());
-  } catch { /* an unparsable meeting URL adds nothing */ }
-  return [...new Set(domains)];
+  if (!platform) throw new MeetingHostRefused('an authenticated session is only for Google Meet, Teams or Zoom meetings');
+  const domains = [...AUTH_NAVIGATION_DOMAINS[platform]];
+  let url: URL;
+  try { url = new URL(meetingUrl || ''); } catch {
+    throw new MeetingHostRefused('the meeting URL does not parse');
+  }
+  if (url.protocol !== 'https:' || !hostAllowed(url.hostname, domains)) {
+    throw new MeetingHostRefused(`the meeting host is not a ${platform} host: ${url.hostname}`);
+  }
+  return domains;
+}
+
+/**
+ * The flags of an authenticated launch with Chromium's site isolation ON: every site in a renderer
+ * process of its own (`--site-per-process`), and the flags that turned it off removed — including
+ * from a `--disable-features` list, whose other features are kept.
+ */
+export function withSiteIsolation(args: readonly string[]): string[] {
+  const off = new Set(['IsolateOrigins', 'site-per-process']);
+  const out: string[] = [];
+  for (const arg of args) {
+    if (arg === '--disable-site-isolation-trials' || arg === '--site-per-process') continue;
+    if (arg.startsWith('--disable-features=')) {
+      const kept = arg.slice('--disable-features='.length).split(',').filter((f) => f && !off.has(f));
+      if (kept.length) out.push(`--disable-features=${kept.join(',')}`);
+      continue;
+    }
+    out.push(arg);
+  }
+  out.push('--site-per-process');
+  return out;
 }
 
 /** Whether a URL is off the list (and so must not be navigated to). */

@@ -5,6 +5,7 @@
  */
 import {
   AUTH_NAVIGATION_DOMAINS, authenticatedNavigationDomains, hostAllowed, offList, restrictNavigation,
+  withSiteIsolation, MeetingHostRefused,
 } from './navigation';
 
 const fails: string[] = [];
@@ -22,10 +23,30 @@ check(hostAllowed('teams.microsoft.com', AUTH_NAVIGATION_DOMAINS.teams)
 check(hostAllowed('us02web.zoom.us', AUTH_NAVIGATION_DOMAINS.zoom), 'zoom web client host');
 
 const meet = authenticatedNavigationDomains('google', 'https://meet.google.com/abc-defg-hij');
-check(meet.includes('google.com') && meet.includes('meet.google.com'), 'google meeting: platform domains + meeting host');
-const jitsi = authenticatedNavigationDomains(null, 'https://jitsi.example.org/room');
-check(jitsi.length === 1 && jitsi[0] === 'jitsi.example.org', 'no platform: only the meeting host');
-check(authenticatedNavigationDomains(null, 'not a url').length === 0, 'an unparsable meeting URL adds nothing');
+check(meet.join() === AUTH_NAVIGATION_DOMAINS.google.join(), 'google meeting: the platform domains, nothing the caller names');
+check(authenticatedNavigationDomains('zoom', 'https://acme.zoom.us/j/123').join() === AUTH_NAVIGATION_DOMAINS.zoom.join(),
+  'a Zoom tenant host is a zoom.us subdomain');
+check(!!authenticatedNavigationDomains('teams', 'https://teams.microsoft.com/l/meetup-join/x'), 'a Teams meeting host');
+// The caller's meeting host never widens the list, and one off the platform's domains refuses the launch.
+const refused = (platform: any, url: any) => {
+  try { authenticatedNavigationDomains(platform, url); return false; } catch (e) { return e instanceof MeetingHostRefused; }
+};
+for (const [platform, url] of [
+  ['google', 'https://attacker.example/meet'], ['google', 'https://meet.google.com.attacker.example/x'],
+  ['google', 'http://meet.google.com/x'], ['teams', 'https://teams.attacker.example/l/x'],
+  ['zoom', 'https://zoom.us.attacker.example/j/1'], ['google', 'not a url'], [null, 'https://jitsi.example.org/room'],
+] as const) {
+  check(refused(platform, url), `refused: ${platform} ${url}`);
+}
+
+// ── site isolation for authenticated launches ────────────────────────────────
+const isolated = withSiteIsolation(['--a', '--disable-features=IsolateOrigins,site-per-process',
+  '--disable-site-isolation-trials', '--disable-features=VizDisplayCompositor', '--b']);
+check(isolated.includes('--site-per-process'), 'site isolation is turned on');
+check(!isolated.some((a) => a === '--disable-site-isolation-trials' || /IsolateOrigins|=site-per-process/.test(a)),
+  `no flag turns it off: ${isolated.join(' ')}`);
+check(isolated.includes('--disable-features=VizDisplayCompositor') && isolated.includes('--a') && isolated.includes('--b'),
+  'other flags are kept');
 
 check(!offList(new URL('about:blank'), meet) && !offList(new URL('data:text/html,x'), meet), 'blank and data frames pass');
 check(offList(new URL('https://attacker.example/'), meet), 'another host is off the list');

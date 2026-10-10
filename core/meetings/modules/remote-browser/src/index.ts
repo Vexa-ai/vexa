@@ -46,6 +46,7 @@ export { browserEnv, BROWSER_ENV_KEYS, NO_SANDBOX_ARGS, launchWithSandbox } from
 // Where an authenticated browser may navigate (the meeting's host and the platform's domains)
 export {
   restrictNavigation, authenticatedNavigationDomains, AUTH_NAVIGATION_DOMAINS, hostAllowed,
+  withSiteIsolation, MeetingHostRefused,
 } from './navigation';
 export type { LaunchPersistentOptions } from './browser';
 // Re-export the Playwright handles this brick's API traffics in, so consumers (the bot
