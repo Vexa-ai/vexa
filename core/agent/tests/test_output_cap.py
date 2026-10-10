@@ -73,3 +73,16 @@ def test_the_runtime_forwards_the_cap_into_every_worker():
     forward = src[src.index("WORKER_FORWARD_ENV = ("):]
     forward = forward[: forward.index("\n)\n")]
     assert re.search(r'"VEXA_AGENT_MAX_OUTPUT_TOKENS"', forward)
+
+
+def test_every_place_that_names_the_cap_says_what_codex_does_with_it():
+    """Codex has no setting for the model's output cap, so it cannot honour the dial; every place
+    that explains the dial says so instead of implying every harness reads it."""
+    import json
+    agent = Path(__file__).resolve().parents[1]
+    for f in (agent / "control_plane" / "config.v1.json",
+              agent.parent / "runtime" / "src" / "runtime_kernel" / "config.v1.json"):
+        row = next(k for k in json.loads(f.read_text())["keys"]
+                   if k["key"] == "VEXA_AGENT_MAX_OUTPUT_TOKENS")
+        assert "codex does not read it" in row["description"], f
+    assert "VEXA_AGENT_MAX_OUTPUT_TOKENS`` is NOT read here" in (agent / "llm" / "codex.py").read_text()

@@ -439,14 +439,15 @@ class ClaimProposal(BaseModel):
     """One thing an agent believes about this person's work, and where it came from."""
     model_config = {"extra": "forbid"}
     claim: str = Field(description="the belief, in one short line the person can correct")
-    source: str = Field("", description="where it came from, in a few words")
-    scope: str = Field("tenant", description="who it is about; `tenant` is the person's company")
+    source: str = Field("", max_length=300, description="where it came from, in a few words")
+    scope: str = Field("tenant", max_length=40,
+                       description="who it is about; `tenant` is the person's company")
 
 
 class ClaimsProposeBody(BaseModel):
     """PROPOSE claims — the body behind `propose`. One call carries everything learned."""
     model_config = {"extra": "forbid"}
-    claims: list[ClaimProposal | str] = Field(description=(
+    claims: list[ClaimProposal | str] = Field(max_length=50, description=(
         "every belief at once, each `{claim, source?, scope?}` or a plain string. Nothing proposed "
         "counts as company context until the person answers."))
 
@@ -462,7 +463,7 @@ class ClaimVerdict(BaseModel):
 class ClaimVerdictsBody(BaseModel):
     """RECORD the person's answer — the body behind `validate`. One call carries the whole answer."""
     model_config = {"extra": "forbid"}
-    verdicts: list[ClaimVerdict] = Field(description=(
+    verdicts: list[ClaimVerdict] = Field(max_length=50, description=(
         "one per claim the person answered, `{id, verdict, note?}`. Call it only after asking them."))
 
 

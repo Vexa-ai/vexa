@@ -1315,6 +1315,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
           // the settled op line. A view that attached to a turn already in flight counted only what
           // it saw; the server counted the turn.
           onSteps: (steps) => patchAgentTurn(key, agentId, (t) => ({ ...t, steps })),
+          onCompacted: (compacted) => patchAgentTurn(key, agentId, (t) => ({ ...t, compacted })),
           onError: (msg) => patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, text: (t.text ?? "") + (t.text ? "\n\n" : "") + presentError(new Error(msg)).headline })),
           onProgress: () => stick.onContent(),
         },

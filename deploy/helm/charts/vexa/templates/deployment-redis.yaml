@@ -67,10 +67,12 @@ spec:
             - "--maxmemory"
             - {{ . | quote }}
             {{- end }}
-            {{- with .Values.redis.maxmemoryPolicy }}
-            - "--maxmemory-policy"
-            - {{ . | quote }}
+            {{- $policy := .Values.redis.maxmemoryPolicy | default "noeviction" }}
+            {{- if ne $policy "noeviction" }}
+            {{- fail (printf "redis.maxmemoryPolicy must be noeviction, not %s: Redis holds the delegation live and revocation records, and an evicted one cuts a live worker's tools or revives a revoked token" $policy) }}
             {{- end }}
+            - "--maxmemory-policy"
+            - "noeviction"
           ports:
             - name: redis
               containerPort: 6379

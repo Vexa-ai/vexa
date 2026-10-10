@@ -8,13 +8,13 @@
 # lifecycle.v1 / webhook.v1 / runtime.v1 / schedule.v1 schemas BY PATH at import (walking up from
 # the module to find `meetings/contracts/...` and `runtime/contracts/...`), so those frozen
 # contract files must be vendored into the image alongside src/.
-FROM python:3.12-slim
+FROM python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f
 
 # Finalized WebM duration/cues; stream-copy only, no re-encoding.
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
 
 # uv via PyPI (ghcr.io is unreachable in this build env) — pinned for deterministic resolves.
-RUN pip install --no-cache-dir uv==0.9.22
+RUN pip install --no-cache-dir uv==0.11.33
 
 ENV UV_LINK_MODE=copy \
     UV_PROJECT_ENVIRONMENT=/opt/venv \
@@ -26,13 +26,7 @@ WORKDIR /app
 
 COPY core/meetings/services/meeting-api/pyproject.toml core/meetings/services/meeting-api/uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-install-project --no-dev
-
-# Production-only runtime deps NOT in the (lean) test pyproject (redis/httpx are already pinned):
-# the ASGI server + the async Postgres stack (collector/bot_spawn/recordings SQLAlchemy adapters)
-# + boto3 (the recordings S3/MinIO storage adapter).
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install "uvicorn[standard]==0.34.0" "sqlalchemy[asyncio]==2.0.36" "asyncpg==0.30.0" "boto3==1.35.0"
+    uv sync --frozen --no-install-project --no-dev --group production
 
 # The shipped source (src/ on PYTHONPATH).
 COPY core/meetings/services/meeting-api/src ./src

@@ -110,5 +110,6 @@ A URL the model chose is an outbound destination picked by something that is not
 The one exemption is the host in your own `VEXA_SEARCH_URL` — you named it, and the search tool
 already talks to it.
 
-Both tools count against the turn's tool-call budget (`VEXA_AGENT_MAX_TOOL_CALLS`) and their results
-are trimmed to the turn's context budget like any other tool result.
+Both tools count against the turn's tool-call budget and their results are trimmed to the turn's
+context budget like any other tool result. See [Long agent turns](/agent-tool-calls) for the budgets
+and what happens when one is reached.

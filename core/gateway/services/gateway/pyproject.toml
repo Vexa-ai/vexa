@@ -23,6 +23,9 @@ dependencies = [
 # Test tooling only: `uv sync --no-dev` (the Dockerfile) keeps it out of the production image.
 # pytest-asyncio drives the /ws multiplex unit tests (asyncio_mode=auto).
 dev = ["pytest>=8", "pytest-asyncio>=0.23"]
+# What only the image runs: the ASGI server and the production database/storage clients. Installed
+# from the lock with `uv sync --group production` by the Dockerfile and Lite, never `uv pip install`d beside it.
+production = ["uvicorn[standard]>=0.34,<1", "redis>=5.2.1,<6"]
 
 [tool.uv]
 package = false

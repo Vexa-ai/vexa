@@ -34,6 +34,23 @@ STEALTH_TOLERATION = {"key": "vexa.ai/pool", "operator": "Equal", "value": "stea
 PLACEMENT_FIELDS = ("nodeSelector", "tolerations", "priorityClassName", "imagePullSecrets")
 
 
+def _pods_into(submitted: list):
+    """A kubectl stand-in: Pod manifests are kept, a created object answers with a uid (the
+    workload's credential Secret is owned by it)."""
+    class _R:
+        returncode, stderr = 0, ""
+
+        def __init__(self, stdout=""):
+            self.stdout = stdout
+
+    def fake(*args, check=True, stdin=None):
+        obj = json.loads(stdin) if stdin else {}
+        if stdin and obj.get("kind") == "Pod":
+            submitted.append(obj)
+        return _R(json.dumps({"metadata": {"uid": "pod-uid"}}) if args[:1] == ("create",) else "")
+    return fake
+
+
 @pytest.fixture(autouse=True)
 def _clean(monkeypatch):
     monkeypatch.setenv("BROWSER_IMAGE", "bot:test")
@@ -128,8 +145,7 @@ def test_the_submitted_pod_carries_the_profiles_placement(monkeypatch):
     """End to end through the kernel and the k8s backend's real spawn path (kubectl faked)."""
     _stealth(monkeypatch, BOT, priority="vexa-stealth", secret="regcred")
     submitted = []
-    monkeypatch.setattr(k8s_backend, "_kubectl",
-                        lambda *a, check=True, stdin=None: submitted.append(json.loads(stdin)) if stdin else None)
+    monkeypatch.setattr(k8s_backend, "_kubectl", _pods_into(submitted))
     rt = Runtime(backend=K8sBackend(namespace="ns"), profiles=default_registry(), grace_sec=0.1,
                  workspace_store=StoreConfig())
     rt.create(WorkloadSpec(workloadId="mtg-1", profile="meeting-bot", env={"VEXA_BOT_CONFIG": "{}"}))
@@ -192,8 +208,7 @@ def test_a_malformed_value_stops_the_production_boot(monkeypatch):
 def test_a_spec_env_cannot_place_the_pod(monkeypatch):
     monkeypatch.setenv(BOT + "PRIORITY_CLASS_NAME", "vexa-stealth")
     submitted = []
-    monkeypatch.setattr(k8s_backend, "_kubectl",
-                        lambda *a, check=True, stdin=None: submitted.append(json.loads(stdin)) if stdin else None)
+    monkeypatch.setattr(k8s_backend, "_kubectl", _pods_into(submitted))
     rt = Runtime(backend=K8sBackend(namespace="ns"), profiles=default_registry(), grace_sec=0.1,
                  workspace_store=StoreConfig())
     hostile = {

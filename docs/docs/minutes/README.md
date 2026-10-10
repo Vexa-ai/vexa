@@ -1,0 +1,3 @@
+# minutes docs
+
+The Minutes section of docs.vexa.ai: the user guide to the Minutes terminal (`clients/terminal`, built with `NEXT_PUBLIC_TERMINAL_MODE=minutes`). One page per area — overview (shell, sign-in, links), chats, pages, meetings, workspaces and connections. Each page follows the same shape: what you can do, limits and errors, How it works (flow, who writes what, routes, configuration), Why it complies (P-rules with their gates, security protections, deny tests by name). Source of truth for behaviour: `clients/terminal/src/minutes` and the agent-api / meeting-api routes each page names.

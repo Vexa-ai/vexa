@@ -376,7 +376,7 @@
         "new_account",
         "setup"
       ],
-      "note": "Opens the trusted Connections panel for Gmail, Calendar, GitHub or a custom secret. Secrets are entered there, never in chat. Refused for a worker dispatched without a person."
+      "note": "Opens the trusted Connections panel for Gmail, Calendar or a custom secret (Git tokens are added by the person in Connections → Git, not requested). Secrets are entered there, never in chat. Refused for a worker dispatched without a person."
     },
     {
       "name": "connections_status",

@@ -535,15 +535,15 @@
       "sites": [
         {
           "path": "core/runtime/contracts/runtime.v1/golden/signed-event-stopped.json",
-          "pattern": "\"signature\": \"(v1=[0-9a-f]{64})\""
+          "pattern": "\"signature\": \"(t=[0-9]+,v2=[0-9a-f]{64})\""
         },
         {
           "path": "core/runtime/tests/test_caller_auth.py",
-          "pattern": "^VECTOR_SIGNATURE = \"(v1=[0-9a-f]{64})\""
+          "pattern": "^VECTOR_SIGNATURE = \"(t=[0-9]+,v2=[0-9a-f]{64})\""
         },
         {
           "path": "core/meetings/services/meeting-api/tests/test_runtime_callback_signature.py",
-          "pattern": "^SIGNATURE = \"(v1=[0-9a-f]{64})\""
+          "pattern": "^SIGNATURE = \"(t=[0-9]+,v2=[0-9a-f]{64})\""
         }
       ]
     },

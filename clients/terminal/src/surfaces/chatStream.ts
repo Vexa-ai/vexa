@@ -77,6 +77,8 @@ export type ChatStreamEvent = {
    *  was measured against. */
   steps?: number;
   budget?: number;
+  /** `done` only — how many older messages the turn compacted to fit the model's context. */
+  compacted?: number;
   /** `done` only, and only when the turn STOPPED at a budget (Vexa-ai/vexa#1622) — the act the
    *  bubble offers, and the words it puts back on the same target. */
   act?: { label?: string; instruction?: string };
@@ -164,6 +166,9 @@ export type ChatStreamCallbacks = {
   /** THE SERVER'S STEP COUNT for this turn (Vexa-ai/vexa#1622) — off `done` or `turn-complete`,
    *  whichever arrives. Optional so existing callers/tests need not implement it. */
   onSteps?: (steps: number) => void;
+  /** THE TURN COMPACTED OLDER HISTORY to fit the model's context (`done.compacted`, a count) — a
+   *  muted note in the activity line, never the reply or the stop line. Optional. */
+  onCompacted?: (count: number) => void;
   /** a hard upstream error the proxy folded into the stream (terminal, surfaced) */
   onError: (message: string) => void;
   /** A TYPED FAULT ENDED THE TURN (P18) — an `error` event or a failed `done` that names the
@@ -595,6 +600,7 @@ export async function streamChatTurn(
             break;
           case "done": {
             terminal = true;
+            if (typeof ev.compacted === "number" && ev.compacted > 0) cb.onCompacted?.(ev.compacted);
             // A FAILED TURN THAT NAMES ITS FAULT (P18) — the provider's 402, its refused key. It
             // is rendered as what it is, not as "Model inference failed: <the provider's JSON>".
             const doneFault = ev.ok === false && cb.onFault ? readFault(ev.fault) : null;

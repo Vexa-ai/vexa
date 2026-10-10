@@ -18,17 +18,19 @@
       "minLength": 32
     },
     "CallbackSignature": {
-      "description": "The X-Runtime-Signature header on every RuntimeEvent the runtime POSTs to a callbackUrl: \"v1=\" + hex(HMAC-SHA256(key, canonical(event))), where key = HMAC-SHA256(RUNTIME_API_TOKEN, \"vexa-runtime-callback.v1\") and canonical(event) is the RuntimeEvent as JSON with keys sorted, no whitespace and UTF-8 unescaped. The token itself never travels to a callback URL. A receiver that holds the token (meeting-api) refuses a callback without a valid signature with 401 and moves nothing.",
+      "description": "The X-Runtime-Signature header on every RuntimeEvent the runtime POSTs to a callbackUrl: \"t=\" + the signing time in unix seconds + \",v2=\" + hex(HMAC-SHA256(key, message)), where key = HMAC-SHA256(RUNTIME_API_TOKEN, \"vexa-runtime-callback.v2\") and message = the timestamp, \"\\n\", the URL the callback is delivered to, \"\\n\", and the RuntimeEvent as JSON with keys sorted, no whitespace and UTF-8 unescaped. The runtime signs at every delivery attempt. The token itself never travels to a callback URL. A receiver that holds the token (meeting-api) refuses with 401, and moves nothing, a callback without a valid signature for the URL it was received on, one whose timestamp is more than 300 seconds from its own clock, and one whose signature it has already accepted.",
       "type": "string",
-      "pattern": "^v1=[0-9a-f]{64}$"
+      "pattern": "^t=[0-9]{1,12},v2=[0-9a-f]{64}$"
     },
     "SignedEventVector": {
-      "description": "A callback-signing vector: signing `event` with `token` must produce `signature` exactly.",
+      "description": "A callback-signing vector: signing `event` for delivery to `url` at `timestamp` with `token` must produce `signature` exactly.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["token", "event", "signature"],
+      "required": ["token", "url", "timestamp", "event", "signature"],
       "properties": {
         "token": { "type": "string", "minLength": 32, "description": "a published test token; it authenticates nothing" },
+        "url": { "type": "string", "minLength": 1 },
+        "timestamp": { "type": "integer", "minimum": 0 },
         "event": { "$ref": "#/$defs/RuntimeEvent" },
         "signature": { "$ref": "#/$defs/CallbackSignature" }
       }

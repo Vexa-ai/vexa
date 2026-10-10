@@ -787,8 +787,15 @@ redis:
     enabled: true
     size: 2Gi
     storageClassName: ""
-  maxmemory: "1gb"
-  maxmemoryPolicy: "allkeys-lru"
+  # Redis holds security state, not a cache: identity admits a worker's delegation token only while
+  # vexa:delegation:live:<jti> exists, and refuses one whose revocation key exists. An eviction
+  # policy would drop those keys under memory pressure, so the store never evicts: a full Redis
+  # refuses writes (OOM), which every writer reports as a typed failure (a worker then starts without
+  # its tools; a revocation still removes the live record first, which DEL is allowed to do when
+  # full). maxmemory sits below the container's memory limit so Redis refuses before the kernel
+  # kills it; raise both together. Any other policy is refused at render.
+  maxmemory: "768mb"
+  maxmemoryPolicy: "noeviction"
   # Durability paired invariant (enforced by vexa.validateRedisDurability): AOF on ⇒ BGSAVE failures
   # are non-blocking. Don't set stopWritesOnBgsaveError=yes without appendonly=yes.
   durability:

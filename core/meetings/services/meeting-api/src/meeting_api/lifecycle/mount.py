@@ -755,9 +755,17 @@ def mount_lifecycle(
         if runtime_callback_token:
             from .. import runtime_signature
 
-            if not runtime_signature.verify(runtime_callback_token, body,
-                                            request.headers.get(runtime_signature.HEADER) or ""):
-                refusal = "unsigned"
+            # Valid for the URL this door was reached on, signed within the skew window, and not
+            # accepted before (one guard per app; Redis-backed when the app has its client).
+            signature = request.headers.get(runtime_signature.HEADER) or ""
+            refusal = runtime_signature.check(runtime_callback_token, body, signature, str(request.url))
+            if refusal is None:
+                guard = getattr(request.app.state, "runtime_replay_guard", None)
+                if guard is None:
+                    guard = runtime_signature.ReplayGuard(getattr(request.app.state, "pipeline_redis", None))
+                    request.app.state.runtime_replay_guard = guard
+                if not await guard.first(signature.strip()):
+                    refusal = "replayed"
         elif not open_callbacks:
             refusal = "no_credential_configured"
         if refusal is not None:

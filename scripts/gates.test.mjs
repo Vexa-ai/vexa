@@ -324,7 +324,7 @@ test("image-licenses RED: an undeclared structured Helm repository/tag pin reds"
 });
 
 test("image-licenses RED: an undeclared Dockerfile FROM pin reds", () => {
-  const base = "FROM mcr.microsoft.com/playwright:v1.56.0-noble AS bot-builder";
+  const base = "FROM mcr.microsoft.com/playwright:v1.56.0-noble@sha256:35246d87a7c88ea9b771c65d33171b2611b02a8253b4b12ce6f94376c55f99f2 AS bot-builder";
   const injected = `FROM somevendor/unaudited:1.2 AS review-probe\n${base}`;
   const r = withEdited(LITE, base, injected, () => runGate("image-licenses"));
   assert.equal(r.green, false, "an undeclared Dockerfile FROM image pin sailed through");
@@ -346,7 +346,7 @@ test("image-licenses RED: an undeclared image in the transcription compose reds"
 
 test("image-licenses RED: an undeclared base in a service Dockerfile reds, ARG defaults resolved", () => {
   const f = "core/identity/services/admin-api/Dockerfile";
-  const r = withEdited(f, "FROM python:3.12-slim", "ARG BASE=somevendor/unaudited:1.2\nFROM ${BASE}",
+  const r = withEdited(f, /^FROM python:3\.12-slim\S*$/m, "ARG BASE=somevendor/unaudited:1.2\nFROM ${BASE}",
     () => runGate("image-licenses"));
   assert.equal(r.green, false, "a service Dockerfile's base was not read");
   assert.match(r.out, /undeclared pinned image "somevendor\/unaudited:1\.2" in core\/identity\/services\/admin-api\/Dockerfile/);
@@ -365,6 +365,32 @@ test("pinned images: the list carries every surface, and an image built here is 
     assert(refs.some((r) => r.startsWith(ref)), `${ref} is missing from the pinned list`);
   assert(!refs.some((r) => r.startsWith("mock-bot")), "mock-bot:dev is built by this repository, not pulled");
   assert(!refs.some((r) => r.startsWith("node:20-alpine")), "the gate-ignored dashboard's base was read");
+});
+
+// ── D-3 · D-4 · D-5: how every Dockerfile gets its bytes ───────────────────────────────────────
+// Each plant below was green before: a tag-only base, a download piped into a shell, a package
+// pip-installed beside the lock, and a uv older than the release that fixed its advisories.
+const ADMIN_DF = "core/identity/services/admin-api/Dockerfile";
+
+test("image-licenses RED: a base image pinned by tag only reds", () => {
+  const r = withEdited(ADMIN_DF, /^FROM python:3\.12-slim@sha256:[0-9a-f]{64}/m, "FROM python:3.12-slim", () => runGate("image-licenses"));
+  assert.equal(r.green, false);
+  assert.match(r.out, /admin-api\/Dockerfile: FROM python:3\.12-slim is not pinned by digest/);
+});
+
+test("image-licenses RED: a download piped into a shell reds", () => {
+  const r = withEdited(ADMIN_DF, /^RUN pip install --no-cache-dir uv==[\d.]+$/m,
+    "RUN curl -LsSf https://astral.sh/uv/install.sh | sh", () => runGate("image-licenses"));
+  assert.equal(r.green, false);
+  assert.match(r.out, /admin-api\/Dockerfile: a RUN pipes a download into a shell/);
+});
+
+test("image-licenses RED: a package installed beside the lock, or an old uv, reds", () => {
+  const r = withEdited(ADMIN_DF, /^RUN pip install --no-cache-dir uv==[\d.]+$/m,
+    'RUN pip install --no-cache-dir uv==0.9.22 && uv pip install --system "uvicorn[standard]==0.34.0"', () => runGate("image-licenses"));
+  assert.equal(r.green, false);
+  assert.match(r.out, /admin-api\/Dockerfile: installs "uvicorn\[standard\]==0\.34\.0" beside the lock/);
+  assert.match(r.out, /admin-api\/Dockerfile: uv==0\.9\.22 is older than 0\.11\.15/);
 });
 
 const TERMINAL_DOCKERFILE = "clients/terminal/Dockerfile";
@@ -417,8 +443,8 @@ test("image-licenses RED: sharp no longer overridden by the stand-in reds", () =
 
 test("runtime-parity RED: the bare `apt install` form (not just apt-get) is caught too", () => {
   // A contributor who writes `apt install redis-server` (no -get) must not bypass the #636 guard.
-  const inject = "RUN apt install -y redis-server\nFROM mcr.microsoft.com/playwright:v1.56.0-noble AS final";
-  const r = withEdited(LITE, "FROM mcr.microsoft.com/playwright:v1.56.0-noble AS final", inject,
+  const inject = "RUN apt install -y redis-server\nFROM mcr.microsoft.com/playwright:v1.56.0-noble@sha256:35246d87a7c88ea9b771c65d33171b2611b02a8253b4b12ce6f94376c55f99f2 AS final";
+  const r = withEdited(LITE, "FROM mcr.microsoft.com/playwright:v1.56.0-noble@sha256:35246d87a7c88ea9b771c65d33171b2611b02a8253b4b12ce6f94376c55f99f2 AS final", inject,
     () => runGate("runtime-parity"));
   assert.equal(r.green, false, "`apt install redis-server` (no -get) bypassed the parity guard");
   assert.match(r.out, /lite/);

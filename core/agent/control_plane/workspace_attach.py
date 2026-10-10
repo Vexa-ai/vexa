@@ -545,6 +545,10 @@ def ensure_workspace_shareable(root: str | Path, subject: str, slug: str) -> tup
     if (rootp / slug).exists() and membership.is_member(rootp, slug, subject) is not None:
         return slug, False
 
+    # ONLY A SLOT THIS STORE RECORDS. Anything else that happens to sit in the subject's store (a
+    # leftover, a staging tree, something a volume brought) is not one of their workspaces.
+    if slug not in (state.get("slots") or {}):
+        raise KeyError(slug)
     src = _slug_dir(rootp, subject, state, slug)  # the private slot's real on-disk path (.attached/…)
     if not src.exists():
         raise KeyError(slug)
@@ -610,6 +614,11 @@ def ensure_workspace_private(root: str | Path, subject: str, workspace_id: str) 
     rootp = Path(root).resolve()
     _safe_subject_dir(rootp, subject)
     if not wpaths.is_workspace_name(workspace_id or "", tier=False):
+        raise KeyError(workspace_id)
+    # A DESK IS NEVER UN-SHARED. A subject's own `<root>/<subject>` is their baseline, whatever a
+    # member list inside it says: a subject is known by its private store or its system tier.
+    if (workspace_id == subject or (rootp / STORE_DIRNAME / workspace_id).is_dir()
+            or (rootp / ".system" / workspace_id).is_dir()):
         raise KeyError(workspace_id)
     ws = (rootp / workspace_id).resolve()
     if not ws.exists() or rootp not in ws.parents:

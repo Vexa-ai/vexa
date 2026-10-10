@@ -24,6 +24,10 @@ from pathlib import Path
 
 from workspaces.shared import workspace_paths as wpaths
 
+#: The most claims one propose, or verdicts one validate, may carry (``bodies`` holds the request to
+#: the same bound; this holds every other caller to it).
+MAX_BATCH = 50
+
 #: Where the book lives on a desk. The SAME path the rig has always written and the same one flows'
 #: `await_claim` reads (`flows_defs/production.py` CLAIM_BOOK) — this change moves who writes it,
 #: never where it is, so an existing desk's book is still its book.
@@ -65,7 +69,7 @@ def _save(workspace: Path, book: dict) -> None:
     wpaths.write_text_inside(workspace, CLAIMS_PATH, json.dumps(book, indent=1))   # nofollow
 
 
-def propose(workspace: Path, batch: list) -> dict:
+def _propose(workspace: Path, batch: list) -> dict:
     """Record claims as PROPOSED. Returns the new ids, the whole book's view of them, and the exact
     lines to show the person.
 
@@ -106,7 +110,7 @@ def propose(workspace: Path, batch: list) -> dict:
     }
 
 
-def record_verdicts(workspace: Path, batch: list) -> dict:
+def _record_verdicts(workspace: Path, batch: list) -> dict:
     """Record a PERSON's word on proposed claims: `confirmed`, `corrected` (the original stays, the
     correction is the note) or `rejected`. One call carries the whole answer.
 
@@ -149,3 +153,24 @@ def record_verdicts(workspace: Path, batch: list) -> dict:
         out["tell_your_person"] = ("One line — noted, write-ups will use it — then offer the next "
                                    "thing. No recap of what you just did.")
     return out
+
+
+# ── one writer at a time ─────────────────────────────────────────────────────────────────────────
+# The book is read, changed and written back. Two calls at once (two tabs, an agent and a person)
+# would each write the book they read and one of them would lose the other's claims or verdicts, so
+# both take the workspace's write lock — the one every commit to this tree already takes.
+
+def propose(workspace: Path, batch: list) -> dict:
+    """Record claims as PROPOSED, under the workspace's write lock (see ``_propose``)."""
+    from shared.adapters import workspace_write_lock
+
+    with workspace_write_lock(Path(workspace)):
+        return _propose(workspace, list(batch or [])[:MAX_BATCH])
+
+
+def record_verdicts(workspace: Path, batch: list) -> dict:
+    """Record the person's verdicts, under the workspace's write lock (see ``_record_verdicts``)."""
+    from shared.adapters import workspace_write_lock
+
+    with workspace_write_lock(Path(workspace)):
+        return _record_verdicts(workspace, list(batch or [])[:MAX_BATCH])
