@@ -140,6 +140,10 @@ async def run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus, 
 
     sub_tasks: Dict[Tuple, asyncio.Task] = {}
     subscribed_meetings: Set[Tuple] = set()
+    # The meeting ROW each subscription streams. A native id is not an identity — a recurring code
+    # names many rows, across tenants too — so the live re-authorization compares the row it is
+    # streaming, never the (platform, native) pair the client typed.
+    streamed_row: Dict[Tuple, str] = {}
 
     async def fan_in(channels: List[str]):
         pubsub = redis.pubsub()
@@ -165,6 +169,7 @@ async def run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus, 
         if key in subscribed_meetings:
             return
         subscribed_meetings.add(key)
+        streamed_row[key] = str(meeting_id)
         channels = [
             f"tc:meeting:{meeting_id}:mutable",
             f"bm:meeting:{meeting_id}:status",
@@ -178,6 +183,7 @@ async def run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus, 
         if task:
             task.cancel()
         subscribed_meetings.discard(key)
+        streamed_row.pop(key, None)
 
     # Auto-subscribe the authed socket to its USER scope (Track G — meeting-status-ws §C.2). The
     # user-scoped redis channel `u:{user_id}:meetings` carries every meeting.status frame for this
@@ -252,9 +258,13 @@ async def run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus, 
             state["failures"] = 0
             return True
         state["failures"] = 0
-        still = {(a.get("platform"), a.get("native_id")) for a in (result.get("authorized") or [])}
+        # BY ROW, not by pair: a reader removed from one meeting may still reach ANOTHER row with the
+        # same native id (a recurring code, their own bot in the same call), and the authorizer then
+        # answers with that row. The stream they hold is the removed one, so it must stop.
+        still = {str(a.get("meeting_id")) for a in (result.get("authorized") or [])
+                 if a.get("meeting_id") is not None}
         for k in keys:
-            if (k[0], k[1]) in still:
+            if streamed_row.get(k) in still:
                 continue
             await unsubscribe_meeting(*k)
             log_event("ws_subscription_revoked", audience="user", span="ws", user_id=user_id,

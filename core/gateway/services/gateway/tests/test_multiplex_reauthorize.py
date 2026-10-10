@@ -131,3 +131,23 @@ async def test_one_failed_hop_does_not_revoke_but_a_sustained_outage_fails_close
     assert not any(f.get("text") == "x" for f in ws.sent), "fail closed after a sustained outage"
     ws.disconnect()
     await task
+
+
+async def test_a_reader_removed_from_one_row_is_cut_even_if_the_same_code_reaches_another(monkeypatch):
+    """R1801-1: the re-check compares the ROW being streamed. After removal the authorizer still
+    answers for the same (platform, native) — with a DIFFERENT row the reader can reach (a recurring
+    meeting code, or their own bot in the same call). The stream of the removed row must stop."""
+    _fast(monkeypatch)
+    auth_map = {("google_meet", "room-1"): {"meeting_id": 42, "user_id": 8}}
+    auth, redis = FakeAuthorizer(valid_key=API_KEY, auth_map=auth_map), FakeRedis()
+    ws = _WS(inbound=[SUBSCRIBE], api_key=API_KEY, close_when_drained=False)
+    task = asyncio.ensure_future(_run_multiplex(ws, auth, redis))
+    await _settle()
+    auth_map[("google_meet", "room-1")] = {"meeting_id": 77, "user_id": 8}   # same code, other row
+    await _wait_reauth()
+    assert any(f.get("error") == "subscription_revoked" for f in ws.sent)
+    await redis.publish("tc:meeting:42:mutable", json.dumps({"type": "transcription_segment", "text": "leak"}))
+    await _settle()
+    assert not any(f.get("text") == "leak" for f in ws.sent), "the removed row's transcript must stop"
+    ws.disconnect()
+    await task
