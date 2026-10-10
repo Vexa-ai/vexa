@@ -816,32 +816,40 @@ source = { virtual = "." }
 dependencies = [
     { name = "croniter" },
     { name = "cryptography" },
-    { name = "fakeredis" },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "icalendar" },
     { name = "jsonschema" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
     { name = "python-dateutil" },
     { name = "python-multipart" },
     { name = "redis" },
     { name = "referencing" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "fakeredis" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "croniter", specifier = ">=2,<4" },
     { name = "cryptography", specifier = ">=43,<47" },
-    { name = "fakeredis", specifier = ">=2.21,<3" },
     { name = "fastapi", specifier = ">=0.110,<1" },
     { name = "httpx", specifier = ">=0.27,<1" },
     { name = "icalendar", specifier = ">=6,<7" },
     { name = "jsonschema", specifier = ">=4.21,<5" },
-    { name = "pytest", specifier = ">=8" },
-    { name = "pytest-asyncio", specifier = ">=0.23,<2" },
     { name = "python-dateutil", specifier = ">=2.9,<3" },
     { name = "python-multipart", specifier = ">=0.0.9" },
     { name = "redis", specifier = ">=5,<6" },
     { name = "referencing", specifier = ">=0.34,<1" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "fakeredis", specifier = ">=2.21,<3" },
+    { name = "pytest", specifier = ">=8" },
+    { name = "pytest-asyncio", specifier = ">=0.23,<2" },
 ]

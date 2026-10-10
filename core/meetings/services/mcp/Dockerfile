@@ -18,7 +18,7 @@ WORKDIR /app
 # 1) Resolve + install the pinned dependency set from the lockfile (no project — package=false).
 COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-install-project
+    uv sync --frozen --no-install-project --no-dev
 
 # 2) Production-only runtime dep NOT in the (lean) test pyproject: the ASGI server.
 RUN --mount=type=cache,target=/root/.cache/uv \

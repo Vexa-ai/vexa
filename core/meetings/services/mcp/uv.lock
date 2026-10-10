@@ -1038,6 +1038,10 @@ dependencies = [
     { name = "fastapi-mcp" },
     { name = "httpx" },
     { name = "pydantic" },
+]
+
+[package.dev-dependencies]
+dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
 ]
@@ -1048,6 +1052,10 @@ requires-dist = [
     { name = "fastapi-mcp", specifier = "==0.4.0" },
     { name = "httpx", specifier = ">=0.27,<1" },
     { name = "pydantic", specifier = ">=2,<3" },
+]
+
+[package.metadata.requires-dev]
+dev = [
     { name = "pytest", specifier = ">=8" },
     { name = "pytest-asyncio", specifier = ">=0.23,<2" },
 ]

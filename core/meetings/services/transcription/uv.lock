@@ -971,11 +971,15 @@ dependencies = [
     { name = "h11" },
     { name = "httpx" },
     { name = "numpy" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
     { name = "python-multipart" },
     { name = "soundfile" },
     { name = "uvicorn", extra = ["standard"] },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
 ]
 
 [package.metadata]
@@ -985,11 +989,15 @@ requires-dist = [
     { name = "h11", specifier = ">=0.16.0" },
     { name = "httpx", specifier = ">=0.27,<1" },
     { name = "numpy", specifier = ">=1.22.0,<2.0.0" },
-    { name = "pytest", specifier = ">=8" },
-    { name = "pytest-asyncio", specifier = ">=0.23,<2" },
     { name = "python-multipart", specifier = ">=0.0.9" },
     { name = "soundfile", specifier = ">=0.12.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=8" },
+    { name = "pytest-asyncio", specifier = ">=0.23,<2" },
 ]
 
 [[package]]

@@ -730,7 +730,6 @@ version = "0.12.0"
 source = { virtual = "." }
 dependencies = [
     { name = "croniter" },
-    { name = "fakeredis" },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "jsonschema" },
@@ -742,13 +741,13 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "fakeredis" },
     { name = "pytest" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "croniter", specifier = ">=2,<6" },
-    { name = "fakeredis", specifier = ">=2.20,<3" },
     { name = "fastapi", specifier = ">=0.110,<1" },
     { name = "httpx", specifier = ">=0.27,<0.29" },
     { name = "jsonschema", specifier = ">=4,<5" },
@@ -759,4 +758,7 @@ requires-dist = [
 ]
 
 [package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=9.0.3" }]
+dev = [
+    { name = "fakeredis", specifier = ">=2.20,<3" },
+    { name = "pytest", specifier = ">=9.0.3" },
+]

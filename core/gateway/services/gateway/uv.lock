@@ -1244,9 +1244,13 @@ dependencies = [
     { name = "fastapi-guard" },
     { name = "httpx" },
     { name = "pydantic" },
+    { name = "starlette" },
+]
+
+[package.dev-dependencies]
+dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
-    { name = "starlette" },
 ]
 
 [package.metadata]
@@ -1256,9 +1260,13 @@ requires-dist = [
     { name = "fastapi-guard", specifier = ">=7.2,<8.0" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "pydantic", specifier = ">=2" },
+    { name = "starlette", specifier = ">=0.37" },
+]
+
+[package.metadata.requires-dev]
+dev = [
     { name = "pytest", specifier = ">=8" },
     { name = "pytest-asyncio", specifier = ">=0.23" },
-    { name = "starlette", specifier = ">=0.37" },
 ]
 
 [[package]]

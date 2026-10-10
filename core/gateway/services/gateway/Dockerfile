@@ -24,7 +24,7 @@ WORKDIR /app
 # 1) Resolve + install the pinned dependency set from the lockfile (no project — package=false).
 COPY core/gateway/services/gateway/pyproject.toml core/gateway/services/gateway/uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-install-project
+    uv sync --frozen --no-install-project --no-dev
 
 # 2) Production-only runtime deps NOT in the (lean) test pyproject: the ASGI server + the real
 #    redis fan-in client (httpx is already pinned). Kept out of pyproject so the offline gate venv

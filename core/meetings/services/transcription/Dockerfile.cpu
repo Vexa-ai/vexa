@@ -21,7 +21,7 @@ WORKDIR /app
 
 COPY core/meetings/services/transcription/pyproject.toml core/meetings/services/transcription/uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-install-project
+    uv sync --frozen --no-install-project --no-dev
 
 COPY core/meetings/services/transcription/src ./src
 RUN mkdir -p /app/models

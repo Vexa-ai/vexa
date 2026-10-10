@@ -26,7 +26,7 @@ WORKDIR /app
 
 COPY core/meetings/services/meeting-api/pyproject.toml core/meetings/services/meeting-api/uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-install-project
+    uv sync --frozen --no-install-project --no-dev
 
 # Production-only runtime deps NOT in the (lean) test pyproject (redis/httpx are already pinned):
 # the ASGI server + the async Postgres stack (collector/bot_spawn/recordings SQLAlchemy adapters)
