@@ -19,8 +19,11 @@ feed and every service key stay out of its reach, whatever runs inside the worke
 
 ``REDIS_WORKLOAD_ACL=shared`` hands workers the service connection instead. That is a deployment's
 explicit choice for a Redis that cannot define users (some managed services); every worker can then
-read and write every unit's streams, so it is safe only when every person on the instance trusts
-every other.
+read and write every unit's streams and every service key — the delegation records and revocations
+among them, so a worker can undo a revocation — so it is safe only when every person on the instance
+trusts every other. Delegation tokens are never published to Redis in that mode (``Dispatcher``), so
+no worker can read another's; the cost is that a unit's token is not refreshed and its tools end at
+the token's ``exp``.
 """
 from __future__ import annotations
 

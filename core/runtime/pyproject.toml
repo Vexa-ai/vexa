@@ -17,6 +17,8 @@ dependencies = [
 [dependency-groups]
 # test tooling only — kept out of the production images (uv sync --no-dev in the Dockerfiles)
 dev = ["pytest>=9.0.3", "fakeredis>=2.20,<3"]
+# the ASGI server the images run the app under, locked like everything else (uv sync --group production)
+production = ["uvicorn[standard]==0.34.0"]
 
 [tool.uv]
 package = false

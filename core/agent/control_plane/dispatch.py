@@ -1215,7 +1215,22 @@ class Dispatcher:
         # Published as the unit's CURRENT token too, which the reaper re-mints from before it
         # expires and the worker reads before each turn (control_plane.delegation_refresh). A
         # publish that fails costs only the refresh: the worker still boots with this token.
+        # REDIS_WORKLOAD_ACL=shared gives every worker the service connection, so a token in Redis
+        # would be readable by every other unit: there it is never published, and the unit keeps
+        # this token (and its tools) until its exp, unrefreshed.
+        if self._settings.redis_workload_acl == "shared":
+            return
         try:
+            # A unit id can be reached by a second dispatch (a meeting's unit is keyed on the meeting
+            # alone). The running worker reads the published token before each turn, so another
+            # person's token is never published over a live one: the unit keeps the person it was
+            # started for, and the refresh keeps re-minting theirs.
+            if not delegation_refresh.same_authority(
+                    self._delegation_store, self._settings.mcp_delegation_secret.get_secret_value(),
+                    unit_id=uid, claims=claims):
+                logger.warning("unit=%s already holds another person's live delegation token — this "
+                               "dispatch's token is not published to it", uid)
+                return
             delegation_refresh.publish(self._delegation_store, unit_id=uid, token=token,
                                        exp=int(claims["exp"]))
         except Exception:  # noqa: BLE001 — the token stands; only its replacement is lost

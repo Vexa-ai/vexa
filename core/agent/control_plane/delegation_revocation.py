@@ -53,6 +53,12 @@ logger = logging.getLogger("agent_api.delegation_revocation")
 
 #: The key identity checks: ``REVOKED_PREFIX + jti`` (gate:fact-parity, ``delegation-revocation-key``).
 REVOKED_PREFIX = "vexa:delegation:revoked:"
+#: THE POSITIVE RECORD identity also requires: ``LIVE_PREFIX + jti``, written when a token is recorded
+#: and deleted when it is revoked, expiring with the token (gate:fact-parity, ``delegation-live-key``).
+#: A denylist alone fails OPEN — a revocation key Redis evicted, or a token never recorded, reads as
+#: "not revoked" — so identity admits a token only while its live key exists and no revocation key
+#: does. An evicted live key refuses the token: the failure costs a worker its tools, never opens one.
+LIVE_PREFIX = "vexa:delegation:live:"
 UNITS_KEY = "vexa:delegation:units"
 UNIT_PREFIX = "vexa:delegation:unit:"
 #: The token a live unit currently holds, as agent-api minted it — agent-api's own record, the one a
@@ -73,6 +79,16 @@ class RevocationError(RuntimeError):
 
 def revoked_key(jti: str) -> str:
     return REVOKED_PREFIX + jti
+
+
+def live_key(jti: str) -> str:
+    return LIVE_PREFIX + jti
+
+
+def mark_live(client, *, jti: str, exp: int, now: Optional[float] = None) -> None:
+    """Write the positive record identity admits ``jti`` by, for the token's remaining life."""
+    t = time.time() if now is None else now
+    client.set(live_key(jti), "1", ex=max(1, int(exp - t)))
 
 
 def unit_key(unit_id: str) -> str:
@@ -112,6 +128,7 @@ def record(client, *, unit_id: str, jti: str, exp: int, now: Optional[float] = N
         if current is None or current < remaining:
             client.expire(unit_key(unit_id), remaining)
         client.sadd(UNITS_KEY, unit_id)
+        mark_live(client, jti=jti, exp=exp, now=t)
     except Exception as e:  # noqa: BLE001 — any failure leaves the token unrevocable
         raise RevocationError(f"the delegation token could not be recorded: {type(e).__name__}") from e
 
@@ -123,6 +140,7 @@ def revoke(client, *, jti: str, exp: int, now: Optional[float] = None) -> bool:
     if remaining <= 0:
         return False
     client.set(revoked_key(jti), "1", ex=remaining)
+    client.delete(live_key(jti))
     return True
 
 

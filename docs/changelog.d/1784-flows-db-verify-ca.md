@@ -1,0 +1,1 @@
+- **flows:** `VEXA_FLOWS_DB_URL` with `sslmode=verify-ca` now needs `sslrootcert` naming a CA file, and `sslrootcert=system` is accepted with `sslmode=verify-full` only, as libpq does. A URL that used `verify-ca` with no CA file stops flows at startup; use `verify-full`, or name the CA.

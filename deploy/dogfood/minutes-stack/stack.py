@@ -55,11 +55,15 @@ def compare(expected, actual):
 
 
 PROBE = r'''
-import os,json,httpx,hashlib
+import os,json,httpx,hashlib,time,uuid,redis
 from shared.delegation import mint_delegation
+from control_plane.delegation_revocation import mark_live
 url=os.environ['VEXA_MCP_URL']
 # Discovery only. No tool invocation, user record, transcript or credential is returned.
-token=mint_delegation(os.environ['VEXA_MCP_DELEGATION_SECRET'],subject='stack-discovery',regime='autonomous',workspaces=[],ttl_sec=60)
+jti=uuid.uuid4().hex
+token=mint_delegation(os.environ['VEXA_MCP_DELEGATION_SECRET'],subject='stack-discovery',regime='autonomous',workspaces=[],ttl_sec=60,jti=jti)
+# Identity admits a delegation token only while agent-api holds it live; hold this one for its 60 s.
+mark_live(redis.from_url(os.environ.get('REDIS_URL') or 'redis://redis:6379/0'),jti=jti,exp=int(time.time())+60)
 headers={'Authorization':'Bearer '+token,'Accept':'application/json, text/event-stream'}
 with httpx.Client(timeout=15) as client:
  def call(method,params,id):

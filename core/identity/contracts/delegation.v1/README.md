@@ -48,10 +48,13 @@ not a `Scope`, and `401 Invalid delegation: no such user` when `sub` names no ac
 against its unit at dispatch and, once the runtime no longer runs that unit (it completed, idled out,
 was stopped or failed), writes `vexa:delegation:revoked:<jti>` to the service Redis with the token's
 remaining lifetime as its expiry (`core/agent/control_plane/delegation_revocation.py`). identity
-answers `401 Invalid delegation: revoked` for a verified token whose key exists, and `503` when it
-cannot read the store, so an unreadable store never reads as "not revoked"; API keys never touch it
-(`admin_api/app/delegation_revocation.py`). The key's name is held equal on both sides by
-`gate:fact-parity` (fact `delegation-revocation-key`). `verify_delegation(…, revoked=…)` remains the
+also holds `vexa:delegation:live:<jti>` from the moment it records a token until it revokes it or the
+token expires. identity admits a verified token only while its live key exists and its revoked key
+does not, and answers `401 Invalid delegation: revoked` otherwise — so a key the store evicted, or a
+token agent-api never recorded, is refused rather than admitted — and `503` when it cannot read the
+store, so an unreadable store never reads as "not revoked"; API keys never touch it
+(`admin_api/app/delegation_revocation.py`). The key names are held equal on both sides by
+`gate:fact-parity` (facts `delegation-revocation-key`, `delegation-live-key`). `verify_delegation(…, revoked=…)` remains the
 in-module form; the dogfood rig's own verifier passes one.
 
 **Refresh.** A unit still running when half of its token's life has passed is handed a new token:

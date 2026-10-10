@@ -554,9 +554,10 @@ test("licenses RED: a shipped Python version with no licence row reds", () => {
 });
 
 test("licenses RED: a pip install line with no recorded closure reds", () => {
-  const r = withEdited(RUNTIME_DOCKERFILE, '"uvicorn[standard]==0.34.0"', '"uvicorn[standard]==0.34.1"', () => runGate("licenses"));
+  // the runtime image's one pip line is uv itself (its ASGI server comes from uv.lock)
+  const r = withEdited(RUNTIME_DOCKERFILE, "uv==0.11.33", "uv==0.11.34", () => runGate("licenses"));
   assert.equal(r.green, false, "an unresolved pip install line passed");
-  assert.match(r.out, /core\/runtime\/Dockerfile: `pip install uvicorn\[standard\]==0\.34\.1` has no resolved closure/);
+  assert.match(r.out, /core\/runtime\/Dockerfile: `pip install uv==0\.11\.34` has no resolved closure/);
 });
 
 test("licenses RED: a Python Cat-B package without its exception row reds", () => {

@@ -26,6 +26,7 @@ flowchart LR
   style redis_acl_users stroke-dasharray: 5 5,stroke-width:3px
   acl_units_index[("vexa:acl:units (redis hash)")]
   delegation_revoked[("vexa:delegation:revoked:{jti} (redis key)")]
+  delegation_live[("vexa:delegation:live:{jti} (redis key)")]
   delegation_records[("vexa:delegation:units + vexa:delegation:unit:{id} (redis set + hash)")]
   delegation_current[("vexa:delegation:current:{id} (redis key)")]
   unit_delegation[("unit:{id}:delegation (redis key)")]
@@ -74,6 +75,8 @@ flowchart LR
   meeting_api -->|write| redis_acl_users
   agent_api -->|write| acl_units_index
   agent_api -->|write| delegation_revoked
+  agent_api -->|write| delegation_live
+  admin_api -.->|read| delegation_live
   admin_api -.->|read| delegation_revoked
   agent_api -->|write| delegation_records
   agent_api -->|write| delegation_current

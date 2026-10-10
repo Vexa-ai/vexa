@@ -55,6 +55,22 @@ def publish(client, *, unit_id: str, token: str, exp: int, now: Optional[float] 
     client.set(delegation_key(unit_id), token, ex=ttl)
 
 
+def same_authority(client, secret: str, *, unit_id: str, claims: dict,
+                   now: Optional[float] = None) -> bool:
+    """May a token with ``claims`` become ``unit_id``'s current token? Yes when the unit holds no live
+    current token, or holds one for the same person. The same person's newer token replaces it —
+    a narrowed ceiling reaches the running worker at its next turn."""
+    current = client.get(dr.CURRENT_PREFIX + unit_id)
+    if not current:
+        return True
+    t = time.time() if now is None else now
+    try:
+        held = delegation.verify_delegation(secret, _text(current), now=int(t))
+    except delegation.DelegationError:
+        return True  # expired or unreadable: nothing live to protect
+    return str(held.get("sub")) == str(claims.get("sub"))
+
+
 def due(claims: dict, now: float) -> bool:
     """Has half of this token's life passed?"""
     iat, exp = int(claims.get("iat") or 0), int(claims.get("exp") or 0)

@@ -19,7 +19,7 @@ service stays out of the identity business. Python because it carves the parent 
 | **consumes** | the terminal's admin settings editor | `GET/PUT /internal/settings/{key}` | the platform-wide defaults (`models`, `transcription`, `setup`, `diagnostics`, `signin`) → `PlatformSettingResponse {key, value, env?, env_problems?}` (`app/platform_settings.py`) |
 | **calls** | bot/worker clients | `X-API-Key` on `/user/*` | user-tier self-serve (webhook config in `user.data`) |
 | **produces** | Postgres (backing stack) | SQLAlchemy `users` · `api_tokens` | the identity tables (one `Base`, FK `api_tokens.user_id → users.id`) |
-| **reads** | agent-api, through the service Redis (`REDIS_URL`) | `EXISTS vexa:delegation:revoked:<jti>` | whether a worker's delegation token was revoked when its unit ended (`app/delegation_revocation.py`); asked only for a `vxd_` whose signature verified, and a store it cannot read refuses that token with 503 — API keys never read it |
+| **reads** | agent-api, through the service Redis (`REDIS_URL`) | `EXISTS vexa:delegation:live:<jti>`, `EXISTS vexa:delegation:revoked:<jti>` | whether agent-api still holds a worker's delegation token live and has not revoked it when its unit ended (`app/delegation_revocation.py`); a token without its live key is refused; asked only for a `vxd_` whose signature verified, and a store it cannot read refuses that token with 503 — API keys never read it |
 
 ## Contracts
 

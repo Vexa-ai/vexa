@@ -1094,6 +1094,28 @@ upgrade_render="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yam
 if grep -q 'postgres-password' <<< "$upgrade_render"; then
   echo "  FAIL: the postgres-password hook rendered without a published live Secret"; fail=1
 else echo "  OK: no postgres-password hook without a published live Secret"; fi
+# Its run is live-only (lookup), so its source is held here: the hook's rights go when it fails as
+# well as when it succeeds, and no password is ever on a kubectl command line.
+HOOK_SRC="$CHART/templates/job-postgres-password.yaml"
+if [ "$(grep -c 'hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed' "$HOOK_SRC")" -eq 3 ] \
+   && ! grep -qE 'patch secret[^|]*-p "' "$HOOK_SRC" && grep -q -- '--patch-file /dev/stdin' "$HOOK_SRC"; then
+  echo "  OK: the rotation hook's rights are removed on failure too; its patches go on stdin"
+else echo "  FAIL: the rotation hook keeps its rights after a failure or puts a value on a command line"; fail=1; fi
+
+# N-10: a policy that names the flows tier names this release's flows Pods (name + instance labels,
+# which the flows Pods now carry), never any Pod in the namespace with a flows component label.
+NP_FLOWS="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true \
+  | awk 'BEGIN{RS="\n---\n"} /kind: NetworkPolicy/')"
+loose="$(awk '{ buf[NR%9]=$0 }
+  /values: \[flows-worker|values: \["flows-worker"|component: flows-api$/ {
+    ok=0; for (i=1;i<9;i++) if (buf[(NR-i)%9] ~ /app.kubernetes.io\/instance: vexa/) ok=1
+    if (!ok) n++ }
+  END { print n+0 }' <<< "$NP_FLOWS")"
+pod_labels="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true --show-only templates/flows.yaml \
+  | grep -c 'app.kubernetes.io/instance: vexa' || true)"
+if [ "$loose" -eq 0 ] && [ "$(grep -c 'flows' <<< "$NP_FLOWS")" -gt 0 ] && [ "$pod_labels" -ge 4 ]; then
+  echo "  OK: every policy peer for the flows tier carries the release's labels, and so do its Pods and Service"
+else echo "  FAIL: $loose flows policy peer(s) match on the component label alone (flows Pod/Service labels: $pod_labels)"; fail=1; fi
 
 # N-7: the namespace default-deny, both directions, with explicit allows for the chart's Pods.
 np_doc() { awk -v n="name: $1" '$0 ~ "^  "n"$"{f=1} f{print} f&&/^---/{exit}' <<< "$RENDER"; }
@@ -1198,5 +1220,38 @@ else echo "  FAIL: LoadBalancer terminal TERMINAL_TRUSTED_PROXIES: $(tp "$tlb")"
 tnamed="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set terminal.service.type=LoadBalancer --set terminal.trustedProxies=203.0.113.10)"
 if [ "$(tp "$tnamed")" = '"203.0.113.10"' ]; then echo "  OK: terminal.trustedProxies is passed through as named"
 else echo "  FAIL: named TERMINAL_TRUSTED_PROXIES: $(tp "$tnamed")"; fail=1; fi
+
+# The flows tier is matched by release, not by component alone: its Pods carry the chart's
+# selector labels, and every NetworkPolicy podSelector, the flows-api Service selector and the flows
+# Pod templates that name a flows component also name this release, so another release's flows Pods
+# in the namespace are not peers. (The Deployments' own selectors stay as they are: immutable.)
+flows_np="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true)"
+# Prints each such block that names a flows component without this release's instance label.
+loose="$(awk '
+  function ind(s) { match(s, /^ */); return RLENGTH }
+  function check(i,   d, j, blk, f, k) {
+    d = ind(line[i]); blk = line[i]; f = (line[i] ~ /flows-(worker|api|mailbox)/); k = 0
+    for (j = i + 1; j <= n && ind(line[j]) > d; j++) {
+      blk = blk "\n" line[j]
+      if (line[j] ~ /flows-(worker|api|mailbox)/) f = 1
+      if (line[j] ~ /app.kubernetes.io\/instance: vexa/) k = 1
+    }
+    if (f && !k) print kind ": " blk "\n=="
+  }
+  function flush(   i) {
+    for (i = 1; i <= n; i++) {
+      if (kind == "NetworkPolicy" && line[i] ~ /^ *(- )?podSelector:/) check(i)
+      if (kind == "Service" && line[i] ~ /^  selector:/) check(i)
+      if (kind == "Deployment" && line[i] ~ /^      labels:/) check(i)
+    }
+    n = 0; kind = ""
+  }
+  /^---/ { flush(); next }
+  /^kind: / { kind = $2 }
+  { line[++n] = $0 }
+  END { flush() }' <<< "$flows_np")"
+if [ -z "$loose" ] && grep -q 'app.kubernetes.io/component: flows-api' <<< "$flows_np"; then
+  echo "  OK: every policy, Service and Pod template naming a flows component also names this release"
+else echo "  FAIL: flows matched by component alone:"; echo "$loose" | head -40; fail=1; fi
 
 [ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }

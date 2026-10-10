@@ -35,7 +35,7 @@ All of this is inert without a CNI that enforces NetworkPolicy.
 {{- $sel := include "vexa.selectorLabels" . | fromYaml }}
 {{- $cp := .Values.networkPolicy.controlPlane }}
 {{- $flows := list "flows-worker" "flows-api" "flows-mailbox" }}
-{{- $chartPods := list (dict "podSelector" (dict "matchLabels" $sel)) (dict "podSelector" (dict "matchExpressions" (list (dict "key" "app.kubernetes.io/component" "operator" "In" "values" $flows)))) }}
+{{- $chartPods := list (dict "podSelector" (dict "matchLabels" $sel)) (dict "podSelector" (dict "matchLabels" $sel "matchExpressions" (list (dict "key" "app.kubernetes.io/component" "operator" "In" "values" $flows)))) }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -47,7 +47,7 @@ spec:
   policyTypes: [Ingress, Egress]
 ---
 {{- /* egress of every chart Pod but the two datastores */}}
-{{- $egressSelectors := list (dict "matchLabels" $sel "matchExpressions" (list (dict "key" "app.kubernetes.io/component" "operator" "NotIn" "values" (list "postgres" "redis")))) (dict "matchExpressions" (list (dict "key" "app.kubernetes.io/component" "operator" "In" "values" $flows))) }}
+{{- $egressSelectors := list (dict "matchLabels" $sel "matchExpressions" (list (dict "key" "app.kubernetes.io/component" "operator" "NotIn" "values" (list "postgres" "redis")))) (dict "matchLabels" $sel "matchExpressions" (list (dict "key" "app.kubernetes.io/component" "operator" "In" "values" $flows))) }}
 {{- range $i, $podSelector := $egressSelectors }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -143,6 +143,7 @@ metadata:
 spec:
   podSelector:
     matchLabels:
+      {{- toYaml $sel | nindent 6 }}
       app.kubernetes.io/component: flows-api
   policyTypes: [Ingress]
   ingress:
@@ -183,6 +184,8 @@ spec:
                 operator: In
                 values: [admin-api, meeting-api, pgbouncer, migrations]
         - podSelector:
+            matchLabels:
+              {{- toYaml $sel | nindent 14 }}
             matchExpressions:
               - key: app.kubernetes.io/component
                 operator: In

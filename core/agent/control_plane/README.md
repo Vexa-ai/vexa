@@ -92,11 +92,12 @@ caller or with the internal secret, never with a credential of its own:
 ## A worker's delegation token ends with its unit
 
 `delegation_revocation.py`. Each dispatch's delegation token (`shared/delegation.py`) is recorded
-against its unit before the spawn (`vexa:delegation:unit:<unit id>`, jti → exp), and a token that
-cannot be recorded is withheld. The reaper thread compares the recorded units with the runtime's live
+against its unit before the spawn (`vexa:delegation:unit:<unit id>`, jti → exp) and held live
+(`vexa:delegation:live:<jti>`, expiring with the token — identity admits a token only while that key
+exists), and a token that cannot be recorded is withheld. The reaper thread compares the recorded units with the runtime's live
 workloads every 30 s; a unit the runtime no longer runs — completed, idled out, stopped, failed, or
 never started — has its tokens written to `vexa:delegation:revoked:<jti>` with their remaining
-lifetime, which identity's `/internal/validate` refuses. A unit id is reused across warm windows, so
+lifetime and their live keys deleted, which identity's `/internal/validate` refuses. A unit id is reused across warm windows, so
 the dispatch that starts a unit's next container also revokes the previous container's token when the
 runtime reports it ended. Tokens younger than 120 s are never revoked (their spawn may still be on
 its way), and a sweep that cannot read the runtime revokes nothing. The token's lifetime,

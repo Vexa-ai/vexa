@@ -36,7 +36,9 @@ import logging
 import os
 import threading
 import time
+import re
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections import OrderedDict
 
@@ -174,6 +176,16 @@ def _resolve_native(meeting_id: str) -> "tuple[str, str] | None":
     return hit
 
 
+#: One path segment: what a platform or native meeting id must be before it goes into a gateway URL
+#: (and a workspace path). Not a separator, not a dotname, no control characters.
+_SEGMENT = re.compile(r"\A[A-Za-z0-9][^/\\\x00-\x1f\x7f]{0,199}\Z")
+
+
+def _segment(value) -> str | None:
+    v = str(value or "")
+    return urllib.parse.quote(v, safe="") if _SEGMENT.match(v) else None
+
+
 def _record_meeting_doc(native: str, platform: str, subject: str) -> None:
     """Best-effort: connect the meeting's own kg doc ref to the meeting on session_end, via the
     gateway (X-API-Key). Recorded from the watcher — NOT any isolated worker — so the user key never
@@ -183,6 +195,12 @@ def _record_meeting_doc(native: str, platform: str, subject: str) -> None:
         key = os.environ.get("VEXA_BOT_API_KEY", "")
         if not key:
             return
+        # The ids come from the meeting list, which a bot fills in: each must be one plain segment,
+        # and is percent-encoded into the URL, so the call can only ever name this meeting's docs.
+        native_seg, platform_seg = _segment(native), _segment(platform)
+        if native_seg is None or platform_seg is None:
+            logger.warning("meeting doc ref not recorded: the meeting id is not a plain name")
+            return
         gw = os.environ.get("VEXA_GATEWAY_URL", "http://gateway:8000").rstrip("/")
         body = json.dumps({
             "workspace": subject,
@@ -190,7 +208,7 @@ def _record_meeting_doc(native: str, platform: str, subject: str) -> None:
             "title": native,
             "kind": "meeting",
         }).encode()
-        url = f"{gw}/meetings/{platform}/{native}/docs"
+        url = f"{gw}/meetings/{platform_seg}/{native_seg}/docs"
         req = urllib.request.Request(
             url, data=body, method="POST",
             headers={"X-API-Key": key, "Content-Type": "application/json"},

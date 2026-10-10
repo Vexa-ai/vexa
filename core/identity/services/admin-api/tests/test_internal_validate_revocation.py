@@ -1,10 +1,11 @@
 """A worker's delegation token stops resolving once agent-api revoked it — and an unreadable store
 refuses delegation tokens, never API keys.
 
-agent-api writes `vexa:delegation:revoked:<jti>` when the unit a token was minted for ends
-(core/agent/control_plane/delegation_revocation.py). `/internal/validate` checks that key for every
-`vxd_` bearer whose signature verified, and answers 503 when it cannot read the store, so a dead
-Redis never reads as "not revoked".
+agent-api writes `vexa:delegation:live:<jti>` when it records a token and, when the unit a token was
+minted for ends, deletes it and writes `vexa:delegation:revoked:<jti>`
+(core/agent/control_plane/delegation_revocation.py). `/internal/validate` admits a `vxd_` bearer whose
+signature verified only while its live key exists and its revoked key does not, and answers 503 when
+it cannot read the store, so neither a dead Redis nor a lost key reads as "not revoked".
 
 No database and no Redis: `get_db` is overridden, and the store is the in-memory fake the conftest
 installs (`revocation_store`), except where a test points the real client at nothing.
@@ -109,6 +110,30 @@ def test_revocation_is_per_token_not_per_person(client, revocation_store):
     revocation_store.revoke("unit-a")
     assert _validate(client, _mint("unit-a")).status_code == 401
     assert _validate(client, _mint("unit-b")).status_code == 200
+
+
+# ── admitted only while agent-api holds the token live ──────────────────────────────────────────
+
+def test_a_token_whose_live_record_is_gone_is_refused(client, revocation_store):
+    """A verified token whose live record the store no longer holds (evicted, or never written) is
+    refused, though no revocation of it exists either."""
+    revocation_store.evict("record-evicted")
+    r = _validate(client, _mint("record-evicted"))
+    assert r.status_code == 401, r.text
+    assert r.json() == {"detail": "Invalid delegation: revoked"}
+
+
+def test_a_revoked_token_stays_refused_if_its_live_record_lingers(client, revocation_store):
+    """Both halves are read: a revocation refuses the token even while a live record still answers."""
+    revocation_store.revoke("both-present")
+    revocation_store.not_live.discard("both-present")
+    assert _validate(client, _mint("both-present")).status_code == 401
+
+
+def test_a_missing_live_record_refuses_only_that_token(client, revocation_store):
+    revocation_store.evict("gone")
+    assert _validate(client, _mint("gone")).status_code == 401
+    assert _validate(client, _mint("held")).status_code == 200
 
 
 # ── the store unreachable: the vxd_ is refused, an API key is not touched ────────────────────────

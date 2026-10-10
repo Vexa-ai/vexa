@@ -69,6 +69,7 @@ system agent  # the execution domain: a trigger becomes one governed agent turn 
   data-asset acl-units-index [writers: agent-api]
   data-asset routine-state [writers: agent-api]
   data-asset delegation-revoked [writers: agent-api]
+  data-asset delegation-live [writers: agent-api]
   data-asset delegation-records [writers: agent-api]
   data-asset delegation-current [writers: agent-api]
   data-asset unit-delegation [writers: agent-api]
@@ -207,6 +208,8 @@ edges:
   meeting-api -write-> redis-acl-users  # ACL SETUSER/DELUSER a bot's own user per session; restore after a Redis restart
   agent-api -write-> acl-units-index  # HSET/HDEL the worker users it defined
   agent-api -write-> delegation-revoked  # SET revoked:<jti> for the token's remaining life when the runtime no longer runs its unit
+  agent-api -write-> delegation-live  # SET live:<jti> for the token's life when it is recorded; DEL it when the token is revoked
+  admin-api -read-> delegation-live  # EXISTS live:<jti> for every verified vxd_ bearer; a token without it is refused (401), a store it cannot read refuses the token (503)
   admin-api -read-> delegation-revoked  # EXISTS revoked:<jti> for every verified vxd_ bearer; a store it cannot read refuses the token (503), API keys never read it
   agent-api -write-> delegation-records  # HSET/SADD a token's jti against its unit before the spawn and at each refresh; HDEL/SREM as tokens are revoked or expire
   agent-api -write-> delegation-current  # SET the unit's current token at dispatch and at each refresh, and GET it to re-mint

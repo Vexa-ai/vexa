@@ -30,6 +30,10 @@
   services' admin key is none of the published values, and admin-api reaches its delegation
   revocation store (its own `is_revoked`, run with its own environment, answers instead of raising).
 
+- `test_image_supply.py` — offline: the runtime image and Lite's runtime venv install nothing
+  outside `uv.lock` (the ASGI server is a locked `production` group), uv is a release past the fixed
+  advisories, and Lite takes it as a checksum-verified binary rather than a piped script.
+
 - `program_environments.py`, `child_identities.py` — LIVE, run by `make -C deploy/lite test` inside the
   booted container: the runtime caller credential has its three holders only; a worker for a numeric
   and a named subject and a bot started through the runtime run as non-root uids of their own with

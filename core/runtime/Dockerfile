@@ -21,8 +21,9 @@ RUN set -eux; \
     chmod +x /usr/local/bin/kubectl; \
     apt-get purge -y curl; apt-get autoremove -y; rm -rf /var/lib/apt/lists/*
 
-# uv via PyPI (ghcr.io is unreachable in this build env) — pinned for deterministic resolves.
-RUN pip install --no-cache-dir uv==0.9.22
+# uv via PyPI (ghcr.io is unreachable in this build env) — pinned for deterministic resolves, at a
+# release past the advisories fixed in 0.11.15.
+RUN pip install --no-cache-dir uv==0.11.33
 
 ENV UV_LINK_MODE=copy \
     UV_PROJECT_ENVIRONMENT=/opt/venv \
@@ -33,13 +34,10 @@ ENV UV_LINK_MODE=copy \
 WORKDIR /app
 
 COPY pyproject.toml uv.lock ./
-# --no-dev: the dev group (pytest) is host-side test tooling, not a runtime dep.
+# --no-dev: the dev group (pytest) is host-side test tooling, not a runtime dep. The production group is
+# the ASGI server, locked like every other package: nothing is installed outside uv.lock.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-install-project --no-dev
-
-# Production-only: the ASGI server (fastapi/httpx/redis are already pinned in pyproject).
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install "uvicorn[standard]==0.34.0"
+    uv sync --frozen --no-install-project --no-dev --group production
 
 COPY src ./src
 

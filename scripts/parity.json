@@ -420,6 +420,25 @@
       ]
     },
     {
+      "id": "delegation-live-key",
+      "fact": "the Redis key prefix a delegation token is held live under until it is revoked or expires, vexa:delegation:live:<jti>",
+      "kind": "literal",
+      "enforced": true,
+      "canonical": "core/agent/control_plane/delegation_revocation.py — LIVE_PREFIX (agent-api is the store's only writer)",
+      "how_to_agree": "rename it in both modules in one change and restart both; tokens recorded under the old name are refused until they are re-minted",
+      "why": "agent-api writes the key when it records a token and identity admits a vxd_ bearer only while it exists. The two are different images with no shared module; a reader that spells the key differently refuses every token, and a writer that does admits none, with each side's own tests green.",
+      "sites": [
+        {
+          "path": "core/agent/control_plane/delegation_revocation.py",
+          "pattern": "^LIVE_PREFIX = \"([^\"]+)\""
+        },
+        {
+          "path": "core/identity/services/admin-api/src/admin_api/app/delegation_revocation.py",
+          "pattern": "^LIVE_PREFIX = \"([^\"]+)\""
+        }
+      ]
+    },
+    {
       "id": "flows-person-refusal",
       "fact": "the refusal a worker with nobody in the loop reads from flows-api (gateway-identity.v1 REFUSAL, human_session_required)",
       "kind": "prose",

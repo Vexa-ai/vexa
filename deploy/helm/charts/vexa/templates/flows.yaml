@@ -47,7 +47,9 @@ spec:
     matchLabels: {app.kubernetes.io/component: flows-worker}
   template:
     metadata:
-      labels: {app.kubernetes.io/component: flows-worker}
+      labels:
+        {{- include "vexa.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: flows-worker
     spec:
       {{- include "vexa.nonRootPodSecurityContext" . | nindent 6 }}
       {{- /* the ensure-db bootstrap only has work to do when the flows tables live in a database
@@ -223,7 +225,9 @@ spec:
     matchLabels: {app.kubernetes.io/component: flows-mailbox}
   template:
     metadata:
-      labels: {app.kubernetes.io/component: flows-mailbox}
+      labels:
+        {{- include "vexa.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: flows-mailbox
     spec:
       {{- include "vexa.nonRootPodSecurityContext" . | nindent 6 }}
       {{- /* F192 — the SAME ensure-db initContainer flows-worker carries above: every Deployment
@@ -382,7 +386,9 @@ spec:
     matchLabels: {app.kubernetes.io/component: flows-api}
   template:
     metadata:
-      labels: {app.kubernetes.io/component: flows-api}
+      labels:
+        {{- include "vexa.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: flows-api
     spec:
       {{- include "vexa.nonRootPodSecurityContext" . | nindent 6 }}
       {{- /* F192 — see the identical block on flows-worker above (reconciled the same way as
@@ -555,7 +561,9 @@ kind: Service
 metadata:
   name: {{ include "vexa.componentName" (list . "flows-api") }}
 spec:
-  selector: {app.kubernetes.io/component: flows-api}
+  selector:
+    {{- include "vexa.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: flows-api
   ports:
     - name: http
       port: 18200

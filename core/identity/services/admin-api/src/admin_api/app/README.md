@@ -9,8 +9,10 @@ internal `X-Internal-Secret`) and assembles the routers below.
   dev-mode escape, one without).
 - `validate.py` — the gateway's fail-closed authz oracle `POST /internal/validate`: an API key or a
   worker's delegation token in, one declared `ValidatedIdentity` out.
-- `delegation_revocation.py` — whether agent-api revoked a worker's delegation token when its unit
-  ended (`vexa:delegation:revoked:<jti>` in the service Redis, `REDIS_URL`). Read only for a `vxd_`
+- `delegation_revocation.py` — whether agent-api still holds a worker's delegation token live
+  (`vexa:delegation:live:<jti>`) and has not revoked it when its unit ended
+  (`vexa:delegation:revoked:<jti>`), both in the service Redis (`REDIS_URL`); a token missing its live
+  key is refused. Read only for a `vxd_`
   bearer whose signature verified; an unreadable store refuses that token with 503 and never touches
   an API key.
 - `platform_settings.py` — `GET/PUT /internal/settings/{key}`: the per-key settings table, the field

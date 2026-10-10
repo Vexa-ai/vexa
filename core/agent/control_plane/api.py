@@ -1075,7 +1075,10 @@ def _build_production_app() -> FastAPI:
                                      secret=settings.internal_api_secret.get_secret_value())
     else:
         logger.warning("REDIS_WORKLOAD_ACL=shared — every agent worker connects to Redis with the "
-                       "service credential and can read and write every unit's streams")
+                       "service credential and can read and write every unit's streams and every "
+                       "service key, the delegation records and revocations among them; delegation "
+                       "tokens are therefore never published to Redis, and a unit's token is not "
+                       "refreshed (its tools end at the token's exp)")
     # A worker's delegation token is recorded against its unit and REVOKED when the unit ends, in the
     # store identity reads for every vxd_ bearer (control_plane.delegation_revocation). Wired only
     # when a toolbelt is configured: with no delegation key or no MCP endpoint nothing is minted.
