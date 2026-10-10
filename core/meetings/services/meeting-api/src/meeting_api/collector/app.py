@@ -1129,7 +1129,7 @@ def build_router(
             if redis is not None:
                 try:
                     await redis.xadd(f"tc:meeting:{result['meeting_id']}",
-                                     {"type": "session_end", "uid": session_uid})
+                                     {"type": "session_end", "session_uid": session_uid})
                 except Exception as e:  # noqa: BLE001 — best-effort marker; never fail the import
                     log_event("transcript_import_marker_failed", audience="system", level="warning",
                               span="meetings.transcript.import", user_id=user_id,

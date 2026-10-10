@@ -282,8 +282,8 @@ async def ingest(store: TranscriptStore, redis: RedisBus, message: dict) -> int:
         # P23/P0: the collector owns tc:meeting:{meeting_id} (the numeric ROW id, cross-tenant safe) —
         # emit the session_end marker the copilot worker + terminal SSE read off it (the agent relay used
         # to do this; the agent now only consumes). Key the marker by the numeric row id (never the
-        # native id, which collides across users/rows). The wire ``uid`` stays the native/session id for
-        # display. When no numeric id is present (an older bot that only sent a native/uid) there is no
+        # native id, which collides across users/rows). The marker's ``session_uid`` stays the native/session
+        # id for display — the field name transcript.v1's SessionEnd seals, the same one a segment carries. When no numeric id is present (an older bot that only sent a native/uid) there is no
         # row to key on → skip; the copilot reaps on idle anyway.
         mid_raw = data.get("meeting_id")
         try:
@@ -293,7 +293,7 @@ async def ingest(store: TranscriptStore, redis: RedisBus, message: dict) -> int:
         if meeting_id is not None and not await _erased(store, meeting_id):
             uid = data.get("native_meeting_id") or data.get("uid") or data.get("session_uid") or str(meeting_id)
             try:
-                await redis.xadd(_transcript_stream(meeting_id), {"type": "session_end", "uid": uid})
+                await redis.xadd(_transcript_stream(meeting_id), {"type": "session_end", "session_uid": uid})
             except Exception as e:  # noqa: BLE001 — best-effort; never abort the batch
                 _log_publish_failure(meeting_id, e)
         return 0

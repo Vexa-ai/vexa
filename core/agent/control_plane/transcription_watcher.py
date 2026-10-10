@@ -353,8 +353,8 @@ def _handle(live, subject: str, mid: str, p: dict, keymap: dict) -> None:
     P0 (cross-tenant leak fix): everything keys on the numeric ROW id ``mid`` — NOT the native Meet
     code, which collides across DIFFERENT users and across ONE user's re-sends. The native code is for
     DISPLAY only: the kg doc, the human-readable title and the ``native_id`` field. The collector writes
-    it into the feed (``session_uid`` on a segment, ``uid`` on the end marker), falling back to the row
-    id when it knows none; then the gateway lookup is tried, and a miss only degrades the display."""
+    it into the feed as ``session_uid`` — on a segment and on the end marker alike (transcript.v1's
+    FeedTranscription and SessionEnd) — falling back to the row id when it knows none; then the gateway lookup is tried, and a miss only degrades the display."""
     kind = p.get("type")
     # The routing key is the numeric ROW id, frozen once per meeting_id (kept for structural parity
     # with the reap path below).
@@ -364,7 +364,9 @@ def _handle(live, subject: str, mid: str, p: dict, keymap: dict) -> None:
     if kind == "session_end":
         # The collector wrote this marker for an end the meeting's own bot signed. The agent only does
         # its OWN bookkeeping: drop the live row, clear keymap, connect the kg doc (native, for display).
-        native = str(p.get("uid") or mid)
+        # `uid` is the name a collector before transcript.v1 parity wrote; read it only as a fallback
+        # so a marker already sitting in a live feed across the upgrade still ends its meeting.
+        native = str(p.get("session_uid") or p.get("uid") or mid)
         live.drop(key)
         keymap.pop(mid, None)
         logger.info("meeting %s ended", key)

@@ -628,7 +628,7 @@ def mount_lifecycle(
                 try:
                     await redis.xadd(
                         f"tc:meeting:{meeting_row_id}",
-                        {"type": "session_end", "uid": str(native or meeting_row_id)},
+                        {"type": "session_end", "session_uid": str(native or meeting_row_id)},
                     )
                     log_event(
                         "meeting_copilot_reap_signalled", audience="system", span="lifecycle.callback",

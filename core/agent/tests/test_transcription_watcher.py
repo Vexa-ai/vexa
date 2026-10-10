@@ -73,7 +73,7 @@ class _Rig:
 
     def verified_end(self, mid, native=None, entry_id="*") -> str:
         return self.r.xadd(f"tc:meeting:{mid}",
-                           {"payload": json.dumps({"type": "session_end", "uid": native or str(mid)})},
+                           {"payload": json.dumps({"type": "session_end", "session_uid": native or str(mid)})},
                            id=entry_id)
 
     def drain(self) -> None:

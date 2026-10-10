@@ -57,7 +57,7 @@ def test_only_the_collectors_feed_reaches_the_output(r, monkeypatch):
     r.xadd("transcription_segments", {"payload": json.dumps({"type": "session_end", "meeting_id": 42})})
     # what the collector admitted for meeting 42
     r.xadd("tc:meeting:42", _wire("hello", "s1"))
-    r.xadd("tc:meeting:42", {"payload": json.dumps({"type": "session_end", "uid": "abc-defg-hij"})})
+    r.xadd("tc:meeting:42", {"payload": json.dumps({"type": "session_end", "session_uid": "abc-defg-hij"})})
     _run(monkeypatch, "--no-bot", "--meeting-id", "42")
     out = [json.loads(f["payload"]) for _id, f in r.xrange("tc:meeting:abc-defg-hij")]
     texts = [s["text"] for p in out for s in p.get("segments", [])]

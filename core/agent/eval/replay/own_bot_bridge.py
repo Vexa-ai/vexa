@@ -112,7 +112,7 @@ def main() -> None:
                     continue
                 t = p.get("type")
                 if t == "session_end":
-                    r.xadd(out_stream, {"payload": json.dumps({"type": "session_end", "uid": native_id})})
+                    r.xadd(out_stream, {"payload": json.dumps({"type": "session_end", "session_uid": native_id})})
                     print("[bridge] session_end", flush=True)
                     return
                 if t != "transcription":

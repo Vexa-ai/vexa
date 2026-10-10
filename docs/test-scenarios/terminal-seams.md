@@ -108,7 +108,7 @@ deferred to an L4 eval with a frozen transcript fixture.
   seam: "session_end on transcription_segments -> _handle -> tc:meeting:{native} session_end + live.drop + keymap clear"
   module_probe: core/agent/services/agent-api/tests/test_transcription_watcher.py  # test_session_end_drops_the_live_row_without_writing_the_carrier
   expected:
-    fanned_frame: { type: session_end, uid: "{native}" }
+    fanned_frame: { type: session_end, session_uid: "{native}" }
     live_row: dropped
     keymap_and_seed: cleared                        # a same-numeric relaunch re-resolves cleanly (no stale key)
   note: session_end is the last transcript entry; reaping clears all per-meeting state so a relaunch is a fresh meeting.
