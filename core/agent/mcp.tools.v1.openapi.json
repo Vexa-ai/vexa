@@ -116,12 +116,14 @@
           "scope": {
             "default": "tenant",
             "description": "who it is about; `tenant` is the person's company",
+            "maxLength": 40,
             "title": "Scope",
             "type": "string"
           },
           "source": {
             "default": "",
             "description": "where it came from, in a few words",
+            "maxLength": 300,
             "title": "Source",
             "type": "string"
           }
@@ -169,6 +171,7 @@
             "items": {
               "$ref": "#/components/schemas/ClaimVerdict"
             },
+            "maxItems": 50,
             "title": "Verdicts",
             "type": "array"
           }
@@ -195,6 +198,7 @@
                 }
               ]
             },
+            "maxItems": 50,
             "title": "Claims",
             "type": "array"
           }

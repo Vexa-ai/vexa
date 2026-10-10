@@ -28,7 +28,7 @@ const DEFAULT_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 // Tracked files, repo-relative, minus any under a `.gateignore` directory. Outside a git checkout
 // (a bare copy) every file on disk counts.
-function trackedFiles(root) {
+export function trackedFiles(root) {
   let files;
   try {
     files = execFileSync("git", ["ls-files", "-z"], { cwd: root, encoding: "utf8", maxBuffer: 64 << 20 })
@@ -55,7 +55,7 @@ function trackedFiles(root) {
   return files.filter((f) => existsSync(join(root, f)) && !underIgnore(f));
 }
 
-const isDockerfile = (f) => /^Dockerfile(\.[^/]+)?$/.test(basename(f)) && !/\.(md|dockerignore)$/.test(f)
+export const isDockerfile = (f) => /^Dockerfile(\.[^/]+)?$/.test(basename(f)) && !/\.(md|dockerignore)$/.test(f)
   || /\.Dockerfile$/.test(f);
 
 // The `docker run` image operand: the first argument that is not an option or an option's value.

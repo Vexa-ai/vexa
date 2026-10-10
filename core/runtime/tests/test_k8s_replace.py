@@ -31,8 +31,11 @@ class FakeCluster:
             name = pod["metadata"]["name"]
             if name in self.pods:
                 r.returncode, r.stderr = 1, f'Error from server (AlreadyExists): pods "{name}" already exists'
+            elif pod.get("kind") == "Secret":
+                pass
             else:
                 self.pods[name] = {**pod, "status": {"phase": "Pending"}}
+                r.stdout = json.dumps({**pod, "metadata": {**pod["metadata"], "uid": f"uid-{name}"}})
         elif verb == "get":
             name = args[2]
             if name in self.pods:
@@ -66,11 +69,11 @@ def _first_turn(cluster, backend, phase):
 def test_a_finished_pod_of_ours_is_replaced(cluster):
     backend = K8sBackend(instance="rel")
     h = _first_turn(cluster, backend, "Succeeded")
-    h2 = backend.start("agent-7-chat-main", RUN, {"TURN": "2"})
+    h2 = backend.start("agent-7-chat-main", RUN, {"LOG_LEVEL": "2"})
     assert h2._impl == h._impl
     pod = cluster.pods[h._impl]
     assert pod["status"] == {"phase": "Pending"}                     # a new Pod, this turn's
-    assert {"name": "TURN", "value": "2"} in pod["spec"]["containers"][0]["env"]
+    assert {"name": "LOG_LEVEL", "value": "2"} in pod["spec"]["containers"][0]["env"]
     assert [c[0] for c in cluster.calls].count("delete") == 1
 
 
@@ -78,7 +81,7 @@ def test_a_running_pod_of_ours_is_the_workload(cluster):
     backend = K8sBackend(instance="rel")
     h = _first_turn(cluster, backend, "Running")
     before = cluster.pods[h._impl]
-    h2 = backend.start("agent-7-chat-main", RUN, {"TURN": "2"})
+    h2 = backend.start("agent-7-chat-main", RUN, {"LOG_LEVEL": "2"})
     assert h2._impl == h._impl and cluster.pods[h._impl] is before
     assert "delete" not in [c[0] for c in cluster.calls]
 

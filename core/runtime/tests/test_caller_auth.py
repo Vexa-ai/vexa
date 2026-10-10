@@ -3,6 +3,8 @@
 Every route except /health requires the runtime caller credential (RUNTIME_API_TOKEN as a bearer),
 and a runtime with no usable credential refuses to boot instead of serving the API open.
 """
+import time
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -112,14 +114,26 @@ def test_production_boot_refuses_without_a_token(monkeypatch):
 VECTOR_TOKEN = "runtime-caller-token-for-tests-0123456789abcdef"
 VECTOR_EVENT = {"workloadId": "mtg-1-abcdef12", "state": "stopped", "at": "2026-10-09T00:00:00+00:00",
                 "exitCode": 0, "stopReason": "completed"}
-VECTOR_SIGNATURE = "v1=2d3b0c1312be4c69a6144019dbd480b5c0f21c905b818e496c3f98cd30a2e286"
+VECTOR_URL = "http://meeting-api:8080/runtime/callback"
+VECTOR_TIMESTAMP = 1791504000
+VECTOR_SIGNATURE = "t=1791504000,v2=f1ed1283cda387b2dbe249719eb9546925955eba96f7829baee866ab264c41c0"
 
 
 def test_the_callback_signature_matches_the_shared_vector():
     from runtime_kernel.caller_auth import sign_callback
 
-    assert sign_callback(VECTOR_TOKEN, VECTOR_EVENT) == VECTOR_SIGNATURE
-    assert sign_callback(VECTOR_TOKEN, {**VECTOR_EVENT, "state": "running"}) != VECTOR_SIGNATURE
+    assert sign_callback(VECTOR_TOKEN, VECTOR_EVENT, VECTOR_URL, VECTOR_TIMESTAMP) == VECTOR_SIGNATURE
+
+
+def test_the_signature_covers_the_time_the_url_and_the_event():
+    """The signature binds when and where it was sent, not only what: the same event signed for
+    another URL, or at another time, is another signature."""
+    from runtime_kernel.caller_auth import sign_callback
+
+    base = sign_callback(VECTOR_TOKEN, VECTOR_EVENT, VECTOR_URL, VECTOR_TIMESTAMP)
+    assert sign_callback(VECTOR_TOKEN, {**VECTOR_EVENT, "state": "running"}, VECTOR_URL, VECTOR_TIMESTAMP) != base
+    assert sign_callback(VECTOR_TOKEN, VECTOR_EVENT, "http://other:8080/runtime/callback", VECTOR_TIMESTAMP) != base
+    assert sign_callback(VECTOR_TOKEN, VECTOR_EVENT, VECTOR_URL, VECTOR_TIMESTAMP + 1) != base
 
 
 def test_every_callback_carries_the_runtimes_signature_and_never_its_token():
@@ -135,6 +149,23 @@ def test_every_callback_carries_the_runtimes_signature_and_never_its_token():
                                            "callbackUrl": "http://meeting-api:8080/runtime/callback"}).status_code == 201
     client.delete("/workloads/w1")
     assert posted
-    for _url, body, headers in posted:
-        assert headers[SIGNATURE_HEADER] == sign_callback(TOKEN, body)
+    for url, body, headers in posted:
+        ts = int(headers[SIGNATURE_HEADER].split(",")[0][2:])
+        assert abs(ts - time.time()) < 60
+        assert headers[SIGNATURE_HEADER] == sign_callback(TOKEN, body, url, ts)
         assert TOKEN not in str(headers) and TOKEN not in str(body)
+
+
+def test_a_retried_callback_is_signed_when_it_is_sent():
+    """A delivery the receiver did not ack is retried by sweep(); each attempt carries a signature
+    made then, so a retry is not refused for an old timestamp."""
+    from runtime_kernel.callbacks import CallbackQueue
+    from runtime_kernel.caller_auth import SIGNATURE_HEADER
+
+    sent, now = [], [1000]
+    queue = CallbackQueue(poster=lambda url, body, headers: sent.append(headers[SIGNATURE_HEADER]) or 503)
+    queue.signer = lambda url, event: {SIGNATURE_HEADER: f"t={now[0]},v2=x"}
+    queue.enqueue("http://meeting-api:8080/runtime/callback", {"workloadId": "w", "state": "stopped"})
+    now[0] = 2000
+    queue.sweep()
+    assert sent == ["t=1000,v2=x", "t=2000,v2=x"]

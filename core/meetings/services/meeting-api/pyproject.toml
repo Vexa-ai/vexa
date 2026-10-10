@@ -21,6 +21,9 @@ dependencies = [
 # Test tooling only: `uv sync --no-dev` (the Dockerfile) keeps it out of the production image.
 # fakeredis backs the in-memory bus the tests drive; the image talks to a real Redis.
 dev = ["pytest>=8", "pytest-asyncio>=0.23,<2", "fakeredis>=2.21,<3"]
+# What only the image runs: the ASGI server and the production database/storage clients. Installed
+# from the lock with `uv sync --group production` by the Dockerfile and Lite, never `uv pip install`d beside it.
+production = ["uvicorn[standard]>=0.34,<1", "sqlalchemy[asyncio]>=2.0.36,<2.1", "asyncpg>=0.30,<1", "boto3>=1.35,<2"]
 
 [tool.uv]
 package = false

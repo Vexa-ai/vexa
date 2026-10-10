@@ -55,7 +55,8 @@ async function main(): Promise<void> {
   let page;
   try {
     ({ context, page } = await launchPersistentBrowser({
-      dataDir, headless: true, args: ['--no-sandbox', '--host-resolver-rules=MAP *.test 127.0.0.1'],
+      // site isolation on, as an authenticated bot runs: a cross-site frame is its own process
+      dataDir, headless: true, args: ['--no-sandbox', '--site-per-process', '--host-resolver-rules=MAP *.test 127.0.0.1'],
     }));
   } catch (e) {
     console.log(`  ⚠️ SKIP — headless Chromium unavailable in this environment: ${(e as Error).message?.split('\n')[0]}`);
@@ -64,7 +65,7 @@ async function main(): Promise<void> {
   }
   const logs: string[] = [];
   try {
-    await restrictNavigation(context, ['allowed.test'], (l) => logs.push(l));
+    await restrictNavigation(context, ['allowed.test', 'frames.test'], (l) => logs.push(l));
 
     // 1) an allowed page loads; its image from the other host still loads
     await page.goto(at('allowed.test', '/'));
@@ -88,8 +89,13 @@ async function main(): Promise<void> {
       const f = document.createElement('iframe'); f.src = src; document.body.appendChild(f);
     }, at('blocked.test', '/inframe'));
     await page.evaluate((src: string) => { window.open(src); }, at('blocked.test', '/popup'));
+    await page.evaluate((src: string) => {
+      const f = document.createElement('iframe'); f.src = src; document.body.appendChild(f);
+    }, at('frames.test', '/allowed-frame'));
     await sleep(1500);
     check('an iframe to another host never reaches it', !seen.includes('blocked.test/inframe'));
+    check('a cross-site frame on the list loads in its own process', seen.includes('frames.test/allowed-frame')
+      && page.frames().some((f) => f.url().includes('frames.test')));
     check('a popup to another host never reaches it', !seen.includes('blocked.test/popup'));
 
     // 4) a redirect that carries the page off the list is blanked where it lands

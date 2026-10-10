@@ -55,6 +55,12 @@ def publish(client, *, unit_id: str, token: str, exp: int, now: Optional[float] 
     client.set(delegation_key(unit_id), token, ex=ttl)
 
 
+def withdraw(client, *, unit_id: str) -> None:
+    """Remove the unit's current token: agent-api's record and the worker's copy. The worker keeps
+    the token it holds; nothing is refreshed until a token is published again."""
+    client.delete(dr.CURRENT_PREFIX + unit_id, delegation_key(unit_id))
+
+
 def same_authority(client, secret: str, *, unit_id: str, claims: dict,
                    now: Optional[float] = None) -> bool:
     """May a token with ``claims`` become ``unit_id``'s current token? Yes when the unit holds no live

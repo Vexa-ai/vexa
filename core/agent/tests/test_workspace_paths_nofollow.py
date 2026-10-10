@@ -102,3 +102,28 @@ def test_max_bytes_and_reserved_and_absolute(world):
     # a reserved dir opens only when allowed
     wp.write_text_inside(ws, ".vexa/workspace.json", "{}", allow=(".vexa",))
     assert wp.read_text_inside(ws, ".vexa/workspace.json", allow=(".vexa",)) == "{}"
+
+
+def test_an_append_never_waits_on_a_planted_fifo(tmp_path):
+    """R6-21: a FIFO at the name made the append's open wait for a reader, holding the worker."""
+    import threading
+    from workspaces.shared import workspace_paths as wp
+    os.mkfifo(tmp_path / "t.jsonl")
+    result = {}
+
+    def append():
+        try:
+            wp.append_text_inside(tmp_path, "t.jsonl", "x\n")
+            result["ok"] = True
+        except (OSError, ValueError) as exc:
+            result["refused"] = exc
+
+    t = threading.Thread(target=append, daemon=True)
+    t.start()
+    t.join(3)
+    if t.is_alive():                     # release the opener the old code left waiting
+        fd = os.open(tmp_path / "t.jsonl", os.O_RDONLY | os.O_NONBLOCK)
+        t.join(3)
+        os.close(fd)
+        raise AssertionError("the append waited on a FIFO")
+    assert "refused" in result

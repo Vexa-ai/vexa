@@ -53,12 +53,23 @@ HttpGet = Callable[[str, dict], tuple[int, str]]
 TranscribeProbe = Callable[[str, str], tuple[int, str]]
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A redirect is the endpoint's answer, never followed: following it would carry the API key to
+    whatever host the endpoint names, past the allow-list that admitted the endpoint."""
+
+    def redirect_request(self, *a, **kw):
+        return None
+
+
+_NO_REDIRECT = urllib.request.build_opener(_NoRedirect)
+
+
 def _post(url: str, payload: dict, headers: dict) -> tuple[int, str]:
     req = urllib.request.Request(url, data=json.dumps(payload).encode(),
                                  headers={"Content-Type": "application/json", **headers},
                                  method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=_TIMEOUT) as r:
+        with _NO_REDIRECT.open(req, timeout=_TIMEOUT) as r:
             return r.status, r.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as e:
         return e.code, e.read().decode("utf-8", "replace")
@@ -85,7 +96,7 @@ def _subject_post(url: str, payload: dict, headers: dict) -> tuple[int, str]:
 def _get(url: str, headers: dict) -> tuple[int, str]:
     req = urllib.request.Request(url, headers=headers, method="GET")
     try:
-        with urllib.request.urlopen(req, timeout=_TIMEOUT) as r:
+        with _NO_REDIRECT.open(req, timeout=_TIMEOUT) as r:
             return r.status, r.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as e:
         return e.code, e.read().decode("utf-8", "replace")

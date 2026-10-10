@@ -103,6 +103,8 @@ def _wire(monkeypatch) -> list[dict]:
         return 200, "{}"
 
     monkeypatch.setattr(config_test, "_subject_post", subject_post)
+    # the deployment route's requests go through the no-redirect opener
+    monkeypatch.setattr(config_test._NO_REDIRECT, "open", urlopen)
     return sent
 
 

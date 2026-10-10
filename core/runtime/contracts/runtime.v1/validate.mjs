@@ -20,14 +20,16 @@ addFormats(ajv);
 ajv.addSchema(schema);
 
 const SHAPE = { spec: "WorkloadSpec", status: "WorkloadStatus", event: "RuntimeEvent", error: "Error", signed: "SignedEventVector" };
-const CALLBACK_LABEL = "vexa-runtime-callback.v1";
+const CALLBACK_LABEL = "vexa-runtime-callback.v2";
 // json.dumps(sort_keys=True, separators=(",", ":"), ensure_ascii=False): sorted at every depth, UTF-8.
 const canon = (v) => Array.isArray(v) ? `[${v.map(canon).join(",")}]`
   : v && typeof v === "object" ? `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canon(v[k])}`).join(",")}}`
   : JSON.stringify(v);
-const signCallback = (token, event) => {
+// The signature covers "<timestamp>\n<url>\n" + canonical(event).
+const signCallback = (token, url, timestamp, event) => {
   const key = createHmac("sha256", Buffer.from(token, "utf8")).update(CALLBACK_LABEL).digest();
-  return "v1=" + createHmac("sha256", key).update(Buffer.from(canon(event), "utf8")).digest("hex");
+  const message = Buffer.from(`${timestamp}\n${url}\n${canon(event)}`, "utf8");
+  return `t=${timestamp},v2=` + createHmac("sha256", key).update(message).digest("hex");
 };
 const dir = join(HERE, "golden");
 const files = readdirSync(dir).filter((n) => n.endsWith(".json"));
@@ -38,7 +40,7 @@ for (const f of files) {
   const validate = ajv.compile({ $ref: `${schema.$id}#/$defs/${shape}` });
   const data = JSON.parse(readFileSync(join(dir, f), "utf8"));
   if (!validate(data)) { console.error(`  ✗ ${f} (${shape}): ${ajv.errorsText(validate.errors)}`); failed++; continue; }
-  if (shape === "SignedEventVector" && signCallback(data.token, data.event) !== data.signature) {
+  if (shape === "SignedEventVector" && signCallback(data.token, data.url, data.timestamp, data.event) !== data.signature) {
     console.error(`  ✗ ${f}: re-signing the event does not reproduce the signature`); failed++; continue;
   }
   console.log(`  ✓ ${f} ≡ ${shape}`);

@@ -65,6 +65,7 @@ _HOME = ("the worker's own HOME (~/.claude, ~/.vexa-skills and its stages): the 
 _DESCRIPTOR = ("lists through a folder descriptor opened without following a link "
                "(`workspace_paths.open_dir_at` / `dir_fd_inside`), and writes only into the "
                "worker's own skill stage")
+_URL_OPEN = "opens a URL through an urllib opener, not a file"
 _NAMES_ONLY = ("lists names only; nothing listed is opened by name — each is located and checked "
                "(a plain file reached without a link), or removed through `unlink_inside`")
 
@@ -144,13 +145,15 @@ ALLOW = {
                "agent/control_plane/deploy_keys.py::ssh_env",
                "agent/worker/friction.py::report"),
     **_entries(_HOME,
-               "agent/llm/claude_code.py::_link_chat_into_workspace",
                "agent/llm/claude_code.py::clear_deployment_credential",
                "agent/llm/claude_skills.py::_link_skills_into_home",
                "agent/llm/claude_skills.py::_stage_workspace_skill"),
     **_entries(_DESCRIPTOR,
                "agent/llm/claude_skills.py::_assemble_skills",
                "agent/llm/claude_skills.py::_copy_entries"),
+    **_entries(_URL_OPEN,
+               "agent/control_plane/config_test.py::_post",
+               "agent/control_plane/config_test.py::_get"),
     **_entries(_NAMES_ONLY,
                "agent/llm/openai_agent.py::run_builtin",
                "agent/llm/ports.py::_current_policy_entries"),

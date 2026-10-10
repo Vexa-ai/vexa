@@ -19,8 +19,11 @@ from fastapi.responses import JSONResponse
 from shared import units
 from shared.git_redaction import redact as redact_secrets
 import hmac
+import logging
 import json
 import os
+
+logger = logging.getLogger("agent_api.admin")
 
 
 def build(**d) -> APIRouter:
@@ -173,12 +176,17 @@ def build(**d) -> APIRouter:
                 "reasons": st["reasons"],
                 "next": "write the missing files into /workspaces/_global, then call this again",
             })
-        # THE CALLER IS THE AUTHOR. The identity the call arrived with carries the admin's address,
-        # so an agent accepting on their behalf names them without having to know it.
+        # THE CALLER IS THE AUTHOR, and nobody else can be. The identity the call arrived with
+        # carries the admin's address; a body naming another address does not change who accepted
+        # the layer (the commit records the real actor). The name is only how the address is shown.
         caller = (request.headers.get("x-user-email") or "").strip()
-        email = (body.author_email or "").strip() or caller or f"admin-{subject}@vexa.local"
+        named = (body.author_email or "").strip()
+        if named and named.lower() != caller.lower():
+            logger.warning("global/ready: author_email %r is not the caller's — the commit is "
+                           "authored by the caller", named)
+        email = caller or f"admin-{subject}@vexa.local"
         name = ((body.author_name or "").strip()
-                or (email.split("@", 1)[0] if caller or body.author_email else "")
+                or (email.split("@", 1)[0] if caller else "")
                 or f"vexa admin {subject}")
         try:
             sha = global_layer.commit(root, author_email=email, author_name=name,
