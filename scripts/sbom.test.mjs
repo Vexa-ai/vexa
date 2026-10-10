@@ -45,7 +45,7 @@ function packageNamed(doc, name) {
 
 test("Lite final-stage apt packages are represented in the emitted SPDX", () => {
   const doc = emitSbom();
-  for (const name of ["ffmpeg", "x11vnc", "pulseaudio", "postgresql-client"]) {
+  for (const name of ["ffmpeg", "xvfb", "pulseaudio", "postgresql-client"]) {
     const pkg = packageNamed(doc, name);
     assert(pkg, `${name} is installed in the Lite final image but absent from the SPDX`);
     assert.equal(pkg.licenseDeclared, "NOASSERTION");
