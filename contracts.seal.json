@@ -13,7 +13,7 @@
   "core/gateway/contracts/gateway-identity.v1": "ec1bcfb54fe4466f45203603c8fdfdfc671445f6fe32ebbaa6dc2fa685a0ff9d",
   "core/gateway/contracts/logevent.v1": "7ab25cc7d935e03ea1aec29a0d717576bcfa1a37d7c412400227c98e1df3ed59",
   "core/gateway/contracts/routes.v1": "d11748b1a13bed0fad8c9ab2aaff00bffb8d8f0cfd8771cf53c8c10cf41053f5",
-  "core/gateway/contracts/ws.v1": "cbd632c0cb19f6f92e8d328c02842b15a08ae5d542a964530606295b3335793b",
+  "core/gateway/contracts/ws.v1": "ad6e3d5052eb16c776570d2d7e6014892ca0aae630fb125298dc49e23fa7018b",
   "core/identity/contracts/delegation.v1": "7c7478a5489f3e4b92a032a31d61c23c7f81248e1852a5388b5e8ecfac17cc3e",
   "core/identity/contracts/identity.v1": "2640146c6d0deaaa705a04f2d6e0fcb8d1c3e506c8063b1c82ddac7591aa103d",
   "core/identity/contracts/signin.v1": "053919b25c84bb98c2eab7d65dca29ef013eb749c5269c932824d209aef55ce6",
