@@ -17,6 +17,12 @@ repository is small and knowable while the set of things that are a secret is ne
 * ``ssh://[user@]host[:port]/owner/repo``
 * ``owner/repo`` — the bare shorthand, expanded to ``https://github.com/owner/repo.git``
 
+On any host but ``github.com`` the path may be deeper than ``owner/repo``: GitLab nests projects in
+groups and subgroups (``https://host/group/sub/repo``), up to :data:`MAX_PATH_SEGMENTS` segments.
+``github.com`` has exactly two, so a deeper path there is refused rather than cloned and failed. Every
+segment is a plain name — never empty, never ``.``/``..``, never GitLab's ``-`` route separator — so a
+path cannot climb out of where it points.
+
 **2. The HOST must be somewhere the caller could have reached themselves** (``assert_public_host``).
 ``git clone`` is a fetch **this server** performs, so a shape whitelist with no opinion about the host
 is a server-side request forge: ``http://169.254.169.254/a/b`` is the cloud metadata service and
@@ -67,7 +73,8 @@ TOKEN_SENTENCE = ("That looks like a token, not a repository. Paste the reposito
 #: …and when it is simply not a repository reference. Saying "that looks like a token" about `foo bar`
 #: would be a guess, and a wrong guess about a secret is how people learn to ignore the warning.
 SHAPE_SENTENCE = ("That is not a repository. Use https://github.com/owner/repo, "
-                  "git@github.com:owner/repo.git, or owner/repo.")
+                  "git@github.com:owner/repo.git, owner/repo, or a full URL with groups "
+                  "(https://git.example.com/group/subgroup/repo).")
 #: …and when the shape is right and the HOST is somewhere only this server can reach.
 HOST_SENTENCE = ("That host is not reachable as a repository. Use a public or company git host, "
                  "not an address inside the deployment.")
@@ -95,11 +102,16 @@ ALLOWED_SCHEMES = ("https", "http", "ssh")
 #: workspace, and a deployment that really does clone from disk must now say so.
 LOCAL_ROOTS_ENV = "VEXA_ALLOW_LOCAL_REPO_ROOT"
 
-_SEG = r"[A-Za-z0-9._-]+"                       # one path segment of an owner or repo name
+#: The deepest repository path accepted: GitLab allows 20 levels of subgroup under a top-level group,
+#: so a project path is at most 22 segments (group · 20 subgroups · project).
+MAX_PATH_SEGMENTS = 22
+
+_SEG = r"[A-Za-z0-9._-]+"                       # one path segment of an owner, group or repo name
+_SEG_RE = re.compile(rf"^{_SEG}$")
 _HOST = r"[A-Za-z0-9.-]+(?::\d{1,5})?"
-_HTTP = re.compile(rf"^(https?)://({_HOST})/({_SEG})/({_SEG}?)/?$")
-_SCP = re.compile(rf"^([A-Za-z0-9._-]+)@([A-Za-z0-9.-]+):/?({_SEG})/({_SEG}?)/?$")
-_SSH = re.compile(rf"^ssh://(?:([A-Za-z0-9._-]+)@)?({_HOST})/({_SEG})/({_SEG}?)/?$")
+_HTTP = re.compile(rf"^(https?)://({_HOST})/([^?#\s]+?)/?$")
+_SCP = re.compile(r"^([A-Za-z0-9._-]+)@([A-Za-z0-9.-]+):/?([^?#\s]+?)/?$")
+_SSH = re.compile(rf"^ssh://(?:([A-Za-z0-9._-]+)@)?({_HOST})/([^?#\s]+?)/?$")
 _BARE = re.compile(rf"^({_SEG})/({_SEG})$")
 
 #: ``scheme://…`` — a transport named the ordinary way.
@@ -127,6 +139,24 @@ class RepoRefError(ValueError):
 
 def _tidy(name: str) -> str:
     return re.sub(r"\.git$", "", name)
+
+
+def _repo_path(host: str, path: str) -> str:
+    """``owner/repo`` or ``group/sub/…/repo`` from a URL's path, ``.git`` dropped — or ``RepoRefError``.
+
+    Two or more plain segments (exactly two on ``github.com``), each a name and nothing that moves:
+    an empty segment, ``.``, ``..`` and GitLab's ``-`` route separator are refused, as is anything
+    outside ``[A-Za-z0-9._-]``."""
+    segs = path.split("/")
+    if segs:
+        segs[-1] = _tidy(segs[-1])
+    limit = 2 if _bare_host(host) == DEFAULT_HOST else MAX_PATH_SEGMENTS
+    if not 2 <= len(segs) <= limit:
+        raise RepoRefError(SHAPE_SENTENCE)
+    for seg in segs:
+        if not _SEG_RE.match(seg) or set(seg) == {"."} or seg == "-":
+            raise RepoRefError(SHAPE_SENTENCE)
+    return "/".join(segs)
 
 
 def _bare_host(host: str) -> str:
@@ -342,14 +372,14 @@ def normalize(raw: Optional[str]) -> Optional[str]:
     # person-typed-value gate, and they are independent on purpose.
     m = _HTTP.match(v)
     if m:
-        return f"{m.group(1)}://{_checked_host(m.group(2))}/{m.group(3)}/{_tidy(m.group(4))}.git"
+        return f"{m.group(1)}://{_checked_host(m.group(2))}/{_repo_path(m.group(2), m.group(3))}.git"
     m = _SCP.match(v)
     if m:
-        return f"{m.group(1)}@{_checked_host(m.group(2))}:{m.group(3)}/{_tidy(m.group(4))}.git"
+        return f"{m.group(1)}@{_checked_host(m.group(2))}:{_repo_path(m.group(2), m.group(3))}.git"
     m = _SSH.match(v)
     if m:
         user = f"{m.group(1)}@" if m.group(1) else ""
-        return f"ssh://{user}{_checked_host(m.group(2))}/{m.group(3)}/{_tidy(m.group(4))}.git"
+        return f"ssh://{user}{_checked_host(m.group(2))}/{_repo_path(m.group(2), m.group(3))}.git"
     m = _BARE.match(v)
     if m:
         return f"https://{DEFAULT_HOST}/{m.group(1)}/{_tidy(m.group(2))}.git"

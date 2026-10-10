@@ -2,7 +2,7 @@
  *  field and SENT. The point of these is not that a nicer error is shown — it is that the value never
  *  leaves the tab, and that nothing which does leave carries a secret. */
 import { describe, expect, it } from "vitest";
-import { checkRepo, looksLikeToken, SHAPE_SENTENCE, TOKEN_SENTENCE } from "../repoRef";
+import { checkRepo, looksLikeToken, MAX_PATH_SEGMENTS, SHAPE_SENTENCE, TOKEN_SENTENCE } from "../repoRef";
 import { MASK, redactSecrets } from "../redactSecrets";
 
 const PAT = "ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8";
@@ -37,6 +37,36 @@ describe("checkRepo — the whitelist", () => {
     "refuses %s as a shape", (bad) => {
       expect(checkRepo(bad)).toEqual({ ok: false, kind: "shape", sentence: SHAPE_SENTENCE });
     });
+
+  it.each([
+    ["https://gitlab.example.com/group/sub/repo", "https://gitlab.example.com/group/sub/repo.git"],
+    ["https://gitlab.example.com:8443/group/sub/deeper/repo.git", "https://gitlab.example.com:8443/group/sub/deeper/repo.git"],
+    ["git@gitlab.example.com:group/sub/repo.git", "git@gitlab.example.com:group/sub/repo.git"],
+    ["ssh://git@gitlab.example.com:2222/group/sub/repo", "ssh://git@gitlab.example.com:2222/group/sub/repo.git"],
+  ])("accepts the nested group path %s", (raw, url) => {
+    expect(checkRepo(raw)).toEqual({ ok: true, url });
+  });
+
+  it("accepts the deepest GitLab path and refuses one deeper", () => {
+    const deepest = [...Array(MAX_PATH_SEGMENTS - 1).fill("g"), "repo"].join("/");
+    expect(checkRepo(`https://gitlab.example.com/${deepest}`)).toEqual({
+      ok: true, url: `https://gitlab.example.com/${deepest}.git` });
+    expect(checkRepo(`https://gitlab.example.com/g/${deepest}`)).toMatchObject({ ok: false, kind: "shape" });
+  });
+
+  it.each([
+    "https://gitlab.example.com/group/../repo",
+    "https://gitlab.example.com/../repo",
+    "git@gitlab.example.com:../repo.git",
+    "https://gitlab.example.com/group/./repo",
+    "https://gitlab.example.com/group//repo",
+    "https://gitlab.example.com/group/repo/-/tree/main",
+    "https://gitlab.example.com/group/repo?ref=main",
+    "https://gitlab.example.com/group/re po",
+    "https://github.com/a/b/c",
+  ])("refuses %s, which is not a plain nested name", (bad) => {
+    expect(checkRepo(bad)).toEqual({ ok: false, kind: "shape", sentence: SHAPE_SENTENCE });
+  });
 
   it("never echoes the value back in its refusal", () => {
     expect(JSON.stringify(checkRepo(PAT))).not.toContain(PAT);

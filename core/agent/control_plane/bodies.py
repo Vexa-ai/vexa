@@ -172,8 +172,8 @@ class WorkspaceSwapBody(BaseModel):
 
 
 class WorkspacePublishBody(BaseModel):
-    """Publish the subject's vexa-born workspace to GitHub — create the repo (unless ``remote_url``
-    targets a pre-created one) and push the current branch's full history. ``token`` is the caller's
+    """Publish the subject's vexa-born workspace — create the repo on GitHub or a registered GitLab
+    ``host`` (unless ``remote_url`` targets a pre-created one) and push the current branch's full history. ``token`` is the caller's
     PAT, used server-side for this call only, NEVER stored (P15)."""
     model_config = {"extra": "forbid"}
     repo_name: Optional[str] = None    # name of the repo to create (required unless remote_url is given)
@@ -182,6 +182,7 @@ class WorkspacePublishBody(BaseModel):
     org: Optional[str] = None          # create under this org instead of the user's account
     remote_url: Optional[str] = None   # skip creation and push to this (pre-created/empty) repo
     slug: Optional[str] = None         # target workspace (own slot or shared membership); omitted = the seed-slot workspace
+    host: Optional[str] = None         # where to CREATE: github.com (default) or a GitLab host the operator registered
 
 
 class WorkspaceRenameBody(BaseModel):

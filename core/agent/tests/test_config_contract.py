@@ -330,7 +330,7 @@ def test_the_qwen_lane_dials_are_declared():
 # 106: -1 VEXA_MEETINGS_DB_URL — it served invited_meetings only, which nothing called; both went.
 # 107: +1 VEXA_AGENT_MAX_OUTPUT_TOKENS — the output cap every harness reads (claude-code maps it onto
 # CLAUDE_CODE_MAX_OUTPUT_TOKENS, openai-agent sends it as max_tokens).
-EXPECTED_DECLARED_KEYS = 107
+EXPECTED_DECLARED_KEYS = 108
 
 
 def test_connections_keys_are_capabilities_on_real_surfaces():

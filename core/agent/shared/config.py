@@ -8,8 +8,10 @@ from __future__ import annotations
 
 from typing import Optional
 
-from pydantic import AliasChoices, Field, SecretStr
+from pydantic import AliasChoices, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from shared import git_provider
 
 #: What a delegation token outlives the chat worker's warm window by, when its lifetime is not
 #: configured: one whole turn, the openai-agent harness's own per-turn ceiling
@@ -201,6 +203,17 @@ class Settings(BaseSettings):
     # the data volume (rotating it makes every previously-sealed secret unreadable, which reads as "no
     # credential saved" — deliberately, so a wrong key never decrypts to garbage).
     secrets_key: SecretStr = SecretStr("")
+    # Which git provider a self-hosted git host runs, so a per-call token is presented the way that
+    # host expects (shared.git_provider): ``gitlab.example.com=gitlab,git.example.org=basic:svc``.
+    # Unlisted hosts keep GitHub's bare-token form. Parsed here so a typo fails the boot (P18) rather
+    # than every clone; read again by shared.git_provider at the moment a token is embedded.
+    git_providers: str = ""
+
+    @field_validator("git_providers")
+    @classmethod
+    def _git_providers_parse(cls, value: str) -> str:
+        git_provider.parse_providers(value)     # raises ValueError naming the bad entry
+        return value
 
     def delegation_ttl_sec(self) -> int:
         """The lifetime of a minted delegation token: ``mcp_delegation_ttl_sec`` when configured,
