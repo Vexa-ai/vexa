@@ -422,7 +422,10 @@ curl -OJ -H "X-API-Key: $API_KEY" "$API_BASE/meetings/42/export"
 `200` with `application/zip` and `Content-Disposition: attachment`. `404` when the caller cannot see
 the meeting, `403` when they see it through a share or a workspace but do not own it, `409` while a
 bot is in it, `502` when a recording cannot be read (the export is refused, never produced without it).
-`media=false` leaves recordings out.
+`media=false` leaves recordings out. `POST` the same path with a parts archive as the body (the
+meeting's workspace and page, from `GET /agent/meeting/bundle-parts?meeting_id=`) to have them placed
+in the bundle; after an import, `POST /agent/meeting/bundle-restore?meeting_id=<new id>` with the same
+file restores them.
 
 ```bash Import — POST /meetings/import[?dry_run=true]
 curl -H "X-API-Key: $API_KEY" -H "Content-Type: application/zip" \
