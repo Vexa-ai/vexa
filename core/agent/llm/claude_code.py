@@ -254,9 +254,8 @@ def _is_api_error(obj: dict, text: str) -> bool:
 
 def _provider_fault(text: str, sdk_error: str, model: str) -> "provider_faults.ProviderFault | None":
     """The typed fault for what the CLI reported, against the endpoint it was pointed at."""
-    host = provider_host()
     return provider_faults.classify(text=text or None, sdk_error=sdk_error or None, model=model,
-                                    provider=host if host != "unknown" else "api.anthropic.com")
+                                    provider=provider_host())
 
 
 #: The settings every launch adds on top of the user scope: no hooks run in the worker.
