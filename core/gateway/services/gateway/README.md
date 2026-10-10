@@ -50,6 +50,22 @@ row (`paths.forwarded_param`), and `{platform}` must be an api.v1 `Platform`. me
 same rows to check, on the route a request matched, the scopes this edge checked
 (`meeting_api/route_scopes.py`). `mcp_reentry` is refused on a `{path:path}` catch-all.
 
+## The validate hop when admin-api is unavailable
+**How it works.** `AdminApiAuthorizer.resolve` (`src/gateway/adapters.py`) POSTs each credential to
+admin-api `/internal/validate` with a 5 s budget. A hop that could not connect (`ConnectError`,
+`ConnectTimeout`) never reached admin-api, so it is sent again after 0.5 s and then 1.5 s
+(`VALIDATE_CONNECT_RETRY_BACKOFF`): an admin-api restart costs a request about 2 s instead of a 503.
+Any other failure is answered at once: a read timeout means admin-api has the request and is slow,
+and a pool timeout is this edge's own saturation, so neither is repeated. After the last retry, or
+on any of those, the edge answers 503, never 401: no verdict was reached on the key.
+
+**Why it complies.** Only a request admin-api never received is repeated, so no verdict is asked for
+twice and a slow identity service gets no extra load. The edge stays fail-closed: no path admits a
+credential without a 200 from `/internal/validate`. Tests: `tests/test_adapters_resolve.py`
+(`test_a_connect_failure_that_recovers_resolves_the_key`,
+`test_a_persistent_connect_failure_still_answers_unavailable`,
+`test_a_hop_that_reached_admin_api_or_hit_this_edges_pool_is_not_retried`).
+
 ## Isolated evaluation
 `tests/` holds unit evals (L2) over `create_app` with in-process fakes injected via `conftest.py`
 (fake `Authorizer`, recording `DownstreamClient`, in-process `RedisBus`): `test_health`,
