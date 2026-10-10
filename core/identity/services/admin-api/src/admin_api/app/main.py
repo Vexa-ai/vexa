@@ -416,19 +416,42 @@ def _as_flag(value) -> Optional[bool]:
     return None
 
 
-def _resolve_capture_signal(user_data: dict, platform_diagnostics: dict) -> bool:
-    """Whether this user's bots tee the captured-signal tape: user > platform_settings > DEFAULT ON.
+#: The deployment's default for the captured-signal tape, the last tier below. meeting-api reads
+#: the same key for the case where it gets no answer from here. The Helm chart sets it to false.
+CAPTURE_SIGNAL_DEFAULT_ENV = "VEXA_CAPTURE_SIGNAL_DEFAULT"
 
-    DEFAULT ON is the product decision, not an accident of config: prod meetings are the fixture
-    source, so absence of any flag means capture. The flag exists to STOP collection fleet-wide with
-    no redeploy (``PUT /internal/settings/diagnostics {"capture_signal": "false"}``), and per-user
-    (``users.data["diagnostics"]["capture_signal"]``) for an account that must not be taped.
+
+def capture_signal_default(raw: Optional[str] = None) -> bool:
+    """``VEXA_CAPTURE_SIGNAL_DEFAULT`` as a boolean: unset or empty is ``True`` (compose and Lite,
+    unchanged); a recognized value is honoured; anything else raises ``ValueError``, which the boot
+    turns into a refusal (``__main__``). ``raw`` is the test seam."""
+    value = os.getenv(CAPTURE_SIGNAL_DEFAULT_ENV) if raw is None else raw
+    if value is None or not value.strip():
+        return True
+    flag = _as_flag(value)
+    if flag is None:
+        raise ValueError(f"{CAPTURE_SIGNAL_DEFAULT_ENV}={value!r} is not a recognized boolean "
+                         f"({'/'.join(_FLAG_TRUE)} / {'/'.join(_FLAG_FALSE)})")
+    return flag
+
+
+def _resolve_capture_signal(user_data: dict, platform_diagnostics: dict,
+                            deployment_default: Optional[bool] = None) -> bool:
+    """Whether this user's bots tee the captured-signal tape: user > platform_settings > the
+    deployment default (``VEXA_CAPTURE_SIGNAL_DEFAULT``; unset = ON).
+
+    ON where nothing is configured is the product decision for compose and Lite: prod meetings are
+    the fixture source. The Helm chart ships the deployment default OFF, so an enterprise install
+    tapes nothing unless an operator turns it on. The flags exist to change collection fleet-wide
+    with no redeploy (``PUT /internal/settings/diagnostics {"capture_signal": "false"}``), and
+    per-user (``users.data["diagnostics"]["capture_signal"]``) for one account.
+    ``deployment_default`` is the test seam; ``None`` reads the environment.
     """
     for source in (user_data.get("diagnostics") or {}, platform_diagnostics or {}):
         flag = _as_flag(source.get("capture_signal") if isinstance(source, dict) else None)
         if flag is not None:
             return flag
-    return True
+    return capture_signal_default() if deployment_default is None else deployment_default
 
 
 # ── the admin claim, at module level so the boot hook can issue a code before any request ─────────

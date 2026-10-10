@@ -223,15 +223,22 @@ def _transcription_from_context(ctx: dict) -> dict:
 
 
 def _capture_signal_from_context(ctx: dict) -> bool:
-    """Whether this spawn tapes its raw captured-signal stream — DEFAULT ON.
+    """Whether this spawn tapes its raw captured-signal stream.
 
-    admin-api resolves user > platform_settings > default-on and ALWAYS states the key, so anything
-    other than an explicit ``False`` here means we could not read a decision: unreachable identity,
-    an older admin-api that predates the field, or an unset ADMIN_API_URL. All of those default ON,
-    because prod meetings are the fixture source and a transient identity blip must not silently
-    turn collection off fleet-wide. The kill switch is an explicit ``false``, nothing else.
+    admin-api resolves user > platform_settings > the deployment default and ALWAYS states the key
+    as a real boolean, so that answer is final. Anything else means we could not read a decision:
+    unreachable identity, an older admin-api that predates the field, or an unset ADMIN_API_URL.
+    Those fall to the DEPLOYMENT's default (``VEXA_CAPTURE_SIGNAL_DEFAULT``): ON where it is unset,
+    as on compose and Lite, because there prod meetings are the fixture source and an identity blip
+    must not silently turn collection off; OFF where the operator set it so, as the Helm chart does,
+    because there a blip must not silently turn it ON. A string is not an answer (contract drift).
     """
-    return ctx.get("capture_signal") is not False
+    from .env_flags import capture_signal_default
+
+    answer = ctx.get("capture_signal")
+    if isinstance(answer, bool):
+        return answer
+    return capture_signal_default()
 
 
 def _bot_name_from_context(ctx: dict) -> Optional[str]:

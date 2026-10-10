@@ -101,6 +101,20 @@ def _auth_session_at_boot(env: "os._Environ | dict | None" = None) -> None:
         raise ConfigError(f"meeting-api refuses to boot: {e}") from None
 
 
+def _capture_signal_default_at_boot(env: "os._Environ | dict | None" = None) -> bool:
+    """``VEXA_CAPTURE_SIGNAL_DEFAULT``, read once at boot (P18). An unrecognized value refuses the
+    boot naming the key: whether meetings are taped is a data-protection decision, and neither side
+    of it may be picked for the operator by a typo."""
+    from .bot_spawn.env_flags import InvalidDeploymentFlag, capture_signal_default
+    from .config_preflight import ConfigError
+
+    env = os.environ if env is None else env
+    try:
+        return capture_signal_default(env.get("VEXA_CAPTURE_SIGNAL_DEFAULT") or "")
+    except InvalidDeploymentFlag as e:
+        raise ConfigError(f"meeting-api refuses to boot: {e}") from None
+
+
 def _identity_key():
     """gateway-identity.v1 — the gateway's Ed25519 public key, or a refused boot. A file that is
     unreadable, or is anything but an Ed25519 public key (the private key included: a verifier that
@@ -153,6 +167,7 @@ def build_production_app():
     _require_config()  # A4: refuse to boot a misconfigured deploy (no ADMIN_TOKEN → every spawn 500s).
     workload_acl = _redis_workload_acl()  # S51: an unknown mode refuses the boot, as agent-api's does
     _auth_session_at_boot()  # S64: a broken authenticated-bot store refuses the boot, not the first spawn
+    _capture_signal_default_at_boot()  # a typo in the tape switch refuses the boot, never guesses
 
     import redis.asyncio as aioredis
     from sqlalchemy.ext.asyncio import async_sessionmaker
