@@ -1157,6 +1157,33 @@ def _regime_forbids(verb: str, scope, delegated: bool | None = None) -> str:
     return "" if _regime_of(scope) == HUMAN_REGIME else HUMAN_ONLY_VERBS[verb]
 
 
+#: The product's remedy for a refusal on regime (gateway-identity.v1 `REFUSAL["remedy"]`): the one
+#: way through is the person asking in chat, where the regime is human. Spelled here because the
+#: rig vendors none of core; the reason and remedy are the product's, word for word.
+PERSON_REASON = "human_session_required"
+PERSON_REMEDY = "ask_in_chat"
+
+
+def regime_refusal(verb: str, why: str) -> dict:
+    """The body a human-only verb answers an unwatched caller with. Carries the product's machine
+    fields (`reason`, `remedy`) beside the rig's own `refused: regime`, and a `tell_your_person`
+    sentence the agent relays verbatim — never "nothing": the person reads it in the run's output
+    or the next time they open the chat, and it tells them the one thing that works."""
+    return {
+        "refused": "regime",
+        "reason": PERSON_REASON,
+        "remedy": PERSON_REMEDY,
+        "verb": verb,
+        "why": f"this session was dispatched WITHOUT a person in the loop, and this verb {why}",
+        "instruction": "Record what you wanted to do and stop; do not retry it and do not look for "
+                       "another route to it.",
+        "tell_your_person": "This ran without you present (a scheduled routine, a background flow "
+                            "or a meeting run), and this action only works when you ask in chat. "
+                            "Nothing is wrong with your connection, and signing in again will not "
+                            "change it.",
+    }
+
+
 GHOST_UID = contextvars.ContextVar("vexa_ghost_uid", default=None)
 
 
@@ -1433,15 +1460,7 @@ def _anon_guard(fn):
         # sentence lived in a markdown file and the token's own `regime` claim was only printed.
         why = _regime_forbids(fn.__name__, scope, _delegated_call())
         if why:
-            return json.dumps({
-                "refused": "regime",
-                "verb": fn.__name__,
-                "why": f"this session was dispatched WITHOUT a person in the loop, and this verb "
-                       f"{why}",
-                "tell_your_person": "nothing — there is no person in this session. Record what you "
-                                    "wanted to do and stop; do not retry it and do not look for "
-                                    "another route to it.",
-            })
+            return json.dumps(regime_refusal(fn.__name__, why))
         if slug and _delegated_call() and not _scope_allows(scope, slug):
             return json.dumps({
                 "refused": "out_of_scope",

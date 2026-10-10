@@ -11,7 +11,7 @@ import { Icon } from "../ui-kit";
 import { usePreviewPinTab } from "./previewPinTab";
 // Data-access lives in its own SoC module (scoped to the authed user — no client subject, P20),
 // proven in isolation by routinesApi.test.ts.
-import { listRoutines, deleteRoutine, setRoutineEnabled, confirmRoutine, type Routine } from "./routinesApi";
+import { listRoutines, deleteRoutine, setRoutineEnabled, confirmRoutine, routineNote, type Routine } from "./routinesApi";
 import { presentError } from "./apiClient";
 
 const BOARD: TabDescriptor = { id: "board:routines", title: "Routines", kind: "routines", params: {}, context: null };
@@ -87,6 +87,9 @@ function RoutinesBoard() {
                 : <span style={{ fontFamily: "var(--mono)", fontSize: 11.5, borderRadius: 5, padding: "1px 7px", background: "var(--panel2)", color: "var(--accent)" }}>{r.cron}</span>}
             </div>
             {r.plan_summary && <div style={{ fontSize: 12.5, color: "var(--t2)", marginTop: 9, lineHeight: 1.5 }}>{r.plan_summary}</div>}
+            {routineNote(r) && (
+              <div role="note" style={{ fontSize: 12.5, color: "var(--t2)", marginTop: 9, lineHeight: 1.5 }}>⚠ {routineNote(r)}</div>
+            )}
             {r.pending_confirmation && (
               <div role="status" style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10, fontSize: 12.5, color: "var(--t2)" }}>
                 <span style={{ flex: 1 }}>Waiting for you — an agent wrote this routine; it will not run until you confirm it.</span>

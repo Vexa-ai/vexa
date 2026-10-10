@@ -38,6 +38,105 @@ curl -X PATCH "$API_BASE/agent/routines/Morning%20brief/enabled" \
 curl -X DELETE "$API_BASE/agent/routines/<routine_id>" -H "X-API-Key: $API_KEY"
 ```
 
+## Routines that need you: mail, calendar and connections
+
+A routine runs on its schedule with nobody present. Reading your mail or calendar, or using one of
+your connected accounts, works only when you ask in chat, so a routine that reaches for them is
+refused on every run. Your connection is fine; signing in again does not change it.
+
+**When you save it.** If the routine's prompt mentions mail or the calendar (email, inbox, Gmail,
+calendar, meeting invites, …) or names one of those tools, the routine is still saved, and it
+carries a note:
+
+```json
+{"name": "Inbox watch", "needs_person": ["mail"],
+ "warning": "This routine needs your mail. A routine runs on its schedule without you present, so each run will be refused when it reaches for it. Ask in chat instead when you want it done; nothing is wrong with your connection."}
+```
+
+`POST /agent/routines` returns `needs_person` (and `warning` when it is not empty), every card in
+`GET /agent/routines` carries the same fields, and the terminal's Routines surface shows the
+warning under the routine. The check reads only the prompt and is deliberately narrow: a routine it
+does not flag is refused at run time exactly as one it does.
+
+**When it runs.** The refused call answers `403` with one body, whichever service refused it:
+
+```json
+{"status": "refused", "reason": "human_session_required",
+ "instruction": "This session runs without a person in the loop. Record what you wanted to do and stop; do not retry it another way.",
+ "remedy": "ask_in_chat",
+ "tell_your_person": "This ran without you present (a scheduled routine, a background flow or a meeting run), and mail, calendar and connection actions only work when you ask in chat. Nothing is wrong with your connection, and signing in again will not change it."}
+```
+
+`remedy` is the stable field a program branches on. `tell_your_person` is the sentence the agent
+passes on to you as it is.
+
+**Limits.** No routine can read mail on its own today: there is no standing consent for that. The
+save-time note is a hint from the prompt's words, not a guarantee in either direction.
+
+### How it works
+
+1. A routine is saved one of two ways: `POST /agent/routines` (agent-api
+   `control_plane/routers/routines.py`), or a `routines/<name>.md` file in the workspace, which
+   `control_plane/workspace_routines.py` reconciles onto the runtime scheduler.
+2. Both read paths build the card the same way. `control_plane/routine_needs.py` reads the prompt.
+   It matches mail and calendar words, and the names of tools whose route is flagged `person` in
+   `core/agent/routes.v1.json` and lives under `/connections/`, joined through
+   `core/agent/mcp.tools.v1.json`. It sets `needs_person` and `warning`. It writes nothing.
+3. When the routine fires, the scheduler POSTs its signed `unit.v1` dispatch (`trigger:
+   scheduled`) to `/invocations`. The worker's delegation token carries regime `autonomous`
+   (`shared/delegation.py`: only `message` is a human trigger).
+4. A mail, calendar or connection tool reaches its route behind the gateway. agent-api's person
+   gate (`route_policy.PERSON_GATE` → `ceiling.require_person`), meeting-api's `regime.py` and
+   flows-api's `DELEGATED_REACH` refuse it with `identity_token.REFUSAL` before any broker or
+   provider call.
+5. The gateway MCP renders the body unchanged into the tool result (`vexa_mcp/tool_errors.py`), so
+   the agent reads `remedy` and `tell_your_person`. The dogfood rig adds both fields to its own
+   refusals on regime (`regime_refusal` in `deploy/dogfood/rig/vexa_control_mcp.py`).
+
+**One writer per datum.** The refusal body is written in one place: the canonical
+`core/gateway/contracts/gateway-identity.v1/identity_token.py`. It is copied byte for byte into the
+gateway, agent-api, meeting-api and the credential broker, and copied once into flows-api's
+`subject_auth.py`. The routine file stays the only record of a workspace routine, and the warning
+is derived on read and never stored.
+
+**Contracts and routes.** gateway-identity.v1 `REFUSAL` (two optional keys added; the first three
+are unchanged). `POST /agent/routines` and `GET /agent/routines` each gain additive response
+fields. No new route, no new configuration.
+
+### Why it complies
+
+| Rule | How | Gate |
+|---|---|---|
+| **P2** couple only through contracts | The refusal body travels as gateway-identity.v1's vendored file, never as an import across images. | `gate:isolation`; `gate:fact-parity` (facts `identity-token`, `flows-person-refusal`) |
+| **P4 / P16** additive contract change | `remedy` and `tell_your_person` are new optional keys. A reader of `status`, `reason` and `instruction` is unaffected. | `gate:contract-version` |
+| **P18** fail loud | A refusal names its remedy instead of leaving the agent to guess. The save-time note says ahead of time what will be refused. | ungated: reviewed |
+| **P23** one writer | One canonical refusal body. The warning is derived on read, never stored. | `gate:fact-parity`; ungated: reviewed for the card fields |
+| **P11** mechanism, not policy | The detector reads the route manifest's `person` flags rather than holding its own list of tools. | ungated: reviewed |
+
+**Security.**
+
+- **Who can do what.** Mail, calendar and connection verbs run only for a delegated identity whose
+  regime is `human`, or for the person's own credential. Nothing in this change widens that.
+- **Enforcement per hop.** The gateway signs the regime into the identity. agent-api's person gate
+  refuses the request before the route body runs. The credential broker is never reached. meeting-api
+  and flows-api apply the same rule to their own human-only verbs.
+- **What is refused.** Every human-only verb, for every unattended regime (`autonomous`, empty or
+  unknown). The remedy names the only way through, asking in chat. It grants nothing.
+- **Deny tests.**
+  `test_an_unattended_mail_or_calendar_call_gets_the_remedy_and_no_provider_call` and
+  `test_a_worker_without_a_person_is_refused_before_the_broker`
+  (`core/agent/tests/test_connection_routes.py`);
+  `test_the_refusal_is_the_one_every_service_answers_with`
+  (`core/flows/tests/test_subject_bearer.py`);
+  `test_regime_refusal_names_the_remedy_and_a_sentence_for_the_person`
+  (`deploy/dogfood/rig/tests/test_authorization.py`);
+  `test_the_refusal_remedy_reaches_the_agent_through_the_gateway_render`
+  (`deploy/dogfood/minutes-stack/test_agent_tools.py`). The save-time note is pinned by
+  `test_the_create_route_saves_and_warns_never_refuses`, `test_the_detector_is_conservative` and
+  `test_the_list_route_marks_workspace_and_api_routines`
+  (`core/agent/tests/test_routine_needs.py`), and the terminal by `routineNote`
+  (`clients/terminal/src/surfaces/__tests__/routinesApi.test.ts`).
+
 ## Read the result
 
 ```bash

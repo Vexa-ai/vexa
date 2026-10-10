@@ -110,7 +110,9 @@ a worker's token to no caller that does not. A worker whose regime is not `human
 loop: `DELEGATED_REACH` in `flows_api.py` is the one table of what it may still do — read the
 person's own rows and file friction — and it is refused every other route (today `POST
 /reactions/{id}/{verb}`) with **403** and the same `human_session_required` body agent-api and
-meeting-api answer with. A route missing from the table is refused to it.
+meeting-api answer with — including `remedy: ask_in_chat` and the `tell_your_person` sentence the
+agent relays to the person (gateway-identity.v1 `REFUSAL`; fact `flows-person-refusal`). A route
+missing from the table is refused to it.
 
 ## Meetings is optional, and so is the agent domain
 

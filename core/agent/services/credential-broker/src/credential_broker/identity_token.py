@@ -88,11 +88,20 @@ DELEGATION_HEADERS = {
 
 #: The answer a service gives a worker dispatched without a person in the loop when it asks for a
 #: verb that needs one. One body everywhere, so a worker reads one refusal whichever service it hit.
+#: ``remedy`` is the stable machine field (the one way through: the person asks in chat, where the
+#: regime is ``human``); ``tell_your_person`` is the sentence the agent relays to them word for word.
+#: Both are additive: ``status``, ``reason`` and ``instruction`` read exactly as before.
+REMEDY_ASK_IN_CHAT = "ask_in_chat"
 REFUSAL = {
     "status": "refused",
     "reason": "human_session_required",
     "instruction": "This session runs without a person in the loop. Record what you wanted to do "
                    "and stop; do not retry it another way.",
+    "remedy": "ask_in_chat",
+    "tell_your_person": "This ran without you present (a scheduled routine, a background flow or a "
+                        "meeting run), and mail, calendar and connection actions only work when you "
+                        "ask in chat. Nothing is wrong with your connection, and signing in again "
+                        "will not change it.",
 }
 
 

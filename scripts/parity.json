@@ -449,11 +449,11 @@
       "sites": [
         {
           "path": "core/gateway/contracts/gateway-identity.v1/identity_token.py",
-          "pattern": "(\"status\": \"refused\",\\s*\"reason\": \"human_session_required\",[\\s\\S]*?another way\\.\")"
+          "pattern": "(\"status\": \"refused\",\\s*\"reason\": \"human_session_required\",[\\s\\S]*?will not change it\\.\",\\s*\\})"
         },
         {
           "path": "core/flows/src/flows_integrations/subject_auth.py",
-          "pattern": "(\"status\": \"refused\",\\s*\"reason\": \"human_session_required\",[\\s\\S]*?another way\\.\")"
+          "pattern": "(\"status\": \"refused\",\\s*\"reason\": \"human_session_required\",[\\s\\S]*?will not change it\\.\",\\s*\\})"
         }
       ]
     },

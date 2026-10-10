@@ -197,6 +197,7 @@ def test_workspace_routine_enabled_patch_rewrites_file_and_reconciles(tmp_path):
         "routine_name": "brief",
         "enabled": True,
         "pending_confirmation": False,
+        "needs_person": [],
     }]
 
     disabled = client.patch(

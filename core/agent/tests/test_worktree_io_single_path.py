@@ -85,6 +85,7 @@ ALLOW = {
                "agent/control_plane/identity_token.py::_write"),
     **_entries(_IMAGE,
                "agent/control_plane/route_policy.py::load",
+               "agent/control_plane/routine_needs.py::person_tools",
                "agent/control_plane/routers/health.py::build.mcp_tools_manifest",
                "agent/control_plane/scaffolds.py::read_preset",
                "agent/control_plane/global_seed.py::_shippable",

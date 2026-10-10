@@ -11,6 +11,17 @@ export interface Routine {
   /** Written where no person stood behind it (an agent's write on the workspace, or a run with nobody
    *  watching): not armed until the person confirms it. */
   pending_confirmation?: boolean;
+  /** What this routine's prompt reaches for that only works when the person asks in chat (mail,
+   *  calendar, connections). A scheduled run has nobody present, so each run is refused there. */
+  needs_person?: string[];
+  /** The one sentence agent-api puts beside such a routine. Present only with `needs_person`. */
+  warning?: string;
+}
+
+/** The note a routine card shows under its plan, or null. agent-api writes the sentence; the
+ *  surface never composes its own, so the wording has one owner. */
+export function routineNote(r: Routine): string | null {
+  return r.needs_person && r.needs_person.length > 0 && r.warning ? r.warning : null;
 }
 
 export async function listRoutines(): Promise<Routine[]> {
