@@ -184,6 +184,25 @@ def _fixed_friction_ids(db, ids: set, *, scan: int = SCAN_ROWS) -> set:
             fixed.add(fid)
     return fixed
 #: The refs this row renders as named fields; everything else is passed through under `context`.
+def _friction_occurrences(db, ids: set) -> dict:
+    """`{friction_id: (occurrences, last_seen_epoch)}` from `friction_occurrence` — the repeat
+    counter `POST /friction` keeps when the same report is filed again inside one UTC hour
+    (`flows_integrations.friction_dedup`, its one writer). Summed across hour buckets folded into
+    the same id. A report with no counter row was filed once: the caller defaults it to 1. READ
+    ONLY, by id, so the cost is bounded by the page of reports already read."""
+    wanted = sorted({str(i) for i in ids if i})
+    if not wanted:
+        return {}
+    names = {f"f{n}": v for n, v in enumerate(wanted)}
+    rows = db.execute("SELECT friction_id, occurrences, last_seen FROM friction_occurrence "
+                      f"WHERE friction_id IN ({', '.join(':' + k for k in names)})", names)
+    out: dict = {}
+    for fid, count, last in rows:
+        n, seen = out.get(fid, (0, 0.0))
+        out[fid] = (n + int(count or 0), max(seen, to_epoch(last) or 0.0))
+    return out
+
+
 _FRICTION_RENDERED = ("uid", "session", "friction_id", "severity", "what_i_tried", "what_happened")
 #: What a session-less report reads as. `POST /friction` stopped requiring `session` in F-D27 —
 #: prod refused a report for not having one, and the report it refused was about that refusal. So a
@@ -216,6 +235,7 @@ def friction_for_subject(db, *, subject: str = "", since: float = 0.0, limit: in
     rows = rows[:max(1, int(limit))]
     ids = {loads(r["subject_refs"]).get("friction_id") or r["reaction_id"] for r in rows}
     fixed_ids = _fixed_friction_ids(db, ids, scan=scan)
+    counts = _friction_occurrences(db, ids)
     out = []
     for r in rows:
         refs = loads(r["subject_refs"])
@@ -241,6 +261,11 @@ def friction_for_subject(db, *, subject: str = "", since: float = 0.0, limit: in
             "tried": refs.get("what_i_tried", ""), "happened": refs.get("what_happened", ""),
             "context": ctx,
             "status": "fixed" if fid in fixed_ids else "open",
+            # HOW MANY TIMES THIS WAS FILED. Identical repeats inside one UTC hour are folded into
+            # the first report rather than admitted as rows of their own; `last_seen` is the newest
+            # of them. A report filed once reads `occurrences: 1`, `last_seen` == `at`.
+            "occurrences": max(1, counts.get(fid, (1, at))[0]),
+            "last_seen": iso(max(at, counts.get(fid, (1, at))[1])),
         })
     return out
 

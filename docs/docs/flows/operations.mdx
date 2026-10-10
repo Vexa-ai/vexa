@@ -97,6 +97,130 @@ retryable as a **new attempt causally linked** — history is never mutated) and
 Receipts carry each effect's provider reference: the SMTP message-id, the git commit, the bot
 workload id.
 
+## Friction reports: repeats are folded into one row
+
+`report_friction` (flows-api `POST /friction`) is where an agent or a person reports something that
+did not work. An agent stuck in a loop used to file the same report on every pass, for example a
+scheduled run whose mail tool refused it on every tick. Each report became its own row, and dozens
+of identical rows hid every other report.
+
+**What it does now.** The first report of an edge is stored as before. If the same subject sends the
+same report again within the same UTC hour, no new row is created. The first report's
+`occurrences` count goes up and its `last_seen` time is updated. The reporter receives:
+
+```json
+{"id": "fr_…", "recorded": false, "duplicate_of": "fr_…", "occurrences": 3,
+ "instruction": "already reported 3 times; do not report it again this run"}
+```
+
+The first report still answers `{"id": "fr_…", "recorded": true, …}`. `friction_so_far` (`GET
+/friction`) returns `occurrences` (1 for a report filed once) and `last_seen` on every report. The
+rig's `friction_dump` adds up `occurrences` in each group, so a group's count is the number of
+reports filed, not the number of rows. The rig's `report_friction` passes the duplicate fields
+through to the agent unchanged.
+
+**Two reports are "the same" when all four of these match:**
+
+| part | taken from |
+|---|---|
+| subject | the caller's credential (or the operator-stamped `X-User-Id`), never the body |
+| tool | `tool` as sent, trimmed and lowercased |
+| reason | the refusal reason token when `what_happened` has one: either labelled (`"reason": "human_session_required"`, `reason=…`) or a known token found anywhere in the text. Otherwise `what_happened` is normalised by removing URLs, emails, timestamps, UUIDs, prefixed ids (`fr_…`), hex runs, quoted handles and digits, then collapsing case and punctuation. If `what_happened` is empty, `what_i_tried` is used instead |
+| hour | the UTC hour of arrival (`floor(epoch / 3600)`) |
+
+**Limits.**
+
+- The bucket is a fixed UTC hour, not a rolling window. A repeat at 10:59:59Z is folded into the
+  report filed at 10:00. A repeat at 11:00:00Z starts a new report, so a fixer can still see that an
+  edge is happening right now.
+- A different tool, a different reason, a different subject or a new hour each produce a separate
+  report.
+- Two different failures can share a key when their texts differ only in ids or quoted names. For
+  example, one tool may fail on two different drafts. The first report's text is kept and the second
+  failure is counted against it.
+- Only the first report's extra fields (`session`, `extra`, `meeting_id` …) are stored. Later
+  repeats add to the count but not to the text.
+
+**What the reporter sees when something goes wrong.**
+
+- If the deployment has no `friction_log` flow, the first report answers `recorded: false` with the
+  existing note. The counter is then dropped, so the next report tries to file again and is not
+  counted against a row that does not exist.
+- If an operator deleted the original report's row, the next repeat starts a new report rather than
+  counting against one nobody can read.
+
+### How it works
+
+1. `POST /friction` resolves the subject from the caller's credential (`subject_or_operator` →
+   `scoped_subject`), exactly as before. A call with no credential is refused with 401.
+2. The route builds the dedup key with `friction_dedup.dedup_key`
+   (`core/flows/src/flows_integrations/friction_dedup.py`). The key is a sha256 hash of
+   `[uid, tool, reason, hour]`, so the stored key contains none of the report's text.
+3. `friction_dedup.record_occurrence` runs a single atomic upsert on `friction_occurrence`:
+   `INSERT … ON CONFLICT (dedup_key) DO UPDATE SET occurrences = occurrences + 1, last_seen = now
+   RETURNING friction_id, occurrences`. If two first reports arrive at the same moment, only one of
+   them gets `occurrences = 1`.
+4. If `occurrences == 1`, the route admits a `friction.reported` reaction as before
+   (`source_event_id = friction-<friction_id>`). If admission creates nothing, `friction_dedup.forget`
+   drops the counter.
+5. If `occurrences > 1`, the route admits nothing and answers with `duplicate_of`, `occurrences` and
+   `instruction`.
+6. `flows_timeline.friction_for_subject` (the read model behind `GET /friction`) reads the page of
+   reports, then reads `friction_occurrence` for those ids. Counts are added up across hour buckets
+   and returned as `occurrences` and `last_seen`.
+
+**One writer per carrier.** `friction_occurrence` is written only by flows-api's `POST /friction`,
+through `friction_dedup`. `flows_timeline` only reads it. The `reaction` row's `subject_refs` holds
+the admitted fact and is never rewritten to store a count. The table is declared in
+`core/flows/src/flows_schema/models.py` and generated into `core/flows/schema.sql`. Like every flows
+table, it is applied with `CREATE TABLE IF NOT EXISTS`, so an existing deployment gets it at boot.
+
+**Contracts and routes.** `POST /friction` and `GET /friction` keep their routes and arguments. The
+new response fields are additive. `core/flows/mcp.tools.v1.json` describes them in the
+`report_friction` and `friction_so_far` notes. The `friction.reported` entry in the
+`flows.v1` carrier census (`carriers.json` and its golden) now states the dedup rule. The sealed
+schema file is unchanged.
+
+**Configuration.** None. The hour bucket and the list of known reason tokens
+(`friction_dedup.KNOWN_REASONS`) are code constants.
+
+### Why it complies
+
+**Architecture** ([architecture](/governance/architecture)):
+
+- **P23, one writer per data carrier.** `friction_occurrence` has one writer (flows-api
+  `POST /friction`) and one reader (`flows_timeline`). The `flows-rows` data asset in
+  `architecture.calm.json` names both, and the chart is resealed. Enforced by `gate:dataflow`.
+- **P2, couple only through contracts.** The read model queries the table with its own SQL and does
+  not import from `flows_integrations`. The engine (`src/flows`) is unchanged. Enforced by
+  `gate:isolation`.
+- **P4 and P8, contracts and goldens.** The carrier census entry and its golden are changed together
+  and validate (`validate.mjs`). `flows.schema.json` is unchanged, so the seal still holds. Enforced
+  by `gate:schema` and `gate:contract-version`. The schema SQL is regenerated from the models and
+  checked by `tests/test_schema_drift.py`.
+- **P18, fail loud.** A report that a deployment cannot store still answers `recorded: false` with a
+  note and logs an error. A duplicate is never reported as stored. It answers `recorded: false` and
+  names the row it was folded into. Ungated: reviewed.
+
+**Security.**
+
+- **Who can read and write.** Only an authenticated caller can file, and the subject comes from the
+  caller's credential, never from the body. The subject is part of the key, so one person's report
+  can never increase another person's count. A duplicate answer only names a report filed by the
+  same subject. `GET /friction` stays scoped to the caller's own reports.
+- **Enforcement per hop.** MCP → gateway (the caller's credential) → flows-api `subject_or_operator`
+  (401 with no credential) → `scoped_subject` → the key. The counter table stores a hash and a uid,
+  never report text.
+- **Deny tests** (`core/flows/tests/test_friction_dedup.py`):
+  `test_a_different_uid_never_increments_another_s_report`,
+  `test_a_counter_whose_report_was_deleted_starts_over`.
+  Behaviour tests: `test_ten_identical_reports_are_one_reaction_with_occurrences_ten`,
+  `test_a_duplicate_answer_tells_the_reporter_to_stop`, `test_a_different_tool_is_a_separate_row`,
+  `test_a_different_reason_is_a_separate_row`, `test_the_same_report_in_the_next_utc_hour_is_a_new_row`,
+  `test_ids_and_timestamps_in_the_text_do_not_defeat_the_key`. Rig:
+  `deploy/dogfood/rig/tests/test_friction.py::test_friction_dump_sums_folded_occurrences_rather_than_counting_rows`,
+  `test_report_friction_passes_a_duplicate_answer_through`.
+
 ## When things break
 
 - A worker dies mid-step → its lease expires, the reconciler re-queues, the resumer reads receipts

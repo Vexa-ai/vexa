@@ -95,6 +95,18 @@ CREATE TABLE IF NOT EXISTS flow_version (
 	CONSTRAINT flow_status CHECK (status IN ('draft','active','retired'))
 );
 
+CREATE TABLE IF NOT EXISTS friction_occurrence (
+	dedup_key TEXT NOT NULL, 
+	friction_id TEXT NOT NULL, 
+	uid TEXT NOT NULL, 
+	occurrences INTEGER NOT NULL, 
+	first_seen DOUBLE PRECISION NOT NULL, 
+	last_seen DOUBLE PRECISION NOT NULL, 
+	PRIMARY KEY (dedup_key)
+);
+
+CREATE INDEX IF NOT EXISTS friction_occurrence_by_id ON friction_occurrence (friction_id);
+
 CREATE TABLE IF NOT EXISTS effect_receipt (
 	effect_key TEXT NOT NULL, 
 	reaction_id TEXT NOT NULL, 
