@@ -666,9 +666,21 @@ def create_app(
     async def create_planned_meeting(request: Request):
         return await _forward_meeting(request)
 
+    # Import a meeting-bundle.v1 archive as a new meeting the caller owns (`?dry_run=true` previews
+    # it and writes nothing). A literal segment, so it is never matched as a row id.
+    @app.post("/meetings/import")
+    async def import_meeting_bundle(request: Request):
+        return await _forward_meeting(request)
+
     # Single meeting — forwards to meeting-api's GET /meetings/{id} (the meeting-detail page reads it).
     @app.get("/meetings/{meeting_id}")
     async def meeting(meeting_id: int, request: Request):
+        return await _forward_meeting(request)
+
+    # The meeting as one portable meeting-bundle.v1 file, for its owner. The zip and its
+    # Content-Disposition pass through verbatim.
+    @app.get("/meetings/{meeting_id}/export")
+    async def export_meeting_bundle(meeting_id: int, request: Request):
         return await _forward_meeting(request)
 
     # Edit / delete a PLANNED meeting by ROW id (owner-scoped; meeting-api refuses FSM rows with 409).
