@@ -22,6 +22,8 @@ import json
 import time
 from pathlib import Path
 
+from workspaces.shared import workspace_paths as wpaths
+
 #: Where the book lives on a desk. The SAME path the rig has always written and the same one flows'
 #: `await_claim` reads (`flows_defs/production.py` CLAIM_BOOK) — this change moves who writes it,
 #: never where it is, so an existing desk's book is still its book.
@@ -45,8 +47,10 @@ def _load(workspace: Path) -> dict:
     raised on: it is a person's own desk file, it can be edited by hand, and refusing to record
     what an agent just learned because an old file will not parse loses the new fact to protect the
     broken one."""
+    # The desk is a work tree the model's tools can write: the book is read nofollow, so a link at
+    # `_pending` or the file is an empty book, never somebody else's.
     try:
-        book = json.loads((workspace / CLAIMS_PATH).read_text(encoding="utf-8"))
+        book = json.loads(wpaths.read_text_inside(workspace, CLAIMS_PATH) or "{}")
     except Exception:  # noqa: BLE001
         book = {}
     if not isinstance(book, dict):
@@ -58,9 +62,7 @@ def _load(workspace: Path) -> dict:
 
 
 def _save(workspace: Path, book: dict) -> None:
-    f = workspace / CLAIMS_PATH
-    f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(json.dumps(book, indent=1), encoding="utf-8")
+    wpaths.write_text_inside(workspace, CLAIMS_PATH, json.dumps(book, indent=1))   # nofollow
 
 
 def propose(workspace: Path, batch: list) -> dict:
@@ -137,11 +139,12 @@ def record_verdicts(workspace: Path, batch: list) -> dict:
     out: dict = {"recorded": recorded}
     if errors:
         out["errors"] = errors
-    marker = workspace / READY_MARKER
-    if any(r["usable_as_context"] for r in recorded) and not marker.exists():
+    if (any(r["usable_as_context"] for r in recorded)
+            and not wpaths.is_file_inside(workspace, READY_MARKER)):
         usable = sum(1 for c in book["claims"] if isinstance(c, dict) and c.get("state") in USABLE)
-        marker.write_text(json.dumps({"ready": True, "at": time.time(),
-                                      "validated_claims": usable}), encoding="utf-8")
+        wpaths.write_text_inside(workspace, READY_MARKER,
+                                 json.dumps({"ready": True, "at": time.time(),
+                                             "validated_claims": usable}))
         out["workspace_ready"] = True
         out["tell_your_person"] = ("One line — noted, write-ups will use it — then offer the next "
                                    "thing. No recap of what you just did.")

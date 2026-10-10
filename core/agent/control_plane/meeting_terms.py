@@ -42,10 +42,10 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 from pathlib import Path
 
+from workspaces.shared import workspace_paths as wpaths
 from workspaces.shared.workspace_id import VEXA_DIR
 
 logger = logging.getLogger("agent_api.meeting_terms")
@@ -134,11 +134,20 @@ def merge(stored, published) -> list[dict]:
 
 
 def _file(workspaces_root, subject: str, meeting_id) -> "Path | None":
+    loc = _locate(workspaces_root, subject, meeting_id)
+    return None if loc is None else loc[0] / loc[1]
+
+
+def _locate(workspaces_root, subject: str, meeting_id) -> "tuple[Path, str] | None":
+    """``(desk root, "<TERMS_DIR>/<mid>.json")`` — the map is read and written relative to the desk
+    through `workspace_paths`, because the desk is a work tree the model's tools can write and the
+    map's contents are returned to the caller: a link at `.vexa`, `meeting-terms` or the file is
+    never read through or written through."""
     mid = str(meeting_id or "").strip()
     subj = str(subject or "").strip()
     if not _SAFE.match(mid) or not _SAFE.match(subj):
         return None
-    return Path(workspaces_root) / subj / TERMS_DIR / f"{mid}.json"
+    return Path(workspaces_root) / subj, f"{TERMS_DIR}/{mid}.json"
 
 
 def read(workspaces_root, subject: str, meeting_id) -> dict:
@@ -148,12 +157,16 @@ def read(workspaces_root, subject: str, meeting_id) -> dict:
     able to tell it from a failure: the canvas renders plain text and costs nothing, exactly as it
     did before anybody pressed the button."""
     empty = {"meeting": str(meeting_id or ""), "cursor": "", "terms": []}
-    path = _file(workspaces_root, subject, meeting_id)
-    if path is None or not path.is_file():
+    loc = _locate(workspaces_root, subject, meeting_id)
+    if loc is None:
         return empty
+    raw = wpaths.read_text_inside(loc[0], loc[1], allow=(VEXA_DIR,))
+    if raw is None:
+        return empty
+    path = loc[0] / loc[1]
     try:
-        doc = json.loads(path.read_text(encoding="utf-8") or "null")
-    except (OSError, ValueError) as exc:
+        doc = json.loads(raw or "null")
+    except ValueError as exc:
         # A map we could not read costs the transcript its chips, never its text (P18: say it in the
         # operator channel; the reader is looking at a meeting, not at our filesystem).
         logger.info("could not read the term map at %s: %s", path, exc)
@@ -172,10 +185,11 @@ def extend(workspaces_root, subject: str, meeting_id, published, cursor: str = "
     again without anybody tracking whether it already was. An empty publish writes NOTHING (rule 3)
     — including the cursor, because a cursor that moved without terms would silently skip the
     stretch of room the next Highlight was going to read."""
-    path = _file(workspaces_root, subject, meeting_id)
+    loc = _locate(workspaces_root, subject, meeting_id)
     current = read(workspaces_root, subject, meeting_id)
-    if path is None:
+    if loc is None:
         return current
+    path = loc[0] / loc[1]
     fresh = [r for r in (clean_term(r) for r in (published or [])) if r]
     if not fresh:
         return current                      # rule 3, cursor included — see the docstring
@@ -187,12 +201,11 @@ def extend(workspaces_root, subject: str, meeting_id, published, cursor: str = "
     if doc == current:
         return current                      # the same publish twice does not even touch the file
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(path.name + ".tmp")
-        tmp.write_text(json.dumps(doc, indent=1) + "\n", encoding="utf-8")
-        os.replace(tmp, path)               # atomic: a reader never sees half a map
-        _git_exclude(Path(workspaces_root) / str(subject).strip())
-    except OSError as exc:
+        # atomic AND nofollow: a new file renamed into place — a reader never sees half a map, and
+        # a link at the name or on the way is replaced or refused, never written through
+        wpaths.write_text_inside(loc[0], loc[1], json.dumps(doc, indent=1) + "\n", allow=(VEXA_DIR,))
+        _git_exclude(loc[0])
+    except (OSError, ValueError) as exc:   # ValueError: a link on the way (PathRefused)
         logger.info("could not store the term map at %s: %s", path, exc)
         return current
     return doc
@@ -204,11 +217,5 @@ def _git_exclude(desk_dir: Path) -> None:
     the worker's post-turn `git add -A` would otherwise commit a new version of this file every
     time somebody pressed Highlight — churn in the history of a person's own desk, for a projection
     of the chat record rather than a fact about the workspace."""
-    info = desk_dir / ".git" / "info"
-    if not info.parent.is_dir():
-        return                              # not a repo (a fresh desk, a test tmpdir) — nothing to exclude
-    info.mkdir(parents=True, exist_ok=True)
-    ex = info / "exclude"
-    body = ex.read_text(encoding="utf-8") if ex.exists() else ""
-    if f"/{TERMS_DIR}/" not in body:
-        ex.write_text(body.rstrip("\n") + f"\n/{TERMS_DIR}/\n", encoding="utf-8")
+    # not a repo (a fresh desk, a test tmpdir) — nothing to exclude; never through a link at `.git`
+    wpaths.ensure_git_exclude(desk_dir, f"/{TERMS_DIR}/")

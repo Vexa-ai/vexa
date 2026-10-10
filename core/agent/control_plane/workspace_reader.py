@@ -244,16 +244,13 @@ _UNFILLED_BANNER = (
 )
 
 
-def _is_template_doc(p: Path) -> bool:
-    """Does this file DECLARE itself a shape? Frontmatter only, and only the head of it."""
-    if p.suffix.lower() != ".md":
+def _is_template_doc(base: Path, rel: str) -> bool:
+    """Does this file DECLARE itself a shape? Frontmatter only, and only the head of it — read
+    NOFOLLOW (`workspace_paths`), because the tree is one the model's tools can write."""
+    if not rel.lower().endswith(".md"):
         return False
-    try:
-        with p.open("r", encoding="utf-8", errors="replace") as fh:
-            head = fh.read(800)
-    except OSError:
-        return False
-    if not head.startswith("---"):
+    head = wpaths.read_head_inside(base, rel, 800)
+    if not head or not head.startswith("---"):
         return False
     end = head.find("\n---", 3)
     return bool(_TEMPLATE_FM.search(head if end == -1 else head[:end]))
@@ -371,7 +368,8 @@ class WorkspaceReader:
                 continue
             if p.is_file():
                 rel = str(p.relative_to(ws))
-                if not hidden and (rel.startswith(_RESERVED_PREFIXES) or _is_template_doc(p)):
+                if not hidden and (rel.startswith(_RESERVED_PREFIXES)
+                                   or _is_template_doc(ws, Path(rel).as_posix())):
                     continue
                 out.append(rel)
         return out
@@ -388,14 +386,16 @@ class WorkspaceReader:
         record. Deliberately not a refusal: the shape is what you consult to write a real entity."""
         ws = self._guard_under_root(base)
         try:
-            f = wpaths.resolve_inside(ws, path)   # absolute · `..` · symlink-out · `.git`/`.vexa`
+            # absolute · `..` · symlink-out · `.git`/`.vexa` — checked ONCE, then read nofollow
+            # through what was checked, so a link swapped in afterwards refuses the read
+            rbase, rel = wpaths.locate_inside(ws, path)
         except wpaths.PathRefused as exc:
             raise ValueError(str(exc)) from None
-        if not (f.exists() and f.is_file()):
+        raw = wpaths.read_bytes_inside(rbase, rel) if rel else None
+        if raw is None:
             return None
-        text = f.read_text()
-        rel = f.relative_to(ws).as_posix()
-        if rel.startswith(_RESERVED_PREFIXES) or _is_template_doc(f):
+        text = raw.decode("utf-8")
+        if rel.startswith(_RESERVED_PREFIXES) or _is_template_doc(rbase, rel):
             return _TEMPLATE_BANNER + text
         if _UNSET_MARKER in text:
             return _UNFILLED_BANNER + text

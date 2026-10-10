@@ -47,6 +47,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 import threading
 import urllib.parse
@@ -54,6 +55,8 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
+
+from workspaces.shared import workspace_paths as wpaths
 
 from control_plane import publish as publish_mod
 
@@ -143,19 +146,14 @@ def on_disk(pages_dir: "str | Path") -> dict:
     read: the seeded `<flow>.md` pages are not this writer's and are not its business."""
     out: dict = {}
     d = Path(pages_dir)
-    if not d.is_dir():
-        return out
-    try:
-        entries = sorted(d.iterdir())
-    except OSError:
-        return out
-    for f in entries:
-        if not f.is_file() or not RUNTIME_PAGE.match(f.name):
+    # NOFOLLOW (`workspace_paths`): `_global` is written by an admin's turn, so the folder and each
+    # page are reached without following a link — a linked page is not one of this writer's.
+    for name in wpaths.list_files_inside(d.parent, d.name):
+        if not RUNTIME_PAGE.match(name):
             continue
-        try:
-            out[f.name] = etag(f.read_bytes())
-        except OSError:
-            continue
+        raw = wpaths.read_bytes_inside(d.parent, f"{d.name}/{name}")
+        if raw is not None:
+            out[name] = etag(raw)
     return out
 
 
@@ -193,8 +191,8 @@ def reconcile(global_root: "str | Path",
     if not want:
         return []
     try:
-        pages_dir.mkdir(parents=True, exist_ok=True)
-    except OSError as e:
+        os.close(wpaths.dir_fd_inside(Path(global_root), (FLOWS_DIRNAME,), create=True))
+    except (OSError, ValueError) as e:   # ValueError: `flows/` is a planted link (PathRefused)
         logger.warning("flow pages: cannot create %s (%s) — a flow authored from the chat has no "
                        "page here until this directory is writable", pages_dir, e)
         return []
@@ -206,14 +204,15 @@ def reconcile(global_root: "str | Path",
             continue
         target = pages_dir / name
         raw = body.encode("utf-8")
+        rel = f"{FLOWS_DIRNAME}/{name}"
         try:
             # BYTES BEFORE WRITE — see the module docstring. `_global` is a git repository, and a
             # writer that rewrote identical content every cycle would fill its history with commits
-            # that say nothing happened.
-            if target.exists() and target.read_bytes() == raw:
+            # that say nothing happened. Both the compare and the write are nofollow.
+            if wpaths.read_bytes_inside(Path(global_root), rel) == raw:
                 continue
-            target.write_bytes(raw)
-        except OSError as e:
+            wpaths.write_bytes_inside(Path(global_root), rel, raw)
+        except (OSError, ValueError) as e:
             logger.warning("flow pages: could not write %s (%s)", target, e)
             continue
         written.append(name)

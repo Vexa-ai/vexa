@@ -43,6 +43,7 @@ import urllib.request
 from pathlib import Path
 
 from control_plane import meeting_note
+from workspaces.shared import workspace_paths as wpaths
 
 logger = logging.getLogger("agent_api.meeting_mint")
 
@@ -157,16 +158,16 @@ def mint(workspaces_root, subject: str, row, *, path: str = "", record=None) -> 
     rel = next((p for p in (proposed, recorded) if p and meeting_note.is_note_path(p)),
                "") or compose(row)
     desk = Path(workspaces_root) / str(subject)
-    f = desk / rel
     created = False
-    if not f.exists():
-        f.parent.mkdir(parents=True, exist_ok=True)
+    # NOFOLLOW: the desk is a work tree the model's tools can write. A real page already there is
+    # the reader's and is left alone; a link at the page, or on the way to it, is never treated as
+    # the page and never written through (a link at the page is replaced; one on the way refuses).
+    if not wpaths.is_file_inside(desk, rel):
         # THE SHAPE IS `shared/meeting_doc`'s, not this module's. It owns the slot, the regions and
         # the cursor — the three things Expand and the flow's report both write between — so a
         # second composition here is how a minted page and an expanded one would stop agreeing.
-        f.write_text(meeting_doc.scaffold(meeting=facts["id"], title=title_of(row),
-                                          native=facts["native"], date=facts["day"]),
-                     encoding="utf-8")
+        wpaths.write_text_inside(desk, rel, meeting_doc.scaffold(
+            meeting=facts["id"], title=title_of(row), native=facts["native"], date=facts["day"]))
         created = True
         _commit(desk, rel)
     if record is not None and not recorded:

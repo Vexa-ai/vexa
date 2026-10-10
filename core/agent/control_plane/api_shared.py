@@ -1085,11 +1085,12 @@ def _fold_workspace_grounding(mounts: "list", slug: str) -> str:
         purpose = ""
     purpose_part = f" Its purpose: {purpose.strip()}." if purpose.strip() else ""
     readme = ""
-    try:
-        text = (Path(mount.path) / "README.md").read_text(encoding="utf-8")
+    # NOFOLLOW: the README is folded into the turn's grounding, and the mount is a work tree the
+    # model's tools can write — a link at `README.md` must not fold another file into the prompt.
+    raw = wpaths.read_bytes_inside(Path(mount.path), "README.md")
+    if raw is not None:
+        text = raw.decode("utf-8", errors="replace")
         readme = "\n".join(text.splitlines()[:_WORKSPACE_README_LINES])[:_WORKSPACE_README_CHARS]
-    except OSError:
-        readme = ""
     fields = {"name": name, "slug": slug, "purpose": purpose_part, "readme": readme}
     if not readme.strip():
         return meeting_steering.NO_README_WORKSPACE_FOCUS.format(**fields)

@@ -35,6 +35,7 @@ from typing import Optional
 
 from shared.gitexec import run_git
 from shared.marks import UNWRITTEN_MARK
+from workspaces.shared import workspace_paths as wpaths
 
 logger = logging.getLogger("agent_api.global_layer")
 
@@ -119,17 +120,17 @@ def state(root: str | Path) -> dict:
     path = Path(root)
     present, missing, unwritten = [], [], []
     for name in LAYER_FILES:
-        f = path / name
-        body = f.read_text(encoding="utf-8", errors="replace") if f.is_file() else ""
+        # NOFOLLOW: `_global` is written by an admin's turn; a linked layer file is not written
+        raw = wpaths.read_bytes_inside(path, name)
+        body = raw.decode("utf-8", errors="replace") if raw is not None else ""
         if not body.strip():
             missing.append(name)
         elif is_unwritten(body):
             unwritten.append(name)
         else:
             present.append(name)
-    readme = ""
-    if (path / "README.md").is_file():
-        readme = (path / "README.md").read_text(encoding="utf-8", errors="replace")
+    raw = wpaths.read_bytes_inside(path, "README.md")
+    readme = raw.decode("utf-8", errors="replace") if raw is not None else ""
     company = company_of(readme)
     service = service_line_of(readme)
     reasons = []

@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Optional
 
 from shared.gitexec import run_git
+from workspaces.shared import workspace_paths as wpaths
 
 logger = logging.getLogger("agent_api.system_mounts")
 
@@ -203,24 +204,19 @@ def ensure_system_workspace(root: str, subject: str, *, seed_dir: Optional[Path]
         return home
     home.mkdir(parents=True, exist_ok=True)
     if seed_dir and Path(seed_dir).exists():
-        import shutil
-        for item in Path(seed_dir).iterdir():
-            dst = home / item.name
-            if item.is_dir():
-                shutil.copytree(item, dst, dirs_exist_ok=True)
-            else:
-                shutil.copy2(item, dst)
+        # nofollow writes into the new `_system` (a link planted there is replaced or refused)
+        wpaths.copy_tree_inside(Path(seed_dir), home)
     else:
         # The thin template: a marker + the LIGHT identity reference so the repo is non-empty and the
         # agent always knows who it is helping. Chats/sessions, settings, routines, membership records
         # land here in later WPs.
-        (home / "README.md").write_text(
+        wpaths.write_text_inside(home, "README.md",
             "# Private system workspace\n\n"
             "Per-user, read-write, always mounted. Holds who you're helping (`identity.md`),\n"
             "chats/sessions, settings, routines, membership/attachment records, and credential refs.\n"
             "Private — never shareable.\n"
         )
-        (home / "identity.md").write_text(_IDENTITY_STUB)
+        wpaths.write_text_inside(home, "identity.md", _IDENTITY_STUB)
     for args in (("init", "-q"), ("config", "user.email", "agent@vexa"), ("config", "user.name", "vexa-agent")):
         run_git(home, *args, check=True)
     run_git(home, "add", "-A", check=True)

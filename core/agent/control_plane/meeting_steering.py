@@ -32,6 +32,9 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
+import stat
+
+from workspaces.shared import workspace_paths as wpaths
 
 logger = logging.getLogger("agent_api.meeting_steering")
 
@@ -159,17 +162,22 @@ def steering_templates(global_ws_path: "str | None" = None) -> dict[str, str]:
     if not root:
         return dict(DEFAULT_TEMPLATES)
     path = Path(root) / OVERRIDE_RELPATH
-    try:
-        mtime = path.stat().st_mtime
-    except OSError:
+    # NOFOLLOW (`workspace_paths`): `_global` is written by an admin's turn, and these templates
+    # steer every person's chat — an override reached through a planted link is no override.
+    st = wpaths.stat_inside(Path(root), OVERRIDE_RELPATH)
+    if st is None or not stat.S_ISREG(st.st_mode):
         return dict(DEFAULT_TEMPLATES)  # no override file — the normal case, not an error
+    mtime = st.st_mtime
     key = str(path)
     cached = _cache.get(key)
     if cached and cached[0] == mtime:
         sections = cached[1]
     else:
         try:
-            sections = _parse_sections(path.read_text(encoding="utf-8"))
+            raw = wpaths.read_text_inside(Path(root), OVERRIDE_RELPATH)
+            if raw is None:
+                raise OSError("the override is not a plain file")
+            sections = _parse_sections(raw)
         except Exception as exc:  # noqa: BLE001 — a broken override must never break chat
             logger.warning("meeting-lifecycle override %s unreadable (%s) — using built-in templates", path, exc)
             sections = {}

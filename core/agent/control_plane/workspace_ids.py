@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Callable, Iterable, Optional
 
 from shared.gitexec import run_git
+from workspaces.shared import workspace_paths as wpaths
 from workspaces.shared.workspace_id import (KINDS, TOUCHES_FILE, VEXA_DIR, WORKSPACE_JSON,
                                  ensure_workspace_json, is_workspace_id, read_touches,
                                  read_workspace_json, write_workspace_json)
@@ -223,18 +224,13 @@ def mirror_touches(desk_dir, rows: list[dict]) -> None:
     commit a new version of this file on every turn — churn in the history of somebody's desk, for
     a value that is not a fact about the workspace."""
     d = Path(desk_dir)
+    # The desk is a work tree the model's tools can write: the touch list and the exclude line are
+    # written through `workspace_paths`, never through a link at `.vexa`, `.git` or either file.
     try:
-        (d / VEXA_DIR).mkdir(parents=True, exist_ok=True)
-        (d / TOUCHES_FILE).write_text(json.dumps(rows[:TOUCH_MIRROR_MAX], indent=1) + "\n",
-                                      encoding="utf-8")
-        info = d / ".git" / "info"
-        if info.parent.is_dir():
-            info.mkdir(parents=True, exist_ok=True)
-            ex = info / "exclude"
-            body = ex.read_text(encoding="utf-8") if ex.exists() else ""
-            if f"/{TOUCHES_FILE}" not in body:
-                ex.write_text(body.rstrip("\n") + f"\n/{TOUCHES_FILE}\n", encoding="utf-8")
-    except OSError as exc:  # noqa: BLE001
+        wpaths.write_text_inside(d, TOUCHES_FILE, json.dumps(rows[:TOUCH_MIRROR_MAX], indent=1) + "\n",
+                                 allow=(VEXA_DIR,))
+        wpaths.ensure_git_exclude(d, f"/{TOUCHES_FILE}")
+    except (wpaths.PathRefused, OSError) as exc:  # noqa: BLE001
         logger.info("could not mirror the touch log into %s: %s", desk_dir, exc)
 
 
@@ -252,7 +248,8 @@ def classify(ws_dir) -> str:
     p = Path(ws_dir)
     if p.name == GLOBAL_SLUG:
         return "global"
-    return "group" if (p / _MEMBERS_FILE).is_file() else "desk"
+    # nofollow: a `policy` linked in from another tree does not make this one a group
+    return "group" if wpaths.is_file_inside(p, _MEMBERS_FILE) else "desk"
 
 
 def _default_name(slug: str, kind: str) -> str:

@@ -54,6 +54,10 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 from control_plane import preset_library
+from workspaces.shared import workspace_paths as wpaths
+
+#: A preset is a short document; read at most this much of it.
+_PRESET_MAX_BYTES = 1 << 20
 
 logger = logging.getLogger("agent_api.scaffolds")
 
@@ -240,13 +244,16 @@ def read_preset(global_root: str | Path, name: str, *,
     f = preset_path(global_root, name)
     fallback = preset_library.image_asks_dir() if image_root is _LIBRARY_DEFAULT else (
         Path(image_root) if image_root is not None else None)
-    try:
-        raw = f.read_text(encoding="utf-8", errors="replace")
-    except OSError as e:
+    # NOFOLLOW: `_global` is written by an admin's turn, and this text opens a link every person
+    # follows — a preset reached through a planted link is not the admin's preset, so it reads as
+    # absent and falls through to the image's copy, exactly as a missing one does.
+    raw = wpaths.read_head_inside(Path(global_root), f"asks/{name}.md", _PRESET_MAX_BYTES)
+    if raw is None:
         alt = (fallback / f"{name}.md") if fallback is not None else None
         if alt is None or not alt.is_file():
-            raise ScaffoldError(f"preset asks/{name}.md cannot be read here ({e.__class__.__name__}) — "
-                                "the link would open nothing") from e
+            why = "NotAPlainFile" if (f.is_symlink() or f.exists()) else "FileNotFoundError"
+            raise ScaffoldError(f"preset asks/{name}.md cannot be read here ({why}) — "
+                                "the link would open nothing")
         logger.info("scaffolds: preset %s is not on the store — reading the copy this image ships "
                     "(%s). preset_library.top_up puts it in _global/asks/ where an admin can edit it.",
                     name, alt)
@@ -462,23 +469,20 @@ def desk_state(workspaces_root: str | Path, subject: str) -> str:
     root = Path(workspaces_root) / str(subject)
     if not root.is_dir():
         return "new"
-    entities = root / "kg" / "entities"
-    if not entities.is_dir():
-        return "new"
     meeting_reports, other = 0, 0
-    try:
-        for f in entities.rglob("*.md"):
-            if f.name == "index.md":
-                continue
-            # `kg/templates/` is the SHAPE of an entity, never one — it must not make a desk warm.
-            if "templates" in f.parts:
-                continue
-            if "meeting" in f.parts:
-                meeting_reports += 1
-            else:
-                other += 1
-    except OSError:
-        return "new"
+    # A descriptor walk that follows no link: a `kg`/`entities` (or any folder below) that is a link
+    # to somebody else's tree makes nobody's desk warm.
+    for rel in wpaths.walk_files_inside(root, "kg/entities"):
+        parts = rel.split("/")
+        if not parts[-1].endswith(".md") or parts[-1] == "index.md":
+            continue
+        # `kg/templates/` is the SHAPE of an entity, never one — it must not make a desk warm.
+        if "templates" in parts:
+            continue
+        if "meeting" in parts:
+            meeting_reports += 1
+        else:
+            other += 1
     if other:
         return "warm"
     return "pile" if meeting_reports else "new"
@@ -498,11 +502,8 @@ def group_state(workspaces_root: str | Path, group_slug: str) -> str:
     if not root.is_dir():
         # A shared workspace lives in its own store slot; an unmaterialised one is still "new".
         return "new"
-    entities = root / "kg" / "entities"
-    try:
-        return "warm" if entities.is_dir() and any(entities.rglob("*.md")) else "new"
-    except OSError:
-        return "new"
+    return "warm" if any(r.endswith(".md") for r in wpaths.walk_files_inside(root, "kg/entities")) \
+        else "new"
 
 
 def state_token(desk: str, group: str) -> str:
