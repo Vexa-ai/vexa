@@ -7,9 +7,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import stat
 from pathlib import Path
-from typing import Optional
+from typing import Iterator, Optional
 
 from workspaces.shared import workspace_paths as wpaths
 
@@ -101,6 +103,85 @@ _TEMPLATE_BANNER = (
 # and the terminal's strip stays as the fallback for everything written before the field existed.
 _TURNS_SIDECAR = "{session}.turns.jsonl"
 
+# ── continuity files are read without following a link ──────────────────────────────────────────
+# A chat's pointer, its user_text sidecar and its transcript live under ``<ws>/.claude/`` — in
+# ``_system`` above all, which the model's tools may write during a turn. agent-api reads them as a
+# process that can see every subject's store, so a link planted there would make it read another
+# subject's chat into this one's history. Below the workspace root nothing is reached through a
+# link: each folder is opened without following one, a file only when it is a regular file with no
+# other hard link.
+_DIR_NOFOLLOW = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+_FILE_NOFOLLOW = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0)
+#: A session pointer is an id a few dozen bytes long.
+_POINTER_MAX_BYTES = 1 << 16
+_PLAIN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,199}")
+
+
+def _open_dirs(ws: Path, parts: "tuple[str, ...]") -> int:
+    """A descriptor for ``ws/<parts…>``: ``ws`` as given, each part below it never through a link."""
+    fd = os.open(ws, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0))
+    try:
+        for part in parts:
+            nxt = os.open(part, _DIR_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = nxt
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def _read_under(ws: Path, parts: "tuple[str, ...]", name: str,
+                max_bytes: Optional[int] = None) -> Optional[str]:
+    """The UTF-8 text of ``ws/<parts…>/name`` read without following a link, or None (missing, a
+    link anywhere below ``ws``, not a regular file with a single link, over ``max_bytes``)."""
+    try:
+        dir_fd = _open_dirs(ws, parts)
+    except OSError:
+        return None
+    try:
+        fd = os.open(name, _FILE_NOFOLLOW, dir_fd=dir_fd)
+    except OSError:
+        return None
+    finally:
+        os.close(dir_fd)
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_nlink > 1:
+            return None
+        if max_bytes is not None and st.st_size > max_bytes:
+            return None
+        with os.fdopen(fd, "rb") as fh:
+            fd = -1
+            raw = fh.read() if max_bytes is None else fh.read(max_bytes + 1)
+    except OSError:
+        return None
+    finally:
+        if fd >= 0:
+            os.close(fd)
+    if max_bytes is not None and len(raw) > max_bytes:
+        return None
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
+def _real_subdirs(ws: Path, parts: "tuple[str, ...]") -> Iterator[str]:
+    """Names of the folders directly in ``ws/<parts…>`` that are folders, not links to one."""
+    try:
+        dir_fd = _open_dirs(ws, parts)
+    except OSError:
+        return
+    try:
+        with os.scandir(dir_fd) as it:
+            names = sorted(e.name for e in it if e.is_dir(follow_symlinks=False))
+    except OSError:
+        names = []
+    finally:
+        os.close(dir_fd)
+    yield from names
+
 # The write-back phase runs in the SAME harness session as the turn it follows, so its prompt and
 # its reply are in this transcript. The phase declares itself with this mark — ONE literal now, in
 # ``shared/marks.py``; the worker reads the same constant under its historical name WRITEBACK_MARK.
@@ -128,12 +209,8 @@ def _user_text_index(roots: "list[Path]", session: str) -> list[dict]:
     sidecar yields no records, and history degrades to the terminal's fallback strip."""
     out: list[dict] = []
     for ws in roots:
-        f = ws / ".claude" / "sessions" / _TURNS_SIDECAR.format(session=session)
-        try:
-            if not f.is_file():
-                continue
-            raw = f.read_text(encoding="utf-8")
-        except OSError:
+        raw = _read_under(ws, (".claude", "sessions"), _TURNS_SIDECAR.format(session=session))
+        if raw is None:
             continue
         for line in raw.splitlines():
             line = line.strip()
@@ -327,17 +404,14 @@ class WorkspaceReader:
     def _session_id(self, ws: Path, session: str) -> Optional[str]:
         """The claude sessionId for a thread, read from its continuity pointer
         (``.claude/sessions/<session>.session``; the legacy ``main`` falls back to ``.claude/.session``)."""
-        candidates = [ws / ".claude" / "sessions" / f"{session}.session"]
+        candidates = [((".claude", "sessions"), f"{session}.session")]
         if session == "main":
-            candidates.append(ws / ".claude" / ".session")
-        for f in candidates:
-            try:
-                if f.exists() and f.is_file():
-                    sid = f.read_text().strip()
-                    if sid:
-                        return sid
-            except OSError:
-                continue
+            candidates.append(((".claude",), ".session"))
+        for parts, name in candidates:
+            sid = (_read_under(ws, parts, name, _POINTER_MAX_BYTES) or "").strip()
+            if sid:
+                # an id names a transcript file by itself: one plain name, or no id at all
+                return sid if _PLAIN_ID.fullmatch(sid) else None
         return None
 
     def _continuity_roots(self, subject: str, extra_roots: "list[str | Path] | None" = None) -> list[Path]:
@@ -364,6 +438,30 @@ class WorkspaceReader:
             out.append(c)
         return out
 
+    def _swept_roots(self, subject: str, session: str) -> Iterator[Path]:
+        """Where the last-resort sweep may look for ``session``'s pointer: the subject's own parked
+        slots (``<root>/.attached/<subject>/<slug>``), then each workspace at ``<root>/<id>`` that
+        holds such a pointer and whose ``policy/members.json`` names the subject. Folders reached
+        through a link are skipped."""
+        if not _PLAIN_ID.fullmatch(subject):
+            return
+        for slug in _real_subdirs(self._root, (".attached", subject)):
+            yield self._root / ".attached" / subject / slug
+        from control_plane import workspace_membership as membership  # deferred: module-load order
+
+        for ws_id in _real_subdirs(self._root, ()):
+            if ws_id.startswith(".") or ws_id == subject:
+                continue
+            ws = self._root / ws_id
+            if not self._session_id(ws, session):
+                continue
+            try:
+                if membership.is_member(self._root, ws_id, subject) is None:
+                    continue
+            except Exception:  # noqa: BLE001 — an unreadable member list is not a membership
+                continue
+            yield ws
+
     def history(self, subject: str, session: str, extra_roots: "list[str | Path] | None" = None) -> list[dict]:
         """The session's prior conversation as ordered, terminal-renderable turns.
 
@@ -384,37 +482,28 @@ class WorkspaceReader:
                 break
         if not sid:
             # LAST RESORT — threads recorded BEFORE continuity anchoring sit under whatever workspace
-            # was the turn's cwd at the time, which may no longer be mounted (deactivated / membership
-            # gone). Two fixed-depth globs over the store root find the pointer; read-only + bounded.
-            for pat in (f"*/.claude/sessions/{session}.session",
-                        f".attached/*/*/.claude/sessions/{session}.session"):
-                for f in self._root.glob(pat):
-                    ws = f.parents[2]
-                    sid = self._session_id(ws, session)
-                    if sid:
-                        roots.append(ws)
-                        break
+            # was the turn's cwd at the time, which may no longer be mounted (deactivated, or switched
+            # off). Only workspaces this subject may read are swept: its own parked slots and the
+            # workspaces whose authoritative member list names it — a session name ("main") is the
+            # same for every subject, so a pointer elsewhere is somebody else's thread.
+            for ws in self._swept_roots(subject, session):
+                sid = self._session_id(ws, session)
                 if sid:
+                    roots.append(ws)
                     break
         if not sid:
             return []
         # The cwd-slug dir is claude's encoding of the workspace path; there is normally one, but match by
         # the sessionId filename to be safe. ``rglob`` also catches subagent transcripts — we want the top.
-        path: Optional[Path] = None
+        raw: Optional[str] = None
         for ws in roots:
-            projects = ws / ".claude" / "projects"
-            if not projects.exists():
-                continue
-            for cand in projects.glob(f"*/{sid}.jsonl"):
-                path = cand
+            for slug in _real_subdirs(ws, (".claude", "projects")):
+                raw = _read_under(ws, (".claude", "projects", slug), f"{sid}.jsonl")
+                if raw is not None:
+                    break
+            if raw is not None:
                 break
-            if path is not None:
-                break
-        if path is None:
-            return []
-        try:
-            raw = path.read_text()
-        except OSError:
+        if raw is None:
             return []
 
         turns: list[dict] = []

@@ -657,7 +657,10 @@ def test_session_history_found_in_active_mount_dir(tmp_path):
 
 def test_session_history_sweeps_unmounted_strands(tmp_path):
     """A thread recorded under a workspace that is NO LONGER mounted (deactivated shared ws) must
-    still load: the reader's last-resort sweep finds the pointer without any extra_roots."""
+    still load: the reader's last-resort sweep finds the pointer without any extra_roots — in a
+    workspace the subject is a member of, or in its own parked slot."""
+    import json
+
     from control_plane.workspace_reader import WorkspaceReader
 
     gone = tmp_path / "some-shared-ws"          # not passed as an extra root — unmounted
@@ -666,8 +669,39 @@ def test_session_history_sweeps_unmounted_strands(tmp_path):
     _write_transcript(gone, "sid-7", [
         {"type": "user", "message": {"role": "user", "content": "stranded"}},
     ])
+    (gone / "policy").mkdir()
+    (gone / "policy" / "members.json").write_text(json.dumps([{"subject": "28", "role": "contributor"}]))
+    parked = tmp_path / ".attached" / "28" / "old-repo"   # the subject's own parked slot
+    (parked / ".claude" / "sessions").mkdir(parents=True)
+    (parked / ".claude" / "sessions" / "chat-p.session").write_text("sid-8\n")
+    _write_transcript(parked, "sid-8", [
+        {"type": "user", "message": {"role": "user", "content": "parked"}},
+    ])
     reader = WorkspaceReader(str(tmp_path))
     assert reader.history("28", "chat-z") == [{"role": "user", "text": "stranded"}]
+    assert reader.history("28", "chat-p") == [{"role": "user", "text": "parked"}]
+
+
+def test_the_sweep_never_serves_another_subjects_thread(tmp_path):
+    """A subject with no pointer of its own for a session name is never served the thread another
+    subject — or a workspace it is not a member of — keeps under that name."""
+    import json
+
+    from control_plane.workspace_reader import WorkspaceReader
+
+    for where in ("u_other", ".attached/u_other/repo", "not-my-shared-ws"):
+        ws = tmp_path / where
+        (ws / ".claude" / "sessions").mkdir(parents=True)
+        (ws / ".claude" / "sessions" / "main.session").write_text(f"sid-{ws.name}\n")
+        _write_transcript(ws, f"sid-{ws.name}", [
+            {"type": "user", "message": {"role": "user", "content": f"PRIVATE to {where}"}},
+        ])
+    (tmp_path / "not-my-shared-ws" / "policy").mkdir()
+    (tmp_path / "not-my-shared-ws" / "policy" / "members.json").write_text(
+        json.dumps([{"subject": "u_other", "role": "owner"}]))
+    reader = WorkspaceReader(str(tmp_path))
+    assert reader.history("u_new", "main") == []
+    assert "PRIVATE to u_other" in json.dumps(reader.history("u_other", "main"))
 
 
 def test_session_history_prefers_the_system_anchor(tmp_path):
