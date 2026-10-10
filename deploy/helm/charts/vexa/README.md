@@ -162,10 +162,11 @@ their browsers run unsandboxed (said in each bot's log).
 
 ## Credentials the runtime forwards into spawned Pods
 
-The runtime forwards a profile's settings from its own environment into each spawned Pod (an agent
-worker's model, its caps, its provider keys). A key the runtime's config contract marks `secret`
-(and any key the contract does not declare) never appears as a value in the Pod spec: the runtime
-puts it in a Secret of that Pod's own, owned by the Pod so the cluster deletes it with the Pod, and
+A spawned Pod's container env comes from the dispatch (an agent worker's model route, its unit's
+tokens, a bot's constructor) and from the settings the runtime forwards from its own environment.
+Any non-empty key the runtime's config contract marks `secret` — and any key the contract does not
+declare — never appears as a value in the Pod spec, whichever of the two set it: the runtime puts it
+in a Secret of that Pod's own, owned by the Pod so the cluster deletes it with the Pod, and
 the container reads it by `secretKeyRef`. The runtime's Role may create Secrets and nothing else
 with them (no read, list or delete); each Secret is named per Pod incarnation. The Pod's container
 starts once its Secret exists, a moment after the Pod is created.

@@ -202,7 +202,7 @@ def test_runtime_scheduling_env_shapes_the_pod_without_becoming_container_config
 
         class _R:
             returncode = 0
-            stdout = ""
+            stdout = json.dumps({"metadata": {"uid": "pod-uid"}}) if args[:1] == ("create",) else ""
             stderr = ""
 
         return _R()
@@ -210,11 +210,11 @@ def test_runtime_scheduling_env_shapes_the_pod_without_becoming_container_config
     monkeypatch.setattr(k8s_backend, "_kubectl", fake_kubectl)
     monkeypatch.setenv(k8s_backend.TOLERATIONS_ENV, json.dumps([{"key": "vexa", "operator": "Exists"}]))
     monkeypatch.setenv(k8s_backend.NODE_SELECTOR_ENV, json.dumps({"pool": "bots"}))
-    K8sBackend(namespace="ns").start("mtg-6", Runnable(image="img"), env={"A": "b"})
+    K8sBackend(namespace="ns").start("mtg-6", Runnable(image="img"), env={"LOG_LEVEL": "b"})
     pod = json.loads(calls[0]["stdin"])
     assert pod["spec"]["tolerations"] == [{"key": "vexa", "operator": "Exists"}]
     assert pod["spec"]["nodeSelector"] == {"pool": "bots"}
-    assert pod["spec"]["containers"][0]["env"] == [{"name": "A", "value": "b"}]
+    assert pod["spec"]["containers"][0]["env"] == [{"name": "LOG_LEVEL", "value": "b"}]
 
 
 def test_k8s_start_submits_the_pod_via_create_stdin(monkeypatch):
@@ -227,14 +227,14 @@ def test_k8s_start_submits_the_pod_via_create_stdin(monkeypatch):
 
         class _R:
             returncode = 0
-            stdout = ""
+            stdout = json.dumps({"metadata": {"uid": "pod-uid"}}) if args[:1] == ("create",) else ""
             stderr = ""
 
         return _R()
 
     monkeypatch.setattr(k8s_backend, "_kubectl", fake_kubectl)
     K8sBackend(namespace="ns").start(
-        "mtg-5", Runnable(image="img"), env={"A": "b"}, resources=Resources(cpu=2, memoryMb=4096),
+        "mtg-5", Runnable(image="img"), env={"LOG_LEVEL": "b"}, resources=Resources(cpu=2, memoryMb=4096),
     )
     assert calls[0]["args"] == ["create", "-f", "-", "-n", "ns"]
     pod = json.loads(calls[0]["stdin"])

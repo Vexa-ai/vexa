@@ -119,14 +119,15 @@ def _kubectl(*args: str, check: bool = True, stdin: Optional[str] = None) -> sub
     return r
 
 
-def _secret_class(forwarded: dict[str, str]) -> set[str]:
-    """The forwarded keys that are credentials: those the runtime's config contract marks
-    ``secret`` — and any it does not declare at all, which are treated as secret rather than
-    guessed to be harmless."""
+def _secret_class(env: dict[str, str]) -> set[str]:
+    """The keys of a container env that are credentials: those the runtime's config contract marks
+    ``secret`` — and any it does not declare at all (a dispatch's tokens, a bot's constructor),
+    which are treated as secret rather than guessed to be harmless. An empty value carries nothing
+    and stays plain."""
     from .config_preflight import load_declaration
 
     declared = {k["key"]: bool(k.get("secret")) for k in load_declaration().get("keys") or []}
-    return {k for k in forwarded if declared.get(k, True)}
+    return {k for k, v in env.items() if v and declared.get(k, True)}
 
 
 def _stop_grace_sec() -> int:
@@ -266,10 +267,11 @@ def build_pod(
     Pure and env-driven ⇒ the whole manifest is asserted offline, with no cluster and no kubectl.
     (``kubectl run --dry-run=client`` is NOT a viable generator here: v1.34 performs API discovery
     before generating and exits 1 with no output when no server is reachable.)"""
+    hidden_keys = set(secret_env[1]) if secret_env else set()
     if runnable.credential_mounts:
         # Where the workload's harness finds the credential Secrets is profile data; a value the
-        # spec already sets wins.
-        env = {**runnable.credential_env, **env}
+        # spec already sets wins (also when that value rides the workload's Secret).
+        env = {**{k: v for k, v in runnable.credential_env.items() if k not in hidden_keys}, **env}
     container: dict = {
         "name": name,
         "image": runnable.image,
@@ -280,7 +282,7 @@ def build_pod(
         # the workload's own Secret, never as literal values in the Pod spec.
         secret_name, keys = secret_env
         container["env"] += [{"name": k, "valueFrom": {"secretKeyRef": {"name": secret_name, "key": k}}}
-                             for k in keys if k not in env]
+                             for k in keys]
     if runnable.command:
         # Explicit argv REPLACES the image ENTRYPOINT. Absent ⇒ the image's own entrypoint boots,
         # which is what the shipped meeting-bot image requires (#675).
@@ -387,10 +389,12 @@ class K8sBackend:
         # already carries is never refilled. A key the runtime's config contract marks secret goes
         # into a Secret of this Pod's own (created once the Pod exists, owned by it, so it is
         # collected with it) and reaches the container by secretKeyRef; the rest stays plain env.
-        forwarded = forwarded_env(runnable.forward_env, os.environ, env)
-        secret_keys = _secret_class(forwarded)
-        hidden = {k: v for k, v in forwarded.items() if k in secret_keys}
-        env = {**env, **{k: v for k, v in forwarded.items() if k not in secret_keys}}
+        # The split covers the WHOLE container env — what the spec stamps (a catalog dispatch carries
+        # its credentials and the unit's tokens itself) as well as what the runtime forwards.
+        full = {**env, **forwarded_env(runnable.forward_env, os.environ, env)}
+        secret_keys = _secret_class(full)
+        hidden = {k: v for k, v in full.items() if k in secret_keys}
+        env = {k: v for k, v in full.items() if k not in secret_keys}
         secret_name = f"{name[:240]}-env-{secrets.token_hex(4)}" if hidden else None
         # The workspace mount set and the runtime's OWN scheduling constraints both shape the Pod.
         # The latter live in the runtime's PROCESS env (the chart sets them on the runtime
@@ -404,7 +408,7 @@ class K8sBackend:
             env=env,
             namespace=self._ns,
             resources=resources,
-            overlay_env={**env, **_runtime_scheduling_env()},
+            overlay_env={**full, **_runtime_scheduling_env()},
             instance=self._instance,
             secret_env=(secret_name, tuple(sorted(hidden))) if hidden else None,
         )
