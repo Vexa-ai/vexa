@@ -12,13 +12,14 @@ from typing import Optional
 
 from control_plane import dispatch as dispatch_mod
 from control_plane import global_layer, model_providers, system_mounts
-from control_plane.bodies import GlobalReadyBody
+from control_plane.bodies import CHAT_SESSION_PATTERN, GlobalReadyBody
 from control_plane.ceiling import require_in_ceiling
 from fastapi import APIRouter, Body, HTTPException, Request
 from fastapi.responses import JSONResponse
 from shared import units
 from shared.git_redaction import redact as redact_secrets
 import hmac
+import re
 import json
 import os
 
@@ -49,6 +50,8 @@ def build(**d) -> APIRouter:
         pick (``selected``; null when it follows your default). An empty list means the deployment
         declares no catalog, and its model is the operator's to set."""
         subject = subject_of(request)
+        if session is not None and not re.match(CHAT_SESSION_PATTERN, session):
+            raise HTTPException(status_code=422, detail="not a chat session id")
         catalog = dispatcher.catalog
         with_selected = session is not None
         selected = None

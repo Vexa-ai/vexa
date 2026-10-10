@@ -143,7 +143,7 @@ class ResetBody(BaseModel):
 class ChatModelBody(BaseModel):
     """``POST /api/chat/model`` — pick which of the operator's models one chat runs on."""
     model_config = {"extra": "forbid"}
-    session: Optional[str] = Field(default=None, max_length=300,
+    session: Optional[str] = Field(default=None, pattern=CHAT_SESSION_PATTERN,
                                    description="the chat session; the default chat when absent")
     model: str = Field(max_length=64, description="a model id from GET /api/models/catalog; "
                                                   "empty puts the chat back on your default")

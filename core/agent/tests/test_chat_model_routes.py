@@ -275,3 +275,11 @@ def test_a_rejected_credential_names_the_model_and_provider():
     out = config_test.run_route_test(_route("or-sonnet"), post=lambda *a: (401, "no"))
     assert out["ok"] is False and out["status"] == 401
     assert out["summary"].startswith("or-sonnet via openrouter:")
+
+
+def test_a_chat_session_id_is_bounded_where_it_enters(stack):
+    c = stack["client"]
+    bad = "../" + "x" * 10
+    assert c.post("/api/chat/model", json={"session": bad, "model": "claude"},
+                  headers=_as(MEMBER)).status_code == 422
+    assert c.get(f"/api/models/catalog?session={bad}", headers=_as(MEMBER)).status_code == 422
