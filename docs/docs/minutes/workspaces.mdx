@@ -1,0 +1,240 @@
+---
+title: "Workspaces and connections"
+description: "A workspace's front page, adding members and invite links, links to workspace pages, attaching a repository, and connecting your accounts."
+---
+
+A workspace is a shared folder of pages with a roster. Your **desk** is yours; a **shared workspace**
+has members; the **company** workspace (`_global`) is read by everyone and written by the
+administrator. This page covers the front page of a workspace, how people join one, links into it,
+attaching an existing repository, and the **Connections** page where you connect your own accounts.
+
+## What you can do
+
+### Read a workspace's front page
+
+Open a workspace's `README.md` (or a `/w/<workspace>` link) and its header shows:
+
+- **What it is:** *Your desk*, *Shared workspace* or *Company layer*, with its title.
+- **Who is in it:** for a shared workspace, up to two names with *you* first ("you, … and 2 more");
+  for your desk, whether agents read it for your meetings; for the company workspace, who reads and
+  who writes it. A reader who may not see the roster sees *you and the other members*.
+- **What is in it:** the page count, and what the workspace is bound to (a meeting series, or where it
+  came from).
+- **What changed last:** *… changed the … page …*, with a link when one page changed, or *Nothing
+  written here yet*.
+
+The buttons depend on your role:
+
+| You are | Buttons |
+|---|---|
+| a member who is not an owner | **History** only |
+| owner of a shared workspace | **Add a member**, **Connect a repo** (or **Sync**), **History** |
+| owner of your desk | **Connect a repo** (or **Sync**), **History** |
+| the administrator, on the company workspace | **Set up policies**, **Add an editor**, **History** |
+
+Every button except History starts a conversation in the chat; none opens a form.
+
+**History** opens *People*, *Repo* and *History* (and *Meetings* for a shared workspace):
+
+- **People** lists members and roles. Owners can **Change role**, **Remove** and **Add a member…**.
+  Members who are not contributors or owners see their own role only.
+- **Repo** shows the attached remote, branch, and how far ahead or behind it is. Owners get
+  **Sync now**, **Pull**, **Push** and **Detach**; Pull, Push and Detach ask you to confirm. Detaching
+  stops syncing and leaves the files as they are.
+- **History** lists commits ten at a time, for the workspace or *This page only*.
+
+### Add a member
+
+1. Press **Add a member** (or ask in the chat).
+2. The agent asks for their email address and a role, and confirms in one sentence:
+   - **owner** — writes the workspace and can add or remove members;
+   - **contributor** — writes the workspace;
+   - **reader** — reads it and does not write it.
+3. The agent creates an invite link for that address. If the person has no account here, the link is
+   emailed to them; otherwise the chat gives you the link to pass on.
+
+Changing a role and removing someone work the same way, from **People** or in the chat. A workspace
+always keeps at least one owner.
+
+### Join from an invite
+
+1. Open the link (`/join?i=…`). The page says who invited you, to which workspace, and as what.
+2. Sign in with Google, Microsoft or an emailed sign-in link. If the invite names one address, that
+   address is filled in and cannot be changed.
+3. You are added and land on the workspace's front page. If you were already signed in, this happens
+   at once.
+
+An invite link works for **one person, for seven days**, and only for the address it names. Invites made
+by the agent during a chat turn stay valid after the turn ends.
+
+### Link to a page
+
+Every workspace has a permanent id. A link `/w/<id>/<path>` (or `/w/<name>/<path>`) opens that page in
+Minutes; with no path it opens the front page. Links made with the id keep working after the workspace
+is renamed. Reloading the page reopens the same page. Only the workspace's owner, or an administrator,
+can rename it.
+
+### Attach an existing repository
+
+Choose **Attach existing repo…** in the chat bar's **+** menu, **Attach a repo…** on the front page, or
+**Attach repository as a workspace** under Connections → Git repositories.
+
+1. Enter the **Repository** address (for example `git@github.com:<org>/<repo>.git`) and the **Branch**
+   (`main` by default). The repository always becomes a **new workspace**; your desk and other
+   workspaces are unchanged.
+2. Press **Attach**. Large repositories can take several minutes; the dialog shows progress.
+3. When it is done (*Cloned … into …*), press **Open workspace**.
+
+Access uses your saved GitHub token, or a **deploy key**: under Connections, press **Use this deploy
+key**, then **Add it on GitHub →** and add the public key to the repository *with write access*. Vexa
+generates the key; you never paste a private key, and the private half never leaves the server.
+
+### Connect your accounts
+
+Open **Connections** from your account menu (bottom of the rail). An agent can also ask you to connect
+something, which opens the same page.
+
+| Card | Lets your agents |
+|---|---|
+| **Git repositories** | use a saved GitHub token, or attach a repository |
+| **Gmail** | read email and save drafts (Minutes does not send mail) |
+| **Google Calendar** | read calendar events |
+| **Custom secret** | use a secret, optionally against one HTTPS address you name |
+
+- You can connect several accounts of one kind: give each a **Connection label** ("Personal",
+  "Work") and press **Add another … account**.
+- Google consent opens in a pop-up. Allow pop-ups for Minutes.
+- A custom secret names the exact HTTPS address, the header, the value format and the one method it may
+  be used with. You confirm the destination host by typing it; an unknown host is flagged.
+- **Disconnect** stops use and keeps the connection; **Delete** removes it (audit history is kept).
+
+How an operator runs the credential broker behind this page is in [Connections](/connections).
+
+## Limits and errors
+
+| You see | Why | What to do |
+|---|---|---|
+| *This invite has expired.* · *…has already been used.* · *…was withdrawn.* | invites last seven days and work once | ask for a new one |
+| *This invite was sent to a different address…* | you signed in with another address | sign in with the invited address |
+| *This invite link is not valid.* | the link does not match any invite | ask for a new one |
+| *This invite could not be checked just now.* | the service did not answer | try again |
+| an owner-only refusal from the agent | only owners add, remove or change members | ask an owner |
+| *cannot remove the last owner* | a workspace needs an owner | add another owner first |
+| *That page is in …, a workspace you do not have access to.* · *That link points at a workspace that is no longer here.* | a `/w/` link you cannot open; Minutes never shows your desk instead | ask for access |
+| *Repository access failed. Check the repository URL and credential.* | the clone was refused | check the address, token or deploy key |
+| *Import interrupted. Check the workspace before retrying.* | the import stopped part-way | check what arrived, then retry |
+| *Allow popups for Minutes, then try again.* · *Authorization was not completed.* | Google consent did not finish | allow pop-ups and retry |
+| *Connections unavailable. Please try again.* | the credential service did not answer | try again; an operator checks the broker |
+
+The private tier is never shared. On the company workspace only the administrator manages who may
+write. A connection label is at most 80 characters.
+
+## How it works
+
+### Flow
+
+1. **Front page.** The terminal reads, in parallel: the workspace record, its tree, its last change, its
+   remote status, and for a shared workspace its members and meetings. All go through the gateway to
+   agent-api.
+2. **Invite.** The agent calls its `workspace_invite` tool, which reaches
+   `POST /api/workspace/invite`. agent-api checks that you own the workspace, mints an invite
+   restricted to that address and valid once, and builds the link from `VEXA_UI_URL`. For an address
+   with no account, it publishes a `workspace.invited` event, and the flows service sends the email.
+3. **Join.** `/join` previews the invite (`GET /api/join/preview`, which grants nothing), you sign in,
+   and the terminal accepts it (`POST /api/workspace/invites/accept`). agent-api checks the
+   gateway-verified email against the invite and adds you to the roster.
+4. **Links.** `/w/<id>` is resolved by `GET /api/workspaces/{id}` (or `by-slug`), which always answers
+   `readable`, `not-yours` or `gone`.
+5. **Attach.** `POST /api/workspace/import` starts an import and returns an operation id; the terminal
+   polls `GET /api/workspace/import/{op}/status`. Deploy keys are `GET`/`POST
+   /api/workspace/{slug}/deploy-key`; the saved token is `GET`/`POST /api/workspace/git-token` (only a
+   masked value comes back).
+6. **Connections.** The terminal's `/api/connections/*` routes call the credential broker as the
+   signed-in person. Agents use their own `connection_request` route, which can request a setup but
+   never read a credential.
+
+### Who writes what
+
+| Data | Single writer | Where |
+|---|---|---|
+| Workspace files and roster (`policy/members.json`) | agent-api | the workspace's git repository |
+| Invites (hashes only) | agent-api | `.invites/` beside the workspaces, outside every workspace |
+| Workspace ids and names | agent-api | `.vexa/workspace.json` in each workspace, plus a registry that can be rebuilt from it |
+| Membership index, users by email | admin-api | the identity database |
+| Import status | agent-api | outside every workspace |
+| Git tokens and deploy keys | agent-api's secret store, or the credential broker when configured | sealed at rest |
+| Connections, consent state, audit | the credential broker | its encrypted store |
+
+### Routes
+
+| Browser calls (terminal) | Goes to |
+|---|---|
+| `GET /api/workspaces/{id}`, `/api/workspaces/by-slug/{slug}`, `/api/workspace/members`, `/api/workspaces/{slug}/git/last-change`, `/api/workspace/git-remote-status` | agent-api, through the gateway's `/agent/*` |
+| `GET /api/join/preview` | agent-api `/api/workspace/invites/preview` (no user key) |
+| `POST /api/workspace/invites/accept` | agent-api, through the gateway |
+| `POST /api/workspace/import`, `GET /api/workspace/import/{op}/status` | agent-api, through the gateway |
+| `GET`, `POST /api/workspace/{slug}/deploy-key`, `/api/workspace/git-token` | agent-api, through the gateway |
+| `GET /api/connections/list`, `POST /api/connections/…` | the credential broker, as the person |
+| agent tools `workspace_invite`, `workspace_membership` | agent-api `/api/workspace/invite`, membership routes |
+
+### Configuration
+
+`VEXA_UI_URL` on agent-api (no invite is made without it). The terminal's connections routes read
+`VEXA_CONNECTIONS_BROKER_URL`, `VEXA_CONNECTIONS_HUMAN_KEY_FILE` and `VEXA_CONNECTIONS_PUBLIC_ORIGIN`;
+the broker itself is set up as in [Connections](/connections).
+
+## Why it complies
+
+### Architecture
+
+| Rule | How this design meets it | Gate |
+|---|---|---|
+| **P2** contracts · **P6** one front door | the browser calls only the terminal; the terminal reaches agent-api through the gateway, and the broker through its contract | `gate:isolation`, `gate:exports`, `gate:domain-doors` |
+| **P4** published schemas | the broker's API is the sealed `credential-broker.v1`; the agent tools are in `mcp.tools.v1` | `gate:schema`, `gate:contract-version` |
+| **P15** secrets protected by default | credentials live in the broker or the sealed git secret store, never in a workspace, a log or the browser | ungated: reviewed; the broker's deny tests below |
+| **P18** fail loud | each invite and link refusal is its own sentence; broker failures are typed `broker_fault`s; an interrupted import says so | ungated: reviewed |
+| **P20** authorize every access | roles are checked on every membership and repository route; invites check the verified email | deny tests below |
+| **P21** state from evidence | an import is done only when it reports `completed`; a connection request is not a connected account | ungated: reviewed |
+| **P23** one writer per carrier | agent-api writes rosters, invites and import status; the broker writes credentials | `gate:dataflow` |
+
+### Security
+
+**Who can do what.** Owners add, remove and change members and manage the repository. Contributors
+write. Readers read. Only the owner or an administrator renames a workspace. The private tier cannot be
+shared, and only the administrator manages the company workspace.
+
+**Protections.**
+
+- Invite tokens are random, shown once, and stored only as a hash. They expire, can be withdrawn, and
+  are used once under a lock, so two people cannot redeem the same invite.
+- A restricted invite is checked against the email the gateway verified, not one the browser sends.
+- The invite preview grants nothing and does not say whether a workspace exists.
+- Deploy keys are generated server-side; the private half is sealed at rest and written to a
+  permission-`0600` file only for the length of one git operation.
+- Connection routes accept only the deployment's own origin and a closed set of actions. The terminal
+  holds the person's broker key; agent workers hold none.
+- Consent pop-ups follow only Google's authorization address or the address the setup declared, and
+  report a status, never a credential, back to the page.
+
+**Deny tests.**
+
+| Test | Proves |
+|---|---|
+| `core/agent/tests/test_workspace_membership.py` · `test_mint_stores_only_hash_and_returns_token_once`, `test_accept_expired_invite_fails`, `test_revoked_invite_rejected`, `test_cannot_remove_last_owner`, `test_api_role_gating_viewer_cannot_invite_owner_can`, `test_api_restricted_invite_checks_x_user_email`, `test_concurrent_accept_max_uses_one_grants_exactly_one`, `test_an_unsigned_identity_is_refused_before_the_role_gate` | invites and roles |
+| `core/agent/tests/test_membership_acts.py` · `test_only_an_owner_may_change_who_is_in_a_workspace`, `test_the_private_tier_is_refused_for_everybody_including_the_admin`, `test_the_invite_is_restricted_to_the_address_it_names`, `test_no_ui_url_means_no_invite_rather_than_a_link_to_nowhere` | the agent's membership verbs |
+| `core/agent/tests/test_invite_link.py` · `test_preview_of_an_open_invite_discloses_no_address`, `test_preview_of_a_token_that_matches_nothing_is_404` | the preview |
+| `core/agent/tests/test_turn_writeback_keeps_platform_writes.py` · `test_an_invite_minted_mid_turn_is_still_redeemable_after_the_turn` | invites survive the turn |
+| `core/agent/tests/test_workspace_ids.py` · `test_a_mere_member_may_not_rename_a_group`, `test_a_desk_owner_may_not_rename_their_desk_but_an_admin_may` | renaming |
+| `core/agent/tests/test_workspace_id_api.py` · `test_resolve_by_id_reports_access_per_reader`, `test_a_link_written_before_a_rename_still_resolves_after_it` | links |
+| `core/agent/tests/test_deploy_keys.py` · `test_the_private_half_is_sealed_at_rest`, `test_ssh_env_materializes_a_0600_key_only_for_the_length_of_the_op` | deploy keys |
+| `core/agent/tests/test_connection_routes.py` · `test_a_worker_without_a_person_is_refused_before_the_broker`, `test_a_caller_without_the_gateway_signature_never_reaches_the_broker` | the agent's connection route |
+| `core/agent/services/credential-broker/tests/test_connection_setup.py` · `test_reuse_cannot_move_existing_secret_to_another_destination`, `test_invalid_spec_and_foreign_owner_refused`; `test_forwarded_identity.py` · `test_a_signature_for_another_person_is_refused`; `test_contract_conformance.py` · `test_each_route_refuses_roles_it_does_not_grant` | the broker |
+| `clients/terminal/src/app/api/connections/__tests__/routes.test.ts` · "refuses cross origin and caller-chosen identity" | the terminal's connection routes |
+| `clients/terminal/src/app/__tests__/join.test.tsx` · "says an unknown token is not valid, without saying whether the workspace exists" | the join page |
+| `clients/terminal/src/minutes/__tests__/workspaceStrip.test.tsx` · "gives a READER the one act that is theirs, and no others"; `memberActs.test.tsx` · "renders no membership control for somebody who is not an owner here" | the front page's buttons |
+| `clients/terminal/src/minutes/__tests__/workspaceDeepLink.test.ts` · "never falls back to the desk — a refusal carries no page at all" | `/w/` links |
+| `clients/terminal/src/minutes/__tests__/attachRepo.test.tsx` · "rejects credentials pasted into the repository field before sending" | attach |
+
+## Related
+
+- [Workspaces](/core/workspaces) · [Browse, upload, and swap the workspace](/how-to/workspace-files) · [Connections (operator)](/connections) · [Pages](/minutes/pages)

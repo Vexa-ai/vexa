@@ -49,6 +49,16 @@
         ]
       },
       {
+        "group": "Minutes",
+        "pages": [
+          "minutes/overview",
+          "minutes/chats",
+          "minutes/pages",
+          "minutes/meetings",
+          "minutes/workspaces"
+        ]
+      },
+      {
         "group": "How-to: Agents",
         "pages": [
           "how-to/chat-workspace",
@@ -120,8 +130,8 @@
           "upgrade-from-minio",
           "authenticated-bots",
           "model-credentials-licensing",
-        "agent-web-search",
-        "agent-tool-calls",
+          "agent-web-search",
+          "agent-tool-calls",
           "security-compliance",
           "troubleshooting",
           "troubleshooting/completion-reasons",
