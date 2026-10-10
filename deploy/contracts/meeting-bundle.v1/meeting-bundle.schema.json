@@ -1,0 +1,176 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vexa.ai/contracts/meeting-bundle.v1/meeting-bundle.schema.json",
+  "title": "meeting-bundle.v1 — one meeting as a portable file any Vexa deployment can import",
+  "description": "A bundle is ONE zip archive. Its entries are the parts below, each named in manifest.json with its byte length and SHA-256. Nothing deployment-bound is carried: no user or key ids, no tokens, no internal URLs, no storage paths, no share lists. Every object is closed (additionalProperties: false) so a field that is not named here cannot ride along. The importer refuses an archive whose manifest, paths, hashes or sizes do not hold, with one of the Refusal codes.",
+  "$defs": {
+    "Manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract", "format_version", "bundle_id", "exported_at", "source", "files"],
+      "properties": {
+        "contract": {"const": "meeting-bundle.v1"},
+        "format_version": {
+          "type": "string",
+          "pattern": "^[0-9]{1,3}\\.[0-9]{1,3}$",
+          "description": "MAJOR.MINOR. An importer refuses a MAJOR it does not know (unsupported_version). A higher MINOR may add optional parts an older importer reports as skipped."
+        },
+        "bundle_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Minted once per export. The importer's duplicate check keys on it."
+        },
+        "exported_at": {"type": "string", "format": "date-time"},
+        "source": {"$ref": "#/$defs/Source"},
+        "files": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2000,
+          "items": {"$ref": "#/$defs/ManifestFile"}
+        }
+      }
+    },
+    "Source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["deployment_id", "meeting_id"],
+      "description": "Provenance only. The importer never reuses these as ids; it records them on the new meeting.",
+      "properties": {
+        "deployment_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$",
+          "description": "An opaque, stable identifier of the exporting deployment. It is not an address and reveals nothing about the deployment."
+        },
+        "meeting_id": {"type": "integer", "minimum": 1, "description": "The meeting's row id on the exporting deployment."}
+      }
+    },
+    "ManifestFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "role", "bytes", "sha256"],
+      "properties": {
+        "path": {"$ref": "#/$defs/EntryPath"},
+        "role": {
+          "type": "string",
+          "pattern": "^[a-z][a-z_]{0,31}$",
+          "description": "meeting · transcript · annotations · media · workspace. The role must agree with the path (meeting.json, transcript.json, annotations.json, media/…, workspace/…)."
+        },
+        "bytes": {"type": "integer", "minimum": 0},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "EntryPath": {
+      "type": "string",
+      "maxLength": 512,
+      "pattern": "^(meeting\\.json|transcript\\.json|annotations\\.json|media/[A-Za-z0-9][A-Za-z0-9_-]{0,63}\\.(webm|wav|mkv|mp4)|workspace/([A-Za-z0-9_][A-Za-z0-9._ -]{0,127}/){0,15}[A-Za-z0-9_][A-Za-z0-9._ -]{0,127})$",
+      "description": "Relative, forward-slash, no '.' or '..' segment, no leading slash, no backslash, no drive letter. manifest.json itself is the one entry not listed."
+    },
+    "Meeting": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["platform", "native_meeting_id", "title", "status", "start_time", "end_time", "participants", "media"],
+      "properties": {
+        "platform": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$"},
+        "native_meeting_id": {"type": ["string", "null"], "maxLength": 256},
+        "title": {"type": ["string", "null"], "maxLength": 512},
+        "status": {"type": "string", "pattern": "^[a-z_]{1,32}$", "description": "The meeting's status where it was exported. An imported meeting is always completed."},
+        "start_time": {"type": ["string", "null"], "format": "date-time"},
+        "end_time": {"type": ["string", "null"], "format": "date-time"},
+        "participants": {
+          "type": "array",
+          "maxItems": 500,
+          "items": {"type": "string", "minLength": 1, "maxLength": 256},
+          "description": "Display names only — never an email address or an account id."
+        },
+        "media": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {"$ref": "#/$defs/MediaPart"}
+        }
+      }
+    },
+    "MediaPart": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "type", "format"],
+      "properties": {
+        "path": {"type": "string", "pattern": "^media/[A-Za-z0-9][A-Za-z0-9_-]{0,63}\\.(webm|wav|mkv|mp4)$"},
+        "type": {"enum": ["audio", "video"]},
+        "format": {"enum": ["webm", "wav", "mkv", "mp4"]},
+        "duration_seconds": {"type": ["number", "null"], "minimum": 0}
+      }
+    },
+    "Transcript": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["segments"],
+      "properties": {
+        "segments": {
+          "type": "array",
+          "maxItems": 20000,
+          "items": {"$ref": "#/$defs/Segment"}
+        }
+      }
+    },
+    "Segment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end", "speaker", "text", "language"],
+      "properties": {
+        "start": {"type": "number", "minimum": 0, "description": "Seconds from the meeting's start_time."},
+        "end": {"type": "number", "minimum": 0},
+        "speaker": {"type": ["string", "null"], "maxLength": 256},
+        "text": {"type": "string", "maxLength": 8000},
+        "language": {"type": ["string", "null"], "maxLength": 16}
+      }
+    },
+    "Annotations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["metadata", "notes"],
+      "properties": {
+        "metadata": {
+          "type": "object",
+          "maxProperties": 64,
+          "propertyNames": {"maxLength": 128},
+          "description": "The caller-written annotations (annotate_meeting). Free-form JSON values; at most 16 KiB serialized."
+        },
+        "notes": {"type": ["string", "null"], "maxLength": 200000}
+      }
+    },
+    "Refusal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "detail"],
+      "description": "What an importer answers when it will not import a bundle. Every refusal names one code.",
+      "properties": {
+        "code": {
+          "enum": [
+            "not_a_bundle",
+            "unsupported_version",
+            "unsafe_path",
+            "unsafe_entry",
+            "too_large",
+            "manifest_mismatch",
+            "hash_mismatch",
+            "invalid_part",
+            "unsafe_media",
+            "duplicate_import"
+          ]
+        },
+        "detail": {"type": "string", "minLength": 1}
+      }
+    },
+    "RefusedVector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bundle", "code", "why"],
+      "description": "A golden malicious or malformed bundle and the refusal code every importer must give it.",
+      "properties": {
+        "bundle": {"type": "string", "pattern": "^[a-z0-9-]+\\.zip$"},
+        "code": {"$ref": "#/$defs/Refusal/properties/code"},
+        "why": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

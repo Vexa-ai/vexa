@@ -33,6 +33,7 @@ flowchart LR
   unit_fault[("unit:{id}:fault (redis key)")]
   acl_bots_index[("vexa:acl:bots (redis hash)")]
   routine_state[("<store>/.routines/ (files)")]
+  meeting_bundle_file[("meeting bundle (portable file)")]
   bot -->|write| segments_stream
   bot -->|write| tc_mutable
   meeting_api -.->|read| segments_stream
@@ -85,3 +86,5 @@ flowchart LR
   agent_api -->|write| unit_fault
   meeting_api -->|write| acl_bots_index
   agent_api -->|write| routine_state
+  meeting_api -->|write| meeting_bundle_file
+  meeting_api -.->|read| meeting_bundle_file
