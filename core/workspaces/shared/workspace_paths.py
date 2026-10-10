@@ -35,6 +35,7 @@ allow-listed with a reason. Standard library only.
 from __future__ import annotations
 
 import os
+import re
 import stat
 import threading
 import time
@@ -62,6 +63,25 @@ class PathRefused(ValueError):
 
 
 REFUSAL = "that path is not inside this workspace"
+
+
+# ── the workspace name ───────────────────────────────────────────────────────────────────────────
+#: THE WORKSPACE NAME RULE, owned here: what a workspace, a slug, a slot, a desk or a shared
+#: workspace id may be called when it is joined onto a path or kept as a name. ONE path segment of
+#: letters, digits and ``. _ @ + -``, at most 128 characters, starting with a letter, a digit or
+#: ``_`` — so never a separator, never a dot-name (the stores' own namespace), never ``.`` or ``..``.
+#: The leading ``_`` is the platform's tiers (``_global``, ``_system``); a caller for which a tier is
+#: never the answer says ``tier=False``. Which names are RESERVED for the platform beyond that is
+#: each caller's own question (``workspace_membership.RESERVED_SLUGS``).
+_WORKSPACE_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._@+-]{0,127}")
+
+
+def is_workspace_name(name: object, *, tier: bool = True) -> bool:
+    """True when ``name`` meets the workspace name rule (above); with ``tier=False`` a platform tier
+    (a name starting ``_``) is refused too."""
+    if not isinstance(name, str) or not _WORKSPACE_NAME.fullmatch(name):
+        return False
+    return tier or not name.startswith("_")
 
 
 def relative_parts(path: str, *, allow=()) -> list[str]:
@@ -139,6 +159,10 @@ def is_inside(root, path: str, *, allow=()) -> bool:
 _DIR_NOFOLLOW = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
 _FILE_NOFOLLOW = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0)
 _CREATE_NEW = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+#: The same three, for a caller that walks a tree by descriptor itself (a budgeted copy, a grant):
+#: it opens with these, through :func:`open_dir_at` / :func:`open_regular_at` / :func:`create_new_at`,
+#: so the flags are spelled once.
+DIR_NOFOLLOW, FILE_NOFOLLOW, CREATE_NEW = _DIR_NOFOLLOW, _FILE_NOFOLLOW, _CREATE_NEW
 
 
 def _open_root(root) -> int:
@@ -175,6 +199,96 @@ def dir_fd_inside(root, parts, *, create: bool = False, mode: int = 0o755) -> in
         os.close(fd)
         raise
     return fd
+
+
+def open_dir_at(dir_fd: int, name: str) -> int:
+    """A descriptor for the folder ``name`` under ``dir_fd``, opened without following a link.
+    ``FileNotFoundError`` when there is none; :class:`PathRefused` when it is anything but a real
+    folder (a link included). The caller closes it."""
+    try:
+        fd = os.open(name, _DIR_NOFOLLOW, dir_fd=dir_fd)
+    except FileNotFoundError:
+        raise
+    except OSError as exc:
+        raise PathRefused(f"{name!r} is not a folder ({exc.strerror})", kind="symlink") from exc
+    try:
+        if not stat.S_ISDIR(os.fstat(fd).st_mode):
+            raise PathRefused(f"{name!r} is not a folder", kind="symlink")
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def open_regular_at(dir_fd: int, name: str) -> int:
+    """A descriptor for the regular file ``name`` under ``dir_fd``: looked at first without following
+    a link, opened only when it is a regular file (so a device or a FIFO is never opened), and kept
+    only when ``fstat`` says it is still that file with no other hard link (whose other name could be
+    anywhere on the volume). ``FileNotFoundError`` when there is none; :class:`PathRefused` otherwise.
+    The caller closes it."""
+    try:
+        seen = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        raise
+    except OSError as exc:
+        raise PathRefused(f"{name!r} cannot be looked at ({exc.strerror})", kind="symlink") from exc
+    if not stat.S_ISREG(seen.st_mode):
+        raise PathRefused(f"{name!r} is not a regular file", kind="symlink")
+    try:
+        fd = os.open(name, _FILE_NOFOLLOW, dir_fd=dir_fd)
+    except FileNotFoundError:
+        raise
+    except OSError as exc:
+        raise PathRefused(f"{name!r} is not a regular file ({exc.strerror})", kind="symlink") from exc
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or (st.st_dev, st.st_ino) != (seen.st_dev, seen.st_ino):
+            raise PathRefused(f"{name!r} is not a regular file", kind="symlink")
+        if st.st_nlink > 1:
+            raise PathRefused(f"{name!r} has another hard link", kind="symlink")
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def create_new_at(dir_fd: int, name: str, mode: int = 0o644) -> int:
+    """A descriptor for a NEW file ``name`` under ``dir_fd`` — never anything already at the name, a
+    link included (``FileExistsError``). The caller writes and closes it."""
+    return os.open(name, _CREATE_NEW, mode, dir_fd=dir_fd)
+
+
+def write_new_inside(root, rel: str, data, *, mode: int = 0o644, allow=()) -> bool:
+    """Create ``root/<rel>`` holding ``data`` (bytes, or text written as UTF-8) — only when nothing is
+    at the name yet: False when something is (a link included, which is never written through).
+    Folders on the way are reached without following a link, missing ones made (``PathRefused`` when
+    one is a link). Raises ``OSError`` on a failed write, leaving no partial file."""
+    *dirs, name = relative_parts(rel, allow=allow)
+    raw = data.encode("utf-8") if isinstance(data, str) else bytes(data)
+    dir_fd = dir_fd_inside(root, dirs, create=True)
+    try:
+        try:
+            fd = create_new_at(dir_fd, name, mode)
+        except FileExistsError:
+            return False
+        try:
+            view = memoryview(raw)
+            while view:
+                view = view[os.write(fd, view):]
+        except BaseException:
+            os.close(fd)
+            fd = -1
+            try:
+                os.unlink(name, dir_fd=dir_fd)
+            except OSError:
+                pass
+            raise
+        finally:
+            if fd >= 0:
+                os.close(fd)
+        return True
+    finally:
+        os.close(dir_fd)
 
 
 def read_text_inside(root, rel: str, *, max_bytes: Optional[int] = None, allow=()) -> Optional[str]:
@@ -297,31 +411,33 @@ def write_text_inside(root, rel: str, text: str, *, mode: int = 0o644, allow=(),
                               make_parents=make_parents, before_replace=before_replace)
 
 
-def unlink_inside(root, rel: str, *, allow=()) -> None:
+def unlink_inside(root, rel: str, *, allow=()) -> bool:
     """Remove ``root/<rel>`` (a symlink is removed itself, never followed) with no directory
     component on the path followed through a link. A link or missing directory on the way, or a
-    missing leaf, is a silent no-op; the leaf is removed only when it is a symlink or a regular
-    file (never a directory)."""
+    missing leaf, is a no-op; the leaf is removed only when it is a symlink or a regular file (never
+    a directory). True when something was removed."""
     try:
         parts = relative_parts(rel, allow=allow)
     except PathRefused:
-        return
+        return False
     *dirs, name = parts
     try:
         dir_fd = dir_fd_inside(root, dirs)
     except (PathRefused, OSError):
-        return
+        return False
     try:
         st = os.lstat(name, dir_fd=dir_fd)
         if stat.S_ISLNK(st.st_mode) or stat.S_ISREG(st.st_mode):
             try:
                 os.unlink(name, dir_fd=dir_fd)
+                return True
             except OSError:
-                pass
+                return False
     except OSError:
         pass
     finally:
         os.close(dir_fd)
+    return False
 
 
 
@@ -459,11 +575,12 @@ def read_head_inside(root, rel: str, nbytes: int, *, allow=()) -> Optional[str]:
         os.close(fd)
 
 
-def walk_files_inside(root, rel_dir: str = "", *, allow=()):
+def walk_files_inside(root, rel_dir: str = "", *, allow=(), skip_dir=None):
     """Every regular file (never a link) at any depth under ``root/<rel_dir>``, as a path relative
     to ``root`` (POSIX). The walk is descriptor-based and follows no link — a symlinked directory is
     neither entered nor reported, a symlinked file is skipped — so nothing outside the tree, and no
-    second name for something inside it, is ever reached."""
+    second name for something inside it, is ever reached. ``skip_dir(rel)`` (the folder's path
+    relative to ``root``) prunes a folder before it is entered."""
     parts = relative_parts(rel_dir, allow=allow) if rel_dir not in ("", ".") else []
     try:
         top = dir_fd_inside(root, parts)
@@ -471,7 +588,12 @@ def walk_files_inside(root, rel_dir: str = "", *, allow=()):
         return
     prefix = "/".join(parts)
     try:
-        for dirpath, _dirnames, filenames, dfd in os.fwalk(".", dir_fd=top, follow_symlinks=False):
+        for dirpath, dirnames, filenames, dfd in os.fwalk(".", dir_fd=top, follow_symlinks=False):
+            if skip_dir is not None:
+                here = os.path.normpath(dirpath).replace(os.sep, "/")
+                base = prefix if here == "." else (f"{prefix}/{here}" if prefix else here)
+                dirnames[:] = [d for d in dirnames
+                               if not skip_dir(f"{base}/{d}" if base else d)]
             for name in sorted(filenames):
                 try:
                     st = os.stat(name, dir_fd=dfd, follow_symlinks=False)
