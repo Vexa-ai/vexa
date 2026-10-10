@@ -1325,7 +1325,9 @@ class OpenAIAgentHarness:
             done: dict = {"type": "done", "reply": reply, "sessionId": sid,
                           "ok": not truncation, "steps": total_calls, "budget": budget_calls}
             if truncation:
-                done["reason"] = _stopped_line(truncation, calls_made, budget_calls,
+                # THE WHOLE TURN, not the last window: after a chat continued past its per-window
+                # budget, the steps it took and the ceiling it had are every window's together.
+                done["reason"] = _stopped_line(truncation, total_calls, budget_calls * window,
                                                time.monotonic() - started)
                 # THE ACT THE BUBBLE OFFERS. Named here rather than in the client because the
                 # harness is the only thing that knows the turn did not finish its own reasoning;

@@ -69,7 +69,7 @@ its `reason` says how many messages were dropped.
 | `VEXA_AGENT_MAX_CHAT_CONTINUATIONS` | `4` | extra windows a chat turn may open, `0` to `50` | compose `.env`, Helm `agentApi.maxChatContinuations`, Lite |
 | `VEXA_AGENT_MAX_TURN_SEC` | `900` | the turn's clock in seconds, across all its windows | compose `.env`; runtime and agent-api `config.v1.json` |
 | `VEXA_AGENT_CONTEXT_TOKENS` | `24000` | estimated tokens per request; older tool results are dropped first to stay under it | compose `.env` |
-| `VEXA_AGENT_MAX_OUTPUT_TOKENS` | unset | output tokens a model request asks for. `openai-agent` sends it as `max_tokens`; `claude-code` receives it as `CLAUDE_CODE_MAX_OUTPUT_TOKENS`; `codex` does not read it | compose `.env` |
+| `VEXA_AGENT_MAX_OUTPUT_TOKENS` | unset | output tokens a model request asks for. `openai-agent` sends it as `max_tokens`; `claude-code` receives it as `CLAUDE_CODE_MAX_OUTPUT_TOKENS`; `codex` does not read it (Codex 0.146.0 has no setting for the model's output cap) | compose `.env` |
 
 - agent-api validates the two continuation settings when it starts and refuses to start with a
   value outside `0` to `50`. It writes both into every worker it starts, so workers run on the

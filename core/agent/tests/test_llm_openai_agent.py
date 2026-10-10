@@ -1026,6 +1026,8 @@ def test_chat_continuation_stops_after_the_configured_number_of_windows(tmp_path
     assert sum(1 for e in evs if e["type"] == "tool-call") == 9      # 3 windows of 3
     assert done["ok"] is False and "tool-call budget" in done["reason"]
     assert done["act"]["label"] == "Continue"
+    # the line reports the whole turn, not the last window's 3 of 3
+    assert "after 9 of 9 steps" in done["reason"], done["reason"]
 
 
 def test_no_continuations_means_the_hard_cap(tmp_path, monkeypatch):

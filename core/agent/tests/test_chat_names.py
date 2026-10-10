@@ -87,3 +87,15 @@ def test_name_and_order_bodies_are_named_models_the_assembler_can_bind(client):
     assert props('/api/chat/name/agent','post')=={'session','title'}
     assert props('/api/chat/name','post')=={'session','title','source'}
     assert props('/api/chat/order','put')=={'order'}
+
+
+def test_the_rail_order_takes_the_row_keys_the_terminal_sends(client):
+    """The terminal keys rail rows `c:<chat>` and `m:<meeting>`; a save of those keys was refused
+    with 422 on every reorder."""
+    order = ['c:pchat-1', 'm:42', 'c:meet-7']
+    r = client.put('/api/chat/order', headers={'X-User-Id': 'a'}, json={'order': order})
+    assert r.status_code == 200, r.text
+    assert client.get('/api/chat/order', headers={'X-User-Id': 'a'}).json()['order'] == order
+    for bad in ('x:pchat-1', 'c:../etc', 'c:', 'c:a/b'):
+        assert client.put('/api/chat/order', headers={'X-User-Id': 'a'},
+                          json={'order': [bad]}).status_code == 422

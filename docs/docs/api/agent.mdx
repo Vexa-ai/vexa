@@ -89,7 +89,9 @@ There is **no** top-level `subject`, `workspace_repo`, or `plan` field.
 `session` is 1–128 characters from `A-Z a-z 0-9 . _ -`, starting with a letter or digit (empty or
 absent means `main`); any other value is a `422`, here and at every other door that takes a session:
 `/api/chat/submit`, `/api/chat/reset`, `GET /api/chat/pending?session=`, `GET /api/sessions/{session}/history`,
-`/api/chat/name`, `/api/chat/name/agent`, `/api/chat/target` and each entry of `PUT /api/chat/order`.
+`/api/chat/name`, `/api/chat/name/agent` and `/api/chat/target`. Each entry of `PUT /api/chat/order` is a
+rail row key, `c:<session>` or `m:<meeting id>` (or a bare session), the part after the prefix held to the
+same rule.
 Returns **Server-Sent Events**; each `data:` line is one frame:
 
 | frame | fields |

@@ -65,9 +65,11 @@ without its tools because time passed; and nothing fails quietly.
 ## Consequences
 
 - **Identity's authorization answer for a worker now depends on Redis.** A Redis outage refuses every
-  `vxd_` bearer (`503`) until it returns; people's own API keys are unaffected. Revocations live in
-  Redis with AOF on in compose and Helm; if Redis loses its data, unrevoked tokens live until their
-  `exp`.
+  `vxd_` bearer (`503`) until it returns; people's own API keys are unaffected. Admission needs the
+  token's live record (`vexa:delegation:live:<jti>`), so a record that is lost — Redis losing its
+  data, or the store evicting the key — REFUSES that token from then on: it fails closed, not open
+  until `exp`. Live units keep working only as far as agent-api records their tokens again (a
+  refresh records the new one). Redis runs with AOF on in compose and Helm to make that rare.
 - **Two reconcilers poll the runtime's live set independently** — the Redis ACL sweeper
   (`workload_redis.start_sweeper`, 15-minute grace) and the delegation reaper
   (`delegation_revocation.start_reaper`, 30 s interval, 120 s grace for a token whose spawn may still
@@ -76,9 +78,10 @@ without its tools because time passed; and nothing fails quietly.
 - **Revocation lags a unit's end** by up to one reaper interval, plus the grace for a token younger
   than 120 s. A refreshed token is recorded past the grace and is revoked on the first sweep after its
   unit ends.
-- **`REDIS_WORKLOAD_ACL=shared`** gives workers the service connection, so a worker could delete a
-  revocation key or write its own delivery key. That mode already trusts every worker; the refresh
-  never re-mints from the worker-readable copy.
+- **`REDIS_WORKLOAD_ACL=shared`** gives workers the service connection, so the delegation records and
+  revocations are within every worker's reach (a worker could delete a live record or a revocation).
+  In that mode agent-api publishes no token to Redis — a unit keeps the token it was spawned with,
+  unrefreshed, until its `exp` — and the mode already trusts every worker.
 - **A single turn longer than half a lifetime** that started just before a refresh loses its tools at
   the old token's `exp`, loudly. Raising `VEXA_MCP_DELEGATION_TTL_SEC` widens the headroom and the
   window a leaked token is good for, together.

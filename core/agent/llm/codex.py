@@ -4,6 +4,11 @@ Codex's non-interactive ``exec`` command is a one-prompt process. Vexa uses ``ap
 one JSON-RPC connection per turn, durable thread rollouts under the private continuity root, and
 ``turn/steer`` for user input that arrives while the turn is in flight. All Codex protocol details
 stay in this vendor-named module; callers see only the frozen UnitEvent stream.
+
+``VEXA_AGENT_MAX_OUTPUT_TOKENS`` is NOT read here, on purpose: Codex (0.146.0, pinned in the worker
+image) has no setting for the model's output cap — the ``max_output_tokens`` fields it knows are
+per-tool exec and search budgets — so there is nothing to map it onto, and a Codex turn asks for
+Codex's own default. The other harnesses honour it (``claude_code``, ``openai_agent``).
 """
 from __future__ import annotations
 
