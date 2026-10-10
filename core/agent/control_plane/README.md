@@ -24,8 +24,10 @@ Every module in this folder, by concern. `routers/` holds the routes, one module
   one logged refusal.
 - `route_policy.py` — which verbs need a person in the loop: the `verbs` rows of
   `core/agent/routes.v1.json` marked `"person": true` (routes.v1). `PERSON_GATE`, an app-level
-  dependency, applies `require_person` to the route a request matched; a row naming a route the
-  app does not serve refuses the boot.
+  dependency, applies `require_person` to the route a request matched. A row naming a route the app
+  does not serve refuses the boot, and so does a destructive or membership route with no flag (any
+  DELETE, and any other write whose path has a `MEMBERSHIP_SEGMENTS` segment, less the internal-only
+  `NOT_A_WORKER_DOOR`).
 - `version.py` — what is serving, one unauthenticated fact.
 - `admin_panel.py` — read-only infrastructure and meeting-pipeline introspection for the hidden admin
   panel.
@@ -86,11 +88,12 @@ caller or with the internal secret, never with a credential of its own:
 ## A worker's delegation token ends with its unit
 
 `delegation_revocation.py`. Each dispatch's delegation token (`shared/delegation.py`) is recorded
-against its unit before the spawn (`vexa:delegation:unit:<unit id>`, jti → exp), and a token that
-cannot be recorded is withheld. The reaper thread compares the recorded units with the runtime's live
+against its unit before the spawn (`vexa:delegation:unit:<unit id>`, jti → exp) and held live
+(`vexa:delegation:live:<jti>`, expiring with the token — identity admits a token only while that key
+exists), and a token that cannot be recorded is withheld. The reaper thread compares the recorded units with the runtime's live
 workloads every 30 s; a unit the runtime no longer runs — completed, idled out, stopped, failed, or
 never started — has its tokens written to `vexa:delegation:revoked:<jti>` with their remaining
-lifetime, which identity's `/internal/validate` refuses. A unit id is reused across warm windows, so
+lifetime and their live keys deleted, which identity's `/internal/validate` refuses. A unit id is reused across warm windows, so
 the dispatch that starts a unit's next container also revokes the previous container's token when the
 runtime reports it ended. Tokens younger than 120 s are never revoked (their spawn may still be on
 its way), and a sweep that cannot read the runtime revokes nothing. The token's lifetime,
@@ -116,11 +119,12 @@ it ends.
 > is documented in [`docs/docs/core/workspaces.mdx`](../../../docs/docs/core/workspaces.mdx).** This section is the Lane M
 > membership/invite mechanism.
 
-`workspace_membership.py` is the access layer for shared workspaces. **Single-rank model (owner ruling
-2026-07-07):** a shared workspace has ONE member rank — every member is read/write and can share
-(mint/revoke invites); the **`owner` is just the CREATOR** (the only one who can unshare / remove
-members / change role). The read-only `viewer` role stays in the lattice for back-compat but is **not
-invitable** — `INVITABLE_ROLES = ("contributor",)`.
+`workspace_membership.py` is the access layer for shared workspaces. **Three roles:** `owner >
+contributor > viewer`, said to people as owner, contributor and reader. An owner writes and adds or
+removes members; a contributor writes; a reader reads. An invite may be minted for any of the three
+(`INVITABLE_ROLES = ROLE_WORDS`). `POST /api/workspace/invite` (one address, the agent's
+`workspace_invite`) is owner-only; `POST /api/workspace/invites` (a link) needs owner or contributor;
+removing members and changing roles is owner-only.
 
 **Two stores, written together (git is authoritative, the index is derived):**
 - **Authoritative** — the workspace's OWN git repo at `policy/members.json`

@@ -29,6 +29,7 @@ This module imports nothing from product code (llm/README.md § Rules).
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import asdict, dataclass
 from typing import Optional
@@ -41,6 +42,8 @@ from llm.errors import LLMError, provider_host
 # from product code — and gate:schema fails when it drifts. A kind is added there, never here.
 _V = fault_wire.ModelProvider
 
+logger = logging.getLogger("llm.faults")
+
 SOURCE = _V.SOURCE
 
 UNPAID = _V.UNPAID
@@ -51,7 +54,7 @@ REFUSED = _V.REFUSED
 KINDS = _V.KINDS
 
 _WHAT = {
-    UNPAID: "is out of credit",
+    UNPAID: "is out of credits",
     UNAUTHORIZED: "rejected the credential",
     RATE_LIMITED: "is limiting requests",
     UNAVAILABLE: "is unavailable",
@@ -89,7 +92,7 @@ def remedy_for(kind: str, provider: str) -> str:
     """The one line a person can act on, per kind."""
     where = provider if provider and provider != "unknown" else "the provider"
     return {
-        UNPAID: f"Add credit at {where}, or choose another model under Settings → Models.",
+        UNPAID: f"Add credits at {where}, or choose another model under Settings → Models.",
         UNAUTHORIZED: f"Check the API key for {where} under Settings → Models.",
         RATE_LIMITED: "Wait a moment and send it again.",
         UNAVAILABLE: "Send it again shortly, or choose another model under Settings → Models.",
@@ -146,9 +149,31 @@ _SECRETS = re.compile(r"(?:sk|pk|rk)-[A-Za-z0-9_\-]{8,}|bearer\s+\S+|api[_-]?key
                       re.IGNORECASE)
 
 
+# A LINK IN THE PROVIDER'S WORDS IS THE OPERATOR'S, NOT THE PERSON'S. OpenRouter's 402 ends "To
+# increase, visit https://openrouter.ai/settings/keys and create a key…" — the page that manages the
+# deployment's key. The person in the chat cannot use it and should not be sent there, so the
+# sentence carrying it leaves the detail and the link goes to the worker's log (`provider_links`).
+_LINK = re.compile(r"https?://[^\s\"'<>)\]]+|\b(?:[a-z0-9-]+\.)+[a-z]{2,}/[^\s\"'<>)\]]*",
+                   re.IGNORECASE)
+
+
+def provider_links(text: object) -> list[str]:
+    """Every link the provider's failure text carries — for the operator's log, never the chat."""
+    return [m.group(0).rstrip(".,;:") for m in _LINK.finditer(str(text or ""))]
+
+
+def _drop_links(text: str) -> str:
+    """The text without any sentence that carries a link. A sentence is kept whole or not at all,
+    so the detail never reads "visit  and create a key"."""
+    if not _LINK.search(text):
+        return text
+    return " ".join(s for s in re.split(r"(?<=[.!?])\s+", text) if s and not _LINK.search(s))
+
+
 def safe_detail(text: object, limit: int = 200) -> str:
     """The provider's own words, made safe to show: the JSON envelope unwrapped to its message,
-    anything credential-shaped redacted, one line, bounded."""
+    anything credential-shaped redacted, any sentence carrying a link removed (the link is the
+    operator's — see :func:`provider_links`), one line, bounded."""
     raw = str(text or "")
     m = re.search(r"\{.*\}", raw, re.DOTALL)
     if m:
@@ -161,7 +186,7 @@ def safe_detail(text: object, limit: int = 200) -> str:
         except ValueError:
             pass
     raw = re.sub(r"^\s*api error:?\s*\d{3}\s*", "", raw, flags=re.IGNORECASE)
-    flat = " ".join(_SECRETS.sub("[redacted]", raw).split())
+    flat = " ".join(_SECRETS.sub("[redacted]", _drop_links(" ".join(raw.split()))).split())
     return flat if len(flat) <= limit else flat[: limit - 1] + "…"
 
 
@@ -191,13 +216,15 @@ def classify(*, status: Optional[int] = None, text: object = None, provider: Opt
         kind = kind_for_status(int(status))
     if kind is None:
         kind = hint
+    if status is None and text:
+        # The status the text names wins over the CLI's label, like an HTTP status does: the label
+        # says "billing_error", the text says 402, and the person should see the 402.
+        status = status_in(text)
+        kind = kind or (kind_for_status(status) if status else None)
     if kind is None and sdk_error:
         kind = _SDK_ERROR.get(str(sdk_error))
     if kind is None and text:
-        status = status if status is not None else status_in(text)
-        kind = kind_for_status(status) if status else None
-        if kind is None:
-            kind = next((k for k, rx in _PHRASES if rx.search(str(text))), None)
+        kind = next((k for k, rx in _PHRASES if rx.search(str(text))), None)
     if kind is None and transport:
         kind = UNAVAILABLE
     # NOT EVERY PROVIDER SAYS "UNPAID" WITH A 402. Anthropic answers an empty balance with a 400
@@ -208,8 +235,25 @@ def classify(*, status: Optional[int] = None, text: object = None, provider: Opt
     if kind is None:
         return None
     detail = safe_detail(text) if text else ""
+    remedy = remedy_for(kind, host)
+    if kind == UNPAID and text and _ASKED_TOO_MUCH.search(str(text)):
+        # "You requested up to 32000 tokens, but can only afford 4857": the balance covers a
+        # smaller answer. The output cap is the operator's dial for exactly this.
+        remedy = (f"Add credits at {host if host and host != 'unknown' else 'the provider'}, lower "
+                  "the model's output cap (VEXA_AGENT_MAX_OUTPUT_TOKENS), or choose another model "
+                  "under Settings → Models.")
+    links = [_SECRETS.sub("[redacted]", u) for u in provider_links(text)] if text else []
+    # THE OPERATOR'S COPY: what the person sees, plus the links the chat leaves out.
+    logger.warning("model provider fault: provider=%s kind=%s status=%s model=%s detail=%r%s",
+                   host, kind, status, model or "", detail,
+                   f" links={links}" if links else "")
     return ProviderFault(kind=kind, provider=host, model=model or "", status=status,
-                         detail=detail, remedy=remedy_for(kind, host))
+                         detail=detail, remedy=remedy)
+
+
+# The provider's own words for "your balance covers a smaller answer than you asked for".
+_ASKED_TOO_MUCH = re.compile(r"fewer max_tokens|can only afford|max_tokens.*(?:credit|afford)",
+                             re.IGNORECASE)
 
 
 class ProviderError(LLMError):

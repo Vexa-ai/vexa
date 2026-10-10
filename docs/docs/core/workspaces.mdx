@@ -4,12 +4,13 @@ description: "The workspace model an agent turn sees, sharing, membership, and l
 ---
 
 
-The workspace model an agent turn sees, how workspaces are shared, how a user joins and manages
+The workspace model an agent turn sees (for the person-facing guide, see
+[Minutes → Workspaces](/minutes/workspaces)), how workspaces are shared, how a user joins and manages
 them, and how members collaborate live during a meeting. This is the canonical explainer; the code
 lives in `core/agent/control_plane/` (membership, invites, mounts, purpose, git-sync, git-credentials),
 `core/agent/worker/` (the turn + mount preamble), `core/runtime/` (the binds), and
 `clients/terminal/src/` — `surfaces/workspace.tsx` (sidebar), `surfaces/workspaceManage.tsx` (the manage
-panel), `app/App.tsx` (invite consent), `surfaces/tokens.tsx` (the GitHub token). Status is marked
+panel), `app/join/` (the invite page), `surfaces/tokens.tsx` (the GitHub token). Status is marked
 ✅ done / 🟡 partial / ⬜ planned throughout.
 
 ## The mount model — three tiers
@@ -112,68 +113,58 @@ Code: `runtime_kernel/mounts.py` (`workspace_binds`, `k8s_volume_mounts`),
   cheap preamble line, not a document. **Why:** flat mounting is the *mechanism*; purpose is what keeps a
   multi-workspace mount set from becoming a junk drawer.
 
-## Sharing model (Lane M — `workspace_membership.py`)
+## Sharing model (`workspace_membership.py`)
 
-**Single rank + creator (owner ruling 2026-07-07).** A shared workspace has one member rank; the
-`owner` is just the **creator**. Roles in the git store are still `owner`/`contributor`, but:
+The person-facing steps (adding a member, joining from a link, what each refusal means) are on
+[Minutes → Workspaces](/minutes/workspaces). This section is the model behind them.
 
-- Invites mint a **read/write MEMBER** only — `INVITABLE_ROLES = ("contributor",)`; the read-only
-  `viewer` tier is retained in the lattice for back-compat but is **not invitable** (✅).
-- **Any member can share** (mint/revoke invites) and read/write — `POST /api/workspace/invites` +
-  `DELETE /api/workspace/invites/{id}` require `contributor`.
-- **Only the creator** (`owner`) can **unshare / remove members / change role** (`require_role("owner")`).
-  → creator-only unshare/delete.
-- **DEFERRED DECISION:** whether to *also* offer an **owner-restricted invite mode** (only the creator
-  invites) vs. keeping invites purely single-rank. Not decided; see `vexa-ops` handoff.
+**Three roles.** `owner > contributor > viewer` in the lattice, said to people as owner, contributor
+and reader (`ROLE_SENTENCES`): an owner writes the workspace and adds or removes members, a contributor
+writes it, a reader reads it. An invite may be minted for any of the three (`INVITABLE_ROLES`).
 
-**Two stores, written together** (git authoritative, index derived):
-- Authoritative: the workspace's own git repo — `policy/members.json`
-  (`[{subject, role, added_by, added_at, email?}]`) + `policy/invites.json` (sha256 **hash** of each token
-  + `{id, role, mode, allowed_emails, expires_at, max_uses, uses, revoked}`).
-- Index: `users.data.memberships[]` for "shared with me" — via the injected `MembershipIndex`
-  (admin-api `/internal/users/{id}/memberships`; in-memory fake in tests).
+- **Inviting a person** — `POST /api/workspace/invite` (the agent's `workspace_invite` tool) is
+  owner-only. It mints an invite `restricted` to the named address, hands the link back for an address
+  this instance knows, and otherwise publishes a `workspace.invited` event for the flows service to mail.
+- **A link** — `POST /api/workspace/invites` mints a link for an owner or contributor of the workspace;
+  `DELETE /api/workspace/invites/{id}` withdraws one. An invite that names addresses is `restricted` to
+  them; one that names none is `open`. Asking for both is refused.
+- **Only an owner** removes members or changes a role (`require_role(..., "owner")`).
+- The system workspace and a person's own private workspaces are never shareable (`assert_shareable`).
 
-**Human roster — members show emails, not opaque ids** (✅). The participant list needs a human label, but
-`agent-api` has no user directory. Solution: **persist the gateway-verified `X-User-Email` into the member
-record at every grant point** — owner bootstrap (`ensure_owner`) and invite redeem (`accept_invite` →
-`grant_membership`). For **legacy** rows granted before this, `ws_members_list` **self-heals** by stamping
-the *requesting* member's own email onto their row the first time they open the manage panel (each member's
-email fills in on their next view). The email is committed to `members.json`, so it **travels with the
-workspace** to every member. **Why here (not `admin-api`/user.data):** the email is already in-hand on every
-request and only this store needs it — no cross-service directory lookup.
+**Where membership and invites live:**
+- **Members** — the workspace's own git repo, `policy/members.json`
+  (`[{subject, role, added_by, added_at, email?}]`), authoritative and travelling with the workspace.
+- **Index** — `users.data.memberships[]` for "shared with me", through the `MembershipIndex` port
+  (admin-api `/internal/users/{id}/memberships`).
+- **Invites** — `<store-root>/.invites/<workspace_id>.json`, outside every workspace mount, holding only
+  the sha256 of each token (`{id, hash, role, mode, allowed_emails, expires_at, max_uses, uses,
+  created_by, created_at, revoked}`). An invite is capability material, so it never sits in a tree that
+  gets published, attached or reseeded.
 
-**Access modes:** `open` (anyone-with-link, authenticated) or `restricted` (verified `X-User-Email`
-in `allowed_emails`). Redeem is **post-auth, no guest** — `POST /api/workspace/invites/accept`.
+**Human roster.** The gateway-verified `X-User-Email` is written into the member record at every grant
+(`ensure_owner`, and `accept_invite` → `grant_membership`), so the participant list shows addresses; a
+row granted before that fills in its email the next time that member opens the list.
 
-**`policy/` is PLATFORM-WRITE-ONLY:** an agent turn may never write `policy/`; the worker's turn-commit
+**`policy/` is platform-write-only:** an agent turn may never write `policy/`; the worker's turn-commit
 reverts any `policy/` change (`_revert_policy_writes` → `{"type":"policy-reverted"}`). Membership is
 written only by `workspace_membership.policy_commit` (platform git identity).
 
-## Joining a workspace — invite link → preview → consent → land (✅)
+## Joining a workspace — `/join`, preview, sign in, accept
 
-The full path from an invite link to seeing the shared workspace. **Why a consent step:** joining mounts
-someone else's workspace into your agent — you should see *what it is* and *how you're joining* before
-committing, not silently get opted in.
+1. **Link.** An invite link is `<VEXA_UI_URL>/join?i=<token>` (`JOIN_PATH`). With `VEXA_UI_URL` unset,
+   agent-api returns no link and says which key names it.
+2. **Preview, before sign-in.** The `/join` page calls the terminal's `GET /api/join/preview?i=`, which
+   passes the token to agent-api's `GET /api/workspace/invites/preview`. The preview takes no user key,
+   grants nothing and consumes no use; it answers who invited you, to which workspace and as what, and
+   `404` for a token that matches nothing, so it never enumerates workspaces.
+3. **Sign in** with any of the terminal's sign-in doors; the invite rides through sign-in.
+4. **Accept.** The terminal calls `POST /api/workspace/invites/accept` through the gateway. agent-api
+   checks the gateway-verified email against a restricted invite's addresses, the expiry and the use
+   count, then adds you to the roster with the invite's role.
+5. **Land** on the shared workspace (see First-view above).
 
-1. **Mint** — a member creates an invite in the manage panel; the link is `…/?invite=<token>`.
-2. **Login** — `AuthGate` signs the user in first (the `?invite=` query survives the OAuth round-trip via
-   the callback URL). **Consent is placed AFTER login** — the terminal's only path to `agent-api` is the
-   **fail-closed gateway**, which 401s anonymous calls (the terminal has no service key), so a *pre-login*
-   preview can't authenticate. `InviteGate` renders **inside** `AuthGate`'s authed subtree.
-3. **Preview (no grant)** — `GET /api/workspace/invites/preview?token=` → `preview_invite` resolves the
-   token to `{workspace_id, purpose, role, shared_by, mode, expires_at, valid}` **without** granting,
-   consuming a use, or checking membership (capability-gated by the token; 404 if it matches nothing, so it
-   never enumerates workspaces). Powers the consent card: **workspace name · purpose · your access ·
-   shared-by**.
-4. **Consent → redeem** — "Continue to join" calls `POST …/invites/accept`, stashes `vexa.openWorkspace`,
-   and reloads to a clean URL. "Not now" drops the invite.
-5. **Land** — the first-view resolver pins the shared workspace's **README** and forces the **Knowledge**
-   section open (see First-view above).
-
-Restricted invites still enforce `allowed_emails` at *accept* time — the preview only reveals name/purpose/
-role to whoever already holds the token (the same trust boundary as the link itself). Code:
-`workspace_membership.preview_invite`, `api.py` (`ws_invite_preview`), `App.tsx` (`InviteGate`,
-`InviteConsent`).
+Code: `workspace_membership.preview_invite` / `accept_invite`, `routers/sharing.py`,
+`clients/terminal/src/app/api/join/`.
 
 ## Managing a workspace — the manage panel (✅)
 
@@ -204,9 +195,11 @@ Create flows are also panel/modal-based, not inline: **Attach repo** opens a por
 Save a GitHub PAT **once** and reuse it for every git op across **all** repos, instead of re-entering it
 per push/pull/publish/attach. Set it in **API Tokens → GitHub**; the git-op forms then don't prompt.
 
-**Security model** (parity with the webhook secret — access-controlled, not encrypted at rest):
-- **Server-side only** — stored under the workspaces store root at `.secrets/<subject>.ghtoken` (`0600`, a
-  dot-dir the workspace scanners skip, **outside any git tree** so it never lands in a commit).
+**Security model:**
+- **Server-side only** — sealed by agent-api's `secret_store` under the workspaces store root in
+  `.secrets/` (a dot-dir the workspace scanners skip, **outside any git tree** so it never lands in a
+  commit), or kept in the [credential broker](/connections#git-credentials-in-the-broker-optional) when
+  `VEXA_GIT_STORE_BROKER_URL` is set. The old plaintext `.secrets/<subject>.ghtoken` is migrated on first read.
 - **Browser-isolated** — never returned to the client; a read yields only a `••••abcd` mask.
 - **Never transits the gateway as a header** and never leaves the one service that uses it (smaller blast
   radius than routing it through `admin-api`/user.data — and no governed-service change).
@@ -214,7 +207,9 @@ per push/pull/publish/attach. Set it in **API Tokens → GitHub**; the git-op fo
   URL for that op only, is **redacted from every error/log** (P15), and is never written to `.git/config`.
 - **Encrypted at rest (✅)** — sealed by `secret_store` under one server-side key: `VEXA_SECRETS_KEY` when
   the operator supplies one (so the key can live outside the data volume), otherwise a `0600` key
-  generated under the secrets root on first use — "unset" means *generated*, never *plaintext*.
+  generated under the secrets root on first use — "unset" means *generated*, never *plaintext*. With
+  `VEXA_ENV=production` an unset key is refused instead: saving a credential fails with a sentence
+  naming `VEXA_SECRETS_KEY`.
   Encrypt-then-MAC (HMAC-SHA256 subkeys + a SHA-256 counter keystream, stdlib only — no new dependency in
   the control-plane image); a tampered envelope or a wrong key reads as **"no credential"**, never as
   garbage. A token written by the older plaintext code is migrated (re-sealed, plaintext unlinked) the
@@ -284,18 +279,127 @@ Delivery mechanics: **Lane W** serialises the attributed writer per shared repo
 (`core/agent/shared/adapters.py workspace_write_lock`); note the flock is not yet on the live commit
 path (`dispatch.py` comment) — drive concurrent shared writes **sequentially** for now (⬜ to wire).
 
+## How it works
+
+**Importing a repository as a workspace** (`POST /api/workspace/import`, also the control MCP's
+`workspace_import`):
+
+1. The terminal or an agent calls agent-api through the gateway. The route is declared `person` in
+   `core/agent/routes.v1.json`, so a worker with nobody in the loop is refused.
+2. agent-api checks the repository URL and ref, and derives the new workspace's slug from them. If the
+   caller names a `credential_workspace` to reuse its deploy key, they must be its owner.
+3. The route answers `202` with an `operation_id` at once. The import runs as a job whose status record
+   is written under `.imports/<subject>/` in the store, outside every workspace mount. Poll
+   `GET /api/workspace/import/{operation_id}/status`; only `completed` means the workspace is usable.
+4. `workspace_credentials.for_workspace` picks the credential: the workspace's deploy key for an
+   `ssh://` or `git@host:` remote, else the person's saved token for `https://`, else nothing (a
+   public repository). The credential lives only inside the operation, never in the job record.
+5. The clone runs through `gitexec` into its own slot `<store>/<slug>`, with its own root and Git
+   history. Personal and the other workspaces are left as they are.
+6. `workspace_ids.sync_workspace` gives the tree an id (kept in `.vexa/workspace.json`, committed to
+   the tree) and points agent-api's registry at the slot. A repository that already carries an id keeps it.
+
+A shared workspace can load a repository too (`POST /api/workspace/shared/{workspace_id}/attach`,
+contributor or owner). Its `policy/members.json` is carried into the clone and kept untracked there.
+
+**Every path from outside goes through one rule.** `core/workspaces/shared/workspace_paths.py` answers
+whether a name or path stays inside a workspace:
+
+- **A workspace name** is one path segment of letters, digits and `. _ -`, at most 121 characters,
+  starting with a letter, digit or `_` (`is_workspace_name`). So never a separator, a dot-name, `.`
+  or `..`. Names reserved for the platform (`_system`, `_global`, `seed`, …) are refused by the caller
+  that owns them (`workspace_membership.RESERVED_SLUGS`).
+- **A path inside a workspace** is refused if it is absolute, uses `..` to leave, leaves through a
+  symlink, or reaches a reserved directory: `.git`, `.vexa` (the workspace id) or `.claude` (the
+  agent's own state). The caller gets one sentence for all four reasons; the log line names which.
+- **Fixed platform files** (`policy/members.json`, the id file, routine state, …) are read and written
+  by descriptor without following a link at the file or at any directory above it.
+
+**A lookup never registers.** Naming a slug in a request (`GET /api/workspaces/by-slug/{slug}`, a
+link's "here") uses `workspace_ids.resolve_slug`. It can re-point a record the tree already carries,
+but it never mints an id and never creates a record. Platform directories at the store root
+(`.attached`, `.system`, `lost+found`, …) are never a workspace, whoever names them. Only acts that
+create or move a workspace call `sync_workspace`.
+
+**During a turn** the worker runs as root and starts the model's tools as the unprivileged
+`vexa-tools` user (`core/agent/worker/Dockerfile`, `llm/ports.py`). Each turn it hands that user, by
+group, only the workspaces the turn may write. A repository's `.git` is never handed over, so the
+tools can read history but not write the repository; a work-tree root is made sticky so `.git` cannot
+be renamed away. If a path cannot be handed over, the turn does not run. At write-back, any change
+the turn made under `policy/` is reverted, and the commit runs through `gitexec`, which runs no
+program the repository names (hooks, filters, credential helpers, …). Where the worker cannot switch
+users (Lite's per-tenant UID), it makes itself non-dumpable instead.
+
+### Who writes what
+
+| Data | Only writer | Where |
+|---|---|---|
+| Workspace trees and their Git history | agent-api (routes, imports) and the worker (turn commits) for the workspaces mounted to it | `VEXA_WORKSPACES_DIR` |
+| Workspace id | the platform, through `shared/workspace_id.py` | `.vexa/workspace.json` in each tree |
+| Workspace registry (id → slug, folder, name, owner) | agent-api, `control_plane/workspace_ids.py` | Redis, or memory; rebuildable from the trees except display names |
+| Member list | agent-api, `workspace_membership.policy_commit` | `policy/members.json` in the workspace |
+| Invites (hashes only) | agent-api, `workspace_membership` | `<store-root>/.invites/<workspace_id>.json`, outside every workspace |
+| Import status | agent-api, `workspace_import.py` | `.imports/<subject>/` (`imports-status` in the architecture chart) |
+| Saved Git token and deploy keys | agent-api's sealed `secret_store` (`VEXA_SECRETS_KEY`), or the [credential broker](/connections#git-credentials-in-the-broker-optional) | `.secrets/` in the store, or the broker |
+
+### Contracts, routes and configuration
+
+- **Contract:** `core/workspaces/contracts/workspace.v1` (the workspace template and entity front matter).
+- **Routes:** agent-api's `routers/workspaces.py` (`/api/workspace/*`, `/api/workspaces/*`), published
+  through the gateway as `/agent/...` by `core/agent/routes.v1.json`.
+- **Configuration:** agent-api's `core/agent/control_plane/config.v1.json` (`VEXA_WORKSPACES_DIR`,
+  `VEXA_SECRETS_KEY`, `VEXA_GIT_STORE_BROKER_URL`, …), set from compose `.env` or Helm values.
+
+## Why it complies
+
+### Architecture
+
+| Rule | How workspaces meet it | Enforced by |
+|---|---|---|
+| P10 (a module by default) | `core/workspaces` is a library hosted inside agent-api, with no runtime of its own. | ungated: reviewed |
+| P2 (couple only through contracts) | Not yet met in full: `core/agent` imports the workspace primitives in process. The carve-out of `core/workspaces` retires this step by step (see its README). | ungated: reviewed |
+| P4 (sealed contracts) | `workspace.v1` is sealed and golden-pinned. | `gate:schema`, `gate:contract-version` |
+| No duplication | One name rule and one path layer, `workspace_paths.py`, vendored byte for byte into the worker's `llm` package. One way to run git, `gitexec.py` (canonical in `core/agent/shared/`), is vendored into `llm` and `core/workspaces/shared` the same way. | `gate:fact-parity` (`workspace-paths`, `git-exec`) |
+| Single path | No file in `core/agent` or `core/workspaces` opens, lists, creates, renames or removes a work-tree path by name outside `workspace_paths`, unless allow-listed with a reason. No git subprocess bypasses `gitexec`. | `gate:python`: `test_worktree_io_single_path.py`, `test_git_single_path.py` |
+| P23 (one writer per carrier) | See the table above. Import status is charted. | `gate:dataflow` (import status); the registry and member list: ungated, reviewed |
+| P18 (fail loud) | A refused path raises; it never returns a value a caller could ignore. A broker outage stops Git operations instead of falling back. A path the tools user cannot get stops the turn. | `gate:python` (tests below) |
+| P20 (authorize every access) | Every route resolves a slug or id only inside the caller's own store or a workspace they belong to; roles are checked against `policy/members.json`. | `gate:python` (tests below) |
+| P12 | `core/workspaces/README.md` and every folder below it. | `gate:readme` |
+
+### Security
+
+- **Who can reach what.** A person reaches only their own workspaces and the shared ones they are a
+  member of. Inviting needs `contributor`; unsharing, removing members and changing roles need
+  `owner`. Only the platform writes `policy/`.
+- **At the gateway.** Workspace routes need a signed-in person; importing with saved credentials needs
+  a person in the loop.
+- **In agent-api.** Every slug or id is checked against the name rule and resolved inside the caller's
+  store; every path against the four refusals. A lookup creates nothing.
+- **In the worker.** The worker's filesystem holds only the turn's mounts. The model's tools run as
+  `vexa-tools`, cannot write `.git`, and cannot change the member list.
+- **Credentials.** A Git token or deploy key is never returned to the browser or the agent, never
+  written into a remote URL or `.git/config`, and never accepted from chat text.
+
+Deny tests, all in `core/agent/tests/`:
+
+| Protection | Tests |
+|---|---|
+| A slug names only the caller's own or a member workspace | `test_workspace_slug_containment.py`: `test_swap_refuses_a_slug_that_is_not_one_of_the_callers_slots`, `test_activate_refuses_a_slug_that_is_not_one_of_the_callers_slots`, `test_shared_attach_refuses_a_slug_outside_the_groups_store`, `test_unshare_refuses_an_id_that_is_not_one_top_level_workspace`, `test_path_parameter_routes_refuse_an_encoded_traversal`, `test_a_poisoned_active_set_entry_is_never_mounted`, `test_history_never_returns_another_subjects_thread` |
+| A lookup registers nothing | `test_workspace_lookup_registers_nothing.py`: `test_naming_a_platform_directory_by_slug_registers_nothing`, `test_naming_a_platform_directory_as_here_registers_nothing`, `test_another_persons_private_files_are_not_read_through_a_named_platform_directory`, `test_a_record_left_by_a_registered_platform_directory_is_gone_and_dropped` |
+| One name rule, one path layer | `test_worktree_links_refused.py`: `test_every_spelling_of_the_workspace_name_rule_answers_the_same` · `test_worktree_io_single_path.py`: `test_no_work_tree_path_is_acted_on_by_name_outside_workspace_paths`, `test_no_entry_exempts_a_whole_module`, `test_the_vendored_helper_is_the_canonical_bytes` · `test_workspace_paths_nofollow.py`: `test_a_linked_directory_component_is_not_followed_for_read`, `test_a_linked_directory_component_refuses_a_write`, `test_max_bytes_and_reserved_and_absolute` |
+| The member list is never read or written through a link | `test_membership_policy_links.py`: `test_a_member_list_reached_through_a_link_is_no_member_list`, `test_a_grant_is_never_written_through_a_link`, `test_a_member_list_with_a_second_hard_link_is_no_member_list` · `test_policy_revert_links.py`: `test_a_members_file_replaced_by_a_link_is_removed_not_written_through` |
+| Git runs nothing the repository names | `test_gitexec.py`: `test_a_hook_planted_in_the_repository_does_not_run`, `test_a_credential_helper_the_repository_names_does_not_run`, `test_a_linked_git_dir_is_refused`, `test_a_git_dir_swapped_in_after_the_check_is_never_read` · `test_git_single_path.py`: `test_no_git_subprocess_bypasses_gitexec` |
+| The tools user cannot write the repository | `test_worker_git_writeback.py`: `test_the_grant_never_opens_git_and_closes_what_an_earlier_grant_opened`, `test_a_work_tree_root_is_sticky_and_nothing_else_is`, `test_a_hook_planted_in_git_does_not_run_at_write_back` · `test_tools_user_cannot_swap_git.py`: `test_the_tools_user_cannot_swap_git_and_can_still_do_its_work` (runs in the worker image) |
+| Git credentials only for the signed person | `test_git_store_identity.py`: `test_the_request_s_signed_person_is_the_actor_and_the_signature_is_forwarded`, `test_without_a_signed_person_nothing_is_sent` · `test_git_broker_store.py`: `test_unavailable_never_falls_back_or_deletes` |
+
 ## Deferred / planned (documented, not built)
 - ⬜ **`_global` branch auto-sync** (currently a one-time clone).
 - ⬜ **Agent-proposed GitHub issues** — since `_global` carries the real repo, an agent that notices a
   user's feature request / bug should be able to **propose an issue** to the main repo (governed
   propose→approve→submit, author = principal).
-- ⬜ **Filesystem isolation** — today the whole store is bound once at `/workspaces`, so a turn can
-  `cd ..` to other workspaces; per-mount binds are the fix (`workspace_binds`), decoupled as a
-  presentation remap. (Security hardening for multi-tenant ship.)
 - ⬜ **Full seed-slot de-specialization** — relocate Personal's tree out of the fixed `<root>/<subject>`
   seed slot into a normal store slot, so share/archive/delete work on it like any workspace (removes the
   last residual specialness; the rank is already gone).
-- ⬜ **Owner-restricted invite mode (deferred decision)** — whether to also offer creator-only invites.
 - ✅ **At-rest encryption for the saved GitHub token** — sealed by `secret_store` under one server-side
   key (`VEXA_SECRETS_KEY`, or a `0600` key generated on first use); the same store holds every
   workspace's deploy-key private half. Legacy plaintext tokens migrate on first read.

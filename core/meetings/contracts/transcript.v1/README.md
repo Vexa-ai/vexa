@@ -32,8 +32,10 @@ re-signs it in Node (fact `segment-entry-vector` holds the same signature in bot
 
 ## The per-meeting feed (`FeedEntry`)
 `tc:meeting:{meeting_id}` — keyed by the meetings-domain numeric **row id**, never the native id, which
-collides across users and rows — is the collector's, and it writes there **only entries it admitted**
-from the bus. Each entry is `{payload}`, the JSON of one of:
+collides across users and rows — has one writer, **meeting-api**: the collector writes a segment, a
+retraction or a bot's own end marker **only for entries it admitted** from the bus; the lifecycle
+writes the start and end markers on the meeting's own state changes; the transcript import writes
+the end marker of a transcript it stored. Each entry is `{payload}`, the JSON of one of:
 
 - **`FeedTranscription`** — one persisted, non-empty segment (`FeedSegment`); `session_uid` and
   `meeting_id` carry the native id for display;

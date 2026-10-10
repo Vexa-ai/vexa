@@ -100,6 +100,12 @@ def allowed_patterns(env: Optional[Mapping[str, str]] = None) -> list[str]:
     return out
 
 
+def named_exactly(host: str, env: Optional[Mapping[str, str]] = None) -> bool:
+    """Is ``host`` allow-listed by its exact name (not only through a wildcard)? The operator has
+    then chosen that host, private or not; a host a wildcard admits is held to public addresses."""
+    return (host or "").lower() in allowed_patterns(env)
+
+
 def _needs_literal(host: str) -> bool:
     """Hosts a wildcard must never reach: loopback, link-local (cloud metadata), private and
     reserved ranges in any notation (``shared/ssrf.py`` reads an IPv6 address for the IPv4 address

@@ -7,9 +7,10 @@
 # Build context: the v0.12 carve root (compose `context: ../..`) — wider than its own dir because the
 # sealed contracts (transcript.v1 / workspace.v1 / unit.v1 / …) are loaded BY PATH at import; those frozen
 # files are vendored under /app so the walk-up resolves repo_root == /app.
-FROM python:3.12-slim
+# python:3.12-slim (Debian 13), pinned by digest; uv past its advisories (fixed in 0.11.15).
+FROM python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f
 
-RUN pip install --no-cache-dir uv==0.9.22
+RUN pip install --no-cache-dir uv==0.11.33
 
 ENV UV_LINK_MODE=copy \
     UV_PROJECT_ENVIRONMENT=/opt/venv \
@@ -30,11 +31,17 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # Pin Claude Code too: the launch passes --setting-sources (llm/claude_code.py), which 2.1.197 lacks,
 # and an unpinned global install is whatever the build cache or npm happened to hold. Node 22: the
 # pinned CLI declares engines.node >= 22.
-RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates curl gnupg && \
-    curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
-    apt-get install -y --no-install-recommends nodejs && \
+# Node comes from the official image, pinned by digest (the same one clients/terminal builds on), not
+# from a remote setup script run as root.
+COPY --from=node:22-trixie-slim@sha256:154ba2f4d6fec323d28e4f4bb86bba4677f1223391a1979cf521304e03a98dfa \
+     /usr/local/bin/node /usr/local/bin/node
+COPY --from=node:22-trixie-slim@sha256:154ba2f4d6fec323d28e4f4bb86bba4677f1223391a1979cf521304e03a98dfa \
+     /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
+RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && \
+    ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx && \
+    apt-get update && apt-get install -y --no-install-recommends git ca-certificates && \
     npm install -g @anthropic-ai/claude-code@2.1.293 @openai/codex@0.146.0 && \
-    apt-get purge -y curl gnupg && apt-get autoremove -y && apt-get clean && rm -rf /var/lib/apt/lists/*
+    apt-get clean && rm -rf /var/lib/apt/lists/*
 # No hook runs in a worker, from any scope: the managed settings file is read whatever
 # --setting-sources says (the launch also passes the same key with --settings).
 RUN mkdir -p /etc/claude-code && \

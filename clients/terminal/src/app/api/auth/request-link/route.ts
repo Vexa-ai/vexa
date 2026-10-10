@@ -32,12 +32,12 @@ import { mintMagicToken, safeNext, ttlSeconds } from "../magicToken";
 import { startLinkDelivery } from "../linkDelivery";
 import { takeLinkRequest } from "../linkRateLimit";
 import { CLIENT_ADDRESS_HEADER } from "../clientAddress.mjs";
+import { isWellFormedEmail } from "../emailAddress";
 
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
 
 const NO_STORE = { "Cache-Control": "no-store, no-cache, must-revalidate" } as const;
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /** Where the link points: the CONFIGURED public URL (`NEXTAUTH_URL`, else `TERMINAL_URL`), and nothing
  *  else. Never the request's Host or X-Forwarded-* headers — whoever asks for a link can set those,
@@ -69,7 +69,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Email is required" }, { status: 400, headers: NO_STORE });
   }
   const normalized = email.trim().toLowerCase();
-  if (!EMAIL_RE.test(normalized)) {
+  if (!isWellFormedEmail(normalized)) {
     return NextResponse.json({ error: "Invalid email format" }, { status: 400, headers: NO_STORE });
   }
 

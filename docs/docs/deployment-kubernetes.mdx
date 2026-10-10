@@ -247,10 +247,35 @@ runtime:
 | `tolerations` | `RUNTIME_K8S_BOT_TOLERATIONS` / `RUNTIME_K8S_AGENT_WORKER_TOLERATIONS` | `spec.tolerations`, replacing the runtime-wide ones |
 | `priorityClassName` | `RUNTIME_K8S_BOT_PRIORITY_CLASS_NAME` / `RUNTIME_K8S_AGENT_WORKER_PRIORITY_CLASS_NAME` | `spec.priorityClassName`; Kubernetes' own `system-*` classes are refused |
 | `imagePullSecrets` | `RUNTIME_K8S_BOT_IMAGE_PULL_SECRETS` / `RUNTIME_K8S_AGENT_WORKER_IMAGE_PULL_SECRETS` | `spec.imagePullSecrets`. Kubernetes then skips the ServiceAccount's own pull secrets for that Pod |
+| `capabilities` | `RUNTIME_K8S_BOT_CAPABILITIES` / `RUNTIME_K8S_AGENT_WORKER_CAPABILITIES` | the Linux capabilities the class's containers keep; every other one is dropped. `null` (the default) keeps the profile's own — none for a bot; `CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `FSETID`, `KILL`, `SETGID`, `SETUID` for a worker, which a root worker needs to give the model's tools a user of their own. `[]` keeps none (OpenShift's restricted SCC) |
+| `seccompProfile` | `RUNTIME_K8S_BOT_SECCOMP_PROFILE` / `RUNTIME_K8S_AGENT_WORKER_SECCOMP_PROFILE` | a `Localhost` seccomp profile for the class's containers, a path under the kubelet's seccomp root; empty means `RuntimeDefault`. For bots the chart sets it from `runtime.botSandbox` (below) while that is on |
 
-All empty by default, which adds nothing to a Pod. The runtime checks these values when it starts
-and refuses to boot on a malformed one, naming it. A caller cannot set any of them: they are not
-part of a `runtime.v1` `WorkloadSpec`, and the runtime drops a spec's `RUNTIME_K8S_*` env keys.
+The scheduling values are empty by default and add nothing to a Pod's placement. Every spawned Pod's
+container does get a security context: privilege escalation off, every capability dropped except the
+class's list above, the class's seccomp profile (`RuntimeDefault` unless one is named), and
+`runAsNonRoot` where the profile's image runs non-root (a meeting bot's does).
+
+`runtime.botSandbox` (on by default) gives meeting bots the seccomp profile Chromium needs to build its
+sandbox, `vexa/seccomp-userns.json`, and a `<release>-bot-seccomp` DaemonSet writes that file to
+`runtime.botSandbox.installer.kubeletSeccompDir` on each node; the DaemonSet needs a namespace that
+admits a hostPath volume. Where node files are managed another way, turn the installer off and point
+`localhostProfile` at the installed path (the chart README covers OpenShift). With `botSandbox` off,
+bots take `meetingBot.seccompProfile` if set and `RuntimeDefault` otherwise, and each bot without the
+profile logs that its browser runs without its sandbox.
+
+Two settings apply to the runtime as a whole:
+
+- `runtime.workloadScheduling.allowBroadTolerations` (`RUNTIME_K8S_ALLOW_BROAD_TOLERATIONS`, default
+  `false`): a toleration with no key, which tolerates every taint, or one for a control-plane or
+  system taint (`node-role.kubernetes.io/control-plane`, `…/master`, `CriticalAddonsOnly`) is refused
+  at boot unless this is `true`, in the runtime-wide `runtime.tolerations`/`global.tolerations` too.
+- `RUNTIME_K8S_INSTANCE`, which the chart sets to the Helm release name: every spawned Pod carries it
+  as the label `runtime.instance`, and the runtime's boot-time re-adoption selects on it, so two
+  releases in one namespace never adopt each other's Pods.
+
+The runtime checks all of these when it starts and refuses to boot on a malformed one, naming it. A
+caller cannot set any of them: they are not part of a `runtime.v1` `WorkloadSpec`, and the runtime
+drops a spec's `RUNTIME_K8S_*` env keys.
 
 <Warning>
 **Spawned-workload commands must exist in the target image under k8s (entrypoint-replace)

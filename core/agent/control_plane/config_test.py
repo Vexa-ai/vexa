@@ -53,21 +53,50 @@ HttpGet = Callable[[str, dict], tuple[int, str]]
 TranscribeProbe = Callable[[str, str], tuple[int, str]]
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A redirect is the endpoint's answer, never followed: following it would carry the API key to
+    whatever host the endpoint names, past the allow-list that admitted the endpoint."""
+
+    def redirect_request(self, *a, **kw):
+        return None
+
+
+_NO_REDIRECT = urllib.request.build_opener(_NoRedirect)
+
+
 def _post(url: str, payload: dict, headers: dict) -> tuple[int, str]:
     req = urllib.request.Request(url, data=json.dumps(payload).encode(),
                                  headers={"Content-Type": "application/json", **headers},
                                  method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=_TIMEOUT) as r:
+        with _NO_REDIRECT.open(req, timeout=_TIMEOUT) as r:
             return r.status, r.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as e:
         return e.code, e.read().decode("utf-8", "replace")
 
 
+def _subject_post(url: str, payload: dict, headers: dict) -> tuple[int, str]:
+    """``_post`` for an endpoint a PERSON chose: no redirects, ever (a redirect would carry their
+    key and our request somewhere else), and a host that only a wildcard admits is reached through
+    the outbound URL guard's pinned transport, so it must resolve to public addresses. A host the
+    operator allow-listed by its exact name is reached as named (a self-hosted model on a private
+    network is that operator's choice)."""
+    import httpx
+    from urllib.parse import urlsplit
+
+    from shared import ssrf
+
+    host = (urlsplit(url).hostname or "").lower()
+    transport = None if model_endpoint.named_exactly(host) else ssrf.build_pinned_sync_transport()
+    with httpx.Client(timeout=_TIMEOUT, follow_redirects=False, transport=transport) as c:
+        r = c.post(url, json=payload, headers=headers)
+        return r.status_code, r.text
+
+
 def _get(url: str, headers: dict) -> tuple[int, str]:
     req = urllib.request.Request(url, headers=headers, method="GET")
     try:
-        with urllib.request.urlopen(req, timeout=_TIMEOUT) as r:
+        with _NO_REDIRECT.open(req, timeout=_TIMEOUT) as r:
             return r.status, r.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as e:
         return e.code, e.read().decode("utf-8", "replace")
@@ -173,7 +202,7 @@ def test_custom_endpoint(base_url: str, api_key: str, model: str = "",
 
 
 def run_models_test(config: dict, env: Optional[dict] = None,
-                    creds_path: Optional[str] = None, post: HttpPost = _post) -> dict:
+                    creds_path: Optional[str] = None, post: Optional[HttpPost] = None) -> dict:
     """The EFFECTIVE model credential test: the route this subject's turn would take, as the
     dispatch decides it. The decision is not restated here: ``overlay_model_config`` (the operator
     gate, ``subject_route_env``, the model allowlist) runs on an empty env and the probe reads what
@@ -188,7 +217,9 @@ def run_models_test(config: dict, env: Optional[dict] = None,
       one is configured, else the mounted subscription file. A key the subject stored is not used
       on this route, so it is sent nowhere, and the summary says that nothing of theirs was tested.
 
-    A custom endpoint the gate refuses is reported as refused, and no request is made."""
+    A custom endpoint the gate refuses is reported as refused, and no request is made. The
+    subject's own endpoint is probed through ``_subject_post`` (no redirects; a wildcard-admitted
+    host only at public addresses); ``post``, when given, replaces both probes (tests)."""
     from control_plane.dispatch import overlay_model_config   # the dispatch's decision, reused
 
     env = env if env is not None else dict(os.environ)
@@ -200,7 +231,7 @@ def run_models_test(config: dict, env: Optional[dict] = None,
     cfg_url = model_endpoint.custom_base_url(cfg)
     if cfg_url and route.get("VEXA_LLM_BASE_URL") == cfg_url:
         out = test_custom_endpoint(route["VEXA_LLM_BASE_URL"], route["VEXA_LLM_API_KEY"], model,
-                                   post=post, extra_body=route["VEXA_LLM_EXTRA_BODY"])
+                                   post=post or _subject_post, extra_body=route["VEXA_LLM_EXTRA_BODY"])
         out["mode"], out["route"] = "custom", "subject"
     elif cfg_url:
         runner = route.get("VEXA_RUNNER") or (env.get("VEXA_RUNNER") or "").strip() or "claude-code"
@@ -209,7 +240,7 @@ def run_models_test(config: dict, env: Optional[dict] = None,
         out = _result(False, f"Refused before any request was made: {reason}")
         out["mode"], out["route"] = "custom", "subject"
     else:
-        out = _test_deployment_route(env, model, creds_path, post)
+        out = _test_deployment_route(env, model, creds_path, post or _post)
         out["route"] = "deployment"
         runner = route.get("VEXA_RUNNER") or (env.get("VEXA_RUNNER") or "").strip()
         if runner == "openai-agent":

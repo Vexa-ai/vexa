@@ -442,7 +442,10 @@ def unlink_inside(root, rel: str, *, allow=()) -> bool:
 
 
 
-_APPEND = os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+#: ``O_NONBLOCK`` so a FIFO planted at the name never holds the opener: with no reader the open
+#: fails at once, and with one the ``fstat`` below refuses it (a regular file ignores the flag).
+_APPEND = (os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK
+           | getattr(os, "O_CLOEXEC", 0))
 
 
 def append_text_inside(root, rel: str, text: str, *, mode: int = 0o600, allow=()) -> None:

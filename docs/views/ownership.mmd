@@ -21,10 +21,12 @@ flowchart LR
   imports_status[("<store>/.imports/{subject}/ (files)")]
   onboarding_research_state[("<store>/.onboarding-research/{sha256(workspace)}/ (files)")]
   rail_order[("agent:rail-order:{subject} (redis key)")]
+  signin_link_redeemed[("vexa:signin-link:redeemed:{jti} (redis key)")]
   redis_acl_users[("Redis ACL users (vexa-unit-*, vexa-bot-*)")]
   style redis_acl_users stroke-dasharray: 5 5,stroke-width:3px
   acl_units_index[("vexa:acl:units (redis hash)")]
   delegation_revoked[("vexa:delegation:revoked:{jti} (redis key)")]
+  delegation_live[("vexa:delegation:live:{jti} (redis key)")]
   delegation_records[("vexa:delegation:units + vexa:delegation:unit:{id} (redis set + hash)")]
   delegation_current[("vexa:delegation:current:{id} (redis key)")]
   unit_delegation[("unit:{id}:delegation (redis key)")]
@@ -67,11 +69,14 @@ flowchart LR
   agent_api -->|write| imports_status
   agent_api -->|write| onboarding_research_state
   agent_api -->|write| rail_order
+  admin_api -->|write| signin_link_redeemed
   agent_api -->|write| unit_in
   agent_api -->|write| redis_acl_users
   meeting_api -->|write| redis_acl_users
   agent_api -->|write| acl_units_index
   agent_api -->|write| delegation_revoked
+  agent_api -->|write| delegation_live
+  admin_api -.->|read| delegation_live
   admin_api -.->|read| delegation_revoked
   agent_api -->|write| delegation_records
   agent_api -->|write| delegation_current

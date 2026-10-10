@@ -38,6 +38,29 @@ and keeps Lite off both jammy apt's stale Redis 6.0.16 and source-available Redi
 > exception, only that the notice be preserved — which this file and the in-image
 > `/usr/local/share/valkey/LICENSE` satisfy.
 
+## Vendored files
+
+| Artifact | Version | License | Source | Shipped in | In-image path |
+| --- | --- | --- | --- | --- | --- |
+| `seccomp/default.json` (modified) | Docker Engine `29.6.2` | Apache-2.0 | [github.com/moby/profiles](https://github.com/moby/profiles) | `vexaai/v012-runtime`, `vexaai/vexa-lite`; installed on Kubernetes nodes by the chart | `/app/src/runtime_kernel/seccomp-userns.json` (runtime), `/app/runtime/src/runtime_kernel/seccomp-userns.json` (Lite), each with `seccomp-userns.LICENSE.txt` beside it |
+
+**`seccomp-userns.json`** — the seccomp profile meeting bots run under:
+[`core/runtime/src/runtime_kernel/seccomp-userns.json`](core/runtime/src/runtime_kernel/seccomp-userns.json)
+is Docker Engine 29.6.2's default profile (the Moby project's `seccomp/default.json`, as vendored
+in that release), **modified**: one rule is added, commented in the file itself, letting a process
+without `CAP_SYS_ADMIN` call `clone`/`unshare` for new namespaces and `chroot` (the kernel still
+asks for the capability inside the caller's own namespace), which Chromium's sandbox needs.
+Lite runs its container under it, the docker backend runs each bot's own container under it, and
+the Helm chart writes it to the nodes for bot Pods. The licence is the Apache License 2.0, the
+same as Vexa's; moby/profiles ships no NOTICE file. Full text:
+[`licenses/moby-profiles.LICENSE.txt`](licenses/moby-profiles.LICENSE.txt), copied beside the
+file in the runtime package (`seccomp-userns.LICENSE.txt`; the parity fact
+`moby-profiles-licence` keeps the two copies identical).
+
+> Apache-2.0 is a Category-A (permissive) license under ADR-0004; vendoring a modified file
+> requires no exception, only the licence text, a statement that it was changed, and the
+> attribution — which this file, the repository NOTICE and the in-image licence copy satisfy.
+
 ## Baked model weights
 
 | Artifact | Version (revision) | License | Source | Baked into | In-image path |

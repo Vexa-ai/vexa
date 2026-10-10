@@ -118,11 +118,42 @@ def test_sslmode_verify_full_checks_the_chain_and_the_host_name():
     assert args["ssl_context"].check_hostname is True
 
 
-def test_sslmode_verify_ca_checks_the_chain_only():
+def test_sslmode_verify_ca_checks_the_chain_only(tmp_path):
     import ssl
-    _, args, _ = pg8000_connection("postgresql+pg8000://u:p@db/flows?sslmode=verify-ca")
+    ca = _ca_file(tmp_path)
+    _, args, _ = pg8000_connection(f"postgresql+pg8000://u:p@db/flows?sslmode=verify-ca&sslrootcert={ca}")
     assert args["ssl_context"].verify_mode == ssl.CERT_REQUIRED
     assert args["ssl_context"].check_hostname is False
+    # only the named CA is trusted, not the system store
+    assert len(args["ssl_context"].get_ca_certs()) == 1
+
+
+@pytest.mark.parametrize("query", ["sslmode=verify-ca", "sslmode=verify-ca&sslrootcert=",
+                                   "sslmode=verify-ca&sslrootcert=system",
+                                   "sslmode=require&sslrootcert=system"])
+def test_a_public_ca_without_the_host_name_check_is_refused(query):
+    """verify-ca with no CA file would trust every public CA without checking the host name;
+    libpq refuses that combination, and so does flows."""
+    with pytest.raises(UnsupportedDialect) as e:
+        pg8000_connection(f"postgresql+pg8000://u:p@db/flows?{query}")
+    assert "verify-full" in str(e.value)
+
+
+def test_sslrootcert_system_is_verify_full_against_the_system_store():
+    import ssl
+    _, args, _ = pg8000_connection("postgresql+pg8000://u:p@db/flows?sslmode=verify-full&sslrootcert=system")
+    assert args["ssl_context"].verify_mode == ssl.CERT_REQUIRED
+    assert args["ssl_context"].check_hostname is True
+
+
+def _ca_file(tmp_path):
+    """A throwaway self-signed CA certificate, made at test time."""
+    import subprocess
+    key, crt = tmp_path / "ca.key", tmp_path / "ca.crt"
+    subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", str(key),
+                    "-out", str(crt), "-days", "1", "-subj", "/CN=flows-test-ca"],
+                   check=True, capture_output=True)
+    return crt
 
 
 def test_an_unknown_sslmode_is_refused_by_name():

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """no-user-namespaces <program> [args...] — run a Lite service unable to create user namespaces.
 
-The container's seccomp profile (deploy/lite/seccomp.json) lets an unprivileged process create a user
+The container's seccomp profile (core/runtime/src/runtime_kernel/seccomp-userns.json) lets an unprivileged process create a user
 namespace, for the meeting bots' Chromium sandbox. No service needs one, so supervisord starts every
 service but the runtime through this: it sets no_new_privs, installs the runtime's own user-namespace
 refusal (runtime_kernel.userns, loaded from its file — standard library only), and execs the program,

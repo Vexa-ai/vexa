@@ -51,6 +51,11 @@ describe("Google", () => {
       .toEqual({ ok: true, email: "ana@example.com", subject: "google:g-1" });
   });
 
+  it("refuses an email claim longer than 254 characters", () => {
+    expect(verifiedProviderIdentity("google",
+      { profile: { email: `${"a".repeat(243)}@example.com`, email_verified: true, sub: "g-1" } }).ok).toBe(false);
+  });
+
   it.each([false, "true", undefined, 1])("refuses email_verified=%s", (verified) => {
     expect(verifiedProviderIdentity("google", { profile: { email: "ana@example.com", email_verified: verified, sub: "g-1" } }).ok)
       .toBe(false);
@@ -65,7 +70,7 @@ describe("Google", () => {
 
   it("the sign-in callback admits with the verified address", async () => {
     expect(await signIn("google", { profile: { email: "Ana@Example.com", email_verified: true, sub: "g-1" } })).toBe(true);
-    expect(findOrCreateUserToken).toHaveBeenCalledWith("ana@example.com");
+    expect(findOrCreateUserToken).toHaveBeenCalledWith("ana@example.com", { subject: expect.stringMatching(/^(google|microsoft):/) });
   });
 });
 
@@ -103,7 +108,7 @@ describe("Microsoft", () => {
     expect(findOrCreateUserToken).not.toHaveBeenCalled();
     expect(await signIn("microsoft", { account: { id_token: idToken(msClaims({ xms_edov: true })) } }, "someone-else@example.com"))
       .toBe(true);
-    expect(findOrCreateUserToken).toHaveBeenCalledWith("ana@example.com");
+    expect(findOrCreateUserToken).toHaveBeenCalledWith("ana@example.com", { subject: expect.stringMatching(/^(google|microsoft):/) });
   });
 });
 

@@ -1584,6 +1584,27 @@
    }
   },
   {
+   "unique-id": "signin-link-redeemed",
+   "node-type": "data-asset",
+   "name": "vexa:signin-link:redeemed:{jti} (redis key)",
+   "description": "the one-use record of an emailed sign-in link (app/signin_links.py): admin-api sets it with NX when a terminal redeems the link and keeps it until the link would have expired, so a link signs in once across every terminal replica and restart",
+   "controls": {
+    "ownership": {
+     "description": "single writer (P23)",
+     "requirements": [
+      {
+       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "config": {
+        "writers": [
+         "admin-api"
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
    "unique-id": "workspaces-system",
    "node-type": "system",
    "name": "workspaces",
@@ -1653,6 +1674,34 @@
          "agent-api"
         ],
         "match": "vexa:delegation:revoked:|revoked_key\\(",
+        "op": "set"
+       }
+      }
+     ]
+    }
+   },
+   "metadata": [
+    {
+     "contract": "delegation.v1"
+    }
+   ]
+  },
+  {
+   "unique-id": "delegation-live",
+   "node-type": "data-asset",
+   "name": "vexa:delegation:live:{jti} (redis key)",
+   "description": "the positive record of a delegation token agent-api handed out and has not revoked: written when the token is recorded (before the spawn, and at each refresh), deleted when it is revoked, expiring with the token (control_plane/delegation_revocation.py); identity (admin-api) admits a verified vxd_ bearer only while this key exists and no revocation of it does, so a record the store evicted or never held refuses the token. The key name is held on both sides by fact delegation-live-key (ADR-0045)",
+   "controls": {
+    "ownership": {
+     "description": "single writer (P23)",
+     "requirements": [
+      {
+       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "config": {
+        "writers": [
+         "agent-api"
+        ],
+        "match": "vexa:delegation:live:|live_key\\(",
         "op": "set"
        }
       }
@@ -1858,6 +1907,7 @@
       "acl-units-index",
       "routine-state",
       "delegation-revoked",
+      "delegation-live",
       "delegation-records",
       "delegation-current",
       "unit-delegation",
@@ -1893,7 +1943,8 @@
       "identity.v1",
       "signin.v1",
       "identity-db",
-      "delegation.v1"
+      "delegation.v1",
+      "signin-link-redeemed"
      ]
     }
    }
@@ -2893,7 +2944,7 @@
      }
     }
    },
-   "description": "the terminal's server, with the internal secret: sign-in admission, the admin claim, the claim-code check and instance state (signin.v1), plus /internal/validate and the settings it edits for the admin",
+   "description": "the terminal's server, with the internal secret: sign-in admission, the admin claim, the claim-code check, instance state, the one-use redeem of an emailed sign-in link and the binding of an OAuth sign-in to its provider subject (signin.v1), plus /internal/validate and the settings it edits for the admin",
    "protocol": "HTTP",
    "metadata": [
     {
@@ -3455,6 +3506,25 @@
    ]
   },
   {
+   "unique-id": "admin-signin-link-record",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "admin-api"
+     },
+     "destination": {
+      "node": "signin-link-redeemed"
+     }
+    }
+   },
+   "description": "SET NX with the link's own expiry (at most an hour) when a terminal redeems an emailed sign-in link; a write that cannot be made refuses the sign-in",
+   "metadata": [
+    {
+     "access": "write"
+    }
+   ]
+  },
+  {
    "unique-id": "workspaces-composed",
    "relationship-type": {
     "composed-of": {
@@ -3579,6 +3649,44 @@
    "metadata": [
     {
      "access": "write"
+    }
+   ]
+  },
+  {
+   "unique-id": "aa-delegation-live",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "agent-api"
+     },
+     "destination": {
+      "node": "delegation-live"
+     }
+    }
+   },
+   "description": "SET live:<jti> for the token's life when it is recorded; DEL it when the token is revoked",
+   "metadata": [
+    {
+     "access": "write"
+    }
+   ]
+  },
+  {
+   "unique-id": "admin-delegation-live",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "admin-api"
+     },
+     "destination": {
+      "node": "delegation-live"
+     }
+    }
+   },
+   "description": "EXISTS live:<jti> for every verified vxd_ bearer; a token without it is refused (401), a store it cannot read refuses the token (503)",
+   "metadata": [
+    {
+     "access": "read"
     }
    ]
   },

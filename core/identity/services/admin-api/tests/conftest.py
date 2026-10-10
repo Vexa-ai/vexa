@@ -62,11 +62,16 @@ def redis_client():
 
 
 class FakeRevocationStore:
-    """The service Redis as `/internal/validate` sees it: the revoked-token keys agent-api writes
-    (app/delegation_revocation.py). `down` makes every read fail like an unreachable Redis."""
+    """The service Redis as `/internal/validate` sees it: the live and revoked keys agent-api writes
+    (app/delegation_revocation.py). Every token a test mints reads as recorded live by agent-api,
+    unless the test `evict`s its live key or `revoke`s it. `down` makes every read fail like an
+    unreachable Redis."""
+
+    LIVE = "vexa:delegation:live:"
 
     def __init__(self):
         self.keys: set[str] = set()
+        self.not_live: set[str] = set()
         self.down = False
         self.reads = 0
 
@@ -74,12 +79,46 @@ class FakeRevocationStore:
         from admin_api.app import delegation_revocation
 
         self.keys.add(delegation_revocation.REVOKED_PREFIX + jti)
+        self.not_live.add(jti)
+
+    def evict(self, jti: str) -> None:
+        """The live key gone without a revocation: evicted, expired early, or never written."""
+        self.not_live.add(jti)
 
     async def exists(self, key: str) -> int:
         self.reads += 1
         if self.down:
             raise ConnectionError("redis down")
+        if key.startswith(self.LIVE):
+            return int(key[len(self.LIVE):] not in self.not_live)
         return int(key in self.keys)
+
+
+class FakeLinkLedger:
+    """The service Redis as `/internal/signin-links/redeem` sees it (app/signin_links.py): SET NX
+    with an expiry. `down` makes every write fail like an unreachable Redis."""
+
+    def __init__(self):
+        self.keys: dict[str, int] = {}
+        self.down = False
+
+    async def set(self, key: str, value: str, *, nx: bool = False, ex: int | None = None):
+        if self.down:
+            raise ConnectionError("redis down")
+        if nx and key in self.keys:
+            return None
+        self.keys[key] = ex
+        return True
+
+
+@pytest.fixture(autouse=True)
+def link_ledger(monkeypatch):
+    """Every test redeems sign-in links against an in-memory ledger, never a real Redis."""
+    from admin_api.app import signin_links
+
+    ledger = FakeLinkLedger()
+    monkeypatch.setattr(signin_links, "_client", ledger)
+    return ledger
 
 
 @pytest.fixture(autouse=True)

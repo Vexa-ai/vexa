@@ -14,7 +14,7 @@ Two doors, and no third:
 - **Email magic link** — `request-link/` mails a signed, single-use link; `redeem/` verifies it and
   sets the cookies. Control of the mailbox is the proof of identity. `magicToken.ts` owns the token
   (HMAC-SHA256 over `{email, exp, jti}` with the link key, 15-minute default TTL capped at 60
-  minutes, in-process single-use ledger) and the `next=` open-redirect guard; `mailer.ts` is a dependency-free SMTP
+  minutes, single use across every replica through admin-api's record, `POST /internal/signin-links/redeem`) and the `next=` open-redirect guard; `mailer.ts` is a dependency-free SMTP
   client driven by the deployment's mail family, `VEXA_MAIL_SMTP_HOST` / `_PORT` / `_FROM` (+ optional
   `_USER`/`_PASSWORD`, `_SECURE`, `_TLS_INSECURE`), declared in `clients/terminal/config.v1.json`.
 
@@ -41,8 +41,9 @@ One link is both door and destination: `/api/auth/redeem?t=<token>&next=<relativ
 the deeplink the visitor was reaching for (`?ask=`, `?meeting=`, `?view=`), so a click lands them
 authenticated and where they meant to be, in one hop.
 
-`login/` — direct email login — is **development-only** and answers 403 on any other build. It was
-previously reachable in production for any address containing `test` (and, in minutes mode, for any
-address at all): a password-less bypass. To sign in against a deployed container, request a link and
-redeem it. `logout/` clears the vexa cookies and the NextAuth session cookies. `adminApi.ts` is the
+`login/` — direct email login — is **development-only** and answers 403 on any other build. To sign
+in against a deployed container, request a link and redeem it. `logout/` clears the vexa cookies and the NextAuth session cookies. `adminApi.ts` is the
 server-only admin-api client.
+
+The user-facing description, the end-to-end flow and the compliance notes are in
+[`docs/docs/authentication.mdx`](../../../../../../docs/docs/authentication.mdx).

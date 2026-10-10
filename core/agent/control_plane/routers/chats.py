@@ -59,9 +59,17 @@ class AgentChatNameBody(BaseModel):
     title: str = Field(max_length=300, description='a concise 3-7 word title naming the actual objective')
 
 
+#: A RAIL ROW KEY, as the terminal writes it: ``c:<chat session>`` or ``m:<meeting id>`` (a bare
+#: session id, as older clients sent, is still one). The part after the prefix is held to the same
+#: bound as every session id (``bodies.CHAT_SESSION_PATTERN``), so the stored order can never carry
+#: a path, a separator or anything long.
+RAIL_KEY_PATTERN = r"^(?:[cm]:)?[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+RailKey = Annotated[str, StringConstraints(pattern=RAIL_KEY_PATTERN)]
+
+
 class ChatOrderBody(BaseModel):
     model_config = ConfigDict(extra='forbid')
-    order: list[Annotated[SessionId, StringConstraints(min_length=1)]] = Field(max_length=5000)
+    order: list[RailKey] = Field(max_length=5000)
 
 
 def build(**d) -> APIRouter:

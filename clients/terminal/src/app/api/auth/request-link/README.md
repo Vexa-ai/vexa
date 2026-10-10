@@ -10,7 +10,8 @@
   here, or the mail went out (no user or allow-list enumeration; refusals and delivery failures are
   logged server-side). The admission question and the send run after the response
   (`../linkDelivery.ts`), so the answer takes the same time either way.
-- `400` for a missing/malformed address, `503` when the instance has no usable signing secret
+- `400` for a missing/malformed address — including any address longer than 254 characters, which
+  is refused before the address pattern runs (`../emailAddress.ts`) — `503` when the instance has no usable signing secret
   (`../authSecret.mjs`) or no configured public URL, the same for every address.
 - The link's origin is the configured public URL (`NEXTAUTH_URL`, else `TERMINAL_URL`; a plain
   absolute http(s) URL), never the request's `Host` or `X-Forwarded-*` headers.
@@ -19,7 +20,8 @@
   `MAGIC_LINK_RATE_WINDOW_SECONDS`). Past the client limit: `429` with `Retry-After`, before admin-api
   is asked. Past the address limit: the usual `200`, and nothing is sent. The client address is the
   one `server.mjs` stamps (`../clientAddress.mjs`): the TCP peer, or the rightmost
-  `X-Forwarded-For` entry when the peer is a private address or named in `TERMINAL_TRUSTED_PROXIES`.
+  `X-Forwarded-For` entry when the peer is loopback or named in `TERMINAL_TRUSTED_PROXIES` (addresses
+  or CIDR ranges). A private peer is not trusted for being private.
 - `next` is reduced to a site-relative path (`safeNext`) BEFORE it is written into the mail.
 - Creates nothing and mints no session — that happens at `../redeem`, after the recipient proves
   they hold the mailbox.

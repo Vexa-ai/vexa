@@ -8,9 +8,10 @@
 # agent_api validates AT THE SEAM (P8): contracts.py loads the sealed transcript.v1 / workspace.v1 /
 # invoke.v1 / unit.v1 schemas BY PATH at import (walking up to find `meetings/contracts/...` and
 # `agent/contracts/...`), so those frozen files must be vendored into the image alongside src/.
-FROM python:3.12-slim
+# python:3.12-slim (Debian 13), pinned by digest; uv past its advisories (fixed in 0.11.15).
+FROM python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f
 
-RUN pip install --no-cache-dir uv==0.9.22
+RUN pip install --no-cache-dir uv==0.11.33
 
 ENV UV_LINK_MODE=copy \
     UV_PROJECT_ENVIRONMENT=/opt/venv \

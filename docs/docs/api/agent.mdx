@@ -89,7 +89,9 @@ There is **no** top-level `subject`, `workspace_repo`, or `plan` field.
 `session` is 1–128 characters from `A-Z a-z 0-9 . _ -`, starting with a letter or digit (empty or
 absent means `main`); any other value is a `422`, here and at every other door that takes a session:
 `/api/chat/submit`, `/api/chat/reset`, `GET /api/chat/pending?session=`, `GET /api/sessions/{session}/history`,
-`/api/chat/name`, `/api/chat/name/agent`, `/api/chat/target` and each entry of `PUT /api/chat/order`.
+`/api/chat/name`, `/api/chat/name/agent` and `/api/chat/target`. Each entry of `PUT /api/chat/order` is a
+rail row key, `c:<session>` or `m:<meeting id>` (or a bare session), the part after the prefix held to the
+same rule.
 Returns **Server-Sent Events**; each `data:` line is one frame:
 
 | frame | fields |
@@ -126,8 +128,14 @@ body of a refused dispatch: `{ detail, fault }` with `503` when the agent runtim
 | `gateway` | `unreachable` |
 
 `POST /api/chat/reset` `{ session? }` → `{ "ok": true }` · `GET /api/sessions` →
-`{ "sessions": [...] }` · `GET /api/sessions/{session}/history` → `{ "turns": [...] }` (tolerant — a
-missing transcript returns `{ "turns": [] }`).
+`{ "sessions": [...] }` · `GET /api/sessions/{session}/history` → `{ "turns": [...] }`: a session the
+caller has no thread for is a `404`; a thread whose transcript is missing or empty returns
+`{ "turns": [] }`.
+
+`GET /api/chat/pending?session=` → `{ pending: [{ entry, id, kind, target, display, at, blocked? }], cursor, fault? }`:
+what the chat submitted that its agent has not taken yet. When a typed fault is stopping the queue,
+each row carries it as `blocked` and the top level once more as `fault`; it clears the moment the agent
+takes anything.
 
 ## Routines
 
@@ -441,8 +449,10 @@ The agent domain's Connections tools are served by the gateway's one MCP server
 `secret_service_call` and `onboarding_research`. Each is one `/api/connections/*` or
 `/api/onboarding/research` route with a typed body; a meetings-only installation does
 not expose them, and without a credential broker they answer that Connections are not
-configured. A worker dispatched without a person in the loop is refused every one of
-them except `connections_status`.
+configured (`onboarding_research` with `action: status` still reports stored progress, because it
+reads no account). A worker dispatched without a person in the loop is refused every one of
+them except `connections_status`. What onboarding research reads, its receipts and its failure
+modes are on [Onboarding research and Extend](/how-to/onboarding-research).
 
 A request returns a connection reference and `awaiting_user` or an existing
 `ready` status. Minutes opens **Connections** on the right, where the user chooses

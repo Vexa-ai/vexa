@@ -57,8 +57,14 @@ def pg8000_connection(url: str):
       disable, allow   no TLS
       prefer (default) TLS when the server offers it, unverified; plaintext when it refuses
       require          TLS, unverified; verified like verify-ca when sslrootcert names a CA file
-      verify-ca        TLS, certificate chain checked against sslrootcert or the system store
-      verify-full      verify-ca, and the server's host name checked against its certificate
+      verify-ca        TLS, certificate chain checked against the CA file sslrootcert names
+                       (required: libpq refuses verify-ca with no root certificate)
+      verify-full      the chain checked against sslrootcert, and the server's host name checked
+                       against its certificate. With no sslrootcert, or sslrootcert=system, the
+                       system store is the trust root, as libpq's sslrootcert=system
+
+    sslrootcert=system is accepted with verify-full only, as libpq does: a public CA is trusted
+    only together with the host name check.
 
     Returns `(url, connect_args, fallback_to_plaintext)`. Pure: nothing here touches the network.
     """
@@ -75,8 +81,16 @@ def pg8000_connection(url: str):
     timeout = query.pop("connect_timeout", None)
     if timeout:
         connect_args["timeout"] = int(timeout)
+    if rootcert == "system" and mode != "verify-full":
+        raise UnsupportedDialect(f"sslrootcert=system needs sslmode=verify-full, not {mode!r}: the system "
+                                 "store trusts every public CA, so the host name must be checked too")
+    if mode == "verify-ca" and not rootcert:
+        raise UnsupportedDialect("sslmode=verify-ca needs sslrootcert naming the CA file to check the "
+                                 "server against (libpq refuses verify-ca without one); use verify-full "
+                                 "to trust the system store with the host name checked")
     if mode in ("verify-ca", "verify-full") or (mode == "require" and rootcert):
-        context = ssl.create_default_context(cafile=rootcert or None)
+        cafile = None if rootcert in (None, "", "system") else rootcert
+        context = ssl.create_default_context(cafile=cafile)
         context.check_hostname = mode == "verify-full"
         connect_args["ssl_context"] = context
     elif mode in ("prefer", "require"):

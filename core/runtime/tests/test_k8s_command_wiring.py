@@ -28,12 +28,13 @@ def _capture_submitted_pods(monkeypatch) -> list:
     pods: list[dict] = []
 
     def fake_kubectl(*args, check=True, stdin=None):
-        if stdin:
-            pods.append(json.loads(stdin))
+        obj = json.loads(stdin) if stdin else {}
+        if obj.get("kind", "Pod") == "Pod" and stdin:
+            pods.append(obj)
 
         class _R:
             returncode = 0
-            stdout = ""
+            stdout = json.dumps({"metadata": {"uid": "pod-uid"}}) if args[:1] == ("create",) else ""
             stderr = ""
 
         return _R()

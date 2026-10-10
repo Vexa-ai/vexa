@@ -13,6 +13,29 @@
   Xvfb's — no VNC, Valkey's password off its command line, root's runtime directory and the self-host
   keys root-only).
 
+- `test_admin_token.py` — offline: Lite's admin key is never a published value. `make up` replaces an
+  unset or published `ADMIN_TOKEN` in `.env` with a minted key, the entrypoint refuses a published
+  one, and the refused list is the one admin-api, meeting-api and flows use.
+
+- `test_database_password.py`, `test_dispatch_signing_key.py`, `test_terminal_secret.py` — offline: no
+  published database password, dispatch signing key or terminal secret; each is minted (and the last
+  two kept across restarts) or refused.
+
+- `test_env_file_hygiene.py`, `test_image_by_path_reads.py`, `test_runtime_environment.py`,
+  `test_workspace_store.py` — offline: `.env.example` is a valid `--env-file`; the image ships every
+  file its services read by path; what each program's environment holds; agent-api's workspace dir
+  and the runtime's mount target are one path.
+
+- `service_checks.py` — LIVE, piped into the booted container by `make -C deploy/lite test`: the
+  services' admin key is none of the published values, and admin-api reads its delegation store as
+  it admits a worker token: the function `/internal/validate` awaits (found in `validate.py`), run
+  with admin-api's environment, admits a probe token only while its live record exists and no
+  revocation does. `test_service_checks.py` (offline) fails if that function is renamed.
+
+- `test_image_supply.py` — offline: the runtime image and Lite's runtime venv install nothing
+  outside `uv.lock` (the ASGI server is a locked `production` group), uv is a release past the fixed
+  advisories, and Lite takes it as a checksum-verified binary rather than a piped script.
+
 - `program_environments.py`, `child_identities.py` — LIVE, run by `make -C deploy/lite test` inside the
   booted container: the runtime caller credential has its three holders only; a worker for a numeric
   and a named subject and a bot started through the runtime run as non-root uids of their own with

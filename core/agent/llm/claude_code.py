@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import stat
 import subprocess
 from pathlib import Path
@@ -27,7 +28,8 @@ from llm.errors import looks_like_auth_failure, preflight_provider_guard, provid
 from llm import fault_wire
 from llm import faults as provider_faults
 from llm import workspace_paths as wpaths
-from llm.ports import HarnessExec, close_event_stream, harness_identity_kwargs, harness_subprocess_env
+from llm.ports import (HarnessExec, close_event_stream, harness_identity_kwargs, harness_subprocess_env,
+                       max_output_tokens)
 from llm.claude_skills import _link_skills_into_home
 from llm.tool_events import (_BOT_TOOLS, _FOCUS_TOOLS, _OPEN_TOOLS, _TERMS_TOOLS, _WRITER_TOOLS,
                              _bot_artifact, _open_event, _published_terms, _short,
@@ -204,7 +206,8 @@ def parse_stream_json(lines: Iterable[str]) -> Iterator[dict]:
                 }
                 if done["ok"] and api_error and str(reply or "").strip() in ("", api_error.strip()):
                     done["ok"] = False      # a "success" whose only answer was the provider's refusal
-                fault = (_provider_fault(str(reply or "") or api_error, sdk_error, model_id)
+                fault = (_provider_fault(str(reply or "") or api_error, sdk_error, model_id,
+                                         status=obj.get("api_error_status"))
                          if not done["ok"] else None)
                 if not done["ok"] and looks_like_auth_failure(reply):
                     # The CLI's own auth text ("Not logged in · Please run /login") is an internal of
@@ -246,19 +249,36 @@ def parse_stream_json(lines: Iterable[str]) -> Iterator[dict]:
         close_event_stream(lines)
 
 
+#: The CLI's own wording for a provider's refusal: ``API Error: 402 <the provider's message>``.
+_API_ERROR_TEXT = re.compile(r"^\s*api error:\s*\d{3}\b", re.IGNORECASE)
+
+
 def _is_api_error(obj: dict, text: str) -> bool:
     """Is this assistant text block the CLI relaying a provider failure, not the model speaking?
-    The CLI marks its own synthetic messages: an SDK ``error`` label, or the ``<synthetic>`` model."""
-    if obj.get("error"):
+
+    Measured on CLI 2.1.293 against an endpoint answering OpenRouter's 402: the CLI emits ONE
+    assistant message with ``model: "<synthetic>"``, ``error: "unknown"`` and
+    ``is_api_error_message: true`` whose text is ``API Error: 402 <message>``, then a ``result``
+    with ``is_error: true`` and ``api_error_status: 402``. Any of its marks is enough; the bare
+    ``API Error: <status>`` prefix is read too, so a build that drops the marks still cannot put
+    the provider's text in the chat as if the agent had said it."""
+    if obj.get("error") or obj.get("is_api_error_message") is True:
+        return True
+    if _API_ERROR_TEXT.match(str(text)):
         return True
     model = str((obj.get("message") or {}).get("model") or "")
     return model == "<synthetic>" and str(text).lstrip().lower().startswith("api error")
 
 
-def _provider_fault(text: str, sdk_error: str, model: str) -> "provider_faults.ProviderFault | None":
-    """The typed fault for what the CLI reported, against the endpoint it was pointed at."""
+def _provider_fault(text: str, sdk_error: str, model: str,
+                    status: object = None) -> "provider_faults.ProviderFault | None":
+    """The typed fault for what the CLI reported, against the endpoint it was pointed at. ``status``
+    is the result's ``api_error_status`` when the CLI wrote one — the provider's HTTP status, read
+    as such rather than out of the prose."""
     host = provider_host()
-    return provider_faults.classify(text=text or None, sdk_error=sdk_error or None, model=model,
+    code = status if isinstance(status, int) and not isinstance(status, bool) and status >= 400 else None
+    return provider_faults.classify(status=code, text=text or None, sdk_error=sdk_error or None,
+                                    model=model,
                                     provider=host if host != "unknown" else "api.anthropic.com")
 
 
@@ -375,6 +395,11 @@ def _cli_env() -> dict[str, str]:
     workspace's ``CLAUDE.md`` loading as project memory."""
     env = harness_subprocess_env()
     env["CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD"] = "1"
+    # THE OUTPUT CAP (`llm.ports.max_output_tokens`). The CLI asks for 32000 output tokens unless
+    # told otherwise; the deployment's one dial is mapped onto the CLI's own variable here.
+    cap = max_output_tokens()
+    if cap is not None:
+        env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = str(cap)
     return env
 
 
@@ -499,27 +524,40 @@ def _link_chat_into_workspace(work: Path) -> None:
     # The continuity root is a mount the model's tools can write (``_system``), so a level of it may
     # be a link the turn planted: each level is created and opened without following one, and a
     # link anywhere skips the chat link (the turn still runs, without cross-turn resume).
+    # The HOME side is acted on through the descriptor that was checked, never by name again: the
+    # `projects` entry is looked at, replaced and made relative to HOME/.claude's own descriptor.
     ws_projects = _nofollow_dirs(work, ".claude", "projects")
-    home_claude = _nofollow_dirs(Path(os.environ.get("HOME", "/root")), ".claude")
-    if ws_projects is None or home_claude is None:
+    try:
+        home_fd = wpaths.dir_fd_inside(Path(os.environ.get("HOME", "/root")), (".claude",), create=True)
+    except (OSError, wpaths.PathRefused):
+        home_fd = None
+    if ws_projects is None or home_fd is None:
         logger.warning("chat continuity not linked: a level of %s/.claude/projects or of HOME/.claude "
                        "is a link or not a directory", work)
         return
-    link = home_claude / "projects"
     try:
-        if link.is_symlink():
-            if os.readlink(link) == str(ws_projects):
-                return
-            link.unlink()
-        elif link.is_dir():
-            if any(link.iterdir()):
-                return  # real transcripts live here — never delete, skip the link
-            link.rmdir()  # empty dir: safe to replace, nothing can be lost
-        elif link.exists():
-            return  # some other filesystem object — don't clobber
-        link.symlink_to(ws_projects, target_is_directory=True)
+        try:
+            st = os.stat("projects", dir_fd=home_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            st = None
+        if st is not None:
+            if stat.S_ISLNK(st.st_mode):
+                if os.readlink("projects", dir_fd=home_fd) == str(ws_projects):
+                    return
+                os.unlink("projects", dir_fd=home_fd)
+            elif stat.S_ISDIR(st.st_mode):
+                try:
+                    # empty only: real transcripts live in a non-empty one — never delete, skip the link
+                    os.rmdir("projects", dir_fd=home_fd)
+                except OSError:
+                    return
+            else:
+                return  # some other filesystem object — don't clobber
+        os.symlink(str(ws_projects), "projects", target_is_directory=True, dir_fd=home_fd)
     except OSError:
         pass  # best-effort; a fresh turn still works, just without cross-turn resume
+    finally:
+        os.close(home_fd)
 
 
 #: The dispatch's mark on a worker whose model route is the person's OWN endpoint

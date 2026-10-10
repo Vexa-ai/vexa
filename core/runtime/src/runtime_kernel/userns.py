@@ -1,6 +1,6 @@
 """userns.py — take away a process's ability to create user namespaces, for good.
 
-Lite runs its container under a seccomp profile (deploy/lite/seccomp.json) that, unlike Docker's
+Lite runs its container under a seccomp profile (seccomp-userns.json beside this file) that, unlike Docker's
 default, lets an unprivileged process create a user namespace: Chromium's sandbox is built on one,
 and a meeting bot's browser renders pages nobody here controls. Nothing else in the container needs
 it, and inside a user namespace an ordinary process is "root" to a large part of the kernel. So every
@@ -16,6 +16,11 @@ Filters only add up, so a process that has this one cannot shed it. Installing i
 ``no_new_privs`` (set here first) or CAP_SYS_ADMIN. x86_64 and aarch64 only: elsewhere
 :func:`refusal` raises, and the caller refuses to start the child.
 
+The other half is the profile that grants it (``seccomp-userns.json`` beside this file: Docker
+Engine's default profile plus one rule). Lite runs its container under it; the docker backend runs a
+meeting bot's own container under it (:func:`container_profile`); on Kubernetes the chart installs it
+on the nodes and bot Pods name it (``RUNTIME_K8S_BOT_SECCOMP_PROFILE``). Its licence is beside it.
+
 Standard library only: the Lite service wrapper (deploy/lite/bin/no-user-namespaces) loads this file
 on its own, outside the runtime's package.
 """
@@ -23,9 +28,14 @@ from __future__ import annotations
 
 import ctypes
 import errno
+import json
+import os
 import platform
 import struct
 from typing import Callable
+
+#: The seccomp profile that lets a meeting bot's browser build its sandbox (see the module docstring).
+PROFILE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "seccomp-userns.json")
 
 CLONE_NEWUSER = 0x10000000
 X32_SYSCALL_BIT = 0x40000000
@@ -120,3 +130,10 @@ def refusal(arch: str | None = None) -> Callable[[], None]:
 def refuse_user_namespaces() -> None:
     """Install the filter in this process now (it must be single-threaded)."""
     refusal()()
+
+
+def container_profile(path: str = PROFILE_PATH) -> str:
+    """The profile as the Docker API takes it (``HostConfig.SecurityOpt`` ``seccomp=<json>``): the
+    file's JSON, compact. Raises OSError/ValueError when the file is missing or not JSON."""
+    with open(path, encoding="utf-8") as f:
+        return json.dumps(json.load(f), separators=(",", ":"))

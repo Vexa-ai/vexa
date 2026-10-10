@@ -31,6 +31,10 @@ import {
   getAuthenticatedBrowserArgs,
   makeEphemeralProfileDir,
   removeProfileDir,
+  restrictNavigation,
+  authenticatedNavigationDomains,
+  withSiteIsolation,
+  type AuthPlatform,
   type Page,
   type BrowserContext,
 } from '@vexa/remote-browser';
@@ -569,6 +573,13 @@ export interface BrowserSession {
  * remote-browser auth args, so the page the JoinDriver receives is configured identically to
  * what @vexa/join expects.  // L4 (O6/VM): live-validated against a real meeting.
  */
+/** The stored-session platform behind each meeting platform (Jitsi has none). */
+const AUTH_PLATFORM: Partial<Record<Invocation['platform'], AuthPlatform>> = {
+  google_meet: 'google',
+  teams: 'teams',
+  zoom: 'zoom',
+};
+
 export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
   // Every bot gets its OWN profile dir — concurrent bots sharing one dir die on Chromium's
   // SingletonLock (#478: joining → failed <1s, "Opening in existing browser session").
@@ -582,6 +593,13 @@ export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
     s3AccessKey: inv.s3AccessKey,
     s3SecretKey: inv.s3SecretKey,
   };
+  // An authenticated browser carries the deployment's stored session: it navigates only to the
+  // platform's own domains, and the meeting host must be one of them (checked before the stored
+  // session is restored — a host outside them refuses the launch). Its sites are isolated from each other
+  // (--site-per-process). A guest browser is neither (a Jitsi meeting may be on any host).
+  const authDomains = inv.authenticated
+    ? authenticatedNavigationDomains(AUTH_PLATFORM[inv.platform] ?? null, inv.meetingUrl)
+    : null;
   if (inv.authenticated && inv.userdataS3Path) {
     // Fail-loud restore: an unreachable/misconfigured store surfaces as a typed SessionSyncError
     // naming the session-restore step (the composition root drives it to a clean terminal failed)
@@ -593,8 +611,14 @@ export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
   // getAuthenticatedBrowserArgs() is the minimal clean set remote-browser uses for signed-in
   // joins; getJoinBrowserArgs() adds the fake-device / autoplay flags the join lane needs. The
   // join args win on conflict (later wins in Chromium arg parsing).
-  const args = [...getAuthenticatedBrowserArgs(), ...getJoinBrowserArgs()];
+  const baseArgs = [...getAuthenticatedBrowserArgs(), ...getJoinBrowserArgs()];
+  const args = authDomains ? withSiteIsolation(baseArgs) : baseArgs;
   const { context, page } = await launchPersistentBrowser({ dataDir, args });
+
+  // ...and its navigations are held to those domains from before the first one.
+  if (inv.authenticated) {
+    await restrictNavigation(context, authDomains ?? []);
+  }
 
   // Voice-agent gate the page reads to decide whether to keep the mic hot (production parity).
   await context.addInitScript(`window.__vexa_voice_agent_enabled = ${!!inv.voiceAgentEnabled};`);

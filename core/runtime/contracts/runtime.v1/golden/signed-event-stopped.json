@@ -1,5 +1,7 @@
 {
   "token": "runtime-caller-token-for-tests-0123456789abcdef",
+  "url": "http://meeting-api:8080/runtime/callback",
+  "timestamp": 1791504000,
   "event": {
     "workloadId": "mtg-1-abcdef12",
     "state": "stopped",
@@ -7,5 +9,5 @@
     "exitCode": 0,
     "stopReason": "completed"
   },
-  "signature": "v1=2d3b0c1312be4c69a6144019dbd480b5c0f21c905b818e496c3f98cd30a2e286"
+  "signature": "t=1791504000,v2=f1ed1283cda387b2dbe249719eb9546925955eba96f7829baee866ab264c41c0"
 }

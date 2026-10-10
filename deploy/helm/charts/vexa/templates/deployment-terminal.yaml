@@ -77,6 +77,10 @@ spec:
                 secretKeyRef:
                   name: {{ include "vexa.adminTokenSecretName" . }}
                   key: INTERNAL_API_SECRET
+            # Whose X-Forwarded-For names the client (the sign-in link's per-client limit). Only these
+            # peers and loopback are believed; see values.yaml terminal.trustedProxies.
+            - name: TERMINAL_TRUSTED_PROXIES
+              value: {{ .Values.terminal.trustedProxies | default (ternary "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,fc00::/7" "" (eq .Values.terminal.service.type "ClusterIP")) | quote }}
             {{- if .Values.terminal.publicUrl }}
             # External origin (set when ingress/LB fronts the terminal) — cookie security + OAuth callbacks.
             - name: NEXTAUTH_URL

@@ -43,9 +43,10 @@ def register(mcp, *, call, guard):
         return json.dumps(body) if status == ok else _error(status, body, fallback, instruction)
 
     @tool
-    def connection_request(provider: Literal['google_email', 'google_calendar', 'custom_secret', 'github'],
+    def connection_request(provider: Literal['google_email', 'google_calendar', 'custom_secret'],
                            label: str = '', new_account: bool = False, setup: dict | None = None) -> str:
-        """Request Gmail, Calendar, GitHub or custom-secret setup in Minutes' trusted Connections panel.
+        """Request Gmail, Calendar or custom-secret setup in Minutes' trusted Connections panel (Git
+        tokens are added by the person in Connections → Git, not requested).
         Never request passwords, tokens, secret calendar URLs or authorization codes in chat. Check
         connections_status afterward; a request is not a connected account or working sync."""
         payload = {'provider': provider, 'label': label, 'new_account': new_account}

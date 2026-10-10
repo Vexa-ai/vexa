@@ -2,7 +2,7 @@
 # Transcription worker (GPU) — faster-whisper / CTranslate2 on CUDA. CTranslate2 ships its own
 # CUDA support (no PyTorch); the cuda-cudnn runtime base provides the libs. Build context is the
 # carve root (compose `context: ../..`) to match the other core services.
-FROM nvidia/cuda:12.3.2-cudnn9-runtime-ubuntu22.04
+FROM nvidia/cuda:12.3.2-cudnn9-runtime-ubuntu22.04@sha256:fa44193567d1908f7ca1f3abf8623ce9c63bc8cba7bcfdb32702eb04d326f7a8
 
 ENV DEBIAN_FRONTEND=noninteractive \
     UV_LINK_MODE=copy \
@@ -16,7 +16,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 RUN apt-get update && apt-get install -y --no-install-recommends \
         python3 python3-pip curl libsndfile1 ffmpeg \
     && rm -rf /var/lib/apt/lists/*
-RUN pip3 install --no-cache-dir uv==0.9.22
+RUN pip3 install --no-cache-dir uv==0.11.33
 # The cuda base ships system python 3.10, but faster-whisper's onnxruntime needs cp311+.
 # uv fetches a managed CPython 3.12 (UV_PYTHON) and builds /opt/venv on it.
 RUN uv python install 3.12

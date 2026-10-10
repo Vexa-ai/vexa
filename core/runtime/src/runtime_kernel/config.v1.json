@@ -290,6 +290,24 @@
       ]
     },
     {
+      "key": "RUNTIME_K8S_BOT_SECCOMP_PROFILE",
+      "class": "defaulted",
+      "default": "(unset — the container runtime's default profile, under which a bot's browser runs without Chromium's sandbox)",
+      "description": "k8s backend: a Localhost seccomp profile every SPAWNED meeting-bot container runs under, as a path relative to the kubelet's seccomp root (the chart installs runtime_kernel/seccomp-userns.json at vexa/seccomp-userns.json and sets this, so the bot's Chromium can build its sandbox). Validated at boot (a plain relative path). Never taken from a workload spec",
+      "targets": [
+        "helm"
+      ]
+    },
+    {
+      "key": "RUNTIME_K8S_AGENT_WORKER_SECCOMP_PROFILE",
+      "class": "defaulted",
+      "default": "(unset — the container runtime's default profile)",
+      "description": "k8s backend: a Localhost seccomp profile every SPAWNED agent-worker container runs under instead of RuntimeDefault, as a path relative to the kubelet's seccomp root. Validated at boot. Never taken from a workload spec",
+      "targets": [
+        "helm"
+      ]
+    },
+    {
       "key": "RUNTIME_K8S_ALLOW_BROAD_TOLERATIONS",
       "class": "defaulted",
       "default": "false",
@@ -588,6 +606,60 @@
       ]
     },
     {
+      "key": "VEXA_AGENT_MAX_TOOL_CALLS_CHAT",
+      "class": "defaulted",
+      "default": "40",
+      "description": "openai-agent harness: tool-call ceiling for a CHAT turn (falls back to VEXA_AGENT_MAX_TOOL_CALLS); forwarded into spawned workers",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_AGENT_MAX_TOOL_CALLS_JOB",
+      "class": "defaulted",
+      "default": "160",
+      "description": "openai-agent harness: tool-call ceiling for a background JOB, per window (falls back to VEXA_AGENT_JOB_MAX_TOOL_CALLS, then VEXA_AGENT_MAX_TOOL_CALLS); forwarded into spawned workers",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_AGENT_MAX_TOOL_CALLS_ROOM",
+      "class": "defaulted",
+      "default": "80",
+      "description": "openai-agent harness: tool-call ceiling for a post-meeting ROOM run (falls back to VEXA_AGENT_MAX_TOOL_CALLS); forwarded into spawned workers",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_AGENT_MAX_TOOL_CALLS_FLOW",
+      "class": "defaulted",
+      "default": "40",
+      "description": "openai-agent harness: tool-call ceiling for one FLOW step (falls back to VEXA_AGENT_MAX_TOOL_CALLS); forwarded into spawned workers",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_AGENT_JOB_MAX_TOOL_CALLS",
+      "class": "defaulted",
+      "default": "160",
+      "description": "openai-agent harness: a background job's tool-call ceiling per window, never below a turn's; forwarded into spawned workers",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_AGENT_JOB_MAX_TURN_SEC",
+      "class": "defaulted",
+      "default": "3600",
+      "description": "openai-agent harness: a background job's whole wall-clock ceiling (s), never below a turn's; forwarded into spawned workers",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
       "key": "VEXA_AGENT_MAX_TURN_SEC",
       "class": "defaulted",
       "default": "900",
@@ -599,8 +671,17 @@
     {
       "key": "VEXA_AGENT_CONTEXT_TOKENS",
       "class": "defaulted",
-      "default": "24000",
-      "description": "openai-agent harness: estimated-token ceiling on a request; forwarded into spawned workers",
+      "default": "131072",
+      "description": "openai-agent harness: estimated-token budget on a request, deployment-wide; a model route's own window stamped by the dispatch wins over it; forwarded into spawned workers",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_AGENT_MAX_OUTPUT_TOKENS",
+      "class": "defaulted",
+      "default": "(unset \u2014 each harness's own default)",
+      "description": "every harness: the output-token cap a model request asks for (claude-code receives it as CLAUDE_CODE_MAX_OUTPUT_TOKENS, openai-agent sends it as max_tokens; codex does not read it: Codex 0.146.0 has no setting for the model's output cap (its own max_output_tokens fields are per-tool exec budgets), so a Codex turn asks for Codex's default); empty keeps each harness's own default (the claude CLI asks for 32000). Forwarded into spawned workers",
       "targets": [
         "compose"
       ]

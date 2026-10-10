@@ -19,6 +19,9 @@ dependencies = [
 # and converge the schema over a sync psycopg URL; the service itself runs on asyncpg (Apache-2.0).
 # psycopg is LGPL-3.0-only, so it must stay here, out of the shipped tree.
 dev = ["pytest>=8", "testcontainers[postgres,redis]>=4.0", "psycopg[binary]>=3.1"]
+# What only the image runs: the ASGI server and the production database/storage clients. Installed
+# from the lock with `uv sync --group production` by the Dockerfile and Lite, never `uv pip install`d beside it.
+production = ["uvicorn[standard]>=0.34,<1", "sqlalchemy[asyncio]>=2.0.36,<2.1"]
 
 [tool.uv]
 package = false

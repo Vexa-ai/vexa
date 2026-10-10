@@ -311,6 +311,8 @@ def default_registry() -> ProfileRegistry:
                     # namespaces, which its browser's sandbox needs; no other child may.
                     scheduling=_profile_scheduling("meeting-bot"),
                     user_namespaces=True,
+                    # The bot image runs as a non-root uid (Chromium will not sandbox a root browser).
+                    run_as_non_root=True,
                 ),
                 idle_timeout_sec=0,  # 0 ⇒ managed externally; enforcement skips it
                 base_env=bot_tuning_env,

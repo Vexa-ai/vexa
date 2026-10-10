@@ -68,6 +68,7 @@ system agent  # the execution domain: a trigger becomes one governed agent turn 
   data-asset acl-units-index [writers: agent-api]
   data-asset routine-state [writers: agent-api]
   data-asset delegation-revoked [writers: agent-api]
+  data-asset delegation-live [writers: agent-api]
   data-asset delegation-records [writers: agent-api]
   data-asset delegation-current [writers: agent-api]
   data-asset unit-delegation [writers: agent-api]
@@ -88,6 +89,7 @@ system identity  # access + audit; owns the durable DB
   contract signin.v1
   data-asset identity-db [writers: admin-api]
   contract delegation.v1
+  data-asset signin-link-redeemed [writers: admin-api]
 
 system runtime-system  # workload spawn (bot/agent containers)
   contract runtime.v1
@@ -171,7 +173,7 @@ edges:
   admin-api -write-> postgres
   terminal -req-> gateway  # every REST call a browser makes, via gateway (the terminal's server also calls admin-api and agent-api directly: term-admin-internal, term-agent-internal)
   terminal -req-> gateway  # live WS via gateway
-  terminal -req-> admin-api  # the terminal's server, with the internal secret: sign-in admission, the admin claim, the claim-code check and instance state (signin.v1), plus /internal/validate and the settings it edits for the admin
+  terminal -req-> admin-api  # the terminal's server, with the internal secret: sign-in admission, the admin claim, the claim-code check, instance state, the one-use redeem of an emailed sign-in link and the binding of an OAuth sign-in to its provider subject (signin.v1), plus /internal/validate and the settings it edits for the admin
   terminal -req-> agent-api  # the terminal's server, with the internal secret: POST /internal/scaffolds (a sign-in's arrival) and GET /internal/has-history
   dashboard -req-> gateway  # dashboard → gateway REST (hosted-compat aliases; the hosted-proven wiring)
   dashboard -req-> gateway  # dashboard → gateway /ws (live transcript view)
@@ -198,12 +200,15 @@ edges:
   agent-api -write-> imports-status  # repository import status (workspace_import.py)
   agent-api -write-> onboarding-research-state  # onboarding research checkpoints (onboarding_research.py)
   agent-api -write-> rail-order  # SET/GET the chat rail order
+  admin-api -write-> signin-link-redeemed  # SET NX with the link's own expiry (at most an hour) when a terminal redeems an emailed sign-in link; a write that cannot be made refuses the sign-in
   claude-plugin -req-> gateway  # the plugin's HTTP MCP server entry: Claude Code calls the gateway's /mcp with the person's Vexa API key; the plugin itself runs no code
   agent-api -write-> unit-in  # XADD the person's next message to a warm unit, signed with the unit's key
   agent-api -write-> redis-acl-users  # ACL SETUSER/DELUSER a worker's own user per dispatch; restore after a Redis restart
   meeting-api -write-> redis-acl-users  # ACL SETUSER/DELUSER a bot's own user per session; restore after a Redis restart
   agent-api -write-> acl-units-index  # HSET/HDEL the worker users it defined
   agent-api -write-> delegation-revoked  # SET revoked:<jti> for the token's remaining life when the runtime no longer runs its unit
+  agent-api -write-> delegation-live  # SET live:<jti> for the token's life when it is recorded; DEL it when the token is revoked
+  admin-api -read-> delegation-live  # EXISTS live:<jti> for every verified vxd_ bearer; a token without it is refused (401), a store it cannot read refuses the token (503)
   admin-api -read-> delegation-revoked  # EXISTS revoked:<jti> for every verified vxd_ bearer; a store it cannot read refuses the token (503), API keys never read it
   agent-api -write-> delegation-records  # HSET/SADD a token's jti against its unit before the spawn and at each refresh; HDEL/SREM as tokens are revoked or expire
   agent-api -write-> delegation-current  # SET the unit's current token at dispatch and at each refresh, and GET it to re-mint

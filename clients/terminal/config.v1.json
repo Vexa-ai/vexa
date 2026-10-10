@@ -42,14 +42,21 @@
       "key": "VEXA_MAIL_SMTP_SECURE",
       "class": "defaulted",
       "default": "0",
-      "description": "1 = implicit TLS (a provider's :465 endpoint). STARTTLS on :587 is not supported.",
+      "description": "1 = implicit TLS (a provider's :465 endpoint). Without it, STARTTLS is used whenever the relay offers it (a provider's :587); with VEXA_MAIL_SMTP_USER and VEXA_MAIL_SMTP_PASSWORD set, a relay that offers neither is refused, since credentials are sent only over TLS.",
       "targets": ["compose", "helm", "lite"]
     },
     {
       "key": "VEXA_MAIL_SMTP_TLS_INSECURE",
       "class": "defaulted",
       "default": "0",
-      "description": "1 = skip the relay's certificate check under VEXA_MAIL_SMTP_SECURE. Development only.",
+      "description": "1 = skip the relay's certificate check, for implicit TLS and STARTTLS alike. Development only.",
+      "targets": ["compose", "helm", "lite"]
+    },
+    {
+      "key": "TERMINAL_TRUSTED_PROXIES",
+      "class": "defaulted",
+      "default": "",
+      "description": "The proxies whose X-Forwarded-For names the client for the sign-in link's per-client rate limit: addresses or CIDR ranges, comma-separated. Only these and loopback are believed; any other peer is the client itself. Helm defaults it to the in-cluster private ranges while the terminal's Service is ClusterIP.",
       "targets": ["compose", "helm", "lite"]
     },
     {

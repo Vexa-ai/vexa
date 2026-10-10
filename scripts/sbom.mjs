@@ -236,6 +236,20 @@ const BAKED_VALKEY = {
   comment: "Source-built (BUILD_TLS=no) into vexaai/vexa-lite; valkey-server + valkey-cli at /usr/local/bin, notice at /usr/local/share/valkey/LICENSE. compose/helm pin valkey/valkey:8-alpine (user-pulled, in image-licenses.json). #653.",
 };
 
+// The seccomp profile meeting bots run under (core/runtime/src/runtime_kernel/seccomp-userns.json): Docker
+// Engine 29.6.2's default profile from moby/profiles, with one rule added (user namespaces, for the
+// bots' Chromium sandbox). A modified Apache-2.0 file VENDORED into the runtime and Lite images, so no
+// dependency scan sees it; its licence travels beside it (seccomp-userns.LICENSE.txt).
+const VENDORED_SECCOMP = {
+  eco: "github", name: "moby/profiles seccomp/default.json", version: "docker-v29.6.2",
+  licenseDeclared: "Apache-2.0", licenseConcluded: "Apache-2.0",
+  copyrightText: "Copyright Docker, Inc. and the Moby project contributors",
+  downloadLocation: "https://github.com/moby/profiles/blob/main/seccomp/default.json",
+  purl: "pkg:github/moby/profiles",
+  supplier: "Organization: The Moby Project",
+  comment: "Modified (one rule added) and vendored as core/runtime/src/runtime_kernel/seccomp-userns.json into vexaai/v012-runtime (/app/src/runtime_kernel/) and vexaai/vexa-lite (/app/runtime/src/runtime_kernel/), licence beside it; the Helm chart installs it on nodes for bot Pods. Notice: repo NOTICE + THIRD_PARTY_LICENSES.md.",
+};
+
 // ── assemble the SPDX 2.3 document ──────────────────────────────────────────────
 function pkgObject(p, id) {
   const externalRefs = p.purl ? [{ referenceCategory: "PACKAGE-MANAGER", referenceType: "purl", referenceLocator: p.purl }] : [];
@@ -284,6 +298,10 @@ const valkeyId = spdxId("Package", "github", "valkey", "8.1.9");
 packages.push(pkgObject(BAKED_VALKEY, valkeyId));
 relationships.push({ spdxElementId: ROOT_ID, relatedSpdxElement: valkeyId, relationshipType: "CONTAINS" });
 
+const seccompId = spdxId("Package", "github", "moby-profiles-seccomp", "docker-v29.6.2");
+packages.push(pkgObject(VENDORED_SECCOMP, seccompId));
+relationships.push({ spdxElementId: ROOT_ID, relatedSpdxElement: seccompId, relationshipType: "CONTAINS" });
+
 for (const apt of liteApt) {
   const id = spdxId("Package", apt.eco, apt.name, apt.version);
   packages.push(pkgObject(apt, id));
@@ -305,7 +323,7 @@ const doc = {
   creationInfo: {
     created: CREATED,
     creators: ["Tool: vexa-sbom (scripts/sbom.mjs)", "Organization: Vexa"],
-    comment: `Coverage: npm deps=${npm.length} (declared licences via pnpm), pip deps=${pip.length} (inventory only, licence=NOASSERTION — pip-licenses owed per ADR-0009), Lite final-stage apt packages=${liteApt.length} (source-declared names; version/licence=NOASSERTION pending image enrichment), baked artifacts=2 (pyannote model weights + Valkey engine, fully specified). Non-dependency baked artifacts sit outside gate:licenses (audited by gate:image-licenses); see THIRD_PARTY_LICENSES.md.`,
+    comment: `Coverage: npm deps=${npm.length} (declared licences via pnpm), pip deps=${pip.length} (inventory only, licence=NOASSERTION — pip-licenses owed per ADR-0009), Lite final-stage apt packages=${liteApt.length} (source-declared names; version/licence=NOASSERTION pending image enrichment), baked artifacts=3 (pyannote model weights + Valkey engine + the vendored, modified moby seccomp profile, fully specified). Non-dependency baked artifacts sit outside gate:licenses (audited by gate:image-licenses); see THIRD_PARTY_LICENSES.md.`,
   },
   packages,
   relationships,

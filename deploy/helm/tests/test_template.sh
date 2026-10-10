@@ -155,6 +155,38 @@ check_hard "$RENDER_HARD" RUNTIME_K8S_BOT_CAPABILITIES '"[\"KILL\"]"'
 check_hard "$RENDER_HARD" RUNTIME_K8S_ALLOW_BROAD_TOLERATIONS '"true"'
 [ "$hard_ok" -eq 1 ] && echo "  OK: spawned-Pod capabilities, broad-toleration opt-in and the release instance render" || fail=1
 
+# Meeting bots' Chromium sandbox (runtime.botSandbox): bot Pods name the Localhost profile that
+# allows user namespaces for their container only, and a DaemonSet installs it on the nodes from
+# the runtime image — root only to write the kubelet's directory: no capability, no escalation, a
+# read-only root filesystem, no API token. Off: RuntimeDefault, no DaemonSet. Installer off (the
+# OpenShift / Security Profiles Operator route): the named path, no DaemonSet. A path that leaves
+# the kubelet's seccomp root does not render.
+sb_ok=1
+check_sb() { local got; got="$(envval "$2" "$1")"; [ "$got" = "$3" ] || { echo "  FAIL: $2 — want $3 got '${got}'"; sb_ok=0; }; }
+DS="$(awk 'BEGIN{RS="\n---\n"} /kind: DaemonSet/ && /component: bot-seccomp/' <<< "$RENDER")"
+check_sb "$RENDER" RUNTIME_K8S_BOT_SECCOMP_PROFILE '"vexa/seccomp-userns.json"'
+check_sb "$RENDER" RUNTIME_K8S_AGENT_WORKER_SECCOMP_PROFILE '""'
+for want in 'automountServiceAccountToken: false' 'runAsUser: 0' 'allowPrivilegeEscalation: false' \
+            'readOnlyRootFilesystem: true' 'drop: \["ALL"\]' 'path: "/var/lib/kubelet/seccomp"' \
+            'type: DirectoryOrCreate' 'cp /app/src/runtime_kernel/seccomp-userns.json' \
+            'dest="/host-seccomp/vexa/seccomp-userns.json"' 'image: "vexaai/v012-runtime:'; do
+  grep -qE -- "$want" <<< "$DS" || { echo "  FAIL: bot-seccomp DaemonSet lacks: $want"; sb_ok=0; }
+done
+grep -qE 'privileged: true|hostNetwork|hostPID|add:' <<< "$DS" && { echo "  FAIL: bot-seccomp DaemonSet is privileged"; sb_ok=0; }
+RENDER_SB_OFF="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set runtime.botSandbox.enabled=false)"
+check_sb "$RENDER_SB_OFF" RUNTIME_K8S_BOT_SECCOMP_PROFILE '""'
+grep -q 'component: bot-seccomp' <<< "$RENDER_SB_OFF" && { echo "  FAIL: a DaemonSet with the sandbox off"; sb_ok=0; }
+RENDER_SB_SPO="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" \
+  --set runtime.botSandbox.installer.enabled=false --set runtime.botSandbox.localhostProfile=operator/vexa/bot-userns.json)"
+check_sb "$RENDER_SB_SPO" RUNTIME_K8S_BOT_SECCOMP_PROFILE '"operator/vexa/bot-userns.json"'
+grep -q 'component: bot-seccomp' <<< "$RENDER_SB_SPO" && { echo "  FAIL: a DaemonSet with the installer off"; sb_ok=0; }
+grep -q 'component: bot-seccomp' <<< "$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set runtime.backend=docker)" \
+  && { echo "  FAIL: a DaemonSet on the docker backend"; sb_ok=0; }
+if helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set runtime.botSandbox.localhostProfile=../etc/x.json >/dev/null 2>&1; then
+  echo "  FAIL: a profile path outside the kubelet's seccomp root rendered"; sb_ok=0
+fi
+[ "$sb_ok" -eq 1 ] && echo "  OK: bot Pods name the user-namespace profile; its installer is unprivileged but root; off and SPO routes render none" || fail=1
+
 # #770: pod topology spread. Empty default (values-test sets nothing) must render NOTHING — the
 # field is optional, so a no-spread chart is byte-identical to a chart without it (single-node /
 # k3s installs keep working). This is the red→green control direction: nothing here, everything
@@ -1062,6 +1094,51 @@ upgrade_render="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yam
 if grep -q 'postgres-password' <<< "$upgrade_render"; then
   echo "  FAIL: the postgres-password hook rendered without a published live Secret"; fail=1
 else echo "  OK: no postgres-password hook without a published live Secret"; fi
+# Its run is live-only (lookup), so its source is held here: the hook's rights go when it fails as
+# well as when it succeeds, and no password is ever on a kubectl command line.
+HOOK_SRC="$CHART/templates/job-postgres-password.yaml"
+if [ "$(grep -c 'hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed' "$HOOK_SRC")" -eq 3 ] \
+   && ! grep -qE 'patch secret[^|]*-p "' "$HOOK_SRC" && grep -q -- '--patch-file /dev/stdin' "$HOOK_SRC"; then
+  echo "  OK: the rotation hook's rights are removed on failure too; its patches go on stdin"
+else echo "  FAIL: the rotation hook keeps its rights after a failure or puts a value on a command line"; fail=1; fi
+
+# N-10: a policy that names the flows tier names this release's flows Pods (name + instance labels,
+# which the flows Pods now carry), never any Pod in the namespace with a flows component label.
+NP_FLOWS="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true \
+  | awk 'BEGIN{RS="\n---\n"} /kind: NetworkPolicy/')"
+loose="$(awk '{ buf[NR%9]=$0 }
+  /values: \[flows-worker|values: \["flows-worker"|component: flows-api$/ {
+    ok=0; for (i=1;i<9;i++) if (buf[(NR-i)%9] ~ /app.kubernetes.io\/instance: vexa/) ok=1
+    if (!ok) n++ }
+  END { print n+0 }' <<< "$NP_FLOWS")"
+pod_labels="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true --show-only templates/flows.yaml \
+  | grep -c 'app.kubernetes.io/instance: vexa' || true)"
+if [ "$loose" -eq 0 ] && [ "$(grep -c 'flows' <<< "$NP_FLOWS")" -gt 0 ] && [ "$pod_labels" -ge 4 ]; then
+  echo "  OK: every policy peer for the flows tier carries the release's labels, and so do its Pods and Service"
+else echo "  FAIL: $loose flows policy peer(s) match on the component label alone (flows Pod/Service labels: $pod_labels)"; fail=1; fi
+
+# Redis holds the delegation live and revocation records (R6-12): it never evicts. The render passes
+# noeviction and a maxmemory below the container's memory limit, and refuses any eviction policy.
+redis_doc="$(awk 'BEGIN{RS="\n---\n"} /kind: Deployment/ && /component: redis/' <<< "$RENDER")"
+policy="$(grep -A1 -- '"--maxmemory-policy"' <<< "$redis_doc" | tail -1 | tr -d ' "-')"
+maxmem="$(grep -A1 -- '"--maxmemory"' <<< "$redis_doc" | tail -1 | tr -d ' "-')"
+if [ "$policy" = "noeviction" ] && [ "$maxmem" = "768mb" ] && grep -q 'memory: 1Gi' <<< "$redis_doc"; then
+  echo "  OK: Redis runs noeviction with maxmemory (768mb) under its 1Gi limit"
+else echo "  FAIL: Redis policy '$policy', maxmemory '$maxmem' — it must never evict security state"; fail=1; fi
+for bad in allkeys-lru volatile-lru allkeys-random volatile-ttl; do
+  if helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set redis.maxmemoryPolicy="$bad" >/dev/null 2>&1; then
+    echo "  FAIL: redis.maxmemoryPolicy=$bad rendered"; fail=1
+  fi
+done
+echo "  OK: an eviction policy for Redis is refused at render"
+
+# The runtime creates each spawned Pod's credential Secret and may do nothing else with Secrets.
+role="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --show-only templates/rbac-runtime.yaml \
+  | sed -n '/^kind: Role$/,/^---/p' | grep -v '^ *#')"
+if grep -A1 'resources: \["secrets"\]' <<< "$role" | grep -q 'verbs: \["create"\]$' \
+   && [ "$(grep -ci 'secret' <<< "$role")" -eq 1 ]; then
+  echo "  OK: the runtime may create Secrets (a spawned Pod's credential env) and nothing more"
+else echo "  FAIL: the runtime's Role over Secrets is not create-only"; fail=1; fi
 
 # N-7: the namespace default-deny, both directions, with explicit allows for the chart's Pods.
 np_doc() { awk -v n="name: $1" '$0 ~ "^  "n"$"{f=1} f{print} f&&/^---/{exit}' <<< "$RENDER"; }
@@ -1138,5 +1215,51 @@ fboth="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set 
   --set flows.existingSecret=flows-key --set flows.apiKey=inline-test-key 2>&1 || true)"
 if grep -q 'flows.apiKey and flows.existingSecret are both set' <<< "$fboth"; then echo "  OK: flows.apiKey with flows.existingSecret is refused"
 else echo "  FAIL: flows.apiKey with flows.existingSecret rendered"; fail=1; fi
+
+# The terminal believes X-Forwarded-For only from the proxies it is told about. ClusterIP (only the
+# ingress and pods reach it): the in-cluster ranges. Any other Service type: nothing by default.
+tp() { grep -A1 'name: TERMINAL_TRUSTED_PROXIES' <<< "$1" | sed -n 's/.*value: //p'; }
+if [ "$(tp "$RENDER")" = '"10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,fc00::/7"' ]; then
+  echo "  OK: terminal trusts the in-cluster ranges behind a ClusterIP Service"
+else echo "  FAIL: terminal TERMINAL_TRUSTED_PROXIES behind ClusterIP: $(tp "$RENDER")"; fail=1; fi
+tlb="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set terminal.service.type=LoadBalancer)"
+if [ "$(tp "$tlb")" = '""' ]; then echo "  OK: a LoadBalancer terminal trusts no proxy unless one is named"
+else echo "  FAIL: LoadBalancer terminal TERMINAL_TRUSTED_PROXIES: $(tp "$tlb")"; fail=1; fi
+tnamed="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set terminal.service.type=LoadBalancer --set terminal.trustedProxies=203.0.113.10)"
+if [ "$(tp "$tnamed")" = '"203.0.113.10"' ]; then echo "  OK: terminal.trustedProxies is passed through as named"
+else echo "  FAIL: named TERMINAL_TRUSTED_PROXIES: $(tp "$tnamed")"; fail=1; fi
+
+# The flows tier is matched by release, not by component alone: its Pods carry the chart's
+# selector labels, and every NetworkPolicy podSelector, the flows-api Service selector and the flows
+# Pod templates that name a flows component also name this release, so another release's flows Pods
+# in the namespace are not peers. (The Deployments' own selectors stay as they are: immutable.)
+flows_np="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true)"
+# Prints each such block that names a flows component without this release's instance label.
+loose="$(awk '
+  function ind(s) { match(s, /^ */); return RLENGTH }
+  function check(i,   d, j, blk, f, k) {
+    d = ind(line[i]); blk = line[i]; f = (line[i] ~ /flows-(worker|api|mailbox)/); k = 0
+    for (j = i + 1; j <= n && ind(line[j]) > d; j++) {
+      blk = blk "\n" line[j]
+      if (line[j] ~ /flows-(worker|api|mailbox)/) f = 1
+      if (line[j] ~ /app.kubernetes.io\/instance: vexa/) k = 1
+    }
+    if (f && !k) print kind ": " blk "\n=="
+  }
+  function flush(   i) {
+    for (i = 1; i <= n; i++) {
+      if (kind == "NetworkPolicy" && line[i] ~ /^ *(- )?podSelector:/) check(i)
+      if (kind == "Service" && line[i] ~ /^  selector:/) check(i)
+      if (kind == "Deployment" && line[i] ~ /^      labels:/) check(i)
+    }
+    n = 0; kind = ""
+  }
+  /^---/ { flush(); next }
+  /^kind: / { kind = $2 }
+  { line[++n] = $0 }
+  END { flush() }' <<< "$flows_np")"
+if [ -z "$loose" ] && grep -q 'app.kubernetes.io/component: flows-api' <<< "$flows_np"; then
+  echo "  OK: every policy, Service and Pod template naming a flows component also names this release"
+else echo "  FAIL: flows matched by component alone:"; echo "$loose" | head -40; fail=1; fi
 
 [ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }

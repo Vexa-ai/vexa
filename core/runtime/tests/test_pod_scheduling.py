@@ -34,6 +34,23 @@ STEALTH_TOLERATION = {"key": "vexa.ai/pool", "operator": "Equal", "value": "stea
 PLACEMENT_FIELDS = ("nodeSelector", "tolerations", "priorityClassName", "imagePullSecrets")
 
 
+def _pods_into(submitted: list):
+    """A kubectl stand-in: Pod manifests are kept, a created object answers with a uid (the
+    workload's credential Secret is owned by it)."""
+    class _R:
+        returncode, stderr = 0, ""
+
+        def __init__(self, stdout=""):
+            self.stdout = stdout
+
+    def fake(*args, check=True, stdin=None):
+        obj = json.loads(stdin) if stdin else {}
+        if stdin and obj.get("kind") == "Pod":
+            submitted.append(obj)
+        return _R(json.dumps({"metadata": {"uid": "pod-uid"}}) if args[:1] == ("create",) else "")
+    return fake
+
+
 @pytest.fixture(autouse=True)
 def _clean(monkeypatch):
     monkeypatch.setenv("BROWSER_IMAGE", "bot:test")
@@ -128,8 +145,7 @@ def test_the_submitted_pod_carries_the_profiles_placement(monkeypatch):
     """End to end through the kernel and the k8s backend's real spawn path (kubectl faked)."""
     _stealth(monkeypatch, BOT, priority="vexa-stealth", secret="regcred")
     submitted = []
-    monkeypatch.setattr(k8s_backend, "_kubectl",
-                        lambda *a, check=True, stdin=None: submitted.append(json.loads(stdin)) if stdin else None)
+    monkeypatch.setattr(k8s_backend, "_kubectl", _pods_into(submitted))
     rt = Runtime(backend=K8sBackend(namespace="ns"), profiles=default_registry(), grace_sec=0.1,
                  workspace_store=StoreConfig())
     rt.create(WorkloadSpec(workloadId="mtg-1", profile="meeting-bot", env={"VEXA_BOT_CONFIG": "{}"}))
@@ -192,8 +208,7 @@ def test_a_malformed_value_stops_the_production_boot(monkeypatch):
 def test_a_spec_env_cannot_place_the_pod(monkeypatch):
     monkeypatch.setenv(BOT + "PRIORITY_CLASS_NAME", "vexa-stealth")
     submitted = []
-    monkeypatch.setattr(k8s_backend, "_kubectl",
-                        lambda *a, check=True, stdin=None: submitted.append(json.loads(stdin)) if stdin else None)
+    monkeypatch.setattr(k8s_backend, "_kubectl", _pods_into(submitted))
     rt = Runtime(backend=K8sBackend(namespace="ns"), profiles=default_registry(), grace_sec=0.1,
                  workspace_store=StoreConfig())
     hostile = {
@@ -283,9 +298,28 @@ def test_spawned_pods_drop_every_capability_but_the_profiles(monkeypatch):
         assert sc["allowPrivilegeEscalation"] is False
         assert sc["capabilities"]["drop"] == ["ALL"]
         assert sc["seccompProfile"] == {"type": "RuntimeDefault"}
-        assert "runAsNonRoot" not in sc                      # both shipped images start as root
+    assert bot["runAsNonRoot"] is True                       # the bot image runs as a non-root uid
+    assert "runAsNonRoot" not in worker                      # the worker image starts as root
     assert "add" not in bot["capabilities"]
     assert worker["capabilities"]["add"] == list(WORKER_CAPABILITIES)
+
+
+def test_bot_pods_run_under_the_node_installed_profile_the_operator_names(monkeypatch):
+    """The chart installs the user-namespace profile on the nodes and names it for meeting bots: their
+    Pods run under it (Localhost), and only theirs. A path that is not a plain relative one is
+    refused at boot."""
+    monkeypatch.setenv("RUNTIME_K8S_BOT_SECCOMP_PROFILE", "vexa/seccomp-userns.json")
+    bot = _pod("meeting-bot")["spec"]["containers"][0]["securityContext"]
+    worker = _pod("agent")["spec"]["containers"][0]["securityContext"]
+    assert bot["seccompProfile"] == {"type": "Localhost", "localhostProfile": "vexa/seccomp-userns.json"}
+    assert worker["seccompProfile"] == {"type": "RuntimeDefault"}
+    monkeypatch.setenv("RUNTIME_K8S_BOT_SECCOMP_PROFILE", "operator/vexa/bot-userns.json")   # the SPO's path shape
+    assert _pod("meeting-bot")["spec"]["containers"][0]["securityContext"]["seccompProfile"]["localhostProfile"] \
+        == "operator/vexa/bot-userns.json"
+    for bad in ("/etc/x.json", "../x.json", "vexa/../x.json", "a b.json", "vexa//x.json", "x" * 300):
+        monkeypatch.setenv("RUNTIME_K8S_BOT_SECCOMP_PROFILE", bad)
+        with pytest.raises(ValueError):
+            default_registry()
 
 
 def test_the_operator_narrows_a_class_capabilities(monkeypatch):

@@ -471,12 +471,16 @@ def test_context_budget_emits_an_event_and_shrinks_the_request(tmp_path, monkeyp
     monkeypatch.setenv("VEXA_AGENT_CONTEXT_TOKENS", "300")
     seen = []
     h = _harness(_server([_msg("", [("c1", "Read", {"file_path": str(tmp_path / "big.md")})]),
+                          _msg("", [("c2", "Read", {"file_path": str(tmp_path / "small.md")})]),
                           _msg("ok")], seen))
     (tmp_path / "big.md").write_text("x" * 40000)
+    (tmp_path / "small.md").write_text("small")
     h.prepare(tmp_path)
     evs = _events(h, tmp_path, "read it", allowed_tools=["Read"])
     assert any(e["type"] == "context-trimmed" for e in evs)
-    assert len(json.dumps(seen[1]["messages"])) < 40000
+    # the older round's result is compacted once a newer round exists; the newest is never touched
+    assert len(json.dumps(seen[2]["messages"])) < 40000
+    assert any(m.get("content") == "small" for m in seen[2]["messages"])
 
 
 def test_file_tools_refuse_a_path_outside_the_mounts(tmp_path):
@@ -898,17 +902,19 @@ def test_a_streamed_tool_call_still_answers_the_turn(tmp_path, monkeypatch):
 
 
 def test_a_trimmed_turn_says_so_on_done(tmp_path, monkeypatch):
-    """F89: `context-trimmed` had no consumer anywhere. The turn is COMPLETE — it just answered from
-    less — so it stays ok=True and reports what it gave up."""
+    """F89 kept, quietly (founder 2026-10-10): the turn is COMPLETE — it answered from a compacted
+    history — so it stays ok=True and carries the count for the activity line. It never carries a
+    `reason`, which the client renders as the turn's stop line under the reply."""
     monkeypatch.setenv("VEXA_AGENT_CONTEXT_TOKENS", "300")
     h = _harness(_server([_msg("", [("c1", "Read", {"file_path": str(tmp_path / "big.md")})]),
+                          _msg("", [("c2", "Read", {"file_path": str(tmp_path / "big.md")})]),
                           _msg("ok")]))
     (tmp_path / "big.md").write_text("x" * 40000)
     h.prepare(tmp_path)
     evs = _events(h, tmp_path, "read it", allowed_tools=["Read"])
     done = evs[-1]
-    assert done["type"] == "done" and done["ok"] is True
-    assert "context-trimmed" in done["reason"]
+    assert done["type"] == "done" and done["ok"] is True and done["reply"] == "ok"
+    assert done["compacted"] >= 1 and "reason" not in done
 
 
 # ── the web tools inside the loop (the adapter's own unit tests live in test_llm_web_tools.py) ───
@@ -1026,6 +1032,8 @@ def test_chat_continuation_stops_after_the_configured_number_of_windows(tmp_path
     assert sum(1 for e in evs if e["type"] == "tool-call") == 9      # 3 windows of 3
     assert done["ok"] is False and "tool-call budget" in done["reason"]
     assert done["act"]["label"] == "Continue"
+    # the line reports the whole turn, not the last window's 3 of 3
+    assert "after 9 of 9 steps" in done["reason"], done["reason"]
 
 
 def test_no_continuations_means_the_hard_cap(tmp_path, monkeypatch):
@@ -1078,3 +1086,40 @@ def test_agent_api_refuses_a_malformed_continuation_bound_at_boot(monkeypatch, b
     monkeypatch.setenv("VEXA_AGENT_MAX_CHAT_CONTINUATIONS", bad)
     with pytest.raises(ValidationError):
         Settings()
+
+
+# ── the budget is the model's window; compaction never drops a person's words (2026-10-10) ──────
+
+def test_with_no_budget_set_a_long_chat_is_not_trimmed_at_24k(tmp_path, monkeypatch):
+    """The founder's chat: 85 messages dropped at a 24000-token default on a model with a 131k
+    window. With nothing set, the default is the large window — a chat of ~60k tokens goes whole."""
+    monkeypatch.delenv("VEXA_AGENT_CONTEXT_TOKENS", raising=False)
+    history = []
+    for i in range(45):
+        history += [{"role": "user", "content": f"question {i} " + "w" * 2600},
+                    {"role": "assistant", "content": f"answer {i} " + "v" * 2600}]
+    history.append({"role": "user", "content": "and now?"})
+    from llm.openai_agent import _DEFAULT_CONTEXT_TOKENS, _est_tokens
+    assert _est_tokens(history) > 24_000
+    sent, trimmed = trim_messages(history, _DEFAULT_CONTEXT_TOKENS)
+    assert trimmed == 0 and len(sent) == len(history)
+
+
+def test_compaction_never_drops_or_shortens_a_persons_message_or_the_latest_exchange():
+    history = []
+    for i in range(10):
+        history += [{"role": "user", "content": f"q{i} " + "u" * 900},
+                    {"role": "assistant", "content": "", "tool_calls": [
+                        {"id": f"c{i}", "type": "function", "function": {"name": "Read", "arguments": "{}"}}]},
+                    {"role": "tool", "tool_call_id": f"c{i}", "content": "r" * 4000},
+                    {"role": "assistant", "content": f"a{i} " + "a" * 3000}]
+    history.append({"role": "user", "content": "the ask " + "z" * 900})
+    sent, trimmed = trim_messages(history, 4000)
+    assert trimmed > 0
+    users_in = [m["content"] for m in history if m["role"] == "user"]
+    users_out = [m["content"] for m in sent if m["role"] == "user"]
+    assert users_out == users_in                                  # every person message, verbatim
+    assert sent[-1] == history[-1]                                # the latest exchange, untouched
+    sent_ids = {c["id"] for m in sent for c in (m.get("tool_calls") or [])}
+    answered = {m["tool_call_id"] for m in sent if m["role"] == "tool"}
+    assert sent_ids == answered                                   # never an orphan (F88)

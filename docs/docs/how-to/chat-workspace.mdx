@@ -57,6 +57,11 @@ curl -H "X-API-Key: $API_KEY" "$API_BASE/agent/sessions"             # list sess
 curl -H "X-API-Key: $API_KEY" "$API_BASE/agent/sessions/<id>/history"
 ```
 
+In the terminal, the chat list has its own controls: rename, reorder, reopen history, copy a
+meeting transcript and delete. See [Manage your chats](/how-to/chat-controls). With the
+`openai-agent` harness, a turn that needs many tool calls keeps going past its first 40; see
+[Long agent turns](/agent-tool-calls).
+
 ## Build a cross-source briefing
 
 The agent grounds its answer in everything the workspace holds, so you can ask it to pull a topic together
@@ -68,6 +73,8 @@ across past meetings and emails:
 
 This is the **knowledge agent** pattern — the output is anchored in
 accumulated context, and each run leaves the workspace a little more complete.
+To fill a new workspace from your own mail and the web in one go, see
+[Onboarding research and Extend](/how-to/onboarding-research).
 
 <Note>
 A `rejected` frame means governance blocked the write. Trusted chat may write; untrusted triggers (email,

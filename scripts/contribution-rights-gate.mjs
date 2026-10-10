@@ -427,24 +427,56 @@ export async function run({ event, config, token, apiBase = "https://api.github.
   const results = [];
   const repo = event.repository.full_name;
   for (const pr of pullRequests) {
-    results.push({ pr, verdict: await verdictFor(repo, pr, config, apiBase, token) });
+    results.push({ pr, ...(await verdictFor(repo, pr, config, apiBase, token)) });
   }
-  const headSha = event.merge_group?.head_sha || pullRequests[0].head.sha;
+  // RE-READ BEFORE PUBLISHING. Runs for one pull request (its own events, each comment on it) can run in
+  // parallel and finish in any order, so a run that read the state before a verifier's decision could
+  // publish last and leave a stale verdict on the head. Each run therefore reads the pull request and
+  // its comments again just before it publishes, and evaluates again if anything moved: whichever run
+  // publishes last has read the latest state.
+  for (let round = 0; round < 3; round++) {
+    let moved = false;
+    for (const r of results) {
+      if (r.seen === null || !r.pr?.number) continue;
+      let fresh, comments;
+      try {
+        fresh = await requestJson(`${apiBase}/repos/${repo}/pulls/${r.pr.number}`, token);
+        comments = await commentsForPullRequest(repo, r.pr.number, apiBase, token);
+      } catch {
+        continue;
+      }
+      if (!fresh?.head?.sha || stateKey(fresh, comments) === r.seen) continue;
+      Object.assign(r, { pr: fresh }, await verdictFor(repo, fresh, config, apiBase, token));
+      moved = true;
+    }
+    if (!moved) break;
+  }
+  const headSha = event.merge_group?.head_sha || results[0].pr.head.sha;
   return publishRightsCheck(event, headSha, results, apiBase, token);
 }
 
+// What a verdict was computed from: the head, the body and every comment's identity and last edit.
+function stateKey(pr, comments) {
+  return JSON.stringify([pr.head?.sha, pr.body ?? "",
+    (comments || []).map((c) => [c.id, c.updated_at ?? c.created_at ?? null, (c.body ?? "").length])]);
+}
+
 // A read that fails while evaluating a PR is that PR's verdict: the check fails closed on its head and
-// says why, instead of leaving an earlier verdict standing.
+// says why, instead of leaving an earlier verdict standing. → { verdict, seen } (`seen` is null when
+// the state could not be read).
 async function verdictFor(repo, pr, config, apiBase, token) {
   try {
     const comments = await commentsForPullRequest(repo, pr.number, apiBase, token);
     const evidence = needsStanding(pr, config) ? await gatherEvidence(repo, pr, config, apiBase, token) : {};
-    return evaluatePullRequest(pr, comments, config, evidence);
+    return { verdict: evaluatePullRequest(pr, comments, config, evidence), seen: stateKey(pr, comments) };
   } catch (error) {
     return {
-      ok: false,
-      title: "Contribution rights could not be evaluated",
-      summary: `Reading GitHub failed, so this check fails closed. Any new comment, edit or push re-runs it.\n\n${error.message}`,
+      seen: null,
+      verdict: {
+        ok: false,
+        title: "Contribution rights could not be evaluated",
+        summary: `Reading GitHub failed, so this check fails closed. Any new comment, edit or push re-runs it.\n\n${error.message}`,
+      },
     };
   }
 }

@@ -28,8 +28,6 @@ const ROOT_BY_DESIGN = {
     "moves and re-homes workspace trees that root-run workers and per-subject uids write in the shared store",
   "core/agent/worker/Dockerfile":
     "starts as root to stage the turn, then runs every tool as the tools uid (the root-plus-tools-uid design)",
-  "core/meetings/services/bot/Dockerfile":
-    "a workload image: the runtime sets its user per workload (a distinct uid per bot in the process backend, the profile's securityContext on k8s)",
   "core/meetings/services/transcription/Dockerfile":
     "self-built GPU image whose model cache volume existing installs hold as root",
   "core/meetings/services/transcription/Dockerfile.cpu":

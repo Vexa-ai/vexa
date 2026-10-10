@@ -20,7 +20,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { GET as redeem } from "../redeem/route";
-import { _resetJtiLedger, mintMagicToken } from "../magicToken";
+vi.mock("../adminApi", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../adminApi")>()),
+  // admin-api's single-use record for links, held in memory (./linkLedgerDouble.ts)
+  redeemSigninLink: (jti: string, expiresAt: number) => linkLedger.redeem(jti, expiresAt),
+}));
+import { mintMagicToken } from "../magicToken";
+import { linkLedger } from "./linkLedgerDouble";
 
 function makeReq(query: Record<string, string>): import("next/server").NextRequest {
   const url = new URL("https://terminal.test/api/auth/redeem");
@@ -75,7 +81,7 @@ function stubs(opts: { mint?: "ok" | "fail"; history?: "none" | "some" | "down" 
 }
 
 beforeEach(() => {
-  _resetJtiLedger();
+  linkLedger.reset();
   vi.stubEnv("NEXTAUTH_SECRET", "test-signing-secret-0123456789abcdef");
   vi.stubEnv("VEXA_ADMIN_API_URL", "http://admin.test");
   vi.stubEnv("VEXA_ADMIN_API_KEY", "admin-secret");

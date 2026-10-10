@@ -81,3 +81,14 @@ test("a package only the terminal's npm lock carries is inventoried", () => {
     writeFileSync(lockPath, original);
   }
 });
+
+test("the vendored, modified moby seccomp profile is in the SPDX with its licence", () => {
+  const doc = emitSbom();
+  const pkg = doc.packages.find((entry) => entry.name === "moby/profiles seccomp/default.json");
+  assert(pkg, "the vendored seccomp profile is absent from the SPDX");
+  assert.equal(pkg.licenseDeclared, "Apache-2.0");
+  assert.match(pkg.comment, /core\/runtime\/src\/runtime_kernel\/seccomp-userns\.json/);
+  assert(doc.relationships.some(
+    (edge) => edge.relatedSpdxElement === pkg.SPDXID && edge.relationshipType === "CONTAINS",
+  ));
+});

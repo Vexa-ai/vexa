@@ -262,24 +262,24 @@ def test_the_live_check_runs_in_make_test():
 
 
 def test_the_container_profile_is_dockers_default_plus_user_namespaces():
-    """seccomp.json: Docker's default profile (deny by default; clone3 answered ENOSYS; namespaces
+    """seccomp-userns.json (the runtime's; the same file bot containers and Pods run under): Docker's default profile (deny by default; clone3 answered ENOSYS; namespaces
     behind CAP_SYS_ADMIN) with one rule more — clone and unshare for a process without that
     capability, so a meeting bot's Chromium can build its sandbox — and `make up` runs Lite under it."""
     import json
 
-    profile = json.loads((LITE / "seccomp.json").read_text())
+    profile = json.loads((ROOT / "core/runtime/src/runtime_kernel/seccomp-userns.json").read_text())
     assert profile["defaultAction"] == "SCMP_ACT_ERRNO"
-    ours = [r for r in profile["syscalls"] if r.get("comment", "").startswith("Vexa Lite:")]
+    ours = [r for r in profile["syscalls"] if r.get("comment", "").startswith("Vexa:")]
     assert len(ours) == 1
     (rule,) = ours
-    assert sorted(rule["names"]) == ["clone", "unshare"] and rule["action"] == "SCMP_ACT_ALLOW"
+    assert sorted(rule["names"]) == ["chroot", "clone", "unshare"] and rule["action"] == "SCMP_ACT_ALLOW"
     assert rule["excludes"] == {"caps": ["CAP_SYS_ADMIN"]} and "args" not in rule
     clone3 = [r for r in profile["syscalls"] if r["names"] == ["clone3"]]
     assert clone3 and clone3[0]["action"] == "SCMP_ACT_ERRNO" and clone3[0]["errnoRet"] == 38
     others = [r for r in profile["syscalls"] if r is not rule and "unshare" in r["names"]]
     assert others and all(r.get("includes", {}).get("caps") == ["CAP_SYS_ADMIN"] for r in others)
     makefile = (LITE / "Makefile").read_text()
-    assert '--security-opt seccomp="$(ROOT)/deploy/lite/seccomp.json"' in makefile
+    assert '--security-opt seccomp="$(ROOT)/core/runtime/src/runtime_kernel/seccomp-userns.json"' in makefile
 
 
 def test_every_service_but_the_runtime_is_refused_user_namespaces():

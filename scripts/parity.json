@@ -420,6 +420,25 @@
       ]
     },
     {
+      "id": "delegation-live-key",
+      "fact": "the Redis key prefix a delegation token is held live under until it is revoked or expires, vexa:delegation:live:<jti>",
+      "kind": "literal",
+      "enforced": true,
+      "canonical": "core/agent/control_plane/delegation_revocation.py — LIVE_PREFIX (agent-api is the store's only writer)",
+      "how_to_agree": "rename it in both modules in one change and restart both; tokens recorded under the old name are refused until they are re-minted",
+      "why": "agent-api writes the key when it records a token and identity admits a vxd_ bearer only while it exists. The two are different images with no shared module; a reader that spells the key differently refuses every token, and a writer that does admits none, with each side's own tests green.",
+      "sites": [
+        {
+          "path": "core/agent/control_plane/delegation_revocation.py",
+          "pattern": "^LIVE_PREFIX = \"([^\"]+)\""
+        },
+        {
+          "path": "core/identity/services/admin-api/src/admin_api/app/delegation_revocation.py",
+          "pattern": "^LIVE_PREFIX = \"([^\"]+)\""
+        }
+      ]
+    },
+    {
       "id": "flows-person-refusal",
       "fact": "the refusal a worker with nobody in the loop reads from flows-api (gateway-identity.v1 REFUSAL, human_session_required)",
       "kind": "prose",
@@ -516,15 +535,15 @@
       "sites": [
         {
           "path": "core/runtime/contracts/runtime.v1/golden/signed-event-stopped.json",
-          "pattern": "\"signature\": \"(v1=[0-9a-f]{64})\""
+          "pattern": "\"signature\": \"(t=[0-9]+,v2=[0-9a-f]{64})\""
         },
         {
           "path": "core/runtime/tests/test_caller_auth.py",
-          "pattern": "^VECTOR_SIGNATURE = \"(v1=[0-9a-f]{64})\""
+          "pattern": "^VECTOR_SIGNATURE = \"(t=[0-9]+,v2=[0-9a-f]{64})\""
         },
         {
           "path": "core/meetings/services/meeting-api/tests/test_runtime_callback_signature.py",
-          "pattern": "^SIGNATURE = \"(v1=[0-9a-f]{64})\""
+          "pattern": "^SIGNATURE = \"(t=[0-9]+,v2=[0-9a-f]{64})\""
         }
       ]
     },
@@ -2081,6 +2100,23 @@
         {
           "path": "docs/docs/api/agent.mdx",
           "pattern": "^\\| `gateway` \\| ([^|\\n]*) \\|$"
+        }
+      ]
+    },
+    {
+      "id": "moby-profiles-licence",
+      "fact": "the licence of the seccomp profile derived from Docker's (moby/profiles, Apache-2.0)",
+      "kind": "file-bytes",
+      "enforced": true,
+      "canonical": "licenses/moby-profiles.LICENSE.txt",
+      "how_to_agree": "copy the verbatim upstream licence beside the profile in the runtime package, so every image that carries core/runtime/src carries its licence",
+      "why": "runtime_kernel/seccomp-userns.json is Docker Engine's default profile with one rule added. licenses/ holds the verbatim upstream text (THIRD_PARTY_LICENSES.md); the runtime image's build context is core/runtime, so the copy that travels with the bytes must live there.",
+      "sites": [
+        {
+          "path": "licenses/moby-profiles.LICENSE.txt"
+        },
+        {
+          "path": "core/runtime/src/runtime_kernel/seccomp-userns.LICENSE.txt"
         }
       ]
     }

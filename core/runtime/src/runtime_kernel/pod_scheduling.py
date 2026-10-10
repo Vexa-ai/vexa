@@ -35,7 +35,8 @@ TOLERATIONS = "TOLERATIONS"
 PRIORITY_CLASS_NAME = "PRIORITY_CLASS_NAME"
 IMAGE_PULL_SECRETS = "IMAGE_PULL_SECRETS"
 CAPABILITIES = "CAPABILITIES"
-SUFFIXES = (NODE_SELECTOR, TOLERATIONS, PRIORITY_CLASS_NAME, IMAGE_PULL_SECRETS, CAPABILITIES)
+SECCOMP_PROFILE = "SECCOMP_PROFILE"
+SUFFIXES = (NODE_SELECTOR, TOLERATIONS, PRIORITY_CLASS_NAME, IMAGE_PULL_SECRETS, CAPABILITIES, SECCOMP_PROFILE)
 #: The runtime-wide settings, validated at boot by the same rules as a profile's own.
 RUNTIME_WIDE_PREFIX = "RUNTIME_K8S_"
 #: The operator's explicit opt-in to tolerations that reach any node or the cluster's own nodes.
@@ -45,6 +46,8 @@ ALLOW_BROAD_TOLERATIONS = "RUNTIME_K8S_ALLOW_BROAD_TOLERATIONS"
 _SYSTEM_TAINT_KEYS = frozenset({"node-role.kubernetes.io/control-plane", "node-role.kubernetes.io/master",
                                 "CriticalAddonsOnly"})
 _CAPABILITY = re.compile(r"^[A-Z][A-Z0-9_]*$")
+#: A Localhost seccomp profile's path, relative to the kubelet's seccomp root: plain segments only.
+_LOCALHOST_PROFILE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]*(/[A-Za-z0-9_][A-Za-z0-9_.-]*)*$")
 
 # Kubernetes' own name rules (apimachinery validation): a DNS-1123 subdomain for object names, a
 # qualified name for label and taint keys, a label value for selector and toleration values.
@@ -70,6 +73,10 @@ class PodScheduling:
     #: overrides the profile's own list — ``None`` keeps the profile's. OpenShift's restricted SCC
     #: admits no added capability: set ``[]`` there.
     capabilities: Optional[tuple[str, ...]] = None
+    #: A Localhost seccomp profile the class's containers run under instead of the runtime's default
+    #: (a path relative to the kubelet's seccomp root, the file present on the node). The chart sets
+    #: it for meeting bots: the profile that lets Chromium build its sandbox. Empty ⇒ RuntimeDefault.
+    seccomp_profile: str = ""
 
     def apply(self, pod_spec: dict) -> None:
         """Lay this profile's placement onto a Pod ``spec`` (in place). A set node selector or
@@ -191,6 +198,16 @@ def _capabilities(env: Mapping[str, str], key: str) -> Optional[tuple[str, ...]]
     return tuple(dict.fromkeys(names))
 
 
+def _seccomp_profile(env: Mapping[str, str], key: str) -> str:
+    value = (env.get(key) or "").strip()
+    if not value:
+        return ""
+    if len(value) > 253 or ".." in value.split("/") or not _LOCALHOST_PROFILE.match(value):
+        raise ValueError(f"{key} must be a profile path relative to the kubelet's seccomp root "
+                         f"(e.g. vexa/seccomp-userns.json)")
+    return value
+
+
 def _priority_class(env: Mapping[str, str], key: str) -> str:
     value = (env.get(key) or "").strip()
     if not value:
@@ -225,6 +242,7 @@ def from_env(prefix: str, env: Mapping[str, str]) -> PodScheduling:
         priority_class_name=_priority_class(env, prefix + PRIORITY_CLASS_NAME),
         image_pull_secrets=_pull_secrets(env, prefix + IMAGE_PULL_SECRETS),
         capabilities=_capabilities(env, prefix + CAPABILITIES),
+        seccomp_profile=_seccomp_profile(env, prefix + SECCOMP_PROFILE),
     )
 
 

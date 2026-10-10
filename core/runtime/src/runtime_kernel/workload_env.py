@@ -74,8 +74,21 @@ WORKER_FORWARD_ENV = (
     # openai-agent harness budget dials (per-turn ceiling + context trim + streaming)
     "VEXA_AGENT_MAX_TOOL_CALLS",
     "VEXA_AGENT_MAX_TURN_SEC",
+    # …per kind of turn (Vexa-ai/vexa#1622; each falls back to VEXA_AGENT_MAX_TOOL_CALLS) and for a
+    # background job's window and whole run (core/agent/llm/JOBS.md). Read by the worker only, so
+    # without these here a deployment's setting never left the runtime.
+    "VEXA_AGENT_MAX_TOOL_CALLS_CHAT",
+    "VEXA_AGENT_MAX_TOOL_CALLS_JOB",
+    "VEXA_AGENT_MAX_TOOL_CALLS_ROOM",
+    "VEXA_AGENT_MAX_TOOL_CALLS_FLOW",
+    "VEXA_AGENT_JOB_MAX_TOOL_CALLS",
+    "VEXA_AGENT_JOB_MAX_TURN_SEC",
     "VEXA_AGENT_CONTEXT_TOKENS",
     "VEXA_AGENT_STREAM",
+    # THE OUTPUT CAP, read by every harness (claude-code maps it onto CLAUDE_CODE_MAX_OUTPUT_TOKENS,
+    # openai-agent sends it as max_tokens). A provider that prices the allowance up front refuses a
+    # small balance the CLI's 32000-token default.
+    "VEXA_AGENT_MAX_OUTPUT_TOKENS",
     # The worker's reach onto the open web (WebSearch/WebFetch). THE ENDPOINT IS THE OPERATOR'S —
     # nothing search-shaped ships with this product — so it arrives as deployment env and is
     # forwarded like every other worker-read dial.

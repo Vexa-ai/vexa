@@ -187,6 +187,15 @@ RUN chmod +x /app/entrypoint.sh
 # See vexa-delivery docs/engineering/openshift-parity.mdx — "HOME=/tmp is the one-variable fix".
 ENV HOME=/tmp
 
+# A NON-ROOT uid, because Chromium will not sandbox a browser running as root, and nothing the bot
+# does needs root: its display, audio daemon, browser profile and recordings all live in /tmp. The
+# two places it writes outside /tmp are made writable by any uid (so OpenShift's assigned UID works
+# as well as this default): the join module's checkpoint screenshots, and the X socket directory a
+# non-root Xvfb cannot create under a root-owned /tmp/.X11-unix. The runtime runs the bot's own
+# container under a seccomp profile that lets the browser build its sandbox (user namespaces).
+RUN install -d -m 1777 /app/storage/screenshots /tmp/.X11-unix
+USER 10002:10002
+
 # noVNC (browser view) — present in the env base; harmless if unused.
 EXPOSE 6080
 

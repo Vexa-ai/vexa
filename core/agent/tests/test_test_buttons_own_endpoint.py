@@ -6,7 +6,8 @@ send exactly the credential that backend would carry, and nothing of the deploym
 
 1. models: a person's own `base_url` with no key is probed with no key (openai-agent), or not at all
    (claude-code, which refuses a keyless own endpoint) — never with agent-api's ANTHROPIC_* or
-   VEXA_LLM_* values. Asserted on the wire (`urllib.request.urlopen`), through the route.
+   VEXA_LLM_* values. Asserted on the wire (`urllib.request.urlopen`, and the person's-endpoint
+   probe `config_test._subject_post`), through the route.
 2. transcription: the pair a bot spawned now would use (`bot_spawn`'s rule): a person's URL with
    its own token, empty meaning none; with no URL of theirs, the deployment's URL with the
    deployment's token — a person's token never goes to the deployment's URL either.
@@ -94,6 +95,16 @@ def _wire(monkeypatch) -> list[dict]:
         return _Resp()
 
     monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+
+    # A person's own endpoint is probed through `config_test._subject_post` (httpx, no redirects,
+    # the URL guard for a wildcard-admitted host); the wire is recorded there for that route.
+    def subject_post(url, payload, headers):
+        sent.append({"url": url, "headers": dict(headers), "body": json.dumps(payload)})
+        return 200, "{}"
+
+    monkeypatch.setattr(config_test, "_subject_post", subject_post)
+    # the deployment route's requests go through the no-redirect opener
+    monkeypatch.setattr(config_test._NO_REDIRECT, "open", urlopen)
     return sent
 
 

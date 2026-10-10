@@ -20,6 +20,11 @@ rules:
   - apiGroups: [""]
     resources: ["pods/log"]
     verbs: ["get"]
+  # A spawned Pod's credential env rides a Secret of its own, owned by the Pod (collected with it)
+  # and named per incarnation: the runtime creates it and never reads, lists or deletes a Secret.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

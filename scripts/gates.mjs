@@ -21,7 +21,7 @@ import { checkDomainDoors, ALLOW_PATH as DOORS_ALLOW } from "./check-domain-door
 import { checkParity, MANIFEST_PATH as PARITY_MANIFEST } from "./check-parity.mjs";
 import { checkVendorPayload, NATIVE_DIR } from "./check-vendor-payload.mjs";
 import { checkPythonLicenses, INDEX_FILE as PY_LICENSE_INDEX } from "./check-python-licenses.mjs";
-import { collectPinnedImages } from "./pinned-images.mjs";
+import { collectPinnedImages, trackedFiles, isDockerfile } from "./pinned-images.mjs";
 import { npmLockInventory } from "./npm-locks.mjs";
 
 const ROOT = process.cwd();
@@ -661,6 +661,12 @@ function gateImageLicenses() {
       bad.push("pnpm-lock.yaml does not override sharp with core/meetings/modules/no-image-backend — the real sharp, and libvips with it, would install for @huggingface/transformers");
   }
 
+  // (7) How every tracked Dockerfile gets its bytes (D-3, D-4, D-5). A base or `COPY --from` image from
+  //     outside the repository is pinned by digest, so a build runs reviewed bytes; nothing is piped
+  //     from the network into a shell; nothing is pip-installed beside the lock (only uv itself, the
+  //     tool that installs the lock); and uv is at least the release that fixed its advisories.
+  bad.push(...dockerfileSupplyChain(ROOT));
+
   // (6) …and the terminal's npm lock, which every terminal image installs from (`npm ci`), carries
   //     none either: package.json points sharp at its own stand-in (clients/terminal/no-image-backend,
   //     byte-held to the bot's by the parity fact no-image-backend-terminal), so no stage, build
@@ -678,6 +684,52 @@ function gateImageLicenses() {
   if (bad.length) return fail(bad);
   console.log(`  ✓ gate:image-licenses — ${foundImages.size} pinned image(s) + ${(man.bundled || []).length} bundled component(s) declared & audited${flagged.length ? ` (${flagged.length} non-A by logged reason: ${flagged.join("; ")})` : ""}`);
   return true;
+}
+
+// The first uv release with no open advisory: 0.11.15 fixed the two that affected 0.9.22 (D-4).
+const UV_FLOOR = [0, 11, 15];
+const versionAtLeast = (v, floor) => {
+  const parts = v.split(".").map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < floor.length; i++) if ((parts[i] || 0) !== floor[i]) return (parts[i] || 0) > floor[i];
+  return true;
+};
+export function dockerfileSupplyChain(root) {
+  const errs = [];
+  for (const f of trackedFiles(root).filter(isDockerfile)) {
+    const text = readFileSync(join(root, f), "utf8");
+    const stages = new Set();
+    const args = new Map();
+    const logical = text.replace(/\\\r?\n/g, " ").split(/\r?\n/);
+    for (const line of logical) {
+      const arg = line.match(/^\s*ARG\s+([A-Za-z_]\w*)=["']?([^\s"']*)/i);
+      if (arg) { args.set(arg[1], arg[2]); continue; }
+      const sub = (r) => r.replace(/\$\{?([A-Za-z_]\w*)\}?/g, (m, n) => (args.has(n) ? args.get(n) : m));
+      const from = line.match(/^\s*FROM\s+(?:--platform=\S+\s+)?(\S+)(?:\s+AS\s+(\S+))?/i);
+      const copyFrom = line.match(/^\s*COPY\s+(?:--\S+\s+)*?--from=(\S+)/i);
+      const ref = from ? sub(from[1]) : copyFrom ? sub(copyFrom[1]) : null;
+      if (from && from[2]) stages.add(from[2].toLowerCase());
+      if (ref && !stages.has(ref.toLowerCase()) && !/^\d+$/.test(ref) && !/^(vexa|vexaai)\//.test(ref)
+          && (ref.includes("/") || ref.includes(":")) && !/@sha256:[0-9a-f]{64}$/.test(ref))
+        errs.push(`${f}: ${from ? "FROM" : "COPY --from"} ${ref} is not pinned by digest — pin it (@sha256:…) so the build runs reviewed bytes`);
+      if (!/^\s*RUN\b/i.test(line)) continue;
+      if (/\b(curl|wget)\b[^|;&]*\|\s*(env\s+[^|;&]*?)?\b(ba|z|da)?sh\b/.test(line))
+        errs.push(`${f}: a RUN pipes a download into a shell — fetch a pinned artifact and check its SHA-256, or copy it from a digest-pinned image`);
+      for (const m of line.matchAll(/\b(?:uv\s+pip|pip3?)\s+install\b([^&;|]*)/g)) {
+        const pkgs = m[1].split(/\s+/).filter((t) => t && !t.startsWith("-") && !t.startsWith("/"));
+        const others = pkgs.filter((t) => !/^["']?uv==/.test(t));
+        if (others.length) errs.push(`${f}: installs ${others.join(" ")} beside the lock — put it in the project's uv.lock (a dependency group) and \`uv sync\` it`);
+        for (const t of pkgs) {
+          const uv = t.match(/^["']?uv==([\d.]+)/);
+          if (uv && !versionAtLeast(uv[1], UV_FLOOR)) errs.push(`${f}: uv==${uv[1]} is older than ${UV_FLOOR.join(".")}, which fixed its advisories`);
+        }
+      }
+      for (const m of line.matchAll(/astral-sh\/uv\/releases\/download\/\$\{?(\w+)\}?|astral-sh\/uv\/releases\/download\/([\d.]+)/g)) {
+        const v = m[2] || args.get(m[1]) || "";
+        if (!versionAtLeast(v, UV_FLOOR)) errs.push(`${f}: uv ${v || "(unresolved)"} is older than ${UV_FLOOR.join(".")}, which fixed its advisories`);
+      }
+    }
+  }
+  return errs;
 }
 
 // gate:runtime-parity (P17, #653 · catches the #636/#637 class) — asserts the cache/stream commands

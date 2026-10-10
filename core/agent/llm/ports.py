@@ -94,6 +94,32 @@ def harness_subprocess_env() -> dict[str, str]:
     return env
 
 
+#: THE OUTPUT CAP, one dial for every harness. A request's output allowance is what an
+#: OpenRouter-style provider prices BEFORE it answers: the claude CLI asks for 32000 output tokens by
+#: default, and a key whose balance covers 4857 is refused with a 402 for a "hi". Unset leaves each
+#: harness's own default. claude-code receives it as ``CLAUDE_CODE_MAX_OUTPUT_TOKENS``
+#: (``claude_code._cli_env``); openai-agent sends it as the request's ``max_tokens``.
+MAX_OUTPUT_TOKENS_ENV = "VEXA_AGENT_MAX_OUTPUT_TOKENS"
+
+
+def max_output_tokens() -> Optional[int]:
+    """The deployment's output cap, or None when it set none. A value that is not a positive whole
+    number is ignored — loudly, in the worker's log — rather than sent to a provider that would
+    refuse every turn over it."""
+    raw = (os.environ.get(MAX_OUTPUT_TOKENS_ENV) or "").strip()
+    if not raw:
+        return None
+    try:
+        cap = int(raw)
+    except ValueError:
+        cap = 0
+    if cap <= 0:
+        _log.warning(
+            "%s=%r is not a positive whole number; no output cap is applied", MAX_OUTPUT_TOKENS_ENV, raw)
+        return None
+    return cap
+
+
 # ── the model's tools run as a user of their own ──────────────────────────────────────────────
 #
 # A harness CLI runs the model's tools (Bash above all) as its own children. Run as the worker's

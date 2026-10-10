@@ -374,6 +374,11 @@
     },
     {
       "method": "POST",
+      "path": "/agent/global/ready",
+      "person": true
+    },
+    {
+      "method": "POST",
       "path": "/agent/connections/read",
       "person": true
     },

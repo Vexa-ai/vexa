@@ -103,7 +103,7 @@ export async function GET(request: NextRequest) {
   const token = request.nextUrl.searchParams.get("t") || "";
   const target = safeNext(request.nextUrl.searchParams.get("next"));
 
-  const verdict = redeemMagicToken(token);
+  const verdict = await redeemMagicToken(token);
   if (!verdict.ok) {
     switch (verdict.reason) {
       case "used":
@@ -112,6 +112,8 @@ export async function GET(request: NextRequest) {
         return page("This link has expired", "Sign-in links are good for a few minutes. Ask for a fresh one.", 410);
       case "unconfigured":
         return page("Email sign-in is not configured", "This instance cannot verify sign-in links.", 503);
+      case "unavailable":
+        return page("Sign-in is unavailable", "We could not check this link just now. It has not been used; try it again in a minute.", 503);
       default:
         return page("This sign-in link is not valid", "The link looks incomplete or altered. Ask for a fresh one.", 400);
     }

@@ -40,7 +40,13 @@ import { authOptions } from "../[...nextauth]/authOptions";
 import { _settleLinkDeliveries } from "../linkDelivery";
 import { _resetLinkRateLimits } from "../linkRateLimit";
 import { signinAdmission } from "../adminApi";
-import { _resetJtiLedger, mintMagicToken } from "../magicToken";
+vi.mock("../adminApi", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../adminApi")>()),
+  // admin-api's single-use record for links, held in memory (./linkLedgerDouble.ts)
+  redeemSigninLink: (jti: string, expiresAt: number) => linkLedger.redeem(jti, expiresAt),
+}));
+import { mintMagicToken } from "../magicToken";
+import { linkLedger } from "./linkLedgerDouble";
 import { SIGNIN_NOT_ALLOWED, SIGNIN_UNAVAILABLE, signinErrorMessage } from "../../../signinRefusal";
 
 // ── a fake admin-api that models the admission rule ───────────────────────────────────────────────
@@ -99,6 +105,8 @@ function installAdminApi() {
       world.users.add(e);
       return json({ id: nextId++, email: e }, 201);
     }
+    // the OAuth door binds the account to its provider subject; these cases are about admission
+    if (u.includes("/provider-subject")) return json({ bound: "first" });
     if (u.includes("/tokens")) return method === "POST" ? json({ token: "minted-tok" }) : json([]);
     if (u.includes("/internal/bootstrap-admin")) {
       const asked = JSON.parse(String(init?.body ?? "{}"));
@@ -122,7 +130,7 @@ beforeEach(() => {
   cookieJar = {};
   sendMail.mockClear();
   sendMail.mockImplementation(async () => {});
-  _resetJtiLedger();
+  linkLedger.reset();
   vi.stubEnv("NEXTAUTH_SECRET", "test-signing-secret-0123456789abcdef");
   vi.stubEnv("NEXTAUTH_URL", "https://terminal.test");
   vi.stubEnv("TERMINAL_URL", "https://terminal.test");

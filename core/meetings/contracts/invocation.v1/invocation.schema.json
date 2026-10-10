@@ -24,7 +24,7 @@
         "botName": { "type": "string" },
         "passcode": { "type": "string", "description": "meeting passcode (zoom passcode screen / jitsi room password); placeholder in goldens" },
         "nativeMeetingId": { "type": "string" },
-        "token": { "type": "string", "description": "SECRET — the session's MeetingToken and the bot's only credential: an HS256 token meeting-api mints per spawn, bound to this session's connectionId (claim session_uid). It is the transport bearer, `Authorization: Bearer <token>`, at three doors: every lifecycle.v1 event the bot POSTs to meetingApiCallbackUrl, every upload to recordingUploadUrl, and an authenticated bot's session-profile.v1 write-back to sessionWritebackUrl; meeting-api refuses it for any other session. Required by a meeting-api from v0.13.2: a bot that sends no bearer is refused (401). Placeholder in goldens" },
+        "token": { "type": "string", "description": "SECRET — the session's MeetingToken and the bot's only credential: an HS256 token meeting-api mints per spawn, bound to this session's connectionId (claim session_uid). It is the transport bearer, `Authorization: Bearer <token>`, at three doors: every lifecycle.v1 event the bot POSTs to meetingApiCallbackUrl, every upload to recordingUploadUrl, and an authenticated bot's session-profile.v1 write-back to sessionWritebackUrl; meeting-api refuses it for any other session, and requires its exp, aud and scope. Required by a meeting-api from v0.13.2: a bot that sends no bearer is refused (401). Placeholder in goldens" },
         "connectionId": { "type": "string" },
         "meeting_id": { "type": "integer" },
         "container_name": { "type": "string" },
