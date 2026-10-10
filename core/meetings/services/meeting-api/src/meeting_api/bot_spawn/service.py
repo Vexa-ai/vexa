@@ -37,11 +37,10 @@ from ..service_authority import (
     ServiceAuthorityRequest,
     ServiceAuthorityUnavailable,
 )
-from .env_flags import env_flag
+from .auth_session import auth_session_config
 from .invocation import build_invocation, build_workload_spec, mint_meeting_token
 from .ports import (
     AuthSessionBusy,
-    AuthSessionNotConfigured,
     DuplicateMeeting,
     MaxBotsExceeded,
     MeetingRepo,
@@ -551,26 +550,20 @@ async def request_bot(
     #     gated loud BEFORE any DB write (the TranscriptionNotConfigured precedent) — a half-
     #     configured knob must never spawn a bot that silently joins anonymous. Env vocabulary
     #     matches the provisioning CLI: BOT_USERDATA_S3_PATH + BOT_S3_{ENDPOINT,BUCKET,ACCESS_KEY,
-    #     SECRET_KEY} (scoped userdata credentials — never the deployment's admin S3 creds; they
-    #     ride the invocation env into the bot container, so their blast radius must stay the
-    #     userdata prefix).
-    authenticated = env_flag("BOT_AUTHENTICATED", False)
-    auth_userdata_path: Optional[str] = None
+    #     SECRET_KEY} (the bots' READ-ONLY userdata pair — it rides the invocation env into the bot
+    #     container, so it may read the session and nothing else). auth_session_config also refuses a pair that reuses
+    #     either half of a storage root pair (MINIO_* / S3_*), before any row or bot exists.
+    auth_cfg = auth_session_config()
+    authenticated = auth_cfg is not None
+    auth_userdata_path: Optional[str] = auth_cfg.userdata_path if auth_cfg else None
     auth_s3: dict[str, Optional[str]] = {}
-    if authenticated:
-        auth_userdata_path = os.getenv("BOT_USERDATA_S3_PATH") or None
+    if auth_cfg is not None:
         auth_s3 = {
-            "s3_endpoint": os.getenv("BOT_S3_ENDPOINT") or None,
-            "s3_bucket": os.getenv("BOT_S3_BUCKET") or None,
-            "s3_access_key": os.getenv("BOT_S3_ACCESS_KEY") or None,
-            "s3_secret_key": os.getenv("BOT_S3_SECRET_KEY") or None,
+            "s3_endpoint": auth_cfg.s3_endpoint,
+            "s3_bucket": auth_cfg.s3_bucket,
+            "s3_access_key": auth_cfg.s3_access_key,
+            "s3_secret_key": auth_cfg.s3_secret_key,
         }
-        if not (auth_userdata_path and auth_s3["s3_endpoint"] and auth_s3["s3_bucket"]):
-            raise AuthSessionNotConfigured(
-                "BOT_AUTHENTICATED is set but the userdata store is incomplete — set "
-                "BOT_USERDATA_S3_PATH + BOT_S3_ENDPOINT + BOT_S3_BUCKET (and scoped "
-                "BOT_S3_ACCESS_KEY/BOT_S3_SECRET_KEY); provision the session with `make login`"
-            )
 
     # 2c. continue_meeting (P3c): reuse a TERMINAL prior meeting row if asked. The reused row keeps
     #     its id (so its transcripts/recordings survive); a fresh session is appended below. This read
