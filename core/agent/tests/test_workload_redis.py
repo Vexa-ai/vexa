@@ -55,7 +55,10 @@ class FakeRedis:
 def test_the_rules_name_the_units_three_keys_and_nothing_else():
     rules = wr.acl_rules("agent-7-chat-a*b", "pw")
     assert rules[:3] == ["reset", "on", ">pw"]
-    assert [r for r in rules if r.startswith("~")] == [
+    assert [r for r in rules if "~" in r] == [
+        "%R~unit:agent-7-chat-a\\*b:in", "~unit:agent-7-chat-a\\*b:out", "~unit:agent-7-chat-a\\*b:cursor"]
+    legacy = wr.acl_rules("agent-7-chat-a*b", "pw", read_only_input=False)
+    assert [r for r in legacy if "~" in r] == [
         "~unit:agent-7-chat-a\\*b:in", "~unit:agent-7-chat-a\\*b:out", "~unit:agent-7-chat-a\\*b:cursor"]
     assert "resetchannels" in rules and "-@all" in rules
     assert sorted(r[1:] for r in rules if r.startswith("+")) == sorted(wr.WORKER_COMMANDS)
@@ -71,6 +74,35 @@ def test_grant_defines_the_user_and_hands_back_its_url():
     assert "service-password" not in url
     assert r.users[user] == wr.acl_rules("agent-7-chat-s1", parts.password)
     assert r.index[user] == "agent-7-chat-s1|100"
+
+
+class OldRedis(FakeRedis):
+    """A server without key permissions: it refuses the ``%R~`` rule by name, as Redis 6 does."""
+
+    def execute_command(self, *args):
+        if args[:2] == ("ACL", "SETUSER") and any(str(a).startswith("%R~") for a in args):
+            self.calls.append(args)
+            raise Exception(f"Error in ACL SETUSER modifier '{[a for a in args if str(a).startswith('%R~')][0]}': Syntax error")
+        return super().execute_command(*args)
+
+
+def test_a_server_without_key_permissions_gets_the_read_write_form_said_loudly(caplog):
+    r = OldRedis()
+    url = wr.grant(r, secret=SECRET, unit_id="agent-7-chat-s1", service_url=SERVICE_URL)
+    user = wr.user_for("agent-7-chat-s1")
+    assert r.users[user] == wr.acl_rules("agent-7-chat-s1", urlsplit(url).password, read_only_input=False)
+    assert "read-only key permissions" in caplog.text
+    del r.users[user]
+    assert wr.restore(r, secret=SECRET) == 1 and user in r.users
+
+
+def test_any_other_refusal_is_still_an_error():
+    class Refusing(FakeRedis):
+        def execute_command(self, *args):
+            raise Exception("NOPERM this user has no permissions to run the 'acl|setuser' command")
+
+    with pytest.raises(wr.WorkloadRedisError):
+        wr.grant(Refusing(), secret=SECRET, unit_id="agent-7-chat-s1", service_url=SERVICE_URL)
 
 
 def test_a_units_password_is_stable_and_its_own():

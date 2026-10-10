@@ -2,8 +2,9 @@
 
 A worker talks to Redis for exactly three keys of its own unit: it reads ``unit:<id>:in``, appends to
 ``unit:<id>:out`` and records how far it has read in ``unit:<id>:cursor``. It is given a Redis user
-that can do that and nothing else — no other key, no pub/sub channel, no admin command — instead of
-the service connection agent-api itself uses. Every other unit's streams, every meeting's transcript
+that can do that and nothing else — no other key, no pub/sub channel, no admin command, and only
+read access to its own input stream (agent-api is that stream's one writer) — instead of the service
+connection agent-api itself uses. Every other unit's streams, every meeting's transcript
 feed and every service key stay out of its reach, whatever runs inside the worker.
 
 * :func:`grant` — before a dispatch spawns, (re)defines the unit's user (``ACL SETUSER`` with
@@ -71,12 +72,31 @@ def unit_keys(unit_id: str) -> tuple[str, str, str]:
     return input_topic(unit_id), output_topic(unit_id), inbox_cursor_key(unit_id)
 
 
-def acl_rules(unit_id: str, password: str) -> list[str]:
-    """The ``ACL SETUSER`` rules for one unit's worker, from a clean slate."""
+def acl_rules(unit_id: str, password: str, *, read_only_input: bool = True) -> list[str]:
+    """The ``ACL SETUSER`` rules for one unit's worker, from a clean slate. The input stream is
+    read-only to it (``%R~``, a Redis 7 / Valkey key permission); ``read_only_input=False`` is the
+    form for a server without key permissions, where the pattern grants read and write."""
+    inp, out, cursor = unit_keys(unit_id)
     return (["reset", "on", f">{password}"]
-            + [f"~{_glob_literal(k)}" for k in unit_keys(unit_id)]
+            + [("%R~" if read_only_input else "~") + _glob_literal(inp)]
+            + [f"~{_glob_literal(k)}" for k in (out, cursor)]
             + ["resetchannels", "-@all"]
             + [f"+{c}" for c in WORKER_COMMANDS])
+
+
+def _set_user(client, user: str, unit_id: str, password: str) -> None:
+    """``ACL SETUSER`` with the read-only input stream; on a server that does not know key
+    permissions (Redis before 7, which names the ``%R~`` rule it refuses), the read-write form,
+    said loudly — the worker's user can then also append to its own input stream."""
+    try:
+        client.execute_command("ACL", "SETUSER", user, *acl_rules(unit_id, password))
+    except Exception as e:  # noqa: BLE001 — classified below; anything else is the caller's error
+        if "%R~" not in str(e):
+            raise
+        logger.warning("this Redis has no read-only key permissions (Redis 7+ / Valkey): the worker "
+                       "of unit %s may also write its own input stream", unit_id)
+        client.execute_command("ACL", "SETUSER", user,
+                               *acl_rules(unit_id, password, read_only_input=False))
 
 
 def worker_url(service_url: str, user: str, password: str) -> str:
@@ -97,7 +117,7 @@ def grant(client, *, secret: str, unit_id: str, service_url: str,
     Raises :class:`WorkloadRedisError` when the user cannot be defined."""
     user, password = user_for(unit_id), password_for(secret, unit_id)
     try:
-        client.execute_command("ACL", "SETUSER", user, *acl_rules(unit_id, password))
+        _set_user(client, user, unit_id, password)
         client.hset(INDEX_KEY, user, f"{unit_id}|{int((now or time.time)())}")
     except Exception as e:  # noqa: BLE001 — any failure leaves the worker without a credential
         raise WorkloadRedisError(f"the worker's Redis user could not be defined: {type(e).__name__}") from e
@@ -136,7 +156,7 @@ def restore(client, *, secret: str) -> int:
         if client.execute_command("ACL", "GETUSER", user):
             continue
         unit_id = value.rpartition("|")[0]
-        client.execute_command("ACL", "SETUSER", user, *acl_rules(unit_id, password_for(secret, unit_id)))
+        _set_user(client, user, unit_id, password_for(secret, unit_id))
         restored += 1
     return restored
 
