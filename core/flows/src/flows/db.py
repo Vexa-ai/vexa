@@ -30,7 +30,8 @@ class DB(Protocol):
 
 
 class UnsupportedDialect(ValueError):
-    """A `db_from_url` URL naming a scheme this engine does not run in production.
+    """A `db_from_url` URL naming a scheme this engine does not run in production, or a Postgres
+    URL asking for something its driver cannot honour (an `sslmode` libpq does not define).
 
     Declared HERE rather than reusing `flows_config.ConfigError` on purpose: this module lives in
     `src/flows/`, the engine core that `core/flows/scripts/check-isolation.js` (gate:isolation)
@@ -38,6 +39,72 @@ class UnsupportedDialect(ValueError):
     an exception class — without becoming the violation it would be reporting. Same intent as
     `ConfigError` (refuse loudly, name what was wrong), declared where the isolation law allows.
     """
+
+
+#: libpq's `sslmode` values, in libpq's order (least to most protection).
+SSL_MODES = ("disable", "allow", "prefer", "require", "verify-ca", "verify-full")
+
+
+def pg8000_connection(url: str):
+    """The SQLAlchemy URL and connect arguments that reach the database `url` names through pg8000.
+
+    The URL names the database; the driver is this package's. flows ships pg8000 (BSD-3-Clause)
+    and no other Postgres DBAPI, so `postgres://`, `postgresql://` and any `postgresql+<driver>://`
+    all connect through it. pg8000 takes TLS as an `ssl_context`, not as libpq's query parameters,
+    so `sslmode` and `sslrootcert` are read here and turned into one (`connect_timeout` becomes
+    pg8000's `timeout`):
+
+      disable, allow   no TLS
+      prefer (default) TLS when the server offers it, unverified; plaintext when it refuses
+      require          TLS, unverified; verified like verify-ca when sslrootcert names a CA file
+      verify-ca        TLS, certificate chain checked against sslrootcert or the system store
+      verify-full      verify-ca, and the server's host name checked against its certificate
+
+    Returns `(url, connect_args, fallback_to_plaintext)`. Pure: nothing here touches the network.
+    """
+    import ssl
+    from sqlalchemy.engine import make_url
+
+    parsed = make_url(url)
+    query = {k: (v[-1] if isinstance(v, tuple) else v) for k, v in parsed.query.items()}
+    mode = query.pop("sslmode", None) or "prefer"
+    rootcert = query.pop("sslrootcert", None)
+    if mode not in SSL_MODES:
+        raise UnsupportedDialect(f"sslmode={mode!r} is not one of {', '.join(SSL_MODES)}")
+    connect_args: dict[str, Any] = {}
+    timeout = query.pop("connect_timeout", None)
+    if timeout:
+        connect_args["timeout"] = int(timeout)
+    if mode in ("verify-ca", "verify-full") or (mode == "require" and rootcert):
+        context = ssl.create_default_context(cafile=rootcert or None)
+        context.check_hostname = mode == "verify-full"
+        connect_args["ssl_context"] = context
+    elif mode in ("prefer", "require"):
+        context = ssl.create_default_context()
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+        connect_args["ssl_context"] = context
+    return (parsed.set(drivername="postgresql+pg8000", query=query), connect_args, mode == "prefer")
+
+
+def pg_engine(url: str, **engine_kwargs):  # pragma: no cover — exercised against a live Postgres
+    """A SQLAlchemy engine on the database `url` names, connected through pg8000 (see
+    `pg8000_connection` for how the URL and its TLS parameters are read). Lazy like any
+    `create_engine`: no connection until first use."""
+    from sqlalchemy import create_engine, event
+
+    target, connect_args, fallback = pg8000_connection(url)
+    engine = create_engine(target, connect_args=connect_args, **engine_kwargs)
+    if fallback:
+        @event.listens_for(engine, "do_connect")
+        def _plaintext_when_tls_is_refused(dialect, _record, cargs, cparams):
+            try:
+                return dialect.dbapi.connect(*cargs, **cparams)
+            except dialect.dbapi.InterfaceError as exc:
+                if "refuses SSL" not in str(exc):
+                    raise
+                return dialect.dbapi.connect(*cargs, **{k: v for k, v in cparams.items() if k != "ssl_context"})
+    return engine
 
 
 def postgres_db(url: str):  # pragma: no cover — production composition; lazy import by design
@@ -49,9 +116,9 @@ def postgres_db(url: str):  # pragma: no cover — production composition; lazy 
     and never calls either method — so a flows-api that cannot reach Postgres still answers
     liveness. The first caller that actually touches the DB (a real request, the worker's first
     claim) pays for the schema application once; every caller after it is free."""
-    from sqlalchemy import create_engine, text
+    from sqlalchemy import text
 
-    engine = create_engine(url, pool_pre_ping=True)
+    engine = pg_engine(url, pool_pre_ping=True)
 
     class _Pg:
         dialect = "postgres"
@@ -93,7 +160,7 @@ def db_from_url(url: str):
     directly so the choice of adapter stays a property of the CONFIGURATION, not the caller.
 
     Postgres is the only production dialect: a `postgres://`/`postgresql://` URL (its
-    `+driver` variants included, e.g. `postgresql+psycopg://`) gets `postgres_db`; anything else
+    `+driver` variants included, e.g. `postgresql+pg8000://`) gets `postgres_db`; anything else
     is refused by name. There is no second branch — the offline/storm dialect (`SqliteDB`) is a
     test double now (`core/flows/tests/sqlite_double.py`), and a test constructs it directly
     rather than routing a `sqlite://` URL through here."""

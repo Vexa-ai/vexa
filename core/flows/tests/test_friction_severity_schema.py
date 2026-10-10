@@ -31,7 +31,7 @@ _PRIOR_ENV = {k: os.environ.get(k) for k in _KEYS}
 os.environ.setdefault("VEXA_FLOWS_API_KEY", "test-flows-key")
 os.environ.setdefault("VEXA_FLOWS_ADMIN_KEY", "test-admin-key-not-a-placeholder")
 os.environ.setdefault("INTERNAL_API_SECRET", "test-internal-secret")
-os.environ["VEXA_FLOWS_DB_URL"] = "postgresql+psycopg://friction:unreachable@127.0.0.1:1/flows"
+os.environ["VEXA_FLOWS_DB_URL"] = "postgresql+pg8000://friction:unreachable@127.0.0.1:1/flows"
 try:
     from flows_integrations import flows_api  # noqa: E402
 finally:

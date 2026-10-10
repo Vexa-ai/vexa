@@ -59,7 +59,7 @@ def send_invite(to_addr, organizer, title, start_epoch):
 
 def lane_invites(db):
     u = subprocess.run(["bash", "-lc",
-                        f'psql "$(sed "s#postgresql+psycopg#postgresql#" ~/.storm/dburl'
+                        f'psql "$(sed "s#postgresql+[a-z0-9]*:#postgresql:#" ~/.storm/dburl'
                         f' | sed "s#/flows\\$#/{db}#")" -tAc '
                         f'"select source_event_id from reaction where source_event_id like '
                         f"'%secondinvite%'\""], capture_output=True, text=True).stdout

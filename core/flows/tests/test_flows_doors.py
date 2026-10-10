@@ -163,5 +163,5 @@ def test_a_named_database_is_returned_unchanged(monkeypatch):
     layer up (Postgres only, 2026-09-03); this test would pass on any non-empty string, sqlite-
     shaped or not — it is here to pin that `db_url()` itself never refuses or rewrites a value."""
     from flows_steps import common
-    monkeypatch.setenv("VEXA_FLOWS_DB_URL", "postgresql+psycopg://x:y@127.0.0.1:1/flows")
-    assert common.db_url() == "postgresql+psycopg://x:y@127.0.0.1:1/flows"
+    monkeypatch.setenv("VEXA_FLOWS_DB_URL", "postgresql+pg8000://x:y@127.0.0.1:1/flows")
+    assert common.db_url() == "postgresql+pg8000://x:y@127.0.0.1:1/flows"

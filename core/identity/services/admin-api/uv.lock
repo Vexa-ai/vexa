@@ -776,11 +776,15 @@ dependencies = [
     { name = "fastapi" },
     { name = "greenlet" },
     { name = "httpx" },
-    { name = "psycopg", extra = ["binary"] },
     { name = "pydantic" },
-    { name = "pytest" },
     { name = "redis" },
     { name = "sqlalchemy" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "psycopg", extra = ["binary"] },
+    { name = "pytest" },
     { name = "testcontainers", extra = ["redis"] },
 ]
 
@@ -790,11 +794,15 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.110" },
     { name = "greenlet", specifier = ">=3.0" },
     { name = "httpx", specifier = ">=0.27" },
-    { name = "psycopg", extras = ["binary"], specifier = ">=3.1" },
     { name = "pydantic", specifier = ">=2" },
-    { name = "pytest", specifier = ">=8" },
     { name = "redis", specifier = ">=5" },
     { name = "sqlalchemy", specifier = ">=2.0" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "psycopg", extras = ["binary"], specifier = ">=3.1" },
+    { name = "pytest", specifier = ">=8" },
     { name = "testcontainers", extras = ["postgres", "redis"], specifier = ">=4.0" },
 ]
 

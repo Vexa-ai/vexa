@@ -38,7 +38,7 @@ os.environ.setdefault("VEXA_FLOWS_API_KEY", "test-flows-key")
 # far too late — module import happens at collection.
 os.environ.setdefault("VEXA_FLOWS_ADMIN_KEY", "test-admin-key-not-a-placeholder")
 os.environ.setdefault("INTERNAL_API_SECRET", "test-internal-secret")
-os.environ["VEXA_FLOWS_DB_URL"] = "postgresql+psycopg://key-gate:unreachable@127.0.0.1:1/flows"
+os.environ["VEXA_FLOWS_DB_URL"] = "postgresql+pg8000://key-gate:unreachable@127.0.0.1:1/flows"
 try:
     from flows_integrations import flows_api  # noqa: E402
 finally:
@@ -61,7 +61,7 @@ def a_configured_deployment(monkeypatch):
     monkeypatch.setenv("VEXA_FLOWS_ADMIN_KEY", "a-real-admin-key")
     monkeypatch.setenv("INTERNAL_API_SECRET", "a-real-internal-secret")
     monkeypatch.setenv("VEXA_FLOWS_DB_URL",
-                       "postgresql+psycopg://x:y@127.0.0.1:1/flows")
+                       "postgresql+pg8000://x:y@127.0.0.1:1/flows")
     monkeypatch.setenv("VEXA_FLOWS_ADMIN_API_URL", "http://admin-api:8057")
 
 
