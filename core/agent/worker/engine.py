@@ -229,9 +229,10 @@ def _open_regular(dir_fd: int, name: str) -> int:
     return fd
 
 
-def _read_legacy_pointer(root: Path, parts: tuple[str, ...], name: str) -> "str | None":
-    """The text of a legacy session pointer at ``root/<parts…>/name``, or None when there is none,
-    it is reached through a link, it is not a regular file, or it is no pointer."""
+def _read_text_nofollow(root: Path, parts: tuple[str, ...], name: str, max_bytes: int,
+                        what: str) -> "str | None":
+    """The UTF-8 text of ``root/<parts…>/name``, or None when there is none, it is reached through a
+    link, it is not a regular file with a single link, it is over ``max_bytes`` or not UTF-8."""
     try:
         dir_fd = _nofollow_dir(root, parts)
     except OSError:
@@ -241,22 +242,72 @@ def _read_legacy_pointer(root: Path, parts: tuple[str, ...], name: str) -> "str 
     except FileNotFoundError:
         return None
     except OSError as exc:
-        log.warning("legacy session pointer %s/%s not adopted: %s", "/".join(parts), name, exc)
+        log.warning("%s %s/%s not read: %s", what, "/".join(parts), name, exc)
         return None
     finally:
         os.close(dir_fd)
     try:
-        raw = os.read(fd, _LEGACY_POINTER_MAX_BYTES + 1)
+        chunks, size = [], 0
+        while size <= max_bytes and (chunk := os.read(fd, min(1 << 20, max_bytes + 1 - size))):
+            chunks.append(chunk)
+            size += len(chunk)
+        raw = b"".join(chunks)
     except OSError:
         return None
     finally:
         os.close(fd)
-    if len(raw) > _LEGACY_POINTER_MAX_BYTES:
+    if len(raw) > max_bytes:
         return None
     try:
         return raw.decode("utf-8")
     except UnicodeDecodeError:
         return None
+
+
+def _read_legacy_pointer(root: Path, parts: tuple[str, ...], name: str) -> "str | None":
+    """The text of a legacy session pointer at ``root/<parts…>/name``, or None when there is none,
+    it is reached through a link, it is not a regular file, or it is no pointer."""
+    return _read_text_nofollow(root, parts, name, _LEGACY_POINTER_MAX_BYTES,
+                               "legacy session pointer")
+
+
+def _replace_nofollow(root: Path, parts: tuple[str, ...], name: str, text: str) -> None:
+    """Make ``root/<parts…>/name`` a new regular file holding ``text``: the folders are reached
+    without following a link (missing ones made), the text goes to a new file created exclusively
+    beside it, and that file is renamed over the name — so whatever was at the name, a link
+    included, is replaced, never written through. Raises ``OSError``."""
+    dir_fd = _nofollow_dir(root, parts, create=True)
+    try:
+        tmp = f".{name}.{os.getpid()}.{threading.get_ident()}.{time.monotonic_ns()}.tmp"
+        fd = os.open(tmp, _CREATE_NEW, 0o666, dir_fd=dir_fd)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(text)
+            os.replace(tmp, name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+        except BaseException:
+            try:
+                os.unlink(tmp, dir_fd=dir_fd)
+            except OSError:
+                pass
+            raise
+    finally:
+        os.close(dir_fd)
+
+
+def _unlink_nofollow(root: Path, parts: tuple[str, ...], name: str) -> None:
+    """Remove ``root/<parts…>/name`` (a link is removed itself), reached without following a link."""
+    try:
+        dir_fd = _nofollow_dir(root, parts)
+    except OSError:
+        return
+    try:
+        os.unlink(name, dir_fd=dir_fd)
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        log.warning("%s/%s not removed: %s", "/".join(parts), name, exc)
+    finally:
+        os.close(dir_fd)
 
 
 def _write_new_pointer(root: Path, parts: tuple[str, ...], name: str, text: str) -> bool:
@@ -1376,6 +1427,10 @@ def _prompt_key(composed: str) -> str:
 # cap loses its OLDEST records first, and a turn with no record degrades to exactly today's
 # behaviour (the terminal's fallback strip) — never to a wrong bubble.
 USER_TEXT_KEEP = 400
+#: The continuity folder under a chat root (``_system`` or the turn's workspace).
+_SESSIONS_DIR = (".claude", "sessions")
+#: A user_text sidecar larger than this is not ours; it is started again rather than read.
+_TURNS_MAX_BYTES = 16 << 20
 
 
 def _turns_file(chat_root: Path, session: str) -> Path:
@@ -1409,17 +1464,15 @@ def record_user_text(chat_root: Path, session: str, composed: str, user_text: st
     line = json.dumps({"key": _prompt_key(composed), "user_text": user_text,
                        "ts": time.time()}, ensure_ascii=False)
     f = _turns_file(chat_root, session)
+    # `_system` is the tools user's to write, so the sidecar is read and replaced without following
+    # a link (see `_read_text_nofollow` / `_replace_nofollow`), never appended to through one.
     try:
-        f.parent.mkdir(parents=True, exist_ok=True)
-        prior = f.read_text(encoding="utf-8").splitlines() if f.exists() else []
-        kept = [ln for ln in prior if ln.strip()]
+        prior = _read_text_nofollow(chat_root, _SESSIONS_DIR, f.name, _TURNS_MAX_BYTES,
+                                    "user_text sidecar") or ""
+        kept = [ln for ln in prior.splitlines() if ln.strip()]
         kept.append(line)
-        if len(kept) > USER_TEXT_KEEP:
-            kept = kept[-USER_TEXT_KEEP:]
-            f.write_text("\n".join(kept) + "\n", encoding="utf-8")
-        else:
-            with f.open("a", encoding="utf-8") as fh:
-                fh.write(line + "\n")
+        kept = kept[-USER_TEXT_KEEP:]
+        _replace_nofollow(chat_root, _SESSIONS_DIR, f.name, "\n".join(kept) + "\n")
     except OSError as e:
         log.warning("could not record user_text for session=%s (%s) — history will fall back to "
                     "stripping the composed prompt", session, e)
@@ -1434,10 +1487,17 @@ def _chat_resume_max_bytes() -> int:
 
 def _resume_id(work: Path, sess_file: Path, harness: HarnessPort) -> str | None:
     """The session id to resume, or None. The id is an OPAQUE per-harness token; the harness also
-    accounts the stored transcript size behind it so an over-budget resume restarts fresh."""
-    if not sess_file.exists():
+    accounts the stored transcript size behind it so an over-budget resume restarts fresh.
+
+    ``sess_file`` is ``work/.claude/sessions/<name>`` (``_session_file``), and ``work`` — ``_system``
+    — is the tools user's to write: the pointer is read without following a link, only as a regular
+    file, and an id that is not one plain name is no id."""
+    text = _read_text_nofollow(work, _SESSIONS_DIR, sess_file.name, _LEGACY_POINTER_MAX_BYTES,
+                               "session pointer")
+    sid = (text or "").strip()
+    if sid and not _plain_name(sid):
+        log.warning("session pointer %s holds no session id; starting fresh", sess_file.name)
         return None
-    sid = sess_file.read_text().strip()
     limit = _chat_resume_max_bytes()
     if sid and limit > 0 and harness.transcript_bytes(work, sid) > limit:
         return None
@@ -1885,8 +1945,7 @@ def run_turn_over_workspace(
     # whatever the session — healing it would drop the chat's resume pointer and ask twice.
     if (resume and first is not None and first.get("type") == "done"
             and not first.get("ok", True) and not first.get("reason") and not first.get("fault")):
-        if sess_file.exists():
-            sess_file.unlink()
+        _unlink_nofollow(chat_root, _SESSIONS_DIR, sess_file.name)
         # The refused-resume turn is ABANDONED here — reap its CLI now rather than leaving a second
         # harness subprocess to whatever the interpreter does with an unreferenced generator.
         close_event_stream(gen)
@@ -1932,8 +1991,11 @@ def run_turn_over_workspace(
     except Exception as e:  # noqa: BLE001 — a friction report is never worth a turn
         log.warning("friction: the auto-file scan failed (%s)", e)
     if captured and session_continuity:
-        sess_file.parent.mkdir(parents=True, exist_ok=True)
-        sess_file.write_text(captured)
+        # never written through a link the tools user planted in `_system` (`_replace_nofollow`)
+        try:
+            _replace_nofollow(chat_root, _SESSIONS_DIR, sess_file.name, captured)
+        except OSError as exc:
+            log.warning("session pointer %s not saved: %s", sess_file.name, exc)
 
 
 def start_prompt(start: dict) -> str | None:
