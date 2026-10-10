@@ -100,6 +100,7 @@ carries the event vocabulary and the rest.
 | `VEXA_LLM_EXTRA_BODY` | JSON object merged into EVERY openai-agent request | `{}` |
 | `VEXA_AGENT_MAX_TOOL_CALLS` / `VEXA_AGENT_MAX_TURN_SEC` | openai-agent per-turn budget | 40 / 900 |
 | `VEXA_AGENT_CONTEXT_TOKENS` | openai-agent context ceiling (trims oldest tool results first) | 24000 |
+| `VEXA_AGENT_MAX_OUTPUT_TOKENS` | every harness: output-token cap per request — claude-code receives it as `CLAUDE_CODE_MAX_OUTPUT_TOKENS`, openai-agent sends it as `max_tokens` (wins over `VEXA_LLM_EXTRA_BODY`) | unset → each harness's default (claude CLI: 32000) |
 | `VEXA_AGENT_STREAM` | openai-agent SSE streaming (`0` = one blocking request) | `1` |
 | `VEXA_SEARCH_URL` | operator-supplied search endpoint for `WebSearch` | empty → `WebSearch` is not attached |
 | `VEXA_SEARCH_DIALECT` | wire format of that endpoint: `searxng` \| `brave` | `searxng` |

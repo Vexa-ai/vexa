@@ -76,6 +76,10 @@ WORKER_FORWARD_ENV = (
     "VEXA_AGENT_MAX_TURN_SEC",
     "VEXA_AGENT_CONTEXT_TOKENS",
     "VEXA_AGENT_STREAM",
+    # THE OUTPUT CAP, read by every harness (claude-code maps it onto CLAUDE_CODE_MAX_OUTPUT_TOKENS,
+    # openai-agent sends it as max_tokens). A provider that prices the allowance up front refuses a
+    # small balance the CLI's 32000-token default.
+    "VEXA_AGENT_MAX_OUTPUT_TOKENS",
     # The worker's reach onto the open web (WebSearch/WebFetch). THE ENDPOINT IS THE OPERATOR'S —
     # nothing search-shaped ships with this product — so it arrives as deployment env and is
     # forwarded like every other worker-read dial.

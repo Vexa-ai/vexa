@@ -27,7 +27,8 @@ from llm.errors import looks_like_auth_failure, preflight_provider_guard, provid
 from llm import fault_wire
 from llm import faults as provider_faults
 from llm import workspace_paths as wpaths
-from llm.ports import HarnessExec, close_event_stream, harness_identity_kwargs, harness_subprocess_env
+from llm.ports import (HarnessExec, close_event_stream, harness_identity_kwargs, harness_subprocess_env,
+                       max_output_tokens)
 from llm.claude_skills import _link_skills_into_home
 from llm.tool_events import (_BOT_TOOLS, _FOCUS_TOOLS, _OPEN_TOOLS, _TERMS_TOOLS, _WRITER_TOOLS,
                              _bot_artifact, _open_event, _published_terms, _short,
@@ -375,6 +376,11 @@ def _cli_env() -> dict[str, str]:
     workspace's ``CLAUDE.md`` loading as project memory."""
     env = harness_subprocess_env()
     env["CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD"] = "1"
+    # THE OUTPUT CAP (`llm.ports.max_output_tokens`). The CLI asks for 32000 output tokens unless
+    # told otherwise; the deployment's one dial is mapped onto the CLI's own variable here.
+    cap = max_output_tokens()
+    if cap is not None:
+        env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = str(cap)
     return env
 
 

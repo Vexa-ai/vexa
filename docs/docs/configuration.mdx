@@ -215,6 +215,7 @@ Point the agent at your own model so no inference leaves the network.
 | Variable | Default | Purpose |
 |---|---|---|
 | `VEXA_AGENT_MODEL` | — | Model the agent runner uses. |
+| `VEXA_AGENT_MAX_OUTPUT_TOKENS` | — (each harness's own; the claude CLI asks for 32000) | Output-token cap on every model request. claude-code receives it as `CLAUDE_CODE_MAX_OUTPUT_TOKENS`; openai-agent sends it as `max_tokens`. Set it when a provider that prices the allowance up front (OpenRouter) refuses a small balance with a 402. |
 | `VEXA_MEETING_MODEL` | — | Model for meeting-time processing. |
 | `ANTHROPIC_API_KEY` | — | Key for Anthropic-backed runners. |
 | `ANTHROPIC_MODEL` · `ANTHROPIC_DEFAULT_OPUS_MODEL` · `…_SONNET_MODEL` · `…_HAIKU_MODEL` | — | Per-tier model overrides. |
