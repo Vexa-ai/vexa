@@ -162,6 +162,14 @@ class TranscriptStore(Protocol):
         row is unknown or not the caller's."""
         ...
 
+    async def stamp_share_mail(self, user_id: int, meeting_id: int, grant_id: str) -> None:
+        """OWNER-scoped: record that an invite mail was handed over for ``grant_id``."""
+        ...
+
+    async def count_share_mails_since(self, user_id: int, since_iso: str) -> int:
+        """Invite mails this owner handed over since ``since_iso`` (the hourly cap's count)."""
+        ...
+
     async def backfill_share_roster(self, user_id: int, meeting_id: int,
                                     emails: "dict[int, str]") -> "Optional[dict]":
         """OWNER-scoped, one-time per reader: name the readers who redeemed before the roster

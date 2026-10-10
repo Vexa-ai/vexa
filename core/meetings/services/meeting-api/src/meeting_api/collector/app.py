@@ -35,6 +35,7 @@ from typing import Any, Callable, Optional
 
 import json
 import re
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
@@ -66,7 +67,9 @@ _FSM_OWNED_STATUSES = frozenset({
 # is checked at the door instead of being trusted downstream.
 SHARE_MODES = frozenset({"open", "restricted"})
 # A workspace invite token handed through for the share mail (agent-api's `secrets.token_urlsafe`).
-_INVITE_TOKEN = re.compile(r"[A-Za-z0-9_-]{16,128}")
+_ONE_ADDRESS = re.compile(r"[^@\s,;<>()\[\]\\\"\x00-\x1f\x7f]{1,64}@[A-Za-z0-9](?:[A-Za-z0-9.-]{0,253}[A-Za-z0-9])?\.[A-Za-z]{2,63}")
+#: Invite emails one owner may have flows send in an hour, across all their meetings (R1801-2).
+SHARE_MAILS_PER_OWNER_PER_HOUR = 30
 SHARE_DEFAULT_TTL_SEC = 86_400                  # 24h — unchanged default
 SHARE_MIN_TTL_SEC = 60                          # a link nobody can redeem in time is not a share
 SHARE_MAX_TTL_SEC = 30 * 24 * 60 * 60           # 30d — a capability, not a second front door
@@ -1064,50 +1067,46 @@ def build_router(
         )
         return JSONResponse(content={"workspace_id": bound})
 
-    def _notify_payload(payload, mode: str, emails: list) -> "tuple[bool, str]":
-        """`notify` (mail each invited address its link, through flows) and the optional
-        `workspace_invite` token to bundle into that link. A mail goes only to an address the grant
-        is RESTRICTED to — an open link has no recipient — and the bundled token is opaque here
-        (agent-api minted it; it only ever lands in the recipient's own link), so it is checked for
-        shape and nothing else."""
-        if not isinstance(payload, dict) or not payload.get("notify"):
-            return False, ""
+    def _notify_payload(payload, mode: str, emails: list) -> bool:
+        """`notify`: mail the invited address its link, through flows.
+
+        ONE RECIPIENT PER MAIL (R1801-2): a share mail goes only to a grant RESTRICTED to exactly one
+        address, so a single request can never fan one owner-worded mail out to a list, and "the link
+        works only for this address" is true of every mail sent. The dialog mints one grant per
+        person; a caller with ten people makes ten requests, each counted against the hourly cap."""
+        if not isinstance(payload, dict) or "notify" not in payload or payload.get("notify") is False:
+            return False
         if payload.get("notify") is not True:
             raise HTTPException(status_code=422, detail="'notify' must be true or false")
-        if mode != "restricted" or not emails:
+        if mode != "restricted" or len(emails) != 1:
             raise HTTPException(status_code=422,
-                                detail="a share mail needs mode 'restricted' and at least one address")
-        ws = payload.get("workspace_invite") or ""
-        if ws and (not isinstance(ws, str) or not _INVITE_TOKEN.fullmatch(ws)):
-            raise HTTPException(status_code=422, detail="'workspace_invite' is not an invite token")
-        return True, ws
+                                detail="a share mail needs mode 'restricted' and exactly one address")
+        return True
 
-    async def _mail_the_invite(user_id, meeting_id, minted: dict, emails: list, request: Request,
-                               workspace_invite: str) -> dict:
-        """Hand one `meeting.shared` fact per address to flows, which mails the link. Returns
-        `{address: True|False}` — whether the fact LANDED — so the dialog can say which people were
-        mailed and offer the copied link for the rest. A publish is not a dependency: a failure
-        here never fails the invite, which is minted and valid either way."""
-        from ..events import publish_meeting_shared
+    async def _mail_the_invite(user_id, meeting_id, minted: dict, email: str, request: Request) -> dict:
+        """Hand ONE `meeting.shared` fact to flows, which mints the recipient's own link at send time
+        and mails it. Returns `{address: True|False}` — whether the fact LANDED.
+
+        NO TOKEN TRAVELS (R1801-5). The fact names the meeting, the address and the grant the owner
+        just minted — never a secret: meeting-api keeps grants as hashes at rest, and the flows
+        event store is not a second place to keep a working credential. The title is the owner's
+        words and goes out as bounded plain text (`share_mail_title`)."""
+        from ..events import publish_meeting_shared, share_mail_title
 
         title = ""
         try:
             rows = await store.list_meetings(user_id, meeting_id=meeting_id, slim=True)
             row = next((m for m in rows if m.get("id") == meeting_id), None)
-            title = str(((row or {}).get("data") or {}).get("title") or "")
+            title = share_mail_title(((row or {}).get("data") or {}).get("title"))
         except Exception:  # noqa: BLE001 — the title is a nicety in a subject line
             title = ""
         inviter = request.headers.get("x-user-email") or ""
-        token = str(minted.get("token") or "")
-        out = {}
-        for email in emails:
-            out[email] = await publish_meeting_shared(
-                meeting_id, user_id, email, token, minted.get("id"), title=title,
-                inviter=inviter, workspace_invite=workspace_invite)
+        landed = await publish_meeting_shared(meeting_id, user_id, email, minted.get("id"),
+                                              title=title, inviter=inviter)
+        await store.stamp_share_mail(user_id, meeting_id, minted.get("id"))
         log_event("meeting_share_mail_handed_over", audience="user", span="meetings.share.notify",
-                  user_id=user_id, meeting_id=str(meeting_id),
-                  fields={"addresses": len(emails), "landed": sum(1 for v in out.values() if v)})
-        return out
+                  user_id=user_id, meeting_id=str(meeting_id), fields={"landed": bool(landed)})
+        return {email: bool(landed)}
 
     def _share_payload(payload) -> "tuple[str, list, int]":
         """mode | allowed_emails | ttl out of a share-mint body, defaulted and VALIDATED the same
@@ -1149,6 +1148,13 @@ def build_router(
                         "read back on every access check"),
             )
         emails = [str(e).strip() for e in emails if str(e).strip()]
+        # ONE ADDRESS PER ENTRY (R1801-2): an entry is matched against a verified address and may be
+        # the recipient of a mail, so a value that could expand into several recipients — a comma,
+        # a semicolon, whitespace, angle brackets, a control character — is refused, not stored.
+        bad = [e for e in emails if not _ONE_ADDRESS.fullmatch(e)]
+        if bad:
+            raise HTTPException(status_code=422,
+                                detail=f"'allowed_emails' entries must each be one address — refused {bad[0]!r}")
 
         raw_ttl = payload.get("expires_in_sec", SHARE_DEFAULT_TTL_SEC)
         if raw_ttl in (None, ""):
@@ -1302,7 +1308,14 @@ def build_router(
         except Exception:
             payload = {}
         mode, emails, ttl = _share_payload(payload)
-        notify, workspace_invite = _notify_payload(payload, mode, emails)
+        notify = _notify_payload(payload, mode, emails)
+        if notify:
+            # THE HOURLY CAP is checked before anything is minted, so a refusal changes nothing.
+            since = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+            if await store.count_share_mails_since(user_id, since) >= SHARE_MAILS_PER_OWNER_PER_HOUR:
+                raise HTTPException(status_code=429, detail=(
+                    f"You have sent {SHARE_MAILS_PER_OWNER_PER_HOUR} invite emails in the last hour. "
+                    "Copy the link instead, or try again later."))
         minted = await store.mint_transcript_share_by_id(
             user_id, meeting_id, mode=mode, allowed_emails=emails, expires_in_sec=ttl,
         )
@@ -1316,8 +1329,7 @@ def build_router(
         log_event("transcript_share_minted", audience="user", span="meetings.transcript.share",
                   user_id=user_id, meeting_id=str(meeting_id), fields={"mode": mode, "by": "row_id"})
         if notify:
-            minted["notified"] = await _mail_the_invite(
-                user_id, meeting_id, minted, emails, request, workspace_invite)
+            minted["notified"] = await _mail_the_invite(user_id, meeting_id, minted, emails[0], request)
         return JSONResponse(content=minted)
 
     # --- POST /meetings/{platform}/{native_meeting_id}/share → mint an INDEPENDENT transcript share link

@@ -385,7 +385,7 @@ class SqlAlchemyTranscriptStore:
         native-keyed read constrains ``Meeting.user_id == user_id`` in SQL, and the by-id read
         evaluates an explicit owner branch inside its authorization check. Passing the decision down
         beats re-deriving it here, where the caller's ``user_id`` is not even in scope."""
-        from .projection import project_response_data
+        from .projection import project_response_data, visible_recordings
 
         snap, seg_by_id, order = pg
         data = snap["data"]
@@ -420,7 +420,7 @@ class SqlAlchemyTranscriptStore:
             "status": snap["status"],
             "start_time": _iso_utc(snap["start_time"]),
             "end_time": _iso_utc(snap["end_time"]),
-            "recordings": data.get("recordings", []),
+            "recordings": visible_recordings(data, viewer_is_owner=viewer_is_owner),
             "notes": data.get("notes"),
             "data": project_response_data(data, viewer_is_owner=viewer_is_owner),
             "segments": segments,
@@ -860,6 +860,25 @@ class SqlAlchemyTranscriptStore:
             flag_modified(meeting, "data")
             await db.commit()
             return {"meeting_id": mid, "ok": True}
+
+    async def stamp_share_mail(self, user_id, meeting_id, grant_id) -> None:
+        """OWNER-scoped: mark that an invite mail was handed over for this grant (`mailed_at`) — what
+        the hourly cap counts."""
+        await self._owned_row_edit(user_id, meeting_id,
+                                   lambda data, m: share_access.stamp_mail(data, str(grant_id)))
+
+    async def count_share_mails_since(self, user_id, since_iso) -> int:
+        """Invite mails this owner handed over since ``since_iso``, across all their meetings. One
+        indexed scan of the owner's own rows (``ix_meeting_user_created_at``); grants are few."""
+        from sqlalchemy import text as sql_text
+
+        async with self._session_factory() as db:
+            n = (await db.execute(sql_text(
+                "SELECT count(*) FROM meetings m, "
+                "jsonb_array_elements(COALESCE(m.data->'share_grants', '[]'::jsonb)) g "
+                "WHERE m.user_id = :uid AND (g->>'mailed_at') >= :since"),
+                {"uid": int(user_id), "since": str(since_iso)})).scalar()
+        return int(n or 0)
 
     async def backfill_share_roster(self, user_id, meeting_id, emails) -> "Optional[dict]":
         """OWNER-scoped, ONE-TIME per reader: name readers who redeemed before the roster existed

@@ -135,7 +135,7 @@ class InMemoryTranscriptStore:
         by-id read returns exactly that row's segments/notes. Mirrors the real store's viewer-aware
         response projection, ``viewer_is_owner`` included — the fake and the real store must agree on
         what a share recipient receives, since most of the suite drives the fake."""
-        from .projection import project_response_data
+        from .projection import project_response_data, visible_recordings
 
         m = self._meetings[mid]
         by_id = dict(m["segments"])
@@ -160,7 +160,7 @@ class InMemoryTranscriptStore:
             "status": m["status"],
             "start_time": m["start_time"],
             "end_time": m["end_time"],
-            "recordings": m["data"].get("recordings", []),
+            "recordings": visible_recordings(m["data"], viewer_is_owner=viewer_is_owner),
             "notes": m["data"].get("notes"),
             "data": project_response_data(m["data"], viewer_is_owner=viewer_is_owner),
             "segments": [_segment_to_api(s) for s in segments],
@@ -399,6 +399,20 @@ class InMemoryTranscriptStore:
             return None
         row["data"] = data
         return result
+
+    async def stamp_share_mail(self, user_id, meeting_id, grant_id):
+        from . import share_access
+        self._owned_row_edit(user_id, meeting_id, lambda d, mid, owner: share_access.stamp_mail(d, str(grant_id)))
+
+    async def count_share_mails_since(self, user_id, since_iso):
+        n = 0
+        for m in self._meetings.values():
+            if m.get("user_id") != user_id:
+                continue
+            for g in (m.get("data") or {}).get("share_grants") or []:
+                if str(g.get("mailed_at") or "") >= str(since_iso):
+                    n += 1
+        return n
 
     async def backfill_share_roster(self, user_id, meeting_id, emails):
         from . import share_access

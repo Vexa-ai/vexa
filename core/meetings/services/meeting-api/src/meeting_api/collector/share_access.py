@@ -67,9 +67,17 @@ def record_redeem(data: dict, user_id: int, email: Optional[str], grant: dict) -
     if user_id not in viewers:
         viewers.append(user_id)
     data["transcript_viewers"] = viewers
+    prior = next((v for v in (data.get("share_viewers") or []) if v.get("user_id") == user_id), {})
     roster = [v for v in (data.get("share_viewers") or []) if v.get("user_id") != user_id]
+    # EVERY grant a reader came in through is kept (`grant_ids`), not only the latest: turning one
+    # link off must take away exactly the access that link gave, and a reader who also holds a live
+    # invite keeps that one (R1801-4). `grant_id` stays as the latest, for the owner's list.
+    ids = [i for i in (prior.get("grant_ids") or ([prior["grant_id"]] if prior.get("grant_id") else []))]
+    if grant.get("id") and grant.get("id") not in ids:
+        ids.append(grant.get("id"))
     roster.append({"user_id": user_id, "email": (email or "").lower() or None,
-                   "grant_id": grant.get("id"), "since": _now_iso()})
+                   "grant_id": grant.get("id"), "grant_ids": ids,
+                   "since": prior.get("since") or _now_iso()})
     data["share_viewers"] = roster
     # A fresh, valid redeem after a removal means the owner re-invited them: the removal is spent.
     data["share_removed"] = [r for r in (data.get("share_removed") or []) if r.get("user_id") != user_id]
@@ -104,8 +112,8 @@ def backfill_roster(data: dict, emails: "dict[int, str]", *, owner_id: int) -> b
                     addr in [str(e).lower() for e in (g.get("allowed_emails") or [])]:
                 grant_id = g.get("id")
                 break
-        roster.append({"user_id": uid, "email": addr, "grant_id": grant_id, "since": None,
-                       "backfilled": True})
+        roster.append({"user_id": uid, "email": addr, "grant_id": grant_id,
+                       "grant_ids": [grant_id] if grant_id else [], "since": None, "backfilled": True})
         changed = True
     if changed:
         data["share_viewers"] = roster
@@ -124,17 +132,26 @@ def access_view(data: dict, *, meeting_id: int, owner_id: int) -> dict:
                        "grant_id": v.get("grant_id"), "since": v.get("since")})
     joined_emails = {p["email"] for p in people if p.get("email")}
     invites, links = [], []
+    # ONE ROW PER PENDING ADDRESS, however many live grants name it — the dialog's copy-link grant
+    # and the one the invite mail mints at send time are both "this person is invited". `ids` is
+    # every grant behind the row, so withdrawing the invite withdraws all of them.
+    by_email: dict = {}
     for g in data.get("share_grants") or []:
         if g.get("revoked") or _expired(g):
             continue
         public = {"id": g.get("id"), "mode": g.get("mode"), "created_at": g.get("created_at"),
                   "expires_at": g.get("expires_at")}
         if g.get("mode") == "restricted":
-            pending = [e for e in (g.get("allowed_emails") or []) if str(e).lower() not in joined_emails]
-            if pending:
-                invites.append({**public, "emails": pending})
+            for e in (g.get("allowed_emails") or []):
+                addr = str(e).lower()
+                if addr in joined_emails:
+                    continue
+                row = by_email.setdefault(addr, {**public, "emails": [addr], "ids": []})
+                row["ids"].append(g.get("id"))
+                row.update({k: v for k, v in public.items()})   # the newest grant names the row
         else:
-            links.append({**public, "joined": sum(1 for p in people if p.get("grant_id") == g.get("id"))})
+            links.append({**public, "joined": sum(1 for p in people if g.get("id") in _ids_of(roster.get(p["user_id"])))})
+    invites = list(by_email.values())
     settings = data.get("share_settings") if isinstance(data.get("share_settings"), dict) else {}
     return {
         "meeting_id": meeting_id,
@@ -146,22 +163,42 @@ def access_view(data: dict, *, meeting_id: int, owner_id: int) -> dict:
     }
 
 
+def _ids_of(entry: Optional[dict]) -> "list[str]":
+    """Every grant a roster entry says this reader came in through."""
+    if not entry:
+        return []
+    return list(entry.get("grant_ids") or ([entry["grant_id"]] if entry.get("grant_id") else []))
+
+
 def revoke_grant(data: dict, grant_id: str) -> bool:
     """Revoke one grant, and drop every person who got in through it. False if no such grant.
 
-    Turning a link off takes back what it gave: people who joined through that link lose access
-    now, not when they next happen to redeem."""
-    found = False
+    Turning a link off takes back what it gave, now (R1801-4):
+      * a reader attributed to it loses access unless another LIVE grant they redeemed still admits
+        them — a person who was also invited by address keeps that invite's access;
+      * a reader with NO attribution at all — a redeem from before the roster recorded grants, not
+        yet backfilled — is removed when an OPEN link is turned off, because nothing on record says
+        they did not come in through it. The owner can invite them again; the list shows who
+        remains."""
+    found = None
     grants = []
     for g in data.get("share_grants") or []:
         if g.get("id") == grant_id:
             g = {**g, "revoked": True}
-            found = True
+            found = g
         grants.append(g)
-    if not found:
+    if found is None:
         return False
     data["share_grants"] = grants
-    gone = {v.get("user_id") for v in (data.get("share_viewers") or []) if v.get("grant_id") == grant_id}
+    live = {g.get("id") for g in grants if not g.get("revoked") and not _expired(g)}
+    roster = {v.get("user_id"): v for v in (data.get("share_viewers") or [])}
+    gone = set()
+    for uid in data.get("transcript_viewers") or []:
+        ids = _ids_of(roster.get(uid))
+        if grant_id in ids and not (set(ids) & live):
+            gone.add(uid)
+        elif not ids and found.get("mode") != "restricted":
+            gone.add(uid)
     if gone:
         data["transcript_viewers"] = [u for u in (data.get("transcript_viewers") or []) if u not in gone]
         data["share_viewers"] = [v for v in (data.get("share_viewers") or []) if v.get("user_id") not in gone]
@@ -190,6 +227,18 @@ def remove_viewer(data: dict, viewer_id: int) -> bool:
     removed.append({"user_id": viewer_id, "at": _now_iso()})
     data["share_removed"] = removed
     return True
+
+
+def stamp_mail(data: dict, grant_id: str) -> bool:
+    """Mark the grant whose invite mail was just handed to flows (``mailed_at``). True if found."""
+    grants, hit = [], False
+    for g in data.get("share_grants") or []:
+        if g.get("id") == grant_id:
+            g, hit = {**g, "mailed_at": _now_iso()}, True
+        grants.append(g)
+    if hit:
+        data["share_grants"] = grants
+    return hit
 
 
 def set_settings(data: dict, *, recording: bool) -> dict:

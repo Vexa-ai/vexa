@@ -152,7 +152,9 @@ export function MeetingShareDialog({ meeting, onClose, origin }: { meeting: Meet
       {results.map((r) => r.url
         ? <div key={r.email} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
             <span style={{ flex: 1, minWidth: 0, color: "var(--t2)" }}>{r.mailed
-              ? <>Emailed <b style={{ color: "var(--t1)" }}>{r.email}</b> their link. You can also copy it — it works only for that address.</>
+              ? (r.workspace
+                ? <>Emailed <b style={{ color: "var(--t1)" }}>{r.email}</b> the meeting. Their workspace invite is only in the copied link — send them that too. It works only for that address.</>
+                : <>Emailed <b style={{ color: "var(--t1)" }}>{r.email}</b> their link. You can also copy it — it works only for that address.</>)
               : <>The email to <b style={{ color: "var(--t1)" }}>{r.email}</b> could not be sent. Copy the link and send it yourself — it works only for that address.</>}</span>
             <button type="button" style={textBtn} onClick={() => void copyText(r.url!)}>Copy link</button>
           </div>
@@ -166,7 +168,13 @@ export function MeetingShareDialog({ meeting, onClose, origin }: { meeting: Meet
       {readers.map((p) => <AccessRow key={`r${p.user_id}`} who={p.email ?? `User ${p.user_id}`} role="can view" busy={busy}
         onRemove={() => void act(() => removeReader(meeting.id, p.user_id))} />)}
       {pending.map((i) => <AccessRow key={`i${i.id}`} who={i.emails.join(", ")} role="invited, not opened yet" busy={busy}
-        onRemove={() => void act(() => revokeShare(meeting.id, i.id))} />)}
+        onRemove={() => void act(async () => {
+          // ONE invite row can stand for several grants (the copied link and the emailed one);
+          // withdrawing the invite withdraws every one of them.
+          let last: MeetingAccess | undefined;
+          for (const id of (i.ids?.length ? i.ids : [i.id])) last = await revokeShare(meeting.id, id);
+          return last;
+        })} />)}
       {workspaceId && <>
         {membersError && <Alert>Could not load the workspace members: {membersError}</Alert>}
         {members?.map((m) => <AccessRow key={`w${m.subject}`} who={m.email || m.name || m.subject}

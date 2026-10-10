@@ -24,6 +24,11 @@ GATED = [
     ("POST", "/meetings/1/share", {}),
     ("POST", "/meetings/google_meet/abc-defg-hij/share", {}),
     ("POST", "/meetings/google_meet/abc-defg-hij/workspace", {"workspace_id": "ws_1"}),
+    # the owner's side of a share (#1801): seeing and changing who can read a meeting
+    ("GET", "/meetings/1/access", None),
+    ("PATCH", "/meetings/1/access", {"recording": True}),
+    ("DELETE", "/meetings/1/share/g1", None),
+    ("DELETE", "/meetings/1/viewers/8", None),
 ]
 
 

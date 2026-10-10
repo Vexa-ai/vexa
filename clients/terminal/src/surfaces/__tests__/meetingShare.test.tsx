@@ -24,7 +24,7 @@ function meeting(over: Partial<MeetingMock> = {}): MeetingMock {
 const ACCESS = {
   meeting_id: 42, workspace_id: null, recording: false, links: [],
   people: [{ user_id: 8, email: "reader@example.test", role: "viewer", grant_id: "g1" }],
-  invites: [{ id: "g2", mode: "restricted", emails: ["pending@example.test"] }],
+  invites: [{ id: "g2", ids: ["g2", "g3"], mode: "restricted", emails: ["pending@example.test"] }],
 };
 
 type Call = { url: string; method: string; body?: unknown };
@@ -95,7 +95,9 @@ describe("MeetingShareDialog", () => {
     fireEvent.click(removes[0]);
     await waitFor(() => expect(calls.some((c) => c.method === "DELETE" && c.url === "/api/meetings/42/viewers/8")).toBe(true));
     fireEvent.click(screen.getAllByRole("button", { name: "Remove" })[1]);
-    await waitFor(() => expect(calls.some((c) => c.method === "DELETE" && c.url === "/api/meetings/42/share/g2")).toBe(true));
+    // withdrawing an invite withdraws every grant behind it
+    await waitFor(() => expect(calls.filter((c) => c.method === "DELETE" && c.url.startsWith("/api/meetings/42/share/")).map((c) => c.url))
+      .toEqual(["/api/meetings/42/share/g2", "/api/meetings/42/share/g3"]));
   });
 
   it("invites one person per address, each restricted to that address, and shows each link", async () => {

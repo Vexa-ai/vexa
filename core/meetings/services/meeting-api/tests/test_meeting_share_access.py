@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -236,23 +237,27 @@ def _capture(monkeypatch, landed=True):
     return sent
 
 
-def test_an_invite_with_notify_hands_one_fact_per_address_to_flows(monkeypatch):
+def test_an_invite_with_notify_hands_flows_a_fact_with_no_token_in_it(monkeypatch):
+    """R1801-5: the fact names the meeting, the address and the grant — never the grant's secret.
+    meeting-api keeps grants as hashes at rest; flows mints the recipient's own link at send time."""
     sent = _capture(monkeypatch)
     store, mid, client = _setup()
+    store._meetings[mid]["data"]["title"] = "Board\r\nBcc: everyone@example.test " + "x" * 600
     r = client.post(f"/meetings/{mid}/share", headers={**_h(OWNER), "x-user-email": "owner@example.test"},
-                    json={"mode": "restricted", "allowed_emails": [INVITEE_EMAIL], "notify": True,
-                          "workspace_invite": "W" * 43})
+                    json={"mode": "restricted", "allowed_emails": [INVITEE_EMAIL], "notify": True})
     assert r.status_code == 200 and r.json()["notified"] == {INVITEE_EMAIL: True}
     [(etype, sid, refs)] = sent
     assert etype == "meeting.shared" and sid.startswith(f"share-{r.json()['id']}-")
     assert INVITEE_EMAIL not in sid, "the dedupe id carries no address"
-    assert refs["email"] == INVITEE_EMAIL and refs["uid"] == str(OWNER)
-    assert refs["token"] == r.json()["token"] and refs["inviter"] == "owner@example.test"
-    assert refs["workspace_invite"] == "W" * 43
-    assert "link" not in refs, "flows composes the link from its own UI address"
+    assert refs["email"] == INVITEE_EMAIL and refs["uid"] == str(OWNER) and refs["grant_id"] == r.json()["id"]
+    assert "token" not in refs and r.json()["token"] not in str(refs), "no credential in the event"
+    assert refs["inviter"] == "owner@example.test"
+    # R1801-2: the owner's title is ONE bounded line of plain text
+    assert "\r" not in refs["title"] and "\n" not in refs["title"] and len(refs["title"]) <= 200
 
 
-def test_no_mail_unless_asked_and_never_for_an_open_link(monkeypatch):
+def test_no_mail_unless_asked_never_for_an_open_link_and_never_to_a_list(monkeypatch):
+    """R1801-2: a share mail goes to exactly one address per request."""
     sent = _capture(monkeypatch)
     store, mid, client = _setup()
     assert client.post(f"/meetings/{mid}/share", headers=_h(OWNER),
@@ -260,9 +265,44 @@ def test_no_mail_unless_asked_and_never_for_an_open_link(monkeypatch):
     assert client.post(f"/meetings/{mid}/share", headers=_h(OWNER),
                        json={"mode": "open", "notify": True}).status_code == 422
     assert client.post(f"/meetings/{mid}/share", headers=_h(OWNER),
-                       json={"mode": "restricted", "allowed_emails": [INVITEE_EMAIL], "notify": True,
-                             "workspace_invite": "../../not a token"}).status_code == 422
+                       json={"mode": "restricted", "allowed_emails": [INVITEE_EMAIL, "b@example.test"],
+                             "notify": True}).status_code == 422
     assert sent == []
+
+
+@pytest.mark.parametrize("entry", ["a@example.test,b@example.test", "a@example.test; b@example.test",
+                                   "Ann <a@example.test>", "a@example.test\nBcc: b@example.test",
+                                   "two words@example.test"])
+def test_an_entry_that_is_not_one_address_is_refused_on_every_mint(entry):
+    """R1801-2: an allow-list entry is one address. Anything that could expand into several
+    recipients, or smuggle a header, is refused before it is stored."""
+    store, mid, client = _setup()
+    r = client.post(f"/meetings/{mid}/share", headers=_h(OWNER),
+                    json={"mode": "restricted", "allowed_emails": [entry]})
+    assert r.status_code == 422
+    assert "share_grants" not in store._meetings[mid]["data"]
+
+
+def test_invite_mail_is_capped_per_owner_per_hour(monkeypatch):
+    """R1801-2: an owner cannot turn the share mail into a relay — past the hourly cap the request
+    is refused before anything is minted, and the copied link remains the way to reach people."""
+    from meeting_api.collector import app as collector_app
+    monkeypatch.setattr(collector_app, "SHARE_MAILS_PER_OWNER_PER_HOUR", 2)
+    sent = _capture(monkeypatch)
+    store, mid, client = _setup()
+    for i in range(2):
+        assert client.post(f"/meetings/{mid}/share", headers=_h(OWNER),
+                           json={"mode": "restricted", "allowed_emails": [f"p{i}@example.test"],
+                                 "notify": True}).status_code == 200
+    before = len(store._meetings[mid]["data"]["share_grants"])
+    r = client.post(f"/meetings/{mid}/share", headers=_h(OWNER),
+                    json={"mode": "restricted", "allowed_emails": ["p9@example.test"], "notify": True})
+    assert r.status_code == 429 and "last hour" in r.json()["detail"]
+    assert len(store._meetings[mid]["data"]["share_grants"]) == before, "nothing minted on refusal"
+    assert len(sent) == 2
+    # without the mail, the owner can still invite and copy the link
+    assert client.post(f"/meetings/{mid}/share", headers=_h(OWNER),
+                       json={"mode": "restricted", "allowed_emails": ["p9@example.test"]}).status_code == 200
 
 
 def test_a_mail_that_did_not_land_is_reported_and_the_invite_still_stands(monkeypatch):
@@ -364,3 +404,67 @@ def test_the_identity_lookup_is_off_without_its_door(monkeypatch):
     lookup = reader_directory.from_env()
     import asyncio
     assert asyncio.run(lookup(33)) is None, "an unreachable identity names nobody and raises nothing"
+
+
+
+# ── R1801-4: turning a link off takes back exactly what it gave ─────────────────────────────────
+def _redeem(client, token, uid, email):
+    return client.post("/transcripts/share/accept", json={"token": token}, headers=_h(uid, email))
+
+
+def test_a_link_off_removes_its_readers_but_not_one_who_also_holds_a_live_invite():
+    store, mid, client = _setup()
+    link = client.post(f"/meetings/{mid}/share", json={"mode": "open"}, headers=_h(OWNER)).json()
+    invite = _invite(client, mid)
+    _redeem(client, link["token"], OUTSIDER, "outsider@example.test")   # came only through the link
+    _redeem(client, link["token"], INVITEE, INVITEE_EMAIL)               # through the link…
+    _redeem(client, invite["token"], INVITEE, INVITEE_EMAIL)             # …and their own invite
+    client.delete(f"/meetings/{mid}/share/{link['id']}", headers=_h(OWNER))
+    assert not _can_read(client, mid, OUTSIDER)
+    assert _can_read(client, mid, INVITEE), "their invite still admits them"
+
+
+def test_a_link_off_removes_a_reader_whose_redeem_left_no_attribution():
+    """A reader with no record of which grant admitted them — a redeem from before grants were
+    recorded — is not left behind when an open link is turned off."""
+    store, mid, client = _setup()
+    link = client.post(f"/meetings/{mid}/share", json={"mode": "open"}, headers=_h(OWNER)).json()
+    data = store._meetings[mid]["data"]
+    data["transcript_viewers"] = [OUTSIDER]            # admitted, no roster entry at all
+    client.delete(f"/meetings/{mid}/share/{link['id']}", headers=_h(OWNER))
+    assert not _can_read(client, mid, OUTSIDER)
+
+
+def test_a_redeem_through_a_second_grant_does_not_erase_the_first():
+    store, mid, client = _setup()
+    link = client.post(f"/meetings/{mid}/share", json={"mode": "open"}, headers=_h(OWNER)).json()
+    invite = _invite(client, mid)
+    _redeem(client, invite["token"], INVITEE, INVITEE_EMAIL)
+    _redeem(client, link["token"], INVITEE, INVITEE_EMAIL)
+    roster = store._meetings[mid]["data"]["share_viewers"]
+    assert set(roster[0]["grant_ids"]) == {invite["id"], link["id"]}
+
+
+def test_two_live_grants_for_one_address_are_one_pending_invite_withdrawn_together():
+    store, mid, client = _setup()
+    a, b = _invite(client, mid), _invite(client, mid)
+    view = client.get(f"/meetings/{mid}/access", headers=_h(OWNER)).json()
+    assert len(view["invites"]) == 1 and set(view["invites"][0]["ids"]) == {a["id"], b["id"]}
+
+
+# ── R1801-10: no recording metadata for a reader who may not play it ─────────────────────────────
+def test_a_reader_without_recording_permission_sees_no_recording_metadata():
+    store = InMemoryTranscriptStore()
+    rec = [{"id": 5, "media_files": [{"id": 6, "storage_path": "s3://bucket/key", "duration_seconds": 9}]}]
+    mid = store.seed_meeting(user_id=OWNER, platform=PLAT, native_meeting_id=NID, status="completed",
+                             data={"recordings": rec, "transcript_viewers": [INVITEE]},
+                             segments=[{"segment_id": "s1", "text": "hello", "speaker": "A"}])
+    client = TestClient(create_app(store, redis=None))
+    t = client.get(f"/transcripts/by-id/{mid}", headers=_h(INVITEE)).json()
+    d = client.get(f"/meetings/{mid}", headers=_h(INVITEE)).json()
+    assert t["recordings"] == [] and "recordings" not in t["data"] and "recordings" not in d["data"]
+    assert "s3://bucket/key" not in str(t) + str(d)
+    # the owner still sees them, and so does the reader once the owner allows it
+    assert client.get(f"/transcripts/by-id/{mid}", headers=_h(OWNER)).json()["recordings"] == rec
+    client.patch(f"/meetings/{mid}/access", json={"recording": True}, headers=_h(OWNER))
+    assert client.get(f"/transcripts/by-id/{mid}", headers=_h(INVITEE)).json()["recordings"] == rec

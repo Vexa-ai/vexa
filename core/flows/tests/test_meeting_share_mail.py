@@ -32,8 +32,10 @@ from test_link_loop import FakeChannel, _StubDB  # noqa: E402
 from test_workspace_invite_mail import _ws  # noqa: E402
 
 UI = "https://app.example.test"
-REFS = {"uid": "7", "meeting_id": "42", "email": "jsmith@example.com", "token": "42.s3cr3t-token",
+REFS = {"uid": "7", "meeting_id": "42", "email": "jsmith@example.com", "grant_id": "g1",
         "title": "Weekly sync", "inviter": "anna@bank.test"}
+#: What the step's own mint returns — the recipient's link is minted at SEND time (R1801-5).
+MINTED = "42.minted-at-send-time"
 
 
 def _ctx(refs):
@@ -41,9 +43,18 @@ def _ctx(refs):
     return StepCtx(reaction=r, effect_key="rid:step", prior={}, clock_now=1_700_000_000.0, scratch={})
 
 
+def _mint(minted):
+    def mint(uid, meeting_id, email, expires_in_sec=0):
+        minted.append((uid, meeting_id, email))
+        return MINTED
+    return mint
+
+
 @pytest.fixture()
 def rig(monkeypatch):
     monkeypatch.setenv("VEXA_UI_URL", UI)
+    minted = []
+    monkeypatch.setattr(production.mt, "mint_transcript_share", _mint(minted))
     reg = Registry()
     production.build(reg, _StubDB())
     ch = FakeChannel()
@@ -60,7 +71,7 @@ def test_the_flow_is_registered_on_meeting_shared_with_one_domainless_step(rig):
     flows = reg.by_event[production.SHARED.name]
     assert [f.name for f in flows] == ["meeting_share"]
     assert flows[0].steps == ("mail_meeting_share",)
-    assert reg.needs("mail_meeting_share") == frozenset()
+    assert reg.needs("mail_meeting_share") == frozenset({"meetings"})
 
 
 def test_the_mail_is_the_template_and_the_link_is_composed_here(rig):
@@ -70,16 +81,40 @@ def test_the_mail_is_the_template_and_the_link_is_composed_here(rig):
     msg = ch.sent[0]
     assert msg["subject"] == "anna@bank.test shared Weekly sync with you"
     assert "{{" not in msg["subject"] + msg["body"]
-    assert "http" not in msg["body"] and REFS["token"] not in msg["body"], "the link is never in prose"
+    assert "http" not in msg["body"] and MINTED not in msg["body"], "the link is never in prose"
     link = urlparse(msg["link"])
     assert f"{link.scheme}://{link.netloc}" == UI
-    assert parse_qs(link.query) == {"tshare": [REFS["token"]]}
+    assert parse_qs(link.query) == {"tshare": [MINTED]}
 
 
-def test_a_bundled_workspace_invite_rides_the_same_link(rig):
+def test_the_link_is_minted_at_send_time_for_exactly_this_address_as_the_owner(rig, monkeypatch):
+    """R1801-5: the fact carries no credential; the step mints the recipient's own restricted
+    grant, as the owner, for this one address — so the event store never holds a working token."""
     reg, ch = rig
-    reg.steps["mail_meeting_share"](_ctx({**REFS, "workspace_invite": "W" * 43}))
-    assert parse_qs(urlparse(ch.sent[0]["link"]).query) == {"tshare": [REFS["token"]], "invite": ["W" * 43]}
+    minted = []
+    monkeypatch.setattr(production.mt, "mint_transcript_share", _mint(minted))
+    reg.steps["mail_meeting_share"](_ctx(dict(REFS)))
+    assert minted == [("7", "42", "jsmith@example.com")]
+    assert "token" not in REFS
+
+
+def test_an_owner_title_is_one_bounded_plain_line(rig):
+    """R1801-2: whatever the producer sent, the subject is one line, bounded."""
+    reg, ch = rig
+    reg.steps["mail_meeting_share"](_ctx({**REFS, "title": "Board\r\nBcc: all@example.test " + "x" * 500}))
+    subj = ch.sent[0]["subject"]
+    assert "\r" not in subj and "\n" not in subj and len(subj) < 300
+
+
+def test_a_failed_mint_sends_nothing(rig, monkeypatch):
+    reg, ch = rig
+    def boom(*a, **k):
+        raise production.mt.ShareMintError(meeting_id="42", identity="jsmith@example.com", status=404,
+                                           detail="Meeting 42 not found", retryable=False)
+    monkeypatch.setattr(production.mt, "mint_transcript_share", boom)
+    with pytest.raises(StepError) as e:
+        reg.steps["mail_meeting_share"](_ctx(dict(REFS)))
+    assert not e.value.retryable and ch.sent == []
 
 
 def test_missing_words_fall_back_to_plain_ones(rig):
@@ -88,13 +123,12 @@ def test_missing_words_fall_back_to_plain_ones(rig):
     assert ch.sent[0]["subject"] == "Someone shared a meeting with you"
 
 
-@pytest.mark.parametrize("missing", ["email", "token"])
-def test_no_address_or_no_token_refuses_and_sends_nothing(rig, missing):
+@pytest.mark.parametrize("missing", ["email", "uid", "meeting_id"])
+def test_no_address_owner_or_meeting_refuses_and_sends_nothing(rig, missing):
     reg, ch = rig
     with pytest.raises(StepError) as e:
         reg.steps["mail_meeting_share"](_ctx({**REFS, missing: ""}))
     assert not e.value.retryable
-    assert REFS["token"] not in str(e.value)
     assert ch.sent == []
 
 
@@ -114,6 +148,7 @@ def test_the_mail_goes_out_on_a_deployment_with_no_agent_domain(monkeypatch):
     notify_mod.use(ch)
     monkeypatch.setattr(mailtext, "ws_file", absent)
     monkeypatch.setattr(policies, "ws_file", absent)
+    monkeypatch.setattr(production.mt, "mint_transcript_share", _mint([]))
     try:
         out = reg.steps["mail_meeting_share"](_ctx(dict(REFS)))
     finally:

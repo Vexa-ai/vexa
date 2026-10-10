@@ -42,3 +42,39 @@ def from_env() -> "Optional[EmailOf]":
             return None
 
     return email_of
+
+
+WritableOf = Callable[[int], Awaitable[Optional["set[str]"]]]
+
+#: The membership roles that may write into a shared workspace — identity's rule
+#: (admin-api `validate.WRITE_ROLES`), read here off the same membership index.
+WRITE_ROLES = frozenset({"contributor", "owner"})
+
+
+def writable_from_env() -> "Optional[WritableOf]":
+    """The owner's CURRENT writable workspaces, from identity, for a caller with no signed request
+    to read them off — the calendar sweep. ``None`` when no identity door is wired; the lookup
+    itself answers ``None`` when identity cannot answer, and the caller must treat that as "may
+    write nowhere" (R1801-3)."""
+    base = (os.getenv("ADMIN_API_URL") or "").rstrip("/")
+    secret = os.getenv("INTERNAL_API_SECRET") or ""
+    if not base or not secret:
+        return None
+
+    async def writable_of(user_id: int) -> "Optional[set[str]]":
+        import httpx
+
+        try:
+            async with httpx.AsyncClient(timeout=TIMEOUT_S) as client:
+                r = await client.get(f"{base}/internal/users/{int(user_id)}/memberships",
+                                     headers={"X-Internal-Secret": secret})
+            if r.status_code != 200:
+                return None
+            rows = (r.json() or {}).get("memberships") or []
+            return {str(m["workspace_id"]) for m in rows
+                    if isinstance(m, dict) and m.get("workspace_id")
+                    and str(m.get("role") or "").lower() in WRITE_ROLES}
+        except Exception:  # noqa: BLE001 — unknown is "may write nowhere", decided by the caller
+            return None
+
+    return writable_of

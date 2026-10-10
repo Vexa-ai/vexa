@@ -176,23 +176,32 @@ def meeting_shared_source_id(grant_id, email) -> str:
     return f"share-{grant_id}-{hashlib.sha256(str(email).lower().encode()).hexdigest()[:12]}"
 
 
-def meeting_shared_refs(meeting_id, uid, email, token, *, title="", inviter="",
-                        workspace_invite="") -> dict:
+#: The longest meeting title a share mail carries; longer titles are cut (R1801-2).
+SHARE_MAIL_TITLE_MAX = 200
+
+
+def share_mail_title(title) -> str:
+    """The owner's meeting title as ONE line of plain text, bounded — it goes into a subject line
+    and a body a stranger reads. Control characters (CR/LF included) become spaces."""
+    import re as _re
+    t = _re.sub(r"[\x00-\x1f\x7f]+", " ", str(title or "")).strip()
+    t = _re.sub(r"\s{2,}", " ", t)
+    return t if len(t) <= SHARE_MAIL_TITLE_MAX else t[:SHARE_MAIL_TITLE_MAX - 1].rstrip() + "…"
+
+
+def meeting_shared_refs(meeting_id, uid, email, grant_id, *, title="", inviter="") -> dict:
     """The refs `mail_meeting_share` reads. `uid` is the OWNER (the inviter), the one subject this
-    deployment can read `_global` through; the recipient is `email`, never `uid`. `token` is the
-    restricted grant's one-time secret — it only admits `email` — and flows composes the link from
-    it with its own `VEXA_UI_URL`; no producer and no template writes a URL."""
-    refs = {"uid": str(uid), "meeting_id": str(meeting_id), "email": str(email),
-            "token": str(token), "title": str(title or ""), "inviter": str(inviter or "")}
-    if workspace_invite:
-        refs["workspace_invite"] = str(workspace_invite)
-    return refs
+    deployment can read `_global` through and the identity flows mints the recipient's link as; the
+    recipient is `email`, never `uid`. `grant_id` names the owner's grant for the record. NO TOKEN:
+    flows mints the recipient's own restricted link at send time (R1801-5)."""
+    return {"uid": str(uid), "meeting_id": str(meeting_id), "email": str(email),
+            "grant_id": str(grant_id or ""), "title": share_mail_title(title),
+            "inviter": str(inviter or "")}
 
 
-async def publish_meeting_shared(meeting_id, uid, email, token, grant_id, *, title="", inviter="",
-                                 workspace_invite="", timeout: Optional[float] = None) -> bool:
+async def publish_meeting_shared(meeting_id, uid, email, grant_id, *, title="", inviter="",
+                                 timeout: Optional[float] = None) -> bool:
     return await publish(
         EVENT_MEETING_SHARED, meeting_shared_source_id(grant_id, email),
-        meeting_shared_refs(meeting_id, uid, email, token, title=title, inviter=inviter,
-                            workspace_invite=workspace_invite),
+        meeting_shared_refs(meeting_id, uid, email, grant_id, title=title, inviter=inviter),
         timeout=timeout)

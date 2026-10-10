@@ -9,6 +9,8 @@ Drives the SHIPPED parse_ics/sync_user over the in-memory collector store, OFFLI
 """
 from __future__ import annotations
 
+import pytest
+
 from datetime import datetime, timedelta, timezone
 
 from meeting_api.calendar_sync import aggregate_stamps, parse_ics, sync_user
@@ -511,11 +513,59 @@ async def test_sync_new_occurrence_inherits_series_workspace():
         status="completed", start_time="2026-07-01T15:00:00Z",
         data={"calendar_uid": "uid-1", "workspace_id": "acme-1424e3"},
     )
-    result = await sync_user(store, USER, parse_ics(_ics(_event()), now=NOW))
+    result = await sync_user(store, USER, parse_ics(_ics(_event()), now=NOW),
+                             writable_workspaces={"acme-1424e3"})
     assert result["counts"]["created"] == 1
     new = next(r for r in await store.list_meetings(USER) if r["status"] in ("idle", "scheduled"))
     assert new["data"]["workspace_id"] == "acme-1424e3"
     assert new["data"]["workspace_source"] == "series"
+
+
+@pytest.mark.parametrize("writable", [set(), {"another-room"}, None],
+                         ids=["demoted-to-viewer", "removed", "identity-did-not-answer"])
+async def test_a_new_occurrence_does_not_inherit_a_workspace_its_owner_can_no_longer_write(writable):
+    """R1801-3: binding takes edit access on every path, the calendar series included. An owner who
+    bound last week's occurrence and has since been demoted or removed gets this week's created
+    PRIVATE — and so does one whose rights could not be read right now."""
+    store = InMemoryTranscriptStore()
+    store.seed_meeting(
+        user_id=USER, platform="google_meet", native_meeting_id="abc-defg-hij",
+        status="completed", start_time="2026-07-01T15:00:00Z",
+        data={"calendar_uid": "uid-1", "workspace_id": "acme-1424e3"},
+    )
+    await sync_user(store, USER, parse_ics(_ics(_event()), now=NOW), writable_workspaces=writable)
+    new = next(r for r in await store.list_meetings(USER) if r["status"] in ("idle", "scheduled"))
+    assert "workspace_id" not in new["data"]
+
+
+async def test_the_sweep_reads_the_owners_current_rights_and_passes_them_on():
+    from meeting_api.calendar_sync.runner import run_user_sync
+    store = InMemoryTranscriptStore()
+    store.seed_meeting(
+        user_id=USER, platform="google_meet", native_meeting_id="abc-defg-hij",
+        status="completed", start_time="2026-07-01T15:00:00Z",
+        data={"calendar_uid": "uid-1", "workspace_id": "acme-1424e3"},
+    )
+    asked = []
+
+    async def writable_of(uid):
+        asked.append(uid)
+        return set()          # a viewer now
+
+    import meeting_api.calendar_sync.runner as runner_mod
+    async def fake_fetch(url, client=None):
+        return _ics(_event()), None
+    import meeting_api.calendar_sync as cs
+    orig = cs.fetch_ics
+    cs.fetch_ics = fake_fetch
+    try:
+        stamp = await run_user_sync(store, {"user_id": USER, "ics_url": "https://example.test/f.ics"},
+                                    now=NOW, writable_of=writable_of)
+    finally:
+        cs.fetch_ics = orig
+    assert stamp.get("last_error") is None and asked == [USER]
+    new = next(r for r in await store.list_meetings(USER) if r["status"] in ("idle", "scheduled"))
+    assert "workspace_id" not in new["data"]
 
 
 async def test_sync_inherit_respects_unbind_tombstone():
@@ -543,7 +593,8 @@ async def test_sync_inherit_newest_row_wins():
         status="completed", start_time="2026-07-01T15:00:00Z",
         data={"calendar_uid": "uid-1", "workspace_unbound": True},
     )
-    await sync_user(store, USER, parse_ics(_ics(_event()), now=NOW))
+    # still able to write there, so it is the tombstone — not the rights check — that stops it
+    await sync_user(store, USER, parse_ics(_ics(_event()), now=NOW), writable_workspaces={"old-room"})
     new = next(r for r in await store.list_meetings(USER) if r["status"] in ("idle", "scheduled"))
     assert "workspace_id" not in new["data"]
 
