@@ -6,9 +6,9 @@ Moved out of `api_shared.py` unchanged; the class names are the OpenAPI schema n
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Annotated, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, StringConstraints, field_validator
 
 from control_plane.ceiling import WRITE_SLUG_HELP
 from workspaces.shared import entities as entities_mod
@@ -31,6 +31,12 @@ class ChatContextBody(BaseModel):
 #: the default session, as before.
 CHAT_SESSION_PATTERN = r"^([A-Za-z0-9][A-Za-z0-9._-]{0,127})?$"
 
+#: THE ONE TYPE for a chat session id at every door — a body field, a query parameter, a path
+#: parameter, a list item. Any value outside :data:`CHAT_SESSION_PATTERN` is a 422 before it reaches
+#: a key, a file name or a workload name. A door that needs a session NAMED (not the default) adds
+#: ``min_length=1`` beside it.
+SessionId = Annotated[str, StringConstraints(pattern=CHAT_SESSION_PATTERN)]
+
 
 class ChatBody(BaseModel):
     model_config = {"extra": "forbid"}
@@ -38,7 +44,7 @@ class ChatBody(BaseModel):
     # subject is DERIVED server-side from X-User-Id (P20) — kept here only so a client that still sends it
     # doesn't 422 (extra=forbid); the value is IGNORED. Dropped from the client in Stage 4.
     subject: Optional[str] = None
-    session: Optional[str] = Field(default=None, pattern=CHAT_SESSION_PATTERN)
+    session: Optional[SessionId] = None
     # LEGACY single-focus grounding ({kind, ref}) — still honored when ``context`` is absent, so
     # old clients keep byte-identical behavior. The terminal now sends ``context`` (below) too.
     active: Optional[dict] = None
@@ -132,7 +138,7 @@ class ResetBody(BaseModel):
     needs the session; ``prompt``/``subject``/``active`` are accepted-and-ignored so a client reusing the
     chat-body shape doesn't 422 (reset must NOT require a prompt the way the chat turn does)."""
     model_config = {"extra": "forbid"}
-    session: Optional[str] = Field(default=None, pattern=CHAT_SESSION_PATTERN)
+    session: Optional[SessionId] = None
     subject: Optional[str] = None
     prompt: Optional[str] = None
     active: Optional[dict] = None

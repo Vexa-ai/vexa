@@ -87,7 +87,9 @@ There is **no** top-level `subject`, `workspace_repo`, or `plan` field.
 
 `POST /api/chat` — body `{ prompt, session?, active? }` (`subject` is server-derived, not sent).
 `session` is 1–128 characters from `A-Z a-z 0-9 . _ -`, starting with a letter or digit (empty or
-absent means `main`); any other value is a `422`, here and on `/api/chat/submit` and `/api/chat/reset`.
+absent means `main`); any other value is a `422`, here and at every other door that takes a session:
+`/api/chat/submit`, `/api/chat/reset`, `GET /api/chat/pending?session=`, `GET /api/sessions/{session}/history`,
+`/api/chat/name`, `/api/chat/name/agent`, `/api/chat/target` and each entry of `PUT /api/chat/order`.
 Returns **Server-Sent Events**; each `data:` line is one frame:
 
 | frame | fields |

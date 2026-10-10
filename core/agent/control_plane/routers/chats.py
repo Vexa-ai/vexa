@@ -9,6 +9,7 @@ single identifier changed.
 """
 from __future__ import annotations
 
+import re
 import time
 
 from control_plane import chat_intents
@@ -23,13 +24,13 @@ from control_plane.api_shared import (
     _model_creds_error_message, _record_chat_turn_head, _sse, _stream_tail_id,
     inbox_pending, inbox_withdraw, logger, meeting_binding, target_preamble, toolbelt_preamble, workspace_focus)
 from control_plane.peer_lookups import meeting_access_check
-from control_plane.bodies import ChatBody, ResetBody
+from control_plane.bodies import CHAT_SESSION_PATTERN, ChatBody, ResetBody, SessionId
 from control_plane.ceiling import refuse_delegated, require_in_ceiling
 from control_plane.config_preflight import NOT_CONFIGURED, capability_state
 from control_plane.workspace_attach import active_workspaces, shared_active_mounts
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Body, HTTPException, Request
+from fastapi import APIRouter, Body, HTTPException, Path, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 from fastapi.responses import JSONResponse, StreamingResponse
 from shared import chat_label as chat_label_mod
@@ -46,21 +47,21 @@ _MEET_SESSION_PREFIX = "meet-"
 
 class ChatNameBody(BaseModel):
     model_config = ConfigDict(extra='forbid')
-    session: str = Field(min_length=1, max_length=300, description='the chat session to name')
+    session: SessionId = Field(min_length=1, description='the chat session to name')
     title: str = Field(max_length=300, description='a concise 3-7 word task title')
     source: Literal['human', 'agent'] = 'human'
 
 
 class AgentChatNameBody(BaseModel):
     model_config = ConfigDict(extra='forbid')
-    session: str = Field(min_length=1, max_length=300,
-                         description='the current chat session, as the turn context states it')
+    session: SessionId = Field(min_length=1,
+                               description='the current chat session, as the turn context states it')
     title: str = Field(max_length=300, description='a concise 3-7 word title naming the actual objective')
 
 
 class ChatOrderBody(BaseModel):
     model_config = ConfigDict(extra='forbid')
-    order: list[Annotated[str, StringConstraints(min_length=1, max_length=300)]] = Field(max_length=5000)
+    order: list[Annotated[SessionId, StringConstraints(min_length=1)]] = Field(max_length=5000)
 
 
 def build(**d) -> APIRouter:
@@ -364,7 +365,8 @@ def build(**d) -> APIRouter:
         return _chat(body, request, stream=False)
 
     @router.get("/api/chat/pending")
-    def chat_pending(request: Request, session: str | None = None):
+    def chat_pending(request: Request,
+                     session: Annotated[str | None, Query(pattern=CHAT_SESSION_PATTERN)] = None):
         """WHAT THIS CHAT HAS SUBMITTED AND ITS AGENT HAS NOT TAKEN YET (Vexa-ai/vexa#1610).
 
         The inbox is the in-topic and the worker publishes how far it has read, so this is a read of
@@ -794,6 +796,8 @@ def build(**d) -> APIRouter:
         at the first write: the whole point of the field is that the agent may trust it."""
         subject = subject_of(request)
         session = str(body.get("session") or "").strip() or units.DEFAULT_CHAT_SESSION
+        if not re.fullmatch(CHAT_SESSION_PATTERN, session):
+            raise HTTPException(status_code=422, detail="not a chat session id")
         wid = str(body.get("workspace") or "").strip()
         require_in_ceiling(request, wid)
         if wid and not _is_slug(wid):
@@ -899,7 +903,8 @@ def build(**d) -> APIRouter:
         subject = subject_of(request)
         return {"sessions": _labelled(subject, sess.list(subject))}
     @router.get("/api/sessions/{session}/history")
-    def session_history(session: str, request: Request):
+    def session_history(session: Annotated[str, Path(pattern=CHAT_SESSION_PATTERN)],
+                        request: Request):
         """The session's prior conversation, as simplified turns the terminal can render (so clicking a
         saved chat re-opens its history). A session the caller has no thread for is 404; a thread whose
         transcript is missing or empty returns ``{turns: []}``; an invalid subject/session never 500s."""
