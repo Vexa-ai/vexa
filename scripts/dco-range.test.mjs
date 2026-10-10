@@ -12,6 +12,9 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { evaluateCommits, parseRemediations, parseSignoffs, readRange } from "./dco-range.mjs";
+import { guardTree } from "./test-tree.mjs";
+
+guardTree();
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), "dco-range.mjs");
 const ADA = { name: "Ada Author", email: "ada@example.com" };

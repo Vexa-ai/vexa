@@ -3,10 +3,15 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
+import { guardTree, sandboxTree } from "./test-tree.mjs";
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+guardTree();
+
+// sbom.mjs runs `pnpm licenses list`, and pnpm writes a scratch file (`_tmp_<pid>_<hex>`) into the
+// directory it runs in. Run in the checkout, that is a write every parallel test file can see — so
+// the SBOM is emitted from this file's private copy of the tree.
+const ROOT = sandboxTree();
 const LITE = join(ROOT, "deploy", "lite", "Dockerfile.lite");
 
 function emitSbom(liteDockerfile) {

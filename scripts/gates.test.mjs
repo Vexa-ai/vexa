@@ -2,12 +2,18 @@
 // Run: node --test scripts/gates.test.mjs   (CI: the gates.yml `static` job runs scripts/*.test.mjs
 // directly — scripts/ is not a workspace package, so `pnpm test` never reaches these files)
 //
-// These plant real files in the checkout and run the real gate as a subprocess, deliberately: the
+// These plant real files in a tree and run the real gate as a subprocess, deliberately: the
 // defect class here lives in the SHELL PIPELINE, not the parse. A scan that strips the filename
 // (`grep -h`) silently disarms every path-based filter downstream of it, and the bare numbers it
 // emits still parse perfectly — so a test that stubs the grep and feeds the parse a fixture would
 // stay green through exactly the bug it was written to catch. The planted file IS the input
 // population: `git grep --untracked` reads the working tree, so a file on disk is a real input.
+//
+// THE TREE IS THIS FILE'S OWN COPY of the checkout (scripts/test-tree.mjs `sandboxTree`), never the
+// checkout. Every test file runs in its own process, in parallel, over the real tree; a plant or an
+// in-place edit there — even one restored in a `finally` — is a window the others read through. On
+// 2026-10-10 publish-edge.test.mjs failed gate:config-contract on the phantom export and the phantom
+// mailer read this file had planted. `guardTree` fails any test that leaves the checkout changed.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -15,9 +21,10 @@ import { execFileSync } from "node:child_process";
 import { writeFileSync, readFileSync, rmSync, mkdirSync, mkdtempSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { guardTree, sandboxTree } from "./test-tree.mjs";
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+guardTree();
+const ROOT = sandboxTree();
 
 // admin-api is declared in deploy/db-budget.json (pool_size 5 / max_overflow 10), so a literal
 // planted here is compared against a real ceiling. agent-api is a real service dir that is NOT
@@ -146,8 +153,7 @@ function withEdited(relPath, find, repl, fn) {
 // deploy/lite/entrypoint.sh was read ONLY as check 3's fallback, so it was the one surface, in the
 // one direction, that nothing walked: an export whose declaration AND reader were both deleted left
 // no refusal and no warning. Measured on the tip before the fix — the same plant was green.
-// entrypoint.sh is touched by no other test file, so the in-place edit below stays inside this
-// file's sequential run.
+// The edit below is made in this file's private tree, so no other test file can read it.
 const LITE_ENTRYPOINT = "deploy/lite/entrypoint.sh";
 
 test("config-contract vacuity: the committed lite entrypoint is green", () => {

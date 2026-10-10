@@ -12,6 +12,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { guardTree } from "./test-tree.mjs";
+
+guardTree();
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PINNED = /^[a-z0-9./-]+:[A-Za-z0-9._-]+@sha256:[a-f0-9]{64}$/;

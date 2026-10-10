@@ -12,6 +12,9 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { checkVendorPayload, blockOf, linkedLibraries, isPayload, NATIVE_DIR, EXCLUSION_FILES, PARITY_FACT_ID } from "./check-vendor-payload.mjs";
+import { guardTree } from "./test-tree.mjs";
+
+guardTree();
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..");
 const BLOCK = (() => {

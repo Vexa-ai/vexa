@@ -16,6 +16,9 @@ import {
   openAcceptanceLegs,
   acceptanceFromIssues,
 } from "./merge-card-gate.mjs";
+import { guardTree } from "./test-tree.mjs";
+
+guardTree();
 
 const run = (o) => ({ name: "value-fsm", started_at: "2026-07-16T20:07:14Z", ...o });
 

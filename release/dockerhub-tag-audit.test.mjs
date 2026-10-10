@@ -10,6 +10,9 @@ import {
   auditCandidateTags,
   previousAttemptTag,
 } from "./dockerhub-tag-audit.mjs";
+import { guardTree } from "../scripts/test-tree.mjs";
+
+guardTree();
 
 function tempAudit(t) {
   const dir = mkdtempSync(join(tmpdir(), "dockerhub-tag-audit-"));
