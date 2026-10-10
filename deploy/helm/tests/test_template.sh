@@ -1094,6 +1094,28 @@ upgrade_render="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yam
 if grep -q 'postgres-password' <<< "$upgrade_render"; then
   echo "  FAIL: the postgres-password hook rendered without a published live Secret"; fail=1
 else echo "  OK: no postgres-password hook without a published live Secret"; fi
+# Its run is live-only (lookup), so its source is held here: the hook's rights go when it fails as
+# well as when it succeeds, and no password is ever on a kubectl command line.
+HOOK_SRC="$CHART/templates/job-postgres-password.yaml"
+if [ "$(grep -c 'hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed' "$HOOK_SRC")" -eq 3 ] \
+   && ! grep -qE 'patch secret[^|]*-p "' "$HOOK_SRC" && grep -q -- '--patch-file /dev/stdin' "$HOOK_SRC"; then
+  echo "  OK: the rotation hook's rights are removed on failure too; its patches go on stdin"
+else echo "  FAIL: the rotation hook keeps its rights after a failure or puts a value on a command line"; fail=1; fi
+
+# N-10: a policy that names the flows tier names this release's flows Pods (name + instance labels,
+# which the flows Pods now carry), never any Pod in the namespace with a flows component label.
+NP_FLOWS="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true \
+  | awk 'BEGIN{RS="\n---\n"} /kind: NetworkPolicy/')"
+loose="$(awk '{ buf[NR%9]=$0 }
+  /values: \[flows-worker|values: \["flows-worker"|component: flows-api$/ {
+    ok=0; for (i=1;i<9;i++) if (buf[(NR-i)%9] ~ /app.kubernetes.io\/instance: vexa/) ok=1
+    if (!ok) n++ }
+  END { print n+0 }' <<< "$NP_FLOWS")"
+pod_labels="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true --show-only templates/flows.yaml \
+  | grep -c 'app.kubernetes.io/instance: vexa' || true)"
+if [ "$loose" -eq 0 ] && [ "$(grep -c 'flows' <<< "$NP_FLOWS")" -gt 0 ] && [ "$pod_labels" -ge 4 ]; then
+  echo "  OK: every policy peer for the flows tier carries the release's labels, and so do its Pods and Service"
+else echo "  FAIL: $loose flows policy peer(s) match on the component label alone (flows Pod/Service labels: $pod_labels)"; fail=1; fi
 
 # N-7: the namespace default-deny, both directions, with explicit allows for the chart's Pods.
 np_doc() { awk -v n="name: $1" '$0 ~ "^  "n"$"{f=1} f{print} f&&/^---/{exit}' <<< "$RENDER"; }
