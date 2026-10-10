@@ -12,6 +12,8 @@ schedule surfaces start processes and fire requests on a caller's word, so only 
 may drive them."""
 from __future__ import annotations
 
+import time
+
 from typing import Callable, Optional
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException
@@ -38,13 +40,14 @@ def _queue_deliver(rt: Runtime, queue: CallbackQueue, caller_token: str) -> Call
     token (``X-Runtime-Signature``) so the receiver can tell a runtime event from anyone else's POST.
     The queue posts immediately and keeps anything the receiver hasn't acked, so a later sweep()
     retries it."""
+    queue.signer = lambda url, event: {SIGNATURE_HEADER: sign_callback(caller_token, event, url, int(time.time()))}
+
     def deliver(ev: RuntimeEvent) -> None:
         record = rt.store.get(ev.workloadId)
         url = record.spec.callbackUrl if record else None
         if not url:
             return
-        event = ev.model_dump(exclude_none=True)
-        queue.enqueue(url, event, headers={SIGNATURE_HEADER: sign_callback(caller_token, event)})
+        queue.enqueue(url, ev.model_dump(exclude_none=True))
     return deliver
 
 

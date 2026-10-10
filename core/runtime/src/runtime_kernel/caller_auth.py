@@ -57,20 +57,30 @@ def load_caller_token(env: Optional[Mapping[str, str]] = None) -> str:
     return token
 
 
-#: The header a RuntimeEvent callback carries its signature in.
+#: The header a RuntimeEvent callback carries its signature in: ``t=<unix seconds>,v2=<hex>``.
 SIGNATURE_HEADER = "X-Runtime-Signature"
-_CALLBACK_LABEL = b"vexa-runtime-callback.v1"
+_CALLBACK_LABEL = b"vexa-runtime-callback.v2"
+#: How far a callback's timestamp may be from the receiver's clock, either way (seconds). A receiver
+#: refuses a signature outside it, and one it has already seen inside it.
+CALLBACK_SKEW_SEC = 300
 
 
 def _canonical(event: Mapping[str, object]) -> bytes:
     return json.dumps(event, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
-def sign_callback(token: str, event: Mapping[str, object]) -> str:
-    """The signature a callback receiver checks: an HMAC over the event, keyed from the caller
-    token (so the token itself never travels to a callback URL). The receiver holds the same token."""
+def callback_message(timestamp: int, url: str, event: Mapping[str, object]) -> bytes:
+    """What a callback signature covers: the signing time, the URL it is delivered to, and the event."""
+    return f"{int(timestamp)}\n{url}\n".encode("utf-8") + _canonical(event)
+
+
+def sign_callback(token: str, event: Mapping[str, object], url: str, timestamp: int) -> str:
+    """The signature a callback receiver checks: an HMAC over the signing time, the delivery URL and
+    the event, keyed from the caller token (so the token itself never travels to a callback URL).
+    Made at every delivery attempt, so a retry carries a fresh time."""
     key = hmac.new(token.encode("utf-8"), _CALLBACK_LABEL, hashlib.sha256).digest()
-    return "v1=" + hmac.new(key, _canonical(event), hashlib.sha256).hexdigest()
+    digest = hmac.new(key, callback_message(timestamp, url, event), hashlib.sha256).hexdigest()
+    return f"t={int(timestamp)},v2={digest}"
 
 
 def bearer_guard(token: str) -> Callable[[Request], None]:
