@@ -8,7 +8,7 @@ description: "Two small processes and a status projection: how flows run, fail, 
 | Process | Role |
 |---|---|
 | `flows-worker` (× N) | the loop: claim by lease → one step → receipt → advance. Stateless; replicas cooperate via `SKIP LOCKED`. A step-duration watchdog flags any step that blocks. |
-| mailbox integration | the front door: real IMAP inbox → facts (invites, threaded replies, new senders), durable cursor — restarts resume, never re-admit. It decides **who it will act for** before it admits anything (below) |
+| mailbox integration | the front door: real IMAP inbox ([any IMAP server](/flows/mailbox) — Gmail is only the preset) → facts (invites, threaded replies, new senders), durable cursor — restarts resume, never re-admit. It decides **who it will act for** before it admits anything (below) |
 | `flows-api` | submit/manage flows; the reactions projection; signal verbs |
 
 All three speak SQL to one Postgres. Deliberately absent: message broker, scheduler service,

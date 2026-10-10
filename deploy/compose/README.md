@@ -46,7 +46,9 @@ this merges.
 different command and with the same environment. It is behind the `mailbox` COMPOSE PROFILE and
 therefore off by default, because mail is an optional intake: a lane started without real IMAP
 credentials restart-loops and reads as a broken stack. Turn it on with `--profile mailbox` (or
-`COMPOSE_PROFILES=mailbox`) once `VEXA_MAIL_ADDR` and `VEXA_MAIL_APP_PASSWORD` are set. Do not
+`COMPOSE_PROFILES=mailbox`) once `VEXA_MAIL_ADDR` and `VEXA_MAIL_APP_PASSWORD` are set. It reads any
+IMAP server — `VEXA_MAIL_IMAP_*` names one (an on-premises Exchange, for example); unset is the Gmail
+preset. See `docs/docs/flows/mailbox.mdx`. Do not
 scale it — the IMAP cursor is single-writer by design.
 
 Two things flows will refuse, and both are deliberate: it will not start without

@@ -206,7 +206,7 @@ jobs:
           # was a flat string that ignored global.imageTag entirely and defaulted to :dev.
           RENDER="$(helm template vexa deploy/helm/charts/vexa -n vexa \
             -f deploy/helm/charts/vexa/values-test.yaml --set flows.enabled=true \
-            --set global.imageTag="$VERSION")"
+            --set flows.mail.enabled=true --set global.imageTag="$VERSION")"
           N="$(grep -cE "image: \"vexaai/v012-[a-z-]+:$VERSION\"" <<<"$RENDER" || true)"
           [ "$N" -ge 12 ] || { echo "::error ::expected >=12 v012 component images pinned to $VERSION, got $N"; exit 1; }
           F="$(grep -cE "image: \"vexaai/v012-flows:$VERSION\"" <<<"$RENDER" || true)"
