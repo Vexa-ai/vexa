@@ -31,7 +31,9 @@ export function MeetingPageHeader({ meetingId, body, path }: { meetingId: string
   // width (up to 60% of the row) and the metadata gives way first; both truncate, full text on
   // hover. Delete sits in the document header's icon group, and the player row is that header's
   // own full-width second line (both in PagesPanel).
-  return <div style={{ flex: "1 1 auto", minWidth: 0 }}>
+  // A zero basis: in the wrapping document header this shares the first line with the icon group
+  // instead of claiming the whole line and pushing the icons onto a row of their own.
+  return <div style={{ flex: "1 1 0%", minWidth: 0 }}>
     <div style={{ display: "flex", alignItems: "baseline", gap: 8, minWidth: 0 }}>
       <div data-doc-name title={path} style={{ ...ty.title, fontSize: 13.5, flex: "0 0 auto", maxWidth: "60%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</div>
       {metadata && <div data-meeting-metadata title={metadata} style={{ ...ty.meta, flex: "0 10 auto", minWidth: 0, color: "var(--t3)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{metadata}</div>}

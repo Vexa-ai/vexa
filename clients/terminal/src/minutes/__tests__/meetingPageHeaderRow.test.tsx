@@ -13,6 +13,8 @@ it("puts the title and platform · date · status on one row, and leaves Delete 
   const meta = container.querySelector("[data-meeting-metadata]")!;
   expect(title.textContent).toBe("Weekly sync");
   expect(meta.parentElement).toBe(title.parentElement);
+  // zero basis, so the document header's icon group stays on the same line
+  expect((title.parentElement!.parentElement as HTMLElement).style.flex).toMatch(/^1 1 0%/);
   expect((meta as HTMLElement).style.whiteSpace).toBe("nowrap");
   expect(meta.getAttribute("title")).toContain("Zoom");
   expect(screen.queryByRole("button", { name: "Delete meeting data" })).toBeNull();
