@@ -400,6 +400,14 @@ class InMemoryTranscriptStore:
         row["data"] = data
         return result
 
+    async def backfill_share_roster(self, user_id, meeting_id, emails):
+        from . import share_access
+
+        def edit(d, mid, owner):
+            share_access.backfill_roster(d, emails, owner_id=owner)
+            return share_access.access_view(d, meeting_id=mid, owner_id=owner)
+        return self._owned_row_edit(user_id, meeting_id, edit)
+
     async def get_share_access(self, user_id, meeting_id):
         from . import share_access
         return self._owned_row_edit(user_id, meeting_id, lambda d, mid, owner: share_access.access_view(

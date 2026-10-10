@@ -75,6 +75,43 @@ def record_redeem(data: dict, user_id: int, email: Optional[str], grant: dict) -
     data["share_removed"] = [r for r in (data.get("share_removed") or []) if r.get("user_id") != user_id]
 
 
+def unnamed_readers(data: dict, *, owner_id: int) -> "list[int]":
+    """Readers with no roster entry — they redeemed a share before meeting-api kept one
+    (``share_viewers``), so the owner's list can only show an id. The backfill names them."""
+    known = {v.get("user_id") for v in (data.get("share_viewers") or [])}
+    return [u for u in (data.get("transcript_viewers") or []) if u != owner_id and u not in known]
+
+
+def backfill_roster(data: dict, emails: "dict[int, str]", *, owner_id: int) -> bool:
+    """ONE-TIME, per reader: give each unnamed reader the roster entry a redeem writes today.
+
+    ``emails`` is ``{user_id: verified address}`` from identity. The grant they came in through is
+    recovered where the record allows it — the newest live restricted grant naming their address —
+    so the invite stops reading "pending" and removing them withdraws it, exactly as for a reader
+    who redeemed after the roster existed. When they joined is not recorded anywhere, so ``since``
+    stays empty rather than being invented; ``backfilled`` says the entry was reconstructed.
+    Idempotent: a reader who already has an entry is never touched. True when anything changed."""
+    pending = set(unnamed_readers(data, owner_id=owner_id))
+    roster = list(data.get("share_viewers") or [])
+    changed = False
+    for uid, email in emails.items():
+        if uid not in pending or not email:
+            continue
+        addr = str(email).lower()
+        grant_id = None
+        for g in reversed(data.get("share_grants") or []):
+            if g.get("mode") == "restricted" and not g.get("revoked") and \
+                    addr in [str(e).lower() for e in (g.get("allowed_emails") or [])]:
+                grant_id = g.get("id")
+                break
+        roster.append({"user_id": uid, "email": addr, "grant_id": grant_id, "since": None,
+                       "backfilled": True})
+        changed = True
+    if changed:
+        data["share_viewers"] = roster
+    return changed
+
+
 def access_view(data: dict, *, meeting_id: int, owner_id: int) -> dict:
     """The owner's view of who can read this meeting. Never carries a secret or a hash."""
     roster = {v.get("user_id"): v for v in (data.get("share_viewers") or [])}

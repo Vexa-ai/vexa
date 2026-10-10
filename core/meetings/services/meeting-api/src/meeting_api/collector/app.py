@@ -41,6 +41,7 @@ from fastapi.responses import JSONResponse
 
 from ..regime import require_person
 from ..workspace_write import require_writable
+from . import reader_directory as _reader_directory
 from .meeting_link import parse_meeting_url
 from .obs import TraceMiddleware as _DefaultTraceMiddleware
 from .obs import log_event as _default_log_event
@@ -147,6 +148,7 @@ def build_router(
     calendar_sync_status: Optional[Callable] = None,
     artifact_object_deleter: Optional[Callable] = None,
     fixture_object_deleter: Optional[Callable] = None,
+    reader_email: Optional[Callable] = None,
 ) -> APIRouter:
     """The collector's READ-side + authorizer routes as a mountable ``APIRouter``.
 
@@ -693,6 +695,23 @@ def build_router(
         view = await store.get_share_access(user_id, meeting_id)
         if view is None:
             raise HTTPException(status_code=404, detail=f"Meeting {meeting_id} not found")
+        # ONE-TIME BACKFILL. A reader who redeemed before the roster existed has no address here;
+        # name them from identity, once, so the owner sees a person, the invite they used stops
+        # reading "pending", and removing them withdraws it. A failed lookup leaves the id listed.
+        unnamed = [p["user_id"] for p in view.get("people", []) if not p.get("email")]
+        lookup = reader_email if reader_email is not None else _reader_directory.from_env()
+        if unnamed and lookup is not None:
+            emails = {}
+            for uid in unnamed[:_reader_directory.MAX_LOOKUPS]:
+                email = await lookup(uid)
+                if email:
+                    emails[uid] = email
+            if emails:
+                view = await store.backfill_share_roster(user_id, meeting_id, emails) or view
+                log_event("meeting_share_roster_backfilled", audience="system",
+                          span="meetings.share.backfill", user_id=user_id,
+                          meeting_id=str(meeting_id), fields={"named": len(emails),
+                                                              "unnamed": len(unnamed)})
         return JSONResponse(content=view)
 
     @router.patch("/meetings/{meeting_id}/access", dependencies=[Depends(require_person)])
@@ -1572,6 +1591,7 @@ def create_app(
     trace_middleware: type = _DefaultTraceMiddleware,
     calendar_sync_now: Optional[Callable] = None,
     calendar_sync_status: Optional[Callable] = None,
+    reader_email: Optional[Callable] = None,
 ) -> FastAPI:
     """Build the STANDALONE collector FastAPI app over the injected ports.
 
@@ -1596,5 +1616,5 @@ def create_app(
 
     app.include_router(build_router(store, redis, log_event=log_event,
                                     calendar_sync_now=calendar_sync_now,
-                                    calendar_sync_status=calendar_sync_status))
+                                    calendar_sync_status=calendar_sync_status, reader_email=reader_email))
     return app

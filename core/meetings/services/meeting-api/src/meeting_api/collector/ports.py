@@ -162,6 +162,13 @@ class TranscriptStore(Protocol):
         row is unknown or not the caller's."""
         ...
 
+    async def backfill_share_roster(self, user_id: int, meeting_id: int,
+                                    emails: "dict[int, str]") -> "Optional[dict]":
+        """OWNER-scoped, one-time per reader: name the readers who redeemed before the roster
+        existed, from ``{user_id: address}``. Answers the access view; ``None`` for a row that is
+        not the caller's."""
+        ...
+
     async def revoke_share_grant(self, user_id: int, meeting_id: int, grant_id: str) -> "Optional[dict]":
         """OWNER-scoped: revoke one grant and drop the people who joined through it. ``None`` when the
         row or the grant is not found."""

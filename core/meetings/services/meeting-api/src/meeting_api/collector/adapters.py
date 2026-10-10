@@ -861,7 +861,15 @@ class SqlAlchemyTranscriptStore:
             await db.commit()
             return {"meeting_id": mid, "ok": True}
 
-    async def _owned_row_edit(self, user_id, meeting_id, edit):
+    async def backfill_share_roster(self, user_id, meeting_id, emails) -> "Optional[dict]":
+        """OWNER-scoped, ONE-TIME per reader: name readers who redeemed before the roster existed
+        (``share_access.backfill_roster``), under the row lock, and answer the access view."""
+        return await self._owned_row_edit(
+            user_id, meeting_id,
+            lambda data, m: (share_access.backfill_roster(data, emails, owner_id=m.user_id),
+                             share_access.access_view(data, meeting_id=m.id, owner_id=m.user_id))[1])
+
+    async def _owned_row_edit(self, user_id, meeting_id, edit, *, write: bool = True):
         """Run ``edit(data, meeting)`` on the caller's OWN row ``meeting_id`` under its row lock and
         commit. ``None`` when the row is absent or not the caller's — the two are indistinguishable,
         as on every owner-scoped share route. ``edit`` returns the response, or ``None`` for 404."""
@@ -875,16 +883,14 @@ class SqlAlchemyTranscriptStore:
         except (TypeError, ValueError):
             return None
         async with self._session_factory() as db:
-            meeting = (await db.execute(
-                select(Meeting).where(Meeting.id == mid, Meeting.user_id == user_id)
-                .limit(1).with_for_update()
-            )).scalars().first()
+            stmt = select(Meeting).where(Meeting.id == mid, Meeting.user_id == user_id).limit(1)
+            meeting = (await db.execute(stmt.with_for_update() if write else stmt)).scalars().first()
             if not meeting:
                 return None
             data = dict(meeting.data) if isinstance(meeting.data, dict) else {}
             result = edit(data, meeting)
-            if result is None:
-                return None
+            if result is None or not write:
+                return result
             meeting.data = data
             flag_modified(meeting, "data")
             await db.commit()
@@ -894,7 +900,8 @@ class SqlAlchemyTranscriptStore:
         """OWNER-scoped: who can read this meeting (``share_access.access_view``)."""
         return await self._owned_row_edit(
             user_id, meeting_id,
-            lambda data, m: share_access.access_view(data, meeting_id=m.id, owner_id=m.user_id))
+            lambda data, m: share_access.access_view(data, meeting_id=m.id, owner_id=m.user_id),
+            write=False)
 
     async def revoke_share_grant(self, user_id, meeting_id, grant_id) -> "Optional[dict]":
         """OWNER-scoped: revoke one grant and drop whoever joined through it."""

@@ -282,3 +282,85 @@ def test_a_stranger_cannot_mail_from_someone_elses_meeting(monkeypatch):
     r = client.post(f"/meetings/{mid}/share", headers=_h(OUTSIDER),
                     json={"mode": "restricted", "allowed_emails": ["x@example.test"], "notify": True})
     assert r.status_code == 404 and sent == []
+
+
+# ── readers who redeemed before the roster existed (one-time backfill) ───────────────────────────
+LEGACY_EMAIL = "legacy@example.test"
+
+
+def _legacy_setup(lookup):
+    """A meeting shared the old way: a restricted invite to LEGACY_EMAIL, redeemed by INVITEE into
+    `transcript_viewers` with NO roster entry — exactly what a pre-roster redeem left behind."""
+    store = InMemoryTranscriptStore()
+    mid = store.seed_meeting(user_id=OWNER, platform=PLAT, native_meeting_id=NID)
+    client = TestClient(create_app(store, redis=None, reader_email=lookup))
+    grant = client.post(f"/meetings/{mid}/share", headers=_h(OWNER),
+                        json={"mode": "restricted", "allowed_emails": [LEGACY_EMAIL]}).json()
+    data = store._meetings[mid]["data"]
+    data["transcript_viewers"] = [INVITEE]
+    for g in data["share_grants"]:
+        g.pop("created_at", None)          # minted before grants carried a mint time
+    data.pop("share_viewers", None)
+    return store, mid, client, grant
+
+
+def _lookup(table):
+    calls = []
+
+    async def email_of(uid):
+        calls.append(uid)
+        return table.get(uid)
+    return email_of, calls
+
+
+def test_the_owners_first_view_names_a_legacy_reader_and_settles_their_invite():
+    lookup, calls = _lookup({INVITEE: LEGACY_EMAIL})
+    store, mid, client, grant = _legacy_setup(lookup)
+    view = client.get(f"/meetings/{mid}/access", headers=_h(OWNER)).json()
+    assert view["people"] == [{"user_id": INVITEE, "email": LEGACY_EMAIL, "role": "viewer",
+                               "grant_id": grant["id"], "since": None}]
+    assert view["invites"] == [], "the invite they came in through is no longer pending"
+    # ONE-TIME: the next view asks identity nothing
+    client.get(f"/meetings/{mid}/access", headers=_h(OWNER))
+    assert calls == [INVITEE]
+
+
+def test_removing_a_backfilled_reader_withdraws_their_invite_and_keeps_them_out():
+    lookup, _ = _lookup({INVITEE: LEGACY_EMAIL})
+    store, mid, client, grant = _legacy_setup(lookup)
+    client.get(f"/meetings/{mid}/access", headers=_h(OWNER))
+    view = client.delete(f"/meetings/{mid}/viewers/{INVITEE}", headers=_h(OWNER)).json()
+    assert view["people"] == [] and view["invites"] == []
+    assert not _can_read(client, mid, INVITEE)
+    again = client.post("/transcripts/share/accept", json={"token": grant["token"]},
+                        headers=_h(INVITEE, LEGACY_EMAIL))
+    assert again.status_code == 403
+
+
+def test_a_failed_lookup_leaves_the_reader_listed_and_still_removable():
+    lookup, _ = _lookup({})                 # identity unreachable or the subject has no address
+    store, mid, client, grant = _legacy_setup(lookup)
+    view = client.get(f"/meetings/{mid}/access", headers=_h(OWNER)).json()
+    assert view["people"][0]["user_id"] == INVITEE and view["people"][0]["email"] is None
+    assert client.delete(f"/meetings/{mid}/viewers/{INVITEE}", headers=_h(OWNER)).status_code == 200
+    assert not _can_read(client, mid, INVITEE)
+    # the pending invite is still withdrawable on its own row
+    assert client.delete(f"/meetings/{mid}/share/{grant['id']}", headers=_h(OWNER)).json()["invites"] == []
+
+
+def test_the_backfill_never_runs_for_a_non_owner():
+    lookup, calls = _lookup({INVITEE: LEGACY_EMAIL})
+    store, mid, client, _ = _legacy_setup(lookup)
+    assert client.get(f"/meetings/{mid}/access", headers=_h(OUTSIDER)).status_code == 404
+    assert calls == []
+
+
+def test_the_identity_lookup_is_off_without_its_door(monkeypatch):
+    from meeting_api.collector import reader_directory
+    monkeypatch.delenv("ADMIN_API_URL", raising=False)
+    monkeypatch.setenv("INTERNAL_API_SECRET", "s")
+    assert reader_directory.from_env() is None
+    monkeypatch.setenv("ADMIN_API_URL", "http://127.0.0.1:1")
+    lookup = reader_directory.from_env()
+    import asyncio
+    assert asyncio.run(lookup(33)) is None, "an unreachable identity names nobody and raises nothing"

@@ -1220,6 +1220,20 @@ def create_app() -> FastAPI:
             raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found")
         return {"id": user.id}
 
+    # The reverse of the door above: a subject's verified address, for meeting-api to name the
+    # people a meeting is shared with on its OWNER's access list (Vexa-ai/vexa#1801). Readers who
+    # redeemed a share before meeting-api kept a roster carry only an id; this is how that roster is
+    # backfilled. Internal tier only, like every route on this prefix — an owner's view never
+    # reaches identity directly, and a subject with no address answers 404.
+    @app.get("/internal/users/{user_id}/email", include_in_schema=False)
+    async def internal_user_email(user_id: int, request: Request,
+                                  db: AsyncSession = Depends(get_db)):
+        check_internal(request)
+        user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
+        if not user or not user.email:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found")
+        return {"id": user.id, "email": user.email}
+
     @app.get("/internal/users/{user_id}/is-admin", include_in_schema=False)
     async def user_is_admin(user_id: str, request: Request, db: AsyncSession = Depends(get_db)):
         """Is THIS subject the instance admin? The role oracle agent-api asks before it mounts the
