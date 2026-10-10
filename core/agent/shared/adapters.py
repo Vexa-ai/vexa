@@ -31,6 +31,7 @@ from shared.gitenv import transport_env
 from shared.gitexec import run_git
 from shared.models import WorkspaceWrite
 from shared.ports import IdentityPort, RuntimePort, SchedulerPort, StreamReader, VcsPort, WorkspacePort
+from shared import runtime_fault
 from shared.token_destination import embed_token
 
 logger = logging.getLogger("agent_api.adapters")
@@ -305,30 +306,39 @@ class RuntimeHttpClient(RuntimePort):
         self._timeout = timeout
         self._auth = runtime_caller_headers(token)
 
+    def _call(self, op: str, req: urllib.request.Request):
+        """THE ONE PLACE THIS ADAPTER TALKS HTTP, and the one place its failures are translated
+        (P5's failure half, P18). Every error a runtime call can end in — an HTTP refusal, a
+        connection that never opened, a body that is not runtime.v1 — leaves here as a typed
+        :class:`shared.runtime_fault.RuntimeFault`, never as a bare ``HTTPError`` for the dispatch
+        path to answer with a 500. ``tests/test_runtime_fault.py`` holds the class to it."""
+        try:
+            with urllib.request.urlopen(req, timeout=self._timeout) as r:  # noqa: S310 — the runtime's URL from Settings
+                return json.loads(r.read())
+        except Exception as exc:  # noqa: BLE001 — every failure is translated, none escapes raw
+            raise runtime_fault.translate(op, exc) from exc
+
     def spawn(self, workload_id: str, profile: str, env: dict[str, str]) -> str:
         body = json.dumps({"workloadId": workload_id, "profile": profile, "env": env}).encode()
         req = urllib.request.Request(
             f"{self._base}/workloads", data=body,
             headers={"Content-Type": "application/json", **self._auth}, method="POST",
         )
-        with urllib.request.urlopen(req, timeout=self._timeout) as r:
-            status = json.loads(r.read())
-        return status.get("workloadId", workload_id)
+        status = self._call("spawn", req)
+        return status.get("workloadId", workload_id) if isinstance(status, dict) else workload_id
 
     def live_workloads(self) -> list[str]:
         """The ids of the workloads the runtime reports starting or running."""
         req = urllib.request.Request(f"{self._base}/workloads", headers=self._auth, method="GET")
-        with urllib.request.urlopen(req, timeout=self._timeout) as r:
-            rows = json.loads(r.read())
-        return [s["workloadId"] for s in rows
+        rows = self._call("list", req)
+        return [s["workloadId"] for s in (rows if isinstance(rows, list) else [])
                 if isinstance(s, dict) and s.get("state") in ("starting", "running") and s.get("workloadId")]
 
     def await_done(self, workload_id: str, timeout_sec: float = 0.0) -> str:
         req = urllib.request.Request(f"{self._base}/workloads/{workload_id}", headers=self._auth,
                                      method="GET")
-        with urllib.request.urlopen(req, timeout=self._timeout) as r:
-            status = json.loads(r.read())
-        return status.get("state", "unknown")
+        status = self._call("status", req)
+        return status.get("state", "unknown") if isinstance(status, dict) else "unknown"
 
 
 def _b64u(raw: bytes) -> str:

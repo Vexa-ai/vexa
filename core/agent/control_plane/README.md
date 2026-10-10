@@ -20,6 +20,11 @@ The agent control plane: the FastAPI app (`api.py`) and orchestration that dispa
   admin-api (email → subject), each as the caller and failing closed.
 - `api_shared.py` — the rest the routes are built out of: the session index, live meetings, SSE
   framing, the chat's grounding and context bundle.
+- `unit_faults.py` — why a chat's queue is not moving (P18): the typed runtime fault a failed spawn
+  leaves on the unit (`unit:{id}:fault`, agent-api its only writer). The pending list marks queued
+  rows `blocked` by it and the chat's SSE relay answers an attach with it as an `error` event; it
+  stops blocking the moment the worker takes anything. A refused dispatch answers 502/503 with
+  `{detail, fault}` on every door, never a 500.
 
 ## A worker's delegation token ends with its unit
 

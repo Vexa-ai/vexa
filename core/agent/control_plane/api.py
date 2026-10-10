@@ -76,6 +76,8 @@ from control_plane.workspace_purpose import read_purpose, write_purpose
 from control_plane import workspace_membership as membership_mod
 from control_plane import git_credentials as git_creds
 from control_plane import dispatch as dispatch_mod
+from control_plane import unit_faults as unit_faults_mod
+from shared.runtime_fault import RuntimeFault
 from control_plane import deploy_keys as deploy_keys_mod
 from control_plane import workspace_credentials as wcreds
 from control_plane import repo_ref
@@ -235,6 +237,14 @@ def create_app(
     # all so that there is no need to setup global at all - let it be empty with no data - it's
     # fine"). The per-request middleware that refused non-admins while `_global` was unwritten (the
     # 2026-09-02 ruling) is gone: every authenticated subject is served whatever `_global` holds.
+
+    # A RUNTIME FAULT IS NEVER A 500 (P18). Every door a dispatch can come through — the chat, the
+    # internal sink, an event, a routine's run-now — answers a failed spawn with the TYPED fault
+    # (`shared.runtime_fault`): 502 when the runtime answered wrongly, 503 when it is down or full.
+    # The chat route handles its own (it also withdraws the turn); this is the floor under the rest.
+    @app.exception_handler(RuntimeFault)
+    async def _runtime_fault(_request: Request, fault: RuntimeFault) -> JSONResponse:
+        return JSONResponse(status_code=fault.http_status, content=unit_faults_mod.answer(fault))
 
     app.state.dispatcher = dispatcher
     app.state.sessions = sess

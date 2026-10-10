@@ -8,6 +8,7 @@ nothing here starts a server.
 | `config` | the agent's settings, a validated config.v1 contract read from the environment (P14) |
 | `models` | the agent domain's own Pydantic shapes |
 | `ports` · `adapters` | the hexagonal seams (P5) and their real implementations: the git workspace, GitHub, the runtime and its scheduler over HTTP, the dispatch identity minter, the transcript stream reader, and the membership index and model config over admin-api |
+| `runtime_fault` | the runtime edge's failure vocabulary (P18): every runtime call that fails leaves `RuntimeHttpClient` as one typed `RuntimeFault` — `source: runtime`, a `kind`, a safe `detail` and a `remedy`, never the runtime's own text |
 | `core` | the agent-run core: transcript.v1 → governed action → a workspace commit |
 | `units` | builds the one canonical unit.v1 dispatch envelope |
 | `unit_input` | who may put a message on a live worker's input stream: the per-unit key agent-api signs each entry with and the worker verifies |

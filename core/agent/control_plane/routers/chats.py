@@ -15,12 +15,13 @@ from control_plane import chat_intents
 from control_plane import dispatch as dispatch_mod
 from control_plane import meeting_mint as meeting_mint_mod
 from control_plane import scaffolds as scaffolds_mod
+from control_plane import unit_faults
 from control_plane import global_layer, system_mounts
 from control_plane.api_shared import (
     CONTEXT_SENTINEL, GLOBAL_TARGET_NOTE,
     _chat_turn_head, _context_grounding, _has_custom_model_endpoint, _is_slug,
     _model_creds_error_message, _record_chat_turn_head, _sse, _stream_tail_id,
-    inbox_pending, logger, meeting_binding, target_preamble, toolbelt_preamble, workspace_focus)
+    inbox_pending, inbox_withdraw, logger, meeting_binding, target_preamble, toolbelt_preamble, workspace_focus)
 from control_plane.peer_lookups import meeting_access_check
 from control_plane.bodies import ChatBody, ResetBody
 from control_plane.ceiling import refuse_delegated, require_in_ceiling
@@ -30,10 +31,11 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Body, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from shared import chat_label as chat_label_mod
 from shared import unit_input, units
 from shared.marks import flow_mark
+from shared.runtime_fault import RuntimeFault
 
 #: How the terminal names a meeting's own agent session — `meet-<row id>`. The `/api/sessions`
 #: docstring below has always said so; #1602 is the first thing on this side to READ it, because a
@@ -379,8 +381,13 @@ def build(**d) -> APIRouter:
         except Exception:  # noqa: BLE001 — an unreadable generation is the id it always had
             gen = 0
         unit_id = units.chat_unit_id(subject, session, gen)
-        return {"pending": inbox_pending(redis_url, unit_id, _unit_key(unit_id)),
-                "cursor": _stream_tail_id(redis_url, units.output_topic(unit_id)) or ""}
+        pending = inbox_pending(redis_url, unit_id, _unit_key(unit_id))
+        # WHY THE QUEUE IS NOT MOVING, when something is (P18): the typed fault each blocked row
+        # already carries, once more at the top for a client that draws one banner, not N rows.
+        blocked = next((p["blocked"] for p in pending if p.get("blocked")), None)
+        return {"pending": pending,
+                "cursor": _stream_tail_id(redis_url, units.output_topic(unit_id)) or "",
+                **({"fault": blocked} if blocked else {})}
 
     def _chat(body: ChatBody, request: Request, *, stream: bool):
         _refuse_delegated(request)
@@ -688,6 +695,11 @@ def build(**d) -> APIRouter:
                 # with and a room named on a later turn of the same thread does not retro-mount. The
                 # post-meeting run uses its own per-meeting session, so it spawns cold and gets the
                 # room; a turn that needs a different room needs a different session.
+                # A RETRY UNDER A ROW'S OWN ID RUNS ONCE (P18). A submission a runtime fault blocked
+                # is still on the inbox; the client retries it under the same id, so the held copy
+                # is withdrawn before the new one goes on — the next worker runs it once, not twice.
+                if body.turn_id:
+                    inbox_withdraw(redis_url, unit_id, _unit_key(unit_id), body.turn_id)
                 try:
                     unit_id = dispatcher.dispatch(  # spawn-or-touch the thread's warm chat unit
                         inv, room=room,
@@ -718,6 +730,16 @@ def build(**d) -> APIRouter:
                         status_code=503,
                         detail="That message did not reach your agent — nothing was lost on your "
                                "side, please send it again.") from exc
+                except RuntimeFault as fault:
+                    # THE RUNTIME SAID NO, OR WAS NOT THERE (P18). This used to climb out of here as
+                    # a bare `HTTPError` and reach the person as "Internal Server Error". It is a
+                    # typed refusal now: who failed (`source`), how (`kind`), a sentence that names
+                    # it without repeating the runtime's own text, and what to do. The words this
+                    # turn pre-delivered were withdrawn by the dispatcher, so a retry runs it once.
+                    logger.warning("chat turn refused by the runtime for subject=%s session=%s: %s",
+                                   subject, session, fault.kind)
+                    return JSONResponse(status_code=fault.http_status,
+                                        content=unit_faults.answer(fault))
                 # ONLY A WATCHED TURN RECORDS THE HEAD. The record is one key per unit meaning "the
                 # turn currently being streamed", and a submission is by definition not that — the
                 # person is watching something else. Overwriting it would leave the streaming turn's
@@ -735,6 +757,21 @@ def build(**d) -> APIRouter:
             return {"ok": True, "id": body.turn_id or "", "session": session, "unit": unit_id,
                     "pending": inbox_pending(redis_url, unit_id, _unit_key(unit_id)),
                     "cursor": _stream_tail_id(redis_url, units.output_topic(unit_id)) or ""}
+        # AN ATTACH TO A UNIT NOTHING WILL RUN ON (P18). When the last spawn for this chat failed
+        # and the worker has taken nothing since, a view that attaches would wait out its whole
+        # timeout for events no worker is going to write. The relay answers with the recorded fault
+        # instead — on THIS stream, composed here, because the unit's out-stream has one writer and
+        # it is the worker (P23). Only when nothing has flowed past the cursor: a stream that has
+        # output to give is read as usual.
+        _fault = unit_faults.live_at(redis_url, unit_id) if resume else None
+        if _fault is not None and (_stream_tail_id(redis_url, units.output_topic(unit_id)) or "") in (
+                resume, "0-0", ""):
+            return StreamingResponse(
+                _sse([unit_faults.error_event(_fault), {"type": "turn-complete"}]),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
+                         "X-Unit-Id": unit_id, "X-Chat-Session": session},
+            )
         return StreamingResponse(
             _sse(_binding_watch(stream_reader.read(unit_id, resume=resume), subject, session)),
             media_type="text/event-stream",

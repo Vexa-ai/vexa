@@ -24,15 +24,28 @@ from control_plane.workspace_membership import reconciled_memberships
 from control_plane.workspace_purpose import read_purpose
 from control_plane import delegation_revocation, global_layer
 from control_plane import model_endpoint
+from control_plane import unit_faults
 from control_plane.meeting_room import group_desk_mount, resolve_desks
 from control_plane.system_mounts import GLOBAL_SLUG, SYSTEM_SLUG, global_mount, system_mount
 from shared.config import Settings
 from shared import delegation
 from shared.ports import IdentityPort, RuntimePort
 from shared import unit_input, units
-from shared.units import chat_session, dispatch_id, input_topic, output_topic
+from shared.runtime_fault import RuntimeFault
+from shared.units import chat_session, dispatch_id, inbox_cursor_key, input_topic, output_topic
 
 logger = logging.getLogger("agent_api.dispatch")
+
+
+def _stream_id_le(a: str, b: str) -> bool:
+    """``a <= b`` for redis stream ids (``<ms>-<seq>``) — compared as numbers, never as text."""
+    def parts(x: str) -> tuple[int, int]:
+        ms, _, seq = str(x).partition("-")
+        return int(ms or 0), int(seq or 0)
+    try:
+        return parts(a) <= parts(b)
+    except ValueError:
+        return False
 
 
 def _ensure_workspace_exists(settings: Settings, subject: str) -> bool:
@@ -997,7 +1010,20 @@ class Dispatcher:
             else:
                 raise WarmDeliveryFailed(
                     f"unit {uid} is running and its turn could not be delivered")
-        acked = self._runtime.spawn(uid, self._settings.agent_profile, env)
+        try:
+            acked = self._runtime.spawn(uid, self._settings.agent_profile, env)
+        except RuntimeFault as fault:
+            # FAIL LOUD AND ATTRIBUTABLE (P18). The runtime said no, or could not be reached; the
+            # typed fault goes back to the caller (a 502/503 the chat can render), and the words this
+            # dispatch pre-delivered are taken back unless a live worker already has them.
+            if not self._spawn_failed(uid, fault, entry_nonce if delivery is not None else ""):
+                raise
+            acked = uid      # a live worker took the turn: the refusal stopped nothing
+        else:
+            # The unit is up: whatever stopped its queue before has stopped stopping it. Only where
+            # the warm path just answered — a topology without a reachable redis has no record.
+            if delivery is not None:
+                unit_faults.clear(self._redis(), uid)
         if delivery is not None:
             self._watch_delivery(uid, env, tail=delivery)
         logger.info(
@@ -1134,6 +1160,55 @@ class Dispatcher:
             return _DELIVERY_FAILED
         return tail
 
+    def _spawn_failed(self, uid: str, fault: RuntimeFault, nonce: str) -> bool:
+        """A spawn ended in ``fault``. Returns True only when the turn is running anyway.
+
+        THE WORDS ARE TAKEN BACK. ``_predeliver`` put this turn on the inbox before the spawn was
+        asked for, so a refused spawn used to leave it there under "queued behind the current turn"
+        for an hour, waiting for a worker nobody started — and a retry then ran it twice. The entry
+        is withdrawn instead, and the caller's typed refusal is the one record of it.
+
+        …UNLESS A LIVE WORKER ALREADY TOOK IT. A warm worker reads its inbox whatever the runtime
+        is doing, so a runtime that was unreachable for one call may have stopped nothing: when the
+        worker's cursor is already past this entry the turn is running, and refusing it would ask
+        the person to send again something that is being answered. That is logged, and only that.
+
+        Otherwise the fault is recorded against the unit (`unit_faults`) so the chat's queue and any
+        view attached to it can say which dependency stopped it."""
+        taken = self._retract(uid, nonce) if nonce else False
+        log_fields = {"event": "runtime_fault", "source": fault.source, "kind": fault.kind,
+                      "op": fault.op, "status": fault.status, "unit": uid,
+                      "turn_running": taken, "upstream": fault.upstream[:300]}
+        if taken:
+            logger.warning(json.dumps(log_fields))
+            return True
+        logger.error(json.dumps(log_fields))
+        unit_faults.record(self._redis(), uid, fault.as_dict())
+        return False
+
+    def _retract(self, uid: str, nonce: str) -> bool:
+        """Withdraw the inbox entry carrying ``nonce``. True when a worker had already taken it.
+
+        agent-api is the in-topic's one writer (P23), so withdrawing its own entry is its call.
+        Best-effort: no redis, or an entry no longer there, withdraws nothing and takes nothing."""
+        r = self._redis()
+        if r is None:
+            return False
+        key = self._unit_input_key(uid)
+        try:
+            cursor = r.get(inbox_cursor_key(uid)) or ""
+            for entry_id, fields in r.xrevrange(input_topic(uid), count=50) or []:
+                msg = unit_input.verified_turn(key, fields or {})
+                if not msg or msg.get("nonce") != nonce:
+                    continue
+                if cursor and _stream_id_le(entry_id, cursor):
+                    return True
+                r.xdel(input_topic(uid), entry_id)
+                return False
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("could not withdraw the refused turn for unit=%s: %s", uid, exc)
+        return False
+
     def _workload_gone(self, uid: str) -> bool:
         """True when the runtime says the workload is NOT alive. Errors read as gone: a respawn on
         uncertainty is SAFE — the runtime's create is a touch for a live workload, never a kill."""
@@ -1174,6 +1249,16 @@ class Dispatcher:
                     logger.warning("warm delivery missed for unit=%s (worker exited) — respawning", uid)
                     try:
                         self._runtime.spawn(uid, self._settings.agent_profile, env)
+                    except RuntimeFault as fault:
+                        # Nobody is waiting on this call to answer, so the fault is RECORDED: the
+                        # message is still on the inbox and the chat's queue must say what is
+                        # holding it, not "queued behind the current turn" for an hour (P18).
+                        logger.error(json.dumps({
+                            "event": "runtime_fault", "source": fault.source, "kind": fault.kind,
+                            "op": fault.op, "status": fault.status, "unit": uid,
+                            "watchdog": True, "upstream": fault.upstream[:300]}))
+                        unit_faults.record(self._redis(), uid, fault.as_dict())
+                        return
                     except Exception:  # noqa: BLE001
                         logger.exception("delivery-watchdog respawn failed for unit=%s", uid)
                         return

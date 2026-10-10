@@ -32,6 +32,7 @@ from jsonschema.exceptions import ValidationError
 from control_plane import meeting_room
 from control_plane import meeting_steering
 from control_plane import schedule_digest as schedule_digest_mod
+from control_plane import unit_faults
 from control_plane import routines as routines_mod
 from control_plane.config_preflight import NOT_CONFIGURED, capability_state, missing_capability_keys
 from shared import unit_input, units
@@ -205,6 +206,11 @@ def inbox_pending(redis_url: "str | None", unit_id: str, key: str) -> list[dict]
     except Exception as exc:  # noqa: BLE001
         logger.warning("could not read the inbox for unit=%s: %s", unit_id, exc)
         return []
+    # WHAT IS HOLDING THE QUEUE, when something is (P18). A spawn the runtime refused leaves its
+    # typed fault on the unit (`unit_faults`); every row still waiting behind it says so, rather than
+    # "queued behind the current turn" when no turn is coming. Evidence-based: the record stops
+    # blocking the moment the worker takes anything.
+    blocked = unit_faults.live(r, unit_id) if rows else None
     out: list[dict] = []
     now = time.time()
     for entry_id, fields in rows or []:
@@ -221,8 +227,41 @@ def inbox_pending(redis_url: "str | None", unit_id: str, key: str) -> list[dict]
             continue
         out.append({"entry": entry_id, "id": str(meta.get("id") or entry_id),
                     "kind": str(meta.get("kind") or ""), "target": str(meta.get("target") or ""),
-                    "display": str(meta.get("display") or ""), "at": at})
+                    "display": str(meta.get("display") or ""), "at": at,
+                    **({"blocked": blocked} if blocked else {})})
     return out
+
+
+def inbox_withdraw(redis_url: "str | None", unit_id: str, key: str, item_id: str) -> int:
+    """Take back what is still QUEUED under the id its client gave it; the count withdrawn.
+
+    WHAT MAKES A RETRY RUN ONCE (P18). A row a runtime fault blocked is still on the inbox, and the
+    next worker that boots runs everything it finds there — so a retry that put a second copy beside
+    it would answer the person twice. The client retries under the row's own id; this withdraws the
+    held copy first. Only entries the worker has NOT taken (after its cursor) are touched: one it
+    took is running, and withdrawing it would change nothing but the record. Best-effort, like the
+    reader above — a failure here withdraws nothing and never fails the submission."""
+    if not redis_url or not item_id or not key:
+        return 0
+    try:
+        import redis
+
+        r = redis.from_url(redis_url, decode_responses=True)
+        topic = units.input_topic(unit_id)
+        cursor = r.get(units.inbox_cursor_key(unit_id))
+        rows = r.xrange(topic, min=cursor or "-", max="+", count=INBOX_PENDING_MAX_ROWS + 1)
+        gone = 0
+        for entry_id, fields in rows or []:
+            if cursor and entry_id == cursor:
+                continue
+            msg = unit_input.verified_turn(key, fields or {})
+            meta = (msg or {}).get("inbox")
+            if isinstance(meta, dict) and str(meta.get("id") or "") == item_id:
+                gone += int(r.xdel(topic, entry_id) or 0)
+        return gone
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("could not withdraw %s from the inbox of unit=%s: %s", item_id, unit_id, exc)
+        return 0
 
 
 # How long a turn's start-cursor record lives — covers the client's whole resume window (its hard
