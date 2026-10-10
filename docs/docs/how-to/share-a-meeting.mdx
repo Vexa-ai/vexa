@@ -13,12 +13,13 @@ first. There is no public, anonymous link.
 Open the meeting and press **Share** in its header, either in the meeting view or in the meeting's
 page header. You can use the dialog while the meeting is running.
 
-1. **Invite people.** Type one or more email addresses and press **Invite**. Each person gets their own
-   link, and that link works only for their address: if it is forwarded, it admits nobody else. The
-   terminal does not send email. Copy each link and send it yourself.
+1. **Invite people.** Type one or more email addresses and press **Invite**. Each person is emailed
+   their own link, and that link works only for their address: if it is forwarded, it admits nobody
+   else. The dialog says who was emailed. You can also copy each link, and if an email could not be
+   sent, the dialog says so and the copied link is the way to reach them.
 2. **Add the workspace (optional).** If the meeting belongs to a workspace, choose **can view** or
-   **can edit** to bundle a workspace invite into the same link. The invitee sees what the workspace
-   is before they join it.
+   **can edit** to bundle a workspace invite into the same link and the same email. The invitee sees
+   what the workspace is before they join it.
 3. **Create a link (optional).** **Create a link** makes a link that anyone can open after signing in.
    It lasts seven days. **Turn off** withdraws it, and everyone who came in through it loses access.
 4. **The recording.** Tick **People you share with can play and download the recording** to give them
@@ -46,7 +47,11 @@ opens directly. When the link cannot be used, the terminal says why instead of o
 
 ## Limits
 
-- **No email is sent** for a meeting invite. The owner copies each person's link and sends it.
+- The invite email goes through the deployment's mail service (flows). A deployment without one
+  sends nothing, and the dialog says the email could not be sent; the copied link still works.
+- **Putting a meeting in a workspace takes edit access there.** A member who can only view a
+  workspace cannot bind a meeting to it — the dialog, a planned meeting and a bot sent into the
+  workspace are all refused with *you need edit access*.
 - An **invite** lasts 30 days and a **link** 7 days. Removing a person blocks every link minted before the
   removal; inviting them again works.
 - **Role on the meeting is view-only.** Edit rights exist on the workspace (*can edit*), not on the
@@ -74,7 +79,13 @@ opens directly. When the link cannot be used, the terminal says why instead of o
 4. **The owner sees and edits access.** `GET /meetings/{id}/access` returns readers, pending invites,
    links, the workspace and the recording setting, without tokens or hashes. `DELETE …/viewers/{user}`,
    `DELETE …/share/{grant}` and `PATCH …/access` change it under the meeting row's lock.
-5. **Live views are re-checked while open.** agent-api's `/api/meeting/stream` asks the access union
+5. **The invite email.** With `notify: true`, meeting-api hands one `meeting.shared` fact per
+   address to flows (`meeting_api/events.py`, the existing publish edge, bounded and best-effort).
+   flows' `meeting_share` renders `behavior/mail/meeting-share.md` and appends the link it composes
+   from its own `VEXA_UI_URL`: the same `/?tshare=…[&invite=…]` the dialog copies. No producer and no
+   template writes a URL. The mint answers `notified: {address: true|false}` so the dialog can say which
+   emails were handed over.
+6. **Live views are re-checked while open.** agent-api's `/api/meeting/stream` asks the access union
    again every 15 seconds. If the answer is no twice, it ends with an `access-revoked` event. The gateway
    re-authorizes every open `/ws` subscription on the same cadence and stops a revoked one with
    `subscription_revoked`. It also re-resolves the key, so an ended workspace membership drops that
@@ -86,6 +97,8 @@ opens directly. When the link cannot be used, the terminal says why instead of o
 |---|---|
 | `meeting.data.share_grants`, `transcript_viewers`, `share_viewers`, `share_removed`, `share_settings` | meeting-api (`collector/share_access.py`, under the row lock) |
 | Workspace membership (`policy/members.json`) and workspace invites | agent-api |
+| The writable-workspace set on an identity (`writable_workspaces`) | identity (admin-api `/internal/validate`), signed by the gateway |
+| The `meeting.shared` fact and its mail | meeting-api publishes; flows mails (`meeting_share`) |
 | The live transcript stream (`tc:meeting:{id}`) | meeting-api's collector. agent-api and the gateway only read it. |
 
 **Contracts and routes.** The meetings route table `core/meetings/routes.v1.json` carries the four new
@@ -125,7 +138,9 @@ email onto the hop. meeting-api trusts only that signature, or the internal secr
 as-the-caller lookups, and decides access itself. agent-api never decides meeting access locally. The
 gateway re-runs meeting-api's subscribe check for open sockets.
 
-**What is refused.** Redeeming a restricted invite from another address; redeeming a revoked or expired
+**What is refused.** Binding a meeting into a workspace the caller cannot write (a viewer, a
+non-member, or an identity without the write claim — fail closed); a share email for an open link
+or for a meeting the caller does not own; redeeming a restricted invite from another address; redeeming a revoked or expired
 grant; redeeming any grant minted before the redeemer was removed; owner routes called by anyone else;
 recording reads without the owner's permission; and every read by a person who was never invited.
 
@@ -140,6 +155,14 @@ recording reads without the owner's permission; and every read by a person who w
   - `test_recording_needs_the_owners_permission_as_well_as_access`
   - `test_recording_for_a_workspace_member_follows_the_same_rule`
   - `test_a_recipient_cannot_delete_the_recording`
+  - `test_no_mail_unless_asked_and_never_for_an_open_link`
+  - `test_a_stranger_cannot_mail_from_someone_elses_meeting`
+- `core/meetings/services/meeting-api/tests/test_workspace_bind_requires_write.py`:
+  - `test_the_bind_route_refuses_a_caller_who_cannot_write` (viewer, non-member, no claim)
+  - `test_planned_meetings_refuse_it_on_create_and_patch`
+- `core/meetings/services/meeting-api/tests/test_bot_spawn.py::test_spawn_refuses_to_bind_into_a_workspace_the_caller_only_reads`
+- `core/identity/services/admin-api/tests/test_writable_workspaces.py::test_a_viewer_membership_is_readable_but_not_writable`
+- `core/flows/tests/test_meeting_share_mail.py::test_no_address_or_no_token_refuses_and_sends_nothing`
 - `core/agent/tests/test_meeting_share_live_revoke.py`:
   - `test_outsider_cannot_open_the_live_stream`
   - `test_removed_invitee_is_cut_off_mid_stream_with_an_explicit_event`

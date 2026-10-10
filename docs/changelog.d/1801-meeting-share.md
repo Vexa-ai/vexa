@@ -7,3 +7,11 @@
   reader loses access everywhere at once, including an open live view: the terminal stream ends with
   `access-revoked`, and `/ws` sends the new ws.v1 code `subscription_revoked`. Recipients no longer
   see bot controls, and a refused share link says why. See [Share a meeting](/how-to/share-a-meeting).
+- **Invited people are emailed their link (#1801).** `POST /meetings/{id}/share` takes `notify: true`
+  for a restricted grant: meeting-api hands a `meeting.shared` fact to flows, whose new `meeting_share`
+  flow mails each address the link (template `behavior/mail/meeting-share.md`; the link is composed by
+  flows from `VEXA_UI_URL`). The dialog says who was emailed and keeps Copy link.
+- **Putting a meeting in a workspace takes edit access there (#1801).** Identity now signs
+  `writable_workspaces` (gateway-identity.v1 and identity.v1, additive), and meeting-api refuses with
+  `403` a bind into a workspace the caller can only view or does not belong to — the bind route,
+  planned meetings and `POST /bots` alike.
