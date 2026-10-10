@@ -3,9 +3,9 @@
 # The engine is stdlib-pure; the deps here are the production edges only: pyproject.toml's
 # [project].dependencies, installed from uv.lock exactly as gate:licenses classifies them, and none
 # of the dev group (pytest).
-FROM python:3.12-slim
+FROM python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f
 # uv via PyPI (ghcr.io is unreachable in this build env) — pinned for deterministic resolves.
-RUN pip install --no-cache-dir uv==0.9.22
+RUN pip install --no-cache-dir uv==0.11.33
 ENV UV_LINK_MODE=copy \
     UV_PROJECT_ENVIRONMENT=/opt/venv \
     PYTHONUNBUFFERED=1 \

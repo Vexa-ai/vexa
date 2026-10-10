@@ -27,8 +27,10 @@
   and the runtime's mount target are one path.
 
 - `service_checks.py` — LIVE, piped into the booted container by `make -C deploy/lite test`: the
-  services' admin key is none of the published values, and admin-api reaches its delegation
-  revocation store (its own `is_revoked`, run with its own environment, answers instead of raising).
+  services' admin key is none of the published values, and admin-api reads its delegation store as
+  it admits a worker token: the function `/internal/validate` awaits (found in `validate.py`), run
+  with admin-api's environment, admits a probe token only while its live record exists and no
+  revocation does. `test_service_checks.py` (offline) fails if that function is renamed.
 
 - `test_image_supply.py` — offline: the runtime image and Lite's runtime venv install nothing
   outside `uv.lock` (the ASGI server is a locked `production` group), uv is a release past the fixed

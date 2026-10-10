@@ -16,10 +16,15 @@ with `WWW-Authenticate: Bearer`. The runtime will not boot without a token, with
 bytes, or with a placeholder published in this repository.
 
 **The callback is signed.** Every `RuntimeEvent` the runtime POSTs to a `callbackUrl` carries
-`X-Runtime-Signature: v1=<hex>` (`$defs/CallbackSignature`): HMAC-SHA256 over the event as canonical
-JSON (keys sorted, no whitespace, UTF-8), keyed with HMAC-SHA256(`RUNTIME_API_TOKEN`,
-`"vexa-runtime-callback.v1"`). The token itself never travels to a callback URL. meeting-api, which
-holds the token, refuses an unsigned or forged `/runtime/callback` with 401 and moves no meeting.
+`X-Runtime-Signature: t=<unix seconds>,v2=<hex>` (`$defs/CallbackSignature`): HMAC-SHA256, keyed with
+HMAC-SHA256(`RUNTIME_API_TOKEN`, `"vexa-runtime-callback.v2"`), over the signing time, a newline, the
+URL the callback is delivered to, a newline, and the event as canonical JSON (keys sorted, no
+whitespace, UTF-8). The runtime signs at every delivery attempt, so a retry carries a fresh time. The
+token itself never travels to a callback URL. meeting-api, which holds the token, refuses with 401
+and moves no meeting a `/runtime/callback` that is unsigned or forged, signed for another URL,
+timestamped more than 300 seconds from its clock, or a replay of one it already accepted. This
+replaces the `v1=` form (event only): a runtime from before v0.13.2 is refused, as the co-release
+already requires.
 
 **A caller of a runtime from before this requirement.** agent-api and meeting-api send the bearer
 from the release that introduced it (v0.13.2). Upgrade the runtime together with both callers; a

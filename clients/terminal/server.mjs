@@ -19,6 +19,7 @@ import next from "next";
 import { WebSocketServer, WebSocket } from "ws";
 import { authSecretStartupError } from "./src/app/api/auth/authSecret.mjs";
 import { stampClientAddress, trustedProxies } from "./src/app/api/auth/clientAddress.mjs";
+import { isImageOptimizerPath, refuseImageOptimizer } from "./src/app/api/imageOptimizer.mjs";
 
 const dev = process.env.NODE_ENV !== "production";
 const { loadEnvConfig } = nextEnv;
@@ -85,6 +86,8 @@ const TRUSTED_PROXIES = trustedProxies(process.env);
 
 const server = createServer((req, res) => {
   stampClientAddress(req, TRUSTED_PROXIES);
+  // The optimizer is off; answered here so Next never sets up its cache for it (src/app/api/imageOptimizer.mjs).
+  if (isImageOptimizerPath(req.url)) return refuseImageOptimizer(res);
   Promise.resolve(handle(req, res)).catch((err) => {
     logError("request handler failed", err);
     sendProxyError(res);

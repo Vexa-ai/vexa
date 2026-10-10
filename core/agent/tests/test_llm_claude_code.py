@@ -479,7 +479,8 @@ def test_the_worker_images_turn_hooks_off_and_run_a_supported_node():
     for text in (worker, lite):
         assert "/etc/claude-code/managed-settings.json" in text
         assert '{"disableAllHooks": true}' in text
-    assert "setup_22.x" in worker and "setup_20.x" not in worker
+    # Node 22, from the official image pinned by digest (never a remote setup script)
+    assert "COPY --from=node:22-" in worker and "@sha256:" in worker and "nodesource" not in worker
 
 
 # ── the untrusted-subprocess env scrub (data-plane tenancy) ──────────────────

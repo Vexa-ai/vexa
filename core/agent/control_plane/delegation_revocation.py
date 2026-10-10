@@ -139,8 +139,14 @@ def revoke(client, *, jti: str, exp: int, now: Optional[float] = None) -> bool:
     remaining = int(exp - t)
     if remaining <= 0:
         return False
-    client.set(revoked_key(jti), "1", ex=remaining)
-    client.delete(live_key(jti))
+    # The live record goes FIRST: identity refuses a token without it, and a full Redis (noeviction)
+    # still allows a delete while it refuses the write below. A revocation key that cannot be
+    # written is then a typed failure the sweep retries, not a token left admitted.
+    try:
+        client.delete(live_key(jti))
+        client.set(revoked_key(jti), "1", ex=remaining)
+    except Exception as e:  # noqa: BLE001 — the reaper keeps the record and tries again
+        raise RevocationError(f"the delegation token could not be revoked: {type(e).__name__}") from e
     return True
 
 

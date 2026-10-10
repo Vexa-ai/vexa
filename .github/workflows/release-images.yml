@@ -241,9 +241,11 @@ jobs:
       # (rather than configuring a daemon-wide registry mirror) is deliberate: the docker CLI
       # resolves credentials by the hostname in the reference, finds none for mirror.gcr.io, and
       # the pull goes out anonymous — the vexaai Docker Hub token is never offered to Google.
+      # Pinned by digest: this image runs privileged on a runner that holds the registry token, so the
+      # bytes it runs are the reviewed ones, not whatever `latest` names on the day.
       - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
         with:
-          image: mirror.gcr.io/tonistiigi/binfmt:latest
+          image: mirror.gcr.io/tonistiigi/binfmt:latest@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
       # Every `FROM` this builder resolves — python:3.12-slim in eight of the ten matrix images,
       # node:22-slim in the terminal — is a Docker Hub read, and on 2026-09-06 that is exactly what
       # killed the v0.13.1-alpha.1 publish: all nine build jobs died on

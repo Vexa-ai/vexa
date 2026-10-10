@@ -522,27 +522,40 @@ def _link_chat_into_workspace(work: Path) -> None:
     # The continuity root is a mount the model's tools can write (``_system``), so a level of it may
     # be a link the turn planted: each level is created and opened without following one, and a
     # link anywhere skips the chat link (the turn still runs, without cross-turn resume).
+    # The HOME side is acted on through the descriptor that was checked, never by name again: the
+    # `projects` entry is looked at, replaced and made relative to HOME/.claude's own descriptor.
     ws_projects = _nofollow_dirs(work, ".claude", "projects")
-    home_claude = _nofollow_dirs(Path(os.environ.get("HOME", "/root")), ".claude")
-    if ws_projects is None or home_claude is None:
+    try:
+        home_fd = wpaths.dir_fd_inside(Path(os.environ.get("HOME", "/root")), (".claude",), create=True)
+    except (OSError, wpaths.PathRefused):
+        home_fd = None
+    if ws_projects is None or home_fd is None:
         logger.warning("chat continuity not linked: a level of %s/.claude/projects or of HOME/.claude "
                        "is a link or not a directory", work)
         return
-    link = home_claude / "projects"
     try:
-        if link.is_symlink():
-            if os.readlink(link) == str(ws_projects):
-                return
-            link.unlink()
-        elif link.is_dir():
-            if any(link.iterdir()):
-                return  # real transcripts live here — never delete, skip the link
-            link.rmdir()  # empty dir: safe to replace, nothing can be lost
-        elif link.exists():
-            return  # some other filesystem object — don't clobber
-        link.symlink_to(ws_projects, target_is_directory=True)
+        try:
+            st = os.stat("projects", dir_fd=home_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            st = None
+        if st is not None:
+            if stat.S_ISLNK(st.st_mode):
+                if os.readlink("projects", dir_fd=home_fd) == str(ws_projects):
+                    return
+                os.unlink("projects", dir_fd=home_fd)
+            elif stat.S_ISDIR(st.st_mode):
+                try:
+                    # empty only: real transcripts live in a non-empty one — never delete, skip the link
+                    os.rmdir("projects", dir_fd=home_fd)
+                except OSError:
+                    return
+            else:
+                return  # some other filesystem object — don't clobber
+        os.symlink(str(ws_projects), "projects", target_is_directory=True, dir_fd=home_fd)
     except OSError:
         pass  # best-effort; a fresh turn still works, just without cross-turn resume
+    finally:
+        os.close(home_fd)
 
 
 #: The dispatch's mark on a worker whose model route is the person's OWN endpoint

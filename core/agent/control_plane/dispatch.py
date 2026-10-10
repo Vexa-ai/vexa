@@ -1220,22 +1220,41 @@ class Dispatcher:
         # this token (and its tools) until its exp, unrefreshed.
         if self._settings.redis_workload_acl == "shared":
             return
+        # A unit id can be reached by a second dispatch for ANOTHER person (a meeting's unit is keyed
+        # on the meeting alone), and the worker on that id reads the published token before each
+        # turn. Whose worker that is depends on a race the dispatcher cannot see — a warm touch keeps
+        # the first person's worker, an ended one is respawned for this dispatch — so neither
+        # person's token is left where the other's worker could read it: the published token is
+        # withdrawn, and this dispatch's is published only when the runtime reports the previous
+        # incarnation ended (the worker about to start is then this dispatch's own).
         try:
-            # A unit id can be reached by a second dispatch (a meeting's unit is keyed on the meeting
-            # alone). The running worker reads the published token before each turn, so another
-            # person's token is never published over a live one: the unit keeps the person it was
-            # started for, and the refresh keeps re-minting theirs.
             if not delegation_refresh.same_authority(
                     self._delegation_store, self._settings.mcp_delegation_secret.get_secret_value(),
                     unit_id=uid, claims=claims):
-                logger.warning("unit=%s already holds another person's live delegation token — this "
-                               "dispatch's token is not published to it", uid)
-                return
+                delegation_refresh.withdraw(self._delegation_store, unit_id=uid)
+                if not self._incarnation_ended(uid):
+                    logger.warning("unit=%s held another person's delegation token — withdrawn, and "
+                                   "this dispatch's is not published to it", uid)
+                    return
+        except Exception:  # noqa: BLE001 — a worker that could read the other token gets none
+            env.pop("VEXA_MCP_DELEGATION_TOKEN", None)
+            logger.exception("unit=%s held another person's delegation token, which could not be "
+                             "withdrawn — the worker runs WITHOUT the vexa MCP", uid)
+            return
+        try:
             delegation_refresh.publish(self._delegation_store, unit_id=uid, token=token,
                                        exp=int(claims["exp"]))
         except Exception:  # noqa: BLE001 — the token stands; only its replacement is lost
             logger.warning("delegation token for unit=%s could not be published for refresh — the "
                            "unit keeps its tools until this token expires", uid, exc_info=True)
+
+    def _incarnation_ended(self, uid: str) -> bool:
+        """Does the runtime report ``uid``'s previous container ended? Anything else — running,
+        starting, unknown, unreadable — is False."""
+        try:
+            return self._runtime.await_done(uid, timeout_sec=0.0) in delegation_revocation.ENDED_STATES
+        except Exception:  # noqa: BLE001 — not knowing is not "ended"
+            return False
 
     def _revoke_ended_incarnation(self, uid: str) -> None:
         """A unit id is reused: a chat thread dispatches every turn to the same id, and a new

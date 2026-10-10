@@ -2,9 +2,12 @@
 
 * the admin key the services run with is none of the values admin-api refuses as published (its own
   config.v1 `forbidden_values`, read from the image);
-* admin-api reaches its delegation revocation store: its own `is_revoked`, run with admin-api's own
-  environment, answers instead of raising (an unreachable store makes /internal/validate refuse every
-  worker's token with 503).
+* admin-api reads its delegation store the way it admits a worker's token: the function its
+  /internal/validate awaits on the delegation module (found in validate.py, so a rename fails this
+  check by name instead of passing on a stale one), run with admin-api's own environment, admits a
+  probe token only while its live record exists, refuses it once a revocation key exists too, and
+  refuses one never recorded (an unreachable store makes /internal/validate refuse every worker's
+  token with 503).
 
 Stdlib only; runs as root; never prints a value. Exits 1 naming what failed.
 """
@@ -15,6 +18,29 @@ import sys
 
 CONF = "/etc/supervisor/conf.d/vexa.conf"
 ADMIN_CONFIG = "/app/admin-api/src/admin_api/config.v1.json"
+VALIDATE = "/app/admin-api/src/admin_api/app/validate.py"
+#: Run in admin-api's venv with its REDIS_URL: the delegation module alone (not the app), its own
+#: key prefixes, a probe token never issued, then held live, then revoked; every key removed after.
+PROBE = """
+import asyncio, importlib.util, os, secrets
+import redis.asyncio as aioredis
+spec = importlib.util.spec_from_file_location("rev", "/app/admin-api/src/admin_api/app/delegation_revocation.py")
+r = importlib.util.module_from_spec(spec); spec.loader.exec_module(r)
+admit = getattr(r, "@FUNC@")
+jti = "r4check-" + secrets.token_hex(8)
+async def main():
+    c = aioredis.from_url(os.environ["REDIS_URL"])
+    try:
+        never = await admit(jti)
+        await c.set(r.LIVE_PREFIX + jti, "1", ex=60)
+        live = await admit(jti)
+        await c.set(r.REVOKED_PREFIX + jti, "1", ex=60)
+        revoked = await admit(jti)
+    finally:
+        await c.delete(r.LIVE_PREFIX + jti, r.REVOKED_PREFIX + jti)
+    print(f"never={never} live={live} revoked={revoked}")
+asyncio.run(main())
+"""
 
 
 def program_pid(name: str) -> int:
@@ -39,24 +65,27 @@ def main() -> int:
         failures.append("the admin key admin-api runs with is unset or published in the Vexa repository")
     if environ_of(program_pid("meeting-api")).get("ADMIN_TOKEN") != key:
         failures.append("meeting-api runs with a different admin key from admin-api")
-    probe = ("import asyncio, importlib.util\n"          # the module alone, not the app it serves
-             "spec = importlib.util.spec_from_file_location('rev', "
-             "'/app/admin-api/src/admin_api/app/delegation_revocation.py')\n"
-             "r = importlib.util.module_from_spec(spec); spec.loader.exec_module(r)\n"
-             "print(asyncio.run(r.is_revoked('r4check-never-issued')))\n")
-    run = subprocess.run(["/opt/venvs/admin/bin/python", "-c", probe], capture_output=True, text=True, timeout=30,
-                         cwd="/app/admin-api",
-                         env={"PATH": "/usr/bin:/bin", "PYTHONPATH": "/app/admin-api/src",
-                              "REDIS_URL": admin_env.get("REDIS_URL", "")})
-    if run.returncode != 0 or run.stdout.strip() != "False":
-        failures.append(f"admin-api cannot read its delegation revocation store "
-                        f"({(run.stderr.strip().splitlines() or ['no output'])[-1][:120]})")
+    # The admission function is whatever /internal/validate awaits on the delegation module.
+    validate_src = open(VALIDATE, encoding="utf-8").read()
+    called = sorted(set(re.findall(r"await revocation\.([a-z_]+)\(", validate_src)))
+    if len(called) != 1:
+        failures.append(f"admin-api's /internal/validate awaits {called or 'nothing'} on its delegation "
+                        "module; this check knows one admission function and must be updated")
+    else:
+        probe = PROBE.replace("@FUNC@", called[0])
+        run = subprocess.run(["/opt/venvs/admin/bin/python", "-c", probe], capture_output=True, text=True,
+                             timeout=60, cwd="/app/admin-api",
+                             env={"PATH": "/usr/bin:/bin", "PYTHONPATH": "/app/admin-api/src",
+                                  "REDIS_URL": admin_env.get("REDIS_URL", "")})
+        if run.returncode != 0 or run.stdout.strip() != "never=False live=True revoked=False":
+            failures.append(f"admin-api's {called[0]} does not read its delegation store as it admits a "
+                            f"token ({(run.stderr.strip().splitlines() or [run.stdout.strip() or 'no output'])[-1][:160]})")
     if failures:
         for f in failures:
             print(f"  ✗ services: {f}", file=sys.stderr)
         return 1
     print(f"  ✓ services: the admin key is none of the {len(published)} published values; "
-          "admin-api reads its delegation revocation store")
+          "admin-api admits a worker token only while its live record exists and no revocation does")
     return 0
 
 

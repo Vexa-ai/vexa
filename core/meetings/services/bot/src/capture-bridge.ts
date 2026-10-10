@@ -33,6 +33,7 @@ import {
   removeProfileDir,
   restrictNavigation,
   authenticatedNavigationDomains,
+  withSiteIsolation,
   type AuthPlatform,
   type Page,
   type BrowserContext,
@@ -592,6 +593,13 @@ export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
     s3AccessKey: inv.s3AccessKey,
     s3SecretKey: inv.s3SecretKey,
   };
+  // An authenticated browser carries the deployment's stored session: it navigates only to the
+  // platform's own domains, and the meeting host must be one of them (checked before the stored
+  // session is restored — a host outside them refuses the launch). Its sites are isolated from each other
+  // (--site-per-process). A guest browser is neither (a Jitsi meeting may be on any host).
+  const authDomains = inv.authenticated
+    ? authenticatedNavigationDomains(AUTH_PLATFORM[inv.platform] ?? null, inv.meetingUrl)
+    : null;
   if (inv.authenticated && inv.userdataS3Path) {
     // Fail-loud restore: an unreachable/misconfigured store surfaces as a typed SessionSyncError
     // naming the session-restore step (the composition root drives it to a clean terminal failed)
@@ -603,14 +611,13 @@ export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
   // getAuthenticatedBrowserArgs() is the minimal clean set remote-browser uses for signed-in
   // joins; getJoinBrowserArgs() adds the fake-device / autoplay flags the join lane needs. The
   // join args win on conflict (later wins in Chromium arg parsing).
-  const args = [...getAuthenticatedBrowserArgs(), ...getJoinBrowserArgs()];
+  const baseArgs = [...getAuthenticatedBrowserArgs(), ...getJoinBrowserArgs()];
+  const args = authDomains ? withSiteIsolation(baseArgs) : baseArgs;
   const { context, page } = await launchPersistentBrowser({ dataDir, args });
 
-  // An authenticated browser carries the deployment's stored session: it navigates only to the
-  // meeting's host and the platform's own domains (sign-in included). Set before the first
-  // navigation; a guest browser is not restricted (a Jitsi meeting may be on any host).
+  // ...and its navigations are held to those domains from before the first one.
   if (inv.authenticated) {
-    await restrictNavigation(context, authenticatedNavigationDomains(AUTH_PLATFORM[inv.platform] ?? null, inv.meetingUrl));
+    await restrictNavigation(context, authDomains ?? []);
   }
 
   // Voice-agent gate the page reads to decide whether to keep the mic hot (production parity).

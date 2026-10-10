@@ -237,6 +237,23 @@ A provider that fails mid-turn reports in the same shape, with kinds `unpaid`, `
 take, in that route's own dialect, with exactly that route's credential. To test any other model you
 may use, call `GET /api/models/test?model=<id>`.
 
+## How it works
+
+1. **Catalog.** agent-api reads `VEXA_MODEL_CATALOG` once at boot and refuses it whole, naming every
+   problem, if anything in it is wrong.
+2. **Pick.** The picker lists `GET /api/models/catalog` for the person and stores a chat's model and
+   effort with `POST /api/chat/model`, which refuses a pick the next turn could not run.
+3. **Dispatch.** On the chat's next message, agent-api resolves the pick through the provider's
+   adapter, in the one place a worker's route is decided, and refuses the turn before anything
+   starts if the pick can no longer run.
+4. **Worker env.** The route is stamped into the new agent's environment: the endpoint, that
+   provider's one credential, the model, the effort in the provider's own field, and the output cap.
+
+The full flow, data ownership, and why it complies with the architecture and security rules, with
+the tests that prove each refusal, are in the module README
+(`core/agent/control_plane/model_providers/README.md`) and
+[ADR-0043](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0043-model-choice-catalog-behind-a-provider-port.md).
+
 ## Security
 
 - **People cannot add endpoints.** The catalog is deployment configuration. A person can reach only
