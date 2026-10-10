@@ -85,8 +85,9 @@ class CustomCall(BaseModel):
 #: agent never has to guess whether a failure is an outage or something a reconnect fixes.
 INSTRUCTIONS = {
     'store_unavailable': ("This deployment's credential store is unavailable: an outage, not an authorization "
-                          "problem. Tell the person so; do not ask them to reconnect (a new authorization is "
-                          "stored in the same place) and do not retry now."),
+                          "problem. Tell the person so in words: the account is connected and reconnecting will not "
+                          "fix it. Do not ask them to reconnect, do not call connection_request (a new authorization "
+                          "is stored in the same place) and do not retry now."),
     'broker_unreachable': ("This deployment's connection service is unreachable or not configured: an outage. "
                            "Tell the person so; do not ask them to reconnect and do not retry now."),
     'provider_error': ("The provider or service refused this request or is unavailable. Report its sentence; "
@@ -243,11 +244,16 @@ def build(*, subject_of, wsr=None, **_):
     def request_connection(request: Request, body: ConnectionRequest):
         """Request Gmail, Calendar, GitHub or custom-secret setup in Minutes' trusted Connections panel.
 
+        While the deployment's credential store is unavailable this opens nothing and answers
+        reason=store_unavailable: explain the outage instead.
+
         Call this whenever the person asks to connect or reconnect an account ("connect gmail"), and when
         an account tool answers reason=reconnect_required. Never answer such a request by retrying the
-        tool that failed. If the account is already ready and the failure was store_unavailable,
-        broker_unreachable or provider_error, call this only if they still want to, and say that
-        reconnecting will not fix that failure.
+        tool that failed. Do NOT call this when the failure was store_unavailable or broker_unreachable
+        (the account is already connected and a new sign-in is stored in the same broken place) or
+        provider_error: instead tell the person in words that the account is connected, that this is
+        an outage or a refusal, and that reconnecting will not fix it. Call it then only if they ask
+        again after that explanation.
 
         For custom_secret, name the service in label (setup has no service or name key) and put in setup
         only: endpoint (exact HTTPS URL), header (Authorization or X-API-Key), scheme (bearer/raw/telegram),
@@ -265,6 +271,15 @@ def build(*, subject_of, wsr=None, **_):
         afterward; ready means stored credentials, not read health. A blank Calendar account label is expected and is not an authorization failure. A request is not a connected account or working sync.
         """
         actor=subject_of(request)
+        # A consent or a saved secret is written to the broker's credential store: while that store
+        # does not answer the broker, opening the panel only sends the person to sign in for nothing.
+        # The panel is not opened, and the answer says why (the same reason the account tools give).
+        if body.provider!='github' and broker_client.store_ready(
+                base_url=os.environ.get('VEXA_CONNECTIONS_BROKER_URL', '')) is False:
+            broker_client.fault('store_unavailable', role='agent', method='POST', path='/api/connections/request',
+                                reason='store_unavailable')
+            raise connection_fault(503, 'store_unavailable',
+                                   'The Connections panel was not opened: the credential store is unavailable')
         if body.provider=='github':
             return {'connection_id':'git','provider':'github','status':'setup_available',
                     'ui_action':'open_connections','instruction':'The Connections panel opens Git repositories setup. The user enters a token privately; SSH public deploy keys remain available in repository attach. Never request a token in chat.'}

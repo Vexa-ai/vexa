@@ -1,27 +1,88 @@
 {
   "case": "connect-gmail",
-  "what": "A Gmail tool has just failed. The person says they want to connect Gmail. The agent must open the Connections panel (connection_request), or say plainly that the account is connected and what is failing. It must never answer by retrying the tool that failed.",
-  "tools": ["connection_request", "connections_status", "gmail_draft_create", "gmail_search"],
+  "what": "A Gmail tool has just failed. The person says they want to connect Gmail. When the authorization expired, the agent opens the Connections panel (connection_request). When the deployment's credential store is down, it does not open the panel: it says the account is connected, that this is an outage, and that reconnecting will not fix it. It never answers by retrying the tool that failed. During the outage connection_request itself opens nothing and answers store_unavailable (agent-api checks the broker's readiness first), so the variant answers it that way and scores the step after.",
+  "tools": [
+    "connection_request",
+    "connections_status",
+    "gmail_draft_create",
+    "gmail_search"
+  ],
   "failing_tool": "gmail_draft_create",
+  "lookups": {
+    "connections_status": {
+      "connections": [
+        {
+          "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "provider": "google_email",
+          "label": "Gmail",
+          "status": "ready"
+        }
+      ]
+    }
+  },
   "variants": {
     "reconnect_required": {
       "status": 409,
-      "detail": {"reason": "reconnect_required", "message": "Authorization expired; reconnect this account"},
-      "pass": ["calls:connection_request"]
+      "detail": {
+        "reason": "reconnect_required",
+        "message": "Authorization expired; reconnect this account",
+        "instruction": "The account's authorization is no longer accepted. Call connection_request for this provider so the person can reconnect in the Connections panel; do not retry this tool until they have."
+      },
+      "pass": [
+        "calls:connection_request"
+      ]
     },
     "store_unavailable": {
       "status": 503,
-      "detail": {"reason": "store_unavailable", "message": "Credential store unavailable — an outage, not an authorization problem: retry later, and do not ask the person to reconnect."},
-      "pass": ["calls:connection_request", "explains:outage"]
+      "detail": {
+        "reason": "store_unavailable",
+        "message": "Credential store unavailable — an outage, not an authorization problem: retry later, and do not ask the person to reconnect.",
+        "instruction": "This deployment's credential store is unavailable: an outage, not an authorization problem. Tell the person so in words: the account is connected and reconnecting will not fix it. Do not ask them to reconnect, do not call connection_request (a new authorization is stored in the same place) and do not retry now."
+      },
+      "pass": [
+        "explains:outage"
+      ],
+      "lookups": {
+        "connection_request": {
+          "status": 503,
+          "detail": {
+            "reason": "store_unavailable",
+            "message": "The Connections panel was not opened: the credential store is unavailable",
+            "instruction": "This deployment's credential store is unavailable: an outage, not an authorization problem. Tell the person so in words: the account is connected and reconnecting will not fix it. Do not ask them to reconnect, do not call connection_request (a new authorization is stored in the same place) and do not retry now."
+          }
+        }
+      }
     }
   },
   "turns": [
-    {"role": "user", "content": "Draft a reply to ada@example.com saying I'll send the deck on Friday."},
-    {"role": "assistant", "tool_call": {"name": "gmail_draft_create",
-      "arguments": {"request_id": "draft-ada-0001", "recipient": "ada@example.com", "subject": "Re: deck",
-                    "body": "Hi Ada, I'll send the deck on Friday."}}},
-    {"role": "tool", "name": "gmail_draft_create", "from_variant": true},
-    {"role": "assistant", "content": "The draft could not be saved."},
-    {"role": "user", "content": "let's connect gmail"}
+    {
+      "role": "user",
+      "content": "Draft a reply to ada@example.com saying I'll send the deck on Friday."
+    },
+    {
+      "role": "assistant",
+      "tool_call": {
+        "name": "gmail_draft_create",
+        "arguments": {
+          "request_id": "draft-ada-0001",
+          "recipient": "ada@example.com",
+          "subject": "Re: deck",
+          "body": "Hi Ada, I'll send the deck on Friday."
+        }
+      }
+    },
+    {
+      "role": "tool",
+      "name": "gmail_draft_create",
+      "from_variant": true
+    },
+    {
+      "role": "assistant",
+      "content": "The draft could not be saved."
+    },
+    {
+      "role": "user",
+      "content": "let's connect gmail"
+    }
   ]
 }

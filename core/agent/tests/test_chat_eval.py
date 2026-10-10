@@ -31,9 +31,29 @@ def test_the_conversation_ends_on_the_persons_request_with_the_variants_tool_ans
     assert json.loads(tool["content"])["detail"]["reason"] == "store_unavailable"
 
 
+def test_an_expired_authorization_passes_by_opening_the_panel():
+    assert chat_eval.score(CASE, "reconnect_required", _reply(["connection_request"]))[0]
+
+
+def test_an_outage_passes_only_on_the_explanation():
+    """In the outage, what is scored is what the agent tells the person: a call alone, or a final
+    answer without the explanation, fails."""
+    text = "Gmail is connected; this is an outage and reconnecting won't fix it."
+    assert not chat_eval.score(CASE, "store_unavailable", _reply(["connection_request"]))[0]
+    assert not chat_eval.score(CASE, "store_unavailable", _reply(["connection_request"], text))[0]
+    assert chat_eval.score(CASE, "store_unavailable", _reply(text=text))[0]
+
+
+def test_in_the_outage_connection_request_answers_that_it_opened_nothing():
+    replies = iter([_reply(["connection_request"]), _reply(text="Done, the panel is open.")])
+    reply = chat_eval.run(CASE, "store_unavailable", chat_eval.messages(CASE, "store_unavailable", "s"),
+                          lambda msgs: next(replies))
+    assert reply["lookups"] == ["connection_request"]
+    assert not chat_eval.score(CASE, "store_unavailable", reply)[0]     # claiming it opened fails
+
+
 @pytest.mark.parametrize("variant", ["reconnect_required", "store_unavailable"])
-def test_calling_connection_request_passes_and_retrying_fails(variant):
-    assert chat_eval.score(CASE, variant, _reply(["connection_request"]))[0]
+def test_retrying_the_failed_tool_always_fails(variant):
     assert not chat_eval.score(CASE, variant, _reply(["gmail_draft_create"]))[0]
     assert not chat_eval.score(CASE, variant, _reply(["connection_request", "gmail_draft_create"]))[0]
 
@@ -44,3 +64,32 @@ def test_an_outage_explanation_passes_only_for_the_outage():
     assert chat_eval.score(CASE, "store_unavailable", _reply(text=text))[0]
     assert not chat_eval.score(CASE, "reconnect_required", _reply(text=text))[0]
     assert not chat_eval.score(CASE, "store_unavailable", _reply(text="Sure, done!"))[0]
+
+
+def test_a_status_lookup_is_answered_and_the_next_step_is_scored():
+    replies = iter([_reply(["connections_status"]),
+                    _reply(text="Gmail is connected; this is an outage and reconnecting won't fix it.")])
+    seen = []
+
+    def complete(msgs):
+        seen.append(msgs)
+        return next(replies)
+    reply = chat_eval.run(CASE, "store_unavailable", chat_eval.messages(CASE, "store_unavailable", "s"), complete)
+    assert reply["lookups"] == ["connections_status"] and chat_eval.score(CASE, "store_unavailable", reply)[0]
+    assert json.loads(seen[1][-1]["content"])["connections"][0]["status"] == "ready"
+
+
+def test_a_lookup_then_the_refused_panel_then_no_explanation_fails_the_outage():
+    replies = iter([_reply(["connections_status"]), _reply(["connection_request"]), _reply(text="Opened it.")])
+    reply = chat_eval.run(CASE, "store_unavailable", chat_eval.messages(CASE, "store_unavailable", "s"),
+                          lambda msgs: next(replies))
+    assert reply["lookups"] == ["connections_status", "connection_request"]
+    assert not chat_eval.score(CASE, "store_unavailable", reply)[0]
+
+
+def test_the_failing_tools_answer_is_what_agent_api_sends():
+    for reason, variant in CASE["variants"].items():
+        assert variant["detail"]["reason"] == reason
+        assert variant["detail"]["instruction"] == INSTRUCTIONS[reason]
+    refusal = CASE["variants"]["store_unavailable"]["lookups"]["connection_request"]["detail"]
+    assert refusal["instruction"] == INSTRUCTIONS["store_unavailable"]

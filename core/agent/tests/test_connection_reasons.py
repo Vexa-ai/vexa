@@ -53,9 +53,9 @@ def test_a_gmail_tool_failure_names_its_reason_and_what_to_do(broker_answers, st
     detail = r.json()['detail']
     assert detail['reason'] == reason
     assert r.status_code == (503 if status == 500 else status)
-    assert ('connection_request' in detail['instruction']) is reconnect
+    assert ('Call connection_request' in detail['instruction']) is reconnect
     if not reconnect:
-        assert 'do not ask them to reconnect' in detail['instruction'] or 'reconnecting does not help' in detail['instruction']
+        assert 'do not ask them to reconnect' in detail['instruction'].lower() or 'reconnecting does not help' in detail['instruction']
 
 
 def test_a_store_outage_on_the_draft_tool_is_typed_too(broker_answers):
@@ -82,3 +82,23 @@ def test_connection_request_is_the_verb_for_connect_and_for_reconnect_required()
     text = ' '.join(_app().openapi()['paths']['/api/connections/request']['post']['description'].split())
     assert 'asks to connect or reconnect an account' in text and 'reason=reconnect_required' in text
     assert 'Never answer such a request by retrying the tool that failed' in text
+
+
+def test_the_panel_is_not_opened_while_the_credential_store_is_down(monkeypatch):
+    """A consent is written to the store, so with the store down connection_request opens nothing
+    and answers store_unavailable, whatever the agent decided."""
+    sent = []
+    monkeypatch.setattr(connections.broker_client, 'store_ready', lambda **kw: False)
+    monkeypatch.setattr(connections, 'call_broker', lambda *a, **kw: sent.append(a) or {'connections': []})
+    r = TestClient(_app()).post('/api/connections/request', headers=HUMAN, json={'provider': 'google_email'})
+    assert r.status_code == 503 and r.json()['detail']['reason'] == 'store_unavailable'
+    assert 'ui_action' not in r.text and sent == []
+
+
+def test_the_panel_opens_while_the_store_answers(monkeypatch):
+    monkeypatch.setattr(connections.broker_client, 'store_ready', lambda **kw: True)
+    monkeypatch.setattr(connections, 'call_broker',
+                        lambda actor, method, path, payload=None, *, identity:
+                        {'connections': []} if path == '/api/connections' else {'connection_id': 'c' * 32, 'status': 'awaiting_user'})
+    r = TestClient(_app()).post('/api/connections/request', headers=HUMAN, json={'provider': 'google_email'})
+    assert r.status_code == 200 and r.json()['ui_action'] == 'open_connections'

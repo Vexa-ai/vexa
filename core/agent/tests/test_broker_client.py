@@ -220,7 +220,7 @@ def test_the_brokers_reason_reaches_the_agent_with_what_to_do(keys, broker, capl
     detail = exc.value.detail
     assert exc.value.status_code == status and detail["reason"] == reason
     assert detail["message"].startswith(body["detail"])
-    assert ("connection_request" in detail["instruction"]) == (reason == "reconnect_required")
+    assert ("Call connection_request" in detail["instruction"]) == (reason == "reconnect_required")
     if status >= 500:   # P18: an outage is a typed fault line naming its reason
         assert faults(caplog)[-1]["reason"] == reason
 
@@ -230,5 +230,6 @@ def test_a_store_outage_is_never_answered_as_a_reconnect(keys, broker):
                                                               "reason": "store_unavailable"})
     with pytest.raises(HTTPException) as exc:
         connections.call_broker("u1", "GET", "/api/connections", identity="signed-u1")
-    assert "do not ask them to reconnect" in exc.value.detail["instruction"]
-    assert "connection_request" not in exc.value.detail["instruction"]
+    assert "do not ask them to reconnect" in exc.value.detail["instruction"].lower()
+    assert "do not call connection_request" in exc.value.detail["instruction"]
+    assert "Call connection_request" not in exc.value.detail["instruction"]

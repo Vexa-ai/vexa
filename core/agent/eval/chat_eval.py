@@ -12,6 +12,11 @@ what counts as a pass. The model's next step is scored:
                         that reconnecting will not fix it
     (always)            it never calls the tool that failed
 
+A call the case (or the variant) lists under ``lookups`` is answered with that canned result, the
+answer agent-api gives (``connections_status``; in an outage ``connection_request``, which then opens
+nothing), and the conversation continues, up to ``MAX_STEPS`` steps; what is scored is the first
+step that is not a lookup.
+
     VEXA_EVAL_BASE_URL=https://openrouter.ai/api/v1 VEXA_EVAL_API_KEY=... VEXA_EVAL_MODEL=... \\
         python3 core/agent/eval/chat_eval.py connect-gmail [--runs 3]
 
@@ -77,6 +82,29 @@ def messages(case: dict, variant: str, system: str) -> list[dict]:
     return out
 
 
+MAX_STEPS = 3
+
+
+def run(case: dict, variant: str, msgs: list[dict], complete) -> dict:
+    """Ask for the next step; answer the case's lookups and ask again; return the first other step.
+    The returned reply carries ``lookups``: the lookups the model made on the way."""
+    looked = []
+    reply: dict = {}
+    for step in range(MAX_STEPS):
+        reply = complete(msgs)
+        calls = reply.get("tool_calls") or []
+        names = [c["function"]["name"] for c in calls]
+        lookups = {**case.get("lookups", {}), **case["variants"][variant].get("lookups", {})}
+        if not calls or any(n not in lookups for n in names):
+            break
+        msgs = msgs + [{"role": "assistant", "content": reply.get("content"), "tool_calls": calls}]
+        for c in calls:
+            looked.append(c["function"]["name"])
+            msgs.append({"role": "tool", "tool_call_id": c.get("id") or f"lookup_{step}",
+                         "content": json.dumps(lookups[c["function"]["name"]])})
+    return {**reply, "lookups": looked}
+
+
 def score(case: dict, variant: str, reply: dict) -> tuple[bool, str]:
     """``reply`` is the model's assistant message: ``{"content": str|None, "tool_calls": [...]}``."""
     calls = [c["function"]["name"] for c in (reply.get("tool_calls") or [])]
@@ -93,11 +121,13 @@ def score(case: dict, variant: str, reply: dict) -> tuple[bool, str]:
 
 
 def _complete(base: str, key: str, model: str, msgs: list[dict], tools: list[dict]) -> dict:
-    body = json.dumps({"model": model, "messages": msgs, "tools": tools, "max_tokens": 400}).encode()
+    body = json.dumps({"model": model, "messages": msgs, "tools": tools, "max_tokens": 2000}).encode()
     headers = {"Content-Type": "application/json", **({"Authorization": f"Bearer {key}"} if key else {})}
     req = urllib.request.Request(base.rstrip("/") + "/chat/completions", data=body, method="POST", headers=headers)
     with urllib.request.urlopen(req, timeout=120) as r:
-        return json.loads(r.read())["choices"][0]["message"]
+        choice = json.loads(r.read())["choices"][0]
+    # A thinking model spends tokens before it answers; an empty, cut-off reply is reported as such.
+    return {**choice["message"], "finish_reason": choice.get("finish_reason")}
 
 
 def main(argv=None) -> int:
@@ -118,14 +148,16 @@ def main(argv=None) -> int:
     tools = tool_specs(case["tools"])
     failed = 0
     for variant in case["variants"]:
-        for run in range(args.runs):
-            reply = _complete(base, key, model, messages(case, variant, system), tools)
+        for n in range(args.runs):
+            reply = run(case, variant, messages(case, variant, system),
+                        lambda msgs: _complete(base, key, model, msgs, tools))
             ok, why = score(case, variant, reply)
             failed += not ok
             calls = [{"name": c["function"]["name"], "arguments": c["function"].get("arguments")}
                      for c in (reply.get("tool_calls") or [])]
-            print(json.dumps({"case": case["case"], "variant": variant, "run": run + 1, "pass": ok, "why": why,
-                              "tool_calls": calls, "text": (reply.get("content") or "")[:600]}))
+            print(json.dumps({"case": case["case"], "variant": variant, "run": n + 1, "pass": ok, "why": why,
+                              "lookups": reply.get("lookups"), "tool_calls": calls, "text": (reply.get("content") or "")[:600],
+                              "finish_reason": reply.get("finish_reason")}))
     return 1 if failed else 0
 
 

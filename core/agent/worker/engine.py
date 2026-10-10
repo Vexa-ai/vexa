@@ -478,12 +478,15 @@ def connections_preamble() -> str:
         "password, token or code in chat.\n"
         "Account tools that fail answer a `reason`:\n"
         "- `reconnect_required` — the authorization is no longer accepted: call `connection_request`.\n"
-        "- `store_unavailable`, `broker_unreachable` — this deployment's connection service is down: "
-        "say so plainly. Reconnecting will not help, because a new sign-in is stored in the same place.\n"
-        "- `provider_error` — the provider refused or is down: report its sentence; reconnecting will not "
-        "help.\n"
-        "If they still ask to reconnect after one of those, call `connection_request` and tell them it "
-        "will not fix that failure.\n\n"
+        "- `store_unavailable`, `broker_unreachable` — this deployment's connection service is down. "
+        "Do NOT call `connection_request`, even when they ask to connect: the account is already "
+        "connected, and a new sign-in would be stored in the same broken place. Say exactly that in "
+        "words: the account is connected, this is an outage, reconnecting will not fix it, try again "
+        "later.\n"
+        "- `provider_error` — the provider refused or is down: report its sentence and say that "
+        "reconnecting will not fix it.\n"
+        "Only if they ask again after that explanation, call `connection_request`, repeating that it "
+        "will not fix the failure.\n\n"
     )
 
 
