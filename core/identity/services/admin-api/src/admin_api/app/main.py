@@ -719,11 +719,33 @@ def create_app() -> FastAPI:
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     # --- user tier: webhook self-serve (writes to user.data JSONB) ---
-    @app.put("/user/webhook", response_model=UserResponse)
+    def _webhook_view(data: dict) -> dict:
+        """The webhook config as both the read and the write answer it: the URL, the events, and
+        whether a secret is set (masked to its last 4 chars). Nothing else in ``users.data`` — a key
+        scoped to bots or transcripts reads its own webhook here, never the account's stored model
+        key, transcription token or calendar feed URLs."""
+        secret = data.get("webhook_secret")
+        return {
+            "webhook_url": data.get("webhook_url"),
+            "webhook_secret_set": bool(secret),
+            "webhook_secret": _mask_secret(secret),
+            "webhook_events": data.get("webhook_events"),
+        }
+
+    @app.put("/user/webhook")
     async def set_user_webhook(webhook_update: WebhookUpdate,
                                user: User = Depends(get_current_user_for_update),
                                db: AsyncSession = Depends(get_db)):
         from sqlalchemy.orm import attributes
+        from .ssrf import SSRFError, validate_url
+        url = webhook_update.webhook_url.strip()
+        if url:
+            # Refused here as well as at delivery: a destination this deployment will never POST to
+            # is a configuration error the person should see when they save it.
+            try:
+                validate_url(url, what="webhook_url", resolve=False)
+            except SSRFError as exc:
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
         data = dict(user.data or {})
         data["webhook_url"] = webhook_update.webhook_url
         if webhook_update.webhook_secret:
@@ -735,24 +757,14 @@ def create_app() -> FastAPI:
         db.add(user)
         await db.commit()
         await db.refresh(user)
-        return UserResponse.model_validate(user)
+        return _webhook_view(user.data if isinstance(user.data, dict) else {})
 
     @app.get("/user/webhook")
     async def get_user_webhook(user: User = Depends(get_current_user)):
         """Read back the caller's webhook config. The secret NEVER leaves in the clear —
         it is masked to its last 4 chars (`********abcd`), enough to recognize which secret
         is set without disclosing it."""
-        data = user.data if isinstance(user.data, dict) else {}
-        secret = data.get("webhook_secret")
-        masked = None
-        if secret:
-            masked = "********" + (secret[-4:] if len(secret) > 8 else "")
-        return {
-            "webhook_url": data.get("webhook_url"),
-            "webhook_secret_set": bool(secret),
-            "webhook_secret": masked,
-            "webhook_events": data.get("webhook_events"),
-        }
+        return _webhook_view(user.data if isinstance(user.data, dict) else {})
 
     # --- user tier: calendar-sync self-serve (writes to user.data JSONB, like webhook) ---
     from .calendars import (MAX_CALENDAR_CONNECTIONS, connections_from_data,

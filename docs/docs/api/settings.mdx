@@ -207,8 +207,9 @@ curl -X PUT "$API_BASE/user/webhook" \
   default.
 </ParamField>
 
-The write returns the account record with **200 OK**; the stored secret is omitted from it. Read it
-back with `GET /user/webhook`, where it appears masked.
+The write answers **200 OK** with the same webhook shape `GET /user/webhook` returns — the secret
+masked, nothing else from the account. A `webhook_url` naming a loopback, private, link-local or
+metadata address, or a host name only this deployment resolves, is refused with **422**.
 
 ### Delivery history
 

@@ -16,13 +16,15 @@ curl -X PUT "$API_BASE/user/webhook" \
        "webhook_events":{"meeting.completed":true,"meeting.status_change":false}}'
 ```
 
-<ParamField body="webhook_url" type="string" required>Destination URL. Pass `""` to clear it — `null` is rejected with `422`.</ParamField>
+<ParamField body="webhook_url" type="string" required>Destination URL. Pass `""` to clear it — `null` is rejected with `422`. A URL naming a loopback, private, link-local or metadata address, or a host name only this deployment resolves, is refused with `422`.</ParamField>
 <ParamField body="webhook_secret" type="string">Shared secret used to sign each payload. Omit to leave the stored secret unchanged.</ParamField>
 <ParamField body="webhook_events" type="object">A map of event name to boolean, e.g. `{"meeting.completed": true}`. An array is rejected with `422`. Omit to leave the stored selection unchanged; when no selection is stored, the default events fire.</ParamField>
 
 ```bash GET /user/webhook
 curl -H "X-API-Key: $API_KEY" "$API_BASE/user/webhook"
 ```
+
+`PUT` and `GET` answer with the same shape:
 
 ```json Response
 { "webhook_url": "https://example.com/hooks/vexa",
@@ -42,14 +44,6 @@ one-for-one at `code=200`. What is still broken is the user-facing **Delivery Hi
 reads a store those deliveries were never written to and so shows none of them
 ([#841](https://github.com/Vexa-ai/vexa/issues/841), open). Deliveries now succeed *silently* —
 the exact inversion of [#815](https://github.com/Vexa-ai/vexa/issues/815), where they failed silently.
-</Warning>
-
-<Warning>
-`PUT /user/webhook` currently answers with the **whole user record**, including
-`max_concurrent_bots` and the account's Stripe customer, subscription and period fields — not the
-webhook shape `GET` returns. It is your own record, not another tenant's, but do not build against
-those fields: they are leaving this response.
-Tracked as [#1241](https://github.com/Vexa-ai/vexa/issues/1241).
 </Warning>
 
 ## Events
