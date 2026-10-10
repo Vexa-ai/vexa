@@ -116,7 +116,13 @@ To keep credentials in an OpenBao or Vault you already run, set the backend to `
 The mount is KV version 2, and the token's policy needs `create`, `update` and `read` on
 `<mount>/data/*`, plus `update` and `delete` on `<mount>/metadata/*` (version retention, and
 deleting a connection). The broker reads the token file on every request, so a renewed token takes effect
-without a restart. Vexa does not ship OpenBao; it is MPL-2.0 software you run yourself.
+without a restart. Keeping the token alive (renewing it, or minting a periodic one) is yours: the broker
+does not renew it. Vexa does not ship OpenBao; it is MPL-2.0 software you run yourself.
+
+The broker's readiness probe (`/ready`) reads `<mount>/data/vexa-readiness-probe` with the token. Nothing
+is ever written there, so a live token gets a 404 and the broker is ready; an expired, revoked or
+narrowed token gets 401 or 403 and `/ready` answers 503 with `"kind": "config"`. The read is covered
+by the `read` grant above; no extra policy is needed.
 
 ## Git credentials in the broker (optional)
 
@@ -128,6 +134,24 @@ broker's git key only while this is on.
 
 ## When something fails
 
+### What the agent and the Connections panel are told
+
+Every failed account call (Gmail, Calendar, a custom service) answers with a `reason`, the
+broker's sentence and what to do:
+
+| `reason` | Means | What happens |
+|---|---|---|
+| `reconnect_required` | The provider no longer accepts the stored authorization, or a permission is missing (409). | The agent calls `connection_request`, which opens the Connections panel, where the person signs in again. |
+| `store_unavailable` | This deployment's credential store does not answer, or refuses the broker: an expired or revoked OpenBao token, or a wrong store key (503). | An outage of this deployment. The agent says so. Reconnecting cannot help: a new sign-in is stored in the same place. |
+| `broker_unreachable` | agent-api cannot reach the broker, it is not configured, or it refused agent-api itself (503). | An outage of this deployment; the agent says so and does not ask for a reconnect. |
+| `provider_error` | Google or the service refused for another reason (409), or is down or answering badly (502 or 503). | The agent reports the sentence. Reconnecting does not help. |
+
+When a person asks the agent to connect or reconnect an account ("connect gmail"), the agent calls
+`connection_request`. If the account is already connected and the failure is one that a reconnect
+does not fix, the agent says that instead of retrying.
+
+### Fault lines
+
 Every broker failure is logged as one JSON line with `"event":"broker_fault"`, a `source` and a
 `kind` — never a key or a value:
 
@@ -136,10 +160,10 @@ Every broker failure is logged as one JSON line with `"event":"broker_fault"`, a
 | `config` | agent-api, terminal | the broker URL or this service's key is not set or not readable |
 | `transport` | agent-api, terminal | the broker did not answer |
 | `http_401` | agent-api, terminal | the broker refused the signature: the two sides hold different keys, or clocks differ by more than 30 seconds |
-| `http_503` | agent-api, terminal | the broker could not reach its store (see the broker's own `store` fault), or Google or a custom service is down or rate-limiting |
+| `http_503` | agent-api, terminal | the broker could not reach its store (see the broker's own `store` fault), or Google or a custom service is down or rate-limiting. agent-api's line also carries the `reason`. |
 | `http_502` | agent-api, terminal | Google or a custom service answered with something unusable |
 | `expired`, `signature`, `replay` | broker (`assertion_refused`) | a request was refused before any route ran |
-| `transport`, `integrity`, `config` | broker (`source: store`) | the store is unreachable, a stored version did not decrypt (wrong store key), or the backend is misconfigured |
+| `transport`, `integrity`, `config` | broker (`source: store`) | the store is unreachable, a stored version did not decrypt (wrong store key), or the backend is misconfigured or refuses the broker's token. On `/ready` (`route: /ready`) the same kinds mark the broker unready. |
 | `owner_mismatch` | broker (`source: store`) | a connection's metadata names a different person from the one its stored credential is sealed to; the credential is not used |
 
 ## How it works
@@ -167,6 +191,18 @@ Three callers reach the broker, each with its own role key. The broker checks a 
 5. Once the person has connected it, a read or call loads the credential from the store, checks the
    owner sealed inside it, refreshes an expired Google token (writing the new version), and calls
    Google or the custom service. Only the result goes back to agent-api.
+6. When it fails, the broker answers its sentence and a `reason` (`credential-broker.v1` `Error`).
+   agent-api passes on `{reason, message, instruction}` (`routers/connections.py` `call_broker`,
+   `INSTRUCTIONS`) and adds `broker_unreachable` when the broker gives no answer of its own. Every
+   account tool's description names the same rule (`FAILURE_RULE`), and every dispatch carries it
+   (`worker/engine.py` `connections_preamble`), so the agent calls `connection_request` only when a
+   reconnect can help.
+
+**Readiness:** `/ready` asks the store whether it answers this broker (`Store.healthy`). The local
+store opens its file; OpenBao reads the readiness path with the broker's token. A store that does
+not answer, or refuses the token, makes `/ready` 503 with `reason: store_unavailable` and the store's
+`kind`, logged as a `broker_fault` line (`source: store`, `route: /ready`), so the orchestrator stops
+sending traffic before every Gmail call fails.
 
 **A person consents or saves a secret:**
 
@@ -234,7 +270,8 @@ Either way a write keeps the new version and the one before it; delete destroys 
 | P23 (one writer per carrier) | The broker alone writes its metadata, audit and credential store (`credentials-store` in the chart). agent-api and the terminal only call it. | `gate:dataflow` |
 | P14 (config is a validated contract) | Its environment is declared in `config.v1.json` and checked against compose and Helm in both directions; a bad configuration stops the boot. | `gate:config-contract` |
 | P15 (secrets behind a port, brokered access) | Credentials sit behind the `Store` port with two adapters. The agent gets results, never the credential. | ungated: reviewed |
-| P18 (fail loud) | Every failure is a typed `broker_fault` line (`source`, `kind`), never a value. `/ready` answers 503 while the store does not. An outage stays a 502 or 503 and is never reported as "reconnect". | `gate:python` (`test_health.py`, `test_upstream_faults.py`) |
+| P18 (fail loud) | Every failure is a typed `broker_fault` line (`source`, `kind`), never a value, and every failed call answers a typed `reason` through to the agent. `/ready` answers 503 while the store does not answer the broker, an expired store token included. An outage stays a 502 or 503 and is never reported as "reconnect". | `gate:python` (`test_health.py`, `test_store_readiness.py`, `test_error_reasons.py`, `test_upstream_faults.py`; agent-api `test_broker_client.py`, `test_connection_reasons.py`) |
+| P4 (sealed contracts) for the reason | `reason` is an optional, enumerated field of `credential-broker.v1` `Error`, with goldens; the change is back-compatible and re-sealed. | `gate:schema`, `gate:contract-version` |
 | P20 (authorize every access) | Every route checks the role and the owner; see below. | `gate:python` (deny tests below) |
 
 ### Security
@@ -270,4 +307,5 @@ Deny tests, all in `core/agent/services/credential-broker/tests/` unless named o
 | Outbound destinations | `test_secret_service.py`: `test_private_mixed_multicast_and_linklocal_refused`, `test_endpoint_and_header_injection_refused`, `test_fixed_endpoint_pinned_ip_redirect_and_secret_redaction` |
 | Git credentials by signed person and membership | `test_git_identity.py`: `test_another_persons_credentials_are_refused`, `test_a_shared_workspace_key_needs_the_signed_membership`, `test_naming_the_owner_as_the_actor_is_no_longer_enough`, `test_a_call_without_the_gateway_signature_is_refused` |
 | agent-api side | `core/agent/tests/test_connections.py`: `test_unconfigured_broker_fails_closed`, `test_multiple_accounts_require_selection_and_cannot_select_foreign_account` · `core/agent/tests/test_git_store_identity.py`: `test_without_a_signed_person_nothing_is_sent`, `test_outside_any_request_the_store_refuses` · `core/agent/tests/test_git_broker_store.py`: `test_unavailable_never_falls_back_or_deletes` |
+| Failures typed, outages never answered as a reconnect | `test_error_reasons.py`: `test_every_reconnect_sentence_is_listed`, `test_an_expired_authorization_is_reconnect_required`, `test_a_store_that_does_not_answer_is_store_unavailable`, `test_a_provider_outage_is_provider_error` · `test_store_readiness.py`: `test_an_expired_or_revoked_token_is_unhealthy`, `test_ready_fails_loud_on_a_dead_store_token` · `core/agent/tests/test_broker_client.py`: `test_the_brokers_reason_reaches_the_agent_with_what_to_do`, `test_a_store_outage_is_never_answered_as_a_reconnect` · `core/agent/tests/test_connection_reasons.py`: `test_a_gmail_tool_failure_names_its_reason_and_what_to_do`, `test_every_account_tool_carries_the_one_failure_rule` |
 | Terminal side | `clients/terminal/src/app/api/connections/__tests__/routes.test.ts`: "refuses cross origin and caller-chosen identity", "arbitrary proxy routes and destinations refused", "custom secret submission projects no credential back to the UI and carries the host confirmation" |
