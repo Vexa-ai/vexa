@@ -20,6 +20,7 @@ nothing here starts a server.
 | `seeding` | materialises a person's workspace from a validated template; the "passes checks" gate for a seed folder |
 | `governance` | the dormant hard-enforcement hook for workspace entity writes |
 | `token_destination` | where a git token may travel: the one rule clone, pull and push obey |
+| `ssrf` | the outbound URL guard: whether this server may fetch a URL a person gave it, and the connection that lands only where it checked; vendored verbatim from `deploy/contracts/outbound-url.v1/ssrf.py` wherever a user-supplied URL is fetched (parity fact `outbound-url-guard`) |
 | `atomic_json` | the one atomic JSON write: a private temp file beside the target, fsynced, then `os.replace` |
 | `gitexec` | the one way git runs (`run_git`): nothing a workspace repository configures — hooks, fsmonitor, drivers, helpers, includes — runs in this process; vendored verbatim into `llm/` and `core/workspaces/shared/` (parity fact `git-exec`), and `tests/test_git_single_path.py` fails on any other git subprocess |
 | `git_redaction` · `gitenv` | the P15 scrubber for git output; the repo-discovery scrub and the transports a network op may use (`transport_env`) |

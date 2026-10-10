@@ -72,6 +72,12 @@ The graph records its modules/contracts. Contract conformance, subprocess lifecy
 failures and browser regression checks accompany the change; vendor-payload absence
 is `gate:vendor-payload`.
 
+**Amendment (2026-10-10, `87451c244`).** `gate:vendor-payload` reads "payload" more widely: a
+`.dylib`, `.dll` or `.a` is one wherever it is tracked, as `.so` and `.node` already were, and so is
+every archive under `core/meetings/services/bot/runtime/native-meeting/`, not only those under
+`native/`. A sanctioned mention in the bot's `package.json` exempts only itself; the rest of its line
+is still checked for a fetch or a native build.
+
 The live single-speaker probe proves capture-to-transcription only. Persistent API
 readback, OAuth, live overlap, sustained capture, native queue bounds and permission
 revocation remain open. Disposition: they gate any support claim and any stock

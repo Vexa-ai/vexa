@@ -257,7 +257,7 @@
    "key": "BOT_S3_ENDPOINT",
    "class": "defaulted",
    "default": "(unset — required when BOT_AUTHENTICATED=true)",
-   "description": "userdata store endpoint, as reachable FROM the bot containers (e.g. http://minio:9000)",
+   "description": "userdata store endpoint, reachable from the bot containers (each restores its session from it) and from meeting-api (which writes an authenticated bot's session back to it), e.g. http://minio:9000",
    "targets": [
     "compose",
     "helm"
@@ -278,7 +278,7 @@
    "class": "defaulted",
    "default": "(unset)",
    "secret": true,
-   "description": "SCOPED userdata-store access key — never the deployment's admin S3 credentials; rides the invocation env into the bot container, so its blast radius must be the userdata prefix only",
+   "description": "READ-ONLY userdata-store access key (Get + List on the userdata prefix): it rides the invocation env into the bot container, and the bot only restores with it. Never a storage root key: meeting-api refuses an authenticated spawn, and the session write-back, when this pair shares a half with a storage root pair (S3_* / MINIO_*)",
    "targets": [
     "compose",
     "helm"
@@ -289,7 +289,7 @@
    "class": "defaulted",
    "default": "(unset)",
    "secret": true,
-   "description": "scoped userdata-store secret key (see BOT_S3_ACCESS_KEY)",
+   "description": "read-only userdata-store secret key (see BOT_S3_ACCESS_KEY)",
    "targets": [
     "compose",
     "helm"
@@ -305,7 +305,7 @@
    "key": "MINIO_ACCESS_KEY",
    "class": "capability",
    "capability": "object_storage",
-   "description": "object-store access key (recordings upload/finalize)"
+   "description": "object-store access key: recordings upload/finalize, and the authenticated bot's session write-back to the userdata store"
   },
   {
    "key": "MINIO_SECRET_KEY",
@@ -339,7 +339,7 @@
    "key": "S3_ACCESS_KEY",
    "class": "defaulted",
    "default": "(unset — falls back to MINIO_ACCESS_KEY)",
-   "description": "explicit S3 access-key override; helm reads it from the storage.s3.existingSecret Secret",
+   "description": "explicit S3 access-key override, for recordings and the authenticated bot's session write-back; helm reads it from the storage.s3.existingSecret Secret",
    "targets": [
     "helm"
    ]

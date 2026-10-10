@@ -33,6 +33,11 @@ trivial fakes.
   each opened without following a link: a link, a FIFO or a hard-linked file is left out, and a
   skill whose `skills/` folder, skill folder or `SKILL.md` is a link, or that holds a second
   `SKILL.md` below its top, is not staged. Part of the `claude-code` adapter.
+- **Vendored guards** (byte-identical copies, because this module imports no product code):
+  `ssrf.py`, the outbound URL guard the web tools fetch through (`deploy/contracts/outbound-url.v1/ssrf.py`,
+  parity fact `outbound-url-guard`),
+  and `workspace_paths.py`, the one way the harnesses read and write inside a work tree without
+  following a link (`core/workspaces/shared/workspace_paths.py`, parity fact `workspace-paths`).
 - **Panel events**: `tool_events.py` — the closed tool vocabularies and the event a successful
   result earns (a write opens its file, a bot send opens the transcript, `open_page`, chips, a
   workspace joining the chat). Imported by all three harnesses so a turn paints the same screen

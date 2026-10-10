@@ -24,8 +24,10 @@ Every module in this folder, by concern. `routers/` holds the routes, one module
   one logged refusal.
 - `route_policy.py` — which verbs need a person in the loop: the `verbs` rows of
   `core/agent/routes.v1.json` marked `"person": true` (routes.v1). `PERSON_GATE`, an app-level
-  dependency, applies `require_person` to the route a request matched; a row naming a route the
-  app does not serve refuses the boot.
+  dependency, applies `require_person` to the route a request matched. A row naming a route the app
+  does not serve refuses the boot, and so does a destructive or membership route with no flag (any
+  DELETE, and any other write whose path has a `MEMBERSHIP_SEGMENTS` segment, less the internal-only
+  `NOT_A_WORKER_DOOR`).
 - `version.py` — what is serving, one unauthenticated fact.
 - `admin_panel.py` — read-only infrastructure and meeting-pipeline introspection for the hidden admin
   panel.
