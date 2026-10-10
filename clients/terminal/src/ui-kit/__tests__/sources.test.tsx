@@ -1,7 +1,7 @@
 /** An agent's sources become a citation list, with each date shown once (guidelines §4.17). */
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { SourceList, extractSources, parseSourceItem, readSources } from "..";
+import { SourceList, extractSources, mergeSources, parseSourceItem, readSources } from "..";
 
 const ANSWER = `Here is what changed this week.
 
@@ -45,5 +45,15 @@ describe("the structured stream field", () => {
   });
   it("anything that is not a list is no sources", () => {
     expect(readSources({ url: "https://a.example.com" })).toEqual([]);
+  });
+});
+
+describe("one fetched page per frame (agent-api)", () => {
+  it("a turn's sources are the union by URL, a later title filling an earlier gap", () => {
+    const a = readSources([{ url: "https://example.com/a" }]);
+    const b = readSources([{ url: "https://example.com/b", title: "B" }]);
+    const a2 = readSources([{ url: "https://example.com/a", title: "A" }]);
+    expect(mergeSources(mergeSources(a, b), a2)).toEqual([
+      { url: "https://example.com/a", title: "A" }, { url: "https://example.com/b", title: "B" }]);
   });
 });

@@ -76,3 +76,15 @@ export function readSources(v: unknown): Source[] {
   }
   return out.slice(0, 50);
 }
+
+/** A turn's sources, merged by URL: a later item with a title fills in an earlier one's; order is
+ *  first-seen. agent-api sends one fetched page per `sources` frame. */
+export function mergeSources(prev: Source[], next: Source[]): Source[] {
+  const out = prev.map((s) => ({ ...s }));
+  for (const n of next) {
+    const i = out.findIndex((s) => s.url === n.url);
+    if (i < 0) out.push(n);
+    else out[i] = { ...out[i], ...Object.fromEntries(Object.entries(n).filter(([, v]) => v)) } as Source;
+  }
+  return out.slice(0, 50);
+}

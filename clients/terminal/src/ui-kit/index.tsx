@@ -136,4 +136,4 @@ export type { Source } from "./primitives/SourceList";
 export { Toaster, toast } from "./primitives/Toast";
 export { contrastRatio, parseColor } from "./format/contrast";
 export { parseTokens } from "./format/tokens";
-export { extractSources, parseSourceItem, readSources } from "./format/sources";
+export { extractSources, mergeSources, parseSourceItem, readSources } from "./format/sources";

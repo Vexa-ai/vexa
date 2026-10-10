@@ -11,7 +11,7 @@ import { LayoutServiceId, type ActiveTab } from "../workbench/layout";
 import { registerCommand, type TabProps } from "../contributions";
 import { meetingsOnly } from "../app/mode";
 import { AgentWindow, Conversation, opIcon, type Turn, type Op } from "../workbench/agent-window";
-import { Chip, ChipRow, Fold, Icon, IconButton, Menu, readSources, type MenuItem } from "../ui-kit";
+import { Chip, ChipRow, Fold, Icon, IconButton, Menu, mergeSources, readSources, type MenuItem } from "../ui-kit";
 import { Crosshair, Ellipsis, Mic, Paperclip, Plus, Send, Square } from "lucide-react";
 import { ReportTurn } from "./ReportThis";
 import { invalidateDocLinkCaches } from "../ui-kit/docLinks";
@@ -1321,7 +1321,8 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
           // the settled op line. A view that attached to a turn already in flight counted only what
           // it saw; the server counted the turn.
           onSteps: (steps) => patchAgentTurn(key, agentId, (t) => ({ ...t, steps })),
-          onSources: (items) => { const sources = readSources(items); if (sources.length) patchAgentTurn(key, agentId, (t) => ({ ...t, sources })); },
+          // agent-api sends one fetched page per frame; a turn's sources are their union by URL
+          onSources: (items) => { const fresh = readSources(items); if (fresh.length) patchAgentTurn(key, agentId, (t) => ({ ...t, sources: mergeSources(t.sources ?? [], fresh) })); },
           onError: (msg) => patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, text: (t.text ?? "") + (t.text ? "\n\n" : "") + presentError(new Error(msg)).headline })),
           onProgress: () => stick.onContent(),
         },

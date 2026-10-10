@@ -198,9 +198,10 @@ the scale — and the diff is reviewed visually.
 An answer's sources render as a citation list — one row per source, title as a link, host and
 date beneath, the date shown **once** (a date already in the title is not repeated). Two ways in:
 
-- **Structured:** a `sources` event on the chat stream, `{ "type": "sources", "items": [{ "title",
-  "url", "date"?, "snippet"? }] }`. Additive: only `http:`/`https:` URLs are kept, at most 50, and a
-  server that never sends it changes nothing.
+- **Structured:** a `sources` event on the chat stream, `{ "type": "sources", "items": [{ "url",
+  "title"?, "date"?, "snippet"? }] }`. agent-api sends one per page the turn successfully fetched
+  (see [Agent API](/api/agent)); the terminal merges a turn's items by URL. Only `http:`/`https:`
+  URLs are kept, at most 50, and a server that never sends it changes nothing.
 - **Fallback:** when the agent writes its sources as a Markdown list under a "Sources" (or
   "References", "Citations", "Links") label, that list is lifted out of the prose and rendered as
   the citation list. If any item is not a link, the block stays prose.
