@@ -158,8 +158,31 @@ def build_production_app():
         # _is_transient_connect_error) — it needs an operator, not a backoff.
         await _connect_with_retry(lambda: ensure_schema(app_db.get_engine(), Base))
         await _announce_admin_claim()
+        await _warn_stored_open_signin()
 
     return app
+
+
+async def _warn_stored_open_signin() -> None:
+    """A `*` in the admin-edited sign-in list — stored before the setting refused it — is ignored
+    (`signin_allow.effective`): opening the instance to everyone is the operator's opt-in through
+    VEXA_SIGNIN_ALLOW. Say so at boot, so the stored value is not mistaken for an open instance or
+    left in place unnoticed. Never fails the boot."""
+    from .app import db as app_db
+    from .app import signin_allow
+    from .app.platform_settings import read_platform_setting
+
+    try:
+        async with app_db.session() as db:
+            stored = (await read_platform_setting(signin_allow.SETTING_KEY, db)).get(
+                signin_allow.SETTING_FIELD, "")
+    except Exception as exc:  # noqa: BLE001 — the admission ignores it either way
+        logger.warning("could not read the sign-in setting at boot (%s)", type(exc).__name__)
+        return
+    if signin_allow.stored_wildcard(stored):
+        logger.warning("the admin-edited sign-in list (Settings → sign-in) holds '*'; it is IGNORED — "
+                       "opening sign-in to everyone is an operator-only opt-in through "
+                       "VEXA_SIGNIN_ALLOW. Remove the entry from the setting.")
 
 
 async def _announce_admin_claim() -> None:

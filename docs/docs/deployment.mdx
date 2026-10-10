@@ -203,7 +203,9 @@ cannot be reached, new sign-ins are refused; sessions that already exist are unt
 
 `VEXA_SIGNIN_ALLOW=*` (the entry `*` alone) lets **any address** sign in and get an account. It is
 meant for a dev or demo stack: nothing sets it by default, admin-api logs a warning at every boot
-while it is set, `*` is never a pattern inside an entry, and `VEXA_ADMIN_EMAILS` refuses it.
+while it is set, `*` is never a pattern inside an entry, and `VEXA_ADMIN_EMAILS` refuses it. It is the
+operator's opt-in only: the sign-in list an admin edits in Settings refuses `*`, and a `*` already
+stored there is ignored and named in a boot warning.
 
 <Warning>
 **The first administrator needs the admin claim code.** On an instance nobody has claimed, admin-api

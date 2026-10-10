@@ -173,9 +173,10 @@ def test_a_settings_write_is_canonicalised_and_all_or_nothing():
     assert sa.normalize_setting(["a@b.co", "@c.co"]) == "a@b.co, @c.co"
     with pytest.raises(sa.InvalidAllowList) as bad:
         sa.normalize_setting("ok@example.com, bank.example, @nodot, x@@y.z, *")
-    # every problem at once — one per bad entry, the good one not among them. `*` is not one of
-    # them: it is the explicit everyone entry (see the wildcard tests at the end of this file).
-    assert len(bad.value.problems) == 3
+    # every problem at once — one per bad entry, the good one not among them. `*` is one of them
+    # here: in the admin-edited list it is refused as the operator's opt-in (wildcard tests below).
+    assert len(bad.value.problems) == 4
+    assert sa.WILDCARD_OPERATOR_ONLY in bad.value.problems
     assert not any("ok@example.com" in p for p in bad.value.problems)
 
 
@@ -545,6 +546,61 @@ def test_the_wildcard_is_never_the_default_and_never_a_pattern(monkeypatch):
     assert sa.matches("someone@example.com", ["*@example.com"]) is False
     assert sa.entry_problem("@*.example.com") is not None
     assert sa.matches("not-an-address", ["*"]) is False
+
+
+# ── R6-2: `*` is the OPERATOR's opt-in — the admin-edited setting can neither set it nor use it ──
+
+def test_the_settings_door_refuses_the_wildcard_as_operator_only(make_client):
+    db = FakeDB(signin_allow="keep@example.com")
+    c = make_client(db)
+    for value in ("*", "alice@example.com, *", ["*"]):
+        r = c.put("/internal/settings/signin", headers={"X-Internal-Secret": SECRET},
+                  json={"allow": value})
+        assert r.status_code == 422, (value, r.text)
+        assert "operator-only" in r.json()["detail"] and "VEXA_SIGNIN_ALLOW" in r.json()["detail"]
+        assert db.rows["signin"].value == {"allow": "keep@example.com"}
+    assert _ask(c, "stranger@example.com").json() == {"admitted": False, "why": "not-allowed"}
+
+
+def test_a_stored_wildcard_opens_nothing(make_client):
+    """A `*` written to the setting before it was refused (or written around the door) is ignored:
+    a stranger is still turned away, and the rest of the stored list still works."""
+    c = make_client(FakeDB(signin_allow="*, alice@example.com"))
+    assert _ask(c, "stranger@example.com").json() == {"admitted": False, "why": "not-allowed"}
+    assert _ask(c, "alice@example.com").json() == {"admitted": True, "why": "allow-list"}
+    assert sa.effective([], "*, alice@example.com") == ["alice@example.com"]
+    assert sa.stored_wildcard("*, alice@example.com") is True
+    assert sa.stored_wildcard("alice@example.com") is False
+
+
+def test_the_operators_wildcard_still_opens_sign_in(make_client, monkeypatch):
+    monkeypatch.setenv("VEXA_SIGNIN_ALLOW", "*")
+    c = make_client(FakeDB())
+    assert _ask(c, "stranger@example.com").json() == {"admitted": True, "why": "allow-list"}
+    assert sa.effective(["*"], "") == ["*"]
+
+
+def test_a_stored_wildcard_is_named_at_boot(monkeypatch, caplog):
+    import asyncio
+    import contextlib
+    import logging
+
+    from admin_api import __main__ as boot
+    from admin_api.app import db as app_db
+
+    for stored, warned in (("*, alice@example.com", True), ("alice@example.com", False)):
+        fake = FakeDB(signin_allow=stored)
+
+        @contextlib.asynccontextmanager
+        async def _session(fake=fake):
+            yield fake
+
+        monkeypatch.setattr(app_db, "session", _session)
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger="admin_api.boot"):
+            asyncio.run(boot._warn_stored_open_signin())
+        said = "IGNORED" in caplog.text and "VEXA_SIGNIN_ALLOW" in caplog.text
+        assert said is warned, (stored, caplog.text)
 
 
 def test_the_wildcard_is_not_an_admin(monkeypatch):
