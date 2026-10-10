@@ -109,6 +109,20 @@ def test_the_page_writer_writes_where_the_mount_reads(deployment):
         assert not [p for p in stale.rglob("*.md") if "acme" in p.name]
 
 
+def test_a_non_admin_company_tier_write_is_refused_and_nothing_lands(deployment):
+    """The deny half of the company tier (friction report, dogfood 2026-10-10): a person who is not
+    an org admin gets the 403 the `extend-meeting` and `create` briefs now name, and no page is
+    written into `_global` or anywhere else by that call."""
+    store, settings, want, stale = deployment
+    c = _client(store, settings)
+    r = c.post("/api/workspace/entity", headers={"X-User-Id": "u_member"},
+               json={"slug": "_global", "kind": "company", "name": "Globex",
+                     "facts": ["Globex makes widgets."], "source": "a meeting"})
+    assert r.status_code == 403, r.text
+    assert "only an org admin may write company-tier pages into _global" in r.text
+    assert not [p for p in store.rglob("*.md") if "globex" in p.name]
+
+
 def test_reset_resets_the_resolved_directory(deployment, tmp_path, monkeypatch):
     store, settings, want, stale = deployment
     seeds = tmp_path / "seeds" / "default"

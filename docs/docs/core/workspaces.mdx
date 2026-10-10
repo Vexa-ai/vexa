@@ -279,6 +279,28 @@ Delivery mechanics: **Lane W** serialises the attributed writer per shared repo
 (`core/agent/shared/adapters.py workspace_write_lock`); note the flock is not yet on the live commit
 path (`dispatch.py` comment) — drive concurrent shared writes **sequentially** for now (⬜ to wire).
 
+## Entity pages — sources, the company tier and write-back (✅)
+
+An agent records what it learned about a person, company, meeting, project or decision with
+`entity_upsert`, which writes `kg/entities/<kind>/<slug>.md` (`core/workspaces/shared/entities.py`).
+
+- **Sources.** Every call carries one `source`. The page lists each distinct source once, in the
+  `sources:` front matter and under `## Sources`. A source may contain commas, quotes or `#`
+  (*"Zoom call 17, 2026-10-09 14:07 UTC"*); it stays one source, and upserting it again adds
+  nothing. A page written before this rule, whose sources were split at their commas, is repaired the
+  next time the same source is upserted.
+- **The company tier.** `slug="_global"` writes a company-tier page into the organisation's layer.
+  Only an org admin may do that; anyone else gets `403 only an org admin may write company-tier pages
+  into _global` and writes the page on their own desk instead. The `extend-meeting` and `create`
+  briefs say so, so an agent that is not an admin does not try.
+- **Write-back.** After a turn, a mechanical pre-pass lists names the turn mentioned that have no
+  page, and a write-back phase may create them. The assistant's own model name (*Claude Sonnet …*,
+  *Claude Opus …*) is never a candidate; a person or company that merely starts with the same word
+  still is.
+
+**Limits and faults.** The front matter stays one-line YAML flow lists, so any YAML reader parses it.
+A split page heals only for a source that is upserted again; other halves stay until edited.
+
 ## How it works
 
 **Importing a repository as a workspace** (`POST /api/workspace/import`, also the control MCP's
@@ -330,6 +352,18 @@ the turn made under `policy/` is reverted, and the commit runs through `gitexec`
 program the repository names (hooks, filters, credential helpers, …). Where the worker cannot switch
 users (Lite's per-tenant UID), it makes itself non-dumpable instead.
 
+**Recording an entity** (`POST /api/workspace/entity`, the `entity_upsert` tool):
+
+1. The agent's call reaches agent-api as the person (`routers/workspaces.py` `ws_entity_upsert`).
+   `slug="_global"` is refused unless `global_layer.is_admin` says the caller is an org admin;
+   any other slug resolves through `_read_target(write=True)`.
+2. `entities.upsert_entity` reads the page's front matter. `_list_field` reads `sources:` and
+   `aliases:` as YAML flow lists, honouring quotes; `_render_list` writes them back deduplicated,
+   quoting any item that would not read back as itself, and folds the comma-split halves of a value
+   being added back into it.
+3. `## Sources` is rebuilt from `sources:`; each new fact is stamped `— source: <source>` once.
+4. agent-api commits the page and `kg/INDEX.md` by pathspec, authored by the person.
+
 ### Who writes what
 
 | Data | Only writer | Where |
@@ -365,6 +399,7 @@ users (Lite's per-tenant UID), it makes itself non-dumpable instead.
 | P18 (fail loud) | A refused path raises; it never returns a value a caller could ignore. A broker outage stops Git operations instead of falling back. A path the tools user cannot get stops the turn. | `gate:python` (tests below) |
 | P20 (authorize every access) | Every route resolves a slug or id only inside the caller's own store or a workspace they belong to; roles are checked against `policy/members.json`. | `gate:python` (tests below) |
 | P12 | `core/workspaces/README.md` and every folder below it. | `gate:readme` |
+| P18 (fail loud), entity pages | A company-tier write by a non-admin is a `403` with one sentence, never a silent write elsewhere; the brief tells the agent where to write instead. A source is never silently split or duplicated. | `gate:python`: `test_entity_source_list.py` |
 
 ### Security
 
@@ -390,6 +425,7 @@ Deny tests, all in `core/agent/tests/`:
 | The member list is never read or written through a link | `test_membership_policy_links.py`: `test_a_member_list_reached_through_a_link_is_no_member_list`, `test_a_grant_is_never_written_through_a_link`, `test_a_member_list_with_a_second_hard_link_is_no_member_list` · `test_policy_revert_links.py`: `test_a_members_file_replaced_by_a_link_is_removed_not_written_through` |
 | Git runs nothing the repository names | `test_gitexec.py`: `test_a_hook_planted_in_the_repository_does_not_run`, `test_a_credential_helper_the_repository_names_does_not_run`, `test_a_linked_git_dir_is_refused`, `test_a_git_dir_swapped_in_after_the_check_is_never_read` · `test_git_single_path.py`: `test_no_git_subprocess_bypasses_gitexec` |
 | The tools user cannot write the repository | `test_worker_git_writeback.py`: `test_the_grant_never_opens_git_and_closes_what_an_earlier_grant_opened`, `test_a_work_tree_root_is_sticky_and_nothing_else_is`, `test_a_hook_planted_in_git_does_not_run_at_write_back` · `test_tools_user_cannot_swap_git.py`: `test_the_tools_user_cannot_swap_git_and_can_still_do_its_work` (runs in the worker image) |
+| Entity sources stay whole; the company tier is admin-only; the assistant is not a write-back subject | `test_entity_source_list.py`: `test_a_comma_inside_a_source_does_not_split_it`, `test_the_same_source_twice_is_recorded_once`, `test_a_page_split_by_the_old_writer_heals_on_the_next_upsert`, `test_the_frontmatter_is_still_yaml_other_readers_parse` · `test_writeback_not_the_assistant.py`: `test_the_model_answering_is_not_a_writeback_candidate`, `test_a_person_or_company_that_starts_with_the_same_word_is_kept` · `test_global_root.py`: `test_a_non_admin_company_tier_write_is_refused_and_nothing_lands` |
 | Git credentials only for the signed person | `test_git_store_identity.py`: `test_the_request_s_signed_person_is_the_actor_and_the_signature_is_forwarded`, `test_without_a_signed_person_nothing_is_sent` · `test_git_broker_store.py`: `test_unavailable_never_falls_back_or_deletes` |
 
 ## Deferred / planned (documented, not built)
