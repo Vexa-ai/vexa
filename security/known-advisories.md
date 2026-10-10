@@ -52,7 +52,7 @@ Categories A and B (LGPL is Category X there). Its reviewed exceptions:
 
 ## Third-party images (Trivy)
 
-Allow file: [`trivy-ignore-third-party.yaml`](trivy-ignore-third-party.yaml), used only for the images
+Allow file: [`.github/trivy-ignore-third-party.yaml`](../.github/trivy-ignore-third-party.yaml), used only for the images
 Vexa's deploy surfaces pin ([`scripts/pinned-images.mjs`](../scripts/pinned-images.mjs)), never for
 Vexa's own images. Each entry is a fixed CRITICAL or HIGH advisory inside an upstream image, scoped by
 package URL to the package it was found in, and expires on 2026-12-31. Produced from a Trivy 0.74.0 scan
