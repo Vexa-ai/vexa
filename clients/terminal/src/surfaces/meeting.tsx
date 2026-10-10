@@ -17,6 +17,7 @@ import { resolveJoinError, serviceDenialFromError, type ServiceDenialPresentatio
 import { ServiceDenialPanel } from "./ServiceDenialPanel";
 import { useLiveMeetings, useLiveMeetingsConnection, useLiveMeetingsLoaded, liveMeetingsNow, refreshMeetings } from "./liveMeetings";
 import { usePreviewPinTab } from "./previewPinTab";
+import { ExportMeetingButton, ImportMeetingButton, exportable } from "./MeetingBundleActions";
 import { defaultBotName } from "./defaultBotName";
 import { parseMeetingInput } from "./meetingId";
 import { getJitsiHosts } from "./jitsiHosts";
@@ -777,6 +778,7 @@ function MeetingsList() {
         <div style={{ marginTop: 8 }}>
           <PlanMeetingButton />
           <CalendarSyncButton variant="row" />
+          <ImportMeetingButton />
         </div>
       </div>
       )}
@@ -1008,6 +1010,7 @@ function MeetingTab({ params }: TabProps) {
           <div style={{ flex: "1 0 0", minWidth: 0 }} />
           {m && <BotControls m={m} connected={connected} />}
           {m?.native_id && <ShareSessionButton platform={platformSlug(m.platform)} native={m.native_id} />}
+          {m && exportable(m) && <ExportMeetingButton meetingId={m.id} />}
         </div>
       </header>
       <div style={{ flex: 1, minHeight: 0 }}>
