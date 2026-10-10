@@ -54,11 +54,14 @@ what was said since the last extend. See [Pages](/minutes/pages#extend-or-create
 
 ### Play the recording
 
-On a finished meeting, the controls load the recording (*Loading recording…*). Then:
+On a finished meeting, the controls load the recording (*Loading recording…*). The player is one row
+under the page's title: the play/pause icon, the time (*0:00 / 51:13*), the **Seek recording** slider
+filling the rest of the row, and the download icon. On a narrow panel the slider shrinks; the row stays
+on one line. There is no mute: use your system volume.
 
-1. Press **Play**. Nothing plays by itself.
-2. Click any transcript passage (*Play from m:ss*), or press <kbd>Enter</kbd> or <kbd>Space</kbd> on it,
-   to jump there. The passage being played is shaded.
+1. Press the play icon (*Play recording*; it turns into *Pause recording*). Nothing plays by itself.
+2. Click any transcript passage, or press <kbd>Enter</kbd> or <kbd>Space</kbd> on it, to jump there.
+   Hovering a passage shows *Play from m:ss* just above that line. The passage being played is shaded.
 3. Drag the **Seek recording** slider to move anywhere in the audio.
 
 There is one player per audio file, and starting one meeting pauses any other. Older recordings have
@@ -67,14 +70,18 @@ so).
 
 ### Download the audio
 
-**Pending ([#1798](https://github.com/Vexa-ai/vexa/pull/1798)).** A download button is not on this line
-yet. Until it lands, recordings can be fetched over the API; see [Recordings](/how-to/recordings).
+Press the download icon at the end of the player row (*Download audio*). The browser saves the
+recording as `<platform>-<meeting-id>-<date>.<ext>`, in its own format (usually `.webm`). It goes
+through the same owner-only check as playback. If the download is refused or interrupted, the
+controls say so under the player (*Could not download audio…*). Over the API, see
+[Recordings](/how-to/recordings).
 
 ### Delete a meeting's data
 
-On a finished meeting, the owner sees **Delete**:
+On a finished meeting, the owner sees the trash icon (*Delete meeting data*) with the other icons in the
+page header (copy, report, edit). It turns red only when you point at it.
 
-1. Press **Delete**. The dialog reads *Delete meeting data?*: *Permanently delete this meeting's audio,
+1. Press it. The dialog reads *Delete meeting data?*: *Permanently delete this meeting's audio,
    transcript and captured fixtures, including promoted fixtures. Saved pages are kept.*
 2. Type `delete`. **Delete permanently** stays disabled until you do.
 3. When it is done: *Meeting audio, transcript and fixtures deleted. Saved pages are kept.*
@@ -96,6 +103,7 @@ and recording were deleted.* Pages written from it are not touched.
 | *Could not load recording* · *Audio could not be played. Retry loading the recording.* | the recording could not be fetched or played | press **Retry** |
 | *Could not stop bot. Retry.* | the stop request failed | retry; the bot is also ended when the meeting ends |
 | *Could not delete meeting data. Retry.* | the delete failed; storage may be unavailable | retry later |
+| *Could not download audio: the recording was not found.* · *Could not download audio (HTTP …). Retry.* · *…the connection failed. Retry.* | the download was refused or did not complete | press the download icon again; a recording you do not own is never served |
 | *This page declares a transcript, but names no meeting.* | a page has a transcript slot without a meeting id | fix the slot or ask the agent |
 | *This meeting's transcript and recording were deleted.* | the meeting's data was deleted | — |
 | *Bot feed error* · *Unreadable transcript frame* | the live feed failed or sent something unreadable | the card reconnects; dismiss it |
@@ -116,7 +124,8 @@ running. Stop and Delete are not shown on a meeting someone shared with you.
    event it saw.
 3. **Playback.** The controls list recordings at `/api/recordings?meeting_id=…` and stream
    `/api/recordings/{id}/media/{media}/raw?type=audio`. The terminal passes byte ranges through, so the
-   player can seek; meeting-api serves the ranges from object storage. A transcript line's play position
+   player can seek; meeting-api serves the ranges from object storage. Download reads the same route
+   with `download=1`, which adds `Content-Disposition: attachment`. A transcript line's play position
    is its timestamp minus the recording's capture start.
 4. **Highlight.** The button sends a silent `highlight` request into the chat. The agent scans the
    transcript for candidates and publishes the ones it keeps; the terminal reads them from
