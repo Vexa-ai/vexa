@@ -65,7 +65,7 @@ The catalog is one JSON object in agent-api's environment, `VEXA_MODEL_CATALOG`.
 | `openai_compatible` | any OpenAI-compatible endpoint: a self-hosted vLLM or llama.cpp, a LiteLLM proxy, an inference gateway | `openai-agent` | `base_url` (required, the OpenAI root, usually ending `/v1`); `auth: none` or `auth: secret` with `secret_ref`; `extra_body` |
 | `openrouter` | any model OpenRouter serves | `openai-agent` on `/api/v1` (default), or `claude-code` on OpenRouter's Anthropic-compatible `/api` | `harness`; `auth: secret` with `secret_ref` (required); `extra_body` (openai-agent only) |
 | `anthropic` | Anthropic directly | `claude-code` | `auth: secret` with `secret_ref` (an API key), or `auth: subscription` (the deployment's own Claude subscription; read [Model credentials & licensing](/model-credentials-licensing) before offering it to other people) |
-| `custom` | each person's own endpoint, as set under Settings → Models | the person's own | none. The person sets the endpoint, key, model and extra body. The endpoint must still pass `VEXA_MODEL_BASE_URL_ALLOW`, and the model `VEXA_MODEL_ALLOWLIST`. |
+| `custom` | each person's own endpoint, as set under Settings → Models | the person's own | none. The person sets the endpoint, key, model and extra body. The endpoint must still pass `VEXA_MODEL_BASE_URL_ALLOW`, and the model `VEXA_MODEL_ALLOWLIST`. On the claude-code harness the endpoint needs a key. |
 
 On a claude-code route through OpenRouter, every model tier the claude CLI uses is pinned to the
 chosen model, so background calls go to that model too.
@@ -188,7 +188,7 @@ A pick that cannot run is refused before anything starts, and the chat says why.
 |---|---|
 | `unknown_model` | the chat's model is no longer in the catalog |
 | `not_permitted` | an admins-only model, for someone else |
-| `not_configured` | an own-endpoint model, for someone with no endpoint set; or a catalog that offers this person nothing |
+| `not_configured` | an own-endpoint model, for someone with no endpoint set or with a keyless endpoint on the claude-code harness; or a catalog that offers this person nothing |
 | `credential_missing` | the provider's `secret_ref` is not set any more |
 | `endpoint_refused` | the person's own endpoint is not allowed by `VEXA_MODEL_BASE_URL_ALLOW` |
 

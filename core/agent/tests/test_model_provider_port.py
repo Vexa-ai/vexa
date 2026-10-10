@@ -109,6 +109,14 @@ def test_custom_refuses_an_endpoint_the_operator_gate_refuses():
     assert "sk-person" not in json.dumps(exc.value.as_dict())
 
 
+def test_a_keyless_own_endpoint_runs_on_openai_agent_and_never_on_claude_code():
+    keyless = dict(OWN, api_key="")
+    assert _catalog().route("mine", _ctx(keyless), admin=False).credential == ""
+    with pytest.raises(ModelChoiceFault) as exc:
+        _catalog().route("mine", _ctx(dict(keyless, runner="claude-code")), admin=False)
+    assert exc.value.kind == NOT_CONFIGURED
+
+
 def test_a_missing_secret_is_a_typed_refusal_naming_the_reference_not_the_value():
     cat = _catalog()
     with pytest.raises(ModelChoiceFault) as exc:

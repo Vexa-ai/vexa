@@ -63,11 +63,22 @@ class CustomAdapter:
                 ENDPOINT_REFUSED, model=model_id, provider=provider_key,
                 detail=f"Your endpoint is not allowed on this deployment: {refusal}.",
                 remedy="Point Settings → Models at an allowed endpoint, or pick another model.")
+        harness = self.harness(provider, ctx)
+        key = str(cfg.get("api_key") or "").strip()
+        if harness == "claude-code" and not key:
+            # The claude CLI on an endpoint with no key of its own falls back to whatever credential
+            # its home holds, and that is the deployment's, never the person's. The openai-agent
+            # harness has no such fallback, so a keyless endpoint is fine there.
+            raise ModelChoiceFault(
+                NOT_CONFIGURED, model=model_id, provider=provider_key,
+                detail="Your endpoint has no API key, and the claude-code harness needs one.",
+                remedy="Add the endpoint's key under Settings → Models, choose the openai-agent "
+                       "harness, or pick another model.")
         own = str(cfg.get("model") or "").strip()
         return ModelRoute(
             model_id=model_id, provider=provider_key, adapter=KIND,
-            harness=self.harness(provider, ctx), base_url=base_url,
-            credential_source=CRED_SUBJECT, credential=str(cfg.get("api_key") or "").strip(),
+            harness=harness, base_url=base_url,
+            credential_source=CRED_SUBJECT, credential=key,
             provider_model=own if own and ctx.model_allowed(own) else ctx.deployment_model,
             extra_body=str(cfg.get("extra_body") or "").strip(),
             capabilities=common.capabilities(model))
