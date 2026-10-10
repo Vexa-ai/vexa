@@ -32,12 +32,12 @@ help:
 	@echo "    make connect        print the exact 'claude mcp add' line for this endpoint"
 
 ## env-check — the dogfood .env must exist; every secret it leaves empty (or still holds a value
-## published in this repository: the database password, the storage root pair, the internal secrets)
-## is minted into it by deploy/compose/mint-dev-env.sh, the same step `make up` runs for compose; a
-## CHANGE-ME left in it (ADMIN_TOKEN) still stops the bring-up.
+## published in this repository: the admin token, the database password, the storage root pair, the
+## internal secrets) is minted into it by deploy/compose/mint-dev-env.sh, the same step `make up` runs
+## for compose; a CHANGE-ME still left in it stops the bring-up.
 env-check:
 	@[ -f $(DOGFOOD_ENV) ] || { \
-	  echo "✗ no $(DOGFOOD_ENV) — cp env.dogfood.example $(DOGFOOD_ENV) and set ADMIN_TOKEN"; \
+	  echo "✗ no $(DOGFOOD_ENV) — cp env.dogfood.example $(DOGFOOD_ENV)"; \
 	  exit 1; }
 	@../compose/mint-dev-env.sh $(DOGFOOD_ENV) | grep -v '^kept ' || true
 	@if grep -q 'CHANGE-ME' $(DOGFOOD_ENV); then \
