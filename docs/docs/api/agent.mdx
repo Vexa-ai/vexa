@@ -132,10 +132,17 @@ body of a refused dispatch: `{ detail, fault }` with `503` when the agent runtim
 caller has no thread for is a `404`; a thread whose transcript is missing or empty returns
 `{ "turns": [] }`.
 
-`GET /api/chat/pending?session=` → `{ pending: [{ entry, id, kind, target, display, at, blocked? }], cursor, fault? }`:
+`GET /api/chat/pending?session=&after=` → `{ pending: [{ entry, id, kind, target, display, at, blocked? }], cursor, taken?, fault? }`:
 what the chat submitted that its agent has not taken yet. When a typed fault is stopping the queue,
 each row carries it as `blocked` and the top level once more as `fault`; it clears the moment the agent
-takes anything.
+takes anything. `after` is an output-stream id (`<ms>-<seq>`, anything else is a `422`); with it,
+`taken` counts the turns the agent has started since that id. A client whose stream just ended passes
+its last event id: a message the agent took the moment the previous turn ended is no longer pending,
+and `taken` is what tells the client to attach and watch it.
+
+A streamed `/api/chat` view stays open until every turn that started on it has sent `turn-complete`.
+Two turns can share one view (the agent takes the next message while it finishes the previous turn's
+write-back); every worker event carries its `turn_id`, so a client can tell them apart.
 
 ## Routines
 

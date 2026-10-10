@@ -30,7 +30,7 @@ import { actEnded, actNoted, actQueued, actSending, actSettled, actStarted, actS
 import { actTarget, endJob, isJobIntent, jobLine, jobTarget, noteJob, promoteJob, queueJob, startJob, stepJob, type JobRec } from "./jobs";
 // THE CHAT'S INBOX (Vexa-ai/vexa#1610) — everything submitted is on the SERVER at once, and the
 // queued rows are read back from it rather than remembered here. See `surfaces/inbox.ts`.
-import { blockSubmission, claimInboxRow, fetchPending, flushOutbox, newSubmissionId, readOutbox, reconcileInbox, runnable, submitToInbox, SubmitRefused } from "./inbox";
+import { blockSubmission, claimInboxRow, fetchPending, flushOutbox, newSubmissionId, readOutbox, reconcileInbox, streamIdAfter, submitToInbox, SubmitRefused, turnsToWatch } from "./inbox";
 import { MINUTES_ONBOARDING_GREETING, MINUTES_PREP_GREETING } from "../canvas/actions";
 import { TERMS_EVENT } from "../canvas/transcriptTerms";
 
@@ -1092,7 +1092,12 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
     // saying it is the same defect as one that says nothing, a minute later.
     if (opts.intent && isJobIntent(opts.intent)) actSending(actTarget(opts.intent));
     const n = state.nextId;
-    const agentId = `a-${n}`;
+    // `let`: THE BUBBLE THE STREAM IS WRITING INTO MOVES when this view carries a second turn — the
+    // answer to something the person submitted while this one was running (`onTurn` below). Every
+    // patch reads it at call time, so routing is this one assignment.
+    let agentId = `a-${n}`;
+    const bubbles = new Map<string, string>();   // worker turn id → the agent bubble that renders it
+    const mySeq = ++sendSeqRef.current;
     const displayText = advertiseFocus ? appendReferenceToken(v, contextRef) : v.trim();
     const ctrl = new AbortController();
     // AN ATTACH DRAWS NO USER BUBBLE for the same reason a hidden turn does not: the person's own
@@ -1132,6 +1137,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
     // this send stops touching it: clearing `busy` in its own `finally` would clear a later turn's.
     let ownsBusy = true;
     const startedJobs = new Set<string>();
+    openViewsRef.current += 1;
     try {
       const result = await streamChatTurn(
         // `scaffold_id` on the FIRST turn: dispatch reads the same record the panel rendered from.
@@ -1145,6 +1151,31 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
           // the queued rows are re-read: the row for the message now answering stops saying it is
           // waiting at the moment it stops waiting, rather than when the answer finishes.
           onAccepted: () => { void refreshPending(); },
+          // ONE VIEW, MORE THAN ONE TURN (the founder, 2026-10-10: *"sometimes chat does not answer
+          // if asked while it's not yet answered"*). A message submitted while this turn ran is
+          // taken by the worker while this turn is still writing its trailing steps, so its answer
+          // streams HERE. It gets its own bubble, below the person's message — never folded into
+          // the bubble above it, where it read as no answer at all. Only while this is the chat's
+          // newest view: a turn sent from the composer after this one has its own connection, and
+          // rendering it twice would be the opposite failure.
+          onTurn: (turnId, isNew) => {
+            const known = bubbles.get(turnId);
+            if (known) { agentId = known; return true; }
+            if (!isNew) { bubbles.set(turnId, agentId); return true; }
+            if (sendSeqRef.current !== mySeq) return false;
+            const prev = agentId;
+            patchAgentTurn(key, prev, (t) => ({ ...t, status: null }));
+            const next = `a-${getChatState(key).nextId}`;
+            updateChatState(key, (s) => ({
+              ...s,
+              turns: [...s.turns, { id: next, role: "agent" as const, text: "", ops: [] }],
+              nextId: s.nextId + 1,
+            }));
+            bubbles.set(turnId, next);
+            agentId = next;
+            breakBeforeNextDelta = false;
+            return true;
+          },
           onDelta: (text) => patchAgentTurn(key, agentId, (t) => {
             const joined = joinInterim(t.text ?? "", text, breakBeforeNextDelta);
             breakBeforeNextDelta = false;
@@ -1311,7 +1342,9 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
       // WHERE THIS CHAT HAS READ TO (Vexa-ai/vexa#1610) — what the NEXT queued item attaches from,
       // so watching a queue costs no gap and replays nothing. Remembered even on a failed turn: the
       // cursor is a position on the Stream, not a verdict about the turn.
-      if (result.cursor) cursorRef.current = result.cursor;
+      // Only ever FORWARD: a job's view can end after a later turn's view did, and moving the cursor
+      // back would make the catch-up attach to a turn that was already watched.
+      if (result.cursor && streamIdAfter(result.cursor, cursorRef.current)) cursorRef.current = result.cursor;
       if (!result.aborted && !result.terminal && startedJobs.size === 0) {
         // The turn never reached a clean end even after resuming past the hard cap — the connection is
         // genuinely lost. Say so (fail-loud, P18): append a note if there was partial output, else the
@@ -1330,9 +1363,12 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
       if ((e as Error)?.name === "AbortError") patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, text: (t.text ?? "") + (t.text ? "\n\n" : "") + "_stopped_" }));
       else patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, text: (t.text ?? "") + (t.text ? "\n\n" : "") + presentError(e).headline }));
     } finally {
+      openViewsRef.current -= 1;
       // whatever happened — abort, error, timeout — no step is left spinning. A spinner that
-      // outlives its turn is the same lie as a tick that precedes it.
-      patchAgentTurn(key, agentId, (t) => ({ ...t, ops: settleOps(t.ops) }));
+      // outlives its turn is the same lie as a tick that precedes it. Every bubble this view wrote.
+      for (const id of new Set([agentId, ...bubbles.values()])) {
+        patchAgentTurn(key, id, (t) => ({ ...t, status: null, ops: settleOps(t.ops) }));
+      }
       if (ownsBusy) updateChatState(key, (s) => ({ ...s, busy: false, abort: null }));
       // A JOB CHIP MUST NOT OUTLIVE ITS CONNECTION, for the same reason a spinner must not outlive
       // its turn. `onJobEnd` removes each one as it lands, so anything still in this set means the
@@ -1368,14 +1404,23 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
   //  …and `catchingUp` is the one-at-a-time latch on the catch-up below. Without it a fast
   //  busy→idle→busy flicker can run two flushes over one outbox, and both would send it.
   const catchingUp = useRef(false);
+  //  `openViewsRef` counts this chat's open connections (a job keeps its turn's open after `busy`
+  //  is handed back), `sendSeqRef` numbers the sends so a view knows whether it is still the newest
+  //  (`onTurn`), and `caughtUp` re-runs the catch-up once a mid-turn submission has been ACKED — the
+  //  turn in front may have ended while the POST was in flight, and then nothing else would.
+  const openViewsRef = useRef(0);
+  const inFlightRef = useRef(new Set<string>());
+  const rerunCatchUp = useRef(false);
+  const sendSeqRef = useRef(0);
+  const [catchUpTick, setCatchUpTick] = useState(0);
   useEffect(() => { cursorRef.current = ""; attachedRef.current = ""; }, [session]);
 
   /** Read the server's pending list back and make the queued rows agree with it. The rows this
    *  chat DREW optimistically are replaced by the ones the server holds — same ids, so nothing
    *  flickers — and a row whose work has been taken disappears because the server stopped listing
    *  it, not because this browser decided it had. */
-  const refreshPending = async () => {
-    const view = await fetchPending(session);
+  const refreshPending = async (after = "") => {
+    const view = await fetchPending(session, fetch, after);
     updateChatState(chatKey, (s) => ({ ...s, jobs: reconcileInbox(s.jobs, view.pending) }));
     return view;
   };
@@ -1387,12 +1432,18 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
   const submitToServer = async (id: string, prompt: string, referenceSource: string, o: SendOpts) => {
     const { wire } = composePrompt(prompt, referenceSource, o);
     const { active, context } = wireContext(o.ground ?? true);
+    // IN FLIGHT, NOT UNSENT: the outbox holds this copy until the ack, and a catch-up that ran in
+    // between must not send it a second time (the worker may already be answering the first).
+    inFlightRef.current.add(id);
     try {
       const view = await submitToInbox({
         id, session, prompt: wire, active, context, scaffoldId: o.scaffoldId, intent: o.intent,
         display: referenceSource,
       });
       updateChatState(chatKey, (s) => ({ ...s, jobs: reconcileInbox(s.jobs, view.pending) }));
+      // ON THE SERVER NOW — look again. The turn in front may have ended while this POST was in
+      // flight, and the catch-up that ran then could not have seen it.
+      setCatchUpTick((n) => n + 1);
     } catch (e) {
       // Left in the outbox on purpose — `flushOutbox` re-sends it the moment the chat is idle, and
       // again on the next load. Saying nothing is right for a NETWORK gap: the message is not lost,
@@ -1406,6 +1457,8 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
         updateChatState(chatKey, (s) => ({ ...s, jobs: blockSubmission(s.jobs,
           { id, kind: o.intent?.kind, display: referenceSource }, fault) }));
       }
+    } finally {
+      inFlightRef.current.delete(id);
     }
   };
 
@@ -1588,24 +1641,37 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
   //  comes up, reads the queue it never held, and watches it. One effect rather than a second one
   //  beside it, because two would both flush the outbox and could send one message twice.
   useEffect(() => {
-    if (busy || catchingUp.current) return;
+    if (busy) return;
+    // ONE AT A TIME, BUT NEVER A DROPPED ASK: a trigger that arrives while a catch-up is running
+    // (the ack of a submission that was in flight) runs once more when that one finishes.
+    if (catchingUp.current) { rerunCatchUp.current = true; return; }
     let cancelled = false;
     catchingUp.current = true;
     void (async () => {
       try {
         const sent = await flushOutbox(session, fetch, (sub, fault) =>
           updateChatState(chatKey, (s) => ({ ...s, jobs: blockSubmission(s.jobs,
-            { id: sub.id, kind: sub.intent?.kind, display: sub.display ?? sub.prompt }, fault) })));
+            { id: sub.id, kind: sub.intent?.kind, display: sub.display ?? sub.prompt }, fault) })),
+          (id) => inFlightRef.current.has(id));
         if (sent.length) {
           updateChatState(chatKey, (s) => ({ ...s, jobs: s.jobs.filter((j) => !(j.outbox && sent.includes(j.id))) }));
         }
-        const view = await refreshPending();
+        // A VIEW STILL OPEN (a job's) is still reading the Stream, so "started after my cursor" is
+        // not a question this moment can ask — the cursor is that view's, and it is not done.
+        const watching = openViewsRef.current > 0;
+        const view = await refreshPending(watching ? "" : cursorRef.current);
         // NOTHING BLOCKED IS WATCHED (P18). A row the runtime refused has no worker coming for it,
         // so attaching would wait out the whole timeout and then say the agent did not respond —
         // the second half of the lie. Only a row that can run is worth a view.
-        const next = runnable(view.pending);
-        if (cancelled || !next.length) return;
-        const head = next[0].entry;
+        //
+        // …AND NOTHING TAKEN IS LEFT UNWATCHED (the founder, 2026-10-10: *"sometimes chat does not
+        // answer if asked while it's not yet answered"*). A message submitted mid-turn is taken by
+        // the worker the instant the turn in front ends; a chat that only watched PENDING rows
+        // found nothing here and the answer streamed to nobody. `taken` says a turn started after
+        // the last event this chat read, and that is worth a view exactly as a queued row is.
+        const want = turnsToWatch(view, watching ? "" : cursorRef.current);
+        if (cancelled || !want || getChatState(chatKey).busy) return;
+        const head = want.head;
         if (attachedRef.current === head) return;
         attachedRef.current = head;
         // The cursor of the stream that just ended is EXACT — the next events after it are the
@@ -1614,11 +1680,12 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
         void send("", "", "", { attachFrom: cursorRef.current || view.cursor || "0-0" });
       } finally {
         catchingUp.current = false;
+        if (rerunCatchUp.current) { rerunCatchUp.current = false; setCatchUpTick((n) => n + 1); }
       }
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [busy, session]);
+  }, [busy, session, catchUpTick]);
 
   const onSubmit = async () => {
     const v = value.trim();
