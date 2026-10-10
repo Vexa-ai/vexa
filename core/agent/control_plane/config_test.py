@@ -203,7 +203,9 @@ def run_models_test(config: dict, env: Optional[dict] = None,
                                    post=post, extra_body=route["VEXA_LLM_EXTRA_BODY"])
         out["mode"], out["route"] = "custom", "subject"
     elif cfg_url:
-        reason = model_endpoint.refuse_reason(cfg_url) or "the endpoint is not admitted"
+        runner = route.get("VEXA_RUNNER") or (env.get("VEXA_RUNNER") or "").strip() or "claude-code"
+        reason = (model_endpoint.route_refusal(cfg_url, str(cfg.get("api_key") or ""), runner)
+                  or "the endpoint is not admitted")
         out = _result(False, f"Refused before any request was made: {reason}")
         out["mode"], out["route"] = "custom", "subject"
     else:
@@ -361,6 +363,50 @@ def _verify_transcribes(base: str, token: str, source: str, probe: TranscribePro
                        status=status)
     return _result(True, f"OK — {endpoint} transcribed the probe clip{who} (HTTP {status}).",
                    source=source, status=status, account=account or None)
+
+
+def _guarded_get(url: str, headers: dict) -> tuple[int, str]:
+    """``_get`` for a CUSTOMER endpoint: through the outbound URL guard's pinned transport, no redirects."""
+    import httpx
+    from shared import ssrf
+
+    with httpx.Client(timeout=_TIMEOUT, follow_redirects=False,
+                      transport=ssrf.build_pinned_sync_transport()) as c:
+        r = c.get(url, headers=headers)
+        return r.status_code, r.text
+
+
+def _guarded_probe(endpoint: str, token: str) -> tuple:
+    """``_transcribe_probe`` for a CUSTOMER endpoint: the same body, through the pinned transport."""
+    import httpx
+    from control_plane.config_preflight import audio_probe_body
+    from shared import ssrf
+
+    content_type, body = audio_probe_body()
+    with httpx.Client(timeout=_STT_PROBE_TIMEOUT, follow_redirects=False,
+                      transport=ssrf.build_pinned_sync_transport()) as c:
+        r = c.post(endpoint, content=body,
+                   headers={"Content-Type": content_type, "Authorization": f"Bearer {token}"})
+        return r.status_code, r.text
+
+
+def run_customer_transcription_test(url: str, token: str, source: str, get: HttpGet = _guarded_get,
+                                    probe: TranscribeProbe = _guarded_probe,
+                                    resolver=None) -> dict:
+    """``run_transcription_test`` for an endpoint the PERSON configured (their Settings), not the
+    deployment: the URL must pass the outbound URL guard before anything is sent, and every request
+    goes through its pinned transport — the Test button never probes this deployment's own network
+    on somebody's behalf."""
+    from shared import ssrf
+
+    try:
+        ssrf.validate_url((url or "").strip(), resolver, what="transcription endpoint")
+    except ssrf.SSRFError as exc:
+        return _result(False, f"Transcription endpoint refused: {exc}.", source=source)
+    try:
+        return run_transcription_test(url, token, source, get=get, probe=probe)
+    except ssrf.SSRFError as exc:   # the connect-time re-check refused
+        return _result(False, f"Transcription endpoint refused: {exc}.", source=source)
 
 
 def run_transcription_test(url: str, token: str, source: str, get: HttpGet = _get,

@@ -116,6 +116,14 @@ subject's endpoint, key, model and extra body whatever the deployment's `VEXA_LL
 subject's key reaches no other endpoint, and no deployment credential reaches the subject's. With
 no subject endpoint, or a refused one, nothing is stamped and the table above applies unchanged.
 
+The subject's route also carries `VEXA_MODEL_ROUTE=subject`, and the claude-code adapter then
+removes any credential stored in the CLI's config directory (`$HOME/.claude/.credentials.json`, where
+a process-backend runtime stages the deployment's subscription) before the CLI starts — refusing the
+turn if it cannot. A claude CLI with no key of its own signs in from that file, so on claude-code a
+subject's endpoint also needs the subject's own key: without one the dispatch refuses the endpoint
+(`model_endpoint.route_refusal`, which the Test button asks too) and the deployment route applies.
+openai-agent reads no file and sends no credential to a keyless endpoint.
+
 **With a model catalog (`VEXA_MODEL_CATALOG`, ADR-0043), the chat's pick decides the route** — and
 the same dispatch stamps it, whole: `VEXA_RUNNER`, `VEXA_AGENT_MODEL`, every `ANTHROPIC_*` and
 `VEXA_LLM_*` name (the provider's key under the one name its endpoint expects, every other one

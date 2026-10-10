@@ -451,7 +451,7 @@ def create_app(
         # at all, by construction, precisely so nothing can reach it this way.
         if not write and subject:
             rec = workspace_registry.by_slug(target)
-            if rec and rec.get("kind") == "desk":
+            if rec and rec.get("kind") == "desk" and ids_mod.private_owner(rec, wsr.root) is None:
                 d = Path(str(rec.get("dir") or ""))
                 if d.is_dir():
                     return d

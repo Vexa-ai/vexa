@@ -413,7 +413,7 @@ def test_dispatcher_model_config_allowlist_gates_models_not_endpoint(monkeypatch
     settings = load_settings(agent_model="deployment-default", model_allowlist="sonnet,haiku")
     rt = _FakeRuntime()
     mc = _FakeModelConfig({"mode": "custom", "base_url": "https://gw.example.com",
-                           "model": "not-allowed"})
+                           "api_key": "gw-key", "model": "not-allowed"})
     d = dispatch.Dispatcher(settings, rt, _FakeIdentity(), model_config=mc)
     d.dispatch(VALID_INV)
     _, _profile, env = rt.spawned[0]

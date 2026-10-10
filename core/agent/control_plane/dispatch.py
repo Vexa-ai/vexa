@@ -427,6 +427,10 @@ def subject_route_env(base_url: str, api_key: str, extra_body: str) -> dict[str,
         # Qwen behind vLLM needs {"chat_template_kwargs":{"enable_thinking":false}} or it returns
         # nothing parseable; another endpoint may refuse those fields. Only the subject knows which.
         "VEXA_LLM_EXTRA_BODY": extra_body,
+        # THE ROUTE, STATED TO THE WORKER: the endpoint is the person's own. A harness whose CLI keeps
+        # a credential in its config directory clears it for this worker (llm/claude_code.py), so
+        # the only credential on this route is the one stamped above.
+        "VEXA_MODEL_ROUTE": "subject",
     }
 
 
@@ -489,10 +493,12 @@ def overlay_model_config(env: dict[str, str], config: dict, *, allowlist: str = 
         # Not custom, or custom with no endpoint — inert either way; deployment credentials apply.
         return
     # THE OPERATOR GATE (F84). A subject-supplied URL is an outbound destination chosen by a
-    # non-operator, so it is refused unless the deployment allow-lists its host. The refusal is
-    # LOUD — a log line and a friction record — because a silently-ignored endpoint runs the turn on
-    # the deployment's own model and looks like it worked.
-    refusal = model_endpoint.refuse_reason(base_url)
+    # non-operator, so it is refused unless the deployment allow-lists its host — and on a harness
+    # that signs in from its config directory when it has no key, it is refused without the
+    # subject's own key. The refusal is LOUD — a log line and a friction record — because a
+    # silently-ignored endpoint runs the turn on the deployment's own model and looks like it worked.
+    refusal = model_endpoint.route_refusal(
+        base_url, api_key, env.get("VEXA_RUNNER") or units.deployment_runner())
     if refusal:
         logger.warning("model endpoint REFUSED for subject=%s: %s", subject or "?", refusal)
         if friction is not None:

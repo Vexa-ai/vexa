@@ -388,6 +388,22 @@ def migrate(root, registry: WorkspaceRegistry, *, created: Optional[str] = None)
 MemberCheck = Callable[[Path, str, str], Optional[str]]
 
 
+def private_owner(record: Optional[dict], root=None) -> Optional[str]:
+    """The owner of a tree that lives in its owner's PRIVATE store (``<root>/.attached/<owner>/…``) —
+    a group its owner un-shared, say — or None. Whatever its record's kind says, such a tree is its
+    owner's alone: a desk is readable by the instance because it is the person's own
+    ``<root>/<subject>``, and a tree parked in their store is not that."""
+    owner = str((record or {}).get("owner") or "").strip()
+    d = (record or {}).get("dir")
+    if not owner or not d or root is None or "/" in owner or owner.startswith("."):
+        return None
+    try:
+        store = (Path(root) / ".attached" / owner).resolve()
+        return owner if store in Path(str(d)).resolve().parents else None
+    except OSError:
+        return None
+
+
 def access_for(record: Optional[dict], subject: str, *, root=None,
                is_member: Optional[MemberCheck] = None) -> str:
     """``readable`` | ``not-yours`` | ``gone`` for one reader and one workspace.
@@ -414,6 +430,9 @@ def access_for(record: Optional[dict], subject: str, *, root=None,
     d = record.get("dir")
     if d and not Path(d).is_dir():
         return ACCESS_GONE
+    owner = private_owner(record, root)
+    if owner is not None:               # a tree in its owner's private store: theirs alone
+        return ACCESS_READABLE if str(subject or "").strip() == owner else ACCESS_NOT_YOURS
     kind = record.get("kind")
     if kind == "global":
         return ACCESS_READABLE          # the org tier is mounted into every worker and every chat
@@ -442,6 +461,8 @@ def writable_for(record: Optional[dict], subject: str, *, root=None,
     that will 403."""
     if not record or access_for(record, subject, root=root, is_member=is_member) != ACCESS_READABLE:
         return False
+    if private_owner(record, root) is not None:
+        return True                     # readable above means the caller is its owner
     kind = record.get("kind")
     if kind == "global":
         return False

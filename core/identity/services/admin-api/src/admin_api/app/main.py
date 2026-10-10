@@ -24,6 +24,7 @@ import socket
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request, Response, Security, status
 from fastapi.security import APIKeyHeader
@@ -173,12 +174,26 @@ class UserResponse(BaseModel):
     data: Dict[str, Any] = Field(default_factory=dict)
 
     @field_serializer("data")
-    def omit_webhook_secret(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        return {
-            key: value
-            for key, value in data.items()
-            if key != "webhook_secret"
-        }
+    def omit_stored_secrets(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """The account's data with no stored credential in it — this is every `/admin/users*` read.
+        The webhook secret is left out; the model key and the transcription token become
+        ``<field>_set`` plus the masked tail ``/user/webhook`` shows; a calendar feed URL becomes
+        ``ics_url_set`` plus its masked form. The internal-tier routes are where services read them."""
+        out = {key: value for key, value in data.items() if key != "webhook_secret"}
+        for key, field in (("model_prefs", "api_key"), ("transcription_prefs", "token")):
+            prefs = out.get(key)
+            if isinstance(prefs, dict) and field in prefs:
+                prefs = dict(prefs)
+                secret = prefs.pop(field)
+                prefs[f"{field}_set"] = bool(secret)
+                prefs[field] = _mask_secret(secret if isinstance(secret, str) else None)
+                out[key] = prefs
+        if isinstance(out.get("calendar_connections"), list):
+            out["calendar_connections"] = [_masked_feed(c) if isinstance(c, dict) else c
+                                           for c in out["calendar_connections"]]
+        if "calendar_ics_url" in out:
+            out.update(_masked_feed({"ics_url": out.pop("calendar_ics_url")}, prefix="calendar_"))
+        return out
 
     model_config = {"from_attributes": True}
 
@@ -321,6 +336,16 @@ class ModelPrefsUpdate(BaseModel):
 class TranscriptionPrefsUpdate(BaseModel):
     url: Optional[str] = None
     token: Optional[str] = None
+
+
+def _masked_feed(connection: dict, *, prefix: str = "") -> dict:
+    """A calendar connection with its feed URL (a credential) replaced by whether one is set and the
+    masked form the calendar routes show (host and the last four characters)."""
+    out = {k: v for k, v in connection.items() if k != "ics_url"}
+    url = connection.get("ics_url") if isinstance(connection.get("ics_url"), str) else ""
+    out[f"{prefix}ics_url_set"] = bool(url)
+    out[f"{prefix}ics_url_masked"] = f"{urlparse(url).hostname or ''}/…{url[-4:]}" if url else None
+    return out
 
 
 def _mask_secret(secret: Optional[str]) -> Optional[str]:
@@ -961,7 +986,18 @@ def create_app() -> FastAPI:
     async def set_user_transcription(update: TranscriptionPrefsUpdate,
                                      user: User = Depends(get_current_user_for_update),
                                      db: AsyncSession = Depends(get_db)):
-        """Set the caller's transcription backend override. ``token`` is a SECRET — masked on read."""
+        """Set the caller's transcription backend override. ``token`` is a SECRET — masked on read.
+
+        A person's own endpoint is a destination this deployment's bots send meeting audio to, so it
+        is held to the outbound URL guard: an internal or private address is refused here (422) and
+        by the bot at every request. The deployment's own STT (env or platform setting) is not."""
+        url = (update.url or "").strip()
+        if url:
+            from .ssrf import SSRFError, validate_url
+            try:
+                validate_url(url, what="url", resolve=False)
+            except SSRFError as exc:
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
         await _put_user_prefs(update.model_dump(exclude_unset=True), "transcription_prefs", user, db)
         return await get_user_transcription(user)
 

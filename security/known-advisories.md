@@ -6,21 +6,16 @@ the date it comes back for review. An entry is removed when the dependency that 
 
 ## Dependencies (OSV-Scanner)
 
-Allow files: [`osv-scanner.toml`](../osv-scanner.toml) (for `pnpm-lock.yaml`) and
-[`clients/terminal/osv-scanner.toml`](../clients/terminal/osv-scanner.toml). OSV-Scanner reads the file
-beside each lockfile.
+Allow files: [`osv-scanner.toml`](../osv-scanner.toml) (for `pnpm-lock.yaml`),
+[`clients/terminal/osv-scanner.toml`](../clients/terminal/osv-scanner.toml) and
+[`services/dashboard/osv-scanner.toml`](../services/dashboard/osv-scanner.toml). OSV-Scanner reads the
+file beside each lockfile.
 
 | Advisory | Package | Severity | Why it is accepted | Review by |
 |---|---|---|---|---|
 | [GHSA-hp3w-g68c-fv3c](https://osv.dev/GHSA-hp3w-g68c-fv3c) | `sprintf-js` 1.1.3 | Medium | No fixed release exists. Reached only through `roarr` ← `global-agent` ← `onnxruntime-node`, which formats its own log lines while its postinstall downloads the ONNX runtime; no request data reaches it. | 2026-12-31 |
 | [GHSA-238p-pmpm-9mq7](https://osv.dev/GHSA-238p-pmpm-9mq7) | `katex` 0.16.47 | Low | A trust bypass that needs prototype pollution to exist already. Reached through `mermaid` in the terminal's diagram rendering; the fix (0.18.2) is outside mermaid 11's `^0.16` range. | 2026-12-31 |
-
-**`services/dashboard` is excluded from the scan.** It is the retiring 0.10 dashboard: off by default
-(Compose profile `dashboard`, Helm `dashboard.enabled: false`), outside the gates
-([ADR-0007](../docs/adr/0007-vendored-dashboard-debt.md), `services/dashboard/.gateignore`),
-and not built by this line's release — Compose runs the prebuilt `vexaai/dashboard` image. Its
-dependencies carry critical and high advisories (`next` 16.2.6 with the image optimizer, `next-auth`,
-`@auth/core`, `nodemailer`, `sharp` 0.34.5 and others); they are fixed where that image is built.
+| [GHSA-vfj7-8cjw-p6xm](https://osv.dev/GHSA-vfj7-8cjw-p6xm) | `braces` 3.0.3 (`services/dashboard`) | High | No fixed release exists. A dev dependency only (`eslint-config-next` → `@next/eslint-plugin-next` → `fast-glob` → `micromatch`), run at lint time over the repository's own globs; not in the dashboard image. | 2026-12-31 |
 
 ### adm-zip (the advisory the report left open)
 
@@ -41,14 +36,13 @@ Categories A and B (LGPL is Category X there). Its reviewed exceptions:
 - **`typing-extensions`** is PSF-2.0 (its own `license_expression`); GitHub's licence detector reads the
   history section of the PSF licence file and reports GPL-1.0-or-later.
 - **libvips behind `sharp`** (`@img/sharp-libvips-*`, and the `@img/sharp-wasm32` / `@img/sharp-win32-*`
-  builds that bundle it; LGPL-3.0-or-later) remains only in `clients/terminal/package-lock.json`, as an
-  optional dependency of `next` that the terminal's build stage installs and its runtime tree removes
-  ([`license-exceptions.json`](../license-exceptions.json)). The pnpm tree, and so the bot and Lite, load
-  `core/meetings/modules/no-image-backend` instead.
-- **`services/dashboard`**: its advisories are allowed by GHSA ID, and `json-schema`, `uri-js` and `bowser`
-  (AFL, BSD-2-Clause-Views and MITNFA terms, all only in that tree) by package, for the reason it is
-  excluded from OSV-Scanner above. Dependency review cannot exclude a path; every shipped lockfile stays
-  guarded by OSV-Scanner, which carries no such entry.
+  builds that bundle it; LGPL-3.0-or-later) remains in two npm locks outside the pnpm tree:
+  `clients/terminal/package-lock.json`, installed by the terminal's build stage and removed from its
+  runtime tree, and `services/dashboard/package-lock.json`, the retiring 0.10 dashboard whose `next/image`
+  uses it ([`license-exceptions.json`](../license-exceptions.json)). The pnpm tree, and so the bot and
+  Lite, load `core/meetings/modules/no-image-backend` instead.
+- **`json-schema`** 0.4.0 (the dashboard, through `@ai-sdk/provider`) declares `(AFL-2.1 OR BSD-3-Clause)`
+  and is taken under BSD-3-Clause; GitHub's detector reads its licence files as an AND.
 
 ## Third-party images (Trivy)
 

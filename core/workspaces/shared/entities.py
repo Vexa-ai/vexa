@@ -29,6 +29,7 @@ import unicodedata
 from pathlib import Path
 
 from workspaces.shared.gitexec import run_git
+from workspaces.shared import workspace_paths as _wp
 
 # The five kinds decision 24 names. A kind outside this set is refused rather than guessed into a new
 # directory: a directory nothing indexes is a page nobody will ever find again.
@@ -76,6 +77,32 @@ class EntityMalformed(EntityRefused):
 
     It SUBCLASSES `EntityRefused` so that every caller which already catches a refusal keeps
     working unchanged; the endpoint, which wants the finer answer, catches this one first."""
+
+
+def _kind_entries(root, kind: str):
+    """``(filename, text)`` for each ``*.md`` directly in ``kg/entities/<kind>``, reached without
+    following a link. Yields nothing when ``kg``, ``entities`` or ``<kind>`` is a symlink (the whole
+    directory is somebody else's then), and skips a leaf that is a link or not a regular file — so a
+    planted link can never fold another tenant's page into this workspace's name index or INDEX.md.
+    ``index.md`` (the generated listing) is skipped as before."""
+    parts = (*ENTITIES_DIR.split("/"), kind)
+    try:
+        dfd = _wp.dir_fd_inside(root, parts)
+    except (OSError, _wp.PathRefused):
+        return
+    try:
+        with os.scandir(dfd) as it:
+            names = sorted(e.name for e in it
+                           if e.name.endswith(".md") and e.name != "index.md"
+                           and e.is_file(follow_symlinks=False))
+    except OSError:
+        names = []
+    finally:
+        os.close(dfd)
+    for name in names:
+        text = _wp.read_text_inside(root, f"{ENTITIES_DIR}/{kind}/{name}")
+        if text is not None:
+            yield name, text
 
 
 def slugify(name: str) -> str:
@@ -846,10 +873,10 @@ def find_entity(root, name: str) -> "tuple[str, str] | None":
     slug = slugify(name)
     if not slug:
         return None
-    base = Path(root) / ENTITIES_DIR
     for kind in KINDS:
-        if (base / kind / f"{slug}.md").exists():
-            return kind, f"{ENTITIES_DIR}/{kind}/{slug}.md"
+        rel = f"{ENTITIES_DIR}/{kind}/{slug}.md"
+        if _wp.read_text_inside(root, rel) is not None:   # nofollow: a linked page is not "here"
+            return kind, rel
     return None
 
 
@@ -899,8 +926,9 @@ def plan_link_back(root, target_name: str, from_name: str, relation: str) -> "tu
     if not hit:
         return None
     kind, rel = hit
-    path = Path(root) / rel
-    text = path.read_text(encoding="utf-8", errors="replace")
+    text = _wp.read_text_inside(root, rel)   # nofollow: never read a neighbour page through a link
+    if text is None:
+        return None
     fm, body = split_frontmatter(text)
     card = parse_card(body)
     if not card.title:
@@ -1074,9 +1102,13 @@ def upsert_entity(root, kind: str, name: str, facts=(), source: str = "", *,
 
     rel = entity_rel_path(kind, name)
     path = root / rel
-    existed = path.exists()
-    raw = path.read_text(encoding="utf-8", errors="replace") if existed else ""
-    fm, body = split_frontmatter(raw)
+    # The page is read NOFOLLOW: a link planted at `kg`, `kg/entities`, the kind dir or the page
+    # itself is not followed, so another tenant's page cannot be read into this one and the write
+    # below replaces the link rather than writing through it. A redirected page reads as absent and
+    # is recreated here, in this workspace.
+    raw = _wp.read_text_inside(root, rel)
+    existed = raw is not None
+    fm, body = split_frontmatter(raw or "")
 
     # THE REWRITE HAPPENS BEFORE IDEMPOTENCY IS TESTED, and the order is load-bearing: a fact
     # re-stated next turn arrives as `[[Nora Quill]]` and is already stored as
@@ -1188,7 +1220,6 @@ def upsert_entity(root, kind: str, name: str, facts=(), source: str = "", *,
         plan = plan_link_back(root, target_name, card.title, there)
         if plan:
             back_plans.append(plan)
-    back_links = [p for p, _text in back_plans]
 
     # A pending back-link COUNTS AS A CHANGE. It did not before, and the consequence was quiet: the
     # chips were written and then reported under `changed: False`, so the endpoint — which commits
@@ -1202,10 +1233,21 @@ def upsert_entity(root, kind: str, name: str, facts=(), source: str = "", *,
                 "migrated": False, "filed": {}}
 
     drop_empty_tail(card)          # a `## Timeline` that never had an entry helps nobody
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(render_card(card, kind, fm), encoding="utf-8")
+    # NOFOLLOW writes: a link at any directory on the path refuses; a link at the page is replaced.
+    # The entity lands in THIS workspace, never through a link into another's tree. A refused page
+    # (a KG directory that is a planted link, not a plain folder) is a clean EntityRefused, not a
+    # 500; a refused back-link is skipped so one hostile neighbour never fails the whole upsert.
+    try:
+        _wp.write_text_inside(root, rel, render_card(card, kind, fm))
+    except _wp.PathRefused as exc:
+        raise EntityRefused(f"{rel} is not a plain path in this workspace — {exc}") from exc
+    back_links = []
     for back_rel, back_text in back_plans:
-        (root / back_rel).write_text(back_text, encoding="utf-8")
+        try:
+            _wp.write_text_inside(root, back_rel, back_text)
+        except _wp.PathRefused:
+            continue
+        back_links.append(back_rel)
     return {"path": rel, "created": not existed, "changed": True, "facts_written": written,
             "already_recorded": max(0, len(facts) - sum(filed.values())),
             "links_resolved": resolved, "links_missing": unresolved,
@@ -1345,12 +1387,9 @@ def known_slugs(root) -> set:
     """Every entity slug this workspace already holds — read from `kg/entities/`, never from the
     generated index, because the index can be one write behind and a stale index means a duplicate
     page."""
-    base = Path(root) / ENTITIES_DIR
     out = set()
     for kind in KINDS:
-        d = base / kind
-        if d.is_dir():
-            out |= {f.stem for f in d.glob("*.md") if f.name != "index.md"}
+        out |= {name[:-3] for name, _text in _kind_entries(root, kind)}
     return out
 
 
@@ -1365,18 +1404,9 @@ def known_names(root) -> set:
     called it. Reading the pages costs one small read each, on the same tree ``index_rows`` already
     walks; the alternative costs a duplicate page nobody merges."""
     out = set(known_slugs(root))
-    base = Path(root) / ENTITIES_DIR
     for kind in KINDS:
-        d = base / kind
-        if not d.is_dir():
-            continue
-        for f in sorted(d.glob("*.md")):
-            if f.name == "index.md":
-                continue
-            try:
-                fm, _body = split_frontmatter(f.read_text(encoding="utf-8", errors="replace"))
-            except OSError:
-                continue
+        for _name, text in _kind_entries(root, kind):
+            fm, _body = split_frontmatter(text)
             for value in [_fm_get(fm, "title")] + _list_field(_fm_get(fm, "aliases")):
                 if value:
                     out.add(slugify(value))
@@ -1503,16 +1533,8 @@ def index_rows(root) -> list[tuple[str, str, str, str]]:
     base = root / ENTITIES_DIR
     rows: list[tuple[str, str, str, str]] = []
     for kind in KINDS:
-        d = base / kind
-        if not d.is_dir():
-            continue
-        for f in sorted(d.glob("*.md")):
-            if f.name == "index.md":
-                continue
-            try:
-                text = f.read_text(encoding="utf-8", errors="replace")
-            except OSError:
-                continue
+        for fname, text in _kind_entries(root, kind):
+            f = base / kind / fname
             fm, _ = split_frontmatter(text)
             # `kg/templates/` is not the only place a shape can hide: a doc whose frontmatter says
             # `template: true` is a SHAPE wherever it sits, and the kg-links rule already forbids
@@ -1544,10 +1566,8 @@ def render_index(root, slug: str = "") -> str:
 
 
 def write_index(root, slug: str = "") -> str:
-    root = Path(root)
-    p = root / INDEX_PATH
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(render_index(root, slug), encoding="utf-8")
+    # NOFOLLOW: a link planted at `kg` or `kg/INDEX.md` is replaced, never written through.
+    _wp.write_text_inside(root, INDEX_PATH, render_index(root, slug))
     return INDEX_PATH
 
 

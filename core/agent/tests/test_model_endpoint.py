@@ -34,7 +34,9 @@ def test_a_custom_endpoint_never_inherits_the_deployment_token(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "deployment-secret")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "deployment-api-key")
     monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "deployment-oauth")
-    env = _overlay({"mode": "custom", "base_url": ALLOWED, "api_key": ""})
+    # keyless on the openai-agent harness — on claude-code the endpoint needs the subject's own key
+    # (`test_own_endpoint_credentials.py`)
+    env = _overlay({"mode": "custom", "base_url": ALLOWED, "api_key": "", "runner": "openai-agent"})
     assert env["ANTHROPIC_BASE_URL"] == ALLOWED
     for key in ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN",
                 "VEXA_LLM_API_KEY"):
@@ -56,7 +58,8 @@ def test_the_backfill_cannot_reach_a_custom_endpoints_slot(monkeypatch):
            "workspaces": [{"id": "u_1", "mode": "rw"}], "trigger": "message",
            "start": {"entrypoint": {"inline": "hi"}}}
     env = build_unit_env(settings, inv, unit_id="unit-1", token="tok",
-                         model_config={"mode": "custom", "base_url": ALLOWED, "api_key": ""})
+                         model_config={"mode": "custom", "base_url": ALLOWED, "api_key": "",
+                                       "runner": "openai-agent"})
     assert env["ANTHROPIC_BASE_URL"] == ALLOWED
     assert env["ANTHROPIC_AUTH_TOKEN"] == ""
     assert env["CLAUDE_CODE_OAUTH_TOKEN"] == ""
@@ -202,7 +205,8 @@ def test_the_test_button_probes_a_custom_endpoint_with_the_subjects_own_key():
         seen["auth"] = headers.get("Authorization")
         return 200, "{}"
 
-    out = run_models_test({"mode": "custom", "base_url": ALLOWED, "model": "m", "api_key": ""},
+    out = run_models_test({"mode": "custom", "base_url": ALLOWED, "model": "m", "api_key": "",
+                           "runner": "openai-agent"},
                           env={"ANTHROPIC_AUTH_TOKEN": "deployment-secret"}, post=post)
     assert out["ok"] is True
     assert seen["auth"] == "Bearer "

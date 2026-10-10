@@ -32,6 +32,8 @@ import secrets
 from pathlib import Path
 from typing import Optional
 
+from workspaces.shared import workspace_paths as _wp
+
 # Where the id lives inside the workspace. Dot-prefixed, so every enumerator the product already
 # has (``scan_workspace_subjects``, the Files tree, ``tree_at``) hides it for free — it is
 # machinery, never a page.
@@ -77,9 +79,11 @@ def read_workspace_json(ws_dir) -> Optional[dict]:
     Never raises on a malformed file. A workspace whose identity file is corrupt is a workspace
     with no id — which the migration then mints for it — and that is a strictly better outcome than
     a control plane that will not start because one tree on the volume has bad json in it."""
-    try:
-        raw = _json_path(ws_dir).read_text(encoding="utf-8")
-    except (OSError, UnicodeError):
+    # `.vexa/workspace.json` is a FIXED path in a work tree the model's tools can write; read it
+    # without following a link planted at `.vexa` or the file, or a wrong/another-workspace identity
+    # would flow into every cross-workspace link and the desk README.
+    raw = _wp.read_text_inside(ws_dir, WORKSPACE_JSON, allow=(".vexa",))
+    if raw is None:
         return None
     try:
         rec = json.loads(raw)
@@ -103,9 +107,14 @@ def write_workspace_json(ws_dir, *, id: str, kind: str, created: str) -> dict:
     if not is_workspace_id(id):
         raise WorkspaceIdError(f"{id!r} is not a workspace id ({ID_LEN} chars of base32)")
     rec = {"id": id, "kind": kind, "created": str(created)}
-    p = _json_path(ws_dir)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(rec, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    # Written NOFOLLOW (a new file renamed into place): a link planted at `.vexa`/`workspace.json`
+    # is replaced, never written through, so the identity cannot be redirected onto another file.
+    # A `.vexa` the tools user planted as a SYMLINK is removed first (the link, never a real `.vexa`
+    # directory — `unlink_inside` leaves a directory alone), so the identity lands in this
+    # workspace's own tree rather than refusing the write.
+    _wp.unlink_inside(ws_dir, VEXA_DIR, allow=(".vexa",))
+    _wp.write_text_inside(ws_dir, WORKSPACE_JSON,
+                          json.dumps(rec, indent=2, sort_keys=True) + "\n", allow=(".vexa",))
     return rec
 
 
@@ -153,9 +162,12 @@ TOUCHES_FILE = f"{VEXA_DIR}/touches.json"
 def read_touches(desk_dir) -> list:
     """`[{workspace, path, at}]`, most recently opened first. `[]` for a desk nobody has opened
     anything from — which is most of them, and is not a failure."""
+    raw = _wp.read_text_inside(desk_dir, TOUCHES_FILE, allow=(".vexa",))
+    if raw is None:
+        return []
     try:
-        rows = json.loads((Path(desk_dir) / TOUCHES_FILE).read_text(encoding="utf-8"))
-    except (OSError, ValueError, UnicodeError):
+        rows = json.loads(raw)
+    except (ValueError, TypeError):
         return []
     return [r for r in rows if isinstance(r, dict) and r.get("workspace") and r.get("path")]
 

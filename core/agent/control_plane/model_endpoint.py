@@ -139,6 +139,27 @@ def refuse_reason(base_url: str, env: Optional[Mapping[str, str]] = None) -> Opt
     return None
 
 
+#: The harnesses that, given an endpoint and no key of their own, sign in with whatever credential
+#: their config directory holds. On a person's own endpoint that would be the deployment's, so such a
+#: route carries the person's own key or does not run.
+HOME_CREDENTIAL_HARNESSES = ("claude-code",)
+
+
+def route_refusal(base_url: str, api_key: str, runner: str,
+                  env: Optional[Mapping[str, str]] = None) -> Optional[str]:
+    """``None`` when a person's own endpoint may carry this turn, else why not: the operator gate
+    (:func:`refuse_reason`), then the key rule — a harness in :data:`HOME_CREDENTIAL_HARNESSES`
+    runs on a person's endpoint only with that person's own key. The dispatch and the Test button
+    both ask this, so neither can admit what the other refuses."""
+    reason = refuse_reason(base_url, env)
+    if reason:
+        return reason
+    if (runner or "").strip() in HOME_CREDENTIAL_HARNESSES and not (api_key or "").strip():
+        return ("a claude-code turn on your own endpoint needs that endpoint's API key — set it "
+                "under Settings → Models, or choose the openai-agent harness")
+    return None
+
+
 def refusal_friction(base_url: str, reason: str, *, subject: str = "", session: str = "") -> dict:
     """The friction record a refused endpoint files (PRD decision 33). A refusal the person cannot
     see is a turn that silently runs on the wrong model, which is the failure this whole gate is

@@ -20,7 +20,7 @@
   "core/meetings/contracts/acts.v1": "1eaa34d27c52b0eb987a278115a1966c058f615ca16e3391b00107a6779dec4f",
   "core/meetings/contracts/captured-signal.v1": "976b79778e50ae5bbfea2cd968a936df628cce025475aca54587122332b62972",
   "core/meetings/contracts/flagged-issue.v1": "4b868f57298131f8eec8246d86d57251f259927d8bfd7df5a0f6016a10f16211",
-  "core/meetings/contracts/invocation.v1": "4f94512e90f39730416d7754b68b7643065e9ff13f05bff1a4f6de9608d2771b",
+  "core/meetings/contracts/invocation.v1": "e945c32ae6fb0a60261e99b55e46e81ebdef139d83b8aaad3ed4130f086db65c",
   "core/meetings/contracts/lifecycle.v1": "622348d764be91ff4ecbac847fabc7efc8d70e8c6a87dc1e5c20e229f1d95512",
   "core/meetings/contracts/mcp.tools.v1": "aaf6cfef0fff29ffb724a9b5128f41a1962cc85ba49c9b2d1f705c9fa8202b68",
   "core/meetings/contracts/sdk-capture.v1": "58b405494c27d17d98cdbd1bba575a4f3209680f9bcbc3d239e6042ded8729f6",

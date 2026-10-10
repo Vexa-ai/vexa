@@ -56,12 +56,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           # pull_request event → default (the PR merge ref). dispatch → the named PR's merge ref.
           ref: ${{ inputs.pr && format('refs/pull/{0}/merge', inputs.pr) || '' }}
-      - uses: jlumbroso/free-disk-space@v1.3.1
-      - uses: astral-sh/setup-uv@v5
+      - uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
       # agent-api reads deploy/compose/.env via env_file (single source of truth) — it must exist.
       - name: Seed compose .env
         run: bash deploy/compose/mint-dev-env.sh   # seeds .env and mints the keys the stack refuses to run without (0.12.27)
@@ -121,7 +121,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ inputs.pr && format('refs/pull/{0}/merge', inputs.pr) || '' }}
           fetch-depth: 2   # merge commit + both parents → HEAD^1 (main) is diffable
@@ -137,16 +137,16 @@ jobs:
           else
             echo "hit=1" >> "$GITHUB_OUTPUT"; echo "could not diff — failing open, running the leg"
           fi
-      - uses: jlumbroso/free-disk-space@v1.3.1
+      - uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
         if: steps.scope.outputs.hit == '1'
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
         if: steps.scope.outputs.hit == '1'
       # Build the PR's OWN lite image (A3: the PR tree, anonymous pulls, no cache-to — read-only
       # cache use). The tag is the Makefile's LOCAL_TAG: `make up` prefers a local vexa-lite:dev
       # over the Hub image, so the stack below boots exactly what this PR would ship.
       - name: Build deploy/lite/Dockerfile.lite from the PR tree
         if: steps.scope.outputs.hit == '1'
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           file: deploy/lite/Dockerfile.lite

@@ -1,0 +1,598 @@
+{
+ "contract": "outbound-url-vectors.v1",
+ "what": [
+  "One table both outbound URL guards are held to: the Python ssrf.py (vendored into every Python",
+  "image that fetches a user-supplied URL) and the TypeScript url-guard.ts in @vexa/transcribe-whisper.",
+  "Byte-identical copies beside each test suite (scripts/parity.json, fact outbound-url-vectors).",
+  "addresses: is_blocked_ip. hostnames: is_blocked_hostname. urls: validate_url with `resolved` as",
+  "the resolver's answer (null = a literal address, no lookup); `refused` is the verdict."
+ ],
+ "addresses": [
+  {
+   "addr": "127.0.0.1",
+   "blocked": true
+  },
+  {
+   "addr": "127.1.2.3",
+   "blocked": true
+  },
+  {
+   "addr": "10.0.0.5",
+   "blocked": true
+  },
+  {
+   "addr": "172.16.0.1",
+   "blocked": true
+  },
+  {
+   "addr": "172.31.255.254",
+   "blocked": true
+  },
+  {
+   "addr": "192.168.1.10",
+   "blocked": true
+  },
+  {
+   "addr": "169.254.169.254",
+   "blocked": true
+  },
+  {
+   "addr": "0.0.0.0",
+   "blocked": true
+  },
+  {
+   "addr": "100.64.0.1",
+   "blocked": true
+  },
+  {
+   "addr": "100.100.100.200",
+   "blocked": true
+  },
+  {
+   "addr": "192.0.0.192",
+   "blocked": true
+  },
+  {
+   "addr": "192.0.2.1",
+   "blocked": true
+  },
+  {
+   "addr": "192.88.99.1",
+   "blocked": true
+  },
+  {
+   "addr": "198.18.0.1",
+   "blocked": true
+  },
+  {
+   "addr": "198.51.100.7",
+   "blocked": true
+  },
+  {
+   "addr": "203.0.113.9",
+   "blocked": true
+  },
+  {
+   "addr": "224.0.0.1",
+   "blocked": true
+  },
+  {
+   "addr": "240.0.0.1",
+   "blocked": true
+  },
+  {
+   "addr": "255.255.255.255",
+   "blocked": true
+  },
+  {
+   "addr": "2130706433",
+   "blocked": true
+  },
+  {
+   "addr": "0x7f.1",
+   "blocked": true
+  },
+  {
+   "addr": "0x7f.0.0.1",
+   "blocked": true
+  },
+  {
+   "addr": "0177.0.0.1",
+   "blocked": true
+  },
+  {
+   "addr": "127.1",
+   "blocked": true
+  },
+  {
+   "addr": "01.2.3.4.5",
+   "blocked": true
+  },
+  {
+   "addr": "not-an-address",
+   "blocked": true
+  },
+  {
+   "addr": "",
+   "blocked": true
+  },
+  {
+   "addr": "::",
+   "blocked": true
+  },
+  {
+   "addr": "::1",
+   "blocked": true
+  },
+  {
+   "addr": "::ffff:127.0.0.1",
+   "blocked": true
+  },
+  {
+   "addr": "::ffff:a9fe:a9fe",
+   "blocked": true
+  },
+  {
+   "addr": "::ffff:10.0.0.1",
+   "blocked": true
+  },
+  {
+   "addr": "::127.0.0.1",
+   "blocked": true
+  },
+  {
+   "addr": "::a9fe:a9fe",
+   "blocked": true
+  },
+  {
+   "addr": "::10.0.0.1",
+   "blocked": true
+  },
+  {
+   "addr": "::ffff:0:127.0.0.1",
+   "blocked": true
+  },
+  {
+   "addr": "::ffff:0:a9fe:a9fe",
+   "blocked": true
+  },
+  {
+   "addr": "2002:7f00:1::1",
+   "blocked": true
+  },
+  {
+   "addr": "2002:a9fe:a9fe::",
+   "blocked": true
+  },
+  {
+   "addr": "2002:a00:1::",
+   "blocked": true
+  },
+  {
+   "addr": "2001:0:4136:e378:8000:63bf:3fff:fdd2",
+   "blocked": true
+  },
+  {
+   "addr": "2001:db8::1",
+   "blocked": true
+  },
+  {
+   "addr": "64:ff9b::7f00:1",
+   "blocked": true
+  },
+  {
+   "addr": "64:ff9b::a9fe:a9fe",
+   "blocked": true
+  },
+  {
+   "addr": "64:ff9b:1::a00:1",
+   "blocked": true
+  },
+  {
+   "addr": "2a00:1450::5efe:a00:1",
+   "blocked": true
+  },
+  {
+   "addr": "2a00:1450::200:5efe:a9fe:a9fe",
+   "blocked": true
+  },
+  {
+   "addr": "fe80::1",
+   "blocked": true
+  },
+  {
+   "addr": "fe80::1%eth0",
+   "blocked": true
+  },
+  {
+   "addr": "fec0::1",
+   "blocked": true
+  },
+  {
+   "addr": "fc00::1",
+   "blocked": true
+  },
+  {
+   "addr": "fd00:ec2::254",
+   "blocked": true
+  },
+  {
+   "addr": "ff02::1",
+   "blocked": true
+  },
+  {
+   "addr": "100::1",
+   "blocked": true
+  },
+  {
+   "addr": "3fff::1",
+   "blocked": true
+  },
+  {
+   "addr": "5f00::1",
+   "blocked": true
+  },
+  {
+   "addr": "::1:0:0:0",
+   "blocked": true
+  },
+  {
+   "addr": "8.8.8.8",
+   "blocked": false
+  },
+  {
+   "addr": "1.1.1.1",
+   "blocked": false
+  },
+  {
+   "addr": "93.184.216.34",
+   "blocked": false
+  },
+  {
+   "addr": "172.32.0.1",
+   "blocked": false
+  },
+  {
+   "addr": "11.0.0.1",
+   "blocked": false
+  },
+  {
+   "addr": "100.128.0.1",
+   "blocked": false
+  },
+  {
+   "addr": "01.2.3.4",
+   "blocked": false
+  },
+  {
+   "addr": "::ffff:93.184.216.34",
+   "blocked": false
+  },
+  {
+   "addr": "2002:5db8:d822::1",
+   "blocked": false
+  },
+  {
+   "addr": "64:ff9b::5db8:d822",
+   "blocked": false
+  },
+  {
+   "addr": "2606:4700::1111",
+   "blocked": false
+  },
+  {
+   "addr": "2a00:1450::200:5efe:5db8:d822",
+   "blocked": false
+  },
+  {
+   "addr": "2a00:1450:4001:80b::200e",
+   "blocked": false
+  }
+ ],
+ "hostnames": [
+  {
+   "host": "localhost",
+   "blocked": true
+  },
+  {
+   "host": "LOCALHOST",
+   "blocked": true
+  },
+  {
+   "host": "localhost.",
+   "blocked": true
+  },
+  {
+   "host": "a.localhost",
+   "blocked": true
+  },
+  {
+   "host": "x.y.localhost.",
+   "blocked": true
+  },
+  {
+   "host": "metadata",
+   "blocked": true
+  },
+  {
+   "host": "metadata.google.internal",
+   "blocked": true
+  },
+  {
+   "host": "metadata.google.internal.",
+   "blocked": true
+  },
+  {
+   "host": "metadata.goog",
+   "blocked": true
+  },
+  {
+   "host": "metadata.amazonaws.com",
+   "blocked": true
+  },
+  {
+   "host": "instance-data",
+   "blocked": true
+  },
+  {
+   "host": "instance-data.ec2.internal",
+   "blocked": true
+  },
+  {
+   "host": "redis",
+   "blocked": true
+  },
+  {
+   "host": "admin-api",
+   "blocked": true
+  },
+  {
+   "host": "internal-receiver",
+   "blocked": true
+  },
+  {
+   "host": "",
+   "blocked": true
+  },
+  {
+   "host": "hooks.example.com",
+   "blocked": false
+  },
+  {
+   "host": "example.com",
+   "blocked": false
+  },
+  {
+   "host": "git.internal",
+   "blocked": false
+  },
+  {
+   "host": "calendar.google.com",
+   "blocked": false
+  },
+  {
+   "host": "receiver.internal",
+   "blocked": false
+  },
+  {
+   "host": "127.0.0.1",
+   "blocked": false
+  },
+  {
+   "host": "2130706433",
+   "blocked": false
+  }
+ ],
+ "urls": [
+  {
+   "url": "https://hooks.example.com/vexa",
+   "resolved": [
+    "93.184.216.34"
+   ],
+   "refused": false
+  },
+  {
+   "url": "http://api.customer.io/webhooks/123",
+   "resolved": [
+    "93.184.216.34"
+   ],
+   "refused": false
+  },
+  {
+   "url": "https://93.184.216.34/hook",
+   "resolved": null,
+   "refused": false
+  },
+  {
+   "url": "https://[2606:4700::1111]/hook",
+   "resolved": null,
+   "refused": false
+  },
+  {
+   "url": "https://[::ffff:93.184.216.34]/hook",
+   "resolved": null,
+   "refused": false
+  },
+  {
+   "url": "https://hooks.example.com:8443/x",
+   "resolved": [
+    "2606:4700::1111"
+   ],
+   "refused": false
+  },
+  {
+   "url": "http://localhost/hook",
+   "resolved": [
+    "93.184.216.34"
+   ],
+   "refused": true
+  },
+  {
+   "url": "http://localhost./hook",
+   "resolved": [
+    "93.184.216.34"
+   ],
+   "refused": true
+  },
+  {
+   "url": "http://a.localhost/hook",
+   "resolved": [
+    "93.184.216.34"
+   ],
+   "refused": true
+  },
+  {
+   "url": "http://redis:6379/",
+   "resolved": [
+    "93.184.216.34"
+   ],
+   "refused": true
+  },
+  {
+   "url": "http://metadata.google.internal/",
+   "resolved": [
+    "93.184.216.34"
+   ],
+   "refused": true
+  },
+  {
+   "url": "http://127.0.0.1:9000/x",
+   "resolved": null,
+   "refused": true
+  },
+  {
+   "url": "http://169.254.169.254/latest",
+   "resolved": null,
+   "refused": true
+  },
+  {
+   "url": "http://2130706433/",
+   "resolved": null,
+   "refused": true
+  },
+  {
+   "url": "http://0x7f.0.0.1/",
+   "resolved": null,
+   "refused": true
+  },
+  {
+   "url": "http://0177.0.0.1/",
+   "resolved": null,
+   "refused": true
+  },
+  {
+   "url": "http://[::1]/h",
+   "resolved": null,
+   "refused": true
+  },
+  {
+   "url": "http://[::ffff:127.0.0.1]/",
+   "resolved": null,
+   "refused": true
+  },
+  {
+   "url": "http://[::ffff:169.254.169.254]/",
+   "resolved": null,
+   "refused": true
+  },
+  {
+   "url": "http://[::127.0.0.1]/",
+   "resolved": null,
+   "refused": true
+  },
+  {
+   "url": "http://[2002:a9fe:a9fe::1]/",
+   "resolved": null,
+   "refused": true
+  },
+  {
+   "url": "http://[64:ff9b::a9fe:a9fe]/x",
+   "resolved": null,
+   "refused": true
+  },
+  {
+   "url": "http://[2001:0:4136:e378:8000:63bf:3fff:fdd2]/",
+   "resolved": null,
+   "refused": true
+  },
+  {
+   "url": "http://[fd00:ec2::254]/",
+   "resolved": null,
+   "refused": true
+  },
+  {
+   "url": "http://[fe80::1%25eth0]/",
+   "resolved": null,
+   "refused": true
+  },
+  {
+   "url": "https://evil.example.com/h",
+   "resolved": [
+    "10.1.2.3"
+   ],
+   "refused": true
+  },
+  {
+   "url": "https://evil.example.com/h",
+   "resolved": [
+    "93.184.216.34",
+    "::ffff:10.0.0.1"
+   ],
+   "refused": true
+  },
+  {
+   "url": "https://evil.example.com/h",
+   "resolved": [
+    "64:ff9b::a9fe:a9fe"
+   ],
+   "refused": true
+  },
+  {
+   "url": "https://evil.example.com/h",
+   "resolved": [
+    "2002:a9fe:a9fe::1"
+   ],
+   "refused": true
+  },
+  {
+   "url": "https://nope.example.com/h",
+   "resolved": [],
+   "refused": true
+  },
+  {
+   "url": "ftp://example.com/hook",
+   "resolved": [
+    "93.184.216.34"
+   ],
+   "refused": true
+  },
+  {
+   "url": "file:///etc/passwd",
+   "resolved": [
+    "93.184.216.34"
+   ],
+   "refused": true
+  },
+  {
+   "url": "https:///nohost",
+   "resolved": [
+    "93.184.216.34"
+   ],
+   "refused": true
+  },
+  {
+   "url": "https://hooks.example.com:99999/",
+   "resolved": [
+    "93.184.216.34"
+   ],
+   "refused": true
+  },
+  {
+   "url": "not a url",
+   "resolved": [
+    "93.184.216.34"
+   ],
+   "refused": true
+  }
+ ]
+}

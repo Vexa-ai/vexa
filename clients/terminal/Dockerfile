@@ -16,8 +16,10 @@
 #                    makes dev boot instant and offline-safe.
 ARG RUNTIME_DEPS=prod
 
-# node:22 — tinykeys@4 requires node >=22; 20 only warns but we pin 22 to match engines.
-FROM node:22-slim AS build
+# node:22 — tinykeys@4 requires node >=22; 20 only warns but we pin 22 to match engines. Debian 13
+# (trixie), pinned by digest: the bookworm-based node:22-slim carries Debian 12's perl-base, with fixed
+# critical advisories its newest digest still does not take. The same base for all three stages.
+FROM node:22-trixie-slim@sha256:154ba2f4d6fec323d28e4f4bb86bba4677f1223391a1979cf521304e03a98dfa AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
@@ -66,7 +68,7 @@ RUN npm run build && rm -rf .next/cache
 # so the runtime tree drops sharp and its @img/* natives, among them the LGPL-3.0-or-later libvips
 # binary. Removed by name rather than with `--omit=optional`: next's platform SWC binary is
 # optional too, and the server needs it at runtime to compile next.config.ts.
-FROM node:22-slim AS deps-prod
+FROM node:22-trixie-slim@sha256:154ba2f4d6fec323d28e4f4bb86bba4677f1223391a1979cf521304e03a98dfa AS deps-prod
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && rm -rf node_modules/sharp node_modules/@img && npm cache clean --force
@@ -78,7 +80,7 @@ FROM build AS deps-dev
 # ARG-selected alias (COPY --from does not expand variables; FROM does).
 FROM deps-${RUNTIME_DEPS} AS deps
 
-FROM node:22-slim AS runtime
+FROM node:22-trixie-slim@sha256:154ba2f4d6fec323d28e4f4bb86bba4677f1223391a1979cf521304e03a98dfa AS runtime
 # The server-side proxy gate reads the mode at REQUEST time (process.env), so the runtime stage must
 # carry the same value the bundle was built with — client gating and edge gating stay in lockstep.
 ARG NEXT_PUBLIC_TERMINAL_MODE=""
@@ -112,6 +114,11 @@ LABEL ai.vexa.terminal.mode="${NEXT_PUBLIC_TERMINAL_MODE:-default}"
 # can be forgotten, and the mode label directly above is here because exactly that happened.
 LABEL ai.vexa.terminal.agent_api="1"
 LABEL ai.vexa.terminal.build="${NEXT_PUBLIC_BUILD_ID:-unknown}"
+# The runtime runs `node server.mjs` and nothing else, so the base's package managers go: npm, npx,
+# corepack and the dependencies npm bundles (tar, pacote, sigstore, …) are never called here and are
+# the image's only fixed HIGH advisories on this base.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
+      /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack /opt/yarn-* /usr/local/bin/yarn /usr/local/bin/yarnpkg
 WORKDIR /app
 COPY package.json package-lock.json ./
 # node_modules from the RUNTIME_DEPS-selected stage (prod = pruned + typescript; dev = full tree).
@@ -131,5 +138,5 @@ RUN groupadd --system --gid 10001 vexa \
 USER 10001:10001
 
 EXPOSE 3000
-# `npm start` === PORT=3000 NODE_ENV=production node server.mjs
+# what `npm start` runs in a checkout: PORT=3000 NODE_ENV=production node server.mjs
 CMD ["node", "server.mjs"]

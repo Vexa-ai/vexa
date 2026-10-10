@@ -619,6 +619,8 @@ def ensure_workspace_private(root: str | Path, subject: str, workspace_id: str) 
     slot_dir = store / new_slug
     slot_dir.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(ws), str(slot_dir))  # re-home the tree into the private .attached store
+    from control_plane import workspace_membership as membership
+    membership.strip_policy(slot_dir)    # a private tree carries no member list
     state["slots"][new_slug] = {"repo": None, "ref": None, "name": workspace_id}  # keep the name as the label
     state["active_set"] = _normalized_active_set({**state, "active_set": [*state.get("active_set", []), new_slug]})
     _save_state(store, state)

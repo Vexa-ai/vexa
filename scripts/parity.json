@@ -130,6 +130,23 @@
       ]
     },
     {
+      "id": "outbound-url-vectors",
+      "fact": "the table both outbound URL guards are held to — the Python ssrf.py and the TypeScript url-guard.ts",
+      "kind": "file-bytes",
+      "enforced": true,
+      "canonical": "core/meetings/services/meeting-api/tests/fixtures/outbound-url-vectors.json",
+      "how_to_agree": "edit the canonical table and copy it VERBATIM over the other site; both test suites must stay green",
+      "why": "The bot's guard is TypeScript and cannot import ssrf.py; a byte comparison across languages means nothing, so the two share a vector table instead. The Python suite (meeting-api tests/test_outbound_url_vectors.py) and the TypeScript suite (@vexa/transcribe-whisper src/url-guard.test.ts) each read their own copy, and this fact keeps the copies one table.",
+      "sites": [
+        {
+          "path": "core/meetings/services/meeting-api/tests/fixtures/outbound-url-vectors.json"
+        },
+        {
+          "path": "core/meetings/modules/whisper/src/outbound-url-vectors.json"
+        }
+      ]
+    },
+    {
       "id": "outbound-url-guard",
       "fact": "whether a server may fetch a URL somebody else supplied: the address lists, the IPv6 forms read for the IPv4 address they carry, and the connection pinned to the checked address",
       "kind": "file-bytes",

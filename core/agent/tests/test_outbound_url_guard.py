@@ -102,3 +102,31 @@ def test_webfetch_refuses_a_rebind_at_connect(monkeypatch):
     monkeypatch.setattr(httpx, "HTTPTransport", lambda *a, **k: rec)
     ok, out = web_tools.web_fetch("https://www.example.com/page", resolve=_public)
     assert not ok and rec.dialled == []
+
+
+# ── the transcription Test button, for an endpoint the person configured ─────────────────────────
+
+@pytest.mark.parametrize("url", ["http://169.254.169.254", "http://[::ffff:10.0.0.1]:8000", "http://transcription:8083",
+                                 "http://[64:ff9b::a9fe:a9fe]", "http://2130706433/v1"])
+def test_the_stt_test_never_probes_an_internal_customer_endpoint(url):
+    from control_plane import config_test as ct
+
+    sent = []
+    out = ct.run_customer_transcription_test(url, "tok", "settings", get=lambda u, h: sent.append(u) or (200, "{}"),
+                                             probe=lambda e, t: sent.append(e) or (200, "{}"),
+                                             resolver=lambda h: ["93.184.216.34"])
+    assert out["ok"] is False and "refused" in out["summary"] and sent == []
+
+
+def test_the_stt_test_refuses_a_name_resolving_inside_and_runs_on_a_public_one():
+    from control_plane import config_test as ct
+
+    sent = []
+    get = lambda u, h: sent.append(u) or (404, "")                                     # noqa: E731
+    probe = lambda e, t: sent.append(e) or (200, '{"text":"probe"}')                   # noqa: E731
+    inside = ct.run_customer_transcription_test("https://stt.example.com", "tok", "settings", get=get, probe=probe,
+                                                resolver=lambda h: ["::ffff:169.254.169.254"])
+    assert inside["ok"] is False and sent == []
+    ct.run_customer_transcription_test("https://stt.example.com", "tok", "settings", get=get, probe=probe,
+                                       resolver=lambda h: ["93.184.216.34"])
+    assert sent and all(s.startswith("https://stt.example.com") for s in sent)

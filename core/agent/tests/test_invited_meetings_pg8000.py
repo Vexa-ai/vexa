@@ -7,7 +7,9 @@ included), and the query and answer shape, against a fake pg8000 connection: no 
 from __future__ import annotations
 
 import json
+import secrets
 import ssl
+from urllib.parse import quote
 
 import pg8000.dbapi
 import pytest
@@ -53,11 +55,14 @@ def fake_pg(monkeypatch):
 
 def test_invited_meetings_reads_through_pg8000(monkeypatch, fake_pg):
     calls, seen, conns = fake_pg
-    monkeypatch.setenv("VEXA_MEETINGS_DB_URL", "postgresql://reader:p%40ss@db:5433/vexa?sslmode=disable")
+    # A throwaway credential with a character that must be URL-decoded; built at run time so no
+    # credential-shaped literal sits in the tree.
+    credential = secrets.token_hex(4) + "@"
+    monkeypatch.setenv("VEXA_MEETINGS_DB_URL", f"postgresql://reader:{quote(credential)}@db:5433/vexa?sslmode=disable")
     got = scaffolds.invited_meetings("  Ann@Example.com ")
     assert got == [{"meeting": "31", "title": "DNA TSC", "when": "Thu 14:00"},
                    {"meeting": "7", "title": "", "when": ""}]
-    assert calls == [{"user": "reader", "password": "p@ss", "host": "db", "port": 5433,
+    assert calls == [{"user": "reader", "password": credential, "host": "db", "port": 5433,
                       "database": "vexa", "timeout": 5}]
     sql, params = seen[0]
     assert "data->'attendees' @> %s::jsonb" in sql
@@ -84,7 +89,7 @@ def test_prefer_is_the_default_and_falls_back_to_plaintext(monkeypatch):
         return "plaintext"
 
     monkeypatch.setattr(pg8000.dbapi, "connect", connect)
-    assert scaffolds.meetings_db_connect("postgres://u:p@db/vexa") == "plaintext"
+    assert scaffolds.meetings_db_connect("postgres://u@db/vexa") == "plaintext"
     assert calls[0]["ssl_context"].verify_mode == ssl.CERT_NONE
     assert "ssl_context" not in calls[1]
 
@@ -97,7 +102,7 @@ def test_prefer_is_the_default_and_falls_back_to_plaintext(monkeypatch):
 def test_sslmode_becomes_an_ssl_context(monkeypatch, mode, verify, hostname):
     calls = []
     monkeypatch.setattr(pg8000.dbapi, "connect", lambda **kw: calls.append(kw) or "conn")
-    scaffolds.meetings_db_connect(f"postgresql://u:p@db/vexa?sslmode={mode}")
+    scaffolds.meetings_db_connect(f"postgresql://u@db/vexa?sslmode={mode}")
     context = calls[0]["ssl_context"]
     assert context.verify_mode == verify and context.check_hostname is hostname
 
@@ -108,7 +113,7 @@ def test_a_refused_tls_under_require_is_not_retried(monkeypatch):
 
     monkeypatch.setattr(pg8000.dbapi, "connect", connect)
     with pytest.raises(pg8000.dbapi.InterfaceError):
-        scaffolds.meetings_db_connect("postgresql://u:p@db/vexa?sslmode=require")
+        scaffolds.meetings_db_connect("postgresql://u@db/vexa?sslmode=require")
 
 
 @pytest.mark.parametrize("url", ["mysql://u@db/vexa", "postgresql://u@db/vexa?sslmode=always"])

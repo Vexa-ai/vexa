@@ -813,6 +813,8 @@ async def request_bot(
         transcription_service_url=transcription_service_url,
         transcription_service_token=transcription_service_token,
         transcription_model=transcription_model,
+        transcription_service_owner=("customer" if configured.get("url") and configured.get("provider") == "customer"
+                                     else None),
         recording_enabled=recording_enabled,
         capture_modes=(["audio", "video"] if recording_enabled else None),
         # O-TEL-1: the tape is INDEPENDENT of recording_enabled — a meeting the user never asked to

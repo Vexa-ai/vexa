@@ -106,6 +106,7 @@ def build_invocation(
     transcription_service_url: Optional[str] = None,
     transcription_service_token: Optional[str] = None,
     transcription_model: Optional[str] = None,
+    transcription_service_owner: Optional[str] = None,
     authenticated: Optional[bool] = None,
     userdata_s3_path: Optional[str] = None,
     s3_endpoint: Optional[str] = None,
@@ -135,6 +136,9 @@ def build_invocation(
         "transcriptionServiceUrl": transcription_service_url,
         "transcriptionServiceToken": transcription_service_token,
         "transcriptionModel": transcription_model,
+        # `customer` only: the bot then holds every request to the endpoint to its outbound URL
+        # guard. The deployment's own endpoint is left unstated (an older bot refuses the field).
+        "transcriptionServiceOwner": "customer" if transcription_service_owner == "customer" else None,
         "recordingEnabled": recording_enabled,
         "captureModes": capture_modes,
         # O-TEL-1 (sealed invocation.v1 field): tee the raw captured-signal.v1 stream to durable

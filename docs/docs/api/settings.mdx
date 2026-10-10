@@ -103,7 +103,9 @@ Returns the same masked shape as the read, with **200 OK**.
   returns **422**.
 </ParamField>
 <ParamField body="api_key" type="string">
-  Credential for that endpoint. Stored, never echoed in the clear.
+  Credential for that endpoint. Stored, never echoed in the clear. On the `claude-code` harness a
+  custom `base_url` needs it: without a key of your own the endpoint is not used, your turns run on
+  the deployment's route, and the refusal is recorded. `openai-agent` runs on a keyless endpoint.
 </ParamField>
 <ParamField body="extra_body" type="string">
   Request fields the OpenAI dialect cannot express, as a JSON string — a self-hosted vLLM/Qwen
@@ -165,7 +167,11 @@ curl -X PUT "$API_BASE/user/transcription" \
 ```
 
 <ParamField body="url" type="string">
-  Transcription endpoint. Must be an `http` or `https` URL with a hostname.
+  Transcription endpoint. Must be an `http` or `https` URL with a hostname, on a public address:
+  your bots send meeting audio to it, so a loopback, private, link-local or metadata address, or a
+  host name only this deployment resolves, is refused with `422` — and a bot refuses it too, at
+  every request. A deployment's own transcription service (its environment or platform setting)
+  may be private.
 </ParamField>
 <ParamField body="token" type="string">
   Credential for that endpoint. Masked on every read-back, exactly like the model credential.
@@ -274,7 +280,10 @@ curl -X PATCH "$ADMIN/admin/users/1" \
   -d '{"max_concurrent_bots": 5}'
 ```
 
-Returns the updated account with **200 OK**; an unknown id returns **404**. A body that changes
+Returns the updated account with **200 OK**; an unknown id returns **404**. No admin read of an
+account carries a stored credential: the model key and the transcription token appear as
+`api_key_set` / `token_set` with the masked tail `GET /user/webhook` shows, and a calendar feed as
+`ics_url_set` with its masked form. Writing a masked value back to a key changes nothing. A body that changes
 nothing returns **422** — the patch requires at least one field. Unrecognized fields are refused
 rather than dropped.
 

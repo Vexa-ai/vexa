@@ -107,3 +107,12 @@ def test_an_internal_calendar_feed_is_refused_when_saved(client, url):
     h = {"X-API-Key": full}
     assert client.post("/user/calendars", headers=h, json={"name": "x", "ics_url": url}).status_code == 422
     assert client.put("/user/calendar", headers=h, json={"ics_url": url}).status_code == 422
+
+
+@pytest.mark.parametrize("url", ["http://transcription:8083", "http://10.0.0.7:9000", "http://[::ffff:169.254.169.254]/",
+                                 "http://[64:ff9b::a9fe:a9fe]/", "http://localhost:8083"])
+def test_an_internal_transcription_endpoint_is_refused_when_saved(client, url):
+    _uid, full, _bot, _tx = _keys(client, "stt-dest@vexa.ai")
+    h = {"X-API-Key": full}
+    assert client.put("/user/transcription", headers=h, json={"url": url}).status_code == 422
+    assert client.put("/user/transcription", headers=h, json={"url": "https://stt.example.com"}).status_code == 200
