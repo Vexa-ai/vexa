@@ -1216,13 +1216,17 @@ function liteProgramEnv(program) {
   return new Set([...envLine.matchAll(/([A-Z][A-Z0-9_]*)=/g)].map((x) => x[1]));
 }
 // key -> the entrypoint.sh line that exports it. A Map, not a Set, so check 6 can name file:line;
-// `.has()` keeps it a drop-in for check 3's fallback use.
+// `.has()` keeps it a drop-in for check 3's fallback use. An `export` is read wherever it stands as a
+// shell word — indented inside an `if` or a `{ … }` group, after a `case` label on the same line,
+// after `;`, `&&` or `||` — not only at column 0: a setting the entrypoint exports from a branch
+// reaches every program all the same (architecture pass 6, S74). Comment lines are skipped.
+const LITE_EXPORT_RE = /(?:^|[\s;&|()])export\s+([A-Z][A-Z0-9_]*)=/g;
 const liteEntrypointExports = () => {
   const lines = readFileSync(join(ROOT, "deploy", "lite", "entrypoint.sh"), "utf8").split("\n");
   const out = new Map();
   for (let i = 0; i < lines.length; i++) {
-    const m = lines[i].match(/^export ([A-Z][A-Z0-9_]*)=/);
-    if (m && !out.has(m[1])) out.set(m[1], i + 1);
+    if (lines[i].trimStart().startsWith("#")) continue;
+    for (const m of lines[i].matchAll(LITE_EXPORT_RE)) if (!out.has(m[1])) out.set(m[1], i + 1);
   }
   return out;
 };
@@ -1241,6 +1245,10 @@ const CONFIG_LITE_UNADOPTED = {
   VEXA_API_KEY: "the lite bootstrap's own key for the smoke calls it makes at start-up; belongs to no service's declaration",
   REDIS_PASSWORD: "the internal valkey's default-user password ([program:redis] --requirepass); the services receive it inside REDIS_URL, and no adopted service reads it by this name",
   VEXA_LITE_STATE_DIR: "the Lite entrypoint's own state directory (the persisted NEXTAUTH_SECRET and the gateway-identity.v1 keypair); supervisord interpolates it into the gateway's signing-key path and the verifiers' public-key path, and no service reads it",
+  REDIS_HOST: "the Lite entrypoint's own part of the internal REDIS_URL it composes (an operator may point it elsewhere); every service receives REDIS_URL, and none reads this",
+  REDIS_PORT: "the same, the port part of the internal REDIS_URL; no service reads it",
+  VEXA_LITE_VNC: "the debug browser view's switch (true|false, default false); supervisord interpolates it into [program:x11vnc] and [program:websockify] autostart, and the entrypoint writes the VNC password file only when it is true; no service reads it",
+  VEXA_LITE_VNC_PASSWORD: "SECRET — the debug browser view's password; the entrypoint alone reads it, writes it to the root-only /run/vexa/vnc/passwd that [program:x11vnc] reads, and unsets it before supervisord starts, so no program inherits it; minted into the state volume when unset",
 };
 function scanEnvReads(dirs) {
   const found = new Map(); // key -> first "file" it was seen in
