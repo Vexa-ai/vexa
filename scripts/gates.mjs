@@ -21,6 +21,7 @@ import { checkDomainDoors, ALLOW_PATH as DOORS_ALLOW } from "./check-domain-door
 import { checkParity, MANIFEST_PATH as PARITY_MANIFEST } from "./check-parity.mjs";
 import { checkVendorPayload, NATIVE_DIR } from "./check-vendor-payload.mjs";
 import { checkPythonLicenses, INDEX_FILE as PY_LICENSE_INDEX } from "./check-python-licenses.mjs";
+import { collectPinnedImages } from "./pinned-images.mjs";
 
 const ROOT = process.cwd();
 const SKIP = new Set(["node_modules", "dist", ".turbo", "__pycache__", "test-results", "playwright-report", "coverage"]);
@@ -549,87 +550,9 @@ function gateImageLicenses() {
   const declaredImages = new Map((man.images || []).map((e) => [e.name, e]));
   const bad = [], flagged = [];
 
-  // (1) third-party image pins across the deploy-owned forms:
-  //     • scalar `image: ref` in compose, Helm values, and Helm templates;
-  //     • structured Helm `image: { repository, tag }` blocks;
-  //     • every `FROM ref` in the Lite Dockerfile (including builder stages whose bytes feed final);
-  //     • non-recipe `*_IMAGE` variable assignments in the Lite Makefile.
-  //     Skip our own vexaai/* / vexa/* images — those are built here, not third-party inputs.
-  const chartDir = join(ROOT, "deploy", "helm", "charts", "vexa");
-  const tplDir = join(chartDir, "templates");
-  const helmValueFiles = existsSync(chartDir)
-    ? readdirSync(chartDir).filter((f) => /^values.*\.yaml$/.test(f)).map((f) => join(chartDir, f))
-    : [];
-  const deployFiles = [
-    join(ROOT, "deploy", "compose", "docker-compose.yml"),
-    ...helmValueFiles,
-    ...(existsSync(tplDir) ? readdirSync(tplDir).filter((f) => /\.ya?ml$/.test(f)).map((f) => join(tplDir, f)) : []),
-  ].filter(existsSync);
-  const foundImages = new Map();   // name → { ref, source } (first sighting)
-  const recordImage = (rawRef, source) => {
-    let ref = rawRef.replace(/^["']|["']$/g, "");
-    if (ref.includes("{{")) return;                                          // helm template expression
-    ref = ref.replace(/\$\{[^:}]*:-([^}]+)\}/g, "$1");                       // ${VAR:-default} → default image
-    if (ref.includes("$")) return;                                           // unresolved variable → no auditable pin
-    if (ref.startsWith("vexaai/") || ref.startsWith("vexa/")) return;         // first-party
-    const name = ref.replace(/@sha256:.*$/, "").replace(/:[^/:]+$/, "");     // strip digest / :tag
-    if (!name || (!ref.includes("/") && !ref.includes(":"))) return;         // Docker stage alias / invalid ref
-    if (!foundImages.has(name)) foundImages.set(name, { ref, source });
-  };
-
-  for (const f of deployFiles)
-    // same-line values only ([ \t]*, never \s* which would cross a newline into a structured
-    // `image:\n  repository:` block — that shape is enumerated separately below). The value may carry
-    // `${VAR:-default}` interpolation ⇒ capture the whole token (no `{}` exclusion) and resolve.
-    for (const m of readFileSync(f, "utf8").matchAll(/^[ \t]*image:[ \t]*["']?([^\s"']+)/gm)) {
-      recordImage(m[1], rel(f));
-    }
-
-  // Helm's established structured values shape:
-  //   image:
-  //     repository: <registry>/<image>
-  //     tag: <tag>
-  // Use indentation to bind repository+tag to the same image block.
-  for (const f of helmValueFiles) {
-    const lines = readFileSync(f, "utf8").split(/\r?\n/);
-    for (let i = 0; i < lines.length; i++) {
-      const image = lines[i].match(/^([ \t]*)image:[ \t]*(?:#.*)?$/);
-      if (!image) continue;
-      const baseIndent = image[1].length;
-      let repository;
-      let tag;
-      for (let j = i + 1; j < lines.length; j++) {
-        if (!lines[j].trim() || lines[j].trimStart().startsWith("#")) continue;
-        const indent = (lines[j].match(/^[ \t]*/) || [""])[0].length;
-        if (indent <= baseIndent) break;
-        const repoMatch = lines[j].match(/^[ \t]*repository:[ \t]*["']?([^\s"']+)/);
-        const tagMatch = lines[j].match(/^[ \t]*tag:[ \t]*["']?([^\s"']+)/);
-        if (repoMatch) repository = repoMatch[1];
-        if (tagMatch) tag = tagMatch[1];
-      }
-      if (repository && tag) recordImage(`${repository}:${tag}`, rel(f));
-    }
-  }
-
-  const liteDockerfile = join(ROOT, "deploy", "lite", "Dockerfile.lite");
-  if (existsSync(liteDockerfile)) {
-    for (const m of readFileSync(liteDockerfile, "utf8").matchAll(
-      /^FROM[ \t]+(?:--platform=\S+[ \t]+)?(\S+)/gmi,
-    )) recordImage(m[1], rel(liteDockerfile));
-  }
-
-  const liteMakefile = join(ROOT, "deploy", "lite", "Makefile");
-  if (existsSync(liteMakefile)) {
-    // Scan ?=, :=, ::=, = with optional export/override; not target-specific assignments, define blocks or \-continued values.
-    for (const line of readFileSync(liteMakefile, "utf8").split(/\r?\n/)) {
-      if (line.startsWith("\t")) continue;
-      const assignment = line.match(/^[ \t]*(?:(?:export|override)[ \t]+)*[A-Za-z_][A-Za-z0-9_]*_IMAGE[ \t]*(?:\?=|::?=|=)[ \t]*([^\s#]+)/);
-      if (assignment) {
-        const value = assignment[1];
-        recordImage(/[/@:$]/.test(value) ? value : `${value}:latest`, rel(liteMakefile));
-      }
-    }
-  }
+  // (1) third-party image pins across the deploy-owned forms (scripts/pinned-images.mjs, which the
+  //     CVE-scanning workflow reads too, so the scanned list and the audited list are one list).
+  const foundImages = collectPinnedImages(ROOT);
 
   for (const [name, { ref, source }] of foundImages) {
     const e = declaredImages.get(name);
