@@ -48,10 +48,9 @@ jobs:
           # Reviewed exceptions, by package (security/known-advisories.md § Dependency review):
           #  - typing-extensions is PSF-2.0 (its own license_expression); GitHub's detector reads the PSF
           #    licence file's history section and reports GPL-1.0-or-later.
-          #  - libvips behind sharp (LGPL-3.0-or-later, and the win32/wasm builds that bundle it) is the
-          #    logged Category-B exception in license-exceptions.json: the bot images load it through
-          #    @huggingface/transformers; the terminal's runtime tree drops it. Open against FINOS, which
-          #    lists LGPL as Category X.
+          #  - libvips behind sharp (LGPL-3.0-or-later, and the win32/wasm builds that bundle it) is left
+          #    only in the terminal's npm lock, installed by its build stage and removed from its runtime
+          #    tree (license-exceptions.json); the pnpm tree loads core/meetings/modules/no-image-backend.
           #  - json-schema, uri-js and bowser appear only in services/dashboard (below).
           allow-dependencies-licenses: >-
             pkg:pypi/typing-extensions,

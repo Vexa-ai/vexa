@@ -41,10 +41,10 @@ Categories A and B (LGPL is Category X there). Its reviewed exceptions:
 - **`typing-extensions`** is PSF-2.0 (its own `license_expression`); GitHub's licence detector reads the
   history section of the PSF licence file and reports GPL-1.0-or-later.
 - **libvips behind `sharp`** (`@img/sharp-libvips-*`, and the `@img/sharp-wasm32` / `@img/sharp-win32-*`
-  builds that bundle it; LGPL-3.0-or-later) is the logged Category-B exception in
-  [`license-exceptions.json`](../license-exceptions.json): the bot images load it because
-  `@huggingface/transformers` imports `sharp` at module scope, and the terminal's runtime tree drops it.
-  It stays an open item against FINOS, which lists LGPL as Category X.
+  builds that bundle it; LGPL-3.0-or-later) remains only in `clients/terminal/package-lock.json`, as an
+  optional dependency of `next` that the terminal's build stage installs and its runtime tree removes
+  ([`license-exceptions.json`](../license-exceptions.json)). The pnpm tree, and so the bot and Lite, load
+  `core/meetings/modules/no-image-backend` instead.
 - **`services/dashboard`**: its advisories are allowed by GHSA ID, and `json-schema`, `uri-js` and `bowser`
   (AFL, BSD-2-Clause-Views and MITNFA terms, all only in that tree) by package, for the reason it is
   excluded from OSV-Scanner above. Dependency review cannot exclude a path; every shipped lockfile stays

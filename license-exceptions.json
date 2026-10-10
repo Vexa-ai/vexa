@@ -4,9 +4,9 @@
     {
       "package": "@img/sharp-libvips",
       "license": "LGPL-3.0-or-later",
-      "reason": "libvips native binary behind `sharp`. LGPL is weak copyleft; it is used unmodified and dynamically linked (a separate prebuilt .so/.dylib that sharp's binding loads at runtime, never statically bundled into our JS), so it qualifies as FINOS/ASF Category B. Two routes bring it in. (1) @vexa/mixed-pipeline → @huggingface/transformers, which lists sharp as a hard dependency and imports it at module scope (dist/transformers.node.mjs), so sharp and its platform libvips binary are installed and loaded wherever the mixed lane runs; the lane is AUDIO-only and never calls an image function. (2) clients/terminal → next, as an optional dependency that only the image optimizer loads; the terminal turns the optimizer off (next.config.ts images.unoptimized).",
-      "disposition": "Logged exception. Ships unmodified in vexaai/vexa-bot and in vexaai/vexa-lite's bot tree (route 1: sharp cannot be dropped without breaking the transformers import). Removed from the terminal's runtime tree in vexaai/v012-terminal (clients/terminal/Dockerfile, deps-prod) and in vexaai/vexa-lite (terminal-builder); gate:image-licenses holds that removal and the optimizer setting together.",
-      "scope": "@vexa/mixed-pipeline (bot runtime: vexaai/vexa-bot, vexaai/vexa-lite); clients/terminal (build stage only, removed from the runtime tree)",
+      "reason": "libvips native binary behind `sharp`. LGPL is weak copyleft; it would be used unmodified and dynamically linked (a separate prebuilt .so/.dylib that sharp's binding loads at runtime), which ADR-0004 treats as Category B; FINOS lists LGPL as Category X. It reaches the npm lock of clients/terminal only, as an optional dependency of next that only the image optimizer loads; the terminal turns the optimizer off (next.config.ts images.unoptimized). The pnpm tree has none: @huggingface/transformers' sharp is overridden by @vexa/no-image-backend (pnpm-workspace.yaml).",
+      "disposition": "Logged exception for the terminal's build stage only. Not in any runtime image: clients/terminal/Dockerfile (deps-prod) and Lite's terminal-builder remove sharp and @img/*, and vexaai/vexa-bot and vexa-lite's bot tree load the stand-in. gate:image-licenses holds all three.",
+      "scope": "clients/terminal (npm lock, build stage only)",
       "approved": "ADR-0004"
     },
     {

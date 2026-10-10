@@ -349,6 +349,23 @@ test("image-licenses RED: the terminal's image optimizer turned back on reds", (
   assert.match(r.out, /unoptimized/);
 });
 
+const PNPM_LOCK = "pnpm-lock.yaml";
+
+test("image-licenses RED: libvips locked again for the bot (an @img/sharp-* package in pnpm-lock) reds", () => {
+  const r = withEdited(PNPM_LOCK, "\npackages:\n",
+    "\npackages:\n\n  '@img/sharp-libvips-linux-x64@1.3.4':\n    resolution: {integrity: sha512-planted}\n",
+    () => runGate("image-licenses"));
+  assert.equal(r.green, false, "a libvips package in pnpm-lock.yaml passed");
+  assert.match(r.out, /pnpm-lock\.yaml locks @img\/sharp-libvips-linux-x64/);
+});
+
+test("image-licenses RED: sharp no longer overridden by the stand-in reds", () => {
+  const r = withEdited(PNPM_LOCK, "  sharp: link:./core/meetings/modules/no-image-backend\n", "  sharp: ^0.35.5\n",
+    () => runGate("image-licenses"));
+  assert.equal(r.green, false, "the sharp override was dropped and the gate stayed green");
+  assert.match(r.out, /does not override sharp/);
+});
+
 test("runtime-parity RED: the bare `apt install` form (not just apt-get) is caught too", () => {
   // A contributor who writes `apt install redis-server` (no -get) must not bypass the #636 guard.
   const inject = "RUN apt install -y redis-server\nFROM mcr.microsoft.com/playwright:v1.56.0-noble AS final";

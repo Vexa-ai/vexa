@@ -13,6 +13,7 @@ system meetings  # capture → transcribe → record; owns the raw transcript
   module join
   module mixed-capture-core
   module mixed-pipeline
+  module no-image-backend
   module record-chunker
   module recording
   module remote-browser

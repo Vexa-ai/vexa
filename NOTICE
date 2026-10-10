@@ -37,9 +37,3 @@ shared libraries, an FFmpeg build licensed LGPL-3.0-or-later that links
 libx264 and libx265 (GPL-2.0-or-later). Vexa does not publish a
 transcription image; an operator who builds one from
 core/meetings/services/transcription redistributes these libraries.
-
-@img/sharp-libvips-* (libvips, LGPL-3.0-or-later) is the prebuilt shared
-library that `sharp` loads at runtime. It ships unmodified in the bot images
-(vexaai/vexa-bot, and the bot tree of vexaai/vexa-lite), because
-@huggingface/transformers imports `sharp` at module scope. The terminal's
-runtime tree does not include it.

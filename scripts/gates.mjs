@@ -605,6 +605,21 @@ function gateImageLicenses() {
   if (existsSync(termConfig) && !/\bimages:\s*\{\s*unoptimized:\s*true\b/.test(readFileSync(termConfig, "utf8")))
     bad.push("clients/terminal/next.config.ts no longer sets `images: { unoptimized: true }` — the terminal images remove sharp, which the image optimizer needs. Turn the optimizer back off, or keep sharp and log the LGPL libvips binary it ships in license-exceptions.json");
 
+  // (5) …and the bot ships without it too. @huggingface/transformers imports sharp at module scope for
+  //     its IMAGE pipeline, which the audio-only mixed lane never reaches, so pnpm-workspace.yaml
+  //     overrides sharp with core/meetings/modules/no-image-backend (a stand-in that throws a typed
+  //     ImageBackendAbsent). Any @img/sharp-* package back in pnpm-lock.yaml is libvips back in
+  //     vexaai/vexa-bot and vexaai/vexa-lite.
+  const pnpmLock = join(ROOT, "pnpm-lock.yaml");
+  if (existsSync(pnpmLock)) {
+    const lockText = readFileSync(pnpmLock, "utf8");
+    const natives = [...new Set([...lockText.matchAll(/^ {2}'?(@img\/sharp-[a-z0-9-]+)@/gm)].map((m) => m[1]))];
+    if (natives.length)
+      bad.push(`pnpm-lock.yaml locks ${natives.join(", ")} — libvips (LGPL-3.0-or-later) is back in the bot images. sharp must resolve to the stand-in: pnpm-workspace.yaml overrides "sharp": "link:./core/meetings/modules/no-image-backend"`);
+    if (!/^ {2}sharp: link:(?:\.\/)?core\/meetings\/modules\/no-image-backend$/m.test(lockText))
+      bad.push("pnpm-lock.yaml does not override sharp with core/meetings/modules/no-image-backend — the real sharp, and libvips with it, would install for @huggingface/transformers");
+  }
+
   if (bad.length) return fail(bad);
   console.log(`  ✓ gate:image-licenses — ${foundImages.size} pinned image(s) + ${(man.bundled || []).length} bundled component(s) declared & audited${flagged.length ? ` (${flagged.length} non-A by logged reason: ${flagged.join("; ")})` : ""}`);
   return true;

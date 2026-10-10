@@ -14,14 +14,14 @@ packages:
   - "clients/terminal"
 # Build scripts pnpm may run (pnpm ≥10 blocks postinstall by default). esbuild
 # ships the native binary our TS test runner (tsx) needs; onnxruntime-node (+ its
-# transitive sharp/protobufjs, via @huggingface/transformers in @vexa/mixed-pipeline)
+# transitive protobufjs, via @huggingface/transformers in @vexa/mixed-pipeline)
 # fetches the native ONNX runtime the pyannote segmenter runs on in production. The
 # mixed-pipeline goldens are model-free, so the gate stays green even before download.
 allowBuilds:
   esbuild: true
   onnxruntime-node: true
   protobufjs: true
-  sharp: true
+  sharp: set this to true or false
 # Security floors for transitive deps we do not name directly. Each entry is an advisory
 # floor, not a version preference: the selector matches ONLY the vulnerable range, and the
 # replacement stays inside the same major so the depending package's own range still holds.
@@ -50,11 +50,11 @@ overrides:
   # minimatch@3 under puppeteer-extra-plugin-stealth in the join and remote-browser modules), and
   # it is held to ^1: minimatch@3 calls the 1.x default export, which 5.x replaces with a named one.
   "brace-expansion@1": "^1.1.21"
-  # sharp <0.35.5: inherited libvips, libheif and librsvg vulnerabilities (GHSA-f88m-g3jw-g9cj,
-  # GHSA-rgj7-g3m4-5g8c, GHSA-wq5f-xc86-pv6w). Enters via @huggingface/transformers, which imports
-  # it at module scope; the audio-only mixed lane never calls an image function (ADR-0004). 0.35
-  # keeps the @img/sharp-libvips-* split, so the Category-B exception stays valid as written.
-  "sharp@<0.35.5": "^0.35.5"
+  # sharp is replaced, not floored: @huggingface/transformers imports it at module scope for its IMAGE
+  # pipeline, the audio-only mixed lane never calls it, and the real package loads libvips
+  # (LGPL-3.0-or-later; FINOS Category X). The stand-in throws a typed ImageBackendAbsent on any call
+  # (core/meetings/modules/no-image-backend). gate:image-licenses fails if libvips is locked again.
+  "sharp": "link:./core/meetings/modules/no-image-backend"
   # protobufjs >=7.5.0 <=7.6.4: DoS via infinite loop. Enters via onnxruntime-web under
   # @huggingface/transformers. Held to ^7 — 8.x is a major bump transformers has not adopted.
   "protobufjs@>=7.5.0 <7.6.5": "^7.6.5"

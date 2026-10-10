@@ -355,6 +355,17 @@
    ]
   },
   {
+   "unique-id": "no-image-backend",
+   "node-type": "module",
+   "name": "no-image-backend",
+   "description": "no-image-backend \u2014 atomic module in meetings",
+   "metadata": [
+    {
+     "path": "core/meetings/modules/no-image-backend"
+    }
+   ]
+  },
+  {
    "unique-id": "record-chunker",
    "node-type": "module",
    "name": "record-chunker",
@@ -1748,6 +1759,7 @@
       "join",
       "mixed-capture-core",
       "mixed-pipeline",
+      "no-image-backend",
       "record-chunker",
       "recording",
       "remote-browser",
