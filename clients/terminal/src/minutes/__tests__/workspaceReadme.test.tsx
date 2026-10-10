@@ -235,7 +235,9 @@ describe("the panel stands on a workspace README and nowhere else", () => {
     // title, not a clause in the middle of a sentence about people.
     expect(container.querySelector("[data-ws-eyebrow]")?.textContent).toBe("Shared workspace");
     expect(where.textContent).toContain("you");
-    // between the crumb above and the prose below — the reading order is the claim
+    // between the crumb above and the prose below — the reading order is the claim. The body is
+    // compiled as MDX asynchronously, so wait for it rather than racing it (it lost under load).
+    await waitFor(() => expect(container.textContent).toContain("The workspace body."));
     const text = container.textContent ?? "";
     expect(text.indexOf("Shared workspace")).toBeLessThan(text.indexOf("The workspace body."));
     expect(container.querySelector("[data-ws-readme]")?.getAttribute("data-ws-kind")).toBe("group");

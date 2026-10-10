@@ -108,3 +108,42 @@ describe("the one date formatter", () => {
     expect(html).toMatch(/title="[^"]*2026[^"]*"/);
   });
 });
+
+describe("lists of records (a page's `sources`) never collapse to a sliver", () => {
+  // The founder's person page: each source label one character per line, its date on top of it, the
+  // row 1,200px tall. Cause: a nested table (an inline-size container, which has NO intrinsic width)
+  // inside an inline, shrink-to-fit list item. jsdom cannot lay text out, so this holds the
+  // STRUCTURE that makes the collapse impossible, for every shape a frontmatter list takes.
+  const SHAPES: unknown[] = [
+    [{ Gmail: "2026-09-17" }, { "linkedin/in/person-name-0a00b0000": "2026-10-10" }],
+    [{ source: "Notes", date: "2026-10-08", url: "https://example.com/n" }],
+    [{ a: 1, b: { c: 2 } }, "plain"],
+    [{ title: "Only a title" }],
+  ];
+  it("no table is ever rendered inside an inline list item", () => {
+    for (const v of SHAPES) {
+      const { container } = render(<KeyValue items={[{ key: "sources", value: kvValue(v) }]} />);
+      expect(container.querySelector(".vx-kv-list-item .vx-kv"), JSON.stringify(v)).toBeNull();
+      cleanup();
+    }
+  });
+  it("a one-key record reads as one line: the label truncating, then its date as a unit", () => {
+    const html = renderToStaticMarkup(<>{kvValue([{ Gmail: "2026-09-17" }])}</>);
+    expect(html).toContain('class="vx-kv-items"');
+    expect(html).toContain('title="Gmail"');
+    expect(html).toMatch(/<time class="vx-nowrap vx-tabular" dateTime="2026-09-17"/);
+  });
+  it("a record with a URL is a safe link", () => {
+    const html = renderToStaticMarkup(<>{kvValue([{ source: "Notes", date: "2026-10-08", url: "https://example.com/n" }])}</>);
+    expect(html).toContain('href="https://example.com/n"');
+    expect(html).toContain('rel="noopener noreferrer"');
+  });
+  it("tags and aliases stay a comma run of scalars", () => {
+    const html = renderToStaticMarkup(<>{kvValue(["Example Co", "example-company"])}</>);
+    expect(html).toContain('class="vx-kv-list"');
+    expect(html).not.toContain("vx-kv-items");
+  });
+  it("a table always fills its line (an inline-size container has no width of its own)", () => {
+    expect(CSS).toMatch(/\.vx-kv\s*\{\s*width:\s*100%/);
+  });
+});

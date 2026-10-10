@@ -23,25 +23,22 @@ export function ScaffoldRefusalCard({ refusal, signedInAs, onDismiss }: {
   const c = refusalCopy(refusal, signedInAs);
   return (
     <div role="alert" data-scaffold-refusal={refusal.reason}
-      style={{ flex: "none", margin: "12px 14px 0", padding: "12px 14px", borderRadius: 8,
-        border: "1px solid var(--line)", background: "var(--surface-0)" }}>
-      <div style={{ ...ty.title, fontSize: 13.5, color: "var(--t1)", marginBottom: 4 }}>{c.title}</div>
-      <div data-refusal="body" style={{ ...ty.body, color: "var(--t3)", lineHeight: 1.55 }}>{c.body}</div>
-      <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+      className="mt-3 mr-3 mb-0 ml-3 pt-3 pr-3 pb-3 pl-3 r-md bd bg-0" style={{ flex: "none" }}>
+      <div className="t-sm c-1 mb-1" style={{ ...ty.title }}>{c.title}</div>
+      <div data-refusal="body" className="c-3 lh-normal" style={{ ...ty.body }}>{c.body}</div>
+      <div className="mt-2" style={{ display: "flex", gap: 8 }}>
         {/* THE WAY OUT, NEXT TO THE DIAGNOSIS (F48). Signing out lands on the sign-in screen, which
             is where somebody on the wrong account has to get to. Without this the card states a
             problem whose only fix is hidden in a menu at the foot of a rail they may have
             collapsed. It is the SAME door the account menu opens, not a second one. */}
         {c.offerSwitch && (
           <button data-refusal="switch" onClick={switchAccount}
-            style={{ ...ty.chip, color: "var(--t1)", background: "transparent",
-              border: "1px solid var(--line2)", borderRadius: 6, padding: "3px 10px", cursor: "pointer" }}>
+            className="c-1 bg-none bd-strong r-md pt-0_5 pr-2 pb-0_5 pl-2" style={{ ...ty.chip, cursor: "pointer" }}>
             Switch account
           </button>
         )}
         <button data-refusal="dismiss" onClick={onDismiss}
-          style={{ ...ty.chip, color: "var(--t3)", background: "transparent",
-            border: "1px solid var(--line)", borderRadius: 6, padding: "3px 10px", cursor: "pointer" }}>
+          className="c-3 bg-none bd r-md pt-0_5 pr-2 pb-0_5 pl-2" style={{ ...ty.chip, cursor: "pointer" }}>
           Dismiss
         </button>
       </div>

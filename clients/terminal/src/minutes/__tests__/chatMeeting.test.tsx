@@ -215,7 +215,7 @@ describe("the rail renders the status the row carries", () => {
   );
 
   it("marks a finished meeting's chat `held`", () => {
-    expect(rail([HELD]).container.querySelector('[data-row-status="held"]')?.textContent).toBe("held");
+    expect(rail([HELD]).container.querySelector('[data-row-status="held"]')?.textContent).toBe("Held");
   });
 
   it("does not say `live` twice — the accent word where the time goes already does", () => {

@@ -11,8 +11,8 @@ import { LayoutServiceId, type ActiveTab } from "../workbench/layout";
 import { registerCommand, type TabProps } from "../contributions";
 import { meetingsOnly } from "../app/mode";
 import { AgentWindow, Conversation, opIcon, type Turn, type Op } from "../workbench/agent-window";
-import { Fold, Icon, Menu } from "../ui-kit";
-import { Ellipsis } from "lucide-react";
+import { Chip, ChipRow, Fold, Icon, IconButton, Menu, mergeSources, readSources, type MenuItem } from "../ui-kit";
+import { Crosshair, Ellipsis, Mic, Paperclip, Plus, Send, Square } from "lucide-react";
 import { ReportTurn } from "./ReportThis";
 import { invalidateDocLinkCaches } from "../ui-kit/docLinks";
 import { startStreamingDictation, type StreamingDictation } from "../ui-kit/micDictation";
@@ -217,14 +217,15 @@ function fileLabel(path: string): string {
   return path.split("/").filter(Boolean).pop()?.replace(/\.md$/, "") || path;
 }
 
+/** A reference written in the text (`@file:…`, a meeting): static, so a Tag with its type icon —
+ *  not a coloured pill (guidelines §4.5). The raw token is its tooltip. */
 function ReferenceChip({ refToken }: { refToken: ReferenceToken }) {
   const isFile = refToken.kind === "file";
   const label = isFile ? fileLabel(refToken.value) : refToken.value;
   return (
-    <span title={refToken.raw}
-      style={{ display: "inline-flex", alignItems: "center", gap: 5, maxWidth: 220, verticalAlign: "baseline", margin: "0 2px", padding: "1px 7px 1px 5px", borderRadius: 6, border: "1px solid var(--line2)", background: isFile ? "var(--bluebg)" : "var(--accentbg)", color: isFile ? "var(--blue)" : "var(--accent)", fontSize: "0.92em", lineHeight: 1.45, whiteSpace: "nowrap" }}>
-      <Icon name={isFile ? "file" : "cal"} size={11} />
-      <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{label}</span>
+    <span title={refToken.raw} className="vx-tag vx-ref" data-kind={isFile ? "file" : "meeting"}>
+      <Icon name={isFile ? "file" : "cal"} size={12} />
+      <span className="vx-ref-label">{label}</span>
     </span>
   );
 }
@@ -519,7 +520,7 @@ function ComposerReferences({ text }: { text: string }) {
   const refs = referenceTokens(text);
   if (refs.length === 0) return null;
   return (
-    <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 5, minWidth: 0 }}>
+    <div className="vx-refs">
       {refs.map((r) => <ReferenceChip key={`${r.kind}:${r.value}`} refToken={r} />)}
     </div>
   );
@@ -612,10 +613,12 @@ function activeReference(tab: ActiveTab | null): ActiveReference | null {
 }
 
 // ── chat MODE (design-spec meeting-lifecycle-v2, W3): the composer states its meeting phase ────────
-const MODE_CHIP: Record<MeetingPhase, { label: string; color: string; bg: string }> = {
-  prep: { label: "Preparing", color: "var(--accent)", bg: "var(--accentbg)" },
-  live: { label: "In meeting", color: "var(--green)", bg: "var(--greenbg)" },
-  post: { label: "Recap", color: "var(--violet)", bg: "var(--violetbg)" },
+// A phase is a coloured DOT beside its word (never colour alone): live is success, recap is the
+// meeting colour, preparing is neutral — accent is reserved for "this is the one / do this".
+const MODE_CHIP: Record<MeetingPhase, { label: string; tone: "neutral" | "success" | "meeting" }> = {
+  prep: { label: "Preparing", tone: "neutral" },
+  live: { label: "In meeting", tone: "success" },
+  post: { label: "Recap", tone: "meeting" },
 };
 const MODE_PLACEHOLDER: Record<MeetingPhase, string> = {
   prep: "Ask me to build the agenda, research attendees, or draft the brief…",
@@ -811,6 +814,8 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
   const [uploading, setUploading] = useState(false);
   const [value, setValue] = useState("");
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
+  // The model picker's effort levels, offered in the "⋯" menu when the composer is narrow.
+  const [effortItems, setEffortItems] = useState<MenuItem[] | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   // Follow the stream ONLY while the reader is at the bottom — "chat should not fight with me when
@@ -1316,6 +1321,8 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
           // the settled op line. A view that attached to a turn already in flight counted only what
           // it saw; the server counted the turn.
           onSteps: (steps) => patchAgentTurn(key, agentId, (t) => ({ ...t, steps })),
+          // agent-api sends one fetched page per frame; a turn's sources are their union by URL
+          onSources: (items) => { const fresh = readSources(items); if (fresh.length) patchAgentTurn(key, agentId, (t) => ({ ...t, sources: mergeSources(t.sources ?? [], fresh) })); },
           onError: (msg) => patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, text: (t.text ?? "") + (t.text ? "\n\n" : "") + presentError(new Error(msg)).headline })),
           onProgress: () => stick.onContent(),
         },
@@ -1739,56 +1746,40 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
         style={{ border: "1px solid var(--line2)", borderRadius: 14, background: "var(--panel)", padding: "10px 10px 6px 12px", display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}
       >
         {((advertiseFocus && contextRef) || (!minutesOnly() && (ambientEligible || includeSchedule === true)) || (bundleFocus && (bundleFocus.kind === "workspace" || bundleFocus.kind === "today"))) && (
-          <div data-composer-context style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0, flexWrap: "nowrap", overflow: "hidden" }}>
+          <div data-composer-context>
+          {/* ONE LINE OF CONTEXT CHIPS (guidelines §3.3): a "+N" chip says how many are out of
+              view and opens the row; nothing is silently clipped. Chips are interactive (each
+              removes or re-adds a piece of context), so they wear the Chip shape — no dashed
+              borders, no uppercase "FOCUS" label: the crosshair icon says it. */}
+          <ChipRow label="context chips">
             {/* ambient schedule chip — the context bundle's always-visible half: on = the agent
                 sees today's schedule; × turns it off; ghost chip re-adds. HIDDEN in minutes mode
                 for now (founder 2026-08-22) — the context still flows, the chip just doesn't. */}
             {minutesOnly() ? null : ambientOn ? (
-              <span title="The agent sees your schedule (today, upcoming, live) on this surface"
-                style={{ flex: "none", display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, color: "var(--t2)", background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 999, padding: "2px 4px 2px 9px" }}>
-                <Icon name="cal" size={10} /> Schedule · today
-                <button aria-label="Remove schedule context" title="Remove schedule context for this session" onClick={() => setAmbient(false)}
-                  style={{ background: "none", border: "none", color: "var(--t3)", cursor: "pointer", display: "flex", padding: 2 }}><Icon name="x" size={10} /></button>
-              </span>
+              <Chip icon={<Icon name="cal" size={14} />} title="The agent sees your schedule (today, upcoming, live) on this surface"
+                onRemove={() => setAmbient(false)} removeLabel="Remove schedule context">Schedule · today</Chip>
             ) : ambientEligible ? (
-              <button onClick={() => setAmbient(null)} title="Include your schedule in the agent's context"
-                style={{ flex: "none", display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, color: "var(--t3)", background: "transparent", border: "1px dashed var(--line2)", borderRadius: 999, padding: "2px 9px", cursor: "pointer" }}>
-                + schedule
-              </button>
+              <Chip ghost icon={<Plus size={14} strokeWidth={1.75} />} title="Include your schedule in the agent's context" onClick={() => setAmbient(null)}>Schedule</Chip>
             ) : null}
             {/* B4 carve: the meeting focus is ONE chip — `Preparing · Title ×` — never a mono
                 uppercase label plus a second raw-id Focus chip for the same meeting. */}
             {advertiseFocus && contextRef && contextRef.kind === "meeting" && activeMeeting ? (() => {
               const mode = MODE_CHIP[meetingPhase(activeMeeting)];
               return (
-                <span title={`This chat is grounded in the meeting's ${mode.label.toLowerCase()} state`}
-                  style={{ flex: "none", display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11.5,
-                    fontWeight: 600, color: mode.color, background: mode.bg, borderRadius: 999,
-                    padding: "2px 5px 2px 10px", maxWidth: 260, minWidth: 0 }}>
-                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
-                    {mode.label} · {meetingLabel(activeMeeting)}
-                  </span>
-                  <button aria-label="Clear focus" title="Clear focus" onClick={() => setFocusCleared(true)}
-                    style={{ background: "none", border: "none", color: mode.color, opacity: 0.7, cursor: "pointer", display: "flex", padding: 2, flex: "none" }}><Icon name="x" size={10} /></button>
-                </span>
+                <Chip icon={<span className="vx-dot" data-tone={mode.tone} />} title={`This chat is grounded in the meeting's ${mode.label.toLowerCase()} state`}
+                  onRemove={() => setFocusCleared(true)} removeLabel="Clear focus">{mode.label} · {meetingLabel(activeMeeting)}</Chip>
               );
             })() : advertiseFocus && contextRef ? (
-              <>
-                <span style={{ color: "var(--t3)", fontSize: 11, textTransform: "uppercase", letterSpacing: ".05em", flex: "none" }}>Focus</span>
-                <ReferenceChip refToken={contextRef} />
-                <button aria-label="Clear focus" title="Clear focus" onClick={() => setFocusCleared(true)} style={{ background: "none", border: "none", color: "var(--t3)", cursor: "pointer", display: "flex", padding: 0, marginLeft: 2, flex: "none" }}><Icon name="x" size={12} /></button>
-              </>
+              <Chip icon={<Crosshair size={14} strokeWidth={1.75} aria-label="Focus" />} title={`Focus: ${contextRef.raw}`}
+                onRemove={() => setFocusCleared(true)} removeLabel="Clear focus">{contextRef.kind === "file" ? fileLabel(contextRef.value) : contextRef.value}</Chip>
             ) : null}
             {(!advertiseFocus || !contextRef) && bundleFocus && (bundleFocus.kind === "workspace" || bundleFocus.kind === "today") && (
-              <>
-                <span style={{ color: "var(--t3)", fontSize: 11, textTransform: "uppercase", letterSpacing: ".05em", flex: "none" }}>Focus</span>
-                <span style={{ flex: "none", display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, color: bundleFocus.kind === "workspace" ? "var(--blue)" : "var(--t2)", background: bundleFocus.kind === "workspace" ? "var(--bluebg)" : "var(--panel2)", border: "1px solid var(--line)", borderRadius: 6, padding: "1px 7px" }}>
-                  <Icon name={bundleFocus.kind === "workspace" ? "panel" : "cal"} size={10} />
-                  {bundleFocus.kind === "workspace" ? `Workspace · ${bundleFocus.slug}` : "Today"}
-                </span>
-                <button aria-label="Clear focus" title="Clear focus" onClick={() => setFocusCleared(true)} style={{ background: "none", border: "none", color: "var(--t3)", cursor: "pointer", display: "flex", padding: 0, marginLeft: 2, flex: "none" }}><Icon name="x" size={12} /></button>
-              </>
+              <Chip icon={bundleFocus.kind === "workspace" ? <Crosshair size={14} strokeWidth={1.75} aria-label="Focus" /> : <Icon name="cal" size={14} />}
+                onRemove={() => setFocusCleared(true)} removeLabel="Clear focus">
+                {bundleFocus.kind === "workspace" ? `Workspace · ${bundleFocus.slug}` : "Today"}
+              </Chip>
             )}
+          </ChipRow>
           </div>
         )}
         <ComposerReferences text={value} />
@@ -1810,6 +1801,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
             effort shows as an icon, below 400px attach and dictate move into a "⋯" menu — and the
             model and send controls are always visible. */}
         <textarea
+          data-ring-host
           ref={inputRef}
           value={value}
           onChange={(e) => setValue(e.target.value)}
@@ -1829,41 +1821,30 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
         />
         <div data-composer-toolbar className="vx-container" style={{ display: "flex", alignItems: "center", flexWrap: "nowrap", gap: 4, minWidth: 0 }}>
           <Fold at={400} wide={<>
-          <button type="button" aria-label="Attach files" title="Attach files" disabled={busy || uploading} onClick={() => fileInputRef.current?.click()}
-            style={{ background: "transparent", color: "var(--t3)", border: "none", width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", cursor: busy || uploading ? "default" : "pointer", flex: "none", opacity: busy || uploading ? 0.6 : 1 }}>
-            <Icon name="plus" size={16} />
-          </button>
-          <button type="button"
-            aria-label={mic === "rec" ? "Stop recording" : "Dictate"}
-            title={mic === "rec" ? "Stop recording (transcribes into the composer)" : mic === "stt" ? "Transcribing…" : "Dictate"}
-            disabled={uploading || mic === "stt"}
-            onClick={() => void toggleMic()}
-            style={{
-              background: mic === "rec" ? "var(--accentbg)" : "transparent",
-              color: mic === "rec" ? "var(--accent)" : "var(--t3)",
-              border: "none",
-              width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center",
-              cursor: uploading || mic === "stt" ? "default" : "pointer", flex: "none", opacity: mic === "stt" ? 0.6 : 1,
-            }}>
-            {mic === "stt"
-              ? <span className="vx-op-spin" style={{ width: 12, height: 12, border: "2px solid var(--line2)", borderTopColor: "var(--t2)", borderRadius: "50%", display: "block" }} />
-              : <Icon name="mic" size={15} />}
-          </button>
+            <IconButton label="Attach files" disabled={busy || uploading} onClick={() => fileInputRef.current?.click()}>
+              <Paperclip size={16} strokeWidth={1.75} />
+            </IconButton>
+            <IconButton label={mic === "rec" ? "Stop recording" : mic === "stt" ? "Transcribing…" : "Dictate"}
+              pressed={mic === "rec"} loading={mic === "stt"} disabled={uploading || mic === "stt"} onClick={() => void toggleMic()}>
+              <Mic size={16} strokeWidth={1.75} />
+            </IconButton>
           </>} narrow={
             <Menu label="More composer actions" placement="top" triggerData={{ "data-composer-more": "" }}
               trigger={<Ellipsis size={16} strokeWidth={1.75} aria-hidden />}
               items={[
-                { key: "attach", label: "Attach files", icon: <Icon name="plus" size={14} />, disabled: busy || uploading, onSelect: () => fileInputRef.current?.click() },
-                { key: "mic", label: mic === "rec" ? "Stop recording" : mic === "stt" ? "Transcribing…" : "Dictate", icon: <Icon name="mic" size={14} />, disabled: uploading || mic === "stt", onSelect: () => void toggleMic() },
+                { key: "attach", label: "Attach files", icon: <Paperclip size={14} strokeWidth={1.75} />, disabled: busy || uploading, onSelect: () => fileInputRef.current?.click() },
+                { key: "mic", label: mic === "rec" ? "Stop recording" : mic === "stt" ? "Transcribing…" : "Dictate", icon: <Mic size={14} strokeWidth={1.75} />, disabled: uploading || mic === "stt", onSelect: () => void toggleMic() },
+                // below 400px the effort control leaves the toolbar and its levels live here
+                ...(effortItems ?? []),
               ]} />
           } />
           <div style={{ flex: "1 1 auto", minWidth: 0, display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 4 }}>
             {/* THE MODEL THIS CHAT RUNS ON, AND ITS EFFORT (ADR-0043) — beside send, because the next
                 turn is when a pick takes effect. Absent on a deployment with no catalog. */}
-            <ModelPicker session={session} />
+            <ModelPicker session={session} onEffortItems={setEffortItems} />
             {busy
-              ? <button aria-label="Stop" title="Stop" onClick={stop} style={{ background: "var(--panel2)", color: "var(--t1)", border: "1px solid var(--line2)", width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flex: "none" }}><span style={{ width: 10, height: 10, background: "var(--t1)", borderRadius: 2, display: "block" }} /></button>
-              : <button aria-label="Send" disabled={uploading} onClick={() => void onSubmit()} style={{ background: "var(--accent)", color: "var(--on-accent)", border: "none", width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", cursor: uploading ? "default" : "pointer", flex: "none", opacity: uploading ? 0.7 : 1 }}><Icon name="send" size={16} /></button>}
+              ? <IconButton label="Stop" variant="secondary" onClick={stop}><Square size={12} strokeWidth={2.5} fill="currentColor" /></IconButton>
+              : <IconButton label="Send" variant="primary" disabled={uploading} onClick={() => void onSubmit()}><Send size={16} strokeWidth={1.75} /></IconButton>}
           </div>
         </div>
       </div>

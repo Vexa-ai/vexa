@@ -163,48 +163,43 @@ export function RoomOnboarding({ onClose, onCreated }: { onClose: () => void; on
 
   const chip = (label: string, onClick: () => void, primary = false) => (
     <button key={label} onClick={onClick}
-      style={{ background: primary ? "var(--accent)" : "var(--panel)", color: primary ? "var(--bg)" : "var(--t2)",
-        border: primary ? "none" : "1px solid var(--line)", borderRadius: 999, padding: "6px 13px", fontSize: 12.5,
-        cursor: "pointer", fontWeight: primary ? 600 : 400 }}>{label}</button>
+      className="r-full pt-1_5 pr-3 pb-1_5 pl-3 t-xs" style={{ background: primary ? "var(--accent)" : "var(--panel)", color: primary ? "var(--bg)" : "var(--t2)", border: primary ? "none" : "1px solid var(--line)", cursor: "pointer", fontWeight: primary ? 600 : 400 }}>{label}</button>
   );
 
   return (
     <Modal title="New workspace" onClose={onClose} width={470}>
       <div style={{ display: "flex", flexDirection: "column", height: 430 }}>
-        <div ref={scroller} style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 12, paddingRight: 4 }}>
+        <div ref={scroller} className="pr-1" style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 12 }}>
           {msgs.map((m, i) => (
             <div key={i} style={{ alignSelf: m.who === "u" ? "flex-end" : "flex-start", maxWidth: "88%" }}>
-              <div style={{ fontSize: 12.5, lineHeight: 1.6, whiteSpace: "pre-wrap", wordBreak: "break-word",
-                background: m.who === "u" ? "var(--panel2)" : "transparent",
-                color: m.who === "u" ? "var(--t1)" : "var(--t2)",
-                borderRadius: 8, padding: m.who === "u" ? "7px 11px" : "0" }}>{m.text}</div>
+              <div className="t-xs lh-normal r-md" style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", background: m.who === "u" ? "var(--panel2)" : "transparent", color: m.who === "u" ? "var(--t1)" : "var(--t2)", padding: m.who === "u" ? "7px 11px" : "0" }}>{m.text}</div>
             </div>
           ))}
-          {err && <div role="alert" style={{ fontSize: 12, color: "var(--danger)", background: "var(--dangerbg)", borderRadius: 8, padding: "8px 10px" }}>⚠ {err}</div>}
+          {err && <div role="alert" className="t-xs c-danger bg-danger-tint r-md pt-2 pr-2 pb-2 pl-2">⚠ {err}</div>}
         </div>
         {phase === "who" && (
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 7, padding: "10px 0 2px" }}>
+          <div className="pt-2 pr-0 pb-0_5 pl-0" style={{ display: "flex", flexWrap: "wrap", gap: 7 }}>
             {chip("Anyone from our organisation", () => pickMode("org"), true)}
             {chip("A list I’ll name", () => pickMode("list"))}
             {chip("Anyone in the meeting", () => pickMode("open"))}
           </div>
         )}
         {phase === "focus" && (
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 7, padding: "10px 0 2px" }}>
+          <div className="pt-2 pr-0 pb-0_5 pl-0" style={{ display: "flex", flexWrap: "wrap", gap: 7 }}>
             {chip("Looks right", () => { setInput("looks right"); setTimeout(() => { const t = "looks right"; setMsgs((m) => [...m, { who: "u", text: t }]); say("Good. Last thing — who belongs in this workspace?"); setPhase("who"); setInput(""); }, 0); }, true)}
           </div>
         )}
         {phase === "done" ? (
-          <div style={{ display: "flex", justifyContent: "flex-end", paddingTop: 10 }}>
+          <div className="pt-2" style={{ display: "flex", justifyContent: "flex-end" }}>
             {chip("Done", onClose, true)}
           </div>
         ) : phase !== "who" && phase !== "creating" ? (
-          <div style={{ display: "flex", gap: 8, paddingTop: 10 }}>
+          <div className="pt-2" style={{ display: "flex", gap: 8 }}>
             <input autoFocus value={input} disabled={phase === ("creating" as Phase)}
               placeholder={phase === "name" ? "Architecture review" : phase === "emails" ? "ana@bank.example, jonas@bank.example" : "Type your answer…"}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter") submitText(); }}
-              style={{ flex: 1, fontSize: 13, padding: "9px 11px", background: "var(--bg)", border: "1px solid var(--line2)", borderRadius: 8, color: "var(--t1)", outline: "none" }} />
+              className="t-sm pt-2 pr-3 pb-2 pl-3 bg-0 bd-strong r-md c-1" style={{ flex: 1, outline: "none" }} />
             {chip("Send", submitText, true)}
           </div>
         ) : null}

@@ -117,3 +117,76 @@
   background: var(--surface-0);
   border-right: 1px solid var(--border-subtle);
 }
+
+/* ── the chat list (minutes/Rail.tsx) ────────────────────────────────────────────────────── */
+.vx-rail { display: flex; flex-direction: column; min-height: 0; background: var(--surface-0); border-right: 1px solid var(--border-subtle); }
+.vx-panelhead.vx-rail-head { height: 46px; flex: none; gap: var(--space-1); }
+/* In the narrow rail the delete action OVERLAYS the time on hover and focus instead of reserving
+ * its width on every row — the title keeps the room, and the row still never reflows. */
+.vx-rail .vx-row2-actions { position: absolute; right: var(--space-1); top: 50%; transform: translateY(-50%); padding: 0; border-radius: var(--radius-sm); background: var(--surface-3); }
+.vx-rail .vx-row2:not(:hover):not(:focus-within) .vx-row2-actions { pointer-events: none; }
+.vx-rail-tabs { min-width: 0; display: flex; }
+.vx-rail-tabs .vx-tab { min-width: 0; padding: 0 var(--space-2); }
+.vx-rail-list { flex: 1; overflow-y: auto; padding: var(--space-2); display: flex; flex-direction: column; gap: var(--space-0_5); }
+.vx-rail-empty { padding: var(--space-1) var(--space-2); font-size: var(--text-sm); color: var(--text-3); }
+.vx-rail-dot { width: 6px; height: 6px; }
+.vx-rail-dot:not([data-tone])[data-kind="chat"] { background: transparent; box-shadow: inset 0 0 0 1px var(--border); }
+.vx-rail-dot:not([data-tone])[data-kind="meeting"] { background: var(--border); }
+.vx-rail-target { max-width: 96px; overflow: hidden; text-overflow: ellipsis; flex: none; }
+.vx-row2-meta[data-live] { color: var(--success-text); }
+.vx-acct { position: relative; flex: none; border-top: 1px solid var(--border-subtle); }
+.vx-acct-menu { bottom: calc(100% + 6px); left: var(--space-2); right: var(--space-2); }
+.vx-acct-badge { display: flex; align-items: center; gap: var(--space-2); width: 100%; padding: var(--space-2) 10px; background: transparent; border: none; cursor: pointer; text-align: left; font: inherit; color: inherit; }
+.vx-acct-badge:hover, .vx-acct-badge[aria-expanded="true"] { background: var(--surface-2); }
+.vx-acct-badge:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+.vx-acct-avatar { width: 24px; height: 24px; border-radius: var(--radius-full); flex: none; background: var(--surface-3); color: var(--text-1); display: flex; align-items: center; justify-content: center; font-size: var(--text-xs); font-weight: var(--weight-semibold); }
+.vx-acct-text { min-width: 0; flex: 1; display: flex; flex-direction: column; }
+.vx-acct-name, .vx-acct-email { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vx-acct-name { font-size: var(--text-sm); font-weight: var(--weight-medium); color: var(--text-1); }
+.vx-acct-email { font-size: var(--text-xs); color: var(--text-3); }
+.vx-acct-more { color: var(--text-3); flex: none; }
+
+/* ── the pages panel (minutes/PagesPanel.tsx) ────────────────────────────────────────────── */
+.vx-pages-head { height: 46px; flex: none; display: flex; align-items: center; gap: var(--space-1); padding: 0 var(--space-2); border-bottom: 1px solid var(--border-subtle); border-left: 1px solid var(--border-subtle); background: color-mix(in srgb, var(--surface-1) 55%, transparent); flex-wrap: nowrap; }
+.vx-pages { display: flex; flex: 1 1 0%; min-height: 0; background: var(--surface-0); border-left: 1px solid var(--border-subtle); }
+.vx-pages-col { flex: 1 1 0%; display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+.vx-doctab { flex: none; display: inline-flex; align-items: center; min-width: 72px; max-width: 176px; height: var(--control-sm); border-radius: var(--radius-md); color: var(--text-2); }
+.vx-doctab:hover { background: var(--surface-3); }
+.vx-doctab[data-active] { background: var(--surface-1); color: var(--text-1); }
+.vx-doctab-label { flex: 1 1 auto; min-width: 0; height: 100%; padding: 0 var(--space-1) 0 10px; background: none; border: none; color: inherit; font: inherit; font-size: var(--text-sm); cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; border-radius: inherit; }
+.vx-doctab[data-preview] .vx-doctab-label { font-style: italic; }
+.vx-doctab-act { flex: none; width: var(--control-xs); height: var(--control-xs); display: inline-flex; align-items: center; justify-content: center; background: none; border: none; border-radius: var(--radius-sm); color: var(--text-3); cursor: pointer; padding: 0; opacity: 0; }
+.vx-doctab:hover .vx-doctab-act, .vx-doctab:focus-within .vx-doctab-act, .vx-doctab[data-active] .vx-doctab-act, .vx-doctab-act[aria-pressed="true"] { opacity: 1; }
+.vx-doctab-act:hover { color: var(--text-1); background: var(--surface-3); }
+.vx-doctab-label:focus-visible, .vx-doctab-act:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+.vx-doc-head { flex: none; display: flex; flex-wrap: wrap; row-gap: var(--space-1); align-items: center; gap: var(--space-1); min-height: 44px; padding: var(--space-1_5) var(--space-3) var(--space-1_5) var(--space-5); border-bottom: 1px solid var(--border-subtle); min-width: 0; }
+.vx-doc-name { flex: 0 1 auto; min-width: 0; font-size: var(--text-md); font-weight: var(--weight-semibold); color: var(--text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vx-doc-error { flex: 0 1 auto; min-width: 0; font-size: var(--text-xs); color: var(--danger-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vx-doc-crumb { flex: none; padding: var(--space-1_5) var(--space-5); border-bottom: 1px solid var(--border-subtle); min-width: 0; }
+.vx-doc-body { position: relative; flex: 1; min-height: 0; overflow-y: auto; padding: var(--space-4) var(--space-5) 40px; font-size: var(--text-md); line-height: 1.6; color: var(--text-1); }
+.vx-doc-body[data-flush] { padding: 0; display: flex; }
+.vx-doc-body[data-canvas] { overflow-y: hidden; }
+.vx-doc-notice { color: var(--text-2); }
+.vx-doc-empty { color: var(--text-3); }
+.vx-listing { display: flex; flex-direction: column; gap: 1px; }
+.vx-listing-entry { color: var(--text-2); font-family: var(--font-mono); font-size: var(--text-mono-sm); border-radius: var(--radius-md); }
+.vx-listing-entry[data-file] { color: var(--text-1); }
+.vx-listing-entry:hover { background: var(--surface-2); }
+
+/* ── the file navigator (minutes/Navigator.tsx) ──────────────────────────────────────────── */
+.vx-nav { flex: none; width: 236px; display: flex; flex-direction: column; min-height: 0; background: var(--surface-0); border-right: 1px solid var(--border-subtle); }
+.vx-nav-search { flex: none; display: flex; align-items: center; gap: var(--space-1_5); padding: var(--space-2) var(--space-2) var(--space-1_5); color: var(--text-3); }
+.vx-nav-filter { flex: 1 1 0%; height: var(--control-xs); font-size: var(--text-xs); padding: 0 var(--space-2); }
+.vx-nav-note { padding: var(--space-1) var(--space-2); font-size: var(--text-xs); color: var(--text-3); line-height: 1.45; }
+.vx-nav-list { flex: 1; min-height: 0; overflow-y: auto; padding: 0 var(--space-1_5) var(--space-3); }
+.vx-nav-group { padding: var(--space-2) 0 var(--space-1); }
+.vx-nav-group > .vx-label { padding: 0 var(--space-1_5) var(--space-1); }
+.vx-nav-entry { padding-left: calc(6px + var(--depth, 0) * 11px); height: 26px; font-size: var(--text-sm); color: var(--text-2); }
+.vx-nav-entry[data-file] { color: var(--text-1); }
+.vx-nav-entry:hover { background: var(--surface-2); }
+.vx-nav-ws { font-weight: var(--weight-medium); color: var(--text-1); }
+.vx-nav-caret { flex: none; color: var(--text-3); }
+.vx-nav-caret[data-open] { transform: rotate(90deg); }
+.vx-nav-row .vx-row2-actions { position: absolute; right: 2px; top: 50%; transform: translateY(-50%); padding: 0; }
+.vx-nav-row:not(:hover):not(:focus-within) .vx-row2-actions { pointer-events: none; }
+@media (prefers-reduced-motion: no-preference) { .vx-nav-caret { transition: transform var(--dur-fast) var(--ease-out); } }

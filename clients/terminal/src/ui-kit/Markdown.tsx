@@ -11,6 +11,8 @@ import { Fragment, type ReactNode } from "react";
 import { Card, CardGroup, InternalLink, Wikilink, isInternalHref, useOpenEntity } from "./docLinks";
 import { DocImage } from "./docImages";
 import { MermaidDiagram, isMermaidFence } from "./docDiagrams";
+import { EntityChip } from "./primitives/Chip";
+import { ExternalLink } from "./primitives/Links";
 
 // A workspace-doc path in inline code → clickable to open the doc. Matches kg/ docs by any
 // spelling the agent uses (relative `kg/entities/x.md` or the verbatim absolute mount path
@@ -23,12 +25,11 @@ const ENTITY_PATH = /^(?:\/workspaces\/[\w./ -]+|[\w./ -]*\.md|PURPOSE|[\w./-]*\
 // workspace context (DocMeta/DocNav) via useOpenEntity, same as every other link.
 function EntityCode({ code }: { code: string }) {
   const openEntity = useOpenEntity();
-  return (
-    <code onClick={() => openEntity({ path: code })}
-      style={{ fontFamily: "var(--mono)", fontSize: "0.88em", background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 4, padding: "0.5px 5px", color: "var(--blue)", cursor: "pointer" }}>
-      {code}
-    </code>
-  );
+  // A workspace document named in the text is a LINK to it, so it wears the entity chip — not mono
+  // blue code that reads as code and behaves as a link (guidelines §4.5). The path is the tooltip;
+  // the chip shows the file's name.
+  const name = code.split("/").filter(Boolean).pop() ?? code;
+  return <EntityChip kind="doc" title={code} onOpen={() => openEntity({ path: code })}>{name}</EntityChip>;
 }
 
 // ── HTML comments are machinery, and machinery is not page copy ────────────────────
@@ -92,10 +93,7 @@ function inline(text: string): ReactNode[] {
       const code = seg.slice(1, -1);
       out.push(ENTITY_PATH.test(code)
         ? <EntityCode key={`c${ci}`} code={code} />
-        : <code key={`c${ci}`}
-            style={{ fontFamily: "var(--mono)", fontSize: "0.88em", background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 4, padding: "0.5px 5px", color: "var(--t1)" }}>
-            {code}
-          </code>,
+        : <code key={`c${ci}`} className="vx-code">{code}</code>,
       );
     } else {
       emphasis(seg, `${ci}`, out);
@@ -131,15 +129,17 @@ function emphasis(text: string, key: string, out: ReactNode[]): void {
       const lm = tok.match(/^\[([^\]]*)\]\(([^)]+)\)$/)!;
       out.push(isInternalHref(lm[2])
         ? <InternalLink key={`${key}-l${i}`} href={lm[2]}>{lm[1] || lm[2]}</InternalLink>
-        : <a key={`${key}-l${i}`} href={/^https?:/i.test(lm[2]) || lm[2].startsWith("#") ? lm[2] : undefined} target="_blank" rel="noreferrer noopener" style={{ color: "var(--blue)", textDecoration: "underline" }}>
-            {lm[1] || lm[2]}
-          </a>,
+        // external: the one ExternalLink (http/https only, noopener noreferrer); an in-page
+        // anchor stays a plain link; any other scheme renders as text
+        : lm[2].startsWith("#")
+          ? <a key={`${key}-l${i}`} className="vx-link" href={lm[2]}>{lm[1] || lm[2]}</a>
+          : <ExternalLink key={`${key}-l${i}`} href={lm[2]}>{lm[1] || lm[2]}</ExternalLink>,
       );
     } else if (m[3]) {
       // **bold** / __bold__ — recurse so **[[wikilink]]** renders the chip, not literal brackets
       const inner: ReactNode[] = [];
       emphasis(tok.slice(2, -2), `${key}-b${i}`, inner);
-      out.push(<strong key={`${key}-b${i}`} style={{ fontWeight: 600, color: "var(--t1)" }}>{inner}</strong>);
+      out.push(<strong key={`${key}-b${i}`} className="fw-600 c-1">{inner}</strong>);
     } else if (m[4]) {
       // *italic* / _italic_ — recurse for the same reason
       const innerI: ReactNode[] = [];
@@ -246,8 +246,8 @@ export function Markdown({ children, style }: { children: string; style?: React.
   const flushList = (items: string[], ordered: boolean) => {
     const Tag = ordered ? "ol" : "ul";
     blocks.push(
-      <Tag key={key++} style={{ margin: "4px 0 8px", paddingLeft: 20, display: "flex", flexDirection: "column", gap: 2 }}>
-        {items.map((it, j) => <li key={j} style={{ lineHeight: 1.55 }}>{inline(it)}</li>)}
+      <Tag key={key++}>
+        {items.map((it, j) => <li key={j}>{inline(it)}</li>)}
       </Tag>,
     );
   };
@@ -271,7 +271,7 @@ export function Markdown({ children, style }: { children: string; style?: React.
         continue;
       }
       blocks.push(
-        <pre key={key++} style={{ fontFamily: "var(--mono)", fontSize: 12, background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 8, padding: "9px 11px", margin: "6px 0 10px", overflowX: "auto", lineHeight: 1.5, color: "var(--t1)" }}>
+        <pre key={key++} className="f-mono t-xs bg-3 bd r-md pt-2 pr-3 pb-2 pl-3 mt-1_5 mr-0 mb-2 ml-0 lh-snug c-1" style={{ overflowX: "auto" }}>
           <code>{buf.join("\n")}</code>
         </pre>,
       );
@@ -283,7 +283,7 @@ export function Markdown({ children, style }: { children: string; style?: React.
 
     // horizontal rule
     if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) {
-      blocks.push(<hr key={key++} style={{ border: "none", borderTop: "1px solid var(--line)", margin: "12px 0" }} />);
+      blocks.push(<hr key={key++} className="bd-none bd-t mt-3 mr-0 mb-3 ml-0" />);
       i++; continue;
     }
 
@@ -292,7 +292,7 @@ export function Markdown({ children, style }: { children: string; style?: React.
     if (h) {
       const lvl = h[1].length;
       blocks.push(
-        <div key={key++} style={{ fontSize: HEADING_SIZE[lvl], fontWeight: 600, color: "var(--t1)", lineHeight: 1.3, margin: lvl <= 2 ? "12px 0 6px" : "10px 0 4px" }}>
+        <div key={key++} className="fw-600 c-1 lh-tight" style={{ fontSize: HEADING_SIZE[lvl], margin: lvl <= 2 ? "12px 0 6px" : "10px 0 4px" }}>
           {inline(h[2])}
         </div>,
       );
@@ -304,7 +304,7 @@ export function Markdown({ children, style }: { children: string; style?: React.
       const buf: string[] = [];
       while (i < lines.length && /^\s*>/.test(lines[i])) { buf.push(lines[i].replace(/^\s*>\s?/, "")); i++; }
       blocks.push(
-        <blockquote key={key++} style={{ borderLeft: "3px solid var(--line2)", paddingLeft: 12, margin: "6px 0 8px", color: "var(--t2)", lineHeight: 1.55 }}>
+        <blockquote key={key++}>
           {inline(buf.join("\n"))}
         </blockquote>,
       );
@@ -337,7 +337,7 @@ export function Markdown({ children, style }: { children: string; style?: React.
       const parsed = parseCardBlock(buf.join("\n"));
       if (parsed.cards.length === 0) {
         // not actually card markup (e.g. a lone unclosed tag) — show it as literal text
-        blocks.push(<p key={key++} style={{ margin: "0 0 8px", lineHeight: 1.6 }}>{inline(buf.join(" "))}</p>);
+        blocks.push(<p key={key++} className="mt-0 mr-0 mb-2 ml-0 lh-normal">{inline(buf.join(" "))}</p>);
         continue;
       }
       const rendered = parsed.cards.map((c, j) => (
@@ -345,7 +345,7 @@ export function Markdown({ children, style }: { children: string; style?: React.
       ));
       blocks.push(parsed.grouped
         ? <CardGroup key={key++} cols={parsed.cols}>{rendered}</CardGroup>
-        : <div key={key++} style={{ display: "flex", flexDirection: "column", gap: 10, margin: "8px 0 12px" }}>{rendered}</div>);
+        : <div key={key++} className="mt-2 mr-0 mb-3 ml-0" style={{ display: "flex", flexDirection: "column", gap: 10 }}>{rendered}</div>);
       continue;
     }
 
@@ -361,11 +361,11 @@ export function Markdown({ children, style }: { children: string; style?: React.
         i++;
       }
       blocks.push(
-        <table key={key++} style={{ width: "100%", borderCollapse: "collapse", margin: "6px 0 10px", color: "var(--t1)", fontSize: "inherit", lineHeight: 1.45 }}>
+        <table key={key++} className="mt-1_5 mr-0 mb-2 ml-0 c-1 lh-snug" style={{ width: "100%", borderCollapse: "collapse", fontSize: "inherit" }}>
           <thead>
             <tr>
               {table.header.map((cell, col) => (
-                <th key={col} style={{ background: "var(--panel)", border: "1px solid var(--line2)", padding: "6px 9px", textAlign: table.align[col], color: "var(--t1)", fontWeight: 600 }}>
+                <th key={col} className="bg-2 bd-strong pt-1_5 pr-2 pb-1_5 pl-2 c-1 fw-600" style={{ textAlign: table.align[col] }}>
                   {inline(cell)}
                 </th>
               ))}
@@ -375,7 +375,7 @@ export function Markdown({ children, style }: { children: string; style?: React.
             {rows.map((row, rowIndex) => (
               <tr key={rowIndex}>
                 {row.map((cell, col) => (
-                  <td key={col} style={{ border: "1px solid var(--line)", padding: "6px 9px", textAlign: table.align[col], color: "var(--t2)", verticalAlign: "top" }}>
+                  <td key={col} className="bd pt-1_5 pr-2 pb-1_5 pl-2 c-2" style={{ textAlign: table.align[col], verticalAlign: "top" }}>
                     {inline(cell)}
                   </td>
                 ))}
@@ -393,11 +393,11 @@ export function Markdown({ children, style }: { children: string; style?: React.
       para.push(lines[i]); i++;
     }
     blocks.push(
-      <p key={key++} style={{ margin: "0 0 8px", lineHeight: 1.6 }}>
+      <p key={key++} className="mt-0 mr-0 mb-2 ml-0 lh-normal">
         {para.map((pl, j) => <Fragment key={j}>{j > 0 && <br />}{inline(pl)}</Fragment>)}
       </p>,
     );
   }
 
-  return <div style={{ color: "var(--t1)", ...style }}>{blocks}</div>;
+  return <div className="vx-prose" style={style}>{blocks}</div>;
 }

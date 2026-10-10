@@ -43,6 +43,7 @@
     "gate:licenses": "node scripts/gates.mjs licenses",
     "gate:image-licenses": "node scripts/gates.mjs image-licenses",
     "gate:runtime-parity": "node scripts/gates.mjs runtime-parity",
+    "gate:ui-design": "node scripts/gates.mjs ui-design",
     "gate:calm": "npx -y @finos/calm-cli@1.47.1 validate -p calm/patterns/meeting-intelligence.pattern.json -a architecture.calm.json",
     "gates": "node scripts/gates.mjs all",
     "observe": "node core/meetings/eval/src/observe.mjs",

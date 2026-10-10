@@ -154,7 +154,8 @@ describe("the chip is on screen exactly while the chat writes there", () => {
     // pins the gap under it: until something knows that name, the chip must still not read
     // `_global`, which is a directory showing through in the one place names belong.
     const { container } = bar({ admin: true, target: GLOBAL_MOUNT });
-    expect(chipFor(container, GLOBAL_MOUNT).textContent).toBe(COMPANY_WORD);
+    // the target chip reads "Writes to <name>" (design guidelines §4.5) — the name is the word
+    expect(chipFor(container, GLOBAL_MOUNT).textContent).toBe(`Writes to ${COMPANY_WORD}`);
     expect(chipFor(container, GLOBAL_MOUNT).textContent).not.toContain("_global");
   });
 

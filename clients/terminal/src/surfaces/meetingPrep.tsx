@@ -12,7 +12,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { registerTab, type TabProps } from "../contributions";
 import { useService, ASK_CHAT_EVENT } from "../platform";
 import { LayoutServiceId } from "../workbench/layout";
-import { Icon } from "../ui-kit";
+import { ConfirmDialog, Icon, ExternalLink } from "../ui-kit";
 import { MdxDoc } from "../ui-kit/MdxDoc";
 import { DateTimePicker } from "../ui-kit/DateTimePicker";
 import { copyText } from "../ui-kit/ContextMenu";
@@ -31,7 +31,7 @@ const field = {
   fontSize: 12.5, padding: "6px 8px", background: "var(--panel)", border: "1px solid var(--line)",
   borderRadius: 7, color: "var(--t1)", outline: "none",
 } as const;
-const label = { fontSize: 10.5, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".06em", fontWeight: 600 } as const;
+// (field labels use the ui-kit `.vx-label`: sentence case, no uppercase eyebrow — guidelines §2.2)
 
 /** THE BRIEF (prep-v3, owner-locked): the workspace README rendered as the page's stage — ONE doc,
  *  team-facing, always the next occurrence's brief. A SEEDED stub never renders as content (bloat
@@ -66,32 +66,32 @@ function Brief({ slug, title }: { slug: string; title: string }) {
   if (state === "loading") return null;
   if (state === "none" || !text) {
     return (
-      <div style={{ margin: "18px 0 0", padding: "12px 14px", border: "1px dashed var(--line2)", borderRadius: 10, fontSize: 12.5, color: "var(--t3)", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+      <div className="mt-4 mr-0 mb-0 ml-0 pt-3 pr-3 pb-3 pl-3 r-lg t-xs c-3" style={{ border: "1px dashed var(--line2)", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         <span style={{ flex: 1, minWidth: 200 }}>No brief yet.</span>
-        <button onClick={askForBrief} style={{ background: "var(--accentbg)", color: "var(--accent)", border: "none", borderRadius: 7, padding: "5px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer", flex: "none" }}>
+        <button onClick={askForBrief} className="bg-accent-tint c-accent bd-none r-md pt-1 pr-3 pb-1 pl-3 t-xs fw-600" style={{ cursor: "pointer", flex: "none" }}>
           Draft the brief — attendees, last time, open items, agenda
         </button>
       </div>
     );
   }
   return (
-    <div style={{ margin: "18px 0 0", border: "1px solid var(--line)", borderRadius: 10, background: "var(--panel)" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 14px 0" }}>
-        <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--green)", flex: "none" }} />
-        <span style={{ fontSize: 10, color: "var(--t3)", letterSpacing: ".08em", fontFamily: "var(--mono)" }}>
+    <div className="mt-4 mr-0 mb-0 ml-0 bd r-lg bg-2">
+      <div className="pt-2 pr-3 pb-0 pl-3" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <span className="r-full bg-success" style={{ width: 6, height: 6, flex: "none" }} />
+        <span className="t-xs c-3 f-mono" style={{ letterSpacing: ".08em" }}>
           team brief · workspace README
         </span>
         <span style={{ flex: 1 }} />
         <button onClick={() => layout.openTab(wsDocTab(slug, "README.md"))}
-          title="Open as a document" style={{ background: "none", border: "none", color: "var(--t3)", fontSize: 11, cursor: "pointer", padding: 0 }}>
+          title="Open as a document" className="bg-none bd-none c-3 t-xs p-0" style={{ cursor: "pointer" }}>
           open
         </button>
         <button onClick={askForBrief} title="Steer the brief in chat"
-          style={{ background: "none", border: "none", color: "var(--t3)", fontSize: 11, cursor: "pointer", padding: 0 }}>
+          className="bg-none bd-none c-3 t-xs p-0" style={{ cursor: "pointer" }}>
           update via chat
         </button>
       </div>
-      <div style={{ padding: "4px 16px 12px", maxHeight: 460, overflow: "auto" }}>
+      <div className="pt-1 pr-4 pb-3 pl-4" style={{ maxHeight: 460, overflow: "auto" }}>
         <MdxDoc style={{ fontSize: 13, lineHeight: 1.55 }}>{text}</MdxDoc>
       </div>
     </div>
@@ -130,23 +130,23 @@ function useOwnBriefNote(enabled: boolean, title: string, nativeId?: string | nu
 function OwnBrief({ note, onSteer }: { note: { path: string; text: string }; onSteer: () => void }) {
   const layout = useService(LayoutServiceId);
   return (
-    <div style={{ margin: "18px 0 0", border: "1px solid var(--line)", borderRadius: 10, background: "var(--panel)" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 14px 0" }}>
-        <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--green)", flex: "none" }} />
-        <span style={{ fontSize: 10, color: "var(--t3)", letterSpacing: ".08em", fontFamily: "var(--mono)" }}>
+    <div className="mt-4 mr-0 mb-0 ml-0 bd r-lg bg-2">
+      <div className="pt-2 pr-3 pb-0 pl-3" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <span className="r-full bg-success" style={{ width: 6, height: 6, flex: "none" }} />
+        <span className="t-xs c-3 f-mono" style={{ letterSpacing: ".08em" }}>
           your brief · this meeting&rsquo;s note
         </span>
         <span style={{ flex: 1 }} />
         <button onClick={() => layout.openTab({ id: `doc:${note.path}`, title: note.path.split("/").pop() ?? note.path, kind: "doc", params: { path: note.path } })}
-          title="Open as a document" style={{ background: "none", border: "none", color: "var(--t3)", fontSize: 11, cursor: "pointer", padding: 0 }}>
+          title="Open as a document" className="bg-none bd-none c-3 t-xs p-0" style={{ cursor: "pointer" }}>
           open
         </button>
         <button onClick={onSteer} title="Steer the brief in chat"
-          style={{ background: "none", border: "none", color: "var(--t3)", fontSize: 11, cursor: "pointer", padding: 0 }}>
+          className="bg-none bd-none c-3 t-xs p-0" style={{ cursor: "pointer" }}>
           update via chat
         </button>
       </div>
-      <div style={{ padding: "4px 16px 12px", maxHeight: 460, overflow: "auto" }}>
+      <div className="pt-1 pr-4 pb-3 pl-4" style={{ maxHeight: 460, overflow: "auto" }}>
         <MdxDoc style={{ fontSize: 13, lineHeight: 1.55 }}>{note.text}</MdxDoc>
       </div>
     </div>
@@ -317,7 +317,13 @@ function MeetingPrepTab({ params }: TabProps) {
   const remove = async () => {
     if (!m) return;
     if (isDraft) { layout.closeTab(PREP_DRAFT_TAB_ID); return; }   // nothing persisted — just discard the draft
-    if (typeof window !== "undefined" && !window.confirm("Delete this planned meeting?")) return;
+    setConfirmDelete(true);
+  };
+  // DELETE ASKS IN A DIALOG, NOT window.confirm (guidelines §4.11, S7): the button names the act.
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const doRemove = async () => {
+    if (!m) return;
+    setConfirmDelete(false);
     setBusy(true);
     try { await deletePlannedMeeting(m.id); refreshMeetings(); layout.closeTab(`prep:${m.id}`); }
     catch (e) { setErr(presentError(e).headline); }
@@ -344,41 +350,42 @@ function MeetingPrepTab({ params }: TabProps) {
   }, [rowGone, layout, meetingId]);
 
   if (!m) {
-    return <div style={{ padding: 32, fontSize: 13, color: "var(--t3)" }}>Loading meeting…</div>;
+    return <div className="p-8 t-sm c-3">Loading meeting…</div>;
   }
   if (!isIntent) {
     return (
-      <div style={{ padding: 32, fontSize: 13, color: "var(--t2)", lineHeight: 1.6 }}>
+      <div className="p-8 t-sm c-2 lh-normal">
         This meeting has started — open it from the Meetings list to see the live view.
       </div>
     );
   }
 
   return (
-    <div style={{ width: "100%", height: "100%", overflow: "auto", boxSizing: "border-box", padding: "24px 28px" }}>
+    <div className="pt-6 pr-6 pb-6 pl-6" style={{ width: "100%", height: "100%", overflow: "auto", boxSizing: "border-box" }}>
+      <ConfirmDialog open={confirmDelete} title="Delete this planned meeting?" confirmLabel="Delete meeting"
+        consequence="This planned meeting is removed from your meetings." busy={busy}
+        onCancel={() => setConfirmDelete(false)} onConfirm={() => void doRemove()} />
       <div style={{ maxWidth: 640 }}>
         {/* TITLE-FIRST hero (prep-v3 carve): no status pills — the page you're on IS the state.
             Title editable in place, honest placeholder, never the "platform · (no link)" fallback. */}
         {readOnly ? (
-          <h2 style={{ margin: "0 0 18px", fontSize: 19, fontWeight: 650, color: "var(--t1)" }}>{headline}</h2>
+          <h2 className="mt-0 mr-0 mb-4 ml-0 t-xl fw-600 c-1">{headline}</h2>
         ) : (
           <input value={title} disabled={busy} placeholder="What's this meeting about?"
             onChange={(e) => setTitle(e.target.value)}
             onBlur={() => { if ((m.title_custom ?? "") !== title.trim()) void patch({ title: title.trim() || null }); }}
             onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
-            style={{ display: "block", width: "100%", boxSizing: "border-box", margin: "0 0 18px", padding: "2px 0 6px",
-              fontSize: 19, fontWeight: 650, color: "var(--t1)", background: "transparent", border: "none",
-              borderBottom: "1px dashed var(--line2)", outline: "none" }} />
+            className="mt-0 mr-0 mb-4 ml-0 pt-0_5 pr-0 pb-1_5 pl-0 t-xl fw-600 c-1 bg-none bd-none" style={{ display: "block", width: "100%", boxSizing: "border-box", borderBottom: "1px dashed var(--line2)", outline: "none" }} />
         )}
 
         {m.auto_join_error && (
-          <div role="alert" style={{ margin: "0 0 14px", padding: "8px 12px", borderRadius: 8, background: "var(--dangerbg)", color: "var(--danger)", fontSize: 12.5, lineHeight: 1.5 }}>
+          <div role="alert" className="mt-0 mr-0 mb-3 ml-0 pt-2 pr-3 pb-2 pl-3 r-md bg-danger-tint c-danger t-xs lh-snug">
             ⚠ Auto-join failed: {m.auto_join_error}
           </div>
         )}
 
         {/* ── meta line (prep-v3 carve): when · Join · auto-join — the raw URL lives behind ⋯ ── */}
-        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 6 }}>
+        <div className="mb-1_5" style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
           <DateTimePicker
             value={m.scheduled_at}
             disabled={readOnly || busy}
@@ -389,23 +396,23 @@ function MeetingPrepTab({ params }: TabProps) {
           {m.meeting_url && (
             /* "Open meeting" not "Join" — the human opens the URL; the notetaker is a separate verb
                (first-run-onboarding frame 6: Join/Send-bot/Auto-join read as flavors of one verb). */
-            <a href={m.meeting_url} target="_blank" rel="noreferrer"
-              style={{ background: "var(--accent)", color: "var(--on-accent)", borderRadius: 7, padding: "5px 14px", fontSize: 12.5, fontWeight: 600, textDecoration: "none" }}>
+            <ExternalLink href={m.meeting_url}
+              className="bg-accent c-on-accent r-md pt-1 pr-3 pb-1 pl-3 t-xs fw-600" style={{ textDecoration: "none" }}>
               Open meeting
-            </a>
+            </ExternalLink>
           )}
           {!readOnly && (
-            <label style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: 12, color: "var(--t2)", cursor: "pointer", userSelect: "none" }}>
+            <label className="t-xs c-2" style={{ display: "inline-flex", alignItems: "center", gap: 7, cursor: "pointer", userSelect: "none" }}>
               <input type="checkbox" checked={autoJoin} disabled={busy}
                 onChange={(e) => void patch({ auto_join: e.target.checked })} />
-              Auto-join{!m.native_id && <span style={{ color: "var(--t3)", fontSize: 11 }}>(needs a link)</span>}
+              Auto-join{!m.native_id && <span className="c-3 t-xs">(needs a link)</span>}
             </label>
           )}
         </div>
         {/* no link yet → the input is the honest primary control; with a link it lives in ⋯ */}
         {!readOnly && (!m.meeting_url || moreOpen) && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 4, margin: "8px 0 4px", maxWidth: 420 }}>
-            <span style={label}>Meeting link</span>
+          <div className="mt-2 mr-0 mb-1 ml-0" style={{ display: "flex", flexDirection: "column", gap: 4, maxWidth: 420 }}>
+            <span className="vx-label">Meeting link</span>
             <input value={link} disabled={busy} placeholder="https://meet.google.com/…"
               onChange={(e) => setLink(e.target.value)}
               onBlur={() => { if ((m.meeting_url ?? "") !== link.trim()) void patch({ meeting_url: link.trim() || null }); }}
@@ -415,9 +422,9 @@ function MeetingPrepTab({ params }: TabProps) {
 
         {/* ── attendees (calendar ATTENDEE lines → data.attendees, prep-v3 slice b) ── */}
         {(m.attendees?.length ?? 0) > 0 && (
-          <div style={{ margin: "0 0 22px" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "0 0 8px" }}>
-              <span style={label}>Attendees</span>
+          <div className="mt-0 mr-0 mb-5 ml-0">
+            <div className="mt-0 mr-0 mb-2 ml-0" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span className="vx-label">Attendees</span>
               <span style={{ flex: 1, height: 1, background: "var(--line)" }} />
             </div>
             <div style={{ display: "flex", gap: 7, flexWrap: "wrap", alignItems: "center" }}>
@@ -429,13 +436,8 @@ function MeetingPrepTab({ params }: TabProps) {
                 const declined = a.partstat === "declined";
                 return (
                   <span key={a.email} title={a.email + (a.partstat ? ` · ${a.partstat}` : "")}
-                    style={{ display: "inline-flex", alignItems: "center", gap: 7,
-                      border: "1px solid var(--line)", borderRadius: 14, padding: "2px 11px 2px 3px",
-                      fontSize: 12.5, color: declined ? "var(--t3)" : "var(--t1)",
-                      textDecoration: declined ? "line-through" : undefined }}>
-                    <span style={{ width: 19, height: 19, borderRadius: "50%", background: "var(--panel2)",
-                      color: "var(--t2)", display: "inline-flex", alignItems: "center", justifyContent: "center",
-                      fontSize: 8.5, fontWeight: 700 }}>{initials}</span>
+                    className="bd r-xl pt-0_5 pr-3 pb-0_5 pl-0_5 t-xs" style={{ display: "inline-flex", alignItems: "center", gap: 7, color: declined ? "var(--t3)" : "var(--t1)", textDecoration: declined ? "line-through" : undefined }}>
+                    <span className="r-full bg-3 c-2 t-xs fw-600" style={{ width: 19, height: 19, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>{initials}</span>
                     {display}
                   </span>
                 );
@@ -447,18 +449,18 @@ function MeetingPrepTab({ params }: TabProps) {
         {/* ── ONE quiet utility row (prep-v3 carve): workspace as a word · share · send · ⋯ ──
             Moved to the TOP (owner ruling): the actions sit above the brief so a long brief never
             buries them. The popouts (rebind select, ⋯ block, invite link) render right here. */}
-        <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap", marginBottom: 12, paddingBottom: 12, borderBottom: "1px solid var(--line)", fontSize: 12, color: "var(--t3)" }}>
+        <div className="mb-3 pb-3 bd-b t-xs c-3" style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
           {m.workspace_id && (
             <span style={{ display: "inline-flex", gap: 6, alignItems: "baseline" }}>
               workspace{" "}
               <button onClick={() => layout.openTab(manageTabDescriptor(m.workspace_id!, { shared: true }))}
                 title={m.workspace_id}
-                style={{ background: "none", border: "none", color: "var(--t2)", fontWeight: 600, fontSize: 12, cursor: "pointer", padding: 0 }}>
+                className="bg-none bd-none c-2 fw-600 t-xs p-0" style={{ cursor: "pointer" }}>
                 {m.workspace_id.replace(/-[0-9a-f]{4,}$/i, "")}
               </button>
               {!readOnly && (
                 <button onClick={() => setRebindOpen((v) => !v)}
-                  style={{ background: "none", border: "none", color: "var(--t3)", fontSize: 11.5, cursor: "pointer", padding: 0, borderBottom: "1px dotted var(--t3)" }}>
+                  className="bg-none bd-none c-3 t-xs p-0" style={{ cursor: "pointer", borderBottom: "1px dotted var(--t3)" }}>
                   change
                 </button>
               )}
@@ -470,34 +472,34 @@ function MeetingPrepTab({ params }: TabProps) {
           {!readOnly && !m.workspace_id && (ownBrief || briefChatStarted) && (
             <button disabled={busy} onClick={() => void createAndBind()}
               title="Everyone you invite sees the brief and the live transcript the moment they join"
-              style={{ background: "none", border: "none", color: "var(--t2)", fontSize: 12, cursor: "pointer", padding: 0, borderBottom: "1px dotted var(--t3)" }}>
+              className="bg-none bd-none c-2 t-xs p-0" style={{ cursor: "pointer", borderBottom: "1px dotted var(--t3)" }}>
               + Create a workspace to share
             </button>
           )}
-          {readOnly && <span style={{ fontSize: 11.5 }}>shared with you</span>}
+          {readOnly && <span className="t-xs">shared with you</span>}
           <span style={{ flex: 1 }} />
           {!readOnly && m.workspace_id && (
             <button disabled={busy} onClick={() => void share()}
-              style={{ background: "none", border: "none", color: "var(--t2)", fontSize: 12, cursor: "pointer", padding: 0, borderBottom: "1px dotted var(--t3)" }}>
+              className="bg-none bd-none c-2 t-xs p-0" style={{ cursor: "pointer", borderBottom: "1px dotted var(--t3)" }}>
               Share with attendees{(m.attendees?.length ?? 0) > 0 ? ` (${m.attendees!.length})` : ""}
             </button>
           )}
           {!readOnly && (
             <button disabled={busy || !m.native_id} onClick={() => void sendNow()}
               title={m.native_id ? "Send the bot now instead of waiting" : "Attach a meeting link first"}
-              style={{ background: "none", border: "none", color: m.native_id ? "var(--accent)" : "var(--t3)", fontSize: 12, fontWeight: 600, cursor: m.native_id ? "pointer" : "default", padding: 0, borderBottom: `1px dotted ${m.native_id ? "var(--accent)" : "var(--t3)"}` }}>
+              className="bg-none bd-none t-xs fw-600 p-0" style={{ color: m.native_id ? "var(--accent)" : "var(--t3)", cursor: m.native_id ? "pointer" : "default", borderBottom: `1px dotted ${m.native_id ? "var(--accent)" : "var(--t3)"}` }}>
               Send notetaker now
             </button>
           )}
           {!readOnly && (
             <button onClick={() => setMoreOpen((v) => !v)} title="More — edit link, unbind, delete"
-              style={{ background: "none", border: "none", color: "var(--t3)", fontSize: 14, cursor: "pointer", padding: "0 2px" }}>
+              className="bg-none bd-none c-3 t-md pt-0 pr-0_5 pb-0 pl-0_5" style={{ cursor: "pointer" }}>
               ⋯
             </button>
           )}
         </div>
         {rebindOpen && !readOnly && shares.length > 0 && (
-          <div style={{ marginBottom: 8 }}>
+          <div className="mb-2">
             <select defaultValue="" disabled={busy}
               onChange={(e) => { if (e.target.value) { void patch({ workspace_id: e.target.value }); setRebindOpen(false); } }}
               style={{ ...field, minWidth: 200 }}>
@@ -507,23 +509,23 @@ function MeetingPrepTab({ params }: TabProps) {
           </div>
         )}
         {moreOpen && !readOnly && (
-          <div style={{ display: "flex", gap: 8, marginBottom: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <div className="mb-2" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             {m.workspace_id && (
               <button disabled={busy} onClick={() => { void patch({ workspace_id: null }); setMoreOpen(false); }}
-                style={{ background: "transparent", border: "1px solid var(--line2)", color: "var(--t3)", borderRadius: 7, padding: "4px 10px", fontSize: 12, cursor: "pointer" }}>
+                className="bg-none bd-strong c-3 r-md pt-1 pr-2 pb-1 pl-2 t-xs" style={{ cursor: "pointer" }}>
                 Unbind workspace
               </button>
             )}
             <button disabled={busy} onClick={() => void remove()}
-              style={{ background: "transparent", border: "1px solid var(--line2)", color: "var(--danger)", borderRadius: 7, padding: "4px 10px", fontSize: 12, cursor: "pointer" }}>
+              className="bg-none bd-strong c-danger r-md pt-1 pr-2 pb-1 pl-2 t-xs" style={{ cursor: "pointer" }}>
               Delete meeting
             </button>
           </div>
         )}
         {inviteLink && (
-          <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
-            <input readOnly value={inviteLink} onFocus={(e) => e.currentTarget.select()} style={{ ...field, flex: 1, fontSize: 11.5 }} />
-            <button onClick={() => void copyText(inviteLink)} style={{ fontSize: 12, padding: "4px 12px", background: "var(--accent)", color: "var(--bg)", border: "none", borderRadius: 7, cursor: "pointer" }}>Copy</button>
+          <div className="mb-2" style={{ display: "flex", gap: 6 }}>
+            <input readOnly value={inviteLink} onFocus={(e) => e.currentTarget.select()} className="t-xs" style={{ ...field, flex: 1 }} />
+            <button onClick={() => void copyText(inviteLink)} className="t-xs pt-1 pr-3 pb-1 pl-3 bg-accent bd-none r-md" style={{ color: "var(--bg)", cursor: "pointer" }}>Copy</button>
           </div>
         )}
 
@@ -531,13 +533,13 @@ function MeetingPrepTab({ params }: TabProps) {
         {m.workspace_id ? (
           <Brief slug={m.workspace_id} title={headline} />
         ) : readOnly ? (
-          <div style={{ margin: "18px 0 0", fontSize: 12.5, color: "var(--t3)" }}>No workspace bound.</div>
+          <div className="mt-4 mr-0 mb-0 ml-0 t-xs c-3">No workspace bound.</div>
         ) : ownBrief ? (
           /* the own-workspace note IS the brief — rendered live while the chat writes it */
           <OwnBrief note={ownBrief} onSteer={() => startBriefChat()} />
         ) : briefChatStarted ? (
-          <div style={{ margin: "18px 0 0", padding: "12px 14px", border: "1px dashed var(--line2)", borderRadius: 10, display: "flex", alignItems: "center", gap: 10, fontSize: 12.5, color: "var(--t3)" }}>
-            <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--accent)", flex: "none" }} />
+          <div className="mt-4 mr-0 mb-0 ml-0 pt-3 pr-3 pb-3 pl-3 r-lg t-xs c-3" style={{ border: "1px dashed var(--line2)", display: "flex", alignItems: "center", gap: 10 }}>
+            <span className="r-full bg-accent" style={{ width: 6, height: 6, flex: "none" }} />
             Brief chat running — the brief renders here as the agent writes it.
           </div>
         ) : (
@@ -545,40 +547,40 @@ function MeetingPrepTab({ params }: TabProps) {
              = the agent interviews you here (the prep tab's meeting grounding rides the turn) and the
              brief lands in YOUR default workspace, reused across the series. Shared workspace = the
              existing collaborative flow, repositioned as the explicit sharing choice. */
-          <div style={{ margin: "18px 0 0", padding: "12px 14px", border: "1px dashed var(--line2)", borderRadius: 10, display: "flex", flexDirection: "column", gap: 9 }}>
-            <div style={{ fontSize: 13, fontWeight: 600, color: "var(--t1)" }}>No brief yet</div>
-            <div style={{ fontSize: 12.5, color: "var(--t3)", lineHeight: 1.55 }}>
+          <div className="mt-4 mr-0 mb-0 ml-0 pt-3 pr-3 pb-3 pl-3 r-lg" style={{ border: "1px dashed var(--line2)", display: "flex", flexDirection: "column", gap: 9 }}>
+            <div className="t-sm fw-600 c-1">No brief yet</div>
+            <div className="t-xs c-3 lh-normal">
               A brief makes the notetaker useful — who&rsquo;s in the room, what you want out of it, what
               to listen for.
             </div>
             <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
               <button disabled={busy} onClick={() => startBriefChat()}
-                style={{ background: "var(--accent)", color: "var(--on-accent)", border: "none", borderRadius: 7, padding: "6px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+                className="bg-accent c-on-accent bd-none r-md pt-1_5 pr-3 pb-1_5 pl-3 t-xs fw-600" style={{ cursor: "pointer" }}>
                 Start brief chat
               </button>
               <button disabled={busy} onClick={() => void createAndBind()}
-                style={{ background: "transparent", color: "var(--accent)", border: "1px dashed var(--line2)", borderRadius: 7, padding: "5px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+                className="bg-none c-accent r-md pt-1 pr-3 pb-1 pl-3 t-xs fw-600" style={{ border: "1px dashed var(--line2)", cursor: "pointer" }}>
                 + Create a workspace to share
               </button>
               {shares.length > 0 && (
                 <select defaultValue="" disabled={busy} onChange={(e) => { if (e.target.value) void patch({ workspace_id: e.target.value }); }}
-                  style={{ ...field, minWidth: 180, color: "var(--t3)" }}>
+                  className="c-3" style={{ ...field, minWidth: 180 }}>
                   <option value="" disabled>or bind an existing one…</option>
                   {shares.map((s) => <option key={s.workspace_id} value={s.workspace_id}>{s.workspace_id}</option>)}
                 </select>
               )}
             </div>
-            <div style={{ fontSize: 11, color: "var(--t3)", lineHeight: 1.5 }}>
-              <b style={{ color: "var(--t2)", fontWeight: 600 }}>Brief chat</b> — the agent interviews you and
+            <div className="t-xs c-3 lh-snug">
+              <b className="c-2 fw-600">Brief chat</b> — the agent interviews you and
               writes the brief into your own workspace, reused across this series.{" "}
-              <b style={{ color: "var(--t2)", fontWeight: 600 }}>Shared workspace</b> — everyone you invite sees
+              <b className="c-2 fw-600">Shared workspace</b> — everyone you invite sees
               the brief and the live transcript the moment they join.
             </div>
           </div>
         )}
 
         {denial && <ServiceDenialPanel presentation={denial} onRetry={() => void sendNow()} />}
-        {err && <div role="alert" style={{ marginTop: 12, fontSize: 12, color: "var(--danger)" }}>⚠ {err}</div>}
+        {err && <div role="alert" className="mt-3 t-xs c-danger">⚠ {err}</div>}
       </div>
     </div>
   );

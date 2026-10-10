@@ -86,31 +86,31 @@ function EditPanel({ cal, busy, onSave, onCancel }: {
   const dirty = Object.keys(body).length > 0;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 7, borderTop: "1px dashed var(--line)", paddingTop: 9 }}>
+    <div className="pt-2" style={{ display: "flex", flexDirection: "column", gap: 7, borderTop: "1px dashed var(--line)" }}>
       <label style={labelled}>
         <span style={labelCol}>Name</span>
-        <input value={name} onChange={(e) => setName(e.target.value)} maxLength={100} style={field} aria-label={`Name for ${cal.name}`} />
+        <input value={name} onChange={(e) => setName(e.target.value)} maxLength={100} className="vx-input" aria-label={`Name for ${cal.name}`} />
       </label>
       <label style={labelled}>
         <span style={labelCol}>Bot name</span>
         <input value={botName} onChange={(e) => setBotName(e.target.value)} maxLength={100} placeholder="Vexa"
-          style={field} aria-label={`Bot name for ${cal.name}`} />
+          className="vx-input" aria-label={`Bot name for ${cal.name}`} />
       </label>
       <label style={labelled}>
         <span style={labelCol}>Replace feed</span>
         <input value={icsUrl} onChange={(e) => setIcsUrl(e.target.value)} type="password" autoComplete="off"
-          placeholder="paste a new secret ICS address to replace it" style={field}
+          placeholder="paste a new secret ICS address to replace it" className="vx-input"
           aria-label={`Replace feed address for ${cal.name}`} />
       </label>
-      <div style={{ ...meta, paddingLeft: 104 }}>
+      <div className="pl-16" style={{ ...meta }}>
         The stored address is never shown again. Leave this empty to keep the current feed.
       </div>
-      <div style={{ display: "flex", gap: 8, paddingLeft: 104 }}>
+      <div className="pl-16" style={{ display: "flex", gap: 8 }}>
         <button disabled={busy || !dirty} onClick={() => onSave(body)}
           style={{ ...(dirty ? primaryBtn : btn), opacity: busy || !dirty ? 0.5 : 1 }}>
           {busy ? "Saving…" : "Save"}
         </button>
-        <button disabled={busy} onClick={onCancel} style={btn}>Cancel</button>
+        <button disabled={busy} onClick={onCancel} className="vx-btn" data-variant="secondary">Cancel</button>
       </div>
     </div>
   );
@@ -133,13 +133,13 @@ function CalendarRow({ cal, stamp, busy, onPatch, onSync, onDisconnect }: {
     <div style={{ ...row, opacity: cal.enabled ? 1 : 0.7 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <Icon name="cal" size={13} style={{ color: cal.enabled ? "var(--green)" : "var(--t3)" }} />
-        <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--t1)" }}>{cal.name}</span>
-        <span style={{ flex: 1, fontSize: 11.5, color: "var(--t3)", fontFamily: "var(--mono)" }}>{feedLine(cal)}</span>
-        <button disabled={locked} onClick={onSync} style={btn}>{busy === "sync" ? "Syncing…" : "Sync now"}</button>
+        <span className="t-xs fw-600 c-1">{cal.name}</span>
+        <span className="t-xs c-3 f-mono" style={{ flex: 1 }}>{feedLine(cal)}</span>
+        <button disabled={locked} onClick={onSync} className="vx-btn" data-variant="secondary">{busy === "sync" ? "Syncing…" : "Sync now"}</button>
         <button disabled={locked} onClick={() => { setEditing((v) => !v); setConfirming(false); }}
-          aria-expanded={editing} style={btn}>{editing ? "Close" : "Edit"}</button>
+          aria-expanded={editing} className="vx-btn" data-variant="secondary">{editing ? "Close" : "Edit"}</button>
         <button disabled={locked} onClick={() => { setConfirming(true); setEditing(false); }}
-          style={{ ...btn, color: "var(--danger)" }}>Disconnect</button>
+          className="c-danger" style={{ ...btn }}>Disconnect</button>
       </div>
 
       <div style={{ ...sync.ok ? meta : { ...meta, color: "var(--danger)" } }} role={sync.ok ? undefined : "alert"}>
@@ -157,18 +157,18 @@ function CalendarRow({ cal, stamp, busy, onPatch, onSync, onDisconnect }: {
             onChange={(e) => onPatch({ auto_join: e.target.checked })} />
           Auto-join — send the bot to this calendar&rsquo;s meetings
         </label>
-        <span style={meta}>Bot name <span style={{ color: "var(--t2)", fontFamily: "var(--mono)" }}>{cal.bot_name || "Vexa"}</span></span>
+        <span style={meta}>Bot name <span className="c-2 f-mono">{cal.bot_name || "Vexa"}</span></span>
       </div>
 
       {confirming && (
-        <div role="alert" style={{ display: "flex", flexDirection: "column", gap: 7, borderTop: "1px dashed var(--line)", paddingTop: 9 }}>
-          <span style={{ fontSize: 11.5, color: "var(--danger)", lineHeight: 1.5 }}>⚠ {disconnectWarning(cal.name)}</span>
+        <div role="alert" className="pt-2" style={{ display: "flex", flexDirection: "column", gap: 7, borderTop: "1px dashed var(--line)" }}>
+          <span className="t-xs c-danger lh-snug">⚠ {disconnectWarning(cal.name)}</span>
           <div style={{ display: "flex", gap: 8 }}>
             <button disabled={locked} onClick={onDisconnect}
-              style={{ ...btn, background: "var(--danger)", color: "var(--on-accent)", border: "none", opacity: locked ? 0.5 : 1 }}>
+              className="bg-danger c-on-accent bd-none" style={{ ...btn, opacity: locked ? 0.5 : 1 }}>
               {busy === "delete" ? "Disconnecting…" : "Yes, disconnect"}
             </button>
-            <button disabled={locked} onClick={() => setConfirming(false)} style={btn}>Keep it</button>
+            <button disabled={locked} onClick={() => setConfirming(false)} className="vx-btn" data-variant="secondary">Keep it</button>
           </div>
         </div>
       )}
@@ -195,39 +195,39 @@ function AddCalendarForm({ busy, onAdd, onCancel }: {
 
   return (
     <div style={{ ...row, borderStyle: "dashed" }}>
-      <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--t1)" }}>Add a calendar</div>
+      <div className="t-xs fw-600 c-1">Add a calendar</div>
       <div style={meta}>
-        Google Calendar: ⚙ Settings → your calendar → <b style={{ color: "var(--t2)" }}>Integrate calendar</b> → copy
-        the <b style={{ color: "var(--t2)" }}>Secret address in iCal format</b>. Outlook: Settings → Calendar →
+        Google Calendar: ⚙ Settings → your calendar → <b className="c-2">Integrate calendar</b> → copy
+        the <b className="c-2">Secret address in iCal format</b>. Outlook: Settings → Calendar →
         Shared calendars → Publish a calendar. Not the public page or embed link — the secret address is a password.
       </div>
       <label style={labelled}>
         <span style={labelCol}>Name</span>
         <input value={name} onChange={(e) => setName(e.target.value)} maxLength={100} placeholder="Work"
-          style={field} aria-label="Calendar name" />
+          className="vx-input" aria-label="Calendar name" />
       </label>
       <label style={labelled}>
         <span style={labelCol}>Secret ICS</span>
         <input value={icsUrl} onChange={(e) => setIcsUrl(e.target.value)} type="password" autoComplete="off"
-          placeholder="https://calendar.google.com/…/basic.ics" style={field} aria-label="Secret ICS address"
+          placeholder="https://calendar.google.com/…/basic.ics" className="vx-input" aria-label="Secret ICS address"
           onKeyDown={(e) => { if (e.key === "Enter" && ready && !busy) onAdd({ name: name.trim(), ics_url: icsUrl.trim(), auto_join: autoJoin, bot_name: botName.trim() || undefined }); }} />
       </label>
       <label style={labelled}>
         <span style={labelCol}>Bot name</span>
         <input value={botName} onChange={(e) => setBotName(e.target.value)} maxLength={100} placeholder="Vexa"
-          style={field} aria-label="Bot name for the new calendar" />
+          className="vx-input" aria-label="Bot name for the new calendar" />
       </label>
-      <label style={{ ...checkRow, paddingLeft: 104 }}>
+      <label className="pl-16" style={{ ...checkRow }}>
         <input type="checkbox" checked={autoJoin} onChange={(e) => setAutoJoin(e.target.checked)} />
         Auto-join meetings imported from this calendar
       </label>
-      <div style={{ display: "flex", gap: 8, paddingLeft: 104 }}>
+      <div className="pl-16" style={{ display: "flex", gap: 8 }}>
         <button disabled={busy || !ready}
           onClick={() => onAdd({ name: name.trim(), ics_url: icsUrl.trim(), auto_join: autoJoin, bot_name: botName.trim() || undefined })}
           style={{ ...primaryBtn, opacity: busy || !ready ? 0.5 : 1 }}>
           {busy ? "Connecting…" : "Connect"}
         </button>
-        <button disabled={busy} onClick={onCancel} style={btn}>Cancel</button>
+        <button disabled={busy} onClick={onCancel} className="vx-btn" data-variant="secondary">Cancel</button>
       </div>
     </div>
   );
@@ -320,8 +320,8 @@ export function CalendarConnectionsPanel() {
         themselves; with auto-join on, the bot joins them when they start. Each calendar carries its own
         auto-join policy and bot name.
       </div>
-      {err && <div role="alert" style={{ fontSize: 11.5, color: "var(--danger)" }}>⚠ {err}</div>}
-      {note && <div role="status" style={{ fontSize: 11.5, color: "var(--green)" }}>✓ {note}</div>}
+      {err && <div role="alert" className="t-xs c-danger">⚠ {err}</div>}
+      {note && <div role="status" className="t-xs c-success">✓ {note}</div>}
 
       {cals === null ? (
         <div style={meta}>Loading calendars…</div>
@@ -329,7 +329,7 @@ export function CalendarConnectionsPanel() {
         <div style={meta}>No calendars connected yet.</div>
       ) : (
         <>
-          <div style={{ fontSize: 11.5, color: "var(--t3)" }}>
+          <div className="t-xs c-3">
             {cals.length} of {MAX_CALENDARS} calendars connected
           </div>
           {cals.map((c) => (

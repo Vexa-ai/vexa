@@ -182,3 +182,61 @@
 /* ── Toast (sonner) ───────────────────────────────────────────────────────────────────────── */
 .vx-toast { background: var(--surface-overlay) !important; color: var(--text-1) !important; border: 1px solid var(--border) !important; box-shadow: var(--shadow-3) !important; font-family: var(--font-sans) !important; font-size: var(--text-sm) !important; }
 
+
+/* ── a chat turn's sources ────────────────────────────────────────────────────────────────── */
+.vx-turn-sources { margin-top: var(--space-3); padding-top: var(--space-2); border-top: 1px solid var(--border-subtle); }
+.vx-turn-sources-title { margin: 0 0 var(--space-1_5); font-size: var(--text-xs); font-weight: var(--weight-medium); color: var(--text-3); }
+
+/* ── ChipRow: one line, "+N" when clipped, wraps when opened ─────────────────────────────── */
+.vx-chiprow { display: flex; align-items: center; gap: var(--space-1_5); min-width: 0; }
+.vx-chiprow-items { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: var(--space-1_5); flex-wrap: nowrap; overflow: hidden; }
+.vx-chiprow[data-clipped] .vx-chiprow-items { mask-image: linear-gradient(to left, transparent 0, black 24px); }
+.vx-chiprow[data-open] .vx-chiprow-items { flex-wrap: wrap; overflow: visible; }
+.vx-chiprow-items > * { flex: none; }
+.vx-chiprow-more { flex: none; }
+
+/* ── references written in the composer text ─────────────────────────────────────────────── */
+.vx-refs { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-1); min-width: 0; }
+.vx-ref { gap: var(--space-1); max-width: 220px; vertical-align: baseline; }
+.vx-ref-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vx-turn-meta { margin-top: var(--space-2); display: flex; flex-wrap: wrap; gap: var(--space-1_5); }
+.vx-turn-steps { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-3); flex: none; }
+/* an entity chip inside running text: same shape, sized to the line */
+.vx-inline-chip { display: inline-flex; vertical-align: baseline; height: auto; padding: 0 var(--space-1_5); gap: var(--space-1); line-height: 1.45; font-size: 0.92em; cursor: pointer; max-width: 100%; }
+.vx-inline-chip[data-missing] { background: transparent; color: var(--text-3); }
+.vx-inline-chip:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.vx-gap-top { margin-top: var(--space-1_5); }
+/* a pressed toggle button: selected = accent tint + primary text + an accent bar (never colour alone) */
+.vx-toggle[aria-pressed="true"] { background: var(--accent-tint); color: var(--text-1); box-shadow: inset 2px 0 0 var(--accent); }
+.vx-chip-main[data-static] { cursor: default; }
+.vx-chip-add { justify-content: center; width: var(--control-xs); padding: 0; cursor: pointer; color: var(--text-3); }
+.vx-chip-add:hover { color: var(--text-1); }
+.vx-chip-add:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.vx-ws-gone { color: var(--text-2); }
+.vx-inline-chip[data-static] { cursor: default; }
+.vx-label { display: block; margin: 0; font-size: var(--text-xs); font-weight: var(--weight-medium); color: var(--text-3); letter-spacing: 0; text-transform: none; }
+span.vx-label { display: inline; }
+.vx-grow { flex: 1; min-width: 0; }
+
+/* ── EVERY FIELD SHOWS FOCUS (guidelines §6 A3, gate G5) ─────────────────────────────────────
+ * 21 inline `outline: none` removed the ring from the sign-in inputs, the join field, filters and
+ * forms, and replaced it with nothing. Until each surface moves to Input/Textarea, this restores a
+ * visible 2px ring on every keyboard-focused field, over the inline style. A field that sits in a
+ * framed control (the composer) marks itself `data-ring-host` and the FRAME takes the ring. */
+:is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), select, textarea):focus-visible:not([data-ring-host]) {
+  outline: 2px solid var(--focus-ring) !important;
+  outline-offset: 2px;
+}
+:has(> textarea[data-ring-host]:focus-visible) {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+/* ── the sign-in gate (app/AuthGate.tsx) ─────────────────────────────────────────────────── */
+.vx-auth-input { height: 36px; }
+.vx-auth-input[data-mono] { font-family: var(--font-mono); }
+.vx-auth-btn { width: 100%; height: 36px; gap: var(--space-2); }
+.vx-auth-text { font-size: var(--text-sm); color: var(--text-3); line-height: 1.5; }
+.vx-auth-quiet { align-self: flex-start; background: none; border: none; padding: 0; font: inherit; font-size: var(--text-xs); color: var(--text-3); text-decoration: underline; cursor: pointer; }
+.vx-auth-quiet:hover { color: var(--text-1); }
+.vx-auth-quiet:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }

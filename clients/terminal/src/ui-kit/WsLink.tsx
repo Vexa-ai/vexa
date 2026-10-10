@@ -16,16 +16,10 @@
  *  component with two async paths would have to hold both, plus rules-of-hooks around the branch.
  */
 import { useEffect, useState } from "react";
-import type { CSSProperties } from "react";
 import { Icon } from "./index";
 import { useOpenEntity, ENTITY_CHIP, DEFAULT_ENTITY_CHIP } from "./docRefs";
 import { humanize, parseWsRef, resolveLink, type ResolvedLink } from "./wsLinks";
 
-const chipBase: CSSProperties = {
-  display: "inline-flex", alignItems: "center", gap: 5, verticalAlign: "baseline",
-  borderRadius: 999, padding: "0.5px 9px 0.5px 7px", fontSize: "0.92em", fontWeight: 500,
-  whiteSpace: "nowrap", lineHeight: 1.45,
-};
 
 /** The entity kind implied by a resolved path, for the chip's icon + colour. Read off the path the
  *  server returned rather than guessed from the ref: the ref carries an id, not a kind. */
@@ -35,7 +29,6 @@ function kindOf(r?: ResolvedLink | null): string | undefined {
 
 export function WsLink({ refText, slug }: { refText: string; slug?: string }) {
   const parsed = parseWsRef(refText);
-  const [hover, setHover] = useState(false);
   // undefined = resolving. The FIRST paint shows the humanized target rather than the raw id: a
   // reader must never be shown `k4m5x2q7bd/nora-quill` while a request is in flight.
   const [target, setTarget] = useState<ResolvedLink | undefined>(undefined);
@@ -51,9 +44,8 @@ export function WsLink({ refText, slug }: { refText: string; slug?: string }) {
 
   if (target === undefined) {
     return (
-      <span style={{ ...chipBase, background: "var(--panel2)", border: "1px solid var(--line)",
-        color: "var(--t3)" }}>
-        <Icon name="link" size={11} style={{ opacity: 0.4 }} />{title}
+      <span className="vx-chip vx-entity vx-inline-chip" data-missing="">
+        <span className="vx-chip-icon" aria-hidden><Icon name="link" size={12} /></span><span className="vx-chip-label">{title}</span>
       </span>
     );
   }
@@ -61,31 +53,26 @@ export function WsLink({ refText, slug }: { refText: string; slug?: string }) {
   if (target.access === "gone") {
     // PLAIN TEXT, no tooltip, no icon. The workspace is not there any more; saying so in a hover
     // the reader has to discover would be explaining our storage to somebody reading a sentence.
-    return <span style={{ color: "var(--t2)" }}>{title}</span>;
+    return <span className="vx-ws-gone">{title}</span>;
   }
 
   if (target.access === "not-yours") {
     return (
       <span title={`In ${target.workspace ? `“${target.workspace}”` : "a workspace"} you don't have`}
-        aria-disabled="true"
-        style={{ ...chipBase, background: "var(--panel2)", border: "1px dashed var(--line)",
-          color: "var(--t3)", cursor: "default" }}>
-        <Icon name="folder" size={11} style={{ opacity: 0.4 }} />
-        {title}
+        aria-disabled="true" className="vx-chip vx-entity vx-inline-chip" data-missing="" data-static="">
+        <span className="vx-chip-icon" aria-hidden><Icon name="folder" size={12} /></span><span className="vx-chip-label">{title}</span>
       </span>
     );
   }
 
   const c = ENTITY_CHIP[kindOf(target) ?? ""] ?? DEFAULT_ENTITY_CHIP;
+  const open = () => openEntity({ path: target.path ?? parsed?.target ?? "", slug: target.slug });
   return (
-    <span role="link"
+    <span role="link" tabIndex={0} className="vx-chip vx-entity vx-inline-chip" data-kind={kindOf(target) ?? "doc"}
       title={target.workspace ? `Open ${title} — in ${target.workspace}` : `Open ${title}`}
-      onClick={() => openEntity({ path: target.path ?? parsed?.target ?? "", slug: target.slug })}
-      onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
-      style={{ ...chipBase, background: hover ? c.bg : "var(--panel2)",
-        border: `1px solid ${hover ? c.color : "var(--line)"}`, color: c.color, cursor: "pointer" }}>
-      <Icon name={c.icon} size={11} style={{ opacity: 0.8 }} />
-      {title}
+      onClick={open} onKeyDown={(e) => { if (e.key === "Enter") open(); }}>
+      <span className="vx-chip-icon" aria-hidden style={{ color: c.color }}><Icon name={c.icon} size={12} /></span>
+      <span className="vx-chip-label">{title}</span>
     </span>
   );
 }

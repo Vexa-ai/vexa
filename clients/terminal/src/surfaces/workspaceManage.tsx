@@ -14,7 +14,7 @@ import { useService } from "../platform";
 import { LayoutServiceId, type LayoutService, type TabDescriptor } from "../workbench/layout";
 import { registerTab, type TabProps } from "../contributions";
 import { meetingsOnly } from "../app/mode";
-import { Icon, Checkbox } from "../ui-kit";
+import { Icon, Checkbox, useConfirm, ExternalLink } from "../ui-kit";
 import { Modal } from "../ui-kit/Modal";
 import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
 import { MdxDoc } from "../ui-kit/MdxDoc";
@@ -54,7 +54,7 @@ const short = (subject: string) => subject.replace(/@.*$/, "").replace(/^u_/, ""
 function Section({ icon, title, right, children }: { icon: string; title: string; right?: ReactNode; children: ReactNode }) {
   return (
     <div style={card}>
-      <div style={sectionTitle}><Icon name={icon} size={13} /><span>{title}</span>{right && <span style={{ marginLeft: "auto", textTransform: "none", letterSpacing: 0 }}>{right}</span>}</div>
+      <div style={sectionTitle}><Icon name={icon} size={13} /><span>{title}</span>{right && <span className="ml-auto" style={{ textTransform: "none", letterSpacing: 0 }}>{right}</span>}</div>
       {children}
     </div>
   );
@@ -131,22 +131,22 @@ function WorkspaceManagePanel({ id, params }: TabProps) {
   });
 
   return (
-    <div style={{ height: "100%", overflowY: "auto", background: "var(--bg)" }}>
-      <div style={{ maxWidth: 720, margin: "0 auto", padding: "22px 24px" }}>
+    <div className="bg-0" style={{ height: "100%", overflowY: "auto" }}>
+      <div className="mt-0 mr-auto mb-0 ml-auto pt-5 pr-6 pb-5 pl-6" style={{ maxWidth: 720 }}>
         <Header
           slug={slug} shared={shared} isSeed={isSeed} displayName={displayName} mounted={mounted}
           archived={!!meta?.archived} busy={busy} onRun={run} reload={loadCore} layout={layout} tabId={id}
           onShare={doShare} onManage={() => setManage(true)}
           meta={{ members: shareWsId ? members : null, status, myRole: shared ? myRole : undefined }}
         />
-        {err && <div role="alert" style={{ margin: "0 0 12px", fontSize: 12.5, color: "var(--danger)", background: "var(--panel)", border: "1px solid var(--danger)", borderRadius: 8, padding: "8px 11px" }}>⚠ {err}</div>}
-        {note && <div role="status" style={{ margin: "0 0 12px", fontSize: 12.5, color: "var(--green)" }}>✓ {note}</div>}
+        {err && <div role="alert" className="mt-0 mr-0 mb-3 ml-0 t-xs c-danger bg-2 bd-danger r-md pt-2 pr-3 pb-2 pl-3">⚠ {err}</div>}
+        {note && <div role="status" className="mt-0 mr-0 mb-3 ml-0 t-xs c-success">✓ {note}</div>}
 
         <ReadmeBody slug={slug} />
 
         {/* the deeper management sections, folded — README stays the hero */}
         <div onClick={() => setManage((v) => !v)}
-          style={{ display: "flex", alignItems: "center", gap: 6, margin: "18px 0 12px", padding: "6px 0", cursor: "pointer", borderTop: "1px solid var(--line)", fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".05em" }}>
+          className="mt-4 mr-0 mb-3 ml-0 pt-1_5 pr-0 pb-1_5 pl-0 bd-t t-xs c-3" style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", textTransform: "uppercase", letterSpacing: ".05em" }}>
           <Icon name="chevR" size={12} style={{ transform: manage ? "rotate(90deg)" : "none", transition: "transform .12s" }} />
           <Icon name="gear" size={12} />Manage workspace
         </div>
@@ -168,10 +168,10 @@ function WorkspaceManagePanel({ id, params }: TabProps) {
 
         {invite && (
           <Modal title={`Share “${displayName}”`} onClose={() => setInvite(null)}>
-            <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+            <div className="mb-2" style={{ display: "flex", gap: 6 }}>
               {(["link", "email"] as const).map((m) => (
                 <button key={m} disabled={busy} onClick={() => setInvite({ ...invite, mode: m, link: null })}
-                  style={{ ...btn(invite.mode === m ? "primary" : "ghost"), fontSize: 12 }}>
+                  className="t-xs" style={{ ...btn(invite.mode === m ? "primary" : "ghost") }}>
                   {m === "link" ? "Invite link" : "Add by email"}
                 </button>
               ))}
@@ -199,13 +199,13 @@ function ReadmeBody({ slug }: { slug: string }) {
     window.addEventListener("focus", load);
     return () => { live = false; clearInterval(iv); window.removeEventListener("focus", load); };
   }, [slug]);
-  if (error) return <div role="alert" style={{ fontSize: 12.5, color: "var(--danger)" }}>⚠ Couldn’t read the README — {error}</div>;
-  if (text === undefined) return <div style={{ fontSize: 12.5, color: "var(--t3)" }}>loading…</div>;
-  if (text === null) return <div style={{ fontSize: 12.5, color: "var(--t3)" }}>No README yet — ask the agent in Chat to start this workspace’s dashboard.</div>;
+  if (error) return <div role="alert" className="t-xs c-danger">⚠ Couldn’t read the README — {error}</div>;
+  if (text === undefined) return <div className="t-xs c-3">loading…</div>;
+  if (text === null) return <div className="t-xs c-3">No README yet — ask the agent in Chat to start this workspace’s dashboard.</div>;
   const body = text.replace(/^---\n[\s\S]*?\n---\n/, "");  // READMEs rarely carry frontmatter; strip if present
   return (
     <DocMetaContext.Provider value={{ path: "README.md", slug }}>
-      <div style={{ fontSize: 14, color: "var(--t1)", lineHeight: 1.6 }}><MdxDoc>{body}</MdxDoc></div>
+      <div className="t-md c-1 lh-normal"><MdxDoc>{body}</MdxDoc></div>
     </DocMetaContext.Provider>
   );
 }
@@ -222,6 +222,7 @@ function Header({ slug, shared, isSeed, displayName, mounted, archived, busy, on
 }) {
   const [renaming, setRenaming] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const [confirm, confirmDialog] = useConfirm();
   const cancelled = useRef(false);
   const toggle = () => onRun(async () => {
     if (shared) await setSharedActive(slug, !mounted);
@@ -234,7 +235,7 @@ function Header({ slug, shared, isSeed, displayName, mounted, archived, busy, on
   const sync = !st?.has_home ? null : !st.tracked ? "not fetched" : st.ahead || st.behind ? `${st.ahead ? `↑${st.ahead}` : ""}${st.ahead && st.behind ? " " : ""}${st.behind ? `↓${st.behind}` : ""}` : "up to date";
   const metaItem: React.CSSProperties = { display: "inline-flex", alignItems: "center", gap: 4, cursor: "pointer" };
   return (
-    <div style={{ marginBottom: 14 }}>
+    <div className="mb-3">
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
         <Checkbox checked={mounted} disabled={busy} onChange={toggle}
           title={mounted ? "Mounted into the agent — uncheck to switch off" : "Switched off — check to mount"}
@@ -243,18 +244,18 @@ function Header({ slug, shared, isSeed, displayName, mounted, archived, busy, on
           <input autoFocus defaultValue={displayName} disabled={busy}
             onKeyDown={(e) => { if (e.key === "Enter") { cancelled.current = false; e.currentTarget.blur(); } else if (e.key === "Escape") { cancelled.current = true; e.currentTarget.blur(); } }}
             onBlur={(e) => { if (cancelled.current) { cancelled.current = false; setRenaming(false); } else doRename(e.currentTarget.value); }}
-            style={{ ...field, flex: 1, fontSize: 18, fontWeight: 600, padding: "4px 8px" }} />
+            className="t-lg fw-600 pt-1 pr-2 pb-1 pl-2" style={{ ...field, flex: 1 }} />
         ) : (
-          <h1 style={{ margin: 0, fontSize: 19, fontWeight: 650, color: "var(--t1)", flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{displayName}</h1>
+          <h1 className="m-0 t-xl fw-600 c-1" style={{ flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{displayName}</h1>
         )}
         <button disabled={busy} onClick={onShare} style={btn("primary")} title="Share this workspace — mint an invite link or add by email">
           <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="link" size={13} />Share</span>
         </button>
         <span onClick={openMenu} title="Rename · Manage · Archive · Delete"
-          style={{ cursor: "pointer", color: "var(--t3)", padding: "2px 7px", fontSize: 16, lineHeight: 1, border: "1px solid var(--line)", borderRadius: 7 }}>⋯</span>
+          className="c-3 pt-0_5 pr-1_5 pb-0_5 pl-1_5 t-lg lh-tight bd r-md" style={{ cursor: "pointer" }}>⋯</span>
       </div>
       {/* ONE quiet meta row: members · GitHub sync · role/kind — each opens the manage fold. */}
-      <div style={{ fontSize: 12, color: "var(--t3)", marginTop: 6, marginLeft: 26, display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+      <div className="t-xs c-3 mt-1_5 ml-6" style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
         {meta.members !== null && (
           <span style={metaItem} onClick={onManage} title="Participants">
             <Icon name="user" size={12} />{meta.members.length} member{meta.members.length === 1 ? "" : "s"}
@@ -277,10 +278,11 @@ function Header({ slug, shared, isSeed, displayName, mounted, archived, busy, on
           { id: "manage", label: "Manage workspace", detail: "purpose · GitHub · participants", onSelect: onManage },
           ...(!shared && !isSeed ? [
             { id: "archive", label: archived ? "Un-archive" : "Archive", detail: "collapse · keep data", onSelect: () => void onRun(async () => { await archiveWorkspace(slug, !archived); reload(); }, archived ? "Un-archived." : "Archived.") },
-            { id: "delete", label: "Delete", detail: "removes all data", onSelect: () => { if (window.confirm(`Delete "${displayName}"? This permanently removes the workspace and all its data.`)) void onRun(async () => { await deleteWorkspace(slug); layout.closeTab(tabId); }); } },
+            { id: "delete", label: "Delete", detail: "removes all data", onSelect: () => { void confirm({ title: `Delete “${displayName}”?`, consequence: "This permanently removes the workspace and all its data.", confirmLabel: "Delete workspace", typeToConfirm: displayName }).then((ok) => { if (ok) void onRun(async () => { await deleteWorkspace(slug); layout.closeTab(tabId); }); }); } },
           ] : []),
         ]} />
       )}
+      {confirmDialog}
     </div>
   );
 }
@@ -301,21 +303,21 @@ function PurposeSection({ slug }: { slug: string }) {
   };
   return (
     <Section icon="info" title="Purpose"
-      right={!editing && <span onClick={() => setEditing(true)} style={{ cursor: "pointer", color: "var(--t3)" }}><Icon name="edit" size={13} /></span>}>
-      {err && <div role="alert" style={{ fontSize: 12, color: "var(--danger)", marginBottom: 6 }}>⚠ {err}</div>}
+      right={!editing && <span onClick={() => setEditing(true)} className="c-3" style={{ cursor: "pointer" }}><Icon name="edit" size={13} /></span>}>
+      {err && <div role="alert" className="t-xs c-danger mb-1_5">⚠ {err}</div>}
       {editing ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           <textarea autoFocus value={draft} disabled={busy} placeholder="What is this workspace for? (one line — the agent reads it to know where things belong)"
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void save(); } if (e.key === "Escape") { setDraft(purpose); setEditing(false); } }}
-            rows={2} style={{ ...field, resize: "vertical", lineHeight: 1.5 }} />
+            rows={2} className="lh-snug" style={{ ...field, resize: "vertical" }} />
           <div style={{ display: "flex", gap: 8 }}>
             <button disabled={busy} onClick={() => void save()} style={btn("primary")}>{busy ? "Saving…" : "Save"}</button>
             <button disabled={busy} onClick={() => { setDraft(purpose); setEditing(false); }} style={btn()}>Cancel</button>
           </div>
         </div>
       ) : (
-        <div style={{ fontSize: 13.5, color: purpose ? "var(--t1)" : "var(--t3)", lineHeight: 1.5, cursor: "pointer" }} onClick={() => setEditing(true)}>
+        <div className="t-sm lh-snug" style={{ color: purpose ? "var(--t1)" : "var(--t3)", cursor: "pointer" }} onClick={() => setEditing(true)}>
           {purpose || "No purpose set — click to describe what this workspace is for."}
         </div>
       )}
@@ -346,18 +348,18 @@ function GitHubSection({ slug, status, published_url, defaultRepoName, busy, onR
 
   return (
     <Section icon="github" title="GitHub"
-      right={status?.branch && <span style={{ fontFamily: "var(--mono)", fontSize: 11.5, color: "var(--t2)" }}>{status.branch}</span>}>
+      right={status?.branch && <span className="f-mono t-xs c-2">{status.branch}</span>}>
       {status === null ? (
-        <div style={{ fontSize: 12.5, color: "var(--t3)" }}>Checking the GitHub state…</div>
+        <div className="t-xs c-3">Checking the GitHub state…</div>
       ) : hasHome ? (<>
-        <div style={{ display: "flex", alignItems: "center", gap: 12, fontSize: 12.5, color: "var(--t2)", marginBottom: 10, flexWrap: "wrap" }}>
-          {url && <a href={url} target="_blank" rel="noreferrer" style={{ color: "var(--accent)", display: "inline-flex", alignItems: "center", gap: 4 }}><Icon name="openIn" size={13} />Open on GitHub</a>}
+        <div className="t-xs c-2 mb-2" style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          {url && <ExternalLink href={url} className="c-accent" style={{ display: "inline-flex", alignItems: "center", gap: 4 }}><Icon name="openIn" size={13} />Open on GitHub</ExternalLink>}
           <AheadBehind ahead={status!.ahead} behind={status!.behind} tracked={status!.tracked} />
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <button disabled={busy} onClick={onPush} style={btn("primary")} title="Push this branch to its GitHub home (fast-forward only)"><span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="upload" size={13} />Push{status!.ahead ? ` (↑${status!.ahead})` : ""}</span></button>
           <button disabled={busy} onClick={onPull} style={btn()} title="Fetch + fast-forward from GitHub"><span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="refresh" size={13} />Pull{status!.behind ? ` (↓${status!.behind})` : ""}</span></button>
-          {hasSaved && <span title="Using your saved GitHub token" style={{ fontSize: 11, color: "var(--t3)", display: "inline-flex", alignItems: "center", gap: 3 }}><Icon name="key" size={11} />saved token</span>}
+          {hasSaved && <span title="Using your saved GitHub token" className="t-xs c-3" style={{ display: "inline-flex", alignItems: "center", gap: 3 }}><Icon name="key" size={11} />saved token</span>}
         </div>
         {pushTok.open && (
           <TokenRow label="GitHub token (repo scope — used once, never stored)" value={pushTok.token} busy={busy}
@@ -372,16 +374,16 @@ function GitHubSection({ slug, status, published_url, defaultRepoName, busy, onR
       </>) : (<>
         {/* No home yet ⇒ this is a vexa-born workspace (attached clones always have origin) — offer
             Publish on ANY of them, own or shared (the backend permission-checks the slug). */}
-        <div style={{ fontSize: 12.5, color: "var(--t2)", marginBottom: 10 }}>Not published yet — create a GitHub repo and push this workspace's full history.</div>
+        <div className="t-xs c-2 mb-2">Not published yet — create a GitHub repo and push this workspace's full history.</div>
         {pub === null ? (
           <button disabled={busy} onClick={() => setPub({ name: defaultRepoName, priv: true, token: "" })} style={btn("primary")}>Publish to GitHub…</button>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <input autoFocus value={pub.name} placeholder="repo name" disabled={busy} onChange={(e) => setPub({ ...pub, name: e.target.value })} style={field} />
-            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: "var(--t2)", cursor: "pointer" }}>
+            <input autoFocus value={pub.name} placeholder="repo name" disabled={busy} onChange={(e) => setPub({ ...pub, name: e.target.value })} className="vx-input" />
+            <label className="t-xs c-2" style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
               <input type="checkbox" checked={pub.priv} disabled={busy} onChange={(e) => setPub({ ...pub, priv: e.target.checked })} /> private repo
             </label>
-            <input type="password" value={pub.token} placeholder={hasSaved ? "GitHub token (optional — using your saved token)" : "GitHub token (repo scope — used once, never stored)"} disabled={busy} onChange={(e) => setPub({ ...pub, token: e.target.value })} style={field} />
+            <input type="password" value={pub.token} placeholder={hasSaved ? "GitHub token (optional — using your saved token)" : "GitHub token (repo scope — used once, never stored)"} disabled={busy} onChange={(e) => setPub({ ...pub, token: e.target.value })} className="vx-input" />
             <div style={{ display: "flex", gap: 8 }}>
               <button disabled={busy || !pub.name.trim() || (!pub.token.trim() && !hasSaved)} onClick={() => doPublish(pub)} style={btn("primary")}>{busy ? "Publishing…" : "Publish"}</button>
               <button disabled={busy} onClick={() => setPub(null)} style={btn()}>Cancel</button>
@@ -394,12 +396,12 @@ function GitHubSection({ slug, status, published_url, defaultRepoName, busy, onR
 }
 
 function AheadBehind({ ahead, behind, tracked }: { ahead: number; behind: number; tracked: boolean }) {
-  if (!tracked) return <span style={{ color: "var(--t3)" }}>not yet fetched</span>;
-  if (!ahead && !behind) return <span style={{ color: "var(--green)" }}>up to date</span>;
+  if (!tracked) return <span className="c-3">not yet fetched</span>;
+  if (!ahead && !behind) return <span className="c-success">up to date</span>;
   return (
-    <span style={{ display: "inline-flex", gap: 8, fontFamily: "var(--mono)" }}>
-      {ahead > 0 && <span style={{ color: "var(--accent)" }} title={`${ahead} local commit(s) to push`}>↑{ahead}</span>}
-      {behind > 0 && <span style={{ color: "var(--warn)" }} title={`${behind} remote commit(s) to pull`}>↓{behind}</span>}
+    <span className="f-mono" style={{ display: "inline-flex", gap: 8 }}>
+      {ahead > 0 && <span className="c-accent" title={`${ahead} local commit(s) to push`}>↑{ahead}</span>}
+      {behind > 0 && <span className="c-warning" title={`${behind} remote commit(s) to pull`}>↓{behind}</span>}
     </span>
   );
 }
@@ -408,11 +410,11 @@ function TokenRow({ label, value, busy, onChange, onSubmit, onCancel, submitLabe
   label: string; value: string; busy: boolean; onChange: (v: string) => void; onSubmit: () => void; onCancel: () => void; submitLabel: string; required?: boolean;
 }) {
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 10 }}>
+    <div className="mt-2" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
       <input autoFocus type="password" value={value} placeholder={label} disabled={busy}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={(e) => { if (e.key === "Enter" && (!required || value.trim())) onSubmit(); if (e.key === "Escape") onCancel(); }}
-        style={field} />
+        className="vx-input" />
       <div style={{ display: "flex", gap: 8 }}>
         <button disabled={busy || (required && !value.trim())} onClick={onSubmit} style={btn("primary")}>{submitLabel}</button>
         <button disabled={busy} onClick={onCancel} style={btn()}>Cancel</button>
@@ -429,6 +431,7 @@ function ParticipantsSection({ ownSlug, shared, shareWsId, myRole, setShareWsId,
 }) {
   const [members, setMembers] = useState<WorkspaceMember[]>([]);
   const [invite, setInvite] = useState<{ mode: "link" | "email"; role: string; ttlDays: number; emails: string; link: string | null } | null>(null);
+  const [confirm, confirmDialog] = useConfirm();
   const loadMembers = () => { if (shareWsId) void listWorkspaceMembers(shareWsId).then(setMembers).catch(() => setMembers([])); };
   useEffect(() => { loadMembers(); }, [shareWsId]);  // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -436,7 +439,7 @@ function ParticipantsSection({ ownSlug, shared, shareWsId, myRole, setShareWsId,
   if (!shareWsId) {
     return (
       <Section icon="user" title="Participants">
-        <div style={{ fontSize: 12.5, color: "var(--t3)", marginBottom: 10 }}>Private to you. Share it to add members and collaborate.</div>
+        <div className="t-xs c-3 mb-2">Private to you. Share it to add members and collaborate.</div>
         <button disabled={busy || !ownSlug} style={btn("primary")}
           onClick={() => ownSlug && onRun(async () => { const { workspace_id } = await shareEnableWorkspace(ownSlug); setShareWsId(workspace_id); reload(); }, "Sharing enabled.")}>
           <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="link" size={13} />Share this workspace</span>
@@ -456,40 +459,41 @@ function ParticipantsSection({ ownSlug, shared, shareWsId, myRole, setShareWsId,
   });
 
   return (
-    <Section icon="user" title="Participants" right={<span style={{ fontSize: 11.5, color: "var(--t3)" }}>{members.length} member{members.length === 1 ? "" : "s"}</span>}>
-      <div style={{ display: "flex", flexDirection: "column", gap: 2, marginBottom: 10 }}>
+    <Section icon="user" title="Participants" right={<span className="t-xs c-3">{members.length} member{members.length === 1 ? "" : "s"}</span>}>
+      <div className="mb-2" style={{ display: "flex", flexDirection: "column", gap: 2 }}>
         {members.map((m) => {
           const creator = m.role === "owner";
           return (
-            <div key={m.subject} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 4px", borderBottom: "1px solid var(--line)" }}>
+            <div key={m.subject} className="pt-1_5 pr-1 pb-1_5 pl-1 bd-b" style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <Icon name="user" size={14} style={{ color: "var(--t3)" }} />
-              <span title={m.subject} style={{ flex: 1, fontSize: 13, color: "var(--t1)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{m.email || short(m.subject)}</span>
-              <span style={{ fontSize: 11, color: creator ? "var(--accent)" : "var(--t3)", textTransform: "uppercase", letterSpacing: ".03em" }}>{creator ? "creator" : "member"}</span>
+              <span title={m.subject} className="t-sm c-1" style={{ flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{m.email || short(m.subject)}</span>
+              <span className="t-xs" style={{ color: creator ? "var(--accent)" : "var(--t3)", textTransform: "uppercase", letterSpacing: ".03em" }}>{creator ? "creator" : "member"}</span>
               {isOwner && !creator && (
                 <span onClick={() => onRun(async () => { await removeWorkspaceMember(shareWsId, m.subject); loadMembers(); }, "Member removed.")}
-                  title="Remove member" style={{ cursor: "pointer", color: "var(--t3)", padding: "0 3px" }}><Icon name="x" size={13} /></span>
+                  title="Remove member" className="c-3 pt-0 pr-0_5 pb-0 pl-0_5" style={{ cursor: "pointer" }}><Icon name="x" size={13} /></span>
               )}
             </div>
           );
         })}
-        {members.length === 0 && <div style={{ fontSize: 12.5, color: "var(--t3)", padding: "4px 0" }}>No members yet — invite someone below.</div>}
+        {members.length === 0 && <div className="t-xs c-3 pt-1 pr-0 pb-1 pl-0">No members yet — invite someone below.</div>}
       </div>
 
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <button disabled={busy} onClick={() => setInvite({ mode: "link", role: "contributor", ttlDays: 7, emails: "", link: null })} style={btn("primary")}><span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="link" size={13} />Invite link</span></button>
         <button disabled={busy} onClick={() => setInvite({ mode: "email", role: "contributor", ttlDays: 7, emails: "", link: null })} style={btn()}><span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="mail" size={13} />Add by email</span></button>
         {shared && (
-          <button disabled={busy} style={{ ...btn(), marginLeft: "auto", color: "var(--danger)" }}
+          <button disabled={busy} className="ml-auto c-danger" style={{ ...btn() }}
             onClick={() => onRun(async () => { await leaveWorkspace(shareWsId); layout.closeTab(tabId); }, "Left the workspace.")}>
             <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="logout" size={13} />Leave</span></button>
         )}
         {isOwner && shared && (
-          <button disabled={busy} style={{ ...btn(), color: "var(--danger)" }}
-            onClick={() => { if (window.confirm("Stop sharing? All members lose access and it becomes your private workspace.")) onRun(async () => { await unshareWorkspace(shareWsId); layout.closeTab(tabId); }, "Unshared."); }}>Unshare</button>
+          <button disabled={busy} className="c-danger" style={{ ...btn() }}
+            onClick={() => { void confirm({ title: "Stop sharing this workspace?", consequence: "All members lose access and it becomes your private workspace.", confirmLabel: "Stop sharing" }).then((ok) => { if (ok) void onRun(async () => { await unshareWorkspace(shareWsId); layout.closeTab(tabId); }, "Unshared."); }); }}>Unshare</button>
         )}
       </div>
 
       {invite && <InviteDialog s={invite} setS={setInvite} onMint={doMint} busy={busy} />}
+      {confirmDialog}
     </Section>
   );
 }
@@ -503,23 +507,23 @@ function InviteDialog({ s, setS, onMint, busy, plain }: {
     <div style={plain
       ? { display: "flex", flexDirection: "column", gap: 8 }
       : { marginTop: 12, padding: "12px", background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 8, display: "flex", flexDirection: "column", gap: 8 }}>
-      {!plain && <div style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em" }}>{s.mode === "email" ? "Add by email" : "Invite link"}</div>}
+      {!plain && <div className="t-xs c-3" style={{ textTransform: "uppercase", letterSpacing: ".04em" }}>{s.mode === "email" ? "Add by email" : "Invite link"}</div>}
       <div style={{ display: "flex", gap: 8 }}>
         <select value={s.role} disabled={busy} onChange={(e) => setS({ ...s, role: e.target.value, link: null })} style={{ ...field, flex: 1 }}>
           <option value="contributor">member (read + write)</option>
           <option value="viewer">viewer (read)</option>
         </select>
-        <select value={s.ttlDays} disabled={busy} onChange={(e) => setS({ ...s, ttlDays: Number(e.target.value), link: null })} style={field}>
+        <select value={s.ttlDays} disabled={busy} onChange={(e) => setS({ ...s, ttlDays: Number(e.target.value), link: null })} className="vx-input">
           <option value={1}>1 day</option><option value={7}>7 days</option><option value={30}>30 days</option>
         </select>
       </div>
       {s.mode === "email" && (
         <input value={s.emails} placeholder="emails (comma-separated) — only these may redeem" disabled={busy}
-          onChange={(e) => setS({ ...s, emails: e.target.value, link: null })} style={field} />
+          onChange={(e) => setS({ ...s, emails: e.target.value, link: null })} className="vx-input" />
       )}
       {s.link ? (
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <input readOnly value={s.link} onFocus={(e) => e.currentTarget.select()} style={{ ...field, flex: 1, fontSize: 11.5, color: "var(--t2)" }} />
+          <input readOnly value={s.link} onFocus={(e) => e.currentTarget.select()} className="t-xs c-2" style={{ ...field, flex: 1 }} />
           <button onClick={() => void copyText(s.link!)} style={btn("primary")}>Copy</button>
         </div>
       ) : (
