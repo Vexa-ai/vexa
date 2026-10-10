@@ -16,6 +16,7 @@ only; other runners declare their own.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import subprocess
 from pathlib import Path
@@ -27,6 +28,8 @@ from llm.claude_skills import _link_skills_into_home
 from llm.tool_events import (_BOT_TOOLS, _FOCUS_TOOLS, _OPEN_TOOLS, _TERMS_TOOLS, _WRITER_TOOLS,
                              _bot_artifact, _open_event, _published_terms, _short,
                              _workspace_focus, _written_artifact)
+
+logger = logging.getLogger("llm.claude_code")
 
 
 def parse_stream_json(lines: Iterable[str]) -> Iterator[dict]:
@@ -211,7 +214,11 @@ def build_argv(
     effort: Optional[str] = None,
     workspace: Optional[str] = None,
 ) -> list[str]:
-    """The headless Claude Code argv — `claude -p <prompt> --output-format stream-json [...]`.
+    """The headless Claude Code argv — `claude -p --input-format stream-json --output-format
+    stream-json [...]`. The PROMPT IS NEVER IN ARGV: every process can read every other process's
+    command line, so the turn's text travels on the CLI's stdin as its first stream-json user message
+    (`_exec_subprocess_stdin`), whether or not mid-turn injection is on. ``prompt`` and
+    ``stdin_mode`` are kept for callers; neither changes the argv.
 
     `--permission-mode acceptEdits` auto-accepts Read/Edit/Write so the turn runs fully headless; the
     `--allowedTools` scope is the capability gate (the model writes entities, `run_harness_turn`
@@ -243,13 +250,10 @@ def build_argv(
     scope (`_link_skills_into_home`) with the frontmatter that could grant tools removed from the
     workspace's.
     """
-    if stdin_mode:
-        # prompt travels via stdin (stream-json) so the pipe stays open for mid-turn injection
-        argv = ["claude", "-p", "--input-format", "stream-json", "--output-format", "stream-json",
-                "--verbose", "--include-partial-messages", "--permission-mode", "acceptEdits"]
-    else:
-        argv = ["claude", "-p", prompt, "--output-format", "stream-json", "--verbose",
-                "--include-partial-messages", "--permission-mode", "acceptEdits"]
+    # the prompt travels via stdin (stream-json): off the command line, and the pipe can stay open
+    # for mid-turn injection when that is on
+    argv = ["claude", "-p", "--input-format", "stream-json", "--output-format", "stream-json",
+            "--verbose", "--include-partial-messages", "--permission-mode", "acceptEdits"]
     argv += ["--setting-sources", "user", "--settings", NO_HOOKS_SETTINGS]
     if workspace:
         argv += ["--add-dir", workspace]
@@ -348,9 +352,12 @@ def _reap(proc, grace: "float | None" = None) -> None:
         proc.wait()
 
 
-def _exec_subprocess_stdin(argv: list[str], cwd: str, first_message: str) -> Iterator[str]:
-    """stdin-mode exec: the prompt travels as the first stream-json user message and stdin STAYS
-    OPEN for mid-turn injection; a `result` line closes it (turn over → CLI exits)."""
+def _exec_subprocess_stdin(argv: list[str], cwd: str, first_message: str, *,
+                           injectable: bool = True) -> Iterator[str]:
+    """The CLI exec: the prompt travels as the first stream-json user message on stdin (never in
+    argv), and stdin stays open until a `result` line closes it (turn over → CLI exits). With
+    ``injectable`` (mid-turn injection on) the open stdin is also published for
+    ``inject_user_message``."""
     global _ACTIVE_STDIN
     proc = subprocess.Popen(argv, cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, text=True, bufsize=1,
@@ -359,8 +366,9 @@ def _exec_subprocess_stdin(argv: list[str], cwd: str, first_message: str) -> Ite
     try:
         proc.stdin.write(_user_message_json(first_message) + "\n")
         proc.stdin.flush()
-        with _STDIN_LOCK:
-            _ACTIVE_STDIN = proc.stdin
+        if injectable:
+            with _STDIN_LOCK:
+                _ACTIVE_STDIN = proc.stdin
         for line in proc.stdout:
             yield line
             if '"type":"result"' in line or '"type": "result"' in line:
@@ -401,6 +409,34 @@ def _exec_subprocess(argv: list[str], cwd: str) -> Iterator[str]:
         _reap(proc)
 
 
+_DIR_NOFOLLOW = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+
+
+def _nofollow_dirs(base: Path, *names: str) -> Optional[Path]:
+    """``base/names…``, each level created if absent and then opened through the verified fd of the
+    level above with ``O_NOFOLLOW``: ``None`` when any level is a link or not a directory. ``base``
+    itself (the mount root, HOME) is the deployment's, and is made if it does not exist yet."""
+    try:
+        base.mkdir(parents=True, exist_ok=True)
+        fd = os.open(base, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0))
+    except OSError:
+        return None
+    try:
+        for name in names:
+            try:
+                os.mkdir(name, dir_fd=fd)
+            except FileExistsError:
+                pass
+            nfd = os.open(name, _DIR_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = nfd
+        return base.joinpath(*names)
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+
+
 def _link_chat_into_workspace(work: Path) -> None:
     """Save + resume chats FROM THE WORKSPACE. claude-code stores a conversation's transcript at
     ``~/.claude/projects/<cwd-slug>/<session>.jsonl`` — inside the container, so it is wiped when the
@@ -414,10 +450,15 @@ def _link_chat_into_workspace(work: Path) -> None:
     transcripts — this function must never delete data it didn't create. A pre-existing directory
     is therefore replaced only when EMPTY (``rmdir``, which cannot destroy content); a non-empty
     one is left alone and the link is skipped — the turn still works, without cross-turn resume."""
-    ws_projects = work / ".claude" / "projects"
-    ws_projects.mkdir(parents=True, exist_ok=True)
-    home_claude = Path(os.environ.get("HOME", "/root")) / ".claude"
-    home_claude.mkdir(parents=True, exist_ok=True)
+    # The continuity root is a mount the model's tools can write (``_system``), so a level of it may
+    # be a link the turn planted: each level is created and opened without following one, and a
+    # link anywhere skips the chat link (the turn still runs, without cross-turn resume).
+    ws_projects = _nofollow_dirs(work, ".claude", "projects")
+    home_claude = _nofollow_dirs(Path(os.environ.get("HOME", "/root")), ".claude")
+    if ws_projects is None or home_claude is None:
+        logger.warning("chat continuity not linked: a level of %s/.claude/projects or of HOME/.claude "
+                       "is a link or not a directory", work)
+        return
     link = home_claude / "projects"
     try:
         if link.is_symlink():
@@ -447,14 +488,13 @@ class ClaudeCodeHarness:
                  session: Optional[str] = None, model: Optional[str] = None,
                  mcp_config: Optional[str] = None) -> Iterator[dict]:
         effort = os.environ.get("VEXA_AGENT_EFFORT") or None
-        if midturn_enabled() and self._exec is _exec_subprocess:
-            argv = build_argv(prompt, allowed_tools=allowed_tools, session=session, model=model,
-                              mcp_config=mcp_config, stdin_mode=True, effort=effort,
-                              workspace=str(work))
-            yield from parse_stream_json(_exec_subprocess_stdin(argv, str(work), prompt))
+        argv = build_argv(prompt, allowed_tools=allowed_tools, session=session, model=model,
+                          mcp_config=mcp_config, stdin_mode=True, effort=effort, workspace=str(work))
+        if self._exec is _exec_subprocess:
+            # the real CLI: the prompt goes in on stdin, never on the command line
+            yield from parse_stream_json(_exec_subprocess_stdin(argv, str(work), prompt,
+                                                                injectable=midturn_enabled()))
         else:
-            argv = build_argv(prompt, allowed_tools=allowed_tools, session=session, model=model,
-                              mcp_config=mcp_config, effort=effort, workspace=str(work))
             yield from parse_stream_json(self._exec(argv, str(work)))
 
     def prepare(self, work: Path, chat_root: Optional[Path] = None) -> None:

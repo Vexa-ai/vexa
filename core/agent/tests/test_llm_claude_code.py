@@ -8,6 +8,7 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 from llm import run_harness_turn
@@ -113,7 +114,7 @@ def test_parse_stream_json_keeps_non_auth_failure_verbatim():
 
 def test_build_argv_core_flags_and_session_model():
     argv = build_argv("hi", allowed_tools=["Read"], session="s1", model="m1")
-    assert argv[:3] == ["claude", "-p", "hi"]
+    assert argv[:4] == ["claude", "-p", "--input-format", "stream-json"]
     assert "--output-format" in argv and "stream-json" in argv
     assert "--allowedTools" in argv and "Read" in argv
     assert "--resume" in argv and "s1" in argv
@@ -739,3 +740,97 @@ def test_prepare_repoints_stale_symlink_and_is_idempotent(tmp_path: Path, monkey
     assert os.readlink(link) == target
     link = _prepare_with_home(monkeypatch, home, ws)  # second turn, already correct → no-op
     assert os.readlink(link) == target
+
+
+# ── the prompt never rides argv (every process can read every command line) ──
+
+def test_the_prompt_is_never_in_argv():
+    secret = "THE-TURN-TEXT-7f3a"
+    for kw in ({}, {"stdin_mode": True}, {"stdin_mode": False}):
+        argv = build_argv(secret, allowed_tools=["Read"], session="s", model="m", **kw)
+        assert not any(secret in a for a in argv), kw
+
+
+@pytest.mark.parametrize("midturn", ["", "1"])
+def test_the_real_cli_gets_the_prompt_on_stdin(monkeypatch, tmp_path, midturn):
+    """Both modes run the CLI through the stdin exec; only mid-turn injection publishes its stdin."""
+    from llm import claude_code
+
+    monkeypatch.setenv("VEXA_MIDTURN_INJECT", midturn)
+    seen = {}
+
+    def fake_stdin_exec(argv, cwd, first_message, *, injectable=True):
+        seen.update(argv=argv, first=first_message, injectable=injectable)
+        return iter(())
+
+    monkeypatch.setattr(claude_code, "_exec_subprocess_stdin", fake_stdin_exec)
+    list(ClaudeCodeHarness().run_turn(tmp_path, "THE-TURN-TEXT-7f3a", allowed_tools=["Read"]))
+    assert seen["first"] == "THE-TURN-TEXT-7f3a"
+    assert not any("THE-TURN-TEXT-7f3a" in a for a in seen["argv"])
+    assert seen["injectable"] is (midturn == "1")
+
+
+def test_the_stdin_exec_delivers_the_prompt_and_keeps_it_off_the_command_line(monkeypatch, tmp_path):
+    """A stand-in CLI reports what it was given: the prompt arrives as the first stream-json user
+    message on stdin, and its own command line does not carry it."""
+    import sys
+    from llm import claude_code
+
+    monkeypatch.setattr(claude_code, "harness_identity_kwargs", lambda: {})
+    script = (
+        "import json, sys\n"
+        "msg = json.loads(sys.stdin.readline())\n"
+        "text = msg['message']['content'][0]['text']\n"
+        "cmd = open('/proc/self/cmdline','rb').read().decode() if __import__('os').path.exists('/proc/self/cmdline') else ' '.join(sys.argv)\n"
+        "print(json.dumps({'type': 'result', 'subtype': 'success', 'is_error': False, 'result': text,"
+        " 'in_cmdline': 'TURN-TEXT' in cmd, 'session_id': 's'}), flush=True)\n"
+    )
+    for injectable in (False, True):
+        lines = list(claude_code._exec_subprocess_stdin([sys.executable, "-c", script], str(tmp_path),
+                                                        "THE-TURN-TEXT-7f3a", injectable=injectable))
+        result = json.loads(lines[-1])
+        assert result["result"] == "THE-TURN-TEXT-7f3a" and result["in_cmdline"] is False
+        assert claude_code._ACTIVE_STDIN is None          # cleared when the turn ends
+
+
+# ── chat continuity never follows a link the turn planted (the _system mount is tools-writable) ──
+
+@pytest.mark.parametrize("planted", [".claude", ".claude/projects"])
+def test_chat_continuity_refuses_a_linked_level(monkeypatch, tmp_path, planted):
+    from llm import claude_code
+
+    work, home, outside = tmp_path / "system", tmp_path / "home", tmp_path / "outside"
+    for d in (work, home, outside):
+        d.mkdir()
+    if planted == ".claude/projects":
+        (work / ".claude").mkdir()
+    (work / planted).symlink_to(outside)
+    monkeypatch.setenv("HOME", str(home))
+    claude_code._link_chat_into_workspace(work)
+    assert list(outside.iterdir()) == []                    # nothing created through the link
+    assert not (home / ".claude" / "projects").exists()      # and no continuity link made
+
+
+def test_chat_continuity_links_real_directories(monkeypatch, tmp_path):
+    from llm import claude_code
+
+    work, home = tmp_path / "system", tmp_path / "home"
+    work.mkdir()
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    claude_code._link_chat_into_workspace(work)
+    link = home / ".claude" / "projects"
+    assert link.is_symlink() and os.readlink(link) == str(work / ".claude" / "projects")
+    assert (work / ".claude" / "projects").is_dir()
+
+
+def test_a_linked_home_claude_is_refused_too(monkeypatch, tmp_path):
+    from llm import claude_code
+
+    work, home, outside = tmp_path / "system", tmp_path / "home", tmp_path / "outside"
+    for d in (work, home, outside):
+        d.mkdir()
+    (home / ".claude").symlink_to(outside)
+    monkeypatch.setenv("HOME", str(home))
+    claude_code._link_chat_into_workspace(work)
+    assert list(outside.iterdir()) == []
