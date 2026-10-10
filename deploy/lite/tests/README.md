@@ -24,7 +24,9 @@
   on per-bot profile dirs with zero Chromium SingletonLock signatures (the #478
   failure class fires at browser launch, so no meeting admission is needed), and,
   through `bot_displays.py` run inside while they are up, each on its own X display
-  that no other bot can open or capture.
+  that no other bot can open or capture, and through `bot_browsers.py`, each browser
+  sandboxed and holding none of the bot's environment, with user namespaces refused to
+  every process but the runtime and the bots.
   Runs in CI as a `release-images / validate-lite` step against the published image, and
   on any clean host after `IMAGE_TAG=vX.Y.Z make lite`; post the attestation with
   `POST_STATUS=1 GIT_SHA=<released sha>` (sole issuer of `release/vm-validated`).

@@ -39,7 +39,8 @@ def test_the_tools_user_is_the_worker_images():
 
 
 def test_valkeys_password_is_in_a_root_only_file_not_on_its_command_line():
-    (command,) = re.findall(r"^command=/usr/local/bin/valkey-server (.*)$", SUPERVISORD, flags=re.M)
+    (command,) = re.findall(r"^command=/usr/local/bin/no-user-namespaces /usr/local/bin/valkey-server (.*)$",
+                            SUPERVISORD, flags=re.M)
     assert "requirepass" not in command and command.startswith("/run/vexa/valkey.conf ")
     block = re.search(r"^\( umask 077; printf 'requirepass.*$", ENTRYPOINT, flags=re.M).group(0)
     assert "/run/vexa/valkey.conf" in block
@@ -259,3 +260,47 @@ def test_the_live_check_runs_in_make_test():
     makefile = (LITE / "Makefile").read_text()
     assert 'tests/child_identities.py" || FAIL=1' in makefile
 
+
+def test_the_container_profile_is_dockers_default_plus_user_namespaces():
+    """seccomp.json: Docker's default profile (deny by default; clone3 answered ENOSYS; namespaces
+    behind CAP_SYS_ADMIN) with one rule more — clone and unshare for a process without that
+    capability, so a meeting bot's Chromium can build its sandbox — and `make up` runs Lite under it."""
+    import json
+
+    profile = json.loads((LITE / "seccomp.json").read_text())
+    assert profile["defaultAction"] == "SCMP_ACT_ERRNO"
+    ours = [r for r in profile["syscalls"] if r.get("comment", "").startswith("Vexa Lite:")]
+    assert len(ours) == 1
+    (rule,) = ours
+    assert sorted(rule["names"]) == ["clone", "unshare"] and rule["action"] == "SCMP_ACT_ALLOW"
+    assert rule["excludes"] == {"caps": ["CAP_SYS_ADMIN"]} and "args" not in rule
+    clone3 = [r for r in profile["syscalls"] if r["names"] == ["clone3"]]
+    assert clone3 and clone3[0]["action"] == "SCMP_ACT_ERRNO" and clone3[0]["errnoRet"] == 38
+    others = [r for r in profile["syscalls"] if r is not rule and "unshare" in r["names"]]
+    assert others and all(r.get("includes", {}).get("caps") == ["CAP_SYS_ADMIN"] for r in others)
+    makefile = (LITE / "Makefile").read_text()
+    assert '--security-opt seccomp="$(ROOT)/deploy/lite/seccomp.json"' in makefile
+
+
+def test_every_service_but_the_runtime_is_refused_user_namespaces():
+    commands, program = {}, None
+    for line in SUPERVISORD.splitlines():
+        if line.startswith("["):
+            program = line[len("[program:"):-1] if line.startswith("[program:") else None
+        elif program and line.startswith("command="):
+            commands[program] = line[len("command="):]
+    assert set(commands) >= {"redis", "admin-api", "runtime", "agent-api", "meeting-api", "gateway", "mcp", "terminal"}
+    for name, command in commands.items():
+        wrapped = command.startswith("/usr/local/bin/no-user-namespaces ")
+        assert wrapped == (name != "runtime"), name
+    wrapper = (LITE / "bin" / "no-user-namespaces").read_text()
+    assert 'USERNS = "/app/runtime/src/runtime_kernel/userns.py"' in wrapper
+    assert "COPY core/runtime/src /app/runtime/src" in DOCKERFILE and "bin/no-user-namespaces" in DOCKERFILE
+    assert wrapper.index("refuse_user_namespaces()") < wrapper.index("os.execvp")
+    profiles = (ROOT / "core" / "runtime" / "src" / "runtime_kernel" / "profiles.py").read_text()
+    assert profiles.count("user_namespaces=True") == 1
+
+
+def test_the_bots_browser_checks_run_with_the_concurrent_bots():
+    smoke = (LITE / "tests" / "concurrent-bots.sh").read_text()
+    assert 'python3 - < "$(dirname "$0")/bot_browsers.py" || die' in smoke

@@ -92,6 +92,10 @@ class Runnable:
     #: The host groups a process-backend child joins besides its own (by name; one the host lacks is
     #: skipped). Container backends ignore it.
     process_groups: tuple[str, ...] = ()
+    #: A process-backend child may create user namespaces (a meeting bot: Chromium's sandbox is built
+    #: on one). Every other child of a root process backend loses that ability before it runs
+    #: (runtime_kernel.userns). Container backends leave it to the container's seccomp profile.
+    user_namespaces: bool = False
     #: The Linux capabilities a container workload keeps; every other one is dropped, and it can gain
     #: none (docker ``no-new-privileges``, k8s ``allowPrivilegeEscalation: false``, seccomp
     #: ``RuntimeDefault``). A process-backend child keeps none: it is not root.
@@ -303,8 +307,10 @@ def default_registry() -> ProfileRegistry:
                     # redis for its streams) and is given no model credential.
                     labels={CLASS_LABEL: "bot"},
                     # As a process-backend child it joins no host group: it brings up its own
-                    # display and audio server (deploy/lite/bin/vexa-bot-launch).
+                    # display and audio server (deploy/lite/bin/vexa-bot-launch). It may create user
+                    # namespaces, which its browser's sandbox needs; no other child may.
                     scheduling=_profile_scheduling("meeting-bot"),
+                    user_namespaces=True,
                 ),
                 idle_timeout_sec=0,  # 0 ⇒ managed externally; enforcement skips it
                 base_env=bot_tuning_env,

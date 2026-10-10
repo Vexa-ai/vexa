@@ -173,7 +173,7 @@ class ProcessBackend:
         if os.geteuid() == 0:
             try:
                 identity = self._identity(workload_id, runnable, env)
-                preexec = preexec_for(identity)
+                preexec = preexec_for(identity, user_namespaces=runnable.user_namespaces)
             except Exception as e:
                 self._uids.release(workload_id)
                 if identity is not None:

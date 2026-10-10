@@ -120,6 +120,9 @@ echo "per-bot profile dirs: $dirs ✓"
 # 3b) each bot on its OWN X display, served by its own Xvfb as its own uid; no bot can open or capture
 #     another's screen, and a uid without a cookie opens none (tests/bot_displays.py, run as root inside)
 docker exec -i "$APP" python3 - < "$(dirname "$0")/bot_displays.py" || die "bots' X displays are not isolated"
+# 3c) each bot's browser sandboxed, holding none of the bot's environment; only bots (and the runtime
+#     that starts them) may create user namespaces (tests/bot_browsers.py)
+docker exec -i "$APP" python3 - < "$(dirname "$0")/bot_browsers.py" || die "bots' browsers are not sandboxed"
 
 # 4) the live-transcript SSE stream AUTHORIZES for the meeting's OWNER (#585 regression).
 #    agent-api owner-scopes /agent/meeting/stream by calling meeting-api GET /meetings/{id}; on lite

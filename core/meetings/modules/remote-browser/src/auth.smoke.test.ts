@@ -6,7 +6,8 @@
  *  1. LAUNCH FLAGS (args.ts) — the authenticated/persistent-context flags must
  *     NOT contain --disable-web-security / --ignore-certificate-errors (Google's
  *     bot layer flags those and blocks the join), MUST disable
- *     AutomationControlled, and MUST NOT be incognito. The session (VNC+CDP)
+ *     AutomationControlled, MUST NOT be incognito, and MUST NOT turn Chromium's
+ *     sandbox off (the launch decides that, sandbox.test.ts). The session (VNC+CDP)
  *     flags must carry the CDP debug args so an agent can attach.
  *
  *  2. LOGGED-IN DECISION (validate.ts) — validateLoggedIn returns loggedIn=true
@@ -38,10 +39,12 @@ check(authArgs.includes('--disable-blink-features=AutomationControlled'),
   'authenticated args must disable AutomationControlled');
 check(!authArgs.includes('--incognito'),
   'authenticated args must NOT be incognito (wipes stored cookies)');
-check(authArgs.includes('--no-sandbox'), 'authenticated args must include --no-sandbox (container)');
+for (const off of ['--no-sandbox', '--disable-setuid-sandbox']) {
+  check(!authArgs.includes(off), `authenticated args must NOT turn the sandbox off (${off})`);
+}
 
 const sessionArgs = getBrowserSessionArgs();
-for (const bad of FORBIDDEN) {
+for (const bad of [...FORBIDDEN, '--no-sandbox', '--disable-setuid-sandbox']) {
   check(!sessionArgs.includes(bad), `session args must NOT contain ${bad}`);
 }
 // session mode must expose CDP so an agent can attach over the gateway proxy

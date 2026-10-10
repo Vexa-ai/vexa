@@ -14,6 +14,8 @@ import re
 import sys
 import tokenize
 
+import pytest
+
 from runtime_kernel.k8s_backend import build_pod
 from runtime_kernel.process_backend import ProcessBackend
 from runtime_kernel.profiles import CredentialFile, Runnable
@@ -141,6 +143,32 @@ def test_the_shipped_agent_profile_carries_the_configured_credentials(monkeypatc
     )
     assert agent.credential_env == {CODEX_HOME_ENV: WORKER_CODEX_HOME}
     assert not bot.credential_mounts and bot.credential_files == () and bot.process_groups == ()
+    # only a meeting bot may create user namespaces (its browser's sandbox); a worker may not
+    assert bot.user_namespaces is True and agent.user_namespaces is False
+
+
+def test_the_process_backend_refuses_user_namespaces_to_every_child_but_a_bot(monkeypatch, tmp_path):
+    from runtime_kernel import process_backend as pb
+
+    seen = []
+    monkeypatch.setattr(pb.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(pb, "sweep_homes", lambda **_: 0)
+    monkeypatch.setattr(pb.ProcessBackend, "_identity",
+                        lambda self, wid, runnable, env: pb.ChildIdentity(4242, 4242, (), str(tmp_path), str(tmp_path)))
+    monkeypatch.setattr(pb, "preexec_for", lambda identity, *, user_namespaces: seen.append(user_namespaces) or (lambda: None))
+    monkeypatch.setattr(pb, "_open_log", lambda wid: (None, None))
+
+    class Done(Exception):
+        pass
+
+    def popen(*_a, **_k):
+        raise Done()
+    monkeypatch.setattr(pb.subprocess, "Popen", popen)
+    backend = pb.ProcessBackend(homes_root=str(tmp_path))
+    for runnable in (Runnable(command=["true"]), Runnable(command=["true"], user_namespaces=True)):
+        with pytest.raises(Done):
+            backend.start("w", runnable, {})
+    assert seen == [False, True]
 
 
 def test_the_process_backend_stages_credential_files_only_for_a_profile_that_asks(monkeypatch, tmp_path):

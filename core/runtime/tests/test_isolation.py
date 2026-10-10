@@ -400,12 +400,27 @@ def test_preexec_drops_groups_then_gid_then_uid_then_proves_it(monkeypatch):
     monkeypatch.setattr(os, "getresgid", lambda: (100017,) * 3, raising=False)
     monkeypatch.setattr(os, "getgroups", lambda: [200000])
     monkeypatch.setattr(iso, "_no_new_privs", lambda: (lambda: calls.append(("nnp", 1))))
+    monkeypatch.setattr(iso.userns, "refusal", lambda: (lambda: calls.append(("no userns", 1))))
     preexec_for(_identity())()
+    assert calls == [("groups", (200000,)), ("gid", 100017), ("uid", 100017), ("nnp", 1), ("no userns", 1)]
+    calls.clear()
+    preexec_for(_identity(), user_namespaces=True)()       # a meeting bot keeps them (its sandbox)
     assert calls == [("groups", (200000,)), ("gid", 100017), ("uid", 100017), ("nnp", 1)]
+
+
+def test_a_child_that_cannot_lose_user_namespaces_is_refused(monkeypatch):
+    def unsupported():
+        raise iso.userns.Unsupported(38, "no filter here")
+    monkeypatch.setattr(iso, "_no_new_privs", lambda: (lambda: None))
+    monkeypatch.setattr(iso.userns, "refusal", unsupported)
+    with pytest.raises(IsolationRefused):
+        preexec_for(_identity())
+    preexec_for(_identity(), user_namespaces=True)          # nothing to take away: not refused
 
 
 def test_preexec_fails_when_the_child_still_holds_root(monkeypatch):
     monkeypatch.setattr(iso, "_no_new_privs", lambda: (lambda: None))
+    monkeypatch.setattr(iso.userns, "refusal", lambda: (lambda: None))
     for name in ("setgroups", "setgid", "setuid"):
         monkeypatch.setattr(os, name, lambda *_: None)
     monkeypatch.setattr(os, "getresuid", lambda: (100017, 100017, 0), raising=False)     # saved uid still root

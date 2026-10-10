@@ -101,6 +101,14 @@ In [compose mode](../compose/README.md) the runtime spawns each bot/agent in its
 container** via the Docker socket; in lite they are child processes, each bot with its own uid, X
 display (cookie only it holds) and audio daemon. There is no shared screen, so no VNC view.
 
+Each bot's browser runs with Chromium's sandbox, and with none of the bot's own environment. The
+sandbox is built on user namespaces, which Docker's default seccomp profile refuses, so `make up`
+starts the container under [`seccomp.json`](seccomp.json): Docker Engine 29.6.2's default profile
+([moby/profiles](https://github.com/moby/profiles), Apache-2.0) with one rule added, letting a process
+without `CAP_SYS_ADMIN` call `clone`/`unshare` for new namespaces. Only the bots keep that: every
+service starts through `bin/no-user-namespaces`, and the runtime refuses it to every child but a
+meeting bot. Started without the profile, the bots' browsers run unsandboxed and log why.
+
 ## Configuration
 
 The repo-root `.env` (auto-seeded from `deploy/compose/.env` if present, else minimal):
