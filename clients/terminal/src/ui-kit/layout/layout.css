@@ -86,16 +86,21 @@
   z-index: 29;
   background: rgba(0, 0, 0, 0.32);
 }
+/* Visibility flips at once on open (so focus can move in on the same frame) and only after the
+ * slide on close (so the panel does not vanish mid-slide). */
 @media (prefers-reduced-motion: no-preference) {
   .vx-sheet[data-form="overlay"],
   .vx-sheet[data-form="fullscreen"] {
-    transition: transform 240ms cubic-bezier(.2, .8, .2, 1), visibility 240ms;
+    transition: transform 240ms cubic-bezier(.2, .8, .2, 1), visibility 0s linear 240ms;
+  }
+  .vx-sheet[data-open] {
+    transition: transform 240ms cubic-bezier(.2, .8, .2, 1), visibility 0s;
   }
 }
 @media (prefers-reduced-motion: reduce) {
   .vx-sheet[data-form="overlay"],
-  .vx-sheet[data-form="fullscreen"] { transform: none; opacity: 0; transition: opacity 120ms, visibility 120ms; }
-  .vx-sheet[data-open] { opacity: 1; }
+  .vx-sheet[data-form="fullscreen"] { transform: none; opacity: 0; transition: opacity 120ms, visibility 0s linear 120ms; }
+  .vx-sheet[data-open] { opacity: 1; transition: opacity 120ms, visibility 0s; }
 }
 
 /* ── The rail's icon strip ────────────────────────────────────────────────────────────────── */

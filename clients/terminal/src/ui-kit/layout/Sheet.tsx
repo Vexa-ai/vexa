@@ -35,9 +35,12 @@ export function Sheet({ form, open, onClose, side = "right", width, label, child
     if (!shown) return;
     const el = box.current;
     const before = document.activeElement as HTMLElement | null;
-    // Move focus in: the first control, else the sheet itself.
-    const first = el?.querySelector<HTMLElement>(FOCUSABLE);
-    (first ?? el)?.focus();
+    // Move focus in: the first control, else the sheet itself — on the next frame, once the open
+    // state has painted and the sheet is visible (an element that is still hidden takes no focus).
+    const frame = requestAnimationFrame(() => {
+      const first = el?.querySelector<HTMLElement>(FOCUSABLE);
+      (first ?? el)?.focus();
+    });
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") { e.stopPropagation(); onClose(); return; }
       if (e.key !== "Tab" || !el) return;
@@ -49,6 +52,7 @@ export function Sheet({ form, open, onClose, side = "right", width, label, child
     };
     document.addEventListener("keydown", onKey);
     return () => {
+      cancelAnimationFrame(frame);
       document.removeEventListener("keydown", onKey);
       // Return focus to the trigger, if it is still on the page.
       if (before && document.contains(before)) before.focus();

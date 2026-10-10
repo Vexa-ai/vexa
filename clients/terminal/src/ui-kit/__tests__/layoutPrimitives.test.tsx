@@ -49,7 +49,7 @@ describe("Sheet", () => {
     expect(screen.getByText("inside")).toBeTruthy();
   });
 
-  it("an open overlay is a modal dialog that takes focus and closes on Escape, returning focus", () => {
+  it("an open overlay is a modal dialog that takes focus and closes on Escape, returning focus", async () => {
     const onClose = vi.fn();
     const trigger = document.createElement("button");
     document.body.appendChild(trigger);
@@ -57,6 +57,7 @@ describe("Sheet", () => {
     const { rerender } = render(<Sheet form="overlay" open onClose={onClose} label="Pages" width={480}><button>first</button></Sheet>);
     const d = screen.getByRole("dialog", { name: "Pages" });
     expect(d.getAttribute("aria-modal")).toBe("true");
+    await new Promise((r) => requestAnimationFrame(() => r(null)));
     expect(document.activeElement).toBe(screen.getByText("first"));
     fireEvent.keyDown(document, { key: "Escape" });
     expect(onClose).toHaveBeenCalledTimes(1);
