@@ -1,0 +1,27 @@
+{
+  "case": "connect-gmail",
+  "what": "A Gmail tool has just failed. The person says they want to connect Gmail. The agent must open the Connections panel (connection_request), or say plainly that the account is connected and what is failing. It must never answer by retrying the tool that failed.",
+  "tools": ["connection_request", "connections_status", "gmail_draft_create", "gmail_search"],
+  "failing_tool": "gmail_draft_create",
+  "variants": {
+    "reconnect_required": {
+      "status": 409,
+      "detail": {"reason": "reconnect_required", "message": "Authorization expired; reconnect this account"},
+      "pass": ["calls:connection_request"]
+    },
+    "store_unavailable": {
+      "status": 503,
+      "detail": {"reason": "store_unavailable", "message": "Credential store unavailable — an outage, not an authorization problem: retry later, and do not ask the person to reconnect."},
+      "pass": ["calls:connection_request", "explains:outage"]
+    }
+  },
+  "turns": [
+    {"role": "user", "content": "Draft a reply to ada@example.com saying I'll send the deck on Friday."},
+    {"role": "assistant", "tool_call": {"name": "gmail_draft_create",
+      "arguments": {"request_id": "draft-ada-0001", "recipient": "ada@example.com", "subject": "Re: deck",
+                    "body": "Hi Ada, I'll send the deck on Friday."}}},
+    {"role": "tool", "name": "gmail_draft_create", "from_variant": true},
+    {"role": "assistant", "content": "The draft could not be saved."},
+    {"role": "user", "content": "let's connect gmail"}
+  ]
+}
