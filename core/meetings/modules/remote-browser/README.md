@@ -16,13 +16,17 @@ Two flows:
 
 Backends: S3 (`syncBrowserData{To,From}S3` — production, shells the `aws` CLI) or local
 (`saveSessionLocal` / `loadSessionLocal`). Only the **session profile** — the auth-essential subset of a
-Chromium profile (~200 KB), defined once in [`src/session-profile.v1.json`](src/session-profile.v1.json)
-and exported as `SESSION_PROFILE` — is ever moved: restore lists the stored prefix and downloads only
-profile paths (an extension, cache or any other key stored there is never fetched), and uploads and local
-copies take regular files only (never a symlink). A bot restores with the deployment's **read-only**
-userdata key and never writes the store: its write-back is the body `readSessionProfile` builds, sent to
-meeting-api, which accepts only `SESSION_PROFILE` paths (it carries a byte-identical copy of the JSON).
-The operator's `make login` uploads with a separate key pair that can write (`LOGIN_S3_ACCESS_KEY` /
+Chromium profile (~200 KB), defined by the sealed
+[`session-profile.v1`](../../contracts/session-profile.v1) contract and exported as `SESSION_PROFILE` —
+is ever moved: restore lists the stored prefix and downloads only profile paths (an extension, cache or
+any other key stored there is never fetched), and uploads and local copies take regular files only
+(never a symlink). The package reads the profile from
+[`src/session-profile.v1.schema.json`](src/session-profile.v1.schema.json), a verbatim copy of the
+contract's schema that `gate:fact-parity` holds to it. A bot restores with the deployment's
+**read-only** userdata key and never writes the store: its write-back is the body `readSessionProfile`
+builds (the contract's `WritebackBody`), sent to meeting-api at the URL its invocation names, and
+meeting-api accepts only `SESSION_PROFILE` paths, reading the same contract file. The operator's
+`make login` uploads with a separate key pair that can write (`LOGIN_S3_ACCESS_KEY` /
 `LOGIN_S3_SECRET_KEY`).
 
 > Launch flags are deliberately restrained: NO `--disable-web-security` / `--ignore-certificate-errors`
@@ -47,6 +51,7 @@ browser, no network): the launch-flag safety set, and the `validateLoggedIn` AND
 not bounced to a sign-in URL AND a known auth cookie is present) driven through a stub Playwright `Page`.
 [`src/session-store.test.ts`](src/session-store.test.ts) drives the real restore/upload against a fake
 `aws` on `PATH`: a stored key outside the profile is never downloaded, an upload names only regular
-profile files, a failed restore is a typed `session-restore` error.
+profile files, a failed restore is a typed `session-restore` error. It also answers every path vector
+of the contract (`golden/PathVectors.*.json`, which meeting-api's matcher is tested against too).
 The real login / persistence / restore paths need an **integration env** (a headed Chromium + VNC, and
 S3 creds for the S3 backend). Covered by `gate:node`, `gate:isolation`, `gate:exports`, `gate:readme`.

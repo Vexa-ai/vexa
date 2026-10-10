@@ -549,6 +549,26 @@
       ]
     },
     {
+      "id": "session-profile-contract",
+      "fact": "the session-profile.v1 contract: the profile a stored browser session may hold, and its write-back route",
+      "kind": "file-bytes",
+      "enforced": true,
+      "canonical": "core/meetings/contracts/session-profile.v1/session-profile.schema.json",
+      "how_to_agree": "edit the contract's schema, re-seal (pnpm seal:contracts), then copy it VERBATIM over both vendored copies; both runtimes' tests read the contract's PathVectors goldens",
+      "why": "An authenticated bot restores only the profile's paths (@vexa/remote-browser, in the bot image) and meeting-api stores only the profile's paths from a write-back (session_profile, in the meeting-api image). Two images and two languages, no shared module, so each reads its own copy of the sealed schema's $defs.SessionProfile, and this fact makes the three files one (architecture pass 6, S62). The two path matchers are held by the contract's PathVectors instead, because a byte comparison across languages means nothing.",
+      "sites": [
+        {
+          "path": "core/meetings/contracts/session-profile.v1/session-profile.schema.json"
+        },
+        {
+          "path": "core/meetings/modules/remote-browser/src/session-profile.v1.schema.json"
+        },
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/session_profile/session-profile.v1.schema.json"
+        }
+      ]
+    },
+    {
       "id": "segment-entry-vector",
       "fact": "the signing vector for a transcription_segments entry that the contract, the bot and meeting-api pin",
       "kind": "literal",

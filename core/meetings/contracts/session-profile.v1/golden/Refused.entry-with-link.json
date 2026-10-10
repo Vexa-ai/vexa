@@ -1,0 +1,12 @@
+{
+  "why": "an entry is a path and its bytes; a link target is refused",
+  "body": {
+    "files": [
+      {
+        "path": "Default/Cookies",
+        "data": "cm90YXRlZC1jb29raWUtZGI=",
+        "link": "/etc/passwd"
+      }
+    ]
+  }
+}

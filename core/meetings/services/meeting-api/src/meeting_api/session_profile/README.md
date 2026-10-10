@@ -10,8 +10,13 @@ credentials (`S3_*`, else `MINIO_*`) at `BOT_S3_ENDPOINT` / `BOT_S3_BUCKET`.
 
 ## Route
 
-`PUT /internal/browser-session/{session_uid}` — `include_in_schema=False`; bots only, the gateway
-routes nothing here. Body: `{"files": [{"path": "<profile path>", "data": "<base64>"}]}`.
+`PUT /internal/browser-session/{session_uid}` — the [`session-profile.v1`](../../../../../contracts/session-profile.v1)
+contract's route (`x-routes`, read from it as `SESSION_WRITEBACK_ROUTE`); `include_in_schema=False`;
+bots only, the gateway routes nothing here. Body: the contract's `WritebackBody`,
+`{"files": [{"path": "<profile path>", "data": "<base64>"}]}`; answer: its `WritebackResult`.
+The bot finds the route at the URL the spawn puts in its invocation (invocation.v1
+`sessionWritebackUrl`, built by `bot_spawn` for authenticated spawns only, this session's uid in the
+path); it derives none.
 
 | Check | Refusal |
 |---|---|
@@ -26,13 +31,19 @@ A store failure is a 502 naming nothing secret. Every refusal past the token is 
 
 ## The profile
 
-[`session-profile.v1.json`](session-profile.v1.json) is a **byte-identical copy** of
-[`@vexa/remote-browser`'s](../../../../../modules/remote-browser/src/session-profile.v1.json), the
-file the bot restores and collects with; [`tests/test_session_profile.py`](../../../tests/test_session_profile.py)
-fails on any difference. Change both together.
+The profile is the `session-profile.v1` contract's `$defs.SessionProfile`, read from
+[`session-profile.v1.schema.json`](session-profile.v1.schema.json): a **verbatim copy** of the
+contract's sealed schema, the same file
+[`@vexa/remote-browser`](../../../../../modules/remote-browser/src/session-profile.v1.schema.json)
+restores and collects with. `gate:fact-parity` (`session-profile-contract`) fails when either copy
+differs from the contract. To change it: edit the contract, re-seal, copy it over both.
+[`tests/test_session_profile.py`](../../../tests/test_session_profile.py) runs the contract's
+`PathVectors` (which remote-browser's matcher answers too), parses every `WritebackBody` golden and
+refuses every `Refused` one.
 
 ## Files
 
-- [`profile.py`](profile.py) — `SESSION_PROFILE`, `profile_path_refusal`, `parse_profile_upload`.
+- [`profile.py`](profile.py) — the vendored contract: `SESSION_PROFILE`, `SESSION_WRITEBACK_ROUTE`,
+  `profile_path_refusal`, `parse_profile_upload`.
 - [`router.py`](router.py) — the route and its four checks.
 - [`writer.py`](writer.py) — `S3SessionWriter` (boto3, lazy) and the `SessionWriter` port.

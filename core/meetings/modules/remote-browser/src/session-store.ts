@@ -3,9 +3,11 @@
  * Login Data) so a login done once survives across browser launches.
  *
  * One profile definition, three backends:
- *   - SESSION_PROFILE (session-profile.v1.json) — the auth-essential subset of a Chromium
- *          profile. Nothing outside it is restored, uploaded, saved or loaded, and meeting-api's
- *          write-back route accepts nothing outside it (it carries a byte-identical copy).
+ *   - SESSION_PROFILE — the auth-essential subset of a Chromium profile, defined by the
+ *          session-profile.v1 contract (core/meetings/contracts/session-profile.v1) and read from
+ *          this package's verbatim copy of its schema. Nothing outside it is restored, uploaded,
+ *          saved or loaded, and meeting-api's write-back route, which reads the same file,
+ *          accepts nothing outside it.
  *   - S3   (syncBrowserDataFromS3 / syncBrowserDataToS3) — shells out to the `aws` CLI. A bot
  *          RESTORES with the deployment's read-only userdata key; the operator's `make login`
  *          UPLOADS with a key that can write the prefix. A bot never writes the store itself:
@@ -20,7 +22,7 @@
 import { execFileSync } from 'child_process';
 import { existsSync, unlinkSync, mkdirSync, copyFileSync, mkdtempSync, rmSync, readdirSync, readlinkSync, statSync, lstatSync, readFileSync } from 'fs';
 import { join, dirname, basename } from 'path';
-import SESSION_PROFILE_SPEC from './session-profile.v1.json';
+import SESSION_PROFILE_CONTRACT from './session-profile.v1.schema.json';
 
 export const BROWSER_DATA_DIR = process.env.BROWSER_DATA_DIR || '/tmp/browser-data';
 
@@ -95,7 +97,7 @@ export interface S3Config {
 
 // ── The session profile ───────────────────────────────────────────────────
 
-/** The shape of session-profile.v1.json. */
+/** The shape of a session profile (session-profile.v1 `#/$defs/Profile`). */
 export interface SessionProfileSpec {
   /** Exact profile-relative paths (cookies, login data, prefs, web data). */
   readonly files: readonly string[];
@@ -109,24 +111,31 @@ export interface SessionProfileSpec {
   readonly maxFiles: number;
 }
 
-/** SESSION_PROFILE — the one definition of what a stored browser session may contain. Read from
- *  session-profile.v1.json, which meeting-api carries byte-identically for its write-back route. */
+const SPEC: SessionProfileSpec = SESSION_PROFILE_CONTRACT.$defs.SessionProfile.const;
+
+/** SESSION_PROFILE — the one definition of what a stored browser session may contain: the
+ *  session-profile.v1 contract's `$defs.SessionProfile`, read from session-profile.v1.schema.json,
+ *  a verbatim copy of the contract's schema (gate:fact-parity `session-profile-contract`). meeting-api
+ *  reads the same file for its write-back route. */
 export const SESSION_PROFILE: SessionProfileSpec = Object.freeze({
-  files: Object.freeze([...SESSION_PROFILE_SPEC.files]),
-  leveldbDirs: Object.freeze([...SESSION_PROFILE_SPEC.leveldbDirs]),
-  leveldbFile: SESSION_PROFILE_SPEC.leveldbFile,
-  maxFileBytes: SESSION_PROFILE_SPEC.maxFileBytes,
-  maxTotalBytes: SESSION_PROFILE_SPEC.maxTotalBytes,
-  maxFiles: SESSION_PROFILE_SPEC.maxFiles,
+  files: Object.freeze([...SPEC.files]),
+  leveldbDirs: Object.freeze([...SPEC.leveldbDirs]),
+  leveldbFile: SPEC.leveldbFile,
+  maxFileBytes: SPEC.maxFileBytes,
+  maxTotalBytes: SPEC.maxTotalBytes,
+  maxFiles: SPEC.maxFiles,
 });
 
 const LEVELDB_FILE = new RegExp(SESSION_PROFILE.leveldbFile);
 
+const CONTROL_CHAR = /[\u0000-\u001f\u007f]/;
+
 /** True when `rel` (profile-relative, '/'-separated) names a SESSION_PROFILE path. Anything with an
- *  empty, '.' or '..' segment, a backslash, a NUL or a leading '/' is never one. */
+ *  empty, '.' or '..' segment, a backslash, a control character or a leading '/' is never one. The
+ *  contract's PathVectors goldens hold this to meeting-api's matcher (session-store.test.ts). */
 export function isSessionProfilePath(rel: string): boolean {
   if (typeof rel !== 'string' || !rel || rel.length > 512) return false;
-  if (rel.includes('\0') || rel.includes('\\') || rel.startsWith('/')) return false;
+  if (CONTROL_CHAR.test(rel) || rel.includes('\\') || rel.startsWith('/')) return false;
   const parts = rel.split('/');
   if (parts.some((p) => p === '' || p === '.' || p === '..')) return false;
   if (SESSION_PROFILE.files.includes(rel)) return true;

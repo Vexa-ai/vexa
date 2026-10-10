@@ -1,11 +1,14 @@
 """SESSION_PROFILE — what a stored browser session may contain, and the check a write-back passes.
 
-The definition is ``session-profile.v1.json`` next to this module: a byte-identical copy of
-``@vexa/remote-browser``'s ``src/session-profile.v1.json``, the file the bot restores and collects
-with (``tests/test_session_profile.py`` fails on any difference, so the two cannot drift). A path is
-in the profile when it is listed in ``files``, or when its parent is one of ``leveldbDirs`` and its
-name matches ``leveldbFile``; everything else — extensions, caches, preferences backups, nested
-paths, traversal names — is not, and a write-back that names one is refused whole.
+The definition is the session-profile.v1 contract (``core/meetings/contracts/session-profile.v1``).
+``session-profile.v1.schema.json`` next to this module is a verbatim copy of its sealed schema, the
+same file ``@vexa/remote-browser`` restores and collects with; ``gate:fact-parity`` fact
+``session-profile-contract`` fails when either copy differs from the contract. The profile is the
+schema's ``$defs.SessionProfile``, and the write-back route is its ``x-routes`` row. A path is in the
+profile when it is listed in ``files``, or when its parent is one of ``leveldbDirs`` and its name
+matches ``leveldbFile``; everything else — extensions, caches, preferences backups, nested paths,
+traversal names — is not, and a write-back that names one is refused whole. The contract's
+``PathVectors`` and ``WritebackBody``/``Refused`` goldens drive ``tests/test_session_profile.py``.
 """
 from __future__ import annotations
 
@@ -16,11 +19,18 @@ import re
 from pathlib import Path
 from typing import Any, Optional
 
-_SPEC_FILE = Path(__file__).with_name("session-profile.v1.json")
+_CONTRACT_FILE = Path(__file__).with_name("session-profile.v1.schema.json")
 
-#: The parsed ``session-profile.v1.json`` (``files``, ``leveldbDirs``, ``leveldbFile``,
+#: The session-profile.v1 schema, as vendored next to this module.
+CONTRACT: dict[str, Any] = json.loads(_CONTRACT_FILE.read_text(encoding="utf-8"))
+
+#: The profile: the contract's ``$defs.SessionProfile`` (``files``, ``leveldbDirs``, ``leveldbFile``,
 #: ``maxFileBytes``, ``maxTotalBytes``, ``maxFiles``).
-SESSION_PROFILE: dict[str, Any] = json.loads(_SPEC_FILE.read_text(encoding="utf-8"))
+SESSION_PROFILE: dict[str, Any] = CONTRACT["$defs"]["SessionProfile"]["const"]
+
+#: The write-back route, as the contract's ``x-routes`` names it.
+SESSION_WRITEBACK_ROUTE: str = next(
+    r["path"] for r in CONTRACT["x-routes"] if r["method"] == "PUT" and r["request"] == "WritebackBody")
 
 _FILES = frozenset(SESSION_PROFILE["files"])
 _LEVELDB_DIRS = frozenset(SESSION_PROFILE["leveldbDirs"])

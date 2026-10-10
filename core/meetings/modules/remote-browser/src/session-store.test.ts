@@ -12,11 +12,14 @@
  *     as is a symlinked directory), from the LIVE dataDir handed in (#725 C1).
  *  3. FAIL-LOUD RESTORE (#724 C3) — a failing listing surfaces as a typed SessionSyncError naming
  *     the session-restore step (and names a missing aws CLI); the upload half stays warn-only.
- *  4. THE PATH RULE — isSessionProfilePath refuses traversal, absolute, backslash and NUL names.
+ *  4. THE PATH RULE — isSessionProfilePath answers every path vector of the session-profile.v1
+ *     contract (golden/PathVectors.*.json, which meeting-api's matcher answers too), and refuses
+ *     traversal, absolute, backslash and NUL names; SESSION_PROFILE is the contract's profile.
  *
  * Same shape as auth.smoke.test.ts (tsx + exit code, no assert lib).
  */
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, chmodSync, symlinkSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, existsSync, chmodSync, symlinkSync } from 'fs';
+import { isDeepStrictEqual } from 'util';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
@@ -67,6 +70,22 @@ const config: S3Config = {
 const base = 'userdata/test-identity/browser-data';
 
 // ── 4. the path rule ────────────────────────────────────────────────────────
+// The contract's vectors, the same files meeting-api's matcher is tested against.
+const CONTRACT = join(__dirname, '..', '..', '..', 'contracts', 'session-profile.v1');
+const vectorFiles = readdirSync(join(CONTRACT, 'golden')).filter((f) => f.startsWith('PathVectors.')).sort();
+check(vectorFiles.length >= 2, `the session-profile.v1 contract must carry PathVectors goldens, found ${vectorFiles.length}`);
+let vectors = 0;
+for (const f of vectorFiles) {
+  const { inProfile, vectors: vs } = JSON.parse(readFileSync(join(CONTRACT, 'golden', f), 'utf8'));
+  for (const v of vs) {
+    vectors++;
+    check(isSessionProfilePath(v.path) === inProfile, `${f}: ${JSON.stringify(v.path)} must be answered ${inProfile} (${v.why})`);
+  }
+}
+check(vectors > 0, 'no path vector was read');
+const contract = JSON.parse(readFileSync(join(CONTRACT, 'session-profile.schema.json'), 'utf8'));
+check(isDeepStrictEqual({ ...SESSION_PROFILE, files: [...SESSION_PROFILE.files], leveldbDirs: [...SESSION_PROFILE.leveldbDirs] },
+  contract.$defs.SessionProfile.const), 'SESSION_PROFILE must be the session-profile.v1 contract\'s profile');
 for (const ok of ['Local State', 'Default/Cookies', 'Default/Web Data', 'Default/Local Storage/leveldb/000003.log',
   'Default/Local Storage/leveldb/CURRENT', 'Default/Session Storage/MANIFEST-000001', 'Default/Session Storage/000005.ldb']) {
   check(isSessionProfilePath(ok), `'${ok}' is a session profile path`);

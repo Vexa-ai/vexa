@@ -3,8 +3,10 @@ changes only through meeting-api, only with SESSION_PROFILE files, and only from
 authenticated bot.
 
 Offline: the spawn runs the SHIPPED ``request_bot`` over the in-memory fakes, so the meeting rows,
-sessions and MeetingTokens are the ones a real spawn makes; the store is an in-memory writer that
-records every put. Every refusal asserts the store was not touched.
+sessions, MeetingTokens and write-back URLs are the ones a real spawn makes; the store is an
+in-memory writer that records every put. Every refusal asserts the store was not touched. The profile,
+the route and the body rule are the session-profile.v1 contract's: its PathVectors, WritebackBody and
+Refused goldens drive the matcher and the parser here, as the PathVectors drive @vexa/remote-browser's.
 """
 from __future__ import annotations
 
@@ -13,6 +15,7 @@ import base64
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import pytest
 from fastapi import FastAPI
@@ -25,9 +28,11 @@ from meeting_api.meeting_token import mint_meeting_token
 from meeting_api.session_profile import (
     MAX_FILE_BYTES,
     SESSION_PROFILE,
+    SESSION_WRITEBACK_ROUTE,
     WRITEBACK_GRACE_S,
     InvalidSessionProfile,
     build_router,
+    is_profile_path,
     parse_profile_upload,
     profile_path_refusal,
 )
@@ -46,23 +51,61 @@ VALID = {
 }
 
 
-# ── the one definition ───────────────────────────────────────────────────────────────────────────
+# ── the one definition: the session-profile.v1 contract ─────────────────────────────────────────
 
-def _canonical() -> Path:
-    rel = Path("core") / "meetings" / "modules" / "remote-browser" / "src" / "session-profile.v1.json"
+def _contract_dir() -> Path:
+    rel = Path("core") / "meetings" / "contracts" / "session-profile.v1"
     for parent in Path(__file__).resolve().parents:
-        if (parent / rel).is_file():
+        if (parent / rel / "session-profile.schema.json").is_file():
             return parent / rel
     raise FileNotFoundError(f"monorepo root with {rel} not found")
 
 
-def test_profile_is_byte_identical_to_the_one_the_bot_uses():
-    """meeting-api accepts exactly what the bot restores and collects: its copy of
-    session-profile.v1.json is the remote-browser file, byte for byte."""
-    vendored = Path(profile_mod.__file__).with_name("session-profile.v1.json")
-    assert vendored.read_bytes() == _canonical().read_bytes(), (
-        "meeting_api/session_profile/session-profile.v1.json differs from "
-        "core/meetings/modules/remote-browser/src/session-profile.v1.json — change both together")
+CONTRACT_DIR = _contract_dir()
+
+
+def _goldens(shape: str) -> list[tuple[str, object]]:
+    found = sorted((CONTRACT_DIR / "golden").glob(f"{shape}.*.json"))
+    assert found, f"the session-profile.v1 contract carries no {shape} goldens"
+    return [(p.name, json.loads(p.read_text(encoding="utf-8"))) for p in found]
+
+
+def _path_vectors() -> list:
+    return [pytest.param(v["path"], doc["inProfile"], id=f"{name}:{v['path']!r}")
+            for name, doc in _goldens("PathVectors") for v in doc["vectors"]]
+
+
+def test_vendored_contract_is_the_contract_byte_for_byte():
+    """meeting-api reads the profile and the route from its copy of the contract's schema, the same
+    bytes the bot restores and collects with (gate:fact-parity `session-profile-contract` too)."""
+    vendored = Path(profile_mod.__file__).with_name("session-profile.v1.schema.json")
+    assert vendored.read_bytes() == (CONTRACT_DIR / "session-profile.schema.json").read_bytes(), (
+        "meeting_api/session_profile/session-profile.v1.schema.json differs from "
+        "core/meetings/contracts/session-profile.v1/session-profile.schema.json — copy the contract over it")
+
+
+def test_profile_and_route_are_the_contracts():
+    contract = json.loads((CONTRACT_DIR / "session-profile.schema.json").read_text(encoding="utf-8"))
+    assert SESSION_PROFILE == contract["$defs"]["SessionProfile"]["const"]
+    assert SESSION_WRITEBACK_ROUTE == next(r["path"] for r in contract["x-routes"] if r["method"] == "PUT")
+
+
+@pytest.mark.parametrize("path,in_profile", _path_vectors())
+def test_contract_path_vectors(path, in_profile):
+    """The contract's PathVectors, which @vexa/remote-browser's isSessionProfilePath answers too."""
+    assert is_profile_path(path) is in_profile, profile_path_refusal(path)
+
+
+@pytest.mark.parametrize("name,body", _goldens("WritebackBody"))
+def test_contract_writeback_bodies_are_accepted(name, body):
+    parsed = parse_profile_upload(json.dumps(body).encode())
+    assert parsed == [(f["path"], base64.b64decode(f["data"])) for f in body["files"]]
+
+
+@pytest.mark.parametrize("name,refused", _goldens("Refused"))
+def test_contract_refused_bodies_are_refused(name, refused):
+    with pytest.raises(InvalidSessionProfile):
+        parse_profile_upload(json.dumps(refused["body"]).encode())
 
 
 @pytest.mark.parametrize("path", [
@@ -150,7 +193,8 @@ class Deployment:
             continue_meeting=continue_meeting,
         ))
         inv = json.loads(self.runtime.specs[-1]["env"]["VEXA_BOT_CONFIG"])
-        return {"meeting_id": inv["meeting_id"], "session_uid": inv["connectionId"], "token": inv["token"]}
+        return {"meeting_id": inv["meeting_id"], "session_uid": inv["connectionId"], "token": inv["token"],
+                "url": inv.get("sessionWritebackUrl")}
 
     def end(self, bot: dict, *, ago: float) -> None:
         row = self.repo._meetings[bot["meeting_id"]]
@@ -167,8 +211,12 @@ class Deployment:
             body = {"files": [{"path": p, "data": base64.b64encode(d).decode()}
                               for p, d in (VALID if files is None else files).items()]}
         content = body if isinstance(body, (bytes, str)) else json.dumps(body)
-        return self.client.put(f"/internal/browser-session/{session_uid or bot['session_uid']}",
-                               content=content, headers={**headers, "Content-Type": "application/json"})
+        # The URL the spawn put in the bot's invocation, as the bot uses it; a bot spawned without
+        # one is driven at the contract's route for its session.
+        url = (SESSION_WRITEBACK_ROUTE.format(session_uid=session_uid) if session_uid
+               else urlsplit(bot["url"]).path if bot.get("url")
+               else SESSION_WRITEBACK_ROUTE.format(session_uid=bot["session_uid"]))
+        return self.client.put(url, content=content, headers={**headers, "Content-Type": "application/json"})
 
 
 @pytest.fixture
@@ -177,6 +225,18 @@ def dep():
 
 
 # ── the live authenticated bot writes the session profile ───────────────────────────────────────
+
+def test_spawn_names_the_write_back_url_for_this_session(dep):
+    """meeting-api tells the bot where to write back (invocation.v1 sessionWritebackUrl): the
+    contract's route for exactly this session, on the meeting-api the bot already reports to."""
+    bot = dep.spawn()
+    assert bot["url"] == "http://meeting-api:8080" + SESSION_WRITEBACK_ROUTE.format(session_uid=bot["session_uid"])
+
+
+def test_anonymous_spawn_names_no_write_back_url(dep, monkeypatch):
+    monkeypatch.setenv("BOT_AUTHENTICATED", "false")
+    assert dep.spawn()["url"] is None
+
 
 def test_live_bot_writes_its_session_profile(dep):
     bot = dep.spawn()

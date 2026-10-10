@@ -24,6 +24,7 @@
   "defaultAvatarUrl": "https://cdn.example.com/avatars/vexa.png",
   "authenticated": true,
   "userdataS3Path": "s3://userdata/alice",
+  "sessionWritebackUrl": "http://meeting-api:8080/internal/browser-session/sess-uid",
   "s3Endpoint": "https://s3.example.com",
   "s3Bucket": "vexa-userdata",
   "s3AccessKey": "S3_KEY_PLACEHOLDER",

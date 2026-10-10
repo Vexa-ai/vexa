@@ -3,8 +3,8 @@
 The bots restore the deployment's stored browser session with a READ-ONLY key; their rotated
 session comes back through this module's one route, ``PUT /internal/browser-session/{session_uid}``,
 which admits only the live authenticated bot's MeetingToken and stores only SESSION_PROFILE files
-(the auth-essential subset defined in ``session-profile.v1.json``, byte-identical to
-``@vexa/remote-browser``'s) with meeting-api's own storage credentials.
+(the auth-essential subset the session-profile.v1 contract defines, read from a verbatim copy of its
+schema, the same file ``@vexa/remote-browser`` reads) with meeting-api's own storage credentials.
 
 Front door (P6): import from here, never a deep module path.
 
@@ -23,12 +23,13 @@ from .profile import (
     MAX_FILES,
     MAX_TOTAL_BYTES,
     SESSION_PROFILE,
+    SESSION_WRITEBACK_ROUTE,
     InvalidSessionProfile,
     is_profile_path,
     parse_profile_upload,
     profile_path_refusal,
 )
-from .router import SESSION_WRITEBACK_ROUTE, WRITEBACK_GRACE_S, build_router
+from .router import WRITEBACK_GRACE_S, build_router
 from .writer import S3SessionWriter, SessionWriter
 
 __all__ = [

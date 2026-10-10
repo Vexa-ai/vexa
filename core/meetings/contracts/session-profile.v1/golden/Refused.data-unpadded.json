@@ -1,0 +1,11 @@
+{
+  "why": "data is padded base64",
+  "body": {
+    "files": [
+      {
+        "path": "Default/Cookies",
+        "data": "eA"
+      }
+    ]
+  }
+}

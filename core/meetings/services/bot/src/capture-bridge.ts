@@ -662,8 +662,9 @@ export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
       // Write-back on clean teardown (#725): Google rotates session cookies during use, so the
       // durable copy is refreshed from the LIVE profile dir after the context flushes — the next
       // spawn restores the freshest state instead of a decaying snapshot. The bot's userdata key is
-      // read-only: the session profile goes to meeting-api (MeetingToken), which stores only
-      // SESSION_PROFILE paths and only from the live authenticated session. Clean teardown only: a
+      // read-only: the session profile goes to meeting-api at the invocation's sessionWritebackUrl
+      // (MeetingToken), which stores only SESSION_PROFILE paths and only from the live authenticated
+      // session; no URL in the invocation, no write-back. Clean teardown only: a
       // SIGKILL never reaches close(), so a hard-killed meeting keeps the last durable copy.
       // Failures are attributed warnings, one bounded attempt — teardown never hangs on it.
       if (inv.authenticated && inv.userdataS3Path) {
