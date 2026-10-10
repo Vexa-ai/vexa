@@ -1,6 +1,8 @@
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
 import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
-const state = vi.hoisted(() => ({ recordings: [] as unknown[], media: async () => new Response(new Blob([new Uint8Array([26, 69, 223, 163, 1])]), { status: 200, headers: { "Content-Type": "audio/webm" } }) }));
+// A byte body, not a jsdom Blob: Node 22's fetch Response never finishes reading a jsdom Blob.
+const okMedia = async () => new Response(new Uint8Array([26, 69, 223, 163, 1]), { status: 200, headers: { "Content-Type": "audio/webm" } });
+const state = vi.hoisted(() => ({ recordings: [] as unknown[], media: (async () => new Response(null, { status: 500 })) as () => Promise<Response> }));
 vi.mock("../../surfaces/liveMeetings", () => ({
   useLiveMeetings: () => [{ id: "42", native_id: "84512345678", platform: "zoom", status: "past", live_status: "completed", start_time: "2026-10-09T14:00:00Z" }],
   useLiveMeetingsConnection: () => true, refreshMeetings: vi.fn(),
@@ -11,6 +13,7 @@ import { audioExtension, audioFilename } from "../audioDownload";
 let saved: { href: string; download: string }[] = [];
 beforeEach(() => {
   saved = [];
+  state.media = okMedia;
   state.recordings = [{ id: 7, media_files: [{ id: 9, type: "audio", format: "webm" }] }];
   vi.stubGlobal("fetch", vi.fn(async (url: string) => String(url).includes("/raw") ? state.media() : new Response(JSON.stringify({ recordings: state.recordings }))));
   vi.stubGlobal("URL", Object.assign(URL, { createObjectURL: vi.fn(() => "blob:audio"), revokeObjectURL: vi.fn() }));
