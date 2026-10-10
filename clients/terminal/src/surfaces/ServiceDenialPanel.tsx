@@ -12,7 +12,7 @@
  *  place to resolve it. The panel names no reason and holds no copy, so a refusal this build has
  *  never seen renders exactly as well as one it has.
  */
-import { Icon } from "../ui-kit";
+import { Icon, ExternalLink } from "../ui-kit";
 import type { ServiceDenialPresentation } from "./serviceDenial";
 
 export function ServiceDenialPanel({
@@ -43,14 +43,12 @@ export function ServiceDenialPanel({
       {(actionUrl || onRetry) && (
         <div className="mt-0_5" style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
           {actionUrl && (
-            <a
+            <ExternalLink
               href={actionUrl}
-              target="_blank"
-              rel="noreferrer"
               className="bg-accent c-on-accent r-md pt-1 pr-2 pb-1 pl-2 t-xs fw-600" style={{ textDecoration: "none", wordBreak: "break-all" }}
             >
               {actionUrl}
-            </a>
+            </ExternalLink>
           )}
           {onRetry && (
             <button

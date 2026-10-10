@@ -1,5 +1,5 @@
 {
-  "_comment": "G2r ratchet (terminal design guidelines §8): per file, how many banned style keys (colour, type, spacing, border, radius, shadow, z-index, motion) inline styles still write. Enforced by src/ui-kit/__tests__/styleBudget.test.ts: a count may only go down, and a lowered count must be written here in the same commit (UPDATE_STYLE_BUDGET=1). A file not listed has a budget of zero. Deleted when every file reaches zero (Phase 3a).",
+  "_comment": "Design ratchets (terminal design guidelines \u00a78), enforced by src/ui-kit/__tests__/styleBudget.test.ts as part of gate:ui-design. Per file: `files` = banned inline style keys (G2: colour, type, spacing, border, radius, shadow, z-index, motion), `rawColours` = hex/rgb/hsl literals outside tokens.css (G1), `outlineNone` = outline:none outside the primitives (G5). A count may only go down, and a lowered count must be written here in the same commit (UPDATE_STYLE_BUDGET=1). A file not listed has a budget of zero, so a new raw colour, a new one-off font size or a removed focus ring anywhere fails CI.",
   "files": {
     "app/App.tsx": 24,
     "app/AuthGate.tsx": 3,
@@ -65,5 +65,42 @@
     "workbench/CommandPalette.tsx": 7,
     "workbench/OpsNotice.tsx": 7,
     "workbench/Workbench.tsx": 10
+  },
+  "rawColours": {
+    "app/api/auth/redeem/route.ts": 8,
+    "app/AuthGate.tsx": 11,
+    "app/join/page.tsx": 1,
+    "canvas/kit.tsx": 2,
+    "canvas/LiveTranscriptEngine.tsx": 1,
+    "minutes/AttachRepo.tsx": 2,
+    "minutes/ContextBar.tsx": 1,
+    "minutes/ExtendAction.tsx": 1,
+    "surfaces/chat.tsx": 3,
+    "surfaces/meeting.tsx": 3,
+    "surfaces/meetingsOnboarding.tsx": 2,
+    "surfaces/ModelPicker.tsx": 1,
+    "surfaces/routines.tsx": 1,
+    "ui-kit/ContextMenu.tsx": 1,
+    "ui-kit/DateTimePicker.tsx": 1,
+    "ui-kit/docDiagrams.tsx": 14,
+    "ui-kit/Modal.tsx": 2,
+    "workbench/CommandPalette.tsx": 2
+  },
+  "outlineNone": {
+    "app/design/catalogue.css": 1,
+    "app/globals.css": 1,
+    "app/join/page.tsx": 1,
+    "minutes/ExtendAction.tsx": 1,
+    "minutes/MarkdownEditor.tsx": 1,
+    "surfaces/admin.tsx": 1,
+    "surfaces/chat.tsx": 1,
+    "surfaces/meeting.tsx": 3,
+    "surfaces/meetingPrep.tsx": 2,
+    "surfaces/meetingsOnboarding.tsx": 1,
+    "surfaces/ReportThis.tsx": 1,
+    "surfaces/roomOnboarding.tsx": 1,
+    "surfaces/routines.tsx": 1,
+    "surfaces/workspace.tsx": 1,
+    "surfaces/workspaceManage.tsx": 1
   }
 }

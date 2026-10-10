@@ -12,7 +12,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { registerTab, type TabProps } from "../contributions";
 import { useService, ASK_CHAT_EVENT } from "../platform";
 import { LayoutServiceId } from "../workbench/layout";
-import { ConfirmDialog, Icon } from "../ui-kit";
+import { ConfirmDialog, Icon, ExternalLink } from "../ui-kit";
 import { MdxDoc } from "../ui-kit/MdxDoc";
 import { DateTimePicker } from "../ui-kit/DateTimePicker";
 import { copyText } from "../ui-kit/ContextMenu";
@@ -396,10 +396,10 @@ function MeetingPrepTab({ params }: TabProps) {
           {m.meeting_url && (
             /* "Open meeting" not "Join" — the human opens the URL; the notetaker is a separate verb
                (first-run-onboarding frame 6: Join/Send-bot/Auto-join read as flavors of one verb). */
-            <a href={m.meeting_url} target="_blank" rel="noreferrer"
+            <ExternalLink href={m.meeting_url}
               className="bg-accent c-on-accent r-md pt-1 pr-3 pb-1 pl-3 t-xs fw-600" style={{ textDecoration: "none" }}>
               Open meeting
-            </a>
+            </ExternalLink>
           )}
           {!readOnly && (
             <label className="t-xs c-2" style={{ display: "inline-flex", alignItems: "center", gap: 7, cursor: "pointer", userSelect: "none" }}>

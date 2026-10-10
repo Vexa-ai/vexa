@@ -46,3 +46,52 @@ describe("G4 — no mid-word breaks", () => {
     expect(bad).toEqual([]);
   });
 });
+
+describe("G6 — motion respects reduced motion", () => {
+  // Every animation or transition in a stylesheet is timed by a duration TOKEN (which collapses to
+  // 0 under prefers-reduced-motion in tokens.css) or sits inside a `no-preference` block.
+  const ALLOW = new Set<string>([]);
+  it("no literal-duration animation or transition outside a reduced-motion guard", () => {
+    const bad: string[] = [];
+    for (const s of SOURCES.filter((x) => x.rel.endsWith(".css") && !ALLOW.has(x.rel))) {
+      // drop the guarded blocks, then look for literal durations in what is left
+      const unguarded = s.text.replace(/@media\s*\(prefers-reduced-motion:\s*no-preference\)\s*\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}/g, "");
+      for (const m of unguarded.matchAll(/(animation|transition)\s*:[^;]*;/g)) {
+        if (/\b\d+(\.\d+)?m?s\b/.test(m[0]) && !/var\(--dur-/.test(m[0])) bad.push(`${s.rel}: ${m[0].slice(0, 80)}`);
+      }
+    }
+    expect(bad).toEqual([]);
+  });
+});
+
+describe("G8 — no secret in an attribute", () => {
+  it("nothing named token / secret / apiKey / password flows into title, aria-label or data-*", () => {
+    const bad: string[] = [];
+    for (const s of SOURCES.filter((x) => x.rel.endsWith(".tsx"))) {
+      for (const m of s.text.matchAll(/\b(title|aria-label|data-[\w-]+)=\{([^}]*)\}/g)) {
+        // a value, not a NAME for one: `secret_label`, `tokenName`, `tokenCount` are labels and counts
+        const names = m[2].replace(/"[^"]*"|'[^']*'|`[^`]*`/g, "").replace(/\b\w*(token|secret|password)_?(label|name|count|scope|kind|s)\w*\b/gi, "");
+        if (/\b(token|secret|apiKey|api_key|password)\b/i.test(names)) bad.push(`${s.rel}: ${m[0].slice(0, 90)}`);
+      }
+    }
+    expect(bad).toEqual([]);
+  });
+});
+
+describe("G9 — external links go through ExternalLink", () => {
+  const ALLOW = new Set(["ui-kit/primitives/Links.tsx", "ui-kit/primitives/Truncate.tsx"]);
+  it('no <a target="_blank"> outside the link primitives', () => {
+    const bad = SOURCES.filter((s) => !ALLOW.has(s.rel) && /<a\b[^>]*target=["{]?["']?_blank/.test(s.text)).map((s) => s.rel);
+    expect(bad).toEqual([]);
+  });
+});
+
+describe("G10 — no raw HTML injection", () => {
+  // the pre-paint theme script, and the sanitised Mermaid SVG; the canvas manifest and validator
+  // only NAME the prop, to refuse it in agent-authored canvases
+  const ALLOW = new Set(["app/layout.tsx", "ui-kit/docDiagrams.tsx", "canvas/manifest.ts", "canvas/validator.ts"]);
+  it("dangerouslySetInnerHTML only in the allowlisted files", () => {
+    const bad = SOURCES.filter((s) => !ALLOW.has(s.rel) && /dangerouslySetInnerHTML/.test(s.text)).map((s) => s.rel);
+    expect(bad).toEqual([]);
+  });
+});

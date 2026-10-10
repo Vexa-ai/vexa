@@ -3,7 +3,7 @@
 import { CONNECTIONS_OPEN } from "./connectionEvents";
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { workspacePath } from "../app/workspaceRoute";
-import { Icon } from "../ui-kit";
+import { Icon, ExternalLink } from "../ui-kit";
 import { copyText } from "../ui-kit/ContextMenu";
 import { ApiError, presentError } from "../surfaces/apiClient";
 import { redactSecrets } from "../surfaces/redactSecrets";
@@ -233,9 +233,9 @@ export function AttachRepo(p: { workspaceId?: string; embedded?: boolean; onClos
                     {/* Only when the server gave us one — a settings URL we guessed would 404 on the
                         person, which is worse than making them find the page themselves. */}
                     {key.add_at && (
-                      <a data-attach="addat" href={key.add_at} target="_blank" rel="noreferrer" className="c-accent" style={{ ...ty.meta }}>
+                      <ExternalLink data-attach="addat" href={key.add_at} className="c-accent" style={{ ...ty.meta }}>
                         Add it on GitHub →
-                      </a>
+                      </ExternalLink>
                     )}
                     <span style={{ ...ty.meta }}>Add as {key.add_as}.</span>
                   </div>

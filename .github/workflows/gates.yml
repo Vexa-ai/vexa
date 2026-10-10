@@ -59,6 +59,7 @@ jobs:
       - run: pnpm gate:dataflow
       - run: pnpm gate:calm
       - run: pnpm gate:licenses
+      - run: pnpm gate:ui-design
       # The rest of the static set. Each is offline and takes about a second; before this they ran
       # only in the pre-push hook (which a worker may not have) or nowhere at all.
       - run: node scripts/gates.mjs isolation-py

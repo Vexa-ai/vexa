@@ -7,7 +7,7 @@ import { useService, OPEN_ENTITY_EVENT, OPEN_MEETING_EVENT } from "../platform";
 import { LayoutServiceId } from "../workbench/layout";
 import { registerList, registerTab, type TabProps } from "../contributions";
 import { minutesOnly } from "../app/mode";
-import { Icon, Checkbox, useConfirm } from "../ui-kit";
+import { Icon, Checkbox, useConfirm, ExternalLink } from "../ui-kit";
 import { Modal } from "../ui-kit/Modal";
 import { RoomOnboarding } from "./roomOnboarding";
 import { ENTITY_CHIP, DEFAULT_ENTITY_CHIP, DocMetaContext, DocNavContext, resolveDocRef, type DocNavigate } from "../ui-kit/docLinks";
@@ -48,8 +48,8 @@ function wikilinks(text: string, navigate?: DocNavigate | null): ReactNode[] {
       const meeting = href.match(/[?&]meeting=([^&#]+)/);
       if (meeting) return <span key={i} role="link" className="c-info" style={{ cursor: "pointer" }}
         onClick={() => window.dispatchEvent(new CustomEvent(OPEN_MEETING_EVENT, { detail: { ref: decodeURIComponent(meeting[1]) } }))}>{label}</span>;
-      if (/^https?:/i.test(href)) return <a key={i} href={href} target="_blank" rel="noreferrer noopener"
-        className="c-info">{label}</a>;
+      if (/^https?:/i.test(href)) return <ExternalLink key={i} href={href}
+        className="c-info">{label}</ExternalLink>;
       return <span key={i} role="link" className="c-info" style={{ cursor: "pointer" }}
         onClick={() => window.dispatchEvent(new CustomEvent(OPEN_ENTITY_EVENT, { detail: { path: href } }))}>{label}</span>;
     }
@@ -968,7 +968,7 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
         {published && (
           <div className="pt-1 pr-2 pb-1 pl-2 t-xs c-2" style={{ display: "flex", alignItems: "center", gap: 6 }}>
             <span className="c-success">✓</span> published →&nbsp;
-            <a href={published.repo_url} target="_blank" rel="noreferrer" className="c-accent" style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{published.repo_url}</a>
+            <ExternalLink href={published.repo_url} className="c-accent" style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{published.repo_url}</ExternalLink>
           </div>
         )}
         {/* Archived workspaces — collapsed group; the data is kept, restore to bring them back. */}
@@ -1133,12 +1133,12 @@ function FmValue({ k, v }: { k: string; v: string }) {
     );
   }
   if (/^https?:\/\/\S+$/.test(v)) {
-    return <a href={v} target="_blank" rel="noreferrer noopener" className="c-info" style={{ textDecoration: "none" }}
-      onMouseEnter={(e) => (e.currentTarget.style.textDecoration = "underline")} onMouseLeave={(e) => (e.currentTarget.style.textDecoration = "none")}>{v.replace(/^https?:\/\//, "").replace(/\/$/, "")} ↗</a>;
+    return <ExternalLink href={v} className="c-info" style={{ textDecoration: "none" }}
+      onMouseEnter={(e) => (e.currentTarget.style.textDecoration = "underline")} onMouseLeave={(e) => (e.currentTarget.style.textDecoration = "none")}>{v.replace(/^https?:\/\//, "").replace(/\/$/, "")} ↗</ExternalLink>;
   }
   if (/^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(v)) {
-    return <a href={`https://${v}`} target="_blank" rel="noreferrer noopener" className="c-info" style={{ textDecoration: "none" }}
-      onMouseEnter={(e) => (e.currentTarget.style.textDecoration = "underline")} onMouseLeave={(e) => (e.currentTarget.style.textDecoration = "none")}>{v} ↗</a>;
+    return <ExternalLink href={`https://${v}`} className="c-info" style={{ textDecoration: "none" }}
+      onMouseEnter={(e) => (e.currentTarget.style.textDecoration = "underline")} onMouseLeave={(e) => (e.currentTarget.style.textDecoration = "none")}>{v} ↗</ExternalLink>;
   }
   if (/^\d{4}-\d{2}-\d{2}/.test(v)) return <span className="f-mono t-xs c-2">{v}</span>;
   if (v === "true" || v === "false") return <span className="f-mono t-xs" style={{ color: v === "true" ? "var(--green)" : "var(--t3)" }}>{v === "true" ? "✓ true" : "✗ false"}</span>;

@@ -14,7 +14,7 @@ import { useService } from "../platform";
 import { LayoutServiceId, type LayoutService, type TabDescriptor } from "../workbench/layout";
 import { registerTab, type TabProps } from "../contributions";
 import { meetingsOnly } from "../app/mode";
-import { Icon, Checkbox, useConfirm } from "../ui-kit";
+import { Icon, Checkbox, useConfirm, ExternalLink } from "../ui-kit";
 import { Modal } from "../ui-kit/Modal";
 import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
 import { MdxDoc } from "../ui-kit/MdxDoc";
@@ -353,7 +353,7 @@ function GitHubSection({ slug, status, published_url, defaultRepoName, busy, onR
         <div className="t-xs c-3">Checking the GitHub state…</div>
       ) : hasHome ? (<>
         <div className="t-xs c-2 mb-2" style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-          {url && <a href={url} target="_blank" rel="noreferrer" className="c-accent" style={{ display: "inline-flex", alignItems: "center", gap: 4 }}><Icon name="openIn" size={13} />Open on GitHub</a>}
+          {url && <ExternalLink href={url} className="c-accent" style={{ display: "inline-flex", alignItems: "center", gap: 4 }}><Icon name="openIn" size={13} />Open on GitHub</ExternalLink>}
           <AheadBehind ahead={status!.ahead} behind={status!.behind} tracked={status!.tracked} />
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>

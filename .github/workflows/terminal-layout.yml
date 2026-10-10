@@ -1,0 +1,55 @@
+name: terminal-layout
+# THE TERMINAL'S LAYOUT SWEEP IN A REAL BROWSER (docs/docs/governance/ui-design.mdx § Gates, L1–L3).
+# Serves the terminal's design catalogue from a dev server and loads its fixture shell
+# (`/design?view=shell`, fixtures only, no sign-in, no backend) at 360–1920px in both themes and on
+# Playwright's Pixel 7 and iPhone 14 in both orientations. It fails on a pane that scrolls sideways,
+# a shell that is itself scrolled, a conversation below its mode's floor or off the screen, a
+# composer toolbar on two rows, or a tab strip that hides a tab without its overflow control.
+#
+# Each width is a FRESH LOAD: a headless browser on a loaded runner may render no frames at all, and
+# then neither resize events nor ResizeObserver arrive after a viewport change (seen on the bbb sweep
+# runner). Resizing a live page is covered by the unit width sweep under gate:ui-design.
+#
+# Playwright (Apache-2.0) is installed here only, never into the terminal's lockfile (P17).
+on:
+  pull_request:
+    paths: ["clients/terminal/**", ".github/workflows/terminal-layout.yml"]
+  push:
+    branches: [main]
+    paths: ["clients/terminal/**"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terminal-layout-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: clients/terminal
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with: { node-version: 22 }
+      - run: npm ci --no-audit --no-fund
+      - run: npm install --no-save --no-audit --no-fund playwright@1.58.2
+      - run: npx playwright install --with-deps chromium
+      - name: Serve the design catalogue
+        run: |
+          (npx next dev -p 3123 > /tmp/next.log 2>&1 &)
+          for i in $(seq 1 90); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' 'http://localhost:3123/design?view=shell' || true)
+            [ "$code" = 200 ] && exit 0
+            sleep 2
+          done
+          cat /tmp/next.log; exit 1
+      - name: Layout sweep (L1–L3, desktop and phones)
+        run: node scripts/layout-sweep.mjs 'http://localhost:3123/design?view=shell' --mobile --json layout-sweep.json
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with: { name: terminal-layout-sweep, path: clients/terminal/layout-sweep.json, if-no-files-found: ignore }

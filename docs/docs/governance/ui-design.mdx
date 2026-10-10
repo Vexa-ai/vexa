@@ -342,18 +342,30 @@ sent to a server.
 
 ## Gates
 
-| ID | Rule | Test | Status |
+All of these fail CI. They run as **`gate:ui-design`** (`pnpm gate:ui-design`, in the `gates`
+workflow's static leg, and again under `gate:node` with the rest of the terminal's tests), and the
+browser layout sweep runs as the **`terminal-layout`** workflow on every pull request that touches
+`clients/terminal/`.
+
+| ID | Rule | Where | Status |
 |---|---|---|---|
-| G7 | every declared text pair ≥ 4.5:1 and boundary pair (control border, focus ring, selected bar) ≥ 3:1, in both themes | `src/ui-kit/__tests__/designTokens.test.ts` | **have** |
-| G3 | every `var(--x)` in the terminal resolves to a token that exists; no colour behind a `var()` fallback | same file | **have** |
-| G1 | no raw colour outside `tokens.css` and an allowlist | same file (counted) and `src/surfaces/__tests__/colorTokens.test.ts` (hex in style colour properties, now including `minutes/`) | **report only** for the count; the hex-in-style check fails |
-| L-unit | every width 320–2560 × every preference: columns add up, the conversation is at least its mode's floor, the rail folds before the pages panel, an auto-collapse never writes a preference, stored widths are clamped not discarded | `src/ui-kit/__tests__/shellLayout.test.ts` | **have** (rides `gate:node`) |
-| L1–L3 | in a browser at 640–1920 in both themes: no pane scrolls sideways, the conversation meets its floor, the composer toolbar is one row, a tab strip that hides a tab shows its overflow control | `clients/terminal/scripts/layout-sweep.mjs` | **have** (run on bbb; attached to the PR; CI later) |
-| KV | no `overflow-wrap: anywhere` in the metadata table; stacked below 360px; dates and long tokens are single units | `src/ui-kit/__tests__/keyValue.test.tsx` | **have** |
-| A8 | the splitter, sheet, menu, tabs, dialog and fields follow their WAI-ARIA patterns | `src/ui-kit/__tests__/layoutPrimitives.test.tsx`, `primitives.test.tsx` | **have** |
-| G13 | every component the ui-kit exports has a catalogue entry; every entry renders in both themes | `src/app/__tests__/designCatalogue.test.tsx` | **have** |
-| G11 | `src/app/design/**` imports only the ui-kit front door, its own files, React, lucide and Next | same file | **have** |
-| G12 | no `window.confirm` / `window.alert`; `window.prompt` only where allowlisted | `src/ui-kit/__tests__/designGuards.test.ts` | **have** |
-| G4 | `overflow-wrap: anywhere` and `word-break: break-all` only in code-like displays, each listed with its reason | same file | **have** |
-| G2r | the inline-style budget only goes down | `src/ui-kit/__tests__/styleBudget.test.ts` + `src/style-budget.json` | **have** |
-| S1, S2 | secrets never in attributes; external links scheme-checked | `primitives.test.tsx` | **have** (primitive level; the guards that ban raw use land with the surface migration) |
+| G1 | no new raw colour (hex, `rgb()`, `hsl()`) outside `tokens.css` — a per-file budget that only goes down | `styleBudget.test.ts` + `src/style-budget.json` (`rawColours`) | **have** |
+| G2 | inline `style` carries layout only — colour, type, spacing, border, radius, shadow, layer and motion keys are a per-file budget that only goes down (so a new one-off font size fails) | same (`files`) | **have** |
+| G3 | every `var(--x)` resolves to a token; no colour behind a `var()` fallback | `designTokens.test.ts` | **have** |
+| G4 | `overflow-wrap: anywhere` / `word-break: break-all` only in code-like displays, each listed with its reason | `designGuards.test.ts` | **have** |
+| G5 | no new `outline: none` outside the primitives — a per-file budget that only goes down; every focused field shows a ring | `styleBudget.test.ts` (`outlineNone`) + `controls.css` | **have** |
+| G6 | every animation and transition is timed by a duration token or sits inside a `prefers-reduced-motion: no-preference` block | `designGuards.test.ts` | **have** |
+| G7 | every declared text pair ≥ 4.5:1 and boundary pair ≥ 3:1, in both themes | `designTokens.test.ts` + `src/app/tokens.pairs.json` | **have** |
+| G8 | nothing named token / secret / apiKey / password flows into `title`, `aria-label` or `data-*` | `designGuards.test.ts` | **have** |
+| G9 | no `<a target="_blank">` outside `ExternalLink` (and `Truncate`) | `designGuards.test.ts` | **have** |
+| G10 | `dangerouslySetInnerHTML` only in the pre-paint theme script and the sanitised Mermaid SVG | `designGuards.test.ts` | **have** |
+| G11 | `/design` imports only the ui-kit front door and its own files | `designCatalogue.test.tsx` | **have** |
+| G12 | no `window.confirm` / `window.alert`; `window.prompt` only where allowlisted | `designGuards.test.ts` | **have** |
+| G13 | every ui-kit component has a catalogue entry that renders in both themes | `designCatalogue.test.tsx` | **have** |
+| L-unit | the shell's width sweep (320–2560 and phones, every preference) | `shellLayout.test.ts` | **have** |
+| L1–L3 | in a browser, 360–1920 in both themes plus Pixel 7 and iPhone 14 in both orientations, each width loaded fresh: no pane scrolls sideways, the shell is never scrolled, the conversation meets its floor and stays on screen, the composer toolbar is one row, a tab strip that hides a tab shows its overflow control | `.github/workflows/terminal-layout.yml` → `scripts/layout-sweep.mjs` | **have** |
+| KV, A8, S1, S2 | the metadata table never breaks a word; WAI-ARIA patterns; secrets masked; links scheme-checked | `keyValue.test.tsx`, `layoutPrimitives.test.tsx`, `primitives.test.tsx` | **have** |
+
+**Lowering a budget.** When a change removes inline styles, raw colours or `outline: none` from a
+file, run `UPDATE_STYLE_BUDGET=1 npx vitest run styleBudget` in `clients/terminal` and commit the
+lowered `src/style-budget.json` with it — the gate fails while a budget is higher than the file.
