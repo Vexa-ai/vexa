@@ -17,6 +17,10 @@ PENDING WHILE THE CALL RUNS — the reaction that makes "a meeting is happening 
 
 The QUESTION card: one proposed claim, waiting for a person to confirm or correct it. Same re-read, same reason. The block's reason carries the CLAIM ITSELF and nothing else: it is this person's data, not our prose, and the sentence around it is `behavior/queue/desk_claim.human.md`'s.
 
+### `await_routine`
+
+The PAUSED-ROUTINE card: a scheduled routine the harness switched off after its runs kept being refused the same way (agent-api `control_plane/routine_refusals.py`). Same re-read as the two cards above, for the same reason: the person may already have switched it back on, edited it or deleted it, and must not be asked again. `Done` when the file is gone or no longer says `enabled: false`; otherwise `Block` on the routine's name — the sentence around it is `behavior/queue/routine_paused.human.md`'s. Reads: refs.\{uid, routine, reason\}.
+
 ### `await_scaffold`
 
 The SETUP card: a desk exists and has never been filled in. Reads: refs.uid. It re-reads the desk rather than trusting the event, because the fact is old the moment it is published: a person who finished setup between the publish and this step must not be asked again. `Done` when the marker is there, `Block` when it is not.

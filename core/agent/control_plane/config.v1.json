@@ -529,14 +529,15 @@
     {
       "key": "VEXA_FLOWS_API_URL",
       "class": "publish-edge",
-      "description": "flows' address \u2014 the domain this service HANDS FACTS TO (desk.unscaffolded, claim.proposed, and workspace.invited \u2014 an invite for an address this instance does not know, which flows mails; Vexa-ai/vexa#1632) and reads the worker's read-only timeline preamble from. Declared as the publish edge because that is what it is: agent-api needs no answer from flows \u2014 the publishes are bounded at 2s and swallowed (control_plane/publish.py) and an absent timeline degrades a turn rather than failing it, so unset is the no-flows PROFILE and not a degraded state. NO DEFAULT, and the class forbids one for the right reason: a fallback address to publish to, invented by us, in a deployment that deliberately runs no such domain",
+      "description": "flows' address \u2014 the domain this service HANDS FACTS TO (desk.unscaffolded, claim.proposed, workspace.invited \u2014 an invite for an address this instance does not know, which flows mails; Vexa-ai/vexa#1632 \u2014 and routine.paused, a scheduled routine the harness switched off after repeated identical refusals) and reads the worker's read-only timeline preamble from. Declared as the publish edge because that is what it is: agent-api needs no answer from flows \u2014 the publishes are bounded at 2s and swallowed (control_plane/publish.py) and an absent timeline degrades a turn rather than failing it, so unset is the no-flows PROFILE and not a degraded state. NO DEFAULT, and the class forbids one for the right reason: a fallback address to publish to, invented by us, in a deployment that deliberately runs no such domain",
       "targets": [
         "compose"
       ],
       "publishes_events": [
         "desk.unscaffolded",
         "claim.proposed",
-        "workspace.invited"
+        "workspace.invited",
+        "routine.paused"
       ]
     },
     {
@@ -558,7 +559,8 @@
       "publishes_events": [
         "desk.unscaffolded",
         "claim.proposed",
-        "workspace.invited"
+        "workspace.invited",
+        "routine.paused"
       ]
     },
     {

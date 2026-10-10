@@ -1153,6 +1153,29 @@ class Dispatcher:
             return None
         return self._warm_stream
 
+    def unit_events_since(self, uid: str, cursor: str = "", *, limit: int = 500):
+        """``[(stream id, event), …]`` from ``unit:<uid>:out`` after ``cursor`` (the latest
+        ``limit`` when there is none), oldest first; ``None`` when the stream cannot be read.
+
+        READ-ONLY: the worker is the stream's one writer. `routine_refusals` reads a scheduled
+        routine's previous runs off it before the next one is dispatched."""
+        r = self._redis()
+        if r is None:
+            return None
+        try:
+            rows = r.xrevrange(output_topic(uid), max="+",
+                               min=f"({cursor}" if cursor else "-", count=limit)
+        except Exception:  # noqa: BLE001 — fail soft: an unread stream counts nothing
+            logger.warning("unit %s: could not read its output stream", uid)
+            return None
+        out = []
+        for entry_id, fields in reversed(rows or []):
+            try:
+                out.append((entry_id, json.loads((fields or {}).get("event") or "{}")))
+            except ValueError:
+                continue
+        return out
+
     def _unit_input_key(self, uid: str) -> str:
         secret = self._settings.internal_api_secret
         return unit_input.unit_key(secret.get_secret_value() if secret else "", uid)

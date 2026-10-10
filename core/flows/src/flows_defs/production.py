@@ -109,6 +109,9 @@ CLAIM_PROPOSED = EventType("claim.proposed")
 #: who is already looking at the answer. The reaction is the mail carrier and nothing else — see
 #: `production_agent.mail_workspace_invite` for why the leg lives on this side at all.
 WORKSPACE_INVITED = EventType("workspace.invited")
+#: PUBLISHED BY THE AGENT DOMAIN (`control_plane/routine_refusals.py`): a scheduled routine was
+#: switched off because its runs kept being refused the same way. One card per pause.
+ROUTINE_PAUSED = EventType("routine.paused")
 #: PRD 40.9 open-decision 8. PUBLISHED BY FLOWS ITSELF — `POST /friction` calls `admit()` in
 #: process, no publish-edge and no agent-api dependency, which is why the carrier census owns this
 #: one to `flows` rather than `agent`: friction is not a domain, and its one ingestion point lives

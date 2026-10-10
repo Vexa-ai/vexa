@@ -2,7 +2,7 @@
  *  /api/routines* with NO `subject` (scope is server-derived — P20), AND that a backend error is
  *  FAIL-LOUD: it throws (propagates to the surface) instead of being swallowed into an empty list (P18). */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { listRoutines, deleteRoutine, setRoutineEnabled, confirmRoutine } from "../routinesApi";
+import { listRoutines, deleteRoutine, setRoutineEnabled, confirmRoutine, pausedNote } from "../routinesApi";
 import { ApiError } from "../apiClient";
 
 let fetchMock: ReturnType<typeof vi.fn>;
@@ -45,5 +45,16 @@ describe("routinesApi — scoped (no subject) + fail-loud", () => {
   it("FAIL-LOUD: a network failure throws (not [])", async () => {
     fetchMock.mockRejectedValueOnce(new TypeError("offline"));
     await expect(listRoutines()).rejects.toBeInstanceOf(ApiError);
+  });
+});
+
+describe("pausedNote — a routine the harness switched off says why", () => {
+  const base = { id: "r1", name: "inbox", cron: "*/10 * * * *" };
+  it("shows agent-api's reason while the routine is off", () => {
+    expect(pausedNote({ ...base, enabled: false, paused_reason: "paused after 3 runs in a row were refused" })).toContain("3 runs");
+  });
+  it("shows nothing once it is back on, or for a routine the person switched off themselves", () => {
+    expect(pausedNote({ ...base, enabled: true, paused_reason: "stale" })).toBeNull();
+    expect(pausedNote({ ...base, enabled: false })).toBeNull();
   });
 });

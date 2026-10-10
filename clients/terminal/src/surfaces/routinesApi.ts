@@ -11,6 +11,14 @@ export interface Routine {
   /** Written where no person stood behind it (an agent's write on the workspace, or a run with nobody
    *  watching): not armed until the person confirms it. */
   pending_confirmation?: boolean;
+  /** Set when the harness switched this routine off because its runs kept being refused the same
+   *  way (agent-api `routine_refusals.py`). Switching it back on clears it. */
+  paused_reason?: string;
+}
+
+/** The line a routine the harness paused shows, or null. agent-api writes the sentence. */
+export function pausedNote(r: Routine): string | null {
+  return !r.enabled && r.paused_reason ? r.paused_reason : null;
 }
 
 export async function listRoutines(): Promise<Routine[]> {

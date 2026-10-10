@@ -38,6 +38,103 @@ curl -X PATCH "$API_BASE/agent/routines/Morning%20brief/enabled" \
 curl -X DELETE "$API_BASE/agent/routines/<routine_id>" -H "X-API-Key: $API_KEY"
 ```
 
+## When a routine keeps being refused
+
+A routine runs without you present, so anything that needs you is refused: your mail, your calendar,
+a connected account. Nothing in a run can change that. Vexa stops the loop in two places:
+
+- **Within one run.** If the agent calls the same tool and gets the same refusal a second time,
+  the tool result gains a note telling it to stop, to pass on the refusal's sentence for you, and
+  to end the run. On the third identical refusal the run ends by itself. It files one friction
+  record for the whole thing, not one per call.
+- **Across runs.** If a routine's runs are refused for the same reason **three times in a row**,
+  the routine is switched off. Its file gets `enabled: false` and a `paused_reason:` line, its
+  schedule is cancelled, and **one** item appears in what is waiting for you (`whats_waiting`). A
+  run that is not refused resets the count.
+
+The Routines surface shows the reason under the routine. To resume, switch it back on (the switch
+removes `paused_reason`), or first change it so it does not need you. A paused routine is never
+deleted, and a chat is never paused.
+
+**Limits.** The pause takes effect when the next scheduled fire arrives, because that is when the
+third run's outcome is read. A routine created through `POST /agent/routines` has no file to hold
+a paused state: it gets the one queue item and keeps its schedule. The in-run stop applies to the
+`openai-agent` harness, which runs the tool loop itself. Under a CLI harness (Claude Code, Codex)
+the tool loop runs in the CLI, so the note cannot be injected and the run is not ended early. That
+run is still counted, and the routine is still paused after three refused runs.
+
+### How it works
+
+1. **In the run.** `core/agent/llm/refusal_guard.py` counts refusals by {tool, reason}. It
+   recognises a structured refusal by `reason: human_session_required`, by
+   `status: refused` with a reason, or by the rig's `refused: <reason>`, and never by an ordinary
+   error. The `openai-agent` loop (`llm/openai_agent.py`) appends the stop note on the second
+   identical refusal. On the third it answers every outstanding call, emits one `refusal-repeated`
+   event and ends the turn with `done.ok: false`.
+2. **The outcome.** `worker/engine.py` stamps the turn's `done` frame with
+   `refused: {tool, reason, count}`, read from the turn's `tool-result` summaries. This works under
+   every harness. The worker is the only writer of its unit's output stream, `unit:<id>:out`.
+   `worker/friction.py` files one `refusal_stop` record in place of the per-call ones.
+3. **The count.** Every scheduled run arrives at agent-api's `/invocations`. Before it is
+   dispatched, `control_plane/routine_refusals.py` checks the routine: only `trigger: scheduled`
+   with launcher `schedule:<routine_id>`. It reads the routine unit's `done` frames since the last
+   cursor (`Dispatcher.unit_events_since`, read-only) and updates the count in
+   `<store>/.routines/refusals/<subject>.json`.
+4. **The pause.** At three, it writes the routine file with
+   `workspace_routines.set_routine_file_enabled(enabled=False, paused_reason=…)`. This is the same
+   write `PATCH /agent/routines/{name}/enabled` makes, and an approval carries across it. Reconcile
+   then cancels the scheduler job. One `routine.paused` fact goes to flows, keyed to the pause.
+   That fire is not dispatched.
+5. **The queue item.** flows' `routine_paused` flow (`core/flows/src/flows_defs/production_agent.py`,
+   step `await_routine`) re-reads the routine file. It blocks while the file says
+   `enabled: false`, and that blocked reaction is the queue item. The words come from
+   `behavior/queue/routine_paused.human.md`. Once the routine is back on or deleted, the step
+   finishes and the item goes away.
+
+**One writer per datum.** The worker writes `unit:<id>:out`, and agent-api only reads it.
+`routine_refusals` is the only writer of the refusal count, which sits outside every workspace mount
+beside the routine approvals, so no worker can write it. The routine file stays the only record of
+whether a routine is on. flows owns the queue reaction.
+
+**Contracts and routes.** No new route. `unit.v1` `DoneFrame` takes an additive `refused` field (the
+frame is not closed to extra fields). flows.v1 gains the carrier `routine.paused` (owner `agent`,
+refs `uid`, `routine`, `reason`), declared on agent-api's `VEXA_FLOWS_API_URL` and
+`VEXA_FLOWS_API_KEY` publish edge in `control_plane/config.v1.json`. No new configuration: the
+threshold is three (`routine_refusals.THRESHOLD`).
+
+### Why it complies
+
+| Rule | How | Gate |
+|---|---|---|
+| **P23** one writer per carrier | The worker writes the out-stream, `routine_refusals` the count, the routine file stays the one record of on/off, flows the queue reaction. | `gate:dataflow`; the count file is ungated: reviewed |
+| **P4 / P16** contracts, additive | `routine.paused` is a declared carrier with a golden, `Carrier.routine-paused.json`. `done.refused` is an optional field. | `gate:schema`, `gate:config-contract` (publish edge ≡ carrier census) |
+| **P7** stateless workers | The worker only reports what it saw. The state lives in agent-api's store. | ungated: reviewed |
+| **P18** fail loud | A routine that cannot work says so once, on the queue and on its card, instead of failing silently every ten minutes. An unreadable stream counts nothing and lets the run go ahead, logged. | ungated: reviewed |
+| **P21** state from evidence | Pausing is decided from the runs' own `done` frames, never from the prompt. | ungated: reviewed |
+
+**Security.**
+
+- **No new access.** Nothing here grants a routine anything. The refusals that cause a pause are
+  unchanged.
+- **Attribution.** The routine a stream belongs to is derived from the dispatch agent-api signed
+  (`dispatch_id` of the routine's own invocation). It never comes from anything the worker says, so
+  a worker cannot pause another routine or another person's.
+- **Who can write the count.** Only agent-api. The file is under `<store>/.routines/`, which is
+  not mounted into any worker.
+- **What is never paused.** A chat (`trigger: message`), an event run, a meeting run, and a
+  scheduled dispatch whose launcher is not `schedule:<id>`.
+- **Tests.** `test_three_refused_runs_pause_the_routine_and_queue_one_card`,
+  `test_a_successful_run_resets_the_count`, `test_a_chat_or_an_event_is_never_counted_or_paused`,
+  `test_an_unreadable_stream_counts_nothing_and_the_run_goes_ahead`,
+  `test_switching_it_back_on_clears_the_pause` (`core/agent/tests/test_routine_refusals.py`);
+  `test_the_harness_injects_the_stop_on_the_second_and_ends_on_the_third`,
+  `test_a_success_or_an_ordinary_error_is_never_counted`,
+  `test_the_turn_refusal_rides_on_any_harness_s_results` (`core/agent/tests/test_refusal_guard.py`);
+  `test_a_paused_routine_blocks_which_is_the_one_queue_item`,
+  `test_a_routine_switched_back_on_or_deleted_is_not_asked_about_again`
+  (`core/flows/tests/test_routine_paused_card.py`); `pausedNote`
+  (`clients/terminal/src/surfaces/__tests__/routinesApi.test.ts`).
+
 ## Read the result
 
 ```bash

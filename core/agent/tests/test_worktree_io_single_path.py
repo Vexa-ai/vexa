@@ -128,6 +128,8 @@ ALLOW = {
                "agent/control_plane/workspace_membership.py::list_memberships",
                "agent/control_plane/workspace_routines.py::_read_approvals",
                "agent/control_plane/workspace_routines.py::_write_approvals",
+               "agent/control_plane/routine_refusals.py::load_state",
+               "agent/control_plane/routine_refusals.py::_save_state",
                "agent/control_plane/workspace_routines.py::_record_existing_approvals",
                "agent/control_plane/workspace_routines.py::scan_workspace_subjects",
                "agent/control_plane/routine_resign.py::resign_unsigned_routines",

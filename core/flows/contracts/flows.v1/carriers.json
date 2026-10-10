@@ -59,6 +59,18 @@
       "description": "Somebody added a member to a workspace and that member is not on this instance; triggers `workspace_invite`, whose one step mails them the link. Vexa-ai/vexa#1632, founder on the front page's own control: \"this add member should just ask chat to do that with mcp, asking their emails etc.\" — membership is a conversation, so the agent asks for the address and the role, confirms in one sentence, mints the invite the existing route mints, and hands this fact over. PUBLISHED ONLY FOR AN EXTERNAL ADDRESS. An invitee who already has an account here is given the link in the chat that invited them — faster, no mailbox in the path, nothing to lose to a spam folder — and NO fact is published at all, so the consumer never has to ask whether the recipient is one of ours and must never grow that question: the account lookup happens once, at the producer, where it already had to happen. WHY THE MAIL LEG IS HERE AND NOT IN AGENT-API: `flows_steps/notify` is where this deployment's outbound channel is chosen (SMTP or Microsoft Graph, one env key), and `mailtext` is where the words live as a file an admin edits rather than a string in a service — a second sender in agent-api would be a second channel to configure and a second copy of the wording to keep in step. `uid` is the INVITER's subject, not the invitee's, because the invitee has none here and the template's `{{company}}` and `{{visibility}}` are read from `_global` through a uid this instance knows. `role` is one of owner · contributor · reader and `role_sentence` is the sentence that role means, composed by the producer so the mail and the chat's confirmation cannot say two different things. `link` travels as the notification's call to action and is never written into the template. Absent from the no-agents profile because the agent domain is: there is no switched-off publisher there, there is no publisher."
     },
     {
+      "event": "routine.paused",
+      "owner": "agent",
+      "cardinality": "once_per_occurrence",
+      "refs": [
+        "uid",
+        "routine",
+        "reason"
+      ],
+      "source_event_id": "routine-paused-<uid>-<routine_id>-<stream id of the third refused run> — keyed to the PAUSE: a redelivery dedupes, and a routine switched back on and paused again is a second occurrence and a second card",
+      "description": "A scheduled routine was switched off because its runs kept being refused the same way: agent-api reads each run's outcome off the worker's output stream (`done.refused`) before the next fire and, at three consecutive refusals with one reason, writes `enabled: false` and a `paused_reason:` line into `routines/<name>.md`, cancels its job and publishes this; triggers `routine_paused`, whose step re-reads the routine file and blocks while it stays off, which is the person's one queue card. `routine` is the file's name, `reason` the refusal reason (usually `human_session_required`). Re-derivable from the desk like `desk.unscaffolded`: a publish that never lands loses the card, never the fact. Absent from the no-agents profile because the agent domain is."
+    },
+    {
       "event": "friction.reported",
       "owner": "flows",
       "cardinality": "once_per_occurrence",

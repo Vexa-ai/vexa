@@ -25,6 +25,7 @@ restore, and a second producer somebody adds later.
 | `claim.proposed` | agent | once per occurrence |
 | `friction.reported` | flows | once per occurrence |
 | `workspace.invited` | agent | once per occurrence |
+| `routine.paused` | agent | once per occurrence |
 
 `meeting.completed` and `invite.received` are recorded from `core/flows/mcp.tools.v1.json`'s own
 `publishes_events`; the two desk carriers from agent-api's `config.v1.json` publish-edge keys. None

@@ -33,6 +33,7 @@ import urllib.error
 import urllib.request
 
 from shared.git_redaction import redact
+from llm.refusal_guard import refusal_reason
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -282,6 +283,45 @@ def budget_stop(trunc: dict, *, last_tool: str = "", session: str = "", subject:
     }
 
 
+def turn_refusal(events: list[dict]) -> dict | None:
+    """``{tool, reason, count}`` when this turn's tool calls were refused with a structured reason
+    (`llm.refusal_guard.refusal_reason`), else None. ``reason`` is the most frequent one, ``tool``
+    the last tool refused for it, ``count`` how many results carried it. Pure."""
+    names = {str(ev.get("callId") or ""): str(ev.get("tool") or "")
+             for ev in events or [] if ev.get("type") == "tool-call"}
+    seen: dict[str, list[str]] = {}
+    for ev in events or []:
+        if ev.get("type") != "tool-result" or ev.get("ok"):
+            continue
+        reason = refusal_reason(ev.get("summary"))
+        if reason:
+            tool = str(ev.get("tool") or names.get(str(ev.get("callId") or ""), ""))
+            seen.setdefault(reason, []).append(tool)
+    if not seen:
+        return None
+    reason = max(seen, key=lambda r: len(seen[r]))
+    return {"tool": seen[reason][-1], "reason": reason, "count": len(seen[reason])}
+
+
+def refusal_stop(ev: dict, *, session: str = "", subject: str = "", workspace: str = "") -> dict:
+    """The ONE record for a turn the harness ended because the same refusal came back
+    `llm.refusal_guard.END_AT` times. It replaces the per-call records those refusals would each
+    have earned, which is how one unattended run used to file the same report again and again."""
+    tool, reason, count = str(ev.get("tool") or ""), str(ev.get("reason") or ""), int(ev.get("count") or 0)
+    return {
+        "reporter": "agent", "subject": subject, "session": session, "kind": "unfulfilled",
+        "tried": f"`{tool}` in a run with nobody in the loop" if reason == "human_session_required"
+                 else f"`{tool}`",
+        "happened": f"refused {count} times in one turn for the same reason ({reason}); the "
+                    "harness ended the turn rather than let it keep asking.",
+        "would_help": "ask for this in chat, where a person is present" if
+                      reason == "human_session_required" else "a turn that reads the refusal once",
+        "severity": "annoyance",
+        "context": {"tool": tool, "error": reason, "workspace": workspace},
+        "auto": True,
+    }
+
+
 def scan_turn(events: list[dict], *, session: str = "", subject: str = "",
               workspace: str = "") -> list[dict]:
     """The records a finished turn's event stream earned, if any.
@@ -304,6 +344,7 @@ def scan_turn(events: list[dict], *, session: str = "", subject: str = "",
     calls: dict[str, dict] = {}
     results: list[tuple[str, dict]] = []
     trunc: dict = {}
+    repeated: dict = {}
     last_tool = ""
     for ev in events or []:
         t = ev.get("type")
@@ -314,6 +355,12 @@ def scan_turn(events: list[dict], *, session: str = "", subject: str = "",
             results.append((str(ev.get("callId") or ""), ev))
         elif t == "turn-truncated":
             trunc = ev
+        elif t == "refusal-repeated":
+            repeated = ev
+    if repeated:
+        # ONE RECORD for the whole repeated refusal, instead of one per refused call and one more
+        # for the turn ending on it (`refusal_stop`).
+        return [refusal_stop(repeated, session=session, subject=subject, workspace=workspace)]
     if not results and not trunc:
         return []
     out: list[dict] = []
