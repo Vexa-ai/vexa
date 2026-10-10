@@ -101,6 +101,10 @@ class Settings(BaseSettings):
     # `post_meeting_dev_email` — all configured the in-product inference pipeline, which is gone.
     agent_model: str = ""
     model_allowlist: str = ""   # optional comma-separated gate on workspace-pinned models
+    # The operator's model catalog (VEXA_MODEL_CATALOG, models.v1 Catalog JSON): the providers and
+    # models people may pick per chat. Empty = no catalog. Parsed and refused whole at boot by
+    # control_plane.model_providers; credentials in it are secret_ref references, never values.
+    model_catalog: str = ""
     # How long a CHAT worker serves its unit:<id>:in topic after the last turn before exiting
     # (TTL-on-idle). A live worker takes the thread's next message WARM (no container/CLI cold
     # start) — the window is the warm-hit budget; an idle worker costs only its parked memory.

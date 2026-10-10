@@ -1,0 +1,290 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vexa.ai/schemas/models.v1",
+  "title": "models.v1",
+  "description": "The model catalog. Two shapes: Catalog is what the operator declares (VEXA_MODEL_CATALOG, agent-api's environment) — the providers this deployment reaches and the models it offers on each; ModelList is what agent-api serves to the terminal and the MCP (GET /api/models) — the models one person may pick, with no endpoint, credential or request setting in it. A credential is only ever a reference (secret_ref), never a value (P14).",
+  "$defs": {
+    "ModelId": {
+      "description": "A catalog id: what a chat, a routine and a person's default name. Stable across releases of the catalog; never the provider's own model id.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"
+    },
+    "ProviderKey": {
+      "description": "The operator's name for one provider declaration (e.g. lab-vllm, openrouter).",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"
+    },
+    "Adapter": {
+      "description": "Which provider adapter resolves a model on this provider. openai_compatible: a self-hosted vLLM / llama.cpp / LiteLLM or any OpenAI-compatible gateway, on the openai-agent harness. openrouter: OpenRouter, on the openai-agent harness (/api/v1) or the claude-code harness (its Anthropic-compatible /api), as the provider declares. anthropic: Anthropic directly, by API key or by the deployment's subscription, on the claude-code harness. custom: the person's own Settings → Models endpoint, gated by VEXA_MODEL_BASE_URL_ALLOW.",
+      "enum": [
+        "openai_compatible",
+        "openrouter",
+        "anthropic",
+        "custom"
+      ]
+    },
+    "Harness": {
+      "description": "The agent harness that drives a model.",
+      "enum": [
+        "claude-code",
+        "openai-agent",
+        "codex"
+      ]
+    },
+    "Access": {
+      "description": "Who may pick a model: everyone on the deployment, or instance admins only.",
+      "enum": [
+        "everyone",
+        "admins"
+      ]
+    },
+    "Capabilities": {
+      "description": "What the model can do on this route. streaming and context_tokens reach the openai-agent harness; a model without tool calling cannot drive an agent turn and is refused at boot.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tool_calling": {
+          "type": "boolean"
+        },
+        "streaming": {
+          "type": "boolean"
+        },
+        "context_tokens": {
+          "type": "integer",
+          "minimum": 1024,
+          "maximum": 10000000
+        }
+      }
+    },
+    "ExtraBody": {
+      "description": "Server-specific request fields merged into every openai-agent request (e.g. a self-hosted Qwen's chat_template_kwargs). Never a credential.",
+      "type": "object"
+    },
+    "Provider": {
+      "description": "One provider declaration. Which fields apply depends on the adapter; agent-api refuses a declaration whose fields its adapter does not take.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "adapter"
+      ],
+      "properties": {
+        "adapter": {
+          "$ref": "#/$defs/Adapter"
+        },
+        "base_url": {
+          "description": "openai_compatible only: the endpoint's OpenAI-compatible root (http or https, e.g. http://10.0.0.5:8000/v1).",
+          "type": "string",
+          "pattern": "^https?://[^\\s/?#@]+(/[^\\s?#]*)?$"
+        },
+        "harness": {
+          "$ref": "#/$defs/Harness"
+        },
+        "auth": {
+          "description": "none: a keyless endpoint. secret: the value secret_ref names. subscription (anthropic only): the deployment's own Claude subscription.",
+          "enum": [
+            "none",
+            "secret",
+            "subscription"
+          ]
+        },
+        "secret_ref": {
+          "description": "A REFERENCE to the credential, never the value: env:NAME names a variable in agent-api's environment, delivered from the deployment's secret store.",
+          "type": "string",
+          "pattern": "^env:[A-Z][A-Z0-9_]{0,127}$"
+        },
+        "extra_body": {
+          "$ref": "#/$defs/ExtraBody"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "auth": {
+                "const": "secret"
+              }
+            },
+            "required": [
+              "auth"
+            ]
+          },
+          "then": {
+            "required": [
+              "secret_ref"
+            ]
+          }
+        }
+      ]
+    },
+    "CatalogModel": {
+      "description": "One model the deployment offers.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "display_name",
+        "provider"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ModelId"
+        },
+        "display_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "provider": {
+          "$ref": "#/$defs/ProviderKey"
+        },
+        "model": {
+          "description": "The model's id at the provider (e.g. Qwen/Qwen3-32B, anthropic/claude-sonnet-4.5). Absent for a custom entry, whose model is the person's own setting.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "capabilities": {
+          "$ref": "#/$defs/Capabilities"
+        },
+        "extra_body": {
+          "$ref": "#/$defs/ExtraBody"
+        },
+        "access": {
+          "$ref": "#/$defs/Access"
+        },
+        "default": {
+          "description": "The model a person runs on before they pick one. At most one entry.",
+          "type": "boolean"
+        }
+      }
+    },
+    "Catalog": {
+      "description": "The operator's declaration (VEXA_MODEL_CATALOG). Unset or empty: no catalog, and every turn runs on the deployment's model and each person's Settings → Models exactly as without one.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "providers",
+        "models"
+      ],
+      "properties": {
+        "providers": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {
+            "$ref": "#/$defs/ProviderKey"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/Provider"
+          }
+        },
+        "models": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/CatalogModel"
+          }
+        }
+      }
+    },
+    "ModelListEntry": {
+      "description": "One model as a person sees it: no endpoint, no credential, no request setting.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "display_name",
+        "provider",
+        "adapter",
+        "harness",
+        "capabilities",
+        "access",
+        "default"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ModelId"
+        },
+        "display_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "provider": {
+          "$ref": "#/$defs/ProviderKey"
+        },
+        "adapter": {
+          "$ref": "#/$defs/Adapter"
+        },
+        "harness": {
+          "$ref": "#/$defs/Harness"
+        },
+        "capabilities": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "tool_calling",
+            "streaming"
+          ],
+          "properties": {
+            "tool_calling": {
+              "type": "boolean"
+            },
+            "streaming": {
+              "type": "boolean"
+            },
+            "context_tokens": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          }
+        },
+        "access": {
+          "$ref": "#/$defs/Access"
+        },
+        "default": {
+          "description": "true on the catalog's own default entry",
+          "type": "boolean"
+        }
+      }
+    },
+    "ModelList": {
+      "description": "GET /api/models: the models the caller may pick. default is the model the caller runs on before picking (their own default, else the catalog's, else the first listed; null when the list is empty). selected is the named chat's own pick, present when the request named a chat (null: the chat follows the default).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "models",
+        "default"
+      ],
+      "properties": {
+        "models": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ModelListEntry"
+          }
+        },
+        "default": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/ModelId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "selected": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/ModelId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

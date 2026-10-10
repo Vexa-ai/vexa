@@ -30,6 +30,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from jsonschema.exceptions import ValidationError
 
 from control_plane import meeting_room
+from control_plane import model_providers
 from control_plane import meeting_steering
 from control_plane import schedule_digest as schedule_digest_mod
 from control_plane import unit_faults
@@ -357,7 +358,11 @@ class _Sessions:
     read and even to write, if explicit ask and purpose)"*.
 
     NOT a latch, unlike ``meeting``: a target is a thing a person changes by clicking a chip, and
-    changing it is the whole feature. ``set_target`` is its ONE writer."""
+    changing it is the whole feature. ``set_target`` is its ONE writer.
+
+    ``model`` — a model-catalog id, or absent for the person's default — is which of the operator's
+    models this chat runs on. Not a latch either: picking another model is the feature.
+    ``set_model`` is its ONE writer."""
 
     def __init__(self, redis_client=None) -> None:
         self._redis = redis_client
@@ -582,6 +587,50 @@ class _Sessions:
         rec["last_active"] = self._now()
         return True
 
+    def set_model(self, subject: str, session: str, model: str) -> bool:
+        """PIN this chat to one model of the operator's catalog, and say whether that changed
+        anything. THE ONE WRITER of ``model``.
+
+        ``model`` is a catalog id the caller has already checked against the catalog and the
+        person's access, or ``""`` — the person's default, which is what an unpicked chat runs on
+        rather than a second name for it. A value that is not even shaped like an id is REFUSED.
+
+        IT RAISES THE STALE-MOUNTS SEMAPHORE, for the reason ``set_target`` does. The route is baked
+        into the container at spawn — the worker reads its harness, endpoint, credential and model
+        from its environment, once — so a warm worker would keep answering on the old model for its
+        whole window. A new unit id is the cure; ``take_mount_generation`` hands the next fresh turn
+        one. A REAL CHANGE ONLY: re-picking the model in force costs nobody a cold start."""
+        mid = str(model or "").strip()
+        if mid and not model_providers.is_model_id(mid):
+            return False
+        if self._redis is not None:
+            mkey = self._meta_key(subject, session)
+            meta = self._redis.hgetall(mkey) or {}
+            if (meta.get("model") or "").strip() == mid:
+                return False
+            self._redis.hset(mkey, mapping={"model": mid, "mounts_stale": "1",
+                                            "last_active": str(self._now())})
+            self._redis.sadd(self._ids_key(subject), session)
+            return True
+        rec = self._mem.setdefault(subject, {}).get(session)
+        if rec is None:
+            rec = {"created": self._now(), "last_active": self._now(), "title": session,
+                   "touched": False}
+            self._mem[subject][session] = rec
+        if str(rec.get("model") or "").strip() == mid:
+            return False
+        rec["model"] = mid
+        rec["mounts_stale"] = True
+        rec["last_active"] = self._now()
+        return True
+
+    def model(self, subject: str, session: str) -> str:
+        """This chat's own model pick (a catalog id), or ``""`` for the person's default."""
+        if self._redis is not None:
+            meta = self._redis.hgetall(self._meta_key(subject, session)) or {}
+            return (meta.get("model") or "").strip()
+        return str((self._mem.get(subject, {}).get(session) or {}).get("model") or "").strip()
+
     def target(self, subject: str, session: str) -> str:
         """This chat's target workspace slug, or ``""`` for the person's own desk."""
         if self._redis is not None:
@@ -657,6 +706,8 @@ class _Sessions:
                     # server predates the field" from "this chat targets the desk" — they mean the
                     # same thing today and a client that guessed would be wrong the day they do not.
                     "target": (meta.get("target") or "").strip() or None,
+                    # absent → the person's default model; `null` for the reason `target` is
+                    "model": (meta.get("model") or "").strip() or None,
                     "scaffold": self._scaffold_pair(meta.get("scaffold")),
                     # absent → True: a row older than the field is a conversation that happened
                     "touched": meta.get("touched") != "0",
@@ -672,6 +723,7 @@ class _Sessions:
                     "created": meta.get("created", 0.0), "last_active": meta.get("last_active", 0.0),
                     "workspaces": list(meta.get("workspaces") or []),
                     "target": str(meta.get("target") or "").strip() or None,
+                    "model": str(meta.get("model") or "").strip() or None,
                     "scaffold": self._scaffold_pair(meta.get("scaffold")),
                     "touched": meta.get("touched", True) is not False,
                     "meeting": str(meta.get("meeting") or "").strip() or None,

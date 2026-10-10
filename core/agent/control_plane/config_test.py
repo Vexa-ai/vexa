@@ -224,6 +224,67 @@ def run_models_test(config: dict, env: Optional[dict] = None,
     return out
 
 
+def run_route_test(route, creds_path: Optional[str] = None,
+                   post: Optional[HttpPost] = None) -> dict:
+    """The Test button for one model of the catalog: the route the dispatch would stamp for it,
+    resolved by the same provider port, probed in that route's own dialect with exactly that route's
+    credential — the same URL the harness posts to, so a green here is the request a turn makes.
+
+    * subscription — the mounted credential file (its expiry), as the deployment route is tested;
+    * openai-agent — a 1-token ``POST {base_url}/chat/completions`` with the route's extra body;
+    * claude-code — a 1-token ``POST {base_url}/v1/messages``, the key under the header the
+      provider expects (bearer for a gateway, ``x-api-key`` for Anthropic's own API).
+
+    A ``custom`` route is the person's own endpoint and keeps its own probe (both dialects)."""
+    from control_plane import model_providers as mp
+
+    post = post or _post          # resolved per call, never bound once at import
+    model = route.provider_model
+    if route.credential_source == mp.CRED_SUBSCRIPTION:
+        out = test_subscription_credentials(creds_path)
+    elif route.credential_source == mp.CRED_SUBJECT:
+        out = test_custom_endpoint(route.base_url, route.credential, model, post=post,
+                                   extra_body=route.extra_body)
+    elif not model:
+        out = _result(False, "This model names no model id at its provider.")
+    elif route.harness == "openai-agent":
+        body: dict = {"model": model, "max_tokens": 1,
+                      "messages": [{"role": "user", "content": "ping"}]}
+        if route.extra_body:
+            body = {**json.loads(route.extra_body), **body}   # reserved keys win, as in the harness
+        headers = {"Authorization": f"Bearer {route.credential}"} if route.credential else {}
+        out = _probe(post, f"{route.base_url.rstrip('/')}/chat/completions", body, headers,
+                     route.base_url, model)
+    else:
+        headers = {"anthropic-version": "2023-06-01"}
+        if route.auth_header == "x-api-key":
+            headers["x-api-key"] = route.credential
+        else:
+            headers["Authorization"] = f"Bearer {route.credential}"
+        base = (route.base_url or "https://api.anthropic.com").rstrip("/")
+        out = _probe(post, f"{base}/v1/messages",
+                     {"model": model, "max_tokens": 1,
+                      "messages": [{"role": "user", "content": "ping"}]},
+                     headers, base, model)
+    out["summary"] = f"{route.model_id} via {route.provider}: {out['summary']}"
+    out.update(mode="catalog", route="catalog", model=route.model_id, provider=route.provider,
+               harness=route.harness)
+    return out
+
+
+def _probe(post: HttpPost, url: str, body: dict, headers: dict, base: str, model: str) -> dict:
+    try:
+        status, text = post(url, body, headers)
+    except Exception as exc:  # DNS, refused, TLS, timeout — the endpoint itself is the problem
+        return _result(False, f"Endpoint unreachable: {exc}")
+    if status in (401, 403):
+        return _result(False, f"Authentication FAILED at {base} (HTTP {status}) — the provider "
+                              "rejected this model's credential.", status=status)
+    if 200 <= status < 300:
+        return _result(True, f"Live completion OK against {base} (model {model}).", status=status)
+    return _result(False, f"Endpoint answered HTTP {status}: {(text or '')[:200]}", status=status)
+
+
 def _test_deployment_route(env: dict, model: str, creds_path: Optional[str],
                            post: HttpPost) -> dict:
     """The deployment's own route, with the deployment's own credential and no extra body (the

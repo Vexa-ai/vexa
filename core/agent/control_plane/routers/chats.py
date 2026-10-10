@@ -16,14 +16,14 @@ from control_plane import dispatch as dispatch_mod
 from control_plane import meeting_mint as meeting_mint_mod
 from control_plane import scaffolds as scaffolds_mod
 from control_plane import unit_faults
-from control_plane import global_layer, system_mounts
+from control_plane import global_layer, model_providers, system_mounts
 from control_plane.api_shared import (
     CONTEXT_SENTINEL, GLOBAL_TARGET_NOTE,
     _chat_turn_head, _context_grounding, _has_custom_model_endpoint, _is_slug,
     _model_creds_error_message, _record_chat_turn_head, _sse, _stream_tail_id,
     inbox_pending, inbox_withdraw, logger, meeting_binding, target_preamble, toolbelt_preamble, workspace_focus)
 from control_plane.peer_lookups import meeting_access_check
-from control_plane.bodies import ChatBody, ResetBody
+from control_plane.bodies import ChatBody, ChatModelBody, ResetBody
 from control_plane.ceiling import refuse_delegated, require_in_ceiling
 from control_plane.config_preflight import NOT_CONFIGURED, capability_state
 from control_plane.workspace_attach import active_workspaces, shared_active_mounts
@@ -563,6 +563,15 @@ def build(**d) -> APIRouter:
             logger.warning("target workspace unreadable for subject=%s session=%s — this turn "
                            "writes where it always did", subject, session)
             _target = ""
+        # THE CHAT'S MODEL — its own pick from the operator's catalog, "" for the person's
+        # default. Read once, fail-soft like the target: an index that cannot answer costs the
+        # turn its pick, and the dispatch runs it on the person's default.
+        try:
+            _model = sess.model(subject, session)
+        except Exception:  # noqa: BLE001
+            logger.warning("chat model unreadable for subject=%s session=%s — this turn runs on "
+                           "the person's default", subject, session)
+            _model = ""
         # THE TARGET WORKSPACE, IN FRONT OF THE ASK (Vexa-ai/vexa#1611). Every turn, including the
         # ones nobody typed — a flow's kick and a routine's wake write somewhere too, and the
         # founder's failure was a turn that did not know where. It goes in FRONT of the grounding
@@ -619,7 +628,10 @@ def build(**d) -> APIRouter:
                 # Refuse HERE with an actionable frame instead: no worker spawn, no ghost session
                 # entry. A FAILED config lookup (None) fails OPEN — a down identity service must
                 # never block a turn; the worker-side auth taxonomy still catches it cleanly.
-                if capability_state("model_inference") == NOT_CONFIGURED:
+                # A MODEL CATALOG CARRIES ITS OWN CREDENTIALS: every provider's secret_ref was
+                # resolved at boot, so the deployment-credential question is not this turn's.
+                if (capability_state("model_inference") == NOT_CONFIGURED
+                        and dispatcher.catalog.empty):
                     cfg = dispatcher.resolve_model_config(subject)
                     if cfg is not None and not _has_custom_model_endpoint(cfg):
                         if not stream:
@@ -709,6 +721,9 @@ def build(**d) -> APIRouter:
                         # envelope, and never anything a request body asserted. It decides the
                         # turn's cwd and rides the delegation token as the tools' default `slug`.
                         target=_target,
+                        # WHICH MODEL — the chat's pick, a catalog id or "" — resolved through the
+                        # provider port inside the dispatch, the one place a route is decided.
+                        model=_model,
                         # WHAT A QUEUED ROW SHOWS (Vexa-ai/vexa#1610), stamped on the inbox entry
                         # itself so the record a person reads and the record the worker takes are
                         # the same object. Written for every turn, not only a submission: a chat
@@ -717,6 +732,14 @@ def build(**d) -> APIRouter:
                         inbox={"id": body.turn_id or "", "display": _submitted,
                                "kind": _intent_kind, "target": _intent_target,
                                "at": round(time.time(), 3)})
+                except model_providers.ModelChoiceFault as fault:
+                    # THE CHAT'S MODEL CANNOT RUN (P18): gone from the catalog, admins-only, an own
+                    # endpoint not set or not allowed, a provider secret missing. Refused before
+                    # anything was spawned or delivered, as a typed fault naming the model and the
+                    # provider — never a turn run on a model the person did not pick.
+                    return JSONResponse(status_code=fault.http_status,
+                                        content={"detail": fault.sentence(),
+                                                 "fault": fault.as_dict()})
                 except dispatch_mod.WarmDeliveryFailed as exc:
                     # THE TURN IS REFUSED, NOT DROPPED. For a warm unit the pre-delivery is the only
                     # delivery, so a failure here means the person's words reached nobody. Answering
@@ -822,6 +845,33 @@ def build(**d) -> APIRouter:
                 raise HTTPException(status_code=403, detail="not a workspace you can write")
         changed = sess.set_target(subject, session, wid)
         return {"ok": True, "session": session, "target": wid or None, "changed": changed}
+    @router.post("/api/chat/model")
+    def chat_model(body: ChatModelBody, request: Request):
+        """Pick which of the deployment's models this chat runs on — the model picker.
+
+        `model` is an id from `GET /api/models/catalog`; `""` puts the chat back on your default.
+        A model the catalog does not have is refused (422), and so is one you may not use (403):
+        the pick is stored only once it is one the next turn can run, because a stored pick is what
+        that turn runs on. The change takes effect on the chat's next turn — a fresh worker, since
+        a running one keeps the model it started with."""
+        _refuse_delegated(request)
+        subject = subject_of(request)
+        session = str(body.session or "").strip() or units.DEFAULT_CHAT_SESSION
+        mid = str(body.model or "").strip()
+        catalog = dispatcher.catalog
+        if mid:
+            if catalog.empty:
+                raise HTTPException(status_code=409, detail="this deployment offers no model "
+                                                            "catalog; its model is set by the operator")
+            ctx = dispatch_mod.route_context(dispatcher.resolve_model_config(subject) or {},
+                                             allowlist=settings.model_allowlist)
+            try:
+                catalog.choose(mid, ctx, admin=lambda: dispatcher.is_admin(subject))
+            except model_providers.ModelChoiceFault as fault:
+                return JSONResponse(status_code=fault.http_status,
+                                    content={"detail": fault.sentence(), "fault": fault.as_dict()})
+        changed = sess.set_model(subject, session, mid)
+        return {"ok": True, "session": session, "model": mid or None, "changed": changed}
     @router.post("/api/chat/reset")
     def chat_reset(body: ResetBody, request: Request):
         """Drop a conversation thread: remove it from the index AND delete its continuity file so a

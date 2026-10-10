@@ -1,0 +1,277 @@
+"""A CHAT RUNS ON THE MODEL ITS PERSON PICKED — the picker's routes, end to end over a real app.
+
+Four things have to be true:
+
+  1. `GET /api/models/catalog` lists what THIS person may pick (an admins-only model is absent for a
+     member), their default, and — asked for a chat — that chat's pick; never an endpoint or a key;
+  2. `POST /api/chat/model` stores a pick only when the next turn could run it, refuses one it could
+     not with a typed fault, and forces the chat's next turn onto a fresh worker;
+  3. the chat's next turn is dispatched on that pick, through the provider port, and a pick that can
+     no longer run refuses the turn out loud — `source: model-provider`, the model and the provider
+     named — before anything is spawned;
+  4. the Settings → Models Test button probes the chosen entry through the same port.
+
+L2: a real FastAPI app over fakes; no redis, no runtime, no model.
+"""
+from __future__ import annotations
+
+import json
+
+import pytest
+from fastapi.testclient import TestClient
+
+from control_plane import config_test
+from control_plane.api import _Sessions, create_app
+from control_plane.dispatch import Dispatcher
+from control_plane.model_providers import parse
+from control_plane.workspace_reader import WorkspaceReader
+from shared.config import load_settings
+from tests.model_catalogs import ENV, EXAMPLE
+
+MEMBER, ADMIN = "u_member", "u_admin"
+
+
+class _Runtime:
+    def __init__(self):
+        self.envs: list[dict] = []
+        self.spawned: list[str] = []
+
+    def spawn(self, workload_id, profile, env):
+        self.spawned.append(workload_id)
+        self.envs.append(env)
+        return workload_id
+
+    def await_done(self, workload_id, timeout_sec=0.0):
+        return "completed"
+
+
+class _Identity:
+    def mint(self, subject, launcher, workspaces, tools):
+        return "tok"
+
+
+class _ModelConfig:
+    """admin-api's effective Settings → Models, per subject."""
+
+    def __init__(self, by_subject=None):
+        self.by_subject = by_subject or {}
+
+    def resolve(self, subject):
+        return dict(self.by_subject.get(subject, {}))
+
+
+class _Reader:
+    def read(self, unit_id, resume=None):
+        yield {"type": "turn-complete"}
+
+
+class _Dispatcher(Dispatcher):
+    """The real dispatcher; only the admin role is answered locally rather than by admin-api."""
+
+    def is_admin(self, subject):
+        return subject == ADMIN
+
+
+@pytest.fixture
+def stack(tmp_path, monkeypatch):
+    for k, v in ENV.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "deployment-key")
+    root = tmp_path / "workspaces"
+    (root / "_global").mkdir(parents=True)
+    runtime = _Runtime()
+    model_config = _ModelConfig()
+    dispatcher = _Dispatcher(load_settings(workspaces_dir=str(root)), runtime, _Identity(),
+                             model_config=model_config, catalog=parse(json.dumps(EXAMPLE), ENV))
+    sessions = _Sessions()
+    app = create_app(dispatcher, stream_reader=_Reader(), reader=WorkspaceReader(str(root)),
+                     sessions=sessions)
+    return {"client": TestClient(app), "runtime": runtime, "sessions": sessions,
+            "model_config": model_config, "dispatcher": dispatcher}
+
+
+def _as(who):
+    return {"X-User-Id": who}
+
+
+# ── 1. the catalog a person sees ────────────────────────────────────────────────────────────────
+
+def test_a_member_sees_only_what_they_may_pick(stack):
+    body = stack["client"].get("/api/models/catalog", headers=_as(MEMBER)).json()
+    assert [m["id"] for m in body["models"]] == ["qwen3-32b", "claude"]
+    assert body["default"] == "qwen3-32b" and "selected" not in body
+
+
+def test_an_admin_sees_the_admins_only_model(stack):
+    body = stack["client"].get("/api/models/catalog", headers=_as(ADMIN)).json()
+    assert "or-sonnet" in [m["id"] for m in body["models"]]
+
+
+def test_the_own_endpoint_model_appears_once_the_person_has_one(stack):
+    stack["model_config"].by_subject[MEMBER] = {"mode": "custom",
+                                                "base_url": "https://openrouter.ai/api/v1"}
+    body = stack["client"].get("/api/models/catalog", headers=_as(MEMBER)).json()
+    assert "mine" in [m["id"] for m in body["models"]]
+
+
+def test_the_listing_never_carries_an_endpoint_or_a_key(stack):
+    text = stack["client"].get("/api/models/catalog", headers=_as(ADMIN)).text
+    for leaked in ("10.0.0.5", "openrouter.ai", ENV["OPENROUTER_API_KEY"], "env:", "extra_body"):
+        assert leaked not in text
+
+
+def test_a_persons_own_default_is_their_default(stack):
+    stack["model_config"].by_subject[MEMBER] = {"default_model": "claude"}
+    assert stack["client"].get("/api/models/catalog", headers=_as(MEMBER)).json()["default"] == "claude"
+
+
+# ── 2. picking ──────────────────────────────────────────────────────────────────────────────────
+
+def test_picking_a_model_stores_it_and_the_chat_lists_it(stack):
+    c = stack["client"]
+    r = c.post("/api/chat/model", json={"session": "s1", "model": "claude"}, headers=_as(MEMBER))
+    assert r.status_code == 200 and r.json() == {"ok": True, "session": "s1", "model": "claude",
+                                                 "changed": True}
+    assert c.get("/api/models/catalog?session=s1", headers=_as(MEMBER)).json()["selected"] == "claude"
+    row = next(x for x in c.get("/api/sessions", headers=_as(MEMBER)).json()["sessions"]
+               if x["session"] == "s1")
+    assert row["model"] == "claude"
+
+
+def test_picking_forces_the_next_turn_onto_a_fresh_worker(stack):
+    """A running worker keeps the model it started with; the pick steps the chat's unit."""
+    c, sess = stack["client"], stack["sessions"]
+    c.post("/api/chat/model", json={"session": "s1", "model": "claude"}, headers=_as(MEMBER))
+    assert sess.take_mount_generation(MEMBER, "s1") == 1
+    again = c.post("/api/chat/model", json={"session": "s1", "model": "claude"}, headers=_as(MEMBER))
+    assert again.json()["changed"] is False
+    assert sess.take_mount_generation(MEMBER, "s1") == 1        # a re-pick costs no cold start
+
+
+@pytest.mark.parametrize("model,status,kind", [("retired-model", 422, "unknown_model"),
+                                               ("or-sonnet", 403, "not_permitted"),
+                                               ("mine", 409, "not_configured")])
+def test_a_pick_the_next_turn_could_not_run_is_refused_and_not_stored(stack, model, status, kind):
+    c = stack["client"]
+    r = c.post("/api/chat/model", json={"session": "s1", "model": model}, headers=_as(MEMBER))
+    assert r.status_code == status
+    fault = r.json()["fault"]
+    assert (fault["source"], fault["kind"], fault["model"]) == ("model-provider", kind, model)
+    assert stack["sessions"].model(MEMBER, "s1") == ""
+
+
+def test_an_empty_pick_puts_the_chat_back_on_the_default(stack):
+    c = stack["client"]
+    c.post("/api/chat/model", json={"session": "s1", "model": "claude"}, headers=_as(MEMBER))
+    r = c.post("/api/chat/model", json={"session": "s1", "model": ""}, headers=_as(MEMBER))
+    assert r.json()["model"] is None and stack["sessions"].model(MEMBER, "s1") == ""
+
+
+# ── 3. the turn ─────────────────────────────────────────────────────────────────────────────────
+
+def _turn(c, who, session="s1"):
+    return c.post("/api/chat", json={"prompt": "hello", "session": session}, headers=_as(who))
+
+
+def test_the_next_turn_runs_on_the_pick(stack):
+    c = stack["client"]
+    c.post("/api/chat/model", json={"session": "s1", "model": "qwen3-32b"}, headers=_as(MEMBER))
+    assert _turn(c, MEMBER).status_code == 200
+    env = stack["runtime"].envs[-1]
+    assert env["VEXA_RUNNER"] == "openai-agent"
+    assert env["VEXA_LLM_BASE_URL"] == "http://10.0.0.5:8000/v1"
+    assert env["VEXA_AGENT_MODEL"] == "Qwen/Qwen3-32B"
+    assert stack["runtime"].spawned[-1].endswith("-g1")          # the fresh unit the pick asked for
+
+
+def test_an_unpicked_chat_runs_on_the_persons_default(stack):
+    stack["model_config"].by_subject[MEMBER] = {"default_model": "claude"}
+    assert _turn(stack["client"], MEMBER).status_code == 200
+    env = stack["runtime"].envs[-1]
+    assert (env["VEXA_RUNNER"], env["VEXA_AGENT_MODEL"], env["ANTHROPIC_BASE_URL"]) == (
+        "claude-code", "claude-sonnet-4-5", "")
+
+
+def test_a_pick_that_can_no_longer_run_refuses_the_turn_with_a_typed_fault(stack):
+    """The catalog changed under a stored pick: the turn is refused out loud, nothing is spawned,
+    and the fault names the model — never a turn quietly run on some other model."""
+    stack["sessions"].set_model(MEMBER, "s1", "retired-model")
+    r = _turn(stack["client"], MEMBER)
+    assert r.status_code == 422
+    body = r.json()
+    assert body["fault"]["source"] == "model-provider"
+    assert body["fault"]["kind"] == "unknown_model" and body["fault"]["model"] == "retired-model"
+    assert "retired-model" in body["detail"]
+    assert stack["runtime"].spawned == []
+
+
+def test_a_catalog_carries_its_own_credentials_past_the_deployment_preflight(stack, monkeypatch):
+    """No deployment credential at all: the pre-catalog preflight refused every turn. A catalog's
+    providers resolved their secrets at boot, so the turn runs."""
+    for k in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN",
+              "VEXA_LLM_API_KEY", "HOST_CLAUDE_CREDENTIALS", "HOST_CLAUDE_DIR"):
+        monkeypatch.delenv(k, raising=False)
+    stack["sessions"].set_model(MEMBER, "s1", "qwen3-32b")
+    assert _turn(stack["client"], MEMBER).status_code == 200
+    assert stack["runtime"].spawned
+
+
+# ── 4. the Test button ──────────────────────────────────────────────────────────────────────────
+
+def test_the_test_button_probes_the_chosen_entry_through_the_port(stack, monkeypatch):
+    sent = []
+
+    def fake_post(url, body, headers):
+        sent.append((url, body, headers))
+        return 200, "{}"
+
+    monkeypatch.setattr(config_test, "_post", fake_post)
+    out = stack["client"].get("/api/models/test?model=or-sonnet", headers=_as(ADMIN)).json()
+    assert out["ok"] is True and out["model"] == "or-sonnet" and out["provider"] == "openrouter"
+    url, body, headers = sent[-1]
+    assert url == "https://openrouter.ai/api/v1/chat/completions"
+    assert headers == {"Authorization": f"Bearer {ENV['OPENROUTER_API_KEY']}"}
+    assert body["model"] == "anthropic/claude-sonnet-4.5"
+
+
+def test_the_test_button_says_why_a_pick_cannot_run(stack):
+    out = stack["client"].get("/api/models/test?model=or-sonnet", headers=_as(MEMBER)).json()
+    assert out["ok"] is False and out["fault"]["kind"] == "not_permitted"
+
+
+def _route(model_id, decl=EXAMPLE, cfg=None):
+    from control_plane.dispatch import route_context
+    return parse(json.dumps(decl), ENV).route(model_id, route_context(cfg or {}, env=ENV), admin=True)
+
+
+def test_the_probe_speaks_each_routes_own_dialect_with_its_own_credential():
+    sent = []
+
+    def post(url, body, headers):
+        sent.append((url, body, headers))
+        return 200, "{}"
+
+    config_test.run_route_test(_route("qwen3-32b"), post=post)
+    url, body, headers = sent[-1]
+    assert url == "http://10.0.0.5:8000/v1/chat/completions" and headers == {}
+    assert body["chat_template_kwargs"] == {"enable_thinking": False}   # the turn's extra body
+
+    decl = json.loads(json.dumps(EXAMPLE))
+    decl["providers"]["anthropic"] = {"adapter": "anthropic", "auth": "secret",
+                                      "secret_ref": "env:ANTHROPIC_DIRECT_KEY"}
+    config_test.run_route_test(_route("claude", decl), post=post)
+    url, _body, headers = sent[-1]
+    assert url == "https://api.anthropic.com/v1/messages"
+    assert headers["x-api-key"] == ENV["ANTHROPIC_DIRECT_KEY"] and "Authorization" not in headers
+
+
+def test_the_subscription_entry_is_tested_by_its_credential_file(tmp_path):
+    out = config_test.run_route_test(_route("claude"), creds_path=str(tmp_path / "absent.json"),
+                                     post=lambda *a: pytest.fail("no request for a subscription"))
+    assert out["ok"] is False and out["model"] == "claude" and "subscription" in out["summary"].lower()
+
+
+def test_a_rejected_credential_names_the_model_and_provider():
+    out = config_test.run_route_test(_route("or-sonnet"), post=lambda *a: (401, "no"))
+    assert out["ok"] is False and out["status"] == 401
+    assert out["summary"].startswith("or-sonnet via openrouter:")
