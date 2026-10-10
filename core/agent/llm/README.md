@@ -66,7 +66,7 @@ function in `_DIALECTS`: take a client, a URL, a query and a count, return
 
 `WebFetch` carries the guard search does not need — a URL the MODEL chose is an outbound destination
 picked by a non-operator — so it refuses loopback / link-local / private / reserved targets and
-re-checks every redirect hop, exempting only the operator's own `VEXA_SEARCH_URL` host. The rule is
+re-checks every redirect hop, exempting only the operator's own `VEXA_SEARCH_URL` host. Every connection — the harness's own client included — goes through `web_tools.fetch_transport`, which re-resolves and re-checks the host at connect time and dials the checked address. The rule is
 `control_plane/model_endpoint.py`'s, **re-stated rather than imported**: the worker image ships
 `worker/`, `llm/`, `shared/` and `contracts/` and deliberately not `control_plane/`, so an import
 would be an ImportError in the only process that runs this code.

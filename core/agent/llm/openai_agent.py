@@ -1087,8 +1087,11 @@ class OpenAIAgentHarness:
         # a 300s inference wait, redirects there are meaningless, and a page the MODEL chose must
         # never ride the connection pool carrying the deployment's model credential.
         # `follow_redirects=False` because `web_fetch` walks the hops itself — every one of them is
-        # re-checked against the SSRF guard, which is the whole point.
-        self._web = httpx.Client(timeout=web_tools.FETCH_TIMEOUT, transport=web_transport,
+        # re-checked against the SSRF guard, which is the whole point. And the client dials through
+        # the guard's pinned transport (`web_tools.fetch_transport`): checked again at connect time,
+        # connected to the checked address. An injected `web_transport` is what it dials through.
+        self._web = httpx.Client(timeout=web_tools.FETCH_TIMEOUT,
+                                 transport=web_tools.fetch_transport(web_transport),
                                  follow_redirects=False)
         self._mcp_http = mcp_http_client
         self._chat_root: Optional[Path] = None
