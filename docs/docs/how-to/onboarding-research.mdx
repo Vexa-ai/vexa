@@ -9,7 +9,7 @@ Two acts fill a person's private workspace from their own accounts:
   accounts, a few items at a time, and turns them into cited entity pages under `kg/` in their
   private workspace. It survives restarts: progress is a server-side cursor that advances only
   when every item in a batch has a receipt.
-- **Extend** is a button on an open page, or on a highlighted transcript passage. It runs as a
+- **Extend** is a button on an open page (a meeting's page included). It runs as a
   background job that researches the subject in the person's connected accounts, their
   workspaces and the web, then writes what it found into the page and its linked entity pages.
 
@@ -49,18 +49,21 @@ not read.
 
 ### Extend
 
-Press **Extend** on an open page, optionally with text selected and a line typed on the button
-saying what to do. The chat answers at once with one line and the work continues as a job; the page
+Press **Extend** on an open page, optionally with a line typed on the button saying what to do. The chat answers at once with one line and the work continues as a job; the page
 refreshes when it lands. Pressing Extend again on the same page queues a second job behind the
 first, and an identical press joins the running one.
 
-Extend has three variants, chosen from what you pressed it on:
+Selecting text is a different control. A selection on a page or on a meeting's transcript shows
+**Ask about this**, which puts the passage into the chat box as a quote with its source (the page, or
+the meeting and its segments). Nothing runs until you send it.
+
+Extend has three presets. The terminal's button uses the first two:
 
 | Pressed on | Preset | What it does |
 |---|---|---|
 | any page | `extend` | Reads the page, then searches your connected accounts, your workspaces and the web for the subject, and writes the findings into the page and linked entity pages. |
 | a meeting's own page | `extend-meeting` | Reads only transcript segments newer than the page's `transcript_cursor`, updates the page's generated regions, and creates pages for what the meeting named. |
-| a highlighted transcript passage | `extend-transcript` | Reads the surrounding transcript, then the workspace, then the web, writes entity pages and marks the terms on the transcript. Never edits the transcript. |
+| a transcript passage, through the `extend_transcript` intent on `POST /api/chat` (no terminal control sends it in this release) | `extend-transcript` | Reads the surrounding transcript, then the workspace, then the web, writes entity pages and marks the terms on the transcript. Never edits the transcript. |
 
 ## What the sources are, and how they are used
 
@@ -178,8 +181,8 @@ failed source pending rather than exclude it, and to report partial work as part
 
 ### Extend
 
-1. The terminal sends the chat turn with a typed intent (`extend`, or `extend_transcript` for a
-   passage) and a plain fallback sentence
+1. The terminal sends the chat turn with a typed intent (`extend`, with `meeting` on a meeting's
+   page; an API client may also send `extend_transcript` for a passage) and a plain fallback sentence
    ([`minutes/extend.ts`](https://github.com/Vexa-ai/vexa/blob/main/clients/terminal/src/minutes/extend.ts)).
 2. agent-api maps the intent's kind, from a closed set, to a preset in `_global/asks/` and fills in
    the path, selection and the person's own line

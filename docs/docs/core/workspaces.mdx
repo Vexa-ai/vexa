@@ -4,12 +4,13 @@ description: "The workspace model an agent turn sees, sharing, membership, and l
 ---
 
 
-The workspace model an agent turn sees, how workspaces are shared, how a user joins and manages
+The workspace model an agent turn sees (for the person-facing guide, see
+[Minutes → Workspaces](/minutes/workspaces)), how workspaces are shared, how a user joins and manages
 them, and how members collaborate live during a meeting. This is the canonical explainer; the code
 lives in `core/agent/control_plane/` (membership, invites, mounts, purpose, git-sync, git-credentials),
 `core/agent/worker/` (the turn + mount preamble), `core/runtime/` (the binds), and
 `clients/terminal/src/` — `surfaces/workspace.tsx` (sidebar), `surfaces/workspaceManage.tsx` (the manage
-panel), `app/App.tsx` (invite consent), `surfaces/tokens.tsx` (the GitHub token). Status is marked
+panel), `app/join/` (the invite page), `surfaces/tokens.tsx` (the GitHub token). Status is marked
 ✅ done / 🟡 partial / ⬜ planned throughout.
 
 ## The mount model — three tiers
@@ -112,68 +113,58 @@ Code: `runtime_kernel/mounts.py` (`workspace_binds`, `k8s_volume_mounts`),
   cheap preamble line, not a document. **Why:** flat mounting is the *mechanism*; purpose is what keeps a
   multi-workspace mount set from becoming a junk drawer.
 
-## Sharing model (Lane M — `workspace_membership.py`)
+## Sharing model (`workspace_membership.py`)
 
-**Single rank + creator (owner ruling 2026-07-07).** A shared workspace has one member rank; the
-`owner` is just the **creator**. Roles in the git store are still `owner`/`contributor`, but:
+The person-facing steps (adding a member, joining from a link, what each refusal means) are on
+[Minutes → Workspaces](/minutes/workspaces). This section is the model behind them.
 
-- Invites mint a **read/write MEMBER** only — `INVITABLE_ROLES = ("contributor",)`; the read-only
-  `viewer` tier is retained in the lattice for back-compat but is **not invitable** (✅).
-- **Any member can share** (mint/revoke invites) and read/write — `POST /api/workspace/invites` +
-  `DELETE /api/workspace/invites/{id}` require `contributor`.
-- **Only the creator** (`owner`) can **unshare / remove members / change role** (`require_role("owner")`).
-  → creator-only unshare/delete.
-- **DEFERRED DECISION:** whether to *also* offer an **owner-restricted invite mode** (only the creator
-  invites) vs. keeping invites purely single-rank. Not decided; see `vexa-ops` handoff.
+**Three roles.** `owner > contributor > viewer` in the lattice, said to people as owner, contributor
+and reader (`ROLE_SENTENCES`): an owner writes the workspace and adds or removes members, a contributor
+writes it, a reader reads it. An invite may be minted for any of the three (`INVITABLE_ROLES`).
 
-**Two stores, written together** (git authoritative, index derived):
-- Authoritative: the workspace's own git repo — `policy/members.json`
-  (`[{subject, role, added_by, added_at, email?}]`) + `policy/invites.json` (sha256 **hash** of each token
-  + `{id, role, mode, allowed_emails, expires_at, max_uses, uses, revoked}`).
-- Index: `users.data.memberships[]` for "shared with me" — via the injected `MembershipIndex`
-  (admin-api `/internal/users/{id}/memberships`; in-memory fake in tests).
+- **Inviting a person** — `POST /api/workspace/invite` (the agent's `workspace_invite` tool) is
+  owner-only. It mints an invite `restricted` to the named address, hands the link back for an address
+  this instance knows, and otherwise publishes a `workspace.invited` event for the flows service to mail.
+- **A link** — `POST /api/workspace/invites` mints a link for an owner or contributor of the workspace;
+  `DELETE /api/workspace/invites/{id}` withdraws one. An invite that names addresses is `restricted` to
+  them; one that names none is `open`. Asking for both is refused.
+- **Only an owner** removes members or changes a role (`require_role(..., "owner")`).
+- The system workspace and a person's own private workspaces are never shareable (`assert_shareable`).
 
-**Human roster — members show emails, not opaque ids** (✅). The participant list needs a human label, but
-`agent-api` has no user directory. Solution: **persist the gateway-verified `X-User-Email` into the member
-record at every grant point** — owner bootstrap (`ensure_owner`) and invite redeem (`accept_invite` →
-`grant_membership`). For **legacy** rows granted before this, `ws_members_list` **self-heals** by stamping
-the *requesting* member's own email onto their row the first time they open the manage panel (each member's
-email fills in on their next view). The email is committed to `members.json`, so it **travels with the
-workspace** to every member. **Why here (not `admin-api`/user.data):** the email is already in-hand on every
-request and only this store needs it — no cross-service directory lookup.
+**Where membership and invites live:**
+- **Members** — the workspace's own git repo, `policy/members.json`
+  (`[{subject, role, added_by, added_at, email?}]`), authoritative and travelling with the workspace.
+- **Index** — `users.data.memberships[]` for "shared with me", through the `MembershipIndex` port
+  (admin-api `/internal/users/{id}/memberships`).
+- **Invites** — `<store-root>/.invites/<workspace_id>.json`, outside every workspace mount, holding only
+  the sha256 of each token (`{id, hash, role, mode, allowed_emails, expires_at, max_uses, uses,
+  created_by, created_at, revoked}`). An invite is capability material, so it never sits in a tree that
+  gets published, attached or reseeded.
 
-**Access modes:** `open` (anyone-with-link, authenticated) or `restricted` (verified `X-User-Email`
-in `allowed_emails`). Redeem is **post-auth, no guest** — `POST /api/workspace/invites/accept`.
+**Human roster.** The gateway-verified `X-User-Email` is written into the member record at every grant
+(`ensure_owner`, and `accept_invite` → `grant_membership`), so the participant list shows addresses; a
+row granted before that fills in its email the next time that member opens the list.
 
-**`policy/` is PLATFORM-WRITE-ONLY:** an agent turn may never write `policy/`; the worker's turn-commit
+**`policy/` is platform-write-only:** an agent turn may never write `policy/`; the worker's turn-commit
 reverts any `policy/` change (`_revert_policy_writes` → `{"type":"policy-reverted"}`). Membership is
 written only by `workspace_membership.policy_commit` (platform git identity).
 
-## Joining a workspace — invite link → preview → consent → land (✅)
+## Joining a workspace — `/join`, preview, sign in, accept
 
-The full path from an invite link to seeing the shared workspace. **Why a consent step:** joining mounts
-someone else's workspace into your agent — you should see *what it is* and *how you're joining* before
-committing, not silently get opted in.
+1. **Link.** An invite link is `<VEXA_UI_URL>/join?i=<token>` (`JOIN_PATH`). With `VEXA_UI_URL` unset,
+   agent-api returns no link and says which key names it.
+2. **Preview, before sign-in.** The `/join` page calls the terminal's `GET /api/join/preview?i=`, which
+   passes the token to agent-api's `GET /api/workspace/invites/preview`. The preview takes no user key,
+   grants nothing and consumes no use; it answers who invited you, to which workspace and as what, and
+   `404` for a token that matches nothing, so it never enumerates workspaces.
+3. **Sign in** with any of the terminal's sign-in doors; the invite rides through sign-in.
+4. **Accept.** The terminal calls `POST /api/workspace/invites/accept` through the gateway. agent-api
+   checks the gateway-verified email against a restricted invite's addresses, the expiry and the use
+   count, then adds you to the roster with the invite's role.
+5. **Land** on the shared workspace (see First-view above).
 
-1. **Mint** — a member creates an invite in the manage panel; the link is `…/?invite=<token>`.
-2. **Login** — `AuthGate` signs the user in first (the `?invite=` query survives the OAuth round-trip via
-   the callback URL). **Consent is placed AFTER login** — the terminal's only path to `agent-api` is the
-   **fail-closed gateway**, which 401s anonymous calls (the terminal has no service key), so a *pre-login*
-   preview can't authenticate. `InviteGate` renders **inside** `AuthGate`'s authed subtree.
-3. **Preview (no grant)** — `GET /api/workspace/invites/preview?token=` → `preview_invite` resolves the
-   token to `{workspace_id, purpose, role, shared_by, mode, expires_at, valid}` **without** granting,
-   consuming a use, or checking membership (capability-gated by the token; 404 if it matches nothing, so it
-   never enumerates workspaces). Powers the consent card: **workspace name · purpose · your access ·
-   shared-by**.
-4. **Consent → redeem** — "Continue to join" calls `POST …/invites/accept`, stashes `vexa.openWorkspace`,
-   and reloads to a clean URL. "Not now" drops the invite.
-5. **Land** — the first-view resolver pins the shared workspace's **README** and forces the **Knowledge**
-   section open (see First-view above).
-
-Restricted invites still enforce `allowed_emails` at *accept* time — the preview only reveals name/purpose/
-role to whoever already holds the token (the same trust boundary as the link itself). Code:
-`workspace_membership.preview_invite`, `api.py` (`ws_invite_preview`), `App.tsx` (`InviteGate`,
-`InviteConsent`).
+Code: `workspace_membership.preview_invite` / `accept_invite`, `routers/sharing.py`,
+`clients/terminal/src/app/api/join/`.
 
 ## Managing a workspace — the manage panel (✅)
 
@@ -346,7 +337,8 @@ users (Lite's per-tenant UID), it makes itself non-dumpable instead.
 | Workspace trees and their Git history | agent-api (routes, imports) and the worker (turn commits) for the workspaces mounted to it | `VEXA_WORKSPACES_DIR` |
 | Workspace id | the platform, through `shared/workspace_id.py` | `.vexa/workspace.json` in each tree |
 | Workspace registry (id → slug, folder, name, owner) | agent-api, `control_plane/workspace_ids.py` | Redis, or memory; rebuildable from the trees except display names |
-| Member list and invites | agent-api, `workspace_membership.policy_commit` | `policy/members.json`, `policy/invites.json` in the workspace |
+| Member list | agent-api, `workspace_membership.policy_commit` | `policy/members.json` in the workspace |
+| Invites (hashes only) | agent-api, `workspace_membership` | `<store-root>/.invites/<workspace_id>.json`, outside every workspace |
 | Import status | agent-api, `workspace_import.py` | `.imports/<subject>/` (`imports-status` in the architecture chart) |
 | Saved Git token and deploy keys | agent-api's sealed `secret_store` (`VEXA_SECRETS_KEY`), or the [credential broker](/connections#git-credentials-in-the-broker-optional) | `.secrets/` in the store, or the broker |
 
@@ -408,7 +400,6 @@ Deny tests, all in `core/agent/tests/`:
 - ⬜ **Full seed-slot de-specialization** — relocate Personal's tree out of the fixed `<root>/<subject>`
   seed slot into a normal store slot, so share/archive/delete work on it like any workspace (removes the
   last residual specialness; the rank is already gone).
-- ⬜ **Owner-restricted invite mode (deferred decision)** — whether to also offer creator-only invites.
 - ✅ **At-rest encryption for the saved GitHub token** — sealed by `secret_store` under one server-side
   key (`VEXA_SECRETS_KEY`, or a `0600` key generated on first use); the same store holds every
   workspace's deploy-key private half. Legacy plaintext tokens migrate on first read.
