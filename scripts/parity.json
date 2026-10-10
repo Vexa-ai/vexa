@@ -318,6 +318,25 @@
       ]
     },
     {
+      "id": "delegation-revocation-key",
+      "fact": "the Redis key prefix a revoked delegation token is written under, vexa:delegation:revoked:<jti>",
+      "kind": "literal",
+      "enforced": true,
+      "canonical": "core/agent/control_plane/delegation_revocation.py — REVOKED_PREFIX (agent-api is the store's only writer)",
+      "how_to_agree": "rename it in both modules in one change; tokens revoked under the old name stay revoked only until they expire, so ship it with a release that restarts both",
+      "why": "agent-api writes the key when a worker's unit ends and identity checks it before answering for a vxd_ bearer. The two are different images with no shared module, and a reader that spells the key differently finds nothing and answers for every revoked token, with each side's own tests green.",
+      "sites": [
+        {
+          "path": "core/agent/control_plane/delegation_revocation.py",
+          "pattern": "^REVOKED_PREFIX = \"([^\"]+)\""
+        },
+        {
+          "path": "core/identity/services/admin-api/src/admin_api/app/delegation_revocation.py",
+          "pattern": "^REVOKED_PREFIX = \"([^\"]+)\""
+        }
+      ]
+    },
+    {
       "id": "flows-person-refusal",
       "fact": "the refusal a worker with nobody in the loop reads from flows-api (gateway-identity.v1 REFUSAL, human_session_required)",
       "kind": "prose",

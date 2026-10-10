@@ -22,7 +22,7 @@ import contracts
 from control_plane.workspace_attach import SEED_SLOT, active_workspaces, shared_active_mounts
 from control_plane.workspace_membership import reconciled_memberships
 from control_plane.workspace_purpose import read_purpose
-from control_plane import global_layer
+from control_plane import delegation_revocation, global_layer
 from control_plane import model_endpoint
 from control_plane.meeting_room import group_desk_mount, resolve_desks
 from control_plane.system_mounts import GLOBAL_SLUG, SYSTEM_SLUG, global_mount, system_mount
@@ -707,7 +707,7 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
             # somebody repeats.
             env["VEXA_MCP_DELEGATION_TOKEN"] = delegation.mint_delegation(
                 mcp_secret, subject=str(subject), regime=regime, workspaces=scope_ws,
-                ttl_sec=settings.mcp_delegation_ttl_sec, target=str(target or "").strip(),
+                ttl_sec=settings.delegation_ttl_sec(), target=str(target or "").strip(),
             )
         except ValueError:
             env.pop("VEXA_MCP_URL", None)
@@ -839,10 +839,14 @@ class Dispatcher:
 
     def __init__(self, settings: Settings, runtime: RuntimePort, identity: IdentityPort,
                  membership_index=None, model_config=None, warm_stream=None,
-                 workload_redis=None) -> None:
+                 workload_redis=None, delegation_store=None) -> None:
         self._settings = settings
         self._runtime = runtime
         self._identity = identity
+        # Where a minted delegation token is recorded against its unit, so it is revoked when the
+        # unit ends (control_plane.delegation_revocation). Production wires the service Redis; None
+        # (tests, the in-process harness) records nothing.
+        self._delegation_store = delegation_store
         # The Redis connection that defines each worker's own Redis user (control_plane.
         # workload_redis). Production wires it unless the deployment chose REDIS_WORKLOAD_ACL=shared;
         # None hands the worker the service URL (the in-process harness, and that explicit choice).
@@ -921,6 +925,7 @@ class Dispatcher:
         self.dispatched.append(invocation)
         identity = invocation["identity"]
         uid = dispatch_id(invocation)
+        self._revoke_ended_incarnation(uid)
         token = self._identity.mint(
             identity["subject"], identity["launcher"], invocation["workspaces"], invocation.get("tools", []),
         )
@@ -950,6 +955,7 @@ class Dispatcher:
                              model_config=model_config, room=room,
                              scaffold_workspaces=scaffold_workspaces, target=target,
                              friction=self._friction)
+        self._record_delegation(uid, env)
         if self._workload_redis is not None:
             # The worker connects as its unit's own Redis user, never with the service connection.
             # A user that cannot be defined refuses the dispatch: the fallback would be the service
@@ -1001,6 +1007,49 @@ class Dispatcher:
             (room or {}).get("meeting_id") or "-", scaffold_workspaces or "-",
         )
         return acked
+
+    # ── the worker's delegation token ends with its unit (delegation_revocation) ─────
+
+    def _record_delegation(self, uid: str, env: dict[str, str]) -> None:
+        """Record the token this dispatch minted against its unit, so the reaper revokes it when the
+        unit ends. A token that cannot be recorded could never be revoked, so it is WITHHELD: with no
+        token the worker attaches no vexa MCP (the endpoint alone attaches nothing) and says so, the
+        same as a deployment with no toolbelt."""
+        token = env.get("VEXA_MCP_DELEGATION_TOKEN")
+        if not token or self._delegation_store is None:
+            return
+        try:
+            claims = delegation.verify_delegation(
+                self._settings.mcp_delegation_secret.get_secret_value(), token)
+            delegation_revocation.record(self._delegation_store, unit_id=uid,
+                                         jti=str(claims.get("jti") or ""), exp=int(claims["exp"]))
+        except Exception:  # noqa: BLE001 — an unrecorded token is never handed out
+            env.pop("VEXA_MCP_DELEGATION_TOKEN", None)
+            logger.exception("delegation token for unit=%s could not be recorded for revocation — "
+                             "the worker runs WITHOUT the vexa MCP", uid)
+
+    def _revoke_ended_incarnation(self, uid: str) -> None:
+        """A unit id is reused: a chat thread dispatches every turn to the same id, and a new
+        container takes it once the last one idled out. When this unit still holds a token older
+        than the grace and the runtime says its container ended, that token belongs to the ended
+        incarnation: revoke it now, before the next incarnation makes the id live again and the
+        reaper's sweep can no longer tell the two apart. Best-effort: anything it cannot learn is
+        left to the reaper."""
+        store = self._delegation_store
+        if store is None:
+            return
+        try:
+            if not delegation_revocation.has_revocable(store, uid):
+                return
+            state = self._runtime.await_done(uid, timeout_sec=0.0)
+            if state in delegation_revocation.ENDED_STATES:
+                revoked = delegation_revocation.revoke_unit(store, uid)
+                if revoked:
+                    logger.info("revoked %d delegation token(s) of unit=%s's ended incarnation",
+                                revoked, uid)
+        except Exception:  # noqa: BLE001 — the reaper is the backstop
+            logger.warning("could not check unit=%s's previous incarnation for revocation", uid,
+                           exc_info=True)
 
     # ── warm delivery (message triggers) ─────────────────────────────────────
 

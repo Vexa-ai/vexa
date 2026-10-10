@@ -58,7 +58,8 @@ its domain serves, and the tool's arguments and description are that route's own
 ### Agent workers use this same server
 
 Every agent worker attaches this server, through the gateway's `/mcp`, as its `vexa` toolbelt. Its
-bearer is a delegation token minted for that one dispatch (`vxd_…`, an hour at most); the gateway
+bearer is a delegation token minted for that one dispatch (`vxd_…`, revoked when the worker's unit
+ends and 30 minutes at most by default); the gateway
 resolves it through identity like an API key — as the person the worker acts for, with scopes `bot` and
 `tx` — and every tool call it makes is checked as theirs. Apart from the harness's own friction
 report, the token works on `/mcp` and nowhere else: a worker calling the REST API with it is refused. A worker dispatched without a person in the

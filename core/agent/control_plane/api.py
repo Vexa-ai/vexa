@@ -1052,10 +1052,24 @@ def _build_production_app() -> FastAPI:
     else:
         logger.warning("REDIS_WORKLOAD_ACL=shared — every agent worker connects to Redis with the "
                        "service credential and can read and write every unit's streams")
+    # A worker's delegation token is recorded against its unit and REVOKED when the unit ends, in the
+    # store identity reads for every vxd_ bearer (control_plane.delegation_revocation). Wired only
+    # when a toolbelt is configured: with no delegation key or no MCP endpoint nothing is minted.
+    delegation_store = None
+    if settings.mcp_url and settings.mcp_delegation_secret.get_secret_value():
+        import redis as _redis
+
+        from control_plane import delegation_revocation
+
+        delegation_store = _redis.from_url(
+            settings.redis_url, decode_responses=True, socket_connect_timeout=2, socket_timeout=5)
+        delegation_revocation.start_reaper(client_factory=lambda: delegation_store,
+                                           live_units=runtime.live_workloads)
     # Lane A: the Dispatcher takes the SAME index so shared workspaces the subject is a member of enter
     # the dispatch mount set (read-only for Slice 1), not just the /active listing.
     dispatcher = Dispatcher(settings, runtime, identity, membership_index=membership_index,
-                            model_config=model_config, workload_redis=workload_redis_client)
+                            model_config=model_config, workload_redis=workload_redis_client,
+                            delegation_store=delegation_store)
     app = create_app(
         dispatcher,
         stream_reader=RedisStreamReader(settings.redis_url),

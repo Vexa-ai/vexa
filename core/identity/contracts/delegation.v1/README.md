@@ -18,7 +18,7 @@ base64url is unpadded.
 
 | | |
 |---|---|
-| **Minter** | agent-api, per dispatch (`core/agent/shared/delegation.py`), lifetime 3600 s |
+| **Minter** | agent-api, per dispatch (`core/agent/shared/delegation.py`), lifetime `VEXA_MCP_DELEGATION_TTL_SEC` — by default the chat worker's warm window plus one turn, 1800 s |
 | **Verifier** | identity's `/internal/validate` (`admin_api/delegation.py`): the gateway and flows resolve a `vxd_` bearer through it like any other. Its answer is identity.v1 `ValidateResponse` with `delegation` and `person_is_admin` |
 | **Key** | `VEXA_MCP_DELEGATION_SECRET`, symmetric, held by agent-api and admin-api only. Empty is refused on mint and verify; unset on admin-api means every `vxd_` bearer is refused |
 | **Where it is accepted** | the gateway admits a `vxd_` bearer on `/mcp`, on the MCP's re-entry (gateway-identity.v1 § Re-entry) and on the worker harness's `POST /agent/friction`; every other route answers 403 |
@@ -44,9 +44,15 @@ signature, constant time (`bad_signature`) → claims are a JSON object (`malfor
 `401 Invalid delegation: <reason>`, and `401 Invalid delegation: no such user` when `sub` names no
 account.
 
-**Revocation.** The product verifier keeps no denylist: a token is valid until `exp`. The `revoked`
-reason exists for a verifier that passes one (`verify_delegation(…, revoked=…)`); the dogfood rig's
-own verifier does.
+**Revocation.** A token ends with the unit it was minted for. agent-api records each token's `jti`
+against its unit at dispatch and, once the runtime no longer runs that unit (it completed, idled out,
+was stopped or failed), writes `vexa:delegation:revoked:<jti>` to the service Redis with the token's
+remaining lifetime as its expiry (`core/agent/control_plane/delegation_revocation.py`). identity
+answers `401 Invalid delegation: revoked` for a verified token whose key exists, and `503` when it
+cannot read the store, so an unreadable store never reads as "not revoked"; API keys never touch it
+(`admin_api/app/delegation_revocation.py`). The key's name is held equal on both sides by
+`gate:fact-parity` (fact `delegation-revocation-key`). `verify_delegation(…, revoked=…)` remains the
+in-module form; the dogfood rig's own verifier passes one.
 
 ## Files
 

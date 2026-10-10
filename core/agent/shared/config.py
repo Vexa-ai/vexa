@@ -6,8 +6,15 @@ never land in a log line, a repr, or a golden. The control plane reads these onc
 """
 from __future__ import annotations
 
+from typing import Optional
+
 from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+#: What a delegation token outlives the chat worker's warm window by, when its lifetime is not
+#: configured: one whole turn, the openai-agent harness's own per-turn ceiling
+#: (VEXA_AGENT_MAX_TURN_SEC, 900 s), so a unit that runs one turn and idles out never outlives it.
+DELEGATION_TTL_MARGIN_SEC = 900
 
 
 class Settings(BaseSettings):
@@ -140,9 +147,12 @@ class Settings(BaseSettings):
     # The MCP endpoint a spawned worker connects to, carrying a short-lived delegation token minted
     # per dispatch (see shared.delegation). Empty ⇒ no MCP is attached (the pre-delegation behaviour).
     mcp_url: str = ""
-    # How long that delegation token lives. It only has to outlast ONE turn — the chat worker's warm
-    # window is the real bound — so it is deliberately short: a leaked worker env goes stale on its own.
-    mcp_delegation_ttl_sec: int = 3600
+    # How long that delegation token lives. The token is REVOKED when its unit ends
+    # (control_plane.delegation_revocation); this is the bound for when that never happens. Unset ⇒
+    # the chat worker's warm window plus one whole turn (`delegation_ttl_sec`), which covers a unit
+    # that runs one turn and idles out. There is no refresh: the worker reads its token once, at boot,
+    # so a warm unit that outlives it loses the vexa MCP until it idles out and the next turn respawns.
+    mcp_delegation_ttl_sec: Optional[int] = Field(default=None, ge=60)
 
     # ── secrets (never logged, committed, or in goldens) — P14 / P15 ─────────
     # Brokered, scoped identity the worker presents (ADR-0003): a port, not a raw key here.
@@ -191,6 +201,11 @@ class Settings(BaseSettings):
     # the data volume (rotating it makes every previously-sealed secret unreadable, which reads as "no
     # credential saved" — deliberately, so a wrong key never decrypts to garbage).
     secrets_key: SecretStr = SecretStr("")
+
+    def delegation_ttl_sec(self) -> int:
+        """The lifetime of a minted delegation token: ``mcp_delegation_ttl_sec`` when configured,
+        else the chat warm window plus one turn (``DELEGATION_TTL_MARGIN_SEC``)."""
+        return int(self.mcp_delegation_ttl_sec or self.chat_idle_timeout_sec + DELEGATION_TTL_MARGIN_SEC)
 
     def is_secret_present(self) -> bool:
         """True when a scoped identity token has been provided (without revealing it)."""

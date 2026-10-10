@@ -509,8 +509,8 @@
     {
       "key": "VEXA_MCP_DELEGATION_TTL_SEC",
       "class": "defaulted",
-      "default": "3600",
-      "description": "lifetime of a minted MCP delegation token. It only has to outlast one dispatch's warm window, so it is deliberately short: a leaked worker env goes stale on its own rather than needing the human's own credential rotated",
+      "default": "(unset \u2014 VEXA_CHAT_IDLE_TIMEOUT_SEC + 900, i.e. 1800 at the defaults)",
+      "description": "lifetime in seconds (at least 60) of a minted MCP delegation token. The token is revoked when its unit ends (control_plane/delegation_revocation.py); this is the bound when that never happens. The default covers a unit that runs one turn (900 s, the openai-agent harness's per-turn ceiling) and then its warm window. The worker reads its token once, at boot, and nothing refreshes it, so a warm unit kept alive past this loses the vexa MCP until it idles out and the next turn respawns it",
       "targets": []
     },
     {

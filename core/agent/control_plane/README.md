@@ -21,6 +21,20 @@ The agent control plane: the FastAPI app (`api.py`) and orchestration that dispa
 - `api_shared.py` — the rest the routes are built out of: the session index, live meetings, SSE
   framing, the chat's grounding and context bundle.
 
+## A worker's delegation token ends with its unit
+
+`delegation_revocation.py`. Each dispatch's delegation token (`shared/delegation.py`) is recorded
+against its unit before the spawn (`vexa:delegation:unit:<unit id>`, jti → exp), and a token that
+cannot be recorded is withheld. The reaper thread compares the recorded units with the runtime's live
+workloads every 30 s; a unit the runtime no longer runs — completed, idled out, stopped, failed, or
+never started — has its tokens written to `vexa:delegation:revoked:<jti>` with their remaining
+lifetime, which identity's `/internal/validate` refuses. A unit id is reused across warm windows, so
+the dispatch that starts a unit's next container also revokes the previous container's token when the
+runtime reports it ended. Tokens younger than 120 s are never revoked (their spawn may still be on
+its way), and a sweep that cannot read the runtime revokes nothing. The token's lifetime,
+`VEXA_MCP_DELEGATION_TTL_SEC`, defaults to the chat warm window plus one turn (1800 s): nothing
+refreshes a running worker's token, so a unit kept warm past it loses the vexa MCP until it idles out.
+
 ## Workspace membership + invites + roles (Lane M — the access layer for shared workspaces)
 
 > **The full workspace + collaboration model (tiers, personal, sharing, live collaboration, deferred)
