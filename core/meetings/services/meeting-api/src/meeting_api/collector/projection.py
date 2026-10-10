@@ -109,6 +109,10 @@ OWNER_ONLY_KEYS = frozenset({
     # The reader roster — every user id that can read this meeting. A share recipient enumerating it
     # learns who ELSE the owner shared with, which is other people's material, not theirs.
     "transcript_viewers",
+    # The same roster with each reader's email, and the people the owner removed
+    # (`share_access`). The owner manages these through `GET /meetings/{id}/access`.
+    "share_viewers",
+    "share_removed",
 })
 
 # What a NON-OWNER's response drops explicitly: both tiers. Kept as one name because that is the

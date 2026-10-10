@@ -25,6 +25,7 @@ import secrets
 from datetime import datetime, timezone
 from typing import Optional
 
+from . import share_access
 from .ports import ARTIFACT_DELETION_FIELD, RedisBus, TranscriptStore, deletion_stamp
 
 log = logging.getLogger("meeting_api.collector.adapters")
@@ -73,6 +74,9 @@ def _build_share_grant(mode: str, allowed_emails, expires_in_sec: int) -> "tuple
         "allowed_emails": list(allowed_emails or []),
         "expires_at": (_now() + timedelta(seconds=int(expires_in_sec))).isoformat(),
         "revoked": False,
+        # When it was minted: a person the owner removed is refused by any grant minted BEFORE the
+        # removal and admitted by a fresh invite minted after it (share_access.redeem_refusal).
+        "created_at": _now().isoformat(),
     }
     return grant, secret
 
@@ -847,17 +851,73 @@ class SqlAlchemyTranscriptStore:
             grant = next((g for g in data.get("share_grants", []) if g.get("secret_hash") == h), None)
             if not grant:
                 return {"error": "invalid"}
-            err = validate_transcript_grant(grant, user_email)
+            err = validate_transcript_grant(grant, user_email) or share_access.redeem_refusal(
+                data, user_id, grant)
             if err:
                 return {"error": err}
-            viewers = list(data.get("transcript_viewers", []))
-            if user_id not in viewers:
-                viewers.append(user_id)
-            data["transcript_viewers"] = viewers
+            share_access.record_redeem(data, user_id, user_email, grant)
             meeting.data = data
             flag_modified(meeting, "data")
             await db.commit()
             return {"meeting_id": mid, "ok": True}
+
+    async def _owned_row_edit(self, user_id, meeting_id, edit):
+        """Run ``edit(data, meeting)`` on the caller's OWN row ``meeting_id`` under its row lock and
+        commit. ``None`` when the row is absent or not the caller's — the two are indistinguishable,
+        as on every owner-scoped share route. ``edit`` returns the response, or ``None`` for 404."""
+        from sqlalchemy import select
+        from sqlalchemy.orm.attributes import flag_modified
+
+        from .models import Meeting
+
+        try:
+            mid = int(meeting_id)
+        except (TypeError, ValueError):
+            return None
+        async with self._session_factory() as db:
+            meeting = (await db.execute(
+                select(Meeting).where(Meeting.id == mid, Meeting.user_id == user_id)
+                .limit(1).with_for_update()
+            )).scalars().first()
+            if not meeting:
+                return None
+            data = dict(meeting.data) if isinstance(meeting.data, dict) else {}
+            result = edit(data, meeting)
+            if result is None:
+                return None
+            meeting.data = data
+            flag_modified(meeting, "data")
+            await db.commit()
+            return result
+
+    async def get_share_access(self, user_id, meeting_id) -> "Optional[dict]":
+        """OWNER-scoped: who can read this meeting (``share_access.access_view``)."""
+        return await self._owned_row_edit(
+            user_id, meeting_id,
+            lambda data, m: share_access.access_view(data, meeting_id=m.id, owner_id=m.user_id))
+
+    async def revoke_share_grant(self, user_id, meeting_id, grant_id) -> "Optional[dict]":
+        """OWNER-scoped: revoke one grant and drop whoever joined through it."""
+        def edit(data, m):
+            if not share_access.revoke_grant(data, str(grant_id)):
+                return None
+            return share_access.access_view(data, meeting_id=m.id, owner_id=m.user_id)
+        return await self._owned_row_edit(user_id, meeting_id, edit)
+
+    async def remove_share_viewer(self, user_id, meeting_id, viewer_id) -> "Optional[dict]":
+        """OWNER-scoped: remove one person's access to this meeting."""
+        def edit(data, m):
+            if not share_access.remove_viewer(data, int(viewer_id)):
+                return None
+            return share_access.access_view(data, meeting_id=m.id, owner_id=m.user_id)
+        return await self._owned_row_edit(user_id, meeting_id, edit)
+
+    async def set_share_settings(self, user_id, meeting_id, *, recording: bool) -> "Optional[dict]":
+        """OWNER-scoped: whether people this meeting is shared with may play its recording."""
+        def edit(data, m):
+            share_access.set_settings(data, recording=recording)
+            return share_access.access_view(data, meeting_id=m.id, owner_id=m.user_id)
+        return await self._owned_row_edit(user_id, meeting_id, edit)
 
     async def append_segment(self, meeting_id, segment) -> None:
         # Live segments land in the Redis hash (``meeting:{id}:segments``), flushed to Postgres by

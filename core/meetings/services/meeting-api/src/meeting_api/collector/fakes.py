@@ -376,13 +376,60 @@ class InMemoryTranscriptStore:
         grant = next((g for g in m["data"].get("share_grants", []) if g.get("secret_hash") == _sha(secret)), None)
         if not grant:
             return {"error": "invalid"}
-        err = validate_transcript_grant(grant, user_email)
+        from . import share_access
+        err = validate_transcript_grant(grant, user_email) or share_access.redeem_refusal(
+            m["data"], user_id, grant)
         if err:
             return {"error": err}
-        viewers = m["data"].setdefault("transcript_viewers", [])
-        if user_id not in viewers:
-            viewers.append(user_id)
+        share_access.record_redeem(m["data"], user_id, user_email, grant)
         return {"meeting_id": mid, "ok": True}
+
+    def _owned_row_edit(self, user_id, meeting_id, edit):
+        """Mirror of the SqlAlchemy store's owner-scoped row edit: absent and foreign read alike."""
+        try:
+            mid = int(meeting_id)
+        except (TypeError, ValueError):
+            return None
+        row = self._meetings.get(mid)
+        if row is None or row.get("user_id") != user_id:
+            return None
+        data = dict(row["data"])
+        result = edit(data, mid, row["user_id"])
+        if result is None:
+            return None
+        row["data"] = data
+        return result
+
+    async def get_share_access(self, user_id, meeting_id):
+        from . import share_access
+        return self._owned_row_edit(user_id, meeting_id, lambda d, mid, owner: share_access.access_view(
+            d, meeting_id=mid, owner_id=owner))
+
+    async def revoke_share_grant(self, user_id, meeting_id, grant_id):
+        from . import share_access
+
+        def edit(d, mid, owner):
+            if not share_access.revoke_grant(d, str(grant_id)):
+                return None
+            return share_access.access_view(d, meeting_id=mid, owner_id=owner)
+        return self._owned_row_edit(user_id, meeting_id, edit)
+
+    async def remove_share_viewer(self, user_id, meeting_id, viewer_id):
+        from . import share_access
+
+        def edit(d, mid, owner):
+            if not share_access.remove_viewer(d, int(viewer_id)):
+                return None
+            return share_access.access_view(d, meeting_id=mid, owner_id=owner)
+        return self._owned_row_edit(user_id, meeting_id, edit)
+
+    async def set_share_settings(self, user_id, meeting_id, *, recording):
+        from . import share_access
+
+        def edit(d, mid, owner):
+            share_access.set_settings(d, recording=recording)
+            return share_access.access_view(d, meeting_id=mid, owner_id=owner)
+        return self._owned_row_edit(user_id, meeting_id, edit)
 
     async def connect_doc(self, user_id, platform, native_meeting_id, doc):
         from .adapters import _upsert_doc

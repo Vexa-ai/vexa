@@ -670,6 +670,65 @@ def build_router(
         )
         return {"kind": "plan"}
 
+    # --- The OWNER's side of a share: who can read this meeting, and taking it back.
+    #
+    # Minting and redeeming existed; seeing who holds the capability and revoking it did not, so a
+    # share was a one-way door. These four routes are owner-scoped by ROW id exactly like the mint
+    # above — a row that is not the caller's 404s like an unknown one — and the rule they apply is
+    # `share_access` (pure, shared with the fake store). Removing someone takes their id out of
+    # `transcript_viewers`, the set every read path consults: REST reads refuse them at once, and the
+    # two live paths (agent-api's SSE, the gateway `/ws`) re-check access while open and end the
+    # stream. REGISTERED BEFORE THE PAIR ROUTES: `PATCH /meetings/{meeting_id}/access` has the same
+    # segment count as `PATCH /meetings/{platform}/{native_meeting_id}`, which would otherwise
+    # swallow it (platform="7", native="access") and answer 404. ---
+    @router.get("/meetings/{meeting_id}/access", dependencies=[Depends(require_person)])
+    async def get_share_access(meeting_id: int, x_user_id: Optional[str] = Header(default=None)):
+        user_id = _resolve_user_id(x_user_id)
+        view = await store.get_share_access(user_id, meeting_id)
+        if view is None:
+            raise HTTPException(status_code=404, detail=f"Meeting {meeting_id} not found")
+        return JSONResponse(content=view)
+
+    @router.patch("/meetings/{meeting_id}/access", dependencies=[Depends(require_person)])
+    async def set_share_access(meeting_id: int, request: Request,
+                               x_user_id: Optional[str] = Header(default=None)):
+        user_id = _resolve_user_id(x_user_id)
+        try:
+            payload = await request.json()
+        except Exception:
+            raise HTTPException(status_code=422, detail="invalid JSON body")
+        recording = payload.get("recording") if isinstance(payload, dict) else None
+        if not isinstance(recording, bool):
+            raise HTTPException(status_code=422, detail="'recording' must be true or false")
+        view = await store.set_share_settings(user_id, meeting_id, recording=recording)
+        if view is None:
+            raise HTTPException(status_code=404, detail=f"Meeting {meeting_id} not found")
+        log_event("meeting_share_settings_changed", audience="user", span="meetings.share.settings",
+                  user_id=user_id, meeting_id=str(meeting_id), fields={"recording": recording})
+        return JSONResponse(content=view)
+
+    @router.delete("/meetings/{meeting_id}/share/{grant_id}", dependencies=[Depends(require_person)])
+    async def revoke_share_grant(meeting_id: int, grant_id: str,
+                                 x_user_id: Optional[str] = Header(default=None)):
+        user_id = _resolve_user_id(x_user_id)
+        view = await store.revoke_share_grant(user_id, meeting_id, grant_id)
+        if view is None:
+            raise HTTPException(status_code=404, detail="No such share on this meeting")
+        log_event("transcript_share_revoked", audience="user", span="meetings.share.revoke",
+                  user_id=user_id, meeting_id=str(meeting_id), fields={"grant_id": grant_id})
+        return JSONResponse(content=view)
+
+    @router.delete("/meetings/{meeting_id}/viewers/{viewer_id}", dependencies=[Depends(require_person)])
+    async def remove_share_viewer(meeting_id: int, viewer_id: int,
+                                  x_user_id: Optional[str] = Header(default=None)):
+        user_id = _resolve_user_id(x_user_id)
+        view = await store.remove_share_viewer(user_id, meeting_id, viewer_id)
+        if view is None:
+            raise HTTPException(status_code=404, detail="That person does not have access to this meeting")
+        log_event("meeting_share_viewer_removed", audience="user", span="meetings.share.remove",
+                  user_id=user_id, meeting_id=str(meeting_id), fields={"viewer_id": viewer_id})
+        return JSONResponse(content=view)
+
     @router.patch("/meetings/{meeting_id}")
     async def patch_planned_meeting(
         meeting_id: int,
