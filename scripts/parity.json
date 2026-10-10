@@ -130,6 +130,23 @@
       ]
     },
     {
+      "id": "workspace-paths",
+      "fact": "how this domain reaches a file inside a work tree the model's tools can write",
+      "kind": "file-bytes",
+      "enforced": true,
+      "canonical": "core/workspaces/shared/workspace_paths.py",
+      "how_to_agree": "edit core/workspaces/shared/workspace_paths.py and copy it VERBATIM over core/agent/llm/workspace_paths.py",
+      "why": "agent-api and the worker, both root, read and write fixed platform files inside work trees the model's tools also write during a turn; a plain open follows a symlink planted at the file or any directory above it, redirecting a root read (its bytes reaching a caller or the model) or a root write (a credential, an identity, a member list) into another tenant's tree. One module holds the no-follow rule. The worker's llm package imports no product code, so it is vendored there and byte-compared; core/agent/tests/test_worktree_io_single_path.py fails on a bare open/read_text/write_text/read_bytes/write_bytes/rmtree in core/agent or core/workspaces that is not allow-listed with a reason.",
+      "sites": [
+        {
+          "path": "core/workspaces/shared/workspace_paths.py"
+        },
+        {
+          "path": "core/agent/llm/workspace_paths.py"
+        }
+      ]
+    },
+    {
       "id": "outbound-url-vectors",
       "fact": "the table both outbound URL guards are held to — the Python ssrf.py and the TypeScript url-guard.ts",
       "kind": "file-bytes",
