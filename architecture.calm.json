@@ -2915,7 +2915,7 @@
      }
     }
    },
-   "description": "the terminal's server, with the internal secret: sign-in admission, the admin claim, the claim-code check, instance state and the one-use redeem of an emailed sign-in link (signin.v1), plus /internal/validate and the settings it edits for the admin",
+   "description": "the terminal's server, with the internal secret: sign-in admission, the admin claim, the claim-code check, instance state, the one-use redeem of an emailed sign-in link and the binding of an OAuth sign-in to its provider subject (signin.v1), plus /internal/validate and the settings it edits for the admin",
    "protocol": "HTTP",
    "metadata": [
     {

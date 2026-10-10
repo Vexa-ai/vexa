@@ -119,7 +119,7 @@ export const authOptions: AuthOptions = {
       // which cannot tell "this address may not sign in" from a cancelled consent screen; the codes
       // below let the sign-in card say the one sentence every door uses (app/signinRefusal.ts) —
       // naming no list and no domain, so it reveals nothing the person could not learn by trying.
-      const result = await findOrCreateUserToken(identity.email);
+      const result = await findOrCreateUserToken(identity.email, { subject: identity.subject });
       if (!result.ok) {
         if (result.refused === "not-allowed") {
           // eslint-disable-next-line no-console

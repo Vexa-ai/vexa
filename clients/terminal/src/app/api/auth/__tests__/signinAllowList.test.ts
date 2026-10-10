@@ -105,6 +105,8 @@ function installAdminApi() {
       world.users.add(e);
       return json({ id: nextId++, email: e }, 201);
     }
+    // the OAuth door binds the account to its provider subject; these cases are about admission
+    if (u.includes("/provider-subject")) return json({ bound: "first" });
     if (u.includes("/tokens")) return method === "POST" ? json({ token: "minted-tok" }) : json([]);
     if (u.includes("/internal/bootstrap-admin")) {
       const asked = JSON.parse(String(init?.body ?? "{}"));
