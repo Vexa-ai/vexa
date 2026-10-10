@@ -1,9 +1,10 @@
 {
- "contract": "outbound-url-vectors.v1",
+ "contract": "outbound-url.v1",
  "what": [
   "One table both outbound URL guards are held to: the Python ssrf.py (vendored into every Python",
   "image that fetches a user-supplied URL) and the TypeScript url-guard.ts in @vexa/transcribe-whisper.",
-  "Byte-identical copies beside each test suite (scripts/parity.json, fact outbound-url-vectors).",
+  "The golden of deploy/contracts/outbound-url.v1; byte-identical copies sit beside each test suite",
+  "(scripts/parity.json, fact outbound-url-vectors).",
   "addresses: is_blocked_ip. hostnames: is_blocked_hostname. urls: validate_url with `resolved` as",
   "the resolver's answer (null = a literal address, no lookup); `refused` is the verdict."
  ],

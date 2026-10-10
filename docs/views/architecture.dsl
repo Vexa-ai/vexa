@@ -91,6 +91,7 @@ system runtime-system  # workload spawn (bot/agent containers)
 system deploy  # deployment + execution-target registry
   contract execution-targets.v1
   contract config.v1
+  contract outbound-url.v1
 
 system service-authority-system  # optional operator-owned admission and active-service authority; absent in stock OSS and never owns billing policy inside core
   service service-authority

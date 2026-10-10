@@ -2,10 +2,10 @@
  * url-guard — may this process send a request to a URL somebody else chose?
  *
  * The TypeScript twin of the Python outbound URL guard (`ssrf.py`, vendored into every Python image
- * that fetches a user-supplied URL). The two cannot share code, so they share a table instead:
- * `outbound-url-vectors.json` beside this file is byte-identical to the copy the Python tests read
- * (`scripts/parity.json`, fact `outbound-url-vectors`), and both test suites hold their guard to
- * every row.
+ * that fetches a user-supplied URL). The two cannot share code, so they share a table instead: the
+ * golden of `deploy/contracts/outbound-url.v1`. `outbound-url-vectors.json` beside this file is a
+ * byte-identical copy (`scripts/parity.json`, fact `outbound-url-vectors`), as is the one the Python
+ * tests read, and both test suites hold their guard to every row.
  *
  * The same three rules:
  *  1. Every address is checked as what a connection to it reaches. An IPv6 address carrying an IPv4

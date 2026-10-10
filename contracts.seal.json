@@ -31,5 +31,6 @@
   "core/runtime/contracts/schedule.v1": "6f2c0277d3d186ca2a9333342930f135ea66bfd931135c451bd12b05ff862648",
   "core/workspaces/contracts/workspace.v1": "4069d5a747914765ba2d4f2d4cf0968916be1208137f845a3f1691a241f7f20f",
   "deploy/contracts/config.v1": "813bf5b3ab9b3d6dfb19960ae0960b51dbca163101f80dca3f2279c517e081f4",
-  "deploy/contracts/execution-targets.v1": "0c644571b7823024aa2e7ec6a135a55202233155c6c60eef79f1f4ec063e6375"
+  "deploy/contracts/execution-targets.v1": "0c644571b7823024aa2e7ec6a135a55202233155c6c60eef79f1f4ec063e6375",
+  "deploy/contracts/outbound-url.v1": "d0c41fa489c991e8053a6ec3172567852dd6e9fc23cf58b890eeb5c52163ba0e"
 }
