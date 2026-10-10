@@ -38,3 +38,16 @@ disconnected → indeterminate/disabled, never an actionable control derived fro
 sources and kinds are unit.v1's `Fault` (`core/agent/contracts/unit.v1`); `faultWire.ts` is GENERATED
 from it (`node core/agent/contracts/unit.v1/gen-faults.mjs`, never edited by hand) and types the label tables,
 so a kind the contract adds fails `tsc` until it has a label (`__tests__/faultContract.test.tsx`).
+
+**Transcription language has one model** (`transcriptionLanguage.ts`, picker and its homes in
+`TranscriptionLanguagePicker.tsx`). A setting is `{language, allowed_languages}` over Whisper codes in
+three modes: auto-detect (neither), one language (every window pinned), or a few languages (detection
+restricted to the list; `language`, or the first entry, is the fallback). It is edited in three places,
+all through the same picker and mapping: Settings → Models stores the person's default
+(`PUT /user/transcription`, `""`/`[]` clear it back to the deployment's); both paste-a-link senders
+(`DropBotInline`, `MeetingsList`) carry an optional per-meeting override via `languageSpawnFields`, whose
+"Default" sends nothing so the server resolves person → deployment → auto; and the live meeting header
+shows the row's `data.transcription_language` and lets the meeting's owner, or an owner/contributor of
+its bound workspace, switch it mid-meeting (`PUT /bots/{platform}/{native}/config`, the body replaces the
+setting). Readers see the language with no control. A refused switch keeps the previous value shown and
+the user's pick open, with the reason and the fix beside the control.

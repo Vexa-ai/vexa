@@ -1,3 +1,5 @@
+import type { MeetingLanguage } from "./transcriptionLanguage";
+
 /** meetingModel — the meeting/transcript/entity SHAPES the live path works in. Real types only; the
  *  backend (meeting-api via the gateway) fills them. No fixtures, no fallbacks. */
 
@@ -34,6 +36,7 @@ export interface MeetingMock {
   insights: { t: string; text: string }[];  // copilot notes, revealed alongside the transcript
   docs?: { workspace: string; path: string; title?: string; kind?: string }[];  // connected workspace docs (data.docs)
   artifacts_deleted?: boolean;  // its owner deleted the transcript + recordings (data.artifact_deletion)
+  transcription_language?: MeetingLanguage;  // the language setting the bot runs with (data.transcription_language)
 }
 
 // ── meeting lifecycle phase (design-spec meeting-lifecycle-v2) ──────────────────────
