@@ -17,11 +17,15 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import re
 from typing import Mapping, Optional
 
 #: The environment variable carrying a worker's unit key (hex).
 KEY_ENV = "VEXA_UNIT_IN_KEY"
 _LABEL = b"vexa-unit-input.v1:"
+#: The one encoded form a ``sig`` has: an HMAC-SHA256 hexdigest, lowercase, as :func:`signed_entry`
+#: writes it.
+_SIG_FORM = re.compile(r"[0-9a-f]{64}")
 
 
 def unit_key(secret: str, unit_id: str) -> str:
@@ -43,7 +47,18 @@ def signed_entry(key: str, body: Mapping) -> dict[str, str]:
 
 def verified_turn(key: str, fields: Mapping) -> Optional[dict]:
     """The message in a stream entry when its signature holds under ``key``; None otherwise —
-    unsigned, forged, signed for another unit, unparseable, or no key to check with."""
+    unsigned, forged, signed for another unit, malformed, unparseable, or no key to check with.
+
+    Never raises. Anyone holding the service connection can write an entry, so its fields are
+    untrusted until the signature holds: a malformed one is a refusal like a forged one, never an
+    exception in the reader (agent-api's pending list, the worker's input loop)."""
+    try:
+        return _verified(key, fields)
+    except Exception:  # noqa: BLE001 — any fault reading an entry is a refusal
+        return None
+
+
+def _verified(key: str, fields: Mapping) -> Optional[dict]:
     turn, sig = fields.get("turn"), fields.get("sig")
     if isinstance(turn, bytes):
         turn = turn.decode("utf-8", "replace")
@@ -51,10 +66,10 @@ def verified_turn(key: str, fields: Mapping) -> Optional[dict]:
         sig = sig.decode("ascii", "replace")
     if not (key and isinstance(turn, str) and isinstance(sig, str)):
         return None
-    try:
-        if not hmac.compare_digest(_sig(key, turn), sig):
-            return None
-        msg = json.loads(turn)
-    except ValueError:
+    if not _SIG_FORM.fullmatch(sig):
         return None
+    # Both sides are ASCII hex here; compared as bytes, as compare_digest requires for anything else.
+    if not hmac.compare_digest(_sig(key, turn).encode("ascii"), sig.encode("ascii")):
+        return None
+    msg = json.loads(turn)
     return msg if isinstance(msg, dict) else None

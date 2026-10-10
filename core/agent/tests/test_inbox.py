@@ -177,6 +177,20 @@ def test_what_the_inbox_view_refuses_to_call_pending(fake_redis):
     assert api_shared.inbox_pending("redis://fake", "u-x", "") == []
 
 
+def test_a_malformed_entry_is_not_pending_and_never_an_error(client, fake_redis):
+    """Any holder of the service connection can append to an in-topic. An entry whose `sig` is not
+    a signature — non-ASCII text above all — is passed over by the pending list and by the submit
+    route, which answers with that list; neither fails."""
+    topic = units.input_topic(_UNIT)
+    fake_redis.xadd(topic, {"turn": json.dumps({"type": "message", "prompt": "x", "inbox": {
+        "id": "c-bad", "display": "bad", "at": time.time()}}), "sig": "é" * 64})
+    fake_redis.xadd(topic, {"turn": "{", "sig": "Z" * 64})
+    seen = client.get("/api/chat/pending", headers=_HEADERS, params={"session": "main"})
+    assert seen.status_code == 200 and seen.json()["pending"] == []
+    r = _submit(client, prompt="still mine", turn_id="c-1")
+    assert r.status_code == 200 and [p["id"] for p in r.json()["pending"]] == ["c-1"]
+
+
 def test_no_redis_is_an_empty_inbox_and_never_an_error():
     """A chat that cannot read its inbox shows what it showed before one existed. It must never be
     the thing that fails the surface asking it."""

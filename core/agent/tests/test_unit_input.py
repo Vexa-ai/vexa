@@ -56,6 +56,50 @@ def test_only_signed_entries_verify():
     assert unit_input.verified_turn("", signed_turn({"prompt": "hi"})) is None
 
 
+def _malformed(prompt: str) -> list:
+    """Entries anyone holding the service connection could write, none of them a signature."""
+    good = signed_turn({"prompt": prompt})
+    deep = "[" * 100000 + "]" * 100000
+    return [
+        {"turn": good["turn"], "sig": "é" * 64},                       # non-ASCII text
+        {"turn": good["turn"], "sig": b"\xff" * 64},                   # non-ASCII bytes
+        {"turn": good["turn"], "sig": good["sig"].upper()},            # not the encoded form
+        {"turn": good["turn"], "sig": good["sig"][:-1]},               # short
+        {"turn": good["turn"], "sig": good["sig"] + "0"},              # long
+        {"turn": good["turn"], "sig": 7},                               # not text
+        {"turn": b"\xff\xfe", "sig": good["sig"]},                      # not UTF-8
+        {"turn": deep, "sig": unit_input._sig(TEST_UNIT_IN_KEY, deep)},  # signed, too deep to parse
+        ["turn", "sig"],                                                # not a mapping
+    ]
+
+
+def test_a_malformed_entry_is_a_refusal_never_an_exception():
+    for fields in _malformed("hi"):
+        assert unit_input.verified_turn(TEST_UNIT_IN_KEY, fields) is None
+    assert unit_input.verified_turn("not-hex", signed_turn({"prompt": "hi"})) is None
+
+
+def test_the_serve_loop_passes_over_a_malformed_entry_and_runs_the_next():
+    inbox = [(f"{i}-0", f) for i, f in enumerate(_malformed("injected"), start=1)]
+    inbox.append(("99-0", signed_turn({"prompt": "mine"})))
+    s = FakeStream(inbox=inbox)
+    serve(s, out_topic="o", in_topic="i", turn=_turn, start={"session": {"ref": "x"}}, idle_ms=10)
+    assert _ran(s) == ["re:mine"]
+
+
+def test_the_boot_drain_passes_over_a_malformed_entry():
+    stream = BootStream([("5-0", _malformed("boot")[0]), ("6-0", signed_turn({"prompt": "queued"}))])
+    ran = []
+
+    def turn(prompt):
+        ran.append(prompt)
+        return iter(())
+
+    serve(stream, out_topic="o", in_topic="i", turn=turn,
+          start={"entrypoint": {"inline": "hello", "nonce": "n0"}}, idle_ms=10)
+    assert ran == ["hello", "queued"]
+
+
 def test_the_serve_loop_runs_only_its_own_signed_messages():
     inbox = [(f"{i}-0", f) for i, f in enumerate(_forgeries("injected"), start=1)]
     inbox.append(("9-0", signed_turn({"prompt": "mine"})))
