@@ -141,3 +141,18 @@ def test_the_shipped_agent_profile_carries_the_configured_credentials(monkeypatc
     )
     assert agent.credential_env == {CODEX_HOME_ENV: WORKER_CODEX_HOME}
     assert not bot.credential_mounts and bot.credential_files == () and bot.process_groups == ("pulse-access",)
+
+
+def test_the_process_backend_stages_credential_files_only_for_a_profile_that_asks(monkeypatch, tmp_path):
+    """As on docker and k8s, ``credential_mounts`` is what hands a profile's files over: a root
+    process backend stages them into the child's fresh HOME only when it is set."""
+    from runtime_kernel import process_backend as pb
+
+    staged: list = []
+    monkeypatch.setattr(pb, "plan_process_isolation", lambda env, euid=None: None)
+    monkeypatch.setattr(pb, "group_ids", lambda names: ())
+    monkeypatch.setattr(pb, "make_home", lambda uid, gid, **kw: staged.append(kw["staged"]) or ("/h", "/h/tmp"))
+    backend = ProcessBackend(homes_root=str(tmp_path / "homes"))
+    backend._identity("job-tuned", TUNED, {})
+    backend._identity("job-withheld", Runnable(**{**TUNED.__dict__, "credential_mounts": False}), {})
+    assert [[f.home_path for f in s] for s in staged] == [[".creds/auth.json"], []]

@@ -41,8 +41,16 @@ log = logging.getLogger("runtime_kernel.process")
 _TAIL_BYTES = 4096
 
 
+#: Where a ROOT runtime keeps the workload logs when ``PROCESS_LOG_DIR`` is unset: beside the
+#: children's HOMEs, in a directory only root can reach (never under the shared /tmp).
+ROOT_LOG_DIR = "/var/lib/vexa-runtime/logs"
+
+
 def _log_dir() -> str:
-    return os.environ.get("PROCESS_LOG_DIR") or os.path.join(tempfile.gettempdir(), "vexa-workloads")
+    configured = os.environ.get("PROCESS_LOG_DIR")
+    if configured:
+        return configured
+    return ROOT_LOG_DIR if os.geteuid() == 0 else os.path.join(tempfile.gettempdir(), "vexa-workloads")
 
 
 def _open_log(workload_id: str) -> tuple[str, int]:
@@ -68,7 +76,7 @@ def _open_log(workload_id: str) -> tuple[str, int]:
                      dir_fd=dir_fd)
     finally:
         os.close(dir_fd)
-    return os.path.join(os.path.realpath(log_dir), name), fd
+    return os.path.join(os.path.normpath(log_dir), name), fd
 
 
 def _tail(path: str, limit: int = _TAIL_BYTES) -> str:
@@ -129,7 +137,7 @@ class ProcessBackend:
         else:
             uid, groups = self._uids.acquire(workload_id), group_ids(runnable.process_groups)
         staged = [StagedFile(source=c.source, home_path=c.home_path)
-                  for c in runnable.credential_files if c.home_path]
+                  for c in runnable.credential_files if c.home_path] if runnable.credential_mounts else []
         home, tmp = make_home(uid, uid, homes_root=self._homes_root, staged=staged)
         return ChildIdentity(uid=uid, gid=uid, groups=tuple(groups), home=home, tmp=tmp)
 

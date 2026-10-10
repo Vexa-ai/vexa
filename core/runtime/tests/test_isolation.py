@@ -113,11 +113,11 @@ def test_plan_none_for_workspaceless_workloads(caplog):
 def test_ids_are_allocated_once_and_persisted(store):
     fd = open_trusted_dir(str(store), owner=ME)
     try:
-        g1 = iso._allocate(fd, iso.GID_REGISTRY, "deal-9", GID_BASE, iso.GID_LIMIT)
-        g2 = iso._allocate(fd, iso.GID_REGISTRY, "acme-1424e3", GID_BASE, iso.GID_LIMIT)
-        u1 = iso._allocate(fd, iso.UID_REGISTRY, "alice", SUBJECT_UID_BASE, iso.SUBJECT_UID_LIMIT)
+        g1 = iso._allocate(fd, iso.GID_REGISTRY, "deal-9", GID_BASE, iso.GID_LIMIT, owner=ME)
+        g2 = iso._allocate(fd, iso.GID_REGISTRY, "acme-1424e3", GID_BASE, iso.GID_LIMIT, owner=ME)
+        u1 = iso._allocate(fd, iso.UID_REGISTRY, "alice", SUBJECT_UID_BASE, iso.SUBJECT_UID_LIMIT, owner=ME)
         assert (g1, g2, u1) == (GID_BASE, GID_BASE + 1, SUBJECT_UID_BASE)
-        assert iso._allocate(fd, iso.GID_REGISTRY, "deal-9", GID_BASE, iso.GID_LIMIT) == g1
+        assert iso._allocate(fd, iso.GID_REGISTRY, "deal-9", GID_BASE, iso.GID_LIMIT, owner=ME) == g1
     finally:
         os.close(fd)
     assert json.loads((store / iso.GID_REGISTRY).read_text()) == {"deal-9": g1, "acme-1424e3": g2}
@@ -131,10 +131,47 @@ def test_a_registry_replaced_by_a_link_is_not_read_or_written_through(store, tmp
     fd = open_trusted_dir(str(store), owner=ME)
     try:
         with pytest.raises(IsolationRefused):
-            iso._allocate(fd, iso.GID_REGISTRY, "deal-9", GID_BASE, iso.GID_LIMIT)
+            iso._allocate(fd, iso.GID_REGISTRY, "deal-9", GID_BASE, iso.GID_LIMIT, owner=ME)
     finally:
         os.close(fd)
     assert outside.read_text() == '{"deal-9": 0}'
+
+
+@pytest.mark.parametrize("content,mode,hardlink", [
+    ('{"deal-9": 200000}', 0o644, False),                # readable by others
+    ('{"deal-9": 200000}', 0o600, True),                 # a second link to it exists
+    ('{"deal-9": 0}', 0o600, False),                      # an id outside the range: root's gid
+    ('{"deal-9": 1000000000}', 0o600, False),             # an id in the subject range
+    ('{"deal-9": "200000"}', 0o600, False),               # not an int
+    ('{"a": 200000, "b": 200000}', 0o600, False),         # one id for two names
+    ('{"../x": 200001}', 0o600, False),                   # not a plain name
+    ('[1, 2]', 0o600, False),
+])
+def test_a_registry_that_is_not_roots_private_file_or_holds_a_bad_id_refuses(store, tmp_path, content,
+                                                                             mode, hardlink):
+    reg = store / iso.GID_REGISTRY
+    reg.write_text(content)
+    os.chmod(reg, mode)
+    if hardlink:
+        os.link(reg, tmp_path / "second-link")
+    fd = open_trusted_dir(str(store), owner=ME)
+    try:
+        with pytest.raises(IsolationRefused):
+            iso._allocate(fd, iso.GID_REGISTRY, "deal-9", GID_BASE, iso.GID_LIMIT, owner=ME)
+    finally:
+        os.close(fd)
+
+
+def test_a_registry_of_another_owner_refuses(store):
+    reg = store / iso.UID_REGISTRY
+    reg.write_text("{}")
+    os.chmod(reg, 0o600)
+    fd = open_trusted_dir(str(store), owner=ME)
+    try:
+        with pytest.raises(IsolationRefused):     # the store's owner is root, the file is ours
+            iso._allocate(fd, iso.UID_REGISTRY, "alice", SUBJECT_UID_BASE, iso.SUBJECT_UID_LIMIT, owner=0)
+    finally:
+        os.close(fd)
 
 
 # ── the store (R4-3: root never follows a link a tenant planted) ──────────────
@@ -145,10 +182,25 @@ def _plan(store, *, subject="17", uid=None, private=(), shared=()):
                             shared=tuple((str(store / p), s) for p, s in shared))
 
 
+def test_a_store_root_others_can_write_is_refused_not_fixed(store):
+    os.chmod(store, 0o777)                               # the old entrypoint's chmod
+    with pytest.raises(IsolationRefused):
+        apply_process_isolation(_plan(store), owner=ME)
+    assert _mode(store) == 0o777                         # refused, left for the deployment to set
+
+
+@pytest.mark.parametrize("tier", [".attached", ".system"])
+def test_a_tier_others_can_write_is_refused(store, tier):
+    (store / tier).mkdir()
+    os.chmod(store / tier, 0o777)
+    with pytest.raises(IsolationRefused):
+        apply_process_isolation(_plan(store), owner=ME)
+
+
 def test_apply_seals_the_store_and_its_tenants(store):
     for d in ("17", "9", ".system/9", ".attached/9", "deal-9", "_global"):
         (store / d).mkdir(parents=True)
-    os.chmod(store, 0o777)                               # the old entrypoint's chmod
+    os.chmod(store, 0o755)
     for d in ("17", "9", ".system/9", ".attached/9", "_global", ".attached", ".system"):
         os.chmod(store / d, 0o755)
     out = apply_process_isolation(_plan(store, private=("17",)), owner=ME)
@@ -262,6 +314,25 @@ def test_a_staged_path_must_stay_in_the_home(tmp_path, bad):
                   staged=[StagedFile(str(cred), bad)])
 
 
+def test_a_link_in_the_homes_path_is_refused_not_resolved(tmp_path):
+    real = tmp_path / "real"
+    real.mkdir()
+    (tmp_path / "via-link").symlink_to(real)
+    with pytest.raises(IsolationRefused):
+        make_home(ME, os.getgid(), homes_root=str(tmp_path / "via-link" / "homes"), owner=ME)
+    assert not (real / "homes").exists()
+
+
+def test_no_new_privs_unavailable_refuses_the_spawn(monkeypatch):
+    import ctypes
+
+    def missing(*_a, **_k):
+        raise OSError("no libc")
+    monkeypatch.setattr(ctypes, "CDLL", missing)
+    with pytest.raises(IsolationRefused):
+        preexec_for(_identity())
+
+
 def test_homes_below_a_directory_others_can_write_are_refused(tmp_path):
     open_dir = tmp_path / "open"
     open_dir.mkdir()
@@ -274,14 +345,14 @@ def test_homes_are_removed_and_swept(tmp_path):
     homes = tmp_path / "homes"
     home, _ = make_home(ME, os.getgid(), homes_root=str(homes), owner=ME)
     (homes / "outside-marker").mkdir()
-    remove_home(home, homes_root=str(homes))
+    remove_home(home, homes_root=str(homes), owner=ME)
     assert not os.path.exists(home)
-    remove_home(str(tmp_path), homes_root=str(homes))     # not one of ours: left alone
+    remove_home(str(tmp_path), homes_root=str(homes), owner=ME)     # not one of ours: left alone
     assert tmp_path.exists()
     live = make_home(ME, os.getgid(), homes_root=str(homes), owner=ME)[0]
     dead = homes / f"{ME + 1}.0123456789abcdef"       # a HOME whose uid no process runs as
     (dead / "tmp").mkdir(parents=True)
-    assert sweep_homes(homes_root=str(homes), live_uids=lambda: {ME}) == 1
+    assert sweep_homes(homes_root=str(homes), owner=ME, live_uids=lambda: {ME}) == 1
     assert os.path.exists(live) and not dead.exists()
     assert (homes / "outside-marker").exists()           # not a HOME name: kept
 
@@ -329,6 +400,7 @@ def test_preexec_drops_groups_then_gid_then_uid_then_proves_it(monkeypatch):
 
 
 def test_preexec_fails_when_the_child_still_holds_root(monkeypatch):
+    monkeypatch.setattr(iso, "_no_new_privs", lambda: (lambda: None))
     for name in ("setgroups", "setgid", "setuid"):
         monkeypatch.setattr(os, name, lambda *_: None)
     monkeypatch.setattr(os, "getresuid", lambda: (100017, 100017, 0), raising=False)     # saved uid still root

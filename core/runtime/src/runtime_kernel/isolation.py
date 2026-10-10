@@ -183,13 +183,17 @@ def _trusted_owner(st: os.stat_result, owner: int) -> bool:
 
 
 def open_trusted_dir(path: str, *, owner: int = 0, create_mode: Optional[int] = None) -> int:
-    """Open ``path`` as a directory only ``owner`` (or root) controls, walking from ``/`` with
-    ``O_NOFOLLOW``: every component must be a directory owned by root or ``owner``, and none above the
-    last may be writable by group or others unless sticky. A missing component is created (owned by
-    whoever runs this) when ``create_mode`` is given. Returns an fd; :class:`IsolationRefused` on any
-    component that fails."""
-    real = os.path.realpath(path)
+    """Open ``path`` as a directory only ``owner`` (or root) controls, walking the path AS GIVEN from
+    ``/`` with ``O_NOFOLLOW``: every component must be a directory (a link anywhere refuses) owned by
+    root or ``owner``, and none above the last may be writable by group or others unless sticky. A
+    missing component is created (owned by whoever runs this) when ``create_mode`` is given. Returns
+    an fd; :class:`IsolationRefused` on any component that fails."""
+    if not path.startswith("/"):
+        raise IsolationRefused(f"{path!r} is not an absolute path")
+    real = os.path.normpath(path)
     parts = [p for p in real.split("/") if p]
+    if ".." in parts:
+        raise IsolationRefused(f"{path!r} names a parent directory")
     fd = os.open("/", _DIR_FLAGS)
     try:
         for i, name in enumerate(parts):
@@ -289,7 +293,11 @@ def chown_tree(top_fd: int, uid: int, gid: int) -> None:
             _reown_leaf(name, dfd, uid, gid)
 
 
-def _read_json_at(dir_fd: int, name: str) -> dict:
+def _read_registry(dir_fd: int, name: str, owner: int, base: int, limit: int) -> dict[str, int]:
+    """A registry at the store root: a regular file root (``owner``) wrote — exactly one link, no
+    access for group or others — holding plain-name keys and ids inside ``[base, limit)``. Anything
+    else refuses: the registry decides uids and gids, so a file that does not look like root's own
+    is not trusted."""
     try:
         fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | _O_CLOEXEC, dir_fd=dir_fd)
     except FileNotFoundError:
@@ -297,11 +305,25 @@ def _read_json_at(dir_fd: int, name: str) -> dict:
     except OSError as e:
         raise IsolationRefused(f"registry {name} cannot be read safely ({e.strerror})") from e
     with os.fdopen(fd, "r", encoding="utf-8") as f:
+        st = os.fstat(f.fileno())
+        if (not stat.S_ISREG(st.st_mode) or st.st_uid != owner or st.st_nlink != 1
+                or stat.S_IMODE(st.st_mode) & 0o077):
+            raise IsolationRefused(f"registry {name} is not a private file of the store's owner")
         try:
             data = json.load(f)
         except ValueError as e:
             raise IsolationRefused(f"registry {name} is not JSON") from e
-    return data if isinstance(data, dict) else {}
+    if not isinstance(data, dict):
+        raise IsolationRefused(f"registry {name} is not a JSON object")
+    out: dict[str, int] = {}
+    for key, value in data.items():
+        if (not isinstance(key, str) or not _SUBJECT.fullmatch(key) or len(key) > MAX_SUBJECT_LEN
+                or type(value) is not int or not base <= value < limit):
+            raise IsolationRefused(f"registry {name} holds an entry outside its range")
+        out[key] = value
+    if len(set(out.values())) != len(out):
+        raise IsolationRefused(f"registry {name} gives one id to two names")
+    return out
 
 
 def _replace_json_at(dir_fd: int, name: str, data: dict) -> None:
@@ -322,15 +344,15 @@ def _replace_json_at(dir_fd: int, name: str, data: dict) -> None:
         raise
 
 
-def _allocate(root_fd: int, registry: str, key: str, base: int, limit: int) -> int:
+def _allocate(root_fd: int, registry: str, key: str, base: int, limit: int, *, owner: int = 0) -> int:
     """The id ``key`` holds in ``registry`` — allocated once (next after the highest), persisted."""
     with _registry_lock:
         fcntl.flock(root_fd, fcntl.LOCK_EX)
         try:
-            reg = {str(k): int(v) for k, v in _read_json_at(root_fd, registry).items()}
+            reg = _read_registry(root_fd, registry, owner, base, limit)
             if key in reg:
                 return reg[key]
-            value = max([v for v in reg.values() if base <= v < limit], default=base - 1) + 1
+            value = max(reg.values(), default=base - 1) + 1
             if value >= limit:
                 raise IsolationRefused(f"{registry} is full")
             reg[key] = value
@@ -373,11 +395,11 @@ def _tier(root_fd: int, name: str, owner: int) -> Optional[int]:
     if fd is None:
         return None
     st = os.fstat(fd)
-    if not _trusted_owner(st, owner):
-        logger.warning("store tier %s was owned by uid %d; re-owning it", name, st.st_uid)
-        os.fchown(fd, owner, owner)
+    if not _trusted_owner(st, owner) or st.st_mode & 0o022:
+        os.close(fd)
+        raise IsolationRefused(f"store tier {name} is not the store owner's alone")
     if stat.S_IMODE(st.st_mode) != 0o711:
-        os.fchmod(fd, 0o711)
+        os.fchmod(fd, 0o711)                          # tighten: traversable, not listable
     return fd
 
 
@@ -394,11 +416,14 @@ def apply_process_isolation(plan: ProcessIsolation, *, owner: int = 0) -> Proces
         st = os.fstat(root_fd)
         if st.st_uid != owner:
             raise IsolationRefused(f"store root {root} is owned by uid {st.st_uid}")
-        if stat.S_IMODE(st.st_mode) != 0o755:
-            os.fchmod(root_fd, 0o755)                 # traversable, writable by its owner only
+        if st.st_mode & 0o022:
+            # anything could have been planted while others could write here: refuse, and let the
+            # deployment (Lite's entrypoint) set the store root right before the runtime starts
+            raise IsolationRefused(f"store root {root} is writable by group or others")
         uid = plan.uid
         if uid is None:
-            uid = _allocate(root_fd, UID_REGISTRY, plan.subject, SUBJECT_UID_BASE, SUBJECT_UID_LIMIT)
+            uid = _allocate(root_fd, UID_REGISTRY, plan.subject, SUBJECT_UID_BASE, SUBJECT_UID_LIMIT,
+                            owner=owner)
         tiers = {name: _tier(root_fd, name, owner) for name in (".attached", ".system")}
         fds.extend(tiers.values())
         # seal EVERY tenant dir, not just this dispatch's — a never-dispatched tenant's data must not
@@ -426,7 +451,7 @@ def apply_process_isolation(plan: ProcessIsolation, *, owner: int = 0) -> Proces
             if fd is None:
                 continue
             try:
-                gid = _allocate(root_fd, GID_REGISTRY, ws_id, GID_BASE, GID_LIMIT)
+                gid = _allocate(root_fd, GID_REGISTRY, ws_id, GID_BASE, GID_LIMIT, owner=owner)
                 groups.append(gid)
                 st = os.fstat(fd)
                 if st.st_gid != gid or stat.S_IMODE(st.st_mode) != 0o2770:
@@ -513,7 +538,7 @@ def make_home(uid: int, gid: int, *, homes_root: str = HOMES_ROOT, owner: int = 
         for fd in reversed(created):                  # innermost first, the HOME itself last
             os.fchown(fd, uid, gid)
         os.fchown(home_fd, uid, gid)
-        home = os.path.join(os.path.realpath(homes_root), name)
+        home = os.path.join(os.path.normpath(homes_root), name)
         return home, os.path.join(home, "tmp")
     finally:
         for fd in created:
@@ -522,11 +547,11 @@ def make_home(uid: int, gid: int, *, homes_root: str = HOMES_ROOT, owner: int = 
         _close(parent)
 
 
-def sweep_homes(*, homes_root: str = HOMES_ROOT,
+def sweep_homes(*, homes_root: str = HOMES_ROOT, owner: int = 0,
                 live_uids: Optional[Callable[[], set[int]]] = None) -> int:
     """Remove the HOMEs whose uid no live process holds (left by a runtime that stopped before its
     children's teardown). Returns how many were removed."""
-    real = os.path.realpath(homes_root)
+    real = os.path.normpath(homes_root)
     try:
         names = os.listdir(real)
     except OSError:
@@ -537,19 +562,19 @@ def sweep_homes(*, homes_root: str = HOMES_ROOT,
         uid, _, rest = name.partition(".")
         if not uid.isascii() or not uid.isdigit() or not rest or int(uid) in live:
             continue
-        remove_home(os.path.join(real, name), homes_root=homes_root)
+        remove_home(os.path.join(real, name), homes_root=homes_root, owner=owner)
         removed += 1
     return removed
 
 
-def remove_home(home: str, *, homes_root: str = HOMES_ROOT) -> None:
+def remove_home(home: str, *, homes_root: str = HOMES_ROOT, owner: int = 0) -> None:
     """Remove a HOME :func:`make_home` made (fd-based, never through a link). Best-effort."""
-    if os.path.dirname(home) != os.path.realpath(homes_root):
+    if os.path.dirname(home) != os.path.normpath(homes_root):
         logger.warning("not removing %s: not a HOME this runtime made", home)
         return
     try:
-        parent = os.open(os.path.realpath(homes_root), _DIR_FLAGS)
-    except OSError:
+        parent = open_trusted_dir(homes_root, owner=owner)
+    except (OSError, IsolationRefused):
         return
     try:
         shutil.rmtree(os.path.basename(home), dir_fd=parent)
@@ -625,14 +650,15 @@ def group_ids(names: Iterable[str]) -> tuple[int, ...]:
 # ── the drop ──────────────────────────────────────────────────────────────────────────────────────
 
 def _no_new_privs() -> Callable[[], None]:
-    """``prctl(PR_SET_NO_NEW_PRIVS)`` for the forked child, resolved before the fork (Linux only):
-    no set-uid program can raise the child's privileges again."""
+    """``prctl(PR_SET_NO_NEW_PRIVS)`` for the forked child, resolved before the fork: no set-uid
+    program can raise the child's privileges again. A host where it cannot be resolved refuses the
+    spawn (:class:`IsolationRefused`) rather than starting a child without it."""
     try:
         import ctypes
         libc = ctypes.CDLL(None, use_errno=True)
         prctl = libc.prctl
-    except (OSError, AttributeError):
-        return lambda: None
+    except (OSError, AttributeError) as e:
+        raise IsolationRefused("prctl(PR_SET_NO_NEW_PRIVS) is not available here") from e
 
     def _set() -> None:
         if prctl(38, 1, 0, 0, 0) != 0:               # PR_SET_NO_NEW_PRIVS

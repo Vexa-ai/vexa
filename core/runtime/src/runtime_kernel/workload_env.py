@@ -112,7 +112,7 @@ PROCESS_PLUMBING_ENV = (
 
 
 #: What a container name (Docker's own rule) and a single file-name component may be.
-_NAME_COMPONENT = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]+$")
+_NAME_COMPONENT = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_.-]+")
 
 
 def name_component(raw: str) -> str:
@@ -121,7 +121,7 @@ def name_component(raw: str) -> str:
     when valid, so every id the control plane mints today keeps its name; otherwise each run of other
     characters becomes ``-`` and a hash of ``raw`` is appended, so two ids never share a name. Never
     contains ``/`` and never starts with ``.``."""
-    if _NAME_COMPONENT.match(raw):
+    if _NAME_COMPONENT.fullmatch(raw):
         return raw
     base = re.sub(r"[^a-zA-Z0-9_.-]+", "-", raw).strip("-_.")
     digest = hashlib.sha256(raw.encode()).hexdigest()[:10]
