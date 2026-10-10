@@ -2,6 +2,9 @@
 
 - `claims-human.json` — the payload the gateway signs for an API key: subject, email, scopes,
   limits, a workspace membership and a webhook.
+- `claims-writer.json` — a member of two workspaces who may write into only one of them:
+  `writable_workspaces` is the subset a service checks before letting the caller put something into a
+  workspace (binding a meeting, for one).
 - `claims-delegated.json` — the payload for a worker's delegation token: the same person, with the
   dispatch's `delegation` ceiling (`autonomous`, one workspace, a target).
 - `vector-human.json`, `vector-delegated.json` — signing vectors. Signing `claims` at `now` with

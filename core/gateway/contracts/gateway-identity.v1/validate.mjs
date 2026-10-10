@@ -36,7 +36,7 @@ const headersOk = ajv.compile({ $ref: `${schema.$id}#/$defs/Headers` });
 // The claims -> x-user-* mapping (identity_token.headers_from_claims), restated. webhook_events is
 // Python's json.dumps of a flat object: ", " and ": " separators.
 const CLAIM_HEADERS = { sub: "x-user-id", email: "x-user-email", scopes: "x-user-scopes", limits: "x-user-limits",
-  workspaces: "x-user-workspaces", webhook_url: "x-user-webhook-url", webhook_secret: "x-user-webhook-secret",
+  workspaces: "x-user-workspaces", writable_workspaces: "x-user-writable-workspaces", webhook_url: "x-user-webhook-url", webhook_secret: "x-user-webhook-secret",
   webhook_events: "x-user-webhook-events" };
 const pyDumps = (v) => v && typeof v === "object" && !Array.isArray(v)
   ? `{${Object.entries(v).map(([k, x]) => `${JSON.stringify(k)}: ${pyDumps(x)}`).join(", ")}}`
@@ -46,7 +46,7 @@ function headersFromClaims(c) {
   for (const [claim, header] of Object.entries(CLAIM_HEADERS)) {
     const v = c[claim];
     if (v === undefined || v === null || v === "" || (Array.isArray(v) && !v.length)) continue;
-    out[header] = claim === "scopes" || claim === "workspaces" ? v.join(",")
+    out[header] = claim === "scopes" || claim === "workspaces" || claim === "writable_workspaces" ? v.join(",")
       : claim === "webhook_events" ? (typeof v === "string" ? v : pyDumps(v)) : String(v);
   }
   const d = c.delegation;

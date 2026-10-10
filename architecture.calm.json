@@ -507,6 +507,18 @@
    ]
   },
   {
+   "unique-id": "models.v1",
+   "node-type": "contract",
+   "name": "models.v1",
+   "description": "models.v1 \u2014 sealed/published contract (agent): the operator's model catalog (VEXA_MODEL_CATALOG) and the per-person list agent-api serves the terminal and the MCP",
+   "metadata": [
+    {
+     "path": "core/agent/contracts/models.v1",
+     "domain": "agent"
+    }
+   ]
+  },
+  {
    "unique-id": "unit.v1",
    "node-type": "contract",
    "name": "unit.v1",
@@ -1892,6 +1904,7 @@
       "routine.v1",
       "task.v1",
       "tool.v1",
+      "models.v1",
       "unit.v1",
       "credential-broker.v1",
       "credentials-broker",
@@ -2579,6 +2592,38 @@
     }
    },
    "description": "GET /internal/calendar-configs discovers secret-gated calendar connections for sync and disconnect cleanup",
+   "protocol": "HTTPS"
+  },
+  {
+   "unique-id": "ma-admin-reader-email",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "meeting-api"
+     },
+     "destination": {
+      "node": "admin-api",
+      "interface": "admin-api-rest"
+     }
+    }
+   },
+   "description": "GET /internal/users/{id}/email (X-Internal-Secret) answers {id, email} for a reader of a shared meeting, asked only on the OWNER's access view (GET /meetings/{id}/access) for readers who redeemed before meeting-api kept a roster; meeting-api writes the address into that meeting's own data.share_viewers (one writer) and a failed lookup leaves the reader listed by id (collector/reader_directory.py)",
+   "protocol": "HTTPS"
+  },
+  {
+   "unique-id": "ma-admin-writable",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "meeting-api"
+     },
+     "destination": {
+      "node": "admin-api",
+      "interface": "admin-api-rest"
+     }
+    }
+   },
+   "description": "GET /internal/users/{id}/memberships (X-Internal-Secret), read once per calendar sync run: a new occurrence of a calendar series inherits the series' workspace only while its owner still holds contributor or owner there (R1801-3); an unanswered lookup is 'may write nowhere' and the occurrence is created private (calendar_sync/runner.py, collector/reader_directory.py)",
    "protocol": "HTTPS"
   },
   {

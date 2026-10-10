@@ -13,6 +13,8 @@ from meeting_api.collector import create_app
 from meeting_api.collector.fakes import InMemoryTranscriptStore
 
 OWNER, MEMBER, STRANGER = 7, 8, 9
+# The owner may write into team-notes (contributor/owner) — binding a meeting there is a write.
+OWNER_WRITER = {"x-user-id": str(OWNER), "x-user-writable-workspaces": "team-notes"}
 PLAT, NID = "google_meet", "abc-defg-hij"
 
 
@@ -24,10 +26,11 @@ def _client():
 
 def test_bind_is_owner_scoped():
     client, _ = _client()
-    ok = client.post(f"/meetings/{PLAT}/{NID}/workspace", json={"workspace_id": "team-notes"}, headers={"x-user-id": str(OWNER)})
+    ok = client.post(f"/meetings/{PLAT}/{NID}/workspace", json={"workspace_id": "team-notes"}, headers=OWNER_WRITER)
     assert ok.status_code == 200 and ok.json()["workspace_id"] == "team-notes"
     # a non-owner cannot bind (their own row doesn't exist → 404)
-    nope = client.post(f"/meetings/{PLAT}/{NID}/workspace", json={"workspace_id": "team-notes"}, headers={"x-user-id": str(STRANGER)})
+    nope = client.post(f"/meetings/{PLAT}/{NID}/workspace", json={"workspace_id": "team-notes"},
+                       headers={"x-user-id": str(STRANGER), "x-user-writable-workspaces": "team-notes"})
     assert nope.status_code == 404
 
 
@@ -42,7 +45,7 @@ def _authz(client, uid, workspaces=None):
 
 def test_member_of_bound_workspace_may_subscribe():
     client, mid = _client()
-    client.post(f"/meetings/{PLAT}/{NID}/workspace", json={"workspace_id": "team-notes"}, headers={"x-user-id": str(OWNER)})
+    client.post(f"/meetings/{PLAT}/{NID}/workspace", json={"workspace_id": "team-notes"}, headers=OWNER_WRITER)
 
     # owner: authorized (branch a, unchanged)
     assert _authz(client, OWNER)["authorized"], "owner must always subscribe"
@@ -76,7 +79,7 @@ def _get_meeting(client, mid, uid, workspaces=None):
 def test_member_of_the_bound_workspace_may_open_the_meeting():
     client, mid = _client()
     client.post(f"/meetings/{PLAT}/{NID}/workspace", json={"workspace_id": "team-notes"},
-                headers={"x-user-id": str(OWNER)})
+                headers=OWNER_WRITER)
 
     assert _get_meeting(client, mid, OWNER).status_code == 200          # owner, unchanged
 

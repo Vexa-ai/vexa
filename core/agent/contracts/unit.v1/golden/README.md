@@ -10,4 +10,8 @@ the signature in Node, and `core/agent/tests/test_unit_input.py` does it with `s
 wire: one `Fault` golden per kind of every source. The Python ones were written by the real emitters
 (`shared/runtime_fault`, `llm/faults.classify`, `llm/codex`, `llm/claude_code`, `worker/tool_access`,
 `control_plane/unit_faults`); the `agent-api` and `gateway` ones carry the terminal proxy's own text
-(`clients/terminal/src/app/api/chat/route.ts`). Hosts, models, times and session ids are synthetic.
+(`clients/terminal/src/app/api/chat/route.ts`). The five `model-provider` pick kinds
+(`unknown_model` … `endpoint_refused`, and `DispatchRefusal.model-unknown`) are agent-api's refusal
+of a chat's model pick (`control_plane/model_providers`, ADR-0043), where `provider` is the
+catalog's provider key and `model` the catalog id. Hosts, models, times and session ids are
+synthetic.

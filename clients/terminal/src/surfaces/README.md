@@ -25,6 +25,21 @@ arriving as a surprise 409, and a write that changes what gets joined (`auto_joi
 `enabled` · a replaced `ics_url`) is followed by the per-calendar sync that reconciles
 already-imported meetings — a rename is not, because it changes nothing downstream.
 
+**Sharing a meeting** (`MeetingShare.tsx`, `meetingShareApi.ts`) is ONE Share action in the meeting
+header — the canvas tab and the minutes page header both render `MeetingShareButton`. The owner gets
+the dialog (invite by email, optionally with the meeting's workspace as view or edit; who has access,
+each with a role and Remove; a sign-in link that can be turned off; whether recipients may play and
+download the recording). A recipient gets the words "Shared with you" and nothing to press. Lists show
+the same quiet icon-and-words indicator (`SharedIndicator`), never a chip. Access is decided by the
+server; the full flow is in [`docs/docs/how-to/share-a-meeting.mdx`](../../../../docs/docs/how-to/share-a-meeting.mdx).
+
+**The model picker** (`ModelPicker.tsx`, `modelsApi.ts`) sits in the chat composer and pins THAT
+chat to one of the deployment's catalog models (ADR-0043; [`docs/docs/model-catalog.mdx`](../../../../docs/docs/model-catalog.mdx)).
+It renders exactly the list agent-api sends for the person — role visibility is the server's, and
+an empty list (no catalog) renders nothing — and it never holds an endpoint or a credential. A
+refused pick shows the server's sentence and keeps the old pick; "use for new chats" writes the
+person's Settings → Models `default_model`.
+
 **Error presentation is part of the surface contract** — surfaces render `presentError(e)`
 (`apiClient.ts`), never `e.message`: the headline is user vocabulary ("Couldn't reach the Vexa
 server…", the backend's own prose reason verbatim when it sent one), while the untranslated

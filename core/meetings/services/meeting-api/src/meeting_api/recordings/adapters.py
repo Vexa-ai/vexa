@@ -265,6 +265,32 @@ class SqlAlchemyRecordingRepo:
             return out
 
 
+    async def list_shared_recordings(self, user_id, member_workspaces=None, *, meeting_id=None):
+        """Index-backed like the meetings list's access union (#800): the viewer branch is the
+        ``transcript_viewers`` GIN containment, the workspace branch the bound-workspace column; the
+        permission (``share_settings.recording``) is then decided per row by ``shared_access``."""
+        from sqlalchemy import cast, func, or_, select
+        from sqlalchemy.dialects.postgresql import JSONB
+
+        from ..sessions.models import Meeting
+        from .shared_access import may_read_shared_recording
+
+        access = [cast(Meeting.data["transcript_viewers"], JSONB).op("@>")(func.to_jsonb(user_id))]
+        if member_workspaces:
+            access.append(Meeting.data["workspace_id"].astext.in_(list(member_workspaces)))
+        stmt = select(Meeting).where(or_(*access), Meeting.user_id != user_id)
+        if meeting_id is not None:
+            stmt = stmt.where(Meeting.id == int(meeting_id))
+        async with self._session_factory() as db:
+            rows = (await db.execute(stmt)).scalars().all()
+            out = []
+            for m in rows:
+                data = m.data if isinstance(m.data, dict) else {}
+                if may_read_shared_recording(data, user_id, member_workspaces):
+                    out.extend({**r, "meeting_id": m.id} for r in data.get("recordings", []))
+            return out
+
+
 def build_production_router(*, database_url: Optional[str] = None):
     """Construct the recordings router with real MinIO/S3 + SQLAlchemy adapters from env."""
     from sqlalchemy.ext.asyncio import async_sessionmaker

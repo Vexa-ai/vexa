@@ -20,90 +20,9 @@ import { usePreviewPinTab } from "./previewPinTab";
 import { defaultBotName } from "./defaultBotName";
 import { parseMeetingInput } from "./meetingId";
 import { getJitsiHosts } from "./jitsiHosts";
-import { mintTranscriptShare, mintInvite, listSharedMemberships, type Membership } from "./workspaceApi";
 import { deletePlannedMeeting, MAX_CALENDARS, listCalendars, createCalendar, updateCalendar, syncCalendar, getCalendarSyncStatus, type CalendarConnection, type CalendarSyncStamp } from "./plannedApi";
 import { prepTabDescriptor, prepDraftTabDescriptor } from "./meetingPrep";
-
-// ── "Share session" — mint a link to this meeting's LIVE FEED (independent transcript share) and,
-//    optionally, BUNDLE a shared-workspace invite into the SAME link (?tshare=…&invite=…). The two are
-//    decoupled capabilities; this is the one-click way to hand someone both at once. ─────────────────
-function platformSlug(display: string): string {
-  return display === "Google Meet" ? "google_meet" : display.toLowerCase().replace(/\s+/g, "_");
-}
-function ShareSessionButton({ platform, native }: { platform: string; native: string }) {
-  const [open, setOpen] = useState(false);
-  const [mode, setMode] = useState("open");
-  const [emails, setEmails] = useState("");
-  const [ttlDays, setTtlDays] = useState(7);
-  const [wsId, setWsId] = useState("");            // "" = transcript only; else also bundle this workspace invite
-  const [shares, setShares] = useState<Membership[]>([]);
-  const [link, setLink] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    void listSharedMemberships().then((ms) => setShares(ms.filter((m) => m.role === "owner" || m.role === "contributor"))).catch(() => {});
-    const close = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
-    document.addEventListener("mousedown", close);
-    return () => document.removeEventListener("mousedown", close);
-  }, [open]);
-  const create = async () => {
-    setBusy(true); setErr(null);
-    try {
-      const allowed = mode === "restricted" ? emails.split(/[,\s]+/).map((s) => s.trim()).filter(Boolean) : undefined;
-      const t = await mintTranscriptShare({ platform, native_meeting_id: native, mode, allowed_emails: allowed, expires_in_sec: ttlDays * 86400 });
-      const params = new URLSearchParams();
-      params.set("tshare", t.token);
-      if (wsId) {  // bundle a workspace membership invite into the same link
-        const inv = await mintInvite({ workspace_id: wsId, role: "contributor", mode, expires_in_sec: ttlDays * 86400, max_uses: mode === "open" ? 50 : 1, allowed_emails: allowed });
-        params.set("invite", inv.token);
-      }
-      setLink(`${window.location.origin}/?${params.toString()}`);
-    } catch (e) { setErr(presentError(e).headline); }
-    finally { setBusy(false); }
-  };
-  const fieldStyle = { fontSize: 12, padding: "4px 6px", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 6, color: "var(--t1)" } as const;
-  return (
-    <div ref={ref} style={{ position: "relative", flex: "none" }}>
-      <button onClick={() => { setOpen((v) => !v); setLink(null); }} title="Share this meeting's live feed (and optionally a workspace)"
-        style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "transparent", border: "1px solid var(--line2)", color: "var(--t2)", borderRadius: 6, padding: "2px 8px", fontSize: 12, cursor: "pointer" }}>
-        <Icon name="upload" size={12} /> Share session
-      </button>
-      {open && (
-        <div style={{ position: "absolute", top: "100%", right: 0, marginTop: 6, width: 280, background: "var(--panel)", border: "1px solid var(--line2)", borderRadius: 10, boxShadow: "0 8px 28px rgba(0,0,0,.32)", padding: 12, zIndex: 50, display: "flex", flexDirection: "column", gap: 8 }}>
-          <div style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em" }}>Share session</div>
-          <div style={{ display: "flex", gap: 6 }}>
-            <select value={mode} disabled={busy} onChange={(e) => { setMode(e.target.value); setLink(null); }} style={{ ...fieldStyle, flex: 1 }}>
-              <option value="open">anyone with link</option>
-              <option value="restricted">restricted (emails)</option>
-            </select>
-            <select value={ttlDays} disabled={busy} onChange={(e) => { setTtlDays(Number(e.target.value)); setLink(null); }} style={fieldStyle}>
-              <option value={1}>1 day</option><option value={7}>7 days</option><option value={30}>30 days</option>
-            </select>
-          </div>
-          {mode === "restricted" && (
-            <input value={emails} placeholder="allowed emails (comma-separated)" disabled={busy}
-              onChange={(e) => { setEmails(e.target.value); setLink(null); }} style={fieldStyle} />
-          )}
-          <select value={wsId} disabled={busy} onChange={(e) => { setWsId(e.target.value); setLink(null); }} style={fieldStyle} title="Optionally bundle a shared workspace into the link">
-            <option value="">live feed only (no workspace)</option>
-            {shares.map((s) => <option key={s.workspace_id} value={s.workspace_id}>+ workspace: {s.workspace_id}</option>)}
-          </select>
-          {err && <div role="alert" style={{ fontSize: 11.5, color: "var(--danger)" }}>⚠ {err}</div>}
-          {link ? (
-            <div style={{ display: "flex", gap: 6 }}>
-              <input readOnly value={link} onFocus={(e) => e.currentTarget.select()} style={{ ...fieldStyle, flex: 1, fontSize: 11 }} />
-              <button onClick={() => void copyText(link)} style={{ fontSize: 12, padding: "4px 10px", background: "var(--accent)", color: "var(--bg)", border: "none", borderRadius: 6, cursor: "pointer" }}>Copy</button>
-            </div>
-          ) : (
-            <button disabled={busy} onClick={() => void create()} style={{ fontSize: 12, padding: "5px 10px", background: "var(--accent)", color: "var(--bg)", border: "none", borderRadius: 6, cursor: "pointer", opacity: busy ? 0.5 : 1 }}>{busy ? "Creating…" : "Create link"}</button>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
+import { MeetingShareButton, SharedIndicator } from "./MeetingShare";
 
 // ── Connected docs — the meeting's knowledge-graph entity + the [[entities]] it links ─────────────
 //  The meeting doc lives at a deterministic path: kg/entities/meeting/<native>.md. When present we show
@@ -473,7 +392,7 @@ function MeetingRow({ m }: { m: MeetingMock }) {
       <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
         {inRoom && <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--green)", flex: "none" }} />}
         <span style={{ fontSize: 13, color: live ? "var(--t1)" : "var(--t2)", fontWeight: live ? 600 : 400, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
-        {m.shared && <span title="Shared with you (you don't own this meeting)" style={{ flex: "none", fontSize: 9.5, color: "var(--t3)", border: "1px solid var(--line)", borderRadius: 5, padding: "0 5px" }}>shared</span>}
+        <SharedIndicator meeting={m} />
         {(m.native_id || isIntent) && !m.shared && <RowActions m={m} showBadge={showBadge} reveal={hover} onActionStart={() => setActionFailure(null)} onActionFailure={setActionFailure} />}
       </div>
       <div style={{ fontSize: 11, color: inRoom ? "var(--green)" : "var(--t3)", marginTop: 1, paddingLeft: inRoom ? 13 : 0 }}>{inRoom ? "live" : m.when}</div>
@@ -1006,8 +925,8 @@ function MeetingTab({ params }: TabProps) {
           {/* the spacer keeps the controls right-aligned while they fit on the title's line, and
               collapses to nothing once they have wrapped to their own */}
           <div style={{ flex: "1 0 0", minWidth: 0 }} />
-          {m && <BotControls m={m} connected={connected} />}
-          {m?.native_id && <ShareSessionButton platform={platformSlug(m.platform)} native={m.native_id} />}
+          {m && !m.shared && <BotControls m={m} connected={connected} />}
+          {m && <MeetingShareButton meeting={m} />}
         </div>
       </header>
       <div style={{ flex: 1, minHeight: 0 }}>

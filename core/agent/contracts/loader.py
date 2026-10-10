@@ -27,6 +27,7 @@ _UNIT_SCHEMA = Path("agent/contracts/unit.v1/unit.schema.json")
 _ROUTINE_SCHEMA = Path("agent/contracts/routine.v1/routine.schema.json")
 _EVENT_SCHEMA = Path("agent/contracts/event.v1/event.schema.json")
 _TOOL_SCHEMA = Path("agent/contracts/tool.v1/tool.schema.json")
+_MODELS_SCHEMA = Path("agent/contracts/models.v1/models.schema.json")
 
 
 def _repo_root() -> Path:
@@ -120,3 +121,23 @@ def validate_event(payload: dict) -> None:
 def validate_tool(payload: dict) -> None:
     """Validate a ``tool.v1`` Tool descriptor (name, grant auto|gate, transport, cred ref, barriers)."""
     _validator(_TOOL_SCHEMA, "Tool").validate(payload)
+
+
+# ── models.v1 (the model catalog: CONSUMED as config, PRODUCED for the terminal and the MCP) ──
+
+def validate_model_catalog_errors(payload: object) -> list:
+    """Every way ``payload`` fails ``models.v1`` Catalog (the operator's ``VEXA_MODEL_CATALOG``),
+    as jsonschema errors — the catalog is refused whole, so the boot names all of them at once."""
+    return sorted(_validator(_MODELS_SCHEMA, "Catalog").iter_errors(payload),
+                  key=lambda e: list(e.absolute_path))
+
+
+def model_id_pattern() -> str:
+    """``models.v1#/$defs/ModelId``'s pattern — the one spelling of a catalog id, read from the
+    contract so nothing that stores an id re-states it."""
+    return _load(_MODELS_SCHEMA)["$defs"]["ModelId"]["pattern"]
+
+
+def validate_model_list(payload: dict) -> None:
+    """Validate a ``models.v1`` ModelList (what ``GET /api/models/catalog`` serves)."""
+    _validator(_MODELS_SCHEMA, "ModelList").validate(payload)

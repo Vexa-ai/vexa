@@ -198,6 +198,23 @@ def build_router(
     token_secret: Optional[str] = None,
 ) -> APIRouter:
     """The recordings routes over the injected ``RecordingRepo`` + ``Storage`` ports."""
+
+    async def _readable(user_id: int, request: Request, *, shared: bool = True) -> list:
+        """The recordings this caller may READ: their own, plus the recordings of meetings shared with
+        them whose owner allowed recipients the recording (``shared_access``) — a transcript-share
+        recipient or a member of the bound workspace. ``shared=False`` keeps exactly the caller's own
+        (the account-wide list stays "my recordings"). Read off ``request`` so the route signatures,
+        which other changes also touch, stay as they are."""
+        recs = await repo.list_meeting_recordings(user_id)
+        if not shared:
+            return recs
+        workspaces = {w.strip() for w in (request.headers.get("x-user-workspaces") or "").split(",")
+                      if w.strip()}
+        raw_mid = request.query_params.get("meeting_id")
+        meeting_id = int(raw_mid) if raw_mid and raw_mid.isdigit() else None
+        own = {r.get("meeting_id") for r in recs}
+        extra = await repo.list_shared_recordings(user_id, workspaces, meeting_id=meeting_id)
+        return recs + [r for r in extra if r.get("meeting_id") not in own]
     router = APIRouter()
 
     @router.post("/internal/recordings/upload", include_in_schema=False)
@@ -299,7 +316,7 @@ def build_router(
         of scope; what changes is that the RESPONSE is bounded, which is what reaches a caller.
         """
         user_id = _resolve_user_id(x_user_id)
-        recs = await repo.list_meeting_recordings(user_id)
+        recs = await _readable(user_id, request, shared=meeting_id is not None)
         if meeting_id is not None:
             recs = [r for r in recs if r.get("meeting_id") == meeting_id]
         recs = sorted(recs, key=_list_sort_key, reverse=True)
@@ -325,7 +342,7 @@ def build_router(
         """Recording detail (api/meetings.mdx: GET /recordings/{recording_id}) — the single recording
         record, scoped to the caller. 404 if the id isn't one of the caller's recordings."""
         user_id = _resolve_user_id(x_user_id)
-        recs = await repo.list_meeting_recordings(user_id)
+        recs = await _readable(user_id, request)
         rec = next((r for r in recs if r.get("id") == recording_id), None)
         if rec is None:
             raise HTTPException(status_code=404, detail="Recording not found")
@@ -365,7 +382,7 @@ def build_router(
     ):
         user_id = _resolve_user_id(x_user_id)
         # Find which meeting owns this recording (scoped to the caller).
-        recs = await repo.list_meeting_recordings(user_id)
+        recs = await _readable(user_id, request)
         rec = next((r for r in recs if r.get("id") == recording_id), None)
         if rec is None:
             raise HTTPException(status_code=404, detail="Recording not found")
@@ -404,7 +421,7 @@ def build_router(
         # Stream the finalized master bytes from object storage (recordings P3). The player fetches
         # /master first (which finalizes), then this; finalize-on-read here too as a safety net.
         user_id = _resolve_user_id(x_user_id)
-        recs = await repo.list_meeting_recordings(user_id)
+        recs = await _readable(user_id, request)
         rec = next((r for r in recs if r.get("id") == recording_id), None)
         if rec is None:
             raise HTTPException(status_code=404, detail="Recording not found")
@@ -425,7 +442,7 @@ def build_router(
             repo, storage, meeting_id=rec["meeting_id"], recording_id=recording_id,
             media_type=mf.get("type", type),
         )
-        recs = await repo.list_meeting_recordings(user_id)
+        recs = await _readable(user_id, request)
         rec = next((r for r in recs if r.get("id") == recording_id), rec)
         mf = next(
             (m for m in (rec or {}).get("media_files", []) if str(m.get("id")) == str(media_file_id)),

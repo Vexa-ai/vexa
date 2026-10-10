@@ -25,6 +25,7 @@ import secrets
 from datetime import datetime, timezone
 from typing import Optional
 
+from . import share_access
 from .ports import ARTIFACT_DELETION_FIELD, RedisBus, TranscriptStore, deletion_stamp
 
 log = logging.getLogger("meeting_api.collector.adapters")
@@ -73,6 +74,9 @@ def _build_share_grant(mode: str, allowed_emails, expires_in_sec: int) -> "tuple
         "allowed_emails": list(allowed_emails or []),
         "expires_at": (_now() + timedelta(seconds=int(expires_in_sec))).isoformat(),
         "revoked": False,
+        # When it was minted: a person the owner removed is refused by any grant minted BEFORE the
+        # removal and admitted by a fresh invite minted after it (share_access.redeem_refusal).
+        "created_at": _now().isoformat(),
     }
     return grant, secret
 
@@ -381,7 +385,7 @@ class SqlAlchemyTranscriptStore:
         native-keyed read constrains ``Meeting.user_id == user_id`` in SQL, and the by-id read
         evaluates an explicit owner branch inside its authorization check. Passing the decision down
         beats re-deriving it here, where the caller's ``user_id`` is not even in scope."""
-        from .projection import project_response_data
+        from .projection import project_response_data, visible_recordings
 
         snap, seg_by_id, order = pg
         data = snap["data"]
@@ -416,7 +420,7 @@ class SqlAlchemyTranscriptStore:
             "status": snap["status"],
             "start_time": _iso_utc(snap["start_time"]),
             "end_time": _iso_utc(snap["end_time"]),
-            "recordings": data.get("recordings", []),
+            "recordings": visible_recordings(data, viewer_is_owner=viewer_is_owner),
             "notes": data.get("notes"),
             "data": project_response_data(data, viewer_is_owner=viewer_is_owner),
             "segments": segments,
@@ -847,17 +851,99 @@ class SqlAlchemyTranscriptStore:
             grant = next((g for g in data.get("share_grants", []) if g.get("secret_hash") == h), None)
             if not grant:
                 return {"error": "invalid"}
-            err = validate_transcript_grant(grant, user_email)
+            err = validate_transcript_grant(grant, user_email) or share_access.redeem_refusal(
+                data, user_id, grant)
             if err:
                 return {"error": err}
-            viewers = list(data.get("transcript_viewers", []))
-            if user_id not in viewers:
-                viewers.append(user_id)
-            data["transcript_viewers"] = viewers
+            share_access.record_redeem(data, user_id, user_email, grant)
             meeting.data = data
             flag_modified(meeting, "data")
             await db.commit()
             return {"meeting_id": mid, "ok": True}
+
+    async def stamp_share_mail(self, user_id, meeting_id, grant_id) -> None:
+        """OWNER-scoped: mark that an invite mail was handed over for this grant (`mailed_at`) — what
+        the hourly cap counts."""
+        await self._owned_row_edit(user_id, meeting_id,
+                                   lambda data, m: share_access.stamp_mail(data, str(grant_id)))
+
+    async def count_share_mails_since(self, user_id, since_iso) -> int:
+        """Invite mails this owner handed over since ``since_iso``, across all their meetings. One
+        indexed scan of the owner's own rows (``ix_meeting_user_created_at``); grants are few."""
+        from sqlalchemy import text as sql_text
+
+        async with self._session_factory() as db:
+            n = (await db.execute(sql_text(
+                "SELECT count(*) FROM meetings m, "
+                "jsonb_array_elements(COALESCE(m.data->'share_grants', '[]'::jsonb)) g "
+                "WHERE m.user_id = :uid AND (g->>'mailed_at') >= :since"),
+                {"uid": int(user_id), "since": str(since_iso)})).scalar()
+        return int(n or 0)
+
+    async def backfill_share_roster(self, user_id, meeting_id, emails) -> "Optional[dict]":
+        """OWNER-scoped, ONE-TIME per reader: name readers who redeemed before the roster existed
+        (``share_access.backfill_roster``), under the row lock, and answer the access view."""
+        return await self._owned_row_edit(
+            user_id, meeting_id,
+            lambda data, m: (share_access.backfill_roster(data, emails, owner_id=m.user_id),
+                             share_access.access_view(data, meeting_id=m.id, owner_id=m.user_id))[1])
+
+    async def _owned_row_edit(self, user_id, meeting_id, edit, *, write: bool = True):
+        """Run ``edit(data, meeting)`` on the caller's OWN row ``meeting_id`` under its row lock and
+        commit. ``None`` when the row is absent or not the caller's — the two are indistinguishable,
+        as on every owner-scoped share route. ``edit`` returns the response, or ``None`` for 404."""
+        from sqlalchemy import select
+        from sqlalchemy.orm.attributes import flag_modified
+
+        from .models import Meeting
+
+        try:
+            mid = int(meeting_id)
+        except (TypeError, ValueError):
+            return None
+        async with self._session_factory() as db:
+            stmt = select(Meeting).where(Meeting.id == mid, Meeting.user_id == user_id).limit(1)
+            meeting = (await db.execute(stmt.with_for_update() if write else stmt)).scalars().first()
+            if not meeting:
+                return None
+            data = dict(meeting.data) if isinstance(meeting.data, dict) else {}
+            result = edit(data, meeting)
+            if result is None or not write:
+                return result
+            meeting.data = data
+            flag_modified(meeting, "data")
+            await db.commit()
+            return result
+
+    async def get_share_access(self, user_id, meeting_id) -> "Optional[dict]":
+        """OWNER-scoped: who can read this meeting (``share_access.access_view``)."""
+        return await self._owned_row_edit(
+            user_id, meeting_id,
+            lambda data, m: share_access.access_view(data, meeting_id=m.id, owner_id=m.user_id),
+            write=False)
+
+    async def revoke_share_grant(self, user_id, meeting_id, grant_id) -> "Optional[dict]":
+        """OWNER-scoped: revoke one grant and drop whoever joined through it."""
+        def edit(data, m):
+            if not share_access.revoke_grant(data, str(grant_id)):
+                return None
+            return share_access.access_view(data, meeting_id=m.id, owner_id=m.user_id)
+        return await self._owned_row_edit(user_id, meeting_id, edit)
+
+    async def remove_share_viewer(self, user_id, meeting_id, viewer_id) -> "Optional[dict]":
+        """OWNER-scoped: remove one person's access to this meeting."""
+        def edit(data, m):
+            if not share_access.remove_viewer(data, int(viewer_id)):
+                return None
+            return share_access.access_view(data, meeting_id=m.id, owner_id=m.user_id)
+        return await self._owned_row_edit(user_id, meeting_id, edit)
+
+    async def set_share_settings(self, user_id, meeting_id, *, recording: bool) -> "Optional[dict]":
+        """OWNER-scoped: whether people this meeting is shared with may play its recording."""
+        def edit(data, m):
+            share_access.set_settings(data, recording=recording)
+            return share_access.access_view(data, meeting_id=m.id, owner_id=m.user_id)
+        return await self._owned_row_edit(user_id, meeting_id, edit)
 
     async def append_segment(self, meeting_id, segment) -> None:
         # Live segments land in the Redis hash (``meeting:{id}:segments``), flushed to Postgres by

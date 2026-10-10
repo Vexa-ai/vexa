@@ -8,11 +8,15 @@ single identifier changed.
 """
 from __future__ import annotations
 
-from control_plane import global_layer, system_mounts
-from control_plane.bodies import GlobalReadyBody
+from typing import Optional
+
+from control_plane import dispatch as dispatch_mod
+from control_plane import global_layer, model_providers, system_mounts
+from control_plane.bodies import GlobalReadyBody, SessionId
 from control_plane.ceiling import require_in_ceiling
 from fastapi import APIRouter, Body, HTTPException, Request
 from fastapi.responses import JSONResponse
+from shared import units
 from shared.git_redaction import redact as redact_secrets
 import hmac
 import logging
@@ -29,6 +33,7 @@ def build(**d) -> APIRouter:
     dispatcher = d['dispatcher']
     live = d['live']
     redis_url = d['redis_url']
+    sess = d['sess']
     settings = d['settings']
     subject_of = d['subject_of']
 
@@ -39,6 +44,35 @@ def build(**d) -> APIRouter:
         subject_of(request)  # identity gate (P20)
         chat_model = settings.agent_model or "default"
         return {"chat_model": chat_model, "agent_model": chat_model}
+    @router.get("/api/models/catalog")
+    def models_catalog(request: Request, session: Optional[SessionId] = None):
+        """The models you may pick on this deployment (``models.v1`` ModelList): each one's name,
+        provider, harness and capabilities — never an endpoint or a credential — plus the model you
+        run on before you pick (``default``). Name a chat (``session``) to also get that chat's own
+        pick (``selected``; null when it follows your default) and its effort pick
+        (``selected_effort``; null when it runs at the model's ``default_effort``). Each model lists
+        the effort levels you may pick for it (``capabilities.reasoning_efforts``, empty when it has
+        no effort control). An empty list means the deployment
+        declares no catalog, and its model is the operator's to set."""
+        subject = subject_of(request)
+        catalog = dispatcher.catalog
+        with_selected = session is not None
+        selected = selected_effort = None
+        if with_selected:
+            name = str(session).strip() or units.DEFAULT_CHAT_SESSION
+            try:
+                selected = sess.model(subject, name)
+                selected_effort = sess.effort(subject, name)
+            except Exception:  # noqa: BLE001 — an unreadable pick is the default
+                selected = selected_effort = None
+        if catalog.empty:
+            return {"models": [], "default": None,
+                    **({"selected": None, "selected_effort": None} if with_selected else {})}
+        ctx = dispatch_mod.route_context(dispatcher.resolve_model_config(subject) or {},
+                                         allowlist=settings.model_allowlist)
+        return catalog.listing(ctx, admin=lambda: dispatcher.is_admin(subject),
+                               selected=selected, with_selected=with_selected,
+                               selected_effort=selected_effort)
     @router.get("/api/admin/overview")
     def admin_overview(request: Request):
         """Read-only infra + pipeline introspection for the terminal's hidden admin panel: every
@@ -162,12 +196,28 @@ def build(**d) -> APIRouter:
         return {"accepted": True, "company": st["company"], "service": st["service"],
                 "commit": sha, "files": st["present"]}
     @router.get("/api/models/test")
-    def models_test(request: Request):
+    def models_test(request: Request, model: Optional[str] = None):
         """Test the effective model credentials NOW: custom mode = a real 1-token completion
         against the endpoint; subscription = mounted-credentials expiry check (the recurring
-        stale-Keychain 401 surfaces here with its remedy instead of at the next chat turn)."""
+        stale-Keychain 401 surfaces here with its remedy instead of at the next chat turn).
+
+        With a model catalog, the model to test is a catalog id (``model``; your default when
+        absent), resolved through the same provider port a turn's dispatch uses and probed with
+        exactly the credential that route carries."""
         from control_plane import config_test as _ct
         subject = subject_of(request)
+        if not dispatcher.catalog.empty:
+            ctx = dispatch_mod.route_context(dispatcher.resolve_model_config(subject) or {},
+                                             allowlist=settings.model_allowlist)
+            try:
+                route = dispatcher.catalog.route(str(model or "").strip(), ctx,
+                                                 admin=lambda: dispatcher.is_admin(subject))
+            except model_providers.ModelChoiceFault as fault:
+                return {"ok": False, "summary": fault.sentence(), "mode": "catalog",
+                        "route": "catalog", "fault": fault.as_dict()}
+            # The endpoint's own words and address are an operator's; anyone else gets the
+            # verdict and the typed fault (``config_test.run_route_test``).
+            return _ct.run_route_test(route, admin=dispatcher.is_admin(subject))
         cfg: dict = {}
         mc = getattr(dispatcher, "_model_config", None)
         if mc is not None:

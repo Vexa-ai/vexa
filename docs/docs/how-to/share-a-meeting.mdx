@@ -1,0 +1,225 @@
+---
+title: "Share a meeting"
+description: "Share a meeting while it runs and after it ends: invite people by email, add its workspace, see who has access, and take access back."
+---
+
+You can share a meeting while it is live or after it has ended. The people you share it with see the
+**live transcript and the bot's status** during the meeting. Afterwards they see the **transcript,
+the notes and the recording**; the recording only if you allow it. Everyone you share with signs in
+first. There is no public, anonymous link.
+
+## Share from the terminal
+
+Open the meeting and press **Share** in its header, either in the meeting view or in the meeting's
+page header. You can use the dialog while the meeting is running.
+
+1. **Invite people.** Type one or more email addresses and press **Invite**. Each person is emailed
+   their own link, and that link works only for their address: if it is forwarded, it admits nobody
+   else. The dialog says who was emailed. You can also copy each link, and if an email could not be
+   sent, the dialog says so and the copied link is the way to reach them.
+2. **Add the workspace (optional).** If the meeting belongs to a workspace, choose **can view** or
+   **can edit** to bundle a workspace invite into the copied link. The email carries the meeting
+   only, so send the copied link to anyone you also want in the workspace; the dialog says so. The
+   invitee sees what the workspace is before they join it.
+3. **Create a link (optional).** **Create a link** makes a link that anyone can open after signing in.
+   It lasts seven days. **Turn off** withdraws it, and everyone who came in through it loses access —
+   unless you also invited them by address, in which case that invite still admits them. A reader
+   with no record of how they came in (one who joined before this release and has not been named
+   yet) is removed too; invite them again if they should stay.
+4. **The recording.** Tick **People you share with can play and download the recording** to give them
+   the recording too. It is off by default, and until you tick it they do not see that a recording
+   exists — no ids, file sizes or storage keys.
+
+**People with access** lists everyone who can read the meeting, with their role: readers (*can view*),
+invites nobody has opened yet, and the members of the meeting's workspace. **Remove** takes a person's
+access away at once on every page they load, and ends a live transcript they have open within about
+17 seconds. Removing someone from the workspace
+is the workspace owner's action, the same as on the workspace's own page.
+
+A meeting you share shows a quiet **Shared with N** in your lists. A meeting shared with you shows
+**Shared with you**. You can read it, but you cannot stop its bot, delete it or change who has access.
+
+## Open a meeting someone shared with you
+
+Open the link and sign in with the address it was sent to. The meeting appears in your meetings and
+opens directly on the meeting's own page — its transcript, its status and **Shared with you** — with
+your desk one tab away. When the link cannot be used, the terminal says why instead of opening an empty page:
+
+| You see | Why |
+|---|---|
+| *This meeting was shared with a different email address.* | You signed in as someone else. Sign in with the invited address. |
+| *The owner has withdrawn this share, or removed your access.* | The invite or link was turned off, or you were removed. |
+| *This share link has expired.* | Invites last 30 days and links 7. Ask the owner for a new one. |
+| *Access removed* (in the meeting) | You were removed while watching. The live transcript stops and does not reconnect. |
+
+## Limits
+
+- The invite email goes through the deployment's mail service (flows). A deployment without one
+  sends nothing, and the dialog says the email could not be sent; the copied link still works.
+- **Putting a meeting in a workspace takes edit access there.** A member who can only view a
+  workspace cannot bind a meeting to it — the dialog, a planned meeting and a bot sent into the
+  workspace are all refused with *you need edit access*. A new occurrence of a calendar series joins
+  the series' workspace only while you can still edit it; otherwise it is created private.
+- **One email per invite, 30 per hour.** Each invite email goes to exactly one address, and an owner
+  can have at most 30 sent in an hour across all their meetings; past that the dialog says so and the
+  copied link still works. An invite address must be a single plain address.
+- An **invite** lasts 30 days and a **link** 7 days. Removing a person blocks every link minted before the
+  removal; inviting them again works.
+- **Role on the meeting is view-only.** Edit rights exist on the workspace (*can edit*), not on the
+  meeting itself.
+- A removed reader's open live view ends within **about 17 seconds** on the terminal's stream (a
+  10-second re-check, a read that blocks for at most 5 seconds, and one retry) and within **about 15
+  seconds** on `/ws`.
+- A workspace member already sees the meeting through the workspace. The dialog shows them, but
+  only the workspace owner removes them.
+
+## How it works
+
+1. **The owner mints an invite.** The terminal calls `POST /meetings/{id}/share`
+   (`mode: "restricted"`, `allowed_emails: [one address]`), once per address. meeting-api stores only
+   the token's hash, in the meeting row (`data.share_grants`), and returns the token once. If the
+   workspace is included, the terminal also mints an agent-api workspace invite restricted to the same
+   address (`POST /agent/workspace/invites`). The link is `/?tshare=<token>[&invite=<token>]`.
+2. **The recipient signs in and redeems.** The terminal's arrival gate posts the token to
+   `POST /transcripts/share/accept`. The gateway attaches the caller's verified identity and email.
+   meeting-api checks the hash, the expiry, the revocation, the email allow-list and any removal, then
+   adds the caller to `data.transcript_viewers` and records who they are in `data.share_viewers` —
+   with every grant they came in through (`grant_ids`), so turning one link off takes away exactly
+   the access it gave.
+3. **Every read asks the same question.** meeting-api answers *may this caller read this meeting?* with
+   one access union: the owner, a reader in `transcript_viewers`, or a member of the bound workspace.
+   That union backs the list, the detail and the transcript. The `/ws` subscribe check applies the same
+   three branches in its own query, keyed by (platform, native id); the live re-check then compares
+   the meeting ROW each subscription streams, so a recurring code that reaches another row never
+   keeps a removed reader on this one. agent-api's live
+   stream and the meeting note ask meeting-api the same question as the caller. Recording reads add one
+   more condition: the owner's `data.share_settings.recording`.
+4. **The owner sees and edits access.** `GET /meetings/{id}/access` returns readers, pending invites,
+   links, the workspace and the recording setting, without tokens or hashes. `DELETE …/viewers/{viewer_id}`,
+   `DELETE …/share/{grant}` and `PATCH …/access` change it under the meeting row's lock.
+   **Readers from before the roster.** Someone who redeemed a share before meeting-api kept
+   `share_viewers` is known only by id. On the owner's first access view, meeting-api asks identity
+   for their address over the internal tier (`GET /internal/users/{id}/email`, `X-Internal-Secret`),
+   once per reader, and writes the roster entry a redeem writes today, including the invite they came
+   in through where the record shows it. That invite then stops showing as pending, and removing them
+   withdraws it. When they joined is not recorded, so it stays empty. If identity cannot answer, they
+   stay listed by id and are still removable.
+5. **The invite email.** With `notify: true` — only for a grant restricted to exactly one address, and
+   at most 30 per owner per hour — meeting-api hands one `meeting.shared` fact to flows
+   (`meeting_api/events.py`, the existing publish edge, bounded and best-effort). The fact carries **no
+   token**: the meeting, the address, the owner and the grant's id. flows' `meeting_share` mints that
+   person's own restricted link at send time, as the owner, through meeting-api's share mint, renders
+   `behavior/mail/meeting-share.md` (the owner's title cut to one plain line of at most 200
+   characters) and appends the link it composes from its own `VEXA_UI_URL` (`/?tshare=…`). No producer
+   and no template writes a URL, and no working token is stored outside meeting-api's hashes. The mint
+   answers `notified: {address: true|false}` so the dialog can say which emails were handed over.
+6. **Live views are re-checked while open.** agent-api's `/api/meeting/stream` asks the access union
+   again every 10 seconds, and also notices a transcript the owner deleted. If the answer is no twice,
+   it ends with an `access-revoked` event. The gateway re-authorizes every open `/ws` subscription every
+   15 seconds, by the row it streams, and stops a revoked one with `subscription_revoked`. It also re-resolves the key, so an ended workspace membership drops that
+   workspace's status channel.
+
+**Who writes what.** One writer per carrier:
+
+| Data | Owner (sole writer) |
+|---|---|
+| `meeting.data.share_grants`, `transcript_viewers`, `share_viewers`, `share_removed`, `share_settings` | meeting-api (`collector/share_access.py`, under the row lock) |
+| Workspace membership (`policy/members.json`) and workspace invites | agent-api |
+| The writable-workspace set on an identity (`writable_workspaces`) | identity (admin-api `/internal/validate`), signed by the gateway |
+| The `meeting.shared` fact and its mail | meeting-api publishes; flows mails (`meeting_share`) |
+| The live transcript stream (`tc:meeting:{id}`) | meeting-api's collector. agent-api and the gateway only read it. |
+
+**Contracts and routes.** The meetings route table `core/meetings/routes.v1.json` carries the four new
+owner routes (`tx` scope). `ws.v1` gains the `subscription_revoked` error code and a golden. The
+terminal's SSE event `access-revoked` is agent-api ↔ terminal. The API reference is in
+[Meetings API › Share a meeting](/api/meetings#share-a-meeting).
+
+**Configuration.** None. The re-check intervals (10 s on the stream, 15 s on `/ws`), the hourly email cap
+(30) and the invite and link lifetimes (30 and 7 days) are constants in `routers/meetings.py`,
+`gateway/multiplex.py`, `collector/app.py` and `meetingShareApi.ts`, and the server clamps any requested
+lifetime to 30 days.
+
+## Why it complies
+
+### Architecture
+
+| Rule | How this meets it | Enforced by |
+|---|---|---|
+| **P20** Complete mediation, default-deny | Every path (REST list, detail and transcript, recording reads, the agent-api SSE and the gateway `/ws`) uses meeting-api's one access union. The recording needs the owner's explicit permission, which defaults to off. Live paths re-check while open. | deny tests below, run by `gate:python`. `gate:access` covers identity's `test_access.py`; these tests are not in that file (reviewed) |
+| **P23** One writer per carrier | All new share state lives on `meeting.data`, written only by meeting-api. agent-api and the gateway only ask. Workspace membership stays agent-api's. | `gate:dataflow`. No new carrier, so the chart is unchanged |
+| **P4 / P8** Contracts sealed, goldens are the spec | `ws.v1` gains `subscription_revoked` with a golden. `identity.v1` (`ValidateResponse.writable_workspaces`) and `gateway-identity.v1` (the signed `writable_workspaces` claim, with a claims/headers golden pair) gain the write set, additively. `flows.v1` declares the `meeting.shared` carrier with a golden. The new routes are rows in the meetings route table, which meeting-api also reads to check scopes (`route_scopes.py`). | `gate:schema`, `gate:contract-version` (re-sealed) |
+| **P2 / P6** Couple through contracts, one front door | The terminal reaches the backend only through the gateway proxy. The rule is one module (`collector/share_access.py`) shared by the real store and the in-memory fake, so the two cannot diverge. Recordings read it through `recordings/shared_access.py`. | `gate:isolation`, `gate:exports` |
+| **P18** Fail loud | A refused link, a failed invite, a failed access load and a removal mid-meeting each show a sentence. A failed re-authorization is retried once, then fails closed with `authorization_call_failed`. | terminal tests below; review |
+| **P21** State from evidence | A removed reader's live view shows *Access removed*, never a quiet *ended*. | `meetingShare.test.tsx` |
+| No duplication | The existing grant mint and redeem path, the arrival gate and the workspace invites are reused. The old *Share session* popover is replaced, not kept beside the new dialog. | review |
+
+### Security
+
+**Who can access what.** Only the owner can mint, list, revoke, remove or change the recording setting.
+A non-owner gets the same `404` as for a meeting that doesn't exist. A reader can read the meeting,
+its transcript and live feed, and its recording if the owner allowed it. A reader cannot delete,
+stop the bot or see other readers. The roster (`transcript_viewers`, `share_viewers`, `share_removed`)
+and the grants are stripped from every response to anyone but the owner, and the grants are stripped
+from the owner's responses too.
+
+identity's `GET /internal/users/{id}/email` answers only the internal tier and only `{id, email}`;
+meeting-api calls it only on the owner's own access view, for readers already on that meeting.
+
+**How each hop enforces it.** The gateway authenticates the key and signs the caller's identity and
+email onto the hop. meeting-api trusts only that signature, or the internal secret for agent-api's
+as-the-caller lookups, and decides access itself. agent-api never decides meeting access locally. The
+gateway re-runs meeting-api's subscribe check for open sockets.
+
+**What is refused.** Binding a meeting into a workspace the caller cannot write (a viewer, a
+non-member, or an identity without the write claim — fail closed); a share email for an open link
+or for a meeting the caller does not own; redeeming a restricted invite from another address; redeeming a revoked or expired
+grant; redeeming any grant minted before the redeemer was removed; owner routes called by anyone else;
+recording reads — and recording metadata — without the owner's permission; an invite entry that is not
+exactly one address; a share email to a list, or past the owner's hourly cap; and every read by a
+person who was never invited.
+
+**The deny tests that prove it.**
+
+- `core/meetings/services/meeting-api/tests/test_meeting_share_access.py`:
+  - `test_outsider_gets_nothing_live_or_after`
+  - `test_removed_invitee_loses_access_immediately_and_cannot_reuse_the_link`
+  - `test_turning_a_link_off_removes_the_people_who_came_through_it`
+  - `test_management_routes_are_owner_only_and_leak_no_existence`
+  - `test_the_roster_is_never_shipped_to_a_recipient`
+  - `test_recording_needs_the_owners_permission_as_well_as_access`
+  - `test_recording_for_a_workspace_member_follows_the_same_rule`
+  - `test_a_recipient_cannot_delete_the_recording`
+  - `test_no_mail_unless_asked_never_for_an_open_link_and_never_to_a_list`
+  - `test_an_entry_that_is_not_one_address_is_refused_on_every_mint`
+  - `test_invite_mail_is_capped_per_owner_per_hour`
+  - `test_an_invite_with_notify_hands_flows_a_fact_with_no_token_in_it`
+  - `test_a_stranger_cannot_mail_from_someone_elses_meeting`
+  - `test_a_link_off_removes_its_readers_but_not_one_who_also_holds_a_live_invite`
+  - `test_a_link_off_removes_a_reader_whose_redeem_left_no_attribution`
+  - `test_a_reader_without_recording_permission_sees_no_recording_metadata`
+- `core/meetings/services/meeting-api/tests/test_calendar_sync.py::test_a_new_occurrence_does_not_inherit_a_workspace_its_owner_can_no_longer_write`
+- `core/meetings/services/meeting-api/tests/test_workspace_bind_requires_write.py`:
+  - `test_the_bind_route_refuses_a_caller_who_cannot_write` (viewer, non-member, no claim)
+  - `test_planned_meetings_refuse_it_on_create_and_patch`
+- `core/meetings/services/meeting-api/tests/test_bot_spawn.py::test_spawn_refuses_to_bind_into_a_workspace_the_caller_only_reads`
+- `core/identity/services/admin-api/tests/test_writable_workspaces.py`: `test_a_viewer_membership_is_readable_but_not_writable`, `test_a_worker_cannot_write_into_global_because_its_person_edits_it`
+- `core/flows/tests/test_meeting_share_mail.py`: `test_the_link_is_minted_at_send_time_for_exactly_this_address_as_the_owner`, `test_an_owner_title_is_one_bounded_plain_line`, `test_no_address_owner_or_meeting_refuses_and_sends_nothing`
+- Readers from before the roster (`test_meeting_share_access.py`):
+  - `test_the_owners_first_view_names_a_legacy_reader_and_settles_their_invite`
+  - `test_removing_a_backfilled_reader_withdraws_their_invite_and_keeps_them_out`
+  - `test_the_backfill_never_runs_for_a_non_owner`
+- `core/identity/services/admin-api/tests/test_internal_user_email.py`: `test_anyone_else_is_refused`, `test_dev_mode_does_not_open_the_door`
+- `core/agent/tests/test_meeting_share_live_revoke.py`:
+  - `test_outsider_cannot_open_the_live_stream`
+  - `test_removed_invitee_is_cut_off_mid_stream_with_an_explicit_event`
+  - `test_an_open_stream_ends_when_the_owner_deletes_the_transcript`
+- `core/gateway/services/gateway/tests/test_multiplex_reauthorize.py`:
+  - `test_a_removed_reader_stops_receiving_and_is_told`
+  - `test_a_reader_removed_from_one_row_is_cut_even_if_the_same_code_reaches_another`
+  - `test_an_ended_workspace_membership_stops_that_workspaces_status_channel`
+  - `test_a_key_that_stops_resolving_closes_the_socket`
+  - `test_one_failed_hop_does_not_revoke_but_a_sustained_outage_fails_closed`
+- Workspace view and edit are enforced by agent-api's existing tests:
+  - `test_workspace_ids.py::test_a_viewer_reads_a_group_and_does_not_write_it`
+  - `test_workspace_deeplink_read.py::test_a_viewer_reads_it_too_and_still_cannot_write_it`
+  - `test_lane_a_shared_mounts.py::test_viewer_gets_a_read_only_shared_mount`

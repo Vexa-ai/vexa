@@ -34,11 +34,15 @@ from __future__ import annotations
 from typing import Any, Callable, Optional
 
 import json
+import re
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 
 from ..regime import require_person
+from ..workspace_write import require_writable
+from . import reader_directory as _reader_directory
 from .meeting_link import parse_meeting_url
 from .obs import TraceMiddleware as _DefaultTraceMiddleware
 from .obs import log_event as _default_log_event
@@ -62,6 +66,10 @@ _FSM_OWNED_STATUSES = frozenset({
 # anyone authenticated can redeem. The failure is silent and it points the wrong way, so the value
 # is checked at the door instead of being trusted downstream.
 SHARE_MODES = frozenset({"open", "restricted"})
+# A workspace invite token handed through for the share mail (agent-api's `secrets.token_urlsafe`).
+_ONE_ADDRESS = re.compile(r"[^@\s,;<>()\[\]\\\"\x00-\x1f\x7f]{1,64}@[A-Za-z0-9](?:[A-Za-z0-9.-]{0,253}[A-Za-z0-9])?\.[A-Za-z]{2,63}")
+#: Invite emails one owner may have flows send in an hour, across all their meetings (R1801-2).
+SHARE_MAILS_PER_OWNER_PER_HOUR = 30
 SHARE_DEFAULT_TTL_SEC = 86_400                  # 24h — unchanged default
 SHARE_MIN_TTL_SEC = 60                          # a link nobody can redeem in time is not a share
 SHARE_MAX_TTL_SEC = 30 * 24 * 60 * 60           # 30d — a capability, not a second front door
@@ -143,6 +151,7 @@ def build_router(
     calendar_sync_status: Optional[Callable] = None,
     artifact_object_deleter: Optional[Callable] = None,
     fixture_object_deleter: Optional[Callable] = None,
+    reader_email: Optional[Callable] = None,
 ) -> APIRouter:
     """The collector's READ-side + authorizer routes as a mountable ``APIRouter``.
 
@@ -491,6 +500,7 @@ def build_router(
         if workspace_id is not None and not isinstance(workspace_id, str):
             raise HTTPException(status_code=422, detail="'workspace_id' must be a string")
         workspace_id = (workspace_id or "").strip() or None
+        require_writable(workspace_id, request.headers)
 
         auto_join = payload.get("auto_join", True)
         if not isinstance(auto_join, bool):
@@ -537,7 +547,7 @@ def build_router(
 
     # --- the ROW-id PATCH/DELETE bodies, factored out so the native-keyed aliases (#579 C1) forward
     # to the SAME owner-scoped, FSM-refusing logic once they have resolved (platform, native) → row. ---
-    async def _apply_meeting_patch(user_id: int, meeting_id: int, payload) -> dict:
+    async def _apply_meeting_patch(user_id: int, meeting_id: int, payload, headers) -> dict:
         from .projection import project_response_data
 
         if not isinstance(payload, dict):
@@ -574,6 +584,7 @@ def build_router(
             if workspace_id is not None and not isinstance(workspace_id, str):
                 raise HTTPException(status_code=422, detail="'workspace_id' must be a string")
             updates["workspace_id"] = (workspace_id or "").strip() or None
+            require_writable(updates["workspace_id"], headers)
         if "auto_join" in payload:
             if not isinstance(payload["auto_join"], bool):
                 raise HTTPException(status_code=422, detail="'auto_join' must be a boolean")
@@ -670,6 +681,82 @@ def build_router(
         )
         return {"kind": "plan"}
 
+    # --- The OWNER's side of a share: who can read this meeting, and taking it back.
+    #
+    # Minting and redeeming existed; seeing who holds the capability and revoking it did not, so a
+    # share was a one-way door. These four routes are owner-scoped by ROW id exactly like the mint
+    # above — a row that is not the caller's 404s like an unknown one — and the rule they apply is
+    # `share_access` (pure, shared with the fake store). Removing someone takes their id out of
+    # `transcript_viewers`, the set every read path consults: REST reads refuse them at once, and the
+    # two live paths (agent-api's SSE, the gateway `/ws`) re-check access while open and end the
+    # stream. REGISTERED BEFORE THE PAIR ROUTES: `PATCH /meetings/{meeting_id}/access` has the same
+    # segment count as `PATCH /meetings/{platform}/{native_meeting_id}`, which would otherwise
+    # swallow it (platform="7", native="access") and answer 404. ---
+    @router.get("/meetings/{meeting_id}/access", dependencies=[Depends(require_person)])
+    async def get_share_access(meeting_id: int, x_user_id: Optional[str] = Header(default=None)):
+        user_id = _resolve_user_id(x_user_id)
+        view = await store.get_share_access(user_id, meeting_id)
+        if view is None:
+            raise HTTPException(status_code=404, detail=f"Meeting {meeting_id} not found")
+        # ONE-TIME BACKFILL. A reader who redeemed before the roster existed has no address here;
+        # name them from identity, once, so the owner sees a person, the invite they used stops
+        # reading "pending", and removing them withdraws it. A failed lookup leaves the id listed.
+        unnamed = [p["user_id"] for p in view.get("people", []) if not p.get("email")]
+        lookup = reader_email if reader_email is not None else _reader_directory.from_env()
+        if unnamed and lookup is not None:
+            emails = {}
+            for uid in unnamed[:_reader_directory.MAX_LOOKUPS]:
+                email = await lookup(uid)
+                if email:
+                    emails[uid] = email
+            if emails:
+                view = await store.backfill_share_roster(user_id, meeting_id, emails) or view
+                log_event("meeting_share_roster_backfilled", audience="system",
+                          span="meetings.share.backfill", user_id=user_id,
+                          meeting_id=str(meeting_id), fields={"named": len(emails),
+                                                              "unnamed": len(unnamed)})
+        return JSONResponse(content=view)
+
+    @router.patch("/meetings/{meeting_id}/access", dependencies=[Depends(require_person)])
+    async def set_share_access(meeting_id: int, request: Request,
+                               x_user_id: Optional[str] = Header(default=None)):
+        user_id = _resolve_user_id(x_user_id)
+        try:
+            payload = await request.json()
+        except Exception:
+            raise HTTPException(status_code=422, detail="invalid JSON body")
+        recording = payload.get("recording") if isinstance(payload, dict) else None
+        if not isinstance(recording, bool):
+            raise HTTPException(status_code=422, detail="'recording' must be true or false")
+        view = await store.set_share_settings(user_id, meeting_id, recording=recording)
+        if view is None:
+            raise HTTPException(status_code=404, detail=f"Meeting {meeting_id} not found")
+        log_event("meeting_share_settings_changed", audience="user", span="meetings.share.settings",
+                  user_id=user_id, meeting_id=str(meeting_id), fields={"recording": recording})
+        return JSONResponse(content=view)
+
+    @router.delete("/meetings/{meeting_id}/share/{grant_id}", dependencies=[Depends(require_person)])
+    async def revoke_share_grant(meeting_id: int, grant_id: str,
+                                 x_user_id: Optional[str] = Header(default=None)):
+        user_id = _resolve_user_id(x_user_id)
+        view = await store.revoke_share_grant(user_id, meeting_id, grant_id)
+        if view is None:
+            raise HTTPException(status_code=404, detail="No such share on this meeting")
+        log_event("transcript_share_revoked", audience="user", span="meetings.share.revoke",
+                  user_id=user_id, meeting_id=str(meeting_id), fields={"grant_id": grant_id})
+        return JSONResponse(content=view)
+
+    @router.delete("/meetings/{meeting_id}/viewers/{viewer_id}", dependencies=[Depends(require_person)])
+    async def remove_share_viewer(meeting_id: int, viewer_id: int,
+                                  x_user_id: Optional[str] = Header(default=None)):
+        user_id = _resolve_user_id(x_user_id)
+        view = await store.remove_share_viewer(user_id, meeting_id, viewer_id)
+        if view is None:
+            raise HTTPException(status_code=404, detail="That person does not have access to this meeting")
+        log_event("meeting_share_viewer_removed", audience="user", span="meetings.share.remove",
+                  user_id=user_id, meeting_id=str(meeting_id), fields={"viewer_id": viewer_id})
+        return JSONResponse(content=view)
+
     @router.patch("/meetings/{meeting_id}")
     async def patch_planned_meeting(
         meeting_id: int,
@@ -681,7 +768,7 @@ def build_router(
             payload = await request.json()
         except Exception:
             raise HTTPException(status_code=422, detail="invalid JSON body")
-        row = await _apply_meeting_patch(user_id, meeting_id, payload)
+        row = await _apply_meeting_patch(user_id, meeting_id, payload, request.headers)
         return JSONResponse(content=row)
 
     # --- DELETE /meetings/{meeting_id} → delete a PLANNED row (intent status only; an FSM row is
@@ -819,7 +906,7 @@ def build_router(
                 status_code=404,
                 detail=f"Meeting not found for platform {platform} and ID {native_meeting_id}",
             )
-        row = await _apply_meeting_patch(user_id, meeting_id, payload)
+        row = await _apply_meeting_patch(user_id, meeting_id, payload, request.headers)
         return JSONResponse(content=row)
 
     @router.delete("/meetings/{platform}/{native_meeting_id}", dependencies=[Depends(require_person)])
@@ -966,6 +1053,7 @@ def build_router(
         workspace_id = str(payload.get("workspace_id", "")).strip() if isinstance(payload, dict) else ""
         if not workspace_id:
             raise HTTPException(status_code=422, detail="'workspace_id' is required")
+        require_writable(workspace_id, request.headers)
         bound = await store.bind_workspace(user_id, platform, native_meeting_id, workspace_id)
         if bound is None:
             raise HTTPException(
@@ -978,6 +1066,47 @@ def build_router(
             fields={"workspace_id": workspace_id},
         )
         return JSONResponse(content={"workspace_id": bound})
+
+    def _notify_payload(payload, mode: str, emails: list) -> bool:
+        """`notify`: mail the invited address its link, through flows.
+
+        ONE RECIPIENT PER MAIL (R1801-2): a share mail goes only to a grant RESTRICTED to exactly one
+        address, so a single request can never fan one owner-worded mail out to a list, and "the link
+        works only for this address" is true of every mail sent. The dialog mints one grant per
+        person; a caller with ten people makes ten requests, each counted against the hourly cap."""
+        if not isinstance(payload, dict) or "notify" not in payload or payload.get("notify") is False:
+            return False
+        if payload.get("notify") is not True:
+            raise HTTPException(status_code=422, detail="'notify' must be true or false")
+        if mode != "restricted" or len(emails) != 1:
+            raise HTTPException(status_code=422,
+                                detail="a share mail needs mode 'restricted' and exactly one address")
+        return True
+
+    async def _mail_the_invite(user_id, meeting_id, minted: dict, email: str, request: Request) -> dict:
+        """Hand ONE `meeting.shared` fact to flows, which mints the recipient's own link at send time
+        and mails it. Returns `{address: True|False}` — whether the fact LANDED.
+
+        NO TOKEN TRAVELS (R1801-5). The fact names the meeting, the address and the grant the owner
+        just minted — never a secret: meeting-api keeps grants as hashes at rest, and the flows
+        event store is not a second place to keep a working credential. The title is the owner's
+        words and goes out as bounded plain text (`share_mail_title`)."""
+        from ..events import publish_meeting_shared, share_mail_title
+
+        title = ""
+        try:
+            rows = await store.list_meetings(user_id, meeting_id=meeting_id, slim=True)
+            row = next((m for m in rows if m.get("id") == meeting_id), None)
+            title = share_mail_title(((row or {}).get("data") or {}).get("title"))
+        except Exception:  # noqa: BLE001 — the title is a nicety in a subject line
+            title = ""
+        inviter = request.headers.get("x-user-email") or ""
+        landed = await publish_meeting_shared(meeting_id, user_id, email, minted.get("id"),
+                                              title=title, inviter=inviter)
+        await store.stamp_share_mail(user_id, meeting_id, minted.get("id"))
+        log_event("meeting_share_mail_handed_over", audience="user", span="meetings.share.notify",
+                  user_id=user_id, meeting_id=str(meeting_id), fields={"landed": bool(landed)})
+        return {email: bool(landed)}
 
     def _share_payload(payload) -> "tuple[str, list, int]":
         """mode | allowed_emails | ttl out of a share-mint body, defaulted and VALIDATED the same
@@ -1019,6 +1148,13 @@ def build_router(
                         "read back on every access check"),
             )
         emails = [str(e).strip() for e in emails if str(e).strip()]
+        # ONE ADDRESS PER ENTRY (R1801-2): an entry is matched against a verified address and may be
+        # the recipient of a mail, so a value that could expand into several recipients — a comma,
+        # a semicolon, whitespace, angle brackets, a control character — is refused, not stored.
+        bad = [e for e in emails if not _ONE_ADDRESS.fullmatch(e)]
+        if bad:
+            raise HTTPException(status_code=422,
+                                detail=f"'allowed_emails' entries must each be one address — refused {bad[0]!r}")
 
         raw_ttl = payload.get("expires_in_sec", SHARE_DEFAULT_TTL_SEC)
         if raw_ttl in (None, ""):
@@ -1172,6 +1308,14 @@ def build_router(
         except Exception:
             payload = {}
         mode, emails, ttl = _share_payload(payload)
+        notify = _notify_payload(payload, mode, emails)
+        if notify:
+            # THE HOURLY CAP is checked before anything is minted, so a refusal changes nothing.
+            since = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+            if await store.count_share_mails_since(user_id, since) >= SHARE_MAILS_PER_OWNER_PER_HOUR:
+                raise HTTPException(status_code=429, detail=(
+                    f"You have sent {SHARE_MAILS_PER_OWNER_PER_HOUR} invite emails in the last hour. "
+                    "Copy the link instead, or try again later."))
         minted = await store.mint_transcript_share_by_id(
             user_id, meeting_id, mode=mode, allowed_emails=emails, expires_in_sec=ttl,
         )
@@ -1184,6 +1328,8 @@ def build_router(
             raise HTTPException(status_code=404, detail=f"Meeting {meeting_id} not found")
         log_event("transcript_share_minted", audience="user", span="meetings.transcript.share",
                   user_id=user_id, meeting_id=str(meeting_id), fields={"mode": mode, "by": "row_id"})
+        if notify:
+            minted["notified"] = await _mail_the_invite(user_id, meeting_id, minted, emails[0], request)
         return JSONResponse(content=minted)
 
     # --- POST /meetings/{platform}/{native_meeting_id}/share → mint an INDEPENDENT transcript share link
@@ -1457,6 +1603,7 @@ def create_app(
     trace_middleware: type = _DefaultTraceMiddleware,
     calendar_sync_now: Optional[Callable] = None,
     calendar_sync_status: Optional[Callable] = None,
+    reader_email: Optional[Callable] = None,
 ) -> FastAPI:
     """Build the STANDALONE collector FastAPI app over the injected ports.
 
@@ -1481,5 +1628,5 @@ def create_app(
 
     app.include_router(build_router(store, redis, log_event=log_event,
                                     calendar_sync_now=calendar_sync_now,
-                                    calendar_sync_status=calendar_sync_status))
+                                    calendar_sync_status=calendar_sync_status, reader_email=reader_email))
     return app

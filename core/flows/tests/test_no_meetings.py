@@ -51,6 +51,8 @@ SRC = pathlib.Path(__file__).resolve().parents[1] / "src"
 MEETINGS_STEPS = {
     "await_start", "dispatch_bot", "run_meeting", "first_meeting",
     "process_meeting", "email_minutes", "email_attendees", "drop_to_attendees", "prepare_meeting",
+    # mints the recipient's own link through meeting-api at send time (Vexa-ai/vexa#1801, R1801-5)
+    "mail_meeting_share",
 }
 
 

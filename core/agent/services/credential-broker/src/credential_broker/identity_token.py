@@ -74,6 +74,7 @@ CLAIM_HEADERS = {
     "scopes": "x-user-scopes",
     "limits": "x-user-limits",
     "workspaces": "x-user-workspaces",
+    "writable_workspaces": "x-user-writable-workspaces",
     "webhook_url": "x-user-webhook-url",
     "webhook_secret": "x-user-webhook-secret",
     "webhook_events": "x-user-webhook-events",
@@ -278,6 +279,11 @@ def claims_from_validation(user: Mapping[str, Any]) -> dict:
         claims["limits"] = limits
     if user.get("workspaces"):
         claims["workspaces"] = [str(w) for w in user["workspaces"]]
+    # The memberships that may WRITE (contributor or owner) — the set a service checks before it
+    # lets the caller put something INTO a workspace, e.g. bind a meeting to it. A subset of
+    # `workspaces`; absent when there is none, which reads as "may write nowhere".
+    if user.get("writable_workspaces"):
+        claims["writable_workspaces"] = [str(w) for w in user["writable_workspaces"]]
     if user.get("webhook_url"):
         claims["webhook_url"] = str(user["webhook_url"])
         if user.get("webhook_secret"):
@@ -366,7 +372,7 @@ def headers_from_claims(claims: Mapping[str, Any]) -> dict:
         if claim not in claims or claims[claim] in (None, "", []):
             continue
         value = claims[claim]
-        if claim in ("scopes", "workspaces"):
+        if claim in ("scopes", "workspaces", "writable_workspaces"):
             out[header] = _join(value)
         elif claim == "webhook_events":
             out[header] = value if isinstance(value, str) else json.dumps(value)

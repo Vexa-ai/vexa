@@ -73,6 +73,14 @@
       "refs": ["friction_id", "fix_ref"],
       "source_event_id": "friction-fix-<friction_id> — keyed to the report being closed, not to this particular call: re-fixing the same id is a no-op at admission (the same fact re-asserted), the right default for an operator-only close-out verb",
       "description": "#1510's C3, closing the follow-up friction.reported's own entry named (\"a later carrier, not registered here\"). Published by flows-api itself at POST /friction/{friction_id}/fix, an in-process admit() exactly like friction.reported — no publish-edge, no agent-api dependency, works in the no-agents profile. Operator-authed (`dependencies=[Depends(auth)]`, the same class `/flows/{name}/{version}/{action}` uses): closing touches a record filed by ANY subject, which only the operator may do — matching the pre-cutover Redis store's own rule (PRD decision 33 §4). The read side (`flows_timeline.friction_for_subject`) folds a `friction.fixed` row into its matching `friction.reported` row as `status: fixed`, keyed on `friction_id`. Recurrence (\"a report filed again after a fix\") is NOT resurrected here — the tracking issue leaves that decision explicitly open, and it is derivable later from the read side alone (a `friction.reported` row newer than the newest matching `friction.fixed` row) with no new carrier, so nothing here forecloses it."
+    },
+    {
+      "event": "meeting.shared",
+      "owner": "meetings",
+      "cardinality": "once_per_occurrence",
+      "refs": ["uid", "meeting_id", "email", "grant_id", "title", "inviter"],
+      "source_event_id": "share-<grant_id>-<sha256(address)[:12]> — keyed to the INVITE (the grant) and the address, never to the address alone: a redelivery dedupes at the intake, while inviting the same person again mints a new grant and mails again, which is what pressing Invite twice means. The address is hashed so the id carries none.",
+      "description": "A meeting's owner invited ONE address from the terminal's Share dialog and asked for the mail; triggers meeting_share, whose one step mints that person's own restricted link at send time — as the owner, through meeting-api's share mint — and mails it. PUBLISHED BY MEETING-API (meeting_api/events.py, the existing publish-edge) from the by-id share mint, only when the body says notify, only for a grant restricted to exactly one address, and under a per-owner hourly cap; the post-meeting attendee fan-out mints its own grants and mails them itself, so it never double-mails. NO CREDENTIAL TRAVELS: `grant_id` names the owner's grant for the record, and the link is minted where it is sent, so the event store never holds a working token (meeting-api keeps grants as hashes at rest). `uid` is the OWNER, the subject `_global` is read through and the identity the link is minted as; the recipient is `email`. `title` (bounded, one line of plain text) and `inviter` are words for the mail and may be empty."
     }
   ]
 }

@@ -4,6 +4,7 @@ import { useLiveMeetings } from "../surfaces/liveMeetings";
 import type { MeetingMock } from "../surfaces/meetingModel";
 import { splitLeadingH1 } from "./workspaceFrontPage";
 import { type as ty } from "./tokens";
+import { MeetingShareButton } from "../surfaces/MeetingShare";
 
 export function meetingHeader(body: string, meeting?: MeetingMock) {
   const heading = splitLeadingH1(body).title;
@@ -29,7 +30,10 @@ export function MeetingPageHeader({ meetingId, body, path }: { meetingId: string
   const meeting = meetings.find(m => m.id === meetingId || m.native_id === meetingId);
   const { title, metadata } = meetingHeader(body, meeting);
   return <div style={{ flex: "1 1 auto", minWidth: 0 }}>
-    <div data-doc-name title={path} style={{ ...ty.title, fontSize: 13.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</div>
+    <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+      <div data-doc-name title={path} style={{ ...ty.title, fontSize: 13.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: "0 1 auto", minWidth: 0 }}>{title}</div>
+      {meeting && <MeetingShareButton meeting={meeting} />}
+    </div>
     {metadata && <div data-meeting-metadata style={{ ...ty.meta, marginTop: 3, color: "var(--t3)", overflowWrap: "anywhere" }}>{metadata}</div>}
     <MeetingControls meetingId={meetingId} />
   </div>;

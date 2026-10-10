@@ -43,7 +43,7 @@ import { scaffoldToChat, type Scaffold, type ScaffoldRefusal } from "./scaffold"
 import { pendingArrival, useScaffoldArrival } from "./arrival";
 import { chatForDeepLink, resolveWorkspaceDeepLink, type DeepLinkOutcome } from "./deepLink";
 import { workspaceRouteFromPath, type WorkspaceRoute } from "../app/workspaceRoute";
-import { artifactsFromTokens, artifactViewEffect, boundMeetingView, isRetiredNotePath, meetingPages, pageForArtifact, pageForDocRef, pageForMeetingRef, pagesForPhase, resolveView, withMeetingPages, withoutSeparateTranscript, VIEW_KEY, VIEW_NAVIGATE_EVENT, type ViewSlot } from "./roomView";
+import { artifactsFromTokens, artifactViewEffect, boundMeetingView, isRetiredNotePath, meetingPages, pageForArtifact, pageForDocRef, pageForMeetingRef, pagesForPhase, resolveView, withMeetingPages, withoutSeparateTranscript, VIEW_KEY, VIEW_NAVIGATE_EVENT, type ViewSlot, SHARED_ARRIVAL_KEY, sharedArrivalFront } from "./roomView";
 import { fetchMeetingNote, fetchMeetingNotePath } from "./meetingNote";
 import { deskPanelPages } from "./deskPanel";
 import { reportOpened } from "./deskTouch";
@@ -374,7 +374,7 @@ export function MinutesShell() {
    *
    *  Every setState below runs after the single `await`, so React commits them together — which is
    *  what lets the artifacts effect trust that `sel.chatId` and `pages` describe the same chat. */
-  const openChat = useCallback(async (c: ChatRec) => {
+  const openChat = useCallback(async (c: ChatRec, how: { front?: "meeting" } = {}) => {
     window.dispatchEvent(new Event(CONNECTIONS_CLOSE));
     const m = c.meeting ? meetings.find((x) => String(x.id) === c.meeting) : undefined;
     // BOUND TO A ROW THIS CLIENT HAS NEVER LISTED — the bot the chat sent moments ago. Ask the list
@@ -474,7 +474,10 @@ export function MinutesShell() {
     // tabs but no stored view (pre-28, or one that has never been navigated) still opens on its
     // focused tab, so nothing regresses for records written before the slot existed.
     const stored = c.view ? { kind: c.view.kind, path: c.view.path, slug: c.view.slug, label: c.view.label } as Page : null;
-    const front = stored ?? focus ?? list[0];
+    // ARRIVING THROUGH A SHARE puts the MEETING in front (`sharedArrivalFront`): the reader came to
+    // see that meeting, and its page is where they find it, its transcript and "Shared with you".
+    // Their desk — the home tab, and on a fresh chat the first one — stays one click away.
+    const front = sharedArrivalFront(list, how.front) ?? stored ?? focus ?? list[0];
     setSel({
       kind: c.meeting ? "meeting" : "chat",
       chatId: c.id,
@@ -497,7 +500,7 @@ export function MinutesShell() {
    *  (id `meet-<meetingId>`, so it lands on the agent session that meeting has always used).
    *  Returns the id of the chat that was actually opened: a caller with something to say to it
    *  (a proposal chip's kick) must address the chat that LANDED, never a reconstructed id. */
-  const openRow = useCallback(async (r: Row, opts: { touched?: boolean; artifacts?: Artifact[]; focus?: string } = {}) => {
+  const openRow = useCallback(async (r: Row, opts: { touched?: boolean; artifacts?: Artifact[]; focus?: string; front?: "meeting" } = {}) => {
     const existing = r.chatId ? chatsRef.current.find((c) => c.id === r.chatId) : undefined;
     const c = existing ?? chatForRow(chatsRef.current, r, meetings);
     let want = opts.touched ? { ...c, touched: true } : c;
@@ -510,11 +513,11 @@ export function MinutesShell() {
       want = { ...want, artifacts: opts.artifacts, focus: opts.focus ?? want.focus };
     }
     if (!existing || opts.touched || opts.artifacts?.length) persist((prev) => upsertChat(prev, want));
-    await openChat(want);
+    await openChat(want, { front: opts.front });
     return want.id;
   }, [meetings, openChat, persist]);
 
-  const openMeeting = useCallback(async (m: MeetingMock, opts: { touched?: boolean; artifacts?: Artifact[]; focus?: string } = {}) => {
+  const openMeeting = useCallback(async (m: MeetingMock, opts: { touched?: boolean; artifacts?: Artifact[]; focus?: string; front?: "meeting" } = {}) => {
     const id = String(m.id);
     const row = railRows(chatsRef.current, [m]).find((r) => r.meetingId === id);
     return row ? await openRow(row, opts) : null;
@@ -1298,14 +1301,20 @@ export function MinutesShell() {
     if (meetingRefSpent.current || !meetings.length) return;
     meetingRefSpent.current = true;
     let ref: string | null = null;
-    try { ref = localStorage.getItem("vexa.openMeetingRef"); localStorage.removeItem("vexa.openMeetingRef"); }
+    let front: "meeting" | undefined;
+    try {
+      ref = localStorage.getItem("vexa.openMeetingRef"); localStorage.removeItem("vexa.openMeetingRef");
+      // Set beside the ref by a share redeem (`App.stashSharedMeeting`): open on the meeting page.
+      if (localStorage.getItem(SHARED_ARRIVAL_KEY) === "meeting") front = "meeting";
+      localStorage.removeItem(SHARED_ARRIVAL_KEY);
+    }
     catch { return; }
     if (!ref) return;
     const native = ref.includes("/") ? ref.slice(ref.indexOf("/") + 1) : ref;
     const m = meetings.find((x) => (x as { native_id?: string }).native_id === native || String(x.id) === ref);
     // The link is spent on the first non-empty list, so a row created between the click and that
     // list would be lost outright — ask for it rather than dropping the deeplink on the floor.
-    if (m) void openMeeting(m, { touched: true }); else ensureMeetingKnown(native);
+    if (m) void openMeeting(m, { touched: true, front }); else ensureMeetingKnown(native);
   }, [meetings, openMeeting]);
 
   const session = sel.chatId;
