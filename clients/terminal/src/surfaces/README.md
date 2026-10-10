@@ -40,3 +40,8 @@ raw idiom `e instanceof Error ? e.message : String(e)` is banned from surface fi
 `__tests__/errorPresentation.guard.test.ts`. State-bearing controls (the meeting header's
 Stop/Send bot) additionally follow the live ws.v1 connection (`useLiveMeetingsConnection`):
 disconnected → indeterminate/disabled, never an actionable control derived from a stale snapshot.
+
+**A typed fault renders through `faults.ts`** — who failed, what kind, the detail, the remedy. Its
+sources and kinds are unit.v1's `Fault` (`core/agent/contracts/unit.v1`); `faultWire.ts` is GENERATED
+from it (`node core/agent/contracts/unit.v1/gen-faults.mjs`, never edited by hand) and types the label tables,
+so a kind the contract adds fails `tsc` until it has a label (`__tests__/faultContract.test.tsx`).

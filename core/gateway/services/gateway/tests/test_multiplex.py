@@ -200,3 +200,68 @@ async def test_connect_auto_subscribes_user_channel_and_forwards():
 
     ws.disconnect()
     await task
+
+
+# ── R6-9: the socket is held to the REST routes' key scopes ─────────────────────────────────────
+
+class _ScopedAuthorizer(FakeAuthorizer):
+    """A key with the given scopes; records whether the subscribe hop was asked at all."""
+
+    def __init__(self, scopes):
+        super().__init__(user={"user_id": 7, "scopes": list(scopes), "max_concurrent": 3},
+                         valid_key=API_KEY, auth_map=AUTH_MAP)
+        self.asked = 0
+
+    async def authorize_subscribe(self, api_key, meetings):
+        self.asked += 1
+        return await super().authorize_subscribe(api_key, meetings)
+
+
+async def test_a_bot_only_key_cannot_subscribe_to_a_transcript():
+    """`GET /transcripts/{platform}/{native_meeting_id}` takes `tx`; a subscription streams the same
+    transcript, so a `bot`-only key is refused it — and nothing is asked downstream or fanned in."""
+    ws = _WS(inbound=[SUBSCRIBE], api_key=API_KEY)
+    redis, auth = FakeRedis(), _ScopedAuthorizer(["bot"])
+    await _run_multiplex(ws, auth, redis)
+    errs = [f for f in ws.sent if f.get("type") == "error"]
+    assert errs and errs[0]["error"] == "insufficient_scope", ws.sent
+    assert not any(f.get("type") == "subscribed" for f in ws.sent)
+    assert auth.asked == 0
+    assert ws.close_code is None                     # the socket stays open for status frames
+
+
+async def test_a_browser_only_key_opens_no_socket():
+    """A key that may read no meeting status over REST (`GET /meetings` takes `tx`, `GET /bots/status`
+    takes `bot`) opens no socket: `insufficient_scope`, then close 4403."""
+    ws = _WS(inbound=[SUBSCRIBE], api_key=API_KEY)
+    redis, auth = FakeRedis(), _ScopedAuthorizer(["browser"])
+    await _run_multiplex(ws, auth, redis)
+    assert ws.sent and ws.sent[0]["error"] == "insufficient_scope"
+    assert ws.close_code == 4403
+    assert auth.asked == 0
+
+
+async def test_a_transcript_key_still_subscribes():
+    ws = _WS(inbound=[SUBSCRIBE], api_key=API_KEY, close_when_drained=False)
+    redis, auth = FakeRedis(), _ScopedAuthorizer(["tx"])
+    task = asyncio.ensure_future(_run_multiplex(ws, auth, redis))
+    for _ in range(10):
+        await asyncio.sleep(0)
+    assert any(f.get("type") == "subscribed" and f["meetings"] for f in ws.sent), ws.sent
+    ws.disconnect()
+    await asyncio.wait_for(task, timeout=2)
+
+
+async def test_the_socket_reads_the_scopes_from_the_route_table():
+    """The rule is the rows', not a literal: a table in which the transcript read takes `bot` lets a
+    `bot` key subscribe."""
+    from gateway.multiplex import STATUS_ROUTES, TRANSCRIPT_ROUTE
+    table = {TRANSCRIPT_ROUTE: frozenset({"bot"}), **{r: frozenset({"bot"}) for r in STATUS_ROUTES}}
+    ws = _WS(inbound=[SUBSCRIBE], api_key=API_KEY, close_when_drained=False)
+    redis, auth = FakeRedis(), _ScopedAuthorizer(["bot"])
+    task = asyncio.ensure_future(_run_multiplex(ws, auth, redis, route_scopes=table))
+    for _ in range(10):
+        await asyncio.sleep(0)
+    assert any(f.get("type") == "subscribed" and f["meetings"] for f in ws.sent), ws.sent
+    ws.disconnect()
+    await asyncio.wait_for(task, timeout=2)

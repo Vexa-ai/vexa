@@ -145,9 +145,13 @@ a harness reads its environment exactly as above and never learns that a catalog
   `ProviderFault{source: "model-provider", kind, provider, model, status, detail, remedy}`, `kind` one
   of `unpaid` (402) · `unauthorized` (401/403) · `rate_limited` (429) · `unavailable` (5xx, timeout)
   · `refused` (other 4xx). Every harness and provider adapter builds it with `faults.classify` and puts
-  it on the failed `done` as `fault` (additive); import it, never define a second one. A first
-  `done` that carries a `fault` is never "healed" as a stale resume — the provider refused the turn,
-  not the session.
+  it on the failed `done` as `fault` (additive); import it, never define a second one. Codex passes the
+  kind its own `codexErrorInfo` label names; claude-code's refusal to start a turn beside another
+  model credential is the worker's, not the provider's (`source: "agent-worker"`). A first `done` that
+  carries a `fault` is never "healed" as a stale resume — the provider refused the turn, not the session.
+- **The fault shape and its kinds are unit.v1's `Fault` (`contracts/unit.v1`).** `fault_wire.py` is
+  generated from it (`node core/agent/contracts/unit.v1/gen-faults.mjs`) — this brick's own copy, since it imports
+  nothing from product code — and `gate:schema` fails when it drifts; never edit it by hand.
 - Session ids are OPAQUE per-harness tokens; an alien/stale id must yield `done.ok=False` (the
   engine's stale-resume retry heals it).
 - **Every harness CLI starts as the tools user** (`ports.harness_identity_kwargs`, user `vexa-tools`

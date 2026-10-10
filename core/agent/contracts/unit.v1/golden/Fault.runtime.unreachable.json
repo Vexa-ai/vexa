@@ -1,0 +1,8 @@
+{
+  "source": "runtime",
+  "kind": "unreachable",
+  "op": "spawn",
+  "status": null,
+  "detail": "the agent runtime could not be reached",
+  "remedy": "Retry in a moment; if it persists, an operator should check that the runtime service is running."
+}

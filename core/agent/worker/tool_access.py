@@ -32,8 +32,11 @@ import time
 from datetime import datetime, timezone
 from typing import Callable, Iterable, Iterator, Optional
 
-SOURCE = "vexa-tools"
-ACCESS_EXPIRED = "access_expired"
+from shared import fault_wire
+
+# unit.v1's fault vocabulary (core/agent/contracts/unit.v1), generated into shared/fault_wire.py.
+SOURCE = fault_wire.VexaTools.SOURCE
+ACCESS_EXPIRED = fault_wire.VexaTools.ACCESS_EXPIRED
 #: The prefix every vexa MCP tool carries in a turn's events, on every harness.
 TOOL_PREFIX = "mcp__vexa__"
 
@@ -65,8 +68,8 @@ def fault(exp: int) -> dict:
 
 
 #: The worker could not confine the model's tools to their own user, so the turn did not run.
-WORKER_SOURCE = "agent-worker"
-TOOLS_UNCONFINED = "tools_unconfined"
+WORKER_SOURCE = fault_wire.AgentWorker.SOURCE
+TOOLS_UNCONFINED = fault_wire.AgentWorker.TOOLS_UNCONFINED
 
 
 def unconfined_fault(path: str, root: str, cause: str) -> dict:

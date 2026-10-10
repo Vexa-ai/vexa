@@ -142,9 +142,17 @@ def test_a_signed_identity_on_a_route_no_row_reaches_is_refused(client, method, 
     assert _scope_refused(client.request(method, path, headers=_signed(["bot", "tx"]), json={}))
 
 
-def test_the_edge_s_own_subscribe_hop_takes_any_key(client):
-    """`/ws` authorizes each meeting for whichever key opened the socket; it is not a row."""
-    r = client.post("/ws/authorize-subscribe", headers=_signed(["browser"]),
+@pytest.mark.parametrize("scopes", [["browser"], ["bot"], ["bot", "browser"]])
+def test_the_edge_s_subscribe_hop_refuses_a_key_that_may_not_read_transcripts(client, scopes):
+    """`/ws` subscribing opens a meeting's live transcript: the hop takes the transcript read's
+    scopes, as the gateway's socket does before it asks (R6-9)."""
+    r = client.post("/ws/authorize-subscribe", headers=_signed(scopes),
+                    json={"meetings": [{"platform": "google_meet", "native_meeting_id": "abc-defg-hij"}]})
+    assert _scope_refused(r), r.text
+
+
+def test_the_edge_s_subscribe_hop_takes_a_transcript_key(client):
+    r = client.post("/ws/authorize-subscribe", headers=_signed(["tx"]),
                     json={"meetings": [{"platform": "google_meet", "native_meeting_id": "abc-defg-hij"}]})
     assert not _scope_refused(r), r.text
 

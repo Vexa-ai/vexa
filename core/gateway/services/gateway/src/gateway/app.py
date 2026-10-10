@@ -1078,7 +1078,7 @@ def create_app(
     # ---- the /ws multiplex (carve of main.websocket_multiplex, main.py:2165-2340) ----
     @app.websocket("/ws")
     async def websocket_multiplex(ws: WebSocket):
-        await run_multiplex(ws, authorizer, redis)
+        await run_multiplex(ws, authorizer, redis, route_scopes=_route_scopes)
 
     # ---- deny by default, at BUILD time ----
     # The route table is now complete, so every route must have declared its scopes. Refusing to

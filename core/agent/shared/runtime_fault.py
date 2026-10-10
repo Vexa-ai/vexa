@@ -17,8 +17,9 @@ So every runtime call is translated HERE into one typed fault:
 (a kubectl line naming the namespace and pod), which belong in the operator's log, not on the
 person's screen. The raw text rides on the exception as `upstream` for that log and nowhere else.
 
-The boundary owns its vocabulary (ADR-0010 — no shared error base): the model provider's fault is
-`llm.faults.ProviderFault`, a sibling shape with the same `source` + `kind` convention.
+The boundary owns its translation (ADR-0010 — no shared error base): the model provider's fault is
+`llm.faults.ProviderFault`, a sibling shape with the same `source` + `kind` convention. Both shapes,
+and the kind vocabulary each may use, are unit.v1's `Fault` (`core/agent/contracts/unit.v1`).
 """
 from __future__ import annotations
 
@@ -28,27 +29,33 @@ import socket
 import urllib.error
 from typing import Optional
 
-SOURCE = "runtime"
+from shared import fault_wire
+
+# THE VOCABULARY IS unit.v1's, NOT THIS MODULE'S (S65). `shared/fault_wire.py` is generated from
+# core/agent/contracts/unit.v1/unit.schema.json, as are the model provider's and the terminal's
+# copies, and gate:schema fails when any of them drifts. A kind is added there, never here.
+_V = fault_wire.Runtime
+
+SOURCE = _V.SOURCE
 
 #: The runtime answered that it could not start the workload (runtime.v1 502).
-SPAWN_REFUSED = "spawn_refused"
+SPAWN_REFUSED = _V.SPAWN_REFUSED
 #: The person's workload quota is full (runtime.v1 429).
-QUOTA_EXCEEDED = "quota_exceeded"
+QUOTA_EXCEEDED = _V.QUOTA_EXCEEDED
 #: The runtime refused agent-api's caller credential (401/403).
-UNAUTHORIZED = "unauthorized"
+UNAUTHORIZED = _V.UNAUTHORIZED
 #: The runtime refused the request itself (400/422, or another 4xx).
-REFUSED = "refused"
+REFUSED = _V.REFUSED
 #: The runtime does not know the workload asked about (404).
-NOT_FOUND = "not_found"
+NOT_FOUND = _V.NOT_FOUND
 #: The runtime could not be reached at all: connection refused, DNS, a timeout.
-UNREACHABLE = "unreachable"
+UNREACHABLE = _V.UNREACHABLE
 #: The runtime answered with a server error other than a refused start.
-UNAVAILABLE = "unavailable"
+UNAVAILABLE = _V.UNAVAILABLE
 #: The runtime answered 2xx with a body that is not runtime.v1.
-BAD_RESPONSE = "bad_response"
+BAD_RESPONSE = _V.BAD_RESPONSE
 
-KINDS = (SPAWN_REFUSED, QUOTA_EXCEEDED, UNAUTHORIZED, REFUSED, NOT_FOUND, UNREACHABLE, UNAVAILABLE,
-         BAD_RESPONSE)
+KINDS = _V.KINDS
 
 #: What agent-api answers its own caller for each kind. A runtime that is down or full is a
 #: "try again later" (503); every other kind is an upstream that answered wrongly (502). Never 500:

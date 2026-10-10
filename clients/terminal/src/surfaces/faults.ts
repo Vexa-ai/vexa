@@ -10,14 +10,21 @@
  *      agent-api refused the chat's model pick before asking it (`control_plane/model_providers`);
  *    · `source: "vexa-tools"` — the turn ran past its tool access and its Vexa tool calls were
  *      refused (`worker/tool_access.py`);
- *    · `source: "agent-worker"` — the worker could not hand the turn's workspace to the user the
- *      model's tools run as, so it refused the turn (`worker/tool_access.py`);
+ *    · `source: "agent-worker"` — the worker refused to start the turn: it could not hand the turn's
+ *      workspace to the user the model's tools run as (`worker/tool_access.py`), or the environment
+ *      holds a model credential it could not remove (`llm/claude_code.py`);
  *    · `source: "agent-api"` / `"gateway"` — the terminal's own chat proxy could not get a typed
  *      answer at all (`app/api/chat/route.ts`, its floor under every 5xx).
  *  This file is the ONE place the chat turns that record into words: who failed, what kind of
  *  failure, the safe detail the server wrote, and the remedy. Every renderer reads it from here, so a
  *  bubble, a queued row and a test can never spell the same fault two ways.
+ *
+ *  THE VOCABULARY IS THE CONTRACT'S (unit.v1 `Fault`, S65). Every source and kind comes from
+ *  `./faultWire.ts`, generated from core/agent/contracts/unit.v1/unit.schema.json with the worker's
+ *  and agent-api's copies; the label tables below are typed by it, so a kind the contract adds and
+ *  this file does not name fails `tsc`, and one it names that the contract does not, too.
  */
+import type { FaultKind, FaultSource } from "./faultWire";
 
 export type Fault = {
   /** WHO failed — the dependency, never "something" */
@@ -56,24 +63,24 @@ export function readFault(x: unknown): Fault | null {
   };
 }
 
-const SOURCE_LABEL: Record<string, string> = {
+/** WHO failed, per contract source. Exported for the contract test, never for a second renderer. */
+export const SOURCE_LABEL: Readonly<Record<FaultSource, string>> = {
   runtime: "Agent runtime",
   "model-provider": "Model provider",
-  "agent-api": "Agent service",
-  gateway: "Vexa gateway",
   "vexa-tools": "Vexa tools",
   "agent-worker": "Your agent",
+  "agent-api": "Agent service",
+  gateway: "Vexa gateway",
 };
 
-const KIND_LABEL: Record<string, string> = {
-  // runtime (`shared/runtime_fault.KINDS`)
+/** HOW it failed, per contract kind — one label for a kind several sources share. */
+export const KIND_LABEL: Readonly<Record<FaultKind, string>> = {
   spawn_refused: "could not start your agent",
   quota_exceeded: "agent limit reached",
   unreachable: "unreachable",
   unavailable: "unavailable",
   bad_response: "answered unreadably",
   not_found: "agent not found",
-  // model provider (`llm/faults.KINDS`)
   unpaid: "out of credit",
   rate_limited: "rate limited",
   refused: "refused the request",
@@ -83,24 +90,26 @@ const KIND_LABEL: Record<string, string> = {
   not_configured: "model not set up for you",
   credential_missing: "provider credential not set",
   endpoint_refused: "your endpoint is not allowed",
-  // both
   unauthorized: "credential refused",
-  // the terminal's own proxy
   internal: "failed",
-  // the worker (`worker/tool_access.py`)
   access_expired: "tool access expired",
   tools_unconfined: "could not confine the model's tools",
+  credential_conflict: "another model credential is mounted",
 };
+
+/** A label table read with a source or kind a newer server may send and this release cannot know. */
+const label = (table: Readonly<Record<string, string>>, key: string): string | undefined =>
+  Object.prototype.hasOwnProperty.call(table, key) ? table[key] : undefined;
 
 /** WHO failed, in words. An unknown source is named as itself rather than hidden. */
 export function faultSource(f: Fault): string {
-  const base = SOURCE_LABEL[f.source] ?? f.source;
+  const base = label(SOURCE_LABEL, f.source) ?? f.source;
   return f.source === "model-provider" && f.provider && f.provider !== "unknown" ? `${base} (${f.provider})` : base;
 }
 
 /** WHAT KIND of failure, in words, with the status beside it when there was one. */
 export function faultKind(f: Fault): string {
-  const base = KIND_LABEL[f.kind] ?? f.kind.replace(/_/g, " ");
+  const base = label(KIND_LABEL, f.kind) ?? f.kind.replace(/_/g, " ");
   return typeof f.status === "number" && f.status > 0 ? `${base} (${f.status})` : base;
 }
 

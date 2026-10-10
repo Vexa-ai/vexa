@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Iterable, Iterator, Optional
 
 from llm.errors import looks_like_auth_failure, preflight_provider_guard, provider_host
+from llm import fault_wire
 from llm import faults as provider_faults
 from llm.ports import HarnessExec, close_event_stream, harness_identity_kwargs, harness_subprocess_env
 from llm.claude_skills import _link_skills_into_home
@@ -576,6 +577,19 @@ def clear_deployment_credential() -> Optional[str]:
     return None
 
 
+def credential_conflict_fault() -> dict:
+    """The refusal above, typed (P18, unit.v1 `Fault`): the worker would not start the turn in the
+    environment it was given — not the model provider, which was never asked."""
+    return {
+        "source": fault_wire.AgentWorker.SOURCE,
+        "kind": fault_wire.AgentWorker.CREDENTIAL_CONFLICT,
+        "status": None,
+        "detail": ("this turn runs on your own model endpoint, and the agent's environment holds "
+                   "another model credential it could not remove, so the turn was not started"),
+        "remedy": "An operator must not mount a model credential into the agent's config directory.",
+    }
+
+
 class ClaudeCodeHarness:
     """``HarnessPort`` adapter for the Claude Code CLI. ``exec_fn`` is injectable for tests."""
 
@@ -589,7 +603,8 @@ class ClaudeCodeHarness:
                  mcp_config: Optional[str] = None) -> Iterator[dict]:
         refused = clear_deployment_credential()
         if refused:
-            yield {"type": "done", "reply": refused, "sessionId": session, "ok": False}
+            yield {"type": "done", "reply": refused, "sessionId": session, "ok": False,
+                   "fault": credential_conflict_fault()}
             return
         effort = os.environ.get("VEXA_AGENT_EFFORT") or None
         argv = build_argv(prompt, allowed_tools=allowed_tools, session=session, model=model,

@@ -17,7 +17,8 @@ tier (`X-Internal-Secret`) is a service, not a key, and names no scopes; bot and
 carry no identity and authenticate themselves.
 
 DENY BY DEFAULT. A signed identity on a route that no row reaches is refused, apart from the edge's
-own hops (`EDGE_HOPS`), which carry the identity without being a row.
+own hops (`EDGE_HOPS`), which carry the identity without being a row and are held to the row whose
+data they serve.
 
 The rule is the edge's: a key passes when it holds ANY of the route's scopes
 (`gateway/app.py _authorize`), and is refused with the edge's body when it holds none.
@@ -39,9 +40,13 @@ RouteKey = Tuple[str, str]
 #: same way), found by walking up from this file.
 MANIFEST = Path("meetings") / "routes.v1.json"
 
-#: Calls the gateway makes ITSELF with a signed identity, which are not routes it serves: the `/ws`
-#: subscribe authorizes each meeting for whichever key opened the socket (`adapters.authorize_subscribe`).
-EDGE_HOPS: FrozenSet[RouteKey] = frozenset({("POST", "/ws/authorize-subscribe")})
+#: Calls the gateway makes ITSELF with a signed identity, which are not routes it serves, each held
+#: to the row whose data it serves: the `/ws` subscribe (`adapters.authorize_subscribe`) opens a
+#: meeting's live transcript, so it takes the transcript read's scopes — the rule the gateway's socket
+#: applies before it asks (`gateway/multiplex.py`).
+EDGE_HOPS: Dict[RouteKey, RouteKey] = {
+    ("POST", "/ws/authorize-subscribe"): ("GET", "/transcripts/{platform}/{native_meeting_id}"),
+}
 
 #: The answer the edge gives a key without the route's scope (`gateway/app.py`), so a client reads
 #: one refusal whichever side refused it.
@@ -113,9 +118,7 @@ def scope_gate(request: Request) -> None:
     key = _matched(request)
     if key is None:
         raise _refuse()  # a matched route that cannot be read is treated as undeclared
-    if key in EDGE_HOPS:
-        return
-    required = ROUTE_SCOPES.get(key)
+    required = ROUTE_SCOPES.get(EDGE_HOPS.get(key, key))
     if required is None:
         raise _refuse()
     held = {s.strip() for s in (request.headers.get("x-user-scopes") or "").split(",") if s.strip()}

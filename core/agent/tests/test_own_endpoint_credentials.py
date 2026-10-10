@@ -105,6 +105,11 @@ def test_a_stored_credential_that_cannot_be_removed_refuses_the_turn(tmp_path, m
         cred.parent.chmod(stat.S_IRWXU)
     assert seen == [], "the CLI was started"
     assert events[-1]["type"] == "done" and events[-1]["ok"] is False
+    # TYPED (P18, unit.v1 `Fault` — architecture pass 6, S66): the worker refused, not the provider, and the
+    # chat says so with the operator's remedy rather than a prose reply alone.
+    assert events[-1]["fault"]["source"] == "agent-worker"
+    assert events[-1]["fault"]["kind"] == "credential_conflict"
+    assert "operator" in events[-1]["fault"]["remedy"]
 
 
 def test_on_the_deployments_route_the_stored_credential_is_the_one_it_runs_on(tmp_path, monkeypatch):
