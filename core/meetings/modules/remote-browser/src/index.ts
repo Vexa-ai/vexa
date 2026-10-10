@@ -43,6 +43,10 @@ export { getAuthenticatedBrowserArgs, getBrowserSessionArgs, CDP_DEBUG_ARGS } fr
 // The one true persistent-context launch (sandboxed where it can be, with a scrubbed environment)
 export { launchPersistentBrowser } from './browser';
 export { browserEnv, BROWSER_ENV_KEYS, NO_SANDBOX_ARGS, launchWithSandbox } from './sandbox';
+// Where an authenticated browser may navigate (the meeting's host and the platform's domains)
+export {
+  restrictNavigation, authenticatedNavigationDomains, AUTH_NAVIGATION_DOMAINS, hostAllowed,
+} from './navigation';
 export type { LaunchPersistentOptions } from './browser';
 // Re-export the Playwright handles this brick's API traffics in, so consumers (the bot
 // composition root + its adapters) type against ONE Page/BrowserContext without a direct
