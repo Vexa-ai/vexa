@@ -747,6 +747,47 @@
       ]
     },
     {
+      "id": "storage-root-placeholders",
+      "fact": "the published values the bundled object storage's root key pair must never hold",
+      "kind": "set",
+      "enforced": true,
+      "canonical": "deploy/compose/docker-compose.yml — the storage service's refusal (the storage itself refuses to start on these)",
+      "how_to_agree": "one list: a value refused at the storage is refused by every step that mints, passes or starts with the pair, or one of them hands the storage a pair it will not start on (or keeps one it should have replaced)",
+      "why": "vexa-access-key / vexa-secret-key shipped as the storage root pair on compose and Lite, so every stack nobody configured shared one root key to every tenant's recordings. Compose's storage refuses them, mint-dev-env.sh and Lite's storage-credentials.sh replace them, Lite's Makefile refuses them before starting its sidecar, and Lite's entrypoint refuses them with storage configured: five spellings of one list drift unless they are held together.",
+      "sites": [
+        {
+          "path": "deploy/compose/docker-compose.yml",
+          "pattern": "^\\s*\"\"\\|(vexa-access-key\\|[^)\\n]*)\\)\\s*$",
+          "flags": "m",
+          "all": true,
+          "note": "the storage service's refusal, for the access and the secret key"
+        },
+        {
+          "path": "deploy/compose/mint-dev-env.sh",
+          "pattern": "case \"\\$1\" in \"\"\\|(vexa-access-key\\|[^)\\n]*)\\) return 0;;",
+          "note": "replaced by a minted pair"
+        },
+        {
+          "path": "deploy/lite/storage-credentials.sh",
+          "pattern": "^\\s*\"\"\\|(vexa-access-key\\|[^)\\n]*)\\) return 0;;",
+          "flags": "m",
+          "note": "replaced by a minted pair in .env"
+        },
+        {
+          "path": "deploy/lite/Makefile",
+          "pattern": "^STORAGE_PUBLISHED := \"\"\\|(.*)$",
+          "flags": "m",
+          "note": "storage-up refuses these before starting the sidecar"
+        },
+        {
+          "path": "deploy/lite/entrypoint.sh",
+          "pattern": "^\\s*\"\"\\|(vexa-access-key\\|[^)\\n]*)\\)$",
+          "flags": "m",
+          "note": "Lite's boot refusal with MINIO_ENDPOINT set"
+        }
+      ]
+    },
+    {
       "id": "redis-password-placeholders",
       "fact": "the values compose's Redis refuses as REDIS_PASSWORD",
       "kind": "set",
