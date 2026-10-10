@@ -1132,6 +1132,14 @@ for bad in allkeys-lru volatile-lru allkeys-random volatile-ttl; do
 done
 echo "  OK: an eviction policy for Redis is refused at render"
 
+# The runtime creates each spawned Pod's credential Secret and may do nothing else with Secrets.
+role="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --show-only templates/rbac-runtime.yaml \
+  | sed -n '/^kind: Role$/,/^---/p' | grep -v '^ *#')"
+if grep -A1 'resources: \["secrets"\]' <<< "$role" | grep -q 'verbs: \["create"\]$' \
+   && [ "$(grep -ci 'secret' <<< "$role")" -eq 1 ]; then
+  echo "  OK: the runtime may create Secrets (a spawned Pod's credential env) and nothing more"
+else echo "  FAIL: the runtime's Role over Secrets is not create-only"; fail=1; fi
+
 # N-7: the namespace default-deny, both directions, with explicit allows for the chart's Pods.
 np_doc() { awk -v n="name: $1" '$0 ~ "^  "n"$"{f=1} f{print} f&&/^---/{exit}' <<< "$RENDER"; }
 dd="$(np_doc vexa-vexa-default-deny)"

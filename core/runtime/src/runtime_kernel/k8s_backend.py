@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import subprocess
 import time
 from typing import Optional
@@ -116,6 +117,16 @@ def _kubectl(*args: str, check: bool = True, stdin: Optional[str] = None) -> sub
     if check and r.returncode != 0:
         raise RuntimeError(f"kubectl {' '.join(args)} failed: {r.stderr.strip()}")
     return r
+
+
+def _secret_class(forwarded: dict[str, str]) -> set[str]:
+    """The forwarded keys that are credentials: those the runtime's config contract marks
+    ``secret`` — and any it does not declare at all, which are treated as secret rather than
+    guessed to be harmless."""
+    from .config_preflight import load_declaration
+
+    declared = {k["key"]: bool(k.get("secret")) for k in load_declaration().get("keys") or []}
+    return {k for k in forwarded if declared.get(k, True)}
 
 
 def _stop_grace_sec() -> int:
@@ -236,6 +247,7 @@ def build_pod(
     resources: Optional[Resources],
     overlay_env: Optional[dict[str, str]] = None,
     instance: str = "",
+    secret_env: Optional[tuple[str, tuple[str, ...]]] = None,
 ) -> dict:
     """The COMPLETE Pod object a spawn submits — every field the workload needs, in one manifest.
 
@@ -263,6 +275,12 @@ def build_pod(
         "image": runnable.image,
         "env": [{"name": k, "value": v} for k, v in env.items()],
     }
+    if secret_env:
+        # ``(secret name, keys)``: values that are credentials reach the container by reference to
+        # the workload's own Secret, never as literal values in the Pod spec.
+        secret_name, keys = secret_env
+        container["env"] += [{"name": k, "valueFrom": {"secretKeyRef": {"name": secret_name, "key": k}}}
+                             for k in keys if k not in env]
     if runnable.command:
         # Explicit argv REPLACES the image ENTRYPOINT. Absent ⇒ the image's own entrypoint boots,
         # which is what the shipped meeting-bot image requires (#675).
@@ -366,8 +384,14 @@ class K8sBackend:
         name = self._pname(workload_id)
         # The profile's forward list (the worker's model, its dials and caps), from the runtime's own
         # environment, exactly as the docker and process backends forward it: a key the spec
-        # already carries is never refilled.
-        env = {**env, **forwarded_env(runnable.forward_env, os.environ, env)}
+        # already carries is never refilled. A key the runtime's config contract marks secret goes
+        # into a Secret of this Pod's own (created once the Pod exists, owned by it, so it is
+        # collected with it) and reaches the container by secretKeyRef; the rest stays plain env.
+        forwarded = forwarded_env(runnable.forward_env, os.environ, env)
+        secret_keys = _secret_class(forwarded)
+        hidden = {k: v for k, v in forwarded.items() if k in secret_keys}
+        env = {**env, **{k: v for k, v in forwarded.items() if k not in secret_keys}}
+        secret_name = f"{name[:240]}-env-{secrets.token_hex(4)}" if hidden else None
         # The workspace mount set and the runtime's OWN scheduling constraints both shape the Pod.
         # The latter live in the runtime's PROCESS env (the chart sets them on the runtime
         # Deployment), not in the per-workload spec.env — which is built per-workload by different
@@ -382,11 +406,12 @@ class K8sBackend:
             resources=resources,
             overlay_env={**env, **_runtime_scheduling_env()},
             instance=self._instance,
+            secret_env=(secret_name, tuple(sorted(hidden))) if hidden else None,
         )
         manifest = json.dumps(pod)
         self._exited.pop(name, None)
         try:
-            _kubectl("create", "-f", "-", *self._ns_args(), stdin=manifest)
+            self._create(name, workload_id, manifest, secret_name, hidden)
             return WorkloadHandle(id=workload_id, impl=name)
         except RuntimeError as exc:
             if "AlreadyExists" not in str(exc):
@@ -402,8 +427,38 @@ class K8sBackend:
             if (existing.get("status") or {}).get("phase") not in TERMINAL_PHASES:
                 return WorkloadHandle(id=workload_id, impl=name)
             self._delete_and_wait(name)
-        _kubectl("create", "-f", "-", *self._ns_args(), stdin=manifest)
+        self._create(name, workload_id, manifest, secret_name, hidden)
         return WorkloadHandle(id=workload_id, impl=name)
+
+    def _create(self, name: str, workload_id: str, manifest: str, secret_name: Optional[str],
+                hidden: dict[str, str]) -> None:
+        """Create the Pod, then (when it has secret-class env) its Secret, owned by the Pod so the
+        cluster deletes it with the Pod. The Pod's container waits for the Secret it references; a
+        Secret that cannot be created takes the Pod down with it. The Secret is named per
+        incarnation, so the runtime only ever creates Secrets: it never reads or deletes one."""
+        if not secret_name:
+            _kubectl("create", "-f", "-", *self._ns_args(), stdin=manifest)
+            return
+        r = _kubectl("create", "-f", "-", "-o", "json", *self._ns_args(), stdin=manifest)
+        try:
+            uid = ((json.loads(r.stdout or "{}").get("metadata") or {}).get("uid")
+                   or ((self._pod(name) or {}).get("metadata") or {}).get("uid"))
+            if not uid:
+                raise RuntimeError(f"pod {name} has no uid to own its env Secret")
+            secret = {
+                "apiVersion": "v1", "kind": "Secret", "type": "Opaque",
+                "metadata": {
+                    "name": secret_name,
+                    "labels": {MANAGED_LABEL: "true", WORKLOAD_ID_LABEL: k8s_label_value(workload_id),
+                               INSTANCE_LABEL: k8s_label_value(self._instance)},
+                    "ownerReferences": [{"apiVersion": "v1", "kind": "Pod", "name": name, "uid": uid}],
+                },
+                "stringData": dict(hidden),
+            }
+            _kubectl("create", "-f", "-", *self._ns_args(), stdin=json.dumps(secret))
+        except Exception:
+            _kubectl("delete", "pod", name, "--ignore-not-found", "--wait=false", *self._ns_args(), check=False)
+            raise
 
     def _pod(self, name: str) -> Optional[dict]:
         r = _kubectl("get", "pod", name, "-o", "json", *self._ns_args(), check=False)

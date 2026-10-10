@@ -160,6 +160,16 @@ sandbox, e.g. under `RuntimeDefault` with `botSandbox.enabled=false`).
 Without these, set `runtime.botSandbox.enabled=false`: bots then run under `runtime/default`, and
 their browsers run unsandboxed (said in each bot's log).
 
+## Credentials the runtime forwards into spawned Pods
+
+The runtime forwards a profile's settings from its own environment into each spawned Pod (an agent
+worker's model, its caps, its provider keys). A key the runtime's config contract marks `secret`
+(and any key the contract does not declare) never appears as a value in the Pod spec: the runtime
+puts it in a Secret of that Pod's own, owned by the Pod so the cluster deletes it with the Pod, and
+the container reads it by `secretKeyRef`. The runtime's Role may create Secrets and nothing else
+with them (no read, list or delete); each Secret is named per Pod incarnation. The Pod's container
+starts once its Secret exists, a moment after the Pod is created.
+
 ## Redis never evicts
 
 The chart's Redis holds security state, not only a cache: identity admits a worker's delegation
