@@ -26,6 +26,13 @@ curl -H "X-API-Key: $API_KEY" "$API_BASE/bots/status"
   it. Admit it like any guest. A run that ended in the lobby says so:
   [`awaiting_admission_timeout` or `awaiting_admission_rejected`](/troubleshooting/completion-reasons),
   and `automatic_leave.max_wait_for_admission` sets how long it waits.
+- **Teams bot never asks to join (`teams_prejoin_blocked`)** — Teams refuses a guest name that
+  contains anything other than letters, numbers, spaces and `- ' . _ @`, such as parentheses or a
+  colon. Teams then keeps **Join now** disabled, so no host sees a request to admit the bot. The run
+  ends `join_failure`, and its `last_error` starts with `teams_prejoin_blocked`, quotes the rule Teams
+  showed and lists the characters it refused. Rename the bot: see
+  [Bot participant name](/configuration#bot-participant-name). Older bots reported this case as
+  waiting in the lobby until `max_wait_for_admission` ran out.
 - **Concurrency cap** — a user can run at most `max_concurrent_bots` bots at once (set when the user was
   created). Stop an existing bot or raise the cap.
 

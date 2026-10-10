@@ -158,6 +158,18 @@ terminal's `build.args` in compose) and rebuild the image — a rename then cost
 which is why the runtime variable is the better knob. Direct `joinMeeting` callers read
 `DEFAULT_BOT_NAME` too and fall back to `Vexa Join Layer`.
 
+<Warning>
+**Microsoft Teams only accepts letters, numbers, spaces and `- ' . _ @` in a guest's name.** A name
+such as `Notetaker (recording)` is refused: Teams keeps its **Join now** button disabled, so the bot
+cannot ask to join any Teams meeting. The bot stops in under half a minute, on the Teams
+pre-join screen. The run ends `join_failure`, and its `last_error` starts with
+`teams_prejoin_blocked` and quotes the rule Teams showed. Pick a name that fits the rule, for example
+`Notetaker - recording`, in `DEFAULT_BOT_NAME`, in `meetingApi.defaultBotName` (Helm), in a calendar
+connection's bot name, or in the `bot_name` of a `POST /bots` request. Google Meet and Zoom accept
+parentheses, so a name that works there can still fail on Teams. Letters with accents and other
+scripts are fine.
+</Warning>
+
 ## Database & storage
 
 | Variable | Default | Purpose |
