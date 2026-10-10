@@ -63,3 +63,16 @@ def test_a_writer_binds_and_anyone_may_unbind_their_own():
     pid = client.post("/meetings", json={"title": "z", "workspace_id": "team"}, headers=WRITER).json()["id"]
     # unbinding takes nothing away from the workspace's members they did not already lose
     assert client.patch(f"/meetings/{pid}", json={"workspace_id": None}, headers=VIEWER).status_code == 200
+
+
+def test_an_unwatched_worker_cannot_bind_even_where_it_could_write():
+    """R1801-8: binding is a person's act. A delegated worker with nobody in the loop is refused on
+    planned create and patch, whatever its write set says; a human-regime worker is not."""
+    unwatched = {**WRITER, "x-user-regime": "autonomous", "x-user-delegation-workspaces": "team"}
+    human = {**WRITER, "x-user-regime": "human", "x-user-delegation-workspaces": "*"}
+    client, store, _ = _client()
+    r = client.post("/meetings", json={"title": "x", "workspace_id": "team"}, headers=unwatched)
+    assert r.status_code == 403 and r.json()["detail"]["reason"] == "human_session_required"
+    mid = client.post("/meetings", json={"title": "y"}, headers=unwatched).json()["id"]
+    assert client.patch(f"/meetings/{mid}", json={"workspace_id": "team"}, headers=unwatched).status_code == 403
+    assert client.patch(f"/meetings/{mid}", json={"workspace_id": "team"}, headers=human).status_code == 200

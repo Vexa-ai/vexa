@@ -26,7 +26,16 @@ def writable_workspaces(headers: Mapping[str, str]) -> "set[str]":
 
 
 def require_writable(workspace_id: Optional[str], headers: Mapping[str, str]) -> None:
-    """Refuse (403) binding to a workspace the caller cannot write. ``None`` (unbind) always passes."""
+    """Refuse (403) binding to a workspace the caller cannot write. ``None`` (unbind) always passes.
+
+    BINDING IS A PERSON'S ACT (R1801-8). It publishes a meeting to every member of a workspace, so a
+    worker dispatched with nobody in the loop (an unwatched regime) is refused with the shared
+    refusal on every path that binds — planned create, both PATCH forms, the bind route — exactly as
+    `require_person` refuses it on the routes that carry that dependency."""
+    from . import identity_token
+
+    if workspace_id and identity_token.is_unwatched(headers):
+        raise HTTPException(status_code=403, detail=identity_token.REFUSAL)
     if workspace_id and workspace_id not in writable_workspaces(headers):
         raise HTTPException(
             status_code=403,
