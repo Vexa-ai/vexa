@@ -52,6 +52,8 @@ jobs:
           #    two npm locks: the terminal's (its build stage installs it, its runtime tree removes it) and
           #    the retiring dashboard's, whose image optimizer uses it (license-exceptions.json,
           #    security/known-advisories.md). The pnpm tree loads core/meetings/modules/no-image-backend.
+          #  - json-schema 0.4.0 (the dashboard, via @ai-sdk/provider) declares "(AFL-2.1 OR BSD-3-Clause)"
+          #    and is taken under BSD-3-Clause; GitHub's detector reads its licence files as AND.
           allow-dependencies-licenses: >-
             pkg:pypi/typing-extensions,
             pkg:npm/%40img/sharp-libvips-darwin-arm64,
@@ -67,4 +69,5 @@ jobs:
             pkg:npm/%40img/sharp-wasm32,
             pkg:npm/%40img/sharp-win32-arm64,
             pkg:npm/%40img/sharp-win32-ia32,
-            pkg:npm/%40img/sharp-win32-x64
+            pkg:npm/%40img/sharp-win32-x64,
+            pkg:npm/json-schema

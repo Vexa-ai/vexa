@@ -41,6 +41,8 @@ Categories A and B (LGPL is Category X there). Its reviewed exceptions:
   runtime tree, and `services/dashboard/package-lock.json`, the retiring 0.10 dashboard whose `next/image`
   uses it ([`license-exceptions.json`](../license-exceptions.json)). The pnpm tree, and so the bot and
   Lite, load `core/meetings/modules/no-image-backend` instead.
+- **`json-schema`** 0.4.0 (the dashboard, through `@ai-sdk/provider`) declares `(AFL-2.1 OR BSD-3-Clause)`
+  and is taken under BSD-3-Clause; GitHub's detector reads its licence files as an AND.
 
 ## Third-party images (Trivy)
 
