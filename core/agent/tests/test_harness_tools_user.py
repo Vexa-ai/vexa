@@ -115,6 +115,7 @@ def _refuse_chmod(monkeypatch):
         raise PermissionError(1, "Operation not permitted")
 
     monkeypatch.setattr(ports.os, "chmod", refuse)
+    monkeypatch.setattr(ports.os, "fchmod", refuse)
 
 
 def test_a_path_that_cannot_be_handed_over_is_named_and_never_stops_the_switch(as_root, monkeypatch,
@@ -133,6 +134,38 @@ def test_a_path_that_cannot_be_handed_over_is_named_and_never_stops_the_switch(a
     assert caught.value.root == str(ws) and caught.value.cause == "Operation not permitted"
     assert ports.tools_identity() == (uid, gid)
     assert ports.harness_identity_kwargs() == {"user": uid, "group": gid, "extra_groups": [], "umask": 0o002}
+
+
+def test_an_entry_swapped_for_a_link_after_the_walk_is_never_changed_through_it(as_root, monkeypatch,
+                                                                                tmp_path):
+    """The grant runs as root while a process the tools user left behind may still be running. An
+    entry looked at, then swapped for a link before its mode is changed, must not have the change
+    made to whatever the link points at (``chmod`` by name follows the link)."""
+    victim = tmp_path / "victim"
+    victim.write_text("theirs")
+    os.chmod(victim, 0o600)
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / "f").write_text("x")
+    os.chmod(ws / "f", 0o600)
+    swapped = []
+
+    def swap_after(real):
+        def look(path, *a, **kw):
+            out = real(path, *a, **kw)
+            if not swapped and str(path).endswith("f") and not str(path).endswith("victim"):
+                swapped.append(path)
+                os.rename(ws / "f", ws / "f-real")
+                os.symlink(victim, ws / "f")
+            return out
+        return look
+
+    monkeypatch.setattr(ports.os, "stat", swap_after(os.stat))
+    monkeypatch.setattr(ports.os, "lstat", swap_after(os.lstat))
+    ports.grant_tools_access([ws])
+    monkeypatch.undo()
+    assert swapped
+    assert stat.S_IMODE(victim.stat().st_mode) == 0o600          # never changed through the link
 
 
 def test_a_turn_whose_grant_fails_is_refused_with_a_typed_fault_not_run_as_root(as_root, monkeypatch,

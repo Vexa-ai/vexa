@@ -31,6 +31,7 @@ import subprocess
 from pathlib import Path
 from typing import Callable, Iterable, Iterator, Optional, Protocol
 
+from llm import workspace_paths as wpaths
 from llm.gitexec import run_git
 
 _log = logging.getLogger("llm.ports")
@@ -144,6 +145,68 @@ def harness_identity_kwargs() -> dict:
     return {"user": uid, "group": gid, "extra_groups": [], "umask": 0o002}
 
 
+# ── changing ownership and modes under a work tree, by descriptor ─────────────────────────────────
+# The trees below are written by the tools user, and these run as root at the start of every turn,
+# while a process the tools user left running could still be changing them. So nothing here acts by
+# name: the walk is ``os.fwalk`` (descriptor-based, no link followed), each entry is opened without
+# following a link (``workspace_paths`` flags) and kept only if it is still the entry the walk saw,
+# and the change is made on that descriptor (``fchown``/``fchmod``). A name swapped for a link after
+# the walk listed it is skipped, never followed — ``chmod`` by name would have changed whatever the
+# link pointed at.
+_EROFS = 30
+
+
+def _open_entry(dir_fd: int, name: str) -> "tuple[int, os.stat_result] | None":
+    """``(descriptor, stat)`` for the entry ``name`` under ``dir_fd``, opened without following a
+    link; None when it is a link, is gone, cannot be opened (a socket) or changed between the look and
+    the open."""
+    try:
+        seen = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+    except OSError:
+        return None
+    if stat.S_ISLNK(seen.st_mode):
+        return None
+    flags = wpaths.DIR_NOFOLLOW if stat.S_ISDIR(seen.st_mode) else wpaths.FILE_NOFOLLOW
+    try:
+        fd = os.open(name, flags, dir_fd=dir_fd)
+    except OSError:
+        return None
+    st = os.fstat(fd)
+    if (st.st_dev, st.st_ino) != (seen.st_dev, seen.st_ino):
+        os.close(fd)
+        return None
+    return fd, st
+
+
+def _walk_entries(top_fd: int, *, skip_git: "Callable[[int, str], None] | None" = None):
+    """``(dir_fd, name)`` for every entry below the folder ``top_fd``, by descriptor, entering no
+    link. With ``skip_git``, a ``.git`` folder is not walked: ``skip_git(dir_fd, label)`` is called
+    for it instead, and each folder holding one is yielded as ``(dir_fd, None)`` once."""
+    for dirpath, dirnames, filenames, dfd in os.fwalk(".", dir_fd=top_fd, follow_symlinks=False):
+        if skip_git is not None:
+            if ".git" in dirnames:
+                dirnames.remove(".git")
+                skip_git(dfd, os.path.normpath(os.path.join(dirpath, ".git")))
+            try:
+                os.stat(".git", dir_fd=dfd, follow_symlinks=False)
+                yield dfd, None, dirpath
+            except OSError:
+                pass
+        for name in dirnames:
+            yield dfd, name, dirpath
+        for name in filenames:
+            if skip_git is not None and name == ".git":
+                continue                             # a `gitdir:` file is git's, not the turn's
+            yield dfd, name, dirpath
+
+
+def _change(fd: int, st: os.stat_result, *, uid: int = -1, gid: int = -1, mode: "int | None" = None) -> None:
+    if (uid != -1 and st.st_uid != uid) or (gid != -1 and st.st_gid != gid):
+        os.fchown(fd, uid, gid)
+    if mode is not None and stat.S_IMODE(st.st_mode) != mode:
+        os.fchmod(fd, mode)
+
+
 def _keep_git_private(gitdir: str, tools_uid: int) -> None:
     """A repository's own directory is never the tools user's to write: the worker's write-back and
     agent-api run git there, and git trusts what it finds in it. Everything under ``gitdir`` loses
@@ -152,34 +215,42 @@ def _keep_git_private(gitdir: str, tools_uid: int) -> None:
     itself is left alone and logged — it is not the platform's repository, and the write-back's git
     refuses it (``gitexec``: owned by neither this process nor the owner of the work tree)."""
     try:
-        top = os.lstat(gitdir)
+        fd = os.open(gitdir, wpaths.DIR_NOFOLLOW)
     except OSError:
         return
-    if not stat.S_ISDIR(top.st_mode):
-        return
+    try:
+        _keep_git_private_fd(fd, gitdir, tools_uid)
+    finally:
+        os.close(fd)
+
+
+def _keep_git_private_fd(git_fd: int, label: str, tools_uid: int) -> None:
+    """:func:`_keep_git_private` on the open repository directory ``git_fd``."""
+    top = os.fstat(git_fd)
     if top.st_uid == tools_uid and top.st_uid != os.geteuid():
         _log.error("%s is owned by the tools user, not the platform — left as it is; git refuses it",
-                   gitdir)
+                   label)
         return
     owner = top.st_uid
 
-    def close(p: str) -> None:
+    def close(fd: int, st: os.stat_result, where: str) -> None:
         try:
-            st = os.lstat(p)
-            if stat.S_ISLNK(st.st_mode):
-                return
-            if st.st_uid == tools_uid and tools_uid != owner:
-                os.lchown(p, owner, -1)
-            if st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
-                os.chmod(p, stat.S_IMODE(st.st_mode) & ~(stat.S_IWGRP | stat.S_IWOTH))
+            _change(fd, st, uid=owner if (st.st_uid == tools_uid and tools_uid != owner) else -1,
+                    mode=(stat.S_IMODE(st.st_mode) & ~(stat.S_IWGRP | stat.S_IWOTH)))
         except OSError as exc:
-            if getattr(exc, "errno", None) != 30:    # EROFS: nobody can write it anyway
-                _log.error("cannot keep %s from the tools user: %s", p, exc)
+            if getattr(exc, "errno", None) != _EROFS:  # nobody can write it anyway
+                _log.error("cannot keep %s from the tools user: %s", where, exc)
 
-    close(gitdir)
-    for dirpath, dirnames, filenames in os.walk(gitdir):
-        for name in (*dirnames, *filenames):
-            close(os.path.join(dirpath, name))
+    close(git_fd, top, label)
+    for dfd, name, dirpath in _walk_entries(git_fd):
+        opened = _open_entry(dfd, name)
+        if opened is None:
+            continue
+        fd, st = opened
+        try:
+            close(fd, st, os.path.join(label, dirpath, name))
+        finally:
+            os.close(fd)
 
 
 def grant_tools_access(paths: Iterable["str | Path"]) -> bool:
@@ -205,44 +276,58 @@ def grant_tools_access(paths: Iterable["str | Path"]) -> bool:
         return True
     tools_uid, gid = ident
     failed: list[tuple[str, str, str]] = []           # (path, granted root, cause)
-    current = ""
 
-    def grant(p: str, is_dir: bool, sticky: bool = False) -> None:
+    def grant(fd: int, st: os.stat_result, where: str, root: str, sticky: bool = False) -> None:
+        is_dir = stat.S_ISDIR(st.st_mode)
+        want = stat.S_IRGRP | stat.S_IWGRP | ((stat.S_IXGRP | stat.S_ISGID) if is_dir else 0)
+        if sticky:
+            want |= stat.S_ISVTX
+        mode = stat.S_IMODE(st.st_mode)
         try:
-            st = os.lstat(p)
-            if stat.S_ISLNK(st.st_mode):
-                return
-            want = stat.S_IRGRP | stat.S_IWGRP | ((stat.S_IXGRP | stat.S_ISGID) if is_dir else 0)
-            if sticky:
-                want |= stat.S_ISVTX
-            if st.st_gid != gid:
-                os.lchown(p, -1, gid)
-            if (st.st_mode & want) != want:
-                os.chmod(p, stat.S_IMODE(st.st_mode) | want)
+            _change(fd, st, gid=gid, mode=mode | want)
         except OSError as exc:
-            if getattr(exc, "errno", None) == 30:    # EROFS: a read-only mount, read access suffices
+            if getattr(exc, "errno", None) == _EROFS:  # a read-only mount, read access suffices
                 return
             cause = os.strerror(exc.errno) if getattr(exc, "errno", None) else (str(exc) or type(exc).__name__)
-            failed.append((p, current, cause))
-            _log.error("cannot hand %s to the tools user: %s", p, exc)
+            failed.append((where, root, cause))
+            _log.error("cannot hand %s to the tools user: %s", where, exc)
+
+    def keep_git(dfd: int, label: str) -> None:
+        try:
+            git_fd = os.open(".git", wpaths.DIR_NOFOLLOW, dir_fd=dfd)
+        except OSError:
+            return
+        try:
+            _keep_git_private_fd(git_fd, label, tools_uid)
+        finally:
+            os.close(git_fd)
 
     for root in paths:
         root = str(root)
-        current = root
-        if not root or not os.path.isdir(root) or os.path.islink(root):
+        if not root:
             continue
-        grant(root, True)
-        for dirpath, dirnames, filenames in os.walk(root):
-            if ".git" in dirnames:
-                dirnames.remove(".git")              # never walked into, never granted
-                _keep_git_private(os.path.join(dirpath, ".git"), tools_uid)
-            if os.path.lexists(os.path.join(dirpath, ".git")):
-                grant(dirpath, True, sticky=True)    # a .git here: nobody else's entry is renamed
-            for name in dirnames:
-                grant(os.path.join(dirpath, name), True)
-            for name in filenames:
-                if name != ".git":                   # a `gitdir:` file is git's, not the turn's
-                    grant(os.path.join(dirpath, name), False)
+        try:
+            top = os.open(root, wpaths.DIR_NOFOLLOW)       # a link or a missing root: nothing to do
+        except OSError:
+            continue
+        try:
+            grant(top, os.fstat(top), root, root)
+            for dfd, name, dirpath in _walk_entries(
+                    top, skip_git=lambda d, label: keep_git(d, os.path.join(root, label))):
+                if name is None:                         # a .git here: nobody else's entry is renamed
+                    grant(dfd, os.fstat(dfd), os.path.normpath(os.path.join(root, dirpath)), root,
+                          sticky=True)
+                    continue
+                opened = _open_entry(dfd, name)
+                if opened is None:
+                    continue
+                fd, st = opened
+                try:
+                    grant(fd, st, os.path.normpath(os.path.join(root, dirpath, name)), root)
+                finally:
+                    os.close(fd)
+        finally:
+            os.close(top)
     if failed:
         _log.error("the model's tools could not be given what this turn needs (%d path(s)) — the "
                    "turn is refused; its harness never runs them as this process", len(failed))
@@ -268,35 +353,41 @@ def show_tools(paths: Iterable["str | Path"]) -> bool:
     _tools_uid, gid = ident
     ok = True
 
-    def show(p: str, is_dir: bool) -> None:
+    def show(fd: int, st: os.stat_result, where: str) -> None:
         nonlocal ok
+        is_dir = stat.S_ISDIR(st.st_mode)
+        mode = stat.S_IMODE(st.st_mode)
+        want = (mode | stat.S_IRGRP | (stat.S_IXGRP if is_dir else 0)) \
+            & ~(stat.S_IWGRP | stat.S_IWOTH | stat.S_ISGID)
         try:
-            st = os.lstat(p)
-            if stat.S_ISLNK(st.st_mode):
-                return
-            mode = stat.S_IMODE(st.st_mode)
-            want = (mode | stat.S_IRGRP | (stat.S_IXGRP if is_dir else 0)) \
-                & ~(stat.S_IWGRP | stat.S_IWOTH | stat.S_ISGID)
-            if st.st_gid != gid:
-                os.lchown(p, -1, gid)
-            if mode != want:
-                os.chmod(p, want)
+            _change(fd, st, gid=gid, mode=want)
         except OSError as exc:
-            if getattr(exc, "errno", None) == 30:    # EROFS: nobody can write it anyway
+            if getattr(exc, "errno", None) == _EROFS:  # nobody can write it anyway
                 return
             ok = False
-            _log.error("cannot show %s to the tools user read-only: %s", p, exc)
+            _log.error("cannot show %s to the tools user read-only: %s", where, exc)
 
     for root in paths:
         root = str(root)
-        if not root or not os.path.isdir(root) or os.path.islink(root):
+        if not root:
             continue
-        show(root, True)
-        for dirpath, dirnames, filenames in os.walk(root):
-            for name in dirnames:
-                show(os.path.join(dirpath, name), True)
-            for name in filenames:
-                show(os.path.join(dirpath, name), False)
+        try:
+            top = os.open(root, wpaths.DIR_NOFOLLOW)
+        except OSError:
+            continue
+        try:
+            show(top, os.fstat(top), root)
+            for dfd, name, dirpath in _walk_entries(top):
+                opened = _open_entry(dfd, name)
+                if opened is None:
+                    continue
+                fd, st = opened
+                try:
+                    show(fd, st, os.path.normpath(os.path.join(root, dirpath, name)))
+                finally:
+                    os.close(fd)
+        finally:
+            os.close(top)
     return ok
 
 
@@ -585,32 +676,7 @@ def _unlink_in_tree(work: Path, rel: str) -> None:
     never followed — the link itself is what ``added`` names and removes, not a file in whatever it
     points at. A directory component that is a link (or any resolution error) simply stops the walk;
     the top-level ``policy`` symlink is handled by the leaf branch below."""
-    parts = rel.split("/")
-    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
-    try:
-        dir_fd = os.open(work, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0))
-    except OSError:
-        return
-    try:
-        for part in parts[:-1]:
-            try:
-                nxt = os.open(part, flags, dir_fd=dir_fd)
-            except OSError:
-                return                              # a link or a missing dir on the way: stop
-            os.close(dir_fd)
-            dir_fd = nxt
-        name = parts[-1]
-        try:
-            st = os.lstat(name, dir_fd=dir_fd)
-        except OSError:
-            return
-        if stat.S_ISLNK(st.st_mode) or stat.S_ISREG(st.st_mode):
-            try:
-                os.unlink(name, dir_fd=dir_fd)
-            except OSError:
-                pass
-    finally:
-        os.close(dir_fd)
+    wpaths.unlink_inside(work, rel)
 
 
 def _revert_policy_writes(work: Path, base_sha: Optional[str]) -> list[str]:
