@@ -11,7 +11,9 @@
  *   - with a forward, a path is the edge prefix followed by literal segments and whole `{name}`
  *     parameters, no name twice, or the prefix's `{path:path}` catch-all;
  *   - a `verbs` row is strictly under the edge prefix and declared once, as agent-api's
- *     `control_plane/route_policy.py` refuses at boot.
+ *     `control_plane/route_policy.py` refuses at boot;
+ *   - a row's `upstream` names each `{name}` parameter once, and only parameters its own path
+ *     matches, so the edge can fill the hop from what it matched.
  * Run: node validate.mjs [--check]
  */
 import Ajv2020 from "ajv/dist/2020.js";
@@ -40,6 +42,8 @@ function forwardable(tail) {
   }
   return true;
 }
+/** The whole-segment `{name}` parameters of a template, in order. */
+const params = (path) => path.split("/").map((s) => PARAM.exec(s)).filter(Boolean).map((m) => m[1]);
 /** The cross-row refusals for one manifest, or [] when it holds. */
 function crossRow(doc) {
   const out = [], seen = new Set();
@@ -50,6 +54,12 @@ function crossRow(doc) {
     if (doc.forward) {
       const p = doc.forward.edge_prefix;
       if (!r.path.startsWith(p) || !forwardable(r.path.slice(p.length))) out.push(`${key} is outside the forward ${p}…`);
+    }
+    if (r.upstream !== undefined) {
+      const mine = new Set(params(r.path)), theirs = params(r.upstream);
+      if (new Set(theirs).size !== theirs.length) out.push(`${key}: upstream ${r.upstream} names a parameter twice`);
+      const extra = theirs.filter((n) => !mine.has(n));
+      if (extra.length) out.push(`${key}: upstream ${r.upstream} names ${extra.join(", ")}, which the row does not match`);
     }
   }
   const verbs = new Set();

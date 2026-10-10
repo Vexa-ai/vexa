@@ -130,9 +130,30 @@
             ]
           },
           "description": "verbs map onto the domain's own routes through its forward"
+        },
+        {
+          "if": {
+            "required": [
+              "forward"
+            ]
+          },
+          "then": {
+            "properties": {
+              "routes": {
+                "items": {
+                  "not": {
+                    "required": [
+                      "upstream"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "description": "a forwarded domain's rows carry no upstream: the forward is the one mapping"
         }
       ],
-      "$comment": "Also checked by validate.mjs, across rows and manifests: (method, path) is declared by one manifest only; with a forward, every path is the edge prefix followed by literal segments and whole `{name}` parameters (no name twice), or the prefix's `{path:path}` catch-all. A `verbs` row is a path strictly under the edge prefix, and no (method, path) is in `verbs` twice."
+      "$comment": "Also checked by validate.mjs, across rows and manifests: (method, path) is declared by one manifest only; with a forward, every path is the edge prefix followed by literal segments and whole `{name}` parameters (no name twice), or the prefix's `{path:path}` catch-all. A `verbs` row is a path strictly under the edge prefix, and no (method, path) is in `verbs` twice. A row's `upstream` names no `{name}` parameter twice and none the row's own path lacks."
     },
     "Forward": {
       "type": "object",
@@ -200,6 +221,11 @@
         "stream": {
           "type": "boolean",
           "description": "true: the edge relays the row's response as server-sent events"
+        },
+        "upstream": {
+          "type": "string",
+          "pattern": "^(?:/(?:[^/{}]+|\\{[A-Za-z_][A-Za-z0-9_]*\\}))+$",
+          "description": "the route template the edge forwards this row to on the domain's service, when it is not the row's own path; its `{name}` parameters are the row's. The domain's service reads it to know which rows reach each of its routes. A forwarded domain carries none: its forward is the one mapping"
         }
       },
       "allOf": [
@@ -247,6 +273,28 @@
             }
           },
           "description": "only a literal row streams, never the catch-all"
+        },
+        {
+          "if": {
+            "required": [
+              "mcp_reentry"
+            ],
+            "properties": {
+              "mcp_reentry": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "path": {
+                "not": {
+                  "pattern": "\\{path:path\\}$"
+                }
+              }
+            }
+          },
+          "description": "mcp_reentry names one route an MCP tool calls back, never a catch-all that would admit every path under its prefix"
         }
       ]
     },

@@ -138,6 +138,57 @@ def test_only_the_edge_s_own_unscoped_row_may_admit_the_mcp_re_entry():
     assert a.mcp_reentry == {("GET", "/auth/me")}
 
 
+def test_mcp_reentry_on_a_catch_all_refuses_to_boot():
+    """A catch-all admits every path under its prefix; an MCP tool calls one route. The flag on a
+    catch-all would admit the re-entry everywhere behind it, so the row is refused at load."""
+    with pytest.raises(ManifestError) as e:
+        routes_manifest.assemble([_doc("agent", [{"method": "GET", "path": "/agent/{path:path}",
+                                                  "scopes": ["bot", "tx"], "mcp_reentry": True}],
+                                       forward={"edge_prefix": "/agent/", "upstream_prefix": "/api/"})])
+    assert "catch-all" in str(e.value)
+
+
+@pytest.mark.parametrize("upstream", ["webhooks/deliveries", "/x/{y:path}", "/x{id}", "/x//y", "/",
+                                      "/meetings/{platform}/{platform}", 7])
+def test_an_upstream_is_a_route_template(upstream):
+    with pytest.raises(ManifestError) as e:
+        routes_manifest.assemble([_doc("meetings", [{"method": "GET", "path": "/x/{platform}",
+                                                     "scopes": ["tx"], "upstream": upstream}])])
+    assert "upstream" in str(e.value)
+
+
+def test_an_upstream_names_only_the_row_s_own_parameters():
+    """The edge fills the hop from what the request matched; a parameter the row lacks has no
+    value to fill."""
+    with pytest.raises(ManifestError) as e:
+        routes_manifest.assemble([_doc("meetings", [{"method": "POST",
+                                                     "path": "/transcripts/by-id/{meeting_id}/share",
+                                                     "scopes": ["tx"],
+                                                     "upstream": "/meetings/{platform}/share"}])])
+    assert "platform" in str(e.value)
+
+
+def test_a_forwarded_domain_carries_no_upstream():
+    with pytest.raises(ManifestError) as e:
+        routes_manifest.assemble([_doc("agent", [{"method": "GET", "path": "/agent/jobs",
+                                                  "scopes": ["bot"], "upstream": "/api/other"}],
+                                       forward={"edge_prefix": "/agent/", "upstream_prefix": "/api/"})])
+    assert "forward" in str(e.value)
+
+
+def test_the_meetings_upstreams_are_exactly_the_declared_ones():
+    """The four rows the edge serves under another path on meeting-api, read from the manifest."""
+    a = routes_manifest.load({"meetings"})
+    assert a.upstream == {
+        ("POST", "/transcripts/by-id/{meeting_id}/share"): "/meetings/{meeting_id}/share",
+        ("POST", "/transcripts/{platform}/{native_meeting_id}/share"):
+            "/meetings/{platform}/{native_meeting_id}/share",
+        ("GET", "/recordings/{recording_id}/media/{media_file_id}/download"):
+            "/recordings/{recording_id}/media/{media_file_id}/raw",
+        ("GET", "/user/webhook/deliveries"): "/webhooks/deliveries",
+    }
+
+
 def test_the_mcp_reentry_rows_are_exactly_the_declared_ones():
     a = routes_manifest.assemble([_doc("meetings", [
         {"method": "GET", "path": "/meetings", "scopes": ["tx"], "mcp_reentry": True},
@@ -186,7 +237,9 @@ def test_the_shipped_manifests_admit_a_worker_on_the_mcp_door_and_the_friction_r
 # ── the edge follows the data ────────────────────────────────────────────────────────────────────
 
 def _concrete(path: str) -> str:
-    return path.replace("{path:path}", "x").replace("{", "").replace("}", "").replace(
+    # A `{platform}` segment must name a meeting platform: the edge refuses any other value (422).
+    return path.replace("{path:path}", "x").replace("{platform}", "google_meet").replace(
+        "{", "").replace("}", "").replace(
         "meeting_id", "1").replace("recording_id", "1").replace("media_file_id", "1")
 
 

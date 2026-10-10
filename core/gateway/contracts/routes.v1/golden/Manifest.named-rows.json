@@ -19,6 +19,14 @@
       "scopes": [
         "tx"
       ]
+    },
+    {
+      "method": "POST",
+      "path": "/transcripts/{platform}/{native_meeting_id}/share",
+      "scopes": [
+        "tx"
+      ],
+      "upstream": "/meetings/{platform}/{native_meeting_id}/share"
     }
   ]
 }

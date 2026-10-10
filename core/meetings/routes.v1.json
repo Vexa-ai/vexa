@@ -3,7 +3,7 @@
   "domain": "meetings",
   "owner": "core/meetings",
   "edge": "gateway",
-  "note": "Bots, meeting records, transcripts, recordings \u2014 and the two calendar SYNC verbs, which run against the feed meeting-api owns even though the connection itself is identity's. A row with `mcp_reentry` is one the MCP's own meeting tools call back into (core/meetings/services/mcp/src/vexa_mcp/app.py): a worker's token is admitted there on the MCP's re-entry, and on no other row.",
+  "note": "Bots, meeting records, transcripts, recordings \u2014 and the two calendar SYNC verbs, which run against the feed meeting-api owns even though the connection itself is identity's. A row with `mcp_reentry` is one the MCP's own meeting tools call back into (core/meetings/services/mcp/src/vexa_mcp/app.py): a worker's token is admitted there on the MCP's re-entry, and on no other row. A row with `upstream` is forwarded to that path on meeting-api rather than its own; meeting-api reads this file to check, for each of its routes, the scopes of the rows that reach it (meeting_api/route_scopes.py).",
   "presence_env": "MEETING_API_URL",
   "routes": [
     {
@@ -208,7 +208,8 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "upstream": "/recordings/{recording_id}/media/{media_file_id}/raw"
     },
     {
       "method": "GET",
@@ -231,7 +232,8 @@
       "path": "/transcripts/by-id/{meeting_id}/share",
       "scopes": [
         "tx"
-      ]
+      ],
+      "upstream": "/meetings/{meeting_id}/share"
     },
     {
       "method": "GET",
@@ -261,7 +263,8 @@
       "path": "/transcripts/{platform}/{native_meeting_id}/share",
       "scopes": [
         "tx"
-      ]
+      ],
+      "upstream": "/meetings/{platform}/{native_meeting_id}/share"
     },
     {
       "method": "GET",
@@ -297,7 +300,8 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "upstream": "/webhooks/deliveries"
     }
   ]
 }

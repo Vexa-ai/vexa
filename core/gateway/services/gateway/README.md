@@ -43,7 +43,12 @@ only on the MCP's re-entry — the rows the MCP's tools call back into, and no o
 fronted wholesale (the agent) declares `forward` — `{"edge_prefix": "/agent/", "upstream_prefix":
 "/api/"}` — and the edge registers its rows from the manifest without naming any of them: the
 catch-all, and a route of its own for every other row (literal, or with whole-segment `{name}`
-parameters re-encoded like any path parameter).
+parameters re-encoded like any path parameter). A meetings row is forwarded to its own path on
+meeting-api, or to the `"upstream"` it names (`/user/webhook/deliveries` is meeting-api's
+`/webhooks/deliveries`); every `{name}` in that target is filled under the same rule as a forwarded
+row (`paths.forwarded_param`), and `{platform}` must be an api.v1 `Platform`. meeting-api reads the
+same rows to check, on the route a request matched, the scopes this edge checked
+(`meeting_api/route_scopes.py`). `mcp_reentry` is refused on a `{path:path}` catch-all.
 
 ## Isolated evaluation
 `tests/` holds unit evals (L2) over `create_app` with in-process fakes injected via `conftest.py`

@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import json
 from contextlib import AsyncExitStack
-from typing import Dict, FrozenSet, List, Optional, Tuple
+from typing import Dict, FrozenSet, List, Literal, Optional, Tuple
 
 import httpx  # the downstream adapter's transport errors are mapped to 502/504 (not leaked as a 500)
 
@@ -142,6 +142,12 @@ def undeclared_routes(app: FastAPI, table=None, unscoped=None) -> List[Tuple[str
                 missing.append(key)
     return missing
 
+#: The meeting platforms a `{platform}` path segment may name: api.v1 `components/schemas/Platform`,
+#: held equal to it by tests/test_meeting_paths.py. A handler types its `platform` with it, so any
+#: other value is refused with the 422 api.v1 declares for these routes, before the caller is
+#: authorized and before anything is forwarded.
+MeetingPlatform = Literal["google_meet", "zoom", "teams", "jitsi", "browser_session"]
+
 # Default sentinel base URL. The DownstreamClient (real httpx or the fake ASGI transport) resolves
 # it; what matters is the PATH the gateway forwards to (verbatim from the route). v0.12 P2 folded
 # the transcription-collector INTO meeting-api (one modular monolith), so /transcripts + /meetings
@@ -165,7 +171,10 @@ _DEFAULT_MCP_URL = "http://mcp:8010"
 _MCP_HEADERS = ("mcp-session-id", "mcp-protocol-version")
 
 
-# Path params and catch-all tails are re-encoded (or refused) in `paths.py` before any hop.
+# Every hop's path is built from what the request MATCHED, never interpolated raw: a meetings row's
+# target is its manifest row's (`_meeting_target`), a forwarded domain's literal row and catch-all
+# are filled by `_register_forwarded`, and identity's calendar id by `path_segment`. Each parameter
+# is one opaque segment, or a 400 (`paths.py`).
 
 
 def _route_key(request: Request) -> Optional[Tuple[str, str]]:
@@ -522,43 +531,74 @@ def create_app(
     def _meeting(path: str) -> str:
         return f"{meeting_api_url}{path}"
 
+    # A MEETINGS ROW'S HOP IS ITS MANIFEST ROW'S, FILLED ONE OPAQUE SEGMENT AT A TIME. The target is
+    # the row's own path, or the `upstream` it declares (`/user/webhook/deliveries` is meeting-api's
+    # `/webhooks/deliveries`) — the same field meeting-api reads to check, on each of its routes, the
+    # scopes this edge checked (`meeting_api/route_scopes.py`), so the two cannot disagree about
+    # which row reaches which route. Every `{name}` is filled from what the request matched under the
+    # forwarded-row rule (`paths.forwarded_param`): a `.`/`..` value, or an encoded `/` or `\`
+    # anywhere in the target, is a 400 before the caller is authorized; anything else, `?` and `#`
+    # included, is percent-encoded into the one segment it arrived in. Starlette hands a handler its
+    # parameters DECODED, so a raw interpolation would let `%2E%2E` or `%23` reshape the hop and land
+    # it on a meeting-api route other than the one whose scope was checked here.
+    def _meeting_target(request: Request) -> Tuple[Optional[str], Optional[Response]]:
+        key = _route_key(request)
+        if key is None or _assembly.owner_of.get(key) != "meetings":
+            return None, _insufficient_scope_response()  # not a meetings row: nothing to forward
+        error = forwarded_target_error(request)
+        if error is not None:
+            return None, error
+        target = _assembly.upstream.get(key, key[1])
+        for name in routes_manifest.params_of(target):
+            segment, error = forwarded_param(str(request.path_params.get(name, "")), request)
+            if error is not None:
+                return None, error
+            target = target.replace("{" + name + "}", segment, 1)
+        return _meeting(target), None
+
+    async def _forward_meeting(request: Request) -> Response:
+        url, error = _meeting_target(request)
+        if error is not None:
+            return error
+        return await _forward(request.method, url, request)
+
     # ---- CORE routes (each forwards to the matching downstream path, per main's route table) ----
     @app.get("/bots")
     async def list_bots(request: Request):
-        return await _forward("GET", _meeting("/bots"), request)
+        return await _forward_meeting(request)
 
     @app.post("/bots", status_code=201)
     async def create_bot(request: Request):
-        return await _forward("POST", _meeting("/bots"), request)
+        return await _forward_meeting(request)
 
     @app.get("/bots/status")
     async def bots_status(request: Request):
-        return await _forward("GET", _meeting("/bots/status"), request)
+        return await _forward_meeting(request)
 
     @app.delete("/bots/{platform}/{native_meeting_id}")
-    async def stop_bot(platform: str, native_meeting_id: str, request: Request):
-        return await _forward("DELETE", _meeting(f"/bots/{platform}/{native_meeting_id}"), request)
+    async def stop_bot(platform: MeetingPlatform, native_meeting_id: str, request: Request):
+        return await _forward_meeting(request)
 
     @app.put("/bots/{platform}/{native_meeting_id}/config", status_code=202)
-    async def update_config(platform: str, native_meeting_id: str, request: Request):
-        return await _forward("PUT", _meeting(f"/bots/{platform}/{native_meeting_id}/config"), request)
+    async def update_config(platform: MeetingPlatform, native_meeting_id: str, request: Request):
+        return await _forward_meeting(request)
 
     @app.post("/bots/{platform}/{native_meeting_id}/speak")
-    async def speak(platform: str, native_meeting_id: str, request: Request):
-        return await _forward("POST", _meeting(f"/bots/{platform}/{native_meeting_id}/speak"), request)
+    async def speak(platform: MeetingPlatform, native_meeting_id: str, request: Request):
+        return await _forward_meeting(request)
 
     # P0 (cross-tenant leak fix): the by-ROW-id transcript read the terminal uses to fetch EXACTLY the
     # row it displays (owner-scoped downstream). Registered BEFORE the native route so `by-id` is not
     # matched as a {platform}. Forwarded verbatim; the auth/identity prep (X-User-Id) is shared.
     @app.get("/transcripts/by-id/{meeting_id}")
     async def transcript_by_id(meeting_id: int, request: Request):
-        return await _forward("GET", _meeting(f"/transcripts/by-id/{meeting_id}"), request)
+        return await _forward_meeting(request)
 
     # Redeem an INDEPENDENT transcript share token (Lane A / M0). Declared BEFORE the {platform}/{native}
     # GET so `share/accept` is not matched as a 2-segment transcript path.
     @app.post("/transcripts/share/accept")
     async def accept_transcript_share(request: Request):
-        return await _forward("POST", _meeting("/transcripts/share/accept"), request)
+        return await _forward_meeting(request)
 
     # native-keyed share MINT alias (#579 C3): the 0.10 api.v1 share path. The mint MOVED to
     # POST /meetings/{platform}/{native}/share in 0.12; alias the old transcripts path to it so a
@@ -571,78 +611,74 @@ def create_app(
     # form so `by-id` is not captured as a platform name.
     @app.post("/transcripts/by-id/{meeting_id}/share")
     async def mint_transcript_share_by_id_alias(meeting_id: int, request: Request):
-        return await _forward("POST", _meeting(f"/meetings/{meeting_id}/share"), request)
+        return await _forward_meeting(request)
 
     @app.post("/transcripts/{platform}/{native_meeting_id}/share")
-    async def mint_transcript_share_alias(platform: str, native_meeting_id: str, request: Request):
-        return await _forward("POST", _meeting(f"/meetings/{platform}/{native_meeting_id}/share"), request)
+    async def mint_transcript_share_alias(platform: MeetingPlatform, native_meeting_id: str, request: Request):
+        return await _forward_meeting(request)
 
     # Declared BEFORE /transcripts/{platform}/... so `search` is matched as a literal, not
     # captured as a platform name.
     @app.get("/transcripts/search")
     async def search_transcripts(request: Request):
-        return await _forward("GET", _meeting("/transcripts/search"), request)
+        return await _forward_meeting(request)
 
     @app.get("/transcripts/{platform}/{native_meeting_id}")
-    async def transcript(platform: str, native_meeting_id: str, request: Request):
-        return await _forward("GET", _meeting(f"/transcripts/{platform}/{native_meeting_id}"), request)
+    async def transcript(platform: MeetingPlatform, native_meeting_id: str, request: Request):
+        return await _forward_meeting(request)
 
     @app.get("/recordings")
     async def list_recordings(request: Request):
-        return await _forward("GET", _meeting("/recordings"), request)
+        return await _forward_meeting(request)
 
     @app.get("/recordings/{recording_id}")
     async def get_recording(recording_id: int, request: Request):
-        return await _forward("GET", _meeting(f"/recordings/{recording_id}"), request)
+        return await _forward_meeting(request)
 
     @app.delete("/recordings/{recording_id}")
     async def delete_recording(recording_id: int, request: Request):
-        return await _forward("DELETE", _meeting(f"/recordings/{recording_id}"), request)
+        return await _forward_meeting(request)
 
     # finalize-on-read master metadata (audio|video); the recording player fetches this, then the
     # raw_url it returns. ?type= is preserved by _forward.
     @app.get("/recordings/{recording_id}/master")
     async def get_recording_master(recording_id: int, request: Request):
-        return await _forward("GET", _meeting(f"/recordings/{recording_id}/master"), request)
+        return await _forward_meeting(request)
 
     # The master byte stream the recording player loads (the master metadata's raw_url points here).
     @app.get("/recordings/{recording_id}/media/{media_file_id}/raw")
     async def get_recording_media_raw(recording_id: int, media_file_id: int, request: Request):
-        return await _forward(
-            "GET", _meeting(f"/recordings/{recording_id}/media/{media_file_id}/raw"), request
-        )
+        return await _forward_meeting(request)
 
     # native download alias (#579 C3): the sealed api.v1 media-download path a 0.10 client calls.
     # 0.12 renamed the media byte route to .../raw (finalize-on-read master stream); alias .../download
     # to it so recording playback no longer 404s. Forwarded verbatim (Range headers preserved).
     @app.get("/recordings/{recording_id}/media/{media_file_id}/download")
     async def get_recording_media_download(recording_id: int, media_file_id: int, request: Request):
-        return await _forward(
-            "GET", _meeting(f"/recordings/{recording_id}/media/{media_file_id}/raw"), request
-        )
+        return await _forward_meeting(request)
 
     @app.get("/meetings")
     async def meetings(request: Request):
-        return await _forward("GET", _meeting("/meetings"), request)
+        return await _forward_meeting(request)
 
     # Create a PLANNED meeting (intent status, no bot) — the Meetings surface's "Plan a meeting".
     @app.post("/meetings", status_code=201)
     async def create_planned_meeting(request: Request):
-        return await _forward("POST", _meeting("/meetings"), request)
+        return await _forward_meeting(request)
 
     # Single meeting — forwards to meeting-api's GET /meetings/{id} (the meeting-detail page reads it).
     @app.get("/meetings/{meeting_id}")
     async def meeting(meeting_id: int, request: Request):
-        return await _forward("GET", _meeting(f"/meetings/{meeting_id}"), request)
+        return await _forward_meeting(request)
 
     # Edit / delete a PLANNED meeting by ROW id (owner-scoped; meeting-api refuses FSM rows with 409).
     @app.patch("/meetings/{meeting_id}")
     async def patch_planned_meeting(meeting_id: int, request: Request):
-        return await _forward("PATCH", _meeting(f"/meetings/{meeting_id}"), request)
+        return await _forward_meeting(request)
 
     @app.delete("/meetings/{meeting_id}", status_code=204)
     async def delete_planned_meeting(meeting_id: int, request: Request):
-        return await _forward("DELETE", _meeting(f"/meetings/{meeting_id}"), request)
+        return await _forward_meeting(request)
 
     # User-owned scheduling intent (schedule/cancel) — the Meetings surface's Schedule/Cancel action
     # PUTs here; forwards to meeting-api's PUT /meetings/{platform}/{native}/intent (owner-scoped).
@@ -650,10 +686,8 @@ def create_app(
     # The caller's own description of a meeting — title + arbitrary metadata — writable in ANY
     # status (meeting-api refuses nothing here; nothing in the dispatch pipeline reads it).
     @app.post("/meetings/{platform}/{native_meeting_id}/annotate")
-    async def annotate_meeting(platform: str, native_meeting_id: str, request: Request):
-        return await _forward(
-            "POST", _meeting(f"/meetings/{platform}/{native_meeting_id}/annotate"), request
-        )
+    async def annotate_meeting(platform: MeetingPlatform, native_meeting_id: str, request: Request):
+        return await _forward_meeting(request)
 
     # Annotate by ROW id — the identity a meeting always has. The (platform, native) pair is not
     # one: a Google Meet room code is reused across sessions and downstream resolves it to the
@@ -663,7 +697,7 @@ def create_app(
     # POST /meetings/{meeting_id}/share below already relies on.
     @app.post("/meetings/{meeting_id}/annotate")
     async def annotate_meeting_by_id(meeting_id: int, request: Request):
-        return await _forward("POST", _meeting(f"/meetings/{meeting_id}/annotate"), request)
+        return await _forward_meeting(request)
 
     # Mint by ROW id — the identity a meeting always has. The (platform, native) pair is not one: a
     # row planned from an invite whose url matched no platform is platform='unknown' with an empty
@@ -673,37 +707,33 @@ def create_app(
     # _forward, so the same auth/identity header prep (X-User-Id, X-User-Email, X-User-Workspaces).
     @app.post("/meetings/{meeting_id}/share")
     async def mint_transcript_share_by_id(meeting_id: int, request: Request):
-        return await _forward("POST", _meeting(f"/meetings/{meeting_id}/share"), request)
+        return await _forward_meeting(request)
 
     # Import a transcript into a meeting the caller owns — "this already happened, here are its
     # words" — and complete it. Row-id addressed like the mint above; same _forward, so the same
     # key→identity resolution (X-User-Id) the meeting-api route scopes on.
     @app.post("/meetings/{meeting_id}/transcript-import")
     async def import_meeting_transcript(meeting_id: int, request: Request):
-        return await _forward("POST", _meeting(f"/meetings/{meeting_id}/transcript-import"), request)
+        return await _forward_meeting(request)
 
     @app.post("/meetings/{platform}/{native_meeting_id}/share")
-    async def mint_transcript_share(platform: str, native_meeting_id: str, request: Request):
-        return await _forward("POST", _meeting(f"/meetings/{platform}/{native_meeting_id}/share"), request)
+    async def mint_transcript_share(platform: MeetingPlatform, native_meeting_id: str, request: Request):
+        return await _forward_meeting(request)
 
     # Bind a meeting to a shared workspace (owner) — Lane A (optional convenience).
     @app.post("/meetings/{platform}/{native_meeting_id}/workspace")
-    async def bind_meeting_workspace(platform: str, native_meeting_id: str, request: Request):
-        return await _forward("POST", _meeting(f"/meetings/{platform}/{native_meeting_id}/workspace"), request)
+    async def bind_meeting_workspace(platform: MeetingPlatform, native_meeting_id: str, request: Request):
+        return await _forward_meeting(request)
 
     # Who was in this meeting, as far as the core actually knows — invitation attendees + heard
     # speakers, each row labelled with its source (Vexa-ai/vexa#451). Owner-scoped downstream.
     @app.get("/meetings/{platform}/{native_meeting_id}/participants")
-    async def get_meeting_participants(platform: str, native_meeting_id: str, request: Request):
-        return await _forward(
-            "GET", _meeting(f"/meetings/{platform}/{native_meeting_id}/participants"), request
-        )
+    async def get_meeting_participants(platform: MeetingPlatform, native_meeting_id: str, request: Request):
+        return await _forward_meeting(request)
 
     @app.put("/meetings/{platform}/{native_meeting_id}/intent")
-    async def set_meeting_intent(platform: str, native_meeting_id: str, request: Request):
-        return await _forward(
-            "PUT", _meeting(f"/meetings/{platform}/{native_meeting_id}/intent"), request
-        )
+    async def set_meeting_intent(platform: MeetingPlatform, native_meeting_id: str, request: Request):
+        return await _forward_meeting(request)
 
     # native-keyed mutate (#579 C1): the sealed api.v1 PATCH/DELETE a 0.10 client (incl. the shipped
     # dashboard) calls by (platform, native_meeting_id). Thin passthrough — meeting-api resolves
@@ -711,19 +741,19 @@ def create_app(
     # (unknown/unowned native → 404, FSM-owned row → 409). Additive: the by-ROW-id int routes above
     # are unchanged; these 2-segment paths never shadow them (FastAPI matches on segment count).
     @app.patch("/meetings/{platform}/{native_meeting_id}")
-    async def patch_native_meeting(platform: str, native_meeting_id: str, request: Request):
-        return await _forward("PATCH", _meeting(f"/meetings/{platform}/{native_meeting_id}"), request)
+    async def patch_native_meeting(platform: MeetingPlatform, native_meeting_id: str, request: Request):
+        return await _forward_meeting(request)
 
     @app.delete("/meetings/{platform}/{native_meeting_id}")
-    async def delete_native_meeting(platform: str, native_meeting_id: str, request: Request):
-        return await _forward("DELETE", _meeting(f"/meetings/{platform}/{native_meeting_id}"), request)
+    async def delete_native_meeting(platform: MeetingPlatform, native_meeting_id: str, request: Request):
+        return await _forward_meeting(request)
 
     # native-keyed chat READ (#579 C3): the sealed api.v1 GET the 0.10 dashboard's chat panel calls.
     # Thin passthrough to meeting-api's honest empty-list restore (0.12 does not persist in-meeting
     # chat server-side). The POST (send) half is a SIGNED GAP — no bot-command backend in 0.12.
     @app.get("/bots/{platform}/{native_meeting_id}/chat")
-    async def read_meeting_chat(platform: str, native_meeting_id: str, request: Request):
-        return await _forward("GET", _meeting(f"/bots/{platform}/{native_meeting_id}/chat"), request)
+    async def read_meeting_chat(platform: MeetingPlatform, native_meeting_id: str, request: Request):
+        return await _forward_meeting(request)
 
     # ---- user self-serve webhook config (main.py:1080 set_user_webhook_proxy) ----
     # Identity OWNS the config (user.data JSONB via admin-api); the gateway is the public edge for
@@ -751,7 +781,7 @@ def create_app(
     # meeting-api scopes the read to the owner.
     @app.get("/user/webhook/deliveries")
     async def get_user_webhook_deliveries(request: Request):
-        return await _forward("GET", _meeting("/webhooks/deliveries"), request)
+        return await _forward_meeting(request)
 
     # ---- user self-serve calendar-sync config (identity owns it, same shape as /user/webhook).
     # The ICS URL is a secret — admin-api masks it on every read-back. Scoped BOT, not BOT_OR_TX:
@@ -761,11 +791,11 @@ def create_app(
     # (identity). Registered before the config routes only for reading clarity - paths are exact.
     @app.get("/user/calendar/sync")
     async def get_user_calendar_sync(request: Request):
-        return await _forward("GET", _meeting("/user/calendar/sync"), request)
+        return await _forward_meeting(request)
 
     @app.post("/user/calendar/sync")
     async def run_user_calendar_sync(request: Request):
-        return await _forward("POST", _meeting("/user/calendar/sync"), request)
+        return await _forward_meeting(request)
 
     @app.put("/user/calendar")
     async def set_user_calendar(request: Request):
@@ -799,17 +829,11 @@ def create_app(
 
     @app.get("/user/calendars/{calendar_id}/sync")
     async def get_calendar_connection_sync(calendar_id: str, request: Request):
-        segment, error = path_segment(calendar_id)
-        if error is not None:
-            return error
-        return await _forward("GET", _meeting(f"/user/calendars/{segment}/sync"), request)
+        return await _forward_meeting(request)
 
     @app.post("/user/calendars/{calendar_id}/sync")
     async def run_calendar_connection_sync(calendar_id: str, request: Request):
-        segment, error = path_segment(calendar_id)
-        if error is not None:
-            return error
-        return await _forward("POST", _meeting(f"/user/calendars/{segment}/sync"), request)
+        return await _forward_meeting(request)
 
     # ---- user self-serve model + transcription prefs (identity owns them, same shape as
     # /user/webhook: secrets masked by admin-api on every read-back, scoped BOT_OR_TX). ----

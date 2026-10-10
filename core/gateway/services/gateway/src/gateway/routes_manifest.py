@@ -33,6 +33,10 @@ A domain the edge forwards wholesale declares `"forward": {"edge_prefix", "upstr
 and its rows are then only paths under the edge prefix — literal, or with whole-segment `{name}`
 parameters (`"stream": true` for a server-sent-event relay) — or the prefix's `{path:path}`
 catch-all, so the edge registers that domain from its manifest and names none of its routes.
+A row the edge serves under a different path on the domain's service says so with `"upstream"`
+(`/user/webhook/deliveries` is meeting-api's `/webhooks/deliveries`): the edge forwards the row
+there, and the domain's service reads the same field to know which rows reach each of its routes —
+meeting-api checks the scopes the edge checked (`meeting_api/route_scopes.py`) from this one table.
 
     delegation that is not a boolean        ->  a flag nobody can read the same way twice
     delegation on an unscoped row           ->  a promise the authorizer never sees
@@ -41,6 +45,11 @@ catch-all, so the edge registers that domain from its manifest and names none of
                                                 admits the token, doing nothing
     mcp_reentry on another domain's         ->  a promise nothing reads: only the edge's own
       unscoped row                              identity read (`/auth/me`) checks it unscoped
+    mcp_reentry on a catch-all row          ->  every path under a prefix admitted at once, which
+                                                is not one route an MCP tool calls
+    an upstream on a forwarded row          ->  a second mapping beside the forward's
+    an upstream that is not a template, or  ->  a hop the edge could not fill from what it matched
+      names a parameter the row lacks
     a forward with a malformed prefix       ->  a mapping that rewrites paths nobody declared
     a forwarded row outside its forward     ->  a route the edge would have to serve by name
 
@@ -90,6 +99,9 @@ class Assembly:
     stream: Set[RouteKey] = field(default_factory=set)
     #: domain -> (edge_prefix, upstream_prefix), for each domain forwarded wholesale.
     forwards: Dict[str, Tuple[str, str]] = field(default_factory=dict)
+    #: row -> the template it is forwarded to on its domain's service, for a row whose hop is not
+    #: its own path (`"upstream"`). Every other row of a named domain is forwarded to its own path.
+    upstream: Dict[RouteKey, str] = field(default_factory=dict)
 
 
 def manifest_paths(repo_root: pathlib.Path) -> Dict[str, pathlib.Path]:
@@ -139,6 +151,23 @@ def _forwardable(tail: str) -> bool:
         return True
     names = []
     for segment in tail.split("/"):
+        if "{" in segment or "}" in segment:
+            m = _PARAM_SEGMENT.match(segment)
+            if not m or m.group(1) in names:
+                return False
+            names.append(m.group(1))
+    return True
+
+
+def _template(value) -> bool:
+    """A route template the edge can fill from a matched row: absolute, and every segment either a
+    literal or one whole `{name}` parameter, no name twice."""
+    if not isinstance(value, str) or not value.startswith("/") or value == "/":
+        return False
+    names = []
+    for segment in value.split("/")[1:]:
+        if not segment:
+            return False
         if "{" in segment or "}" in segment:
             m = _PARAM_SEGMENT.match(segment)
             if not m or m.group(1) in names:
@@ -232,7 +261,29 @@ def assemble(manifests: Iterable[dict]) -> Assembly:
                         f"{domain}: {method} {path} is unscoped and cannot admit the MCP's re-entry "
                         "— an unscoped row never reaches the authorizer that reads the flag; only "
                         "the edge's own identity read checks it itself")
+                if path.endswith(CATCH_ALL):
+                    raise ManifestError(
+                        f"{domain}: {method} {path} is a catch-all and cannot admit the MCP's "
+                        "re-entry — it would admit every path under its prefix, and an MCP tool "
+                        "calls one route; declare that route as a row of its own")
                 out.mcp_reentry.add(key)
+            if "upstream" in row:
+                upstream = row["upstream"]
+                if forward:
+                    raise ManifestError(
+                        f"{domain}: {method} {path} declares an upstream, but the domain is "
+                        f"forwarded wholesale — its forward ({forward[0]} -> {forward[1]}) is the "
+                        "one mapping")
+                if not _template(upstream):
+                    raise ManifestError(
+                        f"{domain}: {method} {path} — upstream must be a route template of literal "
+                        f"segments and whole {{name}} parameters (got {upstream!r})")
+                extra = sorted(set(params_of(upstream)) - set(params_of(path)))
+                if extra:
+                    raise ManifestError(
+                        f"{domain}: {method} {path} — upstream {upstream} names {extra}, which the "
+                        "row does not match, so the edge has nothing to fill them with")
+                out.upstream[key] = upstream
             stream = _flag(domain, row, "stream")
             if forward:
                 tail = path[len(forward[0]):] if path.startswith(forward[0]) else None

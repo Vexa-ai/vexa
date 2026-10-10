@@ -36,6 +36,7 @@ L2 unit / L3 in-process integration: `test_health`, `test_proxy` (fail-closed au
 
 - ✅ delivered — fail-closed `x-api-key` auth + `ROUTE_SCOPES` 403 enforcement
 - ✅ delivered — catch-all tails (`/agent/{path}`, `/mcp/{path}`) stay under their prefix: a `.`/`..` segment (plain or encoded) or an encoded slash/backslash is a 400 before any forward; every other segment is re-encoded as data
+- ✅ delivered — meeting routes forward to exactly the meeting-api route their `routes.v1` row names (its own path or `upstream`): `platform` must be an api.v1 `Platform` (else 422), a `.`/`..` `native_meeting_id` or an encoded slash/backslash is a 400 before any forward, and every other value (`?`, `#` included) is one encoded segment. meeting-api re-checks the signed scopes against the route it matched, from the same rows
 - ✅ delivered — CORE REST proxy to meeting-api (verbatim body/status, identity-header injection, 502/504 upstream mapping)
 - ✅ delivered — `/auth/me` caller identity + `/health` liveness
 - ✅ delivered — `/ws` multiplex: subscribe-authz, per-meeting redis fan-in, unsubscribe/ping, error vocabulary

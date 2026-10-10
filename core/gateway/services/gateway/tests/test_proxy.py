@@ -413,8 +413,12 @@ def test_calendar_id_dot_segments_cannot_walk_up_the_downstream_path():
     assert downstream.last["url"] == "http://admin-api/user/calendars/%2E%2E"
     assert httpx.URL(downstream.last["url"]).path == "/user/calendars/.."
 
-    client.post("/user/calendars/%2E%2E/sync", headers=AUTH)
-    assert downstream.last["url"] == "http://meeting-api/user/calendars/%2E%2E/sync"
+    # The sync verb is a meetings row: a dot-only id is refused there, as on every meetings row
+    # (`_meeting_target`), rather than re-encoded.
+    downstream.last = None
+    r = client.post("/user/calendars/%2E%2E/sync", headers=AUTH)
+    assert r.status_code == 400
+    assert downstream.last is None
 
 
 def test_calendar_id_with_control_character_is_4xx_not_500():
