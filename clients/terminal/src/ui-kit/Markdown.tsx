@@ -11,6 +11,8 @@ import { Fragment, type ReactNode } from "react";
 import { Card, CardGroup, InternalLink, Wikilink, isInternalHref, useOpenEntity } from "./docLinks";
 import { DocImage } from "./docImages";
 import { MermaidDiagram, isMermaidFence } from "./docDiagrams";
+import { EntityChip } from "./primitives/Chip";
+import { ExternalLink } from "./primitives/Links";
 
 // A workspace-doc path in inline code → clickable to open the doc. Matches kg/ docs by any
 // spelling the agent uses (relative `kg/entities/x.md` or the verbatim absolute mount path
@@ -23,12 +25,11 @@ const ENTITY_PATH = /^(?:\/workspaces\/[\w./ -]+|[\w./ -]*\.md|PURPOSE|[\w./-]*\
 // workspace context (DocMeta/DocNav) via useOpenEntity, same as every other link.
 function EntityCode({ code }: { code: string }) {
   const openEntity = useOpenEntity();
-  return (
-    <code onClick={() => openEntity({ path: code })}
-      style={{ fontFamily: "var(--mono)", fontSize: "0.88em", background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 4, padding: "0.5px 5px", color: "var(--blue)", cursor: "pointer" }}>
-      {code}
-    </code>
-  );
+  // A workspace document named in the text is a LINK to it, so it wears the entity chip — not mono
+  // blue code that reads as code and behaves as a link (guidelines §4.5). The path is the tooltip;
+  // the chip shows the file's name.
+  const name = code.split("/").filter(Boolean).pop() ?? code;
+  return <EntityChip kind="doc" title={code} onOpen={() => openEntity({ path: code })}>{name}</EntityChip>;
 }
 
 // ── HTML comments are machinery, and machinery is not page copy ────────────────────
@@ -92,10 +93,7 @@ function inline(text: string): ReactNode[] {
       const code = seg.slice(1, -1);
       out.push(ENTITY_PATH.test(code)
         ? <EntityCode key={`c${ci}`} code={code} />
-        : <code key={`c${ci}`}
-            style={{ fontFamily: "var(--mono)", fontSize: "0.88em", background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 4, padding: "0.5px 5px", color: "var(--t1)" }}>
-            {code}
-          </code>,
+        : <code key={`c${ci}`} className="vx-code">{code}</code>,
       );
     } else {
       emphasis(seg, `${ci}`, out);
@@ -131,9 +129,11 @@ function emphasis(text: string, key: string, out: ReactNode[]): void {
       const lm = tok.match(/^\[([^\]]*)\]\(([^)]+)\)$/)!;
       out.push(isInternalHref(lm[2])
         ? <InternalLink key={`${key}-l${i}`} href={lm[2]}>{lm[1] || lm[2]}</InternalLink>
-        : <a key={`${key}-l${i}`} href={/^https?:/i.test(lm[2]) || lm[2].startsWith("#") ? lm[2] : undefined} target="_blank" rel="noreferrer noopener" style={{ color: "var(--blue)", textDecoration: "underline" }}>
-            {lm[1] || lm[2]}
-          </a>,
+        // external: the one ExternalLink (http/https only, noopener noreferrer); an in-page
+        // anchor stays a plain link; any other scheme renders as text
+        : lm[2].startsWith("#")
+          ? <a key={`${key}-l${i}`} className="vx-link" href={lm[2]}>{lm[1] || lm[2]}</a>
+          : <ExternalLink key={`${key}-l${i}`} href={lm[2]}>{lm[1] || lm[2]}</ExternalLink>,
       );
     } else if (m[3]) {
       // **bold** / __bold__ — recurse so **[[wikilink]]** renders the chip, not literal brackets

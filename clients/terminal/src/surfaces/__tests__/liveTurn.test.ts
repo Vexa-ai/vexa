@@ -182,7 +182,7 @@ describe("the composer while a turn runs", () => {
   });
 
   it("keeps the stop control — a handle is not narration", () => {
-    expect(composer).toMatch(/aria-label="Stop"/);
+    expect(composer).toMatch(/(aria-label|label)="Stop"/);
     expect(composer).toMatch(/onClick=\{stop\}/);
   });
 

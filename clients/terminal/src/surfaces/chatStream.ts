@@ -51,6 +51,8 @@ export type ChatStreamEvent = {
   meeting?: string;
   cursor?: string;
   terms?: unknown[];
+  /** `sources` event: the turn's citations as `{ title, url, date?, snippet? }` (additive). */
+  items?: unknown[];
   // A BACKGROUND JOB (Vexa-ai/vexa#1584). `job_id` is on every event a job produced, and on the
   // `job-started` the spawning turn emits; `kind`/`target`/`line` are the job's own three facts.
   //
@@ -200,6 +202,10 @@ export type ChatStreamCallbacks = {
    *  the chips belong to the CHAT RECORD and this reader owns no state, exactly as with
    *  `onArtifact`. Optional so existing callers/tests need not implement it. */
   onTerms?: (t: { meeting: string; cursor: string; terms: unknown[] }) => void;
+  /** The turn's SOURCES as data (terminal design guidelines §4.17): `{ title, url, date?, snippet? }`
+   *  items the chat renders as a citation list. Additive — a server that never sends the event
+   *  leaves the fallback (a "Sources" Markdown list lifted out of the prose) in charge. */
+  onSources?: (items: unknown[]) => void;
   /** THIS TURN HANDED ITS WORK TO A BACKGROUND JOB and is already over (Vexa-ai/vexa#1584) — the
    *  chat is free NOW, not when this connection closes. Everything carrying this job id from here
    *  on belongs to the job, not to the turn, so none of it touches the turn's own steps. */
@@ -577,6 +583,9 @@ export async function streamChatTurn(
             if (ev.meeting && Array.isArray(ev.terms) && ev.terms.length) {
               cb.onTerms?.({ meeting: ev.meeting, cursor: ev.cursor ?? "", terms: ev.terms });
             }
+            break;
+          case "sources":
+            if (Array.isArray(ev.items)) cb.onSources?.(ev.items);
             break;
           case "commit":
             terminal = true; cb.onCommit(ev.sha);

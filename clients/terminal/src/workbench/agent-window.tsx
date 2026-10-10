@@ -5,7 +5,7 @@
  *  proposed actions directly under the input. The right-rail chat and the `meeting` copilot render
  *  through this, so they look and behave like one product. */
 import { type CSSProperties, type ReactNode, type RefObject, useEffect, useState } from "react";
-import { Icon } from "../ui-kit";
+import { Badge, EntityChip, Icon, SourceList, extractSources, type Source } from "../ui-kit";
 import { Markdown } from "../ui-kit/Markdown";
 import { MdxDoc } from "../ui-kit/MdxDoc";
 import { OPEN_ENTITY_EVENT } from "../platform";
@@ -37,7 +37,9 @@ export type Turn =
   | { id: string; role: "agent"; text: string; ops: Op[]; commit?: string; rejected?: string; status?: TurnStatus | null;
       /** the SERVER's step count for this turn (Vexa-ai/vexa#1622). Absent on a deployment one
        *  release behind, where the op line falls back to counting what this browser saw. */
-      steps?: number; stopped?: TurnStopped; failed?: TurnFault }
+      steps?: number; stopped?: TurnStopped; failed?: TurnFault;
+      /** Structured sources from the stream, when the server sends them (rendered as a SourceList). */
+      sources?: Source[] }
   | { id: string; role: "insight"; t?: string; text: string };
 
 const PHASE_LABEL: Record<TurnPhase, string> = {
@@ -74,6 +76,19 @@ function linkify(text: string): ReactNode[] {
   return text.split(/(\[\[[^\]]+\]\])/).map((p, i) => (p.startsWith("[[") ? <span key={i} style={{ color: "var(--blue)" }}>{p}</span> : <span key={i}>{p}</span>));
 }
 
+/** A finished turn's text, with its SOURCES as a citation list (guidelines §4.17): the structured
+ *  ones when the stream sent them, else a "Sources" list lifted out of the prose — so the raw
+ *  bullet list with every date written twice becomes one row per source, date once. */
+function SettledText({ text, sources }: { text: string; sources?: Source[] }) {
+  const lifted = extractSources(text);
+  const list = sources?.length ? sources : lifted.sources;
+  const body = sources?.length ? (lifted.sources.length ? lifted.body : text) : lifted.body;
+  return <>
+    <MdxDoc>{body}</MdxDoc>
+    {list.length > 0 && <section aria-label="Sources" className="vx-turn-sources"><h3 className="vx-turn-sources-title">Sources</h3><SourceList sources={list} /></section>}
+  </>;
+}
+
 // ── one operation step (the "what's in works" line) ──────────────────────────────
 function OpRow({ op }: { op: Op }) {
   const running = op.status === "running";
@@ -94,14 +109,8 @@ function OpRow({ op }: { op: Op }) {
 // ── files the turn created/edited — ACTIONABLE chips: click opens the doc in the pages panel ──
 function FileChip({ path }: { path: string }) {
   const name = path.split("/").filter(Boolean).pop() ?? path;
-  return (
-    <button
-      onClick={() => window.dispatchEvent(new CustomEvent(OPEN_ENTITY_EVENT, { detail: { path } }))}
-      title={path}
-      style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, fontFamily: "var(--mono)", color: "var(--blue)", background: "var(--bluebg)", border: "none", borderRadius: 6, padding: "3px 8px", cursor: "pointer" }}>
-      <Icon name="edit" size={11} />{name}
-    </button>
-  );
+  // A page the turn wrote is a reference you can open: the entity chip (guidelines §4.5).
+  return <EntityChip kind="doc" title={path} onOpen={() => window.dispatchEvent(new CustomEvent(OPEN_ENTITY_EVENT, { detail: { path } }))}>{name}</EntityChip>;
 }
 
 // ── the act a stopped turn offers — one control, in the bubble it belongs to (Vexa-ai/vexa#1622) ──
@@ -197,7 +206,7 @@ export function Conversation({ turns, busy, empty, onContinue }: {
                     was measured against. */}
                 {(() => {
                   const n = typeof t.steps === "number" ? t.steps : t.ops.length;
-                  return <span style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--t3)", flex: "none" }}>
+                  return <span className="vx-turn-steps">
                     · {n} step{n === 1 ? "" : "s"}
                   </span>;
                 })()}
@@ -207,13 +216,13 @@ export function Conversation({ turns, busy, empty, onContinue }: {
               {/* Mintlify-grade rendering in the OUTPUT too: finished turns compile as MDX (Note/Card/
                   Steps/Tabs + wikilinks, safe plain-markdown fallback); the still-streaming turn uses the
                   light parser and upgrades on completion. */}
-              {busy && last ? <Markdown>{t.text}</Markdown> : <MdxDoc>{t.text}</MdxDoc>}
+              {busy && last ? <Markdown>{t.text}</Markdown> : <SettledText text={t.text} sources={t.sources} />}
             </div>}
             {(() => {
               // every file the turn WROTE, deduped — the output's actionable surface
               const files = [...new Set(t.ops.filter((o) => o.wrote && o.file).map((o) => o.file as string))];
               return files.length > 0 && (
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 9 }}>
+                <div className="vx-turn-meta vx-refs">
                   {files.map((f) => <FileChip key={f} path={f} />)}
                 </div>
               );
@@ -222,14 +231,10 @@ export function Conversation({ turns, busy, empty, onContinue }: {
               ? <StatusLine status={t.status} />
               : (!t.text && !t.failed && <div style={{ fontSize: 13.5, color: "var(--t3)" }}>…</div>))}
             {t.commit && (
-              <div style={{ marginTop: 9, fontSize: 11, color: "var(--green)", display: "inline-flex", alignItems: "center", gap: 6, background: "var(--greenbg)", borderRadius: 6, padding: "3px 8px", fontFamily: "var(--mono)" }}>
-                <Icon name="git" size={12} />committed · {t.commit.slice(0, 7)}
-              </div>
+              <div className="vx-turn-meta"><Badge tone="success"><Icon name="git" size={12} />Committed · <code className="vx-tabular">{t.commit.slice(0, 7)}</code></Badge></div>
             )}
             {t.rejected && (
-              <div style={{ marginTop: 9, fontSize: 11, color: "var(--danger)", display: "inline-flex", alignItems: "center", gap: 6, background: "var(--dangerbg)", borderRadius: 6, padding: "3px 8px" }}>
-                <Icon name="x" size={12} />{t.rejected}
-              </div>
+              <div className="vx-turn-meta"><Badge tone="danger"><Icon name="x" size={12} />{t.rejected}</Badge></div>
             )}
             {t.stopped && <StoppedLine stopped={t.stopped} onContinue={onContinue && (() => onContinue(t))} />}
             {t.failed && <FaultBlock failed={t.failed} onRetry={onContinue && (() => onContinue(t))} />}

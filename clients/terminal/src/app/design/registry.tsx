@@ -6,7 +6,7 @@
 import { useState, type ReactNode } from "react";
 import { Bell, FileText, Pin, Plus, Search, X } from "lucide-react";
 import {
-  Badge, Breadcrumb, Button, Card, Checkbox, Chip, Code, ConfirmDialog, DateText, Dialog, Drawer, EmptyState, EntityChip,
+  Badge, Breadcrumb, Button, Card, Checkbox, Chip, ChipRow, Code, ConfirmDialog, DateText, Dialog, Drawer, EmptyState, EntityChip,
   ErrorState, ExternalLink, Fold, Icon, IconButton, Input, Kbd, KeyValue, ListRow, Menu, OverflowStrip, PanelHeader,
   Popover, SecretReveal, Select, Sheet, Skeleton, SourceList, Spinner, Splitter, StatusDot, Tabs, Tag, Textarea, Toaster,
   Tooltip, Truncate, kvValue, toast,
@@ -91,6 +91,8 @@ export const REGISTRY: Entry[] = [
     demo: () => <><Row><Badge tone="success" dot>Live</Badge><Badge>Held</Badge><Badge tone="warning">Waiting</Badge><Badge tone="danger">2 errors</Badge><Badge tone="info">3 new</Badge><Tag>Company</Tag></Row>
       <Row><Chip selected icon={<FileText size={14} strokeWidth={1.75} />}>Writes to personal</Chip><Chip onRemove={() => {}} removeLabel={`Remove ${WORKSPACE}`}>{WORKSPACE}</Chip><Chip ghost icon={<Plus size={14} strokeWidth={1.75} />}>Add workspace</Chip></Row>
       <Row><EntityChip kind="person" onOpen={() => {}}>{PERSON}</EntityChip><EntityChip kind="company" onOpen={() => {}}>{COMPANY}</EntityChip><EntityChip kind="meeting" onOpen={() => {}}>Weekly sync</EntityChip><EntityChip kind="doc" onOpen={() => {}}>Rollout plan</EntityChip></Row></> },
+  { id: "chip-row", title: "ChipRow", components: ["ChipRow"], note: "One line of chips; \"+N\" says how many are out of view and opens the row.", widths: [320, 480],
+    demo: () => <ChipRow label="context chips">{["Schedule · today", "In meeting · Weekly sync", "Workspace · Example workspace", "Today"].map((c) => <Chip key={c} onRemove={() => {}} removeLabel={`Remove ${c}`}>{c}</Chip>)}</ChipRow> },
   { id: "fields", title: "Input, Textarea", components: ["Input", "Textarea"], note: "Label above; the error is linked by aria-describedby.",
     demo: () => <div className="vx-cat-col"><Input label="Workspace name" placeholder="e.g. Example workspace" /><Input label="Email" defaultValue="not-an-email" error="Enter an email address, like name@example.com" /><Textarea label="Notes" hint="Markdown is fine." /></div> },
   { id: "menu", title: "Menu, Select, Popover", components: ["Menu", "Select", "Popover"], note: "Arrows, Home/End, typeahead; Esc returns focus to the trigger.",

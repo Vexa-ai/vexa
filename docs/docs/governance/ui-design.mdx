@@ -162,6 +162,31 @@ one implements rest, hover, **focus-visible** (a 2px ring with a 2px offset), pr
 
 ---
 
+## 6. Migrating the surfaces
+
+Surfaces move onto the primitives one at a time. Each move lowers that file's entry in
+`clients/terminal/src/style-budget.json` — the count of inline style keys that should belong to a
+primitive or a token (colour, type, spacing, border, radius, shadow, layer, motion). The budget
+gate fails when a file goes up, and when a file went down without its budget being lowered.
+
+| Surface | What changed | Inline-style budget |
+|---|---|---|
+| Composer and conversation | context chips → `Chip` in a one-line `ChipRow` with a "+N" chip (no dashed "+ schedule", no uppercase "FOCUS"); attach, dictate, send and stop → `IconButton`; below 400px the effort levels move into the "⋯" menu; references in the text → `Tag`; workspace paths in answers → `EntityChip` (no longer mono blue code); external links → `ExternalLink`; commit and rejection → `Badge`; files a turn wrote → `EntityChip`; **sources → `SourceList`** (below) | `chat.tsx` 202 → 124 · `Markdown.tsx` 62 → 46 · `agent-window.tsx` 112 → 88 |
+
+### Sources
+
+An answer's sources render as a citation list — one row per source, title as a link, host and
+date beneath, the date shown **once** (a date already in the title is not repeated). Two ways in:
+
+- **Structured:** a `sources` event on the chat stream, `{ "type": "sources", "items": [{ "title",
+  "url", "date"?, "snippet"? }] }`. Additive: only `http:`/`https:` URLs are kept, at most 50, and a
+  server that never sends it changes nothing.
+- **Fallback:** when the agent writes its sources as a Markdown list under a "Sources" (or
+  "References", "Citations", "Links") label, that list is lifted out of the prose and rendered as
+  the citation list. If any item is not a link, the block stays prose.
+
+---
+
 ## The design catalogue
 
 `/design` renders every token and primitive as it really renders, from placeholder fixtures:
