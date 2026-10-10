@@ -67,7 +67,7 @@ def mount_lifecycle(
     ``/bots/internal/callback/lifecycle`` handler, sharing the app's TraceMiddleware).
 
     A bot's callback is authenticated by the MeetingToken minted for ITS session: the token must be
-    signed with ``callback_secret`` (the MeetingToken key, ``ADMIN_TOKEN``) and bound to the
+    signed with the MeetingToken key derived from ``callback_secret`` (``ADMIN_TOKEN``) and bound to the
     event's ``connection_id`` (``meeting_token.admit_session``). The internal tier
     (``x-internal-secret``) is also accepted. A runtime callback must carry the runtime's signature,
     keyed from ``runtime_callback_token``. A door whose key is not wired refuses every callback (401,

@@ -360,6 +360,31 @@
       ]
     },
     {
+      "id": "meeting-token-key-label",
+      "fact": "the purpose label the MeetingToken key is derived under: HMAC-SHA256(ADMIN_TOKEN, label)",
+      "kind": "literal",
+      "enforced": true,
+      "canonical": "core/meetings/services/meeting-api/src/meeting_api/meeting_token.py — KEY_LABEL",
+      "how_to_agree": "a new label is a new key: change meeting-api's minter and both live-proof copies in one change, and upgrade between meetings",
+      "why": "meeting-api is the only service that mints or verifies a MeetingToken, and it no longer signs one with the admin secret itself but with a key derived from it under this label. The compose recording proof and the Helm round trip mint their own tokens to drive the real upload door; a copy whose label differs mints tokens the door refuses, and the proof fails for a reason no log names. meeting-api's tests and the compose copy also pin one derivation vector.",
+      "sites": [
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/meeting_token.py",
+          "pattern": "^KEY_LABEL = b\"([^\"]+)\""
+        },
+        {
+          "path": "deploy/compose/tests/_token.py",
+          "pattern": "^KEY_LABEL = b\"([^\"]+)\"",
+          "note": "the compose recording proof's minter"
+        },
+        {
+          "path": "deploy/helm/tests/recording_roundtrip.py",
+          "pattern": "^KEY_LABEL = b\"([^\"]+)\"",
+          "note": "the Helm recording round trip's minter"
+        }
+      ]
+    },
+    {
       "id": "runtime-callback-header",
       "fact": "the header a RuntimeEvent callback carries its signature in",
       "kind": "literal",

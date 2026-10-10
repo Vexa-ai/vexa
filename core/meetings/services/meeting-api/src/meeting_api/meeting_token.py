@@ -1,9 +1,12 @@
 """meeting_token.py — the MeetingToken: the one credential a meeting bot holds.
 
-An HS256 JWT signed with the MeetingToken key (``ADMIN_TOKEN``). ``bot_spawn`` mints one per bot
-session, bound to that session's connection id (claim ``session_uid``), and places it in the bot's
-invocation. The bot presents it as ``Authorization: Bearer <token>`` on the only two doors it
-calls:
+An HS256 JWT signed with the MeetingToken key. That key is DERIVED from the deployment's admin secret
+(``ADMIN_TOKEN``, admin-api's ``ADMIN_API_TOKEN``) as HMAC-SHA256(admin secret, ``KEY_LABEL``) — never
+the admin secret itself, so the key that signs a bot's credential is not the key that mints API keys,
+and no new secret has to be distributed: meeting-api is the only service that mints or verifies a
+MeetingToken. ``bot_spawn`` mints one per bot session, bound to that session's connection id (claim
+``session_uid``), and places it in the bot's invocation. The bot presents it as
+``Authorization: Bearer <token>`` on the only two doors it calls:
 
   * the lifecycle callback (``lifecycle.mount``), where the session is the event's
     ``connection_id``;
@@ -18,6 +21,7 @@ door checks on its own.
 from __future__ import annotations
 
 import base64
+import hashlib
 import hmac
 import json
 import os
@@ -29,6 +33,24 @@ from typing import Any, Optional
 class InvalidMeetingToken(ValueError):
     """A MeetingToken that does not admit the request (bad signature, expired, malformed, or bound
     to another session). The message names the reason, never the token."""
+
+
+#: The purpose the MeetingToken key is derived for (fact meeting-token-key-label). A new label is a
+#: new key: every token minted under the old one is refused.
+KEY_LABEL = b"vexa/meeting-token/v1"
+#: The audience and scope every MeetingToken carries, and the only ones a door admits.
+AUDIENCE = "transcription-collector"
+SCOPE = "transcribe:write"
+
+
+def signing_key(secret: str) -> bytes:
+    """The MeetingToken key for the admin secret ``secret``: HMAC-SHA256(secret, KEY_LABEL)."""
+    return hmac.new(secret.encode("utf-8"), KEY_LABEL, hashlib.sha256).digest()
+
+
+def sign(signing_input: bytes, secret: str) -> bytes:
+    """The HS256 signature of ``signing_input`` (``header.payload``) under the MeetingToken key."""
+    return hmac.new(signing_key(secret), signing_input, hashlib.sha256).digest()
 
 
 def _b64url(data: bytes) -> str:
@@ -58,7 +80,8 @@ def mint_meeting_token(
     secret: Optional[str] = None,
 ) -> str:
     """Mint the MeetingToken for ONE bot session (``session_uid``, the spawn's connection id),
-    signed with ``ADMIN_TOKEN`` (or ``secret``). Stateless: no token table; the doors re-verify it."""
+    signed with the key derived from ``ADMIN_TOKEN`` (or ``secret``). Stateless: no token table; the
+    doors re-verify it."""
     if not session_uid:
         raise ValueError("a MeetingToken is bound to a session; session_uid is required")
     key = _key(secret, "mint")
@@ -70,9 +93,9 @@ def mint_meeting_token(
         "platform": platform,
         "native_meeting_id": native_meeting_id,
         "session_uid": session_uid,
-        "scope": "transcribe:write",
+        "scope": SCOPE,
         "iss": "meeting-api",
-        "aud": "transcription-collector",
+        "aud": AUDIENCE,
         "iat": now,
         "exp": now + ttl_seconds,
         "jti": str(uuid.uuid4()),
@@ -80,12 +103,11 @@ def mint_meeting_token(
     header_b64 = _b64url(json.dumps(header, separators=(",", ":")).encode())
     payload_b64 = _b64url(json.dumps(payload, separators=(",", ":")).encode())
     signing_input = f"{header_b64}.{payload_b64}".encode("ascii")
-    signature = hmac.new(key.encode(), signing_input, digestmod="sha256").digest()
-    return f"{header_b64}.{payload_b64}.{_b64url(signature)}"
+    return f"{header_b64}.{payload_b64}.{_b64url(sign(signing_input, key))}"
 
 
 def verify_meeting_token(token: str, *, secret: Optional[str] = None) -> dict[str, Any]:
-    """The claims of a MeetingToken with a valid signature that has not expired. Raises
+    """The claims of a MeetingToken signed with the MeetingToken key that has not expired. Raises
     :class:`InvalidMeetingToken` otherwise. Says nothing about which session it may act for — the
     doors use :func:`admit_session`."""
     key = _key(secret, "verify")
@@ -95,8 +117,7 @@ def verify_meeting_token(token: str, *, secret: Optional[str] = None) -> dict[st
         got = _b64url_decode(sig_b64)
     except (ValueError, TypeError, AttributeError):
         raise InvalidMeetingToken("malformed MeetingToken") from None
-    expected = hmac.new(key.encode(), signing_input, digestmod="sha256").digest()
-    if not hmac.compare_digest(expected, got):
+    if not hmac.compare_digest(sign(signing_input, key), got):
         raise InvalidMeetingToken("MeetingToken signature mismatch")
     try:
         claims = json.loads(_b64url_decode(payload_b64))

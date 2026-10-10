@@ -249,8 +249,11 @@ Where you pin an image apart from the stack's tag, move the pin in the same upgr
 **Upgrade between meetings.** A bot now signs every transcript entry it writes, and meeting-api drops
 entries that are not signed. A bot from the previous release still in a call when you upgrade writes
 unsigned entries, so its meeting's live transcript stops (and the meeting leaves the terminal's live
-list) until you send the bot again. Upgrade when no bot is in a meeting, or send those bots again
-afterwards.
+list) until you send the bot again. Its MeetingToken is refused too: meeting-api now signs and checks
+MeetingTokens with a key derived from `ADMIN_TOKEN` rather than with `ADMIN_TOKEN` itself, and does
+not accept a token signed the old way for its remaining life, so that bot's lifecycle callbacks and
+recording uploads are refused (401) until it is sent again. The same happens when `ADMIN_TOKEN` itself
+changes (below). Upgrade when no bot is in a meeting, or send those bots again afterwards.
 
 **Upgrade the gateway together with identity, the MCP, agent-api and flows-api.** Identity (admin-api)
 now verifies an agent worker's token only for a caller that says it understands one. A gateway older

@@ -7,8 +7,8 @@ two channels, the one stream, append only — and the invocation carries that us
 service connection meeting-api uses. No other key, channel or command is in a bot's reach; the user is
 removed when the session reaches a terminal state, and any left behind is removed once it is older
 than the MeetingToken it was minted beside. Redis keeps no user across a restart, so :meth:`restore`
-defines again every user still in the index; the password is derived from the MeetingToken key and
-the session, so a live bot's credential is valid again without telling it anything.
+defines again every user still in the index; the password is derived from the admin secret
+(``ADMIN_TOKEN``, under a label of its own, not the MeetingToken key's) and the session, so a live bot's credential is valid again without telling it anything.
 
 ``REDIS_WORKLOAD_ACL=shared`` hands bots the service connection instead — a deployment's explicit
 choice for a Redis that cannot define users, safe only where every person on the instance trusts
@@ -44,7 +44,7 @@ def user_for(connection_id: str) -> str:
 
 def password_for(secret: str, connection_id: str) -> str:
     if not secret:
-        raise BotRedisError("no MeetingToken key configured: a bot's Redis password cannot be derived")
+        raise BotRedisError("no admin secret (ADMIN_TOKEN) configured: a bot's Redis password cannot be derived")
     key = hmac.new(secret.encode("utf-8"), _LABEL, hashlib.sha256).digest()
     return hmac.new(key, connection_id.encode("utf-8"), hashlib.sha256).hexdigest()
 

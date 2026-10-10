@@ -30,6 +30,8 @@ GATEWAY = os.environ.get("GATEWAY_URL", "http://vexa-vexa-gateway:8000").rstrip(
 ADMIN = os.environ["ADMIN_API_URL"].rstrip("/")
 MEETING_API = "http://127.0.0.1:8080"
 ADMIN_TOKEN = os.environ["ADMIN_TOKEN"]
+#: meeting_api.meeting_token.KEY_LABEL — the purpose the MeetingToken key is derived for.
+KEY_LABEL = b"vexa/meeting-token/v1"
 
 
 def req(method, url, headers=None, body=None):
@@ -78,8 +80,9 @@ def api_key(user_id):
 
 
 def meeting_token(meeting_id, user_id, native_id, session_uid):
-    """A MeetingToken as meeting-api mints it for a bot session (HS256 over ADMIN_TOKEN, bound to
-    ``session_uid`` — the upload admits it only for that session)."""
+    """A MeetingToken as meeting-api mints it for a bot session (HS256 under the key it derives from
+    ADMIN_TOKEN, HMAC-SHA256(ADMIN_TOKEN, KEY_LABEL); bound to ``session_uid`` — the upload admits it
+    only for that session)."""
     def b64(x):
         return base64.urlsafe_b64encode(x).rstrip(b"=").decode()
     now = int(time.time())
@@ -90,7 +93,8 @@ def meeting_token(meeting_id, user_id, native_id, session_uid):
               "aud": "transcription-collector", "iat": now, "exp": now + 3600,
               "jti": str(uuid.uuid4())}
     body = b64(json.dumps(claims, separators=(",", ":")).encode())
-    sig = hmac.new(ADMIN_TOKEN.encode(), f"{head}.{body}".encode(), "sha256").digest()
+    key = hmac.new(ADMIN_TOKEN.encode(), KEY_LABEL, "sha256").digest()
+    sig = hmac.new(key, f"{head}.{body}".encode(), "sha256").digest()
     return f"{head}.{body}.{b64(sig)}"
 
 

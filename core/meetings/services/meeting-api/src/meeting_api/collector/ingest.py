@@ -21,7 +21,6 @@ The ``:mutable`` payload mirrors the bot's live publisher
 from __future__ import annotations
 
 import base64
-import hashlib
 import hmac
 import json
 import os
@@ -195,7 +194,7 @@ def _admitted(fields: dict) -> bool:
 
 
 def _verify_entry(fields: dict) -> bool:
-    from ..meeting_token import verify_meeting_token
+    from ..meeting_token import sign, verify_meeting_token
 
     auth, sig, payload = fields.get("auth"), fields.get("sig"), fields.get("payload")
     secret = os.environ.get("ADMIN_TOKEN")
@@ -205,7 +204,9 @@ def _verify_entry(fields: dict) -> bool:
         return False
     if auth.count(".") != 1:
         return False
-    token = f"{auth}.{_b64url(hmac.new(secret.encode(), auth.encode('ascii', 'replace'), hashlib.sha256).digest())}"
+    # The entry carries the token's header.payload only; its signature is recomputed under the
+    # MeetingToken key (derived from ADMIN_TOKEN, meeting_token.sign), never the admin secret itself.
+    token = f"{auth}.{_b64url(sign(auth.encode('ascii', 'replace'), secret))}"
     try:
         claims = verify_meeting_token(token, secret=secret)
         data = json.loads(payload)

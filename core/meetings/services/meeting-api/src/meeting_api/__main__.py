@@ -49,8 +49,8 @@ def _require_config(env: "os._Environ | dict | None" = None) -> None:
 
     ``config.v1.json`` (next to this module) declares every env key the service consumes; the
     vendored shared preflight raises ``ConfigError`` (a ``RuntimeError``) naming every missing
-    *required-explicit* key — e.g. ADMIN_TOKEN, the MeetingToken key every spawn mints with and the
-    lifecycle callback and the uploads verify with (meeting_token); unset, the deploy would 500
+    *required-explicit* key — e.g. ADMIN_TOKEN, the admin secret the MeetingToken key is derived from,
+    which every spawn mints with and the lifecycle callback and the uploads verify with (meeting_token); unset, the deploy would 500
     every POST /bots, so it refuses to boot instead. Capability tri-states
     (stt · object_storage, incl. the STT live auth probe) are logged here and exposed on
     ``/health``; they never block boot.
@@ -123,8 +123,8 @@ def build_production_app():
     database_url = _database_url()
     redis_url = os.getenv("REDIS_URL", "redis://redis:6379/0")
     runtime_api_url = os.getenv("RUNTIME_API_URL", "http://runtime:8090")
-    # ADMIN_TOKEN is the MeetingToken key: spawns mint with it; the lifecycle callback and the uploads
-    # admit a bot's token with it (meeting_token). _require_config() refused a boot without it.
+    # ADMIN_TOKEN is the admin secret the MeetingToken key is derived from (meeting_token.signing_key):
+    # spawns mint with that key; the lifecycle callback and the uploads admit a bot's token with it. _require_config() refused a boot without it.
     # INTERNAL_API_SECRET is a different credential, the internal tier (internal_secret below).
     token_secret = os.getenv("ADMIN_TOKEN") or None
 

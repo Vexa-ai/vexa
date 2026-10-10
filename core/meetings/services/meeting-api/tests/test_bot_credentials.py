@@ -139,6 +139,13 @@ def test_an_upload_token_without_a_meeting_is_refused_not_a_crash():
     import hashlib
     import hmac as _hmac
 
-    signing = f"{b64({'alg': 'HS256'})}.{b64({'user_id': USER})}"
-    sig = base64.urlsafe_b64encode(_hmac.new(SECRET.encode(), signing.encode(), hashlib.sha256).digest()).rstrip(b"=").decode()
+    from meeting_api import meeting_token
+
+    # correctly signed (the derived MeetingToken key), unexpired, the right audience and scope — and
+    # naming no meeting and no session
+    claims = {"user_id": USER, "aud": meeting_token.AUDIENCE, "scope": meeting_token.SCOPE,
+              "exp": int(__import__("time").time()) + 600}
+    signing = f"{b64({'alg': 'HS256'})}.{b64(claims)}"
+    key = meeting_token.signing_key(SECRET)
+    sig = base64.urlsafe_b64encode(_hmac.new(key, signing.encode(), hashlib.sha256).digest()).rstrip(b"=").decode()
     assert _post(client, f"{signing}.{sig}", "conn-a").status_code == 401

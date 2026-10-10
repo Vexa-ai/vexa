@@ -3,8 +3,9 @@
 Every bot appends to one ``transcription_segments`` stream, so the collector admits an entry only
 when its session signed it: ``auth`` (the MeetingToken's header.payload) and ``sig`` (HMAC-SHA256 of
 the payload keyed with the token), with the payload's ``meeting_id`` the token's. Anything else —
-unsigned, signed for another meeting, tampered, signed with a token another secret minted, or with an
-expired token — is acknowledged and dropped, on both the read and the reclaim path.
+unsigned, signed for another meeting, tampered, signed with a token another secret minted, with a token
+signed with the admin secret itself rather than the key derived from it, or with an expired token — is
+acknowledged and dropped, on both the read and the reclaim path.
 """
 from __future__ import annotations
 
@@ -64,7 +65,7 @@ async def test_a_bot_cannot_write_another_meetings_transcript(store, bus, admin_
 
 
 @pytest.mark.parametrize("variant", ["unsigned", "tampered", "foreign-secret", "expired", "auth-of-another",
-                                     "no-secret-configured"])
+                                     "no-secret-configured", "raw-admin-key"])
 async def test_every_other_entry_is_dropped(store, bus, admin_token, monkeypatch, variant):
     data = _data(1, variant)
     if variant == "unsigned":
@@ -76,6 +77,12 @@ async def test_every_other_entry_is_dropped(store, bus, admin_token, monkeypatch
         fields = signed_fields(data, token=token_for(1, secret="another-secret-0123456789abcdef0123"))
     elif variant == "expired":
         fields = signed_fields(data, token=token_for(1, ttl_seconds=-10))
+    elif variant == "raw-admin-key":
+        # a token signed with the admin secret itself (every token before the key was derived)
+        import base64
+        auth = ".".join(token_for(1).split(".")[:2])
+        raw_sig = hmac.new(admin_token.encode(), auth.encode(), hashlib.sha256).digest()
+        fields = signed_fields(data, token=f"{auth}.{base64.urlsafe_b64encode(raw_sig).rstrip(b'=').decode()}")
     elif variant == "auth-of-another":
         fields = signed_fields(data)
         fields["auth"] = ".".join(token_for(2).split(".")[:2])

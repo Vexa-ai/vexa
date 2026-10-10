@@ -241,8 +241,8 @@ def test_05_recording_to_storage(stack):
     platform, native_id = "google_meet", f"rec-{uuid.uuid4().hex[:8]}"
     meeting_id, session_uid = _insert_meeting(stack, user_id, platform, native_id)
 
-    # The bot authenticates uploads with a MeetingToken (HS256, signed with ADMIN_TOKEN — the admin
-    # secret meeting-api mints AND verifies with, like main; INTERNAL_API_SECRET is a different concern).
+    # The bot authenticates uploads with a MeetingToken (HS256 under the key meeting-api derives from
+    # ADMIN_TOKEN, which it mints AND verifies with; INTERNAL_API_SECRET is a different concern).
     token = mint_meeting_token(meeting_id, user_id, platform, native_id, secret=stack.admin_token,
                                session_uid=session_uid)
 

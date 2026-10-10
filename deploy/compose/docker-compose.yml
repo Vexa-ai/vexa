@@ -581,9 +581,10 @@ services:
       # (/internal/users/{id}/bot-context) and calendar sync discovers connected ICS feeds
       # (/internal/calendar-configs). Unset -> calendar sync no-ops, auto-join spawns uncapped.
       - ADMIN_API_URL=http://admin-api:8001
-      # MeetingToken is signed (mint) AND verified (recordings upload) with ADMIN_TOKEN — the SAME
-      # admin secret admin-api holds (admin-api gets ADMIN_API_TOKEN=${ADMIN_TOKEN}). Exactly like
-      # main (meeting-api ADMIN_TOKEN = admin-api ADMIN_API_TOKEN). __main__ passes token_secret=ADMIN_TOKEN.
+      # ADMIN_TOKEN is the SAME admin secret admin-api holds (admin-api gets ADMIN_API_TOKEN=${ADMIN_TOKEN}).
+      # meeting-api derives the MeetingToken key from it (HMAC-SHA256 under "vexa/meeting-token/v1") and
+      # signs (mint) AND verifies (callbacks, uploads, stream entries) with that key, never with the
+      # admin secret itself. __main__ passes token_secret=ADMIN_TOKEN.
       # NO `changeme` FALLBACK (A19) — same credential as admin-api's ADMIN_API_TOKEN above, and
       # meeting-api declares it required-explicit, so an unset value refuses the boot loudly
       # instead of signing every MeetingToken with a secret published in this repository.
