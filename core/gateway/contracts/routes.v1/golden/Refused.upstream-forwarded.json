@@ -1,0 +1,23 @@
+{
+  "why": "a forwarded domain maps every row through its forward; an upstream beside it would be a second mapping",
+  "manifest": {
+    "contract": "routes.v1",
+    "domain": "agent",
+    "owner": "core/agent",
+    "edge": "gateway",
+    "forward": {
+      "edge_prefix": "/agent/",
+      "upstream_prefix": "/api/"
+    },
+    "routes": [
+      {
+        "method": "GET",
+        "path": "/agent/jobs",
+        "scopes": [
+          "bot"
+        ],
+        "upstream": "/api/other"
+      }
+    ]
+  }
+}

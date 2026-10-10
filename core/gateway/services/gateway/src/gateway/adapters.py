@@ -22,8 +22,16 @@ import os
 from contextlib import asynccontextmanager
 from typing import Optional
 
+from . import identity_token
 from .obs import TRACE_HEADER, get_trace_id
 from .ports import AuthUnavailable
+
+#: The header this edge sets, to ``ACCEPTS_DELEGATION_VALUE``, on its ``/internal/validate`` hop to say
+#: it reads a delegation answer (identity.v1 ``AcceptsDelegationHeader``). Identity answers a worker's
+#: ``vxd_`` token only to a caller that sends it, so an edge that does not read ``delegation`` fails
+#: closed instead of forwarding the worker as its person.
+ACCEPTS_DELEGATION_HEADER = "x-vexa-internal-accepts-delegation"
+ACCEPTS_DELEGATION_VALUE = "1"
 
 
 class HttpxDownstreamClient:
@@ -72,20 +80,25 @@ class AdminApiAuthorizer:
     """``Authorizer`` over the admin-api + meeting-api hops.
 
     ``resolve`` POSTs ``/internal/validate`` to admin-api (carrying ``X-Internal-Secret`` when
-    configured, and forwarding the request trace_id); ``authorize_subscribe`` POSTs
+    configured, the delegation declaration, and the request trace_id); ``authorize_subscribe`` POSTs
     ``/ws/authorize-subscribe`` to meeting-api (which now hosts the folded-in collector, P2) with
     the resolved user identity.
     """
 
-    def __init__(self, client, admin_api_url: str, meeting_api_url: str):
+    def __init__(self, client, admin_api_url: str, meeting_api_url: str, *, identity_key=None):
         self._client = client
         self._admin_api_url = admin_api_url.rstrip("/")
         self._meeting_api_url = meeting_api_url.rstrip("/")
+        # gateway-identity.v1: the gateway's Ed25519 signing key, the same one every forward is signed with.
+        self._identity_key = identity_key
 
     async def resolve(self, api_key: str) -> Optional[dict]:
         import httpx
 
-        headers = {TRACE_HEADER: get_trace_id() or ""}
+        # This edge reads `delegation` (delegation.py), so it declares it; identity answers a
+        # worker's token to no caller that does not.
+        headers = {TRACE_HEADER: get_trace_id() or "",
+                   ACCEPTS_DELEGATION_HEADER: ACCEPTS_DELEGATION_VALUE}
         internal_secret = os.getenv("INTERNAL_API_SECRET", "")
         if internal_secret:
             headers["X-Internal-Secret"] = internal_secret
@@ -123,9 +136,13 @@ class AdminApiAuthorizer:
             # subscribe path fail-safe — surface it as an authorization error, not an unhandled 500.
             return {"authorized": [], "errors": [f"authorization_unavailable:{e}"]}
         if user_data:
-            auth_headers["x-user-id"] = str(user_data["user_id"])
-            auth_headers["x-user-scopes"] = ",".join(user_data.get("scopes", []))
-            auth_headers["x-user-limits"] = str(user_data.get("max_concurrent", 3))
+            # The same signed identity every proxied forward carries (gateway-identity.v1) — meeting-api
+            # refuses an x-user-* header without it.
+            if self._identity_key is not None:
+                auth_headers.update(identity_token.signed_headers(self._identity_key, user_data))
+            else:
+                auth_headers.update(identity_token.headers_from_claims(
+                    identity_token.claims_from_validation(user_data)))
         try:
             resp = await self._client.post(
                 f"{self._meeting_api_url}/ws/authorize-subscribe",
@@ -139,7 +156,22 @@ class AdminApiAuthorizer:
             return {"authorized": [], "errors": [f"authorization_call_failed:{e}"]}
 
 
-def build_auth_and_downstream(admin_api_url: str, meeting_api_url: str):
+def load_signing_key(path: str):
+    """gateway-identity.v1 — the gateway's Ed25519 signing key, or a refused boot.
+
+    This process is the ONE holder of the private key: agent-api, meeting-api and the credential
+    broker hold only its public half, so they verify and cannot sign. The boot preflight refuses an
+    unset path; a file that is unreadable or is not an Ed25519 private key refuses the boot here,
+    naming the fault and never the key."""
+    from .config_preflight import ConfigError
+
+    try:
+        return identity_token.read_signing_key(path)
+    except identity_token.KeyUnavailable as e:
+        raise ConfigError(f"gateway refuses to boot: VEXA_GATEWAY_IDENTITY_SIGNING_KEY_FILE — {e}") from None
+
+
+def build_auth_and_downstream(admin_api_url: str, meeting_api_url: str, *, identity_key=None):
     """#495: build the authorizer + downstream over TWO httpx clients with SEPARATE connection
     pools, and return ``(authorizer, downstream)``. This is the load-bearing decision the whole fix
     turns on — extracted here so it is unit-testable WITHOUT redis (build_production_app needs redis;
@@ -170,7 +202,7 @@ def build_auth_and_downstream(admin_api_url: str, meeting_api_url: str):
         timeout=httpx.Timeout(connect=10.0, read=None, write=10.0, pool=10.0),
         limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
     )
-    authorizer = AdminApiAuthorizer(auth_client, admin_api_url, meeting_api_url)
+    authorizer = AdminApiAuthorizer(auth_client, admin_api_url, meeting_api_url, identity_key=identity_key)
     downstream = HttpxDownstreamClient(forward_client, stream_client=stream_client)
     return authorizer, downstream
 
@@ -211,8 +243,12 @@ def build_production_app(
     mcp_url = os.getenv("MCP_URL", "http://mcp:8010")
     redis_url = redis_url or os.getenv("REDIS_URL", "redis://redis:6379/0")
 
+    # gateway-identity.v1: this process is the ONE holder of the Ed25519 signing key (see load_signing_key).
+    identity_key = load_signing_key(os.getenv("VEXA_GATEWAY_IDENTITY_SIGNING_KEY_FILE", ""))
+
     # #495: authorizer + downstream over SEPARATE httpx pools (see build_auth_and_downstream).
-    authorizer, downstream = build_auth_and_downstream(admin_api_url, meeting_api_url)
+    authorizer, downstream = build_auth_and_downstream(admin_api_url, meeting_api_url,
+                                                       identity_key=identity_key)
     redis_client = aioredis.from_url(
         redis_url, encoding="utf-8", decode_responses=True,
         socket_timeout=10, socket_connect_timeout=5, socket_keepalive=True,
@@ -229,6 +265,9 @@ def build_production_app(
         agent_api_url=agent_api_url,  # P20·Stage 2: the agent control plane fronted under /api/*
         admin_api_url=admin_api_url,  # /user/webhook self-serve proxies to identity (admin-api)
         mcp_url=mcp_url,              # #795: the MCP streamable-HTTP front door under /mcp
+        # gateway-identity.v1: the resolved identity is signed onto every forward with the key loaded
+        # above, so this is never None in production.
+        identity_key=identity_key,
         rate_limiter=_rate_limiter_from_env(),  # WS-6: per-user DoS guard (generous defaults; env-tunable)
     )
 

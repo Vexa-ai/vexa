@@ -88,7 +88,7 @@ import {
   readWorkspaceGitDiff,
   type GitCommit, type WorkspaceMember,
 } from "../surfaces/workspaceApi";
-import { ASK_CHAT_EVENT } from "../canvas/actions";
+import { ASK_CHAT_EVENT } from "../platform";
 import { AttachRepo } from "./AttachRepo";
 import { postIntent } from "./extend";
 import { POLICIES_PATH, POLICIES_WORKSPACE } from "./PoliciesAct";
@@ -448,7 +448,7 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string; title?: s
   // desk. A title that repeats the label above it is not a title.
   const eye = eyebrow(facts.kind);
   const named = (p.title || "").trim()
-    || (facts.kind === "global" ? facts.company : facts.kind === "group" ? facts.name : null);
+    || (facts.kind === "global" ? facts.company : (facts.kind === "group" || facts.kind === "private") ? facts.name : null);
   const heading = named && named.toLowerCase() !== eye.toLowerCase() ? named : null;
 
   /** OPENING THE DETAILS. History is the door and the three sections are what is behind it — all
@@ -798,7 +798,7 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string; title?: s
       {attaching && (
         <AttachRepo workspaceId={facts.kind === "desk" ? undefined : facts.slug}
           onClose={() => setAttaching(false)}
-          onAttached={() => { setAttaching(false); void loadWorkspaceFacts(p.slug).then(setFacts); }} />
+          onAttached={() => { void loadWorkspaceFacts(p.slug).then(setFacts); }} />
       )}
     </div>
   );

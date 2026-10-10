@@ -60,7 +60,7 @@ def test_quoted_windows_zone_resolves_to_the_right_instant():
     ev = parse_ics(load("outlook-w-europe.ics"), SELF)
     assert ev is not None
     assert ev["start"] == utc(2030, 3, 15, 13)
-    assert ev["organizer"] == "anna.bank@oenb.at"
+    assert ev["organizer"] == "anna.bank@bank.example"
     assert ev["url"] == "https://meet.google.com/abc-defg-hij"
 
 
@@ -86,7 +86,7 @@ def test_folding_is_undone_before_anything_is_matched():
     ev = parse_ics(load("outlook-folded.ics"), SELF)
     assert ev is not None
     assert ev["url"] == "https://meet.google.com/abc-defg-hij"
-    assert ev["organizer"] == "anna.bank@oenb.at"
+    assert ev["organizer"] == "anna.bank@bank.example"
     assert ev["ics_uid"].endswith("0000010000000AABBCCDD")
     assert ev["group"] == "risk-weekly"
     assert ev["start"] == utc(2030, 3, 15, 13)

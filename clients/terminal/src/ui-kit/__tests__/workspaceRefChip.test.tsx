@@ -11,7 +11,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { transformDocRefs } from "../MdxDoc";
 import { WorkspaceRef, invalidateDocLinkCaches, primeKnownWorkspaces, resolveDocRef } from "../docLinks";
-import { OPEN_ENTITY_EVENT } from "../../canvas/actions";
+import { OPEN_ENTITY_EVENT } from "../../platform";
 
 // Two team rooms the reader belongs to; only ONE of them is mounted in this chat. `README.md` is
 // the file every workspace has, which is what made the wrong answer look like a right one.

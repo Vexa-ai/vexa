@@ -1,0 +1,348 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vexa.ai/schemas/routes.v1",
+  "title": "routes.v1 — a domain's declaration of the routes the gateway serves for it, and each route's policy",
+  "description": "Each domain writes one `routes.v1.json` beside its service; the gateway assembles its route table from the manifests of the domains a deployment runs (`gateway/routes_manifest.py`). A row carries its policy as well as its scopes, so every policy key lives here: a new one is a contract change (lane:contract), not a loader edit. A forwarded domain may also carry `verbs` rows: policy for one verb behind the forward, read by the domain's own service, not the edge. Rules that span rows or manifests (one owner per (method, path); a forwarded row under its domain's prefix) are stated on Manifest and checked by validate.mjs over every manifest in the repository.",
+  "$defs": {
+    "Manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract",
+        "domain",
+        "owner",
+        "edge",
+        "routes"
+      ],
+      "properties": {
+        "contract": {
+          "const": "routes.v1"
+        },
+        "domain": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$",
+          "description": "the domain whose service is behind these routes; `gateway` is the edge's own two routes"
+        },
+        "owner": {
+          "type": "string",
+          "pattern": "^core/[a-z0-9/_-]+$",
+          "description": "the repository path of the owning domain or service"
+        },
+        "edge": {
+          "const": "gateway"
+        },
+        "note": {
+          "type": "string"
+        },
+        "presence_env": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]*$",
+          "description": "the setting whose presence means this domain is deployed; absent, its rows are not in the table and its routes answer 404"
+        },
+        "forward": {
+          "$ref": "#/$defs/Forward"
+        },
+        "routes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Route"
+          }
+        },
+        "verbs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Verb"
+          },
+          "description": "policy for one verb behind a forward, which the catch-all cannot carry: each row names the verb by its public path. The edge does not register these rows; the domain's service reads them (agent-api's `control_plane/route_policy.py`)"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "not": {
+              "required": [
+                "forward"
+              ]
+            }
+          },
+          "then": {
+            "properties": {
+              "routes": {
+                "items": {
+                  "not": {
+                    "required": [
+                      "stream"
+                    ],
+                    "properties": {
+                      "stream": {
+                        "const": true
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "description": "stream applies to a forwarded domain's literal rows only"
+        },
+        {
+          "if": {
+            "not": {
+              "properties": {
+                "domain": {
+                  "const": "gateway"
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "routes": {
+                "items": {
+                  "not": {
+                    "required": [
+                      "mcp_reentry"
+                    ],
+                    "properties": {
+                      "mcp_reentry": {
+                        "const": true
+                      },
+                      "scopes": {
+                        "maxItems": 0
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "description": "mcp_reentry on an unscoped row is the edge's own identity read (`/auth/me`) only: no other unscoped row reaches the authorizer that reads it"
+        },
+        {
+          "if": {
+            "required": [
+              "verbs"
+            ]
+          },
+          "then": {
+            "required": [
+              "forward"
+            ]
+          },
+          "description": "verbs map onto the domain's own routes through its forward"
+        },
+        {
+          "if": {
+            "required": [
+              "forward"
+            ]
+          },
+          "then": {
+            "properties": {
+              "routes": {
+                "items": {
+                  "not": {
+                    "required": [
+                      "upstream"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "description": "a forwarded domain's rows carry no upstream: the forward is the one mapping"
+        }
+      ],
+      "$comment": "Also checked by validate.mjs, across rows and manifests: (method, path) is declared by one manifest only; with a forward, every path is the edge prefix followed by literal segments and whole `{name}` parameters (no name twice), or the prefix's `{path:path}` catch-all. A `verbs` row is a path strictly under the edge prefix, and no (method, path) is in `verbs` twice. A row's `upstream` names no `{name}` parameter twice and none the row's own path lacks."
+    },
+    "Forward": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "edge_prefix",
+        "upstream_prefix"
+      ],
+      "description": "a domain the edge forwards wholesale: `/<edge_prefix><tail>` is sent upstream as `/<upstream_prefix><tail>`",
+      "properties": {
+        "edge_prefix": {
+          "type": "string",
+          "pattern": "^/(?:[^/{}]+/)*$"
+        },
+        "upstream_prefix": {
+          "type": "string",
+          "pattern": "^/(?:[^/{}]+/)*$"
+        }
+      }
+    },
+    "Route": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "method",
+        "path",
+        "scopes"
+      ],
+      "properties": {
+        "method": {
+          "enum": [
+            "GET",
+            "POST",
+            "PUT",
+            "PATCH",
+            "DELETE",
+            "OPTIONS",
+            "HEAD"
+          ]
+        },
+        "path": {
+          "type": "string",
+          "pattern": "^/"
+        },
+        "scopes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "bot",
+              "tx",
+              "browser"
+            ]
+          },
+          "description": "the key scopes that may call the row; an empty list DECLARES the row unscoped (never an omission)"
+        },
+        "delegation": {
+          "type": "boolean",
+          "description": "true: the row admits a worker's own delegation token; every other row refuses it"
+        },
+        "mcp_reentry": {
+          "type": "boolean",
+          "description": "true: the row admits a worker's delegation token only on the MCP's re-entry, i.e. one row per route an mcp.tools.v1 tool calls back"
+        },
+        "stream": {
+          "type": "boolean",
+          "description": "true: the edge relays the row's response as server-sent events"
+        },
+        "upstream": {
+          "type": "string",
+          "pattern": "^(?:/(?:[^/{}]+|\\{[A-Za-z_][A-Za-z0-9_]*\\}))+$",
+          "description": "the route template the edge forwards this row to on the domain's service, when it is not the row's own path; its `{name}` parameters are the row's. The domain's service reads it to know which rows reach each of its routes. A forwarded domain carries none: its forward is the one mapping"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "delegation"
+            ],
+            "properties": {
+              "delegation": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "scopes": {
+                "minItems": 1
+              },
+              "mcp_reentry": {
+                "const": false
+              }
+            }
+          },
+          "description": "a delegation row is scoped (an unscoped row never reaches the authorizer), and carries no mcp_reentry (the row already admits the token)"
+        },
+        {
+          "if": {
+            "required": [
+              "stream"
+            ],
+            "properties": {
+              "stream": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "path": {
+                "not": {
+                  "pattern": "\\{path:path\\}$"
+                }
+              }
+            }
+          },
+          "description": "only a literal row streams, never the catch-all"
+        },
+        {
+          "if": {
+            "required": [
+              "mcp_reentry"
+            ],
+            "properties": {
+              "mcp_reentry": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "path": {
+                "not": {
+                  "pattern": "\\{path:path\\}$"
+                }
+              }
+            }
+          },
+          "description": "mcp_reentry names one route an MCP tool calls back, never a catch-all that would admit every path under its prefix"
+        }
+      ]
+    },
+    "Verb": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "method",
+        "path",
+        "person"
+      ],
+      "properties": {
+        "method": {
+          "enum": [
+            "GET",
+            "POST",
+            "PUT",
+            "PATCH",
+            "DELETE"
+          ]
+        },
+        "path": {
+          "type": "string",
+          "pattern": "^/"
+        },
+        "person": {
+          "type": "boolean",
+          "description": "true: the verb needs a person in the loop, and the service refuses a worker dispatched without one before the route runs"
+        }
+      }
+    },
+    "Refused": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "why",
+        "manifest"
+      ],
+      "description": "a refusal vector: `manifest` must be refused, for the reason `why` names",
+      "properties": {
+        "why": {
+          "type": "string",
+          "minLength": 1
+        },
+        "manifest": {
+          "type": "object"
+        }
+      }
+    }
+  }
+}

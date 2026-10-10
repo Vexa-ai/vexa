@@ -19,7 +19,7 @@ talk directly — they meet **here**, over published contracts (`api.v1`, `ws.v1
 | Direction | Neighbour | Via | What crosses |
 |---|---|---|---|
 | **calls** | `admin-api` | HTTP `POST /internal/validate` | `x-api-key` token → `{user_id, scopes, max_concurrent, webhook_*}` (fail-closed 401) |
-| **calls** | `meeting-api` | HTTP proxy `/bots · /meetings · /transcripts · /recordings` | client request + injected `x-user-id`/`x-user-scopes`/`x-user-limits`; body + status returned verbatim |
+| **calls** | `meeting-api` | HTTP proxy `/bots · /meetings · /transcripts · /recordings` | client request + injected `x-user-id`/`x-user-scopes`/`x-user-limits`, signed as `X-Vexa-Identity` with the Ed25519 key in `VEXA_GATEWAY_IDENTITY_SIGNING_KEY_FILE` (gateway-identity.v1); body + status returned verbatim |
 | **calls** | `meeting-api` | HTTP `POST /ws/authorize-subscribe` | `/ws` subscribe authorization → `{authorized[], errors[]}` |
 | **consumes** | `redis` (producers: meeting-api + collector) | sub `tc:meeting:{id}:mutable` · `bm:meeting:{id}:status` · `va:meeting:{id}:chat` | raw transcript / status / chat payloads, forwarded unchanged to the socket |
 | **produces** | clients (dashboard, SDKs) | WS `/ws` (`ws.v1`) | `subscribed`/`unsubscribed`/`pong`/`error` control + type-tagged live data frames |
@@ -33,6 +33,22 @@ talk directly — they meet **here**, over published contracts (`api.v1`, `ws.v1
 `contracts.seal.json`.
 **Consumes:** its own `api.v1`/`ws.v1` shapes by-path at the edge; admin-api's `/internal/validate`
 and meeting-api's `/ws/authorize-subscribe` are HTTP hops, not `*.v1` contracts.
+
+## Route table and policy
+Assembled at boot from each deployed domain's `routes.v1.json` (`src/gateway/routes_manifest.py`);
+the edge declares only its own `/health` and `/auth/me`. A row carries its scopes and, with
+`"delegation": true`, admits a worker's own delegation token (the MCP front door and the agent's
+friction report; `src/gateway/delegation.py`); with `"mcp_reentry": true` it admits that token
+only on the MCP's re-entry — the rows the MCP's tools call back into, and no others. A domain
+fronted wholesale (the agent) declares `forward` — `{"edge_prefix": "/agent/", "upstream_prefix":
+"/api/"}` — and the edge registers its rows from the manifest without naming any of them: the
+catch-all, and a route of its own for every other row (literal, or with whole-segment `{name}`
+parameters re-encoded like any path parameter). A meetings row is forwarded to its own path on
+meeting-api, or to the `"upstream"` it names (`/user/webhook/deliveries` is meeting-api's
+`/webhooks/deliveries`); every `{name}` in that target is filled under the same rule as a forwarded
+row (`paths.forwarded_param`), and `{platform}` must be an api.v1 `Platform`. meeting-api reads the
+same rows to check, on the route a request matched, the scopes this edge checked
+(`meeting_api/route_scopes.py`). `mcp_reentry` is refused on a `{path:path}` catch-all.
 
 ## Isolated evaluation
 `tests/` holds unit evals (L2) over `create_app` with in-process fakes injected via `conftest.py`

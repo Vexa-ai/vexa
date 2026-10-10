@@ -2,17 +2,129 @@
 
 The agent control plane: the FastAPI app (`api.py`) and orchestration that dispatches work to workers and reconciles routine/meeting lifecycle. Owns request handling, routine bookkeeping, transcription watching, and event relay — distinct from the `worker/` that runs a single agent workload.
 
+## Modules
+
+Every module in this folder, by concern. `routers/` holds the routes, one module per owner (see
+[`routers/README.md`](routers/README.md)).
+
+**The HTTP app**
+- `api.py` — `create_app`: builds what the routes are built out of (resolvers, stores, peer clients)
+  and includes the routers.
+- `api_shared.py` — what the routes share: the session index, live meetings, the unit inbox, SSE
+  framing, the chat's grounding and context bundle.
+- `unit_faults.py` — why a chat's queue is not moving (P18): the typed runtime fault a failed spawn
+  leaves on the unit (`unit:{id}:fault`, agent-api its only writer). The pending list marks queued
+  rows `blocked` by it and the chat's SSE relay answers an attach with it as an `error` event; it
+  stops blocking the moment the worker takes anything. A refused dispatch answers 502/503 with
+  `{detail, fault}` on every door, never a 500.
+- `bodies.py` — every named request body, as a pydantic model (the OpenAPI schema names).
+- `ceiling.py` — where a caller may act and whether a person is in the loop: the delegated
+  dispatch's workspace ceiling (`require_in_ceiling`, `write_slug`, `reads_within`), the one
+  person-in-the-loop rule (`is_delegated`, `is_unwatched`, `require_person`, `REFUSAL`), and the
+  one logged refusal.
+- `route_policy.py` — which verbs need a person in the loop: the `verbs` rows of
+  `core/agent/routes.v1.json` marked `"person": true` (routes.v1). `PERSON_GATE`, an app-level
+  dependency, applies `require_person` to the route a request matched. A row naming a route the app
+  does not serve refuses the boot, and so does a destructive or membership route with no flag (any
+  DELETE, and any other write whose path has a `MEMBERSHIP_SEGMENTS` segment, less the internal-only
+  `NOT_A_WORKER_DOOR`).
+- `version.py` — what is serving, one unauthenticated fact.
+- `admin_panel.py` — read-only infrastructure and meeting-pipeline introspection for the hidden admin
+  panel.
+- `config_preflight.py` — the boot-time `config.v1` validator (ADR-0026); `config_test.py` — the
+  Settings → Models "Test" probes.
+
+**Trust at the door**
+- `identity_token.py` — gateway-identity.v1: verifies the identity the gateway signed onto a request
+  (vendored byte for byte; fact `identity-token`).
+- `dispatch_sink.py` — who may hand agent-api a dispatch to run.
+- `broker_assertion.py` — credential-broker.v1's one Python signer and verifier;
+  `broker_client.py` — the one HTTP client to the credential broker.
+
+**Peers.** agent-api calls meeting-api, admin-api and flows-api from several modules, each as the
+caller or with the internal secret, never with a credential of its own:
+- `peer_lookups.py` — meeting access and transcript (meeting-api) and email → subject (admin-api), for
+  the live feed's ownership gate and the post-meeting room; fails closed.
+- `meeting_mint.py` (meeting-api annotate), `schedule_digest.py` (meeting-api meetings list),
+  `global_layer.py` (admin-api is-admin), `publish.py` (flows-api events), the membership index
+  `api.py` builds (admin-api), `routers/clock.py` and `routers/admin.py` (admin-api), and
+  `admin_panel.py` (health probes).
+
+**Dispatch and workloads**
+- `dispatch.py` — a unit.v1 DISPATCH becomes a runtime.v1 agent container.
+- `events.py` — event.v1 ingress → unit.v1 DISPATCH.
+- `routines.py` (the routine compiler), `workspace_routines.py` (workspace-authored routines onto the
+  runtime scheduler), `routine_resign.py` (re-arms routines armed before dispatches were signed).
+- `workload_redis.py` — the Redis user an agent worker connects as.
+- `model_endpoint.py` — whether a subject's model config points elsewhere, and the operator gate on
+  where.
+
+**Meetings**
+- `bridge.py` — the meeting WebSocket → agent bridge.
+- `transcription_watcher.py` — the in-process watch over the live transcript.
+- `meeting_mint.py` (a meeting's page exists from the moment the meeting does), `meeting_note.py`
+  (where its report lives on a desk), `meeting_room.py` (the attendees' read-only mounts after it),
+  `meeting_highlight.py` (what it has named, and which names have a page), `meeting_terms.py` (the
+  annotation layer over its transcript), `meeting_steering.py` (per-state preambles for meeting chat
+  turns), `schedule_digest.py` (the schedule as a prompt block).
+
+**Workspaces**
+- `workspace_reader.py`, `workspace_ids.py` (id → where it is now), `workspace_purpose.py`,
+  `system_mounts.py` (the two system tiers of the mount stack), `global_layer.py` and
+  `global_seed.py` (the company layer in `_global`, and its seed), `link_resolver.py`.
+- Membership: `workspace_membership.py` (below), `membership_acts.py` (adding a member is a
+  conversation).
+- Git: `workspace_attach.py`, `workspace_import.py`, `workspace_publish.py`, `workspace_git_sync.py`,
+  `repo_ref.py`, `deploy_keys.py`, `workspace_credentials.py`, `git_credentials.py`,
+  `git_secret_store.py`, and `secret_store.py` (the one encrypted-at-rest store).
+
+**Chat, pages and onboarding**
+- `scaffolds.py` (what the agent knows and the UI shows at the moment a person arrives),
+  `preset_library.py` (the ask library), `chat_intents.py` (a button on a page → its preset),
+  `front_page.py`, `flow_pages_watch.py`, `claims.py` (the claim book), `onboarding_research.py`
+  (the account-scoped research cursor), `connection_setup_schema.py` (a custom-service setup
+  proposal's shape).
+
+## A worker's delegation token ends with its unit
+
+`delegation_revocation.py`. Each dispatch's delegation token (`shared/delegation.py`) is recorded
+against its unit before the spawn (`vexa:delegation:unit:<unit id>`, jti → exp) and held live
+(`vexa:delegation:live:<jti>`, expiring with the token — identity admits a token only while that key
+exists), and a token that cannot be recorded is withheld. The reaper thread compares the recorded units with the runtime's live
+workloads every 30 s; a unit the runtime no longer runs — completed, idled out, stopped, failed, or
+never started — has its tokens written to `vexa:delegation:revoked:<jti>` with their remaining
+lifetime and their live keys deleted, which identity's `/internal/validate` refuses. A unit id is reused across warm windows, so
+the dispatch that starts a unit's next container also revokes the previous container's token when the
+runtime reports it ended. Tokens younger than 120 s are never revoked (their spawn may still be on
+its way), and a sweep that cannot read the runtime revokes nothing. The token's lifetime,
+`VEXA_MCP_DELEGATION_TTL_SEC`, defaults to the chat warm window plus one turn (1800 s).
+
+`delegation_refresh.py`. The same sweep keeps a LIVE unit's token fresh: once half of its life has
+passed, agent-api mints a new one for the same person, regime, ceiling and target (new `jti`),
+from its own record of the current token (`vexa:delegation:current:<unit id>`), records it for
+revocation and publishes it at `unit:<id>:delegation`, which the worker's Redis user may read and not
+write (`workload_redis.py`). The worker reads that key before every turn, write-back and job and
+rewrites its MCP attachment (`worker/engine.py` `DelegationRefresh`), so a unit kept warm keeps its
+tools; it holds the token outside its environment, so no harness subprocess inherits it. The replaced
+token is not revoked while its unit runs: a turn that started with it keeps it until its own `exp`
+(900 s after the refresh at the default). A turn that runs longer than that has its Vexa tool calls
+refused, and ends with a typed fault (`source: "vexa-tools"`, `kind: "access_expired"`;
+`worker/tool_access.py`) rather than quietly without its tools. A unit the runtime no longer runs is
+never refreshed, and every token it holds, refreshed or replaced, is revoked on the first sweep after
+it ends.
+
 ## Workspace membership + invites + roles (Lane M — the access layer for shared workspaces)
 
 > **The full workspace + collaboration model (tiers, personal, sharing, live collaboration, deferred)
 > is documented in [`docs/docs/core/workspaces.mdx`](../../../docs/docs/core/workspaces.mdx).** This section is the Lane M
 > membership/invite mechanism.
 
-`workspace_membership.py` is the access layer for shared workspaces. **Single-rank model (owner ruling
-2026-07-07):** a shared workspace has ONE member rank — every member is read/write and can share
-(mint/revoke invites); the **`owner` is just the CREATOR** (the only one who can unshare / remove
-members / change role). The read-only `viewer` role stays in the lattice for back-compat but is **not
-invitable** — `INVITABLE_ROLES = ("contributor",)`.
+`workspace_membership.py` is the access layer for shared workspaces. **Three roles:** `owner >
+contributor > viewer`, said to people as owner, contributor and reader. An owner writes and adds or
+removes members; a contributor writes; a reader reads. An invite may be minted for any of the three
+(`INVITABLE_ROLES = ROLE_WORDS`). `POST /api/workspace/invite` (one address, the agent's
+`workspace_invite`) is owner-only; `POST /api/workspace/invites` (a link) needs owner or contributor;
+removing members and changing roles is owner-only.
 
 **Two stores, written together (git is authoritative, the index is derived):**
 - **Authoritative** — the workspace's OWN git repo at `policy/members.json`

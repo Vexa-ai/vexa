@@ -19,7 +19,7 @@ import sim as S
 
 RUN = os.environ.get("SIM_RUN_DIR", os.path.expanduser("~/sim-runs/r5"))
 SIZES = [int(x) for x in os.environ.get("SIM_SIZES", "2000,20000,200000").split(",")]
-PROFILE = {2000: "SPI", 20000: "SPE", 200000: "Sony Group"}
+PROFILE = {2000: "Brightwater", 20000: "Brightwater Group", 200000: "Brightwater Holdings"}
 STRATS = ["pilot_random", "one_coordinator_per_show", "all_coordinators_and_pms",
           "admin_all_dailies"]
 LEVER = os.environ.get("SIM_LEVER", "personal")
@@ -35,7 +35,7 @@ def main():
           f"{'T25':>6}{'T50':>6}{'T80':>6} {'peak':>7} {'steady':>7} {'ret30':>7}{'ret90':>7}")
     print("-" * 112)
     for n in SIZES:
-        o = O.build("spi", n)
+        o = O.build("studio", n)
         P.assign(o)
         keep = set(cohorts.split(o)[cohorts.PRODUCTION])
         oc = O.Org([p for p in o.people if p.pid in keep],

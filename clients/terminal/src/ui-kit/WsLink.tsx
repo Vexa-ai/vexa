@@ -37,7 +37,7 @@ export function WsLink({ refText, slug }: { refText: string; slug?: string }) {
   const parsed = parseWsRef(refText);
   const [hover, setHover] = useState(false);
   // undefined = resolving. The FIRST paint shows the humanized target rather than the raw id: a
-  // reader must never be shown `k4m5x2q7bd/olga-avramenko` while a request is in flight.
+  // reader must never be shown `k4m5x2q7bd/nora-quill` while a request is in flight.
   const [target, setTarget] = useState<ResolvedLink | undefined>(undefined);
   const openEntity = useOpenEntity();
 

@@ -27,7 +27,7 @@ kind of thing with frontmatter and a Decided/Open split, so does this one. Every
 it came from. What you could not find out is a line saying so, never a heading with nothing under it.
 
 If the page wants a picture, `fetch_asset` it into the workspace first and reference it relatively
-(`![OeNB logo](assets/oenb-logo.svg)`) — a page never links an image straight off someone else's site.
+(`![Example Bank logo](assets/bank-logo.svg)`) — a page never links an image straight off someone else's site.
 An image address you have not fetched or checked is a GUESS: never write one you have not seen
 answer. When you cannot find the real file, write the sentence without the picture.
 

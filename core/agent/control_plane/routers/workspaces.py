@@ -1,6 +1,6 @@
 """routers/workspaces.py — Everything a workspace is: read and write its files, its git state, its identity, the
-mount set, attach and swap, sharing, membership and invites, and the credentials that
-make a remote reachable.
+mount set, attach and swap, and the credentials that make a remote reachable. Sharing, membership
+and invites are `routers/sharing.py`.
 
 Extracted from `api.py`'s `create_app` VERBATIM: the handler bodies below are the same
 bytes, with `@app.` rewritten to `@router.` and nothing else. Everything they close over
@@ -14,26 +14,27 @@ from control_plane import deploy_keys as deploy_keys_mod
 from control_plane import front_page as front_page_mod
 from control_plane import git_credentials as git_creds
 from control_plane import global_layer
-from control_plane import membership_acts
 from control_plane import publish as publish_mod
 from control_plane import repo_ref
 from control_plane import scaffolds as scaffolds_mod
 from control_plane import system_mounts
+from control_plane import workspace_import as imports
 from control_plane import workspace_credentials as wcreds
 from control_plane import workspace_ids as ids_mod
 from control_plane import workspace_membership as membership_mod
-from control_plane.api_shared import (
-    ArchiveBody, GitTokenBody, InviteAcceptBody, InviteCreateBody, MAX_UPLOAD_BYTES,
-    RoleSetBody, SharedActiveBody, SharedAttachBody, SharedNewBody, WorkspaceActivateBody,
+from control_plane import workspace_routines as workspace_routines_mod
+from control_plane.api_shared import MAX_UPLOAD_BYTES, _upload_filename, logger
+from control_plane.bodies import (
+    ArchiveBody, AssetFetchBody, ClaimVerdictsBody, ClaimsProposeBody, EntityUpsertBody,
+    GitTokenBody, SharedActiveBody, SharedAttachBody, WorkspaceActivateBody,
     WorkspaceDeactivateBody, WorkspaceMoveBody, WorkspaceNewBody, WorkspacePublishBody,
-    WorkspaceInviteBody, WorkspaceMembershipBody,
-    WorkspacePullBody, WorkspacePurposeBody, WorkspacePushBody, WorkspaceRemoveBody,
-    WorkspaceRenameBody, WorkspaceSwapBody, _upload_filename, logger)
+    WorkspaceImportBody, WorkspacePullBody, WorkspacePurposeBody, WorkspacePushBody,
+    WorkspaceRemoveBody, WorkspaceRenameBody, WorkspaceSwapBody, WorkspaceWriteBody)
+from control_plane.ceiling import is_unwatched, require_in_ceiling, write_slug
 from control_plane.workspace_attach import (
-    CloneError, activate_workspace, active_workspaces, attach_shared_workspace,
-    attached_workspaces, create_shared_workspace_dir, create_workspace,
-    deactivate_workspace, delete_workspace, ensure_workspace_private,
-    ensure_workspace_shareable, rename_workspace, set_archived, set_shared_active,
+    CloneError, activate_workspace, active_workspaces, attach_shared_workspace, bind_repository_credential,
+    attached_workspaces, create_workspace, deactivate_workspace, delete_workspace,
+    rename_workspace, set_archived, set_shared_active,
     shared_active_mounts, shared_attached_state, swap_workspace, workspace_slot_dir)
 from control_plane.workspace_git_sync import (
     RemoteSyncError, detach_home, pull_origin, push_origin, remote_status)
@@ -49,9 +50,11 @@ from shared import asset_source as assets_mod
 from shared import friction as friction_mod
 from shared import page_images
 from shared.git_redaction import redact as redact_secrets
+from shared.gitexec import run_git
 from shared.seeding import resolve_seed_dir, seed_workspace, validate_seed
 from typing import Optional
 import hashlib
+import stat as stat_mod
 import os
 
 
@@ -72,28 +75,33 @@ def build(**d) -> APIRouter:
     router = APIRouter()
     _clone_fn = d['_clone_fn']
     _credential_refusal = d['_credential_refusal']
-    # THE ADDRESS → SUBJECT RESOLVER (Vexa-ai/vexa#1632). Already built for the meeting room, and
-    # the same question one door over: does this deployment know this address? Here the answer
-    # decides whether an invite link is handed back in the chat or mailed, and a resolver that
-    # cannot answer means EXTERNAL — the fail-closed direction, which mails rather than silently
-    # handing the agent a link it will tell somebody is already theirs.
-    _email_subject_lookup = d['_email_subject_lookup']
     _entity_mounts = d['_entity_mounts']
     _internal_caller = d['_internal_caller']
     _manage_dir = d['_manage_dir']
     _member_error = d['_member_error']
-    _pc = d['_pc']
     _read_target = d['_read_target']
     _repo = d['_repo']
     _require_shared_write = d['_require_shared_write']
     _workspace_key = d['_workspace_key']
     _ws_is_member = d['_ws_is_member']
     _ws_sync = d['_ws_sync']
+    _ws_lookup = d['_ws_lookup']
     mindex = d['mindex']
     settings = d['settings']
     subject_of = d['subject_of']
     workspace_registry = d['workspace_registry']
     wsr = d['wsr']
+
+    def _writable_global() -> Optional[Path]:
+        """The `_global` the worker mount serves (`system_mounts.global_root`), when this process may
+        write it — else None. One answer for the editor, the page writer and reset, so an admin's
+        edit lands in the bytes every agent reads."""
+        target = system_mounts.global_root(settings, wsr.root)
+        return target if target.is_dir() and os.access(target, os.W_OK) else None
+
+    def _global_dir() -> Path:
+        """Where `_global` is, for the readers in this router (the company directory's person pages)."""
+        return system_mounts.global_root(settings, wsr.root)
 
     @router.get("/api/workspace/tree")
     def ws_tree(request: Request, hidden: bool = False, slug: Optional[str] = None):
@@ -126,15 +134,18 @@ def build(**d) -> APIRouter:
             # keep working after the conversation that produced it is over. So an attached image
             # lands beside the ones the agent fetches, and everything else keeps its drawer.
             folder = assets_mod.ASSETS_DIR if assets_mod.is_image_path(safe_name) else "uploads"
-            into = ws / folder
-            into.mkdir(parents=True, exist_ok=True)
-            target = (into / stored_name).resolve()
-            if into.resolve() not in target.parents:
-                raise HTTPException(status_code=400, detail="invalid filename")
-            pending.append((target, content, stored_name, f"{folder}/{stored_name}"))
+            try:
+                wpaths.relative_parts(f"{folder}/{stored_name}")
+            except wpaths.PathRefused:
+                raise HTTPException(status_code=400, detail="invalid filename") from None
+            pending.append((content, stored_name, f"{folder}/{stored_name}"))
         uploaded: list[dict[str, str]] = []
-        for target, content, stored_name, path in pending:
-            target.write_bytes(content)
+        for content, stored_name, path in pending:
+            # NOFOLLOW: a link planted at `uploads/`/`assets/` refuses, one at the name is replaced
+            try:
+                wpaths.write_bytes_inside(ws, path, content)
+            except wpaths.PathRefused:
+                raise HTTPException(status_code=400, detail="invalid filename") from None
             uploaded.append({"name": stored_name, "path": path})
         return {"files": uploaded}
     def _write_dir(request: Request, subject, rel: str, slug: Optional[str]) -> Path:
@@ -156,11 +167,10 @@ def build(**d) -> APIRouter:
         if rel.startswith("kg/templates/"):
             raise HTTPException(status_code=403, detail="kg/templates/ holds entity shapes, not records")
         if slug == system_mounts.GLOBAL_SLUG:
+            require_in_ceiling(request, slug)
             if not global_layer.is_admin(settings, str(subject)):
                 raise HTTPException(status_code=403, detail="only an org admin may edit _global")
-            candidates = [Path(settings.workspaces_dir) / system_mounts.GLOBAL_SLUG,
-                          Path(settings.global_system_workspace_path or "/nonexistent")]
-            target = next((c for c in candidates if c.is_dir() and os.access(c, os.W_OK)), None)
+            target = _writable_global()
             if target is None:
                 raise HTTPException(status_code=404, detail="the organisation tier is not writable here")
             return target
@@ -175,7 +185,7 @@ def build(**d) -> APIRouter:
                        tool: str = "") -> list[str]:
         """VERIFY EVERY EXTERNAL IMAGE ADDRESS BEFORE IT REACHES A PAGE (Vexa-ai/vexa#1624).
 
-        The OeNB README carried `![OeNB logo](https://upload.wikimedia.org/…/ÖNB_Logo.svg)`, an
+        The Example Bank README carried `![Example Bank logo](https://upload.wikimedia.org/…/Example_Bank_Logo.svg)`, an
         address the agent invented and nobody ever requested; it answers 404. This is the two
         page-writing doors — `workspace_write` (PUT /api/workspace/file) and `entity_upsert` — asking
         the question the writer did not: does this address answer, with an image? A dead one is cut
@@ -217,13 +227,11 @@ def build(**d) -> APIRouter:
         runs). One such path would have sunk the other's staging silently, leaving a moved page on
         disk and nothing in history. Per path, `check=False`, and the commit then names only what
         actually staged."""
-        import subprocess as _sp
         if not (target / ".git").is_dir():
             return None
 
         def _git(*args: str):
-            return _sp.run(["git", "-C", str(target), *args], check=False, capture_output=True,
-                           text=True)
+            return run_git(target, *args)
 
         staged = [p for p in paths if p and _git("add", "--", p).returncode == 0]
         if staged:
@@ -244,15 +252,14 @@ def build(**d) -> APIRouter:
             raise HTTPException(status_code=413,
                                 detail=f"{rel} exceeds {assets_mod.MAX_ASSET_BYTES // (1024 * 1024)}MB")
         try:
-            f = wpaths.resolve_inside(target, rel)   # …and again WITH the root, for the symlink half
-            index = wpaths.resolve_inside(target, assets_mod.SOURCES_INDEX)
+            # resolved ONCE, then written nofollow through what was resolved (`locate_inside`)
+            fbase, frel = wpaths.locate_inside(target, rel)
+            ibase, irel = wpaths.locate_inside(target, assets_mod.SOURCES_INDEX)
+            wpaths.write_bytes_inside(fbase, frel, content)
+            existing = wpaths.read_text_inside(ibase, irel) or ""
+            wpaths.write_text_inside(ibase, irel, assets_mod.record_source(existing, rel, source))
         except wpaths.PathRefused as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from None
-        f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_bytes(content)
-        existing = index.read_text(encoding="utf-8") if index.is_file() else ""
-        index.parent.mkdir(parents=True, exist_ok=True)
-        index.write_text(assets_mod.record_source(existing, rel, source), encoding="utf-8")
         _commit(target, [rel, assets_mod.SOURCES_INDEX], f"asset {rel} ({source or 'uploaded'})")
         return {"path": rel, "bytes": len(content), "source": source,
                 "content_type": assets_mod.media_type_for(rel)}
@@ -260,7 +267,7 @@ def build(**d) -> APIRouter:
     @router.get("/api/workspace/asset")
     def ws_asset(request: Request, path: str, slug: Optional[str] = None,
                  if_none_match: Optional[str] = Header(default=None, alias="If-None-Match")):
-        """SERVE one workspace file AS ITSELF — the route `![logo](assets/oenb-logo.svg)` renders
+        """SERVE one workspace file AS ITSELF — the route `![logo](assets/bank-logo.svg)` renders
         through (Vexa-ai/vexa#1612).
 
         The scoping is `ws_file`'s, deliberately and to the letter: a page and the pictures in it
@@ -276,14 +283,17 @@ def build(**d) -> APIRouter:
         would re-download every logo on every scroll."""
         try:
             base = _read_target(request, slug)
-            f = wpaths.resolve_inside(base, path)
+            abase, arel = wpaths.locate_inside(base, path)
         except wpaths.PathRefused as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from None
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from None
-        if not (f.exists() and f.is_file()):
+        # read ONCE, nofollow, through what was resolved — the bytes served are the bytes checked
+        data = wpaths.read_bytes_inside(abase, arel) if arel else None
+        stat = wpaths.stat_inside(abase, arel) if data is not None else None
+        if data is None or stat is None:
             raise HTTPException(status_code=404, detail="not found")
-        stat = f.stat()
+        f = abase / arel
         etag = f'"{stat.st_size:x}-{stat.st_mtime_ns:x}"'
         headers = {
             "ETag": etag,
@@ -294,13 +304,13 @@ def build(**d) -> APIRouter:
         }
         if if_none_match and etag in [t.strip() for t in if_none_match.split(",")]:
             return Response(status_code=304, headers=headers)
-        return Response(content=f.read_bytes(), media_type=assets_mod.media_type_for(path),
-                        headers=headers)
+        return Response(content=data, media_type=assets_mod.media_type_for(path), headers=headers)
 
     @router.post("/api/workspace/asset")
-    def ws_asset_fetch(request: Request, body: dict = Body(...)):
+    def ws_asset_fetch(request: Request, body: AssetFetchBody = Body(...)):
         """FETCH a remote image INTO the workspace — the act behind the external-image placeholder,
-        and behind the rig's `fetch_asset`.
+        and the verb behind `fetch_asset`. Then reference the stored file on the page relatively,
+        `![alt](assets/<name>)`; never put the remote URL on a page.
 
         The server fetches, never the reader's browser: that is the whole rule (#1612). It is also
         the only place that CAN — a page in a bank's workspace must not make that browser talk to a
@@ -313,8 +323,8 @@ def build(**d) -> APIRouter:
         that is wrong), **424** when the remote answered and answered badly — its own code carried
         as `upstream_status`, so the client can say *the site answered 404* in words — and **502**
         when nothing usable came back at all."""
-        url = str(body.get("url") or "").strip()
-        slug = str(body.get("slug") or "").strip() or None
+        url = body.url.strip()
+        slug = write_slug(request, body.slug)
         try:
             content, ctype, final_url = assets_mod.fetch_asset(url)
         except assets_mod.AssetFetchError as exc:
@@ -326,7 +336,7 @@ def build(**d) -> APIRouter:
                 detail={"error": "asset_upstream" if upstream else "asset_unreachable",
                         "message": str(exc), "url": getattr(exc, "url", "") or url,
                         "upstream_status": upstream}) from None
-        rel = assets_mod.asset_path_for(url, ctype, str(body.get("path") or ""))
+        rel = assets_mod.asset_path_for(url, ctype, body.path)
         return _store_asset(request, rel, slug, content, final_url or url)
 
     @router.put("/api/workspace/asset")
@@ -361,37 +371,44 @@ def build(**d) -> APIRouter:
             raise HTTPException(status_code=404, detail="not found")
         return {"path": path, "content": content}
     @router.put("/api/workspace/file")
-    def ws_file_write(request: Request, body: dict = Body(...)):
-        """WRITE one doc — the terminal's in-place page editor (Codex-style). Authorization mirrors the
-        MOUNT rules, not the read rules: own baseline/_system always; a shared workspace needs
-        contributor+; `_global` only the admin allowlist. Commits so history stays honest."""
+    def ws_file_write(request: Request, body: WorkspaceWriteBody = Body(...)):
+        """WRITE one page, creating it or replacing it whole — the terminal's in-place page editor and
+        the verb behind `workspace_write`. Authorization mirrors the MOUNT rules, not the read rules:
+        own desk and `_system` always; a shared workspace needs contributor+; `_global` only the
+        admin allowlist. Commits, so the history stays honest.
+
+        Never overwrite a page with a note saying it moved or went away: `workspace_move` and
+        `workspace_delete` do those, and keep the history."""
         import shutil as _sh  # noqa: F401 — parity with ws_reset's import style
-        import subprocess as _sp
         subject = subject_of(request)
-        rel = str(body.get("path") or "").strip()
-        slug = str(body.get("slug") or "").strip() or None
-        content = body.get("content")
-        if not isinstance(content, str):
-            raise HTTPException(status_code=400, detail="need a relative path and string content")
+        rel = body.path.strip()
+        slug = write_slug(request, body.slug)
+        content = body.content
         # #1624: an image address nobody checked never reaches the page (see `_screen_images`).
         content = _screen_images(request, [content], path=rel, tool="workspace_write")[0]
         target = _write_dir(request, subject, rel, slug)
         try:
-            f = wpaths.resolve_inside(target, rel)   # …and again WITH the root, for the symlink half
+            # resolved ONCE (…and again WITH the root, for the symlink half), written nofollow
+            fbase, frel = wpaths.locate_inside(target, rel)
+            f = wpaths.write_text_inside(fbase, frel, content)
         except wpaths.PathRefused as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from None
-        f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text(content, encoding="utf-8")
         if (target / ".git").is_dir():
-            _sp.run(["git", "-C", str(target), "add", rel], check=False, capture_output=True)
-            _sp.run(["git", "-C", str(target), "-c", "user.name=vexa-terminal", "-c", "user.email=terminal@vexa.local",
-                     "commit", "-m", f"edit {rel} (terminal page editor)"], check=False, capture_output=True)
-        return {"path": rel, "written": True}
+            run_git(target, "add", "--", rel)
+            run_git(target, "-c", "user.name=vexa-terminal", "-c", "user.email=terminal@vexa.local",
+                    "commit", "-m", f"edit {rel} (terminal page editor)")
+        # A ROUTINE A PERSON WROTE IS A ROUTINE THEY STAND BEHIND (`workspace_routines.PENDING`). A
+        # worker dispatched without a person writes one that waits for confirmation instead.
+        routine = workspace_routines_mod.is_routine_file(wsr.root, str(subject), f)
+        if routine and not is_unwatched(request):
+            workspace_routines_mod.approve_routine_file(str(subject), routine, workspaces_dir=wsr.root)
+        return {"path": rel, "written": True, **({"routine_pending_confirmation": True}
+                                                  if routine and is_unwatched(request) else {})}
 
     # ── REMOVING AND MOVING A PAGE (Vexa-ai/vexa#1621) ───────────────────────────────────────────
     #
     # Founder, session 176, 13:36Z: *"remove from personal"* — and there was no verb for it. The
-    # agent moving the OeNB dossier off the desk had `workspace_write`, which creates or overwrites,
+    # agent moving the Example Bank dossier off the desk had `workspace_write`, which creates or overwrites,
     # and two read-only routes; so it collapsed each of the seven pages to a one-line pointer and had
     # to report that "removed" meant "collapsed". The files stayed on the desk (friction
     # `fr_a373e9448d2909a6`).
@@ -459,17 +476,20 @@ def build(**d) -> APIRouter:
         agent is meant to read that and say so, not retry."""
         subject = subject_of(request)
         rel = str(body.path or "").strip()
-        slug = (body.slug or "").strip() or None
+        slug = write_slug(request, body.slug)
         target = _movable_dir(request, subject, rel, slug)
         try:
-            f = wpaths.resolve_inside(target, rel)
+            # CHECK ONCE, ACT ON WHAT WAS CHECKED: the removal goes through the located root and
+            # link-free path by descriptor, so a link swapped in after the check removes nothing
+            # outside this workspace (``workspace_paths.unlink_inside``)
+            froot, frel = wpaths.locate_inside(target, rel)
         except wpaths.PathRefused as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from None
-        if f.is_dir():
+        st = wpaths.stat_inside(froot, frel) if frel else None
+        if not frel or (st is not None and stat_mod.S_ISDIR(st.st_mode)):
             raise HTTPException(status_code=400, detail="that is a folder — this removes one page")
-        if not f.is_file():
+        if st is None or not stat_mod.S_ISREG(st.st_mode) or not wpaths.unlink_inside(froot, frel):
             raise HTTPException(status_code=404, detail="not found")
-        f.unlink()
         sha = _commit(target, [rel, *_kg_index_after(target, rel)],
                       f"{target.name}: {rel} — removed"[:72])
         return {"path": rel, "deleted": True, "workspace": slug or "", "commit": sha}
@@ -490,38 +510,42 @@ def build(**d) -> APIRouter:
         contributor. Half a move is the one outcome worse than no move — the page would exist twice,
         or nowhere."""
         subject = subject_of(request)
-        src_rel = str(body.from_ or "").strip()
+        src_rel = str(body.path or "").strip()
         dst_rel = str(body.to or "").strip()
-        src_slug = (body.slug or "").strip() or None
+        src_slug = write_slug(request, body.slug)
         # NO `to_slug` MEANS THE SAME WORKSPACE — the ordinary rename. Defaulting it to the caller's
         # desk instead would turn every rename inside a shared workspace into a silent extraction of
         # a page out of it, which is the failure `_writeback_workspace_note` already documents for
-        # `entity_upsert`'s slug default.
-        dst_slug = (body.to_slug or "").strip() or src_slug
+        # `entity_upsert`'s slug default. `personal` names the desk, as on every page verb.
+        asked_to = (body.to_slug or "").strip()
+        dst_slug = write_slug(request, asked_to) if asked_to else src_slug
         src = _movable_dir(request, subject, src_rel, src_slug)
         dst = _movable_dir(request, subject, dst_rel, dst_slug)
         try:
-            src_f = wpaths.resolve_inside(src, src_rel)
-            dst_f = wpaths.resolve_inside(dst, dst_rel)
+            sbase, srel = wpaths.locate_inside(src, src_rel)
+            dbase, drel = wpaths.locate_inside(dst, dst_rel)
         except wpaths.PathRefused as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from None
-        if src_f.is_dir():
+        if srel and wpaths.is_dir_inside(sbase, srel):
             raise HTTPException(status_code=400, detail="that is a folder — this moves one page")
-        if not src_f.is_file():
+        # read ONCE, nofollow, through what was resolved; written the same way
+        content = wpaths.read_bytes_inside(sbase, srel) if srel else None
+        if content is None:
             raise HTTPException(status_code=404, detail="not found")
-        if src_f.resolve() == dst_f.resolve():
+        if (sbase / srel) == (dbase / drel):
             raise HTTPException(status_code=400, detail="the page is already there")
         same_workspace = src.resolve() == dst.resolve()
-        content = src_f.read_bytes()
-        dst_f.parent.mkdir(parents=True, exist_ok=True)
-        dst_f.write_bytes(content)
-        # A STUB IS A PAGE, so only a page gets one. A markdown pointer written over `assets/logo.png`
-        # is a broken picture wearing a helpful sentence.
-        stub = same_workspace and src_rel.lower().endswith(".md")
-        if stub:
-            src_f.write_text(_pointer_stub(dst_rel), encoding="utf-8")
-        else:
-            src_f.unlink()
+        try:
+            wpaths.write_bytes_inside(dbase, drel, content)
+            # A STUB IS A PAGE, so only a page gets one. A markdown pointer written over
+            # `assets/logo.png` is a broken picture wearing a helpful sentence.
+            stub = same_workspace and src_rel.lower().endswith(".md")
+            if stub:
+                wpaths.write_text_inside(sbase, srel, _pointer_stub(dst_rel))
+            else:
+                wpaths.unlink_inside(sbase, srel)
+        except wpaths.PathRefused as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
         subject_line = f"{dst.name}: {dst_rel} — moved from {src_rel}"[:72]
         if same_workspace:
             sha = _commit(src, [src_rel, dst_rel, *_kg_index_after(src, src_rel, dst_rel)],
@@ -539,32 +563,31 @@ def build(**d) -> APIRouter:
                 "commit": to_sha, "source_commit": from_sha}
 
     @router.post("/api/workspace/entity")
-    def ws_entity_upsert(request: Request, body: dict = Body(...)):
-        """UPSERT one knowledge-graph entity — PRD decision 24, the single call behind `entity_upsert`.
+    def ws_entity_upsert(request: Request, body: EntityUpsertBody = Body(...)):
+        """RECORD what was just learned about a person, company, meeting, project or decision — the
+        verb behind `entity_upsert` (PRD decision 24). Use it the moment a turn learns anything
+        durable; a name without a page gets one now.
 
-        Creates or updates `kg/entities/<kind>/<slug>.md` AS A CARD (decision 24.6): a summary, the
-        kind's sections, `## Connected` chips both ways, `## Sources`, `## Open questions`, and the
-        dated log at the end under `## Timeline`. A page in the old flat shape is re-rendered into
-        the card on its next touch, entries preserved. Then it refreshes `kg/INDEX.md` and commits
-        both by pathspec with the F31 subject shape. Authorization is `ws_file_write`'s, because it
-        is the same act — a write into a workspace — and two spellings of one authorization rule is
-        how the second one ends up weaker.
+        One call creates `kg/entities/<kind>/<slug>.md` if it is missing and updates it in place if
+        it is there — never check first, never merge by hand. The page is a CARD (decision 24.6): a
+        summary, the kind's sections (file facts into them with `fields`, or with `section`),
+        `## Connected` chips both ways, `## Sources`, `## Open questions`, and `## Timeline` last for
+        anything dated. A refusal names what to fix: 400 is an argument in a shape this does not
+        read (send the same facts again in the shape it names), 422 is a rule (fix the fact, do not
+        retry). The answer lists `links_missing` — names with no page yet, which are the next calls.
 
-        This endpoint exists so the MCP tool can be a THIN FORWARD (PRD §3.3: every host-reaching rig
-        tool is a missing endpoint in an owning service wearing a shell command). `workspace_write`'s
-        `docker exec` double is the shape this deliberately does not copy.
+        Authorization is `ws_file_write`'s, because it is the same act — a write into a workspace —
+        and two spellings of one authorization rule is how the second one ends up weaker. It
+        refreshes `kg/INDEX.md` and commits both by pathspec with the F31 subject shape.
         """
         subject = subject_of(request)
-        kind = str(body.get("kind") or "").strip().lower()
-        name = str(body.get("name") or "").strip()
-        source = str(body.get("source") or "").strip()
-        slug = str(body.get("slug") or "").strip() or None
-        raw_facts = body.get("facts")
-        if isinstance(raw_facts, str):
-            raw_facts = [raw_facts]
-        facts = [str(f) for f in (raw_facts or []) if str(f).strip()]
-        summary = str(body.get("summary") or "").strip()
-        questions = [str(q) for q in (body.get("open_questions") or ())]
+        kind = body.kind.strip().lower()
+        name = body.name.strip()
+        source = body.source.strip()
+        slug = write_slug(request, body.slug)
+        facts = [str(f) for f in body.facts if str(f).strip()]
+        summary = body.summary.strip()
+        questions = [str(q) for q in body.open_questions]
         # #1624 — the card's free text goes through the same door a plain page does, in ONE call so
         # a logo named in both the summary and a fact costs the host one question, not two.
         screened = _screen_images(request, [summary, *facts, *questions],
@@ -582,9 +605,7 @@ def build(**d) -> APIRouter:
             if not global_layer.is_admin(settings, str(subject)):
                 raise HTTPException(status_code=403,
                                     detail="only an org admin may write company-tier pages into _global")
-            candidates = [Path(settings.workspaces_dir) / system_mounts.GLOBAL_SLUG,
-                          Path(settings.global_system_workspace_path or "/nonexistent")]
-            global_target = next((c for c in candidates if c.is_dir() and os.access(c, os.W_OK)), None)
+            global_target = _writable_global()
             if global_target is None:
                 raise HTTPException(status_code=404, detail="the organisation tier is not writable here")
         elif slug and slug not in (subject, system_mounts.SYSTEM_SLUG):
@@ -608,11 +629,11 @@ def build(**d) -> APIRouter:
             # the facts in `## Timeline`, which is the shape the migration produces anyway.
             result = entities_mod.upsert_entity(
                 target, kind, name, facts, source,
-                mounts=_entity_mounts(subject), dates=body.get("dates"),
+                mounts=_entity_mounts(subject, request), dates=body.dates,
                 summary=summary,
-                fields=body.get("fields") if isinstance(body.get("fields"), dict) else None,
-                section=str(body.get("section") or "").strip(),
-                connections=body.get("connections") or (),
+                fields=body.fields,
+                section=body.section.strip(),
+                connections=body.connections or (),
                 open_questions=questions)
         except entities_mod.EntityMalformed as e:
             # 400, and CAUGHT FIRST — `EntityMalformed` is a subclass, so the broader clause below
@@ -712,14 +733,10 @@ def build(**d) -> APIRouter:
         pushes its own front matter out of the leading ``---`` position and takes the ``title:``
         with it. Guarded by the same ``resolve_inside`` every path from a caller goes through."""
         try:
-            p = wpaths.resolve_inside(base, rel)
+            pbase, prel = wpaths.locate_inside(base, rel)
         except (wpaths.PathRefused, OSError, ValueError):
             return None
-        try:
-            with p.open("r", encoding="utf-8", errors="replace") as fh:
-                return fh.read(front_page_mod._HEAD_BYTES)
-        except OSError:
-            return None
+        return wpaths.read_head_inside(pbase, prel, front_page_mod._HEAD_BYTES) if prel else None
 
     @router.get("/api/workspaces/{slug}/git/last-change")
     def ws_last_change(slug: str, request: Request, path: Optional[str] = None):
@@ -782,7 +799,7 @@ def build(**d) -> APIRouter:
                     # `person_name` — because the sentence must never say *someone*: where nobody
                     # has written this person down, their own address read as a name is the floor.
                     name_of=lambda author, email: front_page_mod.display_name(
-                        wsr.root, address=author, principal=email))}
+                        wsr.root, address=author, principal=email, global_dir=_global_dir()))}
 
     @router.get("/api/people/me")
     def people_me(request: Request):
@@ -802,7 +819,7 @@ def build(**d) -> APIRouter:
         # the reader's own verified address — the key every step of the chain is actually written
         # against, and the floor under it when no page names them.
         address = (request.headers.get("x-user-email") or "").strip() or None
-        name = front_page_mod.display_name(wsr.root, subject, email=address)
+        name = front_page_mod.display_name(wsr.root, subject, email=address, global_dir=_global_dir())
         return {"subject": subject, "name": name,
                 "first_name": front_page_mod.first_name(name)}
 
@@ -843,7 +860,7 @@ def build(**d) -> APIRouter:
         author, email = front_page_mod.admin_principal(history.get("commits") or [])
         if not author and not email:
             return empty
-        name = front_page_mod.display_name(wsr.root, address=author, principal=email)
+        name = front_page_mod.display_name(wsr.root, address=author, principal=email, global_dir=_global_dir())
         return {"name": name, "first_name": front_page_mod.first_name(name)}
 
     @router.post("/api/workspace/git/reset")
@@ -939,9 +956,11 @@ def build(**d) -> APIRouter:
                 "system_seeded": not system_existed}
 
     @router.post("/api/claims")
-    def write_claims(request: Request, body: dict = Body(...)):
+    def write_claims(request: Request, body: ClaimsProposeBody = Body(...)):
         """Record what an agent believes about this person's company as PROPOSED — and tell flows,
-        once per claim.
+        once per claim. Put everything learned in ONE call, show the person the lines it hands
+        back, and record their answer with `validate`. A proposed claim is never company context
+        until a person has answered: an agent cannot promote its own guess.
 
         THIS ROUTE EXISTS SO THE FACT HAS A PRODUCER. The book was written through
         `PUT /api/workspace/file`, a generic route that holds bytes and knows nothing about what
@@ -958,30 +977,67 @@ def build(**d) -> APIRouter:
         needs — the subject, the reader, the desk path — is already closed over here; the state
         machine itself is `control_plane.claims`, which is the concern."""
         subject = subject_of(request)
-        batch = (body or {}).get("claims") or []
-        if not isinstance(batch, list) or not batch:
+        batch = [b if isinstance(b, str) else b.model_dump() for b in body.claims]
+        if not batch:
             raise HTTPException(status_code=400, detail="claims must be a non-empty list")
-        result = claims_mod.propose(wsr.workspace_dir(subject), batch)
+        try:
+            result = claims_mod.propose(wsr.workspace_dir(subject), batch)
+        except wpaths.PathRefused:
+            # the book's folder or file is a link, not a plain path on this desk — never followed
+            raise HTTPException(status_code=409, detail="the claims book on this desk is not a plain "
+                                "file") from None
         for cid in result["ids"]:
             publish_mod.publish(publish_mod.EVENT_CLAIM_PROPOSED,
                                 publish_mod.claim_source_id(subject, cid),
                                 publish_mod.claim_refs(subject, cid))
         return result
+
+    @router.post("/api/claims/verdicts")
+    def record_claim_verdicts(request: Request, body: ClaimVerdictsBody = Body(...)):
+        """Record a PERSON's word on proposed claims — `confirmed`, `corrected` (the note is the
+        correction; the original stays beside it) or `rejected`. Put their whole answer in ONE call,
+        and only after asking them: this is their word, never an agent's guess about it.
+
+        The first claim they stand behind makes the desk ready, so answering finishes the setup.
+        An unknown id or verdict comes back in `errors` and the rest of the answer still lands."""
+        subject = subject_of(request)
+        if not body.verdicts:
+            raise HTTPException(status_code=400, detail="verdicts must be a non-empty list")
+        try:
+            return claims_mod.record_verdicts(wsr.workspace_dir(subject),
+                                              [v.model_dump() for v in body.verdicts])
+        except wpaths.PathRefused:
+            raise HTTPException(status_code=409, detail="the claims book on this desk is not a plain "
+                                "file") from None
     @router.get("/api/workspaces/by-slug/{slug}")
     def ws_id_by_slug(slug: str, request: Request):
         """The identity of a workspace addressed the OLD way — by slug. What the terminal calls to
         put a NAME where it used to print a directory name (F49: the chat header read `126`)."""
+        require_in_ceiling(request, slug)
         subject = subject_of(request)
-        rec = workspace_registry.by_slug(slug) or _ws_sync(slug)
+        # Private attached roots resolve within their owner's slots, never as
+        # instance-wide desks in the global registry.
+        own = attached_workspaces(wsr.root, subject)
+        slot = own.get("slots", {}).get(slug)
+        if slot is not None and slug not in (own.get("active"), "seed") and workspace_slot_dir(wsr.root, subject, slug).is_dir():
+            return {"id": slug, "slug": slug, "name": slot.get("name") or slug,
+                    "kind": "private", "access": "readable", "writable": True}
+        rec = workspace_registry.by_slug(slug) or _ws_lookup(slug)
         access = ids_mod.access_for(rec, subject, root=wsr.root, is_member=_ws_is_member)
         return ids_mod.view(rec, access, writable=ids_mod.writable_for(
             rec, subject, root=wsr.root, is_member=_ws_is_member))
+    def _id_in_ceiling(request: Request, workspace_id: str) -> None:
+        """The ceiling names workspaces by slug; the id routes name one by id, so ask by both."""
+        known = workspace_registry.get(workspace_id) or {}
+        require_in_ceiling(request, str(known.get("slug") or workspace_id))
+
     @router.get("/api/workspaces/{workspace_id}")
     def ws_id_resolve(workspace_id: str, request: Request):
         """`{id, name, kind, access}` for one workspace id, from THIS reader's point of view.
 
         Never 404s and never 403s: `not-yours` and `gone` are ANSWERS (decision 26.3), and a status
         code would make the client render an error where the design says render a greyed chip."""
+        _id_in_ceiling(request, workspace_id)
         subject = subject_of(request)
         rec = workspace_registry.get(workspace_id)
         access = ids_mod.access_for(rec, subject, root=wsr.root, is_member=_ws_is_member)
@@ -1000,6 +1056,7 @@ def build(**d) -> APIRouter:
         AUDITED: who, old, new, when, kept on the record (capped) and logged. A rename is the one
         operation whose whole point is that nothing else changes, which means the only way to see
         that it happened at all is to have written it down."""
+        _id_in_ceiling(request, workspace_id)
         subject = subject_of(request)
         try:
             rec = ids_mod.rename_audited(
@@ -1036,6 +1093,8 @@ def build(**d) -> APIRouter:
 
         Mounting is by-folder (``<root>/<subject>`` is what the next dispatch mounts), so the swapped
         tree takes effect on the subject's next turn — no dispatch change needed."""
+        # `person` in routes.v1.json: loads a repository with the person's saved git credentials
+        require_in_ceiling(request, body.slug)
         subject = subject_of(request)
         repo = _repo(body.repo)      # 422 before any git process exists
         key = deploy_keys_mod.workspace_key(subject=subject)
@@ -1063,7 +1122,6 @@ def build(**d) -> APIRouter:
             "swapped": result.swapped,
             "cloned": result.cloned,
             "parked": result.parked_slug,
-            "nested": result.nested,
         }
     @router.get("/api/workspace/desk")
     def ws_desk(request: Request):
@@ -1120,10 +1178,82 @@ def build(**d) -> APIRouter:
             ],
             "index_degraded": index_degraded,
         }
+    @router.post("/api/workspace/import", status_code=202)
+    def ws_import(request: Request, body: WorkspaceImportBody):
+        """Import a repository as its own workspace; preserve Personal and the repository tree.
+
+        Use this for public AND private repository URLs, never WebFetch as an access test.
+        Returns an operation_id immediately. Poll workspace_import_status until completed;
+        queued/running is not success. Stored credentials are resolved inside the agent service.
+        credential_workspace optionally reuses the deploy key of a workspace you own.
+        """
+        # `person` in routes.v1.json: loads a repository with the person's saved git credentials
+        require_in_ceiling(request, body.credential_workspace)
+        subject = subject_of(request)
+        repo = _repo(body.repo)
+        try:
+            ref = repo_ref.valid_ref(body.ref)
+        except repo_ref.RepoRefError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        credential_workspace = (body.credential_workspace or "").strip()
+        if credential_workspace:
+            try:
+                membership_mod.require_role(wsr.root, credential_workspace, subject, "owner")
+            except MembershipError as exc:
+                raise _member_error(exc)
+        key = deploy_keys_mod.workspace_key(subject=subject, workspace_id=credential_workspace)
+        has_key = deploy_keys_mod.exists(wsr.root, key)
+        # SSH first only when this import names the workspace whose deploy key it reuses. A key the
+        # person merely HAS is the fallback for an https clone refused for want of a credential.
+        use_key = bool(credential_workspace) and has_key
+        repo = imports.repository_url(repo, use_deploy_key=use_key)
+        fallback = imports.ssh_form(repo) if has_key and not use_key else None
+        slug = imports.workspace_slug(repo, ref)
+
+        def clone_into_workspace(url: str):
+            with wcreds.for_workspace(wsr.root, key=key, repo_url=url, subject=subject, explicit_token=body.token) as cred:
+                return activate_workspace(wsr.root, subject, url, ref, slug=slug, token=cred.token,
+                                          clone=_clone_fn(cred))
+
+        def operation():
+            used = repo
+            try:
+                result = clone_into_workspace(repo)
+            except CloneError as exc:
+                detail = redact_secrets(exc)
+                if not (fallback and wcreds.is_auth_failure(str(detail))):
+                    raise _credential_refusal(f"git clone failed: {detail}", subject, credential_workspace or None, repo)
+                used = fallback
+                try:
+                    result = clone_into_workspace(fallback)
+                except CloneError as exc2:
+                    raise _credential_refusal(f"git clone failed: {redact_secrets(exc2)}", subject,
+                                              credential_workspace or None, fallback)
+            name = repo.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
+            rename_workspace(wsr.root, subject, result.slug, name)
+            if credential_workspace:
+                bind_repository_credential(wsr.root, subject, result.slug, credential_workspace)
+            return {"workspace": result.slug, "slug": result.slug, "cloned": result.cloned,
+                    "changed": result.changed, "repo": used, "ref": ref,
+                    "name": name}
+        return imports.start(wsr.root, subject, repo, ref, operation)
+
+    # `/status` keeps this route from matching the same URL as `/api/workspace/{slug}/deploy-key`
+    # (slug "import", operation "deploy-key"): see tests/test_route_table.py.
+    @router.get("/api/workspace/import/{operation_id}/status")
+    def ws_import_status(operation_id: str, request: Request):
+        """Read your repository import. Only completed confirms an independently usable workspace.
+
+        Poll this after workspace_import; report failures verbatim. Never start a duplicate import
+        or report success while status is queued/running/interrupted.
+        """
+        return imports.status(wsr.root, subject_of(request), operation_id)
+
     @router.post("/api/workspace/activate")
     def ws_activate(request: Request, body: WorkspaceActivateBody = Body(default=WorkspaceActivateBody())):
         """ADD a workspace to the active set WITHOUT parking the others (the additive counterpart of swap).
         Clones/restores the target if needed. Idempotent — an already-active workspace is a no-op."""
+        require_in_ceiling(request, body.slug)
         subject = subject_of(request)
         repo = _repo(body.repo)      # 422 before any git process exists
         key = deploy_keys_mod.workspace_key(subject=subject)
@@ -1142,7 +1272,7 @@ def build(**d) -> APIRouter:
         except CloneError as exc:
             raise _credential_refusal(f"git clone failed: {redact_secrets(exc)}", subject, None, repo or "")
         return {"subject": result.subject, "slug": result.slug, "changed": result.changed,
-                "cloned": result.cloned, "nested": result.nested}
+                "cloned": result.cloned}
     @router.post("/api/workspace/new", status_code=201)
     def ws_new(request: Request, body: WorkspaceNewBody = Body(default=WorkspaceNewBody())):
         """CREATE a brand-new BLANK workspace (seeded from the template) at a fresh unique slug and ADD it
@@ -1160,6 +1290,7 @@ def build(**d) -> APIRouter:
         """REMOVE a workspace from the active set (park it — never destroyed). The private baseline can be
         switched off too (sets ``baseline_hidden``; its home tree is untouched, re-activate to switch it back
         on). Idempotent — an already-off / not-active slug is a no-op."""
+        require_in_ceiling(request, body.slug)
         subject = subject_of(request)
         try:
             result = deactivate_workspace(wsr.root, subject, body.slug)
@@ -1174,18 +1305,27 @@ def build(**d) -> APIRouter:
         ``remote_url`` skips creation (pre-created/empty repo). Re-publish = plain push (fast-forward
         or a clear error on divergence — never a force push). The token is used server-side for this
         call only and never stored; every error is token-redacted (P15)."""
+        # `person` in routes.v1.json: spends the person's git credential and changes where the tree syncs
         subject = subject_of(request)
-        token = (body.token or "").strip() or git_creds.read_github_token(wsr.root, subject)
+        # slug → any workspace the caller can manage (own parked slot or shared membership, resolved
+        # + permission-checked by _manage_dir); omitted keeps the legacy seed target.
+        ws_dir = _manage_dir(request, body.slug) if body.slug else None
+        remote_url = (body.remote_url or "").strip()
+        if remote_url and not wcreds.is_https(remote_url):
+            raise HTTPException(status_code=400, detail="publish pushes only to an https:// repository URL")
+        token = (body.token or "").strip()
+        if not token and (not remote_url or wcreds.saved_token_may_reach(remote_url)):
+            # The saved token goes only to GitHub: a repository this call creates there, or an
+            # https://github.com/ URL. Any other host needs a token typed for this call.
+            token = git_creds.read_github_token(wsr.root, subject)
         if not token:
-            raise HTTPException(status_code=400, detail="a GitHub token is required — pass one or save a reusable token")
+            raise HTTPException(status_code=400, detail="a GitHub token is required — pass one or save a reusable token "
+                                                        "(a saved token is only sent to https://github.com/)")
         try:
             result = publish_workspace(
                 wsr.root, subject,
                 token=token, repo_name=body.repo_name, private=body.private,
-                org=body.org or None, remote_url=body.remote_url or None,
-                # slug → any workspace the caller can manage (own parked slot or shared membership,
-                # resolved + permission-checked by _manage_dir); omitted keeps the legacy seed target.
-                ws_dir=_manage_dir(subject, body.slug) if body.slug else None,
+                org=body.org or None, remote_url=body.remote_url or None, ws_dir=ws_dir,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc) or "invalid subject")
@@ -1203,6 +1343,7 @@ def build(**d) -> APIRouter:
     def ws_rename(request: Request, body: WorkspaceRenameBody = Body(...)):
         """Rename a workspace slot — a DISPLAY label only. The slug and the parked tree are unchanged, so
         swap-back and repo re-attach keep matching. Pass an empty ``name`` to clear the label."""
+        require_in_ceiling(request, body.slug)
         subject = subject_of(request)
         try:
             return rename_workspace(wsr.root, subject, body.slug, body.name)
@@ -1249,9 +1390,8 @@ def build(**d) -> APIRouter:
         widening it here would be a seam change nobody asked for, and
         `test_shared_workspace_attach.py` pins that 404. Every WRITE (push · pull · detach) stays on
         ``_manage_dir``, untouched, so this adds no way to change anything."""
-        subject = subject_of(request)
         ws = (_read_target(request, slug) if slug == system_mounts.GLOBAL_SLUG
-              else _manage_dir(subject, slug))
+              else _manage_dir(request, slug))
         s = remote_status(ws)
         return {
             "has_home": s.has_home, "remote": s.remote, "url": s.url, "branch": s.branch,
@@ -1262,8 +1402,9 @@ def build(**d) -> APIRouter:
         """Push a workspace's current branch to its GitHub home (origin for attached clones, vexa-publish
         for published vexa-born), fast-forward only — NEVER a force push. The token authenticates the push
         and is never stored; a diverged remote fails loud (pull first). Every error is token-redacted (P15)."""
+        # `person` in routes.v1.json: spends the person's git credential
         subject = subject_of(request)
-        ws = _manage_dir(subject, body.slug)
+        ws = _manage_dir(request, body.slug)
         home = remote_status(ws)
         key = _workspace_key(subject, body.slug)
         try:
@@ -1284,8 +1425,9 @@ def build(**d) -> APIRouter:
         """Fetch + FAST-FORWARD a workspace from its GitHub home. A divergence (local commits the remote
         lacks) is refused — no merge/rebase/force — so it is resolved deliberately. The token (optional for
         public repos) is used for the fetch only and never stored (P15)."""
+        # `person` in routes.v1.json: spends the person's git credential
         subject = subject_of(request)
-        ws = _manage_dir(subject, body.slug)
+        ws = _manage_dir(request, body.slug)
         # A pull REWRITES the tree, so on a shared workspace it is a write: viewers are refused here even
         # though they may read the same workspace through _manage_dir.
         _require_shared_write(subject, body.slug)
@@ -1318,8 +1460,9 @@ def build(**d) -> APIRouter:
 
         The RECEIPT is the returned pair plus the log line — the two facts a person needs afterwards
         are *which remote went* and *what its URL was*, and neither survives in git once it is gone."""
+        # `person` in routes.v1.json: changes where the tree syncs
         subject = subject_of(request)
-        ws = _manage_dir(subject, body.slug)
+        ws = _manage_dir(request, body.slug)
         _require_shared_write(subject, body.slug)
         try:
             gone = detach_home(ws)
@@ -1336,15 +1479,13 @@ def build(**d) -> APIRouter:
     def ws_purpose_get(request: Request, slug: Optional[str] = None):
         """Read a workspace's PURPOSE one-liner (default = the caller's primary; ``slug`` = one of their
         own or shared workspaces). ``""`` when unset."""
-        subject = subject_of(request)
-        ws = _manage_dir(subject, slug)
+        ws = _manage_dir(request, slug)
         return {"purpose": read_purpose(ws)}
     @router.post("/api/workspace/purpose")
     def ws_purpose_set(request: Request, body: WorkspacePurposeBody = Body(default=WorkspacePurposeBody())):
         """Set (or clear) a workspace's PURPOSE — stored in the workspace + committed so it travels when
         shared and feeds the mount preamble. Returns the normalized purpose actually stored."""
-        subject = subject_of(request)
-        ws = _manage_dir(subject, body.slug)
+        ws = _manage_dir(request, body.slug)
         return {"purpose": write_purpose(ws, body.purpose)}
     @router.post("/api/workspace/shared/{workspace_id}/attach")
     def ws_shared_attach(workspace_id: str, request: Request, body: SharedAttachBody = Body(default=SharedAttachBody())):
@@ -1354,6 +1495,7 @@ def build(**d) -> APIRouter:
         Park-and-clone, exactly as the desk swap: the current tree is kept under the workspace's own
         store and can be swapped back to by slug with no re-clone, so this is reversible. ``policy/``
         (the member list) is carried into the new tree, so an attach can never lock the group out."""
+        require_in_ceiling(request, workspace_id)
         subject = subject_of(request)
         try:
             membership_mod.require_role(wsr.root, workspace_id, subject, "contributor")
@@ -1378,13 +1520,14 @@ def build(**d) -> APIRouter:
         return {
             "workspace_id": workspace_id, "active": result.active_slug, "repo": result.repo,
             "ref": result.ref, "attached": result.swapped, "cloned": result.cloned,
-            "parked": result.parked_slug, "nested": result.nested,
+            "parked": result.parked_slug,
             "state": ("cloned" if result.cloned else "restored" if result.swapped else "already attached"),
         }
     @router.get("/api/workspace/shared/{workspace_id}/attached")
     def ws_shared_attached(workspace_id: str, request: Request):
         """A shared workspace's attachment view — the active slug and the parked trees available to swap
         back to, plus its GitHub home. Any member may read it (it says WHAT is mounted, never a credential)."""
+        require_in_ceiling(request, workspace_id)
         subject = subject_of(request)
         try:
             membership_mod.require_role(wsr.root, workspace_id, subject, "viewer")
@@ -1408,7 +1551,7 @@ def build(**d) -> APIRouter:
         """This workspace's PUBLIC deploy key (null when none has been generated). The private half has
         no read path at all — it is sealed in the credential store and materialized only for one git op."""
         subject = subject_of(request)
-        _manage_dir(subject, slug)          # authorization: own slot, or a workspace they belong to
+        _manage_dir(request, slug)          # authorization: own slot, or a workspace they belong to
         key = _workspace_key(subject, slug)
         pub = deploy_keys_mod.public_key(wsr.root, key)
         return {"slug": slug, "public_key": pub, "fingerprint": deploy_keys_mod.fingerprint(pub),
@@ -1421,7 +1564,7 @@ def build(**d) -> APIRouter:
         This is the credential model: they add our PUBLIC key to their repository; nothing of theirs
         ever travels to us, and the private half is sealed at rest and never leaves this server."""
         subject = subject_of(request)
-        _manage_dir(subject, slug)
+        _manage_dir(request, slug)
         repo_url = str((body or {}).get("repo") or "")
         try:
             prompt = wcreds.deploy_key_prompt(wsr.root, key=_workspace_key(subject, slug), repo_url=repo_url)
@@ -1434,6 +1577,7 @@ def build(**d) -> APIRouter:
     def ws_shared_active(workspace_id: str, request: Request, body: SharedActiveBody = Body(...)):
         """Switch a SHARED workspace ON/OFF in the caller's active set (mount vs hide). Membership is
         unchanged — this is a per-user mount preference so a member can 'switch it off' without leaving."""
+        require_in_ceiling(request, workspace_id)
         subject = subject_of(request)
         try:
             set_shared_active(wsr.root, subject, workspace_id, body.active)
@@ -1443,6 +1587,7 @@ def build(**d) -> APIRouter:
     @router.post("/api/workspace/{slug}/archive")
     def ws_archive(slug: str, request: Request, body: ArchiveBody = Body(default=ArchiveBody())):
         """Archive (collapse, keep the data) or un-archive one of the caller's own workspaces."""
+        require_in_ceiling(request, slug)
         subject = subject_of(request)
         try:
             set_archived(wsr.root, subject, slug, body.archived)
@@ -1454,6 +1599,7 @@ def build(**d) -> APIRouter:
     @router.delete("/api/workspace/{slug}")
     def ws_delete(slug: str, request: Request):
         """DELETE one of the caller's own workspaces — removes the data irreversibly. Baseline is refused."""
+        require_in_ceiling(request, slug)
         subject = subject_of(request)
         try:
             delete_workspace(wsr.root, subject, slug)
@@ -1468,18 +1614,15 @@ def build(**d) -> APIRouter:
         survive: the caller's `personal` baseline, or `_global` (admin allowlist only). Both are
         "just folders" (founder ruling 2026-08-22) — wipe the content, re-copy the seed, commit.
         `_system` is deliberately NOT resettable: it is sessions/continuity, not knowledge."""
-        import shutil as _sh
-        import subprocess as _sp
         subject = subject_of(request)
         target = str(body.get("target") or "")
+        require_in_ceiling(request, None if target == "personal" else target)
         if target == "_global":
             if not global_layer.is_admin(settings, str(subject)):
                 raise HTTPException(status_code=403, detail="only an org admin may reset _global")
-            if not settings.global_system_workspace_path:
-                raise HTTPException(status_code=404, detail="no _global configured")
-            # write through the WORKSPACES-DIR mount (rw in dev) — the host-path mirror mount is ro
-            candidates = [Path(settings.workspaces_dir) / "_global", Path(settings.global_system_workspace_path)]
-            path = next((c for c in candidates if c.is_dir() and os.access(c, os.W_OK)), candidates[0])
+            # The `_global` the worker mount serves (`system_mounts.global_root`): unset config is the
+            # in-store one (founder ruling 2026-10-08), not "no _global".
+            path = system_mounts.global_root(settings, wsr.root)
         elif target == "personal":
             path = Path(wsr.workspace_dir(subject))
         else:
@@ -1487,390 +1630,19 @@ def build(**d) -> APIRouter:
         if not path.is_dir():
             raise HTTPException(status_code=404, detail="workspace not found")
         seed = resolve_seed_dir(seeds_root=os.environ.get("VEXA_WORKSPACE_SEEDS_DIR"))
-        for child in path.iterdir():
-            if child.name == ".git":
-                continue
-            _sh.rmtree(child, ignore_errors=True) if child.is_dir() else child.unlink(missing_ok=True)
-        _sh.copytree(seed, path, dirs_exist_ok=True)
+        # THE SLOT IS A WORK TREE THE MODEL'S TOOLS CAN WRITE. Clearing it never follows a link: a
+        # symlinked child is unlinked as itself (`rmtree` would refuse it, leave it in place, and the
+        # seed copy below would then write THROUGH it into wherever it points). The seed goes back in
+        # through nofollow writes, so a link planted again in the gap is refused, never followed.
+        wpaths.clear_tree_inside(path, keep=(".git",))
+        refused = wpaths.copy_tree_inside(seed, path)
+        if refused:
+            logger.warning("reseed %s: %d seed path(s) refused (a link in the way): %s",
+                           target, len(refused), ", ".join(refused[:5]))
         if (path / ".git").is_dir():
-            _sp.run(["git", "-C", str(path), "add", "-A"], check=False, capture_output=True)
-            _sp.run(["git", "-C", str(path), "-c", "user.name=vexa-platform", "-c", "user.email=platform@vexa.local",
-                     "commit", "-m", f"reseed {target}"], check=False, capture_output=True)
+            run_git(path, "add", "-A")
+            run_git(path, "-c", "user.name=vexa-platform", "-c", "user.email=platform@vexa.local",
+                    "commit", "-m", f"reseed {target}")
         return {"target": target, "reset": True}
-    @router.post("/api/workspace/{workspace_id}/unshare")
-    def ws_unshare(workspace_id: str, request: Request):
-        """UN-SHARE a workspace (owner only) — move it back into the caller's PRIVATE store and drop every
-        member's index entry, so it stops being shared (mirror of share-enable). Returns the new private slug."""
-        subject = subject_of(request)
-        try:
-            membership_mod.require_role(wsr.root, workspace_id, subject, "owner")
-            members = membership_mod.read_members(wsr.root, workspace_id)
-            new_slug = ensure_workspace_private(wsr.root, subject, workspace_id)
-        except MembershipError as exc:
-            raise _member_error(exc)
-        except KeyError:
-            raise HTTPException(status_code=404, detail="workspace not found")
-        for m in members:  # best-effort: the shared workspace is gone, so drop the derived index entries
-            try:
-                mindex.remove(m.get("subject"), workspace_id)
-            except Exception:  # noqa: BLE001
-                pass
-        # The tree moved into the caller's private store and stopped being a group. Its id did NOT
-        # change — un-sharing is an administrative act, not a new workspace — so every link into it
-        # keeps resolving, and for everyone else it now answers `not-yours`, which is the truth.
-        _ws_sync(new_slug, kind="desk", owner=subject,
-                 ws_dir=workspace_slot_dir(wsr.root, subject, new_slug))
-        return {"slug": new_slug}
-    @router.post("/api/workspace/{slug}/share-enable")
-    def ws_share_enable(slug: str, request: Request):
-        """Make one of the caller's OWN workspaces shareable (promote a private workspace to a top-level
-        shared one if needed) and ensure the caller is its owner. Returns the shareable workspace_id — the
-        caller then mints invites against it. This is what lets ANY workspace be shared AFTER creation, with
-        no share-vs-not decision at create time."""
-        subject = subject_of(request)
-        try:
-            workspace_id, promoted = ensure_workspace_shareable(wsr.root, subject, slug)
-            if promoted:
-                membership_mod.ensure_owner(wsr.root, workspace_id, subject, index=mindex,
-                                            email=request.headers.get("x-user-email"), commit_fn=_pc)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-        except KeyError:
-            raise HTTPException(status_code=404, detail="workspace not found")
-        except MembershipError as exc:
-            raise _member_error(exc)
-        return {"workspace_id": workspace_id, "promoted": promoted}
-    @router.post("/api/workspace/shared/new", status_code=201)
-    def ws_shared_new(request: Request, body: SharedNewBody = Body(default=SharedNewBody())):
-        """CREATE a new shared workspace and make the caller its OWNER — the bootstrap for the share flow.
-        A fresh top-level workspace (git-inited + seeded) is created at <root>/<workspace_id>; the caller is
-        granted owner in BOTH stores (policy/members.json + the index). The caller can then mint invites."""
-        subject = subject_of(request)
-        try:
-            wid = create_shared_workspace_dir(wsr.root, body.name)
-            membership_mod.ensure_owner(wsr.root, wid, subject, index=mindex,
-                                        email=request.headers.get("x-user-email"), commit_fn=_pc)
-            # The id is minted HERE, at creation, for the same reason it exists at all: this is the
-            # only moment the workspace's human NAME is known. `create_shared_workspace_dir`
-            # slugifies it into a directory and drops it, so without this line "ASWF DNA Project"
-            # never existed anywhere and the group could only ever be called
-            # `aswf-dna-project-b7b2ee`.
-            _ws_sync(wid, kind="group", name=(body.name or "").strip() or None, owner=subject)
-        except MembershipError as exc:
-            raise _member_error(exc)
-        except Exception as exc:  # noqa: BLE001 — surface a clean 500 (dir/seed failure) rather than a stack
-            logger.exception("shared-workspace create failed for subject=%s", subject)
-            raise HTTPException(status_code=500, detail="could not create shared workspace")
-        return {"workspace_id": wid, "role": "owner", "name": body.name}
-    @router.post("/api/workspace/invites", status_code=201)
-    def ws_invite_create(request: Request, body: InviteCreateBody = Body(...)):
-        """Mint a scoped invite token for a shared workspace. Auth: owner OR contributor of the target.
-        The workspace must be shareable (reserved/own-private refused). The token is returned ONCE; only
-        its hash is persisted, in the invite store at <root>/.invites/<workspace_id>.json — the one
-        file `invites/preview` and `invites/accept` read (Vexa-ai/vexa#1645)."""
-        subject = subject_of(request)
-        # AN ADDRESS BINDS THE INVITE (Vexa-ai/vexa#1635). `allowed_emails` names who this is for, so
-        # it decides the mode — it is not a hint that a separate flag has to agree with. Asking for
-        # both at once ("these addresses, and also anyone") is a contradiction and is refused rather
-        # than resolved in one direction the caller cannot see.
-        emails = [e for e in (body.allowed_emails or []) if str(e).strip()]
-        mode = body.mode
-        if emails and mode == "open":
-            raise HTTPException(status_code=400,
-                                detail="an invite that names addresses is bound to them — drop "
-                                       "allowed_emails for an open link, or drop mode=open")
-        if mode is None:
-            mode = "restricted" if emails else "open"
-        try:
-            membership_mod.require_role(wsr.root, body.workspace_id, subject, "contributor")
-            minted = membership_mod.mint_invite(
-                wsr.root, body.workspace_id, role=body.role, created_by=subject,
-                expires_in_sec=body.expires_in_sec, max_uses=body.max_uses,
-                mode=mode, allowed_emails=emails or None, commit_fn=_pc,
-            )
-        except MembershipError as exc:
-            raise _member_error(exc)
-        # THE LINK IS COMPOSED HERE, on the deployment's declared public app URL — `VEXA_UI_URL`, the
-        # same one variable every scaffold link is built on, because two spellings of the host is how
-        # a link ends up naming somewhere the person cannot reach. The rig used to compose it from
-        # the MCP host it publishes ITSELF under, and the founder opened `rig.dev.vexa.ai/join?i=…`
-        # and got *"not found"*: a client knows where it is, only the deployment knows where the
-        # person's terminal is. Unset ⇒ `invite_url` is null and the caller is told which key names
-        # it, rather than being handed a url with no origin.
-        ui = settings.ui_url if settings is not None else ""
-        url = membership_mod.invite_link(ui, minted.token)
-        return {
-            "id": minted.id, "token": minted.token, "role": minted.role,
-            "workspace_id": body.workspace_id, "expires_at": minted.expires_at,
-            "max_uses": minted.max_uses, "mode": mode,
-            "accept_path": "/api/workspace/invites/accept",
-            "join_path": membership_mod.JOIN_PATH,
-            "invite_url": url or None,
-            "invite_url_refused": None if url else
-                "VEXA_UI_URL is not set on agent-api — this deployment has not declared where its "
-                "terminal is, so there is no link to give anyone",
-        }
-    @router.get("/api/workspace/invites/preview")
-    def ws_invite_preview(request: Request, token: str):
-        """READ-ONLY preview of an invite — the target workspace + terms — WITHOUT granting anything.
-        Powers the pre-join CONSENT screen: the invitee sees what the workspace is (its purpose), the role
-        they'd get, and who shared it BEFORE they log in / join. Capability-gated by the token (whoever
-        holds the link may preview it); no membership is checked or created, no use is consumed. 404 for a
-        token that matches nothing (never enumerates workspaces)."""
-        info = membership_mod.preview_invite(wsr.root, token)
-        if info is None:
-            raise HTTPException(status_code=404, detail="invalid invite")
-        wsid = info["workspace_id"]
-        # Human context for the card: the workspace's purpose + who shared it (their email when we've
-        # stored it — see the members roster; else the opaque subject as a last resort).
-        purpose = read_purpose(membership_mod._ws_dir(wsr.root, wsid))
-        shared_by = info.get("created_by")
-        for m in membership_mod.read_members(wsr.root, wsid):
-            if m.get("subject") == info.get("created_by") and m.get("email"):
-                shared_by = m["email"]
-                break
-        # THE WORKSPACE'S NAME, not its directory. The join card's whole job is one sentence a person
-        # recognises — *"Dmitry invited you to OeNB as a contributor"* — and `oenb-a1b2c3` is not a
-        # name anybody was told. Read-only: `by_slug` alone, never the `_ws_sync` fallback the id
-        # routes use, because this route is reachable without a session and must not write.
-        rec = workspace_registry.by_slug(wsid) or {}
-        return {
-            "workspace_id": wsid, "id": rec.get("id"), "name": rec.get("name") or wsid,
-            "purpose": purpose,
-            "role": info["role"], "mode": info["mode"], "expires_at": info["expires_at"],
-            # Only for a bound invite: an open one has nothing to prefill and nothing to disclose.
-            "restricted_to": (info.get("allowed_emails") or []) if info["mode"] == "restricted" else [],
-            "shared_by": shared_by, "valid": info["valid"], "reason": info["reason"],
-        }
-    @router.post("/api/workspace/invites/accept")
-    def ws_invite_accept(request: Request, body: InviteAcceptBody = Body(...)):
-        """Redeem an invite token (any logged-in user) → membership in BOTH stores, use-count bumped.
-        Idempotent per user (accepting twice = one membership, no extra use consumed). The token carries
-        NO workspace id — we resolve it by scanning the shareable workspaces' invites for its hash.
-        Post-auth redeem (AMENDMENT 5): the caller is an already-authenticated user (X-User-Id); a
-        RESTRICTED invite additionally requires their VERIFIED email (X-User-Email, gateway-injected)
-        to be in the invite's allowed_emails."""
-        subject = subject_of(request)
-        # SECURITY BOUNDARY: X-User-Email is trusted as the caller's VERIFIED email ONLY because the
-        # gateway strips any client-sent x-user-email and re-injects the value it resolved from the
-        # api-key. That invariant holds solely when the gateway is agent-api's SOLE ingress. Today the
-        # terminal / host-local clients reach agent-api directly (no gateway hop), so on the direct edge
-        # this header is spoofable — restricted-mode invites are NOT a security boundary until agent-api
-        # is gateway-fronted (Stage 4). VEXA_REQUIRE_GATEWAY_IDENTITY (checked in subject_of) lets a
-        # hardened deploy reject non-gateway callers. See the TOPOLOGY BOUNDARY note in create_app.
-        subject_email = request.headers.get("x-user-email")
-        # Resolve which shared workspace this token belongs to by hash (never trust a client-declared
-        # id) — through `find_invite`, the SAME resolver `invites/preview` uses. It used to be a second
-        # copy of the scan here, and a token that resolves for one route and not the other is exactly
-        # the shape of failure #1645 was reported as.
-        found = membership_mod.find_invite(wsr.root, body.token)
-        if found is None:
-            raise HTTPException(status_code=404, detail="invalid invite")
-        target_ws = found[0]
-        try:
-            result = membership_mod.accept_invite(
-                wsr.root, target_ws, token=body.token, subject=subject, subject_email=subject_email,
-                index=mindex, commit_fn=_pc,
-            )
-        except MembershipError as exc:
-            raise _member_error(exc)
-        return result
-    @router.delete("/api/workspace/invites/{invite_id}")
-    def ws_invite_revoke(invite_id: str, request: Request, workspace_id: str):
-        """Revoke an invite (owner/contributor of the workspace)."""
-        subject = subject_of(request)
-        try:
-            membership_mod.require_role(wsr.root, workspace_id, subject, "contributor")
-            membership_mod.revoke_invite(wsr.root, workspace_id, invite_id, commit_fn=_pc)
-        except MembershipError as exc:
-            raise _member_error(exc)
-        return {"ok": True, "invite_id": invite_id}
-    @router.get("/api/workspace/invites")
-    def ws_invites_list(request: Request, workspace_id: str):
-        """List a workspace's invites (owner/contributor). Hashes are never surfaced."""
-        subject = subject_of(request)
-        try:
-            membership_mod.require_role(wsr.root, workspace_id, subject, "contributor")
-            return {"invites": membership_mod.list_invites(wsr.root, workspace_id)}
-        except MembershipError as exc:
-            raise _member_error(exc)
-    @router.get("/api/workspace/members")
-    def ws_members_list(request: Request, workspace_id: str):
-        """List a workspace's members (owner/contributor). Opportunistically records the CALLER's own
-        verified email onto their member row (self-healing for members granted before emails were stored)
-        so the roster shows human labels, not opaque subject ids."""
-        subject = subject_of(request)
-        try:
-            membership_mod.require_role(wsr.root, workspace_id, subject, "contributor")
-            try:  # best-effort label refresh — never fail the list on a backfill hiccup
-                membership_mod.backfill_member_email(
-                    wsr.root, workspace_id, subject,
-                    request.headers.get("x-user-email"), commit_fn=_pc)
-            except Exception:  # noqa: BLE001
-                logger.debug("member email backfill skipped for %s in %s", subject, workspace_id, exc_info=True)
-            # WHO EACH MEMBER IS, by name (Vexa-ai/vexa#1634). The roster has carried `email`
-            # since memberships were stored, and an address is how the system finds a person rather
-            # than what they are called — so the front page's first sentence ("you, Jane Smith and 2
-            # more") needs a name beside it. Additive and nullable: `read_members` is unchanged, the
-            # roster renders exactly as it did for a member nobody has written down, and no caller
-            # has to know this field exists. `person_name` never answers with an address.
-            rows = []
-            for m in membership_mod.read_members(wsr.root, workspace_id):
-                named = front_page_mod.person_name(wsr.root, str(m.get("subject") or ""),
-                                                   email=m.get("email"))
-                rows.append({**m, "name": named} if named else dict(m))
-            return {"members": rows}
-        except MembershipError as exc:
-            raise _member_error(exc)
-    @router.delete("/api/workspace/members/{member_subject}")
-    def ws_member_remove(member_subject: str, request: Request, workspace_id: str):
-        """Remove a member (owner only)."""
-        subject = subject_of(request)
-        try:
-            membership_mod.require_role(wsr.root, workspace_id, subject, "owner")
-            membership_mod.remove_member(wsr.root, workspace_id, member_subject, index=mindex, commit_fn=_pc)
-        except MembershipError as exc:
-            raise _member_error(exc)
-        return {"ok": True, "subject": member_subject}
-    @router.post("/api/workspace/members/{member_subject}/role")
-    def ws_member_role(member_subject: str, request: Request, workspace_id: str,
-                       body: RoleSetBody = Body(...)):
-        """Flip a member's role (owner only) — read <-> read/write permissions."""
-        subject = subject_of(request)
-        try:
-            membership_mod.require_role(wsr.root, workspace_id, subject, "owner")
-            rec = membership_mod.set_role(
-                wsr.root, workspace_id, member_subject, body.role,
-                changed_by=subject, index=mindex, commit_fn=_pc,
-            )
-        except MembershipError as exc:
-            raise _member_error(exc)
-        return rec
-    # ── THE TWO VERBS (Vexa-ai/vexa#1632) ────────────────────────────────────────────────────────
-    #
-    # The front page has no membership form any more: its three controls queue an act on the chat,
-    # the agent asks for the address and the role in one question, and then it calls one of these.
-    # Both are addressed by EMAIL, which is the whole reason they are new routes rather than a body
-    # change on the three above — those take a `member_subject`, the opaque platform id, which is
-    # exactly right for a panel holding a roster it just read and useless to an agent whose person
-    # said a name out loud.
-    #
-    # THE THINKING IS IN `control_plane/membership_acts.py`, not here. These are the door: identity,
-    # the gate's two inputs, the injected collaborators, and the refusal translation. Everything that
-    # can be wrong about an act — who may run it, what an address resolves to, whether the link is
-    # mailed or handed over — is decided there, where a test drives it with a directory and three
-    # callables instead of a running app.
-
-    def _act_commit(request: Request, subject: str):
-        """The `policy/` writer for an act, with THE PERSON WHO ASKED as the commit's author.
-
-        `_pc` (the platform writer) is what every membership route above uses and what this one
-        cannot: the issue asks for the act to be "recorded as a commit in the workspace with the
-        inviter as author", and until now every membership change in every workspace's history read
-        `vexa-platform` — so *who added this person* was answerable only by reading a JSON diff. The
-        committer stays the platform, because the platform is what physically holds the write."""
-        return membership_mod.policy_commit_as(
-            subject, request.headers.get("x-user-email") or "")
-
-    def _act_refusal(exc: "membership_acts.ActRefused"):
-        # ONE SENTENCE, THE ACT'S OWN. `_member_error` does the same job for `MembershipError` and
-        # `ActRefused` carries the identical `.status`, so this is that translation and not a second
-        # policy: the rig prints `detail` to the agent, which says it to the person.
-        return HTTPException(status_code=exc.status, detail=str(exc))
-
-    @router.post("/api/workspace/invite")
-    def ws_invite_person(request: Request, body: WorkspaceInviteBody = Body(...)):
-        """Invite ONE address to a workspace as one of `owner · contributor · reader` — the verb
-        behind `workspace_invite`.
-
-        Owner-only, and the check is the same `require_role(..., "owner")` the role and remove routes
-        run. `_system` is refused for everybody; `_global` is admin-only and then refused, because the
-        company layer's editors are a named set in `POLICIES.md` and a membership record there would
-        authorise nothing. The invite is the one `POST /api/workspace/invites` mints — same store,
-        same hash-only persistence — minted `restricted` to the named address, so a forwarded link
-        grants nobody anything.
-
-        Where the link GOES is the question this route exists to answer: an address this instance
-        already knows gets it handed back for the agent to give them in the chat they are in, and
-        every other address is published to the mail carrier. The answer says which happened."""
-        subject = subject_of(request)
-        try:
-            membership_acts.assert_may_manage(
-                wsr.root, body.slug, subject,
-                is_admin=bool(global_layer.is_admin(settings, str(subject))))
-            rec = workspace_registry.by_slug(body.slug) or {}
-            return membership_acts.invite(
-                wsr.root, body.slug, email=body.email, role=body.role, inviter=subject,
-                inviter_email=request.headers.get("x-user-email") or "",
-                workspace_name=str(rec.get("name") or ""),
-                index=mindex, ui_url=(settings.ui_url if settings is not None else ""),
-                commit_fn=_act_commit(request, subject),
-                resolve_subject=_email_subject_lookup,
-                mail=publish_mod.publish_invite)
-        except membership_acts.ActRefused as exc:
-            raise _act_refusal(exc)
-        except MembershipError as exc:
-            raise _member_error(exc)
-
-    @router.post("/api/workspace/membership")
-    def ws_membership_set(request: Request, body: WorkspaceMembershipBody = Body(...)):
-        """Change what an address IS in a workspace, or take them off it — the verb behind
-        `workspace_membership`. `role` is one of the three, or `remove`.
-
-        Same gate as the invite above, and one verb rather than two because it is one question with
-        four answers: an agent that had to choose a verb before asking would have to guess the answer
-        first. The last-owner refusal reaches the person as itself (409) — it is about the workspace,
-        not about them, and a generic failure would leave somebody trying it again."""
-        subject = subject_of(request)
-        try:
-            membership_acts.assert_may_manage(
-                wsr.root, body.slug, subject,
-                is_admin=bool(global_layer.is_admin(settings, str(subject))))
-            return membership_acts.set_membership(
-                wsr.root, body.slug, email=body.email, role=body.role, actor=subject,
-                index=mindex, commit_fn=_act_commit(request, subject),
-                resolve_subject=_email_subject_lookup)
-        except membership_acts.ActRefused as exc:
-            raise _act_refusal(exc)
-        except MembershipError as exc:
-            raise _member_error(exc)
-
-    @router.post("/api/workspace/{workspace_id}/leave")
-    def ws_member_leave(workspace_id: str, request: Request):
-        """LEAVE a shared workspace — the caller removes THEMSELVES (any role; no owner gate). The
-        last-owner guard still applies: a sole creator must unshare or hand off ownership rather than
-        orphan the workspace, so their leave is refused (409) with that message."""
-        subject = subject_of(request)
-        if membership_mod.is_member(wsr.root, workspace_id, subject) is None:
-            raise HTTPException(status_code=404, detail="not a member of this workspace")
-        try:
-            membership_mod.remove_member(wsr.root, workspace_id, subject, index=mindex, commit_fn=_pc)
-        except MembershipError as exc:
-            raise _member_error(exc)
-        return {"ok": True, "left": workspace_id}
-    @router.get("/api/workspace/shared")
-    def ws_shared_list(request: Request):
-        """The "workspaces shared with me" listing, reconciled across BOTH membership stores.
-
-        ``users.data.memberships[]`` (the index) is the fast, cross-host read; ``policy/members.json``
-        is the authoritative one (Q6). Reading ONLY the mirror made every grant on this host invisible
-        whenever the internal edge to admin-api was unreachable — the route answered 200 with an empty
-        list, so a 403 on that hop rendered in the UI as "you have no shared workspaces" rather than as
-        an error. It is now a UNION, never a subtraction: an index row with no local dir is a workspace
-        that lives on another host and must still be listed, so the git store only ever ADDS rows the
-        index is missing. ``index_degraded`` says out loud when the mirror could not be read."""
-        subject = subject_of(request)
-        degraded = False
-        try:
-            rows = list(mindex.list(subject) or [])
-        except Exception as exc:  # noqa: BLE001 — the authoritative store still answers; never 500 this
-            logger.warning("membership index list failed for subject=%s: %s — serving policy/members.json",
-                           subject, exc)
-            rows, degraded = [], True
-        seen = {r.get("workspace_id") for r in rows}
-        for row in membership_mod.list_memberships(wsr.root, subject):
-            if row["workspace_id"] not in seen:
-                rows.append(row)
-        return {"memberships": rows, "index_degraded": degraded}
 
     return router

@@ -133,7 +133,7 @@ def test_a_path_that_climbs_or_carries_a_shell_metacharacter_is_refused(path):
 
 
 @pytest.mark.parametrize("path,expected", [
-    ("kg/entities/person/olga.md", "kg/entities/person/olga.md"),
+    ("kg/entities/person/nora.md", "kg/entities/person/nora.md"),
     ("README.md", "README.md"),
     ("_pending/claims.json", "_pending/claims.json"),
     ("./notes/today.md", "notes/today.md"),

@@ -1,0 +1,22 @@
+{
+  "why": "a scope outside the vocabulary is a set no key can hold: it denies the route while reading like a decision",
+  "manifest": {
+    "contract": "routes.v1",
+    "domain": "agent",
+    "owner": "core/agent",
+    "edge": "gateway",
+    "forward": {
+      "edge_prefix": "/agent/",
+      "upstream_prefix": "/api/"
+    },
+    "routes": [
+      {
+        "method": "GET",
+        "path": "/agent/x",
+        "scopes": [
+          "admin"
+        ]
+      }
+    ]
+  }
+}

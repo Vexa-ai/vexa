@@ -20,7 +20,7 @@ vi.mock("../../ui-kit/MdxDoc", async (importOriginal) => {
 });
 
 import { PagesPanel } from "../PagesPanel";
-import { ASK_CHAT_EVENT } from "../../canvas/actions";
+import { ASK_CHAT_EVENT } from "../../platform";
 import { clearPending } from "../extend";
 import { transcriptSlotMarker } from "../../ui-kit/transcriptSlot";
 import type { PageIntent } from "../../surfaces/chatIntent";
@@ -73,7 +73,7 @@ describe("a page that declares a transcript widget", () => {
     fireLine();
     const prompt = asks[0].prompt ?? "";
     expect(prompt).toContain("transcript_cursor");
-    expect(prompt).toContain('meeting_transcript(meeting_id="147"');
+    expect(prompt).toContain("get_meeting_transcript(meeting_db_id=147");
     expect(prompt).toContain("vexa:transcript");
     expect(prompt).toContain("meeting:<key>:start");
     // and the bubble stays a label — the machinery never becomes the person's own words
@@ -91,9 +91,9 @@ describe("a page that declares a transcript widget", () => {
     sel?.removeAllRanges(); sel?.addRange(range);
     fireEvent(document, new Event("selectionchange"));
     expect(body).toBeTruthy();
-    fireEvent.mouseDown(container.querySelector('[data-doc-act="extend-selection"]') as HTMLElement);
-    fireLine();
-    expect(asks[0].intent).toMatchObject({ kind: "extend", path: PATH, meeting: "147", selection: "The CLA" });
+    fireEvent.click(container.querySelector('[data-doc-act="extend-selection"]') as HTMLElement);
+    expect(asks[0]).toMatchObject({ mode: "draft", reference: { path: PATH, meeting: "147" } });
+    expect(asks[0].prompt).toContain("> The CLA");
   });
 });
 

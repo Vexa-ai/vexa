@@ -66,7 +66,7 @@ def _init_ws(root: Path, slug: str) -> Path:
     return ws
 
 
-def _page(ws: Path, rel: str, text: str = "# OeNB\n\nThe dossier.\n") -> Path:
+def _page(ws: Path, rel: str, text: str = "# Example Bank\n\nThe dossier.\n") -> Path:
     f = ws / rel
     f.parent.mkdir(parents=True, exist_ok=True)
     f.write_text(text)
@@ -110,17 +110,17 @@ def _move(c: TestClient, subject: str, **body):
 
 def test_a_deleted_page_leaves_the_desk_and_stays_in_the_history(tmp_path):
     ws = _init_ws(tmp_path, JANE)
-    _page(ws, "kg/entities/company/oenb.md")
-    r = _delete(_client(tmp_path), JANE, "kg/entities/company/oenb.md")
+    _page(ws, "kg/entities/company/examplebank.md")
+    r = _delete(_client(tmp_path), JANE, "kg/entities/company/examplebank.md")
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["deleted"] is True and body["path"] == "kg/entities/company/oenb.md"
+    assert body["deleted"] is True and body["path"] == "kg/entities/company/examplebank.md"
     # gone from the working tree — the founder's whole ask
-    assert not (ws / "kg/entities/company/oenb.md").exists()
+    assert not (ws / "kg/entities/company/examplebank.md").exists()
     # and recoverable: the commit is a removal, and the bytes are one `git show` behind it
     assert body["commit"] and body["commit"] == _git(ws, "rev-parse", "HEAD")
-    assert "D\tkg/entities/company/oenb.md" in _git(ws, "show", "--name-status", "--format=", "HEAD")
-    assert "The dossier." in _git(ws, "show", "HEAD~1:kg/entities/company/oenb.md")
+    assert "D\tkg/entities/company/examplebank.md" in _git(ws, "show", "--name-status", "--format=", "HEAD")
+    assert "The dossier." in _git(ws, "show", "HEAD~1:kg/entities/company/examplebank.md")
 
 
 def test_the_commit_subject_says_which_page_went(tmp_path):
@@ -136,11 +136,11 @@ def test_removing_an_entity_page_refreshes_the_index_the_next_turn_reads(tmp_pat
     """`kg/INDEX.md` rides in EVERY dispatch (`worker/engine.entity_index_preamble`). A page removed
     without it is a page the next turn is still told the workspace holds."""
     ws = _init_ws(tmp_path, JANE)
-    _page(ws, "kg/entities/company/oenb.md")
+    _page(ws, "kg/entities/company/examplebank.md")
     entities_mod.write_index(ws, JANE)
-    assert "oenb" in (ws / entities_mod.INDEX_PATH).read_text()
-    _delete(_client(tmp_path), JANE, "kg/entities/company/oenb.md")
-    assert "oenb" not in (ws / entities_mod.INDEX_PATH).read_text()
+    assert "examplebank" in (ws / entities_mod.INDEX_PATH).read_text()
+    _delete(_client(tmp_path), JANE, "kg/entities/company/examplebank.md")
+    assert "examplebank" not in (ws / entities_mod.INDEX_PATH).read_text()
 
 
 def test_deleting_a_draft_does_not_mint_an_entity_index(tmp_path):
@@ -201,19 +201,19 @@ def test_a_page_the_turn_wrote_but_never_committed_still_leaves(tmp_path):
 
 def test_a_move_inside_one_workspace_leaves_a_pointer_at_the_old_path(tmp_path):
     ws = _init_ws(tmp_path, JANE)
-    _page(ws, "kg/entities/company/oenb.md")
+    _page(ws, "kg/entities/company/examplebank.md")
     r = _move(_client(tmp_path), JANE,
-              **{"from": "kg/entities/company/oenb.md", "to": "customers/oenb.md"})
+              **{"path": "kg/entities/company/examplebank.md", "to": "customers/examplebank.md"})
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["moved"] is True and body["pointer"] == "kg/entities/company/oenb.md"
-    assert "The dossier." in (ws / "customers/oenb.md").read_text()
-    stub = (ws / "kg/entities/company/oenb.md").read_text()
-    assert "moved_to: customers/oenb.md" in stub and "customers/oenb.md" in stub
+    assert body["moved"] is True and body["pointer"] == "kg/entities/company/examplebank.md"
+    assert "The dossier." in (ws / "customers/examplebank.md").read_text()
+    stub = (ws / "kg/entities/company/examplebank.md").read_text()
+    assert "moved_to: customers/examplebank.md" in stub and "customers/examplebank.md" in stub
     # ONE commit, naming both paths — the move is one act
     assert body["commit"] == body["source_commit"] == _git(ws, "rev-parse", "HEAD")
     names = _git(ws, "show", "--name-only", "--format=", "HEAD").split()
-    assert "customers/oenb.md" in names and "kg/entities/company/oenb.md" in names
+    assert "customers/examplebank.md" in names and "kg/entities/company/examplebank.md" in names
 
 
 def test_a_moved_asset_gets_no_markdown_pointer(tmp_path):
@@ -224,16 +224,16 @@ def test_a_moved_asset_gets_no_markdown_pointer(tmp_path):
     (ws / "assets/logo.png").write_bytes(b"\x89PNG\r\n\x1a\n")
     _git(ws, "add", "-A")
     _git(ws, "commit", "-q", "-m", "logo")
-    r = _move(_client(tmp_path), JANE, **{"from": "assets/logo.png", "to": "assets/oenb-logo.png"})
+    r = _move(_client(tmp_path), JANE, **{"path": "assets/logo.png", "to": "assets/bank-logo.png"})
     assert r.status_code == 200 and r.json()["pointer"] is None
     assert not (ws / "assets/logo.png").exists()
-    assert (ws / "assets/oenb-logo.png").read_bytes() == b"\x89PNG\r\n\x1a\n"
+    assert (ws / "assets/bank-logo.png").read_bytes() == b"\x89PNG\r\n\x1a\n"
 
 
 def test_moving_a_page_onto_itself_is_refused(tmp_path):
     ws = _init_ws(tmp_path, JANE)
     _page(ws, "notes/plan.md")
-    r = _move(_client(tmp_path), JANE, **{"from": "notes/plan.md", "to": "notes/plan.md"})
+    r = _move(_client(tmp_path), JANE, **{"path": "notes/plan.md", "to": "notes/plan.md"})
     assert r.status_code == 400
 
 
@@ -243,13 +243,13 @@ def test_a_move_with_no_to_slug_stays_in_the_workspace_it_started_in(tmp_path):
     root = tmp_path
     _init_ws(root, JANE)
     idx = m.InMemoryMembershipIndex()
-    ws = _init_ws(root, "oenb-c1")
-    m.ensure_owner(root, "oenb-c1", JANE, index=idx)
+    ws = _init_ws(root, "bank-c1")
+    m.ensure_owner(root, "bank-c1", JANE, index=idx)
     _page(ws, "notes/plan.md")
     r = _move(_client(root, index=idx), JANE,
-              **{"from": "notes/plan.md", "to": "notes/2026-plan.md", "slug": "oenb-c1"})
+              **{"path": "notes/plan.md", "to": "notes/2026-plan.md", "slug": "bank-c1"})
     assert r.status_code == 200, r.text
-    assert r.json()["to_workspace"] == "oenb-c1"
+    assert r.json()["to_workspace"] == "bank-c1"
     assert (ws / "notes/2026-plan.md").is_file()
     assert not (root / JANE / "notes/2026-plan.md").exists()
 
@@ -260,27 +260,27 @@ def test_a_cross_workspace_move_writes_the_target_and_deletes_the_source(tmp_pat
     """The founder's actual ask: seven pages off the desk and into the customer's own workspace."""
     root = tmp_path
     desk = _init_ws(root, JANE)
-    _page(desk, "kg/entities/company/oenb.md")
+    _page(desk, "kg/entities/company/examplebank.md")
     idx = m.InMemoryMembershipIndex()
-    target = _init_ws(root, "oenb-c1")
-    m.ensure_owner(root, "oenb-c1", JANE, index=idx)
+    target = _init_ws(root, "bank-c1")
+    m.ensure_owner(root, "bank-c1", JANE, index=idx)
     before_target = _git(target, "rev-parse", "HEAD")
 
     r = _move(_client(root, index=idx), JANE,
-              **{"from": "kg/entities/company/oenb.md", "to": "kg/entities/company/oenb.md",
-                 "to_slug": "oenb-c1"})
+              **{"path": "kg/entities/company/examplebank.md", "to": "kg/entities/company/examplebank.md",
+                 "to_slug": "bank-c1"})
     assert r.status_code == 200, r.text
     body = r.json()
     # the page is THERE
-    assert "The dossier." in (target / "kg/entities/company/oenb.md").read_text()
+    assert "The dossier." in (target / "kg/entities/company/examplebank.md").read_text()
     # …and GONE from the desk, with no pointer stub left behind (the containment rule)
-    assert not (desk / "kg/entities/company/oenb.md").exists()
+    assert not (desk / "kg/entities/company/examplebank.md").exists()
     assert body["pointer"] is None
     # two repositories, two commits
     assert body["commit"] == _git(target, "rev-parse", "HEAD") != before_target
     assert body["source_commit"] == _git(desk, "rev-parse", "HEAD")
     assert body["commit"] != body["source_commit"]
-    assert "D\tkg/entities/company/oenb.md" in _git(desk, "show", "--name-status", "--format=", "HEAD")
+    assert "D\tkg/entities/company/examplebank.md" in _git(desk, "show", "--name-status", "--format=", "HEAD")
 
 
 def test_a_cross_workspace_move_into_a_workspace_the_caller_only_reads_is_refused(tmp_path):
@@ -295,7 +295,7 @@ def test_a_cross_workspace_move_into_a_workspace_the_caller_only_reads_is_refuse
     m.grant_membership(root, "wsA", JANE, "viewer", added_by="owner1", index=idx)
 
     r = _move(_client(root, index=idx), JANE,
-              **{"from": "notes/plan.md", "to": "notes/plan.md", "to_slug": "wsA"})
+              **{"path": "notes/plan.md", "to": "notes/plan.md", "to_slug": "wsA"})
     assert r.status_code == 403
     assert (desk / "notes/plan.md").is_file(), "the source was touched by a refused move"
     assert not (root / "wsA/notes/plan.md").exists()
@@ -311,8 +311,8 @@ def test_the_private_system_tier_is_never_a_removal_target(tmp_path):
     _init_ws(root, JANE)
     c = _client(root)
     assert _delete(c, JANE, "identity.md", slug="_system").status_code == 403
-    assert _move(c, JANE, **{"from": "identity.md", "to": "x.md", "slug": "_system"}).status_code == 403
-    assert _move(c, JANE, **{"from": "notes/plan.md", "to": "x.md",
+    assert _move(c, JANE, **{"path": "identity.md", "to": "x.md", "slug": "_system"}).status_code == 403
+    assert _move(c, JANE, **{"path": "notes/plan.md", "to": "x.md",
                              "to_slug": "_system"}).status_code == 403
 
 
@@ -342,7 +342,7 @@ def test_a_move_out_of_the_company_tier_is_refused_for_everyone_but_the_admin(tm
     g = _init_ws(root, "_global")
     _page(g, "README.md", "# the company\n")
     r = _move(_client(root, admins=ADMIN), JANE,
-              **{"from": "README.md", "to": "stolen.md", "slug": "_global"})
+              **{"path": "README.md", "to": "stolen.md", "slug": "_global"})
     assert r.status_code == 403
     assert (g / "README.md").is_file() and not (desk / "stolen.md").exists()
 
@@ -368,12 +368,12 @@ def test_a_deleted_page_is_not_re_surfaced_by_the_write_back_phase(tmp_path):
     ws = _init_ws(tmp_path, JANE)
     (ws / "kg/entities/person").mkdir(parents=True)
     mounts = [{"slug": JANE, "path": str(ws), "role": "private", "write": True, "primary": True}]
-    said = ["Removed the Olga Avramenko page from your desk."]
+    said = ["Removed the Nora Quill page from your desk."]
 
     # with the page gone and nothing said about it, the phase would propose writing it again
-    assert engine.writeback_candidates(said, mounts) == ["Olga Avramenko"]
+    assert engine.writeback_candidates(said, mounts) == ["Nora Quill"]
     # …and does not, once the turn's own removal is known
-    assert engine.writeback_candidates(said, mounts, removed={"olga-avramenko"}) == []
+    assert engine.writeback_candidates(said, mounts, removed={"nora-quill"}) == []
 
 
 def test_a_truncated_echo_of_a_removed_name_is_dropped_too(tmp_path):
@@ -388,11 +388,11 @@ def test_a_truncated_echo_of_a_removed_name_is_dropped_too(tmp_path):
 
 
 @pytest.mark.parametrize("tool,args,expected", [
-    ("mcp__vexa__workspace_delete", {"path": "kg/entities/company/oenb.md"}, {"oenb"}),
+    ("mcp__vexa__workspace_delete", {"path": "kg/entities/company/examplebank.md"}, {"examplebank"}),
     ("workspace_delete", {"path": "notes/plan.md"}, {"plan"}),
     ("mcp__vexa__workspace_move", {"from": "kg/entities/person/ana.md", "to": "x/ana.md"}, {"ana"}),
     ("mcp__vexa__workspace_move", {"path": "kg/entities/person/ana.md", "to": "x/ana.md"}, {"ana"}),
-    ("mcp__vexa__workspace_write", {"path": "kg/entities/company/oenb.md"}, set()),
+    ("mcp__vexa__workspace_write", {"path": "kg/entities/company/examplebank.md"}, set()),
     ("mcp__vexa__workspace_delete", {}, set()),
     ("mcp__vexa__workspace_delete", "not a dict", set()),
 ])

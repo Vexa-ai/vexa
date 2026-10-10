@@ -10,17 +10,17 @@ import { isPageIntent, isSilent, normalizeIntent, TERM_MAX } from "../chatIntent
 
 describe("explore — a term clicked in a transcript", () => {
   it("carries the term, the meeting and the segment it was said in", () => {
-    expect(normalizeIntent({ kind: "explore", term: " Kaar Tech ", meeting: "41", segment: "s7" }))
-      .toEqual({ kind: "explore", term: "Kaar Tech", meeting: "41", segment: "s7" });
+    expect(normalizeIntent({ kind: "explore", term: " Northwind Labs ", meeting: "41", segment: "s7" }))
+      .toEqual({ kind: "explore", term: "Northwind Labs", meeting: "41", segment: "s7" });
   });
 
   it("an absent segment stays ABSENT — provenance we do not have is not invented", () => {
-    const i = normalizeIntent({ kind: "explore", term: "Kaar Tech", meeting: "41" })!;
+    const i = normalizeIntent({ kind: "explore", term: "Northwind Labs", meeting: "41" })!;
     expect("segment" in i).toBe(false);
   });
 
   it("refuses a term with no meeting, and a meeting with no term", () => {
-    expect(normalizeIntent({ kind: "explore", term: "Kaar Tech" })).toBeNull();
+    expect(normalizeIntent({ kind: "explore", term: "Northwind Labs" })).toBeNull();
     expect(normalizeIntent({ kind: "explore", meeting: "41" })).toBeNull();
     expect(normalizeIntent({ kind: "explore", term: "   ", meeting: "41" })).toBeNull();
   });

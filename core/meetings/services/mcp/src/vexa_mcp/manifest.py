@@ -70,8 +70,16 @@ METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
 AUTHS = {"subject", "admin", "none"}
 #: Published literals a stock deploy surface once supplied — the same refusal list flows-api and the
 #: services' `config.v1` keep. A key that is in this repository authenticates nobody and everybody.
-PLACEHOLDER_KEYS = {"changeme", "change-me", "default", "secret", "vexa-internal-secret",
+PLACEHOLDER_KEYS = {"changeme", "change-me", "CHANGE-ME", "default", "secret", "vexa-internal-secret",
                     "lite-internal-secret"}
+
+
+#: WHERE A DOMAIN'S TOOLS ARE CALLED. A domain the gateway fronts wholesale declares `forward` —
+#: `{"edge_prefix": "/agent/", "upstream_prefix": "/api/"}`, the same mapping its `routes.v1` gives
+#: the gateway — and its tools are then called back THROUGH the gateway at
+#: `<edge_prefix><path after upstream_prefix>`, so a worker's own bearer is admitted there on this
+#: edge's re-entry (`reentry.py`). A domain that declares none is called at its own door. The
+#: decision is the manifest's, never a domain name this assembler recognises.
 
 
 class ManifestError(Exception):
@@ -93,6 +101,8 @@ class Tool:
     auth: str = "subject"
     #: for `auth: admin`, the domain's `{"header": …, "key_env": …}`. None for every other value.
     admin_auth: Optional[dict] = None
+    #: the domain's `forward` as `(edge_prefix, upstream_prefix)`, or None — see `forward_of`.
+    forward: Optional[tuple] = None
 
 
 @dataclass(frozen=True)
@@ -187,11 +197,69 @@ def validate(doc: dict) -> dict:
         else:
             if route.get("method") not in METHODS or not str(route.get("path", "")).startswith("/"):
                 raise ManifestError(f"{domain}/{name}: route needs a method and an absolute path")
+    _check_aliases(domain, doc.get("tools") or [])
+    forward = forward_of(doc)
+    if forward:
+        for t in doc.get("tools") or []:
+            path = str((t.get("route") or {}).get("path", ""))
+            if not path.startswith(forward[1]):
+                raise ManifestError(
+                    f"{domain}/{t.get('name')}: route {path!r} is outside the domain's forward "
+                    f"({forward[1]}…) — a forwarded domain's tools live under its upstream prefix")
     ent = doc.get("entitlement")
     if ent is not None:
         if not isinstance(ent, dict) or not ent.get("route") or not ent.get("answers"):
             raise ManifestError(f"{domain}: entitlement needs a route and what it answers")
     return doc
+
+
+def _check_aliases(domain: str, tools: list) -> None:
+    """One route, one name — a second name for a route declares `alias_of` the first one and takes
+    exactly its arguments, so the two cannot drift into two different tools on one door."""
+    first: Dict[tuple, dict] = {}
+    by_name = {t.get("name"): t for t in tools}
+    for t in tools:
+        route = t.get("route") or {}
+        key = (route.get("method"), route.get("path"))
+        alias = t.get("alias_of")
+        if alias is not None:
+            target = by_name.get(alias)
+            if (alias == t.get("name") or target is None
+                    or (target.get("route") or {}) != route
+                    or list(target.get("arguments") or []) != list(t.get("arguments") or [])
+                    or target.get("alias_of") is not None):
+                raise ManifestError(
+                    f"{domain}/{t.get('name')}: alias_of must name another, non-alias tool on the "
+                    f"same route with the same arguments (got {alias!r})")
+            continue
+        if route and key in first:
+            raise ManifestError(
+                f"{domain}: {first[key]['name']!r} and {t.get('name')!r} are bound to the same route "
+                f"{key[0]} {key[1]} — declare the second as \"alias_of\": {first[key]['name']!r} if "
+                "the second name is deliberate")
+        if route:
+            first[key] = t
+
+
+def _prefix(value) -> Optional[str]:
+    if isinstance(value, str) and value.startswith("/") and value.endswith("/") and "{" not in value:
+        return value
+    return None
+
+
+def forward_of(doc: dict) -> Optional[tuple]:
+    """A manifest's `forward` as `(edge_prefix, upstream_prefix)`, None when it declares none, or
+    :class:`ManifestError` when it declares one this edge cannot read."""
+    raw = doc.get("forward")
+    if raw is None:
+        return None
+    edge = _prefix(raw.get("edge_prefix")) if isinstance(raw, dict) else None
+    upstream = _prefix(raw.get("upstream_prefix")) if isinstance(raw, dict) else None
+    if not (edge and upstream):
+        raise ManifestError(
+            f"{doc.get('domain')}: forward must be two absolute prefixes ending at a segment, "
+            f'{{"edge_prefix": "/x/", "upstream_prefix": "/y/"}} (got {raw!r})')
+    return edge, upstream
 
 
 def _admin_auth(doc: dict) -> Optional[dict]:
@@ -284,7 +352,7 @@ def assemble(manifests: List[dict], *, deployed: Set[str],
                 requires=frozenset(t["requires"]), route=t.get("route"),
                 base_url_env=doc.get("base_url_env"),
                 arguments=tuple(t.get("arguments") or ()), note=t.get("note", ""),
-                auth=t["auth"], admin_auth=admin_auth))
+                auth=t["auth"], admin_auth=admin_auth, forward=forward_of(doc)))
     for doc in manifests:
         if doc["domain"] not in deployed:
             out.absent_domains.add(doc["domain"])

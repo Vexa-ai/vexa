@@ -9,10 +9,15 @@ SDKs, and any client build against.
 
 ## Protocol
 - **Connect:** `ws(s)://<host>/ws` with auth `x-api-key:<token>` header **or** `?api_key=<token>`
-  query. Missing key → `{type:"error", error:"missing_api_key"}` then close `4401`.
+  query. Missing key → `{type:"error", error:"missing_api_key"}` then close `4401`; a key that
+  resolves to nobody → `invalid_api_key`, close `4401`; the key cannot be resolved now →
+  `auth_unavailable`, close `4503`. The socket is held to the REST routes' key scopes: a key that may
+  read no meeting status (`GET /meetings`, `GET /bots/status`) → `insufficient_scope`, close `4403`.
 - **Client → server:** `SubscribeRequest` `{action:"subscribe", meetings:[{platform, native_id}]}`
-  (and `UnsubscribeRequest`). Authorization is delegated to the collector
-  (`POST /ws/authorize-subscribe`) — you only receive meetings your key may read.
+  (and `UnsubscribeRequest`). A subscription streams the meeting's transcript, so it takes the
+  scopes `GET /transcripts/{platform}/{native_meeting_id}` takes (`tx`); otherwise `insufficient_scope`
+  and the socket stays open. Authorization is delegated to the collector
+  (`POST /ws/authorize-subscribe`, which checks the same scopes) — you only receive meetings your key may read.
 - **Server → client (control):** `Subscribed` `{type:"subscribed", meetings:[…]}`, `Unsubscribed`,
   and `Error` `{type:"error", error:<code>, details?}`. `error` is a fixed code (a formal `enum` in
   the schema). Control/auth codes: `missing_api_key`, `invalid_json`, `invalid_subscribe_payload`,

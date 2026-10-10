@@ -9,7 +9,7 @@ import hashlib
 import json
 import re
 from pathlib import Path
-from typing import Optional
+from typing import Iterator, Optional
 
 from workspaces.shared import workspace_paths as wpaths
 
@@ -50,10 +50,11 @@ def _block_text(content) -> str:
         )
     return ""
 
-# `.git` is pure plumbing — huge/noisy, never useful in the Files tree — so it's hidden
-# unconditionally. Everything else dot-prefixed (`.claude` + any dotfile/dotdir) is hidden by
+# `.git` is pure plumbing — huge/noisy, never useful in the Files tree — and `.claude` is the agent's
+# own (chat continuity, harness state): both are hidden unconditionally, as every file route refuses
+# a path into them (`workspace_paths.RESERVED_DIRS`). Everything else dot-prefixed is hidden by
 # default but surfaced when the caller opts in via ``hidden=True``.
-_ALWAYS_HIDDEN = {".git"}
+_ALWAYS_HIDDEN = {".git", ".claude"}
 
 # TEMPLATES ARE NOT RECORDS. `kg/templates/` holds the SHAPE of an entity — a skeleton with
 # `<Full Name>` where a name goes — and every prose file in the workspace says it is never
@@ -101,6 +102,33 @@ _TEMPLATE_BANNER = (
 # and the terminal's strip stays as the fallback for everything written before the field existed.
 _TURNS_SIDECAR = "{session}.turns.jsonl"
 
+# ── continuity files are read without following a link ──────────────────────────────────────────
+# A chat's pointer, its user_text sidecar and its transcript live under ``<ws>/.claude/`` — in
+# ``_system`` above all, which the model's tools may write during a turn. agent-api reads them as a
+# process that can see every subject's store, so a link planted there would make it read another
+# subject's chat into this one's history. Below the workspace root nothing is reached through a
+# link: each folder is opened without following one, a file only when it is a regular file with no
+# other hard link.
+#: A session pointer is an id a few dozen bytes long.
+_POINTER_MAX_BYTES = 1 << 16
+#: The continuity files sit under `.claude/`, which no caller-supplied path may reach
+#: (`workspace_paths.RESERVED_DIRS`); these are the platform's own reads of it.
+_PLUMBING = (".claude",)
+_PLAIN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,199}")
+
+
+def _read_under(ws: Path, parts: "tuple[str, ...]", name: str,
+                max_bytes: Optional[int] = None) -> Optional[str]:
+    """The UTF-8 text of ``ws/<parts…>/name`` read without following a link (``workspace_paths``), or
+    None (missing, a link anywhere below ``ws``, not a regular file with a single link, over
+    ``max_bytes``)."""
+    return wpaths.read_text_inside(ws, "/".join((*parts, name)), max_bytes=max_bytes, allow=_PLUMBING)
+
+
+def _real_subdirs(ws: Path, parts: "tuple[str, ...]") -> Iterator[str]:
+    """Names of the folders directly in ``ws/<parts…>`` that are folders, not links to one."""
+    yield from wpaths.list_dirs_inside(ws, "/".join(parts), allow=_PLUMBING)
+
 # The write-back phase runs in the SAME harness session as the turn it follows, so its prompt and
 # its reply are in this transcript. The phase declares itself with this mark — ONE literal now, in
 # ``shared/marks.py``; the worker reads the same constant under its historical name WRITEBACK_MARK.
@@ -128,12 +156,8 @@ def _user_text_index(roots: "list[Path]", session: str) -> list[dict]:
     sidecar yields no records, and history degrades to the terminal's fallback strip."""
     out: list[dict] = []
     for ws in roots:
-        f = ws / ".claude" / "sessions" / _TURNS_SIDECAR.format(session=session)
-        try:
-            if not f.is_file():
-                continue
-            raw = f.read_text(encoding="utf-8")
-        except OSError:
+        raw = _read_under(ws, (".claude", "sessions"), _TURNS_SIDECAR.format(session=session))
+        if raw is None:
             continue
         for line in raw.splitlines():
             line = line.strip()
@@ -167,16 +191,13 @@ _UNFILLED_BANNER = (
 )
 
 
-def _is_template_doc(p: Path) -> bool:
-    """Does this file DECLARE itself a shape? Frontmatter only, and only the head of it."""
-    if p.suffix.lower() != ".md":
+def _is_template_doc(base: Path, rel: str) -> bool:
+    """Does this file DECLARE itself a shape? Frontmatter only, and only the head of it — read
+    NOFOLLOW (`workspace_paths`), because the tree is one the model's tools can write."""
+    if not rel.lower().endswith(".md"):
         return False
-    try:
-        with p.open("r", encoding="utf-8", errors="replace") as fh:
-            head = fh.read(800)
-    except OSError:
-        return False
-    if not head.startswith("---"):
+    head = wpaths.read_head_inside(base, rel, 800)
+    if not head or not head.startswith("---"):
         return False
     end = head.find("\n---", 3)
     return bool(_TEMPLATE_FM.search(head if end == -1 else head[:end]))
@@ -238,6 +259,15 @@ def _commit_records(raw: str, viewer_email: Optional[str]) -> list[dict]:
 class WorkspaceReader:
     def __init__(self, workspaces_dir: str) -> None:
         self._root = Path(workspaces_dir)
+        self._also: list[Path] = []
+
+    def allow(self, base: "str | Path") -> None:
+        """Admit one directory OUTSIDE the store to the path-based readers — the organisation tier
+        when the deployment keeps `_global` out of the store (`system_mounts.global_root`). Exactly
+        that tree; the store root stays the guard for everything else."""
+        resolved = Path(base).resolve()
+        if resolved not in self._also:
+            self._also.append(resolved)
 
     @property
     def root(self) -> Path:
@@ -258,10 +288,10 @@ class WorkspaceReader:
         readers so a mount PATH (from the active set — own private slots under .attached, or a shared
         workspace at <root>/<id>) can be read directly, not only a ``<root>/<subject>`` dir."""
         base = base.resolve()
-        root = self._root.resolve()
-        if base != root and root not in base.parents:
-            raise ValueError("outside root")
-        return base
+        for root in (self._root.resolve(), *self._also):
+            if base == root or root in base.parents:
+                return base
+        raise ValueError("outside root")
 
     def tree(self, subject: str, hidden: bool = False) -> list[str]:
         """Sorted relative paths of the subject's files (the subject's own ``<root>/<subject>`` dir)."""
@@ -270,24 +300,29 @@ class WorkspaceReader:
     def tree_at(self, base: Path, hidden: bool = False) -> list[str]:
         """Sorted relative paths of the files under ``base`` (any workspace dir under the store root).
 
-        Always excludes ``.git`` internals. By default also excludes ``.claude`` and any other
-        dotfile/dotdir; pass ``hidden=True`` to include those. ``.git`` stays hidden either way.
+        Always excludes ``.git`` and ``.claude``. By default also excludes any other dotfile/dotdir;
+        pass ``hidden=True`` to include those. ``.git`` and ``.claude`` stay hidden either way.
         """
         ws = self._guard_under_root(base)
         if not ws.exists():
             return []
+
+        def skip(rel: str) -> bool:
+            name = rel.rsplit("/", 1)[-1]
+            return name in _ALWAYS_HIDDEN or (not hidden and name.startswith("."))
+
         out: list[str] = []
-        for p in sorted(ws.rglob("*")):
-            parts = p.relative_to(ws).parts
+        # by descriptor, following no link (``workspace_paths.walk_files_inside``): a linked folder
+        # is neither entered nor listed, a linked file is not a file of this workspace
+        for rel in sorted(wpaths.walk_files_inside(ws, skip_dir=skip), key=lambda r: r.split("/")):
+            parts = rel.split("/")
             if any(part in _ALWAYS_HIDDEN for part in parts):
                 continue
             if not hidden and any(part.startswith(".") for part in parts):
                 continue
-            if p.is_file():
-                rel = str(p.relative_to(ws))
-                if not hidden and (rel.startswith(_RESERVED_PREFIXES) or _is_template_doc(p)):
-                    continue
-                out.append(rel)
+            if not hidden and (rel.startswith(_RESERVED_PREFIXES) or _is_template_doc(ws, rel)):
+                continue
+            out.append(rel)
         return out
 
     def read(self, subject: str, path: str) -> Optional[str]:
@@ -302,14 +337,16 @@ class WorkspaceReader:
         record. Deliberately not a refusal: the shape is what you consult to write a real entity."""
         ws = self._guard_under_root(base)
         try:
-            f = wpaths.resolve_inside(ws, path)   # absolute · `..` · symlink-out · `.git`/`.vexa`
+            # absolute · `..` · symlink-out · `.git`/`.vexa` — checked ONCE, then read nofollow
+            # through what was checked, so a link swapped in afterwards refuses the read
+            rbase, rel = wpaths.locate_inside(ws, path)
         except wpaths.PathRefused as exc:
             raise ValueError(str(exc)) from None
-        if not (f.exists() and f.is_file()):
+        raw = wpaths.read_bytes_inside(rbase, rel) if rel else None
+        if raw is None:
             return None
-        text = f.read_text()
-        rel = f.relative_to(ws).as_posix()
-        if rel.startswith(_RESERVED_PREFIXES) or _is_template_doc(f):
+        text = raw.decode("utf-8")
+        if rel.startswith(_RESERVED_PREFIXES) or _is_template_doc(rbase, rel):
             return _TEMPLATE_BANNER + text
         if _UNSET_MARKER in text:
             return _UNFILLED_BANNER + text
@@ -318,17 +355,14 @@ class WorkspaceReader:
     def _session_id(self, ws: Path, session: str) -> Optional[str]:
         """The claude sessionId for a thread, read from its continuity pointer
         (``.claude/sessions/<session>.session``; the legacy ``main`` falls back to ``.claude/.session``)."""
-        candidates = [ws / ".claude" / "sessions" / f"{session}.session"]
+        candidates = [((".claude", "sessions"), f"{session}.session")]
         if session == "main":
-            candidates.append(ws / ".claude" / ".session")
-        for f in candidates:
-            try:
-                if f.exists() and f.is_file():
-                    sid = f.read_text().strip()
-                    if sid:
-                        return sid
-            except OSError:
-                continue
+            candidates.append(((".claude",), ".session"))
+        for parts, name in candidates:
+            sid = (_read_under(ws, parts, name, _POINTER_MAX_BYTES) or "").strip()
+            if sid:
+                # an id names a transcript file by itself: one plain name, or no id at all
+                return sid if _PLAIN_ID.fullmatch(sid) else None
         return None
 
     def _continuity_roots(self, subject: str, extra_roots: "list[str | Path] | None" = None) -> list[Path]:
@@ -355,57 +389,82 @@ class WorkspaceReader:
             out.append(c)
         return out
 
-    def history(self, subject: str, session: str, extra_roots: "list[str | Path] | None" = None) -> list[dict]:
-        """The session's prior conversation as ordered, terminal-renderable turns.
+    def _swept_roots(self, subject: str, session: str) -> Iterator[Path]:
+        """Where the last-resort sweep may look for ``session``'s pointer: the subject's own parked
+        slots (``<root>/.attached/<subject>/<slug>``), then each workspace at ``<root>/<id>`` that
+        holds such a pointer and whose ``policy/members.json`` names the subject. Folders reached
+        through a link are skipped."""
+        if not _PLAIN_ID.fullmatch(subject):
+            return
+        for slug in _real_subdirs(self._root, (".attached", subject)):
+            yield self._root / ".attached" / subject / slug
+        from control_plane import workspace_membership as membership  # deferred: module-load order
 
-        Resolves the thread's claude sessionId from its continuity pointer, finds the transcript JSONL
-        under ``<ws>/.claude/projects/<cwd-slug>/<sessionId>.jsonl``, and parses it into ``Turn``-shaped
-        dicts: user turns ``{role:"user", text}``; agent turns ``{role:"agent", text, ops, commit?}``.
-        Pointer and transcript are searched across every continuity root (``_continuity_roots``) — they
-        normally co-locate, but a thread that MOVED anchors (cwd-rooted → _system-rooted) may have them
-        apart. Tolerant by design — a missing pointer/file or unparseable lines yield ``[]`` (never
-        raises), so the surface degrades to "no history yet" rather than erroring."""
+        for ws_id in _real_subdirs(self._root, ()):
+            if ws_id.startswith(".") or ws_id == subject:
+                continue
+            ws = self._root / ws_id
+            if not self._session_id(ws, session):
+                continue
+            try:
+                if membership.is_member(self._root, ws_id, subject) is None:
+                    continue
+            except Exception:  # noqa: BLE001 — an unreadable member list is not a membership
+                continue
+            yield ws
+
+    def locate_session(self, subject: str, session: str,
+                       extra_roots: "list[str | Path] | None" = None) -> "Optional[tuple[str, list[Path]]]":
+        """``(sessionId, roots)`` for a thread this subject can reach, or ``None`` — the roots the
+        transcript is then searched in. ``None`` is the answer for a session the subject has no
+        thread for, wherever else a thread of that name may exist."""
         if "/" in session or "\\" in session or session in ("", ".", ".."):
-            return []
-        roots = self._continuity_roots(subject, extra_roots)
-        sid: Optional[str] = None
+            return None
+        try:
+            roots = self._continuity_roots(subject, extra_roots)
+        except ValueError:
+            return None
         for ws in roots:
             sid = self._session_id(ws, session)
             if sid:
-                break
-        if not sid:
-            # LAST RESORT — threads recorded BEFORE continuity anchoring sit under whatever workspace
-            # was the turn's cwd at the time, which may no longer be mounted (deactivated / membership
-            # gone). Two fixed-depth globs over the store root find the pointer; read-only + bounded.
-            for pat in (f"*/.claude/sessions/{session}.session",
-                        f".attached/*/*/.claude/sessions/{session}.session"):
-                for f in self._root.glob(pat):
-                    ws = f.parents[2]
-                    sid = self._session_id(ws, session)
-                    if sid:
-                        roots.append(ws)
-                        break
-                if sid:
-                    break
-        if not sid:
+                return sid, roots
+        # LAST RESORT — threads recorded BEFORE continuity anchoring sit under whatever workspace
+        # was the turn's cwd at the time, which may no longer be mounted (deactivated, or switched
+        # off). Only workspaces this subject may read are swept: its own parked slots and the
+        # workspaces whose authoritative member list names it — a session name ("main") is the
+        # same for every subject, so a pointer elsewhere is somebody else's thread.
+        for ws in self._swept_roots(subject, session):
+            sid = self._session_id(ws, session)
+            if sid:
+                return sid, [*roots, ws]
+        return None
+
+    def history(self, subject: str, session: str, extra_roots: "list[str | Path] | None" = None) -> list[dict]:
+        """The session's prior conversation as ordered, terminal-renderable turns.
+
+        Resolves the thread's claude sessionId from its continuity pointer (``locate_session``), finds
+        the transcript JSONL under ``<ws>/.claude/projects/<cwd-slug>/<sessionId>.jsonl``, and parses
+        it into ``Turn``-shaped dicts: user turns ``{role:"user", text}``; agent turns
+        ``{role:"agent", text, ops, commit?}``. Pointer and transcript are searched across the same
+        roots — they normally co-locate, but a thread that MOVED anchors (cwd-rooted →
+        _system-rooted) may have them apart. Tolerant by design — a missing pointer/file or
+        unparseable lines yield ``[]`` (never raises), so the surface degrades to "no history yet"
+        rather than erroring."""
+        found = self.locate_session(subject, session, extra_roots)
+        if found is None:
             return []
+        sid, roots = found
         # The cwd-slug dir is claude's encoding of the workspace path; there is normally one, but match by
         # the sessionId filename to be safe. ``rglob`` also catches subagent transcripts — we want the top.
-        path: Optional[Path] = None
+        raw: Optional[str] = None
         for ws in roots:
-            projects = ws / ".claude" / "projects"
-            if not projects.exists():
-                continue
-            for cand in projects.glob(f"*/{sid}.jsonl"):
-                path = cand
+            for slug in _real_subdirs(ws, (".claude", "projects")):
+                raw = _read_under(ws, (".claude", "projects", slug), f"{sid}.jsonl")
+                if raw is not None:
+                    break
+            if raw is not None:
                 break
-            if path is not None:
-                break
-        if path is None:
-            return []
-        try:
-            raw = path.read_text()
-        except OSError:
+        if raw is None:
             return []
 
         turns: list[dict] = []
@@ -528,17 +587,18 @@ class WorkspaceReader:
         if "/" in session or "\\" in session or session in ("", ".", ".."):
             raise ValueError("invalid session")
         removed = False
-        targets: list[Path] = []
+        targets: list[tuple[Path, str]] = []
         # every continuity root the pointer may live in (_system, home — extra mount dirs are not
         # needed here: dropping the indexed thread only has to cover the anchored locations)
         for ws in self._continuity_roots(subject):
-            targets.append(ws / ".claude" / "sessions" / f"{session}.session")
+            targets.append((ws, f".claude/sessions/{session}.session"))
             if session == "main":
-                targets.append(ws / ".claude" / ".session")
-        for f in targets:
-            if f.exists() and f.is_file():
-                f.unlink()
-                removed = True
+                targets.append((ws, ".claude/.session"))
+        for ws, rel in targets:
+            # by descriptor (``workspace_paths.unlink_inside``): `.claude` is the tools user's to
+            # write, so a link planted at it or at `sessions` is never followed to remove a file
+            # elsewhere; a link at the pointer itself is removed as the link
+            removed = wpaths.unlink_inside(ws, rel, allow=_PLUMBING) or removed
         return removed
 
     def git_state(self, subject: str) -> dict:
@@ -556,19 +616,15 @@ class WorkspaceReader:
         OTHER members' agent pushes to a shared workspace distinctly from the viewer's own writes and from
         platform/seed plumbing. ``viewer`` (the caller's subject id) is what makes ``you`` resolvable — the
         turn-commit stamps author email ``<subject>@vexa.local`` (see ``worker/engine.py`` principal)."""
-        import subprocess
-
-        from shared.gitenv import scrubbed_git_env
+        from shared.gitexec import run_git
 
         base = self._guard_under_root(base)
         if not (base / ".git").exists():
             return {"branch": "", "changes": [], "commits": []}
 
         def git(*args: str) -> str:
-            # scrubbed env: a hook-exported GIT_DIR would report the HOOK's repo, not this workspace
-            return subprocess.run(
-                ["git", "-C", str(base), *args], capture_output=True, text=True, env=scrubbed_git_env()
-            ).stdout.strip()
+            # shared.gitexec: nothing the workspace's repository configures runs in this process
+            return run_git(base, *args).stdout.strip()
 
         changes = []
         for line in git("status", "--porcelain").splitlines():
@@ -600,9 +656,7 @@ class WorkspaceReader:
 
         Empty shape (never an exception) for a directory that is not a repository yet: a workspace
         seeded but never committed to is an ordinary state, not a failure."""
-        import subprocess
-
-        from shared.gitenv import scrubbed_git_env
+        from shared.gitexec import run_git
 
         base = self._guard_under_root(base)
         rel = (path or "").strip() or None
@@ -616,9 +670,7 @@ class WorkspaceReader:
             return {"branch": "", "path": rel, "limit": n, "commits": []}
 
         def git(*args: str) -> str:
-            return subprocess.run(
-                ["git", "-C", str(base), *args], capture_output=True, text=True, env=scrubbed_git_env()
-            ).stdout.strip()
+            return run_git(base, *args).stdout.strip()
 
         args = ["log", f"-{n}", "--name-only", _LOG_FORMAT]
         if rel is not None:
@@ -631,9 +683,8 @@ class WorkspaceReader:
         """Unified diff of ONE commit (optionally scoped to a single file) in the workspace at ``base`` —
         so the terminal can HIGHLIGHT exactly what changed. Capped so a huge commit can't flood the UI."""
         import re
-        import subprocess
 
-        from shared.gitenv import scrubbed_git_env
+        from shared.gitexec import run_git
 
         base = self._guard_under_root(base)
         if path is not None:
@@ -645,10 +696,10 @@ class WorkspaceReader:
                 raise ValueError(str(exc)) from None
         if not (base / ".git").exists() or not re.fullmatch(r"[0-9a-fA-F]{4,40}", sha or ""):
             return {"sha": sha, "path": path, "diff": "", "truncated": False}  # bad sha never hits git
-        args = ["git", "-C", str(base), "show", "--no-color", "--format=", sha]
+        args = ["show", "--no-color", "--format=", sha]
         if path:
             args += ["--", path]
-        out = subprocess.run(args, capture_output=True, text=True, env=scrubbed_git_env()).stdout
+        out = run_git(base, *args).stdout
         lines = out.splitlines()
         return {"sha": sha, "path": path, "diff": "\n".join(lines[:600]), "truncated": len(lines) > 600}
 
@@ -674,9 +725,8 @@ class WorkspaceReader:
         ``{"before", "after", "reset", "detail"}``; ``reset`` False with a ``detail`` is the refusal,
         never an exception — the caller is a flow step whose next move is to say why it could not."""
         import re
-        import subprocess
 
-        from shared.gitenv import scrubbed_git_env
+        from shared.gitexec import run_git
 
         base = self._guard_under_root(base)
         if not (base / ".git").exists():
@@ -686,8 +736,7 @@ class WorkspaceReader:
                     "detail": f"{sha!r} is not a commit id"}
 
         def git(*args: str):
-            return subprocess.run(["git", "-C", str(base), *args], capture_output=True, text=True,
-                                  env=scrubbed_git_env())
+            return run_git(base, *args)
 
         before = git("rev-parse", "HEAD").stdout.strip()
         if not before:

@@ -19,12 +19,59 @@ const SSE_HEADERS = {
   "X-Accel-Buffering": "no",
 } as const;
 
-function sseError(message: string, status?: number) {
-  return new Response(`data: ${JSON.stringify({ type: "error", message, status })}\n\n`, {
+/** A fault as the chat stream carries it (`surfaces/faults.ts` renders it): WHO failed and HOW. */
+type ChatFault = { source: string; kind: string; status?: number | null; detail?: string; remedy?: string };
+
+function sseError(message: string, status?: number, fault?: ChatFault) {
+  return new Response(`data: ${JSON.stringify({ type: "error", message, status, ...(fault ? { fault } : {}) })}\n\n`, {
     status: 200,
     headers: SSE_HEADERS,
   });
 }
+
+/** THE TYPED FAULT agent-api answered with, when it answered with one (P18): `{detail, fault}`. */
+function typedRefusal(body: string): { detail: string; fault: ChatFault } | null {
+  try {
+    const b = JSON.parse(body) as { detail?: unknown; fault?: { source?: unknown; kind?: unknown } } | null;
+    const f = b?.fault;
+    if (!f || typeof f.source !== "string" || typeof f.kind !== "string") return null;
+    return { detail: typeof b?.detail === "string" ? b.detail : "", fault: f as ChatFault };
+  } catch {
+    return null;
+  }
+}
+
+/** THE PROXY'S FLOOR (P18). A 5xx with no typed fault in it — an agent-api one release behind, a
+ *  gateway answering for it — still names WHO did not answer. A bare "Internal Server Error" is the
+ *  exact text the founder was shown for a runtime that refused his agent, and it named nobody. */
+function upstreamFault(status: number, said = ""): ChatFault {
+  const down = status === 502 || status === 503 || status === 504;
+  return {
+    source: "agent-api",
+    kind: down ? "unavailable" : "internal",
+    status,
+    // A sentence the service wrote for the person (its own `detail`) is kept: it knows more than
+    // this floor does. Only a body that says nothing — or says "Internal Server Error" — is replaced.
+    detail: said || (down ? "the agent service did not answer" : "the agent service failed while taking this message"),
+    remedy: said ? "" : "Send it again in a moment; if it keeps happening, an operator should check agent-api's log.",
+  };
+}
+
+/** The prose `detail` of a JSON error body, or "" — never the framework's bare status phrase. */
+function proseDetail(body: string): string {
+  try {
+    const d = (JSON.parse(body) as { detail?: unknown } | null)?.detail;
+    return typeof d === "string" && d.trim() && !/^internal server error$/i.test(d.trim()) ? d.trim() : "";
+  } catch {
+    return "";
+  }
+}
+
+const GATEWAY_UNREACHABLE: ChatFault = {
+  source: "gateway", kind: "unreachable", status: null,
+  detail: "the terminal could not reach the Vexa gateway",
+  remedy: "Send it again in a moment; if it persists, the gateway is down.",
+};
 
 /** Pump an upstream SSE body into a fresh downstream stream: close on done, error on throw, and abort
  *  the upstream fetch when the browser disconnects (so no agent-api connection is leaked). */
@@ -75,8 +122,16 @@ export async function POST(req: NextRequest) {
       signal: abort.signal,
     });
     if (!upstream.ok) {
-      const detail = (await upstream.text().catch(() => "")).trim().replace(/\s+/g, " ");
+      const raw = await upstream.text().catch(() => "");
       req.signal.removeEventListener("abort", onClientGone);
+      const typed = typedRefusal(raw);
+      if (typed) return sseError(typed.detail || `agent-api chat returned ${upstream.status}`, upstream.status, typed.fault);
+      if (upstream.status >= 500) {
+        const said = proseDetail(raw);
+        const fault = upstreamFault(upstream.status, said);
+        return sseError(said || `${fault.detail}.`, upstream.status, fault);
+      }
+      const detail = raw.trim().replace(/\s+/g, " ");
       return sseError(detail || `agent-api chat returned ${upstream.status}`, upstream.status);
     }
     if (!upstream.body) {
@@ -87,7 +142,6 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     req.signal.removeEventListener("abort", onClientGone);
     console.error("[terminal-api] chat proxy failed", err);
-    const message = err instanceof Error && err.message ? err.message : "upstream unavailable";
-    return sseError(message, 502);
+    return sseError(`${GATEWAY_UNREACHABLE.detail}.`, 502, GATEWAY_UNREACHABLE);
   }
 }

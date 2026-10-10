@@ -3,8 +3,12 @@
   "domain": "agent",
   "owner": "core/agent",
   "edge": "gateway",
-  "note": "The agent control plane. ABSENT in the no-agents profile (PRD decision 40.6) \u2014 these seven rows and the routes that carry them are simply not there, so a request 404s.",
+  "note": "The agent control plane. ABSENT in the no-agents profile (PRD decision 40.6) \u2014 these rows and the routes that carry them are simply not there, so a request 404s. The edge registers them from this file: `forward` maps /agent/<path> onto agent-api's /api/<path>, every row but the catch-all is a route of its own (`stream` relays server-sent events), `delegation` admits a worker's own delegation token \u2014 on the friction report its harness files, and nowhere else \u2014 and `mcp_reentry` admits it on the MCP's re-entry: one row per route a tool in mcp.tools.v1.json calls, and no other. `verbs` rows are agent-api's own verbs behind the forward, by public path, carrying a policy the catch-all cannot: `person` \u2014 the verb needs a person in the loop, and agent-api refuses a worker dispatched without one (`control_plane/route_policy.py`). The edge does not register them.",
   "presence_env": "AGENT_API_URL",
+  "forward": {
+    "edge_prefix": "/agent/",
+    "upstream_prefix": "/api/"
+  },
   "routes": [
     {
       "method": "POST",
@@ -12,7 +16,134 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "stream": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/chat/name/agent",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/claims",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/claims/verdicts",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "GET",
+      "path": "/agent/connections",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/calendar/events",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/gmail/draft",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/gmail/inbox",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/gmail/read",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/gmail/search",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/gmail/thread",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/request",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/service/call",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/friction",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "delegation": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/global/ready",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
     },
     {
       "method": "GET",
@@ -20,7 +151,179 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "stream": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/meeting/terms/scan",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/onboarding/research",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "GET",
+      "path": "/agent/time",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "PUT",
+      "path": "/agent/time/zone",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/asset",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/entity",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "GET",
+      "path": "/agent/workspace/file",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "PUT",
+      "path": "/agent/workspace/file",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/import",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "GET",
+      "path": "/agent/workspace/import/{operation_id}/status",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/invite",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "GET",
+      "path": "/agent/workspace/members",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/membership",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/move",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/new",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "GET",
+      "path": "/agent/workspace/purpose",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/remove",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "GET",
+      "path": "/agent/workspace/shared",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "GET",
+      "path": "/agent/workspace/tree",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
     },
     {
       "method": "DELETE",
@@ -61,6 +364,208 @@
         "bot",
         "tx"
       ]
+    }
+  ],
+  "verbs": [
+    {
+      "method": "POST",
+      "path": "/agent/connections/request",
+      "person": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/global/ready",
+      "person": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/read",
+      "person": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/gmail/search",
+      "person": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/gmail/inbox",
+      "person": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/gmail/read",
+      "person": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/gmail/thread",
+      "person": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/calendar/events",
+      "person": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/gmail/draft",
+      "person": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/service/call",
+      "person": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/onboarding/research",
+      "person": true
+    },
+    {
+      "method": "PUT",
+      "path": "/agent/time/zone",
+      "person": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/routines",
+      "person": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/routines/{name}/confirm",
+      "person": true
+    },
+    {
+      "method": "PATCH",
+      "path": "/agent/routines/{name}/enabled",
+      "person": true
+    },
+    {
+      "method": "DELETE",
+      "path": "/agent/routines/{routine_id}",
+      "person": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/claims/verdicts",
+      "person": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/git-token",
+      "person": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/{slug}/deploy-key",
+      "person": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/swap",
+      "person": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/activate",
+      "person": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/import",
+      "person": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/publish",
+      "person": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/push",
+      "person": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/pull",
+      "person": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/git-remote-detach",
+      "person": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/shared/{workspace_id}/attach",
+      "person": true
+    },
+    {
+      "method": "DELETE",
+      "path": "/agent/workspace/{slug}",
+      "person": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/reset",
+      "person": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/{slug}/archive",
+      "person": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/{slug}/share-enable",
+      "person": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/{workspace_id}/unshare",
+      "person": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/invites",
+      "person": true
+    },
+    {
+      "method": "DELETE",
+      "path": "/agent/workspace/invites/{invite_id}",
+      "person": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/invites/accept",
+      "person": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/invite",
+      "person": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/membership",
+      "person": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/members/{member_subject}/role",
+      "person": true
+    },
+    {
+      "method": "DELETE",
+      "path": "/agent/workspace/members/{member_subject}",
+      "person": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace/{workspace_id}/leave",
+      "person": true
     }
   ]
 }

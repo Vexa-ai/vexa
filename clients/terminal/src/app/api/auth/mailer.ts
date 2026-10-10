@@ -2,20 +2,28 @@
  *
  *  Dependency-free ON PURPOSE. The image is built with `npm ci` from a committed lockfile; adding
  *  nodemailer for ~100 lines of protocol would put a new package (and lockfile churn) on the
- *  release build's critical path for one email. This speaks the subset of RFC 5321 a sign-in mail
- *  needs: EHLO → optional AUTH LOGIN → MAIL FROM → RCPT TO → DATA → QUIT.
+ *  release build's critical path for one email. This speaks the subset of RFC 5321 (and RFC 3207)
+ *  a sign-in mail needs: EHLO → STARTTLS when offered → optional AUTH LOGIN → MAIL FROM → RCPT TO →
+ *  DATA → QUIT.
  *
  *  Transport shapes, mirroring `flows_steps/emailx.py` (the pattern already in this stack):
- *    • plain TCP (default)  — the dev mail double (Mailpit) on :1025: no auth, no TLS.
- *    • implicit TLS         — SMTP_SECURE=1, e.g. a provider's :465 endpoint, with AUTH LOGIN.
- *  STARTTLS (opportunistic upgrade on :587) is NOT implemented; a provider that requires it needs
- *  its :465 endpoint or a real mailer library.
+ *    • implicit TLS — VEXA_MAIL_SMTP_SECURE=1, e.g. a provider's :465 endpoint.
+ *    • STARTTLS     — a relay that offers it after EHLO (a provider's :587) is upgraded before anything
+ *                     else is said, with the certificate verified, and greeted again.
+ *    • plain TCP    — a relay that offers neither, e.g. the dev mail double (Mailpit) on :1025.
+ *  CREDENTIALS NEVER CROSS AN UNENCRYPTED CONNECTION: with a user and password set, a relay that ends
+ *  up in plain TCP is refused before AUTH, and nothing is sent.
  *
- *  Env (all optional — the defaults ARE the local dev door):
- *    SMTP_HOST=localhost   SMTP_PORT=1025   SMTP_FROM="Vexa <no-reply@vexa.ai>"
- *    SMTP_USER / SMTP_PASS   (AUTH LOGIN, only when both are present)
- *    SMTP_SECURE=1           (implicit TLS)
- *    SMTP_TLS_INSECURE=1     (skip certificate verification — dev only)
+ *  Env — the deployment's mail family, VEXA_MAIL_SMTP_*, which flows sends through too and which is
+ *  declared in ../../../../config.v1.json (held on compose, Helm and Lite by gate:config-contract):
+ *    VEXA_MAIL_SMTP_HOST      unset = the local dev door, localhost:1025
+ *    VEXA_MAIL_SMTP_PORT      default 25 for a set host (1025 for the dev door)
+ *    VEXA_MAIL_SMTP_FROM      default "Vexa <no-reply@vexa.ai>"
+ *    VEXA_MAIL_SMTP_USER / VEXA_MAIL_SMTP_PASSWORD   AUTH LOGIN, only when both are present, and
+ *                                   only over implicit TLS or STARTTLS
+ *    VEXA_MAIL_SMTP_SECURE=1        implicit TLS
+ *    VEXA_MAIL_SMTP_TLS_INSECURE=1  skip certificate verification (implicit TLS and STARTTLS) — dev only
+ *  These keys are the only source: the defaults above are the declared ones.
  */
 import net from "node:net";
 import tls from "node:tls";
@@ -31,16 +39,17 @@ export interface MailerConfig {
 }
 
 export function mailerConfig(): MailerConfig {
-  const port = parseInt(process.env.SMTP_PORT || "", 10);
   const truthy = (v: string | undefined) => v === "1" || v === "true";
+  const host = process.env.VEXA_MAIL_SMTP_HOST || undefined;
+  const port = parseInt(process.env.VEXA_MAIL_SMTP_PORT || "", 10);
   return {
-    host: process.env.SMTP_HOST || "localhost",
-    port: Number.isFinite(port) && port > 0 ? port : 1025,
-    from: process.env.SMTP_FROM || "Vexa <no-reply@vexa.ai>",
-    user: process.env.SMTP_USER || undefined,
-    pass: process.env.SMTP_PASS || undefined,
-    secure: truthy(process.env.SMTP_SECURE),
-    insecureTls: truthy(process.env.SMTP_TLS_INSECURE),
+    host: host || "localhost",
+    port: Number.isFinite(port) && port > 0 ? port : host ? 25 : 1025,
+    from: process.env.VEXA_MAIL_SMTP_FROM || "Vexa <no-reply@vexa.ai>",
+    user: process.env.VEXA_MAIL_SMTP_USER || undefined,
+    pass: process.env.VEXA_MAIL_SMTP_PASSWORD || undefined,
+    secure: truthy(process.env.VEXA_MAIL_SMTP_SECURE),
+    insecureTls: truthy(process.env.VEXA_MAIL_SMTP_TLS_INSECURE),
   };
 }
 
@@ -120,20 +129,33 @@ function bareAddress(addr: string): string {
  *  whether that is fatal (for /api/auth/request-link it is not, and is never leaked to the client). */
 export async function sendMail(opts: { to: string; subject: string; text: string }, timeoutMs = 15000): Promise<void> {
   const cfg = mailerConfig();
-  const wire = new Wire();
+  let wire = new Wire();
+  let encrypted = cfg.secure;
 
-  const socket: net.Socket = cfg.secure
+  let socket: net.Socket = cfg.secure
     ? tls.connect({ host: cfg.host, port: cfg.port, servername: cfg.host, rejectUnauthorized: !cfg.insecureTls })
     : net.connect({ host: cfg.host, port: cfg.port });
-  socket.setEncoding("utf8");
-  socket.setTimeout(timeoutMs);
-  socket.on("data", (d: string | Buffer) => wire.push(typeof d === "string" ? d : d.toString("utf8")));
-  socket.on("error", (e) => wire.fail(e as Error));
-  socket.on("timeout", () => {
-    wire.fail(new Error(`SMTP timeout after ${timeoutMs}ms (${cfg.host}:${cfg.port})`));
-    socket.destroy();
-  });
-  socket.on("close", () => wire.fail(new Error(`SMTP connection closed (${cfg.host}:${cfg.port})`)));
+  const attach = (s: net.Socket, w: Wire) => {
+    s.setEncoding("utf8");
+    s.setTimeout(timeoutMs);
+    s.on("data", (d: string | Buffer) => w.push(typeof d === "string" ? d : d.toString("utf8")));
+    s.on("error", (e) => w.fail(e as Error));
+    s.on("timeout", () => {
+      w.fail(new Error(`SMTP timeout after ${timeoutMs}ms (${cfg.host}:${cfg.port})`));
+      s.destroy();
+    });
+    s.on("close", () => w.fail(new Error(`SMTP connection closed (${cfg.host}:${cfg.port})`)));
+  };
+  attach(socket, wire);
+  const ready = (s: net.Socket, event: "connect" | "secureConnect") =>
+    new Promise<void>((res, rej) => {
+      const onError = (e: Error) => rej(e);
+      s.once("error", onError);
+      s.once(event, () => {
+        s.off("error", onError);
+        res();
+      });
+    });
 
   const expect = async (ok: number[], step: string): Promise<Reply> => {
     const r = await wire.next();
@@ -144,21 +166,36 @@ export async function sendMail(opts: { to: string; subject: string; text: string
     new Promise<void>((res, rej) => socket.write(`${line}\r\n`, (e) => (e ? rej(e) : res())));
 
   try {
-    await new Promise<void>((res, rej) => {
-      const onError = (e: Error) => rej(e);
-      socket.once("error", onError);
-      socket.once(cfg.secure ? "secureConnect" : "connect", () => {
-        socket.off("error", onError);
-        res();
-      });
-    });
+    await ready(socket, cfg.secure ? "secureConnect" : "connect");
 
     await expect([220], "greeting");
     const heloDomain = bareAddress(cfg.from).split("@")[1] || "localhost";
     await say(`EHLO ${heloDomain}`);
-    await expect([250], "EHLO");
+    const ehlo = await expect([250], "EHLO");
+
+    // STARTTLS (RFC 3207): the relay offered it, so the rest of the session is encrypted, with the
+    // relay's certificate verified exactly as for implicit TLS. The relay forgets what was said before
+    // the upgrade, so it is greeted again.
+    if (!encrypted && /(^|\| )250[- ]STARTTLS\b/i.test(ehlo.text)) {
+      await say("STARTTLS");
+      await expect([220], "STARTTLS");
+      const plain = socket;
+      for (const event of ["data", "error", "timeout", "close"]) plain.removeAllListeners(event);
+      plain.setTimeout(0);
+      socket = tls.connect({ socket: plain, servername: cfg.host, rejectUnauthorized: !cfg.insecureTls });
+      wire = new Wire();
+      attach(socket, wire);
+      await ready(socket, "secureConnect");
+      encrypted = true;
+      await say(`EHLO ${heloDomain}`);
+      await expect([250], "EHLO after STARTTLS");
+    }
 
     if (cfg.user && cfg.pass) {
+      if (!encrypted) {
+        throw new Error(`SMTP: refusing to send credentials to ${cfg.host}:${cfg.port} over an unencrypted ` +
+          "connection — the relay offers no STARTTLS (set VEXA_MAIL_SMTP_SECURE=1 for an implicit-TLS endpoint)");
+      }
       await say("AUTH LOGIN");
       await expect([334], "AUTH LOGIN");
       await say(Buffer.from(cfg.user, "utf8").toString("base64"));

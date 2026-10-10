@@ -20,7 +20,7 @@ spec:
       annotations:
         {{- toYaml .Values.global.podAnnotations | nindent 8 }}
     spec:
-      {{- include "vexa.podSecurityContext" . | nindent 6 }}
+      {{- include "vexa.nonRootPodSecurityContext" . | nindent 6 }}
       {{- with .Values.global.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -77,6 +77,10 @@ spec:
                 secretKeyRef:
                   name: {{ include "vexa.adminTokenSecretName" . }}
                   key: INTERNAL_API_SECRET
+            # Whose X-Forwarded-For names the client (the sign-in link's per-client limit). Only these
+            # peers and loopback are believed; see values.yaml terminal.trustedProxies.
+            - name: TERMINAL_TRUSTED_PROXIES
+              value: {{ .Values.terminal.trustedProxies | default (ternary "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,fc00::/7" "" (eq .Values.terminal.service.type "ClusterIP")) | quote }}
             {{- if .Values.terminal.publicUrl }}
             # External origin (set when ingress/LB fronts the terminal) — cookie security + OAuth callbacks.
             - name: NEXTAUTH_URL
@@ -84,9 +88,45 @@ spec:
             - name: TERMINAL_URL
               value: {{ .Values.terminal.publicUrl | quote }}
             {{- end }}
+            {{- if include "vexa.credentialBrokerEnabled" . }}
+            # Connections panel (credential-broker.v1): the terminal's server routes sign as the
+            # `human` role for the signed-in person. Browser POSTs must come from the public origin.
+            - name: VEXA_CONNECTIONS_BROKER_URL
+              value: {{ include "vexa.credentialBrokerUrl" . | quote }}
+            - name: VEXA_CONNECTIONS_HUMAN_KEY_FILE
+              value: /run/vexa-connections/human/key
+            - name: VEXA_CONNECTIONS_PUBLIC_ORIGIN
+              value: {{ .Values.terminal.publicUrl | default "" | trimSuffix "/" | quote }}
+            {{- end }}
+            # The sign-in link's mail relay — the deployment's VEXA_MAIL_SMTP_* family
+            # (clients/terminal/config.v1.json). The password comes from the chart's Secret.
+            - name: VEXA_MAIL_SMTP_HOST
+              value: {{ .Values.terminal.mail.smtpHost | default "" | toString | quote }}
+            - name: VEXA_MAIL_SMTP_PORT
+              value: {{ .Values.terminal.mail.smtpPort | default "" | toString | quote }}
+            - name: VEXA_MAIL_SMTP_FROM
+              value: {{ .Values.terminal.mail.from | default "" | quote }}
+            - name: VEXA_MAIL_SMTP_USER
+              value: {{ .Values.terminal.mail.user | default "" | quote }}
+            - name: VEXA_MAIL_SMTP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: VEXA_MAIL_SMTP_PASSWORD
+                  optional: true
+            - name: VEXA_MAIL_SMTP_SECURE
+              value: {{ .Values.terminal.mail.secure | default "" | toString | quote }}
+            - name: VEXA_MAIL_SMTP_TLS_INSECURE
+              value: {{ .Values.terminal.mail.tlsInsecure | default "" | toString | quote }}
             {{- with .Values.terminal.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
+          {{- if include "vexa.credentialBrokerEnabled" . }}
+          volumeMounts:
+            - name: connections-keys
+              mountPath: /run/vexa-connections
+              readOnly: true
+          {{- end }}
           startupProbe:
             httpGet:
               path: /
@@ -110,6 +150,16 @@ spec:
             timeoutSeconds: 5
           resources:
             {{- toYaml .Values.terminal.resources | nindent 12 }}
+      {{- if include "vexa.credentialBrokerEnabled" . }}
+      volumes:
+        # The human role key only.
+        - name: connections-keys
+          secret:
+            secretName: {{ include "vexa.credentialBrokerKeys" . }}
+            defaultMode: 0444
+            items:
+              - { key: human.key, path: human/key }
+      {{- end }}
       {{- with .Values.global.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

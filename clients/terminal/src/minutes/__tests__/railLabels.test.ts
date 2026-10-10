@@ -26,7 +26,7 @@ const secs = (iso: string) => Date.parse(iso) / 1000;
 
 /** the founder's rows, as the index held them: `_truncate_title(<composed prompt>)`, cut at 60 */
 const STORED_ACTIVE = "Active context: the user is viewing the workspace file kg/e…";
-const STORED_JOB = "[vexa-job:extend:personal/kg/entities/person/james-spadafo…";
+const STORED_JOB = "[vexa-job:extend:personal/kg/entities/person/james-hollist…";
 const STORED_PREP = "[prep] They clicked through from a prepare email about **DN…";
 
 const session = (over: Partial<ServerSession> & { session: string }): ServerSession => ({
@@ -60,7 +60,7 @@ describe("never a bracket, never a mark, never Active context", () => {
   it("makes machinery a THIRD placeholder — a name nobody chose", () => {
     expect(isPlaceholderLabel(STORED_ACTIVE)).toBe(true);
     expect(isPlaceholderLabel("New chat")).toBe(true);
-    expect(isPlaceholderLabel("Pricing for Kaar")).toBe(false);
+    expect(isPlaceholderLabel("Pricing for Northwind")).toBe(false);
   });
 });
 
@@ -75,8 +75,8 @@ describe("a server session becomes a rail row", () => {
   });
 
   it("falls back to the title when a server one release behind sends no label", () => {
-    const [c] = chatsFromSessions([{ session: "pchat-x", title: "Pricing for Kaar" } as ServerSession], NOW);
-    expect(c.label).toBe("Pricing for Kaar");
+    const [c] = chatsFromSessions([{ session: "pchat-x", title: "Pricing for Northwind" } as ServerSession], NOW);
+    expect(c.label).toBe("Pricing for Northwind");
   });
 
   it("never promotes a machinery TITLE, even from a server that predates the rule", () => {
@@ -105,16 +105,16 @@ describe("a stored label from before the rule", () => {
     const merged = mergeChats(
       [chat({ id: "pchat-job", label: STORED_JOB })],
       chatsFromSessions([session({ session: "pchat-job", title: STORED_JOB,
-                                   label: "Extend: personal/kg/entities/person/james-spadafo…" })], NOW));
-    expect(merged[0].label).toBe("Extend: personal/kg/entities/person/james-spadafo…");
+                                   label: "Extend: personal/kg/entities/person/james-hollist…" })], NOW));
+    expect(merged[0].label).toBe("Extend: personal/kg/entities/person/james-hollist…");
   });
 
   it("does not cost a person their own rename", () => {
     const merged = mergeChats(
-      [chat({ id: "pchat-named", label: "Pricing for Kaar" })],
+      [chat({ id: "pchat-named", label: "Pricing for Northwind" })],
       chatsFromSessions([session({ session: "pchat-named", title: "what did we decide?",
                                    label: "what did we decide?" })], NOW));
-    expect(merged[0].label).toBe("Pricing for Kaar");
+    expect(merged[0].label).toBe("Pricing for Northwind");
   });
 
   it("is replaced by the person's first sentence, like any other placeholder", () => {
@@ -137,7 +137,7 @@ describe("the rail itself", () => {
     const rows = railRows(chatsFromSessions([
       session({ session: "pchat-ctx0", title: STORED_ACTIVE, label: "" }),
       session({ session: "pchat-job", title: STORED_JOB,
-                label: "Extend: personal/kg/entities/person/james-spadafo…" }),
+                label: "Extend: personal/kg/entities/person/james-hollist…" }),
       session({ session: "pchat-min", title: "[minutes-review] Someone clicked…", label: "minutes" }),
       session({ session: "pchat-prep", title: STORED_PREP, label: "prepare" }),
       session({ session: "scaffold-SC1", title: "welcome", label: "welcome" }),
@@ -146,7 +146,7 @@ describe("the rail itself", () => {
       session({ session: "scaffold-SC2", title: "setup global", label: "setup global" }),
     ], NOW), meetings, NOW);
     expect(rows.map((r) => r.label).sort()).toEqual([
-      "Chat", "Extend: personal/kg/entities/person/james-spadafo…", "Workspace setup",
+      "Chat", "Extend: personal/kg/entities/person/james-hollist…", "Workspace setup",
       "minutes", "prepare", "setup global", "welcome", "what's my company called?",
     ]);
     for (const r of rows) expect(isMachineryLabel(r.label)).toBe(false);

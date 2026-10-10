@@ -616,20 +616,24 @@ def test_policy_guard_removes_policy_in_freshly_seeded_workspace(tmp_path):
     assert "policy/members.json" not in tree.splitlines()
 
 
-# ── vector 2 (topology): the opt-in gateway-identity gate rejects non-gateway callers ──────────────
-def test_require_gateway_identity_flag_rejects_direct_edge(tmp_path, monkeypatch):
-    """With VEXA_REQUIRE_GATEWAY_IDENTITY set, a request WITHOUT the gateway's signed marker
-    (X-Gateway-Verified) is rejected 401 — a hardened deploy stops a direct/host-local caller from
-    forging X-User-Id. The marker present → normal auth. Default (flag unset) is unaffected."""
+# ── vector 2 (topology): a forged X-User-Id never reaches the role gate ──────────────────────────
+def test_an_unsigned_identity_is_refused_before_the_role_gate(tmp_path, monkeypatch):
+    """gateway-identity.v1: with the gateway's public key configured (every deployment), a caller that
+    reaches agent-api directly and asserts X-User-Id without the signature is refused 401 at the door;
+    the gateway's signed identity reaches the normal role gate (403 for a non-member, not 401)."""
+    from control_plane import identity_token
+
     _init_ws(tmp_path, "wsA")
-    monkeypatch.setenv("VEXA_REQUIRE_GATEWAY_IDENTITY", "1")
+    key = identity_token.generate_signing_key()
+    public = tmp_path / "identity-public-key.pem"
+    public.write_bytes(identity_token.public_key_pem(key))
+    monkeypatch.setenv("VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE", str(public))
+    monkeypatch.setenv("INTERNAL_API_SECRET", "test-internal-secret")
     c = _client(tmp_path)
-    # direct caller forging X-User-Id but lacking the gateway marker → 401
     r = c.get("/api/workspace/members?workspace_id=wsA", headers={"X-User-Id": "attacker"})
     assert r.status_code == 401
-    # gateway-fronted request (marker present) reaches the normal role gate (403 non-member, not 401)
-    r2 = c.get("/api/workspace/members?workspace_id=wsA",
-               headers={"X-User-Id": "attacker", "X-Gateway-Verified": "1"})
+    signed = {identity_token.HEADER: identity_token.sign(key, {"sub": "attacker"})}
+    r2 = c.get("/api/workspace/members?workspace_id=wsA", headers={"X-User-Id": "victim", **signed})
     assert r2.status_code == 403
 
 

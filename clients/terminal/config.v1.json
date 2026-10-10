@@ -1,0 +1,91 @@
+{
+  "contract": "config.v1",
+  "service": "terminal",
+  "keys": [
+    {
+      "key": "VEXA_MAIL_SMTP_HOST",
+      "class": "defaulted",
+      "default": "(unset — the local dev mail double at localhost:1025)",
+      "description": "The SMTP relay the terminal sends the emailed sign-in link through (src/app/api/auth/mailer.ts). The same key flows sends its mail through: one relay per deployment, one family of keys. Unset, the terminal dials the local dev double (Mailpit) at localhost:1025, which inside a container is nothing, so no link is delivered.",
+      "targets": ["compose", "helm", "lite"]
+    },
+    {
+      "key": "VEXA_MAIL_SMTP_PORT",
+      "class": "defaulted",
+      "default": "25 (1025 for the dev double when VEXA_MAIL_SMTP_HOST is unset)",
+      "description": "The relay's port.",
+      "targets": ["compose", "helm", "lite"]
+    },
+    {
+      "key": "VEXA_MAIL_SMTP_FROM",
+      "class": "defaulted",
+      "default": "Vexa <no-reply@vexa.ai>",
+      "description": "The From of the sign-in mail, as `Name <address>` or a bare address; its domain is also the EHLO name.",
+      "targets": ["compose", "helm", "lite"]
+    },
+    {
+      "key": "VEXA_MAIL_SMTP_USER",
+      "class": "defaulted",
+      "default": "(unset — no AUTH)",
+      "description": "AUTH LOGIN user for the relay; used only when VEXA_MAIL_SMTP_PASSWORD is set as well.",
+      "targets": ["compose", "helm", "lite"]
+    },
+    {
+      "key": "VEXA_MAIL_SMTP_PASSWORD",
+      "class": "defaulted",
+      "default": "(unset — no AUTH)",
+      "description": "AUTH LOGIN password for the relay; used only when VEXA_MAIL_SMTP_USER is set as well. Helm feeds it from the chart's Secret (secrets.mailSmtpPassword).",
+      "secret": true,
+      "targets": ["compose", "helm", "lite"]
+    },
+    {
+      "key": "VEXA_MAIL_SMTP_SECURE",
+      "class": "defaulted",
+      "default": "0",
+      "description": "1 = implicit TLS (a provider's :465 endpoint). Without it, STARTTLS is used whenever the relay offers it (a provider's :587); with VEXA_MAIL_SMTP_USER and VEXA_MAIL_SMTP_PASSWORD set, a relay that offers neither is refused, since credentials are sent only over TLS.",
+      "targets": ["compose", "helm", "lite"]
+    },
+    {
+      "key": "VEXA_MAIL_SMTP_TLS_INSECURE",
+      "class": "defaulted",
+      "default": "0",
+      "description": "1 = skip the relay's certificate check, for implicit TLS and STARTTLS alike. Development only.",
+      "targets": ["compose", "helm", "lite"]
+    },
+    {
+      "key": "TERMINAL_TRUSTED_PROXIES",
+      "class": "defaulted",
+      "default": "",
+      "description": "The proxies whose X-Forwarded-For names the client for the sign-in link's per-client rate limit: addresses or CIDR ranges, comma-separated. Only these and loopback are believed; any other peer is the client itself. Helm defaults it to the in-cluster private ranges while the terminal's Service is ClusterIP.",
+      "targets": ["compose", "helm", "lite"]
+    },
+    {
+      "key": "VEXA_CONNECTIONS_BROKER_URL",
+      "class": "capability",
+      "capability": "connections",
+      "description": "The credential broker's base URL (credential-broker.v1), which the terminal's server calls in the human role for consent, credential save, disconnect and delete (src/app/api/connections/broker.ts). Compose and the chart point it at the broker they deploy; Lite carries no Connections.",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "VEXA_CONNECTIONS_HUMAN_KEY_FILE",
+      "class": "capability",
+      "capability": "connections",
+      "description": "File holding the human role's assertion key, the same file the broker verifies with. Mounted into the terminal only: never into agent-api or a worker. The path is not the secret; the file is.",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "VEXA_CONNECTIONS_PUBLIC_ORIGIN",
+      "class": "defaulted",
+      "default": "(unset — the terminal's NEXTAUTH_URL)",
+      "description": "The origin a browser POST to /api/connections must come from. Deployment configuration only, never a forwarded Host header.",
+      "targets": ["compose", "helm"]
+    }
+  ],
+  "capabilities": {
+    "connections": {
+      "description": "Connections in the browser: a person connects, saves, disconnects and deletes accounts and services through the credential broker",
+      "mode": "all",
+      "when_unconfigured": "every /api/connections route answers 503 with one generic sentence, and the OAuth callback logs a config fault"
+    }
+  }
+}

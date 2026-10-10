@@ -20,7 +20,7 @@
  *  `since` is when it was FIRST seen (never when a flow last re-ran), `status` gates the offer. */
 export interface DeskProposal {
   id: string;
-  /** where the job was seen — `meeting:97`, `page:kg/entities/company/oenb.md` */
+  /** where the job was seen — `meeting:97`, `page:kg/entities/company/examplebank.md` */
   source: string;
   /** the source in human words, for the chip — the meeting's title, the page's name */
   source_label?: string;

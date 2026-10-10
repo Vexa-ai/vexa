@@ -1,7 +1,7 @@
 """page_images.py — AN IMAGE ADDRESS AN AGENT DID NOT CHECK IS A GUESS (Vexa-ai/vexa#1624).
 
-Founder, 2026-09-06, on the OeNB workspace README: the page carried
-``![OeNB logo](https://upload.wikimedia.org/wikipedia/commons/8/8c/%C3%96NB_Logo.svg)``. Pressing
+Founder, 2026-09-06, on the Example Bank workspace README: the page carried
+``![Example Bank logo](https://upload.wikimedia.org/wikipedia/commons/8/8c/Example_Bank_Logo.svg)``. Pressing
 *Fetch into the workspace* answered, in red, that the address had returned **404**. Nobody had ever
 requested it: the agent wrote a plausible Wikimedia path and moved on. A guessed URL is not a small
 error — it is a picture the reader will never see, in a document written for a customer, wearing an
@@ -38,6 +38,7 @@ from urllib.parse import urljoin
 import httpx
 
 from shared import asset_source as assets
+from shared import ssrf
 
 #: ONE address's whole check. Deliberately much shorter than `asset_source.FETCH_TIMEOUT` (20s):
 #: that one is a download the reader pressed a button for and is watching, this one is a gate in
@@ -110,6 +111,8 @@ def _probe(cli: httpx.Client, method: str, url: str,
             return _Answer(None, "", guard)
         try:
             r = cli.request(method, target, headers=headers, timeout=VERIFY_TIMEOUT)
+        except ssrf.SSRFError as exc:
+            return _Answer(None, "", f"refusing {target}: {exc}")
         except httpx.HTTPError as exc:
             return _Answer(None, "", f"could not reach {url}: {type(exc).__name__}")
         location = r.headers.get("location")
@@ -137,7 +140,7 @@ def image_refusal(url: str, *, client: Optional[httpx.Client] = None,
     if refusal:
         return refusal
     own = client is None
-    cli = client or httpx.Client(timeout=VERIFY_TIMEOUT, follow_redirects=False)
+    cli = client or assets.outbound_client(VERIFY_TIMEOUT)
     try:
         a = _probe(cli, "HEAD", url, resolve)
         # the host answered about the METHOD, or said nothing about the file — ask again properly

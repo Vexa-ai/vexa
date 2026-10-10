@@ -37,7 +37,9 @@ def _fresh_probe_cache():
 def test_declaration_loads_and_is_internally_consistent():
     decl = cp.load_declaration()
     assert decl["service"] == "agent-api"
-    assert set(decl["capabilities"]) == {"bot_gateway", "model_inference"}
+    assert set(decl["capabilities"]) == {"bot_gateway", "model_inference", "connections",
+                                         "git_credential_broker", "worker_toolbelt"}
+    assert decl["capabilities"]["worker_toolbelt"]["mode"] == "all"
     assert decl["capabilities"]["model_inference"]["mode"] == "any"
 
 
@@ -103,10 +105,83 @@ def test_preflight_refuses_a_secretless_or_placeheld_internal_tier():
     assert "INTERNAL_API_SECRET" in str(ei.value)
     for placeholder in ("vexa-internal-secret", "lite-internal-secret", "changeme"):
         with pytest.raises(cp.ConfigError) as ei:
-            cp.preflight({"INTERNAL_API_SECRET": placeholder})
+            cp.preflight({"INTERNAL_API_SECRET": placeholder, **IDENTITY})
         assert "INTERNAL_API_SECRET" in str(ei.value)
         assert placeholder not in str(ei.value), "a refusal must never echo the value"
-    cp.preflight({"INTERNAL_API_SECRET": "a-real-secret"})
+    cp.preflight({"INTERNAL_API_SECRET": "a-real-secret", **IDENTITY})
+
+
+RUNTIME_TOKEN = "runtime-caller-token-for-tests-0123456789abcdef"
+DISPATCH_KEY = "dispatch-signing-key-for-tests-0123456789abcdef"
+IDENTITY = {"VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE": "/run/vexa-identity/public/key.pem",
+            "RUNTIME_API_TOKEN": RUNTIME_TOKEN, "VEXA_DISPATCH_SIGNING_KEY": DISPATCH_KEY}
+
+
+def test_preflight_refuses_a_boot_that_cannot_reach_the_runtime():
+    """Every worker spawn and routine job presents the runtime caller credential; the runtime refuses
+    any other caller, so a boot without one (or with a published placeholder) refuses."""
+    base = {"INTERNAL_API_SECRET": "a-real-secret",
+            "VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE": "/run/vexa-identity/public/key.pem",
+            "VEXA_DISPATCH_SIGNING_KEY": DISPATCH_KEY}
+    with pytest.raises(cp.ConfigError) as ei:
+        cp.preflight(base)
+    assert "RUNTIME_API_TOKEN" in str(ei.value)
+    with pytest.raises(cp.ConfigError):
+        cp.preflight({**base, "RUNTIME_API_TOKEN": "changeme"})
+    cp.preflight({**base, "RUNTIME_API_TOKEN": RUNTIME_TOKEN})
+
+
+def test_preflight_refuses_an_unset_or_published_dispatch_signing_key():
+    """agent-api signs every dispatch's identity token with VEXA_DISPATCH_SIGNING_KEY. Its default,
+    `dev-dispatch-signing-key`, was published in this repository and shipped on every deploy
+    surface, so a token signed with it proved nothing. The boot refuses it, every internal-secret
+    placeholder, and an unset key, and never echoes the value."""
+    base = {"INTERNAL_API_SECRET": "a-real-secret", **IDENTITY}
+    unset = {k: v for k, v in base.items() if k != "VEXA_DISPATCH_SIGNING_KEY"}
+    with pytest.raises(cp.ConfigError) as ei:
+        cp.preflight(unset)
+    assert "VEXA_DISPATCH_SIGNING_KEY" in str(ei.value)
+    with pytest.raises(cp.ConfigError) as ei:
+        cp.preflight({**unset, "VEXA_DISPATCH_SIGNING_KEY": "   "})
+    assert "VEXA_DISPATCH_SIGNING_KEY" in str(ei.value)
+    forbidden = next(k["forbidden_values"] for k in cp.load_declaration()["keys"]
+                     if k["key"] == "VEXA_DISPATCH_SIGNING_KEY")
+    assert "dev-dispatch-signing-key" in forbidden
+    for published in forbidden:
+        with pytest.raises(cp.ConfigError) as ei:
+            cp.preflight({**base, "VEXA_DISPATCH_SIGNING_KEY": published})
+        assert "VEXA_DISPATCH_SIGNING_KEY" in str(ei.value)
+        if "-" in published:   # "secret" and "default" are ordinary words in the message itself
+            assert published not in str(ei.value), "a refusal must never echo the value"
+    cp.preflight(base)
+
+
+def test_the_dispatch_token_is_never_signed_with_an_empty_key():
+    """The code default is empty now; an empty key must not sign anything, since such a token
+    verifies for anyone who knows the format."""
+    from shared.adapters import LocalIdentityMinter
+
+    assert Settings().dispatch_signing_key.get_secret_value() == ""
+    with pytest.raises(ValueError):
+        LocalIdentityMinter("")
+
+
+def test_preflight_refuses_a_boot_that_cannot_verify_identity():
+    """gateway-identity.v1 — agent-api believes an x-user-* header only with the gateway's signature
+    beside it; with no key to check it, nobody can be authenticated, so the boot refuses."""
+    with pytest.raises(cp.ConfigError) as ei:
+        cp.preflight({"INTERNAL_API_SECRET": "a-real-secret"})
+    assert "VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE" in str(ei.value)
+    with pytest.raises(cp.ConfigError):
+        cp.preflight({"INTERNAL_API_SECRET": "a-real-secret", "VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE": ""})
+
+
+def test_the_toolbelt_is_a_capability_with_both_halves():
+    assert cp.capability_states({})["worker_toolbelt"] == cp.NOT_CONFIGURED
+    both = {"VEXA_MCP_URL": "http://gateway:8000/mcp", "VEXA_MCP_DELEGATION_SECRET": "k"}
+    assert cp.capability_states(both)["worker_toolbelt"] == cp.CONFIGURED
+    assert cp.capability_states({"VEXA_MCP_URL": "http://gateway:8000/mcp"})["worker_toolbelt"] \
+        == cp.MISCONFIGURED
 
 
 def test_capability_tri_states():
@@ -125,6 +200,9 @@ def test_preflight_reports_capability_rows(monkeypatch):
     for k in ("VEXA_BOT_API_KEY", "HOST_CLAUDE_CREDENTIALS", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("INTERNAL_API_SECRET", "a-real-secret")
+    monkeypatch.setenv("VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE", "/run/vexa-identity/public/key.pem")
+    monkeypatch.setenv("RUNTIME_API_TOKEN", RUNTIME_TOKEN)
+    monkeypatch.setenv("VEXA_DISPATCH_SIGNING_KEY", DISPATCH_KEY)
     report = cp.preflight()
     assert report["service"] == "agent-api"
     assert report["capabilities"]["bot_gateway"]["state"] == cp.NOT_CONFIGURED
@@ -200,7 +278,8 @@ def test_the_qwen_lane_dials_are_declared():
     declared = {k["key"] for k in cp.load_declaration()["keys"]}
     assert {"VEXA_LLM_BASE_URL", "VEXA_LLM_API_KEY", "VEXA_LLM_MODEL", "VEXA_LLM_EXTRA_BODY",
             "VEXA_AGENT_MODEL", "VEXA_AGENT_STREAM", "VEXA_AGENT_MAX_TOOL_CALLS",
-            "VEXA_AGENT_MAX_TURN_SEC", "VEXA_AGENT_CONTEXT_TOKENS", "VEXA_MOUNTS",
+            "VEXA_AGENT_MAX_TURN_SEC", "VEXA_AGENT_CONTEXT_TOKENS", "VEXA_AGENT_MAX_OUTPUT_TOKENS",
+            "VEXA_MOUNTS",
             "VEXA_RUNNER"} <= declared
 
 
@@ -229,7 +308,41 @@ def test_the_qwen_lane_dials_are_declared():
 # harness reads every budget through `_int_env(name, default)` and the scan looks for `os.environ`
 # with a literal beside it. The same blind spot already hides #1613's VEXA_AGENT_JOB_MAX_TOOL_CALLS
 # and VEXA_AGENT_JOB_MAX_TURN_SEC, which are read by the shipped worker and declared nowhere.
-EXPECTED_DECLARED_KEYS = 98
+# 98 at v0.13.1; 103 in v0.13.2: VEXA_AGENT_AUTO_CONTINUE_CHAT, and the four Connections keys —
+# VEXA_CONNECTIONS_BROKER_URL + VEXA_CONNECTIONS_AGENT_KEY_FILE (capability `connections`) and
+# VEXA_GIT_STORE_BROKER_URL + VEXA_GIT_STORE_KEY_FILE (capability `git_credential_broker`). The four
+# were first declared `targets: []` for a dogfood overlay; since the broker is a product service
+# (ADR-0040) they are plumbed on compose and helm, and gate:config-contract holds them there.
+# 104: +1 VEXA_AGENT_MAX_CHAT_CONTINUATIONS — the bound on VEXA_AGENT_AUTO_CONTINUE_CHAT, and both
+# now plumbed on compose, helm and lite (they were `targets: []`, so no standard install could set them).
+# In the same span VEXA_REQUIRE_GATEWAY_IDENTITY was retired for VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE
+# (one key out, one in, net 0): agent-api believes an x-user-* header only when the gateway signed it.
+# 105: +1 RUNTIME_API_TOKEN — the runtime caller credential every runtime.v1 / schedule.v1 call presents.
+# 106: +1 REDIS_WORKLOAD_ACL — what a spawned worker connects to Redis as.
+# 107: +1 CODEX_HOME — the worker's Codex home, named by the runtime and read by the harness.
+# 106: -1 VEXA_WORKSPACE_MOUNT_SOURCE — the store backing is the runtime's own configuration (it drops
+# the key from every spec), so agent-api no longer reads, stamps or declares it; compose and helm
+# set it on the runtime only.
+# 105: -1 VEXA_AGENT_DEFAULT_SUBJECT — a test-harness fallback subject; the harness now passes its
+# subject to create_app and the product reads none.
+# 106: +1 VEXA_UNIT_IN_KEY — the unit's input-stream key; the worker runs only entries signed with it.
+# 107: +1 VEXA_MODEL_ROUTE — the dispatch's mark on a worker routed to the person's own endpoint.
+# 106: -1 VEXA_MEETINGS_DB_URL — it served invited_meetings only, which nothing called; both went.
+# 107: +1 VEXA_AGENT_MAX_OUTPUT_TOKENS — the output cap every harness reads (claude-code maps it onto
+# CLAUDE_CODE_MAX_OUTPUT_TOKENS, openai-agent sends it as max_tokens).
+EXPECTED_DECLARED_KEYS = 107
+
+
+def test_connections_keys_are_capabilities_on_real_surfaces():
+    """The broker keys are optional (the no-Connections deployment is a real one) and plumbed —
+    never a `targets: []` dial a standard install cannot set."""
+    decl = cp.load_declaration()
+    keys = {k["key"]: k for k in decl["keys"]}
+    for key, cap in [("VEXA_CONNECTIONS_BROKER_URL", "connections"), ("VEXA_CONNECTIONS_AGENT_KEY_FILE", "connections"),
+                     ("VEXA_GIT_STORE_BROKER_URL", "git_credential_broker"), ("VEXA_GIT_STORE_KEY_FILE", "git_credential_broker")]:
+        assert keys[key]["class"] == "capability" and keys[key]["capability"] == cap
+        assert keys[key]["targets"] == ["compose", "helm"], key
+    assert decl["capabilities"]["connections"]["when_unconfigured"]
 
 
 def test_the_declared_key_count_is_asserted_not_merely_printed():

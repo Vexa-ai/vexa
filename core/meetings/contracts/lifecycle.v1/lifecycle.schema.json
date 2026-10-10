@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://vexa.ai/schemas/lifecycle.v1",
   "title": "lifecycle.v1",
-  "description": "The bot's DOMAIN status (distinct from runtime.v1's container lifecycle). The bot emits these to its control-plane callback; the legal transitions are the state machine in the README.",
+  "description": "The bot's DOMAIN status (distinct from runtime.v1's container lifecycle). The bot emits these to its control-plane callback; the legal transitions are the state machine in the README. Transport: an HTTP POST of one LifecycleEvent to the invocation's meetingApiCallbackUrl (meeting-api POST /bots/internal/callback/lifecycle) carrying `Authorization: Bearer <invocation.v1 token>`. meeting-api applies the event only when that MeetingToken verifies and its session_uid equals the event's connection_id, or when the caller presents the internal tier's X-Internal-Secret; otherwise 401 {\"status\": \"error\", \"detail\": \"bot session credential required\"} and the event is dropped.",
   "$defs": {
     "BotStatus": {
       "enum": ["joining", "awaiting_admission", "active", "needs_help", "completed", "failed"]

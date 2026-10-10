@@ -1,4 +1,5 @@
 "use client";
+import { MeetingControls } from "../minutes/MeetingControls";
 import { useEffect, useRef } from "react";
 import { useService } from "../platform";
 import { LayoutServiceId } from "../workbench/layout";
@@ -6,7 +7,7 @@ import { CanvasActionsProvider } from "./actions";
 import { MeetingHealthBanner } from "./MeetingHealthBanner";
 import { LiveTranscriptEngine } from "./LiveTranscriptEngine";
 import { TranscriptExtend } from "./TranscriptExtend";
-import { HighlightButton, useTermRenderer } from "./TranscriptTerms";
+import { HighlightButton, useTermRenderer } from "./TranscriptTermControls";
 import { MeetingScopeProvider, MeetingSourceProvider, useMeeting } from "./useMeeting";
 
 export const MEETING_CANVAS_CONTENT_INSET = 18;
@@ -16,7 +17,7 @@ export const MEETING_CANVAS_CONTENT_INSET = 18;
  *  view to switch to any more, so there is no switch: the pane renders what the bot heard, and
  *  everything intelligent happens in the chat's agent over MCP. */
 function RawTranscript({ meetingId }: { meetingId?: string }) {
-  const { transcript } = useMeeting();
+  const { transcript, meeting } = useMeeting();
   // THE TERM CHIPS (PRD decision 35), as a layer over the same words. `useTermRenderer` returns
   // undefined until a Highlight has published something, so an un-highlighted meeting renders
   // exactly the plain text it did before — this costs nothing until somebody asks for it.
@@ -32,7 +33,8 @@ function RawTranscript({ meetingId }: { meetingId?: string }) {
   const box = useRef<HTMLDivElement>(null);
   return (
     <div ref={box} style={{ position: "relative" }}>
-      <LiveTranscriptEngine segments={transcript.segments} renderText={renderText} />
+      <LiveTranscriptEngine meetingId={meeting.id} segments={transcript.segments} renderText={renderText}
+        {...(meeting.deleted ? { emptyLabel: "This meeting’s transcript and recording were deleted." } : {})} />
       {meetingId && <TranscriptExtend containerRef={box} meeting={meetingId} segments={transcript.segments} />}
     </div>
   );
@@ -68,6 +70,7 @@ function MeetingCanvasBody({ meetingId }: { meetingId?: string }) {
         </div>
       )}
       <MeetingHealthBanner />
+      {meetingId && <div style={{ padding: "0 18px 8px" }}><MeetingControls meetingId={meetingId} showBot={false} /></div>}
       <main style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
         <div style={{ padding: MEETING_CANVAS_CONTENT_INSET }}>
           <RawTranscript meetingId={meetingId} />

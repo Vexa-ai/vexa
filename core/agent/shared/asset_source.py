@@ -3,7 +3,7 @@ as, the guarded fetch that brings a remote one INTO the workspace, and the index
 it came from.
 
 Founder, 2026-09-06, on a customer workspace README the agent wrote: *"we want to be able images"* —
-the page showed `![OeNB logo](…)` as alt text and a broken-image icon (Vexa-ai/vexa#1612). The rule
+the page showed `![Example Bank logo](…)` as alt text and a broken-image icon (Vexa-ai/vexa#1612). The rule
 that fixes it is not "allow images", it is **where the bytes live**: a page's image is a file in the
 workspace, served by the same owner- and membership-scoped read route the page itself came from. A
 customer's browser must never be told to go and get a picture from a third party because a document
@@ -19,25 +19,24 @@ fact with no room for a citation inside it, so the citation lives in ``assets/SO
 per file, human-readable in the pages panel, and rewritten in place so a re-fetch updates rather
 than duplicates. An asset with no row is an asset nobody can check.
 
-**THE SSRF RULE IS STATED TWICE, ON PURPOSE.** ``llm/web_tools.fetch_refusal`` states it for the
-WORKER image; this states it for the CONTROL-PLANE image, which ships ``shared/`` and
-``control_plane/`` and deliberately not ``llm/`` (see ``core/agent/services/agent-api/Dockerfile``),
-so importing that one here would be an ImportError in the only process that runs this code — the
-mirror image of the reason web_tools does not import ``control_plane/model_endpoint.py``. A comment
-claiming the two agree would be worth nothing, so a test asserts it instead
-(``tests/test_workspace_assets.py::test_the_two_outbound_guards_agree``).
+**THE ADDRESS RULE IS ``shared/ssrf.py``**, the one outbound URL guard, vendored byte for byte into
+every image that fetches a URL somebody else chose (``scripts/parity.json``, ``outbound-url-guard``).
+``fetch_refusal`` below only phrases its answer for the caller; ``llm/web_tools.fetch_refusal`` does
+the same for the worker image, and ``tests/test_workspace_assets.py::test_the_two_outbound_guards_agree``
+holds the two verdicts together. Every request goes out through ``outbound_client``, whose transport
+re-checks the address and dials the one it checked.
 """
 from __future__ import annotations
 
-import ipaddress
 import re
-import socket
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 from urllib.parse import unquote, urljoin, urlsplit
 
 import httpx
+
+from shared import ssrf
 
 #: Where a fetched or uploaded asset lives. One directory, so a workspace's pictures are findable
 #: and the source index has one home.
@@ -98,18 +97,17 @@ def is_image_path(path: str) -> bool:
 
 # ── the outbound guard (see the module docstring: the same rule llm/web_tools states) ────────────
 
-def _blocked_ip(addr: str) -> bool:
-    try:
-        ip = ipaddress.ip_address(addr)
-    except ValueError:
-        return True                     # unreadable is not the same as safe
-    return bool(ip.is_loopback or ip.is_link_local or ip.is_private or ip.is_reserved
-                or ip.is_unspecified or ip.is_multicast)
-
-
 def _resolve(host: str) -> list[str]:
     """Every address ``host`` resolves to. Separate so a test can play DNS."""
-    return sorted({info[4][0] for info in socket.getaddrinfo(host, None)})
+    return ssrf.resolve_host(host)
+
+
+def outbound_client(timeout: float) -> httpx.Client:
+    """The client every fetch on behalf of a page uses: no automatic redirects (each hop is
+    re-guarded by the caller), and a transport that re-checks the host at connect time and dials
+    the address it checked — a record flipped after ``fetch_refusal`` answered reaches nothing."""
+    return httpx.Client(timeout=timeout, follow_redirects=False,
+                        transport=ssrf.build_pinned_sync_transport())
 
 
 def fetch_refusal(url: str, resolve: Optional[Callable[[str], list[str]]] = None) -> Optional[str]:
@@ -128,25 +126,21 @@ def fetch_refusal(url: str, resolve: Optional[Callable[[str], list[str]]] = None
     host = (parts.hostname or "").lower()
     if not host:
         return f"{raw!r} names no host"
-    if host == "localhost" or host.endswith(".localhost"):
-        return f"refusing {host!r} — the open web only, never this deployment's own network"
-    try:
-        ipaddress.ip_address(host)
-    except ValueError:
-        if "." not in host:
-            return (f"refusing the single-label host {host!r} — that is an internal service name, "
-                    "not a public site")
+    if ssrf.literal_address(host) is None:
+        if ssrf.is_blocked_hostname(host):
+            return (f"refusing {host!r} — an internal service name, never this deployment's own "
+                    "network; the open web only")
         try:
             addrs = resolve(host)
         except OSError as exc:
             return f"could not resolve {host!r} ({type(exc).__name__})"
         if not addrs:
             return f"could not resolve {host!r}"
-        if any(_blocked_ip(a) for a in addrs):
+        if any(ssrf.is_blocked_ip(a) for a in addrs):
             return (f"refusing {host!r} — it resolves into loopback/link-local/private address "
                     "space, which is this deployment's own network and not the open web")
         return None
-    if _blocked_ip(host):
+    if ssrf.is_blocked_ip(host):
         return (f"refusing {host!r} — loopback/link-local/private/reserved addresses are this "
                 "deployment's own network, not the open web")
     return None
@@ -186,7 +180,7 @@ def fetch_asset(url: str, *, client: Optional[httpx.Client] = None,
     something a page shows, not something a workspace downloads."""
     target = str(url or "").strip()
     own = client is None
-    cli = client or httpx.Client(timeout=FETCH_TIMEOUT, follow_redirects=False)
+    cli = client or outbound_client(FETCH_TIMEOUT)
     try:
         for hop in range(MAX_REDIRECTS + 1):
             refusal = fetch_refusal(target, resolve)
@@ -210,6 +204,8 @@ def fetch_asset(url: str, *, client: Optional[httpx.Client] = None,
                             raise AssetFetchError(
                                 f"{target} is larger than {MAX_ASSET_BYTES // (1024 * 1024)}MB — "
                                 "an asset is something a page shows, not a download", url=target)
+            except ssrf.SSRFError as exc:
+                raise AssetFetchError(f"refusing {target}: {exc}", kind="refused", url=target) from None
             except httpx.HTTPError as exc:
                 raise AssetFetchError(f"could not fetch {target}: {type(exc).__name__}: {exc}",
                                       url=target) from None

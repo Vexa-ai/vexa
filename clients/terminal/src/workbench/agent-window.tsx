@@ -8,7 +8,8 @@ import { type CSSProperties, type ReactNode, type RefObject, useEffect, useState
 import { Icon } from "../ui-kit";
 import { Markdown } from "../ui-kit/Markdown";
 import { MdxDoc } from "../ui-kit/MdxDoc";
-import { OPEN_ENTITY_EVENT } from "../canvas/actions";
+import { OPEN_ENTITY_EVENT } from "../platform";
+import { faultHeadline, type Fault } from "../surfaces/faults";
 
 // ── the turn model ────────────────────────────────────────────────────────────────
 export type OpStatus = "running" | "done" | "error";
@@ -25,12 +26,21 @@ export interface TurnStatus { phase: TurnPhase; since: number }
  *  turn that stops silently is exactly the failure this replaces — the founder re-typed the same
  *  instruction into three dead turns because the chat showed a finished one each time. */
 export interface TurnStopped { line: string; act?: { label: string; instruction: string } }
+/** THE TURN FAILED, AND THE CHAT KNOWS WHO FAILED IT (P18) — the runtime that would not start the
+ *  agent, the model provider that refused the turn. A field rendered as its own block, never prose
+ *  appended to the reply: "Internal Server Error" in the agent's bubble is exactly what the founder
+ *  read for a runtime that had refused his agent, and it named nobody. `retry` draws the control
+ *  that sends the same words again. */
+export interface TurnFault { fault: Fault; retry?: boolean }
 export type Turn =
   | { id: string; role: "user"; text: string }
   | { id: string; role: "agent"; text: string; ops: Op[]; commit?: string; rejected?: string; status?: TurnStatus | null;
       /** the SERVER's step count for this turn (Vexa-ai/vexa#1622). Absent on a deployment one
        *  release behind, where the op line falls back to counting what this browser saw. */
-      steps?: number; stopped?: TurnStopped }
+      steps?: number; stopped?: TurnStopped; failed?: TurnFault;
+      /** how many messages of older history the turn compacted to fit the model's context — a
+       *  muted note in the activity line, never part of the reply */
+      compacted?: number }
   | { id: string; role: "insight"; t?: string; text: string };
 
 const PHASE_LABEL: Record<TurnPhase, string> = {
@@ -117,6 +127,33 @@ function StoppedLine({ stopped, onContinue }: { stopped: TurnStopped; onContinue
   );
 }
 
+/** The server's detail as a sentence: capitalised, and closed with a full stop unless it has one. */
+const sentence = (d: string) => {
+  const t = d.charAt(0).toUpperCase() + d.slice(1);
+  return /[.!?…]$/.test(t) ? t : `${t}.`;
+};
+
+// ── a typed fault — WHO failed · what kind · the safe detail · the remedy (P18) ──
+export function FaultBlock({ failed, onRetry }: { failed: TurnFault; onRetry?: () => void }) {
+  const f = failed.fault;
+  return (
+    <div role="alert" data-fault-source={f.source} data-fault-kind={f.kind}
+      style={{ marginTop: 9, maxWidth: 680, border: "1px solid var(--danger)", background: "var(--dangerbg)", borderRadius: 8, padding: "8px 11px", fontSize: 12.5, lineHeight: 1.5, color: "var(--t1)" }}>
+      <div data-fault-headline style={{ display: "flex", alignItems: "center", gap: 7, fontWeight: 650, color: "var(--danger)" }}>
+        <Icon name="x" size={12} />{faultHeadline(f)}
+      </div>
+      {f.detail && <div data-fault-detail style={{ marginTop: 3 }}>{sentence(f.detail)}</div>}
+      {f.remedy && <div data-fault-remedy style={{ marginTop: 3, color: "var(--t2)" }}>{f.remedy}</div>}
+      {failed.retry && onRetry && (
+        <button data-fault-retry onClick={onRetry}
+          style={{ marginTop: 7, display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, fontFamily: "var(--mono)", color: "var(--blue)", background: "var(--bluebg)", border: "none", borderRadius: 6, padding: "3px 10px", cursor: "pointer" }}>
+          Retry
+        </button>
+      )}
+    </div>
+  );
+}
+
 // ── the conversation: a timeline of user bubbles · agent turns (ops + text) · insights ──
 export function Conversation({ turns, busy, empty, onContinue }: {
   turns: Turn[]; busy?: boolean; empty?: ReactNode;
@@ -166,8 +203,12 @@ export function Conversation({ turns, busy, empty, onContinue }: {
                     · {n} step{n === 1 ? "" : "s"}
                   </span>;
                 })()}
+                {t.compacted ? <CompactedNote /> : null}
               </div>
             )}
+            {t.ops.length === 0 && t.compacted ? (
+              <div style={{ margin: "0 0 8px 5px" }}><CompactedNote /></div>
+            ) : null}
             {t.text && <div style={{ fontSize: 13.5, color: "var(--t1)", lineHeight: 1.6, maxWidth: 680 }}>
               {/* Mintlify-grade rendering in the OUTPUT too: finished turns compile as MDX (Note/Card/
                   Steps/Tabs + wikilinks, safe plain-markdown fallback); the still-streaming turn uses the
@@ -185,7 +226,7 @@ export function Conversation({ turns, busy, empty, onContinue }: {
             })()}
             {busy && last && (t.status
               ? <StatusLine status={t.status} />
-              : (!t.text && <div style={{ fontSize: 13.5, color: "var(--t3)" }}>…</div>))}
+              : (!t.text && !t.failed && <div style={{ fontSize: 13.5, color: "var(--t3)" }}>…</div>))}
             {t.commit && (
               <div style={{ marginTop: 9, fontSize: 11, color: "var(--green)", display: "inline-flex", alignItems: "center", gap: 6, background: "var(--greenbg)", borderRadius: 6, padding: "3px 8px", fontFamily: "var(--mono)" }}>
                 <Icon name="git" size={12} />committed · {t.commit.slice(0, 7)}
@@ -197,10 +238,22 @@ export function Conversation({ turns, busy, empty, onContinue }: {
               </div>
             )}
             {t.stopped && <StoppedLine stopped={t.stopped} onContinue={onContinue && (() => onContinue(t))} />}
+            {t.failed && <FaultBlock failed={t.failed} onRetry={onContinue && (() => onContinue(t))} />}
           </div>
         );
       })}
     </>
+  );
+}
+
+/** THE HISTORY WAS COMPACTED (founder 2026-10-10): a quiet note in the activity line, never the
+ *  reply and never the stop line — the turn answered; older history was shortened to fit. */
+function CompactedNote() {
+  return (
+    <span data-compacted title="Older parts of this chat were shortened to fit the model's context; your messages were kept."
+      style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--t3)", flex: "none", opacity: 0.8 }}>
+      · older context compacted
+    </span>
   );
 }
 

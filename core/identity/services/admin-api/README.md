@@ -12,15 +12,22 @@ service stays out of the identity business. Python because it carves the parent 
 |---|---|---|---|
 | **calls** | terminal / dashboard login | `GET /admin/users/email/{email}` | resolve a returning user by email (find-or-create) |
 | **calls** | terminal / dashboard login | `POST /admin/users` · `POST /admin/users/{id}/tokens` | create user · mint a scoped session token |
-| **consumes** | the gateway | `POST /internal/validate` | a raw token → `{user_id, scopes, max_concurrent, email, webhook_*}` (fail-closed) |
+| **consumes** | terminal sign-in doors | `POST /internal/signin-admission` | `{email}` → `{admitted, why}`: an existing user, the admin, or an address on the sign-in allow-list (`VEXA_SIGNIN_ALLOW` + the `signin.allow` setting); anybody while no admin is claimed (Vexa-ai/vexa#1783) |
+| **consumes** | the terminal's OAuth door | `PUT /internal/users/{id}/provider-subject` | `ProviderSubjectBindRequest {subject}` (`google:<sub>`, `microsoft:<tid>:<oid>`) → `{bound: first\|same}`; `409` when the account is bound to another identity of that provider (signin.v1, `app/provider_subjects.py`). The first Google or Microsoft sign-in to an account records the subject in `users.data.provider_subjects`; a later one must carry the same |
+| **consumes** | the terminal's redeem door | `POST /internal/signin-links/redeem` | `SigninLinkRedeemRequest {jti, expires_at}` → `{first: true}` the first time; `409` already redeemed or expired; `503` the record could not be written (signin.v1, `app/signin_links.py`). The record is `vexa:signin-link:redeemed:<jti>` in the service Redis until the link expires, so an emailed link signs in once across every terminal replica |
+| **consumes** | the gateway, flows, the terminal's server | `POST /internal/validate` | `ValidateRequest {token}` → `ValidatedIdentity {user_id, scopes, max_concurrent, email, is_admin, webhook_*?, workspaces?}` (fail-closed; `app/validate.py`). A worker's delegation token (`vxd_…`, verified with `VEXA_MCP_DELEGATION_SECRET`) answers the same shape with scopes `bot`+`tx`, no admin role, the dispatch's ceiling as `delegation`, and `person_is_admin` — whether the person it acts for is the instance admin (a fact about them, never a role the worker holds) |
+| **consumes** | the terminal's admin settings editor | `GET/PUT /internal/settings/{key}` | the platform-wide defaults (`models`, `transcription`, `setup`, `diagnostics`, `signin`) → `PlatformSettingResponse {key, value, env?, env_problems?}` (`app/platform_settings.py`) |
 | **calls** | bot/worker clients | `X-API-Key` on `/user/*` | user-tier self-serve (webhook config in `user.data`) |
 | **produces** | Postgres (backing stack) | SQLAlchemy `users` · `api_tokens` | the identity tables (one `Base`, FK `api_tokens.user_id → users.id`) |
+| **reads** | agent-api, through the service Redis (`REDIS_URL`) | `EXISTS vexa:delegation:live:<jti>`, `EXISTS vexa:delegation:revoked:<jti>` | whether agent-api still holds a worker's delegation token live and has not revoked it when its unit ended (`app/delegation_revocation.py`); a token without its live key is refused; asked only for a `vxd_` whose signature verified, and a store it cannot read refuses that token with 503 — API keys never read it |
 
 ## Contracts
 
 **Owns:** [`core/identity/contracts/identity.v1`](../../contracts/identity.v1) — `ScopedToken`
 (`subject`, `scopes[]` ∈ `{bot,tx,browser}`, `expires_at`), `AccessDecision` (default-deny verdict),
-`ResourceKind`. Sealed in [`contracts.seal.json`](../../../../contracts.seal.json).
+`ResourceKind` — and [`core/identity/contracts/signin.v1`](../../contracts/signin.v1), the sign-in
+admission and admin-claim wire (`app/signin_wire.py` is generated from it). Both sealed in
+[`contracts.seal.json`](../../../../contracts.seal.json).
 Token prefix/scope rules live in `src/admin_api/token_scope.py` (`VALID_SCOPES`, `vxa_<scope>_…`).
 
 **Consumes:** none — this is the root of the identity domain; it produces the token others validate.
@@ -39,8 +46,9 @@ uv run pytest -q     # L3 integration (testcontainers Postgres) · L1 health
 
 - ✅ delivered — `User` + `APIToken` tables (one `Base`, v0.12 carve)
 - ✅ delivered — admin tier: `POST /admin/users`, `GET /admin/users/email/{email}`, `POST /admin/users/{id}/tokens`, `DELETE /admin/tokens/{id}`
-- ✅ delivered — `/internal/validate` authz oracle → `{user_id, scopes, max_concurrent, email, webhook_*}`, fail-closed, expiry-rejecting, `last_used_at` bump
+- ✅ delivered — `/internal/validate` authz oracle → `ValidatedIdentity`, fail-closed, expiry-rejecting, `last_used_at` bump; also resolves a worker's delegation token
+- ✅ delivered — sign-in allow-list: `POST /internal/signin-admission` + the `signin` platform setting (`app/signin_allow.py`; exact addresses and `@domain` entries; env `VEXA_SIGNIN_ALLOW` merged in)
 - ✅ delivered — scoped/multi-scope/expiring token mint (`vxa_<scope>_…`, `VALID_SCOPES`)
-- 🟡 partial — user tier: `PUT /user/webhook` self-serve (other `/user/*` surfaces deferred)
+- ✅ delivered — user tier self-serve: `/user/webhook`, `/user/calendar(s)`, `/user/models`, `/user/transcription`
 - ⬜ planned — `/internal/validate` also returns the canonical `subject` (`u_<user_id>`)
 - ⬜ planned — the find-or-create-user + mint-token flow backs the terminal login (Google + dev type-any-email)

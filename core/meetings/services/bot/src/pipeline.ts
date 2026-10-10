@@ -151,16 +151,19 @@ function toBotSegment(seg: LaneSegment): TranscriptSegment {
 
 /**
  * The sink ADAPTER — the load-bearing reconciliation. The lane emits via `segment` (confirmed),
- * `draft` (live partial, completed:false), `finalize` (session end); the bot's port is a single
- * `publish(segment)`. We forward BOTH `segment` and `draft` to publish (the bot's transcript.v1
- * egress carries `completed` to distinguish confirmed from draft) and treat `finalize` as a
+ * `draft` (live partial, completed:false), and `finalize` (session end). Content goes to
+ * `publish(segment)`; empty drafts withdraw their exact pending ID through `retract`. The
+ * transcript.v1 egress carries `completed` to distinguish confirmed from draft. `finalize` is a
  * no-op at this seam (the bot signals end-of-session via lifecycle.v1, not the transcript stream).
  * publish() is async; the lane's sink methods are sync fire-and-forget, so we swallow + log a
  * rejection rather than letting it escape the lane's emit path.
  */
-function laneSink(publish: TranscriptSink['publish'], onError?: (e: unknown) => void): LaneTranscriptSink {
+function laneSink(sink: TranscriptSink, onError?: (e: unknown) => void): LaneTranscriptSink {
   const forward = (seg: LaneSegment): void => {
-    void publish(toBotSegment(seg)).catch((e) => {
+    const operation = seg.completed === false && !seg.text.trim()
+      ? sink.retract?.([seg.segment_id])
+      : sink.publish(toBotSegment(seg));
+    void operation?.catch((e) => {
       (onError ?? ((err) => console.error(`[bot] pipeline: transcript publish rejected: ${String(err)}`)))(e);
     });
   };
@@ -246,8 +249,9 @@ function createGmeetBotPipeline(
   sink: TranscriptSink,
   config?: SpeakerStreamManagerConfig,
   onError?: (e: unknown) => void,
+  onsetGapMs?: number,
 ): BotPipeline {
-  const lane = createGmeetPipeline({ transcribe, sink: laneSink(sink.publish, onError), config, onError });
+  const lane = createGmeetPipeline({ transcribe, sink: laneSink(sink, onError), config, onError, onsetGapMs });
   return {
     async start() { /* lane is lazy — begins on the first fed frame */ },
     async stop() { await lane.dispose(); },
@@ -418,6 +422,8 @@ export function createTranscribe(inv: Invocation): Transcribe {
     serviceUrl: inv.transcriptionServiceUrl,
     apiToken: inv.transcriptionServiceToken,
     model: inv.transcriptionModel ?? undefined,
+    // the person's own Settings endpoint: every request held to the outbound URL guard
+    publicOnly: inv.transcriptionServiceOwner === 'customer',
   });
   const language = inv.language ?? undefined;
   return (pcm, prompt) => client.transcribe(pcm, language, prompt);
@@ -469,7 +475,30 @@ export function createBotPipeline(
       inv.botName,
     );
   }
-  return createGmeetBotPipeline(transcribe, sink, opts.config, opts.onError);
+  return createGmeetBotPipeline(
+    transcribe, sink, perChannelLaneConfig(inv.platform, opts.config), opts.onError, perChannelOnsetGapMs(inv.platform),
+  );
+}
+
+/** A per-track (Zoom) channel carries one participant, so its turn gap only decides when a stretch
+ *  of speech is finalized. A starved page loses capture callbacks for 1–2 s inside speech; a 2 s gap
+ *  keeps such a stretch whole. Google Meet keeps the lane default (channels rotate between people). */
+export const PER_TRACK_ONSET_GAP_MS = 2000;
+
+/** The per-channel lane's turn-onset gap for one platform; undefined keeps the lane default. */
+export function perChannelOnsetGapMs(platform: Platform | string): number | undefined {
+  return isPerTrackLanePlatform(platform) ? PER_TRACK_ONSET_GAP_MS : undefined;
+}
+
+/** The per-channel lane's tuning for one platform. Per-track capture (Zoom) stamps each frame at
+ *  capture-callback time (#1774), so on a starved page consecutive frames are spaced wider than the
+ *  audio they carry; the lane is told so and measures input gaps frame to frame. Google Meet keeps
+ *  the configuration it is given, unchanged. */
+export function perChannelLaneConfig(
+  platform: Platform | string,
+  config?: SpeakerStreamManagerConfig,
+): SpeakerStreamManagerConfig | undefined {
+  return isPerTrackLanePlatform(platform) ? { ...config, callbackStampedFrames: true } : config;
 }
 
 /** The post-admission subsystem stages createLivePipeline sequences (used in fault labels). */

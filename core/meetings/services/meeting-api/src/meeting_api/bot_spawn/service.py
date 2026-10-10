@@ -37,11 +37,10 @@ from ..service_authority import (
     ServiceAuthorityRequest,
     ServiceAuthorityUnavailable,
 )
-from .env_flags import env_flag
+from .auth_session import auth_session_config
 from .invocation import build_invocation, build_workload_spec, mint_meeting_token
 from .ports import (
     AuthSessionBusy,
-    AuthSessionNotConfigured,
     DuplicateMeeting,
     MaxBotsExceeded,
     MeetingRepo,
@@ -126,18 +125,18 @@ _URL_TEMPLATES = {
 #   * THREAD id — ``19:meeting_…@thread.v2``, the id inside a classic ``/l/meetup-join/`` deep
 #     link. It joins at ``/l/meetup-join/<thread>`` and carries no separate passcode: the deep
 #     link's own query string is the credential, so a caller holding this id holds the whole URL.
-#   * SHORT id — the 10–15 digit meeting id Teams prints next to "Meeting ID / Passcode" and
+#   * SHORT id — the 10–16 digit meeting id Teams prints next to "Meeting ID / Passcode" and
 #     hands out as ``…/meet/<id>?p=<passcode>``. It joins at ``/meet/<id>``, and the passcode is
 #     a SEPARATE value by construction — this is the ONLY shape for which a bare id plus its own
 #     ``passcode`` field is a complete address.
 #
 # Only the SHORT shape is matched: it is the one that needs a different path from the one every
-# Teams id used to get, and its 10–15 digit range mirrors the SSOT parsers that produce these ids
+# Teams id used to get, and its 10–16 digit range mirrors the SSOT parsers that produce these ids
 # (``collector.meeting_link``, the MCP ``link_parser``). Everything else — thread ids included —
 # stays on ``/l/meetup-join/``. Interpolating a SHORT id into that path builds
 # ``/l/meetup-join/397421056486982``: the wrong path for that id, and with nowhere for the
 # passcode to go (#892).
-_TEAMS_SHORT_ID = re.compile(r"^\d{10,15}$")
+_TEAMS_SHORT_ID = re.compile(r"^\d{10,16}$")
 
 #: Teams web-client host SUFFIXES a constructed URL may be built on — the same set the join
 #: layer recognizes as "this page IS Teams" (``join/src/msteams/auth-redirect.ts``
@@ -177,7 +176,7 @@ def _teams_url(native_meeting_id: str, teams_base_host: Optional[str]) -> str:
 
     An id matching neither shape keeps the classic ``/l/meetup-join/`` path: that is what every
     such id resolved to before this rule existed, and shape does not predict joinability here
-    (a bare-numeric id outside the 10–15 range has transcribed real meetings), so an unrecognized
+    (a bare-numeric id outside the 10–16 range has transcribed real meetings), so an unrecognized
     id is left on its established path rather than rerouted on a guess.
     """
     host = resolve_teams_base_host(teams_base_host) or _TEAMS_DEFAULT_HOST
@@ -424,8 +423,11 @@ async def request_bot(
     max_concurrent: Optional[int] = None,
     redis_url: Optional[str] = None,
     meeting_api_url: Optional[str] = None,
-    internal_secret: Optional[str] = None,
     token_secret: Optional[str] = None,
+    # Defines the bot's own Redis user and returns the URL it connects with (bot_spawn.
+    # workload_redis). None hands the bot ``redis_url`` (the in-process harness, and a deployment's
+    # explicit REDIS_WORKLOAD_ACL=shared).
+    redis_grant: "Optional[Callable[[str, int], Awaitable[str]]]" = None,
     # Per-user webhook config (the gateway forwards it from identity's /internal/validate). Persisted
     # into meeting.data so the lifecycle callback delivers status_change events with no users-table read.
     webhook_url: Optional[str] = None,
@@ -548,26 +550,21 @@ async def request_bot(
     #     gated loud BEFORE any DB write (the TranscriptionNotConfigured precedent) — a half-
     #     configured knob must never spawn a bot that silently joins anonymous. Env vocabulary
     #     matches the provisioning CLI: BOT_USERDATA_S3_PATH + BOT_S3_{ENDPOINT,BUCKET,ACCESS_KEY,
-    #     SECRET_KEY} (scoped userdata credentials — never the deployment's admin S3 creds; they
-    #     ride the invocation env into the bot container, so their blast radius must stay the
-    #     userdata prefix).
-    authenticated = env_flag("BOT_AUTHENTICATED", False)
-    auth_userdata_path: Optional[str] = None
+    #     SECRET_KEY} (the bots' READ-ONLY userdata pair — it rides the invocation env into the bot
+    #     container, so it may read the session and nothing else; a bot's write-back goes through
+    #     meeting-api's session_profile route). auth_session_config also refuses a pair that reuses
+    #     either half of a storage root pair (MINIO_* / S3_*), before any row or bot exists.
+    auth_cfg = auth_session_config()
+    authenticated = auth_cfg is not None
+    auth_userdata_path: Optional[str] = auth_cfg.userdata_path if auth_cfg else None
     auth_s3: dict[str, Optional[str]] = {}
-    if authenticated:
-        auth_userdata_path = os.getenv("BOT_USERDATA_S3_PATH") or None
+    if auth_cfg is not None:
         auth_s3 = {
-            "s3_endpoint": os.getenv("BOT_S3_ENDPOINT") or None,
-            "s3_bucket": os.getenv("BOT_S3_BUCKET") or None,
-            "s3_access_key": os.getenv("BOT_S3_ACCESS_KEY") or None,
-            "s3_secret_key": os.getenv("BOT_S3_SECRET_KEY") or None,
+            "s3_endpoint": auth_cfg.s3_endpoint,
+            "s3_bucket": auth_cfg.s3_bucket,
+            "s3_access_key": auth_cfg.s3_access_key,
+            "s3_secret_key": auth_cfg.s3_secret_key,
         }
-        if not (auth_userdata_path and auth_s3["s3_endpoint"] and auth_s3["s3_bucket"]):
-            raise AuthSessionNotConfigured(
-                "BOT_AUTHENTICATED is set but the userdata store is incomplete — set "
-                "BOT_USERDATA_S3_PATH + BOT_S3_ENDPOINT + BOT_S3_BUCKET (and scoped "
-                "BOT_S3_ACCESS_KEY/BOT_S3_SECRET_KEY); provision the session with `make login`"
-            )
 
     # 2c. continue_meeting (P3c): reuse a TERMINAL prior meeting row if asked. The reused row keeps
     #     its id (so its transcripts/recordings survive); a fresh session is appended below. This read
@@ -693,15 +690,17 @@ async def request_bot(
                     fields={"active": active, "cap": max_concurrent},
                 )
                 raise MaxBotsExceeded(user_id, max_concurrent)
-        row = await repo.reopen_meeting(
-            meeting_id=reused_row["id"],
-            data_patch={
-                "transcribe_enabled": transcribe_enabled,
-                "recording_enabled": recording_enabled,
-                "transcription_provider": transcription_provider,
-                "service_authority": authority_record,
-            },
-        )
+        reopen_patch: dict[str, Any] = {
+            "transcribe_enabled": transcribe_enabled,
+            "recording_enabled": recording_enabled,
+            "transcription_provider": transcription_provider,
+            "service_authority": authority_record,
+        }
+        # A continued run in authenticated mode is an authenticated run: it carries the identity key
+        # the per-identity serialization and the session write-back both match on.
+        if authenticated and auth_userdata_path:
+            reopen_patch["auth_userdata_path"] = auth_userdata_path
+        row = await repo.reopen_meeting(meeting_id=reused_row["id"], data_patch=reopen_patch)
     else:
         meeting_data: dict[str, Any] = {}
         if constructed_url:
@@ -768,9 +767,21 @@ async def request_bot(
     # 4. MeetingToken + invocation. connection_id IS the session_uid (parent's connectionId).
     redis_url = redis_url or os.getenv("REDIS_URL", "redis://redis:6379/0")
     meeting_api_url = meeting_api_url or os.getenv("MEETING_API_URL", "http://meeting-api:8080")
-    internal_secret = internal_secret if internal_secret is not None else os.getenv(
-        "INTERNAL_API_SECRET"
-    )
+    if redis_grant is not None:
+        # The bot connects to Redis as this session's own user — never with the service connection.
+        # A user that cannot be defined fails the spawn (the fallback would be the service credential).
+        try:
+            redis_url = await redis_grant(connection_id, meeting_id)
+        except Exception as e:  # noqa: BLE001
+            reason = "the bot's Redis credential could not be issued"
+            try:
+                await repo.fail_meeting(meeting_id=meeting_id, reason=reason, failure_stage="requested")
+            except Exception:  # noqa: BLE001 — failing the row is best-effort; never mask the cause
+                pass
+            log_event("bot_spawn_failed", audience="system", level="error", span="bots.create",
+                      user_id=user_id, meeting_id=str(meeting_id),
+                      fields={"reason": reason, "error": type(e).__name__})
+            raise SpawnFailed(reason) from e
     # STT creds were resolved and gated at step 1b (before the meeting-row write); the resolved
     # transcription_service_url/token/model flow into the invocation below. Without either the bot
     # joins + captures but cannot transcribe — None-safe: omitted from the invocation when unset
@@ -778,8 +789,11 @@ async def request_bot(
     # Token must outlive the bot's max active time (default 4h, see bot deriveMaxActiveMs) or
     # transcription dies mid-meeting when the JWT expires. Default 5h; override per deployment.
     token_ttl_seconds = int(os.getenv("MEETING_TOKEN_TTL_SECONDS") or 18000)
+    # The bot's ONLY credential: its lifecycle callbacks and uploads present this token, bound to
+    # this session (connection_id). No service-tier secret is ever placed in an invocation.
     token = mint_meeting_token(
-        meeting_id, user_id, platform, native_meeting_id, secret=token_secret, ttl_seconds=token_ttl_seconds
+        meeting_id, user_id, platform, native_meeting_id, secret=token_secret,
+        ttl_seconds=token_ttl_seconds, session_uid=connection_id,
     )
     invocation = build_invocation(
         meeting_id=meeting_id,
@@ -795,11 +809,12 @@ async def request_bot(
         transcription_tier=transcription_tier,
         redis_url=redis_url,
         meeting_api_callback_url=f"{meeting_api_url}/bots/internal/callback/lifecycle",
-        internal_secret=internal_secret,
         transcribe_enabled=transcribe_enabled,
         transcription_service_url=transcription_service_url,
         transcription_service_token=transcription_service_token,
         transcription_model=transcription_model,
+        transcription_service_owner=("customer" if configured.get("url") and configured.get("provider") == "customer"
+                                     else None),
         recording_enabled=recording_enabled,
         capture_modes=(["audio", "video"] if recording_enabled else None),
         # O-TEL-1: the tape is INDEPENDENT of recording_enabled — a meeting the user never asked to
@@ -812,6 +827,10 @@ async def request_bot(
         s3_bucket=auth_s3.get("s3_bucket"),
         s3_access_key=auth_s3.get("s3_access_key"),
         s3_secret_key=auth_s3.get("s3_secret_key"),
+        # session-profile.v1's write-back route on this meeting-api, for this session only. Sent only
+        # in authenticated mode: an older bot refuses the field, and an anonymous bot has no session.
+        session_writeback_url=(f"{meeting_api_url}/internal/browser-session/{connection_id}"
+                               if authenticated else None),
         # Explicit caller windows win; otherwise omit everyoneLeftTimeout so the bot's
         # silence-window module default applies (the lobby window stays forgiving for
         # human-in-the-loop dashboard joins).

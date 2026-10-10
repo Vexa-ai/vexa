@@ -214,6 +214,14 @@ def test_delegation_stays_off_unless_both_halves_are_configured(over):
     assert "VEXA_MCP_URL" not in env
 
 
+def test_a_dispatch_without_a_toolbelt_says_so_in_the_log(caplog):
+    """friction.py's spawn_gap is silent for a turn that was never meant to have a toolbelt, so the
+    dispatcher names the gap itself, every time, with the half that is missing."""
+    _env(_settings(mcp_delegation_secret=""), _inv())
+    assert "worker toolbelt not configured (worker_toolbelt: no signing key, " \
+           "VEXA_MCP_DELEGATION_SECRET unset)" in caplog.text
+
+
 def test_two_dispatches_never_share_a_token_id():
     """jti is what revocation names, so it has to be per-dispatch or revoking one revokes the fleet."""
     a = d.verify_delegation(SECRET, _env(_settings(), _inv())["VEXA_MCP_DELEGATION_TOKEN"])
@@ -250,20 +258,46 @@ def test_the_worker_writes_a_bearer_header_config_and_widens_its_allow_set(tmp_p
     assert f"mcp__{VEXA_MCP_SERVER}__entity_upsert" in tools
 
 
-def test_the_config_lands_where_the_post_turn_commit_cannot_sweep_it_up(tmp_path, monkeypatch):
-    """run_harness_turn does `git add -A` on every changed mount. `.claude/` is gitignored in the
-    workspace seed, so a credential written there is never committed or synced to the store."""
+def test_the_config_lands_outside_every_mount(tmp_path, monkeypatch):
+    """The worker's cwd is usually a desk, a shared workspace or `_global`, read by other people
+    through agent-api's file routes and committed by every turn. The attachment carries the worker's
+    token, so it lands in a private directory outside every mount (`shared.private_dir`): 0700 here
+    (no separate tools user), the file 0600, and nothing under any mount holds the token."""
+    import stat as _stat
     from pathlib import Path
+    work = tmp_path / "work"
+    system = tmp_path / "system"
+    shared = tmp_path / "shared-ws"
+    for mount in (work, system, shared):
+        mount.mkdir()
+    monkeypatch.setenv("VEXA_MOUNTS", json.dumps([
+        {"slug": "_system", "path": str(system), "role": "system", "write": True},
+        {"slug": "team", "path": str(shared), "role": "shared", "write": True},
+        {"slug": "u", "path": str(work), "role": "private", "write": True, "primary": True}]))
+    tok = d.mint_delegation(SECRET, subject="58")
+    monkeypatch.setenv("VEXA_MCP_URL", "https://rig.example/mcp")
+    monkeypatch.setenv("VEXA_MCP_DELEGATION_TOKEN", tok)
+    from worker.engine import mcp_delegation_config
+    path, _ = mcp_delegation_config(work)
+    p = Path(path).resolve()
+    for mount in (work, system, shared):
+        assert mount.resolve() not in p.parents, mount
+        for f in mount.rglob("*"):
+            assert not f.is_file() or tok not in f.read_text(errors="ignore"), f
+    assert _stat.S_IMODE(p.stat().st_mode) == 0o600
+    assert _stat.S_IMODE(p.parent.stat().st_mode) == 0o700
+    assert json.loads(p.read_text())["mcpServers"]["vexa"]["headers"]["Authorization"] == f"Bearer {tok}"
+
+
+def test_an_attachment_an_older_worker_left_in_the_workspace_is_removed(tmp_path, monkeypatch):
+    work = tmp_path / "work"
+    (work / ".claude").mkdir(parents=True)
+    (work / ".claude" / "mcp.json").write_text('{"old": "vxd_old.token.here"}')
     monkeypatch.setenv("VEXA_MCP_URL", "https://rig.example/mcp")
     monkeypatch.setenv("VEXA_MCP_DELEGATION_TOKEN", d.mint_delegation(SECRET, subject="58"))
     from worker.engine import mcp_delegation_config
-    path, _ = mcp_delegation_config(tmp_path)
-    assert Path(path).parent.name == ".claude"
-    # The seeds moved out of core/agent in 5aa8226aa (founder ruling: BEHAVIOR is a top-level peer
-    # of the machinery) — machinery is what compiles into the runtime, behavior is what it loads.
-    # The container path is unchanged; only this repo-relative lookup had to follow the move.
-    seed = Path(__file__).resolve().parents[3] / "behavior" / "workspaces" / "default" / ".gitignore"
-    assert ".claude/" in seed.read_text()
+    path, _ = mcp_delegation_config(work)
+    assert path and not (work / ".claude" / "mcp.json").exists()
 
 
 @pytest.mark.parametrize("env", [
@@ -279,6 +313,18 @@ def test_the_worker_attaches_nothing_when_the_dispatcher_minted_nothing(tmp_path
         monkeypatch.setenv(k, v)
     assert mcp_delegation_config(tmp_path) == (None, [])
     assert not (tmp_path / ".claude" / "mcp.json").exists()
+
+
+def test_the_worker_log_says_whether_the_toolbelt_was_attached(tmp_path, monkeypatch, capsys, caplog):
+    from worker.engine import mcp_delegation_config
+    monkeypatch.delenv("VEXA_MCP_URL", raising=False)
+    monkeypatch.delenv("VEXA_MCP_DELEGATION_TOKEN", raising=False)
+    mcp_delegation_config(tmp_path)
+    assert "vexa MCP toolbelt NOT attached: VEXA_MCP_URL and VEXA_MCP_DELEGATION_TOKEN unset" in caplog.text
+    monkeypatch.setenv("VEXA_MCP_URL", "http://gateway:8000/mcp")
+    monkeypatch.setenv("VEXA_MCP_DELEGATION_TOKEN", d.mint_delegation(SECRET, subject="58"))
+    mcp_delegation_config(tmp_path)
+    assert "vexa MCP toolbelt attached: server=vexa url=http://gateway:8000/mcp" in capsys.readouterr().err
 
 
 def test_the_turn_runner_forwards_the_attachment_to_the_harness(monkeypatch, tmp_path):
@@ -314,3 +360,42 @@ class _StubHarness:
 
     def preflight(self):
         return None
+
+
+# ── seam 2, link safety: the credential is never written through a planted .claude link ──────────
+
+def test_the_delegation_credential_is_not_written_through_a_planted_claude_link(tmp_path, monkeypatch):
+    """A turn can leave `.claude` in its work tree a link to another directory. The credential is no
+    longer written under the work tree at all, and removing a legacy attachment never follows the
+    link: nothing lands in, or is removed from, the link's target."""
+    import os
+    from pathlib import Path
+    from worker.engine import mcp_delegation_config
+    work = tmp_path / "work"
+    work.mkdir()
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    (victim / "mcp.json").write_text("THEIRS")
+    os.symlink(victim, work / ".claude", target_is_directory=True)   # the planted link
+    monkeypatch.setenv("VEXA_MCP_URL", "https://rig.example/mcp")
+    monkeypatch.setenv("VEXA_MCP_DELEGATION_TOKEN", d.mint_delegation(SECRET, subject="58"))
+    path, tools = mcp_delegation_config(work)
+    assert path is not None and tools                                 # the turn still gets its toolbelt
+    assert (victim / "mcp.json").read_text() == "THEIRS"              # neither written nor removed
+    assert victim.resolve() not in Path(path).resolve().parents
+    assert work.resolve() not in Path(path).resolve().parents
+
+
+def test_a_planted_mcp_json_link_is_removed_not_followed(tmp_path, monkeypatch):
+    import os
+    from worker.engine import mcp_delegation_config
+    work = tmp_path / "work"
+    (work / ".claude").mkdir(parents=True)
+    victim = tmp_path / "victim.json"
+    victim.write_text("OLD")
+    os.symlink(victim, work / ".claude" / "mcp.json")
+    monkeypatch.setenv("VEXA_MCP_URL", "https://rig.example/mcp")
+    monkeypatch.setenv("VEXA_MCP_DELEGATION_TOKEN", d.mint_delegation(SECRET, subject="58"))
+    mcp_delegation_config(work)
+    assert victim.read_text() == "OLD"                               # the token did not land here
+    assert not os.path.lexists(work / ".claude" / "mcp.json")        # the link itself is gone

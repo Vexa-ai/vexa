@@ -25,8 +25,8 @@ import json
 import pathlib
 import logging
 import os
+import sys
 import re
-import shutil
 import threading
 import time
 import urllib.error
@@ -36,8 +36,13 @@ from typing import Callable, Iterator, Protocol
 
 from llm import (
     HarnessPort,
+    ToolsAccessRefused,
     auth_error_event,
     close_event_stream,
+    grant_tools_access,
+    hand_fd_to_tools,
+    show_tools,
+    harden_worker_process,
     harness_from_env,
     looks_like_auth_failure,
     preflight_provider_guard,
@@ -45,8 +50,11 @@ from llm import (
     run_harness_turn,
 )
 from llm import jobs as llm_jobs
+from llm.ports import tools_identity
 from llm.errors import _AUTH_SIGNATURE_RE  # noqa: F401 — re-exported for the worker.worker shim
 from shared.seeding import resolve_seed_dir, seed_workspace, validate_seed
+from workspaces.shared import workspace_paths as wpaths
+from shared.marks import UNWRITTEN_MARK
 # PRD decision 31 §1 — WHERE THIS PERSON IS IN TIME, on every dispatch (used in the preamble list
 # in `run_turn_over_workspace`). Imported rather than written here: the work is an HTTP read and a
 # cache, not prompt text, and what it returns is rendered by the flows route — the same rendering
@@ -62,12 +70,14 @@ from shared.timeline import timeline_preamble  # noqa: F401 — re-exported for 
 # `unit_of_topic` reads it back out and `inbox_cursor_key` spells the one key this loop writes, so
 # the reader that answers "what is still queued for this chat" is looking where the writer wrote.
 from shared import units as shared_units
+from shared import unit_input
 # THE JOB RUNNER (Vexa-ai/vexa#1584) — a long act that does not hold the chat. It sits above the
 # harness on purpose, so `serve` gets background work for every runner rather than one adapter's.
 from worker import jobs as worker_jobs
+from worker import tool_access
 from worker.friction import (disbelieved_capability, fallback_session, friction_preamble,
                              mcp_unreachable,
-                             report as report_friction, scan_turn, spawn_gap)
+                             report as report_friction, scan_turn, spawn_gap, use_token_source)
 
 log = logging.getLogger("agent_api.worker")
 
@@ -166,37 +176,117 @@ def _continuity_root(work: Path) -> Path:
     return work
 
 
+# The legacy continuity below is adopted out of workspaces the model's tools can write, by a worker
+# that may run as root. So nothing there is reached through a link: everything goes through
+# ``workspace_paths`` — below a mount root every folder and file is opened by descriptor without
+# following one, a file is read only when it is a regular file with no other hard link (whose other
+# name could be anywhere on the volume), and a copy is created exclusively — never written through
+# something already at its name.
+#: A legacy session pointer is an id a few dozen bytes long; anything past this is not one.
+_LEGACY_POINTER_MAX_BYTES = 1 << 16
+#: Everything here sits under `.claude/`, which no caller-supplied path may reach
+#: (`workspace_paths.RESERVED_DIRS`); this is the platform's own reach into it.
+_PLUMBING = (".claude",)
+
+
+def _plain_name(name: str) -> bool:
+    """One path component, usable as a file name under a descriptor: no separator, not ``.``/``..``."""
+    return bool(name) and name not in (".", "..") and not any(c in name for c in "/\\\0")
+
+
+def _under(parts: tuple[str, ...], name: str) -> str:
+    return "/".join((*parts, name))
+
+
+def _read_text_nofollow(root: Path, parts: tuple[str, ...], name: str, max_bytes: int,
+                        what: str) -> "str | None":
+    """The UTF-8 text of ``root/<parts…>/name`` (``workspace_paths.read_text_inside``), or None when
+    there is none, it is reached through a link, it is not a regular file with a single link, it is
+    over ``max_bytes`` or not UTF-8."""
+    return wpaths.read_text_inside(root, _under(parts, name), max_bytes=max_bytes, allow=_PLUMBING)
+
+
+def _read_legacy_pointer(root: Path, parts: tuple[str, ...], name: str) -> "str | None":
+    """The text of a legacy session pointer at ``root/<parts…>/name``, or None when there is none,
+    it is reached through a link, it is not a regular file, or it is no pointer."""
+    return _read_text_nofollow(root, parts, name, _LEGACY_POINTER_MAX_BYTES,
+                               "legacy session pointer")
+
+
+def _replace_nofollow(root: Path, parts: tuple[str, ...], name: str, text: str) -> None:
+    """Make ``root/<parts…>/name`` a new regular file holding ``text`` (``write_text_inside``):
+    whatever was at the name, a link included, is replaced, never written through. Raises
+    ``OSError``, including when a folder on the way is a link."""
+    try:
+        wpaths.write_text_inside(root, _under(parts, name), text, allow=_PLUMBING)
+    except wpaths.PathRefused as exc:
+        raise OSError(f"{'/'.join(parts)} is not a plain folder here") from exc
+
+
+def _unlink_nofollow(root: Path, parts: tuple[str, ...], name: str) -> None:
+    """Remove ``root/<parts…>/name`` (a link is removed itself), reached without following a link."""
+    wpaths.unlink_inside(root, _under(parts, name), allow=_PLUMBING)
+
+
+def _write_new_pointer(root: Path, parts: tuple[str, ...], name: str, text: str) -> bool:
+    """Create ``root/<parts…>/name`` holding ``text``; False when something is already there."""
+    try:
+        return wpaths.write_new_inside(root, _under(parts, name), text, allow=_PLUMBING)
+    except wpaths.PathRefused as exc:
+        raise OSError(f"{'/'.join(parts)} is not a plain folder here") from exc
+
+
+def _adopt_legacy_transcripts(root: Path, chat_root: Path, sid: str) -> None:
+    """Copy every ``.claude/projects/<slug>/<sid>.jsonl`` under ``root`` that ``chat_root`` lacks."""
+    name = f"{sid}.jsonl"
+    for slug in wpaths.list_dirs_inside(root, ".claude/projects", allow=_PLUMBING):
+        if slug.startswith("."):
+            continue
+        rel = f".claude/projects/{slug}/{name}"
+        raw = wpaths.read_bytes_inside(root, rel, allow=_PLUMBING)
+        if raw is None:
+            continue
+        try:
+            wpaths.write_new_inside(chat_root, rel, raw, allow=_PLUMBING)
+        except (OSError, wpaths.PathRefused) as exc:
+            log.warning("legacy transcript %s/%s not adopted: %s", slug, name, exc)
+
+
 def _adopt_legacy_continuity(chat_root: Path, work: Path, session: str) -> None:
     """MIGRATE-ON-READ for the continuity-carrier move (ADR-0028's write-side twin): threads recorded
     BEFORE chats anchored to ``_system`` live under the turn's then-cwd. When the anchored pointer is
     absent, adopt the thread — pointer AND transcript — from the first mount dir that has it, so
     moving the carrier never forks a conversation ("this is the first message I'm seeing" on turn 2).
-    Same adoption discipline ``_session_file`` already applies to the legacy single-thread file."""
+    Same adoption discipline ``_session_file`` already applies to the legacy single-thread file.
+
+    Nothing is followed through a link and only regular files are copied (see the block above);
+    the session name and the adopted session id are used as file names only when each is a single
+    plain name. A refused file is logged and the turn runs without it."""
+    if not _plain_name(session):
+        return
     target = chat_root / ".claude" / "sessions" / f"{session}.session"
-    if target.exists():
+    if os.path.lexists(target):
         return
     candidates = [work] + [Path(m["path"]) for m in active_mounts() if m.get("path")]
     for root in candidates:
         if root == chat_root:
             continue
-        src = root / ".claude" / "sessions" / f"{session}.session"
-        try:
-            if not src.exists():
-                continue
-            sid = src.read_text().strip()
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(sid + "\n" if sid else "")
-            # the transcript must move WITH the pointer — a resumed sid whose jsonl is missing under
-            # the new projects link is an alien id (the stale-resume retry silently starts fresh)
-            if sid:
-                for t in (root / ".claude" / "projects").glob(f"*/{sid}.jsonl"):
-                    dst = chat_root / ".claude" / "projects" / t.parent.name / t.name
-                    dst.parent.mkdir(parents=True, exist_ok=True)
-                    if not dst.exists():
-                        shutil.copyfile(t, dst)
-            return
-        except OSError:
+        text = _read_legacy_pointer(root, (".claude", "sessions"), f"{session}.session")
+        if text is None:
             continue
+        sid = text.strip()
+        try:
+            if not _write_new_pointer(chat_root, (".claude", "sessions"), f"{session}.session",
+                                      sid + "\n" if sid else ""):
+                return
+        except OSError as exc:
+            log.warning("legacy session pointer not adopted: %s", exc)
+            continue
+        # the transcript must move WITH the pointer — a resumed sid whose jsonl is missing under
+        # the new projects link is an alien id (the stale-resume retry silently starts fresh)
+        if sid and _plain_name(sid):
+            _adopt_legacy_transcripts(root, chat_root, sid)
+        return
 
 
 # ── the imperative gate (F162, ledger 2026-09-02 14:17Z-14:30Z) ────────────────────────────────────
@@ -213,18 +303,22 @@ def _adopt_legacy_continuity(chat_root: Path, work: Path, session: str) -> None:
 # prompt, including the MCP-status note — so an imperative is the first thing the model reads, not
 # the last. It fires on the person's OWN words only (`prompt`, not the preamble text that follows),
 # to avoid ever matching itself or another preamble's prose.
+#
+# Each pattern names the verb the ONE MCP serves for it. Booking a bot for later has no verb there — a
+# meeting gets its bot when its calendar invite reaches the mailbox — so "schedule the bot" is not an
+# imperative this gate can order a call for.
 _IMPERATIVE_PATTERNS: tuple[tuple["re.Pattern[str]", str, str], ...] = (
-    (re.compile(r"\bsend\s+(the\s+)?bot\b", re.I), "bot_send", "send the bot"),
-    (re.compile(r"\bschedule\s+(the\s+)?bot\b", re.I), "bot_schedule", "schedule the bot"),
-    (re.compile(r"\bjoin\s+(the\s+)?(meeting|call)\b", re.I), "bot_send", "join the meeting"),
-    (re.compile(r"\bstop\s+record(ing)?\b", re.I), "bot_stop", "stop recording"),
-    (re.compile(r"\bstop\s+(the\s+)?bot\b", re.I), "bot_stop", "stop the bot"),
+    (re.compile(r"\bsend\s+(the\s+)?bot\b", re.I), "request_meeting_bot", "send the bot"),
+    (re.compile(r"\bjoin\s+(the\s+)?(meeting|call)\b", re.I), "request_meeting_bot",
+     "join the meeting"),
+    (re.compile(r"\bstop\s+record(ing)?\b", re.I), "stop_bot", "stop recording"),
+    (re.compile(r"\bstop\s+(the\s+)?bot\b", re.I), "stop_bot", "stop the bot"),
 )
 
 
 def imperative_preamble(prompt: str) -> str:
-    """If the person's own message names an operational imperative — send/stop/schedule the bot,
-    join, stop recording — say so FIRST, in words that outrank every onboarding/propose/write-back
+    """If the person's own message names an operational imperative — send or stop the bot, join,
+    stop recording — say so FIRST, in words that outrank every onboarding/propose/write-back
     concern the rest of the composed prompt carries. Empty string when nothing matches: an ordinary
     chat turn gets no extra framing at all."""
     matched: list[tuple[str, str]] = []
@@ -238,7 +332,7 @@ def imperative_preamble(prompt: str) -> str:
     lines = [
         "## An operational imperative is in this message — act on it FIRST",
         "",
-        "The person's own words below name at least one of: send/stop/schedule the bot, join the "
+        "The person's own words below name at least one of: send or stop the bot, join the "
         "meeting, stop recording. Call the matching tool NOW, before any onboarding question, any "
         "`propose` call, any web search, and before the write-back phase. Answer with what the tool "
         "actually returned — never a scaffold question, a search, or a description of what you would "
@@ -379,7 +473,7 @@ def member_verbs_preamble() -> str:
 
     Named BESIDE `workspace_write` — the issue says *"the turn's prompt naming the verbs beside
     `workspace_write`"* — so it is appended to that preamble rather than shipped as a block of its
-    own: a person asking *"add Marvin to this workspace"* is asking about the same surface as a
+    own: a person asking *"add Quentin to this workspace"* is asking about the same surface as a
     person asking to move a page, and two separate sections would let a turn read one and not the
     other.
 
@@ -433,6 +527,7 @@ def entity_index_preamble(mounts: list[dict]) -> str:
     has never been upserted still sees what it holds instead of being told nothing exists."""
     from workspaces.shared.entities import INDEX_PATH, render_index
     from workspaces.shared.workspace_id import workspace_id_of
+    from workspaces.shared import workspace_paths as wpaths
 
     blocks: list[str] = []
     for m in mounts:
@@ -441,8 +536,11 @@ def entity_index_preamble(mounts: list[dict]) -> str:
         root = Path(str(m.get("path") or ""))
         slug = str(m.get("slug") or root.name)
         try:
-            f = root / INDEX_PATH
-            listing = f.read_text(encoding="utf-8", errors="replace") if f.exists() else ""
+            # FIXED path in a work tree the model's tools can write: never read through a link
+            # planted at `kg` or `kg/INDEX.md` — its bytes go straight into the turn prompt, so a
+            # link to another tenant's file or to the worker's own /proc would exfiltrate into the
+            # model's context. A missing or redirected index just renders live from the directory.
+            listing = wpaths.read_text_inside(root, INDEX_PATH) or ""
             if not listing.strip():
                 listing = render_index(root, slug)
         except OSError:
@@ -490,16 +588,21 @@ def global_context_preamble(mounts: list[dict]) -> str:
     mount = next((m for m in mounts if m.get("role") == "global" or m.get("slug") == "_global"), None)
     if not mount:
         return ""
+    from workspaces.shared import workspace_paths as wpaths
     root = Path(str(mount["path"]))
     remaining = _GLOBAL_CONTEXT_MAX_CHARS
     sections: list[str] = []
     for name in _GLOBAL_CONTEXT_FILES:
         path = root / name
-        try:
-            content = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeError):
+        # `_global` is read-only except on an admin's turn, where the admin's tools could plant a
+        # link here; this content is folded into every subject's prompt, so read it nofollow.
+        content = wpaths.read_text_inside(root, name)
+        if content is None:
             continue
-        if not content.strip() or remaining <= 0:
+        # A seed placeholder nobody wrote (it carries UNWRITTEN_MARK, see shared/marks.py) is
+        # not organisation context: `_global` may stay unwritten for good (founder ruling
+        # 2026-10-08), and its "# Company" heading must never reach a turn as the employer's name.
+        if not content.strip() or UNWRITTEN_MARK in content or remaining <= 0:
             continue
         excerpt = content[:remaining]
         remaining -= len(excerpt)
@@ -746,7 +849,7 @@ def _writeback_workspace_note(mounts: "list[dict] | None" = None) -> str:
 def image_rule() -> str:
     """THE ONE LINE ABOUT PICTURES, wherever a page is written (Vexa-ai/vexa#1624).
 
-    Founder, 2026-09-06, on the OeNB README: the page carried a Wikimedia address the agent had
+    Founder, 2026-09-06, on the Example Bank README: the page carried a Wikimedia address the agent had
     invented, and it answers 404. `shared/page_images.py` catches that on the way in — the reference
     never reaches the page — but a rule that only exists as an enforcement teaches nothing: the
     agent's next turn writes the same guess, has it removed again, and never learns why the picture
@@ -1043,7 +1146,7 @@ def should_write_back(prompt: str, tool_calls: int, *, min_tokens: int | None = 
        that. This is the gate that removes the phase from exactly the turns that need it least;
     3. cheap on BOTH counts — no tool call AND the person said very little. Either signal alone is a
        turn that can have learned something: a long message carries facts with no tool call, and a
-       short one ("who is Olga?") can pull a whole dossier through one. The floor is on the PERSON's
+       short one ("who is Nora?") can pull a whole dossier through one. The floor is on the PERSON's
        words, never on the agent's reply;
     4. **nothing to write** — `candidates` empty. Passing `None` skips this gate (the caller has not
        run the pre-pass), which is only the tests and the legacy call shape.
@@ -1134,8 +1237,8 @@ def _ensure_repo(work: Path) -> None:
     if problems:
         log.warning("workspace seed %s unavailable (%s) — bootstrapping a bare workspace",
                     seed_dir, "; ".join(problems))
-        work.mkdir(parents=True, exist_ok=True)
-        (work / "CLAUDE.md").write_text(_FALLBACK_MEMORY_MD)
+        from workspaces.shared import workspace_paths as wpaths
+        wpaths.write_text_inside(work, "CLAUDE.md", _FALLBACK_MEMORY_MD)   # nofollow, creates `work`
         seed_workspace(work, None)             # git init + commit over the fallback root
     else:
         seed_workspace(work, seed_dir)         # copy the validated template → git init → commit
@@ -1151,14 +1254,17 @@ def _session_file(work: Path, session: str) -> Path:
     so the current conversation isn't lost when sessions go multi (migrate-on-read).
 
     ``.claude/`` here is the FROZEN on-disk continuity-store path (workspace_reader serves chat
-    history from it) — a path contract, not a vendor coupling."""
+    history from it) — a path contract, not a vendor coupling. The legacy file is adopted the way
+    ``_adopt_legacy_continuity`` adopts: never through a link, a regular file only, into a new file."""
     sessions_dir = work / ".claude" / "sessions"
     namespaced = sessions_dir / f"{session}.session"
-    if session == DEFAULT_CHAT_SESSION and not namespaced.exists():
-        legacy = work / ".claude" / ".session"
-        if legacy.exists():
-            sessions_dir.mkdir(parents=True, exist_ok=True)
-            namespaced.write_text(legacy.read_text())
+    if session == DEFAULT_CHAT_SESSION and not os.path.lexists(namespaced):
+        legacy = _read_legacy_pointer(work, (".claude",), ".session")
+        if legacy is not None:
+            try:
+                _write_new_pointer(work, (".claude", "sessions"), namespaced.name, legacy)
+            except OSError as exc:
+                log.warning("legacy session pointer not adopted: %s", exc)
     return namespaced
 
 
@@ -1197,6 +1303,10 @@ def _prompt_key(composed: str) -> str:
 # cap loses its OLDEST records first, and a turn with no record degrades to exactly today's
 # behaviour (the terminal's fallback strip) — never to a wrong bubble.
 USER_TEXT_KEEP = 400
+#: The continuity folder under a chat root (``_system`` or the turn's workspace).
+_SESSIONS_DIR = (".claude", "sessions")
+#: A user_text sidecar larger than this is not ours; it is started again rather than read.
+_TURNS_MAX_BYTES = 16 << 20
 
 
 def _turns_file(chat_root: Path, session: str) -> Path:
@@ -1230,17 +1340,15 @@ def record_user_text(chat_root: Path, session: str, composed: str, user_text: st
     line = json.dumps({"key": _prompt_key(composed), "user_text": user_text,
                        "ts": time.time()}, ensure_ascii=False)
     f = _turns_file(chat_root, session)
+    # `_system` is the tools user's to write, so the sidecar is read and replaced without following
+    # a link (see `_read_text_nofollow` / `_replace_nofollow`), never appended to through one.
     try:
-        f.parent.mkdir(parents=True, exist_ok=True)
-        prior = f.read_text(encoding="utf-8").splitlines() if f.exists() else []
-        kept = [ln for ln in prior if ln.strip()]
+        prior = _read_text_nofollow(chat_root, _SESSIONS_DIR, f.name, _TURNS_MAX_BYTES,
+                                    "user_text sidecar") or ""
+        kept = [ln for ln in prior.splitlines() if ln.strip()]
         kept.append(line)
-        if len(kept) > USER_TEXT_KEEP:
-            kept = kept[-USER_TEXT_KEEP:]
-            f.write_text("\n".join(kept) + "\n", encoding="utf-8")
-        else:
-            with f.open("a", encoding="utf-8") as fh:
-                fh.write(line + "\n")
+        kept = kept[-USER_TEXT_KEEP:]
+        _replace_nofollow(chat_root, _SESSIONS_DIR, f.name, "\n".join(kept) + "\n")
     except OSError as e:
         log.warning("could not record user_text for session=%s (%s) — history will fall back to "
                     "stripping the composed prompt", session, e)
@@ -1255,10 +1363,17 @@ def _chat_resume_max_bytes() -> int:
 
 def _resume_id(work: Path, sess_file: Path, harness: HarnessPort) -> str | None:
     """The session id to resume, or None. The id is an OPAQUE per-harness token; the harness also
-    accounts the stored transcript size behind it so an over-budget resume restarts fresh."""
-    if not sess_file.exists():
+    accounts the stored transcript size behind it so an over-budget resume restarts fresh.
+
+    ``sess_file`` is ``work/.claude/sessions/<name>`` (``_session_file``), and ``work`` — ``_system``
+    — is the tools user's to write: the pointer is read without following a link, only as a regular
+    file, and an id that is not one plain name is no id."""
+    text = _read_text_nofollow(work, _SESSIONS_DIR, sess_file.name, _LEGACY_POINTER_MAX_BYTES,
+                               "session pointer")
+    sid = (text or "").strip()
+    if sid and not _plain_name(sid):
+        log.warning("session pointer %s holds no session id; starting fresh", sess_file.name)
         return None
-    sid = sess_file.read_text().strip()
     limit = _chat_resume_max_bytes()
     if sid and limit > 0 and harness.transcript_bytes(work, sid) > limit:
         return None
@@ -1330,55 +1445,47 @@ def room_run() -> str:
     return (os.environ.get("VEXA_ROOM_MEETING") or "").strip()
 
 
-def room_toolbelt(tools: list[str]) -> list[str]:
-    """The MCP allow-set for a post-meeting turn: everything except the bot verbs.
+#: The verbs that act on a LIVE meeting. A post-meeting turn is offered none of them.
+LIVE_MEETING_VERBS = frozenset({"request_meeting_bot", "stop_bot", "speak_in_meeting",
+                                "update_bot_config", "get_bot_status"})
 
-    The meeting is OVER. `bot_send`, `bot_stop`, `bot_say`, `bot_schedule` and `bots_running` can
-    do nothing useful about a room that has finished, and offering them is not neutral: on
-    2026-09-02 the post-meeting agent for uid 133 read the meeting as still live and called
-    `bot_stop` four times in one turn, each answered with a bare `{"stopped": false, "status":
-    404}` that reads as a transient failure rather than a terminal state (F104). A tool that
-    cannot help is a tool that can be looped on.
+
+def room_toolbelt(tools: list[str]) -> list[str]:
+    """The MCP allow-set for a post-meeting turn: everything except the live-meeting verbs.
+
+    The meeting is OVER. Sending, stopping, speaking through or reconfiguring a bot can do nothing
+    useful about a room that has finished, and offering them is not neutral: on 2026-09-02 the
+    post-meeting agent for uid 133 read the meeting as still live and called the stop verb four
+    times in one turn, each answered with a bare `{"stopped": false, "status": 404}` that reads as
+    a transient failure rather than a terminal state (F104). A tool that cannot help is a tool that
+    can be looped on.
 
     Advertised is not the same as callable, and both matter: the harness will not offer what is
     not in `--allowedTools`, so this removes the option rather than relying on the model declining
     it. `bot_stop` itself also learned to answer the state — the two fixes are independent because
     the MCP serves callers this allow-set never reaches."""
-    return [t for t in tools if not t.startswith(f"mcp__{VEXA_MCP_SERVER}__bot")]
+    prefix = f"mcp__{VEXA_MCP_SERVER}__"
+    return [t for t in tools if not (t.startswith(prefix) and t[len(prefix):] in LIVE_MEETING_VERBS)]
 
 
-def _delegation_dir(work: Path) -> "Path | None":
-    """The first writable home for the delegation credential, or None.
+def _mount_roots(work: Path) -> "list[Path]":
+    """Every directory this dispatch mounted — its workspace, its continuity root and each active
+    mount. A per-dispatch secret is never written under any of them (``shared.private_dir``)."""
+    roots = [work, _continuity_root(work)]
+    roots += [Path(m["path"]) for m in active_mounts() if m.get("path")]
+    return roots
 
-    Three candidates, in order, each keeping the two properties that matter — the file must not be
-    committable, and it must be private to this subject:
 
-      1. ``<cwd>/.claude`` — gitignored by the workspace seed. The normal answer.
-      2. the PRIVATE SYSTEM tier's ``.claude`` — read-write by contract (it is where chat
-         continuity already anchors), private, and outside every desk the turn may commit.
-      3. a per-subject directory under the system temp dir — outside every mount, so no `git add`
-         can reach it, and gone when the container is.
-
-    Returning None is the honest floor: a turn with no toolbelt is a turn that will say so when it
-    is asked to read a transcript, and the grounding gate then fails LOUDLY. A turn that never
-    starts says nothing at all."""
-    import tempfile
-    candidates = [work / ".claude", _continuity_root(work) / ".claude",
-                  Path(tempfile.gettempdir()) / f"vexa-{work.name}" / ".claude"]
-    seen: set[Path] = set()
-    for cand in candidates:
-        if cand in seen:
-            continue
-        seen.add(cand)
+def _remove_legacy_attachment(work: Path) -> None:
+    """An older worker wrote the attachment at ``.claude/mcp.json`` inside its workspace (or its
+    continuity root). Remove one left there, without following a link, so a token it held does not
+    stay readable in a mount after this worker no longer writes there."""
+    from workspaces.shared import workspace_paths as wpaths
+    for base in {work, _continuity_root(work)}:
         try:
-            cand.mkdir(parents=True, exist_ok=True)
-            probe = cand / ".w"
-            probe.write_text("")          # mkdir succeeds on an existing dir under a ro mount
-            probe.unlink()
-            return cand
-        except OSError as e:
-            log.warning("delegation config dir %s unusable (%s) — trying the next candidate", cand, e)
-    return None
+            wpaths.unlink_inside(base, ".claude/mcp.json", allow=(".claude",))
+        except OSError:
+            pass
 
 
 def _file_spawn_gap(url: str, token: str) -> None:
@@ -1397,6 +1504,87 @@ def _file_spawn_gap(url: str, token: str) -> None:
         log.warning("friction: could not file the spawn gap (%s)", e)
 
 
+def write_mcp_config(path: Path, url: str, token: str) -> None:
+    """Write the vexa MCP attachment: one HTTP server, the delegation token in its header. Replaced
+    atomically (a temp file beside it, then ``os.replace``), because a refresh rewrites it while a
+    background job's harness may be starting and reading it. 0600, and handed to the tools user the
+    harness runs as where it can (llm/ports.py)."""
+    cfg = {"mcpServers": {VEXA_MCP_SERVER: {
+        "type": "http", "url": url, "headers": {"Authorization": f"Bearer {token}"},
+    }}}
+    # NOFOLLOW, every time (the refresh rewrites this on every turn). `path` is a file in this
+    # worker's private secrets directory (`shared.private_dir`), outside every mount: the write goes
+    # to a NEW file with a random name created O_EXCL, is fchmod'd 0600 and fchown'd to the tools
+    # user through its own descriptor, and only then renamed over the name — so a link at
+    # `mcp.json` or at a predictable temp name is never written through, chmod'd or chown'd, and the
+    # file is never visible at its name owned by anyone but the user that reads it.
+    from workspaces.shared import workspace_paths as wpaths
+    path = Path(path)
+    wpaths.write_text_inside(path.parent, path.name, json.dumps(cfg),
+                             mode=0o600, before_replace=hand_fd_to_tools)
+
+
+class DelegationRefresh:
+    """The worker's half of the token refresh (``control_plane.delegation_refresh``).
+
+    agent-api replaces a live unit's delegation token before it expires and publishes the new one at
+    ``shared.units.delegation_key(unit)`` — a key this worker's Redis user may read and not write.
+    Called before every turn, write-back and job: when the published token differs from the one in
+    the attachment, the attachment is rewritten, so the harness that turn starts attaches with the
+    new token. Every harness reads the attachment when its turn starts (``claude -p --mcp-config``,
+    the Codex app server, the OpenAI loop), so nothing restarts.
+
+    The token is held here rather than in this process's environment: :meth:`take` removes it from
+    ``os.environ`` at boot, so the harness subprocesses (built from it, ``llm.ports``) do not inherit
+    it. ``current`` is what the friction report presents (``worker.friction.use_token_source``).
+
+    A read that fails, or finds nothing, keeps the attachment as it is: the token in it stays good
+    until it expires or the unit ends."""
+
+    def __init__(self, client, key: str, *, path: "str | None", url: str, token: str) -> None:
+        self._client = client
+        self._key = key
+        self._path = Path(path) if path else None
+        self._url = url
+        self._token = token
+        self._lock = threading.Lock()
+
+    @staticmethod
+    def take() -> str:
+        """The boot token, removed from this process's environment."""
+        return (os.environ.pop("VEXA_MCP_DELEGATION_TOKEN", "") or "").strip()
+
+    def current(self) -> str:
+        return self._token
+
+    def __call__(self) -> bool:
+        """True when the attachment was rewritten with a newer token."""
+        if not self._token:
+            return False  # this dispatch was handed no toolbelt; nothing to keep fresh
+        try:
+            value = self._client.get(self._key)
+        except Exception as e:  # noqa: BLE001 — the attachment stands until its token expires
+            log.warning("delegation token refresh unread (%s) — keeping the current attachment",
+                        type(e).__name__)
+            return False
+        fresh = (value.decode() if isinstance(value, bytes) else str(value or "")).strip()
+        if not fresh or fresh == self._token:
+            return False
+        with self._lock:
+            if fresh == self._token:
+                return False
+            if self._path is not None:
+                try:
+                    write_mcp_config(self._path, self._url, fresh)
+                except (OSError, ValueError) as e:   # ValueError: a planted link (PathRefused)
+                    log.warning("delegation token refresh not written (%s) — keeping the current "
+                                "attachment", e)
+                    return False
+            self._token = fresh
+        print("vexa MCP toolbelt token refreshed", file=sys.stderr, flush=True)
+        return True
+
+
 def mcp_delegation_config(work: Path) -> "tuple[str | None, list[str]]":
     """Materialize the worker's AUTHENTICATED vexa MCP attachment → (mcp-config path, extra allow-set).
 
@@ -1409,38 +1597,42 @@ def mcp_delegation_config(work: Path) -> "tuple[str | None, list[str]]":
     setup-link dialect), but a credential in a query string leaks into every access log and proxy trace
     it passes through, and this one crosses a public hostname.
 
-    It is written under ``.claude/`` because that directory is GITIGNORED in the workspace seed — the
-    post-turn ``git add -A`` in ``run_harness_turn`` commits every changed mount, so a credential
-    written anywhere else in the workspace would be committed and synced to the workspace store. The
-    file is chmod 600 for the same reason the env var is not echoed: it is a bearer credential.
+    IT IS WRITTEN OUTSIDE EVERY MOUNT (``shared.private_dir``). The working directory is usually a
+    desk, a shared workspace or ``_global``, which other people read through agent-api's file routes
+    and every turn commits; a token written there (it was ``.claude/mcp.json``) could be read by
+    anyone who can read that workspace. The attachment lives in a directory this process makes for
+    it — 0700, or 0711 with the file 0600 and given to the tools user when the harness runs as that
+    user — and the harness is pointed at it by path (``--mcp-config``). One an older worker left in
+    the workspace is removed.
 
-    WHERE it goes has FALLBACKS, because on 2026-09-02 this function killed the process. The cwd was
-    a read-only mount, ``mkdir`` raised ``OSError: [Errno 30] Read-only file system``, nothing caught
-    it, and the worker exited(1) before the model ever ran — while the caller sat polling for a reply
-    that could not come. The mount mode is fixed in ``dispatch.py``; this is the belt, and it is the
-    more important half: **the LOCATION of a credential is never worth a turn.** See
-    ``_delegation_dir``.
+    A directory that cannot be made private is never worth a turn: the turn runs without the
+    toolbelt, says so, and files the gap.
     """
     url = (os.environ.get("VEXA_MCP_URL") or "").strip()
     token = (os.environ.get("VEXA_MCP_DELEGATION_TOKEN") or "").strip()
     if not url or not token:
+        # Said out loud, every time: a turn with no toolbelt answers questions about meetings and
+        # workspaces from nothing, and from the chat it looks exactly like a turn that has one.
+        log.warning("vexa MCP toolbelt NOT attached: %s unset — this turn runs without vexa tools "
+                    "(configure the worker_toolbelt capability on agent-api)",
+                    " and ".join(n for n, v in (("VEXA_MCP_URL", url),
+                                                ("VEXA_MCP_DELEGATION_TOKEN", token)) if not v))
         _file_spawn_gap(url, token)
         return None, []
-    cfg = {"mcpServers": {VEXA_MCP_SERVER: {
-        "type": "http", "url": url, "headers": {"Authorization": f"Bearer {token}"},
-    }}}
-    d = _delegation_dir(work)
-    if d is None:
-        log.warning("no writable directory for the vexa MCP delegation config — running this turn "
-                    "WITHOUT the toolbelt rather than not at all")
-        _file_spawn_gap(url, token)
-        return None, []
-    path = d / "mcp.json"
-    path.write_text(json.dumps(cfg))
+    from shared import private_dir
+    from workspaces.shared import workspace_paths as wpaths
+    _remove_legacy_attachment(work)
     try:
-        path.chmod(0o600)
-    except OSError:  # a store backend that does not carry modes — the attachment still stands
-        pass
+        base = private_dir.make(refuse_under=_mount_roots(work), reader=tools_identity())
+        path = base / "mcp.json"
+        write_mcp_config(path, url, token)
+    except (private_dir.NotPrivate, wpaths.PathRefused, OSError) as e:
+        log.warning("vexa MCP delegation config not written (%s) — running WITHOUT the toolbelt", e)
+        _file_spawn_gap(url, token)
+        return None, []
+    # PRINTED, not logged at info: the worker configures no root logger, so an INFO record is dropped,
+    # and "was the toolbelt attached?" is the first question asked of a worker's log.
+    print(f"vexa MCP toolbelt attached: server={VEXA_MCP_SERVER} url={url}", file=sys.stderr, flush=True)
     return str(path), [f"mcp__{VEXA_MCP_SERVER}",
                        *(f"mcp__{VEXA_MCP_SERVER}__{t}" for t in VEXA_MCP_TOOLS)]
 
@@ -1453,9 +1645,14 @@ def _mcp_endpoint(mcp_config: str) -> "tuple[str, dict] | None":
     ``VEXA_MCP_URL`` that could in principle disagree with it (or be unset, on a caller that built
     the file some other way — the delegation seam is not the only writer of this shape, `shared.
     tools.ToolGrant` is another)."""
+    # NOFOLLOW: a link swapped in at the attachment must not make this preflight call a URL with
+    # headers from somebody else's file.
+    from workspaces.shared import workspace_paths as wpaths
+    p = Path(mcp_config)
+    raw = wpaths.read_text_inside(p.parent, p.name)
     try:
-        cfg = json.loads(Path(mcp_config).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        cfg = json.loads(raw) if raw is not None else None
+    except ValueError:
         return None
     servers = cfg.get("mcpServers") if isinstance(cfg, dict) else None
     if not isinstance(servers, dict) or not servers:
@@ -1573,6 +1770,25 @@ def run_turn_over_workspace(
     harness = harness or factory()
     chat_root = _continuity_root(work)  # chats are PRIVATE: _system when mounted, never a shared cwd
     harness.prepare(work, chat_root=chat_root)  # harness-specific continuity/skills wiring (durable)
+    # The harness runs as the tools user wherever the worker can switch users (llm/ports.py): hand
+    # that user this turn's writable workspaces and the harness's own state, which prepare just made.
+    # The skills prepare staged, and the CLI's user scope whose `skills` link names them, are the
+    # tools user's to read only: written by it, they would decide what a later turn loads.
+    #
+    # A GRANT THAT FAILS REFUSES THE TURN (P18), it never falls back: a harness started as this
+    # process would run the model's tools as root, able to read the worker's environment and write
+    # its code. The turn ends with a typed fault naming the path and the cause; the next turn tries
+    # the grant again.
+    home = Path(os.environ.get("HOME", "/tmp"))
+    try:
+        grant_tools_access([*(m["path"] for m in active_mounts() if m.get("write", True)), work,
+                            chat_root, Path(os.environ.get("CODEX_HOME") or home / ".codex")])
+    except ToolsAccessRefused as exc:
+        fault = tool_access.unconfined_fault(exc.path, exc.root, exc.cause)
+        log.error("turn refused for session=%s: %s", session or "-", exc)
+        yield {"type": "done", "ok": False, "reply": fault["detail"], "sessionId": None, "fault": fault}
+        return
+    show_tools([home / ".claude", home / ".vexa-skills"])
     if session and session_continuity:
         _adopt_legacy_continuity(chat_root, work, session)  # migrate-on-read: pre-anchoring threads
     sess_file = _session_file(chat_root, session)
@@ -1680,10 +1896,11 @@ def run_turn_over_workspace(
     # stale session id) — heal it by running the same prompt with no session. `reason` is what says
     # this is NOT that case (F89): a turn that stopped on its own budget also reports ok=False, and
     # re-running it from scratch would burn the budget again and answer no better.
+    # …and neither is `fault` (P18): a provider that refused the turn (402, out of credit) refused it
+    # whatever the session — healing it would drop the chat's resume pointer and ask twice.
     if (resume and first is not None and first.get("type") == "done"
-            and not first.get("ok", True) and not first.get("reason")):
-        if sess_file.exists():
-            sess_file.unlink()
+            and not first.get("ok", True) and not first.get("reason") and not first.get("fault")):
+        _unlink_nofollow(chat_root, _SESSIONS_DIR, sess_file.name)
         # The refused-resume turn is ABANDONED here — reap its CLI now rather than leaving a second
         # harness subprocess to whatever the interpreter does with an unreferenced generator.
         close_event_stream(gen)
@@ -1729,8 +1946,11 @@ def run_turn_over_workspace(
     except Exception as e:  # noqa: BLE001 — a friction report is never worth a turn
         log.warning("friction: the auto-file scan failed (%s)", e)
     if captured and session_continuity:
-        sess_file.parent.mkdir(parents=True, exist_ok=True)
-        sess_file.write_text(captured)
+        # never written through a link the tools user planted in `_system` (`_replace_nofollow`)
+        try:
+            _replace_nofollow(chat_root, _SESSIONS_DIR, sess_file.name, captured)
+        except OSError as exc:
+            log.warning("session pointer %s not saved: %s", sess_file.name, exc)
 
 
 def start_prompt(start: dict) -> str | None:
@@ -1749,8 +1969,12 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
           harness: HarnessPort | None = None, writeback: TurnFn | None = None,
           tools: "list[str] | None" = None, job: TurnFn | None = None,
           jobs_dir: "Path | None" = None, jobs_session: str = "",
-          inbox_cursor: "str | None" = None) -> None:
+          inbox_cursor: "str | None" = None, in_key: "str | None" = None,
+          jobs_root: "Path | None" = None) -> None:
     """Run the entrypoint turn (if any), then serve interactive messages on ``in_topic`` until idle.
+
+    Only stream entries signed with this unit's input key run (``shared/unit_input.py``; ``in_key``,
+    else ``VEXA_UNIT_IN_KEY``): anything else on ``in_topic`` is passed over and logged, never run.
 
     Each turn's UnitEvents are XADD'd to ``out_topic`` (tagged with a turn id), followed by a
     ``turn-complete`` marker. An empty blocking read (idle) returns — the process exits and the
@@ -1829,7 +2053,7 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
     # which is every test and every deployment that has not wired one.
     _jobs = None if job is None else worker_jobs.JobRunner(
         emit=lambda ev: stream.xadd(out_topic, {"event": json.dumps(ev)}),
-        turn=job, register_dir=jobs_dir, session=jobs_session)
+        turn=job, register_dir=jobs_dir, session=jobs_session, register_root=jobs_root)
 
     def _spawn_from_tool(kind: str, target: str, brief: str) -> "tuple[bool, str]":
         """`spawn_job`'s answer to the model — and since Vexa-ai/vexa#1610 it is always an ACCEPTED
@@ -1869,6 +2093,14 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
     # arriving user messages to the RUNNING harness through its runner-neutral steering seam. Claude
     # writes stream-json to its open stdin; Codex sends turn/steer to app-server. A message the active
     # runner cannot take is left IN the stream for the between-turns loop.
+    key = os.environ.get(unit_input.KEY_ENV, "") if in_key is None else in_key
+
+    def _turn_of(entry_id, fields) -> "dict | None":
+        msg = unit_input.verified_turn(key, fields)
+        if msg is None:
+            log.warning("input entry %s is not signed for this unit — not run", entry_id)
+        return msg
+
     def _drain_inject(cursor: list) -> None:
         enabled = getattr(harness, "midturn_enabled", lambda: False)
         inject = getattr(harness, "inject_user_message", lambda _text: False)
@@ -1880,7 +2112,9 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
             return
         for _name, entries in resp or []:
             for entry_id, fields in entries:
-                msg = json.loads(fields.get("turn", "{}"))
+                msg = _turn_of(entry_id, fields)
+                if msg is None:
+                    return  # the outer loop passes over it in order
                 text = msg.get("prompt", "")
                 if msg.get("type") == "stop" or not text:
                     return  # leave stop (and everything after) for the outer loop
@@ -1926,10 +2160,9 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
             took = False
             for _name, entries in resp or []:
                 for entry_id, fields in entries:
-                    try:
-                        msg = json.loads(fields.get("turn", "{}"))
-                    except ValueError:
-                        return
+                    msg = _turn_of(entry_id, fields)
+                    if msg is None:
+                        return          # the outer loop passes over it in order
                     if msg.get("type") == "stop":
                         return          # stopping is the outer loop's, and so is everything after it
                     if read_job_mark(msg.get("prompt", "")) is None:
@@ -1966,9 +2199,9 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
         # tool results.
         #
         # ⚠ THE TOOL RESULTS ARE NOT AVAILABLE HERE, and the version that thought they were invented
-        # people. What reaches this seam is `llm.claude_code._short(content, 80)` — an 80-character
+        # people. What reaches this seam is `llm.tool_events._short(content, 80)` — an 80-character
         # PREVIEW — so a name straddling the cut arrives as a fragment. Measured on a second turn
-        # over a populated desk, the pre-pass proposed "James Spadaf", "James Spad", "Technical
+        # over a populated desk, the pre-pass proposed "James Hollis", "James Holl", "Technical
         # Stee" and "DNA TSC Inaugural Meetin": none has a page, none ever would, and each one
         # dragged a model call it was supposed to prevent — 2 of 2 turns, exactly the gate failing
         # open. A truncated string is not a source of names. It may confirm one; it may never
@@ -2134,7 +2367,9 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
             present = xrange_(in_topic) or []
             for entry_id, fields in present:
                 last = entry_id
-                msg = json.loads(fields.get("turn", "{}"))
+                msg = _turn_of(entry_id, fields)
+                if msg is None:
+                    continue
                 if msg.get("nonce") == entry_nonce:
                     continue          # the entrypoint's own copy — it runs as t0 below
                 text = msg.get("prompt", "")
@@ -2181,7 +2416,9 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
         for _name, entries in resp:
             for entry_id, fields in entries:
                 _took(cursor, entry_id)
-                msg = json.loads(fields.get("turn", "{}"))
+                msg = _turn_of(entry_id, fields)
+                if msg is None:
+                    continue
                 if msg.get("type") == "stop":
                     _join_trailers()
                     if _jobs is not None:
@@ -2194,6 +2431,9 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
 def main() -> None:  # pragma: no cover — the container entrypoint (wired in tests via serve())
     import redis
 
+    # Before anything else: no process of this user without CAP_SYS_PTRACE — the model's tools,
+    # wherever they could not be given a user of their own — reads this process's /proc entries.
+    harden_worker_process()
     work = Path(os.environ.get("VEXA_WORKSPACE_PATH", "/workspace"))
     model = os.environ.get("VEXA_AGENT_MODEL") or None
     # Boot preflight (WS1b): if a credential prefix and its base-url host obviously disagree, log a
@@ -2224,6 +2464,25 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
     # must enter the allow-set too or every tool call would stall on a permission prompt that no
     # human is there to answer.
     mcp_cfg, mcp_tools = mcp_delegation_config(work)
+    # THE TOKEN IS KEPT FRESH, AND OUT OF THE ENVIRONMENT (control_plane.delegation_refresh). It
+    # leaves os.environ here, so no harness subprocess inherits it; the attachment is rewritten
+    # before each turn whenever agent-api has published a newer one for this unit.
+    refresh_delegation = DelegationRefresh(
+        client, shared_units.delegation_key(shared_units.unit_of_topic(os.environ["VEXA_UNIT_IN_TOPIC"])),
+        path=mcp_cfg, url=(os.environ.get("VEXA_MCP_URL") or "").strip(),
+        token=DelegationRefresh.take())
+    use_token_source(refresh_delegation.current)
+
+    def _fresh(fn):
+        """``fn`` with the attachment brought up to date first, and its events watched for a vexa
+        tool call refused after the token it attached with expired (``worker.tool_access``): that
+        turn ends with a typed fault rather than quietly without its tools."""
+        def call(*args, **kwargs):
+            refresh_delegation()
+            exp = tool_access.token_exp(refresh_delegation.current())
+            return tool_access.watch(fn(*args, **kwargs), exp)
+        return call
+
     room = room_run()
     if room:
         mcp_tools = room_toolbelt(mcp_tools)
@@ -2267,9 +2526,9 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
 
     serve(
         client, out_topic=out_topic, in_topic=os.environ["VEXA_UNIT_IN_TOPIC"],
-        turn=lambda prompt: run_turn_over_workspace(work, prompt, model=model,
-                                                    allowed_tools=chat_tools, session=session,
-                                                    mcp_config=mcp_cfg, harness=chat_harness),
+        turn=_fresh(lambda prompt: run_turn_over_workspace(work, prompt, model=model,
+                                                           allowed_tools=chat_tools, session=session,
+                                                           mcp_config=mcp_cfg, harness=chat_harness)),
         # SAME session on purpose: the phase has to see what the turn just saw, and a fresh
         # session would have to be told the whole conversation to ask one bookkeeping question.
         # Small budget by TOOLSET rather than by a step cap the harness does not expose.
@@ -2281,10 +2540,10 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
         # `active_mounts()` PASSED EXPLICITLY (F196/F198/F200) — the same call `writeback_
         # candidates` used moments earlier to decide which desk(s) had anything missing, so the
         # workspace this prompt names cannot silently be a second, disagreeing read of it.
-        writeback=lambda candidates: run_turn_over_workspace(
+        writeback=_fresh(lambda candidates: run_turn_over_workspace(
             work, writeback_prompt(candidates, active_mounts()), model=model,
             allowed_tools=[*WRITEBACK_TOOLS, *mcp_tools], session=session,
-            mcp_config=mcp_cfg, harness=chat_harness),
+            mcp_config=mcp_cfg, harness=chat_harness)),
         # A BACKGROUND JOB'S TURN, and the one line of difference that matters:
         # `session_continuity=False`. A job runs its OWN harness session — it does not resume the
         # conversation, does not move the continuity pointer and does not append to the transcript
@@ -2296,13 +2555,14 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
         # is set on the thread that iterates it — the job's own thread — and the chat turn
         # running beside it in this same process keeps the per-turn budget it always had. The
         # harness reads it (`llm/jobs.in_job`) to pick a budget that fits an act rather than a
-        # sentence: the founder's OeNB job ran 72 steps and then died on a 40-call turn budget.
-        job=_job_turn,
+        # sentence: the founder's Example Bank job ran 72 steps and then died on a 40-call turn budget.
+        job=_fresh(_job_turn),
         # The register that makes "a restart cancels them and the chat is told" true. It sits beside
         # the session pointers, under the private continuity root, which is already outside the
         # workspace commit — and is therefore SHARED by every chat this person has, which is why
         # each record and each event carries the session that owns it.
         jobs_dir=_continuity_root(work) / ".claude" / "jobs",
+        jobs_root=_continuity_root(work),     # the register is read and written nofollow under it
         jobs_session=session,
         # WHERE THIS WORKER SAYS HOW FAR IT HAS READ (Vexa-ai/vexa#1610). Derived from the in-topic
         # rather than handed in as a second environment variable: both sides can already compute it,

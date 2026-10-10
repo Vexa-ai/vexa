@@ -21,7 +21,7 @@ export VEXA_FLOWS_ADMIN_KEY="$(docker inspect vexa-dogfood-admin-api-1 \
   --format '{{range .Config.Env}}{{println .}}{{end}}' | grep '^ADMIN_API_TOKEN=' | cut -d= -f2)"
 export VEXA_INTERNAL_SECRET="$(cat "$HOME/.storm/internal-secret")"
 export VEXA_UI_URL="https://app.dev.vexa.ai"
-export VEXA_FLOWS_ATTENDEE_DOMAINS="rehearse.test,rehearsal.test,imageworks.example,bank.example"
+export VEXA_FLOWS_ATTENDEE_DOMAINS="rehearse.test,rehearsal.test,studio.example,bank.example"
 mkdir -p /tmp/sim-logs
 cd "$FL_SRC" || exit 1
 exec "$VENV" -u -m flows_integrations.mailbox 2>&1 | tee -a /tmp/sim-logs/mailbox.log

@@ -23,12 +23,9 @@ project:
       social: https://github.com/DmitriyG228
       primary: true
     - name: Peter Smulovics
-      affiliation: Morgan Stanley
-      email: Peter.Smulovics@morganstanley.com
       social: https://github.com/psmulovics
       primary: false
     - name: Preeti Gupta
-      affiliation: Citi
       social: https://github.com/preetiagarwal26
       primary: false
   documentation:
@@ -66,8 +63,6 @@ repository:
       social: https://github.com/DmitriyG228
       primary: true
     - name: Peter Smulovics
-      affiliation: Morgan Stanley
-      email: Peter.Smulovics@morganstanley.com
       social: https://github.com/psmulovics
       primary: false
   license:

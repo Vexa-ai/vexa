@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-/** First-run bootstrap + the company-layer setup gate: the unauthenticated /api/auth/instance probe
- *  and the sign-in claim call. Cookie jar mirrors login.test.ts (the login route sets cookies). */
+/** First-run bootstrap: the unauthenticated /api/auth/instance probe and the sign-in claim call.
+ *  Cookie jar mirrors login.test.ts (the login route sets cookies). */
 let cookieJar: Record<string, string> = {};
 
 vi.mock("next/headers", () => ({
@@ -25,12 +25,19 @@ function req(body: unknown) {
 }
 
 /** admin-api stub: find-or-create + mint + the internal instance/bootstrap edges. */
-function stubAdminApi(opts: { adminExists: boolean; globalSetup?: "completed" | "missing"; company?: string | null }) {
+function stubAdminApi(opts: { adminExists: boolean; company?: string | null }) {
   const calls: { url: string; body?: string }[] = [];
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string, init?: RequestInit) => {
       calls.push({ url, body: init?.body as string });
+      // Vexa-ai/vexa#1783: admission comes first. On an instance nobody has claimed, the sign-in
+      // that carries the admin claim code is admitted — that sign-in IS the claim.
+      if (url.includes("/internal/signin-admission")) {
+        return new Response(JSON.stringify({
+          admitted: true, why: opts.adminExists ? "existing-user" : "claim-code",
+        }), { status: 200 });
+      }
       if (url.includes("/admin/users/email/")) {
         return new Response(JSON.stringify({ id: 7, email: "new-test@vexa.ai" }), { status: 200 });
       }
@@ -38,14 +45,13 @@ function stubAdminApi(opts: { adminExists: boolean; globalSetup?: "completed" | 
         return new Response(JSON.stringify({ token: "tok-7" }), { status: 201 });
       }
       if (url.includes("/internal/instance")) {
+        // An admin-api from before 2026-10-08 still sends `global_setup` and `company`; neither may
+        // cross this route.
         return new Response(JSON.stringify({
           admin_exists: opts.adminExists,
-          global_setup: opts.globalSetup ?? "completed",
+          global_setup: "missing",
           company: opts.company ?? null,
         }), { status: 200 });
-      }
-      if (url.includes("/internal/signin-allowed")) {
-        return new Response(JSON.stringify({ allowed: true, reason: "ok", admin_exists: opts.adminExists, global_setup: opts.globalSetup ?? "completed", company: null }), { status: 200 });
       }
       if (url.includes("/internal/bootstrap-admin")) {
         return new Response(JSON.stringify({ claimed: !opts.adminExists, admin_exists: true }), { status: 200 });
@@ -74,41 +80,28 @@ describe("/api/auth/instance — the login surface's claim-screen switch", () =>
   it("no admin anywhere → admin_exists false (claim screen shows)", async () => {
     stubAdminApi({ adminExists: false });
     const res = await instanceRoute();
-    expect(await res.json()).toEqual({ admin_exists: false, global_setup: "completed" });
+    expect(await res.json()).toEqual({ admin_exists: false });
   });
 
-  it("a configured allowlist counts as an existing admin", async () => {
-    // The probe DOES still run, and that is a deliberate change (2026-09-02): an allowlist answers
-    // "are there admins", but nothing about an allowlist implies the company layer has been written,
-    // and this route now has to report `global_setup` too. What the allowlist still does is WIN on
-    // its own question — admin_exists is true here even though the probe says false.
+  it("is admin-api's answer alone — an admin list in the terminal's environment is not consulted", async () => {
+    // admin-api counts its own VEXA_ADMIN_EMAILS as admins; the terminal has no list to add.
     process.env.VEXA_ADMIN_EMAILS = "dmitry@vexa.ai";
-    const calls = stubAdminApi({ adminExists: false, globalSetup: "missing" });
+    stubAdminApi({ adminExists: false });
     const res = await instanceRoute();
-    expect(await res.json()).toEqual({ admin_exists: true, global_setup: "missing" });
-    expect(calls.some((c) => c.url.includes("/internal/instance"))).toBe(true);
+    expect(await res.json()).toEqual({ admin_exists: false });
   });
 
-  it("probe unreachable → BOTH fields fail safe (plain sign-in, gate down)", async () => {
-    // Opposite directions, one failure: admin_exists→true so no dangling claim screen, and
-    // global_setup→"completed" so a network blip cannot lock every user out of a working instance.
+  it("probe unreachable → fails safe to plain sign-in", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("ECONNREFUSED"); }));
     const res = await instanceRoute();
-    expect(await res.json()).toEqual({ admin_exists: true, global_setup: "completed" });
+    expect(await res.json()).toEqual({ admin_exists: true });
   });
 
-  it("gate up → global_setup missing is surfaced, and the company name is NOT", async () => {
-    // The name is the one field here that is not already visible on the screen; it identifies a
-    // customer to any anonymous caller who curls this route, and the sign-in card does not use it.
-    stubAdminApi({ adminExists: true, globalSetup: "missing", company: "Acme GmbH" });
+  it("carries no company-layer state and no company name (founder ruling 2026-10-08)", async () => {
+    stubAdminApi({ adminExists: true, company: "Acme GmbH" });
     const body = await (await instanceRoute()).json();
-    expect(body).toEqual({ admin_exists: true, global_setup: "missing" });
+    expect(body).toEqual({ admin_exists: true });
     expect(JSON.stringify(body)).not.toContain("Acme");
-  });
-
-  it("an admin-api that has never heard of global_setup reads as completed", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ admin_exists: true }), { status: 200 })));
-    expect(await (await instanceRoute()).json()).toEqual({ admin_exists: true, global_setup: "completed" });
   });
 });
 
@@ -120,20 +113,32 @@ describe("first sign-in claims the admin role", () => {
   beforeEach(() => { vi.stubEnv("NODE_ENV", "development"); });
   afterEach(() => { vi.unstubAllEnvs(); });
 
-  it("login on a fresh instance POSTs the bootstrap claim with the user's id", async () => {
+  it("login on a fresh instance POSTs the bootstrap claim with the user's id and the claim code", async () => {
+    cookieJar["vexa-claim-code"] = "ABCD-EF01-JKMN-PQRS"; // entered on the claim screen
     const calls = stubAdminApi({ adminExists: false });
     const res = await loginRoute(req({ email: "new-test@vexa.ai" }));
     expect(res.status).toBe(200);
+    const admission = calls.find((c) => c.url.includes("/internal/signin-admission"));
+    expect(JSON.parse(admission!.body || "{}").claim_code).toBe("ABCD-EF01-JKMN-PQRS");
     const claim = calls.find((c) => c.url.includes("/internal/bootstrap-admin"));
     expect(claim).toBeDefined();
-    expect(JSON.parse(claim!.body || "{}")).toEqual({ user_id: 7 });
+    expect(JSON.parse(claim!.body || "{}")).toEqual({ user_id: 7, claim_code: "ABCD-EF01-JKMN-PQRS" });
   });
 
-  it("allowlist-run instance → claim machinery stays off", async () => {
-    process.env.VEXA_ADMIN_EMAILS = "dmitry@vexa.ai";
+  it("no code, no claim: a sign-in that carries none never asks for the role", async () => {
     const calls = stubAdminApi({ adminExists: true });
     const res = await loginRoute(req({ email: "new-test@vexa.ai" }));
     expect(res.status).toBe(200);
     expect(calls.some((c) => c.url.includes("/internal/bootstrap-admin"))).toBe(false);
+  });
+
+  it("whether the claim lands is admin-api's answer, whatever the terminal's environment says", async () => {
+    process.env.VEXA_ADMIN_EMAILS = "dmitry@vexa.ai";
+    cookieJar["vexa-claim-code"] = "ABCD-EF01-JKMN-PQRS";
+    const calls = stubAdminApi({ adminExists: true });
+    const res = await loginRoute(req({ email: "new-test@vexa.ai" }));
+    expect(res.status).toBe(200);
+    // asked, and told no: the decision is upstream
+    expect(calls.some((c) => c.url.includes("/internal/bootstrap-admin"))).toBe(true);
   });
 });

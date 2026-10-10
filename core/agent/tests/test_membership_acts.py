@@ -490,7 +490,7 @@ def test_the_route_body_is_a_named_model_so_the_verb_could_be_bound(tmp_path):
     """Not decoration: `core/agent/mcp.tools.v1.json` records three routes that cannot be bound at
     the assembled edge because they take a bare `body: dict`. A verb written today with one would
     have joined that list on the day it shipped."""
-    from control_plane.api_shared import WorkspaceInviteBody, WorkspaceMembershipBody
+    from control_plane.bodies import WorkspaceInviteBody, WorkspaceMembershipBody
     assert set(WorkspaceInviteBody.model_fields) == {"slug", "email", "role"}
     assert set(WorkspaceMembershipBody.model_fields) == {"slug", "email", "role"}
     assert WorkspaceInviteBody.model_fields["role"].default == "reader"

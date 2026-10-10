@@ -64,7 +64,7 @@ def test_completed_is_sent_once_to_system_sink_and_replay_is_inert():
     _seed(repo)
     sink = _SystemCapture()
     client = TestClient(
-        create_app(meeting_repo=repo, system_webhook_sink=sink),
+        create_app(open_callbacks=True, meeting_repo=repo, system_webhook_sink=sink),
     )
 
     joining = {
@@ -98,7 +98,7 @@ def test_failed_terminal_is_sent_but_intermediate_statuses_are_not():
     _seed(repo)
     sink = _SystemCapture()
     client = TestClient(
-        create_app(meeting_repo=repo, system_webhook_sink=sink),
+        create_app(open_callbacks=True, meeting_repo=repo, system_webhook_sink=sink),
     )
 
     _post(

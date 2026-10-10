@@ -1,6 +1,6 @@
 /** `/w/<workspace>/<path>` — the link that opens a page (Vexa-ai/vexa#1643).
  *
- *  **Seen on the dogfood stack:** the admin opened `/w/oenb-b5e60c/README.md` — a shared workspace
+ *  **Seen on the dogfood stack:** the admin opened `/w/bank-b5e60c/README.md` — a shared workspace
  *  he owns — and the terminal started a new chat and showed HIS DESK's README. The URL was never
  *  recognised as a route (the ref is a slug; only ids parsed), and nothing downstream could tell
  *  *"I could not open that"* from *"here is the usual page"*.
@@ -32,8 +32,8 @@ describe("what the route reads out of the address bar", () => {
     expect(workspaceRouteFromPath("/w/pilot-b5e60c/README.md"))
       .toEqual({ workspace: "pilot-b5e60c", path: "README.md" });
     // a desk is addressed by the subject id it lives under; the company layer by `_global`
-    expect(workspaceRouteFromPath("/w/126/kg/entities/olga.md"))
-      .toEqual({ workspace: "126", path: "kg/entities/olga.md" });
+    expect(workspaceRouteFromPath("/w/126/kg/entities/nora.md"))
+      .toEqual({ workspace: "126", path: "kg/entities/nora.md" });
     expect(workspaceRouteFromPath("/w/_global/POLICIES.md"))
       .toEqual({ workspace: "_global", path: "POLICIES.md" });
   });
@@ -61,11 +61,11 @@ describe("a readable workspace opens the page the link names", () => {
   });
 
   it("a DESK — addressed by the slug it lives under, named by the registry", () => {
-    const out = deepLinkOutcome({ workspace: "126", path: "kg/entities/olga.md" },
+    const out = deepLinkOutcome({ workspace: "126", path: "kg/entities/nora.md" },
                                 readable({ kind: "desk", name: "Desk 126", slug: "126" }));
     expect(out).toEqual({
       kind: "open", workspace: "126",
-      page: { path: "kg/entities/olga.md", slug: "126", label: "olga" },
+      page: { path: "kg/entities/nora.md", slug: "126", label: "nora" },
     });
   });
 

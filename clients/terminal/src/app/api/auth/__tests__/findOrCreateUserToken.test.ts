@@ -61,6 +61,9 @@ class FakeAdminApi {
   private tick = 0;
   // when set to a token id, the first DELETE of that id 404s (concurrent-delete edge)
   revoke404For: number | null = null;
+  /** admin-api's provider binding per user id (users.data.provider_subjects); `bindDown` answers 503. */
+  bindings = new Map<number, Record<string, string>>();
+  bindDown = false;
 
   /** admin-api's wire format: ISO, microsecond-ish, and NO trailing `Z`. */
   private stamp(hoursAgo: number): string {
@@ -134,6 +137,27 @@ class FakeAdminApi {
     const path = u.pathname;
     this.calls.push({ method, path });
 
+    // POST /internal/signin-admission — Vexa-ai/vexa#1783: every sign-in is admitted before anything
+    // is created. This fixture is about the login-token prune, so it admits everybody; the admission
+    // rule itself is proven in signinAllowList.test.ts.
+    if (path === "/internal/signin-admission" && method === "POST") {
+      return jsonRes({ admitted: true, why: "allow-list" });
+    }
+
+    // PUT /internal/users/{id}/provider-subject — first binds, same passes, another subject is 409
+    const bind = path.match(/^\/internal\/users\/([^/]+)\/provider-subject$/);
+    if (bind && method === "PUT") {
+      if (this.bindDown) return new Response("down", { status: 503 });
+      const userId = Number(bind[1]);
+      const { subject } = JSON.parse(String(init?.body ?? "{}")) as { subject: string };
+      const provider = subject.split(":")[0];
+      const current = this.bindings.get(userId) ?? {};
+      if (current[provider] && current[provider] !== subject) return new Response("bound elsewhere", { status: 409 });
+      const first = !current[provider];
+      this.bindings.set(userId, { ...current, [provider]: subject });
+      return jsonRes({ bound: first ? "first" : "same" });
+    }
+
     // GET /admin/users/email/{email}
     let m = path.match(/^\/admin\/users\/email\/(.+)$/);
     if (m && method === "GET") {
@@ -205,8 +229,7 @@ beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn(fake.fetch));
   process.env.VEXA_ADMIN_API_URL = "http://admin.test";
   process.env.VEXA_ADMIN_API_KEY = "test-admin-key";
-  // allowlist configured → the bootstrap-admin internal call short-circuits (no /internal hit)
-  process.env.VEXA_ADMIN_EMAILS = "owner@vexa.ai";
+  process.env.VEXA_INTERNAL_API_SECRET = "test-internal-secret"; // the admission door (#1783)
   process.env.VEXA_TERMINAL_LOGIN_TOKEN_CAP = "3";
 });
 
@@ -214,7 +237,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   delete process.env.VEXA_ADMIN_API_URL;
   delete process.env.VEXA_ADMIN_API_KEY;
-  delete process.env.VEXA_ADMIN_EMAILS;
+  delete process.env.VEXA_INTERNAL_API_SECRET;
   delete process.env.VEXA_TERMINAL_LOGIN_TOKEN_CAP;
   delete process.env.VEXA_TERMINAL_LOGIN_TOKEN_MAX;
   delete process.env.VEXA_TERMINAL_LOGIN_RECENT_USE_HOURS;
@@ -459,5 +482,44 @@ describe("findOrCreateUserToken — login tokens are pruned by LAST USE (#638, r
     const tok = fake.liveTokens(created.id)[0];
     expect(tok.name).toBe("terminal-login");
     expect(tok.scopes).toEqual(["bot", "tx", "browser"]);
+  });
+});
+
+describe("findOrCreateUserToken — an OAuth sign-in is bound to its provider subject", () => {
+  const TENANT = "11111111-2222-3333-4444-555555555555";
+  const A = `microsoft:${TENANT}:99999999-8888-7777-6666-555555555555`;
+  const B = `microsoft:${TENANT}:aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee`;
+  const minted = () => fake.calls.filter((c) => c.method === "POST" && /\/tokens$/.test(c.path)).length;
+
+  it("the first sign-in binds the subject and is admitted; the same subject again is admitted", async () => {
+    const r1 = await findOrCreateUserToken("ana@example.com", { subject: A });
+    expect(r1.ok).toBe(true);
+    const user = fake.users.get("ana@example.com")!;
+    expect(fake.bindings.get(user.id)).toEqual({ microsoft: A });
+    expect((await findOrCreateUserToken("ana@example.com", { subject: A })).ok).toBe(true);
+  });
+
+  it("another identity of the same provider is refused before any token is minted", async () => {
+    const user = fake.seedUser("ana@example.com");
+    fake.bindings.set(user.id, { microsoft: A });
+    const r = await findOrCreateUserToken("ana@example.com", { subject: B });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.refused).toBe("not-allowed");
+    expect(minted()).toBe(0);
+    expect(fake.bindings.get(user.id)).toEqual({ microsoft: A });
+  });
+
+  it("a binding that cannot be checked refuses, and mints nothing", async () => {
+    fake.seedUser("ana@example.com");
+    fake.bindDown = true;
+    const r = await findOrCreateUserToken("ana@example.com", { subject: A });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.refused).toBe("unavailable");
+    expect(minted()).toBe(0);
+  });
+
+  it("a sign-in with no subject (the emailed link, the dev login) binds nothing", async () => {
+    expect((await findOrCreateUserToken("ana@example.com")).ok).toBe(true);
+    expect(fake.calls.some((c) => c.path.endsWith("/provider-subject"))).toBe(false);
   });
 });

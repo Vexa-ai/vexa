@@ -7,7 +7,7 @@
  * goldens are the spec, P8) with ajv — the same validator the contract's own
  * `validate.mjs` uses, so the bot can NEVER drift from the contract. A parse/validation
  * failure is fatal: the caller maps it to a lifecycle.v1 `failed` / `validation_error`
- * (fail-fast, P14). Secrets ride in this contract (token / internalSecret / S3 keys) —
+ * (fail-fast, P14). Secrets ride in this contract (token / S3 keys) —
  * never logged (P14/P15).
  *
  * `Invocation` is the typed view the rest of the bot depends on. It is a hand-written
@@ -68,7 +68,6 @@ export interface Invocation {
   container_name?: string;
   redisUrl: string;
   meetingApiCallbackUrl?: string;
-  internalSecret?: string;
   // ── transcription ──
   language?: string | null;
   task?: string | null;
@@ -78,6 +77,7 @@ export interface Invocation {
   transcriptionServiceUrl?: string;
   transcriptionServiceToken?: string;
   transcriptionModel?: string | null;
+  transcriptionServiceOwner?: 'vexa' | 'customer';
   // ── recording ──
   recordingEnabled?: boolean;
   captureSignalEnabled?: boolean;
@@ -98,6 +98,8 @@ export interface Invocation {
   s3Bucket?: string;
   s3AccessKey?: string;
   s3SecretKey?: string;
+  /** where the authenticated bot PUTs its session-profile.v1 write-back (sent only in authenticated mode) */
+  sessionWritebackUrl?: string;
 }
 
 /** Thrown when VEXA_BOT_CONFIG is missing / not JSON / off-contract. The composition root
@@ -147,7 +149,7 @@ export function loadInvocation(env: NodeJS.ProcessEnv = process.env): Invocation
   return parseInvocation(env.VEXA_BOT_CONFIG);
 }
 
-const SPEAKER_STREAM_ENV: Array<[keyof SpeakerStreamManagerConfig, string]> = [
+const SPEAKER_STREAM_ENV: Array<[Exclude<keyof SpeakerStreamManagerConfig, 'callbackStampedFrames'>, string]> = [
   ['minAudioDuration', 'BOT_SPEAKER_MIN_AUDIO_SEC'],
   ['submitInterval', 'BOT_SPEAKER_SUBMIT_INTERVAL_SEC'],
   ['confirmThreshold', 'BOT_SPEAKER_CONFIRM_THRESHOLD'],

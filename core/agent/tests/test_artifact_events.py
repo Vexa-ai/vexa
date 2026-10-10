@@ -11,7 +11,8 @@ from __future__ import annotations
 
 import json
 
-from llm.claude_code import _WRITER_TOOLS, _written_artifact, parse_stream_json
+from llm.claude_code import parse_stream_json
+from llm.tool_events import _WRITER_TOOLS, _written_artifact
 from worker.engine import voice_preamble
 
 

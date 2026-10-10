@@ -5,6 +5,7 @@ Deployment-agnostic, zero-npm-dep (ESM + Python, global `fetch`):
 - [`launch.mjs`](launch.mjs) — `POST /bots` per test account, staggered; waits for admission.
 - [`drive.mjs`](drive.mjs) — the rotation/overlap engine: `POST …/speak` cached TTS on a master clock → `truth.jsonl`.
 - [`corpus.mjs`](corpus.mjs) — (re)builds the TTS clip pools (Deepgram Aura); cached in `cache/`.
+- [`segment_bus.py`](segment_bus.py) — publishes fixture segments onto `transcription_segments` signed for their meeting, as a bot does, and reads back the collector's `tc:meeting:{meeting_id}` (`counting_matrix.py`, `counting_replay.py`).
 - [`judge.py`](judge.py) — reads `GET /transcripts/{platform}/{native}` and scores vs truth → the 3 metrics.
 - [`replay.mjs`](replay.mjs) — re-send a legacy tape OR a `captured-signal.v1` (auto-detected; re-encoded to the `@vexa/capture-codec` wire) into a live desktop ingest (O-TEL-2 live twin).
 - [`analyze.mjs`](analyze.mjs) — score a transcript; `--flag-issues` emits `flagged-issue.v1` records (O-TEL-3 auto-flagger, from its mis-attr / overseg oracles).

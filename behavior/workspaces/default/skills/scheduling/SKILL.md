@@ -69,6 +69,12 @@ interval) picks the file up, validates the cron + prompt, and schedules a durabl
 Vexa Scheduler job. Editing the file updates the job; setting `enabled: false` (or
 deleting the file) cancels it.
 
+**A routine runs only once the person stands behind it.** A file written straight onto
+the workspace waits on the Routines board as *pending confirmation* until the person
+confirms it there; one written with `workspace_write` while they are in this chat is
+theirs and is armed directly. Tell them which it is. A run with nobody watching (a
+routine, an event) never arms one: whatever it writes waits for them.
+
 ## Validation notes
 
 - An **enabled** routine MUST have a valid 5-field `cron` and a non-empty `prompt`,

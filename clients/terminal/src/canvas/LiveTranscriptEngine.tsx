@@ -12,12 +12,14 @@
 
 import { useEffect, useRef, useState } from "react";
 import { splitTextIntoSpans, type SpanEntity } from "./inlineSpans";
+import { useMeetingPlayback, seekMeeting, segmentSeconds } from "../minutes/meetingPlayback";
+import { playbackTime } from "../minutes/RecordingPlayer";
 import { entityColor } from "../ui-kit/docLinks";
 
 export interface EngineTag { label: string; kind: string }
 export interface EngineEntity { id?: string; label: string; kind: string; docPath?: string }
 export interface EngineSignal { id: string; kind: string; label: string }
-export interface EngineSegment { speaker?: string; text: string; tsMs?: number; id?: string; completed?: boolean; tags?: EngineTag[] }
+export interface EngineSegment { speaker?: string; text: string; ts?: number | string; tsMs?: number; endMs?: number; id?: string; completed?: boolean; tags?: EngineTag[] }
 
 export interface EngineActions {
   research?(entity: { id?: string; name: string; kind: string }): void;
@@ -145,6 +147,7 @@ function BlockText({ text, entities, actions, renderText }: { text: string; enti
 
 export function LiveTranscriptEngine({
   segments,
+  meetingId,
   emptyLabel = "Nothing said yet\u2026",
   entities,
   signals,
@@ -152,6 +155,7 @@ export function LiveTranscriptEngine({
   renderText,
 }: {
   segments: EngineSegment[];
+  meetingId?: string;
   emptyLabel?: string;
   entities?: EngineEntity[];
   signals?: EngineSignal[];
@@ -159,14 +163,44 @@ export function LiveTranscriptEngine({
   /** an outer layer's per-block renderer (decision 35's term chips). See `BlockText`. */
   renderText?: (text: string) => React.ReactNode;
 }) {
+  const playback = useMeetingPlayback(meetingId);
+  const timed = segments.filter(s => s.completed !== false).map(s => ({ segment: s, timing: segmentSeconds(s, playback.originMs) }));
+  // Explicit ends keep silence unhighlighted; start-only transcripts advance at the next passage.
+  const active = playback.time === null ? undefined : [...timed].reverse().find(item => {
+    if (!item.timing || playback.time! < item.timing.start) return false;
+    const end = item.timing.end ?? timed.find(x => x.timing && x.timing.start > item.timing!.start)?.timing?.start;
+    return end !== undefined && playback.time! < end;
+  })?.segment;
+  const passage = (s: EngineSegment, index: number) => {
+    const timing = segmentSeconds(s, playback.originMs);
+    const canSeek = !!meetingId && playback.available && !!timing;
+    const current = active === s;
+    return <span key={s.id ?? index} data-playback-active={current || undefined}
+      role={canSeek ? "button" : undefined} tabIndex={canSeek ? 0 : undefined}
+      aria-label={canSeek ? `Play from ${playbackTime(timing!.start)}: ${s.text}` : undefined}
+      aria-current={current ? "true" : undefined}
+      title={canSeek ? `Play from ${playbackTime(timing!.start)}` : undefined}
+      style={{ cursor: canSeek ? "pointer" : undefined, borderRadius: 3, background: current ? "color-mix(in srgb, var(--blue) 20%, transparent)" : undefined }}
+      onClick={e => {
+        if (!canSeek || window.getSelection()?.toString()) return;
+        const interactive = (e.target as Element).closest("a,button,input,[role=button],[role=menu]");
+        if (interactive && interactive !== e.currentTarget) return;
+        seekMeeting(meetingId!, timing!.start);
+      }}
+      onKeyDown={e => {
+        if (canSeek && e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
+          e.preventDefault(); seekMeeting(meetingId!, timing!.start);
+        }
+      }}><BlockText text={s.text} entities={entities} actions={actions} renderText={renderText} /></span>;
+  };
   // Confirmed (completed !== false) = stable. Merge consecutive same-speaker confirmed segments into
   // flowing blocks; keyword tags accumulate per block. Pending (completed === false) = the live edge.
-  const blocks: { speaker?: string; tsMs?: number; text: string; key: string; tags: EngineTag[] }[] = [];
+  const blocks: { speaker?: string; tsMs?: number; text: string; key: string; tags: EngineTag[]; segments: EngineSegment[] }[] = [];
   for (const s of segments) {
     if (s.completed === false) continue;
     const last = blocks[blocks.length - 1];
-    if (last && last.speaker === s.speaker) { last.text += " " + s.text; if (s.tags) last.tags.push(...s.tags); }
-    else blocks.push({ speaker: s.speaker, tsMs: s.tsMs, text: s.text, key: s.id ?? `b${blocks.length}`, tags: [...(s.tags ?? [])] });
+    if (last && last.speaker === s.speaker) { last.text += " " + s.text; last.segments.push(s); if (s.tags) last.tags.push(...s.tags); }
+    else blocks.push({ speaker: s.speaker, tsMs: s.tsMs, text: s.text, key: s.id ?? `b${blocks.length}`, tags: [...(s.tags ?? [])], segments: [s] });
   }
   const lastPending = [...segments].reverse().find((s) => s.completed === false);
   const live = (lastPending?.text ?? "").trim();
@@ -243,7 +277,7 @@ export function LiveTranscriptEngine({
           <div key={b.key}>
             {head(b.speaker, b.tsMs)}
             <div style={{ fontSize: 13.5, color: "var(--t1)", lineHeight: 1.6 }}>
-              <BlockText text={b.text} entities={entities} actions={actions} renderText={renderText} />
+              {playback.available ? b.segments.map((s, i) => <span key={s.id ?? i}>{i > 0 ? " " : ""}{passage(s, i)}</span>) : <BlockText text={b.text} entities={entities} actions={actions} renderText={renderText} />}
               {isLast && liveJoinsLast && (
                 <span style={{ color: "var(--t3)", fontStyle: "italic" }}> {live} …</span>
               )}

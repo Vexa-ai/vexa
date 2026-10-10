@@ -1,175 +1,224 @@
 {
- "contract": "config.v1",
- "service": "gateway",
- "capabilities": {
-  "agent_domain": {
-   "description": "Whether this deployment fronts the AGENT domain (PRD decision 40.7: meetings, agents and flows work independently and in any configuration, identity being the only shared dependency). Presence is a configuration fact \u2014 whether the deployment named the door \u2014 never a probe: a probe makes \"agent-api is restarting\" and \"there is no agent-api\" the same answer, and the second is a shipped product.",
-   "when_unconfigured": "The edge registers no /agent/* route and assembles no agent rows into its scope table, so a request to /agent/anything is 404 \u2014 this deployment does not serve it \u2014 rather than a 401 about a route that is not here. Everything else is unchanged: this is the `no-agents` product of decision 40.6 (gateway + meetings + flows + identity), not a degraded gateway."
-  }
- },
- "keys": [
-  {
-   "key": "INTERNAL_API_SECRET",
-   "class": "required-explicit",
-   "secret": true,
-   "description": "shared internal secret attached as X-Internal-Secret on the admin-api /internal/validate hop (adapters.py:67-69). Unset, admin-api rejects validation and EVERY API-key check 503s (fail-closed) — so the boot refuses instead of coming up green and 503ing every call (the 2026-04-23 failure shape, #526). It is ALSO the internal-tier authority agent-api's _internal_caller and admin-api's _check_internal compare against, which is why a published placeholder is refused outright (F95).",
-   "forbidden_values": [
-     "vexa-internal-secret",
-     "lite-internal-secret",
-     "changeme",
-     "change-me",
-     "CHANGE-ME",
-     "default",
-     "secret"
-   ]
+  "contract": "config.v1",
+  "service": "gateway",
+  "capabilities": {
+    "agent_domain": {
+      "description": "Whether this deployment fronts the AGENT domain (PRD decision 40.7: meetings, agents and flows work independently and in any configuration, identity being the only shared dependency). Presence is a configuration fact \u2014 whether the deployment named the door \u2014 never a probe: a probe makes \"agent-api is restarting\" and \"there is no agent-api\" the same answer, and the second is a shipped product.",
+      "when_unconfigured": "The edge registers no /agent/* route and assembles no agent rows into its scope table, so a request to /agent/anything is 404 \u2014 this deployment does not serve it \u2014 rather than a 401 about a route that is not here. Everything else is unchanged: this is the `no-agents` product of decision 40.6 (gateway + meetings + flows + identity), not a degraded gateway."
+    }
   },
-  {
-   "key": "ADMIN_API_URL",
-   "class": "defaulted",
-   "default": "http://admin-api:8001",
-   "description": "admin-api base URL for the /internal/validate token-resolution hop"
-  },
-  {
-   "key": "MEETING_API_URL",
-   "class": "defaulted",
-   "default": "http://meeting-api:8080",
-   "description": "meeting-api base URL — the proxy forward target and the /ws/authorize-subscribe hop"
-  },
-  {
-   "key": "AGENT_API_URL",
-   "class": "capability",
-   "capability": "agent_domain",
-   "description": "agent control-plane base URL fronted under /api/*. UNSET MEANS THE AGENT DOMAIN IS NOT DEPLOYED (PRD 40.6 no-agents, 40.7 domains are independent): the edge registers no /agent/* route and assembles no agent rows into its scope table, so a request there is 404 — this deployment does not serve it — rather than a 401 about a route that is not here. A URL default would assert the domain exists and make its absence unsayable.",
-   "targets": ["compose", "helm", "lite"]
-  },
-  {
-   "key": "MCP_URL",
-   "class": "defaulted",
-   "default": "http://mcp:8010",
-   "description": "MCP service base URL — the streamable-HTTP transport fronted under /mcp (GET streams the SSE leg, POST forwards buffered)",
-   "targets": ["compose"]
-  },
-  {
-   "key": "REDIS_URL",
-   "class": "defaulted",
-   "default": "redis://redis:6379/0",
-   "description": "pub/sub bus backing the /ws fan-in"
-  },
-  {
-   "key": "LOG_LEVEL",
-   "class": "defaulted",
-   "default": "info",
-   "description": "log verbosity"
-  },
-  {
-   "key": "HOST",
-   "class": "defaulted",
-   "default": "0.0.0.0",
-   "description": "uvicorn bind host",
-   "targets": ["lite"]
-  },
-  {
-   "key": "PORT",
-   "class": "defaulted",
-   "default": "8056",
-   "description": "uvicorn bind port",
-   "targets": ["lite"]
-  },
-  {
-   "key": "GUARD_ENABLED",
-   "class": "defaulted",
-   "default": "true",
-   "description": "edge protection (fastapi-guard) master switch — ON by default (#555)"
-  },
-  {
-   "key": "GUARD_WS_ENABLED",
-   "class": "defaulted",
-   "default": "false",
-   "description": "extend the edge guard to the /ws upgrade path"
-  },
-  {
-   "key": "GUARD_ENABLE_REDIS",
-   "class": "defaulted",
-   "default": "true",
-   "description": "back the guard's rate-limit/ban buckets with Redis (shared across replicas)",
-   "targets": ["compose", "helm"]
-  },
-  {
-   "key": "GUARD_RATE_LIMIT_RPM",
-   "class": "defaulted",
-   "default": "600",
-   "description": "per-IP request budget per window",
-   "targets": ["compose", "helm"]
-  },
-  {
-   "key": "GUARD_RATE_LIMIT_WINDOW",
-   "class": "defaulted",
-   "default": "60",
-   "description": "rate-limit window (seconds)",
-   "targets": ["compose", "helm"]
-  },
-  {
-   "key": "GUARD_AUTO_BAN_THRESHOLD",
-   "class": "defaulted",
-   "default": "10",
-   "description": "violations before an IP is auto-banned",
-   "targets": ["compose", "helm"]
-  },
-  {
-   "key": "GUARD_AUTO_BAN_DURATION",
-   "class": "defaulted",
-   "default": "3600",
-   "description": "auto-ban duration (seconds)",
-   "targets": ["compose", "helm"]
-  },
-  {
-   "key": "GUARD_IP_WHITELIST",
-   "class": "defaulted",
-   "default": "",
-   "description": "comma-separated IPs never rate-limited/banned",
-   "targets": ["compose", "helm"]
-  },
-  {
-   "key": "GUARD_IP_BLACKLIST",
-   "class": "defaulted",
-   "default": "",
-   "description": "comma-separated IPs always blocked",
-   "targets": ["compose", "helm"]
-  },
-  {
-   "key": "GUARD_TRUSTED_PROXIES",
-   "class": "defaulted",
-   "default": "",
-   "description": "comma-separated proxy IPs whose X-Forwarded-For is trusted for client-IP resolution",
-   "targets": ["compose", "helm"]
-  },
-  {
-   "key": "GUARD_TRUST_X_FORWARDED_PROTO",
-   "class": "defaulted",
-   "default": "false",
-   "description": "trust X-Forwarded-Proto from the proxy for scheme resolution",
-   "targets": ["compose", "helm"]
-  },
-  {
-   "key": "GUARD_BLOCKED_COUNTRIES",
-   "class": "defaulted",
-   "default": "",
-   "description": "comma-separated country codes to block (geo-IP)",
-   "targets": ["compose"]
-  },
-  {
-   "key": "GUARD_BLOCK_CLOUD_PROVIDERS",
-   "class": "defaulted",
-   "default": "",
-   "description": "block known cloud/hosting provider ranges",
-   "targets": ["compose"]
-  },
-  {
-   "key": "GUARD_REDIS_PREFIX",
-   "class": "defaulted",
-   "default": "vexa:guard:",
-   "description": "Redis key prefix for the guard's rate-limit/ban buckets",
-   "targets": []
-  }
- ]
+  "keys": [
+    {
+      "key": "INTERNAL_API_SECRET",
+      "class": "required-explicit",
+      "secret": true,
+      "description": "shared internal secret attached as X-Internal-Secret on the admin-api /internal/validate hop (adapters.py:67-69). Unset, admin-api rejects validation and EVERY API-key check 503s (fail-closed) \u2014 so the boot refuses instead of coming up green and 503ing every call (the 2026-04-23 failure shape, #526). It is ALSO the internal-tier authority agent-api's _internal_caller and admin-api's _check_internal compare against, which is why a published placeholder is refused outright (F95).",
+      "forbidden_values": [
+        "vexa-internal-secret",
+        "lite-internal-secret",
+        "changeme",
+        "change-me",
+        "CHANGE-ME",
+        "default",
+        "secret"
+      ]
+    },
+    {
+      "key": "VEXA_GATEWAY_IDENTITY_SIGNING_KEY_FILE",
+      "class": "required-explicit",
+      "description": "gateway-identity.v1 signing key: a file holding the gateway's Ed25519 PRIVATE key (PKCS#8 PEM). The gateway signs the identity it resolved onto every forward (X-Vexa-Identity, short expiry); agent-api, meeting-api and the credential broker hold only the public half and can verify but never sign. No other service mounts this file. Unset, or not an Ed25519 private key, the boot refuses. Generated at install: compose's identity-keys one-shot, the Helm identity-keys Secret, the Lite entrypoint (persisted in its state directory)."
+    },
+    {
+      "key": "ADMIN_API_URL",
+      "class": "defaulted",
+      "default": "http://admin-api:8001",
+      "description": "admin-api base URL for the /internal/validate token-resolution hop"
+    },
+    {
+      "key": "MEETING_API_URL",
+      "class": "defaulted",
+      "default": "http://meeting-api:8080",
+      "description": "meeting-api base URL \u2014 the proxy forward target and the /ws/authorize-subscribe hop"
+    },
+    {
+      "key": "AGENT_API_URL",
+      "class": "capability",
+      "capability": "agent_domain",
+      "description": "agent control-plane base URL; the edge fronts it under /agent/*, forwarded onto its /api/* (routes.v1 `forward`). UNSET MEANS THE AGENT DOMAIN IS NOT DEPLOYED (PRD 40.6 no-agents, 40.7 domains are independent): the edge registers no /agent/* route and assembles no agent rows into its scope table, so a request there is 404 \u2014 this deployment does not serve it \u2014 rather than a 401 about a route that is not here. A URL default would assert the domain exists and make its absence unsayable.",
+      "targets": [
+        "compose",
+        "helm",
+        "lite"
+      ]
+    },
+    {
+      "key": "MCP_URL",
+      "class": "defaulted",
+      "default": "http://mcp:8010",
+      "description": "the ONE assembled MCP service (ADR-0037) \u2014 the streamable-HTTP transport fronted under /mcp (GET streams the SSE leg, POST forwards buffered). Every bearer reaches it: a person's API key and a worker's delegation token alike",
+      "targets": [
+        "compose",
+        "helm",
+        "lite"
+      ]
+    },
+    {
+      "key": "REDIS_URL",
+      "class": "defaulted",
+      "default": "redis://redis:6379/0",
+      "secret": true,
+      "description": "pub/sub bus backing the /ws fan-in"
+    },
+    {
+      "key": "LOG_LEVEL",
+      "class": "defaulted",
+      "default": "info",
+      "description": "log verbosity"
+    },
+    {
+      "key": "HOST",
+      "class": "defaulted",
+      "default": "0.0.0.0",
+      "description": "uvicorn bind host",
+      "targets": [
+        "lite"
+      ]
+    },
+    {
+      "key": "PORT",
+      "class": "defaulted",
+      "default": "8056",
+      "description": "uvicorn bind port",
+      "targets": [
+        "lite"
+      ]
+    },
+    {
+      "key": "GUARD_ENABLED",
+      "class": "defaulted",
+      "default": "true",
+      "description": "edge protection (fastapi-guard) master switch \u2014 ON by default (#555)"
+    },
+    {
+      "key": "GUARD_WS_ENABLED",
+      "class": "defaulted",
+      "default": "false",
+      "description": "extend the edge guard to the /ws upgrade path"
+    },
+    {
+      "key": "GUARD_ENABLE_REDIS",
+      "class": "defaulted",
+      "default": "true",
+      "description": "back the guard's rate-limit/ban buckets with Redis (shared across replicas)",
+      "targets": [
+        "compose",
+        "helm"
+      ]
+    },
+    {
+      "key": "GUARD_RATE_LIMIT_RPM",
+      "class": "defaulted",
+      "default": "600",
+      "description": "per-IP request budget per window",
+      "targets": [
+        "compose",
+        "helm"
+      ]
+    },
+    {
+      "key": "GUARD_RATE_LIMIT_WINDOW",
+      "class": "defaulted",
+      "default": "60",
+      "description": "rate-limit window (seconds)",
+      "targets": [
+        "compose",
+        "helm"
+      ]
+    },
+    {
+      "key": "GUARD_AUTO_BAN_THRESHOLD",
+      "class": "defaulted",
+      "default": "10",
+      "description": "violations before an IP is auto-banned",
+      "targets": [
+        "compose",
+        "helm"
+      ]
+    },
+    {
+      "key": "GUARD_AUTO_BAN_DURATION",
+      "class": "defaulted",
+      "default": "3600",
+      "description": "auto-ban duration (seconds)",
+      "targets": [
+        "compose",
+        "helm"
+      ]
+    },
+    {
+      "key": "GUARD_IP_WHITELIST",
+      "class": "defaulted",
+      "default": "",
+      "description": "comma-separated IPs never rate-limited/banned",
+      "targets": [
+        "compose",
+        "helm"
+      ]
+    },
+    {
+      "key": "GUARD_IP_BLACKLIST",
+      "class": "defaulted",
+      "default": "",
+      "description": "comma-separated IPs always blocked",
+      "targets": [
+        "compose",
+        "helm"
+      ]
+    },
+    {
+      "key": "GUARD_TRUSTED_PROXIES",
+      "class": "defaulted",
+      "default": "",
+      "description": "comma-separated proxy IPs whose X-Forwarded-For is trusted for client-IP resolution",
+      "targets": [
+        "compose",
+        "helm"
+      ]
+    },
+    {
+      "key": "GUARD_TRUST_X_FORWARDED_PROTO",
+      "class": "defaulted",
+      "default": "false",
+      "description": "trust X-Forwarded-Proto from the proxy for scheme resolution",
+      "targets": [
+        "compose",
+        "helm"
+      ]
+    },
+    {
+      "key": "GUARD_BLOCKED_COUNTRIES",
+      "class": "defaulted",
+      "default": "",
+      "description": "comma-separated country codes to block (geo-IP)",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "GUARD_BLOCK_CLOUD_PROVIDERS",
+      "class": "defaulted",
+      "default": "",
+      "description": "block known cloud/hosting provider ranges",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "GUARD_REDIS_PREFIX",
+      "class": "defaulted",
+      "default": "vexa:guard:",
+      "description": "Redis key prefix for the guard's rate-limit/ban buckets",
+      "targets": []
+    }
+  ]
 }

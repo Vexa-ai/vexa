@@ -113,6 +113,12 @@ def _admin_key() -> str:
 
 def _http(method: str, url: str, headers: dict | None = None, body=None, timeout=40):
     h = {"content-type": "application/json", **(headers or {})}
+    # agent-api believes an asserted X-User-Id only from the gateway's signature or from the
+    # internal tier (gateway-identity.v1). This rig reaches agent-api directly as an internal caller, so
+    # every call that names a person carries the tier's credential — and the delegation's regime
+    # and workspace ceiling, so the routes that need a person in the loop can refuse on their own.
+    if url.startswith(AGENT_API) and any(k.lower() == "x-user-id" for k in h):
+        h.update(_agent_identity_headers())
     req = urllib.request.Request(
         url, method=method,
         data=json.dumps(body).encode() if body is not None else None, headers=h)
@@ -305,6 +311,53 @@ def _gw_http(uid: str, method: str, path: str, body=None, timeout: int = 40):
 import contextvars  # noqa: E402
 import vexa_oauth  # noqa: E402
 
+_AGENT_FORWARD: list = []
+
+
+def _agent_forward() -> tuple:
+    """The agent domain's declared edge mapping, `(edge_prefix, upstream_prefix)`, from `forward`
+    in `core/agent/mcp.tools.v1.json`. Read once, on first use; this file spells no mapping."""
+    if not _AGENT_FORWARD:
+        path = pathlib.Path(rig_secrets.agent_src()) / "mcp.tools.v1.json"
+        raw = (json.loads(path.read_text()) or {}).get("forward") or {}
+        edge, up = raw.get("edge_prefix"), raw.get("upstream_prefix")
+        if not all(isinstance(x, str) and len(x) > 2 and x.startswith("/") and x.endswith("/")
+                   for x in (edge, up)):
+            raise RuntimeError(f"{path} declares no usable forward: {raw!r}")
+        _AGENT_FORWARD[:] = [edge, up]
+    return tuple(_AGENT_FORWARD)
+
+
+def _agent_git(uid: str, method: str, path: str, body=None, timeout: int = 40):
+    """agent-api's GIT-BACKED workspace routes (attach, swap, push, pull, git-remote-status, the
+    deploy key, repository import): every one of them may read or write the person's git
+    credentials, and a broker-backed git store acts only for the person the gateway signed for.
+
+    A person's own session therefore goes THROUGH THE GATEWAY with their own key: the gateway signs
+    them, agent-api holds that signature for the request, and its git store forwards it to the
+    credential broker's git role. A 401 (a revoked key) re-mints once; nothing else does.
+
+    A DELEGATED worker keeps the internal tier, which carries its regime and workspace ceiling
+    (`_agent_identity_headers`). The person's own key would sign it as the person, unwatched and
+    unbounded, and its own token is admitted at the gateway on `/mcp` only, whose tools do not
+    include these verbs. Against a broker-backed store agent-api then refuses it (no signed person),
+    which is the closed answer."""
+    if _delegated_call():
+        return _http(method, f"{AGENT_API}{path}", {"X-User-Id": uid}, body, timeout)
+    try:
+        edge, up = _agent_forward()
+    except (OSError, ValueError, RuntimeError) as e:
+        return 0, _safe_error(e)
+    if not path.startswith(up):
+        raise ValueError(f"agent-api routes are {up}...")
+    url = f"{GATEWAY}{edge}{path[len(up):]}"
+    st, r = _http(method, url, {"X-API-Key": _user_key(uid)}, body, timeout)
+    if st == 401:
+        st, r = _http(method, url, {"X-API-Key": _user_key(uid, fresh=True)}, body, timeout)
+    return st, r
+
+
+
 CURRENT = contextvars.ContextVar("vexa_subject", default=None)
 CURRENT_SID = contextvars.ContextVar("vexa_mcp_session", default=None)
 SESSION_BIND: dict = {}
@@ -341,6 +394,17 @@ def _regime_set(uid: str, rec: dict) -> None:
     rig_secrets.update(REGIMES_STORE, lambda d: d.update({str(uid): rec}) or d)
 LOGIN_TTL = 900
 
+# EVERY SIGN-IN DOOR THIS SERVER OPENS SITS BEHIND ONE SWITCH, AND IT IS OFF UNLESS TURNED ON:
+# `VEXA_RIG_OAUTH_ENABLED=1` (`vexa_oauth.enabled`). The doors are the OAuth surface, the `/login`
+# page (with `/login/claim` and `/start`), and the start_onboarding/confirm_login and
+# auth_link/auth_claim tools. Each mints a credential for an address on the strength of a mailed
+# code, so a public host that does not mean to be a sign-in surface must not be one by default.
+SIGNIN_OFF_JSON = json.dumps({
+    "error": "sign-in through this server is switched off",
+    "what_to_do": "Your person signs in to Vexa on the web and connects with their own "
+                  "credential. Do not retry this call.",
+})
+
 # The welcome every sign-in response hands the agent, whichever door the person came through.
 # Three beats, not five, and only capabilities that work today. Anything listed here is a promise
 # made in the first thirty seconds of the relationship, so a beat for a broken path is an invented
@@ -364,8 +428,46 @@ def _logins_save(d: dict) -> None:
     rig_secrets.write(LOGINS_STORE, d)
 
 
+def _login_update(h: str, fields: dict, create: bool = False) -> None:
+    """Merge `fields` into one login record under the store's lock (creating it when `create`),
+    and drop expired records. A whole-map save from a stale read would undo a concurrent sign-in."""
+    now = time.time()
+
+    def _fn(d):
+        for k in [k for k, v in d.items() if not isinstance(v, dict) or v.get("exp", 0) <= now]:
+            del d[k]
+        if h in d:
+            d[h].update(fields)
+        elif create:
+            d[h] = dict(fields)
+        return d
+
+    rig_secrets.update(LOGINS_STORE, _fn)
+
+
+#: The admission reasons a rig door accepts. admin-api also admits the sign-in that claims an
+#: unclaimed instance's admin role; no rig door performs that claim, so that reason is refused here.
+SIGNIN_ADMITTED_REASONS = frozenset({"admin", "admin-email", "existing-user", "allow-list"})
+#: `_account_for`'s refusal when admin-api does not admit the address.
+NOT_ADMITTED = "this address may not sign in here"
+
+
+def _signin_admitted(email: str) -> bool:
+    """MAY THIS ADDRESS SIGN IN? admin-api's own rule (`POST /internal/signin-admission`), the
+    question every terminal door asks, asked before the rig creates an account or issues a token.
+    FAILS CLOSED: anything but a 200 that literally says `admitted: true` with a reason in
+    `SIGNIN_ADMITTED_REASONS` refuses."""
+    st, body = _http("POST", f"{ADMIN_API}/internal/signin-admission", _internal_headers(),
+                     {"email": email})
+    return (st == 200 and isinstance(body, dict) and body.get("admitted") is True
+            and body.get("why") in SIGNIN_ADMITTED_REASONS)
+
+
 def _account_for(email: str):
-    """Find or create the account; (uid, existed) or (None, err)."""
+    """Find or create the account of an ADMITTED address; (uid, existed) or (None, err).
+    `err` is `NOT_ADMITTED` when admin-api does not admit the address — nothing is created then."""
+    if not _signin_admitted(email):
+        return None, NOT_ADMITTED
     ak = {"X-Admin-API-Key": _admin_key()}
     st, u = _http("GET", f"{ADMIN_API}/admin/users/email/{email}", ak)
     existed = st == 200
@@ -431,6 +533,25 @@ def _internal_headers() -> dict:
     `/user/settings` to `/internal/users/{id}/settings`, which is named-by-path and therefore
     carries NO dev-mode bypass — this rig is an internal caller and authenticates as one."""
     return {"X-Internal-Secret": INTERNAL_SECRET}
+
+
+def _agent_identity_headers() -> dict:
+    """What a call to agent-api that names a person carries besides `X-User-Id`: the internal
+    tier, and — on a delegated call — the dispatch's regime and workspace ceiling.
+
+    A delegated call always carries both headers. When its scope names no regime or no workspaces
+    they go EMPTY, which agent-api reads as an unwatched worker bounded to its own workspace
+    (`ceiling.is_unwatched`, `ceiling.delegation_allows`); leaving them off would read as the person."""
+    h = {"X-Internal-Secret": INTERNAL_SECRET}
+    if not _delegated_call():
+        return h
+    scope = CALL_SCOPE.get()
+    scope = scope if isinstance(scope, dict) else {}
+    h["X-User-Regime"] = str(scope.get("regime") or "")
+    ws = scope.get("workspaces")
+    h["X-User-Delegation-Workspaces"] = "*" if ws == "*" else ",".join(
+        str(w) for w in (ws if isinstance(ws, list) else []))
+    return h
 
 
 def _settings(uid: str) -> dict:
@@ -711,6 +832,10 @@ def _md_html(md: str) -> str:
 
 
 def _login_page(inner: str, title: str = "Connect to Vexa") -> bytes:
+    """One page of the rig's own HTML. `inner` is markup the caller built (and escaped); `title` is
+    text — a file name on the viewer — so it is escaped here."""
+    import html as _html
+    title = _html.escape(title)
     return (f"""<!doctype html><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1"><title>{title}</title>
 <style>{TERMINAL_CSS}</style>
@@ -726,20 +851,89 @@ _F_BTN = ""
 
 #: Sign-in codes this process will MAIL per window, across all addresses (R-D11). `start_onboarding`
 #: takes no account, so per-address throttling alone left one anonymous caller able to mail an
-#: arbitrary list; this is the only "source" a stateless MCP tool can see.
+#: arbitrary list. It is the ceiling, not the only limit: see the per-source and per-address caps.
 CODE_BUDGET = int(os.environ.get("VEXA_RIG_CODE_BUDGET", "20"))
 CODE_BUDGET_WINDOW_S = int(os.environ.get("VEXA_RIG_CODE_WINDOW_S", "600"))
 _CODE_SENDS: list = []
 
+#: Codes one SOURCE may have mailed per `CODE_BUDGET_WINDOW_S`. Below the ceiling, so one caller
+#: cannot spend everyone's budget and lock every sign-in out. A source is only counted when this
+#: server can tell callers apart (`_client_source`); behind a proxy it was not told how to read,
+#: every caller is the proxy and the ceiling and per-address caps are what remain.
+CODE_SOURCE_BUDGET = int(os.environ.get("VEXA_RIG_CODE_SOURCE_BUDGET", "5"))
+_SOURCE_SENDS: dict = {}
 
-def _code_budget() -> bool:
-    """True when there is budget to mail one more code, and spends it. False when there is not."""
+#: Per ADDRESS, cumulative across every code issued in `CODE_ADDRESS_WINDOW_S`, whichever door
+#: issued it: how many codes may be mailed to it, and how many wrong codes may be tried against
+#: it. Re-requesting a code starts a new code, never a new count.
+CODE_ADDRESS_ISSUE_CAP = int(os.environ.get("VEXA_RIG_CODE_ADDRESS_CAP", "5"))
+CODE_ADDRESS_FAIL_CAP = int(os.environ.get("VEXA_RIG_CODE_ADDRESS_FAILS", "10"))
+CODE_ADDRESS_WINDOW_S = int(os.environ.get("VEXA_RIG_CODE_ADDRESS_WINDOW_S", "3600"))
+#: Wrong tries one code survives.
+CODE_TRIES = 5
+
+#: The request header carrying the caller's address, set by the proxy in front of this server
+#: (e.g. `cf-connecting-ip`). Read ONLY when the TCP peer is loopback or private, i.e. that proxy.
+CLIENT_ADDRESS_HEADER = (os.environ.get("VEXA_RIG_CLIENT_ADDRESS_HEADER") or "").strip().lower()
+#: Who is calling, for the per-source budget. Set by `_Auth` on every HTTP request.
+CALL_SOURCE = contextvars.ContextVar("vexa_call_source", default="")
+
+
+def _client_source(scope) -> str:
+    """The caller's address, or "" when this server cannot tell callers apart.
+
+    A public TCP peer is the caller. A loopback or private peer is a proxy, and the caller is then
+    the last entry of `CLIENT_ADDRESS_HEADER` — trusted from that hop only, never from the public
+    internet, where anyone can send the header."""
+    import ipaddress
+    peer = str((scope.get("client") or ("",))[0] or "")
+    try:
+        ip = ipaddress.ip_address(peer)
+    except ValueError:
+        return ""
+    if not (ip.is_loopback or ip.is_private):
+        return str(ip)
+    if not CLIENT_ADDRESS_HEADER:
+        return ""
+    for k, v in scope.get("headers") or []:
+        if k.decode("latin-1").lower() == CLIENT_ADDRESS_HEADER:
+            try:
+                return str(ipaddress.ip_address(v.decode("latin-1").split(",")[-1].strip()))
+            except ValueError:
+                return ""
+    return ""
+
+
+def _mail_budget(source: str = "") -> str:
+    """Spend one mailed code from the ceiling and from `source`'s share. Returns "" when spent, else
+    which budget is exhausted ("budget" or "source"); nothing is spent then."""
     now = time.time()
-    _CODE_SENDS[:] = [t for t in _CODE_SENDS if t > now - CODE_BUDGET_WINDOW_S]
+    cut = now - CODE_BUDGET_WINDOW_S
+    _CODE_SENDS[:] = [t for t in _CODE_SENDS if t > cut]
+    for k in [k for k, v in _SOURCE_SENDS.items() if not any(t > cut for t in v)]:
+        del _SOURCE_SENDS[k]
+    mine = [t for t in _SOURCE_SENDS.get(source, []) if t > cut] if source else []
+    if source and len(mine) >= CODE_SOURCE_BUDGET:
+        return "source"
     if len(_CODE_SENDS) >= CODE_BUDGET:
-        return False
+        return "budget"
     _CODE_SENDS.append(now)
-    return True
+    if source:
+        _SOURCE_SENDS[source] = mine + [now]
+    return ""
+
+
+#: ONE mailbox and nothing else: a local part of RFC 5322 `atext` characters and dots, a single "@",
+#: and a dotted domain of letters, digits and hyphens. No list separator, quote, bracket, colon or
+#: whitespace fits, so the string names exactly one recipient wherever it becomes a `To` header.
+_EMAIL_SHAPE = re.compile(
+    r"[A-Za-z0-9!#$%&'*+/=?^_`{|}~.-]+"
+    r"@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+")
+
+
+def _plausible_email(email: str) -> bool:
+    """Shape only — the single address the doors will mail. Capped at RFC 5321's 254 characters."""
+    return isinstance(email, str) and len(email) <= 254 and _EMAIL_SHAPE.fullmatch(email) is not None
 
 
 def _send_code(email: str, code: str) -> str | None:
@@ -787,6 +981,19 @@ REVOKED_FILE = HOME / ".storm/mcp-delegation-revoked.json"
 # Same contextvar discipline as CURRENT/CALL_TOKEN: set once where identity is decided, read where a
 # verb needs it, never threaded through signatures.
 CALL_SCOPE = contextvars.ContextVar("vexa_call_scope", default=None)
+
+# WHETHER THIS REQUEST IS A DELEGATED WORKER'S — the verified `delegated` flag, set where the
+# delegation token was verified. A worker is identified by this flag, never by whether its token
+# happened to carry a `scope` claim: a delegation minted without one is still a worker, and must be
+# refused what a worker is refused rather than be served as the person it acts for.
+CALL_DELEGATED = contextvars.ContextVar("vexa_call_delegated", default=False)
+
+
+def _delegated_call() -> bool:
+    """True when this request was authenticated by a verified delegation token. A bearer in the
+    delegation dialect, verified or not, is never served as a person either."""
+    return (CALL_DELEGATED.get() is True or CALL_SCOPE.get() is not None
+            or _is_delegation_token(CALL_TOKEN.get() or ""))
 
 # THE CHAT'S TARGET WORKSPACE for THIS request (Vexa-ai/vexa#1611) — the slug a write verb with no
 # `slug` of its own defaults to. Rides the delegation token as its own claim, beside `scope` and
@@ -925,6 +1132,11 @@ HUMAN_REGIME = "human"
 HUMAN_ONLY_VERBS = {
     "bot_say": "speaks out loud to everyone in a live meeting",
     "meeting_delete": "erases a meeting and its transcript permanently, and cannot be undone",
+    # A repository load authenticates with the person's saved git credentials (their GitHub token,
+    # or a workspace deploy key) whenever the repository asks for one, and this layer cannot know in
+    # advance whether it will. So loading a repository waits for a person in the session.
+    "workspace_attach": "loads a repository with the person's saved git credentials",
+    "workspace_import": "loads a repository with the person's saved git credentials",
 }
 
 
@@ -933,9 +1145,14 @@ def _regime_of(scope) -> str:
     return str((scope or {}).get("regime") or "").strip().lower() if isinstance(scope, dict) else ""
 
 
-def _regime_forbids(verb: str, scope) -> str:
-    """Why ``verb`` is refused under this delegation's regime, or "" when it may proceed."""
-    if verb not in HUMAN_ONLY_VERBS or scope is None:
+def _regime_forbids(verb: str, scope, delegated: bool | None = None) -> str:
+    """Why ``verb`` is refused under this delegation's regime, or "" when it may proceed.
+
+    ``delegated`` says whether the caller is a worker at all; it defaults to "has a scope". A worker
+    whose delegation names no regime is not in the human regime, so a human-only verb is refused."""
+    if delegated is None:
+        delegated = scope is not None
+    if verb not in HUMAN_ONLY_VERBS or not delegated:
         return ""
     return "" if _regime_of(scope) == HUMAN_REGIME else HUMAN_ONLY_VERBS[verb]
 
@@ -995,6 +1212,7 @@ def _subject_raw():
             except _DelegationRefused:
                 return None
             CALL_SCOPE.set(claims.get("scope"))
+            CALL_DELEGATED.set(True)
             CALL_TARGET.set(str(claims.get("target") or "").strip())
             return str(claims["sub"])
     return None
@@ -1213,7 +1431,7 @@ def _anon_guard(fn):
         # REGIME, enforced in the same one place, for the same reason (R-D06). Decision 7 said the
         # autonomous client does not speak in a room and does not delete meetings; until now that
         # sentence lived in a markdown file and the token's own `regime` claim was only printed.
-        why = _regime_forbids(fn.__name__, scope)
+        why = _regime_forbids(fn.__name__, scope, _delegated_call())
         if why:
             return json.dumps({
                 "refused": "regime",
@@ -1224,7 +1442,7 @@ def _anon_guard(fn):
                                     "wanted to do and stop; do not retry it and do not look for "
                                     "another route to it.",
             })
-        if slug and scope is not None and not _scope_allows(scope, slug):
+        if slug and _delegated_call() and not _scope_allows(scope, slug):
             return json.dumps({
                 "refused": "out_of_scope",
                 "workspace": slug,
@@ -1445,6 +1663,17 @@ class _Auth:
             return await self.app(scope, receive, send)
 
         path0 = scope.get("path", "")
+        CALL_SOURCE.set(_client_source(scope))
+
+        # The sign-in pages are doors too, behind the same switch as the tools (`SIGNIN_OFF_JSON`).
+        if (not vexa_oauth.enabled()
+                and (path0 in ("/", "") or path0.startswith(("/login", "/start")))):
+            b = _login_page("<p>Sign-in on this page is switched off.</p>", "Not here")
+            await send({"type": "http.response.start", "status": 404, "headers": [
+                (b"content-type", b"text/html; charset=utf-8"),
+                (b"content-length", str(len(b)).encode())]})
+            await send({"type": "http.response.body", "body": b})
+            return
 
         # ONE FETCH, THREE STEPS. The whole cold path for someone who already signed in on the
         # web. A small model cannot reconstruct a procedure out of a thousand-word bootstrap —
@@ -1533,23 +1762,42 @@ class _Auth:
                 await send({"type": "http.response.body", "body": b})
                 return
 
+            # THE ADDRESS IS BOUND AT STEP 2, AND EVERY LATER STEP READS IT FROM THE RECORD: a code
+            # signs in the address it was mailed to and no other. It is issued and redeemed by
+            # `_issue_email_code` / `_redeem_email_code`, the pair every other door uses: keyed to
+            # the address, wrong tries counted cumulatively per address, the mail budget spent. A
+            # step-3 form naming a different address is refused. Every value this page reflects is
+            # escaped.
+            import html as _html
+            esc = _html.escape
             h = form.get("h") or q.get("h") or ""
             email = (form.get("email") or "").strip().lower()
             code = form.get("code") or ""
+            agent_note = ("<p style='color:#666;font-size:14px'>Your agent sent you here — "
+                          "approve and it carries on by itself.</p>" if h else
+                          "<p style='color:#666;font-size:14px'>Two steps: your email, then "
+                          "a 6-digit code we send to it. You leave with your agent connected "
+                          "to your meetings.</p>")
 
-            if scope.get("method") != "POST" or not email:
-                # step 1: the form. Same page whether the person started here or from a link.
-                agent_note = ("<p style='color:#666;font-size:14px'>Your agent sent you here — "
-                              "approve and it carries on by itself.</p>" if h else
-                              "<p style='color:#666;font-size:14px'>Two steps: your email, then "
-                              "a 6-digit code we send to it. You leave with your agent connected "
-                              "to your meetings.</p>")
-                await page(f"""{agent_note}
-<form method=post action="{base}/login">
-<input type=hidden name=h value="{h}">
+            def email_form(note=agent_note):
+                return f"""{note}
+<form method=post action="{esc(base)}/login">
+<input type=hidden name=h value="{esc(h)}">
 <label>The email your calendar invites come from</label>
 <input name=email type=email autofocus {_F_IN}>
-<button {_F_BTN}>Send me the code</button></form>""")
+<button {_F_BTN}>Send me the code</button></form>"""
+
+            def code_form(note=""):
+                return f"""{note}
+<form method=post action="{esc(base)}/login">
+<input type=hidden name=h value="{esc(h)}">
+<label>The 6-digit code from that email</label>
+<input name=code inputmode=numeric autocomplete=one-time-code autofocus {_F_IN}>
+<button {_F_BTN}>Sign in</button></form>"""
+
+            if scope.get("method") != "POST" or not (email or code):
+                # step 1: the form. Same page whether the person started here or from a link.
+                await page(email_form())
                 return
 
             d = _logins()
@@ -1559,69 +1807,83 @@ class _Auth:
                 return
 
             if not code:
-                # step 2: send the code
-                import secrets as _s
-                if not h:
-                    h = _s.token_urlsafe(16)
-                    d[h] = {"exp": time.time() + LOGIN_TTL, "page_first": True}
-                rec = d[h]
-                c = f"{_s.randbelow(1000000):06d}"
-                rec.update(email=email, email_code=c,
-                           code_exp=time.time() + LOGIN_TTL, tries=0)
-                err = _send_code(email, c)
-                _logins_save(d)
-                if err:
-                    await page(f"<p>Could not send the code ({err}). Try again in a minute.</p>",
+                # step 2: mail a code to the address, and bind the address to this sign-in
+                if not _plausible_email(email):
+                    await page(email_form("<p>That is not an email address — try again.</p>"))
+                    return
+                if h and d[h].get("token"):
+                    await page("<p>That link is used — start over.</p>", "Link used")
+                    return
+                issued = _issue_email_code(email)
+                refused = issued.get("refused")
+                if refused in ("budget", "source", "address"):
+                    await page("<p>Too many sign-in codes were sent just now. Wait a while and "
+                               "start again.</p>", "Slow down")
+                    return
+                if refused == "mail":
+                    print(f"[login] could not mail a sign-in code: {issued.get('detail')}",
+                          flush=True)
+                    await page("<p>Could not send the code. Try again in a minute.</p>",
                                "Mail trouble")
                     return
-                await page(f"""<p>A 6-digit code is on its way to <b>{email}</b>.</p>
-<form method=post action="{base}/login">
-<input type=hidden name=h value="{h}"><input type=hidden name=email value="{email}">
-<label>The 6-digit code from that email</label>
-<input name=code inputmode=numeric autofocus {_F_IN}>
-<button {_F_BTN}>Sign in</button></form>""", "Check your email")
+                # "sent", or "already-sent": a code from the last few minutes is still in that
+                # inbox, and it is the one to type.
+                if not h:
+                    import secrets as _s
+                    h = _s.token_urlsafe(16)
+                    _login_update(h, {"exp": time.time() + LOGIN_TTL, "page_first": True,
+                                      "email": email}, create=True)
+                else:
+                    _login_update(h, {"email": email})
+                await page(code_form(f"<p>A 6-digit code is on its way to <b>{esc(email)}</b>.</p>"),
+                           "Check your email")
                 return
 
-            # step 3: verify, mint, deliver
-            rec = d.get(h) or {}
-            digits = "".join(ch for ch in code if ch.isdigit())
-            if time.time() > rec.get("code_exp", 0) or rec.get("tries", 0) >= 5:
+            # step 3: the code proves the address bound at step 2, and only that address
+            rec = d.get(h) if h else None
+            bound = (rec or {}).get("email") or ""
+            if not bound or rec.get("token"):
                 await page("<p>That code expired — start over.</p>", "Expired")
                 return
-            if digits != rec.get("email_code"):
-                rec["tries"] = rec.get("tries", 0) + 1
-                _logins_save(d)
-                await page(f"""<p>Wrong code — check the email again.</p>
-<form method=post action="{base}/login">
-<input type=hidden name=h value="{h}"><input type=hidden name=email value="{email}">
-<input name=code inputmode=numeric autofocus {_F_IN}>
-<button {_F_BTN}>Sign in</button></form>""", "Not quite")
+            if email and email != bound:
+                await page("<p>That code was sent to a different address — start over.</p>",
+                           "Start over")
                 return
-            uid, existed = _account_for(email)
+            checked = _redeem_email_code(bound, code)
+            if checked.get("error") == "wrong":
+                await page(code_form("<p>Wrong code — check the email again.</p>"), "Not quite")
+                return
+            if not checked.get("ok"):
+                await page("<p>That code expired — start over.</p>", "Expired")
+                return
+            uid, existed = _account_for(bound)
+            if uid is None and existed == NOT_ADMITTED:
+                await page("<p>This address can't sign in here. Ask the person who runs this "
+                           "Vexa to add it.</p>", "Not allowed")
+                return
             if uid is None:
                 await page("<p>Something broke on our side. Tell your agent to "
                            "report_friction().</p>", "Our fault")
                 return
-            tok = _mint_token(uid, email)
-            rec.update(token=tok, uid=uid)
-            rec.pop("email_code", None)
-            _logins_save(d)
+            tok = _mint_token(uid, bound)
+            _login_update(h, {"token": tok, "uid": uid})
             if not rec.get("page_first"):
                 await page("""<p><b>Approved — go back to your agent.</b> It picks the
 connection up by itself within a few seconds; nothing else to do here.</p>""", "Approved")
                 return
+            setup = esc(f"{CANONICAL}?c={h}")
             await page(f"""<p><b>You're in{"" if not existed else " — same account as before"}.</b>
 This is your Vexa address. Give it to your agent — it carries your sign-in, so treat
 it like a password.</p>
-<pre style="background:#f4f4f2;padding:14px;border-radius:8px;font-size:13px;white-space:pre-wrap">{CANONICAL}?c={h}</pre>
+<pre style="background:#f4f4f2;padding:14px;border-radius:8px;font-size:13px;white-space:pre-wrap">{setup}</pre>
 <p style="font-size:15px;margin-top:18px">Wherever your agent keeps its connectors:</p>
 <ul style="font-size:14px;color:#333;line-height:1.85;padding-left:20px;margin:8px 0 0">
 <li><b>Claude desktop, Cowork, claude.ai</b> — Settings → Connectors → Add custom connector,
     transport HTTP, that URL</li>
-<li><b>Claude Code</b> — <code>claude mcp add --transport http vexa "{CANONICAL}?c={h}" -s
+<li><b>Claude Code</b> — <code>claude mcp add --transport http vexa "{setup}" -s
     user</code></li>
-<li><b>Codex</b> — <code>codex mcp add vexa -- npx -y mcp-remote "{CANONICAL}?c={h}"</code></li>
-<li><b>Cursor</b> — <code>{{"vexa": {{"url": "{CANONICAL}?c={h}"}}}}</code> in
+<li><b>Codex</b> — <code>codex mcp add vexa -- npx -y mcp-remote "{setup}"</code></li>
+<li><b>Cursor</b> — <code>{{"vexa": {{"url": "{setup}"}}}}</code> in
     <code>.cursor/mcp.json</code></li>
 </ul>
 <p style="font-size:15px;margin-top:20px">Then say:</p>
@@ -1654,10 +1916,12 @@ working.</p>""", "Connected")
                              {"X-User-Id": rec["uid"]})
             content = (body or {}).get("content") if isinstance(body, dict) else None
             if st != 200 or content is None:
-                b = _login_page(f"<p>No file at <code>{fpath}</code> in this workspace.</p>",
-                                "Not found")
+                import html as _html
+                b = _login_page(f"<p>No file at <code>{_html.escape(fpath)}</code> in this "
+                                "workspace.</p>", "Not found")
                 status = 404
             else:
+                import html as _h2
                 name = fpath.rsplit("/", 1)[-1]
                 if fpath.endswith((".md", ".markdown")):
                     body_md = content
@@ -1665,16 +1929,14 @@ working.</p>""", "Connected")
                     if body_md.startswith("---"):
                         parts = body_md.split("---", 2)
                         if len(parts) == 3:
-                            import html as _h2
                             meta = ('<pre style="font-size:11.5px;color:var(--t3)">'
                                     + _h2.escape(parts[1].strip()) + "</pre>")
                             body_md = parts[2]
-                    inner = (f'<p class=path>{fpath}</p>' + meta
+                    inner = (f'<p class=path>{_h2.escape(fpath)}</p>' + meta
                              + f'<div class="card doc">{_md_html(body_md)}</div>')
                 else:
-                    import html as _html
-                    inner = (f'<p class=path>{fpath}</p>'
-                             f'<pre>{_html.escape(content)}</pre>')
+                    inner = (f'<p class=path>{_h2.escape(fpath)}</p>'
+                             f'<pre>{_h2.escape(content)}</pre>')
                 b = _login_page(inner, name)
                 status = 200
             await send({"type": "http.response.start", "status": status, "headers": [
@@ -1752,7 +2014,9 @@ working.</p>""", "Connected")
                 elif _c in _tokens():
                     tok = _c
                 else:
-                    _rec = _logins().get(_c)
+                    # A login record is a sign-in door's output, so it promotes only while the
+                    # doors are open (`SIGNIN_OFF_JSON`).
+                    _rec = _logins().get(_c) if vexa_oauth.enabled() else None
                     if _rec and _rec.get("token"):
                         _token_put(_c, {"uid": _rec["uid"], "email": _rec["email"],
                                         "via": "setup-url"})
@@ -1838,10 +2102,11 @@ working.</p>""", "Connected")
                        "to the open endpoint instead — everything works there.",
                 "open_endpoint": f"{base}/mcp",
             }).encode()
+            challenge = (f'Bearer realm="vexa", resource_metadata="{meta}"'
+                         if vexa_oauth.enabled() else 'Bearer realm="vexa"')
             await send({"type": "http.response.start", "status": 401, "headers": [
                 (b"content-type", b"application/json"),
-                (b"www-authenticate",
-                 f'Bearer realm="vexa", resource_metadata="{meta}"'.encode()),
+                (b"www-authenticate", challenge.encode()),
                 (b"content-length", str(len(body)).encode()),
             ]})
             await send({"type": "http.response.body", "body": body})
@@ -1874,6 +2139,7 @@ working.</p>""", "Connected")
         # Only a delegated session carries a scope; every other auth path leaves it None, which the
         # guard reads as "unscoped" and lets through exactly as before.
         CALL_SCOPE.set((sub or {}).get("scope"))
+        CALL_DELEGATED.set((sub or {}).get("delegated") is True)
         # …and only a delegated session carries a TARGET (Vexa-ai/vexa#1611). Empty everywhere else,
         # which the guard reads as "no default" — a direct caller's `slug=""` still means their own
         # desk, exactly as it always has.
@@ -1996,7 +2262,7 @@ mcp = MCPServer(
         "is fetch_asset(url) first and `![alt](assets/<name>)` second — never a remote URL "
         "on the page.\n"
         # WHO IS IN A GROUP, beside the verbs that change what is IN one (Vexa-ai/vexa#1632). Its own
-        # bullet rather than a clause on TEAM MEMORY: a person asking "add Marvin to this workspace"
+        # bullet rather than a clause on TEAM MEMORY: a person asking "add Quentin to this workspace"
         # is not asking about files, and a verb buried mid-sentence about pages is a verb the model
         # does not reach for. The founder's ruling is that this is a CONVERSATION \u2014 the front
         # page's button queues an act and there is no form behind it \u2014 so the order is ask,
@@ -2022,7 +2288,7 @@ mcp = MCPServer(
         "so your person can reshape it in a sentence and a wrong step name is a 400, not a "
         "runtime failure. reactions_list shows runs; reaction_signal "
         "(resume/retry/cancel/wake) steers them; fact_emit feeds events in.\n"
-        "\u2022 MAIL — mail_inbox/mail_read: every message Vexa sent this team, as received.\n"
+        "\u2022 MAIL — mail_inbox/mail_read: every message Vexa sent your person, as received.\n"
         "\u2022 DOCS, NO ACCOUNT NEEDED — vexa_overview() and vexa_search_docs(query) work "
         "anonymously, so 'what is this?' is always answerable.\n"
         "\u2022 SIGN-IN — one question, one code, never leaves this chat: ask which email "
@@ -2165,16 +2431,10 @@ def flows_submit(name: str, on_event: str, steps: list[str],
 
     steps: ordered step names from flows_list's vocabulary.
     on_event: a trigger name, e.g. invite.received / meeting.completed / mail.reply.
-    params: flow-level tuning read by steps via ctx.flow.param(key).
-
-    REFUSED while the company layer is missing: a flow submitted into an instance that cannot yet
-    say who it works for is a machine configured for nobody."""
+    params: flow-level tuning read by steps via ctx.flow.param(key)."""
     _actor, _refused = _operator_gate("flows_submit")
     if _refused:
         return _refused
-    gated = _refuse_if_gated("flows_submit", me())
-    if gated:
-        return gated
     st, body = _http("POST", f"{FLOWS_API}/flows", _fkey(), {
         "name": name, "on_event": on_event, "steps": steps,
         "params": params or {}, "activate": activate})
@@ -2187,15 +2447,10 @@ def flow_lifecycle(name: str, version: int, verb: str) -> str:
     """Activate or retire one flow version. verb: activate | retire.
 
     In-flight reactions keep the version stamped at their admission — retiring never
-    rewrites work already running.
-
-    REFUSED while the company layer is missing, for the same reason flows_submit is."""
+    rewrites work already running."""
     _actor, _refused = _operator_gate("flow_lifecycle")
     if _refused:
         return _refused
-    gated = _refuse_if_gated("flow_lifecycle", me())
-    if gated:
-        return gated
     if verb not in ("activate", "retire"):
         return json.dumps({"error": "verb must be activate or retire"})
     st, body = _http("POST", f"{FLOWS_API}/flows/{name}/{version}/{verb}", _fkey(), {})
@@ -2356,7 +2611,7 @@ def workspace_tree(slug: str = "") -> str:
     # whether a credential for it exists at all. It is what lets you answer "can we push this back?"
     # without going looking — and the only shape a credential ever takes in front of a model.
     home = None
-    sst, sbody = _http("GET", f"{AGENT_API}/api/workspace/git-remote-status{q}", {"X-User-Id": uid})
+    sst, sbody = _agent_git(uid, "GET", f"/api/workspace/git-remote-status{q}")
     if sst == 200 and isinstance(sbody, dict) and sbody.get("has_home"):
         home = f"{sbody.get('remote')} {sbody.get('url')} on {sbody.get('branch')}"
     return _capped({"for_display": "a file is opened with a SHORT-LIVED view link this server mints per file (workspace_read returns one) — never show a person a path: paths are arguments for workspace_read/write; show names and links", "status": st, "result": body, "git_home": home or "no git home — this workspace was not loaded from a repository"}, 8000)
@@ -2515,7 +2770,7 @@ def workspace_move(path: str, to: str, slug: str = "", to_slug: str = "") -> str
             "refused": "invalid_path", "from": path, "to": to, "why": str(e),
             "tell_your_person": "plainly, that the file name is not one a workspace can hold.",
         })
-    body = {"from": src, "to": dst}
+    body = {"path": src, "to": dst}
     if slug:
         body["slug"] = slug
     if to_slug:
@@ -2606,7 +2861,7 @@ def entity_upsert(kind: str, name: str, facts: list[str] = [], source: str = "",
       - project: What it is · Who · Status  (fields: status, what, who)
       - decision: What was decided · Why · What it changes  (fields: changes, what, why)
 
-    - `fields` — `{"role": "Chairs the TSC", "company": "[[Sony Pictures Imageworks]]"}`. Each key
+    - `fields` — `{"role": "Chairs the TSC", "company": "[[Brightwater Picture Studios]]"}`. Each key
       above files into its section. A field that names another entity also draws the link BOTH ways:
       giving a person a `company` adds them to that company's page too.
 
@@ -2615,8 +2870,8 @@ def entity_upsert(kind: str, name: str, facts: list[str] = [], source: str = "",
     without a page gets one NOW.
 
     - `kind` — person | company | meeting | project | decision
-    - `name` — what the page is about, as a person would say it ("Cottalango Leon", "Sony Pictures
-      Imageworks"). It becomes the title `[[wikilinks]]` resolve to.
+    - `name` — what the page is about, as a person would say it ("Robin Vale", "Brightwater Picture
+      Studios"). It becomes the title `[[wikilinks]]` resolve to.
     - `facts` — one short sentence each, only what was SAID or READ. Write other entities inside a
       fact as `[[Their Name]]`; the result tells you which of those have no page yet, and those are
       your next calls. Pass `section="<one of the section names above>"` to file them, or leave it
@@ -2776,8 +3031,8 @@ def _refuse_credentials(*values) -> str:
 def _deploy_key_state(uid: str, workspace: str, repo: str) -> dict:
     """The ONE next action when a git op is refused for want of a credential: our public key, where it
     goes, and the state the person reports back. Never a place to paste a secret."""
-    st, body = _http("POST", f"{AGENT_API}/api/workspace/{workspace or 'personal'}/deploy-key",
-                     {"X-User-Id": uid}, {"repo": repo})
+    st, body = _agent_git(uid, "POST", f"/api/workspace/{workspace or 'personal'}/deploy-key",
+                          {"repo": repo})
     if st != 200 or not isinstance(body, dict):
         return {"error": "could not prepare a deploy key for this workspace", "status": st}
     return {
@@ -2806,19 +3061,19 @@ def workspace_attach(workspace: str = "", repo: str = "", ref: str = "main") -> 
     they have. Then call this again.
 
     What is already there is not destroyed: the workspace's current contents are parked and can be
-    swapped back to. If the repo is not a Vexa-shaped workspace it is nested under `kg/` inside one."""
-    refusal = _refuse_credentials(repo, ref, workspace, token)
+    swapped back to. The repository is used as it is."""
+    refusal = _refuse_credentials(repo, ref, workspace)
     if refusal:
         return json.dumps({"refused": refusal, "next": "call again with just the repository URL"})
     uid = me()
     if not repo:
         return json.dumps({"error": "which repository?", "ask": "the repo URL, e.g. git@github.com:acme/kg.git"})
     if workspace:
-        st, body = _http("POST", f"{AGENT_API}/api/workspace/shared/{workspace}/attach",
-                         {"X-User-Id": uid}, {"repo": repo, "ref": ref or "main"})
+        st, body = _agent_git(uid, "POST", f"/api/workspace/shared/{workspace}/attach",
+                              {"repo": repo, "ref": ref or "main"})
     else:
-        st, body = _http("POST", f"{AGENT_API}/api/workspace/swap",
-                         {"X-User-Id": uid}, {"repo": repo, "ref": ref or "main"})
+        st, body = _agent_git(uid, "POST", "/api/workspace/swap",
+                              {"repo": repo, "ref": ref or "main"})
     if st == 403:
         return json.dumps({"error": "they can read that workspace but not replace it",
                            "tell_your_person": "an owner or contributor has to load a repo into a group workspace"})
@@ -2832,7 +3087,7 @@ def workspace_attach(workspace: str = "", repo: str = "", ref: str = "main") -> 
     state = b.get("state") or ("cloned" if b.get("cloned") else "attached")
     return json.dumps({
         "workspace": workspace or "personal", "repo": b.get("repo"), "ref": b.get("ref"),
-        "state": state, "parked": b.get("parked"), "nested": b.get("nested"),
+        "state": state, "parked": b.get("parked"),
         "tell_your_person": (f"Loaded {repo} — it is the workspace now. What was here before is parked "
                              f"and can be brought back."
                              if state == "cloned" else
@@ -2852,12 +3107,11 @@ def workspace_push(workspace: str = "") -> str:
     No credential argument, and none is accepted: the workspace's deploy key or their saved token is
     resolved server-side. If neither exists the result carries a public key to add — say that, and ask
     them to say `done` when it is added."""
-    refusal = _refuse_credentials(workspace, token)
+    refusal = _refuse_credentials(workspace)
     if refusal:
         return json.dumps({"refused": refusal})
     uid = me()
-    st, body = _http("POST", f"{AGENT_API}/api/workspace/push", {"X-User-Id": uid},
-                     {"slug": workspace or None})
+    st, body = _agent_git(uid, "POST", "/api/workspace/push", {"slug": workspace or None})
     if st in (200, 201):
         b = body or {}
         return json.dumps({"pushed": b.get("branch"), "to": b.get("url"), "head": (b.get("head_sha") or "")[:8],
@@ -3021,7 +3275,7 @@ def workspaces() -> str:
 def workspace_target(slug: str = "") -> str:
     """Point this conversation's writes at a workspace — call it when the person SAYS SO.
 
-    *"work in the OeNB workspace"*, *"let's collect this into ILM from now on"*, *"back to my
+    *"work in the Example Bank workspace"*, *"let's collect this into Copperline from now on"*, *"back to my
     desk"*. From then on `entity_upsert`, `workspace_write` and a plain file write land there
     without anybody naming it again, the header chip shows it, and it survives a reload and a
     second window. `slug=""` puts it back on their own desk.
@@ -3088,6 +3342,8 @@ def user_ensure(email: str) -> str:
     ak = {"X-Admin-API-Key": _admin_key()}
     st, u = _http("GET", f"{ADMIN_API}/admin/users/email/{email}", ak)
     if st != 200:
+        if not _signin_admitted((email or "").strip().lower()):
+            return json.dumps({"error": NOT_ADMITTED, "email": email})
         st, u = _http("POST", f"{ADMIN_API}/admin/users", ak,
                       {"email": email, "name": email.split("@")[0].title()})
     uid = str((u or {}).get("id", ""))
@@ -3200,7 +3456,7 @@ def captions_to_segments(video_id: str, max_minutes: int = 45) -> str:
 def zoom_transcript_to_segments(name: str, path: str) -> str:
     """Convert a Zoom/LFX machine transcript into segments, keeping the REAL speaker labels.
 
-    Lines look like `[00:00:10.620 --> 00:00:12.689] Cottalango Leon (Sony Pictures Imageworks):
+    Lines look like `[00:00:10.620 --> 00:00:12.689] Robin Vale (Brightwater Picture Studios):
     text`. Unlike YouTube auto-captions this carries genuine diarization and company
     affiliations, so it exercises attribution the way a real capture does. Consecutive lines
     from one speaker are merged into a turn."""
@@ -3413,31 +3669,72 @@ def meeting_seed(native_id: str, title: str, video_id: str,
                        "read_the_words_with": "meeting_transcript(meeting_id=%s, tail=0)" % mid})
 
 
+def _addressed_to(message: dict) -> list:
+    """The lower-cased recipient addresses of one mail-double message."""
+    return [str((t or {}).get("Address") or "").strip().lower() for t in (message.get("To") or [])]
+
+
+#: How far back mail_inbox looks through the mail double for the caller's own messages.
+MAIL_SCAN = 500
+
+
+def _mail_refused_to_worker(verb: str) -> str:
+    """The refusal for a delegated (worker) caller, or "" for anyone else. A person's mail holds
+    their sign-in codes and links, so a worker acting for them never reads it, in any regime."""
+    if not _delegated_call():
+        return ""
+    return json.dumps({"refused": "delegated", "verb": verb,
+                       "why": "a person's mail holds their sign-in codes; a worker acting for them "
+                              "does not read it",
+                       "what_to_do": "Ask your person to check their own inbox."})
+
+
 @mcp.tool()
 @_anon_guard
 def mail_inbox(limit: int = 20) -> str:
-    """Read the mail double. Every message the system has sent, with nothing leaving the
-    host — this is the outbound half of the loop and the honest way to check what a flow
-    actually said to a person. Account-scoped: an open inbox would let an agent read the
-    sign-in codes and skip the human."""
+    """Read the mail double: the messages Vexa sent YOU, with nothing leaving the host — the
+    outbound half of the loop and the honest way to check what a flow actually said to your
+    person. Account-scoped: only messages addressed to the caller's own address, and nothing when
+    that address is unknown. The double holds every person's mail, sign-in codes included, so
+    a delegated worker is refused."""
     me()
-    st, body = _http("GET", f"{MAILPIT}/api/v1/messages?limit={limit}", None)
+    refused = _mail_refused_to_worker("mail_inbox")
+    if refused:
+        return refused
+    mine = (_caller_email() or "").strip().lower()
+    if not mine:
+        return json.dumps({"total": 0, "messages": []})
+    try:
+        limit = max(1, min(int(limit), 100))
+    except (TypeError, ValueError):
+        limit = 20
+    st, body = _http("GET", f"{MAILPIT}/api/v1/messages?limit={MAIL_SCAN}", None)
     if isinstance(body, dict):
         msgs = [{"from": m["From"]["Address"],
                  "to": [t["Address"] for t in m.get("To", [])],
                  "subject": m["Subject"], "id": m["ID"]}
-                for m in body.get("messages", [])]
-        return _capped({"total": body.get("total"), "messages": msgs}, 8000)
+                for m in body.get("messages", [])
+                if mine in _addressed_to(m)][:limit]
+        return _capped({"total": len(msgs), "messages": msgs}, 8000)
     return json.dumps({"status": st, "body": str(body)[:400]})
 
 
 @mcp.tool()
 @_anon_guard
 def mail_read(message_id: str) -> str:
-    """The full body of one sent message — the artifact as the person receives it."""
+    """The full body of one message Vexa sent YOU — the artifact as your person receives it. A
+    message addressed to anyone else does not exist, as far as this tool says. A delegated worker
+    is refused."""
     me()
-    st, body = _http("GET", f"{MAILPIT}/api/v1/message/{message_id}", None)
+    refused = _mail_refused_to_worker("mail_read")
+    if refused:
+        return refused
+    mine = (_caller_email() or "").strip().lower()
+    st, body = _http("GET", f"{MAILPIT}/api/v1/message/{urllib.parse.quote(str(message_id), safe='')}",
+                     None)
     if isinstance(body, dict):
+        if not mine or mine not in _addressed_to(body):
+            return json.dumps({"status": 404, "body": "no such message"})
         return json.dumps({"subject": body.get("Subject"),
                            "text": (body.get("Text") or "")[:6000]})
     return json.dumps({"status": st, "body": str(body)[:400]})
@@ -3858,59 +4155,22 @@ def company_context() -> str:
 
 
 # ---------------------------------------------------------------- the company layer
-# A fresh Vexa serves NOBODY until its admin has written the thin company layer into `_global`
-# (founder, 2026-09-02: "global needs to be setup by admin, it just should not let him start the
-# service before that"). agent-api holds the gate value and the verifier; the rig only asks.
-
-SETUP_SENTENCE = "This Vexa is being set up by its administrator."
-
-
-def _company_layer_state(uid: str) -> dict:
-    """What the company layer holds, from the one service that can see the store.
-
-    FAIL-CLOSED like every other reader of this gate: if agent-api cannot answer, the layer is
-    missing. A verb that reconfigures the machine must not proceed because a probe timed out."""
-    st, body = _http("GET", f"{AGENT_API}/api/global/state", {"X-User-Id": uid})
-    if st != 200 or not isinstance(body, dict):
-        return {"global_setup": "missing", "reasons": [f"agent-api answered {st}"],
-                "missing_files": [], "you_are_admin": False}
-    return body
-
-
-def _refuse_if_gated(verb: str, uid: str):
-    """The refusal an operator verb returns while the company layer is missing, or None.
-
-    It NAMES ITSELF. A bare "forbidden" leaves the agent to guess whether it asked wrongly or asked
-    too early, and those two have opposite fixes. Note this is a DIFFERENT refusal from
-    `_operator_or_refuse`: that one says "you are not the operator", this one says "there is not yet
-    an organisation to operate". Both can be true; they are answered separately because the person
-    reading the answer has to know which one to fix."""
-    state = _company_layer_state(uid)
-    if state.get("global_setup") == "completed":
-        return None
-    return json.dumps({
-        "refused": verb,
-        "why": f"{verb} is refused: the company layer is not set up. {SETUP_SENTENCE}",
-        "missing_files": state.get("missing_files", []),
-        "reasons": state.get("reasons", []),
-        "next": ("You are the admin — write the five files into _global and call "
-                 "mark_global_ready." if state.get("you_are_admin") else
-                 "Only the instance admin can lift this."),
-    })
+# OPTIONAL (founder ruling 2026-10-08: "let's remove global setup at all so that there is no need to
+# setup global at all - let it be empty with no data - it's fine"). Nothing waits for it and no verb
+# here refuses for want of it; an admin who chooses to write it accepts it with the verb below.
 
 
 @mcp.tool()
 @_anon_guard
 def mark_global_ready() -> str:
-    """ACCEPT the company layer you just wrote into `_global`, and start the service.
+    """ACCEPT the company layer you just wrote into `_global` (optional — nothing waits for it).
 
     Call this at the END of the company-setup conversation, once the administrator agrees the five
     files are right: README.md (the company name as its first heading, then ONE sentence of what it
     does), PRINCIPLES.md, OBJECTIVES.md, STRUCTURE.md, MISSING.md.
 
-    It RE-READS the files itself before it accepts anything, commits them to the `_global` git
-    history with the administrator as the author, and lifts the instance gate — so other people can
-    sign in and the flows engine starts sending. It is a CHECK, not a claim: if the layer is
+    It RE-READS the files itself before it accepts anything and commits them to the `_global` git
+    history with the administrator as the author. It is a CHECK, not a claim: if the layer is
     incomplete it refuses and tells you exactly what is missing, so calling it is always safe, and
     telling the administrator it is done before this verb has accepted it is always wrong.
 
@@ -3926,8 +4186,8 @@ def mark_global_ready() -> str:
     if st != 200:
         return json.dumps({"accepted": False, "status": st, "error": str(body)[:500]})
     return json.dumps({**body,
-                       "say_this": "The instance is set up. Other people can sign in now and the "
-                                   "flows start sending."})
+                       "say_this": "The company layer is written: every agent here now introduces "
+                                   "itself with this company, and the mails name it."})
 
 
 @mcp.tool()
@@ -3962,20 +4222,35 @@ GATEWAY = os.environ.get("VEXA_GATEWAY_URL", "http://localhost:18456")
 
 
 def _meeting_ref(meeting_url: str):
-    """(platform, native_meeting_id) from a pasted link, or (None, why-it-failed)."""
+    """Read meeting identity from an HTTPS provider URL; preserve the original URL for joining."""
     import re as _re
-    u = (meeting_url or "").strip()
-    m = _re.search(r"meet\.google\.com/([a-z]{3}-[a-z]{4}-[a-z]{3})", u)
-    if m:
-        return "google_meet", m.group(1)
-    m = _re.search(r"teams\.live\.com/meet/(\d+)", u)
-    if m:
-        return "teams", m.group(1)
-    m = _re.search(r"zoom\.us/j/(\d+)", u)
-    if m:
-        return "zoom", m.group(1)
-    return None, ("could not read that link — send the full meeting URL "
-                  "(meet.google.com/xxx-xxxx-xxx, teams.live.com/meet/<id>, zoom.us/j/<id>)")
+    from urllib.parse import urlsplit
+    import hashlib
+    try:
+        u = urlsplit((meeting_url or "").strip())
+        host = (u.hostname or "").lower()
+        if u.scheme != "https" or u.username or u.password or u.port not in (None, 443):
+            raise ValueError()
+        def is_host(base):
+            return host == base or host.endswith("." + base)
+        if host == "meet.google.com":
+            m = _re.fullmatch(r"/([a-z]{3}-[a-z]{4}-[a-z]{3})/?", u.path)
+            if m:
+                return "google_meet", m.group(1)
+        if any(is_host(base) for base in ("teams.live.com", "teams.microsoft.com", "teams.microsoft.us", "teams.cloud.microsoft")):
+            path = urlsplit(u.fragment).path if u.path.rstrip("/") in ("", "/v2") and u.fragment.startswith("/meet/") else u.path
+            m = _re.fullmatch(r"/meet/(\d{10,16})/?", path)
+            if m:
+                return "teams", m.group(1)
+            if u.path.startswith("/l/meetup-join/") and len(u.path) > len("/l/meetup-join/"):
+                return "teams", hashlib.sha256(meeting_url.strip().encode()).hexdigest()[:16]
+        if is_host("zoom.us") or is_host("zoomgov.com"):
+            m = _re.fullmatch(r"/j/(\d+)/?", u.path)
+            if m:
+                return "zoom", m.group(1)
+    except ValueError:
+        pass
+    return None, "could not read that link — send the original HTTPS Google Meet, Microsoft Teams or Zoom meeting URL"
 
 
 # meeting-api's own non-terminal set (collector/app.py `_RUNNING_STATUSES`, canonical MeetingStatus
@@ -4344,7 +4619,7 @@ def transcript_terms(meeting_id: str = "", since: str = "", keep: str = "",
          anyone yet. Read the list and pick the ones that matter here: a company in the deal, a
          person nobody has a page for, a product name that was decided on. Drop the ones that are
          just capitalised words.
-      2. `transcript_terms(meeting_id, since, keep="Acme, Cottalango Leon")` — PUBLISH. Exactly those
+      2. `transcript_terms(meeting_id, since, keep="Acme, Robin Vale")` — PUBLISH. Exactly those
          become chips in the transcript. `keep="*"` publishes everything, which is right only when
          everything genuinely matters.
 
@@ -4817,6 +5092,8 @@ def auth_link() -> str:
     """Sign your person in with ONE CLICK-AND-A-CODE on a page, instead of relaying the code
     through the chat. Returns a link: give it to them, then poll auth_claim(handle) every few
     seconds until the token arrives. NO ACCOUNT NEEDED to call this."""
+    if not vexa_oauth.enabled():
+        return SIGNIN_OFF_JSON
     import secrets as _s
     h = _s.token_urlsafe(16)
     d = _logins()
@@ -4838,6 +5115,8 @@ def auth_claim(handle: str) -> str:
     """Second half of auth_link(): returns pending until the person approves, then the token.
     Register it on the connection (header, or ?c=<token> on the address) and reconnect — it is
     the connection's credential, never a call argument."""
+    if not vexa_oauth.enabled():
+        return SIGNIN_OFF_JSON
     d = _logins()
     rec = d.get(handle)
     if not rec:
@@ -4997,7 +5276,7 @@ def deeplink(target: str, ref: str = "", name: str = "", meeting: str = "", ws: 
                       "the terminal composed: context pane left, the meeting beside it"),
         })
     if target == "setup_global":
-        q = f"?setup=global" + (f"&{as_q}" if as_q else "")
+        q = f"?ask=setup-global" + (f"&{as_q}" if as_q else "")
         return json.dumps({"url": f"{UI_BASE}/{q}",
                            "opens": "the org-level setup conversation"})
     return json.dumps({"error": "target must be ask | meeting | meetings | workspace_file | view | pre_meeting | during_meeting | post_meeting | "
@@ -5250,15 +5529,14 @@ def workspace_pull(workspace: str = "") -> str:
 
     No credential argument, and none is accepted — the deploy key or saved token is resolved
     server-side, and a missing one comes back as a key to add, not a box to fill."""
-    refusal = _refuse_credentials(workspace, token)
+    refusal = _refuse_credentials(workspace)
     if refusal:
         return json.dumps({"refused": refusal})
     uid = me()
     q = f"?slug={workspace}" if workspace else ""
-    sst, sbody = _http("GET", f"{AGENT_API}/api/workspace/git-remote-status{q}", {"X-User-Id": uid})
+    sst, sbody = _agent_git(uid, "GET", f"/api/workspace/git-remote-status{q}")
     if sst == 200 and isinstance(sbody, dict) and sbody.get("has_home"):
-        st, body = _http("POST", f"{AGENT_API}/api/workspace/pull", {"X-User-Id": uid},
-                         {"slug": workspace or None})
+        st, body = _agent_git(uid, "POST", "/api/workspace/pull", {"slug": workspace or None})
         if st in (200, 201):
             b = body or {}
             return json.dumps({
@@ -5773,6 +6051,122 @@ def vexa_search_docs(query: str, hits: int = 5) -> str:
                        "source": "https://docs.vexa.ai/llms-full.txt"})[:14000]
 
 
+def _spend_code(rec: dict) -> None:
+    """Drop a code from its address record, keeping the address's cumulative ledger."""
+    for k in ("code", "exp", "tries"):
+        rec.pop(k, None)
+
+
+def _address_ledger(d: dict, now: float) -> None:
+    """Prune every address record to its window; drop records with no live code and no history."""
+    cut = now - CODE_ADDRESS_WINDOW_S
+    for addr in list(d):
+        rec = d[addr] if isinstance(d[addr], dict) else {}
+        rec["issued"] = [t for t in rec.get("issued", []) if t > cut]
+        rec["failed"] = [t for t in rec.get("failed", []) if t > cut]
+        if rec.get("code") and now > rec.get("exp", 0) + CODE_ADDRESS_WINDOW_S:
+            _spend_code(rec)
+        if not rec.get("code") and not rec["issued"] and not rec["failed"]:
+            del d[addr]
+        else:
+            d[addr] = rec
+
+
+def _issue_email_code(email: str) -> dict:
+    """Mail a fresh 6-digit sign-in code to `email` — the mailbox proof every rig sign-in door
+    takes (`/login`, start_onboarding, the OAuth consent screen in vexa_oauth). One of:
+    `{"sent": True}`; `{"refused": "already-sent"}` (a live code is already in that inbox; reminting
+    would invalidate it); `{"refused": "address"}` (that address's codes or wrong tries for the
+    window are spent); `{"refused": "source"}` / `{"refused": "budget"}` (this caller's share, or
+    the process-wide ceiling, of mailed codes is spent); `{"refused": "mail", "detail": ...}`.
+    NO ACCOUNT IS CREATED HERE (R-D11).
+
+    The address record is checked and written under the store's lock, and it keeps a CUMULATIVE
+    ledger (codes mailed, wrong tries) that outlives each code. Asking again therefore never
+    resets a count: guessing is bounded per address, not per request."""
+    import secrets
+    now = time.time()
+    out: dict = {}
+
+    def _claim(d):
+        _address_ledger(d, now)
+        rec = d.get(email) or {"issued": [], "failed": []}
+        if rec.get("code") and now < rec.get("exp", 0) and rec.get("tries", 0) < CODE_TRIES:
+            out["refused"] = "already-sent"
+        elif (len(rec["issued"]) >= CODE_ADDRESS_ISSUE_CAP
+              or len(rec["failed"]) >= CODE_ADDRESS_FAIL_CAP):
+            out["refused"] = "address"
+        else:
+            # RATE-LIMITED BY SOURCE (R-D11). These doors need no account, so without a budget
+            # one anonymous caller in a loop makes us the mailer for an address list.
+            why = _mail_budget(CALL_SOURCE.get() or "")
+            if why:
+                out["refused"] = why
+            else:
+                out["code"] = f"{secrets.randbelow(1000000):06d}"
+                rec.update(code=out["code"], exp=now + LOGIN_TTL, tries=0,
+                           issued=rec["issued"] + [now])
+                d[email] = rec
+        return d
+
+    rig_secrets.update(EMAIL_CODES_STORE, _claim)
+    if "code" not in out:
+        return {"refused": out.get("refused", "budget")}
+    err = _send_code(email, out["code"])
+    if err:
+        # A code nobody received must not sit in the record answering "already sent" for fifteen
+        # minutes. The mailing still counts against the address.
+        def _unsend(d):
+            rec = d.get(email)
+            if rec and rec.get("code") == out["code"]:
+                _spend_code(rec)
+            return d
+        rig_secrets.update(EMAIL_CODES_STORE, _unsend)
+        return {"refused": "mail", "detail": err}
+    return {"sent": True}
+
+
+def _redeem_email_code(email: str, code) -> dict:
+    """Check the code mailed to `email`, and SPEND it on success. One of: `{"ok": True}`,
+    `{"error": "none"}` (no code pending), `{"error": "expired"}`, `{"error": "too-many"}` (the
+    code's or the address's wrong tries are spent; the code is dropped),
+    `{"error": "wrong", "attempts_left": n}`. Checked and counted under the store's lock, so
+    parallel guesses cannot outrun the count."""
+    # ASCII digits only: `str.isdigit` also admits other scripts' digits, which no code contains.
+    digits = "".join(ch for ch in str(code) if ch in "0123456789")
+    now = time.time()
+    out: dict = {}
+
+    def _check(d):
+        _address_ledger(d, now)
+        rec = d.get(email)
+        if not rec or not rec.get("code"):
+            out["error"] = "none"
+        elif now > rec.get("exp", 0):
+            _spend_code(rec)
+            out["error"] = "expired"
+        elif rec.get("tries", 0) >= CODE_TRIES or len(rec["failed"]) >= CODE_ADDRESS_FAIL_CAP:
+            _spend_code(rec)
+            out["error"] = "too-many"
+        elif not hmac.compare_digest(digits, str(rec["code"])):
+            rec["tries"] = int(rec.get("tries", 0)) + 1
+            rec["failed"] = rec["failed"] + [now]
+            left = min(CODE_TRIES - rec["tries"], CODE_ADDRESS_FAIL_CAP - len(rec["failed"]))
+            if left <= 0:
+                _spend_code(rec)
+            out.update(error="wrong", attempts_left=max(0, left))
+        else:
+            # SINGLE USE. Proven: whoever supplied this code can read that mailbox — so it is
+            # spent here, under the store's lock, BEFORE the account is touched. A code that
+            # survived its own success is a second sign-in for anyone who saw it in a transcript.
+            _spend_code(rec)
+            out["ok"] = True
+        return d
+
+    rig_secrets.update(EMAIL_CODES_STORE, _check)
+    return out
+
+
 @mcp.tool()
 def start_onboarding(email: str) -> str:
     """Sign in or sign up, from inside this conversation. NO ACCOUNT NEEDED to call this.
@@ -5782,22 +6176,24 @@ def start_onboarding(email: str) -> str:
     The code is the whole proof: no form, no password, no browser.
 
     Works for new AND returning people -- same two steps either way."""
+    if not vexa_oauth.enabled():
+        return SIGNIN_OFF_JSON
     email = (email or "").strip().lower()
-    if "@" not in email or email.startswith("@") or email.endswith("@"):
+    if not _plausible_email(email):
         return json.dumps({"error": "that is not an email address"})
-    import secrets
-    if not _code_budget():
-        # RATE-LIMITED BY SOURCE (R-D11). This tool needs no account, so the only source this
-        # server can see is itself: a process-wide budget on codes MAILED. Without it, one
-        # anonymous caller in a loop makes us the mailer for an address list.
+    # NO ACCOUNT IS CREATED HERE (R-D11). It used to POST /admin/users before any code was
+    # verified, so an unauthenticated caller minted platform accounts for addresses it did not
+    # own — and the response then said "existing" or "created", which made this an existence
+    # oracle for the whole user table. The account is created in confirm_login, once the code
+    # coming back proves the caller can read that mailbox.
+    issued = _issue_email_code(email)
+    if issued.get("refused") in ("budget", "source", "address"):
         return json.dumps({
-            "error": "too many sign-in codes have been sent from this server just now",
-            "what_to_do": "Wait a minute and call start_onboarding(email) again. If your person "
+            "error": "too many sign-in codes have been sent just now",
+            "what_to_do": "Wait a while and call start_onboarding(email) again. If your person "
                           "already has a code from the last few minutes, use that one.",
         })
-    codes = rig_secrets.read(EMAIL_CODES_STORE)
-    live = codes.get(email)
-    if live and time.time() < live.get("exp", 0) and live.get("tries", 0) < 5:
+    if issued.get("refused") == "already-sent":
         # a code is already sitting in that inbox — reminting would invalidate it
         return json.dumps({
             "code_already_sent": email,
@@ -5805,18 +6201,8 @@ def start_onboarding(email: str) -> str:
                           "inbox. Ask your person for it and call "
                           "confirm_login(email, code) — do not request another.",
         })
-    code = f"{secrets.randbelow(1000000):06d}"
-    # NO ACCOUNT IS CREATED HERE (R-D11). It used to POST /admin/users before any code was
-    # verified, so an unauthenticated caller minted platform accounts for addresses it did not
-    # own — and the response then said "existing" or "created", which made this an existence
-    # oracle for the whole user table. The account is created in confirm_login, once the code
-    # coming back proves the caller can read that mailbox.
-    rig_secrets.update(EMAIL_CODES_STORE, lambda d: d.update(
-        {email: {"code": code, "exp": time.time() + LOGIN_TTL, "tries": 0}}) or d)
-
-    err = _send_code(email, code)
-    if err:
-        return json.dumps({"error": "could not send the code", "detail": err,
+    if issued.get("refused") == "mail":
+        return json.dumps({"error": "could not send the code", "detail": issued.get("detail"),
                            "try": "report_friction() and tell your person — the mail channel "
                                   "is down."})
     return json.dumps({
@@ -5847,42 +6233,31 @@ def confirm_login(email: str, code: str) -> str:
     `?c=<token>` on the address for a client that cannot set one — and reconnect. It
     authenticates the CONNECTION, so it takes effect on the next session. Say that plainly and
     once; do not promise the tools work this turn, because they do not."""
+    if not vexa_oauth.enabled():
+        return SIGNIN_OFF_JSON
     email = (email or "").strip().lower()
-    code = "".join(ch for ch in str(code) if ch.isdigit())
-    rec = rig_secrets.read(EMAIL_CODES_STORE).get(email)
-    if not rec:
+    checked = _redeem_email_code(email, code)
+    if checked.get("error") == "none":
         return json.dumps({"error": "no code is pending for that email",
                            "fix": "call start_onboarding(email) first"})
-
-    def _drop(d):
-        d.pop(email, None)
-        return d
-
-    if time.time() > rec["exp"]:
-        rig_secrets.update(EMAIL_CODES_STORE, _drop)
+    if checked.get("error") == "expired":
         return json.dumps({"error": "that code expired",
                            "fix": "call start_onboarding(email) again for a fresh one"})
-    if rec["tries"] >= 5:
-        rig_secrets.update(EMAIL_CODES_STORE, _drop)
+    if checked.get("error") == "too-many":
         return json.dumps({"error": "too many wrong attempts — code invalidated",
                            "fix": "call start_onboarding(email) again"})
-    if not hmac.compare_digest(str(code), str(rec["code"])):
-        def _bump(d):
-            r = d.get(email)
-            if r:
-                r["tries"] = int(r.get("tries", 0)) + 1
-            return d
-        tries = int(rig_secrets.update(EMAIL_CODES_STORE, _bump).get(email, {}).get("tries", 5))
+    if checked.get("error") == "wrong":
         return json.dumps({"error": "wrong code",
-                           "attempts_left": max(0, 5 - tries),
+                           "attempts_left": checked.get("attempts_left", 0),
                            "note": "ask your person to re-read it — never guess"})
 
-    # SINGLE USE. Proven: whoever supplied this code can read that mailbox — so it is spent here,
-    # under the store's lock, BEFORE the account is touched. A code that survived its own success
-    # is a second sign-in for anyone who saw it in a transcript.
-    rig_secrets.update(EMAIL_CODES_STORE, _drop)
-    # THE ACCOUNT IS CREATED HERE, not in start_onboarding (R-D11) — after the proof, never before.
-    uid, _existed = _account_for(email)
+    # THE ACCOUNT IS CREATED HERE, not in start_onboarding (R-D11) — after the proof, never before,
+    # and only for an address admin-api admits.
+    uid, why = _account_for(email)
+    if not uid and why == NOT_ADMITTED:
+        return json.dumps({"error": "this address may not sign in to this Vexa",
+                           "do": "tell your person plainly; the person who runs this Vexa can "
+                                 "add the address. Do not retry."})
     if not uid:
         return json.dumps({"error": "could not create the account",
                            "do": "report_friction() — this is ours, not theirs"})
@@ -5963,6 +6338,9 @@ def _transport_security():
 # Stateless means each request stands alone: no session handshake to reject, no server memory to
 # outlive, and a restart is invisible to a client mid-turn. The cost is server-initiated streaming,
 # which this server does not use — every tool here answers in one response.
+from workspace_import_tools import register_workspace_import_tools
+register_workspace_import_tools(mcp, git=_agent_git, subject=me, guard=_anon_guard)
+
 app = AUTH_MIDDLEWARE(mcp.streamable_http_app(
     transport_security=_transport_security(), stateless_http=True))
 

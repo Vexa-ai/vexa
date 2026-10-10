@@ -26,12 +26,14 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      # v0.10.5 Pack I.s — stateful-pod anti-affinity (#272 iter-5).
-      # See deployment-minio.yaml header for the full rationale. Symmetric
-      # spread across postgres/redis/minio/tts-service so that on a 2+
-      # node cluster they distribute and avoid Linode's 7-vol-per-instance
-      # cap during chart-upgrade rolling restarts (which retains old PVs
-      # under reclaimPolicy=Retain, briefly causing 8+ volumes/node).
+      # v0.10.5 Pack I.s — stateful-pod anti-affinity (#272 iter-5). Linode LKE
+      # g6-standard-* nodes cap attached block volumes at 7 per instance; a
+      # soft (preferred) spread of the stateful pods across nodes keeps them
+      # under that cap during chart-upgrade rolling restarts (which retain old
+      # PVs under reclaimPolicy=Retain, briefly causing 8+ volumes/node), and
+      # still schedules on a single node. `minio` stays in the list although
+      # the chart no longer runs MinIO: dropping it would change this pod
+      # template and restart Postgres on upgrade, for no scheduling effect.
       affinity:
         podAntiAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:
@@ -64,7 +66,7 @@ spec:
               value: "/var/lib/postgresql/data/pgdata"
           envFrom:
             - secretRef:
-                name: {{ .Values.postgres.credentialsSecretName | quote }}
+                name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
           volumeMounts:
             - name: data
               mountPath: /var/lib/postgresql/data

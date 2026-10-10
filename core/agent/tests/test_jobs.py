@@ -32,6 +32,7 @@ from worker.jobs import JobRunner
 from worker.worker import serve
 
 from .test_worker import CursorStream, FakeStream, _msg
+from tests.conftest import signed_turn
 
 
 # ── the mark: one writer, one reader ─────────────────────────────────────────────────────────────
@@ -327,7 +328,7 @@ def test_a_boot_never_reports_another_chats_job(tmp_path):
     gate = threading.Event()
     a_sink = _Sink()
     a = JobRunner(emit=a_sink, turn=_slow_turn(gate), register_dir=tmp_path / "jobs", session="chat-a")
-    running = a.spawn("extend", "oenb/README.md", "Extend it.")
+    running = a.spawn("extend", "examplebank/README.md", "Extend it.")
     record = tmp_path / "jobs" / f"{running['job_id']}.json"
     assert record.exists()
 
@@ -422,7 +423,7 @@ def test_a_marked_act_completes_the_turn_without_running_it(tmp_path):
         yield {"type": "done", "reply": "ok", "sessionId": "s", "ok": True}
 
     prompt = "context\n" + job_mark("create", "kg/new.md") + "Write the page."
-    s = FakeStream(inbox=[_msg("1-0", prompt), ("2-0", {"turn": json.dumps({"type": "stop"})})])
+    s = FakeStream(inbox=[_msg("1-0", prompt), ("2-0", signed_turn({"type": "stop"}))])
     t = threading.Thread(target=serve, kwargs=dict(
         stream=s, out_topic="o", in_topic="i", turn=chat, job=jobturn,
         jobs_dir=tmp_path / "jobs", start={}, idle_ms=10))
@@ -607,7 +608,7 @@ def _marked(eid, kind, target, nonce=None):
     body = {"prompt": job_mark(kind, target) + "Go further on it."}
     if nonce:
         body["nonce"] = nonce
-    return (eid, {"turn": json.dumps(body)})
+    return (eid, signed_turn(body))
 
 
 def test_an_act_pressed_during_a_turn_starts_beside_it(tmp_path):
@@ -660,7 +661,7 @@ def test_the_drain_takes_only_marked_acts_and_never_reorders_the_rest(tmp_path):
     def chat(prompt):
         ran.append(prompt)
         if prompt == "hello":
-            s.entries.append(("6-0", {"turn": json.dumps({"prompt": "and also this"})}))
+            s.entries.append(("6-0", signed_turn({"prompt": "and also this"})))
             s.entries.append(_marked("7-0", "create", "kg/new.md"))
         yield {"type": "message-delta", "text": "thinking"}
         if prompt == "hello":

@@ -37,8 +37,24 @@
       "description": "uvicorn/app log level"
     },
     {
+      "key": "RUNTIME_API_TOKEN",
+      "class": "required-explicit",
+      "secret": true,
+      "description": "the runtime caller credential: every route except /health requires it as `Authorization: Bearer`, because the workload and schedule surfaces start containers, Pods and processes and fire requests on a caller's word. agent-api and meeting-api hold the same value; no spawned workload receives it. Unset, shorter than 32 bytes, or a published placeholder ⇒ the runtime refuses to boot rather than serve the API open. Minted at install: compose's mint-dev-env.sh, the Helm chart Secret, the Lite entrypoint",
+      "forbidden_values": [
+        "vexa-internal-secret",
+        "lite-internal-secret",
+        "changeme",
+        "change-me",
+        "CHANGE-ME",
+        "default",
+        "secret"
+      ]
+    },
+    {
       "key": "REDIS_URL",
       "class": "capability",
+      "secret": true,
       "capability": "scheduler",
       "description": "backing for the durable schedule.v1 cron store; unset ⇒ no scheduler is constructed"
     },
@@ -69,10 +85,19 @@
       "key": "DOCKER_NETWORK",
       "class": "defaulted",
       "default": "(unset — docker's default bridge)",
-      "description": "network spawned workloads join — compose sets the project network so bots resolve meeting-api/redis by service name",
+      "description": "network a spawned meeting bot joins (and an agent worker too, when DOCKER_WORKER_NETWORK is unset) — compose sets its `bots` network, where only meeting-api, redis and storage sit",
       "targets": [
         "compose",
         "helm"
+      ]
+    },
+    {
+      "key": "DOCKER_WORKER_NETWORK",
+      "class": "defaulted",
+      "default": "(unset — DOCKER_NETWORK)",
+      "description": "network a spawned agent worker joins — compose sets its `workers` network, where only the gateway, redis, flows-api and the opt-in llm-shim / searxng sit. Workload discovery and find() are scoped to both networks",
+      "targets": [
+        "compose"
       ]
     },
     {
@@ -81,6 +106,37 @@
       "default": "(backend default)",
       "description": "shm-size for spawned browser-bot containers",
       "targets": []
+    },
+    {
+      "key": "VEXA_WORKSPACE_MOUNT_SOURCE",
+      "class": "defaulted",
+      "default": "(unset — no store backing: in-store workspace mounts are not bound)",
+      "description": "what backs the agent workspace store on the substrate — a host path or named volume (docker backend), the PVC claim name (k8s backend); the process backend shares the filesystem and needs none. The RUNTIME's own value: a workload spec's VEXA_WORKSPACE_MOUNT_* keys are discarded, and this is injected into every spec that declares a mount set",
+      "targets": [
+        "compose",
+        "helm"
+      ]
+    },
+    {
+      "key": "VEXA_WORKSPACE_MOUNT_TARGET",
+      "class": "defaulted",
+      "default": "/workspaces",
+      "description": "where the workspace store sits inside a workload (agent-api's VEXA_WORKSPACES_DIR). Every mount a spec declares must sit strictly under it, or the create is refused (400); on the process backend it is also the root the POSIX tenant isolation seals",
+      "targets": [
+        "compose",
+        "helm",
+        "lite"
+      ]
+    },
+    {
+      "key": "RUNTIME_EXTRA_MOUNT_SOURCES",
+      "class": "defaulted",
+      "default": "(unset — no out-of-store mount source is served)",
+      "description": "comma-separated absolute host paths, outside the workspace store, that a workload's mount set may name as a mount source; any other source is refused. Compose and Helm set it to agent-api's separately managed _global tier when an operator configures one",
+      "targets": [
+        "compose",
+        "helm"
+      ]
     },
     {
       "key": "RUNTIME_STOP_GRACE_SEC",
@@ -139,6 +195,132 @@
       "class": "defaulted",
       "default": "(unset — the agent-worker class declares no memory, preserving runtime.v1's optional resources)",
       "description": "k8s backend: memory (MiB) every SPAWNED agent-worker Pod declares, as BOTH request and limit. Unset/empty ⇒ no memory declared; a non-numeric value is fatal at boot (#1005)",
+      "targets": [
+        "helm"
+      ]
+    },
+    {
+      "key": "RUNTIME_K8S_BOT_NODE_SELECTOR",
+      "class": "defaulted",
+      "default": "(unset — meeting-bot Pods take the runtime-wide RUNTIME_K8S_NODE_SELECTOR)",
+      "description": "k8s backend: JSON object of node labels every SPAWNED meeting-bot Pod selects. When set it replaces the runtime-wide RUNTIME_K8S_NODE_SELECTOR for this class only, so bots can run on their own pool. Read and validated at boot (label keys and values per Kubernetes' rules); malformed is fatal at boot. Never taken from a workload spec",
+      "targets": [
+        "helm"
+      ]
+    },
+    {
+      "key": "RUNTIME_K8S_BOT_TOLERATIONS",
+      "class": "defaulted",
+      "default": "(unset — meeting-bot Pods take the runtime-wide RUNTIME_K8S_TOLERATIONS)",
+      "description": "k8s backend: JSON array of toleration objects (key, operator Equal|Exists, value, effect, tolerationSeconds) every SPAWNED meeting-bot Pod carries. When set it replaces the runtime-wide RUNTIME_K8S_TOLERATIONS for this class only. Validated at boot; malformed is fatal at boot. Never taken from a workload spec",
+      "targets": [
+        "helm"
+      ]
+    },
+    {
+      "key": "RUNTIME_K8S_BOT_PRIORITY_CLASS_NAME",
+      "class": "defaulted",
+      "default": "(unset — no priorityClassName, the cluster's default priority)",
+      "description": "k8s backend: the PriorityClass every SPAWNED meeting-bot Pod names. Validated at boot as a Kubernetes object name; Kubernetes' own system-* classes are refused. Never taken from a workload spec",
+      "targets": [
+        "helm"
+      ]
+    },
+    {
+      "key": "RUNTIME_K8S_BOT_IMAGE_PULL_SECRETS",
+      "class": "defaulted",
+      "default": "(unset — no imagePullSecrets on the Pod; the namespace's default ServiceAccount still applies its own)",
+      "description": "k8s backend: JSON array of Secret names (or {\"name\": …} objects) every SPAWNED meeting-bot Pod pulls its image with. Validated at boot. Never taken from a workload spec",
+      "targets": [
+        "helm"
+      ]
+    },
+    {
+      "key": "RUNTIME_K8S_AGENT_WORKER_NODE_SELECTOR",
+      "class": "defaulted",
+      "default": "(unset — agent-worker Pods take the runtime-wide RUNTIME_K8S_NODE_SELECTOR)",
+      "description": "k8s backend: JSON object of node labels every SPAWNED agent-worker Pod selects. When set it replaces the runtime-wide RUNTIME_K8S_NODE_SELECTOR for this class only. Validated at boot; malformed is fatal at boot. Never taken from a workload spec",
+      "targets": [
+        "helm"
+      ]
+    },
+    {
+      "key": "RUNTIME_K8S_AGENT_WORKER_TOLERATIONS",
+      "class": "defaulted",
+      "default": "(unset — agent-worker Pods take the runtime-wide RUNTIME_K8S_TOLERATIONS)",
+      "description": "k8s backend: JSON array of toleration objects every SPAWNED agent-worker Pod carries. When set it replaces the runtime-wide RUNTIME_K8S_TOLERATIONS for this class only. Validated at boot; malformed is fatal at boot. Never taken from a workload spec",
+      "targets": [
+        "helm"
+      ]
+    },
+    {
+      "key": "RUNTIME_K8S_AGENT_WORKER_PRIORITY_CLASS_NAME",
+      "class": "defaulted",
+      "default": "(unset — no priorityClassName, the cluster's default priority)",
+      "description": "k8s backend: the PriorityClass every SPAWNED agent-worker Pod names. Validated at boot; Kubernetes' own system-* classes are refused. Never taken from a workload spec",
+      "targets": [
+        "helm"
+      ]
+    },
+    {
+      "key": "RUNTIME_K8S_AGENT_WORKER_IMAGE_PULL_SECRETS",
+      "class": "defaulted",
+      "default": "(unset — no imagePullSecrets on the Pod; the namespace's default ServiceAccount still applies its own)",
+      "description": "k8s backend: JSON array of Secret names (or {\"name\": …} objects) every SPAWNED agent-worker Pod pulls its image with. Validated at boot. Never taken from a workload spec",
+      "targets": [
+        "helm"
+      ]
+    },
+    {
+      "key": "RUNTIME_K8S_BOT_CAPABILITIES",
+      "class": "defaulted",
+      "default": "(unset — the profile's own: none for a meeting bot)",
+      "description": "k8s backend: JSON array of the Linux capabilities every SPAWNED meeting-bot container keeps; all others are dropped and privilege escalation is off either way. Validated at boot (capability names; SYS_ADMIN, SYS_PTRACE and the like refused). Never taken from a workload spec",
+      "targets": [
+        "helm"
+      ]
+    },
+    {
+      "key": "RUNTIME_K8S_AGENT_WORKER_CAPABILITIES",
+      "class": "defaulted",
+      "default": "(unset — the profile's own: CHOWN, DAC_OVERRIDE, FOWNER, FSETID, KILL, SETGID, SETUID, what a root worker needs to give the model's tools a user of their own)",
+      "description": "k8s backend: JSON array of the Linux capabilities every SPAWNED agent-worker container keeps; all others are dropped. Set [] where the platform admits no added capability (OpenShift's restricted SCC, whose workers run non-root and do not use them). Validated at boot. Never taken from a workload spec",
+      "targets": [
+        "helm"
+      ]
+    },
+    {
+      "key": "RUNTIME_K8S_BOT_SECCOMP_PROFILE",
+      "class": "defaulted",
+      "default": "(unset — the container runtime's default profile, under which a bot's browser runs without Chromium's sandbox)",
+      "description": "k8s backend: a Localhost seccomp profile every SPAWNED meeting-bot container runs under, as a path relative to the kubelet's seccomp root (the chart installs runtime_kernel/seccomp-userns.json at vexa/seccomp-userns.json and sets this, so the bot's Chromium can build its sandbox). Validated at boot (a plain relative path). Never taken from a workload spec",
+      "targets": [
+        "helm"
+      ]
+    },
+    {
+      "key": "RUNTIME_K8S_AGENT_WORKER_SECCOMP_PROFILE",
+      "class": "defaulted",
+      "default": "(unset — the container runtime's default profile)",
+      "description": "k8s backend: a Localhost seccomp profile every SPAWNED agent-worker container runs under instead of RuntimeDefault, as a path relative to the kubelet's seccomp root. Validated at boot. Never taken from a workload spec",
+      "targets": [
+        "helm"
+      ]
+    },
+    {
+      "key": "RUNTIME_K8S_ALLOW_BROAD_TOLERATIONS",
+      "class": "defaulted",
+      "default": "false",
+      "description": "k8s backend: true lets a spawned Pod's tolerations (runtime-wide or per class) include one with no key (it tolerates every taint) or one for a control-plane or system taint (node-role.kubernetes.io/control-plane, node-role.kubernetes.io/master, CriticalAddonsOnly). Off, such a value is refused at boot",
+      "targets": [
+        "helm"
+      ]
+    },
+    {
+      "key": "RUNTIME_K8S_INSTANCE",
+      "class": "defaulted",
+      "default": "default",
+      "description": "k8s backend: which runtime this is (the chart sets the Helm release name). Every Pod it spawns carries it as the label runtime.instance, and boot re-adoption selects on it, so two releases in one namespace never adopt each other's Pods",
       "targets": [
         "helm"
       ]
@@ -274,7 +456,7 @@
       "class": "capability",
       "capability": "model_inference",
       "secret": true,
-      "description": "DOCKER-HOST path to Codex subscription auth (~/.codex/auth.json); mounted read-only into spawned codex-runner workers at /root/.codex/auth.json",
+      "description": "DOCKER-HOST path to Codex subscription auth (~/.codex/auth.json); mounted read-only into spawned agent workers at /tmp/.codex/auth.json (WORKER_CODEX_HOME), or copied to ~/.codex/auth.json in a process-backend child's private HOME",
       "targets": [
         "compose"
       ]
@@ -324,7 +506,6 @@
       "key": "ANTHROPIC_BASE_URL",
       "class": "defaulted",
       "default": "(provider default — api.anthropic.com)",
-      "secret": true,
       "description": "endpoint the ANTHROPIC_* credentials authenticate against, brokered into spawned workers"
     },
     {
@@ -373,8 +554,7 @@
       "key": "VEXA_LLM_BASE_URL",
       "class": "defaulted",
       "default": "(adapter default)",
-      "secret": true,
-      "description": "llm-module endpoint, brokered into spawned workers",
+      "description": "openai-agent harness endpoint, forwarded into spawned agent workers when the spec does not set it. A dispatch that applies a subject's own model endpoint stamps it, and a stamped value always wins",
       "targets": [
         "compose"
       ]
@@ -384,7 +564,7 @@
       "class": "capability",
       "capability": "model_inference",
       "secret": true,
-      "description": "provider-agnostic llm-module credential path, brokered into spawned workers (the HarnessPort adapters in core/agent/llm)",
+      "description": "openai-agent harness credential, forwarded into spawned agent workers when the spec does not set it. Never over a stamped value, the empty string included, so a subject's own model endpoint never receives it",
       "targets": [
         "compose"
       ]
@@ -393,7 +573,124 @@
       "key": "VEXA_LLM_MODEL",
       "class": "defaulted",
       "default": "(adapter default)",
-      "description": "llm-module deployment-default model, brokered into spawned workers",
+      "description": "openai-agent harness fallback model, forwarded into spawned agent workers when the spec does not set it; VEXA_AGENT_MODEL wins inside the worker",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_LLM_EXTRA_BODY",
+      "class": "defaulted",
+      "default": "(unset — no extra fields)",
+      "description": "openai-agent harness: a JSON object merged into every chat/completions request (server-specific fields the OpenAI dialect cannot express); forwarded into spawned agent workers when the spec does not set it. A subject's own model endpoint stamps its own, empty included",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_MODEL_ALLOWLIST",
+      "class": "defaulted",
+      "default": "(empty — allow any workspace-pinned model)",
+      "description": "operator gate on workspace-pinned models (comma-separated); forwarded into spawned workers",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_AGENT_MAX_TOOL_CALLS",
+      "class": "defaulted",
+      "default": "40",
+      "description": "openai-agent harness: per-turn tool-call ceiling; forwarded into spawned workers",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_AGENT_MAX_TOOL_CALLS_CHAT",
+      "class": "defaulted",
+      "default": "40",
+      "description": "openai-agent harness: tool-call ceiling for a CHAT turn (falls back to VEXA_AGENT_MAX_TOOL_CALLS); forwarded into spawned workers",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_AGENT_MAX_TOOL_CALLS_JOB",
+      "class": "defaulted",
+      "default": "160",
+      "description": "openai-agent harness: tool-call ceiling for a background JOB, per window (falls back to VEXA_AGENT_JOB_MAX_TOOL_CALLS, then VEXA_AGENT_MAX_TOOL_CALLS); forwarded into spawned workers",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_AGENT_MAX_TOOL_CALLS_ROOM",
+      "class": "defaulted",
+      "default": "80",
+      "description": "openai-agent harness: tool-call ceiling for a post-meeting ROOM run (falls back to VEXA_AGENT_MAX_TOOL_CALLS); forwarded into spawned workers",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_AGENT_MAX_TOOL_CALLS_FLOW",
+      "class": "defaulted",
+      "default": "40",
+      "description": "openai-agent harness: tool-call ceiling for one FLOW step (falls back to VEXA_AGENT_MAX_TOOL_CALLS); forwarded into spawned workers",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_AGENT_JOB_MAX_TOOL_CALLS",
+      "class": "defaulted",
+      "default": "160",
+      "description": "openai-agent harness: a background job's tool-call ceiling per window, never below a turn's; forwarded into spawned workers",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_AGENT_JOB_MAX_TURN_SEC",
+      "class": "defaulted",
+      "default": "3600",
+      "description": "openai-agent harness: a background job's whole wall-clock ceiling (s), never below a turn's; forwarded into spawned workers",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_AGENT_MAX_TURN_SEC",
+      "class": "defaulted",
+      "default": "900",
+      "description": "openai-agent harness: per-turn wall-clock ceiling (s); forwarded into spawned workers",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_AGENT_CONTEXT_TOKENS",
+      "class": "defaulted",
+      "default": "131072",
+      "description": "openai-agent harness: estimated-token budget on a request, deployment-wide; a model route's own window stamped by the dispatch wins over it; forwarded into spawned workers",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_AGENT_MAX_OUTPUT_TOKENS",
+      "class": "defaulted",
+      "default": "(unset \u2014 each harness's own default)",
+      "description": "every harness: the output-token cap a model request asks for (claude-code receives it as CLAUDE_CODE_MAX_OUTPUT_TOKENS, openai-agent sends it as max_tokens; codex does not read it: Codex 0.146.0 has no setting for the model's output cap (its own max_output_tokens fields are per-tool exec budgets), so a Codex turn asks for Codex's default); empty keeps each harness's own default (the claude CLI asks for 32000). Forwarded into spawned workers",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_AGENT_STREAM",
+      "class": "defaulted",
+      "default": "1",
+      "description": "openai-agent harness: stream the completion (0/false/no sends one blocking request); forwarded into spawned workers",
       "targets": [
         "compose"
       ]
@@ -456,8 +753,8 @@
     {
       "key": "PROCESS_LOG_DIR",
       "class": "defaulted",
-      "default": "<tempdir>/vexa-workloads",
-      "description": "process-backend workload log dir — per-workload stdout/stderr capture (the process analog of docker logs); fail-open to DEVNULL if unwritable",
+      "default": "<tempdir>/vexa-workloads (a root runtime: /var/lib/vexa-runtime/logs)",
+      "description": "process-backend workload log dir — per-workload stdout/stderr capture (the process analog of docker logs); under a root runtime it must be root's own (made 0700, files 0600); fail-open to DEVNULL if unusable",
       "targets": []
     }
   ],
@@ -493,11 +790,5 @@
         }
       }
     }
-  },
-  "surface_only": [
-    {
-      "key": "INTERNAL_API_SECRET",
-      "reason": "set on the runtime by compose/helm/lite but never read by runtime code (the internal-call secret is a gateway↔admin-api↔meeting-api concern) — documented drift surfaced by gate:config-contract; candidate for a deploy-surface cleanup"
-    }
-  ]
+  }
 }

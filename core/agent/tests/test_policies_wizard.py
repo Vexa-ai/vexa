@@ -334,5 +334,5 @@ def test_the_wizard_hard_codes_no_ones_name():
     more at the file this issue adds — a wizard is read out to the one person who decides how every
     agent in a company behaves, and somebody else's name in it is the worst possible furniture."""
     text = _ask(WIZARD)
-    for name in ("Marvin", "ASWF", "DNA TSC"):
+    for name in ("Quentin", "ASWF", "DNA TSC"):
         assert name not in text

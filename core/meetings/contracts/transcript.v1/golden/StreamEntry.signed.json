@@ -1,0 +1,5 @@
+{
+  "payload": "{\"type\":\"transcription\",\"meeting_id\":42}",
+  "auth": "eyJhbGciOiJIUzI1NiJ9.eyJtZWV0aW5nX2lkIjo0Mn0",
+  "sig": "ea8b616bd36e85dbc3f3c5aeb36f7bc2391f6a759d425355abfef2430516963d"
+}

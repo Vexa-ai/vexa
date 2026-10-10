@@ -13,6 +13,10 @@ vi.mock("next/headers", () => ({
 
 import { POST as login } from "../login/route";
 
+/** admin-api's admission answer (Vexa-ai/vexa#1783) — these cases are about what the route does once
+ *  an address IS admitted; the refusals are in signinAllowList.test.ts. */
+const admitted = () => new Response(JSON.stringify({ admitted: true, why: "allow-list" }), { status: 200 });
+
 function makeReq(body: unknown): import("next/server").NextRequest {
   return { json: async () => body } as unknown as import("next/server").NextRequest;
 }
@@ -21,6 +25,7 @@ beforeEach(() => {
   setCookies = [];
   process.env.VEXA_ADMIN_API_URL = "http://admin.test";
   process.env.VEXA_ADMIN_API_KEY = "admin-secret";
+  process.env.VEXA_INTERNAL_API_SECRET = "internal-secret";
   // The route is DEVELOPMENT-ONLY (see the production test at the bottom); vitest runs with
   // NODE_ENV=test, so the dev behaviour has to be asked for explicitly.
   vi.stubEnv("NODE_ENV", "development");
@@ -39,6 +44,7 @@ describe("/api/auth/login — direct email login against a mocked admin-api", ()
       "fetch",
       vi.fn(async (url: string, init?: RequestInit) => {
         calls.push(`${init?.method || "GET"} ${url}`);
+        if (url.includes("/internal/signin-admission")) return admitted();
         if (url.includes("/admin/users/email/")) {
           return new Response(JSON.stringify({ id: 42, email: "test-a@b.com", name: "A" }), { status: 200 });
         }
@@ -72,6 +78,7 @@ describe("/api/auth/login — direct email login against a mocked admin-api", ()
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) => {
+        if (url.includes("/internal/signin-admission")) return admitted();
         if (url.includes("/admin/users/email/")) {
           return new Response(JSON.stringify({ id: 9, email: "real@company.com" }), { status: 200 });
         }
@@ -89,6 +96,7 @@ describe("/api/auth/login — direct email login against a mocked admin-api", ()
       "fetch",
       vi.fn(async (url: string, init?: RequestInit) => {
         calls.push(`${init?.method || "GET"} ${url}`);
+        if (url.includes("/internal/signin-admission")) return admitted();
         if (url.includes("/admin/users/email/")) return new Response("not found", { status: 404 });
         if (init?.method === "POST" && url.endsWith("/admin/users")) {
           return new Response(JSON.stringify({ id: 7, email: "test-new@b.com" }), { status: 201 });
@@ -107,6 +115,14 @@ describe("/api/auth/login — direct email login against a mocked admin-api", ()
     const provision = calls.find((c) => c.includes("/agent/workspace/init"));
     expect(provision).toBeTruthy();
     expect(provision!.startsWith("POST")).toBe(true);
+  });
+
+  it("rejects an address longer than 254 characters without calling admin-api", async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    const res = await login(makeReq({ email: `${"a".repeat(243)}@example.com` }));
+    expect(res.status).toBe(400);
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("rejects a malformed email without calling admin-api", async () => {

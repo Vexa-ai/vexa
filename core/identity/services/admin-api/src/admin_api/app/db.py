@@ -44,6 +44,13 @@ def get_engine():
     return _engine
 
 
+def session() -> AsyncSession:
+    """A session outside a request (the boot hook): ``async with db.session() as s: …``."""
+    if _session_factory is None:
+        raise RuntimeError("admin_api.app.db not configured — call configure(database_url) first")
+    return _session_factory()
+
+
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     if _session_factory is None:
         raise RuntimeError("admin_api.app.db not configured — call configure(database_url) first")

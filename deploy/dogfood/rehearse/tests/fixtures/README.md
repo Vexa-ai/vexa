@@ -10,5 +10,5 @@ start measuring whatever somebody last left in that directory. Three turns is en
 assert over the recipe and the derived addresses, never over the words.
 
 The org in parentheses is deliberate: `engine.attendee_address` has to drop it
-("Olga Avramenko (Sony Pictures Imageworks)" → `olga-avramenko@rehearse.test`), and a fixture
+("Nora Quill (Brightwater Picture Studios)" → `nora-quill@rehearse.test`), and a fixture
 without one would let that regress unnoticed.

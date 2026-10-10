@@ -116,9 +116,7 @@ def process_meeting(ctx: StepCtx):
         # an exception, and never as a turn dispatched with an empty instruction, which would
         # bill a model to produce a report nobody could ground.
         try:
-            kick = prompt_for(ctx, "process-meeting.md").format(
-                mid=ctx.refs["meeting_id"], native=ctx.refs["native"],
-                date=_meeting_stamp(ctx, uid))
+            kick_template = prompt_for(ctx, "process-meeting.md")
         except PromptAbsent as absent:
             return NotPresent("behavior", detail=str(absent))
         # WHOSE DESKS THIS TURN MAY READ — the invite, ordered by who spoke, capped. Computed
@@ -145,6 +143,10 @@ def process_meeting(ctx: StepCtx):
         # used, and it was reading `refs["meeting_id"]` instead — the ref, which may still be a
         # native id (R-B19).
         ctx.scratch["row_id"] = row_id
+        # THE KICK NAMES THE ROW TOO: it tells the agent to read the transcript by
+        # `meeting_db_id`, which addresses exactly one meeting, and the ref may be a native id.
+        kick = kick_template.format(mid=row_id or ctx.refs["meeting_id"],
+                                    native=ctx.refs["native"], date=_meeting_stamp(ctx, uid))
         # The PROMPT names only as many desks as agent-api will actually mount: the wire
         # carries the whole ordered room, the sentence must not claim more than the cap allows.
         kick += _shared_report_rules(room_read[:read_max] if read_max else room_read, group)
@@ -189,10 +191,11 @@ def process_meeting(ctx: StepCtx):
                 ctx.scratch["baseline"] = ag.dispatch_turn(
                     uid, session,
                     "STOP. The report you just wrote contains nothing that appears in the "
-                    f"meeting. You did not read it. Call mcp__vexa__meeting_transcript with "
-                    f"meeting_id={ctx.refs['meeting_id']} and tail=0 NOW, read every segment, "
-                    "then write it again from what it returns — quoting one verbatim "
-                    "sentence with its speaker. If you cannot call that tool, say so.",
+                    "meeting. You did not read it. Call mcp__vexa__get_meeting_transcript with "
+                    f"meeting_db_id={ctx.scratch.get('row_id') or ctx.refs['meeting_id']} NOW, "
+                    "read every segment, then write it again from what it returns — quoting "
+                    "one verbatim sentence with its speaker. If you cannot call that tool, say "
+                    "so.",
                     flow=ctx.reaction.flow, step=ctx.reaction.step)
                 return Wait(seconds=12)
             raise StepError(

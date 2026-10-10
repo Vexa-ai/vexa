@@ -19,7 +19,8 @@ from __future__ import annotations
 
 import json
 
-from llm.claude_code import _OPEN_TOOLS, _open_event, parse_stream_json
+from llm.claude_code import parse_stream_json
+from llm.tool_events import _OPEN_TOOLS, _open_event
 from llm.openai_agent import _panel_events
 
 

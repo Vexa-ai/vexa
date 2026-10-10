@@ -15,8 +15,10 @@ golden-locked — this module only orchestrates the IO + the JSONB bookkeeping a
 """
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
-from typing import Any, Optional
+from .media_metadata import seekable_webm
+from typing import Optional
 
 from ..obs import log_event
 from ..recording_codec import build_recording_master
@@ -29,7 +31,7 @@ from .jsonb import (
     new_recording_numeric_id,
     signal_tape_key,
 )
-from .ports import RecordingRepo, Storage
+from .ports import MeetingErased, RecordingRepo, Storage
 
 # Media content types (parent ``recording_codec._media_content_type``, reduced to the core set).
 _CONTENT_TYPES = {"webm": "video/webm", "wav": "audio/wav", "jsonl": "application/x-ndjson",
@@ -52,8 +54,20 @@ class SessionNotFound(Exception):
     """The upload's ``session_uid`` matches no MeetingSession AND it is the final chunk → 404."""
 
 
+class _RecordingDeleted(Exception):
+    """The chunk's recording is being deleted, or was deleted after the chunk looked it up."""
+
+
 class InvalidSignalTape(Exception):
     """A tape upload named a part or format we do not accept → 422 (never a silent store)."""
+
+
+def _no_session(session_uid: str, is_final: bool) -> dict:
+    """What a chunk gets when its session cannot take it — not known yet, or its meeting's
+    recordings deleted: a non-final chunk is ``pending`` (the bot retries), a final one a 404."""
+    if not is_final:
+        return {"status": "pending"}
+    raise SessionNotFound(f"no MeetingSession for session_uid {session_uid}")
 
 
 async def upload_chunk(
@@ -67,6 +81,7 @@ async def upload_chunk(
     media_format: str = "wav",
     chunk_seq: int = 0,
     is_final: bool = True,
+    capture_started_at_ms: Optional[float] = None,
     duration_seconds: Optional[float] = None,
     sample_rate: Optional[int] = None,
 ) -> dict:
@@ -75,12 +90,13 @@ async def upload_chunk(
 
     Returns ``{recording_id, media_file_id, storage_path, status, chunk_seq}``. When the session is
     not yet known and the chunk is non-final, returns ``{"status": "pending"}`` (the bot retries).
+    A chunk whose meeting's recordings are deleted gets the same answer, whether the delete landed
+    before the session lookup or while the chunk was being stored; in the second case the stored
+    object is removed again.
     """
     session = await repo.find_session(session_uid)
     if session is None:
-        if not is_final:
-            return {"status": "pending"}
-        raise SessionNotFound(f"no MeetingSession for session_uid {session_uid}")
+        return _no_session(session_uid, is_final)
 
     meeting_id = session["meeting_id"]
     if token_meeting_id is not None and meeting_id != token_meeting_id:
@@ -113,6 +129,11 @@ async def upload_chunk(
         ex = next(
             (r for r in recs if r.get("session_uid") == session_uid and r.get("source") == "bot"), None
         )
+        # A per-recording delete marks the entry (``deletion_pending``) before it erases the objects,
+        # then removes it. A chunk that meets either state is not folded: the entry would come back
+        # holding an object the delete has already listed past.
+        if (ex is not None and ex.get("deletion_pending")) or (ex is None and existing_rec is not None):
+            raise _RecordingDeleted
         rid = ex["id"] if ex else recording_id
         payload, transitioned_ = apply_chunk_to_recording(
             ex,
@@ -120,11 +141,22 @@ async def upload_chunk(
             session_uid=session_uid, media_type=media_type, media_format=media_format,
             storage_path=key, file_size=len(data), chunk_seq=chunk_seq, is_final=is_final,
             duration_seconds=duration_seconds, sample_rate=sample_rate,
+            capture_started_at_ms=capture_started_at_ms,
         )
         others = [r for r in recs if r.get("id") != rid]
         return others + [payload], (payload, transitioned_)
 
-    rec_payload, transitioned = await repo.mutate_recordings(meeting_id, _fold)
+    try:
+        rec_payload, transitioned = await repo.mutate_recordings(meeting_id, _fold)
+    except _RecordingDeleted:
+        await storage.delete(key)
+        return _no_session(session_uid, is_final)
+    except MeetingErased:
+        # The meeting's recordings were deleted after the session lookup above, while this chunk was
+        # being stored. The fold was refused under the row lock; the object must not outlive the
+        # delete either (the delete listed the recording's objects before this one existed).
+        await storage.delete(key)
+        return _no_session(session_uid, is_final)
     recording_id = rec_payload["id"]
 
     media_file = next((mf for mf in rec_payload["media_files"] if mf["type"] == media_type), {})
@@ -198,6 +230,10 @@ async def upload_signal_tape(
     key = signal_tape_key(user_id=owner or 0, meeting_id=meeting_id, session_uid=session_uid,
                           part=part, media_format=media_format)
     await storage.upload(key, data, content_type=_content_type(media_format))
+    # A deletion may have started while this last teardown upload was in flight.
+    if await repo.find_session(session_uid) is None:
+        await storage.delete(key)
+        raise SessionNotFound("Meeting data was deleted")
     log_event(
         "signal_tape_stored", audience="operator", span="recordings.signal",
         user_id=owner, meeting_id=str(meeting_id),
@@ -262,7 +298,11 @@ async def finalize_master(
     # or the chunk count changed since the master was last assembled. With zero chunk objects we never
     # rebuild — an existing master is served as-is rather than assembled from nothing.
     rebuild = listed_count > 0 and ((not master_exists) or assembled_count != listed_count)
-    if rebuild:
+    normalized = False
+    duration = None
+    master_written = False
+    repair_metadata = media_format == "webm" and mf.get("seekable_version") != 1
+    if rebuild or (master_exists and repair_metadata):
         if master_exists and assembled_count is not None and listed_count > assembled_count:
             # A prior (partial) master is being superseded by chunks that arrived after it — the exact
             # #768 unfreeze. Log it so a re-freeze regression is noisy rather than silent.
@@ -272,9 +312,16 @@ async def finalize_master(
                 fields={"recording_id": recording_id, "media_type": media_type,
                         "prior_assembled_count": assembled_count, "new_count": listed_count},
             )
-        chunks = [await storage.get(k) for k in keys]
-        master_bytes = build_recording_master(chunks, media_format)
+        if rebuild:
+            chunks = [await storage.get(k) for k in keys]
+            master_bytes = build_recording_master(chunks, media_format)
+        else:
+            master_bytes = await storage.get(master_key)
+        if media_format == "webm" and master_bytes.startswith(b"\x1a\x45\xdf\xa3"):
+            master_bytes, duration = await asyncio.to_thread(seekable_webm, master_bytes)
+            normalized = True
         await storage.upload(master_key, master_bytes, content_type=_content_type(media_format))
+        master_written = True
 
     # G3 — stamp the media-file finalized ATOMICALLY (read→modify→write under one row lock), so a late
     # concurrent chunk upload can't clobber the finalized master pointer (the master bytes are already
@@ -286,6 +333,10 @@ async def finalize_master(
         m = next((x for x in r.get("media_files", []) if x.get("type") == media_type), None)
         if m is None:
             return recs, None
+        if normalized:
+            m["seekable_version"] = 1
+            m["duration_seconds"] = duration
+            m["file_size_bytes"] = len(master_bytes)
         m["storage_path"] = master_key
         m["is_final"] = True
         m["assembled_chunk_count"] = listed_count
@@ -301,31 +352,11 @@ async def finalize_master(
         others = [x for x in recs if x.get("id") != recording_id]
         return others + [r], master_key
 
-    return await repo.mutate_recordings(meeting_id, _stamp)
-
-
-def _verify_meeting_token(token: str, *, secret: Optional[str] = None) -> dict[str, Any]:
-    """Verify a MeetingToken (HS256, ``ADMIN_TOKEN``-signed) and return its claims. Raises
-    ``ValueError`` on a bad signature / expiry (the parent ``verify_meeting_token``)."""
-    import base64
-    import hmac
-    import json
-    import os
-
-    secret = secret if secret is not None else os.environ.get("ADMIN_TOKEN")
-    if not secret:
-        raise ValueError("ADMIN_TOKEN not configured; cannot verify MeetingToken")
     try:
-        header_b64, payload_b64, sig_b64 = token.split(".")
-    except ValueError:
-        raise ValueError("malformed MeetingToken")
-    signing_input = f"{header_b64}.{payload_b64}".encode("ascii")
-    expected = hmac.new(secret.encode(), signing_input, digestmod="sha256").digest()
-    got = base64.urlsafe_b64decode(sig_b64 + "=" * (-len(sig_b64) % 4))
-    if not hmac.compare_digest(expected, got):
-        raise ValueError("MeetingToken signature mismatch")
-    claims = json.loads(base64.urlsafe_b64decode(payload_b64 + "=" * (-len(payload_b64) % 4)))
-    exp = claims.get("exp")
-    if exp is not None and int(datetime.now(timezone.utc).timestamp()) > int(exp):
-        raise ValueError("MeetingToken expired")
-    return claims
+        return await repo.mutate_recordings(meeting_id, _stamp)
+    except MeetingErased:
+        # The meeting's recordings were deleted while this master was being built: nothing is
+        # stamped, and a master this call wrote does not outlive the delete.
+        if master_written:
+            await storage.delete(master_key)
+        return None

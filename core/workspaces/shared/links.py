@@ -57,7 +57,7 @@ class Ref:
 def _form_of(target: str) -> str:
     """Entity id or path? A path is the one with structure in it — a slash, or a file extension.
 
-    Entity ids are slugs (`olga-avramenko`), which carry neither. The test is on the SHAPE and not
+    Entity ids are slugs (`nora-quill`), which carry neither. The test is on the SHAPE and not
     on a lookup, because the writer of the link and the reader of it are in different processes and
     the writer's directory listing is not available to the reader."""
     t = str(target or "")
@@ -166,17 +166,14 @@ def entity_slug_index(root, *, workspace_id: str, kinds=None, slugify=None) -> d
 
     Built by ``entity_upsert`` for each of the OTHER mounted workspaces, so a rewrite is a dict
     lookup rather than a directory walk per link."""
-    from pathlib import Path
-
     from workspaces.shared.entities import ENTITIES_DIR, KINDS
 
-    base = Path(root) / ENTITIES_DIR
+    from workspaces.shared import workspace_paths as wpaths
+
     out: dict = {}
     for kind in (kinds or KINDS):
-        d = base / kind
-        if not d.is_dir():
-            continue
-        for f in d.glob("*.md"):
-            if f.name != "index.md":
-                out.setdefault(f.stem, workspace_id)
+        # by descriptor, following no link: a linked kind folder or page is not this workspace's
+        for name in wpaths.list_files_inside(root, f"{ENTITIES_DIR}/{kind}", suffix=".md"):
+            if name != "index.md":
+                out.setdefault(name[:-3], workspace_id)
     return out

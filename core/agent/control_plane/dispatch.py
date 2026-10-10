@@ -22,17 +22,30 @@ import contracts
 from control_plane.workspace_attach import SEED_SLOT, active_workspaces, shared_active_mounts
 from control_plane.workspace_membership import reconciled_memberships
 from control_plane.workspace_purpose import read_purpose
-from control_plane import global_layer
+from control_plane import delegation_refresh, delegation_revocation, global_layer
 from control_plane import model_endpoint
+from control_plane import unit_faults
 from control_plane.meeting_room import group_desk_mount, resolve_desks
 from control_plane.system_mounts import GLOBAL_SLUG, SYSTEM_SLUG, global_mount, system_mount
 from shared.config import Settings
 from shared import delegation
 from shared.ports import IdentityPort, RuntimePort
-from shared import units
-from shared.units import chat_session, dispatch_id, input_topic, output_topic
+from shared import unit_input, units
+from shared.runtime_fault import RuntimeFault
+from shared.units import chat_session, dispatch_id, inbox_cursor_key, input_topic, output_topic
 
 logger = logging.getLogger("agent_api.dispatch")
+
+
+def _stream_id_le(a: str, b: str) -> bool:
+    """``a <= b`` for redis stream ids (``<ms>-<seq>``) — compared as numbers, never as text."""
+    def parts(x: str) -> tuple[int, int]:
+        ms, _, seq = str(x).partition("-")
+        return int(ms or 0), int(seq or 0)
+    try:
+        return parts(a) <= parts(b)
+    except ValueError:
+        return False
 
 
 def _ensure_workspace_exists(settings: Settings, subject: str) -> bool:
@@ -378,6 +391,48 @@ MODEL_AUTH_ENV_ALLOWLIST = (
 # that called it, so a worker needs exactly one model credential: the agent harness's.
 
 
+# ── a subject's own endpoint pins the WHOLE model route, here and nowhere else ───────────────
+# A worker's model env has TWO writers. The dispatch stamps what it decided; then the runtime fills
+# every key the spec left ABSENT from the deployment's own environment
+# (`runtime_kernel.workload_env.WORKER_FORWARD_ENV`, `forwarded_env`), the VEXA_LLM_* keys among
+# them. The openai-agent harness reads VEXA_LLM_* BEFORE ANTHROPIC_*, so a subject's endpoint
+# stamped under the ANTHROPIC_* names alone lost to a forwarded deployment VEXA_LLM_BASE_URL: the
+# turn ran on the deployment's model, and with no deployment VEXA_LLM_API_KEY it carried the
+# SUBJECT's key to the DEPLOYMENT's endpoint (F84 from the other side).
+#
+# So the precedence is decided ONCE, by the dispatch: when a subject's endpoint applies, every key
+# either harness reads to choose an endpoint, a credential, a model override or a request dialect
+# is stamped by `subject_route_env`, the empty string included. The runtime never refills a key the
+# spec carries, so nothing of the deployment's route survives into that worker, and neither harness
+# has to know whose value it is reading. Two names for the subject's one endpoint is not the second
+# endpoint decision 34 removed: that was a second CONSUMER, configured separately.
+def subject_route_env(base_url: str, api_key: str, extra_body: str) -> dict[str, str]:
+    """The model route of a worker whose subject's own endpoint applies: every key, every time.
+
+    ``api_key`` and ``extra_body`` are the subject's own, and empty means NONE — never "use the
+    deployment's". The model is not here: it is ``VEXA_AGENT_MODEL``, resolved once by
+    ``overlay_model_config`` under the operator's allowlist, so the openai-agent override
+    ``VEXA_LLM_MODEL`` is pinned empty rather than left for the deployment's value to fill."""
+    return {
+        # the claude CLI (the claude-code harness)
+        "ANTHROPIC_BASE_URL": base_url,
+        "ANTHROPIC_AUTH_TOKEN": api_key,
+        "ANTHROPIC_API_KEY": api_key,
+        "CLAUDE_CODE_OAUTH_TOKEN": "",     # the subscription token has ONE legitimate destination
+        # the openai-agent harness, which reads these before the ANTHROPIC_* names
+        "VEXA_LLM_BASE_URL": base_url,
+        "VEXA_LLM_API_KEY": api_key,
+        "VEXA_LLM_MODEL": "",
+        # Qwen behind vLLM needs {"chat_template_kwargs":{"enable_thinking":false}} or it returns
+        # nothing parseable; another endpoint may refuse those fields. Only the subject knows which.
+        "VEXA_LLM_EXTRA_BODY": extra_body,
+        # THE ROUTE, STATED TO THE WORKER: the endpoint is the person's own. A harness whose CLI keeps
+        # a credential in its config directory clears it for this worker (llm/claude_code.py), so
+        # the only credential on this route is the one stamped above.
+        "VEXA_MODEL_ROUTE": "subject",
+    }
+
+
 def _allowlisted(model: str, allowlist: str) -> bool:
     """The operator's model gate (``VEXA_MODEL_ALLOWLIST``, comma-separated): empty = anything goes."""
     allowed = {m.strip() for m in allowlist.split(",") if m.strip()}
@@ -390,15 +445,15 @@ def overlay_model_config(env: dict[str, str], config: dict, *, allowlist: str = 
     setting, resolved by admin-api) onto the dispatch env — field-by-field over the deployment
     env defaults, which stay the bottom fallback for anything unset.
 
-    ``mode: custom`` points the agent harness at the supplied gateway (an Anthropic-compatible
-    endpoint, e.g. LiteLLM/OpenRouter in front of an open-source model) via
-    ``ANTHROPIC_BASE_URL``/``ANTHROPIC_AUTH_TOKEN``. ONE endpoint, stamped once: the openai-agent
-    harness (decision 37) reads these same two as its documented fallbacks, so there is no second
-    pair in a second dialect — which is what decision 34 removed and must stay removed. ``mode: subscription`` (or unset) keeps the deployment's brokered credential — the mounted
+    ``mode: custom`` points the agent harness at the supplied gateway (e.g. LiteLLM/OpenRouter in
+    front of an open-source model, or a self-hosted vLLM) once it passes the operator gate: the
+    whole model route is stamped by ``subject_route_env``, under the names each harness reads, so
+    the subject's endpoint, key and extra_body apply whatever the deployment's VEXA_LLM_* say.
+    ``mode: subscription`` (or unset) keeps the deployment's brokered credential — the mounted
     Claude Code subscription / deployment key — and only the model names apply.
 
     Dispatch-stamped values WIN downstream (the runtime copies its own env only for keys absent
-    here — docker_backend's ``key not in spawn_env``). Models are gated by the operator's
+    here — ``runtime_kernel.workload_env.forwarded_env``). Models are gated by the operator's
     allowlist: a non-allowlisted model is DROPPED (deployment default applies), never an error —
     a stale pref must not brick a turn."""
     model = (config.get("model") or "").strip()
@@ -437,10 +492,12 @@ def overlay_model_config(env: dict[str, str], config: dict, *, allowlist: str = 
         # Not custom, or custom with no endpoint — inert either way; deployment credentials apply.
         return
     # THE OPERATOR GATE (F84). A subject-supplied URL is an outbound destination chosen by a
-    # non-operator, so it is refused unless the deployment allow-lists its host. The refusal is
-    # LOUD — a log line and a friction record — because a silently-ignored endpoint runs the turn on
-    # the deployment's own model and looks like it worked.
-    refusal = model_endpoint.refuse_reason(base_url)
+    # non-operator, so it is refused unless the deployment allow-lists its host — and on a harness
+    # that signs in from its config directory when it has no key, it is refused without the
+    # subject's own key. The refusal is LOUD — a log line and a friction record — because a
+    # silently-ignored endpoint runs the turn on the deployment's own model and looks like it worked.
+    refusal = model_endpoint.route_refusal(
+        base_url, api_key, env.get("VEXA_RUNNER") or units.deployment_runner())
     if refusal:
         logger.warning("model endpoint REFUSED for subject=%s: %s", subject or "?", refusal)
         if friction is not None:
@@ -450,25 +507,14 @@ def overlay_model_config(env: dict[str, str], config: dict, *, allowlist: str = 
             except Exception:  # noqa: BLE001 — a report is never worth a dispatch
                 logger.warning("model endpoint refusal could not be filed as friction")
         return
-    env["ANTHROPIC_BASE_URL"] = base_url
-    # ALWAYS THE SUBJECT'S OWN CREDENTIAL — the empty string included (F84, SECURITY). The backfill
-    # at the end of `build_unit_env` fills every MODEL_AUTH_ENV_ALLOWLIST key that is still ABSENT
-    # from agent-api's own environment; an explicit "" is not absent. Stamping only a non-empty key
-    # therefore paired the DEPLOYMENT's brokered token with the SUBJECT's endpoint whenever the
-    # subject supplied a URL and no key. Every credential the harness or the claude CLI would put on
-    # that request is pinned here, so a custom endpoint can only ever receive what its own owner set.
-    env["ANTHROPIC_AUTH_TOKEN"] = api_key
-    env["ANTHROPIC_API_KEY"] = api_key
-    env["CLAUDE_CODE_OAUTH_TOKEN"] = ""    # the subscription token has ONE legitimate destination
-    # THE ONE DIAL WITH NO ANTHROPIC-DIALECT EQUIVALENT. Endpoint, credential and model all reach
-    # the openai-agent harness through the ANTHROPIC_*/VEXA_AGENT_MODEL keys above (see
-    # `llm/openai_agent.py` — `VEXA_LLM_BASE_URL or ANTHROPIC_BASE_URL`, and so on). `extra_body`
-    # has no such fallback, and a self-hosted Qwen returns nothing parseable without
-    # {"chat_template_kwargs":{"enable_thinking":false}} — so a per-subject value has to be
-    # stamped under its own name or the admin-api field that writes it does nothing.
-    extra_body = (config.get("extra_body") or "").strip()
-    if extra_body:
-        env["VEXA_LLM_EXTRA_BODY"] = extra_body
+    # ALWAYS THE SUBJECT'S OWN CREDENTIAL — the empty string included (F84, SECURITY). Two writers
+    # fill a key this leaves ABSENT: the backfill at the end of `build_unit_env` (from agent-api's
+    # own environment) and the runtime's forward list (from the deployment's). An explicit "" is not
+    # absent to either. Stamping only a non-empty key therefore paired the DEPLOYMENT's token with
+    # the SUBJECT's endpoint, and stamping only the claude CLI's names paired the SUBJECT's token
+    # with the DEPLOYMENT's openai-agent endpoint. The whole route is pinned in one call, so a
+    # custom endpoint receives only what its owner set, and the owner's key goes nowhere else.
+    env.update(subject_route_env(base_url, api_key, (config.get("extra_body") or "").strip()))
 
 
 def _worker_cwd(root: str, subject: str, mounts: list[dict], target: str = "") -> str:
@@ -566,7 +612,8 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
     identity = invocation["identity"]
     subject = identity["subject"]
     # The dispatch's personal (rw) workspace folder is mounted at <root>/<subject>; the Runtime binds the
-    # backing store (a host path / named volume) at <root>, and the worker works in the subject subdir.
+    # backing store at <root> from its OWN configuration (it drops any VEXA_WORKSPACE_MOUNT_* key a spec
+    # carries), and the worker works in the subject subdir.
     root = settings.workspaces_dir
     # The ORDERED mount set (WP-A1.1 + WP-A2.1): the private baseline first, then every activated extra.
     # The whole store root is already bound by the runtime, so this is a WORKER-FACING contract (the paths
@@ -592,8 +639,6 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
         # skip exactly that one entry at boot and drain everything else waiting. Copied, never
         # mutated in place: `invocation` belongs to the caller.
         "VEXA_START": json.dumps(_start_with_nonce(invocation["start"], entry_nonce)),
-        "VEXA_WORKSPACE_MOUNT_SOURCE": settings.workspace_mount_source,  # host path / named volume (the store backing)
-        "VEXA_WORKSPACE_MOUNT_TARGET": root,                      # where the Runtime binds it in the container
         "VEXA_WORKSPACE_PATH": _worker_cwd(root, subject, mounts, cwd_target),  # the worker's cwd — the chat's target, else the primary baseline, or (if it's switched off) the first active normal workspace
         "VEXA_MOUNTS": json.dumps(mounts),                       # the ordered active mount set [{slug,path,role,write,primary}]
         "VEXA_WORKSPACE_STORE_URL": settings.workspace_store_url,
@@ -645,6 +690,12 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
     # scope combination), and it is logged rather than swallowed — an unauthenticated worker that was
     # supposed to be authenticated looks, from the chat, exactly like an MCP with nothing to say.
     mcp_secret = settings.mcp_delegation_secret.get_secret_value()
+    if not (mcp_secret and settings.mcp_url):
+        logger.warning("worker toolbelt not configured (worker_toolbelt: %s) — subject=%s's worker "
+                       "runs without vexa tools", ", ".join(n for n, v in (
+                           ("no endpoint, VEXA_MCP_URL unset", settings.mcp_url),
+                           ("no signing key, VEXA_MCP_DELEGATION_SECRET unset", mcp_secret)) if not v),
+                       subject)
     if mcp_secret and settings.mcp_url:
         regime = delegation.regime_for_trigger(invocation["trigger"])
         # Human ⇒ "*" (soft focus over the subject's own account). Autonomous ⇒ the granted workspace
@@ -653,11 +704,12 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
             str(w.get("id")) for w in (invocation.get("workspaces") or []) if w.get("id")
         ]
         # THE ROOM IS DELIBERATELY ABSENT FROM THIS SCOPE, and that is the security answer, not an
-        # omission. The delegation scope is a CEILING ON THE ACCOUNT (`delegation.scope_allows_workspace`:
-        # `"*"` "allows everything the ACCOUNT already allows … the rig still applies its own per-uid
-        # ownership checks underneath"), so naming another attendee's workspace here would be asking the
-        # control MCP to hand THIS uid a workspace it does not own — inert if the rig is correct, and a
-        # genuine widening of the person's account reach if it ever is not. The room is a MOUNT-level read
+        # omission. The delegation scope is a CEILING ON THE ACCOUNT, never a grant: `"*"` allows what
+        # the account already allows, and every workspace route behind the MCP checks the subject's own
+        # access to the workspace it names (membership) as well as the ceiling
+        # (`api_shared.require_in_ceiling`). Naming another attendee's workspace here would therefore be
+        # asking for a workspace this uid does not own — refused by that access check, and a genuine
+        # widening of the person's account reach if it ever failed. The room is a MOUNT-level read
         # grant made by the dispatcher and enforced by the container's mount table (`write: False` → a
         # `:ro` bind), which is a narrower mechanism than a credential and needs no credential change.
         # Net effect on the token: identical bytes to a room-less dispatch — same `sub`, same `regime`,
@@ -667,13 +719,14 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
             # THE TARGET RIDES THE TOKEN (Vexa-ai/vexa#1611) — which is how `entity_upsert` and
             # `workspace_write` with no `slug` land in the workspace this chat is working in rather
             # than on the person's desk. It is a DEFAULT, not a grant: the token's `scope` is still
-            # the ceiling, and the rig applies its per-uid ownership checks underneath exactly as
-            # before. On the token rather than in a tool argument because the model must not have
-            # to remember it — the founder's answer to *"how to softly reinforce that?"* was
-            # context, not a rule somebody repeats.
+            # the ceiling, and each route authorizes the resolved workspace against the subject's own
+            # access exactly as it would one the caller had named (`api_shared.write_slug`). On the
+            # token rather than in a tool argument because the model must not have to remember it —
+            # the founder's answer to *"how to softly reinforce that?"* was context, not a rule
+            # somebody repeats.
             env["VEXA_MCP_DELEGATION_TOKEN"] = delegation.mint_delegation(
                 mcp_secret, subject=str(subject), regime=regime, workspaces=scope_ws,
-                ttl_sec=settings.mcp_delegation_ttl_sec, target=str(target or "").strip(),
+                ttl_sec=settings.delegation_ttl_sec(), target=str(target or "").strip(),
             )
         except ValueError:
             env.pop("VEXA_MCP_URL", None)
@@ -689,8 +742,16 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
     for _var in ("VEXA_FLOWS_API_URL", "VEXA_FLOWS_TIMELINE_KEY"):
         if os.environ.get(_var):
             env[_var] = os.environ[_var]
+    # The workspace template this deployment seeds from. The worker resolves its platform skills (and
+    # any workspace it seeds itself) from it, against its own seeds root (shared.seeding).
+    if (settings.default_template or "").strip():
+        env["VEXA_DEFAULT_TEMPLATE"] = settings.default_template.strip()
     if settings.agent_model:
         env["VEXA_AGENT_MODEL"] = settings.agent_model
+    # The chat-continuation dials the openai-agent harness reads (shared/config.py). Always stamped,
+    # so a worker runs on the deployment's declared value rather than on a default of its own.
+    env["VEXA_AGENT_AUTO_CONTINUE_CHAT"] = "1" if settings.agent_auto_continue_chat else "0"
+    env["VEXA_AGENT_MAX_CHAT_CONTINUATIONS"] = str(settings.agent_max_chat_continuations)
     # The optional operator model gate.
     if settings.model_allowlist:
         env["VEXA_MODEL_ALLOWLIST"] = settings.model_allowlist
@@ -796,10 +857,19 @@ class Dispatcher:
     through. Validates the envelope at the seam (fail loud, P18), mints the token, and spawns."""
 
     def __init__(self, settings: Settings, runtime: RuntimePort, identity: IdentityPort,
-                 membership_index=None, model_config=None, warm_stream=None) -> None:
+                 membership_index=None, model_config=None, warm_stream=None,
+                 workload_redis=None, delegation_store=None) -> None:
         self._settings = settings
         self._runtime = runtime
         self._identity = identity
+        # Where a minted delegation token is recorded against its unit, so it is revoked when the
+        # unit ends (control_plane.delegation_revocation). Production wires the service Redis; None
+        # (tests, the in-process harness) records nothing.
+        self._delegation_store = delegation_store
+        # The Redis connection that defines each worker's own Redis user (control_plane.
+        # workload_redis). Production wires it unless the deployment chose REDIS_WORKLOAD_ACL=shared;
+        # None hands the worker the service URL (the in-process harness, and that explicit choice).
+        self._workload_redis = workload_redis
         # Warm delivery (the lost-turn fix): the redis client used to pre-deliver message-trigger
         # prompts to unit:<id>:in and to watch for the worker's turn-accepted ack. Injectable for
         # tests; None → built lazily from settings.redis_url (unreachable redis fails soft into the
@@ -874,6 +944,7 @@ class Dispatcher:
         self.dispatched.append(invocation)
         identity = invocation["identity"]
         uid = dispatch_id(invocation)
+        self._revoke_ended_incarnation(uid)
         token = self._identity.mint(
             identity["subject"], identity["launcher"], invocation["workspaces"], invocation.get("tools", []),
         )
@@ -903,6 +974,21 @@ class Dispatcher:
                              model_config=model_config, room=room,
                              scaffold_workspaces=scaffold_workspaces, target=target,
                              friction=self._friction)
+        self._record_delegation(uid, env)
+        if self._workload_redis is not None:
+            # The worker connects as its unit's own Redis user, never with the service connection.
+            # A user that cannot be defined refuses the dispatch: the fallback would be the service
+            # credential, which reaches every unit's streams.
+            from control_plane import workload_redis
+
+            env["REDIS_URL"] = workload_redis.grant(
+                self._workload_redis, secret=self._settings.internal_api_secret.get_secret_value(),
+                unit_id=uid, service_url=self._settings.redis_url)
+        # The unit's input-stream key: the worker runs only the stream entries signed with it, and
+        # agent-api is the one writer that holds it (shared/unit_input.py).
+        in_key = self._unit_input_key(uid)
+        if in_key:
+            env[unit_input.KEY_ENV] = in_key
         # WARM DELIVERY (the lost-turn fix). The runtime's create is an IDEMPOTENT TOUCH for a
         # workload that is still starting/running (ADR-0027) — it returns the live status and
         # DISCARDS the spec env, where a chat message's prompt rides. So a message sent while the
@@ -930,7 +1016,20 @@ class Dispatcher:
             else:
                 raise WarmDeliveryFailed(
                     f"unit {uid} is running and its turn could not be delivered")
-        acked = self._runtime.spawn(uid, self._settings.agent_profile, env)
+        try:
+            acked = self._runtime.spawn(uid, self._settings.agent_profile, env)
+        except RuntimeFault as fault:
+            # FAIL LOUD AND ATTRIBUTABLE (P18). The runtime said no, or could not be reached; the
+            # typed fault goes back to the caller (a 502/503 the chat can render), and the words this
+            # dispatch pre-delivered are taken back unless a live worker already has them.
+            if not self._spawn_failed(uid, fault, entry_nonce if delivery is not None else ""):
+                raise
+            acked = uid      # a live worker took the turn: the refusal stopped nothing
+        else:
+            # The unit is up: whatever stopped its queue before has stopped stopping it. Only where
+            # the warm path just answered — a topology without a reachable redis has no record.
+            if delivery is not None:
+                unit_faults.clear(self._redis(), uid)
         if delivery is not None:
             self._watch_delivery(uid, env, tail=delivery)
         logger.info(
@@ -940,6 +1039,93 @@ class Dispatcher:
             (room or {}).get("meeting_id") or "-", scaffold_workspaces or "-",
         )
         return acked
+
+    # ── the worker's delegation token ends with its unit (delegation_revocation) ─────
+
+    def _record_delegation(self, uid: str, env: dict[str, str]) -> None:
+        """Record the token this dispatch minted against its unit, so the reaper revokes it when the
+        unit ends. A token that cannot be recorded could never be revoked, so it is WITHHELD: with no
+        token the worker attaches no vexa MCP (the endpoint alone attaches nothing) and says so, the
+        same as a deployment with no toolbelt."""
+        token = env.get("VEXA_MCP_DELEGATION_TOKEN")
+        if not token or self._delegation_store is None:
+            return
+        try:
+            claims = delegation.verify_delegation(
+                self._settings.mcp_delegation_secret.get_secret_value(), token)
+            delegation_revocation.record(self._delegation_store, unit_id=uid,
+                                         jti=str(claims.get("jti") or ""), exp=int(claims["exp"]))
+        except Exception:  # noqa: BLE001 — an unrecorded token is never handed out
+            env.pop("VEXA_MCP_DELEGATION_TOKEN", None)
+            logger.exception("delegation token for unit=%s could not be recorded for revocation — "
+                             "the worker runs WITHOUT the vexa MCP", uid)
+            return
+        # Published as the unit's CURRENT token too, which the reaper re-mints from before it
+        # expires and the worker reads before each turn (control_plane.delegation_refresh). A
+        # publish that fails costs only the refresh: the worker still boots with this token.
+        # REDIS_WORKLOAD_ACL=shared gives every worker the service connection, so a token in Redis
+        # would be readable by every other unit: there it is never published, and the unit keeps
+        # this token (and its tools) until its exp, unrefreshed.
+        if self._settings.redis_workload_acl == "shared":
+            return
+        # A unit id can be reached by a second dispatch for ANOTHER person (a meeting's unit is keyed
+        # on the meeting alone), and the worker on that id reads the published token before each
+        # turn. Whose worker that is depends on a race the dispatcher cannot see — a warm touch keeps
+        # the first person's worker, an ended one is respawned for this dispatch — so neither
+        # person's token is left where the other's worker could read it: the published token is
+        # withdrawn, and this dispatch's is published only when the runtime reports the previous
+        # incarnation ended (the worker about to start is then this dispatch's own).
+        try:
+            if not delegation_refresh.same_authority(
+                    self._delegation_store, self._settings.mcp_delegation_secret.get_secret_value(),
+                    unit_id=uid, claims=claims):
+                delegation_refresh.withdraw(self._delegation_store, unit_id=uid)
+                if not self._incarnation_ended(uid):
+                    logger.warning("unit=%s held another person's delegation token — withdrawn, and "
+                                   "this dispatch's is not published to it", uid)
+                    return
+        except Exception:  # noqa: BLE001 — a worker that could read the other token gets none
+            env.pop("VEXA_MCP_DELEGATION_TOKEN", None)
+            logger.exception("unit=%s held another person's delegation token, which could not be "
+                             "withdrawn — the worker runs WITHOUT the vexa MCP", uid)
+            return
+        try:
+            delegation_refresh.publish(self._delegation_store, unit_id=uid, token=token,
+                                       exp=int(claims["exp"]))
+        except Exception:  # noqa: BLE001 — the token stands; only its replacement is lost
+            logger.warning("delegation token for unit=%s could not be published for refresh — the "
+                           "unit keeps its tools until this token expires", uid, exc_info=True)
+
+    def _incarnation_ended(self, uid: str) -> bool:
+        """Does the runtime report ``uid``'s previous container ended? Anything else — running,
+        starting, unknown, unreadable — is False."""
+        try:
+            return self._runtime.await_done(uid, timeout_sec=0.0) in delegation_revocation.ENDED_STATES
+        except Exception:  # noqa: BLE001 — not knowing is not "ended"
+            return False
+
+    def _revoke_ended_incarnation(self, uid: str) -> None:
+        """A unit id is reused: a chat thread dispatches every turn to the same id, and a new
+        container takes it once the last one idled out. When this unit still holds a token older
+        than the grace and the runtime says its container ended, that token belongs to the ended
+        incarnation: revoke it now, before the next incarnation makes the id live again and the
+        reaper's sweep can no longer tell the two apart. Best-effort: anything it cannot learn is
+        left to the reaper."""
+        store = self._delegation_store
+        if store is None:
+            return
+        try:
+            if not delegation_revocation.has_revocable(store, uid):
+                return
+            state = self._runtime.await_done(uid, timeout_sec=0.0)
+            if state in delegation_revocation.ENDED_STATES:
+                revoked = delegation_revocation.revoke_unit(store, uid)
+                if revoked:
+                    logger.info("revoked %d delegation token(s) of unit=%s's ended incarnation",
+                                revoked, uid)
+        except Exception:  # noqa: BLE001 — the reaper is the backstop
+            logger.warning("could not check unit=%s's previous incarnation for revocation", uid,
+                           exc_info=True)
 
     # ── warm delivery (message triggers) ─────────────────────────────────────
 
@@ -966,6 +1152,10 @@ class Dispatcher:
             self._warm_retry_at = time.monotonic() + 60.0
             return None
         return self._warm_stream
+
+    def _unit_input_key(self, uid: str) -> str:
+        secret = self._settings.internal_api_secret
+        return unit_input.unit_key(secret.get_secret_value() if secret else "", uid)
 
     def _warm_fail(self) -> None:
         """An op on the warm client failed — drop it and back off (the spawn path still dispatched)."""
@@ -1008,7 +1198,7 @@ class Dispatcher:
             entry = {"type": "message", "prompt": prompt, "nonce": nonce}
             if inbox:
                 entry["inbox"] = inbox
-            r.xadd(input_topic(uid), {"turn": json.dumps(entry)})
+            r.xadd(input_topic(uid), unit_input.signed_entry(self._unit_input_key(uid), entry))
         except Exception as exc:  # noqa: BLE001
             # WHETHER THIS LOSES THE TURN DEPENDS ON THE UNIT, so the decision is the caller's.
             # Cold unit: the spawn carries this same prompt as its entrypoint and nothing is lost —
@@ -1019,6 +1209,55 @@ class Dispatcher:
             self._warm_fail()
             return _DELIVERY_FAILED
         return tail
+
+    def _spawn_failed(self, uid: str, fault: RuntimeFault, nonce: str) -> bool:
+        """A spawn ended in ``fault``. Returns True only when the turn is running anyway.
+
+        THE WORDS ARE TAKEN BACK. ``_predeliver`` put this turn on the inbox before the spawn was
+        asked for, so a refused spawn used to leave it there under "queued behind the current turn"
+        for an hour, waiting for a worker nobody started — and a retry then ran it twice. The entry
+        is withdrawn instead, and the caller's typed refusal is the one record of it.
+
+        …UNLESS A LIVE WORKER ALREADY TOOK IT. A warm worker reads its inbox whatever the runtime
+        is doing, so a runtime that was unreachable for one call may have stopped nothing: when the
+        worker's cursor is already past this entry the turn is running, and refusing it would ask
+        the person to send again something that is being answered. That is logged, and only that.
+
+        Otherwise the fault is recorded against the unit (`unit_faults`) so the chat's queue and any
+        view attached to it can say which dependency stopped it."""
+        taken = self._retract(uid, nonce) if nonce else False
+        log_fields = {"event": "runtime_fault", "source": fault.source, "kind": fault.kind,
+                      "op": fault.op, "status": fault.status, "unit": uid,
+                      "turn_running": taken, "upstream": fault.upstream[:300]}
+        if taken:
+            logger.warning(json.dumps(log_fields))
+            return True
+        logger.error(json.dumps(log_fields))
+        unit_faults.record(self._redis(), uid, fault.as_dict())
+        return False
+
+    def _retract(self, uid: str, nonce: str) -> bool:
+        """Withdraw the inbox entry carrying ``nonce``. True when a worker had already taken it.
+
+        agent-api is the in-topic's one writer (P23), so withdrawing its own entry is its call.
+        Best-effort: no redis, or an entry no longer there, withdraws nothing and takes nothing."""
+        r = self._redis()
+        if r is None:
+            return False
+        key = self._unit_input_key(uid)
+        try:
+            cursor = r.get(inbox_cursor_key(uid)) or ""
+            for entry_id, fields in r.xrevrange(input_topic(uid), count=50) or []:
+                msg = unit_input.verified_turn(key, fields or {})
+                if not msg or msg.get("nonce") != nonce:
+                    continue
+                if cursor and _stream_id_le(entry_id, cursor):
+                    return True
+                r.xdel(input_topic(uid), entry_id)
+                return False
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("could not withdraw the refused turn for unit=%s: %s", uid, exc)
+        return False
 
     def _workload_gone(self, uid: str) -> bool:
         """True when the runtime says the workload is NOT alive. Errors read as gone: a respawn on
@@ -1060,6 +1299,16 @@ class Dispatcher:
                     logger.warning("warm delivery missed for unit=%s (worker exited) — respawning", uid)
                     try:
                         self._runtime.spawn(uid, self._settings.agent_profile, env)
+                    except RuntimeFault as fault:
+                        # Nobody is waiting on this call to answer, so the fault is RECORDED: the
+                        # message is still on the inbox and the chat's queue must say what is
+                        # holding it, not "queued behind the current turn" for an hour (P18).
+                        logger.error(json.dumps({
+                            "event": "runtime_fault", "source": fault.source, "kind": fault.kind,
+                            "op": fault.op, "status": fault.status, "unit": uid,
+                            "watchdog": True, "upstream": fault.upstream[:300]}))
+                        unit_faults.record(self._redis(), uid, fault.as_dict())
+                        return
                     except Exception:  # noqa: BLE001
                         logger.exception("delivery-watchdog respawn failed for unit=%s", uid)
                         return

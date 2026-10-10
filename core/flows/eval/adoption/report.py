@@ -55,7 +55,7 @@ def main():
     w("| the note and the per-attendee blocks | one real agent turn per meeting | |")
     w("| the chat after a click | the deployed agent over agent-api | |")
     w("| the people, personas and decisions | | Haiku, one call per touch |")
-    w("| the org, its meeting graph, the calendar | | generated, SPI-shaped |")
+    w("| the org, its meeting graph, the calendar | | generated, Brightwater-shaped |")
     w("")
     w("**Active** is strict, per the founder's tightening: in the trailing 14 days the person "
       "**opened** a Vexa mail **and** took a **UI action** — clicked into the terminal, sent a "
@@ -63,12 +63,11 @@ def main():
       "scores zero; an open alone is *reached*, not active.\n")
 
     # ── the org
-    o2 = O.build("spi", SIZES[0]); P.assign(o2)
+    o2 = O.build("studio", SIZES[0]); P.assign(o2)
     st = O.stats(o2)
-    w("## 1. The org — SPI, native to the fixtures\n")
-    w(f"Working size **{SIZES[0]:,}** (founder's number). *Assumption stated:* public reporting "
-      "puts SPI at ~700 **production** staff at peak and Twenty's 5,000 is the Sony Pictures "
-      "umbrella — the size is a parameter, not a headcount claim.\n")
+    w("## 1. The org — Brightwater, native to the fixtures\n")
+    w(f"Working size **{SIZES[0]:,}** (founder's number). *Assumption stated:* the size "
+      "is a parameter, not a headcount claim.\n")
     w(f"- {st['people']:,} people · {st['teams']} units · {st['meeting_series']} meeting series "
       f"· {st['meetings_per_week_total']:,.0f} occurrences/week · "
       f"{st['avg_meetings_per_person_per_week']} meetings per person per week")
@@ -107,7 +106,7 @@ def main():
     w("|---|---|---|---|---|---|---|---|")
     results = {}
     for n in SIZES:
-        o = O.build("spi", n)
+        o = O.build("studio", n)
         P.assign(o)
         for lever in LEVERS:
             r = S.run(o, rates, days=120, attendee_followup=lever)
@@ -182,7 +181,7 @@ def main():
       "inbound mailbox double landed on a sibling branch during this run and feeds the "
       "founder's lane, not the sim's. The fixture is a DNA/ASWF working session, not a dailies "
       "review: no dailies transcript exists yet, and the personas judge CONTENT, so this is the "
-      "single biggest gap between this measurement and SPI's real pilot.\n")
+      "single biggest gap between this measurement and a real pilot.\n")
 
     json.dump({f"{n}|{lv}": {k: v for k, v in r.items() if k != "curve"}
                for (n, lv), r in results.items()},

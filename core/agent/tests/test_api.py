@@ -5,10 +5,15 @@ spawns a now-dispatch and streams its Stream back as SSE; chat is an honest 501 
 """
 from __future__ import annotations
 
+import functools
+
 import pytest
 from fastapi.testclient import TestClient
 
 from control_plane.api import create_app
+# No gateway in-process: a request that names nobody runs as `u_jane` (`create_app`'s harness-only
+# `default_subject`). A test that asserts per-user isolation sends `X-User-Id`, which always wins.
+create_app = functools.partial(create_app, default_subject="u_jane")
 from tests import gitserve
 from shared.config import load_settings
 from control_plane.dispatch import Dispatcher
@@ -77,8 +82,8 @@ def _client(stream_reader=None) -> TestClient:
 # every /api/meeting/stream request carries an X-User-Id. `None` from the lookup == not-owned → 403.
 def _fake_owner_lookup(owned: dict):
     """owned = {(user_id, str(meeting_id)): native_meeting_id}. Returns a create_app-compatible
-    ``(user_id, meeting_id) -> dict | None`` — the meeting record when owned, else None."""
-    def _lookup(user_id, meeting_id):
+    ``(user_id, meeting_id, workspaces) -> dict | None`` — the meeting record when owned, else None."""
+    def _lookup(user_id, meeting_id, workspaces=None):
         nat = owned.get((str(user_id), str(meeting_id)))
         if nat is None:
             return None
@@ -116,14 +121,26 @@ def test_models_reports_the_one_model_and_no_second_one(tmp_path):
     assert "streaming_model" not in body and "meeting_model" not in body
 
 
-def test_invocations_dispatches():
-    r = _client().post("/invocations", json=VALID_INV)
+INTERNAL = "agent-test-internal-secret"
+
+
+def test_invocations_dispatches(monkeypatch):
+    monkeypatch.setenv("INTERNAL_API_SECRET", INTERNAL)
+    r = _client().post("/invocations", json=VALID_INV, headers={"X-Internal-Secret": INTERNAL})
     assert r.status_code == 202 and r.json()["workload_id"]
 
 
-def test_invocations_rejects_nonconformant():
-    r = _client().post("/invocations", json={"trigger": "message"})  # missing identity/workspaces/start
+def test_invocations_rejects_nonconformant(monkeypatch):
+    monkeypatch.setenv("INTERNAL_API_SECRET", INTERNAL)
+    r = _client().post("/invocations", json={"trigger": "message"},  # missing identity/workspaces/start
+                       headers={"X-Internal-Secret": INTERNAL})
     assert r.status_code == 400
+
+
+def test_invocations_refuses_an_unauthenticated_caller_before_reading_the_body():
+    """test_dispatch_sink.py has the whole matrix; this is the front door's own line."""
+    r = _client().post("/invocations", json=VALID_INV)
+    assert r.status_code == 401
 
 
 def test_chat_501_without_reader():
@@ -360,11 +377,8 @@ def test_the_retired_copilot_endpoints_are_gone(monkeypatch):
                   json={"native_id": "m9", "on": True}).status_code == 404
 
 
-def test_meeting_stream_seeds_recent_tail_without_replaying_from_zero(monkeypatch):
-    """One stream, one cursor (PRD decision 34). The feed used to MERGE three — the transcript, the
-    copilot's out-stream and the processed-notes stream — and resume each from its own part of a
-    composite SSE id. It now seeds the transcript's recent tail, resumes from that entry, and reads
-    nothing else."""
+def test_meeting_stream_replays_only_transcript_history(monkeypatch):
+    """Replay the transcript in chronological order without reading other streams."""
     import json
     import redis
 
@@ -383,9 +397,12 @@ def test_meeting_stream_seeds_recent_tail_without_replaying_from_zero(monkeypatc
             return []
 
         def xread(self, streams, count=500, block=15000):
+            self.streams_seen.update(streams)
             if self.first_xread is None:
                 self.first_xread = dict(streams)
-                return [("tc:meeting:abc", [("10-0", {"payload": json.dumps({"type": "session_end"})})])]
+                rows = list(reversed(self.xrevrange("tc:meeting:abc")))
+                rows.append(("10-0", {"payload": json.dumps({"type": "session_end"})}))
+                return [("tc:meeting:abc", rows)]
             return []
 
     fake = FakeRedis()
@@ -403,7 +420,7 @@ def test_meeting_stream_seeds_recent_tail_without_replaying_from_zero(monkeypatc
     assert '"text": "still recent"' in body
     assert '"text": "tail"' in body
     assert '"meeting-end"' in body
-    assert fake.first_xread == {"tc:meeting:abc": "9-0"}
+    assert fake.first_xread == {"tc:meeting:abc": "0-0"}
     assert fake.streams_seen == {"tc:meeting:abc"}
 
 
@@ -469,6 +486,8 @@ def test_meeting_stream_on_completed_meeting_never_crashes_xread(monkeypatch):
         def xread(self, streams, count=500, block=15000):
             if not streams:  # real redis-py raises here — this fake does too, faithfully
                 raise redis.exceptions.DataError("XREAD streams must be a non empty dict")
+            if streams.get("tc:meeting:done") == "0-0":
+                return [("tc:meeting:done", self.xrevrange("tc:meeting:done"))]
             return []
 
     fake = FakeRedis()
@@ -552,15 +571,18 @@ def test_workspace_tree_hidden_mode(tmp_path):
     default = reader.tree("u_jane")
     assert default == ["kg/note.md"]
 
-    # hidden=True: surfaces .claude + other dotfiles, but never .git internals
+    # hidden=True: surfaces other dotfiles, but never .git internals nor the agent's .claude plumbing
+    # (no file route reaches into it either — workspace_paths.RESERVED_DIRS)
     shown = reader.tree("u_jane", hidden=True)
-    assert ".claude/sessions/main.session" in shown
+    assert not any(f.startswith(".claude/") for f in shown)
     assert ".env" in shown
     assert "kg/note.md" in shown
     assert not any(f.startswith(".git/") or f == ".git" for f in shown)
 
-    # read() can open a hidden file (traversal-guard still applies)
-    assert reader.read("u_jane", ".claude/sessions/main.session") == "sess\n"
+    # read() can open a hidden file (traversal-guard still applies) — but never one under .claude
+    assert reader.read("u_jane", ".env") == "SECRET=1\n"
+    with pytest.raises(ValueError):
+        reader.read("u_jane", ".claude/sessions/main.session")
 
     # endpoint passes the param through
     c = TestClient(create_app(
@@ -569,7 +591,7 @@ def test_workspace_tree_hidden_mode(tmp_path):
     plain = c.get("/api/workspace/tree", params={"subject": "u_jane"}).json()["files"]
     assert plain == ["kg/note.md"]
     with_hidden = c.get("/api/workspace/tree", params={"subject": "u_jane", "hidden": 1}).json()["files"]
-    assert ".claude/sessions/main.session" in with_hidden
+    assert ".env" in with_hidden and not any(f.startswith(".claude/") for f in with_hidden)
 
 
 def _write_transcript(ws, sid: str, lines: list[dict]) -> None:
@@ -587,7 +609,7 @@ def test_session_history_parses_turns(tmp_path):
     (ws / ".claude" / "sessions" / "main.session").write_text("sid-1\n")
     _write_transcript(ws, "sid-1", [
         {"type": "mode", "mode": "default"},                                # meta — skip
-        {"type": "user", "message": {"role": "user", "content": "research DTCC"}},
+        {"type": "user", "message": {"role": "user", "content": "research Northwind Labs"}},
         {"type": "assistant", "message": {"role": "assistant", "content": [
             {"type": "thinking", "thinking": "hmm"},                        # ignored
             {"type": "text", "text": "Looking it up. "},
@@ -608,7 +630,7 @@ def test_session_history_parses_turns(tmp_path):
     turns = reader.history("u_jane", "main")
 
     assert [t["role"] for t in turns] == ["user", "agent", "user"]
-    assert turns[0] == {"role": "user", "text": "research DTCC"}
+    assert turns[0] == {"role": "user", "text": "research Northwind Labs"}
     # the two assistant lines (split by a tool_result round-trip) fold into ONE agent turn
     assert turns[1]["text"] == "Looking it up. Done."
     assert [o["label"] for o in turns[1]["ops"]] == ["read", "search"]
@@ -638,7 +660,10 @@ def test_session_history_found_in_active_mount_dir(tmp_path):
 
 def test_session_history_sweeps_unmounted_strands(tmp_path):
     """A thread recorded under a workspace that is NO LONGER mounted (deactivated shared ws) must
-    still load: the reader's last-resort sweep finds the pointer without any extra_roots."""
+    still load: the reader's last-resort sweep finds the pointer without any extra_roots — in a
+    workspace the subject is a member of, or in its own parked slot."""
+    import json
+
     from control_plane.workspace_reader import WorkspaceReader
 
     gone = tmp_path / "some-shared-ws"          # not passed as an extra root — unmounted
@@ -647,8 +672,39 @@ def test_session_history_sweeps_unmounted_strands(tmp_path):
     _write_transcript(gone, "sid-7", [
         {"type": "user", "message": {"role": "user", "content": "stranded"}},
     ])
+    (gone / "policy").mkdir()
+    (gone / "policy" / "members.json").write_text(json.dumps([{"subject": "28", "role": "contributor"}]))
+    parked = tmp_path / ".attached" / "28" / "old-repo"   # the subject's own parked slot
+    (parked / ".claude" / "sessions").mkdir(parents=True)
+    (parked / ".claude" / "sessions" / "chat-p.session").write_text("sid-8\n")
+    _write_transcript(parked, "sid-8", [
+        {"type": "user", "message": {"role": "user", "content": "parked"}},
+    ])
     reader = WorkspaceReader(str(tmp_path))
     assert reader.history("28", "chat-z") == [{"role": "user", "text": "stranded"}]
+    assert reader.history("28", "chat-p") == [{"role": "user", "text": "parked"}]
+
+
+def test_the_sweep_never_serves_another_subjects_thread(tmp_path):
+    """A subject with no pointer of its own for a session name is never served the thread another
+    subject — or a workspace it is not a member of — keeps under that name."""
+    import json
+
+    from control_plane.workspace_reader import WorkspaceReader
+
+    for where in ("u_other", ".attached/u_other/repo", "not-my-shared-ws"):
+        ws = tmp_path / where
+        (ws / ".claude" / "sessions").mkdir(parents=True)
+        (ws / ".claude" / "sessions" / "main.session").write_text(f"sid-{ws.name}\n")
+        _write_transcript(ws, f"sid-{ws.name}", [
+            {"type": "user", "message": {"role": "user", "content": f"PRIVATE to {where}"}},
+        ])
+    (tmp_path / "not-my-shared-ws" / "policy").mkdir()
+    (tmp_path / "not-my-shared-ws" / "policy" / "members.json").write_text(
+        json.dumps([{"subject": "u_other", "role": "owner"}]))
+    reader = WorkspaceReader(str(tmp_path))
+    assert reader.history("u_new", "main") == []
+    assert "PRIVATE to u_other" in json.dumps(reader.history("u_other", "main"))
 
 
 def test_session_history_prefers_the_system_anchor(tmp_path):
@@ -675,13 +731,12 @@ def test_session_history_tolerant_of_missing(tmp_path):
     assert reader.history("u_ghost", "main") == []
     assert reader.history("u_jane", "../escape") == []
 
-    # endpoint never 500s and returns {turns: []}
+    # endpoint never 500s: a session the caller has no thread for is 404
     c = TestClient(create_app(
         Dispatcher(load_settings(), _FakeRuntime(), _FakeIdentity()), reader=reader,
     ))
     r = c.get("/api/sessions/main/history", params={"subject": "u_ghost"})
-    assert r.status_code == 200
-    assert r.json() == {"turns": []}
+    assert r.status_code == 404
 
 
 # ── live registry: liveness is EVIDENCE, not a latch (P21 — the stale-"live" server-side root) ──────
@@ -773,16 +828,16 @@ def test_sse_resumes_from_last_event_id_no_reseed(monkeypatch):
     assert "tc:meeting:m1" not in fr.seeded                 # transcript tail NOT re-seeded on resume
 
 
-def test_sse_fresh_connect_seeds_and_tails(monkeypatch):
-    """No Last-Event-ID (fresh connect): seed the bounded transcript tail, then live-tail from there."""
+def test_sse_fresh_connect_replays_from_beginning(monkeypatch):
+    """A fresh connection starts at the beginning; xread batches history before tailing."""
     fr = _StreamRedis()
     c = _stream_client(fr, monkeypatch)
     with c.stream("GET", "/api/meeting/stream", params={"meeting_id": "m1", "session_uid": "m1"},
                   headers={"X-User-Id": "u_owner"}) as r:
         assert r.status_code == 200
         _ = r.read()
-    assert "tc:meeting:m1" in fr.seeded                     # fresh connect DID seed the tail
-    assert fr.xread_last["tc:meeting:m1"] == "$"            # then tails live from now
+    assert "tc:meeting:m1" not in fr.seeded
+    assert fr.xread_last["tc:meeting:m1"] == "0-0"
 
 
 class _RetractRedis:
@@ -837,7 +892,7 @@ class _ResumedSessionRedis:
         if self._reads == 1:
             return [("tc:meeting:m1", [("1-0", {"payload": _j.dumps({"type": "session_end"})})])]
         if self._reads == 2:
-            return [("tc:meeting:m1", [("2-0", {"payload": _j.dumps({"type": "session_start", "uid": "m1"})})])]
+            return [("tc:meeting:m1", [("2-0", {"payload": _j.dumps({"type": "session_start", "session_uid": "m1"})})])]
         if self._reads == 3:
             return [("tc:meeting:m1", [("3-0", {"payload": _j.dumps(
                 {"type": "transcription", "segments": [{"speaker": "J", "text": "still live", "start": 9, "segment_id": "s9"}]})})])]
@@ -864,7 +919,7 @@ def test_sse_session_start_clears_stale_ending_no_premature_end(monkeypatch):
 # param with NO identity/ownership check → any authenticated user B could enumerate A's rows and stream
 # A's live transcript + copilot cards. These tests FAIL on the pre-fix code (the stream opened for B) and
 # pass after: B is REFUSED (403, no stream opened) on A's row, and A's own row streams fine.
-def _xtenant_stream_client(monkeypatch):
+def _xtenant_stream_client(monkeypatch, default_subject="u_jane"):
     """A live-SSE client whose owner-lookup says: row "10" is owned by u_alice (native "aaa-bbb-ccc"),
     row "20" is owned by u_bob (native "xxx-yyy-zzz"). The redis fake ends every stream immediately."""
     import redis
@@ -887,7 +942,7 @@ def _xtenant_stream_client(monkeypatch):
     owned = {("u_alice", "10"): "aaa-bbb-ccc", ("u_bob", "20"): "xxx-yyy-zzz"}
     return TestClient(create_app(
         Dispatcher(load_settings(), _FakeRuntime(), _FakeIdentity()), redis_url="redis://test",
-        meeting_owner_lookup=_fake_owner_lookup(owned),
+        meeting_owner_lookup=_fake_owner_lookup(owned), default_subject=default_subject,
     ), raise_server_exceptions=True)
 
 
@@ -902,10 +957,9 @@ def test_sse_cross_tenant_meeting_stream_is_refused(monkeypatch):
     assert r.status_code == 403, "user B must NOT stream tenant A's live meeting"
 
     # No identity at all → fail closed. In the gateway-fronted topology (no default subject) that is a
-    # 401; the L2 harness sets VEXA_AGENT_DEFAULT_SUBJECT (autouse `_default_subject`), so clear it here to
-    # assert the real gateway contract: a missing X-User-Id is rejected, never a silent open.
-    monkeypatch.setenv("VEXA_AGENT_DEFAULT_SUBJECT", "")
-    c_no_fallback = _xtenant_stream_client(monkeypatch)
+    # 401; the harness's `default_subject` is left out here to assert the real gateway contract: a
+    # missing X-User-Id is rejected, never a silent open.
+    c_no_fallback = _xtenant_stream_client(monkeypatch, default_subject="")
     r = c_no_fallback.get("/api/meeting/stream", params={"meeting_id": "10", "session_uid": "aaa-bbb-ccc"})
     assert r.status_code == 401
 
@@ -987,7 +1041,7 @@ def test_workspace_desk_reports_the_state_not_the_marker(tmp_path):
 
     # THE FOUNDER'S CASE: a desk somebody has worked in, and no marker anywhere near it
     (workspaces / "u_jane" / "kg" / "entities" / "company").mkdir(parents=True)
-    (workspaces / "u_jane" / "kg" / "entities" / "company" / "oenb.md").write_text("# OeNB\n")
+    (workspaces / "u_jane" / "kg" / "entities" / "company" / "examplebank.md").write_text("# Example Bank\n")
     body = c.get("/api/workspace/desk", headers=h).json()
     assert body["state"] == "warm" and body["scaffolded"] is False
 
@@ -1478,3 +1532,38 @@ def test_redis_stream_reader_yields_keepalive_ticks(monkeypatch):
     reader = RedisStreamReader("redis://test", block_ms=10, idle_giveup_ms=30)
     out = list(reader.read("u1"))
     assert out == [None, None]                  # ticks until the giveup, then a clean end
+
+
+def test_sse_fresh_connect_replays_entire_history_across_batches(monkeypatch):
+    """Opening late retains the opening, updates and retractions across session/page boundaries."""
+    import json
+    import fakeredis
+
+    store = fakeredis.FakeRedis(decode_responses=True)
+    key = "tc:meeting:m1"
+    for i in range(1100):
+        payload = {"type": "transcription", "segments": [
+            {"segment_id": f"s{i}", "text": f"line-{i}", "speaker": "A", "completed": True}]}
+        if i in (498, 999):
+            payload = {"type": "session_end"}
+        elif i in (499, 1000):
+            payload = {"type": "session_start"}
+        store.xadd(key, {"payload": json.dumps(payload)}, id=f"{i+1}-0")
+    store.xadd(key, {"payload": json.dumps({"type": "retract", "segment_ids": ["s1"]})}, id="1101-0")
+    store.xadd(key, {"payload": json.dumps({"type": "session_end"})}, id="1102-0")
+
+    class History:
+        def xrevrange(self, *args, **kwargs):
+            return store.xrevrange(*args, **kwargs)
+
+        def xread(self, streams, count=500, block=0):
+            return store.xread(streams, count=count)  # no wall-clock waiting in fixture
+
+    c = _stream_client(History(), monkeypatch)
+    response = c.get("/api/meeting/stream", params={"meeting_id": "m1", "session_uid": "m1"},
+                     headers={"X-User-Id": "u_owner"})
+    events = [json.loads(line[6:]) for line in response.text.splitlines() if line.startswith("data: ")]
+    segments = [e for e in events if e.get("type") == "transcript"]
+    assert [s["text"] for s in segments] == [f"line-{i}" for i in range(1100) if i not in (498,499,999,1000)]
+    assert events[-2] == {"type": "retract", "segment_ids": ["s1"]}
+    assert events[-1] == {"type": "meeting-end"}

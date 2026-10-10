@@ -20,6 +20,8 @@ composition root (`src/index.ts`).
 | publishes | gateway → dashboard | redis pub/sub `tc:meeting:{id}:mutable` | live mutable `transcript.v1` segment |
 | produces | meeting-api | HTTP POST → `inv.meetingApiCallbackUrl` | `lifecycle.v1` status events (retry/backoff) |
 | produces | meeting-api | HTTP POST → `inv.recordingUploadUrl` | assembled recording master (multipart) |
+| consumes | userdata store (S3) | `aws` CLI with the invocation's read-only `s3*` pair (`@vexa/remote-browser`), authenticated mode only | before launch, the stored session's [`session-profile.v1`](../../contracts/session-profile.v1) paths, read-only |
+| produces | meeting-api | HTTP PUT → `inv.sessionWritebackUrl` (`Authorization: Bearer <token>`), authenticated mode only, on clean teardown | the rotated session, a `session-profile.v1` `WritebackBody`; no field ⇒ no write-back |
 | consumes | gateway (commands) | redis pub/sub `bot_commands:meeting:{id}` | `acts.v1` commands (e.g. `speak` / `speak_stop`) |
 
 ### Pre-join reachability gate (#530)
@@ -48,6 +50,9 @@ join** and terminate fast with a typed, attributed outcome instead of an opaque 
 [`lifecycle.v1`](../../contracts/lifecycle.v1) (status it produces),
 [`transcript.v1`](../../contracts/transcript.v1) (segments it publishes). All four are TS-mirrored
 in `src/contracts.ts` and validated against the sealed registry goldens (`contracts.seal.json`).
+In authenticated mode it also follows [`session-profile.v1`](../../contracts/session-profile.v1): what
+it restores and the write-back body it sends, through `@vexa/remote-browser`, which reads that
+contract's profile ([`src/session-writeback.ts`](src/session-writeback.ts)).
 
 ## Isolated evaluation
 

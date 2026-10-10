@@ -73,10 +73,13 @@ def test_bad_event_envelope_raises():
         events.event_to_invocation({"subject": "u_jane"})  # missing name
 
 
-def test_events_endpoint_dispatches():
+def test_events_endpoint_dispatches(monkeypatch):
+    monkeypatch.setenv("INTERNAL_API_SECRET", "agent-test-internal-secret")
     rt = _FakeRuntime()
     dispatcher = Dispatcher(load_settings(), rt, _FakeIdentity())
-    client = TestClient(create_app(dispatcher))
+    # the event names the person it is about, so only the internal tier may send one
+    client = TestClient(create_app(dispatcher),
+                        headers={"X-Internal-Secret": "agent-test-internal-secret"})
 
     r = client.post("/events", json={
         "name": "email.received", "subject": "u_jane",

@@ -16,19 +16,23 @@ to a server-side (RTMS) lane that would not need browser auth at all.
 
 ## 1. Provision the session — `make login`
 
-Provisioning opens a browser, a human signs in **once**, and the session's auth-essential subset
-(~200 KB: cookies, local/session storage, login data, preferences — never cache or history) is
-uploaded to your deployment's userdata storage.
+Provisioning opens a browser, a human signs in **once**, and the session profile — the
+auth-essential subset of the browser profile (~200 KB: cookies, local/session storage, login data,
+preferences — never cache, history or extensions) — is uploaded to your deployment's userdata
+storage.
 
 ```bash
 export BOT_USERDATA_S3_PATH=userdata/bot-identity-1   # a dedicated prefix per bot identity
-export BOT_S3_ENDPOINT=http://localhost:9000          # your deployment's MinIO/S3
+export BOT_S3_ENDPOINT=http://localhost:18900         # compose: the storage service's loopback port
 export BOT_S3_BUCKET=vexa
-export BOT_S3_ACCESS_KEY=...                          # SCOPED userdata credentials — see security
-export BOT_S3_SECRET_KEY=...
+export LOGIN_S3_ACCESS_KEY=...                        # a pair that can WRITE the prefix — on Compose,
+export LOGIN_S3_SECRET_KEY=...                        # .env's MINIO_ACCESS_KEY / MINIO_SECRET_KEY
 
 make login          # AUTH_PLATFORM=google (default) | teams | zoom
 ```
+
+The upload needs a key pair that can write the prefix. The bots' own pair (`BOT_S3_*`, below) is
+read-only and cannot upload; `make login` refuses to start without `LOGIN_S3_*`.
 
 The command opens the platform's sign-in page (headed on a desktop; inside a container, attach via
 the provisioning browser's VNC on `:6080`), waits for you to finish signing in, **confirms** the
@@ -49,17 +53,20 @@ Authenticated mode is a **deployment property**: set it once on `meeting-api` an
 # meeting-api environment (compose: deploy/compose .env; helm: meeting-api env values)
 BOT_AUTHENTICATED=true
 BOT_USERDATA_S3_PATH=userdata/bot-identity-1
-BOT_S3_ENDPOINT=http://minio:9000        # as reachable FROM the bot containers
+BOT_S3_ENDPOINT=http://storage:9000      # as reachable FROM the bot containers
 BOT_S3_BUCKET=vexa
-BOT_S3_ACCESS_KEY=...
+BOT_S3_ACCESS_KEY=...                    # the bots' READ-ONLY pair — see security
 BOT_S3_SECRET_KEY=...
 ```
 
 With the knob set, each bot restores the stored session into its own ephemeral browser profile
 before launch and joins as the signed-in account — no guest-name entry, no lobby knock where the
-account has access. If the knob is set but the storage config is incomplete, `POST /bots` refuses
-with a 503 naming what's missing — a half-configured deployment never silently spawns anonymous
-bots. If the session store is unreachable at spawn time, the bot fails loud with a typed
+account has access. If the knob is set but the storage config is incomplete, meeting-api refuses
+to boot, naming what's missing — a half-configured deployment never silently spawns anonymous
+bots. It also refuses to boot when either half of `BOT_S3_*` equals the storage's root pair
+(`MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY`) or `S3_ACCESS_KEY` / `S3_SECRET_KEY`: that pair rides
+every bot, so it must never be a key that can reach the whole store. `POST /bots` and the session
+write-back apply the same two checks and answer 503. If the session store is unreachable at spawn time, the bot fails loud with a typed
 `session-restore` error naming the step and endpoint — it never joins signed-out on a failed
 restore.
 
@@ -74,9 +81,12 @@ each).
 
 Google rotates session cookies continuously during use and re-challenges state that looks stale.
 A stored session that is only ever *read* decays with every restore. Vexa therefore closes the
-round trip: **restore freshest → use → write back**. On every clean bot teardown, the rotated
-session is uploaded back to the userdata prefix, so the next spawn restores the freshest state
-instead of a decaying snapshot.
+round trip: **restore freshest → use → write back**. On every clean bot teardown, the bot hands its
+rotated session back to `meeting-api` with the session token it already holds, and `meeting-api`
+writes it to the userdata prefix, so the next spawn restores the freshest state instead of a
+decaying snapshot. `meeting-api` accepts the write-back only from the live authenticated bot (the
+newest session spawned on the identity, within ten minutes of its meeting ending) and only the
+session profile's files; anything else is refused and the stored session is left as it was.
 
 The boundary, stated honestly: write-back runs on **clean teardown only**. A hard-killed bot
 (SIGKILL, node crash) never reaches it — the durable copy simply stays at the last successful
@@ -98,10 +108,10 @@ The levers that make session lifetime a configured property instead of luck:
 ## When the session dies anyway — the recovery loop
 
 Eventually a session can decay past recovery (a Workspace policy change, a security challenge, a
-long idle gap). A bot restoring a signed-out session is reported as a failed meeting (the typed
-`auth_session_missing` verdict is landing with the signed-out detection change — until it merges,
-the failure surfaces as the join failing to proceed as the signed-in account; see
-[Troubleshooting](/troubleshooting#authenticated-bot-fails-or-joins-signed-out)). The fix is
+long idle gap). On Google Meet, a bot whose restored session is signed out sees the guest lobby
+instead of the signed-in join button. It does not join as a guest: the meeting ends `failed` with
+completion reason `auth_session_missing` (see [Completion reasons](/troubleshooting/completion-reasons)
+and [Troubleshooting](/troubleshooting#authenticated-bot-fails-or-joins-signed-out)). The fix is
 always the same one command:
 
 ```bash
@@ -124,20 +134,196 @@ s3://<BOT_S3_BUCKET>/<BOT_USERDATA_S3_PATH>/browser-data/
 ```
 
 - **The stored session IS a credential.** Anyone who can read the prefix can be the account.
-  Create **dedicated S3 credentials scoped to the userdata prefix** for `BOT_S3_ACCESS_KEY` /
-  `BOT_S3_SECRET_KEY` — never reuse the deployment's admin S3 credentials.
-- **The boundary, stated honestly:** the S3 credentials ride the bot's invocation into the bot
-  container's environment (that is how the bot restores and writes back). Anyone with `docker
-  inspect` on the bot host, or read access to the runtime API, can see them — which is exactly why
-  they must be scoped to the userdata prefix and nothing else. Secret *values* are never printed
-  in bot logs.
-- The session subset is not otherwise encrypted at rest beyond what your S3/MinIO deployment
-  provides.
+  Create **dedicated, read-only S3 credentials scoped to the userdata prefix** for
+  `BOT_S3_ACCESS_KEY` / `BOT_S3_SECRET_KEY` (list + get on the prefix, nothing else) — never the
+  deployment's admin S3 credentials; `POST /bots` refuses a pair that shares either half with them.
+- **Bots never write the stored session.** A bot restores with its read-only pair and hands its
+  rotated session to `meeting-api`, which writes it with its own storage credentials (`S3_*`, else
+  `MINIO_*`) at `BOT_S3_ENDPOINT` / `BOT_S3_BUCKET` — so those must be credentials that can write
+  that prefix. Only the session profile's files are accepted (cookies, login data, preferences,
+  web data, local/session storage); the same list bounds what a bot restores.
+- **The boundary, stated honestly:** the read-only S3 credentials ride the bot's invocation into the
+  bot container's environment (that is how the bot restores). Anyone with `docker inspect` on the bot
+  host, or read access to the runtime API, can see them — which is exactly why they must be
+  read-only and scoped to the userdata prefix. Secret *values* are never printed in bot logs.
+- The session subset is not otherwise encrypted at rest beyond what your S3 storage provides; on
+  Compose that is versitygw, which writes it as plain files in the `storage-data` volume.
+
+## What an authenticated browser may do
+
+A signed-in browser carries the account's session, so anything it opens as a page runs with that
+session behind it. An authenticated bot's browser is held to three limits.
+
+**It navigates only to the platform's own domains.** Before the stored session is restored, the
+bot checks the meeting URL: it must be `https://` and its host must be one of the platform's
+domains or a subdomain of one. Otherwise the launch is refused. The list is fixed per platform;
+the meeting URL never adds to it.
+
+| Platform | Domains (each with its subdomains) |
+|---|---|
+| Google Meet | `google.com`, `youtube.com`, `gstatic.com`, `googleusercontent.com`, `googleapis.com` |
+| Microsoft Teams | `microsoft.com`, `cloud.microsoft`, `microsoftonline.com`, `microsoftonline-p.com`, `live.com`, `office.com`, `office.net`, `skype.com`, `msauth.net`, `msftauth.net` |
+| Zoom | `zoom.us`, `zoom.com`, `zoomgov.com` |
+
+Jitsi has no stored session, so an authenticated launch for a Jitsi meeting is refused.
+
+The rule covers every navigation in the browser: the top-level page, popups and frames. A
+navigation request to another host is aborted before it leaves (Chromium reports
+`ERR_BLOCKED_BY_CLIENT`). A redirect that lands on another host is caught where it lands, and that
+frame is sent to `about:blank`. Each refusal is logged with the host. Subresources (scripts,
+images, media, XHR) are not restricted: meeting pages load them from CDNs, and a subresource is not
+a page the session can be driven through.
+
+**Site isolation is on.** An authenticated launch adds `--site-per-process` and removes any flag
+that turns site isolation off, so each site renders in its own process.
+
+**Chromium's sandbox is on wherever the host allows it.** This applies to every bot, signed in or
+not. The bot image runs as a non-root user, and the runtime starts bot containers under a seccomp
+profile that lets Chromium create the user namespace its sandbox needs (compose: the runtime's
+Docker backend; Helm: `runtime.botSandbox`; Lite: its own profile). If the sandbox still cannot
+start, the browser launches without it and the bot log says why
+(`Chromium runs without its sandbox: …`). The browser process also gets a short list of
+environment variables (display, audio, locale, paths, proxies) and never the bot's own
+configuration, which holds its tokens and the storage key.
+
+**The session is restored read-only and written back through meeting-api.** The bot lists the
+stored prefix with its read-only `BOT_S3_*` pair and downloads only the paths the
+[`session-profile.v1`](https://github.com/Vexa-ai/vexa/blob/main/core/meetings/contracts/session-profile.v1/README.md)
+contract names, each within its size limit. Anything else in the prefix stays where it is and is
+not restored. On clean teardown the bot sends its rotated session to meeting-api (see
+[Session lifetime](#3-session-lifetime--the-session-stays-alive-because-it-is-used)).
+
+## Failure modes
+
+| What you see | Cause | What to do |
+|---|---|---|
+| meeting-api refuses to boot, naming the missing key | `BOT_AUTHENTICATED=true` with incomplete storage config, or a `BOT_S3_*` half equal to a storage root key | Complete the config; give the bots their own read-only pair |
+| `POST /bots` answers 503 | The same config checks, at spawn time | As above |
+| `POST /bots` answers 409 naming a meeting | Another bot holds this stored session | Wait for it to end, or provision another identity |
+| Meeting `failed`, bot log `no browser session: MeetingHostRefused: …` | The meeting URL is not `https://` on the platform's domains, or the meeting is on Jitsi | Use the platform's own meeting URL; run Jitsi bots on a deployment without `BOT_AUTHENTICATED` |
+| Meeting `failed`, bot log names `session-restore` | The session store was unreachable or refused the bot's pair | Check `BOT_S3_ENDPOINT` from the bot's network and the pair's permissions |
+| Meeting `failed` with `auth_session_missing` (Google Meet) | The restored session is signed out, or nothing is stored at the prefix | `make login` |
+| Bot log `refused a navigation off the authenticated session's hosts: <host>` | A page tried to open another site | Nothing, unless the host is one the platform needs for joining; then report it |
+| Bot log `Chromium runs without its sandbox: …` | The bot runs as root, or the host refuses the user namespace | Keep the runtime's seccomp profile in place (`runtime.botSandbox.enabled` on Helm) |
+| Bot log `session write-back failed (durable copy stays at last restore): … HTTP 4xx/5xx` | meeting-api refused or could not store the write-back | See the status table below; the next clean meeting tries again |
+
+The write-back route answers with these statuses:
+
+| Status | Meaning |
+|---|---|
+| 401 | No MeetingToken, or a token not issued for this session |
+| 409 | Authenticated mode is off |
+| 503 | Authenticated mode is misconfigured, or the bots' pair reuses a storage root key |
+| 403 | This session is not the newest one spawned on the identity, or its meeting ended more than 600 s ago |
+| 413 | The body is larger than the profile's total limit allows |
+| 422 | A path outside the profile, a malformed entry or a file over its limit; nothing is written |
+| 502 | The store did not accept the write |
 
 ## Availability by deployment surface
 
-- **Compose** — supported as above; MinIO is in the stack.
+- **Compose** — supported as above; the in-stack `storage` service (versitygw) is the userdata
+  store. Choose a key pair for `BOT_S3_ACCESS_KEY` / `BOT_S3_SECRET_KEY` (sharing neither half with
+  `MINIO_*`) and set `BOT_S3_ENDPOINT=http://storage:9000`: on bring-up, `storage-init` creates that
+  account, attaches a bucket policy that makes it read-only on `BOT_USERDATA_S3_PATH`, and checks
+  the limit (its own prefix listable and readable; writing or deleting there, recordings and other
+  prefixes denied). If the check fails it exits 1, and `docker compose up` does not start
+  meeting-api. `meeting-api` writes the session back with the storage's own pair, and `make login`
+  uploads with it (`LOGIN_S3_*` = `.env`'s `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY`).
 - **Kubernetes/Helm** — set the same `BOT_AUTHENTICATED` / `BOT_*` env on the meeting-api
-  deployment (values → env); point the S3 vars at storage the bot pods can reach.
+  deployment (values → env); point the S3 vars at storage the bot pods can reach. The chart does
+  not create the bots' account: create it in your object store **read-only** on the userdata
+  prefix (`s3:ListBucket` with an `s3:prefix` condition, `s3:GetObject` on `<prefix>/*`), and make
+  sure meeting-api's own S3 credentials can write that prefix — they store the write-back.
 - **Lite** — the single-container build does not package a userdata store or the provisioning
   flow; authenticated mode is not available on Lite today.
+
+## How it works
+
+1. **Provision.** `make login` runs `@vexa/remote-browser`'s provisioner. A person signs in once;
+   after a signed-in check passes, it uploads the session profile to
+   `<BOT_USERDATA_S3_PATH>/browser-data/` with the operator's `LOGIN_S3_*` pair.
+2. **Boot.** meeting-api reads `BOT_AUTHENTICATED` and the `BOT_*` keys. With the knob on and the
+   store incomplete, or a `BOT_S3_*` half equal to a storage root key, it refuses to boot.
+3. **Spawn.** `POST /bots` reaches meeting-api through the gateway. meeting-api re-checks the
+   config (503), refuses a second live bot on the same prefix (409), mints the bot's MeetingToken
+   for this session, and builds the `invocation.v1` with `authenticated`, the read-only `BOT_S3_*`
+   pair, the storage location and `sessionWritebackUrl`
+   (`PUT /internal/browser-session/{session_uid}`, this session's uid in it). It asks the runtime
+   to start the bot container.
+4. **Launch.** The bot checks the meeting URL against the platform's domains (refused: the
+   meeting fails), restores the session profile from the store with the read-only pair, and
+   launches Chromium with site isolation on and its sandbox on where the host allows. It installs
+   the navigation rule before the first navigation.
+5. **Join and run.** The bot joins as the signed-in account. On Google Meet a signed-out lobby ends
+   the meeting with `auth_session_missing`.
+6. **Write back.** On clean teardown the bot closes the browser, collects the session-profile files
+   from its own profile directory and `PUT`s them to `sessionWritebackUrl` with its MeetingToken.
+   One bounded attempt (15 s); a refusal or timeout is a warning in the bot log.
+7. **Store.** meeting-api admits the token for exactly that `session_uid`, checks authenticated
+   mode, checks that the session is the newest one on the identity and its meeting is live or
+   ended under 600 s ago, then parses the body against `session-profile.v1`. It writes each file
+   with its own storage credentials (`S3_*`, else `MINIO_*`) at `BOT_S3_ENDPOINT` /
+   `BOT_S3_BUCKET`. The bot then removes its profile directory.
+
+**Who writes what.**
+
+| Data | Writer | Readers |
+|---|---|---|
+| The stored session (`userdata` blob, `<prefix>/browser-data/`) | Two writers by design, both recorded in `architecture.calm.json`: the operator's provisioning upload (`remote-browser`) and meeting-api's write-back (`session_profile`). No bot holds a key that can write it. | The bot, read-only |
+| The bot's invocation (with the MeetingToken and `sessionWritebackUrl`) | meeting-api (`bot_spawn`) | The bot |
+| The live profile directory | The bot's own Chromium, one ephemeral directory per bot | The bot's write-back |
+
+**Contracts and routes.** `session-profile.v1` (the profile, its limits, the write-back route and
+body), `invocation.v1` (`authenticated`, `sessionWritebackUrl`, `token`), and meeting-api's
+`PUT /internal/browser-session/{session_uid}` (not in the public schema; the gateway routes nothing
+to it).
+
+**Configuration.** meeting-api's environment, declared in its `config.v1.json`:
+`BOT_AUTHENTICATED`, `BOT_USERDATA_S3_PATH`, `BOT_S3_ENDPOINT`, `BOT_S3_BUCKET`,
+`BOT_S3_ACCESS_KEY`, `BOT_S3_SECRET_KEY`, and its own `S3_*` / `MINIO_*` pair for the write. The
+platform domain lists live in `core/meetings/modules/remote-browser/src/navigation.ts`. The bot
+sandbox's seccomp profile is the runtime's `seccomp-userns.json` (Helm: `runtime.botSandbox`).
+
+## Why it complies
+
+**Architecture.**
+
+| Rule | How this design meets it | Gate |
+|---|---|---|
+| P4: a cross-process contract is sealed | The profile and the write-back route are `session-profile.v1`, sealed in `contracts.seal.json`; the bot's fields ride `invocation.v1` | `gate:schema`, `gate:contract-version` |
+| P23 and ADR-0044: no duplicated fact drifts | The bot (TypeScript) and meeting-api (Python) each read a byte-identical copy of the sealed schema; both path matchers are held to the contract's path vectors | `gate:fact-parity` (fact `session-profile-contract`) |
+| P23: one writer per carrier | The stored session has the two writers the chart declares; the bot's key is read-only, so its rotated session goes through meeting-api | `gate:dataflow` |
+| P6: one front door | The bot uses navigation, sandbox and session-store code only through `@vexa/remote-browser`'s `index` | `gate:exports` |
+| P14: config is a validated contract | Every `BOT_*` key is declared in meeting-api's `config.v1.json`; an incomplete store or a reused root key refuses the boot | `gate:config-contract` |
+| P18: fail loud | A refused meeting host, a failed restore and a signed-out session each end the meeting `failed` with a named reason; every navigation refusal, sandbox fallback and write-back failure is logged | ungated: reviewed |
+| P7: workers are ephemeral | Each bot gets its own profile directory, removed at teardown; the durable copy lives only in the store | ungated: reviewed |
+
+**Security.**
+
+- **The stored session.** Readable by the bots' read-only pair and writable by the operator's
+  login pair and meeting-api's storage pair. meeting-api refuses (boot, spawn and write-back) a bot
+  pair that shares either half with a storage root key.
+- **The write-back.** Only the bot holding a MeetingToken for that exact session, while it is the
+  newest session on the identity and within 600 s of its meeting ending, may write; only profile
+  paths within the limits are stored, and one bad entry refuses the whole body.
+- **The browser.** Navigations stay on the platform's domains; site isolation is on; Chromium's
+  sandbox is on wherever the host allows; the browser's environment never holds the bot's tokens
+  or storage key.
+- **One bot per session.** A second concurrent spawn on the same identity is refused.
+
+Deny tests:
+
+| Protection | Test file | Tests |
+|---|---|---|
+| Write-back admission | `core/meetings/services/meeting-api/tests/test_session_profile.py` | `test_unauthenticated_caller_is_refused`, `test_another_sessions_token_is_refused`, `test_token_for_another_meeting_is_refused`, `test_superseded_bot_is_refused_and_the_live_one_accepted`, `test_meeting_ended_long_ago_is_refused`, `test_authenticated_mode_off_is_refused`, `test_bot_pair_reusing_a_root_key_refuses_the_write_too`, `test_file_outside_the_profile_refuses_the_whole_write`, `test_traversal_or_odd_name_is_refused`, `test_oversized_body_is_refused_before_it_is_parsed`, `test_shipped_app_mounts_the_route_internal_only` |
+| Write-back URL only in authenticated mode | `core/meetings/services/meeting-api/tests/test_authenticated_spawn.py` | `test_build_invocation_carries_the_write_back_url_only_beside_authenticated`, `test_second_concurrent_authenticated_spawn_refused`, `test_incomplete_config_refuses_before_any_db_write` |
+| The bots' pair is not a root key | `core/meetings/services/meeting-api/tests/test_auth_session_boot.py`, `test_bot_storage_key_reuse.py` | `test_a_bots_pair_that_reuses_a_root_key_refuses_the_boot_naming_no_value`, `test_bot_pair_reusing_a_root_half_is_refused_with_nothing_spawned` |
+| Navigation rule and site isolation | `core/meetings/modules/remote-browser/src/navigation.test.ts` | checks `refused: <platform> <url>`, `an off-list navigation is aborted`, `site isolation is turned on`, `no flag turns it off` |
+| Navigation in real Chromium | `core/meetings/services/bot/src/navigation.boundary.test.ts` | checks `a navigation to another host is refused`, `an iframe to another host never reaches it`, `a popup to another host never reaches it`, `a redirect off the list ends on about:blank` |
+| Sandbox and browser environment | `core/meetings/modules/remote-browser/src/sandbox.test.ts` | checks `another launch failure is raised, never retried without the sandbox`, `browserEnv drops <key>`, `the launch asks Playwright for the sandbox` |
+| Restore reads profile paths only | `core/meetings/modules/remote-browser/src/session-store.test.ts` | checks `restore excludes everything, then includes profile paths`, `restore must never name '<path>'` |
+| The bot's write-back | `core/meetings/services/bot/src/session-writeback.test.ts` | checks `authenticated with the bot's MeetingToken`, `every path in the body is a session profile path`, `the write-back never runs the aws CLI` |
+| Bot sandbox profile on each backend | `core/runtime/tests/test_profile_data.py`, `test_pod_scheduling.py` | `test_docker_drops_every_capability_but_the_profiles`, `test_bot_pods_run_under_the_node_installed_profile_the_operator_names` |
+
+The MeetingToken itself is described in
+[Security & compliance → Bot and runtime credentials](/security-compliance#bot-and-runtime-credentials).

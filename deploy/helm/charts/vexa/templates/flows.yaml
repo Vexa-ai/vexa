@@ -29,7 +29,12 @@ stringData:
   VEXA_FLOWS_MAIL_RATE_PER_SENDER: {{ .Values.flows.mailRate.perSender | quote }}
   VEXA_FLOWS_MAIL_RATE_GLOBAL: {{ .Values.flows.mailRate.global | quote }}
   VEXA_FLOWS_MAIL_RATE_WINDOW_S: {{ .Values.flows.mailRate.windowSeconds | quote }}
+  {{- /* The operator key, unless it comes from a Secret you manage (flows.existingSecret, or
+  secrets.existingSecretName with flows.apiKey empty): then it is not rendered here, and every
+  consumer reads it from that Secret by name. */}}
+  {{- if not (include "vexa.flowsApiKeyExistingSecret" .) }}
   VEXA_FLOWS_API_KEY: {{ .Values.flows.apiKey | quote }}
+  {{- end }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -42,8 +47,11 @@ spec:
     matchLabels: {app.kubernetes.io/component: flows-worker}
   template:
     metadata:
-      labels: {app.kubernetes.io/component: flows-worker}
+      labels:
+        {{- include "vexa.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: flows-worker
     spec:
+      {{- include "vexa.nonRootPodSecurityContext" . | nindent 6 }}
       {{- /* the ensure-db bootstrap only has work to do when the flows tables live in a database
       OTHER than the application's own — when flows.databaseName == database.name they already
       live in a database that is guaranteed to exist (F-D5 follow-up: compose already runs this
@@ -68,14 +76,15 @@ spec:
               # not immediately fatal — it re-checks once more (another replica, or an operator,
               # may have created it in the meantime / ahead of time) before refusing loudly.
               import os
-              from sqlalchemy import create_engine, text
+              from sqlalchemy import text
+              from flows import pg_engine
               name = os.environ["FLOWS_DB_NAME"]
               admin_url = (
-                  "postgresql+psycopg://" + os.environ["DB_USER"] + ":" + os.environ["DB_PASSWORD"]
+                  "postgresql+pg8000://" + os.environ["DB_USER"] + ":" + os.environ["DB_PASSWORD"]
                   + "@" + os.environ["DB_HOST"] + ":" + os.environ["DB_PORT"] + "/" + os.environ["DB_NAME"]
                   + "?sslmode=" + os.environ["DB_SSL_MODE"]
               )
-              e = create_engine(admin_url, isolation_level="AUTOCOMMIT")
+              e = pg_engine(admin_url, isolation_level="AUTOCOMMIT")
               with e.connect() as c:
                   exists = c.execute(text("SELECT 1 FROM pg_database WHERE datname=:n"), {"n": name}).first()
                   if not exists:
@@ -138,12 +147,13 @@ spec:
           command: ["/bin/sh", "-c"]
           args:
             - |
-              export VEXA_FLOWS_DB_URL="postgresql+psycopg://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${FLOWS_DB_NAME}?sslmode=${DB_SSL_MODE}"
+              export VEXA_FLOWS_DB_URL="postgresql+pg8000://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${FLOWS_DB_NAME}?sslmode=${DB_SSL_MODE}"
               exec python -m flows_worker
           envFrom:
             - secretRef:
                 name: {{ include "vexa.componentName" (list . "flows") }}
           env:
+            {{- with include "vexa.flowsApiKeyEnv" . }}{{ . | nindent 12 }}{{ end }}
             - name: DB_USER
               valueFrom:
                 secretKeyRef:
@@ -215,8 +225,11 @@ spec:
     matchLabels: {app.kubernetes.io/component: flows-mailbox}
   template:
     metadata:
-      labels: {app.kubernetes.io/component: flows-mailbox}
+      labels:
+        {{- include "vexa.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: flows-mailbox
     spec:
+      {{- include "vexa.nonRootPodSecurityContext" . | nindent 6 }}
       {{- /* F192 — the SAME ensure-db initContainer flows-worker carries above: every Deployment
       that opens VEXA_FLOWS_DB_URL must be able to create the database it opens, not rely on
       flows-worker's pod happening to have won the startup race first (k8s makes no promise
@@ -235,14 +248,15 @@ spec:
           args:
             - |
               import os
-              from sqlalchemy import create_engine, text
+              from sqlalchemy import text
+              from flows import pg_engine
               name = os.environ["FLOWS_DB_NAME"]
               admin_url = (
-                  "postgresql+psycopg://" + os.environ["DB_USER"] + ":" + os.environ["DB_PASSWORD"]
+                  "postgresql+pg8000://" + os.environ["DB_USER"] + ":" + os.environ["DB_PASSWORD"]
                   + "@" + os.environ["DB_HOST"] + ":" + os.environ["DB_PORT"] + "/" + os.environ["DB_NAME"]
                   + "?sslmode=" + os.environ["DB_SSL_MODE"]
               )
-              e = create_engine(admin_url, isolation_level="AUTOCOMMIT")
+              e = pg_engine(admin_url, isolation_level="AUTOCOMMIT")
               with e.connect() as c:
                   exists = c.execute(text("SELECT 1 FROM pg_database WHERE datname=:n"), {"n": name}).first()
                   if not exists:
@@ -302,7 +316,7 @@ spec:
           command: ["/bin/sh", "-c"]
           args:
             - |
-              export VEXA_FLOWS_DB_URL="postgresql+psycopg://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${FLOWS_DB_NAME}?sslmode=${DB_SSL_MODE}"
+              export VEXA_FLOWS_DB_URL="postgresql+pg8000://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${FLOWS_DB_NAME}?sslmode=${DB_SSL_MODE}"
               exec python -m flows_integrations.mailbox
           envFrom:
             - secretRef:
@@ -314,6 +328,7 @@ spec:
           # authorization decision (R-B12) — a known user outside the domain would otherwise be
           # quarantined on a lookup that never reached anything.
           env:
+            {{- with include "vexa.flowsApiKeyEnv" . }}{{ . | nindent 12 }}{{ end }}
             - name: DB_USER
               valueFrom:
                 secretKeyRef:
@@ -371,8 +386,11 @@ spec:
     matchLabels: {app.kubernetes.io/component: flows-api}
   template:
     metadata:
-      labels: {app.kubernetes.io/component: flows-api}
+      labels:
+        {{- include "vexa.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: flows-api
     spec:
+      {{- include "vexa.nonRootPodSecurityContext" . | nindent 6 }}
       {{- /* F192 — see the identical block on flows-worker above (reconciled the same way as
       flows-mailbox's — merge of #1505/F192 with #1509/F-D5): every Deployment that opens
       VEXA_FLOWS_DB_URL must be able to create the database it opens itself, not rely on
@@ -386,14 +404,15 @@ spec:
           args:
             - |
               import os
-              from sqlalchemy import create_engine, text
+              from sqlalchemy import text
+              from flows import pg_engine
               name = os.environ["FLOWS_DB_NAME"]
               admin_url = (
-                  "postgresql+psycopg://" + os.environ["DB_USER"] + ":" + os.environ["DB_PASSWORD"]
+                  "postgresql+pg8000://" + os.environ["DB_USER"] + ":" + os.environ["DB_PASSWORD"]
                   + "@" + os.environ["DB_HOST"] + ":" + os.environ["DB_PORT"] + "/" + os.environ["DB_NAME"]
                   + "?sslmode=" + os.environ["DB_SSL_MODE"]
               )
-              e = create_engine(admin_url, isolation_level="AUTOCOMMIT")
+              e = pg_engine(admin_url, isolation_level="AUTOCOMMIT")
               with e.connect() as c:
                   exists = c.execute(text("SELECT 1 FROM pg_database WHERE datname=:n"), {"n": name}).first()
                   if not exists:
@@ -453,7 +472,7 @@ spec:
           command: ["/bin/sh", "-c"]
           args:
             - |
-              export VEXA_FLOWS_DB_URL="postgresql+psycopg://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${FLOWS_DB_NAME}?sslmode=${DB_SSL_MODE}"
+              export VEXA_FLOWS_DB_URL="postgresql+pg8000://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${FLOWS_DB_NAME}?sslmode=${DB_SSL_MODE}"
               exec python -m flows_integrations.flows_api
           ports:
             - containerPort: 18200
@@ -461,6 +480,7 @@ spec:
             - secretRef:
                 name: {{ include "vexa.componentName" (list . "flows") }}
           env:
+            {{- with include "vexa.flowsApiKeyEnv" . }}{{ . | nindent 12 }}{{ end }}
             - name: DB_USER
               valueFrom:
                 secretKeyRef:
@@ -541,7 +561,9 @@ kind: Service
 metadata:
   name: {{ include "vexa.componentName" (list . "flows-api") }}
 spec:
-  selector: {app.kubernetes.io/component: flows-api}
+  selector:
+    {{- include "vexa.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: flows-api
   ports:
     - name: http
       port: 18200

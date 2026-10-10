@@ -252,23 +252,30 @@ def d_compounding(rec: dict, earlier: list[dict]) -> tuple[float, dict]:
 # by that move (a dynamic `importlib` load by file path is invisible to a static import-repoint
 # grep), so `gate:python` failed at collection with `FileNotFoundError` on the merged tree.
 #
-# …and it is STILL loaded BY PATH, not by package import, even though `core/workspaces/shared`'s
-# own `__init__.py` is now genuinely stdlib-only (no pydantic pull, unlike `core/agent/shared`'s —
-# see that package's own docstring). Keeping the by-path load anyway: it is already proven safe,
-# needs no `core/workspaces` on `sys.path`, and the original hazard this comment describes
-# (`core/agent/shared/__init__.py` pulling pydantic/pydantic_settings into a package that
-# advertises zero dependencies) is exactly the class of bug a static import would still risk in
-# THIS package if `core/workspaces/shared/__init__.py` ever grows one.
+# …and it is LOCATED BY PATH: `core/workspaces` is never put on `sys.path`, so nothing else in
+# this package can resolve a name through it. It is loaded AS ITS PACKAGE, though, because
+# `entities.py` imports its siblings (`workspaces.shared.gitexec` at the top, `links` and
+# `workspace_id` inside functions); a bare file load raised `No module named 'workspaces'` once
+# git went through `gitexec`. Both package `__init__`s are stdlib-only docstrings (see
+# `core/workspaces/shared/__init__.py`), so this pulls in nothing the file load did not.
 def _load_candidate_names():
+    import importlib
     import importlib.util
+    import sys
 
-    src = pathlib.Path(__file__).resolve().parents[3] / "workspaces" / "shared" / "entities.py"
-    spec = importlib.util.spec_from_file_location("_vexa_entities", src)
-    if spec is None or spec.loader is None:  # pragma: no cover — a missing file is a broken checkout
-        raise ImportError(f"cannot load the shared extractor from {src}")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod.candidate_names
+    root = pathlib.Path(__file__).resolve().parents[3] / "workspaces"
+    pkg = sys.modules.get("workspaces")
+    if pkg is None:
+        spec = importlib.util.spec_from_file_location(
+            "workspaces", root / "__init__.py", submodule_search_locations=[str(root)])
+        if spec is None or spec.loader is None:  # pragma: no cover — a missing file is a broken checkout
+            raise ImportError(f"cannot load the workspace primitives from {root}")
+        pkg = importlib.util.module_from_spec(spec)
+        sys.modules["workspaces"] = pkg
+        spec.loader.exec_module(pkg)
+    elif str(root) not in list(getattr(pkg, "__path__", [])):
+        raise ImportError(f"a different `workspaces` package is already loaded ({pkg!r}), not {root}")
+    return importlib.import_module("workspaces.shared.entities").candidate_names
 
 
 candidate_names = _load_candidate_names()

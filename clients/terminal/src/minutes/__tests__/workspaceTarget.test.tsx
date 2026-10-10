@@ -31,14 +31,14 @@ vi.mock("../../ui-kit/WsLink", () => ({
   // the chip and the row ask for a NAME rather than printing a slug (#1585/#1602) — so the stand-in
   // renders a name and the tests read it back.
   WorkspaceName: ({ slug }: { slug: string }) =>
-    <span>{slug === "oenb-4040f6" ? "Austrian National Bank" : slug}</span>,
+    <span>{slug === "bank-4040f6" ? "Example Bank" : slug}</span>,
 }));
 
 afterEach(cleanup);
 
-const OENB = "oenb-4040f6";
+const BANK = "bank-4040f6";
 const chat = (over: Partial<Chat> = {}): Chat =>
-  ({ ...newChat("OeNB onboarding", ["personal", "_global", OENB]), ...over });
+  ({ ...newChat("Example Bank onboarding", ["personal", "_global", BANK]), ...over });
 
 // ── the record ───────────────────────────────────────────────────────────────────────────────────
 
@@ -51,56 +51,56 @@ describe("the chat record carries where it writes", () => {
   });
 
   it("takes one, and moves it", () => {
-    const one = setTarget([chat({ id: "c1" })], "c1", OENB);
-    expect(one[0].target).toBe(OENB);
+    const one = setTarget([chat({ id: "c1" })], "c1", BANK);
+    expect(one[0].target).toBe(BANK);
     expect(setTarget(one, "c1", "personal")[0].target).toBe("personal");
   });
 
   it("clears back to the desk on an empty string", () => {
-    const one = setTarget([chat({ id: "c1", target: OENB })], "c1", "");
+    const one = setTarget([chat({ id: "c1", target: BANK })], "c1", "");
     expect(one[0].target).toBeUndefined();
   });
 
   it("refuses a workspace the chat is not over", () => {
     // A chip on a mount the panel does not have and the next turn will not carry. The server makes
     // the same refusal, so the two halves cannot answer differently about the same chat.
-    const one = setTarget([chat({ id: "c1", workspaces: ["personal"] })], "c1", OENB);
+    const one = setTarget([chat({ id: "c1", workspaces: ["personal"] })], "c1", BANK);
     expect(one[0].target).toBeUndefined();
   });
 
   it("leaves the mount set alone — reach and where-the-work-lands are different questions", () => {
-    const one = setTarget([chat({ id: "c1" })], "c1", OENB);
-    expect(one[0].workspaces).toEqual(["personal", "_global", OENB]);
+    const one = setTarget([chat({ id: "c1" })], "c1", BANK);
+    expect(one[0].workspaces).toEqual(["personal", "_global", BANK]);
   });
 
   it("reads the server's answer, and treats null as the desk", () => {
     const [a, b] = chatsFromSessions([
-      { session: "s1", workspaces: [OENB], target: OENB, touched: true },
+      { session: "s1", workspaces: [BANK], target: BANK, touched: true },
       { session: "s2", workspaces: ["personal"], target: null, touched: true },
     ]);
-    expect(a.target).toBe(OENB);
+    expect(a.target).toBe(BANK);
     expect(b.target).toBeUndefined();
   });
 
   it("keeps a chip this reader just clicked, and takes the server's for a chat it has not seen", () => {
-    const local = [chat({ id: "c1", target: OENB }), chat({ id: "c2", target: undefined })];
-    const server = [chat({ id: "c1", target: "grp-ilm" }), chat({ id: "c2", target: "grp-ilm" })];
+    const local = [chat({ id: "c1", target: BANK }), chat({ id: "c2", target: undefined })];
+    const server = [chat({ id: "c1", target: "grp-copperline" }), chat({ id: "c2", target: "grp-copperline" })];
     const merged = mergeChats(local, server);
-    expect(merged.find((c) => c.id === "c1")?.target).toBe(OENB);
-    expect(merged.find((c) => c.id === "c2")?.target).toBe("grp-ilm");
+    expect(merged.find((c) => c.id === "c1")?.target).toBe(BANK);
+    expect(merged.find((c) => c.id === "c2")?.target).toBe("grp-copperline");
   });
 
   it("puts it on the rail row", () => {
-    const rows = railRows([chat({ id: "c1", target: OENB, touched: true })], []);
-    expect(rows[0].target).toBe(OENB);
+    const rows = railRows([chat({ id: "c1", target: BANK, touched: true })], []);
+    expect(rows[0].target).toBe(BANK);
   });
 });
 
 // ── the header chip ──────────────────────────────────────────────────────────────────────────────
 
 const sel = (target?: string) => ({
-  kind: "chat" as const, chatId: "c1", label: "OeNB onboarding",
-  workspaces: ["personal", "_global", OENB], target,
+  kind: "chat" as const, chatId: "c1", label: "Example Bank onboarding",
+  workspaces: ["personal", "_global", BANK], target,
 });
 
 function bar(target: string | undefined, onSetTarget = vi.fn()) {
@@ -116,69 +116,69 @@ describe("the header chip is visibly the target", () => {
   it("marks the desk when nothing else has been chosen", () => {
     const { container } = bar(undefined);
     expect(chipFor(container, "personal").getAttribute("data-target")).toBe("1");
-    expect(chipFor(container, OENB).getAttribute("data-target")).toBeNull();
+    expect(chipFor(container, BANK).getAttribute("data-target")).toBeNull();
   });
 
   it("marks the chosen one, and only it", () => {
-    const { container } = bar(OENB);
-    expect(chipFor(container, OENB).getAttribute("data-target")).toBe("1");
+    const { container } = bar(BANK);
+    expect(chipFor(container, BANK).getAttribute("data-target")).toBe("1");
     expect(chipFor(container, "personal").getAttribute("data-target")).toBeNull();
   });
 
   it("says so to a screen reader too, not only in a colour", () => {
-    const { container } = bar(OENB);
-    expect(chipFor(container, OENB).getAttribute("aria-current")).toBe("true");
+    const { container } = bar(BANK);
+    expect(chipFor(container, BANK).getAttribute("aria-current")).toBe("true");
   });
 
   it("hides the two mounted in every chat — a constant is not information", () => {
-    const { container } = bar(OENB);
+    const { container } = bar(BANK);
     expect(chipFor(container, "_global")).toBeNull();
   });
 
   it("makes another one the target when the person clicks it", () => {
     const { container, onSetTarget } = bar(undefined);
-    fireEvent.click(container.querySelector(`[data-ws-target="${OENB}"]`) as HTMLElement);
-    expect(onSetTarget).toHaveBeenCalledWith(OENB);
+    fireEvent.click(container.querySelector(`[data-ws-target="${BANK}"]`) as HTMLElement);
+    expect(onSetTarget).toHaveBeenCalledWith(BANK);
   });
 
   it("goes back to the desk the same way — it is a place, not the absence of one", () => {
-    const { container, onSetTarget } = bar(OENB);
+    const { container, onSetTarget } = bar(BANK);
     fireEvent.click(container.querySelector('[data-ws-target="personal"]') as HTMLElement);
     expect(onSetTarget).toHaveBeenCalledWith("personal");
   });
 
   it("does nothing when the person clicks the one that is already the target", () => {
-    const { container, onSetTarget } = bar(OENB);
-    fireEvent.click(container.querySelector(`[data-ws-target="${OENB}"]`) as HTMLElement);
+    const { container, onSetTarget } = bar(BANK);
+    fireEvent.click(container.querySelector(`[data-ws-target="${BANK}"]`) as HTMLElement);
     expect(onSetTarget).not.toHaveBeenCalled();
   });
 
   it("shows the workspace's NAME, never its slug (#1585/#1602)", () => {
-    const { container } = bar(OENB);
-    expect(chipFor(container, OENB).textContent).toContain("Austrian National Bank");
-    expect(chipFor(container, OENB).textContent).not.toContain("4040f6");
+    const { container } = bar(BANK);
+    expect(chipFor(container, BANK).textContent).toContain("Example Bank");
+    expect(chipFor(container, BANK).textContent).not.toContain("4040f6");
   });
 
   it("still lets a workspace be removed from the chat's focus", () => {
     const onRemoveWorkspace = vi.fn();
     const { container } = render(
-      <ContextBar sel={sel(OENB)} flavor="chat" memberships={[]}
+      <ContextBar sel={sel(BANK)} flavor="chat" memberships={[]}
         onAddWorkspace={vi.fn()} onRemoveWorkspace={onRemoveWorkspace} onSetTarget={vi.fn()} />);
-    fireEvent.click(container.querySelector(`[data-ws="${OENB}"] [aria-label^="Remove"]`) as HTMLElement);
-    expect(onRemoveWorkspace).toHaveBeenCalledWith(OENB);
+    fireEvent.click(container.querySelector(`[data-ws="${BANK}"] [aria-label^="Remove"]`) as HTMLElement);
+    expect(onRemoveWorkspace).toHaveBeenCalledWith(BANK);
   });
 
   it("answers which chip is the target without rendering anything", () => {
     expect(isTargetChip(undefined, "personal")).toBe(true);
-    expect(isTargetChip(undefined, OENB)).toBe(false);
-    expect(isTargetChip(OENB, OENB)).toBe(true);
+    expect(isTargetChip(undefined, BANK)).toBe(false);
+    expect(isTargetChip(BANK, BANK)).toBe(true);
   });
 });
 
 // ── the rail row ─────────────────────────────────────────────────────────────────────────────────
 
 const row = (over: Partial<Row> = {}): Row => ({
-  key: "c:c1", chatId: "c1", meetingId: null, label: "OeNB onboarding", when: 1, whenLabel: "now",
+  key: "c:c1", chatId: "c1", meetingId: null, label: "Example Bank onboarding", when: 1, whenLabel: "now",
   live: false, upcoming: false, status: null, touched: true, workspaces: ["personal"], ...over,
 });
 
@@ -188,9 +188,9 @@ const rail = (rows: Row[]) => render(
 
 describe("the rail says which conversation is working somewhere else", () => {
   it("names the target workspace on the row", () => {
-    const { container } = rail([row({ target: OENB })]);
-    const tag = container.querySelector(`[data-row-target="${OENB}"]`);
-    expect(tag?.textContent).toBe("Austrian National Bank");
+    const { container } = rail([row({ target: BANK })]);
+    const tag = container.querySelector(`[data-row-target="${BANK}"]`);
+    expect(tag?.textContent).toBe("Example Bank");
   });
 
   it("says nothing on a row that writes to the desk", () => {
@@ -202,8 +202,8 @@ describe("the rail says which conversation is working somewhere else", () => {
   });
 
   it("keeps the row's own name and its meeting status beside it", () => {
-    const { container } = rail([row({ target: OENB, status: "held" })]);
-    expect(screen.getByText("OeNB onboarding")).toBeTruthy();
+    const { container } = rail([row({ target: BANK, status: "held" })]);
+    expect(screen.getByText("Example Bank onboarding")).toBeTruthy();
     expect(container.querySelector('[data-row-status="held"]')).toBeTruthy();
   });
 });

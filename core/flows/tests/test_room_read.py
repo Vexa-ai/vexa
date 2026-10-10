@@ -273,15 +273,17 @@ def test_the_room_travels_as_agent_apis_four_fields_plus_the_internal_header(mon
 
 def test_no_room_means_the_body_and_headers_this_dispatch_always_sent(monkeypatch):
     """Every other turn in the system — onboarding, the email conversation, the re-ask — must not
-    grow a header or a field, and must never present the internal secret."""
+    grow a room field. It carries the internal tier like every call flows makes FOR a person
+    (gateway-identity.v1: agent-api believes an unsigned X-User-Id only beside it); a room is the BODY
+    fields, never the header."""
     seen = _chat_post(monkeypatch)
     REAL_DISPATCH_TURN("7", "s", "hello")
     assert seen["body"] == {"prompt": "hello", "session": "s"}
-    assert "X-Internal-Secret" not in seen["headers"]
+    assert set(seen["headers"]) == {"X-User-Id", "X-Internal-Secret"}
 
     REAL_DISPATCH_TURN("7", "s", "hello", room={"meeting_id": None, "read": ["a@b.test"]})
     assert seen["body"] == {"prompt": "hello", "session": "s"}
-    assert "X-Internal-Secret" not in seen["headers"]
+    assert set(seen["headers"]) == {"X-User-Id", "X-Internal-Secret"}
 
 
 def test_the_room_addresses_the_ROW_not_the_native_id(monkeypatch):
@@ -331,6 +333,30 @@ def test_the_kick_names_the_desks_it_may_read(monkeypatch):
     assert "anna.smith@bank.test, ben@bank.test" in seen["prompt"]
     assert "READ-ONLY access to the desks" in seen["prompt"]
     assert "never copy a line, a note or a phrase out of one into this report" in seen["prompt"]
+
+def test_the_kick_reads_the_transcript_by_the_resolved_row(monkeypatch):
+    """The kick tells the agent to read the words with `get_meeting_transcript(meeting_db_id=…)`,
+    which addresses ONE meeting by its row — so it must carry the row this step resolved, never the
+    ref, which may be a native id (R-B19) and is no meeting_db_id at all."""
+    reg = Registry()
+    production.build(reg, _StubDB())
+    seen = {}
+    monkeypatch.setattr(production.mt, "meeting_row", lambda uid, m, native=None: {"id": 412})
+    monkeypatch.setattr(production.mt, "room_order",
+                        lambda uid, mid, participants, names, cap=12: list(participants))
+    monkeypatch.setattr(production.ag, "dispatch_turn",
+                        lambda uid, s, p, room=None, **kw: seen.update(prompt=p) or 0)
+    monkeypatch.setattr(production, "setting", lambda uid, key: "")
+    r = Reaction("rid", "sid", "e", {"uid": "7", "meeting_id": "96088138284", "native": "",
+                                     "organizer": "a@x.test", "title": "T",
+                                     "participants": ROOM, "participant_names": NAMES,
+                                     "start": 1_700_003_600.0},
+                 "f", 1, "step", "running", 1, 0.0, None, None, None)
+    reg.steps["process_meeting"](StepCtx(reaction=r, effect_key="k", prior={},
+                                         clock_now=1_700_000_000.0, scratch={}, flow=None))
+    assert "`mcp__vexa__get_meeting_transcript` with `meeting_db_id=412`" in seen["prompt"]
+    assert "96088138284" not in seen["prompt"]
+
 
 # ── the CROSS-SERVICE contract, read off the other service's source ────────────────────────────
 

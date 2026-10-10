@@ -1,11 +1,12 @@
 "use client";
+import { setChatActivity } from "./chatActivity";
 /** Chat — the persistent right-rail agent window. Streams a real agent turn over /api/chat (SSE) into the
  *  turn timeline, surfacing each tool-call as a visible operation (read/search/edit/git/web) with status,
  *  then the message + commit / rejection badge. The composer carries the active center-tab reference. */
 import { useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ClipboardEvent, type DragEvent, type ReactNode } from "react";
 import { minutesOnly } from "../app/mode";
 import { liveMeetingsNow } from "./liveMeetings";
-import { useService, useStore, CommandServiceId } from "../platform";
+import { useService, useStore, CommandServiceId, ARTIFACT_EVENT, ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, FOCUS_WORKSPACE_EVENT, MACHINERY_MARK, OPEN_PAGE_EVENT, WORKSPACE_COMMIT_EVENT, MACHINERY_NOTE, ONBOARDING_KICKOFF_MARK, ONBOARDING_REPLY_SEP } from "../platform";
 import { LayoutServiceId, type ActiveTab } from "../workbench/layout";
 import { registerCommand, type TabProps } from "../contributions";
 import { meetingsOnly } from "../app/mode";
@@ -29,8 +30,8 @@ import { actEnded, actNoted, actQueued, actSending, actSettled, actStarted, actS
 import { actTarget, endJob, isJobIntent, jobLine, jobTarget, noteJob, promoteJob, queueJob, startJob, stepJob, type JobRec } from "./jobs";
 // THE CHAT'S INBOX (Vexa-ai/vexa#1610) — everything submitted is on the SERVER at once, and the
 // queued rows are read back from it rather than remembered here. See `surfaces/inbox.ts`.
-import { claimInboxRow, fetchPending, flushOutbox, newSubmissionId, reconcileInbox, submitToInbox } from "./inbox";
-import { ARTIFACT_EVENT, ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, FOCUS_WORKSPACE_EVENT, MACHINERY_MARK, OPEN_PAGE_EVENT, WORKSPACE_COMMIT_EVENT, MACHINERY_NOTE, ONBOARDING_KICKOFF_MARK, MINUTES_ONBOARDING_GREETING, MINUTES_PREP_GREETING, ONBOARDING_REPLY_SEP } from "../canvas/actions";
+import { blockSubmission, claimInboxRow, fetchPending, flushOutbox, newSubmissionId, readOutbox, reconcileInbox, runnable, submitToInbox, SubmitRefused } from "./inbox";
+import { MINUTES_ONBOARDING_GREETING, MINUTES_PREP_GREETING } from "../canvas/actions";
 import { TERMS_EVENT } from "../canvas/transcriptTerms";
 
 /** classify a tool name into one of the op icons so the operation line reads at a glance */
@@ -115,7 +116,9 @@ function emitChatState(key: string): void {
 }
 
 function updateChatState(key: string, fn: (state: ChatSessionState) => ChatSessionState): void {
-  chatSessions.set(key, fn(getChatState(key)));
+  const next = fn(getChatState(key));
+  chatSessions.set(key, next);
+  setChatActivity(key, next);
   emitChatState(key);
 }
 
@@ -453,25 +456,45 @@ const LOST_JOB_LINE = "Lost the connection to that background job";
  *  runs, which is the whole point — so its line cannot hang off a turn, and sits at the foot of the
  *  transcript instead. `jobLine` is the same shape the turn's own step row reads in, so nobody has
  *  to learn a second vocabulary; the job's TARGET is what tells two of them apart. */
-function JobRows({ jobs }: { jobs: JobRec[] }) {
+function JobRows({ jobs, onRetry }: { jobs: JobRec[]; onRetry?: (j: JobRec) => void }) {
   if (jobs.length === 0) return null;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 6, margin: "0 0 14px 5px" }}>
       {jobs.map((j) => (
-        <div key={j.id} data-job-line title={jobLine([j])}
-          style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, fontFamily: "var(--mono)", fontSize: 11.5, lineHeight: 1.5, color: "var(--t2)" }}>
-          <span className="vx-op-spin" style={{ width: 11, height: 11, borderRadius: "50%", border: "1.5px solid var(--line2)", borderTopColor: "var(--accent)", flex: "none" }} />
+        // A BLOCKED ROW IS NOT A WAITING ONE (P18). No spinner — nothing is coming — but the fault
+        // that stopped it, in the danger colour, and the press that sends it again.
+        <div key={j.id} data-job-line data-job-blocked={j.blocked ? j.blocked.kind : undefined} title={jobLine([j])}
+          role={j.blocked ? "alert" : undefined}
+          style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, fontFamily: "var(--mono)", fontSize: 11.5, lineHeight: 1.5, color: j.blocked ? "var(--danger)" : "var(--t2)" }}>
+          {j.blocked
+            ? <Icon name="x" size={12} style={{ flex: "none" }} />
+            : <span className="vx-op-spin" style={{ width: 11, height: 11, borderRadius: "50%", border: "1.5px solid var(--line2)", borderTopColor: "var(--accent)", flex: "none" }} />}
           <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{jobLine([j])}</span>
+          {j.blocked && onRetry && canRetry(j) && (
+            <button data-job-retry onClick={() => onRetry(j)}
+              style={{ flex: "none", fontSize: 11, fontFamily: "var(--mono)", color: "var(--blue)", background: "var(--bluebg)", border: "none", borderRadius: 6, padding: "2px 9px", cursor: "pointer" }}>
+              Retry
+            </button>
+          )}
         </div>
       ))}
     </div>
   );
 }
 
-function ChatConversation({ turns, busy, empty, surface, jobs = [], onContinue }: {
+/** Can a blocked row be sent again from here? A submission this browser still holds can — exactly
+ *  as it was. A server-held MESSAGE can — its words are on the row. A server-held ACT cannot: its
+ *  target and intent are not on the row, so it says what blocked it and the act is pressed again. */
+function canRetry(j: JobRec): boolean {
+  return !!j.outbox || (j.kind === "message" && !!j.display);
+}
+
+function ChatConversation({ turns, busy, empty, surface, jobs = [], onContinue, onRetryRow }: {
   turns: Turn[]; busy?: boolean; empty?: ReactNode; surface?: FrictionSurface; jobs?: JobRec[];
   /** A STOPPED TURN'S CONTINUE PRESS (Vexa-ai/vexa#1622) — forwarded to the bubble that draws it. */
   onContinue?: (turn: Extract<Turn, { role: "agent" }>) => void;
+  /** A BLOCKED ROW'S RETRY PRESS (P18) — forwarded to the row that draws it. */
+  onRetryRow?: (j: JobRec) => void;
 }) {
   if (turns.length === 0 && empty && jobs.length === 0) return <>{empty}</>;
   return (
@@ -485,7 +508,7 @@ function ChatConversation({ turns, busy, empty, surface, jobs = [], onContinue }
         : <ReportTurn key={t.id} surface={{ ...(surface ?? {}), at: "turn", quote: t.text }}>
             <Conversation turns={[t]} busy={!!busy && i === turns.length - 1} onContinue={onContinue} />
           </ReportTurn>)}
-      <JobRows jobs={jobs} />
+      <JobRows jobs={jobs} onRetry={onRetryRow} />
     </>
   );
 }
@@ -1040,7 +1063,10 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
   // and the target lives on the intent — a chat concern that `workbench/agent-window`'s `Turn`
   // (a rendering model, shared with the meeting copilot) has no business carrying. Nothing here is
   // rendered, so nothing here may cause a render either.
-  const continuable = useRef(new Map<string, { instruction: string; intent?: ChatIntent }>());
+  const continuable = useRef(new Map<string, { instruction: string; intent?: ChatIntent;
+    /** THE SAME WORDS, AGAIN (P18) — a turn a typed fault ended keeps what it was sent with, so its
+     *  Retry re-sends exactly that turn rather than a continue instruction. */
+    retry?: { display: string; hidden?: boolean; ground?: boolean; scaffoldId?: string } }>());
 
   const send = async (text: string, prompt = text, referenceSource = text, opts: SendOpts = {}) => {
     // hidden → no visible user bubble (system kickoffs); ground:false → don't append the active
@@ -1137,6 +1163,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
           // transcript renders that record — this surface forwards and stores nothing.
           onTerms: (t) => window.dispatchEvent(new CustomEvent(TERMS_EVENT, { detail: t })),
           onTool: (tool, args) => {
+            if (/(^|__)connection_request$/.test(tool)) window.dispatchEvent(new CustomEvent("vexa:connections-open", { detail: args }));
             breakBeforeNextDelta = true;      // F40 — the assistant message ended here
             const op = toolOp(tool, args);
             // The workspace tree JUST changed. Drop the doc-link caches (60s TTL) or every entity
@@ -1205,7 +1232,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
             updateChatState(key, (s) => ({ ...s, jobs: stepJob(s.jobs, jobId, step) }));
           },
           // STILL GOING, IN A FRESH WINDOW (Vexa-ai/vexa#1613). A long act that reached its
-          // per-window tool-call budget used to die there — the founder's OeNB job ran 72 steps
+          // per-window tool-call budget used to die there — the founder's Example Bank job ran 72 steps
           // and then said it had failed. It now checkpoints and continues, and the row it already
           // has says so. No step is counted: nothing was done, something was RESUMED.
           onJobProgress: (jobId, line) => {
@@ -1227,7 +1254,28 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
             }));
           },
           onRejected: () => patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, rejected: "workspace.v1 violation — reverted" })),
-          onModelFailure: (reply) => patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, text: (t.text ?? "") + (t.text ? "\n\n" : "") + `Model inference failed${reply ? `: ${reply}` : "."}` })),
+          // ONE FAILURE SURFACE PER TURN. A server one release behind sends no `fault`, and its
+          // failed reply is often the very text the turn already streamed (the CLI's `API Error:
+          // 402 …` arrived as a delta, then again as the reply). Said once is enough: the failure
+          // line does not repeat words already on screen.
+          onModelFailure: (reply) => patchAgentTurn(key, agentId, (t) => {
+            const said = (t.text ?? "").trim();
+            const r = (reply ?? "").trim();
+            const repeat = !!r && !!said && said.endsWith(r);
+            return { ...t, status: null, text: (t.text ?? "") + (t.text ? "\n\n" : "") + `Model inference failed${r && !repeat ? `: ${r}` : "."}` };
+          }),
+          // A TYPED FAULT ENDED THE TURN (P18): the runtime would not start the agent, or the model
+          // provider refused it. It renders as its own block — who failed, what kind, the detail,
+          // the remedy — never as "Internal Server Error" or a provider's JSON in the reply. A turn
+          // that carried words can be sent again from the block; an attach carried none.
+          onFault: (fault) => {
+            const retry = !attachFrom && !!v;
+            if (retry) {
+              continuable.current.set(agentId, { instruction: prompt, intent: opts.intent,
+                retry: { display: text, hidden, ground, scaffoldId: opts.scaffoldId } });
+            }
+            patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, failed: { fault, retry } }));
+          },
           // THE TURN STOPPED EARLY (F89) — not the same thing as the model failing. Keep whatever
           // the turn did produce and say plainly that it is partial, so the person knows to ask
           // again rather than reading half an answer as the whole one.
@@ -1255,6 +1303,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
           // the settled op line. A view that attached to a turn already in flight counted only what
           // it saw; the server counted the turn.
           onSteps: (steps) => patchAgentTurn(key, agentId, (t) => ({ ...t, steps })),
+          onCompacted: (compacted) => patchAgentTurn(key, agentId, (t) => ({ ...t, compacted })),
           onError: (msg) => patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, text: (t.text ?? "") + (t.text ? "\n\n" : "") + presentError(new Error(msg)).headline })),
           onProgress: () => stick.onContent(),
         },
@@ -1342,12 +1391,42 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
     try {
       const view = await submitToInbox({
         id, session, prompt: wire, active, context, scaffoldId: o.scaffoldId, intent: o.intent,
+        display: referenceSource,
       });
       updateChatState(chatKey, (s) => ({ ...s, jobs: reconcileInbox(s.jobs, view.pending) }));
-    } catch {
+    } catch (e) {
       // Left in the outbox on purpose — `flushOutbox` re-sends it the moment the chat is idle, and
-      // again on the next load. Saying nothing here is deliberate too: the message is not lost, and
-      // an error banner for a retry that is about to succeed is its own kind of lie.
+      // again on the next load. Saying nothing is right for a NETWORK gap: the message is not lost,
+      // and an error banner for a retry that is about to succeed is its own kind of lie.
+      //
+      // …BUT A TYPED REFUSAL IS NOT A GAP (P18). The server answered, and said which dependency
+      // stopped it — the runtime that would not start the agent. Silence there is the founder's
+      // "queued behind the current turn" forever, so the row says it is blocked, and by what.
+      if (e instanceof SubmitRefused && e.fault) {
+        const fault = e.fault;
+        updateChatState(chatKey, (s) => ({ ...s, jobs: blockSubmission(s.jobs,
+          { id, kind: o.intent?.kind, display: referenceSource }, fault) }));
+      }
+    }
+  };
+
+  /** SEND A BLOCKED ROW AGAIN (P18). A submission this browser still holds goes back exactly as it
+   *  was, under the same id; a server-held message goes back with its own words under ITS id — and
+   *  either way the server withdraws any copy it still holds under that id first, so it runs once. */
+  const retryRow = async (j: JobRec) => {
+    const held = readOutbox(session).find((x) => x.id === j.id);
+    if (!held && !(j.kind === "message" && j.display)) return;
+    updateChatState(chatKey, (s) => ({ ...s, jobs: s.jobs.filter((x) => x.id !== j.id || x.inbox) }));
+    if (!held) { void submitToServer(j.id, j.display ?? "", j.display ?? "", {}); return; }
+    try {
+      const view = await submitToInbox(held);
+      updateChatState(chatKey, (s) => ({ ...s, jobs: reconcileInbox(s.jobs, view.pending) }));
+    } catch (e) {
+      if (e instanceof SubmitRefused && e.fault) {
+        const fault = e.fault;
+        updateChatState(chatKey, (s) => ({ ...s, jobs: blockSubmission(s.jobs,
+          { id: j.id, kind: held.intent?.kind, display: held.display ?? j.display ?? j.target }, fault) }));
+      }
     }
   };
 
@@ -1368,6 +1447,18 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
    *  has no intent, and its target is the conversation — which is where the words go anyway. */
   const continueTurn = (t: Extract<Turn, { role: "agent" }>) => {
     const held = continuable.current.get(t.id);
+    // RETRY A TURN A FAULT ENDED (P18) — the same words, the same options, once per press: the
+    // control goes as it is pressed, and a second failure draws its own block with its own Retry.
+    if (t.failed && held?.retry) {
+      continuable.current.delete(t.id);
+      patchAgentTurn(chatKey, t.id, (x) => ({ ...x, failed: x.failed && { ...x.failed, retry: false } }));
+      window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, {
+        detail: { prompt: held.instruction, display: held.retry.display, hidden: held.retry.hidden,
+                  ground: held.retry.ground, scaffoldId: held.retry.scaffoldId,
+                  ...(held.intent ? { intent: held.intent } : {}) },
+      }));
+      return;
+    }
     const instruction = t.stopped?.act?.instruction || held?.instruction || "";
     if (!instruction) return;
     continuable.current.delete(t.id);
@@ -1397,17 +1488,23 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
   //  against the server's own pending list. Never a silent drop, and never a disabled control.
   useEffect(() => {
     const onAsk = (e: Event) => {
-      const detail = (e as CustomEvent<{ prompt?: string; display?: string; hidden?: boolean; ground?: boolean; session?: string; scaffoldId?: string; intent?: ChatIntent }>).detail;
+      const detail = (e as CustomEvent<{ mode?: "draft"; prompt?: string; display?: string; hidden?: boolean; ground?: boolean; session?: string; scaffoldId?: string; intent?: ChatIntent }>).detail;
       const prompt = detail?.prompt;
       if (!prompt) return;
       // A SESSION-TARGETED ask must never land in whichever chat happens to be visible (the
       // workspace-scaffold kickoff once fired into the org-setup thread mid-switch). Not ours →
       // stash it; the target session's Chat consumes it the moment it mounts.
       if (detail?.session && detail.session !== session) {
+        if (detail.mode === "draft") return;
         try { localStorage.setItem(`vexa.pendingAsk.${detail.session}`, JSON.stringify({ prompt, display: detail.display, hidden: detail.hidden, ground: detail.ground, scaffoldId: detail.scaffoldId })); } catch { /* ignore */ }
         return;
       }
       if (layout.store.getState().rightCollapsed) layout.toggleRight();
+      if (detail.mode === "draft") {
+        setValue((current) => current ? `${current}\n\n${prompt}` : prompt);
+        window.setTimeout(() => inputRef.current?.focus(), 0);
+        return;
+      }
       // `display` — what the READER sees when it is not what the agent gets: a chip whose label is
       // the user's own sentence renders as their message, and the grounding it carries does not.
       const display = detail?.display || prompt;
@@ -1497,10 +1594,19 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
     catchingUp.current = true;
     void (async () => {
       try {
-        await flushOutbox(session);
+        const sent = await flushOutbox(session, fetch, (sub, fault) =>
+          updateChatState(chatKey, (s) => ({ ...s, jobs: blockSubmission(s.jobs,
+            { id: sub.id, kind: sub.intent?.kind, display: sub.display ?? sub.prompt }, fault) })));
+        if (sent.length) {
+          updateChatState(chatKey, (s) => ({ ...s, jobs: s.jobs.filter((j) => !(j.outbox && sent.includes(j.id))) }));
+        }
         const view = await refreshPending();
-        if (cancelled || !view.pending.length) return;
-        const head = view.pending[0].entry;
+        // NOTHING BLOCKED IS WATCHED (P18). A row the runtime refused has no worker coming for it,
+        // so attaching would wait out the whole timeout and then say the agent did not respond —
+        // the second half of the lie. Only a row that can run is worth a view.
+        const next = runnable(view.pending);
+        if (cancelled || !next.length) return;
+        const head = next[0].entry;
         if (attachedRef.current === head) return;
         attachedRef.current = head;
         // The cursor of the stream that just ended is EXACT — the next events after it are the
@@ -1598,8 +1704,8 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
 
   // THE INPUT FIELD IS FOR TYPING. F66's second half — "working · 18 steps · entity_upsert" beside
   // the stop button — is GONE (founder ruling 2026-09-06, Vexa-ai/vexa#1587, on a screenshot of the
-  // composer reading `working · 1 step · james-spadafora.md` while the chat above already said
-  // `Reading · james-spadafora.md · 1 step` and `Working…`): *"working · 2 steps · whats_waiting —
+  // composer reading `working · 1 step · james-hollister.md` while the chat above already said
+  // `Reading · james-hollister.md · 1 step` and `Working…`): *"working · 2 steps · whats_waiting —
   // remove that from the input field"*. A running turn — and a running job — is told ONCE, in the
   // chat, where the step rows are (`JobRows` below, and the turn's own op line in agent-window).
   // The stop control stays: that is a handle, not narration.
@@ -1742,7 +1848,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
           it in a chat he never made — *"I explain this as stale code."*
           What is left renders the meeting greeting when there IS a meeting, and otherwise renders
           nothing but whatever the host put in `emptyExtra`. */}
-      <ChatConversation turns={turns} busy={busy || loading} jobs={chatState.jobs} surface={surfaceOf(session, activeTab)} onContinue={continueTurn} empty={
+      <ChatConversation turns={turns} busy={busy || loading} jobs={chatState.jobs} surface={surfaceOf(session, activeTab)} onContinue={continueTurn} onRetryRow={(j) => { void retryRow(j); }} empty={
         <div style={{ color: minutesOnly() ? "var(--t2)" : "var(--t3)", fontSize: 13, textAlign: minutesOnly() ? "left" : "center", lineHeight: 1.6, maxWidth: 560, margin: minutesOnly() ? "26px auto 0" : "40px 0 0", padding: minutesOnly() ? "0 22px" : 0 }}>
             {loading ? "Loading conversation…" : (minutesOnly()
               ? minutesEmptyGreeting(session)

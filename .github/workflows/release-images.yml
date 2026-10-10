@@ -89,7 +89,7 @@ jobs:
           fi
           echo "✓ Docker Hub credentials configured"
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           # Candidate provenance compares against the witnessed build commit. A
           # depth-1 checkout makes that commit unknowable and must never widen
@@ -184,7 +184,7 @@ jobs:
 
       - name: Preserve the authenticated candidate-tag audit
         if: always() && steps.build_plan.outputs.build_mode == 'bot-lite-delta'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: candidate-tag-audit-${{ steps.version.outputs.version }}
           path: release-audit/candidate-tag-audit.tsv
@@ -232,18 +232,20 @@ jobs:
       matrix:
         include: ${{ fromJSON(needs.preflight.outputs.build_matrix) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Free runner disk (large image)
         if: matrix.free_disk == true
-        uses: jlumbroso/free-disk-space@v1.3.1
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
       # ── reads that can go somewhere other than Docker Hub, do (#715) ────────────────────────────
       # binfmt is pulled onto the runner's daemon by this action. Naming mirror.gcr.io EXPLICITLY
       # (rather than configuring a daemon-wide registry mirror) is deliberate: the docker CLI
       # resolves credentials by the hostname in the reference, finds none for mirror.gcr.io, and
       # the pull goes out anonymous — the vexaai Docker Hub token is never offered to Google.
-      - uses: docker/setup-qemu-action@v3
+      # Pinned by digest: this image runs privileged on a runner that holds the registry token, so the
+      # bytes it runs are the reviewed ones, not whatever `latest` names on the day.
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
         with:
-          image: mirror.gcr.io/tonistiigi/binfmt:latest
+          image: mirror.gcr.io/tonistiigi/binfmt:latest@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
       # Every `FROM` this builder resolves — python:3.12-slim in eight of the ten matrix images,
       # node:22-slim in the terminal — is a Docker Hub read, and on 2026-09-06 that is exactly what
       # killed the v0.13.1-alpha.1 publish: all nine build jobs died on
@@ -257,12 +259,12 @@ jobs:
       # answers anonymous manifest GETs 200 for library/node:22-slim AND for vexaai/* — and the
       # digests it returns for the vexaai set are byte-identical to the human-reviewed packet at
       # releases/v0.13.0/candidate-images.json.
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
         with:
           buildkitd-config-inline: |
             [registry."docker.io"]
               mirrors = ["mirror.gcr.io"]
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -273,7 +275,7 @@ jobs:
       # its meaning — "this build may reuse the shared layer cache" — and a replacement candidate
       # still builds with no cache at all. `ignore-error` on the EXPORT only: a cache write must
       # never be the thing that reds a release publish (a cache read miss is already harmless).
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
@@ -300,9 +302,9 @@ jobs:
     env:
       VERSION: ${{ needs.preflight.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Free runner disk (the bot build needs ~10 GB of layers)
-        uses: jlumbroso/free-disk-space@v1.3.1
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
       # No registry mirror here, on purpose (#715). This job's two builds are already almost free of
       # Docker Hub: Dockerfile.env is FROM mcr.microsoft.com/playwright (Microsoft's registry, not
       # Hub) and the bot is FROM the vexa/meet-join-env:dev image this job just built locally. The
@@ -310,7 +312,7 @@ jobs:
       # daemon-wide `registry-mirrors` entry — and a daemon-wide mirror would be the WRONG tool
       # anyway: dockerd's classic pull path hands the image's index credential to whatever endpoint
       # it contacts, so it would present the vexaai Read&Write token to the mirror's token endpoint.
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -358,9 +360,9 @@ jobs:
       VERSION: ${{ needs.preflight.outputs.version }}
       MAP: ${{ needs.preflight.outputs.candidate_map }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -481,7 +483,7 @@ jobs:
             printf '%s\t%s\t%s\n' "$stable" "$readback" "$candidate" |
               tee -a stable-image-aliases.tsv
           done < <(node release/candidate-image-map.mjs emit-tsv "$MAP")
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: stable-image-aliases-${{ needs.preflight.outputs.version }}
           path: stable-image-aliases.tsv
@@ -502,9 +504,9 @@ jobs:
       VERSION: ${{ needs.preflight.outputs.version }}
       SBOM_FILE: vexa-sbom-${{ needs.preflight.outputs.version }}.spdx.json
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4 # version comes from package.json "packageManager"
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0 — version comes from package.json "packageManager"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with: { node-version: 22, cache: pnpm } # pnpm 11.7 requires Node >= 22.13
       # Tolerate minor lockfile drift, exactly as the image builds do (Dockerfiles install with
       # --frozen-lockfile=false) — the SBOM must reflect the same tree the images were built from.
@@ -523,7 +525,7 @@ jobs:
             if (d.packages.length < 3) throw new Error("SBOM has too few packages: " + d.packages.length);
             console.log("✓ SBOM ok:", d.packages.length, "packages");
           '
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: vexa-sbom-${{ needs.preflight.outputs.version }}
           path: ${{ env.SBOM_FILE }}
@@ -550,13 +552,13 @@ jobs:
       VERSION: ${{ needs.preflight.outputs.version }}
       BASE_VERSION: ${{ needs.preflight.outputs.base_candidate_tag }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: jlumbroso/free-disk-space@v1.3.1
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
       # #715 — this leg pulled the published images with NO login at all, so every pull billed the
       # runner's shared Azure NAT address (100/hour, split with every other tenant on that IP)
       # instead of the vexaai account (see the alias-candidate comment above for the field evidence).
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -591,10 +593,10 @@ jobs:
           }
           mirror_pull "vexaai/vexa-bot:$VERSION" --platform linux/amd64
           for img in v012-admin-api v012-runtime v012-agent-api v012-meeting-api \
-                     v012-gateway v012-flows v012-mcp v012-terminal v012-agent-worker; do
+                     v012-gateway v012-flows v012-mcp v012-terminal v012-agent-worker v012-credential-broker; do
             mirror_pull "vexaai/$img:$BASE_VERSION"
           done
-          for ref in valkey/valkey:8-alpine postgres:17-alpine minio/minio:latest minio/mc:latest; do
+          for ref in valkey/valkey:8-alpine postgres:17-alpine; do
             mirror_pull "$ref"
           done
           echo "✓ every image this leg runs is resident locally — compose will pull nothing"
@@ -646,18 +648,19 @@ jobs:
     env:
       VERSION: ${{ needs.preflight.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: jlumbroso/free-disk-space@v1.3.1
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
       # #715 — no login here either: the published-Lite pull AND `make -C deploy/lite up`'s
       # implicit third-party pulls both went out anonymous, on the runner's shared IP quota.
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       # ── every image this leg RUNS arrives from the mirror, not Docker Hub (#715) ──────────────
       # See release-validate.yml's validate-lite for the full note. Lite's implicit set is not
-      # compose's: `make -C deploy/lite up` runs `docker run` for a postgres and a minio sidecar
-      # and a one-shot minio/mc, and each of those implicit-pulls (deploy/lite/Makefile § up).
+      # compose's: `make -C deploy/lite up` runs `docker run` for a postgres sidecar, which
+      # implicit-pulls (deploy/lite/Makefile § up). The storage sidecar is pinned by digest
+      # (STORAGE_IMAGE), which a by-tag mirror pull cannot satisfy, so `docker run` fetches it.
       - name: Pre-pull every image this leg runs, through the mirror (#715)
         run: |
           set -euo pipefail
@@ -677,7 +680,7 @@ jobs:
             echo "   ✓ $ref ← Docker Hub"
           }
           mirror_pull "vexaai/vexa-lite:$VERSION" --platform linux/amd64
-          for ref in postgres:17-alpine minio/minio:latest minio/mc:latest; do
+          for ref in postgres:17-alpine; do
             mirror_pull "$ref"
           done
           echo "✓ every image this leg runs is resident locally — make -C deploy/lite up will pull nothing"
@@ -693,8 +696,8 @@ jobs:
           echo "✓ $REF identity + offline pyannote bake green on linux/amd64"
       - name: Boot Lite and prove front doors plus concurrent bots
         run: |
-          printf 'ADMIN_TOKEN=ci-admin-token\nTRANSCRIPTION_SERVICE_URL=\nTRANSCRIPTION_SERVICE_TOKEN=\nIMAGE_TAG=%s\n' \
-            "$VERSION" > .env
+          printf 'ADMIN_TOKEN=%s\nTRANSCRIPTION_SERVICE_URL=\nTRANSCRIPTION_SERVICE_TOKEN=\nIMAGE_TAG=%s\n' \
+            "$(openssl rand -hex 32)" "$VERSION" > .env
           make -C deploy/lite up init-db
           for i in $(seq 1 10); do
             if make -C deploy/lite test; then break; fi
@@ -704,7 +707,7 @@ jobs:
             }
             sleep 15
           done
-          ADMIN_TOKEN=ci-admin-token deploy/lite/tests/concurrent-bots.sh
+          ADMIN_TOKEN="$(sed -n 's/^ADMIN_TOKEN=//p' .env)" deploy/lite/tests/concurrent-bots.sh
       - name: Lite state on failure
         if: failure()
         run: |
@@ -730,10 +733,10 @@ jobs:
     env:
       VERSION: ${{ needs.preflight.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: jlumbroso/free-disk-space@v1.3.1
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
       # #715 — same gap on the arm64 leg: the published-Lite pull carried no credential.
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -759,7 +762,7 @@ jobs:
             echo "   ✓ $ref ← Docker Hub"
           }
           mirror_pull "vexaai/vexa-lite:$VERSION" --platform linux/arm64
-          for ref in postgres:17-alpine minio/minio:latest minio/mc:latest; do
+          for ref in postgres:17-alpine; do
             mirror_pull "$ref"
           done
           echo "✓ every image this leg runs is resident locally — make -C deploy/lite up will pull nothing"
@@ -776,8 +779,8 @@ jobs:
           echo "✓ $REF identity green on native linux/arm64"
       - name: Boot Lite and prove native arm64 front doors
         run: |
-          printf 'ADMIN_TOKEN=ci-admin-token\nTRANSCRIPTION_SERVICE_URL=\nTRANSCRIPTION_SERVICE_TOKEN=\nIMAGE_TAG=%s\n' \
-            "$VERSION" > .env
+          printf 'ADMIN_TOKEN=%s\nTRANSCRIPTION_SERVICE_URL=\nTRANSCRIPTION_SERVICE_TOKEN=\nIMAGE_TAG=%s\n' \
+            "$(openssl rand -hex 32)" "$VERSION" > .env
           make -C deploy/lite up init-db
           for i in $(seq 1 10); do
             if make -C deploy/lite test; then break; fi
@@ -821,13 +824,13 @@ jobs:
       VERSION: ${{ needs.preflight.outputs.version }}
       BASE_VERSION: ${{ needs.preflight.outputs.base_candidate_tag }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
       # #715 — this receipt job reads Docker Hub with `imagetools inspect` + `manifest inspect` and
       # had NO login at all, so every read was anonymous on the runner's shared IP quota. Log in for
       # the daemon, then give the client-side readers the same credential explicitly (see the
       # alias-candidate comment above). The readback assertions themselves are unchanged.
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -955,7 +958,7 @@ jobs:
                 "vexaai/vexa-lite": $lite
               }
             }' | tee release-receipt/candidate-delta.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: candidate-delta-receipt-${{ needs.preflight.outputs.version }}
           path: release-receipt/candidate-delta.json
@@ -983,6 +986,29 @@ jobs:
   # dispatches release-validate standalone, where the identity IS enforced. The consequence
   # for this workflow's conclusion is the point: release-images is red when the build or the
   # published artifacts are wrong, and green when they are not.
+  # Trivy over every image this run built (image-cve-scan.yml): fixed CRITICAL/HIGH advisories in
+  # Vexa's own images. Report-only for now (blocking: false), in parallel with validate and never in
+  # its way. What is left is upstream of us: kubectl's Go (1.26.8; the fix is 1.26.9, in no kubectl
+  # release yet) in the runtime, and npm's bundled packages in agent-worker and Lite, where the agent's
+  # tools may run npm. Flip blocking to true once a run reports none.
+  scan-images:
+    needs: [preflight, build, build-bot]
+    if: >-
+      ${{
+        always() &&
+        needs.preflight.result == 'success' &&
+        needs.preflight.outputs.reuse_candidate != 'true' &&
+        needs.build.result == 'success'
+      }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/image-cve-scan.yml
+    with:
+      build-matrix: ${{ needs.preflight.outputs.build_matrix }}
+      tag: ${{ needs.preflight.outputs.version }}
+      images: ${{ needs.build-bot.result == 'success' && format('["vexaai/vexa-bot:{0}"]', needs.preflight.outputs.version) || '[]' }}
+      blocking: false
+
   validate:
     needs: [preflight, build, build-bot, alias-candidate, sbom]
     if: >-

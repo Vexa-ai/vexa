@@ -27,6 +27,21 @@ trivial fakes.
   agent loop over any OpenAI-compatible `chat/completions` with function calling, no CLI and no
   vendor SDK). All three normalize into the same frozen UnitEvents; Claude remains the deployment
   default.
+- **Claude Code's skills**: `claude_skills.py` stages the turn's skill set into the worker's user
+  scope (`~/.claude/skills`) — the platform's governed skills, then the workspace's own with the
+  tool-granting frontmatter removed. A workspace skill is staged as a copy of its regular files,
+  each opened without following a link: a link, a FIFO or a hard-linked file is left out, and a
+  skill whose `skills/` folder, skill folder or `SKILL.md` is a link, or that holds a second
+  `SKILL.md` below its top, is not staged. Part of the `claude-code` adapter.
+- **Vendored guards** (byte-identical copies, because this module imports no product code):
+  `ssrf.py`, the outbound URL guard the web tools fetch through (`deploy/contracts/outbound-url.v1/ssrf.py`,
+  parity fact `outbound-url-guard`),
+  and `workspace_paths.py`, the one way the harnesses read and write inside a work tree without
+  following a link (`core/workspaces/shared/workspace_paths.py`, parity fact `workspace-paths`).
+- **Panel events**: `tool_events.py` — the closed tool vocabularies and the event a successful
+  result earns (a write opens its file, a bot send opens the transcript, `open_page`, chips, a
+  workspace joining the chat). Imported by all three harnesses so a turn paints the same screen
+  whichever one runs.
 
 ### The runner matrix
 
@@ -38,8 +53,9 @@ trivial fakes.
 
 `openai-agent` exists for PRD decision 37: run the service on a model we host. It has **no `Bash`
 and no skills discovery** — a name in the allow-set it does not implement is simply not attached. It
-carries a hard per-turn budget (tool calls + wall clock) and trims context oldest-tool-result-first,
-because the box it was built for holds ~29 requests at 24k context. Qwen on that box needs
+carries a hard per-turn budget (tool calls + wall clock). Its context budget is the chosen model's
+own window (stamped by the dispatch) or `VEXA_AGENT_CONTEXT_TOKENS`, default 131072; past it, the
+history is compacted quietly, oldest tool results first, never a person's message. Qwen on that box needs
 `VEXA_LLM_EXTRA_BODY={"chat_template_kwargs":{"enable_thinking":false}}` or it spends the whole
 budget reasoning.
 
@@ -56,7 +72,7 @@ function in `_DIALECTS`: take a client, a URL, a query and a count, return
 
 `WebFetch` carries the guard search does not need — a URL the MODEL chose is an outbound destination
 picked by a non-operator — so it refuses loopback / link-local / private / reserved targets and
-re-checks every redirect hop, exempting only the operator's own `VEXA_SEARCH_URL` host. The rule is
+re-checks every redirect hop, exempting only the operator's own `VEXA_SEARCH_URL` host. Every connection — the harness's own client included — goes through `web_tools.fetch_transport`, which re-resolves and re-checks the host at connect time and dials the checked address. The rule is
 `control_plane/model_endpoint.py`'s, **re-stated rather than imported**: the worker image ships
 `worker/`, `llm/`, `shared/` and `contracts/` and deliberately not `control_plane/`, so an import
 would be an ImportError in the only process that runs this code.
@@ -81,29 +97,77 @@ carries the event vocabulary and the rest.
 | `VEXA_RUNNER` | harness adapter key: `claude-code` \| `codex` \| `openai-agent` | `claude-code` |
 | `VEXA_LLM_BASE_URL` | openai-agent endpoint | **required** for `openai-agent` (falls back to `ANTHROPIC_BASE_URL`) |
 | `VEXA_LLM_API_KEY` | openai-agent credential (optional for local runtimes) | falls back `ANTHROPIC_AUTH_TOKEN` → `ANTHROPIC_API_KEY` |
-| `VEXA_LLM_MODEL` | openai-agent model (free string) | empty → fail-loud at the first request |
+| `VEXA_LLM_MODEL` | openai-agent fallback model (free string), read only when no `VEXA_AGENT_MODEL` reaches the worker | `VEXA_AGENT_MODEL`; neither → fail-loud at the first request |
 | `VEXA_LLM_EXTRA_BODY` | JSON object merged into EVERY openai-agent request | `{}` |
 | `VEXA_AGENT_MAX_TOOL_CALLS` / `VEXA_AGENT_MAX_TURN_SEC` | openai-agent per-turn budget | 40 / 900 |
-| `VEXA_AGENT_CONTEXT_TOKENS` | openai-agent context ceiling (trims oldest tool results first) | 24000 |
+| `VEXA_AGENT_CONTEXT_TOKENS` | openai-agent context budget; a model route's own window wins (compacts oldest tool results first, never a person's message) | 131072 |
+| `VEXA_AGENT_MAX_OUTPUT_TOKENS` | every harness: output-token cap per request — claude-code receives it as `CLAUDE_CODE_MAX_OUTPUT_TOKENS`, openai-agent sends it as `max_tokens` (wins over `VEXA_LLM_EXTRA_BODY`); codex does not read it — Codex 0.146.0 has no setting for the model's output cap (its `max_output_tokens` fields are per-tool exec budgets) | unset → each harness's default (claude CLI: 32000) |
 | `VEXA_AGENT_STREAM` | openai-agent SSE streaming (`0` = one blocking request) | `1` |
 | `VEXA_SEARCH_URL` | operator-supplied search endpoint for `WebSearch` | empty → `WebSearch` is not attached |
 | `VEXA_SEARCH_DIALECT` | wire format of that endpoint: `searxng` \| `brave` | `searxng` |
 | `VEXA_SEARCH_API_KEY` | credential for that endpoint (brave needs one; searxng does not) | empty |
-| `ANTHROPIC_*`, `HOST_CLAUDE_CREDENTIALS` | claude-code adapter ONLY | — |
+| `ANTHROPIC_*`, `HOST_CLAUDE_CREDENTIALS` | claude-code adapter; openai-agent reads `ANTHROPIC_BASE_URL` / `_AUTH_TOKEN` / `_API_KEY` only as the fallbacks above | — |
 | `HOST_CODEX_CREDENTIALS`, `OPENAI_API_KEY` | codex adapter subscription-file / API-key auth | — |
+
+**Whose endpoint, the deployment's or a subject's own, is decided by the dispatch, once.** The
+`VEXA_LLM_*` and `ANTHROPIC_*` values above are the deployment's: agent-api backfills the
+`ANTHROPIC_*` ones and the runtime forwards the rest into every worker. When a subject's Settings →
+Models `mode: custom` endpoint passes the operator gate (`VEXA_MODEL_BASE_URL_ALLOW`),
+`control_plane.dispatch.subject_route_env` stamps the whole route for that worker: the subject's
+endpoint as `ANTHROPIC_BASE_URL` and `VEXA_LLM_BASE_URL`, the subject's key (empty when they set
+none) as `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY` and `VEXA_LLM_API_KEY`, the subject's
+`extra_body` (or empty) as `VEXA_LLM_EXTRA_BODY`, and an empty `CLAUDE_CODE_OAUTH_TOKEN` and
+`VEXA_LLM_MODEL`. The model is `VEXA_AGENT_MODEL`, under `VEXA_MODEL_ALLOWLIST`. The runtime never
+overrides a key the dispatch stamped, the empty string included. So both harnesses run on the
+subject's endpoint, key, model and extra body whatever the deployment's `VEXA_LLM_*` say, the
+subject's key reaches no other endpoint, and no deployment credential reaches the subject's. With
+no subject endpoint, or a refused one, nothing is stamped and the table above applies unchanged.
+
+The subject's route also carries `VEXA_MODEL_ROUTE=subject`, and the claude-code adapter then
+removes any credential stored in the CLI's config directory (`$HOME/.claude/.credentials.json`, where
+a process-backend runtime stages the deployment's subscription) before the CLI starts — refusing the
+turn if it cannot. A claude CLI with no key of its own signs in from that file, so on claude-code a
+subject's endpoint also needs the subject's own key: without one the dispatch refuses the endpoint
+(`model_endpoint.route_refusal`, which the Test button asks too) and the deployment route applies.
+openai-agent reads no file and sends no credential to a keyless endpoint.
 
 ## Rules
 
 - **This module imports NOTHING from product code** (`shared/`, `contracts`, `worker/`,
   `control_plane/`) — it must stay liftable into a standalone brick.
-- Vendor names appear only in adapter files (`claude_code.py`, `codex.py`), never in
+- Vendor names appear only in adapter files (`claude_code.py`, `claude_skills.py`, `codex.py`), never in
   `ports.py`/`registry.py` beyond registry keys.
 - UnitEvent shapes (`message-delta` / `tool-call` / `tool-result` / `done{reply,sessionId,ok}` /
   `commit` and the `model-error` / `auth-error` builders in `errors.py`) are FROZEN — the terminal
   reducer and SSE relay consume them field-for-field. They describe the AGENT harness; a meeting's
   feed carries the transcript and nothing else.
+- **A provider failure ends the turn TYPED** (P18): `faults.py` is the one model-provider fault —
+  `ProviderFault{source: "model-provider", kind, provider, model, status, detail, remedy}`, `kind` one
+  of `unpaid` (402) · `unauthorized` (401/403) · `rate_limited` (429) · `unavailable` (5xx, timeout)
+  · `refused` (other 4xx). Every harness and provider adapter builds it with `faults.classify` and puts
+  it on the failed `done` as `fault` (additive); import it, never define a second one. Codex passes the
+  kind its own `codexErrorInfo` label names; claude-code's refusal to start a turn beside another
+  model credential is the worker's, not the provider's (`source: "agent-worker"`). A first `done` that
+  carries a `fault` is never "healed" as a stale resume — the provider refused the turn, not the session.
+- **The fault shape and its kinds are unit.v1's `Fault` (`contracts/unit.v1`).** `fault_wire.py` is
+  generated from it (`node core/agent/contracts/unit.v1/gen-faults.mjs`) — this brick's own copy, since it imports
+  nothing from product code — and `gate:schema` fails when it drifts; never edit it by hand.
 - Session ids are OPAQUE per-harness tokens; an alien/stale id must yield `done.ok=False` (the
   engine's stale-resume retry heals it).
+- **Every harness CLI starts as the tools user** (`ports.harness_identity_kwargs`, user `vexa-tools`
+  in the worker image) wherever the worker runs as root, so the model's tools cannot read the
+  worker's environment through /proc or write its code; the worker hands that user, by group, only
+  the workspaces a turn may write and the harness's writable state (`grant_tools_access`) — never a
+  repository's `.git`, which stays the worker's (a `.git` an earlier grant opened is closed again).
+  The staged skills and the CLI's user scope (`~/.vexa-skills`, `~/.claude`) it may only read
+  (`show_tools`), so a turn cannot change what a later turn loads.
+  A directory holding a `.git` is made sticky, so the tools user cannot rename a `.git` it does not
+  own and put another directory in its place between git's check and git's read.
+  A worker that is not root does not switch and is non-dumpable instead (`harden_worker_process`).
+  A new adapter launches its CLI with those keyword arguments and `harness_subprocess_env()`.
+- **The write-back's git runs through `gitexec`** (`ports._git` → `llm/gitexec.py`, a verbatim copy
+  of `shared/gitexec.py`): no hook, fsmonitor, driver or helper a workspace repository names runs
+  in the worker.
 
 ## Adding a runner
 
@@ -127,10 +191,13 @@ the repository or workspace:
    ```
 
 3. Rebuild `agent-worker` after changing the pinned Codex version, then recreate `runtime` and
-   `agent-api`. The runtime bind-mounts only that file at `/root/.codex/auth.json:ro` in each worker.
+   `agent-api`. The runtime bind-mounts only that file at `$CODEX_HOME/auth.json:ro` in each worker
+   and names `CODEX_HOME` (`/tmp/.codex`, `runtime_kernel.workload_env.WORKER_CODEX_HOME`); the
+   adapter and the Codex CLI read the same variable. On Kubernetes mount the Secret there
+   (`RUNTIME_K8S_SECRET_MOUNTS` with `mountPath: /tmp/.codex/auth.json`, `file: auth.json`).
 
 The adapter keeps rollout history under the private continuity mount's already-ignored
-`.claude/codex/sessions/`; the subscription auth file stays in `/root/.codex` and is never copied,
+`.claude/codex/sessions/`; the subscription auth file stays in `$CODEX_HOME` and is never copied,
 staged, emitted, or returned through the workspace API. `VEXA_CODEX_MODEL` is optional; leaving it
 empty uses the subscription account's Codex default and deliberately ignores an inherited
 `claude-*` model pin.

@@ -27,11 +27,14 @@
 import {
   launchPersistentBrowser,
   syncBrowserDataFromS3,
-  syncBrowserDataToS3,
   cleanStaleLocks,
   getAuthenticatedBrowserArgs,
   makeEphemeralProfileDir,
   removeProfileDir,
+  restrictNavigation,
+  authenticatedNavigationDomains,
+  withSiteIsolation,
+  type AuthPlatform,
   type Page,
   type BrowserContext,
 } from '@vexa/remote-browser';
@@ -43,6 +46,7 @@ import type { BotRecordingSink } from './recording.js';
 import type { TelemetrySink } from './ports.js';
 import type { RemoteAudioActivityTap } from './aloneness.js';
 import { createTtsPlayback } from './tts-playback.js';
+import { writeBackSession } from './session-writeback.js';
 
 /** Float32 PCM → base64 of its little-endian bytes — the EXACT codec wire payload, so a stored
  *  captured-signal.v1 frame round-trips through @vexa/capture-codec (encode→decode→same PCM). */
@@ -569,10 +573,18 @@ export interface BrowserSession {
  * remote-browser auth args, so the page the JoinDriver receives is configured identically to
  * what @vexa/join expects.  // L4 (O6/VM): live-validated against a real meeting.
  */
+/** The stored-session platform behind each meeting platform (Jitsi has none). */
+const AUTH_PLATFORM: Partial<Record<Invocation['platform'], AuthPlatform>> = {
+  google_meet: 'google',
+  teams: 'teams',
+  zoom: 'zoom',
+};
+
 export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
   // Every bot gets its OWN profile dir — concurrent bots sharing one dir die on Chromium's
   // SingletonLock (#478: joining → failed <1s, "Opening in existing browser session").
-  // Authenticated: restore the S3 userdata into this bot's dir before launch (index.ts:2313–2347).
+  // Authenticated: restore the stored session into this bot's dir before launch (index.ts:2313–2347),
+  // with the deployment's read-only userdata key — the session profile only (SESSION_PROFILE).
   const dataDir = makeEphemeralProfileDir();
   const s3Config = {
     userdataS3Path: inv.userdataS3Path,
@@ -581,6 +593,13 @@ export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
     s3AccessKey: inv.s3AccessKey,
     s3SecretKey: inv.s3SecretKey,
   };
+  // An authenticated browser carries the deployment's stored session: it navigates only to the
+  // platform's own domains, and the meeting host must be one of them (checked before the stored
+  // session is restored — a host outside them refuses the launch). Its sites are isolated from each other
+  // (--site-per-process). A guest browser is neither (a Jitsi meeting may be on any host).
+  const authDomains = inv.authenticated
+    ? authenticatedNavigationDomains(AUTH_PLATFORM[inv.platform] ?? null, inv.meetingUrl)
+    : null;
   if (inv.authenticated && inv.userdataS3Path) {
     // Fail-loud restore: an unreachable/misconfigured store surfaces as a typed SessionSyncError
     // naming the session-restore step (the composition root drives it to a clean terminal failed)
@@ -592,8 +611,14 @@ export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
   // getAuthenticatedBrowserArgs() is the minimal clean set remote-browser uses for signed-in
   // joins; getJoinBrowserArgs() adds the fake-device / autoplay flags the join lane needs. The
   // join args win on conflict (later wins in Chromium arg parsing).
-  const args = [...getAuthenticatedBrowserArgs(), ...getJoinBrowserArgs()];
+  const baseArgs = [...getAuthenticatedBrowserArgs(), ...getJoinBrowserArgs()];
+  const args = authDomains ? withSiteIsolation(baseArgs) : baseArgs;
   const { context, page } = await launchPersistentBrowser({ dataDir, args });
+
+  // ...and its navigations are held to those domains from before the first one.
+  if (inv.authenticated) {
+    await restrictNavigation(context, authDomains ?? []);
+  }
 
   // Voice-agent gate the page reads to decide whether to keep the mic hot (production parity).
   await context.addInitScript(`window.__vexa_voice_agent_enabled = ${!!inv.voiceAgentEnabled};`);
@@ -660,12 +685,18 @@ export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
       await context.close().catch(() => { /* best-effort */ });
       // Write-back on clean teardown (#725): Google rotates session cookies during use, so the
       // durable copy is refreshed from the LIVE profile dir after the context flushes — the next
-      // spawn restores the freshest state instead of a decaying snapshot. Clean teardown only:
-      // a SIGKILL never reaches close(), so a hard-killed meeting keeps the last durable copy.
-      // Failures are attributed warnings, bounded per upload — teardown never hangs on S3.
+      // spawn restores the freshest state instead of a decaying snapshot. The bot's userdata key is
+      // read-only: the session profile goes to meeting-api at the invocation's sessionWritebackUrl
+      // (MeetingToken), which stores only SESSION_PROFILE paths and only from the live authenticated
+      // session; no URL in the invocation, no write-back. Clean teardown only: a
+      // SIGKILL never reaches close(), so a hard-killed meeting keeps the last durable copy.
+      // Failures are attributed warnings, one bounded attempt — teardown never hangs on it.
       if (inv.authenticated && inv.userdataS3Path) {
         try {
-          syncBrowserDataToS3(s3Config, dataDir);
+          const r = await writeBackSession(inv, dataDir);
+          console.log(r.skipped
+            ? `[bot] session write-back skipped: ${r.skipped}`
+            : `[bot] session write-back: ${r.sent} session file(s) accepted by meeting-api`);
         } catch (e) {
           console.error(`[bot] session write-back failed (durable copy stays at last restore): ${String(e)}`);
         }
@@ -861,11 +892,10 @@ export async function startCaptureBridge(
       // ── Per-track capture: one 16 kHz PCM tap per remote track, each on its own stable channel ──
       // ONE shared AudioContext hosts every track's tap (Chromium hard-caps concurrent AudioContexts
       // at 6 — a per-track context would drop the 7th+ participant in a large meeting). Each track gets
-      // its own ScriptProcessor on that context; the bot page is headless with no UI to stutter, so the
-      // many-node cost that retired ScriptProcessor on the user's busy meeting page does not apply here.
-      // The accumulated-audio-time clock (anchor + samples/rate, the SAME the mix path proved) stamps
-      // every frame on the page clock = the hints' clock, so the resolver can correlate energy with the
-      // active-speaker signal and the per-channel lane times turns correctly.
+      // its own ScriptProcessor on that context; callbacks share the page's main thread.
+      // All tracks use one epoch-anchored monotonic page clock. Each frame is stamped at
+      // callback time minus its duration; skipped callbacks cannot compress elapsed time.
+      // Resolver hints and frame times remain on the same epoch timeline.
       // #1195 — the deaf-capture guard's presence oracle, on THIS lane too. The guard abstains
       // whenever it is never told about streams (aloneness.ts row 2: `streamsPresentAt === undefined`
       // → 'alone', i.e. no objection), so a capture branch that never calls __vexaStreamPresence
@@ -905,6 +935,7 @@ export async function startCaptureBridge(
         if (!w.__vexaTrackCtx) {
           w.__vexaTrackCtx = new (globalThis as any).AudioContext({ sampleRate: 16000 });
           w.__vexaTrackCtx.resume?.();
+          w.__vexaTrackEpochMs = Date.now() - performance.now();
           w.__vexaTrackCaps = new Map();
           w.__vexaTrackNextCh = 0;
         }
@@ -916,12 +947,22 @@ export async function startCaptureBridge(
           try {
             const src = ctx.createMediaStreamSource(s);
             const proc = ctx.createScriptProcessor(4096, 1, 1);
-            const startMs = Date.now();
-            let processed = 0;
+            let lastFrameEndMs: number | undefined;
+            let lastGapReportMs = -Infinity;
             proc.onaudioprocess = (e: any): void => {
               const input = e.inputBuffer.getChannelData(0) as Float32Array;
-              const ts = startMs + (processed / SR) * 1000;   // wall-clock of this frame's first sample
-              processed += input.length;                       // count ALL samples (silent too) → no drift
+              const frameMs = (input.length / SR) * 1000;
+              const frameEndMs = w.__vexaTrackEpochMs + performance.now();
+              const ts = frameEndMs - frameMs;
+              // Callback delivery approximates capture time; it cannot reconstruct audio
+              // lost upstream. Report discontinuities before silence gating so they remain
+              // distinguishable from a participant simply not speaking.
+              const gapMs = lastFrameEndMs === undefined ? 0 : ts - lastFrameEndMs;
+              if (gapMs > 1000 && frameEndMs - lastGapReportMs >= 10000) {
+                w.__vexaObservation?.('pertrack', { type: 'capture-clock-gap', channel: ch, gapMs, frameMs, tMs: ts }, ts);
+                lastGapReportMs = frameEndMs;
+              }
+              lastFrameEndMs = frameEndMs;
               let maxVal = 0;
               for (let i = 0; i < input.length; i++) { const a = Math.abs(input[i]); if (a > maxVal) maxVal = a; }
               if (maxVal <= SILENCE) return;                   // gate silence (as the mix path did)
@@ -1383,20 +1424,22 @@ export async function startRecording(page: Page, inv: Invocation, recording: Bot
     return Number.isFinite(n) && n > 0 ? n : 15000;
   })();
   // Node-side: decode one base64 recording.v1 chunk → the per-chunk upload sink. mimeType→format.
-  await page.exposeFunction('__vexaRecordingChunk', (base64: string, chunkSeq: number, isFinal: boolean, mimeType: string): void => {
+  await page.exposeFunction('__vexaRecordingChunk', (base64: string, chunkSeq: number, isFinal: boolean, mimeType: string, startedAtMs?: number): void => {
     const bytes = base64 ? new Uint8Array(Buffer.from(base64, 'base64')) : new Uint8Array(0);
     const format: RecordingMasterFormat = /wav/i.test(mimeType) ? 'wav' : 'webm';
-    recording.chunk(key, chunkSeq, isFinal, format, bytes);
+    recording.chunk(key, chunkSeq, isFinal, format, bytes, startedAtMs);
   }).catch((e: Error) => { if (!String(e.message).includes('already registered')) throw e; });
 
   // Page-side: start the generic recording tap (finds + combines the page audio elements).
   await page.evaluate(async (timesliceMs) => {
     const w = (globalThis as any) as Record<string, any>;
     if (w.VexaBrowserUtils?.createRecordingTap && !w.__vexaRecordingTap) {
+      let recordingStartedAtMs: number | undefined;
       w.__vexaRecordingTap = w.VexaBrowserUtils.createRecordingTap({
+        onStarted: () => { recordingStartedAtMs = Date.now(); },
         timesliceMs,
         onChunk: async (c: { base64: string; chunkSeq: number; isFinal: boolean; mimeType: string }) => {
-          try { await w.__vexaRecordingChunk(c.base64, c.chunkSeq, c.isFinal, c.mimeType); return true; }
+          try { await w.__vexaRecordingChunk(c.base64, c.chunkSeq, c.isFinal, c.mimeType, recordingStartedAtMs); return true; }
           catch { return false; }
         },
       });

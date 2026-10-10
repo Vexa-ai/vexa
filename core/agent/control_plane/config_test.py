@@ -53,21 +53,50 @@ HttpGet = Callable[[str, dict], tuple[int, str]]
 TranscribeProbe = Callable[[str, str], tuple[int, str]]
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A redirect is the endpoint's answer, never followed: following it would carry the API key to
+    whatever host the endpoint names, past the allow-list that admitted the endpoint."""
+
+    def redirect_request(self, *a, **kw):
+        return None
+
+
+_NO_REDIRECT = urllib.request.build_opener(_NoRedirect)
+
+
 def _post(url: str, payload: dict, headers: dict) -> tuple[int, str]:
     req = urllib.request.Request(url, data=json.dumps(payload).encode(),
                                  headers={"Content-Type": "application/json", **headers},
                                  method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=_TIMEOUT) as r:
+        with _NO_REDIRECT.open(req, timeout=_TIMEOUT) as r:
             return r.status, r.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as e:
         return e.code, e.read().decode("utf-8", "replace")
 
 
+def _subject_post(url: str, payload: dict, headers: dict) -> tuple[int, str]:
+    """``_post`` for an endpoint a PERSON chose: no redirects, ever (a redirect would carry their
+    key and our request somewhere else), and a host that only a wildcard admits is reached through
+    the outbound URL guard's pinned transport, so it must resolve to public addresses. A host the
+    operator allow-listed by its exact name is reached as named (a self-hosted model on a private
+    network is that operator's choice)."""
+    import httpx
+    from urllib.parse import urlsplit
+
+    from shared import ssrf
+
+    host = (urlsplit(url).hostname or "").lower()
+    transport = None if model_endpoint.named_exactly(host) else ssrf.build_pinned_sync_transport()
+    with httpx.Client(timeout=_TIMEOUT, follow_redirects=False, transport=transport) as c:
+        r = c.post(url, json=payload, headers=headers)
+        return r.status_code, r.text
+
+
 def _get(url: str, headers: dict) -> tuple[int, str]:
     req = urllib.request.Request(url, headers=headers, method="GET")
     try:
-        with urllib.request.urlopen(req, timeout=_TIMEOUT) as r:
+        with _NO_REDIRECT.open(req, timeout=_TIMEOUT) as r:
             return r.status, r.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as e:
         return e.code, e.read().decode("utf-8", "replace")
@@ -173,37 +202,75 @@ def test_custom_endpoint(base_url: str, api_key: str, model: str = "",
 
 
 def run_models_test(config: dict, env: Optional[dict] = None,
-                    creds_path: Optional[str] = None, post: HttpPost = _post) -> dict:
-    """The EFFECTIVE model credential test — same resolution the dispatch overlay applies
-    (Settings user > global config already collapsed by admin-api; env is the floor)."""
+                    creds_path: Optional[str] = None, post: Optional[HttpPost] = None) -> dict:
+    """The EFFECTIVE model credential test: the route this subject's turn would take, as the
+    dispatch decides it. The decision is not restated here: ``overlay_model_config`` (the operator
+    gate, ``subject_route_env``, the model allowlist) runs on an empty env and the probe reads what
+    it stamped (F84 · F93 · Vexa-ai/vexa#1783).
+
+    There are two routes, and a probe never mixes them:
+
+    * **The subject's own**, when a custom endpoint passes the gate. Probed with the subject's key
+      (empty included), model and extra_body: the values the worker receives.
+    * **The deployment's**, in every other case. Probed with the deployment's credential only: its
+      gateway (``ANTHROPIC_BASE_URL`` with ``ANTHROPIC_AUTH_TOKEN`` / ``ANTHROPIC_API_KEY``) when
+      one is configured, else the mounted subscription file. A key the subject stored is not used
+      on this route, so it is sent nowhere, and the summary says that nothing of theirs was tested.
+
+    A custom endpoint the gate refuses is reported as refused, and no request is made. The
+    subject's own endpoint is probed through ``_subject_post`` (no redirects; a wildcard-admitted
+    host only at public addresses); ``post``, when given, replaces both probes (tests)."""
+    from control_plane.dispatch import overlay_model_config   # the dispatch's decision, reused
+
     env = env if env is not None else dict(os.environ)
-    mode = (config.get("mode") or "").strip()
-    # `custom_base_url` is the dispatch overlay's OWN inertness rule, imported rather than restated
-    # (F93): `mode=custom` with no base_url is inert, and such a turn really does run on the
-    # deployment's endpoint — so that is what this button must probe.
-    cfg_url = model_endpoint.custom_base_url(config)
-    base_url = cfg_url or env.get("ANTHROPIC_BASE_URL", "")
-    if cfg_url:
-        # A CUSTOM ENDPOINT CARRIES THE SUBJECT'S OWN KEY AND NOTHING ELSE (F84). The dispatch now
-        # stamps the empty string rather than letting the deployment's brokered token be backfilled
-        # onto a foreign host — so falling back to that token here would green an endpoint the turn
-        # reaches unauthenticated, which is precisely the "certifies a config the turn will not
-        # use" failure.
-        api_key = (config.get("api_key") or "").strip()
+    cfg = config if isinstance(config, dict) else {}
+    route: dict[str, str] = {}
+    overlay_model_config(route, cfg, allowlist=env.get("VEXA_MODEL_ALLOWLIST", ""))
+    # The model the turn runs on: the subject's, when the allowlist kept it, else the deployment's.
+    model = route.get("VEXA_AGENT_MODEL") or (env.get("VEXA_AGENT_MODEL") or "").strip()
+    cfg_url = model_endpoint.custom_base_url(cfg)
+    if cfg_url and route.get("VEXA_LLM_BASE_URL") == cfg_url:
+        out = test_custom_endpoint(route["VEXA_LLM_BASE_URL"], route["VEXA_LLM_API_KEY"], model,
+                                   post=post or _subject_post, extra_body=route["VEXA_LLM_EXTRA_BODY"])
+        out["mode"], out["route"] = "custom", "subject"
+    elif cfg_url:
+        runner = route.get("VEXA_RUNNER") or (env.get("VEXA_RUNNER") or "").strip() or "claude-code"
+        reason = (model_endpoint.route_refusal(cfg_url, str(cfg.get("api_key") or ""), runner)
+                  or "the endpoint is not admitted")
+        out = _result(False, f"Refused before any request was made: {reason}")
+        out["mode"], out["route"] = "custom", "subject"
     else:
-        api_key = (config.get("api_key") or "").strip() or env.get("ANTHROPIC_AUTH_TOKEN", "") \
-            or env.get("ANTHROPIC_API_KEY", "")
-    if mode == "custom" or (not mode and base_url and api_key):
-        out = test_custom_endpoint(
-            base_url, api_key, (config.get("model") or "").strip(), post=post,
-            extra_body=(config.get("extra_body") or "").strip(),
-        )
+        out = _test_deployment_route(env, model, creds_path, post or _post)
+        out["route"] = "deployment"
+        runner = route.get("VEXA_RUNNER") or (env.get("VEXA_RUNNER") or "").strip()
+        if runner == "openai-agent":
+            # The worker reads that lane's own keys, and this image does not ship the harness that
+            # orders them, so the button says what it did not test rather than guess.
+            out["summary"] += (" Your turns run on openai-agent, whose deployment endpoint "
+                               "(VEXA_LLM_BASE_URL) this button does not probe.")
+        if (cfg.get("api_key") or "").strip() or (cfg.get("base_url") or "").strip():
+            out["summary"] += (" Your stored endpoint settings are not in effect (mode is not "
+                               "custom with a Base URL), so your turns run on the deployment's "
+                               "credentials: nothing of yours was sent or tested.")
+    # Non-secret provenance so the UI can say WHAT was tested.
+    out["config"] = {k: v for k, v in cfg.items() if k in ("mode", "model", "base_url") and v}
+    return out
+
+
+def _test_deployment_route(env: dict, model: str, creds_path: Optional[str],
+                           post: HttpPost) -> dict:
+    """The deployment's own route, with the deployment's own credential and no extra body (the
+    claude CLI sends none): its gateway when one is configured with a key, else the subscription
+    file the worker mounts."""
+    base = (env.get("ANTHROPIC_BASE_URL") or "").strip()
+    key = (env.get("ANTHROPIC_AUTH_TOKEN") or env.get("ANTHROPIC_API_KEY") or "").strip()
+    if base and key:
+        out = test_custom_endpoint(base, key, model, post=post)
+        out["summary"] = "Deployment gateway: " + out["summary"]
         out["mode"] = "custom"
     else:
         out = test_subscription_credentials(creds_path)
         out["mode"] = "subscription"
-    # Non-secret provenance so the UI can say WHAT was tested.
-    out["config"] = {k: v for k, v in config.items() if k in ("mode", "model", "base_url") and v}
     return out
 
 
@@ -266,6 +333,65 @@ def _verify_transcribes(base: str, token: str, source: str, probe: TranscribePro
                        status=status)
     return _result(True, f"OK — {endpoint} transcribed the probe clip{who} (HTTP {status}).",
                    source=source, status=status, account=account or None)
+
+
+def _guarded_get(url: str, headers: dict) -> tuple[int, str]:
+    """``_get`` for a CUSTOMER endpoint: through the outbound URL guard's pinned transport, no redirects."""
+    import httpx
+    from shared import ssrf
+
+    with httpx.Client(timeout=_TIMEOUT, follow_redirects=False,
+                      transport=ssrf.build_pinned_sync_transport()) as c:
+        r = c.get(url, headers=headers)
+        return r.status_code, r.text
+
+
+def _guarded_probe(endpoint: str, token: str) -> tuple:
+    """``_transcribe_probe`` for a CUSTOMER endpoint: the same body, through the pinned transport."""
+    import httpx
+    from control_plane.config_preflight import audio_probe_body
+    from shared import ssrf
+
+    content_type, body = audio_probe_body()
+    with httpx.Client(timeout=_STT_PROBE_TIMEOUT, follow_redirects=False,
+                      transport=ssrf.build_pinned_sync_transport()) as c:
+        r = c.post(endpoint, content=body,
+                   headers={"Content-Type": content_type, "Authorization": f"Bearer {token}"})
+        return r.status_code, r.text
+
+
+def transcription_route(configured: Optional[dict], env: dict) -> tuple[str, str, str, str]:
+    """``(url, token, source, provider)`` — the backend a bot spawned now would use and the one
+    credential it would carry, by bot_spawn's rule: a configured URL (Settings, resolved by
+    admin-api's bot-context) brings its own token, empty meaning none — never the deployment's; with
+    no configured URL the deployment's URL and token apply, and a configured token alone is not used
+    (bot_spawn does not use it either). The Test button probes exactly this pair. ``env`` is the
+    deployment's ``TRANSCRIPTION_SERVICE_URL`` / ``_TOKEN``, read by the caller."""
+    cfg = configured if isinstance(configured, dict) else {}
+    url = str(cfg.get("url") or "").strip()
+    if url:
+        return url, str(cfg.get("token") or ""), "settings", str(cfg.get("provider") or "")
+    return (str(env.get("TRANSCRIPTION_SERVICE_URL") or "").strip(),
+            str(env.get("TRANSCRIPTION_SERVICE_TOKEN") or "").strip(), "env", "")
+
+
+def run_customer_transcription_test(url: str, token: str, source: str, get: HttpGet = _guarded_get,
+                                    probe: TranscribeProbe = _guarded_probe,
+                                    resolver=None) -> dict:
+    """``run_transcription_test`` for an endpoint the PERSON configured (their Settings), not the
+    deployment: the URL must pass the outbound URL guard before anything is sent, and every request
+    goes through its pinned transport — the Test button never probes this deployment's own network
+    on somebody's behalf."""
+    from shared import ssrf
+
+    try:
+        ssrf.validate_url((url or "").strip(), resolver, what="transcription endpoint")
+    except ssrf.SSRFError as exc:
+        return _result(False, f"Transcription endpoint refused: {exc}.", source=source)
+    try:
+        return run_transcription_test(url, token, source, get=get, probe=probe)
+    except ssrf.SSRFError as exc:   # the connect-time re-check refused
+        return _result(False, f"Transcription endpoint refused: {exc}.", source=source)
 
 
 def run_transcription_test(url: str, token: str, source: str, get: HttpGet = _get,

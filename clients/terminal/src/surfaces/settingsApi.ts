@@ -52,67 +52,8 @@ export async function setTranscriptionPrefs(update: { url?: string; token?: stri
   }));
 }
 
-/** The admin-writable platform-settings keys: the two config domains + the first-run wizard's
- *  durable "setup" state. */
-export type GlobalSettingKey = "models" | "transcription" | "setup";
-
-// ── the company layer (`_global`) ───────────────────────────────────────────────────────────────
-/** The five files the platform `_global` workspace must hold before this instance serves anybody:
- *  who the company is, what it stands for, what it is working toward, how it is structured, and what
- *  is still missing. Listed here only so the wizard can name the ones that are absent — the SERVER
- *  decides `global_setup`, never this list; a client-side recomputation would be a second opinion on
- *  a gate that must have exactly one. */
-export const COMPANY_LAYER_FILES = ["README.md", "PRINCIPLES.md", "OBJECTIVES.md", "STRUCTURE.md", "MISSING.md"] as const;
-
-/** The company layer's live state, as agent-api reports it. `global_setup` is the gate itself.
- *
- *  `reasons` is the field the UI should actually SHOW: plain sentences from the server saying what
- *  is not yet true. The card renders them verbatim instead of composing its own wording, because a
- *  client that phrases the gate's reasons itself is a second author of the gate's meaning — it drifts
- *  the moment the server learns a new reason, and drifts silently, since a missing sentence looks
- *  exactly like a satisfied condition. `company` is null until the gate lifts, by design. */
-export type GlobalState = {
-  global_setup: "completed" | "missing";
-  company: string | null;
-  present: string[];
-  missing_files: string[];
-  /** Plain sentences naming what is still not true. Render verbatim. */
-  reasons: string[];
-  is_repo: boolean;
-  commits: number;
-  ready_to_accept: boolean;
-  you_are_admin: boolean;
-  /** The server's own copy of the refusal sentence — carried so a caller never has to retype it. */
-  gate_sentence: string;
-};
-
-/** Read the company layer's state. Rides the authenticated catch-all proxy — `/api/global/state` →
- *  gateway `/agent/global/state` — the same edge `/api/workspace/*` uses, so the gateway resolves
- *  the caller's api-key to a user and agent-api answers for the real identity.
- *
- *  Throws (ApiError) on a non-2xx, and normalises an unrecognised body towards "missing". Note that
- *  this is the OPPOSITE fail-safe direction from the sign-in gate in api/auth/adminApi.ts, and
- *  deliberately so: there, guessing wrong locks every user out of a working instance, so it guesses
- *  "completed"; here, guessing wrong only makes the admin's own card keep waiting a few seconds
- *  longer, while guessing "completed" would declare setup finished on a garbled response and let the
- *  admin walk away from an instance that still serves nobody. Each direction is chosen against the
- *  damage its own mistake does. */
-export async function getGlobalState(): Promise<GlobalState> {
-  const body = (await jsonOrThrow(await fetch("/api/global/state", { cache: "no-store" }))) as Partial<GlobalState>;
-  const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((s): s is string => typeof s === "string") : []);
-  return {
-    global_setup: body.global_setup === "completed" ? "completed" : "missing",
-    company: typeof body.company === "string" && body.company.trim() ? body.company : null,
-    present: strings(body.present),
-    missing_files: strings(body.missing_files),
-    reasons: strings(body.reasons),
-    is_repo: body.is_repo === true,
-    commits: typeof body.commits === "number" ? body.commits : 0,
-    ready_to_accept: body.ready_to_accept === true,
-    you_are_admin: body.you_are_admin === true,
-    gate_sentence: typeof body.gate_sentence === "string" ? body.gate_sentence : "",
-  };
-}
+/** The admin-writable platform-settings keys: the two config domains. */
+export type GlobalSettingKey = "models" | "transcription";
 
 /** null ⇒ caller is not an admin (the route 404s) — the global card simply doesn't render. */
 export async function getGlobalSetting(key: GlobalSettingKey): Promise<GlobalSetting | null> {
@@ -128,6 +69,37 @@ export async function setGlobalSetting(key: GlobalSettingKey, update: GlobalSett
   });
   const body = await jsonOrThrow(res) as { value?: GlobalSetting };
   return body.value ?? {};
+}
+
+/** WHO MAY SIGN IN (Vexa-ai/vexa#1783) — the admin-edited half of the instance's sign-in allow-list,
+ *  over the same admin-gated route as the global defaults (`/api/admin/settings/signin`, 404 for
+ *  non-admins). `allow` is what the admin wrote; `env` is the deployment's `VEXA_SIGNIN_ALLOW`, shown
+ *  read-only because it is changed where it is set, not here; `envProblems` are env entries that can
+ *  never match (a typo like `example.com` without its `@`). The effective list is both. */
+export type SigninAllow = { allow: string; env: string; envProblems: string[] };
+
+/** null ⇒ caller is not an admin (the route 404s) — the Sign-in section simply doesn't render. */
+export async function getSigninAllow(): Promise<SigninAllow | null> {
+  const res = await fetch("/api/admin/settings/signin", { cache: "no-store" });
+  if (res.status === 404) return null;
+  const body = await jsonOrThrow(res) as { value?: { allow?: string }; env?: { allow?: string }; env_problems?: string[] };
+  return { allow: body.value?.allow ?? "", env: body.env?.allow ?? "", envProblems: body.env_problems ?? [] };
+}
+
+/** Replace the admin-edited list. Entries are exact addresses or `@domain`, separated by commas or
+ *  new lines; admin-api validates all-or-nothing (422 names every bad entry) and returns the list in
+ *  its canonical form. An empty string clears it. */
+export async function setSigninAllow(allow: string): Promise<string> {
+  const res = await fetch("/api/admin/settings/signin", {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ allow }),
+  });
+  const body = await jsonOrThrow(res) as { value?: { allow?: string } };
+  return body.value?.allow ?? "";
+}
+
+/** One entry per line, for the editor — the stored form is ", "-joined. */
+export function allowLines(stored: string): string {
+  return stored.split(/[\s,;]+/).map((e) => e.trim()).filter(Boolean).join("\n");
 }
 
 /** On-demand credential tests (agent-api /api/{models,transcription}/test via the catch-all →

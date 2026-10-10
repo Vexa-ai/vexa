@@ -32,7 +32,7 @@ transcript_cursor: 2026-09-06T12:04:31.000Z
 
 <!-- vexa:transcript meeting=147 -->
 
-I care about the licence question — ask Cottalango before this ends.
+I care about the licence question — ask Robin before this ends.
 
 ## Decisions
 <!-- meeting:decisions:start -->
@@ -40,7 +40,7 @@ I care about the licence question — ask Cottalango before this ends.
 <!-- meeting:decisions:end -->
 """
 
-HAND_WRITTEN = "I care about the licence question — ask Cottalango before this ends."
+HAND_WRITTEN = "I care about the licence question — ask Robin before this ends."
 
 
 def test_the_widget_slot_is_read_and_written_in_one_spelling():

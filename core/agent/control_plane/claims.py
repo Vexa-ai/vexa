@@ -12,16 +12,21 @@ without inspecting paths and guessing at contents, which is how a file route bec
 machine nobody declared. So the state machine moves here, beside the file, and the route above it
 publishes exactly one fact per claim.
 
-SCOPE, deliberately narrow: this module PROPOSES and nothing else. `validate` / verdicts /
-`mark_scaffolded` remain the rig's for now — they are a human's word on a claim, they belong with
-the desk-ready join, and moving them is a separate change with its own event. What is here is what
-`claim.proposed` needs to exist.
+BOTH HALVES LIVE HERE: an agent PROPOSES, and a person's answer is recorded as VERDICTS. The first
+verdict a person stands behind is also the desk becoming ready (`.scaffolded`) — answering IS the
+setup, and a separate third step was a step somebody could forget.
 """
 from __future__ import annotations
 
 import json
 import time
 from pathlib import Path
+
+from workspaces.shared import workspace_paths as wpaths
+
+#: The most claims one propose, or verdicts one validate, may carry (``bodies`` holds the request to
+#: the same bound; this holds every other caller to it).
+MAX_BATCH = 50
 
 #: Where the book lives on a desk. The SAME path the rig has always written and the same one flows'
 #: `await_claim` reads (`flows_defs/production.py` CLAIM_BOOK) — this change moves who writes it,
@@ -30,6 +35,15 @@ CLAIMS_PATH = "_pending/claims.json"
 
 MAX_CLAIM_CHARS = 600
 MAX_SOURCE_CHARS = 300
+MAX_NOTE_CHARS = 600
+
+#: The marker a finished setup leaves on the desk — the same file `flows_steps.common.scaffolded`
+#: reads to decide a desk is waiting for nothing.
+READY_MARKER = ".scaffolded"
+#: A person's word on a claim -> the state it leaves the claim in.
+VERDICTS = {"confirmed": "validated", "corrected": "corrected", "rejected": "rejected"}
+#: The states whose claim may be used as company context: a person stood behind it.
+USABLE = frozenset({"validated", "corrected"})
 
 
 def _load(workspace: Path) -> dict:
@@ -37,8 +51,10 @@ def _load(workspace: Path) -> dict:
     raised on: it is a person's own desk file, it can be edited by hand, and refusing to record
     what an agent just learned because an old file will not parse loses the new fact to protect the
     broken one."""
+    # The desk is a work tree the model's tools can write: the book is read nofollow, so a link at
+    # `_pending` or the file is an empty book, never somebody else's.
     try:
-        book = json.loads((workspace / CLAIMS_PATH).read_text(encoding="utf-8"))
+        book = json.loads(wpaths.read_text_inside(workspace, CLAIMS_PATH) or "{}")
     except Exception:  # noqa: BLE001
         book = {}
     if not isinstance(book, dict):
@@ -50,12 +66,10 @@ def _load(workspace: Path) -> dict:
 
 
 def _save(workspace: Path, book: dict) -> None:
-    f = workspace / CLAIMS_PATH
-    f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(json.dumps(book, indent=1), encoding="utf-8")
+    wpaths.write_text_inside(workspace, CLAIMS_PATH, json.dumps(book, indent=1))   # nofollow
 
 
-def propose(workspace: Path, batch: list) -> dict:
+def _propose(workspace: Path, batch: list) -> dict:
     """Record claims as PROPOSED. Returns the new ids, the whole book's view of them, and the exact
     lines to show the person.
 
@@ -94,3 +108,69 @@ def propose(workspace: Path, batch: list) -> dict:
                  "validate(verdicts=[{id, verdict, note}]) call. That call finishes the setup."),
         "note": "None of this counts as company context until a human has answered.",
     }
+
+
+def _record_verdicts(workspace: Path, batch: list) -> dict:
+    """Record a PERSON's word on proposed claims: `confirmed`, `corrected` (the original stays, the
+    correction is the note) or `rejected`. One call carries the whole answer.
+
+    A bad item — an id the book does not hold, a verdict that is not one of the three — is reported
+    in `errors` and the rest of the answer still lands: a person who answered five questions in one
+    sentence must not lose four of them to a typo in the fifth.
+
+    The first claim a person stands behind makes the desk READY: `.scaffolded` is written once and
+    never rewritten, because a desk that is ready stays ready."""
+    book = _load(workspace)
+    by_id = {str(c.get("id")): c for c in book["claims"] if isinstance(c, dict)}
+    recorded, errors = [], []
+    for v in batch:
+        vid = str(v.get("id") or "").strip()
+        verdict = str(v.get("verdict") or "").strip()
+        claim = by_id.get(vid)
+        if claim is None:
+            errors.append({"id": vid, "error": "no such claim"})
+            continue
+        if verdict not in VERDICTS:
+            errors.append({"id": vid, "error": "verdict must be confirmed | corrected | rejected"})
+            continue
+        claim.update(state=VERDICTS[verdict], verdict=verdict,
+                     human_note=str(v.get("note") or "")[:MAX_NOTE_CHARS],
+                     validated_at=time.time())
+        recorded.append({"id": vid, "state": claim["state"],
+                         "usable_as_context": claim["state"] in USABLE})
+    if recorded:
+        _save(workspace, book)
+    out: dict = {"recorded": recorded}
+    if errors:
+        out["errors"] = errors
+    if (any(r["usable_as_context"] for r in recorded)
+            and not wpaths.is_file_inside(workspace, READY_MARKER)):
+        usable = sum(1 for c in book["claims"] if isinstance(c, dict) and c.get("state") in USABLE)
+        wpaths.write_text_inside(workspace, READY_MARKER,
+                                 json.dumps({"ready": True, "at": time.time(),
+                                             "validated_claims": usable}))
+        out["workspace_ready"] = True
+        out["tell_your_person"] = ("One line — noted, write-ups will use it — then offer the next "
+                                   "thing. No recap of what you just did.")
+    return out
+
+
+# ── one writer at a time ─────────────────────────────────────────────────────────────────────────
+# The book is read, changed and written back. Two calls at once (two tabs, an agent and a person)
+# would each write the book they read and one of them would lose the other's claims or verdicts, so
+# both take the workspace's write lock — the one every commit to this tree already takes.
+
+def propose(workspace: Path, batch: list) -> dict:
+    """Record claims as PROPOSED, under the workspace's write lock (see ``_propose``)."""
+    from shared.adapters import workspace_write_lock
+
+    with workspace_write_lock(Path(workspace)):
+        return _propose(workspace, list(batch or [])[:MAX_BATCH])
+
+
+def record_verdicts(workspace: Path, batch: list) -> dict:
+    """Record the person's verdicts, under the workspace's write lock (see ``_record_verdicts``)."""
+    from shared.adapters import workspace_write_lock
+
+    with workspace_write_lock(Path(workspace)):
+        return _record_verdicts(workspace, list(batch or [])[:MAX_BATCH])

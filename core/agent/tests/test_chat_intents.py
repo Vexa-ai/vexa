@@ -32,8 +32,8 @@ def test_highlight_is_the_silent_one():
 
 
 def test_the_tokens_are_the_intents_own_fields_as_plain_strings():
-    t = tokens_for({"kind": "explore", "term": "Kaar Tech", "meeting": "41", "segment": "s7"})
-    assert t["term"] == "Kaar Tech" and t["meeting"] == "41" and t["segment"] == "s7"
+    t = tokens_for({"kind": "explore", "term": "Northwind Labs", "meeting": "41", "segment": "s7"})
+    assert t["term"] == "Northwind Labs" and t["meeting"] == "41" and t["segment"] == "s7"
 
 
 def test_an_absent_value_renders_as_nothing_never_as_the_word_None():

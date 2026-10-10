@@ -4,8 +4,8 @@ flowchart TB
     bot["bot"]
     agent_worker["agent-worker"]
   end
-  meeting_api -->|"POST /workloads spawn bot"| runtime_wl
-  agent_api -->|"POST /workloads spawn agent-worker"| runtime_wl
+  meeting_api -->|"meeting-api drives the kernel with Authorization: Bearer RUNTIME_API_TOKEN (runtime.v1 CallerCredential): POST /workloads to spawn a bot, GET /workloads/{id} to read it and DELETE /workloads/{id} to tear it down; its RuntimeEvents come back signed on rt-ma"| runtime_wl
+  agent_api -->|"agent-api drives the kernel with Authorization: Bearer RUNTIME_API_TOKEN (runtime.v1 CallerCredential): POST /workloads, GET /workloads and GET /workloads/{id} to spawn and track agent-worker workloads, and POST /schedule, GET /schedule and DELETE /schedule/{job_id} for routine jobs (schedule.v1)"| runtime_wl
   subgraph deploy_wl["deploy workloads"]
     gateway["gateway"]
     meeting_api["meeting-api"]
@@ -14,7 +14,7 @@ flowchart TB
     runtime["runtime"]
     redis["redis"]
     postgres["postgres"]
-    minio["minio"]
+    object_store["object-store"]
     transcription["transcription"]
   end
   subgraph deploy_wl["deploy workloads"]

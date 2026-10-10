@@ -73,7 +73,7 @@ def _configured_env() -> dict:
     for entry in declaration.get("keys") or []:
         if entry.get("class") == "required-explicit":
             env[entry["key"]] = f"real-{entry['key'].lower().replace('_', '-')}"
-    env["VEXA_FLOWS_DB_URL"] = "postgresql+psycopg://flows:pw@127.0.0.1:1/flows"
+    env["VEXA_FLOWS_DB_URL"] = "postgresql+pg8000://flows:pw@127.0.0.1:1/flows"
     # The doors `flows_config.preflight()` refuses without — flows' own rule, not the declaration's.
     env["VEXA_FLOWS_GATEWAY_URL"] = "http://127.0.0.1:1"
     env["VEXA_FLOWS_ADMIN_API_URL"] = "http://127.0.0.1:1"

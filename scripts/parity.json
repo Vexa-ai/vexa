@@ -30,7 +30,8 @@
     "set": "the captured text is split on commas/whitespace, unquoted, de-duped and sorted — membership must be identical, order and spelling of the container need not be",
     "regex-source": "the captured text is a regular expression SOURCE compared as a string. Used where the sites are in different languages and no shared module can exist (ADR-0036 item 10): two engines may still read one source differently, so this is the strongest check available without a mechanism that does not exist — and strictly stronger than the nothing there is today.",
     "(any kind) forbid_elsewhere": "names the literal itself: any non-test source file under `scan` that contains it and is not a declared site fails. A site list is only an inventory if nothing else writes the fact — without this, single-sourcing a mark today just means someone retypes it next month and the manifest reports green over two writers.",
-    "prose": "the captured text is a SENTENCE compared after its carrier is removed — blockquote markers, string-concatenation seams and whitespace runs collapse. A Python implicit-concat splits a sentence at whichever word hit the margin and a markdown file hard-wraps it; those are not different sentences. Apostrophes are NOT normalised: U+2019 vs U+0027 is a real difference in text a stranger reads."
+    "prose": "the captured text is a SENTENCE compared after its carrier is removed — blockquote markers, string-concatenation seams and whitespace runs collapse. A Python implicit-concat splits a sentence at whichever word hit the margin and a markdown file hard-wraps it; those are not different sentences. Apostrophes are NOT normalised: U+2019 vs U+0027 is a real difference in text a stranger reads.",
+    "header": "the captured text is an HTTP field name, compared case-insensitively (RFC 9110 section 5.1): `x-vexa-identity` and `X-Vexa-Identity` are one answer, and any other difference is a second"
   },
   "facts": [
     {
@@ -65,6 +66,607 @@
         },
         {
           "path": "core/runtime/src/runtime_kernel/config_preflight.py"
+        },
+        {
+          "path": "core/agent/services/credential-broker/src/credential_broker/config_preflight.py"
+        }
+      ]
+    },
+    {
+      "id": "no-image-backend-terminal",
+      "fact": "the sharp stand-in, in the pnpm tree and in the terminal's npm tree",
+      "kind": "file-bytes",
+      "enforced": true,
+      "canonical": "core/meetings/modules/no-image-backend/src/index.cjs",
+      "how_to_agree": "edit the module's copy and vendor it VERBATIM into clients/terminal/no-image-backend",
+      "why": "Both trees replace sharp so that nothing installs libvips (LGPL, FINOS Category X): pnpm-workspace.yaml links the module, and the terminal's npm project, whose build context is clients/terminal alone, carries its own copy (package.json \"sharp\": \"file:./no-image-backend\"). One stand-in, so one typed fault, in two places.",
+      "sites": [
+        {
+          "path": "core/meetings/modules/no-image-backend/src/index.cjs"
+        },
+        {
+          "path": "clients/terminal/no-image-backend/src/index.cjs"
+        }
+      ]
+    },
+    {
+      "id": "connection-setup-schema",
+      "fact": "the shape of a custom-service setup proposal",
+      "kind": "file-bytes",
+      "enforced": true,
+      "canonical": "core/agent/services/credential-broker/src/credential_broker/setup_schema.py",
+      "how_to_agree": "edit the broker's copy and vendor it VERBATIM into agent-api",
+      "why": "The credential broker validates and stores a setup proposal; agent-api publishes the same shape on the agent's connection_request tool so an agent sees every allowed key before it writes one, and a key outside it is refused by name. Two images, no shared module, so the copy is byte-compared.",
+      "sites": [
+        {
+          "path": "core/agent/services/credential-broker/src/credential_broker/setup_schema.py"
+        },
+        {
+          "path": "core/agent/control_plane/connection_setup_schema.py"
+        }
+      ]
+    },
+    {
+      "id": "credential-broker-assertion",
+      "fact": "the credential-broker.v1 assertion signer and verifier (Python)",
+      "kind": "file-bytes",
+      "enforced": true,
+      "canonical": "core/agent/contracts/credential-broker.v1/assertion.py",
+      "how_to_agree": "edit the contract's assertion.py, re-seal nothing (it is not a schema), then copy it VERBATIM over both vendored copies",
+      "why": "Three hand-written copies of this HMAC envelope (agent-api's Connections router, its Git store, the terminal) were the B1 finding on 0.13.2. The Python side is now one file vendored into the two packages that sign or verify, the config-preflight mechanism; the TypeScript twin (clients/terminal/src/app/api/connections/assertion.ts) is held to it by the contract's SignedAssertionVector goldens instead, because a byte comparison across languages means nothing.",
+      "sites": [
+        {
+          "path": "core/agent/contracts/credential-broker.v1/assertion.py"
+        },
+        {
+          "path": "core/agent/control_plane/broker_assertion.py"
+        },
+        {
+          "path": "core/agent/services/credential-broker/src/credential_broker/assertion.py"
+        }
+      ]
+    },
+    {
+      "id": "git-exec",
+      "fact": "how this domain runs git inside a workspace repository",
+      "kind": "file-bytes",
+      "enforced": true,
+      "canonical": "core/agent/shared/gitexec.py",
+      "how_to_agree": "edit core/agent/shared/gitexec.py and copy it VERBATIM over core/agent/llm/gitexec.py and core/workspaces/shared/gitexec.py",
+      "why": "agent-api and the worker run git in repositories whose files more than one party writes, and the rules that keep a repository from choosing what git runs (pinned command-line config, scrubbed environment, the allow-list the repository's own config is reduced to, the shape checks) must be the same everywhere. The worker's llm package imports no product code and the workspace primitives import nothing from core/agent, so the module is vendored into both and byte-compared; core/agent/tests/test_git_single_path.py fails on any git subprocess in core/agent or core/workspaces that does not go through it.",
+      "sites": [
+        {
+          "path": "core/agent/shared/gitexec.py"
+        },
+        {
+          "path": "core/agent/llm/gitexec.py"
+        },
+        {
+          "path": "core/workspaces/shared/gitexec.py"
+        }
+      ]
+    },
+    {
+      "id": "workspace-paths",
+      "fact": "how this domain reaches a file inside a work tree the model's tools can write",
+      "kind": "file-bytes",
+      "enforced": true,
+      "canonical": "core/workspaces/shared/workspace_paths.py",
+      "how_to_agree": "edit core/workspaces/shared/workspace_paths.py and copy it VERBATIM over core/agent/llm/workspace_paths.py",
+      "why": "agent-api and the worker, both root, read and write fixed platform files inside work trees the model's tools also write during a turn; a plain open follows a symlink planted at the file or any directory above it, redirecting a root read (its bytes reaching a caller or the model) or a root write (a credential, an identity, a member list) into another tenant's tree. One module holds the no-follow rule. The worker's llm package imports no product code, so it is vendored there and byte-compared; core/agent/tests/test_worktree_io_single_path.py fails on a bare open/read_text/write_text/read_bytes/write_bytes/rmtree in core/agent or core/workspaces that is not allow-listed with a reason.",
+      "sites": [
+        {
+          "path": "core/workspaces/shared/workspace_paths.py"
+        },
+        {
+          "path": "core/agent/llm/workspace_paths.py"
+        }
+      ]
+    },
+    {
+      "id": "outbound-url-vectors",
+      "fact": "the table both outbound URL guards are held to — the Python ssrf.py and the TypeScript url-guard.ts",
+      "kind": "file-bytes",
+      "enforced": true,
+      "canonical": "deploy/contracts/outbound-url.v1/golden/outbound-url-vectors.json",
+      "how_to_agree": "edit the contract's golden table and copy it VERBATIM over every other site; both test suites must stay green",
+      "why": "The bot's guard is TypeScript and cannot import ssrf.py; a byte comparison across languages means nothing, so the two share a vector table instead: the golden of outbound-url.v1. The Python suite (meeting-api tests/test_outbound_url_vectors.py) and the TypeScript suite (@vexa/transcribe-whisper src/url-guard.test.ts) each read their own copy, and this fact keeps the copies one table (ADR-0044).",
+      "sites": [
+        {
+          "path": "deploy/contracts/outbound-url.v1/golden/outbound-url-vectors.json"
+        },
+        {
+          "path": "core/meetings/services/meeting-api/tests/fixtures/outbound-url-vectors.json"
+        },
+        {
+          "path": "core/meetings/modules/whisper/src/outbound-url-vectors.json"
+        }
+      ]
+    },
+    {
+      "id": "outbound-url-guard",
+      "fact": "whether a server may fetch a URL somebody else supplied: the address lists, the IPv6 forms read for the IPv4 address they carry, and the connection pinned to the checked address",
+      "kind": "file-bytes",
+      "enforced": true,
+      "canonical": "deploy/contracts/outbound-url.v1/ssrf.py",
+      "how_to_agree": "edit the canonical copy in the contract directory and copy it VERBATIM over every other site",
+      "why": "Six spellings of this rule existed (meeting-api's webhook guard, agent-api's asset fetch, the worker's WebFetch, the model-endpoint gate, the repository host check, the credential broker), each reading a different subset of address notations. Five separately-built images fetch user-supplied URLs and may not import each other (P2), so the module is vendored and byte-compared (ADR-0044); its canonical copy lives with the rule, in outbound-url.v1.",
+      "sites": [
+        {
+          "path": "deploy/contracts/outbound-url.v1/ssrf.py"
+        },
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/webhooks/ssrf.py"
+        },
+        {
+          "path": "core/identity/services/admin-api/src/admin_api/app/ssrf.py"
+        },
+        {
+          "path": "core/agent/shared/ssrf.py"
+        },
+        {
+          "path": "core/agent/llm/ssrf.py"
+        },
+        {
+          "path": "core/agent/services/credential-broker/src/credential_broker/ssrf.py"
+        }
+      ]
+    },
+    {
+      "id": "credential-broker-assertion-fields",
+      "fact": "the claims a credential-broker.v1 assertion binds, in the Python signer, the TypeScript signer and the contract's validator",
+      "kind": "set",
+      "enforced": true,
+      "canonical": "core/agent/contracts/credential-broker.v1/assertion.py — _FIELDS",
+      "how_to_agree": "a new claim is a contract change: assertion.py (then its vendored copies), assertion.ts, validate.mjs and the SignedAssertionVector goldens in one change",
+      "why": "The byte comparison holds the three Python copies; the TypeScript twin and the contract's Node validator each retype the claim list. Membership is held here; the ORDER, which the encoding depends on, is held by the signed vectors all three re-derive.",
+      "sites": [
+        {
+          "path": "core/agent/contracts/credential-broker.v1/assertion.py",
+          "pattern": "^_FIELDS = \\(([^)]*)\\)"
+        },
+        {
+          "path": "clients/terminal/src/app/api/connections/assertion.ts",
+          "pattern": "^const FIELDS = \\[([^\\]]*)\\]"
+        },
+        {
+          "path": "core/agent/contracts/credential-broker.v1/validate.mjs",
+          "pattern": "^const ORDER = \\[([^\\]]*)\\]"
+        }
+      ]
+    },
+    {
+      "id": "credential-broker-assertion-header",
+      "fact": "the header a credential-broker.v1 assertion travels in",
+      "kind": "header",
+      "enforced": true,
+      "canonical": "core/agent/contracts/credential-broker.v1/assertion.py — HEADER",
+      "how_to_agree": "rename in the contract, its vendored copies and the TypeScript signer in one change",
+      "why": "The terminal signs in TypeScript and the broker reads the Python constant; a spelling that differs refuses every human-role call with a malformed-assertion 401.",
+      "sites": [
+        {
+          "path": "core/agent/contracts/credential-broker.v1/assertion.py",
+          "pattern": "^HEADER = \"([^\"]+)\""
+        },
+        {
+          "path": "clients/terminal/src/app/api/connections/assertion.ts",
+          "pattern": "^export const ASSERTION_HEADER = '([^']+)'"
+        }
+      ]
+    },
+    {
+      "id": "identity-token",
+      "fact": "gateway-identity.v1 — the signed identity the gateway forwards and the guard that checks it",
+      "kind": "file-bytes",
+      "enforced": true,
+      "canonical": "core/gateway/contracts/gateway-identity.v1/identity_token.py",
+      "how_to_agree": "edit the canonical copy in the contract and vendor it VERBATIM into each package that signs or verifies",
+      "why": "One signer (the gateway, the only holder of the Ed25519 private key) and three verifiers (agent-api, meeting-api, the credential broker, holding the public key) in four separately-built images that may not import each other (P2). A verifier that drifts from its signer refuses every request or, worse, accepts one it should not; the bytes are compared so neither can happen quietly. Since S35 (PR #1784 pass 3) the file also carries the person-in-the-loop rule (is_delegated, is_unwatched) and the one refusal (REFUSAL) agent-api's ceiling.py and meeting-api's regime.py answer with, so the two facts that held those copies by hand (person-refusal, delegated-identity-headers) are retired: one byte-gated file holds them.",
+      "sites": [
+        {
+          "path": "core/gateway/contracts/gateway-identity.v1/identity_token.py"
+        },
+        {
+          "path": "core/gateway/services/gateway/src/gateway/identity_token.py"
+        },
+        {
+          "path": "core/agent/control_plane/identity_token.py"
+        },
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/identity_token.py"
+        },
+        {
+          "path": "core/agent/services/credential-broker/src/credential_broker/identity_token.py"
+        }
+      ]
+    },
+    {
+      "id": "identity-header",
+      "fact": "the header the gateway's signed identity travels in (gateway-identity.v1 X-Vexa-Identity)",
+      "kind": "header",
+      "enforced": true,
+      "canonical": "core/gateway/contracts/gateway-identity.v1/identity_token.py — HEADER (vendored byte for byte, fact identity-token)",
+      "how_to_agree": "read identity_token.HEADER where the package vendors it; where it does not (the MCP), spell it identically",
+      "why": "Every verifier reads the signed identity from this header, agent-api forwards it to the credential broker under it, and the MCP picks it up to hand back on re-entry. A site that spells it differently forwards nothing and reads nothing, and every check behind it fails closed for a reason no log names. The vendored identity_token.py copies are held by identity-token; these are the sites that retype it.",
+      "sites": [
+        {
+          "path": "core/gateway/contracts/gateway-identity.v1/identity_token.py",
+          "pattern": "^HEADER = \"([^\"]+)\""
+        },
+        {
+          "path": "core/meetings/services/mcp/src/vexa_mcp/reentry.py",
+          "pattern": "^INBOUND_HEADER = \"([^\"]+)\""
+        }
+      ]
+    },
+    {
+      "id": "mcp-reentry-header",
+      "fact": "the header the MCP re-enters the gateway with (gateway-identity.v1 ReentryHeader)",
+      "kind": "header",
+      "enforced": true,
+      "canonical": "core/gateway/contracts/gateway-identity.v1/identity.schema.json — $defs.ReentryHeader",
+      "how_to_agree": "a new name is a contract change: the schema, the gateway and the MCP in one change, re-sealed",
+      "why": "The MCP writes it and the gateway reads it, in two images. A spelling that differs leaves every worker's tool call looking like a direct REST call, refused 403, with both ends' own tests green.",
+      "sites": [
+        {
+          "path": "core/gateway/contracts/gateway-identity.v1/identity.schema.json",
+          "pattern": "\"ReentryHeader\": \\{\\s*\"const\": \"([^\"]+)\""
+        },
+        {
+          "path": "core/gateway/services/gateway/src/gateway/delegation.py",
+          "pattern": "^MCP_REENTRY_HEADER = \"([^\"]+)\""
+        },
+        {
+          "path": "core/meetings/services/mcp/src/vexa_mcp/reentry.py",
+          "pattern": "^OUTBOUND_HEADER = \"([^\"]+)\""
+        }
+      ]
+    },
+    {
+      "id": "delegation-token",
+      "fact": "delegation.v1 — the minter and verifier of a worker's per-dispatch vxd_ token",
+      "kind": "file-bytes",
+      "enforced": true,
+      "canonical": "core/identity/contracts/delegation.v1/delegation.py",
+      "how_to_agree": "edit the contract's delegation.py, then copy it VERBATIM over both vendored copies; a change to the wire also changes delegation.schema.json and its goldens, and re-seals",
+      "why": "agent-api mints the token and identity verifies it, in two images that may not import each other (P2). A minter and verifier that drift either refuse every worker or accept a token they should not, and nothing at runtime would say which. The copies were byte-identical by hand before this fact; now the gate is the reason they stay so.",
+      "sites": [
+        {
+          "path": "core/identity/contracts/delegation.v1/delegation.py"
+        },
+        {
+          "path": "core/agent/shared/delegation.py"
+        },
+        {
+          "path": "core/identity/services/admin-api/src/admin_api/delegation.py"
+        }
+      ]
+    },
+    {
+      "id": "delegation-prefix",
+      "fact": "the prefix that marks a bearer as a delegation token",
+      "kind": "literal",
+      "enforced": true,
+      "canonical": "core/identity/contracts/delegation.v1/delegation.py — PREFIX",
+      "how_to_agree": "change the contract's PREFIX and every site in one change",
+      "why": "The gateway decides from the prefix alone that a bearer is a worker's, before identity answers, and refuses it on every route but /mcp. A gateway that spells the prefix differently from the minter admits a worker's token on a person's routes. The two vendored delegation.py copies are held by delegation-token; these are the other places the prefix is written. flows-api reads it too: a vxd_ bearer whose identity answer lost its delegation is still a worker's there.",
+      "sites": [
+        {
+          "path": "core/identity/contracts/delegation.v1/delegation.py",
+          "pattern": "^PREFIX = \"([^\"]+)\""
+        },
+        {
+          "path": "core/identity/contracts/delegation.v1/validate.mjs",
+          "pattern": "^const PREFIX = \"([^\"]+)\""
+        },
+        {
+          "path": "core/gateway/services/gateway/src/gateway/delegation.py",
+          "pattern": "^DELEGATION_TOKEN_PREFIX = \"([^\"]+)\""
+        },
+        {
+          "path": "deploy/dogfood/rig/vexa_control_mcp.py",
+          "pattern": "^DELEGATION_PREFIX = \"([^\"]+)\""
+        },
+        {
+          "path": "core/flows/src/flows_integrations/subject_auth.py",
+          "pattern": "^DELEGATION_TOKEN_PREFIX = \"([^\"]+)\""
+        }
+      ]
+    },
+    {
+      "id": "delegation-accept-header",
+      "fact": "the header a caller of identity's /internal/validate declares it reads a delegation answer with (identity.v1 AcceptsDelegationHeader)",
+      "kind": "header",
+      "enforced": true,
+      "canonical": "core/identity/contracts/identity.v1/identity.schema.json — $defs.AcceptsDelegationHeader",
+      "how_to_agree": "a new name is a contract change: the schema, admin-api and every resolver that reads delegation in one change, re-sealed",
+      "why": "Identity answers a worker's vxd_ token only to a caller that sends this header, so a resolver that predates delegation fails closed instead of taking the worker for its person. Identity reads it and the gateway and flows-api send it, in three images. A sender that spells it differently is answered 401 for every worker, with each side's own tests green.",
+      "sites": [
+        {
+          "path": "core/identity/contracts/identity.v1/identity.schema.json",
+          "pattern": "\"AcceptsDelegationHeader\": \\{\\s*\"const\": \"([^\"]+)\""
+        },
+        {
+          "path": "core/identity/services/admin-api/src/admin_api/app/validate.py",
+          "pattern": "^ACCEPTS_DELEGATION_HEADER = \"([^\"]+)\""
+        },
+        {
+          "path": "core/gateway/services/gateway/src/gateway/adapters.py",
+          "pattern": "^ACCEPTS_DELEGATION_HEADER = \"([^\"]+)\""
+        },
+        {
+          "path": "core/flows/src/flows_integrations/subject_auth.py",
+          "pattern": "^ACCEPTS_DELEGATION_HEADER = \"([^\"]+)\""
+        }
+      ]
+    },
+    {
+      "id": "delegation-revocation-key",
+      "fact": "the Redis key prefix a revoked delegation token is written under, vexa:delegation:revoked:<jti>",
+      "kind": "literal",
+      "enforced": true,
+      "canonical": "core/agent/control_plane/delegation_revocation.py — REVOKED_PREFIX (agent-api is the store's only writer)",
+      "how_to_agree": "rename it in both modules in one change; tokens revoked under the old name stay revoked only until they expire, so ship it with a release that restarts both",
+      "why": "agent-api writes the key when a worker's unit ends and identity checks it before answering for a vxd_ bearer. The two are different images with no shared module, and a reader that spells the key differently finds nothing and answers for every revoked token, with each side's own tests green.",
+      "sites": [
+        {
+          "path": "core/agent/control_plane/delegation_revocation.py",
+          "pattern": "^REVOKED_PREFIX = \"([^\"]+)\""
+        },
+        {
+          "path": "core/identity/services/admin-api/src/admin_api/app/delegation_revocation.py",
+          "pattern": "^REVOKED_PREFIX = \"([^\"]+)\""
+        }
+      ]
+    },
+    {
+      "id": "delegation-live-key",
+      "fact": "the Redis key prefix a delegation token is held live under until it is revoked or expires, vexa:delegation:live:<jti>",
+      "kind": "literal",
+      "enforced": true,
+      "canonical": "core/agent/control_plane/delegation_revocation.py — LIVE_PREFIX (agent-api is the store's only writer)",
+      "how_to_agree": "rename it in both modules in one change and restart both; tokens recorded under the old name are refused until they are re-minted",
+      "why": "agent-api writes the key when it records a token and identity admits a vxd_ bearer only while it exists. The two are different images with no shared module; a reader that spells the key differently refuses every token, and a writer that does admits none, with each side's own tests green.",
+      "sites": [
+        {
+          "path": "core/agent/control_plane/delegation_revocation.py",
+          "pattern": "^LIVE_PREFIX = \"([^\"]+)\""
+        },
+        {
+          "path": "core/identity/services/admin-api/src/admin_api/app/delegation_revocation.py",
+          "pattern": "^LIVE_PREFIX = \"([^\"]+)\""
+        }
+      ]
+    },
+    {
+      "id": "flows-person-refusal",
+      "fact": "the refusal a worker with nobody in the loop reads from flows-api (gateway-identity.v1 REFUSAL, human_session_required)",
+      "kind": "prose",
+      "enforced": true,
+      "canonical": "core/gateway/contracts/gateway-identity.v1/identity_token.py — REFUSAL",
+      "how_to_agree": "change the contract's REFUSAL (and its vendored copies, fact identity-token) and flows-api's copy in one change",
+      "why": "agent-api and meeting-api answer an unwatched worker with the vendored identity_token.REFUSAL; flows-api resolves its caller through identity itself, not through the gateway's signed identity, so it does not vendor that file and holds a copy. A reworded copy would teach a worker two instructions for one rule.",
+      "sites": [
+        {
+          "path": "core/gateway/contracts/gateway-identity.v1/identity_token.py",
+          "pattern": "(\"status\": \"refused\",\\s*\"reason\": \"human_session_required\",[\\s\\S]*?another way\\.\")"
+        },
+        {
+          "path": "core/flows/src/flows_integrations/subject_auth.py",
+          "pattern": "(\"status\": \"refused\",\\s*\"reason\": \"human_session_required\",[\\s\\S]*?another way\\.\")"
+        }
+      ]
+    },
+    {
+      "id": "runtime-callback-signature",
+      "fact": "how a RuntimeEvent callback is signed: the key-derivation label (runtime.v1 CallbackSignature)",
+      "kind": "literal",
+      "enforced": true,
+      "canonical": "core/runtime/contracts/runtime.v1/runtime.schema.json — $defs.CallbackSignature",
+      "how_to_agree": "a new label is a new signature version: change the contract, the runtime's signer, meeting-api's verifier and the vectors in one change",
+      "why": "The runtime signs and meeting-api verifies, in two images with no shared module. A label that differs on one side refuses every runtime callback, so no meeting ever sees its bot's workload end. The vector below holds the whole derivation; this holds the one constant each side retypes.",
+      "sites": [
+        {
+          "path": "core/runtime/contracts/runtime.v1/validate.mjs",
+          "pattern": "^const CALLBACK_LABEL = \"([^\"]+)\""
+        },
+        {
+          "path": "core/runtime/src/runtime_kernel/caller_auth.py",
+          "pattern": "^_CALLBACK_LABEL = b\"([^\"]+)\""
+        },
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/runtime_signature.py",
+          "pattern": "^_LABEL = b\"([^\"]+)\""
+        }
+      ]
+    },
+    {
+      "id": "meeting-token-key-label",
+      "fact": "the purpose label the MeetingToken key is derived under: HMAC-SHA256(ADMIN_TOKEN, label)",
+      "kind": "literal",
+      "enforced": true,
+      "canonical": "core/meetings/services/meeting-api/src/meeting_api/meeting_token.py — KEY_LABEL",
+      "how_to_agree": "a new label is a new key: change meeting-api's minter and both live-proof copies in one change, and upgrade between meetings",
+      "why": "meeting-api is the only service that mints or verifies a MeetingToken, and it no longer signs one with the admin secret itself but with a key derived from it under this label. The compose recording proof and the Helm round trip mint their own tokens to drive the real upload door; a copy whose label differs mints tokens the door refuses, and the proof fails for a reason no log names. meeting-api's tests and the compose copy also pin one derivation vector.",
+      "sites": [
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/meeting_token.py",
+          "pattern": "^KEY_LABEL = b\"([^\"]+)\""
+        },
+        {
+          "path": "deploy/compose/tests/_token.py",
+          "pattern": "^KEY_LABEL = b\"([^\"]+)\"",
+          "note": "the compose recording proof's minter"
+        },
+        {
+          "path": "deploy/helm/tests/recording_roundtrip.py",
+          "pattern": "^KEY_LABEL = b\"([^\"]+)\"",
+          "note": "the Helm recording round trip's minter"
+        }
+      ]
+    },
+    {
+      "id": "runtime-callback-header",
+      "fact": "the header a RuntimeEvent callback carries its signature in",
+      "kind": "literal",
+      "enforced": true,
+      "canonical": "core/runtime/src/runtime_kernel/caller_auth.py — SIGNATURE_HEADER",
+      "how_to_agree": "rename on both sides in one change",
+      "why": "The signer writes the header and the verifier reads it, and an unread header is an unsigned callback: every one refused.",
+      "sites": [
+        {
+          "path": "core/runtime/src/runtime_kernel/caller_auth.py",
+          "pattern": "^SIGNATURE_HEADER = \"([^\"]+)\""
+        },
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/runtime_signature.py",
+          "pattern": "^HEADER = \"([^\"]+)\""
+        }
+      ]
+    },
+    {
+      "id": "runtime-callback-vector",
+      "fact": "the callback-signing vector both sides' tests and the contract pin",
+      "kind": "literal",
+      "enforced": true,
+      "canonical": "core/runtime/contracts/runtime.v1/golden/signed-event-stopped.json",
+      "how_to_agree": "re-derive the vector once and paste the same signature into the golden and both tests",
+      "why": "Each side's test pins its own implementation to a literal; the contract's validate.mjs re-derives the golden in Node. Holding the three literals equal is what makes them one vector rather than three that happen to agree today.",
+      "sites": [
+        {
+          "path": "core/runtime/contracts/runtime.v1/golden/signed-event-stopped.json",
+          "pattern": "\"signature\": \"(t=[0-9]+,v2=[0-9a-f]{64})\""
+        },
+        {
+          "path": "core/runtime/tests/test_caller_auth.py",
+          "pattern": "^VECTOR_SIGNATURE = \"(t=[0-9]+,v2=[0-9a-f]{64})\""
+        },
+        {
+          "path": "core/meetings/services/meeting-api/tests/test_runtime_callback_signature.py",
+          "pattern": "^SIGNATURE = \"(t=[0-9]+,v2=[0-9a-f]{64})\""
+        }
+      ]
+    },
+    {
+      "id": "segment-entry-signer",
+      "fact": "transcript.v1's signer for one transcription_segments entry (Python)",
+      "kind": "file-bytes",
+      "enforced": true,
+      "canonical": "core/meetings/contracts/transcript.v1/segment_entry.py",
+      "how_to_agree": "edit the contract's segment_entry.py, then copy it VERBATIM over both vendored copies; a change to the wire also changes the StreamEntry schema, the SignedEntryVector golden and the bot's entryAuth, and re-seals",
+      "why": "meeting-api's collector checks and its tools sign the entry; the compose stack test signs the entries it injects. The test's hand copy was a third spelling of the HMAC (architecture pass 4, S43). One file, compared by bytes; the bot's TypeScript twin is held by the vector.",
+      "sites": [
+        {
+          "path": "core/meetings/contracts/transcript.v1/segment_entry.py"
+        },
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/collector/segment_entry.py"
+        },
+        {
+          "path": "deploy/compose/tests/_segment_entry.py"
+        }
+      ]
+    },
+    {
+      "id": "session-profile-contract",
+      "fact": "the session-profile.v1 contract: the profile a stored browser session may hold, and its write-back route",
+      "kind": "file-bytes",
+      "enforced": true,
+      "canonical": "core/meetings/contracts/session-profile.v1/session-profile.schema.json",
+      "how_to_agree": "edit the contract's schema, re-seal (pnpm seal:contracts), then copy it VERBATIM over both vendored copies; both runtimes' tests read the contract's PathVectors goldens",
+      "why": "An authenticated bot restores only the profile's paths (@vexa/remote-browser, in the bot image) and meeting-api stores only the profile's paths from a write-back (session_profile, in the meeting-api image). Two images and two languages, no shared module, so each reads its own copy of the sealed schema's $defs.SessionProfile, and this fact makes the three files one (architecture pass 6, S62). The two path matchers are held by the contract's PathVectors instead, because a byte comparison across languages means nothing.",
+      "sites": [
+        {
+          "path": "core/meetings/contracts/session-profile.v1/session-profile.schema.json"
+        },
+        {
+          "path": "core/meetings/modules/remote-browser/src/session-profile.v1.schema.json"
+        },
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/session_profile/session-profile.v1.schema.json"
+        }
+      ]
+    },
+    {
+      "id": "segment-entry-vector",
+      "fact": "the signing vector for a transcription_segments entry that the contract, the bot and meeting-api pin",
+      "kind": "literal",
+      "enforced": true,
+      "canonical": "core/meetings/contracts/transcript.v1/golden/SignedEntryVector.meeting-42.json",
+      "how_to_agree": "re-derive the vector once and paste the same signature into the golden and both tests",
+      "why": "The bot (TypeScript) signs and the collector (Python) verifies; each test pins its own implementation to a literal, and validate.mjs re-derives the golden in Node. Holding the three literals equal makes them one vector. A third-party tool told to 'sign the same way' reads the contract's.",
+      "sites": [
+        {
+          "path": "core/meetings/contracts/transcript.v1/golden/SignedEntryVector.meeting-42.json",
+          "pattern": "\"sig\": \"([0-9a-f]{64})\""
+        },
+        {
+          "path": "core/meetings/services/bot/src/adapters/transcript-redis.test.ts",
+          "pattern": "vector\\.sig === '([0-9a-f]{64})'"
+        },
+        {
+          "path": "core/meetings/services/meeting-api/tests/test_segment_entry_auth.py",
+          "pattern": "assert sig == \"([0-9a-f]{64})\""
+        }
+      ]
+    },
+    {
+      "id": "transcript-feed-key",
+      "fact": "the key of the per-meeting transcript feed, tc:meeting:{meeting row id} (transcript.v1 FeedEntry)",
+      "kind": "literal",
+      "enforced": true,
+      "canonical": "core/meetings/services/meeting-api/src/meeting_api/collector/ingest.py — _transcript_stream (the collector is the feed's only writer)",
+      "how_to_agree": "rename the key in every reader and the writer in one change, and in transcript.v1's FeedEntry",
+      "why": "The collector writes the feed and agent-api acts on it: the watcher registers and ends meetings from it, the live view and the admin panel read it, and meeting-api's erase paths delete it. A reader that spells the key differently sees an empty feed and nothing says why (architecture pass 4, S50). The eval replay tools also spell it; they are tools, not product, and are not sites.",
+      "sites": [
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/collector/ingest.py",
+          "pattern": "f\"(tc:meeting:)\\{[a-z_]+\\}\""
+        },
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/collector/ports.py",
+          "pattern": "f\"(tc:meeting:)\\{[a-z_]+\\}\""
+        },
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/lifecycle/mount.py",
+          "pattern": "f\"(tc:meeting:)\\{[a-z_]+\\}\"",
+          "all": true,
+          "note": "the erase paths"
+        },
+        {
+          "path": "core/agent/control_plane/transcription_watcher.py",
+          "pattern": "f\"(tc:meeting:)\\{[a-z_]+\\}\""
+        },
+        {
+          "path": "core/agent/control_plane/api_shared.py",
+          "pattern": "f\"(tc:meeting:)\\{[a-z_]+\\}\""
+        },
+        {
+          "path": "core/agent/control_plane/routers/meetings.py",
+          "pattern": "f\"(tc:meeting:)\\{[a-z_]+\\}\""
+        },
+        {
+          "path": "core/agent/control_plane/admin_panel.py",
+          "pattern": "f\"(tc:meeting:)\\{[a-z_]+\\}\""
+        }
+      ]
+    },
+    {
+      "id": "unit-input-label",
+      "fact": "the key-derivation label of a unit's input-stream key (unit.v1 InputEntry)",
+      "kind": "literal",
+      "enforced": true,
+      "canonical": "core/agent/shared/unit_input.py — _LABEL",
+      "how_to_agree": "a new label is a new envelope version: change unit_input.py, unit.v1 and its vector in one change, and re-seal",
+      "why": "agent-api signs and the worker verifies with one module, but the contract's validate.mjs restates the derivation to re-derive the vector; a label that differs there leaves the vector proving a scheme nobody runs.",
+      "sites": [
+        {
+          "path": "core/agent/shared/unit_input.py",
+          "pattern": "^_LABEL = b\"([^\"]+)\""
+        },
+        {
+          "path": "core/agent/contracts/unit.v1/validate.mjs",
+          "pattern": "^const UNIT_INPUT_LABEL = \"([^\"]+)\""
         }
       ]
     },
@@ -75,14 +677,14 @@
       "enforced": true,
       "canonical": "core/agent/shared/marks.py",
       "how_to_agree": "import it from shared.marks in Python; the terminal's copy is the one genuine mirror and this gate is what keeps it honest",
-      "why": "Was written FOUR times across three images — control_plane/chat_intents.py, control_plane/scaffolds.py, worker/engine.py, clients/terminal/src/canvas/actions.ts — each with a comment saying the duplication was deliberate because 'the sides ship in different images'. True of the TypeScript copy; never true of the Python ones: core/agent/shared is COPY'd into agent-api, the worker AND lite, and two of the three modules already imported from it at module scope. Three images were agreeing on a literal by hand while the module that could hold it was already in all three. The Python side is now one definition; what is left is the one copy that cannot import Python, and it is gated here rather than hoped about in a comment.",
+      "why": "Was written FOUR times across three images — control_plane/chat_intents.py, control_plane/scaffolds.py, worker/engine.py, clients/terminal/src/canvas/actions.ts (now platform/turnMarks.ts) — each with a comment saying the duplication was deliberate because 'the sides ship in different images'. True of the TypeScript copy; never true of the Python ones: core/agent/shared is COPY'd into agent-api, the worker AND lite, and two of the three modules already imported from it at module scope. Three images were agreeing on a literal by hand while the module that could hold it was already in all three. The Python side is now one definition; what is left is the one copy that cannot import Python, and it is gated here rather than hoped about in a comment.",
       "sites": [
         {
           "path": "core/agent/shared/marks.py",
           "pattern": "^MACHINERY_MARK = \"([^\"]+)\""
         },
         {
-          "path": "clients/terminal/src/canvas/actions.ts",
+          "path": "clients/terminal/src/platform/turnMarks.ts",
           "pattern": "MACHINERY_MARK = \"([^\"]+)\""
         }
       ],
@@ -124,21 +726,21 @@
       "enforced": true,
       "canonical": "core/flows/src/flows_steps/common.py — INTERNAL_SECRET_PLACEHOLDERS (the list with a name; the JSON contracts carry it as data)",
       "how_to_agree": "one list; a contract that adds a placeholder adds it everywhere, or the boot preflight of one service accepts what another refuses",
-      "why": "Ten retypings of one seven-value list across five config.v1 contracts and two Python modules. Unlike every other fact on this page it has NOT drifted — every site is value- and order-identical today — which is exactly why it is enforced rather than laddered: this is the moment the gate costs nothing and buys everything. F95 was one secret with three names shipping the published placeholder as its default; the whole point of the list is that every service refuses the SAME values. There is nothing in deploy/contracts/config.v1 to import from — the schema types forbidden_values as an unconstrained string array — so extracting a shared artefact is a contract change and a design choice, and this PR does not make it. The gate holds the ten in agreement until someone does.",
+      "why": "Ten retypings of one seven-value list across five config.v1 contracts and two Python modules. Unlike every other fact on this page it has NOT drifted — every site is value- and order-identical today — which is exactly why it is enforced rather than laddered: this is the moment the gate costs nothing and buys everything. F95 was one secret with three names shipping the published placeholder as its default; the whole point of the list is that every service refuses the SAME values. There is nothing in deploy/contracts/config.v1 to import from — the schema types forbidden_values as an unconstrained string array — so extracting a shared artefact is a contract change and a design choice, and this PR does not make it. The gate holds the ten in agreement until someone does. Since then the runtime declared a caller credential with the same list (its boot check reads that declaration), and flows-api keeps a fallback copy; both are sites now, so a placeholder added to one list and not another fails here instead of letting one service boot with a value another refuses.",
       "sites": [
         {
           "path": "core/agent/control_plane/config.v1.json",
-          "pattern": "\"forbidden_values\"\\s*:\\s*\\[([^\\]]*)\\]",
+          "pattern": "\"key\"\\s*:\\s*\"(?!VEXA_MCP_DELEGATION_SECRET\"|VEXA_DISPATCH_SIGNING_KEY\")[A-Z0-9_]+\"[^{}]*?\"forbidden_values\"\\s*:\\s*\\[([^\\]]*)\\]",
           "flags": "m",
           "all": true,
-          "note": "every forbidden_values list in this contract must be the same list"
+          "note": "every forbidden_values list in this contract but the delegation secret's (fact delegation-secret-placeholders) and the dispatch signing key's (fact dispatch-key-placeholders) must be the same list"
         },
         {
           "path": "core/flows/src/config.v1.json",
-          "pattern": "\"forbidden_values\"\\s*:\\s*\\[([^\\]]*)\\]",
+          "pattern": "\"key\"\\s*:\\s*\"(?!VEXA_FLOWS_ADMIN_KEY\")[A-Z0-9_]+\"[^{}]*?\"forbidden_values\"\\s*:\\s*\\[([^\\]]*)\\]",
           "flags": "m",
           "all": true,
-          "note": "every forbidden_values list in this contract must be the same list"
+          "note": "every forbidden_values list in this contract but the admin key's (fact admin-token-placeholders) must be the same list"
         },
         {
           "path": "core/gateway/services/gateway/src/gateway/config.v1.json",
@@ -149,17 +751,17 @@
         },
         {
           "path": "core/identity/services/admin-api/src/admin_api/config.v1.json",
-          "pattern": "\"forbidden_values\"\\s*:\\s*\\[([^\\]]*)\\]",
+          "pattern": "\"key\"\\s*:\\s*\"(?!DB_PASSWORD\"|VEXA_MCP_DELEGATION_SECRET\"|ADMIN_API_TOKEN\")[A-Z0-9_]+\"[^{}]*?\"forbidden_values\"\\s*:\\s*\\[([^\\]]*)\\]",
           "flags": "m",
           "all": true,
-          "note": "every forbidden_values list in this contract must be the same list"
+          "note": "every forbidden_values list on a secret row of this contract must be the same list; the DB_PASSWORD row carries database-password-placeholders instead, and the ADMIN_API_TOKEN row admin-token-placeholders"
         },
         {
           "path": "core/meetings/services/meeting-api/src/meeting_api/config.v1.json",
-          "pattern": "\"forbidden_values\"\\s*:\\s*\\[([^\\]]*)\\]",
+          "pattern": "\"key\"\\s*:\\s*\"(?!DB_PASSWORD\"|ADMIN_TOKEN\")[A-Z0-9_]+\"[^{}]*?\"forbidden_values\"\\s*:\\s*\\[([^\\]]*)\\]",
           "flags": "m",
           "all": true,
-          "note": "every forbidden_values list in this contract must be the same list"
+          "note": "every forbidden_values list on a secret row of this contract must be the same list; the DB_PASSWORD row carries database-password-placeholders instead, and the ADMIN_TOKEN row admin-token-placeholders"
         },
         {
           "path": "core/flows/src/flows_steps/common.py",
@@ -168,6 +770,213 @@
         {
           "path": "deploy/dogfood/rig/vexa_control_mcp.py",
           "pattern": "INTERNAL_SECRET_PLACEHOLDERS = \\(([^)]*)\\)"
+        },
+        {
+          "path": "core/runtime/src/runtime_kernel/config.v1.json",
+          "pattern": "\"forbidden_values\"\\s*:\\s*\\[([^\\]]*)\\]",
+          "flags": "m",
+          "all": true,
+          "note": "the runtime caller credential's list (RUNTIME_API_TOKEN)"
+        },
+        {
+          "path": "core/flows/src/flows_integrations/flows_api.py",
+          "pattern": "_FALLBACK_PLACEHOLDERS = \\(([^)]*)\\)",
+          "note": "flows-api's fallback when it cannot read the declaration"
+        },
+        {
+          "path": "core/meetings/services/mcp/src/vexa_mcp/manifest.py",
+          "pattern": "PLACEHOLDER_KEYS = \\{([^}]*)\\}",
+          "note": "the MCP's refusal of a published operator key for an auth: admin tool"
+        }
+      ]
+    },
+    {
+      "id": "delegation-secret-placeholders",
+      "fact": "the values VEXA_MCP_DELEGATION_SECRET may never hold: the internal-secret placeholders plus the key delegation.v1's published vectors are made with",
+      "kind": "set",
+      "extends": "placeholder-secrets",
+      "enforced": true,
+      "canonical": "core/agent/control_plane/config.v1.json — VEXA_MCP_DELEGATION_SECRET (the minter's declaration)",
+      "how_to_agree": "change both declarations in one change; a new published test key joins both",
+      "why": "agent-api signs every worker's delegation token with this key and admin-api verifies it; the boot preflight of each refuses the declared values. delegation.v1's goldens publish a working key, so a deployment that copied it would accept a token anyone can mint. Both holders must refuse the same list, or one boots with a key the other would refuse. core/agent/tests/test_delegation_vectors.py checks that the vectors' key is on it.",
+      "sites": [
+        {
+          "path": "core/agent/control_plane/config.v1.json",
+          "pattern": "\"key\"\\s*:\\s*\"VEXA_MCP_DELEGATION_SECRET\"[^{}]*?\"forbidden_values\"\\s*:\\s*\\[([^\\]]*)\\]"
+        },
+        {
+          "path": "core/identity/services/admin-api/src/admin_api/config.v1.json",
+          "pattern": "\"key\"\\s*:\\s*\"VEXA_MCP_DELEGATION_SECRET\"[^{}]*?\"forbidden_values\"\\s*:\\s*\\[([^\\]]*)\\]"
+        }
+      ]
+    },
+    {
+      "id": "dispatch-key-placeholders",
+      "fact": "the values VEXA_DISPATCH_SIGNING_KEY may never hold: the internal-secret placeholders plus its old default, dev-dispatch-signing-key",
+      "kind": "set",
+      "extends": "placeholder-secrets",
+      "enforced": true,
+      "canonical": "core/agent/control_plane/config.v1.json — VEXA_DISPATCH_SIGNING_KEY (the signer's declaration; its boot preflight refuses these)",
+      "how_to_agree": "change both in one change; a value the chart accepts must be one agent-api boots with",
+      "why": "agent-api signs each dispatch's identity token with this key. Its default, dev-dispatch-signing-key, shipped on compose, Helm and Lite and is published in this repository, so a token signed with it proved nothing. agent-api's boot preflight refuses the declared values, and the chart refuses an explicit secrets.dispatchSigningKey on the same list (it compares lowercased, so the list carries both spellings of change-me only to stay equal to the declaration). Two copies of one refusal list drift unless they are held together.",
+      "sites": [
+        {
+          "path": "core/agent/control_plane/config.v1.json",
+          "pattern": "\"key\"\\s*:\\s*\"VEXA_DISPATCH_SIGNING_KEY\"[^{}]*?\"forbidden_values\"\\s*:\\s*\\[([^\\]]*)\\]"
+        },
+        {
+          "path": "deploy/helm/charts/vexa/templates/secret.yaml",
+          "pattern": "\\$publishedDispatchKeys := list ([^}]*?) \\}\\}",
+          "note": "the chart's refusal of an explicit secrets.dispatchSigningKey"
+        }
+      ]
+    },
+    {
+      "id": "admin-token-placeholders",
+      "fact": "the values the admin key (ADMIN_TOKEN · ADMIN_API_TOKEN · VEXA_FLOWS_ADMIN_KEY · secrets.adminApiToken) may never hold: the internal-secret placeholders plus every default and example this repository has shipped for the admin key",
+      "kind": "set",
+      "extends": "placeholder-secrets",
+      "enforced": true,
+      "canonical": "core/identity/services/admin-api/src/admin_api/config.v1.json — ADMIN_API_TOKEN (the key's owner; its boot preflight refuses these)",
+      "how_to_agree": "one list for one key under four names: a published value found for the admin key joins every site in one change",
+      "why": "The admin key mints an API key for any user, and meeting-api derives the MeetingToken key from it. It shipped as dev-admin-token in compose's .env.example and as CHANGE_ME in the chart's values, and CI, the dashboard harness, the test chart values and the old docs carried more literals; none of them refused anywhere, because the three declarations only carried the internal-secret placeholders. admin-api, meeting-api and flows refuse the declared values at boot, flows refuses them again where it uses the key, the chart refuses an explicit secrets.adminApiToken on the same list and replaces a release Secret still holding one, and mint-dev-env.sh replaces one found in .env. Six copies of one list drift unless they are held together; a value one of them accepts and another refuses is a stack that boots half-way.",
+      "sites": [
+        {
+          "path": "core/identity/services/admin-api/src/admin_api/config.v1.json",
+          "pattern": "\"key\"\\s*:\\s*\"ADMIN_API_TOKEN\"[^{}]*?\"forbidden_values\"\\s*:\\s*\\[([^\\]]*)\\]"
+        },
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/config.v1.json",
+          "pattern": "\"key\"\\s*:\\s*\"ADMIN_TOKEN\"[^{}]*?\"forbidden_values\"\\s*:\\s*\\[([^\\]]*)\\]"
+        },
+        {
+          "path": "core/flows/src/config.v1.json",
+          "pattern": "\"key\"\\s*:\\s*\"VEXA_FLOWS_ADMIN_KEY\"[^{}]*?\"forbidden_values\"\\s*:\\s*\\[([^\\]]*)\\]"
+        },
+        {
+          "path": "core/flows/src/flows_steps/common.py",
+          "pattern": "ADMIN_KEY_PLACEHOLDERS = \\(([^)]*)\\)",
+          "note": "flows' refusal where it uses the key (require_admin_key)"
+        },
+        {
+          "path": "deploy/helm/charts/vexa/templates/secret.yaml",
+          "pattern": "\\$publishedAdminTokens := list ([^}]*?) \\}\\}",
+          "note": "the chart's refusal of an explicit secrets.adminApiToken, and of a release Secret still holding one"
+        },
+        {
+          "path": "deploy/compose/mint-dev-env.sh",
+          "pattern": "admin_published\\(\\) \\{\\n  case \"\\$1\" in ([^)]*)\\) return 0;;",
+          "note": "`make up` replaces an .env ADMIN_TOKEN holding one of these"
+        },
+        {
+          "path": "deploy/lite/Makefile",
+          "pattern": "^ADMIN_PUBLISHED := (.*)$",
+          "flags": "m",
+          "note": "Lite `make up` replaces an .env ADMIN_TOKEN holding one of these"
+        },
+        {
+          "path": "deploy/lite/entrypoint.sh",
+          "pattern": "case \"\\$ADMIN_API_TOKEN\" in\\n\\s*([^)\\n]*)\\)",
+          "note": "Lite's boot refusal of a given admin key"
+        }
+      ]
+    },
+    {
+      "id": "database-password-placeholders",
+      "fact": "the published values the database password must never hold",
+      "kind": "set",
+      "extends": "placeholder-secrets",
+      "enforced": true,
+      "canonical": "deploy/compose/docker-compose.yml — the postgres service's refusal (the database itself refuses to start on these)",
+      "how_to_agree": "one list: the internal-secret placeholders plus postgres and password; a value added at the database is added to every service that builds a database URL, or one of them boots on a password the database would have refused",
+      "why": "postgres shipped as the database password's default on every surface, so every stack nobody configured shared one password anyone could read. Compose's postgres service refuses it, and admin-api and meeting-api refuse it at boot (config.v1 forbidden_values); three spellings of one refusal list drift unless they are held together.",
+      "sites": [
+        {
+          "path": "deploy/compose/docker-compose.yml",
+          "pattern": "^\\s*\"\"\\|(postgres\\|[^)\\n]*)\\)\\s*$",
+          "flags": "m"
+        },
+        {
+          "path": "core/identity/services/admin-api/src/admin_api/config.v1.json",
+          "pattern": "\"key\"\\s*:\\s*\"DB_PASSWORD\"[^{}]*?\"forbidden_values\"\\s*:\\s*\\[([^\\]]*)\\]",
+          "flags": "m"
+        },
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/config.v1.json",
+          "pattern": "\"key\"\\s*:\\s*\"DB_PASSWORD\"[^{}]*?\"forbidden_values\"\\s*:\\s*\\[([^\\]]*)\\]",
+          "flags": "m"
+        },
+        {
+          "path": "deploy/lite/entrypoint.sh",
+          "pattern": "^\\s*\"\"\\|(postgres\\|[^)\\n]*)\\)\\s*$",
+          "note": "Lite's boot refusal"
+        },
+        {
+          "path": "deploy/lite/Makefile",
+          "pattern": "^\\s*\"\"\\|(postgres\\|[^)\\n]*)\\) \\\\$",
+          "note": "`make up` mints a new password when .env holds one of these"
+        },
+        {
+          "path": "deploy/helm/charts/vexa/templates/_helpers.tpl",
+          "pattern": "define \"vexa\\.publishedDbPasswords\" -\\}\\}\\n\\[([^\\]]*)\\]",
+          "note": "the chart's refusal of a bundled database password"
+        }
+      ]
+    },
+    {
+      "id": "storage-root-placeholders",
+      "fact": "the published values the bundled object storage's root key pair must never hold",
+      "kind": "set",
+      "enforced": true,
+      "canonical": "deploy/compose/docker-compose.yml — the storage service's refusal (the storage itself refuses to start on these)",
+      "how_to_agree": "one list: a value refused at the storage is refused by every step that mints, passes or starts with the pair, or one of them hands the storage a pair it will not start on (or keeps one it should have replaced)",
+      "why": "vexa-access-key / vexa-secret-key shipped as the storage root pair on compose and Lite, so every stack nobody configured shared one root key to every tenant's recordings. Compose's storage refuses them, mint-dev-env.sh and Lite's storage-credentials.sh replace them, Lite's Makefile refuses them before starting its sidecar, and Lite's entrypoint refuses them with storage configured: five spellings of one list drift unless they are held together.",
+      "sites": [
+        {
+          "path": "deploy/compose/docker-compose.yml",
+          "pattern": "^\\s*\"\"\\|(vexa-access-key\\|[^)\\n]*)\\)\\s*$",
+          "flags": "m",
+          "all": true,
+          "note": "the storage service's refusal, for the access and the secret key"
+        },
+        {
+          "path": "deploy/compose/mint-dev-env.sh",
+          "pattern": "case \"\\$1\" in \"\"\\|(vexa-access-key\\|[^)\\n]*)\\) return 0;;",
+          "note": "replaced by a minted pair"
+        },
+        {
+          "path": "deploy/lite/storage-credentials.sh",
+          "pattern": "^\\s*\"\"\\|(vexa-access-key\\|[^)\\n]*)\\) return 0;;",
+          "flags": "m",
+          "note": "replaced by a minted pair in .env"
+        },
+        {
+          "path": "deploy/lite/Makefile",
+          "pattern": "^STORAGE_PUBLISHED := \"\"\\|(.*)$",
+          "flags": "m",
+          "note": "storage-up refuses these before starting the sidecar"
+        },
+        {
+          "path": "deploy/lite/entrypoint.sh",
+          "pattern": "^\\s*\"\"\\|(vexa-access-key\\|[^)\\n]*)\\)$",
+          "flags": "m",
+          "note": "Lite's boot refusal with MINIO_ENDPOINT set"
+        }
+      ]
+    },
+    {
+      "id": "redis-password-placeholders",
+      "fact": "the values compose's Redis refuses as REDIS_PASSWORD",
+      "kind": "set",
+      "extends": "placeholder-secrets",
+      "enforced": true,
+      "canonical": "deploy/compose/docker-compose.yml — the redis service's refusal",
+      "how_to_agree": "add a placeholder to placeholder-secrets and every extended list follows; a Redis-only value is added here",
+      "why": "Compose's redis refuses to start on a published password, from a list of its own that had drifted from the base placeholder list (architecture pass 4, S53). One site today; `extends` holds it to the base.",
+      "sites": [
+        {
+          "path": "deploy/compose/docker-compose.yml",
+          "pattern": "case \"\\$\\$REDIS_PASSWORD\" in\\n\\s*\"\"\\|([^)\\n]*)\\)"
         }
       ]
     },
@@ -330,14 +1139,14 @@
       "fact": "the machinery note — the prose a composed opening carries so the agent knows nobody typed it",
       "kind": "prose",
       "decision": "WHICH INSTRUCTION THE AGENT ACTUALLY GETS. The Python copy carries a clause the TypeScript copy does not. The two are handed to the same model in different code paths, so the model is given different instructions depending on which side composed the opening. Unlike the mark it rides on, this is prose with meaning and the two bodies cannot be reconciled mechanically — someone has to say which instruction is right.",
-      "why": "The mark this note carries is now single-sourced (fact machinery-mark). The note is not, and it had already drifted: scaffolds.py continues past where actions.ts stops. Kept on the ledger rather than fixed, because choosing the surviving text is choosing what the agent is told.",
+      "why": "The mark this note carries is now single-sourced (fact machinery-mark). The note is not, and it had already drifted: scaffolds.py continues past where the TypeScript copy (platform/turnMarks.ts) stops. Kept on the ledger rather than fixed, because choosing the surviving text is choosing what the agent is told.",
       "sites": [
         {
           "path": "core/agent/control_plane/scaffolds.py",
           "pattern": "MACHINERY_NOTE = \\(([\\s\\S]*?)\\)\\n"
         },
         {
-          "path": "clients/terminal/src/canvas/actions.ts",
+          "path": "clients/terminal/src/platform/turnMarks.ts",
           "pattern": "export const MACHINERY_NOTE = ([^;]*);"
         }
       ],
@@ -346,7 +1155,7 @@
         {
           "value": "+ MACHINERY_MARK + This opening was composed by the product from the link this person clicked",
           "sites": [
-            "clients/terminal/src/canvas/actions.ts"
+            "clients/terminal/src/platform/turnMarks.ts"
           ]
         },
         {
@@ -361,7 +1170,7 @@
       "id": "internal-secret-class",
       "fact": "how each service's config contract classes INTERNAL_API_SECRET, and therefore what it does when it is unset",
       "kind": "literal",
-      "decision": "WHETHER ONE ENV VAR MAY HAVE THREE BOOT BEHAVIOURS. Four contracts declare it required-explicit (boot refuses); meeting-api declares it defaulted (boots, and silently stops attaching the internal header); runtime lists it surface_only (never read); the MCP service does not declare it at all, so gate:config-contract cannot see it there. Whether meeting-api's leniency is correct is a product decision about a security boundary — a service that quietly drops an auth header when a secret is missing is a different failure mode from one that refuses to start, and it is not for a gate to choose.",
+      "decision": "WHETHER ONE ENV VAR MAY HAVE THREE BOOT BEHAVIOURS. Four contracts declare it required-explicit (boot refuses); meeting-api declares it defaulted (boots, and admits no internal-tier caller); the MCP service does not declare it at all, so gate:config-contract cannot see it there. Whether meeting-api's leniency is correct is a product decision about a security boundary — a service that quietly drops an auth header when a secret is missing is a different failure mode from one that refuses to start, and it is not for a gate to choose.",
       "why": "F95 was one secret with three names. This is the same secret with three boot behaviours, and each contract argues its own case in its own description field where no reader compares them.",
       "sites": [
         {
@@ -563,6 +1372,751 @@
         {
           "path": "clients/terminal/src/ui-kit/transcriptSlot.ts",
           "pattern": "TRANSCRIPT_SLOT_SOURCE = String\\.raw`(.+)`;"
+        }
+      ]
+    },
+    {
+      "id": "unwritten-marker",
+      "fact": "the marker a seeded `_global` layer file carries until somebody writes it",
+      "kind": "literal",
+      "enforced": true,
+      "canonical": "core/agent/shared/marks.py",
+      "how_to_agree": "import UNWRITTEN_MARK from shared.marks in core/agent; flows' copy and every seed file must carry the same literal",
+      "why": "It was spelled three times in product code — control_plane/global_layer.py, worker/engine.py and flows_steps/mailtext.py — and once more in each seed file under behavior/global/. The seed WRITES it and three readers TEST for it: the control plane counts a file still carrying it as unwritten, the worker keeps such a file out of a turn's organisation context, and flows keeps the seed's \"# Company\" heading out of a mail. A seed whose comment drifts by one character reads as WRITTEN to all three, so an unfilled placeholder becomes the employer's name on an outbound mail. core/agent now reads it from shared.marks; flows' image carries no core/agent, so its copy is a site here, and so is every seed file.",
+      "sites": [
+        {
+          "path": "core/agent/shared/marks.py",
+          "pattern": "^UNWRITTEN_MARK = \"([^\"]+)\""
+        },
+        {
+          "path": "core/flows/src/flows_steps/mailtext.py",
+          "pattern": "^UNWRITTEN_MARKER = \"([^\"]+)\""
+        },
+        {
+          "path": "behavior/global/README.md",
+          "pattern": "^<!-- (vexa:[a-z]+) —"
+        },
+        {
+          "path": "behavior/global/PRINCIPLES.md",
+          "pattern": "^<!-- (vexa:[a-z]+) —"
+        },
+        {
+          "path": "behavior/global/OBJECTIVES.md",
+          "pattern": "^<!-- (vexa:[a-z]+) —"
+        },
+        {
+          "path": "behavior/global/STRUCTURE.md",
+          "pattern": "^<!-- (vexa:[a-z]+) —"
+        },
+        {
+          "path": "behavior/global/MISSING.md",
+          "pattern": "^<!-- (vexa:[a-z]+) —"
+        }
+      ],
+      "forbid_elsewhere": "vexa:unwritten",
+      "scan": [
+        "core",
+        "clients",
+        "deploy",
+        "behavior"
+      ]
+    },
+    {
+      "id": "claude-code-pin",
+      "fact": "the Claude Code version the agent worker runs, as each image that installs it pins it",
+      "kind": "literal",
+      "enforced": true,
+      "canonical": "core/agent/worker/Dockerfile",
+      "how_to_agree": "bump both Dockerfiles in one change",
+      "why": "The worker image and the Lite image each `npm install -g` Claude Code, and the same turn runs on whichever one the deployment uses. Two pins that drift mean a turn behaves differently on Lite than on compose or Helm, with nothing in either build to say so.",
+      "sites": [
+        {
+          "path": "core/agent/worker/Dockerfile",
+          "pattern": "@anthropic-ai/claude-code@([0-9][0-9A-Za-z.+-]*)"
+        },
+        {
+          "path": "deploy/lite/Dockerfile.lite",
+          "pattern": "@anthropic-ai/claude-code@([0-9][0-9A-Za-z.+-]*)"
+        }
+      ],
+      "forbid_elsewhere": "@anthropic-ai/claude-code@",
+      "scan": [
+        "core",
+        "deploy",
+        "clients"
+      ]
+    },
+    {
+      "id": "native-sdk-exclusion",
+      "fact": "what of the optional operator-supplied native meeting SDK may never enter git or an image build context",
+      "kind": "literal",
+      "enforced": true,
+      "canonical": ".gitignore",
+      "how_to_agree": "edit the native-sdk-exclusion block in all three files in one change; the blocks are byte-identical",
+      "why": "The SDK, its headers, its bundled Qt and the compiled wrapper are operator files (P17, ADR-0039). Git reads .gitignore, the bot, meeting-api and gateway images read the root .dockerignore, and the Lite image reads deploy/lite/Dockerfile.lite.dockerignore, so the same exclusion is written three times. Before this fact the two dockerignores each said they mirrored a nested .gitignore, and nothing checked it. gate:vendor-payload requires this fact, and proves on the .gitignore copy that the block denies by default under native-meeting/native/.",
+      "sites": [
+        {
+          "path": ".gitignore",
+          "pattern": "^# >>> native-sdk-exclusion[^\\n]*\\n([\\s\\S]*?)^# <<< native-sdk-exclusion"
+        },
+        {
+          "path": ".dockerignore",
+          "pattern": "^# >>> native-sdk-exclusion[^\\n]*\\n([\\s\\S]*?)^# <<< native-sdk-exclusion"
+        },
+        {
+          "path": "deploy/lite/Dockerfile.lite.dockerignore",
+          "pattern": "^# >>> native-sdk-exclusion[^\\n]*\\n([\\s\\S]*?)^# <<< native-sdk-exclusion"
+        }
+      ]
+    },
+    {
+      "id": "workspace-store-path",
+      "fact": "the workspace store's path: agent-api's VEXA_WORKSPACES_DIR equals the runtime's VEXA_WORKSPACE_MOUNT_TARGET on every surface",
+      "kind": "literal",
+      "enforced": true,
+      "canonical": "deploy/helm/charts/vexa/templates/_helpers.tpl — vexa.workspacesDir (the chart renders all three from it); elsewhere each surface writes it twice",
+      "how_to_agree": "move the path on every surface in one change; on compose and Lite change both keys together",
+      "why": "agent-api hands the runtime mount paths under its VEXA_WORKSPACES_DIR; the runtime refuses (400) any mount outside its own VEXA_WORKSPACE_MOUNT_TARGET. Written separately, a difference refuses every dispatch. The chart renders both from one helper; compose and Lite write each key by hand, and agent-api's and the runtime's built-in defaults are the same path. compose's own test holds its pair equal; this holds every surface to one value.",
+      "sites": [
+        {
+          "path": "deploy/helm/charts/vexa/templates/_helpers.tpl",
+          "pattern": "define \"vexa\\.workspacesDir\" -\\}\\}\\n(\\S+)\\n"
+        },
+        {
+          "path": "deploy/compose/docker-compose.yml",
+          "pattern": "^\\s*- VEXA_WORKSPACES_DIR=(\\S+)$"
+        },
+        {
+          "path": "deploy/compose/docker-compose.yml",
+          "pattern": "^\\s*- VEXA_WORKSPACE_MOUNT_TARGET=(\\S+)$"
+        },
+        {
+          "path": "deploy/lite/supervisord.conf",
+          "pattern": "VEXA_WORKSPACES_DIR=\"([^\"]+)\""
+        },
+        {
+          "path": "deploy/lite/supervisord.conf",
+          "pattern": "VEXA_WORKSPACE_MOUNT_TARGET=\"([^\"]+)\""
+        },
+        {
+          "path": "core/runtime/src/runtime_kernel/workload_env.py",
+          "pattern": "^DEFAULT_STORE_TARGET = \"([^\"]+)\""
+        },
+        {
+          "path": "core/agent/shared/config.py",
+          "pattern": "^    workspaces_dir: str = \"([^\"]+)\"",
+          "flags": "m",
+          "note": "agent-api's own default when VEXA_WORKSPACES_DIR is unset (N56)"
+        }
+      ]
+    },
+    {
+      "id": "worker-tools-user",
+      "fact": "the unprivileged user an agent worker runs its harness's tools as",
+      "kind": "literal",
+      "enforced": true,
+      "canonical": "core/agent/worker/Dockerfile — the useradd that creates it",
+      "how_to_agree": "rename the user in the image and in llm/ports.py in one change",
+      "why": "llm/ports.py drops the harness's tool processes to this user by name; the worker image creates it. A name the image does not create is a grant that fails, and the harness then runs as the worker itself (architecture pass 4, N57).",
+      "sites": [
+        {
+          "path": "core/agent/worker/Dockerfile",
+          "pattern": "groupadd --system --gid \\d+ (\\S+) &&"
+        },
+        {
+          "path": "core/agent/worker/Dockerfile",
+          "pattern": "useradd --system --uid \\d+ --gid \\d+ [^\\n]*?nologin (\\S+) &&"
+        },
+        {
+          "path": "core/agent/llm/ports.py",
+          "pattern": "^TOOLS_USER = \"([^\"]+)\"",
+          "flags": "m"
+        }
+      ]
+    },
+    {
+      "id": "teams-meeting-id-length",
+      "fact": "how many digits a Teams short meeting id (teams.microsoft.com/meet/<id>) may have",
+      "kind": "literal",
+      "enforced": true,
+      "canonical": "core/meetings/services/meeting-api/src/meeting_api/bot_spawn/service.py — _TEAMS_SHORT_ID (the server that spawns the bot decides what a Teams meeting is)",
+      "how_to_agree": "change the length in all three parsers in one change",
+      "decided": "10 to 16 digits: the browser extension now accepts the lengths meeting-api and the MCP's link parser accept, so a link the server takes is one the extension recognises (coordinator, 2026-10-09).",
+      "why": "Three parsers in three packages and two languages decide whether a URL is a Teams meeting; nothing compared them and they already disagree at 16 digits (architecture pass 3, S4).",
+      "sites": [
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/bot_spawn/service.py",
+          "pattern": "_TEAMS_SHORT_ID = re\\.compile\\(r\"\\^\\\\d\\{(\\d+,\\d+)\\}\\$\"\\)"
+        },
+        {
+          "path": "core/meetings/services/mcp/src/vexa_mcp/link_parser.py",
+          "pattern": "/meet/\\(\\\\d\\{(\\d+,\\d+)\\}\\)",
+          "all": true,
+          "note": "the path, the fragment and the launcher forms"
+        },
+        {
+          "path": "clients/extension/src/meeting.ts",
+          "pattern": "\\\\/meet\\\\/\\(\\\\d\\{(\\d+,\\d+)\\}\\)",
+          "all": true,
+          "note": "the path and the hash forms"
+        }
+      ]
+    },
+    {
+      "id": "agent-forward-mapping",
+      "fact": "where the gateway fronts the agent domain: /agent/<path> onto agent-api's /api/<path>",
+      "kind": "prose",
+      "enforced": true,
+      "canonical": "core/agent/routes.v1.json — forward (the gateway registers the domain from it)",
+      "how_to_agree": "change both manifests in one change; the gateway reads routes.v1, the MCP assembler reads mcp.tools.v1",
+      "why": "The gateway forwards /agent/* by routes.v1's mapping and the MCP sends every agent tool back through the gateway by mcp.tools.v1's. Two declarations of one mapping: if they differ, every agent tool call lands on a route the gateway does not serve. This replaces the hard-coded rewrite the architecture pass flagged (S16).",
+      "sites": [
+        {
+          "path": "core/agent/routes.v1.json",
+          "pattern": "\"forward\": (\\{[^}]*\\})"
+        },
+        {
+          "path": "core/agent/mcp.tools.v1.json",
+          "pattern": "\"forward\": (\\{[^}]*\\})"
+        }
+      ]
+    },
+    {
+      "id": "token-scopes",
+      "fact": "the scopes an API key may carry, and a route may require",
+      "kind": "set",
+      "enforced": true,
+      "canonical": "core/identity/contracts/identity.v1/identity.schema.json — Scope",
+      "how_to_agree": "a new scope is an identity.v1 change; every list here moves in the same change",
+      "why": "identity mints and validates keys with these scopes, the gateway refuses a route that names another, and the terminal offers and checks them when a person mints a key. Spelled seven times in four places; a scope one list has and another lacks is a key nobody can mint, or a route no key can call, that reads like a decision (architecture pass 4, N50/N51).",
+      "sites": [
+        {
+          "path": "core/identity/contracts/identity.v1/identity.schema.json",
+          "pattern": "\"Scope\":\\s*\\{[^}]*?\"enum\":\\s*\\[([^\\]]*)\\]"
+        },
+        {
+          "path": "core/identity/services/admin-api/src/admin_api/token_scope.py",
+          "pattern": "^VALID_SCOPES: Set\\[str\\] = \\{([^}]*)\\}",
+          "flags": "m"
+        },
+        {
+          "path": "core/identity/services/admin-api/src/admin_api/schema/sync.py",
+          "pattern": "^_FULL_TOKEN_SCOPES = \\[([^\\]]*)\\]",
+          "flags": "m"
+        },
+        {
+          "path": "core/gateway/contracts/routes.v1/routes.schema.json",
+          "pattern": "\"scopes\":\\s*\\{[^}]*?\"enum\":\\s*\\[([^\\]]*)\\]"
+        },
+        {
+          "path": "core/gateway/services/gateway/src/gateway/routes_manifest.py",
+          "pattern": "^SCOPES = frozenset\\(\\{([^}]*)\\}\\)",
+          "flags": "m"
+        },
+        {
+          "path": "clients/terminal/src/app/api/tokens/route.ts",
+          "pattern": "^const VALID_SCOPES = new Set\\(\\[([^\\]]*)\\]\\)",
+          "flags": "m"
+        },
+        {
+          "path": "clients/terminal/src/surfaces/tokensApi.ts",
+          "pattern": "^export const TOKEN_SCOPES = \\[([^\\]]*)\\] as const",
+          "flags": "m"
+        }
+      ]
+    },
+    {
+      "id": "routes-methods",
+      "fact": "the HTTP methods a routes.v1 row may declare",
+      "kind": "set",
+      "enforced": true,
+      "canonical": "core/gateway/contracts/routes.v1/routes.schema.json — Route.method",
+      "how_to_agree": "change the schema and the loader together",
+      "why": "routes.v1 is the sealed statement of what a manifest may say; routes_manifest.py is what the gateway refuses at boot. A vocabulary the two spell differently is a manifest the gate passes and the edge refuses, or the reverse (architecture pass 4, N50).",
+      "sites": [
+        {
+          "path": "core/gateway/contracts/routes.v1/routes.schema.json",
+          "pattern": "\"Route\":[\\s\\S]*?\"method\":\\s*\\{\\s*\"enum\":\\s*\\[([^\\]]*)\\]"
+        },
+        {
+          "path": "core/gateway/services/gateway/src/gateway/routes_manifest.py",
+          "pattern": "^METHODS = frozenset\\(\\{([^}]*)\\}\\)",
+          "flags": "m"
+        }
+      ]
+    },
+    {
+      "id": "routes-verb-methods",
+      "fact": "the HTTP methods a routes.v1 `verbs` row may declare",
+      "kind": "set",
+      "enforced": true,
+      "canonical": "core/gateway/contracts/routes.v1/routes.schema.json — Verb.method",
+      "how_to_agree": "change the schema and agent-api's route_policy.py together",
+      "why": "routes.v1 is the sealed statement of what a verbs row may say; agent-api's route_policy.py is what refuses it at boot. A method one side accepts and the other refuses is a person-only verb that either never boots or is never protected (architecture pass 4, N50).",
+      "sites": [
+        {
+          "path": "core/gateway/contracts/routes.v1/routes.schema.json",
+          "pattern": "\"Verb\":[\\s\\S]*?\"method\":\\s*\\{\\s*\"enum\":\\s*\\[([^\\]]*)\\]"
+        },
+        {
+          "path": "core/agent/control_plane/route_policy.py",
+          "pattern": "^METHODS = frozenset\\(\\{([^}]*)\\}\\)",
+          "flags": "m"
+        }
+      ]
+    },
+    {
+      "id": "mcp-tools-domains",
+      "fact": "the domains an mcp.tools.v1 manifest may be for, or a tool may require",
+      "kind": "set",
+      "enforced": true,
+      "canonical": "core/meetings/contracts/mcp.tools.v1/mcp.tools.schema.json — Manifest.domain",
+      "how_to_agree": "membership is closed: a new domain is an mcp.tools.v1 change and an assembler change, in one change",
+      "why": "mcp.tools.v1 is the sealed statement of what a manifest may say, including a private deployment's mounted one; manifest.py is what the MCP refuses at boot. A vocabulary the two spell differently is a manifest the gate passes and the edge refuses, or the reverse (architecture pass 4, N50).",
+      "sites": [
+        {
+          "path": "core/meetings/contracts/mcp.tools.v1/mcp.tools.schema.json",
+          "pattern": "\"domain\":\\s*\\{\\s*\"enum\":\\s*\\[([^\\]]*)\\]"
+        },
+        {
+          "path": "core/meetings/contracts/mcp.tools.v1/mcp.tools.schema.json",
+          "pattern": "\"requires\":\\s*\\{[^}]*?\"enum\":\\s*\\[([^\\]]*)\\]"
+        },
+        {
+          "path": "core/meetings/contracts/mcp.tools.v1/mcp.tools.schema.json",
+          "pattern": "\"event_v2_owner\":\\s*\\{\\s*\"enum\":\\s*\\[([^\\]]*)\\]"
+        },
+        {
+          "path": "core/meetings/services/mcp/src/vexa_mcp/manifest.py",
+          "pattern": "^DOMAINS = \\{([^}]*)\\}",
+          "flags": "m"
+        }
+      ]
+    },
+    {
+      "id": "mcp-tools-identities",
+      "fact": "who an mcp.tools.v1 tool's caller may be",
+      "kind": "set",
+      "enforced": true,
+      "canonical": "core/meetings/contracts/mcp.tools.v1/mcp.tools.schema.json — Tool.identity",
+      "how_to_agree": "change the schema and the assembler together",
+      "why": "mcp.tools.v1 is the sealed statement of what a manifest may say, including a private deployment's mounted one; manifest.py is what the MCP refuses at boot. A vocabulary the two spell differently is a manifest the gate passes and the edge refuses, or the reverse (architecture pass 4, N50).",
+      "sites": [
+        {
+          "path": "core/meetings/contracts/mcp.tools.v1/mcp.tools.schema.json",
+          "pattern": "\"identity\":\\s*\\{\\s*\"enum\":\\s*\\[([^\\]]*)\\]"
+        },
+        {
+          "path": "core/meetings/services/mcp/src/vexa_mcp/manifest.py",
+          "pattern": "^IDENTITIES = \\{([^}]*)\\}",
+          "flags": "m"
+        }
+      ]
+    },
+    {
+      "id": "mcp-tools-auths",
+      "fact": "which credential the MCP edge may present to a tool's door",
+      "kind": "set",
+      "enforced": true,
+      "canonical": "core/meetings/contracts/mcp.tools.v1/mcp.tools.schema.json — Tool.auth",
+      "how_to_agree": "change the schema and the assembler together",
+      "why": "mcp.tools.v1 is the sealed statement of what a manifest may say, including a private deployment's mounted one; manifest.py is what the MCP refuses at boot. A vocabulary the two spell differently is a manifest the gate passes and the edge refuses, or the reverse (architecture pass 4, N50).",
+      "sites": [
+        {
+          "path": "core/meetings/contracts/mcp.tools.v1/mcp.tools.schema.json",
+          "pattern": "\"auth\":\\s*\\{\\s*\"enum\":\\s*\\[([^\\]]*)\\]"
+        },
+        {
+          "path": "core/meetings/services/mcp/src/vexa_mcp/manifest.py",
+          "pattern": "^AUTHS = \\{([^}]*)\\}",
+          "flags": "m"
+        }
+      ]
+    },
+    {
+      "id": "mcp-tools-methods",
+      "fact": "the HTTP methods an mcp.tools.v1 route may use",
+      "kind": "set",
+      "enforced": true,
+      "canonical": "core/meetings/contracts/mcp.tools.v1/mcp.tools.schema.json — Route.method",
+      "how_to_agree": "change the schema and the assembler together",
+      "why": "mcp.tools.v1 is the sealed statement of what a manifest may say, including a private deployment's mounted one; manifest.py is what the MCP refuses at boot. A vocabulary the two spell differently is a manifest the gate passes and the edge refuses, or the reverse (architecture pass 4, N50).",
+      "sites": [
+        {
+          "path": "core/meetings/contracts/mcp.tools.v1/mcp.tools.schema.json",
+          "pattern": "\"method\":\\s*\\{\\s*\"enum\":\\s*\\[([^\\]]*)\\]"
+        },
+        {
+          "path": "core/meetings/services/mcp/src/vexa_mcp/manifest.py",
+          "pattern": "^METHODS = \\{([^}]*)\\}",
+          "flags": "m"
+        }
+      ]
+    },
+    {
+      "id": "mcp-tools-credential-arguments",
+      "fact": "the argument names an MCP tool may never take",
+      "kind": "set",
+      "enforced": true,
+      "canonical": "core/meetings/contracts/mcp.tools.v1/mcp.tools.schema.json — CredentialArgument",
+      "how_to_agree": "change the schema and the assembler together",
+      "why": "mcp.tools.v1 is the sealed statement of what a manifest may say, including a private deployment's mounted one; manifest.py is what the MCP refuses at boot. A vocabulary the two spell differently is a manifest the gate passes and the edge refuses, or the reverse (architecture pass 4, N50). This list is what keeps a credential out of a tool's argument list, and so out of every transcript.",
+      "sites": [
+        {
+          "path": "core/meetings/contracts/mcp.tools.v1/mcp.tools.schema.json",
+          "pattern": "\"CredentialArgument\":\\s*\\{\\s*\"enum\":\\s*\\[([^\\]]*)\\]"
+        },
+        {
+          "path": "core/meetings/services/mcp/src/vexa_mcp/manifest.py",
+          "pattern": "^CREDENTIAL_ARGUMENTS = \\{([^}]*)\\}",
+          "flags": "m"
+        }
+      ]
+    },
+    {
+      "id": "bot-redis-stream",
+      "fact": "the stream a meeting bot appends its transcript to, as the bot writes it, the collector reads it and the bot's Redis user is granted it",
+      "kind": "literal",
+      "enforced": true,
+      "canonical": "core/meetings/services/meeting-api/src/meeting_api/collector/ingest.py — STREAM_NAME",
+      "how_to_agree": "rename it in the bot, the collector and the grant in one change",
+      "why": "The bot's Redis user is granted exactly this key (bot_spawn/workload_redis.py). A rename on one side is a NOPERM at runtime or an empty collector, and each side's tests check only themselves (architecture pass 4, S51).",
+      "sites": [
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/collector/ingest.py",
+          "pattern": "^STREAM_NAME = \"([^\"]+)\""
+        },
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/bot_spawn/workload_redis.py",
+          "pattern": "^TRANSCRIPT_STREAM = \"([^\"]+)\""
+        },
+        {
+          "path": "core/meetings/services/bot/src/adapters/transcript-redis.ts",
+          "pattern": "^export const TRANSCRIPTION_STREAM = '([^']+)'"
+        }
+      ]
+    },
+    {
+      "id": "bot-redis-mutable-channel",
+      "fact": "the live channel a meeting bot publishes on, tc:meeting:{meeting id}:mutable, as the bot, the collector and the bot's Redis grant spell it",
+      "kind": "literal",
+      "enforced": true,
+      "canonical": "core/meetings/services/meeting-api/src/meeting_api/collector/ingest.py — _mutable_channel",
+      "how_to_agree": "rename it in the bot, the collector, the gateway's /ws fan-in and the grant in one change",
+      "why": "The grant names the channel by literal; the bot and the collector build it from a template. Each pattern requires the ':mutable' suffix and captures the prefix, so a change to either part fails here (architecture pass 4, S51).",
+      "sites": [
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/collector/ingest.py",
+          "pattern": "f\"(tc:meeting:)\\{[a-z_]+\\}:mutable\""
+        },
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/bot_spawn/workload_redis.py",
+          "pattern": "f\"&(tc:meeting:)\\{[a-z_]+\\}:mutable\""
+        },
+        {
+          "path": "core/meetings/services/bot/src/adapters/transcript-redis.ts",
+          "pattern": "`(tc:meeting:)\\$\\{[a-zA-Z_]+\\}:mutable`"
+        },
+        {
+          "path": "core/gateway/services/gateway/src/gateway/multiplex.py",
+          "pattern": "f\"(tc:meeting:)\\{[a-z_]+\\}:mutable\"",
+          "note": "the /ws fan-in"
+        }
+      ]
+    },
+    {
+      "id": "bot-redis-commands-channel",
+      "fact": "the channel a meeting bot takes acts.v1 commands from, bot_commands:meeting:{meeting id}",
+      "kind": "literal",
+      "enforced": true,
+      "canonical": "core/meetings/services/meeting-api/src/meeting_api/lifecycle/stop.py — the publisher",
+      "how_to_agree": "rename it in the publisher, the bot and the grant in one change",
+      "why": "meeting-api publishes on it, the bot subscribes, and the bot's Redis user is granted it by literal (architecture pass 4, S51).",
+      "sites": [
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/lifecycle/stop.py",
+          "pattern": "return f\"(bot_commands:meeting:)\\{[a-z_]+\\}\""
+        },
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/bot_spawn/workload_redis.py",
+          "pattern": "f\"&(bot_commands:meeting:)\\{[a-z_]+\\}\""
+        },
+        {
+          "path": "core/meetings/services/bot/src/contracts.ts",
+          "pattern": "`(bot_commands:meeting:)\\$\\{[a-zA-Z_]+\\}`"
+        }
+      ]
+    },
+    {
+      "id": "bot-redis-commands",
+      "fact": "the Redis commands a meeting bot's user is granted",
+      "kind": "set",
+      "enforced": true,
+      "canonical": "core/meetings/services/meeting-api/src/meeting_api/bot_spawn/workload_redis.py — BOT_COMMANDS",
+      "how_to_agree": "change the grant and invocation.v1's statement of it in one change",
+      "why": "invocation.v1 tells an operator exactly what a bot's Redis credential reaches; the grant is the truth, and the contract may not promise less or more (architecture pass 4, S45/S51).",
+      "sites": [
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/bot_spawn/workload_redis.py",
+          "pattern": "^BOT_COMMANDS = \\(([^)]*)\\)"
+        },
+        {
+          "path": "core/meetings/contracts/invocation.v1/README.md",
+          "pattern": "and the\\s+commands `([^`]+)`"
+        }
+      ]
+    },
+    {
+      "id": "redis-workload-acl-modes",
+      "fact": "the values REDIS_WORKLOAD_ACL accepts",
+      "kind": "set",
+      "enforced": true,
+      "canonical": "core/agent/shared/config.py — redis_workload_acl's pattern",
+      "how_to_agree": "change agent-api's settings pattern and meeting-api's _REDIS_WORKLOAD_ACL in one change; both services refuse to boot on any other value",
+      "why": "One switch, two services, two parsers: a value one service refused the other silently read as the default (architecture pass 4, S51). meeting-api now validates against the same set and refuses an unknown value at boot, as agent-api does.",
+      "sites": [
+        {
+          "path": "core/agent/shared/config.py",
+          "pattern": "validation_alias=AliasChoices\\(\"REDIS_WORKLOAD_ACL\"\\),\\s*pattern=\"\\^\\(([^)]*)\\)\\$\""
+        },
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/__main__.py",
+          "pattern": "^_REDIS_WORKLOAD_ACL = re\\.compile\\(r\"\\^\\(([^)]*)\\)\\$\"\\)"
+        }
+      ]
+    },
+    {
+      "id": "workload-managed-label",
+      "fact": "the label every spawned workload carries and the Helm NetworkPolicies select spawned Pods by",
+      "kind": "literal",
+      "enforced": true,
+      "canonical": "core/runtime/src/runtime_kernel/k8s_backend.py — MANAGED_LABEL",
+      "how_to_agree": "rename it in both backends and every NetworkPolicy in one change",
+      "why": "The runtime stamps it and the chart's policies select on it. A rename on one side leaves spawned Pods outside every workload policy, silently, and only under an enforcing CNI, which CI does not have (architecture pass 4, S54).",
+      "sites": [
+        {
+          "path": "core/runtime/src/runtime_kernel/k8s_backend.py",
+          "pattern": "^MANAGED_LABEL = \"([^\"]+)\""
+        },
+        {
+          "path": "core/runtime/src/runtime_kernel/docker_backend.py",
+          "pattern": "^MANAGED_LABEL = \"([^\"]+)\""
+        },
+        {
+          "path": "deploy/helm/charts/vexa/templates/networkpolicy-workloads.yaml",
+          "pattern": "^\\s+([a-z.]+): \"true\"$",
+          "all": true
+        },
+        {
+          "path": "deploy/helm/charts/vexa/templates/networkpolicy.yaml",
+          "pattern": "^\\s+([a-z.]+): \"true\"$",
+          "all": true
+        },
+        {
+          "path": "deploy/helm/charts/vexa/templates/networkpolicy-namespace.yaml",
+          "pattern": "^\\s+([a-z.]+): \"true\"$",
+          "all": true
+        }
+      ]
+    },
+    {
+      "id": "workload-class-label",
+      "fact": "the label key that names a spawned workload's class",
+      "kind": "literal",
+      "enforced": true,
+      "canonical": "core/runtime/src/runtime_kernel/profiles.py — CLASS_LABEL, and the agent profile's \"worker\"",
+      "how_to_agree": "rename the key or the worker value in the profiles, the docker backend's naming and every NetworkPolicy in one change",
+      "why": "A worker is told apart from a bot only by this label: the worker policy selects it, the bot policy and meeting-api's ingress select everything without it. A renamed key or value puts workers under the bot policy, silently (architecture pass 4, S54).",
+      "sites": [
+        {
+          "path": "core/runtime/src/runtime_kernel/profiles.py",
+          "pattern": "^CLASS_LABEL = \"([^\"]+)\""
+        },
+        {
+          "path": "core/runtime/src/runtime_kernel/docker_backend.py",
+          "pattern": "\\{\"([a-z.]+)\": \"worker\""
+        },
+        {
+          "path": "deploy/helm/charts/vexa/templates/networkpolicy-workloads.yaml",
+          "pattern": "^\\s+([a-z.]+): worker$"
+        },
+        {
+          "path": "deploy/helm/charts/vexa/templates/networkpolicy-workloads.yaml",
+          "pattern": "^\\s+- key: ([a-z.]+)\\n\\s+operator: NotIn\\n\\s+values: \\[worker\\]"
+        },
+        {
+          "path": "deploy/helm/charts/vexa/templates/networkpolicy.yaml",
+          "pattern": "^\\s+- key: ([a-z.]+)\\n\\s+operator: NotIn\\n\\s+values: \\[worker\\]"
+        },
+        {
+          "path": "deploy/helm/charts/vexa/templates/networkpolicy-namespace.yaml",
+          "pattern": "^\\s+([a-z.]+): worker$"
+        }
+      ]
+    },
+    {
+      "id": "workload-worker-class",
+      "fact": "the class value of an agent worker, as the runtime stamps it and the NetworkPolicies select it",
+      "kind": "literal",
+      "enforced": true,
+      "canonical": "core/runtime/src/runtime_kernel/profiles.py — the agent profile's labels",
+      "how_to_agree": "rename the value in the profile, the docker backend's naming and every NetworkPolicy in one change",
+      "why": "Every site's pattern names the value itself, so a site that renames it matches nothing and fails here: a renamed worker class would otherwise fall under the bot policy (architecture pass 4, S54).",
+      "sites": [
+        {
+          "path": "core/runtime/src/runtime_kernel/profiles.py",
+          "pattern": "labels=\\{CLASS_LABEL: \"(worker)\"\\}"
+        },
+        {
+          "path": "core/runtime/src/runtime_kernel/docker_backend.py",
+          "pattern": "\\{\"vexa\\.role\": \"(worker)\""
+        },
+        {
+          "path": "deploy/helm/charts/vexa/templates/networkpolicy-workloads.yaml",
+          "pattern": "^\\s+vexa\\.role: (worker)$"
+        },
+        {
+          "path": "deploy/helm/charts/vexa/templates/networkpolicy-workloads.yaml",
+          "pattern": "values: \\[(worker)\\]"
+        },
+        {
+          "path": "deploy/helm/charts/vexa/templates/networkpolicy.yaml",
+          "pattern": "values: \\[(worker)\\]"
+        },
+        {
+          "path": "deploy/helm/charts/vexa/templates/networkpolicy-namespace.yaml",
+          "pattern": "^\\s+vexa\\.role: (worker)$"
+        }
+      ]
+    },
+    {
+      "id": "fault-kinds-runtime",
+      "fact": "the kinds a `runtime` fault may carry, in unit.v1 and in the public agent API reference",
+      "kind": "set",
+      "enforced": true,
+      "canonical": "core/agent/contracts/unit.v1/unit.schema.json — $defs.RuntimeFaultKind",
+      "how_to_agree": "a kind is added in the schema (then `node core/agent/contracts/unit.v1/gen-faults.mjs` and `pnpm seal:contracts`) and in the docs row, in one change",
+      "why": "The code sides do not spell kinds: each imports a vocabulary gen-faults.mjs writes from the schema, and validate.mjs --check (gate:schema) fails on drift. The reference page is prose no generator writes, so it is held here, or a kind ships that the documentation never names (architecture pass 6, S65).",
+      "sites": [
+        {
+          "path": "core/agent/contracts/unit.v1/unit.schema.json",
+          "pattern": "\"RuntimeFaultKind\": \\{[^{}]*?\"enum\": \\[([^\\]]*)\\]"
+        },
+        {
+          "path": "docs/docs/api/agent.mdx",
+          "pattern": "^\\| `runtime` \\| ([^|\\n]*) \\|$"
+        }
+      ]
+    },
+    {
+      "id": "fault-kinds-model-provider",
+      "fact": "the kinds a `model-provider` fault may carry, in unit.v1 and in the public agent API reference",
+      "kind": "set",
+      "enforced": true,
+      "canonical": "core/agent/contracts/unit.v1/unit.schema.json — $defs.ModelProviderFaultKind",
+      "how_to_agree": "a kind is added in the schema (then `node core/agent/contracts/unit.v1/gen-faults.mjs` and `pnpm seal:contracts`) and in the docs row, in one change",
+      "why": "The code sides do not spell kinds: each imports a vocabulary gen-faults.mjs writes from the schema, and validate.mjs --check (gate:schema) fails on drift. The reference page is prose no generator writes, so it is held here, or a kind ships that the documentation never names (architecture pass 6, S65).",
+      "sites": [
+        {
+          "path": "core/agent/contracts/unit.v1/unit.schema.json",
+          "pattern": "\"ModelProviderFaultKind\": \\{[^{}]*?\"enum\": \\[([^\\]]*)\\]"
+        },
+        {
+          "path": "docs/docs/api/agent.mdx",
+          "pattern": "^\\| `model-provider` \\| ([^|\\n]*) \\|$"
+        }
+      ]
+    },
+    {
+      "id": "fault-kinds-vexa-tools",
+      "fact": "the kinds a `vexa-tools` fault may carry, in unit.v1 and in the public agent API reference",
+      "kind": "set",
+      "enforced": true,
+      "canonical": "core/agent/contracts/unit.v1/unit.schema.json — $defs.VexaToolsFaultKind",
+      "how_to_agree": "a kind is added in the schema (then `node core/agent/contracts/unit.v1/gen-faults.mjs` and `pnpm seal:contracts`) and in the docs row, in one change",
+      "why": "The code sides do not spell kinds: each imports a vocabulary gen-faults.mjs writes from the schema, and validate.mjs --check (gate:schema) fails on drift. The reference page is prose no generator writes, so it is held here, or a kind ships that the documentation never names (architecture pass 6, S65).",
+      "sites": [
+        {
+          "path": "core/agent/contracts/unit.v1/unit.schema.json",
+          "pattern": "\"VexaToolsFaultKind\": \\{[^{}]*?\"enum\": \\[([^\\]]*)\\]"
+        },
+        {
+          "path": "docs/docs/api/agent.mdx",
+          "pattern": "^\\| `vexa-tools` \\| ([^|\\n]*) \\|$"
+        }
+      ]
+    },
+    {
+      "id": "fault-kinds-agent-worker",
+      "fact": "the kinds a `agent-worker` fault may carry, in unit.v1 and in the public agent API reference",
+      "kind": "set",
+      "enforced": true,
+      "canonical": "core/agent/contracts/unit.v1/unit.schema.json — $defs.AgentWorkerFaultKind",
+      "how_to_agree": "a kind is added in the schema (then `node core/agent/contracts/unit.v1/gen-faults.mjs` and `pnpm seal:contracts`) and in the docs row, in one change",
+      "why": "The code sides do not spell kinds: each imports a vocabulary gen-faults.mjs writes from the schema, and validate.mjs --check (gate:schema) fails on drift. The reference page is prose no generator writes, so it is held here, or a kind ships that the documentation never names (architecture pass 6, S65).",
+      "sites": [
+        {
+          "path": "core/agent/contracts/unit.v1/unit.schema.json",
+          "pattern": "\"AgentWorkerFaultKind\": \\{[^{}]*?\"enum\": \\[([^\\]]*)\\]"
+        },
+        {
+          "path": "docs/docs/api/agent.mdx",
+          "pattern": "^\\| `agent-worker` \\| ([^|\\n]*) \\|$"
+        }
+      ]
+    },
+    {
+      "id": "fault-kinds-agent-api",
+      "fact": "the kinds a `agent-api` fault may carry, in unit.v1 and in the public agent API reference",
+      "kind": "set",
+      "enforced": true,
+      "canonical": "core/agent/contracts/unit.v1/unit.schema.json — $defs.AgentApiFaultKind",
+      "how_to_agree": "a kind is added in the schema (then `node core/agent/contracts/unit.v1/gen-faults.mjs` and `pnpm seal:contracts`) and in the docs row, in one change",
+      "why": "The code sides do not spell kinds: each imports a vocabulary gen-faults.mjs writes from the schema, and validate.mjs --check (gate:schema) fails on drift. The reference page is prose no generator writes, so it is held here, or a kind ships that the documentation never names (architecture pass 6, S65).",
+      "sites": [
+        {
+          "path": "core/agent/contracts/unit.v1/unit.schema.json",
+          "pattern": "\"AgentApiFaultKind\": \\{[^{}]*?\"enum\": \\[([^\\]]*)\\]"
+        },
+        {
+          "path": "docs/docs/api/agent.mdx",
+          "pattern": "^\\| `agent-api` \\| ([^|\\n]*) \\|$"
+        }
+      ]
+    },
+    {
+      "id": "fault-kinds-gateway",
+      "fact": "the kinds a `gateway` fault may carry, in unit.v1 and in the public agent API reference",
+      "kind": "set",
+      "enforced": true,
+      "canonical": "core/agent/contracts/unit.v1/unit.schema.json — $defs.GatewayFaultKind",
+      "how_to_agree": "a kind is added in the schema (then `node core/agent/contracts/unit.v1/gen-faults.mjs` and `pnpm seal:contracts`) and in the docs row, in one change",
+      "why": "The code sides do not spell kinds: each imports a vocabulary gen-faults.mjs writes from the schema, and validate.mjs --check (gate:schema) fails on drift. The reference page is prose no generator writes, so it is held here, or a kind ships that the documentation never names (architecture pass 6, S65).",
+      "sites": [
+        {
+          "path": "core/agent/contracts/unit.v1/unit.schema.json",
+          "pattern": "\"GatewayFaultKind\": \\{[^{}]*?\"enum\": \\[([^\\]]*)\\]"
+        },
+        {
+          "path": "docs/docs/api/agent.mdx",
+          "pattern": "^\\| `gateway` \\| ([^|\\n]*) \\|$"
+        }
+      ]
+    },
+    {
+      "id": "moby-profiles-licence",
+      "fact": "the licence of the seccomp profile derived from Docker's (moby/profiles, Apache-2.0)",
+      "kind": "file-bytes",
+      "enforced": true,
+      "canonical": "licenses/moby-profiles.LICENSE.txt",
+      "how_to_agree": "copy the verbatim upstream licence beside the profile in the runtime package, so every image that carries core/runtime/src carries its licence",
+      "why": "runtime_kernel/seccomp-userns.json is Docker Engine's default profile with one rule added. licenses/ holds the verbatim upstream text (THIRD_PARTY_LICENSES.md); the runtime image's build context is core/runtime, so the copy that travels with the bytes must live there.",
+      "sites": [
+        {
+          "path": "licenses/moby-profiles.LICENSE.txt"
+        },
+        {
+          "path": "core/runtime/src/runtime_kernel/seccomp-userns.LICENSE.txt"
         }
       ]
     }

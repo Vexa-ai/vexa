@@ -13,13 +13,14 @@
  */
 import { NextResponse, type NextRequest } from "next/server";
 import { cookies } from "next/headers";
-import { AUTH_COOKIE, SETUP_GATE_REFUSAL, USER_INFO_COOKIE, findOrCreateUserToken, mintFirstVisitScaffold, signinAllowed } from "../adminApi";
+import { AUTH_COOKIE, USER_INFO_COOKIE, findOrCreateUserToken, mintFirstVisitScaffold } from "../adminApi";
+import { SIGNIN_NOT_ALLOWED, SIGNIN_UNAVAILABLE } from "../../../signinRefusal";
+import { isWellFormedEmail } from "../emailAddress";
 
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
 
 const NO_STORE = { "Cache-Control": "no-store, no-cache, must-revalidate" } as const;
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function isSecureRequest(): boolean {
   return (
@@ -52,27 +53,19 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Email is required" }, { status: 400, headers: NO_STORE });
   }
   const normalized = email.trim().toLowerCase();
-  if (!EMAIL_RE.test(normalized)) {
+  if (!isWellFormedEmail(normalized)) {
     return NextResponse.json({ error: "Invalid email format" }, { status: 400, headers: NO_STORE });
   }
 
-  // ── the company-layer setup gate, BEFORE any user row can exist ───────────────────────────────
-  // While the admin is still writing the company layer into `_global`, only the admin may sign in
-  // (founder ruling 2026-09-02). The order here is load-bearing and is the whole reason this block
-  // is above the next line rather than below it: `findOrCreateUserToken()` CREATES the user as a
-  // side effect, so asking admin-api afterwards and then answering 403 would leave a real account
-  // behind for somebody who was never admitted. Refuse first; create nothing.
-  //
-  // The verdict fails towards ALLOWED (see signinAllowed) — the terminal holds the open half of the
-  // gate; the flows engine and the operator verbs hold the closed half.
-  const gate = await signinAllowed(normalized);
-  if (!gate.allowed) {
-    return NextResponse.json({ error: SETUP_GATE_REFUSAL }, { status: 403, headers: NO_STORE });
-  }
-
+  // Dev-only as this door is, it still ADMITS the way every other door does (Vexa-ai/vexa#1783):
+  // `findOrCreateUserToken` asks first, so a development host reachable from outside — the hot
+  // overlay runs NODE_ENV=development — cannot mint accounts for whoever posts here.
   const result = await findOrCreateUserToken(normalized);
   if (!result.ok) {
-    return NextResponse.json({ error: result.error }, { status: result.status || 500, headers: NO_STORE });
+    const error = result.refused === "not-allowed" ? SIGNIN_NOT_ALLOWED
+      : result.refused === "unavailable" ? SIGNIN_UNAVAILABLE
+      : result.error;
+    return NextResponse.json({ error }, { status: result.status || 500, headers: NO_STORE });
   }
 
   const { user, token } = result;
@@ -86,9 +79,7 @@ export async function POST(request: NextRequest) {
   // redirected to, because this door answers a fetch() and its caller owns the navigation. A failed
   // mint is logged and omitted: the sign-in itself is not held hostage to it, and a caller with no
   // `url` lands where it always did.
-  // …and no arrival at all while the company layer is missing: that sign-in is the administrator's
-  // and the setup conversation is its arrival (#1607). The gate verdict above already says which.
-  const minted = await mintFirstVisitScaffold(user.email, user.id, { globalSetup: gate.global_setup });
+  const minted = await mintFirstVisitScaffold(user.email, user.id);
   if (!minted.ok || !minted.data?.url) {
     console.error(`[terminal-auth] first-visit scaffold mint failed for ${user.email}: ${minted.ok ? "no url" : minted.error}`);
   }

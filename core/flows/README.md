@@ -103,6 +103,15 @@ once per process; a caller sending both is answered on the new one.
 An unreachable identity answers **503**, never 401: not being able to ask who somebody is has not
 established that their credential is bad.
 
+**A worker acting for a person** (an agent worker's delegation token, `vxd_…`) resolves to that
+person, carrying the dispatch's `delegation` (`regime`, `workspaces`, `target`). Flows declares to
+identity that it reads one (`X-Vexa-Internal-Accepts-Delegation: 1`, identity.v1); identity answers
+a worker's token to no caller that does not. A worker whose regime is not `human` has nobody in the
+loop: `DELEGATED_REACH` in `flows_api.py` is the one table of what it may still do — read the
+person's own rows and file friction — and it is refused every other route (today `POST
+/reactions/{id}/{verb}`) with **403** and the same `human_session_required` body agent-api and
+meeting-api answer with. A route missing from the table is refused to it.
+
 ## Meetings is optional, and so is the agent domain
 
 Two of the three domains flows can reach are **capability** doors, and their absence is a shape of

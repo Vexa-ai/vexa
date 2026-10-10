@@ -15,3 +15,7 @@ The witness iteration ladder (each rung keeps the previous one's instrumentation
 
 The witness proves what the storm cannot: real time passing, a real SMTP conversation, and a
 human judging that the artifacts are the ones a user should see.
+
+The live runs (`run_live.py`, `run_product.py`) act for a person at agent-api the way flows does,
+over the internal tier (`flows_steps.agent.as_person`): export the stack's `INTERNAL_API_SECRET`
+first, or they refuse to start.

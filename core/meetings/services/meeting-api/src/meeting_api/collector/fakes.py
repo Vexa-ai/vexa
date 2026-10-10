@@ -18,6 +18,8 @@ from __future__ import annotations
 import json
 from typing import Optional
 
+from .ports import ARTIFACT_DELETION_FIELD, deletion_stamp
+
 
 def _segment_to_api(seg: dict) -> dict:
     """A stored segment → api.v1 ``TranscriptionSegment`` (start/end/text/language required)."""
@@ -86,6 +88,18 @@ class InMemoryTranscriptStore:
             "segments": {s["segment_id"]: s for s in (segments or [])},
         }
         return mid
+
+    async def transcript_erased(self, meeting_id) -> bool:
+        try:
+            m = self._meetings.get(int(meeting_id))
+        except (TypeError, ValueError):
+            return False
+        data = (m or {}).get("data")
+        return isinstance(data, dict) and bool(data.get("artifact_deletion"))
+
+    async def erased_meeting_ids(self) -> list:
+        return sorted(mid for mid, m in self._meetings.items()
+                      if isinstance(m.get("data"), dict) and m["data"].get("artifact_deletion"))
 
     async def native_for(self, meeting_id):
         """Numeric meeting_id → (native_meeting_id, platform), cross-user (the internal segment
@@ -718,13 +732,9 @@ class InMemoryTranscriptStore:
         prior = data.get("artifact_deletion") or {}
         already_deleted = bool(prior and prior.get("state", "completed") == "completed")
         if not already_deleted:
-            data["artifact_deletion"] = {
-                "state": "pending",
-                "requested_at": prior.get("requested_at")
-                or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                "scope": "primary_transcript_and_recording_storage",
-                "backup_residuals": "expire_under_deployment_retention_policy",
-            }
+            data[ARTIFACT_DELETION_FIELD] = deletion_stamp(
+                "pending", prior=prior,
+                at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
             m["data"] = data
         return {
             "meeting_id": meeting_id,
@@ -744,17 +754,13 @@ class InMemoryTranscriptStore:
         data = dict(m.get("data") or {})
         for key in ("recordings", "processed", "notes", "share_grants", "transcript_viewers"):
             data.pop(key, None)
-        data["artifact_deletion"] = {
-            "state": "completed",
-            "completed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-            "scope": "primary_transcript_and_recording_storage",
-            "backup_residuals": "expire_under_deployment_retention_policy",
-        }
+        data[ARTIFACT_DELETION_FIELD] = deletion_stamp(
+            "completed", at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
         m["data"] = data
         if self._redis is not None:
-            await self._redis.delete(
-                f"meeting:{meeting_id}:segments", f"proc:meeting:{meeting_id}"
-            )
+            from .ports import erased_meeting_cache_keys
+
+            await self._redis.delete(*erased_meeting_cache_keys(meeting_id))
             await self._redis.srem("active_meetings", str(meeting_id))
         return True
 

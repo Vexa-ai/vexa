@@ -33,10 +33,10 @@ functions as `rehearse` and `subject_reset`.
 
 ```bash
 bin/rehearse.py states                                       # what the catalogue holds
-bin/rehearse.py plan  organizer-invited olga@rehearse.test   # resolve every step, execute none
-bin/rehearse.py enter organizer-invited olga@rehearse.test   # ← the link comes back
+bin/rehearse.py plan  organizer-invited nora@rehearse.test   # resolve every step, execute none
+bin/rehearse.py enter organizer-invited nora@rehearse.test   # ← the link comes back
 bin/rehearse.py enter attendee-stranger-minutes sam@rehearse.test --meeting 2026-03-16 --fresh
-bin/rehearse.py reset olga@rehearse.test
+bin/rehearse.py reset nora@rehearse.test
 bin/rehearse.py all                                          # every state, per-state pass/fail
 ```
 
@@ -48,7 +48,7 @@ living on.
 1. **Every address must be under `$VEXA_REHEARSE_DOMAIN`** (default `rehearse.test`). Not only the
    one you typed: the check reads the whole resolved plan, so the organizer a recipe derives and
    the room it pulls out of the fixture are checked too. The founder's identities, `_global`, the
-   DNA and OeNB groups are unreachable *by construction*, not by care. The one exception is the
+   DNA and Example Bank groups are unreachable *by construction*, not by care. The one exception is the
    address the mail double itself answers as (`VEXA_MAIL_ADDR`) — every invite is addressed to it.
 2. **No live meeting may belong to anyone outside that domain.** A rehearsal writes facts and
    mail; a live meeting is the one thing here that cannot be re-recorded. The probe **fails

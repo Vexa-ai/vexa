@@ -25,7 +25,7 @@ afterEach(() => vi.restoreAllMocks());
 
 const ACTIVE = { "/api/workspace/active": { subject: "126", active: [] } };
 const NAMES: Record<string, unknown> = {
-  "/api/workspaces/by-slug/126": { id: "aaaaaaaaaa", name: "olga@spi.com", kind: "desk", slug: "126", access: "readable" },
+  "/api/workspaces/by-slug/126": { id: "aaaaaaaaaa", name: "nora@studio.example", kind: "desk", slug: "126", access: "readable" },
   "/api/workspaces/by-slug/grp": { id: "bbbbbbbbbb", name: "ASWF DNA Project", kind: "group", slug: "grp", access: "readable" },
 };
 
@@ -34,7 +34,7 @@ describe("deskPanelPages", () => {
   it("a chat with no workspaces opens the reader's own desk README, not the organisation's", async () => {
     routes({ ...ACTIVE, ...NAMES });
     const pages = await deskPanelPages([]);
-    expect(pages[0]).toEqual({ path: "README.md", label: "olga@spi.com" });
+    expect(pages[0]).toEqual({ path: "README.md", label: "nora@studio.example" });
     expect(pages[0].slug).toBeUndefined();                 // the reader's own — a no-slug read
     expect(pages.at(-1)).toEqual({ path: "README.md", slug: "_global", label: "_global" });
   });
@@ -42,14 +42,14 @@ describe("deskPanelPages", () => {
   it("the desk still leads when the chat stresses a group, and the group is NAMED", async () => {
     routes({ ...ACTIVE, ...NAMES });
     const pages = await deskPanelPages(["grp", "_global"]);
-    expect(pages.map((p) => p.label)).toEqual(["olga@spi.com", "ASWF DNA Project", "_global"]);
+    expect(pages.map((p) => p.label)).toEqual(["nora@studio.example", "ASWF DNA Project", "_global"]);
     expect(pages[1].slug).toBe("grp");
   });
 
   it("`personal` is the desk, not a second tab", async () => {
     routes({ ...ACTIVE, ...NAMES });
     const pages = await deskPanelPages(["personal"]);
-    expect(pages.map((p) => p.label)).toEqual(["olga@spi.com", "_global"]);
+    expect(pages.map((p) => p.label)).toEqual(["nora@studio.example", "_global"]);
   });
 
   it("`_system` is never a tab — always mounted, never chosen", async () => {

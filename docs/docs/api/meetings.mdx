@@ -88,7 +88,7 @@ just a title, and the link can be attached later.
 <ParamField body="title" type="string">What the meeting is about — shown in the Meetings list.</ParamField>
 <ParamField body="scheduled_at" type="string">ISO-8601 start time. Present → status `scheduled` (and [auto-join](#auto-join) arms); absent → `idle`.</ParamField>
 <ParamField body="meeting_url" type="string">A Meet/Zoom/Teams link — parsed server-side into `platform` + `native_meeting_id`. Unrecognized links are rejected with `422`.</ParamField>
-<ParamField body="workspace_id" type="string">Bind the meeting to a shared workspace — its members then see the meeting, its live feed, and the transcript.</ParamField>
+<ParamField body="workspace_id" type="string">Bind the meeting to a shared workspace — its members then see the meeting, its live feed, and the transcript. You must be a member (`403` otherwise). `personal` keeps the meeting yours alone. Omitted, a bot an agent worker sends belongs to the shared workspace its chat is working in, when you are a member of it; any other caller's meeting stays private.</ParamField>
 <ParamField body="auto_join" type="boolean">Send the bot automatically at start time. Default `true`.</ParamField>
 
 ```bash POST /meetings
@@ -457,8 +457,8 @@ silently merges two people — so the API hands you both layers, labelled, and l
 
 ## Recordings
 
-The meeting's **audio recording** is uploaded to object storage — on a self-host, your own MinIO bucket,
-so it never leaves your environment. This is the meeting audio, stored separately from the diarized
+The meeting's **audio recording** is uploaded to object storage — on a self-host, storage you run (Lite and
+Compose keep it as plain files in a local volume), so it never leaves your environment. This is the meeting audio, stored separately from the diarized
 transcript above (there is no "per-speaker audio" — speaker separation lives in the transcript as text).
 
 ```bash List recordings — GET /recordings

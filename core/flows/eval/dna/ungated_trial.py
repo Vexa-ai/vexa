@@ -20,6 +20,10 @@ import argparse, json, os, re, subprocess, sys, time, urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from rig import Rig                                              # noqa: E402
+# agent-api believes a named person only from the gateway's signature or the internal tier;
+# this harness acts for one the way flows does (`flows_steps.agent.as_person`).
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "src"))
+from flows_steps.agent import as_person                         # noqa: E402
 
 AGENT_API = os.environ.get("VEXA_DNA_AGENT_API", "http://127.0.0.1:18500")
 
@@ -34,7 +38,7 @@ def dispatch(prompt, session, budget=420):
     req = urllib.request.Request(
         f"{AGENT_API}/api/chat", method="POST",
         data=json.dumps({"prompt": prompt, "session": session}).encode(),
-        headers={"Content-Type": "application/json", "X-User-Id": "68"})
+        headers={"Content-Type": "application/json", **as_person("68")})
     seen, reply = [], ""
     try:
         with urllib.request.urlopen(req, timeout=budget) as r:

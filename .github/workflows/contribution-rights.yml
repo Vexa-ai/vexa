@@ -3,6 +3,9 @@ name: contribution-rights-driver
 on:
   pull_request_target:
     types: [opened, edited, synchronize, reopened]
+  # Only the dco-range job runs on pull_request; see that job.
+  pull_request:
+    types: [opened, synchronize, reopened]
   issue_comment:
     types: [created, edited, deleted]
   merge_group:
@@ -15,14 +18,18 @@ permissions:
   issues: read
   checks: write
 
+# issue_comment and check_run runs belong to the default branch's newest commit, so each gets its
+# own group: a cancelled run there would mark that commit. PR and merge-group runs belong to the
+# evaluated head and supersede each other. The merge queue re-evaluates rights on its own head.
 concurrency:
-  group: contribution-rights-${{ github.event.pull_request.number || github.event.issue.number || github.event.merge_group.head_sha }}
+  group: contribution-rights-${{ github.event_name }}-${{ github.event.pull_request.number || github.event.merge_group.head_sha || github.run_id }}
   cancel-in-progress: true
 
 jobs:
   evaluate:
     if: >-
       ${{
+        github.event_name != 'pull_request' &&
         (github.event_name != 'issue_comment' || github.event.issue.pull_request != null) &&
         (github.event_name != 'check_run' || (github.event.check_run.name == 'DCO' && github.event.check_run.app.slug == 'dco'))
       }}
@@ -30,11 +37,31 @@ jobs:
     steps:
       # pull_request_target is safe here: only trusted default-branch code is checked out,
       # contributor code is never executed, and the token is limited to publishing this check.
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
+      # The verdict is the published head-bound check run; this job itself never fails on it.
       - name: Evaluate and publish the head-bound rights check
         run: node scripts/contribution-rights-gate.mjs
         env:
           GITHUB_TOKEN: ${{ github.token }}
+
+  # DCO over the pull request's whole commit range, with no commit ceiling: the DCO App reads at
+  # most 250 commits, so a long pull request can neither pass it nor learn which commit is wrong.
+  # Every non-merge commit needs its author's sign-off, or that author's remediation commit naming
+  # it; commits already on the default branch are not re-checked. The verdict is this job's status
+  # and the full commit list is its summary.
+  # It runs on pull_request, not pull_request_target, because it executes this branch's script, so
+  # it gets a read-only token and no secrets. It only reads git history and publishes nothing.
+  dco-range:
+    if: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - name: Check every commit in the range for its author's sign-off
+        run: node scripts/dco-range.mjs

@@ -63,16 +63,6 @@
       "targets": []
     },
     {
-      "key": "VEXA_WORKSPACE_MOUNT_SOURCE",
-      "class": "defaulted",
-      "default": "agent-workspaces",
-      "description": "host path / docker named volume the runtime binds into the worker as the workspace store backing",
-      "targets": [
-        "compose",
-        "helm"
-      ]
-    },
-    {
       "key": "VEXA_MOUNTS",
       "class": "defaulted",
       "default": "(unset \u2014 derived per dispatch: the private baseline only)",
@@ -82,8 +72,8 @@
     {
       "key": "VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH",
       "class": "defaulted",
-      "default": "(required for agent dispatch)",
-      "description": "host path / repo dir of the mandatory GLOBAL SYSTEM workspace (_global), first in EVERY worker stack \u2014 behaviour/skills/tools (AMENDMENT 4). A live mount: updating this one repo propagates to all agents next turn. Missing or invalid configuration fails dispatch closed",
+      "default": "(unset \u2014 the in-store <VEXA_WORKSPACES_DIR>/_global, created empty at boot)",
+      "description": "host path / repo dir of the GLOBAL SYSTEM workspace (_global), first in EVERY worker stack \u2014 behaviour/skills/tools (AMENDMENT 4). Optional: unset means agent-api's own in-store _global, created empty if absent (founder ruling 2026-10-08: _global may be empty). A live mount: updating this one repo propagates to all agents next turn. A configured path that is missing or not a directory fails dispatch closed",
       "targets": [
         "compose",
         "helm"
@@ -124,16 +114,17 @@
       "targets": []
     },
     {
-      "key": "VEXA_AGENT_DEFAULT_SUBJECT",
-      "class": "defaulted",
-      "default": "(empty \u2014 FAIL-CLOSED: 401 when the gateway's X-User-Id is absent)",
-      "description": "single-user fallback subject for a direct/self-host deploy with no gateway in front"
-    },
-    {
       "key": "VEXA_REDIS_URL",
       "class": "defaulted",
       "default": "redis://redis:6379/0",
       "description": "the per-dispatch unit:<id>:out/:in streams the control plane relays (SSE) + the transcript tail"
+    },
+    {
+      "key": "REDIS_WORKLOAD_ACL",
+      "class": "defaulted",
+      "default": "per-workload",
+      "description": "what a spawned agent worker connects to Redis as. `per-workload`: a Redis user of its own \u2014 its own unit's input stream, output stream and read cursor \u2014 defined at spawn and removed when it ends; the service connection never reaches it. `shared`: the service connection, for a Redis that cannot define users (some managed services); every agent worker can then read and write every other's keys, so it is safe only where every person on the instance trusts every other. The service's own Redis user needs ACL SETUSER/DELUSER for `per-workload`.",
+      "targets": []
     },
     {
       "key": "VEXA_WORKSPACES_DIR",
@@ -165,8 +156,8 @@
     {
       "key": "VEXA_DEFAULT_TEMPLATE",
       "class": "defaulted",
-      "default": "finos",
-      "description": "which workspace template new subjects are seeded from",
+      "default": "default",
+      "description": "which workspace template new subjects are seeded from (a subdir of VEXA_WORKSPACE_SEEDS_DIR). agent-api stamps it into every worker, which loads that template's skills and seeds from it",
       "targets": []
     },
     {
@@ -182,7 +173,7 @@
       "key": "VEXA_RUNNER",
       "class": "defaulted",
       "default": "claude-code",
-      "description": "agent harness stamped onto dispatched workspace turns: claude-code (default) | codex (the Codex app-server) | openai-agent (this repo's own loop over any OpenAI-compatible endpoint). The deployment FLOOR only \u2014 Settings \u2192 Models pins a harness per subject and the dispatch overlay wins. The openai-agent lane is configured by VEXA_LLM_BASE_URL / _API_KEY / _MODEL / _EXTRA_BODY, which the WORKER reads from its dispatch-stamped env: #1415 removed them from the runtime's forward list, so they travel by stamp and never by forwarding",
+      "description": "agent harness stamped onto dispatched workspace turns: claude-code (default) | codex (the Codex app-server) | openai-agent (this repo's own loop over any OpenAI-compatible endpoint). The deployment FLOOR only \u2014 Settings \u2192 Models pins a harness per subject and the dispatch overlay wins. The openai-agent lane is configured by VEXA_LLM_BASE_URL / _API_KEY / _MODEL / _EXTRA_BODY, which the runtime forwards into the worker from its own environment; a subject's own Settings \u2192 Models endpoint replaces all four for that subject, because the dispatch stamps them and the runtime never overrides a stamped key",
       "targets": [
         "compose"
       ]
@@ -197,9 +188,16 @@
       ]
     },
     {
+      "key": "VEXA_MODEL_ROUTE",
+      "class": "defaulted",
+      "default": "(unset \u2014 the deployment's own route)",
+      "description": "stamped by the dispatch, never set by a deploy surface: `subject` on a worker whose model route is the person's own Settings \u2192 Models endpoint. The claude-code harness then removes any stored credential from the CLI's config directory before the CLI starts, and refuses the turn when it cannot, so the only credential on that route is the person's own",
+      "targets": []
+    },
+    {
       "key": "VEXA_MODEL_BASE_URL_ALLOW",
       "class": "defaulted",
-      "default": "(empty \u2014 the deployment\u2019s own gateway host(s) plus api.anthropic.com, openrouter.ai and the CCC box)",
+      "default": "(empty \u2014 the deployment\u2019s own gateway host(s) plus api.anthropic.com and openrouter.ai)",
       "description": "operator allow-list for the base_url a SUBJECT may pin under Settings \u2192 Models (comma-separated host globs). A subject-chosen endpoint is an outbound destination picked by a non-operator and the worker carries a model credential to it, so anything unmatched is refused at dispatch with a friction record. Loopback/link-local/private addresses and single-label docker service names (redis, admin-api) need an EXACT literal entry \u2014 a wildcard never reaches the deployment\u2019s own network",
       "targets": [
         "compose"
@@ -236,10 +234,24 @@
     },
     {
       "key": "VEXA_DISPATCH_SIGNING_KEY",
-      "class": "defaulted",
-      "default": "dev-dispatch-signing-key",
+      "class": "required-explicit",
       "secret": true,
-      "description": "the shared key per-dispatch tokens are signed with (dev tier; k8s \u2192 SPIRE behind the same seam)"
+      "description": "the shared key agent-api signs each dispatch's identity token with (dev tier; k8s \u2192 SPIRE behind the same seam). It had a published default, `dev-dispatch-signing-key`; anyone holding that value can mint a token this key would sign, so the boot refuses it, the placeholders, and an unset key. Generated at install on every deploy surface: compose's mint-dev-env.sh, the Helm chart's Secret (kept by lookup), the Lite entrypoint (kept under $VEXA_LITE_STATE_DIR)",
+      "targets": [
+        "compose",
+        "helm",
+        "lite"
+      ],
+      "forbidden_values": [
+        "dev-dispatch-signing-key",
+        "vexa-internal-secret",
+        "lite-internal-secret",
+        "changeme",
+        "change-me",
+        "CHANGE-ME",
+        "default",
+        "secret"
+      ]
     },
     {
       "key": "VEXA_GATEWAY_URL",
@@ -283,6 +295,13 @@
       "targets": [
         "compose"
       ]
+    },
+    {
+      "key": "CODEX_HOME",
+      "class": "defaulted",
+      "default": "($HOME/.codex)",
+      "description": "the worker's Codex home: state, and the subscription auth.json the runtime mounts there. The runtime names it for every worker it spawns (runtime_kernel.workload_env.WORKER_CODEX_HOME) and the Codex CLI reads the same variable, so the mount and the read cannot disagree",
+      "targets": []
     },
     {
       "key": "ANTHROPIC_API_KEY",
@@ -352,6 +371,26 @@
       ]
     },
     {
+      "key": "RUNTIME_API_TOKEN",
+      "class": "required-explicit",
+      "secret": true,
+      "description": "the runtime caller credential agent-api presents (`Authorization: Bearer`) on every runtime.v1 and schedule.v1 call \u2014 worker spawns, routine jobs, the admin panel's workload list. The runtime refuses any other caller; the same value is set on the runtime and on meeting-api, and never stamped into a worker. Unset, the boot refuses: every dispatch would be refused by the runtime",
+      "forbidden_values": [
+        "vexa-internal-secret",
+        "lite-internal-secret",
+        "changeme",
+        "change-me",
+        "CHANGE-ME",
+        "default",
+        "secret"
+      ]
+    },
+    {
+      "key": "VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE",
+      "class": "required-explicit",
+      "description": "gateway-identity.v1 verification key: a file holding the gateway's Ed25519 PUBLIC key (SubjectPublicKeyInfo PEM). agent-api rebuilds every x-user-* header from a verified signature and refuses (401) an identity that is neither signed nor carried by the internal tier, and forwards the verified token unchanged to the credential broker on every agent-role call. It verifies and cannot sign; a private key in this file refuses the boot, as does a missing file or any other key type. Generated at install with the gateway's signing key: compose's identity-keys one-shot, the Helm identity-keys ConfigMap, the Lite entrypoint"
+    },
+    {
       "key": "VEXA_INTERNAL_API_SECRET",
       "class": "defaulted",
       "default": "(unset \u2014 DEPRECATED alias of INTERNAL_API_SECRET; read only when the canonical name is absent, and the boot logs a deprecation warning)",
@@ -378,22 +417,6 @@
       ]
     },
     {
-      "key": "VEXA_MEETINGS_DB_URL",
-      "class": "defaulted",
-      "default": "(unset \u2014 a first-visit scaffold reports no invited meetings rather than guessing)",
-      "description": "Read-only DSN for the meetings database, used for ONE question: which meetings is this email address invited to, read off data.attendees. It is the only record that knows somebody was invited BEFORE they ever signed in, which is exactly the case a first visit is \u2014 an owner-keyed lookup answers 'none' for the person this exists to serve. Unset, invited_meetings is absent from the scaffold and the opening says nothing about meetings rather than asserting there are none; emptiness and ignorance are different sentences to somebody reading their first screen. Delete this key once meeting-api serves an invited-by-address route, so agent-api stops holding a second database credential.",
-      "targets": [
-        "compose"
-      ]
-    },
-    {
-      "key": "VEXA_REQUIRE_GATEWAY_IDENTITY",
-      "class": "defaulted",
-      "default": "false",
-      "description": "when true, reject callers lacking the gateway-signed X-Gateway-Verified identity marker (hardened multi-tenant topology); default false preserves dev/direct-edge access",
-      "targets": []
-    },
-    {
       "key": "VEXA_ALLOW_LOCAL_REPO_ROOT",
       "class": "defaulted",
       "default": "(unset)",
@@ -413,6 +436,7 @@
       "key": "TRANSCRIPTION_SERVICE_TOKEN",
       "class": "defaulted",
       "default": "(unset)",
+      "secret": true,
       "description": "SECRET \u2014 the token paired with TRANSCRIPTION_SERVICE_URL for the on-demand /balance probe (Settings\u2192Models Test). Never logged or echoed; only a pass/fail summary leaves the service",
       "targets": [
         "compose"
@@ -429,20 +453,35 @@
     },
     {
       "key": "VEXA_MCP_URL",
-      "class": "defaulted",
-      "default": "(unset \u2014 no MCP is attached to a worker; the pre-delegation behaviour)",
-      "description": "the vexa-control MCP endpoint a spawned chat worker connects to (e.g. https://rig.dev.vexa.ai/mcp). Set together with VEXA_MCP_DELEGATION_SECRET: either alone leaves the toolbelt OFF, because an endpoint with no credential and a credential with no endpoint are both unusable",
+      "class": "capability",
+      "description": "the MCP endpoint a spawned worker attaches as its `vexa` toolbelt: the gateway's /mcp, where the ONE assembled MCP server serves the meetings, agent and flows tools (ADR-0037). Every deploy surface points it at the in-network gateway",
       "targets": [
-        "compose"
-      ]
+        "compose",
+        "helm",
+        "lite"
+      ],
+      "capability": "worker_toolbelt"
     },
     {
       "key": "VEXA_MCP_DELEGATION_SECRET",
-      "class": "defaulted",
-      "default": "(unset \u2014 delegation is OFF and no worker receives an MCP credential)",
-      "description": "the symmetric HS256 key agent-api SIGNS the per-dispatch MCP delegation token with and the vexa-control MCP VERIFIES with (shared.delegation). Empty must mean ABSENT, never 'signed with nothing' \u2014 a zero-length HMAC key would authenticate anyone who guessed the token format",
+      "class": "capability",
+      "description": "the symmetric HS256 key agent-api SIGNS each worker's per-dispatch delegation token with (shared.delegation); identity's /internal/validate verifies it with the same value, so the gateway authenticates the worker's tool calls as the person it acts for. Empty must mean ABSENT, never 'signed with nothing'. Generated at install on every deploy surface",
       "targets": [
-        "compose"
+        "compose",
+        "helm",
+        "lite"
+      ],
+      "capability": "worker_toolbelt",
+      "secret": true,
+      "forbidden_values": [
+        "vexa-internal-secret",
+        "lite-internal-secret",
+        "changeme",
+        "change-me",
+        "CHANGE-ME",
+        "default",
+        "secret",
+        "delegation.v1-published-test-vector-key"
       ]
     },
     {
@@ -469,15 +508,15 @@
     {
       "key": "VEXA_MCP_DELEGATION_TTL_SEC",
       "class": "defaulted",
-      "default": "3600",
-      "description": "lifetime of a minted MCP delegation token. It only has to outlast one dispatch's warm window, so it is deliberately short: a leaked worker env goes stale on its own rather than needing the human's own credential rotated",
+      "default": "(unset \u2014 VEXA_CHAT_IDLE_TIMEOUT_SEC + 900, i.e. 1800 at the defaults)",
+      "description": "lifetime in seconds (at least 60) of a minted MCP delegation token. The token is revoked when its unit ends (control_plane/delegation_revocation.py); this is the bound when that never happens. The default covers a unit that runs one turn (900 s, the openai-agent harness's per-turn ceiling) and then its warm window. A unit still running when half of this has passed is handed a new token (control_plane/delegation_refresh.py), which its worker picks up before its next turn; the replaced token stays good until its own expiry, so a turn has half of this as headroom",
       "targets": []
     },
     {
       "key": "VEXA_MCP_DELEGATION_TOKEN",
       "class": "defaulted",
       "default": "(unset \u2014 derived per dispatch: minted by the dispatcher, never configured)",
-      "description": "the short-lived scoped delegation token the dispatcher stamps into the WORKER's env (subject + regime + workspace scope + exp + jti); the worker writes it into its gitignored .claude/mcp.json as an Authorization header. Runtime-injected per dispatch, never a deploy surface",
+      "description": "the short-lived scoped delegation token the dispatcher stamps into the WORKER's env (subject + regime + workspace scope + exp + jti); the worker takes it out of its environment at boot and writes it, as an Authorization header, into an MCP attachment in a private directory outside every mount (shared/private_dir.py, 0600 for the harness's user). Runtime-injected per dispatch, never a deploy surface",
       "targets": []
     },
     {
@@ -554,7 +593,7 @@
       "key": "VEXA_LLM_BASE_URL",
       "class": "defaulted",
       "default": "(unset \u2014 falls back to ANTHROPIC_BASE_URL)",
-      "description": "openai-agent harness: the OpenAI-compatible endpoint the turn's chat/completions run against. Falls back to ANTHROPIC_BASE_URL, which is what a per-subject Settings \u2192 Models gateway arrives as \u2014 there is ONE endpoint pair and this is its second spelling, kept because the harness predates the collapse",
+      "description": "openai-agent harness: the deployment's OpenAI-compatible endpoint the turn's chat/completions run against. Unset, ANTHROPIC_BASE_URL applies. A subject's own Settings \u2192 Models endpoint that passes VEXA_MODEL_BASE_URL_ALLOW replaces it for that subject: the dispatch stamps this key and ANTHROPIC_BASE_URL to the subject's endpoint, and the runtime never overrides a stamped key",
       "targets": [
         "compose"
       ]
@@ -564,7 +603,7 @@
       "class": "capability",
       "capability": "model_inference",
       "secret": true,
-      "description": "openai-agent harness: the bearer token for VEXA_LLM_BASE_URL. Optional \u2014 a self-hosted vLLM behind the deployment's own network needs none. Falls back to ANTHROPIC_AUTH_TOKEN then ANTHROPIC_API_KEY",
+      "description": "openai-agent harness: the deployment's bearer token for VEXA_LLM_BASE_URL. Optional \u2014 a self-hosted vLLM behind the deployment's own network needs none. Unset, ANTHROPIC_AUTH_TOKEN then ANTHROPIC_API_KEY apply. Never sent to a subject's own endpoint: there the dispatch stamps the subject's own key under every credential name (empty when they set none)",
       "targets": [
         "compose"
       ]
@@ -573,7 +612,7 @@
       "key": "VEXA_LLM_MODEL",
       "class": "defaulted",
       "default": "(unset \u2014 VEXA_AGENT_MODEL applies)",
-      "description": "openai-agent harness: the model id, when it differs from the product-wide VEXA_AGENT_MODEL. VEXA_AGENT_MODEL is the one Settings \u2192 Models writes and the one the dispatch stamps, so this is an override and not the main dial",
+      "description": "openai-agent harness: a fallback model id, read only when no VEXA_AGENT_MODEL reaches the worker. The worker passes VEXA_AGENT_MODEL (what Settings \u2192 Models writes, under VEXA_MODEL_ALLOWLIST, and the dispatch stamps) into every turn, and it wins. Stamped empty when a subject's own endpoint applies, so this deployment value never names the model sent there",
       "targets": [
         "compose"
       ]
@@ -582,7 +621,16 @@
       "key": "VEXA_LLM_EXTRA_BODY",
       "class": "defaulted",
       "default": "(unset \u2014 no extra fields)",
-      "description": "openai-agent harness: a JSON object merged into EVERY chat/completions request \u2014 the escape hatch for server-specific fields the OpenAI dialect cannot express. THE ONE DIAL WITH NO ANTHROPIC-DIALECT EQUIVALENT, and load-bearing: a self-hosted Qwen returns nothing parseable without {\"chat_template_kwargs\":{\"enable_thinking\":false}}, and a mis-stamped value fails SILENTLY (the turn runs with thinking on). Also settable per subject under Settings \u2192 Models",
+      "description": "openai-agent harness: a JSON object merged into EVERY chat/completions request \u2014 the escape hatch for server-specific fields the OpenAI dialect cannot express. THE ONE DIAL WITH NO ANTHROPIC-DIALECT EQUIVALENT, and load-bearing: a self-hosted Qwen returns nothing parseable without {\"chat_template_kwargs\":{\"enable_thinking\":false}}, and a mis-stamped value fails SILENTLY (the turn runs with thinking on). A subject's own Settings \u2192 Models endpoint carries its own extra_body instead (stamped empty when they set none); the deployment's is never sent there",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_AGENT_MAX_OUTPUT_TOKENS",
+      "class": "defaulted",
+      "default": "(unset \u2014 each harness's own default)",
+      "description": "every harness: the output-token cap a model request asks for. claude-code receives it as CLAUDE_CODE_MAX_OUTPUT_TOKENS and openai-agent sends it as max_tokens; codex does not read it: Codex 0.146.0 has no setting for the model's output cap (its own max_output_tokens fields are per-tool exec budgets), so a Codex turn asks for Codex's default; empty keeps each harness's own default (the claude CLI asks for 32000, which a provider that prices the allowance up front refuses on a small balance with a 402)",
       "targets": [
         "compose"
       ]
@@ -637,7 +685,7 @@
       "key": "VEXA_AGENT_MAX_TOOL_CALLS_CHAT",
       "class": "defaulted",
       "default": "40",
-      "description": "openai-agent harness: tool-call ceiling for a CHAT turn — a sentence and its follow-through. Falls back to VEXA_AGENT_MAX_TOOL_CALLS",
+      "description": "openai-agent harness: tool-call ceiling for a CHAT turn \u2014 a sentence and its follow-through. Falls back to VEXA_AGENT_MAX_TOOL_CALLS",
       "targets": [
         "compose"
       ]
@@ -646,7 +694,7 @@
       "key": "VEXA_AGENT_MAX_TOOL_CALLS_JOB",
       "class": "defaulted",
       "default": "160",
-      "description": "openai-agent harness: tool-call ceiling for a background JOB (Create/Extend), PER WINDOW — reaching it is a checkpoint, not a death. Falls back to VEXA_AGENT_JOB_MAX_TOOL_CALLS, then to VEXA_AGENT_MAX_TOOL_CALLS, and is never below a turn's",
+      "description": "openai-agent harness: tool-call ceiling for a background JOB (Create/Extend), PER WINDOW \u2014 reaching it is a checkpoint, not a death. Falls back to VEXA_AGENT_JOB_MAX_TOOL_CALLS, then to VEXA_AGENT_MAX_TOOL_CALLS, and is never below a turn's",
       "targets": [
         "compose"
       ]
@@ -655,7 +703,7 @@
       "key": "VEXA_AGENT_MAX_TOOL_CALLS_ROOM",
       "class": "defaulted",
       "default": "80",
-      "description": "openai-agent harness: tool-call ceiling for a post-meeting ROOM run — one pass over a finished meeting, which is measurably longer than a sentence. Falls back to VEXA_AGENT_MAX_TOOL_CALLS",
+      "description": "openai-agent harness: tool-call ceiling for a post-meeting ROOM run \u2014 one pass over a finished meeting, which is measurably longer than a sentence. Falls back to VEXA_AGENT_MAX_TOOL_CALLS",
       "targets": [
         "compose"
       ]
@@ -681,8 +729,8 @@
     {
       "key": "VEXA_AGENT_CONTEXT_TOKENS",
       "class": "defaulted",
-      "default": "24000",
-      "description": "openai-agent harness: estimated-token ceiling on the request. A SIZING RULE on a shared inference box rather than a nicety \u2014 a 24k-context request is about 1/29th of the CCC KV cache and an unbounded turn evicts everybody else",
+      "default": "131072",
+      "description": "openai-agent harness: estimated-token budget on a request, a deployment-wide value. With a model catalog the dispatch stamps the chosen model's own window less room for its answer, which wins; an entry with no window leaves this value in force. Over it, the history is compacted quietly (oldest tool results first, never a person's message or the latest exchange)",
       "targets": [
         "compose"
       ]
@@ -778,8 +826,8 @@
     {
       "key": "VEXA_TARGET_WORKSPACE",
       "class": "defaulted",
-      "default": "(unset — present only when the chat has chosen one; unset means the person's own desk)",
-      "description": "the chat's TARGET WORKSPACE (Vexa-ai/vexa#1611) — the one slug this conversation's writes go to, while every other mount in the stack is there to read. Runtime-injected per dispatch, never a deploy surface. The worker reads it to MARK that mount in its own `## Your mounted workspaces` block, so a file operation with no better instruction has a path rather than a guess; agent-api says the same fact in the person's vocabulary (`target workspace: <name> — writes go here unless asked otherwise`) and points the turn's cwd and the delegation token's default `slug` at the same place. A POSITIVE signal rather than an inference from which mount is `primary`, because `primary` also answers for a room run's group desk and for an ordinary subject's own baseline. Founder, 2026-09-06: “it creates files in the wrong workspace, we need so that the thing knew the workspace of writing, if it's specified”",
+      "default": "(unset \u2014 present only when the chat has chosen one; unset means the person's own desk)",
+      "description": "the chat's TARGET WORKSPACE (Vexa-ai/vexa#1611) \u2014 the one slug this conversation's writes go to, while every other mount in the stack is there to read. Runtime-injected per dispatch, never a deploy surface. The worker reads it to MARK that mount in its own `## Your mounted workspaces` block, so a file operation with no better instruction has a path rather than a guess; agent-api says the same fact in the person's vocabulary (`target workspace: <name> \u2014 writes go here unless asked otherwise`) and points the turn's cwd and the delegation token's default `slug` at the same place. A POSITIVE signal rather than an inference from which mount is `primary`, because `primary` also answers for a room run's group desk and for an ordinary subject's own baseline. Founder, 2026-09-06: \u201cit creates files in the wrong workspace, we need so that the thing knew the workspace of writing, if it's specified\u201d",
       "targets": []
     },
     {
@@ -804,11 +852,82 @@
       "targets": []
     },
     {
+      "key": "VEXA_UNIT_IN_KEY",
+      "class": "defaulted",
+      "default": "(unset in agent-api \u2014 stamped per dispatch; a worker without one runs no input-stream entry)",
+      "secret": true,
+      "description": "the unit's input-stream key (shared/unit_input.py): agent-api derives it per unit from INTERNAL_API_SECRET, signs every entry it writes to unit:<id>:in with it and stamps it into that unit's worker, which runs only the entries that verify. Never passed to the model's harness",
+      "targets": []
+    },
+    {
       "key": "REDIS_URL",
       "class": "defaulted",
+      "secret": true,
       "default": "(unset in agent-api \u2014 the runtime injects the worker's connection per dispatch)",
       "description": "the WORKER's redis connection (its unit:<id>:in/out Streams). Runtime-injected per dispatch and deliberately withheld from the model's own subprocess (llm/ports._HARNESS_SUBPROCESS_DENY_VARS) \u2014 a Bash tool holding it reaches another tenant's keys (mandatory in the WORKER, which refuses to run without it; agent-api stamps it and never reads it)",
       "targets": []
+    },
+    {
+      "key": "VEXA_GIT_STORE_BROKER_URL",
+      "class": "capability",
+      "capability": "git_credential_broker",
+      "description": "the credential broker's base URL for Git credentials. Opt-in: set, saved Git tokens and deploy keys move into the broker on first use and a broker outage refuses Git operations rather than falling back to disk; unset, they stay in this service's own encrypted store (VEXA_SECRETS_KEY)",
+      "targets": [
+        "compose",
+        "helm"
+      ]
+    },
+    {
+      "key": "VEXA_GIT_STORE_KEY_FILE",
+      "class": "capability",
+      "capability": "git_credential_broker",
+      "description": "file holding the git role's assertion key, set together with VEXA_GIT_STORE_BROKER_URL",
+      "targets": [
+        "compose",
+        "helm"
+      ]
+    },
+    {
+      "key": "VEXA_CONNECTIONS_BROKER_URL",
+      "class": "capability",
+      "capability": "connections",
+      "description": "the credential broker's base URL (credential-broker.v1). Compose and the chart point it at the broker they deploy with agent-api; unset, every Connections route answers 503 'Connections are not configured on this deployment'",
+      "targets": [
+        "compose",
+        "helm"
+      ]
+    },
+    {
+      "key": "VEXA_CONNECTIONS_AGENT_KEY_FILE",
+      "class": "capability",
+      "capability": "connections",
+      "description": "file holding the agent role's assertion key, the same file the broker verifies with. Mounted into agent-api only: never into a worker, never into the terminal",
+      "targets": [
+        "compose",
+        "helm"
+      ]
+    },
+    {
+      "key": "VEXA_AGENT_AUTO_CONTINUE_CHAT",
+      "default": "1",
+      "description": "openai-agent harness: a CHAT turn that reaches its per-window tool-call budget continues into a fresh window instead of stopping (v0.13.2: research in an ordinary chat is not cut off at 40 calls), at most VEXA_AGENT_MAX_CHAT_CONTINUATIONS times and always inside VEXA_AGENT_MAX_TURN_SEC. 0 restores the hard per-turn call cap. Validated by agent-api at boot (shared/config.py) and stamped into every worker (dispatch.build_unit_env).",
+      "class": "defaulted",
+      "targets": [
+        "compose",
+        "helm",
+        "lite"
+      ]
+    },
+    {
+      "key": "VEXA_AGENT_MAX_CHAT_CONTINUATIONS",
+      "default": "4",
+      "description": "openai-agent harness: the most fresh windows a chat turn may continue into (0-50). After the last one the turn stops at the tool-call budget and offers Continue, so a chat cannot run unbounded: with the default 40 calls a window, 200 calls. Validated by agent-api at boot and stamped into every worker.",
+      "class": "defaulted",
+      "targets": [
+        "compose",
+        "helm",
+        "lite"
+      ]
     }
   ],
   "capabilities": {
@@ -821,6 +940,21 @@
       "description": "spawned agent-workers will have a model-provider credential path available \u2014 dispatch stamps the model-auth allowlist from this service's env into every worker spec env (uniform across docker/k8s/process backends); the docker runtime additionally brokers/mounts creds itself (see the runtime's config.v1 for the mount mechanics + file probe)",
       "mode": "any",
       "when_unconfigured": "terminal chat / workspace turns fail inside the worker ('Model inference failed: Not logged in') \u2014 set CLAUDE_CODE_OAUTH_TOKEN (subscription OAuth), an ANTHROPIC_* key, or HOST_CLAUDE_CREDENTIALS (docker subscription mount)"
+    },
+    "connections": {
+      "description": "Connections: the agent can request, list and use a person's connected accounts and services through the credential broker, without ever receiving a credential",
+      "mode": "all",
+      "when_unconfigured": "every /api/connections* route answers 503 'Connections are not configured on this deployment', and so does /api/onboarding/research for `start` and `next`, which reach the broker; its `status` and `ack` answer from the research already stored. The agent's connection tools report the same sentence"
+    },
+    "git_credential_broker": {
+      "description": "Git tokens and deploy keys are kept in the credential broker instead of this service's own encrypted store",
+      "mode": "all",
+      "when_unconfigured": "nothing degrades: Git credentials stay in the local encrypted store (control_plane/secret_store.py, keyed by VEXA_SECRETS_KEY)"
+    },
+    "worker_toolbelt": {
+      "description": "each spawned worker gets the vexa MCP toolbelt: a delegation token minted per dispatch (who it acts for, the regime, the workspace ceiling) and the gateway's /mcp to present it to",
+      "mode": "all",
+      "when_unconfigured": "workers run with no vexa tools; the dispatcher logs the gap on every spawn and the worker files a spawn_gap friction record when only one of the two is set"
     }
   },
   "surface_only": [

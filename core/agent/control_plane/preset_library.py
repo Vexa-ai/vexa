@@ -51,9 +51,10 @@ from __future__ import annotations
 
 import logging
 import os
-import shutil
 from pathlib import Path
 from typing import Optional
+
+from workspaces.shared import workspace_paths as wpaths
 
 logger = logging.getLogger("agent_api.preset_library")
 
@@ -130,21 +131,19 @@ def top_up(global_root: "str | Path", image_dir: "str | Path | None" = None) -> 
         return []
     dst = Path(global_root) / ASKS_DIRNAME
     added: list[str] = []
-    try:
-        dst.mkdir(parents=True, exist_ok=True)
-    except OSError as e:
-        logger.warning("preset_library: cannot create %s (%s) — the image's copy is what "
-                       "read_preset will fall back on", dst, e)
-        return []
+    # `_global` is written by an admin's turn, so `asks/` and each preset are reached through
+    # `workspace_paths`: a preset that is there as a REAL file is the admin's and is left alone; a
+    # link at a preset is not "there" and is replaced, never written through; a link at `asks/`
+    # refuses the copy.
     for f in _shippable(Path(src)):
-        target = dst / f.name
+        rel = f"{ASKS_DIRNAME}/{f.name}"
         # EXISTENCE IS THE WHOLE TEST. Not mtime, not size, not content — a file that is there is
         # the admin's, and a deploy must not be able to revert their edit.
-        if target.exists():
+        if wpaths.is_file_inside(global_root, rel):
             continue
         try:
-            shutil.copy2(f, target)
-        except OSError as e:
+            wpaths.copy_file_inside(f, global_root, rel)
+        except (OSError, ValueError) as e:   # ValueError: a link in the way (PathRefused)
             logger.warning("preset_library: could not add %s to %s (%s)", f.name, dst, e)
             continue
         added.append(f.name)

@@ -2,11 +2,11 @@
 
 ## Step 1 — get the words. Nothing else happens until this succeeds.
 
-Call the tool `mcp__vexa__meeting_transcript` with `meeting_id={mid}` and `tail=0`.
+Call the tool `mcp__vexa__get_meeting_transcript` with `meeting_db_id={mid}`.
 
 That tool IS available to you in this turn. If you do not see it in your tool list, load it first
-(your harness may defer MCP tools behind a tool-search step) and then call it. `tail=0` returns
-EVERY segment of the meeting, not a sample.
+(your harness may defer MCP tools behind a tool-search step) and then call it. Without
+`since_index` it returns EVERY segment of the meeting, not a sample.
 
 You may not write the record from the title, from the meeting id, from this prompt, or from
 anything you already believe about this group. None of those are the meeting. If the call returns

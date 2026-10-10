@@ -2,8 +2,8 @@
 {{- /*
 THE ADOPTION PANEL — three ConfigMaps, no workload, no Service, no network policy to write.
 
-WHAT THIS DOES NOT DO: deploy Grafana. Standing an observability stack inside a central bank's
-cluster is that bank's platform decision, not a side effect of installing a meeting bot — and
+WHAT THIS DOES NOT DO: deploy Grafana. Standing an observability stack inside a regulated
+customer's cluster is that customer's platform decision, not a side effect of installing a meeting bot — and
 the delivery kit already carries a declared hole about shipping monitoring CRDs it does not
 mirror (`kube-prometheus-stack-not-mirrored`). So the chart publishes the two artifacts and
 stops: a Grafana that already runs with the standard sidecar picks them up by label, and an

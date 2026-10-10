@@ -14,30 +14,6 @@ LEASE_S = 90.0
 BACKOFF_S = (5.0, 30.0, 120.0, 600.0)
 MAX_ATTEMPTS = 6
 
-# Was the engine parked by the instance gate on the previous tick? Module-level on purpose: what
-# an operator needs in the log is the TRANSITION, not the state. `tick` runs about once a second,
-# so a line per tick is a line nobody reads, while a line per change is the timeline of the outage.
-_GATE_UP = False
-
-
-def _log_gate(db: DB, up: bool) -> None:
-    """Print the gate's edges, once each. The count is read only when parking BEGINS — it is the
-    number an operator actually asks for ("how much is queued behind this?") and it must not cost
-    a query per tick to answer."""
-    global _GATE_UP
-    if up == _GATE_UP:
-        return
-    _GATE_UP = up
-    if up:
-        rows = db.execute(
-            "SELECT COUNT(*) FROM reaction WHERE status IN ('admitted','retrying')")
-        n = rows[0][0] if rows else 0
-        print(f"[loop] PARKED by the instance gate — {n} reaction(s) keep their place in the "
-              f"queue; nothing is claimed, nothing is failed, no attempt is burned", flush=True)
-    else:
-        print("[loop] instance gate open — resuming", flush=True)
-
-
 def _row_to_reaction(row: tuple):
     (rid, sid, et, refs, flow, ver, step, status, attempt,
      nra, bdl, lease, reason, scratch) = row
@@ -74,25 +50,9 @@ def effect_key(r: Reaction, target: str = "") -> str:
     return f"{r.reaction_id}:{r.step}" + (f":{target}" if target else "")
 
 
-def tick(db: DB, registry: Registry, clock: Clock, *, emit=None, gate=None, present=None) -> bool:
+def tick(db: DB, registry: Registry, clock: Clock, *, emit=None, present=None) -> bool:
     """One unit of work. Returns False when nothing was due (caller sleeps poll_ms).
     ``emit`` (optional) lets steps publish facts: (event_type, source_id, refs) -> int.
-
-    ``gate`` (optional) is a ZERO-ARG PREDICATE answering "may work run at all?". False parks the
-    entire engine — PARK, never drop.
-
-    It is asked BEFORE `claim`, and that position is the whole design. Nothing is leased while the
-    gate is up, so there is no lease to expire, no half-run step, and no row for the reconciler to
-    reclaim; a fact keeps its `admitted`/`retrying` status, its `next_run_at`, its `attempt` and
-    its `reason` exactly as it had them. When the gate opens, everything that arrived during the
-    outage runs in the order it arrived, having lost nothing.
-
-    Deliberately NOT done here: pushing `next_run_at` out on the parked rows. It reads like the
-    tidier expression of "come back later", and it silently REORDERS the queue — a fact admitted
-    one second before the gate opens is due immediately, while a fact admitted an hour earlier was
-    pushed a minute into the future and now runs second. Leaving the rows untouched is both
-    cheaper and the only version that preserves arrival order. Same reasoning for `attempt`: a
-    parked reaction that retried itself into `failed` would be a dropped fact, just slower.
 
     ``present`` (optional) is a PREDICATE ON A DOMAIN NAME — "is this domain deployed?" — asked of
     every domain a step declared through `@reg.step(needs=…)` BEFORE the body runs. Asked before
@@ -107,16 +67,14 @@ def tick(db: DB, registry: Registry, clock: Clock, *, emit=None, gate=None, pres
     and tells it. PRD decision 40.7 asks for a product that keeps working with a domain removed,
     and only the first of the three was ever implemented.
 
-    ``gate`` and ``present`` both default to None — no gate, everything present — so every existing
-    caller (the fixtures, the storm, the offline suite) is unchanged, and `flows/` still imports
-    nothing from `flows_integrations/` or `flows_steps/`: the engine core does not learn what an
-    instance is or which domains a deployment has, the worker injects both.
+    ``present`` defaults to None — everything present — so every existing caller (the fixtures, the
+    storm, the offline suite) is unchanged, and `flows/` still imports nothing from
+    `flows_integrations/` or `flows_steps/`: the engine core does not learn which domains a
+    deployment has, the worker injects it.
+
+    There used to be a ``gate`` predicate here that parked the whole engine while the instance's
+    company layer was unwritten. It went with that gate (founder ruling 2026-10-08).
     """
-    if gate is not None:
-        if not gate():
-            _log_gate(db, True)
-            return False       # "nothing to do, sleep" — the caller's idle path is already right
-        _log_gate(db, False)
     r = claim(db, clock)
     if r is None:
         return False

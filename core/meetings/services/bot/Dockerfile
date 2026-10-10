@@ -106,12 +106,16 @@ FROM vexa/meet-join-env:dev AS runtime
 # it back on clean teardown; without the binary every authenticated spawn fails
 # at session-restore. The Playwright + humanized-X11 stack (xvfb·xdotool·xclip·
 # x11vnc·websockify) comes from the base.
+# The Playwright base pins a browser and therefore an Ubuntu snapshot; `apt-get upgrade` takes the
+# archive's security updates since (OpenSSL, GnuPG) without moving the browser. The bot runs `node` and
+# nothing else, so the base's package managers (npm, corepack, yarn) and the dependencies npm bundles go.
 # noble (#1011) dropped `awscli` from the archive — `apt-get install awscli` has no
 # installation candidate there, which broke this image the moment the base moved. AWS's
 # own v2 installer is the supported path on 24.04; it is the same binary the session
 # store shells out to, so nothing above this line changes.
 RUN export DEBIAN_FRONTEND=noninteractive \
     && apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
     && apt-get install -y --no-install-recommends \
        pulseaudio \
        fluxbox \
@@ -124,7 +128,9 @@ RUN export DEBIAN_FRONTEND=noninteractive \
     && /tmp/aws/install \
     && rm -rf /tmp/aws /tmp/awscliv2.zip \
     && rm -rf /var/lib/apt/lists/* \
-    && aws --version
+    && aws --version \
+    && rm -rf /usr/lib/node_modules/npm /usr/lib/node_modules/corepack /usr/lib/node_modules/yarn \
+         /usr/bin/npm /usr/bin/npx /usr/bin/corepack /usr/bin/yarn /usr/bin/yarnpkg
 
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
     DISPLAY=:99 \
@@ -180,6 +186,15 @@ RUN chmod +x /app/entrypoint.sh
 # $HOME/.aws. /tmp is mode 1777, so it is writable by every UID without knowing which one.
 # See vexa-delivery docs/engineering/openshift-parity.mdx — "HOME=/tmp is the one-variable fix".
 ENV HOME=/tmp
+
+# A NON-ROOT uid, because Chromium will not sandbox a browser running as root, and nothing the bot
+# does needs root: its display, audio daemon, browser profile and recordings all live in /tmp. The
+# two places it writes outside /tmp are made writable by any uid (so OpenShift's assigned UID works
+# as well as this default): the join module's checkpoint screenshots, and the X socket directory a
+# non-root Xvfb cannot create under a root-owned /tmp/.X11-unix. The runtime runs the bot's own
+# container under a seccomp profile that lets the browser build its sandbox (user namespaces).
+RUN install -d -m 1777 /app/storage/screenshots /tmp/.X11-unix
+USER 10002:10002
 
 # noVNC (browser view) — present in the env base; harmless if unused.
 EXPOSE 6080

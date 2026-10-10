@@ -1,0 +1,218 @@
+---
+title: "Pages"
+description: "Find, read, edit and grow the Markdown pages in your workspaces: the navigator, in-place editing, Extend and Create, images, diagrams, and moving pages."
+---
+
+Every page in Minutes is a Markdown file in a [workspace](/concepts#workspace), a git repository the
+agent reads and writes. The right half of the screen shows one page at a time. This page explains how to
+find pages, edit them, ask the agent to grow them, and what happens to images and diagrams.
+
+## What you can do
+
+### Find a page
+
+1. Click the **folder icon** at the left of the page header, or press <kbd>/</kbd> after it is open,
+   to show the **navigator**. It is hidden by default, and your browser remembers whether you left it
+   open.
+2. The navigator lists your **Desk** first, then the company workspace (`_global`, shown under the
+   company name when it is known), then every shared workspace you belong to, by name. Workspaces you
+   cannot read are not listed at all.
+3. Type in **Filter files** to match file *names* across every listed workspace. The list shows the
+   first 50 matches. Content search is not available yet; a filter that starts with `>` says so and
+   matches names.
+4. **Click** a file to read it in the view slot. **Middle-click** it, or press **⧉** (*Open in a tab*),
+   to keep it as a tab.
+
+Press <kbd>Esc</kbd> in the filter to clear it, and again to close the navigator.
+
+### Tabs and history
+
+- The tab shown in *italics* is the **preview**: the next page you open replaces it. Pin a page
+  (*Keep this as a tab*) to keep it.
+- **‹** and **›** step back and forward through the pages you read (<kbd>⌘/Ctrl</kbd> + <kbd>[</kbd> and
+  <kbd>]</kbd>).
+- The breadcrumb under the header lists any folder on the path when you click it. A numeric folder reads
+  *personal* and `.system` reads *private*.
+
+### Edit a page
+
+1. Press **Edit**. The page opens in an editor that keeps the file as plain Markdown with live
+   formatting, in the same colours as the read view (light or dark).
+2. Press **Save**. The page is written and committed to the workspace's git history with the message
+   `edit <path> (terminal page editor)`, then re-read.
+3. **Cancel** drops the draft.
+
+There is no keyboard shortcut for Save. An empty path shows *No page here yet* with a **Create this
+page** button.
+
+### Extend or create a page with the agent
+
+Under a page you will find one of these cards:
+
+| Card | Shown on | What the agent does |
+|---|---|---|
+| **Extend this page** | any page | "Research it, write what is found around it, link both ways." |
+| **Extend this meeting page** | a meeting page | "Take in what has been said since last time, page what it names, link both ways." |
+| **Create this page** | an empty path | "Research it, write it, link what is found around it both ways." |
+
+Press the card, optionally type one line in **what to do with it (optional)**, and press
+<kbd>Enter</kbd>. <kbd>Esc</kbd> goes ahead without a line; there is no cancel. The act runs as a
+[background job](/minutes/chats#background-jobs): the card turns into a status line, the chat stays
+free for other questions, and the page comes into view when the job commits.
+
+What Extend researches, and where it looks, is described in
+[Onboarding research and Extend](/how-to/onboarding-research#extend).
+
+**Extend this meeting page** reads only the transcript that arrived since the last extend. The page
+keeps a `transcript_cursor` in its frontmatter; a page with no cursor, or an older page whose cursor is
+not a whole number, is read from the top.
+
+To ask about *part* of a page or transcript, select the text. An **Ask about this** button appears; it
+drafts a quote into the chat box, and you decide whether to send it. A selection never starts a job.
+
+### Images
+
+- **Drop or paste** files into the editor. They are stored in the workspace under `assets/`, with a
+  relative link inserted (`![name](assets/…)`). Pasted screenshots are named `pasted-YYYYMMDD-HHMMSS`.
+  Files that are not images are stored and linked as plain links.
+- An image that lives on another site shows *External image — it lives on* the host's name, with a
+  **Fetch into the workspace** button. Fetching copies it into `assets/` and records where it came from
+  in `assets/SOURCES.md`.
+- If a fetch fails, **Find it** asks the chat to look for the image and **Remove the link** commits the
+  page without it.
+
+### Diagrams and properties
+
+- A ` ```mermaid ` code block renders as a diagram, both in the read view and under the fence while you
+  edit.
+- A page whose frontmatter has a `type:` (an [OKF](/how-to/workspace-files#the-knowledge-graph-is-an-okf-bundle)
+  entity) shows the frontmatter as **Entity properties**: a key/value list where web addresses are
+  links.
+
+### Remove and move pages
+
+Removing and moving are agent verbs: ask in the chat ("move this page to the project workspace",
+"delete the draft"). The navigator has no rename, delete or drag. A move inside one workspace leaves a
+pointer page at the old path (`moved_to:` in its frontmatter), so old links still lead somewhere. A move
+to another workspace writes the target and removes the source, without a pointer. A removed page stays
+in the git history.
+
+## Limits and errors
+
+| You see | Why | What to do |
+|---|---|---|
+| *Could not save: …* under the editor | the write was refused or failed; your draft is kept | read the reason; see the refusals below |
+| *not authorized for this workspace* | you are a viewer, or not a member | ask an owner for the contributor role |
+| *only an org admin may edit _global* | the company workspace is admin-written | ask an admin |
+| *kg/templates/ holds entity shapes, not records* | templates are not editable as pages | write the record elsewhere |
+| *that path is not inside this workspace* | the path is absolute, contains `..`, or names `.git`, `.vexa` or `.claude` | use a path inside the workspace |
+| *… exceeds 25MB* | the upload ceiling is 25 MB per file | shrink or link the file |
+| *External image* fetch refused | only `http`/`https` addresses on the public internet can be fetched; internal names and private, loopback and link-local addresses are refused | host the image publicly or upload it |
+| *This image does not exist at that address (the site answered 404).* and similar | the remote site answered badly (shown as the site's status) or did not answer | use **Find it** or **Remove the link** |
+| *diagram not drawn — …* | the Mermaid source does not parse | fix the diagram source |
+| *… — queued behind the one running.* | another act on the same page is running | it starts when the first one ends |
+
+Saves have **no conflict check**: a save replaces the whole file, so the last save wins. Fetches time
+out after 20 seconds and follow at most 3 redirects. When the agent writes a page that links an external
+image that is dead or not an image, the link is cut out (the text stays) and a friction report is filed.
+
+## How it works
+
+### Flow
+
+1. **Read.** The page view calls `GET /api/workspace/file?path=…&slug=…` on the terminal. The terminal
+   server forwards it to the gateway as `/agent/workspace/file` with your API key. The gateway resolves
+   the key to you and forwards to agent-api `/api/workspace/file` with your identity signed. agent-api
+   checks your access to the workspace and returns the file.
+2. **Save.** `PUT /api/workspace/file` with `{path, content, slug}` goes the same way. agent-api checks
+   that you may write there, drops external images that do not resolve, writes the file without
+   following symbolic links, and commits.
+3. **Extend / Create.** The card sends a typed *intent* (`extend`, `extend_transcript` or `create`,
+   plus the path and your optional line) through the chat. agent-api runs it as a background job on the
+   page; the agent's commit lands, and the terminal brings the page into view.
+4. **Images.** A drop is `PUT /api/workspace/asset` (multipart; the terminal passes the bytes through
+   undecoded). A fetch is `POST /api/workspace/asset {url}`: agent-api fetches it through its URL guard,
+   stores it under `assets/`, records the source, and makes one commit.
+5. **Remove / move.** The agent calls the `workspace_delete` / `workspace_move` tools, which reach
+   `POST /agent/workspace/remove` and `POST /agent/workspace/move`. Both ends of a move are authorized
+   before anything is written.
+
+### Who writes what
+
+| Data | Single writer | Where |
+|---|---|---|
+| Pages, `assets/`, `assets/SOURCES.md`, git history | agent-api (the `workspaces` library inside the agent domain) | the workspace's git repository |
+| Navigator open/closed | your browser | `localStorage` key `vexa.minutes.navigator` |
+| Extend job state | agent-api's worker jobs | in the agent domain; shown on the card |
+
+The terminal stores no page content. It reads and forwards.
+
+### Routes
+
+| Browser calls (terminal) | Gateway | agent-api |
+|---|---|---|
+| `GET /api/workspace/tree`, `/file`, `/active`, `/shared` | `/agent/workspace/…` | `/api/workspace/…` |
+| `PUT /api/workspace/file` | `/agent/workspace/file` | `/api/workspace/file` |
+| `PUT`, `POST`, `GET /api/workspace/asset` | `/agent/workspace/asset` | `/api/workspace/asset` |
+| agent tools `workspace_delete`, `workspace_move` | `/agent/workspace/remove`, `/agent/workspace/move` | `/api/workspace/remove`, `/api/workspace/move` |
+
+The gateway's mapping of `/agent/*` onto agent-api's `/api/*` is declared in `core/agent/routes.v1.json`;
+the tools are declared in `core/agent/mcp.tools.v1.json`.
+
+### Configuration
+
+`GATEWAY_URL` on the terminal server (default `http://127.0.0.1:18056`). A terminal built in
+[meetings mode](/minutes/overview#configuration) refuses page writes with `404`; reads still work.
+
+## Why it complies
+
+### Architecture
+
+| Rule | How this design meets it | Gate |
+|---|---|---|
+| **P2** couple only through contracts · **P6** one front door | the browser calls only the terminal's `/api/*`; the terminal calls only the gateway, through routes declared in `routes.v1.json` | `gate:isolation`, `gate:exports`, `gate:domain-doors` |
+| **P4** published schemas | the routes and tools are sealed registries (`routes.v1`, `mcp.tools.v1`) | `gate:schema`, `gate:contract-version` |
+| **P18** fail loud | a refused save keeps the draft and shows the reason; refused, failing and unreachable fetches answer distinct codes (`400`, `424`, `502`); an unreachable gateway is a `502`, never a silent success | ungated: reviewed; the proxy's `502` is pinned by `workspaceProxy.test.ts` under `gate:node` |
+| **P20** authorize every access | agent-api checks read and write rights on every path route, and on both ends of a move | deny tests below, under `gate:python` and `gate:node` |
+| **P21** state from evidence | the Extend card shows the job's phase, and the page appears when the commit lands, not when the button is pressed | ungated: reviewed |
+| **P23** one writer per carrier | agent-api is the only writer of a workspace repository; the terminal never writes files | `gate:dataflow` |
+
+### Security
+
+**Who can do what.** You can read your own desk, the company workspace, a colleague's desk (read-only),
+your own private tier, and every shared workspace you belong to (viewers included). You can write your
+desk, your private tier, a shared workspace where you are a contributor or above, and the company
+workspace only as an org admin. Nobody writes `kg/templates/`. An agent acting for you is further held
+to the workspace scope of the chat that dispatched it.
+
+**Protections.**
+
+- Identity comes from your sign-in cookie on the terminal server and is signed by the gateway; the
+  browser never names a user.
+- Paths are refused if they are absolute, contain `..`, name a repository or identity directory, or
+  reach outside the workspace through a symbolic link.
+- Remote images are fetched only over `http`/`https`, never from internal names or private, loopback or
+  link-local addresses; every redirect is checked again, and the body is capped at 25 MB.
+- Stored assets are served with `nosniff` and a `default-src 'none'; sandbox` content security policy.
+- Diagrams render with Mermaid's strict security level from the bundled package. Frontmatter
+  properties never run links or markup.
+
+**Deny tests.**
+
+| Test | Proves |
+|---|---|
+| `core/agent/tests/test_agent_api_authz.py` · `test_every_path_route_refuses_the_same_shapes`, `test_every_path_route_refuses_a_symlink_out_of_the_workspace`, `test_every_path_route_refuses_the_repository_and_identity_directories` | bad paths are refused on every route |
+| `test_agent_api_authz.py` · `test_a_non_member_is_refused_by_every_route_that_names_a_group`, `test_a_colleagues_desk_is_readable_and_never_writable` | membership and read-only desks |
+| `core/agent/tests/test_lane_a_shared_mounts.py` · `test_non_member_is_refused_shared_tree_and_file`, `test_non_member_is_refused_a_shared_WRITE_by_slug`, `test_viewer_gets_a_read_only_shared_mount` | shared workspaces |
+| `core/agent/tests/test_workspace_delete_move.py` · `test_a_path_that_leaves_the_workspace_is_refused`, `test_the_private_system_tier_is_never_a_removal_target`, `test_a_cross_workspace_move_into_a_workspace_the_caller_only_reads_is_refused`, `test_a_move_out_of_the_company_tier_is_refused_for_everyone_but_the_admin`, `test_kg_templates_are_shapes_and_not_records_here_either` | remove and move |
+| `core/agent/tests/test_workspace_assets.py` · `test_the_asset_route_is_scoped_exactly_like_the_file_route`, `test_the_deployments_own_network_is_never_an_asset_source`, `test_every_redirect_hop_is_re_checked_against_the_guard`, `test_a_refused_url_is_a_named_400_not_a_silent_empty_asset`, `test_an_enormous_remote_costs_the_call_and_not_the_workspace` | assets and fetches |
+| `core/agent/tests/test_page_images.py` · `test_a_redirect_into_this_deployments_own_network_is_refused_on_the_hop`, `test_a_page_written_with_a_dead_image_address_comes_out_without_it` | image checks on page writes |
+| `core/agent/tests/test_workspace_paths_nofollow.py` · `test_a_linked_directory_component_refuses_a_write` | no writes through links |
+| `clients/terminal/src/app/api/__tests__/workspaceProxy.test.ts` · "passes an upstream 403 through as 403 — never masked as 405 or 502", "refuses PUT with 404 and never reaches the upstream" | the terminal does not hide refusals, and meetings mode cannot write |
+| `clients/terminal/src/minutes/__tests__/navigator.test.ts` · "refuses a path that walks out of its mount"; `extend.test.ts` · "refuses a path that is missing, empty, or walks out of its mount" | the client refuses bad paths before sending |
+| `clients/terminal/src/ui-kit/__tests__/entityProperties.test.tsx` · "does not execute links or markup from metadata" | properties are inert |
+
+## Related
+
+- [Browse, upload, and swap the workspace](/how-to/workspace-files) — the same files over the API
+- [Workspaces](/core/workspaces) · [Obsidian](/obsidian) · [Chats](/minutes/chats) · [Workspaces and connections](/minutes/workspaces)

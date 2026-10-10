@@ -26,7 +26,7 @@ vi.mock("../../ui-kit/MdxDoc", async (importOriginal) => {
 
 import { PagesPanel } from "../PagesPanel";
 import { LINE_PLACEHOLDER } from "../ExtendAction";
-import { ASK_CHAT_EVENT } from "../../canvas/actions";
+import { ASK_CHAT_EVENT } from "../../platform";
 import { INSTRUCTION_LEAD, clearPending } from "../extend";
 import { INSTRUCTION_MAX, normalizeIntent } from "../../surfaces/chatIntent";
 import type { PageIntent } from "../../surfaces/chatIntent";
@@ -133,61 +133,17 @@ function highlight(host: HTMLElement, from: number, length: number) {
   act(() => { document.dispatchEvent(new Event("selectionchange")); });
 }
 
-describe("the floating control on a selection takes the same line", () => {
-  const rendered = (over: Partial<Parameters<typeof PagesPanel>[0]> = {}) => {
-    const r = panel(over);
-    return { ...r, doc: r.container.querySelector("[data-mdx]") as HTMLElement };
-  };
-
-  it("a press opens the field and sends nothing yet", () => {
-    const { container, doc } = rendered();
-    highlight(doc, 13, 24);                              // "The pilot ships in March"
-    fireEvent.mouseDown(container.querySelector('[data-doc-act="extend-selection"]') as HTMLElement);
-
-    expect(field(container)).toBeTruthy();
-    expect(asks).toHaveLength(0);
-  });
-
-  it("the field SURVIVES its own focus collapsing the selection it is about", () => {
-    const { container, doc } = rendered();
+describe("selection prepares a composer quote", () => {
+  it("quotes the selected text without opening an inline prompt or firing an intent", () => {
+    const { container } = panel();
+    const doc = container.querySelector("[data-mdx]") as HTMLElement;
     highlight(doc, 13, 24);
-    fireEvent.mouseDown(container.querySelector('[data-doc-act="extend-selection"]') as HTMLElement);
-
-    // what focusing an input does to a document selection, exactly
-    act(() => {
-      (window.getSelection() as Selection).removeAllRanges();
-      document.dispatchEvent(new Event("selectionchange"));
-    });
-    expect(field(container)).toBeTruthy();
-
-    type(field(container)!, LINE);
-    fireEvent.keyDown(field(container)!, { key: "Enter" });
-    expect(asks[0].intent).toMatchObject({ selection: "The pilot ships in March", instruction: LINE });
-  });
-
-  it("the WHERE and the WHAT travel together — selection, its source range, and the line", () => {
-    const { container, doc } = rendered();
-    highlight(doc, 13, 24);
-    fireEvent.mouseDown(container.querySelector('[data-doc-act="extend-selection"]') as HTMLElement);
-    type(field(container)!, LINE);
-    fireEvent.keyDown(field(container)!, { key: "Enter" });
-
-    const i = asks[0].intent!;
-    expect(i.kind).toBe("extend");
-    expect(i.path).toBe(PATH);
-    expect(i.instruction).toBe(LINE);
-    expect(BODY.slice(i.selection_range!.start, i.selection_range!.end)).toBe("The pilot ships in March");
-  });
-
-  it("Escape extends the selection with no line", () => {
-    const { container, doc } = rendered();
-    highlight(doc, 13, 24);
-    fireEvent.mouseDown(container.querySelector('[data-doc-act="extend-selection"]') as HTMLElement);
-    fireEvent.keyDown(field(container)!, { key: "Escape" });
-
+    fireEvent.click(container.querySelector('[data-doc-act="extend-selection"]') as HTMLElement);
+    expect(field(container)).toBeNull();
     expect(asks).toHaveLength(1);
-    expect(asks[0].intent?.selection).toBe("The pilot ships in March");
-    expect(asks[0].intent?.instruction).toBeUndefined();
+    expect(asks[0]).toMatchObject({ mode: "draft" });
+    expect(asks[0].intent).toBeUndefined();
+    expect(asks[0].prompt).toContain("> The pilot ships in March");
   });
 });
 

@@ -28,7 +28,7 @@ WHEN = "2026-08-03T14:00:00Z"
 
 SEGS = [
     {"start": 0.0, "end": 4.5, "speaker": "Larry", "text": "Welcome to the TSC call."},
-    {"start": 4.5, "end": 9.25, "speaker": "Marvin", "text": "Two items on the agenda today."},
+    {"start": 4.5, "end": 9.25, "speaker": "Quentin", "text": "Two items on the agenda today."},
     {"start": 9.25, "end": 15.0, "speaker": "Larry", "text": "Let us start with the first."},
 ]
 
@@ -81,7 +81,7 @@ def test_imported_segments_read_back_through_the_by_id_transcript():
     assert body["start_time"].startswith("2026-08-03T14:00:00")
     texts = [s["text"] for s in body["segments"]]
     assert texts == [s["text"] for s in SEGS]           # in order
-    assert body["segments"][1]["speaker"] == "Marvin"   # speakers survive
+    assert body["segments"][1]["speaker"] == "Quentin"   # speakers survive
 
 
 def test_a_second_import_of_the_same_source_writes_nothing():

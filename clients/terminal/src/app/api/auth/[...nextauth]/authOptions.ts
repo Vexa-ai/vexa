@@ -13,7 +13,9 @@ import { type AuthOptions } from "next-auth";
 import GoogleProvider from "next-auth/providers/google";
 import AzureADProvider from "next-auth/providers/azure-ad";
 import { cookies } from "next/headers";
-import { AUTH_COOKIE, SETUP_GATE_REFUSAL, USER_INFO_COOKIE, findOrCreateUserToken, mintFirstVisitScaffold, signinAllowed } from "../adminApi";
+import { AUTH_COOKIE, USER_INFO_COOKIE, findOrCreateUserToken, mintFirstVisitScaffold } from "../adminApi";
+import { SIGNIN_ERROR_NOT_ALLOWED, SIGNIN_ERROR_UNAVAILABLE, SIGNIN_ERROR_UNVERIFIED } from "../../../signinRefusal";
+import { verifiedProviderIdentity } from "../providerIdentity";
 
 const isGoogleEnabled = () => !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
 const isMicrosoftEnabled = () =>
@@ -26,6 +28,15 @@ function isSecureRequest(): boolean {
     (process.env.TERMINAL_URL || "").startsWith("https://") ||
     process.env.NODE_ENV === "production"
   );
+}
+
+/** True when `url` is an absolute URL on exactly `baseUrl`'s origin (scheme, host and port). */
+export function sameOrigin(url: string, baseUrl: string): boolean {
+  try {
+    return new URL(url).origin === new URL(baseUrl).origin;
+  } catch {
+    return false;
+  }
 }
 
 /** The one-shot hand-off from `signIn` to `redirect` (F42). Short-lived and httpOnly: it carries a
@@ -82,28 +93,44 @@ export const authOptions: AuthOptions = {
   callbacks: {
     /** The load-bearing step: turn a verified OAuth identity into the terminal's `vexa-token` +
      *  `vexa-user-info` cookies, reusing the admin-api find-or-create+mint flow. Deny on any failure. */
-    async signIn({ user, account }) {
+    async signIn({ user, account, profile }) {
       const provider = account?.provider;
       if ((provider !== "google" && provider !== "microsoft") || !user.email) return false;
 
-      // The company-layer setup gate — the THIRD door, and it needs the guard for exactly the same
-      // reason the other two do: findOrCreateUserToken() on the next line CREATES the user as a side
-      // effect, so a refusal placed after it would leave a ghost account for somebody who was never
-      // admitted. OAuth is not a weaker door than the magic link, it is a door with a different
-      // proof, and the gate is about WHO may enter, not HOW they proved it.
-      //
-      // NextAuth turns a `false` here into a redirect to `pages.error` ("/"), which is the sign-in
-      // card — and that card reads /api/auth/instance and renders the same refusal sentence. So the
-      // user does see why, even though this callback has no channel of its own to say it in.
-      const gate = await signinAllowed(user.email.toLowerCase());
-      if (!gate.allowed) {
+      // THE ADDRESS IS ONLY USABLE WHEN THE PROVIDER VERIFIED IT (../providerIdentity.ts): accounts
+      // here are keyed by email, so Google must say `email_verified`, and Microsoft must be this
+      // instance's pinned tenant or carry `xms_edov`. Decided before admin-api is asked anything.
+      const identity = verifiedProviderIdentity(provider, {
+        account: account as unknown as Record<string, unknown>,
+        profile: profile as unknown as Record<string, unknown> | undefined,
+      });
+      if (!identity.ok) {
         // eslint-disable-next-line no-console
-        console.warn(`[terminal-auth] ${provider} sign-in refused for ${user.email}: ${SETUP_GATE_REFUSAL} (reason: ${gate.reason})`);
-        return false;
+        console.info(`[terminal-auth] ${provider} sign-in refused: ${identity.why}`);
+        return `/?error=${SIGNIN_ERROR_UNVERIFIED}`;
       }
 
-      const result = await findOrCreateUserToken(user.email.toLowerCase());
+      // WHO MAY SIGN IN (Vexa-ai/vexa#1783) is asked inside findOrCreateUserToken, BEFORE it can
+      // create an account — the same question the emailed link asks, about the address the provider
+      // vouched for. It is about the ADDRESS, not the provider: a provider added later lands here
+      // and is asked the same thing.
+      //
+      // A refusal returns a URL rather than `false`. `false` becomes NextAuth's `?error=AccessDenied`,
+      // which cannot tell "this address may not sign in" from a cancelled consent screen; the codes
+      // below let the sign-in card say the one sentence every door uses (app/signinRefusal.ts) —
+      // naming no list and no domain, so it reveals nothing the person could not learn by trying.
+      const result = await findOrCreateUserToken(identity.email, { subject: identity.subject });
       if (!result.ok) {
+        if (result.refused === "not-allowed") {
+          // eslint-disable-next-line no-console
+          console.info(`[terminal-auth] ${provider} sign-in refused: ${user.email} is not allowed to sign in`);
+          return `/?error=${SIGNIN_ERROR_NOT_ALLOWED}`;
+        }
+        if (result.refused === "unavailable") {
+          // eslint-disable-next-line no-console
+          console.error(`[terminal-auth] ${provider} sign-in refused, admission unavailable (fail closed): ${result.error}`);
+          return `/?error=${SIGNIN_ERROR_UNAVAILABLE}`;
+        }
         // eslint-disable-next-line no-console
         console.error(`[terminal-auth] ${provider} sign-in failed for ${user.email}: ${result.error}`);
         return false;
@@ -129,9 +156,8 @@ export const authOptions: AuthOptions = {
       // lands them exactly where it always did. Returning `false` here would refuse an authenticated
       // person over a missing conversation, which is not the trade — see mintFirstVisitScaffold.
       try {
-        // Same two conditions as the other doors, decided in the same place: nothing to return to,
-        // and no other arrival for this sign-in — the setup conversation is one (#1607).
-        const minted = await mintFirstVisitScaffold(result.user.email, result.user.id, { globalSetup: gate.global_setup });
+        // Same condition as the other doors, decided in the same place: nothing to return to.
+        const minted = await mintFirstVisitScaffold(result.user.email, result.user.id);
         if (minted.ok && minted.data?.url) {
           cookieStore.set(ARRIVAL_COOKIE, minted.data.url, { ...opts, httpOnly: true, maxAge: 120 });
         } else {
@@ -158,8 +184,9 @@ export const authOptions: AuthOptions = {
         if (arrival) return arrival;
       }
       if (url.startsWith("/")) return `${baseUrl}${url}`;
-      if (url.startsWith(baseUrl)) return url;
-      return baseUrl;
+      // An absolute target is followed only to this instance's OWN origin, compared as an origin:
+      // a prefix match would also pass a host that merely begins with this one's name.
+      return sameOrigin(url, baseUrl) ? url : baseUrl;
     },
   },
 };

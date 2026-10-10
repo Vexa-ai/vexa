@@ -41,22 +41,22 @@ def events(stream):
 # ── the pre-pass ─────────────────────────────────────────────────────────────────────────────────
 
 def test_names_come_out_of_prose_mechanically():
-    assert E.candidate_names("Cottalango Leon chairs it for Sony Pictures Imageworks.") == \
-        ["Cottalango Leon", "Sony Pictures Imageworks"]
+    assert E.candidate_names("Robin Vale chairs it for Brightwater Picture Studios.") == \
+        ["Robin Vale", "Brightwater Picture Studios"]
 
 
 def test_a_wikilinked_name_is_still_a_candidate_for_the_pre_pass():
     """The brackets are not the question — the index is. A `[[Name]]` with no page renders as an
     inert 'not found' chip, which is the same failure wearing brackets."""
-    assert E.candidate_names("[[Olga Avramenko]] chairs it.", mask_linked=False) == \
-        ["Olga Avramenko"]
-    assert E.candidate_names("[[Olga Avramenko]] chairs it.", mask_linked=True) == []
+    assert E.candidate_names("[[Nora Quill]] chairs it.", mask_linked=False) == \
+        ["Nora Quill"]
+    assert E.candidate_names("[[Nora Quill]] chairs it.", mask_linked=True) == []
 
 
 def test_missing_names_subtracts_what_the_desk_already_holds(tmp_path):
-    E.upsert_entity(tmp_path, "person", "Olga Avramenko", ["a fact"], "a source")
-    got = E.missing_names([tmp_path], ["Olga Avramenko met Cottalango Leon."])
-    assert got == ["Cottalango Leon"]
+    E.upsert_entity(tmp_path, "person", "Nora Quill", ["a fact"], "a source")
+    got = E.missing_names([tmp_path], ["Nora Quill met Robin Vale."])
+    assert got == ["Robin Vale"]
 
 
 def test_missing_names_is_capped_because_the_list_is_the_budget(tmp_path):
@@ -67,13 +67,13 @@ def test_missing_names_is_capped_because_the_list_is_the_budget(tmp_path):
 
 
 def test_a_turn_whose_names_all_have_pages_never_reaches_a_model(tmp_path):
-    E.upsert_entity(tmp_path, "person", "Olga Avramenko", ["a fact"], "a source")
+    E.upsert_entity(tmp_path, "person", "Nora Quill", ["a fact"], "a source")
     mounts = [{"slug": "d", "path": str(tmp_path), "write": True}]
-    assert engine.writeback_candidates(["Olga Avramenko chairs it."], mounts) == []
+    assert engine.writeback_candidates(["Nora Quill chairs it."], mounts) == []
 
 
 def test_a_read_only_mount_is_not_searched_for_candidates(tmp_path):
-    assert engine.writeback_candidates(["Olga Avramenko chairs it."],
+    assert engine.writeback_candidates(["Nora Quill chairs it."],
                                        [{"slug": "_global", "path": str(tmp_path),
                                          "write": False}]) == []
 
@@ -84,7 +84,7 @@ def test_no_candidates_means_no_phase(monkeypatch):
     monkeypatch.delenv("VEXA_WRITEBACK", raising=False)
     assert engine.should_write_back("a long message " * 20, tool_calls=3, candidates=[]) is False
     assert engine.should_write_back("a long message " * 20, tool_calls=3,
-                                    candidates=["Olga Avramenko"]) is True
+                                    candidates=["Nora Quill"]) is True
 
 
 def test_a_turn_that_already_upserted_gets_no_phase(monkeypatch):
@@ -92,7 +92,7 @@ def test_a_turn_that_already_upserted_gets_no_phase(monkeypatch):
     out that the work is done — which is the phase on exactly the turns that need it least."""
     monkeypatch.delenv("VEXA_WRITEBACK", raising=False)
     assert engine.should_write_back("anything", tool_calls=4, upserts=2,
-                                    candidates=["Olga"]) is False
+                                    candidates=["Nora"]) is False
 
 
 def test_the_legacy_call_shape_still_gates_on_cheapness(monkeypatch):
@@ -185,7 +185,7 @@ def test_the_phase_is_handed_the_candidate_list_not_the_prompt(tmp_path, monkeyp
 
     def turn(_p):
         yield {"type": "tool-call", "tool": "Read", "args": {}, "callId": "a"}
-        yield {"type": "message-delta", "text": "Cottalango Leon chairs the DNA TSC."}
+        yield {"type": "message-delta", "text": "Robin Vale chairs the DNA TSC."}
         yield {"type": "done", "reply": "x", "sessionId": "s"}
 
     def writeback(candidates):
@@ -196,8 +196,8 @@ def test_the_phase_is_handed_the_candidate_list_not_the_prompt(tmp_path, monkeyp
     s = FakeStream()
     serve(s, out_topic="out", in_topic="in", turn=turn,
           start={"entrypoint": {"inline": "what happened?"}}, idle_ms=1, writeback=writeback)
-    assert "Cottalango Leon" in got["candidates"]
-    assert engine.writeback_prompt(got["candidates"]).count("Cottalango Leon") == 1
+    assert "Robin Vale" in got["candidates"]
+    assert engine.writeback_prompt(got["candidates"]).count("Robin Vale") == 1
 
 
 def test_a_turn_that_names_nobody_new_runs_no_model_call(tmp_path, monkeypatch):
@@ -371,12 +371,12 @@ def test_a_phase_inside_its_budget_is_waited_for_not_killed(tmp_path, monkeypatc
 # ── phantom names out of truncated text ──────────────────────────────────────────────────────────
 
 def test_a_truncated_name_never_becomes_a_page(tmp_path):
-    """Measured on a second turn over a populated desk: the pre-pass proposed "James Spadaf",
-    "James Spad" and "Technical Stee" — fragments cut out of the 80-character tool-result PREVIEW
+    """Measured on a second turn over a populated desk: the pre-pass proposed "James Hollis",
+    "James Holl" and "Technical Stee" — fragments cut out of the 80-character tool-result PREVIEW
     the worker seam carries. None had a page, none ever would, and each dragged a model call the
     gate existed to prevent: 2 of 2 turns, the gate failing open."""
-    got = E.missing_names([tmp_path], ["James Spadafora and James Spad and James Spadaf spoke."])
-    assert got == ["James Spadafora"]
+    got = E.missing_names([tmp_path], ["James Hollister and James Holl and James Hollis spoke."])
+    assert got == ["James Hollister"]
 
 
 def test_the_pre_pass_is_not_fed_tool_result_previews(tmp_path, monkeypatch):
@@ -390,7 +390,7 @@ def test_the_pre_pass_is_not_fed_tool_result_previews(tmp_path, monkeypatch):
     def turn(_p):
         yield {"type": "tool-call", "tool": "Read", "args": {}, "callId": "a"}
         yield {"type": "tool-result", "callId": "a", "ok": True,
-               "summary": "...transcript of the call with James Spadaf"}
+               "summary": "...transcript of the call with James Hollis"}
         yield {"type": "message-delta", "text": "Nothing was decided."}
         yield {"type": "done", "reply": "x", "sessionId": "s"}
 

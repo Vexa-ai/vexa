@@ -50,7 +50,7 @@ def main():
             print(f"{cohort:<12} (no rates-{cohort}.json — not sampled)")
             continue
         for n in SIZES:
-            o = O.build("spi", n)
+            o = O.build("studio", n)
             P.assign(o)
             # restrict the population to this cohort: its own people, its own meetings
             keep = set(cohorts.split(o)[cohort])

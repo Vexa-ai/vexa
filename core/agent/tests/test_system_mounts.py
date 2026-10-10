@@ -56,10 +56,12 @@ def test_global_mount_carries_a_pinned_ref(tmp_path):
     assert global_mount(settings2, "/workspaces")["ref"] is None
 
 
-def test_global_mount_fails_closed_when_unconfigured_or_missing(tmp_path, monkeypatch):
+def test_global_mount_defaults_to_an_empty_in_store_global_and_fails_closed_on_a_bad_path(tmp_path, monkeypatch):
+    """Unconfigured is not an error any more (founder ruling 2026-10-08): `_global` is the in-store
+    directory, created empty. A CONFIGURED path that does not exist still fails closed."""
     monkeypatch.delenv("VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH", raising=False)
-    with pytest.raises(RuntimeError, match="required"):
-        global_mount(load_settings(), "/workspaces")
+    m = global_mount(load_settings(), str(tmp_path))
+    assert (tmp_path / "_global").is_dir() and "source" not in m
     settings = load_settings(global_system_workspace_path=str(tmp_path / "does-not-exist"))
     with pytest.raises(RuntimeError, match="does not exist"):
         global_mount(settings, "/workspaces")
@@ -110,14 +112,15 @@ def test_build_mount_set_is_global_active_system_in_order(tmp_path):
     assert [m["slug"] for m in stack if m["role"] == "private"] == [m["slug"] for m in active]
 
 
-def test_build_mount_set_fails_closed_without_global(tmp_path, monkeypatch):
-    """A dispatch cannot start without the mandatory organisation tier."""
+def test_build_mount_set_dispatches_with_no_global_configured(tmp_path, monkeypatch):
+    """A fresh stack configures nothing: the stack still leads with `_global`, the empty in-store one."""
     monkeypatch.delenv("VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH", raising=False)
     root = tmp_path / "ws"
     _seed_baseline(root, "u1")
     settings = load_settings(workspaces_dir=str(root))
-    with pytest.raises(RuntimeError, match="every agent stack includes _global"):
-        build_mount_set(settings, "u1")
+    stack = build_mount_set(settings, "u1")
+    assert stack[0]["slug"] == "_global" and stack[0]["write"] is False
+    assert stack[0]["path"] == f"{root}/_global" and "source" not in stack[0]
 
 
 def test_build_mount_set_survives_a_broken_system_tier(tmp_path, monkeypatch):

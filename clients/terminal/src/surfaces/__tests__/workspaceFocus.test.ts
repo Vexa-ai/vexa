@@ -1,7 +1,7 @@
 /** A WORKSPACE CREATED FROM A CHAT JOINS THAT CHAT (Vexa-ai/vexa#1603) — the client half.
  *
  *  Founder walk, 2026-09-06. He asked for *"a new workspace where we will collect everything we
- *  know about ILM"*; the agent made it and then had to tell him:
+ *  know about Copperline"*; the agent made it and then had to tell him:
  *
  *      *"The new workspace isn't in my native mount stack (it's reached via the workspace_* tools).
  *      Let me seed it via `entity_upsert`, which writes into the target workspace."*
@@ -62,7 +62,7 @@ const noWait = { now: () => 0, sleep: async () => {}, reconnectBackoffMs: 0 };
 async function run(chunks: string[]) {
   const { state, cb } = recorder();
   const fetchImpl = (async () => sseResponse(chunks)) as unknown as typeof fetch;
-  await streamChatTurn({ prompt: "a new workspace for everything we know about ILM",
+  await streamChatTurn({ prompt: "a new workspace for everything we know about Copperline",
                          session: "pchat-abc", active: null },
     cb, { ...noWait, fetchImpl, signal: new AbortController().signal });
   return state;
@@ -71,12 +71,12 @@ async function run(chunks: string[]) {
 describe("the focus event on the chat stream", () => {
   it("forwards the workspace the create made, and its human name", async () => {
     const s = await run([
-      ev({ type: "focus", workspace: "industrial-light-magic-4040f4",
-           name: "Industrial Light and Magic" }),
+      ev({ type: "focus", workspace: "copperline-effects-4040f4",
+           name: "Copperline Effects" }),
       ev({ type: "turn-complete" }),
     ]);
-    expect(s.focused).toEqual([{ workspace: "industrial-light-magic-4040f4",
-                                 name: "Industrial Light and Magic" }]);
+    expect(s.focused).toEqual([{ workspace: "copperline-effects-4040f4",
+                                 name: "Copperline Effects" }]);
   });
 
   it("carries an empty name rather than inventing one", async () => {
@@ -89,7 +89,7 @@ describe("the focus event on the chat stream", () => {
     // answers "what is this chat over", and folding it into either would put the wrong question's
     // rules (a reader's chosen focus, a pin) in charge of a mount set.
     const s = await run([
-      ev({ type: "focus", workspace: "grp-abc", name: "ILM" }),
+      ev({ type: "focus", workspace: "grp-abc", name: "Copperline" }),
       ev({ type: "turn-complete" }),
     ]);
     expect(s.artifacts).toEqual([]);
@@ -97,7 +97,7 @@ describe("the focus event on the chat stream", () => {
   });
 
   it("ignores a focus that names no workspace", async () => {
-    const s = await run([ev({ type: "focus", name: "ILM" }), ev({ type: "turn-complete" })]);
+    const s = await run([ev({ type: "focus", name: "Copperline" }), ev({ type: "turn-complete" })]);
     expect(s.focused).toEqual([]);
   });
 
@@ -105,13 +105,13 @@ describe("the focus event on the chat stream", () => {
     // Create runs as a background job (#1584). The chat it was asked in is still the chat that made
     // the place; a foreign job on the shared Stream is not this connection's business.
     const s = await run([
-      ev({ type: "job-started", job_id: "j1", kind: "create", target: "ILM", line: "on it" }),
-      ev({ type: "focus", job_id: "j1", workspace: "grp-ilm", name: "ILM" }),
+      ev({ type: "job-started", job_id: "j1", kind: "create", target: "Copperline", line: "on it" }),
+      ev({ type: "focus", job_id: "j1", workspace: "grp-copperline", name: "Copperline" }),
       ev({ type: "focus", job_id: "OTHER", workspace: "grp-someone-else" }),
       ev({ type: "job-done", job_id: "j1", line: "done" }),
       ev({ type: "turn-complete" }),
     ]);
-    expect(s.focused.map((f) => f.workspace)).toEqual(["grp-ilm"]);
+    expect(s.focused.map((f) => f.workspace)).toEqual(["grp-copperline"]);
   });
 });
 
@@ -119,8 +119,8 @@ describe("the focus event on the chat stream", () => {
 
 describe("the header chip is the chat's focus", () => {
   it("shows a workspace the turn created, beside what the chat already had", () => {
-    expect(focusSet(["personal", "_global", "industrial-light-magic-4040f4"]))
-      .toEqual(["personal", "industrial-light-magic-4040f4"]);
+    expect(focusSet(["personal", "_global", "copperline-effects-4040f4"]))
+      .toEqual(["personal", "copperline-effects-4040f4"]);
   });
 
   it("…and never the two that are mounted in every chat", () => {

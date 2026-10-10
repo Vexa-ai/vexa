@@ -11,7 +11,7 @@
  */
 "use client";
 import { createContext, useContext } from "react";
-import { OPEN_ENTITY_EVENT } from "../canvas/actions";
+import { OPEN_ENTITY_EVENT } from "../platform";
 
 // ── contexts ─────────────────────────────────────────────────────────────────────
 /** `slug` (when the key is PRESENT) pins the target workspace — including `undefined`

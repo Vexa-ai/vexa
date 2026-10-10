@@ -142,7 +142,7 @@ def test_illegal_nonterminal_transition_is_409(frm, to):
     """Every disallowed edge out of a non-terminal state → 409 echoing the exact from/to."""
     repo = InMemoryMeetingRepo()
     _seed(repo, status="requested")
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
     _drive_to(client, frm, connection_id="sess-uid")
 
     ev = {"connection_id": "sess-uid", "status": to}
@@ -165,7 +165,7 @@ def test_transition_off_terminal_is_409_unless_same(frm, to):
         pytest.skip("same-terminal redelivery is the idempotent no-op (section 2)")
     repo = InMemoryMeetingRepo()
     _seed(repo, status="requested")
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
     _drive_to(client, frm, connection_id="sess-uid")
 
     ev = {"connection_id": "sess-uid", "status": to, "exit_code": 1}
@@ -181,7 +181,7 @@ def test_first_event_other_than_joining_is_409():
         repo = InMemoryMeetingRepo()
         # No persisted status that maps to a non-None BotStatus → rehydrate yields None.
         _seed(repo, status="requested")
-        client = TestClient(create_app(meeting_repo=repo))
+        client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
         ev = {"connection_id": "sess-uid", "status": to, "exit_code": 1}
         r = _post(client, **ev)
         assert r.status_code == 409, f"{to}: {r.text}"
@@ -198,7 +198,7 @@ def test_nonterminal_same_status_replay_is_200(status):
     """Redelivering the record's CURRENT non-terminal status is a 200 no-op (not a 409)."""
     repo = InMemoryMeetingRepo()
     _seed(repo, status="requested")
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
     _drive_to(client, status, connection_id="sess-uid")
 
     r = _post(client, connection_id="sess-uid", status=status)
@@ -210,7 +210,7 @@ def test_completed_redelivery_is_200():
     """The bot retries its terminal up to 3x — a second `completed` must be 200, not 409."""
     repo = InMemoryMeetingRepo()
     _seed(repo, status="active")
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
     ev = {"connection_id": "sess-uid", "status": "completed", "exit_code": 0, "completion_reason": "stopped"}
     r1 = _post(client, **ev)
     r2 = _post(client, **ev)
@@ -223,7 +223,7 @@ def test_failed_redelivery_is_200():
     """The OTHER terminal (failed) must also be idempotent on redelivery — not only completed."""
     repo = InMemoryMeetingRepo()
     _seed(repo, status="active")
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
     ev = {"connection_id": "sess-uid", "status": "failed", "exit_code": 1, "completion_reason": "join_failure"}
     r1 = _post(client, **ev)
     r2 = _post(client, **ev)
@@ -258,7 +258,7 @@ def test_rehydration_allows_next_legal_event(persisted):
     repo = InMemoryMeetingRepo()
     _seed(repo, status=persisted)
     # Fresh app → empty MeetingStore (post-restart).
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
 
     ev = {"connection_id": "sess-uid", "status": next_status}
     if next_status in ("completed", "failed"):
@@ -275,7 +275,7 @@ def test_rehydration_does_not_mask_real_illegality():
     persisted at `active` that receives `joining` (active→joining) still 409s after rehydration."""
     repo = InMemoryMeetingRepo()
     _seed(repo, status="active")
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
     r = _post(client, connection_id="sess-uid", status="joining")
     assert r.status_code == 409, r.text
     assert r.json()["from"] == "active" and r.json()["to"] == "joining"
@@ -286,7 +286,7 @@ def test_rehydration_requested_then_skip_joining_is_409():
     still illegal → 409 (rehydration of `requested` is the pre-joining entry, not a free pass)."""
     repo = InMemoryMeetingRepo()
     _seed(repo, status="requested")
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
     r = _post(client, connection_id="sess-uid", status="active")
     assert r.status_code == 409, r.text
     assert r.json()["from"] is None and r.json()["to"] == "active"
@@ -298,7 +298,7 @@ def test_rehydration_in_memory_record_wins_over_stale_db():
     still succeed (the in-memory ACTIVE is the source of truth, not the stale DB `joining`)."""
     repo = InMemoryMeetingRepo()
     m = _seed(repo, status="requested")
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
     assert _post(client, connection_id="sess-uid", status="joining").status_code == 200
     assert _post(client, connection_id="sess-uid", status="active").status_code == 200
     # Simulate a stale DB read regressing to joining (it shouldn't reseed the live record).
@@ -313,7 +313,7 @@ def test_illegal_local_edge_refreshes_newer_db_state_from_another_replica():
     `stopping`; the durable row repairs the stale local FSM instead of returning 409 forever."""
     repo = InMemoryMeetingRepo()
     meeting = _seed(repo, status="requested")
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
     assert _post(client, connection_id="sess-uid", status="joining").status_code == 200
 
     # Another meeting-api replica observed admission and the user's stop request.
@@ -337,7 +337,7 @@ def test_illegal_local_edge_refreshes_newer_db_state_from_another_replica():
 def test_missing_status_is_422():
     repo = InMemoryMeetingRepo()
     _seed(repo, status="requested")
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
     r = client.post(ENDPOINT, json={"connection_id": "sess-uid"})
     assert r.status_code == 422, r.text
     assert "schema violation" in r.json()["detail"]
@@ -345,7 +345,7 @@ def test_missing_status_is_422():
 
 def test_missing_connection_id_is_422():
     repo = InMemoryMeetingRepo()
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
     r = client.post(ENDPOINT, json={"status": "joining"})
     assert r.status_code == 422, r.text
 
@@ -353,7 +353,7 @@ def test_missing_connection_id_is_422():
 def test_bad_status_enum_is_422():
     repo = InMemoryMeetingRepo()
     _seed(repo, status="requested")
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
     r = client.post(ENDPOINT, json={"connection_id": "sess-uid", "status": "bogus"})
     assert r.status_code == 422, r.text
 
@@ -363,7 +363,7 @@ def test_unknown_connection_id_joining_is_accepted_but_not_persisted():
     in-memory record and returns 200, but the DB persist no-ops (unknown session). This DOCUMENTS
     the current behaviour — the callback does not 404 an unknown session."""
     repo = InMemoryMeetingRepo()  # no meeting/session seeded
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
     r = client.post(ENDPOINT, json={"connection_id": "ghost", "status": "joining"})
     assert r.status_code == 200, r.text
     assert r.json()["meeting_status"] == "joining"
@@ -376,7 +376,7 @@ def test_unknown_connection_id_terminal_is_409():
     session) → fresh status=None → None→completed is illegal → 409. The bot can't 'complete' a
     session the control plane never saw."""
     repo = InMemoryMeetingRepo()
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
     r = client.post(ENDPOINT, json={"connection_id": "ghost", "status": "completed", "exit_code": 0})
     assert r.status_code == 409, r.text
     assert r.json()["from"] is None and r.json()["to"] == "completed"
@@ -407,7 +407,7 @@ def test_reconcile_completes_stale_stopping():
     advances to `completed`."""
     repo = _ReconcileRepo()
     m = _seed(repo, status="stopping")
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
 
     results = _reconcile_once(client, repo)
     assert results == [(m["id"], "sess-uid", 200)], results
@@ -431,7 +431,7 @@ def test_reconcile_is_idempotent_across_ticks():
     nothing stale (it's `completed` now) — no duplicate work, no 409."""
     repo = _ReconcileRepo()
     _seed(repo, status="stopping")
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
     first = _reconcile_once(client, repo)
     second = _reconcile_once(client, repo)
     assert [c for *_ , c in first] == [200]
@@ -443,7 +443,7 @@ def test_reconcile_then_late_bot_terminal_is_idempotent_200():
     The late completed must be an idempotent 200 no-op, not a 409 — and must not double-advance."""
     repo = _ReconcileRepo()
     _seed(repo, status="stopping")
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
     assert [c for *_, c in _reconcile_once(client, repo)] == [200]
 
     # The bot finally sends its terminal (the one the reconcile pre-empted).
@@ -459,7 +459,7 @@ def test_bot_terminal_then_reconcile_finds_nothing():
     reconcile would run, the DB is already `completed`, so the sweep finds nothing stale."""
     repo = _ReconcileRepo()
     _seed(repo, status="stopping")
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
     # Bot's own terminal lands first (rehydrates stopping→active, completes).
     r = client.post(ENDPOINT, json={
         "connection_id": "sess-uid", "status": "completed", "exit_code": 0, "completion_reason": "stopped",
@@ -474,7 +474,7 @@ def test_reconcile_late_bot_failed_after_completed_is_409():
     (`failed`), that's a genuine contradiction → 409 (idempotency must not swallow a real conflict)."""
     repo = _ReconcileRepo()
     _seed(repo, status="stopping")
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
     assert [c for *_, c in _reconcile_once(client, repo)] == [200]
     r = client.post(ENDPOINT, json={"connection_id": "sess-uid", "status": "failed", "exit_code": 1})
     assert r.status_code == 409, r.text
@@ -490,7 +490,7 @@ def test_one_webhook_envelope_per_real_advance():
     envelopes, in order."""
     repo = InMemoryMeetingRepo()
     _seed(repo, status="requested")
-    app = create_app(meeting_repo=repo)
+    app = create_app(open_callbacks=True, meeting_repo=repo)
     client = TestClient(app)
     for st, ev in [
         ("joining", {"status": "joining"}),
@@ -523,7 +523,7 @@ def test_bot_advance_publishes_user_channel_frame():
     repo = InMemoryMeetingRepo()
     m = _seed(repo, status="requested")  # user_id=1 per _seed
     redis = _RecordingRedis()
-    client = TestClient(create_app(meeting_repo=repo, redis=redis))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo, redis=redis))
     r = _post(client, connection_id="sess-uid", status="joining")
     assert r.status_code == 200, r.text
 
@@ -545,7 +545,7 @@ def test_no_extra_webhook_envelope_on_idempotent_replay():
     """The idempotent redelivery (no_op) advances NOTHING, so it must NOT add another
     status_change envelope to app.state.status_change_webhooks.
 
-    BUG: app._mount_lifecycle appends the envelope UNCONDITIONALLY (app.py L199-200), BEFORE the
+    BUG: lifecycle.mount.mount_lifecycle appended the envelope UNCONDITIONALLY, BEFORE the
     `change.no_op` guard that gates the persist + ws-publish. So the in-process envelope log
     double-counts a no-op replay even though no real advance (and no real webhook delivery / ws
     publish) occurred. The redis path (test_no_ws_publish_on_idempotent_replay) is correctly gated;
@@ -568,7 +568,7 @@ def test_webhook_old_new_status_correct_across_full_path():
     """The status_change old/new pair is correct at every hop (no off-by-one in old_status)."""
     repo = InMemoryMeetingRepo()
     _seed(repo, status="requested")
-    app = create_app(meeting_repo=repo)
+    app = create_app(open_callbacks=True, meeting_repo=repo)
     client = TestClient(app)
     for ev in [
         {"status": "joining"},
@@ -653,7 +653,7 @@ def test_general_reconcile_completes_stale_stopping_and_publishes():
     m = _seed(repo, status="stopping")
     repo._meetings[m["id"]]["data"]["stop_requested"] = True  # the stop path set this
     redis = _RecordingRedis()
-    client = TestClient(create_app(meeting_repo=repo, redis=redis))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo, redis=redis))
 
     n = _run_general_sweep(client, repo)
     assert n == 1
@@ -687,7 +687,7 @@ def test_general_reconcile_completes_stale_active():
     `completed` (the bot WAS live, so not a failure). Seeded row's updated_at is far in the past."""
     repo = InMemoryMeetingRepo()
     m = _seed(repo, status="active")  # default updated_at is 2026-06-20 — well past any grace
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
 
     n = _run_general_sweep(client, repo)
     assert n == 1
@@ -701,7 +701,7 @@ def test_general_reconcile_is_idempotent():
     meeting, the second finds nothing (it's terminal now → not listed) and posts nothing."""
     repo = InMemoryMeetingRepo()
     _seed(repo, status="stopping")
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
 
     assert _run_general_sweep(client, repo) == 1
     assert _run_general_sweep(client, repo) == 0
@@ -784,7 +784,7 @@ def test_dead_active_terminal_workload_state_is_reaped():
     m = _seed(repo, status="active")
     repo._meetings[m["id"]]["bot_container_id"] = "wl-exited"
     runtime = FakeRuntimeClient(workloads={"wl-exited": {"workloadId": "wl-exited", "state": "stopped"}})
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
 
     n = _run_general_sweep_rt(client, repo, runtime)
     assert n == 1
@@ -802,7 +802,7 @@ def test_stopping_still_reaps_regardless_of_workload_liveness():
     runtime = FakeRuntimeClient(
         workloads={"wl-stopping": {"workloadId": "wl-stopping", "state": "running"}}
     )
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
 
     n = _run_general_sweep_rt(client, repo, runtime)
     assert n == 1
@@ -854,7 +854,7 @@ def test_bot_callback_evidence_still_completes_during_runtime_desync():
     m = _seed(repo, status="active")
     repo._meetings[m["id"]]["bot_container_id"] = "wl-untracked"
     runtime = FakeRuntimeClient(workloads={})
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
 
     assert _run_general_sweep_rt(client, repo, runtime) == 0        # 404 → no reap
     assert repo._meetings[m["id"]]["status"] == "active"
@@ -930,7 +930,7 @@ def test_continuous_untracked_past_window_escalates_once_with_evidence():
     m = _seed(repo, status="active")
     repo._meetings[m["id"]]["bot_container_id"] = "wl-lost"
     runtime = FakeRuntimeClient(workloads={})          # untracked forever — nothing will re-adopt
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
     tracker: dict = {}
 
     assert _run_general_sweep_esc(client, repo, runtime, tracker, untracked_grace=0.0) == 0
@@ -962,7 +962,7 @@ def test_stopping_untracked_past_window_escalates_on_stop_grace():
     repo._meetings[m["id"]]["bot_container_id"] = "wl-gone"
     repo._meetings[m["id"]]["data"]["stop_requested"] = True
     runtime = FakeRuntimeClient(workloads={})
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
     tracker: dict = {}
 
     # untracked_grace stays LONG (a live *active* bot keeps its full patience); a `stopping` row
@@ -1039,7 +1039,7 @@ def test_runtime_destroyed_completes_stopping_meeting_and_stops_reaper():
     repo = _ReconcileRepo()
     m = _seed(repo, status="stopping")
     repo._meetings[m["id"]]["bot_container_id"] = "wl-stop"
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
 
     # The reaper WOULD list this meeting while it is `stopping` …
     assert repo.list_stale_stopping_sync() == [(m["id"], "sess-uid", "wl-stop")]
@@ -1060,7 +1060,7 @@ def test_runtime_destroyed_completes_active_meeting():
     repo = _ReconcileRepo()
     m = _seed(repo, status="active")
     repo._meetings[m["id"]]["bot_container_id"] = "wl-act"
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
 
     assert _consume_runtime_terminal(client, repo, "wl-act", "destroyed") is True
     assert repo._meetings[m["id"]]["status"] == "completed"
@@ -1072,7 +1072,7 @@ def test_runtime_exited_also_completes_stopping():
     repo = _ReconcileRepo()
     m = _seed(repo, status="stopping")
     repo._meetings[m["id"]]["bot_container_id"] = "wl-exit"
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
 
     assert _consume_runtime_terminal(client, repo, "wl-exit", "exited") is True
     assert repo._meetings[m["id"]]["status"] == "completed"
@@ -1084,7 +1084,7 @@ def test_runtime_destroyed_fails_pre_active_meeting():
     repo = _ReconcileRepo()
     m = _seed(repo, status="awaiting_admission")
     repo._meetings[m["id"]]["bot_container_id"] = "wl-wait"
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
 
     assert _consume_runtime_terminal(client, repo, "wl-wait", "destroyed") is True
     assert repo._meetings[m["id"]]["status"] == "failed"
@@ -1097,7 +1097,7 @@ def test_runtime_destroyed_noop_on_already_terminal_meeting():
     repo = _ReconcileRepo()
     m = _seed(repo, status="active")
     repo._meetings[m["id"]]["bot_container_id"] = "wl-done"
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
     # The bot completes it itself first.
     client.post(ENDPOINT, json={"connection_id": "sess-uid", "status": "completed",
                                 "completion_reason": "left_alone"})
@@ -1180,7 +1180,7 @@ def test_terminal_meeting_emits_session_end_to_reap_copilot():
     repo = InMemoryMeetingRepo()
     m = _seed(repo, status="requested")   # native_meeting_id == "m1"; m["id"] is the numeric ROW id
     redis = _StreamRecordingRedis()
-    client = TestClient(create_app(meeting_repo=repo, redis=redis))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo, redis=redis))
 
     _drive_terminal_seam(client, terminal="completed")
 
@@ -1198,7 +1198,7 @@ def test_failed_meeting_also_reaps_copilot():
     repo = InMemoryMeetingRepo()
     m = _seed(repo, status="requested")
     redis = _StreamRecordingRedis()
-    client = TestClient(create_app(meeting_repo=repo, redis=redis))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo, redis=redis))
 
     _drive_terminal_seam(client, terminal="failed")
 
@@ -1213,7 +1213,7 @@ def test_non_terminal_advance_does_not_emit_session_end():
     repo = InMemoryMeetingRepo()
     m = _seed(repo, status="requested")
     redis = _StreamRecordingRedis()
-    client = TestClient(create_app(meeting_repo=repo, redis=redis))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo, redis=redis))
 
     _post(client, connection_id="sess-uid", status="joining")
     _post(client, connection_id="sess-uid", status="active")
@@ -1233,7 +1233,7 @@ def test_idempotent_terminal_replay_does_not_double_reap():
     repo = InMemoryMeetingRepo()
     m = _seed(repo, status="requested")
     redis = _StreamRecordingRedis()
-    client = TestClient(create_app(meeting_repo=repo, redis=redis))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo, redis=redis))
 
     _drive_terminal_seam(client, terminal="completed")
     # Redeliver the terminal (the bot retries its terminal callback up to 3x) — an idempotent 200 no-op.
@@ -1267,7 +1267,7 @@ def _stop_then_destroy(status: str):
     repo, pub = _ReconcileRepo(), InMemoryCommandPublisher()
     m = _seed(repo, status=status)
     repo._meetings[m["id"]]["bot_container_id"] = "wl-stopped"
-    client = TestClient(create_app(meeting_repo=repo, command_publisher=pub))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo, command_publisher=pub))
 
     r = client.delete("/bots/google_meet/m1", headers={"x-user-id": "1"})
     assert r.status_code == 200, r.text
@@ -1312,7 +1312,7 @@ def test_a_timed_out_admission_is_still_transient_and_still_retried():
     repo = _ReconcileRepo()
     m = _seed(repo, status="awaiting_admission")
     repo._meetings[m["id"]]["bot_container_id"] = "wl-timeout"
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
 
     assert _consume_runtime_terminal(client, repo, "wl-timeout", "destroyed") is True
     row = repo._meetings[m["id"]]
@@ -1340,10 +1340,10 @@ def test_status_change_envelope_log_is_bounded_under_sustained_callbacks():
     BUG (pre-fix): the capture was ``[]`` — its length equalled the number of advances forever.
     Expected: after cap+N genuine advances the capture holds at most the cap, and it holds the most
     RECENT envelopes (ring semantics every reader relies on)."""
-    from meeting_api.app import _ENVELOPE_LOG_CAP
+    from meeting_api.lifecycle.mount import _ENVELOPE_LOG_CAP
 
     repo = InMemoryMeetingRepo()
-    app = create_app(meeting_repo=repo)
+    app = create_app(open_callbacks=True, meeting_repo=repo)
     client = TestClient(app)
 
     overshoot = _ENVELOPE_LOG_CAP + 50
@@ -1438,7 +1438,7 @@ def test_dead_lobby_workload_is_attributed_to_the_admission_wait_with_evidence()
     runtime = FakeRuntimeClient(
         workloads={"wl-dead": {"workloadId": "wl-dead", "state": "exited", "exitCode": 137}}
     )
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
 
     n = _run_general_sweep_rt(client, repo, runtime)
     assert n == 1
@@ -1468,7 +1468,7 @@ def test_dead_joining_workload_is_attributed_to_join_failure():
     runtime = FakeRuntimeClient(
         workloads={"wl-crash": {"workloadId": "wl-crash", "state": "crashed", "exitCode": 1}}
     )
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
 
     assert _run_general_sweep_rt(client, repo, runtime) == 1
     row = repo._meetings[m["id"]]
@@ -1493,7 +1493,7 @@ def test_user_stopped_pre_active_reap_is_never_retried():
     runtime = FakeRuntimeClient(
         workloads={"wl-stopped": {"workloadId": "wl-stopped", "state": "destroyed"}}
     )
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
 
     assert _run_general_sweep_rt(client, repo, runtime) == 1
     row = repo._meetings[m["id"]]
@@ -1521,7 +1521,7 @@ def test_active_liveness_gate_behaviour_is_unchanged():
     repo2 = InMemoryMeetingRepo()
     dead = _seed(repo2, status="active", session_uid="sess-dead")
     repo2._meetings[dead["id"]]["bot_container_id"] = "wl-a-dead"
-    client2 = TestClient(create_app(meeting_repo=repo2))
+    client2 = TestClient(create_app(open_callbacks=True, meeting_repo=repo2))
     runtime2 = FakeRuntimeClient(
         workloads={"wl-a-dead": {"workloadId": "wl-a-dead", "state": "stopped"}}
     )
@@ -1541,7 +1541,7 @@ def test_stopping_row_still_reaps_on_its_short_grace():
     runtime = FakeRuntimeClient(
         workloads={"wl-stop": {"workloadId": "wl-stop", "state": "running"}}
     )
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
 
     assert _run_general_sweep_rt(client, repo, runtime) == 1
     assert repo._meetings[m["id"]]["status"] == "completed"
@@ -1557,7 +1557,7 @@ def test_pre_active_row_with_no_workload_at_all_still_reconciles():
     repo = InMemoryMeetingRepo()
     m = _seed(repo, status="joining")
     runtime = FakeRuntimeClient(workloads={})
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
 
     assert _run_general_sweep_rt(client, repo, runtime) == 1
     row = repo._meetings[m["id"]]
@@ -1575,7 +1575,7 @@ def test_pre_active_untracked_workload_still_escalates_on_the_bounded_window():
     m = _seed(repo, status="awaiting_admission")
     repo._meetings[m["id"]]["bot_container_id"] = "wl-404"
     runtime = FakeRuntimeClient(workloads={})
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
     tracker: dict = {}
 
     assert _run_general_sweep_esc(client, repo, runtime, tracker, untracked_grace=0.0) == 0

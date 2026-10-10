@@ -2,8 +2,10 @@
  * lifecycle.v1 egress ADAPTER — HTTP callback to meeting-api.
  *
  * Implements the `LifecycleSink` port by POSTing each lifecycle.v1 event verbatim to the
- * meeting-api callback URL (`inv.meetingApiCallbackUrl`). 0.11 convention:
- *   • headers: `content-type: application/json` + (if set) `x-internal-secret: <internalSecret>`
+ * meeting-api callback URL (`inv.meetingApiCallbackUrl`):
+ *   • headers: `content-type: application/json` + (if set) `authorization: Bearer <token>` — the
+ *     MeetingToken minted for THIS bot's session (invocation.v1 `token`), the bot's only credential;
+ *     meeting-api accepts it for this session's events and no other
  *   • body: the lifecycle.v1 event JSON, as-is (no envelope)
  *
  * L3-testable via an INJECTED `fetchImpl` (defaults to Node 22's native `fetch` — NO new dep).
@@ -27,8 +29,8 @@ export type FetchLike = (
 export interface HttpLifecycleSinkOptions {
   /** meeting-api's lifecycle.v1 callback URL (invocation.v1 `meetingApiCallbackUrl`). */
   callbackUrl: string;
-  /** SECRET — sent as `x-internal-secret` when present (0.11 internal auth). */
-  internalSecret?: string;
+  /** SECRET — the session's MeetingToken, sent as `authorization: Bearer` when present. */
+  token?: string;
   /** Injected for the L3 test; defaults to Node 22's native global `fetch`. */
   fetchImpl?: FetchLike;
   /** Max POST attempts (1 try + retries). Default 3. */
@@ -52,7 +54,7 @@ const realSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r
 export function createHttpLifecycleSink(opts: HttpLifecycleSinkOptions): LifecycleSink {
   const {
     callbackUrl,
-    internalSecret,
+    token,
     fetchImpl = globalThis.fetch as unknown as FetchLike,
     // 5 × 500ms exponential ≈ 7.5s horizon. The old 3×200ms (~0.6s) horizon lost events across
     // any >1s meeting-api blip; the reaper then attributed a failure to a bot that was seated and
@@ -65,7 +67,7 @@ export function createHttpLifecycleSink(opts: HttpLifecycleSinkOptions): Lifecyc
   } = opts;
 
   const headers: Record<string, string> = { 'content-type': 'application/json' };
-  if (internalSecret) headers['x-internal-secret'] = internalSecret;
+  if (token) headers.authorization = `Bearer ${token}`;
 
   const attempts = Math.max(1, retries);
   const reachAttempts = Math.max(1, reachRetries);

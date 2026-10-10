@@ -27,6 +27,15 @@ set -u
 #                        equal agent-api's own. The control server and flows-api both REFUSE TO
 #                        START without it (F95) — deliberately, because without it the rig cannot
 #                        authenticate as a service and nothing about that failure is visible.
+#   VEXA_RIG_OAUTH_ENABLED  EVERY sign-in door: the OAuth surface (/.well-known/oauth-*, /oauth/*),
+#                        the /login page (/login/claim, /start) and the start_onboarding /
+#                        auth_link tools. OFF unless set to 1; off answers 404 on those paths, the
+#                        tools refuse, and the OAuth tokens it issued stop resolving.
+#                        `VEXA_RIG_OAUTH_ENABLED=1 rig.sh restart` opens them.
+#   VEXA_RIG_CLIENT_ADDRESS_HEADER  the header the proxy in front of the control server puts the
+#                        caller's address in (e.g. cf-connecting-ip), read only from a loopback or
+#                        private peer. Unset behind a proxy, the per-caller sign-in-code budget
+#                        cannot tell callers apart and only the per-address and global caps apply.
 # ONE LINE (2026-09-02): the flows checkout is the LINE worktree. This default is not
 # cosmetic — start_worker passes VEXA_FLOWS_SRC="$FL" into flows-up.sh, which OVERRIDES
 # flows-up.sh's own default, so a later `rig.sh restart` with the old value here would
@@ -40,6 +49,8 @@ FL="${VEXA_FLOWS_SRC:-/home/dima/dev/wt-line/core/flows}"
 VENV_DIR="${VEXA_FLOWS_VENV:-/home/dima/dev/vexa-flows1315/core/flows}"
 PUBLIC_MCP_URL="${VEXA_PUBLIC_MCP_URL:-https://rig.dev.vexa.ai/mcp}"
 UI_URL="${VEXA_UI_URL:-https://app.dev.vexa.ai}"
+OAUTH_ENABLED="${VEXA_RIG_OAUTH_ENABLED:-0}"
+CLIENT_ADDRESS_HEADER="${VEXA_RIG_CLIENT_ADDRESS_HEADER:-}"
 
 # The server this script runs is the file NEXT TO IT — the repo copy when run from the repo, the
 # ~/.storm symlink to that same file when run from there. Neither spelling names a home directory.
@@ -145,6 +156,8 @@ start_ctl() {
   # not tmux's. The `wait` keeps the pane alive and the exit status honest.
   tmux new-session -d -s stormctl -c /tmp \
     "VEXA_FLOWS_SRC=\"$FL\" VEXA_PUBLIC_MCP_URL=\"$PUBLIC_MCP_URL\" VEXA_UI_URL=\"$UI_URL\" \
+     VEXA_RIG_OAUTH_ENABLED=\"$OAUTH_ENABLED\" \
+     VEXA_RIG_CLIENT_ADDRESS_HEADER=\"$CLIENT_ADDRESS_HEADER\" \
      VEXA_MCP_DELEGATION_SECRET=\"\$(cat \"\$HOME/.storm/delegation-secret\" 2>/dev/null)\" \
      INTERNAL_API_SECRET=\"\$(cat \"\$HOME/.storm/internal-secret\" 2>/dev/null)\" \
      $RV/python -u \"$CTL\" > >(tee $LOG/control-mcp.log) 2>&1 & \

@@ -20,7 +20,7 @@ spec:
       annotations:
         {{- toYaml .Values.global.podAnnotations | nindent 8 }}
     spec:
-      {{- include "vexa.podSecurityContext" . | nindent 6 }}
+      {{- include "vexa.nonRootPodSecurityContext" . | nindent 6 }}
       {{- with .Values.global.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -63,8 +63,23 @@ spec:
                 secretKeyRef:
                   name: {{ include "vexa.adminTokenSecretName" . }}
                   key: INTERNAL_API_SECRET
+            # /internal/validate resolves a worker's delegation token (vxd_) with this key.
+            - name: VEXA_MCP_DELEGATION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: VEXA_MCP_DELEGATION_SECRET
+            # agent-api revokes a worker's delegation token here when its unit ends; /internal/validate
+            # refuses a vxd_ bearer it cannot check against it (API keys never read it).
+            {{- include "vexa.redisPasswordEnv" . | nindent 12 }}
+            - name: REDIS_URL
+              value: {{ include "vexa.redisUrl" . | quote }}
             - name: LOG_LEVEL
               value: {{ .Values.adminApi.logLevel | default "info" | quote }}
+            - name: VEXA_SIGNIN_ALLOW
+              value: {{ .Values.adminApi.signinAllow | default "" | quote }}
+            - name: VEXA_ADMIN_EMAILS
+              value: {{ include "vexa.adminEmails" . | quote }}
             {{- with .Values.adminApi.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

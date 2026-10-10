@@ -1,0 +1,9 @@
+{
+  "source": "model-provider",
+  "kind": "rate_limited",
+  "provider": "api.anthropic.com",
+  "model": "claude-sonnet-4-5",
+  "status": 429,
+  "detail": "rate limit exceeded",
+  "remedy": "Wait a moment and send it again."
+}

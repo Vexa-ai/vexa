@@ -60,7 +60,7 @@ def world(tmp_path):
     (grp / "policy").mkdir(parents=True)
     (grp / "policy" / "members.json").write_text('[{"subject":"u_jane","role":"owner"}]')
     (grp / "README.md").write_text("# grp\n")
-    upsert_entity(grp, "person", "Cottalango Leon", ["Chairs the TSC."], "the meeting")
+    upsert_entity(grp, "person", "Robin Vale", ["Chairs the TSC."], "the meeting")
     for d in (tmp_path / "u_jane", tmp_path / "u_mallory", grp):
         _git(d, "init", "-q", "-b", "main")
         _git(d, "config", "user.email", "t@t")
@@ -198,7 +198,7 @@ def test_a_non_member_is_refused_by_every_route_that_names_a_group(world):
     for name, call in _workspace_routes(c, "grp", MALLORY):
         r = call()
         assert r.status_code in (400, 403, 404), f"{name} admitted a non-member ({r.status_code})"
-        assert "Cottalango" not in r.text, f"{name} leaked a group page to a non-member"
+        assert "Robin" not in r.text, f"{name} leaked a group page to a non-member"
     assert not (root / "grp" / "pwned.md").exists()
 
 
@@ -422,8 +422,8 @@ def test_ra10_a_redeemed_scaffold_leaves_the_pending_index():
 def test_ra15_a_mount_with_no_write_key_is_not_a_write_target(tmp_path):
     from worker.engine import writeback_candidates
     (tmp_path / "kg" / "entities").mkdir(parents=True)
-    assert writeback_candidates(["Olga Avramenko spoke."], mounts=[{"path": str(tmp_path)}]) == []
-    assert writeback_candidates(["Olga Avramenko spoke."],
+    assert writeback_candidates(["Nora Quill spoke."], mounts=[{"path": str(tmp_path)}]) == []
+    assert writeback_candidates(["Nora Quill spoke."],
                                 mounts=[{"path": str(tmp_path), "write": True}]) != []
 
 
@@ -436,5 +436,5 @@ def test_resolve_inside_refuses_every_shape(tmp_path, bad):
 
 
 def test_resolve_inside_admits_an_ordinary_document(tmp_path):
-    assert resolve_inside(tmp_path, "kg/entities/person/olga.md") == \
-        (tmp_path / "kg/entities/person/olga.md").resolve()
+    assert resolve_inside(tmp_path, "kg/entities/person/nora.md") == \
+        (tmp_path / "kg/entities/person/nora.md").resolve()

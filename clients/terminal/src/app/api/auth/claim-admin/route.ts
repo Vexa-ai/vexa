@@ -2,11 +2,10 @@
  *
  *  ⚠ THE DEAD END THIS EXISTS TO OPEN (observed live 2026-09-02, 08:48Z). The admin role was only
  *  ever claimable inside `findOrCreateUserToken`, i.e. only while walking through a sign-in door.
- *  An instance that acquired live sessions BEFORE the company-layer gate shipped therefore had no
- *  reachable claim at all: the founder's browser held a valid cookie minted months earlier,
- *  `admin_exists` was false, and a cookie never traverses a sign-in door twice. The screen said
- *  "this instance is not set up" and nothing in the product could set it up. This route is the
- *  missing edge — the same claim, reachable by somebody who is already in.
+ *  An instance that acquired live sessions before it had an admin therefore had no reachable claim
+ *  at all: the founder's browser held a valid cookie minted months earlier, `admin_exists` was
+ *  false, and a cookie never traverses a sign-in door twice. This route is the missing edge — the
+ *  same claim, reachable by somebody who is already in.
  *
  *  IDENTITY. The `vexa-token` cookie is the ONLY input, and it is validated through admin-api's
  *  internal oracle before it means anything. The `vexa-user-info` cookie is display-only and MUST
@@ -15,11 +14,10 @@
  *  a fresh instance. This is the single highest-value privilege the product hands out; it is worth
  *  saying out loud that the cheap cookie is not allowed to grant it.
  *
- *  FAIL CLOSED, deliberately, and note that this is the OPPOSITE direction from the rest of the
- *  gate. `instanceState()` fails towards "the gate is down" because guessing wrong there locks
- *  everybody out of a working instance. Here, guessing wrong GRANTS ADMIN. So an unreachable probe
- *  refuses: the cost of refusing is that the admin presses the button again in ten seconds, and the
- *  cost of allowing is that a stranger becomes the administrator during an outage.
+ *  FAIL CLOSED, deliberately. Guessing wrong here GRANTS ADMIN, so an unreachable probe refuses
+ *  (`instanceState()` fails towards "an admin exists", which lands here as a 409): the cost of
+ *  refusing is that the admin presses the button again in ten seconds, and the cost of allowing is
+ *  that a stranger becomes the administrator during an outage.
  *
  *  RACES. admin-api serialises concurrent claims under an advisory lock and is a no-op once an
  *  admin exists, so two tabs pressing the button together are safe — one claims, the other is told
@@ -28,15 +26,16 @@
  */
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { AUTH_COOKIE, claimAdminRole, instanceState, mintAdminSetupScaffold, mintFirstVisitScaffold, recordSetupHandoff, validateAuthToken } from "../adminApi";
+import { AUTH_COOKIE, CLAIM_COOKIE, claimAdminRole, instanceState, mintFirstVisitScaffold, validateAuthToken } from "../adminApi";
 
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
 
 const NO_STORE = { "Cache-Control": "no-store, no-cache, must-revalidate" } as const;
 
-export async function POST() {
-  const token = (await cookies()).get(AUTH_COOKIE)?.value;
+export async function POST(request: Request) {
+  const jar = await cookies();
+  const token = jar.get(AUTH_COOKIE)?.value;
   if (!token) {
     return NextResponse.json({ error: "Not signed in" }, { status: 401, headers: NO_STORE });
   }
@@ -60,7 +59,16 @@ export async function POST() {
     );
   }
 
-  const claimed = await claimAdminRole(who.userId);
+  // THE CLAIM CODE (admin-api writes it to its log at boot): typed on the claim card, or carried
+  // from the claim screen in front of the sign-in. No code, no claim — admin-api refuses without it.
+  let typed: unknown;
+  try { ({ code: typed } = (await request.json()) ?? {}); } catch { typed = undefined; }
+  const code = (typeof typed === "string" && typed.trim()) || jar.get(CLAIM_COOKIE)?.value || "";
+  if (!code) {
+    return NextResponse.json({ error: "Enter the claim code from the admin-api log." }, { status: 400, headers: NO_STORE });
+  }
+
+  const claimed = await claimAdminRole(who.userId, code);
   if (!claimed.ok) {
     console.error(`[terminal-auth] admin claim failed for user ${who.userId}: ${claimed.error}`);
     return NextResponse.json(
@@ -69,73 +77,45 @@ export async function POST() {
     );
   }
 
-  // `claimed:false` means admin-api's lock handed the role to somebody else between our check and
-  // our write. That is not an error for this user's PAGE — an admin exists either way and the
+  // admin-api decides who may claim (signin_allow.may_claim). On an instance with an allow-list, an
+  // address that is not on it may not be its first administrator.
+  if (!claimed.claimed && claimed.why === "bad-code") {
+    return NextResponse.json(
+      { error: "That is not this instance's claim code. Find the current one in the admin-api log." },
+      { status: 403, headers: NO_STORE },
+    );
+  }
+  if (!claimed.claimed && claimed.why === "not-allowed") {
+    console.info(`[terminal-auth] admin claim refused for user ${who.userId}: not on the sign-in allow-list`);
+    return NextResponse.json(
+      { error: "This address may not claim this instance." },
+      { status: 403, headers: NO_STORE },
+    );
+  }
+
+  // `claimed:false` otherwise means admin-api's lock handed the role to somebody else between our
+  // check and our write. That is not an error for this user's PAGE — an admin exists either way and the
   // reload puts them on the correct screen — but it is not the same event, so it is not reported
   // as one.
   console.info(`[terminal-auth] admin claim by user ${who.userId} (${who.email}): claimed=${claimed.claimed}`);
 
-  // THE ROLE IS NOT THE POINT — THE CONVERSATION IS. Claiming admin without a way back into the
-  // setup conversation is what the localStorage hand-off got wrong: the marker said "handed off"
-  // while the chat itself existed only in one browser's storage. So the claim mints the record for
-  // that conversation and hands back the url to follow. Same order as everywhere else in this gate:
-  // the durable thing first, the navigation second.
-  // WHICH CONVERSATION THEY ARRIVE IN depends on whether the instance is already set up (F42,
-  // founder ruling 2026-09-02). A claim on an instance whose company layer is `completed` — an
-  // instance that acquired its admin late, which is exactly the dead end this route exists to open
-  // — gets an ORDINARY FIRST VISIT, not the setup conversation. Offering setup again to an instance
-  // that is set up says the product does not know its own state, and the founder read that as the
-  // product being wrong about him rather than about itself. `state` was read above, before the
-  // claim, and the company layer is not something claiming a role changes.
-  const setUpAlready = state.global_setup === "completed";
-  const scaffold = setUpAlready
-    // This branch's condition IS the #1607 guard's condition, so passing the state read above keeps
-    // the route to the one instance probe it already makes — and says out loud that the first visit
-    // here is deliberate, not a second arrival slipping past the rule.
-    ? await mintFirstVisitScaffold(who.email, who.userId, { globalSetup: state.global_setup })
-    : await mintAdminSetupScaffold(who.email, who.userId);
-  if (!scaffold.ok || !scaffold.data?.url) {
-    // The role IS claimed — that write already happened and is not undone by this. Say both facts,
-    // because a caller told only "failed" would reasonably retry the claim, and a caller told only
-    // "success" would navigate to a conversation that does not exist. `/` is the honest fallback:
-    // the corner card is still there and still says what is missing.
-    console.error(`[terminal-auth] ${setUpAlready ? "first-visit" : "admin-setup"} scaffold mint failed for ${who.email}: ${scaffold.error}`);
-    return NextResponse.json(
-      {
-        success: true,
-        claimed: claimed.claimed,
-        email: who.email,
-        url: "/",
-        scaffold_error: "You are this instance's administrator, but the setup conversation could not be opened. Reload to try again.",
-      },
-      { headers: NO_STORE },
-    );
+  // WHERE THE NEW ADMIN ARRIVES: an ordinary first visit, exactly as any other sign-in (founder
+  // ruling 2026-10-08 — there is no setup-global conversation to put them into any more). The same
+  // guard as every door applies: somebody with history to return to gets no arrival and lands on `/`.
+  // A failed mint is logged and costs nothing but the arrival — the role IS claimed either way.
+  const scaffold = await mintFirstVisitScaffold(who.email, who.userId);
+  if (!scaffold.ok && scaffold.status !== 409) {
+    console.error(`[terminal-auth] first-visit scaffold mint failed for ${who.email}: ${scaffold.error}`);
   }
-
-  // ONE CLAIM, ONE SETUP CHAT (#1609). This claim has just put an administrator INTO a conversation.
-  // Record that, or `SetupGate` mounts in the document they land in, finds no marker, and opens a
-  // second one over the top of it. Same field, same store the gate writes when IT is the opener —
-  // whoever opens the conversation records it, and this route is now an opener.
-  //
-  // AFTER THE MINT, NEVER BEFORE: the marker says a conversation exists, so writing it ahead of the
-  // record that makes one true would leave a failed mint looking like a finished hand-off — the
-  // admin lands on `/`, the gate resumes as the corner card, and there is no conversation under it.
-  // For the same reason the failed-mint branch above returns without ever reaching this line.
-  //
-  // NOT SURFACED, and this is the one failure in this route that is only logged. The role is
-  // claimed and the conversation exists; a marker that did not stick costs exactly the extra chat
-  // this fixes and nothing else, and the gate carries its own guard for a marker that will not
-  // persist. Withholding the url over it would cost the admin the conversation itself.
-  const recorded = await recordSetupHandoff();
-  if (!recorded.ok) {
-    console.error(`[terminal-auth] setup hand-off not recorded for ${who.email}: ${recorded.error}`);
-  }
-
   // The url is absolute (agent-api composes it from VEXA_UI_URL). The client follows it as given —
   // it is the one place the link is built, and rebuilding it here would be the second spelling of a
   // rule that already exists.
+  const minted = scaffold.ok && scaffold.data?.url ? scaffold.data : null;
   return NextResponse.json(
-    { success: true, claimed: claimed.claimed, email: who.email, url: scaffold.data.url, scaffold: scaffold.data.id },
+    {
+      success: true, claimed: claimed.claimed, email: who.email,
+      url: minted?.url ?? "/", ...(minted ? { scaffold: minted.id } : {}),
+    },
     { headers: NO_STORE },
   );
 }

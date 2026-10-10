@@ -6,7 +6,7 @@
    "key": "ADMIN_TOKEN",
    "class": "required-explicit",
    "secret": true,
-   "description": "HS256-signs the per-spawn MeetingToken AND verifies the recordings upload — the same admin secret admin-api holds (ADMIN_API_TOKEN); unset, every POST /bots would 500, so the boot refuses instead (A4). A PUBLISHED PLACEHOLDER is refused on the same terms as INTERNAL_API_SECRET: the literal is in this repository, so anyone can forge a MeetingToken and upload a recording against any meeting (A19).",
+   "description": "the admin secret admin-api holds (ADMIN_API_TOKEN). meeting-api never signs with it directly: the MeetingToken key is derived from it as HMAC-SHA256(ADMIN_TOKEN, \"vexa/meeting-token/v1\") (meeting_token.signing_key), which HS256-signs the per-spawn MeetingToken AND verifies the lifecycle callback, the recordings upload and the transcript stream entries; unset, every POST /bots would 500, so the boot refuses instead (A4). A PUBLISHED PLACEHOLDER is refused on the same terms as INTERNAL_API_SECRET: the literal is in this repository, so anyone can forge a MeetingToken and upload a recording against any meeting (A19). The list is the internal-secret placeholders plus every default and example this repository has shipped for the admin key on any surface (compose, Helm, Lite, CI, docs); it is held equal to admin-api's ADMIN_API_TOKEN and flows' VEXA_FLOWS_ADMIN_KEY by fact admin-token-placeholders.",
    "forbidden_values": [
      "vexa-internal-secret",
      "lite-internal-secret",
@@ -14,8 +14,53 @@
      "change-me",
      "CHANGE-ME",
      "default",
-     "secret"
+     "secret",
+     "dev-admin-token",
+     "CHANGE_ME",
+     "ci-admin-token",
+     "gate-admin-token",
+     "test-admin-token",
+     "test-admin-token-t3",
+     "vexa-admin-token",
+     "vexa-admin-token-2024",
+     "token",
+     "strong-random-token",
+     "your-secret",
+     "your-secret-token",
+     "your-secret-admin-token",
+     "your-secure-admin-token",
+     "your-admin-token",
+     "your-admin-api-token",
+     "your_admin_api_token",
+     "your_admin_api_key",
+     "your_admin_api_key_here",
+     "YOUR_ADMIN_KEY",
+     "YOUR_ADMIN_API_KEY",
+     "YOUR_ADMIN_TOKEN_FROM_DOTENV",
+     "admin-secret",
+     "admin-key",
+     "test-admin-key"
    ]
+  },
+  {
+   "key": "RUNTIME_API_TOKEN",
+   "class": "required-explicit",
+   "secret": true,
+   "description": "the runtime caller credential meeting-api presents (`Authorization: Bearer`) on every runtime.v1 call — bot spawns, liveness probes, teardown. The runtime refuses any other caller; the same value is set on the runtime and on agent-api, and never placed in a bot invocation. Unset, the boot refuses: every POST /bots would be refused by the runtime",
+   "forbidden_values": [
+    "vexa-internal-secret",
+    "lite-internal-secret",
+    "changeme",
+    "change-me",
+    "CHANGE-ME",
+    "default",
+    "secret"
+   ]
+  },
+  {
+   "key": "VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE",
+   "class": "required-explicit",
+   "description": "gateway-identity.v1 verification key: a file holding the gateway's Ed25519 PUBLIC key (SubjectPublicKeyInfo PEM). meeting-api rebuilds every x-user-* header (owner, bot limit, workspace memberships, webhook) from a verified signature and refuses (401) one that is neither signed nor carried by the internal tier. It verifies and cannot sign; a private key in this file refuses the boot, as does a missing file or any other key type. Generated at install with the gateway's signing key: compose's identity-keys one-shot, the Helm identity-keys ConfigMap, the Lite entrypoint"
   },
   {
    "key": "DB_HOST",
@@ -43,17 +88,27 @@
   },
   {
    "key": "DB_PASSWORD",
-   "class": "defaulted",
-   "default": "postgres",
+   "class": "required-explicit",
    "secret": true,
-   "description": "PostgreSQL password (dev default; change for any non-local deploy)"
+   "description": "PostgreSQL password. No default: unset, the boot refuses. `postgres`, the value every unconfigured stack once shared, and the other values published in this repository are refused the same way, as compose's postgres service refuses them",
+   "forbidden_values": [
+    "postgres",
+    "password",
+    "vexa-internal-secret",
+    "lite-internal-secret",
+    "changeme",
+    "change-me",
+    "CHANGE-ME",
+    "default",
+    "secret"
+   ]
   },
   {
    "key": "DATABASE_URL",
    "class": "defaulted",
    "default": "(derived from DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD as postgresql+asyncpg://)",
    "secret": true,
-   "description": "explicit async SQLAlchemy URL override; when unset the URL is built from the DB_* parts (lite deliberately sets only DB_* so the asyncpg driver is chosen)",
+   "description": "explicit async SQLAlchemy URL override; when unset the URL is built from the DB_* parts (lite deliberately sets only DB_* so the asyncpg driver is chosen). DB_PASSWORD is required at boot either way",
    "targets": []
   },
   {
@@ -74,7 +129,22 @@
    "key": "REDIS_URL",
    "class": "defaulted",
    "default": "redis://redis:6379/0",
+   "secret": true,
    "description": "the transcription_segments stream + bm:meeting:{id}:status pub/sub + bot-command channel backing"
+  },
+  {
+   "key": "BOT_REDIS_RESTORE_INTERVAL_S",
+   "class": "defaulted",
+   "default": "1",
+   "description": "how often (s) meeting-api checks whether Redis is a new process (one INFO) and, when it is, defines again every bot Redis user — Redis keeps none across a restart, so a live bot's credential would otherwise stay refused until its meeting ended",
+   "targets": []
+  },
+  {
+   "key": "REDIS_WORKLOAD_ACL",
+   "class": "defaulted",
+   "default": "per-workload",
+   "description": "what a spawned meeting bot connects to Redis as. `per-workload`: a Redis user of its own — append to transcription_segments, its own meeting's live-update and command channels — defined at spawn and removed when it ends; the service connection never reaches it. `shared`: the service connection, for a Redis that cannot define users (some managed services); every meeting bot can then read and write every other's keys, so it is safe only where every person on the instance trusts every other. The service's own Redis user needs ACL SETUSER/DELUSER for `per-workload`.",
+   "targets": []
   },
   {
    "key": "RUNTIME_API_URL",
@@ -94,9 +164,9 @@
   {
    "key": "INTERNAL_API_SECRET",
    "class": "defaulted",
-   "default": "(unset — the internal lifecycle-callback header is then not attached)",
+   "default": "(unset — no internal-tier caller is admitted, and none may name a person)",
    "secret": true,
-   "description": "shared secret for internal service-to-service calls (x-internal-secret on the self-driven lifecycle callback). Unset is a documented degrade; a PUBLISHED PLACEHOLDER is not — it is the whole internal tier handed to anyone who read the repository (F95), so the boot refuses it.",
+   "description": "shared secret for internal service-to-service calls: meeting-api presents it on admin-api's internal routes and admits it (from trusted services, never from a bot — a bot holds only its session's MeetingToken) on the bot lifecycle callback and the recording upload, and it is the internal tier gateway-identity.v1 believes an unsigned X-User-Id from (agent-api acting for a person). Unset is a documented degrade; a PUBLISHED PLACEHOLDER is not — it is the whole internal tier handed to anyone who read the repository (F95), so the boot refuses it.",
    "forbidden_values": [
      "vexa-internal-secret",
      "lite-internal-secret",
@@ -187,7 +257,7 @@
    "key": "BOT_S3_ENDPOINT",
    "class": "defaulted",
    "default": "(unset — required when BOT_AUTHENTICATED=true)",
-   "description": "userdata store endpoint, as reachable FROM the bot containers (e.g. http://minio:9000)",
+   "description": "userdata store endpoint, reachable from the bot containers (each restores its session from it) and from meeting-api (which writes an authenticated bot's session back to it), e.g. http://minio:9000",
    "targets": [
     "compose",
     "helm"
@@ -208,7 +278,7 @@
    "class": "defaulted",
    "default": "(unset)",
    "secret": true,
-   "description": "SCOPED userdata-store access key — never the deployment's admin S3 credentials; rides the invocation env into the bot container, so its blast radius must be the userdata prefix only",
+   "description": "READ-ONLY userdata-store access key (Get + List on the userdata prefix): it rides the invocation env into the bot container, and the bot only restores with it. Never a storage root key: meeting-api refuses an authenticated spawn, and the session write-back, when this pair shares a half with a storage root pair (S3_* / MINIO_*)",
    "targets": [
     "compose",
     "helm"
@@ -219,7 +289,7 @@
    "class": "defaulted",
    "default": "(unset)",
    "secret": true,
-   "description": "scoped userdata-store secret key (see BOT_S3_ACCESS_KEY)",
+   "description": "read-only userdata-store secret key (see BOT_S3_ACCESS_KEY)",
    "targets": [
     "compose",
     "helm"
@@ -235,7 +305,7 @@
    "key": "MINIO_ACCESS_KEY",
    "class": "capability",
    "capability": "object_storage",
-   "description": "object-store access key (recordings upload/finalize)"
+   "description": "object-store access key: recordings upload/finalize, and the authenticated bot's session write-back to the userdata store"
   },
   {
    "key": "MINIO_SECRET_KEY",
@@ -260,23 +330,29 @@
    "key": "S3_ENDPOINT",
    "class": "defaulted",
    "default": "(unset — falls back to MINIO_ENDPOINT/MINIO_SECURE)",
-   "description": "explicit S3 endpoint override for a non-MinIO store",
-   "targets": []
+   "description": "explicit S3 endpoint override for a non-MinIO store; helm sets it from storage.s3.endpoint",
+   "targets": [
+    "helm"
+   ]
   },
   {
    "key": "S3_ACCESS_KEY",
    "class": "defaulted",
    "default": "(unset — falls back to MINIO_ACCESS_KEY)",
-   "description": "explicit S3 access-key override",
-   "targets": []
+   "description": "explicit S3 access-key override, for recordings and the authenticated bot's session write-back; helm reads it from the storage.s3.existingSecret Secret",
+   "targets": [
+    "helm"
+   ]
   },
   {
    "key": "S3_SECRET_KEY",
    "class": "defaulted",
    "default": "(unset — falls back to MINIO_SECRET_KEY)",
    "secret": true,
-   "description": "explicit S3 secret-key override",
-   "targets": []
+   "description": "explicit S3 secret-key override; helm reads it from the storage.s3.existingSecret Secret",
+   "targets": [
+    "helm"
+   ]
   },
   {
    "key": "RECORDING_BUCKET",
@@ -289,8 +365,19 @@
    "key": "STORAGE_BACKEND",
    "class": "defaulted",
    "default": "minio",
-   "description": "storage-backend label stamped into the recording's meeting.data JSONB",
-   "targets": []
+   "description": "storage-backend label stamped into the recording's meeting.data JSONB; helm sets s3",
+   "targets": [
+    "helm"
+   ]
+  },
+  {
+   "key": "AWS_CONFIG_FILE",
+   "class": "defaulted",
+   "default": "(unset — boto3 reads ~/.aws/config if present)",
+   "description": "boto3's shared-config file, read by the recordings S3 client (not by meeting-api code); helm points it at a mounted file carrying storage.s3's signing region, addressing style and CA bundle",
+   "targets": [
+    "helm"
+   ]
   },
   {
    "key": "MEETING_TOKEN_TTL_SECONDS",

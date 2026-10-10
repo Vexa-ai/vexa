@@ -16,7 +16,7 @@ import addFormats from 'ajv-formats';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createBotPipeline, createTranscribe } from './pipeline.js';
+import { createBotPipeline, createTranscribe, perChannelLaneConfig, perChannelOnsetGapMs, PER_TRACK_ONSET_GAP_MS } from './pipeline.js';
 import type { Invocation } from './config.js';
 import type { TranscriptSegment } from './contracts.js';
 import type { TranscriptSink } from './ports.js';
@@ -59,6 +59,32 @@ const FRAME = new Float32Array((SR * FRAME_MS) / 1000).fill(0.05);
 const FAST = { minAudioDuration: 0.15, submitInterval: 0.1, confirmThreshold: 2, maxBufferDuration: 5, idleTimeoutSec: 2, sampleRate: SR };
 
 async function main(): Promise<void> {
+  // Shifted STT onset: a completed segment has a different ID from its live draft.
+  {
+    let calls = 0;
+    const transcribe = async (): Promise<TranscriptionResult> => {
+      calls++;
+      const text = calls === 1 ? 'one two three four' : 'one two three four five';
+      return { text, language: 'en', duration: 2.5, segments: [
+        { start: 0.1, end: 0.2, text: 'one two' },
+        { start: 0.2, end: 2.5, text: calls === 1 ? 'three four' : 'three four five' },
+      ] };
+    };
+    const sink = captureSink();
+    const pipe = createBotPipeline(baseInv(), sink, { transcribe, config: FAST });
+    await pipe.start();
+    for (let i = 0; i < 12; i++) {
+      pipe.feedAudio(0, 'Alice', FRAME, 1000 + i * FRAME_MS);
+      await sleep(110);
+    }
+    await pipe.stop();
+    const firstDraft = sink.published.find(s => s.completed === false && s.text.trim());
+    check('shifted onset fixture produced a draft', !!firstDraft);
+    check('shifted onset withdraws the old draft ID', !!firstDraft && sink.retracted.includes(firstDraft.segment_id), JSON.stringify(sink.retracted));
+    check('shifted onset preserves confirmed speech', sink.published.some(s => s.completed && s.text === 'one two'));
+    check('empty draft clears are withdrawals, not empty transcription publications', !sink.published.some(s => s.completed === false && !s.text.trim()));
+  }
+
   // ── 1) single glow-bound speaker: capture(ch0='Alice') → lane → stt → bot TranscriptSink ──
   {
     let calls = 0;
@@ -148,6 +174,27 @@ async function main(): Promise<void> {
     (globalThis as any).fetch = realFetch;
     check('invocation.transcriptionModel rides the model form part', modelParts[0] === 'whisper-large-v3-turbo', JSON.stringify(modelParts[0]));
     check('no transcriptionModel → default whisper-1 (wire unchanged)', modelParts[1] === 'whisper-1', JSON.stringify(modelParts[1]));
+  }
+
+  // ── 4b) a CUSTOMER-owned endpoint is held to the outbound URL guard; the deployment's own is not ──
+  // The invocation states the owner; an internal address on a customer endpoint is never dialled
+  // (global fetch is not called either: the guarded path refuses before any socket).
+  {
+    const realFetch = globalThis.fetch;
+    let fetched = 0;
+    (globalThis as any).fetch = async () => {
+      fetched++;
+      return new Response(JSON.stringify({ text: 'ok', language: 'en', duration: 0.1, segments: [] }), { status: 200 });
+    };
+    const pcm = new Float32Array(1600).fill(0.05);
+    let refused = '';
+    try {
+      await createTranscribe(baseInv({ transcriptionServiceUrl: 'http://169.254.169.254', transcriptionServiceOwner: 'customer' }))(pcm);
+    } catch (e) { refused = String((e as Error).message); }
+    const own = await createTranscribe(baseInv({ transcriptionServiceUrl: 'http://transcription:8083' }))(pcm);
+    (globalThis as any).fetch = realFetch;
+    check('customer endpoint on an internal address is refused', /internal or private/.test(refused) && fetched === 1, `refused=${refused} fetched=${fetched}`);
+    check("the deployment's own endpoint is called as before", own.text === 'ok', JSON.stringify(own));
   }
 
   // ── 5) LEGACY MIXED LANE (Zoom/Jitsi) speaker-label boundary (#890): a turn the lane has NOT
@@ -317,6 +364,69 @@ async function main(): Promise<void> {
       !sink.retracted.includes('turn:1:0'), JSON.stringify(sink.retracted));
     check('retraction: the confirmed segment WAS published (real content kept)',
       sink.published.some((s) => s.segment_id === 'turn:1:0' && s.completed), JSON.stringify(sink.published.map((s) => s.segment_id)));
+  }
+
+  // ── 8) ZOOM PER-TRACK on a starved page: per-track capture stamps each frame at callback time (#1774).
+  //      With half the callbacks lost, consecutive 256 ms frames of ONE continuous turn arrive 512 ms apart
+  //      (under the 1 s turn-onset gap). The lane must hold the whole turn — no transcription request
+  //      before the turn closes — and hand every frame to STT at the close. Google Meet's lane config is
+  //      passed through exactly as given.
+  {
+    const ZF = 4096, ZF_MS = (ZF / SR) * 1000;
+    const zframe = new Float32Array(ZF).fill(0.05);
+    const windows: number[] = [];
+    const transcribe = async (pcm: Float32Array): Promise<TranscriptionResult> => {
+      windows.push(pcm.length);
+      return { text: 'starved but whole', language: 'en', duration: pcm.length / SR,
+        segments: [{ start: 0, end: pcm.length / SR, text: 'starved but whole' }] };
+    };
+    const sink = captureSink();
+    const pipe = createBotPipeline(baseInv({ platform: 'zoom', meetingUrl: 'https://zoom.us/j/123456789' }), sink, { transcribe });
+    await pipe.start();
+    const N = 30, t0 = 1_800_000_000_000;
+    // Fed synchronously: the 2 s submit timer cannot fire, so any request here comes from the input-gap guard.
+    for (let k = 0; k < N; k++) pipe.feedAudio(4, 'Alice', zframe, t0 + k * 2 * ZF_MS);
+    const midTurn = windows.length;
+    await pipe.stop();
+    check('zoom starved page: no transcription request inside one continuous turn (no input-gap detach)', midTurn === 0, `requests=${midTurn}`);
+    check('zoom starved page: the turn close hands every frame to STT in one window',
+      windows.length === 1 && windows[0] === N * ZF, JSON.stringify(windows));
+    check('zoom starved page: the whole turn is published',
+      sink.published.some((s) => s.completed && s.text === 'starved but whole'), JSON.stringify(sink.published.map((s) => s.text)));
+    check('zoom per-track lane config carries callbackStampedFrames (with and without env tuning)',
+      perChannelLaneConfig('zoom', FAST)?.callbackStampedFrames === true && perChannelLaneConfig('zoom', FAST)?.maxBufferDuration === FAST.maxBufferDuration
+        && perChannelLaneConfig('zoom')?.callbackStampedFrames === true);
+    check('google_meet lane config is passed through unchanged',
+      perChannelLaneConfig('google_meet', FAST) === FAST && perChannelLaneConfig('google_meet') === undefined);
+  }
+
+  // ── 9) ZOOM PER-TRACK turn gap: a starved page loses capture callbacks for 1–2 s inside speech.
+  //      1.5 s between two frame stamps inside one continuous turn must not close the turn: one final request at the
+  //      close covers every frame. Google Meet keeps the lane's default 1 s gap.
+  {
+    const ZF = 4096, ZF_MS = (ZF / SR) * 1000;
+    const zframe = new Float32Array(ZF).fill(0.05);
+    const windows: number[] = [];
+    const transcribe = async (pcm: Float32Array): Promise<TranscriptionResult> => {
+      windows.push(pcm.length / ZF);
+      return { text: 'one continuous turn', language: 'en', duration: pcm.length / SR,
+        segments: [{ start: 0, end: pcm.length / SR, text: 'one continuous turn' }] };
+    };
+    const sink = captureSink();
+    const pipe = createBotPipeline(baseInv({ platform: 'zoom', meetingUrl: 'https://zoom.us/j/123456789' }), sink, { transcribe });
+    await pipe.start();
+    const t0 = 1_800_000_000_000;
+    let t = t0;
+    for (let k = 0; k < 6; k++) { pipe.feedAudio(4, 'Alice', zframe, t); t += 2 * ZF_MS; }
+    t += 1000;                                                     // callbacks lost: 1.5 s between two frame stamps
+    for (let k = 0; k < 6; k++) { pipe.feedAudio(4, 'Alice', zframe, t); t += 2 * ZF_MS; }
+    await pipe.stop();
+    check('zoom: 1.5 s between frame stamps inside speech keeps one turn (one final request for all 12 frames)',
+      windows.length === 1 && windows[0] === 12, JSON.stringify(windows));
+    check('zoom: the turn is published once', sink.published.filter((s) => s.completed).length === 1,
+      JSON.stringify(sink.published.map((s) => s.text)));
+    check('per-track turn gap is 2 s for zoom; google_meet keeps the lane default',
+      perChannelOnsetGapMs('zoom') === PER_TRACK_ONSET_GAP_MS && PER_TRACK_ONSET_GAP_MS === 2000 && perChannelOnsetGapMs('google_meet') === undefined);
   }
 
   if (failed) { console.error(`\n❌ pipeline (L3): ${failed} check(s) FAILED.`); process.exit(1); }

@@ -20,7 +20,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-import subprocess
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -28,7 +27,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from shared.adapters import GitPushError, push_with_token
-from shared.gitenv import scrubbed_git_env
+from shared.gitexec import run_git
 
 from control_plane.repo_ref import assert_fetchable
 from control_plane.workspace_attach import SEED_SLOT, _safe_subject_dir, attached_workspaces
@@ -119,8 +118,7 @@ def _github_create_repo(repo_name: str, private: bool, token: str, org: Optional
 
 def _git_out(ws: Path, *args: str, token: Optional[str] = None) -> str:
     """Run a read-only git query in the workspace; failures raise token-redacted PublishError."""
-    proc = subprocess.run(["git", "-C", str(ws), *args], capture_output=True, text=True,
-                          env=scrubbed_git_env())
+    proc = run_git(ws, *args)
     if proc.returncode != 0:
         raise PublishError(_redacted(f"git {' '.join(args)} failed: {proc.stderr.strip()}", token))
     return proc.stdout.strip()
@@ -145,8 +143,7 @@ def published_remote_url(ws: str | Path) -> Optional[str]:
     wsp = Path(ws)
     if not (wsp / ".git").exists():
         return None
-    proc = subprocess.run(["git", "-C", str(wsp), "remote", "get-url", PUBLISH_REMOTE],
-                          capture_output=True, text=True, env=scrubbed_git_env())
+    proc = run_git(wsp, "remote", "get-url", PUBLISH_REMOTE)
     url = proc.stdout.strip()
     if proc.returncode != 0 or not url:
         return None
@@ -185,8 +182,7 @@ def publish_workspace(
     # Vexa-born gate. Explicit target: an `origin` remote means an ATTACHED external clone — its home
     # is that repo. Legacy seed-slot path: the active slot carrying a repo URL means the same thing.
     if ws_dir is not None:
-        origin = subprocess.run(["git", "-C", str(ws), "remote", "get-url", "origin"],
-                                capture_output=True, text=True, env=scrubbed_git_env())
+        origin = run_git(ws, "remote", "get-url", "origin")
         if origin.returncode == 0 and origin.stdout.strip():
             raise PublishError(
                 "this workspace is attached from an external repo — it already has a home; "

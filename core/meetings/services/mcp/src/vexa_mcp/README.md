@@ -14,6 +14,21 @@ The MCP service logic, injectable. Public surface is `__init__.py`: **`create_ap
   same `FastApiMCP` mount; prompts reference only ported tools.
 - **`__main__.py`** — `python -m vexa_mcp`, the production entrypoint (compose CMD): serves
   `create_app()` with `GATEWAY_URL`/`HOST`/`PORT` from env.
+- **`tickets.py`** — `report_issue`'s ticket: field bounds, the canonical summary/description,
+  content and caller fingerprints (never the key), and the sink's wire shape (`raw` or `github`).
+- **`manifest.py`** · **`discover.py`** · **`bind.py`** · **`register.py`** — the assembly: each
+  deployed domain's `mcp.tools.v1` manifest validated, discovered over HTTP, bound to the domain's
+  own OpenAPI, and registered as one route per tool (a domain that declares `forward` is called
+  back through the gateway).
+- **`reentry.py`** — carries the identity the gateway signed onto a request back to the gateway on
+  the tool calls that request causes.
+- **`paths.py`** — `path_segment`, the one place a caller-supplied value becomes a path segment:
+  everything but the unreserved characters percent-encoded, `/` included, and a dot-only value
+  encoded too, so no value can end its segment, add a query or fragment, or be resolved as `..`.
+- **`notices.py`** · **`tool_errors.py`** · **`streamable_http.py`** · **`identity.py`** ·
+  **`config_preflight.py`** — standing notices on meeting tools, structured tool refusals, the
+  streaming `/mcp` transport, the meeting-identity vocabulary, and the vendored config preflight.
 
 Stateless by design — no DB, no redis, no direct meeting-api/admin-api access; the only
-outbound seam is the gateway REST surface.
+outbound seams are the gateway REST surface, the assembled domains' doors, and the
+operator's ticket sink.

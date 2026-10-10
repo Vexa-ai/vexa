@@ -307,8 +307,6 @@ Each activation is still confirmed once, on the flow as its page.
 - **A step name that is not in `flows_list`.** It does not exist here. Never submit it — the API
   refuses it with the vocabulary attached, and guessing wastes their turn. Write the proposal.
 - **A trigger nothing emits.** A flow filed on it would never run. Say so and stop.
-- **The company layer is not set up.** `flows_submit` is refused while it is missing, and the answer
-  says so. Do not retry it: say which one thing has to happen first.
 - **A flow that would send mail somewhere the rules forbid.** Say which rule answers it and where
   that answer lives. Do not compose a flow that works around `POLICIES.md`.
 - **No names.** Take the company and the person from the facts block above this ask. Nothing in this

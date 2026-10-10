@@ -5,7 +5,7 @@
  *  somewhere with the authority of a number; a landing that fires twice.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { ASK_CHAT_EVENT } from "../../canvas/actions";
+import { ASK_CHAT_EVENT } from "../../platform";
 import { normalizeIntent, SELECTION_MAX, type ChatIntent, type PageIntent } from "../../surfaces/chatIntent";
 import {
   PREVIEW_MAX, clearPending, compactLabel, fallbackText, landPending, pendingLanding, postIntent, sourceRange,

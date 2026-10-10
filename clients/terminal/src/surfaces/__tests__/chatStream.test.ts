@@ -366,7 +366,7 @@ describe("streamChatTurn — turn-accepted liveness ack", () => {
  *  It rides the CHAT stream and not the meeting stream on purpose (decision 18: the chips are part
  *  of the chat's record), and it is forwarded here rather than stored, exactly like `artifact`. */
 describe("streamChatTurn — the transcript's terms", () => {
-  const terms = [{ term: "Kaar Tech", known: null }];
+  const terms = [{ term: "Northwind Labs", known: null }];
 
   it("forwards a publish with its meeting and its cursor", async () => {
     const seen: unknown[] = [];
@@ -471,7 +471,7 @@ describe("streamChatTurn — a turn that stopped early (F89)", () => {
     const { state, cb } = recorder();
 
     await streamChatTurn(
-      { prompt: "build the OeNB workspace", session: "s1", active: undefined },
+      { prompt: "build the Example Bank workspace", session: "s1", active: undefined },
       cb,
       { fetchImpl: fetchImpl as unknown as typeof fetch, signal: new AbortController().signal, ...noWait },
     );

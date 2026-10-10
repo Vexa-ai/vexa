@@ -1,7 +1,7 @@
 # deploy/compose — the v0.12 control-plane stack (P4)
 
 `docker-compose.yml` brings up the v0.12 control plane: the infra (`postgres:17-alpine`,
-`valkey/valkey:8-alpine`, `minio` + `minio-init`) and the long-running services below, each building its own
+`valkey/valkey:8-alpine`, `storage` (versitygw) + `storage-init`) and the long-running services below, each building its own
 slim image from `<service>/Dockerfile`:
 
 | service      | build context                          | host port | entrypoint                         |
@@ -15,6 +15,16 @@ slim image from `<service>/Dockerfile`:
 | mcp          | `core/meetings/services/mcp`           | 18010     | the MCP transport                  |
 | flows-api    | repo root, `core/flows/Dockerfile`     | 18200     | `python -m flows_integrations.flows_api` |
 | flows-mailbox| repo root, `core/flows/Dockerfile`     | —         | `python -m flows_integrations.mailbox` (profile `mailbox`) |
+
+### Networks
+
+The control plane shares the `vexa` network. Nothing the runtime spawns joins it: meeting bots go on
+`bots` (`DOCKER_NETWORK` — meeting-api, redis, storage) and agent workers on `workers`
+(`DOCKER_WORKER_NETWORK` — the gateway, redis, flows-api, and the optional `llm-shim` / `searxng`).
+Neither reaches the runtime, Postgres, admin-api, agent-api or the terminal. A service you add that a
+bot or worker must reach joins the matching network. The runtime's own API requires
+`RUNTIME_API_TOKEN`, which only agent-api and meeting-api hold, and Postgres refuses to start on an
+empty or published `DB_PASSWORD` (`make rotate-db-password` moves an existing install off one).
 
 ### flows, and what it replaces
 
@@ -46,13 +56,26 @@ unconfigured deployment look configured), and it will refuse to compose a mailed
 terminal. Every key it reads is declared in `core/flows/src/config.v1.json` and checked against
 this file by `gate:config-contract`.
 
-**The instance gate and the no-agents profile (F-D15).** Flows will not act on the world until
-an admin has committed the company layer (`global_setup`) — but the only writer of that layer
-is agent-api's onboarding wizard. Leave `VEXA_FLOWS_AGENT_API_URL` unset (no-agents profile)
-and the gate opens BY CONSTRUCTION, since there is no wizard that could ever satisfy it; set it
-(the full profile) and the gate stays fail-closed until the wizard runs, or an operator commits
-it by hand over `PUT /admin/instance/global-setup` (admin-key gated, same row as the wizard's
-own write).
+**First run needs no setup step beyond the admin claim.** The first administrator is whoever signs in
+with the one-time admin claim code (below), or an address in `VEXA_ADMIN_EMAILS`; signing in first
+grants nothing. There is no company-layer gate (founder ruling 2026-10-08): `_global` lives in the `agent-workspaces` volume, agent-api creates it empty at boot,
+and flows act on the world whether or not anybody ever writes it. `VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH`
+is optional — set it only to manage `_global` as a separate host repo.
+
+**Who may sign in.** Every terminal door — the emailed link, Google, Microsoft — admits only an
+existing user of this instance, an admin, or an address on the sign-in allow-list; anybody else is
+refused before an account is created, and the emailed-link form answers "check your email" either
+way without sending them anything. The allow-list is `VEXA_SIGNIN_ALLOW` on `admin-api` (exact
+addresses and `@domain` entries, comma-separated, e.g. `@example.com,alice@example.org`) plus
+whatever the admin adds in the terminal under Settings → Sign-in. If admin-api cannot be reached,
+new sign-ins are refused; sessions that already exist are untouched. Upgrading admits every
+account that already exists, so nobody is locked out by it.
+
+**The first administrator needs the admin claim code.** On an instance nobody has claimed, admin-api
+writes a one-time code to its log at boot (`docker compose logs admin-api | grep -A4 'ADMIN CLAIM
+CODE'`); the terminal's claim screen asks for it, and the sign-in that carries it becomes the admin.
+Without it nobody new can sign in. `VEXA_ADMIN_EMAILS` names the admins instead (no code is issued
+then). admin-api reads it (and `VEXA_SIGNIN_ALLOW`) and decides every sign-in; the terminal only asks.
 
 Every service answers `GET /health` and carries a compose healthcheck; `depends_on` waits on
 `condition: service_healthy` so the bring-up is ordered. The `runtime` mounts
@@ -62,16 +85,34 @@ old 0.10 line and incompatible with this stack's `lifecycle.v1`) on demand and t
 agent worker (`vexaai/v012-agent-worker:v012`, a `build-only` compose profile); neither is a
 long-running compose service.
 
+Each bot container is created by the runtime, not by compose, so its hardening is set there (the
+Docker API's `HostConfig`, the fields compose's `cap_drop`/`security_opt` set): every capability
+dropped, `no-new-privileges`, and a seccomp profile that lets the bot's Chromium build its sandbox
+(`core/runtime/src/runtime_kernel/seccomp-userns.json`: Docker's default profile plus user
+namespaces, for the bot's own container only). The bot image runs as a non-root uid (10002), which
+Chromium's sandbox requires; each bot logs `Chromium runs with its sandbox`, or why it does not.
+
 ## Usage
 
 ```bash
-cp .env.example .env            # edit secrets/ports/DOCKER_GID
+./deploy/compose/mint-dev-env.sh   # seeds .env, mints the secrets the services refuse to boot without; then edit ports/DOCKER_GID
 docker compose -f deploy/compose/docker-compose.yml build
 docker compose -f deploy/compose/docker-compose.yml up -d
 # poll until healthy, then:
 curl -sf http://localhost:18056/health   # gateway
-docker compose -f deploy/compose/docker-compose.yml down -v
+docker compose -f deploy/compose/docker-compose.yml down
 ```
+
+`make -C deploy/compose down` removes containers and keeps data volumes. To deliberately delete
+the database, recordings, Redis data and agent workspaces, use
+`make -C deploy/compose destroy DESTROY=yes`. `make -C deploy/compose help` lists both commands.
+
+Storage readiness checks the same endpoint as meeting-api (`S3_ENDPOINT`, else `MINIO_ENDPOINT`
+with `MINIO_SECURE`), creates the bucket if absent, and verifies a PUT/GET/DELETE probe outside
+`recordings/`. Any failure prevents meeting-api from starting. After a MinIO upgrade, old
+recordings stay in the old volume and do not play back from the new storage until copied with
+`make -C deploy/compose migrate-storage`. Update `.env`'s old endpoint to `storage:9000` as shown
+in the [upgrade guide](../../docs/docs/upgrade-from-minio.mdx).
 
 `.env.example` documents every variable (faithful to the 0.11 `deploy/compose` names: `DB_*`,
 `REDIS_URL`, `ADMIN_TOKEN`, `INTERNAL_API_SECRET`, `MINIO_*`, `BROWSER_IMAGE`/`AGENT_IMAGE`,

@@ -5,11 +5,11 @@ PRD decision 38. The states live in `deploy/dogfood/rehearse/states.yaml`; this 
 in front of them, and the control MCP's `rehearse` / `subject_reset` tools call the same functions.
 
     rehearse.py states                                   # what the catalogue holds
-    rehearse.py plan organizer-invited olga@rehearse.test # resolve every step, execute none
-    rehearse.py enter organizer-invited olga@rehearse.test
+    rehearse.py plan organizer-invited nora@rehearse.test # resolve every step, execute none
+    rehearse.py enter organizer-invited nora@rehearse.test
     rehearse.py enter attendee-stranger-minutes sam@rehearse.test --meeting 2026-03-16 --fresh
     rehearse.py enter reply-pending sam@rehearse.test --runner openai-agent   # on the CCC Qwen
-    rehearse.py reset olga@rehearse.test
+    rehearse.py reset nora@rehearse.test
     rehearse.py reset 131 --by-id                # a subject whose email is not an address
     rehearse.py all                                      # the whole catalogue (run_all)
 

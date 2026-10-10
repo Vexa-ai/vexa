@@ -38,7 +38,7 @@ _ENV = {"VEXA_FLOWS_API_KEY": "test-flows-key",
         # UNREACHABLE on purpose (port 1 is never a service) — proves the import touches no
         # network. A real Postgres DSN shape is required: unset or `sqlite://` both refuse at
         # `db_from_url` now (Postgres is the only production dialect).
-        "VEXA_FLOWS_DB_URL": "postgresql+psycopg://health-gate:unreachable@127.0.0.1:1/flows"}
+        "VEXA_FLOWS_DB_URL": "postgresql+pg8000://health-gate:unreachable@127.0.0.1:1/flows"}
 _saved = {k: os.environ.get(k) for k in _ENV}
 os.environ.update(_ENV)
 try:

@@ -24,6 +24,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from vexa_mcp import reentry as reentry_mod
 from vexa_mcp import bind, register
 from vexa_mcp import manifest as m
 
@@ -100,11 +101,12 @@ def test_the_same_manifest_assembles_when_the_deployment_holds_the_key():
     assert a.tools[0].auth == "admin"
 
 
-def test_a_placeholder_is_not_holding_the_key():
+@pytest.mark.parametrize("placeholder", sorted(m.PLACEHOLDER_KEYS))
+def test_a_placeholder_is_not_holding_the_key(placeholder):
     """A published literal authenticates nobody and everybody — the same refusal list flows-api and
-    the services' config.v1 already keep."""
+    the services' config.v1 already keep (fact placeholder-secrets), CHANGE-ME included."""
     with pytest.raises(m.ManifestError) as e:
-        m.assemble([ADMIN_MANIFEST], deployed=DEPLOYED, env={"VEXA_MCP_FLOWS_ADMIN_KEY": "changeme"})
+        m.assemble([ADMIN_MANIFEST], deployed=DEPLOYED, env={"VEXA_MCP_FLOWS_ADMIN_KEY": placeholder})
     assert "flows_retire" in str(e.value)
 
 
@@ -126,17 +128,23 @@ def test_an_unsatisfiable_tool_never_reaches_the_surface():
 
 # ── and what actually travels ───────────────────────────────────────────────────────────────────
 
-def _wire(manifest, env):
+def _wire(manifest, env, *, me=None):
+    """``me`` is what the gateway's `/auth/me` answers for the caller — what an `auth: admin` tool
+    asks before it spends the deployment's key. None: there is no gateway to ask."""
     seen = []
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "gateway.test" and request.url.path == "/auth/me":
+            status, body = me if isinstance(me, tuple) else (200, me)
+            return httpx.Response(status, json=body)
         seen.append(request)
         return httpx.Response(200, json={"ok": True})
 
     app = FastAPI()
     a = m.assemble([manifest], deployed=DEPLOYED, env=env)
     register.register(app, bind.verify(a, {"flows": OPENAPI}), {"flows": "http://flows"},
-                      transport=httpx.MockTransport(handler), env=env)
+                      transport=httpx.MockTransport(handler), env=env,
+                      gateway_url="http://gateway.test" if me is not None else None)
     return TestClient(app), seen
 
 
@@ -150,11 +158,45 @@ def test_an_admin_tool_sends_the_deployments_key_and_not_the_callers():
     """The caller is still authenticated at this edge — they just do not get to present their own
     credential to a door that reads an operator key."""
     env = {"VEXA_MCP_FLOWS_ADMIN_KEY": "an-operator-key"}
-    client, seen = _wire(ADMIN_MANIFEST, env)
+    client, seen = _wire(ADMIN_MANIFEST, env, me={"user_id": 1, "is_admin": True})
     client.post("/tools/flows_retire", headers={"Authorization": "Bearer person-key"}, json={})
     sent = seen[-1].headers
     assert sent["X-Flows-Operator-Key"] == "an-operator-key"
     assert "person-key" not in str(dict(sent))
+
+
+# ── and for whom: the instance admin, with their own credential, confirmed at call time ─────────
+
+@pytest.mark.parametrize("me", [
+    {"user_id": 7, "is_admin": False},          # a person's own key, not the admin
+    {"user_id": 7},                              # an answer that does not say
+    {"user_id": 7, "is_admin": "true"},          # not a boolean
+    (403, {"detail": "a worker's delegation token is accepted on /mcp only"}),  # a worker
+    (401, {"detail": "Invalid API key"}),        # nobody
+    None,                                        # no gateway to ask
+])
+def test_an_admin_tool_spends_the_deployments_key_for_the_instance_admin_only(me):
+    env = {"VEXA_MCP_FLOWS_ADMIN_KEY": "an-operator-key"}
+    client, seen = _wire(ADMIN_MANIFEST, env, me=me)
+    r = client.post("/tools/flows_retire", headers={"Authorization": "Bearer someone"}, json={})
+    assert r.status_code == 403
+    assert "instance admin" in r.json()["detail"]
+    assert seen == [], "the operator key went out for a caller who is not the admin"
+
+
+def test_the_admin_check_never_reads_what_the_caller_says_about_itself():
+    env = {"VEXA_MCP_FLOWS_ADMIN_KEY": "an-operator-key"}
+    client, seen = _wire(ADMIN_MANIFEST, env, me={"user_id": 7, "is_admin": False})
+    r = client.post("/tools/flows_retire", json={},
+                    headers={"Authorization": "Bearer someone", "X-User-Scopes": "admin",
+                             "X-Is-Admin": "true", "X-User-Regime": "human"})
+    assert r.status_code == 403 and seen == []
+
+
+def test_a_subject_tool_does_not_ask():
+    client, seen = _wire(_manifest(), {}, me=(500, {}))
+    client.get("/tools/flows_list", headers={"Authorization": "Bearer person-key"})
+    assert seen[-1].url.path == "/flows"
 
 
 def test_a_none_tool_sends_no_credential_at_all():
@@ -187,3 +229,26 @@ def test_every_flows_tool_declares_the_credential_its_own_door_actually_reads():
     admin_gated = {"flows_submit", "flow_lifecycle"}
     assert {t["name"]: t.get("auth") for t in doc["tools"]} == {
         t["name"]: ("admin" if t["name"] in admin_gated else "subject") for t in doc["tools"]}
+
+
+def test_the_admin_question_carries_the_re_entry_identity_so_a_worker_can_be_answered():
+    """A worker's token is answered at the gateway's `/auth/me` only on this edge's re-entry, so the
+    question carries the identity the gateway signed onto the request being served."""
+    asked = []
+    env = {"VEXA_MCP_FLOWS_ADMIN_KEY": "an-operator-key"}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/auth/me":
+            asked.append(request)
+            return httpx.Response(200, json={"user_id": 1, "is_admin": True})
+        return httpx.Response(200, json={"ok": True})
+
+    app = FastAPI()
+    app.add_middleware(reentry_mod.ReentryMiddleware)
+    a = m.assemble([ADMIN_MANIFEST], deployed=DEPLOYED, env=env)
+    register.register(app, bind.verify(a, {"flows": OPENAPI}), {"flows": "http://flows"},
+                      transport=httpx.MockTransport(handler), env=env, gateway_url="http://gateway.test")
+    TestClient(app).post("/tools/flows_retire", json={},
+                         headers={"Authorization": "Bearer vxd_a.b.c", "X-Vexa-Identity": "v1.s.t"})
+    assert asked[-1].headers["x-vexa-internal-mcp-identity"] == "v1.s.t"
+    assert asked[-1].headers["x-api-key"] == "vxd_a.b.c"

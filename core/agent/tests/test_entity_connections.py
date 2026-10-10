@@ -1,10 +1,10 @@
 """A call `entity_upsert` cannot read is refused BY NAME, with a 400, having written nothing.
 
 Vexa-ai/vexa#1589, from the founder's walk on 2026-09-06 (`report_friction`, sessions
-`tommy-burnette-extend` and `james-spadafora-extend`). One call carried three defects, and they are
+`gabe-ashdown-extend` and `james-hollister-extend`). One call carried three defects, and they are
 three different failure classes, so each gets its own tests here:
 
-  1. **A 500 where a shape belonged.** `connections=[{"from": "tommy-burnette", "type": "works_at"}]`
+  1. **A 500 where a shape belonged.** `connections=[{"from": "gabe-ashdown", "type": "works_at"}]`
      — a plausible guess — reached `c["name"]` inside the writing loop and raised `KeyError: 'name'`.
      The agent got "internal server error": no shape named, nothing to fix, nothing to retry.
   2. **A gate nothing named.** The refusal said "every fact needs a source" to an agent that had
@@ -36,8 +36,8 @@ from workspaces.shared import entities as E
 
 def test_a_connection_without_a_name_says_what_a_connection_is(tmp_path):
     with pytest.raises(E.EntityMalformed) as e:
-        E.upsert_entity(tmp_path, "person", "Tommy Burnette", ["Chairs it."], "the call",
-                        connections=[{"from": "tommy-burnette", "type": "works_at"}])
+        E.upsert_entity(tmp_path, "person", "Gabe Ashdown", ["Chairs it."], "the call",
+                        connections=[{"from": "gabe-ashdown", "type": "works_at"}])
     msg = str(e.value)
     # The keys it actually sent, named back to it — the agent has to see WHICH argument was wrong.
     assert "from" in msg and "type" in msg
@@ -163,7 +163,7 @@ def test_the_refusal_names_the_argument_that_is_the_gate(tmp_path):
     """What the walking agent had in front of it: every fact attributed inline, no `source=`, and a
     refusal that told it to do the thing it had just done."""
     with pytest.raises(E.EntityRefused) as e:
-        E.upsert_entity(tmp_path, "person", "Tommy Burnette",
+        E.upsert_entity(tmp_path, "person", "Gabe Ashdown",
                         ["Chairs the TSC — source: the 2026-09-06 call"], "")
     msg = str(e.value)
     assert "`source=`" in msg
@@ -174,7 +174,7 @@ def test_the_refusal_names_the_argument_that_is_the_gate(tmp_path):
 def test_a_fact_that_carries_its_own_source_suffix_is_attributed_once(tmp_path):
     """`## Sources` and the `sources:` frontmatter are both built from the ARGUMENT, so a suffix the
     caller typed reaches neither — and printing ours after theirs put the clause on the line twice."""
-    r = E.upsert_entity(tmp_path, "person", "Tommy Burnette",
+    r = E.upsert_entity(tmp_path, "person", "Gabe Ashdown",
                         ["Chairs the TSC — source: the call"], "the 2026-09-06 call",
                         today="2026-09-06")
     page = (tmp_path / r["path"]).read_text()
@@ -184,9 +184,9 @@ def test_a_fact_that_carries_its_own_source_suffix_is_attributed_once(tmp_path):
 
 
 def test_the_same_fact_restated_bare_is_still_the_same_fact(tmp_path):
-    E.upsert_entity(tmp_path, "person", "Tommy Burnette",
+    E.upsert_entity(tmp_path, "person", "Gabe Ashdown",
                     ["Chairs the TSC — source: the call"], "the call")
-    again = E.upsert_entity(tmp_path, "person", "Tommy Burnette", ["Chairs the TSC"], "the call")
+    again = E.upsert_entity(tmp_path, "person", "Gabe Ashdown", ["Chairs the TSC"], "the call")
     assert again["changed"] is False
 
 
@@ -237,8 +237,8 @@ H = {"X-User-Id": "u_jane"}
 def test_a_connection_without_a_name_is_a_400_naming_the_shape(client, tmp_path):
     """It was a 500 — `KeyError: 'name'` off the end of an uncaught exception."""
     r = client.post("/api/workspace/entity", headers=H, json={
-        "kind": "person", "name": "Tommy Burnette", "facts": ["Chairs it."], "source": "the call",
-        "connections": [{"from": "tommy-burnette", "type": "works_at"}]})
+        "kind": "person", "name": "Gabe Ashdown", "facts": ["Chairs it."], "source": "the call",
+        "connections": [{"from": "gabe-ashdown", "type": "works_at"}]})
     assert r.status_code == 400, r.text
     detail = r.json()["detail"]
     assert "from" in detail and "type" in detail and '"name": "Acme"' in detail

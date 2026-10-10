@@ -1,7 +1,7 @@
 /** WHAT A WORKSPACE'S FRONT PAGE KNOWS — the facts behind `WorkspaceReadmePanel`, as pure functions
  *  plus one loader (Vexa-ai/vexa#1623).
  *
- *  Founder, 2026-09-06, on the OeNB workspace's `README.md` open in the preview: *"ok click we want
+ *  Founder, 2026-09-06, on the Example Bank workspace's `README.md` open in the preview: *"ok click we want
  *  to open the workspace readme — if it's a workspace readme we want to have data: shared with whom,
  *  controls like github sync, git history lookup, etc."* A workspace's README is not a page that
  *  happens to be called README: it is the workspace's front page, and the workspace's own facts
@@ -32,7 +32,7 @@ import { isMachinery } from "./machinery";
 
 /** The server's own three (`workspaces/shared/workspace_id.KINDS`). A "customer workspace" is a
  *  group whose members happen to include a customer — a fact about the people, not a fourth kind. */
-export type WorkspaceKind = "desk" | "group" | "global";
+export type WorkspaceKind = "desk" | "group" | "global" | "private";
 
 /** The company layer's mount slug, and the desk's name in a path segment (the terminal's desk tab
  *  carries no slug at all, so `GET /api/workspaces/{slug}/history` needs a word for it — the same
@@ -78,7 +78,7 @@ function bullet(md: string, needle: string): string | null {
  *  `global_admin_only`. `null` when the file could not be read or has been rewritten past
  *  recognition — the panel then says so, rather than inventing a rule. */
 export function policySentence(kind: WorkspaceKind, policies: string | null): string | null {
-  if (!policies) return null;
+  if (kind === "private" || !policies) return null;
   if (kind === "group") return bullet(policies, "reads a group");
   if (kind === "desk") return ruleHeading(policies, "agent_reads_desk");
   return ruleHeading(policies, "global_admin_only");
@@ -325,11 +325,12 @@ export async function loadWorkspaceFacts(docSlug: string | undefined): Promise<W
 
   const identity = ident.status === "fulfilled" ? ident.value : null;
   const kind: WorkspaceKind = isDesk ? "desk" : isGlobal ? "global"
+    : identity?.kind === "private" ? "private"
     : identity?.kind === "desk" ? "desk" : identity?.kind === "global" ? "global" : "group";
   if (ident.status === "rejected") note("Could not read what this workspace is.");
   if (tree.status === "rejected") note("Could not count the pages.");
   if (change.status === "rejected") note("Could not read what last changed here.");
-  if (policies.status === "rejected") note("Could not read the company policy.");
+  if (kind !== "private" && policies.status === "rejected") note("Could not read the company policy.");
   // The company's name and the reader's own name are NOT notes. Both are optional clauses of one
   // sentence: a missing one costs the line a clause, and a red line at the foot of the panel would
   // be announcing a failure about furniture (#1628's rule for the GitHub read, one fact along).
@@ -347,7 +348,7 @@ export async function loadWorkspaceFacts(docSlug: string | undefined): Promise<W
     : null;
   const policiesText = policies.status === "fulfilled" ? policies.value : null;
   const policy = policySentence(kind, policiesText);
-  if (policiesText && !policy) {
+  if (kind !== "private" && policiesText && !policy) {
     note("The company policy does not state a rule for this kind of workspace.");
   }
 
@@ -377,7 +378,7 @@ export async function loadWorkspaceFacts(docSlug: string | undefined): Promise<W
   }
 
   const owner = kind === "global" ? await amAdmin()
-    : kind === "desk" ? (isDesk || identity?.writable === true)
+    : kind === "desk" || kind === "private" ? (isDesk || identity?.writable === true)
     : myRole === "owner";
 
   const pageList = tree.status === "fulfilled" ? pagePaths(tree.value) : null;

@@ -439,7 +439,7 @@ def _client(tmp_path, rows: dict, *, secret=INTERNAL_SECRET, directory=None):
     book = DIRECTORY if directory is None else directory
     app = create_app(
         Dispatcher(settings, runtime, _FakeIdentity()), stream_reader=_FakeReader(),
-        meeting_owner_lookup=lambda uid, mid: rows.get((str(uid), str(mid))),
+        meeting_owner_lookup=lambda uid, mid, workspaces=None: rows.get((str(uid), str(mid))),
         email_subject_lookup=lambda address: book.get(address),
     )
     return TestClient(app), runtime
@@ -713,7 +713,6 @@ def test_the_group_is_read_off_the_meeting_row_never_the_caller(tmp_path):
 def test_the_resolver_carries_the_group_from_meeting_api(tmp_path):
     c, runtime = _client(tmp_path, {("u_owner", "42"): _row("u_owner", viewers=["u_bob"],
                                                              data_extra={"workspace_id": "g_acme"})})
-    root = Path(runtime.spawned[0][2]["VEXA_WORKSPACE_MOUNT_TARGET"]) if runtime.spawned else None
     r = c.post("/api/chat", json={"prompt": "go", "session": "m42", "room_meeting_id": "42"},
                headers={"X-User-Id": "u_owner", "X-Internal-Secret": INTERNAL_SECRET})
     assert r.status_code == 200
@@ -725,17 +724,18 @@ def test_the_resolver_carries_the_group_from_meeting_api(tmp_path):
     assert any(m["role"] == "system" and m["write"] for m in mounts)
 
 
-def test_the_skills_link_survives_a_read_only_cwd(tmp_path):
-    """PREPARE used to mkdir OUTSIDE its own try/except, so a ro cwd killed the turn before a single
-    token. A room run's cwd is ro by construction, so this is now load-bearing."""
+def test_prepare_survives_a_read_only_cwd(tmp_path, monkeypatch):
+    """A room run's cwd is ro by construction, so PREPARE must write nothing into it: chats go to the
+    private continuity root and skills to the per-subject HOME."""
     import os
     import stat
-    from llm.claude_code import _link_skills_into_workspace
+    from llm.claude_code import ClaudeCodeHarness
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
     work = tmp_path / "ro-desk"
     work.mkdir()
     (work / "README.md").write_text("x")
     os.chmod(work, stat.S_IRUSR | stat.S_IXUSR)
     try:
-        _link_skills_into_workspace(work)          # must not raise
+        ClaudeCodeHarness().prepare(work, chat_root=tmp_path / "system")   # must not raise
     finally:
         os.chmod(work, stat.S_IRWXU)

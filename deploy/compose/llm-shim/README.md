@@ -63,7 +63,7 @@ would be a vendor assumption baked into a model-agnostic product.
 
 ## Pins, and why
 
-The image is pinned to `litellm/litellm:main-v1.97.0` on **Docker Hub** — `ghcr.io/berriai` refuses
+The image is pinned to `litellm/litellm:v1.97.2` (by digest) on **Docker Hub** — `ghcr.io/berriai` refuses
 anonymous pulls, which would break a fresh deployment with an opaque `denied`. Inside the image the
 FastAPI pin is already correct; when running LiteLLM from source instead, `fastapi<0.116` is required: newer FastAPI removed `get_flat_dependant`, which
 LiteLLM imports — the proxy fails at startup. Both pins are ours to carry; that is the cost of this

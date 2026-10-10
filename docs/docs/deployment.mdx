@@ -29,7 +29,10 @@ make all      # full stack via Docker Compose — each service in its own contai
 make bot      # build the meeting bot FROM SOURCE — required before a bot can join a meeting
 ```
 
-`make all` seeds `.env` from `.env.example`, brings the stack up, and **prints an API key plus the
+`make all` seeds `.env` from `.env.example`, mints the secrets the services refuse to boot without
+(`INTERNAL_API_SECRET`, `RUNTIME_API_TOKEN`, `VEXA_FLOWS_API_KEY`, `VEXA_FLOWS_TIMELINE_KEY`,
+`NEXTAUTH_SECRET` — a value you already set is kept),
+brings the stack up, and **prints an API key plus the
 service URLs** when it's done. The **meeting bot is built from source** (`make bot`), **not pulled** —
 the published `vexaai/vexa-bot:dev` on Docker Hub is the older 0.10 line and is **not compatible** with
 this stack's `lifecycle.v1` (bots reach `joining` then fail). `make all` warns loudly if the bot image
@@ -52,7 +55,7 @@ required. Self-hosted: `make all` prints a key when the stack comes up.
 | **runtime** | spawns bot + agent **containers** on demand (via the Docker socket) |
 | **agent-api** | the [agent control plane](/api/agent) — dispatch, chat, routines, events |
 | **terminal** (`:13000`) | the web workbench — proxies `/ws` → gateway and REST/login → agent-api/admin-api |
-| redis (Valkey) · postgres · **minio** | bus + scheduler · metadata · object storage (recordings + workspaces) |
+| redis (Valkey) · postgres · **storage** (versitygw) | bus + scheduler · metadata · recordings, stored as plain files in the `storage-data` volume |
 
 The **bot is not a long-running service** — the [runtime](/core/runtime) spawns a browser container per
 meeting (`BROWSER_IMAGE`) and an agent container per dispatch (`AGENT_IMAGE`), then reaps them. The
@@ -66,12 +69,23 @@ absent).
   default `POST /bots` answers **503** (refuse loud). Capture-only: set `TRANSCRIBE_ENABLED=false`
   or pass `{"transcribe_enabled": false}` on the spawn. See
   [Configuration](/configuration#transcription-stt).
-- **Object storage** — MinIO (`MINIO_*`): meeting recordings and agent workspaces live in your bucket.
-  The default `MINIO_HOST_PORT=9000` is a common port — if it's already taken on your host
-  (`make all` fails with `bind … 127.0.0.1:9000 … address already in use`), set a free port in `.env`.
+- **Object storage** — the `storage` service runs versitygw (`versity/versitygw`, Apache-2.0,
+  pinned by tag and digest), an S3 server whose POSIX backend keeps every recording as a plain file
+  in the `storage-data` volume. meeting-api reaches it over S3 with the `MINIO_*` settings (the
+  variable names are unchanged): `MINIO_ENDPOINT=storage:9000`, and `MINIO_ACCESS_KEY` /
+  `MINIO_SECRET_KEY` are the server's root credentials, so change both before exposing the stack.
+  The one-shot `storage-init` ensures the bucket exists and verifies a PUT/GET/DELETE probe under
+  `.vexa-storage-init/` before meeting-api starts. The storage S3 port is published on loopback only, at
+  `STORAGE_HOST_PORT` (default `18900`). To keep recordings in your own S3 instead, point
+  `S3_ENDPOINT` (or `MINIO_ENDPOINT`) at it; the same readiness check applies
+  ([Configuration](/configuration#database-storage)). Back the volume up
+  with an attribute-preserving copy ([Recordings → Backups](/how-to/recordings#backups)).
+  Upgrading a stack that ran MinIO: old recordings stay in the old volume and do not play back
+  from the new storage until copied with `make -C deploy/compose migrate-storage`. Update the old
+  `.env` endpoint as described in [Where your recordings live now](/upgrade-from-minio).
 - **Agent inference** — bring your own: point the agent at your endpoint so no inference leaves the
   network (`VEXA_AGENT_MODEL` / mounted credentials).
-- **Secrets** — `ADMIN_TOKEN`, `INTERNAL_API_SECRET`, DB credentials. Set real values before exposing.
+- **Secrets** — `ADMIN_TOKEN`, `INTERNAL_API_SECRET`, `RUNTIME_API_TOKEN`, DB credentials. Set real values before exposing.
 
 ## Transcription (the separate GPU unit)
 
@@ -122,12 +136,13 @@ Now bots transcribe end-to-end: **bot → transcription service → segments →
 
 `make all` binds every service to `127.0.0.1` (loopback only). To expose the **terminal** at a public
 hostname, put a TLS-terminating reverse proxy in front of the terminal port (`TERMINAL_PORT`, default
-`13000`) and tell the terminal its public origin so auth cookies and OAuth callbacks are correct:
+`13000`) and tell the terminal its public origin so auth cookies, OAuth callbacks and emailed sign-in
+links are correct (the link is built only from `NEXTAUTH_URL`; without it the terminal sends none):
 
 ```bash
 # deploy/compose/.env
 NEXTAUTH_URL=https://your-host.example.com
-NEXTAUTH_SECRET=<a strong random secret>   # don't ship the dev default
+NEXTAUTH_SECRET=<openssl rand -hex 32>   # required; make all mints one
 ```
 
 An nginx vhost (the terminal proxies `/ws` to the gateway itself, so the proxy only needs standard
@@ -168,9 +183,48 @@ source is ignored, so it cannot rotate an abuser's budget. See
 
 The terminal carries its own Google/Microsoft OAuth login, so the proxy needs no auth of its own.
 
+### Who may sign in
+
+Every terminal sign-in — the emailed link, Google, Microsoft — is admitted only for an **existing
+user** of this instance, an **admin**, or an address on the **sign-in allow-list**. Anybody else is
+refused before an account is created, and the email form answers "check your email" either way
+without sending them anything. Seed the list in `deploy/compose/.env` (admin-api reads it; restart
+it after a change), and add more in the terminal under **Settings → Sign-in** — the effective list is
+both:
+
+```bash
+# deploy/compose/.env
+VEXA_ADMIN_EMAILS=admin@example.com                 # optional: names the admins, no claim code needed
+VEXA_SIGNIN_ALLOW=@example.com,alice@example.org    # exact addresses and whole domains
+```
+
+`@example.com` admits everyone at exactly that domain; a subdomain needs its own entry. If admin-api
+cannot be reached, new sign-ins are refused; sessions that already exist are untouched.
+
+`VEXA_SIGNIN_ALLOW=*` (the entry `*` alone) lets **any address** sign in and get an account. It is
+meant for a dev or demo stack: nothing sets it by default, admin-api logs a warning at every boot
+while it is set, `*` is never a pattern inside an entry, and `VEXA_ADMIN_EMAILS` refuses it. It is the
+operator's opt-in only: the sign-in list an admin edits in Settings refuses `*`, and a `*` already
+stored there is ignored and named in a boot warning.
+
+<Warning>
+**The first administrator needs the admin claim code.** On an instance nobody has claimed, admin-api
+writes a one-time code to its log at boot:
+
+```bash
+docker compose logs admin-api | grep -A4 'ADMIN CLAIM CODE'
+```
+
+Open the terminal, enter the code on the claim screen, then sign in: that sign-in becomes the
+administrator (open an emailed link in the same browser). The code works once, and restarting
+admin-api issues a new one. Without it nobody new can sign in and nobody can claim the role. To name
+the admins instead, set `VEXA_ADMIN_EMAILS` before first boot; no code is issued then. A non-empty
+`VEXA_SIGNIN_ALLOW` narrows the claim too: only an address on the list may sign in or claim.
+</Warning>
+
 ## No egress
 
-Everything runs inside your perimeter: gateway + services + redis/postgres/minio on your host, the
+Everything runs inside your perimeter: gateway + services + redis/postgres/storage on your host, the
 [transcription unit](#transcription-the-separate-gpu-unit) on your own GPU or CPU, **BYO inference**,
 recordings in your object storage. A bundled STT unit means the audio path never calls out — the
 posture the regulated verticals ask for.
@@ -179,3 +233,136 @@ We have not run an install on a genuinely disconnected network, so we do not cla
 procurement review can hold us to is self-hosted with no egress, not a certified air gap. On
 **Kubernetes** the chart does not yet expose `TRANSCRIPTION_MODEL` as a value — see
 [No-egress clusters](/deployment-kubernetes#no-egress-clusters).
+
+## One-time steps after upgrading
+
+Run these once on an existing install when you move to this release. They are safe to repeat.
+
+**Upgrade every component to this release together.** Several connections between Vexa's own
+components now carry a signature or credential that an older peer does not send, and the newer side
+refuses what it does not find. None of these mixes works, so do not leave any component behind:
+
+| If this is older than v0.13.2 | Under a v0.13.2 | What happens |
+|---|---|---|
+| the bot image (`BROWSER_IMAGE`, `runtime.browserImage`) | meeting-api | its lifecycle callbacks and uploads are refused (401) and its transcript entries are dropped |
+| the runtime | meeting-api | its workload callbacks are unsigned and refused (401) |
+| agent-api or meeting-api | the runtime | every workload and schedule call is refused (401) |
+| agent-api | the agent worker image (`AGENT_WORKER_IMAGE`) | the worker drops every follow-up message in a chat, silently |
+| the gateway | admin-api | every agent worker's tool call is refused (401); closed, never open (below) |
+
+Where you pin an image apart from the stack's tag, move the pin in the same upgrade.
+
+**Upgrade between meetings.** A bot now signs every transcript entry it writes, and meeting-api drops
+entries that are not signed. A bot from the previous release still in a call when you upgrade writes
+unsigned entries, so its meeting's live transcript stops (and the meeting leaves the terminal's live
+list) until you send the bot again. Its MeetingToken is refused too: meeting-api now signs and checks
+MeetingTokens with a key derived from `ADMIN_TOKEN` rather than with `ADMIN_TOKEN` itself, and does
+not accept a token signed the old way for its remaining life, so that bot's lifecycle callbacks and
+recording uploads are refused (401) until it is sent again. The same happens when `ADMIN_TOKEN` itself
+changes (below). Upgrade when no bot is in a meeting, or send those bots again afterwards.
+
+**Upgrade the gateway together with identity, the MCP, agent-api and flows-api.** Identity (admin-api)
+now verifies an agent worker's token only for a caller that says it understands one. A gateway older
+than v0.13.2 does not say so, and a v0.13.2 identity refuses it every worker token: agent workers'
+tool calls fail with 401 until the gateway is upgraded too. Nothing is let through in that state; it
+just does not work. Upgrade the gateway, MCP, admin-api, agent-api and flows-api to the same release
+in one step (`make up`, `helm upgrade` and a new Lite image all do).
+
+**Docker Compose: the dispatch signing key needs a value of its own.** agent-api refuses to boot on an
+unset `VEXA_DISPATCH_SIGNING_KEY` or on its old default, `dev-dispatch-signing-key`. `make up` /
+`make all` mint one into `.env` and replace the old default there. If you start the stack with
+`docker compose` directly, set one first (`openssl rand -hex 32`). Nothing verifies these tokens yet,
+so a new key changes nothing a running stack depends on. Helm and Lite generate and keep one
+themselves.
+
+**The admin key needs a value of its own.** admin-api, meeting-api and flows refuse to boot on an
+`ADMIN_TOKEN` (`ADMIN_API_TOKEN`, Helm `secrets.adminApiToken`) holding any value this repository ever
+shipped for it: Compose's `dev-admin-token`, the chart's `CHANGE_ME`, `changeme`, and the CI, test and
+old documentation examples (the full list is each service's `config.v1.json`). **Compose:** `make up` /
+`make all` mint one into `.env` and replace a published one there; if you start the stack with
+`docker compose` directly, run `deploy/compose/mint-dev-env.sh .env` first. **Helm:** leave
+`secrets.adminApiToken` empty and the chart keeps the value its Secret already holds, or replaces a
+published one with a generated one. An explicit published value refuses the render, and that includes
+the old default `CHANGE_ME`, which `helm upgrade --reuse-values` carries over: pass
+`--set secrets.adminApiToken=` (or a value of your own). Read the new value with
+`kubectl -n <namespace> get secret <release>-vexa-secrets -o jsonpath='{.data.ADMIN_API_TOKEN}' | base64 -d`.
+With `secrets.existingSecretName`, put a real `ADMIN_API_TOKEN` in that Secret. **Lite** mints one per
+boot unless you set one. Anything that called the admin API with the old value (provisioning scripts,
+`make provision-token`) needs the new one; API keys already minted keep working.
+
+**Object storage: the root credentials need values of their own.** The bundled storage refuses to
+start on an unset `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` or on the old defaults `vexa-access-key` /
+`vexa-secret-key`. Compose `make up` / `make all` and Lite `make lite` mint a pair into `.env`, replace
+the old defaults there, and restart the storage with the new pair over the same volume, so existing
+recordings stay readable. If you start Compose with `docker compose` directly, run
+`deploy/compose/mint-dev-env.sh .env` first. The Lite image refuses to start with `MINIO_ENDPOINT` set
+and either value unset or a default.
+
+**Rotate `NEXTAUTH_SECRET` if it was ever a default.** The terminal now requires a secret of at least
+32 bytes that is not published in this repository, and refuses to start otherwise. If your install
+ever ran with the old example value (`dev-nextauth-secret`, or Lite's built-in one), treat it as known:
+set a new value (`openssl rand -hex 32`) and restart the terminal. `make all` replaces the old example
+value in `deploy/compose/.env` for you; Helm replaces it in the chart-managed Secret on upgrade; Lite
+mints a new one when you stop passing the old one. Rotating signs everybody out of the web UI once and
+invalidates sign-in links already sent; API keys are not affected.
+
+**Rename the sign-in mail settings if you set `SMTP_*`.** The terminal reads only the deployment's
+mail family: `SMTP_HOST`, `SMTP_PORT`, `SMTP_FROM`, `SMTP_USER`, `SMTP_PASS`, `SMTP_SECURE` and
+`SMTP_TLS_INSECURE` become `VEXA_MAIL_SMTP_HOST`, `_PORT`, `_FROM`, `_USER`, `_PASSWORD`, `_SECURE` and
+`_TLS_INSECURE`. An old name configures nothing, and the sign-in mail goes to the local dev double.
+
+**Docker Compose: give the database its own password.** `DB_PASSWORD` no longer defaults to
+`postgres`, and the `postgres` service refuses to start on an empty value or one published in this
+repository. A new install gets one from `make up` / `make all`. An install whose `.env` still holds
+`postgres` rotates it in one step — it writes a new value to `.env`, applies it inside the database,
+and brings the stack back up:
+
+```bash
+make -C deploy/compose rotate-db-password
+```
+
+**Docker Compose: Redis requires a password.** `REDIS_PASSWORD` is new and the `redis` service refuses
+to start without one. `make up` / `make all` mint it into `.env` (an existing value is kept); if you
+start the stack with `docker compose` directly, add one first (`openssl rand -hex 32`). Bots and agent
+workers never receive it: each connects as a Redis user of its own that meeting-api and agent-api
+define per spawn.
+
+**Docker Compose: bots and agent workers have networks of their own.** The runtime now starts meeting
+bots on the `bots` network (meeting-api, redis, storage) and agent workers on the `workers` network
+(the gateway, redis, flows-api, and the optional `llm-shim` / `searxng`); neither joins the control
+plane's network. A service you added to the stack that a bot or worker must reach has to join the
+matching network too.
+
+**Clear the transcript feeds of meetings deleted earlier.** Deleting a meeting's transcript now also
+removes its live feed from Redis. Meetings deleted on an earlier release kept that feed at rest (no
+reader serves it). This sweep removes it for every deleted meeting and touches nothing else; add
+`--dry-run` first to see the counts:
+
+```bash
+# Docker Compose
+docker compose -p vexa-v012 -f deploy/compose/docker-compose.yml exec meeting-api \
+  python -m meeting_api.collector.erased_feed_sweep
+# Kubernetes (find the Deployment with: kubectl -n vexa get deploy -l app.kubernetes.io/component=meeting-api)
+kubectl -n vexa exec deploy/<meeting-api deployment> -- python -m meeting_api.collector.erased_feed_sweep
+# Vexa Lite
+docker exec -e REDIS_URL=redis://localhost:6379/0 vexa-lite \
+  /opt/venvs/meeting/bin/python -m meeting_api.collector.erased_feed_sweep
+```
+
+It prints one JSON line with the number of deleted meetings found and the keys removed.
+
+**Kubernetes rendered with `helm template` (GitOps): supply the generated secrets.** Values the chart
+generates (the runtime caller token, the dispatch signing key, the Redis and database passwords, the
+sign-in secret, the delegation secret, the gateway's signing key and the credential broker's keys) are
+kept across `helm upgrade` by reading the release's own Secrets. A tool that renders with
+`helm template` cannot read them and generates new ones on every render. Supply each from a Secret you
+manage:
+
+- `secrets.existingSecretName`, carrying `RUNTIME_API_TOKEN`, `REDIS_PASSWORD`, `NEXTAUTH_SECRET`,
+  `VEXA_MCP_DELEGATION_SECRET` and `VEXA_DISPATCH_SIGNING_KEY` beside the keys it already carried;
+- `credentialBroker.existingSecret` (losing `store.key` makes every stored credential unreadable);
+- `identity.existingSecret` with `identity.publicKey` (or `identity.signingKey`);
+- `database.existingSecret` (keys `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`; the chart
+  renders no credentials Secret and never rotates this one), or `database.password`.
+
+See [Kubernetes](/deployment-kubernetes) and `deploy/helm/README.md`.

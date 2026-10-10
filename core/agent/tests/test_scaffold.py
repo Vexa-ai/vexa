@@ -83,7 +83,7 @@ def client(stack):
                      # caller made every test here blind to ownership, which is exactly the check
                      # the hand-link route depends on. A row with no `user_id` is treated as the
                      # caller's, so the fixtures that predate this keep meaning what they meant.
-                     meeting_owner_lookup=lambda u, m: (
+                     meeting_owner_lookup=lambda u, m, workspaces=None: (
                          row if (row := stack["rows"].get(str(m))) is not None
                          and str(row.get("user_id") or u) == str(u) else None),
                      email_subject_lookup=lambda a: stack["subjects"].get(str(a).lower()))
@@ -160,6 +160,43 @@ def test_an_unknown_kind_is_refused(client):
     r = _mint(client, kind="whatever")
     assert r.status_code == 400
     assert "catalogue" in r.text
+
+
+# ── `admin-setup`: a kind that is read and never minted ──────────────────────────────────────────
+#
+# The claim route stopped minting it (the company-layer gate went, founder ruling 2026-10-08), so
+# nothing produces one. Records minted before then still exist — a scaffold lives TTL_SECONDS and a
+# chat's session row keeps its `{kind, id}` — and the terminal still names such a chat.
+
+@pytest.fixture
+def stores(monkeypatch):
+    """Every ScaffoldStore the app builds, so a test can plant a record minted before a change."""
+    made = []
+
+    class _Captured(scaffolds_mod.ScaffoldStore):
+        def __init__(self, *a, **k):
+            super().__init__(*a, **k)
+            made.append(self)
+
+    monkeypatch.setattr(scaffolds_mod, "ScaffoldStore", _Captured)
+    return made
+
+
+def test_admin_setup_is_no_longer_minted(client):
+    assert "admin-setup" not in scaffolds_mod.KINDS
+    assert "admin-setup" in scaffolds_mod.READ_ONLY_KINDS
+    r = _mint(client, who="ada@northwind.io", kind="admin-setup", meeting=None, refs={})
+    assert r.status_code == 400
+    assert "catalogue" in r.text
+
+
+def test_a_stored_admin_setup_record_still_opens(stores, client):
+    sid = _arrival(client, "ada@northwind.io").json()["id"]
+    stores[0].get(sid)["kind"] = "admin-setup"          # stored before the kind stopped being minted
+    r = client.get(f"/api/scaffolds/{sid}", headers=_as("ada@northwind.io", "u_ada"))
+    assert r.status_code == 200
+    assert r.json()["kind"] == "admin-setup"
+    assert "you are talking to: ada@northwind.io" in r.json()["opening_text"]
 
 
 def test_no_ui_url_means_no_mint(tmp_path):
@@ -389,7 +426,7 @@ def test_the_rail_row_is_named_by_the_record_never_by_the_machinery(client, stac
 def test_company_domain_reads_a_real_address_and_refuses_a_placeholder():
     from control_plane.scaffolds import company_domain
     assert company_domain("dmitry@vexa.ai") == "vexa.ai"
-    assert company_domain("Marvin@OeNB.at") == "oenb.at"
+    assert company_domain("Quentin@Bank.example") == "bank.example"
     assert company_domain("a.b+tag@sub.acme.co.uk") == "sub.acme.co.uk"
     # a placeholder is NOT a company, and "" is how the preset learns to ask cold instead
     for addr in ("vexa@storm.test", "x@rehearsal.test", "y@example.com", "z@localhost",
@@ -442,14 +479,15 @@ def test_every_composed_opening_says_read_silently():
 # These pin the COMPOSITION rather than the client: whichever half a client hands back — the record
 # id or the composed opening — the agent is handed the same turn, exactly once.
 
-def _admin_setup(client, who, subject="u_ada"):
-    """An admin-setup record for one address, the shape the claim route mints."""
-    return _mint(client, who=who, kind="admin-setup", meeting=None, refs={},
+def _arrival(client, who, subject="u_ada"):
+    """A meeting-less arrival record for one address — `first-visit`, the arrival the claim route's
+    `admin-setup` record gave way to. The facts ride every kind's opening the same way."""
+    return _mint(client, who=who, kind="first-visit", meeting=None, refs={},
                  provenance={"flow": "admin-claim", "minted_by": subject})
 
 
 def _opening(client, who, subject="u_ada"):
-    sid = _admin_setup(client, who, subject).json()["id"]
+    sid = _arrival(client, who, subject).json()["id"]
     return client.get(f"/api/scaffolds/{sid}",
                       headers=_as(who, subject)).json()["opening_text"]
 
@@ -479,7 +517,7 @@ def test_a_client_that_returns_the_TEXT_instead_of_the_id_gets_the_same_turn(cli
 def test_the_block_is_composed_exactly_once_however_the_turn_arrives(client):
     """The dispatch path adds the block only when the text does not already carry it — one
     composition, no doubling, and no way for a client to drop it by omitting a field."""
-    sid = _admin_setup(client, "ada@northwind.io").json()["id"]
+    sid = _arrival(client, "ada@northwind.io").json()["id"]
     view = client.get(f"/api/scaffolds/{sid}", headers=_as("ada@northwind.io", "u_ada")).json()
     assert view["opening_text"].count(scaffolds_mod.FACTS_HEADING) == 1
     assert scaffolds_mod.turn_prompt(view) == view["opening_text"]

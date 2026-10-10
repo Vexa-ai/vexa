@@ -42,17 +42,17 @@ def test_the_link_rule_names_the_cross_workspace_form():
 def test_the_index_preamble_hands_the_agent_the_ids(tmp_path):
     desk = _ws(tmp_path, "126", "aaaaaaaaaa")
     group = _ws(tmp_path, "grp", "bbbbbbbbbb", kind="group")
-    upsert_entity(desk, "person", "Olga Avramenko", ["Attends."], "the meeting")
-    upsert_entity(group, "person", "Cottalango Leon", ["Chairs."], "the meeting")
+    upsert_entity(desk, "person", "Nora Quill", ["Attends."], "the meeting")
+    upsert_entity(group, "person", "Robin Vale", ["Chairs."], "the meeting")
 
     text = engine.entity_index_preamble([
-        {"slug": "126", "path": str(desk), "write": True, "primary": True, "name": "olga@spi.com"},
+        {"slug": "126", "path": str(desk), "write": True, "primary": True, "name": "nora@studio.example"},
         {"slug": "grp", "path": str(group), "write": True, "name": "ASWF DNA Project"},
         {"slug": "_global", "path": str(tmp_path), "write": False},
     ])
-    assert "workspace id `aaaaaaaaaa`" in text and "(olga@spi.com)" in text
+    assert "workspace id `aaaaaaaaaa`" in text and "(nora@studio.example)" in text
     assert "workspace id `bbbbbbbbbb`" in text and "(ASWF DNA Project)" in text
-    assert "Olga Avramenko" in text and "Cottalango Leon" in text
+    assert "Nora Quill" in text and "Robin Vale" in text
 
 
 def test_a_workspace_with_no_id_still_gets_its_index(tmp_path):
@@ -60,9 +60,9 @@ def test_a_workspace_with_no_id_still_gets_its_index(tmp_path):
     linked TO by id yet."""
     plain = tmp_path / "126"
     (plain / "kg" / "entities").mkdir(parents=True)
-    upsert_entity(plain, "person", "Olga Avramenko", ["Attends."], "the meeting")
+    upsert_entity(plain, "person", "Nora Quill", ["Attends."], "the meeting")
     text = engine.entity_index_preamble([{"slug": "126", "path": str(plain), "write": True}])
-    assert "Olga Avramenko" in text and "workspace id" not in text
+    assert "Nora Quill" in text and "workspace id" not in text
 
 
 # ── which mount is the desk ──────────────────────────────────────────────────────────────────────
@@ -93,7 +93,7 @@ def test_a_room_run_maintains_no_desk(tmp_path):
 def test_refresh_writes_the_sections_and_lists_the_groups(tmp_path):
     desk = _git_ws(tmp_path, "126", "aaaaaaaaaa")
     group = _ws(tmp_path, "grp", "bbbbbbbbbb", kind="group")
-    upsert_entity(desk, "person", "Olga Avramenko", ["Attends."], "the meeting")
+    upsert_entity(desk, "person", "Nora Quill", ["Attends."], "the meeting")
 
     out = engine.refresh_desk_readme([
         {"slug": "126", "path": str(desk), "write": True, "primary": True},
@@ -101,7 +101,7 @@ def test_refresh_writes_the_sections_and_lists_the_groups(tmp_path):
     ])
     assert out["changed"] is True
     text = (desk / "README.md").read_text()
-    assert "[[Olga Avramenko]]" in text
+    assert "[[Nora Quill]]" in text
     assert "[[ws:bbbbbbbbbb/README.md]]" in text
     # committed, by pathspec, so a concurrent writer's staged work is not swept in under this message
     log = subprocess.run(["git", "-C", str(desk), "log", "--oneline", "-1", "--name-only"],
@@ -111,7 +111,7 @@ def test_refresh_writes_the_sections_and_lists_the_groups(tmp_path):
 
 def test_refresh_is_idempotent_and_commits_nothing_the_second_time(tmp_path):
     desk = _git_ws(tmp_path, "126", "aaaaaaaaaa")
-    upsert_entity(desk, "person", "Olga Avramenko", ["Attends."], "the meeting")
+    upsert_entity(desk, "person", "Nora Quill", ["Attends."], "the meeting")
     mounts = [{"slug": "126", "path": str(desk), "write": True, "primary": True}]
     engine.refresh_desk_readme(mounts)
     head = subprocess.run(["git", "-C", str(desk), "rev-parse", "HEAD"],
@@ -123,15 +123,15 @@ def test_refresh_is_idempotent_and_commits_nothing_the_second_time(tmp_path):
 
 def test_refresh_never_touches_what_the_agent_or_the_person_wrote(tmp_path):
     desk = _git_ws(tmp_path, "126", "aaaaaaaaaa")
-    header = "# Olga's desk\n\nThe charter is the only thing that matters this quarter.\n"
+    header = "# Nora's desk\n\nThe charter is the only thing that matters this quarter.\n"
     (desk / "README.md").write_text(header)
     mounts = [{"slug": "126", "path": str(desk), "write": True, "primary": True}]
     engine.refresh_desk_readme(mounts)
-    upsert_entity(desk, "person", "Olga Avramenko", ["Attends."], "the meeting")
+    upsert_entity(desk, "person", "Nora Quill", ["Attends."], "the meeting")
     engine.refresh_desk_readme(mounts)
     text = (desk / "README.md").read_text()
     assert text.startswith(header.rstrip("\n"))
-    assert "[[Olga Avramenko]]" in text
+    assert "[[Nora Quill]]" in text
 
 
 def test_a_desk_that_is_gone_is_not_an_exception(tmp_path):

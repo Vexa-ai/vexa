@@ -21,8 +21,10 @@ spec:
         {{- include "vexa.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: redis
     spec:
-      # v0.10.5 Pack I.s — stateful-pod anti-affinity (#272 iter-5).
-      # See deployment-minio.yaml header for the full rationale.
+      # v0.10.5 Pack I.s — stateful-pod anti-affinity (#272 iter-5); the rationale
+      # is on statefulset-postgres.yaml. `minio` stays in the list although the
+      # chart no longer runs MinIO: dropping it would change this pod template
+      # and restart Redis on upgrade, for no scheduling effect.
       affinity:
         podAntiAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:
@@ -44,7 +46,17 @@ spec:
           imagePullPolicy: IfNotPresent
           {{- /* v0.10.5 Pack C.5 — paired-durability invariant guard */}}
           {{- include "vexa.validateRedisDurability" . }}
+          # The default user requires a password; the services connect with it, and spawned bots and
+          # workers connect as Redis users of their own that agent-api and meeting-api define.
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: REDIS_PASSWORD
           args:
+            - "--requirepass"
+            - "$(REDIS_PASSWORD)"
             - "--appendonly"
             - {{ .Values.redis.durability.appendonly | default "yes" | quote }}
             - "--appendfsync"
@@ -55,10 +67,12 @@ spec:
             - "--maxmemory"
             - {{ . | quote }}
             {{- end }}
-            {{- with .Values.redis.maxmemoryPolicy }}
-            - "--maxmemory-policy"
-            - {{ . | quote }}
+            {{- $policy := .Values.redis.maxmemoryPolicy | default "noeviction" }}
+            {{- if ne $policy "noeviction" }}
+            {{- fail (printf "redis.maxmemoryPolicy must be noeviction, not %s: Redis holds the delegation live and revocation records, and an evicted one cuts a live worker's tools or revives a revoked token" $policy) }}
             {{- end }}
+            - "--maxmemory-policy"
+            - "noeviction"
           ports:
             - name: redis
               containerPort: 6379

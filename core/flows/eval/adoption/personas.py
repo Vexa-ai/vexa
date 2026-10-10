@@ -5,12 +5,12 @@ engine sent, plus that persona's own history of recent touches and what it did w
 answers one fixed schema. Nothing here encodes a propensity number: the numbers are MEASURED
 from the answers, not asserted here — otherwise the simulator would only recite its own priors.
 
-SPI grounding (2026-08-18 DNA dev check-in, Cottalango Leon):
-  · the pilot is "actual coordinators and production managers using it as their main tool"
-  · "the only feedback that we've gotten is just everyone just wants control … don't do AI,
-    don't do AI. And now it's like, no, do it, but make sure I can control every single aspect"
-  · dailies run 30 minutes and a coordinator has "a couple of minutes to do everything" before
-    the next one — the attention budget is the binding constraint, not goodwill.
+The scenario the personas are written for, a fictional VFX studio:
+  · the pilot users are coordinators and production managers, using it as their main tool
+  · what they ask for is control over every aspect of what the AI does with their meetings,
+    more than they ask about the AI itself
+  · a dailies review runs about half an hour and a coordinator has minutes before the next one —
+    the attention budget is the binding constraint, not goodwill.
 """
 from __future__ import annotations
 
@@ -164,7 +164,7 @@ if __name__ == "__main__":
     import sys
 
     import org as O
-    o = O.build(sys.argv[1] if len(sys.argv) > 1 else "spi")
+    o = O.build(sys.argv[1] if len(sys.argv) > 1 else "studio")
     assign(o)
     print(json.dumps(mix(o), indent=1))
     by_role: dict[str, dict[str, int]] = {}

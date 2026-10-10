@@ -1,0 +1,11 @@
+{
+  "user_id": 42,
+  "scopes": ["bot", "tx"],
+  "max_concurrent": 3,
+  "email": "jane@example.com",
+  "is_admin": false,
+  "webhook_url": "https://hooks.example.com/vexa",
+  "webhook_secret": "WEBHOOK_SECRET_PLACEHOLDER",
+  "webhook_events": { "meeting.completed": true, "bot.failed": false },
+  "workspaces": ["ws_team_1"]
+}

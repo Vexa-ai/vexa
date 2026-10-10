@@ -9,8 +9,9 @@ from __future__ import annotations
 import json
 import pathlib
 
-from llm.claude_code import ClaudeCodeHarness, _link_skills_into_workspace
+from llm.claude_code import ClaudeCodeHarness
 from worker.worker import serve
+from tests.conftest import signed_turn
 
 
 class FakeStream:
@@ -39,7 +40,7 @@ def _turn(prompt):
 
 
 def _msg(eid, prompt):
-    return (eid, {"turn": json.dumps({"prompt": prompt})})
+    return (eid, signed_turn({"prompt": prompt}))
 
 
 def test_entrypoint_then_interactive_then_idle():
@@ -71,13 +72,13 @@ def test_session_start_serves_inbox_without_entrypoint_turn():
 
 
 def test_stop_message_exits_immediately():
-    s = FakeStream(inbox=[("1-0", {"turn": json.dumps({"type": "stop"})}), _msg("2-0", "never")])
+    s = FakeStream(inbox=[("1-0", signed_turn({"type": "stop"})), _msg("2-0", "never")])
     serve(s, out_topic="o", in_topic="i", turn=_turn, start={}, idle_ms=10)
     assert s.out == []  # stop before any turn ran
 
 
 def test_interactive_turn_ack_echoes_the_delivery_nonce():
-    s = FakeStream(inbox=[("1-0", {"turn": json.dumps({"prompt": "warm", "nonce": "n-42"})})])
+    s = FakeStream(inbox=[("1-0", signed_turn({"prompt": "warm", "nonce": "n-42"}))])
     serve(s, out_topic="o", in_topic="i", turn=_turn, start={}, idle_ms=10)
     evs = s.events()
     assert evs[0] == {"type": "turn-accepted", "turn_id": "t1", "nonce": "n-42"}
@@ -121,7 +122,7 @@ def test_boot_tail_capture_skips_the_predelivered_copy():
     # The dispatcher XADDs the message to unit:in BEFORE spawning (warm delivery). On a COLD spawn
     # the same prompt arrives as the entrypoint — the pre-delivered copy must be SKIPPED, not
     # replayed as a second turn.
-    s = CursorStream(preloaded=[("5-0", {"turn": json.dumps({"prompt": "hello", "nonce": "n1"})})])
+    s = CursorStream(preloaded=[("5-0", signed_turn({"prompt": "hello", "nonce": "n1"}))])
     serve(s, out_topic="o", in_topic="i", turn=_turn, start={"entrypoint": {"inline": "hello"}}, idle_ms=10)
     evs = s.events()
     assert [e["turn_id"] for e in evs] == ["t0", "t0", "t0", "t0"]  # exactly ONE turn ran
@@ -131,11 +132,11 @@ def test_boot_tail_capture_skips_the_predelivered_copy():
 def test_message_landing_during_the_entrypoint_turn_is_consumed_not_lost():
     # Before the tail-capture fix serve() read from "$" AFTER the entrypoint turn — a message that
     # arrived while t0 ran was invisible forever (the lost-turn hang).
-    s = CursorStream(preloaded=[("5-0", {"turn": json.dumps({"prompt": "hello"})})])
+    s = CursorStream(preloaded=[("5-0", signed_turn({"prompt": "hello"}))])
 
     def turn_with_midturn_arrival(prompt):
         if prompt == "hello":  # t0: a follow-up lands while this turn is still running
-            s.entries.append(("6-0", {"turn": json.dumps({"prompt": "follow-up", "nonce": "n2"})}))
+            s.entries.append(("6-0", signed_turn({"prompt": "follow-up", "nonce": "n2"})))
         yield {"type": "message-delta", "text": f"re:{prompt}"}
 
     serve(s, out_topic="o", in_topic="i", turn=turn_with_midturn_arrival,
@@ -148,7 +149,7 @@ def test_message_landing_during_the_entrypoint_turn_is_consumed_not_lost():
 
 
 def test_midturn_message_uses_the_active_harness_steering_seam():
-    s = CursorStream(preloaded=[("5-0", {"turn": json.dumps({"prompt": "hello"})})])
+    s = CursorStream(preloaded=[("5-0", signed_turn({"prompt": "hello"}))])
 
     class SteeringHarness:
         def __init__(self):
@@ -164,7 +165,7 @@ def test_midturn_message_uses_the_active_harness_steering_seam():
     harness = SteeringHarness()
 
     def active_turn(prompt):
-        s.entries.append(("6-0", {"turn": json.dumps({"prompt": "steer me", "nonce": "n2"})}))
+        s.entries.append(("6-0", signed_turn({"prompt": "steer me", "nonce": "n2"})))
         yield {"type": "message-delta", "text": "working"}
         yield {"type": "done", "reply": "done", "sessionId": "s1", "ok": True}
 
@@ -184,60 +185,6 @@ def test_midturn_message_uses_the_active_harness_steering_seam():
 # durable envelope, and the agents/meeting.md config knobs. All of it exercised the in-product
 # inference pipeline, which is gone: the product runs no model calls of its own beside the
 # agent, and a meeting reaches it over the MCP.
-
-
-# ── workspace skills: governed skills/ symlinked into .claude/skills ──────────────────────────────
-
-def test_link_skills_creates_dir_and_symlink(tmp_path):
-    """Creates skills/ and points .claude/skills at it."""
-    _link_skills_into_workspace(tmp_path)
-    skills = tmp_path / "skills"
-    link = tmp_path / ".claude" / "skills"
-    assert skills.is_dir()
-    assert link.is_symlink()
-    assert pathlib.Path(link.readlink()) == skills
-
-
-def test_link_skills_idempotent(tmp_path):
-    """Running twice leaves a single correct symlink; an existing skill file survives."""
-    (tmp_path / "skills" / "demo").mkdir(parents=True)
-    (tmp_path / "skills" / "demo" / "SKILL.md").write_text("x")
-    _link_skills_into_workspace(tmp_path)
-    _link_skills_into_workspace(tmp_path)
-    link = tmp_path / ".claude" / "skills"
-    assert link.is_symlink()
-    assert (link / "demo" / "SKILL.md").read_text() == "x"
-
-
-def test_link_skills_does_not_clobber_real_skills_dir(tmp_path):
-    """A pre-existing real skills/ dir + its files are preserved, not replaced."""
-    (tmp_path / "skills").mkdir()
-    (tmp_path / "skills" / "keep.md").write_text("keep")
-    _link_skills_into_workspace(tmp_path)
-    assert (tmp_path / "skills" / "keep.md").read_text() == "keep"
-
-
-def test_link_skills_corrects_wrong_existing_symlink(tmp_path):
-    """A stale .claude/skills symlink pointing elsewhere is repointed at skills/."""
-    wrong = tmp_path / "elsewhere"
-    wrong.mkdir()
-    claude = tmp_path / ".claude"
-    claude.mkdir()
-    (claude / "skills").symlink_to(wrong, target_is_directory=True)
-    _link_skills_into_workspace(tmp_path)
-    link = claude / "skills"
-    assert link.is_symlink()
-    assert pathlib.Path(link.readlink()) == tmp_path / "skills"
-
-
-def test_link_skills_keeps_real_claude_skills_dir(tmp_path):
-    """If .claude/skills is a real dir (not a symlink), leave it untouched."""
-    (tmp_path / ".claude" / "skills").mkdir(parents=True)
-    (tmp_path / ".claude" / "skills" / "x.md").write_text("real")
-    _link_skills_into_workspace(tmp_path)
-    link = tmp_path / ".claude" / "skills"
-    assert not link.is_symlink() and link.is_dir()
-    assert (link / "x.md").read_text() == "real"
 
 
 def test_seed_claude_md_defers_copilot_steering_to_meeting_md():

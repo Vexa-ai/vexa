@@ -24,7 +24,7 @@
  *
  *  Every chip carries the whole of its own behaviour: which meeting to open (`meetingId`) and the
  *  one line to say on arrival (`kick`). The shell reads those; it never re-derives them. */
-import { ONBOARDING_GROUNDING, ONBOARDING_REPLY_SEP } from "../canvas/actions";
+import { ONBOARDING_GROUNDING, ONBOARDING_REPLY_SEP } from "../platform";
 import { meetingPhase, type MeetingMock } from "../surfaces/meetingModel";
 import type { DeskProposal } from "../surfaces/proposalsApi";
 import type { DeskFacts } from "../surfaces/workspaceApi";

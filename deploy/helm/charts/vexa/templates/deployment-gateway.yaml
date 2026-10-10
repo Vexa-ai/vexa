@@ -20,7 +20,7 @@ spec:
       annotations:
         {{- toYaml .Values.global.podAnnotations | nindent 8 }}
     spec:
-      {{- include "vexa.podSecurityContext" . | nindent 6 }}
+      {{- include "vexa.nonRootPodSecurityContext" . | nindent 6 }}
       {{- with .Values.global.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -52,6 +52,7 @@ spec:
             - name: AGENT_API_URL
               value: "http://{{ include "vexa.componentName" (list . "agent-api") }}:{{ .Values.agentApi.service.port }}"
             {{- end }}
+            {{- include "vexa.redisPasswordEnv" . | nindent 12 }}
             - name: REDIS_URL
               value: {{ include "vexa.redisUrl" . | quote }}
             - name: INTERNAL_API_SECRET
@@ -59,6 +60,15 @@ spec:
                 secretKeyRef:
                   name: {{ include "vexa.adminTokenSecretName" . }}
                   key: INTERNAL_API_SECRET
+            # gateway-identity.v1: the Ed25519 PRIVATE key that signs the identity the edge resolved
+            # onto every forward. The gateway is the only workload that mounts it.
+            - name: VEXA_GATEWAY_IDENTITY_SIGNING_KEY_FILE
+              value: /run/vexa-identity/signing/key.pem
+            {{- if .Values.mcp.enabled }}
+            # The ONE MCP server (ADR-0037): /mcp is relayed to the assembled MCP service.
+            - name: MCP_URL
+              value: "http://{{ include "vexa.componentName" (list . "mcp") }}:{{ .Values.mcp.service.port }}"
+            {{- end }}
             - name: LOG_LEVEL
               value: {{ .Values.gateway.logLevel | default "info" | quote }}
             # fastapi-guard edge layer (edge_guard.py): per-IP throttle + auto-ban at the edge.
@@ -115,8 +125,20 @@ spec:
             initialDelaySeconds: 30
             periodSeconds: 20
             timeoutSeconds: 5
+          volumeMounts:
+            - name: identity-signing-key
+              mountPath: /run/vexa-identity/signing
+              readOnly: true
           resources:
             {{- toYaml .Values.gateway.resources | nindent 12 }}
+      volumes:
+        # gateway-identity.v1: the signing key, here and in no other workload.
+        - name: identity-signing-key
+          secret:
+            secretName: {{ .Values.identity.existingSecret | default (include "vexa.componentName" (list . "identity-signing-key")) }}
+            defaultMode: 0440
+            items:
+              - { key: signing-key.pem, path: key.pem }
       {{- with .Values.global.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

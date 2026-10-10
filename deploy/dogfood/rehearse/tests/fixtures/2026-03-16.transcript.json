@@ -5,28 +5,28 @@
   "native_meeting_id": "96088138284",
   "occurrence": "2026-03-16",
   "participants": [
-   "Olga Avramenko (Sony Pictures Imageworks)",
-   "Tommy Burnette (Lucasfilm)",
-   "Sam Richards"
+   "Nora Quill (Brightwater Picture Studios)",
+   "Gabe Ashdown (Copperline Effects)",
+   "Jordan Reyes"
   ]
  },
  "segments": [
   {
    "t": 0.0,
    "end": 4.2,
-   "speaker": "Olga Avramenko (Sony Pictures Imageworks)",
+   "speaker": "Nora Quill (Brightwater Picture Studios)",
    "text": "Hey, everyone. Let's start with the schema change."
   },
   {
    "t": 4.2,
    "end": 11.7,
-   "speaker": "Tommy Burnette (Lucasfilm)",
+   "speaker": "Gabe Ashdown (Copperline Effects)",
    "text": "We reviewed it on our side. The naming still worries me."
   },
   {
    "t": 11.7,
    "end": 19.0,
-   "speaker": "Sam Richards",
+   "speaker": "Jordan Reyes",
    "text": "I'll write it up and bring it back next time."
   }
  ]

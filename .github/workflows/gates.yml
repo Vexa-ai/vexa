@@ -15,6 +15,9 @@ on:
   # or every queued PR waits forever on a check that never fires.
   merge_group:
 
+permissions:
+  contents: read
+
 # a superseded run's result is worthless — cancel it
 concurrency:
   group: gates-${{ github.ref }}
@@ -24,9 +27,9 @@ jobs:
   static:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4 # version comes from package.json "packageManager"
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0 — version comes from package.json "packageManager"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with: { node-version: 22, cache: pnpm } # pnpm 11.7 requires Node >= 22.13
       # The `gate script tests` step below drives gate:python over its own planted fixture packages,
       # and that gate shells out to `uv run pytest`. With no uv on this job every planted package
@@ -36,7 +39,7 @@ jobs:
       # the gate tells a passing pytest from a failing one, the one distinction a stub cannot make.
       # Same action and pin as the `python` job; seconds here, because the fixture tree is two
       # one-test packages rather than the checkout's sixteen.
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
       - run: pnpm install --frozen-lockfile
         env: { ONNXRUNTIME_NODE_INSTALL: skip }
       # each gate its own step so a failure is unambiguous
@@ -50,11 +53,37 @@ jobs:
       - run: pnpm gate:config-contract
       - run: pnpm gate:domain-doors
       - run: pnpm gate:fact-parity
+      - run: pnpm gate:vendor-payload
       - run: pnpm gate:db-schema
       - run: pnpm gate:db-budget
       - run: pnpm gate:dataflow
       - run: pnpm gate:calm
       - run: pnpm gate:licenses
+      # The rest of the static set. Each is offline and takes about a second; before this they ran
+      # only in the pre-push hook (which a worker may not have) or nowhere at all.
+      - run: node scripts/gates.mjs isolation-py
+      - run: node scripts/gates.mjs graph-py
+      - run: node scripts/gates.mjs test-isolation
+      # Also fails when docs/docs/governance/arch-compliance.mdx is not what the tree renders now:
+      # regenerate it with `node scripts/arch-report.mjs` in the change that moved its evidence.
+      - run: node scripts/gates.mjs arch-report
+      - run: node scripts/gates.mjs eval
+      - run: node scripts/gates.mjs eval-baseline
+      - run: pnpm gate:image-licenses
+      - run: pnpm gate:runtime-parity
+      - run: node scripts/gates.mjs execution-env
+      - run: node scripts/gates.mjs lite-makefile
+      # The Helm chart's fences: the NetworkPolicies, which workloads hold which token, the broker's
+      # key split. They render offline (`helm template`, no cluster). They used to run only in
+      # release-images.yml, at tag push, after a PR that broke one had already merged.
+      # test_template.sh prints SKIP and exits 0 when helm is absent, so the step first proves helm is
+      # on the runner: a fence test that silently skips reads as a green one.
+      - name: helm static gates (lint + template assertions)
+        run: |
+          command -v helm >/dev/null 2>&1 || { echo "::error ::helm is not on this runner, so the chart's fence tests would SKIP"; exit 1; }
+          helm version --short
+          bash deploy/helm/tests/test_helm_lint.sh
+          bash deploy/helm/tests/test_template.sh
       # Tests OF the gate scripts (the instruments the steps above trust). scripts/ is not a
       # workspace package, so `pnpm test` — turbo run test — never reaches it: this step is the
       # only lane these files run in. Kept here, beside the gates they cover, rather than in the
@@ -65,11 +94,11 @@ jobs:
   python:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with: { node-version: 22, cache: pnpm }
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
       - run: pnpm install --frozen-lockfile
         env: { ONNXRUNTIME_NODE_INSTALL: skip }
       # the runtime docker-backend lifecycle test creates containers via the docker socket API,
@@ -80,9 +109,9 @@ jobs:
   node:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with: { node-version: 22, cache: pnpm }
       # CI runners have no GPU: skip onnxruntime-node's postinstall CUDA EP download — it is
       # large, raced across the two resolved onnxruntime versions, and flaked main's first run

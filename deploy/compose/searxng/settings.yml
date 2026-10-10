@@ -4,7 +4,7 @@
 # SearXNG is AGPL-3.0 and is NOT part of Vexa. The compose block pins an UNMODIFIED upstream image
 # that the operator pulls from SearXNG's own registry and runs as a separate service; no search code
 # is built into, or redistributed inside, any vexaai/* artifact. Declared as a sidecar in
-# ../../../image-licenses.json, exactly as minio/minio is.
+# ../../../image-licenses.json.
 #
 # NOTE ON SYNTAX: SearXNG does NOT expand shell-style ${VAR} in this file — a `${SEARXNG_SECRET}`
 # written here is read LITERALLY and becomes the key. Its settings loader instead reads the

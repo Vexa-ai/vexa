@@ -54,22 +54,22 @@ def test_prep_grounding_reads_no_stream_and_names_the_workspace(monkeypatch):
     would warn on a read — none happens), the title/time/bound workspace are named, and the
     steering pushes agenda/research/brief."""
     ctx, tools, prompt = _meeting_grounding(
-        {"kind": "meeting", "meeting": {
-            "platform": "google_meet", "native_id": "abc-defg-hij", "meeting_id": 46,
-            "status": "scheduled", "title": "OeNB pilot discussion",
-            "scheduled_at": "2026-07-13T10:00:00Z", "workspace_id": "oenb-1424e3"}},
+        {"kind": "meeting",
+         "platform": "google_meet", "native_id": "abc-defg-hij", "meeting_id": 46,
+         "status": "scheduled", "title": "Example Bank pilot discussion",
+         "scheduled_at": "2026-07-13T10:00:00Z", "workspace_id": "bank-1424e3"},
         session="main", prompt="build the agenda", redis_url=None)
     assert ctx == {"kind": "none", "session": "main"} and tools == []
-    assert "PREPARE" in prompt and "OeNB pilot discussion" in prompt
+    assert "PREPARE" in prompt and "Example Bank pilot discussion" in prompt
     assert "scheduled for 2026-07-13T10:00:00Z" in prompt
-    assert 'oenb-1424e3' in prompt
+    assert 'bank-1424e3' in prompt
     assert "there is no transcript" in prompt.lower() or "has not happened yet" in prompt
     assert prompt.endswith("build the agenda")
 
 
 def test_prep_grounding_without_workspace_says_so():
     _ctx, _tools, prompt = _meeting_grounding(
-        {"kind": "meeting", "meeting": {"native_id": "n1", "status": "idle", "title": "Untitled"}},
+        {"kind": "meeting", "native_id": "n1", "status": "idle", "title": "Untitled"},
         session="s", prompt="hi", redis_url=None)
     assert "No shared prep workspace is bound" in prompt
     assert "user's OWN workspace" in prompt  # own-workspace brief note is the steer, not a dead end
@@ -87,8 +87,8 @@ def test_post_grounding_reads_the_raw_transcript_and_never_a_second_stream(monke
             {"segment_id": "s1", "speaker": "Jane", "text": "uh so we kinda agreed Q3??"}]})}],
     })
     _ctx, _tools, prompt = _meeting_grounding(
-        {"kind": "meeting", "meeting": {"native_id": "abc", "meeting_id": 46, "status": "completed",
-                                         "title": "Acme kickoff"}},
+        {"kind": "meeting", "native_id": "abc", "meeting_id": 46, "status": "completed",
+         "title": "Acme kickoff"},
         session="s", prompt="what was decided?", redis_url=url)
     assert "has ended" in prompt and "Acme kickoff" in prompt
     assert "raw transcript" in prompt
@@ -103,7 +103,7 @@ def test_post_grounding_falls_back_to_raw_transcript(monkeypatch):
             {"segment_id": "s1", "speaker": "Raj", "text": "SSO first"}]})}],
     })
     _ctx, _tools, prompt = _meeting_grounding(
-        {"kind": "meeting", "meeting": {"native_id": "abc", "meeting_id": 46, "status": "completed"}},
+        {"kind": "meeting", "native_id": "abc", "meeting_id": 46, "status": "completed"},
         session="s", prompt="recap", redis_url=url)
     assert "raw transcript" in prompt and "Raj: SSO first" in prompt
 
@@ -111,8 +111,8 @@ def test_post_grounding_falls_back_to_raw_transcript(monkeypatch):
 def test_post_grounding_with_no_record_is_honest(monkeypatch):
     url = _fake_redis(monkeypatch, {})
     _ctx, _tools, prompt = _meeting_grounding(
-        {"kind": "meeting", "meeting": {"native_id": "abc", "meeting_id": 46, "status": "failed",
-                                         "title": "Ghost"}},
+        {"kind": "meeting", "native_id": "abc", "meeting_id": 46, "status": "failed",
+         "title": "Ghost"},
         session="s", prompt="summary?", redis_url=url)
     assert "no record of this meeting exists" in prompt
     assert "FAILED" in prompt
@@ -127,7 +127,7 @@ def test_statusless_active_is_legacy_live_path(monkeypatch):
             {"segment_id": "s1", "speaker": "Jane", "text": "ship it Friday"}]})}],
     })
     _ctx, _tools, prompt = _meeting_grounding(
-        {"kind": "meeting", "meeting": {"platform": "google_meet", "native_id": "abc-defg-hij"}},
+        {"kind": "meeting", "platform": "google_meet", "native_id": "abc-defg-hij"},
         session="main", prompt="who spoke last?", redis_url=url)
     assert prompt.startswith("You are assisting in a live meeting (google_meet/abc-defg-hij).")
     assert "Jane: ship it Friday" in prompt and prompt.endswith("who spoke last?")

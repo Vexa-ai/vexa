@@ -9,7 +9,7 @@ import type { MeetingMock, TranscriptLine } from "./meetingModel";
 import { onGatewayWSConnected, onMeetingStatus } from "./gatewayWS";
 
 /** A row from meeting-api GET /meetings (live AND past). */
-interface MeetingRowDTO {
+export interface MeetingRowDTO {
   id: number | string;
   platform: string;
   native_meeting_id: string | null;   // null on a link-less PLANNED meeting (platform 'unknown')
@@ -31,7 +31,20 @@ interface MeetingRowDTO {
     auto_join_error?: string;
     constructed_meeting_url?: string;
     attendees?: { email: string; name?: string; partstat?: string }[];
+    // stamped by meeting-api when the owner deletes the meeting's transcript and recordings; the
+    // row itself is kept as history. Its shape is api.v1's `ArtifactDeletion`
+    // (core/gateway/contracts/api.v1), and `artifactsDeleted` below is its one reader here.
+    artifact_deletion?: { state: "pending" | "completed"; [extra: string]: unknown } | null;
   } | null;
+}
+
+/** Has the owner deleted (or is deleting) this meeting's transcript and recordings? The api.v1
+ *  `MeetingResponse.data.artifact_deletion` stamp, in either of its states, says so; its tests read
+ *  the contract's own goldens, so a reshape of that field fails here rather than silently showing a
+ *  deleted meeting as one with a transcript. */
+export function artifactsDeleted(d: Pick<MeetingRowDTO, "data">): boolean {
+  const stamp = d.data?.artifact_deletion;
+  return !!stamp && typeof stamp === "object";
 }
 
 /** `stopped` is not a DB enum value — it's derived from a terminal `completed` row that the user stopped
@@ -44,6 +57,9 @@ function displayStatus(d: MeetingRowDTO): string {
 /** A transcript segment from meeting-api GET /transcripts/{platform}/{native}. */
 interface SegmentDTO {
   start?: number | null;
+  end?: number | null;
+  absolute_start_time?: string | null;
+  absolute_end_time?: string | null;
   speaker?: string | null;
   text?: string | null;
 }
@@ -57,6 +73,11 @@ interface TranscriptResponseDTO {
  *  inference pipeline that produced it, so `data.processed` has no producer and is not read. */
 export interface DurableTranscript {
   lines: TranscriptLine[];
+}
+
+function transcriptEpochMs(seconds?: number | null, iso?: string | null): number | undefined {
+  if (iso && Number.isFinite(Date.parse(iso))) return Date.parse(iso);
+  return typeof seconds === "number" && Number.isFinite(seconds) && seconds >= 1e9 ? seconds * 1000 : undefined;
 }
 
 function formatTranscriptTime(start?: number | null): string {
@@ -138,6 +159,7 @@ function toMock(d: MeetingRowDTO): MeetingMock {
     platform: d.platform === "google_meet" ? "Google Meet" : d.platform,
     has_recording: !!(d.data?.recordings?.length),
     docs: d.data?.docs ?? [],
+    artifacts_deleted: artifactsDeleted(d),
     participants: [],
     mentioned: [],
     actions: [],
@@ -185,7 +207,7 @@ async function snapshotOnce() {
     const seen = new Set<string>();
     const next = (list || []).map(toMock).filter((m) => !seen.has(m.id) && (seen.add(m.id), true));
     const key = (m: MeetingMock[]) => m.map((x) =>
-      `${x.id}|${x.live_status}|${x.has_recording}|${x.title_custom ?? ""}|${x.scheduled_at ?? ""}|${x.workspace_id ?? ""}|${x.auto_join ?? ""}|${x.auto_join_error ?? ""}|${x.native_id ?? ""}|${(x.attendees ?? []).map((a) => a.email).join("+")}`,
+      `${x.id}|${x.live_status}|${x.has_recording}|${x.artifacts_deleted ? "deleted" : ""}|${x.title_custom ?? ""}|${x.scheduled_at ?? ""}|${x.workspace_id ?? ""}|${x.auto_join ?? ""}|${x.auto_join_error ?? ""}|${x.native_id ?? ""}|${(x.attendees ?? []).map((a) => a.email).join("+")}`,
     ).join(",");
     const wasLoaded = loaded;
     loaded = true;
@@ -268,7 +290,13 @@ export async function fetchDurableTranscript(meetingId: string): Promise<Durable
     const list = body.segments || [];
     const lines = list
       .filter((s) => (s.text ?? "").trim())
-      .map((s) => ({ t: formatTranscriptTime(s.start), speaker: s.speaker || "Speaker", text: s.text ?? "" }));
+      .map((s) => ({
+        t: formatTranscriptTime(s.start),
+        tsMs: transcriptEpochMs(s.start, s.absolute_start_time),
+        endMs: transcriptEpochMs(s.end, s.absolute_end_time),
+        offsetSeconds: typeof s.start === "number" && s.start < 1e9 ? s.start : undefined,
+        speaker: s.speaker || "Speaker", text: s.text ?? "",
+      }));
     return { lines };
   } catch {
     return EMPTY_DURABLE;

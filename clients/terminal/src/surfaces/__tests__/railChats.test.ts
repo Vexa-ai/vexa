@@ -27,7 +27,7 @@ const meeting = (id: string, title: string, live_status: string, startMins: numb
 
 const LIVE = meeting("m-live", "Standup — daily", "active", -12);
 const UPCOMING = meeting("m-prep", "Acme — pricing review", "scheduled", 75);
-const HELD = meeting("m-post", "Blue Light Card — discovery", "completed", -1500);
+const HELD = meeting("m-post", "Fernhill Loyalty Card — discovery", "completed", -1500);
 
 const chat = (over: Partial<Chat> & { id: string }): Chat => ({
   label: over.id, workspaces: ["personal", "_global"], artifacts: [],
@@ -42,22 +42,22 @@ describe("railRows — stored chats UNION live meetings", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].chatId).toBeNull();
     expect(rows[0].meetingId).toBe("m-post");
-    expect(rows[0].label).toBe("Blue Light Card");    // the title's own qualifier is dropped
+    expect(rows[0].label).toBe("Fernhill Loyalty Card");    // the title's own qualifier is dropped
   });
 
   it("a chat bound to a meeting REPLACES its derived row — one row, not two", () => {
-    const rows = railRows([chat({ id: meetingChatId("m-post"), label: "Blue Light Card", meeting: "m-post" })], [HELD]);
+    const rows = railRows([chat({ id: meetingChatId("m-post"), label: "Fernhill Loyalty Card", meeting: "m-post" })], [HELD]);
     expect(rows).toHaveLength(1);
     expect(rows[0].chatId).toBe("meet-m-post");
   });
 
   it("two chats on ONE meeting are two rows — the chat is the row", () => {
     const rows = railRows([
-      chat({ id: "meet-m-post", label: "Blue Light Card", meeting: "m-post", lastActivityAt: T0 }),
+      chat({ id: "meet-m-post", label: "Fernhill Loyalty Card", meeting: "m-post", lastActivityAt: T0 }),
       chat({ id: "pchat-2", label: "BLC — security answers", meeting: "m-post", lastActivityAt: T0 - 60000 }),
     ], [HELD]);
     expect(rows).toHaveLength(2);
-    expect(labels(rows)).toEqual(["Blue Light Card", "BLC — security answers"]);
+    expect(labels(rows)).toEqual(["Fernhill Loyalty Card", "BLC — security answers"]);
   });
 
   it("a chat over no meeting is an ordinary row, and keeps its own workspaces", () => {
@@ -76,14 +76,14 @@ describe("railRows — stored chats UNION live meetings", () => {
 describe("railRows — recency, newest first, live on top", () => {
   it("the running meeting leads even though an upcoming one starts later", () => {
     expect(labels(railRows([], [UPCOMING, HELD, LIVE])))
-      .toEqual(["Standup", "Acme", "Blue Light Card"]);
+      .toEqual(["Standup", "Acme", "Fernhill Loyalty Card"]);
   });
 
   it("a chat sorts on max(last activity, meeting start) — activity can lift an old meeting", () => {
     const rows = railRows([
-      chat({ id: "meet-m-post", label: "Blue Light Card", meeting: "m-post", lastActivityAt: T0 + 30 * 60000 }),
+      chat({ id: "meet-m-post", label: "Fernhill Loyalty Card", meeting: "m-post", lastActivityAt: T0 + 30 * 60000 }),
     ], [HELD, UPCOMING]);
-    expect(labels(rows)).toEqual(["Acme", "Blue Light Card"]);   // upcoming (+75m) still later than +30m
+    expect(labels(rows)).toEqual(["Acme", "Fernhill Loyalty Card"]);   // upcoming (+75m) still later than +30m
     expect(rows[1].when).toBe(T0 + 30 * 60000);                  // …but the chat's activity won over the start
   });
 
@@ -92,12 +92,12 @@ describe("railRows — recency, newest first, live on top", () => {
       chat({ id: "a", label: "yesterday", lastActivityAt: T0 - 24 * 60 * 60000 }),
       chat({ id: "b", label: "ten minutes ago", lastActivityAt: T0 - 10 * 60000 }),
     ], [HELD, UPCOMING]);
-    expect(labels(rows)).toEqual(["Acme", "ten minutes ago", "yesterday", "Blue Light Card"]);
+    expect(labels(rows)).toEqual(["Acme", "ten minutes ago", "yesterday", "Fernhill Loyalty Card"]);
   });
 
   it("a meeting with no start time sorts last rather than to the top", () => {
     const noTime = { id: "m-x", title: "Undated", status: "past", live_status: "completed" } as unknown as MeetingMock;
-    expect(labels(railRows([], [noTime, HELD]))).toEqual(["Blue Light Card", "Undated"]);
+    expect(labels(railRows([], [noTime, HELD]))).toEqual(["Fernhill Loyalty Card", "Undated"]);
   });
 
   it("the label of a live row reads 'live' instead of a clock time", () => {
@@ -123,7 +123,7 @@ describe("whenShort — ONE token, because a name needs the room more than a tim
   });
 
   it("a meeting row is labelled with the MEETING's time, not the chat's last activity", () => {
-    const rows = railRows([chat({ id: "meet-m-post", label: "Blue Light Card", meeting: "m-post", lastActivityAt: T0 })], [HELD], T0);
+    const rows = railRows([chat({ id: "meet-m-post", label: "Fernhill Loyalty Card", meeting: "m-post", lastActivityAt: T0 })], [HELD], T0);
     expect(rows[0].whenLabel).toBe(whenShort(Date.parse(at(-1500)), { now: T0 }));
     expect(rows[0].when).toBe(T0);          // …while the SORT still uses the later of the two
   });
@@ -147,7 +147,7 @@ describe("visibleRows — one chip: touched + live/upcoming, or everything", () 
   });
 
   it("default hides a HELD meeting nobody has touched — the archive is what All is for", () => {
-    expect(labels(visibleRows(rows, false))).not.toContain("Blue Light Card");
+    expect(labels(visibleRows(rows, false))).not.toContain("Fernhill Loyalty Card");
   });
 
   it("All shows everything, in the same order", () => {
@@ -165,9 +165,9 @@ describe("visibleRows — one chip: touched + live/upcoming, or everything", () 
   });
 
   it("the SELECTED row never vanishes under the reader, whatever the filter says", () => {
-    const key = rows.find((r) => r.label === "Blue Light Card")!.key;
-    expect(labels(visibleRows(rows, false, key))).toContain("Blue Light Card");
-    expect(labels(visibleRows(rows, false, null))).not.toContain("Blue Light Card");
+    const key = rows.find((r) => r.label === "Fernhill Loyalty Card")!.key;
+    expect(labels(visibleRows(rows, false, key))).toContain("Fernhill Loyalty Card");
+    expect(labels(visibleRows(rows, false, null))).not.toContain("Fernhill Loyalty Card");
   });
 });
 
@@ -201,7 +201,7 @@ describe("chatForRow — first open materialises a meeting's chat", () => {
     const c = chatForRow([], row, [HELD], T0);
     expect(c.id).toBe("meet-m-post");
     expect(c.meeting).toBe("m-post");
-    expect(c.label).toBe("Blue Light Card");
+    expect(c.label).toBe("Fernhill Loyalty Card");
   });
 
   it("opening is not touching — the materialised chat starts untouched", () => {

@@ -30,9 +30,11 @@ override raise at format time → caught → loud log + fallback):
 from __future__ import annotations
 
 import logging
-import os
 import re
 from pathlib import Path
+import stat
+
+from workspaces.shared import workspace_paths as wpaths
 
 logger = logging.getLogger("agent_api.meeting_steering")
 
@@ -149,23 +151,33 @@ OVERRIDE_RELPATH = "agents/meeting-lifecycle.md"
 
 def steering_templates(global_ws_path: "str | None" = None) -> dict[str, str]:
     """The effective per-phase templates: built-in defaults overlaid with the _global
-    override file when present/parseable. ``global_ws_path`` defaults to the same env the
-    _global mount uses (VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH — config.v1-declared)."""
-    root = (global_ws_path if global_ws_path is not None else os.environ.get("VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH", "")).strip()
+    override file when present/parseable. ``global_ws_path`` defaults to where the _global mount
+    reads from (``system_mounts.global_root``), so an override the admin writes in the default
+    in-store ``_global`` is read too, not only one in an out-of-store path."""
+    if global_ws_path is None:
+        from control_plane import system_mounts
+        from shared.config import load_settings
+        global_ws_path = str(system_mounts.global_root(load_settings()))
+    root = global_ws_path.strip()
     if not root:
         return dict(DEFAULT_TEMPLATES)
     path = Path(root) / OVERRIDE_RELPATH
-    try:
-        mtime = path.stat().st_mtime
-    except OSError:
+    # NOFOLLOW (`workspace_paths`): `_global` is written by an admin's turn, and these templates
+    # steer every person's chat — an override reached through a planted link is no override.
+    st = wpaths.stat_inside(Path(root), OVERRIDE_RELPATH)
+    if st is None or not stat.S_ISREG(st.st_mode):
         return dict(DEFAULT_TEMPLATES)  # no override file — the normal case, not an error
+    mtime = st.st_mtime
     key = str(path)
     cached = _cache.get(key)
     if cached and cached[0] == mtime:
         sections = cached[1]
     else:
         try:
-            sections = _parse_sections(path.read_text(encoding="utf-8"))
+            raw = wpaths.read_text_inside(Path(root), OVERRIDE_RELPATH)
+            if raw is None:
+                raise OSError("the override is not a plain file")
+            sections = _parse_sections(raw)
         except Exception as exc:  # noqa: BLE001 — a broken override must never break chat
             logger.warning("meeting-lifecycle override %s unreadable (%s) — using built-in templates", path, exc)
             sections = {}

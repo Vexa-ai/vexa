@@ -19,7 +19,7 @@
  *  intent still does the right thing, and a build where it reads it is not confused by the
  *  sentence — the two say the same thing.
  */
-import { ASK_CHAT_EVENT } from "../canvas/actions";
+import { ASK_CHAT_EVENT } from "../platform";
 import { actPressed } from "../surfaces/actState";
 import { isMemberIntent, isPageIntent, isSilent, normalizeIntent, type ChatIntent, type ChatIntentKind, type ExtendTranscriptIntent, type IntentOf, type RawIntent } from "../surfaces/chatIntent";
 import { actTarget, isJobIntent } from "../surfaces/jobs";
@@ -77,7 +77,7 @@ function preview(selection: string): string {
  *  quotation of what was highlighted. */
 export function compactLabel(intent: ChatIntent): string {
   // A CHIP CLICKED IN A TRANSCRIPT SHOWS THE WORDS, not the meeting it was said in: the person is
-  // looking at the room already, and "Explore: Kaar Tech (meeting 41, segment …)" spends the whole
+  // looking at the room already, and "Explore: Northwind Labs (meeting 41, segment …)" spends the whole
   // label on the two facts they can see.
   if (intent.kind === "explore") return `Explore: ${intent.term}`;
   // Highlight is silent (decision 35.2) and never reaches a bubble; the label exists only so a
@@ -224,11 +224,11 @@ export function fallbackText(intent: ChatIntent): string {
   const room = (intent.kind === "extend" || intent.kind === "create") && intent.meeting
     ? `\n\nThis is meeting ${intent.meeting}'s own page and the transcript is embedded in it. ` +
       "Read the page first: its frontmatter carries `transcript_cursor`. Read the transcript with " +
-      `meeting_transcript(meeting_id="${intent.meeting}", since="<that cursor>") — only what is new — ` +
-      "then rewrite the content BETWEEN the `<!-- meeting:<key>:start -->` / `:end` markers " +
+      `get_meeting_transcript(meeting_db_id=${intent.meeting}, since_index=<that cursor>) — only what ` +
+      "is new; with no cursor, or one that is not a whole number, read it all — then rewrite the content BETWEEN the `<!-- meeting:<key>:start -->` / `:end` markers " +
       "(about · decisions · commitments · people · questions), leave every word outside them alone, " +
-      "never touch the `<!-- vexa:transcript … -->` slot, and set `transcript_cursor` to the cursor " +
-      "that read returned."
+      "never touch the `<!-- vexa:transcript … -->` slot, and set `transcript_cursor` to the " +
+      "`next_index` that read returned."
     : "";
   // THE LINE RIDES THE FALLBACK TOO. This sentence is what runs when the preset library is behind
   // the client (the header says why both travel), and a fallback that dropped the one thing the

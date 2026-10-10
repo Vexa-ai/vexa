@@ -29,11 +29,14 @@ stack is ready — copy it from the `make all` output and use it as your `X-API-
 
 ### Minting more keys
 
-To mint additional keys, use the `provision-token` make target with your `ADMIN_TOKEN` (it's set in
-`.env`, default `dev-admin-token` — **change it before exposing anything**):
+To mint additional keys, use the `provision-token` make target with your `ADMIN_TOKEN`. There is no
+default: `make up` mints one into `deploy/compose/.env` (and replaces any value this repository ever
+published for it, such as the old `dev-admin-token`), and the services refuse to boot on a published
+one. Treat it like a root password — it mints a key for any user:
 
 ```bash
-make -s provision-token ADMIN_TOKEN=dev-admin-token
+# from deploy/compose
+make -s provision-token ADMIN_TOKEN="$(sed -n 's/^ADMIN_TOKEN=//p' .env)"
 # → prints a freshly minted vxa_... API key
 ```
 
@@ -43,7 +46,7 @@ directly for finer control over users and scopes:
 
 ```bash
 export ADMIN=http://localhost:18057
-export ADMIN_TOKEN=dev-admin-token        # your ADMIN_TOKEN from .env
+export ADMIN_TOKEN="$(sed -n 's/^ADMIN_TOKEN=//p' .env)"   # the ADMIN_TOKEN `make up` minted into .env
 
 # 1. create (or find) a user
 curl -X POST "$ADMIN/admin/users" \
@@ -108,6 +111,137 @@ curl "$ADMIN/admin/users/1/tokens" -H "X-Admin-API-Key: $ADMIN_TOKEN"
 
 — the `terminal-login`-named entries are login sessions (capped, not unbounded), while any
 differently-named entries are self-serve keys the user minted and are never pruned by login.
+
+## Who may sign in to the terminal
+
+The terminal's sign-in doors — the emailed link, Google and Microsoft — each end by creating an
+account and minting a `terminal-login` key for it, so they are gated on **who** the address is, not
+only on proof that the person holds it. A sign-in is admitted only for:
+
+- an **existing user** of this instance (upgrading locks nobody out),
+- an **admin** — the claimed one, or an address in `VEXA_ADMIN_EMAILS`,
+- an address on the **sign-in allow-list**: `VEXA_SIGNIN_ALLOW` on admin-api plus what the admin
+  adds in the terminal under **Settings → Sign-in**. Entries are exact addresses
+  (`alice@example.org`) or whole domains (`@example.com`, that domain exactly).
+
+Anybody else is refused before an account exists. The email form answers "check your email" for
+every address and mails only the admitted ones; the redeem page and the OAuth return show one
+sentence that names no list. If admin-api cannot answer, new sign-ins are refused (existing sessions
+keep working).
+
+**The first administrator needs the admin claim code.** While no admin has been claimed and
+`VEXA_ADMIN_EMAILS` is empty, admin-api writes a one-time claim code to its log at boot. The terminal's
+claim screen asks for it; the sign-in that carries it is admitted and becomes the admin, and the code
+is spent. Without it nobody new can sign in to an unclaimed instance and nobody can take the role.
+Restarting admin-api issues a fresh code. `VEXA_ADMIN_EMAILS` (on admin-api) names the admins instead,
+and then no code is issued. A sign-in allow-list narrows the claim further: only an address on the
+list may sign in or claim the role. admin-api makes every one of these decisions; the terminal only
+asks it.
+An account created through `POST /admin/users` (above) counts as an existing user, so minting a key
+for someone also lets them sign in.
+
+`VEXA_SIGNIN_ALLOW=*` opens sign-in to any address. It is an operator-only setting: the admin's
+Settings → Sign-in list refuses `*`, a `*` already stored there is ignored, and admin-api logs a
+warning at boot whenever sign-in is open.
+
+### The emailed link
+
+- The link is valid for 15 minutes by default (`MAGIC_LINK_TTL_SECONDS`, capped at 60 minutes) and
+  signs in **once**, whichever terminal replica redeems it. A second click shows "already used".
+- An address is at most 254 characters. Requests for a link are budgeted per client address
+  (`MAGIC_LINK_RATE_PER_IP`, default 20) and per email address (`MAGIC_LINK_RATE_PER_ADDRESS`,
+  default 5) over `MAGIC_LINK_RATE_WINDOW_SECONDS` (default 900). Behind a reverse proxy, set
+  `TERMINAL_TRUSTED_PROXIES` to the proxy's addresses so the per-client budget counts real clients;
+  the Helm chart sets the in-cluster ranges when the terminal's Service is `ClusterIP`.
+- The link is mailed through the deployment's relay (`VEXA_MAIL_SMTP_*`). The terminal uses
+  STARTTLS whenever the relay offers it, and never sends `VEXA_MAIL_SMTP_USER`/`_PASSWORD` over an
+  unencrypted connection.
+
+### Google and Microsoft
+
+- Google: the ID token's `email_verified` must be `true`.
+- Microsoft: with `MICROSOFT_TENANT_ID` set to a tenant id, the token's tenant must be that one; with
+  a multi-tenant authority, the token must carry `xms_edov: true`.
+- The first OAuth sign-in to an account records the provider's stable subject on it. A later sign-in
+  through the same provider with a different subject is refused, even for the same address.
+- After sign-in the browser returns only to a path on this instance or a URL on its exact origin.
+
+### What a person sees
+
+| Situation | What the terminal shows |
+|---|---|
+| Address not admitted | The email form still answers "check your email"; nothing is mailed. The redeem page and the OAuth return show one sentence that names no list. |
+| The link was already used, expired, or altered | The redeem page says which (`410` or `400`) and offers a new link. |
+| admin-api cannot be reached | New sign-ins are refused (`503`); existing sessions keep working. If the link's single-use record cannot be checked, the link is not spent and works again later; if the account step fails after that check, the page says the link was used and asks for a new one. |
+| Another Google or Microsoft identity for an account already bound to one | Refused with the same sentence. |
+| No public URL configured (`NEXTAUTH_URL` / `TERMINAL_URL`) | The email form answers `503` and nothing is mailed. |
+
+## How it works
+
+1. **Ask.** The person submits an address (`POST /api/auth/request-link`) or starts OAuth
+   (`/api/auth/[...nextauth]`). The terminal checks the address shape and the request budget.
+2. **Admission.** The terminal's server asks admin-api `POST /internal/signin-admission`
+   (`signin.v1` `SigninAdmissionRequest`). admin-api decides from its own inputs: the user rows, the
+   claimed admin, `VEXA_ADMIN_EMAILS`, the `signin` setting and `VEXA_SIGNIN_ALLOW`
+   (`admin_api/app/signin_allow.py` `decide`). Only a literal `admitted: true` admits.
+3. **Proof.** For the link, the terminal mails a token signed with the link key (HMAC-SHA256 over the
+   address, expiry and a random id). For OAuth, the provider's ID token is checked as above.
+4. **Redeem once.** The redeem route verifies the signature and expiry, then asks admin-api
+   `POST /internal/signin-links/redeem`, which records the link id in the service Redis with
+   `SET NX` until the link expires (`vexa:signin-link:redeemed:<jti>`). Only the first request
+   succeeds.
+5. **Account and binding.** `findOrCreateUserToken` asks admission again, finds or creates the user
+   (`POST /admin/users`) and, for OAuth, binds the provider subject
+   (`PUT /internal/users/{id}/provider-subject`).
+6. **Session.** The terminal mints a `terminal-login` key (`POST /admin/users/{id}/tokens`), keeps
+   the newest `VEXA_TERMINAL_LOGIN_TOKEN_CAP`, and sets the httpOnly `vexa-token` and
+   `vexa-user-info` cookies.
+
+**Who writes what.** admin-api is the only writer of users, tokens, the `signin` setting, the claim
+record, the redeemed-link records and the provider bindings (`users.data.provider_subjects`). The
+terminal stores nothing but the two cookies.
+
+**Configuration.** admin-api (`admin_api/config.v1.json`): `VEXA_SIGNIN_ALLOW`, `VEXA_ADMIN_EMAILS`,
+`REDIS_URL`, `INTERNAL_API_SECRET`. Terminal: `TERMINAL_TRUSTED_PROXIES` and `VEXA_MAIL_SMTP_*` are
+declared in `clients/terminal/config.v1.json`; `NEXTAUTH_SECRET`, `NEXTAUTH_URL`, `MAGIC_LINK_SECRET`,
+`MAGIC_LINK_TTL_SECONDS`, `MAGIC_LINK_RATE_*` and the `GOOGLE_CLIENT_*` / `MICROSOFT_*` provider keys
+are read from the terminal's environment. See [Configuration](/configuration).
+
+## Why it complies
+
+**Architecture**
+
+| Rule | How this design meets it | Enforced by |
+|---|---|---|
+| P2, P4 — couple through sealed contracts | The terminal and admin-api meet only through `signin.v1` (admission, the claim, link redemption, provider binding); its reason vocabularies are generated into both sides. | `gate:schema`, `gate:contract-version` |
+| P6 — one front door | The terminal calls admin-api's internal routes through one client (`adminApi.ts`). | `gate:domain-doors` |
+| P23 — one writer per carrier | admin-api alone writes users, tokens, the allow-list, the redeemed-link records and the bindings; the terminal holds no list and no ledger. | `gate:dataflow`, `gate:calm` |
+| P14 — config is a validated contract | admin-api's keys and the terminal's mail and proxy keys are declared in `config.v1.json`; the terminal's NextAuth and link keys are not yet. | `gate:config-contract` (declared keys) |
+| P18 — fail loud | An unreachable admin-api, a store that cannot be written or a missing public URL refuses with `503`; nothing signs in silently. | ungated: reviewed |
+| P20 — default-deny | Admission, link redemption and binding all refuse unless admin-api answers yes. | ungated: reviewed; deny tests below |
+
+**Security**
+
+- **Who decides.** admin-api alone. Its internal routes need `INTERNAL_API_SECRET`, with no
+  development-mode exception for admission, link redemption or binding.
+- **What is refused.** An address not admitted; a second redemption of a link; an expired or forged
+  link; an unverified provider email; another provider identity for a bound account; a redirect off
+  this origin. The development login (`/api/auth/login`) answers `403` on every build other than
+  development.
+- **What is not revealed.** Admitted and refused addresses get the same response, in the same time.
+
+Deny tests:
+
+| Where | Tests |
+|---|---|
+| `clients/terminal/src/app/api/auth/__tests__/signinAllowList.test.ts` | "every door asked admin-api the ADMISSION question, and nothing after it"; "allowed and refused addresses get byte-identical responses"; "the terminal decides nothing itself: a VEXA_ADMIN_EMAILS in ITS environment admits nobody"; "no code, no claim: a fresh instance admits nobody new, at any door" |
+| `…/__tests__/redeem.test.ts` | "is refused on REPLAY, and mints nothing the second time"; "is refused when ANOTHER terminal replica already redeemed it"; "is refused while the shared record cannot be checked, and stays usable afterwards"; "is refused when FORGED or absent" |
+| `…/__tests__/requestLink.test.ts` | "400s an address longer than 254 characters, well-formed or not, and spends nothing on it"; "refuses to send — 503, nothing mailed — when no public URL is configured, whatever the headers say" |
+| `…/__tests__/providerIdentity.test.ts` | "the sign-in callback refuses an unverified Google email before asking admin-api"; "on a multi-tenant authority requires xms_edov"; "with a pinned tenant id accepts only that tenant" |
+| `…/__tests__/findOrCreateUserToken.test.ts`, `oauthRedirect.test.ts`, `linkRateLimit.test.ts`, `mailerTransport.test.ts` | the provider binding, the same-origin redirect, the trusted-proxy rule and mail over TLS |
+| `core/identity/services/admin-api/tests/test_signin_allow.py` | `test_an_unknown_address_is_refused_once_an_admin_exists`, `test_an_unclaimed_instance_admits_nobody_new_without_the_claim_code`, `test_admission_refuses_an_unknown_address` |
+| `core/identity/services/admin-api/tests/test_signin_links.py` | `test_the_first_redeem_is_admitted_and_every_later_one_refused`, `test_a_store_that_cannot_be_written_refuses`, `test_no_secret_configured_is_closed_even_in_dev_mode` |
+| `core/identity/services/admin-api/tests/test_provider_subjects.py` | `test_another_subject_of_a_bound_provider_is_refused`, `test_the_door_refuses_another_identity_and_changes_nothing` |
 
 ## What can go wrong
 

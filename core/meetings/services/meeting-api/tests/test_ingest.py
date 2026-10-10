@@ -19,6 +19,7 @@ import pytest
 
 from meeting_api.collector import consume_segments, ingest
 from meeting_api.collector.fakes import FakeRedisBus, InMemoryTranscriptStore
+from _segment_auth import admin_token, signed_xadd  # noqa: E402,F401 — entries are signed as a bot signs them
 from meeting_api.collector.ingest import STREAM_NAME, _mutable_channel
 
 
@@ -160,10 +161,10 @@ async def test_ingest_ignores_non_segment_messages(store, bus):
 
 async def test_consume_segments_drains_a_fakeredis_batch(store, bus):
     # enqueue two stream messages, then drain the batch via XREADGROUP + XACK
-    await bus.xadd(STREAM_NAME, {"type": "transcription", "meeting_id": "1",
+    await signed_xadd(bus, {"type": "transcription", "meeting_id": "1",
                                  "segments": [{"segment_id": "a", "start": 0.0, "end": 1.0,
                                                "text": "one", "completed": True}]})
-    await bus.xadd(STREAM_NAME, {"type": "transcription", "meeting_id": "1",
+    await signed_xadd(bus, {"type": "transcription", "meeting_id": "1",
                                  "segments": [{"segment_id": "b", "start": 1.0, "end": 2.0,
                                                "text": "two", "completed": True}]})
     total = await consume_segments(store, bus)
@@ -172,3 +173,8 @@ async def test_consume_segments_drains_a_fakeredis_batch(store, bus):
     assert {s["text"] for s in doc["segments"]} == {"one", "two"}
     # acked: a second drain reads nothing new
     assert await consume_segments(store, bus) == 0
+
+
+@pytest.fixture(autouse=True)
+def _signed_by_this_secret(admin_token):
+    """The collector admits only session-signed entries; these tests sign with ``admin_token``."""

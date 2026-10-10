@@ -10,10 +10,10 @@ So each domain declares its own routes beside its service, in a `routes.v1.json`
 as the `mcp.tools.v1` manifests and for the same reason: the domain that owns the door behind a
 route is the only one that can say what the route is and what it costs.
 
-    core/meetings/routes.v1.json                   38 rows
+    core/meetings/routes.v1.json                   39 rows
     core/identity/routes.v1.json                   12
     core/meetings/services/mcp/routes.v1.json      12
-    core/agent/routes.v1.json                       7   ← absent in the no-agents profile
+    core/agent/routes.v1.json                      40   ← absent in the no-agents profile
     core/gateway/services/gateway/routes.v1.json    2   the edge's OWN /health and /auth/me
 
 WHAT THIS MODULE REFUSES, and why each is a boot failure rather than a log line — every one of them
@@ -24,6 +24,35 @@ is otherwise found by a person hitting a route that answers wrongly:
     a scope name outside the vocabulary     ->  a typo'd scope is an empty set is a DENY-ALL
     a manifest for an absent domain         ->  the table describing a service that is not there
 
+A ROW CARRIES ITS POLICY, NOT ONLY ITS SCOPES. `"delegation": true` admits a worker's own
+delegation token on that row (the MCP front door, the agent's friction report); every other row
+refuses it. `"mcp_reentry": true` admits that token on the row only when the request is the MCP
+acting on an `/mcp` request this edge admitted (`delegation.py`) — the rows the MCP's tools call
+back into, and no others: proof that the MCP is calling is not proof that the MCP calls THIS route.
+A domain the edge forwards wholesale declares `"forward": {"edge_prefix", "upstream_prefix"}` once,
+and its rows are then only paths under the edge prefix — literal, or with whole-segment `{name}`
+parameters (`"stream": true` for a server-sent-event relay) — or the prefix's `{path:path}`
+catch-all, so the edge registers that domain from its manifest and names none of its routes.
+A row the edge serves under a different path on the domain's service says so with `"upstream"`
+(`/user/webhook/deliveries` is meeting-api's `/webhooks/deliveries`): the edge forwards the row
+there, and the domain's service reads the same field to know which rows reach each of its routes —
+meeting-api checks the scopes the edge checked (`meeting_api/route_scopes.py`) from this one table.
+
+    delegation that is not a boolean        ->  a flag nobody can read the same way twice
+    delegation on an unscoped row           ->  a promise the authorizer never sees
+    mcp_reentry that is not a boolean       ->  the same
+    mcp_reentry beside delegation           ->  a narrower-looking flag on a row that already
+                                                admits the token, doing nothing
+    mcp_reentry on another domain's         ->  a promise nothing reads: only the edge's own
+      unscoped row                              identity read (`/auth/me`) checks it unscoped
+    mcp_reentry on a catch-all row          ->  every path under a prefix admitted at once, which
+                                                is not one route an MCP tool calls
+    an upstream on a forwarded row          ->  a second mapping beside the forward's
+    an upstream that is not a template, or  ->  a hop the edge could not fill from what it matched
+      names a parameter the row lacks
+    a forward with a malformed prefix       ->  a mapping that rewrites paths nobody declared
+    a forwarded row outside its forward     ->  a route the edge would have to serve by name
+
 DENY-BY-DEFAULT SURVIVES THE MOVE. The assembled table is still exhaustive and still enforced as
 such by `create_app`: a registered route that no manifest declares refuses to build. What changed
 is only WHO writes the declaration down.
@@ -32,8 +61,9 @@ from __future__ import annotations
 
 import json
 import pathlib
+import re
 from dataclasses import dataclass, field
-from typing import Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
+from typing import Dict, FrozenSet, Iterable, Optional, Set, Tuple
 
 CONTRACT = "routes.v1"
 #: The scope vocabulary `docs/docs/authentication.mdx` defines. A manifest may not invent one: an
@@ -43,6 +73,9 @@ SCOPES = frozenset({"bot", "tx", "browser"})
 METHODS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"})
 
 RouteKey = Tuple[str, str]
+#: The domain whose manifest declares the edge's OWN routes (`/health`, `/auth/me`). Its handlers
+#: read their policy from the table themselves, so it alone may flag an unscoped row.
+EDGE_DOMAIN = "gateway"
 
 
 class ManifestError(Exception):
@@ -57,6 +90,18 @@ class Assembly:
     #: which domain declared each row, so a duplicate can name BOTH sides and an operator reading
     #: the refusal knows which two files to open.
     owner_of: Dict[RouteKey, str] = field(default_factory=dict)
+    #: the rows that admit a worker's own delegation token (`"delegation": true`).
+    delegation: Set[RouteKey] = field(default_factory=set)
+    #: the rows the MCP's tools call back into, which admit that token on the MCP's re-entry
+    #: (`"mcp_reentry": true`) and only on it.
+    mcp_reentry: Set[RouteKey] = field(default_factory=set)
+    #: the literal rows relayed as server-sent events (`"stream": true`).
+    stream: Set[RouteKey] = field(default_factory=set)
+    #: domain -> (edge_prefix, upstream_prefix), for each domain forwarded wholesale.
+    forwards: Dict[str, Tuple[str, str]] = field(default_factory=dict)
+    #: row -> the template it is forwarded to on its domain's service, for a row whose hop is not
+    #: its own path (`"upstream"`). Every other row of a named domain is forwarded to its own path.
+    upstream: Dict[RouteKey, str] = field(default_factory=dict)
 
 
 def manifest_paths(repo_root: pathlib.Path) -> Dict[str, pathlib.Path]:
@@ -85,6 +130,80 @@ def read(path: pathlib.Path) -> dict:
     return doc
 
 
+CATCH_ALL = "{path:path}"
+#: One whole path segment that is a parameter: `{name}`, no converter, nothing else beside it. The
+#: edge re-encodes what fills it as one opaque segment (`paths.path_segment`) before it forwards.
+_PARAM_SEGMENT = re.compile(r"^\{([A-Za-z_][A-Za-z0-9_]*)\}$")
+
+
+def params_of(path: str) -> Tuple[str, ...]:
+    """The whole-segment `{name}` parameters of a row template, in order (none for the catch-all)."""
+    return tuple(m.group(1) for m in (_PARAM_SEGMENT.match(s) for s in path.split("/")) if m)
+
+
+def _forwardable(tail: str) -> bool:
+    """A tail a forwarded row may declare: the catch-all, or segments each of which is a literal or
+    one whole `{name}` parameter, no name twice. Anything else (`{id:path}`, `x{id}`) is a route
+    the edge would have to know how to serve by name."""
+    if not tail:
+        return False
+    if tail == CATCH_ALL:
+        return True
+    names = []
+    for segment in tail.split("/"):
+        if "{" in segment or "}" in segment:
+            m = _PARAM_SEGMENT.match(segment)
+            if not m or m.group(1) in names:
+                return False
+            names.append(m.group(1))
+    return True
+
+
+def _template(value) -> bool:
+    """A route template the edge can fill from a matched row: absolute, and every segment either a
+    literal or one whole `{name}` parameter, no name twice."""
+    if not isinstance(value, str) or not value.startswith("/") or value == "/":
+        return False
+    names = []
+    for segment in value.split("/")[1:]:
+        if not segment:
+            return False
+        if "{" in segment or "}" in segment:
+            m = _PARAM_SEGMENT.match(segment)
+            if not m or m.group(1) in names:
+                return False
+            names.append(m.group(1))
+    return True
+
+
+def _prefix(value) -> Optional[str]:
+    """An absolute path prefix that ends at a segment boundary, or None."""
+    if isinstance(value, str) and value.startswith("/") and value.endswith("/") and "{" not in value:
+        return value
+    return None
+
+
+def _forward(domain: str, doc: dict) -> Optional[Tuple[str, str]]:
+    raw = doc.get("forward")
+    if raw is None:
+        return None
+    edge = _prefix(raw.get("edge_prefix")) if isinstance(raw, dict) else None
+    upstream = _prefix(raw.get("upstream_prefix")) if isinstance(raw, dict) else None
+    if not (edge and upstream):
+        raise ManifestError(
+            f"{domain}: forward must be {{\"edge_prefix\": \"/x/\", \"upstream_prefix\": \"/y/\"}} — two "
+            f"absolute prefixes that end at a segment (got {raw!r})")
+    return edge, upstream
+
+
+def _flag(domain: str, row: dict, name: str) -> bool:
+    value = row.get(name, False)
+    if not isinstance(value, bool):
+        raise ManifestError(f"{domain}: {row.get('method')} {row.get('path')} — {name} must be "
+                            f"true or false (got {value!r})")
+    return value
+
+
 def assemble(manifests: Iterable[dict]) -> Assembly:
     """The union of what the DEPLOYED domains serve, or `ManifestError`.
 
@@ -98,6 +217,9 @@ def assemble(manifests: Iterable[dict]) -> Assembly:
     for doc in manifests:
         domain = doc["domain"]
         rows = doc.get("routes") or []
+        forward = _forward(domain, doc)
+        if forward:
+            out.forwards[domain] = forward
         for row in rows:
             method = str(row.get("method", "")).upper()
             path = str(row.get("path", ""))
@@ -122,6 +244,61 @@ def assemble(manifests: Iterable[dict]) -> Assembly:
                 out.scopes[key] = scopes
             else:
                 out.unscoped.add(key)
+            delegation = _flag(domain, row, "delegation")
+            if delegation:
+                if not scopes:
+                    raise ManifestError(
+                        f"{domain}: {method} {path} is unscoped and cannot admit a delegation — an "
+                        "unscoped row never reaches the authorizer that reads the flag")
+                out.delegation.add(key)
+            if _flag(domain, row, "mcp_reentry"):
+                if delegation:
+                    raise ManifestError(
+                        f"{domain}: {method} {path} declares both delegation and mcp_reentry — the "
+                        "row already admits a worker's token, so the narrower flag would do nothing")
+                if not scopes and domain != EDGE_DOMAIN:
+                    raise ManifestError(
+                        f"{domain}: {method} {path} is unscoped and cannot admit the MCP's re-entry "
+                        "— an unscoped row never reaches the authorizer that reads the flag; only "
+                        "the edge's own identity read checks it itself")
+                if path.endswith(CATCH_ALL):
+                    raise ManifestError(
+                        f"{domain}: {method} {path} is a catch-all and cannot admit the MCP's "
+                        "re-entry — it would admit every path under its prefix, and an MCP tool "
+                        "calls one route; declare that route as a row of its own")
+                out.mcp_reentry.add(key)
+            if "upstream" in row:
+                upstream = row["upstream"]
+                if forward:
+                    raise ManifestError(
+                        f"{domain}: {method} {path} declares an upstream, but the domain is "
+                        f"forwarded wholesale — its forward ({forward[0]} -> {forward[1]}) is the "
+                        "one mapping")
+                if not _template(upstream):
+                    raise ManifestError(
+                        f"{domain}: {method} {path} — upstream must be a route template of literal "
+                        f"segments and whole {{name}} parameters (got {upstream!r})")
+                extra = sorted(set(params_of(upstream)) - set(params_of(path)))
+                if extra:
+                    raise ManifestError(
+                        f"{domain}: {method} {path} — upstream {upstream} names {extra}, which the "
+                        "row does not match, so the edge has nothing to fill them with")
+                out.upstream[key] = upstream
+            stream = _flag(domain, row, "stream")
+            if forward:
+                tail = path[len(forward[0]):] if path.startswith(forward[0]) else None
+                if tail is None or not _forwardable(tail):
+                    raise ManifestError(
+                        f"{domain}: {method} {path} is outside its forward ({forward[0]}…): a "
+                        f"forwarded row is a path under the prefix (literal segments and whole "
+                        f"{{name}} parameters) or {forward[0]}{CATCH_ALL}")
+                if stream and tail == CATCH_ALL:
+                    raise ManifestError(f"{domain}: {method} {path} — only a literal row streams")
+            elif stream:
+                raise ManifestError(f"{domain}: {method} {path} — stream applies to a forwarded "
+                                    "domain's literal rows only")
+            if stream:
+                out.stream.add(key)
         out.domains[domain] = len(rows)
     return out
 

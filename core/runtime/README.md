@@ -5,8 +5,24 @@ The core **kernel**: it spawns and supervises isolated workloads through the `ru
 lifecycle over a pluggable Backend (process / Docker / K8s), and runs a redis-backed `Scheduler`
 that holds `schedule.v1` HTTP-call jobs in a sorted set and HTTP-POSTs them when due. **Mechanism,
 not policy (P11):** a `profile` is an opaque name — the kernel knows docker/k8s/process, not what a
-"bot" or "agent" *is*. Python because this is the runtime/tooling ecosystem and the control plane
-(meeting-api, agent-api) consumes it as a library/seam.
+"bot" or "agent" *is*. What a kind of workload is given beyond its spec is **profile data**
+(`profiles.Runnable`): its labels, the runtime setting naming the network it joins, the runtime
+settings forwarded into it, the credential files it receives and where (`credential_files`,
+`credential_env`), the host groups a process-backend child joins (`process_groups`), and whether
+it may create user namespaces (`user_namespaces`: a meeting bot, for its browser's sandbox). Every
+backend applies that data the same way; only the deployment registry (`default_registry`, the
+`meeting-bot` and `agent` profiles) fills it in — it is the one place that turns the operator's
+`HOST_CLAUDE_CREDENTIALS` / `HOST_CLAUDE_DIR` / `HOST_CODEX_CREDENTIALS` into files a harness reads.
+One residue: the docker backend still renames an `agent-…` workload's container to `worker-…` and
+labels its kind (`_worker_naming`), which keys on agent-api's id scheme. Python because this is the runtime/tooling ecosystem
+and the control plane (meeting-api, agent-api) consumes it as a library/seam.
+
+**What a caller may not decide.** Every route but `/health` requires the caller credential
+(`RUNTIME_API_TOKEN`, held by agent-api, meeting-api and the runtime). A spec's env never carries the
+store backing or Pod scheduling (`VEXA_WORKSPACE_MOUNT_*`, `RUNTIME_K8S_*` are dropped); every mount in
+its set must sit under the runtime's own store target (`VEXA_WORKSPACE_MOUNT_TARGET`), and a mount with
+its own host source must name one of `RUNTIME_EXTRA_MOUNT_SOURCES`. The runtime signs every
+`RuntimeEvent` callback (`X-Runtime-Signature`).
 
 ## Seams
 | Direction | Neighbour | Via | What crosses |
@@ -23,8 +39,7 @@ not policy (P11):** a `profile` is an opaque name — the kernel knows docker/k8
 · RuntimeEvent + RuntimeState/StopReason enums) and
 [`core/runtime/contracts/schedule.v1`](contracts/schedule.v1) (ScheduleJob · Request · Retry).
 **Consumes:** none — it is the bottom of the stack; callers reference its `*.v1` by path.
-Both seal into the registry [`contracts.seal.json`](../../contracts.seal.json) (`schedule.v1`
-unsealed until `pnpm seal:contracts`). Schemas live next to each contract — not restated here.
+Both are sealed in the registry [`contracts.seal.json`](../../contracts.seal.json). Schemas live next to each contract — not restated here.
 
 ## Isolated evaluation
 `tests/` runs L1 contract (goldens ≡ schema), L2 unit (faked Backend/Store, `fakeredis` + `FakeClock`
@@ -41,6 +56,13 @@ uv run pytest -q
   named-volume stores; `:ro` roles enforced); k8s = per-mount `subPath`+`readOnly` volumeMounts; process
   (lite) = per-subject uid + per-shared-workspace gids, 0700 tiers, default-deny sweep. A worker's
   filesystem contains ONLY its dispatch's mounts; no opt-out.
+- ✅ delivered — **no child of a root process backend is root**: a workspace dispatch runs as its
+  subject's uid (a canonical number below 100000 arithmetically, any other plain name from a
+  root-owned registry), any other workload (a meeting bot) as a uid of its own with only its
+  profile's `process_groups`, every child with a fresh private HOME and `no_new_privs`, and every
+  child but a meeting bot under a seccomp filter refusing it a user namespace (`userns.py`). A child that
+  cannot be isolated is refused, never started as root. Root's filesystem work never follows a link
+  (`O_NOFOLLOW` opens on directory fds, an fd walk for re-owning a tree, hard-linked files left alone).
 - ✅ delivered — group-scoped teardown on the process backend: each workload leads its own process
   group (`start_new_session=True`), and every ending path (observed self-exit, kill, cleanup, stop)
   signals the whole group — a self-exiting or stopped bot never strands its child tree. Declared

@@ -6,10 +6,14 @@
  *  (a cached 404 would make find-or-create fabricate duplicate users).
  */
 
-import { SETUP_SETTING, setupHandoffUpdate } from "../../setupHandoff";
+import { cookies } from "next/headers";
+import { type AdmittedReason, type ClaimReason, isAdmittedReason, isClaimReason } from "./signinWire";
 
 export const AUTH_COOKIE = process.env.VEXA_AUTH_COOKIE_NAME || "vexa-token";
 export const USER_INFO_COOKIE = process.env.VEXA_USER_INFO_COOKIE_NAME || "vexa-user-info";
+/** The admin claim code a visitor typed on the claim screen (`claim-code/route.ts`), carried to the
+ *  sign-in that follows. httpOnly, scoped to /api/auth, short-lived; the code itself works once. */
+export const CLAIM_COOKIE = "vexa-claim-code";
 
 export interface AdminUser {
   id: string | number;
@@ -113,14 +117,10 @@ export async function validateAuthToken(token: string): Promise<ValidatedUser> {
   }
 }
 
-// ── first-run bootstrap admin — a fresh instance has NO admin; the first successful sign-in
-//    claims the role (admin-api serializes concurrent claims). A configured VEXA_ADMIN_EMAILS
-//    allowlist means the instance ALREADY has admins → the claim machinery stays off entirely,
-//    which also keeps existing deployments (allowlist-run) from handing admin to the next login.
-
-function allowlistConfigured(): boolean {
-  return (process.env.VEXA_ADMIN_EMAILS || "").split(",").some((e) => e.trim());
-}
+// ── the admin claim — a fresh instance has NO admin unless the deployment names them; whether a
+//    sign-in may take the role is admin-api's decision (`signin_allow.may_claim`), never this
+//    process's. admin-api serializes concurrent claims and holds every input: the claimed role,
+//    VEXA_ADMIN_EMAILS and the allow-list. The terminal reads none of them.
 
 async function internalRequest<T>(path: string, init: RequestInit = {}): Promise<AdminResult<T>> {
   const url = (process.env.VEXA_ADMIN_API_URL || "").replace(/\/$/, "");
@@ -146,120 +146,84 @@ async function internalRequest<T>(path: string, init: RequestInit = {}): Promise
   }
 }
 
-// ── the company-layer setup gate ─────────────────────────────────────────────────
-//    Founder ruling, 2026-09-02: "global needs to be setup by admin, it just should not let him
-//    start the service before that." A fresh instance serves NOBODY until the admin has written the
-//    thin company layer — who the company is, its principles, objectives, structure, and what is
-//    missing — into the platform `_global` workspace. Until that exists: only the admin may sign in,
-//    the flows engine sends nothing, and the operator verbs refuse.
-//
+// ── OAuth sign-ins: the account's bound provider subject ───────────────────────────────────────
+
+/** Bind account `userId` to the OAuth subject signing in to it (`PUT
+ *  /internal/users/{id}/provider-subject`, signin.v1 `ProviderSubjectBindRequest`). The first sign-in
+ *  through a provider records the subject; a later one must carry the same.
+ *
+ *  `bound` only on a 200 that says `first` or `same`; a 409 is `mismatch` (the account belongs to
+ *  another identity of that provider); anything else is `unavailable`, which refuses the sign-in. */
+export async function bindProviderSubject(
+  userId: string | number,
+  subject: string,
+): Promise<"bound" | "mismatch" | "unavailable"> {
+  const res = await internalRequest<{ bound?: unknown }>(
+    `/internal/users/${encodeURIComponent(String(userId))}/provider-subject`,
+    { method: "PUT", body: JSON.stringify({ subject }) },
+  );
+  if (res.ok) return res.data?.bound === "first" || res.data?.bound === "same" ? "bound" : "unavailable";
+  return res.status === 409 ? "mismatch" : "unavailable";
+}
+
+// ── emailed sign-in links: the shared single-use record ─────────────────────────────────────────
+
+/** Record that the sign-in link `jti` is being redeemed (`POST /internal/signin-links/redeem`,
+ *  signin.v1 `SigninLinkRedeemRequest`). admin-api keeps the record in the service Redis until
+ *  `expiresAt`, for every terminal replica at once.
+ *
+ *  `first` only on a 200 whose body says `first: true`; a 409 is `used` (a replay, or a link past its
+ *  expiry); anything else — no internal edge configured, admin-api unreachable, its store down — is
+ *  `unavailable`, which the caller must treat as a refusal. */
+export async function redeemSigninLink(jti: string, expiresAt: number): Promise<"first" | "used" | "unavailable"> {
+  const res = await internalRequest<{ first?: unknown }>("/internal/signin-links/redeem", {
+    method: "POST",
+    body: JSON.stringify({ jti, expires_at: expiresAt }),
+  });
+  if (res.ok) return res.data?.first === true ? "first" : "unavailable";
+  return res.status === 409 ? "used" : "unavailable";
+}
+
+// ── instance state ──────────────────────────────────────────────────────────────
 //    admin-api owns the truth and answers it over the SAME internal door `internalRequest()` already
-//    uses (VEXA_ADMIN_API_URL + X-Internal-Secret). This module is the terminal's ONE reader of it —
-//    no other file may probe those endpoints, so there is exactly one place where the fail-safe
-//    direction is decided.
-
-/** The refusal sentence. ONE string, spelled exactly this way, used verbatim by every door that
- *  turns a sign-in away while the gate is up — the JSON login route, the magic-link HTML card, the
- *  OAuth callback. It is exported rather than retyped because a paraphrase in one door and not
- *  another teaches the same person two different things about one instance state; the failure that
- *  prevents is a user who reads "under maintenance" on one screen and "not authorised" on the next
- *  and concludes their account is broken. Never reword it in a caller. */
-export const SETUP_GATE_REFUSAL = "This Vexa is being set up by its administrator.";
-
-export type GlobalSetupState = "completed" | "missing";
+//    uses (VEXA_ADMIN_API_URL + X-Internal-Secret). There used to be a second fact here, the
+//    company-layer gate (`global_setup`), which kept a fresh instance closed to everyone but its
+//    admin until `_global` was written. Founder ruling 2026-10-08 removed it: "let's remove global
+//    setup at all so that there is no need to setup global at all - let it be empty with no data -
+//    it's fine." No door asks about `_global` any more.
 
 /** What admin-api says about this instance, in one read. */
 export interface InstanceState {
   admin_exists: boolean;
-  global_setup: GlobalSetupState;
-  /** The company the layer names — null while the gate is up, or when the caller may not see it. */
-  company: string | null;
 }
 
-/** The whole instance state: has an admin been claimed, has the company layer been written, and
- *  who is the company.
+/** Has an admin been claimed?
  *
- *  ⚠ THE TWO FIELDS FAIL SAFE IN OPPOSITE DIRECTIONS, and each direction prevents a different
- *  outage. This is the single most confusable thing in this file, so it is spelled out:
- *
- *   • `admin_exists` fails towards TRUE — the pre-existing rule, unchanged. A claim screen that
- *     cannot succeed is a dead end (it invites somebody to become the admin of an instance whose
- *     bootstrap edge is unreachable), so when the probe cannot answer we show plain sign-in.
- *
- *   • `global_setup` fails towards "completed" — that is, towards the gate being DOWN. An
- *     unreachable admin-api must NOT lock every user out of an instance that is working fine. The
- *     other direction turns a transient probe failure into a total sign-in outage, on a screen whose
- *     only content is a sentence the locked-out user can do nothing about.
- *
- *  That is not a hole, because THE TERMINAL IS NOT THE CLOSED HALF OF THIS GATE. The fail-CLOSED
- *  half lives where the irreversible things happen: the flows engine refuses to SEND and agent-api's
- *  operator verbs refuse to act while `_global` is missing. Those two decide with authoritative
- *  state in hand and stop on doubt. The terminal's only job here is to not brick sign-in, so on
- *  doubt it opens the door and lets the enforcing layers say no. */
+ *  Fails towards TRUE. A claim screen that cannot succeed is a dead end (it invites somebody to
+ *  become the admin of an instance whose bootstrap edge is unreachable), so when the probe cannot
+ *  answer we show plain sign-in. */
 export async function instanceState(): Promise<InstanceState> {
-  const res = await internalRequest<{ admin_exists?: boolean; global_setup?: string; company?: string | null }>(
-    "/internal/instance",
-    { method: "GET" },
-  );
-  if (!res.ok || !res.data) {
-    // Unreachable or unconfigured probe → both fields to their fail-safe values (see above).
-    return { admin_exists: true, global_setup: "completed", company: null };
-  }
-  return {
-    // A configured allowlist IS a set of admins, so it answers the admin question on its own
-    // (mirrors instanceHasAdmin below). The probe still runs, because `global_setup` is a separate
-    // fact that no allowlist can imply — an allowlist-run instance can absolutely be missing its
-    // company layer.
-    admin_exists: allowlistConfigured() || res.data.admin_exists === true,
-    // Anything that is not literally "missing" (including an older admin-api that does not know the
-    // field at all) reads as "completed" — the fail-safe direction, again.
-    global_setup: res.data.global_setup === "missing" ? "missing" : "completed",
-    company: typeof res.data.company === "string" && res.data.company.trim() ? res.data.company : null,
-  };
+  const res = await internalRequest<{ admin_exists?: boolean }>("/internal/instance", { method: "GET" });
+  if (!res.ok || !res.data) return { admin_exists: true };
+  // admin-api counts the addresses VEXA_ADMIN_EMAILS names as admins; this process has no list.
+  return { admin_exists: res.data.admin_exists === true };
 }
 
-/** MINT THE ADMIN-SETUP SCAFFOLD — the record that makes the setup conversation reachable.
- *
- *  ⚠ WHAT THIS REPLACES, AND WHY IT WAS A HOLE. The hand-off used to live in `localStorage`: the
- *  wizard stashed a pending preset, the workbench opened a chat from it, and the whole existence of
- *  that conversation was one key in one browser. Clear it, or open the instance in a second browser,
- *  and the admin landed in a Personal chat on the generic greeting — "paste a meeting link" — on an
- *  instance that served nobody, with the setup marker already saying "handoff" so nothing re-opened
- *  it. Verified live on 2026-09-02. A conversation the product depends on cannot live in the one
- *  place a person can clear by accident.
- *
- *  The scaffold is that conversation as a SERVER record (PRD §5.5): who it is for, which workspaces
- *  it mounts, which preset opens it, which tabs it shows. The claim mints it and the client follows
- *  the returned `url` — so a second browser, a cleared browser, and a reload all arrive at the SAME
- *  chat, because the id is in the URL and the record is on the server.
+/** An arrival as a SERVER record (PRD §5.5): who it is for, which workspaces it mounts, which
+ *  preset opens it, which tabs it shows. The door mints it and the client follows the returned
+ *  `url` — so a second browser, a cleared browser, and a reload all arrive at the SAME chat, because
+ *  the id is in the URL and the record is on the server.
  *
  *  Minting is INTERNAL-TIER on agent-api (a scaffold names mounts and composes an opening, so a
  *  caller who could mint one for another address could drive that person's agent). This server
- *  holds that secret; a browser never does. Failure is REPORTED, never swallowed: the caller
- *  decides what to do with a claim that succeeded and a conversation that could not be made.
- */
+ *  holds that secret; a browser never does. Failure is REPORTED, never swallowed. */
 export interface MintedScaffold { id: string; url: string }
 
-/** WHICH ARRIVAL THIS IS. Two so far, and they are the same mechanism with different records:
- *
- *  · `admin-setup` — the first admin claimed the instance and the company layer is not written yet.
- *  · `first-visit` — anybody signing in with no `?s=` of their own, including an admin whose company
- *    layer is already `completed`. That last case is a rule, not an oversight (founder ruling
- *    2026-09-02, F42): offering the setup conversation again to an instance that IS set up says the
- *    product does not know its own state.
- *
- *  The opening PRESET is named per kind and the body lives in `_global/asks/<opening>.md`, so what
- *  either arrival says is admin-editable and no prompt text is ever composed here. */
-export type ArrivalKind = "admin-setup" | "first-visit";
-
-const ARRIVAL_OPENING: Record<ArrivalKind, string> = {
-  "admin-setup": "setup-global",
-  "first-visit": "first-visit",
-};
-
-/** Mint ONE arrival scaffold. The two callers below differ only in the record they ask for. */
+/** Mint the `first-visit` arrival. Its opening preset body lives in `_global/asks/first-visit.md`,
+ *  so what it says is admin-editable and no prompt text is ever composed here. There used to be a
+ *  second kind minted from here, `admin-setup` (the setup-global conversation the first admin was
+ *  put into); it went with the company-layer gate (founder ruling 2026-10-08). */
 async function mintArrivalScaffold(
-  kind: ArrivalKind,
   email: string,
   userId: string | number,
   provenance: { flow: string; step: string },
@@ -274,14 +238,14 @@ async function mintArrivalScaffold(
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Internal-Secret": secret },
       // `workspaces` is deliberately ABSENT, not `[]`: the server derives the mount set from the
-      // address — `_global` + the admin's own desk for a claim, and for a first visit the
-      // workspaces already shared with that address plus the meetings it is invited to. Deriving it
-      // there keeps one rule in one place rather than two that drift, and it is the half a client
-      // could not compute anyway. `tabs`/`focus` likewise come from the preset's own frontmatter.
+      // address — the workspaces already shared with it plus the meetings it is invited to.
+      // Deriving it there keeps one rule in one place rather than two that drift, and it is the half
+      // a client could not compute anyway. `tabs`/`focus` likewise come from the preset's own
+      // frontmatter.
       body: JSON.stringify({
         who: email,
-        kind,
-        opening: ARRIVAL_OPENING[kind],
+        kind: "first-visit",
+        opening: "first-visit",
         provenance: { ...provenance, minted_by: String(userId) },
       }),
       cache: "no-store",
@@ -296,41 +260,6 @@ async function mintArrivalScaffold(
     const e = err as Error;
     return { ok: false, status: 0, error: e.name === "TimeoutError" ? "scaffold mint timed out" : e.message };
   }
-}
-
-/** The admin claim's arrival — the setup conversation. */
-export const mintAdminSetupScaffold = (email: string, userId: string | number) =>
-  mintArrivalScaffold("admin-setup", email, userId, { flow: "admin-claim", step: "claim-admin" });
-
-/** RECORD THAT THE SETUP CONVERSATION IS ALREADY OPEN — where SetupGate reads it (#1609).
- *
- *  ⚠ THE SECOND CHAT THIS EXISTS TO PREVENT. A claim taken through the corner card minted the
- *  `admin-setup` scaffold and the client followed `/?s=<id>` — and nothing wrote the hand-off
- *  marker, because only `SetupGate` had ever written it. So the gate mounted in the very document
- *  the arrival had just landed in, read `setup.global` as absent, concluded that nobody had opened
- *  the setup conversation, and opened one: `/?setup=global`, a second chat on top of the first. The
- *  blank-instance sign-in never hit it (the claim happens inside the sign-in, so the card is never
- *  shown); an instance whose admin claims through the card always did.
- *
- *  ONE CLAIM, ONE SETUP CHAT — and the rule that gets there is that WHOEVER OPENS THE CONVERSATION
- *  RECORDS THAT THEY DID. Two things open it and both now record: this route, by minting the
- *  arrival, and `SetupGate`, by navigating. Neither opens twice, because each reads the marker
- *  first.
- *
- *  IT IS THE SAME STORE, NOT A SECOND ONE. `SetupGate` writes this field through
- *  `/api/admin/settings/setup`, which is a straight proxy onto this endpoint, and the value comes
- *  from `app/setupHandoff.ts` so the two spellings cannot drift apart.
- *
- *  WHY NOT READ `?s=` INSTEAD. The tempting client-side fix is for `SetupGate` to notice the
- *  arrival parameter it was navigated with. It cannot: `InviteGate` strips `?s=` with
- *  `history.replaceState` on the same mount (#1580), so whether it is still there depends on which
- *  effect ran first — which is precisely what the #1580 defect was made of. A durable record is
- *  positive evidence; a parameter being erased beside you is not evidence at all. */
-export function recordSetupHandoff(): Promise<AdminResult<unknown>> {
-  return internalRequest(`/internal/settings/${SETUP_SETTING}`, {
-    method: "PUT",
-    body: JSON.stringify(setupHandoffUpdate()),
-  });
 }
 
 /** AN ORDINARY SIGN-IN'S ARRIVAL (F42, founder ruling 2026-09-02).
@@ -390,39 +319,21 @@ export async function hasHistory(email: string): Promise<{ has: boolean; probed:
  *  is nowhere to go".
  *
  *  THE GUARD LIVES HERE, not at one door, because all four doors — magic link, direct login, OAuth,
- *  the admin claim on an already-set-up instance — are the same moment and would otherwise drift.
+ *  the admin claim — are the same moment and would otherwise drift.
  *
  *  IT FAILS TOWARDS NOT MINTING, and that costs almost nothing: a probe that cannot answer is
  *  talking to the same agent-api the mint itself needs one line later, so an outage lands the person
  *  on `/` either way. What it buys is that a blip can never re-commit the reported defect — a
  *  returning person told, again, that we have never met.
  *
- *  …AND FOR A SIGN-IN THAT MINTED NO OTHER ARRIVAL (Vexa-ai/vexa#1607). The administrator's first
- *  sign-in on a blank instance claims the instance, and the claim opens the setup conversation —
- *  that IS their arrival. A first visit minted beside it put two chats in the rail at the same
- *  minute: *"this is the first chat, but i see two"*. One sign-in, one arrival.
- *
- *  THE CONDITION IS THE COMPANY LAYER, not "did this request claim the role". While `_global` is
- *  missing, the only address admin-api lets through any sign-in door is the administrator's
- *  (`signinAllowed`), and the setup conversation is where they are going — through the claim's own
- *  `admin-setup` scaffold, or through SetupGate's `?setup=global` hand-off. So "the layer is
- *  missing" is exactly the set of sign-ins that already have an arrival, and it is one fact every
- *  door has read by the time it gets here: pass it in and the rule costs no round-trip; omit it and
- *  it asks for itself, so a fifth door cannot skip the guard by forgetting to. */
+ *  THE ADMINISTRATOR IS NOT AN EXCEPTION ANY MORE. This used to mint nothing while `_global` was
+ *  unwritten, because the first admin's arrival was the setup-global conversation (#1607). There is
+ *  no such conversation at first run now (founder ruling 2026-10-08), so the admin's first sign-in
+ *  gets a first visit like anybody else's. */
 export async function mintFirstVisitScaffold(
   email: string,
   userId: string | number,
-  known?: { globalSetup?: GlobalSetupState },
 ): Promise<AdminResult<MintedScaffold>> {
-  const globalSetup = known?.globalSetup ?? (await instanceState()).global_setup;
-  if (globalSetup === "missing") {
-    return {
-      ok: false,
-      status: 409,
-      error: `no arrival minted — ${email} arrives in the administrator's setup conversation `
-        + `(this Vexa's company layer is not written yet)`,
-    };
-  }
   const history = await hasHistory(email);
   if (history.has || !history.probed) {
     return {
@@ -433,60 +344,81 @@ export async function mintFirstVisitScaffold(
         : `no arrival minted — could not ask whether ${email} has history (${history.why})`,
     };
   }
-  return mintArrivalScaffold("first-visit", email, userId, { flow: "sign-in", step: "first-visit" });
+  return mintArrivalScaffold(email, userId, { flow: "sign-in", step: "first-visit" });
 }
 
-/** Does this instance have an admin yet? An allowlist counts as "yes" (those emails ARE admins),
- *  and short-circuits before the probe — those addresses are admins whatever admin-api thinks.
- *  FAIL-SAFE towards true: if the probe can't answer, the login surface shows plain sign-in
- *  rather than dangling a claim screen that can't succeed. */
-export async function instanceHasAdmin(): Promise<boolean> {
-  if (allowlistConfigured()) return true;
-  return (await instanceState()).admin_exists;
-}
+// ── who may sign in (Vexa-ai/vexa#1783) ─────────────────────────────────────────────────────────
+//    Removing the company-layer gate removed the only thing that controlled who could sign in, and
+//    every door ends in find-or-create: whoever finished one got an account, an API token, agent
+//    turns on this instance's model credentials and bot launches. A self-hosted instance must not
+//    be open to anyone with an email address by default.
 
-/** admin-api's verdict on one address while the gate is up. */
-export interface SigninVerdict extends InstanceState {
-  allowed: boolean;
-  reason: string;
-}
+/** The verdict on one address. `why` is a reason for logs and tests, never shown to the person.
+ *  The reasons are signin.v1's (core/identity/contracts/signin.v1), generated into `signinWire.ts`
+ *  from the same schema admin-api's are, so this process knows every reason admin-api can give. */
+export type SigninAdmission =
+  | { admitted: true; why: AdmittedReason }
+  | { admitted: false; why: "not-allowed" | "unavailable"; detail?: string };
 
-/** May THIS address sign in right now?
- *
- *  admin-api answers false ONLY when the gate is up AND an admin already exists AND this is not
- *  that admin. On a virgin instance (no admin claimed yet) the answer is true, because the next
- *  sign-in is the one that claims admin — refusing it would make a fresh instance unclaimable,
- *  which is the exact deadlock the ruling is not asking for.
- *
- *  FAIL-SAFE towards ALLOWED, for the same reason `global_setup` fails towards "completed": the
- *  terminal holds the open half of this gate. A probe that cannot answer must not turn a network
- *  blip into "nobody can log in"; the flows engine and the operator verbs still refuse to act. Note
- *  the deliberate `!== false` below — a malformed body is a probe that could not answer, not a
- *  refusal.
- *
- *  CALL THIS BEFORE `findOrCreateUserToken()`, never after. That function CREATES the user as a
- *  side effect, so checking afterwards leaves a real account behind for somebody who was never
- *  admitted — a ghost row that then looks like a legitimate member of the instance. */
-export async function signinAllowed(email: string): Promise<SigninVerdict> {
-  const res = await internalRequest<{
-    allowed?: boolean; reason?: string; admin_exists?: boolean; global_setup?: string; company?: string | null;
-  }>("/internal/signin-allowed", { method: "POST", body: JSON.stringify({ email }) });
-
-  if (!res.ok || !res.data) {
-    console.warn(`[terminal-auth] setup-gate probe unavailable, sign-in ALLOWED (fail-safe): ${res.error}`);
-    return { allowed: true, reason: "probe-unavailable", admin_exists: true, global_setup: "completed", company: null };
+/** The claim code this request carries, if the visitor entered one on the claim screen. Read from
+ *  the request's cookies; outside a request (a test, a script) there is none. */
+async function claimCodeFromRequest(): Promise<string | undefined> {
+  try {
+    return (await cookies()).get(CLAIM_COOKIE)?.value || undefined;
+  } catch {
+    return undefined;
   }
-  return {
-    allowed: res.data.allowed !== false,
-    reason: typeof res.data.reason === "string" ? res.data.reason : "",
-    admin_exists: res.data.admin_exists === true,
-    global_setup: res.data.global_setup === "missing" ? "missing" : "completed",
-    company: typeof res.data.company === "string" && res.data.company.trim() ? res.data.company : null,
-  };
+}
+
+/** MAY THIS ADDRESS SIGN IN? Every door asks this BEFORE it creates or sends anything — the
+ *  emailed link's request and redeem halves, OAuth, the dev login — and the last three ask it
+ *  through `findOrCreateUserToken`, so a door added later cannot reach an account without it.
+ *
+ *  THE WHOLE DECISION IS ADMIN-API'S (`POST /internal/signin-admission`, rule in
+ *  `signin_allow.decide`): an admin (claimed, or named by `VEXA_ADMIN_EMAILS`), an existing user, an
+ *  address on the allow-list (`VEXA_SIGNIN_ALLOW` + the `signin.allow` setting the admin edits in
+ *  Settings), or — on an instance nobody has claimed and nothing has been configured for — the
+ *  sign-in that carries the one-time admin claim code, because it will claim the instance. This
+ *  process passes the code along when the visitor entered one, asks once, and obeys; it holds no
+ *  list of its own.
+ *
+ *  ⚠ FAILS CLOSED, the opposite direction from `instanceState()`. An unreachable or unconfigured
+ *  admin-api, a non-2xx (an older admin-api has no such route and answers 404), or a body that does
+ *  not literally say `admitted: true` with a reason we know — all refuse. Admission is positive
+ *  evidence or nothing. Sessions that already exist never pass through here, so an outage stops
+ *  new sign-ins and nothing else. */
+export async function signinAdmission(email: string): Promise<SigninAdmission> {
+  const normalized = (email || "").trim().toLowerCase();
+  const claimCode = await claimCodeFromRequest();
+  const res = await internalRequest<{ admitted?: unknown; why?: unknown }>("/internal/signin-admission", {
+    method: "POST",
+    body: JSON.stringify(claimCode ? { email: normalized, claim_code: claimCode } : { email: normalized }),
+  });
+  if (!res.ok || !res.data) {
+    return { admitted: false, why: "unavailable", detail: res.error || `admin-api returned ${res.status}` };
+  }
+  const why = res.data.why;
+  if (res.data.admitted !== true || !isAdmittedReason(why)) return { admitted: false, why: "not-allowed" };
+  return { admitted: true, why };
+}
+
+/** Why admin-api did or did not hand over the role (signin.v1 `ClaimReason`): `claimed`,
+ *  `admin-exists` (somebody holds it, or the deployment names the admins), `bad-code` (no claim code,
+ *  a wrong one, or a spent one), `not-allowed` (this address may not be the first admin). */
+export type ClaimWhy = ClaimReason;
+
+/** Is `code` the live admin claim code? `null` when admin-api could not answer. */
+export async function checkClaimCode(code: string): Promise<boolean | null> {
+  const res = await internalRequest<{ valid?: unknown }>("/internal/admin-claim/check", {
+    method: "POST",
+    body: JSON.stringify({ claim_code: code }),
+  });
+  if (!res.ok || !res.data) return null;
+  return res.data.valid === true;
 }
 
 export type ClaimResult =
-  | { ok: true; claimed: boolean }
+  | { ok: true; claimed: boolean; why: ClaimWhy }
   | { ok: false; status: number; error: string };
 
 /** Ask admin-api to make this user the instance's administrator.
@@ -508,21 +440,27 @@ export type ClaimResult =
  *
  *  Unlike `bootstrapAdminClaim` below, this REPORTS its outcome — a user who pressed a button that
  *  says "claim this instance" is owed the answer, where a background step on a sign-in was not. */
-export async function claimAdminRole(userId: string | number): Promise<ClaimResult> {
-  const res = await internalRequest<{ claimed?: boolean }>("/internal/bootstrap-admin", {
+export async function claimAdminRole(userId: string | number, claimCode?: string): Promise<ClaimResult> {
+  const res = await internalRequest<{ claimed?: boolean; why?: unknown }>("/internal/bootstrap-admin", {
     method: "POST",
-    body: JSON.stringify({ user_id: userId }),
+    body: JSON.stringify(claimCode ? { user_id: userId, claim_code: claimCode } : { user_id: userId }),
   });
   if (!res.ok) return { ok: false, status: res.status || 503, error: res.error || "admin-api refused the claim" };
-  return { ok: true, claimed: res.data?.claimed === true };
+  const claimed = res.data?.claimed === true;
+  const why = res.data?.why;
+  // A refusal whose reason is not signin.v1's is still a refusal; it reads as the role being taken.
+  return { ok: true, claimed, why: claimed ? "claimed" : isClaimReason(why) && why !== "claimed" ? why : "admin-exists" };
 }
 
-/** Claim the admin role for this user IF the instance has none — the "first sign-in = admin"
- *  step, called on every successful login (admin-api makes it a no-op once an admin exists).
- *  BEST-EFFORT: a failure must never block sign-in; the claim screen simply reappears. */
+/** Claim the admin role for this user IF admin-api says this sign-in may — called on every
+ *  successful login with the claim code the visitor entered, if any (admin-api answers no without
+ *  the code, once an admin exists, while the deployment names the admins, or for an address the
+ *  allow-list does not hold). BEST-EFFORT: a failure must never block sign-in; the claim screen
+ *  simply reappears. */
 async function bootstrapAdminClaim(userId: string | number): Promise<void> {
-  if (allowlistConfigured()) return; // allowlist-run instance → role claims stay off
-  const res = await claimAdminRole(userId);
+  const code = await claimCodeFromRequest();
+  if (!code) return; // no code, no claim — nothing to ask
+  const res = await claimAdminRole(userId, code);
   if (res.ok && res.claimed) {
     console.info(`[terminal-auth] bootstrap: user ${userId} claimed the admin role (first sign-in)`);
   } else if (!res.ok) {
@@ -740,11 +678,30 @@ async function pruneLoginTokens(userId: string | number): Promise<void> {
   }
 }
 
-/** Find the user by email, creating them if they don't exist, then mint an APIToken.
- *  Returns the user + token, or an error with an HTTP-ish status for the caller to surface. */
+/** A sign-in that `findOrCreateUserToken` turned away before anything was created. `refused` tells
+ *  the door which sentence to show (signinRefusal.ts); `status` is 403 for "not allowed" and 503 for
+ *  "could not decide". */
+export type SigninRefused = { ok: false; status: number; error: string; refused: "not-allowed" | "unavailable" };
+
+/** Admit, then find the user by email (creating them if they don't exist), then mint an APIToken.
+ *  Returns the user + token, or an error with an HTTP-ish status for the caller to surface.
+ *
+ *  ADMISSION COMES FIRST, and its place is load-bearing: `createUser` below makes an account as a
+ *  side effect, so a refusal placed after it would leave a real account behind for somebody who was
+ *  never admitted — and that account would then pass as an existing user next time. Every sign-in
+ *  door reaches an account through this function, so the check here is the one a new door cannot
+ *  forget. */
 export async function findOrCreateUserToken(
   email: string,
-): Promise<{ ok: true; user: AdminUser; token: string } | { ok: false; status: number; error: string }> {
+  opts: { subject?: string } = {},
+): Promise<{ ok: true; user: AdminUser; token: string } | SigninRefused | { ok: false; status: number; error: string; refused?: undefined }> {
+  const admission = await signinAdmission(email);
+  if (!admission.admitted) {
+    return admission.why === "unavailable"
+      ? { ok: false, status: 503, error: `sign-in admission unavailable: ${admission.detail ?? "admin-api did not answer"}`, refused: "unavailable" }
+      : { ok: false, status: 403, error: "this address is not allowed to sign in here", refused: "not-allowed" };
+  }
+
   const found = await findUserByEmail(email);
 
   let user: AdminUser | undefined;
@@ -762,6 +719,19 @@ export async function findOrCreateUserToken(
     return { ok: false, status: found.status || 503, error: found.error || "Failed to look up user" };
   }
 
+  // AN OAUTH SIGN-IN IS BOUND TO ITS PROVIDER SUBJECT (providerIdentity.ts), before anything is
+  // minted: the first sign-in through a provider records it on the account, and a later one with a
+  // different subject — another account the same tenant administrator gave this address — is refused.
+  if (opts.subject) {
+    const binding = await bindProviderSubject(user.id, opts.subject);
+    if (binding === "mismatch") {
+      return { ok: false, status: 403, error: "this account is bound to another identity of that provider", refused: "not-allowed" };
+    }
+    if (binding !== "bound") {
+      return { ok: false, status: 503, error: "the account's provider binding could not be checked", refused: "unavailable" };
+    }
+  }
+
   // Mint the login token with a stable `terminal-login` name so it is distinguishable from
   // user-created self-serve tokens and can be bounded (find-or-create used to mint unconditionally
   // with no name and no cap → one live token per sign-in, forever).
@@ -771,9 +741,9 @@ export async function findOrCreateUserToken(
   }
   // Bound the user's login tokens to the newest N (best-effort; never blocks sign-in).
   await pruneLoginTokens(user.id);
-  // First-run bootstrap: on a fresh instance the FIRST successful sign-in claims the admin role
-  // (no-op everywhere else — admin exists, or an allowlist runs the instance). Covers both the
-  // direct email login and the OAuth signIn callback, which both land here.
+  // First-run bootstrap: on a fresh instance the FIRST permitted sign-in claims the admin role
+  // (admin-api says no everywhere else). Covers both the direct email login and the OAuth signIn
+  // callback, which both land here.
   await bootstrapAdminClaim(user.id);
   // On genuine account creation ("account start"), eagerly provision the user's workspace tiers so the
   // Personal baseline + `_system` exist before their first chat. Best-effort (idempotent + lazy fallback).

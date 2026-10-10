@@ -445,7 +445,7 @@ COMPOSE_PROJECT=vexa-gate-1005 ONNXRUNTIME_NODE_INSTALL=skip node scripts/gates.
 ```
 
 The three validation scripts (`quota-ns.yaml`, `quota-validate.py`, `a3-live.py`) are reproduced in
-[`MARVIN-TEST-KIT-1005.md`](MARVIN-TEST-KIT-1005.md) so a non-author can re-run every live row.
+[`VALIDATOR-TEST-KIT-1005.md`](VALIDATOR-TEST-KIT-1005.md) so a non-author can re-run every live row.
 
 ---
 

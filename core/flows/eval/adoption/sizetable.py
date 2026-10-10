@@ -18,7 +18,7 @@ import sim as S
 RUN = os.environ.get("SIM_RUN_DIR", os.path.expanduser("~/sim-runs/r4"))
 SIZES = [int(x) for x in os.environ.get("SIM_SIZES", "2000,20000,200000").split(",")]
 LEVERS = ["off", "shared", "personal"]
-PROFILE_NAME = {2000: "SPI", 20000: "Sony Pictures Entertainment", 200000: "Sony Group"}
+PROFILE_NAME = {2000: "Brightwater Picture Studios", 20000: "Brightwater Group", 200000: "Brightwater Holdings"}
 
 
 def bottleneck(r: dict) -> str:
@@ -43,7 +43,7 @@ def main():
              for c in (cohorts.INSIDER, cohorts.PRODUCTION)}
     rows, results = [], {}
     for n in SIZES:
-        o = O.build("spi", n)
+        o = O.build("studio", n)
         P.assign(o)
         for cohort in (cohorts.INSIDER, cohorts.PRODUCTION):
             R = rates.get(cohort)

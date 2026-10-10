@@ -245,8 +245,8 @@ def test_the_queue_resolves_words_for_this_flow():
     words = flows_queue.say("onboarding", flows_queue.TYPE_PENDING)
     assert words, "behavior/queue/onboarding.pending.md resolved to nothing"
     lowered = words.lower()
-    for token in ("meet.new", "request_meeting_bot", "get_meeting_transcript",
-                  "since_index", "stop_bot"):
+    # v0.13.2 onboarding is private knowledge first and never requires a meeting.
+    for token in ("flows/personal.md", "skip or pause", "do not require a first meeting"):
         assert token in lowered, f"the onboarding words never name {token}"
 
 
@@ -279,7 +279,7 @@ def test_a_pending_onboarding_row_becomes_one_spoken_item(db, registry, clock):
     assert item["flow"] == "onboarding"
     assert item["step"] == "first_meeting"
     assert item["reason"]["type"] == flows_queue.TYPE_PENDING
-    assert "meet.new" in item["say"].lower()
+    assert "flows/personal.md" in item["say"].lower()
 
 
 # ── the schema this suite's double stands in for ─────────────────────────────────────────────────

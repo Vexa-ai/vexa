@@ -1,6 +1,6 @@
 /** deepLink — what `/w/<workspace>/<path>` DOES once the URL has been parsed (Vexa-ai/vexa#1643).
  *
- *  **The admin opened `https://app.dev.vexa.ai/w/oenb-b5e60c/README.md` — the README of a shared
+ *  **The admin opened `https://app.dev.vexa.ai/w/bank-b5e60c/README.md` — the README of a shared
  *  workspace he owns — and the terminal started a new chat and showed HIS DESK's README.** Three
  *  separate things had to be true for that, and this module is where the first two are decided:
  *

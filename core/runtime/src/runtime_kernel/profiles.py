@@ -18,15 +18,90 @@ from __future__ import annotations
 import os
 import shlex
 from dataclasses import dataclass, field, replace
-from typing import Optional
+from typing import Mapping, Optional
 
+from . import pod_scheduling
 from .models import Resources
+from .pod_scheduling import PodScheduling
+from .workload_env import CODEX_HOME_ENV, WORKER_CODEX_HOME, WORKER_FORWARD_ENV
+
+
+#: The label a workload's class rides on, on every substrate (container labels, Pod labels). The
+#: chart's NetworkPolicies select on it. Its values are profile data (``default_registry``) — never
+#: taken from the caller's spec or workload id.
+CLASS_LABEL = "vexa.role"
+
+
+@dataclass(frozen=True)
+class SourceMount:
+    """A development hot-mount: the host path in the runtime setting ``env`` is bound read-only at
+    ``target`` (container backends), which becomes the working directory and heads ``pythonpath``."""
+
+    env: str
+    target: str
+    pythonpath: str
+
+
+@dataclass(frozen=True)
+class CredentialFile:
+    """A credential file the runtime hands to a workload whose profile asks for credentials.
+
+    ``source`` is the file as the runtime's substrate sees it (a docker-host path the daemon binds;
+    a path the process backend reads). ``target`` is where a container workload finds it (absolute).
+    ``home_path`` is where a process-backend child finds it, relative to its private HOME; empty means
+    the file is for containers only."""
+
+    source: str
+    target: str
+    home_path: str = ""
 
 
 @dataclass(frozen=True)
 class Runnable:
+    """How to run one kind of workload, and what the runtime gives it beyond its spec.
+
+    Everything past ``image``/``command`` is profile data that every backend applies the same way, so
+    no backend knows what kind of workload it is starting: which labels it carries, which network it
+    joins, which of the runtime's own settings are forwarded into it, whether the runtime's
+    credential files are mounted into it, and (on Kubernetes) where its Pods are placed."""
+
     image: Optional[str] = None
     command: Optional[list[str]] = None
+    #: Labels the workload carries on its substrate.
+    labels: Mapping[str, str] = field(default_factory=dict)
+    #: The runtime setting naming the container network this workload joins. Unset, or empty in the
+    #: runtime's environment ⇒ ``DOCKER_NETWORK``.
+    network_env: Optional[str] = None
+    #: Settings forwarded from the runtime's own environment into the workload, unless the spec
+    #: already sets them.
+    forward_env: tuple[str, ...] = ()
+    #: The workload receives the runtime's configured credentials: ``credential_files`` and
+    #: ``credential_env`` below, and on k8s the ``RUNTIME_K8S_SECRET_MOUNTS`` Secrets. A profile
+    #: without it (a meeting bot) is given none.
+    credential_mounts: bool = False
+    #: A development hot-mount the docker backend applies when its runtime setting is set.
+    source_mount: Optional[SourceMount] = None
+    #: Where the k8s backend places this workload's Pods (node selector, tolerations, priority
+    #: class, image pull secrets) — operator configuration read at boot, never from a spec.
+    scheduling: PodScheduling = field(default_factory=PodScheduling)
+    #: The credential files the runtime hands this workload (see :class:`CredentialFile`).
+    credential_files: tuple[CredentialFile, ...] = ()
+    #: Settings a container workload that receives credentials is given, unless its spec sets them
+    #: (where its harness finds the files). A process-backend child has a private HOME instead.
+    credential_env: Mapping[str, str] = field(default_factory=dict)
+    #: The host groups a process-backend child joins besides its own (by name; one the host lacks is
+    #: skipped). Container backends ignore it.
+    process_groups: tuple[str, ...] = ()
+    #: A process-backend child may create user namespaces (a meeting bot: Chromium's sandbox is built
+    #: on one). Every other child of a root process backend loses that ability before it runs
+    #: (runtime_kernel.userns). Container backends leave it to the container's seccomp profile.
+    user_namespaces: bool = False
+    #: The Linux capabilities a container workload keeps; every other one is dropped, and it can gain
+    #: none (docker ``no-new-privileges``, k8s ``allowPrivilegeEscalation: false``, seccomp
+    #: ``RuntimeDefault``). A process-backend child keeps none: it is not root.
+    capabilities: tuple[str, ...] = ()
+    #: The image runs as a non-root user, so k8s may require it (``runAsNonRoot``).
+    run_as_non_root: bool = False
 
 
 @dataclass(frozen=True)
@@ -69,6 +144,13 @@ class ProfileRegistry:
 
     def names(self) -> list[str]:
         return list(self._profiles)
+
+
+def network_envs(registry: "ProfileRegistry") -> tuple[str, ...]:
+    """The runtime settings naming the networks this registry's workloads join (besides
+    ``DOCKER_NETWORK``) — what the docker backend scopes discovery by."""
+    keys = (registry.get(n).runnable.network_env for n in registry.names())
+    return tuple(dict.fromkeys(k for k in keys if k))
 
 
 def worker_image_for(agent_image: str) -> str:
@@ -124,6 +206,65 @@ def _profile_resources(profile: str) -> Optional[Resources]:
     return Resources(cpu=cpu, memoryMb=memory_mb)
 
 
+# Per-profile Pod placement on Kubernetes, read from the runtime's OWN env at boot (the chart renders
+# it from runtime.workloadScheduling.<class>) and validated there: <prefix>NODE_SELECTOR,
+# <prefix>TOLERATIONS, <prefix>PRIORITY_CLASS_NAME, <prefix>IMAGE_PULL_SECRETS. The prefix sits under
+# RUNTIME_K8S_, which a spec's env can never set (workload_env.RUNTIME_OWNED_PREFIXES).
+_SCHEDULING_ENV_PREFIX = {
+    "meeting-bot": "RUNTIME_K8S_BOT_",
+    "agent": "RUNTIME_K8S_AGENT_WORKER_",
+}
+
+
+def _profile_scheduling(profile: str) -> PodScheduling:
+    return pod_scheduling.from_env(_SCHEDULING_ENV_PREFIX[profile], os.environ)
+#: The claude CLI's credential file, relative to its config directory (``~/.claude``).
+CLAUDE_CREDENTIALS_FILENAME = ".credentials.json"
+
+
+def host_claude_credentials(env: Optional[Mapping[str, str]] = None) -> Optional[str]:
+    """The path of the claude subscription credential the operator configured, as the runtime's
+    substrate sees it (a docker-host path for docker, an in-container path for the process backend).
+
+    ``HOST_CLAUDE_CREDENTIALS`` (the file) wins when set; otherwise it is derived from
+    ``HOST_CLAUDE_DIR`` (the host's ``~/.claude``), which is the mount shape that survives a token
+    refresh — the CLI replaces ``.credentials.json`` by ``rename(2)``, i.e. with a NEW INODE, and a
+    single-FILE bind is pinned to the inode it was created with. ``None`` = no subscription file
+    configured (an API-style key may still be brokered as env)."""
+    env = os.environ if env is None else env
+    explicit = (env.get("HOST_CLAUDE_CREDENTIALS") or "").strip()
+    if explicit:
+        return explicit
+    host_dir = (env.get("HOST_CLAUDE_DIR") or "").strip()
+    return f"{host_dir.rstrip('/')}/{CLAUDE_CREDENTIALS_FILENAME}" if host_dir else None
+
+
+def configured_credentials(env: Optional[Mapping[str, str]] = None) -> tuple[CredentialFile, ...]:
+    """The model-subscription files the operator configured for the runtime to hand to workers —
+    the one place that knows which harness reads which file: the claude CLI's credential
+    (``HOST_CLAUDE_CREDENTIALS`` / ``HOST_CLAUDE_DIR``) and the Codex ``auth.json``
+    (``HOST_CODEX_CREDENTIALS``, inside ``WORKER_CODEX_HOME`` in a container, ``~/.codex`` for a
+    process-backend child)."""
+    env = os.environ if env is None else env
+    files: list[CredentialFile] = []
+    claude = host_claude_credentials(env)
+    if claude:
+        files.append(CredentialFile(source=claude, target=f"/root/.claude/{CLAUDE_CREDENTIALS_FILENAME}",
+                                    home_path=f".claude/{CLAUDE_CREDENTIALS_FILENAME}"))
+    codex = (env.get("HOST_CODEX_CREDENTIALS") or "").strip()
+    if codex:
+        files.append(CredentialFile(source=codex, target=f"{WORKER_CODEX_HOME}/auth.json",
+                                    home_path=".codex/auth.json"))
+    return tuple(files)
+
+
+#: What an agent worker image running as root keeps: it hands the model's tools a user of their own
+#: (SETUID, SETGID), grants that user the turn's workspaces by group and setgid directories (CHOWN,
+#: FOWNER, FSETID), reads and commits what the tools wrote (DAC_OVERRIDE), and stops the tools'
+#: process (KILL). A meeting bot needs none.
+WORKER_CAPABILITIES = ("CHOWN", "DAC_OVERRIDE", "FOWNER", "FSETID", "KILL", "SETGID", "SETUID")
+
+
 def default_registry() -> ProfileRegistry:
     """The real, deployment-shaped registry. Images come from env (no `:latest` fallback — a missing
     image surfaces as an empty string the backend rejects, matching 0.11's fail-visible stance)."""
@@ -162,6 +303,16 @@ def default_registry() -> ProfileRegistry:
                 runnable=Runnable(
                     image=browser_image,
                     command=None,
+                    # A meeting bot joins DOCKER_NETWORK (meeting-api for its callbacks and uploads,
+                    # redis for its streams) and is given no model credential.
+                    labels={CLASS_LABEL: "bot"},
+                    # As a process-backend child it joins no host group: it brings up its own
+                    # display and audio server (deploy/lite/bin/vexa-bot-launch). It may create user
+                    # namespaces, which its browser's sandbox needs; no other child may.
+                    scheduling=_profile_scheduling("meeting-bot"),
+                    user_namespaces=True,
+                    # The bot image runs as a non-root uid (Chromium will not sandbox a root browser).
+                    run_as_non_root=True,
                 ),
                 idle_timeout_sec=0,  # 0 ⇒ managed externally; enforcement skips it
                 base_env=bot_tuning_env,
@@ -176,6 +327,20 @@ def default_registry() -> ProfileRegistry:
                 runnable=Runnable(
                     image=agent_worker_image,
                     command=["python", "-m", "worker"],
+                    # An agent worker joins its own network (gateway, redis, flows-api — no internal
+                    # service), and the runtime brokers model credentials and dials into it.
+                    labels={CLASS_LABEL: "worker"},
+                    network_env="DOCKER_WORKER_NETWORK",
+                    forward_env=WORKER_FORWARD_ENV,
+                    credential_mounts=True,
+                    credential_files=configured_credentials(),
+                    # The Codex home is the runtime's to name: a credential is mounted at
+                    # <it>/auth.json, and the worker and the Codex CLI read CODEX_HOME.
+                    credential_env={CODEX_HOME_ENV: WORKER_CODEX_HOME},
+                    capabilities=WORKER_CAPABILITIES,
+                    source_mount=SourceMount(env="VEXA_AGENT_SRC_MOUNT", target="/app/src/agent_api",
+                                             pythonpath="/app/src/agent_api:/app"),
+                    scheduling=_profile_scheduling("agent"),
                 ),
                 idle_timeout_sec=300,
                 max_lifetime_sec=3600,

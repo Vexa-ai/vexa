@@ -16,10 +16,15 @@ dependencies = [
     # Transport to the gateway (BSD-3).
     "httpx>=0.27,<1",
     "pydantic>=2,<3",
-    # Test harness (in-process, no network — the tests inject an httpx.MockTransport gateway).
-    "pytest>=8",
-    "pytest-asyncio>=0.23,<2",
 ]
+
+[dependency-groups]
+# Test tooling only: `uv sync --no-dev` (the Dockerfile) keeps it out of the production image.
+# In-process, no network — the tests inject an httpx.MockTransport gateway.
+dev = ["pytest>=8", "pytest-asyncio>=0.23,<2"]
+# What only the image runs: the ASGI server and the production database/storage clients. Installed
+# from the lock with `uv sync --group production` by the Dockerfile and Lite, never `uv pip install`d beside it.
+production = ["uvicorn[standard]>=0.34,<1"]
 
 [tool.uv]
 package = false

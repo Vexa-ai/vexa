@@ -3,7 +3,7 @@
 Enter any state a person can be in, on the RUNNING stack, without a rebuild:
 
     from rehearse import load, LiveDoors, rehearse
-    rehearse("organizer-invited", "olga@rehearse.test", doors=LiveDoors())
+    rehearse("organizer-invited", "nora@rehearse.test", doors=LiveDoors())
 
 Four files and one rule. `states.yaml` is the catalogue — the recipes, as data. `catalogue.py`
 validates them against a closed vocabulary. `doors.py` is the only thing that talks to the stack,

@@ -42,24 +42,24 @@ H = {"X-User-Id": "u_jane"}
 
 def test_creates_the_page_and_the_index_and_reports_both(client, tmp_path):
     r = client.post("/api/workspace/entity", headers=H, json={
-        "kind": "person", "name": "Olga Avramenko",
+        "kind": "person", "name": "Nora Quill",
         "facts": ["Chairs the DNA TSC agenda."], "source": "the 2026-03-02 call"})
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["created"] is True
-    assert body["path"] == "kg/entities/person/olga-avramenko.md"
+    assert body["path"] == "kg/entities/person/nora-quill.md"
     assert body["index"] == "kg/INDEX.md"
     page = (tmp_path / "u_jane" / body["path"]).read_text()
-    assert "title: Olga Avramenko" in page
+    assert "title: Nora Quill" in page
     assert "source: the 2026-03-02 call" in page
-    assert "Olga Avramenko" in (tmp_path / "u_jane" / "kg" / "INDEX.md").read_text()
+    assert "Nora Quill" in (tmp_path / "u_jane" / "kg" / "INDEX.md").read_text()
 
 
 def test_a_second_call_appends_rather_than_replacing(client, tmp_path):
     for fact in ("Chairs the DNA TSC agenda.", "Asked for a standard CLA."):
         client.post("/api/workspace/entity", headers=H, json={
-            "kind": "person", "name": "Olga Avramenko", "facts": [fact], "source": "a call"})
-    page = (tmp_path / "u_jane" / "kg/entities/person/olga-avramenko.md").read_text()
+            "kind": "person", "name": "Nora Quill", "facts": [fact], "source": "a call"})
+    page = (tmp_path / "u_jane" / "kg/entities/person/nora-quill.md").read_text()
     assert "Chairs the DNA TSC agenda." in page and "Asked for a standard CLA." in page
 
 
@@ -96,6 +96,6 @@ def test_repeating_a_fact_is_a_no_op_the_caller_can_see(client):
 
 def test_unresolved_wikilinks_come_back_as_the_next_calls(client):
     body = client.post("/api/workspace/entity", headers=H, json={
-        "kind": "person", "name": "Olga", "facts": ["Works with [[Cottalango Leon]]."],
+        "kind": "person", "name": "Nora", "facts": ["Works with [[Robin Vale]]."],
         "source": "the call"}).json()
-    assert body["links_missing"] == ["Cottalango Leon"]
+    assert body["links_missing"] == ["Robin Vale"]

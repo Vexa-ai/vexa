@@ -107,6 +107,10 @@ export const DOOR_TOKENS = [
   [/(^|_)ADMIN_API(_|$)|(^|_)IDENTITY_API(_|$)/, "identity"],
   [/(^|_)MEETING_API(_|$)|(^|_)MEETINGS_API(_|$)|(^|_)TRANSCRIPTION_SERVICE(_|$)/, "meetings"],
   [/(^|_)AGENT_API(_|$)|(^|_)AGENTS_API(_|$)/, "agent"],
+  // The Connections credential broker (core/agent/services/credential-broker, ADR-0040) is an
+  // agent-domain service. Its two door keys carry no service token of their own, so until this row
+  // the gate did not count them at all (0.13.2 architecture pass, S1).
+  [/(^|_)CONNECTIONS_BROKER(_|$)|(^|_)GIT_STORE_BROKER(_|$)|(^|_)CREDENTIAL_BROKER(_|$)/, "agent"],
   [/(^|_)FLOWS_API(_|$)/, "flows"],
   [/(^|_)RUNTIME_API(_|$)/, "runtime"],
   [/(^|_)MCP(_|$)/, "mcp"],
@@ -131,6 +135,7 @@ export const LITERAL_SERVICES = {
   "transcription-collector": "meetings",
   "agent-api": "agent",
   "agent-worker": "agent",
+  "credential-broker": "agent",
   "flows-api": "flows",
   "runtime": "runtime",
   gateway: "gateway",

@@ -10,7 +10,9 @@
  *  need"). A chat still carries the workspaces it is over — that is data on the chat, and the header
  *  shows the mount set — but creating, inviting to, resetting and deleting a folder is a job for the
  *  MCP verbs and the conversation, not for a column of × buttons beside the reading list. */
+import { useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
+import { useChatActive } from "../surfaces/chatActivity";
 import type { Row } from "./chats";
 import { AccountBadge } from "./AccountBadge";
 import { CollapseButton } from "./Collapse";
@@ -49,23 +51,48 @@ const targetTag: CSSProperties = {
   maxWidth: 96, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
 };
 
+function ActivityDot({ r, selected }: { r: Row; selected: boolean }) {
+  const active = useChatActive(r.chatId);
+  if (active) return <span data-row-activity="active" role="img" aria-label="Agent is working" title="Agent is working" style={{ ...liveDot, background: "var(--blue)" }} />;
+  return r.live ? <span style={liveDot} aria-hidden /> : <span style={{ ...row.dot(selected), alignSelf: "center", background: r.meetingId ? "var(--line2)" : "transparent", border: r.meetingId ? "none" : "1px solid var(--line2)" }} aria-hidden />;
+}
+
 export function Rail(p: {
   rows: Row[]; hidden: number;
   all: boolean; onAll: (v: boolean) => void;
   selKey: string | null; onSelect: (r: Row) => void;
   onNewChat: () => void; onDeleteChat: (chatId: string) => void;
   onCollapse?: () => void;
+  onMove?: (from: string, to: string) => void;
 }) {
+  const [deleting, setDeleting] = useState<Row | null>(null);
+  const confirmRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!deleting) return;
+    const outside = (e: PointerEvent) => {
+      if (e.target instanceof Node && !confirmRef.current?.contains(e.target)) setDeleting(null);
+    };
+    const escape = (e: KeyboardEvent) => { if (e.key === "Escape") setDeleting(null); };
+    document.addEventListener("pointerdown", outside, true);
+    document.addEventListener("keydown", escape);
+    return () => {
+      document.removeEventListener("pointerdown", outside, true);
+      document.removeEventListener("keydown", escape);
+    };
+  }, [deleting]);
+  const [dragging, setDragging] = useState<string | null>(null);
   const chatRow = (r: Row) => {
     const on = r.key === p.selKey;
+    const armed = deleting?.key === r.key;
     return (
-      <div key={r.key} style={{ position: "relative", display: "flex" }}
+      <div key={r.key} draggable={!!p.onMove} onDragStart={e => { setDeleting(null); setDragging(r.key); e.dataTransfer.setData("text/plain", r.key); e.dataTransfer.effectAllowed="move"; }}
+        onDragEnd={()=>setDragging(null)} onDragOver={e=>{if(dragging){e.preventDefault();e.dataTransfer.dropEffect="move";}}}
+        onDrop={e=>{e.preventDefault();if(dragging)p.onMove?.(dragging,r.key);setDragging(null);}}
+        style={{ position: "relative", display: "flex" }}
         onMouseEnter={(e) => { const x = e.currentTarget.querySelector("[data-del]") as HTMLElement | null; if (x) x.style.opacity = "1"; }}
-        onMouseLeave={(e) => { const x = e.currentTarget.querySelector("[data-del]") as HTMLElement | null; if (x) x.style.opacity = "0"; }}>
-        <button data-chat-row style={{ ...chatRowS(on), paddingRight: r.chatId ? 22 : 9 }} onClick={() => p.onSelect(r)}>
-          {r.live
-            ? <span style={liveDot} aria-hidden />
-            : <span style={{ ...row.dot(on), alignSelf: "center", background: r.meetingId ? "var(--line2)" : "transparent", border: r.meetingId ? "none" : "1px solid var(--line2)" }} aria-hidden />}
+        onMouseLeave={(e) => { const x = e.currentTarget.querySelector("[data-del]") as HTMLElement | null; if (x && !armed) x.style.opacity = "0"; }}>
+        <button data-chat-row style={{ ...chatRowS(on), paddingRight: r.chatId ? 22 : 9 }} onClick={() => { setDeleting(null); p.onSelect(r); }}>
+          <ActivityDot r={r} selected={on} />
           <span style={{ flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", ...(on ? ty.bodyStrong : ty.body) }}>{r.label}</span>
           {/* WHERE THIS CHAT WRITES, WHEN IT IS NOT THE DESK (Vexa-ai/vexa#1611). By NAME, from the
               registry (#1585/#1602), never the slug. Rendered only for a chat working somewhere
@@ -78,8 +105,17 @@ export function Rail(p: {
           <span style={{ ...ty.meta, flex: "none", fontVariantNumeric: "tabular-nums", color: r.live ? "var(--accent)" : "var(--t3)" }}>{r.whenLabel}</span>
         </button>
         {r.chatId && (
-          <button data-del aria-label={`Delete ${r.label}`} title="Delete chat" onClick={(e) => { e.stopPropagation(); p.onDeleteChat(r.chatId as string); }}
-            style={{ position: "absolute", right: 3, top: "50%", transform: "translateY(-50%)", opacity: 0, transition: "opacity .12s", background: "transparent", border: "none", color: "var(--t3)", cursor: "pointer", fontSize: 13, lineHeight: 1, padding: "2px 4px", fontFamily: "var(--sans)" }}>×</button>
+          <button data-del ref={armed ? confirmRef : null}
+            aria-label={`${armed ? "Confirm delete" : "Delete"} ${r.label}`}
+            title={armed ? "Click again to delete chat" : "Delete chat"}
+            onFocus={e => { e.currentTarget.style.opacity = "1"; }}
+            onBlur={() => setDeleting(null)}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (armed) { setDeleting(null); p.onDeleteChat(r.chatId as string); }
+              else setDeleting(r);
+            }}
+            style={{ position: "absolute", right: 3, top: "50%", transform: "translateY(-50%)", opacity: armed ? 1 : 0, transition: "opacity .12s", background: "transparent", border: "none", color: armed ? "var(--red, #e57373)" : "var(--t3)", cursor: "pointer", fontSize: 13, lineHeight: 1, padding: "2px 4px", fontFamily: "var(--sans)" }}>{armed ? "✓" : "×"}</button>
         )}
       </div>
     );

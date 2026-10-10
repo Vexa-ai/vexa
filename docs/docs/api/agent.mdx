@@ -29,8 +29,11 @@ itself is internal.
 canonical prefix **`/agent/*`**. The gateway resolves your
 `X-API-Key` → user and injects `X-User-Id`; agent-api derives the workspace/chat/quota **`subject`** from
 that header (P20). A `subject` in a request body or query string is **ignored** — never trust the client
-for identity. The `$AGENT_API/api/...` paths below address the internal service directly (which requires
-`X-User-Id`); through the gateway the same routes are `$API_BASE/agent/...` with `X-API-Key`.
+for identity. The gateway signs the identity it stamps (`X-Vexa-Identity`, gateway-identity.v1) and agent-api
+refuses an `X-User-Id` that is not signed, so call these routes **through the gateway** —
+`$API_BASE/agent/...` with `X-API-Key`. The `$AGENT_API/api/...` paths below name the internal routes;
+reaching them directly takes the internal tier (`X-Internal-Secret` beside `X-User-Id`), which only
+Vexa's own services hold.
 
 The proxy maps `/agent/<path>` onto agent-api's `/api/<path>`, so **only the `/api/*` routes have a
 gateway path.** `POST /invocations`, `POST /events`, `GET /health` and `POST /internal/scaffolds` are
@@ -83,6 +86,12 @@ There is **no** top-level `subject`, `workspace_repo`, or `plan` field.
 ## Chat (streamed)
 
 `POST /api/chat` — body `{ prompt, session?, active? }` (`subject` is server-derived, not sent).
+`session` is 1–128 characters from `A-Z a-z 0-9 . _ -`, starting with a letter or digit (empty or
+absent means `main`); any other value is a `422`, here and at every other door that takes a session:
+`/api/chat/submit`, `/api/chat/reset`, `GET /api/chat/pending?session=`, `GET /api/sessions/{session}/history`,
+`/api/chat/name`, `/api/chat/name/agent` and `/api/chat/target`. Each entry of `PUT /api/chat/order` is a
+rail row key, `c:<session>` or `m:<meeting id>` (or a bare session), the part after the prefix held to the
+same rule.
 Returns **Server-Sent Events**; each `data:` line is one frame:
 
 | frame | fields |
@@ -92,24 +101,47 @@ Returns **Server-Sent Events**; each `data:` line is one frame:
 | `tool-result` | `callId`, `ok`, `summary` |
 | `commit` | `sha` |
 | `rejected` | `violations` |
-| `done` | `reply`, `sessionId`, `ok` (+ `detail` when a failure's raw provider text was rewritten) |
-| `error` | `message` — the turn was refused before dispatch (e.g. no model credential configured); actionable, names what to set |
+| `done` | `reply`, `sessionId`, `ok` (+ `detail` when a failure's raw provider text was rewritten, + `fault` when the turn failed typed) |
+| `error` | `message` — the turn was refused before dispatch (e.g. no model credential configured); actionable, names what to set (+ `fault` when a dependency refused it) |
 
 ```bash POST /api/chat  (SSE)
-curl -N -X POST "$AGENT_API/api/chat" -H "Content-Type: application/json" \
-  -H "X-User-Id: u_jane" \
+curl -N -X POST "$API_BASE/agent/chat" -H "Content-Type: application/json" \
+  -H "X-API-Key: $VEXA_API_KEY" \
   -d '{"prompt":"Record that Acme renewed."}'
 ```
 
+**Typed faults.** A failure says who failed and how, as
+`fault: { source, kind, status, detail, remedy }` on a failed `done`, on an `error` frame, and on the
+body of a refused dispatch: `{ detail, fault }` with `503` when the agent runtime is down or full
+(`unreachable`, `unavailable`, `quota_exceeded`) and `502` for its other kinds — never `500`. A
+`runtime` fault adds `op` (`spawn` · `status` · `list`); a `model-provider` fault adds `provider` and
+`model`. `detail` is one safe sentence and `remedy` what to do about it. The shape and the kinds are
+`Fault` in the contract [`unit.v1`](https://github.com/Vexa-ai/vexa/tree/main/core/agent/contracts/unit.v1):
+
+| `source` | `kind` |
+|---|---|
+| `runtime` | `spawn_refused`, `quota_exceeded`, `unauthorized`, `refused`, `not_found`, `unreachable`, `unavailable`, `bad_response` |
+| `model-provider` | `unpaid`, `unauthorized`, `rate_limited`, `unavailable`, `refused` |
+| `vexa-tools` | `access_expired` |
+| `agent-worker` | `tools_unconfined`, `credential_conflict` |
+| `agent-api` | `internal`, `unavailable` |
+| `gateway` | `unreachable` |
+
 `POST /api/chat/reset` `{ session? }` → `{ "ok": true }` · `GET /api/sessions` →
-`{ "sessions": [...] }` · `GET /api/sessions/{session}/history` → `{ "turns": [...] }` (tolerant — a
-missing transcript returns `{ "turns": [] }`).
+`{ "sessions": [...] }` · `GET /api/sessions/{session}/history` → `{ "turns": [...] }`: a session the
+caller has no thread for is a `404`; a thread whose transcript is missing or empty returns
+`{ "turns": [] }`.
+
+`GET /api/chat/pending?session=` → `{ pending: [{ entry, id, kind, target, display, at, blocked? }], cursor, fault? }`:
+what the chat submitted that its agent has not taken yet. When a typed fault is stopping the queue,
+each row carries it as `blocked` and the top level once more as `fault`; it clears the moment the agent
+takes anything.
 
 ## Routines
 
 ```bash POST /api/routines  → 201
-curl -X POST "$AGENT_API/api/routines" -H "Content-Type: application/json" \
-  -H "X-User-Id: u_jane" -d '{
+curl -X POST "$API_BASE/agent/routines" -H "Content-Type: application/json" \
+  -H "X-API-Key: $VEXA_API_KEY" -d '{
   "name":"Morning brief","cron":"0 8 * * 1-5",
   "prompt":"Brief me from overnight activity.","run_now":true
 }'   # → {"routine":{...},"job_id":"job_...","ran_now":true}
@@ -139,6 +171,12 @@ curl -X POST "$AGENT_API/events" -H "Content-Type: application/json" -d '{
   to resume gaplessly. Event types: `transcript`, `retract`, `ping`, `meeting-end`.
 - `GET /api/meeting/relay-health` → typed transcript-relay health (a stale bot key surfaces as
   `native_resolve:{ok:false,kind:"unauthorized"}` rather than silent dead air).
+- `POST /api/meeting/terms/scan` `{ meeting_id, since?, keep? }` → the terms the meeting has named
+  since `since`, each with `known` (the page this reader can open, desk first) or `null`, plus
+  `cursor` and `emit`. Without `keep` it publishes nothing; `keep` (comma separated, `*` for all) adds
+  those terms to the meeting's highlight map, which `GET /api/meeting/terms?meeting_id=` returns.
+  The transcript is read from meeting-api as the caller: `403` for a meeting they cannot read,
+  `502` when the read fails.
 
 **Removed in 0.12** — `POST /api/meeting/start` and `POST /api/meeting/process` return `404`. They
 launched and switched on an in-product "copilot" that turned the live transcript into cleaned notes
@@ -152,6 +190,10 @@ ask about a meeting with `POST /api/chat`, passing
 `GET /api/workspace/file?path=` → `{ "path": "...", "content": "..." }` (`404` if absent) ·
 `PUT /api/workspace/file` `{ path, content, slug? }` → `{ "path": "...", "written": true }` (commits;
 `kg/templates/` is refused `403`, and `_global` needs the admin allowlist) ·
+`POST /api/workspace/remove` `{ path, slug? }` → `{ path, deleted, workspace, commit }` (one page, as a
+commit) · `POST /api/workspace/move` `{ path, to, slug?, to_slug? }` → `{ from, to, moved, pointer,
+commit, source_commit }` (an omitted `to_slug` is the same workspace) ·
+`POST /api/workspace/asset` `{ url, path?, slug? }` → the stored picture's `path` (the server fetches it) ·
 `GET /api/workspace/git` → `{ branch, changes, commits }` ·
 `GET /api/workspace/git/show?sha=&path=&slug=` → the unified diff of one commit ·
 `POST /api/workspace/upload` (multipart `files`, ≤25 MB each) → `{ "files": [{ name, path }] }` ·
@@ -161,6 +203,10 @@ ask about a meeting with `POST /api/chat`, passing
 workspace (parks the current one; omit `repo` to swap back to the seed).
 
 (All workspace routes derive `subject` from `X-User-Id` — no `subject` query parameter.)
+
+On the page writes — file, remove, move, asset and entity — an omitted `slug` is where the conversation
+is working: an agent worker's identity carries its chat's target workspace, and a caller with none
+writes on its own desk. `slug: "personal"` (or `"desk"`) names the desk explicitly.
 
 ## Workspace identity and links
 
@@ -193,7 +239,7 @@ read answers `recorded: false` rather than confirming it exists. `400` without b
 `POST /api/workspace/entity` — the one write that makes a knowledge-graph page. Body
 `{ kind, name, facts?, source?, summary?, fields?, section?, connections?, open_questions?, dates?, slug? }`;
 `kind` is `person` · `company` · `meeting` · `project` · `decision`, and `slug` names the **workspace**
-to write into (default: the caller's own). It renders `kg/entities/<kind>/<slug>.md` as a card, writes
+to write into (default: as for the other page writes above). It renders `kg/entities/<kind>/<slug>.md` as a card, writes
 the reciprocal `## Connected` chips on the other page, refreshes `kg/INDEX.md`, and commits both by
 pathspec.
 
@@ -201,6 +247,16 @@ Returns the upsert result — `path`, `created`, `changed`, `facts_written`, `li
 `links_missing`, `links_rewritten`, `back_links`, `filed`, `kind`, `name` — plus `index` (the index
 path) and `commit` (the sha, `null` when nothing changed). `403` for `_global`; `422` when the write is
 refused, and the refusal sentence is the product — fix the fact rather than retrying.
+
+## Claims
+
+What an agent believes about a person's company is **proposed**, and is company context only once the
+person has answered. `POST /api/claims` `{ claims: [{ claim, source?, scope? } | "…"] }` →
+`{ ids, state: "proposed", show_them_exactly_this, then }`, and publishes `claim.proposed` once per new
+claim (`400` on an empty list). `POST /api/claims/verdicts` `{ verdicts: [{ id, verdict, note? }] }` →
+`{ recorded: [{ id, state, usable_as_context }], errors?, workspace_ready? }` — `verdict` is
+`confirmed` · `corrected` · `rejected`; an unknown id or verdict is reported in `errors` and the rest
+still lands. The first claim the person stands behind writes the desk's `.scaffolded` marker.
 
 ## Rough edges
 
@@ -247,13 +303,16 @@ and the token carries no workspace id — it is resolved by hash ·
 `GET /api/workspace/members?workspace_id=` → `{ members: [...] }` ·
 `POST /api/workspace/members/{member_subject}/role?workspace_id=` `{ role }` → the member record
 (owner) · `DELETE /api/workspace/members/{member_subject}?workspace_id=` → `{ ok, subject }` (owner) ·
+`POST /api/workspace/invite` `{ slug, email, role? }` → the invite, mailed to an address this deployment
+does not know or handed back as a link (owner) · `POST /api/workspace/membership`
+`{ slug, email, role }` → the member's new role, or `remove` (owner; the last owner is refused `409`) ·
 `POST /api/workspace/{workspace_id}/leave` → `{ ok, left }` — any role, but the last owner is refused
 `409` and must hand off or unshare · `GET /api/workspace/shared` →
 `{ memberships: [...], index_degraded }`, the **union** of both stores, with `index_degraded: true`
 when the derived index could not be read.
 
 `POST /api/workspace/shared/{workspace_id}/attach` `{ repo?, ref?, slug?, token? }` →
-`{ workspace_id, active, repo, ref, attached, cloned, parked, nested, state }` — contributor or owner
+`{ workspace_id, active, repo, ref, attached, cloned, parked, state }` — contributor or owner
 only; the current tree is parked, and `policy/` is carried into the new one so an attach cannot lock
 the group out · `GET /api/workspace/shared/{workspace_id}/attached` → the attachment view plus `home`
 (`remote`, `url`, `branch`, `ahead`, `behind`) and `credential`, which says what kind of credential
@@ -265,7 +324,7 @@ exists and never its value · `POST /api/workspace/shared/{workspace_id}/active`
 `GET /api/workspace/active` →
 `{ subject, active: [{ slug, repo, ref, role, path, write, primary, name }], index_degraded }` — the
 ordered set the next dispatch mounts ·
-`POST /api/workspace/activate` `{ repo?, ref?, slug?, token? }` → `{ subject, slug, changed, cloned, nested }`,
+`POST /api/workspace/activate` `{ repo?, ref?, slug?, token? }` → `{ subject, slug, changed, cloned }`,
 additive: nothing else is parked ·
 `POST /api/workspace/new` `{ name? }` → `201 { subject, slug, changed, added }` (blank, seeded) ·
 `POST /api/workspace/deactivate` `{ slug }` → `{ subject, slug, changed }` — parks it, never destroys ·
@@ -304,15 +363,15 @@ failure, `400` with no token passed and none saved.
 
 ## The company layer
 
-`GET /api/global/state` →
-`{ global_setup, company, present, missing_files, reasons, is_repo, commits, ready_to_accept, you_are_admin, gate_sentence }`.
-Readable by any authenticated subject: someone refused at the door is told the instance is mid-setup
-rather than that they are broken. `company` is `null` until the gate is down.
+Optional. `_global` starts empty of company data and may stay that way: no request, sign-in, flow or
+operator verb waits for it (founder ruling 2026-10-08). Unless `VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH`
+names a separate host repo, agent-api keeps `_global` in its own store and creates it empty at boot.
 
 `POST /api/global/ready` `{ author_email?, author_name? }` →
-`{ accepted, global_setup, company, service, commit, files }`. Admin only (`403`) and idempotent; it
-reads the files and commits them itself — nothing may mark itself ready. A layer that is not ready
-answers `409 { accepted: false, missing_files, reasons, next }`.
+`{ accepted, company, service, commit, files }` — accept a company layer an admin chose to write.
+Admin only (`403`) and idempotent; it reads the files and commits them itself, authored by the
+admin (the caller's own address unless the body names another) — nothing may mark itself accepted. A layer that is not complete answers
+`409 { accepted: false, missing_files, reasons, next }`. It gates nothing.
 
 ## Scaffolds
 
@@ -343,10 +402,60 @@ scratch keys. Both are **internal tier**: the caller sends `X-Internal-Secret` m
 `VEXA_INTERNAL_API_SECRET`, and an unconfigured secret means nobody gets in (`403`), whichever ingress
 they arrive on.
 
-`GET /api/models/test` → `{ ok, summary, mode, config }`. Tests the caller's **effective** credentials
-now: `custom` makes a real one-token completion against the endpoint, `subscription` checks the mounted
-credentials for expiry. `config` echoes only `mode`, `model` and `base_url`.
+`GET /api/models/test` → `{ ok, summary, mode, route, config }`. Tests the route the caller's turns
+take now. `route: subject` is the caller's own custom endpoint, when it passes the deployment's
+allow-list: it is probed with the caller's own key, model and extra body. `route: deployment` is every
+other case, probed with the deployment's credential only. `mode` says how: `custom` makes a real
+one-token completion against the endpoint, `subscription` checks the mounted credentials for expiry. A
+stored key that is not in effect is never sent, and the summary says that nothing of the caller's was
+tested. `config` echoes only `mode`, `model` and `base_url`.
 
 `GET /api/transcription/test` → `{ ok, summary, source }` (plus per-failure detail). Probes the
 effective STT backend with its token and then a real transcribe, so a zero-balance account fails here
 rather than on every segment; `source` says whether settings or the deployment env was tested.
+It tests the URL and token a bot spawned now would use.
+- **Your URL in settings:** your URL is probed with your token, and with none if you set none.
+- **No URL of yours:** the deployment's URL is probed with the deployment's token.
+- **Never mixed:** a deployment token never goes to your URL, and your token never goes to the
+  deployment's URL.
+
+## Repository imports
+
+`POST /api/workspace/import` accepts `repo`, optional `ref` (default `main`) and an
+optional one-off `token` from the authenticated UI. It returns HTTP 202 with an
+`operation_id` and `status`. Credentials are never included in the persisted operation.
+
+Poll `GET /api/workspace/import/{operation_id}/status`. States are `queued`, `running`,
+`completed`, `failed`, and `interrupted`. Only `completed` includes a usable `result`
+with the workspace slug, repository and ref. Status is scoped to the caller. Repeating
+the same repository/ref recovers the operation; a different import while one is
+running returns 409. Status survives an agent-service restart, but an unfinished
+operation is marked interrupted rather than automatically replayed.
+
+The MCP equivalents are `workspace_import(repo, ref, credential_workspace?)` and
+`workspace_import_status(operation_id)`. They use configured server-side credentials
+and expose no token argument. The HTTP routes own their schemas and descriptions.
+
+If a deploy key is already registered for another workspace you own, pass its slug as
+`credential_workspace`. The server verifies ownership before using the key and saves
+the reference for later Git operations; it does not copy the key or grant access.
+
+### Request a secure connection
+
+The agent domain's Connections tools are served by the gateway's one MCP server
+(`core/agent/mcp.tools.v1.json`): `connection_request(provider, label?, new_account?, setup?)`,
+`connections_status()`, the reads `gmail_search` · `gmail_read` · `gmail_thread` ·
+`calendar_events` · `mail_inbox` · `mail_read`, `gmail_draft_create`,
+`secret_service_call` and `onboarding_research`. Each is one `/api/connections/*` or
+`/api/onboarding/research` route with a typed body; a meetings-only installation does
+not expose them, and without a credential broker they answer that Connections are not
+configured (`onboarding_research` with `action: status` still reports stored progress, because it
+reads no account). A worker dispatched without a person in the loop is refused every one of
+them except `connections_status`. What onboarding research reads, its receipts and its failure
+modes are on [Onboarding research and Extend](/how-to/onboarding-research).
+
+A request returns a connection reference and `awaiting_user` or an existing
+`ready` status. Minutes opens **Connections** on the right, where the user chooses
+**Continue with Google** and grants read-only consent. Agents must never request
+passwords, tokens or authorization codes in chat. `ready` means authorization was
+stored; it does not establish that email ingestion or Calendar auto-join is active.

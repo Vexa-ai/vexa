@@ -158,9 +158,23 @@ INTERNAL_SECRET_PLACEHOLDERS = ("vexa-internal-secret", "lite-internal-secret", 
                                 "change-me", "CHANGE-ME", "default", "secret")
 #: ONE REFUSAL LIST, NOT ONE PER CREDENTIAL. The note above is about a secret with three names
 #: having three refusal lists that drift; a second list for a second key is the same defect one
-#: step removed. `require_admin_key` reads this, so a placeholder learned here is refused
-#: everywhere in this brick at once.
+#: step removed. A placeholder learned here is refused everywhere in this brick at once:
+#: `require_admin_key` reads ADMIN_KEY_PLACEHOLDERS below, which carries every member of this list.
 PLACEHOLDER_SECRETS = INTERNAL_SECRET_PLACEHOLDERS
+#: The admin key's refusal list: the list above (fact placeholder-secrets holds it to the base) plus
+#: every default and example this repository has shipped for the admin key itself — compose's
+#: `dev-admin-token`, the chart's `CHANGE_ME`, the CI, harness and test values, the old docs'
+#: placeholders. admin-api, meeting-api and the config.v1 declaration of VEXA_FLOWS_ADMIN_KEY refuse
+#: the same list (fact admin-token-placeholders).
+ADMIN_KEY_PLACEHOLDERS = ("vexa-internal-secret", "lite-internal-secret", "changeme", "change-me",
+                          "CHANGE-ME", "default", "secret", "dev-admin-token", "CHANGE_ME",
+                          "ci-admin-token", "gate-admin-token", "test-admin-token", "test-admin-token-t3",
+                          "vexa-admin-token", "vexa-admin-token-2024", "token", "strong-random-token",
+                          "your-secret", "your-secret-token", "your-secret-admin-token",
+                          "your-secure-admin-token", "your-admin-token", "your-admin-api-token",
+                          "your_admin_api_token", "your_admin_api_key", "your_admin_api_key_here",
+                          "YOUR_ADMIN_KEY", "YOUR_ADMIN_API_KEY", "YOUR_ADMIN_TOKEN_FROM_DOTENV",
+                          "admin-secret", "admin-key", "test-admin-key")
 
 
 def require_admin_key() -> str:
@@ -183,7 +197,7 @@ def require_admin_key() -> str:
             "VEXA_FLOWS_ADMIN_KEY is unset — refusing to call admin-api rather than trying a "
             "placeholder. It mints accounts and full-scope tokens; give it a real value the same "
             f"way {INTERNAL_SECRET_ENV} gets one, from a mode-600 file the start script exports.")
-    if key in PLACEHOLDER_SECRETS:
+    if key in ADMIN_KEY_PLACEHOLDERS:
         raise RuntimeError(f"VEXA_FLOWS_ADMIN_KEY is the placeholder {key!r} — refusing to use it. "
                            "That literal is published in this repository, so it authenticates "
                            "nobody and everybody.")
@@ -481,7 +495,7 @@ def ws_file(uid: str, path: str, slug: Optional[str] = None) -> Optional[str]:
     # forges a second query parameter on an internal service (R-B14).
     q = f"&slug={_q(slug, safe='')}" if slug else ""
     code, body = http("GET", f"{agent_door()}/api/workspace/file?path={_q(path, safe='')}{q}",
-                      {"X-User-Id": uid})
+                      {"X-User-Id": uid, "X-Internal-Secret": require_internal_secret()})
     return body.get("content") if code == 200 and isinstance(body, dict) else None
 
 

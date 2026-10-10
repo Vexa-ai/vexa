@@ -1,0 +1,7 @@
+{
+  "now": 1760000001,
+  "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=\n-----END PUBLIC KEY-----\n",
+  "reason": "lifetime_too_long",
+  "token": "v1.eyJlbWFpbCI6ImFkYUBleGFtcGxlLmNvbSIsImV4cCI6MTc2MDAwMDMwMSwiaWF0IjoxNzYwMDAwMDAwLCJzY29wZXMiOlsiYm90IiwidHgiXSwic3ViIjoiNDIiLCJ0eXAiOiJ2ZXhhLWlkZW50aXR5In0._DfBk_Vpm9ChQhUQ_e9yXKNEMOU31n1fADlpfOLQE-rLe_U4DiH547O7UYtwV87rcBXSq9E7pOspaAhUmiapBQ",
+  "what": "a correctly signed identity that claims to live longer than 300 s"
+}

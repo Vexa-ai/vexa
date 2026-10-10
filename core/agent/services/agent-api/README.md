@@ -22,7 +22,7 @@ Python because the agent domain is the LLM/tooling + runtime ecosystem (P13).
 | consumes | terminal | `GET /api/workspace/{tree,file,git}` | workspace tree, file content, git state |
 | calls | runtime kernel | `runtime.v1` (Dispatcher → RuntimePort) | the worker container `env` (repo URL + scoped token) |
 | calls | gateway / meeting-api | `POST /bots`, `DELETE /bots/{platform}/{native_id}` | forward our self-hosted bot in/out of a meeting |
-| consumes | self-hosted bots | redis stream `transcription_segments` | live segments, tailed by `transcription_watcher` |
+| consumes | self-hosted bots | redis stream `transcription_segments` | tailed by `transcription_watcher` as a hint only: an entry names which meeting's verified feed to read |
 | reads | terminal | redis stream `tc:meeting:{uid}` | per-meeting transcript wire (drafts + finals); meeting-api's collector is the single writer (P23) |
 
 ## Contracts
@@ -51,7 +51,7 @@ uv run pytest -q        # uv manages this package's own venv/deps
 - ✅ delivered — `/api/routines` CRUD → `schedule.v1` cron jobs
 - ✅ delivered — `/events` generic ingress (`event.v1` → `unit.v1`)
 - ✅ delivered — `/api/meeting/{bot,stop,stream}`, `/api/meetings/live` live-meeting surface
-- ✅ delivered — `transcription_watcher`: register the live meeting off `transcription_segments`
+- ✅ delivered — `transcription_watcher`: register the live meeting and end it from the collector's verified `tc:meeting:{row}` feed (raw `transcription_segments` entries only say which feed to read)
 - ✅ delivered — `/api/workspace/{tree,file,git}` reads
 - ✅ delivered — in-container worker (`serve`)
 - ✅ delivered — multi-session chat: real conversation threads keyed `agent-{subject}-chat-{session}`
@@ -64,10 +64,15 @@ uv run pytest -q        # uv manages this package's own venv/deps
   cleaned-notes stream and the `processed-notes.v1` contract, the SSE's merge of the copilot's
   out-stream, and every `VEXA_LLM_*` completion dial. The product runs no model calls of its own
   beside the agent; a meeting reaches the agent over the MCP, on a human's turn.
-- ✅ delivered — workspace skills: governed `skills/<name>/SKILL.md` (a VISIBLE, git-tracked tree,
-  seeded with one example) symlinked into `.claude/skills` per turn so the isolated worker's `claude`
-  auto-discovers them. `agents/` + `skills/` are the two per-workspace agent-extension homes. Skill
-  helper scripts run under the turn's existing `--allowedTools` grant (no separate skills gate).
+- ✅ delivered — skills: the platform seed's `skills/<name>/SKILL.md` (shipped in the image) and
+  the workspace's own `skills/` are staged at the worker's `~/.claude/skills` per turn so its `claude`
+  auto-discovers them; on a name clash the platform's loads. A workspace skill is staged as a copy
+  without `allowed-tools` (Claude Code reads it as a grant beyond `--allowedTools`), `hooks`, or any
+  hidden entry such as `.claude-plugin/`: its files may come from an imported repository. The copy
+  holds regular files only, each opened without following a link; a skill reached through a link,
+  or holding a second `SKILL.md` below its top, is not staged. No hook
+  runs in the worker (`disableAllHooks`, on the command line and in the image's managed settings).
+  Skill helper scripts run under the turn's existing `--allowedTools` grant (no separate skills gate).
 - ⬜ planned — multi-workspace (company/service tiers — a FUTURE axis beyond the single user workspace)
 - 🟡 partial — in-memory live-meeting registry (redis-backed adapter pending)
 - ⬜ planned — GET /api/meetings (proxy meeting-api + merge live registry)

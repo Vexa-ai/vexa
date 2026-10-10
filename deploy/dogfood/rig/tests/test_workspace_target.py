@@ -18,7 +18,7 @@ from conftest import as_user, tool
 import vexa_control_mcp as rig
 
 
-TARGET = "oenb-4040f6"
+TARGET = "bank-4040f6"
 
 
 def _write(**kw):
@@ -26,7 +26,7 @@ def _write(**kw):
 
 
 def _upsert(**kw):
-    return json.loads(tool("entity_upsert")(kind="company", name="OeNB", facts=["a fact"],
+    return json.loads(tool("entity_upsert")(kind="company", name="Example Bank", facts=["a fact"],
                                             source="the meeting", **kw))
 
 
@@ -67,8 +67,8 @@ def test_a_named_workspace_beats_the_target_and_does_not_move_it(monkeypatch):
     available to read and even to write, if explicit ask and purpose"*."""
     http = as_user(monkeypatch, "7", routes={"/api/workspace/file": (200, {})})
     rig.CALL_TARGET.set(TARGET)
-    _write(slug="grp-ilm")
-    assert _bodies(http, "/api/workspace/file")[0]["slug"] == "grp-ilm"
+    _write(slug="grp-copperline")
+    assert _bodies(http, "/api/workspace/file")[0]["slug"] == "grp-copperline"
     assert rig.CALL_TARGET.get() == TARGET, "one write elsewhere is not a change of target"
 
 
@@ -134,7 +134,7 @@ def test_the_target_rides_the_delegation_token_and_not_the_scope(monkeypatch):
 
 def test_the_verb_answers_with_the_slug_the_harness_turns_into_a_focus_event(monkeypatch):
     """The rig does not write the record — it has never been told which chat is calling. It confirms
-    the person may write there and answers with the slug; `llm/claude_code._workspace_focus` turns
+    the person may write there and answers with the slug; `llm/tool_events._workspace_focus` turns
     that into the `focus` event agent-api reads on the way past. One writer."""
     as_user(monkeypatch, "7", routes={"/api/workspace/shared": (200, {"memberships": [
         {"workspace_id": TARGET, "role": "owner"}]})})
@@ -160,3 +160,11 @@ def test_the_empty_slug_puts_the_work_back_on_their_own_desk(monkeypatch):
     as_user(monkeypatch, "7")
     out = json.loads(tool("workspace_target")())
     assert out["targeted"] == "" and "desk" in out["workspace"]
+
+
+def test_the_harness_function_this_file_cites_is_where_it_says():
+    """The docstrings above name `llm/tool_events._workspace_focus`; a citation that outlives a move
+    sends the next reader to a file that no longer holds it."""
+    import pathlib
+    src = pathlib.Path(rig.rig_secrets.agent_src()) / "llm" / "tool_events.py"
+    assert "\ndef _workspace_focus(" in src.read_text()

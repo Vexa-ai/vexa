@@ -34,6 +34,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from jsonschema.exceptions import ValidationError
 from pydantic import BaseModel
 
+from control_plane import broker_client, identity_token
 from control_plane import meeting_mint as meeting_mint_mod
 from control_plane import meeting_room
 from control_plane import meeting_steering
@@ -75,6 +76,8 @@ from control_plane.workspace_purpose import read_purpose, write_purpose
 from control_plane import workspace_membership as membership_mod
 from control_plane import git_credentials as git_creds
 from control_plane import dispatch as dispatch_mod
+from control_plane import unit_faults as unit_faults_mod
+from shared.runtime_fault import RuntimeFault
 from control_plane import deploy_keys as deploy_keys_mod
 from control_plane import workspace_credentials as wcreds
 from control_plane import repo_ref
@@ -96,26 +99,30 @@ from control_plane.workspace_reader import WorkspaceReader
 # `api_shared` so the routers can import them too — see that module's docstring.
 from control_plane.routers import health as routers_health
 from control_plane.routers import chats as routers_chats
+from control_plane.routers import ingress as routers_ingress
+from control_plane.routers import routines as routers_routines
 from control_plane.routers import admin as routers_admin
 from control_plane.routers import meetings as routers_meetings
 from control_plane.routers import scaffolds as routers_scaffolds
 from control_plane.routers import friction as routers_friction
 from control_plane.routers import proposals as routers_proposals
+from control_plane.routers import connections as routers_connections
+from control_plane.routers import clock as routers_clock
 from control_plane.routers import workspaces as routers_workspaces
-from control_plane.api_shared import (logger, _PHASE_WORD, _iso, _provenance_line, _epoch_text, 
-    MAX_UPLOAD_BYTES, MEETING_STREAM_TRANSCRIPT_REPLAY, _upload_filename, _truncate_title, 
-    _stream_tail_id, CHAT_TURN_HEAD_TTL_SEC, _chat_turn_head_key, _record_chat_turn_head, 
-    _chat_turn_head, _Sessions, LIVE_SILENCE_TTL_SEC, _LiveMeetings, ChatContextBody, ChatBody, 
-    ScaffoldMintBody, ScaffoldHandBody, ResetBody, RoutineCreate, RoutineEnabledPatch, 
-    WorkspaceSwapBody, WorkspacePublishBody, WorkspaceRenameBody, WorkspacePushBody, 
-    GitTokenBody, WorkspacePullBody, WorkspacePurposeBody, InviteCreateBody, InviteAcceptBody, 
-    RoleSetBody, SharedNewBody, SharedAttachBody, SharedActiveBody, ArchiveBody, 
-    WorkspaceActivateBody, WorkspaceNewBody, WorkspaceDeactivateBody, _encode_sse_cursor, 
-    _decode_sse_cursor, _sse, _has_custom_model_endpoint, _model_creds_error_message, 
-    MEETING_CHAT_TRANSCRIPT_SEGMENTS, _fold_meeting_transcript, _meeting_grounding, 
-    CONTEXT_SENTINEL, _AMBIENT_TAB_KINDS, _ambient_gated, _WORKSPACE_README_LINES, 
-    _WORKSPACE_README_CHARS, _fold_workspace_grounding, _enriched_meeting_focus, 
-    _context_grounding, _ROOM_SOURCE, _http_email_subject_lookup, _http_meeting_owner_lookup)  # noqa: F401
+from control_plane.routers import sharing as routers_sharing
+from control_plane import route_policy
+from control_plane.ceiling import reads_within, require_in_ceiling
+from control_plane.api_shared import (
+    logger, _PHASE_WORD, _iso, _provenance_line, _epoch_text, _Sessions, _LiveMeetings)
+from control_plane.peer_lookups import (
+    _ROOM_SOURCE, _http_email_subject_lookup, _http_meeting_owner_lookup,
+    _http_meeting_transcript_lookup)
+# Re-exported for the tests that import them from here.
+from control_plane.api_shared import (  # noqa: F401
+    CONTEXT_SENTINEL, LIVE_SILENCE_TTL_SEC, _ambient_gated,
+    _context_grounding, _decode_sse_cursor, _encode_sse_cursor, _fold_meeting_transcript,
+    _has_custom_model_endpoint, _meeting_grounding, _truncate_title)
+from control_plane.bodies import ChatBody, ChatContextBody  # noqa: F401
 
 def create_app(
     dispatcher: Dispatcher,
@@ -128,10 +135,15 @@ def create_app(
     redis_url: Optional[str] = None,
     membership_index: Optional[MembershipIndex] = None,
     meeting_owner_lookup: "Optional[object]" = None,
+    meeting_transcript_lookup: "Optional[object]" = None,
     schedule_source: "Optional[Callable[[str], list]]" = None,
     email_subject_lookup: "Optional[object]" = None,
     meeting_note_recorder: "Optional[object]" = None,
+    default_subject: str = "",
 ) -> FastAPI:
+    """Build agent-api. ``default_subject`` is for an in-process test harness only: the subject a
+    request that names nobody runs as, honoured only when the app has no identity door. The
+    production entrypoint never passes it."""
     if sessions is not None:
         sess = sessions
     elif redis_url:
@@ -190,60 +202,49 @@ def create_app(
                         len(_migrated["indexed"]))
     except Exception as exc:  # noqa: BLE001 — a volume that cannot be walked must not stop the boot
         logger.warning("workspace-id migration could not run: %s: %s", type(exc).__name__, exc)
-    app = FastAPI(title="vexa-agent-api", version="0.12.0")
+    # WHICH VERBS NEED A PERSON IN THE LOOP is data — `routes.v1.json`'s `verbs` rows — and this is
+    # the one place it is enforced: an app-level dependency, so it runs for the route a request
+    # matched, before the handler, and no route asks for it by hand (`route_policy.py`).
+    app = FastAPI(title="vexa-agent-api", version="0.12.0", dependencies=[route_policy.PERSON_GATE])
+    settings = dispatcher.settings if dispatcher is not None else None
+    # THE DOOR FOR `x-user-*` (gateway-identity.v1). Every request that names a person must carry the
+    # gateway's signature over that identity, or come from the internal tier (flows, the terminal's
+    # server-side admin routes, the dogfood rig) with `X-Internal-Secret`. Anything else that names a
+    # person is a 401 at this middleware, before any route reads a header. The production boot
+    # requires the key (config.v1 required-explicit), so a deployed agent-api always has this door;
+    # an app built without one is the in-process test harness. The key is the gateway's Ed25519
+    # PUBLIC key: this process can check the gateway's signature and cannot make one. A file that
+    # is unreadable, or is anything but an Ed25519 public key (the private key included), refuses
+    # the boot here, naming the fault and never the key.
+    _identity_key_file = settings.gateway_identity_public_key_file if settings is not None else ""
+    _identity_guarded = bool(_identity_key_file)
+    # Holds the guard-verified person for the broker calls made while serving the request (the Git
+    # credential store acts only for that person). Added first, so it sits INSIDE the guard.
+    app.add_middleware(broker_client.ForwardedIdentity)
+    if _identity_guarded:
+        try:
+            _identity_key = identity_token.read_verify_key(_identity_key_file)
+        except identity_token.KeyUnavailable as e:
+            from control_plane.config_preflight import ConfigError
 
-    # ── THE COMPANY-LAYER GATE, ENFORCED PER REQUEST ────────────────────────────────────────────
-    # Founder ruling, 2026-09-02: a Vexa with no company layer serves nobody. That was first built
-    # as a check at SIGN-IN — and a session minted before the gate existed walked straight past it,
-    # observed live on 2026-09-02: an old cookie got the whole terminal, a chat, and an agent turn
-    # on an instance that could not say which company it worked for. A door check is not a gate; it
-    # is a greeting. The gate belongs where the WORK happens, on every request, because the client
-    # is presentation and the client can be stale, cached, forged or simply already open.
-    #
-    # WHO GETS THROUGH while the layer is missing: the instance admin, and nobody else. Two
-    # deliberate holes, both narrow:
-    #   * `/api/global/*` — the state the wizard polls and the verb that lifts the gate. A gate
-    #     that blocks the only way to open it is a deadlock.
-    #   * requests with NO subject header — the internal tier (`/api/admin/*` and friends), which
-    #     is gated on X-Internal-Secret instead and has no user to judge.
-    # And when NO admin exists yet the gate does not refuse at all: on a virgin instance the next
-    # sign-in is the claim, so refusing here would make a fresh install unclaimable.
-    #
-    # This is the FAIL-CLOSED half of the pair. The terminal deliberately fails OPEN on an
-    # unreachable probe so a transient fault cannot brick sign-in on a working instance; it can
-    # afford to precisely because this middleware holds, so a browser that renders anyway can still
-    # do nothing.
-    # `/api/version` joins them (decision 39): the swap script and an open browser tab both poll
-    # it to find out what is serving, and neither has a subject. Gating it would answer 403 to
-    # the one question whose whole purpose is answerable from outside, before anyone signs in.
-    _GATE_OPEN_PREFIXES = ("/api/global/", "/api/version")
+            raise ConfigError(
+                f"agent-api refuses to boot: VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE — {e}") from None
+        app.add_middleware(
+            identity_token.IdentityGuard, verify_key=_identity_key, service="agent-api",
+            internal_secret=settings.internal_api_secret.get_secret_value())
 
-    @app.middleware("http")
-    async def _company_layer_gate(request: Request, call_next):
-        path = request.url.path
-        if path.startswith("/api/") and not path.startswith(_GATE_OPEN_PREFIXES):
-            subject = request.headers.get("x-user-id") or (
-                settings.agent_default_subject if settings is not None else "")
-            if subject:
-                gate = global_layer.instance_state(settings)
-                # A DEGRADED read is "unknown", never "missing". `instance_state` answers missing
-                # when it cannot reach admin-api — right for anything that SENDS, wrong here, where
-                # the consequence is locking every user out of a working instance because one probe
-                # timed out (and, in a deployment with no admin-api configured at all, locking them
-                # out permanently). Refuse only on a POSITIVE read. The closed half of the pair
-                # lives where the damage is: the flows engine parks rather than mails, and the
-                # operator verbs refuse, both fail-closed.
-                if (not gate.get("degraded")
-                        and gate.get("global_setup") != global_layer.COMPLETED
-                        and gate.get("admin_exists")
-                        and not global_layer.is_admin(settings, str(subject))):
-                    return JSONResponse(status_code=403, content={
-                        "detail": global_layer.GATE_SENTENCE,
-                        "global_setup": global_layer.MISSING,
-                        "why": ("This instance has not been set up yet. Only its administrator can "
-                                "use it until the company layer is written."),
-                    })
-        return await call_next(request)
+    # There is NO company-layer gate here (founder ruling 2026-10-08: "let's remove global setup at
+    # all so that there is no need to setup global at all - let it be empty with no data - it's
+    # fine"). The per-request middleware that refused non-admins while `_global` was unwritten (the
+    # 2026-09-02 ruling) is gone: every authenticated subject is served whatever `_global` holds.
+
+    # A RUNTIME FAULT IS NEVER A 500 (P18). Every door a dispatch can come through — the chat, the
+    # internal sink, an event, a routine's run-now — answers a failed spawn with the TYPED fault
+    # (`shared.runtime_fault`): 502 when the runtime answered wrongly, 503 when it is down or full.
+    # The chat route handles its own (it also withdraws the turn); this is the floor under the rest.
+    @app.exception_handler(RuntimeFault)
+    async def _runtime_fault(_request: Request, fault: RuntimeFault) -> JSONResponse:
+        return JSONResponse(status_code=fault.http_status, content=unit_faults_mod.answer(fault))
 
     app.state.dispatcher = dispatcher
     app.state.sessions = sess
@@ -252,10 +253,18 @@ def create_app(
     app.state.workspace_registry = workspace_registry
     app.state.live_meetings = live
     app.state.scheduler = scheduler
-    settings = dispatcher.settings if dispatcher is not None else None
+    if settings is not None:
+        # An out-of-store `_global` is read where the worker mount serves it from, not from a stale
+        # slot in the store (`system_mounts.global_root`).
+        wsr.allow(system_mounts.global_root(settings, wsr.root))
+    _internal_secret_value = (settings.internal_api_secret.get_secret_value()
+                              if settings is not None else "")
     # The SSE ownership gate's owner-lookup (P0): default = HTTP to meeting-api; injectable for L2 tests.
     _meeting_owner_lookup = meeting_owner_lookup or _http_meeting_owner_lookup(
-        settings.meeting_api_url if settings is not None else "")
+        settings.meeting_api_url if settings is not None else "", _internal_secret_value)
+    # The meeting's words, read as the caller (the Highlight scan): same door, same seam style.
+    _meeting_transcript_lookup = meeting_transcript_lookup or _http_meeting_transcript_lookup(
+        settings.meeting_api_url if settings is not None else "", _internal_secret_value)
     # The ambient schedule digest's rows source (context bundle): TTL-cached meeting-api fetch;
     # injectable for L2 tests, same seam style as meeting_owner_lookup.
     # The post-meeting room's participant ADDRESS → subject resolver; injectable for L2 tests, same
@@ -266,44 +275,31 @@ def create_app(
         settings.admin_api_token.get_secret_value() if settings is not None else "",
     )
     _schedule_source = schedule_source or schedule_digest_mod.digest_source(
-        settings.meeting_api_url if settings is not None else "", mindex.list)
+        settings.meeting_api_url if settings is not None else "", mindex.list,
+        internal_secret=_internal_secret_value)
     # WHERE A MEETING'S PAGE IS, PUT ON THE ROW ITSELF (Vexa-ai/vexa#1601): default = an owner-scoped
     # annotate on meeting-api; injectable for L2 tests, the same seam style as the two above. The
     # path stops being a thing two services each compose — whoever mints records, everybody reads.
     _meeting_note_recorder = meeting_note_recorder or meeting_mint_mod.http_recorder(
-        settings.meeting_api_url if settings is not None else "")
+        settings.meeting_api_url if settings is not None else "", internal_secret=_internal_secret_value)
 
-    # TOPOLOGY BOUNDARY (Lane M vector 3): agent-api trusts X-User-Id / X-User-Email as ground truth.
-    # That trust is only SOUND when the gateway is the SOLE ingress — the gateway strips any client-sent
-    # x-user-id/x-user-email and re-injects the values it resolved from the verified api-key. In the
-    # current dev/direct topology the terminal and host-local clients reach agent-api WITHOUT the gateway
-    # hop (compose loopback + VEXA_AGENT_DEFAULT_SUBJECT fallback), so those headers are spoofable and
-    # restricted-mode invites MUST NOT be relied on as a security boundary here. A hardened deploy sets
-    # VEXA_REQUIRE_GATEWAY_IDENTITY=1: agent-api then rejects any request lacking the gateway's signed
-    # identity marker (X-Gateway-Verified), so identity headers are only honored when the gateway put
-    # them there. OFF by default so the dev/direct topology keeps working. Full fix = route the terminal
-    # through the gateway (Stage 4) and make the gateway the only thing that can reach agent-api.
-    _require_gateway_identity = os.environ.get("VEXA_REQUIRE_GATEWAY_IDENTITY", "").strip().lower() in ("1", "true", "yes")
+    # TOPOLOGY BOUNDARY (Lane M vector 3, gateway-identity.v1): agent-api reads X-User-Id / X-User-Email as
+    # ground truth, and that is sound only because of the door installed above — the gateway signs
+    # the identity it resolved, `IdentityGuard` verifies the signature and rebuilds every x-user-*
+    # header from the signed claims, and an unsigned header is believed only from the internal tier.
+    # Restricted-mode invites and the scaffold recipient checks rely on X-User-Email for exactly
+    # that reason.
 
     def subject_of(request: Request) -> str:
-        """The authenticated subject (P20). The gateway resolves the api-key → user_id and injects
-        ``X-User-Id``; agent-api derives the workspace/chat/quota partition from THAT, never from the
-        client body/query. Fail-closed (401) when the header is absent, unless a single-user fallback
-        (``VEXA_AGENT_DEFAULT_SUBJECT``) is configured for a direct/self-host deploy with no gateway in front.
-
-        When ``VEXA_REQUIRE_GATEWAY_IDENTITY`` is set, the request must additionally carry the gateway's
-        signed identity marker (``X-Gateway-Verified``) — a hardened deploy enforces that identity headers
-        were injected by the gateway, not forged by a direct/host-local caller (see the TOPOLOGY BOUNDARY
-        note above). This does NOT change the default dev/direct topology."""
-        if _require_gateway_identity and not request.headers.get("x-gateway-verified"):
-            raise HTTPException(status_code=401,
-                                detail="gateway-signed identity required (VEXA_REQUIRE_GATEWAY_IDENTITY)")
+        """The authenticated subject (P20): ``X-User-Id`` as the door above let it through — signed
+        by the gateway, or asserted by the internal tier. agent-api derives the workspace/chat/quota
+        partition from THAT, never from the client body/query, and fails closed (401) when no subject
+        is named. A harness's ``default_subject`` applies only to an app built without the door."""
         uid = request.headers.get("x-user-id")
         if uid:
             return uid
-        fallback = settings.agent_default_subject if settings is not None else ""
-        if fallback:
-            return fallback
+        if default_subject and not _identity_guarded:
+            return default_subject
         raise HTTPException(status_code=401, detail="missing X-User-Id (agent-api is fronted by the gateway)")
 
     def _resolve_room(request: Request, subject: str, meeting_id: str,
@@ -377,22 +373,8 @@ def create_app(
                 "group_workspace_id": group, "read_max": read_max,
                 "lookup": _email_subject_lookup}
 
-
-
-
-
-
-
-
-
-
-
-
     # ── routines (MVP2) — a scheduled routine compiles to a schedule.v1 cron job whose body is a
     #    unit.v1 dispatch POSTed back to /invocations when due (the runtime owns the durable cron) ──
-
-
-
 
     # ── events (MVP3) — the GENERIC event-source ingress: any event.v1 Event → a unit.v1 dispatch →
     #    the one Dispatcher. agent-api knows no tool/domain; the unit reaches email/calendar via its
@@ -434,10 +416,16 @@ def create_app(
         # The _global org tier is readable by EVERY subject — it is mounted ro into every worker,
         # so the read API mirrors that; writes still go only through the admin's worker mount.
         if target == system_mounts.GLOBAL_SLUG:
-            g = wsr.root / system_mounts.GLOBAL_SLUG
+            if write:  # read by everyone; WRITTEN only inside a delegated dispatch's ceiling
+                require_in_ceiling(request, target)
+            g = _global_root()
             if g.exists():
                 return g
             raise HTTPException(status_code=404, detail="the organisation tier is not configured")
+        # THE DISPATCH'S CEILING, for a worker dispatched without a person: a named workspace must be
+        # in the isolation set it was granted. Checked before any resolution, so a workspace outside
+        # the set is refused the same way whether or not it exists.
+        require_in_ceiling(request, target)
         mounts = active_workspaces(wsr.root, subject)  # own actives (real .attached paths); may raise ValueError
         try:
             mounts = mounts + shared_active_mounts(wsr.root, subject, mindex.list(subject))
@@ -463,7 +451,8 @@ def create_app(
         # at all, by construction, precisely so nothing can reach it this way.
         if not write and subject:
             rec = workspace_registry.by_slug(target)
-            if rec and rec.get("kind") == "desk":
+            if (rec and rec.get("kind") == "desk" and ids_mod.addressable(rec, wsr.root)
+                    and ids_mod.private_owner(rec, wsr.root) is None):
                 d = Path(str(rec.get("dir") or ""))
                 if d.is_dir():
                     return d
@@ -517,11 +506,14 @@ def create_app(
                     return d
         raise HTTPException(status_code=403, detail="not authorized for this workspace")
 
-    def _manage_dir(subject: str, slug: Optional[str]) -> Path:
+    def _manage_dir(request: Request, slug: Optional[str]) -> Path:
         """Resolve a workspace dir for a MANAGEMENT op (git sync, purpose) — unlike ``_read_target`` this
         also reaches the caller's PARKED slots (a workspace need not be mounted to manage it). Own slots
         first (active or parked); a slug that isn't one of them but IS a shared workspace the caller belongs
-        to resolves to the shared dir. Neither path can ever reach another user's private workspace."""
+        to resolves to the shared dir. Neither path can ever reach another user's private workspace. A
+        named workspace outside a delegated dispatch's ceiling is refused before anything resolves."""
+        require_in_ceiling(request, slug)
+        subject = subject_of(request)
         try:
             return workspace_dir_for(wsr.root, subject, slug)
         except ValueError:
@@ -529,8 +521,11 @@ def create_app(
         except KeyError:
             pass
         target = (slug or "").strip()
-        if target and membership_mod.is_member(wsr.root, target, subject) is not None:
-            return membership_mod._ws_dir(wsr.root, target)
+        try:
+            if target and membership_mod.is_member(wsr.root, target, subject) is not None:
+                return membership_mod._ws_dir(wsr.root, target)
+        except MembershipError:
+            pass                # not one workspace name: nothing to manage
         raise HTTPException(status_code=404, detail="workspace not found")
 
     def _repo(raw: "Optional[str]") -> "Optional[str]":
@@ -592,15 +587,12 @@ def create_app(
     # of whatever it could find, and the two disagreed in every way the alpha ledger records.
 
     def _global_root() -> Path:
-        """Where `_global` actually is, from agent-api's own filesystem.
-
-        The volume slot FIRST and the configured source second — that order is the 2026-09-02
-        single-store fix (audit N1): `_global` was two disjoint stores, agent-api read one and the
-        admin's setup chat wrote the other, and his README went into a directory nothing reads."""
-        vol = wsr.root / system_mounts.GLOBAL_SLUG
-        if vol.is_dir():
-            return vol
-        return Path((settings.global_system_workspace_path if settings is not None else "") or "/nonexistent")
+        """Where `_global` actually is, from agent-api's own filesystem — `system_mounts.global_root`,
+        the same answer the worker mount and every writer use, so a preset the admin wrote is the
+        preset this reads."""
+        if settings is None:
+            return wsr.root / system_mounts.GLOBAL_SLUG
+        return system_mounts.global_root(settings, wsr.root)
 
     def _internal_caller(request: Request) -> bool:
         secret = settings.internal_api_secret.get_secret_value() if settings is not None else ""
@@ -814,11 +806,6 @@ def create_app(
             "share_token": str(share_token) if share_token else None,
         })
 
-
-
-
-
-
     # ── ROUGH EDGES (PRD decision 33) ───────────────────────────────────────────────────────────
     def _friction_subject(request: Request) -> str:
         """Who filed it, BEST-EFFORT — never a refusal.
@@ -835,21 +822,20 @@ def create_app(
         into ONE row with a counter."""
         return (request.headers.get("x-user-id") or "").strip()
 
-
-
-
-
-
-
-
-    def _entity_mounts(subject: str) -> list:
+    def _entity_mounts(subject: str, request: Request) -> list:
         """`[{slug, path}]` for every workspace this subject has mounted — their own actives plus
-        the shared ones their membership grants. Read for ONE purpose: to know which OTHER
-        workspace already holds a page for a name, so the link into it can be written by id.
+        the shared ones their membership grants — that ``request`` may read under a delegated
+        dispatch's ceiling (`ceiling.reads_within`; the subject's own desk is always in it). Read
+        for ONE purpose: to know which OTHER workspace already holds a page for a name, so the link
+        into it can be written by id.
 
         Fails soft to an empty list, which is the single-workspace behaviour: an entity write must
         never fail because the mount table could not be read."""
         out: list = []
+        try:
+            desk = Path(wsr.workspace_dir(subject)).resolve()
+        except ValueError:
+            return out
         try:
             mounts = active_workspaces(wsr.root, subject)
         except Exception:  # noqa: BLE001
@@ -859,12 +845,9 @@ def create_app(
         except Exception:  # noqa: BLE001
             pass
         for m in mounts:
-            if m.path:
+            if m.path and (Path(m.path).resolve() == desk or reads_within(request, m.slug)):
                 out.append({"slug": m.slug, "path": m.path})
         return out
-
-
-
 
     # ── workspace lifecycle (SCAFFOLD / TODO(phase-6)) — init from a validated template, swap which
     # validated workspace/template the next dispatch mounts. The seams exist downstream (seeding.seed_workspace
@@ -885,22 +868,34 @@ def create_app(
     def _ws_sync(slug: str, **kw):
         """Re-point the registry at a workspace that just moved. Best-effort by design: a failure
         here costs a stale row that the next startup migration repairs, and it must never fail the
-        act that moved the workspace."""
+        act that moved the workspace. Only for an act that created or moved a tree (or the caller's
+        own desk): a slug a request names goes through `_ws_lookup`."""
         try:
             return ids_mod.sync_workspace(wsr.root, slug, registry=workspace_registry, **kw)
         except Exception as exc:  # noqa: BLE001
             logger.warning("workspace-id sync failed for %s: %s: %s", slug, type(exc).__name__, exc)
             return None
 
+    def _ws_lookup(slug: str):
+        """A slug a request names that the registry does not know: re-point the record its tree
+        already carries, or None. Registers nothing (`workspace_ids.resolve_slug`)."""
+        try:
+            return ids_mod.resolve_slug(wsr.root, slug, registry=workspace_registry)
+        except Exception as exc:  # noqa: BLE001 — a lookup that fails is a miss, never a 500
+            logger.warning("workspace-id lookup failed for %s: %s", slug, type(exc).__name__)
+            return None
+
     def _ws_here(request: Request, slug: Optional[str]):
         """The reader's CURRENT workspace record — the one an in-workspace `[[Title]]` resolves in.
 
         A slug the caller may not read resolves to None rather than to that workspace: the ref
-        would otherwise be answered out of somebody else's tree because the READER named it."""
+        would otherwise be answered out of somebody else's tree because the READER named it. A slug
+        outside a delegated dispatch's ceiling is refused."""
+        require_in_ceiling(request, slug)
         subject = subject_of(request)
         rec = workspace_registry.by_slug(slug) if slug else workspace_registry.by_slug(str(subject))
         if rec is None and slug:
-            rec = _ws_sync(slug)
+            rec = _ws_lookup(slug)
         if rec is None and not slug:
             rec = _ws_sync(str(subject), kind="desk", owner=str(subject))
         if rec is None:
@@ -908,28 +903,7 @@ def create_app(
         access = ids_mod.access_for(rec, subject, root=wsr.root, is_member=_ws_is_member)
         return rec if access == ids_mod.ACCESS_READABLE else None
 
-
-
-
-
-
-
-
     # ── the additive mount set (WP-A2.1): ACTIVE-SET membership over swap's park/restore machinery ──────
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     # ── workspace membership + invites + roles (Lane M) ───────────────────────────────────────────
     # The access layer for SHARED workspaces. Authoritative store = policy/members.json in the
@@ -955,6 +929,13 @@ def create_app(
         """The deploy-key name for a target: a shared workspace keys by its id (the key belongs to the
         WORKSPACE, so every member's pull uses the same one), a person's desk by subject."""
         target = (slug or "").strip()
+        binding = attached_workspaces(wsr.root, subject).get("slots", {}).get(target, {}).get("credential_workspace")
+        if binding:
+            try:
+                membership_mod.require_role(wsr.root, binding, subject, "owner")
+            except MembershipError as exc:
+                raise HTTPException(status_code=403, detail="Repository credential workspace is no longer accessible") from exc
+            return deploy_keys_mod.workspace_key(workspace_id=binding)
         if target and target != subject and membership_mod.is_member(wsr.root, target, subject) is not None:
             return deploy_keys_mod.workspace_key(workspace_id=target)
         return deploy_keys_mod.workspace_key(subject=subject)
@@ -970,54 +951,21 @@ def create_app(
             return HTTPException(status_code=502, detail=detail)
         return HTTPException(status_code=502, detail=f"{detail}\n\n{wcreds.prompt_sentence(prompt)}")
 
-
-
-
-
-
-
-
-
-    # ── the COMPANY LAYER gate (PRD §9 decision 17; founder 2026-09-02) ──────────────────────────
-    # A fresh instance serves nobody until an admin has written the thin company layer into
-    # `_global`. agent-api is where the verification belongs because agent-api is the only service
-    # that can SEE the store; admin-api holds the resulting value, and every service reads it from
-    # there. Two verbs: look, and accept.
+    # ── the COMPANY LAYER (optional; founder ruling 2026-10-08) ─────────────────────────────────
+    # `_global` may stay empty. When an admin chooses to write the thin company layer, agent-api is
+    # where its acceptance belongs, because agent-api is the only service that can SEE the store.
 
     def _global_store() -> Path:
-        """The WRITABLE `_global` on this host. Two candidates because the deployment mounts the
-        same bytes twice — the workspaces-dir copy (read-write in dev) and the host-path mirror
-        (read-only) — and a writer that picks the wrong one fails at commit time with a permissions
-        error that reads like a bug in git."""
-        candidates = [Path(settings.workspaces_dir) / system_mounts.GLOBAL_SLUG,
-                      Path(settings.global_system_workspace_path or "/nonexistent")]
-        target = next((c for c in candidates if c.is_dir() and os.access(c, os.W_OK)), None)
-        if target is None:
-            target = next((c for c in candidates if c.is_dir()), None)
-        if target is None:
+        """The `_global` this host commits to — `system_mounts.global_root`, the directory the worker
+        mount serves, so what is committed here is what every agent reads next turn."""
+        target = system_mounts.global_root(settings, wsr.root)
+        if not target.is_dir():
             raise HTTPException(status_code=404, detail="the organisation tier is not present here")
         return target
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     # ── Settings → Models "Test" buttons (on-demand credential tests, fail-loud surface) ────────
     # Both test the caller's EFFECTIVE config — the same user > global > env resolution the
     # dispatch overlay / bot_spawn apply — so what's tested is what a turn/bot actually gets.
-
-
 
     # ── THE ROUTES, BY OWNER ─────────────────────────────────────────────────────────────────
     #
@@ -1033,7 +981,7 @@ def create_app(
     # reading the same code they reviewed before. Each router declares in its own `build()` which
     # of these it takes, so "what does this router depend on" is answerable by reading one line.
     #
-    # ORDER IS NOT LOAD-BEARING HERE, and that is checked rather than assumed: no two of these 78
+    # ORDER IS NOT LOAD-BEARING HERE, and that is checked rather than assumed: no two of these
     # routes can match the same concrete URL under the same method (FastAPI resolves
     # first-match-wins, so a pair that could would make the include order a behaviour). The check
     # is `tests/test_route_table.py::test_no_two_routes_can_match_the_same_url`.
@@ -1044,18 +992,22 @@ def create_app(
         _global_root=_global_root, _global_store=_global_store,
         _internal_caller=_internal_caller, _manage_dir=_manage_dir,
         _meeting_note_recorder=_meeting_note_recorder,
-        _meeting_owner_lookup=_meeting_owner_lookup, _member_error=_member_error, _pc=_pc,
+        _meeting_owner_lookup=_meeting_owner_lookup,
+        _meeting_transcript_lookup=_meeting_transcript_lookup, _member_error=_member_error, _pc=_pc,
         _read_target=_read_target, _repo=_repo, _require_shared_write=_require_shared_write,
         _resolve_room=_resolve_room, _scaffold_is_for=_scaffold_is_for,
         _scaffold_recipient_is=_scaffold_recipient_is, _scaffold_view=_scaffold_view,
         _schedule_source=_schedule_source, _workspace_key=_workspace_key, _ws_here=_ws_here,
-        _ws_is_member=_ws_is_member, _ws_sync=_ws_sync, dispatcher=dispatcher,
+        _ws_is_member=_ws_is_member, _ws_sync=_ws_sync, _ws_lookup=_ws_lookup, dispatcher=dispatcher,
         invocations_url=invocations_url, live=live, mindex=mindex,
         redis_url=redis_url, scaffolds=scaffolds, scheduler=scheduler, sess=sess,
-        settings=settings, stream_reader=stream_reader, subject_of=subject_of,
+        settings=settings, stream_reader=stream_reader,
+        subject_of=subject_of,
         workspace_registry=workspace_registry, workspace_touches=workspace_touches, wsr=wsr)
-    for _r in (routers_health, routers_chats, routers_admin, routers_meetings, routers_scaffolds, routers_friction, routers_proposals, routers_workspaces):
+    for _r in (routers_health, routers_ingress, routers_chats, routers_routines, routers_admin, routers_meetings, routers_scaffolds, routers_friction, routers_proposals, routers_workspaces, routers_sharing, routers_connections, routers_clock):
         app.include_router(_r.build(**_deps))
+    # A `verbs` row naming a route this app does not serve protects nothing — refuse the boot.
+    route_policy.assert_served(app.routes)
 
     return app
 
@@ -1088,8 +1040,9 @@ def _build_production_app() -> FastAPI:
     preflight()
 
     settings = load_settings()
-    runtime = RuntimeHttpClient(settings.runtime_api_url)
-    scheduler = SchedulerHttpClient(settings.runtime_api_url)
+    runtime_token = settings.runtime_api_token.get_secret_value()
+    runtime = RuntimeHttpClient(settings.runtime_api_url, token=runtime_token)
+    scheduler = SchedulerHttpClient(settings.runtime_api_url, token=runtime_token)
     identity = LocalIdentityMinter(settings.dispatch_signing_key.get_secret_value())
     invocations_url = settings.agent_api_self_url.rstrip("/") + "/invocations"
     # Lane M: the membership index mirror (users.data.memberships[]) over the admin-api internal edge.
@@ -1106,10 +1059,50 @@ def _build_production_app() -> FastAPI:
         model_config = AdminApiModelConfig(
             settings.admin_api_url, settings.internal_api_secret.get_secret_value(),
         )
+    # Each worker connects to Redis as its unit's own user (control_plane.workload_redis) unless
+    # the deployment chose REDIS_WORKLOAD_ACL=shared. Stale users are swept against the runtime's
+    # live workloads.
+    workload_redis_client = None
+    if settings.redis_workload_acl == "per-workload":
+        import redis as _redis
+
+        from control_plane import workload_redis
+
+        workload_redis_client = _redis.from_url(
+            settings.redis_url, decode_responses=True, socket_connect_timeout=2, socket_timeout=5)
+        workload_redis.start_sweeper(client_factory=lambda: workload_redis_client,
+                                     live_units=runtime.live_workloads,
+                                     secret=settings.internal_api_secret.get_secret_value())
+    else:
+        logger.warning("REDIS_WORKLOAD_ACL=shared — every agent worker connects to Redis with the "
+                       "service credential and can read and write every unit's streams and every "
+                       "service key, the delegation records and revocations among them; delegation "
+                       "tokens are therefore never published to Redis, and a unit's token is not "
+                       "refreshed (its tools end at the token's exp)")
+    # A worker's delegation token is recorded against its unit and REVOKED when the unit ends, in the
+    # store identity reads for every vxd_ bearer (control_plane.delegation_revocation). Wired only
+    # when a toolbelt is configured: with no delegation key or no MCP endpoint nothing is minted.
+    delegation_store = None
+    if settings.mcp_url and settings.mcp_delegation_secret.get_secret_value():
+        import redis as _redis
+
+        from control_plane import delegation_revocation
+
+        delegation_store = _redis.from_url(
+            settings.redis_url, decode_responses=True, socket_connect_timeout=2, socket_timeout=5)
+        from control_plane import delegation_refresh
+
+        # The same sweep replaces a live unit's token before it expires (delegation_refresh), so a
+        # warm unit keeps its vexa MCP past one token's life; an ended unit is never refreshed.
+        delegation_revocation.start_reaper(
+            client_factory=lambda: delegation_store, live_units=runtime.live_workloads,
+            refresher=delegation_refresh.Refresher(settings.mcp_delegation_secret.get_secret_value(),
+                                                   settings.delegation_ttl_sec))
     # Lane A: the Dispatcher takes the SAME index so shared workspaces the subject is a member of enter
     # the dispatch mount set (read-only for Slice 1), not just the /active listing.
     dispatcher = Dispatcher(settings, runtime, identity, membership_index=membership_index,
-                            model_config=model_config)
+                            model_config=model_config, workload_redis=workload_redis_client,
+                            delegation_store=delegation_store)
     app = create_app(
         dispatcher,
         stream_reader=RedisStreamReader(settings.redis_url),
@@ -1124,6 +1117,7 @@ def _build_production_app() -> FastAPI:
         invocations_url=invocations_url,
         workspaces_dir=settings.workspaces_dir,
         interval_sec=settings.routine_reconcile_interval_sec,
+        signing_secret=settings.internal_api_secret.get_secret_value(),
     )
 
     @app.on_event("shutdown")
@@ -1139,6 +1133,18 @@ def _build_production_app() -> FastAPI:
     from control_plane import transcription_watcher
     transcription_watcher.start(settings.redis_url, dispatcher, app.state.live_meetings)
 
+    # `_global` EXISTS FROM THE FIRST BOOT, EMPTY IF NOTHING ELSE (founder ruling 2026-10-08: "let it
+    # be empty with no data - it's fine"). With no out-of-store path configured, the organisation
+    # tier lives in this service's own store and is created here, so a fresh stack dispatches chat
+    # with no configuration at all. An operator's out-of-store path is theirs: it is never created,
+    # and the boot writes below go to it rather than growing a second `_global` in the store.
+    _gdir = system_mounts.global_root(settings)
+    if _gdir == Path(settings.workspaces_dir) / system_mounts.GLOBAL_SLUG:
+        try:
+            system_mounts.ensure_global_dir(settings.workspaces_dir)
+        except Exception as exc:  # noqa: BLE001
+            print(f"organisation tier: could not create {_gdir}: {exc}", flush=True)
+
     # THE PRESET LIBRARY IS TOPPED UP BEFORE THE REPO IS INITIALISED, so a fresh instance's very
     # first commit carries the presets this build ships rather than acquiring them as an untracked
     # afterthought. Additive: a file already in `_global/asks/` is the admin's and is never touched.
@@ -1152,7 +1158,7 @@ def _build_production_app() -> FastAPI:
         # configures logging at all. The top-up changed what every agent here reads; `docker logs`
         # has to show it.
         print(preset_library.summary(
-            preset_library.top_up(Path(settings.workspaces_dir) / system_mounts.GLOBAL_SLUG)),
+            preset_library.top_up(_gdir)),
             flush=True)
     except Exception as exc:  # noqa: BLE001
         print(f"preset library: could not be topped up here: {exc}", flush=True)
@@ -1164,7 +1170,7 @@ def _build_production_app() -> FastAPI:
     # an untracked afterthought.
     try:
         print(global_seed.summary(
-            global_seed.top_up(Path(settings.workspaces_dir) / system_mounts.GLOBAL_SLUG)),
+            global_seed.top_up(_gdir)),
             flush=True)
     except Exception as exc:  # noqa: BLE001
         print(f"organisation tier: could not be seeded here: {exc}", flush=True)
@@ -1175,7 +1181,7 @@ def _build_production_app() -> FastAPI:
     # deployment behaves. Best-effort: a store that is read-only here (the host-path mirror) is a
     # legitimate deployment shape, and it must not stop the service from booting.
     try:
-        global_layer.ensure_repo(Path(settings.workspaces_dir) / system_mounts.GLOBAL_SLUG)
+        global_layer.ensure_repo(_gdir)
     except Exception as exc:  # noqa: BLE001
         logger.info("the organisation tier is not a git repo here and could not be made one: %s", exc)
 
@@ -1187,7 +1193,7 @@ def _build_production_app() -> FastAPI:
     from control_plane import flow_pages_watch
     try:
         app.state.flow_pages_watch = flow_pages_watch.start(
-            Path(settings.workspaces_dir) / system_mounts.GLOBAL_SLUG)
+            _gdir)
     except Exception as exc:  # noqa: BLE001
         app.state.flow_pages_watch = None
         logger.info("flow pages are not being watched here: %s", exc)

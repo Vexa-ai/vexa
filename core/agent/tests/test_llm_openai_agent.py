@@ -64,6 +64,8 @@ def _blocking(monkeypatch):
     # The loop streams by default; these tests script whole messages, so they run the blocking path.
     # Streaming has its own test below.
     monkeypatch.setenv("VEXA_AGENT_STREAM", "0")
+    # Legacy hard-cap tests explicitly exercise the operator opt-out.
+    monkeypatch.setenv("VEXA_AGENT_AUTO_CONTINUE_CHAT", "0")
     monkeypatch.delenv("VEXA_MOUNTS", raising=False)
 
 
@@ -240,7 +242,7 @@ def _not_a_job():
 
 
 def test_a_job_gets_its_own_tool_call_budget(tmp_path, monkeypatch, _not_a_job):
-    """The founder's OeNB job ran 72 steps and then died on the 40-call PER-TURN budget."""
+    """The founder's Example Bank job ran 72 steps and then died on the 40-call PER-TURN budget."""
     monkeypatch.setenv("VEXA_AGENT_MAX_TOOL_CALLS", "1")
     monkeypatch.setenv("VEXA_AGENT_JOB_MAX_TOOL_CALLS", "3")
     script = [_msg("", [("a", "Glob", {"pattern": "*"})]),
@@ -339,7 +341,7 @@ def _plain_turn(monkeypatch):
 
 def _never_stops(tool="Glob"):
     """A MODEL THAT NEVER STOPS. `_server` clamps to the last scripted message, so one message
-    carrying a tool call is replayed for ever — the founder's OeNB turns in miniature."""
+    carrying a tool call is replayed for ever — the founder's Example Bank turns in miniature."""
     return _server([_msg("working on it", [("c1", tool, {"pattern": "*"})])])
 
 
@@ -469,12 +471,16 @@ def test_context_budget_emits_an_event_and_shrinks_the_request(tmp_path, monkeyp
     monkeypatch.setenv("VEXA_AGENT_CONTEXT_TOKENS", "300")
     seen = []
     h = _harness(_server([_msg("", [("c1", "Read", {"file_path": str(tmp_path / "big.md")})]),
+                          _msg("", [("c2", "Read", {"file_path": str(tmp_path / "small.md")})]),
                           _msg("ok")], seen))
     (tmp_path / "big.md").write_text("x" * 40000)
+    (tmp_path / "small.md").write_text("small")
     h.prepare(tmp_path)
     evs = _events(h, tmp_path, "read it", allowed_tools=["Read"])
     assert any(e["type"] == "context-trimmed" for e in evs)
-    assert len(json.dumps(seen[1]["messages"])) < 40000
+    # the older round's result is compacted once a newer round exists; the newest is never touched
+    assert len(json.dumps(seen[2]["messages"])) < 40000
+    assert any(m.get("content") == "small" for m in seen[2]["messages"])
 
 
 def test_file_tools_refuse_a_path_outside_the_mounts(tmp_path):
@@ -896,17 +902,19 @@ def test_a_streamed_tool_call_still_answers_the_turn(tmp_path, monkeypatch):
 
 
 def test_a_trimmed_turn_says_so_on_done(tmp_path, monkeypatch):
-    """F89: `context-trimmed` had no consumer anywhere. The turn is COMPLETE — it just answered from
-    less — so it stays ok=True and reports what it gave up."""
+    """F89 kept, quietly (founder 2026-10-10): the turn is COMPLETE — it answered from a compacted
+    history — so it stays ok=True and carries the count for the activity line. It never carries a
+    `reason`, which the client renders as the turn's stop line under the reply."""
     monkeypatch.setenv("VEXA_AGENT_CONTEXT_TOKENS", "300")
     h = _harness(_server([_msg("", [("c1", "Read", {"file_path": str(tmp_path / "big.md")})]),
+                          _msg("", [("c2", "Read", {"file_path": str(tmp_path / "big.md")})]),
                           _msg("ok")]))
     (tmp_path / "big.md").write_text("x" * 40000)
     h.prepare(tmp_path)
     evs = _events(h, tmp_path, "read it", allowed_tools=["Read"])
     done = evs[-1]
-    assert done["type"] == "done" and done["ok"] is True
-    assert "context-trimmed" in done["reason"]
+    assert done["type"] == "done" and done["ok"] is True and done["reply"] == "ok"
+    assert done["compacted"] >= 1 and "reason" not in done
 
 
 # ── the web tools inside the loop (the adapter's own unit tests live in test_llm_web_tools.py) ───
@@ -978,3 +986,140 @@ def test_a_private_address_is_refused_inside_the_loop(tmp_path):
     result = next(e for e in evs if e["type"] == "tool-result")
     assert result["ok"] is False and "169.254.169.254" in result["summary"]
     assert evs[-1]["ok"] is True          # a refusal is an ordinary result; the turn goes on
+
+
+@pytest.mark.parametrize("batched", [True, False])
+def test_chat_continues_past_40_without_replaying_or_refusing_calls(tmp_path, monkeypatch, batched):
+    monkeypatch.delenv("VEXA_AGENT_AUTO_CONTINUE_CHAT", raising=False)
+    monkeypatch.setenv("VEXA_AGENT_MAX_TOOL_CALLS", "40")
+    calls=[(f"call_{i}", "Write", {"file_path": str(tmp_path / f"fact-{i}.md"), "content": str(i)}) for i in range(45)]
+    seen=[]
+    responses = [_msg("", calls)] if batched else [_msg("", [call]) for call in calls]
+    h=_harness(_server([*responses,_msg("Research complete")],seen))
+    h.prepare(tmp_path)
+    events=_events(h,tmp_path,"Research all sources",allowed_tools=["Write"])
+    executed=[e['callId'] for e in events if e['type']=='tool-call']
+    assert executed==[f"call_{i}" for i in range(45)]
+    assert events[-1]['ok'] and events[-1]['steps']==45
+    assert not any(e['type']=='turn-truncated' for e in events)
+    assert 'act' not in events[-1]
+    assert len(list(tmp_path.glob('fact-*.md')))==45
+    assert len([m for m in seen[-1]['messages'] if m['role']=='tool'])==45
+
+
+def test_auto_continuation_keeps_time_limit(tmp_path, monkeypatch):
+    monkeypatch.delenv("VEXA_AGENT_AUTO_CONTINUE_CHAT", raising=False)
+    monkeypatch.setenv("VEXA_AGENT_MAX_TURN_SEC", "-1")
+    h=_harness(_server([_msg("",[("call", "Write", {"file_path":str(tmp_path/'never.md'),"content":"no"})])]))
+    h.prepare(tmp_path)
+    events=_events(h,tmp_path,"work",allowed_tools=["Write"])
+    assert not events[-1]['ok'] and 'time budget' in events[-1]['reason']
+    assert not (tmp_path/'never.md').exists()
+
+
+# ── chat continuation is BOUNDED (VEXA_AGENT_MAX_CHAT_CONTINUATIONS) ────────────────────────────
+
+def test_chat_continuation_stops_after_the_configured_number_of_windows(tmp_path, monkeypatch):
+    """Auto-continue lifts the per-window call cap; this is the cap on the lifting. A model that
+    never stops gets 1 + N windows and then the same stop, line and Continue act as a hard cap."""
+    monkeypatch.delenv("VEXA_AGENT_AUTO_CONTINUE_CHAT", raising=False)
+    monkeypatch.setenv("VEXA_AGENT_MAX_TOOL_CALLS", "3")
+    monkeypatch.setenv("VEXA_AGENT_MAX_CHAT_CONTINUATIONS", "2")
+    h = _harness(_never_stops())
+    h.prepare(tmp_path)
+    evs = _events(h, tmp_path, "research everything", allowed_tools=["Glob"])
+    done = evs[-1]
+    assert sum(1 for e in evs if e["type"] == "tool-call") == 9      # 3 windows of 3
+    assert done["ok"] is False and "tool-call budget" in done["reason"]
+    assert done["act"]["label"] == "Continue"
+    # the line reports the whole turn, not the last window's 3 of 3
+    assert "after 9 of 9 steps" in done["reason"], done["reason"]
+
+
+def test_no_continuations_means_the_hard_cap(tmp_path, monkeypatch):
+    monkeypatch.delenv("VEXA_AGENT_AUTO_CONTINUE_CHAT", raising=False)
+    monkeypatch.setenv("VEXA_AGENT_MAX_TOOL_CALLS", "3")
+    monkeypatch.setenv("VEXA_AGENT_MAX_CHAT_CONTINUATIONS", "0")
+    h = _harness(_never_stops())
+    h.prepare(tmp_path)
+    evs = _events(h, tmp_path, "research everything", allowed_tools=["Glob"])
+    assert sum(1 for e in evs if e["type"] == "tool-call") == 3 and evs[-1]["ok"] is False
+
+
+def test_the_default_bound_is_finite(tmp_path, monkeypatch):
+    """Unset, a never-stopping chat still ends: 1 + the default continuations windows."""
+    from llm import openai_agent
+    monkeypatch.delenv("VEXA_AGENT_AUTO_CONTINUE_CHAT", raising=False)
+    monkeypatch.delenv("VEXA_AGENT_MAX_CHAT_CONTINUATIONS", raising=False)
+    monkeypatch.setenv("VEXA_AGENT_MAX_TOOL_CALLS", "2")
+    h = _harness(_never_stops())
+    h.prepare(tmp_path)
+    evs = _events(h, tmp_path, "research everything", allowed_tools=["Glob"])
+    expected = 2 * (1 + openai_agent._DEFAULT_MAX_CHAT_CONTINUATIONS)
+    assert sum(1 for e in evs if e["type"] == "tool-call") == expected and evs[-1]["ok"] is False
+
+
+def test_agent_api_declares_the_harness_defaults_and_stamps_them_into_every_worker(monkeypatch):
+    from llm import openai_agent
+    from shared.config import Settings
+    from control_plane.dispatch import build_unit_env
+    monkeypatch.delenv("VEXA_AGENT_AUTO_CONTINUE_CHAT", raising=False)
+    monkeypatch.delenv("VEXA_AGENT_MAX_CHAT_CONTINUATIONS", raising=False)
+    s = Settings()
+    assert s.agent_auto_continue_chat is openai_agent._DEFAULT_AUTO_CONTINUE_CHAT
+    assert s.agent_max_chat_continuations == openai_agent._DEFAULT_MAX_CHAT_CONTINUATIONS
+    inv = {"identity": {"subject": "u_1", "launcher": "user:u_1"}, "runner": "openai-agent",
+           "workspaces": [{"id": "u_1", "mode": "rw"}], "trigger": "message",
+           "start": {"entrypoint": {"inline": "hi"}}}
+    env = build_unit_env(s, inv, unit_id="unit-1", token="tok")
+    assert env["VEXA_AGENT_AUTO_CONTINUE_CHAT"] == "1" and env["VEXA_AGENT_MAX_CHAT_CONTINUATIONS"] == "4"
+    monkeypatch.setenv("VEXA_AGENT_AUTO_CONTINUE_CHAT", "0")
+    monkeypatch.setenv("VEXA_AGENT_MAX_CHAT_CONTINUATIONS", "7")
+    env = build_unit_env(Settings(), inv, unit_id="unit-1", token="tok")
+    assert env["VEXA_AGENT_AUTO_CONTINUE_CHAT"] == "0" and env["VEXA_AGENT_MAX_CHAT_CONTINUATIONS"] == "7"
+
+
+@pytest.mark.parametrize("bad", ["-1", "51", "many"])
+def test_agent_api_refuses_a_malformed_continuation_bound_at_boot(monkeypatch, bad):
+    from pydantic import ValidationError
+    from shared.config import Settings
+    monkeypatch.setenv("VEXA_AGENT_MAX_CHAT_CONTINUATIONS", bad)
+    with pytest.raises(ValidationError):
+        Settings()
+
+
+# ── the budget is the model's window; compaction never drops a person's words (2026-10-10) ──────
+
+def test_with_no_budget_set_a_long_chat_is_not_trimmed_at_24k(tmp_path, monkeypatch):
+    """The founder's chat: 85 messages dropped at a 24000-token default on a model with a 131k
+    window. With nothing set, the default is the large window — a chat of ~60k tokens goes whole."""
+    monkeypatch.delenv("VEXA_AGENT_CONTEXT_TOKENS", raising=False)
+    history = []
+    for i in range(45):
+        history += [{"role": "user", "content": f"question {i} " + "w" * 2600},
+                    {"role": "assistant", "content": f"answer {i} " + "v" * 2600}]
+    history.append({"role": "user", "content": "and now?"})
+    from llm.openai_agent import _DEFAULT_CONTEXT_TOKENS, _est_tokens
+    assert _est_tokens(history) > 24_000
+    sent, trimmed = trim_messages(history, _DEFAULT_CONTEXT_TOKENS)
+    assert trimmed == 0 and len(sent) == len(history)
+
+
+def test_compaction_never_drops_or_shortens_a_persons_message_or_the_latest_exchange():
+    history = []
+    for i in range(10):
+        history += [{"role": "user", "content": f"q{i} " + "u" * 900},
+                    {"role": "assistant", "content": "", "tool_calls": [
+                        {"id": f"c{i}", "type": "function", "function": {"name": "Read", "arguments": "{}"}}]},
+                    {"role": "tool", "tool_call_id": f"c{i}", "content": "r" * 4000},
+                    {"role": "assistant", "content": f"a{i} " + "a" * 3000}]
+    history.append({"role": "user", "content": "the ask " + "z" * 900})
+    sent, trimmed = trim_messages(history, 4000)
+    assert trimmed > 0
+    users_in = [m["content"] for m in history if m["role"] == "user"]
+    users_out = [m["content"] for m in sent if m["role"] == "user"]
+    assert users_out == users_in                                  # every person message, verbatim
+    assert sent[-1] == history[-1]                                # the latest exchange, untouched
+    sent_ids = {c["id"] for m in sent for c in (m.get("tool_calls") or [])}
+    answered = {m["tool_call_id"] for m in sent if m["role"] == "tool"}
+    assert sent_ids == answered                                   # never an orphan (F88)

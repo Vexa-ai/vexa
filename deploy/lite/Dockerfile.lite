@@ -7,7 +7,7 @@
 # agent-api (:8100) — over an internal redis + a shared Xvfb/PulseAudio
 # stack. The runtime uses the PROCESS backend (RUNTIME_BACKEND=process): bots and agent
 # workers run as CHILD PROCESSES, not docker-socket-spawned containers — so lite needs NO
-# docker socket. PostgreSQL + MinIO are external (the `make lite` sidecars).
+# docker socket. PostgreSQL + object storage (versitygw) are external (the `make lite` sidecars).
 #
 # Self-contained: built on the official Playwright image (the bot pins playwright 1.56.0) and
 # installs its own browser/X11/audio stack — it does NOT depend on the bot's published
@@ -22,7 +22,7 @@
 # Mirrors core/meetings/services/bot/Dockerfile (builder), but on the official Playwright
 # image instead of the published meet-join-env base. Browsers come from /ms-playwright.
 # -----------------------------------------------------------------------------
-FROM mcr.microsoft.com/playwright:v1.56.0-noble AS bot-builder
+FROM mcr.microsoft.com/playwright:v1.56.0-noble@sha256:35246d87a7c88ea9b771c65d33171b2611b02a8253b4b12ce6f94376c55f99f2 AS bot-builder
 ENV PNPM_HOME=/pnpm \
     PATH=/pnpm:$PATH \
     PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
@@ -52,13 +52,16 @@ RUN cd /build && node core/meetings/services/bot/warm-hf-cache.mjs || echo "[bot
 # runtime node_modules (npm prune --omit=dev) rather than a standalone trace. Built on the SAME
 # Playwright base as the final stage so any native addon (ws' bufferutil) is ABI-compatible.
 # -----------------------------------------------------------------------------
-FROM mcr.microsoft.com/playwright:v1.56.0-noble AS terminal-builder
+FROM mcr.microsoft.com/playwright:v1.56.0-noble@sha256:35246d87a7c88ea9b771c65d33171b2611b02a8253b4b12ce6f94376c55f99f2 AS terminal-builder
 WORKDIR /app/terminal
 COPY clients/terminal/package.json clients/terminal/package-lock.json ./
+COPY clients/terminal/no-image-backend ./no-image-backend
 RUN npm ci --no-audit --no-fund
 COPY clients/terminal/ ./
 # next build needs the dev deps (typescript/tailwind); prune them after so the runtime tree is lean.
-RUN npm run build && npm prune --omit=dev
+# sharp goes too: it resolves to the terminal's stand-in (no libvips is installed), and next loads it
+# only for the image optimizer, which next.config.ts turns off (same as clients/terminal/Dockerfile).
+RUN npm run build && npm prune --omit=dev && rm -rf node_modules/sharp node_modules/@img
 
 # -----------------------------------------------------------------------------
 # Stage 2c: valkey-builder — build valkey-server + valkey-cli from source on the SAME glibc
@@ -68,7 +71,7 @@ RUN npm run build && npm prune --omit=dev
 # from the pinned git tag, so: no external apt-repo trust (the issue verified redis's apt license
 # metadata is wrong), and no glibc mismatch — an alpine/musl binary can't run on this glibc base.
 # -----------------------------------------------------------------------------
-FROM mcr.microsoft.com/playwright:v1.56.0-noble AS valkey-builder
+FROM mcr.microsoft.com/playwright:v1.56.0-noble@sha256:35246d87a7c88ea9b771c65d33171b2611b02a8253b4b12ce6f94376c55f99f2 AS valkey-builder
 ARG VALKEY_VERSION=8.1.9
 # Pinned SHA-256 of the tag tarball (supply-chain, production-grade R16): the build verifies the bytes,
 # not just the version. `sha256sum -c` fails LOUD on any mismatch — a tampered or drifted tarball stops
@@ -89,17 +92,19 @@ RUN curl -fsSL "https://github.com/valkey-io/valkey/archive/refs/tags/${VALKEY_V
 # -----------------------------------------------------------------------------
 # Stage 3: final — assemble the all-in-one runtime image on the same Playwright base.
 # -----------------------------------------------------------------------------
-FROM mcr.microsoft.com/playwright:v1.56.0-noble AS final
+FROM mcr.microsoft.com/playwright:v1.56.0-noble@sha256:35246d87a7c88ea9b771c65d33171b2611b02a8253b4b12ce6f94376c55f99f2 AS final
 ENV DEBIAN_FRONTEND=noninteractive
 
-# System stack: Python (the 5 services) · supervisor · X11/audio (Xvfb/fluxbox/pulse) ·
-# noVNC (browser view) · postgres client (pg_isready) · git (agent governance ops).
+# System stack: Python (the 5 services) · supervisor · X11/audio (Xvfb/fluxbox/pulse, one set per bot) ·
+# postgres client (pg_isready) · git (agent governance ops). No VNC: there is no shared screen to view.
 # The cache/stream store is Valkey, copied from valkey-builder below — NOT jammy apt's redis-server
 # (6.0.16, no XAUTOCLAIM, the #653 parity gap).
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# `apt-get upgrade` takes the Ubuntu archive's security updates (OpenSSL, GnuPG) since the Playwright
+# base's snapshot without moving the browser it pins.
+RUN apt-get update && apt-get upgrade -y --no-install-recommends && apt-get install -y --no-install-recommends \
       python3 python3-pip python3-venv python3-dev build-essential \
       supervisor postgresql-client \
-      xvfb fluxbox x11vnc novnc python3-websockify \
+      xvfb fluxbox \
       pulseaudio xdotool xclip socat ffmpeg libsndfile1 \
       curl git ca-certificates \
  && usermod -aG pulse-access root 2>/dev/null || true \
@@ -112,10 +117,19 @@ COPY --from=valkey-builder /opt/valkey/bin/valkey-server /opt/valkey/bin/valkey-
 COPY --from=valkey-builder /valkey-COPYING /usr/local/share/valkey/LICENSE
 RUN valkey-server --version && command -v valkey-cli
 
-# uv — the per-service venvs resolve from each service's pyproject + uv.lock. Standalone installer
-# (version-pinned), on PATH at /usr/local/bin.
-RUN curl -LsSf https://astral.sh/uv/0.9.22/install.sh | env UV_INSTALL_DIR=/usr/local/bin UV_NO_MODIFY_PATH=1 sh \
- && uv --version
+# uv — the per-service venvs resolve from each service's pyproject + uv.lock. The release binary,
+# checked against the SHA-256 pinned here before it is unpacked (no remote script runs).
+ARG UV_VERSION=0.11.33
+RUN set -eu; \
+    case "$(dpkg --print-architecture)" in \
+      amd64) triple=x86_64-unknown-linux-gnu; sum=aa9fca823c03289fb6e3460b3dc864f3ea895cafaf9b99247701a67b17d1b018;; \
+      arm64) triple=aarch64-unknown-linux-gnu; sum=9ed88a9a42de3102f9704d021ab186fdf8a69a7ad9a1d3f3486ac6b1e55d6141;; \
+      *) echo "no pinned uv for $(dpkg --print-architecture)" >&2; exit 1;; \
+    esac; \
+    curl -fsSL "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-${triple}.tar.gz" -o /tmp/uv.tar.gz; \
+    echo "${sum}  /tmp/uv.tar.gz" | sha256sum -c -; \
+    tar -xzf /tmp/uv.tar.gz -C /tmp; install -m 0755 "/tmp/uv-${triple}/uv" /usr/local/bin/uv; \
+    rm -rf /tmp/uv.tar.gz "/tmp/uv-${triple}"; uv --version
 
 ENV UV_LINK_MODE=copy \
     PYTHONUNBUFFERED=1 \
@@ -123,39 +137,54 @@ ENV UV_LINK_MODE=copy \
     DISPLAY=:99
 
 WORKDIR /app
-RUN mkdir -p /var/log/supervisor /var/lib/redis /var/run/redis /workspaces
+# Every bot and agent worker runs as a non-root uid of its own (core/runtime isolation.py), so what
+# root keeps here is root's: the Valkey data directory (every stream, every tenant) is 0700, and the
+# workspace store is writable by root alone (the runtime hands each tenant its own 0700 tree).
+RUN mkdir -p /var/log/supervisor /var/lib/redis /var/run/redis /workspaces \
+ && chmod 0700 /var/lib/redis && chmod 0755 /workspaces
+# The Playwright base leaves its browser install writable by every user. Every bot launches these
+# binaries, each as its own uid, so none of them may be able to change them.
+RUN chmod -R a+rX,go-w /ms-playwright
+# The user the model's tools run as where a worker runs as root (core/agent/llm/ports.py TOOLS_USER;
+# the agent worker image creates the same 10001). Lite starts every worker as its subject's uid, and
+# a worker that is not root never switches; the user exists so the harness finds it either way.
+RUN groupadd --system --gid 10001 vexa-tools \
+ && useradd --system --uid 10001 --gid 10001 --home-dir /tmp --no-create-home --shell /usr/sbin/nologin vexa-tools
+# The mounted model credential's directory is root's alone.
+RUN install -d -m 0700 /var/lib/vexa/host-claude
 
 # ── Python venvs — one per service (avoids cross-service dependency-pin conflicts). Each mirrors
-#    that service's Dockerfile (uv sync --frozen + the production-only ASGI/DB extras). ────────────
+#    that service's Dockerfile (uv sync --frozen --no-dev --group production: the lock, nothing beside it). ───
 #    `--python 3.12` pins the interpreter to match every compose image's `FROM python:3.12-slim`.
 #    The base's system python can lag requires-python >=3.11, so an unpinned
 #    `uv venv` would auto-download the newest managed CPython (3.14) — whose stack fails at boot
-#    (SQLAlchemy's psycopg dialect import). Pinning keeps Lite on the same interpreter as compose/helm.
+#    (asyncpg's C extension does not build there). Pinning keeps Lite on the same interpreter as compose/helm.
 # admin-api
 COPY core/identity/services/admin-api/pyproject.toml core/identity/services/admin-api/uv.lock /tmp/admin/
 RUN cd /tmp/admin && uv venv --python 3.12 /opt/venvs/admin \
- && UV_PROJECT_ENVIRONMENT=/opt/venvs/admin uv sync --frozen --no-install-project \
- && uv pip install --python /opt/venvs/admin/bin/python "uvicorn[standard]==0.34.0" "sqlalchemy[asyncio]==2.0.36" "asyncpg==0.30.0"
+ && UV_PROJECT_ENVIRONMENT=/opt/venvs/admin uv sync --frozen --no-install-project --no-dev --group production
 # runtime
 COPY core/runtime/pyproject.toml core/runtime/uv.lock /tmp/runtime/
 RUN cd /tmp/runtime && uv venv --python 3.12 /opt/venvs/runtime \
- && UV_PROJECT_ENVIRONMENT=/opt/venvs/runtime uv sync --frozen --no-install-project --no-dev \
- && uv pip install --python /opt/venvs/runtime/bin/python "uvicorn[standard]==0.34.0"
+ && UV_PROJECT_ENVIRONMENT=/opt/venvs/runtime uv sync --frozen --no-install-project --no-dev --group production
 # meeting-api
 COPY core/meetings/services/meeting-api/pyproject.toml core/meetings/services/meeting-api/uv.lock /tmp/meeting/
 RUN cd /tmp/meeting && uv venv --python 3.12 /opt/venvs/meeting \
- && UV_PROJECT_ENVIRONMENT=/opt/venvs/meeting uv sync --frozen --no-install-project \
- && uv pip install --python /opt/venvs/meeting/bin/python "uvicorn[standard]==0.34.0" "sqlalchemy[asyncio]==2.0.36" "asyncpg==0.30.0" "boto3==1.35.0"
+ && UV_PROJECT_ENVIRONMENT=/opt/venvs/meeting uv sync --frozen --no-install-project --no-dev --group production
 # gateway
 COPY core/gateway/services/gateway/pyproject.toml core/gateway/services/gateway/uv.lock /tmp/gateway/
 RUN cd /tmp/gateway && uv venv --python 3.12 /opt/venvs/gateway \
- && UV_PROJECT_ENVIRONMENT=/opt/venvs/gateway uv sync --frozen --no-install-project \
- && uv pip install --python /opt/venvs/gateway/bin/python "uvicorn[standard]==0.34.0" "redis==5.2.1"
+ && UV_PROJECT_ENVIRONMENT=/opt/venvs/gateway uv sync --frozen --no-install-project --no-dev --group production
 # agent (control-plane group ⇒ fastapi/uvicorn; base deps cover the worker too)
 COPY core/agent/pyproject.toml core/agent/uv.lock /tmp/agent/
 RUN cd /tmp/agent && uv venv --python 3.12 /opt/venvs/agent \
  && UV_PROJECT_ENVIRONMENT=/opt/venvs/agent uv sync --frozen --no-install-project --no-default-groups --group control-plane
-RUN rm -rf /tmp/admin /tmp/runtime /tmp/meeting /tmp/gateway /tmp/agent
+# mcp — the ONE assembled MCP server the gateway relays /mcp to (ADR-0037); each agent worker's
+# toolbelt and a person's own MCP client reach the same tools through it.
+COPY core/meetings/services/mcp/pyproject.toml core/meetings/services/mcp/uv.lock /tmp/mcp/
+RUN cd /tmp/mcp && uv venv --python 3.12 /opt/venvs/mcp \
+ && UV_PROJECT_ENVIRONMENT=/opt/venvs/mcp uv sync --frozen --no-install-project --no-dev --group production
+RUN rm -rf /tmp/admin /tmp/runtime /tmp/meeting /tmp/gateway /tmp/agent /tmp/mcp
 
 # The agent worker is the ONE venv exec'd as a NON-ROOT per-subject uid (the runtime process
 # backend's POSIX tenant isolation — core/runtime/src/runtime_kernel/isolation.py). Its interpreter
@@ -167,7 +196,13 @@ RUN rm -rf /tmp/admin /tmp/runtime /tmp/meeting /tmp/gateway /tmp/agent
 RUN chmod o+x /root
 
 # Claude Code (the agent worker's model+tooling runtime) — npm global, on PATH for every spawned worker.
-RUN npm install -g @anthropic-ai/claude-code
+# Pinned with core/agent/worker/Dockerfile: the launch passes --setting-sources (llm/claude_code.py).
+# 2.1.293 declares engines.node >= 22; this stage's Playwright noble base ships Node 22.
+RUN npm install -g @anthropic-ai/claude-code@2.1.293
+# No hook runs in a worker, from any scope: the managed settings file is read whatever
+# --setting-sources says (the launch also passes the same key with --settings).
+RUN mkdir -p /etc/claude-code && \
+    printf '%s\n' '{"disableAllHooks": true}' > /etc/claude-code/managed-settings.json
 
 # ── Service source + the sealed contracts each loads BY PATH (layout mirrors each service image,
 #    re-rooted under /app/<service> so the import walk-up resolves the same relative tree). ────────
@@ -195,6 +230,9 @@ COPY core/agent/routes.v1.json                    /app/gateway/core/agent/routes
 # in the layout this image ships. `import gateway.app` is where the manifest walk happens, so an
 # omitted or misplaced manifest fails the build rather than the container's first boot.
 RUN cd /app/gateway && PYTHONPATH=/app/gateway/src /opt/venvs/gateway/bin/python -c "import gateway.app"
+# mcp        (PYTHONPATH=/app/mcp/src) — imports at build time, like the gateway above.
+COPY core/meetings/services/mcp/src /app/mcp/src
+RUN cd /app/mcp && PYTHONPATH=/app/mcp/src /opt/venvs/mcp/bin/python -c "import vexa_mcp.app"
 # meeting-api (PYTHONPATH=/app/meeting-api/src; repo_root walk-up == /app/meeting-api)
 COPY core/meetings/services/meeting-api/src /app/meeting-api/src
 COPY core/meetings/contracts/invocation.v1/invocation.schema.json /app/meeting-api/meetings/contracts/invocation.v1/invocation.schema.json
@@ -202,6 +240,7 @@ COPY core/meetings/contracts/lifecycle.v1/lifecycle.schema.json   /app/meeting-a
 COPY core/meetings/contracts/webhook.v1/webhook.schema.json       /app/meeting-api/meetings/contracts/webhook.v1/webhook.schema.json
 COPY core/runtime/contracts/runtime.v1/runtime.schema.json        /app/meeting-api/runtime/contracts/runtime.v1/runtime.schema.json
 COPY core/runtime/contracts/schedule.v1/schedule.schema.json      /app/meeting-api/runtime/contracts/schedule.v1/schedule.schema.json
+COPY core/meetings/routes.v1.json                                 /app/meeting-api/meetings/routes.v1.json
 # agent control plane + worker (PYTHONPATH=/app/agent; repo_root walk-up == /app/agent).
 # This tree mirrors the WORKER image's /app layout (core/agent/worker/Dockerfile): worker + llm +
 # shared + contracts + the seed registries. llm/ is LOAD-BEARING — worker.py's first import is
@@ -211,6 +250,14 @@ COPY core/agent/control_plane   /app/agent/control_plane
 COPY core/agent/worker          /app/agent/worker
 COPY core/agent/llm             /app/agent/llm
 COPY core/agent/contracts       /app/agent/contracts
+# The agent domain's MCP tool manifest. routers/health.py serves it from parents[2] of itself —
+# /app/agent here — so it rides its own COPY (the agent-api image does the same); without it
+# agent-api answers 503 for its manifest and the MCP service waits on it forever.
+# tests/test_image_by_path_reads.py derives every such read from source.
+COPY core/agent/mcp.tools.v1.json /app/agent/mcp.tools.v1.json
+# The agent domain's route manifest: control_plane/route_policy.py reads it from parents[1] of itself
+# (/app/agent here) to know which verbs need a person in the loop.
+COPY core/agent/routes.v1.json /app/agent/routes.v1.json
 # The portable workspace primitives (workspace_id/workspace_paths/entities/links), moved out of
 # core/agent/shared into their own domain (PRD decision 47, step 2) — both control_plane and
 # worker import them as `workspaces.shared.<module>`.
@@ -237,6 +284,10 @@ COPY --from=bot-builder /build/core              /app/core
 COPY --from=bot-builder /build/node_modules      /app/node_modules
 COPY --from=bot-builder /build/package.json /build/pnpm-workspace.yaml /build/pnpm-lock.yaml /build/tsconfig.base.json /build/turbo.json /app/
 COPY --from=bot-builder /build/core/meetings/services/bot/dist/browser-utils.global.js /app/browser-utils.global.js
+# The join module writes checkpoint screenshots to /app/storage/screenshots. Every bot runs as its own
+# uid, so that path is a link to the directory its launcher opens as fd 9 (bin/vexa-bot-launch): each
+# bot writes into its own private HOME and no bot reads another's.
+RUN mkdir -p /app/storage && ln -s /proc/self/fd/9 /app/storage/screenshots
 COPY --from=bot-builder /opt/hf-cache /opt/hf-cache
 ENV VEXA_HF_CACHE=/opt/hf-cache
 # License hygiene: the baked weights are onnx-community/pyannote-segmentation-3.0
@@ -250,35 +301,37 @@ COPY licenses/onnx-community-pyannote-segmentation-3.0.LICENSE.txt /opt/hf-cache
 COPY --from=terminal-builder /app/terminal /app/terminal
 
 # ── Launchers, supervisor config, entrypoint ──────────────────────────────────────────────────────
-COPY deploy/lite/bin/vexa-bot-launch deploy/lite/bin/vexa-agent-worker deploy/lite/bin/setup-pulseaudio-sinks.sh deploy/lite/bin/provision-key.sh /usr/local/bin/
+COPY deploy/lite/bin/vexa-bot-launch deploy/lite/bin/vexa-agent-worker deploy/lite/bin/vexa-runtime deploy/lite/bin/bot-display deploy/lite/bin/no-user-namespaces deploy/lite/bin/provision-key.sh deploy/lite/bin/render-supervisord deploy/lite/bin/persisted-secret /usr/local/bin/
+# The supervisor config is a template: the entrypoint renders the copy supervisord runs (see CMD).
 COPY deploy/lite/supervisord.conf /etc/supervisor/conf.d/vexa.conf
 COPY deploy/lite/entrypoint.sh /entrypoint.sh
-RUN chmod +x /usr/local/bin/vexa-bot-launch /usr/local/bin/vexa-agent-worker \
-      /usr/local/bin/setup-pulseaudio-sinks.sh /usr/local/bin/provision-key.sh /entrypoint.sh
+RUN chmod +x /usr/local/bin/vexa-bot-launch /usr/local/bin/vexa-agent-worker /usr/local/bin/vexa-runtime \
+      /usr/local/bin/bot-display /usr/local/bin/no-user-namespaces /usr/local/bin/provision-key.sh \
+      /usr/local/bin/persisted-secret /usr/local/bin/render-supervisord /entrypoint.sh
 
 # ── Env defaults (every var supervisord interpolates must be SET; entrypoint derives the rest) ────
 ENV LOG_LEVEL=info \
     RUNTIME_BACKEND=process \
     BOT_COMMAND=/usr/local/bin/vexa-bot-launch \
     AGENT_WORKER_COMMAND=/usr/local/bin/vexa-agent-worker \
-    DB_HOST=localhost DB_PORT=5432 DB_NAME=vexa DB_USER=postgres DB_PASSWORD=postgres \
+    DB_HOST=localhost DB_PORT=5432 DB_NAME=vexa DB_USER=postgres \
     REDIS_HOST=localhost REDIS_PORT=6379 \
     ADMIN_API_TOKEN= INTERNAL_API_SECRET= \
     TRANSCRIPTION_SERVICE_URL= TRANSCRIPTION_SERVICE_TOKEN= \
     MINIO_ENDPOINT= MINIO_ACCESS_KEY= MINIO_SECRET_KEY= MINIO_BUCKET=vexa MINIO_SECURE=false \
-    VEXA_AGENT_DEFAULT_SUBJECT=u_live VEXA_DISPATCH_SIGNING_KEY=dev-dispatch-signing-key \
+    VEXA_DISPATCH_SIGNING_KEY= \
     VEXA_BOT_API_KEY= VEXA_AGENT_MODEL= HOST_CLAUDE_CREDENTIALS= \
     ANTHROPIC_API_KEY= ANTHROPIC_AUTH_TOKEN= ANTHROPIC_BASE_URL= ANTHROPIC_MODEL= \
     ANTHROPIC_DEFAULT_OPUS_MODEL= ANTHROPIC_DEFAULT_SONNET_MODEL= ANTHROPIC_DEFAULT_HAIKU_MODEL= \
     VEXA_PUBLIC_API_URL=http://localhost:8056 VEXA_API_KEY= \
     TERMINAL_PUBLIC_URL=http://localhost:3001 \
-    NEXTAUTH_SECRET=vexa-lite-nextauth-secret JWT_SECRET=vexa-lite-jwt-secret
+    NEXTAUTH_SECRET= JWT_SECRET=
 
 # Front doors: gateway (8056) · terminal (3001) · agent control plane (8100).
-EXPOSE 8056 3001 8100 6080
+EXPOSE 8056 3001 8100
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
     CMD curl -sf http://localhost:8056/health > /dev/null || exit 1
 
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["supervisord", "-n", "-c", "/etc/supervisor/conf.d/vexa.conf"]
+CMD ["supervisord", "-n", "-c", "/run/vexa/supervisord.conf"]

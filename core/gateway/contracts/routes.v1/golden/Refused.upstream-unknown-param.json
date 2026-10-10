@@ -1,0 +1,19 @@
+{
+  "why": "an upstream naming a parameter the row does not match leaves the edge nothing to fill it with",
+  "manifest": {
+    "contract": "routes.v1",
+    "owner": "core/meetings",
+    "edge": "gateway",
+    "domain": "meetings",
+    "routes": [
+      {
+        "method": "POST",
+        "path": "/transcripts/by-id/{meeting_id}/share",
+        "scopes": [
+          "tx"
+        ],
+        "upstream": "/meetings/{platform}/{native_meeting_id}/share"
+      }
+    ]
+  }
+}

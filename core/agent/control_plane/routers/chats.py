@@ -1,5 +1,6 @@
-"""routers/chats.py — The conversation surface: dispatch, the SSE turn, sessions, the artifact-event sink and
-the routine schedule that wakes agents on a clock.
+"""routers/chats.py — The conversation surface: the SSE turn and its submit-and-leave twin, the chat's
+target, names and order, and sessions. The dispatch doors are `routers/ingress.py`; routines are
+`routers/routines.py`.
 
 Extracted from `api.py`'s `create_app` VERBATIM: the handler bodies below are the same
 bytes, with `@app.` rewritten to `@router.` and nothing else. Everything they close over
@@ -8,35 +9,67 @@ single identifier changed.
 """
 from __future__ import annotations
 
+import re
 import time
 
 from control_plane import chat_intents
 from control_plane import dispatch as dispatch_mod
 from control_plane import meeting_mint as meeting_mint_mod
-from control_plane import routines as routines_mod
 from control_plane import scaffolds as scaffolds_mod
+from control_plane import unit_faults
 from control_plane import global_layer, system_mounts
-from control_plane import workspace_routines as workspace_routines_mod
 from control_plane.api_shared import (
-    CONTEXT_SENTINEL, GLOBAL_TARGET_NOTE, ChatBody, ResetBody, RoutineCreate, RoutineEnabledPatch,
+    CONTEXT_SENTINEL, GLOBAL_TARGET_NOTE,
     _chat_turn_head, _context_grounding, _has_custom_model_endpoint, _is_slug,
     _model_creds_error_message, _record_chat_turn_head, _sse, _stream_tail_id,
-    inbox_pending, logger, meeting_binding, target_preamble, workspace_focus)
+    inbox_pending, inbox_withdraw, logger, meeting_binding, target_preamble, toolbelt_preamble, workspace_focus)
+from control_plane.peer_lookups import meeting_access_check
+from control_plane.bodies import CHAT_SESSION_PATTERN, ChatBody, ResetBody, SessionId
+from control_plane.ceiling import refuse_delegated, require_in_ceiling
 from control_plane.config_preflight import NOT_CONFIGURED, capability_state
-from control_plane.events import event_to_invocation
 from control_plane.workspace_attach import active_workspaces, shared_active_mounts
-from fastapi import APIRouter, Body, HTTPException, Request
-from fastapi.responses import StreamingResponse
-from jsonschema.exceptions import ValidationError
+from typing import Annotated, Literal
+
+from fastapi import APIRouter, Body, HTTPException, Path, Query, Request
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from fastapi.responses import JSONResponse, StreamingResponse
 from shared import chat_label as chat_label_mod
-from shared import units
+from shared import unit_input, units
 from shared.marks import flow_mark
+from shared.runtime_fault import RuntimeFault
 
 #: How the terminal names a meeting's own agent session — `meet-<row id>`. The `/api/sessions`
 #: docstring below has always said so; #1602 is the first thing on this side to READ it, because a
 #: chat born as a meeting's is named by that meeting (and one that merely CREATED a meeting is not —
 #: Vexa-ai/vexa#1597).
 _MEET_SESSION_PREFIX = "meet-"
+
+
+class ChatNameBody(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    session: SessionId = Field(min_length=1, description='the chat session to name')
+    title: str = Field(max_length=300, description='a concise 3-7 word task title')
+    source: Literal['human', 'agent'] = 'human'
+
+
+class AgentChatNameBody(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    session: SessionId = Field(min_length=1,
+                               description='the current chat session, as the turn context states it')
+    title: str = Field(max_length=300, description='a concise 3-7 word title naming the actual objective')
+
+
+#: A RAIL ROW KEY, as the terminal writes it: ``c:<chat session>`` or ``m:<meeting id>`` (a bare
+#: session id, as older clients sent, is still one). The part after the prefix is held to the same
+#: bound as every session id (``bodies.CHAT_SESSION_PATTERN``), so the stored order can never carry
+#: a path, a separator or anything long.
+RAIL_KEY_PATTERN = r"^(?:[cm]:)?[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+RailKey = Annotated[str, StringConstraints(pattern=RAIL_KEY_PATTERN)]
+
+
+class ChatOrderBody(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    order: list[RailKey] = Field(max_length=5000)
 
 
 def build(**d) -> APIRouter:
@@ -51,17 +84,34 @@ def build(**d) -> APIRouter:
     _scaffold_view = d['_scaffold_view']
     _schedule_source = d['_schedule_source']
     dispatcher = d['dispatcher']
-    invocations_url = d['invocations_url']
     mindex = d['mindex']
     redis_url = d['redis_url']
     scaffolds = d['scaffolds']
-    scheduler = d['scheduler']
     sess = d['sess']
     settings = d['settings']
+
+    def _refuse_delegated(request: Request) -> None:
+        """A chat turn is started by a person, never by a worker acting for one: a delegated
+        identity, whatever its regime, dispatches nothing here."""
+        refuse_delegated(request, reason="delegated_dispatch",
+                         instruction="A chat turn is started by the person, not by an agent acting for "
+                                     "them. Say what you would ask and stop; do not retry it another way.")
+
+    def _unit_key(unit_id: str) -> str:
+        """The unit's input key, the one the dispatcher signs that unit's entries with."""
+        secret = settings.internal_api_secret if settings is not None else None
+        return unit_input.unit_key(secret.get_secret_value() if secret else "", unit_id)
+
+    def _toolbelt_configured() -> bool:
+        return bool(settings is not None and (settings.mcp_url or "").strip()
+                    and settings.mcp_delegation_secret.get_secret_value())
     stream_reader = d['stream_reader']
     subject_of = d['subject_of']
     workspace_registry = d['workspace_registry']
     wsr = d['wsr']
+    # The same access decision the live transcript stream makes (routers/meetings.py): a chat may
+    # fold a meeting's transcript only when its caller could watch that transcript.
+    _meeting_access = meeting_access_check(_meeting_owner_lookup, getattr(wsr, "root", None))
 
     # ── THE TARGET WORKSPACE, BY NAME (Vexa-ai/vexa#1611) ────────────────────────────────────
     #
@@ -187,7 +237,7 @@ def build(**d) -> APIRouter:
             sid, title = str(r.get("session") or ""), str(r.get("title") or "")
             meeting_title = (titles.get(sid[len(_MEET_SESSION_PREFIX):], "")
                              if sid.startswith(_MEET_SESSION_PREFIX) else "")
-            out.append({**r, "label": chat_label_mod.chat_label(
+            out.append({**r, "label": r.get("named_title") or chat_label_mod.chat_label(
                 title, meeting_title=meeting_title,
                 scaffold_label=_preset_label(chat_label_mod.preset_kind(title), cache))})
         return out
@@ -227,7 +277,7 @@ def build(**d) -> APIRouter:
         any send in it created (Vexa-ai/vexa#1597), and any workspace it created
         (Vexa-ai/vexa#1603).
 
-        THE TURN'S OWN STREAM IS WHERE THIS IS KNOWN. `bot_send` is served by the vexa MCP, which is
+        THE TURN'S OWN STREAM IS WHERE THIS IS KNOWN. `request_meeting_bot` is served by the vexa MCP, which is
         stateless by design and has never been told which chat is calling it; the worker knows the
         result but not that a chat is a rail row; agent-api knows the subject and the session because
         it opened this response. So the one place holding both halves of *"this chat made that
@@ -237,7 +287,7 @@ def build(**d) -> APIRouter:
         the client binds off the same event for the render it is doing now, and this is what makes
         the binding survive a reload, a second window and a second machine.
 
-        NO OWNERSHIP RE-CHECK, deliberately. The row came back from a `bot_send` this subject's own
+        NO OWNERSHIP RE-CHECK, deliberately. The row came back from a send this subject's own
         worker made with this subject's own credential, so re-asking meeting-api would add latency
         inside a live SSE and no authority. Every READ of a meeting is owner-scoped where it matters
         regardless — `/api/meeting/note` and `/api/meeting/stream` both refuse a row this caller does
@@ -257,7 +307,7 @@ def build(**d) -> APIRouter:
         …AND IT BECOMES THE ONE THIS CHAT WRITES TO (Vexa-ai/vexa#1611). A `focus` event says *"this
         workspace is where this conversation is working"*, which is two consequences of one fact: it
         joins the mount set (`add_workspace`) and it becomes the target (`set_target`). That is why
-        `workspace_target` — the verb an agent calls when the person says *"work in the OeNB
+        `workspace_target` — the verb an agent calls when the person says *"work in the Example Bank
         workspace"* — emits the SAME event rather than a second kind: a workspace already in the set
         adds nothing and moves the target, a brand-new one does both, and there is one vocabulary
         for "where are we working" instead of two that can drift apart.
@@ -289,14 +339,6 @@ def build(**d) -> APIRouter:
                                      focused, subject, session)
             yield item
 
-    @router.post("/invocations", status_code=202)
-    def invocations(invocation: dict = Body(...)):
-        """The dispatcher sink — any trigger source POSTs a unit.v1 dispatch here."""
-        try:
-            workload_id = dispatcher.dispatch(invocation)
-        except ValidationError as e:  # non-conformant unit.v1 envelope — fail loud (P18)
-            raise HTTPException(status_code=400, detail=f"invalid unit.v1 dispatch: {e.message}")
-        return {"workload_id": workload_id}
     @router.post("/api/chat")
     def chat(body: ChatBody, request: Request):
         """A chat *now*-dispatch: spawn the isolated container, stream its Stream back as SSE.
@@ -331,7 +373,8 @@ def build(**d) -> APIRouter:
         return _chat(body, request, stream=False)
 
     @router.get("/api/chat/pending")
-    def chat_pending(request: Request, session: str | None = None):
+    def chat_pending(request: Request,
+                     session: Annotated[str | None, Query(pattern=CHAT_SESSION_PATTERN)] = None):
         """WHAT THIS CHAT HAS SUBMITTED AND ITS AGENT HAS NOT TAKEN YET (Vexa-ai/vexa#1610).
 
         The inbox is the in-topic and the worker publishes how far it has read, so this is a read of
@@ -348,10 +391,16 @@ def build(**d) -> APIRouter:
         except Exception:  # noqa: BLE001 — an unreadable generation is the id it always had
             gen = 0
         unit_id = units.chat_unit_id(subject, session, gen)
-        return {"pending": inbox_pending(redis_url, unit_id),
-                "cursor": _stream_tail_id(redis_url, units.output_topic(unit_id)) or ""}
+        pending = inbox_pending(redis_url, unit_id, _unit_key(unit_id))
+        # WHY THE QUEUE IS NOT MOVING, when something is (P18): the typed fault each blocked row
+        # already carries, once more at the top for a client that draws one banner, not N rows.
+        blocked = next((p["blocked"] for p in pending if p.get("blocked")), None)
+        return {"pending": pending,
+                "cursor": _stream_tail_id(redis_url, units.output_topic(unit_id)) or "",
+                **({"fault": blocked} if blocked else {})}
 
     def _chat(body: ChatBody, request: Request, *, stream: bool):
+        _refuse_delegated(request)
         if stream_reader is None:
             raise HTTPException(status_code=501, detail="stream relay not wired")
         subject = subject_of(request)  # server-derived (P20); body.subject is ignored
@@ -481,14 +530,17 @@ def build(**d) -> APIRouter:
         # the server, so it takes the dispatch path whatever a stale header says.
         resume = (request.headers.get("last-event-id") or None) if stream else None
         # Ground the chat in the terminal's ACTIVE meeting (if any): agent-api folds the live transcript
-        # from the meeting's redis Stream (tc:meeting:{native} — the SAME stream the live view renders) into
+        # from the meeting's redis Stream (tc:meeting:{row} — the SAME stream the live view renders) into
         # the prompt, fresh on every turn. The transcript stays inside the trusted control plane and
         # rides the prompt to the worker — no file, no cross-domain HTTP, no user key in the worker (P15).
+        # The meeting the client names is checked with the live stream's own access decision before
+        # anything is folded; a meeting this caller cannot read grounds nothing.
         ctx, tools, prompt = _context_grounding(
             body, session, redis_url,
             schedule_rows=lambda: _schedule_source(subject),
             workspace_mounts=lambda: (active_workspaces(wsr.root, subject)
                                       + shared_active_mounts(wsr.root, subject, mindex.list(subject))),
+            meeting_access=lambda meeting_id: _meeting_access(subject, meeting_id),
         )
         # THE CHAT'S MOUNT GENERATION rides the dispatch (Vexa-ai/vexa#1603). An agent-api routing
         # hint, exactly like `context.session` beside it: `dispatch_id` reads it off the in-memory
@@ -527,6 +579,12 @@ def build(**d) -> APIRouter:
         # and therefore in front of the sentinel below, so the person's half stays exactly their
         # words (F47): this is machinery, and machinery never renders as somebody's speech.
         prompt = _target_line(subject, session, _target) + prompt
+        # The naming ask and the clock name TOOLS, so they ride only a turn whose worker gets the
+        # toolbelt that serves them (`chat_name` and `current_time` on the assembled MCP — the
+        # `worker_toolbelt` capability). A turn without one is never told to call something it
+        # does not have.
+        if _toolbelt_configured():
+            prompt = toolbelt_preamble(session) + prompt
         # Mark the grounding→user boundary. Every branch returns `<grounding> + body.prompt`, so the
         # user's words are the exact suffix; the sentinel goes right before them.
         #
@@ -647,6 +705,11 @@ def build(**d) -> APIRouter:
                 # with and a room named on a later turn of the same thread does not retro-mount. The
                 # post-meeting run uses its own per-meeting session, so it spawns cold and gets the
                 # room; a turn that needs a different room needs a different session.
+                # A RETRY UNDER A ROW'S OWN ID RUNS ONCE (P18). A submission a runtime fault blocked
+                # is still on the inbox; the client retries it under the same id, so the held copy
+                # is withdrawn before the new one goes on — the next worker runs it once, not twice.
+                if body.turn_id:
+                    inbox_withdraw(redis_url, unit_id, _unit_key(unit_id), body.turn_id)
                 try:
                     unit_id = dispatcher.dispatch(  # spawn-or-touch the thread's warm chat unit
                         inv, room=room,
@@ -677,6 +740,16 @@ def build(**d) -> APIRouter:
                         status_code=503,
                         detail="That message did not reach your agent — nothing was lost on your "
                                "side, please send it again.") from exc
+                except RuntimeFault as fault:
+                    # THE RUNTIME SAID NO, OR WAS NOT THERE (P18). This used to climb out of here as
+                    # a bare `HTTPError` and reach the person as "Internal Server Error". It is a
+                    # typed refusal now: who failed (`source`), how (`kind`), a sentence that names
+                    # it without repeating the runtime's own text, and what to do. The words this
+                    # turn pre-delivered were withdrawn by the dispatcher, so a retry runs it once.
+                    logger.warning("chat turn refused by the runtime for subject=%s session=%s: %s",
+                                   subject, session, fault.kind)
+                    return JSONResponse(status_code=fault.http_status,
+                                        content=unit_faults.answer(fault))
                 # ONLY A WATCHED TURN RECORDS THE HEAD. The record is one key per unit meaning "the
                 # turn currently being streamed", and a submission is by definition not that — the
                 # person is watching something else. Overwriting it would leave the streaming turn's
@@ -692,8 +765,23 @@ def build(**d) -> APIRouter:
             # rows from this list rather than from what it remembers, which is what makes a reload,
             # another device and a swapped container agree.
             return {"ok": True, "id": body.turn_id or "", "session": session, "unit": unit_id,
-                    "pending": inbox_pending(redis_url, unit_id),
+                    "pending": inbox_pending(redis_url, unit_id, _unit_key(unit_id)),
                     "cursor": _stream_tail_id(redis_url, units.output_topic(unit_id)) or ""}
+        # AN ATTACH TO A UNIT NOTHING WILL RUN ON (P18). When the last spawn for this chat failed
+        # and the worker has taken nothing since, a view that attaches would wait out its whole
+        # timeout for events no worker is going to write. The relay answers with the recorded fault
+        # instead — on THIS stream, composed here, because the unit's out-stream has one writer and
+        # it is the worker (P23). Only when nothing has flowed past the cursor: a stream that has
+        # output to give is read as usual.
+        _fault = unit_faults.live_at(redis_url, unit_id) if resume else None
+        if _fault is not None and (_stream_tail_id(redis_url, units.output_topic(unit_id)) or "") in (
+                resume, "0-0", ""):
+            return StreamingResponse(
+                _sse([unit_faults.error_event(_fault), {"type": "turn-complete"}]),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
+                         "X-Unit-Id": unit_id, "X-Chat-Session": session},
+            )
         return StreamingResponse(
             _sse(_binding_watch(stream_reader.read(unit_id, resume=resume), subject, session)),
             media_type="text/event-stream",
@@ -705,7 +793,7 @@ def build(**d) -> APIRouter:
         """SET this chat's target workspace — the person clicking a chip in the header
         (Vexa-ai/vexa#1611).
 
-        The AGENT does not come through here. When the person says *"work in the OeNB workspace"*
+        The AGENT does not come through here. When the person says *"work in the Example Bank workspace"*
         the agent calls `workspace_target`, whose result the harness turns into a `focus` event, and
         `_binding_watch` writes it on the way past — the same one writer that records a created
         workspace. Two routes to one field would be two writers, and the chip and the record would
@@ -716,7 +804,10 @@ def build(**d) -> APIRouter:
         at the first write: the whole point of the field is that the agent may trust it."""
         subject = subject_of(request)
         session = str(body.get("session") or "").strip() or units.DEFAULT_CHAT_SESSION
+        if not re.fullmatch(CHAT_SESSION_PATTERN, session):
+            raise HTTPException(status_code=422, detail="not a chat session id")
         wid = str(body.get("workspace") or "").strip()
+        require_in_ceiling(request, wid)
         if wid and not _is_slug(wid):
             raise HTTPException(status_code=400, detail="not a workspace slug")
         if wid == system_mounts.GLOBAL_SLUG:
@@ -755,6 +846,40 @@ def build(**d) -> APIRouter:
         except Exception:  # noqa: BLE001 — index drop is the contract; the file delete is best-effort
             logger.exception("dropping continuity file failed subject=%s session=%s", subject, session)
         return {"ok": True}
+    def _name(request: Request, session: str, title: str, *, human: bool) -> dict:
+        subject = subject_of(request)
+        title = ' '.join(title.split())
+        if not title or len(title) > 100:
+            raise HTTPException(422, 'Use a title between 1 and 100 characters')
+        if not any(r['session'] == session for r in sess.list(subject)):
+            raise HTTPException(404, 'Chat not found')
+        changed = sess.name(subject, session, title, human=human)
+        row = next(r for r in _labelled(subject, sess.list(subject)) if r['session'] == session)
+        return {'changed': changed, 'label': row['label'], 'name_source': row.get('name_source')}
+
+    @router.post("/api/chat/name")
+    def name_chat(request: Request, body: ChatNameBody):
+        """Name a chat. A name from the person (`source: human`, the default) is protected from the
+        agent's renames; `source: agent` is the agent's suggestion and never overwrites one."""
+        return _name(request, body.session, body.title, human=body.source != 'agent')
+
+    @router.post("/api/chat/name/agent")
+    def name_chat_as_agent(request: Request, body: AgentChatNameBody):
+        """Name the current chat with a concise 3–7 word task title once its objective is clear.
+        Use the current chat session supplied in the turn context. Avoid raw prompts, secrets,
+        generic names and status words. Human-chosen names cannot be overwritten."""
+        return _name(request, body.session, body.title, human=False)
+
+    @router.get("/api/chat/order")
+    def read_chat_order(request: Request):
+        return {'order': sess.rail_order(subject_of(request))}
+
+    @router.put("/api/chat/order")
+    def save_chat_order(request: Request, body: ChatOrderBody):
+        if len(body.order) != len(set(body.order)):
+            raise HTTPException(422, 'Invalid chat order')
+        return {'order': sess.rail_order(subject_of(request), body.order)}
+
     @router.get("/api/sessions")
     def list_sessions(request: Request):
         """THE RAIL, FOR THIS PERSON, WHEREVER THEY SIGN IN (Vexa-ai/vexa#1591).
@@ -786,10 +911,11 @@ def build(**d) -> APIRouter:
         subject = subject_of(request)
         return {"sessions": _labelled(subject, sess.list(subject))}
     @router.get("/api/sessions/{session}/history")
-    def session_history(session: str, request: Request):
+    def session_history(session: Annotated[str, Path(pattern=CHAT_SESSION_PATTERN)],
+                        request: Request):
         """The session's prior conversation, as simplified turns the terminal can render (so clicking a
-        saved chat re-opens its history). Tolerant: a missing/empty transcript returns ``{turns: []}``;
-        an invalid subject/session never 500s."""
+        saved chat re-opens its history). A session the caller has no thread for is 404; a thread whose
+        transcript is missing or empty returns ``{turns: []}``; an invalid subject/session never 500s."""
         subject = subject_of(request)
         # The turn's cwd FOLLOWS the active set (flat model), so a thread's continuity may sit under
         # any currently-mounted workspace dir — hand the reader those candidates. Best-effort: a
@@ -800,91 +926,15 @@ def build(**d) -> APIRouter:
             extra = [m.path for m in ms]
         except Exception:  # noqa: BLE001
             logger.warning("mount resolution for history failed subject=%s — searching anchored roots only", subject)
+        # Only the caller's own trees and the workspaces their membership mounts are searched; a
+        # session found nowhere there is not theirs, whoever else has a thread of that name.
+        if wsr.locate_session(subject, session, extra_roots=extra) is None:
+            raise HTTPException(status_code=404, detail="session not found")
         try:
             turns = wsr.history(subject, session, extra_roots=extra)
         except Exception:  # noqa: BLE001 — history is best-effort; a bad path → empty, never an error
             logger.exception("loading session history failed subject=%s session=%s", subject, session)
             turns = []
         return {"turns": turns}
-    @router.post("/api/routines", status_code=201)
-    def create_routine(body: RoutineCreate, request: Request):
-        if scheduler is None or not invocations_url:
-            raise HTTPException(status_code=501, detail="scheduler not wired")
-        try:
-            routine = routines_mod.make_routine(
-                subject=subject_of(request), name=body.name, cron=body.cron, prompt=body.prompt,
-            )
-            job_spec = routines_mod.compile_to_job(routine, invocations_url=invocations_url)
-        except (ValueError, ValidationError) as e:  # bad cron form / non-conformant routine — fail loud
-            raise HTTPException(status_code=400, detail=str(getattr(e, "message", e)))
-        job = scheduler.schedule(job_spec)
-        ran_now = False
-        if body.run_now:
-            # Fire one immediate run via the dispatcher (no HTTP hop) so the author sees a result now.
-            try:
-                dispatcher.dispatch(job_spec["request"]["body"])
-                ran_now = True
-            except Exception:  # noqa: BLE001 — the routine is still scheduled even if the demo run fails
-                ran_now = False
-        return {"routine": routine, "job_id": job.get("job_id"), "ran_now": ran_now}
-    @router.get("/api/routines")
-    def list_routines(request: Request):
-        if scheduler is None:
-            return {"routines": []}
-        cards = workspace_routines_mod.routine_cards_for_subject(
-            subject_of(request),
-            jobs=scheduler.list_jobs(limit=1000),
-            workspaces_dir=wsr.root,
-        )
-        return {"routines": cards}
-    @router.patch("/api/routines/{name}/enabled")
-    def set_routine_enabled(name: str, body: RoutineEnabledPatch, request: Request):
-        if scheduler is None or not invocations_url:
-            raise HTTPException(status_code=501, detail="scheduler not wired")
-        subject = subject_of(request)
-        try:
-            workspace_routines_mod.set_routine_file_enabled(
-                subject,
-                name,
-                enabled=body.enabled,
-                workspaces_dir=wsr.root,
-            )
-            result = workspace_routines_mod.reconcile_workspace_routines(
-                subject,
-                scheduler=scheduler,
-                invocations_url=invocations_url,
-                workspaces_dir=wsr.root,
-            )
-        except FileNotFoundError:
-            raise HTTPException(status_code=404, detail="unknown routine")
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
-        return {
-            "ok": True,
-            "name": name,
-            "enabled": body.enabled,
-            "reconcile": result.__dict__,
-        }
-    @router.delete("/api/routines/{routine_id}")
-    def delete_routine(routine_id: str, request: Request):
-        if scheduler is None:
-            raise HTTPException(status_code=501, detail="scheduler not wired")
-        subject = subject_of(request)
-        for job in scheduler.list_jobs():
-            meta = job.get("metadata") or {}
-            if meta.get("routine_id") == routine_id and meta.get("owner") == subject:
-                scheduler.cancel_job(job["job_id"])
-                return {"ok": True, "routine_id": routine_id}
-        raise HTTPException(status_code=404, detail="unknown routine")
-    @router.post("/events", status_code=202)
-    def events(event: dict = Body(...)):
-        try:
-            invocation = event_to_invocation(event)
-        except ValidationError as e:
-            raise HTTPException(status_code=400, detail=f"invalid event.v1: {e.message}")
-        except ValueError as e:  # no plan carried — fail loud (P18)
-            raise HTTPException(status_code=422, detail=str(e))
-        workload_id = dispatcher.dispatch(invocation)
-        return {"workload_id": workload_id, "trigger": invocation["trigger"]}
 
     return router

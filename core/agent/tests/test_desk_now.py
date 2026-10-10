@@ -167,7 +167,7 @@ def test_an_empty_now_says_so_rather_than_vanishing(tmp_path):
 
 def test_a_dated_commitment_is_a_field_the_phase_filed(tmp_path):
     upsert_entity(tmp_path, "decision", "Circulate the charter",
-                  ["Cottalango asked for it before the next TSC."], "the 2026-09-02 transcript",
+                  ["Robin asked for it before the next TSC."], "the 2026-09-02 transcript",
                   dates={"due_at": NOW + 18 * 24 * HOUR})
     rows = desk_now.now_rows(tmp_path, now=NOW)
     assert [p["title"] for p in rows["due"]] == ["Circulate the charter"]

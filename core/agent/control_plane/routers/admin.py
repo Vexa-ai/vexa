@@ -8,13 +8,18 @@ single identifier changed.
 """
 from __future__ import annotations
 
-from control_plane import global_layer
+from control_plane import global_layer, system_mounts
+from control_plane.bodies import GlobalReadyBody
+from control_plane.ceiling import require_in_ceiling
 from fastapi import APIRouter, Body, HTTPException, Request
 from fastapi.responses import JSONResponse
 from shared.git_redaction import redact as redact_secrets
 import hmac
+import logging
 import json
 import os
+
+logger = logging.getLogger("agent_api.admin")
 
 
 def build(**d) -> APIRouter:
@@ -53,7 +58,8 @@ def build(**d) -> APIRouter:
 
         overview: dict = {"workloads": [], "meetings": []}
         try:
-            overview["workloads"] = admin_panel.fetch_workloads(settings.runtime_api_url)
+            overview["workloads"] = admin_panel.fetch_workloads(
+                settings.runtime_api_url, token=settings.runtime_api_token.get_secret_value())
         except Exception as e:  # noqa: BLE001 — typed partial failure (P18): the panel shows the section error
             # SCRUBBED, like every other error this service returns (R-E11). Both of these come off
             # a client built from a URL that routinely carries a credential — `redis://:password@host`
@@ -95,98 +101,66 @@ def build(**d) -> APIRouter:
         # Workloads cross-check the in-memory live registry (a stale "live" entry must not turn
         # relay quiet into a false FAIL). Unknown (kernel unreachable) → None = trust the registry.
         try:
-            workloads = admin_panel.fetch_workloads(settings.runtime_api_url)
+            workloads = admin_panel.fetch_workloads(
+                settings.runtime_api_url, token=settings.runtime_api_token.get_secret_value())
         except Exception:  # noqa: BLE001
             workloads = None
         return admin_panel.run_probe(settings, r, live.list(), relay_health=_txw.relay_health(),
                                      workloads=workloads)
-    @router.get("/api/global/state")
-    def global_state(request: Request):
-        """WHAT THE COMPANY LAYER HOLDS — the wizard's poll, and the honest answer to "why is this
-        instance still refusing people".
-
-        Readable by any authenticated subject on purpose: a non-admin who has just been refused at
-        the door deserves to be told the instance is mid-setup rather than that they are broken.
-        The company NAME is only returned once the gate is down — before that it is a half-written
-        answer to a question about somebody's employer."""
-        subject = subject_of(request)
-        gate = global_layer.instance_state(settings)
-        try:
-            st = global_layer.state(_global_store())
-        except HTTPException:
-            raise
-        except Exception as e:  # noqa: BLE001
-            raise HTTPException(status_code=500, detail=f"could not read the organisation tier: {e}")
-        down = gate.get("global_setup") == global_layer.COMPLETED
-        return {
-            "global_setup": gate.get("global_setup", global_layer.MISSING),
-            "company": (gate.get("company") or st["company"]) if down else None,
-            "present": st["present"],
-            "missing_files": st["missing_files"],
-            "reasons": st["reasons"],
-            "is_repo": st["is_repo"],
-            "commits": st["commits"],
-            "ready_to_accept": st["ready"],
-            "you_are_admin": global_layer.is_admin(settings, str(subject)),
-            "gate_sentence": global_layer.GATE_SENTENCE,
-        }
     @router.post("/api/global/ready")
-    def global_ready(request: Request, body: dict = Body(default={})):
-        """ACCEPT the company layer: verify the files, commit them as the admin, lift the gate.
+    def global_ready(request: Request, body: GlobalReadyBody = Body(default_factory=GlobalReadyBody)):
+        """ACCEPT an admin-written company layer: verify the files and commit them as the admin.
+        Call it at the END of the company-setup conversation, once the administrator agrees the five
+        files are right; telling them it is done before this has accepted it is always wrong.
 
-        NOTHING MAY MARK ITSELF READY. The agent that wrote the layer asks for this verb and the
-        verb goes and looks — the five files present and non-empty, and a README that opens with
-        the company's name and one sentence of what it does. That last rule is the founder's:
-        *"the first chat needs to present itself knowing about itself — which company it's from and
-        what's their service."* An agent can only say which company it belongs to if a human wrote
-        the name down, so the gate does not lift on a README that does not carry one.
+        OPTIONAL. Nothing waits for this any more (founder ruling 2026-10-08: "let's remove global
+        setup at all so that there is no need to setup global at all - let it be empty with no data -
+        it's fine"); `_global` may stay empty for good. It used to also lift the instance gate in
+        admin-api — that gate is gone, so this verb only verifies and commits.
 
-        Admin-only, idempotent, and it reports WHY it refused rather than just refusing — the caller
-        is an agent mid-conversation with the one person who can fix it."""
+        NOTHING MAY MARK ITSELF ACCEPTED: the verb goes and looks — the five files present and
+        written, and a README that opens with the company's name and one sentence of what it does,
+        because those two lines are read out loud to strangers. Admin-only, idempotent, and it
+        reports WHY it refused — the caller is an agent mid-conversation with the one person who
+        can fix it."""
+        require_in_ceiling(request, system_mounts.GLOBAL_SLUG)
         subject = subject_of(request)
         if not global_layer.is_admin(settings, str(subject)):
             raise HTTPException(status_code=403,
                                 detail="only the instance admin may accept the company layer")
         root = _global_store()
-        # The SECOND top-up point. Start is the one that matters for a running instance; this one
-        # catches the instance that was started before its store existed, or whose `_global` became
-        # writable later — and it runs BEFORE the commit below, so anything added rides into the
-        # admin's own acceptance commit instead of sitting untracked. Additive, never overwriting,
-        # and never raising (it logs what it could not write) — so it cannot fail an acceptance.
+        # Top-ups before the commit, so anything added rides into the admin's own acceptance commit
+        # instead of sitting untracked. Additive, never overwriting, and never raising.
         from control_plane import global_seed, preset_library
         preset_library.top_up(root)
-        # The rest of the tier on the same terms — the layer files, `POLICIES.md`, the flow pages
-        # and the mail templates. It cannot lift the gate on its own: every seeded layer file
-        # carries `global_layer.UNWRITTEN_MARKER`, and `state()` below counts a file that still
-        # carries it as not yet written.
         global_seed.top_up(root)
         st = global_layer.state(root)
         if not st["ready"]:
             return JSONResponse(status_code=409, content={
                 "accepted": False,
-                "global_setup": global_layer.MISSING,
                 "missing_files": st["missing_files"],
                 "reasons": st["reasons"],
                 "next": "write the missing files into /workspaces/_global, then call this again",
             })
-        email = str(body.get("author_email") or "").strip() or f"admin-{subject}@vexa.local"
-        name = str(body.get("author_name") or "").strip() or f"vexa admin {subject}"
+        # THE CALLER IS THE AUTHOR, and nobody else can be. The identity the call arrived with
+        # carries the admin's address; a body naming another address does not change who accepted
+        # the layer (the commit records the real actor). The name is only how the address is shown.
+        caller = (request.headers.get("x-user-email") or "").strip()
+        named = (body.author_email or "").strip()
+        if named and named.lower() != caller.lower():
+            logger.warning("global/ready: author_email %r is not the caller's — the commit is "
+                           "authored by the caller", named)
+        email = caller or f"admin-{subject}@vexa.local"
+        name = ((body.author_name or "").strip()
+                or (email.split("@", 1)[0] if caller else "")
+                or f"vexa admin {subject}")
         try:
             sha = global_layer.commit(root, author_email=email, author_name=name,
                                       message=f"company layer: {st['company']}")
         except Exception as e:  # noqa: BLE001
             raise HTTPException(status_code=500, detail=f"could not commit the company layer: {e}")
-        try:
-            global_layer.mark_ready(settings, company=st["company"])
-        except Exception as e:  # noqa: BLE001
-            # The commit stands and the files are on disk; only the MARKER failed. Say exactly that
-            # — an agent told "failed" would rewrite files that are already correct.
-            raise HTTPException(status_code=502, detail=(
-                f"the company layer is committed ({sha}) but the instance gate could not be "
-                f"recorded: {e}"))
-        return {"accepted": True, "global_setup": global_layer.COMPLETED,
-                "company": st["company"], "service": st["service"], "commit": sha,
-                "files": st["present"]}
+        return {"accepted": True, "company": st["company"], "service": st["service"],
+                "commit": sha, "files": st["present"]}
     @router.get("/api/models/test")
     def models_test(request: Request):
         """Test the effective model credentials NOW: custom mode = a real 1-token completion
@@ -210,7 +184,7 @@ def build(**d) -> APIRouter:
         rejected tokens, and the zero-balance-external-account case that 402s every segment."""
         from control_plane import config_test as _ct
         subject = subject_of(request)
-        url, token, source = "", "", "env"
+        configured: dict = {}
         settings = dispatcher.settings
         admin = (settings.admin_api_url or "").rstrip("/")
         if admin:  # same internal edge bot_spawn uses (bot-context carries the resolved override)
@@ -221,16 +195,16 @@ def build(**d) -> APIRouter:
                                            settings.internal_api_secret.get_secret_value()})
                 with _ur.urlopen(req, timeout=5) as r:
                     body = json.loads(r.read())
-                t = body.get("transcription") or {}
-                if t.get("url") or t.get("token"):
-                    url, token, source = t.get("url") or "", t.get("token") or "", "settings"
+                configured = body.get("transcription") or {}
             except Exception:
                 pass  # fall through to env — the probe result still says what was tested
-        if not url:
-            url = os.environ.get("TRANSCRIPTION_SERVICE_URL", "")
-            token = token or os.environ.get("TRANSCRIPTION_SERVICE_TOKEN", "")
-        elif not token:
-            token = os.environ.get("TRANSCRIPTION_SERVICE_TOKEN", "")
+        # ONE URL, ITS OWN TOKEN: the pair a bot spawned now would use. A person's URL never gets
+        # the deployment's token, and a person's token never goes to the deployment's URL.
+        url, token, source, provider = _ct.transcription_route(configured, {
+            "TRANSCRIPTION_SERVICE_URL": os.environ.get("TRANSCRIPTION_SERVICE_URL", ""),
+            "TRANSCRIPTION_SERVICE_TOKEN": os.environ.get("TRANSCRIPTION_SERVICE_TOKEN", "")})
+        if provider == "customer":     # the person's own endpoint: held to the outbound URL guard
+            return _ct.run_customer_transcription_test(url, token, source)
         return _ct.run_transcription_test(url, token, source)
 
     return router

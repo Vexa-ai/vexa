@@ -35,10 +35,10 @@ caller can look that ask's `label:` up in the library it owns.
 
 WHY A TRUNCATED MARK IS SALVAGED HERE AND NOT IN `marks.py`. The stored title of a row minted before
 this rule is `_truncate_title(prompt)` — 60 characters, single-lined — so `[vexa-job:extend:personal/
-kg/entities/person/james-spadafo…` reaches us with the mark's closing `]` cut off. `marks.read_job_
+kg/entities/person/james-hollist…` reaches us with the mark's closing `]` cut off. `marks.read_job_
 mark` is the RECORD reader and must keep refusing a malformed mark; `act_from_title` below is the
 DISPLAY reader for a string that has already been cut, and it is the only reason the founder's
-Extend row can read `Extend: personal/kg/entities/person/james-spadafo…` instead of nothing.
+Extend row can read `Extend: personal/kg/entities/person/james-hollist…` instead of nothing.
 
 WHAT IS NOT RECOVERABLE, said out loud. A row whose stored title is `Active context: the user is
 viewing the workspace file kg/e…` was truncated BEFORE the person's words — the preamble alone is 55

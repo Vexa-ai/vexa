@@ -10,6 +10,7 @@ flowchart LR
   end
   subgraph agent["agent"]
     agent_api["agent-api"]
+    credentials_broker["credential-broker"]
     agent_worker["agent-worker"]
   end
   subgraph gateway_system["gateway"]
@@ -31,7 +32,7 @@ flowchart LR
   subgraph platform["platform"]
     redis["redis"]
     postgres["postgres"]
-    minio["minio"]
+    object_store["object-store"]
   end
   subgraph flows["flows"]
     flows_api["flows-api"]
@@ -39,12 +40,15 @@ flowchart LR
   end
   slim["slim"]
   extension["extension"]
+  claude_plugin["claude-plugin"]
   terminal["terminal"]
   dashboard["dashboard (deprecated)"]
+  credentials_vault["OpenBao (optional)"]
   meeting_api -->|"write"| segments_table
+  bot -->|"HTTP"| meeting_api
   bot -->|"HTTPS"| transcription
   meeting_api -->|"JDBC"| postgres
-  meeting_api -->|"HTTPS"| minio
+  meeting_api -->|"HTTPS"| object_store
   meeting_api -->|"HTTPS"| runtime
   meeting_api -->|"HTTPS"| admin_api
   meeting_api -->|"HTTPS"| service_authority
@@ -58,6 +62,8 @@ flowchart LR
   admin_api -->|"JDBC"| postgres
   terminal -->|"HTTPS"| gateway
   terminal -->|"WebSocket"| gateway
+  terminal -->|"HTTP"| admin_api
+  terminal -->|"HTTP"| agent_api
   dashboard -->|""| gateway
   dashboard -->|""| gateway
   slim -->|"HTTPS"| gateway
@@ -65,3 +71,20 @@ flowchart LR
   flows_worker -->|""| agent_api
   flows_worker -->|""| gateway
   flows_worker -->|""| admin_api
+  agent_api -->|"HTTP"| credentials_broker
+  terminal -->|"HTTP"| credentials_broker
+  credentials_broker -->|"req"| credentials_vault
+  agent_worker -->|"HTTPS"| gateway
+  mcp -->|"HTTP"| agent_api
+  agent_api -->|"HTTP"| meeting_api
+  agent_api -->|"HTTP"| admin_api
+  agent_worker -->|"HTTP"| flows_api
+  bot -->|"HTTP"| meeting_api
+  runtime -->|"HTTP"| agent_api
+  runtime -->|"HTTP"| meeting_api
+  claude_plugin -->|"HTTPS"| gateway
+  agent_api -->|"HTTP"| flows_api
+  agent_api -->|"HTTPS"| gateway
+  mcp -->|"HTTP"| flows_api
+  mcp -->|"HTTP"| meeting_api
+  mcp -->|"HTTP"| admin_api

@@ -54,7 +54,7 @@ export async function initWorkspace(): Promise<{ workspace: string; seeded: bool
   return getJson(`/api/workspace/init`, { method: "POST" });
 }
 
-export interface WorkspaceSlot { repo: string | null; ref: string | null; name?: string; nested?: boolean; archived?: boolean }
+export interface WorkspaceSlot { repo: string | null; ref: string | null; name?: string; archived?: boolean }
 
 /** Archive (collapse, keep the data) or un-archive one of your workspaces. */
 export async function archiveWorkspace(slug: string, archived: boolean): Promise<{ slug: string; archived: boolean }> {
@@ -82,7 +82,7 @@ export async function deleteWorkspace(slug: string): Promise<{ slug: string; del
 /** `active`: the slug occupying the seed slot (`<root>/<subject>`) — a storage detail, not a rank. Every
  *  workspace is equal-rank; `active_set` (from readActiveSet) is the source of truth for what's mounted. */
 export interface AttachedWorkspaces { active: string | null; slots: Record<string, WorkspaceSlot>; published_url?: string | null }
-export interface SwapResult { subject: string; active: string; repo: string | null; ref: string | null; swapped: boolean; cloned: boolean; parked: string | null; nested: boolean }
+export interface SwapResult { subject: string; active: string; repo: string | null; ref: string | null; swapped: boolean; cloned: boolean; parked: string | null }
 
 /** The subject's attachment view: which workspace is active + the parked ones available to swap back to. */
 export async function readAttachedWorkspaces(): Promise<AttachedWorkspaces> {
@@ -254,7 +254,7 @@ export async function unshareWorkspace(workspaceId: string): Promise<{ slug: str
 /** POINT A CHAT'S WRITES at one of its workspaces (Vexa-ai/vexa#1611) — the header chip's click.
  *
  *  `workspace: ""` is the person's own desk, which is the default rather than a second name for it.
- *  The AGENT does not come through here: when the person says *"work in the OeNB workspace"* it
+ *  The AGENT does not come through here: when the person says *"work in the Example Bank workspace"* it
  *  calls `workspace_target`, whose result becomes a `focus` event agent-api reads on the way past.
  *  One field, one writer per side, and the two halves of "where does this chat write" cannot
  *  disagree about a chat neither of them saw last. */
@@ -276,7 +276,7 @@ export async function setSharedActive(workspace_id: string, active: boolean): Pr
  *  private baseline and any other active workspaces stay mounted. Pass `repo` to clone/restore a git repo,
  *  or `slug` to activate an already-parked slot. Idempotent — an already-active workspace is a no-op.
  *  `token` (optional) authenticates a PRIVATE repo's clone — used server-side only, never stored (P15). */
-export async function activateWorkspace(opts: { repo?: string; ref?: string; slug?: string; token?: string }): Promise<{ subject: string; slug: string; changed: boolean; cloned: boolean; nested: boolean }> {
+export async function activateWorkspace(opts: { repo?: string; ref?: string; slug?: string; token?: string }): Promise<{ subject: string; slug: string; changed: boolean; cloned: boolean }> {
   return getJson(`/api/workspace/activate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -611,7 +611,6 @@ export interface SharedAttachResult {
   attached: boolean;
   cloned: boolean;
   parked: string | null;
-  nested: boolean;
   state: "cloned" | "restored" | "already attached";
 }
 
@@ -674,4 +673,25 @@ export async function ensureDeployKey(slug: string, repo?: string): Promise<Depl
  *  it never creates one, so a surface can show the state before the person commits to anything. */
 export async function readDeployKey(slug: string): Promise<DeployKey> {
   return getJson(`/api/workspace/${encodeURIComponent(slug)}/deploy-key`);
+}
+
+export interface WorkspaceImport {
+  operation_id: string; status: "queued" | "running" | "completed" | "failed" | "interrupted";
+  result?: { workspace: string; cloned: boolean; changed: boolean; repo: string; ref: string };
+  error?: string; error_status?: number;
+}
+
+/** Start once, then query the same durable operation until the backend confirms completion. */
+export async function importWorkspace(repo: string, ref: string, token: string | undefined,
+  progress: (message: string) => void): Promise<NonNullable<WorkspaceImport["result"]>> {
+  let job = await getJson<WorkspaceImport>("/api/workspace/import", { method: "POST",
+    headers: { "Content-Type": "application/json" }, body: JSON.stringify({ repo, ref, token }) });
+  while (job.status === "queued" || job.status === "running") {
+    progress("Importing repository as a new workspace. Large repositories can take several minutes.");
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    job = await getJson<WorkspaceImport>(`/api/workspace/import/${encodeURIComponent(job.operation_id)}/status`);
+  }
+  if (job.status !== "completed" || !job.result)
+    throw new ApiError(job.error_status ?? 409, job.error ?? "Import interrupted. Check the workspace before retrying.", `/api/workspace/import/${job.operation_id}/status`);
+  return job.result;
 }

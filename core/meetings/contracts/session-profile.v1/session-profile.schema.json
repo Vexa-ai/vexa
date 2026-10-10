@@ -1,0 +1,137 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vexa.ai/schemas/session-profile.v1",
+  "title": "session-profile.v1",
+  "description": "What a stored browser session of an authenticated bot may contain, and the write-back that replaces it. #/$defs/SessionProfile is the profile itself: a bot restores only its paths from the userdata store, and meeting-api stores only its paths from a write-back. The write-back is the one route in x-routes, which the bot reaches at the URL meeting-api names in invocation.v1 `sessionWritebackUrl`. Two runtimes read this file verbatim, each from a byte-identical copy held by gate:fact-parity `session-profile-contract`: @vexa/remote-browser (src/session-profile.v1.schema.json: restore filter, write-back collection, local save/load) and meeting-api (session_profile/session-profile.v1.schema.json: the write-back route).",
+  "x-routes": [
+    {
+      "method": "PUT",
+      "path": "/internal/browser-session/{session_uid}",
+      "request": "WritebackBody",
+      "response": "WritebackResult",
+      "auth": "Authorization: Bearer <MeetingToken>, the invocation.v1 `token`, admitted for exactly {session_uid}; meeting-api then requires authenticated mode and that the session is the live authenticated bot (the newest session spawned on the deployment's identity, its meeting live or ended under 600 s). Refusals: 401 token, 409 mode off, 503 misconfigured, 403 not the live bot, 413 body over the profile's bound, 422 a body this contract refuses, 502 the store refused"
+    }
+  ],
+  "$defs": {
+    "Profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["files", "leveldbDirs", "leveldbFile", "maxFileBytes", "maxTotalBytes", "maxFiles"],
+      "description": "The shape of a session profile. A path is IN the profile when it is listed in `files`, or when its parent is exactly one of `leveldbDirs` and its whole name matches `leveldbFile`. Nothing else is: no other file, nothing nested below a LevelDB dir, no directory.",
+      "properties": {
+        "files": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/ProfilePath" }, "description": "exact profile-relative paths" },
+        "leveldbDirs": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/ProfilePath" }, "description": "LevelDB directories whose direct data files are in the profile" },
+        "leveldbFile": { "type": "string", "minLength": 1, "description": "regular-expression source for a LevelDB file name, anchored at both ends; matched against the whole name in both runtimes (JavaScript RegExp.test, Python re.fullmatch)" },
+        "maxFileBytes": { "type": "integer", "minimum": 1, "description": "the largest single file" },
+        "maxTotalBytes": { "type": "integer", "minimum": 1, "description": "the largest profile, all files together" },
+        "maxFiles": { "type": "integer", "minimum": 1, "description": "the most files a profile holds" }
+      }
+    },
+    "SessionProfile": {
+      "$ref": "#/$defs/Profile",
+      "description": "THE session profile: the auth-essential subset of a Chromium profile (cookies, login data, preferences, web data, Local Storage and Session Storage LevelDB data), about 200 KB. Changing it changes what every bot restores and what meeting-api accepts, so it is a contract change: re-seal, and copy this file over both runtime copies.",
+      "const": {
+        "files": [
+          "Local State",
+          "Default/Cookies",
+          "Default/Cookies-journal",
+          "Default/Preferences",
+          "Default/Secure Preferences",
+          "Default/Login Data",
+          "Default/Login Data-journal",
+          "Default/Login Data For Account",
+          "Default/Login Data For Account-journal",
+          "Default/Network Persistent State",
+          "Default/Web Data"
+        ],
+        "leveldbDirs": [
+          "Default/Local Storage/leveldb",
+          "Default/Session Storage"
+        ],
+        "leveldbFile": "^(CURRENT|MANIFEST-[0-9]{1,16}|[0-9]{1,16}\\.(log|ldb|sst))$",
+        "maxFileBytes": 8388608,
+        "maxTotalBytes": 33554432,
+        "maxFiles": 128
+      }
+    },
+    "ProfilePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "description": "A profile-relative, '/'-separated path, syntax only: no control character (U+0000-U+001F, U+007F), no backslash, not absolute, and no empty, '.' or '..' segment. Whether the path is in the profile is SessionProfile's rule.",
+      "not": {
+        "anyOf": [
+          { "pattern": "[\\u0000-\\u001f\\u007f\\\\]" },
+          { "pattern": "^/" },
+          { "pattern": "(^|/)\\.{0,2}(/|$)" }
+        ]
+      }
+    },
+    "WritebackEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "data"],
+      "description": "One file: exactly its path and its bytes. A link target, a mode or any other field is refused.",
+      "properties": {
+        "path": { "$ref": "#/$defs/ProfilePath" },
+        "data": {
+          "type": "string",
+          "maxLength": 11184812,
+          "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$",
+          "description": "the file's bytes, standard padded base64 (RFC 4648 section 4). maxLength is the encoding of SessionProfile.maxFileBytes"
+        }
+      }
+    },
+    "WritebackBody": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["files"],
+      "description": "The body of a write-back. Beyond this shape, meeting-api refuses the whole body (422, nothing written) unless every path is in SessionProfile and named once, every decoded file is within maxFileBytes, and all of them together within maxTotalBytes. A body larger than the base64 of maxTotalBytes plus framing for maxFiles entries is refused before it is parsed (413).",
+      "properties": {
+        "files": { "type": "array", "minItems": 1, "maxItems": 128, "items": { "$ref": "#/$defs/WritebackEntry" }, "description": "maxItems is SessionProfile.maxFiles" }
+      }
+    },
+    "WritebackResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["written", "bytes"],
+      "description": "The 200 answer: how many files were stored and their decoded size together.",
+      "properties": {
+        "written": { "type": "integer", "minimum": 1 },
+        "bytes": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "PathVectors": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["inProfile", "vectors"],
+      "description": "Path vectors: every `path` must be answered `inProfile` by every matcher of SessionProfile. The TypeScript matcher (@vexa/remote-browser isSessionProfilePath), the Python matcher (meeting-api profile_path_refusal) and validate.mjs each read these.",
+      "properties": {
+        "inProfile": { "type": "boolean" },
+        "vectors": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "why"],
+            "properties": {
+              "path": { "type": "string" },
+              "why": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      }
+    },
+    "Refused": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["why", "body"],
+      "description": "A refusal vector: `body` must be refused as a write-back body, by WritebackBody's shape or by SessionProfile's rules, for the reason `why` names.",
+      "properties": {
+        "why": { "type": "string", "minLength": 1 },
+        "body": {}
+      }
+    }
+  }
+}

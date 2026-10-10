@@ -39,15 +39,15 @@ Legend — **Have/0.12**: production in 0.12. **Port**: exists on `ei-workspace`
 | 8 | **Routines = trigger → plan** (time + event triggers, create-from-chat) | **Partial → Build** | `ei-workspace:services/runtime-api/scheduler*` has a **one-shot** scheduler (Redis sorted-set executor, retry); `metadata.cron` is **accepted but ignored**. Only trigger today: `meeting.completed`. | Build: (a) cron execution (`croniter`) on the existing scheduler; (b) a **generic event dispatcher** for `email.received`, `calendar.event_created`, `news.found`, `time.daily`, … → run an agent plan; (c) a routine model (name, trigger, plan) + CRUD + `/routine` create-from-chat. The infra exists; the engine is the build. |
 | 9 | **MCP** (tools server) | **Port** | `ei-workspace:services/mcp` wired into the gateway; 0.12 `/mcp` contract-only | Port; optionally expose knowledge-graph resources as MCP tools. |
 | 10 | **News ingestion** (scan tracked entities → workspace) | **Build** | Nothing. | New (lower priority): RSS/web fetch tool + `news.found` event → routine. |
-| 11 | **Self-host / air-gap** | **Have/0.12 (partial)** | `deploy/compose` stands up gateway+meeting-api+admin-api+runtime+postgres+redis+minio. Air-gappable. | Add agent-api / calendar / mcp / email services to compose; publish the `vexa-agent` image. |
+| 11 | **Self-host / air-gap** | **Have/0.12 (partial)** | `deploy/compose` stands up gateway+meeting-api+admin-api+runtime+postgres+redis+storage (versitygw). Air-gappable. | Add agent-api / calendar / mcp / email services to compose; publish the `vexa-agent` image. |
 | 12 | **BYO inference** (point the agent LLM at your endpoint) | **Build** | Transcription endpoint **is** configurable (air-gappable). The **agent LLM is a TODO seam** in 0.12 (`core/agent/.../core.py`); `ei-workspace` agent runs a `claude` CLI with a configurable `DEFAULT_MODEL` but no first-class "BYO endpoint" knob. | Build a clean inference adapter: `AGENT_LLM_BASE_URL` / `MODEL` / `API_KEY` so an enterprise can target self-hosted vLLM, in-tenant Azure OpenAI, Bedrock, or on-prem GPUs. |
 | 13 | **Enterprise identity (SSO / SCIM)** | **Build** | admin-api = API-token auth only. The dashboard does NextAuth (Google/Azure) **client-side**; the backend has no OAuth/SAML/SCIM. | Build backend OIDC/SAML (Okta, Entra ID, Ping) + SCIM provisioning — required for the enterprise self-host story. |
 
 ## Self-host · air-gap · BYO-inference — the specifics
 
-The enterprise (DTCC/MS/Citi) promise is "everything in your infrastructure, no egress, your inference." Status:
+The regulated-enterprise promise is "everything in your infrastructure, no egress, your inference." Status:
 
-- ✅ **Stack is self-hostable** — the whole control plane runs from `deploy/compose` (Postgres, Redis, MinIO, no required SaaS). Air-gappable today for the meeting/recording half.
+- ✅ **Stack is self-hostable** — the whole control plane runs from `deploy/compose` (Postgres, Redis, versitygw storage, no required SaaS). Air-gappable today for the meeting/recording half.
 - ✅ **BYO transcription** — `TRANSCRIPTION_SERVICE_URL`/`_TOKEN` already point at your STT (self-hosted Whisper, in-VPC Azure, etc.).
 - ⚠️ **BYO agent inference** — the seam exists but isn't a first-class config. **Must add** `AGENT_LLM_*` envs + adapter so no token ever leaves the network. This is the #1 air-gap blocker.
 - ⚠️ **Images** — `vexa-bot` is published; **`vexa-agent` is not yet** — needed for the runtime to spawn the agent. Publish (or build in-cluster) it.

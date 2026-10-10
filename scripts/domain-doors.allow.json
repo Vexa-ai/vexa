@@ -75,14 +75,6 @@
       "ruling": "PRD decision 40.5. HALF CLOSED: the URL now defaults to the gateway's assembled MCP surface (deploy/compose/docker-compose.yml, VEXA_MCP_URL) and `core/agent/worker` is classed `client` in this script's own UNITS (its VEXA_MCP_URL sites no longer appear above — client→edge is allowed outright). What remains open is THIS file: it is `agent` control-plane/shared code, not the worker, so it stays domain-kind and a domain may never name the mcp edge directly (the rule has no capability-class escape for domain→edge, unlike domain→domain). The entry closes when dispatch.py mints the worker's env from a value it does not itself hold as a literal MCP_URL/VEXA_MCP_URL-shaped key — e.g. the worker's own default (now in compose) covers the no-override case and this code only ever forwards an explicit operator override, or the mint moves into a helper this script does not scan as `agent`."
     },
     {
-      "path": "core/agent/worker/friction.py",
-      "door": "VEXA_AGENT_API_SELF_URL",
-      "line": 54,
-      "from": "agent-worker",
-      "to": "agent",
-      "ruling": "This is NOT the ADR-0037 seam (that one closed: `core/agent/worker` is now classed `client`, and its VEXA_MCP_URL sites are an ordinary client→edge reach, allowed outright). This is the worker reporting friction back to the SAME agent-api that spawned it — a callback to its own domain, not a client reaching an unrelated one — using an already-declared, already-defaulted config key (`VEXA_AGENT_API_SELF_URL`, config.v1.json class `defaulted`). The entry closes when the worker files friction through the assembled MCP edge (`report_friction`, already in `core/flows/mcp.tools.v1.json`) instead of calling agent-api's `/api/friction` directly, or when a worker-owned callback door is given its own declared class."
-    },
-    {
       "path": "core/agent/control_plane/routers/admin.py",
       "door": "TRANSCRIPTION_SERVICE_URL",
       "line": 218,
@@ -249,6 +241,14 @@
       "from": "terminal",
       "to": "agent",
       "ruling": "PRD decision 46 — clients reach ONE edge with a bearer, and this call has no bearer BY DESIGN. The invite card at /join renders for somebody with no account on this instance (Vexa-ai/vexa#1635): agent-api’s GET /api/workspace/invites/preview takes no subject because it is capability-gated by the invite token itself, and every /agent/{path} row in core/agent/routes.v1.json carries scopes, so the edge answers 401 to a visitor who just clicked a colleague’s link. Asking a stranger to sign in to find out what they are signing in FOR is the wrong order and reads as a phish. The entry closes when the edge can carry a scope-free, capability-gated route — the preview bound in routes.v1 with no scopes — and the client reads only GATEWAY_URL. Siblings: the admin, auth and version routes above."
+    },
+    {
+      "path": "clients/terminal/src/app/api/connections/broker.ts",
+      "door": "VEXA_CONNECTIONS_BROKER_URL",
+      "line": 43,
+      "from": "terminal",
+      "to": "agent",
+      "ruling": "ADR-0037 decision 1 — clients reach ONE edge with a bearer. A door opened in 0.13.2 by Connections (ADR-0040): the terminal's server calls the credential broker directly, in the human role. It is direct because the human role key — the authority to consent and store a credential — must live in no process that agent traffic crosses, and the gateway carries both. The signed identity (ADR-0041) bound the broker's agent role to the person; it gave the gateway no way to present the human role, so it did not close this. The entry closes when the gateway re-stamps a person's session as the broker's human role and the terminal reaches Connections through GATEWAY_URL only."
     }
   ]
 }

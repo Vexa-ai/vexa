@@ -21,20 +21,24 @@ def test_a_subject_config_with_a_runner_wins_over_the_dispatch_default():
     assert env["VEXA_RUNNER"] == "openai-agent"
 
 
-def test_the_qwen_dials_reach_the_worker_together():
+def test_the_qwen_dials_reach_the_worker_together(monkeypatch):
     """The whole decision-37 target in one config: our harness, the CCC endpoint, the model, and
-    the extra_body without which vLLM/Qwen returns no valid JSON at all."""
+    the extra_body without which vLLM/Qwen returns no valid JSON at all. The CCC box is a LAN
+    address, so its operator names it in the endpoint allow-list (the dogfood env does)."""
+    monkeypatch.setenv("VEXA_MODEL_BASE_URL_ALLOW", "192.168.1.6")
     env = _base()
     overlay_model_config(env, {
         "runner": "openai-agent", "mode": "custom",
         "base_url": "http://192.168.1.6:8001/v1", "model": "qwen3.8-27b",
         "extra_body": '{"chat_template_kwargs":{"enable_thinking":false}}'})
     assert env["VEXA_RUNNER"] == "openai-agent"
-    # ONE endpoint, stamped ONCE (PRD decision 34). The harness reads
-    # `VEXA_LLM_BASE_URL or ANTHROPIC_BASE_URL` and `VEXA_LLM_API_KEY or ANTHROPIC_AUTH_TOKEN`,
-    # and takes the model from `VEXA_LLM_MODEL or VEXA_AGENT_MODEL` — so the per-subject gateway
-    # reaches it through these without a second pair in a second dialect.
-    assert env["ANTHROPIC_BASE_URL"] == "http://192.168.1.6:8001/v1"
+    # ONE endpoint, under every name a harness reads. The harness reads
+    # `VEXA_LLM_BASE_URL or ANTHROPIC_BASE_URL` and `VEXA_LLM_API_KEY or ANTHROPIC_AUTH_TOKEN`, and
+    # the runtime fills any of them the dispatch leaves absent with the DEPLOYMENT's value — so the
+    # subject's endpoint is pinned under both, and the openai-agent model override is pinned empty:
+    # the model is the one VEXA_AGENT_MODEL the overlay resolved.
+    assert env["ANTHROPIC_BASE_URL"] == env["VEXA_LLM_BASE_URL"] == "http://192.168.1.6:8001/v1"
+    assert env["VEXA_LLM_MODEL"] == ""
     assert env["VEXA_AGENT_MODEL"] == "qwen3.8-27b"
     # `extra_body` is the exception: no Anthropic-dialect equivalent exists, and without it a
     # self-hosted Qwen reasons its whole budget away and returns nothing parseable.

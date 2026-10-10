@@ -3,7 +3,8 @@
 The portable workspace primitives, imported by both `core/agent/control_plane` (the control plane)
 and `core/agent/worker` (the isolated worker) — the two runtimes that read/write a workspace.
 
-Zero-HTTP, stdlib + git only (no FastAPI, no pydantic): `workspace_id` (minting + the
+Zero-HTTP, stdlib + git only (no FastAPI, no pydantic): `gitexec` (the one way git runs here — a
+verbatim copy of `core/agent/shared/gitexec.py`, held by the parity fact `git-exec`), `workspace_id` (minting + the
 `.vexa/workspace.json` identity file), `workspace_paths` (containment/traversal guards),
 `entities` (the `EntityFrontmatter` read/write seam — `entity_upsert`, slugify, the card renderer),
 `links` (the `[[ws:<workspace-id>/<entity-id>]]` grammar and cross-workspace resolution). Moved out

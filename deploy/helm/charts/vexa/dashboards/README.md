@@ -25,7 +25,7 @@ we are not selling against them.
 
 The chart ships the dashboard and the datasource template as two ConfigMaps, behind
 `adoptionPanel.enabled` (**off by default**). It does **not** deploy Grafana. Standing a
-Grafana into a central bank's cluster is that bank's platform decision, not a side effect of
+Grafana into a regulated customer's cluster is that customer's platform decision, not a side effect of
 installing a meeting bot — and the delivery kit already carries a declared hole
 (`kube-prometheus-stack-not-mirrored`) about shipping monitoring CRDs it does not mirror.
 
@@ -132,7 +132,7 @@ tells them apart, and it is on the top row for that reason.**
   panel rather than skip the row; Postgres has no `try_cast`.
 - **The scans are bounded by volume, not by an index.** `subject_refs` is an opaque blob with
   nothing to push a predicate into — the same constraint the flows engine itself works under.
-  At a central bank's meeting volume this is a table scan of thousands of rows per refresh,
+  At a large organisation's meeting volume this is a table scan of thousands of rows per refresh,
   which is fine; at millions it would want a materialised read model, and that is the moment to
   build one rather than now.
 

@@ -1,0 +1,17 @@
+{
+  "key": "fixture-agent-key-not-a-deployment-secret-0001",
+  "claims": {
+    "role": "agent",
+    "actor": "42",
+    "session": "mcp-request-6f1c2a9e0b7d4c3e8a5f1b2c3d4e5f60",
+    "at": 1760000000,
+    "nonce": "3b8c0d6e9f2a4b1c8d7e6f5a4b3c2d1e",
+    "method": "GET",
+    "path": "/api/connections",
+    "body": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "request_body": "",
+  "encoded": "eyJyb2xlIjoiYWdlbnQiLCJhY3RvciI6IjQyIiwic2Vzc2lvbiI6Im1jcC1yZXF1ZXN0LTZmMWMyYTllMGI3ZDRjM2U4YTVmMWIyYzNkNGU1ZjYwIiwiYXQiOjE3NjAwMDAwMDAsIm5vbmNlIjoiM2I4YzBkNmU5ZjJhNGIxYzhkN2U2ZjVhNGIzYzJkMWUiLCJtZXRob2QiOiJHRVQiLCJwYXRoIjoiL2FwaS9jb25uZWN0aW9ucyIsImJvZHkiOiJlM2IwYzQ0Mjk4ZmMxYzE0OWFmYmY0Yzg5OTZmYjkyNDI3YWU0MWU0NjQ5YjkzNGNhNDk1OTkxYjc4NTJiODU1In0",
+  "signature": "357bafed59bb4b3de454897730b9eee1582d1015e3211d1c8c71647c4ca41800",
+  "header": "eyJyb2xlIjoiYWdlbnQiLCJhY3RvciI6IjQyIiwic2Vzc2lvbiI6Im1jcC1yZXF1ZXN0LTZmMWMyYTllMGI3ZDRjM2U4YTVmMWIyYzNkNGU1ZjYwIiwiYXQiOjE3NjAwMDAwMDAsIm5vbmNlIjoiM2I4YzBkNmU5ZjJhNGIxYzhkN2U2ZjVhNGIzYzJkMWUiLCJtZXRob2QiOiJHRVQiLCJwYXRoIjoiL2FwaS9jb25uZWN0aW9ucyIsImJvZHkiOiJlM2IwYzQ0Mjk4ZmMxYzE0OWFmYmY0Yzg5OTZmYjkyNDI3YWU0MWU0NjQ5YjkzNGNhNDk1OTkxYjc4NTJiODU1In0.357bafed59bb4b3de454897730b9eee1582d1015e3211d1c8c71647c4ca41800"
+}

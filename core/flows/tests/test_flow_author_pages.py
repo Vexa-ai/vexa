@@ -38,7 +38,7 @@ import flows_pages
 
 _ENV = {"VEXA_FLOWS_API_KEY": "test-flows-key-author-pages",
         "INTERNAL_API_SECRET": "test-internal-secret",
-        "VEXA_FLOWS_DB_URL": "postgresql+psycopg://author-pages:unreachable@127.0.0.1:1/flows"}
+        "VEXA_FLOWS_DB_URL": "postgresql+pg8000://author-pages:unreachable@127.0.0.1:1/flows"}
 
 T0 = 1_788_687_000.0            # 2026-09-06 09:30Z, as `clock.now()` writes it
 

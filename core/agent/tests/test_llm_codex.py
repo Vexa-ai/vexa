@@ -5,6 +5,9 @@ import json
 import os
 from pathlib import Path
 
+import pytest
+
+from llm import faults
 from llm.codex import (CodexHarness, _link_sessions_into_workspace, _mcp_config,
                        normalize_notification)
 
@@ -190,9 +193,9 @@ def test_a_codex_transcript_terms_publish_paints_the_chips():
 
 
 def test_a_codex_bot_send_opens_the_live_transcript():
-    body = json.dumps({"sent": True, "meeting_row": "77"})
+    body = json.dumps({"id": 77, "native_meeting_id": "abc-defg-hij", "status": "requested"})
     evs = _completed({"type": "mcpToolCall", "id": "i4", "status": "completed",
-                      "server": "vexa", "tool": "bot_send",
+                      "server": "vexa", "tool": "request_meeting_bot",
                       "arguments": {}, "result": body})
     art = next(e for e in evs if e["type"] == "artifact")
     assert art["path"] == "meeting:77" and art["pin"] is True
@@ -203,3 +206,94 @@ def test_a_failed_codex_item_moves_nothing():
     evs = _completed({"type": "fileChange", "id": "i5", "status": "failed",
                       "changes": [{"path": "/workspaces/u_1/notes/a.md"}]})
     assert [e["type"] for e in evs] == ["tool-result"]
+
+
+def test_codex_reads_its_home_from_codex_home_not_home(tmp_path: Path, monkeypatch):
+    """The runtime mounts the subscription credential at $CODEX_HOME/auth.json and names CODEX_HOME;
+    the worker image's HOME is elsewhere. The preflight and the session link follow CODEX_HOME."""
+    from llm import codex as codex_mod
+
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    (codex_home / "auth.json").write_text(json.dumps({"tokens": {"access_token": "x"}}))
+    monkeypatch.setenv("HOME", str(tmp_path / "elsewhere"))
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    for k in ("OPENAI_API_KEY", "CODEX_API_KEY"):
+        monkeypatch.delenv(k, raising=False)
+    assert codex_mod.codex_home() == codex_home
+    assert CodexHarness().preflight() is None
+    work = tmp_path / "ws"
+    CodexHarness().prepare(work)
+    assert (codex_home / "sessions").is_symlink()
+    monkeypatch.delenv("CODEX_HOME")
+    assert codex_mod.codex_home() == tmp_path / "elsewhere" / ".codex"
+    assert CodexHarness().preflight() is not None        # nothing at $HOME/.codex/auth.json
+
+
+# ── a failed turn ends TYPED (P18 — architecture pass 6, S66) ───────────────────────────────────
+# A failed Codex turn used to end `{"type": "done", "ok": False}` with the error's words as the reply
+# and no `fault`, so the chat could not say who failed — the one harness of three that did not
+# translate (`llm/faults.py`: every harness does).
+
+def _failed_turn_lines(error: dict, *, said: str = "", thread_id="thr_1"):
+    lines = _turn_lines(thread_id)[:3]
+    if said:
+        lines.append({"method": "item/agentMessage/delta", "params": {
+            "delta": said, "threadId": thread_id, "turnId": "turn_1", "itemId": "a1"}})
+    lines.append({"method": "turn/completed", "params": {"threadId": thread_id, "turn": {
+        "id": "turn_1", "status": "failed", "items": [], "error": error}}})
+    return lines
+
+
+def _done_of(lines, tmp_path: Path, monkeypatch) -> dict:
+    for k in ("OPENAI_API_KEY", "CODEX_API_KEY"):
+        monkeypatch.delenv(k, raising=False)
+    proc = _Process(lines)
+    events = list(CodexHarness(process_factory=lambda *a, **k: proc).run_turn(tmp_path, "hi"))
+    assert events[-1]["type"] == "done" and events[-1]["ok"] is False
+    return events[-1]
+
+
+def test_a_codex_usage_limit_ends_the_turn_as_the_providers_fault(tmp_path: Path, monkeypatch):
+    said = "You've hit your usage limit. Try again at 4:12 PM."
+    done = _done_of(_failed_turn_lines({"message": said, "codexErrorInfo": "usageLimitExceeded"}),
+                    tmp_path, monkeypatch)
+    assert done["fault"]["source"] == "model-provider" and done["fault"]["kind"] == "unpaid"
+    assert done["fault"]["provider"] == "chatgpt.com"
+    assert done["detail"] == said and done["reply"] == faults.ProviderFault(**done["fault"]).sentence()
+
+
+@pytest.mark.parametrize("info, kind, status", [
+    ("unauthorized", "unauthorized", None),
+    ("rateLimitExceeded", "rate_limited", None),
+    ("serverOverloaded", "unavailable", None),
+    ({"httpConnectionFailed": {"httpStatusCode": 401}}, "unauthorized", 401),
+    ({"responseStreamDisconnected": {"httpStatusCode": None}}, "unavailable", None),
+    ({"responseTooManyFailedAttempts": {"httpStatusCode": 503}}, "unavailable", 503),
+])
+def test_codex_error_labels_name_the_kind(info, kind, status, tmp_path: Path, monkeypatch):
+    done = _done_of(_failed_turn_lines({"message": "stream failed", "codexErrorInfo": info}),
+                    tmp_path, monkeypatch)
+    assert (done["fault"]["kind"], done["fault"]["status"]) == (kind, status)
+
+
+def test_what_the_model_already_said_stays_the_reply(tmp_path: Path, monkeypatch):
+    done = _done_of(_failed_turn_lines({"message": "rate limited", "codexErrorInfo": "rateLimitExceeded"},
+                                       said="Here is the first half"), tmp_path, monkeypatch)
+    assert done["fault"]["kind"] == "rate_limited" and done["reply"] == "Here is the first half"
+
+
+def test_a_failure_that_names_no_provider_stays_untyped(tmp_path: Path, monkeypatch):
+    """Codex's own limits are not the provider's — and an untyped failed `done` is what lets the
+    worker retry a stale resume, so nothing is typed that the error does not name."""
+    done = _done_of(_failed_turn_lines({"message": "sandbox denied the command", "codexErrorInfo": "sandboxError"}),
+                    tmp_path, monkeypatch)
+    assert "fault" not in done and done["reply"] == "sandbox denied the command"
+
+
+def test_a_refused_json_rpc_call_is_typed_from_its_words(tmp_path: Path, monkeypatch):
+    lines = [{"id": 1, "result": {}}, {"id": 2, "result": {"thread": {"id": "thr_1"}}},
+             {"id": 3, "error": {"code": -32603, "message": "unexpected status 401 Unauthorized: invalid api key"}}]
+    done = _done_of(lines, tmp_path, monkeypatch)
+    assert done["fault"]["kind"] == "unauthorized" and done["fault"]["status"] == 401
+    assert "invalid api key" in done["detail"] and done["reply"].startswith("The model provider (chatgpt.com)")

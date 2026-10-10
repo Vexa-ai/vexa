@@ -8,7 +8,7 @@ from `.env.example` on first `make all`). Defaults below are what the stack fall
 variable is unset — fine for local evaluation, **not** for anything exposed.
 
 <Warning>
-Change every secret (`ADMIN_TOKEN`, `INTERNAL_API_SECRET`, DB and MinIO credentials,
+Change every secret (`ADMIN_TOKEN`, `INTERNAL_API_SECRET`, DB and storage credentials,
 `VEXA_DISPATCH_SIGNING_KEY`, `NEXTAUTH_SECRET`) before putting the stack on a network. The defaults
 are public.
 </Warning>
@@ -104,16 +104,34 @@ redirect this operator callback. Leave all four values unset for the stock OSS b
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `ADMIN_TOKEN` | none — you must set it | Admin API key (`X-Admin-API-Key`) — mints users and tokens, and signs every per-spawn MeetingToken (meeting-api reads it as `ADMIN_TOKEN`, admin-api as `ADMIN_API_TOKEN`). |
+| `ADMIN_TOKEN` | none — you must set it | Admin API key (`X-Admin-API-Key`) — mints users and tokens (meeting-api reads it as `ADMIN_TOKEN`, admin-api as `ADMIN_API_TOKEN`). meeting-api derives the key that signs every per-spawn MeetingToken from it and never signs with it directly. Never a value published in this repository: the services refuse to boot on one. |
 | `INTERNAL_API_SECRET` | none — you must set it | Shared secret for service-to-service calls. |
+| `REDIS_PASSWORD` | none — you must set it (compose) | The bundled Redis's default-user password; the services connect with it inside their Redis URL, and no bot or worker sees it. Compose's `redis` refuses to start without one (`make all` mints it; keep it URL-safe — `openssl rand -hex 32`); Helm generates one (`secrets.redisPassword`, or a `REDIS_PASSWORD` key in `secrets.existingSecretName`); Lite mints one per boot. |
+| `REDIS_WORKLOAD_ACL` | `per-workload` | **agent-api, meeting-api.** What a spawned agent worker or meeting bot connects to Redis as. `per-workload`: a Redis user of its own — a worker its own unit's four keys (input, output, read cursor, delegation token), a bot its own meeting's two channels and the transcript stream it appends to — defined at spawn and removed when it ends. `shared`: the service connection, only for a Redis that cannot define users (some managed services); every worker and bot can then read and write every other's keys, so set it only where every person on the instance trusts every other. With your own Redis, the services' user needs `ACL SETUSER` / `ACL DELUSER` / `ACL GETUSER`. Any other value refuses the boot of both services. |
+| `RUNTIME_API_TOKEN` | none — you must set it | **runtime, agent-api, meeting-api.** The runtime's caller credential: every runtime route except `/health` requires it as `Authorization: Bearer`, and agent-api and meeting-api present it. At least 32 bytes and never a placeholder; all three refuse to boot otherwise. No bot or agent worker is given it. `make all` mints one; Helm generates one and keeps it across upgrades (`secrets.runtimeApiToken`, or a `RUNTIME_API_TOKEN` key in `secrets.existingSecretName`); Lite mints one per boot. |
+| `VEXA_GATEWAY_IDENTITY_SIGNING_KEY_FILE` | none — generated at install | **Gateway only.** A file holding the gateway's Ed25519 private key (PKCS#8 PEM). The gateway signs the identity it resolved onto every request it forwards (`X-Vexa-Identity`). No other service mounts it. |
+| `VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE` | none — generated at install | **agent-api, meeting-api, credential broker.** A file holding the matching public key. They verify the gateway's signature and cannot make one: agent-api and meeting-api refuse a user header that is not signed, and the broker refuses a Connections call without the gateway's signature for that person. A private key here refuses the boot. |
+
+The identity keypair is generated for you: compose's `identity-keys` service on first start (two
+volumes, the private one mounted by the gateway alone), the Helm chart (a Secret and a ConfigMap),
+and the Lite entrypoint (persisted in its state directory). To bring your own, generate it with
+`openssl genpkey -algorithm ed25519 -out signing-key.pem` and
+`openssl pkey -in signing-key.pem -pubout -out public-key.pem`.
 
 Neither has a default any more. Both services **refuse to boot** on a placeholder literal
-(`changeme`, `vexa-internal-secret`, `lite-internal-secret`, `default`, `secret`, …): a value
-published in this repository is not a secret, and a stack running on one comes up green while
+(`changeme`, `vexa-internal-secret`, `lite-internal-secret`, `default`, `secret`, …, and for
+`ADMIN_TOKEN` every value this repository ever shipped for it, such as `dev-admin-token` and
+`CHANGE_ME`): a value published in this repository is not a secret, and a stack running on one comes up green while
 anyone who read the repo can mint an API key for any account. Generate each with
 `openssl rand -hex 32` and set the same `ADMIN_TOKEN` on every service that shares the tier.
-| `VEXA_DISPATCH_SIGNING_KEY` | `dev-dispatch-signing-key` | Signs dispatch tokens (the identity chain of custody). |
-| `NEXTAUTH_SECRET` | `dev-nextauth-secret` | Session secret for the web UI. |
+| `VEXA_DISPATCH_SIGNING_KEY` | — (required) | agent-api signs each dispatch's identity token with it, and refuses to boot on an unset key, on the old default `dev-dispatch-signing-key`, or on a placeholder. `make all` mints one; Helm (which also wants 32+ bytes) and Lite generate and keep one when none is given; by hand `openssl rand -hex 32`. |
+| `NEXTAUTH_SECRET` | — (required) | The terminal's signing secret: sign-in cookies, and through a derived key every emailed sign-in link. At least 32 bytes and never a value published in this repository — the terminal refuses to start otherwise. `make all` mints one; by hand `openssl rand -hex 32`. Helm and Lite generate and keep one when none is given. |
+| `MAGIC_LINK_RATE_PER_ADDRESS` · `MAGIC_LINK_RATE_PER_IP` · `MAGIC_LINK_RATE_WINDOW_SECONDS` | `5` · `20` · `900` | Terminal: how many emailed sign-in links one email address and one client address may ask for per window. Past the address limit nothing is sent; past the client limit the form gets a 429. |
+| `TERMINAL_TRUSTED_PROXIES` | — (Helm: the private ranges while the Service is `ClusterIP`) | Terminal: the proxies whose `X-Forwarded-For` names the client, as addresses or CIDR ranges, comma-separated. Only these and loopback are believed; any other peer's header is ignored, a private peer's included. A reverse proxy in front of the terminal must be named here, or every client behind it shares one sign-in rate limit. |
+| `MAGIC_LINK_SECRET` | — | Optional separate key for emailed sign-in links (32+ bytes, different from `NEXTAUTH_SECRET`). Unset, the link key is derived from `NEXTAUTH_SECRET`. |
+| `VEXA_ADMIN_EMAILS` | — | admin-api: the instance's administrators, comma-separated full addresses. They may always sign in and are the admins; naming them turns off the admin claim, and no claim code is issued. A malformed entry (not a full address) refuses admin-api's boot. The terminal holds no copy: it asks admin-api. |
+| `VEXA_SIGNIN_ALLOW` | — | admin-api: who else may sign in to the terminal besides existing users and admins — exact addresses and `@domain` entries, comma-separated (`@example.com,alice@example.org`). Merged with the list the admin edits under Settings → Sign-in. A malformed entry refuses admin-api's boot, naming the entry. See [Who may sign in](/deployment#who-may-sign-in). |
+| `VEXA_MAIL_SMTP_HOST` · `_PORT` · `_FROM` · `_USER` · `_PASSWORD` · `_SECURE` · `_TLS_INSECURE` | — | The deployment's mail relay: the terminal mails the one-time sign-in link through it, and flows sends through it too. Unset host = no sign-in link is delivered (flows falls back to Gmail with `VEXA_MAIL_ADDR`). `_PORT` defaults to 25; a relay that offers STARTTLS (:587) is upgraded with its certificate checked, and `_SECURE=1` is implicit TLS (:465); `_USER` + `_PASSWORD` enable AUTH LOGIN, which is sent only over TLS — a relay that offers neither is refused; `_TLS_INSECURE=1` skips the certificate check (dev only). Helm: `terminal.mail.*` and `secrets.mailSmtpPassword`. The pre-v0.13.2 `SMTP_*` names still work, with a warning. |
 | `VEXA_BOT_API_KEY` | — | Pre-shared key a bot uses to call back into the stack. |
 
 <Warning>
@@ -144,7 +162,8 @@ which is why the runtime variable is the better knob. Direct `joinMeeting` calle
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `DB_NAME` / `DB_USER` / `DB_PASSWORD` | `vexa` / `postgres` / `postgres` | Postgres credentials (metadata). |
+| `DB_NAME` / `DB_USER` | `vexa` / `postgres` | Postgres database and user (metadata). |
+| `DB_PASSWORD` | none | The Postgres password. Compose's `postgres` service and the Lite entrypoint refuse an unset value or one published in this repository (`postgres` included); `make up` / `make all` / `make lite` mint one into `.env`. The Helm chart (`database.password`) generates one at install and keeps it across upgrades; an explicit value must be 32+ bytes and not a published one. |
 | `POSTGRES_HOST_PORT` | `5458` | Host port mapped to Postgres. |
 | `DB_POOL_SIZE` | `5` | SQLAlchemy async-engine `pool_size` — persistent connections **per pod** — read by admin-api and meeting-api and applied to each service's engine. |
 | `DB_MAX_OVERFLOW` | `10` | SQLAlchemy async-engine `max_overflow` — burst connections above `pool_size`, per pod. Ceiling per pod is `pool_size + max_overflow` (default `15`). |
@@ -155,11 +174,39 @@ which is why the runtime variable is the better knob. Direct `joinMeeting` calle
 whose accounting is `Σ (replicas × (pool_size + max_overflow)) + reserved ≤ max_connections`.
 The defaults (`5` / `10`) match that budget.
 </Note>
-| `MINIO_ENDPOINT` | `minio:9000` | Object storage endpoint (recordings + workspaces). |
-| `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` | `vexa-access-key` / `vexa-secret-key` | MinIO credentials. |
-| `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` | `vexa-access-key` / `vexa-secret-key` | MinIO root credentials. |
-| `MINIO_BUCKET` | `vexa` | Bucket holding recordings and agent workspaces. |
-| `MINIO_SECURE` | `false` | Use TLS to reach MinIO. |
+### Object storage (recordings)
+
+Recordings are stored over S3. Lite and Compose run the store themselves: versitygw
+(`versity/versitygw`, Apache-2.0), whose POSIX backend keeps each object as a plain file in a
+local volume. The variables keep their historical `MINIO_*` names; no MinIO runs in Lite or
+Compose.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `MINIO_ENDPOINT` | `storage:9000` | Where meeting-api stores recordings: `host:port`, or a full `http(s)://` URL. The default is the Compose `storage` service; Lite sets `vexa-lite-storage:9000` itself. Point it at your own S3-compatible store to use that instead. |
+| `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` | none (minted) | The S3 key pair meeting-api uses. In Lite and Compose it is also the bundled storage server's root key pair, so it has no default: the storage refuses to start on an unset pair or on the old published `vexa-access-key` / `vexa-secret-key`, and `make up` / `make lite` mint one into `.env` (replacing a published one). No bot or worker is given this pair. |
+| `MINIO_BUCKET` | `vexa` | Bucket holding recordings; created on bring-up if missing (Compose `storage-init`, Lite `make up`). |
+| `MINIO_SECURE` | `false` | Use `https://` when `MINIO_ENDPOINT` is a bare `host:port`. |
+| `STORAGE_HOST_PORT` | `18900` | Compose only: the storage S3 port on `127.0.0.1` (see [Ports](#ports)). |
+
+Upgrading an install that ran MinIO: [Upgrade from MinIO](/upgrade-from-minio). Backups:
+[Recordings → Backups](/how-to/recordings#backups).
+
+### Object storage on Kubernetes
+
+On Helm, meeting-api's storage variables come from the chart's `storage.s3` values — see
+[Kubernetes → Object storage](/deployment-kubernetes#object-storage). The chart refuses to render
+when `meetingApi.extraEnv` also sets one of them.
+
+| meeting-api variable | Set by the chart from |
+|---|---|
+| `S3_ENDPOINT`, `MINIO_ENDPOINT` | `storage.s3.endpoint` |
+| `MINIO_SECURE` | `true` when that endpoint starts with `https://` |
+| `MINIO_BUCKET` | `storage.s3.bucket` |
+| `S3_ACCESS_KEY`, `MINIO_ACCESS_KEY` | the `storage.s3.accessKeyIdKey` key of the `storage.s3.existingSecret` Secret |
+| `S3_SECRET_KEY`, `MINIO_SECRET_KEY` | the `storage.s3.secretAccessKeyKey` key of the same Secret |
+| `STORAGE_BACKEND` | `s3` — the label stamped on each new recording's metadata |
+| `AWS_CONFIG_FILE` | `/etc/vexa/s3/config`, a mounted file with `storage.s3.region`, the addressing style from `storage.s3.forcePathStyle` and, when set, `storage.s3.caBundle` |
 
 ## Agent inference (bring your own)
 
@@ -168,11 +215,13 @@ Point the agent at your own model so no inference leaves the network.
 | Variable | Default | Purpose |
 |---|---|---|
 | `VEXA_AGENT_MODEL` | — | Model the agent runner uses. |
+| `VEXA_AGENT_MAX_OUTPUT_TOKENS` | — (each harness's own; the claude CLI asks for 32000) | Output-token cap on every model request. claude-code receives it as `CLAUDE_CODE_MAX_OUTPUT_TOKENS`; openai-agent sends it as `max_tokens`; codex does not read it, because Codex has no setting for the model's output cap. Set it when a provider that prices the allowance up front (OpenRouter) refuses a small balance with a 402. |
 | `VEXA_MEETING_MODEL` | — | Model for meeting-time processing. |
 | `ANTHROPIC_API_KEY` | — | Key for Anthropic-backed runners. |
 | `ANTHROPIC_MODEL` · `ANTHROPIC_DEFAULT_OPUS_MODEL` · `…_SONNET_MODEL` · `…_HAIKU_MODEL` | — | Per-tier model overrides. |
 | `HOST_CLAUDE_CREDENTIALS` | — | Host path to Claude credentials mounted into agent containers (see below). |
-| `VEXA_AGENT_DEFAULT_SUBJECT` | `u_live` | Fallback subject before the gateway fronts agent-api. |
+| `VEXA_MCP_URL` | the gateway's `/mcp` | The MCP server each agent worker attaches as its `vexa` toolbelt — the gateway's one assembled MCP server on every shipped surface. |
+| `VEXA_MCP_DELEGATION_SECRET` | generated at install | Signs each worker's short-lived delegation token (agent-api) and verifies it (admin-api, where the gateway resolves it). Empty: workers run without vexa tools, and every spawn says so in its log. |
 | `VEXA_ALLOW_LOCAL_REPO_ROOT` | — | `os.pathsep`-separated directories a workspace repo may be attached from as a local path (`POST /agent/workspace/swap`). Unset refuses local paths. |
 
 ### Claude subscription credentials (`HOST_CLAUDE_CREDENTIALS`)
@@ -231,7 +280,7 @@ and rate knobs live with the process that reads them, on
 |---|---|---|
 | `VEXA_FLOWS_API_KEY` | — | **Required. flows-api refuses to start without it**, and refuses a recognised placeholder (`changeme`, `change-me`, `default`, `secret`) by name. The operator key, sent as `X-Flows-Operator-Key`: it configures the machine and reads or cancels any reaction in the instance. Compose passes it through with no default, on purpose. |
 | `VEXA_FLOWS_TIMELINE_KEY` | — | A second, narrower key that opens `GET /timeline` and nothing else, so the agent worker — which reads the timeline on every dispatch — does not need the operator key in every container. Unset (or a placeholder) means only the operator key opens the route. |
-| `VEXA_FLOWS_DB_URL` | — | Postgres DSN for the ten flows tables. The stack's own database is the expected home. |
+| `VEXA_FLOWS_DB_URL` | — | Postgres DSN for the ten flows tables. The stack's own database is the expected home. Any `postgres://` or `postgresql[+driver]://` URL; flows connects through pg8000 whatever driver it names, and reads libpq's `sslmode` (default `prefer`) and `sslrootcert`. As libpq does, `verify-ca` needs `sslrootcert` naming a CA file, and the system store (`sslrootcert=system`, or `verify-full` with no `sslrootcert`) is trusted only with `verify-full`. |
 | `VEXA_FLOWS_API_HOST` / `VEXA_FLOWS_API_PORT` | `127.0.0.1` / `18200` | Listener. The compose service sets the host to `0.0.0.0` in its own environment, where the exposure is visible beside the port binding; the host lane keeps loopback. |
 | `VEXA_FLOWS_ADMIN_API_URL` · `VEXA_FLOWS_GATEWAY_URL` | — | The doors flows calls out through. Unnamed, a step that needs one refuses loudly at the moment it would have been used. |
 | `VEXA_FLOWS_AGENT_API_URL` | — | The **optional** agent domain. Unset, steps that need an agent answer `not_present` instead of reaching for a door that is not there. |
@@ -260,7 +309,7 @@ Host ports the compose stack publishes on `127.0.0.1` (override any of them in `
 | `RUNTIME_API_PORT` | `18090` | runtime |
 | `AGENT_API_PORT` | `18100` | agent-api |
 | `TERMINAL_PORT` | `13000` | web UI / terminal |
-| `MINIO_HOST_PORT` / `MINIO_CONSOLE_HOST_PORT` | `9000` / `9001` | MinIO API / console |
+| `STORAGE_HOST_PORT` | `18900` | storage (versitygw) S3 API; no web console |
 
 <Note>
 The gateway (`:18056`) is the one front door; the terminal web workbench is at `:13000`. The other host

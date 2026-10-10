@@ -25,6 +25,10 @@ same-origin server runtime (SSE relay, no CORS).
 
 All upstreams resolve to `AGENT_API_URL` (default `http://127.0.0.1:18100`).
 
+`server.mjs` refuses to start without a `NEXTAUTH_SECRET` of at least 32 bytes that is not published
+in this repository — for `npm run dev`, put one in `.env.local` (`openssl rand -hex 32`). See
+[`src/app/api/auth/README.md`](src/app/api/auth/README.md).
+
 ## Contracts
 
 **Owns:** none — the terminal defines no `*.v1`; it is a pure client of the agent domain.

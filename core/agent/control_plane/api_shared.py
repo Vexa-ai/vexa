@@ -28,15 +28,14 @@ from typing import Callable, Iterator, Optional
 from fastapi import Body, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from jsonschema.exceptions import ValidationError
-from pydantic import BaseModel, Field
 
 from control_plane import meeting_room
 from control_plane import meeting_steering
 from control_plane import schedule_digest as schedule_digest_mod
+from control_plane import unit_faults
 from control_plane import routines as routines_mod
 from control_plane.config_preflight import NOT_CONFIGURED, capability_state, missing_capability_keys
-from shared import units
-from workspaces.shared import entities as entities_mod
+from shared import unit_input, units
 from control_plane import workspace_routines as workspace_routines_mod
 from control_plane import link_resolver as link_resolver_mod
 from control_plane import workspace_ids as ids_mod
@@ -129,7 +128,6 @@ def _epoch_text(when) -> str:
         return ""
 
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
-MEETING_STREAM_TRANSCRIPT_REPLAY = 80
 
 
 def _upload_filename(name: str | None) -> str:
@@ -184,8 +182,12 @@ INBOX_PENDING_MAX_AGE_SEC = 3600
 INBOX_PENDING_MAX_ROWS = 200
 
 
-def inbox_pending(redis_url: "str | None", unit_id: str) -> list[dict]:
+def inbox_pending(redis_url: "str | None", unit_id: str, key: str) -> list[dict]:
     """Everything submitted to this chat that its worker has not taken yet, oldest first.
+
+    Only entries signed with the unit's input key (``key``, ``shared.unit_input``) are listed: the
+    worker runs nothing else, so an unsigned or forged entry is not queued for anybody and must not
+    show as if it were. No key lists nothing.
 
     Best-effort by construction: no redis, an unreachable one, a stream that has never existed — all
     answer "nothing queued". A chat that cannot read its inbox shows no queued rows, which is what it
@@ -204,15 +206,19 @@ def inbox_pending(redis_url: "str | None", unit_id: str) -> list[dict]:
     except Exception as exc:  # noqa: BLE001
         logger.warning("could not read the inbox for unit=%s: %s", unit_id, exc)
         return []
+    # WHAT IS HOLDING THE QUEUE, when something is (P18). A spawn the runtime refused leaves its
+    # typed fault on the unit (`unit_faults`); every row still waiting behind it says so, rather than
+    # "queued behind the current turn" when no turn is coming. Evidence-based: the record stops
+    # blocking the moment the worker takes anything.
+    blocked = unit_faults.live(r, unit_id) if rows else None
     out: list[dict] = []
     now = time.time()
     for entry_id, fields in rows or []:
         if cursor and entry_id == cursor:
             continue                      # the entry the worker is on — taken, not queued
-        try:
-            msg = json.loads(fields.get("turn", "{}"))
-        except (TypeError, ValueError):
-            continue
+        msg = unit_input.verified_turn(key, fields or {})
+        if msg is None:
+            continue                      # unsigned, forged or another unit's: the worker refuses it
         meta = msg.get("inbox")
         if not isinstance(meta, dict):
             continue
@@ -221,8 +227,41 @@ def inbox_pending(redis_url: "str | None", unit_id: str) -> list[dict]:
             continue
         out.append({"entry": entry_id, "id": str(meta.get("id") or entry_id),
                     "kind": str(meta.get("kind") or ""), "target": str(meta.get("target") or ""),
-                    "display": str(meta.get("display") or ""), "at": at})
+                    "display": str(meta.get("display") or ""), "at": at,
+                    **({"blocked": blocked} if blocked else {})})
     return out
+
+
+def inbox_withdraw(redis_url: "str | None", unit_id: str, key: str, item_id: str) -> int:
+    """Take back what is still QUEUED under the id its client gave it; the count withdrawn.
+
+    WHAT MAKES A RETRY RUN ONCE (P18). A row a runtime fault blocked is still on the inbox, and the
+    next worker that boots runs everything it finds there — so a retry that put a second copy beside
+    it would answer the person twice. The client retries under the row's own id; this withdraws the
+    held copy first. Only entries the worker has NOT taken (after its cursor) are touched: one it
+    took is running, and withdrawing it would change nothing but the record. Best-effort, like the
+    reader above — a failure here withdraws nothing and never fails the submission."""
+    if not redis_url or not item_id or not key:
+        return 0
+    try:
+        import redis
+
+        r = redis.from_url(redis_url, decode_responses=True)
+        topic = units.input_topic(unit_id)
+        cursor = r.get(units.inbox_cursor_key(unit_id))
+        rows = r.xrange(topic, min=cursor or "-", max="+", count=INBOX_PENDING_MAX_ROWS + 1)
+        gone = 0
+        for entry_id, fields in rows or []:
+            if cursor and entry_id == cursor:
+                continue
+            msg = unit_input.verified_turn(key, fields or {})
+            meta = (msg or {}).get("inbox")
+            if isinstance(meta, dict) and str(meta.get("id") or "") == item_id:
+                gone += int(r.xdel(topic, entry_id) or 0)
+        return gone
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("could not withdraw %s from the inbox of unit=%s: %s", item_id, unit_id, exc)
+        return 0
 
 
 # How long a turn's start-cursor record lives — covers the client's whole resume window (its hard
@@ -419,6 +458,33 @@ class _Sessions:
             if native:
                 rec["meeting_native"] = native
 
+    def name(self, subject: str, session: str, title: str, *, human: bool) -> bool:
+        """Persist a deliberate title without touching activity; human naming wins atomically."""
+        if self._redis is not None:
+            return bool(self._redis.eval("""
+                if redis.call('EXISTS', KEYS[1]) == 0 then return 0 end
+                if ARGV[2] == 'agent' and redis.call('HGET', KEYS[1], 'name_source') == 'human' then return 0 end
+                redis.call('HSET', KEYS[1], 'named_title', ARGV[1], 'name_source', ARGV[2])
+                return 1
+            """, 1, self._meta_key(subject, session), title, 'human' if human else 'agent'))
+        rec = self._mem.get(subject, {}).get(session)
+        if rec is None or (not human and rec.get('name_source') == 'human'):
+            return False
+        rec.update(named_title=title, name_source='human' if human else 'agent')
+        return True
+
+    def rail_order(self, subject: str, order=None) -> list[str]:
+        if self._redis is not None:
+            key = f'agent:rail-order:{subject}'
+            if order is not None:
+                self._redis.set(key, json.dumps(order))
+            return json.loads(self._redis.get(key) or '[]')
+        if not hasattr(self, '_orders'):
+            self._orders = {}
+        if order is not None:
+            self._orders[subject] = list(order)
+        return list(self._orders.get(subject, []))
+
     def add_workspace(self, subject: str, session: str, workspace: str) -> bool:
         """PUT a workspace into this chat's focus, and say whether that changed anything
         (Vexa-ai/vexa#1603). THE RAISER of the stale-mounts semaphore.
@@ -583,6 +649,7 @@ class _Sessions:
                 rows.append({
                     "session": session,
                     "title": meta.get("title") or session,
+                    "named_title": meta.get("named_title"), "name_source": meta.get("name_source"),
                     "created": float(meta.get("created", 0) or 0),
                     "last_active": float(meta.get("last_active", 0) or 0),
                     "workspaces": [str(w) for w in mounts] if isinstance(mounts, list) else [],
@@ -601,6 +668,7 @@ class _Sessions:
             for session, meta in self._mem.get(subject, {}).items():
                 rows.append({
                     "session": session, "title": meta.get("title") or session,
+                    "named_title": meta.get("named_title"), "name_source": meta.get("name_source"),
                     "created": meta.get("created", 0.0), "last_active": meta.get("last_active", 0.0),
                     "workspaces": list(meta.get("workspaces") or []),
                     "target": str(meta.get("target") or "").strip() or None,
@@ -661,359 +729,6 @@ class _LiveMeetings:
         return list(self._by_uid.values())
 
 
-class ChatContextBody(BaseModel):
-    """The terminal-state CONTEXT BUNDLE (slice 1). ``extra="ignore"`` on purpose — forward-
-    tolerant: a newer terminal adding bundle fields must never 422 against this server."""
-    model_config = {"extra": "ignore"}
-    tz: Optional[str] = None            # IANA tz for digest rendering (invalid → UTC)
-    surface: Optional[dict] = None      # {list?: str, tab?: {kind: str}} — the ambient gate signal
-    focus: Optional[dict] = None        # the focused thing (meeting/file/workspace/today); None = cleared
-    include: Optional[dict] = None      # {schedule?: bool} — explicit user toggle beats the gate
-
-
-class ChatBody(BaseModel):
-    model_config = {"extra": "forbid"}
-    prompt: str
-    # subject is DERIVED server-side from X-User-Id (P20) — kept here only so a client that still sends it
-    # doesn't 422 (extra=forbid); the value is IGNORED. Dropped from the client in Stage 4.
-    subject: Optional[str] = None
-    session: Optional[str] = None
-    # LEGACY single-focus grounding ({kind, ref}) — still honored when ``context`` is absent, so
-    # old clients keep byte-identical behavior. The terminal now sends ``context`` (below) too.
-    active: Optional[dict] = None
-    # the terminal-state context bundle; when present it is AUTHORITATIVE (including
-    # ``focus: null`` = the user cleared the focus chip — legacy ``active`` is then ignored).
-    context: Optional[ChatContextBody] = None
-    # Client-minted TURN NONCE (one per user turn, constant across that turn's reconnect attempts).
-    # Lets the server tell a no-cursor RETRY (the stream dropped before the client ever saw an ``id:``,
-    # so it can't send Last-Event-ID) from a genuinely new turn with identical text ("yes" twice):
-    # a matching nonce re-attaches from the turn's recorded start — no second dispatch, no lost events.
-    turn_id: Optional[str] = None
-    # THE MEETING ROOM (post-meeting run). The caller may name ONLY THE MEETING — a meetings-domain
-    # ROW id — and the server resolves who was in it (control_plane/meeting_room.py). There is
-    # deliberately NO field here that names a workspace or a subject: a caller able to say "mount
-    # u_bob" could read any user's desk by naming it, which is the exact hole this shape exists to
-    # close. Accepting it additionally requires the internal-tier secret (see ``_resolve_room``), so
-    # the general end-user chat surface cannot open a room at all.
-    room_meeting_id: Optional[str] = None
-    # MEMBERSHIP = the INVITE's participant list, as ADDRESSES. The trusted caller holds the parsed
-    # invite, so it sends the addresses; agent-api resolves each one to a subject through admin-api
-    # and mounts only participants who ALREADY have a subject and a desk. Addresses, never subject
-    # ids and never workspace names: the resolution — and therefore the blast radius — stays here.
-    room_participants: Optional[list[str]] = None
-    # The invite's ICS ``CN=`` map (address → display name). Used ONLY to match transcript speaker
-    # labels back to addresses that are ALREADY in the list above, i.e. only to ORDER the room. A
-    # name never admits anybody, so a bad match costs position and nothing else.
-    room_participant_names: Optional[dict[str, str]] = None
-    # The transcript's speaker labels, already ordered by speaking time DESCENDING (the caller holds
-    # the transcript, so it does that arithmetic). Unmatched labels are simply ignored.
-    room_speakers: Optional[list[str]] = None
-    room_read_max: Optional[int] = None
-    # THE SCAFFOLD (PRD 5.5). The terminal sends this on the FIRST turn of a chat a link composed.
-    # It is an ID, never a mount list and never prompt text: the record it names says which
-    # workspaces this turn mounts and what the opening ask is, and the server reads BOTH from the
-    # store. A scaffold that is not this subject's is ignored (never an error) — a stale or
-    # forwarded id must not be able to widen anybody's mounts, and must not break their turn either.
-    scaffold_id: Optional[str] = None
-    # THE INTENT (PRD decision 32/35). A button pressed on a page — Extend, Create this page,
-    # Explore a term in a transcript, Highlight the transcript — is an ACT on a named thing, not a
-    # sentence somebody typed. The terminal has sent this since decision 32 landed client-side; with
-    # `extra="forbid"` above and no field here, every one of those presses 422'd. It is a plain dict
-    # rather than a model on purpose: the CLOSED vocabulary is `chat_intents.INTENT_PRESETS`, an
-    # unknown kind is ignored, and a client one release ahead must not be refused at the door.
-    intent: Optional[dict] = None
-
-
-class ScaffoldMintBody(BaseModel):
-    """`POST /internal/scaffolds` — what a FLOW says at the moment it creates a touch.
-
-    ``extra="forbid"``: a mint is the thing a step checks before it sends, so a caller that spells a
-    field wrong has to hear about it here rather than mail a link built from a field nobody read.
-
-    There is deliberately NO field carrying prompt text. ``opening`` is a NAME in `_global/asks/`
-    and the server refuses anything that is not one — the URL never carried text (PRD 6) and neither
-    does the record behind it, for the same reason: anyone who can mint a touch would otherwise be
-    able to drive the recipient's agent."""
-    model_config = {"extra": "forbid"}
-    who: str                                   # the RECIPIENT ADDRESS. Not a subject: they may not exist yet.
-    kind: str                                  # one of scaffolds.KINDS
-    opening: str                               # a preset NAME in _global/asks/, never text
-    meeting: Optional[str] = None              # the meetings-domain ROW id, or None. PHASE IS NOT STORED.
-    workspaces: Optional[list[str]] = None     # slugs to mount; None = derived (see the route)
-    refs: Optional[dict] = None                # the facts for the agent: title, when, organizer, participants…
-    tabs: Optional[list[str]] = None           # UI half; None = the preset's own `tabs:`
-    focus: Optional[str] = None                # UI half; None = the preset's own `focus:`
-    # The RESTRICTED transcript share, minted by the caller against the meeting ROW
-    # (`flows_steps/meeting.mint_transcript_share`) when the meeting is not the recipient's own.
-    # Minted THERE and not here because the mint needs the meeting OWNER's gateway key, which flows
-    # holds and agent-api deliberately does not — see the route's docstring.
-    share_token: Optional[str] = None
-    provenance: Optional[dict] = None          # flow, reaction/run id, minted_by (the fact's admitted_by)
-
-
-class ScaffoldHandBody(BaseModel):
-    """`POST /api/scaffolds/hand` — a HAND LINK (`/?ask=<preset>&meeting=<row>`) turned into a record.
-
-    Two fields, both NAMES, neither prompt text — the same rule as the internal mint and for the same
-    reason (PRD 6, decisions 13/18): a URL must never be able to drive somebody's agent. What made
-    this route necessary is that the terminal used to substitute `?meeting=`/`?ws=` straight into the
-    composed opening, so a crafted link put attacker-chosen text into the first turn.
-
-    There is deliberately NO `who`: the recipient is the SIGNED-IN CALLER, taken from the session.
-    A field would let anyone who can reach this route mint a first turn for somebody else."""
-    model_config = {"extra": "forbid"}
-    preset: str                                # a preset NAME in _global/asks/, never text
-    meeting: Optional[str] = None              # a meetings-domain ROW id the CALLER can see, or None
-
-
-class ResetBody(BaseModel):
-    """Body for POST /api/chat/reset — the docs (api/agent.mdx) say it's just ``{session?}``. reset only
-    needs the session; ``prompt``/``subject``/``active`` are accepted-and-ignored so a client reusing the
-    chat-body shape doesn't 422 (reset must NOT require a prompt the way the chat turn does)."""
-    model_config = {"extra": "forbid"}
-    session: Optional[str] = None
-    subject: Optional[str] = None
-    prompt: Optional[str] = None
-    active: Optional[dict] = None
-    context: Optional[ChatContextBody] = None  # accepted-and-ignored, same rationale
-    room_meeting_id: Optional[str] = None      # accepted-and-ignored (reset mounts nothing)
-
-
-class RoutineCreate(BaseModel):
-    """The Routines surface / ``/routine`` create form — compiles to a routine.v1 + a schedule.v1 job."""
-    model_config = {"extra": "forbid"}
-    subject: Optional[str] = None  # DERIVED from X-User-Id (P20); ignored if sent. Dropped client-side in Stage 4.
-    name: str
-    cron: str
-    prompt: str
-    run_now: bool = True  # fire one immediate run so the author sees a result without waiting for cron
-
-
-class RoutineEnabledPatch(BaseModel):
-    model_config = {"extra": "forbid"}
-    enabled: bool
-
-
-class WorkspaceSwapBody(BaseModel):
-    """Attach a custom external git repo as the subject's workspace. Omit ``repo`` to swap back to seed."""
-    model_config = {"extra": "forbid"}
-    repo: Optional[str] = None   # git URL to clone (None → swap back to the seeded default)
-    ref: Optional[str] = None    # branch/tag/sha to check out (defaults to main)
-    slug: Optional[str] = None   # target a parked slot DIRECTLY (e.g. a no-repo backup) — restores, no re-clone
-    fresh: bool = False          # swap-to-seed only: rebuild the default from template (start fresh) vs restore the park
-    token: Optional[str] = None  # access token for a PRIVATE repo — used for the clone only, never stored (P15)
-
-
-class WorkspacePublishBody(BaseModel):
-    """Publish the subject's vexa-born workspace to GitHub — create the repo (unless ``remote_url``
-    targets a pre-created one) and push the current branch's full history. ``token`` is the caller's
-    PAT, used server-side for this call only, NEVER stored (P15)."""
-    model_config = {"extra": "forbid"}
-    repo_name: Optional[str] = None    # name of the repo to create (required unless remote_url is given)
-    private: bool = True               # create the repo private (default) or public
-    token: Optional[str] = None        # GitHub PAT (repo-creation + push); OPTIONAL — falls back to the caller's SAVED token
-    org: Optional[str] = None          # create under this org instead of the user's account
-    remote_url: Optional[str] = None   # skip creation and push to this (pre-created/empty) repo
-    slug: Optional[str] = None         # target workspace (own slot or shared membership); omitted = the seed-slot workspace
-
-
-class WorkspaceRenameBody(BaseModel):
-    """Set a workspace slot's DISPLAY name (label only — the slug/parked dir are unchanged). Empty clears it."""
-    model_config = {"extra": "forbid"}
-    slug: str
-    name: Optional[str] = None
-
-
-class WorkspacePushBody(BaseModel):
-    """Push a workspace's current branch to its GitHub home (origin / vexa-publish), fast-forward only.
-    ``slug`` targets one of the caller's workspaces (default = the primary); ``token`` is the caller's PAT.
-    OPTIONAL — when omitted, the caller's SAVED reusable GitHub token (git_credentials) is used. Whichever
-    token applies is used for this push only and NEVER stored on the workspace remote (P15)."""
-    model_config = {"extra": "forbid"}
-    slug: Optional[str] = None
-    token: Optional[str] = None
-
-
-class GitTokenBody(BaseModel):
-    """Save (or, with an empty/omitted ``token``, CLEAR) the caller's reusable GitHub token — stored ONCE,
-    server-side, and reused as the fallback credential for every git op across all their repos."""
-    model_config = {"extra": "forbid"}
-    token: Optional[str] = None
-
-
-class WorkspacePullBody(BaseModel):
-    """Fetch + fast-forward a workspace from its GitHub home. ``slug`` targets one of the caller's
-    workspaces (default = primary); ``token`` (optional — public repos need none) is used for the fetch
-    only and NEVER stored (P15). A divergence is refused, not merged/rebased/forced."""
-    model_config = {"extra": "forbid"}
-    slug: Optional[str] = None
-    token: Optional[str] = None
-
-
-class WorkspacePurposeBody(BaseModel):
-    """Set a workspace's PURPOSE — a one-line statement of what it's for, stored IN the workspace so it
-    travels when shared and is read into the agent's mount preamble. ``slug`` targets one of the caller's
-    workspaces (default = primary); an empty ``purpose`` clears it."""
-    model_config = {"extra": "forbid"}
-    slug: Optional[str] = None
-    purpose: str = ""
-
-
-class InviteCreateBody(BaseModel):
-    """Mint a scoped invite for a shared workspace (owner/contributor only). Returns the token ONCE."""
-    model_config = {"extra": "forbid"}
-    workspace_id: str
-    role: str = "viewer"                 # viewer | contributor (never owner)
-    expires_in_sec: int = 604800         # 7 days
-    max_uses: int = 1
-    # UNSTATED by default, and the route derives it (Vexa-ai/vexa#1635). It used to default to
-    # "open", which meant a caller that named `allowed_emails` and said nothing else got a link
-    # ANYONE holding it could redeem — the addresses were stored and never checked, because
-    # accept_invite only enforces them in "restricted". A default that silently discards the one
-    # thing the caller said about who the invite is for is not a default, it is a trap.
-    mode: Optional[str] = None           # open (anyone-with-link) | restricted (allowed_emails only)
-    allowed_emails: Optional[list[str]] = None  # restricted mode: the verified emails permitted to redeem
-
-
-class InviteAcceptBody(BaseModel):
-    """Redeem an invite token (any logged-in user). Idempotent per user."""
-    model_config = {"extra": "forbid"}
-    token: str
-
-
-class RoleSetBody(BaseModel):
-    """Flip a member's role (owner only) — the "change read/write permissions" DoD item."""
-    model_config = {"extra": "forbid"}
-    role: str                            # viewer | contributor | owner
-
-
-class WorkspaceInviteBody(BaseModel):
-    """Invite ONE address to a workspace — the body behind `workspace_invite` (Vexa-ai/vexa#1632).
-
-    NAMED FIELDS, NOT A BARE `dict`, and that is not a style preference: `core/agent/mcp.tools.v1.json`
-    records that `PUT /api/workspace/file`, `POST /api/workspace/entity` and `POST /api/claims` are
-    UNBINDABLE at the assembled edge precisely because they take `body: dict = Body(...)`, which
-    FastAPI publishes with no `properties` for `bind.py` to derive an argument schema from. A verb
-    written today with a bare dict would join that list on the day it shipped."""
-    model_config = {"extra": "forbid"}
-    slug: str                            # the workspace this is about — never guessed, always named
-    email: str                           # the person's address; the handle a human actually says
-    role: str = "reader"                 # owner | contributor | reader (the default is the smallest)
-
-
-class WorkspaceMembershipBody(BaseModel):
-    """Change what an address IS in a workspace, or take them off it — the body behind
-    `workspace_membership` (Vexa-ai/vexa#1632).
-
-    ``role`` carries `remove` as a fourth value rather than a second route, because it is one
-    question with four answers and an agent choosing between two verbs would have to guess the
-    answer before asking it."""
-    model_config = {"extra": "forbid"}
-    slug: str
-    email: str
-    role: str                            # owner | contributor | reader | remove
-
-
-class SharedNewBody(BaseModel):
-    """CREATE a new shared workspace (top-level, caller becomes owner) — the bootstrap that makes a
-    workspace shareable so invites can be minted against it. ``name`` → display + workspace-id base."""
-    model_config = {"extra": "forbid"}
-    name: str = "Shared workspace"
-
-
-class SharedAttachBody(BaseModel):
-    """LOAD AN EXISTING REPO into a SHARED (group) workspace — the group counterpart of
-    ``POST /api/workspace/swap``. The group's current tree is PARKED (kept, swappable-back), the repo is
-    cloned in, and the member list is carried across so nobody loses access.
-
-    ``token`` is the terminal's optional per-call PAT for an https repo; the MCP path never sends one —
-    an ssh repo authenticates with the workspace's deploy key, resolved server-side."""
-    model_config = {"extra": "forbid"}
-    repo: Optional[str] = None   # git URL (ssh → deploy key; https → PAT). None + ``slug`` = swap back
-    ref: Optional[str] = None    # branch/tag/sha (defaults to main)
-    slug: Optional[str] = None   # a parked slot to restore DIRECTLY (no re-clone), e.g. "seed"
-    token: Optional[str] = None  # https only, used for the clone and never stored (P15)
-
-
-class SharedActiveBody(BaseModel):
-    """Switch a shared workspace ON (mount) or OFF (hide) in the caller's active set — per-user, membership
-    is unchanged."""
-    model_config = {"extra": "forbid"}
-    active: bool
-
-
-class ArchiveBody(BaseModel):
-    """Archive (collapse, keep) or un-archive one of the caller's own workspaces."""
-    model_config = {"extra": "forbid"}
-    archived: bool = True
-
-
-class WorkspaceActivateBody(BaseModel):
-    """ADD a workspace to the subject's active set (the additive mount set — WP-A2.1). Pass ``repo`` to
-    clone/restore a git repo, or ``slug`` to activate an already-parked slot. Unlike swap it does NOT park
-    the others — the private baseline and any other active workspaces stay mounted."""
-    model_config = {"extra": "forbid"}
-    repo: Optional[str] = None   # git URL to clone (first time) / restore (thereafter)
-    ref: Optional[str] = None    # branch/tag/sha (defaults to main)
-    slug: Optional[str] = None   # activate an already-parked slot directly (no repo needed)
-    token: Optional[str] = None  # access token for a PRIVATE repo — clone only, never stored (P15)
-
-
-class WorkspaceNewBody(BaseModel):
-    """CREATE a brand-new BLANK workspace (seeded from the template) at a fresh slug and ADD it to the
-    active set — the additive-model "new workspace" action. NOT a swap: nothing is parked/rebuilt/backed
-    up. ``name`` (optional) → the new workspace's display label (default a unique "New workspace")."""
-    model_config = {"extra": "forbid"}
-    name: Optional[str] = None
-
-
-class WorkspaceRemoveBody(BaseModel):
-    """REMOVE one page from a workspace — the body behind `workspace_delete` (Vexa-ai/vexa#1621).
-
-    ``path`` is workspace-RELATIVE; ``slug`` names the workspace (omitted = the caller's own desk /
-    the chat's target).
-
-    ⚠ WHY THIS IS A POST AND NOT `DELETE /api/workspace/file`, which is what it was written as
-    first. `DELETE /api/workspace/{slug}` already exists and DESTROYS A WHOLE WORKSPACE
-    irreversibly — and `{slug}` matches the literal segment `file`, so the two routes can match one
-    URL and the answer would be decided by which router `create_app` includes first.
-    `test_route_table.test_no_two_routes_can_match_the_same_url` caught it, which is the entire
-    point of that gate: of all the pairs to leave to registration order, "remove one page" and
-    "destroy the workspace" is the worst. A POST on its own literal path cannot be confused with
-    anything, and it reads beside its sibling `POST /api/workspace/move`."""
-    model_config = {"extra": "forbid"}
-    path: str
-    slug: Optional[str] = None
-
-
-class WorkspaceMoveBody(BaseModel):
-    """MOVE one page from one path to another — the body behind `workspace_move` (Vexa-ai/vexa#1621).
-
-    ``from``/``to`` are workspace-RELATIVE paths. ``slug`` names the workspace the page is in today
-    (omitted = the caller's own desk / the chat's target); ``to_slug`` names where it is going,
-    and omitted means *the same workspace*, which is the ordinary rename.
-
-    A CROSS-WORKSPACE MOVE IS A WRITE IN THE TARGET AND A DELETE IN THE SOURCE — two repositories,
-    two commits, and either end being read-only refuses the whole call before anything is written.
-
-    ``from`` is a Python keyword, so the field is ``from_`` with the alias the wire actually
-    carries. ``populate_by_name`` keeps the Python spelling usable from a caller that builds the
-    model directly (the tests do); the published OpenAPI property is ``from``, which is what a
-    manifest-bound tool would name and what the rig sends."""
-    model_config = {"extra": "forbid", "populate_by_name": True}
-    from_: str = Field(alias="from")
-    to: str
-    slug: Optional[str] = None
-    to_slug: Optional[str] = None
-
-
-class WorkspaceDeactivateBody(BaseModel):
-    """REMOVE a workspace from the active set (park it — never destroyed). The private baseline cannot be
-    deactivated (it is the subject's durable memory root)."""
-    model_config = {"extra": "forbid"}
-    slug: str
-
-
 def _encode_sse_cursor(last: dict, tkey: str) -> str:
     """The transcript stream's redis cursor as the SSE event id (the browser echoes it as
     Last-Event-ID on reconnect → we resume EXACTLY from here, gapless). '-' = not-yet-read.
@@ -1039,7 +754,7 @@ def meeting_binding(ev: object) -> "tuple[str, str] | None":
     """``(row, native)`` this turn BOUND its chat to, or None (Vexa-ai/vexa#1597).
 
     ONE EVENT MEANS IT, and only one: the ``artifact`` carrying ``meeting:<row>``, which the harness
-    emits for a successful ``bot_send`` and for nothing else (``llm/claude_code.py::_bot_artifact``).
+    emits for a successful ``request_meeting_bot`` and for nothing else (``llm/tool_events.py::_bot_artifact``).
     A bot went into a room BECAUSE this conversation asked for one, so this conversation is that
     meeting's chat — the founder's rule, and his words for the alternative: *"there is no need to
     create a new chat for that"*.
@@ -1066,19 +781,20 @@ def meeting_binding(ev: object) -> "tuple[str, str] | None":
 
 
 def _is_slug(wid: str) -> bool:
-    """A workspace slug is ONE path segment and never a dot-namespaced reserved one.
+    """A workspace slug, by THE workspace name rule (``workspace_paths.is_workspace_name``, its one
+    owner): one path segment, never a dotname, never a separator.
 
-    ONE spelling, shared by everything that takes a slug off a stream or a request and stores it
-    durably (``workspace_focus`` below, ``_Sessions.set_target``). A focus or a target aimed at a
-    guess is worse than none: it survives into every later turn of the chat."""
-    return bool(wid) and "/" not in wid and not wid.startswith(".")
+    Used by everything here that takes a slug off a stream or a request and stores it durably
+    (``workspace_focus`` below, ``_Sessions.set_target``). A focus or a target aimed at a guess is
+    worse than none: it survives into every later turn of the chat."""
+    return wpaths.is_workspace_name(wid)
 
 
 def workspace_focus(ev: object) -> "str | None":
     """The workspace this turn brought INTO the chat's focus, or None (Vexa-ai/vexa#1603).
 
     ONE EVENT MEANS IT, and only one: the ``focus`` the harness emits for a successful
-    ``workspace_new`` and for nothing else (``llm/claude_code.py::_workspace_focus``). A workspace
+    ``workspace_new`` and for nothing else (``llm/tool_events.py::_workspace_focus``). A workspace
     made from a conversation is part of that conversation from that moment — the founder's rule,
     and his words for the alternative: *"not native workspace??"*.
 
@@ -1118,6 +834,23 @@ TARGET_LINE_ALONE = "target workspace: {target} — writes go here unless asked 
 GLOBAL_TARGET_NOTE = ("The company layer is thin: the five files at its root, and company-tier "
                       "pages under `kg/entities/`. Meeting notes, customer records and personal "
                       "documents belong on a desk or in an ordinary workspace, never here.")
+
+
+def toolbelt_preamble(session: str) -> str:
+    """The asks that name a TOOL, so they ride only a turn whose worker holds the toolbelt that
+    serves them (the `worker_toolbelt` capability): name the chat, and read the clock.
+
+    THE CLOCK IS A TOOL, NOT A GUESS. A conversation's timestamps are stale the moment they are
+    written, and a model left to infer "today" from them answers relative dates wrong. On the
+    dogfood rig the queue (`whats_waiting`) carried a fresh clock; on a standard deployment the
+    queue is flows' and the clock is `current_time`, so the turn is told so on every turn."""
+    return (f"Current chat session: {json.dumps(session)}. Once the task is clear, call chat_name "
+            "with this session and a concise 3–7 word task title describing the actual objective "
+            "(for example, ‘Connect personal calendar’). Do not copy the raw opening message, "
+            "include secrets, or narrate naming. A human-chosen title is protected.\n"
+            "For the date or time — now, today, anything relative — call `current_time`; never infer "
+            "it from earlier messages. If it answers `timezone_required`, ask the person their "
+            "timezone and save it with `timezone_set`.\n")
 
 
 def target_preamble(target: str, others: "list[str] | None" = None, note: str = "") -> str:
@@ -1234,11 +967,13 @@ def _meeting_grounding(
 
     There is ONE transcript and one fold of it: the "processed notes" the post branch used to prefer
     were the in-product inference pipeline's output, and PRD decision 34 removed that pipeline.
+    ``active`` is the FLAT focus ``_readable_meeting_focus`` built — one level, scalar fields only.
+    A ``meeting`` key inside it names nothing and is not read.
+
     Returns the plain (none-context, no tools, prompt) when the active tab isn't a meeting."""
-    a = active or {}
-    if a.get("kind") != "meeting":
+    m = active or {}
+    if m.get("kind") != "meeting":
         return ({"kind": "none", "session": session}, [], prompt)
-    m = a.get("meeting") or a  # tolerate {kind, meeting:{…}} or a flat {kind, platform, native_id}
     native = m.get("native_id") or m.get("ref")
     if not native:
         return ({"kind": "none", "session": session}, [], prompt)
@@ -1351,11 +1086,12 @@ def _fold_workspace_grounding(mounts: "list", slug: str) -> str:
         purpose = ""
     purpose_part = f" Its purpose: {purpose.strip()}." if purpose.strip() else ""
     readme = ""
-    try:
-        text = (Path(mount.path) / "README.md").read_text(encoding="utf-8")
+    # NOFOLLOW: the README is folded into the turn's grounding, and the mount is a work tree the
+    # model's tools can write — a link at `README.md` must not fold another file into the prompt.
+    raw = wpaths.read_bytes_inside(Path(mount.path), "README.md")
+    if raw is not None:
+        text = raw.decode("utf-8", errors="replace")
         readme = "\n".join(text.splitlines()[:_WORKSPACE_README_LINES])[:_WORKSPACE_README_CHARS]
-    except OSError:
-        readme = ""
     fields = {"name": name, "slug": slug, "purpose": purpose_part, "readme": readme}
     if not readme.strip():
         return meeting_steering.NO_README_WORKSPACE_FOCUS.format(**fields)
@@ -1389,14 +1125,124 @@ def _enriched_meeting_focus(focus: dict, rows: "list[dict]") -> dict:
     return merged
 
 
+#: The api.v1 field meeting-api stamps when the owner deletes a meeting's transcript and recordings
+#: (``MeetingResponse.data.artifact_deletion``, schema ``ArtifactDeletion``). Named once; the test of
+#: ``transcript_erased`` reads the sealed contract's own goldens, so a reshape there fails it.
+ARTIFACT_DELETION_FIELD = "artifact_deletion"
+
+
+def transcript_erased(row: "dict | None") -> bool:
+    """Whether the owner deleted (or is deleting) this meeting's transcript and recordings.
+
+    meeting-api keeps the row after a typed delete — its title, times and status are history the
+    owner asked to keep — and stamps api.v1's ``ArtifactDeletion`` on ``data.artifact_deletion``, in
+    state ``pending`` while the delete runs and ``completed`` after. Every reader of the transcript
+    treats that stamp, in either state, as "there is no transcript", whatever a cache may still hold."""
+    data = row.get("data") if isinstance(row, dict) else None
+    stamp = data.get(ARTIFACT_DELETION_FIELD) if isinstance(data, dict) else None
+    return isinstance(stamp, dict) and bool(stamp)
+
+
+# The fields a meeting focus may carry into the prompt. Each is a scalar; nothing nested is read.
+_MEETING_FOCUS_FIELDS = ("meeting_id", "native_id", "platform", "status", "title", "scheduled_at",
+                         "workspace_id")
+
+
+def _meeting_focus_level(focus: dict) -> dict:
+    """The ONE level of a client meeting focus that names the meeting: ``focus["meeting"]`` for the
+    wrapped ``{kind, meeting: {…}}`` shape, else the focus itself. Selected once, here; nothing
+    downstream unwraps again."""
+    inner = focus.get("meeting")
+    return inner if isinstance(inner, dict) else focus
+
+
+def _focus_scalar(value) -> str:
+    """A focus field as text, or "" for anything that is not a plain string or integer."""
+    if isinstance(value, bool) or not isinstance(value, (str, int)):
+        return ""
+    return str(value).strip()
+
+
+def _prep_focus(level: dict) -> dict:
+    """A planned meeting's focus: the caller's own scalar fields, copied into a fresh flat dict."""
+    out = {"kind": "meeting"}
+    for key in _MEETING_FOCUS_FIELDS:
+        value = _focus_scalar(level.get(key))
+        if value:
+            out[key] = value
+    if "native_id" not in out and _focus_scalar(level.get("ref")):
+        out["native_id"] = _focus_scalar(level.get("ref"))
+    return out
+
+
+def _focus_from_row(rid: str, row: dict) -> dict:
+    """The focus of a CHECKED meeting, built from its server row alone: row id, native id, platform,
+    status, and the title / time / bound workspace from ``row["data"]``. No client field is read."""
+    data = row.get("data") if isinstance(row.get("data"), dict) else {}
+    out = {"kind": "meeting", "meeting_id": rid,
+           "status": _focus_scalar(row.get("status")).lower(),
+           # A row with no native link (a planned meeting, an imported transcript) is named by its
+           # row id — the same value the terminal puts in the tab.
+           "native_id": _focus_scalar(row.get("native_meeting_id")) or rid}
+    platform = _focus_scalar(row.get("platform"))
+    if platform and platform != "unknown":
+        out["platform"] = platform
+    for key in ("title", "scheduled_at", "workspace_id"):
+        value = _focus_scalar(data.get(key))
+        if value:
+            out[key] = value
+    return out
+
+
+def _readable_meeting_focus(
+    level: dict, meeting_access: "Callable[[str], dict | None] | None",
+) -> "dict | None":
+    """The meeting focus a chat may ground on, or None when the caller may not read that meeting.
+
+    ``level`` is the one level of the client focus that names the meeting
+    (``_meeting_focus_level``). The focus is CLIENT-SENT, and the transcript fold reads
+    ``tc:meeting:{row id}`` straight out of redis, so the row id must be checked before anything is
+    folded — the same access decision the live stream makes (owner, transcript-share recipient, or
+    member of the bound workspace; one union, evaluated by meeting-api). A caller who passes none of
+    those gets no meeting grounding.
+
+    The PREP phase reads nothing server-side (it renders the caller's own fields, overlaid only from
+    the caller's own rows), so it passes through unchecked. Every other phase folds a transcript and
+    is checked. FAIL CLOSED: no access check wired, a row id that is not a row id, a lookup that
+    raises, or a meeting whose transcript its owner deleted all mean no grounding.
+
+    Either way the result is a FRESH flat dict of scalar fields: for a checked meeting it is built
+    from the server row alone (``_focus_from_row``), so the stream that is folded is exactly the row
+    that was checked, and no client key reaches the fold."""
+    status = _focus_scalar(level.get("status")).lower()
+    if meeting_steering.phase_for(status) == "prep":
+        return _prep_focus(level)
+    rid = (_focus_scalar(level.get("meeting_id")) or _focus_scalar(level.get("native_id"))
+           or _focus_scalar(level.get("ref")))
+    if meeting_access is None or not rid.isdigit():
+        return None
+    try:
+        row = meeting_access(rid)
+    except Exception:  # noqa: BLE001 — an access check that cannot answer refuses
+        logger.warning("meeting access check failed for row %s — no meeting grounding", rid)
+        return None
+    if not isinstance(row, dict) or transcript_erased(row):
+        return None
+    return _focus_from_row(rid, row)
+
+
 def _context_grounding(
     body: "ChatBody", session: str, redis_url: "str | None", *,
     schedule_rows: "Callable[[], list[dict]]",
     workspace_mounts: "Callable[[], list]",
+    meeting_access: "Callable[[str], dict | None] | None" = None,
 ) -> "tuple[dict, list[str], str]":
     """Assemble the turn's grounding from the context bundle (or the legacy ``active``).
     ``schedule_rows`` / ``workspace_mounts`` are LAZY — fetched only for the branches that
-    need them, and both degrade to empty on failure (a bundle must never fail the turn)."""
+    need them, and both degrade to empty on failure (a bundle must never fail the turn).
+
+    ``meeting_access(row_id) -> row | None`` is the caller's meeting access check. A meeting focus
+    folds a transcript only for a row it approves; without one, no transcript is folded."""
     prompt = body.prompt
     context = body.context
     focus = context.focus if context is not None else body.active
@@ -1426,8 +1272,12 @@ def _context_grounding(
             preamble = digest + meeting_steering.render("schedule", {})
 
     if kind == "meeting":
-        enriched = _enriched_meeting_focus(dict(focus), rows) if rows else dict(focus)
-        _c, _t, folded_prompt = _meeting_grounding(enriched, session, prompt, redis_url)
+        level = _meeting_focus_level(focus)
+        enriched = _enriched_meeting_focus(dict(level), rows) if rows else dict(level)
+        readable = _readable_meeting_focus(enriched, meeting_access)
+        if readable is None:
+            return (ctx, [], preamble + prompt)
+        _c, _t, folded_prompt = _meeting_grounding(readable, session, prompt, redis_url)
         return (_c, _t, preamble + folded_prompt if preamble else folded_prompt)
 
     if kind == "workspace" and (focus or {}).get("slug"):
@@ -1440,140 +1290,3 @@ def _context_grounding(
 
     # file focus stays client-side-preambled; none/unknown kinds fold nothing extra
     return (ctx, [], preamble + prompt)
-
-
-# ── SSE ownership gate (P0 cross-tenant leak fix — the SSE sibling of the by-id REST check) ──────────
-# The live SSE feed `GET /api/meeting/stream` is keyed on a CALLER-SUPPLIED row id (`meeting_id`) and a
-# `session_uid`. Row ids are sequential ints, so without an ownership check any authenticated user B could
-# `EventSource(...?meeting_id=<A_row>&session_uid=<A_native>)` and stream tenant A's live transcript +
-# an ACTIVE, enumerable cross-tenant read. We mirror the WS `/ws` pattern (gateway
-# `authorize_subscribe` → `Meeting.user_id == user_id`) and the by-id REST path (`get_transcript_by_id`
-# owner-scopes in SQL): verify the caller OWNS the row BEFORE opening the redis stream. Fail CLOSED.
-#
-# agent-api has no meetings DB; it asks meeting-api `GET /meetings/{meeting_id}` forwarding the
-# gateway-injected `X-User-Id` (meeting-api's `_resolve_user_id` trusts it exactly as its by-id path does)
-# — a row owned by another user (or absent) returns 404 there → we treat it as NOT-OWNED. The returned
-# record's `native_meeting_id` also lets us confirm the requested `session_uid` belongs to the SAME owned
-# meeting, so B can't pair its own row with A's native to sniff A's feed. Returns the owned
-# meeting record (dict) on success, else None. Injectable so the L2 suite drives it over a fake.
-# How room membership was derived, stamped on every room dispatch + log line so an audit can tell
-# WHERE the room came from. Under the participant model it is the invite's addresses, resolved to
-# subjects here — the ORDER comes from the transcript, the MEMBERSHIP never does.
-_ROOM_SOURCE = "invite:participants→admin-api"
-
-
-def _http_email_subject_lookup(admin_api_url: str, internal_secret: str, admin_token: str):
-    """Build the participant ADDRESS → subject resolver: ``(address) -> str | None``.
-
-    THE DOOR PROBLEM, stated because it constrains the whole feature. agent-api already holds an
-    internal-tier seam to admin-api (``X-Internal-Secret``, used for the membership index + model
-    config), but that tier exposes NO email lookup. The one route that answers this question,
-    ``GET /admin/users/email/{email}``, is gated by ``verify_admin_token`` — a DIFFERENT and much
-    broader credential (it can also create and patch users). So:
-
-      * the narrow door is tried FIRST — ``GET /internal/users/by-email/{email}`` with the internal
-        secret. It does not exist on admin-api today; this is the route that SHOULD be added
-        (returning only ``{"id": ...}``), and when it is, the room works with no new credential and
-        ``VEXA_ADMIN_API_TOKEN`` can be dropped. A 404 here marks it absent for the process lifetime
-        so we probe once, not once per participant;
-      * the wide door is used only when an operator has explicitly set ``VEXA_ADMIN_API_TOKEN``;
-      * with neither, every lookup returns None — the room resolves to ZERO desks and says so. It
-        never falls back to matching a person by name, which is the failure this design exists to
-        avoid.
-
-    Fail-CLOSED and quiet-per-call: any error is None (that participant is skipped), never an
-    exception that could take down the turn."""
-    import urllib.error
-    import urllib.parse
-    import urllib.request
-
-    base = (admin_api_url or "").rstrip("/")
-    state = {"internal_route": True}   # flipped off the first time the narrow door 404s
-
-    def _get(url: str, headers: dict) -> "dict | None":
-        req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, timeout=5) as resp:   # noqa: S310 — internal service URL
-            if resp.status != 200:
-                return None
-            return json.loads(resp.read().decode() or "null")
-
-    def _lookup(address: str) -> "str | None":
-        if not base or not address:
-            return None
-        quoted = urllib.parse.quote(str(address).strip().lower(), safe="")
-        if state["internal_route"] and internal_secret:
-            try:
-                row = _get(f"{base}/internal/users/by-email/{quoted}",
-                           {"X-Internal-Secret": internal_secret})
-                if isinstance(row, dict) and row.get("id") is not None:
-                    return str(row["id"])
-                return None
-            except urllib.error.HTTPError as e:
-                if e.code == 404:
-                    # Ambiguous by design: 404 is both "no such user" and "no such route". Probe the
-                    # ROUTE once — if the wide door is configured we can tell the difference by
-                    # asking it; if it is not, treat the narrow door as present and this address as
-                    # unknown (the safe reading — it skips a person rather than inventing one).
-                    if not admin_token:
-                        return None
-                    state["internal_route"] = False
-                else:
-                    return None
-            except Exception:  # noqa: BLE001 — unreachable admin-api → skip this participant
-                return None
-        if not admin_token:
-            logger.warning("room: no email→subject resolver is configured (admin-api has no "
-                           "internal by-email route and VEXA_ADMIN_API_TOKEN is unset) — the room "
-                           "will mount ZERO desks")
-            return None
-        try:
-            row = _get(f"{base}/admin/users/email/{quoted}", {"X-Admin-API-Key": admin_token})
-        except Exception:  # noqa: BLE001 — 404 (no such user) and transport errors alike → skip
-            return None
-        return str(row["id"]) if isinstance(row, dict) and row.get("id") is not None else None
-
-    return _lookup
-
-
-def _http_meeting_owner_lookup(meeting_api_url: str):
-    """Build the default meeting ACCESS lookup: GET {meeting_api_url}/meetings/{id} as the caller.
-    Returns a callable ``(user_id, meeting_id, workspaces=None) -> dict | None`` — the meeting record
-    the caller may read, or None when the row is absent / not theirs / meeting-api is unreachable
-    (fail-closed).
-
-    ``workspaces`` is the caller's OWN memberships, forwarded as ``X-User-Workspaces`` so meeting-api
-    can run the third branch of its access union (member of the meeting's bound workspace) instead of
-    owner + transcript-share only. This is the grant the SSE route's own comment named as "the clean
-    seam" and deliberately left unhonoured: a bot requested inside a workspace makes the WORKSPACE's
-    meeting, so a member asking to watch it is not a stranger.
-
-    Omitting the argument keeps the previous, strictly narrower answer — the header is simply absent
-    and every existing caller behaves exactly as before. It stays a LOOKUP rather than a local check
-    because this function knows neither the row's binding nor the caller's role; meeting-api knows
-    both, and one decision made in one place cannot disagree with itself."""
-    import urllib.error
-    import urllib.request
-
-    base = (meeting_api_url or "").rstrip("/")
-
-    def _lookup(user_id: str, meeting_id: str, workspaces=None) -> "dict | None":
-        if not base or not user_id or not str(meeting_id).isdigit():
-            return None  # non-numeric row id can't be an owned meeting row → fail closed
-        headers = {"X-User-Id": str(user_id)}
-        ws = ",".join(str(w).strip() for w in (workspaces or []) if str(w).strip())
-        if ws:
-            headers["X-User-Workspaces"] = ws
-        try:
-            req = urllib.request.Request(f"{base}/meetings/{int(meeting_id)}", headers=headers)
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                if resp.status != 200:
-                    return None
-                return json.loads(resp.read().decode() or "null")
-        except urllib.error.HTTPError:
-            return None   # 404 (not owned / absent) or any other status → refuse
-        except Exception:  # noqa: BLE001 — meeting-api unreachable → fail CLOSED, never open the stream
-            return None
-
-    return _lookup
-
-

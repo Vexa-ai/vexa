@@ -32,11 +32,37 @@ each slice carrying only what the rehearsal proved worth carrying.
 - **`VEXA_RIG_MODE`** (default on here) enables a `token=` argument fallback and a
   `GET /do/<tool>` bridge. Both put a credential in a query string: right for a fetch-only
   agent on a private host, wrong anywhere requests are logged. `VEXA_RIG_MODE=0` disables both.
-- **Identity proves mailbox control and nothing more.** Federation is the upgrade an
-  organisation will require.
+- **Identity proves mailbox control and nothing more.** Every door — `/login`, the
+  `start_onboarding`/`confirm_login` tools and the OAuth consent screen — mails a 6-digit code and
+  issues nothing until it comes back, and creates an account only for an address the instance's
+  sign-in admission admits. A code signs in only the address it was mailed to; `/login` binds the
+  address at its second step and reads it from there. Federation is the upgrade an organisation
+  will require.
+- **Every sign-in door is off unless switched on.** `VEXA_RIG_OAUTH_ENABLED=1` (via
+  `rig.sh restart`) opens the OAuth surface, `/login` (with `/login/claim` and `/start`) and the
+  `start_onboarding`/`confirm_login`/`auth_link`/`auth_claim` tools. Off, those paths answer 404,
+  the tools refuse, and the OAuth tokens this server issued stop resolving.
+- **Sign-in codes are budgeted three ways.** Per address, cumulatively across every code and door
+  (`VEXA_RIG_CODE_ADDRESS_CAP` codes and `VEXA_RIG_CODE_ADDRESS_FAILS` wrong tries per
+  `VEXA_RIG_CODE_ADDRESS_WINDOW_S`; asking again never resets a count); per caller
+  (`VEXA_RIG_CODE_SOURCE_BUDGET`); and process-wide (`VEXA_RIG_CODE_BUDGET`). The caller is the TCP
+  peer, or, behind a proxy, the header `VEXA_RIG_CLIENT_ADDRESS_HEADER` names; without it a proxied
+  rig cannot tell callers apart and only the other two caps apply.
+- **OAuth clients redirect only where a person can see.** Registration takes https redirect URIs,
+  or http to loopback; the consent screen names the host the code is sent to, and redirects only to
+  a URI the client registered, exactly. Refresh tokens expire after 30 days, rotate on every use,
+  stay with the client they were issued to, and re-ask sign-in admission.
+- **Git-backed workspace verbs go through the gateway as the person.** `workspace_attach`,
+  `workspace_push`, `workspace_pull`, `workspace_import`, the deploy key and the git-remote status
+  reach agent-api at the path the agent manifest's `forward` maps, with the person's own key, so a
+  broker-backed git store can act for them. A delegated worker keeps the internal tier with its
+  regime and ceiling and never borrows that key; against a broker-backed store, agent-api refuses it.
 - **`workspace_write` is a dev double** — agent-api exposes no HTTP write, so this reaches the
   volume directly. That missing endpoint is the real gap behind first-class remote workspaces.
-- **Mail is a double** (mailpit): nothing leaves the host.
+- **Mail is a double** (mailpit): nothing leaves the host. It holds every message sent to anyone,
+  sign-in codes included, so `mail_inbox`/`mail_read` are account-scoped: a caller sees only
+  messages addressed to their own address, and nothing when that address is unknown. A
+  delegated worker is refused, even for the person it acts for.
 
 ## Running it
 

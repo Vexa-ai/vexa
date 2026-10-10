@@ -1,7 +1,7 @@
 """L2: AN IMAGE ADDRESS AN AGENT DID NOT CHECK NEVER REACHES THE PAGE (Vexa-ai/vexa#1624).
 
-Founder, 2026-09-06, on the OeNB workspace README: the page carried `![OeNB logo](https://
-upload.wikimedia.org/wikipedia/commons/8/8c/%C3%96NB_Logo.svg)`, an address the agent invented.
+Founder, 2026-09-06, on the Example Bank workspace README: the page carried `![Example Bank logo](https://
+upload.wikimedia.org/wikipedia/commons/8/8c/Example_Bank_Logo.svg)`, an address the agent invented.
 Pressing *Fetch into the workspace* answered 404 — nobody had ever requested it.
 
 The claims, in the order they matter:
@@ -21,12 +21,17 @@ The claims, in the order they matter:
 """
 from __future__ import annotations
 
+import functools
+
 import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from control_plane import publish as publish_mod
 from control_plane.api import create_app
+# No gateway in-process: a request that names nobody runs as `u_jane` (`create_app`'s harness-only
+# `default_subject`). A test that asserts per-user isolation sends `X-User-Id`, which always wins.
+create_app = functools.partial(create_app, default_subject="u_jane")
 from control_plane.dispatch import Dispatcher
 from control_plane.workspace_reader import WorkspaceReader
 from shared import page_images
@@ -34,8 +39,8 @@ from shared.config import load_settings
 
 from tests.test_api import _FakeIdentity, _FakeRuntime
 
-DEAD = "https://upload.wikimedia.org/wikipedia/commons/8/8c/%C3%96NB_Logo.svg"
-LIVE = "https://www.oenb.at/logo.svg"
+DEAD = "https://upload.wikimedia.org/wikipedia/commons/8/8c/Example_Bank_Logo.svg"
+LIVE = "https://www.bank.example/logo.svg"
 
 
 def _app(tmp_path):
@@ -97,7 +102,7 @@ def test_a_host_that_refuses_the_method_is_asked_again_properly():
 
 def test_a_redirect_into_this_deployments_own_network_is_refused_on_the_hop():
     def handler(req):
-        if req.url.host == "www.oenb.at":
+        if req.url.host == "www.bank.example":
             return httpx.Response(302, headers={"location": "http://169.254.169.254/x.png"})
         return httpx.Response(200, headers={"content-type": "image/png"})
     reason = page_images.image_refusal(LIVE, client=_client(handler), resolve=_public)
@@ -115,19 +120,19 @@ def test_the_guard_is_the_fetchs_own_and_never_opens_a_socket_for_a_refused_url(
 # ── finding them in a page ──────────────────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("text,url", [
-    (f"![OeNB logo]({DEAD})", DEAD),
-    (f'![OeNB logo]({DEAD} "the logo")', DEAD),
-    (f'<img src="{DEAD}" alt="OeNB logo">', DEAD),
-    (f"<img alt='OeNB logo' src='{DEAD}' />", DEAD),
+    (f"![Example Bank logo]({DEAD})", DEAD),
+    (f'![Example Bank logo]({DEAD} "the logo")', DEAD),
+    (f'<img src="{DEAD}" alt="Example Bank logo">', DEAD),
+    (f"<img alt='Example Bank logo' src='{DEAD}' />", DEAD),
 ])
 def test_every_shape_an_address_arrives_in_is_found(text, url):
     refs = page_images.external_image_refs(text)
     assert [r.url for r in refs] == [url]
-    assert refs[0].alt == "OeNB logo"
+    assert refs[0].alt == "Example Bank logo"
 
 
 def test_a_workspace_path_and_a_data_url_are_not_external_references():
-    text = "![logo](assets/oenb-logo.svg) ![dot](data:image/png;base64,AAA) [link](https://oenb.at)"
+    text = "![logo](assets/bank-logo.svg) ![dot](data:image/png;base64,AAA) [link](https://bank.example)"
     assert page_images.external_image_refs(text) == []
 
 
@@ -139,12 +144,12 @@ def test_a_page_with_nothing_external_is_returned_untouched_and_unasked():
 
 
 def test_the_sentence_stays_and_the_image_goes():
-    body = ("# OeNB\n\nThe bank's logo is below.\n\n"
-            f"![OeNB logo]({DEAD})\n\nIts head office is in Vienna.\n")
+    body = ("# Example Bank\n\nThe bank's logo is below.\n\n"
+            f"![Example Bank logo]({DEAD})\n\nIts head office is in Vienna.\n")
     out, dropped = page_images.screen_text(body, verify=_verify)
     assert DEAD not in out
     assert "The bank's logo is below." in out and "Its head office is in Vienna." in out
-    assert [d.url for d in dropped] == [DEAD] and dropped[0].alt == "OeNB logo"
+    assert [d.url for d in dropped] == [DEAD] and dropped[0].alt == "Example Bank logo"
     assert "\n\n\n" not in out          # the hole is closed, nothing else is reflowed
 
 
@@ -171,11 +176,11 @@ def test_one_address_named_in_two_fields_is_asked_about_once():
 
 def test_a_page_written_with_a_dead_image_address_comes_out_without_it(tmp_path, monkeypatch):
     monkeypatch.setattr(page_images, "image_refusal", _verify)
-    body = f"# OeNB\n\nThe logo:\n\n![OeNB logo]({DEAD})\n\nFounded in 1816.\n"
+    body = f"# Example Bank\n\nThe logo:\n\n![Example Bank logo]({DEAD})\n\nFounded in 1816.\n"
     r = _app(tmp_path).put("/api/workspace/file", params={"subject": "u_jane"},
-                           json={"path": "kg/oenb.md", "content": body})
+                           json={"path": "kg/examplebank.md", "content": body})
     assert r.status_code == 200
-    written = (tmp_path / "u_jane" / "kg" / "oenb.md").read_text()
+    written = (tmp_path / "u_jane" / "kg" / "examplebank.md").read_text()
     assert DEAD not in written
     assert "Founded in 1816." in written and "The logo:" in written
 
@@ -183,14 +188,14 @@ def test_a_page_written_with_a_dead_image_address_comes_out_without_it(tmp_path,
 def test_an_entity_card_gets_the_same_door(tmp_path, monkeypatch):
     monkeypatch.setattr(page_images, "image_refusal", _verify)
     r = _app(tmp_path).post("/api/workspace/entity", params={"subject": "u_jane"}, json={
-        "kind": "company", "name": "OeNB", "source": "their site",
-        "summary": f"Austria's central bank. ![OeNB logo]({DEAD})",
+        "kind": "company", "name": "Example Bank", "source": "their site",
+        "summary": f"A regulated bank. ![Example Bank logo]({DEAD})",
         "facts": [f"1816 — founded. ![seal]({DEAD})"],
     })
     assert r.status_code == 200
     page = (tmp_path / "u_jane" / r.json()["path"]).read_text()
     assert DEAD not in page
-    assert "Austria's central bank." in page and "founded" in page
+    assert "A regulated bank." in page and "founded" in page
 
 
 def test_the_friction_is_filed_and_it_names_the_guessed_url(tmp_path, monkeypatch):
@@ -199,23 +204,23 @@ def test_the_friction_is_filed_and_it_names_the_guessed_url(tmp_path, monkeypatc
     monkeypatch.setattr(publish_mod, "post_friction",
                         lambda rec, **kw: (filed.append(rec), (True, {"id": "f1"}))[1])
     _app(tmp_path).put("/api/workspace/file", params={"subject": "u_jane"},
-                       json={"path": "kg/oenb.md", "content": f"![OeNB logo]({DEAD})"})
+                       json={"path": "kg/examplebank.md", "content": f"![Example Bank logo]({DEAD})"})
     assert len(filed) == 1
     rec = filed[0]
     assert DEAD in rec["tried"] and "404" in rec["tried"]
     assert rec["reporter"] == "agent" and rec["subject"] == "u_jane"
-    assert rec["context"]["path"] == "kg/oenb.md" and rec["context"]["tool"] == "workspace_write"
+    assert rec["context"]["path"] == "kg/examplebank.md" and rec["context"]["tool"] == "workspace_write"
 
 
 def test_a_clean_page_files_nothing_and_is_written_verbatim(tmp_path, monkeypatch):
     monkeypatch.setattr(page_images, "image_refusal", _verify)
     monkeypatch.setattr(publish_mod, "post_friction",
                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("nothing to report")))
-    body = f"# OeNB\n\n![OeNB logo]({LIVE})\n"
+    body = f"# Example Bank\n\n![Example Bank logo]({LIVE})\n"
     r = _app(tmp_path).put("/api/workspace/file", params={"subject": "u_jane"},
-                           json={"path": "kg/oenb.md", "content": body})
+                           json={"path": "kg/examplebank.md", "content": body})
     assert r.status_code == 200
-    assert (tmp_path / "u_jane" / "kg" / "oenb.md").read_text() == body
+    assert (tmp_path / "u_jane" / "kg" / "examplebank.md").read_text() == body
 
 
 def test_a_write_is_never_failed_by_a_friction_report_that_could_not_be_filed(tmp_path, monkeypatch):
@@ -224,6 +229,6 @@ def test_a_write_is_never_failed_by_a_friction_report_that_could_not_be_filed(tm
     monkeypatch.setattr(publish_mod, "post_friction",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("flows is down")))
     r = _app(tmp_path).put("/api/workspace/file", params={"subject": "u_jane"},
-                           json={"path": "kg/oenb.md", "content": f"prose ![logo]({DEAD}) prose"})
+                           json={"path": "kg/examplebank.md", "content": f"prose ![logo]({DEAD}) prose"})
     assert r.status_code == 200
-    assert DEAD not in (tmp_path / "u_jane" / "kg" / "oenb.md").read_text()
+    assert DEAD not in (tmp_path / "u_jane" / "kg" / "examplebank.md").read_text()

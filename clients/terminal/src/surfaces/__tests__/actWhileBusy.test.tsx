@@ -18,7 +18,7 @@
  *  layers was individually fine: the defect only ever existed in the wiring between them.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, cleanup, waitFor, act } from "@testing-library/react";
+import { render, screen, cleanup, waitFor, act, fireEvent } from "@testing-library/react";
 
 /** The stream, faked: a turn that does not end until this test says so. `vi.hoisted` because
  *  `vi.mock`'s factory is hoisted above every other statement in the file. */
@@ -52,9 +52,8 @@ vi.mock("../chatStream", async (importOriginal) => ({
 
 import { Chat } from "../chat";
 import { postIntent } from "../../minutes/extend";
-import { ServicesProvider, createContainer, reg, CommandServiceId, type CommandService } from "../../platform";
+import { ServicesProvider, createContainer, reg, CommandServiceId, type CommandService, ASK_CHAT_EVENT } from "../../platform";
 import { LayoutServiceId, createLayoutService } from "../../workbench/layout";
-import { ASK_CHAT_EVENT } from "../../canvas/actions";
 
 const container = () => createContainer([
   reg(LayoutServiceId, () => createLayoutService("files")),
@@ -212,4 +211,25 @@ describe("Extend / Create pressed while a turn is running", () => {
     expect(JSON.parse(String((submits()[0][1] as RequestInit).body)).prompt).toContain("and this as well");
     expect(stream.calls.length).toBe(1);   // the turn in front of it is untouched
   });
+});
+
+
+describe("quoted selections prepare drafts", () => {
+  for (const busy of [false, true]) {
+    it(`preserves composer text and never submits (busy=${busy})`, async () => {
+      mountChat();
+      if (busy) await startATurn();
+      const input = document.querySelector("textarea") as HTMLTextAreaElement;
+      fireEvent.change(input, { target: { value: "Explain this" } });
+      await act(async () => {
+        window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, { detail: {
+          mode: "draft", prompt: "Source: desk/note.md\n\n> A quote\n\n",
+        } }));
+      });
+      expect(input.value).toBe("Explain this\n\nSource: desk/note.md\n\n> A quote\n\n");
+      expect(stream.calls).toHaveLength(busy ? 1 : 0);
+      expect(submits()).toHaveLength(0);
+      await waitFor(() => expect(document.activeElement).toBe(input));
+    });
+  }
 });

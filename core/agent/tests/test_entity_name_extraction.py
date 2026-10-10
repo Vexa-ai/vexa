@@ -58,10 +58,10 @@ def test_curly_quotes_are_masked_too():
 def test_a_name_cannot_be_assembled_across_a_line_break():
     """Two unrelated capitalised words that happen to be adjacent only because one ends a line and
     the next starts one must not be read as a single two-word name."""
-    text = "Reported by Peter Smulovics.\nZenith SIG did not meet today."
+    text = "Reported by Peter Varga.\nZenith SIG did not meet today."
     out = E.candidate_names(text, mask_linked=False)
-    assert "Smulovics Zenith" not in out, out
-    assert "Peter Smulovics" in out, out
+    assert "Varga Zenith" not in out, out
+    assert "Peter Varga" in out, out
     assert "Zenith SIG" in out, out
 
 
@@ -100,27 +100,27 @@ def test_an_option_line_is_not_a_name(tmp_path):
             "1. Any Vexa meeting on the org\n"
             "2. Only meetings whose organiser shares them\n"
             "3. Nothing by default\n\n"
-            "Martin Kocher asked for the second one.\n")
+            "Hugo Keller asked for the second one.\n")
     out = E.candidate_names(text, mask_linked=False)
     assert "Any Vexa" not in out, out
     # ...and the name said in the same note still comes through, all the way to the phase's list.
-    assert "Martin Kocher" in out, out
-    assert E.missing_names([tmp_path], [text]) == ["Martin Kocher"]
+    assert "Hugo Keller" in out, out
+    assert E.missing_names([tmp_path], [text]) == ["Hugo Keller"]
 
 
 def test_a_dropped_prefix_does_not_propose_a_second_page(tmp_path):
-    """fr_e805ab2ab6675bff (13:37Z): the phase offered "NB Governing Board" while
-    `kg/entities/project/oenb-governing-board.md` was already on the desk. The "Oe" was dropped
+    """fr_e805ab2ab6675bff (13:37Z): the phase offered "Bank Governing Board" while
+    `kg/entities/project/examplebank-governing-board.md` was already on the desk. The "Example" was dropped
     upstream, and every check the dedup had — exact slug, then a prefix — compares from the LEFT,
     which is the end that was damaged. A near-duplicate page was one tool call away."""
     proj = tmp_path / "kg" / "entities" / "project"
     proj.mkdir(parents=True)
-    (proj / "oenb-governing-board.md").write_text(
-        "---\ntype: project\nid: oenb-governing-board\ntitle: OeNB Governing Board\n---\n"
-        "# OeNB Governing Board\n")
-    assert E.missing_names([tmp_path], ["NB Governing Board met on Thursday."]) == []
+    (proj / "examplebank-governing-board.md").write_text(
+        "---\ntype: project\nid: examplebank-governing-board\ntitle: ExampleBank Governing Board\n---\n"
+        "# ExampleBank Governing Board\n")
+    assert E.missing_names([tmp_path], ["Bank Governing Board met on Thursday."]) == []
     # the spelling the page itself uses is subtracted the way it always was
-    assert E.missing_names([tmp_path], ["OeNB Governing Board met on Thursday."]) == []
+    assert E.missing_names([tmp_path], ["ExampleBank Governing Board met on Thursday."]) == []
     # ...and a different project on the same desk is still offered
     assert E.missing_names([tmp_path], ["Vienna Data Board met on Thursday."]) == \
         ["Vienna Data Board"]
@@ -132,22 +132,22 @@ def test_the_dedup_reads_the_title_not_only_the_filename(tmp_path):
     proj = tmp_path / "kg" / "entities" / "project"
     proj.mkdir(parents=True)
     (proj / "board-2026.md").write_text(
-        "---\ntype: project\nid: board-2026\ntitle: OeNB Governing Board\n---\n"
-        "# OeNB Governing Board\n")
-    assert E.missing_names([tmp_path], ["NB Governing Board met on Thursday."]) == []
+        "---\ntype: project\nid: board-2026\ntitle: ExampleBank Governing Board\n---\n"
+        "# ExampleBank Governing Board\n")
+    assert E.missing_names([tmp_path], ["Bank Governing Board met on Thursday."]) == []
 
 
 def test_a_document_wikilink_is_a_reference_not_a_name(tmp_path):
     """fr_e96aa977edd14de8 (13:54Z): `structure.md` is the org-chart document the research job
     wrote, linked from every person page as `[[structure]]`, and the extractor surfaced "Structure"
     as a missing NAME — every wikilink was a person/company chip whatever it pointed at."""
-    (tmp_path / "structure.md").write_text("# OeNB org chart\n")
-    r = E.upsert_entity(tmp_path, "person", "Martin Kocher",
-                        ["Sits at the top of [[structure]] with [[Josef Meichenitsch]]."],
-                        "the OeNB research job")
+    (tmp_path / "structure.md").write_text("# Example Bank org chart\n")
+    r = E.upsert_entity(tmp_path, "person", "Hugo Keller",
+                        ["Sits at the top of [[structure]] with [[Theo Lindgren]]."],
+                        "the Example Bank research job")
     assert r["links_docs"] == ["structure"], r          # the document link is a reference
     assert r["links_resolved"] == ["structure"], r      # ...and it does point at a page that exists
-    assert r["links_missing"] == ["Josef Meichenitsch"], r   # a NAME with no page still asks
+    assert r["links_missing"] == ["Theo Lindgren"], r   # a NAME with no page still asks
     # and the phase's own pre-pass does not read the link as a name either
     assert E.missing_names([tmp_path], ["Sits at the top of [[structure]]."]) == []
 
@@ -159,8 +159,8 @@ def test_a_link_to_a_page_in_another_mounted_workspace_is_not_missing(tmp_path):
     desk, group = tmp_path / "desk", tmp_path / "group"
     desk.mkdir()
     group.mkdir()
-    E.upsert_entity(group, "project", "OeNB Governing Board", ["Meets monthly."], "the mail")
-    out = E.upsert_entity(desk, "meeting", "OeNB check-in",
-                          ["[[OeNB Governing Board]] was named."], "the transcript",
+    E.upsert_entity(group, "project", "Example Bank Governing Board", ["Meets monthly."], "the mail")
+    out = E.upsert_entity(desk, "meeting", "Example Bank check-in",
+                          ["[[Example Bank Governing Board]] was named."], "the transcript",
                           mounts=[{"path": str(desk)}, {"path": str(group)}])
-    assert out["links_resolved"] == ["OeNB Governing Board"] and out["links_missing"] == []
+    assert out["links_resolved"] == ["Example Bank Governing Board"] and out["links_missing"] == []

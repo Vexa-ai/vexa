@@ -1,8 +1,10 @@
 """claude_code.py — the Claude Code harness ADAPTER (vendor-named like runtime's docker_backend.py).
 
-Everything this codebase knows about the ``claude`` CLI lives in THIS file: the headless argv, the
-``--output-format stream-json`` parser, the ``~/.claude`` continuity/skills wiring, and the
-Anthropic-credential preflight. The rest of the system sees only ``HarnessPort`` UnitEvents.
+Everything this codebase knows about the ``claude`` CLI lives in THIS file and its one companion:
+the headless argv, the ``--output-format stream-json`` parser, the ``~/.claude`` continuity wiring
+and the Anthropic-credential preflight here; the per-turn skills staging in ``claude_skills.py``.
+What a tool result means to the panel is shared by every harness and lives in ``tool_events.py``.
+The rest of the system sees only ``HarnessPort`` UnitEvents.
 
 This is the proven ``claude -p --allowedTools --resume`` pattern (stream-json → SSE). The
 subprocess is an INJECTED runner (``HarnessExec``), so the parser is offline-provable with a fake.
@@ -14,255 +16,26 @@ only; other runners declare their own.
 from __future__ import annotations
 
 import json
+import logging
 import os
+import re
+import stat
 import subprocess
 from pathlib import Path
 from typing import Iterable, Iterator, Optional
 
-from llm.errors import looks_like_auth_failure, preflight_provider_guard
-from llm.ports import HarnessExec, close_event_stream, harness_subprocess_env
+from llm.errors import looks_like_auth_failure, preflight_provider_guard, provider_host
+from llm import fault_wire
+from llm import faults as provider_faults
+from llm import workspace_paths as wpaths
+from llm.ports import (HarnessExec, close_event_stream, harness_identity_kwargs, harness_subprocess_env,
+                       max_output_tokens)
+from llm.claude_skills import _link_skills_into_home
+from llm.tool_events import (_BOT_TOOLS, _FOCUS_TOOLS, _OPEN_TOOLS, _TERMS_TOOLS, _WRITER_TOOLS,
+                             _bot_artifact, _open_event, _published_terms, _short,
+                             _workspace_focus, _written_artifact)
 
-
-# Tools whose SUCCESS means a document now exists that the person should be looking at. The
-# vocabulary is explicit rather than a prefix match: "a tool whose name contains write" would catch
-# a future `workspace_write_policy` or a `write_transcript` and open tabs nobody asked for.
-_WRITER_TOOLS = frozenset({
-    "mcp__vexa__workspace_write",
-    "Write",
-    "Edit",
-    "NotebookEdit",
-})
-
-
-# THE TRANSCRIPT-TERM PUBLISH (PRD decision 35). `transcript_terms` is the only tool whose SUCCESS
-# is meant to paint something on the meeting view, so it is the only one whose RESULT BODY is read
-# here rather than summarised. A closed vocabulary for the same reason `_WRITER_TOOLS` is one: a
-# prefix match would let any future tool ending in `_terms` drive somebody's transcript.
-_TERMS_TOOLS = frozenset({
-    "mcp__vexa__transcript_terms",
-    "transcript_terms",
-})
-
-# The sends that put a bot in a room NOW. `bot_schedule` is deliberately absent: it books a join for
-# later, so there is nothing to open beside the chat yet and a panel that jumped to an empty
-# transcript would be answering a question nobody asked.
-_BOT_TOOLS = frozenset({
-    "mcp__vexa__bot_send",
-    "bot_send",
-})
-
-# THE ASK TO OPEN SOMETHING (Vexa-ai/vexa#1586). Every other panel move on this page is a SIDE
-# EFFECT of doing something else — a write opens its file, a send opens its transcript. This one is
-# the act itself: the founder typed "open meeting transcript", the agent read the 677 segments and
-# described them, and he answered *"it did not open the transcript"*. Asked to open something, the
-# only move it had was to describe it.
-#
-# The tool is served by the vexa MCP rather than being a harness builtin, and that is what makes it
-# work on BOTH runners from one implementation: `claude-code` drives a CLI whose tool list is the
-# CLI's own and cannot reach a Python builtin (`llm/JOBS.md` states this for `spawn_job`), while an
-# MCP verb is reachable by every runner that attaches the server. The event derivation below is
-# shared the same way `_bot_artifact` is.
-_OPEN_TOOLS = frozenset({
-    "mcp__vexa__open_page",
-    "open_page",
-})
-
-
-# A WORKSPACE MADE FROM THIS CONVERSATION JOINS IT (Vexa-ai/vexa#1603). The founder asked for *"a
-# new workspace where we will collect everything we know about ILM"*, got one, and was then told
-# *"the new workspace isn't in my native mount stack (it's reached via the workspace_* tools)"* —
-# *"not native workspace??"*. Creating a place IS the act of bringing it into the room; reaching it
-# through the tools afterwards is the defect. So the create emits its own event, exactly as a send
-# emits the transcript's: the chip shows it, the panel mounts it, and agent-api reads the same
-# event on the way past to put it in the session's focus for every later turn and every other
-# browser.
-#
-# A CLOSED VOCABULARY, for the reason `_WRITER_TOOLS` is one: a prefix match on "workspace" would
-# put every listing, read and purpose-edit into somebody's focus.
-#
-# …AND SO DOES THE VERB THAT MOVES THE TARGET (Vexa-ai/vexa#1611). `workspace_target` is what an
-# agent calls when the person says *"work in the OeNB workspace"*; it emits the SAME event, because
-# a `focus` says "this workspace is where this conversation is working" and that has always meant
-# both halves — it is in the chat's mount set, and it is the one writes go to. Two event kinds for
-# one sentence is how a chip and a record come to disagree.
-_FOCUS_TOOLS = frozenset({
-    "mcp__vexa__workspace_new",
-    "workspace_new",
-    "mcp__vexa__workspace_target",
-    "workspace_target",
-})
-
-
-def _tool_result_text(content: object) -> str:
-    """The tool result as one string, whichever shape the harness handed it in.
-
-    Claude Code emits a tool result either as a bare string or as a list of content blocks; both
-    reach here, and a reader that handles only one of them fails SILENTLY on the other — which for
-    this seam means chips that simply never appear and nothing anywhere saying why."""
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        return "".join(b.get("text", "") for b in content
-                       if isinstance(b, dict) and b.get("type") == "text")
-    return ""
-
-
-def _published_terms(content: object) -> "dict | None":
-    """The `terms` event a `transcript_terms` result asks for, or None.
-
-    ONLY WHEN THE AGENT PUBLISHED. The tool answers a bare look-up call with ``emit: []`` — that
-    call was the agent reading the room, and painting its raw output would put every capitalised
-    word in the meeting on the person's screen. An empty publish is a NON-EVENT rather than an empty
-    event: an empty event would clear the chips the previous Highlight put there."""
-    try:
-        obj = json.loads(_tool_result_text(content))
-    except (json.JSONDecodeError, TypeError):
-        return None
-    if not isinstance(obj, dict):
-        return None
-    emit = obj.get("emit")
-    if not isinstance(emit, list) or not emit:
-        return None
-    return {"type": "terms", "meeting": str(obj.get("meeting") or ""),
-            "cursor": str(obj.get("cursor") or ""), "terms": emit}
-
-
-def _bot_artifact(content: object) -> "dict | None":
-    """The panel move a successful `bot_send` earns, or None (F73, decision 30.4).
-
-    The founder watched the agent finish a send and then offer him a LINK into the product he was
-    already looking at. The fix is not a better sentence — the panel is the product's own surface and
-    moving it is the harness's job, not something the model should be asked to remember. So the send
-    itself opens the live transcript beside the chat.
-
-    BY THE ROW, NEVER THE NATIVE ID. `path` is the literal string ``meeting:`` + the meeting row id;
-    a personal room's native id spans every meeting ever held in it, so it names a series and the
-    resolver would pick whichever occurrence is newest. `bot_send` resolves and returns
-    ``meeting_row`` for exactly this. No row, no event — a panel aimed at a guess is the failure this
-    whole seam is careful about.
-
-    `pin` and `focus` are separate and both are wanted here: pin KEEPS the transcript in the strip so
-    it survives the next thing opened, focus FRONTS it now.
-
-    …AND THE NATIVE ID RIDES ALONG (Vexa-ai/vexa#1597). This event is the only place in the system
-    where "a bot was sent, from THIS chat, into THAT meeting" is stated, and agent-api reads it to
-    BIND the meeting to the chat's session. The row addresses the meeting as the panel addresses it;
-    the native id is how everything that talks to meeting-api addresses it (`bot_stop`, the
-    transcript API), so the binding carries both rather than making a second lookup the price of
-    knowing the second one. Nothing renders it — the client already reads a native id off the
-    meetings list — so an absent one costs the binding a field, never the event."""
-    try:
-        obj = json.loads(_tool_result_text(content))
-    except (json.JSONDecodeError, TypeError):
-        return None
-    if not isinstance(obj, dict) or not obj.get("sent"):
-        return None
-    row = str(obj.get("meeting_row") or "").strip()
-    if not row:
-        return None
-    ev = {"type": "artifact", "path": f"meeting:{row}", "pin": True, "focus": True}
-    native = str(obj.get("meeting") or "").strip()
-    if native:
-        ev["native"] = native
-    return ev
-
-
-def _workspace_focus(content: object) -> "dict | None":
-    """The `focus` event a successful `workspace_new` or `workspace_target` earns, or None
-    (Vexa-ai/vexa#1603, Vexa-ai/vexa#1611).
-
-    ONE FIELD DECIDES IT: `created`, the workspace id the create route minted, which the tool
-    returns for a create and for nothing else — or `targeted`, the id `workspace_target` returns
-    for a workspace it confirmed this person can write. No id, no event — a focus aimed at a guess
-    would put a chat permanently over a workspace that does not exist, the same failure
-    `_bot_artifact` is careful about one object along.
-
-    TWO NAMES, ONE FIELD, deliberately: the tools answer different questions ("I made this" versus
-    "we are working here") and a result that said `created` for a target would be a lie in the
-    transcript. What they MEAN to the chat is identical, which is why one event carries both.
-
-    `name` rides along because this is the only moment the workspace's HUMAN name is in hand on
-    this path; the client shows names, never slugs. It is display only and an absent one costs the
-    event a field, never the focus.
-
-    THE EVENT CLAIMS NO ACCESS. Whether the next turn mounts this read-write is decided by
-    membership, server-side, in `shared_active_mounts` — not by a string a harness wrote. What this
-    event says is only "this workspace is now part of this conversation", which is the one thing
-    the harness is in a position to know."""
-    try:
-        obj = json.loads(_tool_result_text(content))
-    except (json.JSONDecodeError, TypeError):
-        return None
-    if not isinstance(obj, dict):
-        return None
-    wid = str(obj.get("created") or obj.get("targeted") or "").strip()
-    # A slug is one path segment and never a dot-namespaced reserved one. Same shape check the
-    # store itself applies; refusing here keeps a malformed answer out of a durable session record.
-    if not wid or "/" in wid or wid.startswith("."):
-        return None
-    ev = {"type": "focus", "workspace": wid}
-    name = str(obj.get("name") or "").strip()
-    if name:
-        ev["name"] = name
-    return ev
-
-
-def _open_event(content: object) -> "dict | None":
-    """The `open` event a successful `open_page` result asks for, or None (Vexa-ai/vexa#1586).
-
-    The TOOL decides whether anything is there — it resolves the target against the person's own
-    workspaces and meetings and answers `opened: false` with a reason when it is not — so this reads
-    the answer rather than re-deriving it. A refusal paints nothing: the agent was told, in words,
-    and its one-line reply is that reason.
-
-    `path` carries the SAME two dialects an `artifact` event does, so the client resolves both
-    through the one function it already has (`pageForArtifact`): a workspace-relative path for a
-    document, and the literal `meeting:<row id>` for the live transcript canvas. A transcript is not
-    a file (founder ruling 2026-09-01) and this is where that stays true.
-
-    There is no `focus` flag and that is deliberate. An `artifact` is the turn saying "I wrote
-    this"; an `open` is a person having asked to see it, so it always comes to the front — including
-    over a page the reader opened moments ago, which for `artifact` is the case that must NOT
-    interrupt them."""
-    try:
-        obj = json.loads(_tool_result_text(content))
-    except (json.JSONDecodeError, TypeError):
-        return None
-    if not isinstance(obj, dict) or not obj.get("opened"):
-        return None
-    path = str(obj.get("path") or "").strip()
-    if not path:
-        return None
-    return {"type": "open", "target": str(obj.get("target") or ""),
-            "workspace": str(obj.get("workspace") or ""), "path": path}
-
-
-def _written_artifact(tool: str, args: dict) -> "tuple[str, str] | None":
-    """`(workspace, path)` the call is about to write, or None. Read off the ARGUMENTS, at tool-use
-    time, because the result carries only a summary string.
-
-    Two dialects, because two kinds of tool write workspace files:
-      * the MCP verb takes `path` (workspace-relative) and `slug` (empty = the caller's own desk);
-      * the harness tools take an absolute container path under `/workspaces/<slug>/<rel>`.
-    Anything else — a write outside the store, a shape we do not recognise — returns None and no
-    tab is opened. A tab pointing at a path we guessed is worse than no tab: it opens a page that
-    can never load, which is the failure the scaffold's `meeting:note` rule already names."""
-    if tool == "mcp__vexa__workspace_write":
-        rel = str(args.get("path") or "").strip().lstrip("/")
-        slug = str(args.get("slug") or "").strip()
-        return (slug, rel) if rel else None
-    raw = str(args.get("file_path") or args.get("notebook_path") or "").strip()
-    if not raw.startswith("/workspaces/"):
-        return None
-    rest = raw[len("/workspaces/"):]
-    slug, _, rel = rest.partition("/")
-    return (slug, rel) if slug and rel else None
-
-
-def _short(content: object, n: int = 80) -> str:
-    s = content if isinstance(content, str) else json.dumps(content, default=str)
-    s = " ".join(s.split())
-    return s[:n]
+logger = logging.getLogger("llm.claude_code")
 
 
 def parse_stream_json(lines: Iterable[str]) -> Iterator[dict]:
@@ -294,6 +67,14 @@ def parse_stream_json(lines: Iterable[str]) -> Iterator[dict]:
     pending_opens: set[str] = set()
     # callIds of in-flight `workspace_new` calls — same discipline again (Vexa-ai/vexa#1603).
     pending_focus: set[str] = set()
+    # THE PROVIDER'S FAILURE, WHEREVER THE CLI PUT IT (P18). The CLI reports a provider refusal —
+    # OpenRouter's 402, out of credit — as a synthetic assistant message (`API Error: 402 {…}`,
+    # sometimes labelled `error: "billing_error"`), then a `result` with `is_error`; and when it dies
+    # before the stream starts it prints the reason as plain text, which used to be skipped as a
+    # malformed line. All three are kept here, bounded, and read by `_provider_fault` below.
+    api_error, sdk_error, model_id = "", "", ""
+    stray: list[str] = []
+    saw_result = False
     try:
         for raw in lines:
             raw = raw.strip()
@@ -302,8 +83,14 @@ def parse_stream_json(lines: Iterable[str]) -> Iterator[dict]:
             try:
                 obj = json.loads(raw)
             except json.JSONDecodeError:
+                obj = None
+            if not isinstance(obj, dict):
+                stray.append(raw[:500])      # plain stderr/stdout text: kept, never shown raw
+                del stray[:-20]
                 continue
             t = obj.get("type")
+            if t == "system" and obj.get("subtype") == "init" and obj.get("model"):
+                model_id = str(obj["model"])
             if t == "stream_event":
                 event = obj.get("event", {}) or {}
                 if event.get("type") == "content_block_delta":
@@ -315,6 +102,11 @@ def parse_stream_json(lines: Iterable[str]) -> Iterator[dict]:
                 for block in obj.get("message", {}).get("content", []) or []:
                     bt = block.get("type")
                     if bt == "text" and block.get("text"):
+                        if _is_api_error(obj, block["text"]):
+                            # The provider's refusal, not the agent's words: it becomes the turn's
+                            # typed fault below instead of a raw `API Error: 402 {json}` bubble.
+                            api_error, sdk_error = block["text"], str(obj.get("error") or "")
+                            continue
                         if not streamed_partial:  # no partials → emit the whole block (back-compat)
                             yield {"type": "message-delta", "text": block["text"]}
                     elif bt == "tool_use":
@@ -404,6 +196,7 @@ def parse_stream_json(lines: Iterable[str]) -> Iterator[dict]:
                                 "focus": True,
                             }
             elif t == "result":
+                saw_result = True
                 reply = obj.get("result", "")
                 done = {
                     "type": "done",
@@ -411,6 +204,11 @@ def parse_stream_json(lines: Iterable[str]) -> Iterator[dict]:
                     "sessionId": obj.get("session_id"),
                     "ok": obj.get("is_error") is not True and obj.get("subtype") != "error",
                 }
+                if done["ok"] and api_error and str(reply or "").strip() in ("", api_error.strip()):
+                    done["ok"] = False      # a "success" whose only answer was the provider's refusal
+                fault = (_provider_fault(str(reply or "") or api_error, sdk_error, model_id,
+                                         status=obj.get("api_error_status"))
+                         if not done["ok"] else None)
                 if not done["ok"] and looks_like_auth_failure(reply):
                     # The CLI's own auth text ("Not logged in · Please run /login") is an internal of
                     # THIS adapter — /login doesn't exist for an API consumer. Rewrite to the
@@ -422,7 +220,26 @@ def parse_stream_json(lines: Iterable[str]) -> Iterator[dict]:
                         "ANTHROPIC_AUTH_TOKEN or CLAUDE_CODE_OAUTH_TOKEN, "
                         "or configure a model under Settings → Models."
                     )
+                    if fault is not None and fault.status is None:
+                        # No status to read means the CLI's own wording — which is exactly the
+                        # text this branch exists to keep off the person's screen.
+                        fault = provider_faults.ProviderFault(
+                            kind=fault.kind, provider=fault.provider, model=fault.model,
+                            detail="the model credential is missing or expired",
+                            remedy=done["reply"])
+                elif fault is not None:
+                    done["detail"] = _short(reply, 200)
+                    done["reply"] = fault.sentence()
+                if fault is not None:
+                    done["fault"] = fault.as_dict()
                 yield done
+        if not saw_result:
+            # THE CLI DIED WITHOUT A RESULT. A provider failure it printed as text (or as its
+            # synthetic message) still ends the turn, typed — never a turn that just stops.
+            fault = _provider_fault(api_error or "\n".join(stray), sdk_error, model_id)
+            if fault is not None:
+                yield {"type": "done", "reply": fault.sentence(), "sessionId": None, "ok": False,
+                       "fault": fault.as_dict()}
     finally:
         # THE KILL HAPPENS HERE, on every interpreter. `lines` is `_exec_subprocess`'s generator and
         # its `finally` is what reaps the CLI child; a `for` loop hands that last hop to refcount
@@ -430,6 +247,43 @@ def parse_stream_json(lines: Iterable[str]) -> Iterator[dict]:
         # phase's budget then stopped READING the process without stopping it. Closing explicitly is
         # what makes the budget's stop a kill rather than a hope.
         close_event_stream(lines)
+
+
+#: The CLI's own wording for a provider's refusal: ``API Error: 402 <the provider's message>``.
+_API_ERROR_TEXT = re.compile(r"^\s*api error:\s*\d{3}\b", re.IGNORECASE)
+
+
+def _is_api_error(obj: dict, text: str) -> bool:
+    """Is this assistant text block the CLI relaying a provider failure, not the model speaking?
+
+    Measured on CLI 2.1.293 against an endpoint answering OpenRouter's 402: the CLI emits ONE
+    assistant message with ``model: "<synthetic>"``, ``error: "unknown"`` and
+    ``is_api_error_message: true`` whose text is ``API Error: 402 <message>``, then a ``result``
+    with ``is_error: true`` and ``api_error_status: 402``. Any of its marks is enough; the bare
+    ``API Error: <status>`` prefix is read too, so a build that drops the marks still cannot put
+    the provider's text in the chat as if the agent had said it."""
+    if obj.get("error") or obj.get("is_api_error_message") is True:
+        return True
+    if _API_ERROR_TEXT.match(str(text)):
+        return True
+    model = str((obj.get("message") or {}).get("model") or "")
+    return model == "<synthetic>" and str(text).lstrip().lower().startswith("api error")
+
+
+def _provider_fault(text: str, sdk_error: str, model: str,
+                    status: object = None) -> "provider_faults.ProviderFault | None":
+    """The typed fault for what the CLI reported, against the endpoint it was pointed at. ``status``
+    is the result's ``api_error_status`` when the CLI wrote one — the provider's HTTP status, read
+    as such rather than out of the prose."""
+    host = provider_host()
+    code = status if isinstance(status, int) and not isinstance(status, bool) and status >= 400 else None
+    return provider_faults.classify(status=code, text=text or None, sdk_error=sdk_error or None,
+                                    model=model,
+                                    provider=host if host != "unknown" else "api.anthropic.com")
+
+
+#: The settings every launch adds on top of the user scope: no hooks run in the worker.
+NO_HOOKS_SETTINGS = json.dumps({"disableAllHooks": True})
 
 
 def build_argv(
@@ -441,8 +295,13 @@ def build_argv(
     mcp_config: Optional[str] = None,
     stdin_mode: bool = False,
     effort: Optional[str] = None,
+    workspace: Optional[str] = None,
 ) -> list[str]:
-    """The headless Claude Code argv — `claude -p <prompt> --output-format stream-json [...]`.
+    """The headless Claude Code argv — `claude -p --input-format stream-json --output-format
+    stream-json [...]`. The PROMPT IS NEVER IN ARGV: every process can read every other process's
+    command line, so the turn's text travels on the CLI's stdin as its first stream-json user message
+    (`_exec_subprocess_stdin`), whether or not mid-turn injection is on. ``prompt`` and
+    ``stdin_mode`` are kept for callers; neither changes the argv.
 
     `--permission-mode acceptEdits` auto-accepts Read/Edit/Write so the turn runs fully headless; the
     `--allowedTools` scope is the capability gate (the model writes entities, `run_harness_turn`
@@ -454,14 +313,33 @@ def build_argv(
     Backends that validate the OpenAI-compatible `reasoning_effort` field (e.g. vLLM/LiteLLM model
     groups) reject the CLI's default `high` when it is outside their allowlist; an explicit value
     overrides that default. Unset ⇒ no flag ⇒ the CLI's own behaviour, unchanged.
+
+    `--setting-sources user` — ALWAYS. The cwd is a workspace whose files come from wherever the
+    person imported them, and a repository may carry its own `.claude/settings.json` or
+    `.claude/settings.local.json`. Loaded as project/local settings, those could add hooks,
+    environment, permission rules or helper commands to the turn. Only the user scope — the
+    worker's own per-subject HOME — is read, and the turn's capabilities come from this argv alone.
+
+    `--settings {"disableAllHooks": true}` — ALWAYS. The worker runs no hooks of its own, so no hook
+    may run in it, from any settings scope or plugin. The worker images also carry the same key in
+    the managed settings file, the scope `--setting-sources` cannot turn off.
+
+    `--add-dir <workspace>` — the cwd again, as an additional directory, so its `CLAUDE.md` (the
+    workspace's governance root, which every turn must read) still loads as project memory once
+    project settings are off. The CLI reads `CLAUDE.md` from an added directory only with
+    `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1`, which `_cli_env` sets; an added directory's
+    `.claude/` skills, commands and agents load through the `project` source, which is off. The
+    skills the CLI sees are the platform's and the workspace's own `skills/`, staged into the user
+    scope (`_link_skills_into_home`) with the frontmatter that could grant tools removed from the
+    workspace's.
     """
-    if stdin_mode:
-        # prompt travels via stdin (stream-json) so the pipe stays open for mid-turn injection
-        argv = ["claude", "-p", "--input-format", "stream-json", "--output-format", "stream-json",
-                "--verbose", "--include-partial-messages", "--permission-mode", "acceptEdits"]
-    else:
-        argv = ["claude", "-p", prompt, "--output-format", "stream-json", "--verbose",
-                "--include-partial-messages", "--permission-mode", "acceptEdits"]
+    # the prompt travels via stdin (stream-json): off the command line, and the pipe can stay open
+    # for mid-turn injection when that is on
+    argv = ["claude", "-p", "--input-format", "stream-json", "--output-format", "stream-json",
+            "--verbose", "--include-partial-messages", "--permission-mode", "acceptEdits"]
+    argv += ["--setting-sources", "user", "--settings", NO_HOOKS_SETTINGS]
+    if workspace:
+        argv += ["--add-dir", workspace]
     tools = list(allowed_tools)
     if tools:
         argv += ["--allowedTools", ",".join(tools)]
@@ -510,6 +388,21 @@ def inject_user_message(text: str) -> bool:
             return False
 
 
+def _cli_env() -> dict[str, str]:
+    """The Claude Code subprocess env: ``harness_subprocess_env()`` plus the one switch that makes
+    the CLI read ``CLAUDE.md`` from an ``--add-dir`` directory. ``build_argv`` turns project settings
+    off and adds the workspace back as an additional directory, so this is what keeps the
+    workspace's ``CLAUDE.md`` loading as project memory."""
+    env = harness_subprocess_env()
+    env["CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD"] = "1"
+    # THE OUTPUT CAP (`llm.ports.max_output_tokens`). The CLI asks for 32000 output tokens unless
+    # told otherwise; the deployment's one dial is mapped onto the CLI's own variable here.
+    cap = max_output_tokens()
+    if cap is not None:
+        env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = str(cap)
+    return env
+
+
 def _reap_grace() -> float:
     """How long a finished-with stdout is given to bring the CLI down on its own, before it is
     killed. Tunable only so a test can prove the kill path in a fraction of a second."""
@@ -547,19 +440,23 @@ def _reap(proc, grace: "float | None" = None) -> None:
         proc.wait()
 
 
-def _exec_subprocess_stdin(argv: list[str], cwd: str, first_message: str) -> Iterator[str]:
-    """stdin-mode exec: the prompt travels as the first stream-json user message and stdin STAYS
-    OPEN for mid-turn injection; a `result` line closes it (turn over → CLI exits)."""
+def _exec_subprocess_stdin(argv: list[str], cwd: str, first_message: str, *,
+                           injectable: bool = True) -> Iterator[str]:
+    """The CLI exec: the prompt travels as the first stream-json user message on stdin (never in
+    argv), and stdin stays open until a `result` line closes it (turn over → CLI exits). With
+    ``injectable`` (mid-turn injection on) the open stdin is also published for
+    ``inject_user_message``."""
     global _ACTIVE_STDIN
     proc = subprocess.Popen(argv, cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, text=True, bufsize=1,
-                            env=harness_subprocess_env())
+                            env=_cli_env(), **harness_identity_kwargs())
     assert proc.stdout is not None and proc.stdin is not None
     try:
         proc.stdin.write(_user_message_json(first_message) + "\n")
         proc.stdin.flush()
-        with _STDIN_LOCK:
-            _ACTIVE_STDIN = proc.stdin
+        if injectable:
+            with _STDIN_LOCK:
+                _ACTIVE_STDIN = proc.stdin
         for line in proc.stdout:
             yield line
             if '"type":"result"' in line or '"type": "result"' in line:
@@ -585,8 +482,10 @@ def _exec_subprocess(argv: list[str], cwd: str) -> Iterator[str]:
     # read/write another tenant's tc:meeting:* / unit:*:in streams, crossing the tenancy boundary the
     # mounts enforce on the filesystem) nor the minted per-dispatch bearer token. It also drops the
     # git repo-discovery redirects (a hook-exported GIT_DIR would re-point the workspace's git ops).
+    # harness_identity_kwargs: the CLI — and so the model's tools — run as the tools user, not as
+    # the worker (llm/ports.py).
     proc = subprocess.Popen(argv, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
-                            env=harness_subprocess_env())
+                            env=_cli_env(), **harness_identity_kwargs())
     assert proc.stdout is not None
     try:
         yield from proc.stdout
@@ -596,6 +495,17 @@ def _exec_subprocess(argv: list[str], cwd: str) -> Iterator[str]:
         except Exception:  # noqa: BLE001
             pass
         _reap(proc)
+
+
+def _nofollow_dirs(base: Path, *names: str) -> Optional[Path]:
+    """``base/names…``, each level created if absent and opened through the level above without
+    following a link (``workspace_paths.dir_fd_inside``): ``None`` when any level is a link or not a
+    directory. ``base`` itself (the mount root, HOME) is the deployment's, and is made if absent."""
+    try:
+        os.close(wpaths.dir_fd_inside(base, names, create=True))
+    except (OSError, wpaths.PathRefused):
+        return None
+    return base.joinpath(*names)
 
 
 def _link_chat_into_workspace(work: Path) -> None:
@@ -611,56 +521,97 @@ def _link_chat_into_workspace(work: Path) -> None:
     transcripts — this function must never delete data it didn't create. A pre-existing directory
     is therefore replaced only when EMPTY (``rmdir``, which cannot destroy content); a non-empty
     one is left alone and the link is skipped — the turn still works, without cross-turn resume."""
-    ws_projects = work / ".claude" / "projects"
-    ws_projects.mkdir(parents=True, exist_ok=True)
-    home_claude = Path(os.environ.get("HOME", "/root")) / ".claude"
-    home_claude.mkdir(parents=True, exist_ok=True)
-    link = home_claude / "projects"
+    # The continuity root is a mount the model's tools can write (``_system``), so a level of it may
+    # be a link the turn planted: each level is created and opened without following one, and a
+    # link anywhere skips the chat link (the turn still runs, without cross-turn resume).
+    # The HOME side is acted on through the descriptor that was checked, never by name again: the
+    # `projects` entry is looked at, replaced and made relative to HOME/.claude's own descriptor.
+    ws_projects = _nofollow_dirs(work, ".claude", "projects")
     try:
-        if link.is_symlink():
-            if os.readlink(link) == str(ws_projects):
-                return
-            link.unlink()
-        elif link.is_dir():
-            if any(link.iterdir()):
-                return  # real transcripts live here — never delete, skip the link
-            link.rmdir()  # empty dir: safe to replace, nothing can be lost
-        elif link.exists():
-            return  # some other filesystem object — don't clobber
-        link.symlink_to(ws_projects, target_is_directory=True)
+        home_fd = wpaths.dir_fd_inside(Path(os.environ.get("HOME", "/root")), (".claude",), create=True)
+    except (OSError, wpaths.PathRefused):
+        home_fd = None
+    if ws_projects is None or home_fd is None:
+        logger.warning("chat continuity not linked: a level of %s/.claude/projects or of HOME/.claude "
+                       "is a link or not a directory", work)
+        return
+    try:
+        try:
+            st = os.stat("projects", dir_fd=home_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            st = None
+        if st is not None:
+            if stat.S_ISLNK(st.st_mode):
+                if os.readlink("projects", dir_fd=home_fd) == str(ws_projects):
+                    return
+                os.unlink("projects", dir_fd=home_fd)
+            elif stat.S_ISDIR(st.st_mode):
+                try:
+                    # empty only: real transcripts live in a non-empty one — never delete, skip the link
+                    os.rmdir("projects", dir_fd=home_fd)
+                except OSError:
+                    return
+            else:
+                return  # some other filesystem object — don't clobber
+        os.symlink(str(ws_projects), "projects", target_is_directory=True, dir_fd=home_fd)
     except OSError:
         pass  # best-effort; a fresh turn still works, just without cross-turn resume
+    finally:
+        os.close(home_fd)
 
 
-def _link_skills_into_workspace(work: Path) -> None:
-    """Expose the user's GOVERNED skills to the CLI. Skills live as VISIBLE, git-tracked files under the
-    workspace's ``skills/<name>/SKILL.md`` (the ``skills/`` tree mirrors the ``agents/`` config home —
-    not a dotfile, so it shows in the Files surface and is committed). claude-code auto-discovers skills
-    from ``.claude/skills``, which is governance-excluded; so we point ``.claude/skills`` at the real
-    ``skills/`` dir via a symlink. The real files stay durable + committed; the CLI finds them through
-    the link. Idempotent: create ``skills/`` if absent, then (re)point a stale/wrong symlink — but never
-    clobber a real ``.claude/skills`` directory."""
-    skills = work / "skills"
-    link = work / ".claude" / "skills"
+#: The dispatch's mark on a worker whose model route is the person's OWN endpoint
+#: (``control_plane.dispatch.subject_route_env``). Present on that route and on no other.
+SUBJECT_ROUTE_ENV = "VEXA_MODEL_ROUTE"
+#: The CLI's credential file, relative to its config directory — where the runtime stages the
+#: deployment's subscription in a process-backend HOME (``runtime_kernel.profiles``, a test holds
+#: the two equal).
+CREDENTIAL_FILE = ".credentials.json"
+
+
+def cli_credential_path() -> Path:
+    """Where the CLI reads a stored credential in a worker: its config directory, ``$HOME/.claude``
+    (nothing sets another one — neither the dispatch nor the runtime forwards one)."""
+    return Path(os.environ.get("HOME", "/root")) / ".claude" / CREDENTIAL_FILE
+
+
+def clear_deployment_credential() -> Optional[str]:
+    """On the person's own route, leave the CLI no stored credential: ``None`` when there is none
+    left to find, else the reason the turn cannot start.
+
+    Every key the CLI reads from its environment is the person's on this route (the dispatch stamps
+    them, the empty string included), but a CLI with no key of its own signs in with the file in its
+    config directory, and anything there is the deployment's. The file is this workload's own copy, so
+    it is removed for the rest of the worker's life; a file that cannot be removed stops the turn
+    before the CLI starts. On every other route the file is the credential the turn runs on and is
+    left alone."""
+    if os.environ.get(SUBJECT_ROUTE_ENV) != "subject":
+        return None
+    path = cli_credential_path()
     try:
-        # The two mkdirs are INSIDE the guard on purpose. This function is documented best-effort —
-        # "the turn still works, just without workspace skills" — but the directory creation used to
-        # sit outside it, so a cwd bound READ-ONLY (the post-meeting room run, where the ruling is
-        # that the turn writes no desk) raised an uncaught OSError and killed the turn during
-        # PREPARE, before a single token. On a ro cwd whose seed already carries `skills/` both
-        # mkdirs are no-ops and the link is found already correct; on one that does not, we now skip
-        # exactly as the docstring always promised.
-        skills.mkdir(parents=True, exist_ok=True)
-        link.parent.mkdir(parents=True, exist_ok=True)
-        if link.is_symlink():
-            if os.readlink(link) == str(skills):
-                return
-            link.unlink()
-        elif link.exists():
-            return  # a real dir already there — don't clobber
-        link.symlink_to(skills, target_is_directory=True)
-    except OSError:
-        pass  # best-effort; the turn still works, just without workspace skills
+        path.unlink()           # a link is removed itself, never followed
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        logger.warning("could not remove the stored model credential at %s: %s", path, exc)
+    if os.path.lexists(path):
+        return ("This turn runs on your own model endpoint, and the agent's environment still holds "
+                "another model credential it could not remove. The turn was not started; an "
+                "operator must not mount a model credential into the agent's config directory.")
+    return None
+
+
+def credential_conflict_fault() -> dict:
+    """The refusal above, typed (P18, unit.v1 `Fault`): the worker would not start the turn in the
+    environment it was given — not the model provider, which was never asked."""
+    return {
+        "source": fault_wire.AgentWorker.SOURCE,
+        "kind": fault_wire.AgentWorker.CREDENTIAL_CONFLICT,
+        "status": None,
+        "detail": ("this turn runs on your own model endpoint, and the agent's environment holds "
+                   "another model credential it could not remove, so the turn was not started"),
+        "remedy": "An operator must not mount a model credential into the agent's config directory.",
+    }
 
 
 class ClaudeCodeHarness:
@@ -674,30 +625,37 @@ class ClaudeCodeHarness:
     def run_turn(self, work: Path, prompt: str, *, allowed_tools: Iterable[str] = (),
                  session: Optional[str] = None, model: Optional[str] = None,
                  mcp_config: Optional[str] = None) -> Iterator[dict]:
+        refused = clear_deployment_credential()
+        if refused:
+            yield {"type": "done", "reply": refused, "sessionId": session, "ok": False,
+                   "fault": credential_conflict_fault()}
+            return
         effort = os.environ.get("VEXA_AGENT_EFFORT") or None
-        if midturn_enabled() and self._exec is _exec_subprocess:
-            argv = build_argv(prompt, allowed_tools=allowed_tools, session=session, model=model,
-                              mcp_config=mcp_config, stdin_mode=True, effort=effort)
-            yield from parse_stream_json(_exec_subprocess_stdin(argv, str(work), prompt))
+        argv = build_argv(prompt, allowed_tools=allowed_tools, session=session, model=model,
+                          mcp_config=mcp_config, stdin_mode=True, effort=effort, workspace=str(work))
+        if self._exec is _exec_subprocess:
+            # the real CLI: the prompt goes in on stdin, never on the command line
+            yield from parse_stream_json(_exec_subprocess_stdin(argv, str(work), prompt,
+                                                                injectable=midturn_enabled()))
         else:
-            argv = build_argv(prompt, allowed_tools=allowed_tools, session=session, model=model,
-                              mcp_config=mcp_config, effort=effort)
             yield from parse_stream_json(self._exec(argv, str(work)))
 
     def prepare(self, work: Path, chat_root: Optional[Path] = None) -> None:
         # chats are saved to / resumed from the PRIVATE continuity root (the _system mount when the
         # dispatch declares one — the flat model can make the cwd a SHARED workspace, and chats are
-        # private), not ~/.claude; skills stay cwd-scoped (.claude/skills → <work>/skills)
+        # private), not ~/.claude; skills are the platform's plus the workspace's own, in the user scope
         _link_chat_into_workspace(chat_root or work)
-        _link_skills_into_workspace(work)
+        _link_skills_into_home(work)
 
     def transcript_bytes(self, work: Path, session_id: str) -> int:
+        """The stored size of this session's transcript under ``work/.claude/projects``, reached
+        without following a link (``workspace_paths``): a linked folder or file is not this chat's."""
         total = 0
-        for path in (work / ".claude" / "projects").glob(f"*/{session_id}.jsonl"):
-            try:
-                total += path.stat().st_size
-            except OSError:
-                continue
+        name = f"{session_id}.jsonl"
+        for slug in wpaths.list_dirs_inside(work, ".claude/projects", allow=(".claude",)):
+            st = wpaths.stat_inside(work, f".claude/projects/{slug}/{name}", allow=(".claude",))
+            if st is not None and stat.S_ISREG(st.st_mode):
+                total += st.st_size
         return total
 
     def preflight(self) -> Optional[str]:

@@ -144,7 +144,7 @@ def test_a_value_that_is_not_an_address_under_the_domain_is_refused(value):
 
 
 @pytest.mark.parametrize("value", ["a@rehearse.test", "rehearse-group-member@rehearse.test",
-                                   "OLGA-AVRAMENKO@REHEARSE.TEST"])
+                                   "NORA-QUILL@REHEARSE.TEST"])
 def test_a_real_address_under_the_domain_still_passes(value):
     guard_domain([value], "rehearse.test")
 

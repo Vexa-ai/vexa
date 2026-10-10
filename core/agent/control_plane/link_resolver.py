@@ -22,12 +22,15 @@ from control_plane import workspace_ids as ids_mod
 from workspaces.shared.entities import ENTITIES_DIR, KINDS, split_frontmatter
 from workspaces.shared.links import Ref, canonical_url, parse_ref
 from workspaces.shared.workspace_paths import PathRefused, is_inside, relative_parts
+from workspaces.shared import workspace_paths as wpaths
 
 # Titles a resolver may show for a page it is not allowed to open. Deriving one from the ref is the
-# ONLY honest option: the id `olga-avramenko` becomes "Olga Avramenko", which is what the writer
+# ONLY honest option: the id `nora-quill` becomes "Nora Quill", which is what the writer
 # typed before the rewrite. Reading the real title would mean reading a workspace this reader has
 # no claim on, which is the thing the access state exists to prevent.
 _WORD = re.compile(r"[-_]+")
+#: A title lives in the front matter at the top of a page; this much of it is read.
+_TITLE_HEAD_BYTES = 64 * 1024
 
 
 def humanize(target: str) -> str:
@@ -36,10 +39,11 @@ def humanize(target: str) -> str:
     return " ".join(w[:1].upper() + w[1:] for w in _WORD.split(stem) if w) or stem
 
 
-def _title_of(path: Path, fallback: str) -> str:
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
+def _title_of(root: Path, rel: str, fallback: str) -> str:
+    """The page's ``title:`` — read NOFOLLOW (`workspace_paths`): the title is returned to the caller
+    of `POST /api/links/resolve`, and the page is in a tree the model's tools can write."""
+    text = wpaths.read_head_inside(root, rel, _TITLE_HEAD_BYTES)
+    if text is None:
         return fallback
     fm, _ = split_frontmatter(text)
     for ln in fm:
@@ -87,26 +91,35 @@ def _find(root: Path, ref: Ref) -> Optional[str]:
 
     slug = slugify(ref.target) if ref.form == "title" else ref.target
     for kind in KINDS:
-        f = root / ENTITIES_DIR / kind / f"{slug}.md"
-        if f.is_file():
-            return f"{ENTITIES_DIR}/{kind}/{slug}.md"
+        rel = f"{ENTITIES_DIR}/{kind}/{slug}.md"
+        if wpaths.is_file_inside(root, rel):   # a page, not a link planted where one would be
+            return rel
     return None
 
 
 def resolve(ref_text: str, *, subject: str, root, registry: ids_mod.WorkspaceRegistry,
-            here: Optional[dict] = None, is_member=None) -> dict:
+            here: Optional[dict] = None, is_member=None, within=None) -> dict:
     """One ref → ``{ref, title, url, access, workspace}``.
 
     ``here`` is the reader's CURRENT workspace record (from the registry), used for the
     in-workspace ``[[Title]]`` form. Passing ``None`` for it is legitimate — a reader whose own
     workspace has no id yet — and the in-workspace form then resolves to a relative path with no
-    canonical URL, which is exactly what it was before ids existed."""
+    canonical URL, which is exactly what it was before ids existed.
+
+    ``within`` (a slug -> bool) is a delegated dispatch's ceiling (`ceiling.reads_within`): a
+    workspace outside it answers `not-yours` to this reader, whatever the account could read.
+    ``None`` is a reader with no ceiling."""
     ref = parse_ref(ref_text)
     if ref.workspace is None:
         rec, access = here, (ids_mod.ACCESS_READABLE if here else ids_mod.ACCESS_GONE)
     else:
         rec = registry.get(ref.workspace)
         access = ids_mod.access_for(rec, subject, root=root, is_member=is_member)
+        if rec and within is not None and not within(str(rec.get("slug") or "")):
+            # Outside the ceiling: answered as a workspace this reader does not have, read nowhere.
+            return {"ref": ref_text, "title": humanize(ref.target), "url": None,
+                    "access": ids_mod.ACCESS_NOT_YOURS if access == ids_mod.ACCESS_READABLE else access,
+                    "workspace": rec.get("name"), "writable": False}
 
     out = {"ref": ref_text, "title": humanize(ref.target), "url": None, "access": access,
            "workspace": (rec or {}).get("name"),
@@ -128,7 +141,7 @@ def resolve(ref_text: str, *, subject: str, root, registry: ids_mod.WorkspaceReg
         out["url"] = canonical_url(rec["id"], tail)
         out["missing"] = True
         return out
-    out["title"] = _title_of(ws_root / rel, humanize(ref.target))
+    out["title"] = _title_of(ws_root, rel, humanize(ref.target))
     out["url"] = canonical_url(rec["id"], rel)
     out["path"] = rel
     out["slug"] = rec.get("slug")
@@ -136,7 +149,8 @@ def resolve(ref_text: str, *, subject: str, root, registry: ids_mod.WorkspaceReg
 
 
 def resolve_many(refs, *, subject: str, root, registry: ids_mod.WorkspaceRegistry,
-                 here: Optional[dict] = None, is_member=None, limit: int = 200) -> list[dict]:
+                 here: Optional[dict] = None, is_member=None, limit: int = 200,
+                 within=None) -> list[dict]:
     """A page's worth of refs in one round trip — the shape the panel actually needs.
 
     Capped: a document is rendered one screen at a time and a request that could ask for ten
@@ -146,5 +160,5 @@ def resolve_many(refs, *, subject: str, root, registry: ids_mod.WorkspaceRegistr
         key = str(r)
         if key not in seen:
             seen[key] = resolve(key, subject=subject, root=root, registry=registry,
-                                here=here, is_member=is_member)
+                                here=here, is_member=is_member, within=within)
     return list(seen.values())

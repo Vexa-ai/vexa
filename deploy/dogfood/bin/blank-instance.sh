@@ -260,9 +260,8 @@ say "meetings:          $(psql_vexa 'SELECT count(*) FROM meetings;' | tr -d ' '
 say "mailpit:           $(curl -sS "$MAILPIT/api/v1/messages?limit=1" 2>/dev/null | python3 -c 'import json,sys;print(json.load(sys.stdin).get("messages_count",0))' 2>/dev/null || echo '?')"
 echo
 cat <<'NEXT'
-  A blank Vexa. The next sign-in claims the instance, meets the wizard, and writes the company
-  layer; until it does, no other person can sign in, the flows engine parks every fact instead of
-  sending, and the operator verbs refuse.
+  A blank Vexa. The next sign-in claims the instance and lands in an ordinary first visit; there is
+  no company-layer setup step, and everybody who signs in after them is served at once.
 
   Kept on purpose: _global/asks/ (the preset library), _global/mail/ (the mail templates) and
   _global/.git (the history). Those are the deployment's own furniture, not anybody's data. In redis

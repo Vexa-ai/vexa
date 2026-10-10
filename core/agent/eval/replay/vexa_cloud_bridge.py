@@ -150,7 +150,7 @@ def main() -> None:
             time.sleep(args.poll)
     finally:
         # 4) end the meeting on the wire → the worker reaps + the terminal flips to ended
-        r.xadd(stream, {"payload": json.dumps({"type": "session_end", "uid": native_id})})
+        r.xadd(stream, {"payload": json.dumps({"type": "session_end", "session_uid": native_id})})
         print("[bridge] session_end", flush=True)
 
 

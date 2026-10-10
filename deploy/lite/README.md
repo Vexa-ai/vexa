@@ -1,7 +1,7 @@
 # Vexa Lite (v0.12)
 
 The whole v0.12 control plane in **one container**. The simplest way to self-host — `make lite`
-from the repo root provisions PostgreSQL + MinIO and runs everything else in a single image.
+from the repo root provisions PostgreSQL + a storage sidecar (versitygw) and runs everything else in a single image.
 
 ## Why
 
@@ -22,8 +22,8 @@ From the repo root:
 make lite
 ```
 
-Provisions a PostgreSQL + MinIO sidecar, pulls/builds the lite image, starts everything on the
-host network, and probes the front doors. Set `TRANSCRIPTION_SERVICE_URL` /
+Provisions PostgreSQL and storage (versitygw) sidecars, pulls/builds the lite image, starts everything on the
+`vexa-lite-net` bridge network, and probes the front doors. Set `TRANSCRIPTION_SERVICE_URL` /
 `TRANSCRIPTION_SERVICE_TOKEN` in the repo-root `.env` for transcripts (get a token at
 `vexa.ai/account`, or self-host the transcription service on a GPU).
 
@@ -53,7 +53,9 @@ After it finishes:
 - **Agent API:** `http://YOUR_IP:8100`
 
 To stop: `make lite-down` (data volumes are kept; `docker volume rm vexa-lite-pgdata
-vexa-lite-miniodata` to wipe).
+vexa-lite-storagedata` to wipe). After a MinIO upgrade, startup uses the new storage and leaves
+`vexa-lite-miniodata` untouched. Old recordings do not play back until copied with the opt-in
+`make -C deploy/lite migrate-storage` ([upgrade guide](../../docs/docs/upgrade-from-minio.mdx)).
 
 ## What's inside
 
@@ -63,16 +65,15 @@ Supervised by `supervisord`:
 |---|---|---|
 | gateway | **8056** | the one front door — auth, scopes, routing, `/ws` fan-out |
 | admin-api | 8001 | users + API keys + `/internal/validate` |
-| meeting-api | 8080 | bots, transcripts, recordings (→ MinIO) |
+| meeting-api | 8080 | bots, transcripts, recordings (→ storage sidecar, S3) |
 | runtime | 8090 | spawns bot + agent workers as **child processes** (process backend) |
 | agent-api | **8100** | the agent control plane — dispatch, chat (SSE), routines |
+| mcp | 8010 (loopback) | the one assembled MCP server; the gateway relays `/mcp` to it, and every agent worker's toolbelt reaches it there |
 | terminal | **3001** | agent-domain browser-CLI workbench (Next.js + custom `server.mjs` SSE/`/ws` relay) |
 | redis | 6379 | bus + scheduler + per-dispatch streams (internal) |
-| Xvfb · fluxbox · PulseAudio | :99 | display + audio for the headful bot browser |
-| x11vnc · noVNC | 5900 / 6080 | browser view (debugging) |
 
-External (the `make lite` sidecars): **PostgreSQL** (metadata) and **MinIO** (recordings +
-agent workspaces).
+External (the `make lite` sidecars): **PostgreSQL** (metadata) and **storage** — versitygw, an S3
+server that keeps recordings as plain files in volume `vexa-lite-storagedata`.
 
 ### Architecture
 
@@ -83,20 +84,32 @@ agent workspaces).
 |  gateway  admin-api  meeting-api  runtime                    |
 |   :8056     :8001      :8080       :8090                      |
 |                                                              |
-|  agent-api   redis   Xvfb  fluxbox  PulseAudio  noVNC        |
-|   :8100      :6379    :99                        :6080       |
+|  agent-api   redis                                           |
+|   :8100      :6379                                           |
 |                                                              |
-|  bot processes (Playwright)  +  agent workers (Claude Code)  |
+|  bot processes (Playwright, each with its own Xvfb + audio)  |
+|  + agent workers (Claude Code)                               |
 |     ← runtime spawns as child processes (process backend)    |
 +--------------------------------------------------------------+
         |                    |                    |
         v                    v                    v
-   Transcription        PostgreSQL             MinIO
+   Transcription        PostgreSQL        storage (versitygw)
      (external)         (sidecar)             (sidecar)
 ```
 
 In [compose mode](../compose/README.md) the runtime spawns each bot/agent in its **own
-container** via the Docker socket; in lite they are child processes sharing one display/audio.
+container** via the Docker socket; in lite they are child processes, each bot with its own uid, X
+display (cookie only it holds) and audio daemon. There is no shared screen, so no VNC view.
+
+Each bot's browser runs with Chromium's sandbox, and with none of the bot's own environment. The
+sandbox is built on user namespaces, which Docker's default seccomp profile refuses, so `make up`
+starts the container under
+[`seccomp-userns.json`](../../core/runtime/src/runtime_kernel/seccomp-userns.json): Docker Engine
+29.6.2's default profile ([moby/profiles](https://github.com/moby/profiles), Apache-2.0) with one
+rule added, letting a process without `CAP_SYS_ADMIN` call `clone`/`unshare` for new namespaces and
+`chroot` inside one. Only the bots keep that: every service starts through `bin/no-user-namespaces`,
+and the runtime refuses it to every child but a
+meeting bot. Started without the profile, the bots' browsers run unsandboxed and log why.
 
 ## Configuration
 
@@ -108,6 +121,8 @@ The repo-root `.env` (auto-seeded from `deploy/compose/.env` if present, else mi
 | `TRANSCRIPTION_MODEL` | — | STT model id sent on every request — required by backends that validate it (Groq `whisper-large-v3-turbo`, vLLM's served name). Unset → `whisper-1` |
 | `ADMIN_TOKEN` | minted per boot | admin API token (the stack's shared admin secret). It used to default to the published literal `changeme`; the entrypoint now mints a random one per boot when you set none, and admin-api/meeting-api refuse any published placeholder outright. Set it when something OUTSIDE the container has to present it. |
 | `IMAGE_TAG` | `latest` | the `vexaai/vexa-lite` tag to pull (a local `vexa-lite:dev` build wins) |
+| `DB_PASSWORD` | minted by `make up` | the database password. There is no default: `make up` mints one into `.env` when it is unset or a published value (`postgres`), and sets it on the postgres sidecar on every run — so a volume created with the old `postgres` password moves to it without a separate step. Running the image yourself, pass your database's password; the entrypoint refuses to start without one. |
+| `RUNTIME_API_TOKEN` | minted per boot | the runtime caller credential. Not exported to the container's programs: the entrypoint renders it into the environment of the runtime, agent-api and meeting-api only (a root-only copy of the supervisor config at `/run/vexa/supervisord.conf`). `make test` checks that no other process holds it. |
 
 `make` variables (not `.env`) for the bundled local STT: `LOCAL_STT=1` (off by default),
 `WHISPER_MODEL` (`Systran/faster-whisper-tiny.en`), `WHISPER_IMAGE`, `HOST_STT_PORT` (`8083`). When
@@ -131,7 +146,7 @@ docker exec vexa-lite ps aux | grep dist/index.js # running bot processes
 |---|---|---|
 | Bot / agent isolation | POSIX (per-subject uid, 0700 tiers, per-share gids) | separate containers (per-mount binds) |
 | Docker socket | not needed | required (runtime spawns over it) |
-| Datastores | postgres + minio sidecars | in-stack |
+| Datastores | postgres + storage (versitygw) sidecars | in-stack |
 | Setup | `make lite` | `make all` |
 
 Outgrow lite? Switch to [compose](../compose/README.md) — same images, same contracts.
@@ -140,9 +155,9 @@ Outgrow lite? Switch to [compose](../compose/README.md) — same images, same co
 
 | Issue | Note |
 |---|---|
-| Shared X11 display | bots share one Xvfb (`:99`) — best for one browser session at a time |
 | Ephemeral redis | internal redis is in-container; mount `/var/lib/redis` for persistence |
-| Agent ↔ gateway | the agent control plane is reached directly on `:8100` (gateway-fronting is roadmap) |
+| Agent ↔ gateway | the agent control plane listens on `:8100`, but it believes a user only from the gateway's signature (`X-Vexa-Identity`) or the internal tier — reach it through the gateway's `/agent/*` with an API key |
+| Identity keypair | generated on first boot into `$VEXA_LITE_STATE_DIR/identity` (default `/var/lib/vexa/state`; mount the `vexa-lite-state` volume to keep it across re-creating the container). Every Lite program runs as root in one container, so the private key is separated from the agent workers by its file mode, not by a process boundary |
 
 ## Smoke probe — "is this install actually working?"
 

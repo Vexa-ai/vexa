@@ -4,23 +4,31 @@ Codex's non-interactive ``exec`` command is a one-prompt process. Vexa uses ``ap
 one JSON-RPC connection per turn, durable thread rollouts under the private continuity root, and
 ``turn/steer`` for user input that arrives while the turn is in flight. All Codex protocol details
 stay in this vendor-named module; callers see only the frozen UnitEvent stream.
+
+``VEXA_AGENT_MAX_OUTPUT_TOKENS`` is NOT read here, on purpose: Codex (0.146.0, pinned in the worker
+image) has no setting for the model's output cap — the ``max_output_tokens`` fields it knows are
+per-tool exec and search budgets — so there is nothing to map it onto, and a Codex turn asks for
+Codex's own default. The other harnesses honour it (``claude_code``, ``openai_agent``).
 """
 from __future__ import annotations
 
 import json
 import os
+import stat
 import subprocess
 import threading
 from pathlib import Path
 from typing import Callable, Iterable, Iterator, Optional
 
-# THE PANEL CONVENTIONS ARE THE CLAUDE ADAPTER'S, IMPORTED (F92) — the writer's tab, decision 35's
-# transcript chips and decision 30.4's bot-send open. This adapter emitted NONE of them, so the same
-# turn painted the person's screen or did not depending on which harness the deployment ran, which
-# is exactly the thing `openai_agent` imports these to avoid. One vocabulary, three harnesses.
-from llm.claude_code import (_BOT_TOOLS, _TERMS_TOOLS, _WRITER_TOOLS, _bot_artifact,
+# THE PANEL CONVENTIONS ARE SHARED, IMPORTED (F92) — the writer's tab, decision 35's transcript
+# chips and decision 30.4's bot-send open. This adapter emitted NONE of them, so the same turn
+# painted the person's screen or did not depending on which harness the deployment ran.
+# `llm.tool_events` owns them. One vocabulary, three harnesses.
+from llm.tool_events import (_BOT_TOOLS, _TERMS_TOOLS, _WRITER_TOOLS, _bot_artifact,
                              _published_terms, _written_artifact)
-from llm.ports import harness_subprocess_env
+from llm import faults as provider_faults
+from llm import workspace_paths as wpaths
+from llm.ports import harness_identity_kwargs, harness_subprocess_env, tools_identity
 
 
 def _short(value: object, n: int = 120) -> str:
@@ -154,9 +162,11 @@ def _mcp_config(path: Optional[str], allowed_tools: Iterable[str]) -> dict:
     """
     if not path:
         return {}
+    p = Path(path)           # the private attachment, read nofollow — see `engine._mcp_endpoint`
+    text = wpaths.read_text_inside(p.parent, p.name)
     try:
-        raw = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, ValueError, TypeError):
+        raw = json.loads(text) if text is not None else {}
+    except (ValueError, TypeError):
         return {}
     auto = {name.removeprefix("mcp__") for name in allowed_tools if name.startswith("mcp__")}
     servers = raw.get("mcpServers") or {}
@@ -164,34 +174,177 @@ def _mcp_config(path: Optional[str], allowed_tools: Iterable[str]) -> dict:
     return {"mcp_servers": selected} if selected else {}
 
 
+def codex_home() -> Path:
+    """Where Codex keeps its state and its subscription ``auth.json``: ``CODEX_HOME`` (the runtime
+    names it for every worker it spawns, and the Codex CLI reads the same variable), else
+    ``$HOME/.codex``."""
+    configured = (os.environ.get("CODEX_HOME") or "").strip()
+    return Path(configured) if configured else Path(os.environ.get("HOME", "/root")) / ".codex"
+
+
+def _tools_codex_home(ident: "tuple[int, int]") -> Path:
+    """The Codex home for a harness that runs as the tools user. The runtime's ``CODEX_HOME`` holds the
+    subscription ``auth.json`` as a read-only bind of a host file whose mode is the host's, which that
+    user may not be able to read; so it gets a home of its own beside it, holding a copy of the
+    credential (0600, its own) and the same durable sessions link. Without a mounted credential the
+    runtime's home serves as it is."""
+    home = codex_home()
+    # NOTHING HERE FOLLOWS A LINK. ``CODEX_HOME`` is handed to the tools user for the turn, and
+    # ``<home>-tools`` sits beside it (in a world-writable /tmp in the image), so either the
+    # credential or the copy's home can be a link the tools user planted: read through, root would
+    # copy any file it can read into a file then given to the tools user; written through, root
+    # would write the credential where the link points and chown that path away.
+    data = wpaths.read_bytes_inside(home, "auth.json")      # a link at auth.json is no credential
+    if data is None:
+        return home
+    parent, name = home.parent, f"{home.name}-tools"
+    st = wpaths.stat_inside(parent, name)
+    if st is not None and not stat.S_ISDIR(st.st_mode):
+        wpaths.unlink_inside(parent, name)                  # a planted link: removed, never entered
+    try:
+        fd = wpaths.dir_fd_inside(parent, (name,), create=True, mode=0o700)
+    except (wpaths.PathRefused, OSError):
+        return home                                         # no safe home of its own: serve as is
+    try:
+        os.fchmod(fd, 0o700)
+        wpaths.write_bytes_inside(parent, f"{name}/auth.json", data, mode=0o600,
+                                  before_replace=lambda f: os.fchown(f, *ident))
+        sessions = home / "sessions"
+        if sessions.is_symlink():
+            try:
+                os.lstat("sessions", dir_fd=fd)
+            except FileNotFoundError:
+                os.symlink(os.readlink(sessions), "sessions", target_is_directory=True, dir_fd=fd)
+            try:
+                os.chown("sessions", *ident, dir_fd=fd, follow_symlinks=False)
+            except OSError:
+                pass
+        os.fchown(fd, *ident)                               # the directory itself, by its fd
+    finally:
+        os.close(fd)
+    return parent / name
+
+
 def _link_sessions_into_workspace(work: Path) -> None:
-    """Keep Codex rollouts durable without moving the subscription auth file into the workspace."""
+    """Keep Codex rollouts durable without moving the subscription auth file into the workspace.
+
+    Both sides are trees the tools user can write — the continuity root, and ``CODEX_HOME`` (granted
+    for the turn) — so nothing here acts by name: the workspace side is made folder by folder without
+    following a link, and the ``sessions`` entry in ``CODEX_HOME`` is looked at, removed and created
+    relative to that folder's descriptor. A link anywhere on the workspace side skips the link (the
+    turn still runs, without durable rollouts)."""
     # `.claude/` is the frozen, already-ignored agent plumbing root in every existing workspace.
     # Nest Codex state there so upgrading an old workspace cannot make continuity files/symlinks
     # visible to the turn's commit-all path.
-    ws_sessions = work / ".claude" / "codex" / "sessions"
-    ws_sessions.mkdir(parents=True, exist_ok=True)
-    home_codex = Path(os.environ.get("HOME", "/root")) / ".codex"
-    home_codex.mkdir(parents=True, exist_ok=True)
-    link = home_codex / "sessions"
     try:
-        if link.is_symlink():
-            if os.readlink(link) == str(ws_sessions):
-                return
-            link.unlink()
-        elif link.is_dir():
-            if any(link.iterdir()):
-                return
-            link.rmdir()
-        elif link.exists():
-            return
-        link.symlink_to(ws_sessions, target_is_directory=True)
+        os.close(wpaths.dir_fd_inside(work, (".claude", "codex", "sessions"), create=True))
+    except (OSError, wpaths.PathRefused):
+        return
+    ws_sessions = work / ".claude" / "codex" / "sessions"
+    try:
+        home_fd = wpaths.dir_fd_inside(codex_home(), (), create=True)
+    except (OSError, wpaths.PathRefused):
+        return
+    try:
+        try:
+            st = os.stat("sessions", dir_fd=home_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            st = None
+        if st is not None:
+            if stat.S_ISLNK(st.st_mode):
+                if os.readlink("sessions", dir_fd=home_fd) == str(ws_sessions):
+                    return
+                os.unlink("sessions", dir_fd=home_fd)
+            elif stat.S_ISDIR(st.st_mode):
+                try:
+                    os.rmdir("sessions", dir_fd=home_fd)   # empty only: nothing can be lost
+                except OSError:
+                    return
+            else:
+                return                                    # some other object — don't clobber
+        os.symlink(str(ws_sessions), "sessions", target_is_directory=True, dir_fd=home_fd)
     except OSError:
         pass
+    finally:
+        os.close(home_fd)
 
 
 class _RpcFailure(RuntimeError):
-    pass
+    """A JSON-RPC call the app server answered with an error, or a stream that ended early. ``error``
+    is the server's own error object, when there was one, for :func:`_turn_fault`."""
+
+    def __init__(self, message: str, error: object = None) -> None:
+        super().__init__(message)
+        self.error = error
+
+
+# ── a failed turn ends TYPED (P18, S66) ─────────────────────────────────────────────────────────
+#: Codex's own error label (app-server v2 ``TurnError.codexErrorInfo``) → the provider-fault kind it
+#: names. A label for one of Codex's OWN limits (``sessionBudgetExceeded``, ``contextWindowExceeded``,
+#: ``sandboxError``, ``other``…) names none, and the error's text is read instead.
+_CODEX_ERROR_KIND = {
+    "usageLimitExceeded": provider_faults.UNPAID,
+    "rateLimitExceeded": provider_faults.RATE_LIMITED,
+    "serverOverloaded": provider_faults.UNAVAILABLE,
+    "internalServerError": provider_faults.UNAVAILABLE,
+    "unauthorized": provider_faults.UNAUTHORIZED,
+    "badRequest": provider_faults.REFUSED,
+}
+#: The ``codexErrorInfo`` variants that say the request never got a whole answer. Each may carry the
+#: upstream's ``httpStatusCode``, which then names the kind.
+_CODEX_TRANSPORT = ("httpConnectionFailed", "responseStreamConnectionFailed",
+                    "responseStreamDisconnected", "responseTooManyFailedAttempts")
+
+
+def _codex_provider() -> str:
+    """The host a Codex turn's model requests go to: the OpenAI API for a key, else the ChatGPT
+    backend a subscription signs in to."""
+    if any((os.environ.get(key) or "").strip() for key in ("OPENAI_API_KEY", "CODEX_API_KEY")):
+        return "api.openai.com"
+    return "chatgpt.com"
+
+
+def _turn_fault(error: object, model: str = "") -> "Optional[provider_faults.ProviderFault]":
+    """The typed provider fault for a failed Codex turn — ``turn.error`` (``{message,
+    codexErrorInfo, additionalDetails}``) or a JSON-RPC error — or None when nothing in it names one.
+    Nothing here is Codex's raw text: ``faults.classify`` keeps only a safe ``detail``."""
+    err = error if isinstance(error, dict) else {"message": str(error or "")}
+    info = err.get("codexErrorInfo")
+    if info is None and isinstance(err.get("data"), dict):
+        info = err["data"].get("codexErrorInfo")
+    status: Optional[int] = None
+    kind: Optional[str] = None
+    transport = False
+    if isinstance(info, str):
+        kind = _CODEX_ERROR_KIND.get(info)
+    elif isinstance(info, dict):
+        for name in _CODEX_TRANSPORT:
+            if name not in info:
+                continue
+            transport = True
+            variant = info.get(name)
+            code = variant.get("httpStatusCode") if isinstance(variant, dict) else None
+            if isinstance(code, int) and not isinstance(code, bool) and provider_faults.kind_for_status(code):
+                status = code
+    text = " ".join(str(err.get(k)) for k in ("message", "additionalDetails")
+                    if isinstance(err.get(k), str) and err.get(k).strip())
+    return provider_faults.classify(status=status, text=text or None, provider=_codex_provider(),
+                                    model=model, kind=kind, transport=transport)
+
+
+def _failed_done(model_reply: str, failure: str, session: Optional[str], error: object,
+                 model: str) -> dict:
+    """The ``done`` a failed Codex turn ends on, carrying ``fault`` when the failure is the model
+    provider's. Whatever the model already said stays the reply; with nothing said, the reply is the
+    fault's sentence (its own words, ``failure``, move to ``detail``) — or, untyped, those words."""
+    done: dict = {"type": "done", "reply": model_reply or failure, "sessionId": session, "ok": False}
+    fault = _turn_fault(error, model)
+    if fault is not None:
+        done["fault"] = fault.as_dict()
+        if not model_reply.strip():
+            done["detail"] = _short(failure, 200)
+            done["reply"] = fault.sentence()
+    return done
 
 
 ProcessFactory = Callable[..., subprocess.Popen]
@@ -214,23 +367,25 @@ class CodexHarness:
         _link_sessions_into_workspace(chat_root or work)
 
     def transcript_bytes(self, work: Path, session_id: str) -> int:
+        """The stored size of this thread's rollouts, walked by descriptor without following a link
+        (``workspace_paths.walk_files_inside``)."""
         total = 0
-        for path in (work / ".claude" / "codex" / "sessions").rglob(f"*{session_id}*.jsonl"):
-            try:
-                total += path.stat().st_size
-            except OSError:
-                pass
+        for rel in wpaths.walk_files_inside(work, ".claude/codex/sessions", allow=(".claude",)):
+            name = rel.rsplit("/", 1)[-1]
+            if session_id in name and name.endswith(".jsonl"):
+                st = wpaths.stat_inside(work, rel, allow=(".claude",))
+                total += st.st_size if st is not None else 0
         return total
 
     def preflight(self) -> Optional[str]:
         if any((os.environ.get(key) or "").strip()
                for key in ("OPENAI_API_KEY", "CODEX_API_KEY")):
             return None
-        auth = Path(os.environ.get("HOME", "/root")) / ".codex" / "auth.json"
+        text = wpaths.read_text_inside(codex_home(), "auth.json")   # a linked credential is none
         try:
-            if auth.is_file() and json.loads(auth.read_text(encoding="utf-8")):
+            if text is not None and json.loads(text):
                 return None
-        except (OSError, ValueError, TypeError):
+        except (ValueError, TypeError):
             pass
         return ("Codex credentials are missing. Mount a subscription auth file with "
                 "HOST_CODEX_CREDENTIALS (normally ~/.codex/auth.json after `codex login`) "
@@ -273,7 +428,7 @@ class CodexHarness:
             if message.get("id") != request_id:
                 continue
             if message.get("error"):
-                raise _RpcFailure(_short(message["error"], 240))
+                raise _RpcFailure(_short(message["error"], 240), message["error"])
             return message.get("result") or {}
 
     def inject_user_message(self, text: str) -> bool:
@@ -295,9 +450,14 @@ class CodexHarness:
 
     def _spawn(self, work: Path) -> subprocess.Popen:
         env = harness_subprocess_env()
+        # The app-server — and so the model's tools — run as the tools user, not as the worker.
+        ident = tools_identity()
+        if ident is not None:
+            env["CODEX_HOME"] = str(_tools_codex_home(ident))
         return self._process_factory(
             ["codex", "app-server", "--stdio"], cwd=str(work), stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, env=env,
+            **harness_identity_kwargs(),
         )
 
     def run_turn(self, work: Path, prompt: str, *, allowed_tools: Iterable[str] = (),
@@ -306,6 +466,7 @@ class CodexHarness:
         proc = self._spawn(work)
         reply_parts: list[str] = []
         thread_id = session
+        codex_model = ""
         with self._lock:
             self._proc = proc
             self._thread_id = session
@@ -363,7 +524,7 @@ class CodexHarness:
                 message = self._read(proc)
                 if message.get("id") == request_id:
                     if message.get("error"):
-                        raise _RpcFailure(_short(message["error"], 240))
+                        raise _RpcFailure(_short(message["error"], 240), message["error"])
                     turn = (message.get("result") or {}).get("turn") or {}
                     with self._lock:
                         self._turn_id = turn.get("id")
@@ -375,12 +536,16 @@ class CodexHarness:
                     ok = turn.get("status") == "completed"
                     error = turn.get("error") or {}
                     reply = _final_reply(turn, reply_parts)
-                    if not ok and not reply:
-                        reply = error.get("message") or f"Codex turn {turn.get('status', 'failed')}"
-                    yield {"type": "done", "reply": reply, "sessionId": thread_id, "ok": ok}
+                    if ok:
+                        yield {"type": "done", "reply": reply, "sessionId": thread_id, "ok": True}
+                        return
+                    said = error.get("message") if isinstance(error, dict) else None
+                    failure = str(said or f"Codex turn {turn.get('status', 'failed')}")
+                    yield _failed_done(reply, failure, thread_id, error, codex_model)
                     return
         except _RpcFailure as exc:
-            yield {"type": "done", "reply": str(exc), "sessionId": thread_id, "ok": False}
+            yield _failed_done("", str(exc), thread_id,
+                               exc.error if exc.error is not None else str(exc), codex_model)
         finally:
             with self._lock:
                 self._proc = None

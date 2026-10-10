@@ -34,12 +34,12 @@ from flows_integrations.graph_inbox import GraphInbox, synthesize_ics  # noqa: E
 from sqlite_double import SqliteDB                                     # noqa: E402
 
 ENV = {"VEXA_GRAPH_TENANT_ID": "t-1", "VEXA_GRAPH_CLIENT_ID": "c-1",
-       "VEXA_GRAPH_CLIENT_SECRET": "s-1", "VEXA_GRAPH_MAILBOX": "vexa@oenb.at"}
+       "VEXA_GRAPH_CLIENT_SECRET": "s-1", "VEXA_GRAPH_MAILBOX": "vexa@bank.example"}
 
 INVITE_ICS = ("BEGIN:VCALENDAR\r\nMETHOD:REQUEST\r\nBEGIN:VEVENT\r\n"
               'DTSTART;TZID="W. Europe Standard Time":20300315T140000\r\n'
-              "UID:graph-fixture-0001@oenb.at\r\n"
-              "ORGANIZER;CN=Anna Bank:mailto:Anna.Bank@oenb.at\r\n"
+              "UID:graph-fixture-0001@bank.example\r\n"
+              "ORGANIZER;CN=Anna Bank:mailto:Anna.Bank@bank.example\r\n"
               "SUMMARY:Quarterly risk review\r\n"
               "LOCATION:https://meet.google.com/abc-defg-hij\r\n"
               "END:VEVENT\r\nEND:VCALENDAR\r\n")
@@ -77,7 +77,7 @@ class FakeHttp:
                 return 400, json.dumps({"error": {"code": "ErrorInvalidHeader"}})
             self.sent.append(body)
             return 201, json.dumps({"id": "draft-1",
-                                    "internetMessageId": "<real-id@oenb.at>"})
+                                    "internetMessageId": "<real-id@bank.example>"})
         if method == "POST" and url.endswith("/send"):
             return 202, ""
         raise AssertionError(f"unexpected {method} {url}")
@@ -87,9 +87,9 @@ def client(http) -> GraphClient:
     return GraphClient(http=http, env=ENV)
 
 
-def msg(i, when, *, frm="anna.bank@oenb.at", subject="hello", body="hi",
+def msg(i, when, *, frm="anna.bank@bank.example", subject="hello", body="hi",
         headers=None, attachments=False, extra=None):
-    m = {"id": i, "receivedDateTime": when, "internetMessageId": f"<{i}@oenb.at>",
+    m = {"id": i, "receivedDateTime": when, "internetMessageId": f"<{i}@bank.example>",
          "subject": subject, "from": {"emailAddress": {"address": frm}},
          "body": {"content": body}, "hasAttachments": attachments,
          "internetMessageHeaders": [{"name": k, "value": v}
@@ -261,8 +261,8 @@ def test_inbound_headers_are_surfaced_so_threading_is_unchanged():
                            headers={"In-Reply-To": "<ours@vexa.ai>",
                                     "References": "<ours@vexa.ai>"}))
     assert m.headers["In-Reply-To"] == "<ours@vexa.ai>"
-    assert m.message_id == "<m2@oenb.at>"
-    assert m.frm == "anna.bank@oenb.at"
+    assert m.message_id == "<m2@bank.example>"
+    assert m.frm == "anna.bank@bank.example"
 
 
 # ── the same facts as IMAP ───────────────────────────────────────────────────────────────────
@@ -271,7 +271,7 @@ def test_a_graph_invite_and_an_imap_invite_produce_identical_facts():
     from flows_integrations.inbox import from_rfc822
     from flows_integrations.mailbox import parse_ics
 
-    mime = ("From: Anna Bank <anna.bank@oenb.at>\r\nSubject: Quarterly risk review\r\n"
+    mime = ("From: Anna Bank <anna.bank@bank.example>\r\nSubject: Quarterly risk review\r\n"
             'Content-Type: multipart/mixed; boundary="B"\r\nMIME-Version: 1.0\r\n\r\n'
             "--B\r\nContent-Type: text/plain\r\n\r\nsee attached\r\n"
             "--B\r\nContent-Type: text/calendar; method=REQUEST\r\n\r\n"
@@ -287,7 +287,7 @@ def test_a_graph_invite_and_an_imap_invite_produce_identical_facts():
 
     assert over_graph.frm == over_imap.frm
     assert over_graph.subject == over_imap.subject
-    assert parse_ics(over_graph.ics, "vexa@oenb.at") == parse_ics(over_imap.ics, "vexa@oenb.at")
+    assert parse_ics(over_graph.ics, "vexa@bank.example") == parse_ics(over_imap.ics, "vexa@bank.example")
 
 
 # ── outbound (C2) ────────────────────────────────────────────────────────────────────────────
@@ -295,29 +295,29 @@ def test_a_send_is_draft_then_send_and_returns_the_real_message_id():
     """`sendMail` is one call and answers 202 with no body — and the Message-ID IS the threading
     contract. A send whose id we never learned is a conversation we can never route."""
     http = FakeHttp()
-    mid = client(http).send("anna.bank@oenb.at", "Re: risk review", "on it",
-                            in_reply_to="<theirs@oenb.at>")
-    assert mid == "<real-id@oenb.at>"
+    mid = client(http).send("anna.bank@bank.example", "Re: risk review", "on it",
+                            in_reply_to="<theirs@bank.example>")
+    assert mid == "<real-id@bank.example>"
     posts = [u for m, u, _, _ in http.calls if m == "POST" and not u.endswith("/token")]
     assert posts[0].endswith("/messages")
     assert posts[1].endswith("/messages/draft-1/send")
     assert http.sent[0]["internetMessageHeaders"] == [
-        {"name": "In-Reply-To", "value": "<theirs@oenb.at>"},
-        {"name": "References", "value": "<theirs@oenb.at>"}]
+        {"name": "In-Reply-To", "value": "<theirs@bank.example>"},
+        {"name": "References", "value": "<theirs@bank.example>"}]
 
 
 def test_a_tenant_that_rejects_reserved_headers_still_sends():
     """Threading holds without them: what routes the reply is OUR Message-ID, echoed back."""
     http = FakeHttp()
     http.reject_headers = True
-    mid = client(http).send("anna.bank@oenb.at", "hi", "text", in_reply_to="<theirs@oenb.at>")
-    assert mid == "<real-id@oenb.at>"
+    mid = client(http).send("anna.bank@bank.example", "hi", "text", in_reply_to="<theirs@bank.example>")
+    assert mid == "<real-id@bank.example>"
     assert "internetMessageHeaders" not in http.sent[0]
 
 
 def test_the_rsvp_rides_as_an_imip_calendar_attachment():
     http = FakeHttp()
-    client(http).send_calendar_reply("anna.bank@oenb.at", "Accepted: x", "body", INVITE_ICS)
+    client(http).send_calendar_reply("anna.bank@bank.example", "Accepted: x", "body", INVITE_ICS)
     att = http.sent[0]["attachments"][0]
     assert att["contentType"].startswith("text/calendar; method=REPLY")
     assert base64.b64decode(att["contentBytes"]).decode() == INVITE_ICS
@@ -347,9 +347,9 @@ def test_an_exchange_meeting_request_with_no_mime_part_is_synthesized():
     ics = synthesize_ics(m)
     assert ics is not None
     from flows_integrations.mailbox import parse_ics
-    ev = parse_ics(ics, "vexa@oenb.at")
+    ev = parse_ics(ics, "vexa@bank.example")
     assert ev is not None
-    assert ev["organizer"] == "anna.bank@oenb.at"
+    assert ev["organizer"] == "anna.bank@bank.example"
     assert ev["url"] == "https://meet.google.com/abc-defg-hij"
     import calendar as cal
     assert ev["start"] == float(cal.timegm((2030, 3, 15, 13, 0, 0, 0, 1, -1)))

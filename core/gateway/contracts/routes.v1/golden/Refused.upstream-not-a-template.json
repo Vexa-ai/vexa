@@ -1,0 +1,19 @@
+{
+  "why": "an upstream is a route template of literal segments and whole {name} parameters",
+  "manifest": {
+    "contract": "routes.v1",
+    "owner": "core/meetings",
+    "edge": "gateway",
+    "domain": "meetings",
+    "routes": [
+      {
+        "method": "GET",
+        "path": "/recordings/{recording_id}",
+        "scopes": [
+          "bot"
+        ],
+        "upstream": "/recordings/x{recording_id}"
+      }
+    ]
+  }
+}

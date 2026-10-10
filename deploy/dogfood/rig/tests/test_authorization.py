@@ -29,6 +29,22 @@ def test_rd06_the_autonomous_regime_may_not_speak_or_delete(monkeypatch):
     assert out.get("refused") != "regime"
 
 
+def test_loading_a_repository_waits_for_a_person_in_the_session(monkeypatch):
+    """A repository load authenticates with the person's saved git credentials whenever the
+    repository asks for one, so a session dispatched with no person in it may not load one."""
+    as_user(monkeypatch, "7")
+    rig.CALL_SCOPE.set({"regime": "autonomous", "workspaces": ["team"]})
+    for verb, kwargs in (("workspace_attach", {"repo": "https://github.com/acme/kg"}),
+                         ("workspace_import", {"repo": "https://github.com/acme/kg"})):
+        out = json.loads(tool(verb)(**kwargs))
+        assert out.get("refused") == "regime", f"{verb} ran under the autonomous regime"
+
+    # A person in the session, or an undelegated call, is not refused on regime.
+    for verb in ("workspace_attach", "workspace_import"):
+        assert rig._regime_forbids(verb, {"regime": "human", "workspaces": "*"}) == ""
+        assert rig._regime_forbids(verb, None) == ""
+
+
 def test_rd07_reaction_signal_steers_only_the_callers_own_reaction(monkeypatch):
     """GATE 4a (R-D07). `reaction_signal` posts with the lane's admin key and never checked the
     reaction against the caller, while `reactions_list` handed out every id instance-wide — so

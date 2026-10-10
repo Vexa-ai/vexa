@@ -1,6 +1,6 @@
 name: vexa-v012
 # v0.12 control plane (P4). The carved analog of deploy/compose/docker-compose.yml (0.11):
-# postgres:17 + valkey:8 + minio + minio-init infra, then the four long-running Python services —
+# postgres:17 + valkey:8 + storage (versitygw) + storage-init infra, then the four long-running Python services —
 # admin-api · runtime · meeting-api · gateway — each building its own slim uv-based image.
 # Improvement over 0.11: EVERY service carries a healthcheck and depends_on waits on
 # `condition: service_healthy` so the bring-up is ordered + observable.
@@ -14,8 +14,26 @@ services:
     # Valkey (Linux Foundation BSD-3 fork of Redis 7.2.4): parity with the Lite witness surface
     # and off source-available Redis ≥7.4 (RSALv2/SSPLv1). Wire-compatible (RESP) — the service
     # name, REDIS_URL, and every consumer stay put; only the engine changes (#653).
-    image: valkey/valkey:8-alpine
-    command: ["valkey-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    image: valkey/valkey:8-alpine@sha256:081c2f5cb575efc901aa80ff9cdbd1ec6a301682fd35e1ebb4b0990a4a4a8507
+    # A PASSWORD ON THE DEFAULT USER, and none is no start. The services connect with it; a spawned
+    # bot or worker never sees it — each connects as a Redis user of its own, limited to its own
+    # keys, which agent-api and meeting-api define per spawn (REDIS_WORKLOAD_ACL).
+    # mint-dev-env.sh (`make up` / `make all`) mints REDIS_PASSWORD into .env; hex, so it is URL-safe.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        case "$$REDIS_PASSWORD" in
+          ""|vexa-internal-secret|lite-internal-secret|changeme|change-me|CHANGE-ME|default|secret|password)
+            echo "redis: REDIS_PASSWORD is unset or a value published in the Vexa repository - refusing to start." >&2
+            echo "  Run deploy/compose/mint-dev-env.sh (make up does), or set REDIS_PASSWORD in .env (openssl rand -hex 32)." >&2
+            exit 1;;
+        esac
+        exec docker-entrypoint.sh valkey-server --appendonly yes --appendfsync everysec --requirepass "$$REDIS_PASSWORD"
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      # valkey-cli (the healthcheck, `docker compose exec redis valkey-cli`) authenticates with this.
+      - REDISCLI_AUTH=${REDIS_PASSWORD:-}
     healthcheck:
       test: ["CMD", "valkey-cli", "ping"]
       interval: 5s
@@ -23,16 +41,34 @@ services:
       retries: 5
     volumes:
       - redis-data:/data
-    networks: [vexa]
+    networks: [vexa, bots, workers]   # bots and workers keep their streams here
     restart: unless-stopped
 
   postgres:
-    image: postgres:17-alpine
+    image: postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
+    # NO DEFAULT PASSWORD, and a published one refuses the start. `postgres` shipped here as the
+    # fallback and in .env.example, so every stack nobody configured shared one database password
+    # anyone could read. mint-dev-env.sh (`make up` / `make all`) mints DB_PASSWORD into .env. An
+    # install initialised with the old value must rotate it first — see the refusal message and
+    # https://docs.vexa.ai/deployment#one-time-steps-after-upgrading.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        case "$$POSTGRES_PASSWORD" in
+          ""|postgres|password|vexa-internal-secret|lite-internal-secret|changeme|change-me|CHANGE-ME|default|secret)
+            echo "postgres: DB_PASSWORD is unset or a value published in the Vexa repository - refusing to start." >&2
+            echo "  New install: run deploy/compose/mint-dev-env.sh (make up does), or set DB_PASSWORD in .env (openssl rand -hex 32)." >&2
+            echo "  Existing data: make -C deploy/compose rotate-db-password (it sets a new one in .env and inside the database)." >&2
+            exit 1;;
+        esac
+        exec docker-entrypoint.sh "$$@"
+      - --
     command: ["postgres", "-c", "idle_in_transaction_session_timeout=60000"]
     environment:
       - POSTGRES_DB=${DB_NAME:-vexa}
       - POSTGRES_USER=${DB_USER:-postgres}
-      - POSTGRES_PASSWORD=${DB_PASSWORD:-postgres}
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-}
       # The backend operates only UTC time. Pin the DB clock to UTC so func.now()/server_default/
       # onupdate (the naive timestamp columns' server-side values, main's pattern) are guaranteed UTC.
       - TZ=UTC
@@ -49,40 +85,89 @@ services:
     networks: [vexa]
     restart: unless-stopped
 
-  minio:
-    image: minio/minio:latest
-    command: server /data --console-address ":9001"
-    environment:
-      - MINIO_ROOT_USER=${MINIO_ACCESS_KEY:-vexa-access-key}
-      - MINIO_ROOT_PASSWORD=${MINIO_SECRET_KEY:-vexa-secret-key}
-    ports:
-      - "127.0.0.1:${MINIO_HOST_PORT:-9000}:9000"
-      - "127.0.0.1:${MINIO_CONSOLE_HOST_PORT:-9001}:9001"
-    healthcheck:
-      test: ["CMD-SHELL", "mc ready local || curl -sf http://localhost:9000/minio/health/live || exit 1"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-    volumes:
-      - minio-data:/data
-    networks: [vexa]
-    restart: unless-stopped
-
-  minio-init:
-    image: minio/mc:latest
-    depends_on:
-      minio:
-        condition: service_healthy
+  storage:
+    # Object storage for recordings, and for authenticated bots' saved sessions when those point here:
+    # versitygw (Apache-2.0) with its POSIX backend, pinned by digest. Buckets are directories under
+    # data/ in the storage-data volume and every object is a plain file; S3 metadata (content type,
+    # ETag) rides in extended attributes, so back the volume up with an attribute-preserving copy
+    # (rsync -aX, cp -a). iam/ holds the gateway's account file. The admin API shares the S3 port.
+    # meeting-api keeps its MINIO_* variable names; MINIO_ACCESS_KEY / MINIO_SECRET_KEY are this
+    # server's root credentials. The host port is loopback-only and deliberately not MinIO's 9000,
+    # so an upgrading install's old MinIO container can keep running beside it until its recordings
+    # are copied (docs: /upgrade-from-minio).
+    #
+    # NO DEFAULT ROOT PAIR, and a published one refuses the start: `vexa-access-key` / `vexa-secret-key`
+    # shipped here as the fallback and in .env.example. mint-dev-env.sh (`make up` / `make all`) mints a
+    # pair into .env, and replaces a published one; versitygw takes its root key from this environment at
+    # start, so the next `up` restarts it with the new pair over the same volume, and the new root reads
+    # every bucket the old one created. Bots reach this service only to restore an authenticated bot's
+    # saved session, with the scoped account storage-init makes (BOT_S3_*, read-only on its own
+    # prefix); a bot's rotated session comes back through meeting-api. No bot or worker is ever given
+    # the root pair.
+    image: versity/versitygw:v1.8.0@sha256:30292fc2eeacc67a36993b01f7a7a5e3361a19cced0e80c1d71cfa2a4b0a2499
     entrypoint:
       - /bin/sh
       - -c
       - |
-        mc alias set vexa http://minio:9000 $${MINIO_ROOT_USER:-vexa-access-key} $${MINIO_ROOT_PASSWORD:-vexa-secret-key}
-        mc mb --ignore-existing vexa/${MINIO_BUCKET:-vexa}
-        exit 0
+        case "$$ROOT_ACCESS_KEY" in
+          ""|vexa-access-key|vexa-secret-key|minioadmin|changeme|change-me|CHANGE-ME|default|secret|password)
+            echo "storage: MINIO_ACCESS_KEY is unset or a value published in the Vexa repository - refusing to start." >&2
+            echo "  Run deploy/compose/mint-dev-env.sh (make up does); it mints a pair into .env, or replaces a published one." >&2
+            exit 1;;
+        esac
+        case "$$ROOT_SECRET_KEY" in
+          ""|vexa-access-key|vexa-secret-key|minioadmin|changeme|change-me|CHANGE-ME|default|secret|password)
+            echo "storage: MINIO_SECRET_KEY is unset or a value published in the Vexa repository - refusing to start." >&2
+            echo "  Run deploy/compose/mint-dev-env.sh (make up does); it mints a pair into .env, or replaces a published one." >&2
+            exit 1;;
+        esac
+        mkdir -p /srv/vexa-storage/data /srv/vexa-storage/iam && exec versitygw --port :9000 --health /health --iam-dir /srv/vexa-storage/iam --quiet posix /srv/vexa-storage/data
     environment:
-      - MINIO_ROOT_USER=${MINIO_ACCESS_KEY:-vexa-access-key}
-      - MINIO_ROOT_PASSWORD=${MINIO_SECRET_KEY:-vexa-secret-key}
+      - ROOT_ACCESS_KEY=${MINIO_ACCESS_KEY:-}
+      - ROOT_SECRET_KEY=${MINIO_SECRET_KEY:-}
+    ports:
+      - "127.0.0.1:${STORAGE_HOST_PORT:-18900}:9000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9000/health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - storage-data:/srv/vexa-storage
+    networks: [vexa, bots]   # an authenticated bot restores its browser session from here
+    restart: unless-stopped
+
+  storage-init:
+    # Checks the endpoint meeting-api uses (deploy/storage/storage_init.py, with its Python + boto3):
+    # ensures the bucket exists and PUTs/GETs/DELETEs a probe under .vexa-storage-init/, comparing bytes.
+    # Any failure holds meeting-api back. When authenticated bots point BOT_S3_ENDPOINT here, also
+    # creates their scoped account and a bucket policy that makes it read-only on
+    # BOT_USERDATA_S3_PATH, then proves it (list/read allowed; write, delete and the rest denied).
+    build:
+      context: ../..
+      dockerfile: core/meetings/services/meeting-api/Dockerfile
+    image: vexaai/v012-meeting-api:${IMAGE_TAG:-dev}
+    entrypoint: ["python", "/vexa-storage-tools/storage_init.py"]
+    depends_on:
+      storage:
+        condition: service_healthy
+    environment:
+      - STORAGE_ENDPOINT=http://storage:9000
+      - S3_ENDPOINT=${S3_ENDPOINT:-}
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY:-}
+      - S3_SECRET_KEY=${S3_SECRET_KEY:-}
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT:-storage:9000}
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-}
+      - MINIO_BUCKET=${MINIO_BUCKET:-vexa}
+      - MINIO_SECURE=${MINIO_SECURE:-false}
+      - BOT_S3_ENDPOINT=${BOT_S3_ENDPOINT:-}
+      - BOT_S3_BUCKET=${BOT_S3_BUCKET:-}
+      - BOT_S3_ACCESS_KEY=${BOT_S3_ACCESS_KEY:-}
+      - BOT_S3_SECRET_KEY=${BOT_S3_SECRET_KEY:-}
+      - BOT_USERDATA_S3_PATH=${BOT_USERDATA_S3_PATH:-}
+    volumes:
+      - ../storage:/vexa-storage-tools:ro
     networks: [vexa]
 
   # ─── Core services ────────────────────────────────────────────────────────────────────────────
@@ -98,14 +183,30 @@ services:
       - DB_PORT=5432
       - DB_NAME=${DB_NAME:-vexa}
       - DB_USER=${DB_USER:-postgres}
-      - DB_PASSWORD=${DB_PASSWORD:-postgres}
+      - DB_PASSWORD=${DB_PASSWORD:-}
       # NO `changeme` FALLBACK (A19). This token mints an API key for ANY user; a stack that came
       # up on the published literal handed the whole account plane to anyone who read the repo.
       # Unset now means UNSET — admin-api's config.v1 refuses the placeholder literals by name and
       # the admin surface answers 500 rather than accepting a secret everybody has.
       - ADMIN_API_TOKEN=${ADMIN_TOKEN:-}
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET}
+      # identity resolves a worker's delegation token (vxd_) in /internal/validate, so the gateway and
+      # flows authenticate a worker's tool calls without holding this key (agent_delegation).
+      - VEXA_MCP_DELEGATION_SECRET=${VEXA_MCP_DELEGATION_SECRET:-}
+      # agent-api revokes a worker's delegation token here when its unit ends; /internal/validate
+      # refuses a vxd_ bearer it cannot check against it (API keys never read it).
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis:6379/0
       - LOG_LEVEL=${LOG_LEVEL:-info}
+      # Who may sign in to the terminal, besides existing users and admins: comma-separated exact
+      # addresses and @domain entries ("@example.com,alice@example.org"). Empty = nobody new once an
+      # admin exists. The admin can add more in the terminal's Settings → Sign-in; the effective list
+      # is both. See .env.example.
+      - VEXA_SIGNIN_ALLOW=${VEXA_SIGNIN_ALLOW:-}
+      # The administrators, comma-separated exact addresses. They may always sign in, they are the
+      # admins (the terminal's admin panel included), and naming them closes the admin claim. Set it
+      # before first boot whenever the terminal is reachable from outside. Read by admin-api only:
+      # the terminal asks admin-api who may sign in and who is an admin, and holds no list itself.
+      - VEXA_ADMIN_EMAILS=${VEXA_ADMIN_EMAILS:-}
       # ── the publish edge (config.v1 class `publish-edge`) ──────────────────────────────────
       # Identity hands `onboarding.completed` to flows here. Same variable, same default-empty
       # shape as the mcp service's assembly URLs: EMPTY IS A PROFILE, not a misconfiguration —
@@ -165,7 +266,7 @@ services:
       - BOT_SPEAKER_MAX_BUFFER_SEC=${BOT_SPEAKER_MAX_BUFFER_SEC:-}
       - BOT_SPEAKER_IDLE_TIMEOUT_SEC=${BOT_SPEAKER_IDLE_TIMEOUT_SEC:-}
       - VEXA_AGENT_SRC_MOUNT=${VEXA_AGENT_SRC_MOUNT:-}
-      - REDIS_URL=redis://redis:6379/0
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis:6379/0
       # The Runtime brokers model credentials into spawned agents. Subscription credentials may be
       # mounted from the host; API-style Anthropic/OpenRouter env is forwarded from this trusted service.
       - HOST_CLAUDE_CREDENTIALS=${HOST_CLAUDE_CREDENTIALS:-}
@@ -187,11 +288,27 @@ services:
       - ANTHROPIC_DEFAULT_OPUS_MODEL=${ANTHROPIC_DEFAULT_OPUS_MODEL:-}
       - ANTHROPIC_DEFAULT_SONNET_MODEL=${ANTHROPIC_DEFAULT_SONNET_MODEL:-}
       - ANTHROPIC_DEFAULT_HAIKU_MODEL=${ANTHROPIC_DEFAULT_HAIKU_MODEL:-}
-      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET}
+      # The runtime caller credential: every route but /health requires it, and agent-api and
+      # meeting-api present it. No default — the runtime refuses to boot without one (mint-dev-env.sh
+      # mints it into .env). No spawned workload receives it.
+      - RUNTIME_API_TOKEN=${RUNTIME_API_TOKEN:-}
+      # The workspace store as the RUNTIME serves it: what backs it (the named volume agent-api also
+      # mounts) and where it sits inside a worker. A workload spec cannot move either; every mount a
+      # spec declares must sit under the target. The target must equal agent-api's
+      # VEXA_WORKSPACES_DIR and its mount of agent-workspaces (deploy/compose/tests hold them equal).
+      # The only out-of-store source a spec may name is agent-api's _global tier, when an operator
+      # keeps it outside the store (RUNTIME_EXTRA_MOUNT_SOURCES).
+      - VEXA_WORKSPACE_MOUNT_SOURCE=${COMPOSE_PROJECT_NAME:-vexa-v012}_agent-workspaces
+      - VEXA_WORKSPACE_MOUNT_TARGET=/workspaces
+      - RUNTIME_EXTRA_MOUNT_SOURCES=${VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH:-}
       - LOG_LEVEL=${LOG_LEVEL:-info}
-      # Spawn the bot onto THIS compose network so it resolves meeting-api:8080 (lifecycle callback)
-      # + redis. Must equal the project-prefixed network name (DockerBackend → HostConfig.NetworkMode).
-      - DOCKER_NETWORK=${COMPOSE_PROJECT_NAME:-vexa-v012}_vexa
+      # Spawned workloads never join the control-plane network. A meeting bot joins `bots`
+      # (meeting-api for its callbacks and uploads, redis, storage); an agent worker joins `workers`
+      # (the gateway's /mcp, redis, flows-api, and the opt-in llm-shim / searxng). Neither reaches
+      # the runtime, postgres, admin-api, agent-api or the terminal. Each must equal the
+      # project-prefixed network name (DockerBackend → HostConfig.NetworkMode).
+      - DOCKER_NETWORK=${COMPOSE_PROJECT_NAME:-vexa-v012}_bots
+      - DOCKER_WORKER_NETWORK=${COMPOSE_PROJECT_NAME:-vexa-v012}_workers
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       # THE CREDENTIAL MIRROR, TWO SHAPES. The probe reads the DIRECTORY one first (config.v1
@@ -298,6 +415,14 @@ services:
       # `INTERNAL_API_SECRET` and marks `VEXA_INTERNAL_API_SECRET` DEPRECATED ("no deploy surface
       # sets it on agent-api any more"), so the A19 fix rides the spelling this service reads.
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-}
+      # The runtime caller credential agent-api presents on every runtime.v1 / schedule.v1 call.
+      # Required; the same value the runtime and meeting-api hold.
+      - RUNTIME_API_TOKEN=${RUNTIME_API_TOKEN:-}
+      # gateway-identity.v1: the gateway's PUBLIC key, which verifies its X-Vexa-Identity. agent-api
+      # believes an x-user-* header only with that signature (or from the internal tier above), can
+      # check it and cannot make one, and forwards it unchanged to the credential broker. Written by
+      # the `identity-keys` one-shot; this service mounts the public half only.
+      - VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE=/run/vexa-identity/public/key.pem
       # The post-meeting room resolves a participant's email to a subject through admin-api. There
       # is no narrow door yet — the internal-secret tier exposes no by-email lookup, and
       # GET /admin/users/email/{email} sits behind this much broader credential, which can also
@@ -306,18 +431,10 @@ services:
       # matching a person by name. Delete this once admin-api serves
       # GET /internal/users/by-email/{email} returning only {id} — agent-api already prefers it.
       - VEXA_ADMIN_API_TOKEN=${ADMIN_TOKEN:-}
-      # Read-only DSN for the meetings database, for ONE question: which meetings is this address
-      # invited to (data.attendees). Only the invite record knows somebody was invited before they
-      # ever signed in, which is the case a first visit is. Unset, the first-visit opening simply
-      # says nothing about meetings — it never asserts there are none. Goes away when meeting-api
-      # serves an invited-by-address route and agent-api stops holding a second DB credential.
-      - VEXA_MEETINGS_DB_URL=${MEETINGS_DB_URL:-}
-      # Identity (P20): agent-api derives the subject from the gateway-injected X-User-Id. Until the terminal
-      # routes through the gateway (Stage 4), it still reaches agent-api directly with no header, so this
-      # single-user fallback keeps the dev stack working (shared subject). Remove it once the gateway fronts
-      # agent-api and X-User-Id is always present — then a missing header fails closed (401).
-      - VEXA_AGENT_DEFAULT_SUBJECT=${VEXA_AGENT_DEFAULT_SUBJECT:-u_live}
       - VEXA_AGENT_MODEL=${VEXA_AGENT_MODEL:-}
+      # Where a person's Settings → Models endpoint may point (model_endpoint.py). Interpolated so a
+      # stack started with its own --env-file (deploy/dogfood) sets it from that file too.
+      - VEXA_MODEL_BASE_URL_ALLOW=${VEXA_MODEL_BASE_URL_ALLOW:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       # ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL come from env_file (below), NOT environment: — an
       # `environment:` entry interpolates the AMBIENT SHELL first, so a host `export ANTHROPIC_BASE_URL`
@@ -329,28 +446,24 @@ services:
       - ANTHROPIC_DEFAULT_HAIKU_MODEL=${ANTHROPIC_DEFAULT_HAIKU_MODEL:-}
       - VEXA_LOG_LEVEL=${LOG_LEVEL:-info}
       # Stream primitive — the per-dispatch redis Streams the control plane relays (unit:<id>:out → SSE).
-      - VEXA_REDIS_URL=redis://redis:6379/0
-      # The backing the Runtime binds into the worker as the workspace store (the project-prefixed volume).
-      - VEXA_WORKSPACE_MOUNT_SOURCE=${COMPOSE_PROJECT_NAME:-vexa-v012}_agent-workspaces
+      - VEXA_REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis:6379/0
       # Three-tier mount stack (AMENDMENT 4): the platform-owned GLOBAL SYSTEM workspace (_global) mounted
-      # into every worker (behaviour/skills/tools). This path is required for agent dispatch; REF pins it
-      # to a branch/tag/sha for safe rollout, empty = HEAD.
+      # into every worker (behaviour/skills/tools). OPTIONAL: empty = the in-store /workspaces/_global,
+      # created empty at boot; set it only to manage `_global` as a separate host repo OUTSIDE the
+      # store. REF pins it to a branch/tag/sha for safe rollout, empty = HEAD.
       - VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH=${VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH:-}
       - VEXA_GLOBAL_SYSTEM_WORKSPACE_REF=${VEXA_GLOBAL_SYSTEM_WORKSPACE_REF:-}
       - VEXA_GLOBAL_ADMIN_SUBJECTS=${VEXA_GLOBAL_ADMIN_SUBJECTS:-}
       # The shared key the control plane signs per-dispatch tokens with (dev tier; k8s → SPIRE).
-      - VEXA_DISPATCH_SIGNING_KEY=${VEXA_DISPATCH_SIGNING_KEY:-dev-dispatch-signing-key}
-      # The AUTHENTICATED vexa-control MCP a chat worker gets. agent-api mints a short-lived, scoped,
-      # revocable delegation token per dispatch and the MCP verifies it with the same secret — so a
-      # worker never holds a durable user credential. No secret ⇒ no MCP is attached (default),
-      # whatever the URL says.
-      #
-      # ADR-0037 / PRD decision 40.5 — the default is the GATEWAY's assembled MCP surface
-      # (`gateway` proxies `/mcp` to the `mcp` service in this same compose file), not
-      # deploy/dogfood's rig: a worker's MCP attachment is an ordinary CLIENT edge to the one
-      # assembled server, the same edge a terminal or any other MCP client reaches. A deployment
-      # that still needs the rig (or a private mounted domain's MCP) sets VEXA_MCP_URL itself —
-      # this is only the in-network default for a stack that names none.
+      # No default: the old one was published here. mint-dev-env.sh (`make up`) mints it into .env,
+      # and agent-api refuses to boot on an unset or published value.
+      - VEXA_DISPATCH_SIGNING_KEY=${VEXA_DISPATCH_SIGNING_KEY:-}
+      # THE WORKER'S TOOLBELT (capability worker_toolbelt). agent-api mints a short-lived, scoped
+      # delegation token per dispatch with this secret; the worker presents it at the gateway's /mcp,
+      # where the ONE assembled MCP server serves the meetings, agent and flows tools (ADR-0037), and
+      # identity verifies it with the same secret (admin-api above). A worker never holds a durable
+      # user credential. mint-dev-env.sh generates the secret; with it empty no toolbelt is attached
+      # and every spawn says so in the log.
       - VEXA_MCP_URL=${VEXA_MCP_URL:-http://gateway:8000/mcp}
       - VEXA_MCP_DELEGATION_SECRET=${VEXA_MCP_DELEGATION_SECRET:-}
       # THE SCAFFOLD's link origin (PRD §5.5). The SAME variable the flows lane reads, on purpose:
@@ -362,6 +475,17 @@ services:
       # 'Add bot from URL' (terminal): agent-api forwards POST /api/meeting/bot → the gateway POST /bots.
       - VEXA_GATEWAY_URL=http://gateway:8000
       - VEXA_BOT_API_KEY=${VEXA_BOT_API_KEY:-}
+      # ── Connections (credential-broker.v1, ADR-0040) ──────────────────────────────────────
+      # agent-api signs as the `agent` role: request, list and USE a person's connections, never
+      # consent or store. The key is generated by `connections-keys` and mounted below; no worker
+      # ever mounts it. Set VEXA_CONNECTIONS_BROKER_URL empty to run without Connections.
+      - VEXA_CONNECTIONS_BROKER_URL=${VEXA_CONNECTIONS_BROKER_URL-http://credential-broker:8100}
+      - VEXA_CONNECTIONS_AGENT_KEY_FILE=/run/vexa-connections/agent/key
+      # Opt-in: Git tokens and deploy keys move from this service's own encrypted store into the
+      # broker. Set VEXA_GIT_STORE_BROKER_URL=http://credential-broker:8100 to switch; the key
+      # path follows it, so the pair is set together or not at all.
+      - VEXA_GIT_STORE_BROKER_URL=${VEXA_GIT_STORE_BROKER_URL:-}
+      - VEXA_GIT_STORE_KEY_FILE=${VEXA_GIT_STORE_BROKER_URL:+/run/vexa-connections/git/key}
       # ── the publish edge (config.v1 class `publish-edge`) ─────────────────────────────────
       # The agent domain hands `desk.unscaffolded` and `claim.proposed` to flows here — the two
       # desk cards. A PUBLISH IS NOT A DEPENDENCY: the calls are bounded at 2s and swallowed, and
@@ -396,10 +520,20 @@ services:
       # unset, same convention as the runtime's probe mount.
       - ${HOST_CLAUDE_DIR:-/dev/null}:/var/lib/vexa/host-claude:ro
       - ${HOST_CLAUDE_CREDENTIALS:-/dev/null}:/var/lib/vexa/host-claude-credentials:ro
-      # _global org tier at its HOST path — the control plane's exists() check runs here —
-      # AND at /workspaces/_global so the terminal's workspace-file API can read the org page.
+      # _global org tier. UNSET (the default) it lives in the agent-workspaces volume at
+      # /workspaces/_global, which agent-api creates EMPTY at boot — nothing to configure (founder
+      # ruling 2026-10-08: `_global` may be empty). There is deliberately NO bind onto
+      # /workspaces/_global: binding /dev/null there made docker leave an empty `_global` FILE in
+      # the volume, which then blocked the directory. Only an operator-supplied OUT-OF-STORE path is
+      # bound, at its own host path, where the control plane's exists() check runs.
       - ${VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH:-/dev/null}:${VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH:-/var/lib/vexa/no-global2}:ro
-      - ${VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH:-/dev/null}:/workspaces/_global:ro
+      # The agent role key, and the git role key only while the Git store is switched on
+      # (VEXA_GIT_STORE_BROKER_URL set): otherwise its mount point is the empty `connections-git`
+      # volume and this service holds no git key. Nothing else of the broker's (Connections).
+      - connections-agent-key:/run/vexa-connections/agent:ro
+      - connections-git${VEXA_GIT_STORE_BROKER_URL:+-key}:/run/vexa-connections/git:ro
+      # gateway-identity.v1: the gateway's public key (never the signing key).
+      - identity-public-key:/run/vexa-identity/public:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8100/health').status==200 else 1)"]
       interval: 10s
@@ -410,7 +544,12 @@ services:
     depends_on:
       runtime:
         condition: service_healthy
-    networks: [vexa]
+      connections-keys:
+        condition: service_completed_successfully
+      identity-keys:
+        condition: service_completed_successfully
+    # `connections` reaches the credential broker; spawned workers join `vexa` only and cannot.
+    networks: [vexa, connections]
     restart: unless-stopped
 
   meeting-api:
@@ -428,10 +567,17 @@ services:
       - DB_PORT=5432
       - DB_NAME=${DB_NAME:-vexa}
       - DB_USER=${DB_USER:-postgres}
-      - DB_PASSWORD=${DB_PASSWORD:-postgres}
-      - REDIS_URL=redis://redis:6379/0
+      - DB_PASSWORD=${DB_PASSWORD:-}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis:6379/0
       - RUNTIME_API_URL=http://runtime:8090
+      # The runtime caller credential meeting-api presents on every runtime.v1 call. Required; the
+      # same value the runtime and agent-api hold. Never placed in a bot invocation.
+      - RUNTIME_API_TOKEN=${RUNTIME_API_TOKEN:-}
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET}
+      # gateway-identity.v1: the gateway's PUBLIC key — the owner, bot limit, memberships and webhook
+      # meeting-api reads come from a signature it verifies (or the internal tier), never a bare
+      # header. Written by `identity-keys`; mounted read-only below, public half only.
+      - VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE=/run/vexa-identity/public/key.pem
       # The bot's display name in the meeting. The terminal omits bot_name on join, so this is what
       # participants see; set DEFAULT_BOT_NAME in .env and restart meeting-api (no terminal rebuild).
       - DEFAULT_BOT_NAME=${DEFAULT_BOT_NAME:-Vexa}
@@ -439,9 +585,10 @@ services:
       # (/internal/users/{id}/bot-context) and calendar sync discovers connected ICS feeds
       # (/internal/calendar-configs). Unset -> calendar sync no-ops, auto-join spawns uncapped.
       - ADMIN_API_URL=http://admin-api:8001
-      # MeetingToken is signed (mint) AND verified (recordings upload) with ADMIN_TOKEN — the SAME
-      # admin secret admin-api holds (admin-api gets ADMIN_API_TOKEN=${ADMIN_TOKEN}). Exactly like
-      # main (meeting-api ADMIN_TOKEN = admin-api ADMIN_API_TOKEN). __main__ passes token_secret=ADMIN_TOKEN.
+      # ADMIN_TOKEN is the SAME admin secret admin-api holds (admin-api gets ADMIN_API_TOKEN=${ADMIN_TOKEN}).
+      # meeting-api derives the MeetingToken key from it (HMAC-SHA256 under "vexa/meeting-token/v1") and
+      # signs (mint) AND verifies (callbacks, uploads, stream entries) with that key, never with the
+      # admin secret itself. __main__ passes token_secret=ADMIN_TOKEN.
       # NO `changeme` FALLBACK (A19) — same credential as admin-api's ADMIN_API_TOKEN above, and
       # meeting-api declares it required-explicit, so an unset value refuses the boot loudly
       # instead of signing every MeetingToken with a secret published in this repository.
@@ -460,7 +607,9 @@ services:
       - RECORDING_ENABLED=${RECORDING_ENABLED:-true}
       # Authenticated-bot mode (deployment-scoped): when true, every spawned bot restores the
       # provisioned browser session (make login) from the userdata store and joins signed-in.
-      # BOT_S3_* are SCOPED userdata credentials — never the deployment's admin S3 creds.
+      # BOT_S3_* are the bots' READ-ONLY userdata pair — never the deployment's admin S3 creds; a
+      # spawn refuses a pair sharing either half with MINIO_* / S3_*. A bot's rotated session comes
+      # back through meeting-api (PUT /internal/browser-session/…), written with MINIO_* here.
       # Docs: /authenticated-bots.
       - BOT_AUTHENTICATED=${BOT_AUTHENTICATED:-false}
       - BOT_USERDATA_S3_PATH=${BOT_USERDATA_S3_PATH:-}
@@ -486,12 +635,17 @@ services:
       - VEXA_FLOWS_API_KEY=${VEXA_FLOWS_API_KEY:-}
       # Self-hosted Jitsi hostnames (comma-separated) recognized in pasted + calendar links.
       - VEXA_JITSI_HOSTS=${VEXA_JITSI_HOSTS:-}
-      - MINIO_ENDPOINT=${MINIO_ENDPOINT:-minio:9000}
-      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-vexa-access-key}
-      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-vexa-secret-key}
+      - S3_ENDPOINT=${S3_ENDPOINT:-}
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY:-}
+      - S3_SECRET_KEY=${S3_SECRET_KEY:-}
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT:-storage:9000}
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-}
       - MINIO_BUCKET=${MINIO_BUCKET:-vexa}
       - MINIO_SECURE=${MINIO_SECURE:-false}
       - LOG_LEVEL=${LOG_LEVEL:-info}
+    volumes:
+      - identity-public-key:/run/vexa-identity/public:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/health').status==200 else 1)"]
       interval: 10s
@@ -506,9 +660,11 @@ services:
         condition: service_healthy
       runtime:
         condition: service_healthy
-      minio-init:
+      storage-init:
         condition: service_completed_successfully
-    networks: [vexa]
+      identity-keys:
+        condition: service_completed_successfully
+    networks: [vexa, bots]   # bots post their lifecycle callbacks and uploads here
     restart: unless-stopped
 
   gateway:
@@ -542,8 +698,13 @@ services:
       # `.env.example` never set it either. An OPT-OUT (set it empty) is a deployment saying it has
       # no agents; a MISSING default was nobody saying anything and the product answering "no".
       - AGENT_API_URL=${AGENT_API_URL:-http://agent-api:8100}
-      - REDIS_URL=redis://redis:6379/0
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis:6379/0
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET}
+      # gateway-identity.v1: the Ed25519 PRIVATE key the gateway signs the identity it resolved with,
+      # onto every forward. This is the only service that mounts it; agent-api, meeting-api and the
+      # credential broker get the public half and can verify but never sign. Written once by the
+      # `identity-keys` one-shot below.
+      - VEXA_GATEWAY_IDENTITY_SIGNING_KEY_FILE=/run/vexa-identity/signing/key.pem
       - LOG_LEVEL=${LOG_LEVEL:-info}
       # fastapi-guard edge layer (edge_guard.py): per-IP throttle + auto-ban at the edge.
       # ON by default with generous limits (owner ruling — protection that ships dark protects
@@ -570,6 +731,9 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+    volumes:
+      # gateway-identity.v1: the signing key, mounted here and nowhere else.
+      - identity-signing-key:/run/vexa-identity/signing:ro
     init: true
     depends_on:
       admin-api:
@@ -578,8 +742,34 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    networks: [vexa]
+      identity-keys:
+        condition: service_completed_successfully
+    networks: [vexa, workers]   # workers reach their toolbelt at /mcp here
     restart: unless-stopped
+
+  # ─── gateway-identity.v1: the gateway's signing keypair ─────────────────────────────────────────
+  # One-shot: generates an Ed25519 keypair the first time the stack starts and leaves it alone
+  # afterwards — an existing signing key is kept and its public half rewritten from it, so a lost
+  # public volume heals. The PRIVATE key goes to `identity-signing-key`, which only the gateway
+  # mounts; the PUBLIC key to `identity-public-key`, which agent-api, meeting-api and the credential
+  # broker mount read-only. No other service mounts either. Same image as the gateway: the
+  # generator is the gateway's own vendored gateway-identity.v1 module. To rotate, remove
+  # `identity-signing-key` and restart the stack (the four services then reload the new pair).
+  # The gateway runs as uid 10001 (its Dockerfile USER), so the signing key is handed to that uid —
+  # still 0600, still mounted by the gateway alone; re-applied on every start, so a key an older
+  # stack wrote as root is handed over too.
+  identity-keys:
+    build:
+      context: ../..
+      dockerfile: core/gateway/services/gateway/Dockerfile
+    image: vexaai/v012-gateway:${IMAGE_TAG:-dev}
+    user: "0:0"
+    command: ["sh", "-c", "python /app/src/gateway/identity_token.py keygen /keys/signing/key.pem /keys/public/key.pem && chown 10001:10001 /keys/signing/key.pem"]
+    volumes:
+      - identity-signing-key:/keys/signing
+      - identity-public-key:/keys/public
+    network_mode: none
+    restart: "no"
 
   # flows-api — the reaction engine's HTTP surface, and one of the domains the MCP assembly asks
   # for a tool manifest (PRD decision 40).
@@ -618,7 +808,7 @@ services:
       # every interface of that box the day it merged.
       - VEXA_FLOWS_API_HOST=0.0.0.0
       - VEXA_FLOWS_API_PORT=${VEXA_FLOWS_API_PORT:-8200}
-      - VEXA_FLOWS_DB_URL=postgresql+psycopg://${DB_USER:-postgres}:${DB_PASSWORD}@postgres:5432/${DB_NAME:-vexa}
+      - VEXA_FLOWS_DB_URL=postgresql+pg8000://${DB_USER:-postgres}:${DB_PASSWORD}@postgres:5432/${DB_NAME:-vexa}
       # ── the credentials, all fail-closed (#1453, F95) ───────────────────────────────────────
       # NO DEFAULT AND NO `:?`. No default because a weak one makes an unconfigured deployment look
       # configured — that is F95's whole lesson, and `flows_steps/common.py` refuses the published
@@ -653,6 +843,10 @@ services:
       - VEXA_MAIL_APP_PASSWORD=${VEXA_MAIL_APP_PASSWORD:-}
       - VEXA_MAIL_SMTP_HOST=${VEXA_MAIL_SMTP_HOST:-}
       - VEXA_MAIL_SMTP_PORT=${VEXA_MAIL_SMTP_PORT:-25}
+      - VEXA_MAIL_SMTP_SECURE=${VEXA_MAIL_SMTP_SECURE:-}
+      - VEXA_MAIL_SMTP_TLS_INSECURE=${VEXA_MAIL_SMTP_TLS_INSECURE:-}
+      - VEXA_MAIL_SMTP_USER=${VEXA_MAIL_SMTP_USER:-}
+      - VEXA_MAIL_SMTP_PASSWORD=${VEXA_MAIL_SMTP_PASSWORD:-}
       - VEXA_MAILPIT_URL=${VEXA_MAILPIT_URL:-}
       - VEXA_MAILPIT_LOOKBACK_S=${VEXA_MAILPIT_LOOKBACK_S:-300}
       - VEXA_NOTIFY_CHANNEL=${VEXA_NOTIFY_CHANNEL:-smtp}
@@ -702,7 +896,7 @@ services:
         condition: service_healthy
       admin-api:
         condition: service_healthy
-    networks: [vexa]
+    networks: [vexa, workers]   # workers read the timeline here
     restart: unless-stopped
 
   # flows-mailbox — the inbound mail lane: IMAP poll → `POST /events` on the engine. Same image,
@@ -731,7 +925,7 @@ services:
       # every interface of that box the day it merged.
       - VEXA_FLOWS_API_HOST=0.0.0.0
       - VEXA_FLOWS_API_PORT=${VEXA_FLOWS_API_PORT:-8200}
-      - VEXA_FLOWS_DB_URL=postgresql+psycopg://${DB_USER:-postgres}:${DB_PASSWORD}@postgres:5432/${DB_NAME:-vexa}
+      - VEXA_FLOWS_DB_URL=postgresql+pg8000://${DB_USER:-postgres}:${DB_PASSWORD}@postgres:5432/${DB_NAME:-vexa}
       # ── the credentials, all fail-closed (#1453, F95) ───────────────────────────────────────
       # NO DEFAULT AND NO `:?`. No default because a weak one makes an unconfigured deployment look
       # configured — that is F95's whole lesson, and `flows_steps/common.py` refuses the published
@@ -766,6 +960,10 @@ services:
       - VEXA_MAIL_APP_PASSWORD=${VEXA_MAIL_APP_PASSWORD:-}
       - VEXA_MAIL_SMTP_HOST=${VEXA_MAIL_SMTP_HOST:-}
       - VEXA_MAIL_SMTP_PORT=${VEXA_MAIL_SMTP_PORT:-25}
+      - VEXA_MAIL_SMTP_SECURE=${VEXA_MAIL_SMTP_SECURE:-}
+      - VEXA_MAIL_SMTP_TLS_INSECURE=${VEXA_MAIL_SMTP_TLS_INSECURE:-}
+      - VEXA_MAIL_SMTP_USER=${VEXA_MAIL_SMTP_USER:-}
+      - VEXA_MAIL_SMTP_PASSWORD=${VEXA_MAIL_SMTP_PASSWORD:-}
       - VEXA_MAILPIT_URL=${VEXA_MAILPIT_URL:-}
       - VEXA_MAILPIT_LOOKBACK_S=${VEXA_MAILPIT_LOOKBACK_S:-300}
       - VEXA_NOTIFY_CHANNEL=${VEXA_NOTIFY_CHANNEL:-smtp}
@@ -844,7 +1042,7 @@ services:
       # every interface of that box the day it merged.
       - VEXA_FLOWS_API_HOST=0.0.0.0
       - VEXA_FLOWS_API_PORT=${VEXA_FLOWS_API_PORT:-8200}
-      - VEXA_FLOWS_DB_URL=postgresql+psycopg://${DB_USER:-postgres}:${DB_PASSWORD}@postgres:5432/${DB_NAME:-vexa}
+      - VEXA_FLOWS_DB_URL=postgresql+pg8000://${DB_USER:-postgres}:${DB_PASSWORD}@postgres:5432/${DB_NAME:-vexa}
       # ── the credentials, all fail-closed (#1453, F95) ───────────────────────────────────────
       # NO DEFAULT AND NO `:?`. No default because a weak one makes an unconfigured deployment look
       # configured — that is F95's whole lesson, and `flows_steps/common.py` refuses the published
@@ -879,6 +1077,10 @@ services:
       - VEXA_MAIL_APP_PASSWORD=${VEXA_MAIL_APP_PASSWORD:-}
       - VEXA_MAIL_SMTP_HOST=${VEXA_MAIL_SMTP_HOST:-}
       - VEXA_MAIL_SMTP_PORT=${VEXA_MAIL_SMTP_PORT:-25}
+      - VEXA_MAIL_SMTP_SECURE=${VEXA_MAIL_SMTP_SECURE:-}
+      - VEXA_MAIL_SMTP_TLS_INSECURE=${VEXA_MAIL_SMTP_TLS_INSECURE:-}
+      - VEXA_MAIL_SMTP_USER=${VEXA_MAIL_SMTP_USER:-}
+      - VEXA_MAIL_SMTP_PASSWORD=${VEXA_MAIL_SMTP_PASSWORD:-}
       - VEXA_MAILPIT_URL=${VEXA_MAILPIT_URL:-}
       - VEXA_MAILPIT_LOOKBACK_S=${VEXA_MAILPIT_LOOKBACK_S:-300}
       - VEXA_NOTIFY_CHANNEL=${VEXA_NOTIFY_CHANNEL:-smtp}
@@ -945,7 +1147,10 @@ services:
       # URLs already say.
       - ADMIN_API_URL=http://admin-api:8001
       - MEETING_API_URL=http://meeting-api:8080
-      - AGENT_API_URL=${AGENT_API_URL:-}
+      # The agent domain — the same presence signal (and the same default) the gateway reads: this
+      # full profile runs agents, so its tools (Connections, the person's clock, chat naming, the
+      # workspace verbs) join the surface every worker's toolbelt reaches. Empty = no-agents.
+      - AGENT_API_URL=${AGENT_API_URL:-http://agent-api:8100}
       # DEFAULTS TO THE SERVICE. It used to default to empty, so a stack that ran flows still
       # assembled without its tools unless somebody supplied a URL by hand — which is how a
       # docker bridge address came to be the answer. Override to point at a flows elsewhere;
@@ -1007,6 +1212,10 @@ services:
       # on, and `FLOWS_API_URL=` is still how you say you do not carry the domain).
       flows-api:
         condition: service_healthy
+      # Same reason, for the agent domain's tools: an agent-api still starting when this boots would
+      # cost every worker its agent tools for the life of the process.
+      agent-api:
+        condition: service_healthy
     networks: [vexa]
     restart: unless-stopped
 
@@ -1051,10 +1260,6 @@ services:
       - VEXA_API_URL=http://gateway:8000
       - VEXA_ADMIN_API_KEY=${ADMIN_TOKEN:-}
       - VEXA_BOT_API_KEY=${VEXA_BOT_API_KEY:-}
-      # Hidden admin panel (/api/admin/*): comma-separated email allowlist — EMPTY = the panel is off
-      # for everyone. Identity is VERIFIED against admin-api /internal/validate over the internal-tier
-      # secret (never trusted from a cookie), and the same secret fronts agent-api's admin overview.
-      - VEXA_ADMIN_EMAILS=${VEXA_ADMIN_EMAILS:-}
       # NO PLACEHOLDER FALLBACK. F95 removed the published `vexa-internal-secret` default from
       # every service that REFUSES it at boot; these two lines kept it, so an unconfigured stack
       # still PRESENTED the published literal as internal-tier authority. Unset is unset (A19).
@@ -1069,10 +1274,23 @@ services:
       - TRANSCRIPTION_SERVICE_URL=${TRANSCRIPTION_SERVICE_URL:-}
       - TRANSCRIPTION_SERVICE_TOKEN=${TRANSCRIPTION_SERVICE_TOKEN:-}
       - TRANSCRIPTION_MODEL=${TRANSCRIPTION_MODEL:-}
-      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:-dev-nextauth-secret}
+      # REQUIRED, NO DEFAULT. It signs the sign-in cookies and (through a derived key) every emailed
+      # sign-in link, so a published default would let anybody sign in. The terminal also refuses
+      # to start on a value shorter than 32 bytes or one published in this repository.
+      # `make all` mints one into .env; by hand: openssl rand -hex 32
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:?NEXTAUTH_SECRET is required - set it in deploy/compose/.env (openssl rand -hex 32)}
+      # Optional: a separate key for the emailed sign-in link (32+ bytes, different from
+      # NEXTAUTH_SECRET). Unset, the link key is derived from NEXTAUTH_SECRET.
+      - MAGIC_LINK_SECRET=${MAGIC_LINK_SECRET:-}
       # Public origin when self-hosting behind a domain/reverse-proxy (e.g. https://vexa.example.com).
-      # Empty by default (localhost). Setting an https:// value also flips auth cookies to Secure.
+      # The emailed sign-in link is built ONLY from it (never from request headers): empty, the
+      # terminal sends no link. Setting an https:// value also flips auth cookies to Secure.
       - NEXTAUTH_URL=${NEXTAUTH_URL:-}
+      # Proxies whose X-Forwarded-For names the client, for the sign-in link's per-client rate limit:
+      # addresses or CIDR ranges, comma-separated. Only these and loopback are believed. A reverse proxy
+      # on this host reaches the container from the compose network's gateway, so name it (for example
+      # the network's /16, or 172.16.0.0/12); unset, every client behind it shares one limit.
+      - TERMINAL_TRUSTED_PROXIES=${TERMINAL_TRUSTED_PROXIES:-}
       # OAuth login providers (NextAuth). Each provider self-gates on its creds: set BOTH the id and
       # secret to expose that sign-in button on the login page; leave empty to hide it (the dev
       # type-any-email login still works). Register the redirect URI in the provider console:
@@ -1082,8 +1300,30 @@ services:
       - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
       - MICROSOFT_CLIENT_ID=${MICROSOFT_CLIENT_ID:-}
       - MICROSOFT_CLIENT_SECRET=${MICROSOFT_CLIENT_SECRET:-}
-      # Microsoft tenant: "common" = work/school + personal accounts; or a specific tenant id for org-only.
+      # Microsoft tenant: a tenant id (GUID) admits only that tenant's accounts; "common" admits any
+      # tenant, but only sign-ins whose ID token carries `xms_edov: true` (an optional claim to add in
+      # the app registration). Google sign-ins need a verified email.
       - MICROSOFT_TENANT_ID=${MICROSOFT_TENANT_ID:-common}
+      # Sign-in link mail (clients/terminal/src/app/api/auth/mailer.ts) goes through the deployment's
+      # mail relay — the VEXA_MAIL_SMTP_* family flows sends through too (declared in
+      # clients/terminal/config.v1.json). Unset, the mailer dials localhost:1025 inside THIS
+      # container, where nothing listens, and no link is delivered.
+      - VEXA_MAIL_SMTP_HOST=${VEXA_MAIL_SMTP_HOST:-}
+      - VEXA_MAIL_SMTP_PORT=${VEXA_MAIL_SMTP_PORT:-}
+      - VEXA_MAIL_SMTP_FROM=${VEXA_MAIL_SMTP_FROM:-}
+      - VEXA_MAIL_SMTP_USER=${VEXA_MAIL_SMTP_USER:-}
+      - VEXA_MAIL_SMTP_PASSWORD=${VEXA_MAIL_SMTP_PASSWORD:-}
+      - VEXA_MAIL_SMTP_SECURE=${VEXA_MAIL_SMTP_SECURE:-}
+      - VEXA_MAIL_SMTP_TLS_INSECURE=${VEXA_MAIL_SMTP_TLS_INSECURE:-}
+      # Connections panel (credential-broker.v1, ADR-0040). The terminal's server routes sign as
+      # the `human` role for the signed-in person: consent, store, disconnect, delete. The public
+      # origin is what browser POSTs must come from; unset, NEXTAUTH_URL's origin is used, and with
+      # neither the panel refuses to save.
+      - VEXA_CONNECTIONS_BROKER_URL=${VEXA_CONNECTIONS_BROKER_URL-http://credential-broker:8100}
+      - VEXA_CONNECTIONS_HUMAN_KEY_FILE=/run/vexa-connections/human/key
+      - VEXA_CONNECTIONS_PUBLIC_ORIGIN=${VEXA_CONNECTIONS_PUBLIC_ORIGIN:-}
+    volumes:
+      - connections-human-key:/run/vexa-connections/human:ro
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/',r=>process.exit(r.statusCode<500?0:1)).on('error',()=>process.exit(1))"]
       interval: 10s
@@ -1096,7 +1336,96 @@ services:
         condition: service_healthy
       agent-api:
         condition: service_healthy
-    networks: [vexa]
+      connections-keys:
+        condition: service_completed_successfully
+    networks: [vexa, connections]
+    restart: unless-stopped
+  # ─── Connections: the credential broker (credential-broker.v1, ADR-0040) ────────────────────────
+  # One-shot: generates the three role keys and the store key, each into its own volume, the first
+  # time the stack starts, and leaves them alone afterwards. Each consumer mounts only its own:
+  # agent-api the agent key (and the git key while the Git store is on), the terminal the human
+  # key, the broker all four. No worker mounts any of them. To rotate a key, remove its volume and
+  # restart the stack (rotating the store key also makes every stored credential unreadable —
+  # reconnect them).
+  connections-keys:
+    # Same image as credential-broker (its Python is all this needs); the build is repeated so a
+    # fresh `up --build` resolves it locally whichever of the two compose creates first.
+    build:
+      context: ../../core/agent/services/credential-broker
+      dockerfile: Dockerfile
+    image: vexaai/v012-credential-broker:${IMAGE_TAG:-dev}
+    user: "0:0"
+    command:
+      - python
+      - -c
+      - |
+        import pathlib, secrets
+        for role in ("agent", "human", "git", "store"):
+            key = pathlib.Path("/keys", role, "key")
+            if not key.exists():
+                key.write_text(secrets.token_hex(32) + "\n")
+            key.chmod(0o444)
+    volumes:
+      - connections-agent-key:/keys/agent
+      - connections-human-key:/keys/human
+      - connections-git-key:/keys/git
+      - connections-store-key:/keys/store
+    network_mode: none
+    restart: "no"
+  credential-broker:
+    build:
+      context: ../../core/agent/services/credential-broker
+      dockerfile: Dockerfile
+    image: vexaai/v012-credential-broker:${IMAGE_TAG:-dev}
+    environment:
+      - PYTHONUNBUFFERED=1
+      - VEXA_CONNECTIONS_AGENT_KEY_FILE=/run/vexa-connections/agent/key
+      - VEXA_CONNECTIONS_HUMAN_KEY_FILE=/run/vexa-connections/human/key
+      - VEXA_CONNECTIONS_GIT_KEY_FILE=/run/vexa-connections/git/key
+      - VEXA_CONNECTIONS_STATE_DIR=/state
+      # `local` (default): AES-256-GCM in the state volume, keyed from its own volume. `openbao`:
+      # an OpenBao or Vault KV v2 mount you run — set the three OPENBAO values and mount the token.
+      - VEXA_CONNECTIONS_STORE=${VEXA_CONNECTIONS_STORE:-local}
+      - VEXA_CONNECTIONS_STORE_KEY_FILE=/run/vexa-connections/store/key
+      - VEXA_CONNECTIONS_OPENBAO_ADDR=${VEXA_CONNECTIONS_OPENBAO_ADDR:-}
+      - VEXA_CONNECTIONS_OPENBAO_TOKEN_FILE=${VEXA_CONNECTIONS_OPENBAO_TOKEN_FILE:-}
+      - VEXA_CONNECTIONS_OPENBAO_MOUNT=${VEXA_CONNECTIONS_OPENBAO_MOUNT:-connections}
+      # Gmail and Google Calendar consent. Usually the client the terminal signs in with; register
+      # PRODUCT_REDIRECT (https://<your terminal>/api/auth/callback/google) on it. Unset, those two
+      # providers answer "not configured" and custom-secret connections still work.
+      - VEXA_CONNECTIONS_GOOGLE_CLIENT_ID=${VEXA_CONNECTIONS_GOOGLE_CLIENT_ID:-}
+      - VEXA_CONNECTIONS_GOOGLE_CLIENT_SECRET=${VEXA_CONNECTIONS_GOOGLE_CLIENT_SECRET:-}
+      - VEXA_CONNECTIONS_PRODUCT_REDIRECT=${VEXA_CONNECTIONS_PRODUCT_REDIRECT:-}
+      # gateway-identity.v1: an agent-role call must carry the gateway's signature over the person,
+      # forwarded by agent-api; the broker verifies it with this public key and cannot sign.
+      - VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE=/run/vexa-identity/public/key.pem
+    volumes:
+      - connections-state:/state
+      - connections-agent-key:/run/vexa-connections/agent:ro
+      - connections-human-key:/run/vexa-connections/human:ro
+      - connections-git-key:/run/vexa-connections/git:ro
+      - connections-store-key:/run/vexa-connections/store:ro
+      - identity-public-key:/run/vexa-identity/public:ro
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    # Readiness, not liveness: /ready answers 503 while the credential store does not.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8100/ready').status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    depends_on:
+      connections-keys:
+        condition: service_completed_successfully
+      identity-keys:
+        condition: service_completed_successfully
+    # `connections` is internal: only agent-api and the terminal join it, so a worker container
+    # cannot open a socket to the broker. `connections-egress` is the broker's own way out to
+    # Google and to the HTTPS services a person approved.
+    networks: [connections, connections-egress]
     restart: unless-stopped
   # DEPRECATED — the 0.10 dashboard, kept as an OFF-BY-DEFAULT profile while it is still
   # load-bearing (#813). It is the multi-user web UI hosted production runs against the 0.12 core
@@ -1120,8 +1449,8 @@ services:
     profiles: ["llm-shim"]
     # PINNED, deliberately: this is a third-party compatibility surface we vouch for, and both
     # dialects move. Bump it on purpose, never implicitly.
-    image: ${LLM_SHIM_IMAGE:-litellm/litellm:main-v1.97.0}
-    networks: [vexa]     # MUST match the stack: on the default network the agent cannot resolve it
+    image: ${LLM_SHIM_IMAGE:-litellm/litellm:v1.97.2@sha256:200baef4b77d3f15cabab3d3202f8fe993ae695e1c0f3ef1f5c9592f91239df8}
+    networks: [vexa, workers]     # MUST match the stack: workers resolve it on `workers`
     ports:
       - "127.0.0.1:${LLM_SHIM_PORT:-14000}:4000"
     volumes:
@@ -1163,8 +1492,8 @@ services:
       - NEXTAUTH_URL=${DASHBOARD_URL:-http://localhost:13001}
       - NEXT_PUBLIC_APP_URL=${DASHBOARD_URL:-http://localhost:13001}
       - NEXT_PUBLIC_BASE_URL=${DASHBOARD_URL:-http://localhost:13001}
-      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:-dev-nextauth-secret}
-      - JWT_SECRET=${NEXTAUTH_SECRET:-dev-nextauth-secret}
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:-}
+      - JWT_SECRET=${NEXTAUTH_SECRET:-}
       - ALLOW_REGISTRATIONS=${DASHBOARD_ALLOW_REGISTRATIONS:-true}
       - NEXT_PUBLIC_HOSTED_MODE=false
       - DEFAULT_BOT_NAME=${DEFAULT_BOT_NAME:-Vexa}
@@ -1189,7 +1518,7 @@ services:
   # the stack. No search code is built into, or redistributed inside, any vexaai/* artifact, so no
   # AGPL source-offer obligation attaches to Vexa's Apache-2.0 images — the obligation rests with
   # the upstream image the operator runs. A deliberate, reviewed sidecar allowance, declared in
-  # image-licenses.json exactly as minio/minio is (ADR-0004).
+  # image-licenses.json (ADR-0004).
   #
   # OFF by default: the harness speaks to ANY endpoint of this shape, and plenty of deployments
   # already run one or pay for Brave instead. Start it explicitly:
@@ -1205,7 +1534,7 @@ services:
     # bytes, not by a moving tag. Bump it on purpose, never implicitly. (= searxng/searxng:latest
     # at SearXNG 2026.9.5-c7f3080aa.)
     image: ${SEARXNG_IMAGE:-searxng/searxng@sha256:55e1fa15a63ff04e79e213e6aa2837549877b0c6d60757cdb633ae9111cb5fea}
-    networks: [vexa]     # MUST match the stack: on the default network the workers cannot resolve it
+    networks: [vexa, workers]     # MUST match the stack: workers resolve it on `workers`
     ports:
       - "127.0.0.1:${SEARXNG_HOST_PORT:-18481}:8080"
     volumes:
@@ -1233,9 +1562,35 @@ services:
 volumes:
   redis-data:
   postgres-data:
-  minio-data:
+  storage-data:
   agent-workspaces:
+  # Connections: the broker's state, and one volume per key so each service mounts only its own.
+  connections-state:
+  connections-agent-key:
+  connections-human-key:
+  connections-git-key:
+  connections-store-key:
+  # Deliberately empty: agent-api's git-key mount point while the Git store is off.
+  connections-git:
+  # gateway-identity.v1: the gateway's signing key (the gateway only) and its public half.
+  identity-signing-key:
+  identity-public-key:
 
 networks:
+  # The control plane. No spawned bot or worker joins it.
   vexa:
+    driver: bridge
+  # Where the runtime puts meeting bots (DOCKER_NETWORK): meeting-api, redis and storage only.
+  bots:
+    driver: bridge
+  # Where the runtime puts agent workers (DOCKER_WORKER_NETWORK): the gateway, redis, flows-api and
+  # the opt-in llm-shim / searxng only.
+  workers:
+    driver: bridge
+  # Connections: agent-api, the terminal and the broker only. internal = no route out, and no
+  # worker container joins it.
+  connections:
+    driver: bridge
+    internal: true
+  connections-egress:
     driver: bridge

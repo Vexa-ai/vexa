@@ -39,3 +39,31 @@ rewritten merely to add sign-offs.
   repository.
 - A bootstrap PR can prove the deterministic machinery locally; a post-merge canary PR is required
   to witness GitHub event, Check Runs, DCO App, and branch-protection behavior end to end.
+
+## Addendum 2026-10-02 — declared once per contributor
+
+Founder ruling: the choice is made once per contributor, not on every pull request. The gate now
+passes a pull request without a selection when an earlier merged pull request by the same author
+carried an independent declaration with no unresolved review and a body edited only by that author.
+Nobody maintains independent contributors by hand. The `contributors` map in
+`.github/contribution-rights.json` exists only for the maintainer's standing declaration and for
+corporate authorizations that cover future work, which are rare and verified against the private
+register before a maintainer adds them with their `VCR-` receipt. A head-bound corporate receipt on
+an earlier pull request never carries forward. The check names the pull request or entry it relied
+on. The registry is read from the default branch, so a pull request cannot register its own author.
+
+A standing covers only its owner's commits. A commit by another GitHub author with no standing of
+their own returns the pull request to the per-PR selection. An explicit selection that differs from
+the standing decides that pull request, an unresolved verifier review still blocks, grandfathering
+is unchanged, and DCO remains a separate check.
+
+## Addendum 2026-10-03 — the verdict lives on the evaluated head
+
+Comments and DCO results trigger the gate through `issue_comment` and `check_run`, and GitHub
+attaches those runs to the default branch's newest commit. The gate therefore never fails its own
+job on a verdict: the published `contribution-rights` check run on the pull request head, or on the
+merge-group head, is the only verdict. A failed GitHub read while evaluating a pull request is
+published there as a failing verdict that names the error. Runs from comments and check results each
+get their own concurrency group, so they are never cancelled by one another; pull request and
+merge-group runs still supersede earlier runs for the same head, and the merge queue re-evaluates
+rights before anything lands.

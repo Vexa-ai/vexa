@@ -1,0 +1,22 @@
+{{- if .Values.meetingApi.enabled }}
+{{- $s3 := include "vexa.s3" . | fromYaml }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "vexa.componentName" (list . "s3-client") }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+    app.kubernetes.io/component: meeting-api
+data:
+  # boto3's shared-config file for meeting-api's S3 client (AWS_CONFIG_FILE): the signing region,
+  # the addressing style (boto3 reads that from no environment variable) and, when set, the CA
+  # bundle. Credentials never live here; they come from storage.s3.existingSecret.
+  config: |
+    [default]
+    region = {{ $s3.region }}
+    s3 =
+        addressing_style = {{ ternary "path" "virtual" $s3.pathStyle }}
+    {{- if or $s3.caConfigMap $s3.caSecret }}
+    ca_bundle = /etc/vexa/s3-ca/ca.crt
+    {{- end }}
+{{- end }}

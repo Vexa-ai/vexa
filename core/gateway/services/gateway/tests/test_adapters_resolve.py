@@ -65,6 +65,41 @@ def _authorizer(handler):
     return AdminApiAuthorizer(client, ADMIN, "http://meeting-api:8080")
 
 
+@pytest.mark.parametrize("token", ["vxa_bot_ok", "vxd_a.worker.token"])
+async def test_resolve_declares_that_this_edge_reads_a_delegation(token, monkeypatch):
+    """Identity answers a worker's ``vxd_`` token only to a caller that declares it reads
+    ``delegation`` (identity.v1 AcceptsDelegationHeader). This edge does, on every validate hop —
+    beside its internal secret, to the validate route, with the token in the body."""
+    monkeypatch.setenv("INTERNAL_API_SECRET", "s3cret-for-tests")
+    seen = []
+
+    def handler(req):
+        seen.append(req)
+        return httpx.Response(200, json={"user_id": 7, "scopes": ["bot"]})
+
+    await _authorizer(handler).resolve(token)
+    (req,) = seen
+    assert req.url.path == "/internal/validate"
+    assert req.headers.get("x-vexa-internal-accepts-delegation") == "1"
+    assert req.headers.get("x-internal-secret") == "s3cret-for-tests"
+    import json as _json
+    assert _json.loads(req.content) == {"token": token}
+
+
+def test_the_declaration_is_identitys_sealed_header():
+    """Spelled as identity.v1 ``AcceptsDelegationHeader`` — a different spelling declares nothing,
+    and every worker's tool call would answer 401."""
+    import json as _json
+    from pathlib import Path
+
+    from gateway import adapters
+
+    root = next(p for p in Path(__file__).resolve().parents if (p / "core" / "identity").is_dir())
+    schema = _json.loads((root / "core/identity/contracts/identity.v1/identity.schema.json").read_text())
+    assert adapters.ACCEPTS_DELEGATION_HEADER == schema["$defs"]["AcceptsDelegationHeader"]["const"]
+    assert adapters.ACCEPTS_DELEGATION_VALUE == "1"
+
+
 async def test_resolve_200_returns_user():
     auth = _authorizer(lambda req: httpx.Response(200, json={"user_id": 7, "scopes": ["bot"]}))
     assert (await auth.resolve("vxa_bot_ok"))["user_id"] == 7

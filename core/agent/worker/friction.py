@@ -37,9 +37,11 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-#: Where the report goes. `VEXA_AGENT_API_SELF_URL` is an already-declared agent-api config key
-#: (config.v1.json, class `defaulted`, no deploy target) — the worker reads the same name the
-#: control plane does rather than inventing a second one for the same address.
+#: Where the report goes: agent-api's `/api/friction`, reached THROUGH THE EDGE — `/agent/friction` on
+#: the same gateway whose `/mcp` is this worker's toolbelt (`VEXA_MCP_URL`) — and authenticated by the
+#: dispatch's delegation token (`VEXA_MCP_DELEGATION_TOKEN`), the bearer the toolbelt presents.
+#: agent-api believes an X-User-Id only with the gateway's signature beside it (gateway-identity.v1), so a
+#: worker never names its person itself; the gateway resolves the token and says who it acts for.
 TIMEOUT_S = 3.0
 
 #: THE FILE FIRST, ALWAYS — the rule the rig's original `report_friction` was written around, kept
@@ -50,8 +52,27 @@ TIMEOUT_S = 3.0
 FALLBACK_LOG = Path(os.environ.get("TMPDIR", "/tmp")) / "vexa-friction.jsonl"
 
 
-def _api() -> str:
-    return (os.environ.get("VEXA_AGENT_API_SELF_URL") or "http://agent-api:8100").rstrip("/")
+#: Where the current delegation token is read once the worker has taken it out of its environment
+#: (``worker.engine.DelegationRefresh``, which keeps it fresh); None reads the environment.
+_TOKEN_SOURCE: "Callable[[], str] | None" = None
+
+
+def use_token_source(source: "Callable[[], str] | None") -> None:
+    """Read the delegation token from ``source`` from now on (None: the environment again)."""
+    global _TOKEN_SOURCE
+    _TOKEN_SOURCE = source
+
+
+def _edge() -> "tuple[str, str]":
+    """``(gateway base, delegation token)`` — empty strings when the dispatch handed over none.
+
+    The base is the toolbelt's own edge: ``VEXA_MCP_URL`` is the gateway's ``/mcp``, so the gateway
+    is that URL without it. A toolbelt pointed anywhere else (a lane's own MCP server) has no
+    ``/agent`` surface, and the record stays in the fallback log."""
+    url = (os.environ.get("VEXA_MCP_URL") or "").strip().rstrip("/")
+    base = url[: -len("/mcp")] if url.endswith("/mcp") else ""
+    token = _TOKEN_SOURCE() if _TOKEN_SOURCE is not None else os.environ.get("VEXA_MCP_DELEGATION_TOKEN")
+    return base, (token or "").strip()
 
 
 def fallback_session() -> str:
@@ -120,10 +141,14 @@ def report(record: dict, *, subject: str = "", timeout: float = TIMEOUT_S) -> di
             f.write(json.dumps({"at": time.time(), **body}) + "\n")
     except OSError as e:
         log.warning("friction: could not write the fallback log (%s)", e)
+    base, token = _edge()
+    if not base or not token:
+        log.warning("friction: not filed — this worker has no %s; the record is in %s",
+                    "gateway toolbelt" if not base else "delegation token", FALLBACK_LOG)
+        return None
     req = urllib.request.Request(
-        f"{_api()}/api/friction", method="POST", data=json.dumps(body).encode(),
-        headers={"content-type": "application/json",
-                 **({"x-user-id": str(subject)} if subject else {})})
+        f"{base}/agent/friction", method="POST", data=json.dumps(body).encode(),
+        headers={"content-type": "application/json", "x-api-key": token})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.loads(r.read().decode())
@@ -166,19 +191,20 @@ _DISBELIEF = re.compile(
 # coincidence, and a re-run is not free. Ordered longest-phrase-first is unnecessary — every key is
 # a whole word and the request is matched word-wise.
 _VERB_TOOL: tuple[tuple[tuple[str, ...], str], ...] = (
-    (("send", "drop", "put", "join", "admit", "dispatch"), "bot_send"),
-    (("schedule", "book"), "bot_schedule"),
-    (("stop", "remove", "pull"), "bot_stop"),
-    (("transcript", "transcribe", "read along"), "meeting_transcript"),
-    (("say", "speak"), "bot_say"),
+    (("send", "drop", "put", "join", "admit", "dispatch"), "request_meeting_bot"),
+    (("stop", "remove", "pull"), "stop_bot"),
+    (("transcript", "transcribe", "read along"), "get_meeting_transcript"),
+    (("say", "speak"), "speak_in_meeting"),
 )
+#: The verbs a refusal names by saying "bot" rather than by the tool's own name.
+_BOT_VERBS = frozenset({"request_meeting_bot", "stop_bot", "speak_in_meeting"})
 
 
 def disbelieved_capability(prompt: str, reply: str, tools) -> "str | None":
     """The tool this turn REFUSED while holding it, or None (F70).
 
     On 2026-09-02 the founder asked for a bot and was told "I don't have a bot-dispatch tool in this
-    session". `bot_send` was in the list; the CLI logged `hasTools: true`; the model never attempted
+    session". The send verb was in the list; the CLI logged `hasTools: true`; the model never attempted
     a call. Asked afterwards to enumerate its tools it listed them all and said it had been "guessing
     at my own capabilities instead of checking them".
 
@@ -190,13 +216,20 @@ def disbelieved_capability(prompt: str, reply: str, tools) -> "str | None":
     and the turn was right."""
     if not prompt or not reply or not tools:
         return None
-    if not _DISBELIEF.search(reply):
+    refusals = list(_DISBELIEF.finditer(reply))
+    if not refusals:
         return None
     words = set(re.findall(r"[a-z]+", prompt.lower()))
     have = {str(t).rsplit("__", 1)[-1] for t in tools}
     for verbs, tool in _VERB_TOOL:
         if tool in have and words.intersection(verbs):
-            return tool
+            # Prompt includes workspace context. Its verbs cannot establish what capability
+            # the answer refused. Require the SAME refusal clause to name this tool/domain.
+            for refusal in refusals:
+                clause=refusal.group(0).lower()
+                if (tool in clause or (tool in _BOT_VERBS and re.search(r'\bbot\b', clause))
+                        or (tool == 'get_meeting_transcript' and re.search(r'\btranscript\b', clause))):
+                    return tool
     return None
 
 

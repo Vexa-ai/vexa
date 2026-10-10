@@ -49,10 +49,22 @@
         ]
       },
       {
+        "group": "Minutes",
+        "pages": [
+          "minutes/overview",
+          "minutes/chats",
+          "minutes/pages",
+          "minutes/meetings",
+          "minutes/workspaces"
+        ]
+      },
+      {
         "group": "How-to: Agents",
         "pages": [
           "how-to/chat-workspace",
+          "how-to/chat-controls",
           "how-to/workspace-files",
+          "how-to/onboarding-research",
           "how-to/daily-brief",
           "how-to/email-triage"
         ]
@@ -114,9 +126,12 @@
           "deployment-lite",
           "deployment-kubernetes",
           "configuration",
+          "connections",
+          "upgrade-from-minio",
           "authenticated-bots",
           "model-credentials-licensing",
-        "agent-web-search",
+          "agent-web-search",
+          "agent-tool-calls",
           "security-compliance",
           "troubleshooting",
           "troubleshooting/completion-reasons",

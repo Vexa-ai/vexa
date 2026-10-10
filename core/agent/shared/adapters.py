@@ -19,7 +19,6 @@ import json
 import logging
 import os
 import re
-import subprocess
 import time
 import urllib.error
 import urllib.request
@@ -28,9 +27,13 @@ from typing import Protocol
 
 import yaml
 
-from shared.gitenv import pinned_git_env, scrubbed_git_env
+from shared.gitenv import transport_env
+from shared.gitexec import run_git
 from shared.models import WorkspaceWrite
 from shared.ports import IdentityPort, RuntimePort, SchedulerPort, StreamReader, VcsPort, WorkspacePort
+from shared import runtime_fault
+from shared.token_destination import embed_token
+from workspaces.shared import workspace_paths as wpaths
 
 logger = logging.getLogger("agent_api.adapters")
 
@@ -59,21 +62,16 @@ def parse_entity(text: str) -> tuple[dict, str]:
 def _git(cwd: Path, *args: str, token: str | None = None, url: str | None = None) -> str:
     """Run a git command in ``cwd``; return trimmed stdout. ``token`` (if given) is passed via env
     for the duration of the call only and is NEVER placed on the argv (which can leak via ps).
-    Always runs on a scrubbed env — a hook-exported GIT_DIR must never re-point the workspace op
-    at the hook's repo (see shared/gitenv.py).
+    Always runs through ``shared.gitexec``: nothing the repository configures runs, and a
+    hook-exported GIT_DIR can never re-point the workspace op at the hook's repo.
 
     ``url`` marks this call as a NETWORK op against that remote and pins git's transport allow-list
     to what the URL legitimately needs, so a remote reference can never reach a transport that runs a
     command (``ext::``) or reads this host's disk (``file://``)."""
-    overrides = {"GIT_ASKPASS": "true"} if token is not None else {}
-    env = pinned_git_env(url, **overrides) if url is not None else scrubbed_git_env(**overrides)
-    proc = subprocess.run(
-        ["git", *args],
-        cwd=str(cwd),
-        env=env,
-        capture_output=True,
-        text=True,
-    )
+    env = {"GIT_ASKPASS": "true"} if token is not None else {}
+    if url is not None:
+        env.update(transport_env(url))
+    proc = run_git(cwd, *args, env=env)
     if proc.returncode != 0:
         raise RuntimeError(f"git {' '.join(args)} failed: {proc.stderr.strip()}")
     return proc.stdout.strip()
@@ -113,7 +111,9 @@ def workspace_write_lock(work_dir: Path, timeout: float = WRITE_LOCK_TIMEOUT_S):
     git_dir = work_dir / ".git"
     lock_path = (git_dir if git_dir.exists() else work_dir) / ".vexa-writer.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+    # never through a link at the lock's name (beside the tree there is no `.git` to keep it ours)
+    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0),
+                 0o600)
     try:
         start = time.monotonic()
         while True:
@@ -148,11 +148,9 @@ def push_with_token(work_dir: str | Path, remote_url: str, ref: str, token: str 
     Both credential flows converge here: ``GitHubVcs.push`` (brokered secret store) and the
     per-call-token workspace publish (``control_plane.workspace_publish``)."""
     work = Path(work_dir)
-    if token and "://" in remote_url:
-        proto, rest = remote_url.split("://", 1)
-        auth_url = f"{proto}://{token}@{rest}"
-    else:
-        auth_url = remote_url
+    # A credential rides only over https (``token_destination``); any other URL is pushed without one
+    # (and fails loud if the remote needs it).
+    auth_url = embed_token(remote_url, token)
 
     def redact(text: str) -> str:
         return text.replace(token, "***") if token else text
@@ -198,10 +196,8 @@ class RealGitWorkspace(WorkspacePort):
             return
         # Local clone (file path or file:// URL) — derived from parent git_clone_init. The transport
         # allow-list is pinned to what this reference needs; `--` keeps a leading `-` a repository.
-        subprocess.run(
-            ["git", "clone", "--", repo_url, str(self.work_dir)],
-            capture_output=True, text=True, check=True, env=pinned_git_env(repo_url),
-        )
+        run_git(None, "clone", "--", repo_url, str(self.work_dir), env=transport_env(repo_url),
+                check=True)
         name, email = self._identity
         _git(self.work_dir, "config", "user.name", name)
         _git(self.work_dir, "config", "user.email", email)
@@ -212,13 +208,16 @@ class RealGitWorkspace(WorkspacePort):
             pass
 
     def read(self, path: str) -> str | None:
-        f = self.work_dir / path
-        return f.read_text() if f.exists() else None
+        # checked once, read nofollow through what was checked (`workspace_paths.locate_inside`)
+        try:
+            base, rel = wpaths.locate_inside(self.work_dir, path)
+        except wpaths.PathRefused:
+            return None
+        return wpaths.read_text_inside(base, rel) if rel else None
 
     def write(self, write: WorkspaceWrite) -> None:
-        f = self.work_dir / write.path
-        f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text(render_entity(write))
+        base, rel = wpaths.locate_inside(self.work_dir, write.path)
+        wpaths.write_text_inside(base, rel, render_entity(write))
         # NOTE: deliberately no ``git add`` here. On a SHARED repo, staging grabs .git/index.lock and
         # would race a concurrent member's turn (proven: writes get dropped with "index.lock: File
         # exists"). Record the path; commit() stages it under the write lock (Lane W).
@@ -294,31 +293,72 @@ class GitHubVcs(VcsPort):
         return push_with_token(work, remote_url, ref, brokered.reveal(), remote=_PUSH_REMOTE)
 
 
+def runtime_caller_headers(token: str) -> dict[str, str]:
+    """The runtime caller credential as request headers. The runtime answers 401 to anything else,
+    so an empty token is refused here rather than discovered as a 401 on the first dispatch."""
+    if not token:
+        raise ValueError("the runtime caller credential (RUNTIME_API_TOKEN) is required")
+    return {"Authorization": f"Bearer {token}"}
+
+
 class RuntimeHttpClient(RuntimePort):
     """A ``RuntimePort`` over runtime.v1's HTTP surface (``POST /workloads``) — the control-plane→kernel
     edge. agent-api never runs a worker in-process (P7); it asks the runtime kernel to spawn the
     ``agent`` workload. Uses stdlib urllib (no extra dep); the spec body is the runtime.v1 WorkloadSpec.
     """
 
-    def __init__(self, base_url: str, *, timeout: float = 10.0) -> None:
+    def __init__(self, base_url: str, *, token: str, timeout: float = 10.0) -> None:
         self._base = base_url.rstrip("/")
         self._timeout = timeout
+        self._auth = runtime_caller_headers(token)
+
+    def _call(self, op: str, req: urllib.request.Request):
+        """THE ONE PLACE THIS ADAPTER TALKS HTTP, and the one place its failures are translated
+        (P5's failure half, P18). Every error a runtime call can end in — an HTTP refusal, a
+        connection that never opened, a body that is not runtime.v1 — leaves here as a typed
+        :class:`shared.runtime_fault.RuntimeFault`, never as a bare ``HTTPError`` for the dispatch
+        path to answer with a 500. ``tests/test_runtime_fault.py`` holds the class to it."""
+        try:
+            with urllib.request.urlopen(req, timeout=self._timeout) as r:  # noqa: S310 — the runtime's URL from Settings
+                return json.loads(r.read())
+        except Exception as exc:  # noqa: BLE001 — every failure is translated, none escapes raw
+            raise runtime_fault.translate(op, exc) from exc
 
     def spawn(self, workload_id: str, profile: str, env: dict[str, str]) -> str:
         body = json.dumps({"workloadId": workload_id, "profile": profile, "env": env}).encode()
         req = urllib.request.Request(
             f"{self._base}/workloads", data=body,
-            headers={"Content-Type": "application/json"}, method="POST",
+            headers={"Content-Type": "application/json", **self._auth}, method="POST",
         )
-        with urllib.request.urlopen(req, timeout=self._timeout) as r:
-            status = json.loads(r.read())
-        return status.get("workloadId", workload_id)
+        status = self._call("spawn", req)
+        return status.get("workloadId", workload_id) if isinstance(status, dict) else workload_id
+
+    def live_workloads(self) -> list[str]:
+        """The ids of the workloads the runtime reports starting or running.
+
+        AN ANSWER THAT IS NOT A LIST OF WORKLOADS IS AN ERROR, never "nothing is live" (P18, P21).
+        Both unit-end sweepers read this set and act on what is ABSENT from it — the delegation
+        reaper revokes those units' tokens, the Redis ACL sweeper deletes their workers' users — so
+        reading an unreadable answer as empty would end every live worker's tools and Redis access
+        at once. A body that is not a list, or a row that is not a workload, raises the runtime's
+        ``bad_response`` fault; both sweepers skip a sweep that raises."""
+        req = urllib.request.Request(f"{self._base}/workloads", headers=self._auth, method="GET")
+        rows = self._call("list", req)
+        if not isinstance(rows, list):
+            raise runtime_fault.from_bad_body(
+                "list", ValueError(f"GET /workloads answered {type(rows).__name__}, not a list"))
+        bad = [s for s in rows if not (isinstance(s, dict) and isinstance(s.get("workloadId"), str)
+                                       and s.get("workloadId") and isinstance(s.get("state"), str))]
+        if bad:
+            raise runtime_fault.from_bad_body(
+                "list", ValueError(f"GET /workloads answered {len(bad)} row(s) that are not workloads"))
+        return [s["workloadId"] for s in rows if s["state"] in ("starting", "running")]
 
     def await_done(self, workload_id: str, timeout_sec: float = 0.0) -> str:
-        req = urllib.request.Request(f"{self._base}/workloads/{workload_id}", method="GET")
-        with urllib.request.urlopen(req, timeout=self._timeout) as r:
-            status = json.loads(r.read())
-        return status.get("state", "unknown")
+        req = urllib.request.Request(f"{self._base}/workloads/{workload_id}", headers=self._auth,
+                                     method="GET")
+        status = self._call("status", req)
+        return status.get("state", "unknown") if isinstance(status, dict) else "unknown"
 
 
 def _b64u(raw: bytes) -> str:
@@ -337,6 +377,9 @@ class LocalIdentityMinter(IdentityPort):
     """Dev-tier ``IdentityPort`` — signs a per-dispatch token with a shared key (HS256)."""
 
     def __init__(self, signing_key: str, *, ttl_sec: int = 900) -> None:
+        # A token signed with an empty key would verify for anyone who guessed the format.
+        if not signing_key:
+            raise ValueError("dispatch signing key is required")
         self._key = signing_key
         self._ttl = ttl_sec
 
@@ -442,27 +485,29 @@ class SchedulerHttpClient(SchedulerPort):
     """A ``SchedulerPort`` over the runtime's ``/schedule`` surface (schedule.v1) — the control-plane→cron
     edge. agent-api authors routine jobs here; the runtime owns the durable cron. Stdlib urllib, no dep."""
 
-    def __init__(self, base_url: str, *, timeout: float = 10.0) -> None:
+    def __init__(self, base_url: str, *, token: str, timeout: float = 10.0) -> None:
         self._base = base_url.rstrip("/")
         self._timeout = timeout
+        self._auth = runtime_caller_headers(token)
 
     def schedule(self, job: dict) -> dict:
         body = json.dumps(job).encode()
         req = urllib.request.Request(
             f"{self._base}/schedule", data=body,
-            headers={"Content-Type": "application/json"}, method="POST",
+            headers={"Content-Type": "application/json", **self._auth}, method="POST",
         )
         with urllib.request.urlopen(req, timeout=self._timeout) as r:
             return json.loads(r.read())
 
     def list_jobs(self, *, status: str | None = None, limit: int = 50) -> list[dict]:
         q = f"?limit={limit}" + (f"&status={status}" if status else "")
-        req = urllib.request.Request(f"{self._base}/schedule{q}", method="GET")
+        req = urllib.request.Request(f"{self._base}/schedule{q}", headers=self._auth, method="GET")
         with urllib.request.urlopen(req, timeout=self._timeout) as r:
             return json.loads(r.read())
 
     def cancel_job(self, job_id: str) -> dict | None:
-        req = urllib.request.Request(f"{self._base}/schedule/{job_id}", method="DELETE")
+        req = urllib.request.Request(f"{self._base}/schedule/{job_id}", headers=self._auth,
+                                     method="DELETE")
         try:
             with urllib.request.urlopen(req, timeout=self._timeout) as r:
                 return json.loads(r.read())

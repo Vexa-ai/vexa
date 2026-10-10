@@ -12,7 +12,9 @@ from control_plane import link_resolver as link_resolver_mod
 from control_plane import scaffolds as scaffolds_mod
 from control_plane import system_mounts
 from control_plane import workspace_ids as ids_mod
-from control_plane.api_shared import ScaffoldHandBody, ScaffoldMintBody, logger
+from control_plane.api_shared import logger
+from control_plane.bodies import ScaffoldHandBody, ScaffoldMintBody
+from control_plane.ceiling import reads_within, require_in_ceiling
 from fastapi import APIRouter, Body, HTTPException, Request
 from workspaces.shared import workspace_paths as wpaths
 
@@ -351,6 +353,8 @@ def build(**d) -> APIRouter:
         if not wid:
             raise HTTPException(status_code=400, detail="a touch names a workspace id and a path")
         rec = workspace_registry.get(wid)
+        # The dispatch's ceiling holds here as on every route that names a workspace.
+        require_in_ceiling(request, (rec or {}).get("slug") or wid)
         if ids_mod.access_for(rec, subject, root=wsr.root, is_member=_ws_is_member) != ids_mod.ACCESS_READABLE:
             return {"recorded": False}          # not readable — nothing to say, and nothing leaked
         desk = workspace_registry.by_slug(str(subject)) or _ws_sync(str(subject), kind="desk",
@@ -375,6 +379,7 @@ def build(**d) -> APIRouter:
         slug = str(body.get("slug") or "").strip() or None
         return {"results": link_resolver_mod.resolve_many(
             [str(r) for r in refs], subject=subject_of(request), root=wsr.root,
-            registry=workspace_registry, here=_ws_here(request, slug), is_member=_ws_is_member)}
+            registry=workspace_registry, here=_ws_here(request, slug), is_member=_ws_is_member,
+            within=lambda ws: reads_within(request, ws))}
 
     return router

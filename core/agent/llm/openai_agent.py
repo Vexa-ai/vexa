@@ -25,7 +25,7 @@ Three seams make that true and each one is load-bearing:
   exchange. This adapter therefore never rewrites, prefixes or trims the prompt on its way to disk.
 * **The panel conventions are IMPORTED, not re-implemented** — the writer-tool tab, the
   `transcript_terms` chips (decision 35) and the `bot_send` transcript open (decision 30.4) come
-  from ``llm.claude_code`` itself. A second spelling of those vocabularies is a second thing that
+  from ``llm.tool_events``, which every harness imports. A second spelling of those vocabularies is a second thing that
   can go stale; there is one.
 * **MCP is attached from the SAME `mcp.json`** ``worker.engine.mcp_delegation_config`` already
   writes (the rig over streamable-http with `Authorization: Bearer <delegation token>`). Both
@@ -48,14 +48,18 @@ configured: no search engine ships with this product, which is a licence decisio
 self-hosted one is AGPL-3.0) as much as a deployment one. `WebFetch` needs no backend, is therefore
 always attached, and refuses any URL that resolves into the deployment's own network.
 
-SIZING (CCC-Inference-Deployment): the KV cache holds ~29 requests at 24k context, so the loop
-carries a HARD per-turn budget — max tool calls, max wall seconds — and trims context (oldest tool
-results first) to stay under ``VEXA_AGENT_CONTEXT_TOKENS``. A shared box is a shared box.
+CONTEXT: the request is kept under ``VEXA_AGENT_CONTEXT_TOKENS`` — the chosen model's own window,
+stamped by the dispatch, or the deployment's value, else a 131072-token default. Only when a chat
+outgrows it is the history compacted (oldest tool results first, then old tool exchanges, then old
+replies shortened; never a person's message and never the latest exchange), and the turn says so
+quietly in its activity line, never in its reply. Chat call windows continue automatically by default, at most
+``VEXA_AGENT_MAX_CHAT_CONTINUATIONS`` times (default 4) inside the whole-turn clock;
+``VEXA_AGENT_AUTO_CONTINUE_CHAT=0`` restores the hard call cap for operators who require it.
 
 A JOB IS NOT A TURN (Vexa-ai/vexa#1613). The sizing above is about how much of the box ONE request
 may hold at once — context and concurrency — and says nothing about how many times a piece of work
 may come back for another one. An expand-in-every-direction job routinely needs more round trips
-than a chat turn does: the founder's OeNB job ran 72 steps and then died on the 40-call per-turn
+than a chat turn does: the founder's Example Bank job ran 72 steps and then died on the 40-call per-turn
 budget, with everything it had already written on disk. So a job gets its own, larger budget
 (``VEXA_AGENT_JOB_MAX_TOOL_CALLS``, per window) and, on reaching it, does not fail: the pages it
 wrote are already committed, it says how far it got, and it CONTINUES IN A FRESH WINDOW over the
@@ -75,7 +79,7 @@ sets only the old name behaves exactly as it did.
 
 WHAT A TURN THAT SPENDS ITS BUDGET NOW DOES, which is the defect this issue is actually about: it
 SAYS SO. Four friction reports were auto-filed from the founder's own chats on 2026-09-06 while he
-built the OeNB workspace — three in a row in one conversation — because the chat showed a finished
+built the Example Bank workspace — three in a row in one conversation — because the chat showed a finished
 turn and he re-prompted into the same wall each time. The `done` event therefore carries the line
 (*stopped at the tool-call budget after N of M steps*), the step count, and the Continue act the
 person presses to queue "continue where you stopped" back onto the same target. A job checkpoints
@@ -88,6 +92,13 @@ and returns nothing parseable) · ``VEXA_AGENT_MAX_TOOL_CALLS`` (+ the per-kind
 ``VEXA_AGENT_MAX_TOOL_CALLS_CHAT`` / ``_JOB`` / ``_ROOM`` / ``_FLOW``) · ``VEXA_AGENT_MAX_TURN_SEC`` ·
 ``VEXA_AGENT_CONTEXT_TOKENS`` · ``VEXA_AGENT_STREAM`` · ``VEXA_SEARCH_URL`` ·
 ``VEXA_SEARCH_DIALECT`` · ``VEXA_SEARCH_API_KEY``.
+
+WHOSE ENDPOINT this is, the deployment's or the subject's own (Settings → Models ``mode: custom``),
+is NOT decided here. The dispatch decides it once and, for a subject's endpoint, stamps every key
+this harness reads for endpoint, credential, model override and extra body
+(``control_plane.dispatch.subject_route_env``); the runtime never refills a key the dispatch
+stamped. So the fallback order in ``OpenAIAgentHarness.__init__`` never mixes the two owners:
+either every key it reads is the subject's, or none is.
 """
 from __future__ import annotations
 
@@ -96,6 +107,7 @@ import json
 import logging
 import os
 import re
+import stat
 import subprocess
 import time
 import uuid
@@ -106,13 +118,15 @@ import httpx
 
 from llm import jobs as llm_jobs
 from llm.errors import LLMAuthError, LLMConfigError, LLMError
-# The panel/chip/transcript vocabularies are the CLAUDE adapter's, imported rather than copied: the
-# terminal must render an openai-agent turn identically, and two copies of a closed vocabulary drift.
-from llm.claude_code import (_BOT_TOOLS, _FOCUS_TOOLS, _OPEN_TOOLS, _TERMS_TOOLS, _WRITER_TOOLS, _bot_artifact,
+from llm import faults as provider_faults
+# The panel/chip/transcript vocabularies are shared (`llm.tool_events`), imported rather than copied:
+# the terminal must render an openai-agent turn identically, and two copies of a closed vocabulary drift.
+from llm.tool_events import (_BOT_TOOLS, _FOCUS_TOOLS, _OPEN_TOOLS, _TERMS_TOOLS, _WRITER_TOOLS, _bot_artifact,
                              _open_event, _published_terms, _short, _workspace_focus,
                              _written_artifact)
-from llm.ports import harness_subprocess_env
+from llm.ports import harness_subprocess_env, max_output_tokens
 from llm import jobs, web_tools
+from llm import workspace_paths as wpaths
 
 
 def _parse_extra_body(raw: object) -> dict:
@@ -138,15 +152,28 @@ def _parse_extra_body(raw: object) -> dict:
 
 log = logging.getLogger(__name__)
 
+#: Chat transcripts sit under `.claude/projects`, which no caller-supplied path may reach
+#: (`workspace_paths.RESERVED_DIRS`) — the model's own Read/Write/Glob included; this is the
+#: harness's own reach into it.
+_PLUMBING = (".claude",)
+
 # ── budgets ──────────────────────────────────────────────────────────────────────────────────────
-# Defaults chosen against the CCC node's sizing table: ~29 concurrent requests at 24k context, and
-# this product's turns are prefill-dominated (input is ~95% of the tokens moved). A turn that grows
-# its own context without a ceiling is a turn that evicts everybody else's.
-_DEFAULT_CONTEXT_TOKENS = 24_000
+# THE CONTEXT BUDGET IS THE MODEL'S WINDOW (founder 2026-10-10). The dispatch stamps the chosen
+# model's own window, less room for its answer (`control_plane.dispatch.route_env`); a deployment
+# may set VEXA_AGENT_CONTEXT_TOKENS for every model. This default applies only when neither is
+# known, and is a large window rather than a small ceiling: the old 24k default dropped dozens of a
+# chat's messages on a model with a 131k window. Trimming is a quiet fallback, not the answer.
+_DEFAULT_CONTEXT_TOKENS = 131_072
 _DEFAULT_MAX_TOOL_CALLS = 40
 _DEFAULT_MAX_TURN_SEC = 900.0
+#: A CHAT turn that reaches its per-window call budget continues into a fresh window
+#: (``VEXA_AGENT_AUTO_CONTINUE_CHAT``, on by default) at most this many times
+#: (``VEXA_AGENT_MAX_CHAT_CONTINUATIONS``); after the last one it stops at the budget and offers
+#: Continue, like a turn with continuation off. With the default 40 calls a window, that is 200 calls.
+_DEFAULT_AUTO_CONTINUE_CHAT = True
+_DEFAULT_MAX_CHAT_CONTINUATIONS = 4
 #: A BACKGROUND JOB's budgets (Vexa-ai/vexa#1613) — per WINDOW for the calls, whole-job for the
-#: clock. 160 is four turns' worth: above the 72 steps the OeNB job reached before it was killed,
+#: clock. 160 is four turns' worth: above the 72 steps the Example Bank job reached before it was killed,
 #: and low enough that one job cannot hold the box indefinitely between checkpoints.
 _DEFAULT_JOB_MAX_TOOL_CALLS = 160
 _DEFAULT_JOB_MAX_TURN_SEC = 3600.0
@@ -178,6 +205,14 @@ def _int_env(key: str, default: int) -> int:
         return int(os.environ.get(key, "") or default)
     except ValueError:
         return default
+
+
+def _auto_continue_chat() -> bool:
+    """``VEXA_AGENT_AUTO_CONTINUE_CHAT`` — unset means the default (on); 0/false/no turns it off."""
+    raw = (os.environ.get("VEXA_AGENT_AUTO_CONTINUE_CHAT") or "").strip().lower()
+    if not raw:
+        return _DEFAULT_AUTO_CONTINUE_CHAT
+    return raw not in {"0", "false", "no", "off"}
 
 
 def _float_env(key: str, default: float) -> float:
@@ -243,11 +278,8 @@ _JOB_CONTINUE = (
 )
 
 
-#: WHAT THE PERSON PRESSES (Vexa-ai/vexa#1622), and the words that go back with it. A turn does NOT
-#: continue itself the way a job opens a fresh window: a job was dispatched to finish something and
-#: its pages are already committed, while a turn is somebody waiting on a reply who may well want a
-#: different next move. So the loop offers, and the press queues a same-target act through #1610's
-#: inbox — one click where the founder re-typed his instruction three times.
+#: Manual continuation remains available after a time limit or an explicitly enabled hard cap.
+#: Ordinary chats continue across call windows automatically, retaining prior tool results.
 _CONTINUE_LABEL = "Continue"
 _CONTINUE_INSTRUCTION = "continue where you stopped"
 
@@ -477,8 +509,12 @@ def _load_mcp(mcp_config: Optional[str], *, http_client: Optional[httpx.Client] 
     index: dict[str, tuple[_MCPServer, str]] = {}
     if not mcp_config:
         return servers, index
+    p = Path(mcp_config)     # the private attachment, read nofollow — see `engine._mcp_endpoint`
+    text = wpaths.read_text_inside(p.parent, p.name)
     try:
-        cfg = json.loads(Path(mcp_config).read_text())
+        if text is None:
+            raise OSError("not a plain file here")
+        cfg = json.loads(text)
     except (OSError, ValueError) as exc:
         log.warning("mcp config unreadable (%s) — running this turn without the toolbelt", exc)
         return servers, index
@@ -650,6 +686,26 @@ class _Sandbox:
         governance decision the dispatch already made; asking the model nicely is not enforcement."""
         return self._within(raw, self._write_roots, "WRITABLE mounted workspaces")
 
+    def locate(self, raw: str, *, write: bool = False) -> "tuple[Path, str]":
+        """``(mount root, path relative to it)`` for the RESOLVED target — the one check.
+
+        CHECK ONCE, ACT ON WHAT WAS CHECKED (R5-1's rule). These tools run in the worker process,
+        which is root, over paths the model chooses inside trees the model's own tools can also
+        write. Resolving and then opening by name leaves a window in which a link swapped in sends
+        the act somewhere else. So the act never opens this path by name: it goes through
+        ``workspace_paths`` relative to the root returned here, every component of the resolved
+        (already link-free) path opened ``O_NOFOLLOW`` — a link that appears after the check refuses
+        the act instead of redirecting it. Links INSIDE a mount still work: they are resolved here,
+        before the check, exactly as before."""
+        roots = self._write_roots if write else self._roots
+        real = self._within(raw, roots, "WRITABLE mounted workspaces" if write else "mounted workspaces")
+        best: Optional[Path] = None
+        for root in roots:
+            if (real == root or root in real.parents) and (best is None or len(root.parts) > len(best.parts)):
+                best = root
+        assert best is not None          # _within returned it, so one root contains it
+        return best, ("" if real == best else real.relative_to(best).as_posix())
+
     def contains(self, raw: str) -> bool:
         """True when ``raw`` is inside the read set — for filtering hits rather than refusing a call."""
         try:
@@ -704,30 +760,36 @@ def run_builtin(tool: str, args: dict, sandbox: _Sandbox,
                           str(args.get("brief") or ""))
     try:
         if tool == "Read":
-            path = sandbox.resolve(str(args.get("file_path") or ""))
-            text = path.read_text(encoding="utf-8", errors="replace")
+            root, rel = sandbox.locate(str(args.get("file_path") or ""))
+            data = wpaths.read_bytes_inside(root, rel) if rel else None
+            if data is None:
+                return False, f"cannot read {root / rel}: no such file, or not a plain file here"
+            text = data.decode("utf-8", errors="replace")
             lines = text.splitlines()
             start = max(0, int(args.get("offset") or 1) - 1)
             limit = int(args.get("limit") or 2000)
             chunk = "\n".join(lines[start:start + limit])
             return True, chunk[:_READ_MAX_CHARS]
         if tool == "Write":
-            path = sandbox.resolve_write(str(args.get("file_path") or ""))
-            path.parent.mkdir(parents=True, exist_ok=True)
+            root, rel = sandbox.locate(str(args.get("file_path") or ""), write=True)
             content = args.get("content")
-            path.write_text("" if content is None else str(content), encoding="utf-8")
+            path = wpaths.write_text_inside(root, rel, "" if content is None else str(content))
             return True, f"wrote {path}"
         if tool == "Edit":
-            path = sandbox.resolve_write(str(args.get("file_path") or ""))
+            root, rel = sandbox.locate(str(args.get("file_path") or ""), write=True)
             old, new = str(args.get("old_string") or ""), str(args.get("new_string") or "")
-            text = path.read_text(encoding="utf-8")
+            data = wpaths.read_bytes_inside(root, rel) if rel else None
+            if data is None:
+                return False, f"cannot edit {root / rel}: no such file, or not a plain file here"
+            text = data.decode("utf-8")
+            path = root / rel
             hits = text.count(old)
             if not old or hits == 0:
                 return False, "old_string not found in the file"
             if hits > 1 and not args.get("replace_all"):
                 return False, f"old_string appears {hits} times — pass replace_all or extend it"
-            path.write_text(text.replace(old, new) if args.get("replace_all")
-                            else text.replace(old, new, 1), encoding="utf-8")
+            wpaths.write_text_inside(root, rel, text.replace(old, new) if args.get("replace_all")
+                                     else text.replace(old, new, 1))
             return True, f"edited {path}"
         if tool == "Glob":
             base = sandbox.resolve(str(args.get("path") or "")) if args.get("path") else sandbox.resolve(".")
@@ -744,36 +806,37 @@ def run_builtin(tool: str, args: dict, sandbox: _Sandbox,
             hits: list[str] = []
             for p in base.glob(pattern):
                 try:
-                    real = sandbox.resolve(str(p))
+                    hroot, hrel = sandbox.locate(str(p))
                 except (ValueError, OSError):
                     continue                      # a symlink out of the mounts is not a hit
-                if real.is_file():
-                    hits.append(str(real))
+                if hrel and wpaths.is_file_inside(hroot, hrel):
+                    hits.append(str(hroot / hrel))
             hits = sorted(set(hits))[:_GLOB_MAX]
             return True, "\n".join(hits) if hits else "(no matches)"
         if tool == "Grep":
-            base = sandbox.resolve(str(args.get("path") or "")) if args.get("path") else sandbox.resolve(".")
+            groot, grel = sandbox.locate(str(args.get("path") or "") or ".")
             flags = re.IGNORECASE if args.get("case_insensitive") else 0
             rx = re.compile(str(args.get("pattern") or ""), flags)
             keep = str(args.get("glob") or "")
             out: list[str] = []
-            for f in sorted(base.rglob("*")):
+            # a descriptor walk that follows no link and reads each file nofollow: a symlink is
+            # neither entered nor read, so nothing outside the mount is searched (F86's escape)
+            for frel in wpaths.walk_files_inside(groot, grel):
                 if len(out) >= _GREP_MAX_HITS:
                     break
-                if not f.is_file() or ".git" in f.parts:
+                parts = frel.split("/")
+                if ".git" in parts:
                     continue
-                if not sandbox.contains(str(f)):
-                    continue                      # same escape as F86, reached through a symlink
-                if keep and not fnmatch.fnmatch(f.name, keep):
+                if keep and not fnmatch.fnmatch(parts[-1], keep):
                     continue
-                try:
-                    for n, line in enumerate(f.read_text(encoding="utf-8", errors="ignore").splitlines(), 1):
-                        if rx.search(line):
-                            out.append(f"{f}:{n}:{line.strip()[:200]}")
-                            if len(out) >= _GREP_MAX_HITS:
-                                break
-                except OSError:
+                data = wpaths.read_bytes_inside(groot, frel)
+                if data is None:
                     continue
+                for n, line in enumerate(data.decode("utf-8", errors="ignore").splitlines(), 1):
+                    if rx.search(line):
+                        out.append(f"{groot / frel}:{n}:{line.strip()[:200]}")
+                        if len(out) >= _GREP_MAX_HITS:
+                            break
             return True, "\n".join(out) if out else "(no matches)"
     except (OSError, ValueError, re.error) as exc:
         return False, f"{type(exc).__name__}: {exc}"
@@ -805,40 +868,47 @@ class _Transcript:
     losslessly instead of re-deriving it from a rendering. The reader ignores fields it does not
     know; that is the whole trick."""
 
+    # THE STORE IS IN `_system`, A TREE THE MODEL'S TOOLS CAN WRITE, and this process is root: the
+    # transcript is reached relative to the chat root through `workspace_paths`, never through a link
+    # planted at `.claude`, `projects`, the cwd-slug folder or the file — a linked transcript is
+    # neither appended to (written through) nor replayed into the model on resume (read through).
+    _PROJECTS = ".claude/projects"
+
     def __init__(self, chat_root: Path, work: Path, session_id: str) -> None:
         slug = str(work.resolve()).replace("/", "-")
-        self.dir = chat_root / ".claude" / "projects" / slug
+        self.root = Path(chat_root)
+        self.dir = self.root / ".claude" / "projects" / slug
         self.session_id = session_id
-        self.path = self.dir / f"{session_id}.jsonl"
+        self.name = f"{session_id}.jsonl"
+        self._own = f"{self._PROJECTS}/{slug}/{self.name}"
+        self.path = self.dir / self.name
+
+    def _rel(self) -> str:
+        if wpaths.is_file_inside(self.root, self._own, allow=_PLUMBING):
+            return self._own
+        # the sid may have been written under another cwd-slug (a mount that moved) — accept it
+        for slug in wpaths.list_dirs_inside(self.root, self._PROJECTS, allow=_PLUMBING):
+            cand = f"{self._PROJECTS}/{slug}/{self.name}"
+            if wpaths.is_file_inside(self.root, cand, allow=_PLUMBING):
+                return cand
+        return self._own
 
     def exists(self) -> bool:
-        if self.path.exists():
-            return True
-        # the sid may have been written under another cwd-slug (a mount that moved) — accept it
-        parent = self.dir.parent
-        return parent.exists() and any(parent.glob(f"*/{self.session_id}.jsonl"))
-
-    def _resolved(self) -> Path:
-        if self.path.exists():
-            return self.path
-        for cand in self.dir.parent.glob(f"*/{self.session_id}.jsonl"):
-            return cand
-        return self.path
+        return wpaths.is_file_inside(self.root, self._rel(), allow=_PLUMBING)
 
     def append(self, record: dict) -> None:
         try:
-            self.dir.mkdir(parents=True, exist_ok=True)
-            with self._resolved().open("a", encoding="utf-8") as fh:
-                fh.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
-        except OSError as exc:
+            wpaths.append_text_inside(self.root, self._rel(),
+                                      json.dumps(record, ensure_ascii=False, default=str) + "\n",
+                                      allow=_PLUMBING)
+        except (OSError, ValueError) as exc:   # ValueError: a link in the way (PathRefused)
             log.warning("could not append to the session transcript (%s) — history will be short", exc)
 
     def messages(self) -> list[dict]:
         """The prior conversation as OpenAI messages (from the ``oa`` field), or [] if unreadable."""
         out: list[dict] = []
-        try:
-            raw = self._resolved().read_text(encoding="utf-8")
-        except OSError:
+        raw = wpaths.read_text_inside(self.root, self._rel(), allow=_PLUMBING)
+        if raw is None:
             return out
         for line in raw.splitlines():
             if not line.strip():
@@ -928,19 +998,29 @@ def prune_orphans(messages: list[dict]) -> tuple[list[dict], int]:
 
 
 def trim_messages(messages: list[dict], budget: int) -> tuple[list[dict], int]:
-    """Fit ``messages`` under ``budget`` estimated tokens. Returns (messages, trimmed_count).
+    """Fit ``messages`` under ``budget`` estimated tokens by COMPACTING the history. Returns
+    (messages, compacted_count).
 
-    Order of sacrifice, oldest first: tool RESULTS (replaced by a stub, so the model still sees that
-    the call happened), then whole oldest EXCHANGES, and only then the head of the first user
-    message. The LAST user message is never touched — it is the ask, and a turn that trims the ask
-    answers a question nobody put.
+    A quiet fallback, not the answer: the budget is the model's own window, so this runs only on a
+    chat that has outgrown it. Order, oldest first, and only what lies before the latest exchange
+    (the last person message and everything after it; within the current turn, only tool results
+    older than its newest tool round):
+
+      1. tool RESULTS are replaced by a stub, so the model still sees that the call happened;
+      2. whole tool EXCHANGES (an assistant call and the results that answered it) are dropped;
+      3. the agent's earlier replies are shortened to their opening.
+
+    A PERSON'S MESSAGE IS NEVER TOUCHED, nor anything in the latest exchange (founder 2026-10-10):
+    a history that loses what the person said is not a summary of the conversation. If the person's
+    own words alone exceed the window the request goes as it is, and the provider's refusal is the
+    typed fault the turn ends on.
 
     "Exchange", not "message" (F88): dropping an assistant turn without the ``tool`` messages that
     answered it — or a ``tool`` message without its caller — produces a request every
     OpenAI-compatible server rejects with a 400, and the malformation is WRITTEN TO THE TRANSCRIPT,
     so a resumed session reproduced it on every later turn. `prune_orphans` runs first and
     unconditionally, healing transcripts the old trimmer already broke; its removals are not counted
-    as trimming because they buy no context, they only make the request sendable."""
+    as compaction because they buy no context, they only make the request sendable."""
     msgs, healed = prune_orphans([dict(m) for m in messages])
     if healed:
         log.warning("dropped %d orphaned tool message(s) from the session transcript — an "
@@ -948,40 +1028,66 @@ def trim_messages(messages: list[dict], budget: int) -> tuple[list[dict], int]:
     if _est_tokens(msgs) <= budget:
         return msgs, 0
     trimmed = 0
-    for m in msgs:                                     # 1) oldest tool results → stub
-        if _est_tokens(msgs) <= budget:
+
+    def latest() -> int:
+        return max((i for i, m in enumerate(msgs) if m.get("role") == "user"), default=len(msgs))
+
+    def newest_round() -> int:
+        """Where the latest tool round starts: the last call the agent made, else the person's."""
+        return max((i for i, m in enumerate(msgs) if _call_ids(m)), default=latest())
+
+    for i, m in enumerate(msgs):                       # 1) oldest tool results → stub
+        if _est_tokens(msgs) <= budget or i >= max(latest(), newest_round()):
             break
         if m.get("role") == "tool" and m.get("content") != _TRIM_STUB:
             m["content"] = _TRIM_STUB
             trimmed += 1
-    last_user = max((i for i, m in enumerate(msgs) if m.get("role") == "user"), default=0)
-    while _est_tokens(msgs) > budget:                  # 2) drop oldest non-final EXCHANGES
+    while _est_tokens(msgs) > budget:                  # 2) drop oldest tool EXCHANGES
+        cut = latest()
         drop: Optional[set[int]] = None
-        for i, m in enumerate(msgs):
-            if i == 0 or i == last_user or m.get("role") == "system":
+        for i, m in enumerate(msgs[:cut]):
+            if not _call_ids(m):
                 continue
             group = _exchange(msgs, i)
-            if 0 in group or last_user in group or any(msgs[j].get("role") == "system"
-                                                       for j in group):
-                continue                               # the group is anchored — try the next one
+            if any(j >= cut or msgs[j].get("role") in ("user", "system") for j in group):
+                continue
             drop = group
             break
         if not drop:
             break
         msgs = [m for i, m in enumerate(msgs) if i not in drop]
         trimmed += len(drop)
-        last_user = max((i for i, m in enumerate(msgs) if m.get("role") == "user"), default=0)
-    if _est_tokens(msgs) > budget and len(msgs) > 1:   # 3) last resort: head-truncate the opener
-        head = msgs[0]
-        content = str(head.get("content") or "")
-        keep = max(1000, budget * 2)
-        if len(content) > keep:
-            head["content"] = content[:keep] + "\n\n[…trimmed to fit the turn's context budget]"
+    for i, m in enumerate(msgs):                       # 3) shorten the agent's earlier replies
+        if _est_tokens(msgs) <= budget or i >= latest():
+            break
+        content = m.get("content")
+        if m.get("role") == "assistant" and isinstance(content, str) and len(content) > 600 \
+                and not content.endswith(_SHORTENED):
+            m["content"] = content[:400] + _SHORTENED
             trimmed += 1
     return msgs, trimmed
 
 
+#: What an earlier agent reply that was shortened to fit ends with.
+_SHORTENED = "\n\n[…earlier reply shortened to fit the model's context]"
+
+
 # ── the harness ─────────────────────────────────────────────────────────────────────────────────
+
+def _failed_done(reply: str, sid: str, exc: BaseException, *, keep_reply: bool = False) -> dict:
+    """The ``done`` a failed turn ends on. A provider failure the adapter could type carries it as
+    ``fault`` (``llm.faults``, P18) — additive, so the frozen ``done`` shape is unchanged for every
+    consumer that does not read it. Its ``reply`` becomes the fault's own sentence (unless the
+    exception's text is already the actionable one), so even a client that renders only the reply
+    says who failed and what to do instead of a raw status line and a JSON body."""
+    done: dict = {"type": "done", "reply": reply, "sessionId": sid, "ok": False}
+    fault = provider_faults.fault_of(exc)
+    if fault is not None:
+        done["fault"] = fault.as_dict()
+        if not keep_reply:
+            done["reply"] = fault.sentence()
+    return done
+
 
 class OpenAIAgentHarness:
     """``HarnessPort`` adapter: our own agent loop over an OpenAI-compatible endpoint."""
@@ -1006,8 +1112,11 @@ class OpenAIAgentHarness:
         # a 300s inference wait, redirects there are meaningless, and a page the MODEL chose must
         # never ride the connection pool carrying the deployment's model credential.
         # `follow_redirects=False` because `web_fetch` walks the hops itself — every one of them is
-        # re-checked against the SSRF guard, which is the whole point.
-        self._web = httpx.Client(timeout=web_tools.FETCH_TIMEOUT, transport=web_transport,
+        # re-checked against the SSRF guard, which is the whole point. And the client dials through
+        # the guard's pinned transport (`web_tools.fetch_transport`): checked again at connect time,
+        # connected to the checked address. An injected `web_transport` is what it dials through.
+        self._web = httpx.Client(timeout=web_tools.FETCH_TIMEOUT,
+                                 transport=web_tools.fetch_transport(web_transport),
                                  follow_redirects=False)
         self._mcp_http = mcp_http_client
         self._chat_root: Optional[Path] = None
@@ -1019,18 +1128,18 @@ class OpenAIAgentHarness:
         of `prepare` is holding on to the root the engine already computed (`_system` when the
         dispatch declares one — chats are private and must not land on a shared mount)."""
         self._chat_root = Path(chat_root or work)
-        try:
-            (self._chat_root / ".claude" / "projects").mkdir(parents=True, exist_ok=True)
-        except OSError:
-            pass                                  # a read-only mount: the turn still runs
+        try:   # nofollow: a `.claude` planted as a link in `_system` is never created through
+            os.close(wpaths.dir_fd_inside(self._chat_root, (".claude", "projects"), create=True))
+        except (OSError, ValueError):
+            pass                                  # a read-only mount (or a link): the turn still runs
 
     def transcript_bytes(self, work: Path, session_id: str) -> int:
         total = 0
-        for path in (work / ".claude" / "projects").glob(f"*/{session_id}.jsonl"):
-            try:
-                total += path.stat().st_size
-            except OSError:
-                continue
+        name = f"{session_id}.jsonl"
+        for slug in wpaths.list_dirs_inside(work, ".claude/projects", allow=_PLUMBING):
+            st = wpaths.stat_inside(work, f".claude/projects/{slug}/{name}", allow=_PLUMBING)
+            if st is not None and stat.S_ISREG(st.st_mode):      # the entry itself; a link is no size
+                total += st.st_size
         return total
 
     def preflight(self) -> Optional[str]:
@@ -1060,10 +1169,10 @@ class OpenAIAgentHarness:
             yield from self._loop(Path(work), prompt, set(allowed_tools), session, sid, model,
                                   mcp_config)
         except (LLMConfigError, LLMAuthError) as exc:
-            yield {"type": "done", "reply": str(exc), "sessionId": sid, "ok": False}
+            # Their own text already names the variable to set — it stays the reply.
+            yield _failed_done(str(exc), sid, exc, keep_reply=True)
         except LLMError as exc:
-            yield {"type": "done", "reply": f"Model inference failed: {exc}", "sessionId": sid,
-                   "ok": False}
+            yield _failed_done(f"Model inference failed: {exc}", sid, exc)
 
     # -- the loop ---------------------------------------------------------------------------
     def _loop(self, work: Path, prompt: str, allow: set[str], resume: Optional[str], sid: str,
@@ -1103,6 +1212,11 @@ class OpenAIAgentHarness:
             # once, so the budget cannot come from the environment alone.
             kind = llm_jobs.turn_kind()
             budget_calls = _calls_budget(kind)
+            # Interactive research continues across call windows without replaying tools.
+            # Zero still disables execution; the whole-turn clock and allow-set remain enforced.
+            auto_continue = kind == "chat" and _auto_continue_chat()
+            continuations_left = _int_env("VEXA_AGENT_MAX_CHAT_CONTINUATIONS",
+                                          _DEFAULT_MAX_CHAT_CONTINUATIONS) if auto_continue else 0
             budget_secs = _job_seconds() if is_job else _float_env("VEXA_AGENT_MAX_TURN_SEC",
                                                                    _DEFAULT_MAX_TURN_SEC)
             ctx_budget = _int_env("VEXA_AGENT_CONTEXT_TOKENS", _DEFAULT_CONTEXT_TOKENS)
@@ -1154,6 +1268,14 @@ class OpenAIAgentHarness:
                 messages.append(oa)
                 over_budget = False
                 for i, call in enumerate(calls):
+                    if (auto_continue and budget_calls > 0 and calls_made >= budget_calls
+                            and continuations_left > 0):
+                        # Keep the pending call and every prior result. Context trimming remains
+                        # bounded independently; do not fabricate a refusal or re-ask the model.
+                        # Bounded: after the last continuation the budget below stops the turn.
+                        calls_made = 0
+                        window += 1
+                        continuations_left -= 1
                     if calls_made >= budget_calls or (time.monotonic() - started) > budget_secs:
                         over_budget = True
                         reason = "tool-call budget" if calls_made >= budget_calls else "time budget"
@@ -1228,15 +1350,18 @@ class OpenAIAgentHarness:
             done: dict = {"type": "done", "reply": reply, "sessionId": sid,
                           "ok": not truncation, "steps": total_calls, "budget": budget_calls}
             if truncation:
-                done["reason"] = _stopped_line(truncation, calls_made, budget_calls,
+                # THE WHOLE TURN, not the last window: after a chat continued past its per-window
+                # budget, the steps it took and the ceiling it had are every window's together.
+                done["reason"] = _stopped_line(truncation, total_calls, budget_calls * window,
                                                time.monotonic() - started)
                 # THE ACT THE BUBBLE OFFERS. Named here rather than in the client because the
                 # harness is the only thing that knows the turn did not finish its own reasoning;
                 # the client's job is to render a control and post the instruction back.
                 done["act"] = {"label": _CONTINUE_LABEL, "instruction": _CONTINUE_INSTRUCTION}
-            elif trimmed_total:
-                done["reason"] = (f"context-trimmed: {trimmed_total} message(s) dropped to stay "
-                                  f"inside the turn's {ctx_budget}-token budget")
+            if trimmed_total:
+                # QUIETLY: a count the client shows as a muted note in the turn's activity line —
+                # never the reply text, never `reason` (which renders as the turn's stop line).
+                done["compacted"] = trimmed_total
             yield done
         finally:
             for srv in servers:
@@ -1266,6 +1391,11 @@ class OpenAIAgentHarness:
         """One `chat/completions` round trip. Yields ``message-delta`` events while the text
         streams, then a single ``{"__final__": <assistant message>}``."""
         body = {**self._extra, "model": model, "messages": messages}   # reserved keys always win
+        cap = max_output_tokens()
+        if cap is not None:
+            # THE OUTPUT CAP (`llm.ports.max_output_tokens`) — a deployment dial, so it wins over a
+            # `max_tokens` in VEXA_LLM_EXTRA_BODY like the other reserved keys.
+            body["max_tokens"] = cap
         if specs:
             body["tools"] = specs
             body["tool_choice"] = "auto"
@@ -1281,7 +1411,7 @@ class OpenAIAgentHarness:
                                      headers=headers) as r:
                 if r.status_code >= 400:
                     r.read()
-                    self._raise_http(r)
+                    self._raise_http(r, model)
                 for line in r.iter_lines():
                     line = (line or "").strip()
                     if not line.startswith("data:"):
@@ -1301,8 +1431,15 @@ class OpenAIAgentHarness:
                     err = chunk.get("error")
                     if err:
                         detail = err.get("message") if isinstance(err, dict) else str(err)
-                        raise LLMError(f"{self._base} streamed an error frame: "
+                        code = err.get("code") if isinstance(err, dict) else None
+                        fault = provider_faults.classify(
+                            status=code if isinstance(code, int) else None, text=detail or err,
+                            provider=self._host(), model=model)
+                        exc = LLMError(f"{self._base} streamed an error frame: "
                                        f"{_short(detail or err, 300)}")
+                        if fault is not None:
+                            exc.fault = fault
+                        raise exc
                     delta = ((chunk.get("choices") or [{}])[0] or {}).get("delta") or {}
                     if delta.get("content"):
                         acc_text += delta["content"]
@@ -1319,7 +1456,7 @@ class OpenAIAgentHarness:
                         if fn.get("arguments"):
                             slot["function"]["arguments"] += fn["arguments"]
         except httpx.HTTPError as exc:
-            raise LLMError(f"agent transport failure against {self._base}: {exc}") from exc
+            raise self._transport_error(exc, model) from exc
         # F90: A STREAM THAT SAID NOTHING is a failure, not an empty answer. A truncated connection,
         # a model that emitted only reasoning tokens (the Qwen thinking case VEXA_LLM_EXTRA_BODY
         # exists to switch off), a `[DONE]` with no content — all reached `done.ok=True` with an
@@ -1337,9 +1474,9 @@ class OpenAIAgentHarness:
         try:
             r = self._client.post(f"{self._base}/chat/completions", json=body, headers=headers)
         except httpx.HTTPError as exc:
-            raise LLMError(f"agent transport failure against {self._base}: {exc}") from exc
+            raise self._transport_error(exc, str(body.get("model") or "")) from exc
         if r.status_code >= 400:
-            self._raise_http(r)
+            self._raise_http(r, str(body.get("model") or ""))
         try:
             msg = ((r.json().get("choices") or [{}])[0] or {}).get("message") or {}
         except (ValueError, AttributeError, TypeError) as exc:
@@ -1350,13 +1487,37 @@ class OpenAIAgentHarness:
         yield {"__final__": {"role": "assistant", "content": text,
                              **({"tool_calls": msg["tool_calls"]} if msg.get("tool_calls") else {})}}
 
-    def _raise_http(self, r: httpx.Response) -> None:
+    def _host(self) -> str:
+        return provider_faults.provider_host(self._base) if self._base else "unknown"
+
+    def _raise_http(self, r: httpx.Response, model: str = "") -> None:
+        """The provider's refusal, TYPED (P18): the status read into a ``ProviderFault`` that rides
+        on the exception, and from there onto the turn's ``done`` (see ``_failed_done``)."""
         detail = (r.text or "")[:300]
+        fault = provider_faults.classify(status=r.status_code, text=r.text or "",
+                                         provider=self._host(), model=model)
         if r.status_code in (401, 403):
-            raise LLMAuthError(
+            exc: LLMError = LLMAuthError(
                 f"{r.status_code} from {self._base}: {detail} — set VEXA_LLM_API_KEY for this "
                 f"endpoint, or point VEXA_LLM_BASE_URL at one that needs no credential")
-        raise LLMError(f"{r.status_code} from {self._base}: {detail}")
+        else:
+            exc = LLMError(f"{r.status_code} from {self._base}: {detail}")
+        if fault is not None:
+            exc.fault = fault
+        raise exc
+
+    def _transport_error(self, exc: httpx.HTTPError, model: str) -> LLMError:
+        """No answer at all — refused, reset, timed out — is the provider being UNAVAILABLE."""
+        fault = provider_faults.classify(text=str(exc) or type(exc).__name__, transport=True,
+                                         provider=self._host(), model=model)
+        if fault is not None and not fault.detail:
+            fault = provider_faults.ProviderFault(
+                kind=fault.kind, provider=fault.provider, model=fault.model, status=None,
+                detail=type(exc).__name__, remedy=fault.remedy)
+        err = LLMError(f"agent transport failure against {self._base}: {exc}")
+        if fault is not None:
+            err.fault = fault
+        return err
 
 
 def _tool_calls_of(msg: dict) -> list[dict]:
@@ -1385,12 +1546,12 @@ def _tool_calls_of(msg: dict) -> list[dict]:
 
 def _panel_events(call: dict, ok: bool, out: str) -> list[dict]:
     """The panel moves a successful call earns — the SAME four conventions ``claude_code`` applies,
-    through its own helpers: the writer's tab, decision 35's chips, decision 30.4's transcript, and
+    through the same helpers: the writer's tab, decision 35's chips, decision 30.4's transcript, and
     the one a person actually ASKED for (`open_page`, Vexa-ai/vexa#1586).
 
     Both runners read the same result through the same function on purpose. A panel convention
     written twice is a panel convention that is right in one runner — which is the reason these
-    helpers live in `claude_code` and are imported here rather than re-derived."""
+    helpers live in `llm.tool_events` and are imported here rather than re-derived."""
     if not ok:
         return []                                  # success only: a failed call must move nothing
     name = call["name"]

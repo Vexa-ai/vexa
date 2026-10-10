@@ -22,10 +22,19 @@ This module imports NOTHING from product code — it must stay liftable into a s
 """
 from __future__ import annotations
 
+import ctypes
+import logging
 import os
+import pwd
+import stat
 import subprocess
 from pathlib import Path
 from typing import Callable, Iterable, Iterator, Optional, Protocol
+
+from llm import workspace_paths as wpaths
+from llm.gitexec import run_git
+
+_log = logging.getLogger("llm.ports")
 
 # Env vars that redirect git's repo/worktree/index/object discovery away from cwd. Git HOOKS
 # export GIT_DIR (and friends) into their descendants; a git subprocess inheriting them operates
@@ -52,7 +61,10 @@ def scrubbed_git_env() -> dict[str, str]:
 # identity token is a bearer secret the subprocess has no use for. The model DOES need its MODEL
 # credentials (ANTHROPIC_*/CLAUDE_CODE_OAUTH_TOKEN) to talk to the provider, so those are
 # deliberately absent here — this is the tight denylist of vars the model has no legitimate reason to hold.
-_HARNESS_SUBPROCESS_DENY_VARS = ("REDIS_URL", "VEXA_AGENT_IDENTITY_TOKEN")
+_HARNESS_SUBPROCESS_DENY_VARS = ("REDIS_URL", "VEXA_AGENT_IDENTITY_TOKEN",
+                                 # the unit's input-stream key (shared/unit_input.py): whoever holds it
+                                 # can put a message on the worker's input as its owner
+                                 "VEXA_UNIT_IN_KEY")
 
 
 def harness_subprocess_env() -> dict[str, str]:
@@ -80,6 +92,372 @@ def harness_subprocess_env() -> dict[str, str]:
     env = {k: v for k, v in scrubbed_git_env().items() if k not in _HARNESS_SUBPROCESS_DENY_VARS}
     env.setdefault("ENABLE_TOOL_SEARCH", "auto:100")
     return env
+
+
+#: THE OUTPUT CAP, one dial for every harness. A request's output allowance is what an
+#: OpenRouter-style provider prices BEFORE it answers: the claude CLI asks for 32000 output tokens by
+#: default, and a key whose balance covers 4857 is refused with a 402 for a "hi". Unset leaves each
+#: harness's own default. claude-code receives it as ``CLAUDE_CODE_MAX_OUTPUT_TOKENS``
+#: (``claude_code._cli_env``); openai-agent sends it as the request's ``max_tokens``.
+MAX_OUTPUT_TOKENS_ENV = "VEXA_AGENT_MAX_OUTPUT_TOKENS"
+
+
+def max_output_tokens() -> Optional[int]:
+    """The deployment's output cap, or None when it set none. A value that is not a positive whole
+    number is ignored — loudly, in the worker's log — rather than sent to a provider that would
+    refuse every turn over it."""
+    raw = (os.environ.get(MAX_OUTPUT_TOKENS_ENV) or "").strip()
+    if not raw:
+        return None
+    try:
+        cap = int(raw)
+    except ValueError:
+        cap = 0
+    if cap <= 0:
+        _log.warning(
+            "%s=%r is not a positive whole number; no output cap is applied", MAX_OUTPUT_TOKENS_ENV, raw)
+        return None
+    return cap
+
+
+# ── the model's tools run as a user of their own ──────────────────────────────────────────────
+#
+# A harness CLI runs the model's tools (Bash above all) as its own children. Run as the worker's
+# user, those tools could read the worker's environment through /proc — its Redis credential, its
+# identity token, its input-stream key — and write the worker's own code. So when the worker can
+# switch users (it runs as root: docker, and Kubernetes without an assigned UID), every harness CLI
+# runs as TOOLS_USER instead, and the worker hands that user exactly what a turn needs: its writable
+# workspaces and the harness's own state under HOME, by group (owners stay as they are, so the
+# worker's and agent-api's git keep recognising their repositories). A worker that already runs as
+# someone else (Lite's per-tenant UID, OpenShift's assigned UID) cannot switch and does not try;
+# there the worker makes itself non-dumpable (``harden_worker_process``), which keeps a same-UID
+# child out of its /proc entries all the same.
+
+#: The unprivileged user the model's tools run as (created in core/agent/worker/Dockerfile).
+TOOLS_USER = "vexa-tools"
+
+
+
+class ToolsAccessRefused(OSError):
+    """A path a turn needs could not be handed to :data:`TOOLS_USER`. The turn does not run: its
+    harness never falls back to running the model's tools as this (root) process, which could read
+    the worker's environment and write its code. ``path`` is the path that failed, ``root`` the
+    granted path it sits under, ``cause`` the operating system's words for the failure."""
+
+    def __init__(self, path: str, root: str, cause: str) -> None:
+        super().__init__(f"cannot hand {path} to the tools user: {cause}")
+        self.path, self.root, self.cause = path, root, cause
+
+
+def tools_identity() -> Optional[tuple[int, int]]:
+    """``(uid, gid)`` of :data:`TOOLS_USER` when this process can run a harness as that user: it runs
+    as root and the image has the user. None otherwise."""
+    if not hasattr(os, "geteuid") or os.geteuid() != 0:
+        return None
+    try:
+        entry = pwd.getpwnam(TOOLS_USER)
+    except KeyError:
+        return None
+    return entry.pw_uid, entry.pw_gid
+
+
+def harness_identity_kwargs() -> dict:
+    """``subprocess.Popen`` keyword arguments that start a harness as :data:`TOOLS_USER` (no other
+    groups; files it makes are group-writable), or ``{}`` when this process cannot switch."""
+    ident = tools_identity()
+    if ident is None:
+        return {}
+    uid, gid = ident
+    return {"user": uid, "group": gid, "extra_groups": [], "umask": 0o002}
+
+
+# ── changing ownership and modes under a work tree, by descriptor ─────────────────────────────────
+# The trees below are written by the tools user, and these run as root at the start of every turn,
+# while a process the tools user left running could still be changing them. So nothing here acts by
+# name: the walk is ``os.fwalk`` (descriptor-based, no link followed), each entry is opened without
+# following a link (``workspace_paths`` flags) and kept only if it is still the entry the walk saw,
+# and the change is made on that descriptor (``fchown``/``fchmod``). A name swapped for a link after
+# the walk listed it is skipped, never followed — ``chmod`` by name would have changed whatever the
+# link pointed at.
+_EROFS = 30
+
+
+def _open_entry(dir_fd: int, name: str) -> "tuple[int, os.stat_result] | None":
+    """``(descriptor, stat)`` for the entry ``name`` under ``dir_fd``, opened without following a
+    link; None when it is a link, is gone, cannot be opened (a socket) or changed between the look and
+    the open."""
+    try:
+        seen = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+    except OSError:
+        return None
+    if stat.S_ISLNK(seen.st_mode):
+        return None
+    flags = wpaths.DIR_NOFOLLOW if stat.S_ISDIR(seen.st_mode) else wpaths.FILE_NOFOLLOW
+    try:
+        fd = os.open(name, flags, dir_fd=dir_fd)
+    except OSError:
+        return None
+    st = os.fstat(fd)
+    if (st.st_dev, st.st_ino) != (seen.st_dev, seen.st_ino):
+        os.close(fd)
+        return None
+    return fd, st
+
+
+def _walk_entries(top_fd: int, *, skip_git: "Callable[[int, str], None] | None" = None):
+    """``(dir_fd, name)`` for every entry below the folder ``top_fd``, by descriptor, entering no
+    link. With ``skip_git``, a ``.git`` folder is not walked: ``skip_git(dir_fd, label)`` is called
+    for it instead, and each folder holding one is yielded as ``(dir_fd, None)`` once."""
+    for dirpath, dirnames, filenames, dfd in os.fwalk(".", dir_fd=top_fd, follow_symlinks=False):
+        if skip_git is not None:
+            if ".git" in dirnames:
+                dirnames.remove(".git")
+                skip_git(dfd, os.path.normpath(os.path.join(dirpath, ".git")))
+            try:
+                os.stat(".git", dir_fd=dfd, follow_symlinks=False)
+                yield dfd, None, dirpath
+            except OSError:
+                pass
+        for name in dirnames:
+            yield dfd, name, dirpath
+        for name in filenames:
+            if skip_git is not None and name == ".git":
+                continue                             # a `gitdir:` file is git's, not the turn's
+            yield dfd, name, dirpath
+
+
+def _change(fd: int, st: os.stat_result, *, uid: int = -1, gid: int = -1, mode: "int | None" = None) -> None:
+    if (uid != -1 and st.st_uid != uid) or (gid != -1 and st.st_gid != gid):
+        os.fchown(fd, uid, gid)
+    if mode is not None and stat.S_IMODE(st.st_mode) != mode:
+        os.fchmod(fd, mode)
+
+
+def _keep_git_private(gitdir: str, tools_uid: int) -> None:
+    """A repository's own directory is never the tools user's to write: the worker's write-back and
+    agent-api run git there, and git trusts what it finds in it. Everything under ``gitdir`` loses
+    group and other write, and anything the tools user came to own (an earlier turn's grant, a
+    ``git`` it ran) is handed back to the owner of ``gitdir``. A ``gitdir`` the tools user owns
+    itself is left alone and logged — it is not the platform's repository, and the write-back's git
+    refuses it (``gitexec``: owned by neither this process nor the owner of the work tree)."""
+    try:
+        fd = os.open(gitdir, wpaths.DIR_NOFOLLOW)
+    except OSError:
+        return
+    try:
+        _keep_git_private_fd(fd, gitdir, tools_uid)
+    finally:
+        os.close(fd)
+
+
+def _keep_git_private_fd(git_fd: int, label: str, tools_uid: int) -> None:
+    """:func:`_keep_git_private` on the open repository directory ``git_fd``."""
+    top = os.fstat(git_fd)
+    if top.st_uid == tools_uid and top.st_uid != os.geteuid():
+        _log.error("%s is owned by the tools user, not the platform — left as it is; git refuses it",
+                   label)
+        return
+    owner = top.st_uid
+
+    def close(fd: int, st: os.stat_result, where: str) -> None:
+        try:
+            _change(fd, st, uid=owner if (st.st_uid == tools_uid and tools_uid != owner) else -1,
+                    mode=(stat.S_IMODE(st.st_mode) & ~(stat.S_IWGRP | stat.S_IWOTH)))
+        except OSError as exc:
+            if getattr(exc, "errno", None) != _EROFS:  # nobody can write it anyway
+                _log.error("cannot keep %s from the tools user: %s", where, exc)
+
+    close(git_fd, top, label)
+    for dfd, name, dirpath in _walk_entries(git_fd):
+        opened = _open_entry(dfd, name)
+        if opened is None:
+            continue
+        fd, st = opened
+        try:
+            close(fd, st, os.path.join(label, dirpath, name))
+        finally:
+            os.close(fd)
+
+
+def grant_tools_access(paths: Iterable["str | Path"]) -> bool:
+    """Make every directory and file under ``paths`` usable by :data:`TOOLS_USER`'s group — group
+    set to it, group read/write (and search on directories, which also get setgid so new entries
+    keep the group). Symlinks are not followed and read-only mounts are left as they are.
+
+    A repository's ``.git`` is the exception, wherever it sits under ``paths``: it is not granted,
+    and anything an earlier grant opened in it is closed again (``_keep_git_private``). The model's
+    tools may read history, never write the repository the worker's and agent-api's git trust.
+
+    A directory holding a ``.git`` — a work-tree root — also gets the sticky bit: its group can
+    still create entries and write the ones it may write, but can rename or remove only entries it
+    owns. Without it, write access to the work-tree root is enough to rename a ``.git`` the tools
+    user does not own and put another directory in its place.
+
+    True when there is nothing to do or everything was granted. When a path cannot be granted,
+    :class:`ToolsAccessRefused` is raised naming the first one, after the walk (the rest are still
+    granted, so a retry has less to do): the caller refuses the turn. Nothing here ever stops the
+    worker switching users — a harness never runs the model's tools as root because a grant failed."""
+    ident = tools_identity()
+    if ident is None:
+        return True
+    tools_uid, gid = ident
+    failed: list[tuple[str, str, str]] = []           # (path, granted root, cause)
+
+    def grant(fd: int, st: os.stat_result, where: str, root: str, sticky: bool = False) -> None:
+        is_dir = stat.S_ISDIR(st.st_mode)
+        want = stat.S_IRGRP | stat.S_IWGRP | ((stat.S_IXGRP | stat.S_ISGID) if is_dir else 0)
+        if sticky:
+            want |= stat.S_ISVTX
+        mode = stat.S_IMODE(st.st_mode)
+        try:
+            _change(fd, st, gid=gid, mode=mode | want)
+        except OSError as exc:
+            if getattr(exc, "errno", None) == _EROFS:  # a read-only mount, read access suffices
+                return
+            cause = os.strerror(exc.errno) if getattr(exc, "errno", None) else (str(exc) or type(exc).__name__)
+            failed.append((where, root, cause))
+            _log.error("cannot hand %s to the tools user: %s", where, exc)
+
+    def keep_git(dfd: int, label: str) -> None:
+        try:
+            git_fd = os.open(".git", wpaths.DIR_NOFOLLOW, dir_fd=dfd)
+        except OSError:
+            return
+        try:
+            _keep_git_private_fd(git_fd, label, tools_uid)
+        finally:
+            os.close(git_fd)
+
+    for root in paths:
+        root = str(root)
+        if not root:
+            continue
+        try:
+            top = os.open(root, wpaths.DIR_NOFOLLOW)       # a link or a missing root: nothing to do
+        except OSError:
+            continue
+        try:
+            grant(top, os.fstat(top), root, root)
+            for dfd, name, dirpath in _walk_entries(
+                    top, skip_git=lambda d, label: keep_git(d, os.path.join(root, label))):
+                if name is None:                         # a .git here: nobody else's entry is renamed
+                    grant(dfd, os.fstat(dfd), os.path.normpath(os.path.join(root, dirpath)), root,
+                          sticky=True)
+                    continue
+                opened = _open_entry(dfd, name)
+                if opened is None:
+                    continue
+                fd, st = opened
+                try:
+                    grant(fd, st, os.path.normpath(os.path.join(root, dirpath, name)), root)
+                finally:
+                    os.close(fd)
+        finally:
+            os.close(top)
+    if failed:
+        _log.error("the model's tools could not be given what this turn needs (%d path(s)) — the "
+                   "turn is refused; its harness never runs them as this process", len(failed))
+        raise ToolsAccessRefused(*failed[0])
+    return True
+
+
+def show_tools(paths: Iterable["str | Path"]) -> bool:
+    """Let :data:`TOOLS_USER` read, never write, everything under ``paths``: group set to it, group
+    read (and search on directories); group and other write removed, and setgid cleared so nothing
+    created there later is the tools group's by inheritance. Symlinks are not followed (a staged
+    platform skill is a link into the image and stays as it is) and read-only mounts are left alone.
+
+    For what the harness reads but the model's tools must not change: the staged skills
+    (``~/.vexa-skills``) and the CLI's user scope (``~/.claude``), whose ``skills`` link names the
+    turn's stage. Granted for writing, either would let a turn rewrite or re-point the skills a
+    later turn loads. The CLI's transcripts still reach the chat root through ``~/.claude/projects``
+    (a link into a granted workspace). Returns False when a path could not be restricted (logged);
+    nothing to do — this process cannot switch users — is True."""
+    ident = tools_identity()
+    if ident is None:
+        return True
+    _tools_uid, gid = ident
+    ok = True
+
+    def show(fd: int, st: os.stat_result, where: str) -> None:
+        nonlocal ok
+        is_dir = stat.S_ISDIR(st.st_mode)
+        mode = stat.S_IMODE(st.st_mode)
+        want = (mode | stat.S_IRGRP | (stat.S_IXGRP if is_dir else 0)) \
+            & ~(stat.S_IWGRP | stat.S_IWOTH | stat.S_ISGID)
+        try:
+            _change(fd, st, gid=gid, mode=want)
+        except OSError as exc:
+            if getattr(exc, "errno", None) == _EROFS:  # nobody can write it anyway
+                return
+            ok = False
+            _log.error("cannot show %s to the tools user read-only: %s", where, exc)
+
+    for root in paths:
+        root = str(root)
+        if not root:
+            continue
+        try:
+            top = os.open(root, wpaths.DIR_NOFOLLOW)
+        except OSError:
+            continue
+        try:
+            show(top, os.fstat(top), root)
+            for dfd, name, dirpath in _walk_entries(top):
+                opened = _open_entry(dfd, name)
+                if opened is None:
+                    continue
+                fd, st = opened
+                try:
+                    show(fd, st, os.path.normpath(os.path.join(root, dirpath, name)))
+                finally:
+                    os.close(fd)
+        finally:
+            os.close(top)
+    return ok
+
+
+def hand_to_tools(path: "str | Path") -> None:
+    """Give one file the worker wrote for the harness (its MCP attachment) to :data:`TOOLS_USER`,
+    keeping its mode. No-op when this process cannot switch users. The chown does NOT follow a link:
+    the caller writes this file (a Bearer credential) NOFOLLOW, but the tools user could race a
+    symlink in at the name before this runs — chowning the link itself is harmless, chowning its
+    target would hand a root-owned file away."""
+    ident = tools_identity()
+    if ident is None:
+        return
+    try:
+        os.chown(path, *ident, follow_symlinks=False)
+    except OSError as exc:
+        _log.error("cannot hand %s to the tools user: %s", path, exc)
+
+
+def hand_fd_to_tools(fd: int) -> None:
+    """Give an OPEN file to :data:`TOOLS_USER` through its descriptor (``fchown``) — for a file the
+    worker writes nofollow and renames into place (``workspace_paths.write_text_inside`` passes the
+    new file's fd here before the rename), so the credential is never visible at its name owned by
+    anyone but the user that reads it, and no path is resolved at all. No-op when this process
+    cannot switch users."""
+    ident = tools_identity()
+    if ident is None:
+        return
+    try:
+        os.fchown(fd, *ident)
+    except OSError as exc:
+        _log.error("cannot hand an open file to the tools user: %s", exc)
+
+
+def harden_worker_process() -> None:
+    """Make this process non-dumpable: a process of the same user without CAP_SYS_PTRACE (the
+    model's tools, wherever they could not be given a user of their own) can then not read its
+    /proc environment or memory. Linux only; a no-op elsewhere."""
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        PR_SET_DUMPABLE = 4
+        if libc.prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) != 0:
+            _log.warning("prctl(PR_SET_DUMPABLE, 0) failed: errno %d", ctypes.get_errno())
+    except (OSError, AttributeError):
+        pass
 
 
 # A raw process runner: given an argv + a cwd, yield the process's stdout lines. Injected into CLI
@@ -124,15 +502,12 @@ class HarnessPort(Protocol):
 
 def _git(work: Path, *args: str, env: Optional[dict] = None) -> str:
     """Local git runner (trimmed stdout). Deliberately NOT shared.adapters._git — this module owns
-    zero product imports so it stays liftable. Scrubbed env: the turn commit must land on ``work``,
-    never on a repo a hook exported via GIT_DIR. ``env`` (optional) layers extra vars (the principal
-    ``GIT_AUTHOR_*``) over the scrubbed base."""
-    run_env = scrubbed_git_env()
-    if env:
-        run_env.update(env)
-    proc = subprocess.run(["git", *args], cwd=work, capture_output=True, text=True, check=True,
-                          env=run_env)
-    return proc.stdout.strip()
+    zero product imports so it stays liftable. Runs through ``llm.gitexec`` (the vendored twin of
+    ``shared.gitexec``): the write-back runs as the worker, in a repository the model's tools could
+    write, so nothing the repository configures may run here — no hook, no fsmonitor, no driver —
+    and the commit lands on ``work``, never on a repository a hook exported via GIT_DIR. ``env``
+    (optional) layers extra vars (the principal ``GIT_AUTHOR_*``) over the scrubbed base."""
+    return run_git(work, *args, env=env, check=True).stdout.strip()
 
 
 
@@ -152,8 +527,8 @@ _POLICY_DIR = "policy"
 # Founder, 2026-09-07, opening an invite the agent had minted a minute earlier: *"This invite link is
 # not valid. Ask whoever sent it for a new one."* The workspace's own history said why, twice an hour:
 #
-#     8dfff9b 19:28:08  policy: mint invite 41cdb3b6a5841ffc (contributor) for oenb-b5e60c
-#     1a452f9 19:28:09  oenb-b5e60c: policy/invites.json — removed
+#     8dfff9b 19:28:08  policy: mint invite 41cdb3b6a5841ffc (contributor) for bank-b5e60c
+#     1a452f9 19:28:09  bank-b5e60c: policy/invites.json — removed
 #
 # The mint is agent-api, writing its own store during the turn. The removal one second later is THIS
 # file: the guard captured HEAD before the turn, rebuilt the whole `policy/` subtree from it after,
@@ -265,14 +640,22 @@ def _current_policy_entries(work: Path) -> set[str]:
     except subprocess.CalledProcessError:
         pass
     # And whatever is physically on disk (catches a symlinked-in file or a dir the index doesn't know).
+    # NEVER DESCEND THROUGH A SYMLINK. ``policy/`` sits in a work tree the model's tools can write, so
+    # a planted ``policy`` or ``policy/<sub>`` symlink points wherever they choose. A symlink is
+    # recorded as itself — so the removal below unlinks the link, never its target — but its contents
+    # are not walked: enumerating a victim's files here would hand them to that unlink as if the turn
+    # had added them. ``os.walk(followlinks=False)`` yields a symlinked subdirectory's name in
+    # ``dirnames`` and does not recurse into it, which is exactly the record-the-link, skip-its-tree
+    # rule. (``Path.rglob`` recursed through symlinked directories on some supported interpreters.)
     policy_root = work / _POLICY_DIR
-    if policy_root.exists() or policy_root.is_symlink():
-        if policy_root.is_symlink() or not policy_root.is_dir():
-            entries.add(_POLICY_DIR)
-        else:
-            for child in policy_root.rglob("*"):
-                if child.is_file() or child.is_symlink():
-                    entries.add(child.relative_to(work).as_posix())
+    if policy_root.is_symlink() or (policy_root.exists() and not policy_root.is_dir()):
+        entries.add(_POLICY_DIR)
+    elif policy_root.is_dir():
+        for dirpath, dirnames, filenames in os.walk(policy_root, followlinks=False):
+            linked = [d for d in dirnames if os.path.islink(os.path.join(dirpath, d))]
+            for name in (*filenames, *linked):
+                entries.add(Path(dirpath, name).relative_to(work).as_posix())
+            dirnames[:] = [d for d in dirnames if d not in linked]   # do not walk a symlinked dir
     return entries
 
 
@@ -310,6 +693,16 @@ def _policy_paths_differing_from(work: Path, anchor: str) -> set[str]:
             continue
         out |= {ln.strip() for ln in raw.splitlines() if ln.strip()}
     return out
+
+
+def _unlink_in_tree(work: Path, rel: str) -> None:
+    """Unlink ``work/<rel>`` without traversing a symlink at any directory on the way to it: each
+    component is opened ``O_NOFOLLOW`` from a descriptor on its parent, and the leaf is removed
+    through that parent's fd. A planted ``policy/<sub>`` whose ``<sub>`` is a link is therefore
+    never followed — the link itself is what ``added`` names and removes, not a file in whatever it
+    points at. A directory component that is a link (or any resolution error) simply stops the walk;
+    the top-level ``policy`` symlink is handled by the leaf branch below."""
+    wpaths.unlink_inside(work, rel)
 
 
 def _revert_policy_writes(work: Path, base_sha: Optional[str]) -> list[str]:
@@ -355,12 +748,7 @@ def _revert_policy_writes(work: Path, base_sha: Optional[str]) -> list[str]:
             _git(work, "rm", "-r", "-f", "--cached", "--ignore-unmatch", "--", path)
         except subprocess.CalledProcessError:
             pass
-        target = work / path
-        try:
-            if target.is_symlink() or target.is_file():
-                target.unlink(missing_ok=True)
-        except OSError:
-            pass
+        _unlink_in_tree(work, path)
 
     # 2) Restore every edited baseline path from the anchor (checkout writes index + working tree).
     for path in sorted(changed):
@@ -470,7 +858,7 @@ def _commit_mount(work: Path, *, message: str, author: Optional[tuple[str, str]]
     # NEVER RECORD A DELETION OF A `policy/` PATH THIS TURN DID NOT MAKE (Vexa-ai/vexa#1645).
     # `git add -A` stages the tree AS IT FINDS IT, so anything another writer's file happened not to
     # be at that instant is committed as a deletion by whichever turn runs next — which is exactly how
-    # `oenb-b5e60c: policy/invites.json — removed` came to sit one second after every mint. The policy
+    # `bank-b5e60c: policy/invites.json — removed` came to sit one second after every mint. The policy
     # guard is the only thing here entitled to remove a `policy/` path and it says which ones it did;
     # every other staged deletion under `policy/` is put back, in the index and on disk, so the commit
     # carries the platform's tree and the next turn does not re-stage the same removal.

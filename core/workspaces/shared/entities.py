@@ -23,11 +23,12 @@ guard exists to refuse. ``aliases``/``created``/``sources`` are added on top; no
 from __future__ import annotations
 
 import datetime as _dt
-import os
 import re
-import subprocess
 import unicodedata
 from pathlib import Path
+
+from workspaces.shared.gitexec import run_git
+from workspaces.shared import workspace_paths as _wp
 
 # The five kinds decision 24 names. A kind outside this set is refused rather than guessed into a new
 # directory: a directory nothing indexes is a page nobody will ever find again.
@@ -75,6 +76,31 @@ class EntityMalformed(EntityRefused):
 
     It SUBCLASSES `EntityRefused` so that every caller which already catches a refusal keeps
     working unchanged; the endpoint, which wants the finer answer, catches this one first."""
+
+
+def entity_pages(root, kind: str):
+    """``(filename, text, mtime)`` for each ``*.md`` page directly in ``kg/entities/<kind>``, reached
+    without following a link. Yields nothing when ``kg``, ``entities`` or ``<kind>`` is a symlink
+    (the whole directory is somebody else's then), and skips a page that is a link or not a regular
+    file — so a planted link can never fold another tenant's page into this workspace's name index,
+    ``INDEX.md``, the desk README or the dated-pages view. ``index.md`` (the generated listing) is
+    skipped. Text is decoded with errors replaced, as every reader of a page here always did."""
+    rel_dir = f"{ENTITIES_DIR}/{kind}"
+    for name in _wp.list_files_inside(root, rel_dir, suffix=".md"):
+        if name == "index.md":
+            continue
+        rel = f"{rel_dir}/{name}"
+        data = _wp.read_bytes_inside(root, rel)
+        if data is None:
+            continue
+        st = _wp.stat_inside(root, rel)
+        yield name, data.decode("utf-8", errors="replace"), (st.st_mtime if st else 0.0)
+
+
+def _kind_entries(root, kind: str):
+    """``(filename, text)`` — :func:`entity_pages` without the mtime."""
+    for name, text, _mtime in entity_pages(root, kind):
+        yield name, text
 
 
 def slugify(name: str) -> str:
@@ -194,7 +220,7 @@ def wikilinks(texts) -> list[str]:
 
 # ── a wikilink can be a REFERENCE, not a name (Vexa-ai/vexa#1620) ────────────────────────────────
 #
-# ⚠ MEASURED 2026-09-06, fr_e96aa977edd14de8. A research job wrote the OeNB org chart to
+# ⚠ MEASURED 2026-09-06, fr_e96aa977edd14de8. A research job wrote the Example Bank org chart to
 # `structure.md` and linked it from every person page it produced as `[[structure]]`. The write-back
 # read the link as a person nobody had paged and asked for a page called "Structure": every wikilink
 # was a person/company chip, and a link to a DOCUMENT is not that.
@@ -235,23 +261,23 @@ def workspace_docs(root) -> set:
     workspace and not only of the entity tree. Bounded on purpose — hidden and vendored directories
     are pruned and the walk stops at ``_DOC_LIMIT`` files — because this runs on every entity write,
     and a workspace with a repository checked into it must not turn one upsert into a tree scan."""
-    base = Path(root)
     out: set = set()
-    if not base.is_dir():
-        return out
-    entities = str(base / ENTITIES_DIR)
+
+    def skip(rel: str) -> bool:
+        name = rel.rsplit("/", 1)[-1]
+        return name.startswith(".") or name in _DOC_SKIP_DIRS or rel == ENTITIES_DIR
+
     seen = 0
-    for dirpath, dirnames, filenames in os.walk(base):
-        dirnames[:] = [d for d in dirnames if not d.startswith(".") and d not in _DOC_SKIP_DIRS]
-        if dirpath == entities or dirpath.startswith(entities + os.sep):
+    # by descriptor, following no link (``workspace_paths.walk_files_inside``): a linked folder is not
+    # entered and a linked page is not a page of this workspace
+    for rel in _wp.walk_files_inside(root, skip_dir=skip):
+        f = rel.rsplit("/", 1)[-1]
+        if not f.endswith(".md"):
             continue
-        for f in filenames:
-            if not f.endswith(".md"):
-                continue
-            seen += 1
-            if seen > _DOC_LIMIT:
-                return out
-            out.add(slugify(f[:-3]))
+        seen += 1
+        if seen > _DOC_LIMIT:
+            return out
+        out.add(slugify(f[:-3]))
     out.discard("")
     return out
 
@@ -329,7 +355,7 @@ def _today(today: str | None) -> str:
 # ── cross-workspace links (PRD decision 26.3) ────────────────────────────────────────────────────
 #
 # The agent mounts several workspaces at once and writes about a person who has a page in one of the
-# others. Written as `[[Olga Avramenko]]` that link resolves by TITLE, in whichever mount the reader
+# others. Written as `[[Nora Quill]]` that link resolves by TITLE, in whichever mount the reader
 # searches first, and it dies the moment either workspace is renamed. Written as
 # `[[ws:<workspace-id>/<entity-id>]]` it is two ids, and ids do not move.
 #
@@ -650,6 +676,30 @@ class Card:
             return False
         i = self.place(name)
         lines = self.blocks[i][1]
+        if name == 'Connected':
+            wanted = _connection_bullet(line)
+            if wanted:
+                target, relation = wanted
+                matches = [(j, _connection_bullet(old)) for j, old in enumerate(lines[1:], 1)]
+                matches = [(j, edge) for j, edge in matches if edge and slugify(edge[0]) == slugify(target)]
+                if not relation and any(edge[1] for _, edge in matches):
+                    empty = [j for j, edge in matches if not edge[1]]
+                    for j in reversed(empty):
+                        del lines[j]
+                    return bool(empty)
+                # A relationless duplicate adds no information. Keep distinct stated relations.
+                same = [(j, edge) for j, edge in matches if not edge[1] or not relation or edge[1].casefold() == relation.casefold()]
+                if same:
+                    chosen = next((edge for _, edge in same if edge[1]), (target, relation))
+                    if relation:
+                        chosen = (target, relation)
+                    canonical = _chip(*chosen)
+                    first = same[0][0]
+                    changed = lines[first] != canonical or len(same) > 1
+                    lines[first] = canonical
+                    for j, _ in reversed(same[1:]):
+                        del lines[j]
+                    return changed
         if self._has(lines[1:], line):
             return False
         _append_in_block(lines, line if line.startswith("-") else f"- {line}")
@@ -821,14 +871,36 @@ def find_entity(root, name: str) -> "tuple[str, str] | None":
     slug = slugify(name)
     if not slug:
         return None
-    base = Path(root) / ENTITIES_DIR
     for kind in KINDS:
-        if (base / kind / f"{slug}.md").exists():
-            return kind, f"{ENTITIES_DIR}/{kind}/{slug}.md"
+        rel = f"{ENTITIES_DIR}/{kind}/{slug}.md"
+        if _wp.read_text_inside(root, rel) is not None:   # nofollow: a linked page is not "here"
+            return kind, rel
     return None
 
 
+def connection_name(value: str) -> str:
+    """Accept one entity, with optional wiki syntax; never invent identities from prose."""
+    name = str(value).strip()
+    while name.startswith('[[') and name.endswith(']]'):
+        name = name[2:-2].strip()
+    name = name.split('|', 1)[0].strip()
+    if not name or any(c in name for c in '[];\n\r'):
+        raise EntityMalformed('Connection name must identify one page. Pass separate people as separate list entries, not a combined name.')
+    return name
+
+
+def _connection_bullet(line):
+    match = re.fullmatch(r'\s*[-*]\s+(\[\[.*\]\])(?:\s+—\s+(.+))?\s*', line)
+    if not match:
+        return None
+    try:
+        return connection_name(match[1]), (match[2] or '').strip()
+    except EntityMalformed:
+        return None
+
+
 def _chip(name: str, relation: str) -> str:
+    name = connection_name(name)
     rel = (relation or "").strip()
     return f"- [[{name}]] — {rel}" if rel else f"- [[{name}]]"
 
@@ -852,8 +924,9 @@ def plan_link_back(root, target_name: str, from_name: str, relation: str) -> "tu
     if not hit:
         return None
     kind, rel = hit
-    path = Path(root) / rel
-    text = path.read_text(encoding="utf-8", errors="replace")
+    text = _wp.read_text_inside(root, rel)   # nofollow: never read a neighbour page through a link
+    if text is None:
+        return None
     fm, body = split_frontmatter(text)
     card = parse_card(body)
     if not card.title:
@@ -869,7 +942,7 @@ def link_back(root, target_name: str, from_name: str, relation: str) -> "str | N
     if not plan:
         return None
     rel, text = plan
-    (Path(root) / rel).write_text(text, encoding="utf-8")
+    _wp.write_text_inside(root, rel, text)    # nofollow: never into another tree through a link
     return rel
 
 
@@ -933,6 +1006,7 @@ def _connection_list(connections) -> list[dict]:
             if not name:
                 raise EntityMalformed(f"{where} is empty — {_CONNECTION_SHAPE}")
             entry = {"name": name, "relation": "", "reverse": "", "explicit_reverse": False}
+        entry["name"] = connection_name(entry["name"])
         if not slugify(entry["name"]):
             raise EntityMalformed(
                 f"{where} names {entry['name']!r}, which leaves nothing to file it under — "
@@ -1026,13 +1100,17 @@ def upsert_entity(root, kind: str, name: str, facts=(), source: str = "", *,
 
     rel = entity_rel_path(kind, name)
     path = root / rel
-    existed = path.exists()
-    raw = path.read_text(encoding="utf-8", errors="replace") if existed else ""
-    fm, body = split_frontmatter(raw)
+    # The page is read NOFOLLOW: a link planted at `kg`, `kg/entities`, the kind dir or the page
+    # itself is not followed, so another tenant's page cannot be read into this one and the write
+    # below replaces the link rather than writing through it. A redirected page reads as absent and
+    # is recreated here, in this workspace.
+    raw = _wp.read_text_inside(root, rel)
+    existed = raw is not None
+    fm, body = split_frontmatter(raw or "")
 
     # THE REWRITE HAPPENS BEFORE IDEMPOTENCY IS TESTED, and the order is load-bearing: a fact
-    # re-stated next turn arrives as `[[Olga Avramenko]]` and is already stored as
-    # `[[ws:k4m…/olga-avramenko]]`, so comparing the raw forms would append it a second time.
+    # re-stated next turn arrives as `[[Nora Quill]]` and is already stored as
+    # `[[ws:k4m…/nora-quill]]`, so comparing the raw forms would append it a second time.
     field_lines = {f: _as_lines(v) for f, v in fields.items()}
     flat = list(facts) + [v for vals in field_lines.values() for v in vals] + open_questions
     linked = wikilinks(flat)                        # the names as the caller wrote them
@@ -1099,7 +1177,9 @@ def upsert_entity(root, kind: str, name: str, facts=(), source: str = "", *,
         if field in edges:
             here, there = edges[field]
             for value in values:
-                for target_name in (wikilinks([value]) or [value]):
+                for target_name in ([connection_name(value)] if value.strip().startswith('[[') and value.strip().endswith(']]')
+                                    and value.count(']]') == value.count('[[') and ']]' not in value.strip('[]')
+                                    else (wikilinks([value]) or [value])):
                     if card.add("Connected", _chip(target_name, here)):
                         written += 1
                     connections.append({"name": target_name, "relation": here, "reverse": there,
@@ -1138,7 +1218,6 @@ def upsert_entity(root, kind: str, name: str, facts=(), source: str = "", *,
         plan = plan_link_back(root, target_name, card.title, there)
         if plan:
             back_plans.append(plan)
-    back_links = [p for p, _text in back_plans]
 
     # A pending back-link COUNTS AS A CHANGE. It did not before, and the consequence was quiet: the
     # chips were written and then reported under `changed: False`, so the endpoint — which commits
@@ -1152,10 +1231,21 @@ def upsert_entity(root, kind: str, name: str, facts=(), source: str = "", *,
                 "migrated": False, "filed": {}}
 
     drop_empty_tail(card)          # a `## Timeline` that never had an entry helps nobody
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(render_card(card, kind, fm), encoding="utf-8")
+    # NOFOLLOW writes: a link at any directory on the path refuses; a link at the page is replaced.
+    # The entity lands in THIS workspace, never through a link into another's tree. A refused page
+    # (a KG directory that is a planted link, not a plain folder) is a clean EntityRefused, not a
+    # 500; a refused back-link is skipped so one hostile neighbour never fails the whole upsert.
+    try:
+        _wp.write_text_inside(root, rel, render_card(card, kind, fm))
+    except _wp.PathRefused as exc:
+        raise EntityRefused(f"{rel} is not a plain path in this workspace — {exc}") from exc
+    back_links = []
     for back_rel, back_text in back_plans:
-        (root / back_rel).write_text(back_text, encoding="utf-8")
+        try:
+            _wp.write_text_inside(root, back_rel, back_text)
+        except _wp.PathRefused:
+            continue
+        back_links.append(back_rel)
     return {"path": rel, "created": not existed, "changed": True, "facts_written": written,
             "already_recorded": max(0, len(facts) - sum(filed.values())),
             "links_resolved": resolved, "links_missing": unresolved,
@@ -1177,12 +1267,12 @@ def upsert_entity(root, kind: str, name: str, facts=(), source: str = "", *,
 # than keeping a second regex. Two spellings of "what counts as a name" is how a scorer ends up
 # measuring something the product never looked for.
 
-# A capitalised RUN of two or more words — "Sony Pictures Imageworks", "Cottalango Leon". Single
+# A capitalised RUN of two or more words — "Brightwater Picture Studios", "Robin Vale". Single
 # capitalised words are deliberately not counted: at the start of a sentence every word is one, and
 # a rule that fires on "The" and "Monday" is about English, not about the knowledge graph.
 #
-# `and` and `the` are NOT intra-name particles, and the first version had them: it read "Blue Light
-# Card and Kaar Tech" as ONE name, undercounting by exactly the amount a note listing several dead
+# `and` and `the` are NOT intra-name particles, and the first version had them: it read "Fernhill Loyalty
+# Card and Northwind Labs" as ONE name, undercounting by exactly the amount a note listing several dead
 # names does.
 #
 # THE CONNECTOR IS `[ \t]+`, NOT `\s+` (F202/F203/F204/F205). `\s` matches a newline, so the old
@@ -1295,12 +1385,9 @@ def known_slugs(root) -> set:
     """Every entity slug this workspace already holds — read from `kg/entities/`, never from the
     generated index, because the index can be one write behind and a stale index means a duplicate
     page."""
-    base = Path(root) / ENTITIES_DIR
     out = set()
     for kind in KINDS:
-        d = base / kind
-        if d.is_dir():
-            out |= {f.stem for f in d.glob("*.md") if f.name != "index.md"}
+        out |= {name[:-3] for name, _text in _kind_entries(root, kind)}
     return out
 
 
@@ -1315,18 +1402,9 @@ def known_names(root) -> set:
     called it. Reading the pages costs one small read each, on the same tree ``index_rows`` already
     walks; the alternative costs a duplicate page nobody merges."""
     out = set(known_slugs(root))
-    base = Path(root) / ENTITIES_DIR
     for kind in KINDS:
-        d = base / kind
-        if not d.is_dir():
-            continue
-        for f in sorted(d.glob("*.md")):
-            if f.name == "index.md":
-                continue
-            try:
-                fm, _body = split_frontmatter(f.read_text(encoding="utf-8", errors="replace"))
-            except OSError:
-                continue
+        for _name, text in _kind_entries(root, kind):
+            fm, _body = split_frontmatter(text)
             for value in [_fm_get(fm, "title")] + _list_field(_fm_get(fm, "aliases")):
                 if value:
                     out.add(slugify(value))
@@ -1342,7 +1420,7 @@ def _tokens(slug: str) -> list:
 def _contains_aligned(big: str, small: str) -> bool:
     """Is ``small`` inside ``big``, meeting one of its edges at a token boundary?
 
-    "nb-governing-board" sits inside "oenb-governing-board": the dropped "Oe" cuts the first token
+    "bank-governing-board" sits inside "examplebank-governing-board": the dropped "Example" cuts the first token
     mid-word, so a token test cannot see it and a prefix test cannot either — but the two slugs END
     together. Requiring ONE aligned edge is what separates that from "ana-lee" inside "diana-leeds",
     where the overlap meets no boundary at either end and the two names are simply different
@@ -1359,13 +1437,13 @@ def _shadows(slug: str, known: str) -> bool:
     """Does a page keyed ``known`` already cover the name whose slug is ``slug``?
 
     ⚠ MEASURED 2026-09-06, fr_e805ab2ab6675bff (Vexa-ai/vexa#1620): the phase offered
-    "NB Governing Board" while `kg/entities/project/oenb-governing-board.md` sat on the desk. The
-    "Oe" was dropped somewhere upstream, and every test this function had — exact slug, then a
+    "Bank Governing Board" while `kg/entities/project/examplebank-governing-board.md` sat on the desk. The
+    "Example" was dropped somewhere upstream, and every test this function had — exact slug, then a
     prefix — compares from the LEFT, which is precisely the end that was damaged.
 
     Three ways, in the order they cost anything: the same slug; one slug contained in the other with
     an aligned edge — a truncation ("zenith-si" in "zenith-sig", F204) or a dropped prefix
-    ("nb-governing-board" in "oenb-governing-board"); and one slug's TOKENS a subset of the other's,
+    ("bank-governing-board" in "examplebank-governing-board"); and one slug's TOKENS a subset of the other's,
     which catches the same near-duplicate when the words are reordered.
 
     BOTH CONTAINMENT TESTS NEED TWO TOKENS ON THE CONTAINED SIDE. Without that floor a one-word page
@@ -1422,13 +1500,13 @@ def missing_names(roots, texts, *, limit: int = 8) -> list[str]:
 def _drop_prefixes(names: list[str]) -> list[str]:
     """Drop a name that is a PREFIX of another one in the same list — the longer spelling wins.
 
-    "James Spad" beside "James Spadafora" is one person and one page, and truncation only ever
+    "James Holl" beside "James Hollister" is one person and one page, and truncation only ever
     produces the shorter. Deliberately a plain prefix rather than a word-boundary one: the cut that
-    matters here lands MID-WORD ("James Spadaf"), which a word-boundary test does not see.
+    matters here lands MID-WORD ("James Hollis"), which a word-boundary test does not see.
 
     The trade, stated: "John Smith" in a turn that also names "John Smithson" is dropped, and no
     lexical rule can tell those two cases apart. That costs one page not written this turn — it is
-    written the next time the name appears on its own — against a permanent `james-spadaf.md` that
+    written the next time the name appears on its own — against a permanent `james-hollis.md` that
     nothing will ever link to or clean up. Order is preserved, so the first mention still leads."""
     out = []
     for n in names:
@@ -1450,31 +1528,21 @@ def _last_updated(text: str, fallback: str) -> str:
 
 def index_rows(root) -> list[tuple[str, str, str, str]]:
     root = Path(root)
-    base = root / ENTITIES_DIR
     rows: list[tuple[str, str, str, str]] = []
     for kind in KINDS:
-        d = base / kind
-        if not d.is_dir():
-            continue
-        for f in sorted(d.glob("*.md")):
-            if f.name == "index.md":
-                continue
-            try:
-                text = f.read_text(encoding="utf-8", errors="replace")
-            except OSError:
-                continue
+        for fname, text, mtime_s in entity_pages(root, kind):
             fm, _ = split_frontmatter(text)
             # `kg/templates/` is not the only place a shape can hide: a doc whose frontmatter says
             # `template: true` is a SHAPE wherever it sits, and the kg-links rule already forbids
             # citing one. Listing it here would put it back in front of the model on every turn.
             if (_fm_get(fm, "template") or "").lower() == "true":
                 continue
-            title = _fm_get(fm, "title") or f.stem
+            title = _fm_get(fm, "title") or fname[:-3]
             try:
-                mtime = _dt.date.fromtimestamp(f.stat().st_mtime).isoformat()
-            except OSError:
+                mtime = _dt.date.fromtimestamp(mtime_s).isoformat() if mtime_s else ""
+            except (OSError, ValueError, OverflowError):
                 mtime = ""
-            rows.append((kind, title, f"{ENTITIES_DIR}/{kind}/{f.name}", _last_updated(text, mtime)))
+            rows.append((kind, title, f"{ENTITIES_DIR}/{kind}/{fname}", _last_updated(text, mtime)))
     return rows
 
 
@@ -1494,10 +1562,8 @@ def render_index(root, slug: str = "") -> str:
 
 
 def write_index(root, slug: str = "") -> str:
-    root = Path(root)
-    p = root / INDEX_PATH
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(render_index(root, slug), encoding="utf-8")
+    # NOFOLLOW: a link planted at `kg` or `kg/INDEX.md` is replaced, never written through.
+    _wp.write_text_inside(root, INDEX_PATH, render_index(root, slug))
     return INDEX_PATH
 
 
@@ -1516,12 +1582,13 @@ def commit_entity(root, paths, *, subject_path: str, created: bool,
     root = Path(root)
     if not (root / ".git").is_dir():
         return None
-    env = {**os.environ, "GIT_COMMITTER_NAME": "Vexa", "GIT_COMMITTER_EMAIL": "platform@vexa.ai"}
+    env = {"GIT_COMMITTER_NAME": "Vexa", "GIT_COMMITTER_EMAIL": "platform@vexa.ai"}
     if author:
         env["GIT_AUTHOR_NAME"], env["GIT_AUTHOR_EMAIL"] = author
 
     def git(*args):
-        return subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, env=env)
+        # workspaces.shared.gitexec: nothing the workspace's repository configures runs here
+        return run_git(root, *args, env=env)
 
     paths = [str(p) for p in paths if p]
     if not paths:

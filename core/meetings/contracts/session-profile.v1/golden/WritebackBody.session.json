@@ -1,0 +1,36 @@
+{
+  "files": [
+    {
+      "path": "Local State",
+      "data": "eyJvc19jcnlwdCI6e319"
+    },
+    {
+      "path": "Default/Cookies",
+      "data": "cm90YXRlZC1jb29raWUtZGI="
+    },
+    {
+      "path": "Default/Cookies-journal",
+      "data": ""
+    },
+    {
+      "path": "Default/Login Data For Account",
+      "data": "bG9naW4tZGF0YQ=="
+    },
+    {
+      "path": "Default/Local Storage/leveldb/CURRENT",
+      "data": "TUFOSUZFU1QtMDAwMDAxCg=="
+    },
+    {
+      "path": "Default/Local Storage/leveldb/MANIFEST-000001",
+      "data": "bWFuaWZlc3Q="
+    },
+    {
+      "path": "Default/Local Storage/leveldb/000003.log",
+      "data": "bG9jYWwtc3RvcmFnZQ=="
+    },
+    {
+      "path": "Default/Session Storage/000005.ldb",
+      "data": "c2Vzc2lvbi1zdG9yYWdl"
+    }
+  ]
+}

@@ -27,6 +27,11 @@ import cohorts
 import personas
 import rig
 
+# agent-api believes a named person only from the gateway's signature or the internal tier;
+# this harness acts for one the way flows does (`flows_steps.agent.as_person`).
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "src"))
+from flows_steps.agent import as_person  # noqa: E402
+
 AGENT_API = os.environ.get("SIM_AGENT_API", "http://127.0.0.1:18500")
 RUN = os.environ.get("SIM_RUN_DIR", os.path.expanduser("~/sim-runs/r1"))
 COHORT = os.environ.get("SIM_COHORT", cohorts.INSIDER)
@@ -189,7 +194,8 @@ def agent_turn(uid: str, session: str, prompt: str, timeout=180) -> str:
         f"{AGENT_API}/api/chat", method="POST",
         data=json.dumps({"prompt": prompt, "session": session}).encode())
     req.add_header("content-type", "application/json")
-    req.add_header("X-User-Id", str(uid))
+    for k, v in as_person(uid).items():
+        req.add_header(k, v)
     reply = ""
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:

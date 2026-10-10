@@ -21,6 +21,7 @@ import threading
 import time
 
 from worker import engine
+from tests.conftest import signed_turn
 
 
 class FakeStream:
@@ -79,13 +80,13 @@ def test_second_messages_ack_does_not_wait_on_the_first_turns_writeback(monkeypa
     # message 2 is already sitting in the in-topic when serve() starts — the boot-anchor / warm
     # delivery path this stands in for is covered by test_boot_drain.py; what matters here is only
     # that it is there to be read the instant the outer loop asks.
-    second = ("2-0", {"turn": json.dumps({"type": "message", "prompt": "and Sam Reyes?", "nonce": "n2"})})
+    second = ("2-0", signed_turn({"type": "message", "prompt": "and Sam Reyes?", "nonce": "n2"}))
     stream = FakeStream([second])
 
     server = threading.Thread(
         target=engine.serve,
         kwargs=dict(stream=stream, out_topic="out", in_topic="in", turn=turn,
-                    start={"entrypoint": {"inline": "who is Olga Avramenko?"}},
+                    start={"entrypoint": {"inline": "who is Nora Quill?"}},
                     idle_ms=50, writeback=writeback),
         daemon=True, name="serve-under-test",
     )
@@ -145,7 +146,7 @@ def test_a_worker_with_no_second_message_still_completes_its_writeback_before_ex
 
     stream = FakeStream([])  # nothing queued — the very next xread is the idle timeout
     engine.serve(stream, out_topic="out", in_topic="in", turn=turn,
-                start={"entrypoint": {"inline": "who is Olga Avramenko?"}},
+                start={"entrypoint": {"inline": "who is Nora Quill?"}},
                 idle_ms=1, writeback=writeback)
 
     assert ran_writeback.is_set(), "serve() returned before its own trailer's write-back had run"

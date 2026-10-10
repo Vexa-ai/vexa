@@ -36,6 +36,7 @@ from meeting_api.collector.db_writer import (
     segments_hash_key,
 )
 from meeting_api.collector.fakes import FakeRedisBus, InMemoryTranscriptStore
+from _segment_auth import admin_token, signed_xadd  # noqa: E402,F401 — entries are signed as a bot signs them
 
 USER = 7
 NATIVE = "abc-defg-hij"
@@ -83,7 +84,7 @@ def _durable_texts(store, meeting_id: int = 1) -> list[str]:
 # ── (a) consumer tick + db-writer tick ⇒ durable ────────────────────────────────────────────────
 
 async def test_consumer_tick_then_db_writer_tick_lands_segments_durably(store, bus, redis_c):
-    await bus.xadd("transcription_segments", json.loads(_message(1, [
+    await signed_xadd(bus, json.loads(_message(1, [
         _seg("s1", 1.0, "Hello"), _seg("s2", 2.5, "world"),
     ])["payload"]))
     assert await consume_segments(store, bus) == 2
@@ -102,11 +103,11 @@ async def test_consumer_tick_then_db_writer_tick_lands_segments_durably(store, b
 
 
 async def test_db_writer_tick_is_idempotent_and_upserts_rewrites(store, bus, redis_c):
-    await bus.xadd("transcription_segments", json.loads(_message(1, [_seg("s1", 1.0, "draft")])["payload"]))
+    await signed_xadd(bus, json.loads(_message(1, [_seg("s1", 1.0, "draft")])["payload"]))
     await consume_segments(store, bus)
     await db_writer_tick(redis_c, store, now=LATER)
     # A refining rewrite of the SAME segment_id re-enters the hash…
-    await bus.xadd("transcription_segments", json.loads(_message(1, [_seg("s1", 1.0, "polished")])["payload"]))
+    await signed_xadd(bus, json.loads(_message(1, [_seg("s1", 1.0, "polished")])["payload"]))
     await consume_segments(store, bus)
     await db_writer_tick(redis_c, store, now=LATER)
     await db_writer_tick(redis_c, store, now=LATER)  # an extra tick changes nothing
@@ -154,7 +155,7 @@ async def test_hot_tick_does_not_scan_keyspace_reconcile_does(store, bus, redis_
     the active-set meetings (the set is authoritative — ``append_segment`` SADDs atomically with the
     hash write). The self-healing scan fires ONLY on a reconcile tick. This is the saturation fix:
     N hot ticks cost 0 scans instead of N, so a busy redis no longer starves the health probe."""
-    await bus.xadd("transcription_segments", json.loads(_message(1, [_seg("s1", 0.0, "hello")])["payload"]))
+    await signed_xadd(bus, json.loads(_message(1, [_seg("s1", 0.0, "hello")])["payload"]))
     assert await consume_segments(store, bus) == 1
 
     spy = _ScanCountingRedis(redis_c)
@@ -178,7 +179,7 @@ async def test_flipped_incident_redis_wiped_after_flush_get_transcript_survives(
     transcript from the durable store."""
     from meeting_api import create_app
 
-    await bus.xadd("transcription_segments", json.loads(_message(1, [
+    await signed_xadd(bus, json.loads(_message(1, [
         _seg("s1", 1.0, "Hello"), _seg("s2", 2.5, "world"),
     ])["payload"]))
     await consume_segments(store, bus)
@@ -195,7 +196,7 @@ async def test_flipped_incident_redis_wiped_after_flush_get_transcript_survives(
 async def test_unflushed_segments_are_lost_without_the_db_writer(store, bus, redis_c):
     """The control: WITHOUT a db-writer tick a redis wipe loses everything — this is exactly the
     production defect; the writer tick is what makes the difference in the test above."""
-    await bus.xadd("transcription_segments", json.loads(_message(1, [_seg("s1", 1.0, "Hello")])["payload"]))
+    await signed_xadd(bus, json.loads(_message(1, [_seg("s1", 1.0, "Hello")])["payload"]))
     await consume_segments(store, bus)
     await redis_c.flushall()
     doc = await store.get_transcript(USER, "google_meet", NATIVE)
@@ -207,7 +208,7 @@ async def test_unflushed_segments_are_lost_without_the_db_writer(store, bus, red
 async def test_mutable_tail_stays_in_redis_until_it_settles(store, bus, redis_c):
     """IMMUTABILITY_THRESHOLD (parent): a segment updated moments ago is still being refined —
     it must NOT flush yet, but the read path still serves it live from the hash merge."""
-    await bus.xadd("transcription_segments", json.loads(_message(1, [_seg("s1", 1.0, "fresh")])["payload"]))
+    await signed_xadd(bus, json.loads(_message(1, [_seg("s1", 1.0, "fresh")])["payload"]))
     await consume_segments(store, bus)
 
     stored = await db_writer_tick(redis_c, store)  # real `now` — the segment is seconds old
@@ -227,7 +228,7 @@ async def test_teams_csrc_confirmed_segment_flushes_without_waiting_out_the_hold
     segment of its is durable-safe the moment it exists. Measured cost of
     the old behaviour on prod meeting 26088: 36.2 s of a 39.4 s wait, against 2.0 s of model."""
     seg = {**_seg("csrc-201:3:0", 1.0, "shipped now"), "source": "merged", "speaker_key": "csrc:201"}
-    await bus.xadd("transcription_segments", json.loads(_message(1, [seg])["payload"]))
+    await signed_xadd(bus, json.loads(_message(1, [seg])["payload"]))
     await consume_segments(store, bus)
 
     stored = await db_writer_tick(redis_c, store)  # real `now` — the segment is milliseconds old
@@ -239,7 +240,7 @@ async def test_teams_csrc_PENDING_still_waits_out_the_hold(store, bus, redis_c):
     """A draft must never become a durable row: the durable read reports every stored row as
     completed, so a flushed pending would read back as final until its retract caught up."""
     seg = {**_seg("csrc-201:3:p0", 1.0, "still forming", completed=False), "source": "merged", "speaker_key": "csrc:201"}
-    await bus.xadd("transcription_segments", json.loads(_message(1, [seg])["payload"]))
+    await signed_xadd(bus, json.loads(_message(1, [seg])["payload"]))
     await consume_segments(store, bus)
 
     assert await db_writer_tick(redis_c, store) == 0
@@ -251,7 +252,7 @@ async def test_gmeet_lane_confirmed_segment_still_waits_out_the_hold(store, bus,
     the old row with EMPTY TEXT, which never deletes an already-flushed row — so its hold is the
     only thing preventing an orphaned stale row, and this change must not touch it."""
     seg = {**_seg("ch-1:5:1200", 1.0, "refined in place"), "source": "glow-bound"}
-    await bus.xadd("transcription_segments", json.loads(_message(1, [seg])["payload"]))
+    await signed_xadd(bus, json.loads(_message(1, [seg])["payload"]))
     await consume_segments(store, bus)
 
     assert await db_writer_tick(redis_c, store) == 0
@@ -263,7 +264,7 @@ async def test_legacy_mixed_lane_confirmed_segment_keeps_the_hold(store, bus, re
     """A source=merged row without a CSRC speaker key is Zoom/Jitsi legacy traffic and remains
     outside the Teams-only release blast radius."""
     seg = {**_seg("turn:3:0", 1.0, "legacy mixed"), "source": "merged"}
-    await bus.xadd("transcription_segments", json.loads(_message(1, [seg])["payload"]))
+    await signed_xadd(bus, json.loads(_message(1, [seg])["payload"]))
     await consume_segments(store, bus)
 
     assert await db_writer_tick(redis_c, store) == 0
@@ -273,7 +274,7 @@ async def test_legacy_mixed_lane_confirmed_segment_keeps_the_hold(store, bus, re
 async def test_finalize_still_flushes_everything_including_other_lanes(store, bus, redis_c):
     """threshold_for never RAISES a caller's threshold — finalize (threshold 0) still takes the
     whole tail, mixed pendings and gmeet rows included."""
-    await bus.xadd("transcription_segments", json.loads(_message(1, [
+    await signed_xadd(bus, json.loads(_message(1, [
         {**_seg("turn:9:p0", 1.0, "draft tail", completed=False), "source": "merged"},
         {**_seg("ch-1:9:900", 2.0, "gmeet tail"), "source": "glow-bound"},
     ])["payload"]))
@@ -292,7 +293,7 @@ async def test_empty_text_segments_are_dropped_not_stored(store, redis_c):
 async def test_redis_is_trimmed_only_after_a_confirmed_durable_write(store, bus, redis_c):
     """Trim-after-confirm: a failing durable sink leaves the hash INTACT for the next tick —
     a flaky Postgres must never cost the transcript its redis copy."""
-    await bus.xadd("transcription_segments", json.loads(_message(1, [_seg("s1", 1.0, "keep me")])["payload"]))
+    await signed_xadd(bus, json.loads(_message(1, [_seg("s1", 1.0, "keep me")])["payload"]))
     await consume_segments(store, bus)
 
     class _FailingSink:
@@ -327,7 +328,7 @@ async def _terminal_app_and_stores(redis_c):
     async def _finalizer(meeting_id: int) -> None:
         await finalize_meeting(redis_c, store, meeting_id)
 
-    app = create_app(transcript_store=store, meeting_repo=repo, transcript_finalizer=_finalizer)
+    app = create_app(open_callbacks=True, transcript_store=store, meeting_repo=repo, transcript_finalizer=_finalizer)
     return TestClient(app), store
 
 
@@ -372,11 +373,11 @@ async def test_rest_mid_meeting_serves_merged_postgres_plus_redis_tail(store, bu
     from collector_contracts import assert_api_conforms
 
     # An older utterance, already flushed durable by a previous tick…
-    await bus.xadd("transcription_segments", json.loads(_message(1, [_seg("s1", 1.0, "flushed part")])["payload"]))
+    await signed_xadd(bus, json.loads(_message(1, [_seg("s1", 1.0, "flushed part")])["payload"]))
     await consume_segments(store, bus)
     await db_writer_tick(redis_c, store, now=LATER)
     # …and the live tail, seconds old, still ONLY in the redis hash.
-    await bus.xadd("transcription_segments", json.loads(_message(1, [_seg("s2", 2.5, "live tail")])["payload"]))
+    await signed_xadd(bus, json.loads(_message(1, [_seg("s2", 2.5, "live tail")])["payload"]))
     await consume_segments(store, bus)
     assert await redis_c.hlen(segments_hash_key(1)) == 1
 
@@ -440,3 +441,8 @@ def test_the_grace_period_is_declared_config(monkeypatch):
     entry = next((k for k in decl["keys"] if k["key"] == "PROC_PENDING_GRACE_SEC"), None)
     assert entry is not None, "PROC_PENDING_GRACE_SEC is read by db_writer.py and declared nowhere"
     assert entry["class"] == "defaulted" and entry["default"] == "120"
+
+
+@pytest.fixture(autouse=True)
+def _signed_by_this_secret(admin_token):
+    """The collector admits only session-signed entries; these tests sign with ``admin_token``."""

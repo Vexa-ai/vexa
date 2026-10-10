@@ -56,6 +56,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional, Protocol
 
+from workspaces.shared import workspace_paths as wpaths
+
 log = logging.getLogger(__name__)
 
 # The platform-write-only subtree inside every workspace repo. Shared with the worker's turn-commit
@@ -71,8 +73,8 @@ MEMBERS_FILE = f"{POLICY_DIR}/members.json"
 # ``policy/`` to its pre-turn state, deleting every invite that had been minted while the turn ran.
 # The workspace's own history said it out loud, once per mint:
 #
-#     policy: mint invite 41cdb3b6a5841ffc (contributor) for oenb-b5e60c     19:28:08
-#     oenb-b5e60c: policy/invites.json — removed                             19:28:09
+#     policy: mint invite 41cdb3b6a5841ffc (contributor) for bank-b5e60c     19:28:08
+#     bank-b5e60c: policy/invites.json — removed                             19:28:09
 #
 # The write-back is fixed (``llm/ports._policy_anchor``), and that fix alone would have been enough
 # to stop the deletion. It is not enough to stop the CLASS: a file inside a workspace mount is inside
@@ -333,19 +335,16 @@ def _policy_commit(ws: Path, message: str, *, author_name: str, author_email: st
     """The one commit body both writers share — extracted verbatim when the authored variant arrived,
     because a second copy of a git-env-scrubbing commit path is a second place the scrub can be
     forgotten."""
-    import subprocess
-    from shared.gitenv import scrubbed_git_env
+    from shared.gitexec import run_git
 
-    env = scrubbed_git_env(
-        GIT_AUTHOR_NAME=author_name, GIT_AUTHOR_EMAIL=author_email,
-        GIT_COMMITTER_NAME="vexa-platform", GIT_COMMITTER_EMAIL="platform@vexa.ai",
-    )
+    env = {
+        "GIT_AUTHOR_NAME": author_name, "GIT_AUTHOR_EMAIL": author_email,
+        "GIT_COMMITTER_NAME": "vexa-platform", "GIT_COMMITTER_EMAIL": "platform@vexa.ai",
+    }
     ws = Path(ws)
     if not (ws / ".git").exists():
-        subprocess.run(["git", "-C", str(ws), "init", "-q"], check=True,
-                       capture_output=True, text=True, env=env)
-    added = subprocess.run(["git", "-C", str(ws), "add", "--", POLICY_DIR],
-                           capture_output=True, text=True, env=env)
+        run_git(ws, "init", "-q", env=env, check=True)
+    added = run_git(ws, "add", "--", POLICY_DIR, env=env)
     if added.returncode != 0:
         # policy/ is EXCLUDED in this clone — the workspace has an ATTACHED external repo as its tree
         # (workspace_attach.carry_policy), where the member list is deliberately untracked so it is
@@ -362,11 +361,9 @@ def _policy_commit(ws: Path, message: str, *, author_name: str, author_email: st
             log.warning("policy commit could not stage %s in %s: %s", POLICY_DIR, ws, stderr)
         return
     # commit only if policy/ actually changed (staged diff non-empty)
-    staged = subprocess.run(["git", "-C", str(ws), "diff", "--cached", "--quiet", "--", POLICY_DIR],
-                            capture_output=True, text=True, env=env)
+    staged = run_git(ws, "diff", "--cached", "--quiet", "--", POLICY_DIR, env=env)
     if staged.returncode != 0:  # non-zero == there IS a staged change
-        subprocess.run(["git", "-C", str(ws), "commit", "-q", "-m", message, "--", POLICY_DIR],
-                       check=True, capture_output=True, text=True, env=env)
+        run_git(ws, "commit", "-q", "-m", message, "--", POLICY_DIR, env=env, check=True)
 
 
 def _now_iso() -> str:
@@ -381,7 +378,14 @@ def hash_token(token: str) -> str:
 
 def _ws_dir(root: Path, workspace_id: str) -> Path:
     """The on-disk workspace repo for ``workspace_id`` (``<root>/<workspace_id>``), traversal-guarded —
-    the workspace id is the owner subject's slug (the dir the dispatch mounts)."""
+    the workspace id is the owner subject's slug (the dir the dispatch mounts).
+
+    A workspace id is ONE top-level name: no separator and no leading dot. A dotted or multi-segment
+    id would name a tree inside a store (``.attached/<subject>/<slot>``) — a private workspace that is
+    nobody's shared workspace, whatever a ``policy/members.json`` left inside it says."""
+    wid = str(workspace_id or "")
+    if not wpaths.is_workspace_name(wid):               # the one workspace name rule
+        raise MembershipError("invalid workspace id", status=400)
     root = Path(root).resolve()
     ws = (root / workspace_id).resolve()
     if ws != root and root not in ws.parents:
@@ -389,22 +393,30 @@ def _ws_dir(root: Path, workspace_id: str) -> Path:
     return ws
 
 
+# The policy files sit in the work tree, which the model's tools may write during a turn. So below
+# the workspace root nothing is reached through a link (``workspace_paths``): each folder is opened
+# without following one, the file is read only when it is a regular file with no other hard link,
+# and a write creates a new file and renames it over the name — a link planted at the file is
+# replaced, never written through, and a link planted at a folder refuses the write. A list that
+# cannot be read that way is empty: no members, never somebody else's.
 def _read_json_list(ws: Path, rel: str) -> list[dict]:
-    f = ws / rel
-    if not f.exists():
+    raw = wpaths.read_bytes_inside(ws, rel)
+    if raw is None:
         return []
     try:
-        data = json.loads(f.read_text())
-        return data if isinstance(data, list) else []
-    except (OSError, ValueError):
+        data = json.loads(raw)
+    except ValueError:
         log.warning("could not parse %s in %s; treating as empty", rel, ws)
         return []
+    return data if isinstance(data, list) else []
 
 
 def _write_json_list(ws: Path, rel: str, rows: list[dict]) -> None:
-    f = ws / rel
-    f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(json.dumps(rows, indent=2, sort_keys=False) + "\n")
+    try:
+        wpaths.write_text_inside(ws, rel, json.dumps(rows, indent=2, sort_keys=False) + "\n")
+    except wpaths.PathRefused as exc:
+        raise MembershipError(f"{rel.rsplit('/', 1)[0]} in this workspace is not a plain folder",
+                              status=409) from exc
 
 
 # ── the invite store (outside every workspace mount — see INVITE_STORE_DIR above) ────────────────
@@ -415,7 +427,7 @@ def invites_path(root: Path, workspace_id: str) -> Path:
     function and no other, so "persisted somewhere the preview does not read" is not a state this
     code can be in. Traversal-guarded on the workspace id for the same reason ``_ws_dir`` is."""
     slug = str(workspace_id or "").strip()
-    if not slug or "/" in slug or "\\" in slug or slug in (".", ".."):
+    if not wpaths.is_workspace_name(slug):              # the one workspace name rule
         raise MembershipError("invalid workspace id", status=400)
     root = Path(root).resolve()
     path = (root / INVITE_STORE_DIR / f"{slug}.json").resolve()
@@ -445,6 +457,30 @@ def _write_invites(root: Path, workspace_id: str, rows: list[dict]) -> None:
     store = invites_path(root, workspace_id)
     store.parent.mkdir(parents=True, exist_ok=True)
     store.write_text(json.dumps(rows, indent=2, sort_keys=False) + "\n")
+
+
+def drop_invites(root: Path, workspace_id: str) -> bool:
+    """Remove a workspace's invite store, so no invite minted for it can be redeemed. True when there
+    was one. For a workspace that stopped being a group (un-share)."""
+    try:
+        invites_path(root, workspace_id).unlink()
+        return True
+    except FileNotFoundError:
+        return False
+
+
+def strip_policy(ws: Path, *, commit_fn: Optional[CommitFn] = None) -> list[str]:
+    """Remove the member list (and the legacy in-tree invite list) from a tree that is no longer a
+    shared workspace — un-share moves it into its owner's private store, where a member list left
+    inside would still name people who no longer have access. Each file is removed through the policy
+    folder's descriptor, never through a link; the removal is committed (as the platform, unless
+    ``commit_fn`` says otherwise) so the tree's history records it. The relative paths removed."""
+    # each removed through the folders' descriptors (``workspace_paths.unlink_inside``): a link where
+    # the policy folder should be removes nothing, and a link at a file is removed itself
+    removed = [rel for rel in (MEMBERS_FILE, LEGACY_INVITES_FILE) if wpaths.unlink_inside(Path(ws), rel)]
+    if removed:
+        _commit(commit_fn or policy_commit, Path(ws), "unshare: the member list leaves with the group")
+    return removed
 
 
 def workspaces_with_invites(root: Path) -> list[str]:
@@ -952,16 +988,14 @@ def voided_invite_ids(root: Path, workspace_id: str, *, now: Optional[float] = N
     ``DEFAULT_EXPIRES_IN_SEC`` ago is expired on its own terms, and saying it is void adds nothing.
     New mints leave no such commit, so this never counts an invite that is currently working."""
     import subprocess
-    from shared.gitenv import scrubbed_git_env
+    from shared.gitexec import run_git
 
     ws = _ws_dir(root, workspace_id)
     if not (ws / ".git").exists():
         return []
     t = now if now is not None else time.time()
     try:
-        out = subprocess.run(
-            ["git", "-C", str(ws), "log", "--format=%ct%x09%s", "--grep=^policy: mint invite "],
-            capture_output=True, text=True, timeout=10, env=scrubbed_git_env())
+        out = run_git(ws, "log", "--format=%ct%x09%s", "--grep=^policy: mint invite ", timeout=10)
     except (OSError, subprocess.SubprocessError):
         return []
     if out.returncode != 0:

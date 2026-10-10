@@ -9,7 +9,7 @@
 // stderr: the warning pushed the actual violation list out of the diagnostic. A gate whose failure
 // message is a warning about module resolution tells the reader nothing about what it caught.
 import { readFileSync, readdirSync } from "node:fs";
-import { join, relative, dirname } from "node:path";
+import { join, relative, dirname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { builtinModules } from "node:module";
 
@@ -93,6 +93,32 @@ const IMPORT_SPECIFIER = new RegExp([
 
 let files = 0;
 const violations = [];
+/** FOLDER CYCLES (architecture pass 4, S7). dependency-cruiser's no-circular works per FILE, so two
+ *  top-level folders of src/ can import each other through different files and no gate sees it:
+ *  canvas/ ⇄ minutes/ did, through a shared vocabulary of event names that lived in canvas/actions.
+ *  That vocabulary now lives in platform/ (events.ts, turnMarks.ts), below every surface.
+ *
+ *  This records which folder imports which (production files only; tests may reach across) and
+ *  refuses any pair of folders that import each other, unless the pair is listed below. The list is
+ *  the debt as it stands, not a licence: a pair leaves it when it is broken and no pair joins it. */
+const KNOWN_FOLDER_CYCLES = new Set([
+  "app<->minutes", "app<->surfaces", "app<->workbench", "canvas<->surfaces", "minutes<->surfaces",
+  "minutes<->ui-kit", "surfaces<->ui-kit", "surfaces<->workbench",
+]);
+const folderEdges = new Map();   // "from" -> Set("to")
+const folderOf = (abs) => { const r = relative(SRC, abs); return r.startsWith("..") ? null : r.split(sep)[0]; };
+const isTest = (p) => p.includes(`${sep}__tests__${sep}`) || /\.test\.tsx?$/.test(p);
+/** A lazy `import("../x")` is a runtime edge too: ui-kit reaches surfaces/ and minutes/ that way so
+ *  that no static cycle shows. Relative specifiers only, so the type-query ambiguity above does not
+ *  arise for a package name. */
+const LAZY_RELATIVE = /(?<![\w$.])import\(\s*['"](\.[^'"\n]+)['"]\s*\)/g;
+const noteEdge = (p, spec) => {
+  const target = spec.startsWith("@/") ? join(SRC, spec.slice(2)) : resolve(dirname(p), spec);
+  const from = folderOf(p), to = folderOf(target);
+  if (isTest(p) || !from || !to || from === to || from.includes(".") || to.includes(".")) return;
+  if (!folderEdges.has(from)) folderEdges.set(from, new Set());
+  folderEdges.get(from).add(to);
+};
 (function walk(d) {
   for (const e of readdirSync(d, { withFileTypes: true })) {
     const p = join(d, e.name);
@@ -100,10 +126,11 @@ const violations = [];
     else if (e.name.endsWith(".ts") || e.name.endsWith(".tsx")) {
       files++;
       const src = stripComments(readFileSync(p, "utf8"));
+      for (const m of src.matchAll(LAZY_RELATIVE)) noteEdge(p, m[1]);
       for (const m of src.matchAll(IMPORT_SPECIFIER)) {
         const spec = m[1] || m[2] || m[3];
         if (spec.includes("${")) continue;                             // a `from "${x}"` substring inside a template/string literal, not a real import
-        if (spec.startsWith(".") || spec.startsWith("@/")) continue;    // intra-package (relative or @/* alias)
+        if (spec.startsWith(".") || spec.startsWith("@/")) { noteEdge(p, spec); continue; }  // intra-package (relative or @/* alias)
         const bare = spec.startsWith("node:") ? spec.slice(5) : spec;
         const scoped = bare.startsWith("@") ? bare.split("/").slice(0, 2).join("/") : bare.split("/")[0];
         if (builtins.has(bare) || builtins.has(scoped)) continue;       // builtin (± node: prefix)
@@ -114,4 +141,10 @@ const violations = [];
   }
 })(SRC);
 if (violations.length) { console.error("❌ ISOLATION VIOLATION (undeclared dep):\n  " + violations.join("\n  ")); process.exit(1); }
-console.log(`✅ ISOLATION VERIFIED — scanned ${files} files in src/; every import intra-package (./ or @/), builtin, or declared dep.`);
+const mutual = [];
+for (const [from, tos] of folderEdges) for (const to of tos) if (from < to && folderEdges.get(to)?.has(from)) mutual.push(`${from}<->${to}`);
+const newCycles = mutual.filter((pair) => !KNOWN_FOLDER_CYCLES.has(pair));
+const broken = [...KNOWN_FOLDER_CYCLES].filter((pair) => !mutual.includes(pair));
+if (newCycles.length) { console.error("❌ FOLDER CYCLE (src/ folders that import each other):\n  " + newCycles.join("\n  ") + "\n  Move what both need below both (platform/ holds shared vocabulary)."); process.exit(1); }
+if (broken.length) { console.error("❌ FOLDER CYCLE LIST IS STALE — these pairs no longer import each other; remove them from KNOWN_FOLDER_CYCLES:\n  " + broken.join("\n  ")); process.exit(1); }
+console.log(`✅ ISOLATION VERIFIED — scanned ${files} files in src/; every import intra-package (./ or @/), builtin, or declared dep; no new folder cycle (${mutual.length} known).`);

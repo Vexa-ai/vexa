@@ -20,7 +20,7 @@ IT ALSO CARRIES THE OTHER DIRECTION (Vexa-ai/vexa#1613) — whether the code run
 job. A job runs on its own thread (`worker/jobs.JobRunner._run`), so the mark is a THREAD-LOCAL and
 needs no signature change through `HarnessPort.run_turn`, which three adapters implement and only
 one of them cares. The harness reads it to pick a budget: a job is not a turn, and the founder's
-OeNB job died on the per-turn tool-call budget after 72 steps because it was billed as one.
+Example Bank job died on the per-turn tool-call budget after 72 steps because it was billed as one.
 
 …AND #1622 GENERALISES THAT MARK FROM A BOOLEAN TO A KIND. "Is this a job?" turned out to be the
 first instance of a question with four answers — a chat turn, a job (Create/Extend), a post-meeting

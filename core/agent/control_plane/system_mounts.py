@@ -8,9 +8,10 @@ active set (the ``_global`` read-only base and the ``_system`` per-user private 
         Behaviour (CLAUDE.md-level instructions), shared skills, common tools, base knowledge. Agents
         never write it (the mount is ``write=False`` → the runtime binds it ``:ro``). A LIVE MOUNT, not a
         seed: updating the one _global repo propagates to all agents next turn. Source = an env-configured
-        path (``GLOBAL_SYSTEM_WORKSPACE_PATH``, config.v1-declared). Mount HEAD; a pinned ref is supported
-        via ``GLOBAL_SYSTEM_WORKSPACE_REF`` (default the repo's HEAD/main). Missing configuration fails
-        closed: no worker may run without the organisation tier.
+        path (``GLOBAL_SYSTEM_WORKSPACE_PATH``, config.v1-declared), or — when that is unset — the
+        in-store ``<workspaces_dir>/_global``, created EMPTY if absent (founder ruling 2026-10-08:
+        "let it be empty with no data - it's fine"). Mount HEAD; a pinned ref is supported via
+        ``GLOBAL_SYSTEM_WORKSPACE_REF`` (default the repo's HEAD/main).
 
   2. ``/workspaces/_system``  PRIVATE SYSTEM — per-user, READ-WRITE, ALWAYS mounted. Chats/sessions,
         settings, routines, membership/attachment records, credential refs. Private, never shareable.
@@ -29,11 +30,11 @@ from __future__ import annotations
 
 import logging
 import os
-import subprocess
 from pathlib import Path
 from typing import Optional
 
-from shared.gitenv import scrubbed_git_env
+from shared.gitexec import run_git
+from workspaces.shared import workspace_paths as wpaths
 
 logger = logging.getLogger("agent_api.system_mounts")
 
@@ -66,17 +67,62 @@ _IDENTITY_STUB = (
 )
 
 
+def global_root(settings, root: "str | Path | None" = None) -> Path:
+    """WHERE ``_global`` IS, on this service's filesystem — the one answer every reader, every writer
+    and the worker mount use.
+
+    ``VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH`` when it names a directory OUTSIDE the store (a separately
+    managed repo the operator binds in); otherwise the in-store ``<workspaces_dir>/_global``. ``root``
+    is the store root when the caller holds it, else ``settings.workspaces_dir``.
+
+    Why one function: the admin's editor, the page writer, reset, the ready-commit, the preset reader
+    and the boot each used to pick between the two candidates themselves, most of them preferring the
+    in-store slot whenever it existed — while the mount preferred the configured path. On an instance
+    that once ran with the default, that slot exists, so with an out-of-store path configured the
+    admin's edits landed in a ``_global`` no worker mounts. Nothing is created here; the in-store
+    directory is made by ``ensure_global_dir``."""
+    store = Path(root if root is not None else settings.workspaces_dir)
+    in_store = store / GLOBAL_SLUG
+    configured = (getattr(settings, "global_system_workspace_path", "") or "").strip()
+    if not configured or Path(configured).resolve() == in_store.resolve():
+        return in_store
+    return Path(configured)
+
+
+def ensure_global_dir(root: str | Path) -> Path:
+    """The in-store ``<root>/_global``, made an (empty) DIRECTORY if it is not one yet. Idempotent.
+
+    Nobody has to set the organisation tier up any more (founder ruling 2026-10-08), so nothing may
+    wait on an operator to provision it either: when no out-of-store path is configured, agent-api
+    owns ``_global`` inside its own store and creates it. It is never created anywhere ELSE — a
+    host path is the operator's, and auto-creating one is how the 2026-09-02 phantom store happened.
+
+    One repair, and only one: an EMPTY REGULAR FILE at ``<root>/_global`` is removed first. That is
+    what an earlier compose file left behind — it bound ``/dev/null`` over ``/workspaces/_global``,
+    and docker creates a bind's missing mountpoint inside a named volume as an empty file, which then
+    outlived the bind and made the directory impossible to create. A non-empty file is somebody's
+    data and is left alone (the caller then fails on "not a directory")."""
+    path = Path(root) / GLOBAL_SLUG
+    if path.is_file() and not path.is_symlink() and path.stat().st_size == 0:
+        path.unlink()
+        logger.info("system_mounts: removed an empty _global FILE (a stale bind mountpoint) at %s", path)
+    path.mkdir(exist_ok=True)
+    return path
+
+
 def global_mount(settings, root: str) -> dict:
-    """The mandatory GLOBAL SYSTEM tier (``_global``), mounted into every worker.
+    """The GLOBAL SYSTEM tier (``_global``), mounted into every worker — EMPTY is fine.
 
     Source is the platform-operated _global repo/dir named by ``settings.global_system_workspace_path``
-    (env ``GLOBAL_SYSTEM_WORKSPACE_PATH``). ``path`` is that source bound at ``<root>/_global`` — an
-    OUT-OF-STORE mount, so the runtime gives it its OWN read-only bind (source→target). Mount HEAD; a
-    pinned ref (``GLOBAL_SYSTEM_WORKSPACE_REF``) is carried through as the mount ``ref`` for the backend
-    to check out on materialization (default: whatever the repo's HEAD is)."""
-    src = (getattr(settings, "global_system_workspace_path", "") or "").strip()
-    if not src:
-        raise RuntimeError("VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH is required: every agent stack includes _global")
+    (env ``GLOBAL_SYSTEM_WORKSPACE_PATH``), or, when that is unset, the in-store ``<root>/_global``
+    (``ensure_global_dir``). An OUT-OF-STORE source gets its OWN read-only bind (source→target) at
+    ``<root>/_global``; an in-store one rides the store bind. Mount HEAD; a pinned ref
+    (``GLOBAL_SYSTEM_WORKSPACE_REF``) is carried through as the mount ``ref`` for the backend to check
+    out on materialization (default: whatever the repo's HEAD is)."""
+    src_path = global_root(settings, root)
+    if src_path == Path(root) / GLOBAL_SLUG:
+        src_path = ensure_global_dir(root)
+    src = str(src_path)
     if not Path(src).exists():
         raise RuntimeError(f"VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH does not exist: {src}")
     if not Path(src).is_dir():
@@ -158,30 +204,23 @@ def ensure_system_workspace(root: str, subject: str, *, seed_dir: Optional[Path]
         return home
     home.mkdir(parents=True, exist_ok=True)
     if seed_dir and Path(seed_dir).exists():
-        import shutil
-        for item in Path(seed_dir).iterdir():
-            dst = home / item.name
-            if item.is_dir():
-                shutil.copytree(item, dst, dirs_exist_ok=True)
-            else:
-                shutil.copy2(item, dst)
+        # nofollow writes into the new `_system` (a link planted there is replaced or refused)
+        wpaths.copy_tree_inside(Path(seed_dir), home)
     else:
         # The thin template: a marker + the LIGHT identity reference so the repo is non-empty and the
         # agent always knows who it is helping. Chats/sessions, settings, routines, membership records
         # land here in later WPs.
-        (home / "README.md").write_text(
+        wpaths.write_text_inside(home, "README.md",
             "# Private system workspace\n\n"
             "Per-user, read-write, always mounted. Holds who you're helping (`identity.md`),\n"
             "chats/sessions, settings, routines, membership/attachment records, and credential refs.\n"
             "Private — never shareable.\n"
         )
-        (home / "identity.md").write_text(_IDENTITY_STUB)
-    env = scrubbed_git_env()
+        wpaths.write_text_inside(home, "identity.md", _IDENTITY_STUB)
     for args in (("init", "-q"), ("config", "user.email", "agent@vexa"), ("config", "user.name", "vexa-agent")):
-        subprocess.run(["git", *args], cwd=str(home), check=True, capture_output=True, text=True, env=env)
-    subprocess.run(["git", "add", "-A"], cwd=str(home), check=True, capture_output=True, text=True, env=env)
-    subprocess.run(["git", "commit", "-q", "-m", "system workspace init", "--allow-empty"],
-                   cwd=str(home), check=True, capture_output=True, text=True, env=env)
+        run_git(home, *args, check=True)
+    run_git(home, "add", "-A", check=True)
+    run_git(home, "commit", "-q", "-m", "system workspace init", "--allow-empty", check=True)
     return home
 
 

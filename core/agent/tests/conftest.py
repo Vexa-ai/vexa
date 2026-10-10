@@ -80,18 +80,27 @@ def transcription_golden() -> dict:
 
 
 @pytest.fixture(autouse=True)
-def _default_subject(monkeypatch):
-    """The HTTP tests exercise agent-api with no gateway in front, so set the single-user fallback
-    (``VEXA_AGENT_DEFAULT_SUBJECT``) — agent-api derives the subject from it when ``X-User-Id`` is absent.
-    Tests that assert per-user *isolation* pass an explicit ``X-User-Id`` header, which always wins (P20)."""
-    monkeypatch.setenv("VEXA_AGENT_DEFAULT_SUBJECT", "u_jane")
-
-
-@pytest.fixture(autouse=True)
 def _mandatory_global_workspace(monkeypatch, tmp_path_factory):
     """Dispatch tests obey production's mandatory _global invariant by default."""
     global_dir = tmp_path_factory.mktemp("global-system")
     monkeypatch.setenv("VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH", str(global_dir))
+
+
+#: The unit input key every worker test serves with (shared/unit_input.py): a worker runs only the
+#: input entries signed with it, so tests enqueue through :func:`signed_turn`.
+TEST_UNIT_IN_KEY = "11" * 32
+
+
+def signed_turn(body: dict) -> dict:
+    """The stream fields agent-api writes for one message to a unit whose key is TEST_UNIT_IN_KEY."""
+    from shared import unit_input
+
+    return unit_input.signed_entry(TEST_UNIT_IN_KEY, body)
+
+
+@pytest.fixture(autouse=True)
+def _unit_input_key(monkeypatch):
+    monkeypatch.setenv("VEXA_UNIT_IN_KEY", TEST_UNIT_IN_KEY)
 
 
 @pytest.fixture(autouse=True)

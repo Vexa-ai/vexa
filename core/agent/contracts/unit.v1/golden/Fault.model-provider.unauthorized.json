@@ -1,0 +1,9 @@
+{
+  "source": "model-provider",
+  "kind": "unauthorized",
+  "provider": "openrouter.ai",
+  "model": "anthropic/claude-sonnet-4",
+  "status": 401,
+  "detail": "User not found.",
+  "remedy": "Check the API key for openrouter.ai under Settings → Models."
+}

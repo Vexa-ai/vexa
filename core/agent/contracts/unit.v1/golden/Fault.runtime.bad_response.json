@@ -1,0 +1,8 @@
+{
+  "source": "runtime",
+  "kind": "bad_response",
+  "op": "list",
+  "status": null,
+  "detail": "the runtime answered with something agent-api could not read",
+  "remedy": "An operator should check that agent-api and the runtime run the same release."
+}

@@ -1,0 +1,43 @@
+{
+  "connections": [
+    {
+      "id": "0123456789abcdef0123456789abcdef",
+      "provider": "google_email",
+      "label": "Work",
+      "status": "ready",
+      "created": 1760000000.5,
+      "setup_request": "7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e",
+      "account": "person@example.test",
+      "setup": {},
+      "application_configured": false,
+      "approved_host": ""
+    },
+    {
+      "id": "fedcba9876543210fedcba9876543210",
+      "provider": "custom_secret",
+      "label": "Telegram bot",
+      "status": "awaiting_user",
+      "created": 1760000100.0,
+      "setup_request": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+      "account": "",
+      "setup": {
+        "endpoint": "https://api.telegram.org/bot{secret}/sendMessage",
+        "scheme": "telegram",
+        "method": "POST",
+        "secret_label": "Bot token",
+        "fields": [
+          {
+            "name": "chat_id",
+            "label": "Chat ID",
+            "location": "body"
+          }
+        ],
+        "oauth": null,
+        "documentation_url": "https://core.telegram.org/bots/api",
+        "header": "Authorization"
+      },
+      "application_configured": false,
+      "approved_host": ""
+    }
+  ]
+}

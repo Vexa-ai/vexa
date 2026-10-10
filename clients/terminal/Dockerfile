@@ -16,10 +16,14 @@
 #                    makes dev boot instant and offline-safe.
 ARG RUNTIME_DEPS=prod
 
-# node:22 — tinykeys@4 requires node >=22; 20 only warns but we pin 22 to match engines.
-FROM node:22-slim AS build
+# node:22 — tinykeys@4 requires node >=22; 20 only warns but we pin 22 to match engines. Debian 13
+# (trixie), pinned by digest: the bookworm-based node:22-slim carries Debian 12's perl-base, with fixed
+# critical advisories its newest digest still does not take. The same base for all three stages.
+FROM node:22-trixie-slim@sha256:154ba2f4d6fec323d28e4f4bb86bba4677f1223391a1979cf521304e03a98dfa AS build
 WORKDIR /app
+# sharp resolves to the local stand-in (package.json overrides), so no stage installs libvips.
 COPY package.json package-lock.json ./
+COPY no-image-backend ./no-image-backend
 RUN npm ci
 COPY . .
 # Google Analytics measurement id (G-XXXXXXXXXX). NEXT_PUBLIC_* is inlined into the client bundle at
@@ -60,10 +64,18 @@ RUN npm run build && rm -rf .next/cache
 # next.config.ts at runtime and npm-installs its own at BOOT when it's absent. `npm i typescript`
 # here CANNOT provide it: NODE_ENV=production makes npm silently omit anything matching a
 # devDependency. So it is COPIED from the build stage — the exact compiler `next build` ran with.
-FROM node:22-slim AS deps-prod
+#
+# sharp is not shipped. It is an optional dependency of next that only the image optimizer loads,
+# and next.config.ts turns the optimizer off (`/_next/image` answers 404 before sharp is required).
+# package.json points sharp at the local stand-in (no-image-backend), so npm installs no @img/*
+# natives and no libvips (LGPL, FINOS Category X) anywhere; the runtime tree also drops the stand-in.
+# Removed by name rather than with `--omit=optional`: next's platform SWC binary is optional too,
+# and the server needs it at runtime to compile next.config.ts.
+FROM node:22-trixie-slim@sha256:154ba2f4d6fec323d28e4f4bb86bba4677f1223391a1979cf521304e03a98dfa AS deps-prod
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+COPY no-image-backend ./no-image-backend
+RUN npm ci --omit=dev && rm -rf node_modules/sharp node_modules/@img && npm cache clean --force
 COPY --from=build /app/node_modules/typescript ./node_modules/typescript
 
 # deps-dev: the build stage already holds the full npm ci tree.
@@ -72,7 +84,7 @@ FROM build AS deps-dev
 # ARG-selected alias (COPY --from does not expand variables; FROM does).
 FROM deps-${RUNTIME_DEPS} AS deps
 
-FROM node:22-slim AS runtime
+FROM node:22-trixie-slim@sha256:154ba2f4d6fec323d28e4f4bb86bba4677f1223391a1979cf521304e03a98dfa AS runtime
 # The server-side proxy gate reads the mode at REQUEST time (process.env), so the runtime stage must
 # carry the same value the bundle was built with — client gating and edge gating stay in lockstep.
 ARG NEXT_PUBLIC_TERMINAL_MODE=""
@@ -106,6 +118,11 @@ LABEL ai.vexa.terminal.mode="${NEXT_PUBLIC_TERMINAL_MODE:-default}"
 # can be forgotten, and the mode label directly above is here because exactly that happened.
 LABEL ai.vexa.terminal.agent_api="1"
 LABEL ai.vexa.terminal.build="${NEXT_PUBLIC_BUILD_ID:-unknown}"
+# The runtime runs `node server.mjs` and nothing else, so the base's package managers go: npm, npx,
+# corepack and the dependencies npm bundles (tar, pacote, sigstore, …) are never called here and are
+# the image's only fixed HIGH advisories on this base.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
+      /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack /opt/yarn-* /usr/local/bin/yarn /usr/local/bin/yarnpkg
 WORKDIR /app
 COPY package.json package-lock.json ./
 # node_modules from the RUNTIME_DEPS-selected stage (prod = pruned + typescript; dev = full tree).
@@ -118,6 +135,12 @@ COPY server.mjs next.config.ts tsconfig.json ./
 # rather than the build context, where it is absent on a clean clone.
 COPY --from=build /app/next-env.d.ts ./
 COPY src ./src
+# An unprivileged user runs the service: it writes nothing outside /tmp, and reads its mounted keys
+# through the group the deploy surfaces give it (compose's key one-shot, the chart's fsGroup).
+RUN groupadd --system --gid 10001 vexa \
+ && useradd --system --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin vexa
+USER 10001:10001
+
 EXPOSE 3000
-# `npm start` === PORT=3000 NODE_ENV=production node server.mjs
+# what `npm start` runs in a checkout: PORT=3000 NODE_ENV=production node server.mjs
 CMD ["node", "server.mjs"]

@@ -16,6 +16,8 @@ from runtime_kernel import Runtime
 from runtime_kernel import config_preflight as cp
 from runtime_kernel.api import create_app
 
+from _caller import TOKEN, caller_client
+
 
 @pytest.fixture(autouse=True)
 def _fresh_probe_cache():
@@ -32,8 +34,9 @@ def test_declaration_loads_and_is_internally_consistent():
     # model credentials are ALTERNATIVE paths (subscription mount OR an API-style key)
     assert caps["model_inference"]["mode"] == "any"
     assert caps["model_inference"]["probe"]["kind"] == "file"
-    # the runtime has no required-explicit keys: it boots on defaults, capabilities gate features
-    assert [k for k in decl["keys"] if k["class"] == "required-explicit"] == []
+    # the runtime's one required-explicit key is its caller credential; everything else boots on
+    # defaults and capabilities gate features
+    assert [k["key"] for k in decl["keys"] if k["class"] == "required-explicit"] == ["RUNTIME_API_TOKEN"]
 
 
 def test_capability_tri_states():
@@ -132,7 +135,7 @@ def test_file_probe_reads_the_directory_mirror_through_an_inode_swap(tmp_path):
 def test_worker_credential_bind_falls_back_to_the_directory():
     """The worker bind is created fresh at every spawn, so it never went stale — but a deployment
     that configures only HOST_CLAUDE_DIR must still produce an authenticated worker."""
-    from runtime_kernel.docker_backend import host_claude_credentials as hcc
+    from runtime_kernel.profiles import host_claude_credentials as hcc
 
     assert hcc({}) is None
     assert hcc({"HOST_CLAUDE_CREDENTIALS": "/h/.claude/.credentials.json"}) == "/h/.claude/.credentials.json"
@@ -150,7 +153,7 @@ def test_health_carries_capability_rows_additively(monkeypatch):
     for k in ("REDIS_URL", "BROWSER_IMAGE", "AGENT_IMAGE", "HOST_CLAUDE_CREDENTIALS",
               "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
         monkeypatch.delenv(k, raising=False)
-    app = create_app(Runtime(profiles={"test": ["sleep", "30"]}))
+    app = create_app(Runtime(profiles={"test": ["sleep", "30"]}), caller_token=TOKEN)
     r = TestClient(app).get("/health")
     assert r.status_code == 200
     body = r.json()
@@ -162,3 +165,13 @@ def test_health_carries_capability_rows_additively(monkeypatch):
     assert caps["scheduler"]["state"] == cp.NOT_CONFIGURED
     assert caps["model_inference"]["state"] == cp.NOT_CONFIGURED
     assert set(caps) == {"scheduler", "bot_spawn", "agent_spawn", "model_inference"}
+
+
+def test_every_forwarded_worker_setting_is_declared():
+    """The runtime forwards WORKER_FORWARD_ENV from its own environment into agent workers, and Lite
+    starts the runtime with only the keys this declaration names (deploy/lite/bin/vexa-runtime) — so a
+    forwarded key the declaration lacks silently never reaches a Lite worker."""
+    from runtime_kernel.workload_env import WORKER_FORWARD_ENV
+
+    declared = {k["key"] for k in cp.load_declaration()["keys"]}
+    assert set(WORKER_FORWARD_ENV) <= declared, sorted(set(WORKER_FORWARD_ENV) - declared)

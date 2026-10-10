@@ -1,29 +1,25 @@
-"""global_layer.py — the COMPANY LAYER: what `_global` must hold before this Vexa serves anyone.
+"""global_layer.py — the COMPANY LAYER: the thin, optional organisation tier in `_global`.
 
-Founder ruling, 2026-09-02: *"global needs to be setup by admin, it just should not let him start
-the service before that."* And, on the shape of it: `_global` is THIN — *"who the company is,
-principles, objectives, structure, what is missing: a few short files every agent carries."* No
-company workspace, no demo data. The substance of the company lives in ordinary workspaces that a
-chat recombines by mounting several of them; `_global` is the one thing every agent carries.
+Founder ruling, 2026-10-08: *"let's remove global setup at all so that there is no need to setup
+global at all - let it be empty with no data - it's fine."* That reverses the 2026-09-02 ruling
+(*"global needs to be setup by admin, it just should not let him start the service before that"*):
+nothing waits for this layer any more. `_global` may stay empty for the life of an instance; no
+sign-in, dispatch, flow or operator verb is refused for want of it.
 
-This module owns three things and nothing else:
+When an admin DOES choose to write it, the shape is still thin — *"who the company is, principles,
+objectives, structure, what is missing: a few short files every agent carries"* — and this module
+owns three things about it:
 
-  1. **What "set up" MEANS** — the five files, and the one content rule on `README.md`. The rule
-     exists because of a second founder ruling the same day: *"the first chat needs to present
-     itself knowing about itself — which company it's from and what's their service."* An agent
-     that opens by saying which company it belongs to can only do that if a human wrote the name
-     down, so the gate does not lift on a README that does not carry one.
+  1. **What "written" MEANS** — the five files, and the one content rule on `README.md`: it opens
+     with the company's name and one sentence of what it does, because those two lines are read out
+     loud to strangers.
   2. **The verification** — read the store and answer what is present, what is missing, and which
-     company the layer names. Nothing may mark itself ready: the marker is written only after this
-     module has looked at the files.
-  3. **The commit** — `_global` becomes a git repo on the store and every admin acceptance is a
-     commit authored by that admin. Git supplies the firmness the PRD asks for (§3.2): an admin
-     edit is reviewable, diffable and revertable, not a silent mutation of how every agent in the
-     deployment behaves.
+     company the layer names (`state`).
+  3. **The commit** — `_global` is a git repo on the store and an admin's acceptance is a commit
+     authored by that admin, so an edit to what every agent carries is reviewable, diffable and
+     revertable.
 
-It deliberately does NOT own the gate VALUE. That lives in one row in admin-api's
-`platform_settings` and is read by every service through admin-api — one source of truth, one
-reader per service. This module verifies, then asks admin-api to flip it.
+And it is agent-api's one reader of the admin role (`is_admin`).
 """
 from __future__ import annotations
 
@@ -37,16 +33,16 @@ import urllib.request
 from pathlib import Path
 from typing import Optional
 
+from shared.gitexec import run_git
+from shared.marks import UNWRITTEN_MARK
+from workspaces.shared import workspace_paths as wpaths
+
 logger = logging.getLogger("agent_api.global_layer")
 
 # The thin layer, in the order the setup conversation walks it. README FIRST and its first lines
 # are the company's name and one sentence of what it does — everything downstream (the agent's
 # self-introduction, the follow-up mail's opening) reads the company from there.
 LAYER_FILES = ("README.md", "PRINCIPLES.md", "OBJECTIVES.md", "STRUCTURE.md", "MISSING.md")
-
-# The gate's vocabulary, spelled the same way admin-api spells it.
-COMPLETED = "completed"
-MISSING = "missing"
 
 # ── WHAT "NOT YET WRITTEN" MEANS ONCE THE LAYER ARRIVES SCAFFOLDED ───────────────────────────────
 # Before `behavior/global/` existed, `_global` was an empty directory and EMPTINESS was the whole
@@ -58,15 +54,14 @@ MISSING = "missing"
 # seed's. A hash of the shipped file would go stale the moment the seed's wording changed and would
 # then silently call an untouched placeholder "written"; a marker the admin's editor cannot remove
 # by accident cannot. Writing the file means deleting the comment, which the comment itself says.
-UNWRITTEN_MARKER = "vexa:unwritten"
+# The literal lives in `shared/marks.py` because the worker reads it too; flows' copy and the seed
+# files are held to it by `gate:fact-parity` (`scripts/parity.json`, fact `unwritten-marker`).
+UNWRITTEN_MARKER = UNWRITTEN_MARK
 
 
 def is_unwritten(text: str) -> bool:
     """Is this layer file still the seed's placeholder? (The marker is present.)"""
     return UNWRITTEN_MARKER in (text or "")
-
-# The one sentence a refused visitor sees. Quoted, never paraphrased — see admin-api's GATE_SENTENCE.
-GATE_SENTENCE = "This Vexa is being set up by its administrator."
 
 # The README's opening contract: a level-1 heading whose text is the company name, then at least one
 # non-empty line of prose before any other heading. Two lines, and they are the two the product
@@ -88,7 +83,7 @@ def company_of(readme: str) -> Optional[str]:
             return None
         name = m.group(1).strip()
         # A placeholder is not a company. These are the words the setup conversation itself uses
-        # while it is still asking, so accepting them would let an unfinished chat lift the gate.
+        # while it is still asking, so accepting them would put "Company" in front of a customer.
         if not name or name.lower() in {"company", "your company", "unknown", "tbd", "readme",
                                         "_global", "global"}:
             return None
@@ -120,23 +115,22 @@ def state(root: str | Path) -> dict:
     """What the company layer holds RIGHT NOW, read off the store.
 
     Returns `{ready, present, missing_files, company, service, reasons, is_repo, commits}`. `ready`
-    is the verifier's verdict and the ONLY input to flipping the gate; `reasons` says in words what
-    is not yet true, because a wizard that says "not ready" without saying why is a dead end for
-    the one person who can fix it."""
+    is the verifier's verdict on an admin's acceptance; `reasons` says in words what is not yet
+    true. An empty `_global` is simply not ready — which gates nothing."""
     path = Path(root)
     present, missing, unwritten = [], [], []
     for name in LAYER_FILES:
-        f = path / name
-        body = f.read_text(encoding="utf-8", errors="replace") if f.is_file() else ""
+        # NOFOLLOW: `_global` is written by an admin's turn; a linked layer file is not written
+        raw = wpaths.read_bytes_inside(path, name)
+        body = raw.decode("utf-8", errors="replace") if raw is not None else ""
         if not body.strip():
             missing.append(name)
         elif is_unwritten(body):
             unwritten.append(name)
         else:
             present.append(name)
-    readme = ""
-    if (path / "README.md").is_file():
-        readme = (path / "README.md").read_text(encoding="utf-8", errors="replace")
+    raw = wpaths.read_bytes_inside(path, "README.md")
+    readme = raw.decode("utf-8", errors="replace") if raw is not None else ""
     company = company_of(readme)
     service = service_line_of(readme)
     reasons = []
@@ -167,9 +161,10 @@ def state(root: str | Path) -> dict:
     }
 
 
-def _git(path: Path, *args: str, check: bool = False) -> subprocess.CompletedProcess:
-    return subprocess.run(["git", "-C", str(path), *args], check=check,
-                          capture_output=True, text=True)
+def _git(path: Path, *args: str, check: bool = False, env: Optional[dict] = None) -> subprocess.CompletedProcess:
+    # Through shared.gitexec: `_global` is mounted into every worker, so nothing its repository
+    # configures may run in this process.
+    return run_git(path, *args, check=check, env=env)
 
 
 def _commit_count(path: Path) -> int:
@@ -226,52 +221,16 @@ def commit(root: str | Path, *, author_email: str, author_name: str, message: st
     return (head.stdout or "").strip() or None
 
 
-# ── the gate value: admin-api owns it; this is agent-api's ONE reader/writer of it ───────────────
+# ── the admin role: admin-api owns it; this is agent-api's ONE reader of it ─────────────────────
 
 _CACHE: dict[str, tuple[float, dict]] = {}
 _CACHE_TTL_S = 15.0
 
 
-def _admin_api(url: str, secret: str, path: str, *, method: str = "GET",
-               payload: Optional[dict] = None, timeout: float = 6.0) -> dict:
-    body = json.dumps(payload).encode() if payload is not None else None
-    req = urllib.request.Request(f"{url.rstrip('/')}{path}", data=body, method=method,
-                                 headers={"X-Internal-Secret": secret,
-                                          "Content-Type": "application/json"})
+def _admin_api(url: str, secret: str, path: str, *, timeout: float = 6.0) -> dict:
+    req = urllib.request.Request(f"{url.rstrip('/')}{path}", headers={"X-Internal-Secret": secret})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode() or "{}")
-
-
-def instance_state(settings, *, force: bool = False) -> dict:
-    """The gate as admin-api holds it: `{admin_exists, global_setup, company}`.
-
-    Cached briefly because the mount builder consults it on EVERY dispatch. FAIL-CLOSED on every
-    error path: an unreachable admin-api means `missing`, because the expensive direction is a
-    worker mounting the organisation tier read-write for somebody whose admin role we could not
-    actually confirm."""
-    url = (getattr(settings, "admin_api_url", "") or "").strip()
-    secret = ""
-    try:
-        secret = settings.internal_api_secret.get_secret_value()
-    except Exception:  # noqa: BLE001 — a settings object without the field (tests)
-        secret = ""
-    key = f"instance::{url}"
-    now = time.monotonic()
-    if not force:
-        hit = _CACHE.get(key)
-        if hit and hit[0] > now:
-            return hit[1]
-    fallback = {"admin_exists": True, "global_setup": MISSING, "company": None, "degraded": True}
-    if not url or not secret:
-        return fallback
-    try:
-        out = _admin_api(url, secret, "/internal/instance")
-        out.setdefault("global_setup", MISSING)
-    except (urllib.error.URLError, OSError, ValueError) as e:  # noqa: PERF203
-        logger.warning("global_layer: could not read the instance gate (%s) — treating it as missing", e)
-        return fallback
-    _CACHE[key] = (now + _CACHE_TTL_S, out)
-    return out
 
 
 def is_admin(settings, subject: str) -> bool:
@@ -303,20 +262,3 @@ def is_admin(settings, subject: str) -> bool:
         return False
     _CACHE[key] = (now + _CACHE_TTL_S, out)
     return bool(out.get("is_admin"))
-
-
-def mark_ready(settings, *, company: str) -> dict:
-    """Flip the gate to `completed` on admin-api, recording the company the layer names.
-
-    Called ONLY after `state()` has said `ready`. Invalidates the local cache so the very next
-    dispatch sees the new value rather than up to 15 seconds of stale refusal — the admin is
-    watching a screen that is waiting for exactly this."""
-    url = (getattr(settings, "admin_api_url", "") or "").strip()
-    secret = settings.internal_api_secret.get_secret_value()
-    if not url or not secret:
-        raise RuntimeError("cannot record the gate: admin-api url/secret are not configured here")
-    out = _admin_api(url, secret, "/internal/settings/global_setup", method="PUT",
-                     payload={"state": COMPLETED, "company": company,
-                              "completed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
-    _CACHE.clear()
-    return out

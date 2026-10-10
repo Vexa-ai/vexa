@@ -21,9 +21,9 @@
  *
  *  The `vexa-user-info` cookie remains display-only. When the oracle answers, ITS email wins.
  *
- *  `is_admin` (added 2026-09-02) rides along because the company-layer gate has to be decided on
- *  EVERY page load, not once at a sign-in door, and deciding it needs one fact this route already
- *  has in hand: whether the validated subject is this instance's administrator. It comes from the
+ *  `is_admin` (added 2026-09-02) rides along because the client decides admin-only affordances
+ *  (e.g. aiming a chat at the company layer) on every page load, and this route already has the
+ *  fact in hand: whether the validated subject is this instance's administrator. It comes from the
  *  oracle, never from the info cookie.
  *
  *  ⚠ IT IS THREE-VALUED ON PURPOSE: true, false, or NULL when the oracle could not be reached

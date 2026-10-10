@@ -28,13 +28,13 @@ from __future__ import annotations
 import datetime as _dt
 import json
 import logging
-import os
-import subprocess
 import time
 from pathlib import Path
 from typing import Callable, Iterable, Optional
 
-from shared.gitenv import scrubbed_git_env
+from control_plane.workspace_attach import STORE_DIRNAME, _slot
+from shared.gitexec import run_git
+from workspaces.shared import workspace_paths as wpaths
 from workspaces.shared.workspace_id import (KINDS, TOUCHES_FILE, VEXA_DIR, WORKSPACE_JSON,
                                  ensure_workspace_json, is_workspace_id, read_touches,
                                  read_workspace_json, write_workspace_json)
@@ -225,18 +225,13 @@ def mirror_touches(desk_dir, rows: list[dict]) -> None:
     commit a new version of this file on every turn — churn in the history of somebody's desk, for
     a value that is not a fact about the workspace."""
     d = Path(desk_dir)
+    # The desk is a work tree the model's tools can write: the touch list and the exclude line are
+    # written through `workspace_paths`, never through a link at `.vexa`, `.git` or either file.
     try:
-        (d / VEXA_DIR).mkdir(parents=True, exist_ok=True)
-        (d / TOUCHES_FILE).write_text(json.dumps(rows[:TOUCH_MIRROR_MAX], indent=1) + "\n",
-                                      encoding="utf-8")
-        info = d / ".git" / "info"
-        if info.parent.is_dir():
-            info.mkdir(parents=True, exist_ok=True)
-            ex = info / "exclude"
-            body = ex.read_text(encoding="utf-8") if ex.exists() else ""
-            if f"/{TOUCHES_FILE}" not in body:
-                ex.write_text(body.rstrip("\n") + f"\n/{TOUCHES_FILE}\n", encoding="utf-8")
-    except OSError as exc:  # noqa: BLE001
+        wpaths.write_text_inside(d, TOUCHES_FILE, json.dumps(rows[:TOUCH_MIRROR_MAX], indent=1) + "\n",
+                                 allow=(VEXA_DIR,))
+        wpaths.ensure_git_exclude(d, f"/{TOUCHES_FILE}")
+    except (wpaths.PathRefused, OSError) as exc:  # noqa: BLE001
         logger.info("could not mirror the touch log into %s: %s", desk_dir, exc)
 
 
@@ -254,7 +249,8 @@ def classify(ws_dir) -> str:
     p = Path(ws_dir)
     if p.name == GLOBAL_SLUG:
         return "global"
-    return "group" if (p / _MEMBERS_FILE).is_file() else "desk"
+    # nofollow: a `policy` linked in from another tree does not make this one a group
+    return "group" if wpaths.is_file_inside(p, _MEMBERS_FILE) else "desk"
 
 
 def _default_name(slug: str, kind: str) -> str:
@@ -282,12 +278,11 @@ def _commit_identity(ws_dir: Path) -> None:
     over."""
     if not (ws_dir / ".git").is_dir():
         return
-    env = {**os.environ, **scrubbed_git_env(),
-           "GIT_AUTHOR_NAME": "Vexa", "GIT_AUTHOR_EMAIL": "platform@vexa.ai",
+    env = {"GIT_AUTHOR_NAME": "Vexa", "GIT_AUTHOR_EMAIL": "platform@vexa.ai",
            "GIT_COMMITTER_NAME": "Vexa", "GIT_COMMITTER_EMAIL": "platform@vexa.ai"}
 
     def git(*args):
-        return subprocess.run(["git", "-C", str(ws_dir), *args], capture_output=True, text=True, env=env)
+        return run_git(ws_dir, *args, env=env)
 
     try:
         git("add", "--", WORKSPACE_JSON)
@@ -295,6 +290,45 @@ def _commit_identity(ws_dir: Path) -> None:
             git("commit", "-q", "-m", f"{ws_dir.name}: workspace identity", "--", WORKSPACE_JSON)
     except OSError as exc:  # noqa: BLE001 — no git on PATH is a deployment shape, not a failure
         logger.info("could not commit the workspace identity in %s: %s", ws_dir, exc)
+
+
+def workspace_dir(root, slug) -> Optional[Path]:
+    """``<root>/<slug>`` for a slug that can name a top-level workspace, else None.
+
+    The org tier (``_global``), or ONE name under the workspace name rule as a slot
+    (``workspace_attach._slot``: ``workspace_paths.is_workspace_name`` with ``tier=False`` — no
+    separator, never a dotname, never a tier) that is not a reserved system name. So the platform's own directories at the store root (``.attached``,
+    ``.system``, ``.attached-shared``, a staging directory) and anything a volume brings
+    (``lost+found``) are never a workspace, whoever names them."""
+    s = str(slug or "").strip()
+    if s == GLOBAL_SLUG:
+        return Path(root) / GLOBAL_SLUG
+    if s in _SKIP_SLUGS:
+        return None
+    try:
+        return _slot(Path(root), s)
+    except KeyError:
+        return None
+
+
+def addressable(record: Optional[dict], root) -> bool:
+    """A registry record that names a workspace a slug can address: its slug passes
+    :func:`workspace_dir`, and its tree is ``<root>/<slug>`` (or ``_global``'s, or a tree in its
+    owner's private store). A record failing this is answered ``gone`` and dropped at startup."""
+    if not record:
+        return False
+    named = workspace_dir(root, record.get("slug"))
+    if named is None:
+        return False
+    if record.get("slug") == GLOBAL_SLUG or private_owner(record, root) is not None:
+        return True
+    d = record.get("dir")
+    if not d:
+        return True
+    try:
+        return Path(str(d)).resolve() == named.resolve()
+    except OSError:
+        return False
 
 
 def sync_workspace(root, slug: str, *, registry: WorkspaceRegistry, kind: Optional[str] = None,
@@ -307,8 +341,16 @@ def sync_workspace(root, slug: str, *, registry: WorkspaceRegistry, kind: Option
     restore, promote, un-share — it reads the identity out of the tree that is now in place. A
     parked tree brings its id back with it; a freshly cloned repo that already carries
     ``.vexa/workspace.json`` keeps ITS id, and the registry re-points to the new slug. That is how
-    an attached repo stays the same workspace instead of becoming a new one wearing its name."""
-    d = Path(ws_dir) if ws_dir is not None else Path(root) / slug
+    an attached repo stays the same workspace instead of becoming a new one wearing its name.
+
+    For the acts above only: ``slug`` comes from the platform (a created or moved tree, or the
+    caller's own subject), never straight from a request. A lookup that missed uses
+    :func:`resolve_slug`, which mints and registers nothing. A slug outside the naming rule is
+    refused here too (None), so no path registers one."""
+    named = workspace_dir(root, slug)
+    if named is None:
+        return None
+    d = Path(ws_dir) if ws_dir is not None else named
     if not d.is_dir():
         return None
     kind = (kind or classify(d)).strip().lower()
@@ -336,6 +378,29 @@ def sync_workspace(root, slug: str, *, registry: WorkspaceRegistry, kind: Option
     })
 
 
+def resolve_slug(root, slug: str, *, registry: WorkspaceRegistry) -> Optional[dict]:
+    """A lookup by slug that missed the registry: re-point the record the tree at ``<root>/<slug>``
+    already carries, or None. Never mints an id and never registers a new record — naming a
+    workspace in a request is not an act that creates one.
+
+    The tree's own ``.vexa/workspace.json`` must name an id the registry already holds, and that
+    record must not still point at another tree that exists (a lookup does not move a workspace
+    away from where it is)."""
+    d = workspace_dir(root, slug)
+    if d is None or not d.is_dir():
+        return None
+    found = read_workspace_json(d)
+    if not found:
+        return None
+    rec = registry.get(str(found.get("id") or ""))
+    if rec is None:
+        return None
+    prev = rec.get("dir")
+    if prev and Path(str(prev)) != d and Path(str(prev)).is_dir():
+        return None
+    return registry.put({**rec, "slug": str(slug).strip(), "dir": str(d)})
+
+
 def rename(registry: WorkspaceRegistry, workspace_id: str, name: str) -> Optional[dict]:
     """Set a workspace's display name. The id and every link into it are untouched — which is the
     single behaviour decision 26 was asked for."""
@@ -357,9 +422,15 @@ def migrate(root, registry: WorkspaceRegistry, *, created: Optional[str] = None)
     slot inside somebody's attach store would resolve links to a tree nobody can open. Minting it
     now is what makes the id survive the swap that brings it back."""
     rootp = Path(root)
-    out = {"indexed": [], "minted": [], "parked_minted": []}
+    out = {"indexed": [], "minted": [], "parked_minted": [], "dropped": []}
     if not rootp.is_dir():
         return out
+    # A record no slug can address (a platform directory registered by name, say) is dropped: its
+    # links then answer `gone`, which is what such a record should always have answered.
+    for rec in registry.all():
+        if not addressable(rec, rootp):
+            registry.forget(str(rec.get("id")))
+            out["dropped"].append(rec.get("id"))
     day = created or _dt.date.today().isoformat()
     for d in sorted(rootp.iterdir()):
         if not d.is_dir() or d.name.startswith(".") or d.name in _SKIP_SLUGS:
@@ -372,7 +443,7 @@ def migrate(root, registry: WorkspaceRegistry, *, created: Optional[str] = None)
         if not had:
             out["minted"].append(rec)
     # The attach store: `<root>/.attached/<subject>/<slug>` — one level of subject, one of slug.
-    store = rootp / ".attached"
+    store = rootp / STORE_DIRNAME
     if store.is_dir():
         for subject_dir in sorted(p for p in store.iterdir() if p.is_dir()):
             for slot in sorted(p for p in subject_dir.iterdir() if p.is_dir() and not p.name.startswith(".")):
@@ -389,6 +460,22 @@ def migrate(root, registry: WorkspaceRegistry, *, created: Optional[str] = None)
 # A membership check: (root, workspace_id/slug, subject) -> role | None. Injected so this module
 # owns no import of the membership store and the tests need no policy files.
 MemberCheck = Callable[[Path, str, str], Optional[str]]
+
+
+def private_owner(record: Optional[dict], root=None) -> Optional[str]:
+    """The owner of a tree that lives in its owner's PRIVATE store (``<root>/.attached/<owner>/…``) —
+    a group its owner un-shared, say — or None. Whatever its record's kind says, such a tree is its
+    owner's alone: a desk is readable by the instance because it is the person's own
+    ``<root>/<subject>``, and a tree parked in their store is not that."""
+    owner = str((record or {}).get("owner") or "").strip()
+    d = (record or {}).get("dir")
+    if not d or root is None or not wpaths.is_workspace_name(owner):
+        return None
+    try:
+        store = (Path(root) / STORE_DIRNAME / owner).resolve()
+        return owner if store in Path(str(d)).resolve().parents else None
+    except OSError:
+        return None
 
 
 def access_for(record: Optional[dict], subject: str, *, root=None,
@@ -410,13 +497,18 @@ def access_for(record: Optional[dict], subject: str, *, root=None,
     and writable-by-one is the entire shape of a desk.
 
     So `not-yours` applies to a desk only for a caller from OUTSIDE the instance — no subject at all
-    (an unauthenticated edge, or the company-layer gate closed before a subject was resolved). That
+    (an unauthenticated edge, or any refusal that ran before a subject was resolved). That
     is why the subject is tested for emptiness rather than for identity."""
     if not record:
         return ACCESS_GONE
     d = record.get("dir")
     if d and not Path(d).is_dir():
         return ACCESS_GONE
+    if root is not None and not addressable(record, root):
+        return ACCESS_GONE              # a platform directory, or a row pointing somewhere else
+    owner = private_owner(record, root)
+    if owner is not None:               # a tree in its owner's private store: theirs alone
+        return ACCESS_READABLE if str(subject or "").strip() == owner else ACCESS_NOT_YOURS
     kind = record.get("kind")
     if kind == "global":
         return ACCESS_READABLE          # the org tier is mounted into every worker and every chat
@@ -445,6 +537,8 @@ def writable_for(record: Optional[dict], subject: str, *, root=None,
     that will 403."""
     if not record or access_for(record, subject, root=root, is_member=is_member) != ACCESS_READABLE:
         return False
+    if private_owner(record, root) is not None:
+        return True                     # readable above means the caller is its owner
     kind = record.get("kind")
     if kind == "global":
         return False

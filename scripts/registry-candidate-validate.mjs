@@ -27,7 +27,7 @@ function classifyStatus(status) {
   return "registry";
 }
 
-async function request(fetchImpl, url, options, context) {
+async function request(fetchImpl, url, options, context, { allowMissing = false } = {}) {
   let response;
   try {
     response = await fetchImpl(url, options);
@@ -38,6 +38,11 @@ async function request(fetchImpl, url, options, context) {
       { cause: error.message },
     );
   }
+
+  // A negative control may name a tag the repository simply does not have (`latest` exists on
+  // vexaai/vexa-lite and on nothing else in the v012 set). Absent is a legitimate reading there,
+  // so the caller can ask for it; every other call keeps 404 as a failure.
+  if (allowMissing && response.status === 404) return null;
 
   if (!response.ok) {
     const body = (await response.text()).slice(0, 500);
@@ -229,14 +234,16 @@ async function registryManifest({ fetchImpl, registryBase, repository, reference
   };
 }
 
-async function rawRegistryManifest({ fetchImpl, registryBase, repository, reference, token }) {
+async function rawRegistryManifest({ fetchImpl, registryBase, repository, reference, token, allowMissing = false }) {
   const url = new URL(`/v2/${repository}/manifests/${reference}`, registryBase);
   const response = await request(
     fetchImpl,
     url,
     { headers: { authorization: `Bearer ${token}`, accept: ACCEPT } },
     `${repository}@${reference}: manifest read`,
+    { allowMissing },
   );
+  if (!response) return null;
   return {
     digest: response.headers.get("docker-content-digest"),
     mediaType: response.headers.get("content-type")?.split(";")[0],
@@ -320,6 +327,7 @@ export async function aliasManifest({
       repository,
       reference: unchangedReference,
       token,
+      allowMissing: true,
     });
   }
 
@@ -360,10 +368,11 @@ export async function aliasManifest({
       repository,
       reference: unchangedReference,
       token,
+      allowMissing: true,
     });
     identity(
-      readback.digest === unchanged.digest,
-      `${repository}:${unchangedReference}: negative-control descriptor moved (before ${unchanged.digest}, after ${readback.digest || "<missing>"})`,
+      (readback?.digest ?? null) === (unchanged?.digest ?? null),
+      `${repository}:${unchangedReference}: negative-control descriptor moved (before ${unchanged?.digest ?? "<absent>"}, after ${readback?.digest ?? "<absent>"})`,
     );
   }
 

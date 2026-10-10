@@ -24,11 +24,19 @@ export const REQUIRED_IMAGES = [
 // oss_only.
 export const FLOWS_IMAGE = "vexaai/v012-flows";
 export const REQUIRED_IMAGES_V2 = [...REQUIRED_IMAGES, FLOWS_IMAGE];
-export const CURRENT_SCHEMA_VERSION = 2;
-export const CURRENT_REQUIRED_IMAGES = REQUIRED_IMAGES_V2;
+
+// schema_version 3 (v0.13.2+): Connections ships the credential broker as its own image
+// (core/agent/services/credential-broker, ADR-0040) — compose and the chart run it beside
+// agent-api. Frozen schema-1 and schema-2 packets keep validating against ten and eleven; a
+// v0.13.2+ map must name twelve. Hosted production does not deploy it yet, so it is oss_only.
+export const CREDENTIAL_BROKER_IMAGE = "vexaai/v012-credential-broker";
+export const REQUIRED_IMAGES_V3 = [...REQUIRED_IMAGES_V2, CREDENTIAL_BROKER_IMAGE];
+export const CURRENT_SCHEMA_VERSION = 3;
+export const CURRENT_REQUIRED_IMAGES = REQUIRED_IMAGES_V3;
 
 export function requiredImagesFor(doc) {
   if (!doc) return CURRENT_REQUIRED_IMAGES;
+  if (doc.schema_version === 3) return REQUIRED_IMAGES_V3;
   return doc.schema_version === 2 ? REQUIRED_IMAGES_V2 : REQUIRED_IMAGES;
 }
 
@@ -98,6 +106,9 @@ export const RUNTIME_INPUTS_BY_IMAGE = {
     ".dockerignore",
     "core/flows",
     "behavior",
+  ],
+  "vexaai/v012-credential-broker": [
+    "core/agent/services/credential-broker",
   ],
   "vexaai/vexa-lite": [
     "deploy/lite",
@@ -187,6 +198,14 @@ export const BUILD_MATRIX_BY_IMAGE = {
     context: ".",
     dockerfile: "core/flows/Dockerfile",
   },
+  // Narrow context: the broker's signer is vendored into its own src/, so nothing outside its
+  // directory enters the image.
+  "vexaai/v012-credential-broker": {
+    name: "credential-broker",
+    repository: "v012-credential-broker",
+    context: "core/agent/services/credential-broker",
+    dockerfile: "core/agent/services/credential-broker/Dockerfile",
+  },
 };
 
 export const RUNTIME_INPUT_PATHS = [
@@ -203,7 +222,7 @@ const fail = (message) => {
 
 export function validateCandidateMap(doc, expectedVersion) {
   if (!doc || typeof doc !== "object" || Array.isArray(doc)) fail("map must be an object");
-  if (doc.schema_version !== 1 && doc.schema_version !== 2) fail("schema_version must be 1 or 2");
+  if (![1, 2, 3].includes(doc.schema_version)) fail("schema_version must be 1, 2 or 3");
   if (!VERSION.test(doc.release)) fail(`invalid stable release: ${doc.release}`);
   if (expectedVersion && doc.release !== expectedVersion) {
     fail(`map release ${doc.release} does not match requested ${expectedVersion}`);

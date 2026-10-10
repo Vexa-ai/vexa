@@ -1,0 +1,13 @@
+{
+  "why": "identity depends on nothing",
+  "manifest": {
+    "contract": "mcp.tools.v1",
+    "domain": "identity",
+    "source": "oss",
+    "depends_on": [
+      "identity"
+    ],
+    "base_url_env": "AGENT_API_URL",
+    "tools": []
+  }
+}

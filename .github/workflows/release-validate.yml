@@ -94,6 +94,7 @@ on:
           - vexaai/v012-mcp
           - vexaai/v012-terminal
           - vexaai/v012-flows
+          - vexaai/v012-credential-broker
           - vexaai/vexa-bot
           - vexaai/vexa-lite
       validation_leg:
@@ -120,6 +121,7 @@ env:
     vexaai/v012-mcp
     vexaai/v012-terminal
     vexaai/v012-flows
+    vexaai/v012-credential-broker
     vexaai/vexa-bot
     vexaai/vexa-lite
   # The terminal variant THIS release line publishes, asserted against the published image's own
@@ -153,8 +155,7 @@ env:
   #
   # Verified 2026-09-07 from a laptop at zero Hub cost: mirror.gcr.io answers anonymous manifest
   # GETs with 200 for every reference these legs pull — the whole vexaai/* release set,
-  # postgres:17-alpine, valkey/valkey:8-alpine, minio/minio:latest, minio/mc:latest,
-  # node:20-slim — and the digests it returns for the vexaai set are byte-identical to the
+  # postgres:17-alpine, valkey/valkey:8-alpine, node:20-slim — and the digests it returns for the vexaai set are byte-identical to the
   # human-reviewed packet at releases/v0.13.0/candidate-images.json (checked against the file,
   # not against Hub).
   #
@@ -206,10 +207,10 @@ jobs:
           if [ "$BARE" != "$BASE" ]; then PRE=true; else PRE=false; fi
           { echo "version=$VERSION"; echo "prerelease=$PRE"; } >> "$GITHUB_OUTPUT"
           echo "✓ validating published set $VERSION (prerelease=$PRE)"
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Registry validator controls
         run: node --test scripts/registry-candidate-validate.test.mjs
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -348,6 +349,13 @@ jobs:
               EXPECTED_TOP_DESCRIPTORS=11
               EXPECTED_PLATFORM_IDENTITIES=21
               ;;
+            v0.12.27-rc.5|v0.12.27)
+              CANDIDATE_MAP=releases/v0.12.27/candidate-images.json
+              EXPECTED_MAP_STABLE_TAG=v0.12.27
+              EXPECTED_MAP_SHA256=5dfc6f51c2b2cde6ba0f152b06de0ae35624c09e8ad159b3555cd92c6674178d
+              EXPECTED_TOP_DESCRIPTORS=11
+              EXPECTED_PLATFORM_IDENTITIES=21
+              ;;
             v0.12.26-rc.1|v0.12.26)
               CANDIDATE_MAP=releases/v0.12.26/candidate-images.json
               EXPECTED_MAP_STABLE_TAG=v0.12.26
@@ -469,8 +477,8 @@ jobs:
     env:
       VERSION: ${{ needs.resolve.outputs.version }}
     steps:
-      - uses: jlumbroso/free-disk-space@v1.3.1
-      - uses: docker/login-action@v3
+      - uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -531,6 +539,8 @@ jobs:
               # from /.well-known/mcp-tools.json (absent ⇒ that route 503s and the assembled MCP
               # surface silently loses this domain's tools).
               vexaai/v012-flows)        probe "$ref" python -c "import flows_worker, flows_integrations.mailbox, flows_integrations.flows_api, os; assert os.path.exists('/app/mcp.tools.v1.json')" ;;
+              # The broker and its vendored contract signer import, and the image runs unprivileged.
+              vexaai/v012-credential-broker) probe "$ref" python -c "import os, credential_broker.app, credential_broker.store, credential_broker.assertion; assert os.getuid() != 0" ;;
               vexaai/vexa-bot)          probe "$ref" bash -c 'test -x /app/entrypoint.sh && test -f /app/browser-utils.global.js' ;;
               vexaai/vexa-lite)         probe "$ref" bash -c 'test -f /etc/supervisor/conf.d/vexa.conf && test -x /entrypoint.sh' ;;
               *)
@@ -604,10 +614,10 @@ jobs:
     env:
       VERSION: ${{ needs.resolve.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: jlumbroso/free-disk-space@v1.3.1
-      - uses: astral-sh/setup-uv@v5
-      - uses: docker/login-action@v3
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -704,10 +714,10 @@ jobs:
             echo "   ✓ $ref ← Docker Hub"
           }
           for img in v012-admin-api v012-runtime v012-agent-api v012-meeting-api \
-                     v012-gateway v012-flows v012-mcp v012-terminal v012-agent-worker; do
+                     v012-gateway v012-flows v012-mcp v012-terminal v012-agent-worker v012-credential-broker; do
             mirror_pull "vexaai/$img:$VERSION"
           done
-          for ref in valkey/valkey:8-alpine postgres:17-alpine minio/minio:latest minio/mc:latest; do
+          for ref in valkey/valkey:8-alpine postgres:17-alpine; do
             mirror_pull "$ref"
           done
           echo "✓ every image this leg runs is resident locally — compose will pull nothing"
@@ -732,10 +742,10 @@ jobs:
     env:
       VERSION: ${{ needs.resolve.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: jlumbroso/free-disk-space@v1.3.1
-      - uses: astral-sh/setup-uv@v5
-      - uses: docker/login-action@v3
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -766,10 +776,10 @@ jobs:
             echo "   ✓ $ref ← Docker Hub"
           }
           for img in v012-admin-api v012-runtime v012-agent-api v012-meeting-api \
-                     v012-gateway v012-flows v012-mcp v012-terminal v012-agent-worker; do
+                     v012-gateway v012-flows v012-mcp v012-terminal v012-agent-worker v012-credential-broker; do
             mirror_pull "vexaai/$img:$VERSION"
           done
-          for ref in valkey/valkey:8-alpine postgres:17-alpine minio/minio:latest minio/mc:latest node:20-slim; do
+          for ref in valkey/valkey:8-alpine postgres:17-alpine node:20-slim; do
             mirror_pull "$ref"
           done
           echo "✓ every image this leg runs is resident locally — compose will pull nothing"
@@ -800,10 +810,10 @@ jobs:
     env:
       VERSION: ${{ needs.resolve.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: jlumbroso/free-disk-space@v1.3.1
-      - uses: astral-sh/setup-uv@v5
-      - uses: docker/login-action@v3
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -831,10 +841,10 @@ jobs:
             echo "   ✓ $ref ← Docker Hub"
           }
           for img in v012-admin-api v012-runtime v012-agent-api v012-meeting-api \
-                     v012-gateway v012-flows v012-mcp v012-terminal v012-agent-worker; do
+                     v012-gateway v012-flows v012-mcp v012-terminal v012-agent-worker v012-credential-broker; do
             mirror_pull "vexaai/$img:$VERSION"
           done
-          for ref in valkey/valkey:8-alpine postgres:17-alpine minio/minio:latest minio/mc:latest node:20-slim; do
+          for ref in valkey/valkey:8-alpine postgres:17-alpine node:20-slim; do
             mirror_pull "$ref"
           done
           echo "✓ every image this leg runs is resident locally — compose will pull nothing"
@@ -863,10 +873,10 @@ jobs:
     env:
       VERSION: ${{ needs.resolve.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: jlumbroso/free-disk-space@v1.3.1
-      - uses: astral-sh/setup-uv@v5
-      - uses: docker/login-action@v3
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -897,10 +907,10 @@ jobs:
           }
           mirror_pull "vexaai/vexa-bot:$VERSION"
           for img in v012-admin-api v012-runtime v012-agent-api v012-meeting-api \
-                     v012-gateway v012-flows v012-mcp v012-terminal v012-agent-worker; do
+                     v012-gateway v012-flows v012-mcp v012-terminal v012-agent-worker v012-credential-broker; do
             mirror_pull "vexaai/$img:$VERSION"
           done
-          for ref in valkey/valkey:8-alpine postgres:17-alpine minio/minio:latest minio/mc:latest; do
+          for ref in valkey/valkey:8-alpine postgres:17-alpine; do
             mirror_pull "$ref"
           done
           echo "✓ every image this leg runs is resident locally — compose will pull nothing"
@@ -926,17 +936,17 @@ jobs:
     env:
       VERSION: ${{ needs.resolve.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: jlumbroso/free-disk-space@v1.3.1
-      - uses: docker/login-action@v3
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       # ── every image this leg RUNS arrives from the mirror, not Docker Hub (#715) ──────────────
       # See validate-compose for the full note. Lite's implicit set is not compose's: `make -C
-      # deploy/lite up` runs `docker run` for a postgres and a minio sidecar and a one-shot
-      # minio/mc, and `docker run` implicit-pulls each one (deploy/lite/Makefile § up, read
-      # 2026-09-07). The app image itself is explicit — the bake VERIFY below needs it resident
+      # deploy/lite up` runs `docker run` for a postgres sidecar, which implicit-pulls
+      # (deploy/lite/Makefile § up). The storage sidecar is pinned by digest (STORAGE_IMAGE),
+      # which a by-tag mirror pull cannot satisfy, so `docker run` fetches it. The app image itself is explicit — the bake VERIFY below needs it resident
       # anyway, and `up` then finds it locally instead of pulling it a second time.
       # Not here: the LOCAL_STT whisper image (this leg never sets LOCAL_STT) and the bot image
       # (lite's process backend spawns bots in-process; concurrent-bots.sh only `docker exec`s).
@@ -959,7 +969,7 @@ jobs:
             echo "   ✓ $ref ← Docker Hub"
           }
           mirror_pull "vexaai/vexa-lite:$VERSION"
-          for ref in postgres:17-alpine minio/minio:latest minio/mc:latest; do
+          for ref in postgres:17-alpine; do
             mirror_pull "$ref"
           done
           echo "✓ every image this leg runs is resident locally — make -C deploy/lite up will pull nothing"
@@ -981,7 +991,7 @@ jobs:
           || { echo "::error title=offline-bake::vexaai/vexa-lite:$VERSION shipped with an EMPTY or broken /opt/hf-cache — the pyannote-segmentation-3.0 model did not bake (the lite warm degrades gracefully on HF rate-limit). This image would stall on the first Zoom/Teams diarization. Re-run the lite build with HuggingFace reachable."; exit 1; }
       - name: Point lite at the published image
         run: |
-          printf 'ADMIN_TOKEN=ci-admin-token\nTRANSCRIPTION_SERVICE_URL=\nTRANSCRIPTION_SERVICE_TOKEN=\nIMAGE_TAG=%s\n' "$VERSION" > .env
+          printf 'ADMIN_TOKEN=%s\nTRANSCRIPTION_SERVICE_URL=\nTRANSCRIPTION_SERVICE_TOKEN=\nIMAGE_TAG=%s\n' "$(openssl rand -hex 32)" "$VERSION" > .env
       # Pulls nothing any more — the pre-pull step above left vexaai/vexa-lite:$VERSION and the
       # three sidecar images resident (#715).
       - name: Bring lite up (from the pre-pulled vexaai/vexa-lite:$VERSION)
@@ -1000,7 +1010,7 @@ jobs:
       # The script itself waits for the /bots route to answer non-5xx before spawning
       # (the v0.12.1 maiden run failed here with a 502: gateway up, meeting-api not yet).
       - name: Concurrent-bots smoke (the #478 class — ≥2 bots, per-bot profile dirs)
-        run: ADMIN_TOKEN=ci-admin-token deploy/lite/tests/concurrent-bots.sh
+        run: ADMIN_TOKEN="$(sed -n 's/^ADMIN_TOKEN=//p' .env)" deploy/lite/tests/concurrent-bots.sh
       - name: Lite state on failure
         if: failure()
         run: |
@@ -1019,9 +1029,9 @@ jobs:
     env:
       VERSION: ${{ needs.resolve.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: jlumbroso/free-disk-space@v1.3.1
-      - uses: docker/login-action@v3
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -1076,6 +1086,8 @@ jobs:
                 assert_terminal_mode "$ref"
                 ;;
               vexaai/v012-flows)        probe "$ref" python -c "import flows_worker, flows_integrations.mailbox, flows_integrations.flows_api, os; assert os.path.exists('/app/mcp.tools.v1.json')" ;;
+              # The broker and its vendored contract signer import, and the image runs unprivileged.
+              vexaai/v012-credential-broker) probe "$ref" python -c "import os, credential_broker.app, credential_broker.store, credential_broker.assertion; assert os.getuid() != 0" ;;
               vexaai/vexa-lite)         probe "$ref" bash -c 'test -f /etc/supervisor/conf.d/vexa.conf && test -x /entrypoint.sh' ;;
               *)
                 echo "::error title=validate-arm64::no identity assertion for $img — every matrix image must state what proves its contents match its name"
@@ -1088,7 +1100,7 @@ jobs:
           echo "✓ arm64 identity probes green (bot excluded)"
       - name: Point lite at the published image
         run: |
-          printf 'ADMIN_TOKEN=ci-admin-token\nTRANSCRIPTION_SERVICE_URL=\nTRANSCRIPTION_SERVICE_TOKEN=\nIMAGE_TAG=%s\n' "$VERSION" > .env
+          printf 'ADMIN_TOKEN=%s\nTRANSCRIPTION_SERVICE_URL=\nTRANSCRIPTION_SERVICE_TOKEN=\nIMAGE_TAG=%s\n' "$(openssl rand -hex 32)" "$VERSION" > .env
       - name: Bring lite up (pulls vexaai/vexa-lite:$VERSION arm64)
         run: make -C deploy/lite up init-db
       - name: Probe the front doors (make test exits non-zero on failure)
@@ -1115,8 +1127,8 @@ jobs:
       VERSION: ${{ needs.resolve.outputs.version }}
       KUBECONFIG: /etc/rancher/k3s/k3s.yaml
     steps:
-      - uses: actions/checkout@v4
-      - uses: jlumbroso/free-disk-space@v1.3.1
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
       # k3s' containerd pulls anonymously by default — authenticate to dodge Docker Hub's
       # per-IP anonymous rate limit (shared across GitHub runners).
       #
@@ -1169,6 +1181,18 @@ jobs:
           sudo grep -q 'mirror\.gcr\.io' "$HOSTS" \
             || { echo "::error ::k3s' containerd host config for docker.io does not name mirror.gcr.io — every chart-image pull will bill Docker Hub (#715)"; exit 1; }
           echo "✓ containerd tries mirror.gcr.io before registry-1.docker.io for docker.io"
+      # The chart stores recordings in the operator's own S3 and runs no object store, so this leg
+      # starts one that exists only in the test: versitygw (POSIX backend, pinned by digest) with a
+      # Secret of random credentials — the Secret values-test.yaml names as storage.s3.existingSecret.
+      - name: Test-only S3 fixture
+        run: |
+          set -euo pipefail
+          kubectl create namespace vexa
+          kubectl -n vexa create secret generic s3-fixture-credentials \
+            --from-literal=AWS_ACCESS_KEY_ID="$(openssl rand -hex 10)" \
+            --from-literal=AWS_SECRET_ACCESS_KEY="$(openssl rand -hex 20)"
+          kubectl -n vexa apply -f deploy/helm/tests/s3-fixture.yaml
+          kubectl -n vexa wait --for=condition=complete job/s3-fixture-bucket --timeout=300s
       - name: helm install from published images
         run: |
           helm upgrade --install vexa deploy/helm/charts/vexa -n vexa --create-namespace \
@@ -1187,12 +1211,21 @@ jobs:
             exit 1
           fi
           echo "✓ gateway healthy, all pods Running"
+      - name: Recording round trip into the fixture bucket
+        run: |
+          set -euo pipefail
+          kubectl -n vexa exec -i deploy/vexa-vexa-meeting-api -c meeting-api -- \
+            env GATEWAY_URL=http://vexa-vexa-gateway:8000 python3 - all \
+            < deploy/helm/tests/recording_roundtrip.py
+          echo "✓ upload → finalize → playback → delete through the API, objects in the fixture bucket"
       - name: Cluster state on failure
         if: failure()
         run: |
           kubectl -n vexa get pods -o wide || true
           kubectl -n vexa get events --sort-by=.lastTimestamp | tail -50 || true
           kubectl -n vexa describe pods | tail -150 || true
+          kubectl -n vexa logs deploy/s3-fixture --tail=50 || true
+          kubectl -n vexa logs deploy/vexa-vexa-meeting-api --tail=100 || true
 
   # ──────────────────────────────────────────────────────────────────────────────────────────
   # The guarantee block (delivery.mdx ship bar, owner-approved canon 2026-07-13) — GENERATED
@@ -1270,7 +1303,7 @@ jobs:
             echo "| 9 | The notes tell the truth about coverage | this table IS the mechanism — generated from run results, gaps stated above |"
             echo "| 10 | Pointers moved honestly | promote runs only on all-green + promote:true; constitutional guards in the job |"
           } | tee guarantees.md >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: guarantees-${{ needs.resolve.outputs.version }}
           path: guarantees.md
@@ -1289,9 +1322,9 @@ jobs:
     steps:
       # Pin to main: the gate must run TRUSTED code (and read main's receipt), never the
       # dispatched ref — a promote dispatch from a branch cannot substitute its own gate script.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with: { ref: main }
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with: { node-version: 22 }
       - name: Every batch change was individually accepted (pr-value / value-signed)
         env:
@@ -1310,9 +1343,9 @@ jobs:
     steps:
       # Pin to main: the receipt lives on main (committed after the tag), and the gate script
       # itself must be the trusted one, not the dispatched ref's.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with: { ref: main }
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with: { node-version: 22 }
       - name: A human witnessed the assembled value (receipt present + well-formed + version-matched)
         env:
@@ -1351,7 +1384,7 @@ jobs:
       PROMOTE_LATEST: ${{ inputs.promote_latest == true }}
       PROMOTE_REPOSITORY: ${{ inputs.promote_repository }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Manifest-preserving promotion and exact readback
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -1364,6 +1397,9 @@ jobs:
               ;;
             v0.12.23)
               EXPECTED_MAP_SHA256=c5a310465b9005573c9fef79534e34a7822447d6c7004f24271ed59df61fe2a6
+              ;;
+            v0.12.27)
+              EXPECTED_MAP_SHA256=5dfc6f51c2b2cde6ba0f152b06de0ae35624c09e8ad159b3555cd92c6674178d
               ;;
             *)
               echo "::error ::$VERSION has no reviewed stable-promotion map identity"

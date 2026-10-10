@@ -25,6 +25,10 @@ import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from rig import Rig                                              # noqa: E402
+# agent-api believes a named person only from the gateway's signature or the internal tier;
+# this harness acts for one the way flows does (`flows_steps.agent.as_person`).
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "src"))
+from flows_steps.agent import as_person                         # noqa: E402
 
 AGENT_API = os.environ.get("VEXA_DNA_AGENT_API", "http://127.0.0.1:18500")
 MAILPIT = os.environ.get("VEXA_DNA_MAILPIT", "http://127.0.0.1:8025")
@@ -46,7 +50,7 @@ def http(method: str, url: str, headers: dict | None = None, body=None, timeout=
 
 
 def history(uid: str, session: str) -> list:
-    _, h = http("GET", f"{AGENT_API}/api/sessions/{session}/history", {"X-User-Id": uid})
+    _, h = http("GET", f"{AGENT_API}/api/sessions/{session}/history", as_person(uid))
     turns = h.get("turns", []) if isinstance(h, dict) else []
     return turns if isinstance(turns, list) else []
 
@@ -70,7 +74,7 @@ def chat_turn(uid: str, session: str, prompt: str, budget_s: int = 420) -> str |
     The worker container is the signal: the runtime reaps it when the unit goes idle, so once it
     has been seen and is then gone with no new turn in the history, waiting longer cannot help."""
     base = len(history(uid, session))
-    http("POST", f"{AGENT_API}/api/chat", {"X-User-Id": uid},
+    http("POST", f"{AGENT_API}/api/chat", as_person(uid),
          {"prompt": prompt, "session": session}, timeout=3)
     deadline, seen_worker = time.time() + budget_s, False
     while time.time() < deadline:
@@ -244,12 +248,12 @@ ENTITY_PAGES_SAMPLED = 8       # what the judge is shown; the count is measured 
 
 
 def workspace_git(uid: str) -> dict:
-    _, g = http("GET", f"{AGENT_API}/api/workspace/git", {"X-User-Id": uid})
+    _, g = http("GET", f"{AGENT_API}/api/workspace/git", as_person(uid))
     return g if isinstance(g, dict) else {}
 
 
 def ws_file(uid: str, path: str) -> str | None:
-    code, b = http("GET", f"{AGENT_API}/api/workspace/file?path={path}", {"X-User-Id": uid})
+    code, b = http("GET", f"{AGENT_API}/api/workspace/file?path={path}", as_person(uid))
     return b.get("content") if code == 200 and isinstance(b, dict) else None
 
 
@@ -301,7 +305,7 @@ def reset_workspace(rig: Rig, uid: str) -> dict:
     harness therefore supplies the tenant claims and records the verdicts ITSELF, and says so --
     this is a scratch tenant with no human behind it. On any workspace with a real person, the
     person answers."""
-    out = {"reset": http("POST", f"{AGENT_API}/api/workspace/reset", {"X-User-Id": uid},
+    out = {"reset": http("POST", f"{AGENT_API}/api/workspace/reset", as_person(uid),
                          {"target": "personal"})[1]}
     p = rig.call("propose", claims=TENANT_CLAIMS)
     ids = p.get("ids") or p.get("proposed") or []

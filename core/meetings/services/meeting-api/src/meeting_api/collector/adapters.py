@@ -25,7 +25,7 @@ import secrets
 from datetime import datetime, timezone
 from typing import Optional
 
-from .ports import RedisBus, TranscriptStore
+from .ports import ARTIFACT_DELETION_FIELD, RedisBus, TranscriptStore, deletion_stamp
 
 log = logging.getLogger("meeting_api.collector.adapters")
 
@@ -251,6 +251,39 @@ class SqlAlchemyTranscriptStore:
         # numeric meeting_id → (native_meeting_id, platform). The id→native map is immutable for a
         # meeting row, so cache it forever once resolved (bounded by the live meeting set).
         self._native_cache: dict[int, tuple[str, str]] = {}
+        # Meeting ids whose transcript was deleted. Deletion is one-way, so a positive answer is
+        # cached for the life of the process; a negative one never is.
+        self._erased: set[int] = set()
+
+    async def transcript_erased(self, meeting_id) -> bool:
+        try:
+            mid = int(meeting_id)
+        except (TypeError, ValueError):
+            return False
+        if mid in self._erased:
+            return True
+        from sqlalchemy import select  # lazy: not needed for the in-memory fakes
+
+        from .models import Meeting
+
+        async with self._session_factory() as db:
+            data = (await db.execute(select(Meeting.data).where(Meeting.id == mid))).scalars().first()
+        erased = isinstance(data, dict) and bool(data.get("artifact_deletion"))
+        if erased:
+            self._erased.add(mid)
+        return erased
+
+    async def erased_meeting_ids(self) -> "list[int]":
+        """Every meeting row carrying the deletion stamp, oldest first — the operator sweep's input
+        (``erased_feed_sweep``). Served by the ``data`` GIN index."""
+        from sqlalchemy import select  # lazy: not needed for the in-memory fakes
+
+        from .models import Meeting
+
+        async with self._session_factory() as db:
+            rows = await db.execute(
+                select(Meeting.id).where(Meeting.data.has_key("artifact_deletion")).order_by(Meeting.id))
+            return [int(mid) for mid in rows.scalars().all()]
 
     async def native_for(self, meeting_id) -> "Optional[tuple[str, str]]":
         """Resolve a NUMERIC meeting_id → (native_meeting_id, platform) from the meetings table.
@@ -1562,13 +1595,9 @@ class SqlAlchemyTranscriptStore:
                 prior and prior.get("state", "completed") == "completed"
             )
             if not already_deleted:
-                data["artifact_deletion"] = {
-                    "state": "pending",
-                    "requested_at": prior.get("requested_at")
-                    or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                    "scope": "primary_transcript_and_recording_storage",
-                    "backup_residuals": "expire_under_deployment_retention_policy",
-                }
+                data[ARTIFACT_DELETION_FIELD] = deletion_stamp(
+                    "pending", prior=prior,
+                    at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
                 meeting.data = data
                 flag_modified(meeting, "data")
                 await db.commit()
@@ -1599,12 +1628,8 @@ class SqlAlchemyTranscriptStore:
             data = dict(meeting.data) if isinstance(meeting.data, dict) else {}
             for key in ("recordings", "processed", "notes", "share_grants", "transcript_viewers"):
                 data.pop(key, None)
-            data["artifact_deletion"] = {
-                "state": "completed",
-                "completed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                "scope": "primary_transcript_and_recording_storage",
-                "backup_residuals": "expire_under_deployment_retention_policy",
-            }
+            data[ARTIFACT_DELETION_FIELD] = deletion_stamp(
+                "completed", at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
             meeting.data = data
             flag_modified(meeting, "data")
             await db.commit()
@@ -1612,9 +1637,9 @@ class SqlAlchemyTranscriptStore:
         # The DB tombstone makes this retryable: if Redis cleanup fails, a repeat reaches this same
         # terminal row and tries the cache/stream cleanup again without resurrecting durable data.
         if self._redis is not None:
-            await self._redis.delete(
-                f"meeting:{meeting_id}:segments", f"proc:meeting:{meeting_id}"
-            )
+            from .ports import erased_meeting_cache_keys
+
+            await self._redis.delete(*erased_meeting_cache_keys(meeting_id))
             await self._redis.srem("active_meetings", str(meeting_id))
         return True
 

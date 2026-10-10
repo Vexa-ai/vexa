@@ -1,20 +1,38 @@
 {
-  "_comment": "Dependencies allowed by exception under P17 / ADR-0004. `categoryB` = weak-copyleft (LGPL/MPL/EPL); `undeclared` = the package.json carries no `license` field at all (pnpm reports \"Unknown\"), so a human read the licence file the package ships and recorded it here. Each entry is a deliberate, isolated, reviewed allowance — NOT a place to silence Cat-X (GPL/AGPL/source-available). `package` is matched by exact name OR name-prefix (covers per-platform variants). gate:licenses fails on any Cat-B or undeclared dep not listed here.",
+  "_comment": "Dependencies allowed by exception under P17 / ADR-0004. `categoryB` = FINOS Category B, weak copyleft (MPL/EPL/CDDL/OFL); LGPL, like GPL and AGPL, is FINOS Category X and is never a `categoryB` row; `undeclared` = the package.json carries no `license` field at all (pnpm reports \"Unknown\"), so a human read the licence file the package ships and recorded it here. Each entry is a deliberate, isolated, reviewed allowance — NOT a place to silence Cat-X (GPL/LGPL/AGPL/source-available). `package` is matched by exact name OR name-prefix (covers per-platform variants); a row with `\"ecosystem\": \"pypi\"` covers a Python package and is matched by exact name. gate:licenses fails on any Cat-B or undeclared dep not listed here, npm or Python. `operatorSupplied` = an optional runtime the operator downloads under its vendor's terms; under P17 it is not a dependency (ADR-0039), whatever its licence: the Zoom SDK (proprietary) and the Qt5Core its wrapper links (LGPL) are both logged there. A row with `link` names the native library a tracked binding.gyp links; gate:vendor-payload fails on any linked library without a row, and on an `operatorSupplied` row whose contracts are not sealed.",
   "categoryB": [
-    {
-      "package": "@img/sharp-libvips",
-      "license": "LGPL-3.0-or-later",
-      "reason": "libvips native binary behind `sharp`. LGPL is weak copyleft; it is used unmodified and dynamically linked (a separate .dylib/.so loaded at runtime, never statically bundled into our JS), so it qualifies as FINOS/ASF Category B. It enters transitively via @huggingface/transformers' IMAGE pipeline; Vexa's mixed lane is AUDIO-only and never instantiates it.",
-      "disposition": "Logged exception AND pruned from the deployment artifact (`--no-optional` / omit @img/sharp-*), so no LGPL binary ships.",
-      "scope": "@vexa/mixed-pipeline (transitive, build-time only)",
-      "approved": "ADR-0004"
-    },
     {
       "package": "lightningcss",
       "license": "MPL-2.0",
       "reason": "Native CSS transform/minification engine used by the Next/Tailwind toolchain. MPL applies to the unmodified dependency files, not to Vexa source or generated CSS.",
       "disposition": "Logged exception; dependency remains an isolated build/runtime package managed by pnpm.",
-      "scope": "frontend build pipeline and Next CSS handling",
+      "scope": "terminal build only (devDependency via @tailwindcss/postcss); absent from every runtime image",
+      "approved": "ADR-0004"
+    },
+    {
+      "package": "geist",
+      "license": "OFL-1.1",
+      "reason": "The Geist Sans and Geist Mono typefaces (Vercel), a direct dependency of the terminal, which serves them as web fonts. The font files are SIL Open Font License 1.1 (the package declares \"SIL OPEN FONT LICENSE\"; LICENSE.txt is the OFL-1.1 text). FINOS lists OFL-1.1 as Category B. The fonts are used unmodified and bundled with the software, which the OFL permits; it reaches no Vexa code.",
+      "disposition": "Logged exception; installed unmodified from npm, never vendored. The OFL text travels with the package.",
+      "scope": "@vexa/terminal (clients/terminal: the pnpm workspace and its npm lock), served by the client",
+      "approved": "ADR-0004"
+    },
+    {
+      "package": "certifi",
+      "ecosystem": "pypi",
+      "license": "MPL-2.0",
+      "reason": "The Mozilla CA bundle packaged for Python. MPL-2.0 is file-level weak copyleft: it covers certifi's own files, which are used unmodified, and nothing of Vexa's. It reaches every Python service that makes outbound TLS calls through httpx, requests or botocore.",
+      "disposition": "Logged exception; installed unmodified from PyPI as a dependency, never vendored into this repository. Listed in NOTICE.",
+      "scope": "every Python image except flows: admin-api, agent-api, agent worker, credential-broker, gateway, mcp, meeting-api, runtime, transcription, and the matching vexa-lite venvs",
+      "approved": "ADR-0004"
+    },
+    {
+      "package": "tqdm",
+      "ecosystem": "pypi",
+      "license": "MPL-2.0 AND MIT",
+      "reason": "Progress-bar library pulled in by faster-whisper (model download progress). Its MPL-2.0 files make the package Category B as a whole; they are used unmodified, and MPL's file-level copyleft does not reach Vexa code.",
+      "disposition": "Logged exception; installed unmodified from PyPI as a dependency, never vendored. Listed in NOTICE.",
+      "scope": "transcription service only (core/meetings/services/transcription, a direct dependency of faster-whisper)",
       "approved": "ADR-0004"
     }
   ],
@@ -26,6 +44,34 @@
       "disposition": "Logged exception; read from the shipped licence file at khroma@2.1.0. Re-read it if the package is ever upgraded across a major.",
       "scope": "@vexa/terminal (transitive via mermaid, bundled into the client)",
       "approved": "ADR-0004"
+    }
+  ],
+  "operatorSupplied": [
+    {
+      "name": "Zoom Meeting SDK for Linux",
+      "link": "meetingsdk",
+      "license": "LicenseRef-Zoom-Meeting-SDK (proprietary, Cat X)",
+      "disposition": "operator-supplied",
+      "contracts": [
+        "core/meetings/contracts/sdk-join.v1",
+        "core/meetings/contracts/sdk-capture.v1"
+      ],
+      "subprocess": "core/meetings/services/bot/runtime/native-meeting/worker.cjs",
+      "reason": "Optional native meeting backend. The operator downloads the SDK from Zoom under Zoom's own terms, which restrict bot and notetaker use, and holds that licence. Vexa never commits, vendors, downloads or bakes it into any artifact; it is off by default and absent from every default entrypoint and from compose, Helm, Lite and stock dispatch; the bot reaches it only from a disposable child process over the sealed sdk-join.v1 and sdk-capture.v1 contracts. Under P17 it is not a dependency.",
+      "approved": "ADR-0039 (accepted 2026-10-09)"
+    },
+    {
+      "name": "Qt5Core",
+      "link": "Qt5Core",
+      "license": "LGPL-3.0-only (FINOS Category X)",
+      "disposition": "operator-supplied",
+      "contracts": [
+        "core/meetings/contracts/sdk-join.v1",
+        "core/meetings/contracts/sdk-capture.v1"
+      ],
+      "subprocess": "core/meetings/services/bot/runtime/native-meeting/worker.cjs",
+      "reason": "Qt 5 Core, linked by the optional native meeting wrapper (`pkg-config --libs Qt5Core` in core/meetings/services/bot/runtime/native-meeting/native/binding.gyp) because the operator-supplied meeting SDK requires it. It is part of that operator-supplied runtime, not a dependency (P17, ADR-0039): the operator installs Qt from their distribution, or uses the copy the SDK bundles under qt_libs, and builds the wrapper outside every image. Vexa commits, vendors, downloads and bakes neither Qt nor the compiled wrapper, and the bot reaches the wrapper only from the disposable subprocess over the sealed sdk-join.v1 and sdk-capture.v1 contracts. FINOS lists LGPL as Category X, so this is allowed by the operator-supplied rule, as the proprietary SDK is, and never as a dependency exception.",
+      "approved": "ADR-0004 · ADR-0039 (amended 2026-10-10: LGPL is Category X)"
     }
   ]
 }

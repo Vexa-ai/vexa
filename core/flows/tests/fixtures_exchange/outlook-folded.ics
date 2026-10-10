@@ -22,7 +22,7 @@ DTSTART;TZID="W. Europe Standard Time":20300315T140000
 UID:040000008200E00074C5B7101A82E00800000000B0F1C0DE1315D6010000000000
  0000010000000AABBCCDD
 ORGANIZER;CN=Anna Bank:mailto:Anna.Ba
- nk@oenb.at
+ nk@bank.example
 SUMMARY:Quarterly risk review
 LOCATION:https://meet.google.com/abc-
  defg-hij

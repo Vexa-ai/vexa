@@ -2,7 +2,7 @@
 
 `Vexa-ai/vexa#1610`. The founder, dropping several Extend acts with their own instruction lines onto
 one page while a job ran (the chat answered *"There is already something running on
-oenb-b5e60c/README.md — I'll finish that one first"* twice):
+bank-b5e60c/README.md — I'll finish that one first"* twice):
 
 > *"i drop new tasks to that chat, can i be sure everything submitted there is actually processed?"*
 
@@ -40,6 +40,7 @@ from shared.marks import job_mark, read_job_mark
 from worker.worker import serve
 
 from .test_worker import CursorStream
+from tests.conftest import signed_turn
 
 
 # ── the inbox is a stream AND a key, so the fake has to be a real redis ─────────────────────────
@@ -156,22 +157,45 @@ def test_a_row_stops_being_pending_when_the_worker_takes_it(client, fake_redis):
 
 
 def test_what_the_inbox_view_refuses_to_call_pending(fake_redis):
-    """Two filters, both about not inventing a queue nobody is in: an entry from a build that had no
-    inbox, and an entry so old that the only explanation is a worker that never ran."""
+    """Filters about not inventing a queue nobody is in: an entry from a build that had no inbox, an
+    entry so old that the only explanation is a worker that never ran, and an entry the worker would
+    refuse — unsigned, or signed with another unit's key."""
+    from shared import unit_input
+
+    key, other = "22" * 32, "33" * 32
     topic = units.input_topic("u-x")
-    fake_redis.xadd(topic, {"turn": json.dumps({"type": "message", "prompt": "old build"})})
-    fake_redis.xadd(topic, {"turn": json.dumps({"type": "message", "prompt": "stale", "inbox": {
-        "id": "c-old", "display": "stale", "at": time.time() - api_shared.INBOX_PENDING_MAX_AGE_SEC - 60}})})
-    fake_redis.xadd(topic, {"turn": json.dumps({"type": "message", "prompt": "live", "inbox": {
-        "id": "c-new", "display": "live", "at": time.time()}})})
-    assert [p["id"] for p in api_shared.inbox_pending("redis://fake", "u-x")] == ["c-new"]
+    fake_redis.xadd(topic, unit_input.signed_entry(key, {"type": "message", "prompt": "old build"}))
+    fake_redis.xadd(topic, unit_input.signed_entry(key, {"type": "message", "prompt": "stale", "inbox": {
+        "id": "c-old", "display": "stale", "at": time.time() - api_shared.INBOX_PENDING_MAX_AGE_SEC - 60}}))
+    fake_redis.xadd(topic, {"turn": json.dumps({"type": "message", "prompt": "unsigned", "inbox": {
+        "id": "c-unsigned", "display": "unsigned", "at": time.time()}})})
+    fake_redis.xadd(topic, unit_input.signed_entry(other, {"type": "message", "prompt": "forged", "inbox": {
+        "id": "c-forged", "display": "forged", "at": time.time()}}))
+    fake_redis.xadd(topic, unit_input.signed_entry(key, {"type": "message", "prompt": "live", "inbox": {
+        "id": "c-new", "display": "live", "at": time.time()}}))
+    assert [p["id"] for p in api_shared.inbox_pending("redis://fake", "u-x", key)] == ["c-new"]
+    assert api_shared.inbox_pending("redis://fake", "u-x", "") == []
+
+
+def test_a_malformed_entry_is_not_pending_and_never_an_error(client, fake_redis):
+    """Any holder of the service connection can append to an in-topic. An entry whose `sig` is not
+    a signature — non-ASCII text above all — is passed over by the pending list and by the submit
+    route, which answers with that list; neither fails."""
+    topic = units.input_topic(_UNIT)
+    fake_redis.xadd(topic, {"turn": json.dumps({"type": "message", "prompt": "x", "inbox": {
+        "id": "c-bad", "display": "bad", "at": time.time()}}), "sig": "é" * 64})
+    fake_redis.xadd(topic, {"turn": "{", "sig": "Z" * 64})
+    seen = client.get("/api/chat/pending", headers=_HEADERS, params={"session": "main"})
+    assert seen.status_code == 200 and seen.json()["pending"] == []
+    r = _submit(client, prompt="still mine", turn_id="c-1")
+    assert r.status_code == 200 and [p["id"] for p in r.json()["pending"]] == ["c-1"]
 
 
 def test_no_redis_is_an_empty_inbox_and_never_an_error():
     """A chat that cannot read its inbox shows what it showed before one existed. It must never be
     the thing that fails the surface asking it."""
-    assert api_shared.inbox_pending("", "u-x") == []
-    assert api_shared.inbox_pending(None, "u-x") == []
+    assert api_shared.inbox_pending("", "u-x", "22" * 32) == []
+    assert api_shared.inbox_pending(None, "u-x", "22" * 32) == []
 
 
 def test_a_submission_never_moves_the_streaming_turn_s_head(client, fake_redis):
@@ -199,7 +223,7 @@ class CursorStreamWithKeys(CursorStream):
 
 
 def _entry(eid, prompt, **meta):
-    return (eid, {"turn": json.dumps({"prompt": prompt, "inbox": meta})})
+    return (eid, signed_turn({"prompt": prompt, "inbox": meta}))
 
 
 def _act(eid, kind, target, line):

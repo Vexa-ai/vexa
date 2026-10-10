@@ -48,7 +48,7 @@ vi.mock("../../surfaces/workspaceApi", async (importOriginal) => ({
   mintInvite: vi.fn(),
 }));
 
-import { ASK_CHAT_EVENT } from "../../canvas/actions";
+import { ASK_CHAT_EVENT } from "../../platform";
 import { PagesPanel } from "../PagesPanel";
 import { STRIP_MAX_VH } from "../WorkspaceReadmePanel";
 import type { Page } from "../types";

@@ -97,7 +97,11 @@ def test_purpose_roundtrip_via_routes(tmp_path):
     assert c.get("/api/workspace/purpose", headers=H).json()["purpose"] == "ACME deal room"
 
 
-def test_push_via_route_fast_forwards(tmp_path):
+def test_push_via_route_fast_forwards(tmp_path, monkeypatch):
+    # The home here is a LOCAL bare repo, which a deployment refuses unless a self-host operator
+    # opts its root in — the next test proves the refusal; this one opts in for its tmp dir only.
+    from control_plane.repo_ref import LOCAL_ROOTS_ENV
+    monkeypatch.setenv(LOCAL_ROOTS_ENV, str(tmp_path / "remote.git"))
     ws = _seed_primary(tmp_path, "u_jane", with_origin=True)
     (ws / "note.md").write_text("local\n"); _run(ws, "add", "-A")
     _run(ws, "commit", "-q", "-m", "local")
@@ -111,6 +115,18 @@ def test_push_via_route_fast_forwards(tmp_path):
     assert body["ahead"] == 0
 
 
+def test_push_via_route_refuses_a_home_on_this_servers_disk(tmp_path):
+    """A home URL is read back out of `.git/config`; one naming a path on this server is refused with
+    a 400 and nothing is pushed, unless an operator opted that root in."""
+    ws = _seed_primary(tmp_path, "u_jane", with_origin=True)
+    (ws / "note.md").write_text("local\n"); _run(ws, "add", "-A")
+    _run(ws, "commit", "-q", "-m", "local")
+    c = _client(tmp_path)
+    r = c.post("/api/workspace/push", headers=H, json={"token": "ghp_x"})
+    assert r.status_code == 400, r.text
+    assert _run(tmp_path / "remote.git", "rev-list", "--count", "main") == "1"
+
+
 # ── the company layer: a state, not a 404 the client renders in red ───────────────────────────────
 def _seed_global(root: Path) -> Path:
     g = root / "_global"
@@ -120,7 +136,7 @@ def _seed_global(root: Path) -> Path:
     return g
 
 
-def test_git_remote_status_answers_for_the_company_layer(tmp_path):
+def test_git_remote_status_answers_for_the_company_layer(tmp_path, monkeypatch):
     """`_global` is nobody's slot and nobody's membership, so `_manage_dir` answered 404 — and the
     workspace README's front page, having asked a true question and been told the workspace does not
     exist, rendered `not readable` with `Could not read the GitHub state.` in red, to the
@@ -129,6 +145,9 @@ def test_git_remote_status_answers_for_the_company_layer(tmp_path):
     *No repo attached* is a STATE. This route now resolves the company layer through the READ gate —
     the same call `/api/workspace/git` beside it already uses for `_global` — so the client is told
     the truth and can render it as the ordinary thing it is."""
+    # This test keeps `_global` in the store; the suite otherwise configures an out-of-store one
+    # (conftest), which is where every reader and writer would then go (system_mounts.global_root).
+    monkeypatch.delenv("VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH", raising=False)
     _seed_primary(tmp_path, "u_jane", with_origin=False)
     _seed_global(tmp_path)
 

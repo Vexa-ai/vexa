@@ -8,7 +8,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { GET as redeem } from "../redeem/route";
-import { _resetJtiLedger, mintMagicToken } from "../magicToken";
+import { mintMagicToken } from "../magicToken";
+import { linkLedger } from "./linkLedgerDouble";
 
 function makeReq(query: Record<string, string>): import("next/server").NextRequest {
   const url = new URL("https://terminal.test/api/auth/redeem");
@@ -21,6 +22,13 @@ function makeReq(query: Record<string, string>): import("next/server").NextReque
  *  is allowed to fail. */
 function stubAdminApi() {
   return vi.fn(async (url: string, init?: RequestInit) => {
+    // admin-api's single-use record for links: the first redeem of a jti is the only one admitted.
+    if (linkLedger.isRedeem(url)) return linkLedger.respond(init);
+    // Vexa-ai/vexa#1783: the redeem asks whether this address may sign in before it creates
+    // anything. These cases are about the link; the refusals are in signinAllowList.test.ts.
+    if (url.includes("/internal/signin-admission")) {
+      return new Response(JSON.stringify({ admitted: true, why: "existing-user" }), { status: 200 });
+    }
     if (url.includes("/admin/users/email/")) {
       return new Response(JSON.stringify({ id: 42, email: "magic@example.com", name: "Magic" }), { status: 200 });
     }
@@ -35,11 +43,11 @@ function stubAdminApi() {
 }
 
 beforeEach(() => {
-  _resetJtiLedger();
-  vi.stubEnv("NEXTAUTH_SECRET", "test-signing-secret");
+  linkLedger.reset();
+  vi.stubEnv("NEXTAUTH_SECRET", "test-signing-secret-0123456789abcdef");
   vi.stubEnv("VEXA_ADMIN_API_URL", "http://admin.test");
   vi.stubEnv("VEXA_ADMIN_API_KEY", "admin-secret");
-  vi.stubEnv("VEXA_ADMIN_EMAILS", "admin@example.com"); // allowlist → bootstrap claim stays off
+  vi.stubEnv("VEXA_INTERNAL_API_SECRET", "internal-secret");
   vi.stubEnv("TERMINAL_URL", "https://terminal.test");
 });
 
@@ -82,7 +90,7 @@ describe("a valid link", () => {
 describe("open-redirect guard", () => {
   it("refuses to send the recipient off-origin, but still signs them in", async () => {
     for (const hostile of ["https://evil.example/steal", "//evil.example", "/\\evil.example"]) {
-      _resetJtiLedger();
+      linkLedger.reset();
       vi.stubGlobal("fetch", stubAdminApi());
       const minted = mintMagicToken("magic@example.com");
       if (!minted.ok) throw new Error("mint failed");
@@ -108,7 +116,55 @@ describe("a link that must not work", () => {
     expect(second.headers.get("content-type")).toContain("text/html");
     expect(await second.text()).toContain("already used");
     expect(second.cookies.get("vexa-token")).toBeUndefined();
-    expect(fetchSpy.mock.calls.length).toBe(callsAfterFirst); // no admin-api round-trip at all
+    // one round-trip, to the shared single-use record, and nothing that could create or mint
+    const later = fetchSpy.mock.calls.slice(callsAfterFirst).map((c) => String(c[0]));
+    expect(later).toHaveLength(1);
+    expect(linkLedger.isRedeem(later[0])).toBe(true);
+  });
+
+  it("is refused when ANOTHER terminal replica already redeemed it", async () => {
+    // The record is admin-api's, shared by every replica: a jti some other process redeemed is used
+    // here too, although this process has never seen it.
+    const fetchSpy = stubAdminApi();
+    vi.stubGlobal("fetch", fetchSpy);
+    const minted = mintMagicToken("magic@example.com");
+    if (!minted.ok) throw new Error("mint failed");
+    await linkLedger.redeem(minted.jti, minted.expiresAt);       // the other replica's redeem
+
+    const res = await redeem(makeReq({ t: minted.token, next: "/" }));
+    expect(res.status).toBe(410);
+    expect(await res.text()).toContain("already used");
+    expect(res.cookies.get("vexa-token")).toBeUndefined();
+    expect(fetchSpy.mock.calls.map((c) => String(c[0])).some((u) => u.includes("/tokens"))).toBe(false);
+  });
+
+  it("is refused while the shared record cannot be checked, and stays usable afterwards", async () => {
+    vi.stubGlobal("fetch", stubAdminApi());
+    const minted = mintMagicToken("magic@example.com");
+    if (!minted.ok) throw new Error("mint failed");
+
+    linkLedger.down = true;
+    const refused = await redeem(makeReq({ t: minted.token, next: "/" }));
+    expect(refused.status).toBe(503);
+    expect(refused.cookies.get("vexa-token")).toBeUndefined();
+
+    linkLedger.down = false;
+    const later = await redeem(makeReq({ t: minted.token, next: "/" }));
+    expect(later.status).toBe(302);
+  });
+
+  it("sends the link's jti and expiry to admin-api, over the internal edge", async () => {
+    const fetchSpy = stubAdminApi();
+    vi.stubGlobal("fetch", fetchSpy);
+    const minted = mintMagicToken("magic@example.com");
+    if (!minted.ok) throw new Error("mint failed");
+    await redeem(makeReq({ t: minted.token, next: "/" }));
+    const call = fetchSpy.mock.calls.find((c) => linkLedger.isRedeem(String(c[0])));
+    expect(call).toBeTruthy();
+    const init = call![1] as RequestInit;
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(String(init.body))).toEqual({ jti: minted.jti, expires_at: minted.expiresAt });
+    expect((init.headers as Record<string, string>)["X-Internal-Secret"]).toBe("internal-secret");
   });
 
   it("is refused when EXPIRED", async () => {
@@ -136,7 +192,7 @@ describe("a link that must not work", () => {
   it("is refused when the instance has no signing secret", async () => {
     const minted = mintMagicToken("magic@example.com");
     if (!minted.ok) throw new Error("mint failed");
-    _resetJtiLedger();
+    linkLedger.reset();
     vi.stubEnv("NEXTAUTH_SECRET", "");
     const fetchSpy = stubAdminApi();
     vi.stubGlobal("fetch", fetchSpy);

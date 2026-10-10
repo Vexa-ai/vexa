@@ -18,7 +18,7 @@ vi.mock("../../ui-kit/MdxDoc", async (importOriginal) => {
 });
 
 import { PagesPanel } from "../PagesPanel";
-import { ASK_CHAT_EVENT, WORKSPACE_COMMIT_EVENT } from "../../canvas/actions";
+import { ASK_CHAT_EVENT, WORKSPACE_COMMIT_EVENT } from "../../platform";
 import { VIEW_NAVIGATE_EVENT } from "../roomView";
 import { clearPending } from "../extend";
 import type { PageIntent } from "../../surfaces/chatIntent";
@@ -176,49 +176,17 @@ describe("the floating action on a selection (decision 32.1)", () => {
   const rendered = (over: Partial<Parameters<typeof PagesPanel>[0]> = {}) =>
     panel(over).container.querySelector("[data-mdx]") as HTMLElement;
 
-  it("appears only once there is a selection, and carries its text", () => {
+  it("prepares a quote with the source and no automatic agent intent", () => {
     const pre = rendered();
     expect(document.querySelector('[data-doc-act="extend-selection"]')).toBeNull();
-
-    highlight(pre, 13, 24);            // "The pilot ships in March"
-    const btn = document.querySelector('[data-doc-act="extend-selection"]') as HTMLElement;
-    expect(btn).toBeTruthy();
-
-    fireEvent.mouseDown(btn);
-    fireLine();
-    expect(asks[0].intent).toMatchObject({ kind: "extend", workspace: "acme-kg", path: PATH, selection: "The pilot ships in March" });
-    expect(asks[0].display).toBe(`Extend: ${PATH} — “The pilot ships in March”`);
-    expect(asks[0].prompt).toBe(`Extend: ${PATH} — 'The pilot ships in March'`);
-    expect(onOpen).not.toHaveBeenCalled();
-  });
-
-  it("locates the selection in the SOURCE when it occurs there exactly once", () => {
-    const pre = rendered();
     highlight(pre, 13, 24);
-    fireEvent.mouseDown(document.querySelector('[data-doc-act="extend-selection"]') as HTMLElement);
-    fireLine();
-    const r = asks[0].intent?.selection_range;
-    expect(r).toBeTruthy();
-    expect(BODY.slice(r!.start, r!.end)).toBe("The pilot ships in March");
-  });
-
-  it("says nothing about where a selection sits when the text repeats", () => {
-    const body = "one two\n\none two\n";
-    const pre = rendered({ body });
-    highlight(pre, 0, 7);              // "one two", twice in the file
-    fireEvent.mouseDown(document.querySelector('[data-doc-act="extend-selection"]') as HTMLElement);
-    fireLine();
-    expect(asks[0].intent?.selection).toBe("one two");
-    expect(asks[0].intent?.selection_range).toBeUndefined();
-  });
-
-  it("caps a very long selection at 2000 characters", () => {
-    const body = "y".repeat(4000);
-    const pre = rendered({ body });
-    highlight(pre, 0, 4000);
-    fireEvent.mouseDown(document.querySelector('[data-doc-act="extend-selection"]') as HTMLElement);
-    fireLine();
-    expect(asks[0].intent?.selection).toHaveLength(2000);
+    const btn = document.querySelector('[data-doc-act="extend-selection"]') as HTMLElement;
+    expect(btn.textContent).toContain("Ask about this");
+    fireEvent.click(btn);
+    expect(asks[0]).toMatchObject({ mode: "draft", reference: { workspace: "acme-kg", path: PATH } });
+    expect(asks[0].intent).toBeUndefined();
+    expect(asks[0].prompt).toContain("> The pilot ships in March");
+    expect(onOpen).not.toHaveBeenCalled();
   });
 
   it("a selection OUTSIDE the document is not this page's selection", () => {

@@ -14,7 +14,7 @@ ALWAYS-ON (the routine `gate:compose` subset):
                       publishes tc:meeting:{id}:mutable → a /ws client (through the gateway) receives
                       the live frame.
   5  recording      — upload a chunk via the bot's /internal/recordings/upload path → the object
-     → minio          lands in minio; finalize → a master is assembled in minio.
+     → storage        lands in object storage; finalize → a master is assembled there.
   6c continue_meeting — a second session under the same meeting reuses the meeting row + preserves
                       the prior transcript.
   6d max-bots       — a user at max_concurrent_bots gets 429 on the N+1; a freed slot allows the next.
@@ -197,7 +197,8 @@ def test_04_transcript_dataflow(stack):
         ack = json.loads(ws.recv_text(timeout=10))
         assert ack.get("type") == "subscribed" and ack.get("meetings"), f"subscribe ack: {ack}"
 
-        # XADD a golden segment to the REAL transcription_segments stream (the bot's producer path).
+        # XADD a golden segment to the REAL transcription_segments stream (the bot's producer path),
+        # signed for this meeting as the bot's session signs it.
         seg_id = f"seg-{uuid.uuid4().hex[:8]}"
         payload = json.dumps({
             "type": "transcription", "meeting_id": meeting_id,
@@ -207,7 +208,7 @@ def test_04_transcript_dataflow(stack):
                 "speaker": "Tester", "completed": True,
             }],
         })
-        stack.redis_cli("XADD", "transcription_segments", "*", "payload", payload)
+        stack.xadd_segment_entry(payload, meeting_id)
 
         # The background consumer (running in meeting-api) ingests within a bounded wait → publishes
         # tc:meeting:{id}:mutable → the gateway fans it into our /ws client.
@@ -233,16 +234,17 @@ def test_04_transcript_dataflow(stack):
     print(f"\n[4/transcript] XADD→consumer stored (hash) + published tc:meeting:{meeting_id}:mutable → /ws frame received")
 
 
-# ── 5. recording → minio ─────────────────────────────────────────────────────────────────────────
+# ── 5. recording → object storage ────────────────────────────────────────────────────────────────
 
-def test_05_recording_to_minio(stack):
+def test_05_recording_to_storage(stack):
     user_id = STATE["user_id"]
     platform, native_id = "google_meet", f"rec-{uuid.uuid4().hex[:8]}"
     meeting_id, session_uid = _insert_meeting(stack, user_id, platform, native_id)
 
-    # The bot authenticates uploads with a MeetingToken (HS256, signed with ADMIN_TOKEN — the admin
-    # secret meeting-api mints AND verifies with, like main; INTERNAL_API_SECRET is a different concern).
-    token = mint_meeting_token(meeting_id, user_id, platform, native_id, secret=stack.admin_token)
+    # The bot authenticates uploads with a MeetingToken (HS256 under the key meeting-api derives from
+    # ADMIN_TOKEN, which it mints AND verifies with; INTERNAL_API_SECRET is a different concern).
+    token = mint_meeting_token(meeting_id, user_id, platform, native_id, secret=stack.admin_token,
+                               session_uid=session_uid)
 
     chunk = _canonical_wav(b"gate-compose-recording-chunk-pcm-payload")
     fields = {
@@ -260,29 +262,29 @@ def test_05_recording_to_minio(stack):
     storage_path = receipt["storage_path"]
     assert storage_path.startswith(f"recordings/{user_id}/{recording_id}/{session_uid}/audio/")
 
-    # The chunk OBJECT landed in minio (poll — the put is synchronous but be robust).
+    # The chunk OBJECT landed in object storage (poll — the put is synchronous but be robust).
     deadline = time.time() + 20
     chunk_keys = []
     while time.time() < deadline:
-        chunk_keys = stack.minio_ls(f"recordings/{user_id}/{recording_id}/")
+        chunk_keys = stack.object_keys(f"recordings/{user_id}/{recording_id}/")
         if any(k.endswith("000000.wav") for k in chunk_keys):
             break
         time.sleep(2)
-    assert any(k.endswith("000000.wav") for k in chunk_keys), f"chunk object not in minio: {chunk_keys}"
+    assert any(k.endswith("000000.wav") for k in chunk_keys), f"chunk object not in storage: {chunk_keys}"
 
-    # Finalize → a master is assembled + uploaded to minio.
+    # Finalize → a master is assembled + uploaded to object storage.
     code, master = http(
         "GET", f"{stack.meeting_api}/recordings/{recording_id}/master?type=audio",
-        headers={"x-user-id": str(user_id)},
+        headers={"x-internal-secret": stack.internal_secret, "x-user-id": str(user_id)},
     )
     assert code == 200, f"finalize master → {code} {master}"
     master_key = master["storage_path"]
     assert master_key.endswith("master.wav"), f"unexpected master key: {master_key}"
-    master_keys = stack.minio_ls(f"recordings/{user_id}/{recording_id}/")
-    assert any(k.endswith("master.wav") for k in master_keys), f"master not in minio: {master_keys}"
-    STATE["minio_chunk_key"] = next(k for k in chunk_keys if k.endswith("000000.wav"))
-    STATE["minio_master_key"] = next(k for k in master_keys if k.endswith("master.wav"))
-    print(f"\n[5/recording] chunk → minio:{STATE['minio_chunk_key']} ; master → minio:{STATE['minio_master_key']}")
+    master_keys = stack.object_keys(f"recordings/{user_id}/{recording_id}/")
+    assert any(k.endswith("master.wav") for k in master_keys), f"master not in storage: {master_keys}"
+    STATE["storage_chunk_key"] = next(k for k in chunk_keys if k.endswith("000000.wav"))
+    STATE["storage_master_key"] = next(k for k in master_keys if k.endswith("master.wav"))
+    print(f"\n[5/recording] chunk → storage:{STATE['storage_chunk_key']} ; master → storage:{STATE['storage_master_key']}")
 
 
 # ── 6c. continue_meeting ─────────────────────────────────────────────────────────────────────────
@@ -337,7 +339,7 @@ def test_06d_max_bots(stack):
     cap = 2
     user_id = _create_user(stack, max_bots=cap)
     platform = "google_meet"
-    spawn_headers = {"x-user-id": str(user_id), "x-user-limits": str(cap), "Content-Type": "application/json"}
+    spawn_headers = {"x-internal-secret": stack.internal_secret, "x-user-id": str(user_id), "x-user-limits": str(cap), "Content-Type": "application/json"}
 
     def _add_active():
         stack.psql(
@@ -413,7 +415,7 @@ def test_03_real_bot_spawn_joining(stack):
         f"{stack.meeting_api}/bots",
         {"platform": platform, "native_meeting_id": native_id, "bot_name": "GateBot",
          "transcribe_enabled": False},
-        headers={"x-user-id": str(user_id), "x-user-limits": "5"},
+        headers={"x-internal-secret": stack.internal_secret, "x-user-id": str(user_id), "x-user-limits": "5"},
     )
     assert code == 201, f"POST /bots → {code} {body}"
     workload_id = body["bot_container_id"]
@@ -437,7 +439,8 @@ def test_03_real_bot_spawn_joining(stack):
                 break
             time.sleep(2)
         if appeared != container_name:
-            _code, wl = http("GET", f"{stack.runtime}/workloads/{workload_id}", timeout=15)
+            _code, wl = http("GET", f"{stack.runtime}/workloads/{workload_id}", headers=stack.runtime_auth,
+                             timeout=15)
             reason = wl.get("stopReason") if isinstance(wl, dict) else wl
             pytest.fail(
                 f"bot container {container_name} did not appear (saw {appeared!r}); "
@@ -447,13 +450,13 @@ def test_03_real_bot_spawn_joining(stack):
             )
         STATE["bot_container_name"] = appeared
 
-        # Belt-and-suspenders: ensure the bot sits on THIS project's compose network so its lifecycle
+        # Belt-and-suspenders: ensure the bot sits on THIS project's bot network so its lifecycle
         # callback (http://meeting-api:8080/…) + redis can resolve. The runtime already attaches it via
-        # DOCKER_NETWORK=${COMPOSE_PROJECT_NAME}_vexa (connect on an attached container is a no-op error,
+        # DOCKER_NETWORK=${COMPOSE_PROJECT_NAME}_bots (connect on an attached container is a no-op error,
         # swallowed). Named deterministically — the old any-`*_vexa` scan could attach the bot to ANOTHER
         # stack's network on a shared host.
         from conftest import PROJECT
-        subprocess.run(["docker", "network", "connect", f"{PROJECT}_vexa", container_name],
+        subprocess.run(["docker", "network", "connect", f"{PROJECT}_bots", container_name],
                        capture_output=True, timeout=20)
 
         # PROOF (b): the meeting advances to `joining` — the bot's first lifecycle callback lands.
@@ -486,7 +489,7 @@ def test_03_real_bot_spawn_joining(stack):
         print(f"\n[3/bot] real container {container_name} appeared in docker ps; meeting advanced to joining")
     finally:
         # Stop + clean the bot: destroy the runtime workload (docker rm -f), then belt-and-suspenders.
-        http("DELETE", f"{stack.runtime}/workloads/{workload_id}", timeout=30)
+        http("DELETE", f"{stack.runtime}/workloads/{workload_id}", headers=stack.runtime_auth, timeout=30)
         subprocess.run(["docker", "rm", "-f", container_name], capture_output=True, timeout=30)
 
 
@@ -531,9 +534,12 @@ def test_07_webhook_delivery_outcome_reported(stack):
         """"webhook_events": {"meeting.status_change": true}}'::jsonb """
         f"WHERE id = {meeting_id};"
     )
+    # The proof inserted this session by hand, so no bot holds its MeetingToken: it advances the FSM
+    # as the internal tier, which the callback also admits.
     code, body = post_json(
         f"{stack.meeting_api}/bots/internal/callback/lifecycle",
         {"connection_id": session_uid, "status": "completed", "completion_reason": "stopped"},
+        headers={"X-Internal-Secret": stack.internal_secret},
         timeout=20,
     )
     assert code == 200, f"lifecycle callback: {code} {body!r}"

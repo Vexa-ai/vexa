@@ -87,7 +87,6 @@ class _AgentToApi:
 
 @pytest.fixture
 def ctx(tmp_path, monkeypatch):
-    monkeypatch.setenv("VEXA_AGENT_DEFAULT_SUBJECT", "u_jane")          # no gateway in-process → fallback subject
     monkeypatch.setenv("VEXA_WORKSPACE_SEED_DIR", str(_repo_root() / "behavior" / "workspaces" / "default"))
     scheduler = _FakeScheduler()
     app = create_app(
@@ -96,6 +95,7 @@ def ctx(tmp_path, monkeypatch):
         reader=WorkspaceReader(str(tmp_path)),
         scheduler=scheduler,
         invocations_url="http://agent-api:8100/invocations",
+        default_subject="u_jane",                                         # no gateway in-process
     )
     transport = httpx.ASGITransport(app=_AgentToApi(app))
     real = httpx.AsyncClient

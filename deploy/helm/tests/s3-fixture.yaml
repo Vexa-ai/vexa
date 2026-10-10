@@ -1,0 +1,122 @@
+# TEST-ONLY S3 for the Helm install legs — never part of the chart, never shipped.
+#
+# The chart stores recordings in the operator's own S3 (storage.s3) and runs no object store, so a
+# test install needs one beside it: versitygw (Apache-2.0) with its POSIX backend on an emptyDir,
+# pinned by digest. Objects are plain files under /data/<bucket>/ in the pod, which lets a test
+# observe the bucket without going through the chart's own S3 client.
+#
+# The caller creates the credentials first, with random values; values-test.yaml hands the same
+# Secret to the chart as storage.s3.existingSecret:
+#
+#   kubectl -n vexa create secret generic s3-fixture-credentials \
+#     --from-literal=AWS_ACCESS_KEY_ID="$(openssl rand -hex 10)" \
+#     --from-literal=AWS_SECRET_ACCESS_KEY="$(openssl rand -hex 20)"
+#   kubectl -n vexa apply -f deploy/helm/tests/s3-fixture.yaml
+#   kubectl -n vexa wait --for=condition=complete job/s3-fixture-bucket --timeout=180s
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: s3-fixture
+  labels:
+    app.kubernetes.io/name: s3-fixture
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: s3-fixture
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: s3-fixture
+    spec:
+      containers:
+        - name: versitygw
+          image: versity/versitygw:v1.8.0@sha256:30292fc2eeacc67a36993b01f7a7a5e3361a19cced0e80c1d71cfa2a4b0a2499
+          args: ["--port", ":7070", "--health", "/health", "posix", "/data"]
+          env:
+            - name: ROOT_ACCESS_KEY
+              valueFrom:
+                secretKeyRef: { name: s3-fixture-credentials, key: AWS_ACCESS_KEY_ID }
+            - name: ROOT_SECRET_KEY
+              valueFrom:
+                secretKeyRef: { name: s3-fixture-credentials, key: AWS_SECRET_ACCESS_KEY }
+          ports:
+            - name: s3
+              containerPort: 7070
+          readinessProbe:
+            httpGet: { path: /health, port: s3 }
+            periodSeconds: 2
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: s3-fixture
+  labels:
+    app.kubernetes.io/name: s3-fixture
+spec:
+  selector:
+    app.kubernetes.io/name: s3-fixture
+  ports:
+    - name: s3
+      port: 7070
+      targetPort: s3
+---
+# The chart never creates buckets, so the fixture does: `vexa-recordings`, the bucket
+# values-test.yaml names. Retries until the server answers; an existing bucket is success.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: s3-fixture-bucket
+  labels:
+    app.kubernetes.io/name: s3-fixture
+spec:
+  backoffLimit: 30
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: s3-fixture-bucket
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: create-bucket
+          image: versity/versitygw:v1.8.0@sha256:30292fc2eeacc67a36993b01f7a7a5e3361a19cced0e80c1d71cfa2a4b0a2499
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              out=$(versitygw admin --endpoint-url http://s3-fixture:7070 create-bucket \
+                --bucket vexa-recordings --owner "$ADMIN_ACCESS_KEY" 2>&1); rc=$?
+              echo "$out"
+              [ "$rc" -eq 0 ] || echo "$out" | grep -q BucketAlreadyOwnedByYou
+          env:
+            - name: ADMIN_ACCESS_KEY
+              valueFrom:
+                secretKeyRef: { name: s3-fixture-credentials, key: AWS_ACCESS_KEY_ID }
+            - name: ADMIN_SECRET_KEY
+              valueFrom:
+                secretKeyRef: { name: s3-fixture-credentials, key: AWS_SECRET_ACCESS_KEY }
+---
+# The chart's namespace default-deny (networkPolicy.defaultDeny) denies every Pod it does not name,
+# this fixture's included: let the fixture take connections and its bucket Job make them.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: s3-fixture
+  labels:
+    app.kubernetes.io/name: s3-fixture
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values: [s3-fixture, s3-fixture-bucket]
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - {}
+  egress:
+    - {}

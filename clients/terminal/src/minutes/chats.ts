@@ -61,6 +61,7 @@ export const artifactKey = (a: { kind?: string; path: string; slug?: string }) =
 export type Chat = {
   id: string;                 // also the agent session id — `meet-<meetingId>` for a meeting's chat
   label: string;
+  nameSource?: "human" | "agent";
   meeting?: string;           // the meeting row id this chat is about (string form of MeetingMock.id)
   workspaces: string[];       // the mount set — what a PROJECT used to own
   /** THE ONE OF THEM WRITES GO TO (Vexa-ai/vexa#1611).
@@ -253,7 +254,7 @@ const statusOf = (phase: MeetingPhase | null): Row["status"] =>
  *  one. The live lift is what makes the stated consequence true.) No buckets: this is one flat list.
  *
  *  Sorting and LABELLING part company on one point: a meeting row is labelled with the MEETING's own
- *  time, never the chat's last activity, because "Blue Light Card · today" would be a plain lie about
+ *  time, never the chat's last activity, because "Fernhill Loyalty Card · today" would be a plain lie about
  *  a meeting held on Monday. Reading a row is not the meeting moving.
  *
  *  ⚠ `claimed` IS THE WHOLE DEDUP, and Vexa-ai/vexa#1597 is what made it fire for the case it was
@@ -350,6 +351,7 @@ export function visibleRows(rows: Row[], all: boolean, keep?: string | null): Ro
 export type ServerSession = {
   session: string;
   title?: string | null;
+  name_source?: "human" | "agent" | null;
   /** THE SERVER'S NAME FOR THIS ROW (Vexa-ai/vexa#1602) — one rule, computed once, for every
    *  client. Empty means no name is recoverable; absent means a server that predates the rule.
    *  `title` stays what it always was and is still read as the fallback. */
@@ -436,7 +438,8 @@ export function chatsFromSessions(rows: ServerSession[], now = Date.now()): Chat
       // before it was a meeting and the person's own first sentence named it; the founder asked for
       // the meeting's STATUS on that row — *"just attach the status to it"* — not for the row to
       // become something else. `Row.status` is where the meeting shows.
-      label: bornAsMeeting ? "" : (given || named || "Chat"),
+      label: bornAsMeeting && !r.name_source ? "" : (given || named || "Chat"),
+      nameSource: r.name_source || undefined,
       meeting,
       workspaces: mounts.length ? mounts : ["personal", "_global"],
       target: typeof r.target === "string" && r.target.trim() ? r.target.trim() : undefined,
@@ -488,7 +491,8 @@ export function mergeChats(local: Chat[], server: Chat[], hidden: string[] = [])
     if (!l) { by.set(s.id, s); continue; }
     by.set(s.id, {
       ...l,
-      label: isPlaceholderLabel(l.label) && !isPlaceholderLabel(s.label) ? s.label : l.label,
+      label: s.nameSource ? s.label : isPlaceholderLabel(l.label) && !isPlaceholderLabel(s.label) ? s.label : l.label,
+      nameSource: s.nameSource || l.nameSource,
       meeting: l.meeting ?? s.meeting,
       workspaces: l.workspaces?.length ? l.workspaces : s.workspaces,
       target: l.target ?? s.target,
@@ -998,6 +1002,7 @@ function normalise(raw: unknown, now: number): Chat[] {
       // title instead of freezing whatever it was called when it was created. Defaulting those to
       // "Chat" here is what made the empty label a one-render trick — it survived in memory and
       // was rewritten to "Chat" on the next load. Only a chat with NO meeting needs a fallback.
+      nameSource: r.nameSource === "human" || r.nameSource === "agent" ? r.nameSource : undefined,
       label: typeof r.label === "string" && r.label ? r.label : (typeof r.meeting === "string" && r.meeting ? "" : "Chat"),
       meeting: typeof r.meeting === "string" && r.meeting ? r.meeting : undefined,
       workspaces: Array.isArray(r.workspaces) && r.workspaces.length ? r.workspaces.filter((w) => typeof w === "string") : ["personal", "_global"],

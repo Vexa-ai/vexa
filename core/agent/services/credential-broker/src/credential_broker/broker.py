@@ -1,0 +1,304 @@
+"""The broker's core: the state every route shares, and the checks every route runs.
+
+`Broker` owns the metadata database and the credential store port, verifies the caller (the role
+assertion's replay memory, the gateway's signed identity), writes the audit trail before the action
+it records, logs faults as typed lines, and holds the OAuth helpers the consent routes use. The
+routes (`routes_connections.py`, `routes_git.py`) and the app factory (`app.py`) call into it; it
+knows nothing about HTTP routing.
+"""
+from __future__ import annotations
+
+import base64
+import hashlib
+import hmac
+import re
+import sqlite3
+import threading
+import time
+from contextlib import closing
+from pathlib import Path
+from typing import Optional
+from urllib.parse import urlsplit
+
+from fastapi import HTTPException, Request
+
+from . import assertion, identity_token, metadata, providers
+from .obs import log_event
+from .settings import Settings, google_client
+from .store import Record, Store, StoreUnavailable
+
+_CID = re.compile(r"/[a-f0-9]{32}(?=/|$)")
+
+
+def route_of(path: str) -> str:
+    """A path with connection ids folded to {cid}: low-cardinality, and safe to log."""
+    return _CID.sub("/{cid}", path.split("?", 1)[0])
+
+
+def _host(url: str) -> str:
+    try:
+        return (urlsplit(url or "").hostname or "").lower()
+    except ValueError:
+        return ""
+
+
+def destination_host(spec: dict) -> str:
+    """The host a human's secret is sent to for a prepared setup: the token endpoint for OAuth
+    (it receives the client secret), otherwise the service endpoint (it receives the key)."""
+    return _host((spec.get("oauth") or {}).get("token_url") if spec.get("oauth") else spec.get("endpoint", ""))
+
+
+def credential_hosts(spec: dict) -> list[str]:
+    """Every host a prepared setup sends a credential to, each of which a human confirms (M3).
+
+    For OAuth that is the token endpoint (the client secret and the authorization code) and the
+    service endpoint (the person's access token, on every call); otherwise the service endpoint
+    alone. In order, without repeats."""
+    hosts = [destination_host(spec)]
+    if spec.get("oauth"):
+        hosts.append(_host(spec.get("endpoint", "")))
+    return [h for i, h in enumerate(hosts) if h and h not in hosts[:i]]
+
+
+def unwatched(claims: dict) -> bool:
+    """A delegated identity (a worker's) whose regime is not ``human``: nobody is in the loop. An
+    identity with a ``delegation`` claim of any other shape counts as unwatched (fail closed)."""
+    if "delegation" not in claims:
+        return False
+    dlg = claims["delegation"]
+    return not (isinstance(dlg, dict) and str(dlg.get("regime") or "").strip().lower() == "human")
+
+
+class Broker:
+    def __init__(self, settings: Settings, store: Store) -> None:
+        self.settings = settings
+        self.store = store
+        self.root = Path(settings.state_dir)
+        self.root.mkdir(parents=True, exist_ok=True)
+        self.db_path = self.root / "metadata.sqlite"
+        self.lock = threading.RLock()
+        with closing(self.db()) as c, c:
+            metadata.open_schema(c)
+        self.hmac_key = metadata.state_key(self.root / "state-hmac.key")
+        self._owners_sealed = False
+        try:
+            self.seal_owners()
+        except StoreUnavailable as exc:
+            # The store is down at boot: the first credential read retries (`get`).
+            self.fault("store", "seal_" + exc.kind)
+
+    # ── storage ───────────────────────────────────────────────────────────────────────────
+    def db(self) -> sqlite3.Connection:
+        c = sqlite3.connect(self.db_path, timeout=10)
+        c.row_factory = sqlite3.Row
+        return c
+
+    def sql(self, statement: str, args=(), *, one=False, rows=False):
+        with closing(self.db()) as c, c:
+            cur = c.execute(statement, args)
+            if one:
+                r = cur.fetchone()
+                return dict(r) if r else None
+            if rows:
+                return [dict(r) for r in cur.fetchall()]
+            return None
+
+    # A connection's records carry their owner inside the encrypted value (`owner`), and every read
+    # names the owner it expects. The owner column in metadata.sqlite is plaintext on the state
+    # volume; the sealed copy is what decides whose credential a record is.
+    def put(self, path: str, data: dict, *, cas: Optional[int] = None, owner: Optional[str] = None) -> Record:
+        if owner is not None:
+            data = {**data, "owner": str(owner)}
+        try:
+            return self.store.put(path, data, cas=cas)
+        except StoreUnavailable as exc:
+            self.fault("store", exc.kind)
+            raise HTTPException(503, "Credential store unavailable") from None
+
+    def get(self, path: str, *, version: Optional[int] = None, owner: Optional[str] = None) -> Optional[Record]:
+        try:
+            if owner is not None:
+                self.seal_owners()
+            record = self.store.get(path, version=version)
+        except StoreUnavailable as exc:
+            self.fault("store", exc.kind)
+            raise HTTPException(503, "Credential store unavailable") from None
+        if owner is not None and record is not None and record.data.get("owner") != str(owner):
+            self.fault("store", "owner_mismatch")
+            raise HTTPException(503, "Credential store unavailable")
+        return record
+
+    def must_get(self, path: str, version: int, *, owner: str) -> dict:
+        record = self.get(path, version=version, owner=owner)
+        if record is None:
+            self.fault("store", "missing")
+            raise HTTPException(503, "Credential store unavailable")
+        return record.data
+
+    def remove(self, path: str) -> None:
+        """Destroy every stored version of ``path``."""
+        try:
+            self.store.delete(path)
+        except StoreUnavailable as exc:
+            self.fault("store", exc.kind)
+            raise HTTPException(503, "Credential store unavailable") from None
+
+    def seal_owners(self) -> None:
+        """Once per state directory: bring records written before owners were sealed into line.
+
+        A live connection's current credential and OAuth application are rewritten with the owner
+        the metadata names now; a deleted connection's records are destroyed, and a disconnected
+        one's credential (its application is kept for reconnecting). Raises StoreUnavailable when
+        the store does not answer, and is retried on the next credential read."""
+        if self._owners_sealed:
+            return
+        with self.lock:
+            if self._owners_sealed:
+                return
+            if not self.sql("SELECT 1 FROM broker_meta WHERE key='owners_sealed'", one=True):
+                rows = self.sql("SELECT id, actor, status, version, oauth_app_version FROM connections", rows=True)
+                for row in rows:
+                    cid = row["id"]
+                    if row["status"] == "deleted":
+                        self.store.delete(cid)
+                        self.store.delete("oauth-app-" + cid)
+                        continue
+                    if row["status"] == "disconnected":
+                        self.store.delete(cid)
+                    for path, column in ((cid, "version"), ("oauth-app-" + cid, "oauth_app_version")):
+                        if not row[column] or (column == "version" and row["status"] == "disconnected"):
+                            continue
+                        try:
+                            record = self.store.get(path, version=row[column])
+                        except StoreUnavailable as exc:
+                            if exc.kind != "integrity":
+                                raise
+                            continue          # unreadable already; it stays unreadable
+                        if record is None or "owner" in record.data:
+                            continue
+                        saved = self.store.put(path, {**record.data, "owner": str(row["actor"])})
+                        self.sql(f"UPDATE connections SET {column}=? WHERE id=?", (saved.version, cid))
+                self.sql("INSERT OR REPLACE INTO broker_meta(key, value) VALUES ('owners_sealed', ?)",
+                         (str(time.time()),))
+            self._owners_sealed = True
+
+    # ── identity ──────────────────────────────────────────────────────────────────────────
+    def key_for(self, role: str) -> bytes:
+        return assertion.load_key(self.settings.key_files.get(role, ""))
+
+    def person_signed(self, header: str, actor: str) -> dict:
+        """gateway-identity.v1 for an agent- or git-role call: the gateway's signature over ``actor``.
+
+        agent-api forwards the X-Vexa-Identity it verified, unchanged. The broker verifies it with
+        the gateway's PUBLIC key (read per use, like the role keys, so a rotated file takes effect
+        without a restart), requires its subject to be the assertion's actor, and returns the
+        verified claims. Raises AssertionRefused with a typed kind: identity_missing,
+        identity_invalid (a bad signature, expired, malformed), identity_mismatch (signed for
+        somebody else) or identity_key (this deployment's key file is unusable — a configuration
+        fault, refused like the rest)."""
+        if not header:
+            raise assertion.AssertionRefused("identity_missing")
+        try:
+            key = identity_token.read_verify_key(self.settings.identity_public_key_file)
+        except identity_token.KeyUnavailable:
+            raise assertion.AssertionRefused("identity_key") from None
+        try:
+            claims = identity_token.verify(key, header)
+        except identity_token.IdentityError:
+            raise assertion.AssertionRefused("identity_invalid") from None
+        if not hmac.compare_digest(claims["sub"].encode(), str(actor).encode()):
+            raise assertion.AssertionRefused("identity_mismatch")
+        return claims
+
+    def remember(self, nonce: str, expires: float) -> bool:
+        now = time.time()
+        try:
+            with closing(self.db()) as c, c:
+                c.execute("DELETE FROM assertion_nonces WHERE expires < ?", (now,))
+                c.execute("INSERT INTO assertion_nonces VALUES (?, ?)", (nonce, expires))
+            return True
+        except sqlite3.IntegrityError:
+            return False
+
+    @staticmethod
+    def identity(request: Request, roles: set, *, unwatched_ok: bool = False) -> dict:
+        """The verified caller, refused unless its role is in ``roles``. An agent-role call whose
+        signed identity is a worker running without a person in the loop is refused too, unless the
+        route says ``unwatched_ok`` (listing connections, which reads no credential)."""
+        who = getattr(request.state, "who", None)
+        if not who:
+            raise HTTPException(401, "Product identity refused")
+        if who["role"] not in roles:
+            log_event("role_refused", level="warning", user_id=who["actor"],
+                      fields={"role": who["role"], "route": route_of(request.url.path)})
+            raise HTTPException(403, "Human setup required")
+        if who["role"] == "agent" and who.get("unwatched") and not unwatched_ok:
+            log_event("regime_refused", level="warning", user_id=who["actor"],
+                      fields={"route": route_of(request.url.path)})
+            raise HTTPException(403, "This session runs without a person in the loop")
+        return who
+
+    def connection(self, who: dict, cid: str) -> dict:
+        row = self.sql("SELECT * FROM connections WHERE id=? AND actor=? AND status!='deleted'",
+                       (cid, who["actor"]), one=True)
+        if not row:
+            raise HTTPException(404, "Connection not found")
+        return row
+
+    # ── audit and faults ──────────────────────────────────────────────────────────────────
+    def audit(self, who, cid, action, outcome, *, operation="", receipt_id="", version=0, receipt=""):
+        # Committed BEFORE the action it precedes; a failed insert prevents the action.
+        self.sql("INSERT INTO audit(at,actor,session,operation_id,connection,action,outcome,vault_request_id,version,receipt)"
+                 " VALUES (?,?,?,?,?,?,?,?,?,?)",
+                 (time.time(), who["actor"], who["session"], operation, cid, action, outcome, receipt_id, version, receipt))
+        log_event("connection_audit", user_id=who["actor"],
+                  fields={"action": action, "outcome": outcome, "connection": cid, "role": who.get("role", ""),
+                          "store": self.store.name, "version": version, "operation": operation})
+
+    @staticmethod
+    def fault(source: str, kind: str, **fields) -> None:
+        """Something failed that the person cannot fix: a dependency down, misconfigured, or
+        answering unusably."""
+        log_event("broker_fault", level="warning", fields={"source": source, "kind": kind, **fields})
+
+    @staticmethod
+    def refused(source: str, kind: str, route: str) -> None:
+        """An upstream refused, and the answer tells the person what to do. Not a fault."""
+        log_event("upstream_refused", level="warning", fields={"source": source, "kind": kind, "route": route})
+
+    def pkce(self, state: str):
+        verifier = base64.urlsafe_b64encode(hmac.new(self.hmac_key, state.encode(), hashlib.sha256).digest()).decode().rstrip("=")
+        challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
+        return verifier, challenge
+
+    def google(self) -> dict:
+        """The operator's Google OAuth application, from VEXA_CONNECTIONS_GOOGLE_CLIENT_ID/SECRET
+        and nowhere else."""
+        client = google_client(self.settings)
+        if client is None:
+            raise providers.ProviderError("Provider application is not configured on this deployment")
+        return client
+
+    def redirect(self) -> str:
+        if not self.settings.product_redirect:
+            self.fault("config", "oauth_redirect_unset")
+            raise HTTPException(503, "Product OAuth callback is not configured")
+        return self.settings.product_redirect
+
+    def oauth_application(self, row: dict) -> dict:
+        if not row["oauth_app_version"]:
+            raise HTTPException(409, "Save the OAuth application first")
+        return self.must_get("oauth-app-" + row["id"], row["oauth_app_version"], owner=row["actor"])["value"]
+
+    def refreshed(self, who, cid, row, value, operation) -> dict:
+        """A fresh Google access token, rotated in the store, when the stored one is near expiry."""
+        if value["expires_at"] > time.time() + 30:
+            return value
+        if not value.get("refresh_token"):
+            raise providers.ProviderError("Authorization expired; reconnect this account")
+        value = providers.refresh(row["provider"], self.google(), value)
+        saved = self.put(cid, {"value": value}, owner=who["actor"])
+        row["version"] = saved.version
+        self.sql("UPDATE connections SET version=? WHERE id=?", (saved.version, cid))
+        self.audit(who, cid, "credential.refresh", "stored", operation=operation, receipt_id=saved.receipt, version=saved.version)
+        return value

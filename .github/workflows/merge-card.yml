@@ -37,9 +37,9 @@ jobs:
       # Pin to main so the gate runs TRUSTED code, never a PR branch's version of the script.
       # (For pull_request the workflow definition already comes from the base branch; this pins
       # the checked-out script too.) The gate inspects PR state via the API, not the tree.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with: { ref: main }
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with: { node-version: 22 }
       - name: Value AND diff accepted (the merge card)
         env:

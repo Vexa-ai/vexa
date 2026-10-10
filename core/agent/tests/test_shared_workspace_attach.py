@@ -176,9 +176,8 @@ def test_a_failed_clone_leaves_the_group_workspace_untouched(tmp_path):
     assert shared_attached_state(tmp_path, "grp-x4")["active"] is None
 
 
-def test_a_non_compliant_repo_is_nested_under_a_governed_workspace(tmp_path):
-    """A repo with no CLAUDE.md is not a workspace; it is wrapped rather than refused (same rule as the
-    desk attach), so "load our existing docs repo" works without asking anyone to restructure it."""
+def test_plain_repository_remains_at_root_with_membership_preserved(tmp_path):
+    """A plain repository stays at root with its Git metadata and existing membership."""
     _shared_ws(tmp_path, "grp-x5")
     plain = tmp_path / "plain-src"
     plain.mkdir()
@@ -190,8 +189,9 @@ def test_a_non_compliant_repo_is_nested_under_a_governed_workspace(tmp_path):
     subprocess.run(["git", "clone", "-q", "--bare", str(plain), str(bare)], check=True, capture_output=True)
 
     r = attach_shared_workspace(tmp_path, "grp-x5", str(bare), "main")
-    assert r.nested
-    assert (tmp_path / "grp-x5" / "kg" / "plain" / "notes.md").exists()
+    assert not hasattr(r, "nested")
+    assert (tmp_path / "grp-x5" / "notes.md").exists()
+    assert (tmp_path / "grp-x5" / ".git").is_dir()
     assert m.is_member(tmp_path, "grp-x5", "u_owner") == "owner"
 
 

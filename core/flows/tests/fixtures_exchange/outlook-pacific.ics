@@ -12,7 +12,7 @@ END:STANDARD
 END:VTIMEZONE
 BEGIN:VEVENT
 DTSTART;TZID=Pacific Standard Time:20300815T090000
-UID:pst-fixture-0001@oenb.at
+UID:pst-fixture-0001@bank.example
 ORGANIZER;CN=Ops:mailto:OPS@Example.COM
 SUMMARY:West coast sync
 LOCATION:https://meet.google.com/pst-fixt-ure

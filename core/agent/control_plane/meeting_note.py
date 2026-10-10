@@ -42,6 +42,8 @@ from __future__ import annotations
 from pathlib import Path
 import re
 
+from workspaces.shared import workspace_paths as wpaths
+
 #: Where a meeting's record lives on a desk, relative to that desk's root. The directory is the
 #: flow's (`drop_to_attendees` writes here and maintains `index.md` beside the files); this module
 #: only reads it.
@@ -152,42 +154,39 @@ def resolve(workspaces_root, subject: str, row) -> "str | None":
     # being on THIS desk: the record is one fact about the meeting, shared by everybody in the room,
     # and an attendee whose drop has not run yet has no such file. A tab onto a path nobody wrote on
     # this desk is exactly the failure this module exists to refuse.
+    desk = Path(workspaces_root) / str(subject)
     recorded = recorded_path(row)
     if recorded:
+        # nofollow: the desk is a work tree the model's tools can write, so a link at the recorded
+        # path is not "the report on this desk"
         try:
-            if (Path(workspaces_root) / str(subject) / recorded).is_file():
+            if wpaths.is_file_inside(desk, recorded):
                 return recorded
-        except OSError:
+        except (OSError, ValueError):
             pass
     facts = row_facts(row)
     if not (facts["id"] or facts["native"] or facts["title"]):
         return None
-    folder = Path(workspaces_root) / str(subject) / MEETING_DIR
-    if not folder.is_dir():
+    names = wpaths.list_files_inside(desk, MEETING_DIR, suffix=".md")
+    if not names:
         return None
     ids = {v for v in (facts["id"], facts["native"]) if v}
     title = facts["title"].casefold()
     by_title: list[tuple[str, str]] = []      # (frontmatter day, file name)
-    try:
-        entries = sorted(p for p in folder.iterdir() if p.suffix == ".md")
-    except OSError:
-        return None
-    for f in entries:
-        if f.name == "index.md":
+    for name in names:
+        if name == "index.md":
             continue
-        try:
-            with f.open("r", encoding="utf-8", errors="replace") as fh:
-                head = fh.read(_HEAD_BYTES)
-        except OSError:
+        head = wpaths.read_head_inside(desk, f"{MEETING_DIR}/{name}", _HEAD_BYTES)
+        if head is None:
             continue
         fm = front_matter(head)
         if str(fm.get("type") or "").strip().lower() not in ("", "meeting"):
             continue
         if ids and (str(fm.get("meeting") or "").strip() in ids
                     or str(fm.get("native") or "").strip() in ids):
-            return f"{MEETING_DIR}/{f.name}"
+            return f"{MEETING_DIR}/{name}"
         if title and str(fm.get("title") or "").strip().casefold() == title:
-            by_title.append((_day(fm.get("date")), f.name))
+            by_title.append((_day(fm.get("date")), name))
     if not by_title:
         return None
     if len(by_title) > 1 and facts["day"]:
@@ -222,10 +221,10 @@ def describe(workspaces_root, subject: str, row) -> dict:
     if not path:
         return out
     try:
-        with (Path(workspaces_root) / str(subject) / path).open("r", encoding="utf-8",
-                                                               errors="replace") as fh:
-            head = fh.read(_HEAD_BYTES)
-    except OSError:
+        head = wpaths.read_head_inside(Path(workspaces_root) / str(subject), path, _HEAD_BYTES)
+    except (OSError, ValueError):
+        head = None
+    if head is None:
         return out
     out["transcript"] = meeting_doc.slot_meeting(head)
     out["cursor"] = meeting_doc.read_cursor(head)

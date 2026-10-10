@@ -1,0 +1,31 @@
+{
+  "why": "a forwarded domain's tools live under its upstream prefix",
+  "manifest": {
+    "contract": "mcp.tools.v1",
+    "domain": "agent",
+    "source": "oss",
+    "depends_on": [
+      "identity"
+    ],
+    "base_url_env": "AGENT_API_URL",
+    "forward": {
+      "edge_prefix": "/agent/",
+      "upstream_prefix": "/api/"
+    },
+    "tools": [
+      {
+        "name": "t",
+        "identity": "user",
+        "auth": "subject",
+        "requires": [
+          "identity",
+          "agent"
+        ],
+        "route": {
+          "method": "GET",
+          "path": "/other/t"
+        }
+      }
+    ]
+  }
+}

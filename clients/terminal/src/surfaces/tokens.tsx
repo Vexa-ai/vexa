@@ -10,7 +10,6 @@ import { useCallback, useEffect, useState } from "react";
 import { Icon } from "../ui-kit";
 import { copyText } from "../ui-kit/ContextMenu";
 import { listTokens, createToken, revokeToken, TOKEN_SCOPES, type TokenInfo, type TokenScope, type MintedToken } from "./tokensApi";
-import { getGitToken, setGitToken, type SavedGitToken } from "./workspaceApi";
 import { presentError } from "./apiClient";
 
 const EXPIRIES: Array<{ label: string; seconds?: number }> = [
@@ -124,68 +123,8 @@ function CreateTokenForm({ onCreated }: { onCreated: (t: MintedToken) => void })
   );
 }
 
-/** The SAVE-ONCE reusable GitHub token (git_credentials). Stored server-side; the clear value is never
- *  shown again (only a ••••abcd mask). Applied as the fallback credential for push / pull / publish /
- *  attach across ALL of the user's repos, so they don't re-enter it per repo. */
-export function GitHubTokenCard() {
-  const [state, setState] = useState<SavedGitToken | null>(null);
-  const [editing, setEditing] = useState(false);
-  const [value, setValue] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const refresh = useCallback(() => {
-    void getGitToken().then((s) => { setState(s); setError(null); }).catch((e: unknown) => setError(presentError(e).headline));
-  }, []);
-  useEffect(() => refresh(), [refresh]);
-
-  const save = async () => {
-    if (!value.trim() || busy) return;
-    setBusy(true); setError(null);
-    try { const s = await setGitToken(value.trim()); setState(s); setValue(""); setEditing(false); }
-    catch (e: unknown) { setError(presentError(e).headline); }
-    finally { setBusy(false); }
-  };
-  const clear = async () => {
-    setBusy(true); setError(null);
-    try { const s = await setGitToken(null); setState(s); setValue(""); setEditing(false); }
-    catch (e: unknown) { setError(presentError(e).headline); }
-    finally { setBusy(false); }
-  };
-
-  const field = { width: "100%", fontSize: 12, padding: "6px 8px", borderRadius: 6, border: "1px solid var(--line)", background: "var(--panel2)", color: "var(--t1)" } as const;
-  const btn = { fontSize: 12, padding: "5px 12px", borderRadius: 6, border: "1px solid var(--line)", background: "var(--panel2)", color: "var(--t1)", cursor: "pointer" } as const;
-  const showForm = editing || (state !== null && !state.set);
-
-  return (
-    <div style={{ margin: "4px 4px 14px", padding: 10, borderRadius: 8, border: "1px solid var(--line)" }}>
-      <div style={{ fontSize: 12.5, color: "var(--t1)", marginBottom: 3 }}>GitHub token</div>
-      <div style={{ fontSize: 11, color: "var(--t3)", lineHeight: 1.45, marginBottom: 9 }}>
-        Saved once and reused for push · pull · publish · attach across all your repos. Stored server-side —
-        never shown again. Use a fine-grained, minimally-scoped PAT you can revoke on GitHub anytime.
-      </div>
-      {error && <div role="alert" style={{ fontSize: 11.5, color: "var(--danger)", marginBottom: 8 }}>⚠ {error}</div>}
-      {state?.set && !showForm && (
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <Icon name="key" size={13} style={{ color: "var(--accent)" }} />
-          <span style={{ flex: 1, fontSize: 12.5, color: "var(--t2)", fontFamily: "var(--mono)" }}>{state.masked}</span>
-          <button disabled={busy} onClick={() => { setEditing(true); setValue(""); }} style={btn}>Replace</button>
-          <button disabled={busy} onClick={() => void clear()} style={{ ...btn, color: "var(--danger)" }}>Clear</button>
-        </div>
-      )}
-      {showForm && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          <input type="password" autoFocus value={value} placeholder="ghp_… (fine-grained PAT)" disabled={busy}
-            onChange={(e) => setValue(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void save(); if (e.key === "Escape") { setEditing(false); setValue(""); } }} style={field} />
-          <div style={{ display: "flex", gap: 8 }}>
-            <button disabled={busy || !value.trim()} onClick={() => void save()} style={{ ...btn, background: "var(--accent)", color: "var(--on-accent)", border: "none", opacity: busy || !value.trim() ? 0.5 : 1 }}>{busy ? "Saving…" : "Save token"}</button>
-            {state?.set && <button disabled={busy} onClick={() => { setEditing(false); setValue(""); }} style={btn}>Cancel</button>}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
+/** Settings uses the same connection editor as Minutes. */
+export { GitConnection as GitHubTokenCard } from '../minutes/GitConnection';
 
 export function TokensPanel() {
   const [tokens, setTokens] = useState<TokenInfo[]>([]);

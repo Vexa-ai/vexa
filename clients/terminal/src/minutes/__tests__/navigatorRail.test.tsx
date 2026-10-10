@@ -10,7 +10,7 @@ import { render, screen, cleanup, fireEvent, waitFor, act } from "@testing-libra
 import { PagesPanel } from "../PagesPanel";
 import { NAV_OPEN_KEY } from "../navigatorApi";
 import { VIEW_NAVIGATE_EVENT } from "../roomView";
-import { WORKSPACE_COMMIT_EVENT } from "../../canvas/actions";
+import { WORKSPACE_COMMIT_EVENT } from "../../platform";
 import type { Page } from "../types";
 import * as nav from "../navigatorApi";
 

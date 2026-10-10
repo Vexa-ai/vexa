@@ -175,21 +175,24 @@ def test_the_worker_reads_that_stamp_as_the_room_predicate(monkeypatch):
 
 # ══ F104 · the bot verbs leave the toolbelt when the meeting is over ═════════════════════════
 def test_a_post_meeting_turn_is_offered_no_bot_verbs():
-    """The meeting is OVER. `bot_stop` cannot help, and a tool that cannot help is a tool that can
+    """The meeting is OVER. `stop_bot` cannot help, and a tool that cannot help is a tool that can
     be looped on — it was called four times in one turn."""
     from worker.engine import VEXA_MCP_SERVER, VEXA_MCP_TOOLS, room_toolbelt
+
+    from worker.engine import LIVE_MEETING_VERBS
 
     full = [f"mcp__{VEXA_MCP_SERVER}",
             *(f"mcp__{VEXA_MCP_SERVER}__{t}" for t in VEXA_MCP_TOOLS)]
     narrowed = room_toolbelt(full)
 
-    assert f"mcp__{VEXA_MCP_SERVER}__bot_stop" in full        # the belt this narrows
-    assert not [t for t in narrowed if t.startswith(f"mcp__{VEXA_MCP_SERVER}__bot")]
+    assert f"mcp__{VEXA_MCP_SERVER}__stop_bot" in full        # the belt this narrows
+    assert not [t for t in narrowed
+                if t.rsplit("__", 1)[-1] in LIVE_MEETING_VERBS and t.count("__") == 2]
     # ...and nothing else moved: the transcript is the whole point of the turn
-    assert f"mcp__{VEXA_MCP_SERVER}__meeting_transcript" in narrowed
+    assert f"mcp__{VEXA_MCP_SERVER}__get_meeting_transcript" in narrowed
     assert f"mcp__{VEXA_MCP_SERVER}" in narrowed              # the server id itself stays
     assert len(narrowed) == len(full) - len(
-        [t for t in VEXA_MCP_TOOLS if t.startswith("bot")])
+        [t for t in VEXA_MCP_TOOLS if t in LIVE_MEETING_VERBS])
 
 
 # ══ F103 · the two writers on the organiser's desk, both silenced while a room is open ═══════

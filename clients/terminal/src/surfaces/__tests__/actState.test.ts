@@ -161,7 +161,7 @@ describe("the target — the one string a press and its job share", () => {
   });
 
   it("an act that is not a job has no target here", () => {
-    expect(actTarget({ kind: "explore", term: "Kaar Tech", meeting: "41" })).toBe("");
+    expect(actTarget({ kind: "explore", term: "Northwind Labs", meeting: "41" })).toBe("");
     expect(actTarget({ kind: "highlight", meeting: "41" })).toBe("");
   });
 });

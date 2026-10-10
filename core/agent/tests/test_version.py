@@ -19,7 +19,7 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from control_plane import global_layer, version
+from control_plane import version
 from control_plane.api import create_app
 from control_plane.dispatch import Dispatcher
 from shared.config import load_settings
@@ -56,16 +56,3 @@ def test_no_session_needed(client):
     """Probed from the host before any traffic is switched onto the container: there is no user."""
     r = client.get("/api/version")
     assert r.status_code == 200
-
-
-def test_answers_through_the_company_layer_gate(client, monkeypatch):
-    """The gate refuses every `/api/*` path to a non-admin on an unwritten instance. That is right
-    for everything a person does and wrong here: a swap probing a brand-new container has no
-    admin, and a tab polling for "did the thing under me move" would be told 403 forever."""
-    monkeypatch.setattr(global_layer, "instance_state",
-                        lambda *_a, **_k: {"admin_exists": True, "global_setup": "missing", "company": None})
-    monkeypatch.setattr(global_layer, "is_admin", lambda *_a, **_k: False)
-    r = client.get("/api/version", headers={"X-User-Id": "u_stranger"})
-    assert r.status_code == 200, "the gate swallowed the one endpoint that must answer from outside"
-    # and the gate is otherwise still closed — this test must not be passing because it is off
-    assert client.get("/api/models", headers={"X-User-Id": "u_stranger"}).status_code == 403

@@ -10,8 +10,7 @@
  *    1. IDENTITY comes from the validated `vexa-token` ONLY. `vexa-user-info` is client-forgeable
  *       (httpOnly stops a script, not a curl), and this route grants the highest privilege the
  *       product has.
- *    2. It FAILS CLOSED — the opposite direction from the rest of the gate — because guessing wrong
- *       here grants admin rather than merely opening a door.
+ *    2. It FAILS CLOSED, because guessing wrong here grants admin rather than merely opening a door.
  *    3. It never TRANSFERS the role: an instance that already has an admin is refused.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -25,9 +24,18 @@ vi.mock("next/headers", () => ({
   }),
 }));
 
-import { POST as claimAdmin } from "../claim-admin/route";
+import { POST as claimAdminRoute } from "../claim-admin/route";
 
-/** Every scaffold-mint body agent-api saw — which record was asked for is the whole of F42. */
+/** The one-time admin claim code admin-api logs at boot; the card sends what the person typed. */
+const CODE = "ABCD-EF01-JKMN-PQRS";
+const claimAdmin = (body: unknown = { code: CODE }) =>
+  claimAdminRoute(new Request("http://terminal.test/api/auth/claim-admin", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: body === null ? undefined : JSON.stringify(body),
+  }));
+
+/** Every scaffold-mint body agent-api saw. */
 const minted: Record<string, unknown>[] = [];
 
 /** admin-api double: the validate oracle, the instance probe, and the bootstrap-admin write. */
@@ -38,9 +46,7 @@ function stubAdminApi(opts: {
   bootstrap?: { status: number; body?: unknown };
   mint?: { status: number; body?: unknown };
   mintThrows?: boolean;
-  globalSetup?: "completed" | "missing";
   hasHistory?: boolean;
-  recordFails?: boolean;
 }) {
   const calls: string[] = [];
   minted.length = 0;
@@ -60,17 +66,11 @@ function stubAdminApi(opts: {
     }
     if (u.includes("/internal/instance")) {
       if (opts.instanceFails) throw new Error("ECONNREFUSED");
-      return new Response(JSON.stringify({ admin_exists: opts.adminExists ?? false, global_setup: opts.globalSetup ?? "missing" }), { status: 200 });
+      return new Response(JSON.stringify({ admin_exists: opts.adminExists ?? false }), { status: 200 });
     }
     if (u.includes("/internal/bootstrap-admin")) {
       const b = opts.bootstrap ?? { status: 200, body: { claimed: true } };
       return new Response(JSON.stringify(b.body ?? {}), { status: b.status });
-    }
-    // The platform-settings store SetupGate reads its resume state out of (#1609). `400` is the
-    // shape admin-api answers a write it understood nothing of.
-    if (u.includes("/internal/settings/")) {
-      if (opts.recordFails) return new Response(JSON.stringify({ detail: "nothing recognised" }), { status: 400 });
-      return new Response(JSON.stringify({ key: "setup", value: { global: "handoff" } }), { status: 200 });
     }
     if (u.includes("/internal/scaffolds")) {
       minted.push(JSON.parse(String(init?.body ?? "{}")));
@@ -114,7 +114,35 @@ describe("the happy path", () => {
 
     expect(calls.some((c) => c.includes("/internal/bootstrap-admin"))).toBe(true);
     const write = spy.mock.calls.find(([u]) => String(u).includes("/internal/bootstrap-admin"));
-    expect(JSON.parse(String((write![1] as RequestInit).body))).toEqual({ user_id: 11 });
+    expect(JSON.parse(String((write![1] as RequestInit).body))).toEqual({ user_id: 11, claim_code: CODE });
+  });
+});
+
+describe("no code, no claim (M7)", () => {
+  it("a claim that carries no code is refused before admin-api is asked to write anything", async () => {
+    const calls = stubAdminApi({});
+    const res = await claimAdmin(null);
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toContain("claim code");
+    expect(calls.some((c) => c.includes("/internal/bootstrap-admin"))).toBe(false);
+  });
+
+  it("a code admin-api does not recognise is refused with 403 and no arrival", async () => {
+    stubAdminApi({ bootstrap: { status: 200, body: { claimed: false, admin_exists: false, why: "bad-code" } } });
+    const res = await claimAdmin({ code: "WRONG-CODE" });
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toContain("claim code");
+    expect(minted).toHaveLength(0);
+  });
+
+  it("the code the claim screen kept in its cookie counts as typed", async () => {
+    cookieJar["vexa-claim-code"] = CODE;
+    stubAdminApi({});
+    const spy = vi.mocked(globalThis.fetch);
+    const res = await claimAdmin({});
+    expect(res.status).toBe(200);
+    const write = spy.mock.calls.find(([u]) => String(u).includes("/internal/bootstrap-admin"));
+    expect(JSON.parse(String((write![1] as RequestInit).body)).claim_code).toBe(CODE);
   });
 });
 
@@ -173,6 +201,14 @@ describe("it can never transfer the role", () => {
     expect((await res.json()).claimed).toBe(false);
   });
 
+  it("an address admin-api will not let claim (not on the allow-list) is refused with 403", async () => {
+    stubAdminApi({ bootstrap: { status: 200, body: { claimed: false, admin_exists: false, why: "not-allowed" } } });
+    const res = await claimAdmin();
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toBe("This address may not claim this instance.");
+    expect(minted).toHaveLength(0);
+  });
+
   it("a bootstrap write that fails is surfaced, not swallowed", async () => {
     stubAdminApi({ bootstrap: { status: 500, body: { detail: "boom" } } });
     const res = await claimAdmin();
@@ -182,14 +218,12 @@ describe("it can never transfer the role", () => {
 });
 
 
-/** THE CONVERSATION, NOT JUST THE ROLE (F26).
+/** WHERE THE NEW ADMIN ARRIVES (founder ruling 2026-10-08).
  *
- *  The hand-off used to live in `localStorage`: clear it, or open the instance in a second browser,
- *  and the admin landed in a Personal chat on the generic greeting while the setup marker already
- *  said "handoff", so nothing re-opened the conversation. Verified live 2026-09-02. The claim now
- *  mints the admin-setup scaffold — the conversation as a SERVER record — and hands back the url. */
-describe("the setup conversation is minted, not stashed", () => {
-  it("mints an admin-setup scaffold for the ORACLE's address, with no prompt text and no mount list", async () => {
+ *  There is no setup-global conversation at first run any more, so the claim mints the same
+ *  first-visit arrival every other sign-in gets — and never the `admin-setup` record it used to. */
+describe("the claim arrives in an ordinary first visit", () => {
+  it("mints a first-visit scaffold for the ORACLE's address, with no prompt text and no mount list", async () => {
     stubAdminApi({});
     const spy = vi.mocked(globalThis.fetch);
     await claimAdmin();
@@ -199,17 +233,14 @@ describe("the setup conversation is minted, not stashed", () => {
     const body = JSON.parse(String((mint![1] as RequestInit).body));
     expect(body).toEqual({
       who: "dmitry@vexa.ai",
-      kind: "admin-setup",
-      opening: "setup-global",
-      provenance: { flow: "admin-claim", step: "claim-admin", minted_by: "11" },
+      kind: "first-visit",
+      opening: "first-visit",
+      provenance: { flow: "sign-in", step: "first-visit", minted_by: "11" },
     });
-    // `workspaces`, `tabs` and `focus` are ABSENT, not empty: the server derives `_global` + this
-    // admin's own desk from the address and takes the tabs from the preset's frontmatter. Sending
-    // them here would be a second spelling of a rule that already has one.
-    expect("workspaces" in body).toBe(false);
-    expect("tabs" in body).toBe(false);
-    // And nothing carries prompt text — the record behind the url is as text-free as the url.
-    expect(JSON.stringify(body)).not.toMatch(/\[setup-global\]/);
+    for (const forbidden of ["workspaces", "tabs", "focus", "prompt", "opening_text"]) {
+      expect(body).not.toHaveProperty(forbidden);
+    }
+    expect(minted.map((m) => m.kind)).not.toContain("admin-setup");
   });
 
   it("mints on the INTERNAL tier, which a browser can never reach", async () => {
@@ -221,141 +252,40 @@ describe("the setup conversation is minted, not stashed", () => {
     expect(headers["X-Internal-Secret"]).toBe("internal-secret");
   });
 
-  it("a failed mint still reports the role as claimed — and says the conversation is what is missing", async () => {
-    // The role write already happened and is not undone by this. A caller told only "failed" would
-    // reasonably re-claim; one told only "success" would navigate to a chat that does not exist.
+  it("writes no setup hand-off marker — there is no setup conversation to hand off to", async () => {
+    const calls = stubAdminApi({});
+    await claimAdmin();
+    expect(calls.some((c) => c.includes("/internal/settings/"))).toBe(false);
+  });
+
+  it("a claimer with history to return to gets no arrival and lands on `/`", async () => {
+    stubAdminApi({ hasHistory: true });
+    const res = await claimAdmin();
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ success: true, claimed: true, email: "dmitry@vexa.ai", url: "/" });
+    expect(minted).toHaveLength(0);
+  });
+
+  it("a failed mint still reports the role as claimed and lands on `/`", async () => {
+    // The role write already happened and is not undone by this; the arrival is all that is lost.
     stubAdminApi({ mint: { status: 503 } });
     const res = await claimAdmin();
     expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.success).toBe(true);
-    expect(body.claimed).toBe(true);
-    expect(body.url).toBe("/");
-    expect(body.scaffold_error).toMatch(/administrator, but the setup conversation could not be opened/);
+    expect(await res.json()).toEqual({ success: true, claimed: true, email: "dmitry@vexa.ai", url: "/" });
   });
 
   it("an unreachable agent-api is the same story, not a crash", async () => {
     stubAdminApi({ mintThrows: true });
     const res = await claimAdmin();
     expect(res.status).toBe(200);
-    expect((await res.json()).scaffold_error).toBeTruthy();
+    expect((await res.json()).url).toBe("/");
   });
 
   it("does not mint when the claim itself was refused", async () => {
-    // An instance that already has an admin gets 409 and no scaffold: minting one for somebody who
-    // is not the administrator would compose a stranger's first turn over the company layer.
     stubAdminApi({ adminExists: true });
     const spy = vi.mocked(globalThis.fetch);
     const res = await claimAdmin();
     expect(res.status).toBe(409);
     expect(spy.mock.calls.some(([u]) => String(u).includes("/internal/scaffolds"))).toBe(false);
-  });
-});
-
-/** F42 — WHICH CONVERSATION A CLAIM ARRIVES IN. Founder ruling 2026-09-02.
- *
- *  This route exists for the LATE claim: an instance that acquired its admin after the fact. Such an
- *  instance may already have its company layer written — and offering the setup conversation to it
- *  says the product does not know its own state. The founder read exactly that as the product being
- *  wrong about him: an admin-only "Organisation setup" card in front of somebody who needed nothing
- *  of the sort. */
-describe("F42 — the arrival depends on whether the instance is already set up", () => {
-  it("company layer MISSING → the setup conversation", async () => {
-    stubAdminApi({ globalSetup: "missing" });
-    await claimAdmin();
-    expect(minted.map((m) => m.kind)).toEqual(["admin-setup"]);
-    expect(minted[0].opening).toBe("setup-global");
-  });
-
-  it("company layer COMPLETED → an ordinary first visit, not setup again", async () => {
-    stubAdminApi({ globalSetup: "completed" });
-    const res = await claimAdmin();
-    expect(res.status).toBe(200);
-    expect(minted.map((m) => m.kind)).toEqual(["first-visit"]);
-    expect(minted[0].opening).toBe("first-visit");
-  });
-
-  it("either way the client composes NOTHING — no workspaces, no tabs, no prompt text", async () => {
-    for (const globalSetup of ["missing", "completed"] as const) {
-      stubAdminApi({ globalSetup });
-      await claimAdmin();
-      for (const forbidden of ["workspaces", "tabs", "focus", "prompt", "opening_text"]) {
-        expect(minted[0]).not.toHaveProperty(forbidden);
-      }
-    }
-  });
-});
-
-/** #1609 — ONE CLAIM, ONE SETUP CHAT.
- *
- *  The claim minted the setup conversation and the client followed `/?s=<id>` — and nothing wrote
- *  the hand-off marker, because only `SetupGate` had ever written it. So the gate mounted in the
- *  document the arrival had just landed in, read the marker as absent, concluded that nobody had
- *  opened the setup conversation, and opened one on top of it. The founder's own blank-instance
- *  sign-in never hit this (the claim happens inside the sign-in, so the card is never shown); an
- *  instance whose admin claims through the card always did.
- *
- *  The rule: whoever OPENS the conversation records that they did, in the store the gate reads.
- *  This route is now an opener. The gate's half — a recorded hand-off resumes as the corner card
- *  and opens nothing — is in `app/__tests__/setupGate.test.tsx`, which owns that harness. */
-describe("the hand-off is recorded where SetupGate reads it", () => {
-  it("writes `setup.global = handoff` to the platform-settings store, on the internal tier", async () => {
-    stubAdminApi({});
-    const spy = vi.mocked(globalThis.fetch);
-    await claimAdmin();
-
-    const put = spy.mock.calls.find(([u, i]) =>
-      String(u).includes("/internal/settings/setup") && (i as RequestInit)?.method === "PUT");
-    expect(put).toBeDefined();
-    // Exactly one field, and one admin-api's `_SETUP_FIELDS` knows. A field it does not know is
-    // dropped in silence — which is how this very marker vanished on 2026-09-02 while answering 200.
-    expect(JSON.parse(String((put![1] as RequestInit).body))).toEqual({ global: "handoff" });
-    // Internal tier, like the mint beside it: a browser can never reach this edge.
-    expect(((put![1] as RequestInit).headers as Record<string, string>)["X-Internal-Secret"]).toBe("internal-secret");
-  });
-
-  it("records it AFTER the conversation exists, never before", async () => {
-    // The marker asserts that a conversation is open. Written first, a mint that then failed would
-    // leave the gate resuming as the corner card with nothing underneath it — a worse dead end than
-    // the one this route exists to open.
-    const calls = stubAdminApi({});
-    await claimAdmin();
-    const mint = calls.findIndex((c) => c.includes("/internal/scaffolds"));
-    const record = calls.findIndex((c) => c.includes("/internal/settings/setup"));
-    expect(mint).toBeGreaterThanOrEqual(0);
-    expect(record).toBeGreaterThan(mint);
-  });
-
-  it("records NOTHING when the mint failed — the gate must still open the conversation itself", async () => {
-    const calls = stubAdminApi({ mint: { status: 503 } });
-    const res = await claimAdmin();
-    expect((await res.json()).scaffold_error).toBeTruthy();
-    expect(calls.some((c) => c.includes("/internal/settings/setup"))).toBe(false);
-  });
-
-  it("records nothing when the claim itself was refused", async () => {
-    const calls = stubAdminApi({ adminExists: true });
-    expect((await claimAdmin()).status).toBe(409);
-    expect(calls.some((c) => c.includes("/internal/settings/setup"))).toBe(false);
-  });
-
-  it("a record that FAILS does not cost the admin the conversation", async () => {
-    // The role is claimed and the chat exists. A marker that did not stick costs exactly the extra
-    // chat this fixes; withholding the url over it would cost them the conversation itself.
-    stubAdminApi({ recordFails: true });
-    const res = await claimAdmin();
-    expect(res.status).toBe(200);
-    expect((await res.json()).url).toBe("https://app.test/?s=SCAF1");
-  });
-
-  it("records the F42 first visit too — no setup chat may open over that arrival either", async () => {
-    // An instance that is already set up gets an ordinary first visit rather than the setup
-    // conversation. It is still an arrival this claim delivered them into, so the gate must not open
-    // a setup conversation on top of it — and on that instance it would be a setup conversation
-    // offered to somebody who needs none at all, which is the exact thing F42 settled.
-    const calls = stubAdminApi({ globalSetup: "completed" });
-    await claimAdmin();
-    expect(minted.map((m) => m.kind)).toEqual(["first-visit"]);
-    expect(calls.some((c) => c === "PUT http://admin.test/internal/settings/setup")).toBe(true);
   });
 });

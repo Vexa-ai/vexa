@@ -22,7 +22,7 @@
 #
 # ADDRESSES. Every address in every recipe resolves under $VEXA_REHEARSE_DOMAIN (default
 # rehearse.test) and the engine refuses anything else BEFORE the first door is touched. This is
-# the whole safety story: the founder's identities, `_global`, the DNA and OeNB groups cannot be
+# the whole safety story: the founder's identities, `_global`, the DNA and Example Bank groups cannot be
 # named by a recipe, because the domain check runs over the interpolated arguments.
 #
 # IDEMPOTENCE is by derived identity, never by a marker file: the ICS UID and the meeting's
@@ -58,7 +58,7 @@ states:
     # naming what is in the way. Blanking is `bin/blank-instance.sh`, it deletes every person on
     # the stack, and it is not something a state recipe may do as a side effect of being entered.
     preconditions:
-      - instance is blank (no admin claimed, company layer missing)
+      - instance is blank (no admin claimed)
       - the subject address has no user
     steps:
       - do: require_instance_blank
@@ -77,7 +77,7 @@ states:
     artefacts:
       mail: one message to {{subject}} carrying a single-use magic link
       link: the magic link — clicking it CLAIMS THE INSTANCE for {{subject}}
-      desks: none; the claim creates the admin's desk and the admin-setup scaffold
+      desks: none; the claim creates the admin's desk and a first-visit scaffold
     verify:
       - check: mail_present
         of: sign_in_mail

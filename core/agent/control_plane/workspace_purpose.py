@@ -17,7 +17,8 @@ import logging
 import subprocess
 from pathlib import Path
 
-from shared.gitenv import scrubbed_git_env
+from shared.gitexec import run_git
+from workspaces.shared import workspace_paths as wpaths
 
 log = logging.getLogger(__name__)
 
@@ -34,11 +35,10 @@ def _normalize(text: str) -> str:
 def read_purpose(ws: str | Path) -> str:
     """The workspace's purpose statement (``""`` when unset / unreadable). Read-only + quiet: this is on
     the dispatch hot path, so a missing file / bad bytes is just an empty purpose, never an error."""
-    p = Path(ws) / PURPOSE_FILE
-    try:
-        return _normalize(p.read_text(encoding="utf-8"))
-    except (OSError, ValueError, UnicodeDecodeError):
-        return ""
+    # PURPOSE is a FIXED file in a work tree the model's tools can write; it is returned to the
+    # caller AND folded into every dispatch's mount preamble, so read it nofollow — a link here
+    # would disclose another file's bytes.
+    return _normalize(wpaths.read_text_inside(ws, PURPOSE_FILE) or "")
 
 
 def write_purpose(ws: str | Path, text: str) -> str:
@@ -48,11 +48,12 @@ def write_purpose(ws: str | Path, text: str) -> str:
     the file is written regardless (a later turn-commit will pick it up)."""
     wsp = Path(ws)
     purpose = _normalize(text)
-    path = wsp / PURPOSE_FILE
+    # Written/removed NOFOLLOW: a link planted at PURPOSE is replaced, never written through, so
+    # caller text cannot overwrite an arbitrary file root can reach.
     if purpose:
-        path.write_text(purpose + "\n", encoding="utf-8")
-    elif path.exists():
-        path.unlink()  # clearing the purpose removes the file
+        wpaths.write_text_inside(wsp, PURPOSE_FILE, purpose + "\n")
+    else:
+        wpaths.unlink_inside(wsp, PURPOSE_FILE)  # clearing the purpose removes the file
     _commit_purpose(wsp, purpose)
     return purpose
 
@@ -62,13 +63,10 @@ def _commit_purpose(ws: Path, purpose: str) -> None:
     workspace or an empty diff is a quiet no-op — the on-disk file is authoritative regardless."""
     if not (ws / ".git").exists():
         return
-    env = scrubbed_git_env()
     try:
-        subprocess.run(["git", "-C", str(ws), "add", "--", PURPOSE_FILE],
-                       check=True, capture_output=True, text=True, env=env)
+        run_git(ws, "add", "--", PURPOSE_FILE, check=True)
         msg = f"workspace: set purpose" if purpose else "workspace: clear purpose"
-        proc = subprocess.run(["git", "-C", str(ws), "commit", "-q", "-m", msg, "--", PURPOSE_FILE],
-                              capture_output=True, text=True, env=env)
+        proc = run_git(ws, "commit", "-q", "-m", msg, "--", PURPOSE_FILE)
         if proc.returncode != 0 and "nothing to commit" not in (proc.stdout + proc.stderr):
             log.warning("purpose commit in %s failed: %s", ws, proc.stderr.strip())
     except (OSError, subprocess.SubprocessError) as exc:

@@ -54,16 +54,16 @@ def test_the_note_says_what_the_company_layer_is_for():
 
 def test_a_target_with_no_note_reads_exactly_as_it_always_did():
     """The note is additive. Every other target's line is the same bytes it was before #1616."""
-    assert target_preamble("OeNB", ["ILM"]) == (
+    assert target_preamble("Example Bank", ["Copperline"]) == (
         "## Where this turn writes\n\n"
-        "target workspace: OeNB — writes go here unless asked otherwise; "
-        "ILM are mounted to read; write there only on an explicit ask with its purpose.\n\n")
-    assert target_preamble("OeNB", ["ILM"], note="   ") == target_preamble("OeNB", ["ILM"])
+        "target workspace: Example Bank — writes go here unless asked otherwise; "
+        "Copperline are mounted to read; write there only on an explicit ask with its purpose.\n\n")
+    assert target_preamble("Example Bank", ["Copperline"], note="   ") == target_preamble("Example Bank", ["Copperline"])
 
 
 def test_the_note_needs_a_target_to_hang_on():
     """No target, no line — a rule about a place nobody is writing to is furniture."""
-    assert target_preamble("", ["ILM"], note=GLOBAL_TARGET_NOTE) == ""
+    assert target_preamble("", ["Copperline"], note=GLOBAL_TARGET_NOTE) == ""
 
 
 # ── the app, over fakes ──────────────────────────────────────────────────────────────────────────

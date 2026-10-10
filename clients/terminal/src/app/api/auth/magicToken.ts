@@ -9,32 +9,39 @@
  *  Wire format — two base64url parts, dot-separated:
  *      <payload>.<sig>
  *      payload = base64url(JSON {e: <email>, x: <expiry, epoch seconds>, j: <jti>})
- *      sig     = base64url(HMAC-SHA256(NEXTAUTH_SECRET, payload))
- *  Signatures are compared with timingSafeEqual. With no NEXTAUTH_SECRET nothing can be minted
- *  OR verified (fail closed): an unconfigured deploy has no magic-link door at all, rather than
- *  an unsigned one that anybody could forge.
+ *      sig     = base64url(HMAC-SHA256(<link key>, payload))
+ *  The link key is never the session secret: `MAGIC_LINK_SECRET` when configured, else a key
+ *  derived from `NEXTAUTH_SECRET` (`./authSecret.mjs`). Signatures are compared with
+ *  timingSafeEqual. With no usable secret — unset, shorter than 32 bytes, or a value published in
+ *  the repository — nothing can be minted OR verified (fail closed): such a deploy has no
+ *  magic-link door at all, rather than one anybody could sign for.
  *
- *  TTL: 15 minutes by default (MAGIC_LINK_TTL_SECONDS overrides).
+ *  TTL: 15 minutes by default (MAGIC_LINK_TTL_SECONDS overrides, up to MAX_TTL_SECONDS). Verify
+ *  also refuses an expiry further out than MAX_TTL_SECONDS, whatever the token says.
  *
- *  SINGLE USE: a redeemed `jti` is remembered until the token would have expired anyway, so a
- *  link works exactly once. See `consumeJti` for the multi-replica caveat.
+ *  SINGLE USE: admin-api remembers a redeemed `jti` until the token would have expired anyway, for
+ *  every terminal replica at once, so a link works exactly once (`redeemMagicToken`).
  */
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import { redeemSigninLink } from "./adminApi";
+import { magicLinkKey } from "./authSecret.mjs";
 
 /** Default lifetime of an emailed link — long enough to walk to a phone, short enough that a
  *  forwarded/leaked mail stops being a credential quickly. */
 export const DEFAULT_TTL_SECONDS = 15 * 60;
 
+/** The longest an emailed link may live, whatever MAGIC_LINK_TTL_SECONDS says. */
+export const MAX_TTL_SECONDS = 60 * 60;
+
 export function ttlSeconds(): number {
   const raw = parseInt(process.env.MAGIC_LINK_TTL_SECONDS || "", 10);
-  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_TTL_SECONDS;
+  return Number.isFinite(raw) && raw > 0 ? Math.min(raw, MAX_TTL_SECONDS) : DEFAULT_TTL_SECONDS;
 }
 
 /** The signing key. Read at call time (not as a module constant) so tests and the server observe
- *  the live env. Empty/absent → the door is closed, not open. */
+ *  the live env. No usable secret → the door is closed, not open. */
 function secret(): string | null {
-  const s = process.env.NEXTAUTH_SECRET || "";
-  return s.trim() ? s : null;
+  return magicLinkKey(process.env);
 }
 
 function b64url(buf: Buffer): string {
@@ -56,15 +63,17 @@ export type MintResult =
 /** Sign a link for `email`. `now`/`ttl` are injectable so expiry is testable without sleeping. */
 export function mintMagicToken(email: string, opts: { ttl?: number; now?: number } = {}): MintResult {
   const key = secret();
-  if (!key) return { ok: false, error: "NEXTAUTH_SECRET is not configured — magic links are disabled" };
+  if (!key) return { ok: false, error: "no usable NEXTAUTH_SECRET (or MAGIC_LINK_SECRET) — magic links are disabled" };
   const nowSec = Math.floor((opts.now ?? Date.now()) / 1000);
-  const expiresAt = nowSec + (opts.ttl ?? ttlSeconds());
+  const expiresAt = nowSec + Math.min(opts.ttl ?? ttlSeconds(), MAX_TTL_SECONDS);
   const jti = randomUUID();
   const payload = b64url(Buffer.from(JSON.stringify({ e: email, x: expiresAt, j: jti }), "utf8"));
   return { ok: true, token: `${payload}.${signPayload(payload, key)}`, jti, expiresAt };
 }
 
-export type VerifyFailure = "unconfigured" | "malformed" | "bad-signature" | "expired" | "used";
+/** `unavailable`: the link verified, but whether it was already used could not be learned (admin-api
+ *  down or unconfigured). It refuses, and the link is not spent. */
+export type VerifyFailure = "unconfigured" | "malformed" | "bad-signature" | "expired" | "used" | "unavailable";
 export type VerifyResult =
   | { ok: true; email: string; jti: string; expiresAt: number }
   | { ok: false; reason: VerifyFailure };
@@ -100,46 +109,27 @@ export function verifyMagicToken(token: string, opts: { now?: number } = {}): Ve
 
   const nowSec = Math.floor((opts.now ?? Date.now()) / 1000);
   if (nowSec >= expiresAt) return { ok: false, reason: "expired" };
+  // No link this server mints lives longer than MAX_TTL_SECONDS, so an expiry further out is not
+  // one of ours, whatever signed it.
+  if (expiresAt - nowSec > MAX_TTL_SECONDS) return { ok: false, reason: "malformed" };
 
   return { ok: true, email, jti, expiresAt };
 }
 
-// ── single-use ledger ────────────────────────────────────────────────────────────────────────
-/** Redeemed jti → the epoch-second after which it can be forgotten (the token's own expiry; past
- *  that the signature check refuses it anyway, so the ledger never needs to grow past one TTL).
+// ── single use ─────────────────────────────────────────────────────────────────────────────
+/** Verify AND burn: the ONLY entry point that may authorise a sign-in.
  *
- *  ⚠ PROCESS-LOCAL. This is an in-memory Map, so single-use holds only within one replica:
- *  with N terminal replicas behind a load balancer a link could be redeemed up to N times, and a
- *  container restart forgets the ledger entirely (bounded by the 15-minute TTL either way). The
- *  minutes terminal runs as a SINGLE container today, which is why this is acceptable. Scaling
- *  out means moving the ledger to shared state — Redis, or a `used_jti` row in admin-api — and
- *  the swap is confined to `consumeJti` below. */
-const redeemed = new Map<string, number>();
-
-function sweep(nowSec: number): void {
-  for (const [jti, forgetAfter] of redeemed) if (forgetAfter <= nowSec) redeemed.delete(jti);
-}
-
-/** Burn a jti. Returns false if it was already burned (i.e. the link is being replayed). */
-export function consumeJti(jti: string, expiresAt: number, now = Date.now()): boolean {
-  const nowSec = Math.floor(now / 1000);
-  sweep(nowSec);
-  if (redeemed.has(jti)) return false;
-  redeemed.set(jti, expiresAt);
-  return true;
-}
-
-/** Test seam — empties the ledger. Never called by the routes. */
-export function _resetJtiLedger(): void {
-  redeemed.clear();
-}
-
-/** Verify AND burn, atomically from the caller's point of view: the ONLY entry point that may
- *  authorise a sign-in. */
-export function redeemMagicToken(token: string, opts: { now?: number } = {}): VerifyResult {
+ *  The record of which links were used is admin-api's (`POST /internal/signin-links/redeem`,
+ *  signin.v1), kept in the service Redis until the link would have expired anyway. It used to be a
+ *  Map in this process, so with N replicas a link could be redeemed N times and a restart forgot it.
+ *  Only admin-api's "first" admits; "used" is a replay; anything else — admin-api unreachable or
+ *  unconfigured, its store down — is `unavailable` and refuses, with the link left unspent. */
+export async function redeemMagicToken(token: string, opts: { now?: number } = {}): Promise<VerifyResult> {
   const v = verifyMagicToken(token, opts);
   if (!v.ok) return v;
-  if (!consumeJti(v.jti, v.expiresAt, opts.now ?? Date.now())) return { ok: false, reason: "used" };
+  const recorded = await redeemSigninLink(v.jti, v.expiresAt);
+  if (recorded === "used") return { ok: false, reason: "used" };
+  if (recorded !== "first") return { ok: false, reason: "unavailable" };
   return v;
 }
 

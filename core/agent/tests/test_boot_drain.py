@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import json
 
+
 from worker import engine
+from tests.conftest import signed_turn
 
 
 class FakeStream:
@@ -37,7 +39,7 @@ class FakeStream:
 
 
 def _entry(i, prompt, nonce):
-    return (f"{i}-0", {"turn": json.dumps({"type": "message", "prompt": prompt, "nonce": nonce})})
+    return (f"{i}-0", signed_turn({"type": "message", "prompt": prompt, "nonce": nonce}))
 
 
 def _turns(stream):

@@ -75,6 +75,15 @@ class InMemoryMeetingRepo:
                 return dict(m)
         return None
 
+    async def latest_auth_session(self, userdata_s3_path) -> Optional[dict]:
+        # self.sessions is append-ordered, i.e. session-start order.
+        for s in reversed(self.sessions):
+            m = self._meetings.get(s["meeting_id"])
+            if m is not None and (m.get("data") or {}).get("auth_userdata_path") == userdata_s3_path:
+                return {"meeting_id": m["id"], "session_uid": s["session_uid"], "status": m["status"],
+                        "end_time": m.get("end_time"), "updated_at": m.get("updated_at")}
+        return None
+
     async def find_latest(self, user_id, platform, native_meeting_id) -> Optional[dict]:
         rows = [
             m for m in self._meetings.values()

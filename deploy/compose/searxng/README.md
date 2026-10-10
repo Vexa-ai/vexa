@@ -9,8 +9,8 @@ starts one for a deployment that does not already have one.
 **unmodified** upstream image by digest, which **you** pull from SearXNG's own registry and run as a
 separate service beside the stack. It is never built into or redistributed inside a `vexaai/*`
 image, so no AGPL source-offer obligation attaches to Vexa's Apache-2.0 artifacts — it rests with
-the upstream image you run. Declared `disposition: sidecar` in `image-licenses.json`, the same
-disposition as `minio/minio`. Nothing starts unless you name the profile.
+the upstream image you run. Declared `disposition: sidecar` in `image-licenses.json`. Nothing
+starts unless you name the profile.
 
 There is **no Helm component** for this, deliberately: on Kubernetes you run your own and point
 `VEXA_SEARCH_URL` at it.

@@ -29,6 +29,13 @@ stack's shape, that change belongs in the stack, where users get it too.
 | `nginx/mcp.dev.vexa.ai.conf` | the two vhosts, on the host's existing `*.dev.vexa.ai` wildcard cert |
 | `bin/mcp-validate` | drives the endpoint as a real MCP client; stdlib-only, runs from anywhere |
 | `Makefile` | `up · down · ps · logs · key · validate · connect · nginx-check` |
+| `rig/` | the rehearsal rig: provenance for the code the product rehearsal runs on — not a service, not for main |
+| `rehearse/` | user states as data, invokable without rebuilding |
+| `minutes-stack/` | read-only verification of the Minutes deployment against its private lock, and its agent MCP composition root |
+
+The Connections credential broker used to live here as a harness (`credentials-mvp/`). It is a
+product service now — `core/agent/services/credential-broker`, deployed by the stock compose file
+and the chart (ADR-0040) — so a dogfood stack gets it the way users do.
 
 ## Hostnames
 
@@ -46,8 +53,8 @@ On the stack host (never a laptop — container workloads run on `bbb`):
 
 ```bash
 cd deploy/dogfood
-cp env.dogfood.example .env.dogfood     # then fill every CHANGE-ME
-make up                                 # pulls published images, starts the stock stack
+cp env.dogfood.example .env.dogfood     # then set what is yours (URLs, mail relay); leave secrets empty
+make up                                 # mints every empty secret into .env.dogfood, then starts the stock stack
 make key EMAIL=you@example.com          # mint an API key — prints only the token
 sudo cp nginx/mcp.dev.vexa.ai.conf /etc/nginx/sites-available/mcp.dev.vexa.ai
 sudo ln -s /etc/nginx/sites-available/mcp.dev.vexa.ai /etc/nginx/sites-enabled/mcp.dev.vexa.ai.conf
@@ -55,36 +62,27 @@ sudo nginx -t && sudo systemctl reload nginx
 ```
 
 `make up` refuses to run while `CHANGE-ME` remains in the env file. This stack is internet-reachable
-through nginx, and the compose dev defaults (`ADMIN_TOKEN=dev-admin-token`, `DB_PASSWORD=postgres`)
-are not acceptable on something with a public hostname. `make up` also never builds: it pulls the
+through nginx, and the compose dev defaults this file once mirrored (`ADMIN_TOKEN=dev-admin-token`,
+`DB_PASSWORD=postgres`, both now refused by the services) are not acceptable on something with a public hostname. `make up` also never builds: it pulls the
 published, release-validated tag, because a dogfood stack running a local source build proves
 nothing about the release.
 
 ## Handing the instance back to first run
 
 A first-run rehearsal needs an instance that has never been claimed, and a long-lived dogfood stack
-is the opposite of that: the admin is whoever signed in first — usually a test identity — and the
-setup wizard is marked complete. Neither fact can be undone from any product surface.
+is the opposite of that: the admin is whoever signed in first — usually a test identity — and that
+cannot be undone from any product surface.
 
 ```bash
-deploy/dogfood/bin/reset-instance [--admin-email minutes-test@vexa.ai] [--keep-global]
+deploy/dogfood/bin/reset-instance [--admin-email minutes-test@vexa.ai]
 ```
 
-Three values, named, and nothing else: the admin role is released so the next sign-in claims it, the
-first-run wizard state is cleared, and the company-layer gate goes back up. **It deletes nothing** —
-workspaces, chats, meetings, transcripts and `_global/asks/` all survive. That narrow blast radius is
-the point: the account it has to reset sits next to the founder's, and the alternative that existed
-before this script was hand surgery on a jsonb column by whoever remembered the query.
+One value, named, and nothing else: the admin role is released so the next sign-in claims it.
+**It deletes nothing** — workspaces, chats, meetings, transcripts and `_global/asks/` all survive.
+That narrow blast radius is the point: the account it has to reset sits next to the founder's.
 
-After it runs, until the admin's setup chat calls `mark_global_ready`:
-
-- a non-admin sign-in is refused with one sentence, and no user row is created for them;
-- the flows engine **parks** every fact instead of sending — nothing claimed, nothing failed, no
-  attempt burned, arrival order kept;
-- `flows_submit` and `flow_lifecycle` refuse by name.
-
-`--keep-global` leaves the company layer accepted, for rehearsing the claim without re-typing the
-company.
+There is no company-layer step after it (founder ruling 2026-10-08): the next sign-in claims the
+role and lands in an ordinary first visit, and nobody is refused while `_global` is empty.
 
 ## Validating
 

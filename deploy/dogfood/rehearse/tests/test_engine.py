@@ -46,7 +46,7 @@ def test_blank_admin_refuses_on_a_claimed_instance_and_says_so(catalog, env):
 
 def test_the_organizer_state_leaves_a_meeting_parked_not_dispatched(catalog, env):
     doors = StubDoors()
-    rehearse("organizer-invited", "olga@rehearse.test", doors=doors, catalog=catalog, env=env)
+    rehearse("organizer-invited", "nora@rehearse.test", doors=doors, catalog=catalog, env=env)
     assert [m["status"] for m in doors.meetings.values()] == ["scheduled"]
 
 
@@ -130,9 +130,9 @@ def test_a_second_completed_fact_is_a_duplicate_not_a_second_fan_out(catalog, en
 # ── derived values ───────────────────────────────────────────────────────────────────────────────
 
 def test_a_speaker_label_becomes_a_test_domain_address_without_their_employer():
-    assert attendee_address("Olga Avramenko (Sony Pictures Imageworks)", "rehearse.test") == \
-        "olga-avramenko@rehearse.test"
-    assert attendee_address("Sam Richards", "rehearse.test") == "sam-richards@rehearse.test"
+    assert attendee_address("Nora Quill (Brightwater Picture Studios)", "rehearse.test") == \
+        "nora-quill@rehearse.test"
+    assert attendee_address("Jordan Reyes", "rehearse.test") == "jordan-reyes@rehearse.test"
     assert attendee_address("", "rehearse.test") == "someone@rehearse.test"
 
 

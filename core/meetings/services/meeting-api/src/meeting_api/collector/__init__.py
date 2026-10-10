@@ -18,6 +18,8 @@ Public surface (the front door):
   - ``ingest(store, redis, message)`` / ``consume_segments(store, redis, ...)`` — the
     segment-ingestion unit: ``transcription_segments`` stream → store → publish
     ``tc:meeting:{id}:mutable``.
+  - ``signed_entry(token, payload)`` — transcript.v1's signer, for a tool that writes the stream the
+    way a bot does (the eval harness, the compose tests).
   - ``ports`` — the Protocols: ``TranscriptStore``, ``RedisBus`` (+ ``PubSub``).
   - ``adapters.build_production_app(...)`` — wire ``create_app`` with real SQLAlchemy + redis.
   - ``fakes`` — ``InMemoryTranscriptStore`` / ``FakeRedisBus`` (offline drivers).
@@ -30,13 +32,14 @@ the shipped collector; this package imports nothing from conformance.
 from __future__ import annotations
 
 from .app import create_app
-from .ingest import consume_segments, ingest
+from .ingest import consume_segments, ingest, signed_entry
 from .ports import PubSub, RedisBus, TranscriptStore
 
 __all__ = [
     "create_app",
     "ingest",
     "consume_segments",
+    "signed_entry",
     "TranscriptStore",
     "RedisBus",
     "PubSub",

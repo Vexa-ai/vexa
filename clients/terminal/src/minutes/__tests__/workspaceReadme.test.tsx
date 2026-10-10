@@ -514,3 +514,17 @@ describe("the two workspaces that are not groups", () => {
     await screen.findByText(/mounted read-only into every worker/);
   });
 });
+
+
+describe("private repository workspace", () => {
+  it("shows its owner repository controls without claiming shared membership", async () => {
+    vi.mocked(api.readWorkspaceBySlug).mockResolvedValue({ id: "w1", name: "Pilot", kind: "private", slug: "pilot-b5e60c", access: "readable", writable: true });
+    panel();
+    await waitFor(() => expect(screen.getByText("Private workspace")).toBeTruthy());
+    expect(screen.queryByText("Shared workspace")).toBeNull();
+    expect(screen.getByRole("button", { name: "Sync" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Add a member" })).toBeNull();
+    expect(api.listWorkspaceMembers).not.toHaveBeenCalled();
+    expect(api.listSharedMemberships).not.toHaveBeenCalled();
+  });
+});

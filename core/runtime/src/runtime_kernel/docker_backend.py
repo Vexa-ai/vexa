@@ -5,9 +5,12 @@ The runtime talks to the mounted `/var/run/docker.sock` directly — there is **
 image** (main's has none either). Implements the same sync `Backend` port as `ProcessBackend`, so the
 kernel's lifecycle is identical regardless of substrate.
 
-Host config (how the spawned container runs) comes from the runtime service's env, not the workload
-env: `DOCKER_NETWORK` puts the bot on the same compose network as redis/meeting-api (without it the
-bot can't reach the stack), and `DOCKER_SHM_SIZE` gives chromium a real `/dev/shm`.
+Host config (how the spawned container runs) comes from the runtime service's env and the workload's
+profile, never from the workload env: a profile names the runtime setting that holds its network
+(``Runnable.network_env`` — `DOCKER_WORKER_NETWORK` for the agent profile), and `DOCKER_NETWORK` is
+the network of every workload whose profile names none (a meeting bot: meeting-api and redis). Each
+kind of workload reaches only the services on its own network. `DOCKER_SHM_SIZE` gives chromium a
+real `/dev/shm`.
 """
 from __future__ import annotations
 
@@ -22,6 +25,8 @@ from .backend import WorkloadHandle
 from .models import Resources
 from .mounts import workspace_binds
 from .profiles import Runnable
+from .userns import container_profile
+from .workload_env import forwarded_env, name_component
 
 MANAGED_LABEL = "runtime.managed"
 WORKLOAD_ID_LABEL = "runtime.workload_id"
@@ -29,27 +34,20 @@ _COMPOSE_LABEL = "com.docker.compose.project"
 
 logger = logging.getLogger("runtime_kernel.docker_backend")
 
-
-#: The claude CLI's own filename inside ``~/.claude``.
-CLAUDE_CREDENTIALS_FILENAME = ".credentials.json"
+_PROFILE_CACHE: dict[str, str] = {}
 
 
-def host_claude_credentials(env: Optional[Any] = None) -> Optional[str]:
-    """The DOCKER-HOST path of the claude subscription credential to broker into a spawned worker.
-
-    ``HOST_CLAUDE_CREDENTIALS`` (the file) wins when set; otherwise it is derived from
-    ``HOST_CLAUDE_DIR`` (the host's ``~/.claude``), which is the mount shape that survives a token
-    refresh — the CLI replaces ``.credentials.json`` by ``rename(2)``, i.e. with a NEW INODE, and a
-    single-FILE bind is pinned to the inode it was created with. A worker bind is created fresh at
-    every spawn so it was never the half that went stale, but a deployment that configures only the
-    directory must still produce an authenticated worker. ``None`` = no subscription file
-    configured (an API-style key may still be brokered as env)."""
-    env = os.environ if env is None else env
-    explicit = (env.get("HOST_CLAUDE_CREDENTIALS") or "").strip()
-    if explicit:
-        return explicit
-    host_dir = (env.get("HOST_CLAUDE_DIR") or "").strip()
-    return f"{host_dir.rstrip('/')}/{CLAUDE_CREDENTIALS_FILENAME}" if host_dir else None
+def _userns_profile() -> str:
+    """The user-namespace seccomp profile (runtime_kernel/seccomp-userns.json) for the Docker API, read
+    once. Unreadable → empty, said loudly: the bot then starts under the daemon's default profile."""
+    if "profile" not in _PROFILE_CACHE:
+        try:
+            _PROFILE_CACHE["profile"] = container_profile()
+        except (OSError, ValueError) as e:
+            logger.error("seccomp profile for meeting bots unreadable (%s): their browsers will run "
+                         "without Chromium's sandbox", e)
+            _PROFILE_CACHE["profile"] = ""
+    return _PROFILE_CACHE["profile"]
 
 
 def _stop_grace_sec() -> int:
@@ -86,6 +84,13 @@ def _worker_naming(workload_id: str) -> tuple[str, dict[str, str]]:
     return f"worker-{rest}", {"vexa.role": "worker", "vexa.kind": kind}
 
 
+def docker_name(raw: str) -> str:
+    """A container name for ``raw`` (``workload_env.name_component``: unchanged when Docker accepts
+    it, else made valid with a hash of ``raw``). The id itself rides the ``runtime.workload_id``
+    label, which takes any string. Docker has no 63-character limit, so long ids keep their names."""
+    return name_component(raw)
+
+
 def _workload_id_from_leaf(leaf: str) -> str:
     """Reverse ``_worker_naming`` for the label-less name-match fallback: a ``worker-*`` container
     leaf maps back to its ``agent-*`` workload id; anything else IS the workload id."""
@@ -94,25 +99,35 @@ def _workload_id_from_leaf(leaf: str) -> str:
     return leaf
 
 
-def _stack_network() -> Optional[str]:
-    """The stack-unique compose network every workload this runtime spawns joins (``start()`` sets
-    ``HostConfig.NetworkMode`` from the same env). On a SHARED daemon (two vexa stacks on one host —
-    the release-host layout) the managed label and the name prefix are IDENTICAL across stacks, so
-    the network is THE discriminator that scopes discovery and ``find`` to THIS stack's containers —
-    and it works retroactively for label-less incident-era containers too. Unset ⇒ single-stack
-    deployment, no scoping (docker's default bridge)."""
+def _workload_network(network_env: Optional[str]) -> Optional[str]:
+    """The network a spawned workload joins: the value of its profile's ``network_env`` setting,
+    falling back to ``DOCKER_NETWORK``. Unset ⇒ docker's default."""
+    if network_env and os.getenv(network_env):
+        return os.getenv(network_env)
     return os.getenv("DOCKER_NETWORK") or None
 
 
-def _in_stack_network(network: Optional[str], inspect_body: dict) -> bool:
-    """Whether an INSPECTED container is attached to the stack network (no scoping when unset).
-    Checks both ``HostConfig.NetworkMode`` (what ``start()`` sets) and the live
+def _stack_networks(network_envs: tuple[str, ...] = ()) -> tuple[str, ...]:
+    """The stack-unique compose networks the workloads this runtime spawns join (``start()`` sets
+    ``HostConfig.NetworkMode`` from the same env). On a SHARED daemon (two vexa stacks on one host —
+    the release-host layout) the managed label and the name prefix are IDENTICAL across stacks, so
+    the networks are THE discriminator that scopes discovery and ``find`` to THIS stack's containers —
+    and they work retroactively for label-less incident-era containers too. Empty ⇒ single-stack
+    deployment, no scoping (docker's default bridge)."""
+    nets = [n for n in (_workload_network(None), *(_workload_network(k) for k in network_envs)) if n]
+    return tuple(dict.fromkeys(nets))
+
+
+def _in_stack_network(networks: tuple[str, ...], inspect_body: dict) -> bool:
+    """Whether an INSPECTED container is attached to one of the stack networks (no scoping when
+    none is configured). Checks both ``HostConfig.NetworkMode`` (what ``start()`` sets) and the live
     ``NetworkSettings.Networks`` map (covers containers attached by name after create)."""
-    if not network:
+    if not networks:
         return True
-    if (inspect_body.get("HostConfig") or {}).get("NetworkMode") == network:
+    if (inspect_body.get("HostConfig") or {}).get("NetworkMode") in networks:
         return True
-    return network in ((inspect_body.get("NetworkSettings") or {}).get("Networks") or {})
+    attached = (inspect_body.get("NetworkSettings") or {}).get("Networks") or {}
+    return any(n in attached for n in networks)
 
 
 def _socket_url() -> str:
@@ -138,14 +153,17 @@ def _shm_bytes() -> Optional[int]:
 class DockerBackend:
     name = "docker"
 
-    def __init__(self, name_prefix: str = "vexa-") -> None:
+    def __init__(self, name_prefix: str = "vexa-", network_envs: tuple[str, ...] = ()) -> None:
+        """``network_envs``: the runtime settings naming the networks its profiles' workloads join
+        besides ``DOCKER_NETWORK`` (``profiles.network_envs``) — what discovery is scoped by."""
         self._prefix = name_prefix
+        self._network_envs = tuple(network_envs)
         self._url = _socket_url()
         self._session = requests_unixsocket.Session()
 
     def _cname(self, workload_id: str) -> str:
         leaf, _labels = _worker_naming(workload_id)
-        return f"{self._prefix}{leaf}"
+        return docker_name(f"{self._prefix}{leaf}")
 
     def _req(self, method: str, path: str, *, timeout: int = 30, **kw):
         return self._session.request(method, f"{self._url}{path}", timeout=timeout, **kw)
@@ -215,8 +233,20 @@ class DockerBackend:
         name = self._cname(workload_id)
         _leaf, worker_labels = _worker_naming(workload_id)
 
-        host_config: dict[str, Any] = {}
-        network = os.getenv("DOCKER_NETWORK")
+        # Hardening: every capability dropped but the ones the profile keeps, and no privilege a
+        # set-uid program could add (a meeting bot keeps none; an agent worker the few its tools
+        # user needs — profiles.WORKER_CAPABILITIES).
+        host_config: dict[str, Any] = {"CapDrop": ["ALL"], "SecurityOpt": ["no-new-privileges"]}
+        if runnable.capabilities:
+            host_config["CapAdd"] = list(runnable.capabilities)
+        # A workload whose profile may create user namespaces (a meeting bot: Chromium's sandbox is
+        # built on one) runs under the profile that allows it, in its own container only. Without
+        # the file the bot still starts; its browser then says it runs unsandboxed.
+        if runnable.user_namespaces:
+            profile = _userns_profile()
+            if profile:
+                host_config["SecurityOpt"].append(f"seccomp={profile}")
+        network = _workload_network(runnable.network_env)
         if network:
             host_config["NetworkMode"] = network
         shm = _shm_bytes()
@@ -242,92 +272,47 @@ class DockerBackend:
         if api_mounts:
             host_config["Mounts"] = api_mounts
 
-        # The Runtime BROKERS model credentials. Subscription credentials are mounted read-only;
-        # API-style provider env (the claude-code runner's ANTHROPIC_*) is copied from the trusted
-        # runtime service into spawned workers.
-        creds = host_claude_credentials(os.environ)
-        if creds:
-            binds.append(f"{creds}:/root/.claude/.credentials.json:ro")
-        codex_creds = os.getenv("HOST_CODEX_CREDENTIALS")
-        if codex_creds:
-            binds.append(f"{codex_creds}:/root/.codex/auth.json:ro")
-        # DEV hot-mount (parallels the dev.yml service hot-reload): bind the HOST agent_api source over
-        # the image's baked copy so a SPAWNED worker runs the latest worker.py with NO image rebuild —
-        # the next spawn picks up the change. Host path (daemon-resolved); set only in dev.
-        dev_src = os.getenv("VEXA_AGENT_SRC_MOUNT")
+        # The Runtime BROKERS model credentials into the workloads whose profile asks for them: the
+        # profile's credential files are mounted read-only where it says. API-style provider env
+        # rides the profile's forward list below. A profile that asks for none (a meeting bot) is
+        # given none.
+        if runnable.credential_mounts:
+            for cred in runnable.credential_files:
+                binds.append(f"{cred.source}:{cred.target}:ro")
+        # DEV hot-mount (parallels the dev.yml service hot-reload): bind a HOST source tree over the
+        # image's baked copy so a SPAWNED workload runs the latest code with NO image rebuild — the
+        # next spawn picks up the change. Host path (daemon-resolved); set only in dev.
+        source_mount = runnable.source_mount
+        dev_src = os.getenv(source_mount.env) if source_mount else None
         if dev_src:
-            binds.append(f"{dev_src}:/app/src/agent_api:ro")
+            binds.append(f"{dev_src}:{source_mount.target}:ro")
         if binds:
             host_config["Binds"] = binds
 
         spawn_env = dict(env)
         if dev_src:
-            # The worker image normally imports its baked packages from /app. Put the whole hot
-            # agent source tree first or the bind above is decorative: `python -m worker` otherwise
-            # resolves /app/worker and silently runs stale code.
-            spawn_env["PYTHONPATH"] = "/app/src/agent_api:/app"
-        for key in (
-            # llm-module dials: the harness runner selection and its gate. Dispatch-stamped values
-            # win (`key not in spawn_env`). The completion dials that stood here went with the
-            # in-product inference pipeline (PRD decision 34); what remains is read by the
-            # openai-agent HARNESS inside the worker (decision 37), so it must still be forwarded.
-            # THE WORKER'S MODEL (decision 36). `engine.py` reads VEXA_AGENT_MODEL and passes it to
-            # every turn — the chat turn AND the write-back phase — so a deployment that wants
-            # Sonnet sets one value. It has to be FORWARDED or it reaches the runtime and stops
-            # there: the runtime spawns workers with this list, and a setting the worker never sees
-            # is a setting that silently does nothing while reading as configured.
-            "VEXA_AGENT_MODEL",
-            "VEXA_LLM_BASE_URL",
-            "VEXA_LLM_API_KEY",
-            "VEXA_LLM_MODEL",
-            # Server-specific request fields the OpenAI dialect cannot express. LOAD-BEARING for a
-            # self-hosted Qwen ({"chat_template_kwargs":{"enable_thinking":false}}): without it the
-            # model reasons its whole budget away and returns nothing parseable — a failure that
-            # looks like a bad model, not like a missing variable.
-            "VEXA_LLM_EXTRA_BODY",
-            "VEXA_MODEL_ALLOWLIST",
-            "VEXA_RUNNER",
-            "VEXA_MIDTURN_INJECT",
-            "VEXA_CODEX_MODEL",
-            # openai-agent harness budget dials (per-turn ceiling + context trim + streaming)
-            "VEXA_AGENT_MAX_TOOL_CALLS",
-            "VEXA_AGENT_MAX_TURN_SEC",
-            "VEXA_AGENT_CONTEXT_TOKENS",
-            "VEXA_AGENT_STREAM",
-            # The worker's reach onto the open web (the openai-agent harness's WebSearch/WebFetch).
-            # THE ENDPOINT IS THE OPERATOR'S — nothing search-shaped ships with this product — so it
-            # arrives as deployment env and has to be forwarded like every other worker-read dial: a
-            # VEXA_SEARCH_URL that stops at the runtime is a deployment that reads as configured and
-            # hands every turn no search tool at all.
-            "VEXA_SEARCH_URL",
-            "VEXA_SEARCH_DIALECT",
-            "VEXA_SEARCH_API_KEY",
-            # codex harness API-key auth (subscription auth is the read-only bind above)
-            "OPENAI_API_KEY",
-            "CODEX_API_KEY",
-            # claude-code harness credentials (that adapter's concern only)
-            "ANTHROPIC_API_KEY",
-            "ANTHROPIC_AUTH_TOKEN",
-            "ANTHROPIC_BASE_URL",
-            "ANTHROPIC_MODEL",
-            "ANTHROPIC_DEFAULT_OPUS_MODEL",
-            "ANTHROPIC_DEFAULT_SONNET_MODEL",
-            "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-        ):
-            value = os.getenv(key)
-            if value and key not in spawn_env:
-                spawn_env[key] = value
+            # The image normally imports its baked packages from /app. Put the whole hot source tree
+            # first or the bind above is decorative: `python -m worker` otherwise resolves
+            # /app/worker and silently runs stale code.
+            spawn_env["PYTHONPATH"] = source_mount.pythonpath
+        # The profile's forward list: model credentials and dials from the runtime's own
+        # environment. A dispatch-stamped value wins.
+        spawn_env.update(forwarded_env(runnable.forward_env, os.environ, spawn_env))
+        if runnable.credential_mounts:
+            for key, value in runnable.credential_env.items():
+                spawn_env.setdefault(key, value)
 
         payload: dict[str, Any] = {
             "Image": runnable.image,
             "Env": [f"{k}={v}" for k, v in spawn_env.items()],
-            "Labels": {MANAGED_LABEL: "true", WORKLOAD_ID_LABEL: workload_id, **worker_labels},
+            "Labels": {MANAGED_LABEL: "true", WORKLOAD_ID_LABEL: workload_id, **worker_labels,
+                       **runnable.labels},
             "HostConfig": host_config,
         }
         if dev_src:
             # `python -m worker` prepends its cwd to sys.path ahead of PYTHONPATH. Start inside the
             # mounted tree as well, or /app/worker still wins despite the PYTHONPATH above.
-            payload["WorkingDir"] = "/app/src/agent_api"
+            payload["WorkingDir"] = source_mount.target
         if runnable.command:
             payload["Cmd"] = list(runnable.command)
 
@@ -357,7 +342,7 @@ class DockerBackend:
         r = self._req("GET", f"/containers/{name}/json")
         if r.status_code != 200:
             return None
-        if not _in_stack_network(_stack_network(), r.json() or {}):
+        if not _in_stack_network(_stack_networks(self._network_envs), r.json() or {}):
             return None  # exists, but it is ANOTHER stack's container — not ours to touch
         return WorkloadHandle(id=workload_id, impl=name)
 
@@ -375,13 +360,13 @@ class DockerBackend:
 
         Returns ``[{workload_id, name, running, exit_code, started_at}, …]``; never raises."""
         found: dict[str, dict] = {}
-        network = _stack_network()
+        networks = _stack_networks(self._network_envs)
         try:
             import json as _json
 
             def _filters(spec: dict) -> str:
-                if network:
-                    spec = {**spec, "network": [network]}
+                if networks:
+                    spec = {**spec, "network": list(networks)}
                 return quote(_json.dumps(spec), safe="")
 
             r = self._req("GET", f"/containers/json?all=1&filters={_filters({'label': [f'{MANAGED_LABEL}=true']})}")
@@ -392,7 +377,7 @@ class DockerBackend:
                         found[wid] = self._adoptable(wid, c)
             # Fallback: prefix-named containers WITHOUT the labels (spawned before the labels
             # existed). Compose-owned services can share the prefix — exclude anything compose owns.
-            fallback_qs = f"?all=1&filters={_filters({})}" if network else "?all=1"
+            fallback_qs = f"?all=1&filters={_filters({})}" if networks else "?all=1"
             r = self._req("GET", f"/containers/json{fallback_qs}")
             if r.status_code == 200:
                 for c in r.json():

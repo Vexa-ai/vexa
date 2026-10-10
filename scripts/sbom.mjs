@@ -9,11 +9,15 @@
  * inventories four sources into one SPDX document —
  *
  *   1. npm deps   — `pnpm licenses list --json` (the same index gate:licenses uses):
- *                   name · version · declared licence, one SPDX package per version.
+ *                   name · version · declared licence, one SPDX package per version. Plus every
+ *                   npm project that installs from its own package-lock.json outside the pnpm
+ *                   tree (scripts/npm-locks.mjs; the terminal's images run `npm ci` from one),
+ *                   read from the lock, as gate:licenses reads it.
  *   2. pip deps   — the committed uv.lock files (name · version). uv.lock carries
- *                   no licence field, so pip packages ship licenceDeclared=NOASSERTION
- *                   (Python licence resolution via pip-licenses is owed per ADR-0009);
- *                   the INVENTORY is still complete and CI-runnable with no install.
+ *                   no licence field; licenceDeclared comes from python-licenses.json
+ *                   (the reviewed index gate:licenses classifies against) and is
+ *                   NOASSERTION for a locked package no image installs, which the index
+ *                   does not cover. CI-runnable with no install.
  *   3. Lite apt   — every package name installed in Dockerfile.lite's final stage.
  *                   Docker source does not resolve Ubuntu versions or licences, so
  *                   those fields are explicitly NOASSERTION pending image scanning.
@@ -34,6 +38,7 @@
 import { readFileSync, existsSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { execSync } from "node:child_process";
+import { npmLockInventory } from "./npm-locks.mjs";
 
 const ROOT = process.cwd();
 const SKIP = new Set(["node_modules", ".venv", ".git", "dist", ".turbo", "__pycache__", ".pytest_cache"]);
@@ -105,6 +110,20 @@ function npmPackages() {
   return out;
 }
 
+// The npm projects outside the pnpm tree, each package once by name@version (the pnpm index wins).
+function npmLockPackagesFor(sbomNpm) {
+  let inv;
+  try { inv = npmLockInventory(ROOT); }
+  catch (e) { warn(`npm lockfiles could not be read (${e.message}) — emitting SBOM without them`); return []; }
+  const have = new Set(sbomNpm.map((p) => `${p.name}@${p.version}`));
+  return inv.packages.filter((p) => !have.has(`${p.name}@${p.version}`)).map((p) => ({
+    eco: "npm", name: p.name, version: p.version,
+    licenseDeclared: spdxLicense(p.license),
+    purl: `pkg:npm/${p.name}@${p.version}`,
+    homepage: null,
+  }));
+}
+
 // ── source 2: pip deps — inventory from the committed uv.lock files ──────────────
 function findUvLocks(dir = ROOT, acc = []) {
   for (const name of readdirSync(dir)) {
@@ -133,6 +152,8 @@ function parseUvLock(file) {
   return pkgs;
 }
 function pipPackages() {
+  const indexFile = join(ROOT, "python-licenses.json");
+  const licences = existsSync(indexFile) ? (JSON.parse(readFileSync(indexFile, "utf8")).licenses || {}) : {};
   const locks = findUvLocks();
   if (!locks.length) { warn("no uv.lock files found — emitting SBOM without the pip tree"); return []; }
   const byKey = new Map(); // dedup name@version across every service lockfile
@@ -142,7 +163,7 @@ function pipPackages() {
       const key = `${p.name}@${version}`;
       if (!byKey.has(key)) byKey.set(key, {
         eco: "pypi", name: p.name, version,
-        licenseDeclared: "NOASSERTION", // uv.lock carries no licence field (ADR-0009: pip-licenses owed)
+        licenseDeclared: spdxLicense(licences[`${p.name}==${version}`]),
         purl: `pkg:pypi/${p.name.toLowerCase()}@${version}`,
         homepage: null,
       });
@@ -215,6 +236,20 @@ const BAKED_VALKEY = {
   comment: "Source-built (BUILD_TLS=no) into vexaai/vexa-lite; valkey-server + valkey-cli at /usr/local/bin, notice at /usr/local/share/valkey/LICENSE. compose/helm pin valkey/valkey:8-alpine (user-pulled, in image-licenses.json). #653.",
 };
 
+// The seccomp profile meeting bots run under (core/runtime/src/runtime_kernel/seccomp-userns.json): Docker
+// Engine 29.6.2's default profile from moby/profiles, with one rule added (user namespaces, for the
+// bots' Chromium sandbox). A modified Apache-2.0 file VENDORED into the runtime and Lite images, so no
+// dependency scan sees it; its licence travels beside it (seccomp-userns.LICENSE.txt).
+const VENDORED_SECCOMP = {
+  eco: "github", name: "moby/profiles seccomp/default.json", version: "docker-v29.6.2",
+  licenseDeclared: "Apache-2.0", licenseConcluded: "Apache-2.0",
+  copyrightText: "Copyright Docker, Inc. and the Moby project contributors",
+  downloadLocation: "https://github.com/moby/profiles/blob/main/seccomp/default.json",
+  purl: "pkg:github/moby/profiles",
+  supplier: "Organization: The Moby Project",
+  comment: "Modified (one rule added) and vendored as core/runtime/src/runtime_kernel/seccomp-userns.json into vexaai/v012-runtime (/app/src/runtime_kernel/) and vexaai/vexa-lite (/app/runtime/src/runtime_kernel/), licence beside it; the Helm chart installs it on nodes for bot Pods. Notice: repo NOTICE + THIRD_PARTY_LICENSES.md.",
+};
+
 // ── assemble the SPDX 2.3 document ──────────────────────────────────────────────
 function pkgObject(p, id) {
   const externalRefs = p.purl ? [{ referenceCategory: "PACKAGE-MANAGER", referenceType: "purl", referenceLocator: p.purl }] : [];
@@ -234,7 +269,8 @@ function pkgObject(p, id) {
   return o;
 }
 
-const npm = npmPackages();
+const pnpmNpm = npmPackages();
+const npm = [...pnpmNpm, ...npmLockPackagesFor(pnpmNpm)];
 const pip = pipPackages();
 const liteApt = liteAptPackages();
 const deps = [...npm, ...pip].sort((a, b) => (a.eco + a.name + a.version).localeCompare(b.eco + b.name + b.version));
@@ -262,6 +298,10 @@ const valkeyId = spdxId("Package", "github", "valkey", "8.1.9");
 packages.push(pkgObject(BAKED_VALKEY, valkeyId));
 relationships.push({ spdxElementId: ROOT_ID, relatedSpdxElement: valkeyId, relationshipType: "CONTAINS" });
 
+const seccompId = spdxId("Package", "github", "moby-profiles-seccomp", "docker-v29.6.2");
+packages.push(pkgObject(VENDORED_SECCOMP, seccompId));
+relationships.push({ spdxElementId: ROOT_ID, relatedSpdxElement: seccompId, relationshipType: "CONTAINS" });
+
 for (const apt of liteApt) {
   const id = spdxId("Package", apt.eco, apt.name, apt.version);
   packages.push(pkgObject(apt, id));
@@ -283,7 +323,7 @@ const doc = {
   creationInfo: {
     created: CREATED,
     creators: ["Tool: vexa-sbom (scripts/sbom.mjs)", "Organization: Vexa"],
-    comment: `Coverage: npm deps=${npm.length} (declared licences via pnpm), pip deps=${pip.length} (inventory only, licence=NOASSERTION — pip-licenses owed per ADR-0009), Lite final-stage apt packages=${liteApt.length} (source-declared names; version/licence=NOASSERTION pending image enrichment), baked artifacts=2 (pyannote model weights + Valkey engine, fully specified). Non-dependency baked artifacts sit outside gate:licenses (audited by gate:image-licenses); see THIRD_PARTY_LICENSES.md.`,
+    comment: `Coverage: npm deps=${npm.length} (declared licences via pnpm), pip deps=${pip.length} (inventory only, licence=NOASSERTION — pip-licenses owed per ADR-0009), Lite final-stage apt packages=${liteApt.length} (source-declared names; version/licence=NOASSERTION pending image enrichment), baked artifacts=3 (pyannote model weights + Valkey engine + the vendored, modified moby seccomp profile, fully specified). Non-dependency baked artifacts sit outside gate:licenses (audited by gate:image-licenses); see THIRD_PARTY_LICENSES.md.`,
   },
   packages,
   relationships,

@@ -52,7 +52,7 @@ def _spawn(stack, user_id, scenario, *, native_id=None, max_bots=5):
     code, body = post_json(
         f"{stack.meeting_api}/bots",
         payload,
-        headers={"x-user-id": str(user_id), "x-user-limits": str(max_bots)},
+        headers={"x-internal-secret": stack.internal_secret, "x-user-id": str(user_id), "x-user-limits": str(max_bots)},
     )
     assert code == 201, f"POST /bots mock:{scenario} → {code} {body}"
     return native_id, body
@@ -134,16 +134,16 @@ def test_mock_normal_full_lifecycle(stack):
         time.sleep(2)
     assert segs >= 1, f"normal published no transcript segments (redis hash AND postgres empty for meeting {m['id']})"
 
-    # recording leg: the mock uploaded a chunk → it landed in minio under this user.
+    # recording leg: the mock uploaded a chunk → it landed in object storage under this user.
     deadline = time.time() + 20
     keys = []
     while time.time() < deadline:
-        keys = stack.minio_ls(f"recordings/{user_id}/")
+        keys = stack.object_keys(f"recordings/{user_id}/")
         if keys:
             break
         time.sleep(2)
-    assert keys, f"normal recording chunk not in minio for user {user_id}"
-    print(f"\n[mock/normal] completed · {segs} transcript seg(s) · recording in minio ({len(keys)} obj)")
+    assert keys, f"normal recording chunk not in storage for user {user_id}"
+    print(f"\n[mock/normal] completed · {segs} transcript seg(s) · recording in storage ({len(keys)} obj)")
 
 
 # ── silence-left-alone: automatic_leave → invocation → real monitor → lifecycle terminal ─────────
@@ -246,7 +246,7 @@ def test_mock_max_bots_live(stack):
         f"{stack.meeting_api}/bots",
         {"platform": "google_meet", "native_meeting_id": f"overflow-{uuid.uuid4().hex[:6]}", "bot_name": "mock:normal",
          "transcribe_enabled": False},
-        headers={"x-user-id": str(user_id), "x-user-limits": str(cap)},
+        headers={"x-internal-secret": stack.internal_secret, "x-user-id": str(user_id), "x-user-limits": str(cap)},
     )
     assert code == 429, f"N+1 spawn at cap should be 429, got {code} {body}"
     # Free a slot (stop one held bot via the leave mechanism) → the next spawn is admitted (201).
@@ -256,7 +256,7 @@ def test_mock_max_bots_live(stack):
         f"{stack.meeting_api}/bots",
         {"platform": "google_meet", "native_meeting_id": f"refill-{uuid.uuid4().hex[:6]}", "bot_name": "mock:immediate-stop",
          "transcribe_enabled": False},
-        headers={"x-user-id": str(user_id), "x-user-limits": str(cap)},
+        headers={"x-internal-secret": stack.internal_secret, "x-user-id": str(user_id), "x-user-limits": str(cap)},
     )
     assert code == 201, f"after freeing a slot the next spawn should be admitted, got {code} {body}"
     print(f"\n[mock/max-bots-live] cap={cap}: at-cap→429 · freed slot→admit(201) — live spawns")

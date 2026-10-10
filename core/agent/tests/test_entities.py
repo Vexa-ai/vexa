@@ -20,15 +20,15 @@ def read(ws, rel):
 # ── creating a page ──────────────────────────────────────────────────────────────────────────────
 
 def test_creates_the_page_with_the_readers_frontmatter_vocabulary(tmp_path):
-    r = E.upsert_entity(tmp_path, "person", "Olga Avramenko",
+    r = E.upsert_entity(tmp_path, "person", "Nora Quill",
                         ["Runs the DNA TSC agenda."], "the 2026-03-02 TSC call", today="2026-09-02")
-    assert r["created"] is True and r["path"] == "kg/entities/person/olga-avramenko.md"
+    assert r["created"] is True and r["path"] == "kg/entities/person/nora-quill.md"
     text = read(tmp_path, r["path"])
     # type/id/title are what the templates, the per-type index.md files and the terminal's wikilink
     # resolver already read. A page keyed on `kind:`/`name:` would look right and be invisible.
     assert "type: person" in text
-    assert "id: olga-avramenko" in text
-    assert "title: Olga Avramenko" in text
+    assert "id: nora-quill" in text
+    assert "title: Nora Quill" in text
     assert "created: 2026-09-02" in text
     assert "sources: [the 2026-03-02 TSC call]" in text
     assert "aliases: []" in text
@@ -48,7 +48,7 @@ def test_every_kind_decision_24_names_is_writable_and_nothing_else_is(tmp_path):
 
 def test_a_fact_with_no_source_is_refused_and_names_MISSING(tmp_path):
     with pytest.raises(E.EntityRefused) as e:
-        E.upsert_entity(tmp_path, "company", "Sony Pictures Imageworks", ["2,000 people"], "  ")
+        E.upsert_entity(tmp_path, "company", "Brightwater Picture Studios", ["2,000 people"], "  ")
     assert "kg/MISSING.md" in str(e.value)
     assert not (tmp_path / "kg" / "entities").exists()   # refused means NOTHING was written
 
@@ -61,9 +61,9 @@ def test_no_facts_is_refused_rather_than_writing_an_empty_dated_heading(tmp_path
 # ── appending, and idempotency ───────────────────────────────────────────────────────────────────
 
 def test_second_call_appends_a_dated_entry_and_keeps_the_first(tmp_path):
-    E.upsert_entity(tmp_path, "person", "Cottalango Leon", ["Chairs the TSC."], "call A",
+    E.upsert_entity(tmp_path, "person", "Robin Vale", ["Chairs the TSC."], "call A",
                     today="2026-03-02")
-    r = E.upsert_entity(tmp_path, "person", "Cottalango Leon", ["Asked for a standard CLA."],
+    r = E.upsert_entity(tmp_path, "person", "Robin Vale", ["Asked for a standard CLA."],
                         "call B", today="2026-08-18")
     assert r["created"] is False and r["changed"] is True and r["facts_written"] == 1
     text = read(tmp_path, r["path"])
@@ -85,11 +85,11 @@ def test_identical_facts_write_nothing_at_all(tmp_path):
 
 
 def test_a_repeated_fact_is_dropped_and_the_new_one_kept(tmp_path):
-    E.upsert_entity(tmp_path, "person", "Marvin", ["Works at OeNB."], "mail", today="2026-09-01")
-    r = E.upsert_entity(tmp_path, "person", "Marvin", ["Works at OeNB.", "Asked for prod versions."],
+    E.upsert_entity(tmp_path, "person", "Quentin", ["Works at Example Bank."], "mail", today="2026-09-01")
+    r = E.upsert_entity(tmp_path, "person", "Quentin", ["Works at Example Bank.", "Asked for prod versions."],
                         "call", today="2026-09-02")
     assert r["facts_written"] == 1 and r["already_recorded"] == 1
-    assert read(tmp_path, r["path"]).count("Works at OeNB.") == 1
+    assert read(tmp_path, r["path"]).count("Works at Example Bank.") == 1
 
 
 def test_an_existing_hand_written_page_keeps_its_own_frontmatter(tmp_path):
@@ -107,27 +107,27 @@ def test_an_existing_hand_written_page_keeps_its_own_frontmatter(tmp_path):
 # ── wikilinks ────────────────────────────────────────────────────────────────────────────────────
 
 def test_wikilinks_resolve_and_the_missing_ones_come_back_as_the_next_calls(tmp_path):
-    E.upsert_entity(tmp_path, "company", "Sony Pictures Imageworks", ["A VFX studio."], "the web")
-    r = E.upsert_entity(tmp_path, "person", "Olga Avramenko",
-                        ["Works at [[Sony Pictures Imageworks]] with [[Cottalango Leon]]."],
+    E.upsert_entity(tmp_path, "company", "Brightwater Picture Studios", ["A VFX studio."], "the web")
+    r = E.upsert_entity(tmp_path, "person", "Nora Quill",
+                        ["Works at [[Brightwater Picture Studios]] with [[Robin Vale]]."],
                         "the TSC call")
-    assert r["links_resolved"] == ["Sony Pictures Imageworks"]
+    assert r["links_resolved"] == ["Brightwater Picture Studios"]
     # NOT auto-created: a page minted from a name with no facts behind it is the invention
     # decision 24.5 forbids. It is returned so the caller upserts it with its own source.
-    assert r["links_missing"] == ["Cottalango Leon"]
-    assert not (tmp_path / "kg/entities/person/cottalango-leon.md").exists()
+    assert r["links_missing"] == ["Robin Vale"]
+    assert not (tmp_path / "kg/entities/person/robin-vale.md").exists()
 
 
 # ── the index ────────────────────────────────────────────────────────────────────────────────────
 
 def test_index_lists_kind_name_path_and_last_updated(tmp_path):
-    E.upsert_entity(tmp_path, "person", "Olga Avramenko", ["a"], "s", today="2026-03-02")
-    E.upsert_entity(tmp_path, "person", "Olga Avramenko", ["b"], "s", today="2026-08-03")
+    E.upsert_entity(tmp_path, "person", "Nora Quill", ["a"], "s", today="2026-03-02")
+    E.upsert_entity(tmp_path, "person", "Nora Quill", ["b"], "s", today="2026-08-03")
     E.upsert_entity(tmp_path, "company", "Vexa", ["c"], "s", today="2026-05-11")
     rel = E.write_index(tmp_path, "desk-1")
     text = read(tmp_path, rel)
     assert rel == "kg/INDEX.md"
-    assert "| person | Olga Avramenko | `kg/entities/person/olga-avramenko.md` | 2026-08-03 |" in text
+    assert "| person | Nora Quill | `kg/entities/person/nora-quill.md` | 2026-08-03 |" in text
     assert "| company | Vexa | `kg/entities/company/vexa.md` | 2026-05-11 |" in text
     assert "desk-1" in text
 
@@ -163,13 +163,13 @@ def repo(tmp_path):
 
 def test_one_commit_carries_the_F31_subject_shape(tmp_path):
     ws = repo(tmp_path)
-    r = E.upsert_entity(ws, "person", "Olga Avramenko", ["a fact"], "a source")
+    r = E.upsert_entity(ws, "person", "Nora Quill", ["a fact"], "a source")
     idx = E.write_index(ws, "desk-7")
     sha = E.commit_entity(ws, [r["path"], idx], subject_path=r["path"], created=True)
     assert sha
     assert git(ws, "log", "-1", "--format=%s") == \
-        "desk-7: kg/entities/person/olga-avramenko.md — added"
-    r2 = E.upsert_entity(ws, "person", "Olga Avramenko", ["another fact"], "a source")
+        "desk-7: kg/entities/person/nora-quill.md — added"
+    r2 = E.upsert_entity(ws, "person", "Nora Quill", ["another fact"], "a source")
     E.commit_entity(ws, [r2["path"], idx], subject_path=r2["path"], created=False)
     assert git(ws, "log", "-1", "--format=%s").endswith(" — updated")
 
@@ -181,7 +181,7 @@ def test_the_commit_is_by_pathspec_and_leaves_a_concurrent_writers_work_alone(tm
     ws = repo(tmp_path)
     (ws / "someone-elses-draft.md").write_text("mid-turn work")
     git(ws, "add", "someone-elses-draft.md")            # staged by another writer
-    r = E.upsert_entity(ws, "person", "Olga", ["a fact"], "a source")
+    r = E.upsert_entity(ws, "person", "Nora", ["a fact"], "a source")
     E.commit_entity(ws, [r["path"]], subject_path=r["path"], created=True)
     assert "someone-elses-draft.md" not in git(ws, "show", "--name-only", "--format=", "HEAD")
     assert "someone-elses-draft.md" in git(ws, "diff", "--cached", "--name-only")
@@ -189,10 +189,10 @@ def test_the_commit_is_by_pathspec_and_leaves_a_concurrent_writers_work_alone(tm
 
 def test_a_no_op_upsert_produces_no_commit(tmp_path):
     ws = repo(tmp_path)
-    r = E.upsert_entity(ws, "person", "Olga", ["a fact"], "a source")
+    r = E.upsert_entity(ws, "person", "Nora", ["a fact"], "a source")
     E.commit_entity(ws, [r["path"]], subject_path=r["path"], created=True)
     head = git(ws, "rev-parse", "HEAD")
-    again = E.upsert_entity(ws, "person", "Olga", ["a fact"], "a source")
+    again = E.upsert_entity(ws, "person", "Nora", ["a fact"], "a source")
     assert again["changed"] is False
     assert E.commit_entity(ws, [again["path"]], subject_path=again["path"], created=False) is None
     assert git(ws, "rev-parse", "HEAD") == head

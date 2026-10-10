@@ -1,0 +1,8 @@
+{
+  "source": "runtime",
+  "kind": "unavailable",
+  "op": "list",
+  "status": 500,
+  "detail": "the runtime answered with an error (500)",
+  "remedy": "Retry in a few seconds."
+}

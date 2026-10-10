@@ -48,6 +48,7 @@
  *  workspace that already exists on GitHub. The empty state above it is UNCHANGED — new workspaces are
  *  still made in conversation; loading an existing one is a different act, and it is additive beneath
  *  that sentence rather than a correction of it. */
+import { ChatName } from "./ChatName";
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import type { Membership } from "../surfaces/workspaceApi";
@@ -97,6 +98,7 @@ export const isTargetChip = (target: string | undefined, slug: string) => (targe
 
 export function ContextBar(p: {
   sel: Sel; flavor: string;
+  onRename?: (name: string) => Promise<void>;
   memberships: Membership[];
   onAddWorkspace: (id: string) => void; onRemoveWorkspace: (id: string) => void;
   onSetTarget?: (id: string) => void;
@@ -128,9 +130,9 @@ export function ContextBar(p: {
   return (
     <div style={{ ...header, gridRow: 1, gridColumn: 2 }}>
       <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--green, #5da86a)", flex: "none" }} />
-      <span style={{ ...ty.title, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-        <span style={{ color: "var(--t3)", fontWeight: 400 }}>{p.sel.kind === "meeting" ? "Meeting" : "Chat"} › </span>{p.sel.label}
-      </span>
+      <div style={{ ...ty.title, flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 4 }}>
+        <span style={{ color: "var(--t3)", fontWeight: 400, whiteSpace: "nowrap", flex: "none" }}>{p.sel.kind === "meeting" ? "Meeting" : "Chat"} › </span><ChatName key={p.sel.chatId} label={p.sel.label} onRename={p.onRename} />
+      </div>
       <span style={{ ...ty.pill, flex: "none", color: "var(--accent)", background: "var(--accentbg)", borderRadius: 5, padding: "2px 8px" }}>{p.flavor}</span>
 
       <div ref={box} style={{ position: "relative", marginLeft: "auto", display: "flex", alignItems: "center", gap: 5, flex: "none" }}>

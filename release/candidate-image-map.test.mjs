@@ -10,6 +10,8 @@ import {
   PROD_DEPLOYED_IMAGES,
   REQUIRED_IMAGES,
   FLOWS_IMAGE,
+  CREDENTIAL_BROKER_IMAGE,
+  CURRENT_SCHEMA_VERSION,
   CURRENT_REQUIRED_IMAGES,
   requiredImagesFor,
   BUILD_MATRIX_BY_IMAGE,
@@ -20,6 +22,9 @@ import {
   candidateInputDrift,
   validateCandidateMap,
 } from "./candidate-image-map.mjs";
+import { guardTree } from "../scripts/test-tree.mjs";
+
+guardTree();
 
 const digest = (n) => `sha256:${n.repeat(64)}`;
 
@@ -142,7 +147,7 @@ test("schema 2 names the flows image as the eleventh; schema 1 stays ten", () =>
   assert.throws(() => validateCandidateMap({ ...eleven, schema_version: 1 }), /image set mismatch/);
   const plan = candidateBuildPlan(null);
   assert.equal(plan.mode, "full");
-  assert.equal(plan.changed_images.length, 11);
+  assert.equal(plan.changed_images.length, CURRENT_REQUIRED_IMAGES.length);
   assert.deepEqual(plan.build_matrix.find((row) => row.name === "flows"), {
     name: "flows",
     repository: "v012-flows",
@@ -150,6 +155,32 @@ test("schema 2 names the flows image as the eleventh; schema 1 stays ten", () =>
     dockerfile: "core/flows/Dockerfile",
     use_registry_cache: true,
   });
+});
+
+test("schema 3 names the credential broker as the twelfth; schema 2 stays eleven", () => {
+  assert.equal(CURRENT_SCHEMA_VERSION, 3);
+  const eleven = validMap();
+  eleven.schema_version = 2;
+  eleven.images[FLOWS_IMAGE] = { ...eleven.images["vexaai/v012-mcp"], digest: "sha256:" + "f".repeat(64) };
+  assert.throws(() => validateCandidateMap({ ...eleven, schema_version: 3 }), /image set mismatch/);
+  const twelve = structuredClone(eleven);
+  twelve.schema_version = 3;
+  twelve.images[CREDENTIAL_BROKER_IMAGE] = { ...eleven.images["vexaai/v012-mcp"], digest: "sha256:" + "e".repeat(64) };
+  const map = validateCandidateMap(twelve, twelve.release);
+  assert.equal(requiredImagesFor(map).length, 12);
+  assert.equal(map.images[CREDENTIAL_BROKER_IMAGE].class, "oss_only");
+  assert.throws(() => validateCandidateMap({ ...twelve, schema_version: 2 }), /image set mismatch/);
+  assert.throws(() => validateCandidateMap({ ...twelve, schema_version: 4 }), /schema_version must be 1, 2 or 3/);
+  const plan = candidateBuildPlan(null);
+  assert.equal(plan.changed_images.length, 12);
+  assert.deepEqual(plan.build_matrix.find((row) => row.name === "credential-broker"), {
+    name: "credential-broker",
+    repository: "v012-credential-broker",
+    context: "core/agent/services/credential-broker",
+    dockerfile: "core/agent/services/credential-broker/Dockerfile",
+    use_registry_cache: true,
+  });
+  assert.deepEqual(RUNTIME_INPUTS_BY_IMAGE[CREDENTIAL_BROKER_IMAGE], ["core/agent/services/credential-broker"]);
 });
 
 test("refuses a missing image", () => {
@@ -354,6 +385,29 @@ test("v0.12.25 canonical packet binds the rc.1 train candidate", () => {
   assert.equal(
     map.images["vexaai/vexa-bot"].digest,
     "sha256:65f6904b98abb110f591c5082f12319955723e2a6e2c777f26aac9709548f00a",
+  );
+});
+
+test("v0.12.27 canonical packet binds the v0.12.27-rc.5 train candidate (schema 2, eleven images)", () => {
+  const raw = readFileSync(
+    new URL("../releases/v0.12.27/candidate-images.json", import.meta.url),
+  );
+  assert.equal(
+    createHash("sha256").update(raw).digest("hex"),
+    "5dfc6f51c2b2cde6ba0f152b06de0ae35624c09e8ad159b3555cd92c6674178d",
+  );
+  const map = validateCandidateMap(JSON.parse(raw), "v0.12.27");
+  assert.equal(map.schema_version, 2);
+  assert.equal(map.candidate_tag, "v0.12.27-rc.5");
+  assert.equal(map.build_source, "71321ad0fff535b2b565045d56abe315773710fd");
+  assert.equal(map.images["vexaai/vexa-bot"].digest, "sha256:423c487aadb81514c71c9786758a3a730acbf5495e9593930da50c7442f158c1");
+  assert.equal(Object.keys(map.images).length, 11);
+  assert.equal(
+    Object.values(map.images).reduce(
+      (count, image) => count + Object.keys(image.platform_manifests).length,
+      0,
+    ),
+    21,
   );
 });
 

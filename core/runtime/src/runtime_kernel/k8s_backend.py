@@ -9,18 +9,59 @@ ResourceQuota admits on — WITHOUT a partial ``kubectl run --overrides`` contai
 merge replaces the generated container wholesale and strips its image, env and command."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
+import secrets
 import subprocess
+import time
 from typing import Optional
 
+from . import pod_scheduling
 from .backend import WorkloadHandle
 from .models import Resources
 from .mounts import k8s_volume_mounts
 from .profiles import Runnable
+from .workload_env import forwarded_env
 
 MANAGED_LABEL = "runtime.managed"
+#: Which runtime spawned the Pod (the Helm release); adoption selects on it, so two releases in one
+#: namespace never adopt each other's Pods.
+INSTANCE_LABEL = "runtime.instance"
+INSTANCE_ENV = "RUNTIME_K8S_INSTANCE"
+#: Pod phases after which the workload will not run again.
+TERMINAL_PHASES = ("Succeeded", "Failed")
+#: The workload id rides both a label (selectable, so it must be a valid label value) and an
+#: annotation of the same key (the id verbatim, whatever its shape). Adoption reads the annotation.
 WORKLOAD_ID_LABEL = "runtime.workload_id"
+
+# A workload id is the caller's (a chat unit is `agent-<subject>-chat-scaffold-<token_urlsafe>`:
+# capitals, `_`, past 63 characters), but a Pod name, a container name and a label value are not.
+_DNS1123_LABEL = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
+_LABEL_VALUE = re.compile(r"^[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$")
+_NAME_MAX = 63
+_HASH_LEN = 10
+
+
+def k8s_name(raw: str) -> str:
+    """A Pod or container name for ``raw``: ``raw`` itself when it is already a DNS-1123 label of at
+    most 63 characters (so bots and existing Pods keep their names), else lowercased, reduced to
+    ``[a-z0-9-]``, cut to fit and suffixed with a hash of ``raw``, so two ids that differ only in case
+    or in a dropped character never share a name. Deterministic: a restarted runtime re-derives it."""
+    if len(raw) <= _NAME_MAX and _DNS1123_LABEL.match(raw):
+        return raw
+    base = re.sub(r"-+", "-", re.sub(r"[^a-z0-9-]", "-", raw.lower())).strip("-")
+    digest = hashlib.sha256(raw.encode()).hexdigest()[:_HASH_LEN]
+    base = base[: _NAME_MAX - _HASH_LEN - 1].rstrip("-")
+    return f"{base}-{digest}" if base else digest
+
+
+def k8s_label_value(raw: str) -> str:
+    """A label value for ``raw``: ``raw`` itself when valid, else :func:`k8s_name` of it."""
+    if raw == "" or (len(raw) <= _NAME_MAX and _LABEL_VALUE.match(raw)):
+        return raw
+    return k8s_name(raw)
 
 # The extended-resource name a GPU request carries. Kubernetes requires extended resources on the
 # LIMITS side; the request is set equal to the limit automatically, and a requests-side entry that
@@ -78,6 +119,17 @@ def _kubectl(*args: str, check: bool = True, stdin: Optional[str] = None) -> sub
     return r
 
 
+def _secret_class(env: dict[str, str]) -> set[str]:
+    """The keys of a container env that are credentials: those the runtime's config contract marks
+    ``secret`` — and any it does not declare at all (a dispatch's tokens, a bot's constructor),
+    which are treated as secret rather than guessed to be harmless. An empty value carries nothing
+    and stays plain."""
+    from .config_preflight import load_declaration
+
+    declared = {k["key"]: bool(k.get("secret")) for k in load_declaration().get("keys") or []}
+    return {k for k, v in env.items() if v and declared.get(k, True)}
+
+
 def _stop_grace_sec() -> int:
     """Graceful-delete window (SIGTERM → SIGKILL). Same env knob as the Docker backend
     (RUNTIME_STOP_GRACE_SEC, default 30) so a live meeting bot can honour SIGTERM — leave the
@@ -89,7 +141,8 @@ def _stop_grace_sec() -> int:
         return 30
 
 
-def pod_overrides(env: dict[str, str], *, container_name: str) -> Optional[dict]:
+def pod_overrides(env: dict[str, str], *, container_name: str,
+                  credential_mounts: bool = False) -> Optional[dict]:
     """The env-derived OVERLAY ``build_pod`` merges onto a spawned Pod's spec. It carries two
     independent seams:
 
@@ -102,15 +155,16 @@ def pod_overrides(env: dict[str, str], *, container_name: str) -> Optional[dict]
     The overlay is built whenever EITHER seam is present; returns None only when neither is (nothing
     to merge). Building it for scheduling alone is load-bearing: a plain meeting bot has no workspace
     PVC, so a volumes-only early return would silently drop its tolerations and re-create the bug.
-    Pure/env-driven → unit-tested offline (no kubectl)."""
+    ``credential_mounts`` (the profile's, never the spec's) decides whether the runtime's
+    credential-file Secrets are mounted. Pure/env-driven → unit-tested offline (no kubectl)."""
     pvc = env.get("VEXA_WORKSPACE_MOUNT_SOURCE")
     root = env.get("VEXA_WORKSPACE_MOUNT_TARGET")
     volumes, volume_mounts = k8s_volume_mounts(env, pvc_name=pvc or "", store_target=root or "")
     tolerations = _scheduling_json(env, TOLERATIONS_ENV, list)
     node_selector = _scheduling_json(env, NODE_SELECTOR_ENV, dict)
-    # credential files go to AGENT WORKERS only (a dispatch env carries VEXA_UNIT_ID); a meeting
-    # bot never needs a model credential and must not carry one
-    secret_mounts = _scheduling_json(env, SECRET_MOUNTS_ENV, list) if env.get("VEXA_UNIT_ID") else None
+    # credential files go only to a workload whose profile asks for them; a meeting bot never needs
+    # a model credential and must not carry one
+    secret_mounts = _scheduling_json(env, SECRET_MOUNTS_ENV, list) if credential_mounts else None
     for i, sm in enumerate(secret_mounts or ()):
         if not (isinstance(sm, dict) and sm.get("secret") and sm.get("mountPath")):
             raise ValueError(f"{SECRET_MOUNTS_ENV}[{i}] must be {{secret, mountPath[, file]}}, got {sm!r}")
@@ -193,6 +247,8 @@ def build_pod(
     namespace: Optional[str],
     resources: Optional[Resources],
     overlay_env: Optional[dict[str, str]] = None,
+    instance: str = "",
+    secret_env: Optional[tuple[str, tuple[str, ...]]] = None,
 ) -> dict:
     """The COMPLETE Pod object a spawn submits — every field the workload needs, in one manifest.
 
@@ -204,18 +260,29 @@ def build_pod(
     command, env, labels and scheduling all coexist instead of clobbering each other.
 
     ``env`` is the container's env VERBATIM; ``overlay_env`` (default: ``env``) is the wider env the
-    pod-shaping overlay is derived from. They differ because the runtime's own scheduling knobs live
+    pod-shaping overlay is derived from. The profile's ``runnable.scheduling`` is laid on last. They differ because the runtime's own scheduling knobs live
     in its process env, not in the workload's — and must shape the Pod without being injected into
     the workload's container as config.
 
     Pure and env-driven ⇒ the whole manifest is asserted offline, with no cluster and no kubectl.
     (``kubectl run --dry-run=client`` is NOT a viable generator here: v1.34 performs API discovery
     before generating and exits 1 with no output when no server is reachable.)"""
+    hidden_keys = set(secret_env[1]) if secret_env else set()
+    if runnable.credential_mounts:
+        # Where the workload's harness finds the credential Secrets is profile data; a value the
+        # spec already sets wins (also when that value rides the workload's Secret).
+        env = {**{k: v for k, v in runnable.credential_env.items() if k not in hidden_keys}, **env}
     container: dict = {
         "name": name,
         "image": runnable.image,
         "env": [{"name": k, "value": v} for k, v in env.items()],
     }
+    if secret_env:
+        # ``(secret name, keys)``: values that are credentials reach the container by reference to
+        # the workload's own Secret, never as literal values in the Pod spec.
+        secret_name, keys = secret_env
+        container["env"] += [{"name": k, "valueFrom": {"secretKeyRef": {"name": secret_name, "key": k}}}
+                             for k in keys]
     if runnable.command:
         # Explicit argv REPLACES the image ENTRYPOINT. Absent ⇒ the image's own entrypoint boots,
         # which is what the shipped meeting-bot image requires (#675).
@@ -228,21 +295,29 @@ def build_pod(
         "name": name,
         # Adoption labels (the orphaned-live-bot fix): a recreated runtime re-discovers its
         # still-running Pods by this label pair and re-registers them (see the kernel's adopt()).
-        "labels": {MANAGED_LABEL: "true", WORKLOAD_ID_LABEL: workload_id},
+        "labels": {MANAGED_LABEL: "true", WORKLOAD_ID_LABEL: k8s_label_value(workload_id),
+                   **({INSTANCE_LABEL: k8s_label_value(instance)} if instance else {}),
+                   **runnable.labels},
+        # The id verbatim — the label above may be its safe form.
+        "annotations": {WORKLOAD_ID_LABEL: workload_id},
     }
     if namespace:
         metadata["namespace"] = namespace
 
     # restart=Never: the kernel owns restart policy, so the Pod must not resurrect itself.
+    # A workload is not a cluster client: it gets no ServiceAccount token, and no service-link env
+    # enumerating every Service in the namespace.
     pod: dict = {
         "apiVersion": "v1",
         "kind": "Pod",
         "metadata": metadata,
-        "spec": {"containers": [container], "restartPolicy": "Never"},
+        "spec": {"containers": [container], "restartPolicy": "Never",
+                 "automountServiceAccountToken": False, "enableServiceLinks": False},
     }
 
     overlay_source = env if overlay_env is None else overlay_env
-    overlay = (pod_overrides(overlay_source, container_name=name) or {}).get("spec", {})
+    overlay = (pod_overrides(overlay_source, container_name=name,
+                             credential_mounts=runnable.credential_mounts) or {}).get("spec", {})
     for key in ("volumes", "tolerations", "nodeSelector"):
         if overlay.get(key):
             pod["spec"][key] = overlay[key]
@@ -252,18 +327,46 @@ def build_pod(
         for key, value in overlay_container.items():
             if key != "name":
                 container[key] = value
+    # The profile's own placement (operator configuration, validated at boot): its node selector
+    # and tolerations, when set, replace the runtime-wide ones above; its priority class and pull
+    # secrets have no runtime-wide counterpart. Nothing here comes from the workload's env.
+    runnable.scheduling.apply(pod["spec"])
+    # Hardening, last so no overlay replaces it: every capability dropped but the ones the profile
+    # keeps (the operator may narrow them per class, e.g. to none under OpenShift's restricted SCC),
+    # no privilege escalation, the runtime's default seccomp profile unless the operator names the
+    # class's own (meeting bots: the node-installed profile Chromium's sandbox needs), and non-root
+    # where the image runs as one.
+    keep = runnable.capabilities if runnable.scheduling.capabilities is None else runnable.scheduling.capabilities
+    seccomp = ({"type": "Localhost", "localhostProfile": runnable.scheduling.seccomp_profile}
+               if runnable.scheduling.seccomp_profile else {"type": "RuntimeDefault"})
+    security: dict = {"allowPrivilegeEscalation": False, "capabilities": {"drop": ["ALL"]},
+                      "seccompProfile": seccomp}
+    if keep:
+        security["capabilities"]["add"] = list(keep)
+    if runnable.run_as_non_root:
+        security["runAsNonRoot"] = True
+    container["securityContext"] = security
     return pod
 
 
 class K8sBackend:
     name = "k8s"
 
-    def __init__(self, name_prefix: str = "vexa-", namespace: Optional[str] = None) -> None:
+    def __init__(self, name_prefix: str = "vexa-", namespace: Optional[str] = None,
+                 instance: Optional[str] = None) -> None:
         self._prefix = name_prefix
         self._ns = namespace
+        # Exit codes of Pods this backend removed once their exit was observed (name → code).
+        self._exited: dict[str, int] = {}
+        # Which runtime this is (the Helm release). Every Pod it spawns carries it, and adoption
+        # selects on it.
+        self._instance = (instance if instance is not None else os.environ.get(INSTANCE_ENV, "")).strip() or "default"
+        # The runtime-wide placement every spawned Pod carries is held to the profiles' rules here,
+        # at boot, so a bad value stops the runtime by name instead of placing Pods.
+        pod_scheduling.validate_runtime_wide(os.environ)
 
     def _pname(self, workload_id: str) -> str:
-        return f"{self._prefix}{workload_id}"            # must be DNS-1123 (lowercase alnum + '-')
+        return k8s_name(f"{self._prefix}{workload_id}")  # always a DNS-1123 label (the container's too)
 
     def _ns_args(self) -> list[str]:
         return ["-n", self._ns] if self._ns else []
@@ -281,6 +384,18 @@ class K8sBackend:
         if not runnable.image:
             raise ValueError("k8s backend requires an image")
         name = self._pname(workload_id)
+        # The profile's forward list (the worker's model, its dials and caps), from the runtime's own
+        # environment, exactly as the docker and process backends forward it: a key the spec
+        # already carries is never refilled. A key the runtime's config contract marks secret goes
+        # into a Secret of this Pod's own (created once the Pod exists, owned by it, so it is
+        # collected with it) and reaches the container by secretKeyRef; the rest stays plain env.
+        # The split covers the WHOLE container env — what the spec stamps (a catalog dispatch carries
+        # its credentials and the unit's tokens itself) as well as what the runtime forwards.
+        full = {**env, **forwarded_env(runnable.forward_env, os.environ, env)}
+        secret_keys = _secret_class(full)
+        hidden = {k: v for k, v in full.items() if k in secret_keys}
+        env = {k: v for k, v in full.items() if k not in secret_keys}
+        secret_name = f"{name[:240]}-env-{secrets.token_hex(4)}" if hidden else None
         # The workspace mount set and the runtime's OWN scheduling constraints both shape the Pod.
         # The latter live in the runtime's PROCESS env (the chart sets them on the runtime
         # Deployment), not in the per-workload spec.env — which is built per-workload by different
@@ -293,10 +408,92 @@ class K8sBackend:
             env=env,
             namespace=self._ns,
             resources=resources,
-            overlay_env={**env, **_runtime_scheduling_env()},
+            overlay_env={**full, **_runtime_scheduling_env()},
+            instance=self._instance,
+            secret_env=(secret_name, tuple(sorted(hidden))) if hidden else None,
         )
-        _kubectl("create", "-f", "-", *self._ns_args(), stdin=json.dumps(pod))
+        manifest = json.dumps(pod)
+        self._exited.pop(name, None)
+        try:
+            self._create(name, workload_id, manifest, secret_name, hidden)
+            return WorkloadHandle(id=workload_id, impl=name)
+        except RuntimeError as exc:
+            if "AlreadyExists" not in str(exc):
+                raise
+        # The name is deterministic, so a workload id that ran before (a chat's next turn) finds its
+        # previous Pod still there. Ours and finished: remove it and start again. Ours and still
+        # running: that IS the workload — no duplicate. Not ours: never touched.
+        existing = self._pod(name)
+        if existing is not None:
+            if not self._ours(existing, workload_id):
+                raise RuntimeError(f"pod {name} exists and is not this runtime's workload {workload_id!r}; "
+                                   f"not replacing it")
+            if (existing.get("status") or {}).get("phase") not in TERMINAL_PHASES:
+                return WorkloadHandle(id=workload_id, impl=name)
+            self._delete_and_wait(name)
+        self._create(name, workload_id, manifest, secret_name, hidden)
         return WorkloadHandle(id=workload_id, impl=name)
+
+    def _create(self, name: str, workload_id: str, manifest: str, secret_name: Optional[str],
+                hidden: dict[str, str]) -> None:
+        """Create the Pod, then (when it has secret-class env) its Secret, owned by the Pod so the
+        cluster deletes it with the Pod. The Pod's container waits for the Secret it references; a
+        Secret that cannot be created takes the Pod down with it. The Secret is named per
+        incarnation, so the runtime only ever creates Secrets: it never reads or deletes one."""
+        if not secret_name:
+            _kubectl("create", "-f", "-", *self._ns_args(), stdin=manifest)
+            return
+        r = _kubectl("create", "-f", "-", "-o", "json", *self._ns_args(), stdin=manifest)
+        try:
+            uid = ((json.loads(r.stdout or "{}").get("metadata") or {}).get("uid")
+                   or ((self._pod(name) or {}).get("metadata") or {}).get("uid"))
+            if not uid:
+                raise RuntimeError(f"pod {name} has no uid to own its env Secret")
+            secret = {
+                "apiVersion": "v1", "kind": "Secret", "type": "Opaque",
+                "metadata": {
+                    "name": secret_name,
+                    "labels": {MANAGED_LABEL: "true", WORKLOAD_ID_LABEL: k8s_label_value(workload_id),
+                               INSTANCE_LABEL: k8s_label_value(self._instance)},
+                    "ownerReferences": [{"apiVersion": "v1", "kind": "Pod", "name": name, "uid": uid}],
+                },
+                "stringData": dict(hidden),
+            }
+            _kubectl("create", "-f", "-", *self._ns_args(), stdin=json.dumps(secret))
+        except Exception:
+            _kubectl("delete", "pod", name, "--ignore-not-found", "--wait=false", *self._ns_args(), check=False)
+            raise
+
+    def _pod(self, name: str) -> Optional[dict]:
+        r = _kubectl("get", "pod", name, "-o", "json", *self._ns_args(), check=False)
+        if r.returncode != 0:
+            return None
+        try:
+            return json.loads(r.stdout)
+        except ValueError:
+            return None
+
+    def _ours(self, pod: dict, workload_id: str) -> bool:
+        """Spawned by this runtime for this workload: the managed label, this workload id (the
+        annotation, else the label a pre-annotation Pod carries), and this instance (or none, a Pod
+        from before the instance label)."""
+        meta = pod.get("metadata") or {}
+        labels, notes = meta.get("labels") or {}, meta.get("annotations") or {}
+        if labels.get(MANAGED_LABEL) != "true":
+            return False
+        if (notes.get(WORKLOAD_ID_LABEL) or labels.get(WORKLOAD_ID_LABEL)) not in (
+                workload_id, k8s_label_value(workload_id)):
+            return False
+        return labels.get(INSTANCE_LABEL) in (None, k8s_label_value(self._instance))
+
+    def _delete_and_wait(self, name: str, timeout: float = 60.0) -> None:
+        _kubectl("delete", "pod", name, "--ignore-not-found", "--wait=true", f"--timeout={int(timeout)}s",
+                 *self._ns_args(), check=False)
+        deadline = time.time() + timeout
+        while self._pod(name) is not None:
+            if time.time() > deadline:
+                raise RuntimeError(f"pod {name} did not go away within {int(timeout)}s")
+            time.sleep(0.5)
 
     def find(self, workload_id: str) -> Optional[WorkloadHandle]:
         """Re-derive a handle for a workload whose in-process handle was lost (restart): the Pod
@@ -309,12 +506,14 @@ class K8sBackend:
 
     def list_workload_containers(self) -> list[dict]:
         """Discover the workload Pods THIS backend spawned — for boot re-adoption. Label-selected
-        only (``runtime.managed=true``): a name-prefix fallback is unsafe in a shared namespace
-        (the chart's own service Pods can share the prefix), so Pods spawned by a pre-label runtime
-        are not re-adopted. Never raises."""
+        only (``runtime.managed=true`` and this runtime's ``runtime.instance``): a name-prefix
+        fallback is unsafe in a shared namespace (the chart's own service Pods can share the prefix),
+        and another release's Pods are not ours, so Pods spawned by a runtime that did not label
+        them are not re-adopted. Never raises."""
         try:
             r = _kubectl(
-                "get", "pods", "-l", f"{MANAGED_LABEL}=true", "-o", "json",
+                "get", "pods", "-l", f"{MANAGED_LABEL}=true,{INSTANCE_LABEL}={k8s_label_value(self._instance)}",
+                "-o", "json",
                 *self._ns_args(), check=False,
             )
             if r.returncode != 0:
@@ -322,7 +521,10 @@ class K8sBackend:
             out = []
             for pod in json.loads(r.stdout).get("items", []):
                 meta = pod.get("metadata", {})
-                wid = (meta.get("labels") or {}).get(WORKLOAD_ID_LABEL)
+                # The annotation carries the id verbatim; the label may be its safe form (and a Pod
+                # from before the annotation carries only the label, which was then the id itself).
+                wid = ((meta.get("annotations") or {}).get(WORKLOAD_ID_LABEL)
+                       or (meta.get("labels") or {}).get(WORKLOAD_ID_LABEL))
                 if not wid:
                     continue
                 phase = pod.get("status", {}).get("phase")
@@ -345,22 +547,29 @@ class K8sBackend:
             return []
 
     def exit_code(self, h: WorkloadHandle) -> Optional[int]:
-        r = _kubectl("get", "pod", h._impl, "-o", "json", *self._ns_args(), check=False)  # type: ignore[attr-defined]
+        name = h._impl  # type: ignore[attr-defined]
+        if name in self._exited:
+            return self._exited[name]
+        r = _kubectl("get", "pod", name, "-o", "json", *self._ns_args(), check=False)
         if r.returncode != 0:
             return 0                                     # gone (deleted/never-found) → no longer running
         status = json.loads(r.stdout).get("status", {})
         phase = status.get("phase")
-        if phase in ("Pending", "Running"):
+        if phase not in TERMINAL_PHASES:
             return None                                  # still scheduling / running
-        if phase == "Succeeded":
-            return 0
+        code = 0
         if phase == "Failed":
+            code = 1
             for cs in status.get("containerStatuses", []):
                 term = cs.get("state", {}).get("terminated")
                 if term and "exitCode" in term:
-                    return int(term["exitCode"])
-            return 1
-        return None
+                    code = int(term["exitCode"])
+                    break
+        # The exit is now observed (the kernel records it from this answer): the finished Pod is
+        # removed so finished workloads do not pile up, and its code is kept for later polls.
+        self._exited[name] = code
+        _kubectl("delete", "pod", name, "--ignore-not-found", "--wait=false", *self._ns_args(), check=False)
+        return code
 
     def terminate(self, h: WorkloadHandle) -> None:      # graceful: SIGTERM + grace, then SIGKILL
         _kubectl("delete", "pod", h._impl, f"--grace-period={_stop_grace_sec()}", "--wait=false",

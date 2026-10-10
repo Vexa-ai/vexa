@@ -13,7 +13,7 @@ import type { TranscriptSegment } from "../types";
 const AT = Date.UTC(2026, 8, 6, 11, 52, 0);
 
 const SAID: TranscriptSegment[] = [
-  { id: "s1", speaker: "Jane", text: "we looked at Kaar Tech last week", tsMs: AT, completed: true },
+  { id: "s1", speaker: "Jane", text: "we looked at Northwind Labs last week", tsMs: AT, completed: true },
   { id: "s2", speaker: "Ravi", text: "their pilot ships in March, self-hosted", tsMs: AT + 9000, completed: true },
   { id: "s3", speaker: "Jane", text: "and the budget sits with procurement", tsMs: AT + 21000, completed: true },
 ];

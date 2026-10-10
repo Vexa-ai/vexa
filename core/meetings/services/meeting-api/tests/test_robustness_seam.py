@@ -33,7 +33,7 @@ from meeting_api.bot_spawn.fakes import FakeRuntimeClient, InMemoryMeetingRepo
 from meeting_api.collector.fakes import InMemoryTranscriptStore
 from meeting_api.collector.ingest import consume_segments, ingest
 
-SECRET = "test-admin-token"
+SECRET = "admin-key-for-tests-0123456789abcdef"  # not a published value: the boot refuses those
 USER = 7
 LIFECYCLE_ENDPOINT = "/bots/internal/callback/lifecycle"
 
@@ -128,7 +128,7 @@ def test_lifecycle_publish_failure_is_surfaced_but_not_fatal():
     repo = InMemoryMeetingRepo()
     runtime = FakeRuntimeClient()
     bad_redis = ExplodingRedis()
-    app = create_app(meeting_repo=repo, runtime=runtime, command_publisher=bad_redis, redis=bad_redis)
+    app = create_app(open_callbacks=True, meeting_repo=repo, runtime=runtime, command_publisher=bad_redis, redis=bad_redis)
     client = TestClient(app)
 
     # Spawn so the session_uid → meeting mapping exists (the callback persists by session_uid).
@@ -194,12 +194,15 @@ def test_ingest_should_swallow_publish_failure_and_return_count():
     assert n == 1
 
 
-def test_consume_segments_acks_batch_despite_publish_failure():
+def test_consume_segments_acks_batch_despite_publish_failure(monkeypatch):
     """FIXED (ROB4): with the publish fault-isolated inside ingest, a :mutable publish failure no longer
     aborts consume_segments — the segment is persisted AND the batch is ACKED (not left pending for an
     endless redelivery). The blip is logged-not-fatal, matching the lifecycle path."""
     import fakeredis.aioredis as fakeaio
     from meeting_api.collector.fakes import FakeRedisBus
+    from _segment_auth import SECRET, signed_xadd
+
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)   # the collector admits only session-signed entries
 
     async def _run():
         client = fakeaio.FakeRedis(decode_responses=True)
@@ -211,7 +214,7 @@ def test_consume_segments_acks_batch_despite_publish_failure():
 
         bus.publish = boom  # type: ignore[assignment]
         store = InMemoryTranscriptStore()
-        await bus.xadd("transcription_segments", {
+        await signed_xadd(bus, {
             "type": "transcript", "meeting_id": 1,
             "segments": [{"segment_id": "s1", "start": 0.0, "end": 1.0, "text": "hi", "completed": True}],
         })
@@ -851,6 +854,9 @@ def test_startup_requires_admin_token(monkeypatch):
     import meeting_api.__main__ as entry
 
     monkeypatch.delenv("ADMIN_TOKEN", raising=False)
+    monkeypatch.setenv("VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE", "/run/vexa-identity/public/key.pem")
+    monkeypatch.setenv("RUNTIME_API_TOKEN", "runtime-caller-token-for-tests-0123456789abcdef")
+    monkeypatch.setenv("DB_PASSWORD", "db-password-for-tests-0123456789abcdef")
     with pytest.raises(RuntimeError) as ei:
         entry._require_config()
     msg = str(ei.value)
@@ -868,7 +874,7 @@ def test_mint_meeting_token_surfaces_clear_config_error(monkeypatch):
 
     monkeypatch.delenv("ADMIN_TOKEN", raising=False)
     with pytest.raises(ValueError) as ei:
-        mint_meeting_token(1, USER, "google_meet", "x")
+        mint_meeting_token(1, USER, "google_meet", "x", session_uid="conn-1")
     assert "ADMIN_TOKEN" in str(ei.value)
 
 
@@ -912,3 +918,27 @@ def test_spawn_reconciles_a_stop_that_raced_the_boot():
                     json={"platform": "google_meet", "native_meeting_id": "raced-spawn"})
     assert r.status_code == 201, r.text
     assert runtime.deleted, "spawn must tear down the workload when a stop raced its boot (no orphan)"
+
+
+async def test_the_runtime_client_presents_the_caller_credential(monkeypatch):
+    """Every runtime.v1 call meeting-api makes carries the runtime caller credential; the runtime
+    answers 401 to anything else, so a missing credential is refused when the client is built."""
+    import httpx
+    import pytest
+
+    from meeting_api.bot_spawn.adapters import HttpRuntimeClient, runtime_caller_headers
+
+    monkeypatch.delenv("RUNTIME_API_TOKEN", raising=False)
+    with pytest.raises(RuntimeError):
+        runtime_caller_headers()
+    monkeypatch.setenv("RUNTIME_API_TOKEN", "runtime-caller-token-for-tests-0123456789abcdef")
+    seen = []
+
+    def handler(request):
+        seen.append(request.headers.get("authorization"))
+        return httpx.Response(201, json={"workloadId": "mtg-1-abc", "state": "starting"})
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler), headers=runtime_caller_headers())
+    await HttpRuntimeClient(http, "http://runtime:8090").create_workload(
+        {"workloadId": "mtg-1-abc", "profile": "meeting-bot", "env": {}})
+    assert seen == ["Bearer runtime-caller-token-for-tests-0123456789abcdef"]

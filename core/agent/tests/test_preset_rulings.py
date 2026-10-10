@@ -158,6 +158,14 @@ def test_the_expand_acts_grow_the_graph_in_EVERY_direction(act):
     move on a page that does not exist yet and one that does."""
     body = _ask(act)
     assert "## Expand means EVERY direction" in body
+    if act == "extend":
+        for contract in ("connections_status", "gmail_search", "gmail_read", "gmail_thread",
+                         "calendar_events", "connection_id", "WebSearch", "WebFetch",
+                         "Follow every result page", "`entity_upsert`", "links in both directions",
+                         "Every added fact must carry a source reference", "remaining\ngaps",
+                         "never route\nprivate evidence to `_global`"):
+            assert contract in body
+        return
     assert "the page is a NODE and you grow the graph\naround it" in body
     assert "Research the subject from public data (WebSearch, WebFetch)" in body
     assert "give it its own page with `entity_upsert` in the SAME workspace as\nthis page" in body
@@ -199,7 +207,7 @@ def test_no_preset_hard_codes_a_persons_or_a_companys_name():
     `_global/README.md`) and the two domain→name derivation EXAMPLES in `setup-global.md`, which are
     the founder's own current wording on the volume.
     """
-    forbidden = ("Marvin", "ASWF", "DNA TSC")
+    forbidden = ("Quentin", "ASWF", "DNA TSC")
     for f in sorted(BEHAVIOR_ASKS.glob("*.md")):
         text = f.read_text(encoding="utf-8")
         for name in forbidden:
@@ -209,16 +217,15 @@ def test_no_preset_hard_codes_a_persons_or_a_companys_name():
 
 
 def test_the_first_visit_preset_names_things_from_the_facts_block_not_from_its_own_example():
-    """The replacement has to keep the teaching: "You've been added to a workspace" is a
-    notification and the specific thing is why they stayed. Only the example is neutralised."""
+    """New-person research keeps the facts-only greeting and offers account setup."""
     body = _ask("first-visit")
-    assert '"You\'ve been\nadded to a workspace" is a notification' in body
-    assert "is why\nthey stayed." in body
-    assert "the ones in the facts block, never an example from this text" in body
-    assert "**No preset hard-codes a person or a company**" in body
-    for placeholder in ("&lt;the colleague who shared it&gt;", "&lt;workspace\nname&gt;",
-                        "&lt;meeting title&gt;"):
-        assert placeholder in body
+    assert "facts block" in body
+    assert "actual shared workspaces and invited meetings" in body
+    assert "No preset hard-codes a person or a company" in body
+    assert "connection_request" in body
+    assert "90 days" in body and "relevant older threads" in body
+    assert "onboarding_research" in body
+    assert "They may skip" in body
 
 
 # ── the merge direction ──────────────────────────────────────────────────────────────────────────

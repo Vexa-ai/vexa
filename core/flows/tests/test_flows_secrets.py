@@ -39,6 +39,19 @@ def test_the_placeholders_are_refused_by_name(monkeypatch, weak):
         common.require_admin_key()
 
 
+@pytest.mark.parametrize("published", ["dev-admin-token", "CHANGE_ME", "ci-admin-token", "gate-admin-token",
+                                       "test-admin-token", "vexa-admin-token", "token", "your-secret-admin-token",
+                                       "YOUR_ADMIN_API_KEY", "admin-key"])
+def test_every_value_shipped_for_the_admin_key_is_refused_where_it_is_used(monkeypatch, published):
+    """Compose shipped the admin key as `dev-admin-token`, the chart as `CHANGE_ME`; CI, the harness,
+    the test values and the old docs carried more. The boot refuses them (config.v1), and so does the
+    use site, from the same list (fact admin-token-placeholders)."""
+    assert published in common.ADMIN_KEY_PLACEHOLDERS
+    monkeypatch.setenv("VEXA_FLOWS_ADMIN_KEY", published)
+    with pytest.raises(RuntimeError):
+        common.require_admin_key()
+
+
 def test_no_module_constant_carries_the_key_any_more():
     """A constant read at import forces the refusal into import time — where a test that never
     touches admin-api pays for it and the failure is blamed on whoever imported first."""

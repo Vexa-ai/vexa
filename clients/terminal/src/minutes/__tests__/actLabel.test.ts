@@ -2,7 +2,7 @@
  *
  *  The founder pressed Extend and the chat painted the whole composed `[extend]` preset back at him
  *  as his own message — its "Expand means EVERY direction" section and all. An earlier Extend had
- *  shown `Extend: kg/entities/person/james-spadafora.md`.
+ *  shown `Extend: kg/entities/person/james-hollister.md`.
  *
  *  The two halves of an act diverge on purpose and this is where the client half is decided: the
  *  BUBBLE is the label, because that is what the person did; the PROMPT is the whole selection,
@@ -15,8 +15,8 @@ import { normalizeIntent } from "../../surfaces/chatIntent";
 
 describe("an act renders as its label — the composed prompt is the agent's business", () => {
   it("is the verb and the page, on both page acts", () => {
-    const extend = normalizeIntent({ kind: "extend", path: "kg/entities/person/james-spadafora.md" })!;
-    expect(compactLabel(extend)).toBe("Extend: kg/entities/person/james-spadafora.md");
+    const extend = normalizeIntent({ kind: "extend", path: "kg/entities/person/james-hollister.md" })!;
+    expect(compactLabel(extend)).toBe("Extend: kg/entities/person/james-hollister.md");
     expect(compactLabel(normalizeIntent({ kind: "create", path: "kg/plan.md" })!)).toBe("Create: kg/plan.md");
   });
 

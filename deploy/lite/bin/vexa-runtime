@@ -1,0 +1,55 @@
+#!/usr/bin/env python3
+"""Vexa Lite — runtime launcher (supervisord [program:runtime]).
+
+Every Lite program inherits the entrypoint's exports, and those include every service secret of the
+instance (the admin token, the internal tier, the database password, the delegation and sign-in
+secrets). The runtime spawns agent workers and meeting bots as its own child processes, so it starts
+from a CLEARED environment: exactly the keys its config.v1 declaration names, plus the host plumbing
+its children need to run at all (PATH, locale, display, the browser install — the same list the
+process backend copies into a child). Everything else is dropped before the runtime's interpreter
+starts, so it is in neither the runtime's environment nor any child's.
+
+    exec: /opt/venvs/runtime/bin/python /usr/local/bin/vexa-runtime
+"""
+import importlib.util
+import json
+import os
+import sys
+
+INTERPRETER = ("PYTHONPATH", "PYTHONUNBUFFERED")
+
+
+def _kernel_file(src, name):
+    return os.path.join(src, "runtime_kernel", name)
+
+
+def plumbing_keys(src):
+    """The process backend's own host-plumbing list (runtime_kernel.workload_env), loaded from the
+    file alone: it imports only the standard library, so the package and its dependencies stay out
+    of the launcher."""
+    spec = importlib.util.spec_from_file_location("_workload_env", _kernel_file(src, "workload_env.py"))
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module          # dataclasses resolve their module by name
+    spec.loader.exec_module(module)
+    return module.PROCESS_PLUMBING_ENV
+
+
+def declared_keys(src):
+    with open(_kernel_file(src, "config.v1.json"), encoding="utf-8") as f:
+        return [k["key"] for k in json.load(f)["keys"]]
+
+
+def runtime_environment(env, src):
+    """The runtime's whole environment: declared keys, interpreter wiring and host plumbing."""
+    keep = set(declared_keys(src)) | set(INTERPRETER) | set(plumbing_keys(src))
+    return {k: v for k, v in env.items() if k in keep}
+
+
+def main():
+    src = os.environ.get("PYTHONPATH") or "/app/runtime/src"
+    env = runtime_environment(os.environ, src)
+    os.execve(sys.executable, [sys.executable, "-m", "runtime_kernel"], env)
+
+
+if __name__ == "__main__":
+    main()

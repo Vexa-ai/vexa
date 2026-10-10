@@ -18,10 +18,11 @@
  * decision is worse than no gate: it makes the wrong answer permanent and calls it enforcement.
  *
  * THE MANIFEST (`scripts/parity.json`) is the deliverable. Each fact declares:
- *   kind          file-bytes | literal | set | regex-source
+ *   kind          file-bytes | literal | set | regex-source | header | prose
  *   sites[]       {path, pattern} — `pattern` is a JS regex with exactly ONE capture group; it must
  *                 match exactly once in the file. Zero matches or two is a STALE MANIFEST and fails:
  *                 the manifest cannot quietly stop describing the tree.
+ *   extends       (set facts) the id of a base set fact this one must contain, member for member.
  *   enforced      true  → every site must agree. This is the teeth.
  *                 false → the fact has ALREADY DRIFTED and agreeing needs a decision. The distinct
  *                         values are pinned in `distinct` and `decision` names what must be settled.
@@ -72,6 +73,11 @@ export const asSet = (raw) => [...new Set(
   raw.split(/[,|\s]+/).map((t) => t.replace(/^[\s'"`\[({]+|[\s'"`\])}]+$/g, "")).filter(Boolean),
 )].sort();
 
+/** The HEADER normaliser. An HTTP field name is case-insensitive (RFC 9110 section 5.1), so
+ *  `x-vexa-identity` and `X-Vexa-Identity` name one header and must not read as two answers; any
+ *  other difference (a hyphen, a letter) still does. */
+export const asHeader = (raw) => raw.trim().toLowerCase();
+
 /** Read one site's value. Returns {value} or {error}. */
 export function readSite(fact, site, root) {
   const abs = join(root, site.path);
@@ -93,7 +99,8 @@ export function readSite(fact, site, root) {
     // a value at all, so an intra-file disagreement is named where it happens rather than being
     // averaged into whichever match came first.
     const vals = all.map((x) => x[1]);
-    const norm = (v) => fact.kind === "set" ? asSet(v).join(" · ") : fact.kind === "prose" ? asProse(v) : v;
+    const norm = (v) => fact.kind === "set" ? asSet(v).join(" · ") : fact.kind === "prose" ? asProse(v)
+      : fact.kind === "header" ? asHeader(v) : v;
     const distinctHere = [...new Set(vals.map(norm))];
     if (distinctHere.length > 1)
       return { error: `${site.path}: this file writes the fact ${all.length} times and its own copies disagree — ${distinctHere.map((v) => JSON.stringify(v.slice(0, 80))).join(" vs ")}` };
@@ -104,6 +111,7 @@ export function readSite(fact, site, root) {
   const raw = m[1];
   const value = fact.kind === "set" ? asSet(raw).join(" · ")
     : fact.kind === "prose" ? asProse(raw)
+    : fact.kind === "header" ? asHeader(raw)
     : raw;
   return { value, line, raw };
 }
@@ -156,6 +164,9 @@ const short = (v) => {
 const SWEEP_SKIP = new Set(["node_modules", "dist", ".turbo", "__pycache__", ".venv", ".next",
                             "coverage", "test-results", "playwright-report", "tests", "__tests__"]);
 const SWEEP_EXT = /\.(py|ts|tsx|js|jsx|mjs|cjs|sh|sql|json|yml|yaml|md)$/;
+// An image recipe has no extension to match on (`Dockerfile`, `Dockerfile.lite`), and a version pin
+// is exactly the fact one is most likely to retype.
+const SWEEP_DOCKERFILE = /^Dockerfile(\.[A-Za-z0-9_-]+)?$/;
 const sweepTestFile = (n) => /^test_.*\.py$/.test(n) || /_test\.py$/.test(n) || /\.(test|spec)\.[cm]?[jt]sx?$/.test(n);
 
 function sweep(dir, root, needle, hits) {
@@ -165,7 +176,7 @@ function sweep(dir, root, needle, hits) {
     const p = join(dir, name);
     let st; try { st = statSync(p); } catch { continue; }
     if (st.isDirectory()) { sweep(p, root, needle, hits); continue; }
-    if (!SWEEP_EXT.test(name) || sweepTestFile(name)) continue;
+    if (!(SWEEP_EXT.test(name) || SWEEP_DOCKERFILE.test(name)) || sweepTestFile(name)) continue;
     let text; try { text = readFileSync(p, "utf8"); } catch { continue; }
     const i = text.indexOf(needle);
     if (i < 0) continue;
@@ -199,6 +210,25 @@ export function checkParity(root = DEFAULT_ROOT) {
       r.errs.push(`${fact.id}: ${h.path}:${h.line} writes "${fact.forbid_elsewhere}" and is not a declared site — read it from ${fact.canonical || "the canonical definition"} instead, or add the site to ${MANIFEST_PATH} and say why a third writer is right.`);
     results.push(r);
     errs.push(...r.errs);
+  }
+  // `extends`: a SET fact that is a base list plus extras (a credential that also refuses its own
+  // published values) must contain every member of the base fact, so the base list can grow in one
+  // place and every extended copy is made to follow. Checked only when both facts are themselves in
+  // agreement; a disagreement is already its own error.
+  const byId = new Map(results.map((r) => [r.id, r]));
+  for (const fact of manifest.facts || []) {
+    if (!fact.extends) continue;
+    const base = (manifest.facts || []).find((f) => f.id === fact.extends);
+    if (!base || base.kind !== "set" || fact.kind !== "set") {
+      errs.push(`${fact.id}: "extends" names "${fact.extends}", which is not a set fact in ${MANIFEST_PATH}`);
+      continue;
+    }
+    const mine = byId.get(fact.id), theirs = byId.get(base.id);
+    if (!mine || !theirs || mine.distinct.length !== 1 || theirs.distinct.length !== 1) continue;
+    const have = new Set(mine.distinct[0].split(" · "));
+    const missing = theirs.distinct[0].split(" · ").filter((v) => !have.has(v));
+    if (missing.length)
+      errs.push(`${fact.id} extends ${base.id} but lacks ${missing.join(", ")}: every value the base list refuses, this list must refuse too`);
   }
   const enforced = (manifest.facts || []).filter((f) => f.enforced);
   const ledger = (manifest.facts || []).filter((f) => !f.enforced);

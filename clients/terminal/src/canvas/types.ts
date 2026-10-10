@@ -5,6 +5,7 @@ export interface TranscriptSegment {
   speaker?: string;
   text: string;
   ts?: number | string;       // meeting-relative time (seconds) — back-compat
+  endMs?: number;
   tsMs?: number;              // ABSOLUTE wall-clock time of the line, epoch ms (UTC). Renderer formats in local TZ.
   completed?: boolean;        // false = live pending (in-progress ASR); true/undefined = finalized
 }
@@ -66,6 +67,7 @@ export interface MeetingState {
     startedAt?: string;
     participants?: string[];
     docs?: { path: string; title?: string; kind?: string; present?: boolean }[];
+    deleted?: boolean;          // its owner deleted the transcript + recordings; nothing is shown
   };
   transcript: {
     segments: TranscriptSegment[];

@@ -29,6 +29,13 @@ working (see `~/dev/biz/drafts/2026-09-03-workspaces-domain-plan.md` for the ful
   attach/sync/publish/credentials, membership, and the cutover that makes `core/agent` a client of
   this domain through public functions instead of same-process imports.
 
+## How it works and why it complies
+
+How a repository becomes a workspace, the one name rule and path layer (`shared/workspace_paths.py`),
+why a lookup never registers a workspace, the reserved directories, the tools user, who writes what,
+and the deny tests are in [`docs/docs/core/workspaces.mdx`](../../docs/docs/core/workspaces.mdx) under
+"How it works" and "Why it complies".
+
 ## Contracts
 
 **Owns:** `workspace.v1` (the user-workspace template + `EntityFrontmatter` convention).

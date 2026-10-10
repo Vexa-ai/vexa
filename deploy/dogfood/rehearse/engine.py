@@ -1,6 +1,6 @@
 """`rehearse(state, as, meeting, when)` and `subject_reset(address)` — PRD decision 38.2 / 38.3.
 
-    rehearse("organizer-invited", "olga@rehearse.test")
+    rehearse("organizer-invited", "nora@rehearse.test")
       → the person exists, the desk exists, the invite is in the mail double, and the prepare
         mail's `/?s=` link is in the return value. Nothing was clicked and nothing was rebuilt.
 
@@ -10,7 +10,7 @@ somebody else's work is living on:
   1. **Every address must be under `$VEXA_REHEARSE_DOMAIN`** (default `rehearse.test`). Not just
      the subject: the check runs over the fully interpolated arguments of every step, so an
      organizer, an attendee or a group member outside the domain stops the run. The founder's
-     identities, `_global`, the DNA and OeNB groups are unreachable by construction rather than by
+     identities, `_global`, the DNA and Example Bank groups are unreachable by construction rather than by
      care.
   2. **No live meeting may belong to a real subject.** A rehearsal writes facts and mail; a live
      meeting is the one thing on this stack that cannot be re-recorded. The probe fails closed.
@@ -160,7 +160,7 @@ def load_fixture(fixtures_dir: pathlib.Path, meeting: str) -> dict:
 def attendee_address(display_name: str, domain: str) -> str:
     """A fixture's speaker label → a rehearse-domain address.
 
-    "Olga Avramenko (Sony Pictures Imageworks)" → olga-avramenko@rehearse.test. The org in
+    "Nora Quill (Brightwater Picture Studios)" → nora-quill@rehearse.test. The org in
     parentheses is dropped: it is the person's employer, not part of their name, and putting it in
     the local part would make the room read as a set of companies.
     """

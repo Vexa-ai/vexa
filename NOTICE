@@ -1,0 +1,54 @@
+Vexa
+Copyright 2025-2026 Vexa.ai Inc. and the Vexa contributors
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+Third-party notices
+-------------------
+
+Each dependency below is used unmodified and installed from its public
+registry; none of its source is vendored into this repository (the one
+vendored third-party file is described next). The licence
+of every npm and Python dependency is checked by gate:licenses, with the
+weak-copyleft exceptions recorded in license-exceptions.json. On the npm
+side that is the pnpm workspace and every project that installs from its
+own package-lock.json (the terminal's images run `npm ci` from one). The
+retiring dashboard (services/dashboard) and the transcript-rendering copy
+it vendors are outside the gates, and this line builds neither. Binaries
+and model weights built into the images are listed in THIRD_PARTY_LICENSES.md.
+
+One file is vendored and modified:
+core/runtime/src/runtime_kernel/seccomp-userns.json is derived from the
+default seccomp profile of the Moby project
+(https://github.com/moby/profiles, seccomp/default.json, as vendored in
+Docker Engine 29.6.2), Copyright Docker, Inc. and the Moby project
+contributors, licensed under the Apache License, Version 2.0. Vexa added one
+rule (allowing user namespaces for meeting bots' browser sandbox); the file
+says so. Its licence text is licenses/moby-profiles.LICENSE.txt, and travels
+beside it as seccomp-userns.LICENSE.txt.
+
+python-dateutil (flows, meeting-api, runtime) is licensed under the Apache
+License 2.0 for contributions made after 2017-12-01 and under the
+BSD-3-Clause licence for earlier ones, as its LICENSE file states.
+
+certifi (the Mozilla CA bundle, a dependency of httpx, requests and
+botocore in the Python services) is licensed under MPL-2.0.
+
+tqdm (a dependency of faster-whisper in the transcription service) is
+licensed under MPL-2.0 AND MIT.
+
+The Geist font (the `geist` npm package, used by the terminal) is
+Copyright (c) 2023 Vercel, in collaboration with basement.studio, and is
+licensed under the SIL Open Font License, Version 1.1.
+
+NumPy (transcription service) is licensed under BSD-3-Clause. Its binary
+wheels bundle, as separate shared libraries, OpenBLAS (BSD-3-Clause),
+libgfortran (GPL-3.0-or-later WITH GCC-exception-3.1) and libquadmath
+(LGPL-2.1-or-later).
+
+PyAV (`av`, a dependency of faster-whisper in the transcription service)
+is licensed under BSD-3-Clause. Its binary wheels bundle, as separate
+shared libraries, an FFmpeg build licensed LGPL-3.0-or-later that links
+libx264 and libx265 (GPL-2.0-or-later). Vexa does not publish a
+transcription image; an operator who builds one from
+core/meetings/services/transcription redistributes these libraries.

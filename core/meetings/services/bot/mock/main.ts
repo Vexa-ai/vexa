@@ -91,11 +91,11 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
 
   const meetingId = meetingChannelId(inv);
   const lifecycle: LifecycleSink = inv.meetingApiCallbackUrl
-    ? createHttpLifecycleSink({ callbackUrl: inv.meetingApiCallbackUrl, internalSecret: inv.internalSecret })
+    ? createHttpLifecycleSink({ callbackUrl: inv.meetingApiCallbackUrl, token: inv.token })
     : consoleLifecycleSink();
   const transcriptClient = redisClientFrom(inv.redisUrl);
   const actsClient = redisActsClientFrom(inv.redisUrl);
-  const transcript: TranscriptSink = createRedisTranscriptSink({ client: transcriptClient, meetingId });
+  const transcript: TranscriptSink = createRedisTranscriptSink({ client: transcriptClient, meetingId, token: inv.token });
   const liveActs = createRedisActsSource({ client: actsClient, meetingId });
 
   let stopRef: (r: 'stopped') => void = () => {};

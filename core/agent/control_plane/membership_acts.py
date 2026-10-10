@@ -11,7 +11,7 @@ This module is what the verb reaches: the two acts, and the gate in front of bot
 
 WHY A MODULE AND NOT TWO ROUTE BODIES. Everything here is a decision — who may act, what an address
 resolves to, whether a link is handed over or mailed — and every one of them has to be provable
-without a running app. The routes in ``routers/workspaces.py`` are twelve lines each on top of this;
+without a running app. The routes in ``routers/sharing.py`` are twelve lines each on top of this;
 the reasoning is here, where a test can drive it with a directory and three callables.
 
 ── THE GATE, AND WHY IT IS THREE BRANCHES ───────────────────────────────────────────────────────
@@ -112,7 +112,7 @@ INVITE_MAX_USES = 1
 
 class ActRefused(RuntimeError):
     """An act was refused for a reason a person can act on. Carries the status the route answers with,
-    exactly as ``MembershipError`` does — same shape, so ``routers/workspaces.py`` needs no second
+    exactly as ``MembershipError`` does — same shape, so ``routers/sharing.py`` needs no second
     translation table."""
 
     def __init__(self, message: str, *, status: int = 400) -> None:

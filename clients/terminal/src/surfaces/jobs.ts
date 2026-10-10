@@ -19,6 +19,7 @@
  *  below. This file stays the place where a job is NAMED, so the row and the control name it alike.
  */
 import type { ChatIntent, ChatIntentKind } from "./chatIntent";
+import { faultLine, type Fault } from "./faults";
 
 export type JobRec = {
   id: string;
@@ -42,6 +43,15 @@ export type JobRec = {
   /** WHAT THIS ROW IS, in one word — `job` for an act, `queued` for a sentence somebody typed. A
    *  message is not a job and a row that called it one would be the only thing on screen saying so. */
   noun?: string;
+  /** IT IS NOT QUEUED, IT IS BLOCKED (P18) — the typed fault holding it: the runtime that would not
+   *  start the agent. A row that says "queued behind the current turn" when no turn is coming is the
+   *  exact lie the founder saw on the 0.13.2 demo stack, so a blocked row says what blocks it. */
+  blocked?: Fault;
+  /** THIS BROWSER HOLDS IT (P18) — a submission the server refused, kept in the outbox for a retry.
+   *  The pending-list reconcile leaves it alone; only a landed retry or a dismissal removes it. */
+  outbox?: boolean;
+  /** the person's own words in full, when a retry may need to re-send them (a blocked row only) */
+  display?: string;
 };
 
 export function startJob(jobs: JobRec[], j: { id: string; kind: string; target: string }): JobRec[] {
@@ -53,6 +63,9 @@ export function startJob(jobs: JobRec[], j: { id: string; kind: string; target: 
  *  is told while they wait — and the founder's ruling names it: the act fires when pressed, and
  *  when the turn in front of it has to finish first, the panel says so. */
 export const QUEUED_LINE = "queued behind the current turn";
+
+/** WHAT A BLOCKED ROW SAYS, in place of `QUEUED_LINE` (P18): which dependency stopped it and why. */
+export const blockedLine = (f: Fault): string => `blocked — ${faultLine(f)}`;
 
 /** The row a PRESS puts on screen before there is a job id to put on it (Vexa-ai/vexa#1594). Its
  *  `id` is the client's own — the real `job-started` hands the row its server id, so one line runs
@@ -153,7 +166,9 @@ export function jobLine(jobs: JobRec[]): string {
     .map((j) =>
       // A QUEUED act has no steps to count and no label to show — it has not started. What it has
       // is the reason it has not, which is the only thing the person needs while they wait.
-      (j.queued
+      (j.blocked
+        ? [j.noun || "job", j.target || j.kind, blockedLine(j.blocked)]
+        : j.queued
         ? [j.noun || "job", j.target || j.kind, QUEUED_LINE]
         : [j.noun || "job", j.target || j.kind, stepsPhrase(j.steps), j.label])
         .filter(Boolean)

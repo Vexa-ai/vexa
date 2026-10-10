@@ -395,10 +395,11 @@ def test_mcp_client_supplied_user_id_is_stripped_then_reinjected():
 
 # ------------------------------------------------- the agent SSE leg is untouched (row 4 anchor)
 @needs_agent
-def test_agent_sse_still_uses_the_byte_relay_stream_port():
-    """The agent chat SSE keeps its own envelope-minting forward (`stream`), unchanged by the
-    head-aware `open_stream` the MCP leg introduced."""
-    ds = FakeDownstream(stream_chunks=[b'data: {"type":"token","text":"hi"}\n\n'])
+def test_agent_sse_mints_its_own_envelope_over_an_upstream_stream():
+    """The agent chat SSE reads the upstream HEAD (`open_stream`, as the MCP leg does) and, for an
+    upstream event stream, relays it under the gateway's own SSE envelope."""
+    ds = FakeDownstream(content_type="text/event-stream",
+                        stream_chunks=[b'data: {"type":"token","text":"hi"}\n\n'])
     app = create_app(FakeAuthorizer(), ds, FakeRedis(), agent_api_url="http://agent-api")
     client = TestClient(app)
     r = client.post("/agent/chat", headers=AUTH, json={"prompt": "hi"})

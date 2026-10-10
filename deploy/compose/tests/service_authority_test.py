@@ -91,7 +91,7 @@ def test_active_service_boundary_stops_once_and_replay_is_inert(stack) -> None:
             "transcribe_enabled": False,
             "recording_enabled": False,
         },
-        headers={"x-user-id": str(user_id), "x-user-limits": "5"},
+        headers={"x-internal-secret": stack.internal_secret, "x-user-id": str(user_id), "x-user-limits": "5"},
     )
     assert code == 201, f"authority-backed POST /bots → {code} {created}"
 
@@ -113,7 +113,7 @@ def test_active_service_boundary_stops_once_and_replay_is_inert(stack) -> None:
     assert authority["reason"] == "compose_fixture_allow"
     assert service_identity.startswith("meeting-session:")
     assert workload_id
-    assert http("GET", f"{stack.runtime}/workloads/{workload_id}")[0] == 200
+    assert http("GET", f"{stack.runtime}/workloads/{workload_id}", headers=stack.runtime_auth)[0] == 200
 
     stopped = _wait_for(
         lambda: (
@@ -139,6 +139,7 @@ def test_active_service_boundary_stops_once_and_replay_is_inert(stack) -> None:
     runtime_code, runtime_status = http(
         "GET",
         f"{stack.runtime}/workloads/{workload_id}",
+        headers=stack.runtime_auth,
     )
     # runtime.v1 retains an authoritative terminal tombstone; 404 means
     # "untracked", not "successfully destroyed".
