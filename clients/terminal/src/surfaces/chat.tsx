@@ -3,7 +3,7 @@ import { setChatActivity } from "./chatActivity";
 /** Chat — the persistent right-rail agent window. Streams a real agent turn over /api/chat (SSE) into the
  *  turn timeline, surfacing each tool-call as a visible operation (read/search/edit/git/web) with status,
  *  then the message + commit / rejection badge. The composer carries the active center-tab reference. */
-import { useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ClipboardEvent, type DragEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ClipboardEvent, type ReactNode } from "react";
 import { minutesOnly } from "../app/mode";
 import { liveMeetingsNow } from "./liveMeetings";
 import { useService, useStore, CommandServiceId, ARTIFACT_EVENT, ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, FOCUS_WORKSPACE_EVENT, MACHINERY_MARK, OPEN_PAGE_EVENT, WORKSPACE_COMMIT_EVENT, MACHINERY_NOTE, ONBOARDING_KICKOFF_MARK, ONBOARDING_REPLY_SEP } from "../platform";
@@ -34,6 +34,7 @@ import { actTarget, endJob, isJobIntent, jobLine, jobTarget, noteJob, promoteJob
 import { blockSubmission, claimInboxRow, fetchPending, flushOutbox, newSubmissionId, readOutbox, reconcileInbox, runnable, submitToInbox, SubmitRefused } from "./inbox";
 import { MINUTES_ONBOARDING_GREETING, MINUTES_PREP_GREETING } from "../canvas/actions";
 import { TERMS_EVENT } from "../canvas/transcriptTerms";
+import { ATTACHMENT_ACCEPT, AttachmentTray, FileDropZone, ImagePreview, pastedFiles, refusalFor, uploadAttachment, type ComposerAttachment, type UploadedWorkspaceFile } from "./attachments";
 
 /** classify a tool name into one of the op icons so the operation line reads at a glance */
 function toolOp(tool: string, args?: Record<string, unknown>): Op {
@@ -156,13 +157,6 @@ type ReferenceSegment = { kind: "text"; text: string } | { kind: "reference"; re
 type ActiveReference = ReferenceToken;
 const REFERENCE_RE = /@(file|meeting):([A-Za-z0-9._~%+@:/=-]+)/g;
 const MAX_TEXTAREA_HEIGHT = 156;
-const ATTACHMENT_ACCEPT = [
-  "image/*", ".pdf", ".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".jsonl", ".yaml", ".yml", ".log",
-  ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".zip",
-].join(",");
-
-type ComposerAttachment = { id: string; file: File; isImage: boolean; previewUrl?: string };
-type UploadedWorkspaceFile = { name: string; path: string };
 
 /** Where a workspace keeps the pictures its pages reference (agent-api `shared/asset_source.py`). */
 const ASSETS_DIR = "assets";
@@ -524,38 +518,6 @@ function ComposerReferences({ text }: { text: string }) {
   );
 }
 
-function AttachmentChips({ attachments, onRemove }: { attachments: ComposerAttachment[]; onRemove: (id: string) => void }) {
-  if (attachments.length === 0) return null;
-  return (
-    <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 6, minWidth: 0 }}>
-      {attachments.map((a) => a.previewUrl ? (
-        // AN IMAGE IS SHOWN AS ITSELF (the Claude Code composer): a thumbnail above the text,
-        // removed from its corner.
-        <span key={a.id} title={a.file.name} data-attachment-thumb
-          style={{ position: "relative", width: 56, height: 56, flex: "none", borderRadius: 8, overflow: "hidden", border: "1px solid var(--line2)", background: "var(--bg)" }}>
-          <img src={a.previewUrl} alt={a.file.name || "image"} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
-          <button aria-label={`Remove ${a.file.name || "attachment"}`} title="Remove" type="button" onClick={() => onRemove(a.id)}
-            style={{ position: "absolute", top: 3, right: 3, width: 18, height: 18, borderRadius: 999, border: "none", background: "var(--panel)", color: "var(--t2)", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", padding: 0, boxShadow: "0 1px 3px rgba(0,0,0,.3)" }}>
-            <Icon name="x" size={10} />
-          </button>
-        </span>
-      ) : (
-        <span key={a.id} title={a.file.name}
-          style={{ display: "inline-flex", alignItems: "center", gap: 6, maxWidth: 210, minWidth: 0, border: "1px solid var(--line2)", borderRadius: 7, background: "var(--panel2)", color: "var(--t2)", padding: "3px 5px", fontSize: 12, lineHeight: 1.2 }}>
-          {a.previewUrl
-            ? <img src={a.previewUrl} alt="" style={{ width: 24, height: 24, borderRadius: 4, objectFit: "cover", flex: "none", background: "var(--bg)" }} />
-            : <span style={{ width: 24, height: 24, borderRadius: 4, display: "flex", alignItems: "center", justifyContent: "center", flex: "none", background: "var(--bg)", color: "var(--t3)" }}><Icon name="file" size={13} /></span>}
-          <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.file.name || "upload"}</span>
-          <button aria-label={`Remove ${a.file.name || "attachment"}`} title="Remove" type="button" onClick={() => onRemove(a.id)}
-            style={{ background: "none", border: "none", color: "var(--t3)", cursor: "pointer", display: "flex", padding: 1, flex: "none" }}>
-            <Icon name="x" size={12} />
-          </button>
-        </span>
-      ))}
-    </div>
-  );
-}
-
 function referenceContext(text: string): string {
   const refs = referenceTokens(text);
   if (refs.length === 0) return "";
@@ -836,6 +798,9 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const attachmentSeqRef = useRef(0);
   const attachmentsRef = useRef<ComposerAttachment[]>([]);
+  const uploadAbortRef = useRef(new Map<string, AbortController>());
+  const uploadPromiseRef = useRef(new Map<string, Promise<UploadedWorkspaceFile | null>>());
+  const [preview, setPreview] = useState<ComposerAttachment | null>(null);
   // ── mic dictation — STREAMING, meeting-pipeline style (sliding window + LocalAgreement
   //    via ui-kit/micDictation): confirmed + pending text land in the composer LIVE while
   //    speaking; stop flushes the final window. STT is proxied via /api/stt.
@@ -890,6 +855,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
     for (const a of attachmentsRef.current) {
       if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
     }
+    for (const c of uploadAbortRef.current.values()) c.abort();
   }, []);
 
   // Load history into an idle, empty session snapshot. Live turns stay in the per-session store so switching
@@ -963,24 +929,59 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
     })();
   }, [chatKey, session, subject]);
 
+  /** One upload per file, started the moment the file is offered — so the tray shows each file's
+   *  own progress, and a send only waits for whatever is still in flight. The promise resolves to
+   *  the stored file, or null when the upload failed or the file was removed. */
+  const startUpload = (a: ComposerAttachment) => {
+    const ctl = new AbortController();
+    uploadAbortRef.current.set(a.id, ctl);
+    const patch = (fields: Partial<ComposerAttachment>) =>
+      setAttachments((current) => current.map((x) => (x.id === a.id ? { ...x, ...fields } : x)));
+    const p = uploadAttachment(a.file, (progress) => patch({ progress }), ctl.signal)
+      .then((uploaded) => { patch({ status: "done", progress: 1, uploaded, error: undefined }); return uploaded; })
+      .catch((e: unknown) => {
+        if (ctl.signal.aborted) return null;
+        patch({ status: "error", error: (e as Error)?.message || "Upload failed" });
+        return null;
+      })
+      .finally(() => { if (uploadAbortRef.current.get(a.id) === ctl) uploadAbortRef.current.delete(a.id); });
+    uploadPromiseRef.current.set(a.id, p);
+  };
+
   const addFiles = (files: File[]) => {
     if (files.length === 0) return;
     setUploadError(null);
-    setAttachments((current) => [
-      ...current,
-      ...files.map((file) => {
-        const isImage = file.type.startsWith("image/");
-        return {
-          id: `att-${attachmentSeqRef.current++}`,
-          file,
-          isImage,
-          previewUrl: isImage ? URL.createObjectURL(file) : undefined,
-        };
-      }),
-    ]);
+    const added = files.map((file): ComposerAttachment => {
+      const isImage = file.type.startsWith("image/");
+      const refusal = refusalFor(file);
+      return {
+        id: `att-${attachmentSeqRef.current++}`,
+        file,
+        isImage,
+        previewUrl: isImage && !refusal ? URL.createObjectURL(file) : undefined,
+        status: refusal ? "refused" : "uploading",
+        progress: 0,
+        error: refusal ?? undefined,
+      };
+    });
+    setAttachments((current) => [...current, ...added]);
+    for (const a of added) if (a.status === "uploading") startUpload(a);
+  };
+
+  const retryAttachment = (id: string) => {
+    const a = attachmentsRef.current.find((x) => x.id === id);
+    if (!a || a.status !== "error") return;
+    setUploadError(null);
+    const again = { ...a, status: "uploading" as const, progress: 0, error: undefined };
+    setAttachments((current) => current.map((x) => (x.id === id ? again : x)));
+    startUpload(again);
   };
 
   const removeAttachment = (id: string) => {
+    uploadAbortRef.current.get(id)?.abort();
+    uploadAbortRef.current.delete(id);
+    uploadPromiseRef.current.delete(id);
+    setPreview((p) => (p?.id === id ? null : p));
     setAttachments((current) => current.filter((a) => {
       if (a.id !== id) return true;
       if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
@@ -989,6 +990,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
   };
 
   const clearAttachments = () => {
+    uploadPromiseRef.current.clear();
     setAttachments((current) => {
       for (const a of current) {
         if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
@@ -997,22 +999,19 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
     });
   };
 
-  const uploadAttachments = async (): Promise<UploadedWorkspaceFile[]> => {
-    const form = new FormData();
-    for (const a of attachments) form.append("files", a.file, a.file.name || "upload");
-    const r = await fetch("/api/workspace/upload", { method: "POST", body: form });
-    if (!r.ok) {
-      let detail = `Upload failed (${r.status})`;
-      try {
-        const data = await r.json() as { detail?: string };
-        if (data.detail) detail = data.detail;
-      } catch {
-        // keep the status-derived message
-      }
-      throw new Error(detail);
-    }
-    const data = await r.json() as { files?: UploadedWorkspaceFile[] };
-    return data.files ?? [];
+  /** Everything in the tray, uploaded — or the reason the send cannot go yet. */
+  const awaitAttachments = async (pending: ComposerAttachment[]): Promise<UploadedWorkspaceFile[] | string> => {
+    const refused = pending.filter((a) => a.status === "refused");
+    if (refused.length) return `Remove ${refused.map((a) => a.file.name || "the refused file").join(", ")} to send — it can't be attached.`;
+    const results = await Promise.all(pending.map((a) => a.uploaded
+      ? Promise.resolve(a.uploaded)
+      : (uploadPromiseRef.current.get(a.id) ?? Promise.resolve(null))));
+    // a file removed while the send waited is simply not sent — the person took it out
+    const still = new Set(attachmentsRef.current.map((a) => a.id));
+    const kept = pending.map((a, i) => ({ a, r: results[i] })).filter(({ a }) => still.has(a.id));
+    const missing = kept.filter(({ r }) => !r).map(({ a }) => a);
+    if (missing.length) return `${missing.map((a) => a.file.name || "A file").join(", ")} didn't upload — retry or remove it to send.`;
+    return kept.map(({ r }) => r as UploadedWorkspaceFile);
   };
 
   // ── WHAT A TURN CARRIES, COMPOSED ONCE ──────────────────────────────────────────────────────
@@ -1668,15 +1667,10 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
     if (hasAttachments) {
       setUploading(true);
       setUploadError(null);
-      let uploaded: UploadedWorkspaceFile[];
-      try {
-        uploaded = await uploadAttachments();
-      } catch (e) {
-        setUploadError((e as Error)?.message || "Upload failed");
-        setUploading(false);
-        return;
-      }
+      const settled = await awaitAttachments(attachments);
       setUploading(false);
+      if (typeof settled === "string") { setUploadError(settled); return; }
+      const uploaded = settled;
       prompt = attachmentPrompt(prompt, uploaded);
       referenceSource = [v, uploaded.map((f) => `@file:${f.path}`).join("\n")].filter(Boolean).join("\n");
       displayText = displayText || `Attached files: ${uploaded.map((f) => f.name).join(", ")}`;
@@ -1696,18 +1690,11 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
   };
 
   const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
-    const files = Array.from(e.clipboardData.items)
-      .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
-      .map((item) => item.getAsFile())
-      .filter((file): file is File => !!file);
+    // a screenshot, or files copied in the file manager — attached, not pasted as text
+    const files = pastedFiles(e.clipboardData);
     if (files.length === 0) return;
     e.preventDefault();
     addFiles(files);
-  };
-
-  const onDrop = (e: DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    addFiles(Array.from(e.dataTransfer.files));
   };
 
   const slash = value.startsWith("/");
@@ -1733,8 +1720,6 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
         </div>
       )}
       <div
-        onDragOver={(e) => e.preventDefault()}
-        onDrop={onDrop}
         style={{ border: "1px solid var(--line2)", borderRadius: 14, background: "var(--panel)", padding: "10px 10px 6px 12px", display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}
       >
         {((advertiseFocus && contextRef) || (!minutesOnly() && (ambientEligible || includeSchedule === true)) || (bundleFocus && (bundleFocus.kind === "workspace" || bundleFocus.kind === "today"))) && (
@@ -1791,7 +1776,8 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
           </div>
         )}
         <ComposerReferences text={value} />
-        <AttachmentChips attachments={attachments} onRemove={removeAttachment} />
+        <AttachmentTray attachments={attachments} onRemove={removeAttachment} onRetry={retryAttachment}
+          onPreview={(a) => setPreview(a)} onExit={() => inputRef.current?.focus()} />
         {uploadError && <div style={{ color: "var(--danger)", fontSize: 12, lineHeight: 1.35 }}>{uploadError}</div>}
         {micError && <div style={{ color: "var(--danger)", fontSize: 12, lineHeight: 1.35 }}>{micError}</div>}
         <input
@@ -1859,6 +1845,8 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
   );
 
   return (
+    <FileDropZone onFiles={addFiles}>
+    {preview?.previewUrl && <ImagePreview attachment={preview} onClose={() => setPreview(null)} />}
     <AgentWindow top={<ChatHeader subject={subject} session={session} onSelectSession={selectSession} onNewChat={newChat} onClose={() => layout.toggleRight()} />} scrollRef={scrollRef} composer={composer}>
       {/* THE EMPTY STATE. The centered "What organisation are you? / Just the name is enough — I'll
           research the rest…" card that used to sit here is DELETED (F37): it was the pre-scaffold
@@ -1888,6 +1876,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
         </div>
       )}
     </AgentWindow>
+    </FileDropZone>
   );
 }
 

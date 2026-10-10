@@ -32,6 +32,13 @@ an empty list (no catalog) renders nothing — and it never holds an endpoint or
 refused pick shows the server's sentence and keeps the old pick; "use for new chats" writes the
 person's Settings → Models `default_model`.
 
+**Chat attachments** (`attachments.tsx`) — files dropped anywhere on the chat panel, pasted into
+the composer, or picked with +. Each uploads on its own on `POST /api/workspace/upload` with its own
+progress; a file over 25 MB (the route's `MAX_UPLOAD_BYTES`) or of a type the picker does not offer
+is refused in the tray, and a failed upload stays there with a retry. A send never goes past a
+refused or failed file. The flow, who stores and reads the files, and why it complies:
+[`docs/docs/how-to/chat-attachments.mdx`](../../../../docs/docs/how-to/chat-attachments.mdx).
+
 **Error presentation is part of the surface contract** — surfaces render `presentError(e)`
 (`apiClient.ts`), never `e.message`: the headline is user vocabulary ("Couldn't reach the Vexa
 server…", the backend's own prose reason verbatim when it sent one), while the untranslated
