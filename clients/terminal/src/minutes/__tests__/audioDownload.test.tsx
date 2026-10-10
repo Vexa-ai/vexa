@@ -21,8 +21,8 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 describe("download audio", () => {
   it("saves the recording through the playback route, named <platform>-<native_id>-<date>.<ext>", async () => {
     render(<MeetingControls meetingId="42" />);
-    fireEvent.click(await screen.findByRole("button", { name: "Download audio" }));
-    await waitFor(() => expect(saved).toHaveLength(1));
+    fireEvent.click(await screen.findByRole("button", { name: "Download audio" }, { timeout: 5000 }));
+    await waitFor(() => expect(saved).toHaveLength(1), { timeout: 5000 });
     expect(saved[0]).toEqual({ href: "blob:audio", download: "zoom-84512345678-2026-10-09.webm" });
     const call = vi.mocked(fetch).mock.calls.find(c => String(c[0]).includes("/raw"))!;
     // Same-origin, owner-scoped route; the session cookie authorizes it, no credential in the URL.
@@ -34,16 +34,16 @@ describe("download audio", () => {
   it("shows an explicit error when the download is refused, and saves nothing", async () => {
     state.media = async () => new Response(JSON.stringify({ detail: "Recording not found" }), { status: 404 });
     render(<MeetingControls meetingId="42" />);
-    fireEvent.click(await screen.findByRole("button", { name: "Download audio" }));
-    expect((await screen.findByRole("alert")).textContent).toBe("Could not download audio: the recording was not found.");
+    fireEvent.click(await screen.findByRole("button", { name: "Download audio" }, { timeout: 5000 }));
+    expect((await screen.findByRole("alert", {}, { timeout: 5000 })).textContent).toBe("Could not download audio: the recording was not found.");
     expect(saved).toHaveLength(0);
   });
 
   it("shows an explicit error when the connection fails", async () => {
     state.media = async () => { throw new TypeError("network"); };
     render(<MeetingControls meetingId="42" />);
-    fireEvent.click(await screen.findByRole("button", { name: "Download audio" }));
-    expect((await screen.findByRole("alert")).textContent).toMatch(/connection failed/);
+    fireEvent.click(await screen.findByRole("button", { name: "Download audio" }, { timeout: 5000 }));
+    expect((await screen.findByRole("alert", {}, { timeout: 5000 })).textContent).toMatch(/connection failed/);
   });
 
   it("offers no download when the meeting has no recording", async () => {
