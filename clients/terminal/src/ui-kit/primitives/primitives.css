@@ -175,3 +175,11 @@ a.vx-trunc:hover { text-decoration: underline; }
 .vx-fact-val { color: var(--text-1); font-size: var(--text-sm); }
 @container (max-width: 359px) { .vx-fact { grid-template-columns: minmax(0, 1fr); } }
 .vx-policy-unset { color: var(--text-3); font-size: var(--text-xs); }
+
+/* A list of records (a page's `sources`): one line per item, never an inline sliver. */
+.vx-kv { width: 100%; }
+.vx-kv-items { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-0_5); min-width: 0; }
+.vx-kv-item { display: block; min-width: 0; }
+.vx-kv-record { display: flex; align-items: baseline; gap: var(--space-1_5); min-width: 0; max-width: 100%; }
+.vx-kv-record > .vx-trunc { flex: 0 1 auto; min-width: 0; }
+.vx-kv-record > time, .vx-kv-record-sep { flex: none; color: var(--text-3); }

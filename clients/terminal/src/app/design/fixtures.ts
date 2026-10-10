@@ -15,6 +15,14 @@ export const PROPERTIES: Record<string, unknown> = {
   founded: "2019-04-02",
   last_contact: "2026-10-09",
   tags: ["prospect", "platform"],
+  aliases: ["Example Co", "Example Company Ltd", "example-company"],
+  // real-shaped sources: the YAML flow list `[Gmail: 2026-09-17, …]` parses to one-key records
+  sources: [
+    { Gmail: "2026-09-17" },
+    { "linkedin/in/person-name-0a00b0000": "2026-10-10" },
+    { source: "Weekly sync notes", date: "2026-10-08", url: "https://example.com/notes/weekly-sync" },
+    "Shared inbox",
+  ],
   verified: false,
   address: { city: "Example City", country: "Example Country" },
   source_path: PATH_LONG,
