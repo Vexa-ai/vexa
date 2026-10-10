@@ -494,14 +494,22 @@ def _current_policy_entries(work: Path) -> set[str]:
     except subprocess.CalledProcessError:
         pass
     # And whatever is physically on disk (catches a symlinked-in file or a dir the index doesn't know).
+    # NEVER DESCEND THROUGH A SYMLINK. ``policy/`` sits in a work tree the model's tools can write, so
+    # a planted ``policy`` or ``policy/<sub>`` symlink points wherever they choose. A symlink is
+    # recorded as itself — so the removal below unlinks the link, never its target — but its contents
+    # are not walked: enumerating a victim's files here would hand them to that unlink as if the turn
+    # had added them. ``os.walk(followlinks=False)`` yields a symlinked subdirectory's name in
+    # ``dirnames`` and does not recurse into it, which is exactly the record-the-link, skip-its-tree
+    # rule. (``Path.rglob`` recursed through symlinked directories on some supported interpreters.)
     policy_root = work / _POLICY_DIR
-    if policy_root.exists() or policy_root.is_symlink():
-        if policy_root.is_symlink() or not policy_root.is_dir():
-            entries.add(_POLICY_DIR)
-        else:
-            for child in policy_root.rglob("*"):
-                if child.is_file() or child.is_symlink():
-                    entries.add(child.relative_to(work).as_posix())
+    if policy_root.is_symlink() or (policy_root.exists() and not policy_root.is_dir()):
+        entries.add(_POLICY_DIR)
+    elif policy_root.is_dir():
+        for dirpath, dirnames, filenames in os.walk(policy_root, followlinks=False):
+            linked = [d for d in dirnames if os.path.islink(os.path.join(dirpath, d))]
+            for name in (*filenames, *linked):
+                entries.add(Path(dirpath, name).relative_to(work).as_posix())
+            dirnames[:] = [d for d in dirnames if d not in linked]   # do not walk a symlinked dir
     return entries
 
 
@@ -539,6 +547,41 @@ def _policy_paths_differing_from(work: Path, anchor: str) -> set[str]:
             continue
         out |= {ln.strip() for ln in raw.splitlines() if ln.strip()}
     return out
+
+
+def _unlink_in_tree(work: Path, rel: str) -> None:
+    """Unlink ``work/<rel>`` without traversing a symlink at any directory on the way to it: each
+    component is opened ``O_NOFOLLOW`` from a descriptor on its parent, and the leaf is removed
+    through that parent's fd. A planted ``policy/<sub>`` whose ``<sub>`` is a link is therefore
+    never followed — the link itself is what ``added`` names and removes, not a file in whatever it
+    points at. A directory component that is a link (or any resolution error) simply stops the walk;
+    the top-level ``policy`` symlink is handled by the leaf branch below."""
+    parts = rel.split("/")
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    try:
+        dir_fd = os.open(work, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0))
+    except OSError:
+        return
+    try:
+        for part in parts[:-1]:
+            try:
+                nxt = os.open(part, flags, dir_fd=dir_fd)
+            except OSError:
+                return                              # a link or a missing dir on the way: stop
+            os.close(dir_fd)
+            dir_fd = nxt
+        name = parts[-1]
+        try:
+            st = os.lstat(name, dir_fd=dir_fd)
+        except OSError:
+            return
+        if stat.S_ISLNK(st.st_mode) or stat.S_ISREG(st.st_mode):
+            try:
+                os.unlink(name, dir_fd=dir_fd)
+            except OSError:
+                pass
+    finally:
+        os.close(dir_fd)
 
 
 def _revert_policy_writes(work: Path, base_sha: Optional[str]) -> list[str]:
@@ -584,12 +627,7 @@ def _revert_policy_writes(work: Path, base_sha: Optional[str]) -> list[str]:
             _git(work, "rm", "-r", "-f", "--cached", "--ignore-unmatch", "--", path)
         except subprocess.CalledProcessError:
             pass
-        target = work / path
-        try:
-            if target.is_symlink() or target.is_file():
-                target.unlink(missing_ok=True)
-        except OSError:
-            pass
+        _unlink_in_tree(work, path)
 
     # 2) Restore every edited baseline path from the anchor (checkout writes index + working tree).
     for path in sorted(changed):
