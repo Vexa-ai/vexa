@@ -48,7 +48,6 @@ def as_root_with_tools_user(monkeypatch):
     tools = PwEntry(os.getuid() + TOOLS_UID_OFFSET, os.getgid())
     user_db = ports.pwd  # the user database module the worker resolves its tools user through
     monkeypatch.setattr(user_db, "getpwnam", lambda name: tools)
-    monkeypatch.setattr(ports, "_tools_off", False)
     return tools
 
 

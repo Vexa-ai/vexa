@@ -3,8 +3,9 @@
 Where the worker runs as root and the image has the tools user, every harness CLI starts as that user
 (no other groups, group-writable files), and the worker hands it — by group, owners untouched — only
 the workspaces a turn may write and the harness's own state. A Codex credential the tools user may
-not be able to read is copied into a home of its own. A path that cannot be handed over makes the
-worker stop switching, loudly. A worker that is not root never tries, and makes itself non-dumpable.
+not be able to read is copied into a home of its own. A path that cannot be handed over refuses the
+turn with a typed fault; the worker never stops switching, so the model's tools never run as root. A
+worker that is not root never tries, and makes itself non-dumpable.
 The live proof (a root worker, the real image, the tools user's Bash refused the worker's /proc
 environment) runs in the worker image on a host with Docker.
 """
@@ -28,7 +29,6 @@ def as_root(monkeypatch):
     test's own uid/gid, so the ownership calls really run."""
     monkeypatch.setattr(ports.os, "geteuid", lambda: 0)
     monkeypatch.setattr(ports.pwd, "getpwnam", lambda name: PwEntry(os.getuid(), os.getgid()))
-    monkeypatch.setattr(ports, "_tools_off", False)
     return os.getuid(), os.getgid()
 
 
@@ -110,15 +110,80 @@ def test_the_grant_gives_the_group_what_a_turn_writes(as_root, tmp_path):
     assert os.lstat(ws / "link").st_mode & stat.S_IFLNK          # a link is left alone
 
 
-def test_a_path_that_cannot_be_handed_over_stops_the_switch(as_root, monkeypatch, tmp_path):
-    (tmp_path / "f").write_text("x")
-
+def _refuse_chmod(monkeypatch):
     def refuse(*a):
-        raise PermissionError("not permitted")
+        raise PermissionError(1, "Operation not permitted")
 
     monkeypatch.setattr(ports.os, "chmod", refuse)
-    assert ports.grant_tools_access([tmp_path]) is False
-    assert ports.tools_identity() is None and ports.harness_identity_kwargs() == {}
+
+
+def test_a_path_that_cannot_be_handed_over_is_named_and_never_stops_the_switch(as_root, monkeypatch,
+                                                                               tmp_path):
+    """R6-1: a grant that failed used to switch the worker off for the rest of its life — every later
+    harness ran the model's tools as root. Now the grant raises, naming the path and the cause, and
+    the worker still starts the next harness as the tools user."""
+    uid, gid = as_root
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / "f").write_text("x")
+    os.chmod(ws / "f", 0o600)
+    _refuse_chmod(monkeypatch)
+    with pytest.raises(ports.ToolsAccessRefused) as caught:
+        ports.grant_tools_access([ws])
+    assert caught.value.root == str(ws) and caught.value.cause == "Operation not permitted"
+    assert ports.tools_identity() == (uid, gid)
+    assert ports.harness_identity_kwargs() == {"user": uid, "group": gid, "extra_groups": [], "umask": 0o002}
+
+
+def test_a_turn_whose_grant_fails_is_refused_with_a_typed_fault_not_run_as_root(as_root, monkeypatch,
+                                                                                tmp_path):
+    import json
+
+    from worker import engine
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+    monkeypatch.setenv("VEXA_MOUNTS", json.dumps([]))
+    monkeypatch.setattr(engine, "_ensure_repo", lambda w: None)
+    monkeypatch.setattr(engine, "report_friction", lambda rec, **kw: None)
+    ran = []
+
+    def run(*a, **kw):
+        ran.append(ports.harness_identity_kwargs())
+        return iter([{"type": "done", "ok": True, "reply": "ran"}])
+
+    monkeypatch.setattr(engine, "run_harness_turn", run)
+
+    class Harness:
+        name = "fake"
+
+        def prepare(self, work, chat_root=None):
+            pass
+
+        def transcript_bytes(self, work, sid):
+            return 0
+
+    work = tmp_path / "desk"
+    work.mkdir()
+    (work / "notes.md").write_text("x")
+    os.chmod(work / "notes.md", 0o600)
+    _refuse_chmod(monkeypatch)
+    evs = list(engine.run_turn_over_workspace(work, "hi", harness=Harness(), session_continuity=False))
+    assert ran == []                                         # the harness never started
+    assert len(evs) == 1 and evs[0]["type"] == "done" and evs[0]["ok"] is False
+    fault = evs[0]["fault"]
+    assert fault["source"] == "agent-worker" and fault["kind"] == "tools_unconfined"
+    assert "Operation not permitted" in fault["detail"] and fault["remedy"]
+    monkeypatch.undo()                                       # the cause is fixed: the next turn runs,
+    monkeypatch.setattr(ports.os, "geteuid", lambda: 0)      # still as the tools user
+    monkeypatch.setattr(ports.pwd, "getpwnam", lambda name: PwEntry(os.getuid(), os.getgid()))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+    monkeypatch.setenv("VEXA_MOUNTS", json.dumps([]))
+    monkeypatch.setattr(engine, "_ensure_repo", lambda w: None)
+    monkeypatch.setattr(engine, "report_friction", lambda rec, **kw: None)
+    monkeypatch.setattr(engine, "run_harness_turn", run)
+    evs = list(engine.run_turn_over_workspace(work, "hi", harness=Harness(), session_continuity=False))
+    assert ran and ran[0].get("user") == os.getuid() and evs[-1]["reply"] == "ran"
 
 
 def test_the_mcp_attachment_is_handed_to_the_tools_user(as_root, monkeypatch, tmp_path):

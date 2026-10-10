@@ -18,11 +18,16 @@ the turn's tool access, and the turn's ``done`` is marked failed with a typed fa
 
 The terminal renders it like every other fault (``clients/terminal/src/surfaces/faults.ts``), with a
 Retry: the next turn attaches with the unit's current token.
+
+The other end of the same access: a turn whose workspace could not be handed to the user the model's
+tools run as is refused before its harness starts, with :func:`unconfined_fault`
+(``{"source": "agent-worker", "kind": "tools_unconfined", ...}``) — never run with those tools as root.
 """
 from __future__ import annotations
 
 import base64
 import json
+import os
 import time
 from datetime import datetime, timezone
 from typing import Callable, Iterable, Iterator, Optional
@@ -56,6 +61,34 @@ def fault(exp: int) -> dict:
                    "calls it made after that were refused, so its answer may be missing what they "
                    "would have returned."),
         "remedy": "Send it again: the next turn starts with fresh tool access.",
+    }
+
+
+#: The worker could not confine the model's tools to their own user, so the turn did not run.
+WORKER_SOURCE = "agent-worker"
+TOOLS_UNCONFINED = "tools_unconfined"
+
+
+def unconfined_fault(path: str, root: str, cause: str) -> dict:
+    """The typed fault for a turn REFUSED because a path it needs could not be handed to the user the
+    model's tools run as (``llm.ports.grant_tools_access`` raised ``ToolsAccessRefused``). The turn
+    never runs them as the worker instead — that user is what keeps them out of the worker's
+    environment and code — so the person is told which path failed and why. The path is named
+    under the granted folder it sits in (``<folder>/<path inside it>``), never as a full store path."""
+    base = os.path.basename(str(root).rstrip("/")) or str(root)
+    try:
+        inner = os.path.relpath(str(path), str(root)) if root else ""
+    except ValueError:
+        inner = ""
+    where = base if inner in ("", ".") or inner.startswith("..") else f"{base}/{inner}"
+    return {
+        "source": WORKER_SOURCE,
+        "kind": TOOLS_UNCONFINED,
+        "status": None,
+        "detail": (f"This turn did not run: the worker could not hand {where} to the user the "
+                   f"model's tools run as ({cause}), and it never runs them as itself."),
+        "remedy": ("Send it again. If it fails the same way, an operator must fix the ownership "
+                   "or permissions of that path in the workspace store."),
     }
 
 

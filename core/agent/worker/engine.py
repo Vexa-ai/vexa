@@ -38,6 +38,7 @@ from typing import Callable, Iterator, Protocol
 
 from llm import (
     HarnessPort,
+    ToolsAccessRefused,
     auth_error_event,
     close_event_stream,
     grant_tools_access,
@@ -1933,9 +1934,20 @@ def run_turn_over_workspace(
     # that user this turn's writable workspaces and the harness's own state, which prepare just made.
     # The skills prepare staged, and the CLI's user scope whose `skills` link names them, are the
     # tools user's to read only: written by it, they would decide what a later turn loads.
+    #
+    # A GRANT THAT FAILS REFUSES THE TURN (P18), it never falls back: a harness started as this
+    # process would run the model's tools as root, able to read the worker's environment and write
+    # its code. The turn ends with a typed fault naming the path and the cause; the next turn tries
+    # the grant again.
     home = Path(os.environ.get("HOME", "/tmp"))
-    grant_tools_access([*(m["path"] for m in active_mounts() if m.get("write", True)), work, chat_root,
-                        Path(os.environ.get("CODEX_HOME") or home / ".codex")])
+    try:
+        grant_tools_access([*(m["path"] for m in active_mounts() if m.get("write", True)), work,
+                            chat_root, Path(os.environ.get("CODEX_HOME") or home / ".codex")])
+    except ToolsAccessRefused as exc:
+        fault = tool_access.unconfined_fault(exc.path, exc.root, exc.cause)
+        log.error("turn refused for session=%s: %s", session or "-", exc)
+        yield {"type": "done", "ok": False, "reply": fault["detail"], "sessionId": None, "fault": fault}
+        return
     show_tools([home / ".claude", home / ".vexa-skills"])
     if session and session_continuity:
         _adopt_legacy_continuity(chat_root, work, session)  # migrate-on-read: pre-anchoring threads

@@ -19,6 +19,7 @@ from llm.faults import classify as classify_provider_failure
 from llm.ports import (
     HarnessExec,
     HarnessPort,
+    ToolsAccessRefused,
     close_event_stream,
     grant_tools_access,
     hand_fd_to_tools,
@@ -46,6 +47,7 @@ __all__ = [
     "classify_provider_failure",
     "HarnessExec",
     "HarnessPort",
+    "ToolsAccessRefused",
     "close_event_stream",
     "grant_tools_access",
     "hand_fd_to_tools",
