@@ -30,6 +30,8 @@ agent, and a cursor for the next call — never a join key across two readers.
 """
 from __future__ import annotations
 
+import datetime as _dt
+
 from workspaces.shared.entities import KINDS, candidate_names, slugify
 
 # `kg/entities/<kind>/<stem>.md` — the one shape `entity_upsert` writes and the one shape this
@@ -201,3 +203,64 @@ def match_known(terms, index) -> list[dict]:
 def terms_for(segments, index) -> list[dict]:
     """The whole thing: what was said → what has a page. The one entry point a caller needs."""
     return match_known(extract_terms(segments), index)
+
+
+# ── the cursor ───────────────────────────────────────────────────────────────────────────────────
+
+def segment_at(segment: dict):
+    """A segment's position on the meeting's clock: its absolute start, else its relative start."""
+    return segment.get("absolute_start_time") or segment.get("start")
+
+
+def _instant(value):
+    """``value`` as an aware UTC datetime when it is an ISO-8601 timestamp, else None."""
+    text = str(value or "").strip()
+    if not text or text.replace(".", "", 1).isdigit():
+        return None
+    try:
+        t = _dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return t if t.tzinfo else t.replace(tzinfo=_dt.timezone.utc)
+
+
+def segments_since(raw, since) -> list:
+    """The segments said AFTER ``since``, the cursor a previous call returned.
+
+    COMPARED AS TIMES when both sides are timestamps. Comparing the strings made the answer depend
+    on spelling: ``…14:52:57Z`` sorts after ``…14:52:57.309+00:00`` even though it is earlier, so a
+    cursor written with a ``Z`` by one reader hid every later segment from another. Numbers (a
+    relative ``start``) compare as numbers. Anything else falls back to the old string order."""
+    rows = [g for g in (raw or []) if isinstance(g, dict)]
+    if not since:
+        return rows
+    since_t, since_n = _instant(since), _number(since)
+
+    def after(g) -> bool:
+        at = segment_at(g)
+        if since_t is not None and _instant(at) is not None:
+            return _instant(at) > since_t
+        if since_n is not None and _number(at) is not None:
+            return _number(at) > since_n
+        return str(at or "") > str(since)
+
+    return [g for g in rows if after(g)]
+
+
+def _number(value):
+    try:
+        return float(value) if not isinstance(value, bool) else None
+    except (TypeError, ValueError):
+        return None
+
+
+def cursor_note(raw, fresh, since) -> str:
+    """One sentence that tells an EMPTY READ from a cursor with nothing after it. Both used to come
+    back as zero segments, and an agent cannot tell "the meeting said nothing new" from "the
+    transcript is empty" without it (friction report, dogfood 2026-10-10)."""
+    if not raw:
+        return "the transcript has no segments yet"
+    if since and not fresh:
+        return (f"nothing was said after since={since}; the transcript holds {len(raw)} segments. "
+                "Omit since to scan the whole meeting.")
+    return ""

@@ -39,6 +39,11 @@ adds only what was said since (*Highlight · N* shows how many terms there are).
 
 Highlight works on live and finished meetings.
 
+Pressing Highlight again on a finished meeting whose terms are already marked finds nothing new,
+which is correct: the agent's scan says *nothing was said after* the last cursor and how many
+segments the transcript holds. A scan of an empty transcript says so instead
+(*the transcript has no segments yet*), so the two are never confused.
+
 ### Ask about a passage
 
 Select text in the transcript and press **Ask about this** (*Add this quote to your chat*). The quote,
@@ -120,7 +125,13 @@ running. Stop and Delete are not shown on a meeting someone shared with you.
    is its timestamp minus the recording's capture start.
 4. **Highlight.** The button sends a silent `highlight` request into the chat. The agent scans the
    transcript for candidates and publishes the ones it keeps; the terminal reads them from
-   `/api/meeting/terms`. Terms are added, never overwritten.
+   `/api/meeting/terms`. Terms are added, never overwritten. The scan's `since` cursor is the last
+   segment's time from the previous scan; `shared/terms.py` `segments_since` compares it to each
+   segment as a time (ISO-8601 with `Z` or an offset) or as a number (a relative start), so a
+   cursor's spelling never hides later segments. Every answer carries `transcript_segments` (the
+   whole transcript) and `cursor_note`, which says whether an empty scan means an empty transcript
+   or nothing new after the cursor. The agent-api route (`meeting_highlight.scan`) and the dogfood
+   rig's `transcript_terms` both call the same two functions.
 5. **Delete.** `DELETE /api/meetings/{id}` reaches meeting-api, which deletes the stored objects first,
    then the fixtures, then the transcript rows and the meeting's data keys, and marks the meeting as
    deleted.
@@ -162,7 +173,8 @@ go to the meetings side, everything else to the agent. The meetings routes are d
 | Rule | How this design meets it | Gate |
 |---|---|---|
 | **P2** contracts · **P6** one front door | the browser calls only the terminal; meeting routes are meeting-api's sealed `api.v1` | `gate:isolation`, `gate:exports`, `gate:contract-conformance` |
-| **P18** fail loud | an unreachable gateway is a `502`; a stream failure arrives as a `stream-error` event; a recording that cannot be made seekable is a typed fault; each control says when it failed | ungated: reviewed |
+| **No duplication** | the Highlight cursor rule lives once, in `shared/terms.py`, and the agent-api route and the dogfood rig both call it | ungated: reviewed |
+| **P18** fail loud | an empty Highlight scan says whether the transcript is empty or nothing followed the cursor; an unreachable gateway is a `502`; a stream failure arrives as a `stream-error` event; a recording that cannot be made seekable is a typed fault; each control says when it failed | ungated: reviewed |
 | **P20** authorize every access | agent-api and meeting-api check every read: the owner, a share recipient, or a member of the meeting's workspace; recordings and delete are owner-only | `gate:access` and the deny tests below |
 | **P21** state from evidence | the bot card reports what the bot is observed doing, including *admitted · no words for …* | ungated: reviewed |
 | **P22** guaranteed teardown | **Stop bot** uses meeting-api's stop route, which ends the bot directly when it cannot confirm the bot is listening | the meeting-lifecycle eval under `gate:python` |
@@ -194,6 +206,7 @@ delete the meeting's data.
 | `core/agent/tests/test_meeting_workspace_access.py` · `test_the_live_transcript_refuses_a_non_member_before_the_stream_opens`, `test_membership_comes_from_the_roster_on_disk_not_from_a_header`, `test_a_row_id_that_is_not_a_row_is_refused_before_any_hop` | workspace meetings |
 | `core/agent/tests/test_deleted_meeting_transcript.py` · `test_the_live_view_refuses_a_deleted_meeting` | deleted meetings |
 | `core/agent/tests/test_transcript_terms_route.py` · `test_a_meeting_the_caller_may_not_read_is_refused` | Highlight |
+| `core/agent/tests/test_transcript_cursor.py` · `test_a_z_cursor_does_not_hide_a_later_offset_segment`, `test_the_cursor_at_the_last_segment_returns_nothing_and_says_so`, `test_an_empty_transcript_is_named_as_empty_not_as_a_cursor_problem` | Highlight cursor (regression) |
 | `core/agent/tests/test_meeting_mint.py` · `test_the_mint_route_refuses_a_meeting_the_caller_does_not_own` | meeting pages |
 | `core/meetings/services/meeting-api/tests/test_completed_artifact_deletion.py` · `test_non_owner_gets_indistinguishable_404_and_cannot_delete_any_artifact`, `test_completed_artifact_delete_is_idempotent_and_active_lifecycle_is_not_deleted` | delete |
 | `core/meetings/services/meeting-api/tests/test_recordings_list_page.py` · `test_the_filter_still_only_sees_the_callers_own_recordings` | recordings |
