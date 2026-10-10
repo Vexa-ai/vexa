@@ -106,21 +106,21 @@ function ConnectCalendarModal({ onClose, onConnected }: { onClose: () => void; o
     <div role="dialog" aria-label="Connect your calendar"
       style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 200 }}
       onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div style={{ width: 520, maxWidth: "92vw", maxHeight: "88vh", overflowY: "auto", background: "var(--panel)", border: "1px solid var(--line2)", borderRadius: 12, padding: "20px 22px", boxShadow: "0 18px 40px rgba(0,0,0,.5)", display: "flex", flexDirection: "column", gap: 10 }}>
+      <div className="bg-2 bd-strong r-lg pt-5 pr-5 pb-5 pl-5" style={{ width: 520, maxWidth: "92vw", maxHeight: "88vh", overflowY: "auto", boxShadow: "0 18px 40px rgba(0,0,0,.5)", display: "flex", flexDirection: "column", gap: 10 }}>
         <div style={{ display: "flex", alignItems: "center" }}>
-          <span style={{ fontSize: 15, fontWeight: 650, color: "var(--t1)", flex: 1 }}>Connect your calendar</span>
-          <button aria-label="close" onClick={onClose} style={{ background: "none", border: "none", color: "var(--t3)", fontSize: 16, cursor: "pointer", padding: 2 }}>×</button>
+          <span className="t-md fw-600 c-1" style={{ flex: 1 }}>Connect your calendar</span>
+          <button aria-label="close" onClick={onClose} className="bg-none bd-none c-3 t-lg p-0_5" style={{ cursor: "pointer" }}>×</button>
         </div>
-        <div style={{ fontSize: 12, color: "var(--t3)", lineHeight: 1.5 }}>
-          Vexa reads your calendar through its <b style={{ color: "var(--t2)" }}>secret iCal address</b> — a
+        <div className="t-xs c-3 lh-snug">
+          Vexa reads your calendar through its <b className="c-2">secret iCal address</b> — a
           private URL only you can see. No Google sign-in needed. Outlook and Apple Calendar ICS feeds work
           through the same box.
         </div>
         <div>
           <div style={li}><span style={num}>1</span><span>Open <b>Google Calendar</b> on the web → ⚙ <b>Settings</b>.</span></div>
           <div style={li}><span style={num}>2</span><span>In the left list under <b>Settings for my calendars</b>, click your calendar.</span></div>
-          <div style={li}><span style={num}>3</span><span>Scroll to <b>Integrate calendar</b> → copy <b>Secret address in iCal format</b>. <span style={{ color: "var(--t3)" }}>Not the public address — the secret one ends in a long token.</span></span></div>
-          <div style={{ ...li, borderBottom: "none", color: "var(--t3)" }}><span style={num}>4</span><span>Don&rsquo;t see the secret field? Your Google Workspace admin has it locked — ask them to enable &ldquo;Secret address&rdquo; sharing, or use a personal calendar.</span></div>
+          <div style={li}><span style={num}>3</span><span>Scroll to <b>Integrate calendar</b> → copy <b>Secret address in iCal format</b>. <span className="c-3">Not the public address — the secret one ends in a long token.</span></span></div>
+          <div className="c-3" style={{ ...li, borderBottom: "none" }}><span style={num}>4</span><span>Don&rsquo;t see the secret field? Your Google Workspace admin has it locked — ask them to enable &ldquo;Secret address&rdquo; sharing, or use a personal calendar.</span></div>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <input value={name} onChange={(e) => setName(e.target.value)} disabled={busy} maxLength={100}
@@ -131,19 +131,19 @@ function ConnectCalendarModal({ onClose, onConnected }: { onClose: () => void; o
             onKeyDown={(e) => { if (e.key === "Enter") void connect(); }}
             placeholder="https://calendar.google.com/…/basic.ics (secret address)" style={fieldStyle} />
           <button onClick={() => void connect()} disabled={busy || !url.trim()}
-            style={{ flex: "none", background: url.trim() ? "var(--accent)" : "var(--panel2)", color: url.trim() ? "var(--on-accent)" : "var(--t3)", border: "none", borderRadius: 7, padding: "0 14px", fontSize: 12.5, fontWeight: 600, cursor: url.trim() && !busy ? "pointer" : "default" }}>
+            className="bd-none r-md pt-0 pr-3 pb-0 pl-3 t-xs fw-600" style={{ flex: "none", background: url.trim() ? "var(--accent)" : "var(--panel2)", color: url.trim() ? "var(--on-accent)" : "var(--t3)", cursor: url.trim() && !busy ? "pointer" : "default" }}>
             {busy ? "Connecting…" : "Connect"}
           </button>
         </div>
-        {err && <div role="alert" style={{ fontSize: 11.5, color: "var(--danger)", lineHeight: 1.5 }}>⚠ {err}</div>}
+        {err && <div role="alert" className="t-xs c-danger lh-snug">⚠ {err}</div>}
         {done && (
-          <div role={done.ok ? "status" : "alert"} style={{ fontSize: 11.5, color: done.ok ? "var(--green)" : "var(--danger)", lineHeight: 1.5 }}>
+          <div role={done.ok ? "status" : "alert"} className="t-xs lh-snug" style={{ color: done.ok ? "var(--green)" : "var(--danger)" }}>
             {done.ok ? "✓" : "⚠"} {done.text}
           </div>
         )}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <span style={{ fontSize: 11, color: "var(--t3)" }}>Synced every few minutes · add more calendars, rename or disconnect in Settings → Calendar</span>
-          {done?.ok && <button onClick={onClose} style={{ background: "var(--accent)", color: "var(--on-accent)", border: "none", borderRadius: 7, padding: "7px 16px", fontSize: 12.5, fontWeight: 600, cursor: "pointer" }}>Done</button>}
+          <span className="t-xs c-3">Synced every few minutes · add more calendars, rename or disconnect in Settings → Calendar</span>
+          {done?.ok && <button onClick={onClose} className="bg-accent c-on-accent bd-none r-md pt-1_5 pr-4 pb-1_5 pl-4 t-xs fw-600" style={{ cursor: "pointer" }}>Done</button>}
         </div>
       </div>
     </div>
@@ -193,14 +193,14 @@ function DropBotInline() {
         <input value={url} onChange={(e) => setUrl(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void send(); }}
           placeholder="Paste a meeting link (Meet / Zoom / Teams / Jitsi)…" style={fieldStyle} />
         <button onClick={() => void send()} disabled={!url.trim() || sent === "sending"}
-          style={{ flex: "none", background: url.trim() ? "var(--accent)" : "var(--panel2)", color: url.trim() ? "var(--on-accent)" : "var(--t3)", border: "none", borderRadius: 7, padding: "0 10px", fontSize: 12, fontWeight: 600, cursor: url.trim() ? "pointer" : "default" }}>
+          className="bd-none r-md pt-0 pr-2 pb-0 pl-2 t-xs fw-600" style={{ flex: "none", background: url.trim() ? "var(--accent)" : "var(--panel2)", color: url.trim() ? "var(--on-accent)" : "var(--t3)", cursor: url.trim() ? "pointer" : "default" }}>
           {sent === "sending" ? "…" : "Send bot"}
         </button>
       </div>
-      {sent === "ok" && <div style={{ fontSize: 11, color: "var(--green)", lineHeight: 1.4 }}>Bot sent — admit it in the meeting.</div>}
+      {sent === "ok" && <div className="t-xs c-success lh-snug">Bot sent — admit it in the meeting.</div>}
       {denial
         ? <ServiceDenialPanel presentation={denial} onRetry={() => void send()} />
-        : sent === "err" && msg && <div role="alert" style={{ fontSize: 11, color: "var(--danger)", lineHeight: 1.4 }}>⚠ {msg}</div>}
+        : sent === "err" && msg && <div role="alert" className="t-xs c-danger lh-snug">⚠ {msg}</div>}
     </div>
   );
 }
@@ -210,8 +210,8 @@ export function MeetingsOnboarding({ variant }: { variant: "full" | "slim" }) {
   // showing those cards would contradict the product's first promise. One quiet empty state instead.
   if (minutesOnly()) {
     return (
-      <div style={{ padding: "14px 4px", fontSize: 13, color: "var(--t2)", lineHeight: 1.6, maxWidth: 520 }}>
-        <div style={{ fontSize: 15, fontWeight: 650, color: "var(--t1)", marginBottom: 6 }}>Nothing here yet</div>
+      <div className="pt-3 pr-1 pb-3 pl-1 t-sm c-2 lh-normal" style={{ maxWidth: 520 }}>
+        <div className="t-md fw-600 c-1 mb-1_5">Nothing here yet</div>
         Your meetings arrive by invitation: add the assistant&rsquo;s address to any calendar event,
         the way you invite a colleague. After the meeting, everyone on your domain gets their minutes
         by email — and this list fills in by itself.
@@ -232,19 +232,19 @@ export function MeetingsOnboarding({ variant }: { variant: "full" | "slim" }) {
     return (
       <>
         {connected === false && (
-          <div style={{ ...cardBase, flexDirection: "row", alignItems: "center", gap: 10, marginTop: 12 }}>
+          <div className="mt-3" style={{ ...cardBase, flexDirection: "row", alignItems: "center", gap: 10 }}>
             <Icon name="cal" size={15} style={{ color: "var(--t3)", flex: "none" }} />
             <span style={{ ...cardBody, flex: 1 }}>
-              <b style={{ color: "var(--t2)" }}>No calendar connected</b> — connect your calendar&rsquo;s secret
+              <b className="c-2">No calendar connected</b> — connect your calendar&rsquo;s secret
               ICS feed and scheduled meetings appear here by themselves; with auto-join on, the bot joins when
               they start.
             </span>
             <button style={{ ...cta, flex: "none" }} onClick={() => setModal(true)}>Connect calendar →</button>
           </div>
         )}
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
+        <div className="mt-3" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           <button onClick={() => plan()}
-            style={{ flex: "none", background: "transparent", border: "1px dashed var(--line2)", color: "var(--t2)", borderRadius: 7, padding: "7px 11px", fontSize: 12, cursor: "pointer" }}>
+            className="bg-none c-2 r-md pt-1_5 pr-3 pb-1_5 pl-3 t-xs" style={{ flex: "none", border: "1px dashed var(--line2)", cursor: "pointer" }}>
             + Plan a meeting
           </button>
           <div style={{ flex: 1, minWidth: 220 }}><DropBotInline /></div>
@@ -257,12 +257,12 @@ export function MeetingsOnboarding({ variant }: { variant: "full" | "slim" }) {
   // full = the empty-Meetings center stage (frame 4): three paths, calendar primary.
   return (
     <>
-      <div style={{ marginTop: 14, fontSize: 12.5, color: "var(--t3)" }}>
+      <div className="mt-3 t-xs c-3">
         Nothing here yet — pick how meetings should arrive.
       </div>
-      <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
+      <div className="mt-3" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
         {connected !== true && (
-          <div style={{ ...cardBase, border: "1px solid var(--accent)", background: "var(--panel)" }}>
+          <div className="bd-accent bg-2" style={{ ...cardBase }}>
             <span style={cardTitle}><Icon name="cal" size={14} /> Connect your calendar</span>
             <span style={cardBody}>
               One-time setup. Scheduled meetings appear here by themselves; with auto-join on, the bot joins
@@ -283,7 +283,7 @@ export function MeetingsOnboarding({ variant }: { variant: "full" | "slim" }) {
         </div>
       </div>
       {connected === true && (
-        <div style={{ marginTop: 10, fontSize: 11.5, color: "var(--t3)" }}>
+        <div className="mt-2 t-xs c-3">
           ✓ Calendar connected — scheduled meetings appear here as they sync. Add more calendars in Settings → Calendar.
         </div>
       )}
