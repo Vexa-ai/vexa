@@ -34,8 +34,9 @@ def build(**d) -> APIRouter:
     def file_friction(body: dict, request: Request):
         """File one rough edge — from an agent (`report_friction`), the harness, or a person's
         "Report this" (decision 33 §§1-2). Forwards onto flows' own `POST /friction` and returns
-        exactly what it returned — `{id, recorded}` — since this is a forward and not a second
-        contract (#1510's C1/C4). When flows cannot be reached (or refuses — no account to
+        exactly what it returned — `{id, recorded}`, plus `duplicate_of`/`occurrences`/`instruction`
+        when flows folded the report into one it already holds — since this is a forward and not a
+        second contract (#1510's C1/C4). When flows cannot be reached (or refuses — no account to
         attribute an anonymous report to), returns `{id: "", recorded: False}` rather than
         inventing a local id that nothing durable backs."""
         # THE SUBJECT IS THE CALLER'S, NEVER THE BODY'S (R-E04) — unchanged from the store era: an
@@ -59,6 +60,16 @@ def build(**d) -> APIRouter:
         fid = resp.get("id", "") if ok and isinstance(resp, dict) else ""
         logger.info("friction filed kind=%s published=%s id=%s tool=%s",
                     rec.get("kind"), ok, fid or "-", (rec.get("context") or {}).get("tool") or "-")
-        return {"id": fid, "recorded": bool(ok and fid)}
+        out = {"id": fid, "recorded": bool(ok and fid)}
+        # A FOLDED REPEAT IS PASSED THROUGH AS FLOWS SAID IT. flows answers a report it already
+        # holds for this subject/tool/reason/UTC hour with `recorded: false` plus `duplicate_of`,
+        # `occurrences` and `instruction`, and admits nothing. Deriving `recorded` from the id
+        # alone turned that into `recorded: true` and dropped the instruction to stop re-filing.
+        if ok and isinstance(resp, dict) and resp.get("duplicate_of"):
+            out["recorded"] = False
+            for key in ("duplicate_of", "occurrences", "instruction"):
+                if key in resp:
+                    out[key] = resp[key]
+        return out
 
     return router

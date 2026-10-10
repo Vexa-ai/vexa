@@ -169,3 +169,30 @@ class FlowVersion(Base):
     created_by: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[float] = mapped_column(Double, nullable=False)
     __table_args__ = (CheckConstraint("status IN ('draft','active','retired')", name="flow_status"),)
+
+
+class FrictionOccurrence(Base):
+    """ONE ROW PER FRICTION EDGE PER HOUR — the repeat counter behind `POST /friction`'s dedup.
+
+    A reporter stuck in a loop files the same report again and again (a scheduled run refused on
+    every tick filed one per tick). The first report of an edge is admitted as a
+    `friction.reported` reaction exactly as before; every repeat with the same key inside the same
+    UTC hour bumps `occurrences` and `last_seen` here instead of admitting a second reaction.
+
+    `dedup_key` is a sha256 over (uid, tool, normalised reason, UTC hour bucket) — computed in
+    `flows_integrations.friction_dedup`. `friction_id` is the first report's id, the row a repeat
+    is folded into. ONE WRITER: flows-api's `POST /friction`. Readers: `flows_timeline`'s
+    `friction_for_subject`, which folds the count onto the report it belongs to. The reaction's own
+    `subject_refs` are the admitted fact and are never mutated to carry a count."""
+    __tablename__ = "friction_occurrence"
+    dedup_key: Mapped[str] = mapped_column(Text, primary_key=True)
+    friction_id: Mapped[str] = mapped_column(Text, nullable=False)
+    uid: Mapped[str] = mapped_column(Text, nullable=False)
+    occurrences: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    first_seen: Mapped[float] = mapped_column(Double, nullable=False)
+    last_seen: Mapped[float] = mapped_column(Double, nullable=False)
+    # 1 once the first report's reaction was admitted. Until then a missing reaction means "still
+    # being admitted", not "deleted" — see `friction_dedup.record_occurrence`.
+    admitted: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # ONE index, on the join column the read side uses (see MailTurn on why only one).
+    __table_args__ = (Index("friction_occurrence_by_id", "friction_id"),)

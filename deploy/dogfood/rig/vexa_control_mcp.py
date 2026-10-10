@@ -5792,6 +5792,12 @@ def report_friction(session: str, what_i_was_doing: str, what_went_wrong: str,
         "thank_you": "This is the only signal we get about what it is actually like to use "
                      "this. Keep going — do not let it interrupt what you were doing.",
     }
+    # A REPEAT IS FOLDED, NOT FILED (flows' dedup): flows answers `duplicate_of`/`occurrences`/
+    # `instruction` when the same edge was already reported this UTC hour. Passed through as-is,
+    # so the agent reads the one sentence that tells it to stop re-filing.
+    if isinstance(body, dict) and body.get("duplicate_of"):
+        for k in ("duplicate_of", "occurrences", "instruction"):
+            out[k] = body.get(k)
     if not uid:
         out["note"] = "no account — filed to the local ledger only, not the durable flows carrier"
     elif not published:
@@ -5839,9 +5845,10 @@ def friction_dump(since: str = "", status: str = "open") -> str:
     A whole-instance view is not smuggled in behind an operator key. If one is wanted it belongs on
     flows' door, scoped and named there, the way `GET /reactions` already has it.
 
-    Counts are ROWS, not deduplicated occurrences — flows admits one row per report with no dedup
-    at admission — and "recurring" is not a status this reports (see the friction.fixed carrier's
-    own census entry).
+    Counts are OCCURRENCES: flows folds an identical report (same subject, tool and normalised
+    reason inside one UTC hour) into the first one and carries the repeat count on it as
+    `occurrences`, so a group's count is the sum of those, not the number of rows. "recurring" is
+    not a status this reports (see the friction.fixed carrier's own census entry).
 
     since: "" (everything) · "2h" · "3d" · an ISO instant.
     status: "open" (the default — everything not fixed) · "fixed" · "" for all.
@@ -5895,11 +5902,12 @@ def _render_friction_dump(rows: list, *, since: str = "", status: str = "open") 
         grows = sorted(grows, key=lambda r: r.get("at_epoch") or 0, reverse=True)
         newest = grows[0]
         findings.append({
-            "kind": kind, "tool": tool or None, "occurrences": len(grows),
+            "kind": kind, "tool": tool or None,
+            "occurrences": sum(max(1, int(r.get("occurrences") or 1)) for r in grows),
             "status": "fixed" if all(r.get("status") == "fixed" for r in grows) else "open",
             "newest": {k: newest.get(k) for k in
-                      ("id", "at", "subject", "session", "severity", "tried", "happened",
-                       "context")},
+                      ("id", "at", "last_seen", "occurrences", "subject", "session", "severity",
+                       "tried", "happened", "context")},
             "also_ids": [r["id"] for r in grows[1:]],
             "close_with": f'friction_fixed(["{newest["id"]}", ...], "<commit|PR>")',
         })
