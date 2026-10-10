@@ -3,7 +3,9 @@
 WHY A TOKEN PER DISPATCH. A worker runs in a spawned container. A durable account credential there
 would not expire, would carry the whole account into an unwatched routine, and could not be withdrawn
 without rotating the person's own key. The dispatch already knows WHO it acts for and WHY it fired,
-so agent-api mints a credential that says only that and expires within the hour.
+so agent-api mints a credential that says only that and expires with the worker: its lifetime is the
+chat warm window plus one turn (1800 s by default, ``VEXA_MCP_DELEGATION_TTL_SEC``), and the token
+is revoked when the worker's unit ends.
 
 THE TOKEN. A compact HS256 JWS, the same signing idiom as ``adapters.LocalIdentityMinter``'s dispatch
 token, with a ``vxd_`` prefix so a verifier can tell it from an API key WITHOUT trying to parse it:
@@ -26,10 +28,12 @@ DERIVED from ``unit.v1.trigger`` (``message`` ⇒ human; ``scheduled``/``event``
 autonomous) — the same field the contract uses to derive input-trust, so the two trust axes cannot
 drift apart.
 
-VERIFICATION AND REVOCATION. Identity's ``/internal/validate`` verifies the token statelessly:
-signature, audience, expiry. It keeps no denylist, so a token is valid until its ``exp``.
-``verify_delegation`` accepts an optional ``revoked`` set of ``jti`` values for a verifier that keeps
-one; the product passes none.
+VERIFICATION AND REVOCATION. Identity's ``/internal/validate`` verifies the token: signature,
+audience, expiry, then revocation. When a worker's unit ends, agent-api writes the token's ``jti``
+to the service Redis for the token's remaining life (``control_plane/delegation_revocation.py``), and
+identity refuses a token so written, and refuses every delegation token while it cannot read that
+store (``admin_api/app/delegation_revocation.py``). ``verify_delegation`` also accepts an optional
+``revoked`` set of ``jti`` values, for a verifier that holds the set itself.
 
 THE SECRET is symmetric and lives in the environment of the minter (agent-api) and the verifier
 (admin-api) as ``VEXA_MCP_DELEGATION_SECRET``; this module never reads it — callers pass it in, which
