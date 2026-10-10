@@ -75,6 +75,14 @@ export VEXA_AGENT_MAX_CHAT_CONTINUATIONS="${VEXA_AGENT_MAX_CHAT_CONTINUATIONS:-4
 # it from this same environment. Set ADMIN_API_TOKEN (or ADMIN_TOKEN) explicitly when something
 # outside the container has to present it.
 export ADMIN_API_TOKEN="${ADMIN_API_TOKEN:-${ADMIN_TOKEN:-$(python3 -c "import secrets; print(secrets.token_hex(32))")}}"
+# A given key that this repository ever published is refused here, as admin-api, meeting-api and
+# flows refuse it at boot (fact admin-token-placeholders); `make up` replaces one in .env.
+case "$ADMIN_API_TOKEN" in
+    vexa-internal-secret|lite-internal-secret|changeme|change-me|CHANGE-ME|default|secret|dev-admin-token|CHANGE_ME|ci-admin-token|gate-admin-token|test-admin-token|test-admin-token-t3|vexa-admin-token|vexa-admin-token-2024|token|strong-random-token|your-secret|your-secret-token|your-secret-admin-token|your-secure-admin-token|your-admin-token|your-admin-api-token|your_admin_api_token|your_admin_api_key|your_admin_api_key_here|YOUR_ADMIN_KEY|YOUR_ADMIN_API_KEY|YOUR_ADMIN_TOKEN_FROM_DOTENV|admin-secret|admin-key|test-admin-key)
+        echo "ERROR: ADMIN_API_TOKEN / ADMIN_TOKEN is a value published in the Vexa repository - refusing to start." >&2
+        echo "  make -C deploy/lite up mints one into .env; by hand: openssl rand -hex 32." >&2
+        exit 1;;
+esac
 # The internal tier. lite is ONE container, so every service that shares this secret shares this
 # process's environment — which means the fallback can be MINTED per boot instead of shipped as
 # a literal. `lite-internal-secret` was published in this repository and was the exact value

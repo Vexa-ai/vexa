@@ -63,6 +63,9 @@ LEGACY_MINIO_IMAGE      ?=
 LEGACY_MINIO_ACCESS_KEY ?= vexa-access-key
 LEGACY_MINIO_SECRET_KEY ?= vexa-secret-key
 LEGACY_MINIO_BUCKET     ?= $(MINIO_BUCKET)
+# The admin key's published values, the list admin-api, meeting-api and flows refuse at boot (fact
+# admin-token-placeholders): `make up` replaces an .env ADMIN_TOKEN holding one with a minted key.
+ADMIN_PUBLISHED := ""|vexa-internal-secret|lite-internal-secret|changeme|change-me|CHANGE-ME|default|secret|dev-admin-token|CHANGE_ME|ci-admin-token|gate-admin-token|test-admin-token|test-admin-token-t3|vexa-admin-token|vexa-admin-token-2024|token|strong-random-token|your-secret|your-secret-token|your-secret-admin-token|your-secure-admin-token|your-admin-token|your-admin-api-token|your_admin_api_token|your_admin_api_key|your_admin_api_key_here|YOUR_ADMIN_KEY|YOUR_ADMIN_API_KEY|YOUR_ADMIN_TOKEN_FROM_DOTENV|admin-secret|admin-key|test-admin-key
 # The values the storage root refuses, the list compose's storage and Lite's entrypoint refuse.
 STORAGE_PUBLISHED := ""|vexa-access-key|vexa-secret-key|minioadmin|changeme|change-me|CHANGE-ME|default|secret|password
 
@@ -208,6 +211,10 @@ migrate-storage: preflight storage-up
 ## from its temporary init server before the database exists), and retries the ALTER while the image's
 ## own initialisation may still be writing the same role.
 ##
+## The admin key lives in .env too (ADMIN_TOKEN): unset, or one of the values admin-api, meeting-api
+## and flows refuse at boot (ADMIN_PUBLISHED), is replaced by a minted key written back to .env, so an
+## install that kept a published key boots on its next `up`. Never printed.
+##
 ## Note this recipe does NOT `-e` the spawn-default flags (TRANSCRIBE_ENABLED/RECORDING_ENABLED);
 ## they ride `--env-file`, where an empty value must keep the default. That is enforced in code
 ## (bot_spawn/env_flags.py), not here — compose's `${VAR:-true}` has no `--env-file` equivalent.
@@ -216,6 +223,12 @@ up: preflight storage-up
 	docker network inspect $(NETWORK) >/dev/null 2>&1 || docker network create $(NETWORK) >/dev/null; \
 	envv() { grep -E "^$$1=" $(ENV_FILE) 2>/dev/null | head -1 | cut -d= -f2- | sed -E 's/[[:space:]]+#.*$$//; s/[[:space:]]+$$//'; }; \
 	ADMIN_TK=$$(envv ADMIN_TOKEN); \
+	case "$$ADMIN_TK" in $(ADMIN_PUBLISHED)) \
+		ADMIN_TK=$$(openssl rand -hex 32); \
+		if grep -qE '^ADMIN_TOKEN=' "$(ENV_FILE)"; then sed -i.bak "s|^ADMIN_TOKEN=.*|ADMIN_TOKEN=$$ADMIN_TK|" "$(ENV_FILE)" && rm -f "$(ENV_FILE).bak"; \
+		else printf '\nADMIN_TOKEN=%s\n' "$$ADMIN_TK" >> "$(ENV_FILE)"; fi; \
+		echo "  Minted an admin key into $(ENV_FILE) (ADMIN_TOKEN)";; \
+	esac; \
 	TX_URL=$$(envv TRANSCRIPTION_SERVICE_URL); \
 	TX_TOKEN=$$(envv TRANSCRIPTION_SERVICE_TOKEN); \
 	IMAGE_TAG=$$(envv IMAGE_TAG); IMAGE_TAG=$${IMAGE_TAG:-v012}; \
@@ -307,6 +320,8 @@ init-db:
 ## boot provision-key.sh restarts the dashboard and terminal once the self-host key is minted. Then
 ## read every process's environment inside the container (tests/program_environments.py): the
 ## runtime caller credential is held by the runtime, agent-api and meeting-api and nothing else.
+## Then check the services (tests/service_checks.py): the admin key is not a published one, and
+## admin-api reads its delegation revocation store in Redis.
 ## Then start a worker for a numeric and a named subject, a bot, and refused dispatches through the
 ## runtime (tests/child_identities.py): no child is root, each runs as its own uid, and none can read
 ## another process's environment, a secret on any command line, or root's state.
@@ -321,6 +336,7 @@ test:
 		if [ $$OK = 1 ]; then echo "  ✓ $$NAME (:$$PORT)"; else echo "  ✗ $$NAME not responding after $(TEST_WAIT_SECONDS)s (:$$PORT)"; FAIL=1; fi; \
 	done; \
 	docker exec -i $(APP_CONTAINER) python3 - < "$(ROOT)/deploy/lite/tests/program_environments.py" || FAIL=1; \
+	docker exec -i $(APP_CONTAINER) python3 - < "$(ROOT)/deploy/lite/tests/service_checks.py" || FAIL=1; \
 	docker exec -i $(APP_CONTAINER) python3 - < "$(ROOT)/deploy/lite/tests/child_identities.py" || FAIL=1; \
 	exit $$FAIL
 

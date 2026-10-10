@@ -745,6 +745,17 @@
           "path": "deploy/compose/mint-dev-env.sh",
           "pattern": "admin_published\\(\\) \\{\\n  case \"\\$1\" in ([^)]*)\\) return 0;;",
           "note": "`make up` replaces an .env ADMIN_TOKEN holding one of these"
+        },
+        {
+          "path": "deploy/lite/Makefile",
+          "pattern": "^ADMIN_PUBLISHED := (.*)$",
+          "flags": "m",
+          "note": "Lite `make up` replaces an .env ADMIN_TOKEN holding one of these"
+        },
+        {
+          "path": "deploy/lite/entrypoint.sh",
+          "pattern": "case \"\\$ADMIN_API_TOKEN\" in\\n\\s*([^)\\n]*)\\)",
+          "note": "Lite's boot refusal of a given admin key"
         }
       ]
     },
