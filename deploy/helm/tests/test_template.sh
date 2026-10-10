@@ -1139,7 +1139,7 @@ fboth="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set 
 if grep -q 'flows.apiKey and flows.existingSecret are both set' <<< "$fboth"; then echo "  OK: flows.apiKey with flows.existingSecret is refused"
 else echo "  FAIL: flows.apiKey with flows.existingSecret rendered"; fail=1; fi
 
-# The model catalog (ADR-0042): absent by default; when set, agent-api carries it as one JSON env var
+# The model catalog (ADR-0043): absent by default; when set, agent-api carries it as one JSON env var
 # and each provider secret it references by env:NAME from a Secret, never as a value.
 if grep -q 'name: VEXA_MODEL_CATALOG' <<< "$RENDER"; then echo "  FAIL: a model catalog rendered with none set"; fail=1
 else echo "  OK: no model catalog unless one is set"; fi

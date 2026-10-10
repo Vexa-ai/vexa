@@ -21,7 +21,7 @@ same as `meetings/contracts/transcript.v1`), it no longer PUBLISHES it.
 | **`event.v1`** | an external event (e.g. email, meeting) mapped into a `unit.v1` Invocation — generic event ingress. | no |
 | **`proactive-card.v1`** | a proactive output card with actions (agent-initiated surface). | no |
 | **`invoke.v1`** | the legacy meetings→agent invocation seam. **Sealed**; retiring as callers move to `unit.v1`. | **yes** |
-| **`models.v1`** | the model catalog: `Catalog` (the operator's `VEXA_MODEL_CATALOG` — providers by adapter, models, access, default; credentials only as `secret_ref`) and `ModelList` (what `GET /api/models/catalog` serves one person). ADR-0042. | **yes** |
+| **`models.v1`** | the model catalog: `Catalog` (the operator's `VEXA_MODEL_CATALOG` — providers by adapter, models, access, default; credentials only as `secret_ref`) and `ModelList` (what `GET /api/models/catalog` serves one person). ADR-0043. | **yes** |
 | **`credential-broker.v1`** | the Connections credential broker's wire: the signed role assertion (`agent` · `human` · `git`) and every route's request and response body. Carries the canonical Python signer (`assertion.py`) its callers vendor. | **yes** |
 
 Note: `schedule.v1` (the Scheduler job spec routines compile to) is owned by `runtime`, not `agent` —

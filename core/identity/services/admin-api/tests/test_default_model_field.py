@@ -1,4 +1,4 @@
-"""Settings → Models `default_model` (ADR-0042): a model-catalog id, shape-checked at write time.
+"""Settings → Models `default_model` (ADR-0043): a model-catalog id, shape-checked at write time.
 
 The catalog is agent-api's (VEXA_MODEL_CATALOG), so identity never checks the id against a list —
 only that it is shaped like one (models.v1 ModelId, held equal by the `model-catalog-id` fact in

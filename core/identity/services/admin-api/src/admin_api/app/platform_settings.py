@@ -50,7 +50,7 @@ MODEL_MODES = ("subscription", "custom")
 # stale is always the one furthest from the code that uses it.
 # The copilot's second model dial is deliberately absent — it went with the in-product
 # inference pipeline (PRD decision 34).
-# default_model: the model-catalog id (ADR-0042) a person runs on before they pick one in a chat —
+# default_model: the model-catalog id (ADR-0043) a person runs on before they pick one in a chat —
 # per user, or the organisation's on the platform tier. Stored here as an opaque catalog id, shape-
 # checked and never validated against a list: the catalog is agent-api's (VEXA_MODEL_CATALOG), and
 # agent-api skips a stored default that is gone or not the person's, the way it drops a stale runner.

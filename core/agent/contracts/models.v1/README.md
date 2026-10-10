@@ -25,4 +25,4 @@ which is a `models.v2` or a human re-seal (`gate:contract-version`).
 
 `gate:schema` validates `golden/` against the schema (`validate.mjs`); the Python side validates
 through `contracts.validate_model_catalog_errors` / `validate_model_list`. Design:
-[ADR-0042](../../../../docs/adr/0042-model-choice-catalog-behind-a-provider-port.md).
+[ADR-0043](../../../../docs/adr/0043-model-choice-catalog-behind-a-provider-port.md).

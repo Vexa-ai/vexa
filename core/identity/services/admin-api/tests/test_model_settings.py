@@ -122,7 +122,7 @@ def test_model_config_resolves_user_over_platform(client):
 
 
 def test_default_model_resolves_person_over_organisation(client):
-    """ADR-0042: the model a person runs on before picking one — their own default, else the
+    """ADR-0043: the model a person runs on before picking one — their own default, else the
     organisation's (platform tier). Stored as an opaque catalog id; agent-api owns the catalog."""
     uid, tok = _user_token(client, email="default-model@vexa.ai")
     assert client.put("/internal/settings/models", headers=_internal(),

@@ -1,4 +1,4 @@
-/** The model picker (ADR-0042): which of the deployment's models THIS chat runs on.
+/** The model picker (ADR-0043): which of the deployment's models THIS chat runs on.
  *
  *  It lives in the composer, beside the controls that act on the next turn, because that is when a
  *  pick takes effect: the chat's next turn starts a fresh agent on the picked model. It shows only

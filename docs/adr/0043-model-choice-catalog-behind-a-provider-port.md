@@ -1,4 +1,4 @@
-# ADR 0042 — Model choice: an operator-declared catalog behind a provider port, picked per chat
+# ADR 0043 — Model choice: an operator-declared catalog behind a provider port, picked per chat
 
 **Status:** proposed · 2026-10-10 · for v0.13.2 ([#1796](https://github.com/Vexa-ai/vexa/issues/1796)) ·
 applies P4, P5, P14, P18, P20 and P23 · keeps the route invariants of

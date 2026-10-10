@@ -1900,7 +1900,7 @@
       "enforced": true,
       "canonical": "core/agent/contracts/models.v1/models.schema.json — $defs/ModelId",
       "how_to_agree": "change the contract's ModelId pattern and admin-api's MODEL_ID_SOURCE in one change (a re-seal of models.v1)",
-      "why": "ADR-0042. A person's and the organisation's default model are stored by admin-api (Settings → Models default_model), which is in the identity domain and cannot read the agent domain's contract, so it re-states the shape to refuse a malformed id at write time. agent-api reads the pattern from the contract itself. Two shapes would let admin-api store a default agent-api can never match, and a stale default is skipped silently by design.",
+      "why": "ADR-0043. A person's and the organisation's default model are stored by admin-api (Settings → Models default_model), which is in the identity domain and cannot read the agent domain's contract, so it re-states the shape to refuse a malformed id at write time. agent-api reads the pattern from the contract itself. Two shapes would let admin-api store a default agent-api can never match, and a stale default is skipped silently by design.",
       "sites": [
         {
           "path": "core/agent/contracts/models.v1/models.schema.json",

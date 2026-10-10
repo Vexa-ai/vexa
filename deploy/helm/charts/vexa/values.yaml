@@ -208,7 +208,7 @@ models:
   anthropicSonnetModel: ""
   anthropicHaikuModel: ""
   agentModel: ""        # VEXA_AGENT_MODEL
-  # The model catalog (VEXA_MODEL_CATALOG, ADR-0042; docs: https://docs.vexa.ai/model-catalog): the
+  # The model catalog (VEXA_MODEL_CATALOG, ADR-0043; docs: https://docs.vexa.ai/model-catalog): the
   # models people pick per chat in the terminal. Empty = no catalog — every turn runs on agentModel
   # and each person's Settings → Models, as before. A credential is never written here: a provider
   # names a variable (secret_ref: env:NAME) and catalogSecrets delivers it from a Secret.

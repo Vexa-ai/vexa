@@ -1,4 +1,4 @@
-/** Model choice (ADR-0042) — the client edges of the model picker.
+/** Model choice (ADR-0043) — the client edges of the model picker.
  *
  *  The deployment's catalog is agent-api's (`GET /api/models/catalog`, the `models.v1` ModelList):
  *  only the models THIS person may pick, the one they run on before picking, and — for one chat —

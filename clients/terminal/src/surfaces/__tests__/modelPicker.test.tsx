@@ -1,4 +1,4 @@
-/** The model picker (ADR-0042) — a chat runs on the model its person picked.
+/** The model picker (ADR-0043) — a chat runs on the model its person picked.
  *
  *  Pinned here: the picker renders exactly the list agent-api sends for this person (role
  *  visibility is the server's — an admins-only model is simply absent), nothing at all on a

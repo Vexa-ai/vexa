@@ -1,7 +1,7 @@
 # agent · control_plane · model_providers
 
 The operator's model catalog, and the provider port each model resolves through. Design:
-[ADR-0042](../../../../docs/adr/0042-model-choice-catalog-behind-a-provider-port.md).
+[ADR-0043](../../../../docs/adr/0043-model-choice-catalog-behind-a-provider-port.md).
 
 **One concern:** given the catalog an operator declared (`VEXA_MODEL_CATALOG`, `models.v1` Catalog),
 answer three questions per person — *which models may I pick*, *which do I run on before I pick*,

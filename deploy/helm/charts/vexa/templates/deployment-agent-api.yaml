@@ -131,7 +131,7 @@ spec:
             - name: VEXA_AGENT_MODEL
               value: {{ .Values.models.agentModel | default "" | quote }}
             {{- with .Values.models.catalog }}
-            # The model catalog (models.v1 Catalog, ADR-0042): the providers and models people pick
+            # The model catalog (models.v1 Catalog, ADR-0043): the providers and models people pick
             # per chat. Refused whole at boot when anything in it is wrong. It holds no credential:
             # each provider's secret_ref (env:NAME) is delivered below from models.catalogSecrets.
             - name: VEXA_MODEL_CATALOG

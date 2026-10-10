@@ -46,7 +46,7 @@ const KINDS: [Fault, string][] = [
    "Model provider (api.anthropic.com) · unavailable"],
   [{ source: "model-provider", kind: "refused", status: 400, provider: "openrouter.ai", detail: "invalid model id" },
    "Model provider (openrouter.ai) · refused the request (400)"],
-  // the chat's model pick, refused by agent-api before any request (ADR-0042)
+  // the chat's model pick, refused by agent-api before any request (ADR-0043)
   [{ source: "model-provider", kind: "unknown_model", status: null, provider: "", model: "retired-model",
      detail: "The model 'retired-model' is not offered on this deployment any more.", remedy: "Pick another model for this chat." },
    "Model provider · model no longer offered"],

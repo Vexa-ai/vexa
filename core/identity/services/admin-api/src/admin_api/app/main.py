@@ -313,7 +313,7 @@ class ModelPrefsUpdate(BaseModel):
     extra_body: Optional[str] = None
     effort: Optional[str] = None  # claude-code reasoning-effort pin (low|medium|high|xhigh); empty = unset
     runner: Optional[str] = None  # the harness that runs workspace turns; empty = the deployment's
-    # the model-catalog id (ADR-0042) new and unpicked chats run on; empty = the organisation's
+    # the model-catalog id (ADR-0043) new and unpicked chats run on; empty = the organisation's
     # default, else the catalog's
     default_model: Optional[str] = None
 

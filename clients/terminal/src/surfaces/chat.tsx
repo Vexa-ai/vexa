@@ -1802,7 +1802,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
             rows={1}
             style={{ flex: 1, background: "none", border: "none", outline: "none", color: "var(--t1)", fontSize: 14, lineHeight: "20px", minWidth: 0, minHeight: 28, maxHeight: MAX_TEXTAREA_HEIGHT, resize: "none", overflowY: "hidden", padding: "4px 0", margin: 0, fontFamily: "inherit" }}
           />
-          {/* THE MODEL THIS CHAT RUNS ON (ADR-0042) — beside the controls that act on the next
+          {/* THE MODEL THIS CHAT RUNS ON (ADR-0043) — beside the controls that act on the next
               turn, because that is when a pick takes effect. Absent on a deployment with no catalog. */}
           <ModelPicker session={session} />
           <button type="button" aria-label="Attach files" title="Attach files" disabled={busy || uploading} onClick={() => fileInputRef.current?.click()}
