@@ -520,8 +520,11 @@ def create_app(
         except KeyError:
             pass
         target = (slug or "").strip()
-        if target and membership_mod.is_member(wsr.root, target, subject) is not None:
-            return membership_mod._ws_dir(wsr.root, target)
+        try:
+            if target and membership_mod.is_member(wsr.root, target, subject) is not None:
+                return membership_mod._ws_dir(wsr.root, target)
+        except MembershipError:
+            pass                # not one workspace name: nothing to manage
         raise HTTPException(status_code=404, detail="workspace not found")
 
     def _repo(raw: "Optional[str]") -> "Optional[str]":

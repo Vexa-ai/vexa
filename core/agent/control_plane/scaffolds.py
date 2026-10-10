@@ -491,9 +491,10 @@ def group_state(workspaces_root: str | Path, group_slug: str) -> str:
     Deliberately read off the DESK rather than off "does another meeting share this binding", which
     is the client's rule: the client already holds the meetings list, the server would have to fetch
     it, and what the preset actually branches on is whether there is group memory to build ON."""
-    if not group_slug:
-        return "absent"
-    root = Path(workspaces_root) / str(group_slug)
+    g = str(group_slug or "")
+    if not g or "/" in g or "\\" in g or g.startswith("."):
+        return "absent"                 # not one workspace name: bound to nothing
+    root = Path(workspaces_root) / g
     if not root.is_dir():
         # A shared workspace lives in its own store slot; an unmaterialised one is still "new".
         return "new"

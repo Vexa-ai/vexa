@@ -36,6 +36,7 @@ from shared.gitenv import transport_env
 from shared.gitexec import run_git
 from shared.seeding import resolve_seed_dir, seed_workspace, validate_seed
 from shared.token_destination import embed_token
+from workspaces.shared import workspace_paths as wpaths
 
 log = logging.getLogger(__name__)
 
@@ -53,6 +54,9 @@ PRIVATE_ROLE = "private"
 # the membership index + authoritatively re-checked against the workspace's own policy/members.json. Write
 # access is gated by the member's role (contributor/owner write; viewer is read-only).
 SHARED_ROLE = "shared"
+# THE WORKSPACE NAMING RULE: one name, starting alphanumeric — so never a separator, never a dotname,
+# never ``.`` or ``..``. Every slug and every shared workspace id this module joins onto a path meets it.
+_WORKSPACE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$")
 
 # Inject the actual clone for tests (a local file repo, no network). Signature: (repo_url, ref, dest, token).
 CloneFn = Callable[[str, str, Path, Optional[str]], None]
@@ -101,13 +105,30 @@ class ActiveResult:
     cloned: bool = False      # True == a fresh git clone happened (activate of a never-seen repo)
 
 
+def _slot(store: Path, slug: Optional[str]) -> Path:
+    """``store/<slug>`` for a slug that names ONE slot of this store, or ``KeyError``.
+
+    Every path this module builds from a slug goes through here. A slug is one name under the
+    workspace naming rule (``_WORKSPACE_ID_RE``: no separator, no leading dot, so never ``.`` or
+    ``..``), and the joined path must still resolve inside ``store`` — the subject's own store, or
+    the one shared workspace's store. Anything else is not a workspace of this store."""
+    s = (slug or "").strip()
+    if not _WORKSPACE_ID_RE.fullmatch(s):
+        raise KeyError(s)
+    try:
+        wpaths.resolve_inside(store, s)
+    except wpaths.PathRefused:
+        raise KeyError(s) from None
+    return store / s
+
+
 def _slug_dir(root: Path, subject: str, state: dict, slug: str) -> Path:
     """Where a slug's workspace tree lives on disk: the SEED-SLOT occupant sits in place at
     ``<root>/<subject>``; every other slug lives in its store slot ``<root>/.attached/<subject>/<slug>``.
     A pure storage-location detail (not a rank) — active + parked members alike resolve through here."""
     if slug == _seed_slot_slug(state):
         return _safe_subject_dir(root, subject)
-    return _store(root, subject) / slug
+    return _slot(_store(root, subject), slug)
 
 
 def workspace_slot_dir(root: str | Path, subject: str, slug: str) -> Path:
@@ -184,6 +205,8 @@ def _git_clone(repo_url: str, ref: str, dest: Path, token: Optional[str] = None,
 
 
 def _safe_subject_dir(root: Path, subject: str) -> Path:
+    if not subject or "/" in subject or "\\" in subject:   # one name, never a path
+        raise ValueError("invalid subject")
     ws = (root / subject).resolve()
     if ws != root.resolve() and root.resolve() not in ws.parents:
         raise ValueError("invalid subject")
@@ -247,9 +270,9 @@ def _normalized_active_set(state: dict) -> list[str]:
     seed_slot = _seed_slot_slug(state)
     ordered: list[str] = []
     for slug in state.get("active_set", []):
-        if slug in ordered:
+        if not isinstance(slug, str) or slug in ordered:
             continue
-        if slug == seed_slot or slug in state.get("slots", {}):
+        if slug == seed_slot or (slug in state.get("slots", {}) and _WORKSPACE_ID_RE.fullmatch(slug)):
             ordered.append(slug)
     return ordered
 
@@ -325,6 +348,7 @@ def swap_workspace(
     state = _load_state(store)
 
     target_slug = (slug or "").strip() or (SEED_SLOT if not repo_url else _slug(repo_url))
+    parked_target = _slot(store, target_slug)      # KeyError: not a slot of this subject's store
     fresh_seed = bool(fresh) and target_slug == SEED_SLOT  # 'start fresh' only applies to the default
 
     # No-op: the requested repo is already mounted (and really present on disk). A never-swapped subject
@@ -340,7 +364,6 @@ def swap_workspace(
 
     # ── PHASE 1: build the target tree OUT OF PLACE — the live workspace is NOT touched yet, so a clone
     # failure (private repo, bad token, network) raises here leaving everything exactly as it was. ──────
-    parked_target = store / target_slug
     cloned = False
     staged: Path                       # the ready-to-activate tree we'll move into active_dir
     restore = False                    # True == staged is the parked slot itself (swap-back; move, don't rebuild)
@@ -506,6 +529,8 @@ def ensure_workspace_shareable(root: str | Path, subject: str, slug: str) -> tup
 
     rootp = Path(root).resolve()
     _safe_subject_dir(rootp, subject)
+    if not _WORKSPACE_ID_RE.fullmatch(slug or ""):
+        raise KeyError(slug)
     store = _store(rootp, subject)
     state = _load_state(store)
     primary = _seed_slot_slug(state)
@@ -568,7 +593,7 @@ def delete_workspace(root: str | Path, subject: str, slug: str) -> None:
         raise ValueError("the baseline workspace can't be deleted")
     if slug not in state["slots"]:
         raise KeyError(slug)
-    slot_dir = (store / slug).resolve()
+    slot_dir = _slot(store, slug).resolve()
     if store.resolve() in slot_dir.parents and slot_dir.exists():  # only ever a slot under this subject's store
         shutil.rmtree(slot_dir, ignore_errors=True)
     state["slots"].pop(slug, None)
@@ -583,6 +608,8 @@ def ensure_workspace_private(root: str | Path, subject: str, workspace_id: str) 
     After this, the workspace is private again — other members lose access (its top-level path is gone)."""
     rootp = Path(root).resolve()
     _safe_subject_dir(rootp, subject)
+    if not _WORKSPACE_ID_RE.fullmatch(workspace_id or ""):
+        raise KeyError(workspace_id)
     ws = (rootp / workspace_id).resolve()
     if not ws.exists() or rootp not in ws.parents:
         raise KeyError(workspace_id)
@@ -618,8 +645,9 @@ def shared_active_mounts(root: str | Path, subject: str, memberships: list[dict]
     mounts: list[ActiveMount] = []
     for entry in memberships:
         ws_id = (entry.get("workspace_id") or "").strip() if isinstance(entry, dict) else ""
-        if not ws_id or ws_id == subject or ws_id.startswith(".") or ws_id in membership.RESERVED_SLUGS:
-            continue  # own baseline / reserved / dot-namespaced are never shared mounts
+        if (not ws_id or ws_id == subject or ws_id.startswith(".") or "/" in ws_id or "\\" in ws_id
+                or ws_id in membership.RESERVED_SLUGS):
+            continue  # own baseline / reserved / dot-namespaced / not one name are never shared mounts
         if ws_id in hidden:
             continue  # switched off by the user — keep the membership, just don't mount it
         ws_dir = (rootp / ws_id).resolve()
@@ -667,6 +695,7 @@ def activate_workspace(
     state = _load_state(store)
 
     target_slug = (slug or "").strip() or (SEED_SLOT if not repo_url else _slug(repo_url))
+    slot_dir = _slot(store, target_slug)           # KeyError: not a slot of this subject's store
 
     if target_slug in _normalized_active_set(state):
         return ActiveResult(subject, target_slug, changed=False)   # already active — uniform for every slug
@@ -682,7 +711,6 @@ def activate_workspace(
 
     # Materialize the slot tree OUT OF PLACE if it isn't already parked — a clone failure raises here
     # leaving the active set untouched (mirrors swap's phase-1 discipline).
-    slot_dir = store / target_slug
     cloned = False
     if not slot_dir.exists():
         if repo_url:
@@ -822,7 +850,7 @@ def _reseed(active_dir: Path) -> None:
 
 def _park(store: Path, slug: str, src: Path) -> None:
     """Move the live tree ``src`` into its parking slot ``store/slug`` (superseding a stale park there)."""
-    dst = store / slug
+    dst = _slot(store, slug)
     if dst.exists():
         shutil.rmtree(dst)  # supersede a stale park (its live copy was the active one)
     dst.parent.mkdir(parents=True, exist_ok=True)
@@ -904,7 +932,6 @@ def rename_workspace(root: str | Path, subject: str, slug: str, name: Optional[s
 
 SHARED_STORE_DIRNAME = ".attached-shared"   # <root>/.attached-shared/<workspace_id>/<slug> (dot ⇒ skipped by every scan)
 POLICY_DIRNAME = "policy"                   # the member list — travels across an attach
-_WORKSPACE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$")
 
 
 def shared_store(root: str | Path, workspace_id: str) -> Path:
@@ -915,7 +942,7 @@ def shared_store(root: str | Path, workspace_id: str) -> Path:
 
 def _safe_workspace_id(workspace_id: str) -> str:
     wid = (workspace_id or "").strip()
-    if not _WORKSPACE_ID_RE.match(wid) or wid in ("seed", SEED_BACKUP_SLOT):
+    if not _WORKSPACE_ID_RE.fullmatch(wid) or wid in ("seed", SEED_BACKUP_SLOT):
         raise ValueError("invalid workspace id")
     return wid
 
@@ -1022,6 +1049,7 @@ def attach_repo_at(
     store = Path(store)
     state = _plain_state(store)
     target_slug = (slug or "").strip() or (SEED_SLOT if not repo_url else _slug(repo_url))
+    parked_target = _slot(store, target_slug)      # KeyError: not a slot of this workspace's store
 
     live = (active_dir / ".git").exists()
     if state.get("active") == target_slug and live:
@@ -1033,7 +1061,6 @@ def attach_repo_at(
                           swapped=False, cloned=False, parked_slug=None)
 
     # ── PHASE 1 — build out of place (a failure here leaves everything exactly as it was) ──────────
-    parked_target = store / target_slug
     cloned = False
     restore = False
     if parked_target.exists():

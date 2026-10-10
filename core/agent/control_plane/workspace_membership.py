@@ -379,7 +379,14 @@ def hash_token(token: str) -> str:
 
 def _ws_dir(root: Path, workspace_id: str) -> Path:
     """The on-disk workspace repo for ``workspace_id`` (``<root>/<workspace_id>``), traversal-guarded —
-    the workspace id is the owner subject's slug (the dir the dispatch mounts)."""
+    the workspace id is the owner subject's slug (the dir the dispatch mounts).
+
+    A workspace id is ONE top-level name: no separator and no leading dot. A dotted or multi-segment
+    id would name a tree inside a store (``.attached/<subject>/<slot>``) — a private workspace that is
+    nobody's shared workspace, whatever a ``policy/members.json`` left inside it says."""
+    wid = str(workspace_id or "")
+    if not wid or "/" in wid or "\\" in wid or wid.startswith("."):
+        raise MembershipError("invalid workspace id", status=400)
     root = Path(root).resolve()
     ws = (root / workspace_id).resolve()
     if ws != root and root not in ws.parents:
