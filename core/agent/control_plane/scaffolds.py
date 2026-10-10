@@ -664,13 +664,16 @@ def invited_meetings(address: str) -> list[dict]:
     addr = str(address or "").strip().lower()
     if not url or not addr:
         return []
-    import psycopg
 
     want = json.dumps([{"email": addr}])
-    with psycopg.connect(url, connect_timeout=5) as cx:
-        rows = cx.execute(
-            "SELECT id, data FROM meetings WHERE data->'attendees' @> %s::jsonb "
-            "ORDER BY id DESC LIMIT 10", (want,)).fetchall()
+    cx = meetings_db_connect(url)
+    try:
+        cur = cx.cursor()
+        cur.execute("SELECT id, data FROM meetings WHERE data->'attendees' @> %s::jsonb "
+                    "ORDER BY id DESC LIMIT 10", (want,))
+        rows = cur.fetchall()
+    finally:
+        cx.close()
     out: list[dict] = []
     for rid, data in rows:
         d = data if isinstance(data, dict) else {}
@@ -678,3 +681,50 @@ def invited_meetings(address: str) -> list[dict]:
                     "title": d.get("title") or "",
                     "when": d.get("scheduled_at") or ""})
     return out
+
+
+#: libpq's `sslmode` values.
+SSL_MODES = ("disable", "allow", "prefer", "require", "verify-ca", "verify-full")
+
+
+def meetings_db_connect(url: str):
+    """A pg8000 connection to the meetings database a libpq-style URL names
+    (`postgres[ql][+driver]://user:password@host:port/db?sslmode=…`).
+
+    pg8000 is BSD-3-Clause and pure Python; the LGPL drivers stay out of this image, the same choice
+    core/flows makes. pg8000 takes TLS as an `ssl_context`, so libpq's `sslmode` and `sslrootcert` are
+    read here: disable and allow connect in plaintext; prefer (the default) offers TLS unverified and
+    falls back to plaintext when the server refuses it; require insists on TLS, verified like verify-ca
+    when sslrootcert names a CA; verify-ca checks the chain and verify-full the host name as well."""
+    import ssl
+    from urllib.parse import parse_qs, unquote, urlsplit
+
+    import pg8000.dbapi
+
+    u = urlsplit(url)
+    if not u.scheme.startswith("postgres"):
+        raise ValueError(f"VEXA_MEETINGS_DB_URL must be a postgres:// URL, not {u.scheme!r}")
+    query = {k: v[-1] for k, v in parse_qs(u.query).items()}
+    mode = query.get("sslmode", "prefer")
+    rootcert = query.get("sslrootcert")
+    if mode not in SSL_MODES:
+        raise ValueError(f"sslmode={mode!r} is not one of {', '.join(SSL_MODES)}")
+    kwargs = {"user": unquote(u.username or ""), "password": unquote(u.password) if u.password else None,
+              "host": u.hostname or "localhost", "port": u.port or 5432,
+              "database": unquote(u.path.lstrip("/")) or None, "timeout": 5}
+    if mode in ("verify-ca", "verify-full") or (mode == "require" and rootcert):
+        context = ssl.create_default_context(cafile=rootcert or None)
+        context.check_hostname = mode == "verify-full"
+        kwargs["ssl_context"] = context
+    elif mode in ("prefer", "require"):
+        context = ssl.create_default_context()
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+        kwargs["ssl_context"] = context
+    try:
+        return pg8000.dbapi.connect(**kwargs)
+    except pg8000.dbapi.InterfaceError as exc:
+        if mode != "prefer" or "refuses SSL" not in str(exc):
+            raise
+        kwargs.pop("ssl_context")
+        return pg8000.dbapi.connect(**kwargs)

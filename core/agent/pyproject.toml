@@ -26,6 +26,9 @@ control-plane = [
     # gateway-identity.v1: verifies the gateway's Ed25519 signature with its public key (control plane only;
     # the worker never sees an identity token). Apache-2.0 OR BSD-3-Clause.
     "cryptography>=50.0.1,<51",
+    # The meetings database read behind invited_meetings (scaffolds.py). BSD-3-Clause, pure Python;
+    # not psycopg, which is LGPL-3.0-only. GHSA-wq2g-r956-j8cc is fixed in 1.31.5.
+    "pg8000>=1.31.5,<2",
 ]
 # worker image (claude-in-container) — base only; claude-code is an npm global, not a pip dep.
 worker = []
