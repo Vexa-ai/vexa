@@ -32,8 +32,9 @@ export function MeetingPageHeader({ meetingId, body, path }: { meetingId: string
   // down to 4em) and the metadata takes what is left, truncating with the full text on hover. Only
   // a control that cannot fit even then wraps below, never under the header's icons.
   // A zero basis: in the wrapping document header this shares the first line with the icon group
-  // instead of claiming the whole line and pushing the icons onto a row of their own.
-  return <div style={{ flex: "1 1 0%", minWidth: 0 }}>
+  // instead of claiming the whole line and pushing the icons onto a row of their own. A large grow
+  // factor: the header's spacer (also `1 1 0%`) would otherwise take half the free width.
+  return <div style={{ flex: "100 1 0%", minWidth: 0 }}>
     <div style={{ display: "flex", alignItems: "baseline", flexWrap: "wrap", gap: 8, rowGap: 4, minWidth: 0 }}>
       <div data-doc-name title={path} style={{ ...ty.title, fontSize: 13.5, flex: "3 1 0%", minWidth: "4em", maxWidth: "max-content", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</div>
       {metadata && <div data-meeting-metadata title={metadata} style={{ ...ty.meta, flex: "1 1 0%", minWidth: 0, color: "var(--t3)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{metadata}</div>}
