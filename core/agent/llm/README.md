@@ -40,7 +40,7 @@ trivial fakes.
   following a link (`core/workspaces/shared/workspace_paths.py`, parity fact `workspace-paths`).
 - **Panel events**: `tool_events.py` — the closed tool vocabularies and the event a successful
   result earns (a write opens its file, a bot send opens the transcript, `open_page`, chips, a
-  workspace joining the chat). Imported by all three harnesses so a turn paints the same screen
+  workspace joining the chat, and a fetched page becomes a `sources` frame — the turn's citations). Imported by all three harnesses so a turn paints the same screen
   whichever one runs.
 
 ### The runner matrix

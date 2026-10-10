@@ -84,6 +84,42 @@ _FOCUS_TOOLS = frozenset({
 })
 
 
+# THE PAGES A TURN READ ARE ITS SOURCES (terminal design guidelines §4.17). A successful fetch of an
+# http(s) page is the one tool result that is, by itself, a citation: the agent read that page to
+# answer. Searches are not — a result list is candidates, not what was read. The terminal renders
+# the `sources` events of a turn as one citation list (title, host, date once), instead of lifting a
+# "Sources" Markdown list out of the prose. A closed vocabulary, for the reason the others are.
+_FETCH_TOOLS = frozenset({
+    "WebFetch",
+    "mcp__vexa__web_fetch",
+})
+
+
+def _fetched_source(args: object, content: object) -> "dict | None":
+    """The `sources` event one successful page fetch earns, or None.
+
+    One item per event: the terminal merges a turn's items by URL, so no harness has to keep a
+    per-turn ledger. The URL comes from the call's own arguments (what was asked for); the title,
+    when the tool reports one, from its JSON result. Only http(s) — anything else is not a page a
+    reader can open, and the terminal would refuse it anyway."""
+    url = str((args or {}).get("url") or "").strip() if isinstance(args, dict) else ""
+    if not url.lower().startswith(("http://", "https://")) or len(url) > 2048:
+        return None
+    item: dict = {"url": url}
+    try:
+        obj = json.loads(_tool_result_text(content))
+    except (json.JSONDecodeError, TypeError):
+        obj = None
+    if isinstance(obj, dict):
+        title = str(obj.get("title") or "").strip()
+        if title:
+            item["title"] = title[:300]
+        final = str(obj.get("url") or "").strip()
+        if final.lower().startswith(("http://", "https://")):
+            item["url"] = final[:2048]
+    return {"type": "sources", "items": [item]}
+
+
 def _tool_result_text(content: object) -> str:
     """The tool result as one string, whichever shape the harness handed it in.
 
