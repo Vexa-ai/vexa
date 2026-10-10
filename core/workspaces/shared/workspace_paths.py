@@ -24,7 +24,12 @@ ones that returned a value each had at least one caller that did not look at it.
 """
 from __future__ import annotations
 
+import os
+import stat
+import threading
+import time
 from pathlib import Path
+from typing import Optional
 
 #: Directories no caller-supplied path may reach into. ``allow=(".git",)`` opens one for a route
 #: that owns it — nothing does today; the parameter exists so a future one need not weaken the rule.
@@ -88,3 +93,187 @@ def is_inside(root, path: str, *, allow=()) -> bool:
     except (PathRefused, OSError):
         return False
     return True
+
+
+# ── reaching a FIXED platform file inside a work tree, without following a link ──────────────────
+#
+# ``resolve_inside`` above answers about a CALLER-supplied path and refuses one that leaves the
+# workspace. These helpers are for the other half: a path the PLATFORM fixes (``PURPOSE``,
+# ``.claude/mcp.json``, ``kg/entities/<kind>/<slug>.md``, ``.vexa/workspace.json``) that agent-api or
+# the worker — running as root — reads or writes inside a work tree the model's tools can also write
+# during a turn. A plain ``open``/``read_text``/``write_text`` follows a symlink the tools user plants
+# at the file or at any directory above it, so the root process can be redirected to read another
+# tenant's file (its content then returned to a caller or folded into the model's prompt) or to write
+# through the link (a credential or an identity landing wherever the link points). So each directory
+# component is opened ``O_NOFOLLOW`` from its parent's descriptor, the file is read only when it is a
+# regular file with a single hard link, and a write goes to a new ``O_EXCL`` file renamed into place.
+# ``rel`` is still split through ``relative_parts`` (absolute / ``..`` / a reserved dir refused unless
+# ``allow`` names it), because a fixed path is no reason to skip the textual rule.
+_DIR_NOFOLLOW = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+_FILE_NOFOLLOW = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0)
+_CREATE_NEW = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+
+
+def _open_root(root) -> int:
+    """A descriptor for the mount ``root`` itself (opened as given — it is the platform's trusted
+    base, resolved by the dispatcher). Raises ``OSError`` if it is not a directory."""
+    return os.open(root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0))
+
+
+def dir_fd_inside(root, parts, *, create: bool = False, mode: int = 0o755) -> int:
+    """A descriptor for ``root/<parts…>``, every component below ``root`` opened without following a
+    link; a symlink or non-directory on the way raises :class:`PathRefused` (``kind='symlink'``). With
+    ``create`` a missing component is made (0o755) first — ``root`` itself included, so a write to a
+    workspace the seed has not materialized yet still lands. The caller closes the descriptor."""
+    if create:
+        Path(root).mkdir(parents=True, exist_ok=True)
+    fd = _open_root(root)
+    try:
+        for part in parts:
+            if create:
+                try:
+                    os.mkdir(part, mode, dir_fd=fd)
+                except FileExistsError:
+                    pass                 # already a real directory → the O_NOFOLLOW open confirms it
+                except OSError as exc:
+                    # a symlink (EEXIST is FileExistsError; a symlink-to-dir gives ENOTDIR/ELOOP here)
+                    raise PathRefused(REFUSAL, kind="symlink") from exc
+            try:
+                nxt = os.open(part, _DIR_NOFOLLOW, dir_fd=fd)
+            except OSError as exc:
+                raise PathRefused(REFUSAL, kind="symlink") from exc
+            os.close(fd)
+            fd = nxt
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def read_text_inside(root, rel: str, *, max_bytes: Optional[int] = None, allow=()) -> Optional[str]:
+    """The UTF-8 text of the FIXED path ``root/<rel>`` read without following a link anywhere below
+    ``root``; ``None`` when it is missing, reached through a link, not a regular file with a single
+    hard link, larger than ``max_bytes``, or not valid UTF-8."""
+    try:
+        parts = relative_parts(rel, allow=allow)
+    except PathRefused:
+        return None
+    *dirs, name = parts
+    try:
+        dir_fd = dir_fd_inside(root, dirs)
+    except (PathRefused, OSError):
+        return None
+    try:
+        fd = os.open(name, _FILE_NOFOLLOW, dir_fd=dir_fd)
+    except OSError:
+        return None
+    finally:
+        os.close(dir_fd)
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_nlink > 1:
+            return None
+        if max_bytes is not None and st.st_size > max_bytes:
+            return None
+        with os.fdopen(fd, "rb") as fh:
+            fd = -1
+            raw = fh.read()
+    except OSError:
+        return None
+    finally:
+        if fd >= 0:
+            os.close(fd)
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
+def read_bytes_inside(root, rel: str, *, max_bytes: Optional[int] = None, allow=()) -> Optional[bytes]:
+    """Like :func:`read_text_inside` but the raw bytes (for a non-text asset); ``None`` on the same
+    refusals, and when it is larger than ``max_bytes``."""
+    try:
+        parts = relative_parts(rel, allow=allow)
+    except PathRefused:
+        return None
+    *dirs, name = parts
+    try:
+        dir_fd = dir_fd_inside(root, dirs)
+    except (PathRefused, OSError):
+        return None
+    try:
+        fd = os.open(name, _FILE_NOFOLLOW, dir_fd=dir_fd)
+    except OSError:
+        return None
+    finally:
+        os.close(dir_fd)
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_nlink > 1:
+            return None
+        if max_bytes is not None and st.st_size > max_bytes:
+            return None
+        with os.fdopen(fd, "rb") as fh:
+            fd = -1
+            return fh.read()
+    except OSError:
+        return None
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+
+def write_text_inside(root, rel: str, text: str, *, mode: int = 0o644, allow=(),
+                      make_parents: bool = True) -> Path:
+    """Write ``text`` to the FIXED path ``root/<rel>``, creating a NEW file and renaming it into
+    place so a symlink already at the name is replaced rather than written through, and with no
+    directory component on the path followed through a link. Raises :class:`PathRefused` when a
+    component is a link (or ``rel`` is absolute / escapes / names a reserved dir not in ``allow``).
+    Returns the file's path."""
+    parts = relative_parts(rel, allow=allow)
+    *dirs, name = parts
+    dir_fd = dir_fd_inside(root, dirs, create=make_parents)
+    try:
+        tmp = f".{name}.{os.getpid()}.{threading.get_ident()}.{time.monotonic_ns()}.tmp"
+        fd = os.open(tmp, _CREATE_NEW, mode, dir_fd=dir_fd)
+        try:
+            os.fchmod(fd, mode)          # exact mode regardless of umask (a credential may be 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(text)
+            os.replace(tmp, name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+        except BaseException:
+            try:
+                os.unlink(tmp, dir_fd=dir_fd)
+            except OSError:
+                pass
+            raise
+    finally:
+        os.close(dir_fd)
+    return Path(root) / "/".join(parts)
+
+
+def unlink_inside(root, rel: str, *, allow=()) -> None:
+    """Remove ``root/<rel>`` (a symlink is removed itself, never followed) with no directory
+    component on the path followed through a link. A link or missing directory on the way, or a
+    missing leaf, is a silent no-op; the leaf is removed only when it is a symlink or a regular
+    file (never a directory)."""
+    try:
+        parts = relative_parts(rel, allow=allow)
+    except PathRefused:
+        return
+    *dirs, name = parts
+    try:
+        dir_fd = dir_fd_inside(root, dirs)
+    except (PathRefused, OSError):
+        return
+    try:
+        st = os.lstat(name, dir_fd=dir_fd)
+        if stat.S_ISLNK(st.st_mode) or stat.S_ISREG(st.st_mode):
+            try:
+                os.unlink(name, dir_fd=dir_fd)
+            except OSError:
+                pass
+    except OSError:
+        pass
+    finally:
+        os.close(dir_fd)
