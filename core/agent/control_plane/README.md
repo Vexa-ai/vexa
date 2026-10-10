@@ -56,6 +56,10 @@ caller or with the internal secret, never with a credential of its own:
 - `workload_redis.py` — the Redis user an agent worker connects as.
 - `model_endpoint.py` — whether a subject's model config points elsewhere, and the operator gate on
   where.
+- `model_providers/` — the operator's model catalog (`VEXA_MODEL_CATALOG`, `models.v1`) and the
+  provider port each model resolves through, one adapter per provider kind (ADR-0042). The dispatch
+  (`dispatch.apply_model_route`, `route_env`) is the one place a resolved route becomes a worker's
+  environment; see [`model_providers/README.md`](model_providers/README.md).
 
 **Meetings**
 - `bridge.py` — the meeting WebSocket → agent bridge.

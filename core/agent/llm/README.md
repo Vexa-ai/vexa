@@ -116,6 +116,13 @@ subject's endpoint, key, model and extra body whatever the deployment's `VEXA_LL
 subject's key reaches no other endpoint, and no deployment credential reaches the subject's. With
 no subject endpoint, or a refused one, nothing is stamped and the table above applies unchanged.
 
+**With a model catalog (`VEXA_MODEL_CATALOG`, ADR-0042), the chat's pick decides the route** — and
+the same dispatch stamps it, whole: `VEXA_RUNNER`, `VEXA_AGENT_MODEL`, every `ANTHROPIC_*` and
+`VEXA_LLM_*` name (the provider's key under the one name its endpoint expects, every other one
+empty), `VEXA_AGENT_STREAM` / `VEXA_AGENT_CONTEXT_TOKENS` from the model's capabilities, and the
+claude CLI's model tiers (pinned to the chosen model on a gateway). Nothing in this module changes:
+a harness reads its environment exactly as above and never learns that a catalog chose it.
+
 ## Rules
 
 - **This module imports NOTHING from product code** (`shared/`, `contracts`, `worker/`,

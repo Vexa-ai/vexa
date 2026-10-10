@@ -1,0 +1,215 @@
+---
+title: "Model catalog"
+description: "Offer several models — a self-hosted Qwen 3, anything on OpenRouter, Anthropic — and let each person pick the one a chat runs on."
+---
+
+The model catalog is the list of models your deployment offers. Each person picks one per chat, in
+the chat's composer. You decide:
+
+- which providers the deployment reaches;
+- which models it offers on each;
+- what each model can do;
+- who may use it;
+- which one people start on.
+
+Without a catalog, nothing changes. Every turn runs on `VEXA_AGENT_MODEL` and each person's
+Settings → Models, as before.
+
+## The catalog
+
+The catalog is one JSON object in agent-api's environment, `VEXA_MODEL_CATALOG`. Its schema is
+`core/agent/contracts/models.v1`, the `Catalog` shape. It has two parts:
+
+- **providers:** one entry per endpoint, each naming the adapter that knows how to reach it;
+- **models:** the models offered on those providers.
+
+```json
+{
+  "providers": {
+    "lab-vllm": {
+      "adapter": "openai_compatible",
+      "base_url": "http://10.0.0.5:8000/v1",
+      "auth": "none",
+      "extra_body": { "chat_template_kwargs": { "enable_thinking": false } }
+    },
+    "openrouter": {
+      "adapter": "openrouter",
+      "auth": "secret",
+      "secret_ref": "env:OPENROUTER_API_KEY"
+    }
+  },
+  "models": [
+    {
+      "id": "qwen3-32b",
+      "display_name": "Qwen 3 32B (self-hosted)",
+      "provider": "lab-vllm",
+      "model": "Qwen/Qwen3-32B",
+      "capabilities": { "tool_calling": true, "streaming": true, "context_tokens": 32768 },
+      "default": true
+    },
+    {
+      "id": "or-sonnet",
+      "display_name": "Claude Sonnet via OpenRouter",
+      "provider": "openrouter",
+      "model": "anthropic/claude-sonnet-4.5",
+      "access": "admins"
+    }
+  ]
+}
+```
+
+### Providers and their adapters
+
+| `adapter` | Reaches | Harness | Fields |
+|---|---|---|---|
+| `openai_compatible` | any OpenAI-compatible endpoint: a self-hosted vLLM or llama.cpp, a LiteLLM proxy, an inference gateway | `openai-agent` | `base_url` (required, the OpenAI root, usually ending `/v1`); `auth: none` or `auth: secret` with `secret_ref`; `extra_body` |
+| `openrouter` | any model OpenRouter serves | `openai-agent` on `/api/v1` (default), or `claude-code` on OpenRouter's Anthropic-compatible `/api` | `harness`; `auth: secret` with `secret_ref` (required); `extra_body` (openai-agent only) |
+| `anthropic` | Anthropic directly | `claude-code` | `auth: secret` with `secret_ref` (an API key), or `auth: subscription` (the deployment's own Claude subscription; read [Model credentials & licensing](/model-credentials-licensing) before offering it to other people) |
+| `custom` | each person's own endpoint, as set under Settings → Models | the person's own | none. The person sets the endpoint, key, model and extra body. The endpoint must still pass `VEXA_MODEL_BASE_URL_ALLOW`, and the model `VEXA_MODEL_ALLOWLIST`. |
+
+On a claude-code route through OpenRouter, every model tier the claude CLI uses is pinned to the
+chosen model, so background calls go to that model too.
+
+### Models
+
+| Field | Meaning |
+|---|---|
+| `id` | What a chat and a person's default name, e.g. `qwen3-32b`: lowercase letters, digits, `.`, `_`, `-`, at most 64 characters. Keep it stable. |
+| `display_name` | What people see in the picker. |
+| `provider` | A key of `providers`. |
+| `model` | The model's id at the provider. A `custom` model has none, because the person sets it. |
+| `capabilities` | `tool_calling` (must be true: every harness is an agent loop), `streaming` (default true), `context_tokens` (the openai-agent harness trims history to it). |
+| `extra_body` | Request fields merged over the provider's, for the openai-agent harness. |
+| `access` | `everyone` (default) or `admins`. An admins-only model is not shown to, and is refused for, anyone else. |
+| `default` | `true` on at most one model: the one people run on before they pick. |
+
+### Credentials are references, never values
+
+A provider's credential is `secret_ref: env:NAME`, the name of a variable in agent-api's
+environment. agent-api reads the value at dispatch. The value never appears in the catalog, in a
+log, in a refusal or in anything the browser receives. It goes only to that provider's endpoint, as
+the header that provider expects:
+
+- a bearer token for an OpenAI-compatible endpoint and for OpenRouter;
+- `x-api-key` for Anthropic.
+
+agent-api refuses a catalog that writes a credential inline: a field named like one (`api_key`,
+`token`…), a credential-shaped value, or credentials in a URL. The refusal names the field, never the
+value.
+
+## Setting it
+
+<Tabs>
+  <Tab title="Compose">
+    In `deploy/compose/.env`, put the catalog on one line and each secret on its own line:
+
+    ```dotenv
+    VEXA_MODEL_CATALOG={"providers":{"lab-vllm":{"adapter":"openai_compatible","base_url":"http://10.0.0.5:8000/v1","auth":"none","extra_body":{"chat_template_kwargs":{"enable_thinking":false}}},"openrouter":{"adapter":"openrouter","auth":"secret","secret_ref":"env:OPENROUTER_API_KEY"}},"models":[{"id":"qwen3-32b","display_name":"Qwen 3 32B (self-hosted)","provider":"lab-vllm","model":"Qwen/Qwen3-32B","capabilities":{"tool_calling":true,"streaming":true,"context_tokens":32768},"default":true},{"id":"or-sonnet","display_name":"Claude Sonnet via OpenRouter","provider":"openrouter","model":"anthropic/claude-sonnet-4.5"}]}
+    OPENROUTER_API_KEY=<your OpenRouter key>
+    ```
+
+    Then recreate agent-api.
+  </Tab>
+  <Tab title="Helm">
+    Write the catalog as values. Each `secret_ref` is delivered from a Secret you manage:
+
+    ```yaml
+    models:
+      catalog:
+        providers:
+          lab-vllm:
+            adapter: openai_compatible
+            base_url: http://vllm.inference.svc:8000/v1
+            auth: none
+            extra_body: {chat_template_kwargs: {enable_thinking: false}}
+          openrouter:
+            adapter: openrouter
+            auth: secret
+            secret_ref: env:OPENROUTER_API_KEY
+        models:
+          - id: qwen3-32b
+            display_name: Qwen 3 32B (self-hosted)
+            provider: lab-vllm
+            model: Qwen/Qwen3-32B
+            capabilities: {tool_calling: true, streaming: true, context_tokens: 32768}
+            default: true
+          - id: or-sonnet
+            display_name: Claude Sonnet via OpenRouter
+            provider: openrouter
+            model: anthropic/claude-sonnet-4.5
+            access: admins
+      catalogSecrets:
+        - env: OPENROUTER_API_KEY   # the name the secret_ref uses
+          secretName: model-keys    # default: the chart's own Secret
+          key: openrouter           # default: the env name
+    ```
+  </Tab>
+</Tabs>
+
+**agent-api refuses a catalog with anything wrong in it at boot, and names every problem.** The
+checks are:
+
+- an unknown adapter;
+- a field an adapter does not take;
+- an inline credential;
+- a duplicate id;
+- two defaults;
+- a model on an undeclared provider;
+- a model without tool calling;
+- a `secret_ref` that is not set.
+
+A catalog is never half-applied.
+
+## What people see
+
+- **The picker.** A model picker sits in the chat's composer, beside the send button.
+  - It shows only the models the person may use. An `admins` model appears only for instance
+    admins, and a `custom` model appears only once the person has set their own endpoint.
+  - It shows nothing on a deployment with no catalog.
+- **A pick is per chat.**
+  - It takes effect on the chat's next message, which starts a fresh agent on that model.
+  - "Use … for new chats" makes the current model the person's default.
+  - "Follow my default" un-pins the chat.
+- **Defaults.** A chat nobody picked for runs on the person's default
+  (Settings → Models `default_model`), else the organisation's (the same field on the admin's
+  platform settings), else the catalog's `default`, else the first model the person may use.
+- **Autonomous runs.** Routines and other runs nobody starts by typing use the person's default.
+  Background jobs a chat starts run on that chat's model.
+
+The same list is available over the API (`GET /api/models/catalog`) and to MCP clients as the
+`models_list` tool. See the [agent API](/api/agent#the-model-catalog-and-a-chats-model).
+
+## When a model cannot run
+
+A pick that cannot run is refused before anything starts, and the chat says why. Its typed fault is
+`source: model-provider`, naming the model and the provider, with one of these kinds:
+
+| `kind` | Meaning |
+|---|---|
+| `unknown_model` | the chat's model is no longer in the catalog |
+| `not_permitted` | an admins-only model, for someone else |
+| `not_configured` | an own-endpoint model, for someone with no endpoint set; or a catalog that offers this person nothing |
+| `credential_missing` | the provider's `secret_ref` is not set any more |
+| `endpoint_refused` | the person's own endpoint is not allowed by `VEXA_MODEL_BASE_URL_ALLOW` |
+
+A chat never silently runs on a different model.
+
+A provider that fails mid-turn reports in the same shape, with kinds `unpaid`, `unauthorized`,
+`rate_limited`, `unavailable` and `refused`. In that case the provider is the host the turn went to.
+
+**Settings → Models → Test** probes your default model through the same route a turn on it would
+take, in that route's own dialect, with exactly that route's credential. To test any other model you
+may use, call `GET /api/models/test?model=<id>`.
+
+## Security
+
+- **People cannot add endpoints.** The catalog is deployment configuration. A person can reach only
+  their own endpoint, through a `custom` entry you declare, and only if it passes
+  `VEXA_MODEL_BASE_URL_ALLOW` (loopback, private and internal hosts need an exact entry).
+- **Each credential goes to one place.**
+  - A provider's credential goes only to that provider's endpoint.
+  - A person's key goes only to their own endpoint.
+  - The deployment's credentials never go to either.
+  - The deployment's subscription goes only to Anthropic.
+- **Nothing sensitive reaches the browser.** No endpoint, credential or request setting is in
+  anything the browser or an MCP client receives.

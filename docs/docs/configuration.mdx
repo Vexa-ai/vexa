@@ -215,6 +215,7 @@ Point the agent at your own model so no inference leaves the network.
 | Variable | Default | Purpose |
 |---|---|---|
 | `VEXA_AGENT_MODEL` | — | Model the agent runner uses. |
+| `VEXA_MODEL_CATALOG` | — (no catalog) | The models people pick per chat: one JSON object of providers and models, with credentials only as `secret_ref: env:NAME`. Refused whole at boot if anything in it is wrong. See [Model catalog](/model-catalog). |
 | `VEXA_MEETING_MODEL` | — | Model for meeting-time processing. |
 | `ANTHROPIC_API_KEY` | — | Key for Anthropic-backed runners. |
 | `ANTHROPIC_MODEL` · `ANTHROPIC_DEFAULT_OPUS_MODEL` · `…_SONNET_MODEL` · `…_HAIKU_MODEL` | — | Per-tier model overrides. |
