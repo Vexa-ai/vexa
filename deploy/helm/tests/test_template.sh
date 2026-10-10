@@ -1139,4 +1139,20 @@ fboth="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set 
 if grep -q 'flows.apiKey and flows.existingSecret are both set' <<< "$fboth"; then echo "  OK: flows.apiKey with flows.existingSecret is refused"
 else echo "  FAIL: flows.apiKey with flows.existingSecret rendered"; fail=1; fi
 
+# The model catalog (ADR-0042): absent by default; when set, agent-api carries it as one JSON env var
+# and each provider secret it references by env:NAME from a Secret, never as a value.
+if grep -q 'name: VEXA_MODEL_CATALOG' <<< "$RENDER"; then echo "  FAIL: a model catalog rendered with none set"; fail=1
+else echo "  OK: no model catalog unless one is set"; fi
+mc="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" \
+  --set-json 'models.catalog={"providers":{"openrouter":{"adapter":"openrouter","auth":"secret","secret_ref":"env:OPENROUTER_API_KEY"}},"models":[{"id":"or-sonnet","display_name":"Sonnet","provider":"openrouter","model":"anthropic/claude-sonnet-4.5"}]}' \
+  --set-json 'models.catalogSecrets=[{"env":"OPENROUTER_API_KEY","secretName":"model-keys","key":"openrouter"}]')"
+mc_json="$(grep -A1 -E '^[[:space:]]+- name: VEXA_MODEL_CATALOG$' <<< "$mc" | sed -nE 's/^[[:space:]]+value: (.*)$/\1/p')"
+if python3 -c 'import json,sys; d=json.loads(json.loads(sys.argv[1])); assert d["models"][0]["id"]=="or-sonnet"' "$mc_json" 2>/dev/null; then
+  echo "  OK: models.catalog renders as VEXA_MODEL_CATALOG JSON on agent-api"
+else echo "  FAIL: models.catalog did not render as JSON"; fail=1; fi
+if grep -A4 -E '^[[:space:]]+- name: OPENROUTER_API_KEY$' <<< "$mc" | grep -q 'name: model-keys' \
+   && grep -A5 -E '^[[:space:]]+- name: OPENROUTER_API_KEY$' <<< "$mc" | grep -q 'key: openrouter'; then
+  echo "  OK: models.catalogSecrets delivers each secret_ref from its Secret"
+else echo "  FAIL: models.catalogSecrets"; fail=1; fi
+
 [ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }
