@@ -1,7 +1,7 @@
 """Synthetic DAILIES fixtures — the meeting the production cohort is actually in.
 
-The pilot is coordinators and production managers "using it as their main tool", and the tool
-is the Dailies Notes Assistant. The recorded corpus holds none: every DNA fixture is an
+The pilot users are coordinators and production managers, and the meeting they live in is
+dailies. The recorded corpus holds none: every DNA fixture is an
 ASWF/TSC working session, which the insider cohort attends and the production cohort does not.
 Revolution 1 measured production personas against a governance meeting they were never in, and
 they ignored it for that reason — the instrument, not the product.
@@ -73,7 +73,7 @@ def pace(lines: list, rng) -> list:
     A duration-derived number taken off the un-paced version is wrong in the same way a
     transcript with no gaps is wrong, so this is not cosmetic.
 
-    Targets the 20-40 minute band the DNA check-in describes ("their review runs 30 min"), by
+    Targets a 20-40 minute band (a dailies review runs about half an hour), by
     putting a playback pause between shot discussions rather than spreading time evenly.
     """
     out, t = [], float(rng.randint(20, 60))

@@ -197,7 +197,7 @@ def test_now_carries_a_commitment_only_when_a_FIELD_carries_its_date(tmp_path):
                         dates={"held_at": NOW - HOUR, "report_delivered_at": NOW})
     page = d / out["path"]
     page.write_text(page.read_text() + "\n## Committed\n\n- Circulate the charter by 2026-09-20\n")
-    upsert_entity(d, "decision", "Sign the CLA", ["Brightwater asked for the standard shape."], "the call",
+    upsert_entity(d, "decision", "Sign the CLA", ["Their counsel asked for the standard form."], "the call",
                   dates={"due_at": NOW + 5 * 24 * HOUR})
     _write(d, now=NOW)
     got = _sections((d / "README.md").read_text())["now"]

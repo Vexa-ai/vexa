@@ -114,12 +114,10 @@ def _names(rng: random.Random, n: int, pool: str) -> list[str]:
 
 
 # ── Brightwater ──────────────────────────────────────────────────────────────────────────────
-# Grounded in the 2026-08-18 DNA dev check-in (Robin Vale, Brightwater): the pilot is "actual
-# coordinators and production managers using it as their main tool", 3-5 of them, one show
-# under NDA; dailies review "runs 30 min" and coordinators have "a couple of minutes to do
-# everything" before the next; the big reviews carry "hundreds of people" and run "to three
-# hours". The DNA product is the *Dailies Notes Assistant* — so DAILIES is the dominant
-# recurring meeting, per show, per department, daily.
+# The scenario, for a fictional VFX studio: the pilot users are 3-5 coordinators and production
+# managers; a dailies review runs about half an hour, with minutes between one and the next; the
+# big reviews are long and crowded. So DAILIES is the dominant recurring meeting, per show, per
+# department, daily.
 VFX_DEPTS = ["Layout", "Animation", "Lighting", "FX", "Compositing", "Character/Modeling"]
 VFX_SHOW_MIX = 0.78        # share of headcount on shows; the rest is studio function
 VFX_STUDIO = [             # name, weight, kind
@@ -221,7 +219,7 @@ def _vfx_meetings(rng, org: "Org", add, teams):
         sups = [m[0] for m in dept_units.values()]
         add("production_meeting", f"{sname} production meeting", lead_pm,
             office + sups, 1.0)
-        # the big review: "hundreds of people … to three hours" — fortnightly, whole show
+        # the big review: long and crowded — fortnightly, whole show
         whole = office + [p for ms in dept_units.values() for p in ms]
         add("show_review", f"{sname} show review", lead_pm, whole, 0.5)
         # 1:1s inside the production office

@@ -212,7 +212,7 @@ def main() -> int:
         upsert_entity(desk, "meeting", "DNA TSC next", ["Booked in the series."], "the invite",
                       today=second["date"], dates={"scheduled_at": when_next})
         upsert_entity(desk, "decision", "Sign the ASWF CLA",
-                      ["Brightwater asked for the standard shape rather than an authorisation letter."],
+                      ["Their counsel asked for the standard form."],
                       f"the {second['date']} transcript", today=second["date"],
                       dates={"due_at": at(second["date"]) + 7 * 86400})
 
