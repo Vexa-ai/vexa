@@ -527,7 +527,7 @@
       "key": "VEXA_MCP_DELEGATION_TOKEN",
       "class": "defaulted",
       "default": "(unset \u2014 derived per dispatch: minted by the dispatcher, never configured)",
-      "description": "the short-lived scoped delegation token the dispatcher stamps into the WORKER's env (subject + regime + workspace scope + exp + jti); the worker writes it into its gitignored .claude/mcp.json as an Authorization header. Runtime-injected per dispatch, never a deploy surface",
+      "description": "the short-lived scoped delegation token the dispatcher stamps into the WORKER's env (subject + regime + workspace scope + exp + jti); the worker takes it out of its environment at boot and writes it, as an Authorization header, into an MCP attachment in a private directory outside every mount (shared/private_dir.py, 0600 for the harness's user). Runtime-injected per dispatch, never a deploy surface",
       "targets": []
     },
     {

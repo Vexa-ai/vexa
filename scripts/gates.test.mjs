@@ -2,12 +2,18 @@
 // Run: node --test scripts/gates.test.mjs   (CI: the gates.yml `static` job runs scripts/*.test.mjs
 // directly — scripts/ is not a workspace package, so `pnpm test` never reaches these files)
 //
-// These plant real files in the checkout and run the real gate as a subprocess, deliberately: the
+// These plant real files in a tree and run the real gate as a subprocess, deliberately: the
 // defect class here lives in the SHELL PIPELINE, not the parse. A scan that strips the filename
 // (`grep -h`) silently disarms every path-based filter downstream of it, and the bare numbers it
 // emits still parse perfectly — so a test that stubs the grep and feeds the parse a fixture would
 // stay green through exactly the bug it was written to catch. The planted file IS the input
 // population: `git grep --untracked` reads the working tree, so a file on disk is a real input.
+//
+// THE TREE IS THIS FILE'S OWN COPY of the checkout (scripts/test-tree.mjs `sandboxTree`), never the
+// checkout. Every test file runs in its own process, in parallel, over the real tree; a plant or an
+// in-place edit there — even one restored in a `finally` — is a window the others read through. On
+// 2026-10-10 publish-edge.test.mjs failed gate:config-contract on the phantom export and the phantom
+// mailer read this file had planted. `guardTree` fails any test that leaves the checkout changed.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -15,9 +21,10 @@ import { execFileSync } from "node:child_process";
 import { writeFileSync, readFileSync, rmSync, mkdirSync, mkdtempSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { guardTree, sandboxTree } from "./test-tree.mjs";
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+guardTree();
+const ROOT = sandboxTree();
 
 // admin-api is declared in deploy/db-budget.json (pool_size 5 / max_overflow 10), so a literal
 // planted here is compared against a real ceiling. agent-api is a real service dir that is NOT
@@ -146,8 +153,7 @@ function withEdited(relPath, find, repl, fn) {
 // deploy/lite/entrypoint.sh was read ONLY as check 3's fallback, so it was the one surface, in the
 // one direction, that nothing walked: an export whose declaration AND reader were both deleted left
 // no refusal and no warning. Measured on the tip before the fix — the same plant was green.
-// entrypoint.sh is touched by no other test file, so the in-place edit below stays inside this
-// file's sequential run.
+// The edit below is made in this file's private tree, so no other test file can read it.
 const LITE_ENTRYPOINT = "deploy/lite/entrypoint.sh";
 
 test("config-contract vacuity: the committed lite entrypoint is green", () => {
@@ -326,6 +332,41 @@ test("image-licenses RED: an undeclared Dockerfile FROM pin reds", () => {
   assert.match(r.out, /somevendor\/unaudited:1\.2/);
 });
 
+// ── S75: the pinned list is discovered, not listed ──────────────────────────────────────────────
+// pinned-images.mjs read compose's main file, the vexa chart and the Lite Dockerfile only, so the
+// transcription stack, the dogfood rig and every other Dockerfile's base were neither licence-audited
+// nor CVE-scanned. Each plant below was green before.
+
+test("image-licenses RED: an undeclared image in the transcription compose reds", () => {
+  const r = withEdited("deploy/transcription/docker-compose.yml", "image: nginx:alpine", "image: somevendor/unaudited:1.2",
+    () => runGate("image-licenses"));
+  assert.equal(r.green, false, "the transcription stack's image was not read");
+  assert.match(r.out, /undeclared pinned image "somevendor\/unaudited:1\.2" in deploy\/transcription\/docker-compose\.yml/);
+});
+
+test("image-licenses RED: an undeclared base in a service Dockerfile reds, ARG defaults resolved", () => {
+  const f = "core/identity/services/admin-api/Dockerfile";
+  const r = withEdited(f, "FROM python:3.12-slim", "ARG BASE=somevendor/unaudited:1.2\nFROM ${BASE}",
+    () => runGate("image-licenses"));
+  assert.equal(r.green, false, "a service Dockerfile's base was not read");
+  assert.match(r.out, /undeclared pinned image "somevendor\/unaudited:1\.2" in core\/identity\/services\/admin-api\/Dockerfile/);
+});
+
+test("image-licenses RED: an undeclared image a deploy script runs reds", () => {
+  const r = withEdited("deploy/dogfood/rig/rig.sh", "axllent/mailpit:latest", "somevendor/unaudited:1.2",
+    () => runGate("image-licenses"));
+  assert.equal(r.green, false, "the dogfood rig's docker run image was not read");
+  assert.match(r.out, /undeclared pinned image "somevendor\/unaudited:1\.2" in deploy\/dogfood\/rig\/rig\.sh/);
+});
+
+test("pinned images: the list carries every surface, and an image built here is first-party", () => {
+  const refs = JSON.parse(execFileSync("node", [join(ROOT, "scripts", "pinned-images.mjs"), "--json"], { cwd: ROOT, encoding: "utf8" }));
+  for (const ref of ["nginx:alpine", "python:3.12-slim", "axllent/mailpit:latest", "valkey/valkey"])
+    assert(refs.some((r) => r.startsWith(ref)), `${ref} is missing from the pinned list`);
+  assert(!refs.some((r) => r.startsWith("mock-bot")), "mock-bot:dev is built by this repository, not pulled");
+  assert(!refs.some((r) => r.startsWith("node:20-alpine")), "the gate-ignored dashboard's base was read");
+});
+
 const TERMINAL_DOCKERFILE = "clients/terminal/Dockerfile";
 const TERMINAL_NEXT_CONFIG = "clients/terminal/next.config.ts";
 const SHARP_PRUNE = " && rm -rf node_modules/sharp node_modules/@img";
@@ -334,6 +375,14 @@ test("image-licenses RED: the terminal image keeping sharp (LGPL libvips) reds",
   const r = withEdited(TERMINAL_DOCKERFILE, SHARP_PRUNE, "", () => runGate("image-licenses"));
   assert.equal(r.green, false, "the terminal's runtime tree kept sharp and the gate stayed green");
   assert.match(r.out, /clients\/terminal\/Dockerfile \(deps-prod\) ships sharp/);
+});
+
+test("image-licenses RED: libvips back in the terminal's npm lock reds", () => {
+  const r = withEdited("clients/terminal/package-lock.json", `    "node_modules/sharp": {`,
+    `    "node_modules/@img/sharp-libvips-linux-x64": {\n      "version": "1.3.4",\n      "license": "LGPL-3.0-or-later",\n      "optional": true\n    },\n    "node_modules/sharp": {`,
+    () => runGate("image-licenses"));
+  assert.equal(r.green, false, "a locked libvips sailed through");
+  assert.match(r.out, /clients\/terminal\/package-lock\.json locks @img\/sharp-libvips-linux-x64/);
 });
 
 test("image-licenses RED: Lite's terminal tree keeping sharp reds", () => {
@@ -523,9 +572,55 @@ test("licenses RED: a Python package under a Cat X licence is FORBIDDEN", () => 
   assert.match(r.out, /FORBIDDEN \(Cat X\) GPL-3\.0-only/);
 });
 
-test("licenses RED: an AND expression is as restrictive as its worst term (Apache-2.0 AND LGPL is Cat B)", () => {
+test("licenses RED: an AND expression is as restrictive as its worst term (Apache-2.0 AND MPL is Cat B)", () => {
   const key = firstKey("h11==");
-  const r = withEdited(PY_INDEX, `"${key}": "MIT"`, `"${key}": "Apache-2.0 AND LGPL-3.0-or-later"`, () => runGate("licenses"));
-  assert.equal(r.green, false, "an AND with an LGPL term was read as Cat A from its leading term");
-  assert.match(r.out, /Cat-B Apache-2\.0 AND LGPL-3\.0-or-later needs a license-exceptions\.json categoryB row/);
+  const r = withEdited(PY_INDEX, `"${key}": "MIT"`, `"${key}": "Apache-2.0 AND MPL-2.0"`, () => runGate("licenses"));
+  assert.equal(r.green, false, "an AND with an MPL term was read as Cat A from its leading term");
+  assert.match(r.out, /Cat-B Apache-2\.0 AND MPL-2\.0 needs a license-exceptions\.json categoryB row/);
+});
+
+// ── S71: one LGPL category, FINOS's ─────────────────────────────────────────────────────────────
+// FINOS lists LGPL-2.1 and LGPL-3.0 as Category X and CDDL and OFL-1.1 as Category B. The classifier
+// used to put LGPL in B (so a logged row admitted it) and OFL in A; dependency review already used
+// FINOS's list, and nothing held the two together.
+
+test("licenses RED: LGPL is Category X, so no exception row admits it", () => {
+  const key = firstKey("h11==");
+  const r = withEdited(PY_INDEX, `"${key}": "MIT"`, `"${key}": "LGPL-2.1-or-later"`, () => runGate("licenses"));
+  assert.equal(r.green, false, "an LGPL package passed");
+  assert.match(r.out, /FORBIDDEN \(Cat X\) LGPL-2\.1-or-later/);
+  const and = withEdited(PY_INDEX, `"${key}": "MIT"`, `"${key}": "Apache-2.0 AND LGPL-3.0-or-later"`, () => runGate("licenses"));
+  assert.match(and.out, /FORBIDDEN \(Cat X\) Apache-2\.0 AND LGPL-3\.0-or-later/);
+});
+
+test("licenses RED: CDDL is Category B and needs a logged row", () => {
+  const key = firstKey("h11==");
+  const r = withEdited(PY_INDEX, `"${key}": "MIT"`, `"${key}": "CDDL-1.0"`, () => runGate("licenses"));
+  assert.equal(r.green, false, "a CDDL package passed with no logged row");
+  assert.match(r.out, /Cat-B CDDL-1\.0 needs a license-exceptions\.json categoryB row/);
+});
+
+test("licenses RED: a categoryB row may not hold an LGPL licence", () => {
+  const r = withEdited("license-exceptions.json", `"license": "MPL-2.0",\n      "reason": "Native CSS`,
+    `"license": "LGPL-3.0-only",\n      "reason": "Native CSS`, () => runGate("licenses"));
+  assert.equal(r.green, false, "an LGPL row sat in categoryB");
+  assert.match(r.out, /categoryB row "lightningcss" is LGPL-3\.0-only, Cat X/);
+});
+
+test("licenses RED: dependency review may not allow a licence the classifier calls Cat X", () => {
+  const r = withEdited(".github/workflows/dependency-review.yml", "            0BSD,\n",
+    "            0BSD,\n            LGPL-3.0-only,\n", () => runGate("licenses"));
+  assert.equal(r.green, false, "dependency review admitted LGPL and the gate stayed green");
+  assert.match(r.out, /dependency-review\.yml allows LGPL-3\.0-only, which this classifier puts in Cat X/);
+});
+
+// ── S73: the terminal's npm lock is in the gate ─────────────────────────────────────────────────
+// Its images install with `npm ci` from clients/terminal/package-lock.json, which pnpm's index does
+// not read. Before S73 this plant was green.
+
+test("licenses RED: a Cat X package in the terminal's npm lock is forbidden", () => {
+  const r = withEdited("clients/terminal/package-lock.json",
+    /("node_modules\/zod": \{[^}]*?"license": ")MIT(")/, "$1LGPL-3.0-only$2", () => runGate("licenses"));
+  assert.equal(r.green, false, "the terminal's npm lock was not read");
+  assert.match(r.out, /FORBIDDEN \(Cat X\) LGPL-3\.0-only: zod/);
 });

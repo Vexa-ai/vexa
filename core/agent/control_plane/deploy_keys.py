@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Iterator, Optional
 
 from control_plane import git_secret_store as secret_store
+from workspaces.shared import workspace_paths as wpaths
 
 log = logging.getLogger(__name__)
 
@@ -148,7 +149,7 @@ def ssh_env(root: str | Path, key: str, *, key_env: str = "") -> Iterator[Option
         )
         yield {"GIT_SSH_COMMAND": cmd}
     finally:
-        shutil.rmtree(td, ignore_errors=True)
+        wpaths.remove_tree(td, ignore_errors=True)
 
 
 def is_ssh_url(url: str) -> bool:

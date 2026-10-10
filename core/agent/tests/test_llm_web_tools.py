@@ -128,7 +128,7 @@ def test_brave_dialect_parses_results_and_sends_the_subscription_token(monkeypat
     assert payload["results"][1]["snippet"] == "Projects hosted by the foundation."
 
 
-def test_the_dialect_registry_is_the_plug_point():
+def test_the_dialect_registry_is_the_plug_point(monkeypatch):
     # Adding a backend is one function in one table — that is the whole licence argument's mechanics.
     assert set(web_tools._DIALECTS) == {"searxng", "brave"}
     assert web_tools.DEFAULT_DIALECT == "searxng"
@@ -138,9 +138,8 @@ def test_the_dialect_registry_is_the_plug_point():
 
     web_tools._DIALECTS["stub"] = _stub
     try:
-        import os
-        os.environ[web_tools.URL_ENV] = "https://x.example"
-        os.environ[web_tools.DIALECT_ENV] = "stub"
+        monkeypatch.setenv(web_tools.URL_ENV, "https://x.example")
+        monkeypatch.setenv(web_tools.DIALECT_ENV, "stub")
         ok, out = web_tools.web_search("q", 3, client=_client(lambda r: httpx.Response(200)))
         assert ok and json.loads(out)["results"][0]["url"] == "https://x.example/1"
     finally:

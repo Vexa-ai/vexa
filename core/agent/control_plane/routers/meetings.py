@@ -30,7 +30,7 @@ def build(**d) -> APIRouter:
     _meeting_note_recorder = d['_meeting_note_recorder']
     _meeting_owner_lookup = d['_meeting_owner_lookup']
     _meeting_transcript_lookup = d['_meeting_transcript_lookup']
-    _ws_sync = d['_ws_sync']
+    _ws_lookup = d['_ws_lookup']
     live = d['live']
     redis_url = d['redis_url']
     settings = d['settings']
@@ -56,7 +56,7 @@ def build(**d) -> APIRouter:
         then the company layer, then the groups they belong to — the precedence a chip resolves in.
         The groups are the ones inside a delegated dispatch's ceiling (`_entity_mounts`)."""
         def wsid(slug: str) -> str:
-            rec = workspace_registry.by_slug(slug) or _ws_sync(slug) or {}
+            rec = workspace_registry.by_slug(slug) or _ws_lookup(slug) or {}
             return str(rec.get("id") or slug)
 
         out = [(wsid(str(subject)), "", wsr.workspace_dir(subject))]

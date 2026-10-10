@@ -93,9 +93,14 @@ Gmail read plus draft creation; Vexa never sends mail.
 
 A person, or their agent, can prepare a custom connection: an HTTPS endpoint and how the key is
 presented, or a full OAuth application. Only the person can save the secret, in the panel. The panel
-shows the host the secret will be sent to, flags a host that is not a known provider or the
-service's own documentation site, and on the first save to a new host asks the person to type it.
-The broker sends only to public addresses, refuses redirects, and redacts the key from responses.
+shows every host a credential will be sent to (for OAuth, the token endpoint and the service
+endpoint that receives the access token), flags a host that is not a known provider, and on the
+first save to a new host asks the person to type it; the broker refuses the save otherwise. The
+broker sends only to public addresses, refuses redirects, and redacts the key from responses.
+
+Deleting a connection destroys every stored version of its credential and OAuth application;
+disconnecting destroys the credential and keeps the application for reconnecting. Otherwise a
+credential keeps its current version and the one before it. Backups you take keep what they hold.
 
 ## Using your own OpenBao
 
@@ -109,7 +114,8 @@ To keep credentials in an OpenBao or Vault you already run, set the backend to `
 | Mount | `VEXA_CONNECTIONS_OPENBAO_MOUNT=connections` | `credentialBroker.openbao.mount` |
 
 The mount is KV version 2, and the token's policy needs `create`, `update` and `read` on
-`<mount>/data/*`. The broker reads the token file on every request, so a renewed token takes effect
+`<mount>/data/*`, plus `update` and `delete` on `<mount>/metadata/*` (version retention, and
+deleting a connection). The broker reads the token file on every request, so a renewed token takes effect
 without a restart. Vexa does not ship OpenBao; it is MPL-2.0 software you run yourself.
 
 ## Git credentials in the broker (optional)
@@ -117,7 +123,8 @@ without a restart. Vexa does not ship OpenBao; it is MPL-2.0 software you run yo
 agent-api keeps saved Git tokens and deploy keys in its own encrypted store (`VEXA_SECRETS_KEY`).
 To keep them in the broker instead, set `VEXA_GIT_STORE_BROKER_URL=http://credential-broker:8100`
 (compose) or `credentialBroker.gitStore: true` (Helm). Existing credentials move on first use. With
-it on, a broker outage stops Git operations instead of falling back to disk.
+it on, a broker outage stops Git operations instead of falling back to disk. agent-api holds the
+broker's git key only while this is on.
 
 ## When something fails
 
@@ -133,3 +140,4 @@ Every broker failure is logged as one JSON line with `"event":"broker_fault"`, a
 | `http_502` | agent-api, terminal | Google or a custom service answered with something unusable |
 | `expired`, `signature`, `replay` | broker (`assertion_refused`) | a request was refused before any route ran |
 | `transport`, `integrity`, `config` | broker (`source: store`) | the store is unreachable, a stored version did not decrypt (wrong store key), or the backend is misconfigured |
+| `owner_mismatch` | broker (`source: store`) | a connection's metadata names a different person from the one its stored credential is sealed to; the credential is not used |

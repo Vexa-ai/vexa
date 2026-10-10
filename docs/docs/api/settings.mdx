@@ -106,6 +106,8 @@ Returns the same masked shape as the read, with **200 OK**.
   Credential for that endpoint. Stored, never echoed in the clear. On the `claude-code` harness a
   custom `base_url` needs it: without a key of your own the endpoint is not used, your turns run on
   the deployment's route, and the refusal is recorded. `openai-agent` runs on a keyless endpoint.
+  Your own `base_url` is always paired with your own `api_key` and `extra_body`. They are never
+  filled from the organisation's settings, which belong to the organisation's endpoint.
 </ParamField>
 <ParamField body="extra_body" type="string">
   Request fields the OpenAI dialect cannot express, as a JSON string — a self-hosted vLLM/Qwen

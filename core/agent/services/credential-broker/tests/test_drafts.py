@@ -8,12 +8,13 @@ import httpx
 import pytest
 
 from credential_broker import providers
+from conftest import OWNER
 
 
 def test_permission_required_then_idempotent_creation(signed, connection, ready, store):
     cid = connection("google_email")
     value = {"access_token": "TOKEN", "expires_at": time.time() + 500, "scope": ""}
-    store.put(cid, {"value": value})
+    store.put(cid, {"owner": OWNER, "value": value})
     ready(cid)
     payload = {"request_id": "fixture-draft-" + cid[:8], "recipient": "test@example.test", "subject": "fixture", "body": "private draft"}
     path = f"/api/connections/{cid}/draft"
@@ -21,7 +22,7 @@ def test_permission_required_then_idempotent_creation(signed, connection, ready,
                                                                      "status": "draft_created", "sent": False}) as create:
         assert signed("agent", "POST", path, payload).json()["status"] == "permission_required"
         create.assert_not_called()
-        store.put(cid, {"value": {**value, "scope": providers.DRAFT_SCOPE}})
+        store.put(cid, {"owner": OWNER, "value": {**value, "scope": providers.DRAFT_SCOPE}})
         ready(cid, version=2)
         for _ in range(2):
             assert signed("agent", "POST", path, payload).json()["status"] == "draft_created"

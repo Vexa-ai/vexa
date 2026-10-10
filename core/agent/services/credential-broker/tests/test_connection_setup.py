@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from credential_broker import connection_setup, secret_service
+from conftest import OWNER
 
 SPEC = {"endpoint": "https://api.telegram.org/bot{secret}/sendMessage", "scheme": "telegram", "method": "POST",
         "secret_label": "Bot token", "fields": [{"name": "chat_id", "label": "Chat ID", "location": "body"}]}
@@ -58,7 +59,7 @@ def test_human_entered_endpoint_needs_no_confirmation(signed, connection):
 
 def test_reuse_cannot_move_existing_secret_to_another_destination(signed, connection, ready, store):
     cid = connection("custom_secret", "Service")
-    store.put(cid, {"value": {"value": "fixture-secret", "endpoint": "https://api.example.test/one",
+    store.put(cid, {"owner": OWNER, "value": {"value": "fixture-secret", "endpoint": "https://api.example.test/one",
                               "header": "Authorization", "scheme": "bearer", "method": "GET"}})
     ready(cid)
     result = signed("human", "POST", f"/api/connections/{cid}/custom-secret", {"value": "", "endpoint": "https://other.example/two"})

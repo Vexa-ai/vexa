@@ -3,6 +3,9 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { editedOnlyByAuthor, evaluatePullRequest, mergedDeclaration, registeredStanding, run } from "./contribution-rights-gate.mjs";
+import { guardTree } from "./test-tree.mjs";
+
+guardTree();
 
 const sha = "a".repeat(40);
 const oldSha = "b".repeat(40);

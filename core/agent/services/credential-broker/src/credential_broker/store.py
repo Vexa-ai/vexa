@@ -7,11 +7,16 @@ a version so a credential that was rotated mid-operation is never mixed with its
 * `LocalEncryptedStore` (the default): AES-256-GCM, one random 96-bit nonce per version, the path
   and version bound as associated data so a ciphertext cannot be replayed under another name. The
   rows live in their own SQLite file beside the broker's metadata; the key comes from a file the
-  deployment supplies and never touches the state volume.
+  deployment supplies and never touches the state volume. Removed rows are overwritten on disk
+  (``secure_delete``).
 * `OpenBaoStore` (optional): the OpenBao/Vault KV v2 HTTP API, for operators who already run one.
   Its path layout is the one the 0.13.2 development harness used, so a deployment that ran the
   harness keeps its stored credentials when it moves to this service. Its address is https, or
   plain http to this host's loopback only (`address_allowed`): the vault token rides on every call.
+
+Retention: a write keeps the new version and the one before it (`KEEP_VERSIONS`) and destroys older
+ones, so a superseded secret, refresh token or client secret does not outlive its successor's
+successor; `delete` destroys every version of a path.
 
 Nothing here logs or raises a value. A failure is a `StoreUnavailable` carrying a `kind`.
 """
@@ -34,7 +39,14 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from .obs import log_event
+
 _PATH = re.compile(r"^[A-Za-z0-9_.-]{1,160}(/[A-Za-z0-9_.-]{1,160}){0,3}$")
+
+
+#: Versions a path keeps: the current one, and the one before it so a reader that started on it can
+#: finish while a write lands. Anything older is destroyed by the write that supersedes it.
+KEEP_VERSIONS = 2
 
 
 class StoreUnavailable(Exception):
@@ -58,6 +70,8 @@ class Store(Protocol):
     def put(self, path: str, data: dict, *, cas: Optional[int] = None) -> Record: ...
 
     def get(self, path: str, *, version: Optional[int] = None) -> Optional[Record]: ...
+
+    def delete(self, path: str) -> None: ...
 
     def healthy(self) -> bool: ...
 
@@ -103,7 +117,9 @@ class LocalEncryptedStore:
             raise StoreUnavailable("config") from None
 
     def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(self._db, timeout=10, isolation_level=None)
+        c = sqlite3.connect(self._db, timeout=10, isolation_level=None)
+        c.execute("PRAGMA secure_delete=ON")   # a destroyed version is overwritten, not left in free pages
+        return c
 
     @staticmethod
     def _aad(path: str, version: int) -> bytes:
@@ -129,6 +145,8 @@ class LocalEncryptedStore:
                             "INSERT INTO secret_versions VALUES (?,?,?,?,?,?)",
                             (path, version, nonce, ciphertext, self._key_id, time.time()),
                         )
+                        c.execute("DELETE FROM secret_versions WHERE path=? AND version<=?",
+                                  (path, version - KEEP_VERSIONS))
                     except BaseException:
                         c.execute("ROLLBACK")
                         raise
@@ -166,6 +184,16 @@ class LocalEncryptedStore:
             # tampered row read as a revoked credential.
             raise StoreUnavailable("integrity") from None
         return Record(data=json.loads(plaintext), version=stored_version, receipt=uuid.uuid4().hex)
+
+    def delete(self, path: str) -> None:
+        """Destroy every version of ``path``. Deleting a path that holds nothing is not an error."""
+        _check_path(path)
+        with self._lock:
+            try:
+                with closing(self._connect()) as c:
+                    c.execute("DELETE FROM secret_versions WHERE path=?", (path,))
+            except sqlite3.Error:
+                raise StoreUnavailable("transport") from None
 
     def healthy(self) -> bool:
         try:
@@ -217,7 +245,7 @@ class OpenBaoStore:
         self._mount = mount
         self._transport = transport
 
-    def _request(self, method: str, path: str, *, body=None, params=None, allow_missing=False):
+    def _request(self, method: str, path: str, *, body=None, params=None, allow_missing=False, kind="data"):
         try:
             token = self._token_file.read_text().strip()
         except OSError:
@@ -225,7 +253,7 @@ class OpenBaoStore:
         try:
             with httpx.Client(timeout=5, follow_redirects=False, transport=self._transport) as client:
                 response = client.request(
-                    method, f"{self._address}/v1/{self._mount}/data/{path}",
+                    method, f"{self._address}/v1/{self._mount}/{kind}/{path}",
                     headers={"X-Vault-Token": token}, json=body, params=params,
                 )
         except httpx.HTTPError:
@@ -250,9 +278,17 @@ class OpenBaoStore:
             body["options"] = {"cas": cas}
         result = self._request("POST", path, body=body)
         try:
-            return Record(data=data, version=int(result["data"]["version"]), receipt=str(result.get("request_id", "")))
+            record = Record(data=data, version=int(result["data"]["version"]), receipt=str(result.get("request_id", "")))
         except (KeyError, TypeError, ValueError):
             raise StoreUnavailable("transport") from None
+        # Retention: KV v2 destroys versions beyond the key's max_versions. Set after the write
+        # landed, so a refusal here never loses a credential the provider has already rotated; a
+        # refusal is logged, and the mount's own max_versions applies.
+        try:
+            self._request("POST", path, body={"max_versions": KEEP_VERSIONS}, kind="metadata")
+        except StoreUnavailable as exc:
+            log_event("broker_fault", level="warning", fields={"source": "store", "kind": "retention_" + exc.kind})
+        return record
 
     def get(self, path: str, *, version: Optional[int] = None) -> Optional[Record]:
         _check_path(path)
@@ -268,6 +304,11 @@ class OpenBaoStore:
                           receipt=str(result.get("request_id", "")))
         except (KeyError, TypeError, ValueError):
             raise StoreUnavailable("transport") from None
+
+    def delete(self, path: str) -> None:
+        """Destroy every version of ``path`` and its metadata (KV v2 ``DELETE metadata/<path>``)."""
+        _check_path(path)
+        self._request("DELETE", path, allow_missing=True, kind="metadata")
 
     def healthy(self) -> bool:
         try:

@@ -109,15 +109,23 @@ def harness_subprocess_env() -> dict[str, str]:
 #: The unprivileged user the model's tools run as (created in core/agent/worker/Dockerfile).
 TOOLS_USER = "vexa-tools"
 
-#: Set when a path a turn needs could not be handed to the tools user: from then on this worker runs
-#: its harness as itself (said loudly), because a harness that cannot write its workspace is worse.
-_tools_off = False
+
+
+class ToolsAccessRefused(OSError):
+    """A path a turn needs could not be handed to :data:`TOOLS_USER`. The turn does not run: its
+    harness never falls back to running the model's tools as this (root) process, which could read
+    the worker's environment and write its code. ``path`` is the path that failed, ``root`` the
+    granted path it sits under, ``cause`` the operating system's words for the failure."""
+
+    def __init__(self, path: str, root: str, cause: str) -> None:
+        super().__init__(f"cannot hand {path} to the tools user: {cause}")
+        self.path, self.root, self.cause = path, root, cause
 
 
 def tools_identity() -> Optional[tuple[int, int]]:
     """``(uid, gid)`` of :data:`TOOLS_USER` when this process can run a harness as that user: it runs
     as root and the image has the user. None otherwise."""
-    if _tools_off or not hasattr(os, "geteuid") or os.geteuid() != 0:
+    if not hasattr(os, "geteuid") or os.geteuid() != 0:
         return None
     try:
         entry = pwd.getpwnam(TOOLS_USER)
@@ -188,17 +196,18 @@ def grant_tools_access(paths: Iterable["str | Path"]) -> bool:
     owns. Without it, write access to the work-tree root is enough to rename a ``.git`` the tools
     user does not own and put another directory in its place.
 
-    When a path cannot be granted, this worker stops switching users (``_tools_off``) and says so,
-    and False is returned; True when there is nothing to do or everything was granted."""
-    global _tools_off
+    True when there is nothing to do or everything was granted. When a path cannot be granted,
+    :class:`ToolsAccessRefused` is raised naming the first one, after the walk (the rest are still
+    granted, so a retry has less to do): the caller refuses the turn. Nothing here ever stops the
+    worker switching users — a harness never runs the model's tools as root because a grant failed."""
     ident = tools_identity()
     if ident is None:
         return True
     tools_uid, gid = ident
-    ok = True
+    failed: list[tuple[str, str, str]] = []           # (path, granted root, cause)
+    current = ""
 
     def grant(p: str, is_dir: bool, sticky: bool = False) -> None:
-        nonlocal ok
         try:
             st = os.lstat(p)
             if stat.S_ISLNK(st.st_mode):
@@ -213,11 +222,13 @@ def grant_tools_access(paths: Iterable["str | Path"]) -> bool:
         except OSError as exc:
             if getattr(exc, "errno", None) == 30:    # EROFS: a read-only mount, read access suffices
                 return
-            ok = False
+            cause = os.strerror(exc.errno) if getattr(exc, "errno", None) else (str(exc) or type(exc).__name__)
+            failed.append((p, current, cause))
             _log.error("cannot hand %s to the tools user: %s", p, exc)
 
     for root in paths:
         root = str(root)
+        current = root
         if not root or not os.path.isdir(root) or os.path.islink(root):
             continue
         grant(root, True)
@@ -232,11 +243,11 @@ def grant_tools_access(paths: Iterable["str | Path"]) -> bool:
             for name in filenames:
                 if name != ".git":                   # a `gitdir:` file is git's, not the turn's
                     grant(os.path.join(dirpath, name), False)
-    if not ok:
-        _tools_off = True
-        _log.error("the model's tools could not be given what this turn needs — from now on this "
-                   "worker runs its harness as itself, with its environment readable to them")
-    return ok
+    if failed:
+        _log.error("the model's tools could not be given what this turn needs (%d path(s)) — the "
+                   "turn is refused; its harness never runs them as this process", len(failed))
+        raise ToolsAccessRefused(*failed[0])
+    return True
 
 
 def show_tools(paths: Iterable["str | Path"]) -> bool:

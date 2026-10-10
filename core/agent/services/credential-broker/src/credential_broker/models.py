@@ -6,7 +6,7 @@ holds them to the contract's request goldens.
 """
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Annotated, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -38,6 +38,8 @@ class OAuthApplicationBody(Strict):
     client_secret: str = Field(min_length=1, max_length=2000)
     setup_request: str = Field(max_length=80)
     confirmed_host: str = Field(default="", max_length=253)
+    #: The other credential hosts the person typed: the service endpoint, when it is not the token host.
+    confirmed_hosts: list[Annotated[str, Field(max_length=253)]] = Field(default_factory=list, max_length=4)
 
 
 class PreparedSetupBody(Strict):

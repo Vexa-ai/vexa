@@ -571,15 +571,18 @@ def test_workspace_tree_hidden_mode(tmp_path):
     default = reader.tree("u_jane")
     assert default == ["kg/note.md"]
 
-    # hidden=True: surfaces .claude + other dotfiles, but never .git internals
+    # hidden=True: surfaces other dotfiles, but never .git internals nor the agent's .claude plumbing
+    # (no file route reaches into it either — workspace_paths.RESERVED_DIRS)
     shown = reader.tree("u_jane", hidden=True)
-    assert ".claude/sessions/main.session" in shown
+    assert not any(f.startswith(".claude/") for f in shown)
     assert ".env" in shown
     assert "kg/note.md" in shown
     assert not any(f.startswith(".git/") or f == ".git" for f in shown)
 
-    # read() can open a hidden file (traversal-guard still applies)
-    assert reader.read("u_jane", ".claude/sessions/main.session") == "sess\n"
+    # read() can open a hidden file (traversal-guard still applies) — but never one under .claude
+    assert reader.read("u_jane", ".env") == "SECRET=1\n"
+    with pytest.raises(ValueError):
+        reader.read("u_jane", ".claude/sessions/main.session")
 
     # endpoint passes the param through
     c = TestClient(create_app(
@@ -588,7 +591,7 @@ def test_workspace_tree_hidden_mode(tmp_path):
     plain = c.get("/api/workspace/tree", params={"subject": "u_jane"}).json()["files"]
     assert plain == ["kg/note.md"]
     with_hidden = c.get("/api/workspace/tree", params={"subject": "u_jane", "hidden": 1}).json()["files"]
-    assert ".claude/sessions/main.session" in with_hidden
+    assert ".env" in with_hidden and not any(f.startswith(".claude/") for f in with_hidden)
 
 
 def _write_transcript(ws, sid: str, lines: list[dict]) -> None:
@@ -889,7 +892,7 @@ class _ResumedSessionRedis:
         if self._reads == 1:
             return [("tc:meeting:m1", [("1-0", {"payload": _j.dumps({"type": "session_end"})})])]
         if self._reads == 2:
-            return [("tc:meeting:m1", [("2-0", {"payload": _j.dumps({"type": "session_start", "uid": "m1"})})])]
+            return [("tc:meeting:m1", [("2-0", {"payload": _j.dumps({"type": "session_start", "session_uid": "m1"})})])]
         if self._reads == 3:
             return [("tc:meeting:m1", [("3-0", {"payload": _j.dumps(
                 {"type": "transcription", "segments": [{"speaker": "J", "text": "still live", "start": 9, "segment_id": "s9"}]})})])]

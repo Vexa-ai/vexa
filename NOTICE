@@ -9,8 +9,12 @@ Third-party notices
 Each dependency below is used unmodified and installed from its public
 registry; none of its source is vendored into this repository. The licence
 of every npm and Python dependency is checked by gate:licenses, with the
-weak-copyleft exceptions recorded in license-exceptions.json. Binaries and
-model weights built into the images are listed in THIRD_PARTY_LICENSES.md.
+weak-copyleft exceptions recorded in license-exceptions.json. On the npm
+side that is the pnpm workspace and every project that installs from its
+own package-lock.json (the terminal's images run `npm ci` from one). The
+retiring dashboard (services/dashboard) and the transcript-rendering copy
+it vendors are outside the gates, and this line builds neither. Binaries
+and model weights built into the images are listed in THIRD_PARTY_LICENSES.md.
 
 python-dateutil (flows, meeting-api, runtime) is licensed under the Apache
 License 2.0 for contributions made after 2017-12-01 and under the

@@ -160,11 +160,15 @@ def _resolve(host: str) -> list[str]:
 
 class _FetchTransport(httpx.BaseTransport):
     """Pinned for every host (``ssrf.build_pinned_sync_transport``) except the operator's own search
-    endpoint — the same one exemption ``fetch_refusal`` makes."""
+    endpoint — the same one exemption ``fetch_refusal`` makes. At connect time the host is resolved
+    again through the same resolver the URL check used, every address checked, and the connection
+    dialled to a checked address: what was checked is what is reached. ``inner`` is the transport
+    that dials (a test's recorder; the real one otherwise)."""
 
-    def __init__(self) -> None:
-        self._pinned = ssrf.build_pinned_sync_transport()
-        self._plain = httpx.HTTPTransport()
+    def __init__(self, inner: Optional[httpx.BaseTransport] = None) -> None:
+        self._plain = inner if inner is not None else httpx.HTTPTransport()
+        self._pinned = ssrf.build_pinned_sync_transport(inner=self._plain,
+                                                        resolver=lambda host: _resolve(host))
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
         own = _host(search_url())
@@ -174,7 +178,12 @@ class _FetchTransport(httpx.BaseTransport):
 
     def close(self) -> None:
         self._pinned.close()
-        self._plain.close()
+
+
+def fetch_transport(inner: Optional[httpx.BaseTransport] = None) -> httpx.BaseTransport:
+    """The connection every web-tool client uses — the harness's own included. A client built on any
+    other transport resolves the name again when it dials and can land wherever that answer points."""
+    return _FetchTransport(inner)
 
 
 def fetch_refusal(url: str, resolve: Optional[Callable[[str], list[str]]] = None) -> Optional[str]:

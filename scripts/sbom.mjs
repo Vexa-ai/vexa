@@ -9,7 +9,10 @@
  * inventories four sources into one SPDX document —
  *
  *   1. npm deps   — `pnpm licenses list --json` (the same index gate:licenses uses):
- *                   name · version · declared licence, one SPDX package per version.
+ *                   name · version · declared licence, one SPDX package per version. Plus every
+ *                   npm project that installs from its own package-lock.json outside the pnpm
+ *                   tree (scripts/npm-locks.mjs; the terminal's images run `npm ci` from one),
+ *                   read from the lock, as gate:licenses reads it.
  *   2. pip deps   — the committed uv.lock files (name · version). uv.lock carries
  *                   no licence field; licenceDeclared comes from python-licenses.json
  *                   (the reviewed index gate:licenses classifies against) and is
@@ -35,6 +38,7 @@
 import { readFileSync, existsSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { execSync } from "node:child_process";
+import { npmLockInventory } from "./npm-locks.mjs";
 
 const ROOT = process.cwd();
 const SKIP = new Set(["node_modules", ".venv", ".git", "dist", ".turbo", "__pycache__", ".pytest_cache"]);
@@ -104,6 +108,20 @@ function npmPackages() {
     }
   }
   return out;
+}
+
+// The npm projects outside the pnpm tree, each package once by name@version (the pnpm index wins).
+function npmLockPackagesFor(sbomNpm) {
+  let inv;
+  try { inv = npmLockInventory(ROOT); }
+  catch (e) { warn(`npm lockfiles could not be read (${e.message}) — emitting SBOM without them`); return []; }
+  const have = new Set(sbomNpm.map((p) => `${p.name}@${p.version}`));
+  return inv.packages.filter((p) => !have.has(`${p.name}@${p.version}`)).map((p) => ({
+    eco: "npm", name: p.name, version: p.version,
+    licenseDeclared: spdxLicense(p.license),
+    purl: `pkg:npm/${p.name}@${p.version}`,
+    homepage: null,
+  }));
 }
 
 // ── source 2: pip deps — inventory from the committed uv.lock files ──────────────
@@ -237,7 +255,8 @@ function pkgObject(p, id) {
   return o;
 }
 
-const npm = npmPackages();
+const pnpmNpm = npmPackages();
+const npm = [...pnpmNpm, ...npmLockPackagesFor(pnpmNpm)];
 const pip = pipPackages();
 const liteApt = liteAptPackages();
 const deps = [...npm, ...pip].sort((a, b) => (a.eco + a.name + a.version).localeCompare(b.eco + b.name + b.version));

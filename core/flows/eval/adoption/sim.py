@@ -104,8 +104,8 @@ def _touches_for(meeting, org_state, is_seeded, attendee_followup: str):
 
 
 SEED_STRATEGIES = {
-    # (i) the pilot as it stands — Robin's "3-5 coordinators and production managers
-    #     using it as their main tool", picked without regard to WHAT they organize.
+    # (i) the pilot as designed — 3-5 coordinators and production managers using it as their
+    #     main tool, picked without regard to WHAT they organize.
     "pilot_random": "3-5 coordinators/PMs, chosen at random",
     # (ii) structure: one coordinator per SHOW. A show's dailies are organized by its
     #      production coordinator, and one coordinator organizes many recurring meetings, so

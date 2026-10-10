@@ -55,7 +55,8 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 from shared import desk_now
-from workspaces.shared.entities import _DATED_HEADING, ENTITIES_DIR, KINDS, split_frontmatter
+from workspaces.shared import workspace_paths as wpaths
+from workspaces.shared.entities import _DATED_HEADING, ENTITIES_DIR, KINDS, entity_pages, split_frontmatter
 from workspaces.shared.links import format_ref
 
 README = "README.md"
@@ -149,17 +150,10 @@ def cards(mounts: Iterable[dict], home_id: str) -> list[Card]:
         if not wid or not root.is_dir():
             continue
         for kind in KINDS:
-            d = root / ENTITIES_DIR / kind
-            if not d.is_dir():
-                continue
-            for f in sorted(d.glob("*.md")):
-                if f.name == "index.md":
-                    continue
-                try:
-                    text = f.read_text(encoding="utf-8", errors="replace")
-                    modified = f.stat().st_mtime
-                except OSError:
-                    continue
+            # NOFOLLOW (`entities.entity_pages`): the mount is a work tree the model's tools can
+            # write, so a linked kind folder or page never puts somebody else's card on this desk.
+            for fname, text, modified in entity_pages(root, kind):
+                f = root / ENTITIES_DIR / kind / fname
                 fm, _ = split_frontmatter(text)
                 if (_fm(fm, "template") or "").lower() == "true":
                     continue          # a SHAPE is never a card
@@ -321,11 +315,10 @@ def update_readme(root, *, mounts: Iterable[dict] = (), workspaces: Iterable[dic
 
     Idempotent: a desk whose cards and touches have not moved rewrites byte-identical content and
     reports `changed: False`, so this is safe to run at the end of every turn."""
-    p = Path(root) / README
-    try:
-        before = p.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        before = ""
+    # The README is read and rewritten NOFOLLOW: the desk is a work tree the model's tools can
+    # write, so a link at `README.md` is never read through nor written through (it is replaced).
+    raw = wpaths.read_bytes_inside(Path(root), README)
+    before = raw.decode("utf-8", errors="replace") if raw is not None else ""
     text = before
     for key in RETIRED_SECTIONS:
         text = _drop_marked(text, key)
@@ -344,6 +337,5 @@ def update_readme(root, *, mounts: Iterable[dict] = (), workspaces: Iterable[dic
         head = text.rstrip("\n") or header_for(name).rstrip("\n")
         text = head + "\n\n" + "\n\n".join(appended) + "\n"
     if text != before:
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(text, encoding="utf-8")
+        wpaths.write_text_inside(Path(root), README, text)
     return {"path": README, "changed": text != before, "sections": [k for k, _ in SECTIONS]}

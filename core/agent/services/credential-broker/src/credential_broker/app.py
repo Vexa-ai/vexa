@@ -4,7 +4,8 @@ Every route except the two probes (GET /health, GET /ready) requires an X-Vexa-A
 with a role key; the role decides what the caller may do (contract `x-routes`). An agent- or
 git-role call must ALSO carry the gateway's signed identity (gateway-identity.v1 `X-Vexa-Identity`)
 naming the same person as the assertion's actor: agent-api holds both keys, and neither key alone
-may let it act for anybody it likes. The broker owns three things nobody else writes:
+may let it act for anybody it likes. On the agent role that identity must also have a person in the
+loop (a worker dispatched without one may only list connections), the same rule agent-api applies. The broker owns three things nobody else writes:
 connection metadata and its audit trail (metadata.sqlite), the credential store (ADR-0040), and
 the OAuth state that binds a consent to the browser session that started it.
 
@@ -23,7 +24,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from . import assertion, identity_token, providers, routes_connections, routes_git
-from .broker import Broker, route_of
+from .broker import Broker, route_of, unwatched
 from .faults import UpstreamFault
 from .obs import TraceMiddleware, log_event
 
@@ -76,8 +77,11 @@ def create_app(broker: Broker) -> FastAPI:
             return JSONResponse({"detail": "Product identity refused"}, 401)
         # `memberships`: the shared workspaces the gateway signed for this person (agent and git
         # roles only; the human role's person is resolved by the terminal, without them).
+        # `unwatched`: the signed identity is a worker's, dispatched without a person in the loop
+        # (`Broker.identity` refuses it on every agent-role route that reads or uses a credential).
         request.state.who = {"actor": claims["actor"], "session": claims["session"], "role": claims["role"],
-                             "memberships": frozenset(str(w) for w in person.get("workspaces") or ())}
+                             "memberships": frozenset(str(w) for w in person.get("workspaces") or ()),
+                             "unwatched": unwatched(person)}
         response = await call_next(request)
         response.headers["Cache-Control"] = "no-store"
         response.headers["X-Content-Type-Options"] = "nosniff"

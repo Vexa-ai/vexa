@@ -12,7 +12,7 @@ import jsonschema
 import pytest
 from fastapi.routing import APIRoute
 
-from conftest import CONTRACT, golden, schema
+from conftest import CONTRACT, golden, schema, OWNER
 from credential_broker import models, providers, secret_service
 
 SCHEMA = schema()
@@ -96,7 +96,7 @@ def test_responses_conform(signed, connection, ready, store, client):
     conforms("ConnectionState", signed("human", "POST", f"/api/connections/{cid}/delete").json())
     gmail = connection("google_email")
     conforms("AuthorizeResponse", signed("human", "POST", f"/api/connections/{gmail}/authorize").json())
-    store.put(gmail, {"value": {"access_token": "t", "expires_at": 9e12, "scope": providers.DRAFT_SCOPE}})
+    store.put(gmail, {"owner": OWNER, "value": {"access_token": "t", "expires_at": 9e12, "scope": providers.DRAFT_SCOPE}})
     ready(gmail)
     with patch.object(providers, "read_account", return_value={"messages": [], "has_more": False, "next_page_token": ""}):
         conforms("AccountReadResponse", signed("agent", "POST", f"/api/connections/{gmail}/read", golden("AccountReadRequest.gmail-search.json")).json())

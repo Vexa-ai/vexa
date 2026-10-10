@@ -145,7 +145,7 @@
       }
     },
     "FeedEntry": {
-      "description": "One entry of the per-meeting feed `tc:meeting:{meeting_id}`, keyed by the meetings-domain numeric row id (never the native id, which collides across users and rows). The collector is its only writer, and writes it only for bus entries it admitted (StreamEntry), so a reader may act on it: agent-api's transcription watcher registers and ends meetings from it, and the terminal's live view reads it through agent-api. The entry's one field, `payload`, is the JSON of a FeedTranscription, a FeedRetract or a SessionEnd.",
+      "description": "One entry of the per-meeting feed `tc:meeting:{meeting_id}`, keyed by the meetings-domain numeric row id (never the native id, which collides across users and rows). The collector is its only writer, and writes it only for bus entries it admitted (StreamEntry), so a reader may act on it: agent-api's transcription watcher registers and ends meetings from it, and the terminal's live view reads it through agent-api. The entry's one field, `payload`, is the JSON of a FeedTranscription, a FeedRetract, a FeedSessionStart or a SessionEnd.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -257,6 +257,23 @@
           "items": {
             "type": "string"
           }
+        }
+      }
+    },
+    "FeedSessionStart": {
+      "description": "A feed entry marking the meeting live again on this row: meeting-api writes it when the meeting's lifecycle reaches `active`, so a reader that saw an earlier SessionEnd on a reused row stops treating the row as ended. `session_uid` carries the native id for display (the row id when no native id resolves), as on every other feed entry. Unlike the bus-level SessionStart it carries nothing else.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "session_uid"
+      ],
+      "properties": {
+        "type": {
+          "const": "session_start"
+        },
+        "session_uid": {
+          "type": "string"
         }
       }
     }

@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from workspaces.shared import workspace_paths as wpaths
+
 import yaml
 
 from control_plane import routine_resign
@@ -110,8 +112,32 @@ def routine_id_for_workspace_file(subject: str, name: str) -> str:
     return f"rt_{digest}"
 
 
+# A ROUTINE FILE IS IN A WORK TREE THE MODEL'S TOOLS CAN WRITE (`<desk>/routines/<name>.md`), and
+# agent-api reads it to arm a schedule and returns its text in `GET /api/routines`. Every read and
+# write goes through `workspace_paths` relative to the desk root, never through a link planted at
+# `routines` or at the file: a linked file is no routine file.
+def _base_rel(path: Path) -> tuple[Path, str]:
+    """``(desk root, "routines/<name>.md")`` for a routine file path."""
+    p = Path(path)
+    return p.parent.parent, f"{p.parent.name}/{p.name}"
+
+
+def _read_routine(path: Path) -> Optional[str]:
+    base, rel = _base_rel(path)
+    return wpaths.read_text_inside(base, rel)
+
+
+def _routine_paths(ws: Path) -> list[Path]:
+    """The desk's routine files — regular files directly in a real ``routines/`` only."""
+    return [ws / ROUTINES_DIR / n for n in wpaths.list_files_inside(ws, ROUTINES_DIR, suffix=".md")]
+
+
 def _content_hash(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    base, rel = _base_rel(path)
+    data = wpaths.read_bytes_inside(base, rel)
+    if data is None:
+        raise OSError(f"{rel} is not a regular file in this workspace")
+    return hashlib.sha256(data).hexdigest()
 
 
 def _approvals_file(workspaces_dir: str | Path, subject: str) -> Path:
@@ -145,9 +171,10 @@ def approve_routine_file(subject: str, name: str, *,
     """Record that a person stands behind ``routines/<name>.md`` exactly as it is now. Returns the
     approved content hash, or None when there is no such file."""
     path = _safe_routine_path(workspaces_dir, subject, name)
-    if not path.is_file():
+    try:
+        digest = _content_hash(path)
+    except OSError:
         return None
-    digest = _content_hash(path)
     approvals = _read_approvals(workspaces_dir, subject)
     if approvals.get(name) != digest:
         approvals[name] = digest
@@ -186,8 +213,7 @@ def _record_existing_approvals(workspaces_dir: str | Path) -> None:
         return
     recorded = 0
     for subject in scan_workspace_subjects(workspaces_dir):
-        routines_dir = Path(workspaces_dir) / subject / ROUTINES_DIR
-        for path in sorted(routines_dir.glob("*.md")) if routines_dir.is_dir() else []:
+        for path in _routine_paths(Path(workspaces_dir) / subject):
             if approve_routine_file(subject, path.stem, workspaces_dir=workspaces_dir):
                 recorded += 1
     marker.parent.mkdir(parents=True, exist_ok=True)
@@ -238,10 +264,7 @@ def _string_value(value: object) -> str:
 def _routine_card_from_file(path: Path, *, subject: str, job_card: Optional[dict] = None,
                             pending: bool = False) -> dict:
     label = path.as_posix()
-    try:
-        text = path.read_text()
-    except OSError:
-        text = ""
+    text = _read_routine(path) or ""
     fm, body = _split_frontmatter(text, label=label)
     enabled = _as_bool(fm.get("enabled"), True, label=label)
     cron = _string_value(fm.get("cron"))
@@ -288,10 +311,9 @@ def set_routine_file_enabled(
 ) -> Path:
     """Rewrite only the ``enabled`` frontmatter field for ``routines/<name>.md``."""
     path = _safe_routine_path(workspaces_dir, subject, name)
-    if not path.exists() or not path.is_file():
+    text = _read_routine(path)
+    if text is None:
         raise FileNotFoundError(path)
-
-    text = path.read_text()
     m = _FRONTMATTER_BLOCK.match(text)
     if not m:
         raise ValueError("routine file missing YAML frontmatter")
@@ -307,7 +329,8 @@ def set_routine_file_enabled(
         )
     else:
         raw_fm = f"enabled: {value}\n{raw_fm}" if raw_fm else f"enabled: {value}"
-    path.write_text(open_marker + raw_fm + close_marker + body)
+    base, rel = _base_rel(path)
+    wpaths.write_text_inside(base, rel, open_marker + raw_fm + close_marker + body)
     return path
 
 
@@ -334,9 +357,8 @@ def routine_cards_for_subject(
         legacy_cards.append(card)
 
     ws = _safe_workspace_dir(workspaces_dir, subject)
-    routines_dir = ws / ROUTINES_DIR
     cards: list[dict] = []
-    for path in sorted(routines_dir.glob("*.md")) if routines_dir.exists() else []:
+    for path in _routine_paths(ws):
         rid = routine_id_for_workspace_file(subject, path.stem)
         job_card = job_by_rid.get(rid)
         pending = not routine_file_approved(path, subject=subject, workspaces_dir=workspaces_dir)
@@ -408,10 +430,9 @@ def load_routine_file(path: str | Path) -> Optional[RoutineFile]:
     """
     p = Path(path)
     label = p.as_posix()
-    try:
-        text = p.read_text()
-    except OSError as exc:
-        log.warning("%s: could not read routine file: %s", label, exc)
+    text = _read_routine(p)
+    if text is None:
+        log.warning("%s: could not read routine file (missing, or not a regular file here)", label)
         return None
 
     fm, body = _split_frontmatter(text, label=label)
@@ -513,8 +534,7 @@ def reconcile_workspace_routines(
 ) -> ReconcileResult:
     """Reconcile ``/workspaces/<subject>/routines/*.md`` onto schedule.v1 jobs."""
     ws = _safe_workspace_dir(workspaces_dir, subject)
-    routines_dir = ws / ROUTINES_DIR
-    paths = sorted(routines_dir.glob("*.md")) if routines_dir.exists() else []
+    paths = _routine_paths(ws)
 
     desired: dict[str, dict] = {}
     skipped = pending = 0

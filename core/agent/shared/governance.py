@@ -8,12 +8,14 @@ re-wire them into the turn path to restore hard enforcement (P8).
 """
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 from typing import Iterable, Optional
 
 import contracts
 from shared.adapters import _git, parse_entity
+from workspaces.shared import workspace_paths as wpaths
 
 # index.md / log.md are OKF v0.1 reserved files — listings/history WITHOUT frontmatter, not entities.
 _ENTITY_RE = re.compile(r"^kg/entities/(?!(?:.*/)?(?:index|log)\.md$).+\.md$")
@@ -43,10 +45,14 @@ def revalidate_entities(work_dir: str | Path, paths: Optional[Iterable[str]] = N
     targets = list(paths) if paths is not None else changed_entity_files(work)
     violations: list[tuple[str, str]] = []
     for rel in targets:
-        f = work / rel
-        if not f.exists():  # deleted — nothing to validate
+        # nofollow: the page is in a tree the model's tools can write. Deleted is nothing to do; a
+        # link (or anything else that is not a plain file) is a violation, never read through.
+        text = wpaths.read_text_inside(work, rel)
+        if text is None:
+            if os.path.lexists(work / rel):
+                violations.append((rel, "not a plain file in this workspace (a link is not an entity)"))
             continue
-        frontmatter, _body = parse_entity(f.read_text())
+        frontmatter, _body = parse_entity(text)
         try:
             contracts.validate_entity_frontmatter(frontmatter)
         except Exception as e:  # jsonschema ValidationError — surface the path + reason (P18)

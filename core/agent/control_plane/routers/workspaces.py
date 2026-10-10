@@ -84,6 +84,7 @@ def build(**d) -> APIRouter:
     _workspace_key = d['_workspace_key']
     _ws_is_member = d['_ws_is_member']
     _ws_sync = d['_ws_sync']
+    _ws_lookup = d['_ws_lookup']
     mindex = d['mindex']
     settings = d['settings']
     subject_of = d['subject_of']
@@ -132,15 +133,18 @@ def build(**d) -> APIRouter:
             # keep working after the conversation that produced it is over. So an attached image
             # lands beside the ones the agent fetches, and everything else keeps its drawer.
             folder = assets_mod.ASSETS_DIR if assets_mod.is_image_path(safe_name) else "uploads"
-            into = ws / folder
-            into.mkdir(parents=True, exist_ok=True)
-            target = (into / stored_name).resolve()
-            if into.resolve() not in target.parents:
-                raise HTTPException(status_code=400, detail="invalid filename")
-            pending.append((target, content, stored_name, f"{folder}/{stored_name}"))
+            try:
+                wpaths.relative_parts(f"{folder}/{stored_name}")
+            except wpaths.PathRefused:
+                raise HTTPException(status_code=400, detail="invalid filename") from None
+            pending.append((content, stored_name, f"{folder}/{stored_name}"))
         uploaded: list[dict[str, str]] = []
-        for target, content, stored_name, path in pending:
-            target.write_bytes(content)
+        for content, stored_name, path in pending:
+            # NOFOLLOW: a link planted at `uploads/`/`assets/` refuses, one at the name is replaced
+            try:
+                wpaths.write_bytes_inside(ws, path, content)
+            except wpaths.PathRefused:
+                raise HTTPException(status_code=400, detail="invalid filename") from None
             uploaded.append({"name": stored_name, "path": path})
         return {"files": uploaded}
     def _write_dir(request: Request, subject, rel: str, slug: Optional[str]) -> Path:
@@ -247,15 +251,14 @@ def build(**d) -> APIRouter:
             raise HTTPException(status_code=413,
                                 detail=f"{rel} exceeds {assets_mod.MAX_ASSET_BYTES // (1024 * 1024)}MB")
         try:
-            f = wpaths.resolve_inside(target, rel)   # …and again WITH the root, for the symlink half
-            index = wpaths.resolve_inside(target, assets_mod.SOURCES_INDEX)
+            # resolved ONCE, then written nofollow through what was resolved (`locate_inside`)
+            fbase, frel = wpaths.locate_inside(target, rel)
+            ibase, irel = wpaths.locate_inside(target, assets_mod.SOURCES_INDEX)
+            wpaths.write_bytes_inside(fbase, frel, content)
+            existing = wpaths.read_text_inside(ibase, irel) or ""
+            wpaths.write_text_inside(ibase, irel, assets_mod.record_source(existing, rel, source))
         except wpaths.PathRefused as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from None
-        f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_bytes(content)
-        existing = index.read_text(encoding="utf-8") if index.is_file() else ""
-        index.parent.mkdir(parents=True, exist_ok=True)
-        index.write_text(assets_mod.record_source(existing, rel, source), encoding="utf-8")
         _commit(target, [rel, assets_mod.SOURCES_INDEX], f"asset {rel} ({source or 'uploaded'})")
         return {"path": rel, "bytes": len(content), "source": source,
                 "content_type": assets_mod.media_type_for(rel)}
@@ -279,14 +282,17 @@ def build(**d) -> APIRouter:
         would re-download every logo on every scroll."""
         try:
             base = _read_target(request, slug)
-            f = wpaths.resolve_inside(base, path)
+            abase, arel = wpaths.locate_inside(base, path)
         except wpaths.PathRefused as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from None
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from None
-        if not (f.exists() and f.is_file()):
+        # read ONCE, nofollow, through what was resolved — the bytes served are the bytes checked
+        data = wpaths.read_bytes_inside(abase, arel) if arel else None
+        stat = wpaths.stat_inside(abase, arel) if data is not None else None
+        if data is None or stat is None:
             raise HTTPException(status_code=404, detail="not found")
-        stat = f.stat()
+        f = abase / arel
         etag = f'"{stat.st_size:x}-{stat.st_mtime_ns:x}"'
         headers = {
             "ETag": etag,
@@ -297,8 +303,7 @@ def build(**d) -> APIRouter:
         }
         if if_none_match and etag in [t.strip() for t in if_none_match.split(",")]:
             return Response(status_code=304, headers=headers)
-        return Response(content=f.read_bytes(), media_type=assets_mod.media_type_for(path),
-                        headers=headers)
+        return Response(content=data, media_type=assets_mod.media_type_for(path), headers=headers)
 
     @router.post("/api/workspace/asset")
     def ws_asset_fetch(request: Request, body: AssetFetchBody = Body(...)):
@@ -382,11 +387,11 @@ def build(**d) -> APIRouter:
         content = _screen_images(request, [content], path=rel, tool="workspace_write")[0]
         target = _write_dir(request, subject, rel, slug)
         try:
-            f = wpaths.resolve_inside(target, rel)   # …and again WITH the root, for the symlink half
+            # resolved ONCE (…and again WITH the root, for the symlink half), written nofollow
+            fbase, frel = wpaths.locate_inside(target, rel)
+            f = wpaths.write_text_inside(fbase, frel, content)
         except wpaths.PathRefused as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from None
-        f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text(content, encoding="utf-8")
         if (target / ".git").is_dir():
             run_git(target, "add", "--", rel)
             run_git(target, "-c", "user.name=vexa-terminal", "-c", "user.email=terminal@vexa.local",
@@ -513,27 +518,30 @@ def build(**d) -> APIRouter:
         src = _movable_dir(request, subject, src_rel, src_slug)
         dst = _movable_dir(request, subject, dst_rel, dst_slug)
         try:
-            src_f = wpaths.resolve_inside(src, src_rel)
-            dst_f = wpaths.resolve_inside(dst, dst_rel)
+            sbase, srel = wpaths.locate_inside(src, src_rel)
+            dbase, drel = wpaths.locate_inside(dst, dst_rel)
         except wpaths.PathRefused as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from None
-        if src_f.is_dir():
+        if srel and wpaths.is_dir_inside(sbase, srel):
             raise HTTPException(status_code=400, detail="that is a folder — this moves one page")
-        if not src_f.is_file():
+        # read ONCE, nofollow, through what was resolved; written the same way
+        content = wpaths.read_bytes_inside(sbase, srel) if srel else None
+        if content is None:
             raise HTTPException(status_code=404, detail="not found")
-        if src_f.resolve() == dst_f.resolve():
+        if (sbase / srel) == (dbase / drel):
             raise HTTPException(status_code=400, detail="the page is already there")
         same_workspace = src.resolve() == dst.resolve()
-        content = src_f.read_bytes()
-        dst_f.parent.mkdir(parents=True, exist_ok=True)
-        dst_f.write_bytes(content)
-        # A STUB IS A PAGE, so only a page gets one. A markdown pointer written over `assets/logo.png`
-        # is a broken picture wearing a helpful sentence.
-        stub = same_workspace and src_rel.lower().endswith(".md")
-        if stub:
-            src_f.write_text(_pointer_stub(dst_rel), encoding="utf-8")
-        else:
-            src_f.unlink()
+        try:
+            wpaths.write_bytes_inside(dbase, drel, content)
+            # A STUB IS A PAGE, so only a page gets one. A markdown pointer written over
+            # `assets/logo.png` is a broken picture wearing a helpful sentence.
+            stub = same_workspace and src_rel.lower().endswith(".md")
+            if stub:
+                wpaths.write_text_inside(sbase, srel, _pointer_stub(dst_rel))
+            else:
+                wpaths.unlink_inside(sbase, srel)
+        except wpaths.PathRefused as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
         subject_line = f"{dst.name}: {dst_rel} — moved from {src_rel}"[:72]
         if same_workspace:
             sha = _commit(src, [src_rel, dst_rel, *_kg_index_after(src, src_rel, dst_rel)],
@@ -721,14 +729,10 @@ def build(**d) -> APIRouter:
         pushes its own front matter out of the leading ``---`` position and takes the ``title:``
         with it. Guarded by the same ``resolve_inside`` every path from a caller goes through."""
         try:
-            p = wpaths.resolve_inside(base, rel)
+            pbase, prel = wpaths.locate_inside(base, rel)
         except (wpaths.PathRefused, OSError, ValueError):
             return None
-        try:
-            with p.open("r", encoding="utf-8", errors="replace") as fh:
-                return fh.read(front_page_mod._HEAD_BYTES)
-        except OSError:
-            return None
+        return wpaths.read_head_inside(pbase, prel, front_page_mod._HEAD_BYTES) if prel else None
 
     @router.get("/api/workspaces/{slug}/git/last-change")
     def ws_last_change(slug: str, request: Request, path: Optional[str] = None):
@@ -972,7 +976,12 @@ def build(**d) -> APIRouter:
         batch = [b if isinstance(b, str) else b.model_dump() for b in body.claims]
         if not batch:
             raise HTTPException(status_code=400, detail="claims must be a non-empty list")
-        result = claims_mod.propose(wsr.workspace_dir(subject), batch)
+        try:
+            result = claims_mod.propose(wsr.workspace_dir(subject), batch)
+        except wpaths.PathRefused:
+            # the book's folder or file is a link, not a plain path on this desk — never followed
+            raise HTTPException(status_code=409, detail="the claims book on this desk is not a plain "
+                                "file") from None
         for cid in result["ids"]:
             publish_mod.publish(publish_mod.EVENT_CLAIM_PROPOSED,
                                 publish_mod.claim_source_id(subject, cid),
@@ -990,8 +999,12 @@ def build(**d) -> APIRouter:
         subject = subject_of(request)
         if not body.verdicts:
             raise HTTPException(status_code=400, detail="verdicts must be a non-empty list")
-        return claims_mod.record_verdicts(wsr.workspace_dir(subject),
-                                          [v.model_dump() for v in body.verdicts])
+        try:
+            return claims_mod.record_verdicts(wsr.workspace_dir(subject),
+                                              [v.model_dump() for v in body.verdicts])
+        except wpaths.PathRefused:
+            raise HTTPException(status_code=409, detail="the claims book on this desk is not a plain "
+                                "file") from None
     @router.get("/api/workspaces/by-slug/{slug}")
     def ws_id_by_slug(slug: str, request: Request):
         """The identity of a workspace addressed the OLD way — by slug. What the terminal calls to
@@ -1005,7 +1018,7 @@ def build(**d) -> APIRouter:
         if slot is not None and slug not in (own.get("active"), "seed") and workspace_slot_dir(wsr.root, subject, slug).is_dir():
             return {"id": slug, "slug": slug, "name": slot.get("name") or slug,
                     "kind": "private", "access": "readable", "writable": True}
-        rec = workspace_registry.by_slug(slug) or _ws_sync(slug)
+        rec = workspace_registry.by_slug(slug) or _ws_lookup(slug)
         access = ids_mod.access_for(rec, subject, root=wsr.root, is_member=_ws_is_member)
         return ids_mod.view(rec, access, writable=ids_mod.writable_for(
             rec, subject, root=wsr.root, is_member=_ws_is_member))
@@ -1597,7 +1610,6 @@ def build(**d) -> APIRouter:
         survive: the caller's `personal` baseline, or `_global` (admin allowlist only). Both are
         "just folders" (founder ruling 2026-08-22) — wipe the content, re-copy the seed, commit.
         `_system` is deliberately NOT resettable: it is sessions/continuity, not knowledge."""
-        import shutil as _sh
         subject = subject_of(request)
         target = str(body.get("target") or "")
         require_in_ceiling(request, None if target == "personal" else target)
@@ -1614,11 +1626,15 @@ def build(**d) -> APIRouter:
         if not path.is_dir():
             raise HTTPException(status_code=404, detail="workspace not found")
         seed = resolve_seed_dir(seeds_root=os.environ.get("VEXA_WORKSPACE_SEEDS_DIR"))
-        for child in path.iterdir():
-            if child.name == ".git":
-                continue
-            _sh.rmtree(child, ignore_errors=True) if child.is_dir() else child.unlink(missing_ok=True)
-        _sh.copytree(seed, path, dirs_exist_ok=True)
+        # THE SLOT IS A WORK TREE THE MODEL'S TOOLS CAN WRITE. Clearing it never follows a link: a
+        # symlinked child is unlinked as itself (`rmtree` would refuse it, leave it in place, and the
+        # seed copy below would then write THROUGH it into wherever it points). The seed goes back in
+        # through nofollow writes, so a link planted again in the gap is refused, never followed.
+        wpaths.clear_tree_inside(path, keep=(".git",))
+        refused = wpaths.copy_tree_inside(seed, path)
+        if refused:
+            logger.warning("reseed %s: %d seed path(s) refused (a link in the way): %s",
+                           target, len(refused), ", ".join(refused[:5]))
         if (path / ".git").is_dir():
             run_git(path, "add", "-A")
             run_git(path, "-c", "user.name=vexa-platform", "-c", "user.email=platform@vexa.local",

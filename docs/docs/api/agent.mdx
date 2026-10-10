@@ -450,6 +450,11 @@ With a [model catalog](/model-catalog), `GET /api/models/test?model=<id>` tests 
 `GET /api/transcription/test` → `{ ok, summary, source }` (plus per-failure detail). Probes the
 effective STT backend with its token and then a real transcribe, so a zero-balance account fails here
 rather than on every segment; `source` says whether settings or the deployment env was tested.
+It tests the URL and token a bot spawned now would use.
+- **Your URL in settings:** your URL is probed with your token, and with none if you set none.
+- **No URL of yours:** the deployment's URL is probed with the deployment's token.
+- **Never mixed:** a deployment token never goes to your URL, and your token never goes to the
+  deployment's URL.
 
 ## Repository imports
 

@@ -36,6 +36,7 @@
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "remark-gfm": "^4.0.1",
+    "sharp": "file:./no-image-backend",
     "sonner": "^2.0.7",
     "sucrase": "^3.35.1",
     "tailwind-merge": "^3.4.0",
@@ -63,7 +64,7 @@
   "overrides": {
     "postcss": ">=8.5.23",
     "nanoid": "^3.3.18",
-    "sharp": "^0.35.5",
+    "sharp": "$sharp",
     "undici": "^7.29.1",
     "source-map-js": "^1.2.2",
     "dompurify": "^3.4.16"

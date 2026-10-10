@@ -11,7 +11,7 @@ So every fixture carries a COHORT, every person belongs to one, and a touch is o
 generated for a person whose cohort matches the meeting.
 
   insider     the DNA/ASWF working-group world — pipeline engineers, studio technology, TDs,
-              the Robin/Nora-shaped people who are actually in the TSC. The recorded DNA
+              the people who are actually in the TSC. The recorded DNA
               fixtures belong here, and to nobody else.
   production  the people the pilot is actually for — coordinators, production managers,
               supervisors, department artists. Their meeting is DAILIES, per show, per

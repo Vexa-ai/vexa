@@ -12,4 +12,9 @@ truthy). Any call — `sharp(...)`, or one of the module functions a caller reac
 `ImageBackendAbsent` (`code: ERR_VEXA_NO_IMAGE_BACKEND`), naming what was asked for and why there is
 no backend, rather than failing somewhere less legible.
 
-`gate:image-licenses` holds the override in place: a libvips package back in `pnpm-lock.yaml` fails it.
+The terminal's npm project, whose images install with `npm ci` from its own lockfile, carries a copy of
+`src/index.cjs` at `clients/terminal/no-image-backend` and points `sharp` at it. The parity fact
+`no-image-backend-terminal` holds the two byte-identical.
+
+`gate:image-licenses` holds both overrides in place: a libvips package back in `pnpm-lock.yaml` or in
+`clients/terminal/package-lock.json` fails it.

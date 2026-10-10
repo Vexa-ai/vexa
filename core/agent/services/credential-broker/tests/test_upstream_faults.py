@@ -18,6 +18,7 @@ import pytest
 
 from credential_broker import providers, secret_service, service_oauth
 from credential_broker.faults import UpstreamFault
+from conftest import OWNER
 
 SPEC = {"endpoint": "https://api.example.com/v2/data",
         "oauth": {"authorization_url": "https://login.example.com/authorize", "token_url": "https://api.example.com/token",
@@ -145,7 +146,7 @@ def test_custom_oauth_rejection_stays_a_refusal():
 @pytest.fixture
 def gmail(connection, ready, store):
     cid = connection("google_email")
-    store.put(cid, {"value": {"access_token": "SECRET", "expires_at": time.time() + 3600, "scope": providers.DRAFT_SCOPE}})
+    store.put(cid, {"owner": OWNER, "value": {"access_token": "SECRET", "expires_at": time.time() + 3600, "scope": providers.DRAFT_SCOPE}})
     ready(cid)
     return cid
 

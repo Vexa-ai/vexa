@@ -527,9 +527,11 @@ services:
       # the volume, which then blocked the directory. Only an operator-supplied OUT-OF-STORE path is
       # bound, at its own host path, where the control plane's exists() check runs.
       - ${VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH:-/dev/null}:${VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH:-/var/lib/vexa/no-global2}:ro
-      # The agent and git role keys, and nothing else of the broker's (Connections).
+      # The agent role key, and the git role key only while the Git store is switched on
+      # (VEXA_GIT_STORE_BROKER_URL set): otherwise its mount point is the empty `connections-git`
+      # volume and this service holds no git key. Nothing else of the broker's (Connections).
       - connections-agent-key:/run/vexa-connections/agent:ro
-      - connections-git-key:/run/vexa-connections/git:ro
+      - connections-git${VEXA_GIT_STORE_BROKER_URL:+-key}:/run/vexa-connections/git:ro
       # gateway-identity.v1: the gateway's public key (never the signing key).
       - identity-public-key:/run/vexa-identity/public:ro
     healthcheck:
@@ -1339,9 +1341,10 @@ services:
   # ─── Connections: the credential broker (credential-broker.v1, ADR-0040) ────────────────────────
   # One-shot: generates the three role keys and the store key, each into its own volume, the first
   # time the stack starts, and leaves them alone afterwards. Each consumer mounts only its own:
-  # agent-api the agent and git keys, the terminal the human key, the broker all four. No worker
-  # mounts any of them. To rotate a key, remove its volume and restart the stack (rotating the
-  # store key also makes every stored credential unreadable — reconnect them).
+  # agent-api the agent key (and the git key while the Git store is on), the terminal the human
+  # key, the broker all four. No worker mounts any of them. To rotate a key, remove its volume and
+  # restart the stack (rotating the store key also makes every stored credential unreadable —
+  # reconnect them).
   connections-keys:
     # Same image as credential-broker (its Python is all this needs); the build is repeated so a
     # fresh `up --build` resolves it locally whichever of the two compose creates first.
@@ -1565,6 +1568,8 @@ volumes:
   connections-human-key:
   connections-git-key:
   connections-store-key:
+  # Deliberately empty: agent-api's git-key mount point while the Git store is off.
+  connections-git:
   # gateway-identity.v1: the gateway's signing key (the gateway only) and its public half.
   identity-signing-key:
   identity-public-key:

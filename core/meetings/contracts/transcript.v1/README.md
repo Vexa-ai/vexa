@@ -38,6 +38,9 @@ from the bus. Each entry is `{payload}`, the JSON of one of:
 - **`FeedTranscription`** — one persisted, non-empty segment (`FeedSegment`); `session_uid` and
   `meeting_id` carry the native id for display;
 - **`FeedRetract`** — `segment_ids` the bot superseded;
+- **`FeedSessionStart`** — `{type: "session_start", session_uid}`: the meeting is live (again) on
+  this row; meeting-api writes it when the lifecycle reaches `active`, so a reused row that ended
+  before is not read as ended;
 - **`SessionEnd`** — `{type: "session_end", session_uid}`: the meeting is over.
 
 agent-api's transcription watcher registers and ends meetings from this feed, and the terminal's live

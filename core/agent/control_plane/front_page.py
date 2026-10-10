@@ -76,6 +76,8 @@ import re
 from pathlib import Path
 from typing import Optional
 
+from workspaces.shared import workspace_paths as wpaths
+
 #: The company layer's slug — the tier the directory lives in. One spelling, shared with
 #: ``system_mounts.GLOBAL_SLUG`` (imported there rather than here so this module stays importable
 #: on its own, the way ``chat_intents`` is).
@@ -221,12 +223,11 @@ def _name_of_person_page(text: str) -> Optional[str]:
     return h1.strip() if h1 else None
 
 
-def _head(p: Path) -> str:
-    try:
-        with p.open("r", encoding="utf-8", errors="replace") as fh:
-            return fh.read(_HEAD_BYTES)
-    except OSError:
-        return ""
+def _head(base: Path, rel: str) -> str:
+    """The first ``_HEAD_BYTES`` of ``base/<rel>`` — read NOFOLLOW (`workspace_paths`): every page
+    this module peeks at sits in a work tree the model's tools can write (a desk, ``_system``,
+    ``_global``), and its front matter is what names a person on the front page."""
+    return wpaths.read_head_inside(base, rel, _HEAD_BYTES) or ""
 
 
 def _self_page_name(desk: Path, address: Optional[str] = None) -> Optional[str]:
@@ -240,14 +241,10 @@ def _self_page_name(desk: Path, address: Optional[str] = None) -> Optional[str]:
     ``dmitry.md`` says ``type: person / id: dmitry / title: Dmitry`` and carries no ``self:`` key at
     all. A marker that has to be there for a name to resolve is a marker whose absence silently
     renames somebody *someone*."""
-    folder = desk / PERSON_DIR
-    if not folder.is_dir():
+    names = wpaths.list_files_inside(desk, PERSON_DIR, suffix=".md")
+    if not names:
         return None
-    try:
-        pages = sorted(folder.glob("*.md"))
-    except OSError:
-        return None
-    heads = [(page, _head(page)) for page in pages]
+    heads = [(name, _head(desk, f"{PERSON_DIR}/{name}")) for name in names]
     for _page, text in heads:
         if str(front_matter(text).get("self", "")).strip().lower() not in ("true", "yes", "on"):
             continue
@@ -262,7 +259,7 @@ def _self_page_name(desk: Path, address: Optional[str] = None) -> Optional[str]:
         fm = front_matter(text)
         mine = ((want_mail and str(fm.get("email", "")).strip().lower() == want_mail)
                 or (want_id and str(fm.get("id", "")).strip().lower() == want_id)
-                or (want_id and re.sub(r"\.mdx?$", "", page.name, flags=re.I).lower() == want_id))
+                or (want_id and re.sub(r"\.mdx?$", "", page, flags=re.I).lower() == want_id))
         if not mine:
             continue
         name = _name_of_person_page(text)
@@ -275,16 +272,10 @@ def _directory_name(root: Path, subject: str, email: Optional[str],
                     global_dir: Optional[Path] = None) -> Optional[str]:
     """The company directory's answer — a `_global` person page that names this subject or address.
     ``global_dir`` is where `_global` is (``system_mounts.global_root``); the in-store one by default."""
-    folder = Path(global_dir if global_dir is not None else root / GLOBAL_SLUG) / PERSON_DIR
-    if not folder.is_dir():
-        return None
+    gbase = Path(global_dir if global_dir is not None else root / GLOBAL_SLUG)
     want_mail = (email or "").strip().lower()
-    try:
-        pages = sorted(folder.glob("*.md"))
-    except OSError:
-        return None
-    for page in pages:
-        text = _head(page)
+    for page in wpaths.list_files_inside(gbase, PERSON_DIR, suffix=".md"):
+        text = _head(gbase, f"{PERSON_DIR}/{page}")
         fm = front_matter(text)
         matches = (str(fm.get("subject", "")).strip() == str(subject)
                    or (want_mail and str(fm.get("email", "")).strip().lower() == want_mail))
@@ -312,21 +303,20 @@ def local_part(address: Optional[str]) -> str:
 
 def _rosters(root: Path) -> list[list[dict]]:
     """Every workspace's ``policy/members.json``, as parsed lists. Failures are simply absent."""
+    # THROUGH `read_members` — the one reader of a member list, which reaches it without following a
+    # link (a contributor's tools can write `policy/` in a shared tree). A lazy import keeps this
+    # module importable on its own.
+    from control_plane.workspace_membership import read_members
+
     out: list[list[dict]] = []
-    try:
-        entries = sorted(p for p in Path(root).iterdir() if p.is_dir() and not p.name.startswith("."))
-    except OSError:
-        return out
-    for ws in entries:
-        try:
-            raw = (ws / MEMBERS_FILE).read_text(encoding="utf-8", errors="replace")
-        except OSError:
+    for name in wpaths.list_dirs_inside(Path(root)):
+        if name.startswith("."):
             continue
         try:
-            rows = json.loads(raw)
-        except (ValueError, TypeError):
+            rows = read_members(Path(root), name)
+        except Exception:  # noqa: BLE001 — a roster we cannot read is simply absent
             continue
-        if isinstance(rows, list):
+        if isinstance(rows, list) and rows:
             out.append([r for r in rows if isinstance(r, dict)])
     return out
 
@@ -393,8 +383,7 @@ def identity_name(root: Path, subject: Optional[str]) -> Optional[str]:
     sub = str(subject or "").strip()
     if not sub or not _SAFE_SUBJECT.fullmatch(sub):
         return None
-    note = Path(root) / SYSTEM_STORE_DIRNAME / sub / "identity.md"
-    m = _IDENTITY_NAME.search(_head(note))
+    m = _IDENTITY_NAME.search(_head(Path(root) / SYSTEM_STORE_DIRNAME / sub, "identity.md"))
     if not m:
         return None
     # `Dmitry (dmitry@vexa.ai)` — the address in the bullet is a parenthesis, never the name.

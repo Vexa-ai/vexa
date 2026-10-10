@@ -105,6 +105,7 @@ import json
 import logging
 import os
 import re
+import stat
 import subprocess
 import time
 import uuid
@@ -123,6 +124,7 @@ from llm.tool_events import (_BOT_TOOLS, _FOCUS_TOOLS, _OPEN_TOOLS, _TERMS_TOOLS
                              _written_artifact)
 from llm.ports import harness_subprocess_env
 from llm import jobs, web_tools
+from llm import workspace_paths as wpaths
 
 
 def _parse_extra_body(raw: object) -> dict:
@@ -147,6 +149,11 @@ def _parse_extra_body(raw: object) -> dict:
 
 
 log = logging.getLogger(__name__)
+
+#: Chat transcripts sit under `.claude/projects`, which no caller-supplied path may reach
+#: (`workspace_paths.RESERVED_DIRS`) — the model's own Read/Write/Glob included; this is the
+#: harness's own reach into it.
+_PLUMBING = (".claude",)
 
 # ── budgets ──────────────────────────────────────────────────────────────────────────────────────
 # Defaults chosen against the CCC node's sizing table: ~29 concurrent requests at 24k context, and
@@ -498,8 +505,12 @@ def _load_mcp(mcp_config: Optional[str], *, http_client: Optional[httpx.Client] 
     index: dict[str, tuple[_MCPServer, str]] = {}
     if not mcp_config:
         return servers, index
+    p = Path(mcp_config)     # the private attachment, read nofollow — see `engine._mcp_endpoint`
+    text = wpaths.read_text_inside(p.parent, p.name)
     try:
-        cfg = json.loads(Path(mcp_config).read_text())
+        if text is None:
+            raise OSError("not a plain file here")
+        cfg = json.loads(text)
     except (OSError, ValueError) as exc:
         log.warning("mcp config unreadable (%s) — running this turn without the toolbelt", exc)
         return servers, index
@@ -671,6 +682,26 @@ class _Sandbox:
         governance decision the dispatch already made; asking the model nicely is not enforcement."""
         return self._within(raw, self._write_roots, "WRITABLE mounted workspaces")
 
+    def locate(self, raw: str, *, write: bool = False) -> "tuple[Path, str]":
+        """``(mount root, path relative to it)`` for the RESOLVED target — the one check.
+
+        CHECK ONCE, ACT ON WHAT WAS CHECKED (R5-1's rule). These tools run in the worker process,
+        which is root, over paths the model chooses inside trees the model's own tools can also
+        write. Resolving and then opening by name leaves a window in which a link swapped in sends
+        the act somewhere else. So the act never opens this path by name: it goes through
+        ``workspace_paths`` relative to the root returned here, every component of the resolved
+        (already link-free) path opened ``O_NOFOLLOW`` — a link that appears after the check refuses
+        the act instead of redirecting it. Links INSIDE a mount still work: they are resolved here,
+        before the check, exactly as before."""
+        roots = self._write_roots if write else self._roots
+        real = self._within(raw, roots, "WRITABLE mounted workspaces" if write else "mounted workspaces")
+        best: Optional[Path] = None
+        for root in roots:
+            if (real == root or root in real.parents) and (best is None or len(root.parts) > len(best.parts)):
+                best = root
+        assert best is not None          # _within returned it, so one root contains it
+        return best, ("" if real == best else real.relative_to(best).as_posix())
+
     def contains(self, raw: str) -> bool:
         """True when ``raw`` is inside the read set — for filtering hits rather than refusing a call."""
         try:
@@ -725,30 +756,36 @@ def run_builtin(tool: str, args: dict, sandbox: _Sandbox,
                           str(args.get("brief") or ""))
     try:
         if tool == "Read":
-            path = sandbox.resolve(str(args.get("file_path") or ""))
-            text = path.read_text(encoding="utf-8", errors="replace")
+            root, rel = sandbox.locate(str(args.get("file_path") or ""))
+            data = wpaths.read_bytes_inside(root, rel) if rel else None
+            if data is None:
+                return False, f"cannot read {root / rel}: no such file, or not a plain file here"
+            text = data.decode("utf-8", errors="replace")
             lines = text.splitlines()
             start = max(0, int(args.get("offset") or 1) - 1)
             limit = int(args.get("limit") or 2000)
             chunk = "\n".join(lines[start:start + limit])
             return True, chunk[:_READ_MAX_CHARS]
         if tool == "Write":
-            path = sandbox.resolve_write(str(args.get("file_path") or ""))
-            path.parent.mkdir(parents=True, exist_ok=True)
+            root, rel = sandbox.locate(str(args.get("file_path") or ""), write=True)
             content = args.get("content")
-            path.write_text("" if content is None else str(content), encoding="utf-8")
+            path = wpaths.write_text_inside(root, rel, "" if content is None else str(content))
             return True, f"wrote {path}"
         if tool == "Edit":
-            path = sandbox.resolve_write(str(args.get("file_path") or ""))
+            root, rel = sandbox.locate(str(args.get("file_path") or ""), write=True)
             old, new = str(args.get("old_string") or ""), str(args.get("new_string") or "")
-            text = path.read_text(encoding="utf-8")
+            data = wpaths.read_bytes_inside(root, rel) if rel else None
+            if data is None:
+                return False, f"cannot edit {root / rel}: no such file, or not a plain file here"
+            text = data.decode("utf-8")
+            path = root / rel
             hits = text.count(old)
             if not old or hits == 0:
                 return False, "old_string not found in the file"
             if hits > 1 and not args.get("replace_all"):
                 return False, f"old_string appears {hits} times — pass replace_all or extend it"
-            path.write_text(text.replace(old, new) if args.get("replace_all")
-                            else text.replace(old, new, 1), encoding="utf-8")
+            wpaths.write_text_inside(root, rel, text.replace(old, new) if args.get("replace_all")
+                                     else text.replace(old, new, 1))
             return True, f"edited {path}"
         if tool == "Glob":
             base = sandbox.resolve(str(args.get("path") or "")) if args.get("path") else sandbox.resolve(".")
@@ -765,36 +802,37 @@ def run_builtin(tool: str, args: dict, sandbox: _Sandbox,
             hits: list[str] = []
             for p in base.glob(pattern):
                 try:
-                    real = sandbox.resolve(str(p))
+                    hroot, hrel = sandbox.locate(str(p))
                 except (ValueError, OSError):
                     continue                      # a symlink out of the mounts is not a hit
-                if real.is_file():
-                    hits.append(str(real))
+                if hrel and wpaths.is_file_inside(hroot, hrel):
+                    hits.append(str(hroot / hrel))
             hits = sorted(set(hits))[:_GLOB_MAX]
             return True, "\n".join(hits) if hits else "(no matches)"
         if tool == "Grep":
-            base = sandbox.resolve(str(args.get("path") or "")) if args.get("path") else sandbox.resolve(".")
+            groot, grel = sandbox.locate(str(args.get("path") or "") or ".")
             flags = re.IGNORECASE if args.get("case_insensitive") else 0
             rx = re.compile(str(args.get("pattern") or ""), flags)
             keep = str(args.get("glob") or "")
             out: list[str] = []
-            for f in sorted(base.rglob("*")):
+            # a descriptor walk that follows no link and reads each file nofollow: a symlink is
+            # neither entered nor read, so nothing outside the mount is searched (F86's escape)
+            for frel in wpaths.walk_files_inside(groot, grel):
                 if len(out) >= _GREP_MAX_HITS:
                     break
-                if not f.is_file() or ".git" in f.parts:
+                parts = frel.split("/")
+                if ".git" in parts:
                     continue
-                if not sandbox.contains(str(f)):
-                    continue                      # same escape as F86, reached through a symlink
-                if keep and not fnmatch.fnmatch(f.name, keep):
+                if keep and not fnmatch.fnmatch(parts[-1], keep):
                     continue
-                try:
-                    for n, line in enumerate(f.read_text(encoding="utf-8", errors="ignore").splitlines(), 1):
-                        if rx.search(line):
-                            out.append(f"{f}:{n}:{line.strip()[:200]}")
-                            if len(out) >= _GREP_MAX_HITS:
-                                break
-                except OSError:
+                data = wpaths.read_bytes_inside(groot, frel)
+                if data is None:
                     continue
+                for n, line in enumerate(data.decode("utf-8", errors="ignore").splitlines(), 1):
+                    if rx.search(line):
+                        out.append(f"{groot / frel}:{n}:{line.strip()[:200]}")
+                        if len(out) >= _GREP_MAX_HITS:
+                            break
             return True, "\n".join(out) if out else "(no matches)"
     except (OSError, ValueError, re.error) as exc:
         return False, f"{type(exc).__name__}: {exc}"
@@ -826,40 +864,47 @@ class _Transcript:
     losslessly instead of re-deriving it from a rendering. The reader ignores fields it does not
     know; that is the whole trick."""
 
+    # THE STORE IS IN `_system`, A TREE THE MODEL'S TOOLS CAN WRITE, and this process is root: the
+    # transcript is reached relative to the chat root through `workspace_paths`, never through a link
+    # planted at `.claude`, `projects`, the cwd-slug folder or the file — a linked transcript is
+    # neither appended to (written through) nor replayed into the model on resume (read through).
+    _PROJECTS = ".claude/projects"
+
     def __init__(self, chat_root: Path, work: Path, session_id: str) -> None:
         slug = str(work.resolve()).replace("/", "-")
-        self.dir = chat_root / ".claude" / "projects" / slug
+        self.root = Path(chat_root)
+        self.dir = self.root / ".claude" / "projects" / slug
         self.session_id = session_id
-        self.path = self.dir / f"{session_id}.jsonl"
+        self.name = f"{session_id}.jsonl"
+        self._own = f"{self._PROJECTS}/{slug}/{self.name}"
+        self.path = self.dir / self.name
+
+    def _rel(self) -> str:
+        if wpaths.is_file_inside(self.root, self._own, allow=_PLUMBING):
+            return self._own
+        # the sid may have been written under another cwd-slug (a mount that moved) — accept it
+        for slug in wpaths.list_dirs_inside(self.root, self._PROJECTS, allow=_PLUMBING):
+            cand = f"{self._PROJECTS}/{slug}/{self.name}"
+            if wpaths.is_file_inside(self.root, cand, allow=_PLUMBING):
+                return cand
+        return self._own
 
     def exists(self) -> bool:
-        if self.path.exists():
-            return True
-        # the sid may have been written under another cwd-slug (a mount that moved) — accept it
-        parent = self.dir.parent
-        return parent.exists() and any(parent.glob(f"*/{self.session_id}.jsonl"))
-
-    def _resolved(self) -> Path:
-        if self.path.exists():
-            return self.path
-        for cand in self.dir.parent.glob(f"*/{self.session_id}.jsonl"):
-            return cand
-        return self.path
+        return wpaths.is_file_inside(self.root, self._rel(), allow=_PLUMBING)
 
     def append(self, record: dict) -> None:
         try:
-            self.dir.mkdir(parents=True, exist_ok=True)
-            with self._resolved().open("a", encoding="utf-8") as fh:
-                fh.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
-        except OSError as exc:
+            wpaths.append_text_inside(self.root, self._rel(),
+                                      json.dumps(record, ensure_ascii=False, default=str) + "\n",
+                                      allow=_PLUMBING)
+        except (OSError, ValueError) as exc:   # ValueError: a link in the way (PathRefused)
             log.warning("could not append to the session transcript (%s) — history will be short", exc)
 
     def messages(self) -> list[dict]:
         """The prior conversation as OpenAI messages (from the ``oa`` field), or [] if unreadable."""
         out: list[dict] = []
-        try:
-            raw = self._resolved().read_text(encoding="utf-8")
-        except OSError:
+        raw = wpaths.read_text_inside(self.root, self._rel(), allow=_PLUMBING)
+        if raw is None:
             return out
         for line in raw.splitlines():
             if not line.strip():
@@ -1042,8 +1087,11 @@ class OpenAIAgentHarness:
         # a 300s inference wait, redirects there are meaningless, and a page the MODEL chose must
         # never ride the connection pool carrying the deployment's model credential.
         # `follow_redirects=False` because `web_fetch` walks the hops itself — every one of them is
-        # re-checked against the SSRF guard, which is the whole point.
-        self._web = httpx.Client(timeout=web_tools.FETCH_TIMEOUT, transport=web_transport,
+        # re-checked against the SSRF guard, which is the whole point. And the client dials through
+        # the guard's pinned transport (`web_tools.fetch_transport`): checked again at connect time,
+        # connected to the checked address. An injected `web_transport` is what it dials through.
+        self._web = httpx.Client(timeout=web_tools.FETCH_TIMEOUT,
+                                 transport=web_tools.fetch_transport(web_transport),
                                  follow_redirects=False)
         self._mcp_http = mcp_http_client
         self._chat_root: Optional[Path] = None
@@ -1055,18 +1103,18 @@ class OpenAIAgentHarness:
         of `prepare` is holding on to the root the engine already computed (`_system` when the
         dispatch declares one — chats are private and must not land on a shared mount)."""
         self._chat_root = Path(chat_root or work)
-        try:
-            (self._chat_root / ".claude" / "projects").mkdir(parents=True, exist_ok=True)
-        except OSError:
-            pass                                  # a read-only mount: the turn still runs
+        try:   # nofollow: a `.claude` planted as a link in `_system` is never created through
+            os.close(wpaths.dir_fd_inside(self._chat_root, (".claude", "projects"), create=True))
+        except (OSError, ValueError):
+            pass                                  # a read-only mount (or a link): the turn still runs
 
     def transcript_bytes(self, work: Path, session_id: str) -> int:
         total = 0
-        for path in (work / ".claude" / "projects").glob(f"*/{session_id}.jsonl"):
-            try:
-                total += path.stat().st_size
-            except OSError:
-                continue
+        name = f"{session_id}.jsonl"
+        for slug in wpaths.list_dirs_inside(work, ".claude/projects", allow=_PLUMBING):
+            st = wpaths.stat_inside(work, f".claude/projects/{slug}/{name}", allow=_PLUMBING)
+            if st is not None and stat.S_ISREG(st.st_mode):      # the entry itself; a link is no size
+                total += st.st_size
         return total
 
     def preflight(self) -> Optional[str]:

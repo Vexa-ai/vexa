@@ -86,6 +86,21 @@ def _redis_workload_acl(env: "os._Environ | dict | None" = None) -> str:
     return value
 
 
+def _auth_session_at_boot(env: "os._Environ | dict | None" = None) -> None:
+    """The authenticated-bot storage, checked once at boot (P14) with the same reading the spawn and
+    the session write-back apply (`bot_spawn.auth_session.auth_session_config`). With
+    ``BOT_AUTHENTICATED`` on, an incomplete userdata store or a bots' key pair that reuses a storage
+    root key refuses the boot, naming the variables and never a value. Off, nothing is checked."""
+    from .bot_spawn.auth_session import auth_session_config
+    from .bot_spawn.ports import AuthSessionNotConfigured
+    from .config_preflight import ConfigError
+
+    try:
+        auth_session_config(env)
+    except AuthSessionNotConfigured as e:
+        raise ConfigError(f"meeting-api refuses to boot: {e}") from None
+
+
 def _identity_key():
     """gateway-identity.v1 — the gateway's Ed25519 public key, or a refused boot. A file that is
     unreadable, or is anything but an Ed25519 public key (the private key included: a verifier that
@@ -137,6 +152,7 @@ def build_production_app():
     """Wire the unified meeting-api with the real adapters + the lifespan-driven loops."""
     _require_config()  # A4: refuse to boot a misconfigured deploy (no ADMIN_TOKEN → every spawn 500s).
     workload_acl = _redis_workload_acl()  # S51: an unknown mode refuses the boot, as agent-api's does
+    _auth_session_at_boot()  # S64: a broken authenticated-bot store refuses the boot, not the first spawn
 
     import redis.asyncio as aioredis
     from sqlalchemy.ext.asyncio import async_sessionmaker

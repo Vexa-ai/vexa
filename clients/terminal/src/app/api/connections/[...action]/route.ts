@@ -4,6 +4,7 @@ import { BrokerFault, brokerCall, publicOrigin } from '../broker';
 const headers = {'Cache-Control':'no-store', 'Referrer-Policy':'no-referrer'};
 const cid = /^[a-f0-9]{32}$/;
 const host = (v: unknown) => v === undefined || (typeof v === 'string' && v.length <= 253);
+const hosts = (v: unknown) => v === undefined || (Array.isArray(v) && v.length <= 4 && v.every(h => typeof h === 'string' && h.length <= 253));
 
 /** A broker failure, already logged by kind in brokerCall, as the browser sees it: the broker's own
  *  fixed sentence when the person can act on it, otherwise one generic line. */
@@ -33,7 +34,7 @@ export async function POST(req: NextRequest) {
     }
     if (parts.length===2 && cid.test(parts[0]) && parts[1]==='oauth-application') {
       const body=await req.json();
-      if(typeof body.client_id!=='string'||typeof body.client_secret!=='string'||typeof body.setup_request!=='string'||!host(body.confirmed_host)||Object.keys(body).some(k=>!['client_id','client_secret','setup_request','confirmed_host'].includes(k))||body.client_id.length>200||body.client_secret.length>2000)return new NextResponse(null,{status:400,headers});
+      if(typeof body.client_id!=='string'||typeof body.client_secret!=='string'||typeof body.setup_request!=='string'||!host(body.confirmed_host)||!hosts(body.confirmed_hosts)||Object.keys(body).some(k=>!['client_id','client_secret','setup_request','confirmed_host','confirmed_hosts'].includes(k))||body.client_id.length>200||body.client_secret.length>2000)return new NextResponse(null,{status:400,headers});
       return NextResponse.json(await brokerCall('POST',`/api/connections/${parts[0]}/oauth-application`,body),{headers});
     }
     if (parts.length===2 && cid.test(parts[0]) && parts[1]==='custom-secret') {

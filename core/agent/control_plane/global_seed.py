@@ -40,9 +40,10 @@ from __future__ import annotations
 
 import logging
 import os
-import shutil
 from pathlib import Path
 from typing import Optional
+
+from workspaces.shared import workspace_paths as wpaths
 
 logger = logging.getLogger("agent_api.global_seed")
 
@@ -140,12 +141,14 @@ def top_up(global_root: "str | Path",
             dest_name = f"{prefix}/{rel}" if prefix else rel
             # EXISTENCE IS THE WHOLE TEST — see the module docstring. Not mtime, not size, not
             # content: a file that is there is the admin's, and a deploy must not revert their edit.
-            if target.exists():
+            # NOFOLLOW (`workspace_paths`): `_global` is written by an admin's turn, so "there" means
+            # a plain file reached without a link — a planted link (dangling or not) is replaced at
+            # the leaf and refused in a parent, never written through as root.
+            if wpaths.is_file_inside(root, dest_name):
                 continue
             try:
-                target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(f, target)
-            except OSError as e:
+                wpaths.copy_file_inside(f, root, dest_name)
+            except (OSError, ValueError) as e:   # ValueError: PathRefused
                 logger.warning("global_seed: could not add %s to %s (%s) — the image's copy is "
                                "what a reader falls back on", dest_name, root, e)
                 continue

@@ -14,6 +14,7 @@ nothing here starts a server.
 | `unit_input` | who may put a message on a live worker's input stream: the per-unit key agent-api signs each entry with and the worker verifies |
 | `spawn` | builds the runtime.v1 `WorkloadSpec.env` for an agent worker |
 | `delegation` | the worker's per-dispatch token (delegation.v1), vendored byte for byte from `core/identity/contracts/delegation.v1/` |
+| `private_dir` | where a worker keeps a per-dispatch secret (its MCP attachment): a directory of its own outside every mount, 0700 (0711 with the file given to the harness's tools user), removed at exit |
 | `tools` | the generic toolbelt mechanism: tool.v1 → a Claude grant |
 | `seeding` | materialises a person's workspace from a validated template; the "passes checks" gate for a seed folder |
 | `governance` | the dormant hard-enforcement hook for workspace entity writes |

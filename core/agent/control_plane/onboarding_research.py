@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from shared.atomic_json import write_json_atomic
+from workspaces.shared import workspace_paths as wpaths
 
 
 class ResearchError(ValueError):
@@ -37,6 +38,24 @@ class Research:
             path = self.directory / 'state.json'
             state = json.loads(path.read_text()) if path.exists() else None
             yield state
+
+    def _graph_page(self, name):
+        """The text of ``kg/…/<page>.md`` named by a receipt, or None when it is not a plain markdown
+        file under ``kg/`` reached without a link."""
+        try:
+            parts = wpaths.relative_parts(str(name))
+        except wpaths.PathRefused:
+            return None
+        if len(parts) < 2 or parts[0] != 'kg' or not parts[-1].endswith('.md'):
+            return None
+        return wpaths.read_text_inside(self.workspace, '/'.join(parts))
+
+    def _write_audit(self, batch_id, receipts):
+        """The batch's receipts, in this workspace's checkpoint directory (the platform's, beside
+        the work tree, never inside it)."""
+        audit = self.directory / (batch_id + '.json')
+        audit.write_text(json.dumps({'batch': batch_id, 'receipts': receipts}))
+        os.chmod(audit, 0o600)
 
     def save(self, state):
         write_json_atomic(self.directory / 'state.json', state)
@@ -92,16 +111,16 @@ class Research:
                         if not paths:
                             raise ResearchError('Extracted sources require saved graph paths')
                         for name in paths:
-                            path = (self.workspace / name).resolve()
-                            graph = (self.workspace / 'kg').resolve()
-                            if self.workspace not in graph.parents or graph not in path.parents or not path.is_file() or path.suffix != '.md':
+                            # NOFOLLOW (`workspace_paths`): the page is in the person's work tree,
+                            # so it is read without following a link anywhere on its path — a
+                            # receipt cannot vouch for a file outside `kg/` through one.
+                            text = self._graph_page(name)
+                            if text is None:
                                 raise ResearchError('Receipt must name an existing private graph markdown file')
-                            if r['source_id'] not in path.read_text():
+                            if r['source_id'] not in text:
                                 raise ResearchError('Graph receipt is missing its source reference')
                 # Write receipts before advancing; replay after a crash is idempotent.
-                audit = self.directory / (batch_id + '.json')
-                audit.write_text(json.dumps({'batch': batch_id, 'receipts': receipts}))
-                os.chmod(audit, 0o600)
+                self._write_audit(batch_id, receipts)
                 stream = state['streams'][pending['stream']]
                 stream.update(cursor=pending['next_cursor'], done=not pending['has_more'])
                 state['counts']['reviewed'] += len(receipts)

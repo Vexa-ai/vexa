@@ -3,7 +3,7 @@
 ``tc:meeting:{row}`` has one owner on the writing side (the meetings domain) and two readers that act
 on it (agent-api's transcription watcher, the terminal's live view through agent-api). The contract
 states its shape: every entry is a ``FeedEntry`` — one ``payload`` field — whose JSON is a
-``FeedTranscription``, a ``FeedRetract`` or a ``SessionEnd``. The golden validator
+``FeedTranscription``, a ``FeedRetract``, a ``FeedSessionStart`` or a ``SessionEnd``. The golden validator
 (``transcript.v1/validate.mjs``) checks the goldens against that; nothing checked the WRITERS, and
 they drifted: the end marker went out as ``{"type": "session_end", "uid": …}`` while the sealed
 ``SessionEnd`` (additionalProperties: false) requires ``session_uid``. A reader written from the
@@ -14,7 +14,9 @@ it — the ``FeedEntry`` wrapper, then the inner shape picked by its ``type``:
 
   * the collector's ingest: a segment, a retract, and a bot's own ``session_end``;
   * the transcript import's completion marker;
-  * the lifecycle's reap marker when a meeting lands terminal.
+  * the lifecycle's markers: ``session_start`` when a meeting goes active, the reap
+    ``session_end`` when it lands terminal. The start marker was written as ``{"uid": …}`` and
+    was in no feed shape at all until transcript.v1 gained ``FeedSessionStart``.
 
 The schema is loaded BY PATH off the contract directory (the collector conforms to it, never edits it).
 """
@@ -37,7 +39,8 @@ from meeting_api.collector import ingest
 from meeting_api.collector.fakes import FakeRedisBus, InMemoryTranscriptStore
 
 # The same inner-shape table as transcript.v1/validate.mjs.
-INNER = {"transcription": "FeedTranscription", "retract": "FeedRetract", "session_end": "SessionEnd"}
+INNER = {"transcription": "FeedTranscription", "retract": "FeedRetract",
+         "session_start": "FeedSessionStart", "session_end": "SessionEnd"}
 
 
 @lru_cache(maxsize=None)
@@ -149,7 +152,7 @@ def test_the_import_marker_is_a_sealed_session_end():
 
 # ── the lifecycle's reap marker ─────────────────────────────────────────────────────────────────
 
-def test_the_lifecycle_reap_marker_is_a_sealed_session_end():
+def test_the_lifecycle_markers_are_sealed_feed_entries():
     repo = InMemoryMeetingRepo()
     m = asyncio.run(repo.create_meeting(user_id=1, platform="google_meet", native_meeting_id="m1", data={}))
     asyncio.run(repo.create_session(meeting_id=m["id"], session_uid="sess-uid"))
@@ -162,7 +165,7 @@ def test_the_lifecycle_reap_marker_is_a_sealed_session_end():
             ev["completion_reason"] = "stopped"
         assert client.post("/bots/internal/callback/lifecycle", json=ev).status_code == 200
 
-    ends = [e for e in redis.streams.get(f"tc:meeting:{m['id']}", [])
-            if json.loads(e["payload"]).get("type") == "session_end"]
-    assert len(ends) == 1
-    assert assert_feed_entry(ends[0]) == {"type": "session_end", "session_uid": "m1"}
+    entries = redis.streams.get(f"tc:meeting:{m['id']}", [])
+    inner = [assert_feed_entry(e) for e in entries]          # EVERY entry the lifecycle wrote
+    assert {"type": "session_start", "session_uid": "m1"} in inner, inner
+    assert [p for p in inner if p["type"] == "session_end"] == [{"type": "session_end", "session_uid": "m1"}]

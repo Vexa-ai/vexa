@@ -10,6 +10,8 @@
  *      agent-api refused the chat's model pick before asking it (`control_plane/model_providers`);
  *    · `source: "vexa-tools"` — the turn ran past its tool access and its Vexa tool calls were
  *      refused (`worker/tool_access.py`);
+ *    · `source: "agent-worker"` — the worker could not hand the turn's workspace to the user the
+ *      model's tools run as, so it refused the turn (`worker/tool_access.py`);
  *    · `source: "agent-api"` / `"gateway"` — the terminal's own chat proxy could not get a typed
  *      answer at all (`app/api/chat/route.ts`, its floor under every 5xx).
  *  This file is the ONE place the chat turns that record into words: who failed, what kind of
@@ -60,6 +62,7 @@ const SOURCE_LABEL: Record<string, string> = {
   "agent-api": "Agent service",
   gateway: "Vexa gateway",
   "vexa-tools": "Vexa tools",
+  "agent-worker": "Your agent",
 };
 
 const KIND_LABEL: Record<string, string> = {
@@ -86,6 +89,7 @@ const KIND_LABEL: Record<string, string> = {
   internal: "failed",
   // the worker (`worker/tool_access.py`)
   access_expired: "tool access expired",
+  tools_unconfined: "could not confine the model's tools",
 };
 
 /** WHO failed, in words. An unknown source is named as itself rather than hidden. */

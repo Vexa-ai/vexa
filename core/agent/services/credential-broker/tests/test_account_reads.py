@@ -9,6 +9,7 @@ import httpx
 import pytest
 
 from credential_broker import providers
+from conftest import OWNER
 
 
 def test_gmail_read_projects_content_not_credentials():
@@ -73,7 +74,7 @@ def test_read_is_owner_scoped_ready_only_and_audited_without_content(signed, con
     assert signed("agent", "POST", path, body, actor="other").status_code == 404
     assert signed("agent", "POST", path, body).status_code == 409
     assert not store.calls
-    store.put(cid, {"value": {"access_token": "SECRET", "expires_at": time.time() + 300}})
+    store.put(cid, {"owner": OWNER, "value": {"access_token": "SECRET", "expires_at": time.time() + 300}})
     ready(cid)
     with patch.object(providers, "read_account", return_value={"messages": [{"id": "abc"}]}):
         r = signed("agent", "POST", path, body)
@@ -86,7 +87,7 @@ def test_read_is_owner_scoped_ready_only_and_audited_without_content(signed, con
 
 def test_expired_token_is_refreshed_and_rotated(signed, connection, ready, store):
     cid = connection("google_calendar")
-    store.put(cid, {"value": {"access_token": "old", "refresh_token": "r", "expires_at": 0, "scope": "s"}})
+    store.put(cid, {"owner": OWNER, "value": {"access_token": "old", "refresh_token": "r", "expires_at": 0, "scope": "s"}})
     ready(cid)
     with patch.object(providers, "refresh", return_value={"access_token": "new", "refresh_token": "r2", "expires_at": time.time() + 3600, "scope": "s"}), \
             patch.object(providers, "read_account", return_value={"events": []}) as read:
@@ -99,7 +100,7 @@ def test_expired_token_is_refreshed_and_rotated(signed, connection, ready, store
 
 def test_provider_read_does_not_hold_the_global_lock(signed, connection, ready, store, broker):
     cid = connection("google_email")
-    store.put(cid, {"value": {"access_token": "private", "expires_at": time.time() + 3600}})
+    store.put(cid, {"owner": OWNER, "value": {"access_token": "private", "expires_at": time.time() + 3600}})
     ready(cid)
 
     def read(*args, **kwargs):

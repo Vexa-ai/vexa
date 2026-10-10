@@ -1,5 +1,5 @@
 {
-  "_comment": "Packaging-side licence manifest (P17 / ADR-0004, #653), the complement to license-exceptions.json. gate:licenses scans the npm/py DEPENDENCY tree; it is blind to what our IMAGES ship. This file declares the two surfaces it cannot see, and gate:image-licenses (scripts/gates.mjs) audits them: `images` = third-party container images pinned by deploy-owned compose, Helm, Lite Dockerfile FROM surfaces, or Lite Makefile `*_IMAGE` variables (an undeclared pin fails; a non-permissive one needs a logged `reason`); `bundled` = components baked INTO a published vexaai/* image (redistribution \u2014 Cat A or Cat-B-with-reason only, Cat X always fails). `name` matches an image ref with its :tag stripped. The per-release SPDX SBOM inventories every package name installed by the Lite final stage; because Docker source cannot resolve Ubuntu package versions or licences, those fields stay NOASSERTION until an image-level scanner enriches them.",
+  "_comment": "Packaging-side licence manifest (P17 / ADR-0004, #653), the complement to license-exceptions.json. gate:licenses scans the npm/py DEPENDENCY tree; it is blind to what our IMAGES ship. This file declares the two surfaces it cannot see, and gate:image-licenses (scripts/gates.mjs) audits them: `images` = third-party container images the repository pins (scripts/pinned-images.mjs: every compose file and Helm chart under deploy/, every tracked Dockerfile's FROM, `docker run` in deploy/ scripts and Makefiles, and Makefile `*_IMAGE` variables) (an undeclared pin fails; a non-permissive one needs a logged `reason`); `bundled` = components baked INTO a published vexaai/* image (redistribution \u2014 Cat A or Cat-B-with-reason only, Cat X always fails). `name` matches an image ref with its :tag stripped. The per-release SPDX SBOM inventories every package name installed by the Lite final stage; because Docker source cannot resolve Ubuntu package versions or licences, those fields stay NOASSERTION until an image-level scanner enriches them.",
   "images": [
     {
       "name": "openbao/openbao",
@@ -55,6 +55,36 @@
       "license": "MIT",
       "disposition": "sidecar",
       "note": "The llm-shim: the Anthropic /v1/messages front door for a deployment running its own OpenAI-dialect model server (deploy/compose/llm-shim/README.md). OFF by default, behind the `llm-shim` compose profile, and operator-pulled from LiteLLM's own registry \u2014 never redistributed inside a vexaai/* artifact. LiteLLM's LICENSE is MIT with one carve-out: content under `enterprise/` is governed by `enterprise/LICENSE`. We pin, run and vouch for the image as published; we bundle no part of it."
+    },
+    {
+      "name": "python",
+      "license": "PSF-2.0",
+      "disposition": "base-image",
+      "note": "Docker's official Python image, the base of every Python service image (python:3.12-slim) and of the CPU transcription image (python:3.10-slim). Python is PSF-2.0, Category A. Debian's packages in the slim base are aggregated, not linked by Vexa, and are inventoried by the image scan rather than licence-gated, as for the other base images."
+    },
+    {
+      "name": "node",
+      "license": "MIT",
+      "disposition": "base-image",
+      "note": "Docker's official Node.js image: the terminal's base, pinned by digest (node:22-trixie-slim), and the mock bot's test image (node:20-slim, core/meetings/services/bot/Dockerfile.mock). Node.js is MIT, Category A; Debian's packages in the slim base are aggregated and inventoried by the image scan."
+    },
+    {
+      "name": "nvidia/cuda",
+      "license": "LicenseRef-NVIDIA-CUDA-EULA (proprietary)",
+      "disposition": "base-image",
+      "reason": "Base of the GPU transcription image (core/meetings/services/transcription/Dockerfile). Vexa publishes no transcription image (NOTICE): the operator builds it, pulling this base from NVIDIA's registry under NVIDIA's CUDA licence, so the base is never redistributed inside a vexaai/* artifact. The CPU build (python:3.10-slim) needs no NVIDIA component. How the transcription build is licensed as a whole is the open founder decision S72."
+    },
+    {
+      "name": "nginx",
+      "license": "BSD-2-Clause",
+      "disposition": "sidecar",
+      "note": "The transcription stack's load balancer (deploy/transcription/docker-compose*.yml, nginx:alpine). nginx is BSD-2-Clause, Category A; operator-pulled and not redistributed."
+    },
+    {
+      "name": "axllent/mailpit",
+      "license": "MIT",
+      "disposition": "dev-tool",
+      "note": "The dogfood rig's mail catcher (deploy/dogfood/rig/rig.sh, axllent/mailpit:latest), bound to 127.0.0.1 on the rig host only. MIT, Category A; never part of a deployment or a vexaai/* artifact."
     }
   ],
   "bundled": [

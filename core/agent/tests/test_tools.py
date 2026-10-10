@@ -70,18 +70,22 @@ def test_build_argv_attaches_mcp_config():
     assert "mcp__vexa-email" in argv[i + 1]
 
 
-def test_apply_tool_grant_injects_mcp_json_under_dot_claude(tmp_path):
+def test_apply_tool_grant_writes_its_mcp_config_outside_the_workspace(tmp_path):
+    """An MCP server's `env` can carry a credential, and the workspace is read through every file
+    route: the config lands in a private directory of this process's own, never under `ws`."""
+    import stat as _stat
+    from pathlib import Path
     ws = tmp_path / "ws" / "u_jane"
     ws.mkdir(parents=True)
     allowed, mcp_config = apply_tool_grant(ws, ["email"], _registry(tmp_path))
 
-    mcp = ws / ".claude" / "mcp.json"
-    assert mcp.exists()                                                      # injected, NOT in the kg
-    assert "vexa-email" in json.loads(mcp.read_text())["mcpServers"]
-    assert mcp_config == str(mcp)
+    mcp = Path(mcp_config)
+    assert mcp.exists() and "vexa-email" in json.loads(mcp.read_text())["mcpServers"]
+    assert ws.resolve() not in mcp.resolve().parents                         # not in the workspace
+    assert not (ws / ".claude" / "mcp.json").exists() and not (ws / "mcp.json").exists()
+    assert _stat.S_IMODE(mcp.stat().st_mode) == 0o600
+    assert _stat.S_IMODE(mcp.parent.stat().st_mode) == 0o700
     assert "mcp__vexa-email" in allowed
-    # the mcp config is under .claude (excluded from governance) — never a workspace entity.
-    assert not (ws / "mcp.json").exists()
     # and it wires through build_argv exactly as the runner used to.
     argv = build_argv("triage", allowed_tools=allowed, mcp_config=mcp_config)
     assert "--mcp-config" in argv and str(mcp) in argv

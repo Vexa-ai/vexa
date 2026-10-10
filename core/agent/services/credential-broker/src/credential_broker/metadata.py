@@ -2,7 +2,8 @@
 broker-private HMAC key.
 
 `metadata.sqlite` holds connection metadata, the audit trail, pending OAuth states, draft
-idempotency rows and the assertion nonces the replay check remembers. `open_schema` creates the
+idempotency rows, the assertion nonces the replay check remembers, and `broker_meta` (one-time
+upgrade steps the broker has completed). `open_schema` creates the
 tables and adds any column a database from an earlier release lacks; it never drops or rewrites one.
 """
 from __future__ import annotations
@@ -17,6 +18,7 @@ CREATE TABLE IF NOT EXISTS audit (seq INTEGER PRIMARY KEY AUTOINCREMENT, at REAL
 CREATE TABLE IF NOT EXISTS oauth_states (state_hash TEXT PRIMARY KEY, actor TEXT, session TEXT, connection TEXT, expires REAL);
 CREATE TABLE IF NOT EXISTS draft_requests (id TEXT PRIMARY KEY, actor TEXT, connection TEXT, fingerprint TEXT, result TEXT);
 CREATE TABLE IF NOT EXISTS assertion_nonces (nonce TEXT PRIMARY KEY, expires REAL);
+CREATE TABLE IF NOT EXISTS broker_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 """
 # Columns the 0.13.2 development harness added one release at a time. Kept, with the same names and
 # defaults, so a deployment that ran the harness opens its existing metadata.sqlite unchanged.

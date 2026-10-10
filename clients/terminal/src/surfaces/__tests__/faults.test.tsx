@@ -70,6 +70,10 @@ const KINDS: [Fault, string][] = [
      detail: "This turn ran past its tool access, which expired at 10:30:00 UTC; the Vexa tool calls it made after that were refused.",
      remedy: "Send it again: the next turn starts with fresh tool access." },
    "Vexa tools · tool access expired (401)"],
+  [{ source: "agent-worker", kind: "tools_unconfined", status: null,
+     detail: "This turn did not run: the worker could not hand desk/notes.md to the user the model's tools run as (Operation not permitted), and it never runs them as itself.",
+     remedy: "Send it again. If it fails the same way, an operator must fix the ownership or permissions of that path in the workspace store." },
+   "Your agent · could not confine the model's tools"],
 ];
 
 describe("a typed fault renders who failed, what kind, the detail and the remedy", () => {

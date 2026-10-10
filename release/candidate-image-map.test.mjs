@@ -22,6 +22,9 @@ import {
   candidateInputDrift,
   validateCandidateMap,
 } from "./candidate-image-map.mjs";
+import { guardTree } from "../scripts/test-tree.mjs";
+
+guardTree();
 
 const digest = (n) => `sha256:${n.repeat(64)}`;
 

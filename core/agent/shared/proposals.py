@@ -53,6 +53,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
+from workspaces.shared import workspace_paths as wpaths
 from workspaces.shared.workspace_id import VEXA_DIR
 
 log = logging.getLogger(__name__)
@@ -107,9 +108,10 @@ def read(root) -> list[dict]:
     """Every row on this desk, in stored order (newest first). A missing or unreadable file is an
     EMPTY LIST, never an error: a chat that refused to render because a cache file was half-written
     would be a worse product than a chat with no chips."""
-    try:
-        raw = _path(root).read_text(encoding="utf-8")
-    except OSError:
+    # NOFOLLOW: the desk is a work tree the model's tools can write, and these rows are returned to
+    # the caller (`GET /api/proposals`) — a link at `.vexa` or the file is an empty list.
+    raw = wpaths.read_text_inside(Path(root), PROPOSALS_FILE, allow=(VEXA_DIR,))
+    if raw is None:
         return []
     try:
         doc = json.loads(raw)
@@ -126,10 +128,9 @@ def open_items(root, cap: int = OPEN_MAX) -> list[dict]:
 
 
 def _write(root, items: list[dict]) -> None:
-    p = _path(root)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps({"contract": CONTRACT, "items": items}, indent=1) + "\n",
-                 encoding="utf-8")
+    wpaths.write_text_inside(Path(root), PROPOSALS_FILE,
+                             json.dumps({"contract": CONTRACT, "items": items}, indent=1) + "\n",
+                             allow=(VEXA_DIR,))
     _exclude_from_git(Path(root))
 
 
@@ -141,15 +142,8 @@ def _exclude_from_git(root: Path) -> None:
     something, which is churn in the history of somebody's desk for a value that is not a fact about
     the workspace. Best-effort — a desk that is not a git repository simply has nothing to exclude."""
     try:
-        info = root / ".git" / "info"
-        if not info.parent.is_dir():
-            return
-        info.mkdir(parents=True, exist_ok=True)
-        ex = info / "exclude"
-        body = ex.read_text(encoding="utf-8") if ex.exists() else ""
-        if f"/{PROPOSALS_FILE}" not in body:
-            ex.write_text(body.rstrip("\n") + f"\n/{PROPOSALS_FILE}\n", encoding="utf-8")
-    except OSError as exc:  # noqa: BLE001 — a queue is never worth failing a turn over
+        wpaths.ensure_git_exclude(root, f"/{PROPOSALS_FILE}")   # never through a link at `.git`
+    except (OSError, ValueError) as exc:  # noqa: BLE001 — a queue is never worth failing a turn over
         log.info("proposals: could not exclude %s from git: %s", PROPOSALS_FILE, exc)
 
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import subprocess
 import threading
 from pathlib import Path
@@ -20,6 +21,7 @@ from typing import Callable, Iterable, Iterator, Optional
 # `llm.tool_events` owns them. One vocabulary, three harnesses.
 from llm.tool_events import (_BOT_TOOLS, _TERMS_TOOLS, _WRITER_TOOLS, _bot_artifact,
                              _published_terms, _written_artifact)
+from llm import workspace_paths as wpaths
 from llm.ports import harness_identity_kwargs, harness_subprocess_env, tools_identity
 
 
@@ -154,9 +156,11 @@ def _mcp_config(path: Optional[str], allowed_tools: Iterable[str]) -> dict:
     """
     if not path:
         return {}
+    p = Path(path)           # the private attachment, read nofollow — see `engine._mcp_endpoint`
+    text = wpaths.read_text_inside(p.parent, p.name)
     try:
-        raw = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, ValueError, TypeError):
+        raw = json.loads(text) if text is not None else {}
+    except (ValueError, TypeError):
         return {}
     auto = {name.removeprefix("mcp__") for name in allowed_tools if name.startswith("mcp__")}
     servers = raw.get("mcpServers") or {}
@@ -179,23 +183,40 @@ def _tools_codex_home(ident: "tuple[int, int]") -> Path:
     credential (0600, its own) and the same durable sessions link. Without a mounted credential the
     runtime's home serves as it is."""
     home = codex_home()
-    auth = home / "auth.json"
-    if not auth.is_file():
+    # NOTHING HERE FOLLOWS A LINK. ``CODEX_HOME`` is handed to the tools user for the turn, and
+    # ``<home>-tools`` sits beside it (in a world-writable /tmp in the image), so either the
+    # credential or the copy's home can be a link the tools user planted: read through, root would
+    # copy any file it can read into a file then given to the tools user; written through, root
+    # would write the credential where the link points and chown that path away.
+    data = wpaths.read_bytes_inside(home, "auth.json")      # a link at auth.json is no credential
+    if data is None:
         return home
-    own = home.parent / f"{home.name}-tools"
-    own.mkdir(mode=0o700, exist_ok=True)
-    copy = own / "auth.json"
-    copy.write_bytes(auth.read_bytes())
-    copy.chmod(0o600)
-    sessions = home / "sessions"
-    link = own / "sessions"
-    if sessions.is_symlink() and not link.is_symlink():
-        link.symlink_to(os.readlink(sessions), target_is_directory=True)
-    for p in (own, copy):
-        os.chown(p, *ident)
-    if link.is_symlink():
-        os.lchown(link, *ident)
-    return own
+    parent, name = home.parent, f"{home.name}-tools"
+    st = wpaths.stat_inside(parent, name)
+    if st is not None and not stat.S_ISDIR(st.st_mode):
+        wpaths.unlink_inside(parent, name)                  # a planted link: removed, never entered
+    try:
+        fd = wpaths.dir_fd_inside(parent, (name,), create=True, mode=0o700)
+    except (wpaths.PathRefused, OSError):
+        return home                                         # no safe home of its own: serve as is
+    try:
+        os.fchmod(fd, 0o700)
+        wpaths.write_bytes_inside(parent, f"{name}/auth.json", data, mode=0o600,
+                                  before_replace=lambda f: os.fchown(f, *ident))
+        sessions = home / "sessions"
+        if sessions.is_symlink():
+            try:
+                os.lstat("sessions", dir_fd=fd)
+            except FileNotFoundError:
+                os.symlink(os.readlink(sessions), "sessions", target_is_directory=True, dir_fd=fd)
+            try:
+                os.chown("sessions", *ident, dir_fd=fd, follow_symlinks=False)
+            except OSError:
+                pass
+        os.fchown(fd, *ident)                               # the directory itself, by its fd
+    finally:
+        os.close(fd)
+    return parent / name
 
 
 def _link_sessions_into_workspace(work: Path) -> None:
@@ -260,11 +281,11 @@ class CodexHarness:
         if any((os.environ.get(key) or "").strip()
                for key in ("OPENAI_API_KEY", "CODEX_API_KEY")):
             return None
-        auth = codex_home() / "auth.json"
+        text = wpaths.read_text_inside(codex_home(), "auth.json")   # a linked credential is none
         try:
-            if auth.is_file() and json.loads(auth.read_text(encoding="utf-8")):
+            if text is not None and json.loads(text):
                 return None
-        except (OSError, ValueError, TypeError):
+        except (ValueError, TypeError):
             pass
         return ("Codex credentials are missing. Mount a subscription auth file with "
                 "HOST_CODEX_CREDENTIALS (normally ~/.codex/auth.json after `codex login`) "

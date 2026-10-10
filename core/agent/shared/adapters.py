@@ -33,6 +33,7 @@ from shared.models import WorkspaceWrite
 from shared.ports import IdentityPort, RuntimePort, SchedulerPort, StreamReader, VcsPort, WorkspacePort
 from shared import runtime_fault
 from shared.token_destination import embed_token
+from workspaces.shared import workspace_paths as wpaths
 
 logger = logging.getLogger("agent_api.adapters")
 
@@ -205,13 +206,16 @@ class RealGitWorkspace(WorkspacePort):
             pass
 
     def read(self, path: str) -> str | None:
-        f = self.work_dir / path
-        return f.read_text() if f.exists() else None
+        # checked once, read nofollow through what was checked (`workspace_paths.locate_inside`)
+        try:
+            base, rel = wpaths.locate_inside(self.work_dir, path)
+        except wpaths.PathRefused:
+            return None
+        return wpaths.read_text_inside(base, rel) if rel else None
 
     def write(self, write: WorkspaceWrite) -> None:
-        f = self.work_dir / write.path
-        f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text(render_entity(write))
+        base, rel = wpaths.locate_inside(self.work_dir, write.path)
+        wpaths.write_text_inside(base, rel, render_entity(write))
         # NOTE: deliberately no ``git add`` here. On a SHARED repo, staging grabs .git/index.lock and
         # would race a concurrent member's turn (proven: writes get dropped with "index.lock: File
         # exists"). Record the path; commit() stages it under the write lock (Lane W).

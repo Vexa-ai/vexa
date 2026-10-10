@@ -6,6 +6,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { lockClosure, markerApplies, parseUvLock, pythonInstalls, spdxFromPyPI, installKey } from "./check-python-licenses.mjs";
+import { guardTree } from "./test-tree.mjs";
+
+guardTree();
 
 const LOCK = `version = 1
 revision = 3

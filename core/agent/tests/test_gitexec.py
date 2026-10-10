@@ -330,6 +330,17 @@ def _subjects(repo: Path) -> list:
 
 
 @pytest.mark.skipif(not PINNED, reason="git is handed the checked directory through /proc (Linux)")
+def test_git_keeps_the_pinned_directory_as_it_was_given(repo):
+    """The pin rests on git using ``GIT_DIR=/proc/self/fd/N`` as given — reading through the open
+    descriptor — rather than resolving it to the directory's name and opening that again. Checked in
+    the agent-api and worker images (git 2.47); this keeps the assumption under test wherever the
+    suite runs."""
+    out = run_git(repo, "rev-parse", "--git-dir")
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.strip().startswith("/proc/self/fd/"), out.stdout
+
+
+@pytest.mark.skipif(not PINNED, reason="git is handed the checked directory through /proc (Linux)")
 def test_a_git_dir_swapped_in_after_the_check_is_never_read(repo, marker, tmp_path, monkeypatch):
     hostile = _hostile_git_dir(repo, tmp_path, marker)
     real_run = subprocess.run

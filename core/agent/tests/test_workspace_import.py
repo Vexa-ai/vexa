@@ -7,13 +7,25 @@ from fastapi import HTTPException
 from control_plane import workspace_import as jobs
 
 
+# How long a job may take to reach a final state. The jobs here are a stub operation on a thread
+# or a local `git` against a scratch repository — milliseconds on an idle machine. The old wait
+# counted 200 polls of 10 ms, two seconds, and a loaded CI or test host ran past it with the job
+# still `running`. The poll now stops on the job's own state, and the deadline exists only so a
+# job that never finishes fails the test instead of hanging it.
+FINISH_DEADLINE_S = 60.0
+
+
 def finish(root, subject, operation_id):
-    for _ in range(200):
+    deadline = time.monotonic() + FINISH_DEADLINE_S
+    pause = .005
+    while True:
         result = jobs.status(root, subject, operation_id)
         if result['status'] not in ('queued', 'running'):
             return result
-        time.sleep(.01)
-    raise AssertionError('job did not finish')
+        if time.monotonic() >= deadline:
+            raise AssertionError(f"job did not finish within {FINISH_DEADLINE_S:.0f}s: {result}")
+        time.sleep(pause)
+        pause = min(pause * 2, .1)
 
 
 def test_slow_operation_is_deduplicated_and_subject_scoped(tmp_path):

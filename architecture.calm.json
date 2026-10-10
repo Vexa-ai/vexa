@@ -756,6 +756,18 @@
    ]
   },
   {
+   "unique-id": "outbound-url.v1",
+   "node-type": "contract",
+   "name": "outbound-url.v1",
+   "description": "outbound-url.v1 \u2014 sealed/published contract (deploy): may a server fetch a URL somebody else supplied; the canonical ssrf.py vendored into every Python image that does, and the case table the Python and TypeScript guards are held to (ADR-0044)",
+   "metadata": [
+    {
+     "path": "deploy/contracts/outbound-url.v1",
+     "domain": "deploy"
+    }
+   ]
+  },
+  {
    "unique-id": "slim",
    "node-type": "webclient",
    "name": "slim",
@@ -2831,7 +2843,8 @@
      "container": "deploy",
      "nodes": [
       "execution-targets.v1",
-      "config.v1"
+      "config.v1",
+      "outbound-url.v1"
      ]
     }
    }

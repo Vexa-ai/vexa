@@ -30,7 +30,10 @@ matches that domain exactly — a subdomain needs its own entry — and an exact
 address exactly (no plus-address folding). Case never matters. There is no pattern syntax; the
 one exception is the entry `*` alone, an explicit operator opt-in meaning EVERYONE may sign in
 (a dev or demo stack). It is never a default: unset, the instance stays closed, and admin-api logs
-a warning at boot while `*` is set (`open_to_everyone`).
+a warning at boot while `*` is set (`open_to_everyone`). It is the OPERATOR's opt-in only, made in
+`VEXA_SIGNIN_ALLOW` where the boot warns about it: the admin-edited setting refuses it with a 422
+(`normalize_setting`), and a `*` already stored there is ignored (`effective`) and named at boot
+(`stored_wildcard`).
 
 THIS MODULE IS PURE. `app/main.py` owns the one door that asks (`POST /internal/signin-admission`)
 and the settings row; everything that can be decided without a database is decided here, so it is
@@ -133,13 +136,25 @@ def parse(raw) -> Tuple[List[str], List[str]]:
     return valid, problems
 
 
+#: Why the admin-edited list refuses `*`. Opening the instance to every address is the operator's
+#: decision, made in the deployment's environment where the boot warns about it — not a Settings
+#: entry that opens the instance with nothing logged.
+WILDCARD_OPERATOR_ONLY = (f"'{WILDCARD}' (anyone may sign in) is an operator-only opt-in: it is set in "
+                          f"{ENV_KEY} on the deployment, not here. This list takes addresses and "
+                          f"@domain entries.")
+
+
 def normalize_setting(raw) -> str:
     """The canonical stored form of an admin-written list: valid entries joined by ", ".
 
     ALL-OR-NOTHING: one bad entry refuses the whole write. Storing the good half and dropping the
     rest would answer 200 for a list that is not the one the admin typed — the same silent partial
-    write `PUT /internal/settings/{key}` already refuses for unknown fields."""
+    write `PUT /internal/settings/{key}` already refuses for unknown fields. `*` is one of the
+    refused entries here (:data:`WILDCARD_OPERATOR_ONLY`)."""
     valid, problems = parse(raw)
+    if WILDCARD in valid:
+        valid = [e for e in valid if e != WILDCARD]
+        problems = problems + [WILDCARD_OPERATOR_ONLY]
     if problems:
         raise InvalidAllowList(problems)
     if len(valid) > MAX_ENTRIES:
@@ -158,8 +173,9 @@ def env_entries() -> Tuple[List[str], List[str]]:
 def effective(env: Iterable[str], setting_value) -> List[str]:
     """The effective list: the env entries plus the settings entries, de-duplicated. Invalid stored
     entries (only possible if the row was written around the validator) are dropped, never
-    widened."""
-    stored, _ = parse(setting_value)
+    widened — and so is a stored `*`, written before the setting refused it: only the operator's
+    `VEXA_SIGNIN_ALLOW` opens the instance (:func:`stored_wildcard` names it at boot)."""
+    stored = [e for e in parse(setting_value)[0] if e != WILDCARD]
     out: List[str] = []
     seen = set()
     for entry in list(env) + stored:
@@ -219,6 +235,12 @@ def open_to_everyone() -> bool:
     may sign in. Boot logs a warning while it is set, so an open instance is never open silently."""
     valid, _ = env_entries()
     return WILDCARD in valid
+
+
+def stored_wildcard(setting_value) -> bool:
+    """Does the admin-edited setting hold `*`? It is ignored (:func:`effective`); the boot says so,
+    so an operator who finds it there knows the setting did not open the instance."""
+    return WILDCARD in parse(setting_value)[0]
 
 
 def boot_problems() -> List[str]:

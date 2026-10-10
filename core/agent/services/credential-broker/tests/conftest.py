@@ -24,6 +24,9 @@ from credential_broker.store import Record, StoreUnavailable
 CONTRACT = Path(__file__).resolve().parents[3] / "contracts" / "credential-broker.v1"
 GOOGLE = {"client_id": "fixture-client.apps.googleusercontent.com", "client_secret": "fixture-client-secret"}
 REDIRECT = "https://app.example.test/api/auth/callback/google"
+#: The default actor `signed` calls as. A record seeded straight into the store names it as its owner,
+#: as every record the broker writes for a connection does.
+OWNER = "product-user"
 
 
 class FakeStore:
@@ -57,6 +60,12 @@ class FakeStore:
         if not 1 <= n <= len(versions):
             return None
         return Record(data=versions[n - 1], version=n, receipt=uuid.uuid4().hex)
+
+    def delete(self, path: str) -> None:
+        self.calls.append(("delete", path))
+        if self.fail:
+            raise StoreUnavailable(self.fail)
+        self.rows.pop(path, None)
 
     def healthy(self) -> bool:
         return not self.fail

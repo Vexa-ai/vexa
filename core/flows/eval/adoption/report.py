@@ -181,7 +181,7 @@ def main():
       "inbound mailbox double landed on a sibling branch during this run and feeds the "
       "founder's lane, not the sim's. The fixture is a DNA/ASWF working session, not a dailies "
       "review: no dailies transcript exists yet, and the personas judge CONTENT, so this is the "
-      "single biggest gap between this measurement and Brightwater's real pilot.\n")
+      "single biggest gap between this measurement and a real pilot.\n")
 
     json.dump({f"{n}|{lv}": {k: v for k, v in r.items() if k != "curve"}
                for (n, lv), r in results.items()},
