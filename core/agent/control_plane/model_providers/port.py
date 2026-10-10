@@ -31,20 +31,23 @@ from dataclasses import dataclass, field
 from typing import Callable, Mapping, Optional, Protocol
 
 from contracts import model_id_pattern
+from shared.fault_wire import ModelProvider as _V
 
-SOURCE = "model-provider"
+# THE VOCABULARY IS unit.v1's (`Fault`, `ModelProviderFaultKind`), generated into
+# `shared/fault_wire.py` — the same source and kinds a failed provider call carries.
+SOURCE = _V.SOURCE
 
 #: The chat (or routine) names a model the catalog does not have.
-UNKNOWN_MODEL = "unknown_model"
+UNKNOWN_MODEL = _V.UNKNOWN_MODEL
 #: The model exists and this person may not use it (an admins-only entry).
-NOT_PERMITTED = "not_permitted"
+NOT_PERMITTED = _V.NOT_PERMITTED
 #: The entry needs something of the person's that they have not set (a ``custom`` entry with no
 #: endpoint under Settings → Models), or the catalog offers this person nothing at all.
-NOT_CONFIGURED = "not_configured"
+NOT_CONFIGURED = _V.NOT_CONFIGURED
 #: The secret the provider's ``secret_ref`` names is not in agent-api's environment.
-CREDENTIAL_MISSING = "credential_missing"
-#: The person's own endpoint failed the operator's allow-list (``VEXA_MODEL_BASE_URL_ALLOW``).
-ENDPOINT_REFUSED = "endpoint_refused"
+CREDENTIAL_MISSING = _V.CREDENTIAL_MISSING
+#: The person's own endpoint cannot carry the turn (``model_endpoint.route_refusal``).
+ENDPOINT_REFUSED = _V.ENDPOINT_REFUSED
 
 KINDS = (UNKNOWN_MODEL, NOT_PERMITTED, NOT_CONFIGURED, CREDENTIAL_MISSING, ENDPOINT_REFUSED)
 

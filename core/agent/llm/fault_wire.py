@@ -38,7 +38,12 @@ class ModelProvider:
     RATE_LIMITED = "rate_limited"
     UNAVAILABLE = "unavailable"
     REFUSED = "refused"
-    KINDS: Tuple[str, ...] = ("unpaid", "unauthorized", "rate_limited", "unavailable", "refused")
+    UNKNOWN_MODEL = "unknown_model"
+    NOT_PERMITTED = "not_permitted"
+    NOT_CONFIGURED = "not_configured"
+    CREDENTIAL_MISSING = "credential_missing"
+    ENDPOINT_REFUSED = "endpoint_refused"
+    KINDS: Tuple[str, ...] = ("unpaid", "unauthorized", "rate_limited", "unavailable", "refused", "unknown_model", "not_permitted", "not_configured", "credential_missing", "endpoint_refused")
 
 
 class VexaTools:

@@ -242,8 +242,13 @@ def test_a_refused_pick_travels_in_the_model_providers_fault_shape():
     assert refused["status"] is None
 
 
-def test_the_pick_kinds_never_shadow_a_providers_kinds():
-    from llm.faults import KINDS as PROVIDER_KINDS
+def test_the_pick_kinds_are_unit_v1_model_provider_kinds_no_provider_call_derives():
+    """One vocabulary (unit.v1 `ModelProviderFaultKind`): the pick kinds are in it, and the harness's
+    classifier never derives one of them from a provider's answer — they are agent-api's alone."""
+    from llm import faults
     from control_plane.model_providers import KINDS as PICK_KINDS
 
-    assert not set(PICK_KINDS) & set(PROVIDER_KINDS)
+    assert set(PICK_KINDS) <= set(faults.KINDS)
+    derived = {f.kind for s in (400, 401, 402, 403, 404, 429, 500, 503)
+               if (f := faults.classify(status=s, provider="h", model="m"))}
+    assert not derived & set(PICK_KINDS)
