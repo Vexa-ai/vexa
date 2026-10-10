@@ -44,12 +44,12 @@ function WidgetBody({ meetingId }: { meetingId: string }) {
   return (
     <div data-transcript-widget={meetingId} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: 0.4, textTransform: "uppercase", color: "var(--t3)" }}>
+        <span className="t-xs fw-600 c-3" style={{ letterSpacing: 0.4, textTransform: "uppercase" }}>
           Transcript
         </span>
         {live && (
-          <span data-widget-live style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, color: "var(--accent)" }}>
-            <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--accent)" }} />
+          <span data-widget-live className="t-xs c-accent" style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+            <span className="r-full bg-accent" style={{ width: 6, height: 6 }} />
             live
           </span>
         )}
@@ -58,8 +58,7 @@ function WidgetBody({ meetingId }: { meetingId: string }) {
             widget into view should not have to find a different surface to attribute what is in it. */}
         <button type="button" aria-label="Copy transcript" disabled={!transcript.segments.some(s => s.text.trim())}
           onClick={() => void copyTranscript()} onBlur={() => setCopied(false)}
-          style={{ cursor: "pointer", fontSize: 11.5, padding: "3px 9px", borderRadius: 999,
-            border: "1px solid var(--line2)", background: "var(--panel2)", color: "var(--t2)" }}>
+          className="t-xs pt-0_5 pr-2 pb-0_5 pl-2 r-full bd-strong bg-3 c-2" style={{ cursor: "pointer" }}>
           {copied ? "Copied" : "Copy transcript"}
         </button>
         {copyError && <span role="alert">Could not copy transcript</span>}
@@ -84,7 +83,7 @@ export function MeetingTranscriptWidget({ meetingId }: { meetingId?: string }) {
   if (!id) {
     // An honest empty state rather than a live-looking box bound to nothing: the marker named no
     // meeting, which is a defect in the page, not in the room.
-    return <div style={{ color: "var(--t3)", fontSize: 12 }}>This page declares a transcript, but names no meeting.</div>;
+    return <div className="c-3 t-xs">This page declares a transcript, but names no meeting.</div>;
   }
   return (
     <MeetingScopeProvider meetingId={id}>
