@@ -104,7 +104,9 @@ if (!isMeetUrl && !isTeamsUrl && !isZoomUrl) {
   try {
     result = await joinMeeting(page, {
       meetingUrl: url,
-      botName: "Vexa Join Layer (isolated)",
+      // Teams refuses parentheses (and most punctuation) in a display name: keep the default plain.
+      // BOT_NAME overrides it, e.g. to reproduce a refused name (#1780).
+      botName: process.env.BOT_NAME || "Vexa Join Layer",
       authenticated: !!AUTH_PROFILE,
       debug: true,
       hooks: {

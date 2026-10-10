@@ -155,5 +155,11 @@ export {
   isMicrosoftLoginUrl, isTeamsMeetingUrl,
 } from "./msteams/auth-redirect";
 export type { TeamsJoinRedirectReason } from "./msteams/auth-redirect";
+// The Teams pre-join gate (#1780): a "Join now" button Teams keeps disabled (an invalid display
+// name) terminates the join with `TeamsPreJoinBlockedError` — same not-an-AdmissionError idiom, so
+// `teams_prejoin_blocked` and Teams' own validation text reach the terminal event's reason text.
+export {
+  TeamsPreJoinBlockedError, TEAMS_PREJOIN_BLOCKED, teamsDisplayNameDisallowedChars,
+} from "./msteams/prejoin-blocked";
 export { joinZoomMeeting, buildZoomWebClientUrl, waitForZoomMeetingAdmission, checkForZoomAdmissionSilent, leaveZoomMeeting, dismissZoomPopups, startZoomRemovalMonitor };
 export { joinJitsiMeeting, buildJitsiMeetingUrl, waitForJitsiMeetingAdmission, checkForJitsiAdmissionSilent, leaveJitsiMeeting, startJitsiRemovalMonitor };
