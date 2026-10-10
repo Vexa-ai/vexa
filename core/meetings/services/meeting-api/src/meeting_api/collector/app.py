@@ -39,6 +39,7 @@ from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, R
 from fastapi.responses import JSONResponse
 
 from ..regime import require_person
+from ..workspace_write import require_writable
 from .meeting_link import parse_meeting_url
 from .obs import TraceMiddleware as _DefaultTraceMiddleware
 from .obs import log_event as _default_log_event
@@ -491,6 +492,7 @@ def build_router(
         if workspace_id is not None and not isinstance(workspace_id, str):
             raise HTTPException(status_code=422, detail="'workspace_id' must be a string")
         workspace_id = (workspace_id or "").strip() or None
+        require_writable(workspace_id, request.headers)
 
         auto_join = payload.get("auto_join", True)
         if not isinstance(auto_join, bool):
@@ -537,7 +539,7 @@ def build_router(
 
     # --- the ROW-id PATCH/DELETE bodies, factored out so the native-keyed aliases (#579 C1) forward
     # to the SAME owner-scoped, FSM-refusing logic once they have resolved (platform, native) → row. ---
-    async def _apply_meeting_patch(user_id: int, meeting_id: int, payload) -> dict:
+    async def _apply_meeting_patch(user_id: int, meeting_id: int, payload, headers) -> dict:
         from .projection import project_response_data
 
         if not isinstance(payload, dict):
@@ -574,6 +576,7 @@ def build_router(
             if workspace_id is not None and not isinstance(workspace_id, str):
                 raise HTTPException(status_code=422, detail="'workspace_id' must be a string")
             updates["workspace_id"] = (workspace_id or "").strip() or None
+            require_writable(updates["workspace_id"], headers)
         if "auto_join" in payload:
             if not isinstance(payload["auto_join"], bool):
                 raise HTTPException(status_code=422, detail="'auto_join' must be a boolean")
@@ -740,7 +743,7 @@ def build_router(
             payload = await request.json()
         except Exception:
             raise HTTPException(status_code=422, detail="invalid JSON body")
-        row = await _apply_meeting_patch(user_id, meeting_id, payload)
+        row = await _apply_meeting_patch(user_id, meeting_id, payload, request.headers)
         return JSONResponse(content=row)
 
     # --- DELETE /meetings/{meeting_id} → delete a PLANNED row (intent status only; an FSM row is
@@ -878,7 +881,7 @@ def build_router(
                 status_code=404,
                 detail=f"Meeting not found for platform {platform} and ID {native_meeting_id}",
             )
-        row = await _apply_meeting_patch(user_id, meeting_id, payload)
+        row = await _apply_meeting_patch(user_id, meeting_id, payload, request.headers)
         return JSONResponse(content=row)
 
     @router.delete("/meetings/{platform}/{native_meeting_id}", dependencies=[Depends(require_person)])
@@ -1025,6 +1028,7 @@ def build_router(
         workspace_id = str(payload.get("workspace_id", "")).strip() if isinstance(payload, dict) else ""
         if not workspace_id:
             raise HTTPException(status_code=422, detail="'workspace_id' is required")
+        require_writable(workspace_id, request.headers)
         bound = await store.bind_workspace(user_id, platform, native_meeting_id, workspace_id)
         if bound is None:
             raise HTTPException(

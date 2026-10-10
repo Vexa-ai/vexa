@@ -21,6 +21,8 @@ from meeting_api.collector.meeting_link import find_meeting_link, parse_meeting_
 
 USER = 7
 H = {"x-user-id": str(USER)}
+# Binding a planned meeting into a workspace takes write access there (meeting_api.workspace_write).
+H = {**H, "x-user-writable-workspaces": "ws-1,ws-9,ws-42"}
 AT = "2026-07-10T15:00:00Z"
 URL = "https://meet.google.com/abc-defg-hij"
 

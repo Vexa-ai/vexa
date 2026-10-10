@@ -65,6 +65,11 @@ def accepts_delegation(request: Request) -> bool:
     return (request.headers.get(ACCEPTS_DELEGATION_HEADER) or "").strip() == ACCEPTS_DELEGATION_VALUE
 
 
+#: The membership roles that may write into a shared workspace (agent-api's role ladder:
+#: viewer < contributor < owner; "reader" is the person-facing word for viewer).
+WRITE_ROLES = frozenset({"contributor", "owner"})
+
+
 class ValidateRequest(BaseModel):
     """The bearer to resolve. A missing or empty `token` is a 401 ("Missing token"), not a 422: it is
     an answer about the bearer, which is what every caller branches on."""
@@ -96,6 +101,9 @@ class ValidatedIdentity(BaseModel):
     # subscribe. Present when the account carries a membership list. For a delegation token, only
     # the memberships inside the dispatch's ceiling (`_validate_delegation`).
     workspaces: Optional[List[str]] = None
+    # The subset the caller may WRITE into (contributor or owner), so meeting-api can refuse to bind
+    # a meeting into a workspace its owner only reads. Bounded by the same ceiling for a delegation.
+    writable_workspaces: Optional[List[str]] = None
     delegation: Optional[DelegationCeiling] = None   # delegation tokens only
     # WHO THE WORKER ACTS FOR, as a fact about that person — never a role the worker holds
     # (`is_admin` stays False). The MCP edge spends the deployment's operator key for a worker only
@@ -124,6 +132,11 @@ def identity_of(user: User, *, scopes: List[str], is_admin: bool) -> Dict[str, A
     if isinstance(memberships, list):
         resp["workspaces"] = [str(m["workspace_id"]) for m in memberships
                               if isinstance(m, dict) and m.get("workspace_id")]
+        writable = [str(m["workspace_id"]) for m in memberships
+                    if isinstance(m, dict) and m.get("workspace_id")
+                    and str(m.get("role") or "").lower() in WRITE_ROLES]
+        if writable:   # present only when there is one, like the webhook fields
+            resp["writable_workspaces"] = writable
     return resp
 
 
@@ -164,6 +177,9 @@ async def _validate_delegation(token: str, db: AsyncSession) -> Dict[str, Any]:
     if "workspaces" in resp:
         resp["workspaces"] = [w for w in resp["workspaces"] if delegation_mod.ceiling_reads(
             ceiling["workspaces"], w, subject=str(uid))]
+    if "writable_workspaces" in resp:
+        reachable = set(resp.get("workspaces") or [])
+        resp["writable_workspaces"] = [w for w in resp["writable_workspaces"] if w in reachable]
     resp["delegation"] = ceiling
     if claims.get("target"):
         resp["delegation"]["target"] = str(claims["target"])

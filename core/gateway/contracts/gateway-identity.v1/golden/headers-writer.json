@@ -1,0 +1,11 @@
+{
+  "claims_golden": "claims-writer.json",
+  "headers": {
+    "x-user-id": "42",
+    "x-user-email": "ada@example.com",
+    "x-user-scopes": "tx",
+    "x-user-limits": "3",
+    "x-user-workspaces": "ws_7f3a,ws_read",
+    "x-user-writable-workspaces": "ws_7f3a"
+  }
+}

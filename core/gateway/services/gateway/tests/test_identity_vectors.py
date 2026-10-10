@@ -30,7 +30,7 @@ def _names(prefix: str) -> list:
 def test_the_vectors_are_there():
     assert "reentry-admitted.json" in _names("reentry-")
     assert len(_names("reentry-")) >= 5
-    assert _names("headers-") == ["headers-delegated.json", "headers-human.json"]
+    assert _names("headers-") == ["headers-delegated.json", "headers-human.json", "headers-writer.json"]
 
 
 @pytest.mark.parametrize("name", _names("reentry-"))
