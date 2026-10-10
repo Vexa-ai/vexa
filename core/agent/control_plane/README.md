@@ -123,11 +123,12 @@ it ends.
 > is documented in [`docs/docs/core/workspaces.mdx`](../../../docs/docs/core/workspaces.mdx).** This section is the Lane M
 > membership/invite mechanism.
 
-`workspace_membership.py` is the access layer for shared workspaces. **Single-rank model (owner ruling
-2026-07-07):** a shared workspace has ONE member rank — every member is read/write and can share
-(mint/revoke invites); the **`owner` is just the CREATOR** (the only one who can unshare / remove
-members / change role). The read-only `viewer` role stays in the lattice for back-compat but is **not
-invitable** — `INVITABLE_ROLES = ("contributor",)`.
+`workspace_membership.py` is the access layer for shared workspaces. **Three roles:** `owner >
+contributor > viewer`, said to people as owner, contributor and reader. An owner writes and adds or
+removes members; a contributor writes; a reader reads. An invite may be minted for any of the three
+(`INVITABLE_ROLES = ROLE_WORDS`). `POST /api/workspace/invite` (one address, the agent's
+`workspace_invite`) is owner-only; `POST /api/workspace/invites` (a link) needs owner or contributor;
+removing members and changing roles is owner-only.
 
 **Two stores, written together (git is authoritative, the index is derived):**
 - **Authoritative** — the workspace's OWN git repo at `policy/members.json`

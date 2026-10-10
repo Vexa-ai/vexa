@@ -53,8 +53,9 @@ trivial fakes.
 
 `openai-agent` exists for PRD decision 37: run the service on a model we host. It has **no `Bash`
 and no skills discovery** — a name in the allow-set it does not implement is simply not attached. It
-carries a hard per-turn budget (tool calls + wall clock) and trims context oldest-tool-result-first,
-because the box it was built for holds ~29 requests at 24k context. Qwen on that box needs
+carries a hard per-turn budget (tool calls + wall clock). Its context budget is the chosen model's
+own window (stamped by the dispatch) or `VEXA_AGENT_CONTEXT_TOKENS`, default 131072; past it, the
+history is compacted quietly, oldest tool results first, never a person's message. Qwen on that box needs
 `VEXA_LLM_EXTRA_BODY={"chat_template_kwargs":{"enable_thinking":false}}` or it spends the whole
 budget reasoning.
 
@@ -99,8 +100,8 @@ carries the event vocabulary and the rest.
 | `VEXA_LLM_MODEL` | openai-agent fallback model (free string), read only when no `VEXA_AGENT_MODEL` reaches the worker | `VEXA_AGENT_MODEL`; neither → fail-loud at the first request |
 | `VEXA_LLM_EXTRA_BODY` | JSON object merged into EVERY openai-agent request | `{}` |
 | `VEXA_AGENT_MAX_TOOL_CALLS` / `VEXA_AGENT_MAX_TURN_SEC` | openai-agent per-turn budget | 40 / 900 |
-| `VEXA_AGENT_CONTEXT_TOKENS` | openai-agent context ceiling (trims oldest tool results first) | 24000 |
-| `VEXA_AGENT_MAX_OUTPUT_TOKENS` | every harness: output-token cap per request — claude-code receives it as `CLAUDE_CODE_MAX_OUTPUT_TOKENS`, openai-agent sends it as `max_tokens` (wins over `VEXA_LLM_EXTRA_BODY`) | unset → each harness's default (claude CLI: 32000) |
+| `VEXA_AGENT_CONTEXT_TOKENS` | openai-agent context budget; a model route's own window wins (compacts oldest tool results first, never a person's message) | 131072 |
+| `VEXA_AGENT_MAX_OUTPUT_TOKENS` | every harness: output-token cap per request — claude-code receives it as `CLAUDE_CODE_MAX_OUTPUT_TOKENS`, openai-agent sends it as `max_tokens` (wins over `VEXA_LLM_EXTRA_BODY`); codex does not read it — Codex 0.146.0 has no setting for the model's output cap (its `max_output_tokens` fields are per-tool exec budgets) | unset → each harness's default (claude CLI: 32000) |
 | `VEXA_AGENT_STREAM` | openai-agent SSE streaming (`0` = one blocking request) | `1` |
 | `VEXA_SEARCH_URL` | operator-supplied search endpoint for `WebSearch` | empty → `WebSearch` is not attached |
 | `VEXA_SEARCH_DIALECT` | wire format of that endpoint: `searxng` \| `brave` | `searxng` |

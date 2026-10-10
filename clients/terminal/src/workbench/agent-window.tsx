@@ -37,7 +37,10 @@ export type Turn =
   | { id: string; role: "agent"; text: string; ops: Op[]; commit?: string; rejected?: string; status?: TurnStatus | null;
       /** the SERVER's step count for this turn (Vexa-ai/vexa#1622). Absent on a deployment one
        *  release behind, where the op line falls back to counting what this browser saw. */
-      steps?: number; stopped?: TurnStopped; failed?: TurnFault }
+      steps?: number; stopped?: TurnStopped; failed?: TurnFault;
+      /** how many messages of older history the turn compacted to fit the model's context — a
+       *  muted note in the activity line, never part of the reply */
+      compacted?: number }
   | { id: string; role: "insight"; t?: string; text: string };
 
 const PHASE_LABEL: Record<TurnPhase, string> = {
@@ -200,8 +203,12 @@ export function Conversation({ turns, busy, empty, onContinue }: {
                     · {n} step{n === 1 ? "" : "s"}
                   </span>;
                 })()}
+                {t.compacted ? <CompactedNote /> : null}
               </div>
             )}
+            {t.ops.length === 0 && t.compacted ? (
+              <div style={{ margin: "0 0 8px 5px" }}><CompactedNote /></div>
+            ) : null}
             {t.text && <div style={{ fontSize: 13.5, color: "var(--t1)", lineHeight: 1.6, maxWidth: 680 }}>
               {/* Mintlify-grade rendering in the OUTPUT too: finished turns compile as MDX (Note/Card/
                   Steps/Tabs + wikilinks, safe plain-markdown fallback); the still-streaming turn uses the
@@ -236,6 +243,17 @@ export function Conversation({ turns, busy, empty, onContinue }: {
         );
       })}
     </>
+  );
+}
+
+/** THE HISTORY WAS COMPACTED (founder 2026-10-10): a quiet note in the activity line, never the
+ *  reply and never the stop line — the turn answered; older history was shortened to fit. */
+function CompactedNote() {
+  return (
+    <span data-compacted title="Older parts of this chat were shortened to fit the model's context; your messages were kept."
+      style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--t3)", flex: "none", opacity: 0.8 }}>
+      · older context compacted
+    </span>
   );
 }
 

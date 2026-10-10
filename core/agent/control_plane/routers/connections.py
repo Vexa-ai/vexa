@@ -42,7 +42,11 @@ class _NamedRefusalRoute(APIRoute):
 
 class ConnectionRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
-    provider: Literal['google_email', 'google_calendar', 'custom_secret', 'github']
+    # EXACTLY the credential broker's catalog (`credential_broker.providers.CATALOG`): a provider the
+    # broker cannot set up is refused here, by name, never accepted and answered with a stand-in.
+    # Git credentials are not a connection: the person adds a Git token in Connections → Git, and a
+    # repository attaches with a deploy key; neither is something an agent can request.
+    provider: Literal['google_email', 'google_calendar', 'custom_secret']
     label: str = Field(default='',max_length=80)
     new_account: bool = False
     # THE SHAPE IS PUBLISHED, every key of it (`connection_setup_schema`, the broker's own, vendored):
@@ -192,7 +196,8 @@ def build(*, subject_of, wsr=None, **_):
 
     @router.post('/api/connections/request')
     def request_connection(request: Request, body: ConnectionRequest):
-        """Request Gmail, Calendar, GitHub or custom-secret setup in Minutes' trusted Connections panel.
+        """Request Gmail, Calendar or custom-secret setup in Minutes' trusted Connections panel.
+        Git credentials are not requested here: the person adds a Git token in Connections → Git.
 
         For custom_secret, name the service in label (setup has no service or name key) and put in setup
         only: endpoint (exact HTTPS URL), header (Authorization or X-API-Key), scheme (bearer/raw/telegram),
@@ -210,9 +215,6 @@ def build(*, subject_of, wsr=None, **_):
         afterward; ready means stored credentials, not read health. A blank Calendar account label is expected and is not an authorization failure. A request is not a connected account or working sync.
         """
         actor=subject_of(request)
-        if body.provider=='github':
-            return {'connection_id':'git','provider':'github','status':'setup_available',
-                    'ui_action':'open_connections','instruction':'The Connections panel opens Git repositories setup. The user enters a token privately; SSH public deploy keys remain available in repository attach. Never request a token in chat.'}
         if body.provider=='custom_secret' and not body.label.strip():
             raise HTTPException(422,'Name the service in label before requesting its connection')
         label=body.label.strip() or ({'google_email':'Gmail','google_calendar':'Google Calendar','custom_secret':'Custom secret'}[body.provider])

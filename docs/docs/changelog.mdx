@@ -13,6 +13,138 @@ The authoritative, per-release changelog is on **GitHub Releases**:
 [github.com/Vexa-ai/vexa/releases](https://github.com/Vexa-ai/vexa/releases). This page summarizes the
 notable line and the migration notes between majors.
 
+## 0.13 — Minutes
+
+0.13.0 and 0.13.1 were pre-releases of the Minutes line; 0.13.2 is the first release of it. Items
+that first shipped in a pre-release are listed under it below, so the 0.13.2 notes do not repeat them.
+
+### Upgrading from 0.12
+
+An install on 0.12.x crosses every change below when it moves to 0.13.2. Each links to the step that
+handles it; [One-time steps after upgrading](/deployment#one-time-steps-after-upgrading) has them all.
+
+**Upgrade every component together, between meetings.** Several connections between Vexa's own
+components now carry a signature or credential that an older peer does not send, and the newer side
+refuses what it does not find: the bot's lifecycle callbacks, uploads and transcript entries
+(meeting-api), the runtime's workload callbacks and the calls made to it, agent-api's messages to the
+agent worker, and the gateway's calls to identity. Move the bot image, runtime, agent-api, agent
+worker image, meeting-api, gateway, admin-api, MCP and flows-api to v0.13.2 in one upgrade, with any
+separately pinned image moved in the same step, and upgrade when no bot is in a meeting (or send those
+bots again afterwards). `make up`, `helm upgrade` and a new Lite image do this. The table of what each
+mix does is in [Deployment](/deployment#one-time-steps-after-upgrading).
+
+| What changed | What to do |
+|---|---|
+| The in-product meeting copilot is removed: `POST /api/meeting/start` and `POST /api/meeting/process` answer `404`, and `meeting_model` is gone from `/api/models` and `PUT /user/models`. | Ask about a meeting in the chat. Remove calls to those routes. |
+| `GET /admin/instance` is removed. Whether the instance has an administrator is read at admin-api's internal `GET /internal/instance`. | Nothing in the product called it; remove any script that did. |
+| Workspace swap, import, activate and shared attach no longer return `nested`. | Clients that read the field: stop reading it (it was always `false`). |
+| Sign-in to the terminal admits only existing users, admins and addresses on the sign-in allow-list. | Set `VEXA_SIGNIN_ALLOW` or `VEXA_ADMIN_EMAILS` on admin-api for new people, or add them under Settings → Sign-in. See [Who may sign in](/authentication#who-may-sign-in-to-the-terminal). |
+| Every secret value this repository ever published is refused at boot: `ADMIN_TOKEN`, the database password, the object-storage root pair, the dispatch signing key, `NEXTAUTH_SECRET`. | `make up` / `make all` mint new values into `.env`; Helm generates them; Lite mints them. See [One-time steps](/deployment#one-time-steps-after-upgrading). |
+| Docker Compose: Redis requires `REDIS_PASSWORD`. | `make up` mints it; with plain `docker compose`, set one first. |
+| The gateway, admin-api, meeting-api, MCP, terminal and flows images run as uid 10001. | On Kubernetes their pods set `runAsNonRoot` and `fsGroup` 10001; check any volume you mount into them yourself. See [Kubernetes](/deployment-kubernetes). |
+| `NEXTAUTH_SECRET` must be at least 32 bytes and not a published value. Microsoft sign-in on a multi-tenant authority needs the `xms_edov` optional claim. | Set a new secret (`openssl rand -hex 32`). For Microsoft, pin `MICROSOFT_TENANT_ID` or add `xms_edov` to the app registration. See [Kubernetes](/deployment-kubernetes). |
+| flows refuses `sslmode=verify-ca` without `sslrootcert` in `VEXA_FLOWS_DB_URL`. | Name the CA file, or use `verify-full`. |
+| The credential broker is a new service and image (`vexaai/v012-credential-broker`) in Compose and the Helm chart. | Keep its store key (`credentialBroker.existingSecret` on Helm); losing it makes every stored credential unreadable. See [Connections](/connections). |
+
+### First shipped in the 0.13.0 pre-release
+
+- **See all your past meetings.** The Today view's past-meetings list now has a *Show more* button that
+  pages through your whole meeting history (20 at a time) instead of stopping at the most recent 8 — so
+  older meetings (and their transcripts + recordings) are reachable again.
+
+- **Open a meeting's recording straight from its note.** Meeting notes carry a clickable link to the
+  recording & transcript, meetings are addressable by a stable `/?meeting=<id>` URL you can open right
+  in the browser, and a meeting opened that way now shows its real name in the tab.
+
+- **Codex can now run workspace-agent turns alongside Claude Code (#1313).** Operators can select
+  the Codex app-server harness, use a read-only host subscription login, resume conversations after
+  worker recreation, and steer an active turn without waiting for it to finish.
+
+- **Personal setup always opens the personal discovery flow, and every stack carries `_global` first
+  (#1314).** Agent dispatch refuses when `_global` is not configured instead of running without the
+  organisation's context, and the worker loads `_global`'s entry files into every turn, so a personal
+  conversation uses the company facts already recorded instead of asking for them again.
+
+- **A Microsoft 365 mailbox can be the front door.** For a tenant that exposes neither IMAP nor
+  SMTP AUTH — the common bank posture — the inbox and the outbound channel now speak Microsoft
+  Graph, selected by configuration, with every fact identical to the mailbox we already had. No
+  live tenant has answered it yet; it is proven against recorded shapes and a fake, and the first
+  real tenant is what closes it.
+- **A Teams invite is joined at the meeting it names.** An Exchange invitation carries the same
+  meeting under two different identifiers, and the one written first is the wrong one — a bot
+  dispatched on it joins nothing, with no error anywhere. The invite is now read the way Microsoft
+  writes it, from the property that is unambiguous.
+- **An Exchange invite keeps its title.** Outlook writes a language on the subject line where
+  Google does not; every Exchange invite was called "Meeting", and that word was the subject of
+  the mail we sent back.
+- **One malformed invite can no longer stop the mailbox.** A start time the calendar admits but no
+  clock can read used to raise out of the poll, and the poll only moves past a message it has
+  answered — so everything behind it waited, indefinitely. It is now read as a start time we do
+  not have, which is an answer the parser already knew how to give.
+
+- **The in-product meeting copilot is gone; the agent is the one intelligence (#1415).** Vexa no
+  longer makes model calls of its own beside the agent. `POST /api/meeting/start` and
+  `POST /api/meeting/process` return **404**, `GET /api/models` no longer carries `streaming_model`
+  or `meeting_model`, and `meeting_model` is no longer a field on `PUT /user/models` — a value sent
+  there is discarded. The live transcript feed is unchanged; to ask about a meeting, ask in the chat.
+  See the [Agent API](/api/agent), [Settings](/api/settings) and [Status](/roadmap/status).
+
+- **Run the whole product on your own model, with nothing leaving the estate (#1417).** The
+  workspace agent's harness speaks the Anthropic `/v1/messages` dialect; a self-hosted vLLM, Ollama
+  or llama.cpp server speaks only the OpenAI one. `docker compose --profile llm-shim up -d llm-shim`
+  starts the missing front door between them. Off by default — a hosted gateway that already serves
+  both dialects needs nothing. Per-account, `PUT /user/models` now takes `extra_body` (server-specific
+  request fields the OpenAI dialect cannot express, as a JSON string) and `runner` (which harness runs
+  your turns). See [Settings](/api/settings) and `deploy/compose/llm-shim/README.md`.
+
+- **A write-back phase that runs over its budget no longer leaves the harness process running
+  (#1434).** When the post-turn write-back phase hit its tool-call or time budget, the agent worker
+  stopped reading the Claude Code CLI but, on some CPython builds, never killed it — so the worker
+  stayed as busy as it was before the budget fired, one orphaned process per over-budget turn. The
+  teardown is now explicit at every hop of the event chain instead of relying on the interpreter's
+  garbage collection, so the budget ends the process on every supported interpreter.
+
+- **Agent turns can reach the open web: `WebSearch` + `WebFetch`.** The `openai-agent` harness — the
+  loop Vexa runs against a model you host yourself — had the workspace file tools and nothing else,
+  so a turn told to *research first, ask last* had no way to research anything. `WebFetch` reads one
+  `http(s)` page as text and is always available. `WebSearch` speaks a small adapter to a search
+  endpoint **you supply** (`VEXA_SEARCH_URL` + `VEXA_SEARCH_DIALECT`: `searxng` or `brave`); with
+  none configured it is simply absent from the turn's tool list. **No search engine ships with
+  Vexa** — no image, no compose service, no vendored code. `WebFetch` refuses any address on the
+  deployment's own network, re-checking every redirect hop. See
+  [Agent web search](/agent-web-search).
+
+- **Outlook and Exchange invites are read at all.** `DTSTART;TZID=W. Europe Standard Time` is the
+  Windows spelling of a timezone, not the IANA one, and it raised out of the ICS parser, out of the
+  mail router and out of the mailbox poll — so every Exchange invite was dropped by an exception
+  rather than by a decision, and nothing downstream could say which meeting had gone missing. A
+  timezone we cannot name is now treated as UTC, the same answer a floating start time already got.
+- **With no agent, everyone in the room is told the meeting was recorded.** The person who invited
+  Vexa already got that mail; every other attendee got silence, from a bot they had watched sit in
+  the meeting. They now get the same words the organiser does — no summary claimed, no button into
+  a chat that is not deployed.
+- **A meeting can be kept off everyone else's desk.** Sharing notes with the attendees inside your
+  organisation stays on by default; `#noshare` in the invite excludes one meeting. The minutes mail
+  says both, so the choice is visible to the person who has it.
+
+### First shipped in the 0.13.1 pre-release
+
+- **A bot requested inside a workspace is the workspace's meeting, live for every member (#1648).**
+  `POST /bots` takes an optional `workspace_id`, authorized against the caller's own resolved
+  memberships, and writes it to `data.workspace_id` at spawn; the chat's `bot_send` / `bot_schedule`
+  send the workspace the conversation is working in, so *"assign it to the group"* binds instead of
+  being refused. Every member of the bound workspace then sees the meeting while it runs — in the
+  list (already), on the meeting page, in the live transcript, in `/api/meeting/note` and
+  `/api/meeting/terms`, and in the bot's status, which is now published to a per-workspace channel
+  each member's socket joins at connect. A workspace's front page lists its meetings, live ones
+  first, and the write-up mail reaches the workspace's members rather than the requester alone.
+  Unbound meetings are untouched: no bind, no widening, no extra mail.
+
+## 0.13.x maintenance fixes
+
+Changes in 0.13.2 and later. The release collector adds the pending fragments from
+`docs/changelog.d/` here.
+
 ## 0.12 — control-plane carve
 
 0.12 reorganizes the backend around a single front door and server-derived identity.
@@ -1120,7 +1252,7 @@ fix(gates): every gate failure now prints its diagnostic — an empty stdout Buf
   hostname exactly, or as an explicit subdomain — vanity and government tenancies
   (`us02web.zoom.us`, `company.zoom.us`, `frbmeetings.zoomgov.com`, `contoso.teams.microsoft.com`)
   are unaffected, and a look-alike hostname is refused instead of sending a bot somewhere on its
-  say-so. See [MCP tools](/mcp).
+  say-so. See [MCP tools](/vexa-mcp).
 
 - **MCP: `request_meeting_bot` can start a Zoom bot again (#1630).** The tool forwards the
   caller's full Zoom join link to the bots API, which needs the link's host to join; before, it
