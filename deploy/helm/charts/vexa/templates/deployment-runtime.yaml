@@ -173,6 +173,20 @@ spec:
               value: {{ $worker.priorityClassName | default "" | quote }}
             - name: RUNTIME_K8S_AGENT_WORKER_IMAGE_PULL_SECRETS
               value: {{ $worker.imagePullSecrets | default list | toJson | quote }}
+            # The Linux capabilities each class's containers keep (all others are dropped, and none
+            # can be gained). Unset (null) keeps the profile's own; [] keeps none.
+            - name: RUNTIME_K8S_BOT_CAPABILITIES
+              value: {{ if kindIs "invalid" $bot.capabilities }}""{{ else }}{{ $bot.capabilities | toJson | quote }}{{ end }}
+            - name: RUNTIME_K8S_AGENT_WORKER_CAPABILITIES
+              value: {{ if kindIs "invalid" $worker.capabilities }}""{{ else }}{{ $worker.capabilities | toJson | quote }}{{ end }}
+            # A toleration with no key, or for a control-plane/system taint, is refused unless this
+            # is true (runtime-wide and per class alike).
+            - name: RUNTIME_K8S_ALLOW_BROAD_TOLERATIONS
+              value: {{ $placement.allowBroadTolerations | default false | quote }}
+            # Which runtime this is: spawned Pods carry it, and the boot-time rediscovery selects on it, so two
+            # releases in one namespace never adopt each other's Pods.
+            - name: RUNTIME_K8S_INSTANCE
+              value: {{ .Release.Name | quote }}
             {{- end }}
             {{- with .Values.runtime.extraEnv }}
             {{- toYaml . | nindent 12 }}

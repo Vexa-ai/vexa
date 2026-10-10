@@ -465,16 +465,26 @@ runtime:
   #     a Pod that names none).
   # Empty everywhere (the default) renders nothing new on the Pods.
   workloadScheduling:
+    # Tolerations with no key (they tolerate every taint) or for control-plane/system taints
+    # (node-role.kubernetes.io/control-plane, …/master, CriticalAddonsOnly) are refused at the
+    # runtime's boot unless this is true — in runtime.tolerations / global.tolerations too.
+    allowBroadTolerations: false
     meetingBot:
       nodeSelector: {}
       tolerations: []
       priorityClassName: ""
       imagePullSecrets: []
+      # Linux capabilities the class's containers keep; every other one is dropped. null keeps the
+      # profile's own (none for a bot); [] keeps none.
+      capabilities: null
     agentWorker:
       nodeSelector: {}
       tolerations: []
       priorityClassName: ""
       imagePullSecrets: []
+      # null keeps the profile's own (CHOWN, DAC_OVERRIDE, FOWNER, FSETID, KILL, SETGID, SETUID: a
+      # root worker gives the model's tools a user of their own). OpenShift restricted SCC: [].
+      capabilities: null
   # Per-component override of global.topologySpreadConstraints (same shape). Applies to the runtime
   # Deployment's OWN pods (not the bot/agent Pods it spawns — those carry runtime.tolerations/
   # nodeSelector via the RUNTIME_K8S_* env below). Omit `labelSelector` and the runtime's own pod

@@ -217,7 +217,12 @@ class DockerBackend:
         name = self._cname(workload_id)
         _leaf, worker_labels = _worker_naming(workload_id)
 
-        host_config: dict[str, Any] = {}
+        # Hardening: every capability dropped but the ones the profile keeps, and no privilege a
+        # set-uid program could add (a meeting bot keeps none; an agent worker the few its tools
+        # user needs — profiles.WORKER_CAPABILITIES).
+        host_config: dict[str, Any] = {"CapDrop": ["ALL"], "SecurityOpt": ["no-new-privileges"]}
+        if runnable.capabilities:
+            host_config["CapAdd"] = list(runnable.capabilities)
         network = _workload_network(runnable.network_env)
         if network:
             host_config["NetworkMode"] = network

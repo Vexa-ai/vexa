@@ -112,6 +112,7 @@ def test_a_class_value_replaces_the_runtime_wide_one_for_that_field_only(monkeyp
 
 
 def test_kubernetes_native_shapes_are_accepted(monkeypatch):
+    monkeypatch.setenv("RUNTIME_K8S_ALLOW_BROAD_TOLERATIONS", "true")        # the operator opted in
     tolerations = [
         {"operator": "Exists"},                                              # tolerate everything
         {"key": "node.kubernetes.io/not-ready", "operator": "Exists", "effect": "NoExecute",
@@ -229,3 +230,80 @@ def test_the_docker_backend_ignores_placement(monkeypatch):
     placed = Runnable(image="bot:1", scheduling=PodScheduling(priority_class_name="vexa-stealth",
                                                                 image_pull_secrets=("regcred",)))
     assert _create_payload(monkeypatch, placed, "job-1") == _create_payload(monkeypatch, Runnable(image="bot:1"), "job-1")
+
+
+
+# ── tolerations that reach every node or the cluster's own nodes need an explicit opt-in (RT5-1) ──
+
+@pytest.mark.parametrize("toleration", [
+    {"operator": "Exists"},
+    {"operator": "Exists", "effect": "NoSchedule"},
+    {"key": "node-role.kubernetes.io/control-plane", "operator": "Exists", "effect": "NoSchedule"},
+    {"key": "node-role.kubernetes.io/master", "operator": "Exists"},
+    {"key": "CriticalAddonsOnly", "operator": "Exists"},
+])
+@pytest.mark.parametrize("prefix", [BOT, "RUNTIME_K8S_AGENT_WORKER_"])
+def test_a_broad_toleration_is_refused_without_the_opt_in(monkeypatch, toleration, prefix):
+    monkeypatch.setenv(prefix + "TOLERATIONS", json.dumps([toleration]))
+    with pytest.raises(ValueError, match="RUNTIME_K8S_ALLOW_BROAD_TOLERATIONS"):
+        default_registry()
+    monkeypatch.setenv("RUNTIME_K8S_ALLOW_BROAD_TOLERATIONS", "true")
+    default_registry()
+
+
+@pytest.mark.parametrize("env", [
+    {"RUNTIME_K8S_TOLERATIONS": '[{"operator": "Exists"}]'},
+    {"RUNTIME_K8S_TOLERATIONS": '[{"key": "node-role.kubernetes.io/control-plane", "operator": "Exists"}]'},
+    {"RUNTIME_K8S_TOLERATIONS": '[{"key": "bad key!", "operator": "Exists"}]'},
+    {"RUNTIME_K8S_NODE_SELECTOR": '{"bad key!": "x"}'},
+    {"RUNTIME_K8S_NODE_SELECTOR": '["not", "an", "object"]'},
+    {"RUNTIME_K8S_ALLOW_BROAD_TOLERATIONS": "maybe"},
+])
+def test_the_runtime_wide_placement_is_validated_at_boot(monkeypatch, env):
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    with pytest.raises(ValueError):
+        K8sBackend()
+
+
+def test_a_valid_runtime_wide_placement_boots(monkeypatch):
+    monkeypatch.setenv("RUNTIME_K8S_TOLERATIONS", '[{"key": "dedicated", "value": "vexa", "effect": "NoSchedule"}]')
+    monkeypatch.setenv("RUNTIME_K8S_NODE_SELECTOR", '{"vexa.ai/pool": "workloads"}')
+    K8sBackend()
+
+
+# ── spawned Pods are hardened (RT5-6) ───────────────────────────────────────────────────────────
+
+def test_spawned_pods_drop_every_capability_but_the_profiles(monkeypatch):
+    from runtime_kernel.profiles import WORKER_CAPABILITIES
+
+    bot = _pod("meeting-bot")["spec"]["containers"][0]["securityContext"]
+    worker = _pod("agent")["spec"]["containers"][0]["securityContext"]
+    for sc in (bot, worker):
+        assert sc["allowPrivilegeEscalation"] is False
+        assert sc["capabilities"]["drop"] == ["ALL"]
+        assert sc["seccompProfile"] == {"type": "RuntimeDefault"}
+        assert "runAsNonRoot" not in sc                      # both shipped images start as root
+    assert "add" not in bot["capabilities"]
+    assert worker["capabilities"]["add"] == list(WORKER_CAPABILITIES)
+
+
+def test_the_operator_narrows_a_class_capabilities(monkeypatch):
+    monkeypatch.setenv("RUNTIME_K8S_AGENT_WORKER_CAPABILITIES", "[]")          # OpenShift restricted SCC
+    worker = _pod("agent")["spec"]["containers"][0]["securityContext"]
+    assert "add" not in worker["capabilities"] and worker["capabilities"]["drop"] == ["ALL"]
+    monkeypatch.setenv("RUNTIME_K8S_AGENT_WORKER_CAPABILITIES", '["CAP_KILL", "SETUID"]')
+    assert _pod("agent")["spec"]["containers"][0]["securityContext"]["capabilities"]["add"] == ["KILL", "SETUID"]
+    for bad in ('["SYS_ADMIN"]', '["ALL"]', '["kill"]', '{"a": 1}'):
+        monkeypatch.setenv("RUNTIME_K8S_AGENT_WORKER_CAPABILITIES", bad)
+        with pytest.raises(ValueError):
+            default_registry()
+
+
+def test_a_profile_whose_image_runs_non_root_requires_it():
+    from runtime_kernel.k8s_backend import build_pod
+    from runtime_kernel.profiles import Runnable
+
+    pod = build_pod(name="p", workload_id="w", runnable=Runnable(image="i", run_as_non_root=True), env={},
+                    namespace=None, resources=None)
+    assert pod["spec"]["containers"][0]["securityContext"]["runAsNonRoot"] is True

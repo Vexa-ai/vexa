@@ -92,6 +92,12 @@ class Runnable:
     #: The host groups a process-backend child joins besides its own (by name; one the host lacks is
     #: skipped). Container backends ignore it.
     process_groups: tuple[str, ...] = ()
+    #: The Linux capabilities a container workload keeps; every other one is dropped, and it can gain
+    #: none (docker ``no-new-privileges``, k8s ``allowPrivilegeEscalation: false``, seccomp
+    #: ``RuntimeDefault``). A process-backend child keeps none: it is not root.
+    capabilities: tuple[str, ...] = ()
+    #: The image runs as a non-root user, so k8s may require it (``runAsNonRoot``).
+    run_as_non_root: bool = False
 
 
 @dataclass(frozen=True)
@@ -248,6 +254,13 @@ def configured_credentials(env: Optional[Mapping[str, str]] = None) -> tuple[Cre
     return tuple(files)
 
 
+#: What an agent worker image running as root keeps: it hands the model's tools a user of their own
+#: (SETUID, SETGID), grants that user the turn's workspaces by group and setgid directories (CHOWN,
+#: FOWNER, FSETID), reads and commits what the tools wrote (DAC_OVERRIDE), and stops the tools'
+#: process (KILL). A meeting bot needs none.
+WORKER_CAPABILITIES = ("CHOWN", "DAC_OVERRIDE", "FOWNER", "FSETID", "KILL", "SETGID", "SETUID")
+
+
 def default_registry() -> ProfileRegistry:
     """The real, deployment-shaped registry. Images come from env (no `:latest` fallback — a missing
     image surfaces as an empty string the backend rejects, matching 0.11's fail-visible stance)."""
@@ -317,6 +330,7 @@ def default_registry() -> ProfileRegistry:
                     # The Codex home is the runtime's to name: a credential is mounted at
                     # <it>/auth.json, and the worker and the Codex CLI read CODEX_HOME.
                     credential_env={CODEX_HOME_ENV: WORKER_CODEX_HOME},
+                    capabilities=WORKER_CAPABILITIES,
                     source_mount=SourceMount(env="VEXA_AGENT_SRC_MOUNT", target="/app/src/agent_api",
                                              pythonpath="/app/src/agent_api:/app"),
                     scheduling=_profile_scheduling("agent"),

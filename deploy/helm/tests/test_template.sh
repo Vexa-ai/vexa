@@ -134,6 +134,27 @@ if grep -qE '^[[:space:]]+priorityClassName: |regcred|worker-reg' <<< "$(grep -v
 fi
 [ "$place_ok" -eq 1 ] && echo "  OK: per-class placement reaches its own keys only, as JSON" || fail=1
 
+# Spawned-Pod hardening and identity (RT5-1/6/7): each class keeps the profile's capabilities unless
+# the operator sets a list ([] keeps none, the OpenShift setting); broad tolerations stay refused
+# unless opted in; the runtime names its release so adoption never crosses releases.
+hard_ok=1
+check_hard() {  # check_hard <render> <key> <expected value line>
+  local got; got="$(envval "$2" "$1")"
+  if [ "$got" != "$3" ]; then echo "  FAIL: $2 — want $3 got '${got}'"; hard_ok=0; fi
+}
+check_hard "$RENDER" RUNTIME_K8S_BOT_CAPABILITIES '""'
+check_hard "$RENDER" RUNTIME_K8S_AGENT_WORKER_CAPABILITIES '""'
+check_hard "$RENDER" RUNTIME_K8S_ALLOW_BROAD_TOLERATIONS '"false"'
+check_hard "$RENDER" RUNTIME_K8S_INSTANCE '"vexa"'
+RENDER_HARD="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" \
+  --set-json 'runtime.workloadScheduling.agentWorker.capabilities=[]' \
+  --set-json 'runtime.workloadScheduling.meetingBot.capabilities=["KILL"]' \
+  --set runtime.workloadScheduling.allowBroadTolerations=true)"
+check_hard "$RENDER_HARD" RUNTIME_K8S_AGENT_WORKER_CAPABILITIES '"[]"'
+check_hard "$RENDER_HARD" RUNTIME_K8S_BOT_CAPABILITIES '"[\"KILL\"]"'
+check_hard "$RENDER_HARD" RUNTIME_K8S_ALLOW_BROAD_TOLERATIONS '"true"'
+[ "$hard_ok" -eq 1 ] && echo "  OK: spawned-Pod capabilities, broad-toleration opt-in and the release instance render" || fail=1
+
 # #770: pod topology spread. Empty default (values-test sets nothing) must render NOTHING — the
 # field is optional, so a no-spread chart is byte-identical to a chart without it (single-node /
 # k3s installs keep working). This is the red→green control direction: nothing here, everything

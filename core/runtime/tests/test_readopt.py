@@ -392,7 +392,7 @@ def test_k8s_start_stamps_adoption_labels(monkeypatch):
     (call,) = calls
     pod = _json.loads(call["stdin"])            # the labels ride the submitted manifest
     assert pod["metadata"]["labels"] == {
-        "runtime.managed": "true", "runtime.workload_id": "mtg-2-d93eee39",
+        "runtime.managed": "true", "runtime.workload_id": "mtg-2-d93eee39", "runtime.instance": "default",
     }
 
 
@@ -416,7 +416,7 @@ def test_k8s_discovers_pods_by_label(monkeypatch):
             returncode = 0
             stdout = json.dumps(pods)
             stderr = ""
-        assert "-l" in args and "runtime.managed=true" in args
+        assert "-l" in args and "runtime.managed=true,runtime.instance=default" in args
         return R()
 
     monkeypatch.setattr(k8s_backend, "_kubectl", fake_kubectl)
@@ -449,3 +449,32 @@ def test_docker_discovery_covers_both_workload_networks(monkeypatch):
     assert ids == ["agent-58-chat", "mtg-2-d93eee39"]
     assert be.find("agent-58-chat") is not None
     assert be.find("mtg-7-eyeball") is None
+
+
+
+def test_k8s_adopts_only_its_own_instances_pods(monkeypatch):
+    """Two releases in one namespace: each runtime stamps its instance on what it spawns and adopts
+    by it, so neither re-adopts (and then stops) the other's live Pods."""
+    from runtime_kernel import k8s_backend
+    from runtime_kernel.profiles import Runnable
+
+    submitted, selectors = [], []
+
+    def fake_kubectl(*args: str, check: bool = True, stdin=None):
+        if stdin:
+            submitted.append(json.loads(stdin))
+        if "-l" in args:
+            selectors.append(args[args.index("-l") + 1])
+
+        class R:  # noqa: N801
+            returncode = 0
+            stdout = json.dumps({"items": []})
+            stderr = ""
+        return R()
+
+    monkeypatch.setattr(k8s_backend, "_kubectl", fake_kubectl)
+    monkeypatch.setenv("RUNTIME_K8S_INSTANCE", "release-a")
+    k8s_backend.K8sBackend().start("mtg-1", Runnable(image="img"), {})
+    k8s_backend.K8sBackend(instance="release-b").list_workload_containers()
+    assert submitted[0]["metadata"]["labels"]["runtime.instance"] == "release-a"
+    assert selectors == ["runtime.managed=true,runtime.instance=release-b"]

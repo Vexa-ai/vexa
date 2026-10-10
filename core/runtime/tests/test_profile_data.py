@@ -156,3 +156,17 @@ def test_the_process_backend_stages_credential_files_only_for_a_profile_that_ask
     backend._identity("job-tuned", TUNED, {})
     backend._identity("job-withheld", Runnable(**{**TUNED.__dict__, "credential_mounts": False}), {})
     assert [[f.home_path for f in s] for s in staged] == [[".creds/auth.json"], []]
+
+
+def test_docker_drops_every_capability_but_the_profiles(monkeypatch):
+    """A spawned container keeps only its profile's capabilities and can gain none: a meeting bot
+    keeps none (its browser, display and audio run without), an agent worker the few its tools user
+    needs."""
+    import _profiles
+    from runtime_kernel.profiles import WORKER_CAPABILITIES
+
+    bot = _create_payload(monkeypatch, _profiles.bot("bot:1"), "mtg-1")["HostConfig"]
+    worker = _create_payload(monkeypatch, _profiles.agent("img"), "agent-1-chat")["HostConfig"]
+    for hc in (bot, worker):
+        assert hc["CapDrop"] == ["ALL"] and hc["SecurityOpt"] == ["no-new-privileges"]
+    assert "CapAdd" not in bot and worker["CapAdd"] == list(WORKER_CAPABILITIES)

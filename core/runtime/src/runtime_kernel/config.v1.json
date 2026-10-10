@@ -271,6 +271,42 @@
       ]
     },
     {
+      "key": "RUNTIME_K8S_BOT_CAPABILITIES",
+      "class": "defaulted",
+      "default": "(unset — the profile's own: none for a meeting bot)",
+      "description": "k8s backend: JSON array of the Linux capabilities every SPAWNED meeting-bot container keeps; all others are dropped and privilege escalation is off either way. Validated at boot (capability names; SYS_ADMIN, SYS_PTRACE and the like refused). Never taken from a workload spec",
+      "targets": [
+        "helm"
+      ]
+    },
+    {
+      "key": "RUNTIME_K8S_AGENT_WORKER_CAPABILITIES",
+      "class": "defaulted",
+      "default": "(unset — the profile's own: CHOWN, DAC_OVERRIDE, FOWNER, FSETID, KILL, SETGID, SETUID, what a root worker needs to give the model's tools a user of their own)",
+      "description": "k8s backend: JSON array of the Linux capabilities every SPAWNED agent-worker container keeps; all others are dropped. Set [] where the platform admits no added capability (OpenShift's restricted SCC, whose workers run non-root and do not use them). Validated at boot. Never taken from a workload spec",
+      "targets": [
+        "helm"
+      ]
+    },
+    {
+      "key": "RUNTIME_K8S_ALLOW_BROAD_TOLERATIONS",
+      "class": "defaulted",
+      "default": "false",
+      "description": "k8s backend: true lets a spawned Pod's tolerations (runtime-wide or per class) include one with no key (it tolerates every taint) or one for a control-plane or system taint (node-role.kubernetes.io/control-plane, node-role.kubernetes.io/master, CriticalAddonsOnly). Off, such a value is refused at boot",
+      "targets": [
+        "helm"
+      ]
+    },
+    {
+      "key": "RUNTIME_K8S_INSTANCE",
+      "class": "defaulted",
+      "default": "default",
+      "description": "k8s backend: which runtime this is (the chart sets the Helm release name). Every Pod it spawns carries it as the label runtime.instance, and boot re-adoption selects on it, so two releases in one namespace never adopt each other's Pods",
+      "targets": [
+        "helm"
+      ]
+    },
+    {
       "key": "BROWSER_IMAGE",
       "class": "capability",
       "capability": "bot_spawn",

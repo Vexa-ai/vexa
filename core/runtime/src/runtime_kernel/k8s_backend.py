@@ -14,14 +14,22 @@ import json
 import os
 import re
 import subprocess
+import time
 from typing import Optional
 
+from . import pod_scheduling
 from .backend import WorkloadHandle
 from .models import Resources
 from .mounts import k8s_volume_mounts
 from .profiles import Runnable
 
 MANAGED_LABEL = "runtime.managed"
+#: Which runtime spawned the Pod (the Helm release); adoption selects on it, so two releases in one
+#: namespace never adopt each other's Pods.
+INSTANCE_LABEL = "runtime.instance"
+INSTANCE_ENV = "RUNTIME_K8S_INSTANCE"
+#: Pod phases after which the workload will not run again.
+TERMINAL_PHASES = ("Succeeded", "Failed")
 #: The workload id rides both a label (selectable, so it must be a valid label value) and an
 #: annotation of the same key (the id verbatim, whatever its shape). Adoption reads the annotation.
 WORKLOAD_ID_LABEL = "runtime.workload_id"
@@ -226,6 +234,7 @@ def build_pod(
     namespace: Optional[str],
     resources: Optional[Resources],
     overlay_env: Optional[dict[str, str]] = None,
+    instance: str = "",
 ) -> dict:
     """The COMPLETE Pod object a spawn submits — every field the workload needs, in one manifest.
 
@@ -266,6 +275,7 @@ def build_pod(
         # Adoption labels (the orphaned-live-bot fix): a recreated runtime re-discovers its
         # still-running Pods by this label pair and re-registers them (see the kernel's adopt()).
         "labels": {MANAGED_LABEL: "true", WORKLOAD_ID_LABEL: k8s_label_value(workload_id),
+                   **({INSTANCE_LABEL: k8s_label_value(instance)} if instance else {}),
                    **runnable.labels},
         # The id verbatim — the label above may be its safe form.
         "annotations": {WORKLOAD_ID_LABEL: workload_id},
@@ -300,15 +310,36 @@ def build_pod(
     # and tolerations, when set, replace the runtime-wide ones above; its priority class and pull
     # secrets have no runtime-wide counterpart. Nothing here comes from the workload's env.
     runnable.scheduling.apply(pod["spec"])
+    # Hardening, last so no overlay replaces it: every capability dropped but the ones the profile
+    # keeps (the operator may narrow them per class, e.g. to none under OpenShift's restricted SCC),
+    # no privilege escalation, the runtime's default seccomp profile, and non-root where the image
+    # runs as one.
+    keep = runnable.capabilities if runnable.scheduling.capabilities is None else runnable.scheduling.capabilities
+    security: dict = {"allowPrivilegeEscalation": False, "capabilities": {"drop": ["ALL"]},
+                      "seccompProfile": {"type": "RuntimeDefault"}}
+    if keep:
+        security["capabilities"]["add"] = list(keep)
+    if runnable.run_as_non_root:
+        security["runAsNonRoot"] = True
+    container["securityContext"] = security
     return pod
 
 
 class K8sBackend:
     name = "k8s"
 
-    def __init__(self, name_prefix: str = "vexa-", namespace: Optional[str] = None) -> None:
+    def __init__(self, name_prefix: str = "vexa-", namespace: Optional[str] = None,
+                 instance: Optional[str] = None) -> None:
         self._prefix = name_prefix
         self._ns = namespace
+        # Exit codes of Pods this backend removed once their exit was observed (name → code).
+        self._exited: dict[str, int] = {}
+        # Which runtime this is (the Helm release). Every Pod it spawns carries it, and adoption
+        # selects on it.
+        self._instance = (instance if instance is not None else os.environ.get(INSTANCE_ENV, "")).strip() or "default"
+        # The runtime-wide placement every spawned Pod carries is held to the profiles' rules here,
+        # at boot, so a bad value stops the runtime by name instead of placing Pods.
+        pod_scheduling.validate_runtime_wide(os.environ)
 
     def _pname(self, workload_id: str) -> str:
         return k8s_name(f"{self._prefix}{workload_id}")  # always a DNS-1123 label (the container's too)
@@ -342,9 +373,60 @@ class K8sBackend:
             namespace=self._ns,
             resources=resources,
             overlay_env={**env, **_runtime_scheduling_env()},
+            instance=self._instance,
         )
-        _kubectl("create", "-f", "-", *self._ns_args(), stdin=json.dumps(pod))
+        manifest = json.dumps(pod)
+        self._exited.pop(name, None)
+        try:
+            _kubectl("create", "-f", "-", *self._ns_args(), stdin=manifest)
+            return WorkloadHandle(id=workload_id, impl=name)
+        except RuntimeError as exc:
+            if "AlreadyExists" not in str(exc):
+                raise
+        # The name is deterministic, so a workload id that ran before (a chat's next turn) finds its
+        # previous Pod still there. Ours and finished: remove it and start again. Ours and still
+        # running: that IS the workload — no duplicate. Not ours: never touched.
+        existing = self._pod(name)
+        if existing is not None:
+            if not self._ours(existing, workload_id):
+                raise RuntimeError(f"pod {name} exists and is not this runtime's workload {workload_id!r}; "
+                                   f"not replacing it")
+            if (existing.get("status") or {}).get("phase") not in TERMINAL_PHASES:
+                return WorkloadHandle(id=workload_id, impl=name)
+            self._delete_and_wait(name)
+        _kubectl("create", "-f", "-", *self._ns_args(), stdin=manifest)
         return WorkloadHandle(id=workload_id, impl=name)
+
+    def _pod(self, name: str) -> Optional[dict]:
+        r = _kubectl("get", "pod", name, "-o", "json", *self._ns_args(), check=False)
+        if r.returncode != 0:
+            return None
+        try:
+            return json.loads(r.stdout)
+        except ValueError:
+            return None
+
+    def _ours(self, pod: dict, workload_id: str) -> bool:
+        """Spawned by this runtime for this workload: the managed label, this workload id (the
+        annotation, else the label a pre-annotation Pod carries), and this instance (or none, a Pod
+        from before the instance label)."""
+        meta = pod.get("metadata") or {}
+        labels, notes = meta.get("labels") or {}, meta.get("annotations") or {}
+        if labels.get(MANAGED_LABEL) != "true":
+            return False
+        if (notes.get(WORKLOAD_ID_LABEL) or labels.get(WORKLOAD_ID_LABEL)) not in (
+                workload_id, k8s_label_value(workload_id)):
+            return False
+        return labels.get(INSTANCE_LABEL) in (None, k8s_label_value(self._instance))
+
+    def _delete_and_wait(self, name: str, timeout: float = 60.0) -> None:
+        _kubectl("delete", "pod", name, "--ignore-not-found", "--wait=true", f"--timeout={int(timeout)}s",
+                 *self._ns_args(), check=False)
+        deadline = time.time() + timeout
+        while self._pod(name) is not None:
+            if time.time() > deadline:
+                raise RuntimeError(f"pod {name} did not go away within {int(timeout)}s")
+            time.sleep(0.5)
 
     def find(self, workload_id: str) -> Optional[WorkloadHandle]:
         """Re-derive a handle for a workload whose in-process handle was lost (restart): the Pod
@@ -357,12 +439,14 @@ class K8sBackend:
 
     def list_workload_containers(self) -> list[dict]:
         """Discover the workload Pods THIS backend spawned — for boot re-adoption. Label-selected
-        only (``runtime.managed=true``): a name-prefix fallback is unsafe in a shared namespace
-        (the chart's own service Pods can share the prefix), so Pods spawned by a pre-label runtime
-        are not re-adopted. Never raises."""
+        only (``runtime.managed=true`` and this runtime's ``runtime.instance``): a name-prefix
+        fallback is unsafe in a shared namespace (the chart's own service Pods can share the prefix),
+        and another release's Pods are not ours, so Pods spawned by a runtime that did not label
+        them are not re-adopted. Never raises."""
         try:
             r = _kubectl(
-                "get", "pods", "-l", f"{MANAGED_LABEL}=true", "-o", "json",
+                "get", "pods", "-l", f"{MANAGED_LABEL}=true,{INSTANCE_LABEL}={k8s_label_value(self._instance)}",
+                "-o", "json",
                 *self._ns_args(), check=False,
             )
             if r.returncode != 0:
@@ -396,22 +480,29 @@ class K8sBackend:
             return []
 
     def exit_code(self, h: WorkloadHandle) -> Optional[int]:
-        r = _kubectl("get", "pod", h._impl, "-o", "json", *self._ns_args(), check=False)  # type: ignore[attr-defined]
+        name = h._impl  # type: ignore[attr-defined]
+        if name in self._exited:
+            return self._exited[name]
+        r = _kubectl("get", "pod", name, "-o", "json", *self._ns_args(), check=False)
         if r.returncode != 0:
             return 0                                     # gone (deleted/never-found) → no longer running
         status = json.loads(r.stdout).get("status", {})
         phase = status.get("phase")
-        if phase in ("Pending", "Running"):
+        if phase not in TERMINAL_PHASES:
             return None                                  # still scheduling / running
-        if phase == "Succeeded":
-            return 0
+        code = 0
         if phase == "Failed":
+            code = 1
             for cs in status.get("containerStatuses", []):
                 term = cs.get("state", {}).get("terminated")
                 if term and "exitCode" in term:
-                    return int(term["exitCode"])
-            return 1
-        return None
+                    code = int(term["exitCode"])
+                    break
+        # The exit is now observed (the kernel records it from this answer): the finished Pod is
+        # removed so finished workloads do not pile up, and its code is kept for later polls.
+        self._exited[name] = code
+        _kubectl("delete", "pod", name, "--ignore-not-found", "--wait=false", *self._ns_args(), check=False)
+        return code
 
     def terminate(self, h: WorkloadHandle) -> None:      # graceful: SIGTERM + grace, then SIGKILL
         _kubectl("delete", "pod", h._impl, f"--grace-period={_stop_grace_sec()}", "--wait=false",
