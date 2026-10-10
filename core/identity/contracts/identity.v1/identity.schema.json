@@ -111,7 +111,7 @@
         "webhook_url": { "type": "string" },
         "webhook_secret": { "type": "string", "description": "present only with webhook_url" },
         "webhook_events": { "type": "object", "additionalProperties": { "type": "boolean" }, "description": "present only with webhook_url" },
-        "workspaces": { "type": "array", "items": { "type": "string" }, "description": "shared-workspace memberships" },
+        "workspaces": { "type": "array", "items": { "type": "string" }, "description": "shared-workspace memberships; for a delegation token, only the person's memberships inside the dispatch's ceiling (delegation.v1 ceiling_reads)" },
         "delegation": { "$ref": "#/$defs/ValidateDelegation" },
         "person_is_admin": { "type": "boolean" }
       },

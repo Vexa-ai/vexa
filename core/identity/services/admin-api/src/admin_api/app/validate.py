@@ -88,7 +88,8 @@ class ValidatedIdentity(BaseModel):
     webhook_events: Optional[Dict[str, Any]] = None
     # The caller's shared-workspace membership ids (from the derived users.data.memberships[]), so
     # the gateway can inject x-user-workspaces → meeting-api authorizes a member's transcript
-    # subscribe. Present when the account carries a membership list.
+    # subscribe. Present when the account carries a membership list. For a delegation token, only
+    # the memberships inside the dispatch's ceiling (`_validate_delegation`).
     workspaces: Optional[List[str]] = None
     delegation: Optional[DelegationCeiling] = None   # delegation tokens only
     # WHO THE WORKER ACTS FOR, as a fact about that person — never a role the worker holds
@@ -139,6 +140,14 @@ async def _validate_delegation(token: str, db: AsyncSession) -> Dict[str, Any]:
     if user is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Invalid delegation: no such user")
     resp = identity_of(user, scopes=list(DELEGATED_SCOPES), is_admin=False)
+    # THE WORKER'S MEMBERSHIPS ARE THE PERSON'S, NARROWED TO ITS CEILING. Services behind the gateway
+    # read `workspaces` as the shared workspaces this bearer reads through — meeting-api grants a read
+    # of a meeting bound to any of them — so a worker granted workspace A is answered A, never the
+    # person's B. The rule is the delegation contract's (`ceiling_reads`), the one agent-api's
+    # resolvers apply; `"*"` (a person in the loop) keeps every membership.
+    if "workspaces" in resp:
+        resp["workspaces"] = [w for w in resp["workspaces"] if delegation_mod.ceiling_reads(
+            ceiling["workspaces"], w, subject=str(uid))]
     resp["delegation"] = ceiling
     if claims.get("target"):
         resp["delegation"]["target"] = str(claims["target"])

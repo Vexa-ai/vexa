@@ -113,6 +113,37 @@ def regime_for_trigger(trigger: str) -> str:
     return "human" if trigger in HUMAN_TRIGGERS else "autonomous"
 
 
+#: Workspaces every subject READS whatever its dispatch's ceiling: the company layer, mounted
+#: read-only into every worker. A write there is held to the ceiling like any other.
+READ_BY_EVERYONE = frozenset({"_global"})
+
+
+def ceiling_allows(workspaces: "str | Iterable[str] | None", workspace: object, *, subject: object = "") -> bool:
+    """May a worker dispatched with the ceiling ``workspaces`` (a token's ``scope.workspaces``:
+    ``"*"``, or the list of workspace ids it was granted) address ``workspace``?
+
+    ``"*"`` is bounded by the account alone. An empty id, or the subject's own id, is the subject's
+    own workspace and always in scope: the uid decides it, not the caller. Any other id must be in
+    the list. THE ONE DEFINITION of the ceiling, called by agent-api's resolvers
+    (``control_plane/ceiling.py``) and, through :func:`ceiling_reads`, by identity's answer for a
+    delegation token (``/internal/validate`` narrows the person's memberships with it)."""
+    w = str(workspace or "").strip()
+    own = str(subject or "").strip()
+    if workspaces == "*" or not w or (own and w == own):
+        return True
+    if workspaces is None or isinstance(workspaces, (str, bytes)):
+        return False
+    return w in {str(x).strip() for x in workspaces if str(x).strip()}
+
+
+def ceiling_reads(workspaces: "str | Iterable[str] | None", workspace: object, *, subject: object = "") -> bool:
+    """May that worker READ ``workspace``? :func:`ceiling_allows`, plus the workspaces every subject
+    reads (:data:`READ_BY_EVERYONE`). A read that walks a person-wide set — their memberships, the
+    meetings bound to them — keeps only what this answers True for."""
+    return str(workspace or "").strip() in READ_BY_EVERYONE or ceiling_allows(
+        workspaces, workspace, subject=subject)
+
+
 def is_delegation_token(token: str) -> bool:
     """Cheap discriminator — does this bearer value even claim to be a delegation token? Lets a verifier
     fall through to its OTHER token schemes without paying a parse, and without a failed parse being

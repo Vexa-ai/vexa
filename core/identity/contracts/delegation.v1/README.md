@@ -29,6 +29,13 @@ carry `workspaces: "*"`; an autonomous one always carries its explicit isolation
 refuses the combination. The scope is a ceiling: it never grants what the account could not already
 reach. `target` is a default workspace for verbs that name none, and is outside `scope` on purpose.
 
+**What the ceiling admits** is defined once, in `delegation.py`: `ceiling_allows(workspaces,
+workspace, subject=)` — `"*"`, an empty id or the subject's own id, or an id in the list — and
+`ceiling_reads`, which also admits `_global`, the company layer every subject reads. agent-api's
+resolvers apply them to a named workspace (`control_plane/ceiling.py`), and identity applies
+`ceiling_reads` to the person's memberships when it answers a delegation token, so the workspaces a
+worker reads meetings through are the ones inside its ceiling.
+
 **Verification order**, with the reason a verifier gives for each refusal (`RefusalReason`):
 `vxd_` prefix (`not_delegated` — not this scheme, try the others) → three parts (`malformed`) →
 signature, constant time (`bad_signature`) → claims are a JSON object (`malformed`) →

@@ -24,8 +24,11 @@ the internal tier (`X-Internal-Secret` = `INTERNAL_API_SECRET`).
   memberships (`workspaces`) when they exist. For a delegation token, `scopes` are exactly
   `["bot", "tx"]`, `is_admin` is always `false`, and two fields appear that an API key never has:
   `delegation` (`ValidateDelegation`: the dispatch's `regime`, `workspaces` ceiling and `target`)
-  and `person_is_admin` (whether the person the worker acts for is the instance admin). The gateway
-  signs this answer onward as gateway-identity.v1 claims.
+  and `person_is_admin` (whether the person the worker acts for is the instance admin). Its
+  `workspaces` are the person's memberships narrowed to that ceiling (delegation.v1
+  `ceiling_reads`; `"*"` keeps them all), because the services behind the gateway read them as the
+  workspaces the bearer reads through. The gateway signs this answer onward as gateway-identity.v1
+  claims.
 - **Failures** — `503` without an internal secret outside dev mode; `403` on a wrong one; `401`
   `Missing token` · `Invalid token` · `Token expired` · `Delegation tokens are not accepted on this
   deployment` · `Invalid delegation: <reason>` (delegation.v1 `RefusalReason`) · `Invalid

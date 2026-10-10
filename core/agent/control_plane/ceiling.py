@@ -34,6 +34,9 @@ from typing import Optional
 from fastapi import HTTPException, Request
 
 from control_plane import identity_token
+# The ceiling rule itself is the delegation contract's (`ceiling_allows` / `ceiling_reads`), one
+# definition shared with identity, which narrows a delegated identity's memberships with it.
+from shared import delegation
 # `REFUSAL` is what a verb that needs a person answers a worker dispatched without one: the vendored
 # gateway-identity.v1 body, the same one meeting-api's `regime.py` answers with.
 from control_plane.identity_token import CLAIM_HEADERS, DELEGATION_HEADERS, REFUSAL
@@ -87,31 +90,43 @@ def write_slug(request: "Request", asked: Optional[str]) -> Optional[str]:
     return resolved
 
 
+def _ceiling(request: "Request"):
+    """The dispatch's ceiling as the delegation contract states it (``"*"`` or a list of workspace
+    ids), or ``None`` for a caller that is not a delegated worker."""
+    raw = request.headers.get(WORKSPACES_HEADER)
+    if raw is None:
+        return None
+    return "*" if raw.strip() == "*" else [w.strip() for w in raw.split(",") if w.strip()]
+
+
 def delegation_allows(request: "Request", slug: Optional[str]) -> bool:
     """May this caller address workspace ``slug``? A worker dispatched without a person carries the
     dispatch's isolation set (``x-user-delegation-workspaces``); ``*`` — and every caller that is not
     a delegated worker — is bounded by the account alone. An EMPTY slug, or the caller's own id, is
-    the caller's own workspace and always in scope: the uid decides it, not the caller."""
-    target = (slug or "").strip()
-    ceiling = request.headers.get(WORKSPACES_HEADER)
-    if ceiling is None or ceiling.strip() == "*" or not target:
+    the caller's own workspace and always in scope: the uid decides it, not the caller
+    (`delegation.ceiling_allows`)."""
+    ceiling = _ceiling(request)
+    if ceiling is None:
         return True
-    if target == (request.headers.get(SUBJECT_HEADER) or "").strip():
-        return True
-    return target in {w.strip() for w in ceiling.split(",") if w.strip()}
+    return delegation.ceiling_allows(ceiling, slug, subject=request.headers.get(SUBJECT_HEADER) or "")
 
 
 #: The workspaces every subject reads, so a read is never held to a ceiling over them: the company
 #: layer, mounted read-only into every worker (`_read_target` holds only a WRITE there to it).
-READ_BY_EVERYONE = frozenset({"_global"})
+READ_BY_EVERYONE = delegation.READ_BY_EVERYONE
 
 
 def reads_within(request: "Request", slug: Optional[str]) -> bool:
     """May this caller READ workspace ``slug`` under its dispatch's ceiling? The rule the
     named-workspace resolvers apply on a read, for the routes that walk a person-wide set — the
     person's memberships, their mounts, the workspaces a page's links name — rather than resolve
-    one named workspace. A caller with no ceiling reads everything its account does, as before."""
-    return (slug or "").strip() in READ_BY_EVERYONE or delegation_allows(request, slug)
+    one named workspace. A caller with no ceiling reads everything its account does, as before.
+    The same definition (`delegation.ceiling_reads`) narrows a delegated identity's memberships at
+    identity, which is what bounds the meeting reads meeting-api answers through the MCP."""
+    ceiling = _ceiling(request)
+    if ceiling is None:
+        return True
+    return delegation.ceiling_reads(ceiling, slug, subject=request.headers.get(SUBJECT_HEADER) or "")
 
 
 def is_delegated(request: "Request") -> bool:
