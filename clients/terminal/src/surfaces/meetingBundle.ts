@@ -1,8 +1,13 @@
-/** A meeting as a portable file (meeting-bundle.v1): the two calls the Export and Import actions make.
+/** A meeting as a portable file (meeting-bundle.v1): the calls the Export and Import actions make.
  *
- *  Export downloads `/api/meetings/{id}/export` with progress (the server sends Content-Length) and
- *  hands the browser a file. Import posts a zip to `/api/meetings/import` twice: first with
- *  `dry_run=true` to show what WOULD be created, then for real once the person confirms.
+ *  A bundle has two owners. meeting-api writes it and lands the meeting; the agent domain owns the
+ *  meeting's workspace and its page. The domains do not call each other, so THIS client carries the
+ *  agent half across:
+ *
+ *  Export: `/api/meeting/bundle-parts` (the workspace tree + the page, or 204) → handed to
+ *  `POST /api/meetings/{id}/export`, which places them in the bundle; with none, `GET` the export.
+ *  Import: `/api/meetings/import?dry_run=true` (the preview) → `/api/meetings/import` → when the
+ *  bundle carries a workspace or a page, `/api/meeting/bundle-restore` with the same file.
  *
  *  Every refusal is shown as the server said it — its contract code and its sentence — never a
  *  generic "something went wrong": a bad hash, a duplicate and a too-big file need different fixes. */
@@ -18,12 +23,24 @@ export interface BundlePreview {
   segments: number;
   speakers: string[];
   media: { path: string; type: string; format: string; bytes: number; duration_seconds: number | null }[];
-  annotations: { metadata_keys: string[] };
-  skipped: { part: string; reason: string; files?: number }[];
+  annotations: { metadata_keys: string[]; notes: boolean };
+  /** What the agent domain restores after the meeting lands (`restoreParts`). */
+  handoff: { workspace_files: number; notes_page: boolean };
   duplicate_of: number | null;
 }
 
 export interface ImportResult extends BundlePreview { imported: true; meeting_id: number }
+
+export interface RestoreResult {
+  meeting_id: number;
+  workspace: { slug: string; files: number } | null;
+  notes_page: { path: string; written: boolean } | null;
+}
+
+/** Whether the export carried the meeting's workspace and page: `included`, `none` (the meeting has
+ *  neither), or `unavailable` (the agent domain refused or is not deployed — said, never hidden). */
+export type PartsOutcome = { state: "included"; workspaceFiles: number; notesPage: boolean; skippedFiles: number }
+  | { state: "none" } | { state: "unavailable"; reason: string };
 
 /** A refusal the server named. `code` is the contract's Refusal code when there is one. */
 export class BundleError extends Error {
@@ -51,20 +68,44 @@ export function bundleFilename(disposition: string | null, meetingId: string): s
   return name || `meeting-${meetingId}.meeting-bundle.zip`;
 }
 
+/** The agent half of an export: the parts archive, or why there is none. */
+async function fetchParts(meetingId: string, fetcher: typeof fetch): Promise<{ body: Blob | null; outcome: PartsOutcome }> {
+  try {
+    const r = await fetcher(`/api/meeting/bundle-parts?meeting_id=${encodeURIComponent(meetingId)}`, { cache: "no-store" });
+    if (r.status === 204) return { body: null, outcome: { state: "none" } };
+    if (!r.ok) return { body: null, outcome: { state: "unavailable", reason: (await failure(r)).message } };
+    return {
+      body: await r.blob(),
+      outcome: {
+        state: "included",
+        workspaceFiles: Number(r.headers.get("x-vexa-workspace-files")) || 0,
+        notesPage: r.headers.get("x-vexa-notes-page") === "1",
+        skippedFiles: Number(r.headers.get("x-vexa-skipped-files")) || 0,
+      },
+    };
+  } catch (e) {
+    return { body: null, outcome: { state: "unavailable", reason: e instanceof Error ? e.message : "unreachable" } };
+  }
+}
+
 /** Download a meeting's bundle, reporting progress as a fraction (null while the size is unknown). */
 export async function downloadBundle(
   meetingId: string,
   onProgress: (fraction: number | null) => void,
   fetcher: typeof fetch = fetch,
-): Promise<{ blob: Blob; filename: string }> {
-  const r = await fetcher(`/api/meetings/${encodeURIComponent(meetingId)}/export`, { cache: "no-store" });
+): Promise<{ blob: Blob; filename: string; parts: PartsOutcome }> {
+  const { body, outcome } = await fetchParts(meetingId, fetcher);
+  const url = `/api/meetings/${encodeURIComponent(meetingId)}/export`;
+  const r = body
+    ? await fetcher(url, { method: "POST", headers: { "Content-Type": "application/zip" }, body, cache: "no-store" })
+    : await fetcher(url, { cache: "no-store" });
   if (!r.ok) throw await failure(r);
   const total = Number(r.headers.get("content-length")) || 0;
   const filename = bundleFilename(r.headers.get("content-disposition"), meetingId);
   if (!r.body) {
     const blob = await r.blob();
     onProgress(1);
-    return { blob, filename };
+    return { blob, filename, parts: outcome };
   }
   const reader = r.body.getReader();
   const chunks: Uint8Array[] = [];
@@ -77,7 +118,7 @@ export async function downloadBundle(
     onProgress(total ? Math.min(1, received / total) : null);
   }
   onProgress(1);
-  return { blob: new Blob(chunks as BlobPart[], { type: "application/zip" }), filename };
+  return { blob: new Blob(chunks as BlobPart[], { type: "application/zip" }), filename, parts: outcome };
 }
 
 /** Hand a blob to the browser as a download. */
@@ -115,4 +156,15 @@ export async function confirmImport(file: Blob, fetcher: typeof fetch = fetch): 
   const r = await post(file, false, fetcher);
   if (!r.ok) throw await failure(r);
   return await r.json() as ImportResult;
+}
+
+/** Land the bundle's workspace and page for the meeting `confirmImport` just created from it. */
+export async function restoreParts(file: Blob, meetingId: number, fetcher: typeof fetch = fetch): Promise<RestoreResult> {
+  const r = await fetcher(`/api/meeting/bundle-restore?meeting_id=${meetingId}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/zip" },
+    body: file,
+  });
+  if (!r.ok) throw await failure(r);
+  return await r.json() as RestoreResult;
 }

@@ -10,8 +10,8 @@ import { Modal } from "../ui-kit/Modal";
 import { refreshMeetings } from "./liveMeetings";
 import type { MeetingMock } from "./meetingModel";
 import {
-  BundleError, confirmImport, downloadBundle, previewImport, saveBlob,
-  type BundlePreview, type ImportResult,
+  BundleError, confirmImport, downloadBundle, previewImport, restoreParts, saveBlob,
+  type BundlePreview, type ImportResult, type PartsOutcome, type RestoreResult,
 } from "./meetingBundle";
 
 const button: CSSProperties = { background: "transparent", color: "var(--t2)", border: "1px solid var(--line)", borderRadius: 6, padding: "4px 9px", fontSize: 12, cursor: "pointer" };
@@ -33,12 +33,14 @@ function describe(e: unknown): string {
 export function ExportMeetingButton({ meetingId }: { meetingId: string }) {
   const [progress, setProgress] = useState<number | null | undefined>(undefined);
   const [error, setError] = useState("");
+  const [parts, setParts] = useState<PartsOutcome | null>(null);
   const busy = progress !== undefined;
   const run = async () => {
-    setError(""); setProgress(null);
+    setError(""); setParts(null); setProgress(null);
     try {
-      const { blob, filename } = await downloadBundle(meetingId, setProgress);
+      const { blob, filename, parts: outcome } = await downloadBundle(meetingId, setProgress);
       saveBlob(blob, filename);
+      setParts(outcome);
     } catch (e) { setError(describe(e)); }
     finally { setProgress(undefined); }
   };
@@ -48,6 +50,10 @@ export function ExportMeetingButton({ meetingId }: { meetingId: string }) {
       {busy ? (progress == null ? "Exporting…" : `Exporting ${Math.round(progress * 100)}%`) : "Export"}
     </button>
     {error && <span role="alert" style={{ fontSize: 12, color: "var(--danger)" }}>{error}</span>}
+    {parts?.state === "unavailable" && <span role="status" style={{ fontSize: 12, color: "var(--accent)" }}>
+      Exported without the workspace and notes page: {parts.reason}</span>}
+    {parts?.state === "included" && parts.skippedFiles > 0 && <span role="status" style={{ fontSize: 12, color: "var(--accent)" }}>
+      {parts.skippedFiles} workspace file{parts.skippedFiles === 1 ? "" : "s"} left out: name or size a bundle cannot carry</span>}
   </span>;
 }
 
@@ -65,7 +71,9 @@ function PreviewCard({ p }: { p: BundlePreview }) {
     <div>{p.segments} transcript segment{p.segments === 1 ? "" : "s"}{p.speakers.length ? ` · ${p.speakers.join(", ")}` : ""}</div>
     <div>{p.media.length ? p.media.map(m => `${m.type} (${m.format}, ${mb(m.bytes)})`).join(" · ") : "No recordings — transcript only"}</div>
     {p.annotations.metadata_keys.length > 0 && <div>Annotations: {p.annotations.metadata_keys.join(", ")}</div>}
-    {p.skipped.map(s => <div key={s.part} style={{ color: "var(--accent)" }}>Not imported: {s.part} — {s.reason}</div>)}
+    {p.annotations.notes && <div>Notes</div>}
+    {p.handoff.notes_page && <div>The meeting&rsquo;s page, onto your desk</div>}
+    {p.handoff.workspace_files > 0 && <div>Workspace: {p.handoff.workspace_files} file{p.handoff.workspace_files === 1 ? "" : "s"}, as a new workspace of yours</div>}
     <div style={note}>Exported {when(p.exported_at)} from another deployment (meeting {p.source.meeting_id}). It will be yours only — nobody else gets access.</div>
     {p.duplicate_of != null && <div role="alert" style={{ color: "var(--danger)" }}>
       You already imported this file as meeting {p.duplicate_of}. Delete that meeting to import it again.
@@ -88,6 +96,7 @@ function ImportDialog({ onClose }: { onClose: () => void }) {
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<BundlePreview | null>(null);
   const [done, setDone] = useState<ImportResult | null>(null);
+  const [restored, setRestored] = useState<RestoreResult | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [over, setOver] = useState(false);
@@ -102,7 +111,16 @@ function ImportDialog({ onClose }: { onClose: () => void }) {
   const confirm = async () => {
     if (!file) return;
     setBusy(true); setError("");
-    try { setDone(await confirmImport(file)); refreshMeetings(); }
+    try {
+      const result = await confirmImport(file);
+      setDone(result); refreshMeetings();
+      // The meeting has landed; the agent domain now lands what it owns from the same file. A
+      // refusal there is shown — the meeting stays imported either way.
+      if (result.handoff.workspace_files > 0 || result.handoff.notes_page) {
+        try { setRestored(await restoreParts(file, result.meeting_id)); }
+        catch (e) { setError(`The meeting was imported, but its workspace and notes page were not: ${describe(e)}`); }
+      }
+    }
     catch (e) { setError(describe(e)); }
     finally { setBusy(false); }
   };
@@ -112,6 +130,9 @@ function ImportDialog({ onClose }: { onClose: () => void }) {
     {done ? <div role="status" style={{ fontSize: 13, color: "var(--t2)", lineHeight: 1.5 }}>
       Imported as meeting {done.meeting_id}: {done.meeting.title || "Untitled meeting"}, {done.segments} segments
       {done.media.length ? `, ${done.media.length} recording${done.media.length === 1 ? "" : "s"}` : ""}.
+      {restored?.workspace && <div>Workspace restored: {restored.workspace.files} files in &ldquo;{restored.workspace.slug}&rdquo;.</div>}
+      {restored?.notes_page && <div>{restored.notes_page.written ? "The meeting\u2019s page is on your desk." : "Your desk already had this meeting\u2019s page; it was kept."}</div>}
+      {error && <div role="alert" style={{ marginTop: 8, fontSize: 12, color: "var(--danger)" }}>{error}</div>}
       <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 14 }}><button style={button} onClick={onClose}>Done</button></div>
     </div> : <>
       <label data-bundle-drop onDragOver={e => { e.preventDefault(); setOver(true); }} onDragLeave={() => setOver(false)} onDrop={onDrop}
