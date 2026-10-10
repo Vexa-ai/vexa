@@ -8,7 +8,7 @@ import pytest
 
 from credential_broker import providers
 from credential_broker.faults import UpstreamFault
-from conftest import GOOGLE
+from conftest import GOOGLE, OWNER
 
 
 def authorize(signed, cid, session="browser-session"):
@@ -68,7 +68,7 @@ def test_callback_stores_tokens_and_returns_status_only(signed, connection, stor
         r = signed("human", "GET", path)
     assert r.json() == {"connection_id": cid, "status": "connected"}
     assert exchange.call_args.kwargs["redirect"] == "https://app.example.test/api/auth/callback/google"
-    assert store.rows[cid][-1] == {"value": token}
+    assert store.rows[cid][-1] == {"value": token, "owner": OWNER}
     listed = signed("human", "GET", "/api/connections").text
     assert "fixture-user-secret" not in listed and "person@example.test" in listed
 

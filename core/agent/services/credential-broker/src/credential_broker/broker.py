@@ -56,6 +56,12 @@ class Broker:
         with closing(self.db()) as c, c:
             metadata.open_schema(c)
         self.hmac_key = metadata.state_key(self.root / "state-hmac.key")
+        self._owners_sealed = False
+        try:
+            self.seal_owners()
+        except StoreUnavailable as exc:
+            # The store is down at boot: the first credential read retries (`get`).
+            self.fault("store", "seal_" + exc.kind)
 
     # ── storage ───────────────────────────────────────────────────────────────────────────
     def db(self) -> sqlite3.Connection:
@@ -73,22 +79,33 @@ class Broker:
                 return [dict(r) for r in cur.fetchall()]
             return None
 
-    def put(self, path: str, data: dict, *, cas: Optional[int] = None) -> Record:
+    # A connection's records carry their owner inside the encrypted value (`owner`), and every read
+    # names the owner it expects. The owner column in metadata.sqlite is plaintext on the state
+    # volume; the sealed copy is what decides whose credential a record is.
+    def put(self, path: str, data: dict, *, cas: Optional[int] = None, owner: Optional[str] = None) -> Record:
+        if owner is not None:
+            data = {**data, "owner": str(owner)}
         try:
             return self.store.put(path, data, cas=cas)
         except StoreUnavailable as exc:
             self.fault("store", exc.kind)
             raise HTTPException(503, "Credential store unavailable") from None
 
-    def get(self, path: str, *, version: Optional[int] = None) -> Optional[Record]:
+    def get(self, path: str, *, version: Optional[int] = None, owner: Optional[str] = None) -> Optional[Record]:
         try:
-            return self.store.get(path, version=version)
+            if owner is not None:
+                self.seal_owners()
+            record = self.store.get(path, version=version)
         except StoreUnavailable as exc:
             self.fault("store", exc.kind)
             raise HTTPException(503, "Credential store unavailable") from None
+        if owner is not None and record is not None and record.data.get("owner") != str(owner):
+            self.fault("store", "owner_mismatch")
+            raise HTTPException(503, "Credential store unavailable")
+        return record
 
-    def must_get(self, path: str, version: int) -> dict:
-        record = self.get(path, version=version)
+    def must_get(self, path: str, version: int, *, owner: str) -> dict:
+        record = self.get(path, version=version, owner=owner)
         if record is None:
             self.fault("store", "missing")
             raise HTTPException(503, "Credential store unavailable")
@@ -101,6 +118,45 @@ class Broker:
         except StoreUnavailable as exc:
             self.fault("store", exc.kind)
             raise HTTPException(503, "Credential store unavailable") from None
+
+    def seal_owners(self) -> None:
+        """Once per state directory: bring records written before owners were sealed into line.
+
+        A live connection's current credential and OAuth application are rewritten with the owner
+        the metadata names now; a deleted connection's records are destroyed, and a disconnected
+        one's credential (its application is kept for reconnecting). Raises StoreUnavailable when
+        the store does not answer, and is retried on the next credential read."""
+        if self._owners_sealed:
+            return
+        with self.lock:
+            if self._owners_sealed:
+                return
+            if not self.sql("SELECT 1 FROM broker_meta WHERE key='owners_sealed'", one=True):
+                rows = self.sql("SELECT id, actor, status, version, oauth_app_version FROM connections", rows=True)
+                for row in rows:
+                    cid = row["id"]
+                    if row["status"] == "deleted":
+                        self.store.delete(cid)
+                        self.store.delete("oauth-app-" + cid)
+                        continue
+                    if row["status"] == "disconnected":
+                        self.store.delete(cid)
+                    for path, column in ((cid, "version"), ("oauth-app-" + cid, "oauth_app_version")):
+                        if not row[column] or (column == "version" and row["status"] == "disconnected"):
+                            continue
+                        try:
+                            record = self.store.get(path, version=row[column])
+                        except StoreUnavailable as exc:
+                            if exc.kind != "integrity":
+                                raise
+                            continue          # unreadable already; it stays unreadable
+                        if record is None or "owner" in record.data:
+                            continue
+                        saved = self.store.put(path, {**record.data, "owner": str(row["actor"])})
+                        self.sql(f"UPDATE connections SET {column}=? WHERE id=?", (saved.version, cid))
+                self.sql("INSERT OR REPLACE INTO broker_meta(key, value) VALUES ('owners_sealed', ?)",
+                         (str(time.time()),))
+            self._owners_sealed = True
 
     # ── identity ──────────────────────────────────────────────────────────────────────────
     def key_for(self, role: str) -> bytes:
@@ -201,7 +257,7 @@ class Broker:
     def oauth_application(self, row: dict) -> dict:
         if not row["oauth_app_version"]:
             raise HTTPException(409, "Save the OAuth application first")
-        return self.must_get("oauth-app-" + row["id"], row["oauth_app_version"])["value"]
+        return self.must_get("oauth-app-" + row["id"], row["oauth_app_version"], owner=row["actor"])["value"]
 
     def refreshed(self, who, cid, row, value, operation) -> dict:
         """A fresh Google access token, rotated in the store, when the stored one is near expiry."""
@@ -210,7 +266,7 @@ class Broker:
         if not value.get("refresh_token"):
             raise providers.ProviderError("Authorization expired; reconnect this account")
         value = providers.refresh(row["provider"], self.google(), value)
-        saved = self.put(cid, {"value": value})
+        saved = self.put(cid, {"value": value}, owner=who["actor"])
         row["version"] = saved.version
         self.sql("UPDATE connections SET version=? WHERE id=?", (saved.version, cid))
         self.audit(who, cid, "credential.refresh", "stored", operation=operation, receipt_id=saved.receipt, version=saved.version)

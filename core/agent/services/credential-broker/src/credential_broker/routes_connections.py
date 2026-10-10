@@ -119,7 +119,7 @@ def build(b: Broker) -> APIRouter:
             require_confirmation(row, destination_host(spec), body.confirmed_host)
         value = body.value
         if not value and row["status"] == "ready":
-            saved_config = b.must_get(cid, row["version"])["value"]
+            saved_config = b.must_get(cid, row["version"], owner=who["actor"])["value"]
             b.audit(who, cid, "credential.read", "retrieved", version=row["version"])
             proposed = spec or {"endpoint": body.endpoint, "header": body.header, "scheme": body.scheme, "method": body.method}
             if any(saved_config.get(k) != proposed.get(k) for k in ("endpoint", "header", "scheme", "method")):
@@ -148,7 +148,7 @@ def build(b: Broker) -> APIRouter:
             if current["setup_spec"] and (body.setup_request != current["setup_request"] or current["setup_spec"] != row["setup_spec"]):
                 raise HTTPException(409, "Setup changed; review the updated form and save again")
             b.audit(who, cid, "credential.store", "requested")
-            saved = b.put(cid, {"value": config})
+            saved = b.put(cid, {"value": config}, owner=who["actor"])
             b.audit(who, cid, "credential.store", "stored", receipt_id=saved.receipt, version=saved.version)
             b.sql("UPDATE connections SET status=?,version=?,approved_host=? WHERE id=?",
                   ("ready", saved.version, host, cid))
@@ -171,7 +171,8 @@ def build(b: Broker) -> APIRouter:
             host = destination_host(spec)
             require_confirmation(row, host, body.confirmed_host)
             b.audit(who, cid, "oauth.application", "requested")
-            saved = b.put("oauth-app-" + cid, {"value": {"client_id": body.client_id, "client_secret": body.client_secret, "spec": spec}})
+            saved = b.put("oauth-app-" + cid, {"value": {"client_id": body.client_id, "client_secret": body.client_secret, "spec": spec}},
+                          owner=who["actor"])
             b.audit(who, cid, "oauth.application", "stored", receipt_id=saved.receipt, version=saved.version)
             b.sql("UPDATE connections SET oauth_app_version=?,status='awaiting_user',approved_host=? WHERE id=?",
                   (saved.version, host, cid))
@@ -227,7 +228,7 @@ def build(b: Broker) -> APIRouter:
                     value["oauth_application"] = cfg
                 else:
                     value = providers.tokens(row["provider"], b.google(), code=code, verifier=verifier, redirect=b.redirect())
-                saved = b.put(cid, {"value": value})
+                saved = b.put(cid, {"value": value}, owner=who["actor"])
                 account = providers.account_email(row["provider"], value)
                 b.audit(who, cid, "oauth.authorize", "stored", receipt_id=saved.receipt, version=saved.version)
                 b.sql("UPDATE connections SET status=?,version=?,account=? WHERE id=?", ("ready", saved.version, account, cid))
@@ -282,7 +283,7 @@ def build(b: Broker) -> APIRouter:
                 raise HTTPException(409, "Matching connection is not ready")
             b.audit(who, cid, body.action, "requested", operation=operation, version=row["version"])
             try:
-                value = b.must_get(cid, row["version"])["value"]
+                value = b.must_get(cid, row["version"], owner=who["actor"])["value"]
                 b.audit(who, cid, "credential.read", "retrieved", operation=operation, version=row["version"])
                 value = b.refreshed(who, cid, row, value, operation)
             except (providers.ProviderError, UpstreamFault, HTTPException):
@@ -314,7 +315,7 @@ def build(b: Broker) -> APIRouter:
                     raise HTTPException(409, "Draft outcome unknown; check Gmail before retrying")
                 return json.loads(prior["result"])
             b.audit(who, cid, "gmail.draft", "requested", operation=body.request_id)
-            value = b.must_get(cid, row["version"])["value"]
+            value = b.must_get(cid, row["version"], owner=who["actor"])["value"]
             b.audit(who, cid, "credential.read", "retrieved", operation=body.request_id, version=row["version"])
             if providers.DRAFT_SCOPE not in value.get("scope", "").split():
                 b.sql("UPDATE connections SET setup_request=? WHERE id=?", (secrets.token_urlsafe(18), cid))
@@ -340,7 +341,7 @@ def build(b: Broker) -> APIRouter:
             raise HTTPException(409, "Service connection is not ready")
         operation = uuid.uuid4().hex
         b.audit(who, cid, "service.call", "requested", operation=operation, version=row["version"])
-        value = b.must_get(cid, row["version"])["value"]
+        value = b.must_get(cid, row["version"], owner=who["actor"])["value"]
         b.audit(who, cid, "credential.read", "retrieved", operation=operation, version=row["version"])
         try:
             if value.get("oauth_application"):
@@ -349,14 +350,14 @@ def build(b: Broker) -> APIRouter:
                     row = b.connection(who, cid)
                     if row["status"] != "ready":
                         raise HTTPException(409, "Service connection is not ready")
-                    value = b.must_get(cid, row["version"])["value"]
+                    value = b.must_get(cid, row["version"], owner=who["actor"])["value"]
                     cfg = value["oauth_application"]
                     if value.get("expires_at") is not None and value["expires_at"] <= time.time() + 30:
                         if not value.get("refresh_token"):
                             raise secret_service.ServiceError("Authorization expired; reconnect")
                         value = service_oauth.exchange(cfg["spec"], cfg, refresh=value["refresh_token"])
                         value["oauth_application"] = cfg
-                        saved = b.put(cid, {"value": value})
+                        saved = b.put(cid, {"value": value}, owner=who["actor"])
                         b.sql("UPDATE connections SET version=? WHERE id=?", (saved.version, cid))
                         b.audit(who, cid, "credential.refresh", "stored", operation=operation, receipt_id=saved.receipt, version=saved.version)
                     spec = cfg["spec"]

@@ -139,3 +139,4 @@ Every broker failure is logged as one JSON line with `"event":"broker_fault"`, a
 | `http_502` | agent-api, terminal | Google or a custom service answered with something unusable |
 | `expired`, `signature`, `replay` | broker (`assertion_refused`) | a request was refused before any route ran |
 | `transport`, `integrity`, `config` | broker (`source: store`) | the store is unreachable, a stored version did not decrypt (wrong store key), or the backend is misconfigured |
+| `owner_mismatch` | broker (`source: store`) | a connection's metadata names a different person from the one its stored credential is sealed to; the credential is not used |
