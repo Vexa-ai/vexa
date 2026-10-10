@@ -174,6 +174,37 @@ curl -X POST "$API_BASE/meetings/google_meet/abc-defg-hij/workspace" \
 Returns `200` with `{"workspace_id": "ws-acme"}`. `422` when `workspace_id` is missing or empty;
 `404` for a record you don't own. `POST /meetings` accepts the same binding at creation time.
 
+### Share a meeting
+
+A meeting is shared with a **share grant**: a capability the owner mints and a signed-in person
+redeems. Redeeming adds them to the meeting's readers. A reader gets the meeting in `GET /meetings`
+(with `shared: true`), its detail, its transcript (`GET /transcripts/by-id/{id}`), its live feed (the
+terminal's stream and `/ws`), and its recording only when the owner allows it. The owner manages
+grants and readers with the routes below. All of them take the meeting's row id and need the `tx` scope.
+A meeting that isn't yours returns `404`, exactly like one that doesn't exist.
+
+| Route | What it does |
+|---|---|
+| `POST /meetings/{meeting_id}/share` | Mint a grant. Body: `{mode, allowed_emails?, expires_in_sec?}`. `mode` is `restricted` (only the listed verified addresses can redeem it) or `open` (any signed-in person can). The TTL is clamped to 60 s–30 days. Returns `{id, token, mode, expires_at}`, and the `token` appears **only in this response**. |
+| `POST /transcripts/share/accept` | Redeem a token as the signed-in caller: `{token}` → `{meeting_id, ok}`. `403 not_allowed` for an address not on a restricted grant, `403 revoked` / `403 expired` for a withdrawn or lapsed grant, `404` for an unknown token. |
+| `GET /meetings/{meeting_id}/access` | Who can read the meeting: `{people:[{user_id, email, role:"viewer", grant_id, since}], invites:[{id, emails, expires_at}], links:[{id, joined, expires_at}], workspace_id, recording}`. Carries no tokens or hashes. |
+| `PATCH /meetings/{meeting_id}/access` | `{recording: true\|false}`: whether readers may play and download the recording. The default is `false`. Returns the access view. |
+| `DELETE /meetings/{meeting_id}/share/{grant_id}` | Revoke a grant (a pending invite or a link). Anyone who joined through it loses access immediately. Returns the access view; `404` for an unknown grant. |
+| `DELETE /meetings/{meeting_id}/viewers/{user_id}` | Remove a reader. They lose access on every path at once: REST reads return `404`, and an open live stream ends (`access-revoked` on the terminal stream, `subscription_revoked` on `/ws`) within about 15 seconds. A grant minted before the removal no longer admits them. A new invite does. |
+
+```bash Invite one person, then remove them
+curl -X POST "$API_BASE/meetings/42/share" -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"mode":"restricted","allowed_emails":["ana@example.com"],"expires_in_sec":2592000}'
+curl "$API_BASE/meetings/42/access" -H "X-API-Key: $API_KEY"
+curl -X DELETE "$API_BASE/meetings/42/viewers/1187" -H "X-API-Key: $API_KEY"
+```
+
+Recording reads (`GET /recordings/{id}`, `…/master`, `…/media/{media_file_id}/raw`) serve a reader the
+recordings of a meeting shared with them only while that meeting's `recording` setting is `true`.
+`GET /recordings` stays a list of your own recordings unless you pass `meeting_id`.
+Deleting a recording stays owner-only. The terminal flow is described in
+[Share a meeting](/how-to/share-a-meeting).
+
 ## api.v1 native-id support (per route)
 
 `api.v1` is sealed as a **file hash** (`contracts.seal.json`), which pins the schema document, not
