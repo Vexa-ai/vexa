@@ -43,13 +43,29 @@ export function ModelPicker({ session }: { session: string }) {
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const ref = useRef<HTMLDivElement>(null);
+  // Counts this chat's stored picks. A catalog read that started before the latest pick answers
+  // with the chat as it was, so its `selected`/`selected_effort` must not replace the pick.
+  const picks = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
     setError(null);
+    // A NEW CHAT IS NOT THE PREVIOUS ONE. The model list is the person's and stays on screen while
+    // this chat's read is in flight, but the previous chat's picks do not: a pick made now goes out
+    // for this chat, on the model this chat follows (live on app.dev, a new chat's effort pick went
+    // out with the previous chat's model, and the read landing after it reset the dropdown).
+    picks.current = 0;
+    setList((l) => (l ? { ...l, selected: null, selected_effort: null } : l));
+    const startedAt = picks.current;
     getModelCatalog(session)
       // an answer that is not a model list (a server one release behind) is no catalog
-      .then((l) => { if (!cancelled) setList(Array.isArray(l?.models) ? l : null); })
+      .then((l) => {
+        if (cancelled) return;
+        if (!Array.isArray(l?.models)) { setList(null); return; }
+        // a pick made while this read was in flight is newer than what the read saw
+        setList((cur) => (picks.current !== startedAt && cur
+          ? { ...l, selected: cur.selected, selected_effort: cur.selected_effort } : l));
+      })
       .catch(() => { if (!cancelled) setList(null); });   // no catalog route → no picker
     return () => { cancelled = true; };
   }, [session]);
@@ -74,6 +90,7 @@ export function ModelPicker({ session }: { session: string }) {
     setError(null);
     try {
       const r = await setChatModel(session, id);
+      picks.current += 1;
       setList((l) => (l ? { ...l, selected: r.model, selected_effort: null } : l));
     } catch (e) {
       setError(presentError(e).headline);
@@ -94,7 +111,9 @@ export function ModelPicker({ session }: { session: string }) {
     setError(null);
     try {
       const r = await setChatModel(session, list.selected ?? "", level);
-      setList((l) => (l ? { ...l, selected_effort: r.effort ?? null } : l));
+      picks.current += 1;
+      // what the server stored: its echo, else the level it accepted
+      setList((l) => (l ? { ...l, selected_effort: r.effort !== undefined ? r.effort : (level || null) } : l));
     } catch (e) {
       setError(presentError(e).headline);
     }

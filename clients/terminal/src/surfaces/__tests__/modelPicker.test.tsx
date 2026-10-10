@@ -7,7 +7,7 @@
  *  Settings → Models `default_model`. No endpoint and no credential ever reaches this component.
  */
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, waitFor, act } from "@testing-library/react";
 import { ModelPicker } from "../ModelPicker";
 import type { ModelList } from "../modelsApi";
 
@@ -178,5 +178,49 @@ describe("the effort selector", () => {
     fireEvent.click(await chip());
     fireEvent.click(document.querySelector('[data-model-id="qwen3-32b"]')!);
     await waitFor(() => expect(effortSelect()).toBeNull());
+  });
+});
+
+// ── a new chat: the pick shows at once, whatever the catalog read still in flight says ─────────
+//
+// Live on app.dev: in a new chat, an effort picked before the first message was stored, but the
+// dropdown went back to the default. Switching chats keeps the previous chat's list on screen while
+// the new chat's catalog read is in flight; a pick made then went out with the PREVIOUS chat's
+// model, and the read, landing after it, put the dropdown back on the default.
+
+describe("an effort picked in a new chat", () => {
+  it("shows the pick right after picking, and a catalog read that lands later does not undo it", async () => {
+    const calls: Call[] = [];
+    let releaseNewChat: (r: Response) => void = () => {};
+    // the person's default is the model with effort levels; the previous chat pinned it at max
+    const previous = { ...WITH_EFFORT, default: "claude", selected: "claude", selected_effort: "max" as const };
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      const method = (init?.method || "GET").toUpperCase();
+      calls.push({ url, method, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+      if (method === "GET" && url.includes("session=s1")) return new Response(JSON.stringify(previous), { status: 200 });
+      if (method === "GET") return new Promise<Response>((resolve) => { releaseNewChat = resolve; });
+      const b = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({ ok: true, session: b.session, model: b.model || null,
+                                           effort: b.effort || null, changed: true }), { status: 200 });
+    }));
+    // the new chat follows the person's default, which here is the model with effort levels
+    const newChat = { ...WITH_EFFORT, default: "claude", selected: null, selected_effort: null };
+
+    const { rerender } = render(<ModelPicker session="s1" />);
+    await chip();
+    expect(effortSelect()!.value).toBe("max");
+
+    rerender(<ModelPicker session="new-chat" />);          // the new chat's read is still in flight
+    await waitFor(() => expect(calls.filter((c) => c.method === "GET")).toHaveLength(2));
+    fireEvent.change(effortSelect()!, { target: { value: "high" } });
+    await waitFor(() => expect(calls.some((c) => c.method === "POST")).toBe(true));
+    // the pick is for THIS chat, on the model it follows — never the previous chat's pick
+    expect(calls.find((c) => c.method === "POST")!.body).toEqual({ session: "new-chat", model: "", effort: "high" });
+    await waitFor(() => expect(effortSelect()!.value).toBe("high"));
+
+    // the read started before the pick lands now, with the chat as it was before it
+    await act(async () => { releaseNewChat(new Response(JSON.stringify(newChat), { status: 200 })); });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(effortSelect()!.value).toBe("high");
   });
 });
