@@ -12,6 +12,7 @@ settings editor over the internal tier and read by agent-api and meeting-api. Th
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
@@ -49,7 +50,14 @@ MODEL_MODES = ("subscription", "custom")
 # stale is always the one furthest from the code that uses it.
 # The copilot's second model dial is deliberately absent — it went with the in-product
 # inference pipeline (PRD decision 34).
-MODELS_FIELDS = ("mode", "model", "base_url", "api_key", "extra_body", "effort", "runner")
+# default_model: the model-catalog id (ADR-0042) a person runs on before they pick one in a chat —
+# per user, or the organisation's on the platform tier. Stored here as an opaque catalog id, shape-
+# checked and never validated against a list: the catalog is agent-api's (VEXA_MODEL_CATALOG), and
+# agent-api skips a stored default that is gone or not the person's, the way it drops a stale runner.
+MODELS_FIELDS = ("mode", "model", "base_url", "api_key", "extra_body", "effort", "runner",
+                 "default_model")
+#: models.v1 ModelId — a catalog id's shape (core/agent/contracts/models.v1; a fact-parity site).
+MODEL_ID_SOURCE = r"^[a-z0-9][a-z0-9._-]{0,63}$"
 TRANSCRIPTION_FIELDS = ("url", "token")
 # "setup" tracks the admin first-run wizard: per-step state ("done" / "skipped") + overall
 # completion — the terminal re-surfaces the wizard until it reads completed. Plain strings,
@@ -82,6 +90,10 @@ def validate_config_fields(update: dict) -> dict:
         if field == "mode" and value not in MODEL_MODES:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                                 detail=f"mode must be one of {sorted(MODEL_MODES)}")
+        if field == "default_model" and not re.match(MODEL_ID_SOURCE, value):
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                detail="default_model must be a model-catalog id "
+                                       "(lowercase letters, digits, '.', '_' or '-')")
         if field in ("base_url", "url"):
             parsed = urlparse(value)
             if parsed.scheme not in ("http", "https") or not parsed.hostname:
