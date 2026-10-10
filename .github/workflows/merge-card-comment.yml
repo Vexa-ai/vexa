@@ -29,9 +29,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with: { ref: main }   # trusted gate script, never the PR head
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with: { node-version: 22 }
       - name: Render the card
         env:
@@ -39,7 +39,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBERS: ${{ github.event.pull_request.number }}
         run: node scripts/merge-card-gate.mjs > card.md || true   # exit 1 when not accepted; the card body is what we want
-      - uses: actions/github-script@v7
+      - uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         with:
           script: |
             const fs = require('fs');
