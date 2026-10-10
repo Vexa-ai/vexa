@@ -155,8 +155,7 @@ env:
   #
   # Verified 2026-09-07 from a laptop at zero Hub cost: mirror.gcr.io answers anonymous manifest
   # GETs with 200 for every reference these legs pull — the whole vexaai/* release set,
-  # postgres:17-alpine, valkey/valkey:8-alpine, minio/minio:latest, minio/mc:latest,
-  # node:20-slim — and the digests it returns for the vexaai set are byte-identical to the
+  # postgres:17-alpine, valkey/valkey:8-alpine, node:20-slim — and the digests it returns for the vexaai set are byte-identical to the
   # human-reviewed packet at releases/v0.13.0/candidate-images.json (checked against the file,
   # not against Hub).
   #
@@ -718,7 +717,7 @@ jobs:
                      v012-gateway v012-flows v012-mcp v012-terminal v012-agent-worker v012-credential-broker; do
             mirror_pull "vexaai/$img:$VERSION"
           done
-          for ref in valkey/valkey:8-alpine postgres:17-alpine minio/minio:latest minio/mc:latest; do
+          for ref in valkey/valkey:8-alpine postgres:17-alpine; do
             mirror_pull "$ref"
           done
           echo "✓ every image this leg runs is resident locally — compose will pull nothing"
@@ -780,7 +779,7 @@ jobs:
                      v012-gateway v012-flows v012-mcp v012-terminal v012-agent-worker v012-credential-broker; do
             mirror_pull "vexaai/$img:$VERSION"
           done
-          for ref in valkey/valkey:8-alpine postgres:17-alpine minio/minio:latest minio/mc:latest node:20-slim; do
+          for ref in valkey/valkey:8-alpine postgres:17-alpine node:20-slim; do
             mirror_pull "$ref"
           done
           echo "✓ every image this leg runs is resident locally — compose will pull nothing"
@@ -845,7 +844,7 @@ jobs:
                      v012-gateway v012-flows v012-mcp v012-terminal v012-agent-worker v012-credential-broker; do
             mirror_pull "vexaai/$img:$VERSION"
           done
-          for ref in valkey/valkey:8-alpine postgres:17-alpine minio/minio:latest minio/mc:latest node:20-slim; do
+          for ref in valkey/valkey:8-alpine postgres:17-alpine node:20-slim; do
             mirror_pull "$ref"
           done
           echo "✓ every image this leg runs is resident locally — compose will pull nothing"
@@ -911,7 +910,7 @@ jobs:
                      v012-gateway v012-flows v012-mcp v012-terminal v012-agent-worker v012-credential-broker; do
             mirror_pull "vexaai/$img:$VERSION"
           done
-          for ref in valkey/valkey:8-alpine postgres:17-alpine minio/minio:latest minio/mc:latest; do
+          for ref in valkey/valkey:8-alpine postgres:17-alpine; do
             mirror_pull "$ref"
           done
           echo "✓ every image this leg runs is resident locally — compose will pull nothing"
@@ -945,9 +944,9 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       # ── every image this leg RUNS arrives from the mirror, not Docker Hub (#715) ──────────────
       # See validate-compose for the full note. Lite's implicit set is not compose's: `make -C
-      # deploy/lite up` runs `docker run` for a postgres and a minio sidecar and a one-shot
-      # minio/mc, and `docker run` implicit-pulls each one (deploy/lite/Makefile § up, read
-      # 2026-09-07). The app image itself is explicit — the bake VERIFY below needs it resident
+      # deploy/lite up` runs `docker run` for a postgres sidecar, which implicit-pulls
+      # (deploy/lite/Makefile § up). The storage sidecar is pinned by digest (STORAGE_IMAGE),
+      # which a by-tag mirror pull cannot satisfy, so `docker run` fetches it. The app image itself is explicit — the bake VERIFY below needs it resident
       # anyway, and `up` then finds it locally instead of pulling it a second time.
       # Not here: the LOCAL_STT whisper image (this leg never sets LOCAL_STT) and the bot image
       # (lite's process backend spawns bots in-process; concurrent-bots.sh only `docker exec`s).
@@ -970,7 +969,7 @@ jobs:
             echo "   ✓ $ref ← Docker Hub"
           }
           mirror_pull "vexaai/vexa-lite:$VERSION"
-          for ref in postgres:17-alpine minio/minio:latest minio/mc:latest; do
+          for ref in postgres:17-alpine; do
             mirror_pull "$ref"
           done
           echo "✓ every image this leg runs is resident locally — make -C deploy/lite up will pull nothing"

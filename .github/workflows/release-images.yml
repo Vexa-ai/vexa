@@ -594,7 +594,7 @@ jobs:
                      v012-gateway v012-flows v012-mcp v012-terminal v012-agent-worker v012-credential-broker; do
             mirror_pull "vexaai/$img:$BASE_VERSION"
           done
-          for ref in valkey/valkey:8-alpine postgres:17-alpine minio/minio:latest minio/mc:latest; do
+          for ref in valkey/valkey:8-alpine postgres:17-alpine; do
             mirror_pull "$ref"
           done
           echo "✓ every image this leg runs is resident locally — compose will pull nothing"
@@ -656,8 +656,9 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       # ── every image this leg RUNS arrives from the mirror, not Docker Hub (#715) ──────────────
       # See release-validate.yml's validate-lite for the full note. Lite's implicit set is not
-      # compose's: `make -C deploy/lite up` runs `docker run` for a postgres and a minio sidecar
-      # and a one-shot minio/mc, and each of those implicit-pulls (deploy/lite/Makefile § up).
+      # compose's: `make -C deploy/lite up` runs `docker run` for a postgres sidecar, which
+      # implicit-pulls (deploy/lite/Makefile § up). The storage sidecar is pinned by digest
+      # (STORAGE_IMAGE), which a by-tag mirror pull cannot satisfy, so `docker run` fetches it.
       - name: Pre-pull every image this leg runs, through the mirror (#715)
         run: |
           set -euo pipefail
@@ -677,7 +678,7 @@ jobs:
             echo "   ✓ $ref ← Docker Hub"
           }
           mirror_pull "vexaai/vexa-lite:$VERSION" --platform linux/amd64
-          for ref in postgres:17-alpine minio/minio:latest minio/mc:latest; do
+          for ref in postgres:17-alpine; do
             mirror_pull "$ref"
           done
           echo "✓ every image this leg runs is resident locally — make -C deploy/lite up will pull nothing"
@@ -759,7 +760,7 @@ jobs:
             echo "   ✓ $ref ← Docker Hub"
           }
           mirror_pull "vexaai/vexa-lite:$VERSION" --platform linux/arm64
-          for ref in postgres:17-alpine minio/minio:latest minio/mc:latest; do
+          for ref in postgres:17-alpine; do
             mirror_pull "$ref"
           done
           echo "✓ every image this leg runs is resident locally — make -C deploy/lite up will pull nothing"

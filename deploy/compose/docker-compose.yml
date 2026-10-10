@@ -1514,7 +1514,7 @@ services:
   # the stack. No search code is built into, or redistributed inside, any vexaai/* artifact, so no
   # AGPL source-offer obligation attaches to Vexa's Apache-2.0 images — the obligation rests with
   # the upstream image the operator runs. A deliberate, reviewed sidecar allowance, declared in
-  # image-licenses.json exactly as minio/minio is (ADR-0004).
+  # image-licenses.json (ADR-0004).
   #
   # OFF by default: the harness speaks to ANY endpoint of this shape, and plenty of deployments
   # already run one or pay for Brave instead. Start it explicitly:
