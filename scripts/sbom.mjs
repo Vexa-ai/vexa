@@ -11,9 +11,10 @@
  *   1. npm deps   — `pnpm licenses list --json` (the same index gate:licenses uses):
  *                   name · version · declared licence, one SPDX package per version.
  *   2. pip deps   — the committed uv.lock files (name · version). uv.lock carries
- *                   no licence field, so pip packages ship licenceDeclared=NOASSERTION
- *                   (Python licence resolution via pip-licenses is owed per ADR-0009);
- *                   the INVENTORY is still complete and CI-runnable with no install.
+ *                   no licence field; licenceDeclared comes from python-licenses.json
+ *                   (the reviewed index gate:licenses classifies against) and is
+ *                   NOASSERTION for a locked package no image installs, which the index
+ *                   does not cover. CI-runnable with no install.
  *   3. Lite apt   — every package name installed in Dockerfile.lite's final stage.
  *                   Docker source does not resolve Ubuntu versions or licences, so
  *                   those fields are explicitly NOASSERTION pending image scanning.
@@ -133,6 +134,8 @@ function parseUvLock(file) {
   return pkgs;
 }
 function pipPackages() {
+  const indexFile = join(ROOT, "python-licenses.json");
+  const licences = existsSync(indexFile) ? (JSON.parse(readFileSync(indexFile, "utf8")).licenses || {}) : {};
   const locks = findUvLocks();
   if (!locks.length) { warn("no uv.lock files found — emitting SBOM without the pip tree"); return []; }
   const byKey = new Map(); // dedup name@version across every service lockfile
@@ -142,7 +145,7 @@ function pipPackages() {
       const key = `${p.name}@${version}`;
       if (!byKey.has(key)) byKey.set(key, {
         eco: "pypi", name: p.name, version,
-        licenseDeclared: "NOASSERTION", // uv.lock carries no licence field (ADR-0009: pip-licenses owed)
+        licenseDeclared: spdxLicense(licences[`${p.name}==${version}`]),
         purl: `pkg:pypi/${p.name.toLowerCase()}@${version}`,
         homepage: null,
       });

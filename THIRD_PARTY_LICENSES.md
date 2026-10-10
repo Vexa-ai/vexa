@@ -1,7 +1,8 @@
 # Third-party licenses — baked artifacts outside the dependency gate
 
 `gate:licenses` (ADR-0004, `scripts/gates.mjs`) scans the resolved **npm** dependency
-tree (`pnpm licenses list --json`) and the Python tree grows into `pip-licenses`. Neither
+tree (`pnpm licenses list --json`) and every **Python** package an image installs
+(`python-licenses.json`, `scripts/check-python-licenses.mjs`). Neither half
 sees **non-dependency artifacts baked into the images** — model weights pulled from a model
 hub, or a service binary built from source at image-build time. This file is the
 packaging-side complement: every such artifact is recorded here with its license, mirrored

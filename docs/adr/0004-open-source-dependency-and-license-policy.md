@@ -25,9 +25,13 @@ largely to govern this; we adopt its posture and the ASF licence-category model.
 
 **Enforcement — `gate:licenses`:** scan the full resolved tree against the allowlist. The npm side uses
 **pnpm's built-in licence index** (`pnpm licenses list --json`) — no extra dependency to vet, itself a P17
-win; the Python side adds `pip-licenses` when those deps grow. **Fail** on any Category X *and on any
-unclassified licence* (fail-safe); **require a logged exception** (`license-exceptions.json`) for every
-Category B. Emit an **SBOM** (SPDX 2.3) per release so the consumer's OSPO can audit —
+win. The Python side reads what each image installs from its recipe (the `uv.lock` every `uv sync`
+installs, with the groups it names, and every `pip install` line) and classifies each `name==version`
+against `python-licenses.json`, a reviewed index read from PyPI metadata
+(`scripts/check-python-licenses.mjs --refresh`), because `uv.lock` carries no licence. A `uv sync` that
+would install the `dev` group fails the gate. An `AND` expression is as restrictive as its worst term.
+**Fail** on any Category X *and on any unclassified licence* (fail-safe); **require a logged exception**
+(`license-exceptions.json`) for every Category B. Emit an **SBOM** (SPDX 2.3) per release so the consumer's OSPO can audit —
 `scripts/sbom.mjs` inventories the npm tree (the same pnpm index), the pip tree (from the committed
 `uv.lock`s), **and baked non-dependency artifacts the gate cannot see** (model weights, below); the
 `release-images` workflow runs it and its `validate` leg gates on the SBOM artifact, so no release

@@ -20,6 +20,7 @@ import { createHash } from "node:crypto";
 import { checkDomainDoors, ALLOW_PATH as DOORS_ALLOW } from "./check-domain-doors.mjs";
 import { checkParity, MANIFEST_PATH as PARITY_MANIFEST } from "./check-parity.mjs";
 import { checkVendorPayload, NATIVE_DIR } from "./check-vendor-payload.mjs";
+import { checkPythonLicenses, INDEX_FILE as PY_LICENSE_INDEX } from "./check-python-licenses.mjs";
 
 const ROOT = process.cwd();
 const SKIP = new Set(["node_modules", "dist", ".turbo", "__pycache__", "test-results", "playwright-report", "coverage"]);
@@ -426,14 +427,16 @@ function gateEvalBaseline() {
   return true;
 }
 
-// gate:licenses (P17) — every resolved dep is OSS-licence-clean (FINOS Cat A/B/X). Uses pnpm's
-// built-in licence index (no added dependency to vet — itself a P17 win). Cat A (permissive) passes;
+// gate:licenses (P17) — every resolved dep is OSS-licence-clean (FINOS Cat A/B/X), npm and Python.
+// npm: pnpm's built-in licence index (no added dependency to vet — itself a P17 win). Python: every
+// package a Dockerfile installs, from the uv.lock it syncs and the pip lines it runs, against the
+// reviewed python-licenses.json (scripts/check-python-licenses.mjs). Cat A (permissive) passes;
 // Cat B (LGPL/MPL/EPL) must be listed in license-exceptions.json; Cat X (GPL/AGPL/SSPL/BSL/…) and
 // any unclassified licence fail the build. B is checked before X so LGPL never trips the GPL match.
 // FINOS licence classifier (ADR-0004), shared by gate:licenses (npm/py deps) and gate:image-licenses
 // (baked apt packages + pinned container images). B is tested before X so LGPL never trips the GPL
 // match. Cat X is where Redis ≥7.4's RSALv2/SSPLv1 lands — the exact class #653 keeps out of our images.
-const LICENSE_A = [/^MIT/, /^Apache-2\.0/i, /^BSD\b/, /^BSD-/, /^ISC/, /^0BSD/, /^Unlicense/, /^CC0-/, /^CC-BY-/, /^Python-2\.0/, /^PostgreSQL$/i, /^BlueOak/, /^Zlib/i, /^MIT-0/, /^WTFPL/i, /^SIL OPEN FONT LICENSE/i];
+const LICENSE_A = [/^MIT/, /^Apache-2\.0/i, /^BSD\b/, /^BSD-/, /^ISC/, /^0BSD/, /^Unlicense/, /^CC0-/, /^CC-BY-/, /^Python-2\.0/, /^PSF-2\.0$/, /^PostgreSQL$/i, /^BlueOak/, /^Zlib/i, /^MIT-0/, /^WTFPL/i, /^SIL OPEN FONT LICENSE/i];
 const LICENSE_B = [/LGPL/i, /^MPL/i, /^EPL/i];                                    // weak copyleft — needs a logged exception
 const LICENSE_X = [/(^|[^L])GPL/i, /AGPL/i, /SSPL/i, /\bBSL\b/i, /Business Source/i, /Elastic-/i, /Commons.?Clause/i, /Proprietary/i, /UNLICENSED/, /\bRSALv?\d/i, /Redis Source Available/i];
 // One licence NAME, matched whole. → "A" | "B" | "X" | "?"; see classifyLicense for expressions.
@@ -452,13 +455,20 @@ function classifyTerm(lic) {
 // that used to sit in LICENSE_A was this same rule, hand-written for one package; it is gone
 // because the general one subsumes it.
 //
-// `AND` is deliberately NOT split: it binds us to every term at once, so the expression falls
-// through to the whole-string match and stays unclassified until a human reads it — the safe
-// direction, and the direction a gate should fail in.
+// AN `AND` BINDS US TO EVERY TERM AT ONCE, so a conjunction is as restrictive as its most restrictive
+// term: `MPL-2.0 AND MIT` (tqdm) is Cat B, `Apache-2.0 AND LGPL-3.0-or-later` is Cat B, and a term
+// nobody has classified leaves the whole conjunction unclassified. Matched as a whole string, the
+// leading term decided alone — `Apache-2.0 AND LGPL-3.0-or-later` read as Cat A.
+const CAT_RANK = { A: 0, B: 1, "?": 2, X: 3 };
+function classifyConjunction(expr) {
+  const terms = expr.replace(/^\(\s*|\s*\)$/g, "").split(/\s+AND\s+/i).map((t) => t.trim());
+  if (terms.length < 2) return classifyTerm(expr);
+  return terms.map(classifyTerm).reduce((w, c) => (CAT_RANK[c] > CAT_RANK[w] ? c : w), "A");
+}
 function classifyLicense(lic) {
   const terms = String(lic).replace(/^\(\s*|\s*\)$/g, "").split(/\s+OR\s+/i).map((t) => t.trim());
-  if (terms.length < 2) return classifyTerm(lic);
-  const cats = terms.map(classifyTerm);
+  if (terms.length < 2) return classifyConjunction(String(lic));
+  const cats = terms.map(classifyConjunction);
   return cats.includes("A") ? "A" : cats.includes("B") ? "B" : cats.includes("X") ? "X" : "?";
 }
 
@@ -466,7 +476,8 @@ function gateLicenses() {
   let raw;
   try { raw = execSync("pnpm licenses list --json", { cwd: ROOT, stdio: ["ignore", "pipe", "ignore"] }).toString(); }
   catch (e) { raw = (e.stdout || "").toString(); }
-  if (!raw.trim()) { console.log("  ✓ gate:licenses — no resolved deps yet (green-on-empty)"); return true; }
+  // No resolved npm tree yet is green-on-empty for the npm half only; the Python half still runs.
+  if (!raw.trim()) raw = "{}";
   let data; try { data = JSON.parse(raw); } catch { return fail(["`pnpm licenses list --json` returned non-JSON — run `pnpm install` first"]); }
   // pnpm answers a query it COULD NOT ANSWER with `{ "error": { code, message } }` on stdout —
   // valid JSON, shaped nothing like a licence index. Read it before the loop: without this the gate
@@ -477,7 +488,8 @@ function gateLicenses() {
   if (data?.error) return fail([`\`pnpm licenses list\` could not read the dependency tree: ${data.error.message ?? data.error.code ?? "unknown error"}`]);
   const exFile = join(ROOT, "license-exceptions.json");
   const exFileData = existsSync(exFile) ? JSON.parse(readFileSync(exFile, "utf8")) : {};
-  const exceptions = exFileData.categoryB || [];
+  // npm rows only: a `"ecosystem": "pypi"` row is the Python half's, matched by exact name there.
+  const exceptions = (exFileData.categoryB || []).filter((e) => (e.ecosystem || "npm") === "npm");
   // A package that DECLARES NO LICENCE AT ALL is reported by pnpm as "Unknown". That is not a
   // licence to classify — it is a package.json field somebody left out — so the only honest
   // resolution is a human reading the licence file the package actually ships and recording what it
@@ -505,9 +517,14 @@ function gateLicenses() {
     }
     bad.push(`unclassified licence "${lic}": ${names.join(", ")} — classify it in scripts/gates.mjs or replace the dep`);
   }
+  let py;
+  try { py = checkPythonLicenses(ROOT, classifyLicense); }
+  catch (e) { return fail([...bad, `Python licences: the checker itself failed — ${errText(e).slice(0, 800)}`]); }
+  bad.push(...py.errs);
   if (bad.length) return fail(bad);
   const total = Object.values(data).reduce((n, p) => n + p.length, 0);
-  console.log(`  ✓ gate:licenses — ${total} deps OSS-clean (Cat A${flagged.length ? `; ${flagged.length} by logged exception: ${flagged.join("; ")}` : ""})`);
+  console.log(`  ✓ gate:licenses — ${total} npm deps OSS-clean (Cat A${flagged.length ? `; ${flagged.length} by logged exception: ${flagged.join("; ")}` : ""})`);
+  console.log(`  ✓ gate:licenses — ${py.total} Python packages from ${py.installs} install line(s) in ${py.dockerfiles} Dockerfile(s) OSS-clean against ${PY_LICENSE_INDEX} (Cat A${py.flagged.length ? `; ${py.flagged.length} by logged exception: ${py.flagged.join("; ")}` : ""})`);
   return true;
 }
 

@@ -455,3 +455,60 @@ test("gate:python GREEN: multiple passing planted packages do not red the gate",
   const r = withPlantedPyPkgs([{ dir: PKG_A, pass: true }, { dir: PKG_B, pass: true }], (tree) => runGate("python", tree));
   assert.equal(r.green, true, `two genuinely green planted packages reded the gate:\n${r.out}`);
 });
+
+// ── gate:licenses, Python half (scripts/check-python-licenses.mjs) ──────────────────────────────
+// Planted through the real gate: a Dockerfile, the licence index or the exception log is edited in
+// place and restored byte-for-byte, so each red is the one the committed tree would produce.
+
+const PY_INDEX = "python-licenses.json";
+const EXCEPTIONS = "license-exceptions.json";
+const GATEWAY_DOCKERFILE = "core/gateway/services/gateway/Dockerfile";
+const RUNTIME_DOCKERFILE = "core/runtime/Dockerfile";
+const indexRows = () => JSON.parse(readFileSync(join(ROOT, PY_INDEX), "utf8")).licenses;
+const firstKey = (prefix) => Object.keys(indexRows()).find((k) => k.startsWith(prefix));
+
+test("licenses vacuity: the committed tree (npm and Python) is green", () => {
+  const r = runGate("licenses");
+  assert.equal(r.green, true, `the clean tree already reds — the fixtures below prove nothing:\n${r.out}`);
+  assert.match(r.out, /Python packages from \d+ install line/);
+});
+
+test("licenses RED: a uv sync that would install the dev group reds", () => {
+  const r = withEdited(GATEWAY_DOCKERFILE, "uv sync --frozen --no-install-project --no-dev", "uv sync --frozen --no-install-project",
+    () => runGate("licenses"));
+  assert.equal(r.green, false, "a sync shipping the dev group passed");
+  assert.match(r.out, /gateway\/Dockerfile: `uv sync` for core\/gateway\/services\/gateway installs the default dev group/);
+});
+
+test("licenses RED: a shipped Python version with no licence row reds", () => {
+  const key = firstKey("anyio==");
+  const r = withEdited(PY_INDEX, `"${key}"`, `"${key}.0"`, () => runGate("licenses"));
+  assert.equal(r.green, false, "a locked version the index has never read passed");
+  assert.match(r.out, new RegExp(`${key.replace(/[.]/g, "\\.")} ships but has no licence row`));
+});
+
+test("licenses RED: a pip install line with no recorded closure reds", () => {
+  const r = withEdited(RUNTIME_DOCKERFILE, '"uvicorn[standard]==0.34.0"', '"uvicorn[standard]==0.34.1"', () => runGate("licenses"));
+  assert.equal(r.green, false, "an unresolved pip install line passed");
+  assert.match(r.out, /core\/runtime\/Dockerfile: `pip install uvicorn\[standard\]==0\.34\.1` has no resolved closure/);
+});
+
+test("licenses RED: a Python Cat-B package without its exception row reds", () => {
+  const r = withEdited(EXCEPTIONS, '"package": "certifi",', '"package": "certifi-removed",', () => runGate("licenses"));
+  assert.equal(r.green, false, "certifi (MPL-2.0) shipped with no exception row");
+  assert.match(r.out, /Cat-B MPL-2\.0 needs a license-exceptions\.json categoryB row with "ecosystem": "pypi": certifi/);
+});
+
+test("licenses RED: a Python package under a Cat X licence is FORBIDDEN", () => {
+  const key = firstKey("h11==");
+  const r = withEdited(PY_INDEX, `"${key}": "MIT"`, `"${key}": "GPL-3.0-only"`, () => runGate("licenses"));
+  assert.equal(r.green, false, "a GPL package passed");
+  assert.match(r.out, /FORBIDDEN \(Cat X\) GPL-3\.0-only/);
+});
+
+test("licenses RED: an AND expression is as restrictive as its worst term (Apache-2.0 AND LGPL is Cat B)", () => {
+  const key = firstKey("h11==");
+  const r = withEdited(PY_INDEX, `"${key}": "MIT"`, `"${key}": "Apache-2.0 AND LGPL-3.0-or-later"`, () => runGate("licenses"));
+  assert.equal(r.green, false, "an AND with an LGPL term was read as Cat A from its leading term");
+  assert.match(r.out, /Cat-B Apache-2\.0 AND LGPL-3\.0-or-later needs a license-exceptions\.json categoryB row/);
+});
