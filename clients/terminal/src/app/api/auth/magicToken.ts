@@ -19,10 +19,11 @@
  *  TTL: 15 minutes by default (MAGIC_LINK_TTL_SECONDS overrides, up to MAX_TTL_SECONDS). Verify
  *  also refuses an expiry further out than MAX_TTL_SECONDS, whatever the token says.
  *
- *  SINGLE USE: a redeemed `jti` is remembered until the token would have expired anyway, so a
- *  link works exactly once. See `consumeJti` for the multi-replica caveat.
+ *  SINGLE USE: admin-api remembers a redeemed `jti` until the token would have expired anyway, for
+ *  every terminal replica at once, so a link works exactly once (`redeemMagicToken`).
  */
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import { redeemSigninLink } from "./adminApi";
 import { magicLinkKey } from "./authSecret.mjs";
 
 /** Default lifetime of an emailed link — long enough to walk to a phone, short enough that a
@@ -70,7 +71,9 @@ export function mintMagicToken(email: string, opts: { ttl?: number; now?: number
   return { ok: true, token: `${payload}.${signPayload(payload, key)}`, jti, expiresAt };
 }
 
-export type VerifyFailure = "unconfigured" | "malformed" | "bad-signature" | "expired" | "used";
+/** `unavailable`: the link verified, but whether it was already used could not be learned (admin-api
+ *  down or unconfigured). It refuses, and the link is not spent. */
+export type VerifyFailure = "unconfigured" | "malformed" | "bad-signature" | "expired" | "used" | "unavailable";
 export type VerifyResult =
   | { ok: true; email: string; jti: string; expiresAt: number }
   | { ok: false; reason: VerifyFailure };
@@ -113,42 +116,20 @@ export function verifyMagicToken(token: string, opts: { now?: number } = {}): Ve
   return { ok: true, email, jti, expiresAt };
 }
 
-// ── single-use ledger ────────────────────────────────────────────────────────────────────────
-/** Redeemed jti → the epoch-second after which it can be forgotten (the token's own expiry; past
- *  that the signature check refuses it anyway, so the ledger never needs to grow past one TTL).
+// ── single use ─────────────────────────────────────────────────────────────────────────────
+/** Verify AND burn: the ONLY entry point that may authorise a sign-in.
  *
- *  ⚠ PROCESS-LOCAL. This is an in-memory Map, so single-use holds only within one replica:
- *  with N terminal replicas behind a load balancer a link could be redeemed up to N times, and a
- *  container restart forgets the ledger entirely (bounded by the 15-minute TTL either way). The
- *  minutes terminal runs as a SINGLE container today, which is why this is acceptable. Scaling
- *  out means moving the ledger to shared state — Redis, or a `used_jti` row in admin-api — and
- *  the swap is confined to `consumeJti` below. */
-const redeemed = new Map<string, number>();
-
-function sweep(nowSec: number): void {
-  for (const [jti, forgetAfter] of redeemed) if (forgetAfter <= nowSec) redeemed.delete(jti);
-}
-
-/** Burn a jti. Returns false if it was already burned (i.e. the link is being replayed). */
-export function consumeJti(jti: string, expiresAt: number, now = Date.now()): boolean {
-  const nowSec = Math.floor(now / 1000);
-  sweep(nowSec);
-  if (redeemed.has(jti)) return false;
-  redeemed.set(jti, expiresAt);
-  return true;
-}
-
-/** Test seam — empties the ledger. Never called by the routes. */
-export function _resetJtiLedger(): void {
-  redeemed.clear();
-}
-
-/** Verify AND burn, atomically from the caller's point of view: the ONLY entry point that may
- *  authorise a sign-in. */
-export function redeemMagicToken(token: string, opts: { now?: number } = {}): VerifyResult {
+ *  The record of which links were used is admin-api's (`POST /internal/signin-links/redeem`,
+ *  signin.v1), kept in the service Redis until the link would have expired anyway. It used to be a
+ *  Map in this process, so with N replicas a link could be redeemed N times and a restart forgot it.
+ *  Only admin-api's "first" admits; "used" is a replay; anything else — admin-api unreachable or
+ *  unconfigured, its store down — is `unavailable` and refuses, with the link left unspent. */
+export async function redeemMagicToken(token: string, opts: { now?: number } = {}): Promise<VerifyResult> {
   const v = verifyMagicToken(token, opts);
   if (!v.ok) return v;
-  if (!consumeJti(v.jti, v.expiresAt, opts.now ?? Date.now())) return { ok: false, reason: "used" };
+  const recorded = await redeemSigninLink(v.jti, v.expiresAt);
+  if (recorded === "used") return { ok: false, reason: "used" };
+  if (recorded !== "first") return { ok: false, reason: "unavailable" };
   return v;
 }
 

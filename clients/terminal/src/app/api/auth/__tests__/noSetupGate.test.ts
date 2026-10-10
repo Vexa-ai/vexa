@@ -24,7 +24,13 @@ vi.mock("next/headers", () => ({
 
 import { POST as login } from "../login/route";
 import { GET as redeem } from "../redeem/route";
-import { _resetJtiLedger, mintMagicToken } from "../magicToken";
+vi.mock("../adminApi", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../adminApi")>()),
+  // admin-api's single-use record for links, held in memory (./linkLedgerDouble.ts)
+  redeemSigninLink: (jti: string, expiresAt: number) => linkLedger.redeem(jti, expiresAt),
+}));
+import { mintMagicToken } from "../magicToken";
+import { linkLedger } from "./linkLedgerDouble";
 
 function loginReq(body: unknown): import("next/server").NextRequest {
   return { json: async () => body } as unknown as import("next/server").NextRequest;
@@ -70,7 +76,7 @@ function stubAdminApi() {
 
 beforeEach(() => {
   setCookies = [];
-  _resetJtiLedger();
+  linkLedger.reset();
   vi.stubEnv("NODE_ENV", "development");           // the direct login route is dev-only
   vi.stubEnv("NEXTAUTH_SECRET", "test-signing-secret-0123456789abcdef");
   vi.stubEnv("VEXA_ADMIN_API_URL", "http://admin.test");

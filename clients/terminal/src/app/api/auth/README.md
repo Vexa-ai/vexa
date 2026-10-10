@@ -14,7 +14,7 @@ Two doors, and no third:
 - **Email magic link** — `request-link/` mails a signed, single-use link; `redeem/` verifies it and
   sets the cookies. Control of the mailbox is the proof of identity. `magicToken.ts` owns the token
   (HMAC-SHA256 over `{email, exp, jti}` with the link key, 15-minute default TTL capped at 60
-  minutes, in-process single-use ledger) and the `next=` open-redirect guard; `mailer.ts` is a dependency-free SMTP
+  minutes, single use across every replica through admin-api's record, `POST /internal/signin-links/redeem`) and the `next=` open-redirect guard; `mailer.ts` is a dependency-free SMTP
   client driven by the deployment's mail family, `VEXA_MAIL_SMTP_HOST` / `_PORT` / `_FROM` (+ optional
   `_USER`/`_PASSWORD`, `_SECURE`, `_TLS_INSECURE`), declared in `clients/terminal/config.v1.json`.
 

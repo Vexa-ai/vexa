@@ -88,6 +88,7 @@ system identity  # access + audit; owns the durable DB
   contract signin.v1
   data-asset identity-db [writers: admin-api]
   contract delegation.v1
+  data-asset signin-link-redeemed [writers: admin-api]
 
 system runtime-system  # workload spawn (bot/agent containers)
   contract runtime.v1
@@ -171,7 +172,7 @@ edges:
   admin-api -write-> postgres
   terminal -req-> gateway  # every REST call a browser makes, via gateway (the terminal's server also calls admin-api and agent-api directly: term-admin-internal, term-agent-internal)
   terminal -req-> gateway  # live WS via gateway
-  terminal -req-> admin-api  # the terminal's server, with the internal secret: sign-in admission, the admin claim, the claim-code check and instance state (signin.v1), plus /internal/validate and the settings it edits for the admin
+  terminal -req-> admin-api  # the terminal's server, with the internal secret: sign-in admission, the admin claim, the claim-code check, instance state and the one-use redeem of an emailed sign-in link (signin.v1), plus /internal/validate and the settings it edits for the admin
   terminal -req-> agent-api  # the terminal's server, with the internal secret: POST /internal/scaffolds (a sign-in's arrival) and GET /internal/has-history
   dashboard -req-> gateway  # dashboard → gateway REST (hosted-compat aliases; the hosted-proven wiring)
   dashboard -req-> gateway  # dashboard → gateway /ws (live transcript view)
@@ -198,6 +199,7 @@ edges:
   agent-api -write-> imports-status  # repository import status (workspace_import.py)
   agent-api -write-> onboarding-research-state  # onboarding research checkpoints (onboarding_research.py)
   agent-api -write-> rail-order  # SET/GET the chat rail order
+  admin-api -write-> signin-link-redeemed  # SET NX with the link's own expiry (at most an hour) when a terminal redeems an emailed sign-in link; a write that cannot be made refuses the sign-in
   claude-plugin -req-> gateway  # the plugin's HTTP MCP server entry: Claude Code calls the gateway's /mcp with the person's Vexa API key; the plugin itself runs no code
   agent-api -write-> unit-in  # XADD the person's next message to a warm unit, signed with the unit's key
   agent-api -write-> redis-acl-users  # ACL SETUSER/DELUSER a worker's own user per dispatch; restore after a Redis restart

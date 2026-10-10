@@ -82,6 +82,33 @@ class FakeRevocationStore:
         return int(key in self.keys)
 
 
+class FakeLinkLedger:
+    """The service Redis as `/internal/signin-links/redeem` sees it (app/signin_links.py): SET NX
+    with an expiry. `down` makes every write fail like an unreachable Redis."""
+
+    def __init__(self):
+        self.keys: dict[str, int] = {}
+        self.down = False
+
+    async def set(self, key: str, value: str, *, nx: bool = False, ex: int | None = None):
+        if self.down:
+            raise ConnectionError("redis down")
+        if nx and key in self.keys:
+            return None
+        self.keys[key] = ex
+        return True
+
+
+@pytest.fixture(autouse=True)
+def link_ledger(monkeypatch):
+    """Every test redeems sign-in links against an in-memory ledger, never a real Redis."""
+    from admin_api.app import signin_links
+
+    ledger = FakeLinkLedger()
+    monkeypatch.setattr(signin_links, "_client", ledger)
+    return ledger
+
+
 @pytest.fixture(autouse=True)
 def revocation_store(monkeypatch):
     """Every test answers delegation tokens against an empty in-memory store, never a real Redis; a

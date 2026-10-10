@@ -44,6 +44,7 @@ from . import claim_code
 from . import signin_allow
 from . import signin_wire
 from . import platform_settings as platform_settings_mod
+from . import signin_links as signin_links_mod
 from . import validate as validate_mod
 from .platform_settings import (MODELS_FIELDS, TRANSCRIPTION_FIELDS, apply_config_update,
                                 read_platform_setting, validate_config_fields)
@@ -1028,6 +1029,7 @@ def create_app() -> FastAPI:
         }
 
     app.include_router(validate_mod.router)  # POST /internal/validate — the gateway's authz oracle
+    app.include_router(signin_links_mod.router)  # POST /internal/signin-links/redeem — a link signs in once
 
     async def _load_user(
         user_id: str,

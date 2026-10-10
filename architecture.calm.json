@@ -1584,6 +1584,27 @@
    }
   },
   {
+   "unique-id": "signin-link-redeemed",
+   "node-type": "data-asset",
+   "name": "vexa:signin-link:redeemed:{jti} (redis key)",
+   "description": "the one-use record of an emailed sign-in link (app/signin_links.py): admin-api sets it with NX when a terminal redeems the link and keeps it until the link would have expired, so a link signs in once across every terminal replica and restart",
+   "controls": {
+    "ownership": {
+     "description": "single writer (P23)",
+     "requirements": [
+      {
+       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "config": {
+        "writers": [
+         "admin-api"
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
    "unique-id": "workspaces-system",
    "node-type": "system",
    "name": "workspaces",
@@ -1893,7 +1914,8 @@
       "identity.v1",
       "signin.v1",
       "identity-db",
-      "delegation.v1"
+      "delegation.v1",
+      "signin-link-redeemed"
      ]
     }
    }
@@ -2893,7 +2915,7 @@
      }
     }
    },
-   "description": "the terminal's server, with the internal secret: sign-in admission, the admin claim, the claim-code check and instance state (signin.v1), plus /internal/validate and the settings it edits for the admin",
+   "description": "the terminal's server, with the internal secret: sign-in admission, the admin claim, the claim-code check, instance state and the one-use redeem of an emailed sign-in link (signin.v1), plus /internal/validate and the settings it edits for the admin",
    "protocol": "HTTP",
    "metadata": [
     {
@@ -3448,6 +3470,25 @@
     }
    },
    "description": "SET/GET the chat rail order",
+   "metadata": [
+    {
+     "access": "write"
+    }
+   ]
+  },
+  {
+   "unique-id": "admin-signin-link-record",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "admin-api"
+     },
+     "destination": {
+      "node": "signin-link-redeemed"
+     }
+    }
+   },
+   "description": "SET NX with the link's own expiry (at most an hour) when a terminal redeems an emailed sign-in link; a write that cannot be made refuses the sign-in",
    "metadata": [
     {
      "access": "write"

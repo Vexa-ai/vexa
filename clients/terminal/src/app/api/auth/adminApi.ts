@@ -146,6 +146,24 @@ async function internalRequest<T>(path: string, init: RequestInit = {}): Promise
   }
 }
 
+// ── emailed sign-in links: the shared single-use record ─────────────────────────────────────────
+
+/** Record that the sign-in link `jti` is being redeemed (`POST /internal/signin-links/redeem`,
+ *  signin.v1 `SigninLinkRedeemRequest`). admin-api keeps the record in the service Redis until
+ *  `expiresAt`, for every terminal replica at once.
+ *
+ *  `first` only on a 200 whose body says `first: true`; a 409 is `used` (a replay, or a link past its
+ *  expiry); anything else — no internal edge configured, admin-api unreachable, its store down — is
+ *  `unavailable`, which the caller must treat as a refusal. */
+export async function redeemSigninLink(jti: string, expiresAt: number): Promise<"first" | "used" | "unavailable"> {
+  const res = await internalRequest<{ first?: unknown }>("/internal/signin-links/redeem", {
+    method: "POST",
+    body: JSON.stringify({ jti, expires_at: expiresAt }),
+  });
+  if (res.ok) return res.data?.first === true ? "first" : "unavailable";
+  return res.status === 409 ? "used" : "unavailable";
+}
+
 // ── instance state ──────────────────────────────────────────────────────────────
 //    admin-api owns the truth and answers it over the SAME internal door `internalRequest()` already
 //    uses (VEXA_ADMIN_API_URL + X-Internal-Secret). There used to be a second fact here, the

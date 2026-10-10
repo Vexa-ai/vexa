@@ -87,6 +87,22 @@
       "additionalProperties": false,
       "required": ["admin_exists"],
       "properties": { "admin_exists": { "type": "boolean" } }
+    },
+    "SigninLinkRedeemRequest": {
+      "description": "POST /internal/signin-links/redeem — the terminal redeems an emailed sign-in link it has verified (signature and expiry are the terminal's own check). admin-api records the link's jti in the service Redis until it expires, so a link signs in once across every terminal replica and restart. 200 with SigninLinkRedeemResponse the first time; 409 when the jti was already redeemed (or has expired); 503 when the record cannot be written, which the terminal answers by refusing the sign-in.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["jti", "expires_at"],
+      "properties": {
+        "jti": { "type": "string", "pattern": "^[A-Za-z0-9-]{1,64}$", "description": "The link's random id (a UUID as the terminal mints it)." },
+        "expires_at": { "type": "integer", "description": "The link's own expiry, epoch seconds; the record is kept until then." }
+      }
+    },
+    "SigninLinkRedeemResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["first"],
+      "properties": { "first": { "const": true, "description": "This redemption is the link's first." } }
     }
   }
 }

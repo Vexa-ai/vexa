@@ -10,6 +10,7 @@ no list of its own. Internal tier only (`X-Internal-Secret`).
 | `POST /internal/bootstrap-admin` | `AdminClaimRequest` | `AdminClaimResponse` |
 | `POST /internal/admin-claim/check` | `ClaimCodeCheckRequest` | `ClaimCodeCheckResponse` |
 | `GET /internal/instance` | — | `InstanceState` |
+| `POST /internal/signin-links/redeem` | `SigninLinkRedeemRequest` | `SigninLinkRedeemResponse` (200, the first time); `409` already redeemed or expired; `503` the record could not be written |
 
 **The reason vocabularies are the contract.** `AdmittedReason`, `RefusedReason` and `ClaimReason`
 are generated into both languages by `gen.mjs` — admin-api's `app/signin_wire.py` and the terminal's
