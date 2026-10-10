@@ -60,13 +60,6 @@ EXPECTED = frozenset({
     ("POST", "/api/connections/service/call"), ("POST", "/api/onboarding/research"),
     ("PUT", "/api/time/zone"),
 })
-#: A non-GET route whose path has one of these segments changes who a workspace is shared with, or
-#: what credential reaches it, and must be flagged — a new one included, the day it lands.
-MEMBERSHIP_SEGMENTS = frozenset({"members", "invites", "invite", "membership", "leave", "unshare",
-                                 "share-enable", "archive", "deploy-key", "git-token"})
-#: Destructive routes a delegated caller can never reach, so this check is not theirs: the internal
-#: tier only (a worker never holds it).
-NOT_A_WORKER_DOOR = frozenset({("POST", "/api/workspace/git/reset")})
 #: A body that would act on the person's own things if the gate let it through.
 BODIES = {
     ("POST", "/api/workspace/reset"): {"target": "personal"},
@@ -150,9 +143,40 @@ def test_the_flagged_set_holds_every_expected_verb():
 
 
 def test_every_destructive_or_membership_route_is_flagged():
-    family = {(m, p) for (m, p) in ROUTES if m not in ("GET", "HEAD")
-              and (m == "DELETE" or MEMBERSHIP_SEGMENTS & set(p.split("/")))} - NOT_A_WORKER_DOOR
+    family = route_policy.destructive_family(ROUTES)
     assert family <= route_policy.PERSON_VERBS, sorted(family - route_policy.PERSON_VERBS)
+    assert ("DELETE", "/api/workspace/{slug}") in family and ("POST", "/api/workspace/invites") in family
+    assert not route_policy.NOT_A_WORKER_DOOR & family
+
+
+@pytest.mark.parametrize("key", [("DELETE", "/api/workspace/{slug}"),
+                                 ("POST", "/api/workspace/members/{member_subject}/role")])
+def test_a_destructive_route_left_unflagged_refuses_the_boot(monkeypatch, key):
+    """The rule above is the boot's own, not only this suite's: a flag dropped from routes.v1 — or a
+    destructive route added without one — stops agent-api from starting, naming the route."""
+    assert key in ROUTES and key in route_policy.PERSON_VERBS
+    monkeypatch.setattr(route_policy, "PERSON_VERBS", route_policy.PERSON_VERBS - {key})
+    with pytest.raises(route_policy.PolicyError) as e:
+        route_policy.assert_served(list(ROUTES.values()))
+    assert f"{key[0]} {key[1]}" in str(e.value) and "person" in str(e.value)
+
+
+def test_a_new_destructive_route_without_a_row_refuses_the_boot():
+    from fastapi import APIRouter
+    extra = APIRouter()
+
+    @extra.delete("/api/workspace/notes/{note_id}")
+    def _drop(note_id: str) -> None:   # pragma: no cover - never called
+        return None
+
+    @extra.post("/api/workspace/{slug}/leave-now")
+    def _fine(slug: str) -> None:      # pragma: no cover - not the family: no membership segment
+        return None
+
+    with pytest.raises(route_policy.PolicyError) as e:
+        route_policy.assert_served([*ROUTES.values(), *extra.routes])
+    assert "DELETE /api/workspace/notes/{note_id}" in str(e.value)
+    assert "leave-now" not in str(e.value)
 
 
 def test_no_route_asks_for_a_person_by_hand():

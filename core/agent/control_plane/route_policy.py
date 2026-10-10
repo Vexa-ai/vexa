@@ -25,6 +25,10 @@ FAILS CLOSED, at boot rather than on a request:
     the same (method, path) twice                    ->  two rows, one of which is not read
     a row naming a route this app does not serve     ->  a typo that drops a verb's protection
                                                          (`assert_served`, run by `create_app`)
+    a destructive or membership route with no flag   ->  a new verb that lands unprotected
+                                                         (`assert_served`: any DELETE, and any
+                                                         other write whose path has a
+                                                         `MEMBERSHIP_SEGMENTS` segment)
 """
 from __future__ import annotations
 
@@ -44,8 +48,25 @@ METHODS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE"})
 RouteKey = Tuple[str, str]
 
 
+#: A non-GET route whose path has one of these segments changes who a workspace is shared with, or
+#: what credential reaches it, and must be flagged — a new one included, the day it lands.
+MEMBERSHIP_SEGMENTS = frozenset({"members", "invites", "invite", "membership", "leave", "unshare",
+                                 "share-enable", "archive", "deploy-key", "git-token"})
+#: Destructive routes a delegated caller can never reach, so the flag is not theirs: the internal
+#: tier only (a worker never holds it).
+NOT_A_WORKER_DOOR = frozenset({("POST", "/api/workspace/git/reset")})
+
+
 class PolicyError(Exception):
     """A `verbs` declaration agent-api must not boot with."""
+
+
+def destructive_family(keys: Iterable[RouteKey]) -> FrozenSet[RouteKey]:
+    """The keys that must carry `person`: every DELETE, and every other write whose path has a
+    `MEMBERSHIP_SEGMENTS` segment — less the internal-only `NOT_A_WORKER_DOOR`."""
+    return frozenset((m, p) for m, p in keys
+                     if m not in ("GET", "HEAD")
+                     and (m == "DELETE" or MEMBERSHIP_SEGMENTS & set(p.split("/")))) - NOT_A_WORKER_DOOR
 
 
 def person_verbs(doc: dict) -> FrozenSet[RouteKey]:
@@ -126,9 +147,16 @@ def served_keys(routes: Iterable) -> FrozenSet[RouteKey]:
 
 
 def assert_served(routes: Iterable) -> None:
-    """Every declared person verb names a route this app serves — or the boot is refused, naming it.
-    A renamed route would otherwise leave its row matching nothing, and the verb unprotected."""
-    missing = sorted(PERSON_VERBS - served_keys(routes))
+    """Every declared person verb names a route this app serves, and every destructive or
+    membership route this app serves is declared one — or the boot is refused, naming them. A
+    renamed route would otherwise leave its row matching nothing, and a new destructive route would
+    land with no row at all; either way the verb would be unprotected."""
+    served = served_keys(routes)
+    missing = sorted(PERSON_VERBS - served)
     if missing:
         raise PolicyError("routes.v1 verbs name routes agent-api does not serve: "
                           + ", ".join(f"{m} {p}" for m, p in missing))
+    unflagged = sorted(destructive_family(served) - PERSON_VERBS)
+    if unflagged:
+        raise PolicyError("agent-api serves destructive or membership routes routes.v1 does not "
+                          "flag `person: true`: " + ", ".join(f"{m} {p}" for m, p in unflagged))
