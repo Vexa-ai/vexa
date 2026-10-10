@@ -205,6 +205,7 @@ describe("the chat's own step rows are the one place status is told", () => {
     expect(CHAT_TSX).toMatch(/data-job-line/);
     // and it is inside the conversation, not the composer
     expect(composerJsx(CHAT_TSX)).not.toMatch(/data-job-line/);
-    expect(CHAT_TSX).toMatch(/<JobRows jobs=\{jobs\} \/>/);
+    // (a blocked row carries its Retry press, P18 — the rows are still rendered in one place)
+    expect(CHAT_TSX).toMatch(/<JobRows jobs=\{jobs\}( onRetry=\{onRetryRow\})? \/>/);
   });
 });

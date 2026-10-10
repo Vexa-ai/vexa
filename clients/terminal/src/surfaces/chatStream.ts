@@ -14,6 +14,7 @@
 import type { ChatIntent } from "./chatIntent";
 import { noteAuthFailure, isAuthStatus } from "@/app/session";
 import { SESSION_ENDED_HEADLINE } from "./apiClient";
+import { readFault, type Fault } from "./faults";
 
 /** A parsed SSE event off the chat stream. `type` is the discriminator; other fields are per-type. */
 export type ChatStreamEvent = {
@@ -79,6 +80,10 @@ export type ChatStreamEvent = {
   /** `done` only, and only when the turn STOPPED at a budget (Vexa-ai/vexa#1622) — the act the
    *  bubble offers, and the words it puts back on the same target. */
   act?: { label?: string; instruction?: string };
+  /** `error` and failed `done` events — WHO failed and HOW (P18): the runtime that would not start
+   *  the agent, the model provider that refused the turn. Read through `faults.readFault`; a server
+   *  one release behind sends none and the event renders as it always did. */
+  fault?: unknown;
 };
 
 /** IS THIS JOB THIS CHAT'S? (Vexa-ai/vexa#1613.)
@@ -161,6 +166,12 @@ export type ChatStreamCallbacks = {
   onSteps?: (steps: number) => void;
   /** a hard upstream error the proxy folded into the stream (terminal, surfaced) */
   onError: (message: string) => void;
+  /** A TYPED FAULT ENDED THE TURN (P18) — an `error` event or a failed `done` that names the
+   *  dependency that failed (`source`), how (`kind`), a safe detail and a remedy. It REPLACES
+   *  `onError`/`onModelFailure` for that event, so the chat never prints "Internal Server Error" or
+   *  "Model inference failed" over a failure it can name. `reply` is the turn's own text, if any.
+   *  Optional: without it a fault falls through to the old callbacks unchanged. */
+  onFault?: (fault: Fault, reply?: string) => void;
   /** we are (re)connecting and no output has shown yet — show/keep a "starting agent…" affordance */
   onStarting: () => void;
   /** THE WORKER HAS TAKEN A TURN — its liveness ack (Vexa-ai/vexa#1610 reads it for a second
@@ -287,6 +298,18 @@ const DEFAULT_RECONNECT_BACKOFF_MS = 800;
 const DEFAULT_HEARTBEAT_MS = 3500;       // "still working…" cadence during a quiet read
 const DEFAULT_IDLE_RECONNECT_MS = 18000; // an OPEN-but-silent stream this long ⇒ stalled → reconnect
 
+/** The typed fault a non-ok JSON answer carries (`{detail, fault}`), or null. Never throws: a body
+ *  that is not JSON, or a test double with no body at all, is simply no fault. */
+async function bodyFault(r: Response): Promise<Fault | null> {
+  try {
+    if (typeof r.json !== "function") return null;
+    const body = (await r.json()) as { fault?: unknown } | null;
+    return readFault(body?.fault);
+  } catch {
+    return null;
+  }
+}
+
 /** Split accumulated SSE text into complete lines, returning [lines, remainder]. */
 function takeLines(buf: string): [string[], string] {
   const lines = buf.split("\n");
@@ -379,6 +402,14 @@ export async function streamChatTurn(
       return "closed";                  // the POST itself failed (a network blip) → resume from the cursor
     }
     if (!r.ok) {
+      // A 5xx THAT NAMES ITS FAULT is not transient by guessing — the server said what failed, and
+      // retrying for the whole hard cap would only hide that sentence behind a spinner (P18).
+      const typed = r.status >= 500 && cb.onFault ? await bodyFault(r) : null;
+      if (typed) {
+        terminal = true;
+        cb.onFault?.(typed);
+        return "terminal";
+      }
       // 4xx is a real client/terminal error — surface it, don't retry for the whole hard cap. A 5xx
       // (transient gateway/upstream) is resumable → reconnect from the cursor.
       if (r.status < 500) {
@@ -564,6 +595,15 @@ export async function streamChatTurn(
             break;
           case "done": {
             terminal = true;
+            // A FAILED TURN THAT NAMES ITS FAULT (P18) — the provider's 402, its refused key. It
+            // is rendered as what it is, not as "Model inference failed: <the provider's JSON>".
+            const doneFault = ev.ok === false && cb.onFault ? readFault(ev.fault) : null;
+            if (doneFault) {
+              if (typeof ev.steps === "number") cb.onSteps?.(ev.steps);
+              sawVisibleOutput = true;
+              cb.onFault?.(doneFault, ev.reply);
+              break;
+            }
             // `reason` distinguishes "the model failed" from "the turn stopped early" (F89). They
             // read identically in the old shape — both arrive as ok=false — and telling a person
             // "Model inference failed" when the model worked and the BUDGET ran out sends them
@@ -598,6 +638,10 @@ export async function streamChatTurn(
             terminal = true;
             sawVisibleOutput = true;
             const authFailed = typeof ev.status === "number" && isAuthStatus(ev.status);
+            // WHO FAILED, when the server could say (P18): the runtime that would not start the
+            // agent, the proxy that got no answer. Never a bare "Internal Server Error".
+            const errFault = !authFailed && cb.onFault ? readFault(ev.fault) : null;
+            if (errFault) { cb.onFault?.(errFault); break; }
             if (authFailed) noteAuthFailure(ev.status as number, "/api/chat");
             cb.onError(authFailed ? SESSION_ENDED_HEADLINE : (ev.message || "Chat request failed."));
             break;

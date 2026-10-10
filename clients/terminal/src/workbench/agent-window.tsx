@@ -9,6 +9,7 @@ import { Icon } from "../ui-kit";
 import { Markdown } from "../ui-kit/Markdown";
 import { MdxDoc } from "../ui-kit/MdxDoc";
 import { OPEN_ENTITY_EVENT } from "../canvas/actions";
+import { faultHeadline, type Fault } from "../surfaces/faults";
 
 // ── the turn model ────────────────────────────────────────────────────────────────
 export type OpStatus = "running" | "done" | "error";
@@ -25,12 +26,18 @@ export interface TurnStatus { phase: TurnPhase; since: number }
  *  turn that stops silently is exactly the failure this replaces — the founder re-typed the same
  *  instruction into three dead turns because the chat showed a finished one each time. */
 export interface TurnStopped { line: string; act?: { label: string; instruction: string } }
+/** THE TURN FAILED, AND THE CHAT KNOWS WHO FAILED IT (P18) — the runtime that would not start the
+ *  agent, the model provider that refused the turn. A field rendered as its own block, never prose
+ *  appended to the reply: "Internal Server Error" in the agent's bubble is exactly what the founder
+ *  read for a runtime that had refused his agent, and it named nobody. `retry` draws the control
+ *  that sends the same words again. */
+export interface TurnFault { fault: Fault; retry?: boolean }
 export type Turn =
   | { id: string; role: "user"; text: string }
   | { id: string; role: "agent"; text: string; ops: Op[]; commit?: string; rejected?: string; status?: TurnStatus | null;
       /** the SERVER's step count for this turn (Vexa-ai/vexa#1622). Absent on a deployment one
        *  release behind, where the op line falls back to counting what this browser saw. */
-      steps?: number; stopped?: TurnStopped }
+      steps?: number; stopped?: TurnStopped; failed?: TurnFault }
   | { id: string; role: "insight"; t?: string; text: string };
 
 const PHASE_LABEL: Record<TurnPhase, string> = {
@@ -117,6 +124,33 @@ function StoppedLine({ stopped, onContinue }: { stopped: TurnStopped; onContinue
   );
 }
 
+/** The server's detail as a sentence: capitalised, and closed with a full stop unless it has one. */
+const sentence = (d: string) => {
+  const t = d.charAt(0).toUpperCase() + d.slice(1);
+  return /[.!?…]$/.test(t) ? t : `${t}.`;
+};
+
+// ── a typed fault — WHO failed · what kind · the safe detail · the remedy (P18) ──
+export function FaultBlock({ failed, onRetry }: { failed: TurnFault; onRetry?: () => void }) {
+  const f = failed.fault;
+  return (
+    <div role="alert" data-fault-source={f.source} data-fault-kind={f.kind}
+      style={{ marginTop: 9, maxWidth: 680, border: "1px solid var(--danger)", background: "var(--dangerbg)", borderRadius: 8, padding: "8px 11px", fontSize: 12.5, lineHeight: 1.5, color: "var(--t1)" }}>
+      <div data-fault-headline style={{ display: "flex", alignItems: "center", gap: 7, fontWeight: 650, color: "var(--danger)" }}>
+        <Icon name="x" size={12} />{faultHeadline(f)}
+      </div>
+      {f.detail && <div data-fault-detail style={{ marginTop: 3 }}>{sentence(f.detail)}</div>}
+      {f.remedy && <div data-fault-remedy style={{ marginTop: 3, color: "var(--t2)" }}>{f.remedy}</div>}
+      {failed.retry && onRetry && (
+        <button data-fault-retry onClick={onRetry}
+          style={{ marginTop: 7, display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, fontFamily: "var(--mono)", color: "var(--blue)", background: "var(--bluebg)", border: "none", borderRadius: 6, padding: "3px 10px", cursor: "pointer" }}>
+          Retry
+        </button>
+      )}
+    </div>
+  );
+}
+
 // ── the conversation: a timeline of user bubbles · agent turns (ops + text) · insights ──
 export function Conversation({ turns, busy, empty, onContinue }: {
   turns: Turn[]; busy?: boolean; empty?: ReactNode;
@@ -185,7 +219,7 @@ export function Conversation({ turns, busy, empty, onContinue }: {
             })()}
             {busy && last && (t.status
               ? <StatusLine status={t.status} />
-              : (!t.text && <div style={{ fontSize: 13.5, color: "var(--t3)" }}>…</div>))}
+              : (!t.text && !t.failed && <div style={{ fontSize: 13.5, color: "var(--t3)" }}>…</div>))}
             {t.commit && (
               <div style={{ marginTop: 9, fontSize: 11, color: "var(--green)", display: "inline-flex", alignItems: "center", gap: 6, background: "var(--greenbg)", borderRadius: 6, padding: "3px 8px", fontFamily: "var(--mono)" }}>
                 <Icon name="git" size={12} />committed · {t.commit.slice(0, 7)}
@@ -197,6 +231,7 @@ export function Conversation({ turns, busy, empty, onContinue }: {
               </div>
             )}
             {t.stopped && <StoppedLine stopped={t.stopped} onContinue={onContinue && (() => onContinue(t))} />}
+            {t.failed && <FaultBlock failed={t.failed} onRetry={onContinue && (() => onContinue(t))} />}
           </div>
         );
       })}
