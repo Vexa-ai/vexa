@@ -121,7 +121,9 @@ describe("the strip takes the header and no more", () => {
     const rows = container.querySelector("[data-ws-rows]") as HTMLElement;
     expect(rows).toBeTruthy();
     expect(rows.style.maxHeight).toBe(`${STRIP_MAX_VH}vh`);   // the cap is in the style, not in luck
-    expect(rows.style.overflowY).toBe("auto");                // …and nothing is clipped out of reach
+    // …and nothing is clipped out of reach: what overflows the cap is reached through "Show more",
+    // never through a second scroller nested inside the page's own (design guidelines §4.10)
+    expect(rows.style.overflow).toBe("hidden");
     expect(strip(container)!.style.maxHeight).toBe("");       // the head of the page is not capped
     // …and the cap the style names is inside "1/8 screen at max" on the viewport above
     expect((STRIP_MAX_VH / 100) * window.innerHeight).toBeLessThanOrEqual(window.innerHeight / 8);

@@ -63,7 +63,7 @@ describe("Select", () => {
 
 describe("Breadcrumb", () => {
   it("collapses the middle past four segments, and marks the current page", () => {
-    render(<Breadcrumb items={["one", "two", "three", "four", "five"].map((k) => ({ key: k, label: k, onSelect: () => {} }))} />);
+    render(<Breadcrumb items={["one", "two", "three", "four", "five"].map((k, i, a) => ({ key: k, label: k, onSelect: i < a.length - 1 ? () => {} : undefined }))} />);
     expect(screen.getByRole("button", { name: "2 more folders" })).toBeTruthy();
     expect(screen.getByText("five").getAttribute("aria-current")).toBe("page");
     expect(screen.queryByText("two")).toBeNull();

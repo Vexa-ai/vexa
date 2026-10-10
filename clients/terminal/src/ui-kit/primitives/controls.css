@@ -201,3 +201,16 @@
 .vx-ref-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .vx-turn-meta { margin-top: var(--space-2); display: flex; flex-wrap: wrap; gap: var(--space-1_5); }
 .vx-turn-steps { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-3); flex: none; }
+/* an entity chip inside running text: same shape, sized to the line */
+.vx-inline-chip { display: inline-flex; vertical-align: baseline; height: auto; padding: 0 var(--space-1_5); gap: var(--space-1); line-height: 1.45; font-size: 0.92em; cursor: pointer; max-width: 100%; }
+.vx-inline-chip[data-missing] { background: transparent; color: var(--text-3); }
+.vx-inline-chip:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.vx-gap-top { margin-top: var(--space-1_5); }
+/* a pressed toggle button: selected = accent tint + primary text + an accent bar (never colour alone) */
+.vx-toggle[aria-pressed="true"] { background: var(--accent-tint); color: var(--text-1); box-shadow: inset 2px 0 0 var(--accent); }
+.vx-chip-main[data-static] { cursor: default; }
+.vx-chip-add { justify-content: center; width: var(--control-xs); padding: 0; cursor: pointer; color: var(--text-3); }
+.vx-chip-add:hover { color: var(--text-1); }
+.vx-chip-add:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.vx-ws-gone { color: var(--text-2); }
+.vx-inline-chip[data-static] { cursor: default; }

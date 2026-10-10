@@ -24,6 +24,7 @@
  *  renderer and the flows both read.
  */
 import type { CSSProperties, ReactNode } from "react";
+import { Badge } from "./primitives/Chip";
 
 export const POLICY_KIND = "policies";
 
@@ -111,18 +112,21 @@ const chip = (color: string, bg: string): CSSProperties => ({
 
 function Value({ value }: { value: string }): ReactNode {
   const v = value.trim();
-  if (!v) return <span style={{ color: "var(--t3)", fontSize: 12 }}>unset — the default applies</span>;
-  if (ON.has(v.toLowerCase())) return <span style={chip("var(--green)", "transparent")}>on</span>;
-  if (OFF.has(v.toLowerCase())) return <span style={chip("var(--t3)", "transparent")}>off</span>;
-  return <span style={{ fontFamily: "var(--mono)", fontSize: 12, color: "var(--t1)" }}>{v}</span>;
+  // A value is STATIC, so a Badge (on = success with its word, off = neutral) — not a coloured pill.
+  if (!v) return <span className="vx-policy-unset">Unset — the default applies</span>;
+  if (ON.has(v.toLowerCase())) return <Badge tone="success">On</Badge>;
+  if (OFF.has(v.toLowerCase())) return <Badge>Off</Badge>;
+  return <code className="vx-code">{v}</code>;
 }
 
 function Lens({ label, text }: { label: string; text?: string }): ReactNode {
   if (!text) return null;
   return (
-    <div style={{ display: "flex", gap: 8, alignItems: "baseline", lineHeight: 1.5 }}>
-      <span style={{ color: "var(--t3)", fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4, width: 78, flex: "none" }}>{label}</span>
-      <span style={{ color: "var(--t2)", fontSize: 12.5, minWidth: 0 }}>{text}</span>
+    // the metadata table's rules (guidelines §4.16): sentence case, no uppercase eyebrow, stacked
+    // below 360px of pane width
+    <div className="vx-fact">
+      <span className="vx-kv-key">{label}</span>
+      <span className="vx-kv-val">{text}</span>
     </div>
   );
 }

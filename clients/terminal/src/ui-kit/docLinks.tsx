@@ -396,7 +396,6 @@ export function Wikilink({ title }: { title: string }) {
  *  Resolves against the doc's workspace (DocMetaContext); a title that matches no entity
  *  doc renders muted with a "not found" tooltip instead of a dead click. */
 function EntityWikilink({ title }: { title: string }) {
-  const [hover, setHover] = useState(false);
   const meta = useContext(DocMetaContext);
   // undefined = resolving, null = not found, ResolvedDoc = found
   const [target, setTarget] = useState<ResolvedDoc | null | undefined>(undefined);
@@ -413,29 +412,24 @@ function EntityWikilink({ title }: { title: string }) {
     // title yet — but it still OPENS, landing on the page's empty state, because a chip that eats
     // its own click is indistinguishable from a broken app. Everything the reader can see says
     // "clickable"; only the handler disagreed.
+    // (a ghost chip, not a dashed one — guidelines §4.5)
     return (
-      <span role="link" onClick={() => openEntity({ wikilink: title })}
-        title={`No doc for “${title}” in the mounted workspaces yet — opens the empty page`}
-        onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
-        style={{ display: "inline-flex", alignItems: "center", gap: 5, verticalAlign: "baseline",
-          background: "var(--panel2)", border: `1px dashed ${hover ? "var(--line2)" : "var(--line)"}`, borderRadius: 999,
-          padding: "0.5px 9px 0.5px 7px", color: hover ? "var(--t2)" : "var(--t3)", fontSize: "0.92em",
-          fontWeight: 500, cursor: "pointer", whiteSpace: "nowrap", lineHeight: 1.45 }}>
-        <Icon name="link" size={11} style={{ opacity: 0.5 }} />
-        {title}
+      <span role="link" tabIndex={0} className="vx-chip vx-entity vx-inline-chip" data-missing=""
+        onClick={() => openEntity({ wikilink: title })} onKeyDown={(e) => { if (e.key === "Enter") openEntity({ wikilink: title }); }}
+        title={`No doc for “${title}” in the mounted workspaces yet — opens the empty page`}>
+        <span className="vx-chip-icon" aria-hidden><Icon name="link" size={12} /></span>
+        <span className="vx-chip-label">{title}</span>
       </span>
     );
   }
+  // THE ENTITY CHIP (guidelines §4.5): one shape for every reference — radius 6, a border, the
+  // type ICON in the type's colour; no colour fill per type and no pill.
+  const open = () => { if (target) openEntity({ path: target.path, slug: target.slug }); else openEntity({ wikilink: title }); };
   return (
-    <span onClick={() => { if (target) openEntity({ path: target.path, slug: target.slug }); else openEntity({ wikilink: title }); }}
-      onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
-      style={{ display: "inline-flex", alignItems: "center", gap: 5, verticalAlign: "baseline",
-        background: hover ? c.bg : "var(--panel2)",
-        border: `1px solid ${hover ? c.color : "var(--line)"}`, borderRadius: 999,
-        padding: "0.5px 9px 0.5px 7px", color: c.color, fontSize: "0.92em",
-        fontWeight: 500, cursor: "pointer", whiteSpace: "nowrap", lineHeight: 1.45 }}>
-      <Icon name={c.icon} size={11} style={{ opacity: 0.8 }} />
-      {title}
+    <span role="link" tabIndex={0} className="vx-chip vx-entity vx-inline-chip" data-kind={target?.type ?? "doc"}
+      onClick={open} onKeyDown={(e) => { if (e.key === "Enter") open(); }}>
+      <span className="vx-chip-icon" aria-hidden style={{ color: c.color }}><Icon name={c.icon} size={12} /></span>
+      <span className="vx-chip-label">{title}</span>
     </span>
   );
 }
@@ -458,7 +452,6 @@ function EntityWikilink({ title }: { title: string }) {
 export function DocPath({ path }: { path: string }) {
   const meta = useContext(DocMetaContext);
   const openEntity = useOpenEntity();
-  const [hover, setHover] = useState(false);
   const absolute = WORKER_PATH.test(path);
   const [live, setLive] = useState(absolute);
   useEffect(() => {
@@ -467,16 +460,16 @@ export function DocPath({ path }: { path: string }) {
     void docPathExists(path, meta).then((ok) => { if (on) setLive(ok); });
     return () => { on = false; };
   }, [path, absolute, meta.path, meta.slug]);
-  const base: CSSProperties = {
-    fontFamily: "var(--mono)", fontSize: "0.88em", background: "var(--panel2)",
-    border: "1px solid var(--line)", borderRadius: 4, padding: "0.5px 5px",
-  };
-  if (!live) return <code style={{ ...base, color: "var(--t1)" }}>{path}</code>;
+  if (!live) return <code className="vx-code">{path}</code>;
+  // a LIVE path is a reference you can open: the entity chip, showing the file's name (the full
+  // path is the tooltip) — not blue monospace that reads as code (guidelines §4.5)
+  const name = path.split("/").filter(Boolean).pop() ?? path;
   return (
-    <code role="link" title={`Open ${path}`} onClick={() => openEntity({ path })}
-      onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
-      style={{ ...base, borderColor: hover ? "var(--blue)" : "var(--line)", color: "var(--blue)",
-        cursor: "pointer", textDecoration: hover ? "underline" : "none" }}>{path}</code>
+    <span role="link" tabIndex={0} className="vx-chip vx-entity vx-inline-chip" data-kind="doc" title={`Open ${path}`}
+      onClick={() => openEntity({ path })} onKeyDown={(e) => { if (e.key === "Enter") openEntity({ path }); }}>
+      <span className="vx-chip-icon" aria-hidden><Icon name="file" size={12} /></span>
+      <span className="vx-chip-label">{name}</span>
+    </span>
   );
 }
 
@@ -488,21 +481,16 @@ export function DocPath({ path }: { path: string }) {
  *  the seed CLAUDE.md § The README is this workspace's dashboard), so that is the door this opens.
  *  An unwritten README still opens — the honest empty state, same contract as every other chip. */
 export function WorkspaceRef({ token }: { token: string }) {
-  const [hover, setHover] = useState(false);
   const openEntity = useOpenEntity();
   const ws = lookupWorkspace(token);
   if (!ws) return <>{token}</>;    // the snapshot moved under us — plain text, never a dead chip
+  const open = () => openEntity({ path: "README.md", slug: ws.slug, exact: true });
   return (
-    <span role="link" onClick={() => openEntity({ path: "README.md", slug: ws.slug, exact: true })}
-      title={`Open the ${ws.label} workspace README`}
-      onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
-      style={{ display: "inline-flex", alignItems: "center", gap: 5, verticalAlign: "baseline",
-        background: hover ? "var(--violetbg)" : "var(--panel2)",
-        border: `1px solid ${hover ? "var(--violet)" : "var(--line)"}`, borderRadius: 999,
-        padding: "0.5px 9px 0.5px 7px", color: "var(--violet)", fontSize: "0.92em",
-        fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap", lineHeight: 1.45 }}>
-      <Icon name="folder" size={11} style={{ opacity: 0.8 }} />
-      {ws.label}
+    <span role="link" tabIndex={0} className="vx-chip vx-entity vx-inline-chip" data-kind="workspace"
+      onClick={open} onKeyDown={(e) => { if (e.key === "Enter") open(); }}
+      title={`Open the ${ws.label} workspace README`}>
+      <span className="vx-chip-icon" aria-hidden><Icon name="folder" size={12} /></span>
+      <span className="vx-chip-label">{ws.label}</span>
     </span>
   );
 }

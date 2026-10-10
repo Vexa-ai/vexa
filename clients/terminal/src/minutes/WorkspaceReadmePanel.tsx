@@ -78,7 +78,7 @@
  *     failure: the red line is reserved for a read that actually broke, and it names what broke.
  */
 import {
-  useCallback, useEffect, useState,
+  useCallback, useEffect, useLayoutEffect, useRef, useState,
   type CSSProperties, type ReactNode,
 } from "react";
 import { Icon } from "../ui-kit";
@@ -134,7 +134,7 @@ const stripS: CSSProperties = {
  *  person can see the top of and cannot click is the one thing this panel refuses to render. */
 const rowsS: CSSProperties = {
   display: "flex", flexDirection: "column", gap: 3, minWidth: 0,
-  maxHeight: `${STRIP_MAX_VH}vh`, overflowY: "auto", overflowX: "hidden",
+  maxHeight: `${STRIP_MAX_VH}vh`, overflow: "hidden",
 };
 const sectionS: CSSProperties = { borderTop: "1px solid var(--line)", marginTop: 8, paddingTop: 8 };
 const firstSectionS: CSSProperties = { marginTop: 0, paddingTop: 0 };
@@ -203,13 +203,7 @@ const barS = (w: number | string): CSSProperties => ({
   display: "block", height: 9, width: w, borderRadius: 5, background: surface.raisedHi,
 });
 const rowS: CSSProperties = { display: "flex", alignItems: "baseline", gap: 8, minWidth: 0, lineHeight: 1.5 };
-const keyS: CSSProperties = { ...ty.meta, flex: "none", width: 74 };
 const valS: CSSProperties = { ...ty.body, color: "var(--t1)", flex: "1 1 0%", minWidth: 0, wordBreak: "break-word" };
-const btnS: CSSProperties = {
-  ...ty.chip, flex: "none", padding: "2px 8px", borderRadius: 6, cursor: "pointer",
-  border: "1px solid var(--line)", background: surface.raisedHi, color: "var(--t2)",
-};
-const dangerS: CSSProperties = { ...btnS, borderColor: "var(--danger)", color: "var(--danger)" };
 /** A QUIET LINK — the changed page's title in the last-change row. Not the accent colour and not a
  *  full underline: it sits inside a grey sentence, so it is the sentence's own colour with a
  *  hairline under it (#1634's design spec, point 4), and it only warms up on hover. */
@@ -218,15 +212,13 @@ const quietLink: CSSProperties = {
   cursor: "pointer", textDecoration: "underline", textDecorationThickness: "0.5px",
   textDecorationColor: "var(--line2)", textUnderlineOffset: 3,
 };
-const linkBtn: CSSProperties = {
-  ...ty.meta, background: "transparent", border: "none", padding: 0, color: "var(--accent)",
-  cursor: "pointer", textDecoration: "underline", textUnderlineOffset: 2,
-};
+/** One fact, on the metadata table's rules (guidelines §4.16): the label column `minmax(64px, 30%)`,
+ *  the value wraps at spaces, and below 360px of pane width the label sits above its value. */
 function Fact(p: { k: string; name: string; children: ReactNode }) {
   return (
-    <div style={rowS} data-ws-fact={p.k}>
-      <span style={keyS}>{p.name}</span>
-      <span style={valS}>{p.children}</span>
+    <div className="vx-fact" data-ws-fact={p.k}>
+      <span className="vx-kv-key">{p.name}</span>
+      <span className="vx-kv-val vx-fact-val">{p.children}</span>
     </div>
   );
 }
@@ -243,15 +235,15 @@ function Act(p: {
       <span data-ws-confirm={p.id} style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
         <span style={{ ...ty.meta, color: "var(--t2)" }}>{p.sentence}</span>
         <button data-ws-act-confirm={p.id} disabled={p.busy} onClick={p.onRun}
-          style={{ ...(p.danger ? dangerS : btnS), opacity: p.busy ? 0.55 : 1 }}>
+          className="vx-btn" data-variant={p.danger ? "danger" : "secondary"} aria-busy={p.busy || undefined}>
           {p.busy ? "…" : "Confirm"}
         </button>
-        <button data-ws-act-cancel={p.id} onClick={() => p.onArm(null)} style={{ ...btnS, border: "none", background: "transparent" }}>Cancel</button>
+        <button data-ws-act-cancel={p.id} onClick={() => p.onArm(null)} className="vx-btn" data-variant="ghost">Cancel</button>
       </span>
     );
   }
   return (
-    <button data-ws-act={p.id} onClick={() => p.onArm(p.id)} style={p.danger ? dangerS : btnS}>{p.label}</button>
+    <button data-ws-act={p.id} onClick={() => p.onArm(p.id)} className="vx-btn" data-variant={p.danger ? "danger-ghost" : "secondary"}>{p.label}</button>
   );
 }
 
@@ -323,6 +315,19 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string; title?: s
   const [commits, setCommits] = useState<GitCommit[] | null>(null);
   const [shown, setShown] = useState(HISTORY_PAGE);
   const [thisPage, setThisPage] = useState(false);
+  // NO SCROLLER INSIDE THE PAGE'S SCROLLER (terminal design guidelines §4.10). The rows keep #1628's
+  // 1/8-screen cap, and what does not fit is reached by "Show more" — a control that is always
+  // whole and always clickable, which is the rule this cap was written to keep — instead of a
+  // second, nested scrollbar inside the page's own.
+  const rowsRef = useRef<HTMLDivElement | null>(null);
+  const [rowsOpen, setRowsOpen] = useState(false);
+  const [rowsClipped, setRowsClipped] = useState(false);
+  useLayoutEffect(() => {
+    const el = rowsRef.current;
+    if (!el || rowsOpen) return;
+    const clipped = el.scrollHeight > el.clientHeight + 1;
+    setRowsClipped((c) => (c === clipped ? c : clipped));
+  });
   // THE ONE DISCLOSURE (#1634 rule 6). The three sections live under it; History is the button that
   // opens it. **It starts closed, always** (Vexa-ai/vexa#1642): the front page is two sentences, and
   // a stored posture that reopened it is how the founder met this panel already open on `_global`.
@@ -504,7 +509,7 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string; title?: s
         <div data-ws-eyebrow style={eyebrowS}>{eye}</div>
         {heading && <h1 data-ws-title style={titleS}>{heading}</h1>}
 
-        <div data-ws-rows style={rowsS}>
+        <div data-ws-rows ref={rowsRef} style={rowsOpen ? { ...rowsS, maxHeight: "none" } : rowsS} data-clipped={rowsClipped && !rowsOpen ? "" : undefined}>
         {/* WHO IS HERE — faces, then the sentence, the count and the one pill as ONE flow, then
             this viewer's acts at the right edge. */}
         <div data-ws-people-row style={{ ...lineS, ...rowFlow }}>
@@ -564,6 +569,11 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string; title?: s
           </span>
         </div>
         </div>
+        {(rowsClipped || rowsOpen) && (
+          <button type="button" data-ws-rows-more className="vx-kv-more" aria-expanded={rowsOpen} onClick={() => setRowsOpen((v) => !v)}>
+            {rowsOpen ? "Show less" : "Show more"}
+          </button>
+        )}
       </div>
 
       {/* …AND THE THREE SECTIONS, when the reader asked for them. Nothing below this line exists in
@@ -604,11 +614,11 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string; title?: s
                           be about somebody the reader can see. */}
                       {owner && m.role !== "owner" && (
                         <>
-                          <button data-ws-act={`member-role:${m.subject}`} style={btnS}
+                          <button data-ws-act={`member-role:${m.subject}`} className="vx-btn" data-variant="secondary"
                             onClick={() => { postIntent({ kind: "member_role", workspace: facts.slug, member: m.email || m.subject }); }}>
                             Change role
                           </button>
-                          <button data-ws-act={`member-remove:${m.subject}`} style={dangerS}
+                          <button data-ws-act={`member-remove:${m.subject}`} className="vx-btn" data-variant="danger-ghost"
                             onClick={() => { postIntent({ kind: "member_remove", workspace: facts.slug, member: m.email || m.subject }); }}>
                             Remove
                           </button>
@@ -631,7 +641,7 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string; title?: s
                   better — the roles need a sentence each, and a select box has nowhere to put one. */}
               {owner && (
                 <div style={{ marginTop: 7 }}>
-                  <button data-ws-act="member-add" style={btnS}
+                  <button data-ws-act="member-add" className="vx-btn" data-variant="secondary"
                     onClick={() => { postIntent({ kind: "member_add", workspace: facts.slug }); }}>
                     Add a member…
                   </button>
@@ -698,7 +708,7 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string; title?: s
                   worker and is not one of `attachTargets`' targets, so an "Attach a repo…" button on
                   `_global` would be a control whose only outcome is a refusal — rule 1, again. */}
               {owner && facts.kind !== "global" && (
-                <button data-ws-act="attach" style={{ ...btnS, marginTop: 6 }} onClick={() => setAttaching(true)}>
+                <button data-ws-act="attach" className="vx-btn vx-gap-top" data-variant="secondary" onClick={() => setAttaching(true)}>
                   Attach a repo…
                 </button>
               )}
@@ -722,7 +732,7 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string; title?: s
               </Fact>
               {owner && (
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 7 }}>
-                  <button data-ws-act="sync" style={btnS} onClick={() => void run(async () => {
+                  <button data-ws-act="sync" className="vx-btn" data-variant="secondary" onClick={() => void run(async () => {
                     const s = await gitRemoteStatus(sync(syncSlug));
                     setFacts({ ...facts, remote: s, remoteFailure: null });
                     return `${s.branch ?? "HEAD"} — ${s.ahead} ahead, ${s.behind} behind.`;
@@ -760,7 +770,7 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string; title?: s
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
             <button data-ws-history-filter aria-pressed={thisPage}
               onClick={() => { setThisPage((v) => !v); setShown(HISTORY_PAGE); }}
-              style={{ ...btnS, background: thisPage ? "var(--accentbg)" : surface.raisedHi, color: thisPage ? "var(--accent)" : "var(--t2)", borderColor: thisPage ? "var(--accent)" : "var(--line)" }}>
+              className="vx-btn vx-toggle" data-variant="secondary">
               This page only
             </button>
             {/* THE LIST SAYS ITS OWN SCOPE. The button is a control, and a control's label is not a
@@ -777,7 +787,7 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string; title?: s
               <CommitRow key={c.sha} c={c} open={openSha === c.sha} diff={diff} onOpen={() => void openCommit(c.sha)} />
             ))}
             {more && (
-              <button data-ws-history-more style={{ ...linkBtn, marginTop: 4 }}
+              <button data-ws-history-more className="vx-kv-more"
                 onClick={() => setShown((n) => n + HISTORY_PAGE)}>more</button>
             )}
           </div>

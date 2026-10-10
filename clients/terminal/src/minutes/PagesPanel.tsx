@@ -24,10 +24,10 @@
  *  name in the listing opens it as a tab. Plain names, no icons — this panel is for reading, not
  *  file management.
  */
-import type { CSSProperties } from "react";
 import { useEffect, useRef, useState } from "react";
 import { MeetingPageHeader } from "./MeetingPageHeader";
-import { Icon, OverflowStrip } from "../ui-kit";
+import { Breadcrumb, Button, EmptyState, Icon, IconButton, OverflowStrip } from "../ui-kit";
+import { ChevronLeft, ChevronRight, FileText, Folder, Pin, X } from "lucide-react";
 import { copyText } from "../ui-kit/ContextMenu";
 import { DocMetaContext } from "../ui-kit/docRefs";
 import { MdxDoc } from "../ui-kit/MdxDoc";
@@ -42,7 +42,6 @@ import { loadNavOpen, saveNavOpen } from "./navigatorApi";
 import { CreatePageButton, ExtendPageButton, SelectionExtend, useIntentLanding } from "./ExtendAction";
 import { registry } from "../contributions";
 import { ReportPageButton } from "../surfaces/ReportThis";
-import { header, surface, type as ty } from "./tokens";
 import { WorkspaceReadmePanel } from "./WorkspaceReadmePanel";
 import { splitLeadingH1 } from "./workspaceFrontPage";
 import { isWorkspaceReadme } from "./workspaceReadme";
@@ -51,41 +50,9 @@ import { isWorkspaceReadme } from "./workspaceReadme";
  *  `min-width: 0` instead of holding a permanent sliver open once the crumb has been starved. */
 const SEP = " › ";
 
-/** Tabs do NOT shrink. Five of them in a 384px panel had ellipsized to "T..×  M..×  P..×" — every
- *  tab present, every one unreadable, which is a worse failure than not seeing them all. So each
- *  keeps a legible width and the STRIP scrolls, the way a browser's does; the full path stays on
- *  hover via `title`. Nav arrows and the edit control sit outside that scroller and never move. */
-const chipBase: CSSProperties = { flex: "0 0 auto", maxWidth: 150, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
-/** A tab's BOX and the label inside it. The box grew when the pin moved onto the tab: a label
- *  allotted the full 150px would push its own pin out of the box that clips it. */
-const tabBox: CSSProperties = { ...chipBase, maxWidth: 176 };
-const tabLabel: CSSProperties = { ...chipBase, maxWidth: 104 };
-/** The controls a tab carries — the pin, and `×`. Small, and lit only on the tab in front. */
-const tabBtn = (on: boolean): CSSProperties => ({
-  flex: "none", display: "flex", alignItems: "center", justifyContent: "center", width: 18, height: 20,
-  background: "transparent", border: "none", borderRadius: 4, padding: 0, cursor: "pointer",
-  color: on ? "var(--accent)" : "var(--t3)", fontFamily: "var(--sans)", fontSize: 12, lineHeight: 1,
-});
-const crumbBtn: CSSProperties = { background: "transparent", border: "none", padding: 0, margin: 0, font: "inherit", color: "inherit", cursor: "pointer" };
-const navBtn = (on: boolean): CSSProperties => ({
-  flex: "none", width: 22, height: 24, display: "flex", alignItems: "center", justifyContent: "center",
-  background: "transparent", border: "none", borderRadius: 6, fontFamily: "var(--sans)", fontSize: 17,
-  lineHeight: 1, color: on ? "var(--t2)" : "var(--line2)", cursor: on ? "pointer" : "default", padding: 0,
-});
-
-/** The doc header's utility group — one size, one shape, `on` for a control that is currently
- *  holding the view (the source toggle) or has just fired (copy). */
-const iconBtn = (on: boolean): CSSProperties => ({
-  flex: "none", width: 26, height: 24, display: "flex", alignItems: "center", justifyContent: "center",
-  background: on ? surface.raisedHi : "transparent", border: "none", borderRadius: 6,
-  color: on ? "var(--t1)" : "var(--t3)", cursor: "pointer", padding: 0, transition: "color .12s, background .12s",
-});
-const litIcon = (e: { currentTarget: HTMLElement }) => { e.currentTarget.style.color = "var(--t1)"; e.currentTarget.style.background = surface.raised; };
-const dimIcon = (on: boolean) => (e: { currentTarget: HTMLElement }) => {
-  e.currentTarget.style.color = on ? "var(--t1)" : "var(--t3)";
-  e.currentTarget.style.background = on ? surface.raisedHi : "transparent";
-};
-
+/** Tabs do NOT shrink below a legible width (72–176px, `.vx-doctab`): five of them in a 384px panel
+ *  had ellipsized to "T..×  M..×  P..×" — every tab present, every one unreadable. The STRIP
+ *  scrolls instead, and its overflow menu lists every tab; the full path stays on hover. */
 /** WHAT A WORKSPACE SEGMENT IS CALLED WHEN A PERSON READS IT. A desk's slug is its owner's user
  *  number and the private system workspace lives under `.system/<number>`; both are addresses, not
  *  names, and the crumb was printing them raw — "173 › identity.md" — so the reader met a number
@@ -198,19 +165,17 @@ export function PagesPanel(p: {
     <>
       {/* The header band never scrolls sideways (guidelines §3.4): the tab strip inside it does,
           with a fade and an overflow menu, and everything else here is a fixed-size control. */}
-      <div className="vx-pane" data-pane="pages-header" style={{ ...header, gridRow: 1, gridColumn: 3, gap: 6, flexWrap: "nowrap", minWidth: 0, borderLeft: "1px solid var(--line)", padding: "0 10px" }}>
+      <div className="vx-pane vx-pages-head" data-pane="pages-header" style={{ gridRow: 1, gridColumn: 3 }}>
         {/* where you have BEEN, at the panel's left edge — the reading order of a document surface
             starts here (Obsidian, and the old terminal, both put them exactly there). */}
         {/* the navigator's toggle — the panel's leftmost control, because the rail it opens is the
             panel's leftmost column. One button, no other chrome (decision 27.4). */}
-        <button data-nav-toggle aria-pressed={navOpen} aria-label={navOpen ? "Hide the file navigator" : "Show the file navigator"}
-          title={navOpen ? "Hide the file navigator" : "Show the file navigator (Esc closes, / filters)"}
-          onClick={() => showNav(!navOpen)} style={iconBtn(navOpen)}
-          onMouseEnter={litIcon} onMouseLeave={dimIcon(navOpen)}>
-          <Icon name="folder" size={13} />
-        </button>
-        <button data-nav="back" aria-label="Back" title="Back (⌘/Ctrl + [)" disabled={!p.canBack} onClick={p.onBack} style={navBtn(!!p.canBack)}>‹</button>
-        <button data-nav="forward" aria-label="Forward" title="Forward (⌘/Ctrl + ])" disabled={!p.canForward} onClick={p.onForward} style={navBtn(!!p.canForward)}>›</button>
+        <IconButton data-nav-toggle pressed={navOpen} label={navOpen ? "Hide the file navigator" : "Show the file navigator"}
+          onClick={() => showNav(!navOpen)}>
+          <Icon name="folder" size={14} />
+        </IconButton>
+        <IconButton data-nav="back" label="Back" disabled={!p.canBack} onClick={p.onBack}><ChevronLeft size={16} strokeWidth={1.75} /></IconButton>
+        <IconButton data-nav="forward" label="Forward" disabled={!p.canForward} onClick={p.onForward}><ChevronRight size={16} strokeWidth={1.75} /></IconButton>
         {/* NO HIDDEN TABS (guidelines §3.3): the strip fades at an edge with tabs beyond it, and an
             overflow control lists every tab whenever one is not fully in view. */}
         <OverflowStrip label="tabs" activeKey={(() => { const a = p.pages.find(tabOn); return a ? tabKey(a) : undefined; })()}
@@ -222,9 +187,11 @@ export function PagesPanel(p: {
           // open next, and that is worth knowing before you navigate away from it.
           const kept = !!pg.pinned || !!pg.desk;
           return (
-            <span key={tabKey(pg)} data-strip-key={tabKey(pg)} style={{ ...tabBox, display: "inline-flex", alignItems: "center", background: on ? "var(--accentbg)" : surface.raised, border: `1px solid ${on ? "var(--accent)" : "transparent"}`, borderRadius: 6 }}>
+            // THE DOCUMENT TAB (guidelines §4.6, `document` skin): the tab in front joins the page
+            // below it (surface-1, primary text) — no accent border; accent is not "the open tab".
+            <span key={tabKey(pg)} data-strip-key={tabKey(pg)} className="vx-doctab" data-active={on ? "" : undefined} data-preview={kept ? undefined : ""}>
               <button data-tab data-kept={kept ? "" : undefined} onClick={() => p.onOpen(pg)} title={pg.slug ? `${pg.slug} › ${pg.path}` : pg.path}
-                style={{ ...ty.chip, ...tabLabel, fontStyle: kept ? undefined : "italic", color: on ? "var(--accent)" : "var(--t2)", background: "transparent", border: "none", padding: "3px 3px 3px 10px", cursor: "pointer" }}>
+                className="vx-doctab-label" aria-current={on || undefined}>
                 {tabName(pg)}
               </button>
               {/* THE PIN, ON THE TAB. The chat's home carries none: it is a product default rather
@@ -235,9 +202,8 @@ export function PagesPanel(p: {
               {p.onTogglePin && !pg.desk && !pg.permanent && (
                 <button data-tab-pin aria-pressed={kept} aria-label={kept ? `Unpin ${pg.label}` : `Keep ${pg.label} as a tab`}
                   title={kept ? "Unpin — this goes back to being the page you are reading" : "Keep this as a tab"}
-                  onClick={(e) => { e.stopPropagation(); p.onTogglePin?.(pg); }}
-                  style={{ ...tabBtn(on), opacity: kept ? 1 : 0.55 }}>
-                  <Icon name="pin" size={11} />
+                  onClick={(e) => { e.stopPropagation(); p.onTogglePin?.(pg); }} className="vx-doctab-act">
+                  <Pin size={12} strokeWidth={1.75} fill={kept ? "currentColor" : "none"} aria-hidden />
                 </button>
               )}
               {/* `×` — EXCEPT ON THE MEETING'S OWN PAGES (Vexa-ai/vexa#1600). Founder, on the
@@ -254,7 +220,7 @@ export function PagesPanel(p: {
                   the pin above does. */}
               {p.onClose && !pg.permanent && !pg.desk && p.pages.length > 1 && (
                 <button data-tab-close aria-label={`Close ${pg.label}`} title="Close tab" onClick={(e) => { e.stopPropagation(); p.onClose?.(pg); }}
-                  style={{ ...tabBtn(on), width: 16, marginRight: 3 }}>×</button>
+                  className="vx-doctab-act"><X size={12} strokeWidth={1.75} aria-hidden /></button>
               )}
             </span>
           );
@@ -266,13 +232,13 @@ export function PagesPanel(p: {
         {/* outside the tab scroller (`flex: none`), so it never scrolls out of reach */}
         {p.onCollapse && <CollapseButton side="right" onClick={p.onCollapse} label={p.collapseLabel} />}
       </div>
-      <div className="vx-pane" data-pane="pages" style={{ gridRow: 2, gridColumn: 3, flex: "1 1 0%", display: "flex", minHeight: 0, minWidth: 0, background: surface.pages, borderLeft: "1px solid var(--line)" }}>
+      <div className="vx-pane vx-pages" data-pane="pages" style={{ gridRow: 2, gridColumn: 3 }}>
         {/* The rail sits INSIDE the panel, under the shared header band — beside the open file, the
             way the founder's reference has it. `onOpenTab` is this panel's own open route, so an
             explicit open-in-tab lands on the chat record exactly like a link click does; a plain
             click never comes through here at all (decision 28). */}
         {navOpen && <Navigator onOpenTab={p.onOpen} onClose={() => showNav(false)} />}
-        <div style={{ flex: "1 1 0%", display: "flex", flexDirection: "column", minHeight: 0, minWidth: 0 }}>
+        <div className="vx-pages-col">
         {/* WHAT is in front, and what can be done to it — the document's own header row.
             Filename prominent, location subdued beside it, every utility grouped hard right
             (founder reference, the desktop app's doc panel). Three rows now stack above the body
@@ -280,13 +246,12 @@ export function PagesPanel(p: {
             FRONT, the crumb below says where it LIVES and walks you back up.
             A canvas is exempt — it names its own meeting in its own header, and there is no file
             here to read as source, copy or edit, so the whole row (not just the group) stands down. */}
-        {doc && <div style={{ flex: "none", display: "flex", alignItems: "baseline", gap: 8, padding: "9px 20px 8px", borderBottom: "1px solid var(--line)", minWidth: 0 }}>
-          {docMeeting ? <MeetingPageHeader meetingId={docMeeting} body={p.body ?? ""} path={p.docPath} /> : <span data-doc-name title={docName}
-            style={{ ...ty.title, fontSize: 13.5, color: "var(--t1)", flex: "0 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{docName}</span>}
+        {doc && <div className="vx-doc-head">
+          {docMeeting ? <MeetingPageHeader meetingId={docMeeting} body={p.body ?? ""} path={p.docPath} /> : <span data-doc-name title={docName} className="vx-doc-name">{docName}</span>}
           {/* ONE PATH LINE (PRD decision 28, founder: *"duplicated paths"*). This span repeated the
               folder trail that the breadcrumb directly below already shows, and navigates. The name
               belongs here; the path belongs there. */}
-          <span style={{ flex: "1 1 0%", minWidth: 8 }} />
+          <span className="vx-panelhead-gap" />
           {/* WHAT IS LEFT IN THIS GROUP, and why each of the three that went, went. The PIN moved
               onto the tab (*"tab icon is on tab"*) — it is a fact about a tab, not about the header.
               The `</>` RAW LENS is gone outright (*"remove raw markdown button"*): it answered a
@@ -295,28 +260,21 @@ export function PagesPanel(p: {
               than the sixth spark-shaped glyph in a row. */}
           {!p.notice && p.body !== null && (mode === "view"
             ? <>
-                <button data-doc-act="copy" onClick={() => { void copyText(p.body ?? ""); setCopied(true); }}
-                  title={copied ? "Copied" : "Copy contents"} aria-label="Copy contents"
-                  style={iconBtn(copied)} onMouseEnter={litIcon} onMouseLeave={dimIcon(copied)}>
+                <IconButton data-doc-act="copy" label="Copy contents" pressed={copied || undefined} onClick={() => { void copyText(p.body ?? ""); setCopied(true); }}>
                   <Icon name={copied ? "check" : "copy"} size={14} />
-                </button>
+                </IconButton>
                 {/* PRD decision 33 §2 — this page is wrong, or is not the page I asked for. The
                     RESOLVED view slot, never the tab label or the crumb (F63): those are display
                     strings, and a report built from one names a file nobody opened. */}
                 <ReportPageButton workspace={p.docSlug} path={p.docPath} />
-                <button data-doc-act="edit" onClick={() => { setDraft(p.body ?? ""); setSaveError(null); setMode("edit"); }}
-                  title="Edit" aria-label="Edit"
-                  style={iconBtn(false)} onMouseEnter={litIcon} onMouseLeave={dimIcon(false)}>
+                <IconButton data-doc-act="edit" label="Edit" onClick={() => { setDraft(p.body ?? ""); setSaveError(null); setMode("edit"); }}>
                   <Icon name="edit" size={14} />
-                </button>
+                </IconButton>
               </>
             : <>
-                {saveError && <span data-doc-act="save-error" role="alert" title={saveError}
-                  style={{ ...ty.meta, flex: "0 1 auto", minWidth: 0, color: "var(--danger)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>Could not save: {saveError}</span>}
-                <button data-doc-act="cancel" onClick={() => { setSaveError(null); setMode("view"); }} title="Cancel"
-                  style={{ ...ty.chip, flex: "none", color: "var(--t3)", background: "transparent", border: "none", padding: "3px 6px", cursor: "pointer" }}>Cancel</button>
-                <button data-doc-act="save" onClick={() => void save()} disabled={saving} title="Save"
-                  style={{ ...ty.chip, flex: "none", color: "var(--on-accent)", background: "var(--accent)", border: "none", borderRadius: 6, padding: "3px 12px", cursor: saving ? "default" : "pointer", fontWeight: 600 }}>{saving ? "Saving…" : "Save"}</button>
+                {saveError && <span data-doc-act="save-error" role="alert" title={saveError} className="vx-doc-error">Could not save: {saveError}</span>}
+                <Button data-doc-act="cancel" variant="ghost" onClick={() => { setSaveError(null); setMode("view"); }} title="Cancel">Cancel</Button>
+                <Button data-doc-act="save" variant="primary" onClick={() => void save()} disabled={saving} loading={saving} title="Save">{saving ? "Saving…" : "Save"}</Button>
               </>)}
         </div>}
         {/* the breadcrumb — the doc's address, and a path you can walk back up. A canvas has no
@@ -326,35 +284,27 @@ export function PagesPanel(p: {
             so the screen said it twice. What is left is the FOLDER TRAIL — the question this row
             answers, and the only part of it you can click. A folder LISTING has no header above it,
             so there the last segment is the folder you are standing in and it stays. */}
-        {!canvas && (!doc || trail.length > 0) && <div title={fullPath} data-crumb style={{ flex: "none", display: "flex", alignItems: "center", gap: 0, padding: "7px 20px 6px", borderBottom: "1px solid var(--line)", fontFamily: "var(--mono)", fontSize: 11, color: "var(--t3)", overflow: "hidden", whiteSpace: "nowrap", minWidth: 0 }}>
-          {/* A long trail never scrolls the panel sideways: the FIRST segment keeps its width and
-              the rest give way with an ellipsis; the whole path is the row's tooltip. */}
-          {trail.map(({ i, label: c }) => (
-            <span key={i} style={{ flex: i === 0 ? "none" : "0 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>
-              {i > 0 && <span style={{ opacity: 0.6 }}>{SEP}</span>}
-              <button style={crumbBtn} title={i === 0 ? `List ${c}` : `List ${crumbs.slice(1, i + 1).join("/")}`}
-                onClick={() => nav(i)}
-                onMouseEnter={(e) => { e.currentTarget.style.color = "var(--accent)"; }}
-                onMouseLeave={(e) => { e.currentTarget.style.color = "inherit"; }}>{c}</button>
-            </span>
-          ))}
-          {!doc && <>
-            {trail.length > 0 && <span style={{ flex: "none", opacity: 0.6 }}>{SEP}</span>}
-            <span style={{ flex: "0 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", color: "var(--t1)", fontWeight: 600 }}>{leaf}</span>
-          </>}
+        {/* ONE BREADCRUMB STYLE (guidelines §4.7): the ui-kit Breadcrumb — sans, chevron
+            separators, ancestors quiet, and the middle folded into "…" once the trail is long, so
+            it never scrolls the panel sideways. Names come from `crumbLabel` (never a number). */}
+        {!canvas && (!doc || trail.length > 0) && <div title={fullPath} data-crumb className="vx-doc-crumb">
+          <Breadcrumb label="Where this page lives" items={[
+            ...trail.map(({ i, label: c }) => ({ key: `c${i}`, label: c as string, onSelect: () => nav(i) })),
+            ...(!doc ? [{ key: "leaf", label: leaf as string }] : []),
+          ]} />
         </div>}
-        <div ref={docBox} data-doc-body style={{ ...ty.body, position: "relative", flex: 1, overflowY: canvas ? "hidden" : "auto", padding: canvas || (mode === "edit" && !listing) ? 0 : "18px 20px 40px", minHeight: 0, lineHeight: 1.6, color: "var(--t1)", display: canvas || (mode === "edit" && !listing) ? "flex" : undefined }}>
+        <div ref={docBox} data-doc-body className="vx-doc-body" data-flush={canvas || (mode === "edit" && !listing) ? "" : undefined} data-canvas={canvas ? "" : undefined}>
           {p.notice
-            ? <div data-pages-notice style={{ ...ty.body, color: "var(--t2)", lineHeight: 1.6 }}>{p.notice}</div>
+            ? <div data-pages-notice className="vx-doc-notice">{p.notice}</div>
             : canvas
             // the canvas owns its own scrolling, header and padding — it is a whole surface, not a body
             ? (MeetingCanvas
                 ? <MeetingCanvas id={`meeting:${p.docPath}`} params={{ meetingId: p.docPath }} active />
-                : <div style={{ ...ty.body, color: "var(--t3)", padding: "18px 20px" }}>The meeting surface is not registered in this build.</div>)
+                : <EmptyState>The meeting surface is not registered in this build.</EmptyState>)
             : listing
               ? <FolderListing listing={listing} onNavigate={p.onNavigate} onOpen={p.onOpen} />
               : p.body === null
-                ? <div style={{ ...ty.body, color: "var(--t3)", lineHeight: 1.6 }}>
+                ? <div className="vx-doc-empty">
                     <div>No page here yet — it appears when the conversation (or a meeting) writes one.</div>
                     {/* …or you ask for it now (decision 32.4). Same resolved slot as the header. */}
                     <CreatePageButton workspace={p.docSlug} path={p.docPath} />
@@ -411,11 +361,6 @@ export function PagesPanel(p: {
   );
 }
 
-const entryS: CSSProperties = {
-  display: "block", width: "100%", textAlign: "left", background: "transparent", border: "none",
-  padding: "4px 6px", borderRadius: 6, cursor: "pointer", fontFamily: "var(--mono)", fontSize: 12.5,
-};
-
 /** A folder, as a list of names. Directories first, then files; clicking a directory goes deeper,
  *  clicking a file opens it as a tab. Deliberately plain — this is orientation, not a file manager. */
 function FolderListing(p: { listing: Listing; onNavigate?: (slug: string | undefined, prefix: string) => void; onOpen: (pg: Page) => void }) {
@@ -427,20 +372,18 @@ function FolderListing(p: { listing: Listing; onNavigate?: (slug: string | undef
   const dirs = p.listing.dirs.filter((d) => !isMachineryEntry(prefix, d, slug));
   const files = p.listing.files.filter((f) => !isMachineryEntry(prefix, f, slug));
   if (!dirs.length && !files.length) {
-    return <div style={{ ...ty.body, color: "var(--t3)" }}>Nothing in this folder.</div>;
+    return <EmptyState>Nothing in this folder.</EmptyState>;
   }
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+    <div className="vx-listing">
       {dirs.map((d) => (
-        <button key={"d/" + d} data-entry="dir" style={{ ...entryS, color: "var(--t2)" }} onClick={() => p.onNavigate?.(slug, at(d))}
-          onMouseEnter={(e) => { e.currentTarget.style.background = surface.raised; }}
-          onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>{d}/</button>
+        <button key={"d/" + d} data-entry="dir" className="vx-row2-main vx-listing-entry" onClick={() => p.onNavigate?.(slug, at(d))}>
+          <Folder size={14} strokeWidth={1.75} aria-hidden /><span className="vx-row2-title">{d}/</span></button>
       ))}
       {files.map((f) => (
-        <button key={"f/" + f} data-entry="file" style={{ ...entryS, color: "var(--t1)" }}
-          onClick={() => p.onOpen({ path: at(f), slug, label: f.replace(/\.md$/i, "") })}
-          onMouseEnter={(e) => { e.currentTarget.style.background = surface.raised; }}
-          onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>{f}</button>
+        <button key={"f/" + f} data-entry="file" className="vx-row2-main vx-listing-entry" data-file=""
+          onClick={() => p.onOpen({ path: at(f), slug, label: f.replace(/\.md$/i, "") })}>
+          <FileText size={14} strokeWidth={1.75} aria-hidden /><span className="vx-row2-title">{f}</span></button>
       ))}
     </div>
   );

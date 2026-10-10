@@ -51,7 +51,7 @@
 import { ChatName } from "./ChatName";
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
-import { ChevronDown, PenLine } from "lucide-react";
+import { ChevronDown, PenLine, Plus, X } from "lucide-react";
 import { Fold, Menu, type MenuItem } from "../ui-kit";
 import type { Membership } from "../surfaces/workspaceApi";
 import type { Sel } from "./types";
@@ -75,16 +75,6 @@ export const focusSet = (workspaces: string[], opts: { admin?: boolean; target?:
   return opts.admin === true && opts.target === GLOBAL_MOUNT ? [...set, GLOBAL_MOUNT] : set;
 };
 
-const wsChip: CSSProperties = {
-  ...ty.mono, display: "inline-flex", alignItems: "center", gap: 2, background: surface.raised,
-  border: "1px solid var(--line)", borderRadius: 6, padding: "2px 4px 2px 8px", color: "var(--t2)", flex: "none",
-};
-/** THE TARGET, VISIBLY THE TARGET. Accent on the border and the text — the same accent the rail's
- *  selected row wears, because it answers the same question in the same glance: this is the one. */
-const targetChip: CSSProperties = {
-  ...wsChip, borderColor: "var(--accent)", color: "var(--accent)", background: "var(--accentbg)",
-};
-const xBtn: CSSProperties = { background: "transparent", border: "none", color: "var(--t3)", cursor: "pointer", fontSize: 12, lineHeight: 1, padding: "0 3px", fontFamily: "var(--sans)" };
 const menuItem: CSSProperties = {
   ...ty.chip, display: "block", width: "100%", textAlign: "left", background: "transparent",
   border: "none", borderRadius: 6, padding: "6px 8px", color: "var(--t1)", cursor: "pointer",
@@ -180,12 +170,15 @@ export function ContextBar(p: {
           // a place and refuses to open it. It opens `_global/README.md` and re-states the target.
           const isGlobal = w === GLOBAL_MOUNT;
           return (
-            <span key={w} style={isTarget ? targetChip : wsChip} data-ws={w}
+            // A WORKSPACE IS A CHIP (guidelines §4.5): sans, sentence case, radius 6; the TARGET is
+            // the selected chip — accent tint, primary text and a 2px accent bar, plus the pen icon
+            // and "Writes to", so it is never colour alone.
+            <span key={w} className="vx-chip" data-selected={isTarget ? "" : undefined} data-ws={w}
               data-target={isTarget ? "1" : undefined} aria-current={isTarget ? "true" : undefined}>
               {/* F49: this printed the workspace's SLUG — for a desk, the opaque subject id (`126`)
                   the reader has never seen. Names live in the registry precisely because slugs and
                   directories change and names are what a person reads. */}
-              <button data-ws-target={w} style={{ ...xBtn, color: "inherit", padding: 0, cursor: isTarget && !isGlobal ? "default" : "pointer", font: "inherit", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+              <button data-ws-target={w} className="vx-chip-main" data-static={isTarget && !isGlobal ? "" : undefined}
                 aria-label={isGlobal ? `Open ${COMPANY_WORD}` : isTarget ? `Writes go to ${w}` : `Write into ${w} from now on`}
                 title={isGlobal
                   ? "The company layer. Writes in this chat go here — click to open it."
@@ -196,20 +189,21 @@ export function ContextBar(p: {
                   if (isGlobal) p.onTargetGlobal?.();
                   else if (!isTarget) p.onSetTarget?.(w);
                 }}>
-                <WorkspaceName slug={w} fallback={isGlobal ? COMPANY_WORD : undefined} />
+                {isTarget && <PenLine size={14} strokeWidth={1.75} aria-hidden />}
+                <span className="vx-chip-label">{isTarget ? <>Writes to <WorkspaceName slug={w} fallback={isGlobal ? COMPANY_WORD : undefined} /></> : <WorkspaceName slug={w} fallback={isGlobal ? COMPANY_WORD : undefined} />}</span>
               </button>
               {/* `_global` has no × for the reason the desk has none: it is mounted in every chat by
                   construction, so removing it is not a thing that can happen. Aim elsewhere. */}
               {w !== DESK && !isGlobal && (
-                <button aria-label={`Remove ${w} from this chat`} title={`Remove ${w} from this chat`} style={xBtn}
-                  onClick={() => p.onRemoveWorkspace(w)}>×</button>
+                <button aria-label={`Remove ${w} from this chat`} title={`Remove ${w} from this chat`} className="vx-chip-x"
+                  onClick={() => p.onRemoveWorkspace(w)}><X size={12} strokeWidth={1.75} aria-hidden /></button>
               )}
             </span>
           );
         })}
         <button aria-label="Add a workspace to this chat" title="Add a workspace to this chat"
           onClick={() => setPicking((v) => !v)}
-          style={{ ...wsChip, padding: "2px 7px", color: "var(--t3)", cursor: "pointer", fontSize: 13, lineHeight: 1.15 }}>+</button>
+          className="vx-chip vx-chip-add" data-ghost=""><Plus size={14} strokeWidth={1.75} aria-hidden /></button>
         {picking && (
           <div role="menu" style={{ position: "absolute", top: "calc(100% + 6px)", right: 0, zIndex: 30, minWidth: 200, background: "var(--sidebar)", border: "1px solid var(--line2)", borderRadius: 10, padding: 6, boxShadow: "0 8px 24px rgba(0,0,0,.35)" }}>
             {/* THE ADMIN'S ONE EXTRA ANSWER (#1616), above the memberships because it is the one

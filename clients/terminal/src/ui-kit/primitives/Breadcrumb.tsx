@@ -24,7 +24,11 @@ export function Breadcrumb({ items, label = "Breadcrumb" }: { items: Crumb[]; la
         <Menu label={`${middle.length} more folders`} trigger="…" items={middle.map((c) => ({ key: c.key, label: c.label, onSelect: () => c.onSelect?.() }))} />{sep}
       </span>}
       {tail.map((c) => <span key={c.key} className="vx-crumb-item">{crumb(c)}{sep}</span>)}
-      {last && <span className="vx-crumb vx-crumb-current" aria-current="page">{last.label}</span>}
+      {/* The last segment is the current page — unless it can be walked to (a document's folder
+          trail ends at the folder, which is still a place to go). */}
+      {last && (last.onSelect
+        ? <span className="vx-crumb-item">{crumb(last)}</span>
+        : <span className="vx-crumb vx-crumb-current" aria-current="page">{last.label}</span>)}
     </nav>
   );
 }
