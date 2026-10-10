@@ -19,7 +19,7 @@ const BOARD: TabDescriptor = { id: "board:routines", title: "Routines", kind: "r
 function RoutinesBoardNav() {
   const nav = usePreviewPinTab<HTMLButtonElement>(BOARD);
   return (
-    <button onClick={nav.onClick} onDoubleClick={nav.onDoubleClick} style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "8px 9px", borderRadius: 7, border: "1px solid var(--line2)", background: "var(--panel)", color: "var(--t1)", fontSize: 13, cursor: "pointer", marginBottom: 8 }}>
+    <button onClick={nav.onClick} onDoubleClick={nav.onDoubleClick} className="pt-2 pr-2 pb-2 pl-2 r-md bd-strong bg-2 c-1 t-sm mb-2" style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", cursor: "pointer" }}>
       <Icon name="zap" size={14} />Routines board
     </button>
   );
@@ -28,7 +28,7 @@ function RoutinesBoardNav() {
 function RoutineNavRow({ routine }: { routine: Routine }) {
   const nav = usePreviewPinTab<HTMLDivElement>(BOARD);
   return (
-    <div onClick={nav.onClick} onDoubleClick={nav.onDoubleClick} style={{ padding: "6px 9px", borderRadius: 6, cursor: "pointer", fontSize: 12.5, color: "var(--t2)" }}>{routine.name}</div>
+    <div onClick={nav.onClick} onDoubleClick={nav.onDoubleClick} className="pt-1_5 pr-2 pb-1_5 pl-2 r-md t-xs c-2" style={{ cursor: "pointer" }}>{routine.name}</div>
   );
 }
 
@@ -65,37 +65,37 @@ function RoutinesBoard() {
   const inp: CSSProperties = { background: "var(--panel2)", border: "1px solid var(--line2)", borderRadius: 6, padding: "4px 8px", color: "var(--t1)", fontSize: 13, outline: "none", fontFamily: "inherit" };
 
   return (
-    <div style={{ height: "100%", overflowY: "auto", background: "var(--bg)" }}>
-      <div style={{ maxWidth: 760, margin: "0 auto", padding: "24px" }}>
-        <div style={{ fontSize: 18, color: "var(--t1)", fontWeight: 500, marginBottom: 4 }}>Routines</div>
-        <div style={{ fontSize: 13, color: "var(--t3)", marginBottom: 20 }}>Scheduled agents. Create one in Chat with <code style={{ fontFamily: "var(--mono)", color: "var(--accent)" }}>/routine</code>; manage them here.</div>
-        {error && <div role="alert" style={{ fontSize: 12.5, color: "var(--danger)", background: "var(--panel)", border: "1px solid var(--danger)", borderRadius: 8, padding: "8px 11px", marginBottom: 14 }}>⚠ Couldn’t load routines — {error}</div>}
+    <div className="bg-0" style={{ height: "100%", overflowY: "auto" }}>
+      <div className="mt-0 mr-auto mb-0 ml-auto p-6" style={{ maxWidth: 760 }}>
+        <div className="t-lg c-1 fw-500 mb-1">Routines</div>
+        <div className="t-sm c-3 mb-5">Scheduled agents. Create one in Chat with <code className="f-mono c-accent">/routine</code>; manage them here.</div>
+        {error && <div role="alert" className="t-xs c-danger bg-2 bd-danger r-md pt-2 pr-3 pb-2 pl-3 mb-3">⚠ Couldn’t load routines — {error}</div>}
         {routines.map((r) => (
-          <div key={r.id} style={{ border: "1px solid var(--line)", borderRadius: 12, background: "var(--panel)", padding: "14px 16px", marginBottom: 12, opacity: r.enabled ? 1 : 0.55 }}>
+          <div key={r.id} className="bd r-lg bg-2 pt-3 pr-4 pb-3 pl-4 mb-3" style={{ opacity: r.enabled ? 1 : 0.55 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
               {editing === r.id
-                ? <input style={{ ...inp, flex: 1, fontSize: 14 }} value={r.name} onChange={(e) => patch(r.id, "name", e.target.value)} />
-                : <span style={{ fontSize: 14.5, color: "var(--t1)", fontWeight: 500, flex: 1 }}>{r.name}</span>}
+                ? <input className="t-md" style={{ ...inp, flex: 1 }} value={r.name} onChange={(e) => patch(r.id, "name", e.target.value)} />
+                : <span className="t-md c-1 fw-500" style={{ flex: 1 }}>{r.name}</span>}
               <div style={sw(!!r.enabled)} onClick={() => void toggle(r)} title={r.enabled ? "Enabled" : "Disabled"}><div style={knob(!!r.enabled)} /></div>
-              <button onClick={() => setEditing(editing === r.id ? null : r.id)} title="Edit" style={{ background: "none", border: "none", color: "var(--t3)", cursor: "pointer", display: "flex" }}><Icon name="panel" size={14} /></button>
-              <button onClick={() => void del(r.id)} title="Delete" style={{ background: "none", border: "none", color: "var(--t3)", cursor: "pointer", display: "flex" }}><Icon name="x" size={14} /></button>
+              <button onClick={() => setEditing(editing === r.id ? null : r.id)} title="Edit" className="bg-none bd-none c-3" style={{ cursor: "pointer", display: "flex" }}><Icon name="panel" size={14} /></button>
+              <button onClick={() => void del(r.id)} title="Delete" className="bg-none bd-none c-3" style={{ cursor: "pointer", display: "flex" }}><Icon name="x" size={14} /></button>
             </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 9 }}>
-              <span style={{ fontSize: 11, color: "var(--t3)" }}>schedule</span>
+            <div className="mt-2" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span className="t-xs c-3">schedule</span>
               {editing === r.id
-                ? <input style={{ ...inp, fontFamily: "var(--mono)", width: 160 }} value={r.cron} onChange={(e) => patch(r.id, "cron", e.target.value)} />
-                : <span style={{ fontFamily: "var(--mono)", fontSize: 11.5, borderRadius: 5, padding: "1px 7px", background: "var(--panel2)", color: "var(--accent)" }}>{r.cron}</span>}
+                ? <input className="f-mono" style={{ ...inp, width: 160 }} value={r.cron} onChange={(e) => patch(r.id, "cron", e.target.value)} />
+                : <span className="f-mono t-xs r-md pt-0 pr-1_5 pb-0 pl-1_5 bg-3 c-accent">{r.cron}</span>}
             </div>
-            {r.plan_summary && <div style={{ fontSize: 12.5, color: "var(--t2)", marginTop: 9, lineHeight: 1.5 }}>{r.plan_summary}</div>}
+            {r.plan_summary && <div className="t-xs c-2 mt-2 lh-snug">{r.plan_summary}</div>}
             {r.pending_confirmation && (
-              <div role="status" style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10, fontSize: 12.5, color: "var(--t2)" }}>
+              <div role="status" className="mt-2 t-xs c-2" style={{ display: "flex", alignItems: "center", gap: 10 }}>
                 <span style={{ flex: 1 }}>Waiting for you — an agent wrote this routine; it will not run until you confirm it.</span>
-                <button onClick={() => void confirm(r)} style={{ border: "1px solid var(--line2)", borderRadius: 6, background: "var(--panel2)", color: "var(--t1)", fontSize: 12.5, padding: "3px 10px", cursor: "pointer" }}>Confirm</button>
+                <button onClick={() => void confirm(r)} className="bd-strong r-md bg-3 c-1 t-xs pt-0_5 pr-2 pb-0_5 pl-2" style={{ cursor: "pointer" }}>Confirm</button>
               </div>
             )}
           </div>
         ))}
-        {routines.length === 0 && <div style={{ color: "var(--t3)", fontSize: 13, padding: "20px 0" }}>No routines yet — open Chat and try <code style={{ fontFamily: "var(--mono)", color: "var(--accent)" }}>/routine</code>.</div>}
+        {routines.length === 0 && <div className="c-3 t-sm pt-5 pr-0 pb-5 pl-0">No routines yet — open Chat and try <code className="f-mono c-accent">/routine</code>.</div>}
       </div>
     </div>
   );
@@ -107,11 +107,11 @@ function RoutinesLeft() {
   const [routines, setRoutines] = useState<Routine[]>([]);
   useEffect(() => { layout.openTab(BOARD); void listRoutines().then(setRoutines).catch(() => {/* the board view surfaces the error loudly */}); }, [layout]);
   return (
-    <div style={{ padding: "8px" }}>
+    <div className="p-2">
       <RoutinesBoardNav />
-      <div style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em", padding: "6px 4px 4px" }}>scheduled agents</div>
+      <div className="t-xs c-3 pt-1_5 pr-1 pb-1 pl-1" style={{ textTransform: "uppercase", letterSpacing: ".04em" }}>scheduled agents</div>
       {routines.map((r) => <RoutineNavRow key={r.id} routine={r} />)}
-      {routines.length === 0 && <div style={{ padding: "8px 4px", color: "var(--t3)", fontSize: 12 }}>None yet — create with <code style={{ fontFamily: "var(--mono)", color: "var(--accent)" }}>/routine</code> in Chat.</div>}
+      {routines.length === 0 && <div className="pt-2 pr-1 pb-2 pl-1 c-3 t-xs">None yet — create with <code className="f-mono c-accent">/routine</code> in Chat.</div>}
     </div>
   );
 }

@@ -31,23 +31,23 @@ function TokenRow({ token, onRevoke }: { token: TokenInfo; onRevoke: (id: number
   const created = fmtDate(token.created_at);
   const expires = fmtDate(token.expires_at);
   return (
-    <div style={{ padding: "7px 9px", borderRadius: 6, display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "var(--t2)" }}>
+    <div className="pt-1_5 pr-2 pb-1_5 pl-2 r-md t-xs c-2" style={{ display: "flex", alignItems: "center", gap: 8 }}>
       <Icon name="key" size={13} />
-      <div style={{ minWidth: 0, flex: 1, lineHeight: 1.3 }}>
-        <div style={{ color: "var(--t1)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+      <div className="lh-tight" style={{ minWidth: 0, flex: 1 }}>
+        <div className="c-1" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {token.name || `token #${token.id}`}
         </div>
-        <div style={{ fontSize: 11, color: "var(--t3)" }}>
+        <div className="t-xs c-3">
           {token.scopes.map(scopeLabel).join(" · ")}{created ? ` · created ${created}` : ""}{expires ? ` · expires ${expires}` : ""}
         </div>
       </div>
       {confirming ? (
         <>
-          <button onClick={() => onRevoke(token.id)} style={{ background: "none", border: "none", color: "var(--danger)", cursor: "pointer", fontSize: 11.5, padding: 2 }}>revoke</button>
-          <button onClick={() => setConfirming(false)} style={{ background: "none", border: "none", color: "var(--t3)", cursor: "pointer", fontSize: 11.5, padding: 2 }}>keep</button>
+          <button onClick={() => onRevoke(token.id)} className="bg-none bd-none c-danger t-xs p-0_5" style={{ cursor: "pointer" }}>revoke</button>
+          <button onClick={() => setConfirming(false)} className="bg-none bd-none c-3 t-xs p-0_5" style={{ cursor: "pointer" }}>keep</button>
         </>
       ) : (
-        <button title="Revoke token" onClick={() => setConfirming(true)} style={{ background: "none", border: "none", color: "var(--t3)", cursor: "pointer", display: "flex", padding: 2 }}>
+        <button title="Revoke token" onClick={() => setConfirming(true)} className="bg-none bd-none c-3 p-0_5" style={{ cursor: "pointer", display: "flex" }}>
           <Icon name="x" size={13} />
         </button>
       )}
@@ -95,21 +95,21 @@ function CreateTokenForm({ onCreated }: { onCreated: (t: MintedToken) => void })
 
   const field = { width: "100%", fontSize: 12, padding: "5px 8px", borderRadius: 6, border: "1px solid var(--line)", background: "var(--panel2)", color: "var(--t1)" } as const;
   return (
-    <div style={{ margin: "4px 4px 10px", padding: 10, borderRadius: 8, border: "1px solid var(--line)" }}>
-      <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name (optional)" style={{ ...field, marginBottom: 8 }} />
-      <div style={{ display: "flex", gap: 10, marginBottom: 8 }}>
+    <div className="mt-1 mr-1 mb-2 ml-1 p-2 r-md bd">
+      <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name (optional)" className="mb-2" style={{ ...field }} />
+      <div className="mb-2" style={{ display: "flex", gap: 10 }}>
         {TOKEN_SCOPES.map((s) => (
-          <label key={s} title={`scope: ${s}`} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: "var(--t2)", cursor: "pointer" }}>
+          <label key={s} title={`scope: ${s}`} className="t-xs c-2" style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer" }}>
             <input type="checkbox" checked={scopes.includes(s)} onChange={() => toggle(s)} />{scopeLabel(s)}
           </label>
         ))}
       </div>
-      <select value={expiryIdx} onChange={(e) => setExpiryIdx(Number(e.target.value))} style={{ ...field, marginBottom: 8 }}>
+      <select value={expiryIdx} onChange={(e) => setExpiryIdx(Number(e.target.value))} className="mb-2" style={{ ...field }}>
         {EXPIRIES.map((e, i) => <option key={e.label} value={i}>{e.label}</option>)}
       </select>
-      {error && <div role="alert" style={{ fontSize: 11.5, color: "var(--danger)", marginBottom: 8 }}>⚠ {error}</div>}
+      {error && <div role="alert" className="t-xs c-danger mb-2">⚠ {error}</div>}
       <button onClick={() => void submit()} disabled={busy || scopes.length === 0}
-        style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, padding: "4px 10px", borderRadius: 6, border: "1px solid var(--line)", background: "var(--panel2)", color: "var(--t1)", cursor: busy || scopes.length === 0 ? "default" : "pointer", opacity: busy || scopes.length === 0 ? 0.6 : 1 }}>
+        className="t-xs pt-1 pr-2 pb-1 pl-2 r-md bd bg-3 c-1" style={{ display: "flex", alignItems: "center", gap: 5, cursor: busy || scopes.length === 0 ? "default" : "pointer", opacity: busy || scopes.length === 0 ? 0.6 : 1 }}>
         <Icon name="plus" size={12} />{busy ? "creating…" : "Create token"}
       </button>
     </div>
@@ -135,12 +135,12 @@ export function TokensPanel() {
   };
 
   return (
-    <div style={{ padding: "8px" }}>
-      {error && <div role="alert" style={{ fontSize: 12, color: "var(--danger)", padding: "6px 9px" }}>⚠ Couldn’t load tokens — {error}</div>}
+    <div className="p-2">
+      {error && <div role="alert" className="t-xs c-danger pt-1_5 pr-2 pb-1_5 pl-2">⚠ Couldn’t load tokens — {error}</div>}
       {minted && <MintedTokenCard minted={minted} onDismiss={() => setMinted(null)} />}
       <CreateTokenForm onCreated={onCreated} />
       {tokens.map((t) => <TokenRow key={t.id} token={t} onRevoke={onRevoke} />)}
-      {tokens.length === 0 && !error && <div style={{ padding: "8px 4px", color: "var(--t3)", fontSize: 12 }}>No API tokens yet.</div>}
+      {tokens.length === 0 && !error && <div className="pt-2 pr-1 pb-2 pl-1 c-3 t-xs">No API tokens yet.</div>}
     </div>
   );
 }

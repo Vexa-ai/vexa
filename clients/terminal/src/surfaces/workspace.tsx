@@ -41,16 +41,16 @@ function wikilinks(text: string, navigate?: DocNavigate | null): ReactNode[] {
     : window.dispatchEvent(new CustomEvent(OPEN_ENTITY_EVENT, { detail: { wikilink } }));
   return text.split(/(\[\[[^\]]+\]\]|\[[^\]]+\]\([^)]+\))/).map((part, i) => {
     if (part.startsWith("[[")) return <span key={i} onClick={() => open(part.slice(2, -2))}
-      style={{ color: "var(--blue)", cursor: "pointer" }}>{part}</span>;
+      className="c-info" style={{ cursor: "pointer" }}>{part}</span>;
     const md = part.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
     if (md) {
       const [, label, href] = md;
       const meeting = href.match(/[?&]meeting=([^&#]+)/);
-      if (meeting) return <span key={i} role="link" style={{ color: "var(--blue)", cursor: "pointer" }}
+      if (meeting) return <span key={i} role="link" className="c-info" style={{ cursor: "pointer" }}
         onClick={() => window.dispatchEvent(new CustomEvent(OPEN_MEETING_EVENT, { detail: { ref: decodeURIComponent(meeting[1]) } }))}>{label}</span>;
       if (/^https?:/i.test(href)) return <a key={i} href={href} target="_blank" rel="noreferrer noopener"
-        style={{ color: "var(--blue)" }}>{label}</a>;
-      return <span key={i} role="link" style={{ color: "var(--blue)", cursor: "pointer" }}
+        className="c-info">{label}</a>;
+      return <span key={i} role="link" className="c-info" style={{ cursor: "pointer" }}
         onClick={() => window.dispatchEvent(new CustomEvent(OPEN_ENTITY_EVENT, { detail: { path: href } }))}>{label}</span>;
     }
     return <span key={i}>{part}</span>;
@@ -85,13 +85,13 @@ const writeSS = (k: string, v: string) => { try { sessionStorage.setItem(k, v); 
 // A unified-diff block with +/- line highlighting — shows EXACTLY what a commit changed.
 function DiffView({ text }: { text: string }) {
   return (
-    <pre style={{ margin: "2px 0 4px 15px", padding: "6px 8px", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 6, fontSize: 11, fontFamily: "var(--mono)", overflowX: "auto", whiteSpace: "pre", lineHeight: 1.5 }}>
+    <pre className="mt-0_5 mr-0 mb-1 ml-4 pt-1_5 pr-2 pb-1_5 pl-2 bg-2 bd r-md t-xs f-mono lh-snug" style={{ overflowX: "auto", whiteSpace: "pre" }}>
       {text.split("\n").map((line, i) => {
         const h = line[0];
         const meta = line.startsWith("@@") || line.startsWith("diff ") || line.startsWith("index ") || line.startsWith("--- ") || line.startsWith("+++ ");
         const color = meta ? "var(--accent)" : h === "+" ? "var(--green)" : h === "-" ? "var(--danger)" : "var(--t3)";
         const bg = !meta && h === "+" ? "color-mix(in srgb, var(--green) 14%, transparent)" : !meta && h === "-" ? "color-mix(in srgb, var(--danger) 14%, transparent)" : "transparent";
-        return <div key={i} style={{ color, background: bg, padding: "0 3px" }}>{line || " "}</div>;
+        return <div key={i} className="pt-0 pr-0_5 pb-0 pl-0_5" style={{ color, background: bg }}>{line || " "}</div>;
       })}
     </pre>
   );
@@ -103,25 +103,25 @@ function CommitRow({ c, wsLabel, onOpen }: { c: GitCommit; wsLabel?: string; onO
   const who = kind === "you" ? "you" : kind === "system" ? "system" : (c.author || "member");
   const whoColor = isMember ? "var(--accent)" : "var(--t3)";
   return (
-    <div style={{ padding: "4px 9px", fontSize: 12 }}>
-      <div style={{ color: "var(--t1)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{c.msg}</div>
-      <div style={{ fontSize: 11, color: "var(--t3)", display: "flex", gap: 8, alignItems: "center" }}>
+    <div className="pt-1 pr-2 pb-1 pl-2 t-xs">
+      <div className="c-1" style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{c.msg}</div>
+      <div className="t-xs c-3" style={{ display: "flex", gap: 8, alignItems: "center" }}>
         <span title={isMember ? `edited by ${c.author}` : undefined} style={{ display: "inline-flex", alignItems: "center", gap: 3, color: whoColor, fontWeight: isMember ? 600 : 400, maxWidth: "55%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {isMember && <Icon name="user" size={11} />}{who}
         </span>
-        <span style={{ fontFamily: "var(--mono)", color: "var(--green)", flex: "none" }}>{c.sha}</span>
+        <span className="f-mono c-success" style={{ flex: "none" }}>{c.sha}</span>
         <span style={{ flex: "none" }}>{c.when}</span>
-        {wsLabel && <span title={`in ${wsLabel}`} style={{ marginLeft: "auto", color: "var(--accent)", fontSize: 10, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "40%", textTransform: "uppercase", letterSpacing: ".03em" }}>{wsLabel}</span>}
+        {wsLabel && <span title={`in ${wsLabel}`} className="ml-auto c-accent t-xs" style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "40%", textTransform: "uppercase", letterSpacing: ".03em" }}>{wsLabel}</span>}
       </div>
       {/* the files this commit touched — clickable links that OPEN the file (its exact diff is one click
           away in the doc header's "Changes"). */}
       {onOpen && (c.files?.length ?? 0) > 0 && (
-        <div style={{ marginTop: 2, display: "flex", flexDirection: "column", gap: 1 }}>
+        <div className="mt-0_5" style={{ display: "flex", flexDirection: "column", gap: 1 }}>
           {c.files!.map((f) => (
             <div key={f} onClick={() => onOpen(f)} title={`Open ${f}`}
               onMouseEnter={(e) => (e.currentTarget.style.color = "var(--accent)")}
               onMouseLeave={(e) => (e.currentTarget.style.color = "var(--t2)")}
-              style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer", fontSize: 11.5, color: "var(--t2)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              className="t-xs c-2" style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
               <Icon name="file" size={11} style={{ color: "var(--t3)", flex: "none" }} />
               <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{f}</span>
             </div>
@@ -168,7 +168,7 @@ function TreeRow({ node, depth, expanded, toggle, openFile, pinFile, openMenu }:
         onDoubleClick={() => pinFile(node.path)}
         onContextMenu={(e) => openMenu(e, node.path)}
         {...hover}
-        style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 9px", paddingLeft: pad + 14, borderRadius: 6, cursor: "pointer", fontSize: 12.5, color: "var(--t2)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+        className="pt-1 pr-2 pb-1 pl-2 r-md t-xs c-2" style={{ display: "flex", alignItems: "center", gap: 6, paddingLeft: pad + 14, cursor: "pointer", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
         <Icon name="file" size={13} style={{ color: "var(--t3)" }} />
         <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{node.name}</span>
       </div>
@@ -178,7 +178,7 @@ function TreeRow({ node, depth, expanded, toggle, openFile, pinFile, openMenu }:
   return (
     <>
       <div data-tree-path={node.path} onClick={() => toggle(node.path)} {...hover}
-        style={{ display: "flex", alignItems: "center", gap: 4, padding: "4px 9px", paddingLeft: pad, borderRadius: 6, cursor: "pointer", fontSize: 12.5, color: "var(--t1)" }}>
+        className="pt-1 pr-2 pb-1 pl-2 r-md t-xs c-1" style={{ display: "flex", alignItems: "center", gap: 4, paddingLeft: pad, cursor: "pointer" }}>
         <Icon name="chevR" size={13} style={{ color: "var(--t3)", transform: open ? "rotate(90deg)" : "none", transition: "transform .12s" }} />
         <Icon name="folder" size={13} style={{ color: "var(--accent)" }} />
         <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{node.name}</span>
@@ -227,24 +227,23 @@ function MountSection({ mount }: { mount: ActiveMount }) {
   const openDoc = (p: string) => layout.openPreview(docTab(p, mount.slug));
   const pinDoc = (p: string) => layout.openTab(docTab(p, mount.slug));
   return (
-    <div style={{ marginTop: 2 }}>
+    <div className="mt-0_5">
       <div onClick={() => setOpen((v) => !v)} title="Shared workspace — read-only"
-        style={{ display: "flex", alignItems: "center", gap: 5, padding: "6px 8px", cursor: "pointer",
-          fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em" }}>
+        className="pt-1_5 pr-2 pb-1_5 pl-2 t-xs c-3" style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer", textTransform: "uppercase", letterSpacing: ".04em" }}>
         <Icon name="chevR" size={12} style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform .12s" }} />
         <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{mount.name || mount.slug}</span>
         {mount.role === "shared" && (
           <span title={mount.write ? "Shared · read-write" : "Shared · read-only"}
-            style={{ marginLeft: "auto", display: "flex", alignItems: "center", color: mount.write ? "var(--accent)" : "var(--t3)" }}>
+            className="ml-auto" style={{ display: "flex", alignItems: "center", color: mount.write ? "var(--accent)" : "var(--t3)" }}>
             <Icon name={mount.write ? "user" : "eye"} size={12} />
           </span>
         )}
       </div>
       {open && (<>
-        {error && <div role="alert" style={{ margin: "0 8px 6px", fontSize: 11.5, color: "var(--danger)" }}>⚠ {error}</div>}
+        {error && <div role="alert" className="mt-0 mr-2 mb-1_5 ml-2 t-xs c-danger">⚠ {error}</div>}
         {nodes.map((n) => <TreeRow key={n.path} node={n} depth={0} expanded={expanded} toggle={toggleDir}
           openFile={openDoc} pinFile={pinDoc} openMenu={() => {}} />)}
-        {!error && tree.length === 0 && <div style={{ padding: "3px 12px", color: "var(--t3)", fontSize: 12 }}>Empty.</div>}
+        {!error && tree.length === 0 && <div className="pt-0_5 pr-3 pb-0_5 pl-3 c-3 t-xs">Empty.</div>}
         {/* No per-workspace activity strip — all members' pushes surface in the ONE aggregated RECENT
             ACTIVITY feed (GitSection) + the "new updates" badge on the Knowledge nav. */}
       </>)}
@@ -400,18 +399,18 @@ export function FilesList() {  // exported for the surface test
     : [];
   const homeLabel = homeMount ? (homeMount.name || (homeMount.slug === "seed" ? "Personal" : homeMount.slug)) : null;
   return (
-    <div style={{ padding: "6px 8px" }}>
+    <div className="pt-1_5 pr-2 pb-1_5 pl-2">
       {/* WORKSPACES FIRST — the top-level object of Knowledge; the file tree recedes below. */}
       <WorkspaceSwitcher onSwapped={() => setReloadKey((k) => k + 1)} />
-      <div style={{ marginTop: 14, borderTop: "1px solid var(--line)", paddingTop: 8 }} />
-      <div style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em", padding: "2px 8px 6px", display: "flex", alignItems: "center", gap: 6 }}>
+      <div className="mt-3 bd-t pt-2" />
+      <div className="t-xs c-3 pt-0_5 pr-2 pb-1_5 pl-2" style={{ textTransform: "uppercase", letterSpacing: ".04em", display: "flex", alignItems: "center", gap: 6 }}>
         <span onClick={toggleFiles} title={filesOpen ? "Collapse the file tree" : "Browse the workspace files"}
           style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer", minWidth: 0 }}>
           <Icon name="chevR" size={12} style={{ transform: filesOpen ? "rotate(90deg)" : "none", transition: "transform .12s", flex: "none" }} />
           <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{minutesOnly() ? (homeLabel ? `in ${homeLabel}` : "documents") : `files${homeLabel ? ` · ${homeLabel}` : ""}`}</span>
         </span>
         <span onClick={() => setReloadKey((k) => k + 1)} title="Refresh the file list"
-          style={{ marginLeft: "auto", display: "flex", cursor: "pointer", color: "var(--t3)" }}>
+          className="ml-auto c-3" style={{ display: "flex", cursor: "pointer" }}>
           <Icon name="refresh" size={13} />
         </span>
         <span onClick={toggleKgOnly} title={kgOnly ? "Show all workspace files" : "Show only the knowledge graph"}
@@ -424,7 +423,7 @@ export function FilesList() {  // exported for the surface test
           <Icon name="key" size={13} />
         </span>
       </div>
-      <div style={{ padding: "0 4px 8px", position: "relative" }}>
+      <div className="pt-0 pr-1 pb-2 pl-1" style={{ position: "relative" }}>
         <Icon name="search" size={12} style={{ position: "absolute", left: 13, top: 8, color: "var(--t3)", pointerEvents: "none" }} />
         <input
           value={query}
@@ -435,26 +434,26 @@ export function FilesList() {  // exported for the surface test
           }}
           placeholder={minutesOnly() ? "Search this group…" : "Find file…"}
           spellCheck={false}
-          style={{ width: "100%", boxSizing: "border-box", fontSize: 12.5, padding: "5px 8px 5px 26px", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 7, color: "var(--t1)", outline: "none" }}
+          className="t-xs pt-1 pr-2 pb-1 pl-6 bg-2 bd r-md c-1" style={{ width: "100%", boxSizing: "border-box", outline: "none" }}
         />
       </div>
-      {error && <div role="alert" style={{ margin: "0 8px 8px", fontSize: 12, color: "var(--danger)", background: "var(--panel)", border: "1px solid var(--danger)", borderRadius: 8, padding: "8px 10px" }}>⚠ Couldn’t load the workspace — {error}</div>}
+      {error && <div role="alert" className="mt-0 mr-2 mb-2 ml-2 t-xs c-danger bg-2 bd-danger r-md pt-2 pr-2 pb-2 pl-2">⚠ Couldn’t load the workspace — {error}</div>}
       {q ? (<>
         {matches.map((h) => (
           <div key={(h.slug || "") + ":" + h.p} onClick={() => layout.openPreview(docTab(h.p, h.slug))} onDoubleClick={() => layout.openTab(docTab(h.p, h.slug))} onContextMenu={(e) => openMenu(e, h.p)}
             onMouseEnter={(e) => (e.currentTarget.style.background = "var(--panel2)")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-            style={{ padding: "4px 9px", borderRadius: 6, cursor: "pointer", fontSize: 12.5, display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+            className="pt-1 pr-2 pb-1 pl-2 r-md t-xs" style={{ cursor: "pointer", display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
             <Icon name="file" size={13} style={{ color: "var(--t3)", flex: "none" }} />
-            <span style={{ color: "var(--t1)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", flex: "none", maxWidth: h.ws ? "45%" : "60%" }}>{base(h.p)}</span>
-            <span style={{ color: "var(--t3)", fontSize: 11, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", direction: "rtl", flex: 1, minWidth: 0 }}>{h.p.slice(0, -base(h.p).length).replace(/\/$/, "")}</span>
-            {h.ws && <span title={`in shared workspace ${h.ws}`} style={{ flex: "none", color: "var(--accent)", fontSize: 10, whiteSpace: "nowrap", textTransform: "uppercase", letterSpacing: ".03em" }}>{h.ws}</span>}
+            <span className="c-1" style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", flex: "none", maxWidth: h.ws ? "45%" : "60%" }}>{base(h.p)}</span>
+            <span className="c-3 t-xs" style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", direction: "rtl", flex: 1, minWidth: 0 }}>{h.p.slice(0, -base(h.p).length).replace(/\/$/, "")}</span>
+            {h.ws && <span title={`in shared workspace ${h.ws}`} className="c-accent t-xs" style={{ flex: "none", whiteSpace: "nowrap", textTransform: "uppercase", letterSpacing: ".03em" }}>{h.ws}</span>}
           </div>
         ))}
-        {matches.length === 0 && <div style={{ padding: 8, color: "var(--t3)", fontSize: 12 }}>No files match “{query.trim()}”.</div>}
+        {matches.length === 0 && <div className="p-2 c-3 t-xs">No files match “{query.trim()}”.</div>}
       </>) : filesOpen ? (<>
         {nodes.map((n) => <TreeRow key={n.path} node={n} depth={0} expanded={expanded} toggle={toggle} openFile={(p) => layout.openPreview(docTab(p, homeMount?.slug))} pinFile={(p) => layout.openTab(docTab(p, homeMount?.slug))} openMenu={openMenu} />)}
-        {!error && homeMount === null && <div style={{ padding: 8, color: "var(--t3)", fontSize: 12 }}>No active workspace — turn one on in Workspaces above.</div>}
-        {!error && hasHome && tree.length === 0 && <div style={{ padding: 8, color: "var(--t3)", fontSize: 12 }}>Empty — ask the agent in Chat to record something.</div>}
+        {!error && homeMount === null && <div className="p-2 c-3 t-xs">No active workspace — turn one on in Workspaces above.</div>}
+        {!error && hasHome && tree.length === 0 && <div className="p-2 c-3 t-xs">Empty — ask the agent in Chat to record something.</div>}
       </>) : null}
       {menu && (
         <ContextMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)} items={[
@@ -719,14 +718,14 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
     .toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "vexa-workspace";
 
   return (
-    <div style={{ paddingTop: 2 }}>
-      <div onClick={toggle} style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em", padding: "2px 8px 6px", display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+    <div className="pt-0_5">
+      <div onClick={toggle} className="t-xs c-3 pt-0_5 pr-2 pb-1_5 pl-2" style={{ textTransform: "uppercase", letterSpacing: ".04em", display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
         <Icon name="chevR" size={12} style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform .12s" }} />
         <Icon name="folder" size={12} />{minutesOnly() ? "groups" : "workspaces"}
       </div>
       {open && (<>
         {assignUid && (
-          <div role="status" style={{ margin: "2px 8px 6px", padding: "6px 9px", fontSize: 12, border: "1px solid var(--accent)", borderRadius: 6, color: "var(--t1)" }}>
+          <div role="status" className="mt-0_5 mr-2 mb-1_5 ml-2 pt-1_5 pr-2 pb-1_5 pl-2 t-xs bd-accent r-md c-1">
             <b>Assign {assignTitle ? `“${assignTitle}”` : "this meeting"} to a group</b> — click
             the group below that should own it (and its series, if recurring).{" "}
             <a onClick={(e) => { e.preventDefault(); try { localStorage.removeItem("vexa.assignMeeting"); localStorage.removeItem("vexa.assignMeetingTitle"); } catch { /* ignore */ } setAssignUid(null); }}
@@ -734,11 +733,11 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
           </div>
         )}
         {assignDone && (
-          <div role="status" style={{ margin: "2px 8px 6px", padding: "6px 9px", fontSize: 12, border: "1px solid var(--success)", borderRadius: 6, color: "var(--t1)" }}>
+          <div role="status" className="mt-0_5 mr-2 mb-1_5 ml-2 pt-1_5 pr-2 pb-1_5 pl-2 t-xs r-md c-1" style={{ border: "1px solid var(--success)" }}>
             Assigned to <b>{assignDone}</b>. The group's minutes for this meeting are on their way.
           </div>
         )}
-        {err && <div role="alert" style={{ padding: "2px 9px", fontSize: 12, color: "var(--danger)" }}>⚠ {err}</div>}
+        {err && <div role="alert" className="pt-0_5 pr-2 pb-0_5 pl-2 t-xs c-danger">⚠ {err}</div>}
         {slots.map(([slug, meta]) => {
           // The per-row toggle is a CHECKBOX reflecting ACTIVE-SET membership (WP-A2.1): CHECKED = MOUNTED
           // into the agent turn, UNCHECKED = AVAILABLE (parked, check to mount). Multiple rows can be checked
@@ -751,7 +750,7 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
           const toggleTitle = mounted ? "Mounted into the agent — uncheck to unmount (park)" : "Available — check to mount into the agent";
           return (
             <div key={slug}
-              style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 9px", borderRadius: 6, fontSize: 12, opacity: busy ? 0.6 : 1 }}
+              className="pt-1 pr-2 pb-1 pl-2 r-md t-xs" style={{ display: "flex", alignItems: "center", gap: 6, opacity: busy ? 0.6 : 1 }}
               onMouseEnter={(e) => { if (!isRenaming) e.currentTarget.style.background = "var(--panel2)"; }} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
               {minutesOnly() ? (
                 <span role="radio" aria-checked={mounted} tabIndex={0}
@@ -759,9 +758,7 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
                   onKeyDown={(e) => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); void selectRoom(slug, mounted); } }}
                   title={mounted ? `${display} — the group you are in` : `Open ${display}`}
                   aria-label={`${display} — ${mounted ? "the group you are in" : "open this group"}`}
-                  style={{ width: 14, height: 14, borderRadius: "50%", flex: "none", cursor: busy ? "default" : "pointer",
-                    border: `1.5px solid ${mounted ? "var(--accent)" : "var(--line2)"}`,
-                    background: mounted ? "var(--accent)" : "transparent", boxShadow: mounted ? "inset 0 0 0 2.5px var(--sidebar)" : "none" }} />
+                  className="r-full" style={{ width: 14, height: 14, flex: "none", cursor: busy ? "default" : "pointer", border: `1.5px solid ${mounted ? "var(--accent)" : "var(--line2)"}`, background: mounted ? "var(--accent)" : "transparent", boxShadow: mounted ? "inset 0 0 0 2.5px var(--sidebar)" : "none" }} />
               ) : (
                 <Checkbox checked={mounted} disabled={busy}
                   onChange={() => void toggleActive(slug, mounted)}
@@ -771,7 +768,7 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
                 <input autoFocus defaultValue={meta.name ?? ""} placeholder="display name" disabled={busy}
                   onKeyDown={(e) => { if (e.key === "Enter") { cancelled.current = false; e.currentTarget.blur(); } else if (e.key === "Escape") { cancelled.current = true; e.currentTarget.blur(); } }}
                   onBlur={(e) => { if (cancelled.current) { cancelled.current = false; setRenaming(null); } else { void doRename(slug, e.currentTarget.value); } }}
-                  style={{ flex: 1, fontSize: 12, padding: "3px 6px", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 5, color: "var(--t1)" }} />
+                  className="t-xs pt-0_5 pr-1_5 pb-0_5 pl-1_5 bg-2 bd r-md c-1" style={{ flex: 1 }} />
               ) : (
                 <span onClick={() => assignUid ? void selectRoom(slug, false) : (!busy && openManage(slug, { name: display }))}
                   title="Open the manage panel (rename · on/off · GitHub · purpose · participants)"
@@ -791,7 +788,7 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
           const mounted = activeSet.some((m) => m.role === "shared" && m.slug === wsId);
           return (
             <div key={`shared:${wsId}`}
-              style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 9px", borderRadius: 6, fontSize: 12, opacity: busy ? 0.6 : 1 }}
+              className="pt-1 pr-2 pb-1 pl-2 r-md t-xs" style={{ display: "flex", alignItems: "center", gap: 6, opacity: busy ? 0.6 : 1 }}
               onMouseEnter={(e) => (e.currentTarget.style.background = "var(--panel2)")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
               {minutesOnly() ? (
                 <span role="radio" aria-checked={mounted} tabIndex={0}
@@ -799,9 +796,7 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
                   onKeyDown={(e) => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); void selectShared(wsId, mounted); } }}
                   title={mounted ? `${wsId} — the group you are in` : `Open ${wsId}`}
                   aria-label={`${wsId} — shared group, ${mem.role}${mounted ? ", the group you are in" : ""}`}
-                  style={{ width: 14, height: 14, borderRadius: "50%", flex: "none", cursor: busy ? "default" : "pointer",
-                    border: `1.5px solid ${mounted ? "var(--accent)" : "var(--line2)"}`,
-                    background: mounted ? "var(--accent)" : "transparent", boxShadow: mounted ? "inset 0 0 0 2.5px var(--sidebar)" : "none" }} />
+                  className="r-full" style={{ width: 14, height: 14, flex: "none", cursor: busy ? "default" : "pointer", border: `1.5px solid ${mounted ? "var(--accent)" : "var(--line2)"}`, background: mounted ? "var(--accent)" : "transparent", boxShadow: mounted ? "inset 0 0 0 2.5px var(--sidebar)" : "none" }} />
               ) : (
                 <Checkbox checked={mounted} disabled={busy}
                   onChange={() => void toggleShared(wsId, !mounted)}
@@ -814,7 +809,7 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
               {minutesOnly() && mem.role === "owner" && (
                 <span onClick={(e) => { e.stopPropagation(); setConfirmDelete({ slug: wsId, display: wsId }); }}
                   title="Remove this group…" aria-label={`Remove ${wsId}`}
-                  style={{ display: "flex", cursor: "pointer", color: "var(--t3)", padding: "0 2px" }}
+                  className="c-3 pt-0 pr-0_5 pb-0 pl-0_5" style={{ display: "flex", cursor: "pointer" }}
                   onMouseEnter={(ev) => (ev.currentTarget.style.color = "var(--danger)")}
                   onMouseLeave={(ev) => (ev.currentTarget.style.color = "var(--t3)")}>
                   <Icon name="x" size={12} />
@@ -827,7 +822,7 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
         })}
         {/* Attach repo is a LIST-LEVEL action; the FORM opens in a modal (portaled overlay) rather than
             expanding inline in the sidebar — see the Modal block below. */}
-        <div onClick={() => setForm({ repo: "", ref: "", token: "" })} style={{ padding: "5px 9px", fontSize: 12, color: "var(--accent)", cursor: "pointer", display: minutesOnly() ? "none" : "flex", alignItems: "center", gap: 6 }}>
+        <div onClick={() => setForm({ repo: "", ref: "", token: "" })} className="pt-1 pr-2 pb-1 pl-2 t-xs c-accent" style={{ cursor: "pointer", display: minutesOnly() ? "none" : "flex", alignItems: "center", gap: 6 }}>
           <Icon name="plus" size={12} /> Attach repo…
         </div>
         {/* MINUTES — room creation is a proactive conversation (roomOnboarding.tsx): the assistant
@@ -841,15 +836,15 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
         {confirmDelete !== null && minutesOnly() && (
           <Modal title="Remove this group?" onClose={() => setConfirmDelete(null)}>
             <div style={{ display: "flex", flexDirection: "column" }}>
-              <p style={{ fontSize: 13, color: "var(--t2)", margin: 0, lineHeight: 1.6 }}>
-                <b style={{ color: "var(--t1)" }}>{confirmDelete.display}</b> and everything it knows will be removed. Its members stop receiving extracts. Meetings already held keep their records.
+              <p className="t-sm c-2 m-0 lh-normal">
+                <b className="c-1">{confirmDelete.display}</b> and everything it knows will be removed. Its members stop receiving extracts. Meetings already held keep their records.
               </p>
-              <p style={{ fontSize: 12, color: "var(--t3)", margin: "9px 0 0", lineHeight: 1.55 }}>This cannot be undone.</p>
-              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
+              <p className="t-xs c-3 mt-2 mr-0 mb-0 ml-0 lh-normal">This cannot be undone.</p>
+              <div className="mt-4" style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
                 <button disabled={busy} onClick={() => setConfirmDelete(null)}
-                  style={{ fontSize: 13, padding: "8px 16px", background: "transparent", color: "var(--t2)", border: "1px solid var(--line)", borderRadius: 8, cursor: "pointer" }}>Keep it</button>
+                  className="t-sm pt-2 pr-4 pb-2 pl-4 bg-none c-2 bd r-md" style={{ cursor: "pointer" }}>Keep it</button>
                 <button disabled={busy} onClick={() => void doDeleteRoom(confirmDelete.slug)}
-                  style={{ fontSize: 13, padding: "8px 16px", background: "var(--danger)", color: "var(--bg)", border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 600 }}>
+                  className="t-sm pt-2 pr-4 pb-2 pl-4 bg-danger bd-none r-md fw-600" style={{ color: "var(--bg)", cursor: "pointer" }}>
                   {busy ? "Removing…" : "Remove group"}</button>
               </div>
             </div>
@@ -871,10 +866,10 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
                   <input type="password" value={form.token} placeholder="access token (optional, for private repos)" disabled={busy}
                     onChange={(e) => setForm({ ...form, token: e.target.value })}
                     onKeyDown={(e) => { if (e.key === "Enter") submit(); }} style={field} />
-                  <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+                  <div className="mt-1" style={{ display: "flex", gap: 8 }}>
                     <button disabled={busy || !form.repo.trim()} onClick={submit}
-                      style={{ fontSize: 13, padding: "8px 16px", background: "var(--accent)", color: "var(--on-accent)", border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 600, opacity: busy || !form.repo.trim() ? 0.5 : 1 }}>{busy ? "Attaching…" : "Attach"}</button>
-                    <button disabled={busy} onClick={() => setForm(null)} style={{ fontSize: 13, padding: "8px 16px", background: "transparent", color: "var(--t2)", border: "1px solid var(--line)", borderRadius: 8, cursor: "pointer" }}>Cancel</button>
+                      className="t-sm pt-2 pr-4 pb-2 pl-4 bg-accent c-on-accent bd-none r-md fw-600" style={{ cursor: "pointer", opacity: busy || !form.repo.trim() ? 0.5 : 1 }}>{busy ? "Attaching…" : "Attach"}</button>
+                    <button disabled={busy} onClick={() => setForm(null)} className="t-sm pt-2 pr-4 pb-2 pl-4 bg-none c-2 bd r-md" style={{ cursor: "pointer" }}>Cancel</button>
                   </div>
                 </div>
               );
@@ -890,49 +885,49 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
           title={minutesOnly()
             ? "New group — name it, say who belongs, then it is created"
             : "New workspace — create a blank workspace and add it to your set (nothing is replaced)"}
-          style={{ padding: "5px 9px", fontSize: 12, color: "var(--accent)", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, opacity: busy ? 0.6 : 1 }}>
+          className="pt-1 pr-2 pb-1 pl-2 t-xs c-accent" style={{ cursor: "pointer", display: "flex", alignItems: "center", gap: 6, opacity: busy ? 0.6 : 1 }}>
           <Icon name="plus" size={12} /> {minutesOnly() ? "New group…" : "New workspace…"}
         </div>
         {/* SHARE dialog — mint an invite link (open/restricted · role · TTL) and copy it. */}
         {share !== null && (
-          <div style={{ padding: "8px 9px", display: "flex", flexDirection: "column", gap: 7, borderTop: "1px solid var(--line)", marginTop: 4 }}>
-            <div style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em" }}>Share “{share.wsId}”</div>
+          <div className="pt-2 pr-2 pb-2 pl-2 bd-t mt-1" style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+            <div className="t-xs c-3" style={{ textTransform: "uppercase", letterSpacing: ".04em" }}>Share “{share.wsId}”</div>
             <div style={{ display: "flex", gap: 6 }}>
               <select value={share.role} disabled={busy} onChange={(e) => setShare({ ...share, role: e.target.value, link: null })}
-                style={{ flex: 1, fontSize: 12, padding: "4px 6px", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 6, color: "var(--t1)" }}>
+                className="t-xs pt-1 pr-1_5 pb-1 pl-1_5 bg-2 bd r-md c-1" style={{ flex: 1 }}>
                 <option value="viewer">viewer (read)</option>
                 <option value="contributor">contributor (read+write)</option>
               </select>
               <select value={share.mode} disabled={busy} onChange={(e) => setShare({ ...share, mode: e.target.value, link: null })}
-                style={{ flex: 1, fontSize: 12, padding: "4px 6px", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 6, color: "var(--t1)" }}>
+                className="t-xs pt-1 pr-1_5 pb-1 pl-1_5 bg-2 bd r-md c-1" style={{ flex: 1 }}>
                 <option value="open">anyone with link</option>
                 <option value="restricted">restricted (emails)</option>
               </select>
               <select value={share.ttlDays} disabled={busy} onChange={(e) => setShare({ ...share, ttlDays: Number(e.target.value), link: null })}
-                style={{ fontSize: 12, padding: "4px 6px", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 6, color: "var(--t1)" }}>
+                className="t-xs pt-1 pr-1_5 pb-1 pl-1_5 bg-2 bd r-md c-1">
                 <option value={1}>1 day</option><option value={7}>7 days</option><option value={30}>30 days</option>
               </select>
             </div>
             {share.mode === "restricted" && (
               <input value={share.emails} placeholder="allowed emails (comma-separated)" disabled={busy}
                 onChange={(e) => setShare({ ...share, emails: e.target.value, link: null })}
-                style={{ fontSize: 12, padding: "5px 7px", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 6, color: "var(--t1)" }} />
+                className="t-xs pt-1 pr-1_5 pb-1 pl-1_5 bg-2 bd r-md c-1" />
             )}
             {share.link ? (
               <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                 <input readOnly value={share.link} onFocus={(e) => e.currentTarget.select()}
-                  style={{ flex: 1, fontSize: 11.5, padding: "5px 7px", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 6, color: "var(--t2)" }} />
+                  className="t-xs pt-1 pr-1_5 pb-1 pl-1_5 bg-2 bd r-md c-2" style={{ flex: 1 }} />
                 <button onClick={() => void copyText(share.link!)}
-                  style={{ fontSize: 12, padding: "4px 10px", background: "var(--accent)", color: "var(--bg)", border: "none", borderRadius: 6, cursor: "pointer" }}>Copy</button>
+                  className="t-xs pt-1 pr-2 pb-1 pl-2 bg-accent bd-none r-md" style={{ color: "var(--bg)", cursor: "pointer" }}>Copy</button>
               </div>
             ) : (
               <div style={{ display: "flex", gap: 8 }}>
                 <button disabled={busy} onClick={() => void doMintLink(share)}
-                  style={{ fontSize: 12, padding: "4px 10px", background: "var(--accent)", color: "var(--bg)", border: "none", borderRadius: 6, cursor: "pointer", opacity: busy ? 0.5 : 1 }}>{busy ? "Creating…" : "Create link"}</button>
-                <button disabled={busy} onClick={() => setShare(null)} style={{ fontSize: 12, padding: "4px 10px", background: "transparent", color: "var(--t2)", border: "1px solid var(--line)", borderRadius: 6, cursor: "pointer" }}>Cancel</button>
+                  className="t-xs pt-1 pr-2 pb-1 pl-2 bg-accent bd-none r-md" style={{ color: "var(--bg)", cursor: "pointer", opacity: busy ? 0.5 : 1 }}>{busy ? "Creating…" : "Create link"}</button>
+                <button disabled={busy} onClick={() => setShare(null)} className="t-xs pt-1 pr-2 pb-1 pl-2 bg-none c-2 bd r-md" style={{ cursor: "pointer" }}>Cancel</button>
               </div>
             )}
-            {share.link && <div onClick={() => setShare(null)} style={{ fontSize: 11, color: "var(--t3)", cursor: "pointer", alignSelf: "flex-end" }}>Done</div>}
+            {share.link && <div onClick={() => setShare(null)} className="t-xs c-3" style={{ cursor: "pointer", alignSelf: "flex-end" }}>Done</div>}
           </div>
         )}
         {/* Publish / push-updates form — opened from the ACTIVE row's ↑ action (no list-level trigger:
@@ -943,53 +938,53 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
           const ready = !!pubForm.token.trim() && (pushMode || !!pubForm.name.trim());
           const onKey = (e: React.KeyboardEvent) => { if (e.key === "Enter" && ready) void doPublish(pubForm); if (e.key === "Escape") setPubForm(null); };
           return (
-            <div style={{ padding: "6px 9px", display: "flex", flexDirection: "column", gap: 6 }}>
+            <div className="pt-1_5 pr-2 pb-1_5 pl-2" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
               {pushMode ? (
-                <div title={pubForm.remoteUrl} style={{ fontSize: 12, color: "var(--t2)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                <div title={pubForm.remoteUrl} className="t-xs c-2" style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                   push updates → {pubForm.remoteUrl}
                 </div>
               ) : (<>
                 <input autoFocus value={pubForm.name} placeholder="repo name" disabled={busy}
                   onChange={(e) => setPubForm({ ...pubForm, name: e.target.value })} onKeyDown={onKey}
-                  style={{ fontSize: 12, padding: "5px 7px", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 6, color: "var(--t1)" }} />
-                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--t2)", cursor: "pointer" }}>
+                  className="t-xs pt-1 pr-1_5 pb-1 pl-1_5 bg-2 bd r-md c-1" />
+                <label className="t-xs c-2" style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
                   <input type="checkbox" checked={pubForm.priv} disabled={busy} onChange={(e) => setPubForm({ ...pubForm, priv: e.target.checked })} />
                   private repo
                 </label>
               </>)}
               <input autoFocus={pushMode} type="password" value={pubForm.token} placeholder="GitHub token (repo scope — used once, never stored)" disabled={busy}
                 onChange={(e) => setPubForm({ ...pubForm, token: e.target.value })} onKeyDown={onKey}
-                style={{ fontSize: 12, padding: "5px 7px", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 6, color: "var(--t1)" }} />
+                className="t-xs pt-1 pr-1_5 pb-1 pl-1_5 bg-2 bd r-md c-1" />
               <div style={{ display: "flex", gap: 8 }}>
                 <button disabled={busy || !ready} onClick={() => void doPublish(pubForm)}
-                  style={{ fontSize: 12, padding: "4px 10px", background: "var(--accent)", color: "var(--bg)", border: "none", borderRadius: 6, cursor: "pointer", opacity: busy || !ready ? 0.5 : 1 }}>
+                  className="t-xs pt-1 pr-2 pb-1 pl-2 bg-accent bd-none r-md" style={{ color: "var(--bg)", cursor: "pointer", opacity: busy || !ready ? 0.5 : 1 }}>
                   {busy ? (pushMode ? "Pushing…" : "Publishing…") : (pushMode ? "Push updates" : "Publish")}
                 </button>
-                <button disabled={busy} onClick={() => setPubForm(null)} style={{ fontSize: 12, padding: "4px 10px", background: "transparent", color: "var(--t2)", border: "1px solid var(--line)", borderRadius: 6, cursor: "pointer" }}>Cancel</button>
+                <button disabled={busy} onClick={() => setPubForm(null)} className="t-xs pt-1 pr-2 pb-1 pl-2 bg-none c-2 bd r-md" style={{ cursor: "pointer" }}>Cancel</button>
               </div>
             </div>
           );
         })()}
         {published && (
-          <div style={{ padding: "4px 9px", fontSize: 12, color: "var(--t2)", display: "flex", alignItems: "center", gap: 6 }}>
-            <span style={{ color: "var(--green)" }}>✓</span> published →&nbsp;
-            <a href={published.repo_url} target="_blank" rel="noreferrer" style={{ color: "var(--accent)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{published.repo_url}</a>
+          <div className="pt-1 pr-2 pb-1 pl-2 t-xs c-2" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span className="c-success">✓</span> published →&nbsp;
+            <a href={published.repo_url} target="_blank" rel="noreferrer" className="c-accent" style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{published.repo_url}</a>
           </div>
         )}
         {/* Archived workspaces — collapsed group; the data is kept, restore to bring them back. */}
         {archivedSlots.length > 0 && (
-          <div style={{ marginTop: 4 }}>
+          <div className="mt-1">
             <div onClick={() => setShowArchived((v) => !v)}
-              style={{ display: "flex", alignItems: "center", gap: 5, padding: "5px 9px", cursor: "pointer", fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em" }}>
+              className="pt-1 pr-2 pb-1 pl-2 t-xs c-3" style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer", textTransform: "uppercase", letterSpacing: ".04em" }}>
               <Icon name="chevR" size={12} style={{ transform: showArchived ? "rotate(90deg)" : "none", transition: "transform .12s" }} />
               Archived ({archivedSlots.length})
             </div>
             {showArchived && archivedSlots.map(([slug, meta]) => (
-              <div key={`arch:${slug}`} style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 9px 4px 24px", fontSize: 12, color: "var(--t3)", opacity: busy ? 0.6 : 1 }}
+              <div key={`arch:${slug}`} className="pt-1 pr-2 pb-1 pl-6 t-xs c-3" style={{ display: "flex", alignItems: "center", gap: 6, opacity: busy ? 0.6 : 1 }}
                 onMouseEnter={(e) => (e.currentTarget.style.background = "var(--panel2)")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
                 <span style={{ flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{meta.name || label(slug, meta.repo)}</span>
-                <span onClick={() => void doArchive(slug, false)} title="Un-archive" style={{ flex: "none", color: "var(--accent)", cursor: "pointer", fontSize: 11 }}>restore</span>
-                <span onClick={() => void doDelete(slug, meta.name || label(slug, meta.repo))} title="Delete permanently" style={{ flex: "none", color: "var(--t3)", cursor: "pointer", fontSize: 13, padding: "0 3px" }}>×</span>
+                <span onClick={() => void doArchive(slug, false)} title="Un-archive" className="c-accent t-xs" style={{ flex: "none", cursor: "pointer" }}>restore</span>
+                <span onClick={() => void doDelete(slug, meta.name || label(slug, meta.repo))} title="Delete permanently" className="c-3 t-sm pt-0 pr-0_5 pb-0 pl-0_5" style={{ flex: "none", cursor: "pointer" }}>×</span>
               </div>
             ))}
           </div>
@@ -1041,25 +1036,25 @@ function GitSection() {
   }, [open]);
   const toggle = () => setOpen((v) => { const n = !v; writeSS(SS_GIT_OPEN, n ? "1" : "0"); return n; });
   return (
-    <div style={{ marginTop: 14, borderTop: "1px solid var(--line)", paddingTop: 8 }}>
-      <div onClick={toggle} style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em", padding: "2px 8px 6px", display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+    <div className="mt-3 bd-t pt-2">
+      <div onClick={toggle} className="t-xs c-3 pt-0_5 pr-2 pb-1_5 pl-2" style={{ textTransform: "uppercase", letterSpacing: ".04em", display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
         <Icon name="chevR" size={12} style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform .12s" }} />
         <Icon name="zap" size={12} />{minutesOnly() ? "recently in this group" : "source control"}
-        {git.branch && <span style={{ marginLeft: "auto", fontFamily: "var(--mono)", color: "var(--t2)", textTransform: "none" }}>{git.branch}</span>}
+        {git.branch && <span className="ml-auto f-mono c-2" style={{ textTransform: "none" }}>{git.branch}</span>}
       </div>
-      {open && gitError && <div role="alert" style={{ padding: "2px 9px", fontSize: 12, color: "var(--danger)" }}>⚠ git unavailable — {gitError}</div>}
+      {open && gitError && <div role="alert" className="pt-0_5 pr-2 pb-0_5 pl-2 t-xs c-danger">⚠ git unavailable — {gitError}</div>}
       {!open || gitError ? null : (!git.branch && feed.length === 0) ? (
-        <div style={{ padding: "2px 9px", fontSize: 12, color: "var(--t3)" }}>Not a repo yet.</div>
+        <div className="pt-0_5 pr-2 pb-0_5 pl-2 t-xs c-3">Not a repo yet.</div>
       ) : (<>
-      {git.changes.length > 0 && <div style={{ fontSize: 10.5, color: "var(--t3)", padding: "2px 9px" }}>CHANGES</div>}
+      {git.changes.length > 0 && <div className="t-xs c-3 pt-0_5 pr-2 pb-0_5 pl-2">CHANGES</div>}
       {git.changes.map((c) => (
-        <div key={c.path} onClick={() => layout.openPreview(docTab(c.path))} onDoubleClick={() => layout.openTab(docTab(c.path))} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 9px", borderRadius: 6, cursor: "pointer", fontSize: 12 }}
+        <div key={c.path} onClick={() => layout.openPreview(docTab(c.path))} onDoubleClick={() => layout.openTab(docTab(c.path))} className="pt-1 pr-2 pb-1 pl-2 r-md t-xs" style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}
           onMouseEnter={(e) => (e.currentTarget.style.background = "var(--panel2)")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
-          <span style={{ width: 14, fontFamily: "var(--mono)", color: c.kind === "A" ? "var(--green)" : "var(--accent)", flex: "none" }}>{c.kind}</span>
-          <span style={{ color: "var(--t2)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{base(c.path)}</span>
+          <span className="f-mono" style={{ width: 14, color: c.kind === "A" ? "var(--green)" : "var(--accent)", flex: "none" }}>{c.kind}</span>
+          <span className="c-2" style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{base(c.path)}</span>
         </div>
       ))}
-      {feed.length > 0 && <div style={{ fontSize: 10.5, color: "var(--t3)", padding: "8px 9px 2px" }}>RECENT ACTIVITY</div>}
+      {feed.length > 0 && <div className="t-xs c-3 pt-2 pr-2 pb-0_5 pl-2">RECENT ACTIVITY</div>}
       {feed.map((c) => <CommitRow key={(c.slug || "") + ":" + c.sha} c={c} wsLabel={c.ws} onOpen={(f) => layout.openPreview(docTab(f, c.slug))} />)}
       </>)}
     </div>
@@ -1087,13 +1082,13 @@ function PathBreadcrumb({ path }: { path: string }) {
     revealInTree(target);
   };
   return (
-    <div style={{ fontFamily: "var(--mono)", fontSize: 12, color: "var(--t3)", display: "flex", flexWrap: "wrap", alignItems: "center" }}>
+    <div className="f-mono t-xs c-3" style={{ display: "flex", flexWrap: "wrap", alignItems: "center" }}>
       {parts.map((name, i) => {
         const isFile = i === parts.length - 1;
         const prefix = parts.slice(0, i + 1).join("/");
         return (
           <span key={prefix} style={{ display: "inline-flex", alignItems: "center" }}>
-            {i > 0 && <span style={{ padding: "0 2px", userSelect: "none" }}>/</span>}
+            {i > 0 && <span className="pt-0 pr-0_5 pb-0 pl-0_5" style={{ userSelect: "none" }}>/</span>}
             <span {...hover} style={seg}
               title={`Reveal ${prefix}${isFile ? "" : "/"} in the sidebar · right-click to copy a reference`}
               onClick={() => reveal(prefix)}
@@ -1133,32 +1128,32 @@ function FmValue({ k, v }: { k: string; v: string }) {
     const items = list[1].split(",").map((s) => s.trim().replace(/^["']|["']$/g, "")).filter(Boolean);
     return (
       <span style={{ display: "inline-flex", flexWrap: "wrap", gap: 5 }}>
-        {items.map((t) => <span key={t} style={{ background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 999, padding: "1px 9px", color: "var(--t2)", fontSize: 12, lineHeight: 1.6, whiteSpace: "nowrap" }}>{t}</span>)}
+        {items.map((t) => <span key={t} className="bg-3 bd r-full pt-0 pr-2 pb-0 pl-2 c-2 t-xs lh-normal" style={{ whiteSpace: "nowrap" }}>{t}</span>)}
       </span>
     );
   }
   if (/^https?:\/\/\S+$/.test(v)) {
-    return <a href={v} target="_blank" rel="noreferrer noopener" style={{ color: "var(--blue)", textDecoration: "none" }}
+    return <a href={v} target="_blank" rel="noreferrer noopener" className="c-info" style={{ textDecoration: "none" }}
       onMouseEnter={(e) => (e.currentTarget.style.textDecoration = "underline")} onMouseLeave={(e) => (e.currentTarget.style.textDecoration = "none")}>{v.replace(/^https?:\/\//, "").replace(/\/$/, "")} ↗</a>;
   }
   if (/^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(v)) {
-    return <a href={`https://${v}`} target="_blank" rel="noreferrer noopener" style={{ color: "var(--blue)", textDecoration: "none" }}
+    return <a href={`https://${v}`} target="_blank" rel="noreferrer noopener" className="c-info" style={{ textDecoration: "none" }}
       onMouseEnter={(e) => (e.currentTarget.style.textDecoration = "underline")} onMouseLeave={(e) => (e.currentTarget.style.textDecoration = "none")}>{v} ↗</a>;
   }
-  if (/^\d{4}-\d{2}-\d{2}/.test(v)) return <span style={{ fontFamily: "var(--mono)", fontSize: 12, color: "var(--t2)" }}>{v}</span>;
-  if (v === "true" || v === "false") return <span style={{ fontFamily: "var(--mono)", fontSize: 12, color: v === "true" ? "var(--green)" : "var(--t3)" }}>{v === "true" ? "✓ true" : "✗ false"}</span>;
-  if (k === "id") return <span style={{ fontFamily: "var(--mono)", fontSize: 12, color: "var(--t2)" }}>{v}</span>;
-  if (k === "title") return <span style={{ color: "var(--t1)", fontWeight: 600 }}>{wikilinks(v, navigate)}</span>;
-  return <span style={{ color: "var(--t1)" }}>{wikilinks(v, navigate)}</span>;
+  if (/^\d{4}-\d{2}-\d{2}/.test(v)) return <span className="f-mono t-xs c-2">{v}</span>;
+  if (v === "true" || v === "false") return <span className="f-mono t-xs" style={{ color: v === "true" ? "var(--green)" : "var(--t3)" }}>{v === "true" ? "✓ true" : "✗ false"}</span>;
+  if (k === "id") return <span className="f-mono t-xs c-2">{v}</span>;
+  if (k === "title") return <span className="c-1 fw-600">{wikilinks(v, navigate)}</span>;
+  return <span className="c-1">{wikilinks(v, navigate)}</span>;
 }
 
 function FrontmatterCard({ fm }: { fm: [string, string][] }) {
   return (
-    <div style={{ border: "1px solid var(--line)", borderRadius: 10, background: "var(--panel)", padding: "11px 13px", marginBottom: 14, fontSize: 13, display: "flex", flexDirection: "column", gap: 6 }}>
+    <div className="bd r-lg bg-2 pt-3 pr-3 pb-3 pl-3 mb-3 t-sm" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
       {fm.map(([k, v]) => (
         <div key={k} style={{ display: "flex", gap: 10, alignItems: "baseline" }}>
-          <span style={{ color: "var(--t3)", width: 96, flex: "none", fontSize: 12 }}>{k}</span>
-          <span style={{ minWidth: 0, lineHeight: 1.55 }}><FmValue k={k} v={v} /></span>
+          <span className="c-3 t-xs" style={{ width: 96, flex: "none" }}>{k}</span>
+          <span className="lh-normal" style={{ minWidth: 0 }}><FmValue k={k} v={v} /></span>
         </div>
       ))}
     </div>
@@ -1170,9 +1165,7 @@ function NavArrow({ dir, enabled, onGo }: { dir: -1 | 1; enabled: boolean; onGo:
   return (
     <button aria-label={dir === -1 ? "Back" : "Forward"} title={dir === -1 ? "Back" : "Forward"}
       onClick={onGo} disabled={!enabled}
-      style={{ background: "none", border: "none", padding: 3, display: "flex", borderRadius: 6,
-        color: enabled ? "var(--t1)" : "var(--t3)", opacity: enabled ? 1 : 0.35,
-        cursor: enabled ? "pointer" : "default" }}
+      className="bg-none bd-none p-0_5 r-md" style={{ display: "flex", color: enabled ? "var(--t1)" : "var(--t3)", opacity: enabled ? 1 : 0.35, cursor: enabled ? "pointer" : "default" }}
       onMouseEnter={(e) => { if (enabled) e.currentTarget.style.background = "var(--panel2)"; }}
       onMouseLeave={(e) => { e.currentTarget.style.background = "none"; }}>
       <Icon name="arrowR" size={15} style={dir === -1 ? { transform: "scaleX(-1)" } : undefined} />
@@ -1262,30 +1255,30 @@ function DocTab({ id, params }: TabProps) {
   return (
     <DocNavContext.Provider value={navigate}>
     <DocMetaContext.Provider value={{ path, slug }}>
-      <div ref={scroller} style={{ height: "100%", overflowY: "auto", background: "var(--bg)" }}>
-        <div style={{ maxWidth: 760, margin: "0 auto", padding: "22px 24px" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 12 }}>
+      <div ref={scroller} className="bg-0" style={{ height: "100%", overflowY: "auto" }}>
+        <div className="mt-0 mr-auto mb-0 ml-auto pt-5 pr-6 pb-5 pl-6" style={{ maxWidth: 760 }}>
+          <div className="mb-3" style={{ display: "flex", alignItems: "center", gap: 6 }}>
             <span style={{ display: "inline-flex", gap: 0, flex: "none" }}>
               <NavArrow dir={-1} enabled={nav.idx > 0} onGo={() => go(-1)} />
               <NavArrow dir={1} enabled={nav.idx < nav.stack.length - 1} onGo={() => go(1)} />
             </span>
             <div style={{ minWidth: 0, flex: 1 }}><PathBreadcrumb path={path} /></div>
             <span onClick={loadDiff} title="Show the exact lines changed in the latest commit"
-              style={{ flex: "none", display: "inline-flex", alignItems: "center", gap: 4, cursor: "pointer", fontSize: 11.5, color: showDiff ? "var(--accent)" : "var(--t3)" }}>
+              className="t-xs" style={{ flex: "none", display: "inline-flex", alignItems: "center", gap: 4, cursor: "pointer", color: showDiff ? "var(--accent)" : "var(--t3)" }}>
               <Icon name="git" size={12} />Changes
             </span>
           </div>
           {updated && (
             <div onClick={loadDiff} role="status"
-              style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10, padding: "5px 10px", cursor: "pointer", background: "var(--panel)", border: "1px solid var(--accent)", borderRadius: 7, fontSize: 12, color: "var(--accent)" }}>
+              className="mb-2 pt-1 pr-2 pb-1 pl-2 bg-2 bd-accent r-md t-xs c-accent" style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
               <Icon name="zap" size={12} />Updated just now — view the exact lines changed
             </div>
           )}
           {showDiff && (diff === null || diff === ""
-            ? <div style={{ fontSize: 12, color: "var(--t3)", marginBottom: 10 }}>loading changes…</div>
-            : <div style={{ marginBottom: 12 }}><DiffView text={diff} /></div>)}
+            ? <div className="t-xs c-3 mb-2">loading changes…</div>
+            : <div className="mb-3"><DiffView text={diff} /></div>)}
           {fm.length > 0 && <FrontmatterCard fm={fm} />}
-          <div style={{ fontSize: 14, color: "var(--t1)", lineHeight: 1.6 }}>{content === null ? "loading…" : <MdxDoc>{body}</MdxDoc>}</div>
+          <div className="t-md c-1 lh-normal">{content === null ? "loading…" : <MdxDoc>{body}</MdxDoc>}</div>
         </div>
       </div>
     </DocMetaContext.Provider>
