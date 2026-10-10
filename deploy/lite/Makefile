@@ -203,7 +203,10 @@ migrate-storage: preflight storage-up
 ## The database password lives in .env (DB_PASSWORD), never as a default: an unset or published value
 ## is replaced by a minted one written back to .env, and every `up` sets the .env value on the postgres
 ## sidecar over its local socket (ALTER USER), so a volume created with the old published password
-## moves to it without a separate step. The value is never printed.
+## moves to it without a separate step. The value is never printed. It waits until the `vexa` database
+## answers a query, not merely until the server accepts connections (a first start answers pg_isready
+## from its temporary init server before the database exists), and retries the ALTER while the image's
+## own initialisation may still be writing the same role.
 ##
 ## Note this recipe does NOT `-e` the spawn-default flags (TRANSCRIBE_ENABLED/RECORDING_ENABLED);
 ## they ride `--env-file`, where an empty value must keep the default. That is enforced in code
@@ -242,10 +245,14 @@ up: preflight storage-up
 			-e TZ=UTC -e PGTZ=UTC \
 			-v $(PG_VOLUME):/var/lib/postgresql/data \
 			$(PG_IMAGE) -c idle_in_transaction_session_timeout=60000 > /dev/null; \
-		for i in $$(seq 1 24); do docker exec $(PG_CONTAINER) pg_isready -U postgres -d vexa -q 2>/dev/null && break; sleep 2; done; \
 	fi; \
-	printf "ALTER USER postgres PASSWORD '%s';\n" "$$(printf '%s' "$$DB_PW" | sed "s/'/''/g")" \
-		| docker exec -i $(PG_CONTAINER) psql -U postgres -d vexa -v ON_ERROR_STOP=1 -q >/dev/null; \
+	for i in $$(seq 1 45); do docker exec $(PG_CONTAINER) psql -U postgres -d vexa -tAc 'select 1' >/dev/null 2>&1 && break; sleep 2; done; \
+	PW_SET=0; for i in $$(seq 1 10); do \
+		printf "ALTER USER postgres PASSWORD '%s';\n" "$$(printf '%s' "$$DB_PW" | sed "s/'/''/g")" \
+			| docker exec -i $(PG_CONTAINER) psql -U postgres -d vexa -v ON_ERROR_STOP=1 -q >/dev/null 2>&1 && { PW_SET=1; break; }; \
+		sleep 3; \
+	done; \
+	[ "$$PW_SET" = 1 ] || { echo "  ✗ PostgreSQL: could not set the database password (is $(PG_CONTAINER) still initialising?)"; exit 1; }; \
 	echo "  ✓ PostgreSQL ready"; \
 	if [ -n "$(LOCAL_STT)" ]; then \
 		echo "Starting local CPU STT ($(WHISPER_CONTAINER), $(WHISPER_MODEL))..."; \
