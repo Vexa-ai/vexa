@@ -117,7 +117,8 @@ without a restart. Vexa does not ship OpenBao; it is MPL-2.0 software you run yo
 agent-api keeps saved Git tokens and deploy keys in its own encrypted store (`VEXA_SECRETS_KEY`).
 To keep them in the broker instead, set `VEXA_GIT_STORE_BROKER_URL=http://credential-broker:8100`
 (compose) or `credentialBroker.gitStore: true` (Helm). Existing credentials move on first use. With
-it on, a broker outage stops Git operations instead of falling back to disk.
+it on, a broker outage stops Git operations instead of falling back to disk. agent-api holds the
+broker's git key only while this is on.
 
 ## When something fails
 
