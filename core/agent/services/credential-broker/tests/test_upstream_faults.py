@@ -156,7 +156,7 @@ def test_a_provider_fault_on_a_read_is_a_typed_5xx(signed, gmail, broker, capsys
     capsys.readouterr()
     with patch.object(providers, "read_account", side_effect=UpstreamFault("provider", kind, "Account read is unavailable; retry later")):
         r = signed("agent", "POST", f"/api/connections/{gmail}/read", {"action": "gmail.search"})
-    assert r.status_code == status and r.json() == {"detail": "Account read is unavailable; retry later"}
+    assert r.status_code == status and r.json() == {"detail": "Account read is unavailable; retry later", "reason": "provider_error"}
     out = capsys.readouterr().out
     faults = [json.loads(line) for line in out.splitlines() if '"event":"broker_fault"' in line]
     assert faults[-1]["fields"] == {"source": "provider", "kind": kind, "route": "/api/connections/{cid}/read"}

@@ -27,6 +27,8 @@ from . import assertion, identity_token, providers, routes_connections, routes_g
 from .broker import Broker, route_of, unwatched
 from .faults import UpstreamFault
 from .obs import TraceMiddleware, log_event
+from .reasons import ReasonedError, refusal_reason
+from .store import StoreUnavailable
 
 
 #: The probes an orchestrator calls without an assertion. Liveness is the process; readiness is the
@@ -44,17 +46,22 @@ def create_app(broker: Broker) -> FastAPI:
         # Validation errors must not echo credential-bearing input.
         return JSONResponse({"detail": "Invalid request fields"}, 422)
 
+    @app.exception_handler(ReasonedError)
+    async def reasoned(request, exc):
+        # `reason` is the caller's to act on (`reasons.py`); `detail` stays the person's sentence.
+        return JSONResponse({"detail": exc.detail, "reason": exc.reason}, exc.status_code)
+
     @app.exception_handler(providers.ProviderError)
     async def provider_refusal(request, exc):
         # The person can act on it (reconnect, grant a permission, fix an argument).
         b.refused("provider", "refused", route_of(request.url.path))
-        return JSONResponse({"detail": str(exc)}, 409)
+        return JSONResponse({"detail": str(exc), "reason": refusal_reason(str(exc))}, 409)
 
     @app.exception_handler(UpstreamFault)
     async def upstream_fault(request, exc):
         # Google or a custom service is down or answered unusably: 503/502, never a reconnect.
         b.fault(exc.source, exc.kind, route=route_of(request.url.path))
-        return JSONResponse({"detail": str(exc)}, exc.status)
+        return JSONResponse({"detail": str(exc), "reason": "provider_error"}, exc.status)
 
     @app.middleware("http")
     async def boundaries(request: Request, call_next):
@@ -97,17 +104,23 @@ def create_app(broker: Broker) -> FastAPI:
 
     @app.get("/ready")
     def ready():
-        """Readiness: the credential store answers (`Store.healthy`). 503 while it does not, so no
-        traffic is sent to a broker that would refuse every credential operation."""
+        """Readiness: the credential store answers THIS broker (`Store.healthy`, an authenticated
+        check). 503 while it does not, so no traffic is sent to a broker that would refuse every
+        credential operation; the answer and the fault line name the kind (`config` for a store
+        that refuses the broker's credential, `transport` for one that does not answer)."""
         body = {"service": "credential-broker", "store": b.store.name}
+        kind = "unhealthy"
         try:
             healthy = bool(b.store.healthy())
+        except StoreUnavailable as exc:
+            healthy, kind = False, exc.kind
         except Exception:  # noqa: BLE001 — a probe that raises is an unready store, never a crashed probe
             healthy = False
         if healthy:
             return JSONResponse({"status": "ok", **body}, headers={"Cache-Control": "no-store"})
-        b.fault("store", "unhealthy", route="/ready")
-        return JSONResponse({"status": "unavailable", **body}, 503, headers={"Cache-Control": "no-store"})
+        b.fault("store", kind, route="/ready")
+        return JSONResponse({"status": "unavailable", "reason": "store_unavailable", "kind": kind, **body}, 503,
+                            headers={"Cache-Control": "no-store"})
 
     app.include_router(routes_connections.build(b))
     app.include_router(routes_git.build(b))

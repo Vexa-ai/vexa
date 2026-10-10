@@ -73,7 +73,9 @@ class Store(Protocol):
 
     def delete(self, path: str) -> None: ...
 
-    def healthy(self) -> bool: ...
+    def healthy(self) -> bool:
+        """True when the store answers this broker, or raises ``StoreUnavailable`` naming the kind."""
+        ...
 
 
 def _check_path(path: str) -> str:
@@ -310,9 +312,15 @@ class OpenBaoStore:
         _check_path(path)
         self._request("DELETE", path, allow_missing=True, kind="metadata")
 
+    #: A path nothing is ever written to. Reading it proves the token is alive and its policy still
+    #: covers ``<mount>/data/*``: a 404 is healthy, 401/403 is a dead or narrowed token.
+    PROBE_PATH = "vexa-readiness-probe"
+
     def healthy(self) -> bool:
-        try:
-            with httpx.Client(timeout=3, follow_redirects=False, transport=self._transport) as client:
-                return client.get(f"{self._address}/v1/sys/health").status_code == 200
-        except httpx.HTTPError:
-            return False
+        """An AUTHENTICATED check: the store answers this broker's token. ``/v1/sys/health`` alone
+        stays 200 for an expired or revoked token while every credential operation fails, so the
+        probe reads :data:`PROBE_PATH` with the token, the same call a credential read makes.
+        Raises ``StoreUnavailable`` (``config`` for a refused or unreadable token, ``transport``
+        for no answer)."""
+        self._request("GET", self.PROBE_PATH, allow_missing=True)
+        return True
