@@ -27,7 +27,7 @@
 import type { CSSProperties } from "react";
 import { useEffect, useRef, useState } from "react";
 import { MeetingPageHeader } from "./MeetingPageHeader";
-import { MeetingDeleteButton } from "./MeetingControls";
+import { MeetingControls, MeetingDeleteButton } from "./MeetingControls";
 import { Icon } from "../ui-kit";
 import { copyText } from "../ui-kit/ContextMenu";
 import { DocMetaContext } from "../ui-kit/docRefs";
@@ -270,7 +270,7 @@ export function PagesPanel(p: {
             FRONT, the crumb below says where it LIVES and walks you back up.
             A canvas is exempt — it names its own meeting in its own header, and there is no file
             here to read as source, copy or edit, so the whole row (not just the group) stands down. */}
-        {doc && <div style={{ flex: "none", display: "flex", alignItems: "baseline", gap: 8, padding: "9px 20px 8px", borderBottom: "1px solid var(--line)", minWidth: 0 }}>
+        {doc && <div style={{ flex: "none", display: "flex", alignItems: "baseline", gap: 8, rowGap: 4, flexWrap: docMeeting ? "wrap" : undefined, padding: "9px 20px 8px", borderBottom: "1px solid var(--line)", minWidth: 0 }}>
           {docMeeting ? <MeetingPageHeader meetingId={docMeeting} body={p.body ?? ""} path={p.docPath} /> : <span data-doc-name title={docName}
             style={{ ...ty.title, fontSize: 13.5, color: "var(--t1)", flex: "0 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{docName}</span>}
           {/* ONE PATH LINE (PRD decision 28, founder: *"duplicated paths"*). This span repeated the
@@ -309,6 +309,9 @@ export function PagesPanel(p: {
                 <button data-doc-act="save" onClick={() => void save()} disabled={saving} title="Save"
                   style={{ ...ty.chip, flex: "none", color: "var(--on-accent)", background: "var(--accent)", border: "none", borderRadius: 6, padding: "3px 12px", cursor: saving ? "default" : "pointer", fontWeight: 600 }}>{saving ? "Saving…" : "Save"}</button>
               </>)}
+          {/* A meeting page's player row: its own full-width line under the title row, so the
+              scrubber gets the panel's width rather than what the icon group leaves. */}
+          {docMeeting && <div style={{ flexBasis: "100%", minWidth: 0 }}><MeetingControls meetingId={docMeeting} showDelete={false} /></div>}
         </div>}
         {/* the breadcrumb — the doc's address, and a path you can walk back up. A canvas has no
             address: its `path` is a row id, and the canvas names the meeting in its own header. */}

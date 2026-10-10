@@ -7,7 +7,7 @@ vi.mock("../../surfaces/liveMeetings", () => ({
 vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ recordings: [] }))));
 import { MeetingPageHeader } from "../MeetingPageHeader";
 afterEach(cleanup);
-it("puts the title and platform · date · status on one row, and leaves Delete to the header group", () => {
+it("puts the title and platform · date · status on one row, and leaves Delete and the player to the document header", () => {
   const { container } = render(<MeetingPageHeader meetingId="42" body="# Weekly sync" path="meetings/x.md" />);
   const title = container.querySelector("[data-doc-name]")!;
   const meta = container.querySelector("[data-meeting-metadata]")!;
@@ -16,4 +16,5 @@ it("puts the title and platform · date · status on one row, and leaves Delete 
   expect((meta as HTMLElement).style.whiteSpace).toBe("nowrap");
   expect(meta.getAttribute("title")).toContain("Zoom");
   expect(screen.queryByRole("button", { name: "Delete meeting data" })).toBeNull();
+  expect(screen.queryByRole("region", { name: "Meeting controls" })).toBeNull();
 });
