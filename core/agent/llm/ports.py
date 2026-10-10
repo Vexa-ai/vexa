@@ -239,6 +239,56 @@ def grant_tools_access(paths: Iterable["str | Path"]) -> bool:
     return ok
 
 
+def show_tools(paths: Iterable["str | Path"]) -> bool:
+    """Let :data:`TOOLS_USER` read, never write, everything under ``paths``: group set to it, group
+    read (and search on directories); group and other write removed, and setgid cleared so nothing
+    created there later is the tools group's by inheritance. Symlinks are not followed (a staged
+    platform skill is a link into the image and stays as it is) and read-only mounts are left alone.
+
+    For what the harness reads but the model's tools must not change: the staged skills
+    (``~/.vexa-skills``) and the CLI's user scope (``~/.claude``), whose ``skills`` link names the
+    turn's stage. Granted for writing, either would let a turn rewrite or re-point the skills a
+    later turn loads. The CLI's transcripts still reach the chat root through ``~/.claude/projects``
+    (a link into a granted workspace). Returns False when a path could not be restricted (logged);
+    nothing to do — this process cannot switch users — is True."""
+    ident = tools_identity()
+    if ident is None:
+        return True
+    _tools_uid, gid = ident
+    ok = True
+
+    def show(p: str, is_dir: bool) -> None:
+        nonlocal ok
+        try:
+            st = os.lstat(p)
+            if stat.S_ISLNK(st.st_mode):
+                return
+            mode = stat.S_IMODE(st.st_mode)
+            want = (mode | stat.S_IRGRP | (stat.S_IXGRP if is_dir else 0)) \
+                & ~(stat.S_IWGRP | stat.S_IWOTH | stat.S_ISGID)
+            if st.st_gid != gid:
+                os.lchown(p, -1, gid)
+            if mode != want:
+                os.chmod(p, want)
+        except OSError as exc:
+            if getattr(exc, "errno", None) == 30:    # EROFS: nobody can write it anyway
+                return
+            ok = False
+            _log.error("cannot show %s to the tools user read-only: %s", p, exc)
+
+    for root in paths:
+        root = str(root)
+        if not root or not os.path.isdir(root) or os.path.islink(root):
+            continue
+        show(root, True)
+        for dirpath, dirnames, filenames in os.walk(root):
+            for name in dirnames:
+                show(os.path.join(dirpath, name), True)
+            for name in filenames:
+                show(os.path.join(dirpath, name), False)
+    return ok
+
+
 def hand_to_tools(path: "str | Path") -> None:
     """Give one file the worker wrote for the harness (its MCP attachment) to :data:`TOOLS_USER`,
     keeping its mode. No-op when this process cannot switch users."""

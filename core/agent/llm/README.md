@@ -138,8 +138,10 @@ no subject endpoint, or a refused one, nothing is stamped and the table above ap
 - **Every harness CLI starts as the tools user** (`ports.harness_identity_kwargs`, user `vexa-tools`
   in the worker image) wherever the worker runs as root, so the model's tools cannot read the
   worker's environment through /proc or write its code; the worker hands that user, by group, only
-  the workspaces a turn may write and the harness's own state (`grant_tools_access`) — never a
+  the workspaces a turn may write and the harness's writable state (`grant_tools_access`) — never a
   repository's `.git`, which stays the worker's (a `.git` an earlier grant opened is closed again).
+  The staged skills and the CLI's user scope (`~/.vexa-skills`, `~/.claude`) it may only read
+  (`show_tools`), so a turn cannot change what a later turn loads.
   A directory holding a `.git` is made sticky, so the tools user cannot rename a `.git` it does not
   own and put another directory in its place between git's check and git's read.
   A worker that is not root does not switch and is non-dumpable instead (`harden_worker_process`).

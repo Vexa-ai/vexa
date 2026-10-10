@@ -144,3 +144,58 @@ def test_the_worker_makes_itself_non_dumpable(monkeypatch):
 def test_hardening_never_raises_where_there_is_no_prctl(monkeypatch):
     monkeypatch.setattr(ports.ctypes, "CDLL", lambda *a, **k: object())
     ports.harden_worker_process()
+
+
+def test_what_the_harness_only_reads_is_shown_read_only(as_root, tmp_path):
+    """The staged skills and the CLI's user scope: the tools group may read them, never write them
+    — written, they would decide what a later turn loads."""
+    stage = tmp_path / ".vexa-skills" / "turn-x"
+    (stage / "mine").mkdir(parents=True)
+    (stage / "mine" / "SKILL.md").write_text("---\nname: mine\n---\n")
+    os.chmod(stage, 0o2770)                                     # what an earlier grant left
+    os.chmod(stage / "mine" / "SKILL.md", 0o664)
+    (stage / "shipped").symlink_to("/etc", target_is_directory=True)
+    user_scope = tmp_path / ".claude"
+    user_scope.mkdir()
+    os.chmod(user_scope, 0o2775)
+    (user_scope / "skills").symlink_to(stage, target_is_directory=True)
+    assert ports.show_tools([tmp_path / ".vexa-skills", user_scope]) is True
+    for d in (stage, stage / "mine", user_scope):
+        mode = d.stat().st_mode
+        assert mode & stat.S_IRGRP and mode & stat.S_IXGRP
+        assert not mode & (stat.S_IWGRP | stat.S_IWOTH | stat.S_ISGID)
+    f = (stage / "mine" / "SKILL.md").stat().st_mode
+    assert f & stat.S_IRGRP and not f & (stat.S_IWGRP | stat.S_IWOTH)
+    assert os.lstat(stage / "shipped").st_mode & stat.S_IFLNK      # a platform skill link is left be
+
+
+def test_a_turn_grants_its_workspaces_and_only_shows_the_skills(monkeypatch, tmp_path):
+    import json
+
+    from worker import engine
+    granted, shown = [], []
+    monkeypatch.setattr(engine, "grant_tools_access", lambda paths: granted.extend(map(str, paths)) or True)
+    monkeypatch.setattr(engine, "show_tools", lambda paths: shown.extend(map(str, paths)) or True)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+    monkeypatch.setenv("VEXA_MOUNTS", json.dumps([]))
+
+    class Harness:
+        name = "fake"
+
+        def prepare(self, work, chat_root=None):
+            pass
+
+        def transcript_bytes(self, work, sid):
+            return 0
+
+    monkeypatch.setattr(engine, "_ensure_repo", lambda w: None)
+    monkeypatch.setattr(engine, "run_harness_turn", lambda *a, **kw: iter([{"type": "done", "ok": True}]))
+    monkeypatch.setattr(engine, "report_friction", lambda rec, **kw: None)
+    work = tmp_path / "ws"
+    work.mkdir()
+    list(engine.run_turn_over_workspace(work, "hi", harness=Harness(), session_continuity=False))
+    home = tmp_path / "home"
+    assert str(work) in granted and str(home / ".codex") in granted
+    assert str(home / ".claude") not in granted and str(home / ".vexa-skills") not in granted
+    assert shown == [str(home / ".claude"), str(home / ".vexa-skills")]

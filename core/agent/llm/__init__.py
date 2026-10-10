@@ -22,6 +22,7 @@ from llm.ports import (
     close_event_stream,
     grant_tools_access,
     hand_to_tools,
+    show_tools,
     harden_worker_process,
     run_harness_turn,
 )
@@ -47,6 +48,7 @@ __all__ = [
     "close_event_stream",
     "grant_tools_access",
     "hand_to_tools",
+    "show_tools",
     "harden_worker_process",
     "run_harness_turn",
     "HARNESS_RUNNERS",

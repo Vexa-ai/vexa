@@ -42,6 +42,7 @@ from llm import (
     close_event_stream,
     grant_tools_access,
     hand_to_tools,
+    show_tools,
     harden_worker_process,
     harness_from_env,
     looks_like_auth_failure,
@@ -1830,10 +1831,12 @@ def run_turn_over_workspace(
     harness.prepare(work, chat_root=chat_root)  # harness-specific continuity/skills wiring (durable)
     # The harness runs as the tools user wherever the worker can switch users (llm/ports.py): hand
     # that user this turn's writable workspaces and the harness's own state, which prepare just made.
+    # The skills prepare staged, and the CLI's user scope whose `skills` link names them, are the
+    # tools user's to read only: written by it, they would decide what a later turn loads.
     home = Path(os.environ.get("HOME", "/tmp"))
     grant_tools_access([*(m["path"] for m in active_mounts() if m.get("write", True)), work, chat_root,
-                        home / ".claude", home / ".vexa-skills",
                         Path(os.environ.get("CODEX_HOME") or home / ".codex")])
+    show_tools([home / ".claude", home / ".vexa-skills"])
     if session and session_continuity:
         _adopt_legacy_continuity(chat_root, work, session)  # migrate-on-read: pre-anchoring threads
     sess_file = _session_file(chat_root, session)
