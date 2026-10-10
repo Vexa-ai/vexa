@@ -288,3 +288,23 @@ def test_a_configured_lifetime_wins_and_is_minted(tmp_path):
 def test_a_lifetime_under_a_minute_is_refused():
     with pytest.raises(Exception):
         load_settings(mcp_delegation_ttl_sec=30)
+
+
+class _FullRedis(fakeredis.FakeRedis):
+    """A Redis at maxmemory under noeviction: writes that grow memory are refused, deletes are not."""
+
+    def set(self, *args, **kwargs):
+        import redis as _redis
+        raise _redis.exceptions.ResponseError("OOM command not allowed when used memory > 'maxmemory'.")
+
+
+def test_a_full_redis_still_refuses_the_token_and_says_so():
+    """Under noeviction a full Redis refuses the revocation write. The live record is deleted first
+    (a delete is still allowed), so identity refuses the token anyway, and the refused write is a
+    typed failure the reaper retries, never a token left admitted."""
+    now = time.time()
+    client = _FullRedis()
+    fakeredis.FakeRedis.set(client, dr.live_key("j1"), "1", ex=600)
+    with pytest.raises(dr.RevocationError):
+        dr.revoke(client, jti="j1", exp=int(now) + 600, now=now)
+    assert not client.exists(dr.live_key("j1"))

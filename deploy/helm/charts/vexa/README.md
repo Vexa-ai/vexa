@@ -160,6 +160,21 @@ sandbox, e.g. under `RuntimeDefault` with `botSandbox.enabled=false`).
 Without these, set `runtime.botSandbox.enabled=false`: bots then run under `runtime/default`, and
 their browsers run unsandboxed (said in each bot's log).
 
+## Redis never evicts
+
+The chart's Redis holds security state, not only a cache: identity admits a worker's delegation
+token only while `vexa:delegation:live:<jti>` exists and no `vexa:delegation:revoked:<jti>` does.
+An eviction policy would drop those keys under memory pressure, cutting a live worker's tools or
+(before the live record existed) reviving a revoked token. So `redis.maxmemoryPolicy` is
+`noeviction`, and any other value fails the render.
+
+When Redis is full it refuses writes (`OOM command not allowed`) instead of dropping keys. agent-api
+reports each refused write as a typed failure: a token it cannot record is withheld (the worker
+starts without its tools), and a revocation deletes the live record first, which a full Redis still
+allows, so a token is refused even when its revocation key cannot be written. `redis.maxmemory`
+(768mb by default) sits below `redis.resources.limits.memory` (1Gi) so Redis refuses before the
+kernel kills it; raise the two together.
+
 ## Validate (no cluster)
 
 ```bash

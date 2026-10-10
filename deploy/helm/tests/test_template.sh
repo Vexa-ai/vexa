@@ -1117,6 +1117,21 @@ if [ "$loose" -eq 0 ] && [ "$(grep -c 'flows' <<< "$NP_FLOWS")" -gt 0 ] && [ "$p
   echo "  OK: every policy peer for the flows tier carries the release's labels, and so do its Pods and Service"
 else echo "  FAIL: $loose flows policy peer(s) match on the component label alone (flows Pod/Service labels: $pod_labels)"; fail=1; fi
 
+# Redis holds the delegation live and revocation records (R6-12): it never evicts. The render passes
+# noeviction and a maxmemory below the container's memory limit, and refuses any eviction policy.
+redis_doc="$(awk 'BEGIN{RS="\n---\n"} /kind: Deployment/ && /component: redis/' <<< "$RENDER")"
+policy="$(grep -A1 -- '"--maxmemory-policy"' <<< "$redis_doc" | tail -1 | tr -d ' "-')"
+maxmem="$(grep -A1 -- '"--maxmemory"' <<< "$redis_doc" | tail -1 | tr -d ' "-')"
+if [ "$policy" = "noeviction" ] && [ "$maxmem" = "768mb" ] && grep -q 'memory: 1Gi' <<< "$redis_doc"; then
+  echo "  OK: Redis runs noeviction with maxmemory (768mb) under its 1Gi limit"
+else echo "  FAIL: Redis policy '$policy', maxmemory '$maxmem' — it must never evict security state"; fail=1; fi
+for bad in allkeys-lru volatile-lru allkeys-random volatile-ttl; do
+  if helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set redis.maxmemoryPolicy="$bad" >/dev/null 2>&1; then
+    echo "  FAIL: redis.maxmemoryPolicy=$bad rendered"; fail=1
+  fi
+done
+echo "  OK: an eviction policy for Redis is refused at render"
+
 # N-7: the namespace default-deny, both directions, with explicit allows for the chart's Pods.
 np_doc() { awk -v n="name: $1" '$0 ~ "^  "n"$"{f=1} f{print} f&&/^---/{exit}' <<< "$RENDER"; }
 dd="$(np_doc vexa-vexa-default-deny)"
