@@ -901,8 +901,8 @@ def build(**d) -> APIRouter:
     @router.get("/api/sessions/{session}/history")
     def session_history(session: str, request: Request):
         """The session's prior conversation, as simplified turns the terminal can render (so clicking a
-        saved chat re-opens its history). Tolerant: a missing/empty transcript returns ``{turns: []}``;
-        an invalid subject/session never 500s."""
+        saved chat re-opens its history). A session the caller has no thread for is 404; a thread whose
+        transcript is missing or empty returns ``{turns: []}``; an invalid subject/session never 500s."""
         subject = subject_of(request)
         # The turn's cwd FOLLOWS the active set (flat model), so a thread's continuity may sit under
         # any currently-mounted workspace dir — hand the reader those candidates. Best-effort: a
@@ -913,6 +913,10 @@ def build(**d) -> APIRouter:
             extra = [m.path for m in ms]
         except Exception:  # noqa: BLE001
             logger.warning("mount resolution for history failed subject=%s — searching anchored roots only", subject)
+        # Only the caller's own trees and the workspaces their membership mounts are searched; a
+        # session found nowhere there is not theirs, whoever else has a thread of that name.
+        if wsr.locate_session(subject, session, extra_roots=extra) is None:
+            raise HTTPException(status_code=404, detail="session not found")
         try:
             turns = wsr.history(subject, session, extra_roots=extra)
         except Exception:  # noqa: BLE001 — history is best-effort; a bad path → empty, never an error

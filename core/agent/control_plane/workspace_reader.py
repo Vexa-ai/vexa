@@ -462,37 +462,47 @@ class WorkspaceReader:
                 continue
             yield ws
 
-    def history(self, subject: str, session: str, extra_roots: "list[str | Path] | None" = None) -> list[dict]:
-        """The session's prior conversation as ordered, terminal-renderable turns.
-
-        Resolves the thread's claude sessionId from its continuity pointer, finds the transcript JSONL
-        under ``<ws>/.claude/projects/<cwd-slug>/<sessionId>.jsonl``, and parses it into ``Turn``-shaped
-        dicts: user turns ``{role:"user", text}``; agent turns ``{role:"agent", text, ops, commit?}``.
-        Pointer and transcript are searched across every continuity root (``_continuity_roots``) — they
-        normally co-locate, but a thread that MOVED anchors (cwd-rooted → _system-rooted) may have them
-        apart. Tolerant by design — a missing pointer/file or unparseable lines yield ``[]`` (never
-        raises), so the surface degrades to "no history yet" rather than erroring."""
+    def locate_session(self, subject: str, session: str,
+                       extra_roots: "list[str | Path] | None" = None) -> "Optional[tuple[str, list[Path]]]":
+        """``(sessionId, roots)`` for a thread this subject can reach, or ``None`` — the roots the
+        transcript is then searched in. ``None`` is the answer for a session the subject has no
+        thread for, wherever else a thread of that name may exist."""
         if "/" in session or "\\" in session or session in ("", ".", ".."):
-            return []
-        roots = self._continuity_roots(subject, extra_roots)
-        sid: Optional[str] = None
+            return None
+        try:
+            roots = self._continuity_roots(subject, extra_roots)
+        except ValueError:
+            return None
         for ws in roots:
             sid = self._session_id(ws, session)
             if sid:
-                break
-        if not sid:
-            # LAST RESORT — threads recorded BEFORE continuity anchoring sit under whatever workspace
-            # was the turn's cwd at the time, which may no longer be mounted (deactivated, or switched
-            # off). Only workspaces this subject may read are swept: its own parked slots and the
-            # workspaces whose authoritative member list names it — a session name ("main") is the
-            # same for every subject, so a pointer elsewhere is somebody else's thread.
-            for ws in self._swept_roots(subject, session):
-                sid = self._session_id(ws, session)
-                if sid:
-                    roots.append(ws)
-                    break
-        if not sid:
+                return sid, roots
+        # LAST RESORT — threads recorded BEFORE continuity anchoring sit under whatever workspace
+        # was the turn's cwd at the time, which may no longer be mounted (deactivated, or switched
+        # off). Only workspaces this subject may read are swept: its own parked slots and the
+        # workspaces whose authoritative member list names it — a session name ("main") is the
+        # same for every subject, so a pointer elsewhere is somebody else's thread.
+        for ws in self._swept_roots(subject, session):
+            sid = self._session_id(ws, session)
+            if sid:
+                return sid, [*roots, ws]
+        return None
+
+    def history(self, subject: str, session: str, extra_roots: "list[str | Path] | None" = None) -> list[dict]:
+        """The session's prior conversation as ordered, terminal-renderable turns.
+
+        Resolves the thread's claude sessionId from its continuity pointer (``locate_session``), finds
+        the transcript JSONL under ``<ws>/.claude/projects/<cwd-slug>/<sessionId>.jsonl``, and parses
+        it into ``Turn``-shaped dicts: user turns ``{role:"user", text}``; agent turns
+        ``{role:"agent", text, ops, commit?}``. Pointer and transcript are searched across the same
+        roots — they normally co-locate, but a thread that MOVED anchors (cwd-rooted →
+        _system-rooted) may have them apart. Tolerant by design — a missing pointer/file or
+        unparseable lines yield ``[]`` (never raises), so the surface degrades to "no history yet"
+        rather than erroring."""
+        found = self.locate_session(subject, session, extra_roots)
+        if found is None:
             return []
+        sid, roots = found
         # The cwd-slug dir is claude's encoding of the workspace path; there is normally one, but match by
         # the sessionId filename to be safe. ``rglob`` also catches subagent transcripts — we want the top.
         raw: Optional[str] = None

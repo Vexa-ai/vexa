@@ -1,8 +1,8 @@
 """A slug or workspace id names ONE workspace of the caller's own store, or of a workspace they belong to.
 
 Two subjects share one store: `u_jane` (the caller) and `u_mallory` (the other tenant). Mallory has a
-live desk, a parked workspace and a chat thread. Every route that takes a slug or a workspace id is
-driven by Jane with every shape that could name one of Mallory's trees —
+live desk, a parked workspace and a chat thread. Every route that takes a slug or a workspace id, and
+the chat-history lookup, is driven by Jane with every shape that could name one of Mallory's trees —
 a traversal, an absolute path, Mallory's own name, an encoded separator, a dotted store path — and
 each must refuse without moving, mounting, reading or echoing anything of Mallory's.
 """
@@ -245,3 +245,36 @@ def test_manage_and_read_routes_refuse_a_store_path_with_a_stale_member_list(sto
     assert f.status_code in (400, 403, 404) and "MALLORY" not in f.text
     assert not (store / ".attached" / "u_mallory" / "secret-slot" / ".vexa" / "purpose").exists()
     _mallory_intact(store)
+
+
+# ── chat history: never another subject's thread ─────────────────────────────────────────────────
+
+@pytest.mark.parametrize("session", ["main", "chat-z"])
+def test_history_never_returns_another_subjects_thread(store, session):
+    reader = WorkspaceReader(str(store))
+    assert reader.history("u_jane", session) == []
+    assert reader.locate_session("u_jane", session) is None
+    r = _client(store).get(f"/api/sessions/{session}/history", headers=JANE)
+    assert r.status_code == 404 and "MALLORY" not in r.text
+
+
+def test_history_still_finds_the_callers_own_parked_thread(store):
+    mine = _repo(store / ".attached" / "u_jane" / "old-slot", "JANE PARKED")
+    _thread(mine, "chat-old", "sid-jane-old", "jane before anchoring")
+    r = _client(store).get("/api/sessions/chat-old/history", headers=JANE)
+    assert r.status_code == 200
+    assert r.json()["turns"] == [{"role": "user", "text": "jane before anchoring"}]
+
+
+def test_history_follows_no_pointer_and_no_link_out_of_the_workspace(store):
+    """The pointer and the transcript directory are workspace CONTENT (an attached repo can carry
+    both). A pointer naming a path, or a projects entry linking into another desk, reads nothing."""
+    desk = store / "u_jane"
+    (desk / ".claude" / "sessions").mkdir(parents=True)
+    (desk / ".claude" / "sessions" / "p1.session").write_text("../../../u_mallory/.claude/projects/-workspace/sid-mallory-desk\n")
+    (desk / ".claude" / "sessions" / "p2.session").write_text("sid-mallory-desk\n")
+    (desk / ".claude" / "projects").mkdir(parents=True)
+    (desk / ".claude" / "projects" / "link").symlink_to(store / "u_mallory" / ".claude" / "projects" / "-workspace")
+    reader = WorkspaceReader(str(store))
+    assert reader.history("u_jane", "p1") == []
+    assert reader.history("u_jane", "p2") == []

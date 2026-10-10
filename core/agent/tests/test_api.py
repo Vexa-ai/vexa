@@ -728,13 +728,12 @@ def test_session_history_tolerant_of_missing(tmp_path):
     assert reader.history("u_ghost", "main") == []
     assert reader.history("u_jane", "../escape") == []
 
-    # endpoint never 500s and returns {turns: []}
+    # endpoint never 500s: a session the caller has no thread for is 404
     c = TestClient(create_app(
         Dispatcher(load_settings(), _FakeRuntime(), _FakeIdentity()), reader=reader,
     ))
     r = c.get("/api/sessions/main/history", params={"subject": "u_ghost"})
-    assert r.status_code == 200
-    assert r.json() == {"turns": []}
+    assert r.status_code == 404
 
 
 # ── live registry: liveness is EVIDENCE, not a latch (P21 — the stale-"live" server-side root) ──────
