@@ -166,6 +166,30 @@ describe("what it does refuse", () => {
     expect(sendMail).not.toHaveBeenCalled();
   });
 
+  it("400s an address longer than 254 characters, well-formed or not, and spends nothing on it", async () => {
+    const long = `${"a".repeat(243)}@example.com`;              // 255 characters, otherwise valid
+    expect(long.length).toBe(255);
+    const res = await requestLink(makeReq({ email: long }));
+    expect(res.status).toBe(400);
+    expect(sendMail).not.toHaveBeenCalled();
+    // the boundary itself still works
+    const edge = `${"a".repeat(242)}@example.com`;
+    expect((await requestLink(makeReq({ email: edge }))).status).toBe(200);
+  });
+
+  it("answers an oversized address at once instead of running the pattern over it", async () => {
+    // 100,000 dots after the "@" and a second "@" to end on: the address pattern backtracks over every
+    // split of the dots before it can say no — seconds of work on one value, all of it on the
+    // terminal's only thread.
+    const hostile = `x@${".".repeat(100_000)}@`;
+    const started = performance.now();
+    const res = await requestLink(makeReq({ email: hostile }));
+    const elapsed = performance.now() - started;
+    expect(res.status).toBe(400);
+    expect(elapsed).toBeLessThan(200);
+    expect(sendMail).not.toHaveBeenCalled();
+  });
+
   it("503s — honestly — when the instance cannot sign anything", async () => {
     vi.stubEnv("NEXTAUTH_SECRET", "");
     const res = await requestLink(makeReq({ email: "someone@example.com" }));

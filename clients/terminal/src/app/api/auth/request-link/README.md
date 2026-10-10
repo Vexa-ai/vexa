@@ -10,7 +10,8 @@
   here, or the mail went out (no user or allow-list enumeration; refusals and delivery failures are
   logged server-side). The admission question and the send run after the response
   (`../linkDelivery.ts`), so the answer takes the same time either way.
-- `400` for a missing/malformed address, `503` when the instance has no usable signing secret
+- `400` for a missing/malformed address — including any address longer than 254 characters, which
+  is refused before the address pattern runs (`../emailAddress.ts`) — `503` when the instance has no usable signing secret
   (`../authSecret.mjs`) or no configured public URL, the same for every address.
 - The link's origin is the configured public URL (`NEXTAUTH_URL`, else `TERMINAL_URL`; a plain
   absolute http(s) URL), never the request's `Host` or `X-Forwarded-*` headers.

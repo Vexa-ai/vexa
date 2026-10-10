@@ -117,6 +117,14 @@ describe("/api/auth/login — direct email login against a mocked admin-api", ()
     expect(provision!.startsWith("POST")).toBe(true);
   });
 
+  it("rejects an address longer than 254 characters without calling admin-api", async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    const res = await login(makeReq({ email: `${"a".repeat(243)}@example.com` }));
+    expect(res.status).toBe(400);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it("rejects a malformed email without calling admin-api", async () => {
     const fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);

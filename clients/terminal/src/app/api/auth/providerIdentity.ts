@@ -18,13 +18,14 @@
  *  provider subject on a user, so an account is still found by its (verified) email alone.
  */
 
+import { isWellFormedEmail } from "./emailAddress";
+
 export type ProviderIdentity =
   | { ok: true; email: string; subject: string }
   | { ok: false; why: string };
 
 const MULTI_TENANT = new Set(["", "common", "organizations", "consumers"]);
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 type Claims = Record<string, unknown>;
 
@@ -49,7 +50,7 @@ export function jwtClaims(token: unknown): Claims | null {
 
 function emailOf(claims: Claims): string | null {
   const email = str(claims.email).toLowerCase();
-  return EMAIL.test(email) ? email : null;
+  return isWellFormedEmail(email) ? email : null;
 }
 
 function google(profile: Claims | undefined): ProviderIdentity {
