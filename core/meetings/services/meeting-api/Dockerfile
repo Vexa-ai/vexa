@@ -46,6 +46,9 @@ COPY core/meetings/contracts/lifecycle.v1/lifecycle.schema.json     ./meetings/c
 COPY core/meetings/contracts/webhook.v1/webhook.schema.json         ./meetings/contracts/webhook.v1/webhook.schema.json
 COPY core/runtime/contracts/runtime.v1/runtime.schema.json          ./runtime/contracts/runtime.v1/runtime.schema.json
 COPY core/runtime/contracts/schedule.v1/schedule.schema.json        ./runtime/contracts/schedule.v1/schedule.schema.json
+# The meetings domain's route manifest: route_scopes.py reads, per route, the key scopes of the
+# edge rows that reach it, from the same walk-up.
+COPY core/meetings/routes.v1.json                                   ./meetings/routes.v1.json
 
 EXPOSE 8080
 # python -m meeting_api → create_app(real adapters) + the lifespan-driven background loops.

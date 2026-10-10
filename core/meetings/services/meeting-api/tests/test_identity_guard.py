@@ -45,7 +45,9 @@ def test_an_unsigned_bot_limit_or_webhook_cannot_ride_along(client):
 
 # ── caller class: the gateway ──────────────────────────────────────────────────────────────────
 def test_the_gateway_signed_identity_reaches_the_routes(client):
-    r = client.get("/meetings", headers=_signed("7", limits=1))
+    # The gateway signs the key's scopes with every identity; the route's own scope rides along
+    # (route_scopes: `GET /meetings` is a `tx` row).
+    r = client.get("/meetings", headers=_signed("7", limits=1, scopes=["tx"]))
     assert r.status_code == 200, r.text
 
 

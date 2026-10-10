@@ -231,6 +231,7 @@ COPY core/meetings/contracts/lifecycle.v1/lifecycle.schema.json   /app/meeting-a
 COPY core/meetings/contracts/webhook.v1/webhook.schema.json       /app/meeting-api/meetings/contracts/webhook.v1/webhook.schema.json
 COPY core/runtime/contracts/runtime.v1/runtime.schema.json        /app/meeting-api/runtime/contracts/runtime.v1/runtime.schema.json
 COPY core/runtime/contracts/schedule.v1/schedule.schema.json      /app/meeting-api/runtime/contracts/schedule.v1/schedule.schema.json
+COPY core/meetings/routes.v1.json                                 /app/meeting-api/meetings/routes.v1.json
 # agent control plane + worker (PYTHONPATH=/app/agent; repo_root walk-up == /app/agent).
 # This tree mirrors the WORKER image's /app layout (core/agent/worker/Dockerfile): worker + llm +
 # shared + contracts + the seed registries. llm/ is LOAD-BEARING — worker.py's first import is

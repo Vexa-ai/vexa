@@ -37,6 +37,7 @@ from fastapi.responses import JSONResponse
 from . import bot_spawn as _bot_spawn
 from . import identity_token
 from . import recordings as _recordings
+from . import route_scopes
 from .collector.app import build_router as _build_collector_router
 from .collector.ports import RedisBus, TranscriptStore
 from .lifecycle.machine import LifecycleSink, MeetingStore
@@ -200,7 +201,13 @@ def create_app(
     health + conformance harnesses drive. Production wires the real adapters via each module's
     ``adapters.build_production_*`` (composition is P3; the seams are here).
     """
-    app = FastAPI(title="Vexa Meeting API (v0.12)", version="0.12.0")
+    # THE EDGE'S SCOPES, CHECKED AGAIN ON THE ROUTE A REQUEST MATCHED (route_scopes). A request
+    # carrying the gateway's signed identity is refused when its key holds none of the scopes of the
+    # meetings rows that reach this route, or when no row reaches it at all — so a hop that landed
+    # on a route other than the one the edge checked is refused here too. App-level, so every route
+    # is covered and none asks for it by hand.
+    app = FastAPI(title="Vexa Meeting API (v0.12)", version="0.12.0",
+                  dependencies=[route_scopes.SCOPE_GATE])
     # The edge: read/mint X-Trace-Id and bind it for the request (logevent.v1 trace_id).
     app.add_middleware(TraceMiddleware)
     # THE DOOR FOR x-user-* (gateway-identity.v1). meeting-api derives the owner, the bot limit, the
