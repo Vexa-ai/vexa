@@ -82,6 +82,20 @@ def test_a_nested_repository_is_kept_closed_too(as_root_with_tools_user, ws):
     assert (inner).stat().st_mode & stat.S_IWGRP
 
 
+def test_a_work_tree_root_is_sticky_and_nothing_else_is(as_root_with_tools_user, ws):
+    """Sticky where a ``.git`` sits, so the tools user cannot rename one it does not own and put
+    another directory in its place; ordinary directories keep plain group write."""
+    inner = ws / "imported"
+    inner.mkdir()
+    _raw(inner, "init", "-q")
+    assert ports.grant_tools_access([ws]) is True
+    for repo_root in (ws, inner):
+        mode = repo_root.stat().st_mode
+        assert mode & stat.S_ISVTX and mode & stat.S_IWGRP and mode & stat.S_ISGID
+    notes = (ws / "notes").stat().st_mode
+    assert notes & stat.S_IWGRP and not notes & stat.S_ISVTX
+
+
 def test_a_git_dir_the_tools_user_owns_is_left_alone(monkeypatch, ws, caplog):
     monkeypatch.setattr(ports.os, "geteuid", lambda: 0)
     os.chmod(ws / ".git" / "config", 0o664)

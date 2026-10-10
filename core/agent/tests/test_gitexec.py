@@ -5,13 +5,16 @@ Each test plants one class of repository-controlled program in a real repository
 credential helper, a signing program, a work-tree redirect — and then drives the commands this
 domain runs through :func:`run_git`. Every planted program writes a marker file when it runs; no
 marker may ever appear. The shape checks (a linked or redirected ``.git``, a foreign owner) are
-refused before git starts.
+refused before git starts. And git reads the ``.git`` that was checked: a directory swapped in after
+the check — carrying every setting the command line cannot override — is never read.
 """
 from __future__ import annotations
 
 import os
+import shutil
 import stat
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -265,3 +268,204 @@ def test_the_private_directory_is_ours_and_holds_no_hooks():
     assert st.st_uid == os.geteuid() and stat.S_IMODE(st.st_mode) == 0o700
     assert list((home / "hooks").iterdir()) == []
     assert "bareRepository = explicit" in (home / "gitconfig").read_text()
+
+
+# ── check, then run: git reads the directory that was checked ─────────────────────────────────
+
+PINNED = sys.platform.startswith("linux")
+
+
+def _set(path: Path, key: str, value: str) -> None:
+    """Write one key into a config FILE the way git quotes it (planting only)."""
+    subprocess.run(["git", "config", "--file", str(path), "--add", key, value], check=True,
+                   capture_output=True, env={k: v for k, v in os.environ.items()
+                                             if not k.startswith("GIT_")})
+
+
+def _hostile_git_dir(repo: Path, tmp_path: Path, marker: Path) -> Path:
+    """A copy of ``repo/.git`` whose configuration names programs only the repository's own file
+    can name — filter, diff and merge drivers, reached directly, through an include and through
+    ``config.worktree`` — and a work tree whose attributes select them."""
+    hostile = tmp_path / "hostile.git"
+    shutil.copytree(repo / ".git", hostile, symlinks=True)
+    run = f"sh -c \"touch '{marker}'; cat\""
+    inc = tmp_path / "inc.cfg"
+    for key in ("filter.y.clean", "filter.y.smudge"):
+        _set(inc, key, run)
+        _set(hostile / "config.worktree", key.replace(".y.", ".z."), run)
+    cfg = hostile / "config"
+    _set(cfg, "extensions.worktreeConfig", "true")
+    subprocess.run(["git", "config", "--file", str(cfg), "core.repositoryformatversion", "1"],
+                   check=True)
+    _set(cfg, "include.path", str(inc))
+    for key in ("filter.x.clean", "filter.x.smudge", "filter.x.process", "diff.x.textconv",
+                "diff.x.command", "merge.x.driver"):
+        _set(cfg, key, run)
+    (repo / ".gitattributes").write_text("* filter=x diff=x merge=x\n*.md filter=y\n*.txt filter=z\n")
+    (repo / "b.txt").write_text("b\n")
+    return hostile
+
+
+def _checked(repo: Path) -> Path:
+    """Where the swap parks the checked ``.git`` (outside the work tree, so it is not content)."""
+    return repo.parent / "checked.git"
+
+
+def _swap_in(repo: Path, hostile: Path) -> None:
+    """What a writer of the work-tree root can do between the check and git's read."""
+    (repo / ".git").rename(_checked(repo))
+    shutil.copytree(hostile, repo / ".git", symlinks=True)
+
+
+def _swap_back(repo: Path) -> None:
+    shutil.rmtree(repo / ".git")
+    _checked(repo).rename(repo / ".git")
+
+
+def _subjects(repo: Path) -> list:
+    return [run_git(repo, "add", "-A"), run_git(repo, "status", "--porcelain"),
+            run_git(repo, "commit", "-q", "-m", "change", env=IDENT),
+            run_git(repo, "diff", "HEAD~1"), run_git(repo, "log", "-1", "-p"),
+            run_git(repo, "checkout", "HEAD", "--", "a.md")]
+
+
+@pytest.mark.skipif(not PINNED, reason="git is handed the checked directory through /proc (Linux)")
+def test_a_git_dir_swapped_in_after_the_check_is_never_read(repo, marker, tmp_path, monkeypatch):
+    hostile = _hostile_git_dir(repo, tmp_path, marker)
+    real_run = subprocess.run
+    swapped = []
+
+    def run(argv, *a, **kw):              # the window: after every check, right before git starts
+        if argv[:2] != ["git", "--no-pager"]:
+            return real_run(argv, *a, **kw)
+        _swap_in(repo, hostile)
+        swapped.append(argv)
+        try:
+            return real_run(argv, *a, **kw)
+        finally:
+            _swap_back(repo)
+
+    monkeypatch.setattr(gitexec.subprocess, "run", run)
+    (repo / "a.md").write_text("two\n")
+    procs = _subjects(repo)
+    assert len(swapped) == len(procs)
+    assert not marker.exists()
+    assert all(p.returncode == 0 for p in procs), [p.stderr for p in procs]
+    # git worked in the checked directory: the commit is there, and the swapped-in one is untouched
+    log = _raw(repo, "log", "--format=%s").stdout.split()
+    assert log == ["change", "seed"]
+    assert "change" not in subprocess.run(["git", "--git-dir", str(hostile), "log", "--format=%s"],
+                                          capture_output=True, text=True).stdout
+
+
+def test_a_swap_right_after_the_check_is_never_read(repo, marker, tmp_path, monkeypatch):
+    """Pinned (Linux): git still works in the checked directory. Elsewhere: the identity re-check
+    refuses before git starts. Either way nothing the swapped-in directory names runs."""
+    hostile = _hostile_git_dir(repo, tmp_path, marker)
+    real_check = gitexec._check_repository
+
+    def check(root, home):
+        result = real_check(root, home)
+        if result[0] is not None:
+            _swap_in(repo, hostile)
+        return result
+
+    monkeypatch.setattr(gitexec, "_check_repository", check)
+    (repo / "a.md").write_text("two\n")
+    proc = run_git(repo, "add", "-A")
+    assert not marker.exists()
+    if PINNED:
+        assert proc.returncode == 0
+        staged = subprocess.run(["git", "--git-dir", str(_checked(repo)), "--work-tree",
+                                 str(repo), "diff", "--cached", "--name-only"],
+                                capture_output=True, text=True).stdout.split()
+        assert "a.md" in staged
+    else:
+        assert proc.returncode == gitexec.REFUSED and "changed after it was checked" in proc.stderr
+
+
+def test_without_proc_a_swap_while_git_runs_is_a_refusal(repo, tmp_path, monkeypatch):
+    monkeypatch.setattr(gitexec, "_pin", lambda fd: None)     # the path, re-checked by identity
+    other = tmp_path / "other.git"
+    shutil.copytree(repo / ".git", other, symlinks=True)
+    real_run = subprocess.run
+
+    def run(argv, *a, **kw):
+        proc = real_run(argv, *a, **kw)
+        if argv[:2] == ["git", "--no-pager"]:
+            (repo / ".git").rename(repo / ".git-checked")
+            other.rename(repo / ".git")
+        return proc
+
+    monkeypatch.setattr(gitexec.subprocess, "run", run)
+    proc = run_git(repo, "status")
+    assert proc.returncode == gitexec.REFUSED and "changed while git ran" in proc.stderr
+    (repo / ".git").rename(other)                            # put the checked one back
+    (repo / ".git-checked").rename(repo / ".git")
+    with pytest.raises(GitRefused):
+        run_git(repo, "status", check=True)
+
+
+def test_a_git_dir_replaced_between_inspection_and_opening_is_refused(repo, tmp_path, monkeypatch):
+    real_open = os.open
+    other = tmp_path / "other.git"
+    shutil.copytree(repo / ".git", other, symlinks=True)
+
+    def opener(path, flags, *a, **kw):
+        if os.fspath(path) == os.path.join(str(repo), ".git"):
+            (repo / ".git").rename(repo / ".git-checked")
+            other.rename(repo / ".git")
+        return real_open(path, flags, *a, **kw)
+
+    monkeypatch.setattr(gitexec.os, "open", opener)
+    proc = run_git(repo, "status")
+    assert proc.returncode == gitexec.REFUSED and "changed while it was being checked" in proc.stderr
+
+
+def test_a_git_dir_that_appears_after_the_check_is_not_discovered(tmp_path, marker, monkeypatch):
+    ws = tmp_path / "plain"
+    ws.mkdir()
+    source = tmp_path / "src"
+    source.mkdir()
+    _raw(source, "init", "-q")
+    _raw(source, "config", "core.fsmonitor", f"touch '{marker}'; echo")
+    _raw(source, "config", "filter.x.clean", f"sh -c \"touch '{marker}'; cat\"")
+    (ws / ".gitattributes").write_text("* filter=x\n")
+    real_check = gitexec._check_repository
+
+    def check(root, home):
+        result = real_check(root, home)
+        if os.path.realpath(root) == os.path.realpath(ws):
+            shutil.copytree(source / ".git", ws / ".git", symlinks=True)
+        return result
+
+    monkeypatch.setattr(gitexec, "_check_repository", check)
+    proc = run_git(ws, "add", "-A")
+    assert proc.returncode != 0 and "not a git repository" in proc.stderr
+    assert not marker.exists()
+
+
+def test_gits_own_ownership_rule_still_applies(repo, monkeypatch):
+    """GIT_DIR is explicit, which skips git's ``safe.directory`` check — so it is made here: a
+    ``.git`` and work tree owned by someone else are refused unless the system lists the work tree."""
+    real_lstat = os.lstat
+    targets = {os.path.join(str(repo), ".git"), str(repo)}
+
+    def lstat(path, *a, **kw):
+        st = real_lstat(path, *a, **kw)
+        if os.fspath(path) in targets:
+            fields = list(st)
+            fields[stat.ST_UID] = st.st_uid + 4242
+            return os.stat_result(fields)
+        return st
+
+    monkeypatch.setattr(gitexec.os, "lstat", lstat)
+    monkeypatch.setattr(gitexec, "_safe_directories", [])
+    proc = run_git(repo, "status")
+    assert proc.returncode == gitexec.REFUSED and "dubious ownership" in proc.stderr
+    monkeypatch.setattr(gitexec, "_safe_directories", [str(repo)])
+    assert run_git(repo, "status").returncode == 0
+    monkeypatch.setattr(gitexec, "_safe_directories", [str(repo.parent) + "/*"])
+    assert run_git(repo, "status").returncode == 0
+    monkeypatch.setattr(gitexec, "_safe_directories", ["*"])
+    assert run_git(repo, "status").returncode == 0

@@ -183,6 +183,11 @@ def grant_tools_access(paths: Iterable["str | Path"]) -> bool:
     and anything an earlier grant opened in it is closed again (``_keep_git_private``). The model's
     tools may read history, never write the repository the worker's and agent-api's git trust.
 
+    A directory holding a ``.git`` — a work-tree root — also gets the sticky bit: its group can
+    still create entries and write the ones it may write, but can rename or remove only entries it
+    owns. Without it, write access to the work-tree root is enough to rename a ``.git`` the tools
+    user does not own and put another directory in its place.
+
     When a path cannot be granted, this worker stops switching users (``_tools_off``) and says so,
     and False is returned; True when there is nothing to do or everything was granted."""
     global _tools_off
@@ -192,13 +197,15 @@ def grant_tools_access(paths: Iterable["str | Path"]) -> bool:
     tools_uid, gid = ident
     ok = True
 
-    def grant(p: str, is_dir: bool) -> None:
+    def grant(p: str, is_dir: bool, sticky: bool = False) -> None:
         nonlocal ok
         try:
             st = os.lstat(p)
             if stat.S_ISLNK(st.st_mode):
                 return
             want = stat.S_IRGRP | stat.S_IWGRP | ((stat.S_IXGRP | stat.S_ISGID) if is_dir else 0)
+            if sticky:
+                want |= stat.S_ISVTX
             if st.st_gid != gid:
                 os.lchown(p, -1, gid)
             if (st.st_mode & want) != want:
@@ -218,6 +225,8 @@ def grant_tools_access(paths: Iterable["str | Path"]) -> bool:
             if ".git" in dirnames:
                 dirnames.remove(".git")              # never walked into, never granted
                 _keep_git_private(os.path.join(dirpath, ".git"), tools_uid)
+            if os.path.lexists(os.path.join(dirpath, ".git")):
+                grant(dirpath, True, sticky=True)    # a .git here: nobody else's entry is renamed
             for name in dirnames:
                 grant(os.path.join(dirpath, name), True)
             for name in filenames:

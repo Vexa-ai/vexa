@@ -36,10 +36,23 @@ What :func:`run_git` pins, in the order git resolves it:
    ``fetch``, branch tracking, identity); every other key is removed and logged by name.
 4. **The repository's shape** is checked first: ``.git`` must be a real directory (not a link, not a
    ``gitdir:`` file) owned by this process or by the owner of the work tree, with no ``commondir``
-   redirect and no object alternates, and its ``config`` a regular file. A repository that fails is
-   refused — exit status 128 with the reason, exactly as git reports its own refusals — never
-   repaired.
-5. ``diff``, ``show``, ``log`` and ``whatchanged`` run with ``--no-ext-diff --no-textconv``.
+   redirect and no object alternates, and its ``config`` a regular file. Git's own ownership rule
+   applies as well (``.git`` and the work tree owned by this user, or the work tree listed in the
+   system's ``safe.directory``), checked here because an explicit ``GIT_DIR`` (5) skips git's. A
+   repository that fails is refused — exit status 128 with the reason, exactly as git reports its
+   own refusals — never repaired.
+5. **Git reads exactly the directory that was checked.** ``.git`` is opened once, the checks and
+   the reduction in 3 and 4 run on that open directory, and git is given that same directory as
+   ``GIT_DIR`` (``/proc/self/fd/N`` on Linux, the descriptor passed to git). Renaming ``.git`` or
+   swapping another directory in after the check changes nothing git reads. Where ``/proc`` cannot
+   name a descriptor (not Linux), ``GIT_DIR`` is the path and the directory's identity is
+   re-checked immediately before and after git runs; any change is a refusal. A command run at a
+   root with no ``.git`` gets a ``GIT_DIR`` that cannot exist, so a ``.git`` appearing after the
+   check is never discovered. Attributes in the work tree can still name a filter, diff or merge
+   driver, but a driver runs only when configuration defines its command, and no scope git reads
+   can: the command line and global file are this module's, the system scope is off, and the
+   repository's file is the reduced one in the directory git was handed.
+6. ``diff``, ``show``, ``log`` and ``whatchanged`` run with ``--no-ext-diff --no-textconv``.
 
 The canonical copy is ``core/agent/shared/gitexec.py``. It is vendored VERBATIM where a package
 cannot import it: ``core/agent/llm/gitexec.py`` (the worker's ``llm`` package imports no product
@@ -53,6 +66,7 @@ import os
 import re
 import stat
 import subprocess
+import sys
 import tempfile
 import threading
 from typing import Mapping, Optional, Sequence
@@ -117,8 +131,17 @@ class GitRefused(subprocess.CalledProcessError):
 
 _state_lock = threading.Lock()
 _private_dir: Optional[str] = None
+_safe_directories: list[str] = []
 _validated: dict[tuple, bool] = {}
 _VALIDATED_MAX = 4096
+
+#: How ``.git`` is held open between the check and git's run: a path-only handle on Linux (no read
+#: needed, cannot be used to read or write by itself), never following a link.
+_DIR_FLAGS = (getattr(os, "O_PATH", os.O_RDONLY) | os.O_DIRECTORY | os.O_NOFOLLOW
+              | getattr(os, "O_CLOEXEC", 0))
+#: The name, inside a directory only this process can write, given to git as ``GIT_DIR`` when the
+#: work tree had no ``.git`` at the check: it never exists, so git finds no repository.
+_NO_REPOSITORY = "no-repository"
 
 
 def _carried_safe_directories() -> list[str]:
@@ -137,10 +160,12 @@ def _carried_safe_directories() -> list[str]:
 
 
 def _make_private_dir() -> str:
+    global _safe_directories
     path = tempfile.mkdtemp(prefix="vexa-gitexec-")          # 0700, ours, unpredictable name
     os.mkdir(os.path.join(path, "hooks"), 0o700)            # deliberately empty
     lines = ["[safe]", "\tbareRepository = explicit"]
-    for entry in _carried_safe_directories():
+    _safe_directories = _carried_safe_directories()
+    for entry in _safe_directories:
         escaped = entry.replace("\\", "\\\\").replace('"', '\\"')
         lines.append(f'\tdirectory = "{escaped}"')
     fd = os.open(os.path.join(path, "gitconfig"), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -242,10 +267,13 @@ def _split_args(args: Sequence[str]) -> tuple[list[str], str, list[str]]:
     return caller_config, sub, rest[1:]
 
 
-def _list_config(path: str, home: str) -> Optional[list[tuple[str, Optional[str]]]]:
-    """``(key, value)`` pairs of one config file, includes NOT followed; None if unreadable."""
+def _list_config(path: str, home: str,
+                 fds: Sequence[int] = ()) -> Optional[list[tuple[str, Optional[str]]]]:
+    """``(key, value)`` pairs of one config file, includes NOT followed; None if unreadable.
+    ``fds``: descriptors ``path`` names through ``/proc/self/fd`` (passed to git at that number)."""
     proc = subprocess.run(["git", "config", "--file", path, "--list", "--null"],
-                          cwd=home, env=_base_env(home, None), capture_output=True, timeout=30)
+                          cwd=home, env=_base_env(home, None), capture_output=True, timeout=30,
+                          pass_fds=tuple(fds))
     if proc.returncode != 0:
         return None
     pairs: list[tuple[str, Optional[str]]] = []
@@ -259,7 +287,7 @@ def _list_config(path: str, home: str) -> Optional[list[tuple[str, Optional[str]
 
 
 def _rewrite_config(gitdir: str, path: str, keep: list[tuple[str, Optional[str]]], home: str,
-                    mode: int) -> None:
+                    mode: int, fds: Sequence[int] = ()) -> None:
     fd, tmp = tempfile.mkstemp(prefix="config.vexa-", dir=gitdir)
     os.close(fd)
     try:
@@ -267,7 +295,8 @@ def _rewrite_config(gitdir: str, path: str, keep: list[tuple[str, Optional[str]]
         for key, value in keep:
             subprocess.run(["git", "config", "--file", tmp, "--add", key,
                             "true" if value is None else value],
-                           cwd=home, env=env, capture_output=True, check=True, timeout=30)
+                           cwd=home, env=env, capture_output=True, check=True, timeout=30,
+                           pass_fds=tuple(fds))
         os.chmod(tmp, mode)
         os.replace(tmp, path)
     except BaseException:
@@ -278,31 +307,118 @@ def _rewrite_config(gitdir: str, path: str, keep: list[tuple[str, Optional[str]]
         raise
 
 
-def _check_repository(root: str, home: str) -> Optional[str]:
-    """None when the repository at ``root`` may be used (its config reduced to the allow-list
-    first), else the reason it is refused. ``root`` without a ``.git`` is not checked here: git,
-    pinned to ``root`` by the ceiling, finds no repository there."""
+class _Held:
+    """``.git`` held open from the check until git has run. ``ref`` is the path this process and
+    git use for it: ``/proc/self/fd/N`` when pinned, else the path itself (re-checked by
+    identity around the run)."""
+
+    __slots__ = ("fd", "ident", "ref", "pinned")
+
+    def __init__(self, fd: int, ident: tuple[int, int], ref: str, pinned: bool) -> None:
+        self.fd, self.ident, self.ref, self.pinned = fd, ident, ref, pinned
+
+    def close(self) -> None:
+        try:
+            os.close(self.fd)
+        except OSError:
+            pass
+
+
+def _pin(fd: int) -> Optional[str]:
+    """``/proc/self/fd/N`` when it names exactly the directory ``fd`` holds (Linux), else None."""
+    if not sys.platform.startswith("linux"):
+        return None
+    ref = f"/proc/self/fd/{fd}"
+    try:
+        named, held = os.stat(ref), os.fstat(fd)
+    except OSError:
+        return None
+    return ref if (named.st_dev, named.st_ino) == (held.st_dev, held.st_ino) else None
+
+
+def _ours(uid: int) -> bool:
+    """Git's rule for "owned by the current user", without its ``SUDO_UID`` allowance for root."""
+    return uid == os.geteuid()
+
+
+def _safe_directory(root: str) -> bool:
+    """Git's ``safe.directory`` match of the work tree against the system entries this module
+    carries (the same list the private global config holds)."""
+    path = os.path.realpath(root)
+    for entry in _safe_directories:
+        if entry == "*":
+            return True
+        if entry.endswith("/*") and len(entry) >= 3:
+            prefix = os.path.realpath(entry[:-2]) + os.sep
+            if path.startswith(prefix):
+                return True
+        elif os.path.realpath(entry) == path:
+            return True
+    return False
+
+
+def _same(root: str, held: _Held) -> bool:
+    """``root/.git`` still names the directory that was checked."""
+    try:
+        st = os.lstat(os.path.join(root, ".git"))
+    except OSError:
+        return False
+    return stat.S_ISDIR(st.st_mode) and (st.st_dev, st.st_ino) == held.ident
+
+
+def _check_repository(root: str, home: str) -> "tuple[Optional[_Held], Optional[str]]":
+    """``(held, None)`` when the repository at ``root`` may be used — its ``.git`` held open and its
+    config reduced to the allow-list first — else ``(None, reason)``. ``(None, None)``: no ``.git``
+    at ``root``; git, given a ``GIT_DIR`` that cannot exist, finds no repository there."""
     gitdir = os.path.join(root, ".git")
     try:
         st = os.lstat(gitdir)
     except FileNotFoundError:
-        return None
+        return None, None
     except OSError as exc:
-        return f"cannot inspect .git ({exc.strerror})"
+        return None, f"cannot inspect .git ({exc.strerror})"
     if stat.S_ISLNK(st.st_mode):
-        return ".git is a symbolic link"
+        return None, ".git is a symbolic link"
     if not stat.S_ISDIR(st.st_mode):
-        return ".git is not a directory"
+        return None, ".git is not a directory"
     try:
         owner_of_tree = os.lstat(root).st_uid
     except OSError as exc:
-        return f"cannot inspect the work tree ({exc.strerror})"
+        return None, f"cannot inspect the work tree ({exc.strerror})"
     if st.st_uid not in (os.geteuid(), owner_of_tree):
-        return ".git is owned by neither this process nor the owner of the work tree"
+        return None, ".git is owned by neither this process nor the owner of the work tree"
+    if not (_ours(st.st_uid) and _ours(owner_of_tree)) and not _safe_directory(root):
+        return None, ("dubious ownership: .git or the work tree is not owned by this user and the "
+                      "work tree is not a safe.directory")
+    try:
+        fd = os.open(gitdir, _DIR_FLAGS)
+    except OSError as exc:
+        return None, f"cannot open .git ({exc.strerror})"
+    try:
+        held_st = os.fstat(fd)
+    except OSError as exc:
+        os.close(fd)
+        return None, f"cannot inspect .git ({exc.strerror})"
+    if not stat.S_ISDIR(held_st.st_mode) or (held_st.st_dev, held_st.st_ino) != (st.st_dev, st.st_ino):
+        os.close(fd)
+        return None, ".git changed while it was being checked"
+    ref = _pin(fd)
+    held = _Held(fd, (st.st_dev, st.st_ino), ref or gitdir, ref is not None)
+    reason = _check_contents(held, home, gitdir)
+    if reason is not None:
+        held.close()
+        return None, reason
+    return held, None
+
+
+def _check_contents(held: _Held, home: str, gitdir: str) -> Optional[str]:
+    """The checks and the reduction inside the held ``.git``, all through ``held.ref`` (``gitdir``
+    is its path, for the log only)."""
+    fds = (held.fd,) if held.pinned else ()
     for redirect in ("commondir", os.path.join("objects", "info", "alternates")):
-        if os.path.lexists(os.path.join(gitdir, redirect)):
+        if os.path.lexists(os.path.join(held.ref, redirect)):
             return f".git/{redirect} redirects the repository"
-    config = os.path.join(gitdir, "config")
+    config = os.path.join(held.ref, "config")
     try:
         cst = os.lstat(config)
     except FileNotFoundError:
@@ -311,31 +427,43 @@ def _check_repository(root: str, home: str) -> Optional[str]:
         return f"cannot inspect .git/config ({exc.strerror})"
     if not stat.S_ISREG(cst.st_mode):
         return ".git/config is not a regular file"
-    stamp = (config, cst.st_dev, cst.st_ino, cst.st_size, cst.st_mtime_ns, cst.st_ctime_ns)
+    stamp = (*held.ident, cst.st_dev, cst.st_ino, cst.st_size, cst.st_mtime_ns, cst.st_ctime_ns)
     if _validated.get(stamp):
         return None
-    pairs = _list_config(config, home)
+    pairs = _list_config(config, home, fds)
     if pairs is None:
         return ".git/config cannot be read"
     keep = [(k, v) for k, v in pairs if _LOCAL_ALLOWED.match(k)]
     if len(keep) != len(pairs):
         removed = sorted({k for k, _ in pairs if not _LOCAL_ALLOWED.match(k)})
         _log.warning("gitexec: removed %d setting(s) from %s that git would act on: %s",
-                     len(pairs) - len(keep), config, ", ".join(removed))
+                     len(pairs) - len(keep), os.path.join(gitdir, "config"), ", ".join(removed))
         try:
-            _rewrite_config(gitdir, config, keep, home, stat.S_IMODE(cst.st_mode) & 0o644)
+            _rewrite_config(held.ref, config, keep, home, stat.S_IMODE(cst.st_mode) & 0o644, fds)
         except (OSError, subprocess.SubprocessError) as exc:
             return f".git/config could not be reduced ({exc})"
         try:
             cst = os.lstat(config)
         except OSError:
             return None
-        stamp = (config, cst.st_dev, cst.st_ino, cst.st_size, cst.st_mtime_ns, cst.st_ctime_ns)
+        stamp = (*held.ident, cst.st_dev, cst.st_ino, cst.st_size, cst.st_mtime_ns, cst.st_ctime_ns)
     with _state_lock:
         if len(_validated) >= _VALIDATED_MAX:
             _validated.clear()
         _validated[stamp] = True
     return None
+
+
+def _refused(argv: list[str], root: str, reason: str, *, check: bool, capture_output: bool,
+             text: bool) -> subprocess.CompletedProcess:
+    message = f"vexa: refusing to run git in {root}: {reason}\n"
+    _log.warning(message.strip())
+    empty: "str | bytes" = "" if text else b""
+    err: "str | bytes" = message if text else message.encode()
+    if check:
+        raise GitRefused(REFUSED, argv, output=empty, stderr=err)
+    return subprocess.CompletedProcess(argv, REFUSED, stdout=empty if capture_output else None,
+                                       stderr=err if capture_output else None)
 
 
 def run_git(cwd: "Optional[str | os.PathLike[str]]", *args: str,
@@ -363,18 +491,33 @@ def run_git(cwd: "Optional[str | os.PathLike[str]]", *args: str,
     if sub in _DIFF_COMMANDS:
         argv += ["--no-ext-diff", "--no-textconv"]
     argv += rest
+    shape = {"check": check, "capture_output": capture_output, "text": text}
 
-    reason = _check_repository(root, home)
+    held, reason = _check_repository(root, home)
     if reason is not None:
-        message = f"vexa: refusing to run git in {root}: {reason}\n"
-        _log.warning(message.strip())
-        empty: "str | bytes" = "" if text else b""
-        err: "str | bytes" = message if text else message.encode()
-        if check:
-            raise GitRefused(REFUSED, argv, output=empty, stderr=err)
-        return subprocess.CompletedProcess(argv, REFUSED, stdout=empty if capture_output else None,
-                                           stderr=err if capture_output else None)
-    if sub not in _CREATING_COMMANDS and os.path.isdir(os.path.join(root, ".git")):
-        run_env["GIT_WORK_TREE"] = root
-    return subprocess.run(argv, cwd=root, env=run_env, check=check, capture_output=capture_output,
-                          text=text, timeout=timeout, input=input)
+        return _refused(argv, root, reason, **shape)
+    try:
+        if sub in _CREATING_COMMANDS:
+            # init/clone make a repository; they are not handed one (an existing .git was still
+            # checked and reduced above, as before).
+            return subprocess.run(argv, cwd=root, env=run_env, check=check,
+                                  capture_output=capture_output, text=text, timeout=timeout,
+                                  input=input)
+        if held is None:
+            run_env["GIT_DIR"] = os.path.join(home, _NO_REPOSITORY)
+            fds: tuple[int, ...] = ()
+        else:
+            run_env["GIT_DIR"] = held.ref
+            run_env["GIT_WORK_TREE"] = root
+            fds = (held.fd,) if held.pinned else ()
+            if not held.pinned and not _same(root, held):
+                return _refused(argv, root, ".git changed after it was checked", **shape)
+        proc = subprocess.run(argv, cwd=root, env=run_env, check=check,
+                              capture_output=capture_output, text=text, timeout=timeout,
+                              input=input, pass_fds=fds)
+        if held is not None and not held.pinned and not _same(root, held):
+            return _refused(argv, root, ".git changed while git ran", **shape)
+        return proc
+    finally:
+        if held is not None:
+            held.close()
