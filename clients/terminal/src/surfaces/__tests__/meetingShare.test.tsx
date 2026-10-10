@@ -165,8 +165,11 @@ describe("arriving through a share link opens that meeting in either shell", () 
     stashSharedMeeting(13);
     expect(localStorage.getItem("vexa.openMeeting")).toBe("13");
     expect(localStorage.getItem("vexa.openMeetingRef")).toBeNull();
+    expect(localStorage.getItem("vexa.openMeetingFront")).toBeNull();
     vi.stubEnv("NEXT_PUBLIC_TERMINAL_MODE", "minutes");
     stashSharedMeeting(14);
     expect(localStorage.getItem("vexa.openMeetingRef")).toBe("14");
+    // …and asks the minutes shell to open it on the meeting's page, not the reader's desk
+    expect(localStorage.getItem("vexa.openMeetingFront")).toBe("meeting");
   });
 });

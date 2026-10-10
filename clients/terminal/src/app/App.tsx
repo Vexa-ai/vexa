@@ -18,6 +18,7 @@ import { VersionBar } from "./VersionBar";
 import { registry } from "../contributions";
 import { AuthGate } from "./AuthGate";
 import { ApiError, presentError } from "../surfaces/apiClient";
+import { SHARED_ARRIVAL_KEY } from "../minutes/roomView";
 import { OnboardingGate } from "./OnboardingGate";
 import { acceptInvite, acceptTranscriptShare, previewInvite, type InvitePreview } from "../surfaces/workspaceApi";
 import { redeemScaffoldShare } from "../minutes/scaffold";
@@ -175,7 +176,11 @@ function InviteGate({ children }: { children: ReactNode }) {
 export function stashSharedMeeting(meetingId: number | string): void {
   try {
     localStorage.setItem("vexa.openMeeting", String(meetingId));
-    if (minutesOnly()) localStorage.setItem("vexa.openMeetingRef", String(meetingId));
+    if (minutesOnly()) {
+      localStorage.setItem("vexa.openMeetingRef", String(meetingId));
+      // …and on the MEETING's page, not the reader's desk (minutes/roomView.sharedArrivalFront).
+      localStorage.setItem(SHARED_ARRIVAL_KEY, "meeting");
+    }
   } catch { /* locked-down storage: the meeting is still in their list */ }
 }
 
