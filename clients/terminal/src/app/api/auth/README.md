@@ -41,8 +41,9 @@ One link is both door and destination: `/api/auth/redeem?t=<token>&next=<relativ
 the deeplink the visitor was reaching for (`?ask=`, `?meeting=`, `?view=`), so a click lands them
 authenticated and where they meant to be, in one hop.
 
-`login/` — direct email login — is **development-only** and answers 403 on any other build. It was
-previously reachable in production for any address containing `test` (and, in minutes mode, for any
-address at all): a password-less bypass. To sign in against a deployed container, request a link and
-redeem it. `logout/` clears the vexa cookies and the NextAuth session cookies. `adminApi.ts` is the
+`login/` — direct email login — is **development-only** and answers 403 on any other build. To sign
+in against a deployed container, request a link and redeem it. `logout/` clears the vexa cookies and the NextAuth session cookies. `adminApi.ts` is the
 server-only admin-api client.
+
+The user-facing description, the end-to-end flow and the compliance notes are in
+[`docs/docs/authentication.mdx`](../../../../../../docs/docs/authentication.mdx).

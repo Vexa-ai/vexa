@@ -47,9 +47,9 @@ not a `Scope`, and `401 Invalid delegation: no such user` when `sub` names no ac
 **Revocation.** A token ends with the unit it was minted for. agent-api records each token's `jti`
 against its unit at dispatch and, once the runtime no longer runs that unit (it completed, idled out,
 was stopped or failed), writes `vexa:delegation:revoked:<jti>` to the service Redis with the token's
-remaining lifetime as its expiry (`core/agent/control_plane/delegation_revocation.py`). identity
+remaining lifetime as its expiry (`core/agent/control_plane/delegation_revocation.py`). agent-api
 also holds `vexa:delegation:live:<jti>` from the moment it records a token until it revokes it or the
-token expires. identity admits a verified token only while its live key exists and its revoked key
+token expires; it is the only writer of every `vexa:delegation:*` key, and identity only reads. identity admits a verified token only while its live key exists and its revoked key
 does not, and answers `401 Invalid delegation: revoked` otherwise — so a key the store evicted, or a
 token agent-api never recorded, is refused rather than admitted — and `503` when it cannot read the
 store, so an unreadable store never reads as "not revoked"; API keys never touch it
@@ -62,6 +62,9 @@ the same `sub`, `scope` and `target`, a new `jti` and a full lifetime, minted by
 record of the current one (`core/agent/control_plane/delegation_refresh.py`). The worker picks it up
 before its next turn. The replaced token is not revoked while the unit runs; it ends at its own `exp`,
 or with the unit. A unit that has ended is never refreshed.
+
+The whole lifecycle — minting, refresh, revocation and admission — is described for operators in
+`docs/docs/architecture/identity-and-trust.mdx` (§ Worker delegation tokens).
 
 ## Files
 

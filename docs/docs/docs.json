@@ -52,7 +52,9 @@
         "group": "How-to: Agents",
         "pages": [
           "how-to/chat-workspace",
+          "how-to/chat-controls",
           "how-to/workspace-files",
+          "how-to/onboarding-research",
           "how-to/daily-brief",
           "how-to/email-triage"
         ]
@@ -119,6 +121,7 @@
           "authenticated-bots",
           "model-credentials-licensing",
         "agent-web-search",
+        "agent-tool-calls",
           "security-compliance",
           "troubleshooting",
           "troubleshooting/completion-reasons",

@@ -1,0 +1,166 @@
+---
+title: "Manage your chats"
+description: "The terminal's chat list: see which chats are working, rename and reorder them, reopen their history, copy a meeting transcript, and delete a chat with a second click."
+---
+
+The left column of the terminal is one list of your chats. A meeting is a chat too: opening its row
+opens the meeting's page. This page covers the controls on that list and on the chat header.
+
+| Control | Where | What it does |
+|---|---|---|
+| Activity dot | each row | blue while the agent is working in that chat |
+| Rename | the chat's name in the header | gives the chat your own title |
+| Reorder | drag a row | saves your order of the list |
+| History | click a row | reopens the conversation |
+| Copy transcript | the transcript on a meeting page | copies what was said |
+| Delete | `×` on a row, then `✓` | removes the chat from the list in this browser |
+
+## See which chats are working
+
+A row shows a blue dot ("Agent is working") while a turn is running in that chat, or while a
+background job started from it is running. A job that is only queued does not count. Several chats
+can be working at once, and switching to another chat does not stop a turn.
+
+Other dots: a live meeting's row has an accent dot and shows the time in the accent colour, and a
+finished meeting's chat is tagged `held`.
+
+**Limit.** The dot reflects the turns and jobs this browser tab is following. It is not read from the
+server, so another browser or a reload does not show turns that tab is not streaming.
+
+## Rename a chat
+
+1. Open the chat. Its name is in the header, after `Chat ›` (or `Meeting ›`).
+2. Click the name. It becomes a text box with **Save** and **Cancel**.
+3. Type a title and press Enter or **Save**. **Escape** or **Cancel** leaves it unchanged.
+
+- Titles are 1 to 100 characters. Spaces are collapsed and an empty title cannot be saved.
+- A chat you have not sent anything in yet cannot be renamed.
+- If the save fails, the box stays open with "Couldn't save. Try again."
+
+The agent also names chats. Once a task is clear, it gives the chat a short title of three to seven
+words with its `chat_name` tool. **A title you chose is never overwritten by the agent.** The list
+picks up new names about every five seconds.
+
+## Reorder the list
+
+Drag a row and drop it on another row. The dragged row takes that row's place. Your order is saved
+for your account, so it is the same in every browser you sign in from. Chats that are not in your
+saved order yet, such as new ones, follow the ordered rows, newest first.
+
+If the order cannot be saved, the list keeps its previous order and shows "Couldn't save chat order.
+Try again."
+
+<Warning>
+In this release candidate the terminal sends row keys (`c:<chat id>`, `m:<meeting id>`) that the
+server's session-name rule refuses, so saving an order fails with `422` and the message above
+appears. The order is not changed.
+</Warning>
+
+## Reopen a chat's history
+
+Click a row to reopen the conversation. The terminal loads its turns from the server, so the history
+is there in any browser. Turns the product composed for you (for example from an emailed link) are
+not shown as your messages. If loading fails, the chat opens empty and tries again the next time you
+open it.
+
+## Copy a meeting transcript
+
+On a meeting page, the transcript has a **Copy transcript** button.
+
+- It copies every finished segment, plus the one still being spoken, as the speaker's name on one
+  line and the text below it, with a blank line between segments.
+- It is disabled until someone has said something.
+- After a copy it reads **Copied**. If the browser refuses the copy, it shows "Could not copy
+  transcript".
+
+The copy happens in your browser from the transcript already on the page. Nothing is sent to the
+server.
+
+## Delete a chat
+
+1. Hover a row, or tab to its delete button. A `×` appears at its right.
+2. Click `×`. It turns into a red `✓` ("Click again to delete chat").
+3. Click `✓` to delete.
+
+Pressing **Escape**, clicking anywhere else, moving focus away or starting a drag cancels it. A
+meeting row that has no chat has no `×`.
+
+**What delete does.** It removes the chat from the list **in this browser** and remembers that it is
+hidden there. It does not delete the conversation on the server: the session and its history stay,
+and another browser still lists the chat. A meeting's own row returns, because the meeting still
+exists. If you delete the chat you are in, the terminal opens your most recent other chat, or a new
+one if there is none.
+
+To drop a conversation on the server, use `POST /agent/chat/reset` (see
+[Chat with your workspace](/how-to/chat-workspace#continue-a-conversation)).
+
+## How it works
+
+1. **The list.** The terminal calls `GET /api/sessions` and builds the rows from your session index,
+   merged with your meetings. It refreshes every five seconds, so names the agent sets appear.
+2. **Every call goes through the gateway.** The browser calls the terminal's own `/api/*` routes. The
+   terminal forwards them to the gateway's `/agent/*` prefix with your key, and the gateway forwards
+   them to agent-api's `/api/*` with a signed identity. The browser never sends a user id.
+3. **Rename.** `POST /api/chat/name` with `{session, title}`. agent-api checks the title, checks the
+   session is in your index (`404` if not) and stores it as a human name.
+4. **Agent naming.** Each chat turn tells the agent its session id. The agent's `chat_name` tool calls
+   `POST /agent/chat/name/agent` through the MCP re-entry route. That route always stores an agent
+   name and has no field to claim a human one.
+5. **Order.** `GET /api/chat/order` reads your saved order; `PUT /api/chat/order` with `{order}`
+   replaces it.
+6. **History.** `GET /api/sessions/{session}/history` reads the conversation from the harness's
+   transcript in your workspace and returns simplified turns.
+7. **Activity, copy and delete** run in the browser only. Activity is kept in the page's memory,
+   copy uses the clipboard, and delete writes the hidden list to local storage
+   (`vexa.minutes.chatsHidden`).
+
+**Who stores what.**
+
+| Data | Writer | Where |
+|---|---|---|
+| Session index: titles, `named_title`, `name_source` | agent-api | Redis hash per session (`_Sessions` in `core/agent/control_plane/api_shared.py`), in memory without Redis |
+| Rail order | agent-api | Redis key `agent:rail-order:{subject}`, a JSON list |
+| Conversation | the worker's agent harness | the session transcript under the workspace's `.claude/projects/` |
+| Hidden chats, the "All" filter, collapsed columns | the terminal, in the browser | local storage |
+
+**Routes.** `POST /api/chat/name`, `POST /api/chat/name/agent`, `GET` and `PUT /api/chat/order`,
+`GET /api/sessions`, `GET /api/sessions/{session}/history`, all in
+`core/agent/control_plane/routers/chats.py`. The agent route is declared in `core/agent/routes.v1.json`
+and in the `chat_name` row of `core/agent/mcp.tools.v1.json`.
+
+**Configuration.** None. These controls have no settings.
+
+## Why it complies
+
+**Architecture**
+
+| Rule | How this design meets it | Enforced by |
+|---|---|---|
+| P6 — one front door | The browser reaches agent-api only through the terminal's `/api/*` proxy and the gateway. | `gate:domain-doors` |
+| P4 — sealed contracts | The agent's naming tool is a row in `mcp.tools.v1.json`; its route is a row in `routes.v1.json`. | `gate:schema`, `gate:contract-version` |
+| P23 — one writer per carrier | agent-api alone writes the session index and the rail order. The rail order is a declared carrier with agent-api as its only writer. | `gate:dataflow` (rail order); session index: ungated, reviewed |
+| P18 — fail loud | A failed rename, order save or copy shows an error and keeps the old value; the session-list client (`surfaces/sessionsApi.ts`) throws on a backend error instead of returning an empty list. | ungated: reviewed |
+| P20 — default-deny | Every route is scoped to the caller's own index; a session that is not yours is `404`. | ungated: reviewed; deny tests below |
+
+**Security**
+
+- **Who can see and change what.** Only you can list, name, order or read the history of your
+  chats. agent-api takes the subject from the gateway's signed identity, never from the request
+  body, and a request that names nobody is refused with `401`.
+- **What is refused.** A rename of a session not in your index (`404`); a title that is empty or over
+  100 characters (`422`); a session id outside the session-name rule, in a rename, an order or a
+  history path (`422`); an order with duplicates or more than 5000 entries (`422`); an agent claiming
+  a human name (`422`); the agent overwriting a human name (no change).
+- **History.** The server searches only your own workspaces and those your memberships mount. A
+  session it does not find there is `404`, whoever else has a thread of that name.
+
+Deny tests:
+
+| Where | Tests |
+|---|---|
+| `core/agent/tests/test_chat_names.py` | `test_human_name_is_protected_and_scoped`, `test_order_is_per_person`, `test_routes_validate_and_isolate`, `test_agent_title_and_manual_title_reach_the_rail`, `test_the_agent_names_through_its_own_route_and_never_overrides_the_person` |
+| `core/agent/tests/test_chat_session_bound.py` | `test_the_history_path_refuses_a_session_outside_the_bound`, `test_the_naming_bodies_refuse_a_session_outside_the_bound`, `test_the_rail_order_and_the_target_refuse_a_session_outside_the_bound` |
+| `core/agent/tests/test_identity_guard.py` | `test_an_unsigned_identity_is_refused`, `test_naming_nobody_is_401_and_there_is_no_fallback_subject`, `test_the_gateway_signed_identity_is_believed_and_wins_over_plain_headers` |
+| `core/agent/tests/test_workspace_slug_containment.py` | `test_history_never_returns_another_subjects_thread` |
+| `clients/terminal/src/minutes/__tests__/chatControls.test.tsx` | "saves a clicked title and cancels without a write"; "requires a confirmation and permits cancellation"; "reorders both directions, keeps new chats and ignores invalid drags" |
+| `clients/terminal/src/minutes/__tests__/chatActivity.test.tsx` | "tracks concurrent chats independently and clears completed/failed turns"; "keeps running jobs active after composer is released; queued-only jobs are not active" |

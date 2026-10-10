@@ -53,6 +53,14 @@ What this does and does not stop:
 - The human role belongs to the terminal. The terminal resolves the person from its sign-in cookie,
   and the broker trusts the terminal's key for that.
 
+## How it works and why it complies
+
+The end-to-end flows (an agent using a connection, a person consenting, agent-api using a Git
+credential), the two stores and how `VEXA_CONNECTIONS_STORE` selects one, the single-writer table,
+the architecture rules this service meets and the deny tests that prove each protection are in
+[`docs/docs/connections.mdx`](../../../../docs/docs/connections.mdx) under "How it works" and
+"Why it complies".
+
 ## Contracts
 
 **Owns:** [`core/agent/contracts/credential-broker.v1`](../../contracts/credential-broker.v1) — the

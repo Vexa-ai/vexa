@@ -1,0 +1,149 @@
+---
+title: "Long agent turns"
+description: "How a chat turn keeps calling tools past 40 without starting over, the limits that still bound it, and what you see when one is reached."
+---
+
+A chat turn can need many tool calls, for example when it researches across your mail, meetings and
+the web. With the `openai-agent` harness (`VEXA_RUNNER=openai-agent`), a chat turn that reaches its
+tool-call budget **keeps going** in a new window instead of stopping. It keeps every earlier tool
+result and does not run any call twice. Two limits still bound it: a number of windows and the
+turn's clock.
+
+<Note>
+Everything on this page applies to the `openai-agent` harness only, apart from the output cap. The
+`claude-code` and `codex` harnesses run their vendor CLI's own loop, and these budget settings do not
+apply to them.
+</Note>
+
+## What happens in a long chat turn
+
+With the defaults, a chat turn gets 40 tool calls per window and up to 4 extra windows:
+
+1. The turn makes tool calls as usual.
+2. At the 40th call, the window ends and a new one opens at once. The model still has the whole
+   conversation, including every earlier tool result. Nothing is replayed, refused or asked again.
+3. This repeats up to 4 times, so a chat turn can make up to 200 tool calls (40 × 5).
+4. After the last window, or when the turn's clock runs out, the turn stops.
+
+Only **chat** turns continue this way. Other kinds of turn have their own budgets. A background job
+(Create or Extend) gets 160 calls per window and, at the budget, starts a fresh window from its
+brief and what it has already written. A post-meeting run gets 80 and a flow step 40; both stop at
+the budget. See
+[`core/agent/llm/JOBS.md`](https://github.com/Vexa-ai/vexa/blob/main/core/agent/llm/JOBS.md).
+
+## What you see when a limit is reached
+
+A turn that stops on a limit is not an error and has no fault block. The reply so far stays in the
+bubble, and under it the terminal shows one line and a **Continue** button:
+
+- tool calls: *stopped at the tool-call budget after 40 of 40 steps*
+- clock: *stopped at the time budget after N steps (Ts)*
+
+The step count in the line is the last window's. **Continue** sends "continue where you stopped" to
+the same chat, or to the same page when the turn was a page action. If something else is running
+there, it is queued behind it.
+
+Over the API, the turn's `done` frame carries the same facts:
+
+| Field | Meaning |
+|---|---|
+| `ok` | `false` when the turn stopped on a limit |
+| `steps` | tool calls the whole turn made, across windows |
+| `budget` | the per-window tool-call budget |
+| `reason` | the line above |
+| `act` | `{"label":"Continue","instruction":"continue where you stopped"}` |
+
+Calls the model asked for after the limit are answered as not run, with a result that names the
+tool ("not run: the turn hit its tool-call budget"), so the saved conversation stays valid for the
+next turn. A `turn-truncated` event is also emitted for logs and the friction report.
+
+A turn that only had to drop old tool results to fit its context still finishes with `ok: true`;
+its `reason` says how many messages were dropped.
+
+## Configure it
+
+| Variable | Default | What it sets | Where it is declared |
+|---|---|---|---|
+| `VEXA_AGENT_MAX_TOOL_CALLS` | `40` | tool calls per window, and the fallback for every kind of turn. `0` lets no tool run. | compose `.env`; runtime and agent-api `config.v1.json` |
+| `VEXA_AGENT_AUTO_CONTINUE_CHAT` | `1` | `0` stops every chat turn at the budget with the Continue button instead | compose `.env`, Helm `agentApi.autoContinueChat`, Lite |
+| `VEXA_AGENT_MAX_CHAT_CONTINUATIONS` | `4` | extra windows a chat turn may open, `0` to `50` | compose `.env`, Helm `agentApi.maxChatContinuations`, Lite |
+| `VEXA_AGENT_MAX_TURN_SEC` | `900` | the turn's clock in seconds, across all its windows | compose `.env`; runtime and agent-api `config.v1.json` |
+| `VEXA_AGENT_CONTEXT_TOKENS` | `24000` | estimated tokens per request; older tool results are dropped first to stay under it | compose `.env` |
+| `VEXA_AGENT_MAX_OUTPUT_TOKENS` | unset | output tokens a model request asks for. `openai-agent` sends it as `max_tokens`; `claude-code` receives it as `CLAUDE_CODE_MAX_OUTPUT_TOKENS`; `codex` does not read it | compose `.env` |
+
+- agent-api validates the two continuation settings when it starts and refuses to start with a
+  value outside `0` to `50`. It writes both into every worker it starts, so workers run on the
+  deployment's values.
+- The runtime forwards `VEXA_AGENT_MAX_TOOL_CALLS`, `VEXA_AGENT_MAX_TURN_SEC`,
+  `VEXA_AGENT_CONTEXT_TOKENS` and `VEXA_AGENT_MAX_OUTPUT_TOKENS` from its own environment into each
+  worker. The Helm chart does not set them, so a Kubernetes deployment runs on the defaults.
+- `VEXA_AGENT_MAX_OUTPUT_TOKENS` must be a positive whole number. Any other value is ignored and
+  logged by the worker. Lowering it helps when a provider such as OpenRouter refuses a small balance
+  for the `claude` CLI's default 32000-token request. When the provider says the request asked for
+  more than the balance covers, the chat's provider fault names this setting in its remedy.
+- The per-kind settings `VEXA_AGENT_MAX_TOOL_CALLS_CHAT`, `_JOB`, `_ROOM` and `_FLOW` are read by the
+  harness, but in this release the runtime does not forward them into workers. Set
+  `VEXA_AGENT_MAX_TOOL_CALLS` to change a deployment's budget.
+
+The clock is checked before each tool call. A model request already in flight is not interrupted,
+and a reply with no tool calls is never cut off.
+
+## How it works
+
+1. **Dispatch.** The person sends a chat message (`POST /agent/chat` through the gateway). agent-api
+   builds the worker's environment (`dispatch.build_unit_env`) and writes
+   `VEXA_AGENT_AUTO_CONTINUE_CHAT` and `VEXA_AGENT_MAX_CHAT_CONTINUATIONS` into it from its validated
+   settings (`core/agent/shared/config.py`).
+2. **Spawn.** The runtime starts the worker and forwards the budget settings listed above from its own
+   environment (`WORKER_FORWARD_ENV` in `core/runtime/src/runtime_kernel/workload_env.py`).
+3. **The loop.** The harness (`core/agent/llm/openai_agent.py`) reads the kind of turn and its
+   budget, then sends the conversation to the model, runs the tool calls it returns, and feeds the
+   results back.
+4. **A new window.** Before each call it checks the budget. For a chat turn with continuations left,
+   reaching the budget resets the window's count and the loop carries on with the same message list.
+   No message is added and no call is refused.
+5. **The stop.** With no continuations left, or past the clock, the remaining calls are answered as
+   not run, and the turn ends with `done` carrying `ok: false`, `reason` and `act`.
+6. **The client.** The worker's events reach the terminal over the chat's server-sent events. The
+   terminal shows `reason` as a line under the reply and `act` as the **Continue** button, which
+   sends the instruction as a new turn.
+
+**Who stores what.** The harness in the worker is the only writer of the conversation transcript
+(under the workspace's `.claude/projects/`). It records every tool call and result, including the
+"not run" answers. agent-api owns the continuation settings it writes into workers; the operator owns
+the rest through the deployment environment.
+
+**Contracts.** The events are the frozen unit event types in `core/agent/llm/ports.py`. `steps`,
+`budget`, `reason` and `act` are optional fields on `done`, so a client that does not know them still
+reads the turn. Config keys are declared in `core/agent/control_plane/config.v1.json` and
+`core/runtime/src/runtime_kernel/config.v1.json`.
+
+## Why it complies
+
+**Architecture**
+
+| Rule | How this design meets it | Enforced by |
+|---|---|---|
+| P14 — config is a validated contract | Every setting here is declared in a `config.v1.json`; the continuation settings are validated when agent-api starts and are declared for compose, Helm and Lite. | `gate:config-contract` |
+| P7 — config arrives by env | Workers get every setting from their environment: written by agent-api's dispatch or forwarded by the runtime. | review |
+| P18 — fail loud | A turn that stops on a limit says so in `reason`, sets `ok: false` and offers Continue. It never looks finished. A bad output cap is logged, not sent. | ungated: reviewed; tests below |
+| P23 — one writer per carrier | The harness alone writes the conversation transcript; the terminal only renders `done`. | review |
+| No duplication | The default continuation values are defined in the harness and agent-api, and a test holds them equal. | `test_agent_api_declares_the_harness_defaults_and_stamps_them_into_every_worker` |
+
+**Security and bounds**
+
+- **A turn cannot run without end.** Continuation is bounded by `VEXA_AGENT_MAX_CHAT_CONTINUATIONS`
+  (at most 50) and by the turn's clock, which no window resets.
+- **A continued turn keeps its limits.** The allow-set of tools is checked when each call runs, not
+  only when tools are offered, so a new window gains no tools. File tools stay inside the turn's
+  mounts, and `WebFetch` keeps its address checks (see [Agent web search](/agent-web-search)).
+- **Every call is answered.** A call refused at a limit gets a result, so the saved conversation is
+  never left with an unanswered call.
+
+Tests:
+
+| Where | Tests |
+|---|---|
+| `core/agent/tests/test_llm_openai_agent.py` | `test_chat_continues_past_40_without_replaying_or_refusing_calls`, `test_auto_continuation_keeps_time_limit`, `test_chat_continuation_stops_after_the_configured_number_of_windows`, `test_no_continuations_means_the_hard_cap`, `test_the_default_bound_is_finite`, `test_tool_call_budget_stops_the_turn_and_answers_every_call`, `test_a_turn_that_spends_its_budget_says_so_and_offers_to_continue`, `test_the_refused_calls_carry_their_tool_name`, `test_agent_api_declares_the_harness_defaults_and_stamps_them_into_every_worker`, `test_agent_api_refuses_a_malformed_continuation_bound_at_boot`, `test_the_allow_set_is_enforced_at_EXECUTION_not_only_at_advertisement`, `test_file_tools_refuse_a_path_outside_the_mounts` |
+| `core/runtime/tests/test_forwarded_env_parity.py` | `test_all_three_backends_forward_the_same_set` |
+| `clients/terminal/src/surfaces/__tests__/budgetStop.test.tsx` | "ends with a visible line naming the budget and the count"; "offers a Continue act that re-submits the SAME TARGET with 'continue where you stopped'"; "draws no control when the turn stopped for something there is no continuing" |

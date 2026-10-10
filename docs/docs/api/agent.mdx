@@ -447,8 +447,10 @@ The agent domain's Connections tools are served by the gateway's one MCP server
 `secret_service_call` and `onboarding_research`. Each is one `/api/connections/*` or
 `/api/onboarding/research` route with a typed body; a meetings-only installation does
 not expose them, and without a credential broker they answer that Connections are not
-configured. A worker dispatched without a person in the loop is refused every one of
-them except `connections_status`.
+configured (`onboarding_research` with `action: status` still reports stored progress, because it
+reads no account). A worker dispatched without a person in the loop is refused every one of
+them except `connections_status`. What onboarding research reads, its receipts and its failure
+modes are on [Onboarding research and Extend](/how-to/onboarding-research).
 
 A request returns a connection reference and `awaiting_user` or an existing
 `ready` status. Minutes opens **Connections** on the right, where the user chooses
