@@ -63,6 +63,10 @@ export VEXA_MAIL_SMTP_USER="${VEXA_MAIL_SMTP_USER:-}"
 export VEXA_MAIL_SMTP_PASSWORD="${VEXA_MAIL_SMTP_PASSWORD:-}"
 export VEXA_MAIL_SMTP_SECURE="${VEXA_MAIL_SMTP_SECURE:-}"
 export VEXA_MAIL_SMTP_TLS_INSECURE="${VEXA_MAIL_SMTP_TLS_INSECURE:-}"
+# Proxies whose X-Forwarded-For names the client for the terminal's sign-in rate limit (addresses or
+# CIDR ranges). Only these and loopback are believed: a reverse proxy in front of this container must
+# be named (it reaches the terminal from the Docker network's gateway), or every client shares one limit.
+export TERMINAL_TRUSTED_PROXIES="${TERMINAL_TRUSTED_PROXIES:-}"
 # A chat turn continues past its tool-call budget into a fresh window, at most this many times
 # (agent-api validates both and stamps them into every worker; see deploy/compose/.env.example).
 export VEXA_AGENT_AUTO_CONTINUE_CHAT="${VEXA_AGENT_AUTO_CONTINUE_CHAT:-1}"

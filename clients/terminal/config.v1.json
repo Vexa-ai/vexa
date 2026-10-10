@@ -53,6 +53,13 @@
       "targets": ["compose", "helm", "lite"]
     },
     {
+      "key": "TERMINAL_TRUSTED_PROXIES",
+      "class": "defaulted",
+      "default": "",
+      "description": "The proxies whose X-Forwarded-For names the client for the sign-in link's per-client rate limit: addresses or CIDR ranges, comma-separated. Only these and loopback are believed; any other peer is the client itself. Helm defaults it to the in-cluster private ranges while the terminal's Service is ClusterIP.",
+      "targets": ["compose", "helm", "lite"]
+    },
+    {
       "key": "VEXA_CONNECTIONS_BROKER_URL",
       "class": "capability",
       "capability": "connections",

@@ -14,7 +14,7 @@ vi.mock("../mailer", () => ({ sendMail: (opts: MailArgs) => sendMail(opts) }));
 import { POST as requestLinkRoute } from "../request-link/route";
 import { _settleLinkDeliveries } from "../linkDelivery";
 import { _resetLinkRateLimits, takeLinkRequest } from "../linkRateLimit";
-import { CLIENT_ADDRESS_HEADER, clientAddress, isPrivateAddress, stampClientAddress, trustedProxies } from "../clientAddress.mjs";
+import { CLIENT_ADDRESS_HEADER, clientAddress, isPrivateAddress, matchesProxy, stampClientAddress, trustedProxies } from "../clientAddress.mjs";
 
 const admission = vi.fn(async (url: string) =>
   String(url).includes("/internal/signin-admission")
@@ -96,15 +96,38 @@ describe("the client address", () => {
     expect(clientAddress(undefined, "198.51.100.1")).toBe("unknown");
   });
 
-  it("behind a private or named proxy, is the rightmost X-Forwarded-For entry", () => {
-    for (const proxy of ["127.0.0.1", "10.1.2.3", "172.18.0.1", "192.168.1.1", "::1", "fd00::1"]) {
-      expect(isPrivateAddress(proxy)).toBe(true);
+  it("behind a loopback or named proxy, is the rightmost X-Forwarded-For entry", () => {
+    for (const proxy of ["127.0.0.1", "::1"]) {
       expect(clientAddress(proxy, "198.51.100.1, 203.0.113.9")).toBe("203.0.113.9");
     }
     expect(clientAddress("203.0.113.50", "198.51.100.1", trustedProxies({ TERMINAL_TRUSTED_PROXIES: "203.0.113.50" })))
       .toBe("198.51.100.1");
+    const ranges = trustedProxies({ TERMINAL_TRUSTED_PROXIES: "172.16.0.0/12, fd00::/8" });
+    expect(clientAddress("172.18.0.1", "198.51.100.1, 203.0.113.9", ranges)).toBe("203.0.113.9");
+    expect(clientAddress("::ffff:172.18.0.1", "203.0.113.9", ranges)).toBe("203.0.113.9");
+    expect(clientAddress("fd00::5", "203.0.113.9", ranges)).toBe("203.0.113.9");
     expect(isPrivateAddress("172.32.0.1")).toBe(false);
     expect(isPrivateAddress("8.8.8.8")).toBe(false);
+  });
+
+  it("a private peer that was not named is the client itself: its X-Forwarded-For is the caller's own", () => {
+    // A port forwarder, an L4 balancer or a neighbour on the same network reaches the terminal from a
+    // private address and passes the caller's header through unchanged; believing it would let each
+    // request pick its own rate-limit key.
+    for (const peer of ["10.1.2.3", "172.18.0.1", "192.168.1.1", "100.64.0.9", "fd00::1", "fe80::1"]) {
+      expect(isPrivateAddress(peer)).toBe(true);
+      expect(clientAddress(peer, "198.51.100.1, 203.0.113.9")).toBe(peer);
+      expect(clientAddress(peer, "203.0.113.9", trustedProxies({ TERMINAL_TRUSTED_PROXIES: "192.0.2.0/24" }))).toBe(peer);
+    }
+  });
+
+  it("a named range admits exactly its own addresses", () => {
+    expect(matchesProxy("10.255.0.1", "10.0.0.0/8")).toBe(true);
+    expect(matchesProxy("11.0.0.1", "10.0.0.0/8")).toBe(false);
+    expect(matchesProxy("2001:db8::1", "2001:db8::/32")).toBe(true);
+    expect(matchesProxy("2001:db9::1", "2001:db8::/32")).toBe(false);
+    expect(matchesProxy("10.0.0.1", "10.0.0.0/33")).toBe(false);       // a malformed range names nothing
+    expect(matchesProxy("10.0.0.1", "not-an-address")).toBe(false);
   });
 
   it("server.mjs's stamp replaces any inbound copy of the header", () => {

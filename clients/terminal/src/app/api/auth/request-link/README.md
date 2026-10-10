@@ -20,7 +20,8 @@
   `MAGIC_LINK_RATE_WINDOW_SECONDS`). Past the client limit: `429` with `Retry-After`, before admin-api
   is asked. Past the address limit: the usual `200`, and nothing is sent. The client address is the
   one `server.mjs` stamps (`../clientAddress.mjs`): the TCP peer, or the rightmost
-  `X-Forwarded-For` entry when the peer is a private address or named in `TERMINAL_TRUSTED_PROXIES`.
+  `X-Forwarded-For` entry when the peer is loopback or named in `TERMINAL_TRUSTED_PROXIES` (addresses
+  or CIDR ranges). A private peer is not trusted for being private.
 - `next` is reduced to a site-relative path (`safeNext`) BEFORE it is written into the mail.
 - Creates nothing and mints no session — that happens at `../redeem`, after the recipient proves
   they hold the mailbox.

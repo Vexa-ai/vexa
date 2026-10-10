@@ -1171,4 +1171,17 @@ fboth="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set 
 if grep -q 'flows.apiKey and flows.existingSecret are both set' <<< "$fboth"; then echo "  OK: flows.apiKey with flows.existingSecret is refused"
 else echo "  FAIL: flows.apiKey with flows.existingSecret rendered"; fail=1; fi
 
+# The terminal believes X-Forwarded-For only from the proxies it is told about. ClusterIP (only the
+# ingress and pods reach it): the in-cluster ranges. Any other Service type: nothing by default.
+tp() { grep -A1 'name: TERMINAL_TRUSTED_PROXIES' <<< "$1" | sed -n 's/.*value: //p'; }
+if [ "$(tp "$RENDER")" = '"10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,fc00::/7"' ]; then
+  echo "  OK: terminal trusts the in-cluster ranges behind a ClusterIP Service"
+else echo "  FAIL: terminal TERMINAL_TRUSTED_PROXIES behind ClusterIP: $(tp "$RENDER")"; fail=1; fi
+tlb="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set terminal.service.type=LoadBalancer)"
+if [ "$(tp "$tlb")" = '""' ]; then echo "  OK: a LoadBalancer terminal trusts no proxy unless one is named"
+else echo "  FAIL: LoadBalancer terminal TERMINAL_TRUSTED_PROXIES: $(tp "$tlb")"; fail=1; fi
+tnamed="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set terminal.service.type=LoadBalancer --set terminal.trustedProxies=203.0.113.10)"
+if [ "$(tp "$tnamed")" = '"203.0.113.10"' ]; then echo "  OK: terminal.trustedProxies is passed through as named"
+else echo "  FAIL: named TERMINAL_TRUSTED_PROXIES: $(tp "$tnamed")"; fail=1; fi
+
 [ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }
