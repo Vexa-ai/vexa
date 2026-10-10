@@ -410,6 +410,30 @@ The same segments arrive **live** (`completed: false`, a pending draft) and then
 (`completed: true`) — the gateway forwards the confirmed-plus-pending bundle to subscribers as the meeting
 runs.
 
+## Export and import a meeting
+
+A meeting moves between deployments as one file, a [`meeting-bundle.v1`](/how-to/move-a-meeting) zip.
+Both routes need the `tx` scope.
+
+```bash Export (owner only) — GET /meetings/{meeting_id}/export[?media=false]
+curl -OJ -H "X-API-Key: $API_KEY" "$API_BASE/meetings/42/export"
+```
+
+`200` with `application/zip` and `Content-Disposition: attachment`. `404` when the caller cannot see
+the meeting, `403` when they see it through a share or a workspace but do not own it, `409` while a
+bot is in it, `502` when a recording cannot be read (the export is refused, never produced without it).
+`media=false` leaves recordings out.
+
+```bash Import — POST /meetings/import[?dry_run=true]
+curl -H "X-API-Key: $API_KEY" -H "Content-Type: application/zip" \
+  --data-binary @meeting.meeting-bundle.zip "$API_BASE/meetings/import?dry_run=true"
+```
+
+With `dry_run=true`: `200` and a preview (meeting, segment count, speakers, media, `skipped`,
+`duplicate_of`); nothing is written. Without it: `201` and the new `meeting_id`, owned by the caller
+only. A refusal is `{"detail": {"code", "detail"}}` — `409 duplicate_import`, `413 too_large`, or
+`422` with one of the codes in the [refusal table](/how-to/move-a-meeting#what-you-see-when-it-is-refused).
+
 ## Meeting participants
 
 ```bash GET /meetings/{platform}/{native_meeting_id}/participants

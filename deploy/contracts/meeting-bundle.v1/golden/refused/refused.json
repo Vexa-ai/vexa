@@ -1,0 +1,62 @@
+[
+  {
+    "bundle": "absolute-path.zip",
+    "code": "unsafe_path",
+    "why": "an entry with an absolute path"
+  },
+  {
+    "bundle": "backslash-path.zip",
+    "code": "unsafe_path",
+    "why": "an entry name using a backslash separator"
+  },
+  {
+    "bundle": "decompression-bomb.zip",
+    "code": "too_large",
+    "why": "a 4 MiB part that deflates past the 200:1 inflation cap"
+  },
+  {
+    "bundle": "deployment-bound-field.zip",
+    "code": "invalid_part",
+    "why": "meeting.json carrying a user id and a storage path"
+  },
+  {
+    "bundle": "fake-media.zip",
+    "code": "unsafe_media",
+    "why": "a media part whose bytes are not the container its name claims"
+  },
+  {
+    "bundle": "hash-mismatch.zip",
+    "code": "hash_mismatch",
+    "why": "a part changed after the manifest hashed it"
+  },
+  {
+    "bundle": "missing-manifest.zip",
+    "code": "not_a_bundle",
+    "why": "a zip without manifest.json"
+  },
+  {
+    "bundle": "not-a-zip.zip",
+    "code": "not_a_bundle",
+    "why": "bytes that are not a zip archive"
+  },
+  {
+    "bundle": "symlink.zip",
+    "code": "unsafe_entry",
+    "why": "an entry that is a symbolic link"
+  },
+  {
+    "bundle": "unknown-version.zip",
+    "code": "unsupported_version",
+    "why": "a format_version whose major this contract does not define"
+  },
+  {
+    "bundle": "unlisted-entry.zip",
+    "code": "manifest_mismatch",
+    "why": "an entry the manifest does not list"
+  },
+  {
+    "bundle": "zip-slip.zip",
+    "code": "unsafe_path",
+    "why": "an entry whose name climbs out of the archive with '..'"
+  }
+]

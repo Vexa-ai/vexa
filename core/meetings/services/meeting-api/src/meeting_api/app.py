@@ -338,6 +338,17 @@ def create_app(
         recording_repo = _recordings_fakes().InMemoryRecordingRepo()
     app.include_router(_recordings.build_router(recording_repo, storage, token_secret=token_secret))
 
+    # meeting-bundle.v1: export a meeting the caller owns as one portable file, import one as a new
+    # meeting. Composed over the same three ports as the routes above — the transcript store, the
+    # recording repo and object storage — so an import lands every byte through its one writer.
+    from . import bundle as _bundle
+    from .obs import log_event as _log_event
+
+    app.include_router(_bundle.build_router(
+        transcript_store, recording_repo, storage,
+        finalize=_recordings.finalize_master, log_event=_log_event, secret=token_secret,
+    ))
+
     # --- session_profile: PUT /internal/browser-session/{session_uid} — the authenticated bot's write-back ---
     from .session_profile import build_router as _build_session_profile_router
     app.include_router(_build_session_profile_router(meeting_repo, token_secret=token_secret))

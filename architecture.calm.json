@@ -1876,6 +1876,44 @@
      "domain": "meetings"
     }
    ]
+  },
+  {
+   "unique-id": "meeting-bundle.v1",
+   "node-type": "contract",
+   "name": "meeting-bundle.v1",
+   "description": "meeting-bundle.v1 — sealed/published contract (deploy): one meeting as a portable zip that any separate Vexa deployment can import (manifest with a SHA-256 per file; meeting, transcript and annotations parts; optional media and workspace parts); nothing deployment-bound is carried; its goldens include malicious bundles the Python importer and the Node re-derivation must both refuse with the same code",
+   "metadata": [
+    {
+     "path": "deploy/contracts/meeting-bundle.v1",
+     "domain": "deploy"
+    }
+   ]
+  },
+  {
+   "unique-id": "meeting-bundle-file",
+   "node-type": "data-asset",
+   "name": "meeting bundle (portable file)",
+   "description": "a meeting exported as one meeting-bundle.v1 zip: written by meeting-api's export for the meeting's owner, read by meeting-api's import on this or another deployment as a new meeting the importer owns; the person carries the file between them",
+   "controls": {
+    "ownership": {
+     "description": "single writer: meeting-api's exporter",
+     "requirements": [
+      {
+       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "config": {
+        "writers": [
+         "meeting-api"
+        ]
+       }
+      }
+     ]
+    }
+   },
+   "metadata": [
+    {
+     "contract": "meeting-bundle.v1"
+    }
+   ]
   }
  ],
  "relationships": [
@@ -1997,7 +2035,8 @@
       "zoom-sdk-capture",
       "sdk-capture.v1",
       "acl-bots-index",
-      "mcp.tools.v1"
+      "mcp.tools.v1",
+      "meeting-bundle-file"
      ]
     }
    }
@@ -3028,7 +3067,8 @@
      "nodes": [
       "execution-targets.v1",
       "config.v1",
-      "outbound-url.v1"
+      "outbound-url.v1",
+      "meeting-bundle.v1"
      ]
     }
    }
@@ -3949,6 +3989,46 @@
     {
      "access": "req",
      "contract": "mcp.tools.v1"
+    }
+   ]
+  },
+  {
+   "unique-id": "ma-writes-bundle",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "meeting-api"
+     },
+     "destination": {
+      "node": "meeting-bundle-file"
+     }
+    }
+   },
+   "description": "GET /meetings/{meeting_id}/export — the owner's whole meeting as a meeting-bundle.v1 zip",
+   "metadata": [
+    {
+     "access": "write",
+     "contract": "meeting-bundle.v1"
+    }
+   ]
+  },
+  {
+   "unique-id": "ma-reads-bundle",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "meeting-api"
+     },
+     "destination": {
+      "node": "meeting-bundle-file"
+     }
+    }
+   },
+   "description": "POST /meetings/import — validate a meeting-bundle.v1 zip (manifest, every hash, paths, sizes) and land it as a new meeting the importer owns",
+   "metadata": [
+    {
+     "access": "read",
+     "contract": "meeting-bundle.v1"
     }
    ]
   }

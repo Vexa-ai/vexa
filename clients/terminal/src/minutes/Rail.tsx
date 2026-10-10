@@ -18,6 +18,7 @@ import { AccountBadge } from "./AccountBadge";
 import { CollapseButton } from "./Collapse";
 import { T, row, surface, type as ty } from "./tokens";
 import { WorkspaceName } from "../ui-kit/WsLink";
+import { ImportMeetingButton } from "../surfaces/MeetingBundleActions";
 
 const chipS = (on: boolean): CSSProperties => ({
   ...ty.control, fontSize: 11.5, color: on ? "var(--t1)" : "var(--t3)",
@@ -129,6 +130,7 @@ export function Rail(p: {
           title={p.all ? "Showing every chat, including ones nothing has been said in" : "Showing chats you have written in, plus live and upcoming meetings"}>
           All{!p.all && p.hidden > 0 ? ` ${p.hidden}` : ""}
         </button>
+        <ImportMeetingButton compact />
         <button title="New chat" aria-label="New chat" onClick={p.onNewChat}
           style={{ ...row.ghostPlus, marginLeft: 0, fontSize: 17, color: "var(--t2)" }}>+</button>
         {p.onCollapse && <CollapseButton side="left" onClick={p.onCollapse} />}

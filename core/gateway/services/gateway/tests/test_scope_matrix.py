@@ -58,6 +58,8 @@ CASES = [
     ("POST", "/meetings/42/annotate", "/meetings/{meeting_id}/annotate"),
     ("POST", "/meetings/42/share", "/meetings/{meeting_id}/share"),
     ("POST", "/meetings/42/transcript-import", "/meetings/{meeting_id}/transcript-import"),
+    ("GET", "/meetings/42/export", "/meetings/{meeting_id}/export"),
+    ("POST", "/meetings/import", "/meetings/import"),
     ("POST", "/meetings/google_meet/abc-defg-hij/share",
      "/meetings/{platform}/{native_meeting_id}/share"),
     ("POST", "/meetings/google_meet/abc-defg-hij/workspace",
