@@ -61,11 +61,12 @@ BOT_S3_SECRET_KEY=...
 
 With the knob set, each bot restores the stored session into its own ephemeral browser profile
 before launch and joins as the signed-in account — no guest-name entry, no lobby knock where the
-account has access. If the knob is set but the storage config is incomplete, `POST /bots` refuses
-with a 503 naming what's missing — a half-configured deployment never silently spawns anonymous
-bots. It also refuses with a 503 when either half of `BOT_S3_*` equals the storage's root pair
+account has access. If the knob is set but the storage config is incomplete, meeting-api refuses
+to boot, naming what's missing — a half-configured deployment never silently spawns anonymous
+bots. It also refuses to boot when either half of `BOT_S3_*` equals the storage's root pair
 (`MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY`) or `S3_ACCESS_KEY` / `S3_SECRET_KEY`: that pair rides
-every bot, so it must never be a key that can reach the whole store. If the session store is unreachable at spawn time, the bot fails loud with a typed
+every bot, so it must never be a key that can reach the whole store. `POST /bots` and the session
+write-back apply the same two checks and answer 503. If the session store is unreachable at spawn time, the bot fails loud with a typed
 `session-restore` error naming the step and endpoint — it never joins signed-out on a failed
 restore.
 
