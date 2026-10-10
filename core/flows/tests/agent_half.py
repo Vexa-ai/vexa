@@ -38,9 +38,9 @@ import pytest
 PRESENT: bool = importlib.util.find_spec("flows_defs.production_agent") is not None
 
 WHY = ("flows_defs/production_agent.py is not in this tree — the agent half of the production "
-       "definitions (meeting_prep · email_chat · desk_setup · desk_claim · workspace_invite, and "
+       "definitions (meeting_prep · email_chat · desk_setup · desk_claim · workspace_invite · routine_paused, and "
        "the steps prepare_meeting · feedback_turn · await_scaffold · await_claim · "
-       "mail_workspace_invite) is an optional module "
+       "mail_workspace_invite · await_routine) is an optional module "
        "this cut omits, and `production._register_agent_flows` skips it by find_spec. This "
        "assertion is about those flows and can say nothing here.")
 
@@ -55,10 +55,11 @@ required = pytest.mark.skipif(not PRESENT, reason=WHY)
 #: (this one declares nothing — it renders a template and sends a notification), this one is
 #: "which steps does the optional module register at all".
 STEPS = frozenset({"prepare_meeting", "feedback_turn", "await_scaffold", "await_claim",
-                   "mail_workspace_invite"})
+                   "mail_workspace_invite", "await_routine"})
 
 #: The flows it registers, likewise (flows_defs/README.md's own table).
-FLOWS = frozenset({"meeting_prep", "email_chat", "desk_setup", "desk_claim", "workspace_invite"})
+FLOWS = frozenset({"meeting_prep", "email_chat", "desk_setup", "desk_claim", "workspace_invite",
+                   "routine_paused"})
 
 
 def only_if_present(names) -> set:

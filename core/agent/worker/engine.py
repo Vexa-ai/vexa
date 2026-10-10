@@ -77,7 +77,8 @@ from worker import jobs as worker_jobs
 from worker import tool_access
 from worker.friction import (disbelieved_capability, fallback_session, friction_preamble,
                              mcp_unreachable,
-                             report as report_friction, scan_turn, spawn_gap, use_token_source)
+                             report as report_friction, scan_turn, spawn_gap, turn_refusal,
+                             use_token_source)
 
 log = logging.getLogger("agent_api.worker")
 
@@ -1916,8 +1917,16 @@ def run_turn_over_workspace(
     tool_events: list[dict] = []
     try:
         for ev in (gen if first is None else itertools.chain([first], gen)):
-            if ev.get("type") in ("tool-call", "tool-result", "turn-truncated"):
+            if ev.get("type") in ("tool-call", "tool-result", "turn-truncated", "refusal-repeated"):
                 tool_events.append(ev)
+            if ev.get("type") == "done":
+                # THE RUN'S REFUSAL, ON ITS OWN OUTCOME (`llm/refusal_guard.py`). Read off the
+                # turn's tool results, so it holds for every harness, the CLI ones included. agent-api
+                # reads it off a scheduled routine's `done` to pause a routine that is refused run
+                # after run (`control_plane/routine_refusals.py`).
+                refused = turn_refusal(tool_events)
+                if refused:
+                    ev.setdefault("refused", refused)
             if ev.get("type") == "done" and ev.get("sessionId"):
                 captured = ev["sessionId"]
             if ev.get("type") == "done" and ev.get("reason"):

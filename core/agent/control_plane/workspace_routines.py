@@ -54,6 +54,9 @@ _FRONTMATTER_BLOCK = re.compile(r"^(\s*---[^\S\n]*\n)(.*?)(\n---[^\S\n]*(?:\n|$)
 _ENABLED_LINE = re.compile(
     r"(?m)^(?P<prefix>[ \t]*enabled[ \t]*:[ \t]*)(?P<value>[^#\n]*?)(?P<suffix>[ \t]*(?:#.*)?$)"
 )
+#: The frontmatter line a routine paused by the harness carries (`routine_refusals.py`). The
+#: person's own switch-on removes it (`set_routine_file_enabled(enabled=True)`).
+_PAUSED_LINE = re.compile(r"(?m)^[ \t]*paused_reason[ \t]*:[^\n]*(?:\n|\Z)")
 _MONTHS = {
     "jan": 1,
     "feb": 2,
@@ -290,6 +293,9 @@ def _routine_card_from_file(path: Path, *, subject: str, job_card: Optional[dict
     card["plan_kind"] = "prompt" if card.get("plan_summary") else card.get("plan_kind")
     card.setdefault("job_id", None)
     card.setdefault("next_run", None)
+    paused = _string_value(fm.get("paused_reason"))
+    if paused and not enabled:
+        card["paused_reason"] = paused
     if not enabled:
         card["status"] = "disabled"
     elif pending:
@@ -308,8 +314,13 @@ def set_routine_file_enabled(
     *,
     enabled: bool,
     workspaces_dir: str | Path = "/workspaces",
+    paused_reason: str = "",
 ) -> Path:
-    """Rewrite only the ``enabled`` frontmatter field for ``routines/<name>.md``."""
+    """Rewrite only the ``enabled`` frontmatter field for ``routines/<name>.md``.
+
+    ``paused_reason`` (with ``enabled=False``) also writes a ``paused_reason:`` line — the harness's
+    pause after repeated refusals (`routine_refusals.py`). Switching a routine ON removes any such
+    line: the person turning it back on is the answer to it."""
     path = _safe_routine_path(workspaces_dir, subject, name)
     text = _read_routine(path)
     if text is None:
@@ -329,9 +340,24 @@ def set_routine_file_enabled(
         )
     else:
         raw_fm = f"enabled: {value}\n{raw_fm}" if raw_fm else f"enabled: {value}"
+    if enabled or paused_reason:
+        raw_fm = _PAUSED_LINE.sub("", raw_fm).rstrip("\n")
+    if paused_reason and not enabled:
+        one_line = " ".join(str(paused_reason).split()).replace('"', "'")
+        raw_fm = f'{raw_fm}\npaused_reason: "{one_line}"'
     base, rel = _base_rel(path)
     wpaths.write_text_inside(base, rel, open_marker + raw_fm + close_marker + body)
     return path
+
+
+def routine_name_for_id(subject: str, routine_id: str, *,
+                         workspaces_dir: str | Path = "/workspaces") -> Optional[str]:
+    """The ``routines/<name>.md`` whose id (`routine_id_for_workspace_file`) is ``routine_id``, or
+    None — a routine created through ``POST /api/routines`` has no file."""
+    for path in _routine_paths(_safe_workspace_dir(workspaces_dir, subject)):
+        if routine_id_for_workspace_file(subject, path.stem) == routine_id:
+            return path.stem
+    return None
 
 
 def routine_cards_for_subject(

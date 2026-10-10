@@ -52,6 +52,12 @@ EVENT_CLAIM_PROPOSED = "claim.proposed"
 # for a mail nobody needed.
 EVENT_WORKSPACE_INVITED = "workspace.invited"
 
+# THE FOURTH CARRIER — a scheduled routine was switched off because its runs kept being refused the
+# same way (`routine_refusals.py`). Like `desk.unscaffolded` it is re-derivable from the desk: the
+# routine file says `enabled: false` with a `paused_reason:` line, so a publish that never lands
+# loses the queue card and never the fact.
+EVENT_ROUTINE_PAUSED = "routine.paused"
+
 #: Bounded on purpose. Both publishes run INSIDE a request a person is waiting on — a sign-in that
 #: provisions a desk, and an agent turn writing what it learned — so the ceiling on how slow flows
 #: can make those is this number, not flows' own timeout.
@@ -261,3 +267,17 @@ def file_friction_report(record: dict) -> bool:
     rec = friction_mod.normalize(record)
     ok, _resp = post_friction(rec)
     return ok
+
+
+def routine_paused_source_id(subject, routine_id, at) -> str:
+    """Keyed to (person, routine, the pause): ONE card per pause. A routine switched back on and
+    paused again is a second pause and a second card; a redelivery of the same one dedupes."""
+    return f"routine-paused-{subject}-{routine_id}-{at}"
+
+
+def publish_routine_paused(subject, routine_id, name, reason, at, *,
+                           timeout: Optional[float] = None) -> bool:
+    """Hand ONE paused routine to flows' queue (`routine_paused`). NEVER raises."""
+    return publish(EVENT_ROUTINE_PAUSED, routine_paused_source_id(subject, routine_id, at),
+                   {"uid": str(subject), "routine": str(name), "reason": str(reason)},
+                   timeout=timeout)
