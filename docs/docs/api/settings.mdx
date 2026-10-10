@@ -263,7 +263,10 @@ curl -X PATCH "$ADMIN/admin/users/1" \
   -d '{"max_concurrent_bots": 5}'
 ```
 
-Returns the updated account with **200 OK**; an unknown id returns **404**. A body that changes
+Returns the updated account with **200 OK**; an unknown id returns **404**. No admin read of an
+account carries a stored credential: the model key and the transcription token appear as
+`api_key_set` / `token_set` with the masked tail `GET /user/webhook` shows, and a calendar feed as
+`ics_url_set` with its masked form. Writing a masked value back to a key changes nothing. A body that changes
 nothing returns **422** — the patch requires at least one field. Unrecognized fields are refused
 rather than dropped.
 

@@ -67,12 +67,21 @@ SETUP_FIELDS = ("models", "transcription", "completed", "global")
 DIAGNOSTICS_FIELDS = ("capture_signal",)
 
 
+#: The fields that hold a credential, and the prefix every read of one is masked behind
+#: (``main._mask_secret``). A read never reveals one; a write replaces it — and a write of the masked
+#: form a read returned is no write at all.
+SECRET_FIELDS = ("api_key", "token")
+MASK = "********"
+
+
 def validate_config_fields(update: dict) -> dict:
     """Shared field validation for both the per-user prefs and the platform settings writers
     (one rulebook, whichever tier writes). Returns the cleaned update dict."""
     cleaned: dict = {}
     for field, raw in update.items():
         value = (raw or "").strip() if isinstance(raw, str) else raw
+        if field in SECRET_FIELDS and isinstance(value, str) and value.startswith(MASK):
+            continue  # the masked read-back: a client echoing what it was shown changes nothing
         if value in (None, ""):
             cleaned[field] = ""  # explicit clear
             continue
