@@ -47,6 +47,8 @@ spec:
               app.kubernetes.io/component: {{ $c }}
         {{- end }}
         - podSelector:
+            matchLabels:
+              {{- $sel | nindent 14 }}
             matchExpressions:
               - key: app.kubernetes.io/component
                 operator: In

@@ -1184,4 +1184,37 @@ tnamed="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set
 if [ "$(tp "$tnamed")" = '"203.0.113.10"' ]; then echo "  OK: terminal.trustedProxies is passed through as named"
 else echo "  FAIL: named TERMINAL_TRUSTED_PROXIES: $(tp "$tnamed")"; fail=1; fi
 
+# The flows tier is matched by release, not by component alone: its Pods carry the chart's
+# selector labels, and every NetworkPolicy podSelector, the flows-api Service selector and the flows
+# Pod templates that name a flows component also name this release, so another release's flows Pods
+# in the namespace are not peers. (The Deployments' own selectors stay as they are: immutable.)
+flows_np="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true)"
+# Prints each such block that names a flows component without this release's instance label.
+loose="$(awk '
+  function ind(s) { match(s, /^ */); return RLENGTH }
+  function check(i,   d, j, blk, f, k) {
+    d = ind(line[i]); blk = line[i]; f = (line[i] ~ /flows-(worker|api|mailbox)/); k = 0
+    for (j = i + 1; j <= n && ind(line[j]) > d; j++) {
+      blk = blk "\n" line[j]
+      if (line[j] ~ /flows-(worker|api|mailbox)/) f = 1
+      if (line[j] ~ /app.kubernetes.io\/instance: vexa/) k = 1
+    }
+    if (f && !k) print kind ": " blk "\n=="
+  }
+  function flush(   i) {
+    for (i = 1; i <= n; i++) {
+      if (kind == "NetworkPolicy" && line[i] ~ /^ *(- )?podSelector:/) check(i)
+      if (kind == "Service" && line[i] ~ /^  selector:/) check(i)
+      if (kind == "Deployment" && line[i] ~ /^      labels:/) check(i)
+    }
+    n = 0; kind = ""
+  }
+  /^---/ { flush(); next }
+  /^kind: / { kind = $2 }
+  { line[++n] = $0 }
+  END { flush() }' <<< "$flows_np")"
+if [ -z "$loose" ] && grep -q 'app.kubernetes.io/component: flows-api' <<< "$flows_np"; then
+  echo "  OK: every policy, Service and Pod template naming a flows component also names this release"
+else echo "  FAIL: flows matched by component alone:"; echo "$loose" | head -40; fail=1; fi
+
 [ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }

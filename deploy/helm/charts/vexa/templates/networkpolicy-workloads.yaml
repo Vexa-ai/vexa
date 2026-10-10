@@ -111,6 +111,7 @@ spec:
     - to:
         - podSelector:
             matchLabels:
+              {{- $sel | nindent 14 }}
               app.kubernetes.io/component: flows-api
       ports:
         - port: 18200
