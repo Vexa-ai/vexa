@@ -23,6 +23,7 @@ import { buildChatContext, focusTarget, readIncludeSchedule, scheduleEligible, w
 import { useLiveMeetings } from "./liveMeetings";
 import { meetingPhase, type MeetingMock, type MeetingPhase } from "./meetingModel";
 import { presentError } from "./apiClient";
+import { ModelPicker } from "./ModelPicker";
 import { promptCarriesActiveContext } from "./surfaceSync";
 import { isPageIntent, type ChatIntent } from "./chatIntent";
 import { surfaceOf, type FrictionSurface } from "./frictionApi";
@@ -1801,6 +1802,9 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
             rows={1}
             style={{ flex: 1, background: "none", border: "none", outline: "none", color: "var(--t1)", fontSize: 14, lineHeight: "20px", minWidth: 0, minHeight: 28, maxHeight: MAX_TEXTAREA_HEIGHT, resize: "none", overflowY: "hidden", padding: "4px 0", margin: 0, fontFamily: "inherit" }}
           />
+          {/* THE MODEL THIS CHAT RUNS ON (ADR-0042) — beside the controls that act on the next
+              turn, because that is when a pick takes effect. Absent on a deployment with no catalog. */}
+          <ModelPicker session={session} />
           <button type="button" aria-label="Attach files" title="Attach files" disabled={busy || uploading} onClick={() => fileInputRef.current?.click()}
             style={{ background: "transparent", color: "var(--t3)", border: "1px solid var(--line2)", width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", cursor: busy || uploading ? "default" : "pointer", flex: "none", opacity: busy || uploading ? 0.6 : 1 }}>
             <Icon name="paperclip" size={15} />

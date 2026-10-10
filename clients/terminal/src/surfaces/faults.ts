@@ -6,7 +6,8 @@
  *
  *  The server now types every failure on the chat path at its adapter:
  *    · `source: "runtime"` — agent-api could not get an agent started (`shared/runtime_fault.py`);
- *    · `source: "model-provider"` — the model's provider refused the turn (`llm/faults.py`);
+ *    · `source: "model-provider"` — the model's provider refused the turn (`llm/faults.py`), or
+ *      agent-api refused the chat's model pick before asking it (`control_plane/model_providers`);
  *    · `source: "vexa-tools"` — the turn ran past its tool access and its Vexa tool calls were
  *      refused (`worker/tool_access.py`);
  *    · `source: "agent-api"` / `"gateway"` — the terminal's own chat proxy could not get a typed
@@ -73,6 +74,12 @@ const KIND_LABEL: Record<string, string> = {
   unpaid: "out of credit",
   rate_limited: "rate limited",
   refused: "refused the request",
+  // the chat's model pick, refused by agent-api before any request (`control_plane/model_providers`)
+  unknown_model: "model no longer offered",
+  not_permitted: "model not open to you",
+  not_configured: "model not set up for you",
+  credential_missing: "provider credential not set",
+  endpoint_refused: "your endpoint is not allowed",
   // both
   unauthorized: "credential refused",
   // the terminal's own proxy
