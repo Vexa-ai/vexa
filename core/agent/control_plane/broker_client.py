@@ -44,10 +44,13 @@ def route_of(path: str) -> str:
     return _CID.sub("/{cid}", path.split("?", 1)[0])
 
 
-def fault(kind: str, *, role: str, method: str, path: str, status: Optional[int] = None) -> BrokerFault:
-    log.warning(json.dumps({"event": "broker_fault", "source": "credential-broker", "kind": kind, "role": role,
-                            "method": method, "route": route_of(path), "status": status},
-                           separators=(",", ":")))
+def fault(kind: str, *, role: str, method: str, path: str, status: Optional[int] = None,
+          reason: Optional[str] = None) -> BrokerFault:
+    line = {"event": "broker_fault", "source": "credential-broker", "kind": kind, "role": role,
+            "method": method, "route": route_of(path), "status": status}
+    if reason:
+        line["reason"] = reason
+    log.warning(json.dumps(line, separators=(",", ":")))
     return BrokerFault(kind, status)
 
 

@@ -458,6 +458,35 @@ def page_verbs_preamble() -> str:
     )
 
 
+def connections_preamble() -> str:
+    """WHEN THE PERSON ASKS TO CONNECT AN ACCOUNT, AND WHAT A CONNECTION FAILURE MEANS.
+
+    The Connections panel opens only through `connection_request`. A turn that held only the
+    failing account tool answered *"let's connect gmail"* by retrying that tool: nothing told it the
+    request was a verb of its own, and the failure (an outage of the deployment's credential store)
+    looked the same as an authorization the person could renew. The account tools now answer a
+    typed ``reason`` (`control_plane/routers/connections.py` ``INSTRUCTIONS``), and this names the
+    two rules beside each other on every dispatch, since the tools arrive deferred and a verb the
+    prompt does not mention is one the model improvises around.
+
+    `tests/test_connections_preamble.py` holds the text to the reasons agent-api answers."""
+    return (
+        "## Connecting an account\n\n"
+        "When the person asks to connect or reconnect an account (\"connect gmail\", \"reconnect my "
+        "calendar\"), call `connection_request` for that provider: it opens the Connections panel, where "
+        "they sign in. Never answer that request by retrying the tool that failed, and never ask for a "
+        "password, token or code in chat.\n"
+        "Account tools that fail answer a `reason`:\n"
+        "- `reconnect_required` — the authorization is no longer accepted: call `connection_request`.\n"
+        "- `store_unavailable`, `broker_unreachable` — this deployment's connection service is down: "
+        "say so plainly. Reconnecting will not help, because a new sign-in is stored in the same place.\n"
+        "- `provider_error` — the provider refused or is down: report its sentence; reconnecting will not "
+        "help.\n"
+        "If they still ask to reconnect after one of those, call `connection_request` and tell them it "
+        "will not fix that failure.\n\n"
+    )
+
+
 def member_verbs_preamble() -> str:
     """WHO IS IN A WORKSPACE, and the two verbs that change it (Vexa-ai/vexa#1632).
 
@@ -1850,7 +1879,7 @@ def run_turn_over_workspace(
     # worth of onboarding/propose framing).
     turn_prompt = (imperative_preamble(prompt)
                    + mcp_status_note + voice_preamble() + friction_preamble() + kg_links_preamble(mounts)
-                   + page_verbs_preamble()
+                   + page_verbs_preamble() + connections_preamble()
                    + mounts_preamble(mounts, active_target())
                    + entity_index_preamble(mounts) + timeline_preamble()
                    + global_context_preamble(mounts)
