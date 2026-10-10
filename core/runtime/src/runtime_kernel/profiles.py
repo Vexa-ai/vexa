@@ -290,9 +290,9 @@ def default_registry() -> ProfileRegistry:
                     # redis for its streams) and is given no model credential.
                     labels={CLASS_LABEL: "bot"},
                     scheduling=_profile_scheduling("meeting-bot"),
-                    # As a process-backend child it plays and records through the host's system
-                    # PulseAudio, which admits members of this group only.
-                    process_groups=("pulse-access",),
+                    # As a process-backend child it opens the host's shared display, which admits
+                    # the members of this group only (its audio server is its own).
+                    process_groups=("vexa-display",),
                 ),
                 idle_timeout_sec=0,  # 0 ⇒ managed externally; enforcement skips it
                 base_env=bot_tuning_env,

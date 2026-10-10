@@ -184,13 +184,14 @@ migrate-storage: preflight storage-up
 ## lost — which once shipped `docker run … $IMG` with an EMPTY image (vexa-lite never created,
 ## every front door down). Keep all commentary OUT of the recipe body; annotate here instead.
 ##
-## Claude-credential automount (C2/#502): if the host has ~/.claude/.credentials.json, mount the
-## DIRECTORY that holds it and point HOST_CLAUDE_CREDENTIALS at the IN-CONTAINER path inside that
-## mount — in LITE the process backend reads the file directly. (Compose is the opposite: there the
-## var is a docker-HOST path the compose file mounts. Don't copy the semantics across.)
-## It is the DIRECTORY, not the file, because a single-file bind pins the inode it was created with
-## and the CLI refreshes the token by rename(2)-ing a NEW inode over .credentials.json — lite is a
-## long-lived container, so a file bind would serve the pre-refresh token until the next restart.
+## Claude-credential automount (C2/#502): if the host has ~/.claude/.credentials.json, mount THAT FILE
+## read-only into a root-only directory (/var/lib/vexa/host-claude, 0700 in the image) and point
+## HOST_CLAUDE_CREDENTIALS at it — in LITE the runtime copies it into each worker's private HOME.
+## (Compose is the opposite: there the var is a docker-HOST path the compose file mounts. Don't copy
+## the semantics across.) Only the file: the rest of ~/.claude (transcripts, history, settings) is
+## the operator's and never enters the container. A single-file bind pins the inode it was created
+## with, and the CLI refreshes a token by rename(2)-ing a new file over it, so after the host CLI
+## refreshes, re-run `make up` (or set CLAUDE_CODE_OAUTH_TOKEN / an API key instead).
 ##
 ## `envv` strips an INLINE COMMENT and trailing space from a .env value. `.env.example` once shipped
 ## `ADMIN_TOKEN=dev-admin-token   # admin-api auth…`; a bare `cut -d= -f2-` kept the comment, and the
@@ -228,8 +229,8 @@ up: preflight storage-up
 	esac; \
 	CLAUDE_CREDS="$$HOME/.claude/.credentials.json"; \
 	if [ -f "$$CLAUDE_CREDS" ]; then \
-		echo "  Detected Claude subscription credentials — mounting into container"; \
-		CLAUDE_MOUNT="-v $$HOME/.claude:/var/lib/vexa/host-claude:ro -e HOST_CLAUDE_CREDENTIALS=/var/lib/vexa/host-claude/.credentials.json"; \
+		echo "  Detected Claude subscription credentials — mounting the credential file into the container"; \
+		CLAUDE_MOUNT="-v $$CLAUDE_CREDS:/var/lib/vexa/host-claude/.credentials.json:ro -e HOST_CLAUDE_CREDENTIALS=/var/lib/vexa/host-claude/.credentials.json"; \
 	else \
 		CLAUDE_MOUNT=""; \
 	fi; \

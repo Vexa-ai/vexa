@@ -637,8 +637,8 @@
     {
       "key": "PROCESS_LOG_DIR",
       "class": "defaulted",
-      "default": "<tempdir>/vexa-workloads",
-      "description": "process-backend workload log dir — per-workload stdout/stderr capture (the process analog of docker logs); fail-open to DEVNULL if unwritable",
+      "default": "<tempdir>/vexa-workloads (a root runtime: /var/lib/vexa-runtime/logs)",
+      "description": "process-backend workload log dir — per-workload stdout/stderr capture (the process analog of docker logs); under a root runtime it must be root's own (made 0700, files 0600); fail-open to DEVNULL if unusable",
       "targets": []
     }
   ],

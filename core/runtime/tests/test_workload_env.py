@@ -234,7 +234,8 @@ def test_no_service_secret_reaches_a_child_process():
     for forward in (_WORKER_FORWARD, _BOT_FORWARD):
         env = child_environment({"VEXA_UNIT_ID": "u1"}, forward=forward, parent=_RUNTIME_ENV)
         assert _leaks(env) == []
-        assert env["PATH"] == "/usr/bin:/bin" and env["DISPLAY"] == ":99"
+        assert env["PATH"] == "/usr/bin:/bin"
+        assert "DISPLAY" not in env          # no child gets the runtime's display; a bot names its own
         assert env["VEXA_UNIT_ID"] == "u1"
 
 
@@ -285,3 +286,11 @@ def test_a_real_child_sees_none_of_the_runtimes_secrets(monkeypatch, tmp_path):
         seen = json.loads(out.read_text())
         assert seen["MARKER"] == "1"
         assert _leaks(seen) == []
+
+
+@pytest.mark.parametrize("raw", ["agent-1-chat\n", "agent-1-chat\nx", "\nagent"])
+def test_a_name_component_never_keeps_a_newline(raw):
+    from runtime_kernel.workload_env import name_component
+
+    out = name_component(raw)
+    assert "\n" not in out and "/" not in out and not out.startswith(".")

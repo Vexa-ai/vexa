@@ -4,21 +4,42 @@
 # =============================================================================
 # The runtime kernel (RUNTIME_BACKEND=process) execs this once per meeting via the
 # meeting-bot profile (BOT_COMMAND). Unlike the bot's own container entrypoint, it does
-# NOT bring up Xvfb / PulseAudio — supervisord already owns those for the whole container
-# (one shared display, like 0.10.6 lite). The bot's full constructor arrives in the
-# inherited env as VEXA_BOT_CONFIG (invocation.v1); we just run the worker.
+# NOT bring up Xvfb — supervisord owns the one shared display for the whole container.
+# The bot's full constructor arrives in the inherited env as VEXA_BOT_CONFIG (invocation.v1);
+# we just run the worker.
 #
 # The runtime starts each bot as a uid of its own (never root) with a private HOME and only the
-# pulse-access group: the system PulseAudio is reached by its socket, the join module's checkpoint
-# screenshots (written to /app/storage/screenshots, a link to /proc/self/fd/9 in the image) land in
-# this bot's own HOME through fd 9, and so does its captured-signal recording, so no bot sees or
-# overwrites another's.
+# vexa-display group, which reads the display's cookie. Everything else this bot touches is its own:
+#  * its OWN PulseAudio daemon, socket in its HOME (0700), with the tts_sink → virtual_mic graph the
+#    bot's speak path expects (the same graph the bot image's entrypoint builds), muted, and no module
+#    loading once it is up — no other bot can reach it, and no bot's audio reaches another's mic;
+#  * its checkpoint screenshots: the join module writes /app/storage/screenshots, a link in the image
+#    to /proc/self/fd/9, which is this bot's own $HOME/screenshots;
+#  * its captured-signal recording, in its HOME.
+# The daemon is in the bot's process group, so the runtime's group teardown ends it with the bot.
 set -u
 
 export DISPLAY="${DISPLAY:-:99}"
-export PULSE_SERVER="${PULSE_SERVER:-unix:/run/pulse/native}"
-export VEXA_CAPTURE_SIGNAL_DIR="${VEXA_CAPTURE_SIGNAL_DIR:-${HOME:-/tmp}/captured-signal}"
-screenshots="${HOME:-/tmp}/screenshots"
+export XAUTHORITY="${XAUTHORITY:-/run/vexa/display/Xauthority}"
+home="${HOME:-/tmp}"
+export VEXA_CAPTURE_SIGNAL_DIR="${VEXA_CAPTURE_SIGNAL_DIR:-$home/captured-signal}"
+
+pulse_dir="$home/pulse"
+mkdir -p -m 0700 "$pulse_dir"
+export XDG_RUNTIME_DIR="$pulse_dir"
+export PULSE_SERVER="unix:$pulse_dir/native"
+pulseaudio --daemonize=no --exit-idle-time=-1 --disallow-exit -n --use-pid-file=no --system=no \
+    --realtime=no --high-priority=no --log-target=stderr --log-level=error \
+    --load="module-native-protocol-unix socket=$pulse_dir/native" \
+    --load="module-null-sink sink_name=tts_sink sink_properties=device.description=TTSAudioSink" \
+    --load="module-remap-source master=tts_sink.monitor source_name=virtual_mic source_properties=device.description=VirtualMicrophone" \
+    --disallow-module-loading &
+for _ in $(seq 1 50); do pactl info >/dev/null 2>&1 && break; sleep 0.1; done
+pactl set-default-source virtual_mic 2>/dev/null || true
+pactl set-sink-mute tts_sink 1 2>/dev/null || true
+pactl set-source-mute virtual_mic 1 2>/dev/null || true
+
+screenshots="$home/screenshots"
 mkdir -p "$screenshots"
 exec 9<"$screenshots"
 

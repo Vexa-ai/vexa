@@ -96,13 +96,14 @@ WORKER_FORWARD_ENV = (
 )
 
 #: What a CHILD PROCESS (the process backend) inherits from the runtime's environment besides its
-#: profile's forward list: what any program needs to run on this host (paths, locale, display and
-#: audio, the browser install, proxies and CA bundles). Never product configuration and never a
-#: service credential — those reach a child only through its own spec.
+#: profile's forward list: what any program needs to run on this host (paths, locale, the browser
+#: install, proxies and CA bundles). Never product configuration and never a service credential —
+#: those reach a child only through its own spec. Never the display or an audio server either: a
+#: workload that needs them (a meeting bot) names its own in its launcher, and its profile's
+#: ``process_groups`` decide whether it may open them.
 PROCESS_PLUMBING_ENV = (
     "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TERM", "TZ", "TMPDIR",
     "LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE",
-    "DISPLAY", "XDG_RUNTIME_DIR", "PULSE_SERVER", "PULSE_SINK", "PULSE_SOURCE", "PULSE_RUNTIME_PATH",
     "PLAYWRIGHT_BROWSERS_PATH", "PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD", "PNPM_HOME", "NODE_ENV", "CI",
     "VEXA_HF_CACHE", "VEXA_IMAGE_VERSION",
     "PYTHONUNBUFFERED", "PYTHONDONTWRITEBYTECODE",

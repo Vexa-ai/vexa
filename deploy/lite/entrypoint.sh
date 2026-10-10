@@ -152,14 +152,14 @@ export AGENT_WORKER_COMMAND="${AGENT_WORKER_COMMAND:-/usr/local/bin/vexa-agent-w
 export VEXA_BOT_API_KEY="${VEXA_BOT_API_KEY:-}"
 export VEXA_AGENT_MODEL="${VEXA_AGENT_MODEL:-}"
 # HOST_CLAUDE_CREDENTIALS (config.v1 `model_inference`): path of a claude credentials JSON as seen
-# INSIDE this lite container. Mount the DIRECTORY, not the file — `make up` does
-#   -v ~/.claude:/var/lib/vexa/host-claude:ro
+# INSIDE this lite container. Mount only that FILE, into the root-only /var/lib/vexa/host-claude —
+# `make up` does
+#   -v ~/.claude/.credentials.json:/var/lib/vexa/host-claude/.credentials.json:ro
 #   -e HOST_CLAUDE_CREDENTIALS=/var/lib/vexa/host-claude/.credentials.json
-# because a single-FILE bind is pinned to the inode it was created with, and the claude CLI
-# refreshes an expiring token by rename(2)-ing a NEW inode over .credentials.json: a long-lived
-# container then serves the pre-refresh token until it is restarted. Lite's runtime uses the
-# process backend, so the worker reads the file directly; the runtime's config.v1 file probe
-# verifies it on /health.
+# — never the whole ~/.claude, which holds the operator's own transcripts and history. The runtime
+# copies the file into each worker's private HOME; its config.v1 file probe verifies it on /health.
+# A single-file bind pins the inode it was created with, and the CLI refreshes a token by rename(2)-ing
+# a new file over it: after the host CLI refreshes, re-create the container (`make up`).
 # Alternative: leave empty and set ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN instead.
 export HOST_CLAUDE_CREDENTIALS="${HOST_CLAUDE_CREDENTIALS:-}"
 export CLAUDE_CODE_OAUTH_TOKEN="${CLAUDE_CODE_OAUTH_TOKEN:-}"
@@ -206,6 +206,32 @@ fi
 export VEXA_DISPATCH_SIGNING_KEY="${VEXA_DISPATCH_SIGNING_KEY:-$(/usr/local/bin/persisted-secret "$lite_state_dir/dispatch-signing-key")}"
 # Read by no Lite program; minted per boot like the internal tier so no published value is exported.
 export JWT_SECRET="${JWT_SECRET:-$(python3 -c "import secrets; print(secrets.token_hex(32))")}"
+
+# The mounted model credential's directory is root's alone (the runtime copies the file into each
+# worker's HOME; no child reads it here).
+mkdir -p /var/lib/vexa/host-claude && chmod 0700 /var/lib/vexa/host-claude 2>/dev/null || true
+
+# The shared X display: Xvfb runs with access control on, so only a holder of its cookie can open it —
+# root's programs and the vexa-display group, which the runtime gives to meeting bots and not to
+# agent workers. A fresh cookie every start (bin/display-cookie; never printed).
+/usr/local/bin/display-cookie /run/vexa/display/Xauthority 99 vexa-display
+
+# The debug browser view (x11vnc + noVNC) is OFF unless VEXA_LITE_VNC=true. On, it listens on the
+# container's loopback only and asks for a password: VEXA_LITE_VNC_PASSWORD, else one minted on the
+# first boot and kept in $VEXA_LITE_STATE_DIR/vnc-password (read it with docker exec; never printed).
+# Every process in the container shares the loopback, so the password is what keeps bots and workers
+# off the display. VNC passwords are 8 characters at most.
+case "${VEXA_LITE_VNC:-false}" in
+    true|false) export VEXA_LITE_VNC="${VEXA_LITE_VNC:-false}";;
+    *) echo "ERROR: VEXA_LITE_VNC must be true or false." >&2; exit 1;;
+esac
+mkdir -p -m 0700 /run/vexa/vnc
+if [ "$VEXA_LITE_VNC" = true ]; then
+    vnc_password="${VEXA_LITE_VNC_PASSWORD:-$(/usr/local/bin/persisted-secret "${VEXA_LITE_STATE_DIR:-/var/lib/vexa/state}/vnc-password")}"
+    ( umask 077; printf '%s\n' "$vnc_password" > /run/vexa/vnc/passwd )
+    unset vnc_password
+fi
+unset VEXA_LITE_VNC_PASSWORD
 
 # Workspace store for the agent (shared dir; the worker runs in-process, no volume bind). Writable by
 # root alone: every agent worker runs as its subject's own uid, and the runtime hands each subject its

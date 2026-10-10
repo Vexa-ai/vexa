@@ -71,8 +71,8 @@ Supervised by `supervisord`:
 | mcp | 8010 (loopback) | the one assembled MCP server; the gateway relays `/mcp` to it, and every agent worker's toolbelt reaches it there |
 | terminal | **3001** | agent-domain browser-CLI workbench (Next.js + custom `server.mjs` SSE/`/ws` relay) |
 | redis | 6379 | bus + scheduler + per-dispatch streams (internal) |
-| Xvfb · fluxbox · PulseAudio | :99 | display + audio for the headful bot browser |
-| x11vnc · noVNC | 5900 / 6080 | browser view (debugging) |
+| Xvfb · fluxbox | :99 | the display for the headful bot browser; opening it needs the cookie only bots' group reads (each bot runs its own PulseAudio) |
+| x11vnc · noVNC | 5900 / 6080 (loopback) | browser view for debugging — off unless `VEXA_LITE_VNC=true`, then behind a password |
 
 External (the `make lite` sidecars): **PostgreSQL** (metadata) and **storage** — versitygw, an S3
 server that keeps recordings as plain files in volume `vexa-lite-storagedata`.
@@ -86,8 +86,8 @@ server that keeps recordings as plain files in volume `vexa-lite-storagedata`.
 |  gateway  admin-api  meeting-api  runtime                    |
 |   :8056     :8001      :8080       :8090                      |
 |                                                              |
-|  agent-api   redis   Xvfb  fluxbox  PulseAudio  noVNC        |
-|   :8100      :6379    :99                        :6080       |
+|  agent-api   redis   Xvfb  fluxbox  (noVNC, off by default)   |
+|   :8100      :6379    :99           (:6080 loopback)          |
 |                                                              |
 |  bot processes (Playwright)  +  agent workers (Claude Code)  |
 |     ← runtime spawns as child processes (process backend)    |

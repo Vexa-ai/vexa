@@ -138,6 +138,11 @@ RUN chmod -R a+rX,go-w /ms-playwright
 # a worker that is not root never switches; the user exists so the harness finds it either way.
 RUN groupadd --system --gid 10001 vexa-tools \
  && useradd --system --uid 10001 --gid 10001 --home-dir /tmp --no-create-home --shell /usr/sbin/nologin vexa-tools
+# The group that may open the shared X display (it reads the cookie bin/display-cookie writes at each
+# start). The runtime gives it to meeting bots, never to agent workers. The mounted model credential's
+# directory is root's alone.
+RUN groupadd --system vexa-display \
+ && install -d -m 0700 /var/lib/vexa/host-claude
 
 # ── Python venvs — one per service (avoids cross-service dependency-pin conflicts). Each mirrors
 #    that service's Dockerfile (uv sync --frozen --no-dev + the production-only ASGI/DB extras). ───
@@ -292,12 +297,12 @@ COPY licenses/onnx-community-pyannote-segmentation-3.0.LICENSE.txt /opt/hf-cache
 COPY --from=terminal-builder /app/terminal /app/terminal
 
 # ── Launchers, supervisor config, entrypoint ──────────────────────────────────────────────────────
-COPY deploy/lite/bin/vexa-bot-launch deploy/lite/bin/vexa-agent-worker deploy/lite/bin/vexa-runtime deploy/lite/bin/setup-pulseaudio-sinks.sh deploy/lite/bin/provision-key.sh deploy/lite/bin/render-supervisord deploy/lite/bin/persisted-secret /usr/local/bin/
+COPY deploy/lite/bin/vexa-bot-launch deploy/lite/bin/vexa-agent-worker deploy/lite/bin/vexa-runtime deploy/lite/bin/display-cookie deploy/lite/bin/provision-key.sh deploy/lite/bin/render-supervisord deploy/lite/bin/persisted-secret /usr/local/bin/
 # The supervisor config is a template: the entrypoint renders the copy supervisord runs (see CMD).
 COPY deploy/lite/supervisord.conf /etc/supervisor/conf.d/vexa.conf
 COPY deploy/lite/entrypoint.sh /entrypoint.sh
 RUN chmod +x /usr/local/bin/vexa-bot-launch /usr/local/bin/vexa-agent-worker /usr/local/bin/vexa-runtime \
-      /usr/local/bin/setup-pulseaudio-sinks.sh /usr/local/bin/provision-key.sh \
+      /usr/local/bin/display-cookie /usr/local/bin/provision-key.sh \
       /usr/local/bin/persisted-secret /usr/local/bin/render-supervisord /entrypoint.sh
 
 # ── Env defaults (every var supervisord interpolates must be SET; entrypoint derives the rest) ────
@@ -318,8 +323,9 @@ ENV LOG_LEVEL=info \
     TERMINAL_PUBLIC_URL=http://localhost:3001 \
     NEXTAUTH_SECRET= JWT_SECRET=
 
-# Front doors: gateway (8056) · terminal (3001) · agent control plane (8100).
-EXPOSE 8056 3001 8100 6080
+# Front doors: gateway (8056) · terminal (3001) · agent control plane (8100). The debug browser view
+# (noVNC, 6080) is off by default and loopback-only when on (VEXA_LITE_VNC).
+EXPOSE 8056 3001 8100
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
     CMD curl -sf http://localhost:8056/health > /dev/null || exit 1

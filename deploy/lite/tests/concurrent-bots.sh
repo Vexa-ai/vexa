@@ -84,7 +84,7 @@ done
 # the spawn is (correctly) refused with 503 by the STT-config gate, since the lite
 # smoke env wires no transcription backend. (The real fresh-install STT-gate defect
 # a user hits with the default transcribe_enabled=true is a product issue, #502/#504.)
-X bash -c 'rm -f /tmp/vexa-workloads/*.log 2>/dev/null; true'
+X bash -c 'rm -f /var/lib/vexa-runtime/logs/*.log 2>/dev/null; true'
 ids=()
 for i in $(seq 1 "$N_BOTS"); do
   mid=$(printf 'aaa-smk%02d-bot' "$i")
@@ -98,7 +98,7 @@ sleep "$WINDOW"
 
 # ── assertions ──
 # 1) zero SingletonLock signatures in any workload log
-if X bash -c 'grep -l "Opening in existing browser session" /tmp/vexa-workloads/*.log 2>/dev/null' | grep -q .; then
+if X bash -c 'grep -l "Opening in existing browser session" /var/lib/vexa-runtime/logs/*.log 2>/dev/null' | grep -q .; then
   die "SingletonLock signature present — shared profile dir regression (#478)"
 fi
 # 2) every bot's meeting is alive in joining/awaiting/active (not failed)

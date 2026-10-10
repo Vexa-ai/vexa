@@ -3,11 +3,18 @@ start children through the runtime the way agent-api and meeting-api do, and che
 
 * an agent worker for a numeric subject, one for a named subject, a meeting bot: every process the
   runtime starts (and everything those start) runs with no uid or gid 0 anywhere, no_new_privs set; a
-  worker as its subject's uid, a bot as a uid of its own with only the PulseAudio group;
+  worker as its subject's uid with no extra group, a bot as a uid of its own with only the display
+  group;
 * a dispatch whose subject cannot be mapped is refused, and starts nothing;
 * as each identity a child ran with: no other process's environment is readable, nor root's state
-  (the rendered supervisor config, Valkey's config and data, the signing key, the workload logs), and
-  the browser install and the workspace store are not writable;
+  (the rendered supervisor config, Valkey's config and data, the signing key, the workload logs, the
+  VNC password, the mounted model credential), and the browser install and the workspace store are
+  not writable;
+* the shared X display: a worker identity can neither read its cookie nor open it; a bot identity
+  can; nothing opens it without the cookie. The VNC port (and its noVNC bridge) is closed, or asks
+  for a password;
+* when a chat turn can start (model credentials configured), the turn's prompt appears on no
+  process's command line while its CLI runs;
 * no process in the container carries a service secret on its command line.
 
 Stdlib only; runs as root; never prints a value. Exits 1 naming what failed.
@@ -16,6 +23,9 @@ import grp
 import json
 import os
 import re
+import secrets
+import socket
+import struct
 import subprocess
 import sys
 import threading
@@ -24,15 +34,24 @@ import urllib.error
 import urllib.request
 
 RUNTIME = "http://127.0.0.1:8090"
+ADMIN = "http://127.0.0.1:8001"
+GATEWAY = "http://127.0.0.1:8056"
 RENDERED = "/run/vexa/supervisord.conf"
 CONF = "/etc/supervisor/conf.d/vexa.conf"
+XAUTH = "/run/vexa/display/Xauthority"
+X_SOCKET = "/tmp/.X11-unix/X99"
 UID_BASE, SUBJECT_UID_BASE, WORKLOAD_UID_BASE = 100000, 1_000_000_000, 1_500_000_000
 ROOT_ONLY = ["/run/vexa/supervisord.conf", "/run/vexa/valkey.conf", "/var/lib/redis",
              "/var/lib/vexa/state/identity/signing-key.pem", "/var/lib/vexa/state/nextauth-secret",
-             "/tmp/vexa-workloads"]
+             "/var/lib/vexa-runtime/logs", "/run/vexa/vnc", "/var/lib/vexa/host-claude"]
 NOT_WRITABLE = ["/ms-playwright", "/workspaces", "/app", "/usr/local/bin"]
 SECRET_NAME = re.compile(r"SECRET|TOKEN|PASSWORD|_KEY$")
 WATCH_SECONDS = 20
+
+
+def environ_of(pid: int) -> dict:
+    with open(f"/proc/{pid}/environ", "rb") as f:
+        return dict(e.split(b"=", 1) for e in f.read().split(b"\0") if b"=" in e)
 
 
 def runtime_token() -> str:
@@ -40,15 +59,18 @@ def runtime_token() -> str:
     return re.search(r'RUNTIME_API_TOKEN="([^"]+)"', text).group(1)
 
 
-def call(method: str, path: str, token: str, body=None) -> int:
-    req = urllib.request.Request(RUNTIME + path, method=method,
-                                 data=json.dumps(body).encode() if body is not None else None,
-                                 headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+def http(method: str, url: str, headers: dict, body=None, timeout: float = 30):
+    req = urllib.request.Request(url, method=method, data=json.dumps(body).encode() if body is not None else None,
+                                 headers={"Content-Type": "application/json", **headers})
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
-            return r.status
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.status, r.read()
     except urllib.error.HTTPError as e:
-        return e.code
+        return e.code, e.read()
+
+
+def call(method: str, path: str, token: str, body=None) -> int:
+    return http(method, RUNTIME + path, {"Authorization": f"Bearer {token}"}, body)[0]
 
 
 def runtime_pid() -> int:
@@ -72,14 +94,22 @@ def parent(pid: int) -> int:
         return int(f.read().rsplit(b")", 1)[1].split()[1])
 
 
-def descendants(root: int) -> list[int]:
+def cmdline(pid: int) -> bytes:
+    with open(f"/proc/{pid}/cmdline", "rb") as f:
+        return f.read()
+
+
+def pids() -> list:
+    return [int(p) for p in os.listdir("/proc") if p.isdigit()]
+
+
+def descendants(root: int) -> list:
     parents = {}
-    for entry in os.listdir("/proc"):
-        if entry.isdigit():
-            try:
-                parents[int(entry)] = parent(int(entry))
-            except OSError:
-                pass
+    for pid in pids():
+        try:
+            parents[pid] = parent(pid)
+        except OSError:
+            pass
     out = []
     for pid in parents:
         node = pid
@@ -89,11 +119,6 @@ def descendants(root: int) -> list[int]:
                 out.append(pid)
                 break
     return out
-
-
-def cmdline(pid: int) -> bytes:
-    with open(f"/proc/{pid}/cmdline", "rb") as f:
-        return f.read()
 
 
 class Watch(threading.Thread):
@@ -119,7 +144,57 @@ class Watch(threading.Thread):
             time.sleep(0.005)
 
 
-def probe_as(uids: list, gid: int, groups: list, others: list) -> list:
+# ── the display and VNC, as seen by an identity ───────────────────────────────────────────────────
+
+def x_cookie(data: bytes):
+    """The MIT-MAGIC-COOKIE-1 data of an X authority file."""
+    i = 0
+    while i + 2 <= len(data):
+        i += 2                                        # family
+        fields = []
+        for _ in range(4):
+            (n,) = struct.unpack(">H", data[i:i + 2])
+            fields.append(data[i + 2:i + 2 + n])
+            i += 2 + n
+        if fields[2] == b"MIT-MAGIC-COOKIE-1":
+            return fields[3]
+    return None
+
+
+def x_open(cookie) -> int:
+    """The X server's answer to a connection setup on the shared display: 1 opened, 0 refused, -1 no
+    server reachable."""
+    name, data = (b"MIT-MAGIC-COOKIE-1", cookie) if cookie else (b"", b"")
+    pad = lambda b: b + b"\0" * (-len(b) % 4)       # noqa: E731
+    req = b"l\0" + struct.pack("<HHHH", 11, 0, len(name), len(data)) + b"\0\0" + pad(name) + pad(data)
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(5)
+            s.connect(X_SOCKET)
+            s.sendall(req)
+            return 1 if s.recv(1) == b"\x01" else 0
+    except OSError:
+        return -1
+
+
+def vnc_open(port: int) -> str:
+    """'closed', 'password' (only authenticated security types), or 'OPEN' (no authentication)."""
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
+            if port != 5900:
+                return "listening"
+            s.recv(12)
+            s.sendall(b"RFB 003.008\n")
+            n = s.recv(1)
+            types = s.recv(n[0]) if n and n[0] else b""
+            return "OPEN" if 1 in types else "password"
+    except ConnectionRefusedError:
+        return "closed"
+    except OSError:
+        return "closed"
+
+
+def probe_as(uids: list, gid: int, groups: list, others: list, bot: bool) -> list:
     """Fork, become this identity, and try what a child must not be able to do. Returns failures."""
     r, w = os.pipe()
     pid = os.fork()
@@ -153,8 +228,21 @@ def probe_as(uids: list, gid: int, groups: list, others: list) -> list:
                     open(os.path.join(path, ".r4-probe"), "w").close()
                     os.unlink(os.path.join(path, ".r4-probe"))
                     bad.append(f"wrote into {path}")
-                except (PermissionError, FileNotFoundError, OSError):
+                except OSError:
                     pass
+            try:
+                cookie = x_cookie(open(XAUTH, "rb").read())
+            except (PermissionError, FileNotFoundError):
+                cookie = None
+            if x_open(None) == 1:
+                bad.append("opened the display without its cookie")
+            if bot and (cookie is None or x_open(cookie) != 1):
+                bad.append("a bot could not open the display with its cookie")
+            if not bot and cookie is not None:
+                bad.append("a worker read the display's cookie")
+            for port in (5900, 6080):
+                if vnc_open(port) == "OPEN":
+                    bad.append(f"reached the display over VNC on :{port} with no password")
         except Exception as e:                       # noqa: BLE001 — reported, never raised
             bad.append(f"probe error {type(e).__name__}")
         os.write(w, json.dumps(bad).encode())
@@ -168,20 +256,75 @@ def probe_as(uids: list, gid: int, groups: list, others: list) -> list:
     return json.loads(data or b"[]")
 
 
+# ── the turn's prompt never rides a command line ──────────────────────────────────────────────────
+
+def prompt_check(token: str) -> tuple:
+    """Start a chat turn whose prompt carries a marker and watch every command line while its CLI runs.
+    Returns (failures, note)."""
+    admin_key = environ_of(1).get(b"ADMIN_API_TOKEN", b"").decode()
+    email = "r4check-chat@example.invalid"
+    code, body = http("POST", f"{ADMIN}/admin/users", {"X-Admin-API-Key": admin_key},
+                      {"email": email, "name": "R4 check"})
+    if code >= 300:
+        code, body = http("GET", f"{ADMIN}/admin/users/email/{email}", {"X-Admin-API-Key": admin_key})
+    user = json.loads(body)["id"]
+    code, body = http("POST", f"{ADMIN}/admin/users/{user}/tokens?scopes=bot,tx", {"X-Admin-API-Key": admin_key})
+    api_key = json.loads(body)["token"]
+    marker = f"r4check-prompt-{secrets.token_hex(6)}"
+    answer = {"text": b""}
+
+    def chat():
+        req = urllib.request.Request(f"{GATEWAY}/agent/chat", method="POST",
+                                     data=json.dumps({"prompt": f"{marker} say hello"}).encode(),
+                                     headers={"Content-Type": "application/json", "X-API-Key": api_key})
+        try:
+            with urllib.request.urlopen(req, timeout=120) as r:
+                while chunk := r.read(256):
+                    answer["text"] += chunk
+                    if len(answer["text"]) > 4096:
+                        return
+        except Exception:                            # noqa: BLE001 — the stream ending is expected
+            pass
+
+    threading.Thread(target=chat, daemon=True).start()
+    failures, cli_seen, deadline = [], None, time.time() + 90
+    while time.time() < deadline:
+        if b"No model credentials" in answer["text"]:
+            return [], "prompt check skipped: no model credentials configured, so no turn can start"
+        for pid in pids():
+            try:
+                line = cmdline(pid)
+                st = status(pid)
+            except OSError:
+                continue
+            if marker.encode() in line:
+                failures.append(f"pid {pid} ({st['name']}) carries the turn's prompt on its command line")
+            if line.startswith(b"claude\0") and UID_BASE <= st["uids"][0] < SUBJECT_UID_BASE:
+                cli_seen = cli_seen or time.time()
+        if failures or (cli_seen and time.time() - cli_seen > 5):
+            break
+        time.sleep(0.05)
+    for wl in json.loads(http("GET", f"{RUNTIME}/workloads", {"Authorization": f"Bearer {token}"})[1] or b"[]"):
+        wid = wl.get("workloadId", "") if isinstance(wl, dict) else ""
+        if wid.startswith(f"agent-{user}-"):
+            call("DELETE", f"/workloads/{wid}", token)
+    if not cli_seen and not failures:
+        failures.append("a chat turn started no claude CLI within 90s (the prompt check did not run)")
+    return failures, "the turn's prompt was on no command line while its CLI ran" if cli_seen else ""
+
+
 def secret_values() -> list:
     values = []
-    for path in ("/proc/1/environ", f"/proc/{runtime_pid()}/environ"):
-        with open(path, "rb") as f:
-            for entry in f.read().split(b"\0"):
-                key, _, value = entry.partition(b"=")
-                if SECRET_NAME.search(key.decode(errors="replace")) and len(value) >= 16:
-                    values.append(value)
+    for pid in (1, runtime_pid()):
+        for key, value in environ_of(pid).items():
+            if SECRET_NAME.search(key.decode(errors="replace")) and len(value) >= 16:
+                values.append(value)
     values.append(runtime_token().encode())
     return values
 
 
 def main() -> int:
-    failures = []
+    failures, notes = [], []
     token, rt = runtime_token(), runtime_pid()
     watch = Watch(rt)
     watch.start()
@@ -200,6 +343,10 @@ def main() -> int:
         if not ok and code == 201:
             failures.append(f"{wid}: a dispatch with an unmappable subject was started")
     time.sleep(WATCH_SECONDS)
+    prompt_failures, note = prompt_check(token)
+    failures += prompt_failures
+    if note:
+        notes.append(note)
     watch.stop.set()
     watch.join()
     seen = watch.seen
@@ -213,25 +360,28 @@ def main() -> int:
         failures.append("no process ran as the numeric subject's uid")
     if not any(SUBJECT_UID_BASE <= u < WORKLOAD_UID_BASE for u in uids):
         failures.append("no process ran as the named subject's uid")
+    display = grp.getgrnam("vexa-display").gr_gid
     bots = [st for st in seen.values() if st["uids"][0] >= WORKLOAD_UID_BASE]
     if not bots:
         failures.append("no process ran as a workload uid (the bot)")
-    pulse = grp.getgrnam("pulse-access").gr_gid
     for st in bots:
-        if st["groups"] != [pulse]:
-            failures.append(f"a bot process ({st['name']}) has groups other than pulse-access")
-    others = [int(p) for p in os.listdir("/proc") if p.isdigit()]
+        if st["groups"] != [display]:
+            failures.append(f"a bot process ({st['name']}) has groups other than vexa-display")
+    for st in seen.values():
+        if st["uids"][0] < WORKLOAD_UID_BASE and st["groups"]:
+            failures.append(f"a worker process ({st['name']}) holds supplementary groups {st['groups']}")
+    others = pids()
     identities = {(tuple(st["uids"]), st["gids"][0], tuple(st["groups"])) for st in seen.values()}
     for ids, gid, groups in identities:
-        failures += [f"uid {ids[0]}: {b}" for b in probe_as(list(ids), gid, list(groups), others)]
-    secrets = secret_values()
+        bot = ids[0] >= WORKLOAD_UID_BASE
+        failures += [f"uid {ids[0]}: {b}" for b in probe_as(list(ids), gid, list(groups), others, bot)]
+    secrets_ = secret_values()
     for pid in others:
         try:
-            with open(f"/proc/{pid}/cmdline", "rb") as f:
-                cmdline = f.read()
+            line = cmdline(pid)
         except OSError:
             continue
-        if any(s in cmdline for s in secrets):
+        if any(s in line for s in secrets_):
             failures.append(f"pid {pid} carries a service secret on its command line")
     for wid, _profile, _env, _ok in cases:
         call("DELETE", f"/workloads/{wid}", token)
@@ -240,8 +390,10 @@ def main() -> int:
             print(f"  ✗ child identities: {f}", file=sys.stderr)
         return 1
     print(f"  ✓ child identities: {len(seen)} spawned processes, {len(identities)} identities — none root, "
-          "none can read another process's environment or root's state; refused dispatch started nothing; "
-          "no secret on any command line")
+          "none can read another process's environment or root's state; only bots open the display; "
+          "VNC closed or password-protected; refused dispatch started nothing; no secret on any command line")
+    for note in notes:
+        print(f"  ✓ {note}" if "skipped" not in note else f"  · {note}")
     return 0
 
 

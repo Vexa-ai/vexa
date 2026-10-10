@@ -2,7 +2,8 @@
 backend; satisfies the runtime.v1 lifecycle. (docker/k8s backends are ported from 0.11 when needed.)
 
 Output capture: each workload's stdout+stderr goes to a per-workload log file under
-``PROCESS_LOG_DIR`` (default ``<tempdir>/vexa-workloads``) — the process analog of ``docker logs``.
+``PROCESS_LOG_DIR`` (default ``<tempdir>/vexa-workloads``; a root runtime ``/var/lib/vexa-runtime/logs``)
+— the process analog of ``docker logs``.
 A workload that exits nonzero gets its log tail surfaced at ERROR level through the runtime's own
 logs the first time the exit is observed, so a crashed worker (e.g. an ImportError at startup) is
 diagnosable from the runtime service logs instead of vanishing into /dev/null.

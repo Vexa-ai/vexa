@@ -70,7 +70,8 @@ One supervisord tree runs the services a compose deployment spreads across conta
 | **gateway** (`:8056`), **terminal** (`:3001`), **agent-api** (`:8100`) | the three published front doors |
 | **meeting-api, admin-api, runtime** | loopback-only (`127.0.0.1`) — reach them with `docker exec` |
 | **valkey** | in-container Redis-compatible store, loopback-only |
-| **Xvfb · fluxbox · pulseaudio · x11vnc · noVNC** | the shared virtual display and audio graph bots run on |
+| **Xvfb · fluxbox** | the shared virtual display bots run on; opening it needs a cookie only meeting bots can read (each bot also runs its own audio daemon) |
+| **x11vnc · noVNC** | the debug browser view — off unless you set `VEXA_LITE_VNC=true`; then loopback-only on `:6080` and password-protected (`VEXA_LITE_VNC_PASSWORD`, else minted into the state volume as `vnc-password`) |
 
 Bots and agent workers are **not** supervisord programs — the runtime spawns them as child
 processes, one per meeting and per agent dispatch. Inspect a running deployment with:
@@ -97,8 +98,10 @@ mints one on first boot and keeps it in `/var/lib/vexa/state` (the `vexa-lite-st
 `make lite`); or set it in `.env` to a value of at least 32 bytes (`openssl rand -hex 32`). The
 terminal refuses to start on a shorter value or one published in this repository.
 
-If `~/.claude/.credentials.json` exists on the host, `make lite` mounts it read-only into the
-container so agents run on your Claude subscription without copying credentials into `.env`.
+If `~/.claude/.credentials.json` exists on the host, `make lite` mounts that one file read-only into
+a root-only directory in the container, so agents run on your Claude subscription without copying
+credentials into `.env`; nothing else from `~/.claude` enters the container. A file mount keeps the
+file it started with: after the Claude CLI on the host refreshes its token, run `make lite` again.
 
 ## Persistence and upgrade
 
