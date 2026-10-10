@@ -319,7 +319,7 @@ def test_config_declares_the_publish_edge_for_both_events():
     for k in edges:
         assert "default" not in k, f"{k['key']} carries a default — a fallback address we invented"
         carried.update(k.get("publishes_events") or [])
-    assert carried == {"meeting.started", "meeting.completed"}
+    assert carried == {"meeting.started", "meeting.completed", "meeting.shared"}
 
 
 def test_the_carriers_meeting_api_publishes_are_owned_by_meetings_in_the_census():

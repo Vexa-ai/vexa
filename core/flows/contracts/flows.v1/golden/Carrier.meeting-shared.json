@@ -1,0 +1,16 @@
+{
+  "event": "meeting.shared",
+  "owner": "meetings",
+  "cardinality": "once_per_occurrence",
+  "refs": [
+    "uid",
+    "meeting_id",
+    "email",
+    "token",
+    "title",
+    "inviter",
+    "workspace_invite"
+  ],
+  "source_event_id": "share-<grant_id>-<sha256(address)[:12]> — keyed to the INVITE (the grant) and the address, never to the address alone: a redelivery dedupes at the intake, while inviting the same person again mints a new grant and mails again, which is what pressing Invite twice means. The address is hashed so the id carries none.",
+  "description": "A meeting's owner invited an address from the terminal's Share dialog and asked for the mail; triggers meeting_share, whose one step mails that person the sign-in link. PUBLISHED BY MEETING-API (meeting_api/events.py, the existing publish-edge) from the by-id share mint, once per address, only when the body says notify — the post-meeting attendee fan-out mints its own grants and mails them itself, so it never double-mails. `uid` is the OWNER, the subject `_global` is read through; the recipient is `email`. `token` is the restricted grant's one-time secret, which admits only `email`; flows composes the link from its own VEXA_UI_URL (?tshare=, plus ?invite= when the owner bundled the meeting's workspace) — no producer and no template writes a URL. `workspace_invite` is optional and opaque to both ends. `title` and `inviter` are words for the mail and may be empty."
+}

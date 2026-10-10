@@ -51,6 +51,11 @@ from typing import Optional
 
 EVENT_MEETING_STARTED = "meeting.started"
 EVENT_MEETING_COMPLETED = "meeting.completed"
+#: The owner invited somebody, by address, to read this meeting (the terminal's Share dialog).
+#: flows' `meeting_share` mails them the link. Published by `collector/app.py`'s by-id share mint,
+#: and only when the owner asked for the mail (`notify`), so the attendee fan-out — which mints its
+#: own restricted grants and mails them itself — never sends a second mail.
+EVENT_MEETING_SHARED = "meeting.shared"
 
 log = logging.getLogger("meeting_api.events")
 
@@ -160,4 +165,34 @@ async def publish_meeting_completed(meeting_id, native, platform, uid, completio
     return await publish(
         EVENT_MEETING_COMPLETED, meeting_completed_source_id(meeting_id),
         meeting_completed_refs(meeting_id, native, platform, uid, completion_reason),
+        timeout=timeout)
+
+
+def meeting_shared_source_id(grant_id, email) -> str:
+    """Keyed to (grant, address): ONE MAIL PER INVITE. A redelivery dedupes at the intake; inviting
+    the same person again mints a new grant, which is a new invite and mails again — what pressing
+    Invite a second time means. The address is hashed so the id itself carries no address."""
+    import hashlib
+    return f"share-{grant_id}-{hashlib.sha256(str(email).lower().encode()).hexdigest()[:12]}"
+
+
+def meeting_shared_refs(meeting_id, uid, email, token, *, title="", inviter="",
+                        workspace_invite="") -> dict:
+    """The refs `mail_meeting_share` reads. `uid` is the OWNER (the inviter), the one subject this
+    deployment can read `_global` through; the recipient is `email`, never `uid`. `token` is the
+    restricted grant's one-time secret — it only admits `email` — and flows composes the link from
+    it with its own `VEXA_UI_URL`; no producer and no template writes a URL."""
+    refs = {"uid": str(uid), "meeting_id": str(meeting_id), "email": str(email),
+            "token": str(token), "title": str(title or ""), "inviter": str(inviter or "")}
+    if workspace_invite:
+        refs["workspace_invite"] = str(workspace_invite)
+    return refs
+
+
+async def publish_meeting_shared(meeting_id, uid, email, token, grant_id, *, title="", inviter="",
+                                 workspace_invite="", timeout: Optional[float] = None) -> bool:
+    return await publish(
+        EVENT_MEETING_SHARED, meeting_shared_source_id(grant_id, email),
+        meeting_shared_refs(meeting_id, uid, email, token, title=title, inviter=inviter,
+                            workspace_invite=workspace_invite),
         timeout=timeout)

@@ -49,9 +49,11 @@ export function removeReader(meetingId: string | number, userId: number): Promis
   return getJson(`/api/meetings/${encodeURIComponent(String(meetingId))}/viewers/${encodeURIComponent(String(userId))}`, { method: "DELETE" });
 }
 
-interface Minted { id: string; token: string; mode: string; expires_at: string }
+interface Minted { id: string; token: string; mode: string; expires_at: string; notified?: Record<string, boolean> }
 
-function mintShare(meetingId: string | number, body: { mode: "open" | "restricted"; allowed_emails?: string[]; expires_in_sec: number }): Promise<Minted> {
+function mintShare(meetingId: string | number, body: {
+  mode: "open" | "restricted"; allowed_emails?: string[]; expires_in_sec: number; notify?: boolean; workspace_invite?: string;
+}): Promise<Minted> {
   return getJson(`/api/meetings/${encodeURIComponent(String(meetingId))}/share`, json("POST", body));
 }
 
@@ -79,25 +81,30 @@ export function shareUrl(origin: string, tshare: string, workspaceInvite?: strin
 
 export type WorkspaceGrant = "none" | "viewer" | "contributor";
 
-export interface InviteResult { email: string; url?: string; error?: unknown }
+/** `mailed`: the server handed the invite mail to the mail service (true), or could not (false) — then
+ *  the copied link is the only way it reaches them, and the dialog says so. */
+export interface InviteResult { email: string; url?: string; mailed?: boolean; error?: unknown }
 
 /** Invite each address to the meeting — one invite per person, restricted to that address so a
  *  forwarded link admits nobody else — and, if asked, to the meeting's workspace with the chosen role,
- *  bundled into the same link. Each address succeeds or fails on its own; the caller shows both. */
+ *  bundled into the same link. The server mails each person their link (`notify`); the link is also
+ *  returned for copying. Each address succeeds or fails on its own; the caller shows both. */
 export async function inviteToMeeting(opts: {
   meetingId: string | number; emails: string[]; workspaceId?: string | null; workspaceRole: WorkspaceGrant; origin: string;
 }): Promise<InviteResult[]> {
   const out: InviteResult[] = [];
   for (const email of opts.emails) {
     try {
-      const share = await mintShare(opts.meetingId, { mode: "restricted", allowed_emails: [email], expires_in_sec: INVITE_TTL_SEC });
+      // The workspace invite first, so the ONE mail the server sends carries both.
       let ws: string | undefined;
       if (opts.workspaceId && opts.workspaceRole !== "none") {
         const inv = await mintInvite({ workspace_id: opts.workspaceId, role: opts.workspaceRole, mode: "restricted",
           allowed_emails: [email], max_uses: 1, expires_in_sec: INVITE_TTL_SEC });
         ws = inv.token;
       }
-      out.push({ email, url: shareUrl(opts.origin, share.token, ws) });
+      const share = await mintShare(opts.meetingId, { mode: "restricted", allowed_emails: [email],
+        expires_in_sec: INVITE_TTL_SEC, notify: true, ...(ws ? { workspace_invite: ws } : {}) });
+      out.push({ email, url: shareUrl(opts.origin, share.token, ws), mailed: share.notified?.[email] === true });
     } catch (error) {
       out.push({ email, error });
     }

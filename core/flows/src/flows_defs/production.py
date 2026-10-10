@@ -97,6 +97,11 @@ MAIL_REPLY = EventType("mail.reply")
 # they are facts with a flow each, which is what puts them in the queue and what lets the words
 # they are spoken in live in `behavior/` instead of in a tool body.
 STARTED = EventType("meeting.started")
+#: PUBLISHED BY THE MEETINGS DOMAIN (`meeting_api/events.py`), when a meeting's owner invites an
+#: address from the Share dialog and asks for the mail. One fact per address; `meeting_share` mails
+#: that person the sign-in link. Registered HERE, not in `production_agent.py`: its producer is
+#: meeting-api, which every profile with flows carries, and its one step reaches no domain.
+SHARED = EventType("meeting.shared")
 #: PUBLISHED BY THE AGENT DOMAIN. Absent — event and reaction both — where there is no agent-api,
 #: which is correct rather than degraded: there is no desk in that deployment to have a card on.
 DESK_UNSCAFFOLDED = EventType("desk.unscaffolded")
@@ -2655,6 +2660,49 @@ def build(reg: Registry, db) -> None:
         field. No mail, no desk card, no downstream effect."""
         return Done({"recorded": True})
 
+    # ── the meeting-share invite's mail leg ───────────────────────────────────
+    @reg.step
+    def mail_meeting_share(ctx: StepCtx):
+        """Mail one person the link to a meeting its owner shared with them.
+
+        A person pressed **Invite** in a meeting's Share dialog with this address, so the mail is
+        sent on a human's own act — like `mail_workspace_invite`, and for the same reason no
+        fan-out switch may swallow it: the dialog has already told the owner the mail went out.
+        Unlike that one it does not ask whether the address has an account here — the owner chose
+        to mail it, and the link signs either kind of person in.
+
+        THE LINK IS COMPOSED HERE, from this deployment's own `VEXA_UI_URL`, and never by the
+        producer or the template (`behavior/mail/README.md`: a template never writes a URL). It is
+        the terminal's existing share arrival — `?tshare=` redeemed after sign-in, plus `?invite=`
+        when the owner bundled the meeting's workspace — the same link the dialog's Copy link
+        hands out, so the mail and the copied link can never disagree. The token only admits the
+        address it was minted for, so a forwarded mail admits nobody else.
+
+        Reads: refs.{email, token, uid, meeting_id, title?, inviter?, workspace_invite?}
+        Effect: one notification · Result: {message_id, to, meeting_id}."""
+        to = str(ctx.refs.get("email") or "").strip()
+        token = str(ctx.refs.get("token") or "").strip()
+        meeting_id = str(ctx.refs.get("meeting_id") or "").strip()
+        if not to or not token:
+            # Typed and terminal: the refs are frozen at admission, so a retry asks the same
+            # unanswerable question. Neither ref is printed — the token is a credential.
+            raise StepError(
+                f"cannot mail the share of meeting {meeting_id or '<unknown>'}: refs carry "
+                f"{'no address' if not to else 'an address'} and "
+                f"{'no token' if not token else 'a token'} — a share mail without both asks "
+                "somebody to do nothing.", retryable=False)
+        link = _common.ui_link(tshare=token, invite=str(ctx.refs.get("workspace_invite") or ""))
+        uid = str(ctx.refs.get("uid") or "")
+        values = {k: str(ctx.refs[k]) for k in ("inviter", "title") if str(ctx.refs.get(k) or "").strip()}
+        values.setdefault("inviter", "Someone")
+        values.setdefault("title", "a meeting")
+        subject, body = mailtext.render("meeting-share", uid, values)
+        if not subject:
+            logger.warning("the meeting-share template carries no `subject:` line — falling back")
+            subject = f"{values['inviter']} shared a meeting with you"
+        mid = notify(to, subject, body, link=link)
+        return Done({"message_id": mid, "to": to, "meeting_id": meeting_id}, provider_ref=mid)
+
     s = reg.steps
     # VERSION 2 — `spawn_onboardings` removed (decision 29). VERSION 3 — `emit_started` added after
     # `dispatch_bot` (PRD decision 42.2). The version bump is the whole mechanism: `match()` is
@@ -2682,6 +2730,9 @@ def build(reg: Registry, db) -> None:
     # call runs. That row is the queue. Its two siblings, the desk cards, are `production_agent`'s.
     reg.flow(name="live_meeting", version=1, on=STARTED,
              steps=[s["attend_live"]])
+    # THE SHARE MAIL. One step, one effect, no queue row: it tells a person, it waits for nobody.
+    reg.flow(name="meeting_share", version=1, on=SHARED,
+             steps=[s["mail_meeting_share"]])
     # THE SINK (PRD 40.9 open-decision 8). One step, `Done` on its first tick, no effect — see
     # `record_friction`'s own docstring for why this exists at all. Reaches no domain, so it is
     # registered here rather than in `production_agent.py`: friction is reportable with or without

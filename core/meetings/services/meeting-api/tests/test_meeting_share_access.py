@@ -222,3 +222,63 @@ def test_a_recipient_cannot_delete_the_recording():
     client, rid, media = _recording_client({"transcript_viewers": [INVITEE],
                                             "share_settings": {"recording": True}})
     assert client.delete(f"/recordings/{rid}", headers=_h(INVITEE)).status_code == 404
+
+
+# ── the invite mail (meeting.shared → flows `meeting_share`) ──────────────────────────────────────
+def _capture(monkeypatch, landed=True):
+    from meeting_api import events
+    sent = []
+
+    async def fake_publish(event_type, source_event_id, refs, *, timeout=None):
+        sent.append((event_type, source_event_id, refs))
+        return landed
+    monkeypatch.setattr(events, "publish", fake_publish)
+    return sent
+
+
+def test_an_invite_with_notify_hands_one_fact_per_address_to_flows(monkeypatch):
+    sent = _capture(monkeypatch)
+    store, mid, client = _setup()
+    r = client.post(f"/meetings/{mid}/share", headers={**_h(OWNER), "x-user-email": "owner@example.test"},
+                    json={"mode": "restricted", "allowed_emails": [INVITEE_EMAIL], "notify": True,
+                          "workspace_invite": "W" * 43})
+    assert r.status_code == 200 and r.json()["notified"] == {INVITEE_EMAIL: True}
+    [(etype, sid, refs)] = sent
+    assert etype == "meeting.shared" and sid.startswith(f"share-{r.json()['id']}-")
+    assert INVITEE_EMAIL not in sid, "the dedupe id carries no address"
+    assert refs["email"] == INVITEE_EMAIL and refs["uid"] == str(OWNER)
+    assert refs["token"] == r.json()["token"] and refs["inviter"] == "owner@example.test"
+    assert refs["workspace_invite"] == "W" * 43
+    assert "link" not in refs, "flows composes the link from its own UI address"
+
+
+def test_no_mail_unless_asked_and_never_for_an_open_link(monkeypatch):
+    sent = _capture(monkeypatch)
+    store, mid, client = _setup()
+    assert client.post(f"/meetings/{mid}/share", headers=_h(OWNER),
+                       json={"mode": "restricted", "allowed_emails": [INVITEE_EMAIL]}).status_code == 200
+    assert client.post(f"/meetings/{mid}/share", headers=_h(OWNER),
+                       json={"mode": "open", "notify": True}).status_code == 422
+    assert client.post(f"/meetings/{mid}/share", headers=_h(OWNER),
+                       json={"mode": "restricted", "allowed_emails": [INVITEE_EMAIL], "notify": True,
+                             "workspace_invite": "../../not a token"}).status_code == 422
+    assert sent == []
+
+
+def test_a_mail_that_did_not_land_is_reported_and_the_invite_still_stands(monkeypatch):
+    _capture(monkeypatch, landed=False)
+    store, mid, client = _setup()
+    r = client.post(f"/meetings/{mid}/share", headers=_h(OWNER),
+                    json={"mode": "restricted", "allowed_emails": [INVITEE_EMAIL], "notify": True})
+    assert r.status_code == 200 and r.json()["notified"] == {INVITEE_EMAIL: False}
+    ok = client.post("/transcripts/share/accept", json={"token": r.json()["token"]},
+                     headers=_h(INVITEE, INVITEE_EMAIL))
+    assert ok.status_code == 200
+
+
+def test_a_stranger_cannot_mail_from_someone_elses_meeting(monkeypatch):
+    sent = _capture(monkeypatch)
+    store, mid, client = _setup()
+    r = client.post(f"/meetings/{mid}/share", headers=_h(OUTSIDER),
+                    json={"mode": "restricted", "allowed_emails": ["x@example.test"], "notify": True})
+    assert r.status_code == 404 and sent == []

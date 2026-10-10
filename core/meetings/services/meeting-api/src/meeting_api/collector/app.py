@@ -34,6 +34,7 @@ from __future__ import annotations
 from typing import Any, Callable, Optional
 
 import json
+import re
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
@@ -63,6 +64,8 @@ _FSM_OWNED_STATUSES = frozenset({
 # anyone authenticated can redeem. The failure is silent and it points the wrong way, so the value
 # is checked at the door instead of being trusted downstream.
 SHARE_MODES = frozenset({"open", "restricted"})
+# A workspace invite token handed through for the share mail (agent-api's `secrets.token_urlsafe`).
+_INVITE_TOKEN = re.compile(r"[A-Za-z0-9_-]{16,128}")
 SHARE_DEFAULT_TTL_SEC = 86_400                  # 24h — unchanged default
 SHARE_MIN_TTL_SEC = 60                          # a link nobody can redeem in time is not a share
 SHARE_MAX_TTL_SEC = 30 * 24 * 60 * 60           # 30d — a capability, not a second front door
@@ -1042,6 +1045,51 @@ def build_router(
         )
         return JSONResponse(content={"workspace_id": bound})
 
+    def _notify_payload(payload, mode: str, emails: list) -> "tuple[bool, str]":
+        """`notify` (mail each invited address its link, through flows) and the optional
+        `workspace_invite` token to bundle into that link. A mail goes only to an address the grant
+        is RESTRICTED to — an open link has no recipient — and the bundled token is opaque here
+        (agent-api minted it; it only ever lands in the recipient's own link), so it is checked for
+        shape and nothing else."""
+        if not isinstance(payload, dict) or not payload.get("notify"):
+            return False, ""
+        if payload.get("notify") is not True:
+            raise HTTPException(status_code=422, detail="'notify' must be true or false")
+        if mode != "restricted" or not emails:
+            raise HTTPException(status_code=422,
+                                detail="a share mail needs mode 'restricted' and at least one address")
+        ws = payload.get("workspace_invite") or ""
+        if ws and (not isinstance(ws, str) or not _INVITE_TOKEN.fullmatch(ws)):
+            raise HTTPException(status_code=422, detail="'workspace_invite' is not an invite token")
+        return True, ws
+
+    async def _mail_the_invite(user_id, meeting_id, minted: dict, emails: list, request: Request,
+                               workspace_invite: str) -> dict:
+        """Hand one `meeting.shared` fact per address to flows, which mails the link. Returns
+        `{address: True|False}` — whether the fact LANDED — so the dialog can say which people were
+        mailed and offer the copied link for the rest. A publish is not a dependency: a failure
+        here never fails the invite, which is minted and valid either way."""
+        from ..events import publish_meeting_shared
+
+        title = ""
+        try:
+            rows = await store.list_meetings(user_id, meeting_id=meeting_id, slim=True)
+            row = next((m for m in rows if m.get("id") == meeting_id), None)
+            title = str(((row or {}).get("data") or {}).get("title") or "")
+        except Exception:  # noqa: BLE001 — the title is a nicety in a subject line
+            title = ""
+        inviter = request.headers.get("x-user-email") or ""
+        token = str(minted.get("token") or "")
+        out = {}
+        for email in emails:
+            out[email] = await publish_meeting_shared(
+                meeting_id, user_id, email, token, minted.get("id"), title=title,
+                inviter=inviter, workspace_invite=workspace_invite)
+        log_event("meeting_share_mail_handed_over", audience="user", span="meetings.share.notify",
+                  user_id=user_id, meeting_id=str(meeting_id),
+                  fields={"addresses": len(emails), "landed": sum(1 for v in out.values() if v)})
+        return out
+
     def _share_payload(payload) -> "tuple[str, list, int]":
         """mode | allowed_emails | ttl out of a share-mint body, defaulted and VALIDATED the same
         way for both address shapes.
@@ -1235,6 +1283,7 @@ def build_router(
         except Exception:
             payload = {}
         mode, emails, ttl = _share_payload(payload)
+        notify, workspace_invite = _notify_payload(payload, mode, emails)
         minted = await store.mint_transcript_share_by_id(
             user_id, meeting_id, mode=mode, allowed_emails=emails, expires_in_sec=ttl,
         )
@@ -1247,6 +1296,9 @@ def build_router(
             raise HTTPException(status_code=404, detail=f"Meeting {meeting_id} not found")
         log_event("transcript_share_minted", audience="user", span="meetings.transcript.share",
                   user_id=user_id, meeting_id=str(meeting_id), fields={"mode": mode, "by": "row_id"})
+        if notify:
+            minted["notified"] = await _mail_the_invite(
+                user_id, meeting_id, minted, emails, request, workspace_invite)
         return JSONResponse(content=minted)
 
     # --- POST /meetings/{platform}/{native_meeting_id}/share → mint an INDEPENDENT transcript share link

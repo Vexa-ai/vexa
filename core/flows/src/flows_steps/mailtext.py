@@ -168,6 +168,20 @@ DEFAULTS: dict[str, str] = {
         "\n"
         "The link below is yours alone — it signs you in, so please do not forward it.\n"
     ),
+    # BYTE-FOR-BYTE `behavior/mail/meeting-share.md`. Read by `mail_meeting_share` with two tokens
+    # of its own, `{{inviter}}` and `{{title}}`; no URL — the step appends the link.
+    "meeting-share": (
+        "subject: {{inviter}} shared {{title}} with you\n"
+        "---\n"
+        "I am Vexa, the meeting assistant at {{company}}. {{service}}\n"
+        "\n"
+        "{{inviter}} shared {{title}} with you. While it runs you can follow the live transcript; "
+        "afterwards you can read the transcript and the notes.\n"
+        "\n"
+        "{{visibility}}\n"
+        "\n"
+        "The link below works only for this address — it signs you in, so please do not forward it.\n"
+    ),
 }
 
 

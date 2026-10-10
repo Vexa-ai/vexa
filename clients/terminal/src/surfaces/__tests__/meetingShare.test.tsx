@@ -100,7 +100,8 @@ describe("MeetingShareDialog", () => {
 
   it("invites one person per address, each restricted to that address, and shows each link", async () => {
     respond = (c) => c.url.endsWith("/share") && c.method === "POST"
-      ? { status: 200, body: { id: "g9", token: "42.tok", mode: "restricted", expires_at: "x" } }
+      ? { status: 200, body: { id: "g9", token: "42.tok", mode: "restricted", expires_at: "x",
+          notified: { [(c.body as { allowed_emails: string[] }).allowed_emails[0]]: (c.body as { allowed_emails: string[] }).allowed_emails[0] === "a@x.io" } } }
       : { status: 200, body: ACCESS };
     render(<MeetingShareDialog meeting={meeting()} onClose={() => {}} origin="https://app.example" />);
     await screen.findByText("reader@example.test");
@@ -109,10 +110,13 @@ describe("MeetingShareDialog", () => {
     await screen.findByText("a@x.io");
     const mints = calls.filter((c) => c.method === "POST" && c.url === "/api/meetings/42/share");
     expect(mints.map((c) => c.body)).toEqual([
-      expect.objectContaining({ mode: "restricted", allowed_emails: ["a@x.io"] }),
-      expect.objectContaining({ mode: "restricted", allowed_emails: ["b@y.io"] }),
+      expect.objectContaining({ mode: "restricted", allowed_emails: ["a@x.io"], notify: true }),
+      expect.objectContaining({ mode: "restricted", allowed_emails: ["b@y.io"], notify: true }),
     ]);
     expect(screen.getAllByRole("button", { name: "Copy link" })).toHaveLength(2);
+    // the mail that landed is said, and the one that did not is said too — with the way round it
+    expect(screen.getByText(/Emailed/).textContent).toMatch(/a@x\.io/);
+    expect(screen.getByText(/could not be sent/).textContent).toMatch(/b@y\.io/);
   });
 
   it("refuses a malformed address in words, and sends nothing", async () => {

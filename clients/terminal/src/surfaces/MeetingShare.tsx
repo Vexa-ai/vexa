@@ -6,8 +6,8 @@
  *  action at all, just the words "Shared with you" — managing access is the owner's.
  *
  *  The dialog has four small parts, each one backend call away (`meetingShareApi`):
- *    • Invite people by email — one invite per address, optionally with the meeting's workspace
- *      (view or edit) bundled into the same link;
+ *    • Invite people by email — one invite per address, mailed to them by the server, optionally with
+ *      the meeting's workspace (view or edit) bundled into the same link; the link can also be copied;
  *    • People with access — readers, pending invites and workspace members, each with a role and a
  *      remove action;
  *    • A link — anyone who opens it must sign in; it can be turned off, which removes whoever came
@@ -151,7 +151,9 @@ export function MeetingShareDialog({ meeting, onClose, origin }: { meeting: Meet
       {inputError && <Alert>{inputError}</Alert>}
       {results.map((r) => r.url
         ? <div key={r.email} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
-            <span style={{ flex: 1, minWidth: 0, color: "var(--t2)" }}>Send <b style={{ color: "var(--t1)" }}>{r.email}</b> this link — it works only for that address.</span>
+            <span style={{ flex: 1, minWidth: 0, color: "var(--t2)" }}>{r.mailed
+              ? <>Emailed <b style={{ color: "var(--t1)" }}>{r.email}</b> their link. You can also copy it — it works only for that address.</>
+              : <>The email to <b style={{ color: "var(--t1)" }}>{r.email}</b> could not be sent. Copy the link and send it yourself — it works only for that address.</>}</span>
             <button type="button" style={textBtn} onClick={() => void copyText(r.url!)}>Copy link</button>
           </div>
         : <Alert key={r.email}>Could not invite {r.email}: {presentError(r.error).headline}</Alert>)}
