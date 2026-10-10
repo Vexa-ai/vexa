@@ -1069,6 +1069,16 @@ def removed_page_slugs(tool: str, args: object) -> set:
     return out
 
 
+# THE ASSISTANT IS NOT A SUBJECT OF THE PERSON'S GRAPH (friction report, dogfood 2026-10-10). Asked
+# "what model is running behind the hood here?", the turn answered with the model's name, and the
+# pre-pass asked the phase to write a page for it. The model's own family name is a property of
+# this deployment, not a person, company, meeting, project or decision the person deals with.
+# Narrow on purpose: only the vendor family followed by a tier word, so a page about the vendor or
+# a product named in a meeting is still a candidate. The Highlight extractor (`shared/terms.py`)
+# does not use this filter, because a room can legitimately discuss a model by name.
+_ASSISTANT_SELF = re.compile(r"^Claude(?:\s+(?:Sonnet|Opus|Haiku|Fable|Code|Instant))+(?:\s+[\d.]+)?$")
+
+
 def writeback_candidates(texts, mounts: list[dict] | None = None,
                          removed: "set | None" = None) -> list[str]:
     """THE PRE-PASS — the phase's cheap half, in code, before any model is asked anything.
@@ -1119,7 +1129,7 @@ def writeback_candidates(texts, mounts: list[dict] | None = None,
              and not (in_room and str(m.get("role") or "private") == "private")]
     if not roots:
         return []
-    names = missing_names(roots, [t for t in texts if t])
+    names = [n for n in missing_names(roots, [t for t in texts if t]) if not _ASSISTANT_SELF.match(n)]
     if not removed:
         return names
     from workspaces.shared.entities import slugify

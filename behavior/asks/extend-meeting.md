@@ -56,9 +56,11 @@ the file once, whole, with `workspace_write`.
 ## Page what the room named
 
 For every company, person, project or product the new segments name and that has no page: write it
-(`entity_upsert`). A COMPANY goes in the company layer, `slug="_global"` — companies are the
-organisation's, not one person's desk. Everything else goes on the desk this page is on. Link both
-ways: the meeting page names the entity, the entity's page names this meeting.
+(`entity_upsert`). A COMPANY goes in the company layer, `slug="_global"`, when this turn mounts
+`_global` read-write — only an org admin's does. Otherwise write it on the desk this page is on,
+like everything else: a `403 only an org admin may write company-tier pages into _global` means
+exactly that, so write it there and do not report it. Link both ways: the meeting page names the
+entity, the entity's page names this meeting.
 
 Then publish the terms so the transcript shows them where they were said:
 

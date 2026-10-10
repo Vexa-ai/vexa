@@ -23,6 +23,7 @@ guard exists to refuse. ``aliases``/``created``/``sources`` are added on top; no
 from __future__ import annotations
 
 import datetime as _dt
+import json
 import re
 import unicodedata
 from pathlib import Path
@@ -143,11 +144,31 @@ def split_frontmatter(text: str) -> tuple[list[str], str]:
     return m.group(1).splitlines(), text[m.end():]
 
 
+def _strip_comment(value: str) -> str:
+    """Cut a trailing YAML comment: a ``#`` after whitespace, outside a quoted scalar. A quote only
+    opens a scalar where one can start (the value's first character, or after ``[`` or ``,``), so
+    an apostrophe inside a bare title is text. Cutting at ANY ``#`` truncated a quoted source such
+    as ``"Slack #general"``, which ``_render_list`` writes quoted for exactly that reason."""
+    quote, prev, last = "", " ", ""
+    for i, ch in enumerate(value):
+        if quote:
+            if ch == quote and not (quote == '"' and prev == "\\"):
+                quote = ""
+        elif ch in "\"'" and last in ("", "[", ","):
+            quote = ch
+        elif ch == "#" and prev in " \t":
+            return value[:i]
+        prev = ch
+        if not ch.isspace():
+            last = ch
+    return value
+
+
 def _fm_get(lines: list[str], key: str) -> str | None:
     for ln in lines:
         k, sep, v = ln.partition(":")
         if sep and k.strip() == key:
-            return v.split("#")[0].strip()
+            return _strip_comment(v).strip()
     return None
 
 
@@ -166,20 +187,87 @@ def _fm_set(lines: list[str], key: str, value: str) -> list[str]:
 
 
 def _list_field(raw: str | None) -> list[str]:
+    """Read a one-line YAML flow list (``[a, "b, c"]``) back into its items.
+
+    QUOTE-AWARE, because ``_render_list`` quotes any item that carries a comma. Splitting the raw
+    text on every comma turned ONE source, ``"Zoom call 17, 2026-10-09 14:07 UTC"``, into two
+    items, and each later upsert of the same source appended it again beside its own halves — the
+    doubled `## Sources` a person found on their page. A double-quoted item is read with JSON
+    escapes (the subset of YAML's that ``_render_list`` writes), a single-quoted one with YAML's
+    doubled-quote escape, and a bare item as the trimmed text it always was."""
     raw = (raw or "").strip()
     if not raw or raw in ("[]", "~", "null"):
         return []
-    return [p.strip() for p in raw.strip("[]").split(",") if p.strip()]
+    if raw.startswith("[") and raw.endswith("]"):
+        raw = raw[1:-1]
+    items, buf, quote, i = [], [], "", 0
+    while i < len(raw):
+        ch = raw[i]
+        if quote == '"':
+            buf.append(ch)
+            if ch == "\\" and i + 1 < len(raw):
+                buf.append(raw[i + 1])
+                i += 1
+            elif ch == '"':
+                quote = ""
+        elif quote == "'":
+            buf.append(ch)
+            if ch == "'":
+                if raw[i + 1:i + 2] == "'":
+                    buf.append("'")
+                    i += 1
+                else:
+                    quote = ""
+        elif ch in "\"'" and not "".join(buf).strip():
+            buf, quote = [ch], ch
+        elif ch == ",":
+            items.append("".join(buf))
+            buf = []
+        else:
+            buf.append(ch)
+        i += 1
+    items.append("".join(buf))
+    return [v for v in (_unquote(p.strip()) for p in items) if v]
+
+
+def _unquote(item: str) -> str:
+    if len(item) >= 2 and item[0] == item[-1] == '"':
+        try:
+            return str(json.loads(item)).strip()
+        except ValueError:
+            return item[1:-1].strip()
+    if len(item) >= 2 and item[0] == item[-1] == "'":
+        return item[1:-1].replace("''", "'").strip()
+    return item
+
+
+#: A flow-list item that YAML (and ``_list_field``) would read differently written bare: it carries
+#: a separator or a quote, opens with an indicator character, or contains `: ` / ` #`.
+_NEEDS_QUOTES = re.compile(r"""[,\[\]{}"']|^[\s&*!|>%@`?-]|\s$|:\s|:$|\s#""")
+
+
+def _render_item(item: str) -> str:
+    return json.dumps(item, ensure_ascii=False) if _NEEDS_QUOTES.search(item) else item
 
 
 def _render_list(items) -> str:
+    """Write items as a one-line YAML flow list, quoting each that would not read back as itself.
+
+    DEDUPLICATED BY VALUE, and an item written before this fix as the comma-split halves of a value
+    now being added is folded back into it: a page that already carries ``Zoom call 17`` and
+    ``2026-10-09 14:07 UTC`` side by side, re-upserted with the source they were cut from, ends up
+    with that one source instead of three."""
     seen, out = set(), []
     for i in items:
         i = str(i).strip()
         if i and i not in seen:
             seen.add(i)
             out.append(i)
-    return "[" + ", ".join(out) + "]"
+    for whole in [i for i in out if "," in i]:
+        halves = [h.strip() for h in whole.split(",") if h.strip()]
+        if len(halves) > 1 and all(h in seen for h in halves):
+            out = [i for i in out if i not in halves]
+    return "[" + ", ".join(_render_item(i) for i in out) + "]"
 
 
 def _normalise(fact: str) -> str:
