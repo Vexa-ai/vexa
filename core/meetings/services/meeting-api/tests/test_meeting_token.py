@@ -132,6 +132,50 @@ def test_a_token_signed_with_the_raw_admin_secret_is_refused():
     assert meeting_token.admit_session(_hand_made(_claims()), session_uid="conn-a", secret=SECRET)
 
 
+# ── a token states its own limits: exp, aud and scope are required ──────────────────────────────
+
+
+def test_every_minted_token_carries_exp_aud_and_scope():
+    token = meeting_token.mint_meeting_token(1, USER, "google_meet", "abc", secret=SECRET, session_uid="conn-a")
+    claims = meeting_token.verify_meeting_token(token, secret=SECRET)
+    assert claims["aud"] == "transcription-collector" and claims["scope"] == "transcribe:write"
+    assert claims["exp"] > claims["iat"]
+
+
+@pytest.mark.parametrize("missing", ["exp", "aud", "scope"])
+def test_a_token_missing_exp_aud_or_scope_is_refused(missing):
+    """Correctly signed and bound to the session, but without one of the three: refused, never read as
+    an unlimited token."""
+    claims = _claims()
+    del claims[missing]
+    token = _hand_made(claims)
+    with pytest.raises(meeting_token.InvalidMeetingToken):
+        meeting_token.verify_meeting_token(token, secret=SECRET)
+    with pytest.raises(meeting_token.InvalidMeetingToken):
+        meeting_token.admit_session(token, session_uid="conn-a", secret=SECRET)
+
+
+@pytest.mark.parametrize("claim,value", [("aud", "admin-api"), ("aud", ["transcription-collector"]),
+                                         ("scope", "admin"), ("scope", "transcribe:write admin"),
+                                         ("exp", None), ("exp", True), ("exp", "soon")])
+def test_a_token_with_another_aud_scope_or_a_bad_exp_is_refused(claim, value):
+    token = _hand_made(_claims(**{claim: value}))
+    with pytest.raises(meeting_token.InvalidMeetingToken):
+        meeting_token.admit_session(token, session_uid="conn-a", secret=SECRET)
+
+
+def test_the_upload_refuses_a_token_without_an_exp():
+    claims = _claims()
+    del claims["exp"]
+    repo = InMemoryRecordingRepo()
+    repo.seed(meeting_id=1, user_id=USER, session_uid="conn-a")
+    storage = InMemoryStorage()
+    app = FastAPI()
+    app.include_router(build_router(repo, storage, token_secret=SECRET))
+    assert _upload(TestClient(app), _hand_made(claims), "conn-a").status_code == 401
+    assert storage.blobs == {}
+
+
 # ── both doors, one rule ────────────────────────────────────────────────────────────────────────
 
 

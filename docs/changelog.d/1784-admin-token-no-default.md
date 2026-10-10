@@ -10,6 +10,7 @@
 - **A MeetingToken is no longer signed with the admin key (#1784).** meeting-api derives the
   MeetingToken key from `ADMIN_TOKEN` (HMAC-SHA256 under a fixed purpose label) and signs and checks
   every bot's token with that, so the credential a bot holds is never signed with the key that mints
-  API keys. No new secret is needed. Tokens minted before the upgrade are refused: a bot already in a
+  API keys. No new secret is needed. A token must also carry an expiry, its audience and its scope;
+  one without any of them is refused. Tokens minted before the upgrade are refused: a bot already in a
   call when you upgrade has its callbacks and uploads refused until it is sent again, so **upgrade
   between meetings**. See [One-time steps after upgrading](/deployment#one-time-steps-after-upgrading).

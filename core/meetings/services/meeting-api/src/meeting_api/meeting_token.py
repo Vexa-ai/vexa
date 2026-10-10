@@ -13,8 +13,9 @@ MeetingToken. ``bot_spawn`` mints one per bot session, bound to that session's c
   * the recording chunk and signal-tape upload (``recordings.router``), where the session is the
     request's ``session_uid``.
 
-Both doors admit a token through :func:`admit_session`, one rule: a valid signature, not expired,
-and bound to exactly the session the request names. A token bound to another session, or bound to
+Both doors admit a token through :func:`admit_session`, one rule: a valid signature, an ``exp`` that
+has not passed, the MeetingToken's own ``aud`` and ``scope``, and bound to exactly the session the
+request names. A token bound to another session, or bound to
 none, is refused. The internal tier (a trusted service, not a bot) is a separate credential each
 door checks on its own.
 """
@@ -107,9 +108,10 @@ def mint_meeting_token(
 
 
 def verify_meeting_token(token: str, *, secret: Optional[str] = None) -> dict[str, Any]:
-    """The claims of a MeetingToken signed with the MeetingToken key that has not expired. Raises
-    :class:`InvalidMeetingToken` otherwise. Says nothing about which session it may act for — the
-    doors use :func:`admit_session`."""
+    """The claims of a MeetingToken signed with the MeetingToken key that carries an ``exp`` that has
+    not passed, the MeetingToken audience and its scope. Raises :class:`InvalidMeetingToken`
+    otherwise — a token without any one of the three is refused, not read as unlimited. Says nothing
+    about which session it may act for — the doors use :func:`admit_session`."""
     key = _key(secret, "verify")
     try:
         header_b64, payload_b64, sig_b64 = token.split(".")
@@ -121,12 +123,23 @@ def verify_meeting_token(token: str, *, secret: Optional[str] = None) -> dict[st
         raise InvalidMeetingToken("MeetingToken signature mismatch")
     try:
         claims = json.loads(_b64url_decode(payload_b64))
+        if not isinstance(claims, dict):
+            raise ValueError("claims are not an object")
         exp = claims.get("exp")
-        expired = exp is not None and int(datetime.now(timezone.utc).timestamp()) > int(exp)
     except (ValueError, TypeError, AttributeError):
+        raise InvalidMeetingToken("malformed MeetingToken") from None
+    if exp is None or isinstance(exp, bool):
+        raise InvalidMeetingToken("MeetingToken carries no exp")
+    try:
+        expired = int(datetime.now(timezone.utc).timestamp()) > int(exp)
+    except (ValueError, TypeError, OverflowError):
         raise InvalidMeetingToken("malformed MeetingToken") from None
     if expired:
         raise InvalidMeetingToken("MeetingToken expired")
+    if claims.get("aud") != AUDIENCE:
+        raise InvalidMeetingToken("MeetingToken is not for this audience")
+    if claims.get("scope") != SCOPE:
+        raise InvalidMeetingToken("MeetingToken does not carry the MeetingToken scope")
     return claims
 
 
