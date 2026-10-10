@@ -115,7 +115,7 @@
     },
     "Error": {
       "type": "object",
-      "description": "server → client: a protocol/auth error. `error` is a fixed code from the vocabulary below (formalized as the enum on the property, so the conformance harness's emitted codes are machine-checked against this contract). Control/auth codes (exercised by the offline /ws conformance harness): missing_api_key, invalid_json, invalid_subscribe_payload, invalid_unsubscribe_payload, unknown_action. Downstream-auth codes — emitted by the deployed gateway's POST /ws/authorize-subscribe path (adapters.AdminApiAuthorizer), so they are PRODUCTION-ONLY and NOT reachable by the synchronous offline harness: authorization_service_error (downstream returned non-200; carries `status` + `detail`), authorization_call_failed (the downstream call raised; carries `details`).",
+      "description": "server → client: a protocol/auth error. `error` is a fixed code from the vocabulary below (formalized as the enum on the property, so the conformance harness's emitted codes are machine-checked against this contract). Control/auth codes (exercised by the offline /ws conformance harness): missing_api_key, invalid_json, invalid_subscribe_payload, invalid_unsubscribe_payload, unknown_action. Downstream-auth codes — emitted by the deployed gateway's POST /ws/authorize-subscribe path (adapters.AdminApiAuthorizer), so they are PRODUCTION-ONLY and NOT reachable by the synchronous offline harness: authorization_service_error (downstream returned non-200; carries `status` + `detail`), authorization_call_failed (the downstream call raised; carries `details`). Connect-time codes: invalid_api_key (the key resolves to nobody, or is a worker delegation token; close 4401), auth_unavailable (the key could not be resolved now; close 4503), insufficient_scope (the key holds none of the scopes the REST routes for meeting status take — close 4403 — or, on a subscribe, none of the transcript read's; the socket stays open).",
       "required": ["type", "error"],
       "properties": {
         "type": { "const": "error" },
@@ -128,7 +128,10 @@
             "invalid_unsubscribe_payload",
             "unknown_action",
             "authorization_service_error",
-            "authorization_call_failed"
+            "authorization_call_failed",
+            "invalid_api_key",
+            "auth_unavailable",
+            "insufficient_scope"
           ]
         },
         "details": { "anyOf": [{ "type": "string" }, { "type": "array" }, { "type": "object" }] },

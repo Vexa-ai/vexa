@@ -20,7 +20,23 @@ from .obs import log_event, set_user_id
 from .ports import Authorizer, AuthUnavailable, RedisBus
 
 
-async def run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus) -> None:
+#: THE SOCKET IS HELD TO THE REST ROUTES' SCOPES, read from the same rows (the assembled routes.v1
+#: table), so a key reaches nothing here it could not reach over REST. A meeting subscription fans in
+#: the live transcript (`tc:meeting:{id}:mutable`), so it takes the transcript read's scopes; the
+#: socket itself carries meeting-status frames, so opening it takes the scopes of a route that
+#: answers meeting status (`GET /meetings` or `GET /bots/status`).
+TRANSCRIPT_ROUTE = ("GET", "/transcripts/{platform}/{native_meeting_id}")
+STATUS_ROUTES = (("GET", "/meetings"), ("GET", "/bots/status"))
+
+
+def _assembled_scopes() -> dict:
+    """The full-profile route table (`gateway.app.ROUTE_SCOPES`) — for a caller that names none."""
+    from .app import ROUTE_SCOPES
+    return ROUTE_SCOPES
+
+
+async def run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus, *,
+                        route_scopes: "dict | None" = None) -> None:
     """The ``/ws`` control loop + fan-in, carved verbatim from main.websocket_multiplex.
 
     PUBLIC (P2 follow-up): the conformance ws-harness drives this directly to exercise the SHIPPED
@@ -98,6 +114,22 @@ async def run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus) 
         return
     user_id = user_data["user_id"]
     set_user_id(user_id)
+
+    # A KEY WITHOUT THE SCOPE IS REFUSED HERE AS OVER REST (`_authorize`): a key that can read no
+    # meeting status opens no socket, and one that cannot read transcripts subscribes to none.
+    table = route_scopes if route_scopes is not None else _assembled_scopes()
+    held = {str(s) for s in (user_data.get("scopes") or [])}
+    status_scopes = frozenset().union(*(table.get(r, frozenset()) for r in STATUS_ROUTES))
+    transcript_scopes = frozenset(table.get(TRANSCRIPT_ROUTE, frozenset()))
+    if not held & status_scopes:
+        log_event("request_denied_scope", audience="user", level="warning", span="ws",
+                  user_id=user_id, fields={"path": "/ws", "required": sorted(status_scopes)})
+        try:
+            await ws.send_text(json.dumps({"type": "error", "error": "insufficient_scope",
+                                           "details": "this key reads no meeting status"}))
+        finally:
+            await ws.close(code=4403)  # Forbidden
+        return
 
     sub_tasks: Dict[Tuple, asyncio.Task] = {}
     subscribed_meetings: Set[Tuple] = set()
@@ -205,6 +237,15 @@ async def run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus) 
                     await ws.send_text(json.dumps({
                         "type": "error", "error": "invalid_subscribe_payload",
                         "details": "no valid meeting objects"}))
+                    continue
+                if not held & transcript_scopes:
+                    log_event("request_denied_scope", audience="user", level="warning", span="ws",
+                              user_id=user_id,
+                              fields={"path": "/ws subscribe", "required": sorted(transcript_scopes)})
+                    await ws.send_text(json.dumps({
+                        "type": "error", "error": "insufficient_scope",
+                        "details": "subscribing streams a meeting's transcript; this key may not "
+                                   "read transcripts"}))
                     continue
 
                 # The downstream authorize hop must never crash the socket: a RAISE → authorization_call_failed
