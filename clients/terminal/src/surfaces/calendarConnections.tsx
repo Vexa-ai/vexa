@@ -89,17 +89,17 @@ function EditPanel({ cal, busy, onSave, onCancel }: {
     <div style={{ display: "flex", flexDirection: "column", gap: 7, borderTop: "1px dashed var(--line)", paddingTop: 9 }}>
       <label style={labelled}>
         <span style={labelCol}>Name</span>
-        <input value={name} onChange={(e) => setName(e.target.value)} maxLength={100} style={field} aria-label={`Name for ${cal.name}`} />
+        <input value={name} onChange={(e) => setName(e.target.value)} maxLength={100} className="vx-input" aria-label={`Name for ${cal.name}`} />
       </label>
       <label style={labelled}>
         <span style={labelCol}>Bot name</span>
         <input value={botName} onChange={(e) => setBotName(e.target.value)} maxLength={100} placeholder="Vexa"
-          style={field} aria-label={`Bot name for ${cal.name}`} />
+          className="vx-input" aria-label={`Bot name for ${cal.name}`} />
       </label>
       <label style={labelled}>
         <span style={labelCol}>Replace feed</span>
         <input value={icsUrl} onChange={(e) => setIcsUrl(e.target.value)} type="password" autoComplete="off"
-          placeholder="paste a new secret ICS address to replace it" style={field}
+          placeholder="paste a new secret ICS address to replace it" className="vx-input"
           aria-label={`Replace feed address for ${cal.name}`} />
       </label>
       <div style={{ ...meta, paddingLeft: 104 }}>
@@ -110,7 +110,7 @@ function EditPanel({ cal, busy, onSave, onCancel }: {
           style={{ ...(dirty ? primaryBtn : btn), opacity: busy || !dirty ? 0.5 : 1 }}>
           {busy ? "Saving…" : "Save"}
         </button>
-        <button disabled={busy} onClick={onCancel} style={btn}>Cancel</button>
+        <button disabled={busy} onClick={onCancel} className="vx-btn" data-variant="secondary">Cancel</button>
       </div>
     </div>
   );
@@ -135,9 +135,9 @@ function CalendarRow({ cal, stamp, busy, onPatch, onSync, onDisconnect }: {
         <Icon name="cal" size={13} style={{ color: cal.enabled ? "var(--green)" : "var(--t3)" }} />
         <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--t1)" }}>{cal.name}</span>
         <span style={{ flex: 1, fontSize: 11.5, color: "var(--t3)", fontFamily: "var(--mono)" }}>{feedLine(cal)}</span>
-        <button disabled={locked} onClick={onSync} style={btn}>{busy === "sync" ? "Syncing…" : "Sync now"}</button>
+        <button disabled={locked} onClick={onSync} className="vx-btn" data-variant="secondary">{busy === "sync" ? "Syncing…" : "Sync now"}</button>
         <button disabled={locked} onClick={() => { setEditing((v) => !v); setConfirming(false); }}
-          aria-expanded={editing} style={btn}>{editing ? "Close" : "Edit"}</button>
+          aria-expanded={editing} className="vx-btn" data-variant="secondary">{editing ? "Close" : "Edit"}</button>
         <button disabled={locked} onClick={() => { setConfirming(true); setEditing(false); }}
           style={{ ...btn, color: "var(--danger)" }}>Disconnect</button>
       </div>
@@ -168,7 +168,7 @@ function CalendarRow({ cal, stamp, busy, onPatch, onSync, onDisconnect }: {
               style={{ ...btn, background: "var(--danger)", color: "var(--on-accent)", border: "none", opacity: locked ? 0.5 : 1 }}>
               {busy === "delete" ? "Disconnecting…" : "Yes, disconnect"}
             </button>
-            <button disabled={locked} onClick={() => setConfirming(false)} style={btn}>Keep it</button>
+            <button disabled={locked} onClick={() => setConfirming(false)} className="vx-btn" data-variant="secondary">Keep it</button>
           </div>
         </div>
       )}
@@ -204,18 +204,18 @@ function AddCalendarForm({ busy, onAdd, onCancel }: {
       <label style={labelled}>
         <span style={labelCol}>Name</span>
         <input value={name} onChange={(e) => setName(e.target.value)} maxLength={100} placeholder="Work"
-          style={field} aria-label="Calendar name" />
+          className="vx-input" aria-label="Calendar name" />
       </label>
       <label style={labelled}>
         <span style={labelCol}>Secret ICS</span>
         <input value={icsUrl} onChange={(e) => setIcsUrl(e.target.value)} type="password" autoComplete="off"
-          placeholder="https://calendar.google.com/…/basic.ics" style={field} aria-label="Secret ICS address"
+          placeholder="https://calendar.google.com/…/basic.ics" className="vx-input" aria-label="Secret ICS address"
           onKeyDown={(e) => { if (e.key === "Enter" && ready && !busy) onAdd({ name: name.trim(), ics_url: icsUrl.trim(), auto_join: autoJoin, bot_name: botName.trim() || undefined }); }} />
       </label>
       <label style={labelled}>
         <span style={labelCol}>Bot name</span>
         <input value={botName} onChange={(e) => setBotName(e.target.value)} maxLength={100} placeholder="Vexa"
-          style={field} aria-label="Bot name for the new calendar" />
+          className="vx-input" aria-label="Bot name for the new calendar" />
       </label>
       <label style={{ ...checkRow, paddingLeft: 104 }}>
         <input type="checkbox" checked={autoJoin} onChange={(e) => setAutoJoin(e.target.checked)} />
@@ -227,7 +227,7 @@ function AddCalendarForm({ busy, onAdd, onCancel }: {
           style={{ ...primaryBtn, opacity: busy || !ready ? 0.5 : 1 }}>
           {busy ? "Connecting…" : "Connect"}
         </button>
-        <button disabled={busy} onClick={onCancel} style={btn}>Cancel</button>
+        <button disabled={busy} onClick={onCancel} className="vx-btn" data-variant="secondary">Cancel</button>
       </div>
     </div>
   );

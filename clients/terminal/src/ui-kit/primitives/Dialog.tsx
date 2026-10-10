@@ -68,3 +68,21 @@ export function ConfirmDialog({ open, onCancel, onConfirm, title, consequence, c
     </Dialog>
   );
 }
+
+export type ConfirmRequest = { title: string; consequence: ReactNode; confirmLabel: string; tone?: "danger" | "primary"; typeToConfirm?: string };
+
+/** `useConfirm()` — the drop-in for `window.confirm` (guidelines §4.11, S7): `await confirm({…})`
+ *  resolves true on the named confirm button, false on Cancel, Escape or the scrim. Render the
+ *  returned `dialog` once in the component. One request at a time; a new one cancels the last. */
+export function useConfirm(): [(req: ConfirmRequest) => Promise<boolean>, ReactNode] {
+  const [req, setReq] = useState<(ConfirmRequest & { resolve: (ok: boolean) => void }) | null>(null);
+  const confirm = (r: ConfirmRequest) => new Promise<boolean>((resolve) => {
+    setReq((prev) => { prev?.resolve(false); return { ...r, resolve }; });
+  });
+  const close = (ok: boolean) => { req?.resolve(ok); setReq(null); };
+  const dialog = (
+    <ConfirmDialog open={!!req} title={req?.title ?? ""} consequence={req?.consequence} confirmLabel={req?.confirmLabel ?? "Confirm"}
+      tone={req?.tone} typeToConfirm={req?.typeToConfirm} onCancel={() => close(false)} onConfirm={() => close(true)} />
+  );
+  return [confirm, dialog];
+}

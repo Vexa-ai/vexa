@@ -52,7 +52,7 @@
     "surfaces/settings.tsx": 97,
     "surfaces/tasks.tsx": 23,
     "surfaces/today.tsx": 82,
-    "surfaces/tokens.tsx": 70,
+    "surfaces/tokens.tsx": 47,
     "surfaces/workspace.tsx": 414,
     "surfaces/workspaceManage.tsx": 140,
     "ui-kit/ContextMenu.tsx": 15,

@@ -1800,6 +1800,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
             effort shows as an icon, below 400px attach and dictate move into a "⋯" menu — and the
             model and send controls are always visible. */}
         <textarea
+          data-ring-host
           ref={inputRef}
           value={value}
           onChange={(e) => setValue(e.target.value)}

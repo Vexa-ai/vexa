@@ -82,7 +82,7 @@ function ConfigForm({ fields, load, save, note }: {
             <input value={values[f.key] ?? ""} placeholder={f.placeholder}
               type={f.secret && (values[f.key] ?? "") !== (initial[f.key] ?? "") ? "password" : "text"}
               onChange={(e) => { setSaved(false); setValues((v) => ({ ...v, [f.key]: e.target.value })); }}
-              style={field} />
+              className="vx-input" />
           )}
         </label>
       ))}

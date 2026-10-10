@@ -217,3 +217,17 @@
 .vx-label { display: block; margin: 0; font-size: var(--text-xs); font-weight: var(--weight-medium); color: var(--text-3); letter-spacing: 0; text-transform: none; }
 span.vx-label { display: inline; }
 .vx-grow { flex: 1; min-width: 0; }
+
+/* ── EVERY FIELD SHOWS FOCUS (guidelines §6 A3, gate G5) ─────────────────────────────────────
+ * 21 inline `outline: none` removed the ring from the sign-in inputs, the join field, filters and
+ * forms, and replaced it with nothing. Until each surface moves to Input/Textarea, this restores a
+ * visible 2px ring on every keyboard-focused field, over the inline style. A field that sits in a
+ * framed control (the composer) marks itself `data-ring-host` and the FRAME takes the ring. */
+:is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), select, textarea):focus-visible:not([data-ring-host]) {
+  outline: 2px solid var(--focus-ring) !important;
+  outline-offset: 2px;
+}
+:has(> textarea[data-ring-host]:focus-visible) {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}

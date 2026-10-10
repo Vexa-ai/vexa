@@ -14,7 +14,7 @@ import { useService } from "../platform";
 import { LayoutServiceId, type LayoutService, type TabDescriptor } from "../workbench/layout";
 import { registerTab, type TabProps } from "../contributions";
 import { meetingsOnly } from "../app/mode";
-import { Icon, Checkbox } from "../ui-kit";
+import { Icon, Checkbox, useConfirm } from "../ui-kit";
 import { Modal } from "../ui-kit/Modal";
 import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
 import { MdxDoc } from "../ui-kit/MdxDoc";
@@ -222,6 +222,7 @@ function Header({ slug, shared, isSeed, displayName, mounted, archived, busy, on
 }) {
   const [renaming, setRenaming] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const [confirm, confirmDialog] = useConfirm();
   const cancelled = useRef(false);
   const toggle = () => onRun(async () => {
     if (shared) await setSharedActive(slug, !mounted);
@@ -277,10 +278,11 @@ function Header({ slug, shared, isSeed, displayName, mounted, archived, busy, on
           { id: "manage", label: "Manage workspace", detail: "purpose · GitHub · participants", onSelect: onManage },
           ...(!shared && !isSeed ? [
             { id: "archive", label: archived ? "Un-archive" : "Archive", detail: "collapse · keep data", onSelect: () => void onRun(async () => { await archiveWorkspace(slug, !archived); reload(); }, archived ? "Un-archived." : "Archived.") },
-            { id: "delete", label: "Delete", detail: "removes all data", onSelect: () => { if (window.confirm(`Delete "${displayName}"? This permanently removes the workspace and all its data.`)) void onRun(async () => { await deleteWorkspace(slug); layout.closeTab(tabId); }); } },
+            { id: "delete", label: "Delete", detail: "removes all data", onSelect: () => { void confirm({ title: `Delete “${displayName}”?`, consequence: "This permanently removes the workspace and all its data.", confirmLabel: "Delete workspace", typeToConfirm: displayName }).then((ok) => { if (ok) void onRun(async () => { await deleteWorkspace(slug); layout.closeTab(tabId); }); }); } },
           ] : []),
         ]} />
       )}
+      {confirmDialog}
     </div>
   );
 }
@@ -377,11 +379,11 @@ function GitHubSection({ slug, status, published_url, defaultRepoName, busy, onR
           <button disabled={busy} onClick={() => setPub({ name: defaultRepoName, priv: true, token: "" })} style={btn("primary")}>Publish to GitHub…</button>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <input autoFocus value={pub.name} placeholder="repo name" disabled={busy} onChange={(e) => setPub({ ...pub, name: e.target.value })} style={field} />
+            <input autoFocus value={pub.name} placeholder="repo name" disabled={busy} onChange={(e) => setPub({ ...pub, name: e.target.value })} className="vx-input" />
             <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: "var(--t2)", cursor: "pointer" }}>
               <input type="checkbox" checked={pub.priv} disabled={busy} onChange={(e) => setPub({ ...pub, priv: e.target.checked })} /> private repo
             </label>
-            <input type="password" value={pub.token} placeholder={hasSaved ? "GitHub token (optional — using your saved token)" : "GitHub token (repo scope — used once, never stored)"} disabled={busy} onChange={(e) => setPub({ ...pub, token: e.target.value })} style={field} />
+            <input type="password" value={pub.token} placeholder={hasSaved ? "GitHub token (optional — using your saved token)" : "GitHub token (repo scope — used once, never stored)"} disabled={busy} onChange={(e) => setPub({ ...pub, token: e.target.value })} className="vx-input" />
             <div style={{ display: "flex", gap: 8 }}>
               <button disabled={busy || !pub.name.trim() || (!pub.token.trim() && !hasSaved)} onClick={() => doPublish(pub)} style={btn("primary")}>{busy ? "Publishing…" : "Publish"}</button>
               <button disabled={busy} onClick={() => setPub(null)} style={btn()}>Cancel</button>
@@ -412,7 +414,7 @@ function TokenRow({ label, value, busy, onChange, onSubmit, onCancel, submitLabe
       <input autoFocus type="password" value={value} placeholder={label} disabled={busy}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={(e) => { if (e.key === "Enter" && (!required || value.trim())) onSubmit(); if (e.key === "Escape") onCancel(); }}
-        style={field} />
+        className="vx-input" />
       <div style={{ display: "flex", gap: 8 }}>
         <button disabled={busy || (required && !value.trim())} onClick={onSubmit} style={btn("primary")}>{submitLabel}</button>
         <button disabled={busy} onClick={onCancel} style={btn()}>Cancel</button>
@@ -429,6 +431,7 @@ function ParticipantsSection({ ownSlug, shared, shareWsId, myRole, setShareWsId,
 }) {
   const [members, setMembers] = useState<WorkspaceMember[]>([]);
   const [invite, setInvite] = useState<{ mode: "link" | "email"; role: string; ttlDays: number; emails: string; link: string | null } | null>(null);
+  const [confirm, confirmDialog] = useConfirm();
   const loadMembers = () => { if (shareWsId) void listWorkspaceMembers(shareWsId).then(setMembers).catch(() => setMembers([])); };
   useEffect(() => { loadMembers(); }, [shareWsId]);  // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -485,11 +488,12 @@ function ParticipantsSection({ ownSlug, shared, shareWsId, myRole, setShareWsId,
         )}
         {isOwner && shared && (
           <button disabled={busy} style={{ ...btn(), color: "var(--danger)" }}
-            onClick={() => { if (window.confirm("Stop sharing? All members lose access and it becomes your private workspace.")) onRun(async () => { await unshareWorkspace(shareWsId); layout.closeTab(tabId); }, "Unshared."); }}>Unshare</button>
+            onClick={() => { void confirm({ title: "Stop sharing this workspace?", consequence: "All members lose access and it becomes your private workspace.", confirmLabel: "Stop sharing" }).then((ok) => { if (ok) void onRun(async () => { await unshareWorkspace(shareWsId); layout.closeTab(tabId); }, "Unshared."); }); }}>Unshare</button>
         )}
       </div>
 
       {invite && <InviteDialog s={invite} setS={setInvite} onMint={doMint} busy={busy} />}
+      {confirmDialog}
     </Section>
   );
 }
@@ -509,13 +513,13 @@ function InviteDialog({ s, setS, onMint, busy, plain }: {
           <option value="contributor">member (read + write)</option>
           <option value="viewer">viewer (read)</option>
         </select>
-        <select value={s.ttlDays} disabled={busy} onChange={(e) => setS({ ...s, ttlDays: Number(e.target.value), link: null })} style={field}>
+        <select value={s.ttlDays} disabled={busy} onChange={(e) => setS({ ...s, ttlDays: Number(e.target.value), link: null })} className="vx-input">
           <option value={1}>1 day</option><option value={7}>7 days</option><option value={30}>30 days</option>
         </select>
       </div>
       {s.mode === "email" && (
         <input value={s.emails} placeholder="emails (comma-separated) — only these may redeem" disabled={busy}
-          onChange={(e) => setS({ ...s, emails: e.target.value, link: null })} style={field} />
+          onChange={(e) => setS({ ...s, emails: e.target.value, link: null })} className="vx-input" />
       )}
       {s.link ? (
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>

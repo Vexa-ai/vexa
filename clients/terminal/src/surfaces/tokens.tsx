@@ -7,7 +7,7 @@
  *  minted token value is shown ONCE (copy it now); it is never listed again.
  */
 import { useCallback, useEffect, useState } from "react";
-import { Icon } from "../ui-kit";
+import { Button, Icon, SecretReveal } from "../ui-kit";
 import { copyText } from "../ui-kit/ContextMenu";
 import { listTokens, createToken, revokeToken, TOKEN_SCOPES, type TokenInfo, type TokenScope, type MintedToken } from "./tokensApi";
 import { presentError } from "./apiClient";
@@ -57,20 +57,13 @@ function TokenRow({ token, onRevoke }: { token: TokenInfo; onRevoke: (id: number
 
 /** The one-time reveal: shown right after a mint, then gone forever (the list never carries the value). */
 function MintedTokenCard({ minted, onDismiss }: { minted: MintedToken; onDismiss: () => void }) {
-  const [copied, setCopied] = useState(false);
-  const copy = () => { copyText(minted.token); setCopied(true); };
+  // THE TOKEN IS SHOWN THROUGH SecretReveal (guidelines §7 S1): masked until the person presses
+  // Show, copied only on an explicit press, and never written into an attribute, a URL or storage.
   return (
-    <div style={{ margin: "8px 4px", padding: 10, borderRadius: 8, border: "1px solid var(--line)", background: "var(--panel2)" }}>
-      <div style={{ fontSize: 11.5, color: "var(--t2)", marginBottom: 6 }}>
-        Token created — copy it now, it will <b>not</b> be shown again.
-      </div>
-      <code style={{ display: "block", fontSize: 11, color: "var(--t1)", wordBreak: "break-all", marginBottom: 8 }}>{minted.token}</code>
-      <div style={{ display: "flex", gap: 8 }}>
-        <button onClick={copy} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11.5, padding: "3px 8px", borderRadius: 6, border: "1px solid var(--line)", background: "transparent", color: "var(--t1)", cursor: "pointer" }}>
-          <Icon name="copy" size={12} />{copied ? "copied" : "copy"}
-        </button>
-        <button onClick={onDismiss} style={{ fontSize: 11.5, padding: "3px 8px", borderRadius: 6, border: "none", background: "transparent", color: "var(--t3)", cursor: "pointer" }}>done</button>
-      </div>
+    <div className="vx-card" data-raised="" role="status">
+      <p className="vx-dialog-text">Token created — copy it now; it will <b>not</b> be shown again.</p>
+      <div className="vx-gap-top"><SecretReveal value={minted.token} label="new API token" onCopy={(v) => copyText(v)} /></div>
+      <div className="vx-gap-top"><Button variant="ghost" onClick={onDismiss}>Done</Button></div>
     </div>
   );
 }

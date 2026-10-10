@@ -7,7 +7,7 @@ import { useService, OPEN_ENTITY_EVENT, OPEN_MEETING_EVENT } from "../platform";
 import { LayoutServiceId } from "../workbench/layout";
 import { registerList, registerTab, type TabProps } from "../contributions";
 import { minutesOnly } from "../app/mode";
-import { Icon, Checkbox } from "../ui-kit";
+import { Icon, Checkbox, useConfirm } from "../ui-kit";
 import { Modal } from "../ui-kit/Modal";
 import { RoomOnboarding } from "./roomOnboarding";
 import { ENTITY_CHIP, DEFAULT_ENTITY_CHIP, DocMetaContext, DocNavContext, resolveDocRef, type DocNavigate } from "../ui-kit/docLinks";
@@ -510,6 +510,8 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
     finally { setBusy(false); }
   };
   const [confirmDelete, setConfirmDelete] = useState<null | { slug: string; display: string }>(null);
+  // every other destructive act asks in a dialog that names it — never window.confirm (S7)
+  const [confirm, confirmDialog] = useConfirm();
   const [sharedMemberships, setSharedMemberships] = useState<Membership[]>([]);  // ALL shared (incl switched-off)
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -641,7 +643,7 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
 
   // UN-SHARE (owner only): move the workspace back to your private store — the mirror of Share.
   const doUnshare = async (workspaceId: string) => {
-    if (typeof window !== "undefined" && !window.confirm(`Stop sharing "${workspaceId}"? Other members will lose access; it becomes a private workspace of yours.`)) return;
+    if (!(await confirm({ title: "Stop sharing this workspace?", consequence: "Other members will lose access; it becomes a private workspace of yours.", confirmLabel: "Stop sharing" }))) return;
     setBusy(true); setErr(null);
     try { await unshareWorkspace(workspaceId); load(); onSwapped(); }
     catch (e) { setErr(presentError(e).headline); }
@@ -659,7 +661,7 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
   const doDelete = async (slug: string, display: string) => {
     // MINUTES: removal is confirmed in the named modal (see confirmDelete), never a browser confirm.
     if (minutesOnly()) { setConfirmDelete({ slug, display }); return; }
-    if (typeof window !== "undefined" && !window.confirm(`Delete "${display}"? This permanently removes the workspace and all its data.`)) return;
+    if (!(await confirm({ title: `Delete “${display}”?`, consequence: "This permanently removes the workspace and all its data.", confirmLabel: "Delete workspace", typeToConfirm: display }))) return;
     setBusy(true); setErr(null);
     try { await deleteWorkspace(slug); load(); onSwapped(); }
     catch (e) { setErr(presentError(e).headline); }
@@ -835,6 +837,7 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
           <RoomOnboarding onClose={() => setRoomWiz(null)} onCreated={() => { load(); onSwapped(); }} />
         )}
         {/* MINUTES — removing a room is confirmed by seeing its name, never a bare icon click. */}
+        {confirmDialog}
         {confirmDelete !== null && minutesOnly() && (
           <Modal title="Remove this group?" onClose={() => setConfirmDelete(null)}>
             <div style={{ display: "flex", flexDirection: "column" }}>
