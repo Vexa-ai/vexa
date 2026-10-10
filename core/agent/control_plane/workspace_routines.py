@@ -21,6 +21,7 @@ from workspaces.shared import workspace_paths as wpaths
 
 import yaml
 
+from control_plane import routine_needs
 from control_plane import routine_resign
 from control_plane import routines as routines_mod
 from shared.ports import SchedulerPort
@@ -299,6 +300,9 @@ def _routine_card_from_file(path: Path, *, subject: str, job_card: Optional[dict
     else:
         card.setdefault("status", None)
     card["pending_confirmation"] = bool(enabled and pending)
+    # WHAT IT WILL BE REFUSED (`routine_needs`): a prompt that reads mail or the calendar is refused
+    # on every scheduled run, so the card says so beside it. A note, never a refusal to save.
+    routine_needs.annotate(card, card.get("plan_summary") or "")
     return card
 
 
@@ -354,6 +358,7 @@ def routine_cards_for_subject(
         card = dict(card)
         card["enabled"] = True
         card["routine_name"] = card.get("name")
+        routine_needs.annotate(card, card.get("plan_summary") or "")
         legacy_cards.append(card)
 
     ws = _safe_workspace_dir(workspaces_dir, subject)

@@ -135,7 +135,7 @@ plain Extend preset when a variant is missing.
 | `Give exactly one receipt per source in the pending page` (`409`) | An item in the batch has no receipt. The batch is not acknowledged. |
 | `Receipt must name an existing private graph markdown file` or `Graph receipt is missing its source reference` (`409`) | A cited page is not a `kg/…/*.md` file in the workspace, or does not contain the item's `source_id`. |
 | `Use an explicit exclusion category` or `Explain each exclusion` (`409`) | An exclusion must be `bulk_or_automated`, `duplicate`, `no_durable_facts` or `user_excluded`, with a reason. |
-| `human_session_required` (`403`) | A background worker with no person in the loop called a Connections tool. |
+| `human_session_required` (`403`, `remedy: ask_in_chat`) | A run with no person in the loop (a scheduled routine, a background flow or a meeting run) called a Connections tool. The body's `tell_your_person` says so in one sentence the agent relays; the fix is to ask in chat. Your connection is fine and signing in again changes nothing. |
 | `Private workspace is unavailable` (`503`) | agent-api has no workspace reader on this deployment. |
 | An Extend line saying the job failed, or that a restart cancelled it | The job did not finish. Press Extend again. |
 

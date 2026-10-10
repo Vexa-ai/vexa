@@ -29,6 +29,21 @@ def test_rd06_the_autonomous_regime_may_not_speak_or_delete(monkeypatch):
     assert out.get("refused") != "regime"
 
 
+def test_regime_refusal_names_the_remedy_and_a_sentence_for_the_person(monkeypatch):
+    """A refusal on regime carries the product's machine fields — `reason: human_session_required`
+    and `remedy: ask_in_chat` — and a `tell_your_person` sentence the agent can relay as it is.
+    Before, it told the agent there was nobody to tell, so the person never learned why a routine
+    did nothing, and signing in again (which changes nothing) was the only thing left to try."""
+    as_user(monkeypatch, "7")
+    rig.CALL_SCOPE.set({"regime": "autonomous", "workspaces": ["team"]})
+    out = json.loads(tool("meeting_delete")(meeting_id="12"))
+    assert out["refused"] == "regime"
+    assert out["reason"] == "human_session_required"
+    assert out["remedy"] == "ask_in_chat"
+    assert "ask in chat" in out["tell_your_person"]
+    assert "signing in again will not change it" in out["tell_your_person"]
+
+
 def test_loading_a_repository_waits_for_a_person_in_the_session(monkeypatch):
     """A repository load authenticates with the person's saved git credentials whenever the
     repository asks for one, so a session dispatched with no person in it may not load one."""

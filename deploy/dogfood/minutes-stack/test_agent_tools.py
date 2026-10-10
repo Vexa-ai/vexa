@@ -197,6 +197,21 @@ class AgentCallGoesThroughTheGateway(unittest.TestCase):
         out = json.loads(agent_tools._error(status, body, 'fallback'))
         self.assertEqual((out['status'], out['reason']), ('refused', 'human_session_required'))
 
+    def test_the_refusal_remedy_reaches_the_agent_through_the_gateway_render(self):
+        """The product's `REFUSAL` (gateway-identity.v1) rendered by the gateway MCP and parsed here
+        keeps `remedy` and `tell_your_person`, so the agent on this rig reads the same way through
+        as it would on the product's own MCP."""
+        errors = agent_mcp.load('product_tool_errors', PRODUCT_TOOLS.parents[2] / 'core' / 'meetings'
+                                / 'services' / 'mcp' / 'src' / 'vexa_mcp' / 'tool_errors.py')
+        token = agent_mcp.load('product_identity_token', PRODUCT_TOOLS.parents[2] / 'core' / 'gateway'
+                               / 'contracts' / 'gateway-identity.v1' / 'identity_token.py')
+        inner = token.REFUSAL
+        text = errors.render_tool_error(403, json.dumps({'detail': inner}))
+        _, (status, body) = self.worker(Gateway(refusal(text)))
+        out = json.loads(agent_tools._error(status, body, 'fallback'))
+        self.assertEqual(out['remedy'], 'ask_in_chat')
+        self.assertEqual(out['tell_your_person'], inner['tell_your_person'])
+
     def test_an_http_status_in_the_refusal_is_kept(self):
         _, (status, body) = self.worker(Gateway(refusal('HTTP 404\n{"detail":"no such"}')))
         self.assertEqual((status, body), (404, {'detail': {'detail': 'no such'}}))

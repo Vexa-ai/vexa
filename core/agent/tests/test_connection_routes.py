@@ -97,6 +97,28 @@ def test_a_worker_without_a_person_is_refused_before_the_broker(client, broker, 
     assert len(broker) == before
 
 
+@pytest.mark.parametrize('path,payload', [
+    ('/api/connections/gmail/inbox', {'limit': 3}),
+    ('/api/connections/calendar/events', {'time_min': '2026-10-01T00:00:00Z',
+                                          'time_max': '2026-10-08T00:00:00Z'}),
+])
+def test_an_unattended_mail_or_calendar_call_gets_the_remedy_and_no_provider_call(client, broker,
+                                                                                   path, payload):
+    """A scheduled routine's run that reads mail or the calendar is told WHAT WORKS, not only that
+    it was refused: the stable `remedy: ask_in_chat` and a `tell_your_person` sentence the agent
+    relays word for word. The broker — and so the mail provider — is never reached."""
+    before = len(broker)
+    r = client.post(path, headers=WORKER, json=payload)
+    assert r.status_code == 403
+    detail = r.json()['detail']
+    assert detail['status'] == 'refused'
+    assert detail['reason'] == 'human_session_required'
+    assert detail['remedy'] == 'ask_in_chat'
+    assert 'ask in chat' in detail['tell_your_person']
+    assert 'Nothing is wrong with your connection' in detail['tell_your_person']
+    assert len(broker) == before
+
+
 def test_unknown_arguments_are_refused_not_dropped(client):
     assert client.post('/api/connections/gmail/search', headers=HUMAN,
                        json={'query': 'x', 'token': 'leak'}).status_code == 422
