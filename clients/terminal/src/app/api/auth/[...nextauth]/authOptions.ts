@@ -30,6 +30,15 @@ function isSecureRequest(): boolean {
   );
 }
 
+/** True when `url` is an absolute URL on exactly `baseUrl`'s origin (scheme, host and port). */
+export function sameOrigin(url: string, baseUrl: string): boolean {
+  try {
+    return new URL(url).origin === new URL(baseUrl).origin;
+  } catch {
+    return false;
+  }
+}
+
 /** The one-shot hand-off from `signIn` to `redirect` (F42). Short-lived and httpOnly: it carries a
  *  URL for the next hop of THIS sign-in and nothing else, and it is consumed the moment it is read
  *  so a second navigation cannot land on a spent arrival. */
@@ -175,8 +184,9 @@ export const authOptions: AuthOptions = {
         if (arrival) return arrival;
       }
       if (url.startsWith("/")) return `${baseUrl}${url}`;
-      if (url.startsWith(baseUrl)) return url;
-      return baseUrl;
+      // An absolute target is followed only to this instance's OWN origin, compared as an origin:
+      // a prefix match would also pass a host that merely begins with this one's name.
+      return sameOrigin(url, baseUrl) ? url : baseUrl;
     },
   },
 };
