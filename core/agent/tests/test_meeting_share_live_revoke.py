@@ -104,3 +104,28 @@ def test_the_owner_keeps_streaming_through_the_rechecks(monkeypatch):
     assert '"access-revoked"' not in body
     assert "line 40" in body and '"meeting-end"' in body
     assert calls["n"] >= 10  # the stream really did re-ask
+
+
+
+def test_an_open_stream_ends_when_the_owner_deletes_the_transcript(monkeypatch):
+    """R1801-6: deletion is re-checked while the stream is open, not only when it opens."""
+    client, calls = _app(monkeypatch, {OWNER, INVITEE})
+    state = {"n": 0}
+    real = meetings_router.transcript_erased
+
+    def erased_after_a_while(row):
+        state["n"] += 1
+        return state["n"] > 3
+    monkeypatch.setattr(meetings_router, "transcript_erased", erased_after_a_while)
+    with _open(client, INVITEE) as r:
+        body = "".join(r.iter_text())
+    assert '"access-revoked"' in body and "line 1" in body
+
+
+def test_the_redis_read_never_blocks_longer_than_the_recheck():
+    """R1801-6: the worst case a removed reader keeps a live view is bounded by the re-check, the
+    read block and the retry — a read that blocked for the whole interval doubled it."""
+    assert meetings_router.LIVE_READ_BLOCK_MS / 1000 < meetings_router.LIVE_ACCESS_RECHECK_SEC
+    worst = (meetings_router.LIVE_ACCESS_RECHECK_SEC + meetings_router.LIVE_READ_BLOCK_MS / 1000
+             + meetings_router.LIVE_ACCESS_RETRY_SEC)
+    assert worst <= 17.5
