@@ -153,6 +153,37 @@ def test_with_per_workload_credentials_the_token_is_published_for_refresh(tmp_pa
     assert store.get(dr.CURRENT_PREFIX + uid) == env["VEXA_MCP_DELEGATION_TOKEN"]
 
 
+def _meeting_inv(subject):
+    return {**INV, "trigger": "transcription",
+            "identity": {"subject": subject, "launcher": "integration:meetings"},
+            "workspaces": [{"id": subject, "mode": "ro"}],
+            "context": {"kind": "meeting", "meeting": {"meeting_id": "abc-defg-hij",
+                                                       "session_uid": "abc-defg-hij",
+                                                       "platform": "google_meet"}}}
+
+
+def test_a_second_dispatch_of_another_person_never_replaces_a_units_current_token(tmp_path):
+    """A meeting's unit id is keyed on the meeting: a later dispatch for someone else reaching the same
+    unit does not publish its token to the worker already running there."""
+    store = _store()
+    rt = _Runtime()
+    d = dispatch.Dispatcher(_settings(tmp_path), rt, _Identity(), delegation_store=store)
+    uid = d.dispatch(_meeting_inv("u_jane"))
+    jane = rt.spawned[-1]["VEXA_MCP_DELEGATION_TOKEN"]
+    assert d.dispatch(_meeting_inv("u_bob")) == uid
+    assert store.get(dr.CURRENT_PREFIX + uid) == jane
+    assert store.get(delegation_key(uid)) == jane
+
+
+def test_a_second_dispatch_of_the_same_person_still_publishes(tmp_path):
+    store = _store()
+    rt = _Runtime()
+    d = dispatch.Dispatcher(_settings(tmp_path), rt, _Identity(), delegation_store=store)
+    uid = d.dispatch(_meeting_inv("u_jane"))
+    d.dispatch(_meeting_inv("u_jane"))
+    assert store.get(dr.CURRENT_PREFIX + uid) == rt.spawned[-1]["VEXA_MCP_DELEGATION_TOKEN"]
+
+
 # ── THE UNIT-END PATH: mint → the unit stops → the jti is in the store, for the token's remaining life
 
 def test_mint_then_end_the_unit_and_its_token_is_revoked_for_its_remaining_life(tmp_path):

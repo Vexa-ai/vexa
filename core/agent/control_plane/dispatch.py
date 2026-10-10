@@ -1069,6 +1069,16 @@ class Dispatcher:
         if self._settings.redis_workload_acl == "shared":
             return
         try:
+            # A unit id can be reached by a second dispatch (a meeting's unit is keyed on the meeting
+            # alone). The running worker reads the published token before each turn, so another
+            # person's token is never published over a live one: the unit keeps the person it was
+            # started for, and the refresh keeps re-minting theirs.
+            if not delegation_refresh.same_authority(
+                    self._delegation_store, self._settings.mcp_delegation_secret.get_secret_value(),
+                    unit_id=uid, claims=claims):
+                logger.warning("unit=%s already holds another person's live delegation token — this "
+                               "dispatch's token is not published to it", uid)
+                return
             delegation_refresh.publish(self._delegation_store, unit_id=uid, token=token,
                                        exp=int(claims["exp"]))
         except Exception:  # noqa: BLE001 — the token stands; only its replacement is lost
