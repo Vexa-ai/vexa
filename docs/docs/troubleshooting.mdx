@@ -182,10 +182,65 @@ retry budget on the first emit (≤ ~15s) already rides out brief transient prog
 | `401 Invalid API key` | unknown or revoked key | mint a fresh one ([Authentication](/authentication)) |
 | `403 Insufficient scope for this endpoint` | key lacks the route's scope | mint with the right `scopes=` |
 | `403 Invalid or missing admin token.` on `/admin/*` | missing or wrong `ADMIN_TOKEN` | use the `X-Admin-API-Key` matching your `ADMIN_TOKEN` |
+| `503 Authentication temporarily unavailable, retry` | the gateway could not get an answer from admin-api about the key; the key was **not** rejected | retry after the `Retry-After` seconds; if it persists, check admin-api ([below](#503-authentication-temporarily-unavailable)) |
 
 **Don't have a key yet?** Hosted: sign in at [vexa.ai/signin](https://vexa.ai/signin) with a Google
 account and copy your key from [your account page](https://vexa.ai/account) — free credit, no card
 required. Self-hosted: `make all` prints a key when the stack comes up.
+
+### 503 Authentication temporarily unavailable
+
+The gateway checks every API key with admin-api before forwarding the request. A `503` with
+`Authentication temporarily unavailable, retry` (and `Retry-After: 1`) means no verdict was reached on
+the key: admin-api did not answer, answered with a server error, or answered something that is not a
+verdict. The key is not invalid; send the request again. On the live WebSocket the same case sends
+an `auth_unavailable` error frame and closes with code `4503`, not `4401`.
+
+A short admin-api restart does not produce it: when the gateway cannot connect to admin-api at all,
+it tries again after 0.5 s and then 1.5 s before answering `503`. If you see it repeatedly, admin-api
+is down or overloaded: check that its container or pod is running and ready, and look for
+`auth_infra_unavailable` lines in the gateway log, which carry the reason.
+
+#### How it works
+
+1. For each credential, the gateway's admin-api adapter (`AdminApiAuthorizer.resolve`,
+   `core/gateway/services/gateway/src/gateway/adapters.py`) POSTs it to admin-api `/internal/validate`
+   with a 5-second budget per attempt.
+2. A `200` with a readable body admits the key. A `4xx` means the key is invalid, and the gateway
+   answers `401`.
+3. A hop that could not connect (`ConnectError`, `ConnectTimeout`) never reached admin-api, so it is
+   sent again: at most three attempts, after waits of 0.5 s and 1.5 s
+   (`VALIDATE_CONNECT_RETRY_BACKOFF`). A refused connection costs about 2 s in all; a connect that
+   times out can use its 5-second budget on each attempt.
+4. Every other failure is answered at once, without a retry: a read timeout (admin-api has the
+   request and is slow), a pool timeout (this gateway's own connection pool is full), a `5xx`, a
+   redirect, or an unreadable `200`. These, and the last failed connect, answer `503`.
+
+The waits are fixed in code; there is nothing to configure. admin-api remains the only service that
+decides whether a key is valid; the gateway only asks.
+
+#### Why it complies
+
+| Rule | How | Gate |
+|---|---|---|
+| P18 fail loud | No verdict is a `503` with `Retry-After`, never a `401` that blames the key, and it is logged as `auth_infra_unavailable` with the reason. | `gate:python` (`core/gateway/services/gateway/tests/test_adapters_resolve.py`) |
+| P20 authorize every access | The gateway stays fail-closed: no path admits a key without a `200` from `/internal/validate`. A retry repeats only a request admin-api never received, so no verdict is asked for twice. | `gate:python` (tests below) |
+| P5 adapt at the boundary | The retry lives in the gateway's admin-api adapter; nothing else in the gateway changed. | ungated: reviewed |
+
+**Security.** The retry adds no way in: each attempt carries the same key and headers to the same
+admin-api address, and only an answer from admin-api can admit a key. A slow admin-api gets no
+extra load, because a request it already received is never repeated. Tests, in
+`core/gateway/services/gateway/tests/test_adapters_resolve.py`:
+
+| Protection | Tests |
+|---|---|
+| No verdict is never an admission or a `401` | `test_resolve_transport_failure_raises_unavailable`, `test_resolve_server_error_raises_unavailable`, `test_resolve_redirect_is_no_verdict_unavailable`, `test_resolve_unparseable_200_body_raises_unavailable` |
+| Only a `4xx` from admin-api rejects a key | `test_resolve_client_error_is_invalid_key_none` |
+| Only a hop that never connected is retried, and only twice | `test_a_connect_failure_that_recovers_resolves_the_key`, `test_a_persistent_connect_failure_still_answers_unavailable`, `test_a_hop_that_reached_admin_api_or_hit_this_edges_pool_is_not_retried` |
+
+The gateway's own notes are in its
+[README](https://github.com/Vexa-ai/vexa/blob/main/core/gateway/services/gateway/README.md); the
+identity check itself is described in [Identity & trust](/architecture/identity-and-trust#admission-at-identity).
 
 ## Agent chat says no model credentials are configured
 
