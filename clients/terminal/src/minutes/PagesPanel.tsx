@@ -46,6 +46,7 @@ import { header, surface, type as ty } from "./tokens";
 import { WorkspaceReadmePanel } from "./WorkspaceReadmePanel";
 import { splitLeadingH1 } from "./workspaceFrontPage";
 import { isWorkspaceReadme } from "./workspaceReadme";
+import { DeletePageDialog, PageRemovedToast, pageTitle, useCanDelete, workspaceLabel, type PageTarget } from "./pageDelete";
 
 /** Breadcrumb separator. Its padding is NBSP *content*, not margin, so it collapses away under
  *  `min-width: 0` instead of holding a permanent sliver open once the crumb has been starved. */
@@ -147,6 +148,11 @@ export function PagesPanel(p: {
   // which blocks the main thread — so React could not repaint and the button sat frozen on
   // "Saving…" behind the dialog, reading as a hang on top of the failure.
   const [saveError, setSaveError] = useState<string | null>(null);
+  // DELETE (founder 2026-10-11: *"we probably need a delete for a note"*). Offered where the reader
+  // may edit; the server decides again. Not on a meeting's page, which the meeting owns, nor on a
+  // workspace's README, which is the workspace's front page.
+  const [deleting, setDeleting] = useState<PageTarget | null>(null);
+  const mayDelete = useCanDelete(p.docSlug);
   // a new doc (or fresh content) always lands in VIEW, rendered
   useEffect(() => { setMode("view"); setSaveError(null); }, [p.docPath, p.docSlug]);
   useEffect(() => { if (!copied) return; const t = setTimeout(() => setCopied(false), 1400); return () => clearTimeout(t); }, [copied]);
@@ -298,6 +304,13 @@ export function PagesPanel(p: {
                   style={iconBtn(false)} onMouseEnter={litIcon} onMouseLeave={dimIcon(false)}>
                   <Icon name="edit" size={14} />
                 </button>
+                {mayDelete && !docMeeting && !isWorkspaceReadme(p.docPath) && (
+                  <button data-doc-act="delete" title="Delete page" aria-label="Delete page"
+                    onClick={() => setDeleting({ path: p.docPath, slug: p.docSlug, title: pageTitle(p.docPath), workspace: workspaceLabel(p.docSlug) })}
+                    style={iconBtn(false)} onMouseEnter={litIcon} onMouseLeave={dimIcon(false)}>
+                    <Icon name="trash" size={14} />
+                  </button>
+                )}
               </>
             : <>
                 {saveError && <span data-doc-act="save-error" role="alert" title={saveError}
@@ -394,6 +407,8 @@ export function PagesPanel(p: {
         </div>
         </div>
       </div>
+      {deleting && <DeletePageDialog target={deleting} onClose={() => setDeleting(null)} />}
+      <PageRemovedToast />
     </>
   );
 }

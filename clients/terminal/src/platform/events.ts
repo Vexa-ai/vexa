@@ -69,3 +69,8 @@ export const FOCUS_WORKSPACE_EVENT = "vexa:terminal:focus-workspace";
  *  yet" for a file that has been on disk for a minute, and the reader concludes the agent did
  *  nothing. */
 export const WORKSPACE_COMMIT_EVENT = "vexa:terminal:workspace-commit";
+
+/** A PERSON DELETED A PAGE (founder 2026-10-11: *"we probably need a delete for a note"*). Detail:
+ *  `{ path, slug }` — `slug` absent for the reader's own desk. The minutes shell, the one writer of
+ *  the chat record, drops every tab on that page; the delete itself has already committed. */
+export const PAGE_REMOVED_EVENT = "vexa:terminal:page-removed";

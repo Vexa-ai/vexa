@@ -102,6 +102,7 @@ import {
 import {
   DESK_SLUG, HISTORY_PAGE, loadHistory, loadWorkspaceFacts, roleLabel, type WorkspaceFacts,
 } from "./workspaceReadme";
+import { removedPathOf, restoreFromHistory, useCanDelete } from "./pageDelete";
 
 /** THE STRIP IS NOT A CARD ANY MORE (#1634 rule 5: *"grey, small, sentence-like — the people-and-
  *  last-edit line under a shared document's title. Body starts right under."*). A bordered panel
@@ -260,10 +261,17 @@ function Act(p: {
  *  only* the list read as unfiltered — `_global`'s README history is full of commits whose message
  *  says `MISSING.md, OBJECTIVES.md +13`. The files are what the filter actually matched, and git
  *  narrows them to the pathspec, so the row can be checked against the claim above it. */
-function CommitRow(p: { c: GitCommit; open: boolean; diff: string | null; onOpen: () => void }) {
+function CommitRow(p: { c: GitCommit; open: boolean; diff: string | null; onOpen: () => void; onRestore?: (path: string) => void }) {
   const files = p.c.files ?? [];
+  // A DELETED PAGE COMES BACK FROM HERE (founder 2026-10-11): the removal's own row offers Restore.
+  const removed = p.onRestore ? removedPathOf(p.c) : null;
   return (
-    <div data-ws-commit={p.c.sha} style={{ marginBottom: 3 }}>
+    <div data-ws-commit={p.c.sha} style={{ marginBottom: 3, position: "relative" }}>
+      {removed && (
+        <button data-ws-restore={removed} onClick={() => p.onRestore?.(removed)} title={`Put ${removed} back`}
+          style={{ ...ty.chip, position: "absolute", right: 4, top: 2, zIndex: 1, background: surface.raisedHi, border: "1px solid var(--line)",
+                   borderRadius: 6, padding: "1px 8px", color: "var(--accent)", cursor: "pointer" }}>Restore</button>
+      )}
       <button onClick={p.onOpen} title={`${files.length} file(s)`}
         style={{ ...ty.body, display: "block", width: "100%", textAlign: "left",
                  background: p.open ? surface.raisedHi : "transparent", border: "none",
@@ -339,6 +347,9 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string; title?: s
   const openEntity = useOpenEntity();
 
   const addr = facts?.slug ?? (p.slug || DESK_SLUG);
+  // Restore is the edit rule, like Delete — a reader sees the removal in the list and no button.
+  const mayRestore = useCanDelete(p.slug || undefined);
+  const [histNonce, setHistNonce] = useState(0);
 
   // The whole panel reloads when the workspace changes, never when a disclosure or the filter does.
   useEffect(() => {
@@ -366,7 +377,7 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string; title?: s
       .then((c) => { if (live) setCommits(c); })
       .catch(() => { if (live) setCommits([]); });
     return () => { live = false; };
-  }, [facts, addr, thisPage, shown, p.path]);
+  }, [facts, addr, thisPage, shown, p.path, histNonce]);
 
   const run = useCallback(async (what: () => Promise<string>) => {
     setBusy(true);
@@ -774,7 +785,12 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string; title?: s
             {listed === null && <div style={ty.meta}>Reading…</div>}
             {listed?.length === 0 && <div style={ty.meta}>No commits here yet.</div>}
             {listed?.map((c) => (
-              <CommitRow key={c.sha} c={c} open={openSha === c.sha} diff={diff} onOpen={() => void openCommit(c.sha)} />
+              <CommitRow key={c.sha} c={c} open={openSha === c.sha} diff={diff} onOpen={() => void openCommit(c.sha)}
+                onRestore={mayRestore ? (path) => void run(async () => {
+                  await restoreFromHistory({ path, slug: p.slug || undefined, commit: c.sha });
+                  setHistNonce((n) => n + 1);   // the restore is a commit; the list shows it
+                  return `Restored ${path}.`;
+                }) : undefined} />
             ))}
             {more && (
               <button data-ws-history-more style={{ ...linkBtn, marginTop: 4 }}

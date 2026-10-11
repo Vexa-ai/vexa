@@ -473,6 +473,20 @@ class WorkspaceRemoveBody(BaseModel):
     slug: Optional[str] = Field(None, description=WRITE_SLUG_HELP)
 
 
+class WorkspaceRestoreBody(BaseModel):
+    """PUT BACK one page a removal took out — the body behind the page view's **Undo** and History's
+    **Restore** (founder 2026-10-11: *"we probably need a delete for a note"*).
+
+    ``path`` and ``slug`` as on `WorkspaceRemoveBody`. ``commit`` is the removal to undo: the sha
+    `POST /api/workspace/remove` answered with, or a History row's. Omitted = the newest commit that
+    removed ``path``. The bytes come from that commit's parent, so what returns is exactly what went."""
+    model_config = {"extra": "forbid"}
+    path: str = Field(description="workspace-relative path of the page to put back")
+    slug: Optional[str] = Field(None, description=WRITE_SLUG_HELP)
+    commit: Optional[str] = Field(None, description=(
+        "the commit that removed the page; omit it for the newest removal of that path"))
+
+
 class WorkspaceMoveBody(BaseModel):
     """MOVE one page from one path to another — the body behind `workspace_move` (Vexa-ai/vexa#1621).
 

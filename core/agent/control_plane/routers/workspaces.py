@@ -29,7 +29,8 @@ from control_plane.bodies import (
     GitTokenBody, SharedActiveBody, SharedAttachBody, WorkspaceActivateBody,
     WorkspaceDeactivateBody, WorkspaceMoveBody, WorkspaceNewBody, WorkspacePublishBody,
     WorkspaceImportBody, WorkspacePullBody, WorkspacePurposeBody, WorkspacePushBody,
-    WorkspaceRemoveBody, WorkspaceRenameBody, WorkspaceSwapBody, WorkspaceWriteBody)
+    WorkspaceRemoveBody, WorkspaceRenameBody, WorkspaceRestoreBody, WorkspaceSwapBody,
+    WorkspaceWriteBody)
 from control_plane.ceiling import is_unwatched, require_in_ceiling, write_slug
 from control_plane.workspace_attach import (
     CloneError, activate_workspace, active_workspaces, attach_shared_workspace, bind_repository_credential,
@@ -56,6 +57,7 @@ from typing import Optional
 import hashlib
 import stat as stat_mod
 import os
+import re
 
 
 #: HOW FAR BACK THE FRONT PAGE LOOKS for a change a person can read (Vexa-ai/vexa#1634). Deep enough
@@ -461,6 +463,17 @@ def build(**d) -> APIRouter:
                 f"Moved to [{name}]({new_rel}).\n\n"
                 f"This page now lives at `{new_rel}`. Its history is in this workspace's git log.\n")
 
+    def _page_subject(ws: str, rel: str, verb: str) -> str:
+        """`<workspace>: <path> — <verb>`, at most 72 characters, and the VERB always survives.
+
+        Clipping the whole string at 72 cut the verb off a long path, and History's Restore finds a
+        removal by it — so a long path is shortened in the middle instead (`kg/…/name.md`)."""
+        whole = f"{ws}: {rel} — {verb}"
+        if len(whole) <= 72:
+            return whole
+        room = max(8, 72 - len(f"{ws}:  — {verb}") - 1)
+        return f"{ws}: …{rel[-room:]} — {verb}"[:72]
+
     @router.post("/api/workspace/remove")
     def ws_file_remove(request: Request, body: WorkspaceRemoveBody = Body(...)):
         """REMOVE one page from a workspace, as a commit — the verb behind `workspace_delete`.
@@ -491,8 +504,62 @@ def build(**d) -> APIRouter:
         if st is None or not stat_mod.S_ISREG(st.st_mode) or not wpaths.unlink_inside(froot, frel):
             raise HTTPException(status_code=404, detail="not found")
         sha = _commit(target, [rel, *_kg_index_after(target, rel)],
-                      f"{target.name}: {rel} — removed"[:72])
+                      _page_subject(target.name, rel, "removed"))
         return {"path": rel, "deleted": True, "workspace": slug or "", "commit": sha}
+
+    @router.post("/api/workspace/restore")
+    def ws_file_restore(request: Request, body: WorkspaceRestoreBody = Body(...)):
+        """PUT BACK one page a removal took out — the page view's **Undo** and History's **Restore**.
+
+        Founder, 2026-10-11, on a junk entity page the agent had written: *"we probably need a
+        delete for a note"*. The delete is `ws_file_remove` above, unchanged; this is what makes
+        offering it to a person safe. A removal is a commit, so the bytes are its parent's — read
+        out of git and written back exactly, then committed, so the restore is history too.
+
+        THE SAME DOOR AS THE REMOVAL (`_movable_dir`): whoever could not have removed the page
+        cannot put it back, `_system` and `kg/templates/` included. And it never overwrites: a page
+        already at the path is a 409, because a restore that clobbers a newer page is a second loss
+        dressed as an undo. ``commit`` must be a commit that removed ``path``; omitted, it is the
+        newest such commit."""
+        subject = subject_of(request)
+        rel = str(body.path or "").strip()
+        slug = write_slug(request, body.slug)
+        target = _movable_dir(request, subject, rel, slug)
+        try:
+            froot, frel = wpaths.locate_inside(target, rel)
+        except wpaths.PathRefused as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+        if not frel:
+            raise HTTPException(status_code=400, detail="name the page to put back")
+        if not (target / ".git").is_dir():
+            raise HTTPException(status_code=404, detail="this workspace keeps no history to restore from")
+        if wpaths.stat_inside(froot, frel) is not None:
+            raise HTTPException(status_code=409, detail=(
+                "a page is already at that path — move or remove it first; a restore never overwrites"))
+        sha = str(body.commit or "").strip()
+        if sha:
+            if not re.fullmatch(r"[0-9a-fA-F]{7,40}", sha):
+                raise HTTPException(status_code=400, detail="`commit` is not a commit id")
+            took = run_git(target, "show", "--no-renames", "--diff-filter=D", "--name-only",
+                           "--format=", sha, "--", rel)
+            if took.returncode != 0 or rel not in took.stdout.splitlines():
+                raise HTTPException(status_code=404, detail="that commit did not remove this page")
+        else:
+            sha = run_git(target, "log", "-1", "--no-renames", "--diff-filter=D", "--format=%H",
+                          "--", rel).stdout.strip()
+            if not sha:
+                raise HTTPException(status_code=404, detail="no removal of this page in the history")
+        before = run_git(target, "show", f"{sha}^:{rel}", text=False)
+        if before.returncode != 0:
+            raise HTTPException(status_code=404, detail="the history has no copy of this page")
+        try:
+            wpaths.write_bytes_inside(froot, frel, before.stdout)
+        except wpaths.PathRefused as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+        head = _commit(target, [rel, *_kg_index_after(target, rel)],
+                       _page_subject(target.name, rel, "restored"))
+        return {"path": rel, "restored": True, "workspace": slug or "", "commit": head,
+                "from_commit": sha}
 
     @router.post("/api/workspace/move")
     def ws_file_move(request: Request, body: WorkspaceMoveBody = Body(...)):

@@ -22,6 +22,7 @@
 import type { CSSProperties, ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "../ui-kit";
+import { ContextMenu, type ContextMenuItem } from "../ui-kit/ContextMenu";
 import { WORKSPACE_COMMIT_EVENT } from "../platform";
 import type { Page } from "./types";
 import { navigateView } from "./roomView";
@@ -30,6 +31,7 @@ import {
   type NavWorkspace, type TreeNode,
 } from "./navigatorApi";
 import { surface, type as ty } from "./tokens";
+import { DeletePageDialog, offerDelete, pageTitle, type PageTarget } from "./pageDelete";
 
 /** FIXED (founder: a "left-side bar", not a second resizable pane). The pages panel's own drag is
  *  the one width the reader sets here; a rail with its own handle would put two grips on one edge. */
@@ -50,6 +52,12 @@ const nameS: CSSProperties = { flex: "1 1 0%", minWidth: 0, overflow: "hidden", 
 const caret = (open: boolean): CSSProperties => ({ flex: "none", width: 10, color: "var(--t3)", fontFamily: "var(--sans)", fontSize: 9, lineHeight: 1, transform: open ? "rotate(90deg)" : "none", transition: "transform .1s" });
 const hoverOn = (e: { currentTarget: HTMLElement }) => { e.currentTarget.style.background = surface.raised; };
 const hoverOff = (e: { currentTarget: HTMLElement }) => { e.currentTarget.style.background = "transparent"; };
+/** A file row's own controls — hidden until the row is hovered (or the control focused). */
+const rowAct: CSSProperties = {
+  position: "absolute", top: "50%", transform: "translateY(-50%)", opacity: 0, transition: "opacity .12s",
+  background: "transparent", border: "none", color: "var(--t3)", cursor: "pointer", fontSize: 11, lineHeight: 1,
+  padding: "2px 4px", fontFamily: "var(--sans)",
+};
 
 const named = (path: string) => (path.split("/").pop() ?? path).replace(/\.md$/i, "");
 const pageFor = (ws: NavWorkspace, path: string): Page => ({ path, slug: ws.slug, label: named(path) });
@@ -69,6 +77,11 @@ export function Navigator(p: {
   const [openWs, setOpenWs] = useState<Set<string>>(() => new Set());
   const [openDirs, setOpenDirs] = useState<Set<string>>(() => new Set());
   const [q, setQ] = useState("");
+  // A FILE ROW'S MENU — Open in a tab, and Delete… where the reader may edit that workspace.
+  const [menu, setMenu] = useState<{ x: number; y: number; ws: NavWorkspace; path: string; canDelete: boolean } | null>(null);
+  const [deleting, setDeleting] = useState<PageTarget | null>(null);
+  const dialogUp = useRef(false);
+  dialogUp.current = !!deleting;
   const box = useRef<HTMLInputElement>(null);
   const seeded = useRef(!!p.workspaces);
   /** workspace keys whose file list has been read (or handed in) — never read back from state */
@@ -137,7 +150,8 @@ export function Navigator(p: {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") { onCloseRef.current(); return; }
+      // Esc with the delete dialog up belongs to the dialog, not to the rail behind it.
+      if (e.key === "Escape") { if (!dialogUp.current) onCloseRef.current(); return; }
       if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey) return;
       const t = e.target as HTMLElement | null;
       const tag = t?.tagName;
@@ -167,22 +181,40 @@ export function Navigator(p: {
   /** THE EXPLICIT KEEP. Middle-click, or the ⧉ — a tab through the panel's own route. */
   const keep = (ws: NavWorkspace, path: string) => p.onOpenTab(pageFor(ws, path));
 
+  /** Open a file row's menu at (x, y). Whether it offers Delete is asked before it opens, so the
+   *  menu never grows an item under the pointer. */
+  const openMenu = (ws: NavWorkspace, path: string, x: number, y: number) => {
+    void offerDelete(ws.slug).catch(() => false).then((canDelete) => setMenu({ x, y, ws, path, canDelete }));
+  };
+  const rowActs = "[data-nav-tab],[data-nav-more]";
   const fileRow = (ws: NavWorkspace, path: string, label: string, depth: number) => (
     <div key={`${ws.key}|${path}`} style={{ position: "relative", display: "flex" }}
-      onMouseEnter={(e) => { const b = e.currentTarget.querySelector("[data-nav-tab]") as HTMLElement | null; if (b) b.style.opacity = "1"; }}
-      onMouseLeave={(e) => { const b = e.currentTarget.querySelector("[data-nav-tab]") as HTMLElement | null; if (b) b.style.opacity = "0"; }}>
+      onMouseEnter={(e) => { e.currentTarget.querySelectorAll<HTMLElement>(rowActs).forEach((b) => { b.style.opacity = "1"; }); }}
+      onMouseLeave={(e) => { e.currentTarget.querySelectorAll<HTMLElement>(rowActs).forEach((b) => { b.style.opacity = "0"; }); }}>
       <button data-nav-file={`${ws.key}|${path}`} title={ws.slug ? `${ws.slug} › ${path}` : path}
         onClick={() => go(ws, path)}
         onAuxClick={(e) => { if (e.button === 1) { e.preventDefault(); keep(ws, path); } }}
-        style={{ ...entry, color: "var(--t1)", paddingLeft: 6 + depth * 11, paddingRight: 22 }}
+        onContextMenu={(e) => { e.preventDefault(); openMenu(ws, path, e.clientX, e.clientY); }}
+        style={{ ...entry, color: "var(--t1)", paddingLeft: 6 + depth * 11, paddingRight: 40 }}
         onMouseEnter={hoverOn} onMouseLeave={hoverOff}>
         <span style={nameS}>{label}</span>
       </button>
       <button data-nav-tab={`${ws.key}|${path}`} aria-label={`Open ${label} in a tab`} title="Open in a tab"
         onClick={(e) => { e.stopPropagation(); keep(ws, path); }}
-        style={{ position: "absolute", right: 2, top: "50%", transform: "translateY(-50%)", opacity: 0, transition: "opacity .12s", background: "transparent", border: "none", color: "var(--t3)", cursor: "pointer", fontSize: 11, lineHeight: 1, padding: "2px 4px", fontFamily: "var(--sans)" }}>⧉</button>
+        style={{ ...rowAct, right: 20 }}>⧉</button>
+      <button data-nav-more={`${ws.key}|${path}`} aria-label={`More for ${label}`} title="More"
+        onClick={(e) => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); openMenu(ws, path, r.left, r.bottom + 2); }}
+        onFocus={(e) => { e.currentTarget.style.opacity = "1"; }}
+        style={{ ...rowAct, right: 2 }}>⋯</button>
     </div>
   );
+  const menuItems = (m: NonNullable<typeof menu>): ContextMenuItem[] => [
+    { id: "open-tab", label: "Open in a tab", onSelect: () => keep(m.ws, m.path) },
+    ...(m.canDelete ? [{ id: "delete", label: "Delete…", detail: m.path, onSelect: () => setDeleting({
+      path: m.path, slug: m.ws.slug, title: pageTitle(m.path),
+      workspace: m.ws.kind === "desk" ? "your personal workspace" : m.ws.name,
+    }) }] : []),
+  ];
 
   const nodes = (ws: NavWorkspace, list: TreeNode[], depth: number): ReactNode[] =>
     list.flatMap((n) => {
@@ -270,6 +302,8 @@ export function Navigator(p: {
                 );
               })}
       </div>
+      {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems(menu)} onClose={() => setMenu(null)} />}
+      {deleting && <DeletePageDialog target={deleting} onClose={() => setDeleting(null)} />}
     </div>
   );
 }

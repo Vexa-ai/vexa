@@ -191,7 +191,9 @@ ask about a meeting with `POST /api/chat`, passing
 `PUT /api/workspace/file` `{ path, content, slug? }` → `{ "path": "...", "written": true }` (commits;
 `kg/templates/` is refused `403`, and `_global` needs the admin allowlist) ·
 `POST /api/workspace/remove` `{ path, slug? }` → `{ path, deleted, workspace, commit }` (one page, as a
-commit) · `POST /api/workspace/move` `{ path, to, slug?, to_slug? }` → `{ from, to, moved, pointer,
+commit) · `POST /api/workspace/restore` `{ path, slug?, commit? }` → `{ path, restored, workspace,
+commit, from_commit }` (puts back a removed page from the removal's parent, as a commit; `409` if a
+file is at the path) · `POST /api/workspace/move` `{ path, to, slug?, to_slug? }` → `{ from, to, moved, pointer,
 commit, source_commit }` (an omitted `to_slug` is the same workspace) ·
 `POST /api/workspace/asset` `{ url, path?, slug? }` → the stored picture's `path` (the server fetches it) ·
 `GET /api/workspace/git` → `{ branch, changes, commits }` ·

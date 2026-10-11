@@ -1,6 +1,6 @@
 ---
 title: "Pages"
-description: "Find, read, edit and grow the Markdown pages in your workspaces: the navigator, in-place editing, Extend and Create, images, diagrams, and moving pages."
+description: "Find, read, edit and grow the Markdown pages in your workspaces: the navigator, in-place editing, Extend and Create, images, diagrams, and deleting and moving pages."
 ---
 
 Every page in Minutes is a Markdown file in a [workspace](/concepts#workspace), a git repository the
@@ -89,10 +89,28 @@ drafts a quote into the chat box, and you decide whether to send it. A selection
   entity) shows the frontmatter as **Entity properties**: a key/value list where web addresses are
   links.
 
-### Remove and move pages
+### Delete a page
 
-Removing and moving are agent verbs: ask in the chat ("move this page to the project workspace",
-"delete the draft"). The navigator has no rename, delete or drag. A move inside one workspace leaves a
+1. Press the **trash icon** in the page header (beside Copy and Edit), or press **⋯** on the file's row
+   in the navigator (or right-click the row) and choose **Delete…**.
+2. The dialog reads *Delete <page>? It's removed from <workspace>; you can restore it from History.*
+   **Delete page** has the focus, so <kbd>Enter</kbd> deletes and <kbd>Esc</kbd> cancels.
+3. The page is removed as a commit. Every tab on it closes; if it was in front, the next tab comes
+   forward. Links to it from other pages show as dashed *no page yet* chips.
+4. A note at the bottom of the screen says *Deleted <page>.* with **Undo** for 10 seconds. Undo puts
+   the page back exactly as it was, as a new commit, and opens it.
+
+After that, open the workspace's README, press **History**, and press **Restore** on the row that
+removed the page. Restore never overwrites: if a page has been written at that path since, it refuses.
+
+You are offered Delete where you may edit: your own desk, a shared workspace where you are a
+contributor or owner, and the company workspace (`_global`) only as its administrator. A reader sees
+no Delete and no Restore. A meeting's own page and a workspace's README have no Delete button.
+
+### Move pages, or delete them by asking
+
+Ask in the chat ("move this page to the project workspace", "delete the draft"). The agent uses the
+same delete as the button. The navigator has no rename or drag. A move inside one workspace leaves a
 pointer page at the old path (`moved_to:` in its frontmatter), so old links still lead somewhere. A move
 to another workspace writes the target and removes the source, without a pointer. A removed page stays
 in the git history.
@@ -105,6 +123,8 @@ in the git history.
 | *not authorized for this workspace* | you are a viewer, or not a member | ask an owner for the contributor role |
 | *only an org admin may edit _global* | the company workspace is admin-written | ask an admin |
 | *kg/templates/ holds entity shapes, not records* | templates are not editable as pages | write the record elsewhere |
+| *Could not delete: …* in the dialog | the delete was refused (the same rules as a save); nothing was removed | read the reason |
+| *Could not restore: a page is already at that path …* | a page was written at that path after the delete; a restore never overwrites | move or delete the newer page first |
 | *that path is not inside this workspace* | the path is absolute, contains `..`, or names `.git`, `.vexa` or `.claude` | use a path inside the workspace |
 | *… exceeds 25MB* | the upload ceiling is 25 MB per file | shrink or link the file |
 | *External image* fetch refused | only `http`/`https` addresses on the public internet can be fetched; internal names and private, loopback and link-local addresses are refused | host the image publicly or upload it |
@@ -133,9 +153,18 @@ image that is dead or not an image, the link is cut out (the text stays) and a f
 4. **Images.** A drop is `PUT /api/workspace/asset` (multipart; the terminal passes the bytes through
    undecoded). A fetch is `POST /api/workspace/asset {url}`: agent-api fetches it through its URL guard,
    stores it under `assets/`, records the source, and makes one commit.
-5. **Remove / move.** The agent calls the `workspace_delete` / `workspace_move` tools, which reach
-   `POST /agent/workspace/remove` and `POST /agent/workspace/move`. Both ends of a move are authorized
-   before anything is written.
+5. **Delete.** The page header and the navigator call `POST /api/workspace/remove` with `{path, slug}`
+   on the terminal, which forwards it to `/agent/workspace/remove` — the same agent-api verb the agent's
+   `workspace_delete` tool calls. agent-api authorizes it as a save (plus: never `_system`), removes the
+   file without following links, refreshes `kg/INDEX.md` for an entity page, and commits
+   `<workspace>: <path> — removed`. The answer carries the commit. The terminal then closes the page's
+   tabs, drops its cached link lookups, and re-reads the navigator.
+6. **Undo / Restore.** `POST /api/workspace/restore` with `{path, slug, commit}` (Undo passes the
+   removal's commit; History's Restore passes the row's). agent-api checks the same rights, refuses
+   with `409` if a file is at the path, checks that the commit removed that path, writes the bytes from
+   the commit's parent, and commits `<workspace>: <path> — restored`.
+7. **Move.** The agent calls `workspace_move`, which reaches `POST /agent/workspace/move`. Both ends
+   of a move are authorized before anything is written.
 
 ### Who writes what
 
@@ -154,7 +183,9 @@ The terminal stores no page content. It reads and forwards.
 | `GET /api/workspace/tree`, `/file`, `/active`, `/shared` | `/agent/workspace/…` | `/api/workspace/…` |
 | `PUT /api/workspace/file` | `/agent/workspace/file` | `/api/workspace/file` |
 | `PUT`, `POST`, `GET /api/workspace/asset` | `/agent/workspace/asset` | `/api/workspace/asset` |
-| agent tools `workspace_delete`, `workspace_move` | `/agent/workspace/remove`, `/agent/workspace/move` | `/api/workspace/remove`, `/api/workspace/move` |
+| `POST /api/workspace/remove` (Delete), agent tool `workspace_delete` | `/agent/workspace/remove` | `/api/workspace/remove` |
+| `POST /api/workspace/restore` (Undo, Restore) | `/agent/workspace/restore` | `/api/workspace/restore` |
+| agent tool `workspace_move` | `/agent/workspace/move` | `/api/workspace/move` |
 
 The gateway's mapping of `/agent/*` onto agent-api's `/api/*` is declared in `core/agent/routes.v1.json`;
 the tools are declared in `core/agent/mcp.tools.v1.json`.
@@ -173,9 +204,10 @@ the tools are declared in `core/agent/mcp.tools.v1.json`.
 | **P2** couple only through contracts · **P6** one front door | the browser calls only the terminal's `/api/*`; the terminal calls only the gateway, through routes declared in `routes.v1.json` | `gate:isolation`, `gate:exports`, `gate:domain-doors` |
 | **P4** published schemas | the routes and tools are sealed registries (`routes.v1`, `mcp.tools.v1`) | `gate:schema`, `gate:contract-version` |
 | **P18** fail loud | a refused save keeps the draft and shows the reason; refused, failing and unreachable fetches answer distinct codes (`400`, `424`, `502`); an unreachable gateway is a `502`, never a silent success | ungated: reviewed; the proxy's `502` is pinned by `workspaceProxy.test.ts` under `gate:node` |
-| **P20** authorize every access | agent-api checks read and write rights on every path route, and on both ends of a move | deny tests below, under `gate:python` and `gate:node` |
+| **P20** authorize every access | agent-api checks read and write rights on every path route, on both ends of a move, and on delete and restore with the save's rule (the terminal's offer of Delete is not the check) | deny tests below, under `gate:python` and `gate:node` |
 | **P21** state from evidence | the Extend card shows the job's phase, and the page appears when the commit lands, not when the button is pressed | ungated: reviewed |
-| **P23** one writer per carrier | agent-api is the only writer of a workspace repository; the terminal never writes files | `gate:dataflow` |
+| **P23** one writer per carrier | agent-api is the only writer of a workspace repository; the terminal never writes files — a delete and its undo are agent-api commits, and the agent's `workspace_delete` is the same route | `gate:dataflow` |
+| **P18** fail loud (delete) | a refused delete stays in the dialog with the reason; a restore that would overwrite answers `409` | `pageDelete.test.tsx`, `test_page_delete_restore.py` under `gate:node`, `gate:python` |
 
 ### Security
 
@@ -208,6 +240,8 @@ to the workspace scope of the chat that dispatched it.
 | `core/agent/tests/test_workspace_assets.py` · `test_the_asset_route_is_scoped_exactly_like_the_file_route`, `test_the_deployments_own_network_is_never_an_asset_source`, `test_every_redirect_hop_is_re_checked_against_the_guard`, `test_a_refused_url_is_a_named_400_not_a_silent_empty_asset`, `test_an_enormous_remote_costs_the_call_and_not_the_workspace` | assets and fetches |
 | `core/agent/tests/test_page_images.py` · `test_a_redirect_into_this_deployments_own_network_is_refused_on_the_hop`, `test_a_page_written_with_a_dead_image_address_comes_out_without_it` | image checks on page writes |
 | `core/agent/tests/test_workspace_paths_nofollow.py` · `test_a_linked_directory_component_refuses_a_write` | no writes through links |
+| `core/agent/tests/test_page_delete_restore.py` · `test_a_reader_of_a_shared_workspace_can_neither_delete_nor_restore`, `test_someone_outside_a_shared_workspace_can_neither_delete_nor_restore`, `test_the_company_tier_is_restored_only_by_its_admin`, `test_the_private_system_tier_is_never_a_restore_target`, `test_kg_templates_are_not_restored_either`, `test_a_restore_never_overwrites_a_page_that_is_there_now`, `test_a_commit_that_did_not_remove_the_page_is_refused`, `test_a_restore_path_that_leaves_the_workspace_is_refused` | delete and restore |
+| `clients/terminal/src/minutes/__tests__/pageDelete.test.tsx` · "NOT in a shared workspace where they are a reader", "NOT on `_global` for someone who is not its admin, and never on `_system`", "offers no Delete… where the reader only reads", "a refusal stays in the dialog" | readers are not offered Delete; a refusal is shown |
 | `clients/terminal/src/app/api/__tests__/workspaceProxy.test.ts` · "passes an upstream 403 through as 403 — never masked as 405 or 502", "refuses PUT with 404 and never reaches the upstream" | the terminal does not hide refusals, and meetings mode cannot write |
 | `clients/terminal/src/minutes/__tests__/navigator.test.ts` · "refuses a path that walks out of its mount"; `extend.test.ts` · "refuses a path that is missing, empty, or walks out of its mount" | the client refuses bad paths before sending |
 | `clients/terminal/src/ui-kit/__tests__/entityProperties.test.tsx` · "does not execute links or markup from metadata" | properties are inert |
