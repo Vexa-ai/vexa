@@ -1100,9 +1100,16 @@ def _build_production_app() -> FastAPI:
                                                    settings.delegation_ttl_sec))
     # Lane A: the Dispatcher takes the SAME index so shared workspaces the subject is a member of enter
     # the dispatch mount set (read-only for Slice 1), not just the /active listing.
+    # The operator's model catalog (VEXA_MODEL_CATALOG): parsed and refused WHOLE here, at boot,
+    # naming every problem (P14) — a catalog that is half-right fails a person's turn an hour later.
+    from control_plane import model_providers
+
+    catalog = model_providers.parse(settings.model_catalog)
+    if not catalog.empty:
+        logger.info("model catalog: %d model(s) — %s", len(catalog.ids), ", ".join(catalog.ids))
     dispatcher = Dispatcher(settings, runtime, identity, membership_index=membership_index,
                             model_config=model_config, workload_redis=workload_redis_client,
-                            delegation_store=delegation_store)
+                            delegation_store=delegation_store, catalog=catalog)
     app = create_app(
         dispatcher,
         stream_reader=RedisStreamReader(settings.redis_url),

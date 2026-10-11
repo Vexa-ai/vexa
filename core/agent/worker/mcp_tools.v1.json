@@ -47,6 +47,7 @@
     "onboarding_research",
     "secret_service_call",
     "current_time",
+    "models_list",
     "timezone_set",
     "chat_name"
   ]

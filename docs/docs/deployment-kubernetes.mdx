@@ -579,6 +579,28 @@ Without an Ingress the Services stay cluster-internal. `helm install` alone does
 reach it with `kubectl port-forward` during evaluation, or enable the Ingress above.
 </Note>
 
+## The model catalog
+
+`models.catalog` declares the models people pick per chat (see [Model catalog](/model-catalog)).
+Each provider key it references is delivered to agent-api by `models.catalogSecrets`, from a Secret
+you create and name:
+
+```yaml
+models:
+  catalog:
+    providers:
+      openrouter: { adapter: openrouter, auth: secret, secret_ref: env:VEXA_MODEL_SECRET_OPENROUTER }
+    models:
+      - { id: or-sonnet, display_name: Claude Sonnet via OpenRouter, provider: openrouter, model: anthropic/claude-sonnet-4.5 }
+  catalogSecrets:
+    - env: VEXA_MODEL_SECRET_OPENROUTER   # the name secret_ref uses
+      secretName: model-keys              # required
+      key: openrouter                     # default: the env name
+```
+
+Every `env` must start with `VEXA_MODEL_SECRET_`, and `secretName` is required. The chart refuses
+anything else, so a catalog secret never shares a name, or a Secret, with agent-api's own.
+
 ## The deprecated dashboard (optional)
 
 The 0.10 dashboard — the multi-user web UI that predates the Terminal — ships as an

@@ -11,6 +11,7 @@ export type ModelPrefs = {
   base_url?: string | null;
   api_key_set?: boolean;
   api_key?: string | null; // masked on read (********abcd) — write-only in the clear
+  default_model?: string | null; // the model-catalog id new and unpicked chats run on (ADR-0043)
 };
 
 export type TranscriptionPrefs = {

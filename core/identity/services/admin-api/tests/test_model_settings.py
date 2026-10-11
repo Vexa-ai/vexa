@@ -121,6 +121,22 @@ def test_model_config_resolves_user_over_platform(client):
     assert client.get("/internal/users/999999/model-config", headers=_internal()).status_code == 404
 
 
+def test_default_model_resolves_person_over_organisation(client):
+    """ADR-0043: the model a person runs on before picking one — their own default, else the
+    organisation's (platform tier). Stored as an opaque catalog id; agent-api owns the catalog."""
+    uid, tok = _user_token(client, email="default-model@vexa.ai")
+    assert client.put("/internal/settings/models", headers=_internal(),
+                      json={"default_model": "qwen3-32b"}).status_code == 200
+    r = client.get(f"/internal/users/{uid}/model-config", headers=_internal())
+    assert r.json()["models"]["default_model"] == "qwen3-32b"          # the organisation's
+    put = client.put("/user/models", headers={"X-API-Key": tok}, json={"default_model": "claude"})
+    assert put.status_code == 200 and put.json()["default_model"] == "claude"
+    r = client.get(f"/internal/users/{uid}/model-config", headers=_internal())
+    assert r.json()["models"]["default_model"] == "claude"             # the person's own wins
+    assert client.put("/user/models", headers={"X-API-Key": tok},
+                      json={"default_model": "Not An Id"}).status_code == 422
+
+
 def test_a_persons_own_endpoint_never_inherits_the_platform_credential(client):
     """A person who names their OWN endpoint brings its credential: the operator's platform key (and
     its server-specific request fields) are for the operator's endpoint and never fill the gap —

@@ -129,6 +129,7 @@
           "connections",
           "upgrade-from-minio",
           "authenticated-bots",
+          "model-catalog",
           "model-credentials-licensing",
           "agent-web-search",
           "agent-tool-calls",

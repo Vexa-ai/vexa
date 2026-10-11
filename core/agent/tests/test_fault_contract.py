@@ -26,7 +26,7 @@ import jsonschema
 import pytest
 from referencing import Registry, Resource
 
-from control_plane import unit_faults
+from control_plane import model_providers, unit_faults
 from llm import codex, claude_code
 from llm import fault_wire as llm_wire
 from llm import faults
@@ -66,6 +66,8 @@ def test_each_generated_vocabulary_is_the_contracts(wire):
 def test_every_emitter_spells_its_source_and_kinds_from_the_contract():
     assert runtime_fault.SOURCE == "runtime" and list(runtime_fault.KINDS) == _kinds("runtime")
     assert faults.SOURCE == "model-provider" and list(faults.KINDS) == _kinds("model-provider")
+    assert model_providers.SOURCE == "model-provider"
+    assert set(model_providers.KINDS) <= set(_kinds("model-provider"))
     assert tool_access.SOURCE == "vexa-tools" and [tool_access.ACCESS_EXPIRED] == _kinds("vexa-tools")
     refusal = claude_code.credential_conflict_fault()
     unconfined = tool_access.unconfined_fault("/workspaces/u/desk/notes.md", "/workspaces/u", "EPERM")
@@ -114,9 +116,15 @@ def _codex_faults() -> list[dict]:
     return [f.as_dict() for f in out if f is not None]
 
 
+def _model_choice_faults() -> list[dict]:
+    """agent-api's refusal of a chat's model pick (ADR-0043) — one per kind it can send."""
+    return [model_providers.ModelChoiceFault(k, model="m", provider="p", detail="d", remedy="r").as_dict()
+            for k in model_providers.KINDS]
+
+
 EMITTED = {
     "runtime": _runtime_faults,
-    "model-provider": lambda: _provider_faults() + _codex_faults(),
+    "model-provider": lambda: _provider_faults() + _codex_faults() + _model_choice_faults(),
     "vexa-tools": lambda: [tool_access.fault(1791282600)],
     "agent-worker": lambda: [claude_code.credential_conflict_fault(),
                              tool_access.unconfined_fault("/workspaces/u/desk/notes.md", "/workspaces/u",
@@ -171,3 +179,11 @@ def test_every_golden_conforms_in_python_too(path):
     """validate.mjs proves the goldens under ajv; this proves them under the validator agent-api
     ships, so the two engines cannot read the contract differently unnoticed."""
     _conforms(path.name.split(".")[0], json.loads(path.read_text()))
+
+
+def test_a_refused_model_pick_answers_a_conforming_dispatch_refusal():
+    """The chat's answer to a pick that cannot run (ADR-0043) is unit.v1's DispatchRefusal."""
+    for kind in model_providers.KINDS:
+        fault = model_providers.ModelChoiceFault(kind, model="retired-model", provider="openrouter",
+                                                 detail="The model is not offered.", remedy="Pick another.")
+        _conforms("DispatchRefusal", {"detail": fault.sentence(), "fault": fault.as_dict()})
