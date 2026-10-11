@@ -31,6 +31,30 @@ export function notesForView(body: string): string {
     .join("");
 }
 
+/** The notes without headings that head nothing. A minted page carries its sections empty until an
+ *  update fills them (`meeting_doc.scaffold`), and the `report` section stays empty until the
+ *  meeting's report is written — a column of bare headings reads as a form nobody filled in. A
+ *  section is empty when, once its HTML comments (the region markers) are taken out, nothing but
+ *  whitespace is left before the next heading of the same or a higher level. Only the heading line
+ *  goes; the markers stay (they render as nothing). Fenced code is never read as headings. */
+export function withoutEmptySections(md: string): string {
+  const lines = String(md ?? "").split("\n");
+  const fenced: boolean[] = [];
+  let inFence = false;
+  for (const l of lines) { if (/^\s*(```|~~~)/.test(l)) { fenced.push(true); inFence = !inFence; } else fenced.push(inFence); }
+  const level = (i: number) => (fenced[i] ? 0 : (/^(#{1,6})\s+\S/.exec(lines[i])?.[1].length ?? 0));
+  const drop = new Set<number>();
+  for (let i = 0; i < lines.length; i++) {
+    const lv = level(i);
+    if (!lv) continue;
+    let j = i + 1;
+    while (j < lines.length && !(level(j) && level(j) <= lv)) j++;
+    const rest = lines.slice(i + 1, j).join("\n").replace(/<!--[\s\S]*?-->/g, "");
+    if (!rest.trim()) drop.add(i);
+  }
+  return lines.filter((_, i) => !drop.has(i)).join("\n");
+}
+
 /** `m:ss` (or `h:mm:ss`) for a number of seconds. */
 export function clock(seconds: number): string {
   const s = Math.max(0, Math.floor(seconds));

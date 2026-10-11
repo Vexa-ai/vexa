@@ -17,7 +17,7 @@
  *
  *  The chat bound to the meeting stays beside this view; nothing here replaces it. */
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronUp, MessageSquareText } from "lucide-react";
 import { WORKSPACE_COMMIT_EVENT, useService } from "../platform";
 import { LayoutServiceId } from "../workbench/layout";
 import { LiveTranscriptEngine } from "./LiveTranscriptEngine";
@@ -38,7 +38,7 @@ import { MeetingPageHeader } from "../minutes/MeetingPageHeader";
 import { fetchMeetingNote } from "../minutes/meetingNote";
 import {
   createMeetingNotes, loadTranscriptOpen, notesForView, notesFreshness, saveTranscriptOpen,
-  transcriptLines, transcriptTail, updateMeetingNotes,
+  transcriptLines, transcriptTail, updateMeetingNotes, withoutEmptySections,
 } from "./meetingNotes";
 import { surface, type as ty } from "../minutes/tokens";
 import { DESK_SLUG } from "../minutes/workspaceReadme";
@@ -167,7 +167,7 @@ function NotesSection({ meetingId, notes, lines }: { meetingId: string; notes: R
       {notes.phase === "ready" && (
         <div data-notes-body style={{ ...ty.body, lineHeight: 1.6, color: "var(--t1)", minWidth: 0 }}>
           <DocMetaContext.Provider value={{ path: notes.path }}>
-            <MdxDoc>{notesForView(notes.body)}</MdxDoc>
+            <MdxDoc>{withoutEmptySections(notesForView(notes.body))}</MdxDoc>
           </DocMetaContext.Provider>
         </div>
       )}
@@ -205,16 +205,19 @@ function TranscriptSection({ meetingId, scroller }: { meetingId: string; scrolle
     try { await copyText(text); setCopied(true); } catch { setCopied(false); }
   };
   const body = `transcript-${meetingId}`;
+  const hidden = !open && lines > shown.filter((x) => x.completed !== false).length;
+  // A DIFFERENT OBJECT FROM THE NOTES (founder, 2026-10-11: *"this should be distinct it's
+  // transcript here - it's not evident from the UX"*). The notes are the document; the transcript is
+  // a docked tray under it: its own raised surface, hairline and radius, its own header saying what
+  // it is, how long it is and whether it is live, and conversational rows rather than prose.
   return (
-    <section data-meeting-transcript data-open={open ? "" : undefined} aria-label="Transcript"
-      style={{ display: "flex", flexDirection: "column", gap: 8, minWidth: 0, borderTop: "1px solid var(--line)", paddingTop: 14 }}>
+    <section data-meeting-transcript role="region" aria-labelledby={`${body}-title`} data-open={open ? "" : undefined}
+      style={{ display: "flex", flexDirection: "column", gap: 10, minWidth: 0, background: surface.raised,
+        border: "1px solid var(--line)", borderRadius: 12, padding: "12px 14px 14px" }}>
       <div style={sectionHead}>
-        <button type="button" data-transcript-toggle aria-expanded={open} aria-controls={body} onClick={toggle}
-          title={open ? "Show only the latest lines" : "Show the whole transcript"}
-          style={{ ...label, display: "inline-flex", alignItems: "center", gap: 6, background: "transparent", border: "none", padding: 0, cursor: "pointer" }}>
-          {open ? <ChevronDown size={14} aria-hidden /> : <ChevronRight size={14} aria-hidden />}
-          Transcript · {lines} {lines === 1 ? "line" : "lines"}
-        </button>
+        <span style={{ display: "inline-flex", color: "var(--t2)" }}><MessageSquareText size={15} aria-hidden /></span>
+        <h2 id={`${body}-title`} style={{ ...label, fontSize: 13 }}>Transcript</h2>
+        <span data-transcript-count style={{ ...ty.meta, fontVariantNumeric: "tabular-nums" }}>{lines} {lines === 1 ? "line" : "lines"}</span>
         {live && <span data-transcript-live style={{ ...ty.meta, display: "inline-flex", alignItems: "center", gap: 5, color: "var(--accent)" }}>
           <span aria-hidden style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--accent)" }} />live</span>}
         <span style={{ flex: "1 1 0%" }} />
@@ -224,10 +227,18 @@ function TranscriptSection({ meetingId, scroller }: { meetingId: string; scrolle
           </button>
           <HighlightButton meeting={meetingId} live={live} />
         </>}
+        <button type="button" data-transcript-toggle aria-expanded={open} aria-controls={body} onClick={toggle}
+          title={open ? "Show only the latest lines" : "Show the whole transcript"} style={quiet}>
+          {open ? <ChevronUp size={13} aria-hidden /> : <ChevronDown size={13} aria-hidden />}
+          {open ? "Collapse" : "Show all"}
+        </button>
       </div>
       <div id={body} ref={box} style={{ position: "relative", minWidth: 0 }}>
-        <LiveTranscriptEngine meetingId={meeting.id} segments={shown} renderText={renderText}
+        <LiveTranscriptEngine meetingId={meeting.id} segments={shown} renderText={renderText} layout="rows"
           emptyLabel={meeting.deleted ? "This meeting’s transcript and recording were deleted." : "Nothing said yet — this fills in as the room talks."} />
+        {/* there is more above the tail: a fade says so without a word */}
+        {hidden && <div data-transcript-fade aria-hidden style={{ position: "absolute", left: 0, right: 0, top: 0, height: 28, pointerEvents: "none",
+          background: `linear-gradient(${surface.raised}, transparent)` }} />}
         {open && <TranscriptExtend containerRef={box} meeting={meetingId} segments={segments} />}
       </div>
     </section>

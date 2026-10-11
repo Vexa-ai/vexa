@@ -38,7 +38,7 @@ import { ASK_CHAT_EVENT, ServicesProvider, WORKSPACE_COMMIT_EVENT, createContain
 import { LayoutServiceId, createLayoutService } from "../../workbench/layout";
 import { clearPending, pendingLanding } from "../../minutes/extend";
 import { resetActs } from "../../surfaces/actState";
-import { notesForView, notesFreshness, transcriptTail } from "../meetingNotes";
+import { notesForView, notesFreshness, transcriptTail, withoutEmptySections } from "../meetingNotes";
 import type { ChatIntent } from "../../surfaces/chatIntent";
 
 const ROW = "147";
@@ -219,7 +219,10 @@ describe("the transcript — collapsed tail, or everything", () => {
     await renderView();
     const toggle = q("[data-transcript-toggle]")!;
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
-    expect(toggle.textContent).toContain("Transcript · 5 lines");
+    expect(toggle.textContent).toBe("Show all");
+    expect(q("[data-transcript-count]")?.textContent).toBe("5 lines");
+    // there is more above the tail, and the panel says so
+    expect(q("[data-transcript-fade]")).not.toBeNull();
     expect(transcriptText()).toContain("collapsed by default");
     expect(transcriptText()).toContain("notes go on top");
     expect(transcriptText()).not.toContain("first we agree the scope");
@@ -250,6 +253,8 @@ describe("the transcript — collapsed tail, or everything", () => {
     await renderView();
     await act(async () => { fireEvent.click(q("[data-transcript-toggle]")!); });
     expect(q("[data-transcript-toggle]")?.getAttribute("aria-expanded")).toBe("true");
+    expect(q("[data-transcript-toggle]")?.textContent).toBe("Collapse");
+    expect(q("[data-transcript-fade]")).toBeNull();
     for (const l of LINES) expect(transcriptText()).toContain(l);
     expect(q('[aria-label="Copy transcript"]')).not.toBeNull();
     expect(sessionStorage.getItem(`vexa.meetingTranscriptOpen.${ROW}`)).toBe("1");
@@ -264,6 +269,35 @@ describe("the transcript — collapsed tail, or everything", () => {
     const t = q("[data-transcript-toggle]") as HTMLButtonElement;
     expect(t.tagName).toBe("BUTTON");
     expect(document.getElementById(t.getAttribute("aria-controls")!)).not.toBeNull();
+  });
+});
+
+describe("the transcript is a different object from the notes", () => {
+  it("its own labelled region, outside the notes, with conversational rows — not the notes' prose", async () => {
+    await renderView();
+    const panel = q("[data-meeting-transcript]")!;
+    const notes = q("[data-meeting-notes]")!;
+    expect(panel.getAttribute("role")).toBe("region");
+    expect(document.getElementById(panel.getAttribute("aria-labelledby")!)?.textContent).toBe("Transcript");
+    expect(document.getElementById(notes.getAttribute("aria-labelledby")!)?.textContent).toBe("Notes");
+    expect(notes.contains(panel)).toBe(false);
+    expect(panel.contains(notes)).toBe(false);
+    // a contained tray: its own surface, border and radius
+    expect(panel.style.borderRadius).toBe("12px");
+    expect(panel.style.border).toContain("1px solid");
+    expect(panel.style.background).not.toBe("");
+    // rows: who and when in a left column, what was said beside it
+    const rows = panel.querySelectorAll("[data-transcript-row]");
+    expect(rows.length).toBe(3);
+    expect(rows[0].querySelector("[data-transcript-who]")?.textContent).toMatch(/Jane|Ravi/);
+    expect(notes.querySelector("[data-transcript-row]")).toBeNull();
+  });
+
+  it("empty template sections are not rendered as bare headings", async () => {
+    fileBody = NOTES_MD + "\n## Report\n\n<!-- meeting:report:start -->\n\n<!-- meeting:report:end -->\n";
+    await renderView();
+    expect(q("[data-notes-body]")?.textContent).not.toContain("Report");
+    expect(q("[data-notes-body]")?.textContent).toContain("Decisions");
   });
 });
 
@@ -292,6 +326,16 @@ describe("the view's rules, as functions", () => {
     expect(notesFreshness({ cursor: "3", segments: segs })).toBe("from transcript up to 1:05");
     expect(notesFreshness({ cursor: "", segments: segs })).toBe("not yet updated from the transcript");
     expect(notesFreshness({ cursor: "abc", segments: segs })).toBe("not yet updated from the transcript");
+  });
+
+  it("withoutEmptySections drops a heading that heads only markers, and keeps one with content below", () => {
+    const md = "# T\n\n## About\n<!-- a:start -->\n<!-- a:end -->\n## Decisions\n- x\n## People\n### Jane\nowns it\n```\n## not a heading\n```\n";
+    const out = withoutEmptySections(md);
+    expect(out).not.toContain("## About");
+    expect(out).toContain("<!-- a:start -->");
+    expect(out).toContain("## Decisions");
+    expect(out).toContain("## People");
+    expect(out).toContain("## not a heading");
   });
 
   it("transcriptTail is the last three said lines, counting the one still being said", () => {
