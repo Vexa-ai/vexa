@@ -13,6 +13,7 @@ import { meetingsOnly } from "../app/mode";
 import { AgentWindow, Conversation, opIcon, type Turn, type Op } from "../workbench/agent-window";
 import { Icon } from "../ui-kit";
 import { ReportTurn } from "./ReportThis";
+import { BundleImportCards, useBundleImports } from "./ChatBundleImport";
 import { invalidateDocLinkCaches } from "../ui-kit/docLinks";
 import { startStreamingDictation, type StreamingDictation } from "../ui-kit/micDictation";
 import { sessionTitle, type SessionSummary } from "./sessions";
@@ -799,6 +800,8 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
   const [value, setValue] = useState("");
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  // A meeting bundle handed to the chat is a call to import, not a file to attach (ChatBundleImport).
+  const bundleImports = useBundleImports();
   const scrollRef = useRef<HTMLDivElement>(null);
   // Follow the stream ONLY while the reader is at the bottom — "chat should not fight with me when
   // it's outputting text and i scroll up to scroll chat history" (founder, Vexa-ai/vexa#1599).
@@ -819,7 +822,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
   // The transcript is measured AFTER the commit that grew it, which the stream callback below
   // cannot do — a chunk's text is not in the DOM yet when it fires. Keyed on the content itself
   // (every chunk rebuilds `turns`) so that typing in the composer costs no layout read.
-  useEffect(() => { stick.onContent(); }, [stick, turns, chatState.jobs, busy, loading]);
+  useEffect(() => { stick.onContent(); }, [stick, turns, chatState.jobs, busy, loading, bundleImports.cards]);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const attachmentSeqRef = useRef(0);
@@ -951,7 +954,15 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
     })();
   }, [chatKey, session, subject]);
 
+  // EVERY FILE THE CHAT IS HANDED comes through here — dropped, pasted or picked. Meeting bundles
+  // leave for the import route first (their outcome is a card in the conversation); what is left is
+  // attached exactly as before.
   const addFiles = (files: File[]) => {
+    if (files.length === 0) return;
+    void bundleImports.route(files).then(attachFiles);
+  };
+
+  const attachFiles = (files: File[]) => {
     if (files.length === 0) return;
     setUploadError(null);
     setAttachments((current) => [
@@ -1684,8 +1695,10 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
   };
 
   const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
+    // Pictures, as always, and now any copied FILE too: a pasted meeting bundle imports, like a
+    // dropped one. A paste with no file in it stays a text paste.
     const files = Array.from(e.clipboardData.items)
-      .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+      .filter((item) => item.kind === "file")
       .map((item) => item.getAsFile())
       .filter((file): file is File => !!file);
     if (files.length === 0) return;
@@ -1856,6 +1869,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
                 an arriving conversation is worse than one that arrives a beat late. */}
             {!loading && emptyExtra}
           </div>} />
+      <BundleImportCards cards={bundleImports.cards} onDismiss={bundleImports.dismiss} />
       {/* JUMP TO LATEST — the only way back to following that costs the reader nothing. Sticky to
           the bottom of the scroller and zero-height, so it adds no scroll height of its own and the
           window shell (owned by parallel work) is untouched. */}
