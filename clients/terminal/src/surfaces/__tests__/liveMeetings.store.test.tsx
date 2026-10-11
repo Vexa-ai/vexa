@@ -245,3 +245,29 @@ describe("liveMeetings store", () => {
     expect(snaps()).toBe(before);
   });
 });
+
+describe("liveMeetings store · a call's name and time", () => {
+  it("carries created_at, the time of a call that never started", async () => {
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const u = String(input);
+      if (u.includes("/api/meetings")) {
+        return jsonResp({ meetings: [{ ...meetingsPayload("failed").meetings[0], created_at: "2026-10-10T21:09:00Z" }] });
+      }
+      return jsonResp({});
+    });
+    const { hook } = await startStore();
+    expect(hook.result.current[0].created_at).toBe("2026-10-10T21:09:00Z");
+  });
+
+  it("a rename reaches every reader at once, and an empty name goes back to the default label", async () => {
+    const { mod, hook } = await startStore();
+    const id = String(golden.meeting_id);
+    expect(hook.result.current[0].title).toBe(`Google Meet · ${NATIVE}`);
+    act(() => mod.applyMeetingTitle(id, "  Campbell intro  "));
+    expect(hook.result.current[0].title_custom).toBe("Campbell intro");
+    expect(hook.result.current[0].title).toBe("Campbell intro");
+    act(() => mod.applyMeetingTitle(id, ""));
+    expect(hook.result.current[0].title_custom).toBeUndefined();
+    expect(hook.result.current[0].title).toBe(`Google Meet · ${NATIVE}`);
+  });
+});

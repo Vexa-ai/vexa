@@ -144,7 +144,7 @@ export function artifactsFromTokens(
  *
  *  Pure and here rather than inline in the shell for the same reason every other token resolver is:
  *  what a path means is a contract with the server, and a contract is worth a test. */
-export function pageForArtifact(ev: { workspace?: string; path?: string }): Page | null {
+export function pageForArtifact(ev: { workspace?: string; path?: string; label?: string }): Page | null {
   const path = (ev.path ?? "").trim();
   // A MEETING, NOT A FILE. `meeting:<row id>` opens the meeting CANVAS — the live transcript that
   // streams segments as they are captured — rather than a document at a path. It reuses the
@@ -158,7 +158,9 @@ export function pageForArtifact(ev: { workspace?: string; path?: string }): Page
   // not fall through and render a document at the literal path "meeting:".
   if (/^meeting:/.test(path)) {
     const id = path.slice("meeting:".length).trim();
-    return id && !id.includes("/") ? { kind: "meeting", path: id, label: "Transcript" } : null;
+    // A caller that knows the meeting's name (the navigator's Calls view) passes it, so a call kept
+    // in a tab reads as that call rather than as one of several tabs all called "Transcript".
+    return id && !id.includes("/") ? { kind: "meeting", path: id, label: ev.label?.trim() || "Transcript" } : null;
   }
   // A path that walks out of the mount is refused, as everywhere else here — a write we cannot
   // name honestly opens no tab rather than a tab pointing somewhere it should not.

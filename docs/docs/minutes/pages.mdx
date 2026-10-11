@@ -25,6 +25,44 @@ find pages, edit them, ask the agent to grow them, and what happens to images an
 
 Press <kbd>Esc</kbd> in the filter to clear it, and again to close the navigator.
 
+### Find a call
+
+1. At the top of the navigator, switch from **Files** to **Calls**. Use <kbd>←</kbd> / <kbd>→</kbd> on
+   the switch from the keyboard. Your browser remembers the view you left it on.
+2. **Calls** lists the meetings you own and the ones shared with you, newest first. Calls happening now
+   are at the top under **Live**. The rest are grouped by day. When you have more than 40 calls they are
+   grouped by month. The first 30 calls are shown, and **Show more** adds the next 30. A call with no
+   title shows its platform and meeting code. Planned meetings that have not run yet are not listed,
+   and neither are calls you deleted. A call whose bot never got in is listed at the time you sent the
+   bot, with the time in italics.
+3. **Click** a call to open its transcript in the panel. A live call streams as it is spoken. What
+   you can do there is on [Meetings](/minutes/meetings).
+   **Middle-click** the call, or press **⧉**, to keep it in a tab. **⧉** and the row's other buttons
+   appear in place of the time when you point at the row or move to it with the keyboard.
+4. Type in **Filter calls** to match call titles. Start with `>` to search what was said: this searches
+   the transcripts of calls **you own**. Calls shared with you are matched by title only.
+5. If a call belongs to a workspace you can read, its row shows a folder button that opens that
+   workspace in **Files**. In **Files**, that workspace's row shows how many calls belong to it.
+   Click the count to list those calls.
+
+### Rename a call
+
+You can rename a call you own. The name is the meeting's own title, so it changes everywhere the call
+appears: the **Calls** list, the chat list, the meeting's header and its tab.
+
+- In **Calls**, point at the call, press **⋯** and choose **Rename**. Or move to the call with the
+  keyboard and press <kbd>F2</kbd>.
+- On the meeting's page, click its name in the header (see [Meetings](/minutes/meetings)).
+
+Type the new name and press <kbd>Enter</kbd>. <kbd>Escape</kbd> cancels. In the list, moving away from
+the field also saves. Clear the name and save to go back to the call's default name, its platform
+and meeting code.
+
+A call shared with you shows its name without a rename control. Only its owner can rename it. If a
+save is refused, the field stays open and says so.
+
+A chat's name is separate. Renaming a call does not rename a chat that you named yourself.
+
 ### Tabs and history
 
 - The tab shown in *italics* is the **preview**: the next page you open replaces it. Pin a page
@@ -143,6 +181,9 @@ image that is dead or not an image, the link is cut out (the text stays) and a f
 |---|---|---|
 | Pages, `assets/`, `assets/SOURCES.md`, git history | agent-api (the `workspaces` library inside the agent domain) | the workspace's git repository |
 | Navigator open/closed | your browser | `localStorage` key `vexa.minutes.navigator` |
+| Navigator view (Files or Calls) | your browser | `localStorage` key `vexa.minutes.navigator.view` |
+| Calls, transcripts, a call's workspace | meeting-api | the meetings database; the terminal only reads them |
+| A call's name | meeting-api (annotate route) | the meeting's `data.title`; the terminal writes it only through that route |
 | Extend job state | agent-api's worker jobs | in the agent domain; shown on the card |
 
 The terminal stores no page content. It reads and forwards.
@@ -155,9 +196,42 @@ The terminal stores no page content. It reads and forwards.
 | `PUT /api/workspace/file` | `/agent/workspace/file` | `/api/workspace/file` |
 | `PUT`, `POST`, `GET /api/workspace/asset` | `/agent/workspace/asset` | `/api/workspace/asset` |
 | agent tools `workspace_delete`, `workspace_move` | `/agent/workspace/remove`, `/agent/workspace/move` | `/api/workspace/remove`, `/api/workspace/move` |
+| Calls list: `GET /api/meetings` | `/meetings` | meeting-api `GET /meetings` |
+| Call transcript: `GET /api/transcripts/by-id/{id}` | `/transcripts/by-id/{id}` | meeting-api, same route |
+| `>` in Filter calls: `GET /api/transcripts/search?q=` | `/transcripts/search` | meeting-api, same route |
+| Rename a call: `POST /api/meetings/{id}/annotate` `{"title": …}` | `/meetings/{meeting_id}/annotate` | meeting-api, same route |
 
 The gateway's mapping of `/agent/*` onto agent-api's `/api/*` is declared in `core/agent/routes.v1.json`;
 the tools are declared in `core/agent/mcp.tools.v1.json`.
+
+### Calls
+
+The **Calls** view reads the same meeting list as the chats rail, `GET /api/meetings`. It makes no
+read of its own, so a meeting appears in the panel only if that list contains it. Clicking a call opens
+the panel's meeting view for that meeting. That view loads the transcript by meeting id and streams a
+live call. The panel has no transcript viewer of its own.
+
+The `>` search calls `GET /api/transcripts/search`. Results are limited to calls you own, so the list
+can contain calls the search cannot reach. The terminal then drops any result whose meeting is not in
+your list. A search can make the list shorter but never adds a call to it.
+
+A deleted call is not listed. Deleting a finished meeting erases its transcript and recordings and
+keeps the row as history, marked `data.artifact_deletion`. The list still returns that row, so the
+terminal drops it.
+
+A call's time is when it started, else when it was planned, else when the bot was requested. This is
+the order meeting-api uses for the list.
+
+**Renaming.** A rename posts `{"title": …}` to `POST /api/meetings/{id}/annotate`, addressed by the
+meeting's row id. This is the route the MCP `annotate_meeting` tool and the REST API use. meeting-api
+stores the title in the meeting's `data.title`. An empty title removes it, and the call goes back to
+its default name. The terminal keeps no copy of the name. When the route answers, the terminal
+updates its in-memory meetings list and reads the list again, so every view shows the stored title.
+A tab for a call takes its name from that list.
+
+A call's workspace is the meeting's own `workspace_id`. The folder button and the count on a
+workspace row are both read from it, so nothing is copied onto the workspace. A workspace you cannot
+read is not in the navigator, so its calls show no folder button.
 
 ### Configuration
 
@@ -173,9 +247,9 @@ the tools are declared in `core/agent/mcp.tools.v1.json`.
 | **P2** couple only through contracts · **P6** one front door | the browser calls only the terminal's `/api/*`; the terminal calls only the gateway, through routes declared in `routes.v1.json` | `gate:isolation`, `gate:exports`, `gate:domain-doors` |
 | **P4** published schemas | the routes and tools are sealed registries (`routes.v1`, `mcp.tools.v1`) | `gate:schema`, `gate:contract-version` |
 | **P18** fail loud | a refused save keeps the draft and shows the reason; refused, failing and unreachable fetches answer distinct codes (`400`, `424`, `502`); an unreachable gateway is a `502`, never a silent success | ungated: reviewed; the proxy's `502` is pinned by `workspaceProxy.test.ts` under `gate:node` |
-| **P20** authorize every access | agent-api checks read and write rights on every path route, and on both ends of a move | deny tests below, under `gate:python` and `gate:node` |
+| **P20** authorize every access | agent-api checks read and write rights on every path route, and on both ends of a move. The Calls view lists only what meeting-api's own meeting list returns for you (owned, plus shared with you), and opens only those. Renaming a call goes through meeting-api's annotate route, which writes only a meeting you own; the terminal offers the control only to the owner | deny tests below, under `gate:python` and `gate:node` |
 | **P21** state from evidence | the Extend card shows the job's phase, and the page appears when the commit lands, not when the button is pressed | ungated: reviewed |
-| **P23** one writer per carrier | agent-api is the only writer of a workspace repository; the terminal never writes files | `gate:dataflow` |
+| **P23** one writer per carrier | agent-api is the only writer of a workspace repository; the terminal never writes files. meeting-api is the only writer of a call's name; the terminal sends the change to its route and keeps no copy | `gate:dataflow` |
 
 ### Security
 
@@ -183,7 +257,9 @@ the tools are declared in `core/agent/mcp.tools.v1.json`.
 your own private tier, and every shared workspace you belong to (viewers included). You can write your
 desk, your private tier, a shared workspace where you are a contributor or above, and the company
 workspace only as an org admin. Nobody writes `kg/templates/`. An agent acting for you is further held
-to the workspace scope of the chat that dispatched it.
+to the workspace scope of the chat that dispatched it. You can rename only calls you own: the terminal
+sends the rename with your sign-in, the gateway names you to meeting-api, and meeting-api writes the
+title only when the meeting's owner is you. A call shared with you is read-only here.
 
 **Protections.**
 
@@ -211,8 +287,12 @@ to the workspace scope of the chat that dispatched it.
 | `clients/terminal/src/app/api/__tests__/workspaceProxy.test.ts` · "passes an upstream 403 through as 403 — never masked as 405 or 502", "refuses PUT with 404 and never reaches the upstream" | the terminal does not hide refusals, and meetings mode cannot write |
 | `clients/terminal/src/minutes/__tests__/navigator.test.ts` · "refuses a path that walks out of its mount"; `extend.test.ts` · "refuses a path that is missing, empty, or walks out of its mount" | the client refuses bad paths before sending |
 | `clients/terminal/src/ui-kit/__tests__/entityProperties.test.tsx` · "does not execute links or markup from metadata" | properties are inert |
+| `core/meetings/services/meeting-api/tests/test_collector_api.py` · `test_get_meetings_empty_for_other_user_conforms`; `test_xtenant_isolation.py` · `test_cross_tenant_rest_isolation`; `test_transcript_share.py` · `test_visitor_can_LOAD_the_transcript_after_redeem`; `test_transcript_search.py` · `test_another_tenants_transcript_never_surfaces` | another person's meeting is not in your list, its transcript does not open for you, and transcript search never returns it |
+| `clients/terminal/src/minutes/__tests__/navigatorCalls.test.tsx` · "DENY: another person's unshared meeting never appears or opens" | the Calls view lists and opens only meetings in your list, and drops search results for any other meeting |
+| `core/meetings/services/meeting-api/tests/test_meeting_by_db_id.py` · `test_another_users_meeting_id_is_a_404_not_a_write`, `test_a_person_the_meeting_is_shared_with_sees_it_but_cannot_rename_it`; `test_meeting_annotate.py` · `test_another_users_meeting_is_404_not_403` | only the owner can rename a call; a person it is shared with, or anyone else, gets `404` and nothing is written |
+| `clients/terminal/src/minutes/__tests__/navigatorCalls.test.tsx` · "DENY: a call shared with you offers no rename — no ⋯, and F2 does nothing"; `callRename.test.tsx` · "DENY: a call shared with you shows its name with no rename control", "DENY: a refusal (another person's meeting is a 404) throws and changes nothing locally" | the terminal offers rename only to the owner, and a refused rename changes nothing |
 
 ## Related
 
 - [Browse, upload, and swap the workspace](/how-to/workspace-files) — the same files over the API
-- [Workspaces](/core/workspaces) · [Obsidian](/obsidian) · [Chats](/minutes/chats) · [Workspaces and connections](/minutes/workspaces)
+- [Workspaces](/core/workspaces) · [Obsidian](/obsidian) · [Chats](/minutes/chats) · [Workspaces and connections](/minutes/workspaces) · [Meetings](/minutes/meetings)

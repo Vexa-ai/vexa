@@ -27,6 +27,8 @@
 import type { CSSProperties } from "react";
 import { useEffect, useRef, useState } from "react";
 import { MeetingPageHeader } from "./MeetingPageHeader";
+import { useLiveMeetings } from "../surfaces/liveMeetings";
+import { pageLabel } from "./callsList";
 import { Icon } from "../ui-kit";
 import { copyText } from "../ui-kit/ContextMenu";
 import { DocMetaContext } from "../ui-kit/docRefs";
@@ -100,6 +102,13 @@ function crumbLabel(seg: string, i: number, all: string[]): string | null {
 
 /** A directory listing the breadcrumb navigated to: the folders and files directly under `prefix`. */
 export type Listing = { slug?: string; prefix: string; dirs: string[]; files: string[] };
+
+/** A call's tab is named by the meeting as it is NOW, so a rename reaches tabs already open. Its own
+ *  component, so only a strip that holds a call subscribes to the meetings store. */
+function CallTabLabel({ pg }: { pg: Page }) {
+  const meetings = useLiveMeetings();
+  return <>{pageLabel(pg, meetings)}</>;
+}
 
 export function PagesPanel(p: {
   pages: Page[]; docPath: string; docSlug?: string; onOpen: (pg: Page) => void;
@@ -214,7 +223,7 @@ export function PagesPanel(p: {
             <span key={`${pg.slug ?? ""}|${pg.path}`} style={{ ...tabBox, display: "inline-flex", alignItems: "center", background: on ? "var(--accentbg)" : surface.raised, border: `1px solid ${on ? "var(--accent)" : "transparent"}`, borderRadius: 6 }}>
               <button data-tab data-kept={kept ? "" : undefined} onClick={() => p.onOpen(pg)} title={pg.slug ? `${pg.slug} › ${pg.path}` : pg.path}
                 style={{ ...ty.chip, ...tabLabel, fontStyle: kept ? undefined : "italic", color: on ? "var(--accent)" : "var(--t2)", background: "transparent", border: "none", padding: "3px 3px 3px 10px", cursor: "pointer" }}>
-                {/^\d+$/.test(pg.label) ? "personal" : pg.label}
+                {pg.kind === "meeting" ? <CallTabLabel pg={pg} /> : /^\d+$/.test(pg.label) ? "personal" : pg.label}
               </button>
               {/* THE PIN, ON THE TAB. The chat's home carries none: it is a product default rather
                   than something the reader asked for, so there is no decision here to offer. Nor
