@@ -30,7 +30,7 @@ agent, and a cursor for the next call — never a join key across two readers.
 """
 from __future__ import annotations
 
-from workspaces.shared.entities import KINDS, candidate_names, slugify
+from workspaces.shared.entities import KINDS, candidate_names, slugify, strip_leading_noise
 
 # `kg/entities/<kind>/<stem>.md` — the one shape `entity_upsert` writes and the one shape this
 # reads. Anything else in the tree is not an entity page, however much it looks like one.
@@ -46,43 +46,15 @@ ENTITIES_PREFIX = "kg/entities/"
 # is exactly what the extractor is looking for. Prose does not begin sentences that way; people do,
 # constantly, and a transcript is nothing but sentence openings.
 #
-# So the lead is stripped HERE and not in `candidate_names`: that function's behaviour is measured
-# against the write-back phase's own numbers (decision 24.4), and quietly changing it to suit a
-# different corpus would move a metric nobody was watching. This is the transcript's own correction,
-# named as such.
+# So the lead is stripped by the CONSUMER and not in `candidate_names`: that function's behaviour is
+# measured against the write-back phase's own numbers (decision 24.4), and quietly changing it to
+# suit a different corpus would move a metric nobody was watching.
 #
-# THE TRADE, STATED: "On Semiconductor" and "Our World in Data" lose their first word and then fall
-# to the two-word floor, so they never become chips. That is one chip missed against eight junk
-# chips on a single meeting — and a junk chip is not neutral, it is an invitation to research
-# "But I'll".
-_LEADING_NOISE = frozenset({
-    # sentence openers
-    "so", "but", "and", "also", "then", "now", "well", "actually", "just", "right", "okay", "ok",
-    "yeah", "yes", "no", "oh", "plus", "or", "if", "when", "while", "because", "though", "although",
-    "like", "maybe", "anyway", "basically", "honestly", "obviously",
-    # demonstratives and possessives that read as part of a name
-    "that", "that's", "this", "these", "those", "the", "a", "an",
-    "our", "your", "their", "his", "her", "its", "my",
-    # pronouns and their contractions — "But I'll" survives the opener strip as "I'll"
-    "i", "i'll", "i'm", "i've", "i'd", "we", "we'll", "we're", "we've", "they", "they'll",
-    "they're", "they've", "he", "he's", "she", "she's", "it", "it's", "you", "you'll", "you're",
-    "you've",
-    # prepositions that open a clause
-    "on", "in", "at", "for", "to", "with", "from", "by", "as", "of", "about", "into", "over",
-})
-
-
-def _strip_lead(name: str) -> str:
-    """Drop leading noise words until the first real one, then hold the two-word floor.
-
-    Repeated rather than single-pass: "And so Cameron" is one utterance and two noise words. What is
-    left has to still be a NAME — one word is not, by the extractor's own rule (see the header of
-    `extract_terms`) — so a stripped candidate that shrinks to a single word is dropped entirely
-    rather than admitted through a back door the two-word floor was closed against."""
-    parts = name.split()
-    while parts and parts[0].lower() in _LEADING_NOISE:
-        parts = parts[1:]
-    return " ".join(parts) if len(parts) >= 2 else ""
+# ONE LIST, ONE OWNER. The noise list and the strip moved to `workspaces.shared.entities`
+# (`LEADING_SPEECH_NOISE`, `strip_leading_noise`) when the write-back pre-pass needed the same
+# correction: it read "So Vexam, which is the Finos project" out of a transcript and wrote a page
+# called "So Vexam". Two copies of this list would drift the first time either was tuned, and the
+# drift would show up as a chip for a name the write-back refuses, or the other way round.
 
 
 def extract_terms(segments) -> list[dict]:
@@ -106,7 +78,7 @@ def extract_terms(segments) -> list[dict]:
         sid = (seg or {}).get("id")
         at = (seg or {}).get("at")
         for raw in candidate_names(text, mask_linked=False):
-            name = _strip_lead(raw)
+            name = strip_leading_noise(raw)
             if not name:
                 continue
             row = seen.get(name)

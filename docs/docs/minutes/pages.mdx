@@ -137,6 +137,23 @@ image that is dead or not an image, the link is cut out (the text stays) and a f
    `POST /agent/workspace/remove` and `POST /agent/workspace/move`. Both ends of a move are authorized
    before anything is written.
 
+### Pages the agent writes for names
+
+At the end of a turn, the agent checks the names the turn mentioned against the pages your workspaces
+already hold, and writes a page for each name that has none (`entity_upsert`). Before a name is
+offered:
+
+- **Words that open a spoken sentence are removed.** *So*, *And*, *But*, *Well*, *Okay* and similar
+  words are dropped from the front of a name, so "So Vexam" is read as "Vexam". What is left must still
+  be two words. Highlighted transcript terms use the same list.
+- **A near spelling of an existing page is that page.** A name one letter away from a page's title or
+  alias (two letters for long names) is matched to that page, not offered as a new one. "Vexam" is
+  Vexa.
+- **A name heard once in a transcript is a question, not a page.** When the only source is one line
+  of a meeting transcript, the agent adds "Who or what is …?" to the meeting's open questions instead
+  of writing a page. A name with a second source, such as your message, a file or an email, gets its
+  page.
+
 ### Who writes what
 
 | Data | Single writer | Where |
@@ -211,6 +228,14 @@ to the workspace scope of the chat that dispatched it.
 | `clients/terminal/src/app/api/__tests__/workspaceProxy.test.ts` · "passes an upstream 403 through as 403 — never masked as 405 or 502", "refuses PUT with 404 and never reaches the upstream" | the terminal does not hide refusals, and meetings mode cannot write |
 | `clients/terminal/src/minutes/__tests__/navigator.test.ts` · "refuses a path that walks out of its mount"; `extend.test.ts` · "refuses a path that is missing, empty, or walks out of its mount" | the client refuses bad paths before sending |
 | `clients/terminal/src/ui-kit/__tests__/entityProperties.test.tsx` · "does not execute links or markup from metadata" | properties are inert |
+
+### Name write-back
+
+| Rule | How this design meets it | Gate |
+|---|---|---|
+| **One owner per rule** | the list of spoken sentence openers lives once, in `core/workspaces/shared/entities.py` (`LEADING_SPEECH_NOISE`, `strip_leading_noise`); the transcript-terms extractor and the write-back check both import it | `gate:python` (`test_the_chip_extractor_and_the_write_back_share_one_noise_list`) |
+| **No page from a transcript artefact** | openers are stripped and near spellings are matched before a name is offered | `gate:python`: `core/agent/tests/test_entity_name_extraction.py` · `test_so_vexam_is_not_a_new_page`, `test_every_discourse_opener_is_stripped_before_the_desk_is_asked`, `test_an_opener_before_a_genuinely_new_name_still_yields_that_name`, `test_a_one_letter_variant_of_an_existing_page_is_that_page`, `test_near_variant_has_a_floor_and_does_not_swallow_different_names` |
+| **A single hearing is not evidence** | the write-back prompt and the workspace rules send a once-heard transcript name to open questions | `gate:python`: `core/agent/tests/test_entity_writeback.py` · `test_a_name_heard_once_in_a_transcript_goes_to_open_questions_not_a_page` |
 
 ## Related
 

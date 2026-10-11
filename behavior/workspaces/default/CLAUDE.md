@@ -31,7 +31,9 @@ Three rules travel with it, and they are the whole of it:
 
 <!-- decision-24:start -->
 - **A name without a page gets one NOW.** The moment a turn learns something durable about a person,
-  company, meeting, project or decision, it is written. Not at the end, not next time.
+  company, meeting, project or decision, it is written. Not at the end, not next time. The one
+  exception: a name heard once in a meeting transcript, with no other source, goes to the meeting
+  note's open questions ("Who or what is X?"), not a new page — transcription mishears names.
 - **Facts carry a source** — only what was said in the conversation or read from a file, a tool
   result or a transcript, each with where it came from. A fact with no source is refused.
 - **Gaps go to `kg/MISSING.md`, never invented.** What you would have to guess is an open question

@@ -1339,6 +1339,50 @@ _LEADING_DETERMINER = {
 _LEADING_NOT_A_NAME = _LEADING_VERB | _LEADING_DETERMINER
 
 
+# SPEECH NOISE AT THE HEAD OF A NAME — the one list, owned here, read by both consumers that see a
+# transcript: the chip extractor (`core/agent/shared/terms.py`) and the write-back pre-pass
+# (`missing_names` below). Measured on the DNA TSC transcript of 2026-03-02: eight of 28 candidates
+# were "But I'll", "So Cameron", "That's John", "And Gabe"… — a sentence opens with a capitalised
+# function word and the next word is capitalised too. Measured again on app.dev, 2026-10-11: the
+# write-back phase read "So Vexam, which is the Finos project" and wrote a project page called
+# "So Vexam" — an ASR spelling of Vexa behind a discourse opener.
+#
+# Stripped by the CONSUMERS, not inside `candidate_names`: that function is the decision-24.4
+# metric `core/flows/eval/dna/score.py` imports, tuned on written notes, and a corpus correction
+# applied inside it would move a number nobody was watching.
+#
+# THE TRADE, STATED: "On Semiconductor" and "Our World in Data" lose their first word and then fall
+# to the two-word floor. One page or chip missed, against a junk page per meeting.
+LEADING_SPEECH_NOISE = frozenset({
+    # sentence openers
+    "so", "but", "and", "also", "then", "now", "well", "actually", "just", "right", "okay", "ok",
+    "yeah", "yes", "no", "oh", "plus", "or", "if", "when", "while", "because", "though", "although",
+    "like", "maybe", "anyway", "basically", "honestly", "obviously",
+    # demonstratives and possessives that read as part of a name
+    "that", "that's", "this", "these", "those", "the", "a", "an",
+    "our", "your", "their", "his", "her", "its", "my",
+    # pronouns and their contractions — "But I'll" survives the opener strip as "I'll"
+    "i", "i'll", "i'm", "i've", "i'd", "we", "we'll", "we're", "we've", "they", "they'll",
+    "they're", "they've", "he", "he's", "she", "she's", "it", "it's", "you", "you'll", "you're",
+    "you've",
+    # prepositions that open a clause
+    "on", "in", "at", "for", "to", "with", "from", "by", "as", "of", "about", "into", "over",
+})
+
+
+def strip_leading_noise(name: str) -> str:
+    """Drop leading speech-noise words until the first real one, then hold the two-word floor.
+
+    Repeated rather than single-pass: "And so Cameron" is one utterance and two noise words. What is
+    left has to still be a NAME — one word is not, by the extractor's own rule — so a candidate that
+    shrinks to a single word ("So Vexam" → "Vexam") is dropped entirely rather than admitted through
+    a back door the two-word floor was closed against. Returns "" for a dropped candidate."""
+    parts = name.split()
+    while parts and parts[0].lower().replace("’", "'") in LEADING_SPEECH_NOISE:
+        parts = parts[1:]
+    return " ".join(parts) if len(parts) >= 2 else ""
+
+
 def candidate_names(text: str, *, mask_linked: bool = True) -> list[str]:
     """Proper names in a piece of prose, in order of appearance, de-duplicated.
 
@@ -1463,7 +1507,45 @@ def _shadows(slug: str, known: str) -> bool:
         return True
     if len(b) >= 2 and set(b) <= set(a):
         return True
-    return False
+    return _near_variant(slug, known)
+
+
+def _edit_distance(a: str, b: str, cap: int) -> int:
+    """Levenshtein distance, stopping early once every path is past ``cap`` (returns ``cap + 1``)."""
+    if abs(len(a) - len(b)) > cap:
+        return cap + 1
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        if min(cur) > cap:
+            return cap + 1
+        prev = cur
+    return prev[-1]
+
+
+def _near_variant(slug: str, known: str) -> bool:
+    """Is ``slug`` a mis-hearing or mis-spelling of the page keyed ``known``?
+
+    ⚠ MEASURED 2026-10-11 on app.dev: speech recognition wrote "Vexa" as "Vexam", and the write-back
+    phase made a page for the variant beside the page for the real thing. Every other test in
+    ``_shadows`` is about truncation and word order; none sees one letter wrong.
+
+    One edit when the longer slug has five characters or more and the shorter has four ("vexam" →
+    "vexa"); two edits once both have twelve ("robin-valentine" / "robyn-valentyne"). Below that
+    floor two short names a letter apart are usually two different things ("Ada" / "Ida").
+
+    THE TRADE, STATED: "James Holl" and "James Hall" are one edit apart and can be two people. The
+    cost is one page not written this turn — it is written the next time the name arrives with a
+    source of its own, under the alias the person adds — against a duplicate page per ASR variant,
+    which nothing merges. Known variants the desk has already seen belong in a page's ``aliases``;
+    ``known_names`` reads those, so a recorded variant is an exact match, not a guess."""
+    short, long_ = sorted((slug, known), key=len)
+    if len(long_) < 5 or len(short) < 4:
+        return False
+    cap = 2 if len(short) >= 12 else 1
+    return _edit_distance(slug, known, cap) <= cap
 
 
 def missing_names(roots, texts, *, limit: int = 8) -> list[str]:
@@ -1487,7 +1569,13 @@ def missing_names(roots, texts, *, limit: int = 8) -> list[str]:
             continue
     seen: list[str] = []
     for t in texts:
-        for n in candidate_names(t, mask_linked=False):
+        for raw in candidate_names(t, mask_linked=False):
+            # A TRANSCRIPT OPENS SENTENCES WITH "So", "And", "Well"… (``LEADING_SPEECH_NOISE``):
+            # "So Vexam" is the opener and an ASR spelling of Vexa, not a project. The same strip
+            # the chip extractor applies, from the same list.
+            n = strip_leading_noise(raw)
+            if not n:
+                continue
             slug = slugify(n)
             if not slug or n in seen:
                 continue
