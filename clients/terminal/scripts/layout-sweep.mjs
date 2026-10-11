@@ -23,6 +23,7 @@
  *   L3  the conversation is at least the mode's floor (560 / 480 / 440, full width below 960), and
  *       the composer toolbar is ONE row.
  *   tabs  a tab strip that hides a tab shows its overflow control.
+ *   L5  no text stacked one letter per line (a collapsed column) — part of L1's verdict.
  * Exit 1 when L1, L3 or tabs fail anywhere.
  */
 import { writeFileSync } from "node:fs";
@@ -48,6 +49,18 @@ export const MEASURE = () => {
     sideways.push(`${describe(el)} ${el.scrollWidth}>${el.clientWidth}`);
   }
   const docWide = document.documentElement.scrollWidth > vw + 1;
+  // L5 — TEXT STACKED ONE LETTER PER LINE (founder, 2026-10-10: a metadata label collapsed to a
+  // sliver). A visible element holding ≥ 4 characters of its own text, narrower than two
+  // characters and taller than four lines, is a collapsed column, whatever caused it.
+  const stacked = [];
+  for (const el of document.querySelectorAll("[data-pane] *")) {
+    if (!visible(el) || el.closest("svg")) continue;
+    const own = [...el.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent.trim()).join("");
+    if (own.length < 4) continue;
+    const cs = getComputedStyle(el); const r = el.getBoundingClientRect();
+    const fs = parseFloat(cs.fontSize) || 12; const lh = parseFloat(cs.lineHeight) || fs * 1.4;
+    if (r.width < fs * 2 && r.height > lh * 4) stacked.push(`${describe(el)} ${Math.round(r.width)}×${Math.round(r.height)} "${own.slice(0, 20)}"`);
+  }
   // L2
   const small = [];
   for (const el of document.querySelectorAll("button, [role=button], a[href], [role=menuitem], [role=tab], [role=separator]")) {
@@ -88,7 +101,7 @@ export const MEASURE = () => {
     shellMode: document.querySelector("[data-shell-mode]")?.getAttribute("data-shell-mode") ?? null,
     chat, textarea: textarea ? Math.round(textarea.getBoundingClientRect().width) : null,
     convLeft, shellScrolled,
-    L1: { ok: sideways.length === 0 && !docWide && !shellScrolled && !convOffscreen, sideways, docWide, shellScrolled, convOffscreen },
+    L1: { ok: sideways.length === 0 && !docWide && !shellScrolled && !convOffscreen && stacked.length === 0, sideways, docWide, shellScrolled, convOffscreen, stacked },
     L2: { small: small.length, examples: small.slice(0, 8) },
     L3: { ok: (chat === null || chat >= floor) && (toolbarRows === null || toolbarRows <= 1), toolbarRows },
     tabs: { ok: strips.every((s) => !s.hides || s.control), strips },

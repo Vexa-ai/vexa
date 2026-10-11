@@ -69,7 +69,7 @@ function ReportField({ surface, onDone }: { surface: FrictionSurface; onDone: ()
   };
 
   if (said !== null) {
-    return <span data-report="said" style={{ ...ty.meta, color: "var(--t3)" }}>{said}</span>;
+    return <span data-report="said" className="c-3" style={{ ...ty.meta }}>{said}</span>;
   }
   return (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 6, minWidth: 0, flex: "1 1 220px" }}>
@@ -80,14 +80,10 @@ function ReportField({ surface, onDone }: { surface: FrictionSurface; onDone: ()
           // consumed, so the panel's own Escape (close-topmost) does not also fire
           if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); onDone(); }
         }}
-        style={{
-          ...ty.chip, flex: "1 1 0%", minWidth: 0, padding: "3px 8px", borderRadius: 6,
-          border: "1px solid var(--line2)", background: "var(--bg)", color: "var(--t1)", outline: "none",
-        }} />
+        className="pt-0_5 pr-2 pb-0_5 pl-2 r-md bd-strong bg-0 c-1" style={{ ...ty.chip, flex: "1 1 0%", minWidth: 0, outline: "none" }} />
       <button data-report="send" onClick={() => void send()} disabled={busy || !text.trim()}
         title="Send" aria-label="Send the report"
-        style={{ ...ty.chip, flex: "none", border: "none", borderRadius: 6, padding: "3px 10px", cursor: "pointer",
-                 color: "var(--on-accent)", background: "var(--accent)", opacity: busy || !text.trim() ? 0.55 : 1 }}>
+        className="bd-none r-md pt-0_5 pr-2 pb-0_5 pl-2 c-on-accent bg-accent" style={{ ...ty.chip, flex: "none", cursor: "pointer", opacity: busy || !text.trim() ? 0.55 : 1 }}>
         {busy ? "…" : "Send"}
       </button>
     </span>
@@ -134,7 +130,7 @@ export function ReportTurn(p: { surface: FrictionSurface; children: React.ReactN
         </button>
       )}
       {open && (
-        <div style={{ display: "flex", alignItems: "center", gap: 6, margin: "6px 0 0", minWidth: 0 }}>
+        <div className="mt-1_5 mr-0 mb-0 ml-0" style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
           <ReportField surface={p.surface} onDone={() => setOpen(false)} />
         </div>
       )}

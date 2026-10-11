@@ -24,7 +24,7 @@ export function EntityProperties({ source }: { source: string }) {
   if (!properties) return null;
   const items = Object.entries(properties).filter(([, v]) => !isEmptyValue(v))
     .map(([key, value]) => ({ key, value: kvValue(value) }));
-  return <section aria-label="Entity properties" data-entity-properties style={{ marginBottom: 20, paddingBottom: 14, borderBottom: "1px solid var(--line)" }}>
+  return <section aria-label="Entity properties" data-entity-properties className="mb-5 pb-3 bd-b">
     <KeyValue items={items} />
   </section>;
 }

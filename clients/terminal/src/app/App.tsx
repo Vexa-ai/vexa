@@ -186,24 +186,24 @@ function InviteConsent({ token, onProceed, onDecline, busy = false }: { token: s
   return (
     <div style={wrap}>
       <div style={card}>
-        <div style={{ fontSize: 11.5, textTransform: "uppercase", letterSpacing: ".08em", color: "var(--t3)", marginBottom: 12 }}>You've been invited to a workspace</div>
-        {!pv && !err && <div style={{ color: "var(--t3)", fontSize: 13 }}>Loading invite…</div>}
+        <div className="t-xs c-3 mb-3" style={{ textTransform: "uppercase", letterSpacing: ".08em" }}>You've been invited to a workspace</div>
+        {!pv && !err && <div className="c-3 t-sm">Loading invite…</div>}
         {invalid && (
           <>
-            <div style={{ fontSize: 16, color: "var(--t1)", marginBottom: 6 }}>Invite unavailable</div>
-            <div style={{ fontSize: 13, color: "var(--t3)", marginBottom: 20 }}>{err || "This invite is no longer valid — it may have been revoked, expired, or already used."}</div>
+            <div className="t-lg c-1 mb-1_5">Invite unavailable</div>
+            <div className="t-sm c-3 mb-5">{err || "This invite is no longer valid — it may have been revoked, expired, or already used."}</div>
             <button onClick={onDecline} style={btnGhost}>Continue to Vexa</button>
           </>
         )}
         {pv && pv.valid && (
           <>
-            <div style={{ fontSize: 21, fontWeight: 600, color: "var(--t1)", marginBottom: 5, wordBreak: "break-word" }}>{pv.name}</div>
-            <div style={{ fontSize: 13.5, color: "var(--t2)", lineHeight: 1.5, marginBottom: 18 }}>
-              {pv.purpose || <span style={{ color: "var(--t3)" }}>A shared knowledge workspace.</span>}
+            <div className="t-xl fw-600 c-1 mb-1" style={{ wordBreak: "break-word" }}>{pv.name}</div>
+            <div className="t-sm c-2 lh-snug mb-4">
+              {pv.purpose || <span className="c-3">A shared knowledge workspace.</span>}
             </div>
             <div style={termRow}><span style={termK}>Your access</span><span style={termV}>{roleLabel(pv.role)}</span></div>
             {pv.shared_by && <div style={termRow}><span style={termK}>Shared by</span><span style={termV}>{pv.shared_by}</span></div>}
-            <div style={{ fontSize: 12, color: "var(--t3)", lineHeight: 1.5, margin: "16px 0 20px", paddingTop: 14, borderTop: "1px solid var(--line)" }}>
+            <div className="t-xs c-3 lh-snug mt-4 mr-0 mb-5 ml-0 pt-3 bd-t">
               Joining adds this workspace to your set and mounts it into the agent. You can switch it off or leave any time.
             </div>
             <div style={{ display: "flex", gap: 10 }}>
@@ -233,7 +233,7 @@ export function App() {
   // mounted so the server HTML (which can't see localStorage/dockview) matches — no hydration mismatch.
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
-  if (!mounted) return <div style={{ height: "100vh", background: "var(--bg)" }} />;
+  if (!mounted) return <div className="bg-0" style={{ height: "100vh" }} />;
 
   // AuthGate logs the user in first (a ?invite= link preserves its query through the OAuth round-trip);
   // InviteGate then shows the consent screen for any ?invite= INSIDE the authed subtree, so its preview /

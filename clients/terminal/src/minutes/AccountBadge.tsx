@@ -1,27 +1,11 @@
 "use client";
 /** Account actions; all service setup lives in Connections. */
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState } from "react";
+import { Ellipsis } from "lucide-react";
 import { Icon } from "../ui-kit";
 import { useTheme } from "../app/theme";
 import { CONNECTIONS_OPEN } from "./connectionEvents";
-import { surface, type as ty } from "./tokens";
 
-const itemS: CSSProperties = {
-  ...ty.body,
-  display: "flex", alignItems: "center", gap: 9, width: "100%", textAlign: "left",
-  padding: "7px 9px", borderRadius: 7, border: "none", background: "transparent",
-  color: "var(--t1)", cursor: "pointer",
-};
-const hi = (e: { currentTarget: HTMLElement }) => { e.currentTarget.style.background = surface.raisedHi; };
-const lo = (e: { currentTarget: HTMLElement }) => { e.currentTarget.style.background = "transparent"; };
-
-/** Sign out and come back on the sign-in screen. Wiping client state on the way out keeps the next
- *  person from inheriting this one's chats, tabs and pane widths — the same discipline the
- *  workbench's own profile row applies.
- *
- *  Exported because the scaffold refusal card needs the SAME door (F48): a card that says "you are
- *  signed in as the wrong person" and then makes them hunt for the account menu has not offered a
- *  way out. One implementation, two callers — not two that drift. */
 export function switchAccount(): void {
   void fetch("/api/auth/logout", { method: "POST" }).finally(() => {
     try { localStorage.clear(); sessionStorage.clear(); } catch { /* storage unavailable */ }
@@ -61,33 +45,33 @@ export function AccountBadge() {
 
   const signOut = switchAccount;
 
+  // The account menu on the ui-kit menu classes (guidelines §4.4): 28px items with icons, the
+  // overlay surface and shadow tokens, focus rings; the trigger is a ListRow-height button with
+  // the avatar, the name and the address truncating with an ellipsis.
   return (
-    <div ref={box} style={{ position: "relative", flex: "none", borderTop: "1px solid var(--line)" }}>
+    <div ref={box} className="vx-acct">
       {open && (
-        <div role="menu" data-acct="menu"
-          style={{ position: "absolute", bottom: "calc(100% + 6px)", left: 8, right: 8, zIndex: 30, background: "var(--sidebar)", border: "1px solid var(--line2)", borderRadius: 10, padding: 6, boxShadow: "0 8px 24px rgba(0,0,0,.35)" }}>
-          <button role="menuitem" onClick={() => { window.dispatchEvent(new Event(CONNECTIONS_OPEN)); setOpen(false); }} style={itemS}>Connections</button>
-          <button role="menuitem" data-acct="theme" onClick={() => { toggleTheme(); setOpen(false); }}
-            style={itemS} onMouseEnter={hi} onMouseLeave={lo}>
-            <Icon name={day ? "moon" : "sun"} size={14} />{day ? "Dark mode" : "Day mode"}
+        <div role="menu" data-acct="menu" className="vx-menu vx-acct-menu">
+          <button role="menuitem" className="vx-menu-item" onClick={() => { window.dispatchEvent(new Event(CONNECTIONS_OPEN)); setOpen(false); }}>
+            <span className="vx-menu-icon" aria-hidden><Icon name="link" size={14} /></span><span className="vx-menu-label">Connections</span>
           </button>
-          <button role="menuitem" data-acct="signout" onClick={signOut}
-            style={itemS} onMouseEnter={hi} onMouseLeave={lo}>
-            <Icon name="logout" size={14} />Sign out
+          <button role="menuitem" data-acct="theme" className="vx-menu-item" onClick={() => { toggleTheme(); setOpen(false); }}>
+            <span className="vx-menu-icon" aria-hidden><Icon name={day ? "moon" : "sun"} size={14} /></span><span className="vx-menu-label">{day ? "Dark mode" : "Day mode"}</span>
+          </button>
+          <div role="separator" className="vx-menu-sep" />
+          <button role="menuitem" data-acct="signout" className="vx-menu-item" onClick={signOut}>
+            <span className="vx-menu-icon" aria-hidden><Icon name="logout" size={14} /></span><span className="vx-menu-label">Sign out</span>
           </button>
         </div>
       )}
-      <button data-acct="badge" aria-haspopup="menu" aria-expanded={open} title={email || name}
-        onClick={() => setOpen((v) => !v)}
-        style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "8px 10px", background: open ? surface.raised : "transparent", border: "none", cursor: "pointer", textAlign: "left" }}
-        onMouseEnter={(e) => { e.currentTarget.style.background = surface.raised; }}
-        onMouseLeave={(e) => { if (!open) e.currentTarget.style.background = "transparent"; }}>
-        <span aria-hidden style={{ ...ty.control, fontSize: 10.5, width: 24, height: 24, borderRadius: "50%", flex: "none", background: surface.raisedHi, color: "var(--t1)", display: "flex", alignItems: "center", justifyContent: "center" }}>{initials}</span>
-        <span style={{ minWidth: 0, flex: 1, lineHeight: 1.3 }}>
-          <span style={{ ...ty.bodyStrong, fontSize: 12.5, color: "var(--t1)", display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</span>
-          {email && <span style={{ ...ty.meta, display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{email}</span>}
+      <button data-acct="badge" className="vx-acct-badge" aria-haspopup="menu" aria-expanded={open} title={email || name}
+        onClick={() => setOpen((v) => !v)}>
+        <span aria-hidden className="vx-acct-avatar">{initials}</span>
+        <span className="vx-acct-text">
+          <span className="vx-acct-name">{name}</span>
+          {email && <span className="vx-acct-email">{email}</span>}
         </span>
-        <span aria-hidden style={{ flex: "none", color: "var(--t3)", fontSize: 13, lineHeight: 1, fontFamily: "var(--sans)" }}>⋯</span>
+        <Ellipsis size={16} strokeWidth={1.75} aria-hidden className="vx-acct-more" />
       </button>
     </div>
   );

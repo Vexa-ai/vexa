@@ -122,7 +122,7 @@ it("shows each rule's value, its default and its lenses", async () => {
   expect(row.textContent?.toLowerCase()).toContain("security");
   expect(row.textContent?.toLowerCase()).toContain("adversarial");
   const unanswered = container.querySelector('[data-policy-rule="attendee_domains"]')!;
-  expect(unanswered.textContent).toContain("unset");
+  expect(unanswered.textContent).toContain("Unset");   // sentence case (design guidelines §5.1)
 });
 
 // ── 4 · the view-source fold on a generated flow page ────────────────────────────────────────

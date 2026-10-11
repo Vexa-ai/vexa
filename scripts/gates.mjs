@@ -5,7 +5,7 @@
  * Usage: node scripts/gates.mjs [readme|isolation|isolation-py|exports|graph|graph-py|schema|
  *                                contract-version|config-contract|python|stack|node|health|access|
  *                                tracing|replay|telemetry|eval|licenses|compose|execution-env|
- *                                lite-makefile|domain-doors|fact-parity|vendor-payload|all]
+ *                                lite-makefile|domain-doors|fact-parity|vendor-payload|ui-design|all]
  */
 import { readdirSync, existsSync, readFileSync, writeFileSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -410,6 +410,29 @@ function gateNode() {
   try { execSync("npx turbo run build test --output-logs=errors-only", { cwd: ROOT, stdio: "pipe" }); }
   catch (e) { return fail([`turbo build/test:\n${errText(e).slice(-2000)}`]); }
   console.log(`  ✓ gate:node — ${pkgs.length} package(s) · build + test green`);
+  return true;
+}
+
+// gate:ui-design (P9, P12, P18, P21 — docs/docs/governance/ui-design.mdx § Gates) — the terminal's design
+// guards as one named gate: tokens resolve and pass contrast in both themes (G3, G7), the inline-style,
+// raw-colour and outline:none budgets only go down (G2, G1, G5), no mid-word breaks (G4), motion respects
+// reduced motion (G6), no secret in an attribute (G8), external links through ExternalLink (G9), no raw
+// HTML injection (G10), the catalogue holds no user data and covers every primitive (G11, G13), no
+// browser dialogs (G12), and the responsive shell's width sweep. They also ride gate:node with the rest
+// of the terminal's vitest suite; this gate runs them alone, fast, in the static leg.
+const UI_DESIGN_TESTS = [
+  "src/ui-kit/__tests__/designTokens.test.ts", "src/ui-kit/__tests__/styleBudget.test.ts",
+  "src/ui-kit/__tests__/designGuards.test.ts", "src/ui-kit/__tests__/shellLayout.test.ts",
+  "src/ui-kit/__tests__/keyValue.test.tsx", "src/ui-kit/__tests__/layoutPrimitives.test.tsx",
+  "src/ui-kit/__tests__/primitives.test.tsx", "src/app/__tests__/designCatalogue.test.tsx",
+  "src/surfaces/__tests__/colorTokens.test.ts",
+];
+function gateUiDesign() {
+  const term = join(ROOT, "clients", "terminal");
+  if (!existsSync(join(term, "src", "app", "tokens.css"))) { console.log("  ✓ gate:ui-design — no design tokens yet (green-on-empty)"); return true; }
+  try { execFileSync("npx", ["vitest", "run", ...UI_DESIGN_TESTS], { cwd: term, stdio: "pipe" }); }
+  catch (e) { return fail([`terminal design guards:\n${errText(e).slice(-3000)}`]); }
+  console.log(`  ✓ gate:ui-design — ${UI_DESIGN_TESTS.length} guard suites green (G1–G13 + the width sweep)`);
   return true;
 }
 
@@ -1704,7 +1727,7 @@ function gateDomainDoors() {
   return true;
 }
 
-const GATES = { readme: gateReadme, "lite-makefile": gateLiteMakefile, "docs-version": gateDocsVersion, dataflow: gateDataflow, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, "config-contract": gateConfigContract, "db-schema": gateDbSchema, "db-budget": gateDbBudget, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, "image-licenses": gateImageLicenses, "runtime-parity": gateRuntimeParity, compose: gateCompose, "execution-env": gateExecutionEnv, "test-isolation": gateTestIsolation, "arch-report": gateArchReport, parity: gateParity, "compose-stress": gateComposeStress, "compose-chaos": gateComposeChaos, "eval-baseline": gateEvalBaseline, "contract-conformance": gateContractConformance, "domain-doors": gateDomainDoors, "fact-parity": gateFactParity, "vendor-payload": gateVendorPayload };
+const GATES = { readme: gateReadme, "lite-makefile": gateLiteMakefile, "docs-version": gateDocsVersion, dataflow: gateDataflow, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, "config-contract": gateConfigContract, "db-schema": gateDbSchema, "db-budget": gateDbBudget, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, "image-licenses": gateImageLicenses, "runtime-parity": gateRuntimeParity, compose: gateCompose, "execution-env": gateExecutionEnv, "test-isolation": gateTestIsolation, "arch-report": gateArchReport, parity: gateParity, "compose-stress": gateComposeStress, "compose-chaos": gateComposeChaos, "eval-baseline": gateEvalBaseline, "contract-conformance": gateContractConformance, "domain-doors": gateDomainDoors, "fact-parity": gateFactParity, "vendor-payload": gateVendorPayload, "ui-design": gateUiDesign };
 // gate:fact-parity (P23 — one writer per fact) — the generalisation of the ONE control case in this
 // repository. `config_preflight.py` is vendored byte-identically into seven packages and has never
 // drifted, because check 2 of gate:config-contract fails the build on byte-inequality. Every other

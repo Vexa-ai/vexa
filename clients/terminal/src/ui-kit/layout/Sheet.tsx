@@ -30,6 +30,12 @@ export function Sheet({ form, open, onClose, side = "right", width, label, child
   const box = useRef<HTMLDivElement>(null);
   const overlay = form !== "inline";
   const shown = overlay && open;
+  // Read `onClose` through a ref so the effect below runs when the sheet OPENS, not on every parent
+  // render: with the inline arrow in its dependencies, each rail poll (~5 s) returned focus to the
+  // trigger and then to the sheet's first control — pulling it out of a dialog open inside the
+  // drawer (the rail's delete confirm). Same defect as `Dialog`, same fix.
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
 
   useEffect(() => {
     if (!shown) return;
@@ -42,7 +48,7 @@ export function Sheet({ form, open, onClose, side = "right", width, label, child
       (first ?? el)?.focus();
     });
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") { e.stopPropagation(); onClose(); return; }
+      if (e.key === "Escape") { e.stopPropagation(); closeRef.current(); return; }
       if (e.key !== "Tab" || !el) return;
       const items = Array.from(el.querySelectorAll<HTMLElement>(FOCUSABLE)).filter((n) => n.offsetParent !== null || n === document.activeElement);
       if (items.length === 0) { e.preventDefault(); el.focus(); return; }
@@ -57,7 +63,7 @@ export function Sheet({ form, open, onClose, side = "right", width, label, child
       // Return focus to the trigger, if it is still on the page.
       if (before && document.contains(before)) before.focus();
     };
-  }, [shown, onClose]);
+  }, [shown]);
 
   const style: CSSProperties | undefined = form === "overlay" && width ? { width } : undefined;
   return (

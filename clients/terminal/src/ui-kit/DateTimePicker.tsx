@@ -87,22 +87,15 @@ export function DateTimePicker({ value, onChange, onClear, disabled, placeholder
   return (
     <div ref={ref} style={{ position: "relative", display: "inline-block", minWidth: 0 }}>
       <button type="button" disabled={disabled} onClick={() => setOpen((v) => !v)}
-        style={{
-          display: "inline-flex", alignItems: "center", gap: 7, fontSize: 12.5, padding: "6px 10px",
-          background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 7,
-          color: selected ? "var(--t1)" : "var(--t3)", cursor: disabled ? "default" : "pointer",
-          opacity: disabled ? 0.6 : 1, whiteSpace: "nowrap",
-        }}>
-        <span aria-hidden style={{ fontSize: 12, lineHeight: 1, opacity: 0.7 }}>🗓</span>
+        className="t-xs pt-1_5 pr-2 pb-1_5 pl-2 bg-2 bd r-md" style={{ display: "inline-flex", alignItems: "center", gap: 7, color: selected ? "var(--t1)" : "var(--t3)", cursor: disabled ? "default" : "pointer", opacity: disabled ? 0.6 : 1, whiteSpace: "nowrap" }}>
+        <span aria-hidden className="t-xs lh-tight" style={{ opacity: 0.7 }}>🗓</span>
         {selected ? fmtValue(selected) : placeholder}
       </button>
       {open && (
         <div role="dialog" aria-label="Pick date and time"
-          style={{ position: "absolute", top: "100%", left: 0, marginTop: 6, zIndex: 60, width: 336,
-            background: "var(--panel)", border: "1px solid var(--line2)", borderRadius: 10,
-            boxShadow: "0 10px 32px rgba(0,0,0,.35)", padding: 12 }}>
+          className="mt-1_5 bg-2 bd-strong r-lg p-3" style={{ position: "absolute", top: "100%", left: 0, zIndex: 60, width: 336, boxShadow: "0 10px 32px rgba(0,0,0,.35)" }}>
           {quick.length > 0 && (
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+            <div className="mb-2" style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
               {quick.map((q) => (
                 <button key={q.label} type="button" style={chipStyle}
                   onClick={() => { onChange(q.d.toISOString()); setOpen(false); }}
@@ -116,20 +109,20 @@ export function DateTimePicker({ value, onChange, onClear, disabled, placeholder
           <div style={{ display: "flex", gap: 12 }}>
             {/* calendar */}
             <div style={{ flex: "none", width: 196 }}>
-              <div style={{ display: "flex", alignItems: "center", marginBottom: 6 }}>
+              <div className="mb-1_5" style={{ display: "flex", alignItems: "center" }}>
                 <button type="button" aria-label="Previous month"
                   onClick={() => setViewMonth(new Date(viewMonth.getFullYear(), viewMonth.getMonth() - 1, 1))}
-                  style={{ background: "transparent", border: "none", color: "var(--t2)", cursor: "pointer", fontSize: 13, padding: "0 6px" }}>‹</button>
-                <span style={{ flex: 1, textAlign: "center", fontSize: 12, fontWeight: 600, color: "var(--t1)" }}>
+                  className="bg-none bd-none c-2 t-sm pt-0 pr-1_5 pb-0 pl-1_5" style={{ cursor: "pointer" }}>‹</button>
+                <span className="t-xs fw-600 c-1" style={{ flex: 1, textAlign: "center" }}>
                   {MONTHS[viewMonth.getMonth()]} {viewMonth.getFullYear()}
                 </span>
                 <button type="button" aria-label="Next month"
                   onClick={() => setViewMonth(new Date(viewMonth.getFullYear(), viewMonth.getMonth() + 1, 1))}
-                  style={{ background: "transparent", border: "none", color: "var(--t2)", cursor: "pointer", fontSize: 13, padding: "0 6px" }}>›</button>
+                  className="bg-none bd-none c-2 t-sm pt-0 pr-1_5 pb-0 pl-1_5" style={{ cursor: "pointer" }}>›</button>
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 1 }}>
                 {DAYS.map((d) => (
-                  <span key={d} style={{ fontSize: 9.5, color: "var(--t3)", textAlign: "center", padding: "2px 0", textTransform: "uppercase" }}>{d}</span>
+                  <span key={d} className="t-xs c-3 pt-0_5 pr-0 pb-0_5 pl-0" style={{ textAlign: "center", textTransform: "uppercase" }}>{d}</span>
                 ))}
                 {Array.from({ length: lead }).map((_, i) => <span key={`x${i}`} />)}
                 {Array.from({ length: daysInMonth }).map((_, i) => {
@@ -139,13 +132,7 @@ export function DateTimePicker({ value, onChange, onClear, disabled, placeholder
                   const past = atTime(day, 23, 59).getTime() < Date.now();
                   return (
                     <button key={i} type="button" disabled={past} onClick={() => pickDay(day)}
-                      style={{
-                        fontSize: 11.5, padding: "4px 0", borderRadius: 6, cursor: past ? "default" : "pointer",
-                        border: isToday && !isSel ? "1px solid var(--line2)" : "1px solid transparent",
-                        background: isSel ? "var(--accent)" : "transparent",
-                        color: isSel ? "var(--bg)" : past ? "var(--t3)" : "var(--t1)",
-                        opacity: past ? 0.45 : 1, fontWeight: isSel ? 650 : 400,
-                      }}
+                      className="t-xs pt-1 pr-0 pb-1 pl-0 r-md" style={{ cursor: past ? "default" : "pointer", border: isToday && !isSel ? "1px solid var(--line2)" : "1px solid transparent", background: isSel ? "var(--accent)" : "transparent", color: isSel ? "var(--bg)" : past ? "var(--t3)" : "var(--t1)", opacity: past ? 0.45 : 1, fontWeight: isSel ? 650 : 400 }}
                       onMouseEnter={(e) => { if (!isSel && !past) e.currentTarget.style.background = "var(--panel2)"; }}
                       onMouseLeave={(e) => { if (!isSel) e.currentTarget.style.background = "transparent"; }}>
                       {i + 1}
@@ -155,7 +142,7 @@ export function DateTimePicker({ value, onChange, onClear, disabled, placeholder
               </div>
             </div>
             {/* time slots */}
-            <div ref={timeListRef} style={{ flex: 1, maxHeight: 208, overflowY: "auto", borderLeft: "1px solid var(--line)", paddingLeft: 10 }}>
+            <div ref={timeListRef} className="bd-l pl-2" style={{ flex: 1, maxHeight: 208, overflowY: "auto" }}>
               {Array.from({ length: 96 }).map((_, i) => {
                 const h = Math.floor(i / 4), m = (i % 4) * 15;
                 const label = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
@@ -163,13 +150,7 @@ export function DateTimePicker({ value, onChange, onClear, disabled, placeholder
                   && selected.getMinutes() - (selected.getMinutes() % 15) === m;
                 return (
                   <button key={label} type="button" onClick={() => { pickTime(h, m); setOpen(false); }}
-                    style={{
-                      display: "block", width: "100%", textAlign: "center", fontSize: 12, height: 26,
-                      borderRadius: 6, border: "none", cursor: "pointer",
-                      background: isSel ? "var(--accent)" : "transparent",
-                      color: isSel ? "var(--bg)" : "var(--t2)", fontWeight: isSel ? 650 : 400,
-                      fontFamily: "var(--mono)",
-                    }}
+                    className="t-xs r-md bd-none f-mono" style={{ display: "block", width: "100%", textAlign: "center", height: 26, cursor: "pointer", background: isSel ? "var(--accent)" : "transparent", color: isSel ? "var(--bg)" : "var(--t2)", fontWeight: isSel ? 650 : 400 }}
                     onMouseEnter={(e) => { if (!isSel) e.currentTarget.style.background = "var(--panel2)"; }}
                     onMouseLeave={(e) => { if (!isSel) e.currentTarget.style.background = "transparent"; }}>
                     {label}
@@ -179,9 +160,9 @@ export function DateTimePicker({ value, onChange, onClear, disabled, placeholder
             </div>
           </div>
           {onClear && (
-            <div style={{ marginTop: 10, display: "flex", justifyContent: "flex-end" }}>
+            <div className="mt-2" style={{ display: "flex", justifyContent: "flex-end" }}>
               <button type="button" onClick={() => { onClear(); setOpen(false); }}
-                style={{ fontSize: 11.5, background: "transparent", border: "none", color: "var(--t3)", cursor: "pointer", textDecoration: "underline" }}>
+                className="t-xs bg-none bd-none c-3" style={{ cursor: "pointer", textDecoration: "underline" }}>
                 No time (plan stays idle)
               </button>
             </div>

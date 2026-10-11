@@ -1,7 +1,8 @@
 /** The 1b primitives: roles, keyboard, focus, `aria-*`, error linking, and the two security
  *  primitives (guidelines §4, §7 S1–S2). */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { useState } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
   Badge, Breadcrumb, Button, Chip, ConfirmDialog, EmptyState, ErrorState, ExternalLink, IconButton, Input, ListRow,
@@ -63,7 +64,7 @@ describe("Select", () => {
 
 describe("Breadcrumb", () => {
   it("collapses the middle past four segments, and marks the current page", () => {
-    render(<Breadcrumb items={["one", "two", "three", "four", "five"].map((k) => ({ key: k, label: k, onSelect: () => {} }))} />);
+    render(<Breadcrumb items={["one", "two", "three", "four", "five"].map((k, i, a) => ({ key: k, label: k, onSelect: i < a.length - 1 ? () => {} : undefined }))} />);
     expect(screen.getByRole("button", { name: "2 more folders" })).toBeTruthy();
     expect(screen.getByText("five").getAttribute("aria-current")).toBe("page");
     expect(screen.queryByText("two")).toBeNull();
@@ -91,6 +92,37 @@ describe("ConfirmDialog — replaces window.confirm", () => {
     expect(onConfirm).toHaveBeenCalled();
     fireEvent.keyDown(document, { key: "Escape" });
     expect(onCancel).toHaveBeenCalled();
+  });
+
+  // 2026-10-11 (app.dev, "delete still does not work for chats"): the dialog's focus effect depended
+  // on `onClose`, which callers pass as an inline arrow, so every parent render (the rail's ~5 s
+  // sessions poll) moved focus back to the first button, Cancel, under a keyboard reader's hands.
+  it("a parent re-render with a new onCancel does not move focus", () => {
+    let bump = () => {};
+    function Host() {
+      const [n, setN] = useState(0);
+      bump = () => setN((v) => v + 1);
+      return <ConfirmDialog open title="Delete?" confirmLabel="Delete" consequence={`n=${n}`} onCancel={() => {}} onConfirm={() => {}} />;
+    }
+    render(<Host />);
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Cancel" }));
+    const go = screen.getByRole("button", { name: "Delete" });
+    go.focus();
+    act(() => bump()); act(() => bump());
+    expect(document.activeElement).toBe(go);
+  });
+
+  it("focusConfirm starts on the named act, so Enter confirms; Escape still cancels", () => {
+    const onCancel = vi.fn();
+    render(<ConfirmDialog open focusConfirm title="Delete this chat?" confirmLabel="Delete chat" consequence="x" onCancel={onCancel} onConfirm={() => {}} />);
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Delete chat" }));
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("focusConfirm is ignored with typeToConfirm: the field takes focus", () => {
+    render(<ConfirmDialog open focusConfirm typeToConfirm="ws" title="Delete?" confirmLabel="Delete" consequence="x" onCancel={() => {}} onConfirm={() => {}} />);
+    expect(document.activeElement).toBe(screen.getByRole("textbox"));
   });
 });
 

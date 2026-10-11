@@ -146,14 +146,14 @@ function WorkspaceImage({ path, slug, alt }: { path: string; slug?: string; alt?
     return (
       <span data-image-missing={path} style={{ ...frame, display: "inline-flex" }}>
         <Icon name="alert" size={14} />
-        <span>No <code style={{ fontFamily: "var(--mono)" }}>{path}</code> in this workspace{alt ? ` — “${alt}”` : ""}</span>
+        <span>No <code className="f-mono">{path}</code> in this workspace{alt ? ` — “${alt}”` : ""}</span>
       </span>
     );
   }
   return (
     <img data-workspace-image={path} src={workspaceAssetUrl(path, { slug })} alt={alt ?? ""}
       loading="lazy" onError={() => setBroken(true)}
-      style={{ maxWidth: "100%", height: "auto", borderRadius: 8, margin: "6px 0", display: "block" }} />
+      className="r-md mt-1_5 mr-0 mb-1_5 ml-0" style={{ maxWidth: "100%", height: "auto", display: "block" }} />
   );
 }
 
@@ -254,15 +254,15 @@ function ExternalImage({ src, alt }: { src: string; alt?: string }) {
     <span data-external-image={src} style={{ ...frame, flexWrap: "wrap" }}>
       <Icon name={failed ? "alert" : "web"} size={14} />
       <span style={{ minWidth: 0, flex: "1 1 55%" }}>
-        External image — it lives on <strong style={{ color: "var(--t1)" }}>{externalHost(src)}</strong>, not in this workspace{alt ? `: “${alt}”` : ""}.
-        {failed && <span data-image-failed style={{ display: "block", marginTop: 3, color: "var(--danger)" }}>{failure}</span>}
+        External image — it lives on <strong className="c-1">{externalHost(src)}</strong>, not in this workspace{alt ? `: “${alt}”` : ""}.
+        {failed && <span data-image-failed className="mt-0_5 c-danger" style={{ display: "block" }}>{failure}</span>}
       </span>
       {failed
         // THE FAILURE IS A PLACE TO ACT FROM, not a dead end. Two moves and they are the only two
         // there are: get the right picture, or stop the page promising one.
         ? <span style={{ flex: "none", display: "flex", gap: 6 }}>
             {took
-              ? <span data-image-took={took} style={{ color: "var(--t3)" }}>
+              ? <span data-image-took={took} className="c-3">
                   {took === "find" ? "Asked this chat to find it" : "Removing it from the page…"}
                 </span>
               : actable && <>
@@ -282,7 +282,7 @@ function ExternalImage({ src, alt }: { src: string; alt?: string }) {
                 cursor: state === "fetching" ? "default" : "pointer" }}>
               {state === "fetching" ? "Fetching…" : "Fetch into the workspace"}
             </button>
-          : <span style={{ flex: "none", color: "var(--t3)" }}>nothing to fetch</span>}
+          : <span className="c-3" style={{ flex: "none" }}>nothing to fetch</span>}
     </span>
   );
 }

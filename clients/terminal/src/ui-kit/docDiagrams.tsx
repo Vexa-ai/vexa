@@ -155,10 +155,10 @@ const SOURCE_BLOCK: CSSProperties = {
  *  a legible diagram description, not a blank. */
 function DiagramSource({ source, error }: { source: string; error?: string }) {
   return (
-    <div data-mermaid-source style={{ margin: "6px 0 10px" }}>
-      <pre style={{ ...SOURCE_BLOCK, margin: 0 }}><code>{source}</code></pre>
+    <div data-mermaid-source className="mt-1_5 mr-0 mb-2 ml-0">
+      <pre className="m-0" style={{ ...SOURCE_BLOCK }}><code>{source}</code></pre>
       {error && (
-        <div data-mermaid-error role="note" style={{ fontFamily: "var(--mono)", fontSize: 10.5, color: "var(--t3)", marginTop: 5 }}>
+        <div data-mermaid-error role="note" className="f-mono t-xs c-3 mt-1">
           diagram not drawn — {error}
         </div>
       )}
@@ -193,7 +193,7 @@ export function MermaidDiagram({ source }: { source: string }) {
     // mermaid's own <style> is scoped to the svg's id, so the markup carries its colours with it and
     // nothing here leaks into the page. Horizontal overflow scrolls INSIDE the figure: a wide
     // deployment diagram must not widen the document (docs are read in a pane, not a browser tab).
-    <div data-mermaid-diagram style={{ margin: "10px 0 14px", overflowX: "auto", lineHeight: "normal", textAlign: "center" }}
+    <div data-mermaid-diagram className="mt-2 mr-0 mb-3 ml-0" style={{ overflowX: "auto", lineHeight: "normal", textAlign: "center" }}
       dangerouslySetInnerHTML={{ __html: state.svg }} />
   );
 }

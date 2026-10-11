@@ -50,10 +50,7 @@ export function ActLine(p: { onFire: (instruction?: string) => void; label: stri
         if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); p.onFire(text.trim() || undefined); }
         else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); p.onFire(undefined); }
       }}
-      style={{
-        ...ty.chip, width: "100%", minWidth: 0, color: "var(--t1)", background: "transparent",
-        border: "none", outline: "none", padding: 0, ...p.style,
-      }}
+      className="c-1 bg-none bd-none p-0" style={{ ...ty.chip, width: "100%", minWidth: 0, outline: "none", ...p.style }}
     />
   );
 }
@@ -147,7 +144,7 @@ function PageAct(p: {
   useEffect(() => { setAsking(false); }, [p.slot]);
   const fire = (instruction?: string) => { setAsking(false); remember(p.onFire(instruction)); };
   const open = () => { forget(); setAsking(true); };
-  const icon = <span style={{ flex: "none", display: "flex", color: "var(--accent)" }}><Icon name={p.icon} size={15} /></span>;
+  const icon = <span className="c-accent" style={{ flex: "none", display: "flex" }}><Icon name={p.icon} size={15} /></span>;
 
   if (asking) {
     return (
@@ -155,7 +152,7 @@ function PageAct(p: {
         {icon}
         <span style={{ minWidth: 0, flex: "1 1 0%" }}>
           <ActLine onFire={fire} label={p.fieldLabel} style={{ ...ty.chip, fontWeight: 600 }} />
-          <span style={{ ...ty.meta, display: "block", marginTop: 2 }}>{LINE_HINT}</span>
+          <span className="mt-0_5" style={{ ...ty.meta, display: "block" }}>{LINE_HINT}</span>
         </span>
       </div>
     );
@@ -172,10 +169,10 @@ function PageAct(p: {
         title={p.hint} style={{ ...actBox, cursor: "default" }}>
         <span className="vx-op-spin" aria-hidden="true" style={spinner(14)} />
         <span style={{ minWidth: 0 }}>
-          <span data-act-title style={{ ...ty.chip, display: "block", fontWeight: 600, color: "var(--t1)" }}>{w.head}</span>
+          <span data-act-title className="fw-600 c-1" style={{ ...ty.chip, display: "block" }}>{w.head}</span>
           {/* the line is empty for the first moment of a job — hold its room rather than let the box
               jump the instant the first step arrives */}
-          <span data-act-line style={{ ...ty.meta, display: "block", marginTop: 2, minHeight: 14 }}>{w.line}</span>
+          <span data-act-line className="mt-0_5" style={{ ...ty.meta, display: "block", minHeight: 14 }}>{w.line}</span>
         </span>
       </div>
     );
@@ -190,11 +187,11 @@ function PageAct(p: {
       onMouseEnter={(e) => { e.currentTarget.style.background = surface.raisedHi; e.currentTarget.style.borderColor = "var(--accent)"; }}
       onMouseLeave={(e) => { e.currentTarget.style.background = surface.raised; e.currentTarget.style.borderColor = "var(--line)"; }}>
       {failed
-        ? <span style={{ flex: "none", display: "flex", color: "var(--danger)" }}><Icon name="alert" size={15} /></span>
+        ? <span className="c-danger" style={{ flex: "none", display: "flex" }}><Icon name="alert" size={15} /></span>
         : icon}
       <span style={{ minWidth: 0 }}>
-        <span data-act-title style={{ ...ty.chip, display: "block", fontWeight: 600, color: "var(--t1)" }}>{p.title}</span>
-        <span data-act-line style={{ ...ty.meta, display: "block", marginTop: 2, ...(failed ? { color: "var(--danger)" } : {}) }}>{failed ?? p.line}</span>
+        <span data-act-title className="fw-600 c-1" style={{ ...ty.chip, display: "block" }}>{p.title}</span>
+        <span data-act-line className="mt-0_5" style={{ ...ty.meta, display: "block", ...(failed ? { color: "var(--danger)" } : {}) }}>{failed ?? p.line}</span>
       </span>
     </button>
   );
@@ -279,10 +276,7 @@ export function SelectionAct(p: {
   return <button data-doc-act={p.act} title="Add this quote to your chat"
     onMouseDown={(e) => e.preventDefault()}
     onClick={() => { p.onReference(hit.text); window.getSelection()?.removeAllRanges(); setHit(null); }}
-    style={{ ...ty.chip, position: "absolute", zIndex: 4, top: hit.top, left: hit.left,
-      display: "inline-flex", alignItems: "center", gap: 5, color: "var(--t1)",
-      background: surface.raisedHi, border: "1px solid var(--line)", borderRadius: 6,
-      padding: "3px 8px", cursor: "pointer", boxShadow: "0 2px 8px rgba(0,0,0,.18)" }}>
+    className="c-1 bd r-md pt-0_5 pr-2 pb-0_5 pl-2" style={{ ...ty.chip, position: "absolute", zIndex: 4, top: hit.top, left: hit.left, display: "inline-flex", alignItems: "center", gap: 5, background: surface.raisedHi, cursor: "pointer", boxShadow: "0 2px 8px rgba(0,0,0,.18)" }}>
     <Icon name="spark" size={12} /> Ask about this
   </button>;
 }

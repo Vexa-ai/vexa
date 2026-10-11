@@ -1,0 +1,20 @@
+/* PROSE — a document or an answer (guidelines §2.2, §3.5). One stylesheet for both renderers
+ * (MdxDoc and the plain-Markdown fallback): body on --text-md, headings on the type scale, wraps
+ * at spaces, a wide table or code block scrolls inside its own frame and never the page. */
+.vx-prose { color: var(--text-1); overflow-wrap: break-word; min-width: 0; }
+.vx-prose p { margin: 0 0 var(--space-2); line-height: 1.6; }
+.vx-prose-h { color: var(--text-1); font-weight: var(--weight-semibold); line-height: 1.3; margin: var(--space-2) 0 var(--space-1); }
+.vx-prose-h[data-level="1"] { font-size: var(--text-xl); margin-top: var(--space-3); }
+.vx-prose-h[data-level="2"] { font-size: var(--text-lg); margin-top: var(--space-3); }
+.vx-prose-h[data-level="3"] { font-size: var(--text-md); }
+.vx-prose-h[data-level="4"] { font-size: var(--text-sm); }
+.vx-prose ul, .vx-prose ol { margin: var(--space-1) 0 var(--space-2); padding-left: var(--space-5); display: flex; flex-direction: column; gap: var(--space-0_5); }
+.vx-prose li { line-height: 1.55; }
+.vx-prose blockquote { border-left: 3px solid var(--border); padding-left: var(--space-3); margin: var(--space-1_5) 0 var(--space-2); color: var(--text-2); line-height: 1.55; }
+.vx-prose hr { border: none; border-top: 1px solid var(--border-subtle); margin: var(--space-3) 0; }
+.vx-prose .vx-code-block { margin: var(--space-1_5) 0 var(--space-2); }
+.vx-prose-table { overflow-x: auto; margin: var(--space-1_5) 0 var(--space-2); }
+.vx-prose table { width: 100%; border-collapse: collapse; color: var(--text-1); line-height: 1.45; }
+.vx-prose th { background: var(--surface-2); border: 1px solid var(--border); padding: var(--space-1_5) var(--space-2); font-weight: var(--weight-semibold); text-align: left; }
+.vx-prose td { border: 1px solid var(--border-subtle); padding: var(--space-1_5) var(--space-2); color: var(--text-2); vertical-align: top; }
+.vx-link-inline { text-decoration: underline; cursor: pointer; }

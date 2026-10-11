@@ -70,21 +70,16 @@ export function MeetingHealthBanner() {
     <div
       role="status"
       aria-live="polite"
-      style={{
-        display: "flex", flexDirection: "column", gap: 4,
-        margin: "8px 18px 0", padding: "8px 11px", borderRadius: 8,
-        background: tone.bg, border: `1px solid ${tone.color}`, color: tone.color,
-        fontSize: 12.5, lineHeight: 1.4,
-      }}
+      className="mt-2 mr-4 mb-0 ml-4 pt-2 pr-3 pb-2 pl-3 r-md t-xs lh-snug" style={{ display: "flex", flexDirection: "column", gap: 4, background: tone.bg, border: `1px solid ${tone.color}`, color: tone.color }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        {dot && <span style={{ width: 7, height: 7, borderRadius: "50%", background: tone.color, flex: "none", boxShadow: `0 0 0 3px ${tone.bg}` }} />}
+        {dot && <span className="r-full" style={{ width: 7, height: 7, background: tone.color, flex: "none", boxShadow: `0 0 0 3px ${tone.bg}` }} />}
         <span style={{ fontWeight: health.kind === "error" ? 700 : 600 }}>{headline}</span>
       </div>
 
       {/* For stalled/disconnected, still surface the most recent underlying issue if there is one. */}
       {health.kind !== "ended" && health.kind !== "error" && issue && !issueDismissed && (
-        <div style={{ fontSize: 11.5, opacity: 0.92 }}>
+        <div className="t-xs" style={{ opacity: 0.92 }}>
           {issueLabel(issue.kind)}{issue.status ? ` (${issue.status})` : ""}: {issue.message}
         </div>
       )}
@@ -92,12 +87,12 @@ export function MeetingHealthBanner() {
       {/* The error chip carries the message + a dismiss control. */}
       {health.kind === "error" && issue && (
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontSize: 11.5, opacity: 0.92, flex: 1, minWidth: 0 }}>{issue.message}</span>
+          <span className="t-xs" style={{ opacity: 0.92, flex: 1, minWidth: 0 }}>{issue.message}</span>
           <button
             type="button"
             onClick={() => setDismissedAt(issue.at)}
             title="Dismiss"
-            style={{ flex: "none", background: "transparent", border: `1px solid ${tone.color}`, color: tone.color, borderRadius: 6, padding: "1px 7px", fontSize: 11, cursor: "pointer", fontWeight: 600 }}
+            className="bg-none r-md pt-0 pr-1_5 pb-0 pl-1_5 t-xs fw-600" style={{ flex: "none", border: `1px solid ${tone.color}`, color: tone.color, cursor: "pointer" }}
           >
             Dismiss
           </button>

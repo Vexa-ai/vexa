@@ -12,16 +12,17 @@
  *  default, revealed on an explicit press, with a copy button. The value is NEVER placed in
  *  `title`, `aria-label`, `data-*`, a URL or storage; it exists in the DOM only as the revealed
  *  text node. */
-import { useState, type ReactNode } from "react";
+import { useState, type AnchorHTMLAttributes, type ReactNode } from "react";
 import { Check, Copy, Eye, EyeOff } from "lucide-react";
 import { IconButton } from "./Button";
 
 const SAFE = /^https?:\/\//i;
 export const isSafeHref = (href: string): boolean => SAFE.test(href.trim());
 
-export function ExternalLink({ href, children }: { href: string; children: ReactNode }) {
-  if (!isSafeHref(href)) return <span className="vx-link-refused">{children}</span>;
-  return <a className="vx-link" href={href} target="_blank" rel="noopener noreferrer">{children}</a>;
+export function ExternalLink({ href, children, className, ...rest }: { href: string; children: ReactNode; className?: string }
+  & Omit<AnchorHTMLAttributes<HTMLAnchorElement>, "href" | "target" | "rel" | "children" | "className">) {
+  if (!isSafeHref(href)) return <span className={["vx-link-refused", className].filter(Boolean).join(" ")}>{children}</span>;
+  return <a {...rest} className={["vx-link", className].filter(Boolean).join(" ")} href={href} target="_blank" rel="noopener noreferrer">{children}</a>;
 }
 
 export function Code({ children, block }: { children: string; block?: boolean }) {

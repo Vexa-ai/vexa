@@ -1,11 +1,13 @@
 "use client";
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Markdown as MarkdownView } from "../ui-kit/Markdown";
+import { Badge as UiBadge, Button as UiButton, Tabs as UiTabs } from "../ui-kit";
 import { useActions } from "./actions";
 import type { EntityItem, TranscriptSegment } from "./types";
 
 type Tone = "default" | "accent" | "green" | "warn";
 type Size = "sm" | "md" | "lg";
+const BADGE_TONE: Record<Tone, "neutral" | "info" | "success" | "warning"> = { default: "neutral", accent: "info", green: "success", warn: "warning" };
 type Align = "left" | "center" | "right";
 type Loadable = { loading?: boolean };
 
@@ -83,14 +85,7 @@ function Skeleton({ lines = 3, compact = false }: { lines?: number; compact?: bo
       {Array.from({ length: count }).map((_, index) => (
         <div
           key={index}
-          style={{
-            height: compact ? 10 : 13,
-            width: `${index % 3 === 2 ? 58 : index % 2 === 1 ? 76 : 92}%`,
-            maxWidth: "100%",
-            borderRadius: 999,
-            background: "linear-gradient(90deg, var(--panel2), var(--line2), var(--panel2))",
-            opacity: 0.72,
-          }}
+          className="r-full" style={{ height: compact ? 10 : 13, width: `${index % 3 === 2 ? 58 : index % 2 === 1 ? 76 : 92}%`, maxWidth: "100%", background: "linear-gradient(90deg, var(--panel2), var(--line2), var(--panel2))", opacity: 0.72 }}
         />
       ))}
     </div>
@@ -101,9 +96,9 @@ function Empty({ title = "Nothing yet", body }: { title?: string; body?: string 
   const safeTitle = toText(title, "Nothing yet");
   const safeBody = toText(body);
   return (
-    <div style={{ ...frameStyle, border: "1px dashed var(--line2)", borderRadius: 8, padding: 18, color: "var(--t3)", textAlign: "center", fontSize: 13, overflow: "hidden" }}>
-      <div style={{ color: "var(--t2)", fontWeight: 600, marginBottom: safeBody ? 4 : 0, ...lineClamp(2) }}>{safeTitle}</div>
-      {safeBody && <div style={{ lineHeight: 1.5, ...lineClamp(3) }}>{safeBody}</div>}
+    <div className="r-md p-4 c-3 t-sm" style={{ ...frameStyle, border: "1px dashed var(--line2)", textAlign: "center", overflow: "hidden" }}>
+      <div className="c-2 fw-600" style={{ marginBottom: safeBody ? 4 : 0, ...lineClamp(2) }}>{safeTitle}</div>
+      {safeBody && <div className="lh-snug" style={{ ...lineClamp(3) }}>{safeBody}</div>}
     </div>
   );
 }
@@ -114,11 +109,11 @@ function Panel({ title, subtitle, tone = "default", loading = false, children }:
   const safeSubtitle = toText(subtitle);
   const content = loading ? <Skeleton lines={4} /> : children;
   return (
-    <section style={{ ...frameStyle, width: "100%", background: "var(--panel)", border: `1px solid ${safeTone === "default" ? "var(--line)" : toneColor[safeTone]}`, borderRadius: 8, padding: 14, overflow: "hidden" }}>
+    <section className="bg-2 r-md p-3" style={{ ...frameStyle, width: "100%", border: `1px solid ${safeTone === "default" ? "var(--line)" : toneColor[safeTone]}`, overflow: "hidden" }}>
       {(safeTitle || safeSubtitle) && (
         <header style={{ marginBottom: hasContent(content) ? 12 : 0, minWidth: 0 }}>
-          {safeTitle && <div style={{ color: "var(--t1)", fontSize: 14, fontWeight: 650, ...lineClamp(1) }}>{safeTitle}</div>}
-          {safeSubtitle && <div style={{ color: "var(--t3)", fontSize: 12, marginTop: 3, lineHeight: 1.45, ...lineClamp(2) }}>{safeSubtitle}</div>}
+          {safeTitle && <div className="c-1 t-md fw-600" style={{ ...lineClamp(1) }}>{safeTitle}</div>}
+          {safeSubtitle && <div className="c-3 t-xs mt-0_5 lh-snug" style={{ ...lineClamp(2) }}>{safeSubtitle}</div>}
         </header>
       )}
       {hasContent(content) && <div style={{ minWidth: 0, maxWidth: "100%" }}>{content}</div>}
@@ -130,7 +125,7 @@ function Section({ title, loading = false, children }: { title?: string; childre
   const safeTitle = toText(title);
   return (
     <section style={{ ...frameStyle, width: "100%", overflow: "hidden" }}>
-      {safeTitle && <div style={{ color: "var(--t3)", fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".04em", marginBottom: 8, ...lineClamp(1) }}>{safeTitle}</div>}
+      {safeTitle && <div className="c-3 t-xs fw-600 mb-2" style={{ textTransform: "uppercase", letterSpacing: ".04em", ...lineClamp(1) }}>{safeTitle}</div>}
       {loading ? <Skeleton lines={4} /> : children}
     </section>
   );
@@ -179,12 +174,12 @@ function Card({ title, body, ts, tone = "default", loading = false, children }: 
   const safeTs = ts == null ? "" : toText(ts);
   if (loading) return <Panel loading />;
   return (
-    <article style={{ ...frameStyle, width: "100%", background: safeTone === "default" ? "var(--panel)" : toneBg[safeTone], border: "1px solid var(--line)", borderRadius: 8, padding: 11, overflow: "hidden" }}>
+    <article className="bd r-md p-3" style={{ ...frameStyle, width: "100%", background: safeTone === "default" ? "var(--panel)" : toneBg[safeTone], overflow: "hidden" }}>
       <div style={{ display: "flex", gap: 8, alignItems: "baseline", minWidth: 0 }}>
-        {safeTitle && <div style={{ color: "var(--t1)", fontSize: 13, fontWeight: 650, lineHeight: 1.35, flex: 1, ...lineClamp(2) }}>{safeTitle}</div>}
-        {safeTs && <div title={safeTs} style={{ color: "var(--t3)", fontSize: 11, fontFamily: "var(--mono)", flex: "none", maxWidth: 120, ...lineClamp(1) }}>{safeTs}</div>}
+        {safeTitle && <div className="c-1 t-sm fw-600 lh-tight" style={{ flex: 1, ...lineClamp(2) }}>{safeTitle}</div>}
+        {safeTs && <div title={safeTs} className="c-3 t-xs f-mono" style={{ flex: "none", maxWidth: 120, ...lineClamp(1) }}>{safeTs}</div>}
       </div>
-      {safeBody && <div style={{ color: "var(--t2)", fontSize: 12.5, lineHeight: 1.45, marginTop: safeTitle ? 5 : 0, ...lineClamp(4) }}>{safeBody}</div>}
+      {safeBody && <div className="c-2 t-xs lh-snug" style={{ marginTop: safeTitle ? 5 : 0, ...lineClamp(4) }}>{safeBody}</div>}
       {hasContent(children) && <div style={{ marginTop: safeTitle || safeBody ? 9 : 0, minWidth: 0 }}>{children}</div>}
     </article>
   );
@@ -198,10 +193,10 @@ function Stat({ label, value, delta, tone = "default", size = "md", loading = fa
   const safeDelta = delta == null ? "" : toText(delta);
   if (loading) return <Card loading />;
   return (
-    <div style={{ ...frameStyle, width: "100%", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 8, padding: safeSize === "lg" ? 14 : 11, overflow: "hidden" }}>
-      <div style={{ color: "var(--t3)", fontSize: 11, textTransform: "uppercase", letterSpacing: ".04em", fontWeight: 700, ...lineClamp(1) }}>{safeLabel}</div>
-      <div title={safeValue} style={{ color: toneColor[safeTone] === "var(--t2)" ? "var(--t1)" : toneColor[safeTone], fontSize: safeSize === "lg" ? 26 : safeSize === "sm" ? 18 : 22, fontWeight: 700, marginTop: 5, lineHeight: 1.05, ...lineClamp(1) }}>{safeValue}</div>
-      {safeDelta && <div title={safeDelta} style={{ color: "var(--t3)", fontSize: 12, marginTop: 5, ...lineClamp(1) }}>{safeDelta}</div>}
+    <div className="bg-2 bd r-md" style={{ ...frameStyle, width: "100%", padding: safeSize === "lg" ? 14 : 11, overflow: "hidden" }}>
+      <div className="c-3 t-xs fw-600" style={{ textTransform: "uppercase", letterSpacing: ".04em", ...lineClamp(1) }}>{safeLabel}</div>
+      <div title={safeValue} className="fw-600 mt-1 lh-tight" style={{ color: toneColor[safeTone] === "var(--t2)" ? "var(--t1)" : toneColor[safeTone], fontSize: safeSize === "lg" ? 26 : safeSize === "sm" ? 18 : 22, ...lineClamp(1) }}>{safeValue}</div>
+      {safeDelta && <div title={safeDelta} className="c-3 t-xs mt-1" style={{ ...lineClamp(1) }}>{safeDelta}</div>}
     </div>
   );
 }
@@ -234,17 +229,17 @@ function Table({ columns, rows, empty = "No rows", loading = false }: { columns?
   const normalized = cols.map((column) => typeof column === "string" ? { key: column, label: column, align: "left" as Align } : { key: toText(column.key), label: toText(column.label, column.key), align: asAlign(column.align) }).filter((column) => column.key);
   if (!normalized.length) return <Empty title={empty} body="No displayable columns are available." />;
   return (
-    <div style={{ ...scrollStyle, border: "1px solid var(--line)", borderRadius: 8 }}>
-      <table style={{ width: "100%", tableLayout: "fixed", borderCollapse: "collapse", fontSize: 12.5 }}>
+    <div className="bd r-md" style={{ ...scrollStyle }}>
+      <table className="t-xs" style={{ width: "100%", tableLayout: "fixed", borderCollapse: "collapse" }}>
         <thead>
-          <tr>{normalized.map((column) => <th key={column.key} title={column.label} style={{ textAlign: column.align, color: "var(--t3)", fontSize: 11, textTransform: "uppercase", letterSpacing: ".04em", padding: "8px 10px", borderBottom: "1px solid var(--line)", ...ellipsisLine() }}>{column.label}</th>)}</tr>
+          <tr>{normalized.map((column) => <th key={column.key} title={column.label} className="c-3 t-xs pt-2 pr-2 pb-2 pl-2 bd-b" style={{ textAlign: column.align, textTransform: "uppercase", letterSpacing: ".04em", ...ellipsisLine() }}>{column.label}</th>)}</tr>
         </thead>
         <tbody>
           {safeRows.map((row, rowIndex) => (
             <tr key={rowIndex}>
               {normalized.map((column, columnIndex) => {
                 const text = toText(readCell(row, column.key, columnIndex));
-                return <td key={column.key} title={text} style={{ color: "var(--t2)", textAlign: column.align, padding: "8px 10px", borderTop: rowIndex ? "1px solid var(--line)" : "none", verticalAlign: "top", ...ellipsisLine() }}>{text}</td>;
+                return <td key={column.key} title={text} className="c-2 pt-2 pr-2 pb-2 pl-2" style={{ textAlign: column.align, borderTop: rowIndex ? "1px solid var(--line)" : "none", verticalAlign: "top", ...ellipsisLine() }}>{text}</td>;
               })}
             </tr>
           ))}
@@ -269,12 +264,12 @@ function List({ items, empty = "No items", loading = false }: { items?: ListItem
         const body = toText(obj.body);
         const meta = obj.meta == null ? "" : toText(obj.meta);
         return (
-          <div key={`${title}-${index}`} style={{ ...frameStyle, border: "1px solid var(--line)", borderRadius: 8, background: "var(--panel)", padding: "8px 10px", overflow: "hidden" }}>
+          <div key={`${title}-${index}`} className="bd r-md bg-2 pt-2 pr-2 pb-2 pl-2" style={{ ...frameStyle, overflow: "hidden" }}>
             <div style={{ display: "flex", gap: 8, alignItems: "baseline", minWidth: 0 }}>
-              <div title={title} style={{ color: toneColor[safeTone] === "var(--t2)" ? "var(--t1)" : toneColor[safeTone], fontWeight: 600, fontSize: 13, flex: 1, ...lineClamp(1) }}>{title}</div>
-              {meta && <div title={meta} style={{ color: "var(--t3)", fontFamily: "var(--mono)", fontSize: 11, flex: "none", maxWidth: 120, ...lineClamp(1) }}>{meta}</div>}
+              <div title={title} className="fw-600 t-sm" style={{ color: toneColor[safeTone] === "var(--t2)" ? "var(--t1)" : toneColor[safeTone], flex: 1, ...lineClamp(1) }}>{title}</div>
+              {meta && <div title={meta} className="c-3 f-mono t-xs" style={{ flex: "none", maxWidth: 120, ...lineClamp(1) }}>{meta}</div>}
             </div>
-            {body && <div title={body} style={{ color: "var(--t2)", fontSize: 12, lineHeight: 1.45, marginTop: 4, ...lineClamp(3) }}>{body}</div>}
+            {body && <div title={body} className="c-2 t-xs lh-snug mt-1" style={{ ...lineClamp(3) }}>{body}</div>}
           </div>
         );
       })}
@@ -303,7 +298,7 @@ function EntityActionButton({ children, onClick }: { children?: ReactNode; onCli
     <button
       type="button"
       onClick={onClick}
-      style={{ border: "1px solid var(--line2)", borderRadius: 6, background: "var(--panel2)", color: "var(--t2)", padding: "3px 7px", fontSize: 11.5, fontWeight: 650, cursor: "pointer", maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+      className="bd-strong r-md bg-3 c-2 pt-0_5 pr-1_5 pb-0_5 pl-1_5 t-xs fw-600" style={{ cursor: "pointer", maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
     >
       {children}
     </button>
@@ -340,23 +335,23 @@ function EntityList({ items, empty = "No entities", loading = false }: { items?:
             onMouseLeave={() => { setHovered((current) => current === key ? null : current); setMenuOpen((current) => current === key ? null : current); }}
             style={{ ...frameStyle, position: "relative", display: "inline-flex", flexDirection: "column", alignItems: "flex-start", maxWidth: "100%", overflow: "visible" }}
           >
-            <div style={{ display: "inline-flex", alignItems: "center", gap: 6, maxWidth: "100%", minHeight: 28, border: "1px solid var(--line2)", borderRadius: 7, background: "var(--panel)", padding: "3px 5px 3px 7px", boxShadow: isHovered ? "0 0 0 1px var(--line2)" : "none" }}>
-              <span style={{ width: 7, height: 7, borderRadius: "50%", background: entityDotColor[rawItem.kind] ?? "var(--t3)", flex: "none" }} />
+            <div className="bd-strong r-md bg-2 pt-0_5 pr-1 pb-0_5 pl-1_5" style={{ display: "inline-flex", alignItems: "center", gap: 6, maxWidth: "100%", minHeight: 28, boxShadow: isHovered ? "0 0 0 1px var(--line2)" : "none" }}>
+              <span className="r-full" style={{ width: 7, height: 7, background: entityDotColor[rawItem.kind] ?? "var(--t3)", flex: "none" }} />
               <button
                 type="button"
                 title={canOpen ? docPath : name}
                 onClick={canOpen ? openDoc : undefined}
-                style={{ minWidth: 0, maxWidth: 168, border: "none", background: "transparent", color: canOpen ? "var(--t1)" : "var(--t2)", padding: 0, fontSize: 12.5, fontWeight: 700, cursor: canOpen ? "pointer" : "default", textAlign: "left", ...ellipsisLine() }}
+                className="bd-none bg-none p-0 t-xs fw-600" style={{ minWidth: 0, maxWidth: 168, color: canOpen ? "var(--t1)" : "var(--t2)", cursor: canOpen ? "pointer" : "default", textAlign: "left", ...ellipsisLine() }}
               >
                 {name}
               </button>
-              {context && <span title={context} style={{ color: "var(--t3)", fontSize: 11, maxWidth: 74, ...ellipsisLine() }}>{context}</span>}
+              {context && <span title={context} className="c-3 t-xs" style={{ maxWidth: 74, ...ellipsisLine() }}>{context}</span>}
               {rawItem.researched === false ? (
-                <button type="button" onClick={research} style={{ border: "none", background: "transparent", color: "var(--accent)", padding: "0 1px", fontSize: 11.5, fontWeight: 750, cursor: "pointer", whiteSpace: "nowrap" }}>
+                <button type="button" onClick={research} className="bd-none bg-none c-accent pt-0 pr-0 pb-0 pl-0 t-xs fw-600" style={{ cursor: "pointer", whiteSpace: "nowrap" }}>
                   + research
                 </button>
               ) : docPath ? (
-                <button type="button" onClick={openDoc} style={{ border: "none", background: "transparent", color: "var(--blue)", padding: "0 1px", fontSize: 11.5, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
+                <button type="button" onClick={openDoc} className="bd-none bg-none c-info pt-0 pr-0 pb-0 pl-0 t-xs fw-600" style={{ cursor: "pointer", whiteSpace: "nowrap" }}>
                   doc
                 </button>
               ) : null}
@@ -364,23 +359,23 @@ function EntityList({ items, empty = "No entities", loading = false }: { items?:
                 type="button"
                 aria-label={`Options for ${name}`}
                 onClick={() => setMenuOpen((current) => current === key ? null : key)}
-                style={{ border: "none", background: "transparent", color: "var(--t3)", padding: "0 2px", fontSize: 13, lineHeight: 1, cursor: "pointer", flex: "none" }}
+                className="bd-none bg-none c-3 pt-0 pr-0_5 pb-0 pl-0_5 t-sm lh-tight" style={{ cursor: "pointer", flex: "none" }}
               >
                 ▾
               </button>
             </div>
             {isMenuOpen && (
-              <div style={{ position: "absolute", top: 31, right: 0, zIndex: 5, minWidth: 130, border: "1px solid var(--line)", borderRadius: 7, background: "var(--panel)", boxShadow: "0 12px 32px rgba(0,0,0,.28)", padding: 4 }}>
-                {docPath && <button type="button" onClick={openDoc} style={{ width: "100%", border: "none", borderRadius: 5, background: "transparent", color: "var(--t2)", textAlign: "left", padding: "6px 8px", fontSize: 12, cursor: "pointer" }}>Open doc</button>}
-                <button type="button" onClick={research} style={{ width: "100%", border: "none", borderRadius: 5, background: "transparent", color: "var(--t2)", textAlign: "left", padding: "6px 8px", fontSize: 12, cursor: "pointer" }}>Research</button>
-                <button type="button" onClick={copyRef} style={{ width: "100%", border: "none", borderRadius: 5, background: "transparent", color: "var(--t2)", textAlign: "left", padding: "6px 8px", fontSize: 12, cursor: "pointer" }}>Copy ref</button>
+              <div className="bd r-md bg-2 p-1" style={{ position: "absolute", top: 31, right: 0, zIndex: 5, minWidth: 130, boxShadow: "0 12px 32px rgba(0,0,0,.28)" }}>
+                {docPath && <button type="button" onClick={openDoc} className="bd-none r-md bg-none c-2 pt-1_5 pr-2 pb-1_5 pl-2 t-xs" style={{ width: "100%", textAlign: "left", cursor: "pointer" }}>Open doc</button>}
+                <button type="button" onClick={research} className="bd-none r-md bg-none c-2 pt-1_5 pr-2 pb-1_5 pl-2 t-xs" style={{ width: "100%", textAlign: "left", cursor: "pointer" }}>Research</button>
+                <button type="button" onClick={copyRef} className="bd-none r-md bg-none c-2 pt-1_5 pr-2 pb-1_5 pl-2 t-xs" style={{ width: "100%", textAlign: "left", cursor: "pointer" }}>Copy ref</button>
               </div>
             )}
             {isHovered && (summary || quote) && (
-              <div style={{ ...frameStyle, width: "min(280px, calc(100vw - 48px))", marginTop: 6, border: "1px solid var(--line)", borderRadius: 8, background: "var(--panel)", boxShadow: "0 12px 32px rgba(0,0,0,.24)", padding: 9, zIndex: 4 }}>
-                {summary && <div title={summary} style={{ color: "var(--t2)", fontSize: 12, lineHeight: 1.4, ...lineClamp(3) }}>{summary}</div>}
-                {quote && <div title={quote} style={{ color: "var(--t3)", fontSize: 11.5, fontStyle: "italic", lineHeight: 1.4, marginTop: summary ? 6 : 0, ...lineClamp(3) }}>{quote}</div>}
-                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
+              <div className="mt-1_5 bd r-md bg-2 p-2" style={{ ...frameStyle, width: "min(280px, calc(100vw - 48px))", boxShadow: "0 12px 32px rgba(0,0,0,.24)", zIndex: 4 }}>
+                {summary && <div title={summary} className="c-2 t-xs lh-snug" style={{ ...lineClamp(3) }}>{summary}</div>}
+                {quote && <div title={quote} className="c-3 t-xs lh-snug" style={{ fontStyle: "italic", marginTop: summary ? 6 : 0, ...lineClamp(3) }}>{quote}</div>}
+                <div className="mt-2" style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                   {docPath && <EntityActionButton onClick={openDoc}>Open doc</EntityActionButton>}
                   <EntityActionButton onClick={research}>Research</EntityActionButton>
                   <EntityActionButton onClick={copyRef}>Copy ref</EntityActionButton>
@@ -405,7 +400,7 @@ function Timeline({ items, empty = "No events", loading = false }: { items?: { i
         const marker = item.ts != null ? toText(item.ts) : toText(item.kind);
         return (
           <div key={item.id ?? `${title}-${index}`} style={{ display: "grid", gridTemplateColumns: "minmax(48px, 74px) minmax(0, 1fr)", gap: 10, minWidth: 0 }}>
-            <div title={marker} style={{ color: "var(--t3)", fontFamily: "var(--mono)", fontSize: 11, paddingTop: 2, ...lineClamp(1) }}>{marker}</div>
+            <div title={marker} className="c-3 f-mono t-xs pt-0_5" style={{ ...lineClamp(1) }}>{marker}</div>
             <Card title={title} body={item.body} />
           </div>
         );
@@ -421,14 +416,14 @@ function Transcript({ segments, liveCaption, empty = "Nothing said yet", loading
   if (!safeSegments.length && !caption) return <Empty title={empty} body="Transcript lines will appear once speech is available." />;
   return (
     <div style={{ ...scrollStyle, display: "flex", flexDirection: "column", gap: 8, maxHeight: 420 }}>
-      {caption && <div title={caption} style={{ color: "var(--t1)", background: "var(--panel2)", border: "1px solid var(--line2)", borderRadius: 8, padding: "8px 10px", fontSize: 13, ...lineClamp(2) }}>{caption}</div>}
+      {caption && <div title={caption} className="c-1 bg-3 bd-strong r-md pt-2 pr-2 pb-2 pl-2 t-sm" style={{ ...lineClamp(2) }}>{caption}</div>}
       {safeSegments.map((segment, index) => {
         const speaker = toText(segment.speaker, "Speaker");
         const text = toText(segment.text);
         return (
-          <div key={`${index}-${segment.ts ?? ""}-${speaker}`} style={{ display: "grid", gridTemplateColumns: "minmax(68px, 92px) minmax(0, 1fr)", gap: 9, fontSize: 12.5, minWidth: 0 }}>
-            <div title={speaker} style={{ color: "var(--t3)", ...lineClamp(1) }}>{speaker}</div>
-            <div title={text} style={{ color: "var(--t2)", lineHeight: 1.45, ...lineClamp(3) }}>{text}</div>
+          <div key={`${index}-${segment.ts ?? ""}-${speaker}`} className="t-xs" style={{ display: "grid", gridTemplateColumns: "minmax(68px, 92px) minmax(0, 1fr)", gap: 9, minWidth: 0 }}>
+            <div title={speaker} className="c-3" style={{ ...lineClamp(1) }}>{speaker}</div>
+            <div title={text} className="c-2 lh-snug" style={{ ...lineClamp(3) }}>{text}</div>
           </div>
         );
       })}
@@ -474,8 +469,8 @@ function LiveTranscript({ segments, liveCaption, empty = "waiting for transcript
   if (!tail.length) {
     return (
       <div role="status" aria-live="polite" style={{ ...bandStyle, display: "flex", alignItems: "center" }}>
-        <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--t3)", flex: "none", marginRight: 8 }} />
-        <span style={{ color: "var(--t3)", fontSize: 12.5, fontStyle: "italic", ...ellipsisLine() }}>{toText(empty, "waiting for transcript…")}</span>
+        <span className="r-full mr-2" style={{ width: 7, height: 7, background: "var(--t3)", flex: "none" }} />
+        <span className="c-3 t-xs" style={{ fontStyle: "italic", ...ellipsisLine() }}>{toText(empty, "waiting for transcript…")}</span>
       </div>
     );
   }
@@ -488,11 +483,11 @@ function LiveTranscript({ segments, liveCaption, empty = "waiting for transcript
           return (
             <div
               key={`${index}-${line.speaker}-${line.text.slice(0, 24)}`}
-              style={{ marginBottom: isLast ? 0 : 5, color: line.live || isLast ? "var(--t1)" : "var(--t3)", fontSize: 12.5, lineHeight: 1.5, overflowWrap: "anywhere" }}
+              className="t-xs lh-snug" style={{ marginBottom: isLast ? 0 : 5, color: line.live || isLast ? "var(--t1)" : "var(--t3)", overflowWrap: "anywhere" }}
             >
-              <span style={{ color: line.live ? "var(--green)" : "var(--t3)", fontWeight: 750, marginRight: 5 }}>{line.speaker}:</span>
+              <span className="fw-600 mr-1" style={{ color: line.live ? "var(--green)" : "var(--t3)" }}>{line.speaker}:</span>
               <span>{line.text}</span>
-              {line.live && <span aria-hidden="true" style={{ opacity: 0.5, marginLeft: 4 }}>•••</span>}
+              {line.live && <span aria-hidden="true" className="ml-1" style={{ opacity: 0.5 }}>•••</span>}
             </div>
           );
         })}
@@ -520,12 +515,12 @@ function NoteTagChip({ label, kind, context, onClick }: { label: string; kind?: 
       onMouseLeave={() => setHover(false)}
       title={`Ask the chat about “${label}”`}
       aria-label={`Ask the chat about ${label}`}
-      style={{ display: "inline-flex", alignItems: "center", gap: 5, verticalAlign: "baseline", background: active ? "var(--accentbg)" : "var(--panel2)", border: `1px solid ${active ? "var(--accent)" : "var(--line2)"}`, borderRadius: 999, padding: "1px 8px", margin: "0 1px", fontSize: 12.5, fontWeight: 550, color: active ? "var(--accent)" : "var(--t1)", whiteSpace: "nowrap", cursor: clickable ? "pointer" : "default", fontFamily: "inherit", lineHeight: 1.4 }}
+      className="r-full pt-0 pr-2 pb-0 pl-2 mt-0 mr-0 mb-0 ml-0 t-xs fw-500 lh-snug" style={{ display: "inline-flex", alignItems: "center", gap: 5, verticalAlign: "baseline", background: active ? "var(--accentbg)" : "var(--panel2)", border: `1px solid ${active ? "var(--accent)" : "var(--line2)"}`, color: active ? "var(--accent)" : "var(--t1)", whiteSpace: "nowrap", cursor: clickable ? "pointer" : "default", fontFamily: "inherit" }}
     >
-      <span aria-hidden="true" style={{ width: 6, height: 6, borderRadius: "50%", background: active ? "var(--accent)" : dot, flex: "none" }} />
+      <span aria-hidden="true" className="r-full" style={{ width: 6, height: 6, background: active ? "var(--accent)" : dot, flex: "none" }} />
       {label}
-      {context ? <span style={{ color: active ? "var(--accent)" : "var(--t3)", fontWeight: 400 }}>· {context}</span> : null}
-      {clickable ? <span aria-hidden="true" style={{ marginLeft: 1, fontSize: 11, opacity: hover ? 1 : 0.55 }}>↗</span> : null}
+      {context ? <span className="fw-400" style={{ color: active ? "var(--accent)" : "var(--t3)" }}>· {context}</span> : null}
+      {clickable ? <span aria-hidden="true" className="ml-0 t-xs" style={{ opacity: hover ? 1 : 0.55 }}>↗</span> : null}
     </button>
   );
 }
@@ -639,17 +634,17 @@ function LiveNotes({ notes, empty = "condensing the conversation…", loading = 
                 <span />
                 <div title={block.chapter} style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
                   <span aria-hidden="true" style={{ height: 1, background: "var(--line2)", flex: "1 1 16px", minWidth: 16 }} />
-                  <span style={{ color: "var(--t3)", fontSize: 11, fontWeight: 750, textTransform: "uppercase", letterSpacing: ".04em", flex: "none", maxWidth: "min(320px, 70%)", ...lineClamp(1) }}>{block.chapter}</span>
+                  <span className="c-3 t-xs fw-600" style={{ textTransform: "uppercase", letterSpacing: ".04em", flex: "none", maxWidth: "min(320px, 70%)", ...lineClamp(1) }}>{block.chapter}</span>
                   <span aria-hidden="true" style={{ height: 1, background: "var(--line2)", flex: "8 1 32px", minWidth: 32 }} />
                 </div>
               </div>
             ) : null}
             <div style={{ display: "grid", gridTemplateColumns: "minmax(78px, 106px) minmax(0, 1fr)", gap: 10, alignItems: "baseline", minWidth: 0 }}>
-              <span style={{ minWidth: 0, paddingTop: 1 }}>
-                <span title={block.speaker} style={{ display: "block", color: "var(--t2)", fontSize: 12, fontWeight: 650, ...lineClamp(1) }}>{block.speaker}</span>
-                {block.clock ? <span style={{ display: "block", marginTop: 2, fontSize: 10.5, color: "var(--t3)", fontFamily: "var(--mono)", ...lineClamp(1) }}>{block.clock}</span> : null}
+              <span className="pt-0" style={{ minWidth: 0 }}>
+                <span title={block.speaker} className="c-2 t-xs fw-600" style={{ display: "block", ...lineClamp(1) }}>{block.speaker}</span>
+                {block.clock ? <span className="mt-0_5 t-xs c-3 f-mono" style={{ display: "block", ...lineClamp(1) }}>{block.clock}</span> : null}
               </span>
-              <div style={{ fontSize: 14, lineHeight: 1.5, color: "var(--t1)", overflowWrap: "anywhere", minWidth: 0 }}>
+              <div className="t-md lh-snug c-1" style={{ overflowWrap: "anywhere", minWidth: 0 }}>
                 {block.lines.map((note, lineIndex) => {
                   const pending = note.completed === false;
                   return (
@@ -659,7 +654,7 @@ function LiveNotes({ notes, empty = "condensing the conversation…", loading = 
                     >
                       {lineIndex ? " " : null}
                       <NoteBody text={toText(note.text)} tags={safeArray(note.tags)} onTag={onTag} />
-                      {pending ? <span aria-hidden="true" style={{ marginLeft: 4, opacity: 0.6 }}>•••</span> : null}
+                      {pending ? <span aria-hidden="true" className="ml-1" style={{ opacity: 0.6 }}>•••</span> : null}
                     </span>
                   );
                 })}
@@ -686,7 +681,7 @@ function Chart({ kind = "bar", data, tone = "accent", loading = false }: { kind?
   const points = values.map((value, index) => `${(index / Math.max(1, values.length - 1)) * 100},${42 - (value / max) * 36 + 3}`).join(" ");
   const safeTone = asTone(tone);
   return (
-    <svg viewBox="0 0 100 48" preserveAspectRatio="none" style={{ width: "100%", maxWidth: "100%", height: 110, display: "block", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 8, overflow: "hidden" }}>
+    <svg viewBox="0 0 100 48" preserveAspectRatio="none" className="bg-2 bd r-md" style={{ width: "100%", maxWidth: "100%", height: 110, display: "block", overflow: "hidden" }}>
       {kind === "line"
         ? <polyline points={points} fill="none" stroke={toneColor[safeTone]} strokeWidth="2" vectorEffect="non-scaling-stroke" />
         : values.map((value, index) => {
@@ -700,8 +695,9 @@ function Chart({ kind = "bar", data, tone = "accent", loading = false }: { kind?
 
 function Badge({ children, tone = "default", loading = false }: { children?: ReactNode; tone?: Tone } & Loadable) {
   if (loading) return <span style={{ display: "inline-flex", width: 58 }}><Skeleton lines={1} compact /></span>;
-  const safeTone = asTone(tone);
-  return <span style={{ ...frameStyle, display: "inline-flex", alignItems: "center", maxWidth: "100%", padding: "2px 7px", borderRadius: 5, background: toneBg[safeTone], color: toneColor[safeTone], fontSize: 11, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{children ?? "Status"}</span>;
+  // RE-POINTED (guidelines §4.18, Phase 2f): the agent-facing `ui.Badge` API is unchanged; it
+  // renders the terminal's own Badge, so a canvas status looks like every other status.
+  return <UiBadge tone={BADGE_TONE[asTone(tone)]}>{children ?? "Status"}</UiBadge>;
 }
 
 function Tag({ children, tone = "default", loading = false }: { children?: ReactNode; tone?: Tone } & Loadable) {
@@ -709,13 +705,15 @@ function Tag({ children, tone = "default", loading = false }: { children?: React
 }
 
 function Button({ children, tone = "default", size = "md", disabled, loading = false, onClick }: { children?: ReactNode; tone?: Tone; size?: Size; disabled?: boolean; onClick?: () => void } & Loadable) {
+  // RE-POINTED: `ui.Button` keeps its props; it renders the terminal's Button (accent tone = the
+  // primary action, every other tone = secondary — a canvas does not get its own button looks).
   const safeTone = asTone(tone);
-  const safeSize = asSize(size);
   const isDisabled = Boolean(disabled || loading);
   return (
-    <button type="button" onClick={isDisabled ? undefined : onClick} disabled={isDisabled} style={{ ...frameStyle, border: "1px solid var(--line2)", borderRadius: 7, background: isDisabled ? "var(--panel2)" : safeTone === "default" ? "var(--panel)" : toneBg[safeTone], color: isDisabled ? "var(--t3)" : safeTone === "default" ? "var(--t1)" : toneColor[safeTone], padding: safeSize === "sm" ? "4px 8px" : safeSize === "lg" ? "9px 13px" : "7px 10px", fontSize: textSize[safeSize], fontWeight: 650, cursor: isDisabled ? "default" : "pointer", maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+    <UiButton variant={safeTone === "accent" ? "primary" : "secondary"} size={asSize(size) === "sm" ? "sm" : "md"}
+      onClick={isDisabled ? undefined : onClick} disabled={isDisabled} loading={loading}>
       {loading ? "Loading" : children ?? "Action"}
-    </button>
+    </UiButton>
   );
 }
 
@@ -724,9 +722,9 @@ function Toggle({ checked = false, label, loading = false, onChange }: { checked
   const isChecked = Boolean(checked);
   const safeLabel = toText(label);
   return (
-    <button type="button" onClick={() => onChange?.(!isChecked)} style={{ ...frameStyle, display: "inline-flex", alignItems: "center", gap: 8, border: "none", background: "transparent", color: "var(--t2)", fontSize: 12.5, cursor: "pointer", maxWidth: "100%", overflow: "hidden" }}>
-      <span style={{ width: 30, height: 16, borderRadius: 999, background: isChecked ? "var(--greenbg)" : "var(--panel2)", border: "1px solid var(--line2)", position: "relative", flex: "none" }}>
-        <span style={{ position: "absolute", width: 12, height: 12, top: 1, left: isChecked ? 15 : 1, borderRadius: "50%", background: isChecked ? "var(--green)" : "var(--t3)" }} />
+    <button type="button" onClick={() => onChange?.(!isChecked)} className="bd-none bg-none c-2 t-xs" style={{ ...frameStyle, display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer", maxWidth: "100%", overflow: "hidden" }}>
+      <span className="r-full bd-strong" style={{ width: 30, height: 16, background: isChecked ? "var(--greenbg)" : "var(--panel2)", position: "relative", flex: "none" }}>
+        <span className="r-full" style={{ position: "absolute", width: 12, height: 12, top: 1, left: isChecked ? 15 : 1, background: isChecked ? "var(--green)" : "var(--t3)" }} />
       </span>
       {safeLabel && <span title={safeLabel} style={{ ...lineClamp(1) }}>{safeLabel}</span>}
     </button>
@@ -742,16 +740,9 @@ function Tabs({ tabs, value, loading = false, onChange }: { tabs?: { id: string;
   const current = safeTabs.find((tab) => tab.id === active) ?? safeTabs[0];
   return (
     <div style={{ ...frameStyle, width: "100%", overflow: "hidden" }}>
-      <div style={{ display: "inline-flex", maxWidth: "100%", padding: 3, gap: 2, background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 8, marginBottom: 10, overflow: "auto" }}>
-        {safeTabs.map((tab) => {
-          const label = toText(tab.label, tab.id);
-          return (
-            <button key={tab.id} type="button" onClick={() => { setInternal(tab.id); onChange?.(tab.id); }} title={label} style={{ border: "none", borderRadius: 6, background: tab.id === active ? "var(--panel2)" : "transparent", color: tab.id === active ? "var(--t1)" : "var(--t3)", padding: "5px 9px", fontSize: 12, cursor: "pointer", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: "none" }}>
-              {label}
-            </button>
-          );
-        })}
-      </div>
+      {/* RE-POINTED: the terminal's Tabs (WAI-ARIA, roving tabindex) under the same `ui.Tabs` API */}
+      <div className="mb-3"><UiTabs label="Sections" value={current?.id ?? ""} onChange={(id) => { setInternal(id); onChange?.(id); }}
+        items={safeTabs.map((tab) => ({ key: tab.id, label: toText(tab.label, tab.id) }))} /></div>
       <div style={{ minWidth: 0, maxWidth: "100%" }}>{current?.content}</div>
     </div>
   );
@@ -765,8 +756,8 @@ function Progress({ value = 0, max = 100, tone = "accent", label, loading = fals
   const safeTone = asTone(tone);
   return (
     <div style={{ ...frameStyle, width: "100%", overflow: "hidden" }}>
-      {safeLabel && <div title={safeLabel} style={{ color: "var(--t3)", fontSize: 12, marginBottom: 5, ...lineClamp(1) }}>{safeLabel}</div>}
-      <div style={{ height: 7, background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 999, overflow: "hidden" }}>
+      {safeLabel && <div title={safeLabel} className="c-3 t-xs mb-1" style={{ ...lineClamp(1) }}>{safeLabel}</div>}
+      <div className="bg-3 bd r-full" style={{ height: 7, overflow: "hidden" }}>
         <div style={{ height: "100%", width: `${pct}%`, background: toneColor[safeTone] }} />
       </div>
     </div>
@@ -780,7 +771,7 @@ function Avatar({ name, tone = "default", size = "md", loading = false }: { name
   const safeName = toText(name, "Unknown");
   const initials = safeName.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join("") || "?";
   const safeTone = asTone(tone);
-  return <span title={safeName} style={{ width: px, height: px, minWidth: px, borderRadius: "50%", display: "inline-flex", alignItems: "center", justifyContent: "center", background: toneBg[safeTone], color: toneColor[safeTone], fontSize: safeSize === "lg" ? 13 : 11, fontWeight: 800, overflow: "hidden" }}>{initials}</span>;
+  return <span title={safeName} className="r-full fw-600" style={{ width: px, height: px, minWidth: px, display: "inline-flex", alignItems: "center", justifyContent: "center", background: toneBg[safeTone], color: toneColor[safeTone], fontSize: safeSize === "lg" ? 13 : 11, overflow: "hidden" }}>{initials}</span>;
 }
 
 function Markdown({ children, loading = false }: { children?: string } & Loadable) {

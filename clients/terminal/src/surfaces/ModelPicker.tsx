@@ -22,7 +22,7 @@
  *  set, an effort the model does not offer) is shown as the server's own sentence; the stored pick
  *  is left as it was. */
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
-import { Fold, Icon } from "../ui-kit";
+import { Fold, Icon, type MenuItem } from "../ui-kit";
 import { Gauge } from "lucide-react";
 import { presentError } from "./apiClient";
 import { effectiveModel, effortsOf, getModelCatalog, setChatModel, setDefaultModel, type Effort, type ModelEntry, type ModelList } from "./modelsApi";
@@ -130,7 +130,10 @@ function contextLabel(m: ModelEntry): string | null {
   return n >= 1024 ? `${Math.round(n / 1024)}k` : String(n);   // 32768 → 32k, as models are named
 }
 
-export function ModelPicker({ session }: { session: string }) {
+/** `onEffortItems` — the composer's "⋯" menu: below 400px of composer the effort control leaves
+ *  the toolbar and its levels are offered there instead (guidelines §3.3). The picker reports the
+ *  items (or null when the model has no effort control); the composer renders them. */
+export function ModelPicker({ session, onEffortItems }: { session: string; onEffortItems?: (items: MenuItem[] | null) => void }) {
   const [list, setList] = useState<ModelList | null>(null);
   const [open, setOpen] = useState(false);
   const [effortOpen, setEffortOpen] = useState(false);
@@ -161,6 +164,30 @@ export function ModelPicker({ session }: { session: string }) {
       .catch(() => { if (!cancelled) setList(null); });   // no catalog route → no picker
     return () => { cancelled = true; };
   }, [session]);
+
+  // Report the effort levels to the composer's overflow menu whenever they change.
+  const pickEffortRef = useRef<(lvl: Effort | "") => void>(() => {});
+  const reportRef = useRef(onEffortItems);
+  reportRef.current = onEffortItems;
+  const effortModel = list && list.models.length ? effectiveModel(list) : null;
+  const effortStale = !!list?.selected && !list.models.some((m) => m.id === list.selected);
+  const effortLevels = effortStale ? [] : effortsOf(effortModel);
+  const effortDefaultLevel = effortModel?.capabilities.default_effort ?? null;
+  const effortPicked: Effort | "" = list?.selected_effort ?? effortDefaultLevel ?? "";
+  const effortKey = `${effortLevels.join(",")}|${effortPicked}|${effortDefaultLevel ?? ""}`;
+  useEffect(() => {
+    const report = reportRef.current;
+    if (!report) return;
+    if (effortLevels.length === 0) { report(null); return; }
+    const levels: (Effort | "")[] = [...(effortDefaultLevel ? [] : [""] as const), ...effortLevels];
+    report(levels.map((lvl, i) => ({
+      key: `effort:${lvl || "default"}`, separatorBefore: i === 0,
+      label: lvl ? `Effort: ${EFFORT_LABEL[lvl]}` : "Effort: default", checked: effortPicked === lvl,
+      data: { "data-effort-level": lvl }, onSelect: () => pickEffortRef.current(lvl),
+    })));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the key is the dependency
+  }, [effortKey]);
+  useEffect(() => () => reportRef.current?.(null), []);
 
   if (!list || list.models.length === 0) return null;
 
@@ -202,10 +229,36 @@ export function ModelPicker({ session }: { session: string }) {
     }
   };
 
+  pickEffortRef.current = (lvl) => void pickEffort(lvl);
   const efforts = stale ? [] : effortsOf(current);
   const effortDefault = current?.capabilities.default_effort ?? null;
   const effortValue: Effort | "" = list.selected_effort ?? effortDefault ?? "";
   const name = stale ? "Model unavailable" : current ? splitDisplayName(current.display_name).short : "Model";
+  const effortMenu = (
+        <TextMenu open={effortOpen} setOpen={(v) => { setEffortOpen(v); if (v) setOpen(false); }} buttonLabel="Effort for this chat"
+            title={`Reasoning effort for ${name}`} data={{ "data-effort-picker": "", "data-effort": effortValue }}
+            // Below 560px of composer the effort is an icon (its name stays the button's title and
+            // accessible name), so the model's name keeps the room (guidelines §3.3).
+            label={<Fold at={560} wide={effortValue ? EFFORT_LABEL[effortValue] : "Default effort"}
+              narrow={<Gauge size={14} strokeWidth={1.75} aria-hidden />} />} width={190}>
+            {!effortDefault && (
+              <button type="button" role="menuitemradio" aria-checked={effortValue === ""} data-effort-level=""
+                onClick={() => { setEffortOpen(false); void pickEffort(""); }} style={item}>
+                <span style={{ width: 13, flex: "none", display: "flex" }}>{effortValue === "" ? <Icon name="check" size={13} /> : null}</span>
+                <span style={ellipsis}>Default</span>
+              </button>
+            )}
+            {efforts.map((lvl) => (
+              <button key={lvl} type="button" role="menuitemradio" aria-checked={effortValue === lvl} data-effort-level={lvl}
+                onClick={() => { setEffortOpen(false); void pickEffort(lvl); }}
+                style={{ ...item, background: effortValue === lvl ? "var(--panel2)" : "transparent", color: effortValue === lvl ? "var(--t1)" : "var(--t2)" }}>
+                <span style={{ width: 13, flex: "none", display: "flex" }}>{effortValue === lvl ? <Icon name="check" size={13} /> : null}</span>
+                <span style={{ flex: 1, ...ellipsis }}>{EFFORT_LABEL[lvl]}</span>
+                {lvl === effortDefault && <span style={muted}>default</span>}
+              </button>
+            ))}
+          </TextMenu>
+  );
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 2, minWidth: 0, flex: "0 1 auto", position: "relative" }}>
       <div data-model-picker style={{ minWidth: 56, display: "flex" }}>
@@ -246,31 +299,9 @@ export function ModelPicker({ session }: { session: string }) {
           <div style={{ ...muted, padding: "4px 8px 6px" }}>A new pick takes effect on this chat&apos;s next message.</div>
         </TextMenu>
       </div>
-      {efforts.length > 0 && (
-        <TextMenu open={effortOpen} setOpen={(v) => { setEffortOpen(v); if (v) setOpen(false); }} buttonLabel="Effort for this chat"
-          title={`Reasoning effort for ${name}`} data={{ "data-effort-picker": "", "data-effort": effortValue }}
-          // Below 560px of composer the effort is an icon (its name stays the button's title and
-          // accessible name), so the model's name keeps the room (guidelines §3.3).
-          label={<Fold at={560} wide={effortValue ? EFFORT_LABEL[effortValue] : "Default effort"}
-            narrow={<Gauge size={14} strokeWidth={1.75} aria-hidden />} />} width={190}>
-          {!effortDefault && (
-            <button type="button" role="menuitemradio" aria-checked={effortValue === ""} data-effort-level=""
-              onClick={() => { setEffortOpen(false); void pickEffort(""); }} style={item}>
-              <span style={{ width: 13, flex: "none", display: "flex" }}>{effortValue === "" ? <Icon name="check" size={13} /> : null}</span>
-              <span style={ellipsis}>Default</span>
-            </button>
-          )}
-          {efforts.map((lvl) => (
-            <button key={lvl} type="button" role="menuitemradio" aria-checked={effortValue === lvl} data-effort-level={lvl}
-              onClick={() => { setEffortOpen(false); void pickEffort(lvl); }}
-              style={{ ...item, background: effortValue === lvl ? "var(--panel2)" : "transparent", color: effortValue === lvl ? "var(--t1)" : "var(--t2)" }}>
-              <span style={{ width: 13, flex: "none", display: "flex" }}>{effortValue === lvl ? <Icon name="check" size={13} /> : null}</span>
-              <span style={{ flex: 1, ...ellipsis }}>{EFFORT_LABEL[lvl]}</span>
-              {lvl === effortDefault && <span style={muted}>default</span>}
-            </button>
-          ))}
-        </TextMenu>
-      )}
+      {efforts.length > 0 && (onEffortItems
+        ? <Fold at={400} wide={effortMenu} narrow={null} />
+        : effortMenu)}
       {error && (
         <div role="alert" style={{ position: "absolute", bottom: 34, right: 0, width: 260, maxWidth: "calc(100vw - 32px)", padding: "6px 8px", borderRadius: 8,
           border: "1px solid var(--line)", background: "var(--panel)", color: "var(--danger)", fontSize: 12, lineHeight: 1.35 }}>

@@ -19,6 +19,7 @@ import { EntityProperties, entityProperties } from "./EntityProperties";
 import { Markdown, stripHtmlComments } from "./Markdown";
 import { DocImage } from "./docImages";
 import { MermaidDiagram, isMermaidFence } from "./docDiagrams";
+import { ExternalLink } from "./primitives/Links";
 import { Icon } from "./index";
 import {
   Card, CardGroup, DocMetaContext, DocNavContext, DocPath, ENTITY_CHIP, DEFAULT_ENTITY_CHIP, InternalLink,
@@ -40,9 +41,9 @@ export { DocMetaContext, DocNavContext, ENTITY_CHIP, DEFAULT_ENTITY_CHIP, type D
 function Callout({ tone, icon, children }: { tone: "blue" | "accent"; icon: string; children?: ReactNode }) {
   const color = tone === "blue" ? "var(--blue)" : "var(--accent)";
   return (
-    <div style={{ display: "flex", gap: 10, border: "1px solid var(--line)", borderLeft: `3px solid ${color}`, borderRadius: 8, background: "var(--panel)", padding: "10px 13px", margin: "8px 0 12px", lineHeight: 1.55 }}>
-      <span style={{ color, flex: "none", marginTop: 2 }}><Icon name={icon} size={14} /></span>
-      <div style={{ color: "var(--t2)", minWidth: 0 }}>{children}</div>
+    <div className="bd r-md bg-2 pt-2 pr-3 pb-2 pl-3 mt-2 mr-0 mb-3 ml-0 lh-normal" style={{ display: "flex", gap: 10, borderLeft: `3px solid ${color}` }}>
+      <span className="mt-0_5" style={{ color, flex: "none" }}><Icon name={icon} size={14} /></span>
+      <div className="c-2" style={{ minWidth: 0 }}>{children}</div>
     </div>
   );
 }
@@ -55,14 +56,14 @@ const Warning = ({ children }: { children?: ReactNode }) => <Callout tone="accen
 function Steps({ children }: { children?: ReactNode }) {
   const items = Array.isArray(children) ? children : [children];
   return (
-    <div style={{ margin: "8px 0 12px", display: "flex", flexDirection: "column" }}>
+    <div className="mt-2 mr-0 mb-3 ml-0" style={{ display: "flex", flexDirection: "column" }}>
       {items.filter(Boolean).map((child, i) => (
         <div key={i} style={{ display: "flex", gap: 12 }}>
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", flex: "none" }}>
-            <div style={{ width: 22, height: 22, borderRadius: 11, background: "var(--panel2)", border: "1px solid var(--line2)", color: "var(--t1)", fontSize: 11.5, fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "center" }}>{i + 1}</div>
+            <div className="r-lg bg-3 bd-strong c-1 t-xs fw-600" style={{ width: 22, height: 22, display: "flex", alignItems: "center", justifyContent: "center" }}>{i + 1}</div>
             {i < items.length - 1 && <div style={{ width: 1, flex: 1, background: "var(--line)" }} />}
           </div>
-          <div style={{ paddingBottom: 14, minWidth: 0, flex: 1 }}>{child}</div>
+          <div className="pb-3" style={{ minWidth: 0, flex: 1 }}>{child}</div>
         </div>
       ))}
     </div>
@@ -72,8 +73,8 @@ function Steps({ children }: { children?: ReactNode }) {
 function Step({ title, children }: { title?: string; children?: ReactNode }) {
   return (
     <div>
-      {title && <div style={{ fontWeight: 600, color: "var(--t1)", fontSize: 13.5, marginBottom: 4, lineHeight: "22px" }}>{title}</div>}
-      <div style={{ color: "var(--t2)", lineHeight: 1.55 }}>{children}</div>
+      {title && <div className="fw-600 c-1 t-sm mb-1" style={{ lineHeight: "22px" }}>{title}</div>}
+      <div className="c-2 lh-normal">{children}</div>
     </div>
   );
 }
@@ -82,16 +83,16 @@ function Tabs({ children }: { children?: ReactNode }) {
   const items = (Array.isArray(children) ? children : [children]).filter(Boolean) as Array<{ props?: { title?: string; children?: ReactNode } }>;
   const [active, setActive] = useState(0);
   return (
-    <div style={{ border: "1px solid var(--line)", borderRadius: 10, margin: "8px 0 12px", overflow: "hidden" }}>
-      <div style={{ display: "flex", gap: 2, background: "var(--panel)", borderBottom: "1px solid var(--line)", padding: "4px 6px" }}>
+    <div className="bd r-lg mt-2 mr-0 mb-3 ml-0" style={{ overflow: "hidden" }}>
+      <div className="bg-2 bd-b pt-1 pr-1_5 pb-1 pl-1_5" style={{ display: "flex", gap: 2 }}>
         {items.map((t, i) => (
           <button key={i} onClick={() => setActive(i)}
-            style={{ border: "none", background: i === active ? "var(--panel2)" : "transparent", color: i === active ? "var(--t1)" : "var(--t3)", fontSize: 12.5, fontWeight: i === active ? 600 : 400, padding: "5px 11px", borderRadius: 7, cursor: "pointer" }}>
+            className="bd-none t-xs pt-1 pr-3 pb-1 pl-3 r-md" style={{ background: i === active ? "var(--panel2)" : "transparent", color: i === active ? "var(--t1)" : "var(--t3)", fontWeight: i === active ? 600 : 400, cursor: "pointer" }}>
             {t.props?.title ?? `Tab ${i + 1}`}
           </button>
         ))}
       </div>
-      <div style={{ padding: "11px 14px" }}>{items[active]?.props?.children}</div>
+      <div className="pt-3 pr-3 pb-3 pl-3">{items[active]?.props?.children}</div>
     </div>
   );
 }
@@ -112,9 +113,11 @@ function fencedCode(children: ReactNode): { lang: string; source: string } | nul
   return { lang, source: props.children.replace(/\n$/, "") };
 }
 
-const HEADING_SIZE: Record<number, number> = { 1: 18, 2: 16, 3: 14.5, 4: 13.5 };
+// PROSE LOOKS ARE ONE STYLESHEET (`.vx-prose` in ui-kit/primitives/prose.css, guidelines §2.2):
+// headings on the type scale, 72ch measure, lists, quotes, tables, code. The elements below stay
+// plain; only behaviour (links, fences) is decided here.
 const h = (lvl: number) => ({ children }: { children?: ReactNode }) => (
-  <div style={{ fontSize: HEADING_SIZE[lvl], fontWeight: 600, color: "var(--t1)", lineHeight: 1.3, margin: lvl <= 2 ? "12px 0 6px" : "10px 0 4px" }}>{children}</div>
+  <div className="vx-prose-h" data-level={lvl}>{children}</div>
 );
 
 const htmlComponents = {
@@ -124,15 +127,15 @@ const htmlComponents = {
   // out of a customer's document. DocImage does neither: workspace paths load through the scoped
   // asset route, remote ones render as an offer to fetch them in.
   img: DocImage,
-  p: ({ children }: { children?: ReactNode }) => <p style={{ margin: "0 0 8px", lineHeight: 1.6 }}>{children}</p>,
+  p: ({ children }: { children?: ReactNode }) => <p>{children}</p>,
   a: ({ href, children }: { href?: string; children?: ReactNode }) => {
     // Meeting deep-link (`?meeting=<id>`, relative or absolute) → open the meeting canvas (transcript +
     // recording) in-app, no reload. The same URL also cold-opens the meeting via App.tsx (portable).
     const mref = href?.match(/[?&]meeting=([^&#]+)/);
     if (mref) {
       const ref = decodeURIComponent(mref[1]);
-      return <span role="link" onClick={() => window.dispatchEvent(new CustomEvent(OPEN_MEETING_EVENT, { detail: { ref } }))}
-        style={{ color: "var(--blue)", textDecoration: "underline", cursor: "pointer" }}>{children}</span>;
+      const open = () => window.dispatchEvent(new CustomEvent(OPEN_MEETING_EVENT, { detail: { ref } }));
+      return <span role="link" tabIndex={0} className="vx-link vx-link-inline" onClick={open} onKeyDown={(e) => { if (e.key === "Enter") open(); }}>{children}</span>;
     }
     // Workspace-internal link (no scheme, not an anchor) → navigate the doc pane in place
     // (or open a tab outside a doc pane), same path the Wikilink chip uses. Relative hrefs
@@ -140,12 +143,11 @@ const htmlComponents = {
     if (href && isInternalHref(href)) return <InternalLink href={href}>{children}</InternalLink>;
     // external: only http(s) and #anchors keep a live href — javascript:/data:/;
     // //host from untrusted docs render as inert text
-    const safeHref = href && (/^https?:/i.test(href) || href.startsWith("#")) ? href : undefined;
-    if (!safeHref) return <span style={{ color: "var(--blue)" }}>{children}</span>;
-    return <a href={safeHref} target="_blank" rel="noreferrer noopener" style={{ color: "var(--blue)", textDecoration: "underline" }}>{children}</a>;
+    if (href?.startsWith("#")) return <a className="vx-link vx-link-inline" href={href}>{children}</a>;
+    return <ExternalLink href={href ?? ""}>{children}</ExternalLink>;
   },
   code: ({ children }: { children?: ReactNode }) => (
-    <code style={{ fontFamily: "var(--mono)", fontSize: "0.88em", background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 4, padding: "0.5px 5px", color: "var(--t1)" }}>{children}</code>
+    <code className="vx-code">{children}</code>
   ),
   // A FENCE CAN BE A PICTURE (#1617). Markdown gives a fenced block to `pre` wrapping a `code`
   // whose class names the language, so this is the only seam where ```mermaid can be told from
@@ -155,25 +157,14 @@ const htmlComponents = {
     const fence = fencedCode(children);
     if (fence && isMermaidFence(fence.lang)) return <MermaidDiagram source={fence.source} />;
     return (
-      <pre style={{ fontFamily: "var(--mono)", fontSize: 12, background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 8, padding: "9px 11px", margin: "6px 0 10px", overflowX: "auto", lineHeight: 1.5, color: "var(--t1)" }}>{children}</pre>
+      <pre className="vx-code-block">{children}</pre>
     );
   },
-  ul: ({ children }: { children?: ReactNode }) => <ul style={{ margin: "4px 0 8px", paddingLeft: 20, display: "flex", flexDirection: "column", gap: 2 }}>{children}</ul>,
-  ol: ({ children }: { children?: ReactNode }) => <ol style={{ margin: "4px 0 8px", paddingLeft: 20, display: "flex", flexDirection: "column", gap: 2 }}>{children}</ol>,
-  li: ({ children }: { children?: ReactNode }) => <li style={{ lineHeight: 1.55 }}>{children}</li>,
-  blockquote: ({ children }: { children?: ReactNode }) => (
-    <blockquote style={{ borderLeft: "3px solid var(--line2)", paddingLeft: 12, margin: "6px 0 8px", color: "var(--t2)", lineHeight: 1.55 }}>{children}</blockquote>
-  ),
-  hr: () => <hr style={{ border: "none", borderTop: "1px solid var(--line)", margin: "12px 0" }} />,
-  table: ({ children }: { children?: ReactNode }) => (
-    <table style={{ width: "100%", borderCollapse: "collapse", margin: "6px 0 10px", color: "var(--t1)", lineHeight: 1.45 }}>{children}</table>
-  ),
-  th: ({ children, style }: { children?: ReactNode; style?: CSSProperties }) => (
-    <th style={{ background: "var(--panel)", border: "1px solid var(--line2)", padding: "6px 9px", color: "var(--t1)", fontWeight: 600, ...style }}>{children}</th>
-  ),
-  td: ({ children, style }: { children?: ReactNode; style?: CSSProperties }) => (
-    <td style={{ border: "1px solid var(--line)", padding: "6px 9px", color: "var(--t2)", verticalAlign: "top", ...style }}>{children}</td>
-  ),
+  // a wide table scrolls inside its own frame, never the page (guidelines §3.4)
+  table: ({ children }: { children?: ReactNode }) => <div className="vx-prose-table" data-allow-hscroll=""><table>{children}</table></div>,
+  // GFM column alignment arrives as `style={{ textAlign }}` — layout, kept
+  th: ({ children, style }: { children?: ReactNode; style?: CSSProperties }) => <th style={style ? { textAlign: style.textAlign } : undefined}>{children}</th>,
+  td: ({ children, style }: { children?: ReactNode; style?: CSSProperties }) => <td style={style ? { textAlign: style.textAlign } : undefined}>{children}</td>,
 };
 
 export const MDX_COMPONENTS = { ...htmlComponents, ViewSource, Note, Warning, Card, CardGroup, Steps, Step, Tabs, Tab, Wikilink, DocPath, WorkspaceRef };
@@ -317,7 +308,7 @@ function TranscriptSlot({ meeting }: { meeting: string }): ReactNode {
   const Widget = registry.tabComponent(TRANSCRIPT_WIDGET_KIND);
   if (!Widget) {
     return (
-      <div data-transcript-slot={meeting} style={{ ...SLOT_BOX, color: "var(--t3)", fontSize: 12 }}>
+      <div data-transcript-slot={meeting} className="c-3 t-xs" style={{ ...SLOT_BOX }}>
         The live transcript is not available in this build.
       </div>
     );
@@ -393,7 +384,7 @@ export function MdxDoc({ children, style }: { children: string; style?: CSSPrope
     return <MdxBody style={style}>{segments[0].text}</MdxBody>;
   }
   return (
-    <div style={{ color: "var(--t1)", ...style }}>
+    <div className="c-1" style={{ ...style }}>
       {head}
       {segments.map((seg, i) => (seg.kind === "transcript"
         ? <TranscriptSlot key={`w${i}`} meeting={seg.meeting} />
@@ -431,13 +422,13 @@ function MdxBody({ children, style }: { children: string; style?: CSSProperties 
     return () => { cancelled = true; };
   }, [src, wsGen]);
 
-  if (state.status === "loading") return <div style={{ color: "var(--t3)", fontSize: 12, ...style }}>rendering…</div>;
+  if (state.status === "loading") return <div className="c-3 t-xs" style={{ ...style }}>rendering…</div>;
   if (state.status === "fallback") {
     return (
       <div style={style}>
         {/* fail-loud: name the downgrade AND the reason inline — a tooltip-only error is
             invisible in screenshots and to anyone who doesn't hover */}
-        <div style={{ fontFamily: "var(--mono)", fontSize: 10.5, color: "var(--t3)", marginBottom: 8 }}>
+        <div className="f-mono t-xs c-3 mb-2">
           simplified rendering (MDX failed: {state.error})
         </div>
         <Markdown>{src}</Markdown>
@@ -446,7 +437,7 @@ function MdxBody({ children, style }: { children: string; style?: CSSProperties 
   }
   const Content = state.Content;
   return (
-    <div style={{ color: "var(--t1)", ...style }}>
+    <div className="vx-prose" style={style}>
       <Content components={MDX_COMPONENTS} />
     </div>
   );

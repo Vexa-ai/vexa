@@ -2,7 +2,8 @@
  *  button), OverflowStrip (no silent hidden tabs), and the shell store (one key, tolerant reads). */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { Menu, OverflowStrip, Sheet, Splitter, splitterKey, readShellStore, writeShellStore, SHELL_KEY } from "..";
+import { ConfirmDialog, Menu, OverflowStrip, Sheet, Splitter, splitterKey, readShellStore, writeShellStore, SHELL_KEY } from "..";
+import { useState } from "react";
 
 afterEach(cleanup);
 
@@ -72,6 +73,37 @@ describe("Sheet", () => {
     expect(box.hasAttribute("inert")).toBe(true);
     expect(box.getAttribute("aria-hidden")).toBe("true");
     expect((box.querySelector("input") as HTMLInputElement).value).toBe("draft");
+  });
+
+  // 2026-10-11: the sheet's focus effect depended on `onClose` (an inline arrow at every caller), so
+  // each parent render returned focus to the trigger and then to the sheet's first control — out of
+  // a ConfirmDialog open inside the drawer (the rail's delete confirm).
+  it("a parent re-render with a new onClose does not pull focus out of a dialog open inside it", async () => {
+    let bump = () => {};
+    function Host() {
+      const [n, setN] = useState(0);
+      bump = () => setN((v) => v + 1);
+      return <Sheet form="overlay" open onClose={() => {}} label="Chats" side="left" width={240}>
+        <button>first in drawer {n}</button>
+        <ConfirmDialog open focusConfirm title="Delete?" confirmLabel="Delete" consequence="x" onCancel={() => {}} onConfirm={() => {}} />
+      </Sheet>;
+    }
+    render(<Host />);
+    await act(() => new Promise((r) => requestAnimationFrame(() => r(null))));
+    const go = screen.getByRole("button", { name: "Delete" });
+    go.focus();
+    act(() => bump());
+    await act(() => new Promise((r) => requestAnimationFrame(() => r(null))));
+    expect(document.activeElement).toBe(go);
+  });
+
+  it("Escape calls the latest onClose", () => {
+    const first = vi.fn(), latest = vi.fn();
+    const { rerender } = render(<Sheet form="overlay" open onClose={first} label="Pages"><button>x</button></Sheet>);
+    rerender(<Sheet form="overlay" open onClose={latest} label="Pages"><button>x</button></Sheet>);
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(first).not.toHaveBeenCalled();
+    expect(latest).toHaveBeenCalledTimes(1);
   });
 
   it("the scrim closes it", () => {

@@ -209,8 +209,8 @@ export default function JoinPage() {
       <div style={card} data-testid="join-card">
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/vexa-logo.svg" alt="Vexa" width={28} height={28} style={{ borderRadius: 8, display: "block", flex: "none" }} />
-          <div style={{ fontSize: 15, fontWeight: 600, color: "var(--t1)" }}>
+          <img src="/vexa-logo.svg" alt="Vexa" width={28} height={28} className="r-md" style={{ display: "block", flex: "none" }} />
+          <div className="t-md fw-600 c-1">
             {phase === "refused" ? "This invite" : "You have been invited"}
           </div>
         </div>
@@ -220,7 +220,7 @@ export default function JoinPage() {
         )}
 
         {phase === "refused" && (
-          <div style={{ fontSize: 12.5, color: "var(--t2)", lineHeight: 1.55 }} data-testid="join-refused">
+          <div className="t-xs c-2 lh-normal" data-testid="join-refused">
             {refusal(why)}
           </div>
         )}
@@ -241,7 +241,7 @@ export default function JoinPage() {
 
             {sent ? (
               <>
-                <div style={{ fontSize: 13, color: "var(--t1)", lineHeight: 1.5 }}>Check your email.</div>
+                <div className="t-sm c-1 lh-snug">Check your email.</div>
                 <div style={muted}>
                   If {sent} can sign in here, a link is on its way. It brings you straight back to this
                   invite. It works once and expires in a few minutes.
@@ -249,7 +249,7 @@ export default function JoinPage() {
                 {!locked && (
                   <button
                     onClick={() => { setSent(null); setError(null); }}
-                    style={{ background: "none", border: "none", color: "var(--t3)", fontSize: 11, cursor: "pointer", padding: 0, alignSelf: "flex-start" }}
+                    className="bg-none bd-none c-3 t-xs p-0" style={{ cursor: "pointer", alignSelf: "flex-start" }}
                   >
                     Use a different address
                   </button>
@@ -271,7 +271,7 @@ export default function JoinPage() {
                 )}
 
                 <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                  <div style={{ fontSize: 11, color: "var(--t3)", lineHeight: 1.4 }}>
+                  <div className="t-xs c-3 lh-snug">
                     {locked
                       ? "This invite is for this address. We’ll email it a sign-in link."
                       : "Enter your email and we’ll send you a sign-in link."}
@@ -285,16 +285,13 @@ export default function JoinPage() {
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     placeholder="you@company.com"
-                    style={{
-                      background: "var(--bg)", border: "1px solid var(--line2)", borderRadius: 7,
-                      padding: "9px 10px", fontSize: 13, color: locked ? "var(--t2)" : "var(--t1)", outline: "none",
-                    }}
+                    className="bg-0 bd-strong r-md pt-2 pr-2 pb-2 pl-2 t-sm" style={{ color: locked ? "var(--t2)" : "var(--t1)", outline: "none" }}
                   />
                   <button type="submit" disabled={sending} style={submitBtn}>
                     {sending ? "Sending…" : "Email me a sign-in link"}
                   </button>
                 </form>
-                {error && <div style={{ fontSize: 11.5, color: "var(--danger-text)" }} data-testid="join-error">{error}</div>}
+                {error && <div className="t-xs c-danger" data-testid="join-error">{error}</div>}
               </>
             )}
           </>

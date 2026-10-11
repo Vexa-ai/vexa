@@ -95,8 +95,9 @@ describe('the pin is ON the tab (founder: "tab icon is on tab")', () => {
     const tabs = [...container.querySelectorAll("[data-tab]")];
     expect(tabs.map((t) => t.hasAttribute("data-kept"))).toEqual([true, true, false]);
     // the preview reads as one, the way Obsidian's does — it is about to be replaced
-    expect((tabs[2] as HTMLElement).style.fontStyle).toBe("italic");
-    expect((tabs[1] as HTMLElement).style.fontStyle).toBe("");
+    // (italic is the `.vx-doctab[data-preview]` rule — the tab carries the flag, the CSS the look)
+    expect(tabs[2].closest(".vx-doctab")?.hasAttribute("data-preview")).toBe(true);
+    expect(tabs[1].closest(".vx-doctab")?.hasAttribute("data-preview")).toBe(false);
   });
 
   it("is not in the document header any more", () => {
