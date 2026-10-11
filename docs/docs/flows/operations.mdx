@@ -118,7 +118,7 @@ The first report still answers `{"id": "fr_…", "recorded": true, …}`. `frict
 rig's `friction_dump` adds up `occurrences` in each group, so a group's count is the number of
 reports filed, not the number of rows. The rig's `report_friction` passes the duplicate fields
 through to the agent unchanged. So does agent-api's `POST /api/friction` forward (used by the worker's
-auto-filer and the terminal's "Report this"): a folded repeat answers `recorded: false` with
+auto-filer; see [Agent API](/api/agent#rough-edges)): a folded repeat answers `recorded: false` with
 `duplicate_of`, `occurrences` and `instruction`.
 
 **Two reports are "the same" when all four of these match:**

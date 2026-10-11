@@ -262,19 +262,20 @@ still lands. The first claim the person stands behind writes the desk's `.scaffo
 
 `POST /api/friction` — body `{ kind?, severity?, tried?, happened?, would_help?, session?, context? }`;
 the context keys `workspace` · `path` · `meeting_id` · `scaffold_id` · `tool` · `error` · `surface` are
-also accepted flat. → `201 { id, status, recurrence, kind, known }`, where `known` is `recurrence > 1`.
-`kind` is `missing-tool` · `refusal` · `no-page` · `wrong-workspace` · `unfulfilled` · `error` · `ux` ·
-`other`; `severity` is `blocker` · `annoyance` · `papercut` · `idea`. Unknown keys are dropped, free
-text is clipped and secret-scrubbed, and identical reports fold into one row with a counter. This is
-the **one route here that files without an identified caller** — `X-User-Id` is recorded when present
-and never required.
+also accepted flat. `session`, `tried` and `happened` must be present (`400` otherwise). `kind` is
+`missing-tool` · `refusal` · `no-page` · `wrong-workspace` · `unfulfilled` · `error` · `ux` · `other`;
+`severity` is `blocker` · `annoyance` · `papercut` · `idea`. Unknown keys are dropped and free text is
+clipped and secret-scrubbed. This is the **one route here that files without an identified caller** —
+`X-User-Id` is recorded when present and never required.
 
-`GET /api/friction/dump?since=&status=open&format=md` → `text/markdown`; `format=json` returns
-`{ since, status, count, findings, records }` from the same renderer.
-
-`POST /api/friction/{friction_id}/fix` `{ fix_ref }` → `{ id, status, fix_ref }`. `fix_ref` is any
-reference a reader can follow — a sha, a PR, a sentence — and is required (`400` when empty); `404` for
-an unknown id. The same edge filed again after a fix comes back as `recurring`.
+agent-api stores nothing: it forwards the report to flows' `POST /friction` and returns its answer,
+`201 { id, recorded }`. When flows cannot be reached or refuses the report, the answer is
+`{ "id": "", "recorded": false }`. When the same subject already filed the same report (same tool,
+same refusal reason or same text once ids are removed) in the same UTC hour, flows counts it against
+the first report instead of storing a new one, and the answer passes that through:
+`{ id, recorded: false, duplicate_of, occurrences, instruction }`, where `instruction` tells the
+reporter not to file it again this run. How reports are folded:
+[Friction reports](/flows/operations#friction-reports-repeats-are-folded-into-one-row).
 
 ## Sharing, membership and invites
 
