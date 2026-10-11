@@ -732,7 +732,7 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
           </div>
         )}
         {assignDone && (
-          <div role="status" style={{ margin: "2px 8px 6px", padding: "6px 9px", fontSize: 12, border: "1px solid var(--ok, #2e7d32)", borderRadius: 6, color: "var(--t1)" }}>
+          <div role="status" style={{ margin: "2px 8px 6px", padding: "6px 9px", fontSize: 12, border: "1px solid var(--success)", borderRadius: 6, color: "var(--t1)" }}>
             Assigned to <b>{assignDone}</b>. The group's minutes for this meeting are on their way.
           </div>
         )}

@@ -1,0 +1,184 @@
+/* ui-kit control primitives (guidelines §4.1–4.18). Every value is a token from app/tokens.css.
+ * Every interactive element gets a 2px focus ring with a 2px offset on :focus-visible — the first
+ * focus-visible styles in the terminal. */
+
+.vx-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+:where(.vx-btn, .vx-chip-main, .vx-chip-x, .vx-entity, .vx-tab, .vx-crumb, .vx-row2-main, .vx-card[data-interactive], .vx-link, .vx-input):focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* ── Button / IconButton ──────────────────────────────────────────────────────────────────── */
+.vx-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: var(--space-1_5);
+  height: var(--control-sm); padding: 0 10px; border-radius: var(--radius-md);
+  border: 1px solid transparent; background: transparent; color: var(--text-2);
+  font: inherit; font-size: var(--text-sm); font-weight: var(--weight-medium); line-height: 1;
+  cursor: pointer; white-space: nowrap; flex: none;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.vx-btn[data-size="md"] { height: var(--control-md); padding: 0 12px; font-size: var(--text-md); }
+.vx-btn[data-variant="primary"] { background: var(--accent); color: var(--on-accent); }
+.vx-btn[data-variant="primary"]:hover:not(:disabled) { background: var(--accent-hover); }
+.vx-btn[data-variant="secondary"] { background: var(--surface-2); color: var(--text-1); border-color: var(--border-control); }
+.vx-btn[data-variant="secondary"]:hover:not(:disabled) { background: var(--surface-3); }
+.vx-btn[data-variant="ghost"]:hover:not(:disabled) { background: var(--surface-3); color: var(--text-1); }
+.vx-btn[data-variant="danger"] { background: var(--danger); color: white; }
+.vx-btn[data-variant="danger-ghost"] { color: var(--danger-text); }
+.vx-btn[data-variant="danger-ghost"]:hover:not(:disabled) { background: var(--danger-tint); }
+.vx-btn:active:not(:disabled) { transform: translateY(0.5px); }
+.vx-btn:disabled { color: var(--text-disabled); cursor: default; }
+.vx-btn[data-variant="primary"]:disabled, .vx-btn[data-variant="danger"]:disabled { background: var(--surface-3); }
+.vx-btn-icon { display: inline-flex; width: var(--icon-md); height: var(--icon-md); align-items: center; justify-content: center; }
+.vx-iconbtn { padding: 0; width: var(--control-sm); }
+.vx-iconbtn[data-size="xs"] { width: var(--control-xs); height: var(--control-xs); }
+.vx-iconbtn[data-size="md"] { width: var(--control-md); height: var(--control-md); }
+.vx-iconbtn[aria-pressed="true"] { background: var(--surface-3); color: var(--text-1); }
+
+/* ── Spinner, StatusDot, Kbd ──────────────────────────────────────────────────────────────── */
+.vx-spinner { display: inline-block; width: 16px; height: 16px; border-radius: var(--radius-full); border: 2px solid var(--border); border-top-color: var(--text-2); }
+.vx-spinner[data-size="14"] { width: 14px; height: 14px; }
+@media (prefers-reduced-motion: no-preference) { .vx-spinner { animation: vx-op-spin 0.7s linear infinite; } }
+.vx-status { display: inline-flex; align-items: center; gap: var(--space-1_5); font-size: var(--text-xs); color: var(--text-2); }
+.vx-dot { width: 8px; height: 8px; border-radius: var(--radius-full); background: var(--text-3); flex: none; }
+.vx-dot[data-tone="success"] { background: var(--success); }
+.vx-dot[data-tone="warning"] { background: var(--warning); }
+.vx-dot[data-tone="danger"] { background: var(--danger); }
+.vx-dot[data-tone="info"] { background: var(--info); }
+.vx-dot[data-tone="meeting"] { background: var(--meeting); }
+.vx-dot[data-tone="accent"] { background: var(--accent); }
+.vx-kbd { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-2); padding: 0 var(--space-1); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+
+/* ── Badge, Tag, Chip, EntityChip ─────────────────────────────────────────────────────────── */
+.vx-badge {
+  display: inline-flex; align-items: center; gap: var(--space-1); height: 20px; padding: 0 var(--space-1_5);
+  border-radius: var(--radius-sm); font-size: var(--text-xs); font-weight: var(--weight-medium); white-space: nowrap;
+  background: var(--surface-3); color: var(--text-2);
+}
+.vx-badge[data-tone="success"] { background: var(--success-tint); color: var(--success-text); }
+.vx-badge[data-tone="warning"] { background: var(--warning-tint); color: var(--warning-text); }
+.vx-badge[data-tone="danger"] { background: var(--danger-tint); color: var(--danger-text); }
+.vx-badge[data-tone="info"] { background: var(--info-tint); color: var(--info-text); }
+.vx-badge[data-tone="meeting"] { background: var(--meeting-tint); color: var(--meeting-text); }
+.vx-tag { display: inline-flex; align-items: center; height: 20px; padding: 0 var(--space-1_5); border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text-2); font-size: var(--text-xs); white-space: nowrap; }
+.vx-chip {
+  display: inline-flex; align-items: center; min-width: 0; max-width: 100%; height: var(--control-xs);
+  border-radius: var(--radius-md); background: var(--surface-2); border: 1px solid var(--border); color: var(--text-2);
+  font-size: var(--text-sm); flex: none;
+}
+.vx-chip[data-selected] { background: var(--accent-tint); color: var(--text-1); box-shadow: inset 2px 0 0 var(--accent); }
+.vx-chip[data-ghost] { background: transparent; color: var(--text-3); }
+.vx-chip-main, .vx-entity {
+  display: inline-flex; align-items: center; gap: var(--space-1); min-width: 0; height: 100%; padding: 0 var(--space-2);
+  background: none; border: none; color: inherit; font: inherit; cursor: pointer; border-radius: inherit;
+}
+.vx-entity { background: var(--surface-2); border: 1px solid var(--border); color: var(--text-1); }
+.vx-entity[data-kind="meeting"] .vx-chip-icon { color: var(--meeting-text); }
+.vx-chip:hover, .vx-entity:hover { border-color: var(--border-control); }
+.vx-chip-icon { display: inline-flex; color: var(--text-3); flex: none; }
+.vx-chip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vx-chip-x { display: inline-flex; align-items: center; justify-content: center; width: var(--control-xs); height: 100%; background: none; border: none; color: var(--text-3); cursor: pointer; border-radius: inherit; }
+.vx-chip-x:hover { color: var(--text-1); }
+
+/* ── Field (Input, Textarea) ──────────────────────────────────────────────────────────────── */
+.vx-field { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; }
+.vx-field-label { font-size: var(--text-sm); color: var(--text-2); font-weight: var(--weight-medium); }
+.vx-field-hint { font-size: var(--text-xs); color: var(--text-3); }
+.vx-field-error { display: flex; align-items: center; gap: var(--space-1); font-size: var(--text-sm); color: var(--danger-text); }
+.vx-input {
+  height: var(--control-md); padding: 0 10px; border-radius: var(--radius-md); border: 1px solid var(--border-control);
+  background: var(--surface-2); color: var(--text-1); font: inherit; font-size: var(--text-md); min-width: 0;
+}
+.vx-input::placeholder { color: var(--text-3); }
+.vx-input:focus-visible { border-color: var(--accent); }
+.vx-field[data-invalid] .vx-input { border-color: var(--danger); }
+.vx-textarea { height: auto; min-height: 72px; padding: var(--space-2) 10px; resize: vertical; line-height: var(--leading-md); }
+.vx-select-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
+/* ── Tabs ─────────────────────────────────────────────────────────────────────────────────── */
+.vx-tabs { display: flex; gap: var(--space-1); min-width: 0; }
+.vx-tab { position: relative; height: var(--control-sm); padding: 0 10px; border: none; background: none; color: var(--text-2); font: inherit; font-size: var(--text-sm); cursor: pointer; border-radius: var(--radius-md); white-space: nowrap; min-width: 72px; max-width: 176px; overflow: hidden; text-overflow: ellipsis; }
+.vx-tab:hover { color: var(--text-1); }
+.vx-tabs[data-skin="underline"] .vx-tab[aria-selected="true"] { color: var(--text-1); box-shadow: inset 0 -2px 0 var(--accent); border-radius: 0; }
+.vx-tabs[data-skin="document"] .vx-tab[aria-selected="true"] { color: var(--text-1); background: var(--surface-1); }
+
+/* ── Breadcrumb ───────────────────────────────────────────────────────────────────────────── */
+.vx-breadcrumb { display: flex; align-items: center; min-width: 0; font-size: var(--text-sm); color: var(--text-3); white-space: nowrap; overflow: hidden; }
+.vx-crumb-item { display: inline-flex; align-items: center; min-width: 0; flex: 0 1 auto; }
+.vx-crumb { background: none; border: none; padding: 0; font: inherit; color: inherit; cursor: pointer; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.vx-crumb:hover { color: var(--text-1); }
+.vx-crumb-current { color: var(--text-1); cursor: default; }
+.vx-crumb-sep { flex: none; margin: 0 var(--space-1); color: var(--text-3); }
+
+/* ── ListRow, PanelHeader, Card ───────────────────────────────────────────────────────────── */
+.vx-row2 { position: relative; display: flex; align-items: center; min-width: 0; border-radius: var(--radius-md); }
+.vx-row2-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--space-2); height: var(--control-sm); padding: 0 var(--space-2); background: none; border: none; color: var(--text-2); font: inherit; font-size: var(--text-sm); text-align: left; cursor: pointer; border-radius: inherit; }
+.vx-row2[data-two-line] .vx-row2-main { height: 44px; }
+.vx-row2:hover { background: var(--surface-3); }
+.vx-row2[data-selected] { background: var(--surface-2); box-shadow: inset 2px 0 0 var(--accent); }
+.vx-row2[data-selected] .vx-row2-main { color: var(--text-1); font-weight: var(--weight-medium); }
+.vx-row2-lead { display: inline-flex; flex: none; width: var(--icon-md); justify-content: center; }
+.vx-row2-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vx-row2-meta { flex: none; font-size: var(--text-xs); color: var(--text-3); font-variant-numeric: tabular-nums; }
+.vx-row2-actions { display: inline-flex; gap: var(--space-0_5); padding-right: var(--space-1); opacity: 0; }
+.vx-row2:hover .vx-row2-actions, .vx-row2:focus-within .vx-row2-actions { opacity: 1; }
+.vx-panelhead { display: flex; align-items: center; gap: var(--space-2); height: 44px; padding: 0 var(--space-4); border-bottom: 1px solid var(--border-subtle); min-width: 0; }
+.vx-panelhead[data-inset="rail"] { padding: 0 var(--space-3); }
+.vx-panelhead-title { font-size: var(--text-md); font-weight: var(--weight-semibold); color: var(--text-1); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vx-panelhead-gap { flex: 1; }
+.vx-card { display: block; width: 100%; text-align: left; font: inherit; color: inherit; background: var(--surface-1); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); padding: var(--space-4); }
+.vx-card[data-raised] { background: var(--surface-2); }
+.vx-card[data-interactive] { cursor: pointer; }
+.vx-card[data-interactive]:hover { border-color: var(--border); }
+.vx-card-head { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-2); }
+.vx-card-title { flex: 1; min-width: 0; font-size: var(--text-md); font-weight: var(--weight-semibold); color: var(--text-1); }
+.vx-card-body { font-size: var(--text-md); color: var(--text-2); line-height: var(--leading-md); }
+.vx-card-foot { margin-top: var(--space-3); display: flex; gap: var(--space-2); justify-content: flex-end; }
+
+/* ── Dialog ───────────────────────────────────────────────────────────────────────────────── */
+.vx-dialog-layer { position: fixed; inset: 0; z-index: var(--z-modal); display: flex; align-items: center; justify-content: center; padding: var(--space-4); }
+.vx-dialog-layer > .vx-scrim { position: absolute; }
+.vx-dialog { position: relative; width: 560px; max-width: 100%; max-height: calc(100vh - 32px); overflow: auto; background: var(--surface-overlay); border: 1px solid var(--border); border-radius: var(--radius-xl); box-shadow: var(--shadow-2); padding: var(--space-5); outline: none; }
+.vx-dialog[data-width="confirm"] { width: 400px; }
+.vx-dialog[data-width="wide"] { width: 720px; }
+.vx-dialog-title { margin: 0 0 var(--space-2); font-size: var(--text-lg); font-weight: var(--weight-semibold); color: var(--text-1); }
+.vx-dialog-body { display: flex; flex-direction: column; gap: var(--space-3); font-size: var(--text-md); color: var(--text-2); line-height: var(--leading-md); }
+.vx-dialog-text { margin: 0; }
+.vx-dialog-foot { display: flex; justify-content: flex-end; gap: var(--space-2); margin-top: var(--space-5); }
+
+/* ── EmptyState, Skeleton, ErrorState, Tooltip, Popover ───────────────────────────────────── */
+.vx-empty { max-width: 72ch; display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-2); padding: var(--space-4) 0; }
+.vx-empty-icon { color: var(--text-3); display: inline-flex; }
+.vx-empty-text { margin: 0; font-size: var(--text-md); color: var(--text-2); line-height: var(--leading-md); }
+.vx-skeleton { display: flex; flex-direction: column; gap: var(--space-2); }
+.vx-skeleton-line { display: block; height: 12px; border-radius: var(--radius-sm); background: var(--surface-2); }
+.vx-skeleton-line:last-child { width: 60%; }
+.vx-error { border: 1px solid var(--danger); background: var(--danger-tint); border-radius: var(--radius-lg); padding: var(--space-3); display: flex; flex-direction: column; gap: var(--space-1_5); }
+.vx-error-head { display: flex; align-items: center; gap: var(--space-1_5); color: var(--danger-text); font-weight: var(--weight-medium); font-size: var(--text-md); }
+.vx-error-why { margin: 0; font-size: var(--text-sm); color: var(--text-2); }
+.vx-error-detail summary { cursor: pointer; font-size: var(--text-xs); color: var(--text-3); }
+.vx-error-detail pre { margin: var(--space-1) 0 0; font-family: var(--font-mono); font-size: var(--text-mono-sm); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-2); }
+.vx-tip-anchor { position: relative; display: inline-flex; }
+.vx-tip { position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%); z-index: var(--z-tooltip); max-width: 280px; width: max-content; padding: var(--space-1) var(--space-2); border-radius: var(--radius-md); background: var(--surface-overlay); border: 1px solid var(--border); box-shadow: var(--shadow-1); font-size: var(--text-xs); color: var(--text-1); pointer-events: none; }
+.vx-popover { padding: var(--space-3); }
+
+/* ── ExternalLink, Code, SecretReveal ─────────────────────────────────────────────────────── */
+.vx-link { color: var(--info-text); text-decoration: none; }
+.vx-link:hover { text-decoration: underline; }
+.vx-link-refused { color: var(--text-2); }
+.vx-code { font-family: var(--font-mono); font-size: var(--text-mono-sm); background: var(--surface-2); border-radius: var(--radius-sm); padding: 1px var(--space-1); overflow-wrap: anywhere; }
+.vx-code-block { margin: 0; font-family: var(--font-mono); font-size: var(--text-mono-md); line-height: var(--leading-mono-md); background: var(--surface-2); border-radius: var(--radius-lg); padding: var(--space-3); overflow-x: auto; }
+.vx-secret { display: inline-flex; align-items: center; gap: var(--space-1); min-width: 0; max-width: 100%; }
+.vx-secret-value { min-width: 0; }
+
+/* ── SourceList ───────────────────────────────────────────────────────────────────────────── */
+.vx-sources-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.vx-source { display: flex; flex-direction: column; gap: var(--space-0_5); min-width: 0; }
+.vx-source-title { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-sm); }
+.vx-source-meta { font-size: var(--text-xs); color: var(--text-3); }
+.vx-source-snippet { font-size: var(--text-sm); color: var(--text-2); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+
+/* ── Toast (sonner) ───────────────────────────────────────────────────────────────────────── */
+.vx-toast { background: var(--surface-overlay) !important; color: var(--text-1) !important; border: 1px solid var(--border) !important; box-shadow: var(--shadow-3) !important; font-family: var(--font-sans) !important; font-size: var(--text-sm) !important; }
+

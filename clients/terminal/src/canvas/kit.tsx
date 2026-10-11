@@ -462,7 +462,7 @@ function LiveTranscript({ segments, liveCaption, empty = "waiting for transcript
     width: "100%",
     border: "1px solid var(--line)",
     borderRadius: 8,
-    background: "var(--sidebar, var(--panel))",
+    background: "var(--sidebar)",
     color: "var(--t2)",
     padding: "8px 12px",
   };

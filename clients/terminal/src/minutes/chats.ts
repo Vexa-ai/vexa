@@ -170,8 +170,9 @@ export function resetChats(): Chat[] {
   saveChats([]);
   return [];
 }
-/** Which side columns the reader has folded away. One key per side, because the two are independent
- *  choices and a combined key would make forgetting one of them the default. */
+/** Which side columns the reader folded away — the LEGACY keys. The shell's layout now lives under one
+ *  key (`vexa.shell.v1`, written only by ui-kit's `useShellLayout`); these are read once, by
+ *  `legacyShellStore`, so a reader who folded a column before the move finds it folded after. */
 export const COLLAPSED_KEY = { left: "vexa.minutes.railCollapsed", right: "vexa.minutes.pagesCollapsed" } as const;
 export type Side = keyof typeof COLLAPSED_KEY;
 
@@ -1095,6 +1096,19 @@ export function loadCollapsed(side: Side): boolean {
   try { return localStorage.getItem(COLLAPSED_KEY[side]) === "1"; } catch { return false; }
 }
 
-export function saveCollapsed(side: Side, collapsed: boolean): void {
-  try { localStorage.setItem(COLLAPSED_KEY[side], collapsed ? "1" : "0"); } catch { /* ignore */ }
+/** Where the pages panel's dragged width used to live. */
+export const LEGACY_PAGES_W_KEY = "vexa.minutes.pagesW";
+
+/** THE SHELL'S FIRST READ, for a profile that has no `vexa.shell.v1` yet: the reader's old folds and
+ *  the old pages width carried into the new store (the width for both modes the panel docked at
+ *  before — wide and desktop — so it comes back clamped, not reset). Read-only: nothing writes these
+ *  keys any more. */
+export function legacyShellStore(): { prefs: { railOpen: boolean; pagesOpen: boolean }; widths: { wide?: { pages: number }; desktop?: { pages: number } } } {
+  let w = NaN;
+  try { w = Number(localStorage.getItem(LEGACY_PAGES_W_KEY)); } catch { /* ignore */ }
+  const pages = Number.isFinite(w) && w > 0 ? Math.round(w) : undefined;
+  return {
+    prefs: { railOpen: !loadCollapsed("left"), pagesOpen: !loadCollapsed("right") },
+    widths: pages ? { wide: { pages }, desktop: { pages } } : {},
+  };
 }

@@ -67,7 +67,7 @@ export function ProposalChips(
         if (p.itemId && onDismiss) {
           return (
             <span key={p.id} style={pairS}>
-              <button data-proposal={p.kind} type="button" style={inPairS} onClick={() => onPick(p)}>
+              <button data-proposal={p.kind} type="button" style={inPairS} title={p.label} onClick={() => onPick(p)}>
                 {body}
               </button>
               <button data-dismiss={p.itemId} type="button" style={dismissS}
@@ -77,7 +77,7 @@ export function ProposalChips(
           );
         }
         return (
-          <button key={p.id} data-proposal={p.kind} type="button" style={chipS} onClick={() => onPick(p)}
+          <button key={p.id} data-proposal={p.kind} type="button" style={chipS} title={p.label} onClick={() => onPick(p)}
             onMouseEnter={(e) => hoverIn(e.currentTarget)}
             onMouseLeave={(e) => hoverOut(e.currentTarget)}>
             {body}

@@ -294,7 +294,7 @@ export default function JoinPage() {
                     {sending ? "Sending…" : "Email me a sign-in link"}
                   </button>
                 </form>
-                {error && <div style={{ fontSize: 11.5, color: "var(--danger, #ef4444)" }} data-testid="join-error">{error}</div>}
+                {error && <div style={{ fontSize: 11.5, color: "var(--danger-text)" }} data-testid="join-error">{error}</div>}
               </>
             )}
           </>

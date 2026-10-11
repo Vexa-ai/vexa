@@ -50,7 +50,9 @@
  *  that sentence rather than a correction of it. */
 import { ChatName } from "./ChatName";
 import { useEffect, useRef, useState } from "react";
-import type { CSSProperties } from "react";
+import type { CSSProperties, ReactNode } from "react";
+import { ChevronDown, PenLine } from "lucide-react";
+import { Fold, Menu, type MenuItem } from "../ui-kit";
 import type { Membership } from "../surfaces/workspaceApi";
 import type { Sel } from "./types";
 import { header, surface, type as ty } from "./tokens";
@@ -110,6 +112,10 @@ export function ContextBar(p: {
   /** Aim this chat at the company layer and open it — the menu entry's click and the chip's, which
    *  are the same act by design. */
   onTargetGlobal?: () => void;
+  /** Pane controls the shell puts at the header's edges where a pane is an overlay (the chat list
+   *  in single mode at the left; the pages sheet at the right). */
+  leading?: ReactNode;
+  trailing?: ReactNode;
 }) {
   const [picking, setPicking] = useState(false);
   const box = useRef<HTMLDivElement | null>(null);
@@ -127,14 +133,43 @@ export function ContextBar(p: {
   // a menu row that reads as broken.
   const offerGlobal = admin && !!p.onTargetGlobal && p.sel.target !== GLOBAL_MOUNT;
 
+  // THE HEADER FOLDS BY ITS OWN WIDTH (guidelines §3.3): below 520px of header the workspace chips
+  // become ONE control — "Writes to <target>" — whose menu holds every act the chips offered:
+  // retarget, remove, add, attach. Same handlers, same labels; the chips and the menu are two forms
+  // of one control, never two controls.
+  const target = p.sel.target || DESK;
+  const items: MenuItem[] = [
+    ...set.map((w): MenuItem => {
+      const isGlobal = w === GLOBAL_MOUNT;
+      return {
+        key: `t:${w}`, checked: isTargetChip(p.sel.target, w), data: { "data-ws-target": w },
+        label: <WorkspaceName slug={w} fallback={isGlobal ? COMPANY_WORD : undefined} />,
+        onSelect: () => { if (isGlobal) p.onTargetGlobal?.(); else if (!isTargetChip(p.sel.target, w)) p.onSetTarget?.(w); },
+      };
+    }),
+    ...set.filter((w) => w !== DESK && w !== GLOBAL_MOUNT).map((w, i): MenuItem => ({
+      key: `r:${w}`, separatorBefore: i === 0, label: <>Remove <WorkspaceName slug={w} /></>, onSelect: () => p.onRemoveWorkspace(w),
+    })),
+    ...(offerGlobal ? [{ key: "g", separatorBefore: true, data: { "data-ctx": "global" }, label: <>Add <WorkspaceName slug={GLOBAL_MOUNT} fallback={COMPANY_WORD} /></>, onSelect: () => p.onTargetGlobal?.() } as MenuItem] : []),
+    ...addable.map((id, i): MenuItem => ({
+      key: `a:${id}`, separatorBefore: i === 0 && !offerGlobal, label: <>Add <WorkspaceName slug={id} /></>, onSelect: () => p.onAddWorkspace(id),
+    })),
+    ...(p.onAttachRepo ? [{ key: "attach", separatorBefore: true, data: { "data-ctx": "attach" }, label: "Attach existing repo…", onSelect: () => p.onAttachRepo?.(undefined) } as MenuItem] : []),
+  ];
+  // A meeting's phase is information, so it is a quiet badge; "chat" said nothing the breadcrumb
+  // ("Chat ›") had not, so the pill that printed it is gone (guidelines §4.5).
+  const phase = p.sel.kind === "meeting" ? p.flavor.split(" · ")[1] : undefined;
+
   return (
-    <div style={{ ...header, gridRow: 1, gridColumn: 2 }}>
-      <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--green, #5da86a)", flex: "none" }} />
+    <div className="vx-pane" data-pane="header" style={{ ...header, gridRow: 1, gridColumn: 2, gap: 8, padding: "0 12px 0 16px" }}>
+      {p.leading}
+      <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--green)", flex: "none" }} />
       <div style={{ ...ty.title, flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 4 }}>
         <span style={{ color: "var(--t3)", fontWeight: 400, whiteSpace: "nowrap", flex: "none" }}>{p.sel.kind === "meeting" ? "Meeting" : "Chat"} › </span><ChatName key={p.sel.chatId} label={p.sel.label} onRename={p.onRename} />
       </div>
-      <span style={{ ...ty.pill, flex: "none", color: "var(--accent)", background: "var(--accentbg)", borderRadius: 5, padding: "2px 8px" }}>{p.flavor}</span>
+      {phase && <span data-flavor-badge style={{ ...ty.meta, flex: "none", color: "var(--t2)", background: surface.raised, borderRadius: 4, padding: "1px 6px", lineHeight: "18px", whiteSpace: "nowrap" }}>{phase[0].toUpperCase() + phase.slice(1)}</span>}
 
+      <Fold at={520} wide={
       <div ref={box} style={{ position: "relative", marginLeft: "auto", display: "flex", alignItems: "center", gap: 5, flex: "none" }}>
         {set.map((w) => {
           // NO TARGET IS THE DESK. One spelling of the default, here as everywhere: the record
@@ -150,7 +185,7 @@ export function ContextBar(p: {
               {/* F49: this printed the workspace's SLUG — for a desk, the opaque subject id (`126`)
                   the reader has never seen. Names live in the registry precisely because slugs and
                   directories change and names are what a person reads. */}
-              <button data-ws-target={w} style={{ ...xBtn, color: "inherit", padding: 0, cursor: isTarget && !isGlobal ? "default" : "pointer", font: "inherit" }}
+              <button data-ws-target={w} style={{ ...xBtn, color: "inherit", padding: 0, cursor: isTarget && !isGlobal ? "default" : "pointer", font: "inherit", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
                 aria-label={isGlobal ? `Open ${COMPANY_WORD}` : isTarget ? `Writes go to ${w}` : `Write into ${w} from now on`}
                 title={isGlobal
                   ? "The company layer. Writes in this chat go here — click to open it."
@@ -204,7 +239,14 @@ export function ContextBar(p: {
             )}
           </div>
         )}
-      </div>
+      </div>} narrow={
+        <Menu label="Workspaces for this chat" variant="chip" align="end" triggerData={{ "data-ws-fold": "" }}
+          title="Where this chat writes, and what it can read"
+          trigger={<><PenLine size={14} strokeWidth={1.75} aria-hidden /><span style={{ minWidth: 0, maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>Writes to <WorkspaceName slug={target} fallback={target === GLOBAL_MOUNT ? COMPANY_WORD : undefined} /></span><ChevronDown size={14} strokeWidth={1.75} aria-hidden /></>}
+          items={items}
+          footer={addable.length === 0 && !offerGlobal ? "New workspaces are made in conversation." : undefined} />
+      } />
+      {p.trailing}
     </div>
   );
 }
