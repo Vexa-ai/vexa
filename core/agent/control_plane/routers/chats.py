@@ -237,7 +237,10 @@ def build(**d) -> APIRouter:
             sid, title = str(r.get("session") or ""), str(r.get("title") or "")
             meeting_title = (titles.get(sid[len(_MEET_SESSION_PREFIX):], "")
                              if sid.startswith(_MEET_SESSION_PREFIX) else "")
-            out.append({**r, "label": r.get("named_title") or chat_label_mod.chat_label(
+            # A stored name is cleaned ON READ, never rewritten: a `named_title` an agent sent with a
+            # marker in it (Vexa-ai/vexa#1641) shows as the words around the marker.
+            named = chat_label_mod.strip_markers(r.get("named_title") or "")
+            out.append({**r, "label": named or chat_label_mod.chat_label(
                 title, meeting_title=meeting_title,
                 scaffold_label=_preset_label(chat_label_mod.preset_kind(title), cache))})
         return out
@@ -848,7 +851,7 @@ def build(**d) -> APIRouter:
         return {"ok": True}
     def _name(request: Request, session: str, title: str, *, human: bool) -> dict:
         subject = subject_of(request)
-        title = ' '.join(title.split())
+        title = chat_label_mod.strip_markers(title)
         if not title or len(title) > 100:
             raise HTTPException(422, 'Use a title between 1 and 100 characters')
         if not any(r['session'] == session for r in sess.list(subject)):

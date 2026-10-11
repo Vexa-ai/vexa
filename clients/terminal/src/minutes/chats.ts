@@ -284,7 +284,7 @@ export function railRows(chats: Chat[], meetings: MeetingMock[], now = Date.now(
       // The last guard, at the surface the founder was looking at: a stored label from before
       // the rule (Vexa-ai/vexa#1602) is treated as the placeholder it is, so the row falls back to
       // its meeting's title or to "Chat" rather than putting a mark on the rail.
-      label: (isMachineryLabel(c.label) ? "" : c.label) || (m ? meetingTitle(m) : "Chat"),
+      label: (isMachineryLabel(stripMarkers(c.label)) ? "" : stripMarkers(c.label)) || (m ? meetingTitle(m) : "Chat"),
       when,
       whenLabel: whenShort(m ? meetingWhen(m) : when, { live, now }),
       live, upcoming,
@@ -417,11 +417,11 @@ export function chatsFromSessions(rows: ServerSession[], now = Date.now()): Chat
     // the scaffold's label, the act's label, or the person's first words with the machinery
     // stripped — so the rail, a second window and any other client agree by construction rather
     // than by three implementations of one rule.
-    const given = typeof r.label === "string" ? r.label.trim() : "";
+    const given = typeof r.label === "string" ? stripMarkers(r.label) : "";
     // The index defaults an untitled session's title to the session id — a placeholder, not a name.
     // And a server that predates `label` sends the raw stored title, which is where the founder's
     // `Active context: the u…` rows came from: it is read, but never when it is machinery.
-    const title = typeof r.title === "string" ? r.title.trim() : "";
+    const title = typeof r.title === "string" ? stripMarkers(r.title) : "";
     const named = title && title !== id && !isMachineryLabel(title) ? title : "";
     const mounts = Array.isArray(r.workspaces)
       ? r.workspaces.filter((w): w is string => typeof w === "string" && !!w.trim())
@@ -613,7 +613,15 @@ export function chatForRow(chats: Chat[], row: Row, meetings: MeetingMock[], now
 export function isMachineryLabel(label: string): boolean {
   const t = (label ?? "").trim();
   if (!t) return false;
-  return t.startsWith("[") || t.startsWith("Active context") || t.startsWith("Active meeting");
+  return t.startsWith("[") || t.startsWith("<!--") || t.startsWith("Active context") || t.startsWith("Active meeting");
+}
+
+/** A label without any `<!--vexa:…-->` marker (Vexa-ai/vexa#1641). The composer puts
+ *  `<!--vexa:user-input-below-->` in front of the person's sentence, and rows named before the server
+ *  stripped it read `<!--vexa:user-input-below-->zz-delete…` on the rail and in the delete dialog. An
+ *  HTML comment is never text to show: a stored label is cleaned where it is read, not rewritten. */
+export function stripMarkers(label: string): string {
+  return (label ?? "").replace(/<!--\s*vexa:[\s\S]*?(?:-->|$)/g, " ").replace(/\s+/g, " ").trim();
 }
 
 /** A label NOBODY CHOSE. The `+` button mints "New chat" and a normalised record falls back to
@@ -632,7 +640,7 @@ export const CHAT_TITLE_MAX = 48;
 
 /** The person's first sentence, as a rail row's name: one line, trimmed, cut with an ellipsis. */
 export function titleFromTurn(text: string): string {
-  const one = (text ?? "").replace(/\s+/g, " ").trim();
+  const one = stripMarkers(text ?? "");
   if (!one) return "";
   return one.length > CHAT_TITLE_MAX ? one.slice(0, CHAT_TITLE_MAX - 1).trimEnd() + "…" : one;
 }

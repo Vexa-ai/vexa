@@ -75,6 +75,24 @@ _KIND_PREFIX = re.compile(r"\A\[([a-z][a-z0-9_-]{0,31})\]\s*")
 # the literal still has exactly one writer.
 _JOB_CUT = re.compile(re.escape(JOB_MARK) + r"([a-z0-9_-]{1,32}):([^\]]{0,512})(?:\]|\Z)")
 
+# THE GROUNDING/USER BOUNDARY (Vexa-ai/vexa#1641). The terminal's composer and the chat route both
+# put `<!--vexa:user-input-below-->` (`control_plane.api_shared.CONTEXT_SENTINEL`) right in front
+# of the person's sentence, and it arrives inside `body.prompt` — so the old rule, which stripped
+# the "Active context…" block up to `---` and stopped, handed the marker to the rail as the first
+# characters of the row's name. Everything before the LAST sentinel is machinery; the person's
+# words are what follows it. Spelled here rather than imported because `shared/` never imports the
+# control plane; the test pins the two literals to each other.
+USER_INPUT_SENTINEL = "<!--vexa:user-input-below-->"
+# Any `vexa:` HTML-comment marker, whole — and one the index's 60-character cut left unterminated
+# at the end of a stored title. An HTML comment is never something to render as text.
+_VEXA_MARKER = re.compile(r"<!--\s*vexa:[\s\S]*?(?:-->|\Z)")
+
+
+def strip_markers(text: str) -> str:
+    """``text`` without any ``<!--vexa:…-->`` marker, single-lined. A label, a stored title or a
+    name somebody sent (`/api/chat/name`) goes through this before it is shown."""
+    return " ".join(_VEXA_MARKER.sub(" ", str(text or "")).split())
+
 
 def truncate_label(text: str, *, limit: int = CHAT_LABEL_MAX) -> str:
     """One line, cut with an ellipsis — the same shape the index has always stored."""
@@ -92,7 +110,7 @@ def is_machinery_label(label: str) -> bool:
     t = (label or "").strip()
     if not t:
         return False
-    if t.startswith("[") or t.startswith(JOB_MARK):
+    if t.startswith("[") or t.startswith(JOB_MARK) or t.startswith("<!--"):
         return True
     if MACHINERY_MARK in t or PHASE_MARK in t:
         return True
@@ -154,6 +172,11 @@ def human_head(text: str) -> str:
     Returns `""` when there are none, which is an answer: a prompt that is machinery end to end has
     no human head, and inventing one from the machinery's prose is the defect this file exists for."""
     s = str(text or "")
+    cut = s.rfind(USER_INPUT_SENTINEL)
+    if cut >= 0:
+        # The boundary is the authority when it is there: only what follows it is the person's.
+        s = s[cut + len(USER_INPUT_SENTINEL):]
+    s = _VEXA_MARKER.sub(" ", s)
     if any(s.lstrip().startswith(p) for p in _ACTIVE_OPENS):
         m = _ACTIVE_BLOCK.match(s.lstrip())
         # No separator left means the block itself was truncated — everything we hold is preamble.
@@ -178,7 +201,7 @@ def chat_label(text: str, *, meeting_title: str = "", scaffold_label: str = "",
     (`minutes/chats.ts` — `isPlaceholderLabel`), and a server that shipped it would be handing every
     client a name that outranks the person's own local rename in the merge."""
     for candidate in (meeting_title, scaffold_label, act_from_title(text)):
-        picked = truncate_label(candidate, limit=limit)
+        picked = truncate_label(strip_markers(candidate), limit=limit)
         if picked and not is_machinery_label(picked):
             return picked
     return truncate_label(human_head(text), limit=limit)
