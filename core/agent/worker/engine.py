@@ -416,7 +416,13 @@ def kg_links_preamble(mounts: "list[dict] | None" = None) -> str:
         "- `kg/templates/` and any doc whose frontmatter carries `template: true` are SHAPES, not"
         " records: never list them as entities or meetings, never `[[wikilink]]` them, never cite"
         " them in a brief and never count them as prior context. If you hold nothing on a subject,"
-        " say so — a shape is not a substitute for knowledge you do not have.\n\n"
+        " say so — a shape is not a substitute for knowledge you do not have.\n"
+        # The company's shapes (founder ruling 2026-10-11): the admin account edits them in
+        # `_global/kg/templates/`, and `entity_upsert` already creates a new card from them.
+        "- The company's templates are `_global/kg/templates/<kind>.md`. When the company has one"
+        " for a kind, it is the shape of a new page of that kind — it wins over this workspace's own"
+        " `kg/templates/` copy; `entity_upsert` creates new cards from it, and `section=` may name"
+        " any section it adds.\n\n"
     )
 
 

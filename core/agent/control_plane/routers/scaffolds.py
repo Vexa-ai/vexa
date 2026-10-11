@@ -8,6 +8,7 @@ single identifier changed.
 """
 from __future__ import annotations
 
+from control_plane import global_layer
 from control_plane import link_resolver as link_resolver_mod
 from control_plane import scaffolds as scaffolds_mod
 from control_plane import system_mounts
@@ -17,6 +18,10 @@ from control_plane.bodies import ScaffoldHandBody, ScaffoldMintBody
 from control_plane.ceiling import reads_within, require_in_ceiling
 from fastapi import APIRouter, Body, HTTPException, Request
 from workspaces.shared import workspace_paths as wpaths
+
+
+#: The preset the admin account's first sign-in opens: the company setup, over `_global` alone.
+ADMIN_ARRIVAL = "setup-global"
 
 
 def build(**d) -> APIRouter:
@@ -40,6 +45,16 @@ def build(**d) -> APIRouter:
     workspace_registry = d['workspace_registry']
     workspace_touches = d['workspace_touches']
     wsr = d['wsr']
+
+    def _is_admin_account(subject) -> bool:
+        """Is this subject the deployment's admin account? Identity answers; no subject, no settings
+        or no answer is no (fail closed: the everyday arrival is what anybody else gets)."""
+        if not subject or settings is None:
+            return False
+        try:
+            return bool(global_layer.is_admin_account(settings, str(subject)))
+        except Exception:  # noqa: BLE001 — an unanswered question is not a yes
+            return False
 
     @router.get("/internal/has-history")
     def has_history(who: str, request: Request):
@@ -109,12 +124,19 @@ def build(**d) -> APIRouter:
             raise HTTPException(status_code=503,
                                 detail="VEXA_UI_URL is not set on agent-api — a scaffold url would "
                                        "have no origin, and a link nobody can open is not a touch")
+        subject = _email_subject_lookup(who.lower()) or ""
+        # THE ADMIN ACCOUNT'S ARRIVAL IS THE COMPANY SETUP (founder ruling 2026-10-11). It has no
+        # desk, no workspaces and no meetings, so the everyday first visit (which offers exactly
+        # those) is the wrong conversation for it: its first sign-in opens `setup-global`, over
+        # `_global` alone. Decided here, where the mint is, so no door has to remember it.
+        admin_acct = _is_admin_account(subject)
+        opening = str(body.opening or "")
+        if admin_acct and body.kind == "first-visit":
+            opening = ADMIN_ARRIVAL
         try:
-            fm, _body_text = scaffolds_mod.read_preset(_global_root(), str(body.opening or ""))
+            fm, _body_text = scaffolds_mod.read_preset(_global_root(), opening)
         except scaffolds_mod.ScaffoldError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
-
-        subject = _email_subject_lookup(who.lower()) or ""
         row = None
         mid = str(body.meeting or "").strip()
         minted_by = str((body.provenance or {}).get("minted_by") or "")
@@ -136,6 +158,10 @@ def build(**d) -> APIRouter:
             if group and group not in mounts:
                 mounts.append(group)
         mounts = [system_mounts.GLOBAL_SLUG] + [m for m in mounts if m != system_mounts.GLOBAL_SLUG]
+        if admin_acct:
+            # The record says what the chat mounts; the admin account's mounts are `_global` only
+            # (dispatch confines it either way — this keeps the record from naming a desk).
+            mounts = [system_mounts.GLOBAL_SLUG]
 
         # ONE FIRST VISIT PER PERSON, NOT ONE PER SIGN-IN.
         #
@@ -152,14 +178,15 @@ def build(**d) -> APIRouter:
         # a workspace shared with them since, a meeting they have been invited to.
         if body.kind == "first-visit":
             existing = next((r for r in scaffolds.for_recipient(who, pending_only=True)
-                             if r.get("kind") == "first-visit"), None)
+                             if r.get("kind") == "first-visit"
+                             and str(r.get("opening") or opening) == opening), None)
             if existing:
                 logger.info("scaffold REUSED id=%s kind=first-visit who=%s (unredeemed)",
                             existing["id"], who)
                 return {"id": existing["id"], "url": f"{ui}/?s={existing['id']}"}
 
         rec = _compose_and_mint(
-            who=who, subject=subject, kind=body.kind, opening=str(body.opening), fm=fm,
+            who=who, subject=subject, kind=body.kind, opening=opening, fm=fm,
             mid=mid, mounts=mounts, group=group, refs_in=body.refs,
             tabs=body.tabs, focus=body.focus, provenance=body.provenance,
             share_token=body.share_token,
@@ -238,6 +265,8 @@ def build(**d) -> APIRouter:
                                            "name a meeting you can open")
         group = scaffolds_mod.group_workspace_of(row)
         mounts = [system_mounts.GLOBAL_SLUG, subject] + ([group] if group else [])
+        if _is_admin_account(subject):
+            mounts = [system_mounts.GLOBAL_SLUG]     # the admin account has `_global` and nothing else
 
         rec = _compose_and_mint(
             who=who, subject=subject, kind="hand-link", opening=preset, fm=fm,

@@ -14,6 +14,7 @@ from control_plane import deploy_keys as deploy_keys_mod
 from control_plane import front_page as front_page_mod
 from control_plane import git_credentials as git_creds
 from control_plane import global_layer
+from control_plane import kg_templates
 from control_plane import publish as publish_mod
 from control_plane import repo_ref
 from control_plane import scaffolds as scaffolds_mod
@@ -148,10 +149,13 @@ def build(**d) -> APIRouter:
                 raise HTTPException(status_code=400, detail="invalid filename") from None
             uploaded.append({"name": stored_name, "path": path})
         return {"files": uploaded}
-    def _write_dir(request: Request, subject, rel: str, slug: Optional[str]) -> Path:
+    def _write_dir(request: Request, subject, rel: str, slug: Optional[str], *,
+                   templates: bool = False) -> Path:
         """WHICH workspace dir a write to ``rel`` lands in, or the refusal. The mount rules, in one
         place: own baseline/_system always; a shared workspace needs contributor+; `_global` only
-        the admin allowlist; `kg/templates/` never.
+        the admin account; `kg/templates/` never — except the COMPANY's templates in `_global`, on
+        the two doors that pass ``templates=True`` (the page write, which validates the shape, and
+        the page remove, which reverts a kind to the baked shape), and only for the admin account.
 
         Extracted from ``ws_file_write`` unchanged when the ASSET writes arrived, because the
         alternative was a second copy of an authorization rule — and a permission check that exists
@@ -164,8 +168,18 @@ def build(**d) -> APIRouter:
         # `kg/templates/` is the SHAPE of an entity, not one. It is hidden from every tree, so a tab
         # can only be open on it deliberately — and a save from that tab would silently rewrite the
         # shape every future entity is copied from.
-        if rel.startswith("kg/templates/"):
-            raise HTTPException(status_code=403, detail="kg/templates/ holds entity shapes, not records")
+        #
+        # THE COMPANY'S TEMPLATES ARE THE ONE EXCEPTION (founder ruling 2026-10-11: the admin account
+        # controls the templates new notes are created from). `_global/kg/templates/<kind>.md` is
+        # the shape `entity_upsert` creates a new card from; it is written only through the doors
+        # that ask for it, and the `_global` branch below still refuses every account but the
+        # admin account.
+        if rel.startswith("kg/templates/") and not (templates and slug == system_mounts.GLOBAL_SLUG):
+            raise HTTPException(status_code=403, detail=(
+                "kg/templates/ holds entity shapes, not records — the company's templates are "
+                "_global/kg/templates/, edited by the admin account"
+                if slug == system_mounts.GLOBAL_SLUG else
+                "kg/templates/ holds entity shapes, not records"))
         if slug == system_mounts.GLOBAL_SLUG:
             require_in_ceiling(request, slug)
             if not global_layer.is_admin_account(settings, str(subject)):
@@ -386,7 +400,14 @@ def build(**d) -> APIRouter:
         content = body.content
         # #1624: an image address nobody checked never reaches the page (see `_screen_images`).
         content = _screen_images(request, [content], path=rel, tool="workspace_write")[0]
-        target = _write_dir(request, subject, rel, slug)
+        target = _write_dir(request, subject, rel, slug, templates=True)
+        # A TEMPLATE IS CHECKED BEFORE IT LANDS: a shape `entity_upsert` cannot create a card from
+        # is refused here with what to put back, rather than discovered on the next new note.
+        if kg_templates.is_template_path(rel):
+            problems = kg_templates.validate(rel, content)
+            if problems:
+                raise HTTPException(status_code=422, detail={
+                    "refused": "not a usable template", "path": rel, "problems": problems})
         try:
             # resolved ONCE (…and again WITH the root, for the symlink half), written nofollow
             fbase, frel = wpaths.locate_inside(target, rel)
@@ -417,7 +438,8 @@ def build(**d) -> APIRouter:
     # `git show` away forever — which is what makes removing a page a safe thing for an agent to do
     # at all, and why neither of these needs a confirmation step the model would have to invent.
 
-    def _movable_dir(request: Request, subject, rel: str, slug: Optional[str]) -> Path:
+    def _movable_dir(request: Request, subject, rel: str, slug: Optional[str], *,
+                     templates: bool = False) -> Path:
         """WHICH workspace dir a REMOVAL (or the source/target half of a move) lands in, or the
         refusal. `_write_dir`'s rules — path guard, `kg/templates/`, `_global` admin-only, shared
         needs contributor+, anything outside the active set 403s — plus ONE more.
@@ -433,7 +455,7 @@ def build(**d) -> APIRouter:
             raise HTTPException(status_code=403, detail=(
                 "`_system` holds chats, sessions and identity — the platform writes that tier; "
                 "pages are removed from a desk or a workspace, never from it"))
-        return _write_dir(request, subject, rel, slug)
+        return _write_dir(request, subject, rel, slug, templates=templates)
 
     def _kg_index_after(target: Path, *rels: str) -> list[str]:
         """Refresh `kg/INDEX.md` when one of ``rels`` was an ENTITY page, and say so as a pathspec.
@@ -477,7 +499,9 @@ def build(**d) -> APIRouter:
         subject = subject_of(request)
         rel = str(body.path or "").strip()
         slug = write_slug(request, body.slug)
-        target = _movable_dir(request, subject, rel, slug)
+        # Removing a COMPANY template is allowed (the kind reverts to the baked shape); moving one
+        # is not — a move would land a shape nobody validated, or take one out without a revert.
+        target = _movable_dir(request, subject, rel, slug, templates=True)
         try:
             # CHECK ONCE, ACT ON WHAT WAS CHECKED: the removal goes through the located root and
             # link-free path by descriptor, so a link swapped in after the check removes nothing
@@ -634,7 +658,11 @@ def build(**d) -> APIRouter:
                 fields=body.fields,
                 section=body.section.strip(),
                 connections=body.connections or (),
-                open_questions=questions)
+                open_questions=questions,
+                # THE COMPANY'S SHAPE for this kind, when the admin account wrote one
+                # (`_global/kg/templates/<kind>.md`); a new card takes its sections, and one that is
+                # not a usable shape is ignored in favour of the baked one (`kg_templates`).
+                template=kg_templates.company_template(_global_dir(), kind))
         except entities_mod.EntityMalformed as e:
             # 400, and CAUGHT FIRST — `EntityMalformed` is a subclass, so the broader clause below
             # would swallow it. This is the one refusal that IS a retry: an argument the writer

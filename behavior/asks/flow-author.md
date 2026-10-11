@@ -1,6 +1,6 @@
 ---
 label: flows
-mounts: _global, personal
+mounts: _global
 tabs: _global/flows/README.md
 focus: _global/flows/README.md
 ---

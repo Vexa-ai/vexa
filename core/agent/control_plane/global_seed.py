@@ -23,12 +23,15 @@ is the SAME RULE `preset_library` established one directory down, applied to the
   reported by the return value and the log; every reader of these files already falls back to the
   copy in the image.
 
-TWO SOURCES, ONE TREE. `behavior/global/` is the seed proper — the layer files with their unwritten
+THREE SOURCES, ONE TREE. `behavior/global/` is the seed proper — the layer files with their unwritten
 regions, `POLICIES.md`, and the generated flow pages. `behavior/mail/` is copied to `_global/mail/`
 rather than duplicated into the seed: that directory's README already says the repo copy is the
 SOURCE and `/workspaces/_global/mail/<name>.md` is the live copy, *"same content, edited in both, or
 the source lies"* — and until now the only thing that carried one to the other was a person
-remembering to. `asks/` is `preset_library`'s and stays there; it had this rule first.
+remembering to. `asks/` is `preset_library`'s and stays there; it had this rule first. A THIRD
+source, the entity templates every desk is seeded with, lands in `_global/kg/templates/`: the
+company's copy of the shapes new notes are created from, which only the admin account edits
+(`kg_templates`).
 
 WHAT THE SEED MUST NOT DO IS PASS FOR A WRITTEN LAYER. Every layer file arrives carrying
 `global_layer.UNWRITTEN_MARKER`, and `global_layer.state` counts a file that still carries it as not
@@ -56,14 +59,23 @@ DEFAULT_IMAGE_SEED_DIR = "/app/behavior/global"
 #: Where the image keeps the mail templates. Same COPY discipline, same test.
 DEFAULT_IMAGE_MAIL_DIR = "/app/behavior/mail"
 
+#: Where the image keeps the entity templates every desk is seeded with (the agent-api Dockerfile
+#: COPYs `behavior/workspaces` to `/app/workspace-seeds`). They are carried into
+#: `_global/kg/templates/` too, so the admin account has the company's copy to edit (founder ruling
+#: 2026-10-11: the admin account controls the templates new notes are created from). Additive, like
+#: everything here: an edited template is never overwritten by a deploy.
+DEFAULT_IMAGE_TEMPLATES_DIR = "/app/workspace-seeds/default/kg/templates"
+
 #: Operator overrides, for a deployment that mounts either from somewhere else. They mirror
 #: `VEXA_PRESET_LIBRARY_DIR` and `VEXA_WORKSPACE_SEEDS_DIR`, which do the same job for the two
 #: trees that already had one.
 ENV_IMAGE_SEED_DIR = "VEXA_GLOBAL_SEED_DIR"
 ENV_IMAGE_MAIL_DIR = "VEXA_GLOBAL_MAIL_DIR"
+ENV_IMAGE_TEMPLATES_DIR = "VEXA_GLOBAL_TEMPLATES_DIR"
 
 #: The live directory name each source lands in, relative to `_global`. Empty string = the root.
 MAIL_DIRNAME = "mail"
+TEMPLATES_DIRNAME = "kg/templates"
 
 
 def _dir(env_name: str, default: str) -> Optional[Path]:
@@ -84,6 +96,11 @@ def image_mail_dir() -> Optional[Path]:
     return _dir(ENV_IMAGE_MAIL_DIR, DEFAULT_IMAGE_MAIL_DIR)
 
 
+def image_templates_dir() -> Optional[Path]:
+    """The image's copy of the entity templates, or None when this build carries none."""
+    return _dir(ENV_IMAGE_TEMPLATES_DIR, DEFAULT_IMAGE_TEMPLATES_DIR)
+
+
 def sources() -> list[tuple[Path, str]]:
     """(source directory, destination relative to `_global`) for every tree this module carries."""
     out: list[tuple[Path, str]] = []
@@ -93,6 +110,9 @@ def sources() -> list[tuple[Path, str]]:
     mail = image_mail_dir()
     if mail is not None:
         out.append((mail, MAIL_DIRNAME))
+    templates = image_templates_dir()
+    if templates is not None:
+        out.append((templates, TEMPLATES_DIRNAME))
     return out
 
 
