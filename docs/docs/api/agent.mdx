@@ -99,6 +99,7 @@ Returns **Server-Sent Events**; each `data:` line is one frame:
 | `message-delta` | `text` |
 | `tool-call` | `tool`, `args`, `callId` |
 | `tool-result` | `callId`, `ok`, `summary` |
+| `sources` | `items`: `[{ url, title? }]` — a page the turn successfully fetched (`WebFetch`), one per frame; a client merges a turn's items by `url` and renders them as the answer's citations. Only `http`/`https` URLs. |
 | `commit` | `sha` |
 | `rejected` | `violations` |
 | `done` | `reply`, `sessionId`, `ok` (+ `detail` when a failure's raw provider text was rewritten, + `fault` when the turn failed typed) |
@@ -109,6 +110,57 @@ curl -N -X POST "$API_BASE/agent/chat" -H "Content-Type: application/json" \
   -H "X-API-Key: $VEXA_API_KEY" \
   -d '{"prompt":"Record that Acme renewed."}'
 ```
+
+### Sources: the pages a turn read
+
+When the agent reads a web page with `WebFetch` to answer, the stream carries a `sources` frame for
+that page, so a client can show the answer's citations from data instead of parsing a "Sources" list
+out of the reply text:
+
+```json
+{ "type": "sources", "items": [{ "url": "https://example.com/report", "title": "Example report" }] }
+```
+
+**Limits.**
+
+- Only a fetch that succeeded is a source. A failed fetch and a search result list are not.
+- One item per frame. A turn that read three pages sends three frames; merge them by `url`.
+- `url` is `http` or `https` only, at most 2,048 characters. `title` is present only when the fetch
+  tool's result is JSON carrying a `title`, and is cut to 300 characters.
+- The `claude-code` and `openai-agent` harnesses emit it. The `codex` harness does not.
+
+#### How it works
+
+1. The harness sees a `WebFetch` call and keeps its arguments by call id
+   (`core/agent/llm/claude_code.py`; `core/agent/llm/openai_agent.py` `_panel_events`).
+2. On that call's successful result it calls `_fetched_source(args, content)` in
+   `core/agent/llm/tool_events.py`, the one place both harnesses share. The URL comes from the call's
+   arguments. When the result is JSON, its `title` is added and its own `url` field, if it is
+   `http(s)`, replaces the one asked for.
+3. The frame follows that call's `tool-result` frame on the worker's output and reaches the chat SSE
+   stream unchanged, like the other panel frames.
+
+The harness is the only writer of the frame; nothing stores it. No sealed contract lists the chat
+frames, so the frame is additive: a client that does not know it ignores it. No route and no
+configuration.
+
+#### Why it complies
+
+| Rule | How | Gate |
+|---|---|---|
+| **P2** couple only through contracts | The fetch vocabulary and the frame builder live once in `llm/tool_events.py`; both harnesses import it rather than keep a copy. | `gate:python` (`test_the_openai_runner_derives_the_same_event`); the shared module itself: ungated: reviewed |
+| **P16** additive change | A new optional frame type on an unsealed stream; existing frames are unchanged. | ungated: reviewed |
+| **P18** fail loud, no false success | Only a successful fetch becomes a source, so a citation always names a page the turn read. | `gate:python` (`test_a_failed_fetch_is_not_a_source`, `test_a_search_is_not_a_source`) |
+| **P23** one writer | The harness derives the frame from the tool result; nothing else writes sources. | ungated: reviewed |
+
+**Security.** The frame grants no access: it carries only URLs the person's own turn fetched, on that
+person's own stream, through the same agent-api relay as every other frame. The fetch itself is
+unchanged (`openai-agent`'s `WebFetch` keeps its outbound-address guard). A non-web scheme is never
+passed on as a link, and the title is length-capped data, not markup. Tests in
+`core/agent/tests/test_turn_sources.py`: `test_only_http_urls_are_sources` (refuses `javascript:`,
+`file:` and a missing URL), `test_a_failed_fetch_is_not_a_source`, `test_a_search_is_not_a_source`,
+`test_a_successful_fetch_is_a_source`, `test_the_title_and_final_url_come_from_a_json_result`,
+`test_the_openai_runner_derives_the_same_event`.
 
 **Typed faults.** A failure says who failed and how, as
 `fault: { source, kind, status, detail, remedy }` on a failed `done`, on an `error` frame, and on the

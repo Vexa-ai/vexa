@@ -32,7 +32,7 @@ from llm.ports import (HarnessExec, close_event_stream, harness_identity_kwargs,
                        max_output_tokens)
 from llm.claude_skills import _link_skills_into_home
 from llm.tool_events import (_BOT_TOOLS, _FOCUS_TOOLS, _OPEN_TOOLS, _TERMS_TOOLS, _WRITER_TOOLS,
-                             _bot_artifact, _open_event, _published_terms, _short,
+                             _FETCH_TOOLS, _bot_artifact, _fetched_source, _open_event, _published_terms, _short,
                              _workspace_focus, _written_artifact)
 
 logger = logging.getLogger("llm.claude_code")
@@ -67,6 +67,7 @@ def parse_stream_json(lines: Iterable[str]) -> Iterator[dict]:
     pending_opens: set[str] = set()
     # callIds of in-flight `workspace_new` calls — same discipline again (Vexa-ai/vexa#1603).
     pending_focus: set[str] = set()
+    pending_fetches: dict[str, dict] = {}   # call id -> the fetch's args (its URL), until the result
     # THE PROVIDER'S FAILURE, WHEREVER THE CLI PUT IT (P18). The CLI reports a provider refusal —
     # OpenRouter's 402, out of credit — as a synthetic assistant message (`API Error: 402 {…}`,
     # sometimes labelled `error: "billing_error"`), then a `result` with `is_error`; and when it dies
@@ -131,6 +132,8 @@ def parse_stream_json(lines: Iterable[str]) -> Iterator[dict]:
                             pending_opens.add(call_id)
                         elif tool_name in _FOCUS_TOOLS:
                             pending_focus.add(call_id)
+                        elif tool_name in _FETCH_TOOLS:
+                            pending_fetches[call_id] = block.get("input", {}) or {}
                         yield {
                             "type": "tool-call",
                             "tool": tool_name,
@@ -184,6 +187,14 @@ def parse_stream_json(lines: Iterable[str]) -> Iterator[dict]:
                         pending_focus.discard(call_id)
                         if was_focus and ok:
                             ev = _workspace_focus(block.get("content"))
+                            if ev:
+                                yield ev
+                        # A PAGE THE TURN READ IS A SOURCE. Success-only like the rest: a fetch
+                        # that failed read nothing, and citing it would be a claim the answer
+                        # cannot back.
+                        fetched = pending_fetches.pop(call_id, None)
+                        if fetched is not None and ok:
+                            ev = _fetched_source(fetched, block.get("content"))
                             if ev:
                                 yield ev
                         target = pending_writes.pop(call_id, None)
