@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Iterator, Optional
 
 from control_plane import git_secret_store as secret_store
+from shared import git_provider
 from workspaces.shared import workspace_paths as wpaths
 
 log = logging.getLogger(__name__)
@@ -159,11 +160,17 @@ def is_ssh_url(url: str) -> bool:
 
 
 def deploy_keys_url(repo_url: str) -> Optional[str]:
-    """The GitHub settings page where a public key is added as a deploy key, derived from the repo URL.
-    None for a host we cannot map — we say the state, we never guess a link."""
+    """The settings page where a public key is added as a deploy key, derived from the repo URL: GitHub's
+    ``/settings/keys``, or GitLab's repository settings for a host the operator registered as GitLab
+    (``VEXA_GIT_PROVIDERS``). None for any other host — we say the state, we never guess a link."""
     u = (repo_url or "").strip().rstrip("/")
     u = re.sub(r"\.git$", "", u)
     m = re.match(r"^(?:https?://|ssh://)?(?:[^@/]+@)?github\.com[:/]+([^/]+)/([^/]+)$", u)
-    if not m:
-        return None
-    return f"https://github.com/{m.group(1)}/{m.group(2)}/settings/keys"
+    if m:
+        return f"https://github.com/{m.group(1)}/{m.group(2)}/settings/keys"
+    host = git_provider.hostname_of(u)
+    if host and git_provider.provider_for(u).kind == git_provider.GITLAB:
+        m = re.match(r"^(?:https?://[^/]+/|ssh://[^/]+/|[^@/]+@[^:/]+:/?)((?:[A-Za-z0-9._-]+/)+[A-Za-z0-9._-]+)$", u)
+        if m:
+            return f"https://{host}/{m.group(1)}/-/settings/repository#js-deploy-keys-settings"
+    return None

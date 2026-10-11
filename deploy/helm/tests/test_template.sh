@@ -1262,4 +1262,15 @@ if [ -z "$loose" ] && grep -q 'app.kubernetes.io/component: flows-api' <<< "$flo
   echo "  OK: every policy, Service and Pod template naming a flows component also names this release"
 else echo "  FAIL: flows matched by component alone:"; echo "$loose" | head -40; fail=1; fi
 
+# agentApi.gitProviders reaches agent-api as VEXA_GIT_PROVIDERS, verbatim; unset renders empty (every
+# host keeps GitHub's token form).
+git_hosts="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" \
+  --set-string agentApi.gitProviders='git.example.com=gitlab\,code.example.org=basic:svc-vexa' \
+  | grep -A1 'name: VEXA_GIT_PROVIDERS' | grep 'value:' || true)"
+git_default="$(printf '%s\n' "$RENDER" | grep -A1 'name: VEXA_GIT_PROVIDERS' | grep 'value:' || true)"
+if grep -q '"git.example.com=gitlab,code.example.org=basic:svc-vexa"' <<< "$git_hosts" \
+   && grep -q 'value: ""' <<< "$git_default"; then
+  echo "  OK: agentApi.gitProviders reaches agent-api as VEXA_GIT_PROVIDERS (empty by default)"
+else echo "  FAIL: VEXA_GIT_PROVIDERS not rendered as set: [$git_hosts] default [$git_default]"; fail=1; fi
+
 [ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }

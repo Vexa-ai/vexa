@@ -40,7 +40,8 @@ from control_plane.workspace_git_sync import (
     RemoteSyncError, detach_home, pull_origin, push_origin, remote_status)
 from control_plane.workspace_membership import MembershipError
 from control_plane.workspace_publish import (
-    PublishError, RepoExistsError, publish_workspace, published_remote_url)
+    PublishError, RepoExistsError, UnsupportedHostError, creation_host, publish_workspace,
+    published_remote_url)
 from control_plane.workspace_purpose import read_purpose, write_purpose
 from fastapi import APIRouter, Body, File, Form, Header, HTTPException, Request, Response, UploadFile
 from pathlib import Path
@@ -1299,8 +1300,9 @@ def build(**d) -> APIRouter:
         return {"subject": result.subject, "slug": result.slug, "changed": result.changed}
     @router.post("/api/workspace/publish")
     def ws_publish(request: Request, body: WorkspacePublishBody = Body(...)):
-        """Publish this subject's vexa-born workspace to GitHub — the counterpart of swap/attach.
-        Creates the repo under the caller's account (or ``org``) with their per-call PAT, then pushes
+        """Publish this subject's vexa-born workspace — the counterpart of swap/attach.
+        Creates the repo on GitHub, or on a GitLab ``host`` the operator registered (``org`` is then a
+        group path, nested allowed), under the caller's account with their per-call token, then pushes
         the active workspace's current branch (FULL history) over the token-scrubbed dedicated remote.
         ``remote_url`` skips creation (pre-created/empty repo). Re-publish = plain push (fast-forward
         or a clear error on divergence — never a force push). The token is used server-side for this
@@ -1313,22 +1315,35 @@ def build(**d) -> APIRouter:
         remote_url = (body.remote_url or "").strip()
         if remote_url and not wcreds.is_https(remote_url):
             raise HTTPException(status_code=400, detail="publish pushes only to an https:// repository URL")
+        # Where a NEW repository would be created, decided before any credential is read: GitHub, or a
+        # GitLab host the operator registered. Anything else is refused by name (P18), never probed.
+        target = None
+        if not remote_url:
+            try:
+                target = creation_host(body.host)
+            except UnsupportedHostError as exc:
+                raise HTTPException(status_code=422, detail=str(exc))
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
         token = (body.token or "").strip()
-        if not token and (not remote_url or wcreds.saved_token_may_reach(remote_url)):
+        if not token and (target == "github.com" or (remote_url and wcreds.saved_token_may_reach(remote_url))):
             # The saved token goes only to GitHub: a repository this call creates there, or an
             # https://github.com/ URL. Any other host needs a token typed for this call.
             token = git_creds.read_github_token(wsr.root, subject)
         if not token:
-            raise HTTPException(status_code=400, detail="a GitHub token is required — pass one or save a reusable token "
-                                                        "(a saved token is only sent to https://github.com/)")
+            raise HTTPException(status_code=400, detail="an access token is required — pass one, or save a reusable "
+                                                        "GitHub token (a saved token is only sent to https://github.com/)")
         try:
             result = publish_workspace(
                 wsr.root, subject,
                 token=token, repo_name=body.repo_name, private=body.private,
                 org=body.org or None, remote_url=body.remote_url or None, ws_dir=ws_dir,
+                host=target,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc) or "invalid subject")
+        except UnsupportedHostError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
         except RepoExistsError as exc:
             raise HTTPException(status_code=409, detail=str(exc))   # already token-redacted (P15)
         except PublishError as exc:

@@ -573,6 +573,13 @@ agentApi:
   # budget with a Continue act instead. agent-api validates both at boot and stamps them into workers.
   autoContinueChat: "1"
   maxChatContinuations: "4"
+  # Self-hosted git hosts and the provider each runs, so a token typed for a clone, pull, push or
+  # publish is sent in the shape that host expects: comma-separated <host>=<provider>, provider one of
+  # github (the bare token), gitlab (oauth2:<token>) or basic:<username> (<username>:<token>).
+  # A gitlab host is also the one place besides github.com where publish may CREATE a repository.
+  # Unlisted hosts keep GitHub's form. A malformed value stops agent-api at boot.
+  # Example: "gitlab.example.com=gitlab,git.example.org=basic:svc-vexa"
+  gitProviders: ""
   extraEnv: []
 
 # ---------- Connections: the credential broker (credential-broker.v1, ADR-0040) ----------

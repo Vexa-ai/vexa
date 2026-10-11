@@ -357,9 +357,15 @@ never a force push; `400` when no credential resolves, naming the deploy-key rou
 `POST /api/workspace/pull` `{ slug?, token? }` → `{ remote, url, branch, head_sha, updated, behind_before }`;
 a divergence is refused rather than merged, rebased or forced, and on a shared workspace a viewer is
 refused because a pull rewrites the tree ·
-`POST /api/workspace/publish` `{ repo_name?, private?, org?, remote_url?, slug?, token? }` →
-`{ repo_url, pushed_ref, head_sha, created }` — `409` if the repo already exists, `502` on a push
-failure, `400` with no token passed and none saved.
+`POST /api/workspace/publish` `{ repo_name?, private?, org?, remote_url?, slug?, token?, host? }` →
+`{ repo_url, pushed_ref, head_sha, created }` — `host` is where a new repository is created:
+`github.com` (default) or a GitLab host registered in `VEXA_GIT_PROVIDERS`, where `org` is a group path
+(nested allowed); any other host is `422` naming it. `409` if the repo already exists, `502` on a push
+failure, `400` with no token passed and none saved (a saved token is only used for GitHub).
+
+Repository addresses may be nested (`group/sub/repo`) on any host but `github.com`. A per-call `token`
+written `<user>:<token>` (for GitLab, `oauth2:<token>`) is sent with that account name; a bare token is
+shaped by the host's provider. See [Repositories on GitLab](/minutes/workspaces#repositories-on-gitlab-or-another-self-hosted-server).
 
 ## The company layer
 

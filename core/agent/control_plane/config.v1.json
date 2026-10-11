@@ -417,6 +417,16 @@
       ]
     },
     {
+      "key": "VEXA_GIT_PROVIDERS",
+      "class": "defaulted",
+      "default": "(unset \u2014 every host takes GitHub's bare-token form)",
+      "description": "comma-separated <host>=<provider> entries naming the git provider a self-hosted host runs: github (the token as the whole URL userinfo), gitlab (oauth2:<token>) or basic:<username> (<username>:<token>). Decides how a per-call token is presented on clone, pull, push and publish (shared/git_provider.py), and makes a gitlab host a place publish may create a repository. A per-call token written <user>:<token> overrides the map. Parsed at boot; a malformed entry is a boot refusal naming it",
+      "targets": [
+        "compose",
+        "helm"
+      ]
+    },
+    {
       "key": "VEXA_ALLOW_LOCAL_REPO_ROOT",
       "class": "defaulted",
       "default": "(unset)",
