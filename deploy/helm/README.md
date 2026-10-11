@@ -86,6 +86,7 @@ them under running services. Supply each from a Secret you manage:
 | `identity.existingSecret` + `identity.publicKey` | the gateway's signing key as `signing-key.pem`, and its PEM public key in values (a render cannot derive it from a Secret it cannot read). Or `identity.signingKey` |
 | `database.existingSecret` | keys `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`; the chart renders no credentials Secret and never rotates this one. Or `database.password` |
 | `flows.existingSecret`, or `secrets.existingSecretName` with `flows.apiKey` empty | flows' operator key `VEXA_FLOWS_API_KEY`. The chart does not generate it; from either Secret, flows-api, flows-worker, flows-mailbox and the MCP edge read it by name and the chart's flows Secret leaves it out, so `flows.enabled` needs no key in values. Setting `flows.apiKey` and `flows.existingSecret` together is refused |
+| `flows.mail.existingSecret` | the bot mailbox's `VEXA_MAIL_APP_PASSWORD` and, optionally, the relay login's `VEXA_MAIL_SMTP_PASSWORD`. Every flows container reads them by name and the chart's flows Secret leaves the password out. Setting `flows.mail.appPassword` too is refused. The IMAP and SMTP endpoints, TLS modes and an internal CA bundle are `flows.mail.imap`, `.smtp` and `.ca` — see `docs/docs/flows/mailbox.mdx` |
 
 ## Known boundaries (v0.12)
 

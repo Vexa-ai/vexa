@@ -847,6 +847,16 @@ services:
       - VEXA_MAIL_SMTP_TLS_INSECURE=${VEXA_MAIL_SMTP_TLS_INSECURE:-}
       - VEXA_MAIL_SMTP_USER=${VEXA_MAIL_SMTP_USER:-}
       - VEXA_MAIL_SMTP_PASSWORD=${VEXA_MAIL_SMTP_PASSWORD:-}
+      # the relay's TLS policy and trust, and the IMAP endpoint — every default is the Gmail preset;
+      # a *_CA_FILE is a path INSIDE the container (mount the bundle in an override)
+      - VEXA_MAIL_SMTP_TLS=${VEXA_MAIL_SMTP_TLS:-auto}
+      - VEXA_MAIL_SMTP_CA_FILE=${VEXA_MAIL_SMTP_CA_FILE:-}
+      - VEXA_MAIL_IMAP_HOST=${VEXA_MAIL_IMAP_HOST:-imap.gmail.com}
+      - VEXA_MAIL_IMAP_PORT=${VEXA_MAIL_IMAP_PORT:-}
+      - VEXA_MAIL_IMAP_TLS=${VEXA_MAIL_IMAP_TLS:-tls}
+      - VEXA_MAIL_IMAP_USER=${VEXA_MAIL_IMAP_USER:-}
+      - VEXA_MAIL_IMAP_FOLDER=${VEXA_MAIL_IMAP_FOLDER:-INBOX}
+      - VEXA_MAIL_IMAP_CA_FILE=${VEXA_MAIL_IMAP_CA_FILE:-}
       - VEXA_MAILPIT_URL=${VEXA_MAILPIT_URL:-}
       - VEXA_MAILPIT_LOOKBACK_S=${VEXA_MAILPIT_LOOKBACK_S:-300}
       - VEXA_NOTIFY_CHANNEL=${VEXA_NOTIFY_CHANNEL:-smtp}
@@ -964,6 +974,16 @@ services:
       - VEXA_MAIL_SMTP_TLS_INSECURE=${VEXA_MAIL_SMTP_TLS_INSECURE:-}
       - VEXA_MAIL_SMTP_USER=${VEXA_MAIL_SMTP_USER:-}
       - VEXA_MAIL_SMTP_PASSWORD=${VEXA_MAIL_SMTP_PASSWORD:-}
+      # the relay's TLS policy and trust, and the IMAP endpoint — every default is the Gmail preset;
+      # a *_CA_FILE is a path INSIDE the container (mount the bundle in an override)
+      - VEXA_MAIL_SMTP_TLS=${VEXA_MAIL_SMTP_TLS:-auto}
+      - VEXA_MAIL_SMTP_CA_FILE=${VEXA_MAIL_SMTP_CA_FILE:-}
+      - VEXA_MAIL_IMAP_HOST=${VEXA_MAIL_IMAP_HOST:-imap.gmail.com}
+      - VEXA_MAIL_IMAP_PORT=${VEXA_MAIL_IMAP_PORT:-}
+      - VEXA_MAIL_IMAP_TLS=${VEXA_MAIL_IMAP_TLS:-tls}
+      - VEXA_MAIL_IMAP_USER=${VEXA_MAIL_IMAP_USER:-}
+      - VEXA_MAIL_IMAP_FOLDER=${VEXA_MAIL_IMAP_FOLDER:-INBOX}
+      - VEXA_MAIL_IMAP_CA_FILE=${VEXA_MAIL_IMAP_CA_FILE:-}
       - VEXA_MAILPIT_URL=${VEXA_MAILPIT_URL:-}
       - VEXA_MAILPIT_LOOKBACK_S=${VEXA_MAILPIT_LOOKBACK_S:-300}
       - VEXA_NOTIFY_CHANNEL=${VEXA_NOTIFY_CHANNEL:-smtp}
@@ -1081,6 +1101,16 @@ services:
       - VEXA_MAIL_SMTP_TLS_INSECURE=${VEXA_MAIL_SMTP_TLS_INSECURE:-}
       - VEXA_MAIL_SMTP_USER=${VEXA_MAIL_SMTP_USER:-}
       - VEXA_MAIL_SMTP_PASSWORD=${VEXA_MAIL_SMTP_PASSWORD:-}
+      # the relay's TLS policy and trust, and the IMAP endpoint — every default is the Gmail preset;
+      # a *_CA_FILE is a path INSIDE the container (mount the bundle in an override)
+      - VEXA_MAIL_SMTP_TLS=${VEXA_MAIL_SMTP_TLS:-auto}
+      - VEXA_MAIL_SMTP_CA_FILE=${VEXA_MAIL_SMTP_CA_FILE:-}
+      - VEXA_MAIL_IMAP_HOST=${VEXA_MAIL_IMAP_HOST:-imap.gmail.com}
+      - VEXA_MAIL_IMAP_PORT=${VEXA_MAIL_IMAP_PORT:-}
+      - VEXA_MAIL_IMAP_TLS=${VEXA_MAIL_IMAP_TLS:-tls}
+      - VEXA_MAIL_IMAP_USER=${VEXA_MAIL_IMAP_USER:-}
+      - VEXA_MAIL_IMAP_FOLDER=${VEXA_MAIL_IMAP_FOLDER:-INBOX}
+      - VEXA_MAIL_IMAP_CA_FILE=${VEXA_MAIL_IMAP_CA_FILE:-}
       - VEXA_MAILPIT_URL=${VEXA_MAILPIT_URL:-}
       - VEXA_MAILPIT_LOOKBACK_S=${VEXA_MAILPIT_LOOKBACK_S:-300}
       - VEXA_NOTIFY_CHANNEL=${VEXA_NOTIFY_CHANNEL:-smtp}

@@ -1,0 +1,219 @@
+---
+title: "Connect the bot mailbox"
+description: "Invite-by-email against any IMAP server — an on-premises Exchange, Exchange Online or Gmail: what the mail administrators must enable, the Helm and compose settings, and what each failure looks like."
+---
+
+People invite the bot the way they invite a colleague: they add its address to a calendar invite.
+The `flows-mailbox` process reads that mailbox over IMAP, turns each invite into a fact, and the
+`invite_intake` flow accepts the invite, acknowledges it and sends the bot into the meeting when it
+starts. Replies and acknowledgements go out over SMTP.
+
+Any IMAP server works. Gmail is the **preset**: when no endpoint is named, the mailbox reads
+`imap.gmail.com` and sends through Gmail with an app password, exactly as earlier releases did.
+
+## Checklist for the mail administrators
+
+Hand this list to whoever runs the mail server. Every item is on the mail side. Nothing here asks
+for more access than one mailbox.
+
+- [ ] **A dedicated mailbox** for the bot, for example `vexa@example.org`. A shared mailbox works
+      only if it can be logged into directly with its own credentials.
+- [ ] **IMAP is enabled for that mailbox.** On Exchange Server: the IMAP4 services are running
+      (`MSExchangeIMAP4` and `MSExchangeIMAP4BE`), and IMAP is enabled on the mailbox
+      (`Set-CASMailbox <mailbox> -ImapEnabled $true`).
+- [ ] **The IMAP port is reachable from the cluster**: 993 for implicit TLS (recommended) or 143
+      with STARTTLS. Open the egress network policy and any firewall between the pods and the
+      server.
+- [ ] **IMAP accepts a password login for this mailbox.** The bot logs in with a user name and
+      password (IMAP `LOGIN`). On Exchange Server, the IMAP login method must allow plain-text
+      login over TLS (`Set-ImapSettings -LoginType SecureLogin`, the default). The bot does not
+      support OAuth2 (XOAUTH2) or Kerberos for IMAP yet.
+- [ ] **The login name.** Say which form the server accepts: the address, the UPN, or
+      `DOMAIN\user`.
+- [ ] **The certificate.** If the server's certificate is issued by an internal CA, provide that
+      CA's certificate in PEM form. The bot trusts only the bundle you give it.
+- [ ] **SMTP for replies.** A relay the pods may submit to, usually port 587 with STARTTLS, and
+      whether it needs a login (`Set-ReceiveConnector` with authenticated submission). The relay
+      must let the bot send as its own address.
+- [ ] **Optional: a folder.** If invites should be read from a folder other than the inbox, for
+      example by a transport rule, give its name.
+
+The mailbox must also keep the original invite: no rule that turns calendar invites into
+tentative meetings and drops the `.ics` attachment.
+
+## Configure it on Kubernetes (Helm)
+
+Put the passwords in a Secret you manage and refer to it, so they never sit in values:
+
+```bash
+kubectl -n vexa create secret generic vexa-mail \
+  --from-literal=VEXA_MAIL_APP_PASSWORD='<mailbox password>' \
+  --from-literal=VEXA_MAIL_SMTP_PASSWORD='<relay login password, if the relay needs one>'
+kubectl -n vexa create configmap vexa-mail-ca --from-file=ca.crt=internal-ca.pem
+```
+
+```yaml
+flows:
+  enabled: true
+  mail:
+    enabled: true
+    address: vexa@example.org
+    existingSecret: vexa-mail          # carries VEXA_MAIL_APP_PASSWORD (+ VEXA_MAIL_SMTP_PASSWORD)
+    imap:
+      host: mail.example.org
+      port: ""                         # empty = 993 for tls, 143 for starttls
+      tls: tls                         # tls | starttls | none (lab only)
+      user: 'EXAMPLE\vexa'             # empty = the address
+      folder: ""                       # empty = INBOX
+    smtp:
+      host: mail.example.org           # empty = terminal.mail's relay; both empty = Gmail
+      port: "587"
+      tls: starttls                    # auto | tls | starttls | none
+      user: 'EXAMPLE\vexa'             # with VEXA_MAIL_SMTP_PASSWORD in the Secret = AUTH LOGIN
+    ca:
+      configMapName: vexa-mail-ca      # or secretName; key defaults to ca.crt
+      key: ca.crt
+    domains: example.org               # who the mailbox will act for — see Operating workflows
+```
+
+| Value | Default | What it does |
+|---|---|---|
+| `flows.mail.enabled` | unset | Runs the `flows-mailbox` Deployment. Unset, it runs exactly when `address` is set. `false` turns it off. |
+| `flows.mail.address` | — | The address the bot answers as. Invites must be sent to it. |
+| `flows.mail.existingSecret` | — | A Secret carrying `VEXA_MAIL_APP_PASSWORD` and, optionally, `VEXA_MAIL_SMTP_PASSWORD`. Setting it together with `appPassword` is refused at render. |
+| `flows.mail.appPassword` | — | The mailbox password in values. Prefer `existingSecret`. |
+| `flows.mail.imap.host` / `.port` / `.tls` / `.user` / `.folder` | Gmail preset | The IMAP endpoint. |
+| `flows.mail.smtp.host` / `.port` / `.tls` / `.user` / `.secure` / `.tlsInsecure` | `terminal.mail` | The relay. Empty `host` reuses `terminal.mail`, the relay the sign-in mail already uses. |
+| `flows.mail.ca.configMapName` / `.secretName` / `.key` | — | An internal CA bundle, mounted read-only at `/etc/vexa/mail-ca/ca.pem` in every flows pod and trusted by both IMAP and SMTP. Naming both is refused. |
+
+Write the login name in a values file, not with `--set`: `--set` treats a backslash as an escape
+character.
+
+## Configure it with compose
+
+Set the same keys in `deploy/compose/.env`, and start the lane with the `mailbox` profile
+(`COMPOSE_PROFILES=mailbox`). A CA bundle is a path inside the container, so mount it in an
+override file.
+
+| Variable | Default | What it does |
+|---|---|---|
+| `VEXA_MAIL_ADDR` | — | The bot's address. |
+| `VEXA_MAIL_APP_PASSWORD` | — | The mailbox password: the IMAP login's, and Gmail SMTP's. |
+| `VEXA_MAIL_IMAP_HOST` | `imap.gmail.com` | The IMAP server. |
+| `VEXA_MAIL_IMAP_PORT` | 993 / 143 | 993 for `tls`, 143 for `starttls` and `none`. |
+| `VEXA_MAIL_IMAP_TLS` | `tls` | `tls` (implicit), `starttls` (refused if the server does not offer it) or `none` (cleartext; the password crosses the network, so a lab server only, and every connection logs a warning). |
+| `VEXA_MAIL_IMAP_USER` | the address | The login name. |
+| `VEXA_MAIL_IMAP_FOLDER` | `INBOX` | The folder invites are read from. |
+| `VEXA_MAIL_IMAP_CA_FILE` | system store | A PEM bundle the server's certificate must chain to, instead of the system store. |
+| `VEXA_MAIL_SMTP_HOST` / `_PORT` / `_USER` / `_PASSWORD` | Gmail | The relay. |
+| `VEXA_MAIL_SMTP_TLS` | `auto` | `auto` (implicit TLS with `VEXA_MAIL_SMTP_SECURE=1`, otherwise STARTTLS whenever offered), `tls`, `starttls` (required) or `none`. Credentials are never sent over an unencrypted connection, whatever the mode. |
+| `VEXA_MAIL_SMTP_CA_FILE` | system store | The relay's CA bundle. |
+
+`VEXA_MAIL_SMTP_TLS` and `VEXA_MAIL_SMTP_CA_FILE` apply to flows only. The terminal's sign-in mail
+reads `VEXA_MAIL_SMTP_SECURE`, and its Node runtime takes an internal CA through
+`NODE_EXTRA_CA_CERTS`.
+
+## When it fails
+
+Every mail-server failure is reported as one line with the same shape:
+`mail:<kind> <imap|smtp> <host>:<port> — <the server's own words>`. The line never contains a
+password: a server that quotes the refused login has the password masked.
+
+| Kind | What it means | Who fixes it |
+|---|---|---|
+| `auth` | The server refused the login: the password, the login name, IMAP disabled on the mailbox, or a login method the server does not accept. | Mail administrators, or the Secret |
+| `tls` | The certificate is not trusted by the bundle you gave, the name does not match, or `starttls` was required and the server does not offer it. | The CA bundle, or the TLS mode |
+| `connect` | The host does not resolve, refuses the connection, or times out. Retried automatically. | Network policy, firewall, host or port |
+| `config` | A setting that can never work: an unknown TLS mode, a missing CA file, a folder that does not exist, credentials over an unencrypted relay. | The values |
+| `protocol` | The server answered something unexpected, or refused a recipient. Retried. | Usually the server's logs |
+
+Where you see it:
+
+- **The pod's readiness.** `flows-mailbox` turns NotReady when its last poll failed, and
+  `kubectl describe pod` shows the line under the readiness failure. It does not restart: none of
+  these is cured by a restart. It keeps polling and turns Ready again by itself after the fix.
+  A pod that has not finished its first poll is also NotReady.
+- **The log.** `mailbox FAULT mail:auth imap mail.example.org:993 — …` is written once when the
+  fault starts and once more if it changes; `mailbox RECOVERED` when it clears.
+- **The flow.** A reply or acknowledgement that cannot be sent fails its step with the same line as
+  the reaction's reason (`GET /reactions`). An `auth`, `tls` or `config` fault fails the reaction at
+  once; a `connect` or `protocol` fault is retried with backoff first.
+
+Invites from people outside the allow-list are not a mail-server failure. They are quarantined; see
+[Operating workflows](/flows/operations#who-the-mailbox-will-act-for).
+
+## Microsoft 365 without IMAP
+
+For a Microsoft 365 tenant that will not enable IMAP, set `VEXA_MAIL_INBOX=graph` and
+`VEXA_NOTIFY_CHANNEL=graph` and the four `VEXA_GRAPH_*` keys: an app registration with the
+`Mail.ReadWrite` and `Mail.Send` application permissions and an Exchange application access policy
+that limits it to the one mailbox. This path has been tested against recorded responses only, never
+against a live tenant, and the chart does not carry its keys yet.
+
+An on-premises Exchange Server does not offer Microsoft Graph. Its alternative to IMAP is Exchange
+Web Services (EWS), which this release does not support.
+
+## How it works
+
+1. A person sends a calendar invite to the bot's address. The mail server delivers it to the
+   mailbox.
+2. `flows-mailbox` polls every 12 seconds. It connects to `VEXA_MAIL_IMAP_HOST`, secures the
+   connection (`tls` or `starttls`, the certificate checked against `VEXA_MAIL_IMAP_CA_FILE` or the
+   system store), logs in as `VEXA_MAIL_IMAP_USER` and selects the folder
+   (`flows_steps/mail_transport.py`, `imap_open`).
+3. It searches for messages past its cursor, fetches each one and parses the `.ics` attachment
+   into an invite: organizer, meeting link, start time (`flows_integrations/inbox.py`,
+   `mailbox.py`).
+4. It decides who it will act for: an organizer who is neither a known user nor inside
+   `VEXA_FLOWS_MAIL_DOMAINS` is quarantined, and nothing else happens.
+5. An accepted invite is admitted as an `invite.received` fact in the flows database, and the
+   cursor advances.
+6. `flows-worker` runs `invite_intake`: it makes sure the organizer has an account (admin-api),
+   sends the RSVP and the acknowledgement over SMTP (`flows_steps/emailx.py`), waits for the
+   start, and creates the bot through the gateway's `POST /bots`.
+7. After each poll the mailbox writes its state to a file in its own temp directory
+   (`flows_integrations/mailbox_status.py`), which the readiness probe reads.
+
+**Who writes what.** The mailbox is the only writer of `mail_cursor`, `mail_seen` and
+`mail_quarantine`. The `reaction` and `effect_receipt` tables are written by the flows engine, and
+`admit` is its only entrance. The status file belongs to the mailbox process and is read only by
+the probe in the same container. The bot and meeting are created by meeting-api, behind the
+gateway.
+
+**Where the configuration lives.** Every key is declared in `core/flows/src/config.v1.json` and
+`flows_config.DECLARED`. Compose sets them in `deploy/compose/docker-compose.yml` from `.env`. The
+chart renders them as environment entries from `flows.mail` (`vexa.flowsMailEnv` in
+`_helpers.tpl`), with the passwords from a Secret and the CA bundle from a mounted ConfigMap or
+Secret.
+
+## Why it complies
+
+| Rule | How this meets it | Enforced by |
+|---|---|---|
+| **P2** couple only through contracts | The mailbox and worker reach admin-api, the gateway and meeting-api over HTTP only. The new transport module lives in `flows_steps` and imports no domain package. | `core/flows/scripts/check-isolation.js` (`make -C core/flows gates`) |
+| **P5** adapt at the boundary | `imaplib`, `smtplib` and `ssl` exceptions are translated into `MailTransportError` at the transport and nowhere else. The parser and the flows never see which server answered. | review; `test_mail_transport.py` |
+| **P11** mechanism, not policy | Gmail is a set of defaults, not code. Any server is the same code path with different values. | review |
+| **P14** config is a declared contract; secrets are a class | Eight new keys, each declared with its class and default in both declarations. The passwords stay in `SECRETS`, come from a Secret, and are masked out of every fault. | `gate:config-contract`, `test_config_contract.py`, `test_config_declaration.py` |
+| **P18** fail loud and attributable | Every failure is a typed fault (`kind`, `wire`, host and port), logged on change, surfaced on readiness and recorded as the reaction's reason. A pod that has not yet reached its server is not Ready. | `test_mail_transport.py`, `test_mail_relay.py`, `gate:helm` |
+| **P21** report state from evidence | Readiness turns green only after a poll that reached the server, never on a restored cursor. | `test_the_probe_is_not_ready_before_a_first_poll_or_when_the_loop_goes_silent` |
+| **P23** one writer per carrier | No new table. The status file has one writer and one reader in one container. | `gate:dataflow` |
+
+**Security.**
+
+- **Who can reach the mailbox.** Only the `flows-mailbox` pod logs in to IMAP. Only the flows
+  pods hold the passwords, read from a Secret by name. No API route returns them.
+- **Encryption.** IMAP defaults to implicit TLS with the certificate verified. `starttls` refuses
+  a server that does not offer the upgrade
+  (`test_starttls_required_refuses_a_server_that_does_not_offer_it`). A certificate that does not
+  chain to the configured CA stops the connection before the login is sent
+  (`test_a_certificate_from_another_ca_is_a_tls_fault_before_any_login`,
+  `test_the_wrong_ca_is_refused_on_starttls_too`). SMTP never sends credentials over an unencrypted
+  connection (`test_credentials_are_refused_on_a_relay_that_offers_no_encryption`,
+  `test_none_never_upgrades_and_still_never_sends_credentials`).
+- **No credential in any output.** Faults, logs and the probe file carry no password
+  (`test_a_wrong_password_is_an_auth_fault_and_never_echoes_the_password`,
+  `test_a_server_that_quotes_the_refused_auth_line_never_leaks_the_credential`).
+- **Who the bot acts for** is unchanged: the domain allow-list and the quarantine still decide
+  before anything is admitted (`test_mail_authz.py`).
+- **Cleartext IMAP** (`none`) exists for a lab server only. It sends the password unencrypted and
+  logs a warning on every connection.

@@ -143,6 +143,129 @@ manage, they read it from there by name instead (an explicit env entry wins over
 {{- end -}}
 {{- end -}}
 
+{{/*
+THE BOT MAILBOX (flows.mail) — invite-by-email against any IMAP server, Gmail being only the preset.
+Nil-safe throughout: `helm upgrade --reuse-values` renders with the PREVIOUS chart's values, which
+have no imap/smtp/ca blocks at all.
+
+vexa.flowsMailboxEnabled — "true" when the flows-mailbox Deployment renders. An explicit bool in
+flows.mail.enabled wins; unset, it is on exactly when an address is set (what an install that set
+one already ran).
+*/}}
+{{- define "vexa.flowsMailboxEnabled" -}}
+{{- $m := .Values.flows.mail | default dict -}}
+{{- if kindIs "bool" $m.enabled -}}
+{{- if $m.enabled -}}true{{- end -}}
+{{- else if $m.address -}}true{{- end -}}
+{{- end -}}
+
+{{/* The Secret carrying the mailbox passwords, when the operator manages it; refuses both. */}}
+{{- define "vexa.flowsMailExistingSecret" -}}
+{{- $m := .Values.flows.mail | default dict -}}
+{{- if and $m.existingSecret $m.appPassword -}}
+{{- fail "flows.mail.appPassword and flows.mail.existingSecret are both set — keep one: the password in values, or the Secret that carries VEXA_MAIL_APP_PASSWORD" -}}
+{{- end -}}
+{{- $m.existingSecret | default "" -}}
+{{- end -}}
+
+{{/* Where the CA bundle is mounted in every flows container, when one is named. */}}
+{{- define "vexa.flowsMailCaPath" -}}/etc/vexa/mail-ca/ca.pem{{- end -}}
+
+{{- define "vexa.flowsMailCa" -}}
+{{- $ca := (.Values.flows.mail | default dict).ca | default dict -}}
+{{- if and $ca.configMapName $ca.secretName -}}
+{{- fail "flows.mail.ca: set configMapName or secretName, not both" -}}
+{{- end -}}
+configMap: {{ $ca.configMapName | default "" | quote }}
+secret: {{ $ca.secretName | default "" | quote }}
+key: {{ $ca.key | default "ca.crt" | quote }}
+{{- end -}}
+
+{{/*
+vexa.flowsMailEnv — the mail settings every flows container reads (the worker SENDS, the mailbox
+READS, flows-api reports the capability). Rendered as explicit env entries, which win over the
+flows Secret's envFrom. SMTP falls back to terminal.mail when flows.mail.smtp.host is empty: the
+deployment has ONE relay and an operator configures it once.
+*/}}
+{{- define "vexa.flowsMailEnv" -}}
+{{- $m := .Values.flows.mail | default dict -}}
+{{- $imap := $m.imap | default dict -}}
+{{- $own := $m.smtp | default dict -}}
+{{- $term := (.Values.terminal | default dict).mail | default dict -}}
+{{- $smtp := $own -}}
+{{- if not $own.host -}}
+{{- $smtp = dict "host" $term.smtpHost "port" $term.smtpPort "user" $term.user "secure" $term.secure "tlsInsecure" $term.tlsInsecure "tls" $own.tls -}}
+{{- end -}}
+{{- $ca := include "vexa.flowsMailCa" . | fromYaml -}}
+{{- $existing := include "vexa.flowsMailExistingSecret" . -}}
+- name: VEXA_MAIL_IMAP_HOST
+  value: {{ $imap.host | default "" | toString | quote }}
+- name: VEXA_MAIL_IMAP_PORT
+  value: {{ $imap.port | default "" | toString | quote }}
+- name: VEXA_MAIL_IMAP_TLS
+  value: {{ $imap.tls | default "" | toString | quote }}
+- name: VEXA_MAIL_IMAP_USER
+  value: {{ $imap.user | default "" | toString | quote }}
+- name: VEXA_MAIL_IMAP_FOLDER
+  value: {{ $imap.folder | default "" | toString | quote }}
+- name: VEXA_MAIL_SMTP_HOST
+  value: {{ $smtp.host | default "" | toString | quote }}
+- name: VEXA_MAIL_SMTP_PORT
+  value: {{ $smtp.port | default "" | toString | quote }}
+- name: VEXA_MAIL_SMTP_TLS
+  value: {{ $smtp.tls | default "" | toString | quote }}
+- name: VEXA_MAIL_SMTP_USER
+  value: {{ $smtp.user | default "" | toString | quote }}
+- name: VEXA_MAIL_SMTP_SECURE
+  value: {{ $smtp.secure | default "" | toString | quote }}
+- name: VEXA_MAIL_SMTP_TLS_INSECURE
+  value: {{ $smtp.tlsInsecure | default "" | toString | quote }}
+- name: VEXA_MAIL_SMTP_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: {{ $existing | default (include "vexa.adminTokenSecretName" .) | quote }}
+      key: VEXA_MAIL_SMTP_PASSWORD
+      optional: true
+{{- if $existing }}
+- name: VEXA_MAIL_APP_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: {{ $existing | quote }}
+      key: VEXA_MAIL_APP_PASSWORD
+{{- end }}
+{{- if or $ca.configMap $ca.secret }}
+- name: VEXA_MAIL_IMAP_CA_FILE
+  value: {{ include "vexa.flowsMailCaPath" . | quote }}
+- name: VEXA_MAIL_SMTP_CA_FILE
+  value: {{ include "vexa.flowsMailCaPath" . | quote }}
+{{- end }}
+{{- end -}}
+
+{{/* The CA bundle's volume and mount (nothing when no bundle is named). */}}
+{{- define "vexa.flowsMailCaVolume" -}}
+{{- $ca := include "vexa.flowsMailCa" . | fromYaml -}}
+{{- if $ca.configMap }}
+- name: mail-ca
+  configMap:
+    name: {{ $ca.configMap | quote }}
+    items: [{key: {{ $ca.key | quote }}, path: ca.pem}]
+{{- else if $ca.secret }}
+- name: mail-ca
+  secret:
+    secretName: {{ $ca.secret | quote }}
+    items: [{key: {{ $ca.key | quote }}, path: ca.pem}]
+{{- end }}
+{{- end -}}
+
+{{- define "vexa.flowsMailCaMount" -}}
+{{- $ca := include "vexa.flowsMailCa" . | fromYaml -}}
+{{- if or $ca.configMap $ca.secret }}
+- name: mail-ca
+  mountPath: /etc/vexa/mail-ca
+  readOnly: true
+{{- end }}
+{{- end -}}
+
 {{- define "vexa.adminTokenSecretName" -}}
 {{- if .Values.secrets.existingSecretName -}}
 {{- .Values.secrets.existingSecretName -}}

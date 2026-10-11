@@ -303,7 +303,7 @@ fi
 # discrete env vars, same shape admin-api uses) — these assertions now read those, not a literal
 # DSN string, but the underlying claim is the same one F-D4 made.
 FLOWS_EXT="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" \
-  --set flows.enabled=true --set postgres.enabled=false \
+  --set flows.enabled=true --set flows.mail.enabled=true --set postgres.enabled=false \
   --set database.host=db.example.internal --set database.port=5432 \
   --set postgres.credentialsSecretName=external-pg-creds \
   --set agentApi.enabled=false --set terminal.enabled=false \
@@ -320,7 +320,7 @@ else
   echo "  OK: flows tier renders no in-cluster postgres component name under postgres.enabled=false (#F-D4)"
 fi
 FLOWS_DEFAULT="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" \
-  --set flows.enabled=true --show-only templates/flows.yaml)"
+  --set flows.enabled=true --set flows.mail.enabled=true --show-only templates/flows.yaml)"
 if grep -A1 'name: DB_HOST' <<< "$FLOWS_DEFAULT" | grep -q 'value: "vexa-vexa-postgres"' \
   && grep -A1 'name: DB_PORT' <<< "$FLOWS_DEFAULT" | grep -q 'value: "5432"'; then
   echo "  OK: flows tier DB_HOST/DB_PORT unchanged under the default in-cluster postgres.enabled=true"
@@ -419,7 +419,7 @@ fi
 # database is unbacked-up. When the two names match, the ensure-db initContainer is skipped
 # entirely — nothing to create, the application database already exists by definition.
 FLOWS_SHARED_DB="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" \
-  --set flows.enabled=true --set flows.databaseName=vexa --show-only templates/flows.yaml)"
+  --set flows.enabled=true --set flows.mail.enabled=true --set flows.databaseName=vexa --show-only templates/flows.yaml)"
 if grep -A1 'name: FLOWS_DB_NAME' <<< "$FLOWS_SHARED_DB" | grep -q 'value: "vexa"'; then
   echo "  OK: flows.databaseName=vexa renders FLOWS_DB_NAME=vexa on every composed DSN"
 else
@@ -499,7 +499,7 @@ fi
 #       carrying flows as unpinned (S8) no matter what the publisher did.
 # These four assertions are the shape check. Against the flat-string chart the first three fail.
 FLOWS_PINNED="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" \
-  --set flows.enabled=true --set global.imageTag=vPINNED --show-only templates/flows.yaml)"
+  --set flows.enabled=true --set flows.mail.enabled=true --set global.imageTag=vPINNED --show-only templates/flows.yaml)"
 flows_pinned_count="$(grep -cE '^\s+image: "vexaai/v012-flows:vPINNED"$' <<< "$FLOWS_PINNED" || true)"
 if [ "$flows_pinned_count" -eq 6 ]; then
   echo "  OK: all 6 flows containers follow global.imageTag ($flows_pinned_count)"
@@ -510,7 +510,7 @@ fi
 # the addressability proof — a flat string has no .tag to set.
 PIN_REF='v0.12.27@sha256:1111111111111111111111111111111111111111111111111111111111111111'
 FLOWS_DIGEST="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" \
-  --set flows.enabled=true --set "flows.image.tag=$PIN_REF" --show-only templates/flows.yaml)"
+  --set flows.enabled=true --set flows.mail.enabled=true --set "flows.image.tag=$PIN_REF" --show-only templates/flows.yaml)"
 digest_count="$(grep -cE "^\s+image: \"vexaai/v012-flows:${PIN_REF//./\\.}\"$" <<< "$FLOWS_DIGEST" || true)"
 if [ "$digest_count" -eq 6 ]; then
   echo "  OK: publisher pin shape flows.image.tag=<version>@sha256 reaches all 6 containers ($digest_count)"
@@ -617,7 +617,7 @@ fi
 # A12.4 — the flows image follows global.imageTag like every other service instead of a mutable
 # `:dev`, and an explicit flows.image still wins (that is how a publisher digest-pins a release).
 FLOWS_PINNED="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" \
-  --set flows.enabled=true --set global.imageTag=vPIN --show-only templates/flows.yaml)"
+  --set flows.enabled=true --set flows.mail.enabled=true --set global.imageTag=vPIN --show-only templates/flows.yaml)"
 if grep -q 'image: "vexaai/v012-flows:vPIN"' <<< "$FLOWS_PINNED" \
   && ! grep -q 'v012-flows:dev' <<< "$FLOWS_PINNED"; then
   echo "  OK: flows image honors global.imageTag (no mutable :dev left) (#A12)"
@@ -625,7 +625,7 @@ else
   echo "  FAIL: flows image ignored global.imageTag (#A12)"; fail=1
 fi
 FLOWS_OVERRIDE="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" \
-  --set flows.enabled=true --set global.imageTag=vPIN \
+  --set flows.enabled=true --set flows.mail.enabled=true --set global.imageTag=vPIN \
   --set flows.image=reg.example/flows@sha256:abc --show-only templates/flows.yaml)"
 if grep -q 'image: "reg.example/flows@sha256:abc"' <<< "$FLOWS_OVERRIDE"; then
   echo "  OK: an explicit flows.image still wins over global.imageTag (#A12)"
@@ -1104,14 +1104,14 @@ else echo "  FAIL: the rotation hook keeps its rights after a failure or puts a 
 
 # N-10: a policy that names the flows tier names this release's flows Pods (name + instance labels,
 # which the flows Pods now carry), never any Pod in the namespace with a flows component label.
-NP_FLOWS="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true \
+NP_FLOWS="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true --set flows.mail.enabled=true \
   | awk 'BEGIN{RS="\n---\n"} /kind: NetworkPolicy/')"
 loose="$(awk '{ buf[NR%9]=$0 }
   /values: \[flows-worker|values: \["flows-worker"|component: flows-api$/ {
     ok=0; for (i=1;i<9;i++) if (buf[(NR-i)%9] ~ /app.kubernetes.io\/instance: vexa/) ok=1
     if (!ok) n++ }
   END { print n+0 }' <<< "$NP_FLOWS")"
-pod_labels="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true --show-only templates/flows.yaml \
+pod_labels="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true --set flows.mail.enabled=true --show-only templates/flows.yaml \
   | grep -c 'app.kubernetes.io/instance: vexa' || true)"
 if [ "$loose" -eq 0 ] && [ "$(grep -c 'flows' <<< "$NP_FLOWS")" -gt 0 ] && [ "$pod_labels" -ge 4 ]; then
   echo "  OK: every policy peer for the flows tier carries the release's labels, and so do its Pods and Service"
@@ -1166,7 +1166,7 @@ if grep -q -- '- 10.0.0.0/8' <<< "$cpe"; then echo "  FAIL: control-plane egress
 off="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set networkPolicy.defaultDeny.enabled=false)"
 if grep -q 'name: vexa-vexa-default-deny' <<< "$off"; then echo "  FAIL: defaultDeny.enabled=false still renders the default-deny"; fail=1
 else echo "  OK: networkPolicy.defaultDeny.enabled=false renders no default-deny"; fi
-fl_render="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true)"
+fl_render="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true --set flows.mail.enabled=true)"
 fl="$(awk '/^  name: vexa-vexa-flows-api-ingress$/{f=1} f{print} f&&/^---/{exit}' <<< "$fl_render")"
 if grep -q 'vexa.role: worker' <<< "$fl"; then echo "  OK: flows-api admits the chart's Pods and agent workers"
 else echo "  FAIL: flows-api ingress under the default-deny"; fail=1; fi
@@ -1201,17 +1201,17 @@ flows_key_refs() {  # flows_key_refs <render> → "<secret> <count>" lines for V
 }
 for src in "secrets.existingSecretName=shared-secrets shared-secrets" "flows.existingSecret=flows-key flows-key"; do
   set -- $src
-  fk="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true --set "$1")"
+  fk="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true --set flows.mail.enabled=true --set "$1")"
   if grep -qE '^  VEXA_FLOWS_API_KEY:' <<< "$fk"; then echo "  FAIL: $1 still renders the key into the flows Secret"; fail=1
   elif [ "$(flows_key_refs "$fk")" = "$2 4" ]; then echo "  OK: $1 — flows' three containers and the MCP edge read VEXA_FLOWS_API_KEY from $2"
   else echo "  FAIL: $1 — VEXA_FLOWS_API_KEY refs: $(flows_key_refs "$fk" | tr '\n' ';')"; fail=1; fi
 done
-fk="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true \
+fk="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true --set flows.mail.enabled=true \
   --set secrets.existingSecretName=shared-secrets --set flows.apiKey=inline-test-key)"
 if grep -qE '^  VEXA_FLOWS_API_KEY: "inline-test-key"$' <<< "$fk" && [ "$(flows_key_refs "$fk")" = "vexa-vexa-flows 1" ]; then
   echo "  OK: flows.apiKey in values keeps the key in the chart's flows Secret, as before"
 else echo "  FAIL: flows.apiKey with secrets.existingSecretName"; fail=1; fi
-fboth="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true \
+fboth="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true --set flows.mail.enabled=true \
   --set flows.existingSecret=flows-key --set flows.apiKey=inline-test-key 2>&1 || true)"
 if grep -q 'flows.apiKey and flows.existingSecret are both set' <<< "$fboth"; then echo "  OK: flows.apiKey with flows.existingSecret is refused"
 else echo "  FAIL: flows.apiKey with flows.existingSecret rendered"; fail=1; fi
@@ -1233,7 +1233,7 @@ else echo "  FAIL: named TERMINAL_TRUSTED_PROXIES: $(tp "$tnamed")"; fail=1; fi
 # selector labels, and every NetworkPolicy podSelector, the flows-api Service selector and the flows
 # Pod templates that name a flows component also name this release, so another release's flows Pods
 # in the namespace are not peers. (The Deployments' own selectors stay as they are: immutable.)
-flows_np="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true)"
+flows_np="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true --set flows.mail.enabled=true)"
 # Prints each such block that names a flows component without this release's instance label.
 loose="$(awk '
   function ind(s) { match(s, /^ */); return RLENGTH }
@@ -1261,5 +1261,69 @@ loose="$(awk '
 if [ -z "$loose" ] && grep -q 'app.kubernetes.io/component: flows-api' <<< "$flows_np"; then
   echo "  OK: every policy, Service and Pod template naming a flows component also names this release"
 else echo "  FAIL: flows matched by component alone:"; echo "$loose" | head -40; fail=1; fi
+
+# ── the bot mailbox against an on-premises Exchange (flows.mail) ───────────────────────────────
+# Before: IMAP was imap.gmail.com in code, the chart had no IMAP or relay values for flows, the
+# mailbox password could only sit in values, and the mailbox rendered (and restart-looped) with no
+# address at all. Each assertion below fails on that chart.
+MAIL_VALUES="$(mktemp)"
+cat > "$MAIL_VALUES" <<'YAML'
+flows:
+  enabled: true
+  mail:
+    address: bot@corp.example
+    existingSecret: mail-creds
+    imap: {host: mail.corp.example, tls: starttls, user: 'CORP\vexa-bot', folder: Invites}
+    smtp: {host: smtp.corp.example, port: "587", tls: starttls, user: 'CORP\vexa-bot'}
+    ca: {configMapName: corp-ca, key: ca-bundle.pem}
+YAML
+MAIL_R="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" -f "$MAIL_VALUES" --show-only templates/flows.yaml)"
+MB="$(awk '/^---/{p=0} /name: vexa-vexa-flows-mailbox$/{p=1} p' <<< "$MAIL_R")"
+mail_ok=1
+for kv in 'VEXA_MAIL_IMAP_HOST|value: "mail.corp.example"' 'VEXA_MAIL_IMAP_TLS|value: "starttls"' \
+          'VEXA_MAIL_IMAP_USER|value: "CORP\\vexa-bot"' 'VEXA_MAIL_IMAP_FOLDER|value: "Invites"' \
+          'VEXA_MAIL_SMTP_HOST|value: "smtp.corp.example"' 'VEXA_MAIL_SMTP_TLS|value: "starttls"' \
+          'VEXA_MAIL_IMAP_CA_FILE|value: "/etc/vexa/mail-ca/ca.pem"' \
+          'VEXA_MAIL_SMTP_CA_FILE|value: "/etc/vexa/mail-ca/ca.pem"'; do
+  k="${kv%%|*}"; v="${kv#*|}"
+  grep -A1 "name: $k\$" <<< "$MB" | grep -qF "$v" || { echo "  FAIL: flows-mailbox $k is not $v"; mail_ok=0; }
+done
+if grep -A4 'name: VEXA_MAIL_APP_PASSWORD$' <<< "$MB" | tr -d '\n' | grep -qE 'name: "mail-creds"[[:space:]]+key: VEXA_MAIL_APP_PASSWORD'; then :
+else echo "  FAIL: flows-mailbox does not read VEXA_MAIL_APP_PASSWORD from flows.mail.existingSecret"; mail_ok=0; fi
+if awk '/^---/{p=0} /kind: Secret/{p=1} p' <<< "$MAIL_R" | grep -q 'VEXA_MAIL_APP_PASSWORD'; then
+  echo "  FAIL: the chart's flows Secret still renders VEXA_MAIL_APP_PASSWORD under flows.mail.existingSecret"; mail_ok=0; fi
+grep -qE 'name: "corp-ca"' <<< "$MB" && grep -qE 'key: "ca-bundle.pem"' <<< "$MB" \
+  || { echo "  FAIL: the CA bundle ConfigMap is not mounted into flows-mailbox"; mail_ok=0; }
+grep -q 'flows_integrations.mailbox_status' <<< "$MB" \
+  || { echo "  FAIL: flows-mailbox carries no readiness probe over its own poll report"; mail_ok=0; }
+grep -qE 'mountPath: /tmp$' <<< "$MB" || { echo "  FAIL: flows-mailbox has no writable /tmp for its report"; mail_ok=0; }
+[ "$mail_ok" -eq 1 ] && echo "  OK: flows.mail renders IMAP/SMTP endpoints, TLS modes, the CA bundle, the existing-Secret password and the mailbox probe"
+[ "$mail_ok" -eq 1 ] || fail=1
+rm -f "$MAIL_VALUES"
+# The relay is the deployment's: with no flows.mail.smtp.host, flows sends through terminal.mail.
+RELAY="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true \
+  --set flows.mail.address=bot@corp.example --set terminal.mail.smtpHost=relay.corp.example \
+  --set terminal.mail.smtpPort=587 --show-only templates/flows.yaml)"
+if grep -A1 'name: VEXA_MAIL_SMTP_HOST$' <<< "$RELAY" | grep -qF 'value: "relay.corp.example"'; then
+  echo "  OK: flows inherits the deployment relay from terminal.mail when flows.mail.smtp.host is empty"
+else echo "  FAIL: flows does not inherit terminal.mail's relay"; fail=1; fi
+# Off unless it can run; an explicit false wins over an address; both passwords refused.
+if helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true \
+     --show-only templates/flows.yaml | grep -q 'name: vexa-vexa-flows-mailbox$'; then
+  echo "  FAIL: flows-mailbox renders with no address (it restart-loops on its first login)"; fail=1
+else echo "  OK: flows-mailbox does not render without an address or flows.mail.enabled"; fi
+if helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true \
+     --set flows.mail.address=bot@corp.example --set flows.mail.enabled=false \
+     --show-only templates/flows.yaml | grep -q 'name: vexa-vexa-flows-mailbox$'; then
+  echo "  FAIL: flows.mail.enabled=false did not turn the mailbox off"; fail=1
+else echo "  OK: flows.mail.enabled=false turns the mailbox off even with an address"; fi
+if helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true \
+     --set flows.mail.appPassword=x --set flows.mail.existingSecret=mail-creds >/dev/null 2>&1; then
+  echo "  FAIL: flows.mail.appPassword with flows.mail.existingSecret was not refused"; fail=1
+else echo "  OK: flows.mail.appPassword with flows.mail.existingSecret is refused"; fi
+if helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true \
+     --set flows.mail.ca.configMapName=a --set flows.mail.ca.secretName=b >/dev/null 2>&1; then
+  echo "  FAIL: flows.mail.ca with both a ConfigMap and a Secret was not refused"; fail=1
+else echo "  OK: flows.mail.ca with both a ConfigMap and a Secret is refused"; fi
 
 [ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }

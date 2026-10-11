@@ -4,8 +4,10 @@ The edge: processes that turn the outside world into FACTS. `mailbox.py` — the
 ICS → invite.received; thread-matched replies → mail.reply; durable cursor (mail_cursor row)
 so restarts resume, never re-admit.
 
-`inbox.py` is the source seam underneath it: `VEXA_MAIL_INBOX=imap` (default) polls
-imap.gmail.com exactly as before, `=mailpit` polls the dev stack's mail double over REST
+`inbox.py` is the source seam underneath it: `VEXA_MAIL_INBOX=imap` (default) polls any IMAP
+server — `VEXA_MAIL_IMAP_HOST`/`_PORT`/`_TLS`/`_USER`/`_FOLDER`/`_CA_FILE`, Gmail being the preset
+every one of them defaults to (the wire and its typed `MailTransportError` are
+`flows_steps/mail_transport.py`), `=mailpit` polls the dev stack's mail double over REST
 (`VEXA_MAILPIT_URL`, filtered on `VEXA_MAIL_ADDR`, no mail password needed). Both fetch the raw
 RFC822 source and share one parse, so the two produce identical facts. Mailpit ids are random
 rather than monotonic, so its position is a `Created` watermark (`mail_cursor.token`) plus a
@@ -21,8 +23,13 @@ second-granular and two invitations can share one. Outbound goes through `flows_
 (`VEXA_GRAPH_TENANT_ID`/`_CLIENT_ID`/`_CLIENT_SECRET`/`_MAILBOX`, the `mailbox_graph` capability).
 **No live tenant has ever answered it** — fixtures and a fake HTTP layer only.
 
-An Exchange mailbox with IMAP ENABLED does not need any of that. It does, today, need code we do
-not have: `ImapInbox.host` is hardcoded to `imap.gmail.com`.
+An Exchange mailbox with IMAP ENABLED — on-premises or Exchange Online — does not need any of that:
+it is the IMAP source with its own host, login name and CA bundle.
+
+`mailbox_status.py` is the mailbox's health: the poll loop writes how its last poll went (ok, or the
+typed fault) to a file in its temp directory, and `python -m flows_integrations.mailbox_status` is
+the readiness probe that reads it. Operator page, How it works and Why it complies:
+`docs/docs/flows/mailbox.mdx`.
 
 `outlook.py` is what the ICS parser has to know about Microsoft specifically, and only that:
 RFC 5545 unfolding (Outlook folds at 75 octets and splits a Teams URL over three lines), UTF-16
