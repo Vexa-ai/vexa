@@ -164,3 +164,74 @@ def test_a_link_to_a_page_in_another_mounted_workspace_is_not_missing(tmp_path):
                           ["[[Example Bank Governing Board]] was named."], "the transcript",
                           mounts=[{"path": str(desk)}, {"path": str(group)}])
     assert out["links_resolved"] == ["Example Bank Governing Board"] and out["links_missing"] == []
+
+
+# ── 2026-10-11 · app.dev — "So Vexam": a discourse opener plus an ASR spelling of an existing page ──
+
+def _page(root, kind, slug, title, aliases=None):
+    d = root / "kg" / "entities" / kind
+    d.mkdir(parents=True, exist_ok=True)
+    extra = f"aliases: [{', '.join(aliases)}]\n" if aliases else ""
+    (d / f"{slug}.md").write_text(f"---\ntype: {kind}\nid: {slug}\ntitle: {title}\n{extra}---\n# {title}\n")
+
+
+def test_so_vexam_is_not_a_new_page(tmp_path):
+    """Live repro: the write-back phase read "So Vexam, which is the Finos project" out of a
+    meeting transcript and created `kg/entities/project/so-vexam.md` — a page whose own body says
+    it is not a distinct project. "So" is the sentence opener; "Vexam" is how speech recognition
+    spelled Vexa, which already has a page."""
+    _page(tmp_path, "company", "vexa", "Vexa")
+    _page(tmp_path, "project", "finos", "FINOS")
+    text = "So Vexam, which is the Finos project, is what we want to put in front of the TSC."
+    assert E.missing_names([tmp_path], [text]) == []
+
+
+def test_every_discourse_opener_is_stripped_before_the_desk_is_asked(tmp_path):
+    """Each opener on its own line, ahead of a name the desk already holds: none may reach the
+    phase as a new name — the opener-plus-name spelling is not a second page for the same thing."""
+    _page(tmp_path, "person", "nora-quill", "Nora Quill")
+    for opener in ("So", "And", "But", "Well", "Okay", "Yeah", "Also", "That's", "And so"):
+        text = f"{opener} Nora Quill said the rollout slips a week."
+        assert E.missing_names([tmp_path], [text]) == [], (opener, E.missing_names([tmp_path], [text]))
+
+
+def test_an_opener_before_a_genuinely_new_name_still_yields_that_name(tmp_path):
+    """The strip removes the opener, not the name: a real two-word name nobody has a page for is
+    still offered — under its own spelling, not the opener's."""
+    _page(tmp_path, "company", "vexa", "Vexa")
+    for opener in ("So", "And", "But", "Well", "Okay"):
+        out = E.missing_names([tmp_path], [f"{opener} Robin Vale chairs the steering committee."])
+        assert out == ["Robin Vale"], (opener, out)
+    # ...and with no opener at all, unchanged.
+    assert E.missing_names([tmp_path], ["Brightwater Studios signed on Monday."]) == \
+        ["Brightwater Studios"]
+
+
+def test_a_one_letter_variant_of_an_existing_page_is_that_page(tmp_path):
+    """An ASR or typing variant one edit away from a page's title is the page, not a new one."""
+    _page(tmp_path, "person", "robin-vale", "Robin Vale")
+    assert E.missing_names([tmp_path], ["Robyn Vale chairs it now."]) == []
+    assert E._shadows("vexam", "vexa") is True
+    # a recorded variant (an alias) is an exact match
+    _page(tmp_path, "project", "finos", "FINOS", aliases=["Fino Project"])
+    assert E.missing_names([tmp_path], ["Fino Project met on Thursday."]) == []
+
+
+def test_near_variant_has_a_floor_and_does_not_swallow_different_names(tmp_path):
+    _page(tmp_path, "company", "vexa", "Vexa")
+    # short names a letter apart are different things
+    assert E._shadows("ada", "ida") is False
+    # two edits on a short slug is not a variant
+    assert E._shadows("nora-quill", "nora-quinn") is False
+    # a different name entirely is still offered
+    assert E.missing_names([tmp_path], ["Vienna Data Board met."]) == ["Vienna Data Board"]
+
+
+def test_the_chip_extractor_and_the_write_back_share_one_noise_list():
+    """One owner: the transcript-terms layer strips with the SAME function the write-back pre-pass
+    uses, so a chip and a page can never disagree about what an opener is."""
+    from shared import terms as T
+    assert T.strip_leading_noise is E.strip_leading_noise
+    assert not hasattr(T, "_LEADING_NOISE")
+    assert E.strip_leading_noise("So Vexam") == ""
+    assert E.strip_leading_noise("And so Robin Vale") == "Robin Vale"

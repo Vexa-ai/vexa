@@ -910,6 +910,13 @@ def writeback_prompt(candidates: list[str], mounts: "list[dict] | None" = None) 
         "A name you cannot say one sourced thing about does NOT get a page: append it to "
         "`kg/MISSING.md` as one line — the name and what you would need to know — in a single "
         "write at the end. Never invent a fact to fill a page.\n\n"
+        # 2026-10-11, app.dev: "So Vexam, which is the Finos project" — one line of a transcript —
+        # became a project page whose own body said it was not a distinct project. Speech
+        # recognition mishears names; one hearing is not evidence that a thing exists.
+        "A name heard ONCE in a meeting transcript, with no other source this turn, is not a page "
+        "yet — transcription mishears names. Add it to the meeting's `open_questions` as \"Who or "
+        "what is <name>?\" and move on. A name with a second source (the person's message, a "
+        "file, a mail, a tool result) gets its page as above.\n\n"
         + image_rule() + "\n\n"
         "Work only from this turn. You have a hard budget: no exploration, no reading files you "
         "have not already read.")
