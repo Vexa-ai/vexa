@@ -78,6 +78,12 @@ spec:
             # Mirrors compose (docker-compose.yml ADMIN_API_URL=http://admin-api:8001).
             - name: ADMIN_API_URL
               value: "http://{{ include "vexa.componentName" (list . "admin-api") }}:{{ .Values.adminApi.service.port }}"
+            # calendar.internalFeedAllow: internal hosts/networks calendar feeds may be fetched from.
+            - name: VEXA_CALENDAR_FEED_ALLOW
+              value: {{ (.Values.calendar | default dict).internalFeedAllow | default "" | quote }}
+            # calendar.autoJoinBlock: domains/addresses auto-join never joins, for every account.
+            - name: VEXA_AUTO_JOIN_BLOCK
+              value: {{ (.Values.calendar | default dict).autoJoinBlock | default "" | quote }}
             - name: INTERNAL_API_SECRET
               valueFrom:
                 secretKeyRef:

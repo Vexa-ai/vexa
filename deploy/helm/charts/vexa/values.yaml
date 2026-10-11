@@ -201,6 +201,19 @@ storage:
       secretName: ""
       key: ca.crt
 
+# Calendars (docs: /calendar-integration#enterprise-settings). Both are operator settings; no user
+# can change or widen them.
+calendar:
+  # Internal hosts and networks a calendar (ICS) feed may be served from — a feed inside your
+  # corporate network. Exact host names and CIDRs, comma-separated: "cal.corp.example, 10.20.0.0/16".
+  # Loopback, link-local/cloud metadata and other reserved ranges are never allowed (the services
+  # refuse to start on such an entry). Applies to calendar feeds only, never to webhooks.
+  internalFeedAllow: ""
+  # Domains and addresses the calendar auto-join must never join, for every account: a meeting whose
+  # organiser, an invitee or the meeting link's host matches is skipped and marked on the meeting.
+  # "gated.example, ceo@partner.example". Each person can add their own (PUT /user/calendar).
+  autoJoinBlock: ""
+
 # Model ids brokered into agents/bots (empty ⇒ provider default). Mirrors compose ANTHROPIC_*/VEXA_*.
 models:
   anthropicModel: ""

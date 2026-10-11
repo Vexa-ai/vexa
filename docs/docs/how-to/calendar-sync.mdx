@@ -284,6 +284,142 @@ first auto-joining source in stable source order supplies its bot name. You can 
 auto-join per meeting in its prep view. Connections created without an explicit bot name default
 to the legacy user-wide setting, then `Vexa`.
 
+## Push meetings from your own calendar system
+
+No ICS feed? An external job (a script reading Exchange, a sync service, a cron job) can push the
+meetings itself with [`POST /meetings`](/api/meetings#plan-a-meeting), using a person's API key. Each
+pushed meeting is an ordinary planned meeting: it shows under **Upcoming** and the bot auto-joins it
+at `scheduled_at` unless `auto_join` is `false`. The job needs only outbound HTTPS to the Vexa API,
+so it also works where Vexa cannot reach the calendar.
+
+| Field | Meaning |
+|---|---|
+| `title` | What the meeting is called in the Meetings list. |
+| `scheduled_at` | ISO-8601 start time, with an offset (`2026-10-20T09:00:00+02:00`). Present means the meeting is `scheduled` and auto-join arms. |
+| `meeting_url` | The Teams, Meet or Zoom link. An unrecognized link is a `422`. |
+| `auto_join` | `true` (default) sends the bot at start time; `false` only plans it. |
+
+```bash
+# One person's upcoming meetings, pushed every few minutes by an external job.
+API_BASE=https://vexa.example.com
+# meetings.jsonl: one {"title":…,"scheduled_at":…,"meeting_url":…} per line, from your calendar.
+while IFS= read -r row; do
+  code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$API_BASE/meetings" \
+    -H "X-API-Key: $VEXA_API_KEY" -H "Content-Type: application/json" -d "$row")
+  case "$code" in
+    201) echo "planned" ;;
+    409) echo "already planned for this link" ;;   # see below to move or cancel it
+    *)   echo "refused: HTTP $code" ;;
+  esac
+done < meetings.jsonl
+```
+
+Running the job again is safe: a second push of the same link answers `409` while the first plan is
+still upcoming. To move or cancel a plan the job already made, address it by its link with
+`PATCH` or `DELETE /meetings/{platform}/{native_meeting_id}` (for example
+`{"scheduled_at":"…"}` or `{"auto_join":false}`). The person's [auto-join block
+list](#enterprise-settings) applies to pushed meetings too, matched on the link's host.
+
+## Enterprise settings
+
+Two settings exist for calendars inside an organisation's own network.
+
+**Internal calendar feeds (operator).** The calendar fetch refuses private and internal addresses,
+so a feed served inside your network is refused by default (`last_error`: *couldn't reach the URL
+(… a blocked/internal address)*; saving such a URL is a `422`). An operator can name internal hosts
+and networks that calendar feeds may come from. Nobody else can: it is deployment configuration,
+never a user setting.
+
+| Where | Value |
+|---|---|
+| Helm | `calendar.internalFeedAllow: "cal.corp.example, 10.20.0.0/16"` |
+| Compose / env | `VEXA_CALENDAR_FEED_ALLOW=cal.corp.example,10.20.0.0/16` on admin-api and meeting-api |
+
+- An entry is an **exact host name** (no wildcard) or an **IP network** in CIDR form (or one address).
+- A listed name may resolve to private addresses. Any other host is admitted only when every address
+  it resolves to is public or inside a listed network.
+- **Never admitted, whatever is listed:** loopback, link-local and cloud metadata, unspecified,
+  multicast and reserved addresses, `localhost` and cloud metadata names. An entry that would cover
+  them (`0.0.0.0/0`, `127.0.0.0/8`, `169.254.0.0/16`), a wildcard, a URL, a port or a malformed name
+  stops admin-api and meeting-api at start, naming the entry.
+- Write IPv4 networks in IPv4 form; an IPv4-mapped IPv6 address is not matched against them.
+- The setting applies to calendar feeds only. Webhooks and every other outbound fetch keep the
+  default rule.
+- The feed must answer directly: redirects are still refused.
+
+**Auto-join block list (operator and each person).** Domains and addresses the calendar bot must
+never auto-join. A planned meeting whose organiser, an invitee or the meeting link's host matches is
+skipped when it is due, and the meeting shows *auto-join is blocked for this meeting: the organiser
+matches the block-list entry 'gated.example'*. Use it for organisations that do not want a bot
+knocking on their calls. The operator sets a list for every account (Helm
+`calendar.autoJoinBlock`, env `VEXA_AUTO_JOIN_BLOCK` on meeting-api); each person adds their own
+with [`PUT /user/calendar`](/api/calendar#auto-join-block-list). Either list blocks. A person who
+sends a bot by hand has decided, and is not stopped.
+
+Limits: organiser and invitees are known only for meetings imported from a calendar feed; a meeting
+pushed with `POST /meetings` is matched on its link's host only. A Teams or Google Meet link's host
+is Microsoft's or Google's, so block an organisation by its email domain, not by its link. If the
+person's list cannot be read when the meeting is due, that meeting is not joined either.
+
+### How it works
+
+Internal feeds:
+
+1. The operator sets `VEXA_CALENDAR_FEED_ALLOW` (Helm renders it from `calendar.internalFeedAllow`
+   on admin-api and meeting-api). Each service parses it at start with `parse_allowance` from the
+   outbound URL guard (`deploy/contracts/outbound-url.v1/ssrf.py`) and refuses to start on a bad entry.
+2. A person saves a feed (`PUT /user/calendar`, `POST`/`PATCH /user/calendars`). admin-api checks the
+   URL as written, with the allowance (`validate_ics_url`); an internal address outside it is a `422`.
+3. meeting-api's calendar sweep fetches the feed through the pinned transport built with the same
+   allowance (`calendar_sync/adapters.build_ics_client`). It resolves the host, checks every address,
+   dials the checked address, and re-checks at connect, so a listed name that re-resolves to loopback
+   or metadata is refused before any byte is sent.
+4. No other fetch is built with the allowance: webhooks call the guard without it.
+
+Block lists:
+
+1. The person's list is stored by admin-api in their identity record (`auto_join_block`) and returned
+   on `GET /user/calendar` and on the internal `GET /internal/users/{id}/bot-context`.
+2. The operator's list is `VEXA_AUTO_JOIN_BLOCK`, parsed by meeting-api at start.
+3. Each auto-join sweep (`bot_spawn/auto_join.py`) checks every due meeting against the operator's
+   list first, then, with the bot context it already fetches for the per-person cap, against the
+   person's list (`bot_spawn/auto_join_block.py`). A match stamps the reason on the meeting and spawns
+   nothing.
+
+Ownership: identity (admin-api) is the only writer of a person's list; the operator's settings live
+only in deployment configuration; meeting-api writes the refusal on its own meeting row. The routes
+involved are `PUT`/`GET /user/calendar`, `GET /internal/users/{id}/bot-context`, `POST /meetings`, and
+the sweeps; the configuration lives in the Helm `calendar:` block and in the two services'
+`config.v1.json` declarations.
+
+### Why it complies
+
+| Rule | How | Gate |
+|---|---|---|
+| P23: no duplicated fact | The allowance is part of the one outbound URL guard, vendored byte-for-byte into every image; no service grows its own exception | `gate:fact-parity` (`outbound-url-guard`) |
+| P14: config validated at boot | Both settings are env keys declared in `config.v1.json`; a bad entry refuses the boot | `gate:config-contract` |
+| P2: couple through contracts | meeting-api reads the person's list from identity's existing bot-context door; no import crosses services | `gate:isolation-py`, `gate:domain-doors` |
+| P23: one writer per carrier | Identity writes the list, meeting-api only reads it and writes its own meeting row | `gate:dataflow` |
+| P18: fail loud | Every refusal is stamped on the meeting or named in the boot log; an unreadable person's list refuses rather than being ignored | ungated: reviewed; tests below |
+| One grammar for block entries | The entry grammar is written in meeting-api (enforcement) and mirrored in admin-api (validation on save) | ungated: reviewed |
+
+**Security.** Only the operator can widen what calendar feeds may reach, and never to loopback,
+link-local or cloud metadata, nor for any fetch but calendar feeds. A person can change only their
+own block list, through their own API key; the bot context that carries it is internal-tier only.
+Deny tests: `test_everything_else_stays_refused_with_an_allowance`,
+`test_a_listed_host_that_rebinds_to_metadata_at_connect_is_never_dialled`,
+`test_the_allowance_never_reaches_customer_webhooks`,
+`test_an_unsafe_or_malformed_entry_refuses_the_boot` and
+`test_without_an_allowance_an_internal_feed_is_refused_and_never_dialled` (meeting-api,
+`tests/test_calendar_feed_allow.py`); `test_with_an_allowance_everything_else_internal_is_still_refused`
+and `test_an_unsafe_allowance_entry_is_refused` (admin-api, `tests/test_calendar_enterprise.py`);
+`test_a_deployment_blocked_organiser_domain_is_never_auto_joined`,
+`test_an_owner_blocked_invitee_subdomain_is_never_auto_joined`,
+`test_a_blocked_meeting_link_host_is_never_auto_joined`,
+`test_an_unreadable_owner_list_refuses_instead_of_being_ignored` and
+`test_a_bad_deployment_list_refuses_the_boot` (meeting-api, `tests/test_auto_join_block.py`);
+`test_one_owner_cannot_see_or_change_another_owners_block_list` (admin-api, against Postgres).
+
 ## Disconnect
 
 On **Calendar**, choose **Disconnect** for the exact named feed. Meetings that also belong to
