@@ -687,6 +687,18 @@
    ]
   },
   {
+   "unique-id": "transcription-language.v1",
+   "node-type": "contract",
+   "name": "transcription-language.v1",
+   "description": "transcription-language.v1 \u2014 sealed: the language a meeting bot transcribes in (auto, forced, restricted to a list), its tiers (meeting, person, deployment) and their precedence, the setting a meeting runs with, and the live change PUT /bots/{platform}/{native_meeting_id}/config; meeting-api and identity read its goldens (meetings)",
+   "metadata": [
+    {
+     "path": "core/meetings/contracts/transcription-language.v1",
+     "domain": "meetings"
+    }
+   ]
+  },
+  {
    "unique-id": "transcript.v1",
    "node-type": "contract",
    "name": "transcript.v1",
@@ -1981,6 +1993,7 @@
       "lifecycle.v1",
       "service-authority.v1",
       "session-profile.v1",
+      "transcription-language.v1",
       "transcript.v1",
       "webhook.v1",
       "transcription",

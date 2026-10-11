@@ -184,6 +184,18 @@
    "description": "server-side bot participant name used by POST /bots when bot_name is omitted"
   },
   {
+   "key": "DEFAULT_TRANSCRIPTION_LANGUAGE",
+   "class": "defaulted",
+   "default": "(unset — no deployment default; a person's default or auto-detection applies)",
+   "description": "the deployment's default transcription language (transcription-language.v1 DeploymentDefault): one code such as `de`. With DEFAULT_TRANSCRIPTION_ALLOWED_LANGUAGES set it must be one of that list, and is the language a window detected outside the list falls back to. Applies to every spawn whose request and person set no language. A value the contract refuses stops the boot"
+  },
+  {
+   "key": "DEFAULT_TRANSCRIPTION_ALLOWED_LANGUAGES",
+   "class": "defaulted",
+   "default": "(unset — detection is not restricted)",
+   "description": "the deployment's default list of languages detection is restricted to (transcription-language.v1 DeploymentDefault), comma-separated with no spaces, e.g. `de,en`. A value the contract refuses stops the boot"
+  },
+  {
    "key": "TRANSCRIPTION_SERVICE_URL",
    "class": "capability",
    "capability": "stt",

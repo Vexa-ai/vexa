@@ -147,7 +147,9 @@ curl "$API_BASE/user/transcription" -H "X-API-Key: $API_KEY"
 {
   "url": "https://stt.example.com",
   "token_set": true,
-  "token": "********9a2b"
+  "token": "********9a2b",
+  "language": "de",
+  "allowed_languages": ["de", "en"]
 }
 ```
 
@@ -166,6 +168,16 @@ curl -X PUT "$API_BASE/user/transcription" \
 </ParamField>
 <ParamField body="token" type="string">
   Credential for that endpoint. Masked on every read-back, exactly like the model credential.
+</ParamField>
+
+<ParamField body="language" type="string">
+  Your default transcription language for the bots you send (e.g. `de`); `""` clears it. With
+  `allowed_languages` it must be one of them. A meeting can still override it. See
+  [Transcription language](/how-to/transcription-language).
+</ParamField>
+<ParamField body="allowed_languages" type="string[]">
+  Your default list of languages detection is restricted to (e.g. `["de","en"]`); `[]` clears it.
+  Read back as-is (not a secret). A refused value is `422`.
 </ParamField>
 
 Same partial-update and clearing rules as [model configuration](#model-configuration).

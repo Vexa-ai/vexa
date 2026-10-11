@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vexa.ai/schemas/transcription-language.v1",
+  "title": "transcription-language.v1",
+  "description": "The language a meeting bot transcribes in: the setting itself, where each tier of it is written (a meeting's spawn request and live change, a person's default, the deployment's default), and the setting a meeting is running with. One rule beyond the shapes, enforced by validate.mjs and by every runtime that reads these shapes: when both `language` and a non-empty `allowed_languages` are set, `language` is one of the list.",
+  "$defs": {
+    "LanguageCode": {
+      "description": "A Whisper language code: two or three lower-case letters (`de`, `en`, `yue`).",
+      "type": "string",
+      "pattern": "^[a-z]{2,3}$"
+    },
+    "LanguageList": {
+      "description": "The languages detection is restricted to. Empty means no restriction.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/LanguageCode" },
+      "uniqueItems": true,
+      "maxItems": 16
+    },
+    "LanguageSetting": {
+      "description": "auto: neither field set — each window is detected freely. forced: `language` set, list empty — every window is pinned to it. restricted: list set — a window detected outside the list is transcribed again pinned to `language` (a member of the list) or, when it is null, to the first entry; a one-entry list pins to that entry.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["language", "allowed_languages"],
+      "properties": {
+        "language": { "anyOf": [{ "$ref": "#/$defs/LanguageCode" }, { "type": "null" }] },
+        "allowed_languages": { "$ref": "#/$defs/LanguageList" }
+      }
+    },
+    "Source": {
+      "description": "Which tier supplied a meeting's setting. Precedence, first tier that sets either field wins as a whole: meeting, then user, then deployment, then auto.",
+      "enum": ["meeting", "user", "deployment", "auto"]
+    },
+    "EffectiveSetting": {
+      "description": "The setting a meeting's bot runs with, stored on the meeting as `data.transcription_language` and returned on every meeting read. meeting-api is its one writer: at spawn, and on every accepted live change.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["language", "allowed_languages", "source"],
+      "properties": {
+        "language": { "anyOf": [{ "$ref": "#/$defs/LanguageCode" }, { "type": "null" }] },
+        "allowed_languages": { "$ref": "#/$defs/LanguageList" },
+        "source": { "$ref": "#/$defs/Source" }
+      }
+    },
+    "SpawnFields": {
+      "description": "The language fields of a `POST /bots` body (the rest of that body is api.v1's). Both absent or null: the meeting tier is unset and lower tiers apply. `language: \"auto\"` sets the meeting tier to auto, over any default.",
+      "type": "object",
+      "properties": {
+        "language": { "anyOf": [{ "$ref": "#/$defs/LanguageCode" }, { "const": "auto" }, { "type": "null" }] },
+        "allowed_languages": { "anyOf": [{ "$ref": "#/$defs/LanguageList" }, { "type": "null" }] }
+      }
+    },
+    "ConfigUpdate": {
+      "description": "The body of `PUT /bots/{platform}/{native_meeting_id}/config`. It REPLACES the running setting: an omitted or null field is cleared, so `{\"language\": null, \"allowed_languages\": null}` is auto. At least one of the two is present.",
+      "type": "object",
+      "additionalProperties": false,
+      "anyOf": [{ "required": ["language"] }, { "required": ["allowed_languages"] }],
+      "properties": {
+        "language": { "anyOf": [{ "$ref": "#/$defs/LanguageCode" }, { "type": "null" }] },
+        "allowed_languages": { "anyOf": [{ "$ref": "#/$defs/LanguageList" }, { "type": "null" }] },
+        "task": { "type": ["string", "null"], "description": "Accepted for the api.v1 shape and carried to the bot unchanged." }
+      }
+    },
+    "ConfigAccepted": {
+      "description": "The 202 answer to a live change: the change was delivered to the running bot and is now the meeting's setting.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["meeting_id", "platform", "native_meeting_id", "transcription_language"],
+      "properties": {
+        "meeting_id": { "type": "integer" },
+        "platform": { "type": "string" },
+        "native_meeting_id": { "type": "string" },
+        "transcription_language": { "$ref": "#/$defs/EffectiveSetting" }
+      }
+    },
+    "UserPreferenceUpdate": {
+      "description": "The language fields of `PUT /user/transcription` (the person's default). `\"\"` clears `language`; `[]` clears the list; an absent field is unchanged.",
+      "type": "object",
+      "properties": {
+        "language": { "anyOf": [{ "$ref": "#/$defs/LanguageCode" }, { "const": "" }, { "type": "null" }] },
+        "allowed_languages": { "anyOf": [{ "$ref": "#/$defs/LanguageList" }, { "type": "null" }] }
+      }
+    },
+    "UserPreference": {
+      "description": "The language fields of `GET /user/transcription`, and of identity's internal bot-context answer under `transcription_language` (present there only when the person set either field).",
+      "$ref": "#/$defs/LanguageSetting"
+    },
+    "DeploymentDefault": {
+      "description": "meeting-api's environment: `DEFAULT_TRANSCRIPTION_LANGUAGE` (a code, or empty) and `DEFAULT_TRANSCRIPTION_ALLOWED_LANGUAGES` (comma-separated codes, or empty) — Helm `meetingApi.transcriptionLanguage` and `meetingApi.transcriptionAllowedLanguages`. meeting-api refuses to boot on a value this contract refuses.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["DEFAULT_TRANSCRIPTION_LANGUAGE", "DEFAULT_TRANSCRIPTION_ALLOWED_LANGUAGES"],
+      "properties": {
+        "DEFAULT_TRANSCRIPTION_LANGUAGE": { "type": "string", "pattern": "^([a-z]{2,3})?$" },
+        "DEFAULT_TRANSCRIPTION_ALLOWED_LANGUAGES": { "type": "string", "pattern": "^([a-z]{2,3}(,[a-z]{2,3}){0,15})?$" }
+      }
+    }
+  },
+  "x-routes": [
+    {
+      "method": "POST",
+      "path": "/bots",
+      "request": "SpawnFields",
+      "response": "EffectiveSetting",
+      "auth": "the caller's key (scope `bot`); the effective setting is stored on the new meeting as data.transcription_language and carried to the bot as invocation.v1 `language` + `allowedLanguages`. Refusals: 422 a body this contract refuses"
+    },
+    {
+      "method": "PUT",
+      "path": "/bots/{platform}/{native_meeting_id}/config",
+      "request": "ConfigUpdate",
+      "response": "ConfigAccepted",
+      "auth": "the caller's key (scope `bot`); allowed for the meeting's owner and for an owner or contributor of the workspace the meeting is bound to. Delivered as an acts.v1 `reconfigure` on bot_commands:meeting:{meeting_id}. Refusals: 403 neither owner nor editor, 404 no active bot the caller can see, 409 the bot is not listening yet (nothing changed), 422 a body this contract refuses, 503 the caller's workspace role could not be read"
+    },
+    {
+      "method": "PUT",
+      "path": "/user/transcription",
+      "request": "UserPreferenceUpdate",
+      "response": "UserPreference",
+      "auth": "the caller's own account (identity admin-api). Refusals: 422 a body this contract refuses"
+    }
+  ]
+}

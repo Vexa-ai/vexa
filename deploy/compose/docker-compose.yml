@@ -600,6 +600,11 @@ services:
       - TRANSCRIPTION_SERVICE_URL=${TRANSCRIPTION_SERVICE_URL:-}
       - TRANSCRIPTION_SERVICE_TOKEN=${TRANSCRIPTION_SERVICE_TOKEN:-}
       - TRANSCRIPTION_MODEL=${TRANSCRIPTION_MODEL:-}
+      # The deployment's default transcription language, for bots whose request and person set
+      # none: one code (de) and/or the codes detection is restricted to (de,en). A refused value
+      # stops meeting-api's boot naming the fix.
+      - DEFAULT_TRANSCRIPTION_LANGUAGE=${DEFAULT_TRANSCRIPTION_LANGUAGE:-}
+      - DEFAULT_TRANSCRIPTION_ALLOWED_LANGUAGES=${DEFAULT_TRANSCRIPTION_ALLOWED_LANGUAGES:-}
       # Deployment-level defaults for a spawn's transcribe/recording flags when the request does not
       # say (config.v1 `defaulted` keys). TRANSCRIBE_ENABLED=false makes a no-STT deployment spawn
       # capture-only bots instead of 503-ing every default POST /bots.

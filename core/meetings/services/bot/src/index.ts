@@ -23,14 +23,15 @@
  * lazy redis connect.
  */
 import { createClient } from 'redis';
-import { loadInvocation, InvocationError, speakerStreamConfigFromEnv, type Invocation } from './config.js';
+import { isMixedLanePlatform, loadInvocation, InvocationError, speakerStreamConfigFromEnv, type Invocation } from './config.js';
 import type { Act, LifecycleEvent, TranscriptSegment } from './contracts.js';
 import { createOrchestrator } from './orchestrator.js';
 import { createHttpLifecycleSink } from './adapters/lifecycle-http.js';
 import { createRedisTranscriptSink, redisClientFrom } from './adapters/transcript-redis.js';
 import { createRedisActsSource, redisActsClientFrom } from './adapters/acts-redis.js';
 import { createBrowserJoinDriver } from './join-driver.js';
-import { createBotPipeline, createLivePipeline, createTranscribe, serr, type BotPipeline } from './pipeline.js';
+import { createBotPipeline, createLivePipeline, createTranscribe, languageControlFrom, serr, type BotPipeline } from './pipeline.js';
+import { languageActHandler, observationOf, summarize, type LanguageObservation } from './transcription-language.js';
 import { createBotRecordingSink } from './recording.js';
 import { createCaptureSignalRecorder, startBotLogSidecar, wrapTranscribeWithTap, wrapTranscriptWithSnapshot, type CaptureSignalRecorder } from './telemetry.js';
 import { uploadSignalTapes } from './signal-upload.js';
@@ -99,18 +100,22 @@ function deriveMaxActiveMs(inv: Invocation, everyoneLeftMs: number, env: NodeJS.
 }
 
 /**
- * Tee an ActsSource so EVERY act reaches both the orchestrator (its single `handle`, which owns
- * `leave`) AND the bot's voice handler (speak / speak_stop), from ONE underlying subscription.
- * The orchestrator stays the pure core (it never imports the SpeakController); the voice path is
- * wired here at the composition root. The orchestrator's `subscribe(handler)` registers its
- * handler; we fan the live source's messages to it plus `voice`.
+ * Tee an ActsSource so EVERY act reaches the orchestrator (its single `handle`, which owns `leave`)
+ * AND each side handler — voice (speak / speak_stop), transcription language (reconfigure) — from
+ * ONE underlying subscription. The orchestrator stays the pure core (it never imports the
+ * SpeakController or the language control); the side paths are wired here at the composition root.
  */
-function teeActs(source: ActsSource, voice: (act: Act) => void | Promise<void>): ActsSource {
+export function teeActs(
+  source: ActsSource,
+  sides: Record<string, (act: Act) => void | Promise<void>>,
+): ActsSource {
   return {
     subscribe(handler) {
       return source.subscribe((act) => {
         void Promise.resolve(handler(act)).catch((e) => console.error(`[bot] acts: orchestrator handler rejected: ${String(e)}`));
-        void Promise.resolve(voice(act)).catch((e) => console.error(`[bot] acts: voice handler rejected: ${String(e)}`));
+        for (const [name, side] of Object.entries(sides)) {
+          void Promise.resolve().then(() => side(act)).catch((e) => console.error(`[bot] acts: ${name} handler rejected: ${String(e)}`));
+        }
       });
     },
   };
@@ -232,12 +237,28 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
   console.log(`[bot] aloneness: silence adapter + deaf-capture guard enabled (window_ms=${aloneSilenceWindowMs})`);
   if (speakerStreamConfig) console.log(`[bot] speaker-stream tuning enabled: ${JSON.stringify(speakerStreamConfig)}`);
 
+  // The live transcription-language setting: seeded from the invocation (validated at parse), then
+  // replaced field by field by acts.v1 `reconfigure`. Every lane's next STT call reads it.
+  const languageControl = languageControlFrom(inv);
+  const observeLanguage = (obs: LanguageObservation): void => {
+    try {
+      signalRecorder?.sink.captureObservation?.({
+        type: 'observation', t: Date.now(), source: 'transcription-language',
+        lane: isMixedLanePlatform(inv.platform) ? 'mixed' : 'gmeet', observation: { ...obs },
+      });
+    } catch { /* an observation must never disturb the meeting */ }
+  };
+  console.log(`[bot] transcription language: ${summarize(languageControl.get())} (invocation)`);
+  observeLanguage(observationOf(languageControl.get(), 'invocation'));
+  const languageActs = languageActHandler(languageControl, { observe: observeLanguage });
+
   try {
     session = await launchBrowser(inv);                                   // L4 (O6/VM)
     join = createBrowserJoinDriver(session.page, inv);
     botPipeline = createBotPipeline(inv, transcript, {
       // When recording, tee every STT round-trip to <session>.stt.jsonl (the capture/STT/assembly bisect).
-      transcribe: signalRecorder ? wrapTranscribeWithTap(createTranscribe(inv), signalRecorder.path) : undefined,
+      transcribe: signalRecorder ? wrapTranscribeWithTap(createTranscribe(inv, languageControl), signalRecorder.path) : undefined,
+      languageControl,
       config: speakerStreamConfig,
       // Every STT fault is counted and carried out on the terminal lifecycle event (see
       // sttFaults). Logging it here as well keeps the raw line for anyone tailing the container.
@@ -295,14 +316,17 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
         console.error(`[bot] live-pipeline: ${stage} failed (non-fatal, bot stays seated): ${serr(e)}`);
       },
     });
-    // Voice: tee acts so `speak`/`speak_stop` reach the SpeakController (gated on voiceAgentEnabled).
+    // Tee acts: `speak`/`speak_stop` reach the SpeakController (gated on voiceAgentEnabled) and
+    // `reconfigure` reaches the transcription-language control.
     const speak = createSpeakController(session.page, inv);
-    acts = teeActs(liveActs, voiceHandler(speak));
+    acts = teeActs(liveActs, { voice: voiceHandler(speak), 'transcription-language': languageActs });
   } catch (e) {
     console.error(`[bot] browser launch/capture wiring failed — falling back to clean terminal failed: ${String(e)}`);
     join = noBrowserJoinDriver(String(e));
     pipeline = noBrowserPipeline();
-    acts = liveActs;
+    // No lane runs, so a reconfigure only updates a setting nothing reads — still validated and
+    // logged, so the act is never silently dropped.
+    acts = teeActs(liveActs, { 'transcription-language': languageActs });
   }
 
   // Reachability gate (#530): only meaningful under a control plane (a callback URL is set). When

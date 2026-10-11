@@ -23,6 +23,8 @@ import { getJitsiHosts } from "./jitsiHosts";
 import { mintTranscriptShare, mintInvite, listSharedMemberships, type Membership } from "./workspaceApi";
 import { deletePlannedMeeting, MAX_CALENDARS, listCalendars, createCalendar, updateCalendar, syncCalendar, getCalendarSyncStatus, type CalendarConnection, type CalendarSyncStamp } from "./plannedApi";
 import { prepTabDescriptor, prepDraftTabDescriptor } from "./meetingPrep";
+import { SpawnLanguagePicker } from "./TranscriptionLanguagePicker";
+import { DEFAULT_CHOICE, choiceProblem, languageSpawnFields, type LanguageChoice } from "./transcriptionLanguage";
 
 // ── "Share session" — mint a link to this meeting's LIVE FEED (independent transcript share) and,
 //    optionally, BUNDLE a shared-workspace invite into the SAME link (?tshare=…&invite=…). The two are
@@ -690,7 +692,7 @@ function CalendarSyncButton({ variant = "icon" }: { variant?: "icon" | "row" }) 
 }
 
 // ── Meetings LIST (left) ─────────────────────────────────────────────────────────
-function MeetingsList() {
+export function MeetingsList() {
   const layout = useService(LayoutServiceId);
   // The meeting LIST lives on the Today page (the center) — the sidebar never renders it too
   // (design-spec §v4 anti-pattern: same list twice). The rail keeps only its ACTIONS + a link to Today.
@@ -708,12 +710,16 @@ function MeetingsList() {
   const [sent, setSent] = useState<null | "sending" | "ok" | "err">(null);
   const [errMsg, setErrMsg] = useState<string | null>(null);
   const [denial, setDenial] = useState<ServiceDenialPresentation | null>(null);
+  const [language, setLanguage] = useState<LanguageChoice>(DEFAULT_CHOICE);
   const addBot = async () => {
     const u = url.trim();
     if (!u || sent === "sending") return;
     // Parse + validate the pasted link/id against the platform formats (mirrors join-form).
     const parsed = parseMeetingInput(u, await getJitsiHosts());
     if (!parsed) { setSent("err"); setErrMsg("That doesn't look like a Meet / Zoom / Teams / Jitsi link."); setDenial(null); setTimeout(() => setSent(null), 5000); return; }
+    // An unfinished language pick stays on screen with its own hint; the link and the pick are kept.
+    const languageProblem = choiceProblem(language);
+    if (languageProblem) { setSent("err"); setErrMsg(languageProblem); setDenial(null); return; }
     setSent("sending"); setErrMsg(null); setDenial(null);
     let refused = false;
     try {
@@ -721,10 +727,10 @@ function MeetingsList() {
       const r = await fetch("/api/bots", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ platform: parsed.platform, native_meeting_id: parsed.native_meeting_id, meeting_url: u, bot_name: defaultBotName() }),
+        body: JSON.stringify({ platform: parsed.platform, native_meeting_id: parsed.native_meeting_id, meeting_url: u, bot_name: defaultBotName(), ...languageSpawnFields(language) }),
       });
       if (r.ok) {
-        setSent("ok"); setUrl("");
+        setSent("ok"); setUrl(""); setLanguage(DEFAULT_CHOICE);
         // The list has no background poll, so force a re-fetch now and again as the bot
         // transitions requested → joining → active (else the meeting only shows on reload).
         refreshMeetings(); setTimeout(refreshMeetings, 2000); setTimeout(refreshMeetings, 6000);
@@ -770,6 +776,7 @@ function MeetingsList() {
             {sent === "sending" ? "…" : "Add bot"}
           </button>
         </div>
+        <div style={{ marginTop: 6 }}><SpawnLanguagePicker value={language} onChange={setLanguage} disabled={sent === "sending"} /></div>
         {sent === "ok" && <div style={{ fontSize: 11, color: "var(--green)", marginTop: 5, lineHeight: 1.4 }}>Bot sent — admit it in the meeting; it appears here once it starts transcribing.</div>}
         {denial
           ? <ServiceDenialPanel presentation={denial} onRetry={() => void addBot()} />

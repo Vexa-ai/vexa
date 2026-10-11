@@ -47,6 +47,7 @@ from . import platform_settings as platform_settings_mod
 from . import provider_subjects as provider_subjects_mod
 from . import signin_links as signin_links_mod
 from . import validate as validate_mod
+from . import transcription_language as transcription_language_mod
 from .platform_settings import (MODELS_FIELDS, TRANSCRIPTION_FIELDS, apply_config_update,
                                 read_platform_setting, validate_config_fields)
 from .internal_tier import check_internal, check_internal_no_dev_bypass
@@ -342,6 +343,11 @@ class ModelPrefsUpdate(BaseModel):
 class TranscriptionPrefsUpdate(BaseModel):
     url: Optional[str] = None
     token: Optional[str] = None
+    # The person's default transcription language (transcription-language.v1 UserPreferenceUpdate):
+    # a code, or "" to clear; a list of codes, or [] to clear. Typed loosely on purpose — the
+    # contract's rulebook (`transcription_language.apply`) refuses with a message naming the fix.
+    language: Optional[Any] = None
+    allowed_languages: Optional[Any] = None
 
 
 def _masked_feed(connection: dict, *, prefix: str = "") -> dict:
@@ -961,11 +967,13 @@ def create_app() -> FastAPI:
 
     # --- user tier: model + transcription self-serve prefs (users.data JSONB, like webhook) ---
     async def _put_user_prefs(update_fields: dict, data_key: str, user: User,
-                              db: AsyncSession) -> dict:
+                              db: AsyncSession, *, language_fields: Optional[dict] = None) -> dict:
         from sqlalchemy.orm import attributes
         cleaned = validate_config_fields(update_fields)
         data = dict(user.data or {})
         data[data_key] = apply_config_update(data.get(data_key) or {}, cleaned)
+        if language_fields:
+            data[data_key] = transcription_language_mod.apply(data[data_key], language_fields)
         if not data[data_key]:
             data.pop(data_key, None)  # fully cleared → back to platform/env defaults
         user.data = data
@@ -1023,7 +1031,17 @@ def create_app() -> FastAPI:
                 validate_url(url, what="url", resolve=False)
             except SSRFError as exc:
                 raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
-        await _put_user_prefs(update.model_dump(exclude_unset=True), "transcription_prefs", user, db)
+        fields = update.model_dump(exclude_unset=True)
+        language_fields = {k: fields.pop(k) for k in ("language", "allowed_languages") if k in fields}
+        if language_fields:
+            # Checked against the WHOLE stored default before anything is written, so a change to
+            # one half that breaks the rule with the other half is refused, not half-applied.
+            stored = (user.data if isinstance(user.data, dict) else {}).get("transcription_prefs") or {}
+            try:
+                transcription_language_mod.apply(stored, language_fields)
+            except transcription_language_mod.Refused as refused:
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(refused))
+        await _put_user_prefs(fields, "transcription_prefs", user, db, language_fields=language_fields)
         return await get_user_transcription(user)
 
     @app.get("/user/transcription")
@@ -1034,6 +1052,7 @@ def create_app() -> FastAPI:
             "url": prefs.get("url"),
             "token_set": bool(prefs.get("token")),
             "token": _mask_secret(prefs.get("token")),
+            **transcription_language_mod.read(prefs),
         }
 
     app.include_router(validate_mod.router)  # POST /internal/validate — the gateway's authz oracle
@@ -1503,6 +1522,11 @@ def create_app() -> FastAPI:
                 platform_transcription,
                 TRANSCRIPTION_FIELDS,
             )
+        # The person's default transcription language (transcription-language.v1 user tier), only
+        # when they set one; meetings decides its precedence against the request and the deployment.
+        language = transcription_language_mod.for_bot_context(user_transcription)
+        if language:
+            resp["transcription_language"] = language
         if transcription:
             # Ownership follows the URL that will actually serve this spawn. This non-secret
             # discriminator crosses only the internal bot-context edge; the URL/token remain

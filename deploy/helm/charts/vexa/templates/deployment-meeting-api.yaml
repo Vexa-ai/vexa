@@ -104,6 +104,10 @@ spec:
               value: {{ .Values.meetingApi.defaultBotName | default "" | quote }}
             - name: TRANSCRIPTION_SERVICE_URL
               value: {{ .Values.meetingApi.transcriptionServiceUrl | default "" | quote }}
+            - name: DEFAULT_TRANSCRIPTION_LANGUAGE
+              value: {{ .Values.meetingApi.transcriptionLanguage | default "" | quote }}
+            - name: DEFAULT_TRANSCRIPTION_ALLOWED_LANGUAGES
+              value: {{ join "," (.Values.meetingApi.transcriptionAllowedLanguages | default list) | quote }}
             - name: TRANSCRIPTION_SERVICE_TOKEN
               valueFrom:
                 secretKeyRef:

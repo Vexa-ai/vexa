@@ -1262,4 +1262,18 @@ if [ -z "$loose" ] && grep -q 'app.kubernetes.io/component: flows-api' <<< "$flo
   echo "  OK: every policy, Service and Pod template naming a flows component also names this release"
 else echo "  FAIL: flows matched by component alone:"; echo "$loose" | head -40; fail=1; fi
 
+# The deployment's default transcription language reaches meeting-api as the two env vars its boot
+# check reads (transcription-language.v1 DeploymentDefault): empty by default, and a value list
+# joined with commas and no spaces, which is the only list form the contract accepts.
+lang_env() { awk -v n="$2" '$0 ~ "- name: "n"$" { getline; sub(/^ *value: /, ""); print; exit }' <<< "$1"; }
+if [ "$(lang_env "$RENDER" DEFAULT_TRANSCRIPTION_LANGUAGE)" = '""' ] \
+   && [ "$(lang_env "$RENDER" DEFAULT_TRANSCRIPTION_ALLOWED_LANGUAGES)" = '""' ]; then
+  echo "  OK: no default transcription language unless one is set"
+else echo "  FAIL: default transcription language rendered without being set"; fail=1; fi
+lang_r="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set meetingApi.transcriptionLanguage=de --set 'meetingApi.transcriptionAllowedLanguages={de,en}')"
+if [ "$(lang_env "$lang_r" DEFAULT_TRANSCRIPTION_LANGUAGE)" = '"de"' ] \
+   && [ "$(lang_env "$lang_r" DEFAULT_TRANSCRIPTION_ALLOWED_LANGUAGES)" = '"de,en"' ]; then
+  echo "  OK: meetingApi.transcriptionLanguage/AllowedLanguages render as de and de,en"
+else echo "  FAIL: transcription language env: $(lang_env "$lang_r" DEFAULT_TRANSCRIPTION_LANGUAGE) $(lang_env "$lang_r" DEFAULT_TRANSCRIPTION_ALLOWED_LANGUAGES)"; fail=1; fi
+
 [ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }

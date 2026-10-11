@@ -101,6 +101,20 @@ def _auth_session_at_boot(env: "os._Environ | dict | None" = None) -> None:
         raise ConfigError(f"meeting-api refuses to boot: {e}") from None
 
 
+def _transcription_language_at_boot(env: "os._Environ | dict | None" = None) -> None:
+    """The deployment's default transcription language, checked once at boot (P14, P18) with the
+    reading every spawn applies (`bot_spawn.transcription_language.deployment_tier`). A value
+    transcription-language.v1 refuses stops the boot naming the variable and the fix, instead of
+    being found by the first spawn."""
+    from .bot_spawn.transcription_language import LanguageRefused, deployment_tier
+    from .config_preflight import ConfigError
+
+    try:
+        deployment_tier(env)
+    except LanguageRefused as e:
+        raise ConfigError(f"meeting-api refuses to boot: {e}") from None
+
+
 def _identity_key():
     """gateway-identity.v1 — the gateway's Ed25519 public key, or a refused boot. A file that is
     unreadable, or is anything but an Ed25519 public key (the private key included: a verifier that
@@ -153,6 +167,7 @@ def build_production_app():
     _require_config()  # A4: refuse to boot a misconfigured deploy (no ADMIN_TOKEN → every spawn 500s).
     workload_acl = _redis_workload_acl()  # S51: an unknown mode refuses the boot, as agent-api's does
     _auth_session_at_boot()  # S64: a broken authenticated-bot store refuses the boot, not the first spawn
+    _transcription_language_at_boot()  # a refused default language stops the boot, not the first spawn
 
     import redis.asyncio as aioredis
     from sqlalchemy.ext.asyncio import async_sessionmaker
