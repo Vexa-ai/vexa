@@ -195,6 +195,9 @@ diagnostics:
 |---|---|---|
 | `diagnostics.captureSignal` | `"false"` | The deployment's default for taping. `"true"` or `"false"`; any other value stops `helm install` and `helm template` with a message naming the value. |
 
+The value is also listed in the [Helm chart README](https://github.com/Vexa-ai/vexa/blob/main/deploy/helm/README.md#configuration-that-matters),
+and the variable it sets, `VEXA_CAPTURE_SIGNAL_DEFAULT`, in [Configuration](/configuration#captured-signal-tapes).
+
 The chart value is the last word only when nobody has said otherwise. An administrator can change
 it without a redeploy, for every account (`PUT /internal/settings/diagnostics` with
 `{"capture_signal": "true"}` or `"false"`; an empty string clears it) or for one account
