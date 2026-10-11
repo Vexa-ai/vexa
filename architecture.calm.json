@@ -1584,6 +1584,29 @@
    }
   },
   {
+   "unique-id": "rail-marks",
+   "node-type": "data-asset",
+   "name": "agent:rail-marks:{subject} (redis hash)",
+   "description": "a person's pins and hides on their own chat rail, one field per mark (p:<row>, h:<row>) (control_plane/api_shared.py rail_marks, mark_row); agent-api writes and reads it, in memory when there is no redis. A mark on a shared meeting is the viewer's own and never the owner's",
+   "controls": {
+    "ownership": {
+     "description": "single writer (P23)",
+     "requirements": [
+      {
+       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "config": {
+        "writers": [
+         "agent-api"
+        ],
+        "match": "_marks_key",
+        "op": "kv-write"
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
    "unique-id": "signin-link-redeemed",
    "node-type": "data-asset",
    "name": "vexa:signin-link:redeemed:{jti} (redis key)",
@@ -1903,6 +1926,7 @@
       "imports-status",
       "onboarding-research-state",
       "rail-order",
+      "rail-marks",
       "redis-acl-users",
       "acl-units-index",
       "routine-state",
@@ -3499,6 +3523,25 @@
     }
    },
    "description": "SET/GET the chat rail order",
+   "metadata": [
+    {
+     "access": "write"
+    }
+   ]
+  },
+  {
+   "unique-id": "aa-rail-marks",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "agent-api"
+     },
+     "destination": {
+      "node": "rail-marks"
+     }
+    }
+   },
+   "description": "HSET/HDEL/HGETALL a person's rail pins and hides",
    "metadata": [
     {
      "access": "write"

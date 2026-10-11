@@ -362,6 +362,7 @@ class _Sessions:
     def __init__(self, redis_client=None) -> None:
         self._redis = redis_client
         self._mem: dict[str, dict[str, dict]] = {}  # subject → {session → {created,last_active,title}}
+        self._marks: dict[str, dict[str, str]] = {}  # subject → {"p:<row>" | "h:<row>" → "1"}
 
     # ── redis key helpers ──
     @staticmethod
@@ -484,6 +485,64 @@ class _Sessions:
         if order is not None:
             self._orders[subject] = list(order)
         return list(self._orders.get(subject, []))
+
+    #: The most rows one person may mark. A mark is one hash field per flag, so this bounds the
+    #: carrier the way ``ChatOrderBody`` bounds the order.
+    RAIL_MARKS_CAP = 5000
+    #: The two marks a rail row can carry, by their field prefix in the hash.
+    _MARK_FLAGS = {"pinned": "p", "hidden": "h"}
+
+    @staticmethod
+    def _marks_key(subject: str) -> str:
+        return f"agent:rail-marks:{subject}"
+
+    def rail_marks(self, subject: str) -> dict:
+        """THIS PERSON'S PINS AND HIDES on their own rail: ``{pinned: [row], hidden: [row]}``.
+
+        A row is a rail key (``c:<chat session>`` or ``m:<meeting id>``). The marks are the
+        viewer's and nobody else's: a pin on a meeting shared with you lives under YOUR subject, so
+        the owner's rail never moves because you pinned or hid it."""
+        if self._redis is not None:
+            fields = self._redis.hgetall(self._marks_key(subject)) or {}
+        else:
+            fields = dict(self._marks.get(subject, {}))
+        out: dict[str, list[str]] = {name: [] for name in self._MARK_FLAGS}
+        for field in sorted(fields):
+            flag, _, row = str(field).partition(":")
+            for name, prefix in self._MARK_FLAGS.items():
+                if flag == prefix and row:
+                    out[name].append(row)
+        return out
+
+    def mark_row(self, subject: str, row: str, *, pinned: "bool | None" = None,
+                 hidden: "bool | None" = None) -> dict:
+        """Set or clear one row's marks and return the person's marks. ``None`` leaves a flag alone.
+
+        One hash field PER FLAG (``p:<row>``, ``h:<row>``), so a pin and a hide written at the same
+        moment from two windows cannot overwrite each other: neither write reads the other's field.
+        Raises ``OverflowError`` when a new mark would pass ``RAIL_MARKS_CAP``."""
+        wanted = {self._MARK_FLAGS[n]: v for n, v in (("pinned", pinned), ("hidden", hidden)) if v is not None}
+        if self._redis is not None:
+            key = self._marks_key(subject)
+            adds = [f"{p}:{row}" for p, on in wanted.items() if on and not self._redis.hexists(key, f"{p}:{row}")]
+            if adds and self._redis.hlen(key) + len(adds) > self.RAIL_MARKS_CAP:
+                raise OverflowError("too many marked rows")
+            for prefix, on in wanted.items():
+                if on:
+                    self._redis.hset(self._marks_key(subject), f"{prefix}:{row}", "1")
+                else:
+                    self._redis.hdel(self._marks_key(subject), f"{prefix}:{row}")
+            return self.rail_marks(subject)
+        mine = self._marks.setdefault(subject, {})
+        adds = [f"{p}:{row}" for p, on in wanted.items() if on and f"{p}:{row}" not in mine]
+        if adds and len(mine) + len(adds) > self.RAIL_MARKS_CAP:
+            raise OverflowError("too many marked rows")
+        for prefix, on in wanted.items():
+            if on:
+                mine[f"{prefix}:{row}"] = "1"
+            else:
+                mine.pop(f"{prefix}:{row}", None)
+        return self.rail_marks(subject)
 
     def add_workspace(self, subject: str, session: str, workspace: str) -> bool:
         """PUT a workspace into this chat's focus, and say whether that changed anything

@@ -25,7 +25,7 @@ from control_plane.api_shared import (
     inbox_pending, inbox_withdraw, logger, meeting_binding, target_preamble, toolbelt_preamble, workspace_focus)
 from control_plane.peer_lookups import meeting_access_check
 from control_plane.bodies import CHAT_SESSION_PATTERN, ChatBody, ResetBody, SessionId
-from control_plane.ceiling import refuse_delegated, require_in_ceiling
+from control_plane.ceiling import reads_within, refuse_delegated, require_in_ceiling
 from control_plane.config_preflight import NOT_CONFIGURED, capability_state
 from control_plane.workspace_attach import active_workspaces, shared_active_mounts
 from typing import Annotated, Literal
@@ -70,6 +70,14 @@ RailKey = Annotated[str, StringConstraints(pattern=RAIL_KEY_PATTERN)]
 class ChatOrderBody(BaseModel):
     model_config = ConfigDict(extra='forbid')
     order: list[RailKey] = Field(max_length=5000)
+
+
+class ChatMarkBody(BaseModel):
+    """Pin or hide ONE row of the caller's own rail. A flag that is absent is left as it is."""
+    model_config = ConfigDict(extra='forbid')
+    row: RailKey = Field(description='the rail row: `c:<chat session>` or `m:<meeting id>`')
+    pinned: bool | None = Field(default=None, description='keep the row at the top of the list')
+    hidden: bool | None = Field(default=None, description='take the row out of the list, reversibly')
 
 
 def build(**d) -> APIRouter:
@@ -880,6 +888,48 @@ def build(**d) -> APIRouter:
             raise HTTPException(422, 'Invalid chat order')
         return {'order': sess.rail_order(subject_of(request), body.order)}
 
+    def _row_visible(subject: str, row: str, request: Request) -> bool:
+        """May this person mark this row? Only a row their own rail can show (P20, default-deny).
+
+        A chat is theirs when the session is in their own index, or when it is a meeting's own
+        chat (`meet-<id>`) on a meeting they can read — that chat exists in the browser before its
+        first turn reaches the index. A meeting is theirs when THE ONE meeting access decision
+        (owner, share recipient, member of its workspace) returns the row. Any failure denies."""
+        kind, _, ref = row.partition(':')
+        try:
+            if kind == 'c':
+                if any(r['session'] == ref for r in sess.list(subject)):
+                    return True
+                ref = ref[len(_MEET_SESSION_PREFIX):] if ref.startswith(_MEET_SESSION_PREFIX) else ''
+            if not ref.isdigit():
+                return False
+            return _meeting_access(subject, ref, within=lambda slug: reads_within(request, slug)) is not None
+        except Exception:  # noqa: BLE001 — a lookup that fails narrows to deny, never opens
+            logger.warning("rail mark visibility check failed subject=%s row=%s", subject, row)
+            return False
+
+    @router.get("/api/chat/marks")
+    def read_chat_marks(request: Request):
+        """The caller's pinned and hidden rail rows: `{pinned: [row], hidden: [row]}`."""
+        return sess.rail_marks(subject_of(request))
+
+    @router.post("/api/chat/marks")
+    def mark_chat_row(request: Request, body: ChatMarkBody):
+        """Pin, unpin, hide or unhide one row of the caller's own rail and return their marks.
+
+        Setting a mark needs a row the caller can see (`404` otherwise). Clearing one does not: it
+        only ever removes the caller's own mark, for a row that may have gone since."""
+        if body.pinned is None and body.hidden is None:
+            raise HTTPException(422, 'Name a mark to change: pinned or hidden')
+        subject = subject_of(request)
+        row = body.row if ':' in body.row else f'c:{body.row}'
+        if (body.pinned or body.hidden) and not _row_visible(subject, row, request):
+            raise HTTPException(404, 'Row not found')
+        try:
+            return sess.mark_row(subject, row, pinned=body.pinned, hidden=body.hidden)
+        except OverflowError:
+            raise HTTPException(422, 'Too many marked rows')
+
     @router.get("/api/sessions")
     def list_sessions(request: Request):
         """THE RAIL, FOR THIS PERSON, WHEREVER THEY SIGN IN (Vexa-ai/vexa#1591).
@@ -910,6 +960,56 @@ def build(**d) -> APIRouter:
         outrank the reader's own rename in the merge."""
         subject = subject_of(request)
         return {"sessions": _labelled(subject, sess.list(subject))}
+    @router.delete("/api/sessions/{session}")
+    def delete_session(session: Annotated[str, Path(pattern=CHAT_SESSION_PATTERN)], request: Request):
+        """DELETE ONE OF YOUR CHATS, for good (`DELETE /api/sessions/{session_id}`, api.v1).
+
+        Removes the session from your index, its conversation (the harness transcript and its
+        continuity pointer) and your own marks and place in the rail order. Pages and files the chat
+        wrote into a workspace stay: they belong to the workspace. A meeting the chat was about is not
+        deleted — that is the meeting owner's act — but its row is hidden on YOUR rail so the meeting
+        does not come straight back in the chat's place; unhide it from the Hidden view.
+
+        `404` for a session that is not in your index; `409` while something you submitted to it is
+        still queued, because the queued turn would bring the chat back; `403` for an agent acting
+        for the person — deleting a conversation is the person's own act."""
+        refuse_delegated(request, reason="delegated_delete",
+                         instruction="Deleting a chat is the person's own act. Tell them which chat and stop.")
+        subject = subject_of(request)
+        row = next((r for r in sess.list(subject) if r['session'] == session), None)
+        if row is None:
+            raise HTTPException(404, 'Chat not found')
+        try:
+            gen = sess.mount_gen(subject, session)
+        except Exception:  # noqa: BLE001
+            gen = 0
+        unit_id = units.chat_unit_id(subject, session, gen)
+        if inbox_pending(redis_url, unit_id, _unit_key(unit_id)):
+            raise HTTPException(409, 'This chat still has queued messages. Wait for them to run, then delete it.')
+        extra: list = []
+        try:
+            ms = active_workspaces(wsr.root, subject) + shared_active_mounts(wsr.root, subject, mindex.list(subject))
+            extra = [m.path for m in ms]
+        except Exception:  # noqa: BLE001 — narrows the sweep to the anchored roots, never widens it
+            logger.warning("mount resolution for delete failed subject=%s", subject)
+        try:
+            files = wsr.drop_history(subject, session, extra_roots=extra)
+        except Exception:  # noqa: BLE001
+            logger.exception("deleting chat history failed subject=%s session=%s", subject, session)
+            raise HTTPException(500, 'Could not delete the conversation. Nothing was removed from your list.')
+        sess.drop(subject, session)
+        sess.mark_row(subject, f'c:{session}', pinned=False, hidden=False)
+        order = sess.rail_order(subject)
+        if f'c:{session}' in order or session in order:
+            sess.rail_order(subject, [k for k in order if k not in (f'c:{session}', session)])
+        meeting = (session[len(_MEET_SESSION_PREFIX):] if session.startswith(_MEET_SESSION_PREFIX)
+                   else str(row.get('meeting') or ''))
+        hidden_meeting = None
+        if meeting.isdigit():
+            hidden_meeting = f'm:{meeting}'
+            sess.mark_row(subject, hidden_meeting, hidden=True)
+        return {'ok': True, 'session': session, 'files_removed': files, 'hidden_meeting': hidden_meeting}
+
     @router.get("/api/sessions/{session}/history")
     def session_history(session: Annotated[str, Path(pattern=CHAT_SESSION_PATTERN)],
                         request: Request):

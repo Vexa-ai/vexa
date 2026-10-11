@@ -94,8 +94,8 @@ refused as a target.
 
 ### Name, order and delete chats
 
-A chat is named from your first message until you rename it. Renaming, the activity dot, reordering,
-reopening history and deleting a chat are covered in [Manage your chats](/how-to/chat-controls). What
+A chat is named from your first message until you rename it. Renaming, the activity dot, pinning,
+hiding, reopening history and deleting a chat are covered in [Manage your chats](/how-to/chat-controls). What
 happens when a long turn reaches its tool-call limit is in [Long agent turns](/agent-tool-calls).
 
 ## Limits and errors
@@ -139,6 +139,7 @@ person: an agent acting for someone cannot start one.
 |---|---|---|
 | Your chat list (rail) and names | agent-api | Redis, per user |
 | Rail order | agent-api | Redis, per user |
+| Pins and hides | agent-api | Redis, per user |
 | Chat inbox | agent-api (every entry signed) | the chat unit's input stream |
 | Turn output and job events | the agent worker | the chat unit's output stream; agent-api only relays it |
 | Inbox position | the agent worker | the chat unit's cursor |
@@ -156,7 +157,8 @@ person: an agent acting for someone cannot start one.
 | `POST /api/chat/target` | `POST /api/chat/target` |
 | `POST /api/chat/name` | `POST /api/chat/name` |
 | `GET`, `PUT /api/chat/order` | `GET`, `PUT /api/chat/order` |
-| `GET /api/sessions`, `/api/sessions/{id}/history` | the same paths |
+| `GET`, `POST /api/chat/marks` | `GET`, `POST /api/chat/marks` |
+| `GET /api/sessions`, `/api/sessions/{id}/history`, `DELETE /api/sessions/{id}` | the same paths |
 | `GET`, `POST /api/proposals`, `POST /api/proposals/resolve` | the same paths |
 
 `/agent/chat` is a streamed route of its own in `core/agent/routes.v1.json`; the others pass through the
