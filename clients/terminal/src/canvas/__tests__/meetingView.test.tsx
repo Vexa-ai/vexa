@@ -216,15 +216,16 @@ describe("the view renders without notes", () => {
 
 // jsdom has no layout: the transcript window gets a fixed geometry here, and a played line a fixed
 // place above the window's bottom, so following can be measured.
-const geom = { scrollHeight: 1000, clientHeight: 128, activeTop: -600 };
+const geom = { scrollHeight: 1000, clientHeight: 128, activeTop: -600, viewW: 0 };
 const tops = new WeakMap<Element, number>();
 const isWin = (el: Element) => el.hasAttribute("data-transcript-window");
 const saved: Record<string, PropertyDescriptor | undefined> = {};
 function installLayout() {
-  for (const k of ["scrollHeight", "clientHeight", "scrollTop"]) saved[k] = Object.getOwnPropertyDescriptor(Element.prototype, k);
+  for (const k of ["scrollHeight", "clientHeight", "scrollTop", "clientWidth"]) saved[k] = Object.getOwnPropertyDescriptor(Element.prototype, k);
   saved.rect = Object.getOwnPropertyDescriptor(Element.prototype, "getBoundingClientRect");
   Object.defineProperty(Element.prototype, "scrollHeight", { configurable: true, get() { return isWin(this) ? geom.scrollHeight : 0; } });
   Object.defineProperty(Element.prototype, "clientHeight", { configurable: true, get() { return isWin(this) ? geom.clientHeight : 0; } });
+  Object.defineProperty(Element.prototype, "clientWidth", { configurable: true, get() { return this.hasAttribute("data-meeting-view") ? geom.viewW : 0; } });
   Object.defineProperty(Element.prototype, "scrollTop", { configurable: true,
     get() { return tops.get(this) ?? 0; },
     set(v: number) { tops.set(this, isWin(this) ? Math.max(0, Math.min(v, geom.scrollHeight - geom.clientHeight)) : 0); } });
@@ -309,18 +310,48 @@ describe("the transcript — a scrolling window, or everything", () => {
     } finally { await act(async () => { player.dispose(); }); }
   });
 
-  it("Show all expands to full height with Copy and Highlight; the choice is remembered for this meeting", async () => {
+  it("Show all moves the transcript into a narrow sidebar of the meeting view, beside the notes; the tail goes", async () => {
     await renderView();
     await act(async () => { fireEvent.click(q("[data-transcript-toggle]")!); });
+    const side = q("[data-transcript-sidebar]")!;
+    expect(side).not.toBeNull();
+    expect(container.querySelectorAll("[data-meeting-transcript]")).toHaveLength(1);       // no duplicate
+    expect(side.contains(q("[data-meeting-transcript]"))).toBe(true);
+    expect(q("[data-meeting-main]")!.contains(q("[data-meeting-transcript]"))).toBe(false);
+    expect(q("[data-meeting-main]")!.contains(q("[data-meeting-notes]"))).toBe(true);     // notes keep the main column
+    expect(side.style.width).toBe("320px");
     expect(q("[data-transcript-toggle]")?.getAttribute("aria-expanded")).toBe("true");
     expect(q("[data-transcript-toggle]")?.textContent).toBe("Collapse");
     expect(win().style.maxHeight).toBe("");
-    expect(q("[data-transcript-fade]")).toBeNull();
     expect(q('[aria-label="Copy transcript"]')).not.toBeNull();
     expect(sessionStorage.getItem(`vexa.meetingTranscriptOpen.${ROW}`)).toBe("1");
+    // it follows the newest line there too
+    expect(win().scrollTop).toBe(872);
+    // resizable from the keyboard, remembered for the session
+    await act(async () => { fireEvent.keyDown(q("[data-transcript-resize]")!, { key: "ArrowLeft" }); });
+    expect(side.style.width).toBe("336px");
+    expect(sessionStorage.getItem("vexa.meetingTranscriptWidth")).toBe("336");
     act(() => { root.unmount(); });
     await renderView();
-    expect(q("[data-transcript-toggle]")?.getAttribute("aria-expanded")).toBe("true");
+    expect(q("[data-transcript-sidebar]")).not.toBeNull();
+    expect(q("[data-transcript-sidebar]")!.style.width).toBe("336px");
+    await act(async () => { fireEvent.click(q("[data-transcript-toggle]")!); });
+    expect(q("[data-transcript-sidebar]")).toBeNull();
+    expect(q("[data-meeting-main] [data-meeting-transcript]")).not.toBeNull();
+  });
+
+  it("too narrow for a sidebar (a phone), the expanded transcript is a full-width sheet over the notes", async () => {
+    geom.viewW = 390;
+    try {
+      await renderView();
+      await act(async () => { fireEvent.click(q("[data-transcript-toggle]")!); });
+      expect(q("[data-transcript-sidebar]")).toBeNull();
+      const sheet = q("[data-transcript-sheet]")!;
+      expect(sheet.style.position).toBe("absolute");
+      expect(sheet.contains(q("[data-meeting-transcript]"))).toBe(true);
+      await act(async () => { fireEvent.click(q("[data-transcript-toggle]")!); });
+      expect(q("[data-transcript-sheet]")).toBeNull();
+    } finally { geom.viewW = 0; }
   });
 
   it("the toggle is a real button and names the window it controls", async () => {
@@ -372,6 +403,11 @@ describe("no Brief, no Minutes", () => {
 });
 
 describe("the view's rules, as functions", () => {
+  it("notesForView leaves the frontmatter out — the notes start after it", () => {
+    expect(notesForView(NOTES_MD)).not.toContain("transcript_cursor");
+    expect(notesForView(NOTES_MD).trimStart().startsWith("# Design review")).toBe(true);
+  });
+
   it("notesForView drops every slot and keeps every other word", () => {
     expect(notesForView(NOTES_MD)).not.toContain("vexa:transcript");
     expect(notesForView(NOTES_MD)).toContain("- Ship the one view on Friday");

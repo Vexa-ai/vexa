@@ -26,7 +26,10 @@ import type { TranscriptSegment } from "./types";
  *  defect the one view removes. Text around a slot is kept exactly; fenced examples of the marker
  *  stay literal (`splitTranscriptSlots` passes fences through). */
 export function notesForView(body: string): string {
-  return splitTranscriptSlots(body ?? "")
+  // The frontmatter is the page's machinery (type, meeting id, cursor) — the reader of notes wants
+  // the notes. It stays in the file; the view starts at the first line after it.
+  const src = String(body ?? "").replace(/^---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/, "");
+  return splitTranscriptSlots(src)
     .map((s) => (s.kind === "text" ? s.text : ""))
     .join("");
 }

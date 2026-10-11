@@ -11,13 +11,16 @@
  *       **Create notes** is the existing mint. No notes yet is the same layout with a placeholder:
  *       the view never needs the file to exist to open the meeting.
  *    3. TRANSCRIPT — meeting-api's, from its database and live stream, never copied into the notes.
- *       Collapsed by default (live or finished) to its last few lines, which keep moving while the
- *       meeting runs; expanded, it is the whole thing with Highlight, Ask about this and
- *       click-to-play. The person's toggle is remembered per meeting for the session.
+ *       Its own panel, never prose. Collapsed (the default, live or finished) it is a scrolling
+ *       window about four lines tall under the notes, sitting on the newest line. Expanded
+ *       ("Show all") it moves into a narrow, resizable sidebar on the view's right — or, where the
+ *       view is too narrow for one, a full-width sheet over the notes. Playback highlights the line
+ *       being played and keeps it in view in every mode. The choice and the width are remembered
+ *       for the session.
  *
  *  The chat bound to the meeting stays beside this view; nothing here replaces it. */
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { ChevronDown, ChevronUp, MessageSquareText } from "lucide-react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { ChevronDown, MessageSquareText, PanelRightOpen } from "lucide-react";
 import { WORKSPACE_COMMIT_EVENT, useService } from "../platform";
 import { LayoutServiceId } from "../workbench/layout";
 import { LiveTranscriptEngine } from "./LiveTranscriptEngine";
@@ -177,6 +180,17 @@ function NotesSection({ meetingId, notes, lines }: { meetingId: string; notes: R
 
 /** The collapsed panel's window: about four lines of the conversation. */
 export const TRANSCRIPT_WINDOW_PX = 128;
+/** The expanded transcript's sidebar: narrow, resizable within these bounds, remembered per session. */
+export const SIDEBAR = { min: 260, max: 480, initial: 320 } as const;
+/** Below this view width the sidebar cannot sit beside the notes, so the expanded transcript is a
+ *  full-width sheet over them instead. */
+export const SIDEBAR_FITS_PX = 640;
+const WIDTH_KEY = "vexa.meetingTranscriptWidth";
+const loadWidth = (): number => {
+  try { const n = Number(sessionStorage.getItem(WIDTH_KEY)); return n >= SIDEBAR.min && n <= SIDEBAR.max ? n : SIDEBAR.initial; }
+  catch { return SIDEBAR.initial; }
+};
+const saveWidth = (n: number) => { try { sessionStorage.setItem(WIDTH_KEY, String(n)); } catch { /* storage refused */ } };
 
 /** Where a scroller must sit to put a line in the middle of it — clamped to what it can scroll. */
 export function centeredTop(box: { scrollHeight: number; clientHeight: number }, lineTop: number, lineHeight: number): number {
@@ -184,78 +198,72 @@ export function centeredTop(box: { scrollHeight: number; clientHeight: number },
   return Math.max(0, Math.min(want, Math.max(0, box.scrollHeight - box.clientHeight)));
 }
 
-function TranscriptSection({ meetingId, scroller }: { meetingId: string; scroller: () => HTMLElement | null }) {
+/** Where the transcript is drawn: the scrolling TAIL at the foot of the meeting view (collapsed), a
+ *  narrow SIDEBAR on the view's right (expanded, wide enough), or a full-width SHEET over the notes
+ *  (expanded, too narrow for a sidebar). */
+export type TranscriptMode = "tail" | "sidebar" | "sheet";
+
+/** THE TRANSCRIPT, a different object from the notes (founder, 2026-10-11: *"this should be distinct
+ *  it's transcript here - it's not evident from the UX"*): its own surface, its own header (what it
+ *  is, how long, whether it is live), conversational rows. In every mode the lines live in ONE
+ *  scrolling window, so following works the same everywhere: it sits on the newest line until the
+ *  person scrolls up (then *Jump to latest*), and during playback it keeps the played line in view
+ *  until the person scrolls away (then *Follow playback*). A scroll this panel made itself is
+ *  recognised by where it left the box, so only a person's scroll lets go. */
+function TranscriptPanel({ meetingId, mode, onToggle }: { meetingId: string; mode: TranscriptMode; onToggle: () => void }) {
   const { transcript, meeting } = useMeeting();
   const renderText = useTermRenderer(meetingId);
   const playback = useMeetingPlayback(meeting.id);
-  const [open, setOpen] = useState(() => loadTranscriptOpen(meetingId));
-  useEffect(() => { setOpen(loadTranscriptOpen(meetingId)); }, [meetingId]);
-  const toggle = () => setOpen((v) => { saveTranscriptOpen(meetingId, !v); return !v; });
+  const open = mode !== "tail";
   const segments = transcript.segments;
   const lines = transcriptLines(segments);
   const durableTerminal = ["completed", "failed", "stopped", "past"].includes(meeting.status ?? "");
   const live = meeting.live === true && !durableTerminal;
   const box = useRef<HTMLDivElement>(null);       // the lines' own box (selection scope)
-  const win = useRef<HTMLDivElement>(null);       // the collapsed window that scrolls
+  const win = useRef<HTMLDivElement>(null);       // the window that scrolls
   const [copied, setCopied] = useState(false);
   const playing = playback.time !== null;
-  // TWO THINGS THE PANEL MAY FOLLOW, each until the person scrolls away from it: the newest line
-  // (collapsed, or expanded while live) and, during playback, the line being played. A scroll this
-  // panel made itself is recognised by where it left the box, so only a person's scroll lets go.
   const [followLatest, setFollowLatest] = useState(true);
   const [followPlay, setFollowPlay] = useState(true);
-  const [above, setAbove] = useState(false);   // lines above the window's top edge
-  const lastSet = useRef<{ el: HTMLElement | null; top: number }>({ el: null, top: -1 });
-  const target = (): HTMLElement | null => (open ? scroller() : win.current);
-  const setTop = (el: HTMLElement, top: number) => { el.scrollTop = top; lastSet.current = { el, top: el.scrollTop }; };
-  const toBottom = () => { const el = target(); if (el) setTop(el, el.scrollHeight); };
-  const toActive = () => {
-    const el = target();
+  const [above, setAbove] = useState(false);      // lines above the window's top edge
+  const lastTop = useRef(-1);
+  const setTop = (el: HTMLElement, top: number) => { el.scrollTop = top; lastTop.current = el.scrollTop; setAbove(el.scrollTop > 2); };
+  const toBottom = () => { const el = win.current; if (el) setTop(el, el.scrollHeight); };
+  const toActive = (): boolean => {
+    const el = win.current;
     const line = box.current?.querySelector<HTMLElement>("[data-playback-active]");
-    if (!el || !line) return;
+    if (!el || !line) return false;
     const lr = line.getBoundingClientRect(), br = el.getBoundingClientRect();
     setTop(el, centeredTop(el, lr.top - br.top + el.scrollTop, lr.height));
+    return true;
   };
-  // a new playback (or a new meeting) follows again from the start
+  // a new playback follows again from the start
   useEffect(() => { if (playing) setFollowPlay(true); }, [playing]);
   useEffect(() => {
-    if (playing && followPlay) { toActive(); return; }
-    if (followLatest && (!open || live)) toBottom();
+    if (playing && followPlay && toActive()) return;
+    if (!playing && followLatest) toBottom();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, live, segments.length, playback.time, followPlay, followLatest]);
-  useEffect(() => {
-    const els = [win.current, scroller()].filter(Boolean) as HTMLElement[];
-    const on = (e: Event) => {
-      const el = e.currentTarget as HTMLElement;
-      if (el !== target()) return;
-      if (lastSet.current.el === el && Math.abs(el.scrollTop - lastSet.current.top) <= 2) return;
-      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= 8;
-      setFollowLatest(atBottom);
-      if (playing) setFollowPlay(false);
-      if (el === win.current) setAbove(el.scrollTop > 2);
-    };
-    els.forEach((el) => el.addEventListener("scroll", on));
-    return () => els.forEach((el) => el.removeEventListener("scroll", on));
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, playing, scroller]);
-  useEffect(() => { const w = win.current; setAbove(!open && !!w && w.scrollTop > 2); }, [open, segments.length, playback.time, followLatest, followPlay]);
+  }, [mode, segments.length, playback.time, followPlay, followLatest]);
+  const onScroll = () => {
+    const el = win.current;
+    if (!el || Math.abs(el.scrollTop - lastTop.current) <= 2) return;
+    lastTop.current = el.scrollTop;
+    setAbove(el.scrollTop > 2);
+    setFollowLatest(el.scrollHeight - el.scrollTop - el.clientHeight <= 8);
+    if (playing) setFollowPlay(false);
+  };
   const copy = async () => {
     const text = segments.filter((s) => s.completed !== false && s.text.trim())
       .map((s) => `${s.speaker ? s.speaker + "\n" : ""}${s.text}`).join("\n\n");
     try { await copyText(text); setCopied(true); } catch { setCopied(false); }
   };
   const body = `transcript-${meetingId}`;
-  // A DIFFERENT OBJECT FROM THE NOTES (founder, 2026-10-11: *"this should be distinct it's
-  // transcript here - it's not evident from the UX"*). The notes are the document; the transcript is
-  // a docked tray under it: its own raised surface, hairline and radius, its own header saying what
-  // it is, how long it is and whether it is live, and conversational rows rather than prose.
-  // COLLAPSED IS A WINDOW, NOT AN EXCERPT (founder: *"this tail probably should be scrollable and on
-  // playback it should highlight"*): about four lines tall, scrollable through the whole transcript,
-  // sitting on the newest line until the person scrolls up.
+  const frame: CSSProperties = mode === "tail"
+    ? { background: surface.raised, border: "1px solid var(--line)", borderRadius: 12, padding: "12px 14px 14px" }
+    : { background: surface.raised, height: "100%", padding: "12px 12px 0", boxSizing: "border-box" };
   return (
-    <section data-meeting-transcript role="region" aria-labelledby={`${body}-title`} data-open={open ? "" : undefined}
-      style={{ display: "flex", flexDirection: "column", gap: 10, minWidth: 0, background: surface.raised,
-        border: "1px solid var(--line)", borderRadius: 12, padding: "12px 14px 14px" }}>
+    <section data-meeting-transcript data-mode={mode} role="region" aria-labelledby={`${body}-title`} data-open={open ? "" : undefined}
+      style={{ display: "flex", flexDirection: "column", gap: 10, minWidth: 0, minHeight: 0, ...frame }}>
       <div style={sectionHead}>
         <span style={{ display: "inline-flex", color: "var(--t2)" }}><MessageSquareText size={15} aria-hidden /></span>
         <h2 id={`${body}-title`} style={{ ...label, fontSize: 13 }}>Transcript</h2>
@@ -263,25 +271,30 @@ function TranscriptSection({ meetingId, scroller }: { meetingId: string; scrolle
         {live && <span data-transcript-live style={{ ...ty.meta, display: "inline-flex", alignItems: "center", gap: 5, color: "var(--accent)" }}>
           <span aria-hidden style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--accent)" }} />live</span>}
         <span style={{ flex: "1 1 0%" }} />
+        <button type="button" data-transcript-toggle aria-expanded={open} aria-controls={body} onClick={onToggle}
+          title={open ? "Back to the latest lines under the notes" : "Open the whole transcript beside the notes"} style={quiet}>
+          {open ? <ChevronDown size={13} aria-hidden /> : <PanelRightOpen size={13} aria-hidden />}
+          {open ? "Collapse" : "Show all"}
+        </button>
+      </div>
+      {(open || (playing && !followPlay) || (!playing && !followLatest)) && <div style={{ ...sectionHead, gap: 6 }}>
         {playing && !followPlay && <button type="button" data-transcript-follow-playback style={quiet}
           onClick={() => { setFollowPlay(true); toActive(); }}>Follow playback</button>}
-        {!playing && !followLatest && (live || !open) && <button type="button" data-transcript-jump style={quiet}
+        {!playing && !followLatest && <button type="button" data-transcript-jump style={quiet}
           onClick={() => { setFollowLatest(true); toBottom(); }}>Jump to latest</button>}
         {open && <>
+          <span style={{ flex: "1 1 0%" }} />
           <button type="button" aria-label="Copy transcript" disabled={!lines} onClick={() => void copy()} onBlur={() => setCopied(false)} style={quiet}>
             {copied ? "Copied" : "Copy transcript"}
           </button>
           <HighlightButton meeting={meetingId} live={live} />
         </>}
-        <button type="button" data-transcript-toggle aria-expanded={open} aria-controls={body} onClick={toggle}
-          title={open ? "Back to the scrolling window" : "Show the whole transcript at full height"} style={quiet}>
-          {open ? <ChevronUp size={13} aria-hidden /> : <ChevronDown size={13} aria-hidden />}
-          {open ? "Collapse" : "Show all"}
-        </button>
-      </div>
-      <div style={{ position: "relative", minWidth: 0 }}>
-        <div id={body} ref={win} data-transcript-window tabIndex={0} aria-label="Transcript lines"
-          style={open ? { minWidth: 0 } : { minWidth: 0, maxHeight: TRANSCRIPT_WINDOW_PX, overflowY: "auto", overscrollBehavior: "contain" }}>
+      </div>}
+      <div style={{ position: "relative", minWidth: 0, minHeight: 0, flex: open ? "1 1 0%" : "none", display: "flex", flexDirection: "column" }}>
+        <div id={body} ref={win} data-transcript-window tabIndex={0} aria-label="Transcript lines" onScroll={onScroll}
+          style={open
+            ? { minWidth: 0, flex: "1 1 0%", minHeight: 0, overflowY: "auto", overscrollBehavior: "contain", paddingBottom: 12 }
+            : { minWidth: 0, maxHeight: TRANSCRIPT_WINDOW_PX, overflowY: "auto", overscrollBehavior: "contain" }}>
           <div ref={box} style={{ position: "relative", minWidth: 0 }}>
             <LiveTranscriptEngine meetingId={meeting.id} segments={segments} renderText={renderText} layout="rows"
               emptyLabel={meeting.deleted ? "This meeting’s transcript and recording were deleted." : "Nothing said yet — this fills in as the room talks."} />
@@ -289,11 +302,30 @@ function TranscriptSection({ meetingId, scroller }: { meetingId: string; scrolle
           </div>
         </div>
         {/* there is more above: a fade says so without a word */}
-        {!open && above && <div data-transcript-fade aria-hidden style={{ position: "absolute", left: 0, right: 0, top: 0, height: 24, pointerEvents: "none",
+        {above && <div data-transcript-fade aria-hidden style={{ position: "absolute", left: 0, right: 0, top: 0, height: 24, pointerEvents: "none",
           background: `linear-gradient(${surface.raised}, transparent)` }} />}
       </div>
     </section>
   );
+}
+
+/** The drag handle between the notes and the transcript sidebar: pointer drag, or the arrow keys
+ *  when focused (16px a press). */
+function SidebarHandle({ width, onWidth }: { width: number; onWidth: (n: number) => void }) {
+  const clamp = (n: number) => Math.max(SIDEBAR.min, Math.min(SIDEBAR.max, Math.round(n)));
+  return <div role="separator" aria-orientation="vertical" aria-label="Resize the transcript" tabIndex={0}
+    aria-valuemin={SIDEBAR.min} aria-valuemax={SIDEBAR.max} aria-valuenow={width} data-transcript-resize
+    onKeyDown={(e) => {
+      if (e.key === "ArrowLeft") { e.preventDefault(); onWidth(clamp(width + 16)); }
+      if (e.key === "ArrowRight") { e.preventDefault(); onWidth(clamp(width - 16)); }
+    }}
+    onPointerDown={(e) => {
+      const x0 = e.clientX, w0 = width;
+      const move = (ev: PointerEvent) => onWidth(clamp(w0 + (x0 - ev.clientX)));
+      const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
+      window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
+    }}
+    style={{ flex: "none", width: 6, cursor: "col-resize", borderLeft: "1px solid var(--line)", background: "transparent" }} />;
 }
 
 function MeetingViewBody({ meetingId }: { meetingId: string }) {
@@ -305,20 +337,50 @@ function MeetingViewBody({ meetingId }: { meetingId: string }) {
   useEffect(() => {
     if (meeting.title && meeting.title !== "Meeting") layout.setTitle(`meeting:${meetingId}`, meeting.title.split(" — ")[0]);
   }, [layout, meetingId, meeting.title]);
-  const scroll = useRef<HTMLDivElement>(null);
-  const scroller = useMemo(() => () => scroll.current, []);
+  // COLLAPSED BY DEFAULT, live or finished; the person's choice is remembered per meeting.
+  const [open, setOpen] = useState(() => loadTranscriptOpen(meetingId));
+  useEffect(() => { setOpen(loadTranscriptOpen(meetingId)); }, [meetingId]);
+  const toggle = () => setOpen((v) => { saveTranscriptOpen(meetingId, !v); return !v; });
+  const [width, setWidth] = useState(loadWidth);
+  const onWidth = (n: number) => { setWidth(n); saveWidth(n); };
+  // How wide the VIEW is, not the window: the view sits in a resizable column.
+  const root = useRef<HTMLDivElement>(null);
+  const [viewW, setViewW] = useState(0);
+  useEffect(() => {
+    const el = root.current;
+    if (!el) return;
+    const read = () => setViewW(el.clientWidth);
+    read();
+    const RO = (globalThis as { ResizeObserver?: typeof ResizeObserver }).ResizeObserver;
+    if (RO) { const ro = new RO(read); ro.observe(el); return () => ro.disconnect(); }
+    window.addEventListener("resize", read);
+    return () => window.removeEventListener("resize", read);
+  }, []);
+  // 0 = not measured (no layout yet): assume the sidebar fits rather than cover the notes
+  const fits = viewW === 0 || viewW >= SIDEBAR_FITS_PX;
+  const mode: TranscriptMode = !open ? "tail" : fits ? "sidebar" : "sheet";
   return (
-    <div data-meeting-view={meetingId} style={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0, minWidth: 0, background: surface.pages }}>
-      <div ref={scroll} style={{ flex: 1, minHeight: 0, overflowY: "auto", overflowX: "hidden" }}>
+    <div ref={root} data-meeting-view={meetingId} style={{ position: "relative", height: "100%", display: "flex", flexDirection: "row", minHeight: 0, minWidth: 0, background: surface.pages }}>
+      <div data-meeting-main style={{ flex: "1 1 0%", minWidth: 0, minHeight: 0, overflowY: "auto", overflowX: "hidden" }}>
         <header style={{ padding: `14px ${MEETING_VIEW_INSET}px 12px`, borderBottom: "1px solid var(--line)", minWidth: 0 }}>
           <MeetingPageHeader meetingId={meetingId} body={notes.phase === "ready" ? notes.body : ""} path={notes.phase === "ready" ? notes.path : ""} />
         </header>
         <MeetingHealthBanner />
         <div style={{ padding: `16px ${MEETING_VIEW_INSET}px 32px`, display: "flex", flexDirection: "column", gap: 20, minWidth: 0 }}>
           <NotesSection meetingId={meetingId} notes={notes} lines={transcriptLines(transcript.segments)} />
-          <TranscriptSection meetingId={meetingId} scroller={scroller} />
+          {/* the tail sits under the notes only while collapsed — opened, it moves to the side */}
+          {mode === "tail" && <TranscriptPanel meetingId={meetingId} mode="tail" onToggle={toggle} />}
         </div>
       </div>
+      {mode === "sidebar" && <>
+        <SidebarHandle width={width} onWidth={onWidth} />
+        <aside data-transcript-sidebar style={{ flex: "none", width, minWidth: 0, minHeight: 0, height: "100%" }}>
+          <TranscriptPanel meetingId={meetingId} mode="sidebar" onToggle={toggle} />
+        </aside>
+      </>}
+      {mode === "sheet" && <div data-transcript-sheet style={{ position: "absolute", inset: 0, zIndex: 5, background: surface.raised }}>
+        <TranscriptPanel meetingId={meetingId} mode="sheet" onToggle={toggle} />
+      </div>}
     </div>
   );
 }

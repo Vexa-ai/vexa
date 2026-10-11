@@ -4,7 +4,8 @@
   Transcript tab and the "Brief"/"Minutes" page are gone, and the transcript is no longer shown twice.
   **Update notes** rewrites the notes from what was said since the last update (the same act as
   Extend on the meeting's page); **Create notes** makes them when a meeting has none. The transcript
-  starts collapsed to its last three lines, which keep moving during a live meeting; expand it for
-  Highlight, Ask about this and click-to-play. Links with `view=transcript`, `minutes` or `brief`
+  is its own panel: collapsed, a scrolling window under the notes that stays on the newest line;
+  **Show all** opens it in a narrow, resizable sidebar beside the notes (a full-width sheet on a
+  phone). Playback highlights the line being played and keeps it in view. Links with `view=transcript`, `minutes` or `brief`
   still work and open the meeting view. A notes update for a meeting the caller cannot read is now
   refused with `403` before a turn is queued. (#1836) See [Meetings](/minutes/meetings).
