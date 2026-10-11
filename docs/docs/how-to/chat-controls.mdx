@@ -34,6 +34,9 @@ server, so another browser or a reload does not show turns that tab is not strea
 3. Type a title and press Enter or **Save**. **Escape** or **Cancel** leaves it unchanged.
 
 - Titles are 1 to 100 characters. Spaces are collapsed and an empty title cannot be saved.
+- A chat's automatic name is taken from your own words only. The context the terminal sends ahead
+  of your message, and any `<!--vexa:…-->` marker, never appear in a name; a name saved before this
+  rule is shown without them.
 - A chat you have not sent anything in yet cannot be renamed.
 - If the save fails, the box stays open with "Couldn't save. Try again."
 
