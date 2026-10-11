@@ -70,3 +70,10 @@ Observe-only sessions are never later reinterpreted as enforced sessions.
 No config means explicit stock OSS allow-all. Once configured, unavailable, malformed, stale, or
 cross-bound decisions fail closed. `mode=observe` records the authority response but cannot satisfy
 a hosted hard-spend-cap claim.
+
+## Auto-join block lists
+`auto_join_block.py` — domains and addresses the auto-join sweep never joins: the operator's
+`VEXA_AUTO_JOIN_BLOCK` (parsed at boot) and the owner's `auto_join_block` from bot-context. A due row
+whose organiser, an invitee or the link's host matches is stamped (`data.auto_join_error`, counter
+`blocked`) and never spawned. `POST /bots` is not affected. Docs:
+[Calendar sync → Enterprise settings](../../../../../../../docs/docs/how-to/calendar-sync.mdx).

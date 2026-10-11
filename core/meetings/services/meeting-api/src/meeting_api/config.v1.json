@@ -651,6 +651,20 @@
    "targets": []
   },
   {
+   "key": "VEXA_CALENDAR_FEED_ALLOW",
+   "class": "defaulted",
+   "default": "(empty — no internal feed is reachable)",
+   "targets": ["compose", "helm"],
+   "description": "operator allowance for calendar feeds served inside a private network: exact host names and IP networks (CIDR), comma- or space-separated (cal.corp.example, 10.20.0.0/16). The ICS fetch's pinned transport admits an address inside a listed network, or any non-reserved address a listed name resolves to; everything else stays refused by the outbound URL guard (deploy/contracts/outbound-url.v1). Loopback, link-local/cloud metadata, unspecified, multicast and reserved addresses are never admitted, and an entry overlapping them, a wildcard, a URL or a malformed name refuses the boot. Calendar feeds only: customer webhooks never read it. admin-api reads the same key when a feed is saved."
+  },
+  {
+   "key": "VEXA_AUTO_JOIN_BLOCK",
+   "class": "defaulted",
+   "default": "(empty — no deployment-wide block)",
+   "targets": ["compose", "helm"],
+   "description": "the deployment's auto-join block list: domains (matching themselves and subdomains) and exact email addresses, comma- or space-separated. The auto-join sweep never spawns a bot for a planned meeting whose organiser, an invitee or the meeting link's host matches; it stamps the reason on the row (data.auto_join_error). Each owner's own list (auto_join_block, PUT /user/calendar, delivered on bot-context) applies on top. A malformed entry refuses the boot. Manual POST /bots is not affected."
+  },
+  {
    "key": "PIPELINE_TICK_STALE_S",
    "class": "defaulted",
    "default": "120",

@@ -11,9 +11,23 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from fastapi import HTTPException, status
 
-from .ssrf import SSRFError, validate_url
+import os
+import re
+
+from .ssrf import SSRFError, parse_allowance, validate_url
 
 MAX_CALENDAR_CONNECTIONS = 10
+
+#: The operator's internal calendar-feed hosts and networks. meeting-api reads the same key for the
+#: fetch; this side only refuses, when the feed is saved, what that fetch would refuse anyway.
+FEED_ALLOW_ENV = "VEXA_CALENDAR_FEED_ALLOW"
+
+
+def feed_allowance(raw: Optional[str] = None):
+    """The ``OperatorAllowance`` from ``VEXA_CALENDAR_FEED_ALLOW`` (``raw`` is the test seam);
+    ``ValueError`` on a bad entry, which the boot turns into a refusal (``__main__``)."""
+    value = os.getenv(FEED_ALLOW_ENV, "") if raw is None else raw
+    return parse_allowance(value, what=FEED_ALLOW_ENV)
 
 
 def validate_bot_name(value: str) -> str:
@@ -38,7 +52,7 @@ def validate_ics_url(value: str) -> str:
     try:
         # The feed is fetched by meeting-api through the same guard, resolved and pinned; refusing
         # an internal destination here tells the person when they save it, not on the next sync.
-        validate_url(url, what="ics_url", resolve=False)
+        validate_url(url, what="ics_url", resolve=False, allow=feed_allowance())
     except SSRFError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
     if "/calendar/embed" in (parsed.path or "").lower():
@@ -49,6 +63,51 @@ def validate_ics_url(value: str) -> str:
                     "iCal format' (ends in .ics)"),
         )
     return url
+
+
+# ── auto-join block list: domains and addresses the calendar bot must never auto-join ──────────
+# Identity stores the owner's list; meeting-api's auto-join sweep enforces it (with the deployment's
+# own VEXA_AUTO_JOIN_BLOCK) and reads it from /internal/users/{id}/bot-context. The entry grammar is
+# the sweep's (meeting_api/bot_spawn/auto_join_block.py); this side refuses what it would refuse.
+MAX_AUTO_JOIN_BLOCK = 200
+_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+_LOCAL = re.compile(r"[a-z0-9.!#$%&'*+/=?^_`{|}~-]{1,64}")
+
+
+def _valid_domain(text: str) -> bool:
+    return (len(text) <= 253 and "." in text
+            and all(_LABEL.fullmatch(label) for label in text.split(".")))
+
+
+def validate_auto_join_block(entries) -> list[str]:
+    """The owner's block list, normalized (lowercase, ``@x``/``*.x`` → ``x``, deduplicated, order
+    kept), or a 422 naming the first bad entry. ``[]`` clears it."""
+    if not isinstance(entries, list):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail="auto_join_block must be a list of domains or email addresses")
+    out: list[str] = []
+    for entry in entries:
+        raw = entry if isinstance(entry, str) else ""
+        item = raw.strip().lower().rstrip(".")
+        if item.startswith("*."):
+            item = item[2:]
+        elif item.startswith("@"):
+            item = item[1:]
+        if "@" in item:
+            local, _, domain = item.rpartition("@")
+            ok = bool(_LOCAL.fullmatch(local)) and _valid_domain(domain)
+        else:
+            ok = _valid_domain(item)
+        if not ok:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                detail=f"auto_join_block: {entry!r} is not a domain (example.com) "
+                                       "or an email address")
+        if item not in out:
+            out.append(item)
+    if len(out) > MAX_AUTO_JOIN_BLOCK:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail=f"auto_join_block: at most {MAX_AUTO_JOIN_BLOCK} entries")
+    return out
 
 
 def _legacy_id(user_id: int) -> str:

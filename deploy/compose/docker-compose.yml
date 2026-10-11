@@ -202,6 +202,8 @@ services:
       # admin exists. The admin can add more in the terminal's Settings → Sign-in; the effective list
       # is both. See .env.example.
       - VEXA_SIGNIN_ALLOW=${VEXA_SIGNIN_ALLOW:-}
+      # Internal calendar-feed hosts/networks (operator only; see .env.example).
+      - VEXA_CALENDAR_FEED_ALLOW=${VEXA_CALENDAR_FEED_ALLOW:-}
       # The administrators, comma-separated exact addresses. They may always sign in, they are the
       # admins (the terminal's admin panel included), and naming them closes the admin claim. Set it
       # before first boot whenever the terminal is reachable from outside. Read by admin-api only:
@@ -585,6 +587,9 @@ services:
       # (/internal/users/{id}/bot-context) and calendar sync discovers connected ICS feeds
       # (/internal/calendar-configs). Unset -> calendar sync no-ops, auto-join spawns uncapped.
       - ADMIN_API_URL=http://admin-api:8001
+      # Internal calendar-feed hosts/networks, and the deployment's auto-join block list (see .env.example).
+      - VEXA_CALENDAR_FEED_ALLOW=${VEXA_CALENDAR_FEED_ALLOW:-}
+      - VEXA_AUTO_JOIN_BLOCK=${VEXA_AUTO_JOIN_BLOCK:-}
       # ADMIN_TOKEN is the SAME admin secret admin-api holds (admin-api gets ADMIN_API_TOKEN=${ADMIN_TOKEN}).
       # meeting-api derives the MeetingToken key from it (HMAC-SHA256 under "vexa/meeting-token/v1") and
       # signs (mint) AND verifies (callbacks, uploads, stream entries) with that key, never with the

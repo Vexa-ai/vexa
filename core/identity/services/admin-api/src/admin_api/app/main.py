@@ -247,6 +247,9 @@ class CalendarUpdate(BaseModel):
     ics_url: Optional[str] = None
     auto_join: Optional[bool] = None
     bot_name: Optional[str] = None
+    # Domains / addresses auto-join must never join (organiser, invitee or meeting-link host).
+    # ``[]`` clears; absent leaves it as it is.
+    auto_join_block: Optional[List[str]] = None
 
 
 class CalendarCreate(BaseModel):
@@ -823,7 +826,7 @@ def create_app() -> FastAPI:
     # --- user tier: calendar-sync self-serve (writes to user.data JSONB, like webhook) ---
     from .calendars import (MAX_CALENDAR_CONNECTIONS, connections_from_data,
                             masked_connection, new_connection, store_connections,
-                            validate_bot_name, validate_ics_url)
+                            validate_auto_join_block, validate_bot_name, validate_ics_url)
 
     async def _save_calendar_connections(user: User, db: AsyncSession,
                                          connections: list[dict]) -> None:
@@ -942,6 +945,16 @@ def create_app() -> FastAPI:
                     current["deleted"] = True
         if calendar_update.auto_join is not None and current is not None:
             current["auto_join"] = bool(calendar_update.auto_join)
+        if "auto_join_block" in calendar_update.model_fields_set:
+            data = dict(user.data or {})
+            block = validate_auto_join_block(calendar_update.auto_join_block or [])
+            if block:
+                data["auto_join_block"] = block
+            else:
+                data.pop("auto_join_block", None)
+            from sqlalchemy.orm import attributes
+            user.data = data
+            attributes.flag_modified(user, "data")
         await _save_calendar_connections(user, db, connections)
         return await get_user_calendar(user)  # the masked read-back shape
 
@@ -957,6 +970,7 @@ def create_app() -> FastAPI:
             "ics_url_masked": masked["ics_url_masked"] if masked else None,
             "auto_join": masked["auto_join"] if masked else True,
             "bot_name": data.get("calendar_bot_name") or "Vexa",
+            "auto_join_block": list(data.get("auto_join_block") or []),
         }
 
     # --- user tier: model + transcription self-serve prefs (users.data JSONB, like webhook) ---
@@ -1469,6 +1483,9 @@ def create_app() -> FastAPI:
         resp: dict = {
             "max_concurrent": user.max_concurrent_bots,
             "bot_name": data.get("calendar_bot_name") or "Vexa",
+            # The owner's auto-join block list, enforced by meeting-api's sweep. Always stated, so
+            # the sweep never has to tell "no list" from "an older identity".
+            "auto_join_block": list(data.get("auto_join_block") or []),
         }
         # Fixture collection (O-TEL-1): whether this spawn tapes its raw captured-signal stream.
         # ALWAYS present in the response — a missing key downstream is indistinguishable from an
