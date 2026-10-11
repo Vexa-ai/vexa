@@ -76,7 +76,7 @@ most coding agents).
 - [Webhooks](https://docs.vexa.ai/webhooks.md): signed delivery, event selection, delivery history
 - [Agent API](https://docs.vexa.ai/api/agent.md): dispatch units, chat turns, routines, workspace — **not served on the hosted service or on Kubernetes**
 - [Errors](https://docs.vexa.ai/api/errors.md): status codes and shapes across both APIs
-- [Deployment](https://docs.vexa.ai/deployment.md): compose · [Vexa Lite](https://docs.vexa.ai/deployment-lite.md) · [Kubernetes](https://docs.vexa.ai/deployment-kubernetes.md)
+- [Deployment](https://docs.vexa.ai/deployment.md): compose · [Vexa Lite](https://docs.vexa.ai/deployment-lite.md) · [Kubernetes](https://docs.vexa.ai/deployment-kubernetes.md) ([agent tools on Kubernetes](https://docs.vexa.ai/deployment-helm-agent-tools.md))
 - [Configuration](https://docs.vexa.ai/configuration.md): every env var and capability
 - [Upgrade from MinIO](https://docs.vexa.ai/upgrade-from-minio.md): move recordings from an older Lite or Compose install into the versitygw storage, verified by SHA-256
 - [Troubleshooting](https://docs.vexa.ai/troubleshooting.md)
