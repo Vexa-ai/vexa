@@ -162,6 +162,28 @@ spec:
                   name: {{ include "vexa.adminTokenSecretName" . }}
                   key: CLAUDE_CODE_OAUTH_TOKEN
                   optional: true
+            # THE HARNESS ROUTE, agent-api's half: the dispatch stamps VEXA_RUNNER onto each turn, the
+            # credential preflight counts VEXA_LLM_API_KEY as a configured model credential, and the
+            # Settings → Models check reads the deployment endpoint. The runtime carries the same keys
+            # to the workers themselves (see the runtime Deployment).
+            {{- with .Values.models.runner }}
+            - name: VEXA_RUNNER
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.models.llmBaseUrl }}
+            - name: VEXA_LLM_BASE_URL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.models.llmExtraBody }}
+            - name: VEXA_LLM_EXTRA_BODY
+              value: {{ . | quote }}
+            {{- end }}
+            - name: VEXA_LLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: VEXA_LLM_API_KEY
+                  optional: true
             - name: ANTHROPIC_MODEL
               value: {{ .Values.models.anthropicModel | default "" | quote }}
             - name: ANTHROPIC_DEFAULT_OPUS_MODEL

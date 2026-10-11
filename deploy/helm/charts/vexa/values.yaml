@@ -150,6 +150,12 @@ secrets:
   anthropicAuthToken: ""
   anthropicBaseUrl: ""
   claudeCodeOauthToken: ""
+  # The openai-agent harness's bearer token for models.llmBaseUrl (VEXA_LLM_API_KEY) — a LiteLLM
+  # virtual key, say. It is also what tells agent-api a model credential is configured: with no key
+  # here and none of the ANTHROPIC_* / OAuth ones, every chat turn is refused before it starts, so an
+  # endpoint that needs no key still takes a placeholder value. With existingSecretName, carry
+  # VEXA_LLM_API_KEY.
+  llmApiKey: ""
 
 # ---------- Shared backing config ----------
 database:
@@ -208,6 +214,17 @@ models:
   anthropicSonnetModel: ""
   anthropicHaikuModel: ""
   agentModel: ""        # VEXA_AGENT_MODEL
+  # THE AGENT HARNESS AND ITS OWN ENDPOINT (docs/docs/deployment/helm-agent-tools.mdx). Empty keeps
+  # the default harness, claude-code, which speaks the Anthropic dialect through ANTHROPIC_* below.
+  # A self-hosted or proxied model that speaks the OpenAI dialect (vLLM, LiteLLM in front of GLM,
+  # Qwen, Llama…) takes runner "openai-agent" and llmBaseUrl; its key, if it needs one, goes in
+  # secrets.llmApiKey. The model MUST do tool calling (function calling): every turn — sending the
+  # bot, reading a transcript, writing a page — is a tool call, and a model served without it ends
+  # each turn with the typed fault `model-provider / no_tool_calling`.
+  runner: ""            # VEXA_RUNNER: "" (claude-code) | openai-agent | codex
+  llmBaseUrl: ""        # VEXA_LLM_BASE_URL, e.g. http://litellm.ai.svc:4000/v1 — the /v1 base
+  llmExtraBody: ""      # VEXA_LLM_EXTRA_BODY: a JSON object merged into every request, e.g.
+                        # '{"chat_template_kwargs":{"enable_thinking":false}}' for a Qwen
 
 # ============ Components ============
 

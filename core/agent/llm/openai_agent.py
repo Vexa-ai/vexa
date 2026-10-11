@@ -1089,6 +1089,25 @@ def _failed_done(reply: str, sid: str, exc: BaseException, *, keep_reply: bool =
     return done
 
 
+class _EmptyCompletion(LLMError):
+    """The endpoint answered 200 and streamed neither content nor a tool call (F90)."""
+
+
+# THE TOOL-CALLING CHECK (``OpenAIAgentHarness._check_tool_calling``). Endpoints and models already
+# seen calling a tool in this process: the check runs at most once per pair, and never again after
+# it passed. A failed or inconclusive check is not remembered, so a fixed endpoint heals on the next
+# turn without a restart.
+_TOOL_CALLING_OK: set[tuple[str, str]] = set()
+_TOOL_CHECK_TIMEOUT = 60.0
+# Room for a reasoning model to think a sentence before it calls (Qwen spent 14 tokens).
+_TOOL_CHECK_MAX_TOKENS = 512
+_TOOL_CHECK_PROMPT = ("This is an automated check that tool calling works. Call the function "
+                      "vexa_tool_check now. Do not answer in text.")
+_TOOL_CHECK_SPEC = {"type": "function", "function": {
+    "name": "vexa_tool_check", "description": "Confirms that tool calling works. Takes no arguments.",
+    "parameters": {"type": "object", "properties": {}}}}
+
+
 class OpenAIAgentHarness:
     """``HarnessPort`` adapter: our own agent loop over an OpenAI-compatible endpoint."""
 
@@ -1251,15 +1270,39 @@ class OpenAIAgentHarness:
                 text = ""
                 calls: list[dict] = []
                 oa: dict = {}
-                for ev in self._complete(sent, specs, target):
-                    if "__final__" in ev:
-                        oa = ev["__final__"]
-                        text = str(oa.get("content") or "")
-                        calls = _tool_calls_of(oa)
-                        break
-                    yield ev
-                    if ev.get("type") == "message-delta":
-                        text += ev.get("text", "")
+                try:
+                    for ev in self._complete(sent, specs, target):
+                        if "__final__" in ev:
+                            oa = ev["__final__"]
+                            text = str(oa.get("content") or "")
+                            calls = _tool_calls_of(oa)
+                            break
+                        yield ev
+                        if ev.get("type") == "message-delta":
+                            text += ev.get("text", "")
+                except _EmptyCompletion as empty:
+                    # AN EMPTY ANSWER TO A REQUEST THAT CARRIED TOOLS can be the tools themselves: a
+                    # server whose tool parser swallowed a call it was never told to expect streams
+                    # nothing at all. The same check as below decides which failure it was.
+                    fault = (self._tool_calling_fault("", target, first=not total_calls)
+                             if specs else None)
+                    if fault is None:
+                        raise
+                    exc = LLMError(f"{self._base}: {fault.detail}")
+                    exc.fault = fault
+                    raise exc from empty
+                if not calls and specs:
+                    # NO TOOL CALLING IS A FAULT, NOT AN ANSWER (llm/faults.py § NO TOOL CALLING).
+                    # A round that offered tools and got none back is normal — most chat replies
+                    # need no tool — unless the reply is a tool call written as text, or the
+                    # endpoint turns out not to do tool calling at all. Then the reply ("I have no
+                    # tools") is the model talking about tools it was never shown, and the person
+                    # must hear WHY instead.
+                    fault = self._tool_calling_fault(text, target, first=not total_calls)
+                    if fault is not None:
+                        exc = LLMError(f"{self._base}: {fault.detail}")
+                        exc.fault = fault
+                        raise exc
                 if not calls:
                     store.record_assistant(text, [], oa or {"role": "assistant", "content": text})
                     reply = text
@@ -1411,7 +1454,7 @@ class OpenAIAgentHarness:
                                      headers=headers) as r:
                 if r.status_code >= 400:
                     r.read()
-                    self._raise_http(r, model)
+                    self._raise_http(r, model, tools_sent=bool(specs))
                 for line in r.iter_lines():
                     line = (line or "").strip()
                     if not line.startswith("data:"):
@@ -1432,9 +1475,14 @@ class OpenAIAgentHarness:
                     if err:
                         detail = err.get("message") if isinstance(err, dict) else str(err)
                         code = err.get("code") if isinstance(err, dict) else None
-                        fault = provider_faults.classify(
-                            status=code if isinstance(code, int) else None, text=detail or err,
-                            provider=self._host(), model=model)
+                        status = code if isinstance(code, int) else None
+                        if specs and provider_faults.tools_refused(detail or err):
+                            fault = provider_faults.no_tool_calling(
+                                provider=self._host(), model=model, status=status,
+                                detail=str(detail or err))
+                        else:
+                            fault = provider_faults.classify(status=status, text=detail or err,
+                                                             provider=self._host(), model=model)
                         exc = LLMError(f"{self._base} streamed an error frame: "
                                        f"{_short(detail or err, 300)}")
                         if fault is not None:
@@ -1462,7 +1510,7 @@ class OpenAIAgentHarness:
         # exists to switch off), a `[DONE]` with no content — all reached `done.ok=True` with an
         # empty reply, which the chat renders as the agent having nothing to say.
         if not acc_text and not acc_calls:
-            raise LLMError(f"{self._base} streamed no content and no tool calls — the endpoint "
+            raise _EmptyCompletion(f"{self._base} streamed no content and no tool calls — the endpoint "
                            "answered 200 with an empty completion (a truncated stream, or a model "
                            "spending its whole budget on reasoning tokens)")
         msg: dict = {"role": "assistant", "content": acc_text}
@@ -1476,7 +1524,7 @@ class OpenAIAgentHarness:
         except httpx.HTTPError as exc:
             raise self._transport_error(exc, str(body.get("model") or "")) from exc
         if r.status_code >= 400:
-            self._raise_http(r, str(body.get("model") or ""))
+            self._raise_http(r, str(body.get("model") or ""), tools_sent=bool(body.get("tools")))
         try:
             msg = ((r.json().get("choices") or [{}])[0] or {}).get("message") or {}
         except (ValueError, AttributeError, TypeError) as exc:
@@ -1487,15 +1535,94 @@ class OpenAIAgentHarness:
         yield {"__final__": {"role": "assistant", "content": text,
                              **({"tool_calls": msg["tool_calls"]} if msg.get("tool_calls") else {})}}
 
+    def _tool_calling_fault(self, text: str, model: str, *,
+                            first: bool) -> Optional[provider_faults.ProviderFault]:
+        """The ``no_tool_calling`` fault for a round that offered tools and got none, or None.
+
+        A tool call written as text is decisive on its own. Otherwise, on the turn's FIRST round
+        only, and once per endpoint and model per process (``_TOOL_CALLING_OK``), a forced check
+        asks the endpoint for one call to a no-op function with ``tool_choice: "required"``. A
+        server that honours it answers with a call; one that dropped the tools (LiteLLM's
+        ``drop_params``) answers with text, and one that cannot serve them says so. A check that
+        fails for any OTHER reason (a timeout, a 5xx) proves nothing and never faults the turn."""
+        host = self._host()
+        if provider_faults.tool_call_as_text(text):
+            return provider_faults.no_tool_calling(
+                provider=host, model=model,
+                detail="The model wrote its tool call as text, so the endpoint is not parsing tool "
+                       "calls for it.")
+        key = (self._base, model)
+        if not first or key in _TOOL_CALLING_OK:
+            return None
+        verdict = self._check_tool_calling(model)
+        if verdict is None:
+            _TOOL_CALLING_OK.add(key)
+        elif verdict.kind != provider_faults.NO_TOOL_CALLING:
+            return None
+        return verdict
+
+    def _check_tool_calling(self, model: str) -> Optional[provider_faults.ProviderFault]:
+        """One forced tool call against the endpoint. None = it does tool calling; a
+        ``no_tool_calling`` fault = it does not; any other fault = the check proved nothing."""
+        body = {**self._extra, "model": model, "max_tokens": _TOOL_CHECK_MAX_TOKENS,
+                "messages": [{"role": "user", "content": _TOOL_CHECK_PROMPT}],
+                "tools": [_TOOL_CHECK_SPEC]}
+        headers = {"Authorization": f"Bearer {self._key}"} if self._key else {}
+        host = self._host()
+        inconclusive = provider_faults.ProviderFault(kind=provider_faults.UNAVAILABLE,
+                                                     provider=host, model=model)
+        for choice in ("required", "auto"):
+            try:
+                r = self._client.post(f"{self._base}/chat/completions",
+                                      json={**body, "tool_choice": choice}, headers=headers,
+                                      timeout=_TOOL_CHECK_TIMEOUT)
+            except httpx.HTTPError as exc:
+                log.warning("tool-calling check against %s did not answer (%s) — not judged",
+                            host, type(exc).__name__)
+                return inconclusive
+            if r.status_code >= 400:
+                if 400 <= r.status_code < 500 and provider_faults.tools_refused(r.text):
+                    return provider_faults.no_tool_calling(provider=host, model=model,
+                                                           status=r.status_code,
+                                                           detail=r.text or "")
+                if choice == "required" and 400 <= r.status_code < 500:
+                    continue        # a server that only knows "auto" — ask again with it
+                log.warning("tool-calling check against %s answered %s — not judged", host,
+                            r.status_code)
+                return inconclusive
+            try:
+                msg = ((r.json().get("choices") or [{}])[0] or {}).get("message") or {}
+            except (ValueError, AttributeError, TypeError):
+                return inconclusive
+            if msg.get("tool_calls"):
+                return None
+            if provider_faults.tool_call_as_text(msg.get("content")):
+                return provider_faults.no_tool_calling(
+                    provider=host, model=model,
+                    detail="The model wrote its tool call as text, so the endpoint is not parsing "
+                           "tool calls for it.")
+            if choice == "required":
+                return provider_faults.no_tool_calling(
+                    provider=host, model=model,
+                    detail="The endpoint answered without a tool call when one was required, so "
+                           "it does not pass this model its tools.")
+        return inconclusive
+
     def _host(self) -> str:
         return provider_faults.provider_host(self._base) if self._base else "unknown"
 
-    def _raise_http(self, r: httpx.Response, model: str = "") -> None:
+    def _raise_http(self, r: httpx.Response, model: str = "", *, tools_sent: bool = False) -> None:
         """The provider's refusal, TYPED (P18): the status read into a ``ProviderFault`` that rides
-        on the exception, and from there onto the turn's ``done`` (see ``_failed_done``)."""
+        on the exception, and from there onto the turn's ``done`` (see ``_failed_done``). A 4xx
+        whose words say the request's TOOLS are unsupported is ``no_tool_calling``, not ``refused``:
+        "check the model name" sends the person to the wrong dial."""
         detail = (r.text or "")[:300]
-        fault = provider_faults.classify(status=r.status_code, text=r.text or "",
-                                         provider=self._host(), model=model)
+        if tools_sent and 400 <= r.status_code < 500 and provider_faults.tools_refused(r.text):
+            fault: Optional[provider_faults.ProviderFault] = provider_faults.no_tool_calling(
+                provider=self._host(), model=model, status=r.status_code, detail=r.text or "")
+        else:
+            fault = provider_faults.classify(status=r.status_code, text=r.text or "",
+                                             provider=self._host(), model=model)
         if r.status_code in (401, 403):
             exc: LLMError = LLMAuthError(
                 f"{r.status_code} from {self._base}: {detail} — set VEXA_LLM_API_KEY for this "

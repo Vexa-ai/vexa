@@ -211,10 +211,17 @@ when `meetingApi.extraEnv` also sets one of them.
 ## Agent inference (bring your own)
 
 Point the agent at your own model so no inference leaves the network.
+The model must do tool calling: a model served without it ends each turn with the typed fault
+`model-provider` / `no_tool_calling`. On Helm, see [Agent tools on Kubernetes](/deployment-helm-agent-tools)
+and the [chart README](https://github.com/Vexa-ai/vexa/blob/main/deploy/helm/charts/vexa/README.md).
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `VEXA_AGENT_MODEL` | — | Model the agent runner uses. |
+| `VEXA_RUNNER` | `claude-code` | The agent harness: `claude-code` (Anthropic dialect), `codex`, or `openai-agent` for vLLM, LiteLLM and other OpenAI-compatible endpoints. Set on agent-api and the runtime, which passes it to each worker. Helm: `models.runner`. |
+| `VEXA_LLM_BASE_URL` | — (falls back to `ANTHROPIC_BASE_URL`) | openai-agent: the endpoint's `/v1` base. Helm: `models.llmBaseUrl`. |
+| `VEXA_LLM_API_KEY` | — | openai-agent: the endpoint's bearer token, secret. Helm: `secrets.llmApiKey` (read by `secretKeyRef`). An endpoint that needs no key still takes a placeholder: with no model credential at all, agent-api refuses every turn. |
+| `VEXA_LLM_EXTRA_BODY` | — | openai-agent: a JSON object merged into every request, e.g. `{"chat_template_kwargs":{"enable_thinking":false}}` for a Qwen. Helm: `models.llmExtraBody`. |
 | `VEXA_AGENT_MAX_OUTPUT_TOKENS` | — (each harness's own; the claude CLI asks for 32000) | Output-token cap on every model request. claude-code receives it as `CLAUDE_CODE_MAX_OUTPUT_TOKENS`; openai-agent sends it as `max_tokens`; codex does not read it, because Codex has no setting for the model's output cap. Set it when a provider that prices the allowance up front (OpenRouter) refuses a small balance with a 402. |
 | `VEXA_MEETING_MODEL` | — | Model for meeting-time processing. |
 | `ANTHROPIC_API_KEY` | — | Key for Anthropic-backed runners. |

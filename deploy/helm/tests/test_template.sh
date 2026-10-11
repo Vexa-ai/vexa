@@ -1262,4 +1262,66 @@ if [ -z "$loose" ] && grep -q 'app.kubernetes.io/component: flows-api' <<< "$flo
   echo "  OK: every policy, Service and Pod template naming a flows component also names this release"
 else echo "  FAIL: flows matched by component alone:"; echo "$loose" | head -40; fail=1; fi
 
+# ── THE CHAT AGENT'S TOOLBELT ON HELM (docs/docs/deployment/helm-agent-tools.mdx) ──────────────────
+# The chat agent sends the bot, reads the transcript and stops the bot through the vexa MCP tools. On
+# Helm that needs four things together, and a render missing any one of them gives an agent with no
+# meeting tools and nothing anywhere saying why: the MCP Deployment + Service, the gateway's /mcp relay
+# to it, agent-api's toolbelt pair (VEXA_MCP_URL + VEXA_MCP_DELEGATION_SECRET) with identity
+# (admin-api) verifying the same secret, and a worker egress that reaches the gateway — and only the
+# gateway: the MCP takes the worker's delegated token through the edge, never directly.
+doc() {  # doc <kind> <name> <render> → that one rendered document
+  awk -v k="kind: $1" -v n="  name: $2" '
+    /^---/ { if (hit) { printf "%s", buf; out=1; exit } buf=""; kk=0; nn=0; next }
+    { buf = buf $0 "\n"; if ($0 == k) kk=1; if ($0 == n) nn=1; if (kk && nn) hit=1 }
+    END { if (hit && !out) printf "%s", buf }' <<< "$3"
+}
+tb_ok=1
+tb() { if eval "$2"; then echo "  OK: $1"; else echo "  FAIL: $1"; tb_ok=0; fail=1; fi; }
+mcp_dep="$(doc Deployment vexa-vexa-mcp "$RENDER")"
+mcp_svc="$(doc Service vexa-vexa-mcp "$RENDER")"
+gw_dep="$(doc Deployment vexa-vexa-gateway "$RENDER")"
+aa_dep="$(doc Deployment vexa-vexa-agent-api "$RENDER")"
+ad_dep="$(doc Deployment vexa-vexa-admin-api "$RENDER")"
+rt_dep="$(doc Deployment vexa-vexa-runtime "$RENDER")"
+w_np="$(doc NetworkPolicy vexa-vexa-worker-egress "$RENDER")"
+m_np="$(doc NetworkPolicy vexa-vexa-mcp-ingress "$RENDER")"
+sec="$(doc Secret vexa-vexa-secrets "$RENDER")"
+tb "the MCP Deployment is rendered by default" '[ -n "$mcp_dep" ] && grep -q "containerPort: 8010" <<< "$mcp_dep"'
+tb "the MCP Service fronts it on 8010" 'grep -q "port: 8010" <<< "$mcp_svc" && grep -q "app.kubernetes.io/component: mcp" <<< "$mcp_svc"'
+tb "the gateway relays /mcp to the MCP Service" '[ "$(envval MCP_URL "$gw_dep")" = "\"http://vexa-vexa-mcp:8010\"" ]'
+tb "agent-api points the worker toolbelt at the gateway /mcp" '[ "$(envval VEXA_MCP_URL "$aa_dep")" = "\"http://vexa-vexa-gateway:8000/mcp\"" ]'
+tb "agent-api signs with VEXA_MCP_DELEGATION_SECRET from the chart Secret" 'grep -A4 "name: VEXA_MCP_DELEGATION_SECRET" <<< "$aa_dep" | grep -q "key: VEXA_MCP_DELEGATION_SECRET"'
+tb "identity (admin-api) verifies with the same secret" 'grep -A4 "name: VEXA_MCP_DELEGATION_SECRET" <<< "$ad_dep" | grep -q "name: vexa-vexa-secrets"'
+tb "the chart Secret carries a generated delegation secret" 'grep -qE "^  VEXA_MCP_DELEGATION_SECRET: \"[A-Za-z0-9]{32,}\"" <<< "$sec"'
+tb "agent workers may reach the gateway" 'grep -B1 -A6 "component: gateway" <<< "$w_np" | grep -q "port: 8000"'
+tb "agent workers have no direct path to the MCP (8010)" '! grep -qE "component: mcp|port: 8010" <<< "$w_np"'
+tb "the MCP admits only the release's own Pods, never a spawned workload" '! grep -q "runtime.managed" <<< "$m_np"'
+tb "the MCP runs unprivileged by default (uid 10001, no escalation, caps dropped)" 'grep -q "runAsUser: 10001" <<< "$mcp_dep" && grep -q "allowPrivilegeEscalation: false" <<< "$mcp_dep"'
+ocp="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set global.securityContext.deliver=false)"
+tb "OpenShift (deliver=false): the MCP Pod names no uid, so restricted-v2 assigns one" '! grep -qE "securityContext|runAsUser" <<< "$(doc Deployment vexa-vexa-mcp "$ocp")"'
+nomcp="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set mcp.enabled=false)"
+tb "mcp.enabled=false: no MCP and no toolbelt URL (agent-api then says it has no Vexa tools)" '[ -z "$(doc Deployment vexa-vexa-mcp "$nomcp")" ] && ! grep -q "name: VEXA_MCP_URL" <<< "$(doc Deployment vexa-vexa-agent-api "$nomcp")"'
+# The harness route (models.runner / llmBaseUrl / llmExtraBody, secrets.llmApiKey): absent by default…
+tb "default: no harness route is set (claude-code, ANTHROPIC_*)" '! grep -qE "name: VEXA_RUNNER$|name: VEXA_LLM_BASE_URL$" <<< "$aa_dep$rt_dep"'
+route="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set models.runner=openai-agent \
+  --set models.llmBaseUrl=http://litellm.ai.svc:4000/v1 --set-string 'models.llmExtraBody={"temperature":0}' \
+  --set secrets.llmApiKey=sk-render-test-only)"
+for d in agent-api runtime; do
+  dd="$(doc Deployment "vexa-vexa-$d" "$route")"
+  tb "$d carries VEXA_RUNNER=openai-agent" '[ "$(envval VEXA_RUNNER "$dd")" = "\"openai-agent\"" ]'
+  tb "$d carries VEXA_LLM_BASE_URL" '[ "$(envval VEXA_LLM_BASE_URL "$dd")" = "\"http://litellm.ai.svc:4000/v1\"" ]'
+  tb "$d carries VEXA_LLM_EXTRA_BODY" 'grep -A1 "name: VEXA_LLM_EXTRA_BODY" <<< "$dd" | grep -q temperature'
+  tb "$d reads VEXA_LLM_API_KEY from the Secret, never inline" 'grep -A4 "name: VEXA_LLM_API_KEY" <<< "$dd" | grep -q "key: VEXA_LLM_API_KEY" && ! grep -q "sk-render-test-only" <<< "$dd"'
+done
+tb "the chart Secret carries VEXA_LLM_API_KEY when set" 'grep -q "VEXA_LLM_API_KEY: \"sk-render-test-only\"" <<< "$(doc Secret vexa-vexa-secrets "$route")"'
+tb "and not when unset" '! grep -q "VEXA_LLM_API_KEY" <<< "$sec"'
+# A mirrored install (Harbor / GitLab registry) pinning one tag spawns its chat workers FROM THE MIRROR.
+# This was the literal vexaai/v012-agent-worker:<tag>: offline, no chat worker ever started.
+for img in harbor.example/vexa/v012-agent-worker:v012 registry.example:5000/vexa/agent-worker@sha256:0123abcd; do
+  mir="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set global.imageTag=0.13.3 --set "runtime.agentWorkerImage=$img")"
+  want="\"$(sed -E 's#(@sha256:[a-f0-9]+|:[^:/]+)$##' <<< "$img"):0.13.3\""
+  tb "global.imageTag keeps the mirror's worker repository ($img)" '[ "$(envval AGENT_WORKER_IMAGE "$(doc Deployment vexa-vexa-runtime "$mir")")" = "$want" ]'
+done
+[ "$tb_ok" -eq 1 ] && echo "  OK: the chat agent's toolbelt is wired end to end on Helm"
+
 [ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }

@@ -68,6 +68,11 @@ value its own Secret already holds, or generates one on first install. It refuse
 full list of what such a render must supply is under
 [One-time steps after upgrading](/deployment#one-time-steps-after-upgrading).
 
+**The chat agent's meeting tools** (send the bot, read the transcript, stop it) are deployed by
+default. The agent also needs a model that does tool calling: for a self-hosted or LiteLLM model, set
+`models.runner`, `models.llmBaseUrl` and `secrets.llmApiKey`. See
+[Agent tools on Kubernetes](/deployment-helm-agent-tools).
+
 `values-staging.yaml` and `values-test.yaml` show environment overlays. Chart tests
 (`helm lint` + template tests) live under `deploy/helm/tests/`.
 
