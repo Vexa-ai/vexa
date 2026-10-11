@@ -69,3 +69,35 @@ describe("pageForArtifact names a call it is told the name of", () => {
     expect(pageForArtifact({ path: "meeting:11" })?.label).toBe("Transcript");
   });
 });
+
+describe("callRows · deleted calls and calls that never started", () => {
+  it("never lists a call whose transcript and recordings were deleted (pending or completed)", () => {
+    const rows = callRows([
+      m({ id: "1", start_time: "2026-10-10T21:09:00Z", artifacts_deleted: true }),
+      m({ id: "2", start_time: "2026-10-10T21:12:00Z" }),
+    ]);
+    expect(rows.map((r) => r.id)).toEqual(["2"]);
+  });
+
+  it("a call whose bot never got in is dated by its request, not filed under No date", () => {
+    const now = new Date("2026-10-11T12:00:00");
+    const rows = callRows([
+      m({ id: "1", start_time: new Date("2026-10-11T09:00:00").toISOString() }),
+      m({ id: "2", live_status: "failed", title_custom: "Campbell", created_at: new Date("2026-10-11T10:00:00").toISOString() }),
+    ]);
+    expect(rows.map((r) => r.id)).toEqual(["2", "1"]);
+    expect(rows[0]).toMatchObject({ started: false });
+    expect(rows[1]).toMatchObject({ started: true });
+    expect(groupCalls(rows, now).map((g) => g.label)).toEqual(["Today"]);
+  });
+});
+
+import { pageLabel } from "../callsList";
+describe("pageLabel", () => {
+  const meetings = [m({ id: "11", title_custom: "Renamed" })];
+  it("a call's tab follows the meeting's current name; other tabs keep theirs", () => {
+    expect(pageLabel({ kind: "meeting", path: "11", label: "Old" }, meetings)).toBe("Renamed");
+    expect(pageLabel({ kind: "meeting", path: "12", label: "Old" }, meetings)).toBe("Old");
+    expect(pageLabel({ path: "README.md", label: "README" }, meetings)).toBe("README");
+  });
+});

@@ -13,6 +13,7 @@
 import type { CSSProperties, KeyboardEvent } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "../ui-kit";
+import { ContextMenu } from "../ui-kit/ContextMenu";
 import { OPEN_PAGE_EVENT } from "../platform";
 import { useLiveMeetings, useLiveMeetingsLoaded } from "../surfaces/liveMeetings";
 import type { Page } from "./types";
@@ -21,6 +22,8 @@ import {
   matchCalls, searchTranscripts, type CallRow, type ContentMatch,
 } from "./callsList";
 import type { NavWorkspace, ParsedQuery } from "./navigatorApi";
+import { canRenameCall } from "./callRename";
+import { CallNameEditor } from "./CallName";
 import { surface, type as ty } from "./tokens";
 
 // ── the switch ───────────────────────────────────────────────────────────────────────────────────
@@ -80,10 +83,21 @@ const rowBtn: CSSProperties = {
   cursor: "pointer", minWidth: 0, fontSize: 12.5,
 };
 const nameS: CSSProperties = { flex: "1 1 0%", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
+const actBtn: CSSProperties = {
+  background: "transparent", border: "none", color: "var(--t3)", cursor: "pointer", fontSize: 11, lineHeight: 1,
+  padding: "2px 3px", fontFamily: "var(--sans)", display: "inline-flex", alignItems: "center",
+};
+/** THE ROW'S ACTIONS TAKE THE TIME'S PLACE. At rest a row shows its time at the right edge; under
+ *  the pointer or keyboard focus the time steps aside (kept in layout, so nothing shifts) and the
+ *  row's controls — workspace, open in a tab, more — stand where it was, on the hover colour. They
+ *  used to be drawn OVER the time, and "10:09 PM" read through the ⧉ (founder, 2026-10-11). */
 const reveal = (e: { currentTarget: HTMLElement }, on: boolean) => {
-  e.currentTarget.style.background = on ? surface.raised : "transparent";
-  const b = e.currentTarget.querySelector("[data-call-tab]") as HTMLElement | null;
-  if (b) b.style.opacity = on ? "1" : "0";
+  const row = e.currentTarget;
+  row.style.background = on ? surface.raised : "transparent";
+  const acts = row.querySelector("[data-call-acts]") as HTMLElement | null;
+  if (acts) acts.style.opacity = on ? "1" : "0";
+  const when = row.querySelector("[data-call-when]") as HTMLElement | null;
+  if (when) when.style.visibility = on ? "hidden" : "visible";
 };
 
 /** Open a call's transcript: the shell's own `open-page` route, `meeting:<row id>` form. */
@@ -130,38 +144,86 @@ export function CallsList(p: {
 
   const wsName = p.workspaceFilter ? p.workspaces.find((w) => w.key === p.workspaceFilter)?.name : null;
 
+  // Rename: one row at a time, from the row's ⋯ menu or F2 on the focused row. The editor replaces
+  // the row in place; when it closes, focus returns to the row so the keyboard is where it was.
+  const byId = useMemo(() => new Map(meetings.map((m) => [m.id, m] as const)), [meetings]);
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null);
+  const root = useRef<HTMLDivElement>(null);
+  const focusRow = (id: string) => requestAnimationFrame(() =>
+    root.current?.querySelector<HTMLElement>(`[data-call=${JSON.stringify(id)}]`)?.focus());
+  const startRename = (id: string) => { setMenu(null); setRenaming(id); };
+  const endRename = (id: string) => { setRenaming(null); focusRow(id); };
+  const closeMenu = (id: string, refocus: boolean) => {
+    setMenu(null);
+    const row = root.current?.querySelector<HTMLElement>(`[data-call-row=${JSON.stringify(id)}]`);
+    if (row && !row.matches(":hover")) reveal({ currentTarget: row }, false);
+    if (refocus) root.current?.querySelector<HTMLElement>(`[data-call-more=${JSON.stringify(id)}]`)?.focus();
+  };
+
   const row = (r: CallRow, byMonth: boolean, snippet?: string) => {
     const ws = callWorkspace(r, p.workspaces);
     const when = callWhen(r, byMonth);
+    const m = byId.get(r.id);
+    const mayRename = canRenameCall(m);
+    const notStarted = !r.live && !r.started;
+    if (renaming === r.id && m && mayRename) {
+      return (
+        <div key={r.id} data-call-row={r.id} style={{ display: "flex", alignItems: "center", padding: "2px 4px", minHeight: 28 }}>
+          <CallNameEditor compact meeting={m} label={r.label} onDone={() => endRename(r.id)} />
+        </div>
+      );
+    }
     return (
-      <div key={r.id} style={{ position: "relative", display: "flex", alignItems: "center", borderRadius: 6 }}
-        onMouseEnter={(e) => reveal(e, true)} onMouseLeave={(e) => reveal(e, false)}
-        onFocus={(e) => reveal(e, true)} onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) reveal(e, false); }}>
-        <button type="button" data-call={r.id} title={r.label}
-          aria-label={`${r.label}${r.live ? ", live" : when ? `, ${when}` : ""}${r.shared ? ", shared with you" : ""}`}
+      <div key={r.id} data-call-row={r.id} style={{ position: "relative", display: "flex", alignItems: "center", borderRadius: 6 }}
+        onMouseEnter={(e) => reveal(e, true)} onMouseLeave={(e) => { if (menu?.id !== r.id) reveal(e, false); }}
+        onFocus={(e) => reveal(e, true)} onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node) && menu?.id !== r.id) reveal(e, false); }}>
+        <button type="button" data-call={r.id} title={notStarted ? `${r.label} — requested, never started` : r.label}
+          aria-label={`${r.label}${r.live ? ", live" : when ? `, ${when}` : ""}${notStarted ? ", never started" : ""}${r.shared ? ", shared with you" : ""}`}
+          aria-keyshortcuts={mayRename ? "F2" : undefined}
           onClick={() => openCall(r)}
+          onKeyDown={(e) => { if (e.key === "F2" && mayRename) { e.preventDefault(); startRename(r.id); } }}
           onAuxClick={(e) => { if (e.button === 1) { e.preventDefault(); p.onOpenTab(callPage(r)); } }}
-          style={{ ...rowBtn, paddingRight: 22, flexDirection: snippet ? "column" : "row", alignItems: snippet ? "stretch" : "center" }}>
+          style={{ ...rowBtn, flexDirection: snippet ? "column" : "row", alignItems: snippet ? "stretch" : "center" }}>
           <span style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
             {r.live
               ? <span data-call-live aria-hidden style={{ flex: "none", width: 6, height: 6, borderRadius: "50%", background: "var(--red, #e5484d)" }} />
               : <Icon name="mic" size={11} style={{ color: "var(--t3)" }} />}
             <span style={nameS}>{r.label}</span>
             {r.shared && <span aria-hidden title="Shared with you" style={{ ...ty.meta, fontSize: 10, flex: "none" }}>shared</span>}
-            {when && <span style={{ ...ty.meta, flex: "none", color: r.live ? "var(--red, #e5484d)" : "var(--t3)" }}>{when}</span>}
+            {when && <span data-call-when data-call-not-started={notStarted ? "" : undefined}
+              style={{ ...ty.meta, flex: "none", color: r.live ? "var(--red, #e5484d)" : "var(--t3)", fontStyle: notStarted ? "italic" : undefined }}>{when}</span>}
           </span>
           {snippet && <span data-call-snippet style={{ ...ty.meta, ...nameS, paddingLeft: 17 }}>{snippet}</span>}
         </button>
-        {ws && (
-          <button type="button" data-call-ws={ws.key} title={`In workspace ${ws.name}`}
-            aria-label={`Show workspace ${ws.name}`} onClick={() => p.onRevealWorkspace(ws.key)}
-            style={{ position: "absolute", right: 22, top: 6, background: "transparent", border: "none", color: "var(--t3)", cursor: "pointer", padding: "1px 2px", lineHeight: 0 }}>
-            <Icon name="folder" size={11} />
-          </button>
+        <span data-call-acts style={{ position: "absolute", right: 2, top: 3, display: "flex", alignItems: "center", gap: 1, opacity: 0, transition: "opacity .12s", background: surface.raised, borderRadius: 5, paddingLeft: 2 }}>
+          {ws && (
+            <button type="button" data-call-ws={ws.key} title={`In workspace ${ws.name}`}
+              aria-label={`Show workspace ${ws.name}`} onClick={() => p.onRevealWorkspace(ws.key)} style={{ ...actBtn, lineHeight: 0 }}>
+              <Icon name="folder" size={11} />
+            </button>
+          )}
+          <button type="button" data-call-tab={r.id} aria-label={`Open ${r.label} in a tab`} title="Open in a tab"
+            onClick={() => p.onOpenTab(callPage(r))} style={actBtn}>⧉</button>
+          {mayRename && (
+            <button type="button" data-call-more={r.id} aria-label={`Actions for ${r.label}`} title="Rename"
+              aria-haspopup="menu" aria-expanded={menu?.id === r.id}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                if (menu?.id === r.id) { setMenu(null); return; }
+                const b = e.currentTarget.getBoundingClientRect();
+                setMenu({ id: r.id, x: b.right - 188, y: b.bottom + 4 });
+              }} style={actBtn}>⋯</button>
+          )}
+        </span>
+        {menu?.id === r.id && (
+          // the chats rail's own menu primitive, so a call's menu looks and behaves like a chat's
+          <ContextMenu x={menu.x} y={menu.y} onClose={() => closeMenu(r.id, true)}
+            items={[
+              { id: "rename", label: "Rename", detail: "F2", onSelect: () => startRename(r.id) },
+              { id: "tab", label: "Open in a tab", onSelect: () => p.onOpenTab(callPage(r)) },
+            ]} />
         )}
-        <button type="button" data-call-tab={r.id} aria-label={`Open ${r.label} in a tab`} title="Open in a tab"
-          onClick={() => p.onOpenTab(callPage(r))}
-          style={{ position: "absolute", right: 2, top: 4, opacity: 0, transition: "opacity .12s", background: "transparent", border: "none", color: "var(--t3)", cursor: "pointer", fontSize: 11, lineHeight: 1, padding: "2px 4px", fontFamily: "var(--sans)" }}>⧉</button>
       </div>
     );
   };
@@ -209,7 +271,7 @@ export function CallsList(p: {
   }
 
   return (
-    <div data-calls>
+    <div data-calls ref={root}>
       {p.query.content && filtering && (
         <div data-calls-note style={{ ...ty.meta, padding: "0 4px 6px", lineHeight: 1.45 }}>
           Searching the transcripts of your own calls; shared calls match by title only.
@@ -229,3 +291,4 @@ export function CallsList(p: {
     </div>
   );
 }
+

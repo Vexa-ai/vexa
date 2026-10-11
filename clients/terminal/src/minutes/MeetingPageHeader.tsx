@@ -1,5 +1,6 @@
 "use client";
 import { MeetingControls } from "./MeetingControls";
+import { CallName } from "./CallName";
 import { useLiveMeetings } from "../surfaces/liveMeetings";
 import type { MeetingMock } from "../surfaces/meetingModel";
 import { splitLeadingH1 } from "./workspaceFrontPage";
@@ -29,7 +30,9 @@ export function MeetingPageHeader({ meetingId, body, path }: { meetingId: string
   const meeting = meetings.find(m => m.id === meetingId || m.native_id === meetingId);
   const { title, metadata } = meetingHeader(body, meeting);
   return <div style={{ flex: "1 1 auto", minWidth: 0 }}>
-    <div data-doc-name title={path} style={{ ...ty.title, fontSize: 13.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</div>
+    <div data-doc-name title={path} style={{ ...ty.title, fontSize: 13.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "flex", minWidth: 0 }}>
+      <CallName meeting={meeting} label={title} />
+    </div>
     {metadata && <div data-meeting-metadata style={{ ...ty.meta, marginTop: 3, color: "var(--t3)", overflowWrap: "anywhere" }}>{metadata}</div>}
     <MeetingControls meetingId={meetingId} />
   </div>;

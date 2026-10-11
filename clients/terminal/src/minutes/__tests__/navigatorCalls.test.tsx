@@ -22,6 +22,8 @@ const store = vi.hoisted(() => ({ meetings: [] as unknown[], loaded: true }));
 vi.mock("../../surfaces/liveMeetings", () => ({
   useLiveMeetings: () => store.meetings,
   useLiveMeetingsLoaded: () => store.loaded,
+  applyMeetingTitle: () => {},
+  refreshMeetings: () => {},
 }));
 vi.mock("../navigatorApi", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../navigatorApi")>()),
@@ -222,5 +224,76 @@ describe("the meeting ↔ workspace link", () => {
     store.meetings = [mtg({ id: "21", title_custom: "Elsewhere", start_time: "2026-10-01T00:00:00Z", workspace_id: "not-mine" })];
     const c = await openCalls();
     expect(c.querySelector("[data-call-ws]")).toBeNull();
+  });
+});
+
+describe("rename a call from its row", () => {
+  const annotateCalls = (f: ReturnType<typeof vi.fn>) =>
+    f.mock.calls.filter((c) => String((c as unknown[])[0]).endsWith("/annotate")).map((c) => [String((c as unknown[])[0]), JSON.parse(((c as unknown[])[1] as RequestInit).body as string)]);
+
+  it("⋯ → Rename edits the row in place; Enter writes the meeting's title through annotate", async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({}) }));
+    vi.stubGlobal("fetch", fetchMock);
+    const c = await openCalls();
+    fireEvent.click(c.querySelector('[data-call-more="12"]') as HTMLElement);
+    fireEvent.click(screen.getByRole("menuitem", { name: /Rename/ }));
+    const input = c.querySelector('[data-call-rename="12"] input') as HTMLInputElement;
+    expect(input.value).toBe("Google Meet · abc-defg-hij");
+    fireEvent.change(input, { target: { value: "Campbell" } });
+    fireEvent.submit(input.closest("form")!);
+    await waitFor(() => expect(annotateCalls(fetchMock)).toEqual([["/api/meetings/12/annotate", { title: "Campbell" }]]));
+    await waitFor(() => expect(c.querySelector("[data-call-rename]")).toBeNull());
+  });
+
+  it("F2 on a focused row starts the rename; Escape puts the row back untouched", async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({}) }));
+    vi.stubGlobal("fetch", fetchMock);
+    const c = await openCalls();
+    fireEvent.keyDown(c.querySelector('[data-call="11"]') as HTMLElement, { key: "F2" });
+    const input = c.querySelector('[data-call-rename="11"] input') as HTMLInputElement;
+    expect(input.value).toBe("Acme pricing review");
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(c.querySelector("[data-call-rename]")).toBeNull();
+    expect(c.querySelector('[data-call="11"]')).toBeTruthy();
+    expect(annotateCalls(fetchMock)).toEqual([]);
+  });
+
+  it("DENY: a call shared with you offers no rename — no ⋯, and F2 does nothing", async () => {
+    const c = await openCalls();
+    expect(c.querySelector('[data-call-more="13"]')).toBeNull();
+    fireEvent.keyDown(c.querySelector('[data-call="13"]') as HTMLElement, { key: "F2" });
+    expect(c.querySelector("[data-call-rename]")).toBeNull();
+  });
+});
+
+describe("deleted calls and the row's own layout", () => {
+  it("a call whose transcript was deleted is not listed", async () => {
+    store.meetings = [...LIST, mtg({ id: "16", native_id: "rhw-abcd-efg", start_time: "2026-10-10T21:09:00Z", artifacts_deleted: true })];
+    const c = await openCalls();
+    expect(callIds(c)).not.toContain("16");
+    expect(callIds(c)).toEqual(["14", "13", "12", "11"]);
+  });
+
+  it("under the pointer the row's actions take the time's place instead of drawing over it", async () => {
+    const c = await openCalls();
+    const row = c.querySelector('[data-call-row="12"]') as HTMLElement;
+    const when = row.querySelector("[data-call-when]") as HTMLElement;
+    const acts = row.querySelector("[data-call-acts]") as HTMLElement;
+    expect(when.style.visibility).not.toBe("hidden");
+    expect(acts.style.opacity).toBe("0");
+    fireEvent.mouseEnter(row);
+    expect(when.style.visibility).toBe("hidden");
+    expect(acts.style.opacity).toBe("1");
+    fireEvent.mouseLeave(row);
+    expect(when.style.visibility).toBe("visible");
+    expect(acts.style.opacity).toBe("0");
+  });
+
+  it("a call that never started is listed at its request time and says so", async () => {
+    store.meetings = [mtg({ id: "17", title_custom: "Campbell", live_status: "failed", created_at: "2026-10-11T07:00:00Z" })];
+    const c = await openCalls();
+    expect(c.querySelector('[data-calls-group="undated"]')).toBeNull();
+    expect(c.querySelector('[data-call="17"]')?.getAttribute("aria-label")).toMatch(/never started/);
+    expect(c.querySelector('[data-call="17"] [data-call-not-started]')).toBeTruthy();
   });
 });

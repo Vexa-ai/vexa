@@ -24,8 +24,12 @@ export interface CallRow {
   /** the meeting ROW id — what the transcript canvas opens */
   id: string;
   label: string;
-  /** ISO time the list orders by: when it ran, else when it was due */
+  /** ISO time the list orders by: when it ran, else when it was due, else when it was requested —
+   *  meeting-api's own event time, COALESCE(scheduled_at, start_time, created_at), started first */
   at?: string;
+  /** false for a call whose bot never got in (no start_time): it is listed at the time it was
+   *  requested, and says so, rather than under a "No date" heading */
+  started: boolean;
   live: boolean;
   shared: boolean;
   /** the workspace this meeting is bound to (`data.workspace_id`), as the list carries it */
@@ -47,19 +51,31 @@ export function callLabel(m: Pick<MeetingMock, "id" | "title_custom" | "platform
 
 /** The calls the panel lists: everything with a transcript to open — live or finished. A PLANNED
  *  meeting (nothing captured yet) is not a call and has no transcript, so it is not listed here; the
- *  chats rail is where plans live. Newest first; live calls lead, because they are happening now. */
+ *  chats rail is where plans live. Newest first; live calls lead, because they are happening now.
+ *
+ *  A DELETED call is not listed either. Founder, 2026-10-11: *"deleted calls should be removed from
+ *  here"*. Deleting a finished meeting erases its transcript and recordings and keeps the row as
+ *  history, stamped `data.artifact_deletion` (pending, then completed); the list route still returns
+ *  that row, so the stamp — read once, by `artifactsDeleted` in the store — is what drops it here.
+ *  With nothing left to open, a listed deleted call could only ever show an empty transcript.
+ *
+ *  THE TIME. A call whose bot never got in has no `start_time`, and a call sent ad hoc has no
+ *  `scheduled_at`; such a row used to sort last under a "No date" heading although meeting-api knows
+ *  exactly when it was requested. It now takes `created_at`, the third term of the server's own
+ *  ordering, and carries `started: false` so the row can say it never started. */
 export function callRows(meetings: readonly MeetingMock[]): CallRow[] {
   const rows: CallRow[] = [];
   const seen = new Set<string>();
   for (const m of meetings) {
     if (!m?.id || seen.has(m.id)) continue;
     const phase = meetingPhase(m);
-    if (phase === "prep") continue;
+    if (phase === "prep" || m.artifacts_deleted) continue;
     seen.add(m.id);
     rows.push({
       id: m.id,
       label: callLabel(m),
-      at: m.start_time ?? m.scheduled_at ?? undefined,
+      at: m.start_time ?? m.scheduled_at ?? m.created_at ?? undefined,
+      started: !!m.start_time || phase === "live",
       live: phase === "live",
       shared: !!m.shared,
       workspaceId: m.workspace_id || undefined,
@@ -179,4 +195,13 @@ export async function searchTranscripts(q: string, fetcher: typeof fetch = fetch
   } catch {
     return null;
   }
+}
+
+/** A tab's label. A call's tab (`kind: "meeting"`, path = the row id) is named by the meeting as it
+ *  is NOW, so a rename reaches tabs already open; every other page keeps the label it was opened
+ *  with. A meeting the store does not hold keeps its stored label too. */
+export function pageLabel(pg: { kind?: string; path: string; label: string }, meetings: readonly MeetingMock[]): string {
+  if (pg.kind !== "meeting") return pg.label;
+  const m = meetings.find((x) => x.id === pg.path);
+  return m ? callLabel(m) : pg.label;
 }

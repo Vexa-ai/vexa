@@ -3,6 +3,7 @@
  *  • "meetings" LIST (left): meetings; the live one auto-opens; click any to (re)open its meeting view.
  *  • "meeting" TAB (center): fixed meeting chrome around the Meeting Canvas body.
  *    The generated canvas view consumes this meeting's live MeetingState. */
+import { CallName } from "../minutes/CallName";
 import { minutesOnly } from "../app/mode";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useService } from "../platform";
@@ -999,7 +1000,9 @@ function MeetingTab({ params }: TabProps) {
                   ? <span style={{ display: "inline-flex", alignItems: "center", color: "var(--violet)", background: "var(--violetbg)", fontWeight: 600, letterSpacing: ".06em", fontSize: 10.5, textTransform: "uppercase", borderRadius: 999, padding: "2px 9px", flex: "none" }}>Recap</span>
                   : <span style={{ fontSize: 11, color: "var(--t3)", fontWeight: 600, letterSpacing: ".04em", textTransform: "uppercase", flex: "none" }}>Connecting…</span>}
             <span style={{ width: 3, height: 3, borderRadius: "50%", background: "var(--t3)", flex: "none" }} />
-            <span style={{ color: "var(--t1)", fontWeight: 550, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m ? (m.title_custom ?? (m.native_id ?? m.title).replace(/^Google Meet · /, "")) : "Meeting"}</span>
+            {/* the meeting's name, renamed in place by its owner (Vexa-ai/vexa call rename) */}
+            <CallName meeting={m} label={m ? (m.title_custom ?? (m.native_id ?? m.title).replace(/^Google Meet · /, "")) : "Meeting"}
+              style={{ color: "var(--t1)", fontWeight: 550 }} />
             {m && <span style={{ color: "var(--t3)", flex: "none", fontSize: 12 }}>{m.platform}</span>}
             {m && <span style={{ color: "var(--t3)", flex: "none" }}>{m.participants.length} in the room</span>}
           </div>
