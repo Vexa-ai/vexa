@@ -41,9 +41,16 @@ import { TranscriptionClient, type TranscriptionResult } from '@vexa/transcribe-
 import { isMixedLanePlatform, isPerTrackLanePlatform, type Invocation, type Platform } from './config.js';
 import type { TranscriptSegment } from './contracts.js';
 import type { Pipeline, TranscriptSink } from './ports.js';
+import {
+  createLanguageControl,
+  languageAwareTranscribe,
+  pinnedLanguage,
+  type LanguageControl,
+  type SttCall,
+} from './transcription-language.js';
 
-/** stt.v1 round-trip — real adapter = TranscriptionClient.transcribe; L2/L3 = a mock. The
- *  lane bakes language/prompt at the call site, so the closure carries the configured language. */
+/** stt.v1 round-trip — real adapter = TranscriptionClient.transcribe; L2/L3 = a mock. The lane
+ *  supplies only audio + prompt; the closure carries the live transcription-language setting. */
 export type Transcribe = (pcm: Float32Array, prompt?: string) => Promise<TranscriptionResult>;
 
 /** Each platform's TRUE hint kind — the binder's lag correction is per-kind
@@ -317,7 +324,7 @@ function createMixedBotPipeline(
   transcribe: Transcribe,
   sink: TranscriptSink,
   hintKind: HintKind,
-  language?: string,
+  language: () => string | undefined,
   onError?: (e: unknown) => void,
   createTranscriber: MixedTranscriberFactory = (cb) => ChunkedTranscriber.create(cb),
   onObservation?: (source: string, obs: Record<string, unknown>, tMs?: number) => void,
@@ -368,7 +375,9 @@ function createMixedBotPipeline(
         // The turn's pending is gone (moved to another name / tail emptied / turn closed) → retract it.
         clearPending: () => { reconcilePending([]); },
         rename: (_oldSpeaker, newSpeaker, segments) => publish(newSpeaker, segments, true),
-        language,
+        // Read on every turn: the transcriber holds this object by reference, so a reconfigure
+        // reaches the segment stamp and the language-probability gate of the next turn.
+        get language() { return language(); },
         onError,
         // C1 hop 4: the binder's instantaneous verdict per hint — a hint with no
         // overlapping turn increments `missed` (loudly, on the periodic counter line).
@@ -411,13 +420,24 @@ function createMixedBotPipeline(
   };
 }
 
-/** Build the real STT transcribe closure from invocation.v1 — language baked into the call so
- *  the lane never knows about config. transcribeEnabled=false ⇒ a no-op transcribe (the engine
- *  still runs turn gating but emits empty text; recording-only meetings need no STT). */
-export function createTranscribe(inv: Invocation): Transcribe {
+/** The live language setting a lane runs with, seeded from invocation.v1. */
+export function languageControlFrom(inv: Invocation): LanguageControl {
+  return createLanguageControl({ language: inv.language, allowedLanguages: inv.allowedLanguages });
+}
+
+/** Build the real STT transcribe closure from invocation.v1. The language is decided per call by
+ *  the control (auto / forced / restricted), so the lane never knows about config.
+ *  transcribeEnabled=false ⇒ a no-op transcribe (the engine still runs turn gating but emits empty
+ *  text; recording-only meetings need no STT). `stt` replaces the TranscriptionClient call (tests). */
+export function createTranscribe(
+  inv: Invocation,
+  control: LanguageControl = languageControlFrom(inv),
+  stt?: SttCall,
+): Transcribe {
   if (inv.transcribeEnabled === false || !inv.transcriptionServiceUrl) {
     return async () => ({ text: '', language: inv.language ?? 'en', duration: 0, segments: [] });
   }
+  if (stt) return languageAwareTranscribe(stt, control);
   const client = new TranscriptionClient({
     serviceUrl: inv.transcriptionServiceUrl,
     apiToken: inv.transcriptionServiceToken,
@@ -425,8 +445,7 @@ export function createTranscribe(inv: Invocation): Transcribe {
     // the person's own Settings endpoint: every request held to the outbound URL guard
     publicOnly: inv.transcriptionServiceOwner === 'customer',
   });
-  const language = inv.language ?? undefined;
-  return (pcm, prompt) => client.transcribe(pcm, language, prompt);
+  return languageAwareTranscribe((pcm, language, prompt) => client.transcribe(pcm, language, prompt), control);
 }
 
 /**
@@ -458,9 +477,13 @@ export function createBotPipeline(
     /** Where the lane's own typed observations go (the turn-spine switch). Wired at the
      *  composition root to the capture-signal recorder's observations sidecar. */
     onObservation?: (source: string, obs: Record<string, unknown>, tMs?: number) => void;
+    /** The live transcription-language setting (reconfigure acts apply to it). Seeded from the
+     *  invocation when absent. */
+    languageControl?: LanguageControl;
   } = {},
 ): BotPipeline {
-  const transcribe = opts.transcribe ?? createTranscribe(inv);
+  const languageControl = opts.languageControl ?? languageControlFrom(inv);
+  const transcribe = opts.transcribe ?? createTranscribe(inv, languageControl);
   if (inv.platform === 'teams') {
     return createTeamsBotPipeline(
       transcribe, sink, opts.onError, opts.createTeamsTranscriber, opts.onObservation, inv.botName,
@@ -471,7 +494,7 @@ export function createBotPipeline(
   if (isMixedLanePlatform(inv.platform) && !isPerTrackLanePlatform(inv.platform)) {
     return createMixedBotPipeline(
       transcribe, sink, hintKindForPlatform(inv.platform),
-      inv.language ?? undefined, opts.onError, opts.createMixedTranscriber, opts.onObservation,
+      () => pinnedLanguage(languageControl.get()), opts.onError, opts.createMixedTranscriber, opts.onObservation,
       inv.botName,
     );
   }

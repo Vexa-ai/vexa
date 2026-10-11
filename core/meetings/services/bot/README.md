@@ -22,7 +22,7 @@ composition root (`src/index.ts`).
 | produces | meeting-api | HTTP POST → `inv.recordingUploadUrl` | assembled recording master (multipart) |
 | consumes | userdata store (S3) | `aws` CLI with the invocation's read-only `s3*` pair (`@vexa/remote-browser`), authenticated mode only | before launch, the stored session's [`session-profile.v1`](../../contracts/session-profile.v1) paths, read-only |
 | produces | meeting-api | HTTP PUT → `inv.sessionWritebackUrl` (`Authorization: Bearer <token>`), authenticated mode only, on clean teardown | the rotated session, a `session-profile.v1` `WritebackBody`; no field ⇒ no write-back |
-| consumes | gateway (commands) | redis pub/sub `bot_commands:meeting:{id}` | `acts.v1` commands (e.g. `speak` / `speak_stop`) |
+| consumes | gateway (commands) | redis pub/sub `bot_commands:meeting:{id}` | `acts.v1` commands (e.g. `speak` / `speak_stop`, `reconfigure` of the transcription language — see [src/README.md](src/README.md#transcription-language)) |
 
 ### Pre-join reachability gate (#530)
 

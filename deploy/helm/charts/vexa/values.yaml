@@ -380,6 +380,13 @@ meetingApi:
   defaultBotName: "Vexa"    # the bot's display name; the terminal omits bot_name so this is what
                             # participants see. Blank it to get the service's VexaBot-{random}.
   transcriptionServiceUrl: ""   # STT endpoint the spawned bot transcribes against (empty ⇒ capture only)
+  # The deployment's default transcription language (docs: /how-to/transcription-language). Used by
+  # every bot whose request and person set none. transcriptionLanguage: one code ("de"), or "" for
+  # none. transcriptionAllowedLanguages: the codes detection is restricted to (["de", "en"]); when
+  # both are set the language must be in the list and is the fallback for a window detected outside
+  # it. A value meeting-api refuses stops its boot, naming the fix.
+  transcriptionLanguage: ""
+  transcriptionAllowedLanguages: []
   # Optional service-authority.v1 adapter JSON. Empty preserves stock OSS allow-all. A configured
   # authority must use failure_policy=closed and mode=enforce|observe; the secret lives under
   # secrets.serviceAuthoritySecret or the existing Secret key VEXA_SERVICE_AUTHORITY_SECRET.

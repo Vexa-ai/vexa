@@ -1,0 +1,179 @@
+---
+title: "Transcription language"
+description: "Set the language meeting bots transcribe in — for the whole deployment, for each person, for one meeting — and change it while the meeting runs."
+---
+
+A meeting bot sends every few seconds of speech to the transcription backend. By default the backend
+detects the language of each window on its own. That works for a meeting in one language, but in a
+meeting that mixes, say, German and English, a short or accented window can be detected as the wrong
+language. You can tell the bot what to expect.
+
+## The three modes
+
+| Mode | You set | What the bot does with each window |
+|---|---|---|
+| **Auto-detect** | nothing | The backend detects the language. |
+| **One language** | `language: "de"` | Every window is transcribed as German. |
+| **A few languages** | `allowed_languages: ["de", "en"]`, optionally `language: "de"` | The backend detects the language. If it detects one outside the list, the bot transcribes the window again in `language` (the fallback), or in the first entry when no fallback is set. |
+
+Codes are Whisper's two- or three-letter codes: `de`, `en`, `fr`, `es`, `it`, `nl`, `pl` and so on. When
+you set both fields, `language` must be one of `allowed_languages`. A list holds at most 16 codes.
+
+"A few languages" is the mode for a mixed meeting: German stays German, English stays English, and a
+window detected as something else falls back to German instead of producing text in a third language.
+
+## Where to set it, and which setting wins
+
+| Level | Where | Who |
+|---|---|---|
+| **Meeting** | The **Language** control beside the meeting link when you send a bot; `language` / `allowed_languages` on `POST /bots`; the agent's `request_meeting_bot` tool | whoever sends the bot |
+| **Person** | Settings → **Transcription language**; `PUT /user/transcription` | each person, for their own bots |
+| **Deployment** | Helm `meetingApi.transcriptionLanguage` / `meetingApi.transcriptionAllowedLanguages`; env `DEFAULT_TRANSCRIPTION_LANGUAGE` / `DEFAULT_TRANSCRIPTION_ALLOWED_LANGUAGES` | the operator |
+
+The first level that sets anything decides the whole setting: **meeting, then person, then deployment,
+then auto-detect.** A meeting that says `de` is pinned to German even when the person's default is
+"German or English". To force auto-detect over every default for one meeting, send `language: "auto"`.
+
+Every way a bot is started gets the same answer: the API, the terminal, the agent's tool, a calendar
+auto-join and a bot started from an email invitation. A calendar auto-join and an email invitation have
+no meeting level, so they use the person's default, then the deployment's.
+
+The meeting stores the setting its bot runs with as `data.transcription_language`, with `source` naming
+the level that chose it:
+
+```json
+{ "language": "de", "allowed_languages": ["de", "en"], "source": "deployment" }
+```
+
+## Change it during the meeting
+
+On the live meeting page, the header shows the current language. The meeting's owner, and an owner or
+contributor of the workspace the meeting belongs to, can change it there. Readers see the language but
+cannot change it.
+
+The chat agent can change it too, with the `update_bot_config` tool. Over the API:
+
+```bash
+curl -X PUT "$API_BASE/bots/google_meet/abc-defg-hij/config" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"language": "de"}'
+```
+
+The body replaces the running setting: a field you leave out is cleared, so
+`{"language": null, "allowed_languages": null}` returns to auto-detect. The bot uses the new setting
+from its next transcription call; text already transcribed is not redone.
+
+## Configure the deployment default (Helm)
+
+```yaml
+meetingApi:
+  transcriptionLanguage: "de"
+  transcriptionAllowedLanguages: ["de", "en"]
+```
+
+The chart renders these as `DEFAULT_TRANSCRIPTION_LANGUAGE=de` and
+`DEFAULT_TRANSCRIPTION_ALLOWED_LANGUAGES=de,en` on meeting-api. With Docker Compose or Lite, set the two
+variables in `.env`. Both are empty by default, which means auto-detect. meeting-api checks them when it
+starts. It refuses to start on a value it cannot use, such as `German`, `de, en` (with a space), or a
+language that is not in the list, and its log names the variable and the fix.
+
+## Limits
+
+- **Transcribe only.** `task: "translate"` is accepted on the API but the bot only transcribes.
+- **A few languages can cost a second call.** A window detected outside the list is transcribed twice.
+  With a list that matches the meeting, this is rare.
+- **Granularity is the window**, a few seconds of one speaker, not a word. A sentence that switches
+  language mid-way is transcribed in one language.
+- **A planned meeting has no language of its own yet.** Calendar meetings use the person's or the
+  deployment's default; change the language live once the bot has joined.
+
+## When it goes wrong
+
+| What you see | Why | What to do |
+|---|---|---|
+| `422` on `POST /bots`, `PUT …/config` or `PUT /user/transcription` | A code is not a two- or three-letter lower-case code, a list repeats a code, or `language` is not in the list | Fix the value the message names |
+| `409` on a live change: "the bot is not listening yet" | The bot is still starting, or has left. Nothing was changed | Retry once the bot is in the meeting |
+| `403` on a live change | You are neither the meeting's owner nor an owner or contributor of its workspace | Ask the owner |
+| `404` on a live change | No running bot you can see for this meeting | Check the meeting id and that the bot is running |
+| `503` on a live change | The command bus is down, or your workspace role could not be confirmed. Nothing was changed | Retry |
+| meeting-api does not start | `DEFAULT_TRANSCRIPTION_*` holds a value it cannot use | Fix the value its log names |
+
+## How it works
+
+1. **The setting is resolved once per spawn.** `POST /bots` reaches meeting-api's `request_bot`, which a
+   calendar auto-join also calls directly. Before any row or bot exists, it checks the meeting level
+   (`422` if refused). It then reads the person's default out of the bot-context answer it already
+   fetches from identity, and the deployment default from its environment. It takes the first level that
+   is set.
+2. **It is stored and handed to the bot.** meeting-api writes `data.transcription_language` on the
+   meeting. It puts `language` and `allowedLanguages` in the bot's invocation (invocation.v1).
+3. **The bot applies it to every transcription call.** One language pins each call. A few languages
+   sends the call unpinned, then repeats it pinned to the fallback when the detected language is outside
+   the list. The bot logs `[bot] transcription language: …` at start and on every change.
+4. **A live change is a command to the running bot.** `PUT /bots/{platform}/{native_meeting_id}/config`
+   reaches meeting-api through the gateway. meeting-api checks the body and who is asking, then
+   publishes an acts.v1 `reconfigure` on the meeting's command channel `bot_commands:meeting:{id}`. Redis
+   reports how many bots received it. Only if one did does meeting-api store the new setting
+   (source `meeting`) and answer `202`. The bot replaces its setting, and the next transcription call
+   uses it.
+
+**Who writes what.**
+
+| Data | Writer | Readers |
+|---|---|---|
+| The person's default (`users.data.transcription_prefs.language`, `.allowed_languages`) | identity admin-api (`PUT /user/transcription`) | meeting-api, through bot-context |
+| The meeting's setting (`meetings.data.transcription_language`) | meeting-api: at spawn, and on an accepted live change | the terminal, the API, the agent |
+| The bot's running setting | the bot, from its invocation and each `reconfigure` | its transcription calls |
+| The deployment default | the operator (Helm values or env) | meeting-api |
+
+**Contracts and routes.** [`transcription-language.v1`](https://github.com/Vexa-ai/vexa/tree/main/core/meetings/contracts/transcription-language.v1)
+defines the setting, its levels, the stored shape and the live change, with goldens. `invocation.v1`
+already carried `language` and `allowedLanguages`, and `acts.v1` already carried `reconfigure`. Neither
+changed. The routes are `POST /bots`, `PUT /bots/{platform}/{native_meeting_id}/config` (api.v1 path,
+now served) and `GET`/`PUT /user/transcription`.
+
+**Configuration.** The deployment default is meeting-api's environment (declared in its `config.v1.json`).
+The person's default is in identity. The meeting level is on the request.
+
+## Why it complies
+
+**Architecture.**
+
+- **P4, P8 (contracts sealed, goldens are the spec).** The new shapes cross process boundaries
+  (terminal, gateway, meeting-api, identity, bot), so they are a sealed contract with goldens.
+  meeting-api's and identity's tests run every golden through their own validation, and so does the
+  contract's `validate.mjs`. Enforced by `gate:schema` and `gate:contract-version`.
+- **P23 (one writer per carrier).** meeting-api is the only writer of `data.transcription_language`, and
+  identity the only writer of the person's default. The bot holds its running setting in memory and
+  writes nothing back. The contract is registered in `architecture.calm.json`. Enforced by
+  `gate:dataflow`.
+- **No duplication of the rule.** The levels are resolved in one place, `request_bot`, which every spawn
+  path reaches. No client, flow or tool resolves defaults itself: the terminal and the email flow send
+  nothing when no override is chosen. Ungated: reviewed. The flow test
+  `test_the_invited_bot_is_spawned_with_the_link_alone` pins that the invitation path sends no language.
+- **P14, P18 (config validated at boot, fail loud).** The deployment default is validated when
+  meeting-api starts, and a refused value stops the boot naming the fix. A live change that reaches no
+  bot is a `409` that changes nothing, and is never stored as if it had been applied (P21). The bot
+  refuses a malformed `reconfigure` and logs why. Covered by `test_a_refused_deployment_default_stops_the_boot`
+  and `test_a_bot_that_is_not_listening_is_a_409_and_nothing_is_stored`.
+- **P2, P6 (front doors).** The terminal reaches meeting-api only through the gateway. meeting-api reads
+  the person's default only through identity's existing internal bot-context door, and a workspace role
+  only through identity's internal memberships door. Enforced by `gate:isolation` and `gate:domain-doors`.
+
+**Security.**
+
+- **Who may change a running bot's language.** The meeting's owner, and an owner or contributor of the
+  workspace the meeting is bound to. meeting-api checks this on every request. The caller's identity and
+  workspace memberships arrive signed by the gateway, and the caller's role is read from identity at the
+  moment of the request. A reader is refused with `403`. Somebody who is neither owner nor member gets
+  `404`, the same answer as for a meeting that does not exist, so the route does not reveal other
+  people's meetings. When the role cannot be confirmed, the answer is `503`, never a guess. Deny tests:
+  `test_a_workspace_reader_is_refused_and_nothing_is_sent`, `test_somebody_outside_the_meeting_cannot_see_it`,
+  `test_an_unconfirmable_role_is_a_503_never_a_guess`. In the terminal, a reader gets no control
+  (`meetingLanguage.test.tsx`), but the server check is what enforces it.
+- **The key's scope.** The route is a `bot`-scope row in the meetings route table, checked at the gateway
+  and again by meeting-api (`route_scopes`).
+- **The person's default** is written only through the person's own key on `PUT /user/transcription`. It
+  crosses to meeting-api only on the internal bot-context door, which needs the internal secret.
+- **Values are closed.** Every level accepts only codes matching `^[a-z]{2,3}$`, at most 16, so nothing
+  free-form reaches the bot's invocation, its command channel or the transcription request.

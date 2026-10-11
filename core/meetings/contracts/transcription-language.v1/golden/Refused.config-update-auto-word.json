@@ -1,0 +1,1 @@
+{ "shape": "ConfigUpdate", "value": { "language": "auto" }, "reason": "a live change says auto with nulls, not the word" }

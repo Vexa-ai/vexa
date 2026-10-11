@@ -146,7 +146,30 @@ def test_update_bot_config_path_and_payload(client, gateway, auth):
     assert r.status_code == 200
     req = gateway.requests[-1]
     assert (req.method, req.url.path) == ("PUT", "/bots/teams/9361792952021/config")
-    assert gateway.last_json() == {"language": "es"}
+    # The body replaces the running setting, so the cleared half is sent as null.
+    assert gateway.last_json() == {"language": "es", "allowed_languages": None}
+
+
+def test_update_bot_config_carries_an_allowed_list_and_auto(client, gateway, auth):
+    """The chat agent's live language switch: a restricted list, then back to auto."""
+    path = "/bot-config?platform=google_meet&native_meeting_id=abc-defg-hij"
+    assert client.put(path, headers=auth, json={"allowed_languages": ["de", "en"]}).status_code == 200
+    assert gateway.last_json() == {"language": None, "allowed_languages": ["de", "en"]}
+    assert client.put(path, headers=auth, json={}).status_code == 200
+    assert gateway.last_json() == {"language": None, "allowed_languages": None}
+
+
+def test_request_meeting_bot_forwards_language_and_allowed_list(client, gateway, auth):
+    """The agent's spawn path: a per-meeting language reaches POST /bots; none is invented."""
+    client.post("/request-meeting-bot", headers=auth,
+                json={"native_meeting_id": "abc-defg-hij", "platform": "google_meet",
+                      "language": "de", "allowed_languages": ["de", "en"]})
+    body = gateway.last_json()
+    assert body["language"] == "de" and body["allowed_languages"] == ["de", "en"]
+    client.post("/request-meeting-bot", headers=auth,
+                json={"native_meeting_id": "abc-defg-hij", "platform": "google_meet"})
+    body = gateway.last_json()
+    assert "language" not in body and "allowed_languages" not in body
 
 
 def test_stop_bot_path(client, gateway, auth):

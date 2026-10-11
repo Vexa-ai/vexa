@@ -39,6 +39,7 @@ from ..service_authority import (
 )
 from .auth_session import auth_session_config
 from .invocation import build_invocation, build_workload_spec, mint_meeting_token
+from . import transcription_language as tlang
 from .ports import (
     AuthSessionBusy,
     DuplicateMeeting,
@@ -414,6 +415,7 @@ async def request_bot(
     meeting_url: Optional[str] = None,
     teams_base_host: Optional[str] = None,
     language: Optional[str] = None,
+    allowed_languages: Optional[list] = None,
     task: Optional[str] = None,
     transcription_tier: str = "realtime",
     recording_enabled: bool = False,
@@ -463,6 +465,10 @@ async def request_bot(
     means no cap was provided, so no pre-check.
     """
     authority = authority or AllowAllServiceAuthority()
+    # 0. The meeting tier of the transcription language (transcription-language.v1), checked before
+    #    anything else: a refused value raises ``LanguageRefused`` (the router's 422) with no lookup,
+    #    row or workload behind it.
+    meeting_language = tlang.spawn_tier(language, allowed_languages)
     # 1. URL.
     constructed_url = meeting_url or construct_meeting_url(
         platform, native_meeting_id, teams_base_host=teams_base_host
@@ -497,6 +503,17 @@ async def request_bot(
     # without identity being consulted about it at all — the answer could not change anything.
     if not bot_name:
         bot_name = _bot_name_from_context(bot_context)
+    # THE LANGUAGE THE BOT TRANSCRIBES IN — fourth reader of the same hop. Whole-setting precedence:
+    # this request, then this person's default, then the deployment's, then auto. Every spawn path
+    # reaches here (POST /bots from the API, the terminal, the MCP and an invite-by-email flow; the
+    # calendar sweep calls this function directly), so none of them carries its own copy of the rule.
+    try:
+        user_language = tlang.user_tier(bot_context)
+    except tlang.LanguageRefused as e:
+        user_language = None
+        log_event("bot_spawn_user_language_unreadable", audience="system", level="warning",
+                  span="bots.create", user_id=user_id, fields={"reason": str(e)})
+    transcription_language = tlang.resolve(meeting_language, user_language, tlang.deployment_tier())
     transcription_provider: Optional[str] = "none" if not transcribe_enabled else None
     if configured.get("url"):
         transcription_service_url = configured["url"]
@@ -691,6 +708,7 @@ async def request_bot(
                 )
                 raise MaxBotsExceeded(user_id, max_concurrent)
         reopen_patch: dict[str, Any] = {
+            "transcription_language": transcription_language,
             "transcribe_enabled": transcribe_enabled,
             "recording_enabled": recording_enabled,
             "transcription_provider": transcription_provider,
@@ -707,6 +725,9 @@ async def request_bot(
             meeting_data["constructed_meeting_url"] = constructed_url
         meeting_data["transcribe_enabled"] = transcribe_enabled
         meeting_data["recording_enabled"] = recording_enabled
+        # The setting the bot runs with, and which tier chose it. meeting-api is its one writer:
+        # here, and on every accepted live change (lifecycle/reconfigure_router.py).
+        meeting_data["transcription_language"] = transcription_language
         if transcription_provider is not None:
             meeting_data["transcription_provider"] = transcription_provider
         meeting_data["service_authority"] = authority_record
@@ -804,7 +825,8 @@ async def request_bot(
         token=token,
         native_meeting_id=native_meeting_id,
         connection_id=connection_id,
-        language=language,
+        language=transcription_language["language"],
+        allowed_languages=transcription_language["allowed_languages"],
         task=task,
         transcription_tier=transcription_tier,
         redis_url=redis_url,

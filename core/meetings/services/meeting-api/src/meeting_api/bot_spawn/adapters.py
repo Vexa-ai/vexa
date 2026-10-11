@@ -120,6 +120,26 @@ class SqlAlchemyMeetingRepo:
             )
             return [_row_to_dict(m) for m in (await db.execute(stmt)).scalars().all()]
 
+    async def find_active_rows_bound(self, platform, native_meeting_id, workspace_ids) -> list:
+        from sqlalchemy import select
+
+        from ..sessions.models import Meeting
+
+        if not workspace_ids:
+            return []
+        async with self._session_factory() as db:
+            stmt = (
+                select(Meeting)
+                .where(
+                    Meeting.platform == platform,
+                    Meeting.platform_specific_id == native_meeting_id,
+                    Meeting.status.notin_(("completed", "failed")),
+                    Meeting.data["workspace_id"].astext.in_(list(workspace_ids)),
+                )
+                .order_by(Meeting.created_at.desc(), Meeting.id.desc())
+            )
+            return [_row_to_dict(m) for m in (await db.execute(stmt)).scalars().all()]
+
     async def find_active_by_userdata(self, userdata_s3_path) -> Optional[dict]:
         from sqlalchemy import select
 

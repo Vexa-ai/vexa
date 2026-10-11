@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import os
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import httpx
 import mcp.types as mcp_types
@@ -107,7 +107,23 @@ class RequestMeetingBot(BaseModel):
             "  so a bare room name is rejected (422); the id is derived from the URL"
         ),
     )
-    language: Optional[str] = Field(None, description="Optional language code for transcription (e.g., 'en', 'es'). If not specified, auto-detected")
+    language: Optional[str] = Field(
+        None,
+        description=(
+            "Optional transcription language code (e.g. 'de', 'en'): every window is transcribed in "
+            "it. 'auto' detects freely, overriding the person's and the deployment's default. Omit "
+            "to use the person's default, then the deployment's, then auto-detection. With "
+            "allowed_languages, it must be one of them and is the fallback."
+        ),
+    )
+    allowed_languages: Optional[List[str]] = Field(
+        None,
+        description=(
+            "Optional list of language codes detection is restricted to (e.g. ['de', 'en']) — for "
+            "meetings that switch between a few languages. A window detected outside the list is "
+            "transcribed again in `language`, or in the first entry."
+        ),
+    )
     bot_name: Optional[str] = Field(None, description="Optional custom name for the bot in the meeting")
     workspace_id: Optional[str] = Field(
         None,
@@ -138,7 +154,18 @@ class RequestMeetingBot(BaseModel):
 
 
 class UpdateBotConfig(BaseModel):
-    language: str = Field(..., description="New language code for transcription (e.g., 'en', 'es')")
+    """The new transcription language of a running bot. It REPLACES the current setting: a field
+    left out is cleared, so both null means auto-detection."""
+    language: Optional[str] = Field(
+        None,
+        description="Language code every window is transcribed in (e.g. 'de', 'en'); null with no "
+                    "allowed_languages = auto-detect.",
+    )
+    allowed_languages: Optional[List[str]] = Field(
+        None,
+        description="Language codes detection is restricted to (e.g. ['de', 'en']); `language`, if "
+                    "set, must be one of them and is the fallback.",
+    )
 
 
 class AnnotateMeeting(BaseModel):
@@ -662,7 +689,10 @@ def create_app(
         api_key: str = Depends(get_api_key),
     ) -> Dict[str, Any]:
         """
-        Update the configuration of an active bot (e.g., changing the transcription language).
+        Change the transcription language of a running bot, from its next few seconds of speech.
+        The body replaces the current setting (both fields null = auto-detect). Allowed for the
+        meeting's owner and for an owner or contributor of its workspace; 409 means the bot is not
+        in the meeting yet — retry once it is.
         Identify the meeting with `platform` + `native_meeting_id` — the exact field names
         request_meeting_bot, list_meetings and parse_meeting_link hand back.
         """
