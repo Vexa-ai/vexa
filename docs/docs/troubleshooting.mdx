@@ -154,7 +154,7 @@ of audio.
 - Read the bot's `[COVERAGE]` line (written every minute and when the bot leaves):
   `captured=…s submitted=…s transcribed=…s (…% of captured) no_speech=…s short=…s dropped=…s`.
   `transcribed` close to `captured` means nothing was lost. `no_speech` is silence or audio the STT
-  returned nothing for. `short` is final fragments under a second that were not sent (see
+  returned nothing for. `short` is whole turns under a second that were not sent (see
   `BOT_SPEAKER_MIN_FINAL_AUDIO_SEC`). Any `dropped` seconds also appear as an `[AUDIO-DROPPED]` line
   naming the reason.
 - `[TranscriptionClient] timeout (attempt n/4)` lines mean requests are outliving

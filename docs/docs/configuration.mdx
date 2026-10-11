@@ -28,7 +28,7 @@ are public.
 | `BOT_SPEAKER_CONFIRM_THRESHOLD` | `2` | Consecutive matching STT results required to confirm a segment. `1` lowers latency but reduces LocalAgreement protection against corrections. |
 | `BOT_SPEAKER_MAX_BUFFER_SEC` | `30` | Maximum buffered Google Meet audio before a forced submission. |
 | `BOT_SPEAKER_IDLE_TIMEOUT_SEC` | `15` | Flush/reset timeout after a speaker stops producing audio. |
-| `BOT_SPEAKER_MIN_FINAL_AUDIO_SEC` | `1` | A final speaker window (turn close, idle, input gap) shorter than this is not sent to STT: sub-second fragments come back as phrases like "Thank you." that the hallucination filter discards. Skipped seconds are counted as `short` in the bot's `[COVERAGE]` line. |
+| `BOT_SPEAKER_MIN_FINAL_AUDIO_SEC` | `1` | A speaker turn whose whole audio is shorter than this is not sent to STT as a final window (the sub-second tail of a longer turn always is): sub-second fragments come back as phrases like "Thank you." that the hallucination filter discards. Skipped seconds are counted as `short` in the bot's `[COVERAGE]` line. |
 | `BOT_STT_TIMEOUT_SEC` | `90` | Per-request STT timeout for meeting bots, in seconds (minimum `20`). A remote STT can take 15–30 s for a few seconds of audio; a shorter timeout aborts requests that would have answered. Audio is never dropped while a request is in flight. See [Troubleshooting](/troubleshooting#transcript-covers-only-part-of-the-meeting). |
 
 The STT service is the **GPU workload, deployed separately** from this stack — see

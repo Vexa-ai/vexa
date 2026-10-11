@@ -401,7 +401,7 @@
       "key": "BOT_SPEAKER_MIN_FINAL_AUDIO_SEC",
       "class": "defaulted",
       "default": "(unset — bot default 1)",
-      "description": "final speaker windows shorter than this many seconds are not sent to STT (they only return filtered phrases) and are counted as short in the bot's coverage line; forwarded to spawned bots",
+      "description": "speaker turns whose whole audio is shorter than this many seconds are not sent to STT (they only return filtered phrases) and are counted as short in the bot's coverage line; forwarded to spawned bots",
       "targets": [
         "compose",
         "helm",
