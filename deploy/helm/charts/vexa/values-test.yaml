@@ -1,8 +1,15 @@
 # Smoke overlay for a single-node cluster (local k3s). Locally-built images imported into the node's
 # containerd, so never pull; everything single-replica; PDBs off (a PDB minAvailable:1 on a single
-# replica blocks drains); gateway + MinIO via NodePort; dummy secrets.
+# replica blocks drains); gateway via NodePort; dummy secrets; recordings in the TEST-ONLY S3 fixture
+# (deploy/helm/tests/s3-fixture.yaml), which must be running in the namespace first:
 #
-#   helm install vexa deploy/helm/charts/vexa -n vexa --create-namespace -f values-test.yaml
+#   kubectl create namespace vexa
+#   kubectl -n vexa create secret generic s3-fixture-credentials \
+#     --from-literal=AWS_ACCESS_KEY_ID="$(openssl rand -hex 10)" \
+#     --from-literal=AWS_SECRET_ACCESS_KEY="$(openssl rand -hex 20)"
+#   kubectl -n vexa apply -f deploy/helm/tests/s3-fixture.yaml
+#   kubectl -n vexa wait --for=condition=complete job/s3-fixture-bucket --timeout=180s
+#   helm install vexa deploy/helm/charts/vexa -n vexa -f values-test.yaml
 #
 # Proves the control plane stands up + /health is green. Does NOT exercise live bot/agent spawn
 # (needs the bot image present on the node + RWX workspace storage — see README).
@@ -48,12 +55,13 @@ redis:
   persistence:
     size: 1Gi
 
-minio:
-  service:
-    type: NodePort
-    nodePort: 30900
-  persistence:
-    size: 2Gi
+# The chart runs no object store: this points meeting-api at the test fixture, whose Secret the
+# caller creates (above). Nothing here is a shipped default.
+storage:
+  s3:
+    endpoint: "http://s3-fixture:7070"
+    bucket: "vexa-recordings"
+    existingSecret: "s3-fixture-credentials"
 
 ingress:
   enabled: false

@@ -36,6 +36,11 @@ check('ja: "ご視聴ありがとうございました" filtered', isHallucinati
 check('ja: "次の動画でお会いしましょう" filtered', isHallucination("次の動画でお会いしましょう") === true);
 check('tr: "Abone olmayı unutmayın" filtered', isHallucination("Abone olmayı unutmayın") === true);
 check('tr: case/punctuation-insensitive ("abone olmayı unutmayın.")', isHallucination("abone olmayı unutmayın.") === true);
+// Russian stock outros a silent Zoom track produced under forced `ru` (exact, case/punctuation-insensitive).
+check('ru: "Спасибо за субтитры!" filtered', isHallucination("Спасибо за субтитры!") === true);
+check('ru: "Спасибо за просмотр." filtered', isHallucination("Спасибо за просмотр.") === true);
+check("real Russian speech that merely contains the words is kept",
+  isHallucination("Спасибо за просмотр документа, давай перейдём к следующему пункту") === false);
 check("real Spanish speech still kept (no over-filter)",
   isHallucination("empecemos con el bounded context de facturacion") === false);
 

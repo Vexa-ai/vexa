@@ -1,7 +1,7 @@
 [project]
 name = "vexa-compose-stack-test"
 version = "0.12.0"
-description = "P5 — gate:compose: the autonomous stack-readiness proof. Brings up the REAL v0.12 compose stack and proves it is ready to run the vexa bot (health · auth surface · transcript dataflow · recording→minio · control-plane fixtures), with the real bot-spawn proof gated behind COMPOSE_BOT=1."
+description = "P5 — gate:compose: the autonomous stack-readiness proof. Brings up the REAL v0.12 compose stack and proves it is ready to run the vexa bot (health · auth surface · transcript dataflow · recording→object storage · control-plane fixtures), with the real bot-spawn proof gated behind COMPOSE_BOT=1."
 requires-python = ">=3.11"
 # Stdlib-first on purpose (urllib for HTTP, a hand-rolled RFC6455 client for /ws) so the harness
 # needs the fewest moving parts; `redis` is the one real-protocol client we lean on (XADD the golden

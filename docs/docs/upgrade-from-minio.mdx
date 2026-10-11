@@ -1,0 +1,212 @@
+---
+title: "Where your recordings live now"
+description: "Find recordings from an older MinIO install and copy them into Lite or Compose storage with the opt-in migration tool."
+---
+
+Lite and Compose now store new recordings in **versitygw**, in a new volume. If you upgraded
+from MinIO, your old recordings stay in the old MinIO volume and **do not play back until copied**
+to the new storage: the API answers HTTP 500 until they are copied. This release never writes
+the old volume itself and does not copy or delete your old recordings. However, if Compose's
+`.env` still has `MINIO_ENDPOINT=minio:9000` and the old MinIO container is running, meeting-api
+keeps writing **new recordings to the old MinIO volume**. Change `.env` before starting, as
+shown below. Use the opt-in script to copy the old recordings.
+
+## Find your recordings
+
+Default volume names (Compose project `vexa-v012`):
+
+| Install | Old recordings, kept in MinIO's format | New recordings, stored as plain files |
+|---|---|---|
+| Lite | `vexa-lite-miniodata` | `vexa-lite-storagedata`, under `data/vexa/` |
+| Compose | `vexa-v012_minio-data` | `vexa-v012_storage-data`, under `data/vexa/` |
+
+Fresh installs use only the new storage. For upgraded Compose installs, change the endpoint in
+`.env` as shown below: until then, an endpoint still pointing to a running MinIO continues to
+use it. If that endpoint no longer answers, the storage readiness check prevents meeting-api
+from starting. Lite's normal startup does not inspect the old MinIO volume.
+
+versitygw speaks S3 and keeps object metadata in extended attributes. Back up its volume with
+an attribute-preserving copy (`rsync -aX`, `cp -a`). MinIO's volume is not a directory of plain
+S3 objects: copying its files directly into versitygw is not a migration.
+
+## The storage warning at start-up
+
+Compose prints this line in `make up` and `make dev` after the configured recording store
+passes readiness, whenever its host or port differs from the bundled storage:
+
+```text
+[storage-init] WARNING: recordings go to <endpoint> (bucket '<bucket>'), not the bundled storage at <storage_endpoint>. Expected if that is your own S3; if this install was upgraded from MinIO, see https://docs.vexa.ai/upgrade-from-minio
+```
+
+If the configured store does not answer, `make up` and `make dev` stop and print storage-init's
+`STOP:` line instead.
+
+Lite prints this line at the end of `up` (also part of `make lite`) whenever `.env` has a
+non-empty `S3_ENDPOINT`:
+
+```text
+WARNING: recordings go to <endpoint> (S3_ENDPOINT in <env_file>), not the bundled storage (<storage_container>). Expected if that is your own S3; if this install was upgraded from MinIO, see https://docs.vexa.ai/upgrade-from-minio
+```
+
+The warning repeats on every start while that configuration remains; it does not block startup
+or migrate recordings. If it names your own S3, there is nothing to do. If it names
+`http://minio:9000` in Compose or an old MinIO address, your `.env` still points at the old MinIO
+and new recordings are going there. Change `.env` as shown below and restart.
+
+## Copy the old recordings
+
+The standalone tool is `deploy/storage/migrate-from-minio.sh`, invoked by `make migrate-storage`
+in either deployment directory. It uses the Python and boto3 in the deployment's app image.
+You need:
+
+- The old MinIO volume and credentials, plus free disk space for a second copy.
+- The old MinIO container, running or stopped, or a compatible MinIO server image already on
+  the machine. Keep that image: the script never pulls one.
+- The new release's Lite or meeting-api image available locally (normal installation obtains it).
+
+The script reads objects through the old MinIO, uploads them to versitygw, reads each upload
+back, and compares its SHA-256 hash and size. It never deletes source or target objects or the
+old volume. A manifest makes the copy resumable; `migration-from-minio/summary.json` in the new
+volume is its receipt.
+
+Reruns copy source additions and changes when the target still matches the previous copy. They
+preserve target edits and deletions, and report conflicts in `changed_on_both_sides`,
+`changed_in_target_after_copy`, `deleted_in_target_after_copy`, and `deleted_at_source_after_copy`.
+`VERIFIED` means every source key was verified or explicitly reported, with no verification
+failures; it can include conflicts. Review the report and play old recordings before retiring MinIO.
+
+### Lite
+
+From the repository root, after checking out the new release, clear `S3_ENDPOINT` in `.env`
+if it points at the old MinIO (`S3_ENDPOINT=`). Then start and copy:
+
+```bash
+make lite
+make -C deploy/lite migrate-storage
+```
+
+With `S3_ENDPOINT` empty or absent, `make lite` starts `vexa-lite-storage` and the app on the
+new storage. The copy reads through `vexa-lite-minio` if it is running. Otherwise it starts a temporary MinIO on the old volume
+using the stopped container's image, then removes the temporary container after the copy.
+You can run the copy before switching the app, too; repeat it after switching to capture any
+recordings the old app wrote between the first copy and the switch.
+
+For non-default source settings, pass `LEGACY_MINIO_CONTAINER`, `LEGACY_MINIO_VOLUME`,
+`LEGACY_MINIO_ACCESS_KEY`, `LEGACY_MINIO_SECRET_KEY`, or `LEGACY_MINIO_BUCKET` on the make command.
+Target credentials and bucket use `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`, and `MINIO_BUCKET`;
+use the same overrides as your Lite startup.
+
+### Compose
+
+From the repository root, after checking out the new release, update the old endpoint before
+starting. These edits work with both BSD and GNU `sed`; the original `.env` is kept for rollback:
+
+```bash
+cd deploy/compose
+cp -p .env .env.before-storage-switch
+sed -i.bak 's/^MINIO_ENDPOINT=minio:9000[[:space:]]*$/MINIO_ENDPOINT=storage:9000/' .env
+sed -i.bak 's|^BOT_S3_ENDPOINT=http://minio:9000[[:space:]]*$|BOT_S3_ENDPOINT=http://storage:9000|' .env
+grep -E '^(MINIO_ENDPOINT|S3_ENDPOINT|BOT_S3_ENDPOINT)=' .env
+make up
+make migrate-storage
+```
+
+Confirm `MINIO_ENDPOINT=storage:9000`. If the old value is quoted, includes a URL scheme or has
+an inline comment, edit that line to this value manually. `S3_ENDPOINT`, when nonempty, takes
+precedence: clear it to use `MINIO_ENDPOINT`, or keep it if you intend to use your own S3 store.
+The bot edit applies only to the in-stack MinIO endpoint; keep an external bot store as configured.
+Then run `make up`. With the bundled storage it prints no storage line. A `[storage-init] WARNING:`
+line naming `http://minio:9000` means the stack is still using the old MinIO; a `[storage-init] STOP:`
+line means the configured store did not answer and meeting-api was not started.
+`docker compose -p vexa-v012 logs storage-init` shows the whole check, which ends in
+`Ready: endpoint http://storage:9000` for the default stack.
+
+Compose leaves the old MinIO container running as an orphan on `make up`; the copy reads through
+it. The new storage publishes `127.0.0.1:18900`, so it can run alongside MinIO's port `9000`.
+`storage-init` checks the configured recording endpoint on bring-up: it ensures the bucket exists,
+then writes, reads, compares and deletes a probe under `.vexa-storage-init/`. Any failure stops
+meeting-api from starting and names the endpoint, bucket and failed step. The same check applies
+to your own S3 endpoint; its credentials need these permissions.
+
+If authenticated bots use a different bucket, also copy it:
+
+```bash
+make migrate-storage MIGRATE_BUCKET=<bot-bucket>
+```
+
+`MIGRATE_BUCKET` sets both bucket defaults; `LEGACY_MINIO_BUCKET` can override the source.
+With `BOT_S3_ENDPOINT=http://storage:9000`, storage-init provisions the configured bot account
+and prefix policy. For custom Compose project names, pass `PROJECT=<name>` on every make command.
+Source credentials default to `.env`'s `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY`; override them with
+`LEGACY_MINIO_ACCESS_KEY` / `LEGACY_MINIO_SECRET_KEY` if the old store used different credentials.
+
+If you copied before switching endpoints, repeat each copy after switching to catch late writes.
+Check an old recording in your client or request its media:
+
+```bash
+curl -f -H "X-API-Key: $API_KEY" -o /dev/null -w '%{http_code}\n' \
+  "$API_BASE/recordings/<id>/media/<media_file_id>/raw"
+```
+
+### If the old MinIO container or image is gone
+
+If its container is gone, name a compatible image already listed by `docker image ls`:
+
+```bash
+make -C deploy/lite migrate-storage LEGACY_MINIO_IMAGE=<image>
+make -C deploy/compose migrate-storage LEGACY_MINIO_IMAGE=<image>
+```
+
+Run only the command for your deployment. Without a local image, the tool stops and explains
+what is missing; it does not copy or delete recordings. You need a MinIO server build you trust
+that can open the old volume. If no old volume exists, the tool reports nothing to migrate.
+
+## Stop the stack or retire MinIO
+
+**Never remove the old MinIO container or its volume until the script's last run ends with
+VERIFIED.** The script also copies recordings written to the old MinIO after the upgrade;
+switch endpoints and rerun it to capture those recordings before retiring MinIO.
+
+Compose `make down` removes containers (including orphans) and keeps data volumes. Lite
+`make -C deploy/lite down` keeps data volumes too. Compose's separate
+`make -C deploy/compose destroy DESTROY=yes` deletes its **current stack's** database, recordings,
+Redis data and agent workspace volumes. It does not delete the old MinIO volume, which is no
+longer declared in this release's Compose file.
+
+After checking the copy report and playback, you can remove the old containers explicitly:
+
+```bash
+# Lite
+docker rm -f vexa-lite-minio
+
+# Compose, default project
+docker rm -f vexa-v012-minio-1 vexa-v012-minio-init-1
+```
+
+Keep the old volume and a usable MinIO image for as long as you need rollback. When satisfied
+that you no longer need them, delete only the old volume for your deployment:
+
+```bash
+# Lite
+docker volume rm vexa-lite-miniodata
+
+# Compose, default project
+docker volume rm vexa-v012_minio-data
+```
+
+These explicit Docker commands are the deletion step. Changes or deletions made in the new
+storage never propagate back to the old volume.
+
+## Roll back to the previous release
+
+Keep the old MinIO volume, its compatible image, and your previous configuration. Stop new
+recording activity and stop the current app with this release's volume-preserving `make down`
+(Compose) or `make -C deploy/lite down` (Lite). Check out the previous release and start it
+against the old volume, using the locally retained MinIO image. For Compose restore the previous
+`.env` (including `MINIO_ENDPOINT=minio:9000` and any old bot endpoint), then use
+`docker compose -p vexa-v012 up -d --no-build --pull never`. For Lite restore the previous app
+image tag and run `make lite`.
+
+The previous release can read the recordings still in the old volume. Recordings created after
+the switch exist only in the new volume unless you copy them back separately. Keep the new
+storage volume too. Do not use an older release's destructive shutdown command during rollback.

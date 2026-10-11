@@ -5,7 +5,8 @@ description: "The whole control plane in one container — process runtime backe
 
 Vexa Lite packs every control-plane service into a single image (`vexaai/vexa-lite`) and runs
 bots and agent workers as **in-container processes** (`RUNTIME_BACKEND=process`) — no Docker
-socket, no per-bot containers. Two sidecars carry state: Postgres and MinIO. Lite is one of the
+socket, no per-bot containers. Two sidecars carry state: Postgres and the recordings storage
+(versitygw, an S3 server that keeps each recording as a plain file in a volume). Lite is one of the
 three supported deploy paths (lite · [compose](/deployment) · [Kubernetes](/deployment-kubernetes))
 and ships from the same images and contracts.
 
@@ -18,9 +19,10 @@ make lite
 
 `make lite` (= `make -C deploy/lite all`) writes a minimal `.env` if you don't have one, pulls
 `vexaai/vexa-lite:$IMAGE_TAG` (default `v012`; a locally built `vexa-lite:dev` wins when present),
-starts the `vexa-lite-postgres` and `vexa-lite-minio` sidecars on the `vexa-lite-net` Docker
+starts the `vexa-lite-postgres` and `vexa-lite-storage` sidecars on the `vexa-lite-net` Docker
 network, boots the app container, waits on the gateway health endpoint, and probes the three
-front doors:
+front doors, giving each up to two minutes to answer (on first boot the terminal restarts once the
+self-host key is minted):
 
 | Front door | Port |
 |---|---|
@@ -86,17 +88,29 @@ State lives in the sidecars' named volumes and survives app-container replacemen
 | Data | Where |
 |---|---|
 | Users, meetings, transcripts (Postgres) | volume `vexa-lite-pgdata` |
-| Recordings + agent workspaces (MinIO) | volume `vexa-lite-miniodata` |
+| Recordings (the `vexa-lite-storage` sidecar, versitygw) | volume `vexa-lite-storagedata` — one plain file per object under `data/vexa/` |
 | Valkey state and `/workspaces` scratch | **in-container, ephemeral** — mount `/var/lib/redis` yourself if you need it kept |
+
+The storage sidecar runs `versity/versitygw` (Apache-2.0), pinned by tag and digest in
+`deploy/lite/Makefile`. meeting-api reaches it over S3 at `vexa-lite-storage:9000` with the
+`MINIO_*` settings the Makefile passes (the names are unchanged; the credentials default to
+`vexa-access-key` / `vexa-secret-key` and can be overridden on the `make` command line). Its port is
+not published. Back the volume up with a copy that keeps extended attributes (`rsync -aX`,
+`cp -a`); see [Recordings → Backups](/how-to/recordings#backups).
 
 Upgrading is re-running with a newer image: set `IMAGE_TAG` in `.env` (pin a specific release so
 deploys are reproducible), then `make lite` again — it replaces the app container and leaves the
 sidecars and their volumes untouched. Schema converges in-process on service startup; there is no
 separate migration step.
 
+**Coming from a Lite that ran MinIO**: old recordings stay in `vexa-lite-miniodata` and do not
+play back until copied. `make lite` starts on the new storage without inspecting the old volume.
+Run `make -C deploy/lite migrate-storage` to copy and verify objects by SHA-256; it never deletes
+the old volume. [Where your recordings live now](/upgrade-from-minio) covers the copy and rollback.
+
 ```bash
-make -C deploy/lite down                                # containers go, volumes stay
-docker volume rm vexa-lite-pgdata vexa-lite-miniodata   # full wipe
+make -C deploy/lite down                                  # containers go, volumes stay
+docker volume rm vexa-lite-pgdata vexa-lite-storagedata   # full wipe
 ```
 
 ## Is this install actually working? — `make probe SURFACE=lite`
@@ -118,8 +132,10 @@ gateway's `/health` (30s interval, 120s start period).
 - **Agent API is not gateway-fronted.** Clients reach `:8100` directly; gateway-fronting is
   roadmap.
 - **No MCP service.** The compose stack's `/mcp` surface does not exist in Lite.
-- **Sidecar ports are unpublished.** Postgres and the MinIO console are reachable only on the
-  Docker network, not from the host.
+- **Sidecar ports are unpublished.** Postgres and the storage sidecar's S3 port are reachable only
+  on the Docker network, not from the host.
+- **No authenticated bots.** Lite does not package the provisioning flow or a userdata store
+  ([Authenticated bots](/authenticated-bots#availability-by-deployment-surface)).
 
 Outgrown it? Switch to [compose](/deployment) — same images, same contracts. Per-feature honest
 status: [Roadmap → Status](/roadmap/status).

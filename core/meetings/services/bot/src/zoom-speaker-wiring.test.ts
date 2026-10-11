@@ -133,17 +133,25 @@ const pipeline: BotPipeline = {
 const captured: Array<{ name: string; t: number; isEnd?: boolean }> = [];
 const observations: Array<{ source: string; observation: Record<string, unknown> }> = [];
 const telemetry = {
+  captureFrame: () => {},
   captureHint: (h: { name: string; t: number; isEnd?: boolean }) => captured.push(h),
   captureObservation: (o: { source: string; observation: Record<string, unknown> }) => observations.push(o),
 } as unknown as TelemetrySink;
 const presence: number[] = [];
 const activity = {
+  observeRemoteEnergy: () => {},
   ready: () => { /* not driven */ },
   unavailable: () => { /* not driven */ },
   observeStreamPresence: (n: number) => presence.push(n),
 } as unknown as RemoteAudioActivityTap;
 const inv = { platform: 'zoom', botName: 'Vexa Bot', connectionId: 'test' } as unknown as Invocation;
 
+const realDateNow = Date.now;
+const realPerformance = globalThis.performance;
+const epoch = realDateNow();
+let elapsedMs = 0;
+Date.now = () => epoch + elapsedMs;
+Object.defineProperty(globalThis, 'performance', { configurable: true, value: { now: () => elapsedMs } });
 const t0 = Date.now();
 const stop = await startCaptureBridge(page, inv, pipeline, telemetry, undefined, activity);
 
@@ -201,7 +209,55 @@ setSpeaker('Dave'); tick(1);    // back before confirm
 check('boundary: a single-poll flicker (Eve) never crosses', !spoken.slice(before).some((s) => s.name === 'Eve'),
   JSON.stringify(spoken.slice(before)));
 
+// A processor missed callbacks for 30 minutes; the next frame must describe NOW,
+// not 256 ms after the track was attached. Exercise both tracks at the real seam.
+const frameTimes: number[] = [];
+const originalFeed = pipeline.feedAudio;
+pipeline.feedAudio = (_ch, _name, _pcm, ts) => { frameTimes.push(ts); };
+const caps = (g.__vexaTrackCaps as Map<string, any>);
+const input = new Float32Array(4096).fill(0.1);
+for (const delay of [256, 1800000, 1800256]) {
+  elapsedMs = delay;
+  for (const cap of caps.values()) cap.proc.onaudioprocess({ inputBuffer: { getChannelData: () => input } });
+  const latest = frameTimes.slice(-2);
+  check('delayed callbacks preserve current frame start on both tracks at ' + delay,
+    latest.length === 2 && latest.every(ts => Math.abs(ts - (epoch + delay - 256)) < 1), JSON.stringify(latest));
+}
+check('missed callbacks are reported as capture-clock-gap observations',
+  observations.filter(o => o.observation.type === 'capture-clock-gap').length === 2);
+// Wall-clock corrections must not move the audio clock backwards.
+Date.now = () => epoch - 60000;
+elapsedMs = 1800512;
+for (const cap of caps.values()) cap.proc.onaudioprocess({ inputBuffer: { getChannelData: () => input } });
+check('wall-clock adjustment does not jump the capture timeline',
+  frameTimes.slice(-2).every(ts => ts === epoch + elapsedMs - 256));
+// Replay the committed long-call schedule through the real per-track callbacks.
+const fixture = JSON.parse(readFileSync(new URL('./fixtures/zoom-clock.json', import.meta.url), 'utf8'));
+Date.now = () => epoch + elapsedMs;
+for (let n = 3; n <= fixture.tracks; n++) (g.__vexaCapturedRemoteAudioStreams as any[]).push(remoteStream('stream-' + n));
+tick(1);
+const fixturePcm = new Float32Array(fixture.frameSamples).fill(fixture.pcmAmplitude);
+const frameMs = fixture.frameSamples / fixture.sampleRate * 1000;
+const callbackEveryMs = frameMs / fixture.deliveredAudioRatio;
+const replayStart = elapsedMs;
+let maxErrorMs = 0;
+let replayedFrames = 0;
+pipeline.feedAudio = (_ch, _name, _pcm, ts) => {
+  maxErrorMs = Math.max(maxErrorMs, Math.abs(ts - (epoch + elapsedMs - frameMs)));
+  replayedFrames++;
+};
+for (let t = callbackEveryMs; t <= fixture.wallDurationMs; t += callbackEveryMs) {
+  elapsedMs = replayStart + t;
+  for (const cap of caps.values()) cap.proc.onaudioprocess({ inputBuffer: { getChannelData: () => fixturePcm } });
+}
+check('one-hour eight-track 0.43x fixture has no cumulative clock drift',
+  caps.size === fixture.tracks && replayedFrames > 40000 && maxErrorMs < 1,
+  JSON.stringify({ tracks: caps.size, replayedFrames, maxErrorMs }));
+console.log(JSON.stringify({ receipt: 'zoom-clock-fixture', tracks: caps.size, wallDurationMs: fixture.wallDurationMs, replayedFrames, maxErrorMs }));
+pipeline.feedAudio = originalFeed;
 await stop();
+Date.now = realDateNow;
+Object.defineProperty(globalThis, 'performance', { configurable: true, value: realPerformance });
 (g as any).setInterval = realSetInterval;
 (g as any).clearInterval = realClearInterval;
 

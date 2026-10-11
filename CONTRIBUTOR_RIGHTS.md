@@ -2,14 +2,20 @@
 
 Vexa accepts contributions under Apache-2.0 while preserving a reviewable record that the person
 or organization supplying each contribution had the right to do so. The normal individual path is
-one declaration in the pull request plus the standard Developer Certificate of Origin (DCO) on
-each commit. An individual CLA is not required on that path.
+one declaration, made once on your first pull request, plus the standard Developer Certificate of
+Origin (DCO) on each commit. An individual CLA is not required on that path.
 
 This policy applies to pull requests opened after the activation pull request recorded in
 `.github/contribution-rights.json`. Earlier merged work is not rewritten or retroactively declared
 non-compliant. Concrete ownership concerns in earlier work are reviewed individually.
 
-## Choose one path when opening a pull request
+## Choose one path on your first pull request
+
+You declare once per contributor, not per pull request. Once you have selected **Independent**
+yourself on a merged pull request in this repository, later pull requests need no selection; the
+gate finds that pull request automatically. Corporate standing comes only from an authorization on
+file (see *Administration*). If a later contribution falls under a different path, for example work
+an employer now owns, select that path on that pull request; it decides that pull request.
 
 ### Independent
 
@@ -59,10 +65,19 @@ whether the independent or corporate path applies, without asking you to draft l
 
 ## What the automated gate proves
 
-The `contribution-rights` check requires exactly one declaration. The corporate path passes only
-after a designated verifier records an opaque private-register receipt against the exact pull
-request number and current head SHA. A later push invalidates the verification. A verifier can
-also place an independent declaration into rights review when concrete facts contradict it.
+The `contribution-rights` check passes without a selection when the author has an earlier merged
+pull request whose independent box they ticked themselves: every edit to that body must be the
+author's, so a box a maintainer ticked does not count. It also passes for an author in the registry
+described under *Administration*. A corporate receipt on an earlier pull request never carries
+forward. The check names the pull request or registry entry it relied on. A standing covers only its
+owner's commits: if a commit in the pull request has a different GitHub author with no standing of
+their own, the check names that author and requires a selection. Otherwise it requires exactly one
+selection, as on a first contribution.
+
+A per-PR corporate selection passes only after a designated verifier records an opaque
+private-register receipt against the exact pull request number and current head SHA. A later push
+invalidates that verification. A verifier can also place any pull request, including one from a
+registered contributor, into rights review when concrete facts contradict the declaration.
 
 The executed agreement and personal information remain in the private register. Public checks show
 only an opaque receipt identifier and verification state. A corporate authorization is evidence of
@@ -93,10 +108,11 @@ maintainer will never manufacture another person's sign-off.
 ## Agent-assisted contributions
 
 An agent may explain this policy, inspect commits, use `--signoff` after the human has explicitly
-chosen a rights path, and prepare a repair. It must not choose the legal path, certify rights,
-change global Git identity, add another person's sign-off, or rewrite/push history without the
-human's explicit approval. The desired experience is one conscious legal choice and no Git
-ceremony.
+chosen a rights path, and prepare a repair. It may carry forward a path the human has already
+declared, including selecting it in a pull request. It must not make the first choice, certify
+rights, change global Git identity, add another person's sign-off, or rewrite/push history without
+the human's explicit approval. The desired experience is one conscious legal choice per contributor
+and no Git ceremony.
 
 ### Making sign-off automatic (agent runbook)
 
@@ -173,8 +189,26 @@ Head: <40-character commit SHA>
 ```
 
 `Decision: review` opens a persistent hold. `Decision: cleared` closes that hold for an independent
-contribution at the named head. Only identities listed in `.github/contribution-rights.json` are
+contribution at the named head. Only `verifiers` listed in `.github/contribution-rights.json` are
 accepted, and all decisions are re-evaluated in the merge queue.
+
+Independent contributors are never added by hand: their standing comes from their own earlier
+merged declaration. The `contributors` map in `.github/contribution-rights.json`, keyed by GitHub
+login, exists only for the maintainer's standing declaration and for corporate authorizations that
+cover a contributor's future contributions, which are rare and verified against the private
+register first:
+
+```json
+"octocat": {
+  "path": "corporate",
+  "declared": "YYYY-MM-DD",
+  "source": "<register reference>",
+  "receipt": "VCR-YYYY-NNNN"
+}
+```
+
+The gate reads the registry from the default branch, so a pull request cannot register its own
+author.
 
 Before activating the gate, repository administrators must:
 

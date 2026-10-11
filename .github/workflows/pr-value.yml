@@ -188,3 +188,4 @@ jobs:
         run: |
           docker ps -a
           docker logs vexa-lite --tail 300 || true
+          docker logs vexa-lite-storage --tail 100 || true

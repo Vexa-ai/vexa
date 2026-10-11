@@ -134,16 +134,16 @@ def test_mock_normal_full_lifecycle(stack):
         time.sleep(2)
     assert segs >= 1, f"normal published no transcript segments (redis hash AND postgres empty for meeting {m['id']})"
 
-    # recording leg: the mock uploaded a chunk → it landed in minio under this user.
+    # recording leg: the mock uploaded a chunk → it landed in object storage under this user.
     deadline = time.time() + 20
     keys = []
     while time.time() < deadline:
-        keys = stack.minio_ls(f"recordings/{user_id}/")
+        keys = stack.object_keys(f"recordings/{user_id}/")
         if keys:
             break
         time.sleep(2)
-    assert keys, f"normal recording chunk not in minio for user {user_id}"
-    print(f"\n[mock/normal] completed · {segs} transcript seg(s) · recording in minio ({len(keys)} obj)")
+    assert keys, f"normal recording chunk not in storage for user {user_id}"
+    print(f"\n[mock/normal] completed · {segs} transcript seg(s) · recording in storage ({len(keys)} obj)")
 
 
 # ── silence-left-alone: automatic_leave → invocation → real monitor → lifecycle terminal ─────────
