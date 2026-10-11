@@ -14,7 +14,9 @@ newcomer_reads_history: off
 global_admin_only: on
 open_web: on
 prep_and_invite_mail: on
+minutes_mail: on
 attendee_domains:
+mail_domains:
 data_statement:
 ---
 
@@ -313,6 +315,23 @@ it carries no content and claims nothing was built for anybody.
 
 **The price of turning it off.** Vexa becomes something that only ever speaks after the fact.
 
+<a id="minutes_mail"></a>
+### `minutes_mail` — the minutes mail after a meeting
+
+**Default `on`.**
+
+**The effect.** After a meeting, the organiser is mailed the minutes, and the members of a group the
+meeting is bound to get the same mail. Off, nobody is mailed the minutes; the report is still
+written and still readable in the product. Each person's own `mail_minutes` setting sits under this
+rule: deny wins either way.
+
+**Adoption.** The minutes mail is how most people first read what Vexa made. **Security.** It sends
+what was said in a meeting to the people who own it, nobody else. **Adversarial.** Nothing beyond
+what the meeting's own organiser could already read.
+
+**The price of turning it off.** The product stops speaking after a meeting unless someone opens it.
+The attendee follow-up is a separate rule ([`report_to_participants`](#report_to_participants)).
+
 <a id="attendee_domains"></a>
 ### `attendee_domains` — which domains count as inside
 
@@ -326,6 +345,29 @@ default.
 **The effect.** It is the line between inside and outside for delivery. Together with
 `external_participants` it decides who receives a report: inside always, outside only when externals
 are on.
+
+<a id="mail_domains"></a>
+### `mail_domains` — which domains the mailbox takes invitations and mail from
+
+**Default: empty, which means `VEXA_FLOWS_MAIL_DOMAINS` if the operator set it, else the mailbox's
+own domain.** Comma-separated, with or without a leading `@`. Each entry must be a domain: `*`, a
+bare top-level domain, an address or a URL is ignored and named as a problem, never read as
+"everyone".
+
+**The effect.** The inbound allow-list. Mail and invitations from a person who already has an
+account are always handled. From anybody else, they are handled only when the sender (for an
+invitation, its organiser) is inside one of these domains; everything else is recorded and
+quarantined: no account, no agent turn, no reply. *"Only accept invites from bank.com"* is
+`mail_domains: bank.com`.
+
+**Adoption.** A colleague at a sister company can invite the mailbox without an account first.
+**Security.** This is the door on the public internet; every domain added is a population that can
+make this deployment create accounts and spend model turns, rate-limited. **Adversarial.** A sender
+address is not proof of identity, so a domain here is trusted as far as its mail is.
+
+**What stays deployment configuration.** The mailbox address, its password or app registration, the
+SMTP relay and the rate limits are the operator's (`VEXA_MAIL_*`, `VEXA_GRAPH_*`,
+`VEXA_FLOWS_MAIL_RATE_*`); they are never written here and never shown to an agent.
 
 <a id="data_statement"></a>
 ### `data_statement` — this deployment's own sentence about where the words live
@@ -384,8 +426,11 @@ product does not yet check.
 | `attendee_domains` | the line between inside and outside, for the same fan-out |
 | `data_statement` | the provenance line above every minutes mail |
 | `prep_and_invite_mail` | the prep note before a meeting (`emit_prep`) |
+| `minutes_mail` | the minutes mail after a meeting (`email_minutes`, and its group fan-out) |
+| `mail_domains` | the inbound mailbox: which senders and invitation organisers it acts for |
 | `transcript_retention_days`, `recording_retention_days` | the derived disclosure |
-| `bot_joins_on_invite`, `bot_joins_mixed_meetings` | **declared, not yet enforced** — admission would have to read this file before dispatching a bot |
+| `bot_joins_on_invite` | the inbound mailbox: off, an invitation is recorded and nothing is created, accepted or joined |
+| `bot_joins_mixed_meetings` | **declared, not yet enforced** — admission would have to read this file before dispatching a bot |
 | `organizer_confirms_join` | **declared, not yet enforced** — and it is `off`, which is today's behaviour, so the line records the gate rather than claiming it |
 | `agent_writes_pages` | **declared, not yet enforced** — containment already bounds where a turn writes; this switch does not yet gate whether it writes |
 | `newcomer_reads_history` | **declared, not yet enforced** — and it is `off`, which is the safe direction to be unenforced in |

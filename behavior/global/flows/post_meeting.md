@@ -16,7 +16,7 @@ Runs when **`meeting.completed`** happens, in 4 steps. This page is written from
 | **trigger** | `meeting.completed` |
 | **version** | 4 — a step list changes by adding a version, never by editing one in place |
 | **mails** | `(composed in the step, from no template)`, `attendee-head` |
-| **rules it honours** | [`report_to_participants`](../POLICIES.md#report_to_participants), [`external_participants`](../POLICIES.md#external_participants), [`attendee_domains`](../POLICIES.md#attendee_domains), [`data_statement`](../POLICIES.md#data_statement) |
+| **rules it honours** | [`report_to_participants`](../POLICIES.md#report_to_participants), [`external_participants`](../POLICIES.md#external_participants), [`minutes_mail`](../POLICIES.md#minutes_mail), [`attendee_domains`](../POLICIES.md#attendee_domains), [`data_statement`](../POLICIES.md#data_statement) |
 
 ## The steps, in order
 
@@ -37,7 +37,7 @@ Send the committed note VERBATIM in the body + the feedback ask + ONE link into 
 - **effect:** one notification
 - **domains:** without **agent** it runs anyway, with less to work with · without **meetings** the reaction ends there, saying so
 - **mails:** `(composed in the step, from no template)`
-- **rules it honours:** [`report_to_participants`](../POLICIES.md#report_to_participants), [`data_statement`](../POLICIES.md#data_statement)
+- **rules it honours:** [`report_to_participants`](../POLICIES.md#report_to_participants), [`minutes_mail`](../POLICIES.md#minutes_mail), [`data_statement`](../POLICIES.md#data_statement)
 
 ### 3. `email_attendees`
 
@@ -298,6 +298,12 @@ def email_minutes(ctx: StepCtx):
     layer out.
 
     Reads: refs.{uid,organizer,title,meeting_id} · Effect: one notification."""
+    # THE DEPLOYMENT'S RULE BEFORE THE PERSON'S PREFERENCE, the shape `emit_prep` already has:
+    # `minutes_mail` in `_global/POLICIES.md` is the admin account's answer for everybody (and
+    # covers the group fan-out below, which only this step reaches); `mail_minutes` is one
+    # person's answer for themselves. Deny wins either way; an unreadable `_global` is `on`.
+    if policies.param(ctx, "minutes_mail", str(ctx.refs.get("uid") or "")) is False:
+        return Done({"skipped": "minutes_mail is off for this deployment"})
     if not setting(ctx.refs["uid"], "mail_minutes"):
         return Done({"skipped": "mail_minutes is off for this person"})
     # THE RECIPIENT. `refs["organizer"]` only exists for a calendar-invited meeting — an AD

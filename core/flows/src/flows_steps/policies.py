@@ -35,6 +35,7 @@ sentence are untouched by this module.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Optional
 
 from .common import ws_file
@@ -92,9 +93,14 @@ DEFAULTS: dict = {
     "open_web": True,
     # prep mail and the invite line to organizers — the second measured lever
     "prep_and_invite_mail": True,
+    # the minutes mail to the organiser (and to a bound group's members) after a meeting
+    "minutes_mail": True,
     # which domains count as inside. EMPTY IS NOT "EVERYONE": it means the organiser's own domain,
     # exactly as the inbound allow-list unset means the mailbox's own.
     "attendee_domains": (),
+    # which domains the MAILBOX takes invitations and mail from (the inbound allow-list). EMPTY IS
+    # NOT "EVERYONE": it falls back to `VEXA_FLOWS_MAIL_DOMAINS`, then to the mailbox's own domain.
+    "mail_domains": (),
     # this deployment's own sentence about where the words live; empty = the derived one
     "data_statement": "",
 }
@@ -166,6 +172,28 @@ def _as_domains(value: str) -> tuple:
     return tuple(d.strip().lower().lstrip("@") for d in value.split(",") if d.strip())
 
 
+#: WHAT A DOMAIN IN AN ALLOW-LIST LOOKS LIKE: labels of letters, digits and hyphens, at least one dot.
+#: `*`, `com`, `@`, an address and a URL are not domains, and an allow-list is the one value where
+#: reading a typo generously widens a door on the public internet.
+_DOMAIN_RE = re.compile(r"^(?=.{3,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")
+
+#: The allow-lists whose every entry must be a domain. `attendee_domains` is read as it always was;
+#: `mail_domains` is new and guards an INBOUND door, so it is checked on the way in.
+_STRICT_DOMAIN_KEYS = frozenset({"mail_domains"})
+
+
+def _as_strict_domains(value: str, key: str, problems: list) -> tuple:
+    """Every entry that is a domain; every other entry DROPPED and named. Dropping narrows: an
+    allow-list left empty by it falls back to the env, then to the mailbox's own domain."""
+    out = []
+    for d in _as_domains(value):
+        if _DOMAIN_RE.match(d):
+            out.append(d)
+        else:
+            problems.append(f"{key}: {d!r} is not a domain — ignored")
+    return tuple(out)
+
+
 def resolve(raw: Optional[str]) -> dict:
     """The effective rules: this file's defaults, overlaid with `profile:`, overlaid with whatever
     the front matter answers explicitly. Returns every key in `DEFAULTS`, plus `profile` and
@@ -193,6 +221,8 @@ def resolve(raw: Optional[str]) -> dict:
             out[key] = _as_bool(raw_value, bool(base), key, problems)
         elif key.endswith("_days"):
             out[key] = _as_days(raw_value, base, key, problems)
+        elif isinstance(default, tuple) and key in _STRICT_DOMAIN_KEYS:
+            out[key] = _as_strict_domains(raw_value, key, problems)
         elif isinstance(default, tuple):
             out[key] = _as_domains(raw_value)
         else:
@@ -221,6 +251,21 @@ def read(uid: str) -> dict:
     for problem in out.get("problems") or ():
         logger.warning("policies: %s", problem)
     return out
+
+
+#: WHO READS `_global` WHEN NO PERSON IS INVOLVED. The inbound mailbox decides whether to act on a
+#: message before it knows whose message it is, so there is no uid to read the company layer as.
+#: `_global` is readable by every subject (agent-api `_read_target`), so the subject named here
+#: grants nothing; it exists because the internal-tier door names somebody on every request, and a
+#: log line that says `flows` is more honest than one that borrows a person's id.
+COMPANY_READER = "flows"
+
+
+def read_company() -> dict:
+    """The rules as the COMPANY holds them, for a decision taken before any person is known — the
+    inbound mailbox's allow-list and its invite switch. Same file, same fail-soft defaults as
+    `read`; only the reader differs."""
+    return read(COMPANY_READER)
 
 
 def param(ctx, key: str, uid: str = ""):

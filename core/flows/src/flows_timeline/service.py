@@ -245,6 +245,54 @@ def friction_for_subject(db, *, subject: str = "", since: float = 0.0, limit: in
     return out
 
 
+#: The statuses a report can be in, and the one value that means "either".
+FRICTION_STATUSES = ("open", "fixed")
+
+
+def _scrubbed(value):
+    """Every string inside `value` with credential-shaped runs masked — dicts and lists walked."""
+    from flows_timeline.redaction import redact
+    if isinstance(value, str):
+        return redact(value)
+    if isinstance(value, dict):
+        return {k: _scrubbed(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_scrubbed(v) for v in value]
+    return value
+
+
+def friction_sink(db, *, since: float = 0.0, kind: str = "", subject: str = "", status: str = "",
+                  limit: int = 50, scan: int = SCAN_ROWS,
+                  identity: Optional[Callable] = None) -> Optional[list[dict]]:
+    """THE WHOLE SINK, for the deployment's admin account (founder ruling 2026-10-11: *"friction
+    reading from sink"*). Every subject's reports unless `subject` narrows it to one person (a uid
+    or an address — `None` when nobody answers to it, as `friction_for_subject`); `kind` matches
+    the reporter's own word case-insensitively; `status` is `open`, `fixed` or empty for both.
+
+    SCRUBBED ON THE WAY OUT. The sink stores a report as it was sent (F-D26), and a report filed
+    over MCP never passed the worker's scrubber — so a pasted token would otherwise reach whoever
+    reads everybody's reports. Every free-text field, `context` included, goes through the same
+    shape-based scrubber agent-api uses (`redaction.py`, byte-identical to `git_redaction.py`).
+
+    This function authorizes nothing; the route in front of it is operator-gated."""
+    rows = friction_for_subject(db, subject=subject, since=since, limit=scan, scan=scan,
+                                identity=identity)
+    if rows is None:
+        return None
+    want_kind = (kind or "").strip().lower()
+    want_status = (status or "").strip().lower()
+    out = []
+    for r in rows:
+        if want_status and r.get("status") != want_status:
+            continue
+        if want_kind and str((r.get("context") or {}).get("kind") or "").strip().lower() != want_kind:
+            continue
+        out.append(_scrubbed(r))
+        if len(out) >= max(1, int(limit)):
+            break
+    return out
+
+
 # ── the meetings half ────────────────────────────────────────────────────────────────────────────
 #
 # The meetings table lives in another service's database, so it is reached the way every step

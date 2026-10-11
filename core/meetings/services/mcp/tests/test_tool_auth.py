@@ -228,7 +228,9 @@ def test_every_flows_tool_declares_the_credential_its_own_door_actually_reads():
     doc = json.loads((pathlib.Path(__file__).resolve().parents[5]
                       / "core/flows/mcp.tools.v1.json").read_text())
     assert doc["tools"], "the flows manifest declares no tools"
-    admin_gated = {"flows_submit", "flow_lifecycle"}
+    # + the admin account's two reads of the whole deployment (founder ruling 2026-10-11): the
+    # friction sink and the mail settings, both on operator-gated `auth` routes.
+    admin_gated = {"flows_submit", "flow_lifecycle", "friction_list", "mail_settings"}
     assert {t["name"]: t.get("auth") for t in doc["tools"]} == {
         t["name"]: ("admin" if t["name"] in admin_gated else "subject") for t in doc["tools"]}
 

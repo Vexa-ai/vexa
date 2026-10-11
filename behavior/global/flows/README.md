@@ -19,7 +19,7 @@ Everything this deployment does on its own, one page each. A flow is a trigger a
 | [`live_meeting`](live_meeting.md) | `meeting.started` | 1 | — |
 | [`meeting_prep`](meeting_prep.md) | `meeting.upcoming` | 1 | `prep_and_invite_mail` |
 | [`onboarding`](onboarding.md) | `onboarding.completed` | 1 | — |
-| [`post_meeting`](post_meeting.md) | `meeting.completed` | 4 | `report_to_participants`, `external_participants`, `attendee_domains`, `data_statement` |
+| [`post_meeting`](post_meeting.md) | `meeting.completed` | 4 | `report_to_participants`, `external_participants`, `minutes_mail`, `attendee_domains`, `data_statement` |
 | [`workspace_invite`](workspace_invite.md) | `workspace.invited` | 1 | — |
 
 The rules are answered in [`POLICIES.md`](../POLICIES.md), one directory up.
