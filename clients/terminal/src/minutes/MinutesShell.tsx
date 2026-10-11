@@ -47,7 +47,7 @@ import { artifactsFromTokens, artifactViewEffect, boundMeetingView, isRetiredNot
 import { fetchMeetingNote, fetchMeetingNotePath } from "./meetingNote";
 import { deskPanelPages } from "./deskPanel";
 import { reportOpened } from "./deskTouch";
-import { applyProposal, emptyLine, linkProposal, proposals, type ConnectionRow, type Proposal } from "./proposals";
+import { applyProposal, CALENDAR, proposals, type ConnectionRow, type Proposal, type Read, type UpcomingEvent } from "./proposals";
 import { CONNECTIONS_OPEN } from "./connectionEvents";
 import { listProposals, resolveProposal, type DeskProposal } from "../surfaces/proposalsApi";
 import { ProposalChips } from "./ProposalChips";
@@ -81,6 +81,16 @@ const fireKick = (session: string, prompt: string, say?: string, scaffoldId?: st
     // re-derive mounts and opening from the session, which is the composed-from-whatever-was-there
     // problem the scaffold exists to end.
     { detail: { hidden: !say, display: say, session, prompt, scaffoldId } })), 1200);
+
+/** The suggestion row could not read what it is built from. Said ONCE per page — the row re-reads
+ *  on every focus, and a console that repeats the same line every time the tab comes back says
+ *  nothing new. The row itself shows no chips (or no prep chip) instead of a wrong one. */
+let chipFaultLogged = false;
+function logChipFault(e: unknown) {
+  if (chipFaultLogged) return;
+  chipFaultLogged = true;
+  console.warn(JSON.stringify({ event: "suggestions_unreadable", source: "terminal", detail: String((e as Error)?.message ?? e) }));
+}
 
 export function MinutesShell() {
   const layout = useService(LayoutServiceId);
@@ -219,18 +229,23 @@ export function MinutesShell() {
   // existed — `listProposals` never throws, deliberately.
   const [deskItems, setDeskItems] = useState<DeskProposal[]>([]);
   useEffect(() => { void listProposals().then(setDeskItems); }, []);
-  // THE PERSON'S OWN CONNECTIONS (founder, 2026-10-10) — the connect chip shows only when one is
-  // missing or broken, read off the broker's statuses. It used to read a DEPLOYMENT flag
-  // (`/api/config` → `google.meet`, false everywhere) and so offered "Connect Google" to someone who
-  // had connected Gmail and Calendar. `null` until the list answers, and null offers nothing.
-  // Re-read when the tab regains focus and when a consent window reports back.
-  const [connections, setConnections] = useState<ConnectionRow[] | null>(null);
+  // THE PERSON'S OWN CONNECTIONS decide the row (founder, 2026-10-11: "connect email, calendar and
+  // if connected is to check email and prepare for next meeting"). Read through the Connections
+  // front door the panel uses (`/api/connections/list` → the broker, metadata only). Three states:
+  // `null` until it answers, the rows, or `"error"` — and an error shows NO chips (never a guessed
+  // row), logged once per page. Re-read when the tab regains focus and when a consent window reports
+  // back, so a chip flips from "Connect …" to "Check my email" without a reload.
+  const [connections, setConnections] = useState<Read<ConnectionRow[]>>(null);
   useEffect(() => {
     let live = true;
     const load = () => void fetch("/api/connections/list", { cache: "no-store" })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => { if (live && d && Array.isArray(d.connections)) setConnections(d.connections as ConnectionRow[]); })
-      .catch(() => undefined);
+      .then(async (r) => {
+        const d = r.ok ? await r.json() : null;
+        if (!d || !Array.isArray(d.connections)) throw new Error(`connections list: HTTP ${r.status}`);
+        return d.connections as ConnectionRow[];
+      })
+      .then((rows) => { if (live) setConnections(rows); })
+      .catch((e) => { if (!live) return; logChipFault(e); setConnections("error"); });
     load();
     const onVis = () => { if (!document.hidden) load(); };
     document.addEventListener("visibilitychange", onVis);
@@ -238,6 +253,27 @@ export function MinutesShell() {
     if (channel) channel.onmessage = () => load();
     return () => { live = false; document.removeEventListener("visibilitychange", onVis); channel?.close(); };
   }, []);
+  // THE NEXT MEETING ON THE CONNECTED CALENDAR — only asked for when a calendar is ready, and at most
+  // once every five minutes (each read is a real, audited calendar call). The terminal projects it to
+  // title + start; the row picks the soonest titled one (`nextMeeting`). An error here only costs the
+  // prep chip — the rest of the row is still true.
+  const [events, setEvents] = useState<Read<UpcomingEvent[]>>(null);
+  const calendarReady = Array.isArray(connections) && connections.some((c) => c.provider === CALENDAR && c.status === "ready");
+  useEffect(() => {
+    if (!calendarReady) { setEvents(null); return; }
+    let live = true;
+    const load = () => void fetch("/api/connections/upcoming", { cache: "no-store" })
+      .then(async (r) => {
+        const d = r.ok ? await r.json() : null;
+        if (!d || !Array.isArray(d.events)) throw new Error(`upcoming events: HTTP ${r.status}`);
+        return d.events as UpcomingEvent[];
+      })
+      .then((ev) => { if (live) setEvents(ev); })
+      .catch((e) => { if (!live) return; logChipFault(e); setEvents("error"); });
+    load();
+    const timer = window.setInterval(() => { if (!document.hidden) load(); }, 5 * 60 * 1000);
+    return () => { live = false; window.clearInterval(timer); };
+  }, [calendarReady]);
   // The signed-in address — the ONE fact the setup chip puts in the person's mouth, so they never
   // type what we already know. Same seam the account badge reads; unknown simply drops the clause.
   const [email, setEmail] = useState<string | null>(null);
@@ -631,18 +667,15 @@ export function MinutesShell() {
    *  should not create a new chat, this chat is already new").
    *
    *  What the click does to the record is `applyProposal`, which is pure and tested; this is the
-   *  wiring only — persist it, re-lay-out if the chat just became a meeting's, say the line into the
-   *  SAME session. A meeting chip therefore REBINDS: the conversation in front takes the meeting's
-   *  ref and title, and the phase pages open beside it exactly as they do from the rail. */
+   *  wiring only — persist it, rename the chat in front if nobody named it, say the line into the
+   *  SAME session. A connect chip opens the Connections panel instead and says nothing. */
   const runProposal = async (p: Proposal) => {
     // …including inside a DRAFT: the chat in front is the draft when there is one, so a chip
     // PROMOTES it rather than minting a second row beside it. That is the founder's 2026-09-01
     // ruling ("this chat is already new") applied to F35's unwritten chat.
     const current = chatsRef.current.find((c) => c.id === sel.chatId) ?? draftRef.current ?? null;
-    const eff = applyProposal(p, current, meetings);
-    if (!eff) return;
-    // Neither of these says anything or touches a chat, so neither spends the offer.
-    if (eff.act === "paste") return;                           // ProposalChips opens the field itself
+    const eff = applyProposal(p, current);
+    // Opening Connections says nothing and touches no chat, so it does not spend the offer.
     if (eff.act === "connect") {
       window.dispatchEvent(new CustomEvent(CONNECTIONS_OPEN, { detail: { provider: eff.provider, connection_id: eff.connectionId } }));
       return;
@@ -657,32 +690,20 @@ export function MinutesShell() {
     // The offer is spent the moment it is taken. A kick is hidden AND settle-delayed, so without
     // this the row would sit there for another 1.2 seconds, live, offering to do the same thing.
     setSpent(sel.chatId);
-    if (eff.act === "filter") { toggleAll(true); return; }
     if (eff.act === "create") { addChat(eff.label, ["personal", "_global"], { kick: eff.kick, say: eff.say }); return; }
-    if (eff.act === "open") {
-      const m = meetings.find((x) => String(x.id) === eff.meetingId);
-      const chatId = m ? await openMeeting(m, { touched: true }) : null;
-      if (!chatId) return;
-      setSpent(chatId);
-      if (eff.kick) fireKick(chatId, eff.kick, eff.say);
-      return;
-    }
-    // The chat in front, mutated in place. It only needs re-opening when it CHANGED ROOM — a plain
-    // relabel must not throw away the pages panel the reader is looking at.
-    const rebound = eff.chat.meeting !== current?.meeting;
+    // The chat in front, mutated in place: touched and named, never re-roomed.
     persist((prev) => upsertChat(prev, eff.chat));
     setDraft((d) => (d && d.id === eff.chat.id ? null : d));
-    if (rebound) await openChat(eff.chat);
-    else setSel((x) => ({ ...x, label: eff.chat.label }));
+    setSel((x) => ({ ...x, label: eff.chat.label }));
     if (eff.kick) fireKick(eff.chat.id, eff.kick, eff.say);
   };
 
-  /** Up to ten chips, recomputed from the two lists already in hand, the desk's own facts, its short
-   *  list and one capability flag. Pure, so the row is decided in the render that draws it — no model
-   *  call and no effect; the one fetch this needs (`listProposals`) is a plain file read done once. */
+  /** Up to four chips, recomputed from the person's connections, their next calendar meeting, the
+   *  desk's own facts and its short list. Pure, so the row is decided in the render that draws it —
+   *  no model call and no effect. */
   const chips = useMemo(
-    () => proposals(meetings, allChats, desk, Date.now(), email, deskItems, connections),
-    [meetings, allChats, desk, email, deskItems, connections]);
+    () => proposals(connections, events, Date.now(), desk, email, deskItems),
+    [connections, events, desk, email, deskItems]);
   /** THE PERSON SAYING NO. It closes the row on the server and drops it here, and — unlike a pick —
    *  it does NOT spend the offer: the rest of the list is still worth having. */
   const dismissProposal = (p: Proposal) => {
@@ -1600,9 +1621,7 @@ export function MinutesShell() {
         )}
         <div style={{ flex: 1, minHeight: 0 }}>
           <Chat params={{ session }} emptyExtra={<ProposalChips items={shownChips}
-            line={shownChips.length ? emptyLine(shownChips) : null}
-            onPick={(p) => void runProposal(p)} onDismiss={dismissProposal}
-            onSendLink={(url) => void runProposal(linkProposal(url))} />} />
+            onPick={(p) => void runProposal(p)} onDismiss={dismissProposal} />} />
         </div>
       </main>
       </div>

@@ -4,7 +4,8 @@
  *
  *  A click FIRES (founder ruling, consistency with the emailed links): the turn goes, with nothing
  *  left in the composer to press Enter on. And it fires IN THIS CHAT — a chip never opens a second
- *  conversation (founder, 2026-09-01: "this chat is already new"). The row is passed empty once a
+ *  conversation (founder, 2026-09-01: "this chat is already new"). Every chip is a native <button>,
+ *  so Tab reaches it and Enter or Space presses it; focus shows the same highlight as hover. The row is passed empty once a
  *  chip has been pressed, so the offer cannot be taken twice while its turn is still settling.
  *
  *  A CHIP WRITTEN BY AN AGENT SAYS WHERE IT CAME FROM, AND CAN BE REFUSED (Vexa-ai/vexa#1614). The
@@ -13,9 +14,7 @@
  *  human words, rendered beside the act — and a `×`, because a list you cannot say no to stops
  *  being a list and becomes a nag. Dismissing does NOT spend the row: the item leaves, the rest of
  *  the offer stays exactly where it was. */
-import { useState, type CSSProperties, type FormEvent } from "react";
-import { getJitsiHosts } from "../surfaces/jitsiHosts";
-import { parseMeetingInput } from "../surfaces/meetingId";
+import type { CSSProperties } from "react";
 import type { Proposal } from "./proposals";
 import { surface, type as ty } from "./tokens";
 
@@ -48,67 +47,17 @@ function hoverOut(el: HTMLElement) {
   el.style.background = surface.raised; el.style.color = "var(--t2)"; el.style.borderColor = "var(--line)";
 }
 
-const fieldS: CSSProperties = {
-  ...ty.chip, flex: 1, minWidth: 0, background: surface.raised, color: "var(--t1)",
-  border: "1px solid var(--line2)", borderRadius: 6, padding: "6px 10px", outline: "none",
-};
-const sendS: CSSProperties = {
-  ...ty.chip, flex: "none", background: "var(--accent)", color: "var(--on-accent)", border: "none",
-  borderRadius: 6, padding: "6px 12px", cursor: "pointer", fontWeight: 600,
-};
-const cancelS: CSSProperties = { ...chipS, borderRadius: 6, flex: "none" };
-
-/** The paste field the send chip opens. Validation is the same parser the meetings list uses. */
-function LinkField({ onSend, onCancel }: { onSend: (url: string) => void; onCancel: () => void }) {
-  const [url, setUrl] = useState("");
-  const [err, setErr] = useState<string | null>(null);
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
-    const u = url.trim();
-    if (!u) return;
-    if (u.length > 500 || !parseMeetingInput(u, await getJitsiHosts())) {
-      setErr("That isn't a Google Meet, Zoom, Teams or Jitsi link. Check it and try again.");
-      return;
-    }
-    onSend(u);
-  };
-  return (
-    <form data-link-field onSubmit={(e) => void submit(e)} style={{ marginTop: 20, maxWidth: 560 }}>
-      <div style={{ display: "flex", gap: 8 }}>
-        <input autoFocus value={url} aria-label="Meeting link" aria-invalid={!!err}
-          placeholder="Paste a Google Meet, Zoom, Teams or Jitsi link"
-          onChange={(e) => { setUrl(e.target.value); setErr(null); }}
-          onKeyDown={(e) => { if (e.key === "Escape") onCancel(); }} style={fieldS} />
-        <button type="submit" disabled={!url.trim()} style={{ ...sendS, opacity: url.trim() ? 1 : 0.5 }}>Send bot</button>
-        <button type="button" onClick={onCancel} style={cancelS}>Cancel</button>
-      </div>
-      {err && <div role="alert" style={{ ...ty.chip, color: "var(--danger)", marginTop: 6 }}>{err}</div>}
-    </form>
-  );
-}
-
 export function ProposalChips(
-  { items, onPick, onDismiss, onSendLink, line }: {
+  { items, onPick, onDismiss }: {
     items: Proposal[];
     onPick: (p: Proposal) => void;
     onDismiss?: (p: Proposal) => void;
-    /** A validated link from the send chip's paste field. */
-    onSendLink?: (url: string) => void;
-    /** The one line shown when nothing but the send act is on offer (`emptyLine`). */
-    line?: string | null;
   },
 ) {
-  const [pasting, setPasting] = useState(false);
-  if (!items.length && !line) return null;
-  const say = line ? <p data-empty-line style={{ margin: "20px 0 0", color: "var(--t2)" }}>{line}</p> : null;
-  if (pasting && onSendLink) {
-    return <>{say}<LinkField onSend={(u) => { setPasting(false); onSendLink(u); }} onCancel={() => setPasting(false)} /></>;
-  }
-  const pick = (p: Proposal) => (p.kind === "link" && !p.kick && onSendLink ? setPasting(true) : onPick(p));
+  if (!items.length) return null;
   return (
-    <>{say}
     <div data-proposals role="group" aria-label="Suggestions"
-      style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: line ? 12 : 20 }}>
+      style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 20 }}>
       {items.map((p) => {
         const body = (
           <>
@@ -119,7 +68,7 @@ export function ProposalChips(
         if (p.itemId && onDismiss) {
           return (
             <span key={p.id} style={pairS}>
-              <button data-proposal={p.kind} type="button" style={inPairS} onClick={() => pick(p)}>
+              <button data-proposal={p.kind} type="button" style={inPairS} onClick={() => onPick(p)}>
                 {body}
               </button>
               <button data-dismiss={p.itemId} type="button" style={dismissS}
@@ -129,14 +78,15 @@ export function ProposalChips(
           );
         }
         return (
-          <button key={p.id} data-proposal={p.kind} type="button" style={chipS} title={p.label} onClick={() => pick(p)}
+          <button key={p.id} data-proposal={p.kind} type="button" style={chipS} title={p.label} onClick={() => onPick(p)}
             onMouseEnter={(e) => hoverIn(e.currentTarget)}
-            onMouseLeave={(e) => hoverOut(e.currentTarget)}>
+            onMouseLeave={(e) => hoverOut(e.currentTarget)}
+            onFocus={(e) => hoverIn(e.currentTarget)}
+            onBlur={(e) => hoverOut(e.currentTarget)}>
             {body}
           </button>
         );
       })}
     </div>
-    </>
   );
 }

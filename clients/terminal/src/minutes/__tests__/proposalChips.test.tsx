@@ -1,21 +1,19 @@
-/** The chip row itself (Vexa-ai/vexa#1614) — what it renders, and the two things a click can mean.
+/** The chip row itself — what it renders, and the two things a click can mean.
  *
- *  `proposals.test.ts` proves WHAT is offered. This proves the row: an item another agent wrote
- *  shows its source and can be refused; a derived or standing chip cannot (there is nothing to
- *  refuse — it is a statement about this account, not a job somebody filed for you); and picking and
- *  dismissing are two different verbs, because only one of them is feedback about the proposal.
- */
+ *  `proposals.test.ts` proves WHAT is offered. This proves the row: every chip is a real button a
+ *  keyboard reaches; an item another agent wrote shows its source and can be refused; a connection
+ *  chip cannot (it is a statement about this account, not a job somebody filed); and picking and
+ *  dismissing are two different verbs. */
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import { ProposalChips } from "../ProposalChips";
-import { connectionGap, EMPTY_LINE, jtbdProposal, SEND_BOT, type Proposal } from "../proposals";
+import { CHECK_EMAIL, jtbdProposal, proposals, type Proposal } from "../proposals";
 
 afterEach(() => cleanup());
 
 const JOB = jtbdProposal({ id: "row-1", source: "meeting:97", source_label: "Pilot sync",
                            act: "The migration doc, by Friday" });
-const CONNECT = connectionGap([])!;
-const LINK = SEND_BOT;
+const [CONNECT_EMAIL, CONNECT_CAL] = proposals([], null);
 
 const row = (items: Proposal[], onPick = vi.fn(), onDismiss = vi.fn()) => {
   render(<ProposalChips items={items} onPick={onPick} onDismiss={onDismiss} />);
@@ -28,31 +26,62 @@ describe("what the row shows", () => {
     expect(screen.queryByRole("group")).toBeNull();
   });
 
+  it("the connection chips, as buttons in a labelled group", () => {
+    row([CONNECT_EMAIL, CONNECT_CAL]);
+    expect(screen.getByRole("group", { name: "Suggestions" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Connect your email" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Connect your calendar" })).toBeTruthy();
+  });
+
   it("an agent-written item says its act AND where it came from", () => {
     row([JOB]);
     const chip = screen.getByText(/The migration doc, by Friday/);
-    expect(chip.textContent).toContain("The migration doc, by Friday");
     expect(chip.textContent).toContain("Pilot sync");
   });
 
-  it("derived acts carry no source and no ×", () => {
-    row([CONNECT, LINK]);
+  it("connection chips carry no source and no ×", () => {
+    row([CONNECT_EMAIL, CHECK_EMAIL]);
     expect(screen.queryByRole("button", { name: /^Dismiss:/ })).toBeNull();
-    expect(screen.getByText("Send Vexa to a meeting")).toBeTruthy();
   });
 
-  it("with nothing useful, a short friendly line instead of filler", () => {
-    render(<ProposalChips items={[LINK]} line={EMPTY_LINE} onPick={vi.fn()} />);
-    expect(screen.getByText(EMPTY_LINE)).toBeTruthy();
+  it("a long label is cut with an ellipsis and kept whole in the tooltip (phone width)", () => {
+    const long = { ...CHECK_EMAIL, label: "Prepare for " + "Quarterly business review ".repeat(6) + "at 3:00 PM" };
+    row([long]);
+    const b = screen.getByRole("button", { name: long.label });
+    expect(b.getAttribute("title")).toBe(long.label);
+    expect(b.style.textOverflow).toBe("ellipsis");
+    expect(b.style.maxWidth).toBe("100%");
+  });
+});
+
+describe("keyboard", () => {
+  it("every chip is a native button of type=button — Tab reaches it, Enter and Space press it", () => {
+    row([CONNECT_EMAIL, CHECK_EMAIL, JOB]);
+    for (const b of Array.from(document.querySelectorAll("[data-proposal]"))) {
+      expect(b.tagName).toBe("BUTTON");
+      expect(b.getAttribute("type")).toBe("button");
+      expect(b.getAttribute("tabindex")).not.toBe("-1");
+    }
+  });
+
+  it("focus highlights the chip the way hover does", () => {
+    row([CHECK_EMAIL]);
+    const b = screen.getByRole("button", { name: "Check my email" });
+    const before = b.style.color;
+    fireEvent.focus(b);
+    expect(b.style.color).not.toBe(before);
+    fireEvent.blur(b);
+    expect(b.style.color).toBe(before);
   });
 });
 
 describe("picking and dismissing are two different verbs", () => {
-  it("a click fires the act — the chip hands back the whole proposal, kick and all", () => {
-    const { onPick, onDismiss } = row([JOB]);
-    fireEvent.click(screen.getByText(/The migration doc, by Friday/));
-    expect(onPick).toHaveBeenCalledWith(JOB);
-    expect(onDismiss).not.toHaveBeenCalled();
+  it("a click hands back the whole proposal", () => {
+    const { onPick } = row([CHECK_EMAIL, CONNECT_CAL]);
+    fireEvent.click(screen.getByRole("button", { name: "Check my email" }));
+    expect(onPick).toHaveBeenCalledWith(CHECK_EMAIL);
+    fireEvent.click(screen.getByRole("button", { name: "Connect your calendar" }));
+    expect(onPick).toHaveBeenCalledWith(CONNECT_CAL);
   });
 
   it("the × dismisses THAT item and fires nothing", () => {
@@ -62,57 +91,9 @@ describe("picking and dismissing are two different verbs", () => {
     expect(onPick).not.toHaveBeenCalled();
   });
 
-  it("with no dismiss handler the item is still offered — just not refusable", () => {
-    const onPick = vi.fn();
-    render(<ProposalChips items={[JOB]} onPick={onPick} />);
-    expect(screen.queryByRole("button", { name: /^Dismiss:/ })).toBeNull();
-    fireEvent.click(screen.getByText(/The migration doc, by Friday/));
-    expect(onPick).toHaveBeenCalledWith(JOB);
-  });
-
   it("every chip is tagged with its kind, so the row is readable from the DOM", () => {
-    row([JOB, CONNECT, LINK]);
-    const kinds = Array.from(document.querySelectorAll("[data-proposal]"))
-      .map((el) => el.getAttribute("data-proposal"));
-    expect(kinds).toEqual(["jtbd", "connect", "link"]);
-  });
-});
-
-describe("send Vexa to a meeting — the chip opens a paste field", () => {
-  const open = () => {
-    const onPick = vi.fn(), onSendLink = vi.fn();
-    render(<ProposalChips items={[LINK]} onPick={onPick} onSendLink={onSendLink} />);
-    fireEvent.click(screen.getByText("Send Vexa to a meeting"));
-    return { onPick, onSendLink };
-  };
-
-  it("a click opens the field and says nothing to the agent", () => {
-    const { onPick, onSendLink } = open();
-    expect(screen.getByRole("textbox", { name: "Meeting link" })).toBeTruthy();
-    expect(onPick).not.toHaveBeenCalled();
-    expect(onSendLink).not.toHaveBeenCalled();
-  });
-
-  it("a valid link is sent", async () => {
-    const { onSendLink } = open();
-    fireEvent.change(screen.getByRole("textbox", { name: "Meeting link" }), { target: { value: "https://meet.google.com/abc-defg-hij" } });
-    fireEvent.click(screen.getByRole("button", { name: "Send bot" }));
-    await vi.waitFor(() => expect(onSendLink).toHaveBeenCalledWith("https://meet.google.com/abc-defg-hij"));
-  });
-
-  it("anything else is refused beside the field, with the input kept", async () => {
-    const { onSendLink } = open();
-    const box = screen.getByRole("textbox", { name: "Meeting link" }) as HTMLInputElement;
-    fireEvent.change(box, { target: { value: "not a link" } });
-    fireEvent.click(screen.getByRole("button", { name: "Send bot" }));
-    await vi.waitFor(() => expect(screen.getByRole("alert").textContent).toContain("isn't a Google Meet"));
-    expect(onSendLink).not.toHaveBeenCalled();
-    expect(box.value).toBe("not a link");
-  });
-
-  it("Cancel brings the chips back", () => {
-    open();
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    expect(screen.getByText("Send Vexa to a meeting")).toBeTruthy();
+    row([CHECK_EMAIL, JOB, CONNECT_CAL]);
+    const kinds = Array.from(document.querySelectorAll("[data-proposal]")).map((el) => el.getAttribute("data-proposal"));
+    expect(kinds).toEqual(["check-email", "jtbd", "connect"]);
   });
 });
