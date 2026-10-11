@@ -16,6 +16,7 @@ The guides split by the plane they touch — **meetings**, **agents**, or both c
 | `email-triage.mdx` | agents — triage an inbox |
 | `live-copilot.mdx` | both — follow a live meeting (raw transcript stream + an agent turn over it) |
 | `chat-workspace.mdx` | agents — drive the workspace chat surface |
+| `paste-a-meeting-link.mdx` | both — paste a meeting link into a chat to send the bot |
 | `chat-controls.mdx` | agents — manage chats: activity, rename, order, history, delete |
 | `workspace-files.mdx` | agents — read/write workspace files |
 | `onboarding-research.mdx` | agents — onboarding research and Extend |
