@@ -4,7 +4,8 @@
  *
  *  A click FIRES (founder ruling, consistency with the emailed links): the turn goes, with nothing
  *  left in the composer to press Enter on. And it fires IN THIS CHAT — a chip never opens a second
- *  conversation (founder, 2026-09-01: "this chat is already new"). The row is passed empty once a
+ *  conversation (founder, 2026-09-01: "this chat is already new"). Every chip is a native <button>,
+ *  so Tab reaches it and Enter or Space presses it; focus shows the same highlight as hover. The row is passed empty once a
  *  chip has been pressed, so the offer cannot be taken twice while its turn is still settling.
  *
  *  A CHIP WRITTEN BY AN AGENT SAYS WHERE IT CAME FROM, AND CAN BE REFUSED (Vexa-ai/vexa#1614). The
@@ -77,9 +78,11 @@ export function ProposalChips(
           );
         }
         return (
-          <button key={p.id} data-proposal={p.kind} type="button" style={chipS} onClick={() => onPick(p)}
+          <button key={p.id} data-proposal={p.kind} type="button" style={chipS} title={p.label} onClick={() => onPick(p)}
             onMouseEnter={(e) => hoverIn(e.currentTarget)}
-            onMouseLeave={(e) => hoverOut(e.currentTarget)}>
+            onMouseLeave={(e) => hoverOut(e.currentTarget)}
+            onFocus={(e) => hoverIn(e.currentTarget)}
+            onBlur={(e) => hoverOut(e.currentTarget)}>
             {body}
           </button>
         );

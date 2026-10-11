@@ -77,3 +77,34 @@ test('an actionable broker refusal reaches the person; anything else is one gene
  vi.mocked(brokerCall).mockRejectedValueOnce(new BrokerFault('unauthenticated'));
  expect((await GET(new NextRequest(origin+'/api/connections/list'))).status).toBe(401);
 });
+test('upcoming reads only a READY calendar, over a fixed 24-hour window, and returns title + start only',async()=>{
+ const cal='c'.repeat(32), mail='e'.repeat(32), off='d'.repeat(32);
+ vi.mocked(brokerCall).mockImplementation(async (method:string,path:string)=>{
+  if(method==='GET')return {connections:[{id:mail,provider:'google_email',status:'ready'},{id:off,provider:'google_calendar',status:'disconnected'},{id:cal,provider:'google_calendar',status:'ready'}]};
+  return {events:[
+   {summary:'Acme — pricing review',start:{dateTime:'2026-10-11T15:00:00+02:00'},description:'secret agenda',attendees:[{email:'x@acme.test'}],htmlLink:'https://calendar.google.com/x',location:'Room 1'},
+   {summary:'Gone',status:'cancelled',start:{dateTime:'2026-10-11T16:00:00+02:00'}},
+   {start:{date:'2026-10-12'}},
+  ]};
+ });
+ const before=Date.now();
+ const r=await GET(new NextRequest(origin+'/api/connections/upcoming?time_max=2099-01-01&connection='+off));
+ expect(r.status).toBe(200);
+ expect(await r.json()).toEqual({events:[{title:'Acme — pricing review',start:'2026-10-11T15:00:00+02:00'},{title:'',start:null}]});
+ const reads=vi.mocked(brokerCall).mock.calls.filter(c=>c[0]==='POST');
+ expect(reads.map(c=>c[1])).toEqual([`/api/connections/${cal}/read`]);
+ const body=reads[0][2] as {action:string;time_min:string;time_max:string};
+ expect(body.action).toBe('calendar.events');
+ expect(Date.parse(body.time_max)-Date.parse(body.time_min)).toBe(24*60*60*1000);
+ expect(Date.parse(body.time_min)).toBeGreaterThanOrEqual(before-1000);
+});
+test('upcoming with no ready calendar asks the broker for nothing but the list',async()=>{
+ vi.mocked(brokerCall).mockResolvedValue({connections:[{id:'e'.repeat(32),provider:'google_email',status:'ready'}]});
+ expect(await (await GET(new NextRequest(origin+'/api/connections/upcoming'))).json()).toEqual({events:[]});
+ expect(vi.mocked(brokerCall).mock.calls.every(c=>c[0]==='GET')).toBe(true);
+});
+test('upcoming fails loud as one generic line, never a calendar body',async()=>{
+ vi.mocked(brokerCall).mockRejectedValueOnce(new BrokerFault('transport'));
+ const r=await GET(new NextRequest(origin+'/api/connections/upcoming'));
+ expect([r.status,(await r.json()).error]).toEqual([503,'Calendar unavailable. Try again.']);
+});

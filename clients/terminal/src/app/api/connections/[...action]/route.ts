@@ -15,10 +15,42 @@ function failure(e: unknown, fallback: string) {
   return NextResponse.json({error: fallback}, {status: 503, headers});
 }
 
+/** The empty chat's "Prepare for <title> at <time>" chip needs the next meeting on the person's
+ *  connected calendar. This is the broker's own calendar read (`calendar.events`, audited there),
+ *  as the signed-in person, over a FIXED window — the next 24 hours, `UPCOMING_WINDOW_MS` in
+ *  `minutes/proposals.ts` — with no caller input at all. The answer is projected down to the title
+ *  and the start of each event: no description, attendees, location or link reaches the browser,
+ *  and nothing is stored. No ready calendar → an empty list, and the broker is not asked. */
+const UPCOMING_MS = 24 * 60 * 60 * 1000;
+const CAL_MAX = 3;
+type CalEvent = { summary?: unknown; status?: unknown; start?: { dateTime?: unknown } | null };
+async function upcoming() {
+  const rows = ((await brokerCall('GET','/api/connections'))?.connections ?? []) as {id:string;provider:string;status:string}[];
+  const calendars = rows.filter(r => r.provider==='google_calendar' && r.status==='ready' && cid.test(r.id)).slice(0, CAL_MAX);
+  const now = Date.now();
+  const window = {action:'calendar.events', time_min:new Date(now).toISOString(), time_max:new Date(now+UPCOMING_MS).toISOString(), limit:10};
+  const events: {title:string;start:string|null}[] = [];
+  for (const c of calendars) {
+    const read = await brokerCall('POST',`/api/connections/${c.id}/read`,window);
+    for (const e of ((read?.events ?? []) as CalEvent[])) {
+      if (e?.status === 'cancelled') continue;
+      events.push({title: typeof e?.summary==='string' ? e.summary.slice(0,200) : '', start: typeof e?.start?.dateTime==='string' ? e.start.dateTime : null});
+    }
+  }
+  return {events};
+}
+
 export async function GET(req: NextRequest) {
-  if (!req.nextUrl.pathname.endsWith('/connections/list')) return new NextResponse(null,{status:404});
-  try { return NextResponse.json(await brokerCall('GET','/api/connections'),{headers}); }
-  catch (e) { return failure(e, 'Connections unavailable. Check your sign-in or try again.'); }
+  const path = req.nextUrl.pathname;
+  if (path.endsWith('/connections/list')) {
+    try { return NextResponse.json(await brokerCall('GET','/api/connections'),{headers}); }
+    catch (e) { return failure(e, 'Connections unavailable. Check your sign-in or try again.'); }
+  }
+  if (path.endsWith('/connections/upcoming')) {
+    try { return NextResponse.json(await upcoming(),{headers}); }
+    catch (e) { return failure(e, 'Calendar unavailable. Try again.'); }
+  }
+  return new NextResponse(null,{status:404});
 }
 export async function POST(req: NextRequest) {
   // The origin comes from deployment configuration, never forwarded Host headers.
