@@ -48,8 +48,9 @@ describe("pagesForPhase — a real meeting is the meeting view, bound to its row
     expect(labels(pagesForPhase("prep", "abc-native", "1234", NOTE))).toEqual(["Meeting", "Personal page"]);
   });
 
-  it("nothing captured under the row → still just the personal page", () => {
-    expect(labels(pagesForPhase("live", null, "1234"))).toEqual(["Personal page"]);
+  it("a row with no native id (an imported call) still opens the meeting view", () => {
+    expect(labels(pagesForPhase("live", null, "1234"))).toEqual(["Meeting", "Personal page"]);
+    expect(labels(pagesForPhase("live", null, null))).toEqual(["Personal page"]);
   });
 });
 

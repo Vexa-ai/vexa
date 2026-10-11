@@ -218,7 +218,7 @@ export function meetingView(meetingId: string): Page {
 }
 
 /** The pages a meeting room shows: the meeting view, then the reader's own page.
- *  `native` absent = nothing captured under this row yet, so there is only the personal page.
+ *  With neither a row nor a native id there is nothing to show but the personal page.
  *
  *  `notePath` is used only by a `?mock=1` fixture (no row behind it — see `meetingPages`). A real
  *  meeting's notes are read by the view itself, from `/api/meeting/note`, so the room no longer
@@ -226,7 +226,9 @@ export function meetingView(meetingId: string): Page {
  *  meeting at all. */
 export function pagesForPhase(phase: MeetingPhase, native?: string | null, meetingId?: string | null,
                               notePath?: string | null): Page[] {
-  if (!native) return [personalPage()];
+  // A ROW IS A MEETING, native id or not (an imported call carries none): the view opens on it and
+  // says what it has. Without a row (a mock) the canned pages are keyed on the native id.
+  if (!native && !meetingId) return [personalPage()];
   return [...meetingPages(phase, meetingId, notePath, native), personalPage()];
 }
 

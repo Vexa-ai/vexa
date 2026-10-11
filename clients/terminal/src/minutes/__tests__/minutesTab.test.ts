@@ -39,9 +39,9 @@ describe("the room's own pages — the notes live in the view, never a guessed t
     }
   });
 
-  it("has nothing to show with no capture", () => {
+  it("binds the view to the row, with or without a native id", () => {
     expect(pagesForPhase("post", NATIVE, ROW, FLOW_NOTE)[0]).toMatchObject({ kind: "meeting", path: ROW });
-    expect(labels(pagesForPhase("post", null, ROW, FLOW_NOTE))).toEqual(["Personal page"]);
+    expect(labels(pagesForPhase("post", null, ROW, FLOW_NOTE))).toEqual(["Meeting", "Personal page"]);
   });
 
   it("agrees with the scaffold's own answer for the same meeting: `meeting:note` IS the view", () => {
