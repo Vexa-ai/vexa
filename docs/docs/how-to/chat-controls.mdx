@@ -73,6 +73,31 @@ To bring it back, press **Hidden N** in the list's header. The list shows only h
 The menu works from the keyboard: the first item takes focus, Arrow Up and Down move, Enter chooses,
 Escape closes it and returns focus to `⋯`.
 
+## Keyboard shortcuts
+
+These act on the chat that is open, while its row is in the list you are looking at. The menu shows
+each one beside its item.
+
+| Action | Mac | Windows and Linux | In the open `⋯` menu |
+|---|---|---|---|
+| Pin / Unpin | `⇧⌘P` | `Ctrl+Shift+P` | `P` |
+| Hide / Unhide | `⇧⌘X` | `Ctrl+Shift+X` | `H` |
+| Delete… | `⌘⌫` | `Ctrl+Backspace` | `D` |
+| New chat | `⇧⌘E` | `Ctrl+Shift+E` | |
+
+- **Delete always asks.** The shortcut opens the same `✓` confirmation as the menu; nothing is deleted
+  until you confirm.
+- **Typing is never taken.** Single letters work only inside the open menu. `⌘⌫` / `Ctrl+Backspace`
+  does nothing while you are in a text field, where it deletes text. The `Shift` shortcuts work from
+  the composer too.
+- **Only a row you can see.** If the open chat is not in the list on screen (for example it is
+  filtered out by **All**, or you are in **Hidden** and it is not hidden), the row shortcuts do
+  nothing. While the list is collapsed, none of these shortcuts work.
+- **Other browsers.** None of these is a Chrome, Safari or macOS shortcut. In Firefox, `Ctrl+Shift+P`
+  opens a private window and `Ctrl+Shift+E` opens the network panel; in Edge, `Ctrl+Shift+P` opens an
+  InPrivate window and `Ctrl+Shift+E` opens sidebar search. While the terminal has focus, these keys
+  go to the terminal.
+
 ## Reopen a chat's history
 
 Click a row to reopen the conversation. The terminal loads its turns from the server, so the history
@@ -99,7 +124,7 @@ server.
    chat").
 2. Click `✓` to delete.
 
-Escape, clicking anywhere else or moving focus away cancels it. A meeting row with no chat has no
+Escape, clicking anywhere else or moving focus to another control cancels it. A meeting row with no chat has no
 **Delete…**: deleting a meeting is done on the meeting, not in this list.
 
 **What delete does.** It is permanent and applies on every device:
@@ -218,5 +243,6 @@ Deny tests:
 | `core/agent/tests/test_identity_guard.py` | `test_an_unsigned_identity_is_refused`, `test_naming_nobody_is_401_and_there_is_no_fallback_subject`, `test_the_gateway_signed_identity_is_believed_and_wins_over_plain_headers` |
 | `core/agent/tests/test_workspace_slug_containment.py` | `test_history_never_returns_another_subjects_thread` |
 | `clients/terminal/src/minutes/__tests__/chatControls.test.tsx` | "saves a clicked title and cancels without a write"; "requires a confirmation and permits cancellation"; "a chat started now is on top even when a saved order exists"; "pinned rows lead…"; "pins, hides and unhides from the row menu, by keyboard too"; "the Hidden view lists hidden rows with Unhide" |
+| `clients/terminal/src/minutes/__tests__/railShortcuts.test.tsx` | each shortcut; "typing is never taken"; "never acts on a row the person cannot see…"; "Ctrl+Backspace only arms the confirm…"; "the armed ✓ survives a blur to nothing…" |
 | `clients/terminal/src/minutes/__tests__/railMarks.test.ts` | "deleting a meeting's chat used to leave the same row behind"; pin and hide filters; server reads and writes |
 | `clients/terminal/src/minutes/__tests__/chatActivity.test.tsx` | "tracks concurrent chats independently and clears completed/failed turns"; "keeps running jobs active after composer is released; queued-only jobs are not active" |

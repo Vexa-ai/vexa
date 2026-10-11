@@ -19,6 +19,7 @@ import { CollapseButton } from "./Collapse";
 import { T, row, surface, type as ty } from "./tokens";
 import { WorkspaceName } from "../ui-kit/WsLink";
 import { ContextMenu, type ContextMenuItem } from "../ui-kit/ContextMenu";
+import { RAIL_SHORTCUTS, isTypingTarget, matchesShortcut, shortcutAria, shortcutLabel, type Shortcut } from "../ui-kit/shortcuts";
 import { MoreHorizontal, Pin } from "lucide-react";
 
 const chipS = (on: boolean): CSSProperties => ({
@@ -58,6 +59,8 @@ const rowActS = (armed: boolean): CSSProperties => ({
   border: "none", color: armed ? "var(--red, #e57373)" : "var(--t3)", cursor: "pointer", fontSize: 13,
   lineHeight: 1, padding: "3px 4px", fontFamily: "var(--sans)", display: "flex", alignItems: "center", borderRadius: 4,
 });
+
+const shortcutLabelFor = (k: keyof typeof RAIL_SHORTCUTS) => shortcutLabel(RAIL_SHORTCUTS[k]);
 
 function ActivityDot({ r, selected }: { r: Row; selected: boolean }) {
   const active = useChatActive(r.chatId);
@@ -101,13 +104,42 @@ export function Rail(p: {
     setMenu(null);
     if (refocus) menuButtons.current.get(key)?.focus();
   };
+  // ONE LIST OF ACTS PER ROW: the menu draws it, and the keyboard shortcuts run the same entries,
+  // so a shortcut can only do what the row's menu offers for that row (no Pin on a hidden row, no
+  // Delete on a meeting with no chat).
   const itemsFor = (r: Row): ContextMenuItem[] => {
     const items: ContextMenuItem[] = [];
-    if (!r.hidden && p.onPin) items.push({ id: "pin", label: r.pinned ? "Unpin" : "Pin to top", onSelect: () => p.onPin?.(r, !r.pinned) });
-    if (p.onHide) items.push({ id: "hide", label: r.hidden ? "Unhide" : "Hide", detail: r.hidden ? undefined : "Bring it back from Hidden", onSelect: () => p.onHide?.(r, !r.hidden) });
-    if (r.chatId) items.push({ id: "delete", label: "Delete…", danger: true, onSelect: () => setDeleting(r) });
+    if (!r.hidden && p.onPin) items.push({ id: "pin", label: r.pinned ? "Unpin" : "Pin to top", shortcut: RAIL_SHORTCUTS.pin, letter: "P", onSelect: () => p.onPin?.(r, !r.pinned) });
+    if (p.onHide) items.push({ id: "hide", label: r.hidden ? "Unhide" : "Hide", detail: r.hidden ? undefined : "Bring it back from Hidden", shortcut: RAIL_SHORTCUTS.hide, letter: "H", onSelect: () => p.onHide?.(r, !r.hidden) });
+    if (r.chatId) items.push({ id: "delete", label: "Delete…", danger: true, shortcut: RAIL_SHORTCUTS.delete, letter: "D", onSelect: () => setDeleting(r) });
     return items;
   };
+  // THE SHORTCUTS ACT ON THE SELECTED ROW, and only on one the person can see: it must be in the
+  // list this rail is drawing (not filtered out by Active/All, not in the other of Hidden and the
+  // list). A collapsed rail is not mounted, so it has no shortcuts at all. Nothing fires while a
+  // modal or a row menu is open (the menu has its own letters), and the editing key (Backspace)
+  // is never taken out of a text field. Delete only ARMS the row's ✓: it never deletes by itself.
+  const live = useRef({ p, deleting, menu, itemsFor });
+  live.current = { p, deleting, menu, itemsFor };
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const { p, menu, itemsFor } = live.current;
+      if (e.defaultPrevented || e.repeat || menu) return;
+      if (document.querySelector("[aria-modal=true]")) return;
+      if (matchesShortcut(e, RAIL_SHORTCUTS.newChat)) { e.preventDefault(); p.onNewChat(); return; }
+      const id = (["pin", "hide", "delete"] as const).find((k) => matchesShortcut(e, RAIL_SHORTCUTS[k]));
+      if (!id) return;
+      if ((RAIL_SHORTCUTS[id] as Shortcut).editing && isTypingTarget(e.target)) return;
+      const r = p.rows.find((x) => x.key === p.selKey);
+      const item = r && itemsFor(r).find((i) => i.id === id);
+      if (!r || !item) return;
+      e.preventDefault();
+      if (id === "delete") [...document.querySelectorAll<HTMLElement>("[data-row-key]")].find((el) => el.dataset.rowKey === r.key)?.scrollIntoView?.({ block: "nearest" });
+      void item.onSelect();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
   const chatRow = (r: Row) => {
     const on = r.key === p.selKey;
     const armed = deleting?.key === r.key;
@@ -137,7 +169,10 @@ export function Rail(p: {
         {armed ? (
           <button data-del data-armed className="vx-row-act" ref={confirmRef} autoFocus
             aria-label={`Confirm delete ${r.label}`} title="Click again to delete chat"
-            onBlur={() => setDeleting(null)}
+            // FOCUS MOVING ELSEWHERE cancels; focus moving to NOTHING does not. Safari and Firefox on
+            // macOS do not focus a button on click, so a mousedown on ✓ blurs it with no new target —
+            // cancelling there removed the ✓ before its click landed, and the delete never went out.
+            onBlur={(e) => { if (e.relatedTarget) setDeleting(null); }}
             onClick={(e) => { e.stopPropagation(); setDeleting(null); p.onDeleteChat(r.chatId as string); }}
             style={rowActS(true)}>✓</button>
         ) : (
@@ -170,7 +205,7 @@ export function Rail(p: {
             {p.hiddenView ? "Done" : `Hidden ${p.hiddenMarked}`}
           </button>
         )}
-        <button title="New chat" aria-label="New chat" onClick={p.onNewChat}
+        <button title={`New chat (${shortcutLabelFor("newChat")})`} aria-label="New chat" aria-keyshortcuts={shortcutAria(RAIL_SHORTCUTS.newChat)} onClick={p.onNewChat}
           style={{ ...row.ghostPlus, marginLeft: 0, fontSize: 17, color: "var(--t2)" }}>+</button>
         {p.onCollapse && <CollapseButton side="left" onClick={p.onCollapse} />}
       </div>
