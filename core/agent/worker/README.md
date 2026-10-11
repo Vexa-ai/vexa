@@ -17,6 +17,11 @@ Spawned by the control plane; liveness is the workload's lifecycle.
   with its own harness session, so a two-minute act no longer holds the chat. It sits above the
   harness so that one implementation serves every runner. The contract is
   [`../llm/JOBS.md`](../llm/JOBS.md).
+- `meeting_link.py` — a chat message that is only a meeting link sends the bot before the model
+  runs: the vexa MCP's `parse_meeting_link` decides whether it is one, and `request_meeting_bot`
+  sends it on the turn's own attachment and token. The outcome (`requested`, `already_there`,
+  `refused` with its typed reason) is a `meeting-link` event and the top of the turn's prompt. See
+  [Paste a meeting link](../../../docs/docs/how-to/paste-a-meeting-link.mdx).
 - `tool_access.py` — a turn and its tool access (P18): a vexa MCP call that fails at or after the
   attached delegation token's `exp` ends the turn with the typed `access_expired` fault instead of a
   silent tool error, and a turn whose work tree could not be handed to the tools user is refused

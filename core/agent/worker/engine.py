@@ -74,6 +74,7 @@ from shared import unit_input
 # THE JOB RUNNER (Vexa-ai/vexa#1584) — a long act that does not hold the chat. It sits above the
 # harness on purpose, so `serve` gets background work for every runner rather than one adapter's.
 from worker import jobs as worker_jobs
+from worker import meeting_link
 from worker import tool_access
 from worker.friction import (disbelieved_capability, fallback_session, friction_preamble,
                              mcp_unreachable,
@@ -1829,6 +1830,20 @@ def run_turn_over_workspace(
                 log.warning("friction: could not file the mcp-unreachable gap (%s)", e)
             yield {"type": "mcp-unavailable", "server": VEXA_MCP_SERVER, "detail": mcp_detail}
             mcp_config = None
+    # A MESSAGE THAT IS ONLY A MEETING LINK SENDS THE BOT (`worker/meeting_link.py`). Decided and
+    # done here, before the model is asked anything, on the same attachment and token the model's
+    # own `request_meeting_bot` would use; the turn then runs with the outcome at the top of its
+    # prompt so the answer — and the history — say what happened. Only a turn somebody typed in a
+    # chat qualifies: no job, no post-meeting room (its bot verbs are withheld), no mark.
+    link_note = ""
+    if mcp_config is not None and session and session_continuity and not llm_jobs.in_job() \
+            and not room_run():
+        link = meeting_link.candidate(prompt, human_half(prompt))
+        endpoint = _mcp_endpoint(mcp_config) if link else None
+        if link and endpoint is not None:
+            link_events, link_ev = meeting_link.send(link, endpoint)
+            yield from link_events
+            link_note = meeting_link.preamble(link_ev)
     # Declare the mount set to the model VERBATIM (WP-A1.1) + the write-routing policy (WP-A1.2), so the
     # agent never guesses where it may read/write. Single-mount turns get no mounts preamble; the
     # kg-links rule ([[wikilinks]] render as actionable entity chips) applies to EVERY turn.
@@ -1848,7 +1863,7 @@ def run_turn_over_workspace(
     # F162 — the imperative gate goes FIRST, ahead of even the MCP-status note: see its definition
     # for the ledger incident this closes (four unanswered "send bot"s, lost under six preambles'
     # worth of onboarding/propose framing).
-    turn_prompt = (imperative_preamble(prompt)
+    turn_prompt = (link_note + imperative_preamble(prompt)
                    + mcp_status_note + voice_preamble() + friction_preamble() + kg_links_preamble(mounts)
                    + page_verbs_preamble()
                    + mounts_preamble(mounts, active_target())
