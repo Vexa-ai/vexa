@@ -173,6 +173,15 @@ const numsIn = (t: string) => (t.match(/\d+/g) || []).map(Number);
   mgr.feedAudio('b', new Float32Array(Math.round(1.2 * SR)).fill(0.05), 1_800_000_000_000);
   await mgr.flushSpeaker('b', true);
   ok(sent === 1, 'a 1.2 s final window is submitted');
+  // The sub-second TAIL of a longer turn (after its confirmed prefix) is real speech: always sent.
+  mgr.addSpeaker('c', 'Speaker');
+  mgr.feedAudio('c', new Float32Array(Math.round(2.6 * SR)).fill(0.05), 1_800_000_000_000);
+  await (mgr as unknown as { trySubmit(id: string): Promise<void> }).trySubmit('c');
+  mgr.handleTranscriptionResult('c', 'hello there', 2.0, [{ text: 'hello', start: 0, end: 1 }, { text: 'there', start: 1, end: 2 }]);
+  mgr.handleTranscriptionResult('c', 'hello there friend', 2.0, [{ text: 'hello', start: 0, end: 1 }, { text: 'there', start: 1, end: 2 }, { text: 'friend', start: 2, end: 2.6 }]);
+  const before = sent;
+  await mgr.flushSpeaker('c', true);
+  ok(sent === before + 1, `a 0.6 s tail after a confirmed prefix is still submitted as the final window (${sent - before} request)`);
   mgr.removeAll();
 }
 

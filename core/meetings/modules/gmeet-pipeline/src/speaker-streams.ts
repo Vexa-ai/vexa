@@ -125,7 +125,8 @@ export interface SpeakerStreamManagerConfig {
    *  hard cap, the window up to its quietest late frame is finalized from its own request and the
    *  audio after that cut stays buffered. Opt-in; default false keeps every other feeder's behaviour. */
   callbackStampedFrames?: boolean;
-  /** A FINAL window (turn close, idle, input-gap detach) shorter than this is not submitted: STT
+  /** A stretch whose whole audio is shorter than this is not submitted as a final window (turn close,
+   *  idle, input-gap detach; the sub-second tail of a longer turn is always sent): STT
    *  answers sub-second fragments with phrases like "Thank you." that the hallucination filter then
    *  discards anyway. The skipped seconds are counted as `shortSec`, never silently. Default: 1 */
   minFinalAudioSec?: number;
@@ -724,7 +725,10 @@ export class SpeakerStreamManager {
   private async finalSubmit(buffer: SpeakerBuffer, why: string): Promise<void> {
     const held = this.unconfirmedSamples(buffer);
     if (held <= 0) { this.fullReset(buffer, 'moved'); return; }
-    if (held / this.sampleRate < this.minFinalAudioSec) {
+    // Only a stretch that is short AS A WHOLE is skipped: the sub-second tail of a longer turn (left
+    // after its confirmed prefix) is real speech with context and is always sent.
+    const stretch = buffer.absBase + buffer.totalSamples;
+    if (stretch / this.sampleRate < this.minFinalAudioSec) {
       log(`[SpeakerStreams] [SHORT-SKIP] "${buffer.speakerName}" ${(held / this.sampleRate).toFixed(1)}s final window (${why}) ` +
           `under ${this.minFinalAudioSec}s — not submitting (sub-second fragments only produce filtered phrases)`);
       if (buffer.lastTranscript) this.emitSegment(buffer, buffer.lastTranscript);
