@@ -83,3 +83,14 @@ it("streams recording bytes and preserves range seeking through the meetings gat
   expect(res.headers.get("content-range")).toBe("bytes 4-7/100");
   expect(new Uint8Array(await res.arrayBuffer())).toEqual(bytes);
 });
+
+it("relays a download's attachment header and query so a saved recording keeps its server filename", async () => {
+  const mock = vi.fn(async (_url: string, _init: RequestInit) => new Response(new Uint8Array([1, 2]), { status: 200, headers: {
+    "Content-Type": "audio/webm", "Content-Disposition": 'attachment; filename="meeting-31-2026-10-09-audio.webm"',
+  } }));
+  vi.stubGlobal("fetch", mock);
+  const res = await getRoute(makeReq("GET", "?type=audio&download=1"), ctx("recordings", "7", "media", "9", "raw"));
+  expect(mock.mock.calls[0][0]).toContain("/recordings/7/media/9/raw?type=audio&download=1");
+  expect(res.headers.get("content-disposition")).toBe('attachment; filename="meeting-31-2026-10-09-audio.webm"');
+  expect(res.headers.get("cache-control")).toBe("private, no-store");
+});

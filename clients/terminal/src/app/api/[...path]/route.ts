@@ -81,7 +81,8 @@ async function forward(req: NextRequest, params: Promise<{ path: string[] }>): P
 
     if (/^recordings\/[^/]+\/media\/[^/]+\/raw$/.test(joined)) {
       const mediaHeaders = new Headers({ "Cache-Control": "private, no-store" });
-      for (const name of ["Content-Type", "Content-Length", "Content-Range", "Accept-Ranges"]) {
+      // Content-Disposition carries a `?download=1` save (the server names the file).
+      for (const name of ["Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "Content-Disposition"]) {
         const value = upstream.headers.get(name);
         if (value) mediaHeaders.set(name, value);
       }

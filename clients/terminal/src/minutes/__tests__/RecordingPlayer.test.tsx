@@ -24,3 +24,13 @@ it("prefers finite media duration and never invents a total", () => {
   expect(screen.getByLabelText("Playback time").textContent).toBe("0:00 / 1:01");
   expect(playbackTime(3661)).toBe("1:01:01");
 });
+it("toggles one play/pause icon button and offers no mute", () => {
+  vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue();
+  const { container } = render(<RecordingPlayer src="/audio" onError={vi.fn()} actions={<button aria-label="Extra" />} />);
+  const audio = container.querySelector("audio")!;
+  expect(screen.getByRole("button", { name: "Play recording" }).textContent).toBe("");
+  fireEvent.play(audio);
+  expect(screen.getByRole("button", { name: "Pause recording" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /mute/i })).toBeNull();
+  expect(screen.getByRole("group", { name: "Recording player" }).lastElementChild?.getAttribute("aria-label")).toBe("Extra");
+});
