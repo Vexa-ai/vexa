@@ -1,0 +1,144 @@
+---
+title: "Admin account"
+description: "What the deployment's admin account does: flows and mail, note templates, the friction sink and the company workspace, from its home or its chat."
+---
+
+The **admin account** is the one account that controls the company layer (`_global`) of a
+deployment. It is a dedicated address, not anybody's everyday account, and it has nothing else: no
+desk, no shared workspaces, no meetings. [Workspaces → The admin account](/minutes/workspaces#the-admin-account)
+says how an operator names one.
+
+It is for four things:
+
+| Area | What you control | Everyday accounts |
+|---|---|---|
+| **Flows & mail** | what the mailbox accepts, which mails go out, the flows that run | refused |
+| **Templates** | the shapes new notes are created from | refused |
+| **Friction** | every report anybody filed about something that did not work | read their own only |
+| **Workspace** | the company layer every agent carries: `README.md`, `POLICIES.md`, `STRUCTURE.md`… | read only |
+
+## What you can do
+
+### Start
+
+Sign in as the admin account. The first time, the terminal opens the **company setup** conversation
+over `_global` alone. After that, an empty chat shows the four areas as cards. Each card opens a
+chat that already knows its job; you can also say the same things in any chat of this account.
+
+### Flows & mail
+
+Say what you want; the chat changes it, tells you what it costs first, and then reads the result
+back.
+
+| You say | What changes |
+|---|---|
+| *"Only accept invites from bank.com"* | `mail_domains: bank.com` in `_global/POLICIES.md` |
+| *"Stop the bot joining when the mailbox is invited"* | `bot_joins_on_invite: off` |
+| *"Stop sending the minutes"* | `minutes_mail: off` |
+| *"Stop the prep mails"* | `prep_and_invite_mail: off` |
+| *"Stop sending attendee follow-ups"* | `report_to_participants: off` |
+| *"Change what the minutes mail says"* | `_global/mail/<name>.md` |
+| *"When a meeting ends, also …"* | a new flow version (`flows_submit`), confirmed once |
+
+The `mail_settings` tool reads the whole picture: the inbound allow-list and where it came from,
+whether invitations are acted on, which outbound mails are on, which mail wordings are overridden,
+and which flows react to inbound mail.
+
+**What stays the operator's.** The mailbox address, its password or app registration, the SMTP relay
+and the rate limits are deployment configuration (`VEXA_MAIL_*`, `VEXA_GRAPH_*`,
+`VEXA_FLOWS_MAIL_RATE_*`). The admin account sees whether credentials are configured, never a value.
+
+### Templates
+
+New person, company, meeting, project and decision pages are created from the templates in
+`_global/kg/templates/<kind>.md`. Ask the **Templates** chat to add, rename or reorder a section,
+for example *"add a Risk section to company pages"*. From then on, every new company page has
+`## Risk`, and an agent can file facts into it. Existing pages are not reshaped.
+
+A template must keep:
+
+- front matter with `template: true`, `type: <kind>`, `id:` and `title:`;
+- every section the agent files into for that kind, and `Connected`, `Sources`, `Open questions`
+  and `Timeline`.
+
+You may add sections and reorder them. A save that breaks this is refused, with what to put back.
+Each save is a commit in `_global`, so **History** shows it and any version can be written back.
+Removing a company template returns that kind to the built-in shape.
+
+### Friction
+
+Ask the **Friction** chat *"what's broken this week?"*. It reads every report on the deployment with
+`friction_list` and groups them: what keeps failing, how often, who hit it, and blockers first. You
+can narrow it by `kind`, `person` (an address or id), `since` and `status` (`open` or `fixed`).
+Credential-shaped text in a report is shown as `«redacted»`.
+
+### Workspace
+
+The **Workspace** card reopens the company setup: the five short files of `_global`, the policies
+wizard, and the company's pages. The admin account writes all of them into `_global`; it has no other
+workspace.
+
+## Limits and errors
+
+| Message or symptom | Cause | What to do |
+|---|---|---|
+| *this tool acts with the deployment's own operator key, so only the deployment's admin account … may use it* | `mail_settings`, `friction_list`, `flows_submit` or `flow_lifecycle` called by an everyday account | sign in as the admin account |
+| *only the admin account may edit _global* | an everyday account tried to write a policy, a mail wording or a template | sign in as the admin account |
+| `422` *not a usable template* | the template lost a required section or front-matter line | put back what the message names |
+| *kg/templates/ holds entity shapes, not records* | a write or move into a desk's templates, or a move into `_global`'s | edit `_global/kg/templates/<kind>.md` as the admin account |
+| `mail_domains: '*' is not a domain — ignored` in `policy_problems` | a value that is not a domain | write domains only (`bank.com`) |
+| an invitation arrived and nothing happened | `bot_joins_on_invite: off`, or the organiser is outside the allow-list | `mail_settings` says which; quarantine rows say which mail |
+
+## How it works
+
+1. **Who.** admin-api names the admin account (`VEXA_ADMIN_ACCOUNT`) and reports it as
+   `admin_account` on identity's doors. agent-api, the gateway, the MCP and the terminal read that
+   answer and keep no list of their own.
+2. **Flows & mail.** The runtime answers are front-matter rows in `_global/POLICIES.md`, written by
+   the admin account through agent-api's page door. flows reads them per send and per inbound mail.
+   The inbound allow-list resolves `mail_domains` → `VEXA_FLOWS_MAIL_DOMAINS` → the mailbox's own
+   domain. `bot_joins_on_invite: off` records an invitation as `invite_policy_off` in
+   `mail_quarantine` and creates nothing. `minutes_mail: off` skips the minutes mail, before any
+   person's own `mail_minutes` setting.
+3. **Reads.** `mail_settings` (`GET /mail/settings`) and `friction_list` (`GET /friction/all`) are
+   flows-api routes behind its operator key. The MCP spends that key only after the gateway confirms
+   the caller is the admin account.
+4. **Templates.** agent-api's page door accepts `_global/kg/templates/<kind>.md` from the admin account
+   only and validates it. `entity_upsert` reads the company template for the kind and creates a new
+   card with its sections; one that is not a valid shape is ignored. A deploy copies the built-in
+   templates into `_global/kg/templates/` once and never overwrites an edited one.
+5. **Arrival.** The admin account's first sign-in is minted as the `setup-global` conversation over
+   `_global` only. The four home cards open `/?ask=mail-admin`, `templates`, `friction-review` and
+   `setup-global`, which the server mints like any other hand link.
+
+| Route | Who |
+|---|---|
+| `GET /mail/settings` (flows-api) | operator key; MCP `mail_settings` for the admin account only |
+| `GET /friction/all` (flows-api) | operator key; MCP `friction_list` for the admin account only |
+| `PUT /api/workspace/file` `slug=_global`, `kg/templates/…` (agent-api) | the admin account; validated |
+| `POST /api/workspace/remove` `slug=_global`, `kg/templates/…` | the admin account |
+
+## Why it complies
+
+| Rule | How | Gate |
+|---|---|---|
+| **P23** one writer per carrier | `_global` (policies, mail wording, templates) is written only by agent-api for the admin account; flows only reads it; the friction sink is written only by flows-api | ungated: reviewed; deny tests below |
+| **P6** one front door | the new reads are flows-api routes in its MCP manifest; the terminal opens named asks through the existing hand-link mint | `gate:domain-doors`, `gate:isolation` |
+| **P14** secrets and config | credentials stay deployment configuration and are reported only as configured or not; `mail_domains` accepts domains only | flows `test_admin_account_mail.py` |
+| **P15** secrets by default | every free-text field of `friction_list` is scrubbed by the same shape-based scrubber agent-api uses, vendored byte-identically | `gate:fact-parity` (`secret-redaction`) |
+| **P18** fail closed and soft | an unreadable `_global` resolves to the defaults; a broken template falls back to the built-in shape; an unanswered admin question is no | tests below |
+| **P20** authorize every access | everyday accounts, the instance admin's included, are refused every admin control | deny tests below |
+
+**Tests.** `core/flows/tests/test_admin_account_mail.py` (allow-list from the page, invitations off,
+minutes off, `/mail/settings` with no credential, `/friction/all` operator-only, filtered and
+scrubbed); `core/agent/tests/test_admin_account_functions.py` (template writes for the admin account
+only, validation, new cards from the company template, existing pages untouched, the admin arrival,
+no admin ask mounting a desk); `core/meetings/services/mcp/tests/test_tool_auth.py` (both reads are
+admin-gated); `clients/terminal/src/minutes/__tests__/adminHome.test.tsx`.
+
+## Related
+
+- [Workspaces → The admin account](/minutes/workspaces#the-admin-account)
+- [Flows → Operations](/flows/operations)
+- [Flows → Authoring](/flows/authoring)
+- [Pages](/minutes/pages)

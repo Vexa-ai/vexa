@@ -104,7 +104,7 @@ in the git history.
 | *Could not save: …* under the editor | the write was refused or failed; your draft is kept | read the reason; see the refusals below |
 | *not authorized for this workspace* | you are a viewer, or not a member | ask an owner for the contributor role |
 | *only the admin account may edit _global* | the company workspace is written by the admin account | sign in as the [admin account](/minutes/workspaces#the-admin-account) |
-| *kg/templates/ holds entity shapes, not records* | templates are not editable as pages | write the record elsewhere |
+| *kg/templates/ holds entity shapes, not records* | a desk's templates are not editable as pages | write the record elsewhere; the company's templates are `_global/kg/templates/`, edited by the [admin account](/minutes/admin-account#templates) |
 | *that path is not inside this workspace* | the path is absolute, contains `..`, or names `.git`, `.vexa` or `.claude` | use a path inside the workspace |
 | *… exceeds 25MB* | the upload ceiling is 25 MB per file | shrink or link the file |
 | *External image* fetch refused | only `http`/`https` addresses on the public internet can be fetched; internal names and private, loopback and link-local addresses are refused | host the image publicly or upload it |
@@ -182,7 +182,7 @@ the tools are declared in `core/agent/mcp.tools.v1.json`.
 **Who can do what.** You can read your own desk, the company workspace, a colleague's desk (read-only),
 your own private tier, and every shared workspace you belong to (viewers included). You can write your
 desk, your private tier, a shared workspace where you are a contributor or above, and the company
-workspace only as the admin account (which writes nothing else). Nobody writes `kg/templates/`. An agent acting for you is further held
+workspace only as the admin account (which writes nothing else). Nobody writes a workspace's `kg/templates/`; the admin account writes the company's, in `_global/kg/templates/`, validated on save, and new pages are created from them. An agent acting for you is further held
 to the workspace scope of the chat that dispatched it.
 
 **Protections.**
