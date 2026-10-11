@@ -28,7 +28,7 @@ and links.
 
 - A state card says what the bot is doing: *Bot at the door*, *Bot needs someone to let it in*,
   *Bot admitted · no words for …*, *Reconnecting to the bot…*, *Bot left*, or *Bot feed error*.
-- The transcript panel shows the last three lines, and they keep moving as people talk (*Nothing said yet —
+- The transcript panel shows the newest lines, and moves as people talk (*Nothing said yet —
   this fills in as the room talks.*). Opening a meeting part-way through replays everything said so
   far, then continues live.
 - **Stop bot** takes the bot out of the meeting. It is shown while the bot is requested, joining,
@@ -60,13 +60,18 @@ right below. The file itself is not changed.
 
 The transcript sits in its own panel under the notes, with a header that reads **Transcript**, the
 number of lines, and *live* while the bot is in. Each line shows the speaker and time on the left and
-what was said beside it. The panel starts collapsed, live or finished: the last three lines, with a
-fade above them when there is more. Press **Show all** to expand it and **Collapse** to go back to the
-tail (both are buttons you can reach with <kbd>Tab</kbd> and press with <kbd>Enter</kbd>). Expanded,
-it shows every line with **Copy transcript** and **Highlight**, and you can select text to **Ask about
-this** or click a line to play from there. While a live meeting is expanded, the view follows the
-newest line unless you have scrolled up to read. Minutes remembers whether you expanded each meeting
-until you close the browser tab.
+what was said beside it. The panel starts collapsed, live or finished: a window about four lines
+tall, sitting on the newest line, with a fade above when there is more. Scroll inside it (or focus it
+and use the arrow keys) to read back through the whole transcript. During a live meeting it stays on
+the newest line until you scroll up; then **Jump to latest** takes you back. Press **Show all** to
+expand the panel to full height and **Collapse** to go back to the window. **Copy transcript** and
+**Highlight** are in the expanded panel. Select text anywhere in it to **Ask about this**.
+
+**Play from a line.** Click a line (or press <kbd>Enter</kbd> or <kbd>Space</kbd> on it) to play the
+recording from there. While the recording plays, the line being played is shaded and the panel scrolls
+to keep it in view, collapsed or expanded. If you scroll away yourself it stops following, and
+**Follow playback** brings it back. Minutes remembers whether you expanded each meeting until you
+close the browser tab.
 
 Sections of the notes that are still empty (for example *Report* before the meeting's report is
 written) are not shown.

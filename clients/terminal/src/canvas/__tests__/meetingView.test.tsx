@@ -214,61 +214,120 @@ describe("the view renders without notes", () => {
   });
 });
 
-describe("the transcript — collapsed tail, or everything", () => {
-  it("a LIVE meeting starts collapsed: the last three lines and the count", async () => {
+// jsdom has no layout: the transcript window gets a fixed geometry here, and a played line a fixed
+// place above the window's bottom, so following can be measured.
+const geom = { scrollHeight: 1000, clientHeight: 128, activeTop: -600 };
+const tops = new WeakMap<Element, number>();
+const isWin = (el: Element) => el.hasAttribute("data-transcript-window");
+const saved: Record<string, PropertyDescriptor | undefined> = {};
+function installLayout() {
+  for (const k of ["scrollHeight", "clientHeight", "scrollTop"]) saved[k] = Object.getOwnPropertyDescriptor(Element.prototype, k);
+  saved.rect = Object.getOwnPropertyDescriptor(Element.prototype, "getBoundingClientRect");
+  Object.defineProperty(Element.prototype, "scrollHeight", { configurable: true, get() { return isWin(this) ? geom.scrollHeight : 0; } });
+  Object.defineProperty(Element.prototype, "clientHeight", { configurable: true, get() { return isWin(this) ? geom.clientHeight : 0; } });
+  Object.defineProperty(Element.prototype, "scrollTop", { configurable: true,
+    get() { return tops.get(this) ?? 0; },
+    set(v: number) { tops.set(this, isWin(this) ? Math.max(0, Math.min(v, geom.scrollHeight - geom.clientHeight)) : 0); } });
+  Object.defineProperty(Element.prototype, "getBoundingClientRect", { configurable: true, value() {
+    const top = this.hasAttribute("data-playback-active") ? geom.activeTop : 0;
+    return { top, height: 20, bottom: top + 20, left: 0, right: 0, width: 0, x: 0, y: top, toJSON() {} } as DOMRect;
+  } });
+}
+function removeLayout() {
+  for (const [k, d] of Object.entries(saved)) {
+    const name = k === "rect" ? "getBoundingClientRect" : k;
+    if (d) Object.defineProperty(Element.prototype, name, d); else delete (Element.prototype as unknown as Record<string, unknown>)[name];
+  }
+}
+const win = () => q("[data-transcript-window]")!;
+const userScroll = async (top: number) => { await act(async () => { win().scrollTop = top; win().dispatchEvent(new Event("scroll")); }); };
+
+describe("the transcript — a scrolling window, or everything", () => {
+  beforeEach(installLayout);
+  afterEach(removeLayout);
+
+  it("collapsed is a fixed-height window that scrolls through the WHOLE transcript, sitting on the newest line", async () => {
     await renderView();
     const toggle = q("[data-transcript-toggle]")!;
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     expect(toggle.textContent).toBe("Show all");
     expect(q("[data-transcript-count]")?.textContent).toBe("5 lines");
-    // there is more above the tail, and the panel says so
-    expect(q("[data-transcript-fade]")).not.toBeNull();
-    expect(transcriptText()).toContain("collapsed by default");
-    expect(transcriptText()).toContain("notes go on top");
-    expect(transcriptText()).not.toContain("first we agree the scope");
+    expect(win().style.maxHeight).toBe("128px");
+    expect(win().style.overflowY).toBe("auto");
+    expect(win().getAttribute("tabindex")).toBe("0");
+    for (const l of LINES) expect(transcriptText()).toContain(l);   // scroll up to any of them
+    expect(win().scrollTop).toBe(872);                               // at the bottom
+    expect(q("[data-transcript-fade]")).not.toBeNull();              // more above
     expect(q("[data-transcript-live]")?.textContent).toBe("live");
   });
 
-  it("the live tail keeps moving as lines arrive, still collapsed", async () => {
+  it("live: new lines keep it on the bottom; a person who scrolls up is left there with Jump to latest", async () => {
     await renderView({}, live(3));
-    expect(transcriptText()).toContain("notes go on top");
+    expect(win().scrollTop).toBe(872);
+    await userScroll(100);
+    expect(q("[data-transcript-jump]")?.textContent).toBe("Jump to latest");
     liveState = { transcript: live(5) };
-    meetingsState = [row()];
     await act(async () => { root.render(<ServicesProvider container={createContainer([reg(LayoutServiceId, () => createLayoutService("meetings"))])}><MeetingView meetingId={ROW} /></ServicesProvider>); });
     await flush();
-    expect(q("[data-transcript-toggle]")?.getAttribute("aria-expanded")).toBe("false");
-    expect(transcriptText()).toContain("collapsed by default");
-    expect(transcriptText()).not.toContain("then the header");
+    expect(win().scrollTop).toBe(100);                               // not dragged down
+    await act(async () => { fireEvent.click(q("[data-transcript-jump]")!); });
+    expect(win().scrollTop).toBe(872);
+    expect(q("[data-transcript-jump]")).toBeNull();
   });
 
-  it("a FINISHED meeting starts collapsed too", async () => {
+  it("a FINISHED meeting starts collapsed too, on its last lines", async () => {
     durableState.lines = LINES.map((text, i) => ({ speaker: "Jane", text, offsetSeconds: i * 15 }));
     await renderView({ status: "past", live_status: "completed", session_uid: undefined }, []);
     expect(q("[data-transcript-toggle]")?.getAttribute("aria-expanded")).toBe("false");
     expect(q("[data-transcript-live]")).toBeNull();
-    expect(transcriptText()).not.toContain("first we agree the scope");
+    expect(win().scrollTop).toBe(872);
   });
 
-  it("expanding shows everything, with Highlight and Copy; the choice is remembered for this meeting", async () => {
+  it("playback: the played line is highlighted and kept in view; a manual scroll stops following until Follow playback", async () => {
+    await renderView({}, live());
+    const { registerPlayback } = await import("../../minutes/meetingPlayback");
+    const seek = vi.fn();
+    const player = registerPlayback(ROW, { seek, pause: vi.fn(), originMs: AT });
+    try {
+      await act(async () => { player.update(31, true); });            // inside the third line (30s)
+      const active = q("[data-playback-active]")!;
+      expect(active.textContent).toContain("notes go on top");
+      // centred: 872 (bottom) + (-600) line offset, less half the window
+      expect(win().scrollTop).toBe(872 - 600 - (128 - 20) / 2);
+      const followed = win().scrollTop;
+      await userScroll(500);
+      expect(q("[data-transcript-follow-playback]")?.textContent).toBe("Follow playback");
+      await act(async () => { player.update(32); });
+      expect(win().scrollTop).toBe(500);                             // the person's place is kept
+      await act(async () => { fireEvent.click(q("[data-transcript-follow-playback]")!); });
+      expect(win().scrollTop).not.toBe(500);
+      expect(q("[data-transcript-follow-playback]")).toBeNull();
+      expect(followed).toBeGreaterThan(0);
+      // clicking a line still plays from it
+      await act(async () => { fireEvent.click(q("[data-playback-active]")!); });
+      expect(seek).toHaveBeenCalled();
+    } finally { await act(async () => { player.dispose(); }); }
+  });
+
+  it("Show all expands to full height with Copy and Highlight; the choice is remembered for this meeting", async () => {
     await renderView();
     await act(async () => { fireEvent.click(q("[data-transcript-toggle]")!); });
     expect(q("[data-transcript-toggle]")?.getAttribute("aria-expanded")).toBe("true");
     expect(q("[data-transcript-toggle]")?.textContent).toBe("Collapse");
+    expect(win().style.maxHeight).toBe("");
     expect(q("[data-transcript-fade]")).toBeNull();
-    for (const l of LINES) expect(transcriptText()).toContain(l);
     expect(q('[aria-label="Copy transcript"]')).not.toBeNull();
     expect(sessionStorage.getItem(`vexa.meetingTranscriptOpen.${ROW}`)).toBe("1");
-    // reopened in the same session: still expanded
     act(() => { root.unmount(); });
     await renderView();
     expect(q("[data-transcript-toggle]")?.getAttribute("aria-expanded")).toBe("true");
   });
 
-  it("the toggle is a real button: keyboard reachable, and it names what it controls", async () => {
+  it("the toggle is a real button and names the window it controls", async () => {
     await renderView();
     const t = q("[data-transcript-toggle]") as HTMLButtonElement;
     expect(t.tagName).toBe("BUTTON");
-    expect(document.getElementById(t.getAttribute("aria-controls")!)).not.toBeNull();
+    expect(document.getElementById(t.getAttribute("aria-controls")!)).toBe(win());
   });
 });
 
@@ -288,7 +347,7 @@ describe("the transcript is a different object from the notes", () => {
     expect(panel.style.background).not.toBe("");
     // rows: who and when in a left column, what was said beside it
     const rows = panel.querySelectorAll("[data-transcript-row]");
-    expect(rows.length).toBe(3);
+    expect(rows.length).toBe(5);
     expect(rows[0].querySelector("[data-transcript-who]")?.textContent).toMatch(/Jane|Ravi/);
     expect(notes.querySelector("[data-transcript-row]")).toBeNull();
   });
