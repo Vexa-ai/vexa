@@ -26,7 +26,7 @@ import { WORKSPACE_COMMIT_EVENT } from "../platform";
 import type { Page } from "./types";
 import { navigateView } from "./roomView";
 import {
-  MAX_HITS, filterByName, loadNavTree, loadNavWorkspaces, parseQuery, treeFrom,
+  MAX_HITS, filterByName, frontPagePath, loadNavTree, loadNavWorkspaces, parseQuery, treeFrom,
   type NavWorkspace, type TreeNode,
 } from "./navigatorApi";
 import { surface, type as ty } from "./tokens";
@@ -156,6 +156,14 @@ export function Navigator(p: {
     if (next.has(ws.key)) next.delete(ws.key); else { next.add(ws.key); void ensureTree(ws); }
     setOpenWs(next);
   };
+  /** THE NAME OPENS THE FRONT PAGE (founder, 2026-10-11: *"click on workspace should open the
+   *  readme"*). The click also expands the row — it never collapses it — so the files are there
+   *  under the page that was just put in front. The chevron alone is still the plain toggle. */
+  const openFront = (ws: NavWorkspace) => {
+    if (!openWs.has(ws.key)) { setOpenWs((prev) => new Set(prev).add(ws.key)); void ensureTree(ws); }
+    navigateView(ws.slug, frontPagePath(trees[ws.key]));
+  };
+  const setWsOpen = (ws: NavWorkspace, open: boolean) => { if (openWs.has(ws.key) !== open) toggleWs(ws); };
   const toggleDir = (key: string) => setOpenDirs((prev) => {
     const next = new Set(prev);
     if (next.has(key)) next.delete(key); else next.add(key);
@@ -255,10 +263,22 @@ export function Navigator(p: {
                 const open = openWs.has(ws.key);
                 return (
                   <div key={ws.key}>
+                    {/* NAME → front page + expand; CHEVRON → toggle only. Keyboard: Enter opens
+                        the front page, → / ← expand / collapse. */}
                     <button data-nav-ws={ws.key} aria-expanded={open} title={ws.name}
-                      onClick={() => toggleWs(ws)} style={wsRow}
+                      onClick={(e) => {
+                        if ((e.target as HTMLElement).closest?.("[data-nav-ws-caret]")) toggleWs(ws);
+                        else openFront(ws);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") { e.preventDefault(); openFront(ws); }
+                        else if (e.key === "ArrowRight") { e.preventDefault(); setWsOpen(ws, true); }
+                        else if (e.key === "ArrowLeft") { e.preventDefault(); setWsOpen(ws, false); }
+                      }}
+                      style={wsRow}
                       onMouseEnter={hoverOn} onMouseLeave={hoverOff}>
-                      <span style={caret(open)} aria-hidden>▶</span>
+                      <span data-nav-ws-caret={ws.key} title={open ? "Collapse" : "Expand"}
+                        style={{ ...caret(open), padding: "4px 3px", margin: "-4px -3px" }} aria-hidden>▶</span>
                       <span style={{ ...nameS, paddingLeft: 2 }}>{ws.name}</span>
                     </button>
                     {open && (

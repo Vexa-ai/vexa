@@ -18,6 +18,8 @@
 import type { ActiveMount, Membership } from "../surfaces/workspaceApi";
 import { listSharedMemberships, listWorkspaceTree, readActiveSet, readWorkspaceById } from "../surfaces/workspaceApi";
 import { GLOBAL_SLUG, humanPaths } from "./machinery";
+import { WORKSPACE_FRONT_PAGE } from "./deepLink";
+import { isWorkspaceReadme } from "./workspaceReadme";
 
 /** Desk first, then `_global`, then the groups — decision 27.1's order, and it is not alphabetical
  *  by accident: the reader's own desk is where they write, `_global` is what the company shares. */
@@ -92,6 +94,19 @@ export function buildWorkspaces(src: {
   }
 
   return [desk, ...(global ? [global] : []), ...[...groups.values()].sort(byName)];
+}
+
+// ── the front page ───────────────────────────────────────────────────────────────────────────────
+
+/** WHAT A CLICK ON A WORKSPACE'S NAME OPENS. Founder, 2026-10-11, on this rail: *"click on
+ *  workspace should open the readme"*. The root README is the workspace's front page — the panel
+ *  renders the who-is-here header above it (`WorkspaceReadmePanel`) — so the name opens that.
+ *
+ *  The file as the tree spells it when the tree has been read (`Readme.md` in an attached repo),
+ *  otherwise the same page `/w/<workspace>` opens with no path. A workspace with no README is not a
+ *  blank pane either way: it opens exactly as that link does. */
+export function frontPagePath(files?: readonly string[] | null): string {
+  return (files ?? []).find((f) => isWorkspaceReadme(f)) ?? WORKSPACE_FRONT_PAGE;
 }
 
 // ── the tree ─────────────────────────────────────────────────────────────────────────────────────

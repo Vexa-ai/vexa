@@ -58,6 +58,10 @@ async function openRail() {
  *  the open document's name too, so "README.md" is genuinely ambiguous on this screen — and a test
  *  that matches the header instead of the row would pass with the rail rendering nothing. */
 const rowOf = (c: HTMLElement, key: string) => c.querySelector(`[data-nav-file="${key}"]`) as HTMLElement | null;
+/** A workspace row's CHEVRON — the plain expand/collapse. The row's NAME opens the front page. */
+const caretOf = (c: HTMLElement, key: string) => c.querySelector(`[data-nav-ws-caret="${key}"]`) as HTMLElement;
+const wsOf = (c: HTMLElement, key: string) => c.querySelector(`[data-nav-ws="${key}"]`) as HTMLElement;
+const nameOf = (c: HTMLElement, key: string) => wsOf(c, key).querySelector("span:not([data-nav-ws-caret])") as HTMLElement;
 const waitRow = async (c: HTMLElement, key: string) => {
   await waitFor(() => expect(rowOf(c, key)).toBeTruthy());
   return rowOf(c, key) as HTMLElement;
@@ -114,20 +118,20 @@ describe("the workspaces (decisions 26–27.1)", () => {
     const container = await openRail();
     expect(nav.loadNavTree).not.toHaveBeenCalled();
 
-    fireEvent.click(container.querySelector('[data-nav-ws="desk"]') as HTMLElement);
+    fireEvent.click(caretOf(container, "desk"));
     await waitRow(container, "desk|README.md");
     expect(nav.loadNavTree).toHaveBeenCalledTimes(1);
 
-    fireEvent.click(container.querySelector('[data-nav-ws="desk"]') as HTMLElement);   // collapse
+    fireEvent.click(caretOf(container, "desk"));   // collapse
     expect(rowOf(container, "desk|README.md")).toBeNull();
-    fireEvent.click(container.querySelector('[data-nav-ws="desk"]') as HTMLElement);   // and back
+    fireEvent.click(caretOf(container, "desk"));   // and back
     await waitRow(container, "desk|README.md");
     expect(nav.loadNavTree).toHaveBeenCalledTimes(1);
   });
 
   it("shows human files only — no machinery, no dotfiles (decision 27.2)", async () => {
     const container = await openRail();
-    fireEvent.click(container.querySelector('[data-nav-ws="desk"]') as HTMLElement);
+    fireEvent.click(caretOf(container, "desk"));
     await waitRow(container, "desk|README.md");
 
     expect(screen.getByText("drafts")).toBeTruthy();
@@ -146,7 +150,7 @@ describe("opening a file (decision 28)", () => {
 
   async function deskOpen() {
     const container = await openRail();
-    fireEvent.click(container.querySelector('[data-nav-ws="desk"]') as HTMLElement);
+    fireEvent.click(caretOf(container, "desk"));
     await waitRow(container, "desk|README.md");
     return container;
   }
@@ -160,7 +164,7 @@ describe("opening a file (decision 28)", () => {
 
   it("the destination carries the workspace it came from — through the folders it lives in", async () => {
     const container = await openRail();
-    fireEvent.click(container.querySelector('[data-nav-ws="acme-kg"]') as HTMLElement);
+    fireEvent.click(caretOf(container, "acme-kg"));
     // the tree NESTS: the file is inside `kg/`, and the folder opens before the file exists on screen
     await waitFor(() => expect(container.querySelector('[data-nav-dir="acme-kg|kg"]')).toBeTruthy());
     expect(rowOf(container, "acme-kg|kg/brief-2026.md")).toBeNull();
@@ -187,6 +191,77 @@ describe("opening a file (decision 28)", () => {
   });
 });
 
+describe("a workspace's NAME opens its front page (founder, 2026-10-11)", () => {
+  /** *"click on workspace should open the readme"*. Before this, the whole row was a toggle: the
+   *  workspace's own page was one expand and one more click away, and the click the reader made
+   *  on the name did nothing but show a list. */
+  const seen: unknown[] = [];
+  const spy = (e: Event) => seen.push((e as CustomEvent).detail);
+  beforeEach(() => { seen.length = 0; window.addEventListener(VIEW_NAVIGATE_EVENT, spy); });
+  afterEach(() => window.removeEventListener(VIEW_NAVIGATE_EVENT, spy));
+
+  it("clicking the name puts the README in front and expands the row", async () => {
+    const container = await openRail();
+    fireEvent.click(nameOf(container, "acme-kg"));
+    expect(seen).toEqual([{ workspace: "acme-kg", path: "README.md", label: "README" }]);
+    expect(onOpen).not.toHaveBeenCalled();                       // navigates, mints no tab
+    await waitFor(() => expect(container.querySelector('[data-nav-dir="acme-kg|kg"]')).toBeTruthy());
+    expect(wsOf(container, "acme-kg").getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("the desk and the company layer open the same way", async () => {
+    const container = await openRail();
+    fireEvent.click(nameOf(container, "desk"));
+    fireEvent.click(nameOf(container, "_global"));
+    expect(seen).toEqual([
+      { workspace: undefined, path: "README.md", label: "README" },
+      // `_global` here has no README in its tree: it opens as `/w/_global` does — never a blank pane
+      { workspace: "_global", path: "README.md", label: "README" },
+    ]);
+  });
+
+  it("a second click on the name opens it again and does NOT collapse the row", async () => {
+    const container = await openRail();
+    fireEvent.click(nameOf(container, "desk"));
+    await waitRow(container, "desk|README.md");
+    fireEvent.click(nameOf(container, "desk"));
+    expect(seen).toHaveLength(2);
+    expect(rowOf(container, "desk|README.md")).toBeTruthy();
+  });
+
+  it("the README is opened as the tree spells it", async () => {
+    vi.mocked(nav.loadNavTree).mockImplementation(async (ws: nav.NavWorkspace) =>
+      ws.key === "acme-kg" ? ["Readme.md", "kg/a.md"] : TREES[ws.key] ?? []);
+    const container = await openRail();
+    fireEvent.click(caretOf(container, "acme-kg"));
+    await waitRow(container, "acme-kg|Readme.md");
+    fireEvent.click(nameOf(container, "acme-kg"));
+    expect(seen).toEqual([{ workspace: "acme-kg", path: "Readme.md", label: "Readme" }]);
+  });
+
+  it("the chevron alone only toggles — it opens nothing", async () => {
+    const container = await openRail();
+    fireEvent.click(caretOf(container, "desk"));
+    await waitRow(container, "desk|README.md");
+    fireEvent.click(caretOf(container, "desk"));
+    expect(rowOf(container, "desk|README.md")).toBeNull();
+    expect(seen).toEqual([]);
+  });
+
+  it("keyboard: Enter opens the front page, → expands, ← collapses", async () => {
+    const container = await openRail();
+    const row = wsOf(container, "desk");
+    fireEvent.keyDown(row, { key: "ArrowRight" });
+    await waitRow(container, "desk|README.md");
+    expect(seen).toEqual([]);
+    fireEvent.keyDown(row, { key: "ArrowLeft" });
+    expect(rowOf(container, "desk|README.md")).toBeNull();
+    fireEvent.keyDown(row, { key: "Enter" });
+    expect(seen).toEqual([{ workspace: undefined, path: "README.md", label: "README" }]);
+    await waitRow(container, "desk|README.md");
+  });
+});
+
 describe("a page that went away (Vexa-ai/vexa#1621)", () => {
   /** THE FIRST ACTS THIS RAIL HAS EVER HAD TO SURVIVE THAT REMOVE A FILE. `workspace_delete` and
    *  `workspace_move` take a page OUT of a workspace; every workspace's list is read exactly once,
@@ -196,7 +271,7 @@ describe("a page that went away (Vexa-ai/vexa#1621)", () => {
    *  reaching the other surface that shows the file. */
   it("re-reads an expanded workspace on a commit, so the deleted page loses its row", async () => {
     const container = await openRail();
-    fireEvent.click(container.querySelector('[data-nav-ws="desk"]') as HTMLElement);
+    fireEvent.click(caretOf(container, "desk"));
     await waitRow(container, "desk|README.md");
     expect(nav.loadNavTree).toHaveBeenCalledTimes(1);
 
