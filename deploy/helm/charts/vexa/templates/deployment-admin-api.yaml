@@ -34,6 +34,9 @@ spec:
             - name: http
               containerPort: 8001
           env:
+            # diagnostics.captureSignal (default "false"): no captured-signal tape unless turned on.
+            - name: VEXA_CAPTURE_SIGNAL_DEFAULT
+              value: {{ include "vexa.captureSignalDefault" . | quote }}
             - name: DB_HOST
               value: {{ include "vexa.dbHostEffective" . | quote }}
             - name: DB_PORT
