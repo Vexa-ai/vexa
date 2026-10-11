@@ -145,6 +145,69 @@ The bot is capturing audio, but transcription isn't configured — or the bot wa
 - A stale bot key shows up as `native_resolve:{ok:false,kind:"unauthorized"}` on
   `GET /api/meeting/relay-health` rather than as silent dead air.
 
+## Transcript covers only part of the meeting
+
+The bot was in the meeting and some lines arrived, but long stretches of speech are missing. The
+usual cause is a slow transcription backend: a remote STT can take 15–30 s to answer a few seconds
+of audio.
+
+- Read the bot's `[COVERAGE]` line (written every minute and when the bot leaves):
+  `captured=…s submitted=…s transcribed=…s (…% of captured) no_speech=…s short=…s dropped=…s`.
+  `transcribed` close to `captured` means nothing was lost. `no_speech` is silence or audio the STT
+  returned nothing for. `short` is final fragments under a second that were not sent (see
+  `BOT_SPEAKER_MIN_FINAL_AUDIO_SEC`). Any `dropped` seconds also appear as an `[AUDIO-DROPPED]` line
+  naming the reason.
+- `[TranscriptionClient] timeout (attempt n/4)` lines mean requests are outliving
+  `BOT_STT_TIMEOUT_SEC` (default 90 s). Raise it, or move to a faster backend. Requests that answer
+  within it are waited for, however long they take.
+- Repeated `[SpeakerStreams] [FILTERED] Hallucination … "Thank you."` lines on short windows are the
+  STT answering near-silence. They are filtered out and are not missing speech.
+
+### How it works
+
+Each speaker channel turn has its own audio buffer in the bot (`SpeakerStreamManager`, the Google
+Meet and Zoom lane). The buffer is the only owner of that audio until it has been transcribed. One
+request per buffer is in flight at a time. While it is in flight, new audio keeps accumulating in
+the buffer and rides the next request, so a slow STT makes windows longer instead of losing audio.
+
+- **Turn close.** The buffer's last transcript is published only if it covers the buffered audio
+  (within 0.5 s). Otherwise the whole window is sent as a final request. If a request is still in
+  flight, the final request goes out when that one answers. The closed turn is freed only after its
+  final answer arrives, capped at 10 minutes.
+- **Input gap.** When frames resume after more than 2 s, the buffered stretch is detached under its
+  own request route, which may already be in flight. It finishes its final request, and its answer
+  cannot land on the new stretch. Up to 4 detached stretches per speaker can be finishing at once.
+  After that the live window is extended instead.
+- **Hard cap.** At `BOT_SPEAKER_MAX_BUFFER_SEC` (30 s) with no covering transcript, the window up to
+  its quietest recent frame is sent as a final request, and the rest stays buffered.
+- **Bound.** Audio held behind a request that never answers is capped at 300 s per speaker. Past the
+  cap, new frames are dropped and counted.
+- **Retries.** A timed-out or failed request is retried with the same window (up to 4 attempts).
+  The caller receives one answer, so the same audio is never transcribed twice. If the final window
+  still fails, its seconds are counted as dropped.
+
+Configuration: `BOT_STT_TIMEOUT_SEC`, `BOT_SPEAKER_MIN_FINAL_AUDIO_SEC` and the other
+`BOT_SPEAKER_*` keys ([Configuration](/configuration#transcription-stt)). The runtime forwards them
+to every spawned bot.
+
+### Why it complies
+
+- **P18, fail loud and attributed.** Every second of captured audio ends in exactly one counted
+  outcome, and a loss is an `error`-level `[AUDIO-DROPPED]` line with its seconds and reason. STT
+  faults still reach the host through `onError` as typed `TranscriptionError`s. Gate: the
+  `@vexa/gmeet-pipeline` test suite (`slow-stt`, `fault-surfacing`, `count-channelswitch`), which
+  runs in `gate:node`.
+- **P7, configuration by environment.** The new keys are declared in the runtime's `config.v1`
+  contract and forwarded the same way as the existing `BOT_SPEAKER_*` keys. A timeout under 20 s is
+  refused with a warning, and the default stays in force. Gates: `gate:config-contract` and the bot
+  `config` test.
+- **Data ownership.** Audio never leaves the bot except in the STT request it was already sent in.
+  Nothing new is stored or transmitted. The coverage line carries durations only, never text or
+  audio.
+- **Security model.** Unchanged. A customer-owned STT endpoint still goes through the outbound URL
+  guard on every request, retries included (`url-guard` tests). The bot's STT token is read from
+  the invocation and is never logged.
+
 ## What terminal errors look like — and where the technical details live
 
 Terminal error surfaces speak user vocabulary ("Couldn't reach the Vexa server — check that the

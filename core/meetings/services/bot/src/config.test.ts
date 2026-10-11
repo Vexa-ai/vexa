@@ -10,7 +10,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseInvocation, loadInvocation, InvocationError, speakerStreamConfigFromEnv } from './config.js';
+import { parseInvocation, loadInvocation, InvocationError, speakerStreamConfigFromEnv, sttTimeoutMsFromEnv } from './config.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const GOLDEN_DIR = join(HERE, '..', '..', '..', 'contracts', 'invocation.v1', 'golden');
@@ -91,4 +91,18 @@ console.log('\n✅ config (L1/L2): the goldens parse, the env helper round-trips
     BOT_SPEAKER_CONFIRM_THRESHOLD: '1.5',
   }, (message) => invalidWarnings.push(message));
   check('invalid speaker-stream values fall back loudly', invalid === undefined && invalidWarnings.length === 2, invalidWarnings.join('; '));
+
+  const minFinal = speakerStreamConfigFromEnv({ BOT_SPEAKER_MIN_FINAL_AUDIO_SEC: '0.6' }, () => {});
+  check('BOT_SPEAKER_MIN_FINAL_AUDIO_SEC reaches the config', minFinal?.minFinalAudioSec === 0.6, JSON.stringify(minFinal));
 }
+
+// ── STT request timeout from env (BOT_STT_TIMEOUT_SEC) ─────────────────────────
+{
+  const warnings: string[] = [];
+  check('BOT_STT_TIMEOUT_SEC unset → client default', sttTimeoutMsFromEnv({}, (m) => warnings.push(m)) === undefined);
+  check('BOT_STT_TIMEOUT_SEC=45 → 45000 ms', sttTimeoutMsFromEnv({ BOT_STT_TIMEOUT_SEC: '45' }) === 45_000);
+  check('BOT_STT_TIMEOUT_SEC under 20 s is refused loudly (default kept)',
+    sttTimeoutMsFromEnv({ BOT_STT_TIMEOUT_SEC: '5' }, (m) => warnings.push(m)) === undefined && warnings.length === 1, warnings.join('; '));
+}
+
+if (failed) { console.error(`\n❌ config env tuning: ${failed} check(s) FAILED.`); process.exit(1); }
