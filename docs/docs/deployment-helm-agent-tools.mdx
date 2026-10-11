@@ -1,0 +1,213 @@
+---
+title: "Agent tools on Kubernetes"
+description: "Give the chat agent its meeting tools on a Helm install: send the bot, read the transcript, change its settings and stop it. Covers the values, the model's tool-calling requirement, network policy and OpenShift."
+---
+
+On a Helm install, the chat agent sends the meeting bot, reads the live transcript, changes the bot's
+settings and stops it through the **vexa tools**. These are the same tools a person's own MCP client
+sees at `/mcp`. They need two things:
+
+1. **The toolbelt.** The chart deploys it by default: the MCP service, the gateway's `/mcp` route,
+   and a short-lived delegated token for each agent worker.
+2. **A model that does tool calling (function calling).** You supply this. Every turn is a loop of
+   tool calls, so a model served without tool calling cannot send a bot. The agent then ends the turn
+   with a typed fault instead of answering.
+
+## What the agent can do
+
+With the toolbelt attached, a chat turn can call, among others:
+
+| Tool | What it does |
+|---|---|
+| `request_meeting_bot` | send a bot to a Google Meet, Teams, Zoom or Jitsi link |
+| `get_bot_status` | list the person's running bots and their state |
+| `get_meeting_transcript` | read the transcript while the meeting runs |
+| `update_bot_config` | change a running bot's settings, such as its transcription language |
+| `stop_bot` | take the bot out of the meeting |
+
+So a person can paste a link in the chat and say *"join this"*. The agent acts as that person: it
+sees only their meetings, and the bot it sends is theirs.
+
+## Values
+
+The toolbelt needs no values. The model route does: set the harness, its endpoint and its key.
+
+```yaml
+models:
+  agentModel: "glm-4.6"                  # the model id your endpoint serves
+  runner: openai-agent                   # the harness that speaks the OpenAI dialect
+  llmBaseUrl: "http://litellm.ai.svc:4000/v1"
+  llmExtraBody: ""                       # optional JSON merged into every request
+secrets:
+  llmApiKey: "<the LiteLLM virtual key>" # or carry VEXA_LLM_API_KEY in secrets.existingSecretName
+networkPolicy:
+  workloads:
+    worker:
+      extraEgress:                       # only when the endpoint is in-cluster or on a private range
+        - to: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ai}}}]
+          ports: [{port: 4000, protocol: TCP}]
+```
+
+| Value | Env it sets | Where | Notes |
+|---|---|---|---|
+| `mcp.enabled` | `MCP_URL` (gateway), `VEXA_MCP_URL` (agent-api) | gateway, agent-api | default `true`. `false` removes the toolbelt: the agent has no vexa tools. |
+| `secrets.mcpDelegationSecret` | `VEXA_MCP_DELEGATION_SECRET` | agent-api signs, admin-api verifies | generated at install and kept across upgrades. With `secrets.existingSecretName`, your Secret must carry it. |
+| `models.runner` | `VEXA_RUNNER` | agent-api, runtime | empty means `claude-code`, which speaks the Anthropic dialect through `secrets.anthropic*`. Use `openai-agent` for vLLM, LiteLLM and other OpenAI-compatible endpoints. |
+| `models.llmBaseUrl` | `VEXA_LLM_BASE_URL` | agent-api, runtime | the `/v1` base of the endpoint. |
+| `models.llmExtraBody` | `VEXA_LLM_EXTRA_BODY` | agent-api, runtime | a JSON object merged into every request, for server-specific fields. |
+| `secrets.llmApiKey` | `VEXA_LLM_API_KEY` | agent-api, runtime (from the Secret) | the endpoint's bearer token. Also what tells agent-api that a model credential exists (see [Limits](#limits)). |
+| `models.agentModel` | `VEXA_AGENT_MODEL` | agent-api | the model id. |
+| `runtime.agentWorkerImage` | `AGENT_WORKER_IMAGE` | runtime | the worker image. With `global.imageTag` set, only its tag is replaced, so a mirrored registry is kept. |
+
+The runtime passes the model route on to each agent worker it starts. So the route must be on the
+runtime, not only on agent-api, and the chart sets it on both. A person's own endpoint, set under
+**Settings → Models**, still replaces the deployment's route for that person.
+
+### LiteLLM, GLM and other self-hosted models
+
+The model must return structured `tool_calls`. Check three things before you point the agent at it:
+
+- **The model supports function calling.** GLM-4.5 and later, Qwen 2.5 and later, and Llama 3.1 and
+  later do. Older or base models often do not.
+- **The server parses tool calls.** vLLM needs `--enable-auto-tool-choice` and a
+  `--tool-call-parser` that matches the model (`glm45` for GLM-4.5/4.6, `hermes` for Qwen). Without
+  the parser, the model writes its call as text, and the agent reports that.
+- **LiteLLM passes the tools through.** The model entry must not lose `tools` to `drop_params: true`
+  (globally or on that model), because LiteLLM then drops them silently. If LiteLLM does not know the
+  model supports function calling, set `supports_function_calling: true` in its `model_info`.
+
+To check an endpoint by hand, send one forced call. The answer must contain `tool_calls`:
+
+```bash
+curl -s "$LLM_BASE_URL/chat/completions" -H "Authorization: Bearer $LLM_KEY" \
+  -H 'Content-Type: application/json' -d '{
+  "model": "glm-4.6", "max_tokens": 256, "tool_choice": "required",
+  "messages": [{"role": "user", "content": "Call check now."}],
+  "tools": [{"type": "function", "function": {"name": "check",
+             "parameters": {"type": "object", "properties": {}}}}]}' | jq '.choices[0].message.tool_calls'
+```
+
+### Network policy
+
+With `networkPolicy.enabled` (the default), an agent worker reaches the gateway, redis, flows-api
+when flows is deployed, DNS, and addresses outside the private ranges. It reaches the MCP **only
+through the gateway**. There is no direct path from a worker to the MCP service, and the chart's
+template tests hold that.
+
+A model endpoint inside the cluster, or on a private address (`10.0.0.0/8`, `172.16.0.0/12`,
+`192.168.0.0/16`), is outside what a worker may reach by default. Add it with
+`networkPolicy.workloads.worker.extraEgress`, as in the example above. The chart's control plane
+(gateway, MCP, agent-api, runtime) already reaches each other.
+
+### OpenShift
+
+Set `global.securityContext.deliver: false`. The chart then renders no `securityContext`, and the
+`restricted-v2` SCC assigns the uid, group 0, `fsGroup`, dropped capabilities and the seccomp
+profile. The MCP service and the gateway run as any such uid: they write nothing outside `/tmp`. On
+plain Kubernetes (`deliver: true`) both run as uid 10001.
+
+## What you see when something is missing
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| The turn ends with **Model provider · cannot call tools** (`model-provider` / `no_tool_calling`) | the endpoint or model does not do tool calling | serve the model with tool calling on (above), or choose another model under Settings → Models |
+| *"No model credentials are configured, so the agent cannot run"* | no `secrets.llmApiKey` and no other model credential | set `secrets.llmApiKey`; an endpoint that needs no key still takes a placeholder |
+| The turn ends with **Model provider · unavailable** | the worker cannot reach the endpoint | add the endpoint to `networkPolicy.workloads.worker.extraEgress` |
+| The MCP Pod restarts a few times right after install | it asks each service for its tools at boot and refuses to start with some missing | none needed: it settles once agent-api and meeting-api are ready |
+| Chat workers stay in `ImagePullBackOff` | the worker image is not in your registry | set `runtime.agentWorkerImage` to your mirror's repository |
+
+The `no_tool_calling` fault is read three ways. The server refuses the request because it carries
+`tools`. The model writes its tool call as text. Or a forced check comes back with no tool call. The
+check runs at most once per endpoint and model in each worker, and only after a first round that got
+no tool call back. A check that fails for another reason, such as a timeout, never faults the turn.
+
+## Limits
+
+- The `claude-code` harness drives the Claude CLI, which needs an Anthropic-dialect endpoint. For a
+  GLM, Qwen or Llama model, use `openai-agent`.
+- An endpoint that needs no key still needs a value in `secrets.llmApiKey`, because agent-api refuses
+  a turn when no model credential is configured.
+- The tool-calling check proves that the endpoint *can* call a tool. A model that calls tools badly
+  is not a fault: the person sees the turn and its tool results.
+
+## How it works
+
+1. A person sends a chat message. The gateway authenticates their key and passes the turn, with a
+   signed identity, to agent-api.
+2. agent-api mints a **delegation token** (`vxd_…`) for this dispatch: HS256 over
+   `VEXA_MCP_DELEGATION_SECRET`, naming the person, their workspace ceiling and an expiry. It asks
+   the runtime to start a worker Pod, with `VEXA_MCP_URL` (the gateway's `/mcp`) and the token in its
+   environment.
+3. The runtime starts the worker from `AGENT_WORKER_IMAGE` and passes on the model route
+   (`VEXA_RUNNER`, `VEXA_LLM_BASE_URL`, `VEXA_LLM_API_KEY`, `VEXA_LLM_EXTRA_BODY`). The key travels in
+   a Secret of that Pod's own, never as a value in the Pod spec.
+4. The worker writes `mcp.json` with the token as its bearer, lists the tools at the gateway's `/mcp`,
+   and offers them to the model as `mcp__vexa__<tool>`.
+5. The model calls `request_meeting_bot`. The worker sends `tools/call` to the gateway's `/mcp`. The
+   gateway sends the `vxd_` token to identity (admin-api `/internal/validate`), which verifies the
+   signature, the audience, the expiry and the revocation list, and answers with the person.
+6. The gateway forwards the call to the MCP service with a signed identity. The MCP calls the meetings
+   API back through the gateway, as the same person, on the routes it declares. meeting-api asks the
+   runtime for a bot Pod.
+7. The result returns to the model, and the turn's events stream back to the person. When the unit
+   ends, agent-api revokes the token. Its expiry bounds it if that never happens.
+
+**One writer per carrier.** agent-api mints and revokes delegation tokens. Identity (admin-api)
+alone verifies them. The meetings domain alone writes the meeting and bot rows. The MCP service holds
+no identity and no data: it relays each call through the gateway with the caller's own bearer.
+
+**Contracts and routes.** `delegation.v1` (the token), `gateway-identity.v1` (the signed identity),
+`identity.v1` `/internal/validate`, `routes.v1` (which routes accept a delegated bearer:
+`"delegation": true` for `/mcp`, `"mcp_reentry": true` for the routes the MCP calls back), `unit.v1`
+`Fault` (the typed fault, including `no_tool_calling`), and `config.v1` (every env key above).
+
+**Where the configuration lives.** `deploy/helm/charts/vexa/values.yaml` (`mcp`, `models`,
+`secrets`, `networkPolicy.workloads`). The templates are `deployment-mcp.yaml`, `service-mcp.yaml`,
+`deployment-gateway.yaml` (`MCP_URL`), `deployment-agent-api.yaml` and `deployment-runtime.yaml`
+(the toolbelt and the model route), `networkpolicy-workloads.yaml` (worker egress), and
+`networkpolicy-namespace.yaml` (MCP ingress). The tool-calling check is in
+`core/agent/llm/openai_agent.py`, and the fault in `core/agent/llm/faults.py`.
+
+## Why it complies
+
+### Architecture
+
+| Rule | How this design meets it | Enforced by |
+|---|---|---|
+| **P2** couple only through contracts | the worker reaches the meetings domain only through `/mcp`, and the MCP reaches it only through the gateway, as declared in `routes.v1` | gate:domain-doors, gate:isolation |
+| **P6** one front door per module | the gateway is the one door: workers have no network path to the MCP or meeting-api | `deploy/helm/tests/test_template.sh` (gate:helm), NetworkPolicy |
+| **P7** workers are stateless; config by env | the worker gets its toolbelt URL, token and model route by env, per dispatch | gate:config-contract |
+| **P14** config is a validated contract | `VEXA_RUNNER`, `VEXA_LLM_*` are declared for helm in agent-api's and the runtime's `config.v1.json`, and present in the templates | gate:config-contract |
+| **P18** fail loud and attributable | a model without tool calling ends the turn with `model-provider` / `no_tool_calling`, never a reply claiming there are no tools | `core/agent/tests/test_no_tool_calling.py`, gate:schema (one golden per kind) |
+| **P20** complete mediation | every tool call is authorised at identity as the person the token names, then scoped to their memberships | gateway and admin-api deny tests (below) |
+| **P23** one writer per carrier | tokens: agent-api mints, identity verifies; meetings: meeting-api writes | ungated: reviewed |
+| no duplication | one MCP server, one fault vocabulary generated into every side | `test_create_app_has_no_second_mcp_upstream`, `gen-faults.mjs --check` |
+
+### Security
+
+- **Who can call the tools.** Only a worker holding a live `vxd_` token, or a person with their own
+  API key. A token is accepted only on `/mcp` and, on re-entry, only on the routes the MCP declares
+  it calls back. It is never accepted on any other REST route.
+- **How each hop is authorised.** At the gateway, identity verifies the token's signature, audience,
+  expiry and revocation. At the MCP, the gateway's signed identity names the person. At meeting-api,
+  the same person's ownership check applies to every meeting. A worker acts within its dispatch's
+  workspace ceiling, never beyond the person's own memberships.
+- **What is refused.** A forged, expired, malformed or revoked token. A token for an account that no
+  longer exists. A token on a REST route called directly. A re-entry marker that is not the gateway's
+  own signature for that delegation. Any token when the deployment has no delegation secret.
+- **The network wall.** Spawned workers take no inbound connection, cannot reach the MCP, admin-api,
+  agent-api, meeting-api, the runtime or postgres, and reach the gateway on its port only.
+- **Secrets.** The delegation secret and the model key live in the chart Secret (or yours), are read
+  by `secretKeyRef`, and never appear inline in a Deployment or a worker Pod spec.
+- **Deny tests.** `test_an_unknown_delegation_bearer_is_refused_before_any_forward`,
+  `test_a_delegation_bearer_is_refused_on_rest_routes_called_directly`,
+  `test_a_valid_re_entry_is_refused_on_a_route_the_mcp_does_not_call_back`,
+  `test_a_re_entry_marker_must_be_the_edges_own_signature_for_the_same_delegation`
+  (gateway, `test_delegated_mcp.py`); `test_a_forged_expired_or_malformed_token_is_401`,
+  `test_a_token_for_an_account_that_no_longer_exists_is_401`,
+  `test_a_deployment_without_the_delegation_key_refuses_every_delegation` (admin-api,
+  `test_internal_validate_delegation.py`); `test_narrowing_never_adds_a_workspace_the_person_is_not_a_member_of`
+  (`test_delegation_workspaces.py`); and in `deploy/helm/tests/test_template.sh`: *agent workers have
+  no direct path to the MCP*, *the MCP admits only the release's own Pods*, *workers cannot reach
+  meeting-api / admin-api / agent-api / runtime / postgres*, *reads VEXA_LLM_API_KEY from the Secret,
+  never inline*.

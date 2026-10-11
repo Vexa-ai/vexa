@@ -116,6 +116,28 @@ spec:
                   name: {{ include "vexa.adminTokenSecretName" . }}
                   key: ANTHROPIC_BASE_URL
                   optional: true
+            # THE HARNESS ROUTE (models.runner / llmBaseUrl / llmExtraBody, secrets.llmApiKey). The runtime
+            # forwards these to every agent worker it spawns (runtime_kernel.workload_env
+            # WORKER_FORWARD_ENV) — the worker's openai-agent harness reads them, so they must be HERE,
+            # not only on agent-api. A subject's own Settings → Models endpoint still replaces them.
+            {{- with .Values.models.runner }}
+            - name: VEXA_RUNNER
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.models.llmBaseUrl }}
+            - name: VEXA_LLM_BASE_URL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.models.llmExtraBody }}
+            - name: VEXA_LLM_EXTRA_BODY
+              value: {{ . | quote }}
+            {{- end }}
+            - name: VEXA_LLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: VEXA_LLM_API_KEY
+                  optional: true
             - name: ANTHROPIC_MODEL
               value: {{ .Values.models.anthropicModel | default "" | quote }}
             - name: ANTHROPIC_DEFAULT_OPUS_MODEL

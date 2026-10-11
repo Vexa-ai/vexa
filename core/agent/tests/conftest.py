@@ -113,3 +113,26 @@ def _isolated_home(monkeypatch, tmp_path_factory):
     (Git is unaffected: workspaces set ``user.name``/``user.email`` per-repo, never globally.)"""
     home = tmp_path_factory.mktemp("home")
     monkeypatch.setenv("HOME", str(home))
+
+
+@pytest.fixture(autouse=True)
+def _tool_calling_check_passes(request, monkeypatch):
+    """The openai-agent harness's forced tool-calling check (``_check_tool_calling``) passes by default.
+
+    It is one extra request on a turn whose first round offered tools and got none back, and most
+    harness tests script exactly that turn against a stub that cannot tell the check from the
+    conversation — so they would count, or answer, a request they never meant to see. The tests of
+    the check itself opt out with ``@pytest.mark.real_tool_check``."""
+    if request.node.get_closest_marker("real_tool_check"):
+        return
+    try:
+        from llm import openai_agent
+    except ImportError:                       # a test environment without the llm package
+        return
+    monkeypatch.setattr(openai_agent.OpenAIAgentHarness, "_check_tool_calling",
+                        lambda self, model: None)
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "real_tool_check: run the openai-agent harness's real "
+                                       "tool-calling check instead of the conftest's passing stub")

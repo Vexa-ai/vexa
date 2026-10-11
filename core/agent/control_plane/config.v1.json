@@ -175,7 +175,8 @@
       "default": "claude-code",
       "description": "agent harness stamped onto dispatched workspace turns: claude-code (default) | codex (the Codex app-server) | openai-agent (this repo's own loop over any OpenAI-compatible endpoint). The deployment FLOOR only \u2014 Settings \u2192 Models pins a harness per subject and the dispatch overlay wins. The openai-agent lane is configured by VEXA_LLM_BASE_URL / _API_KEY / _MODEL / _EXTRA_BODY, which the runtime forwards into the worker from its own environment; a subject's own Settings \u2192 Models endpoint replaces all four for that subject, because the dispatch stamps them and the runtime never overrides a stamped key",
       "targets": [
-        "compose"
+        "compose",
+        "helm"
       ]
     },
     {
@@ -595,7 +596,8 @@
       "default": "(unset \u2014 falls back to ANTHROPIC_BASE_URL)",
       "description": "openai-agent harness: the deployment's OpenAI-compatible endpoint the turn's chat/completions run against. Unset, ANTHROPIC_BASE_URL applies. A subject's own Settings \u2192 Models endpoint that passes VEXA_MODEL_BASE_URL_ALLOW replaces it for that subject: the dispatch stamps this key and ANTHROPIC_BASE_URL to the subject's endpoint, and the runtime never overrides a stamped key",
       "targets": [
-        "compose"
+        "compose",
+        "helm"
       ]
     },
     {
@@ -605,7 +607,8 @@
       "secret": true,
       "description": "openai-agent harness: the deployment's bearer token for VEXA_LLM_BASE_URL. Optional \u2014 a self-hosted vLLM behind the deployment's own network needs none. Unset, ANTHROPIC_AUTH_TOKEN then ANTHROPIC_API_KEY apply. Never sent to a subject's own endpoint: there the dispatch stamps the subject's own key under every credential name (empty when they set none)",
       "targets": [
-        "compose"
+        "compose",
+        "helm"
       ]
     },
     {
@@ -623,7 +626,8 @@
       "default": "(unset \u2014 no extra fields)",
       "description": "openai-agent harness: a JSON object merged into EVERY chat/completions request \u2014 the escape hatch for server-specific fields the OpenAI dialect cannot express. THE ONE DIAL WITH NO ANTHROPIC-DIALECT EQUIVALENT, and load-bearing: a self-hosted Qwen returns nothing parseable without {\"chat_template_kwargs\":{\"enable_thinking\":false}}, and a mis-stamped value fails SILENTLY (the turn runs with thinking on). A subject's own Settings \u2192 Models endpoint carries its own extra_body instead (stamped empty when they set none); the deployment's is never sent there",
       "targets": [
-        "compose"
+        "compose",
+        "helm"
       ]
     },
     {

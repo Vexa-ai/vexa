@@ -52,7 +52,15 @@ ingress) and the values table. Key knobs: `global.imageTag`, `runtime.backend`
   verified by admin-api) is generated into the chart Secret; set `secrets.mcpDelegationSecret` to supply
   your own, and with `secrets.existingSecretName` your Secret must carry it.
 - **One MCP server.** `mcp.enabled` (default on) deploys the assembled MCP service; the gateway relays
-  `/mcp` to it and agent-api points every worker's toolbelt at the gateway's `/mcp`.
+  `/mcp` to it and agent-api points every worker's toolbelt at the gateway's `/mcp`. Workers reach it
+  only through the gateway.
+- **The agent's model route.** `models.runner` (`openai-agent` for vLLM, LiteLLM and other
+  OpenAI-compatible endpoints), `models.llmBaseUrl`, `models.llmExtraBody` and `secrets.llmApiKey` are
+  set on agent-api and on the runtime, which passes them to each agent worker. The model must do tool
+  calling, or each turn ends with the typed fault `model-provider` / `no_tool_calling`. An endpoint on a
+  private range goes in `networkPolicy.workloads.worker.extraEgress`. With `global.imageTag`, the worker
+  image keeps `runtime.agentWorkerImage`'s repository, so a mirrored registry supplies it. Operator
+  page: [`docs/docs/deployment-helm-agent-tools.mdx`](../../../../docs/docs/deployment-helm-agent-tools.mdx).
 - **Who reaches agent-api and meeting-api.** `networkPolicy.enabled` (default on) admits agent-api traffic
   from the gateway, the MCP service, the runtime, flows and the terminal, and meeting-api traffic from
   the gateway, agent-api, the MCP service, the runtime and meeting bots. Agent workers reach neither —

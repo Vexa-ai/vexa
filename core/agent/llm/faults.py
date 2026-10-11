@@ -8,7 +8,8 @@ second one. The shape and the ``kind`` vocabulary are unit.v1's ``Fault`` (``cor
 The shape is STABLE — the terminal renders it field for field::
 
     {"source":   "model-provider",
-     "kind":     "unpaid" | "unauthorized" | "rate_limited" | "unavailable" | "refused",
+     "kind":     "unpaid" | "unauthorized" | "rate_limited" | "unavailable" | "refused"
+                 | "no_tool_calling",
      "provider": <host the request went to, e.g. "openrouter.ai">,
      "model":    <model id, or "">,
      "status":   <HTTP status, or None when the failure had none (a timeout)>,
@@ -16,7 +17,9 @@ The shape is STABLE — the terminal renders it field for field::
      "remedy":   <one line a person can act on, or "">}
 
 ``kind`` from the status: 402 → unpaid · 401/403 → unauthorized · 429 → rate_limited ·
-5xx/529/timeout/transport → unavailable · any other 4xx → refused. When there is no status to read
+5xx/529/timeout/transport → unavailable · any other 4xx → refused. ``no_tool_calling`` is not read
+from a status: it is the turn's tools being refused, dropped or answered as text (see
+:func:`tools_refused` and :func:`no_tool_calling`). When there is no status to read
 (a CLI that printed the failure as prose), the text is read for one — ``API Error: 402`` — and then
 for the providers' own phrases ("insufficient credits", "rate limit"…).
 
@@ -51,6 +54,7 @@ UNAUTHORIZED = _V.UNAUTHORIZED
 RATE_LIMITED = _V.RATE_LIMITED
 UNAVAILABLE = _V.UNAVAILABLE
 REFUSED = _V.REFUSED
+NO_TOOL_CALLING = _V.NO_TOOL_CALLING
 KINDS = _V.KINDS
 
 _WHAT = {
@@ -59,6 +63,7 @@ _WHAT = {
     RATE_LIMITED: "is limiting requests",
     UNAVAILABLE: "is unavailable",
     REFUSED: "refused the request",
+    NO_TOOL_CALLING: "does not do tool calling for this model",
 }
 
 
@@ -97,6 +102,8 @@ def remedy_for(kind: str, provider: str) -> str:
         RATE_LIMITED: "Wait a moment and send it again.",
         UNAVAILABLE: "Send it again shortly, or choose another model under Settings → Models.",
         REFUSED: "Check the model name and its settings under Settings → Models.",
+        NO_TOOL_CALLING: ("Serve this model with tool calling (function calling) switched on, or "
+                          "choose another model under Settings → Models."),
     }.get(kind, "")
 
 
@@ -249,6 +256,56 @@ def classify(*, status: Optional[int] = None, text: object = None, provider: Opt
                    f" links={links}" if links else "")
     return ProviderFault(kind=kind, provider=host, model=model or "", status=status,
                          detail=detail, remedy=remedy)
+
+
+# ── NO TOOL CALLING ──────────────────────────────────────────────────────────────────────────────
+# Every turn this product runs is a tool loop: sending the bot, reading a transcript, writing a page.
+# An endpoint that cannot do function calling therefore cannot run a turn — and the failure mode it
+# had was the worst one available: the model, never shown its tools, ANSWERED, and said it had none
+# ("I don't have the ability to join meetings"). A person cannot tell that from a deployment whose
+# toolbelt is missing. So it is a typed fault, read three ways (core/agent/llm/openai_agent.py):
+#   1. the server REFUSES the request because it carries `tools` — its own words, matched below;
+#   2. the model writes its tool call AS TEXT (`<tool_call>…`) — the server is not parsing them;
+#   3. a forced check (`tool_choice: "required"`) comes back with no tool call — the server or a
+#      proxy dropped the tools (LiteLLM's `drop_params` does this silently).
+
+# The servers' own words for "this request's tools are not supported". vLLM without
+# --enable-auto-tool-choice, LiteLLM's UnsupportedParamsError, Ollama, llama.cpp, TGI, OpenAI-style.
+_TOOLS_REFUSED = re.compile(
+    r"enable-auto-tool-choice|tool-call-parser"
+    r"|does not support (?:the )?(?:parameters?:?\s*\[?['\"]?)?(?:tools|tool_choice|function[ _]calling)"
+    r"|(?:tools|tool_choice|function[ _]calling|tool use|tool calling)\b[^.]{0,40}\b(?:is |are )?not supported"
+    r"|unsupportedparams|unsupported (?:parameter|param)s?:?[^.]{0,40}\btools?\b"
+    r"|does not support tools|doesn't support tools|tools are not supported|no tool support",
+    re.IGNORECASE)
+
+# A tool call written as TEXT: the model's native call markup arriving in `content` because the
+# server is not parsing it into `tool_calls` (Qwen/Hermes `<tool_call>`, GLM `<tool_call>name`,
+# Llama `<|python_tag|>`, Mistral `[TOOL_CALLS]`, the `<function=…>` form).
+_TEXT_TOOL_CALL = re.compile(r"<tool_call>|<\|tool_call\|?>|<\|python_tag\|>|\[TOOL_CALLS\]|<function=",
+                             re.IGNORECASE)
+
+
+def tools_refused(text: object) -> bool:
+    """True when a provider's failure text says the request's TOOLS are what it cannot serve."""
+    return bool(text) and bool(_TOOLS_REFUSED.search(str(text)))
+
+
+def tool_call_as_text(text: object) -> bool:
+    """True when an assistant reply carries a tool call written as text instead of as `tool_calls`."""
+    return bool(text) and bool(_TEXT_TOOL_CALL.search(str(text)))
+
+
+def no_tool_calling(*, provider: Optional[str] = None, model: Optional[str] = None,
+                    status: Optional[int] = None, detail: str = "") -> ProviderFault:
+    """The typed fault for an endpoint/model that does not do function calling (see above)."""
+    host = provider or provider_host()
+    fault = ProviderFault(kind=NO_TOOL_CALLING, provider=host, model=model or "", status=status,
+                          detail=safe_detail(detail) if detail else "",
+                          remedy=remedy_for(NO_TOOL_CALLING, host))
+    logger.warning("model provider fault: provider=%s kind=%s status=%s model=%s detail=%r",
+                   host, NO_TOOL_CALLING, status, model or "", fault.detail)
+    return fault
 
 
 # The provider's own words for "your balance covers a smaller answer than you asked for".

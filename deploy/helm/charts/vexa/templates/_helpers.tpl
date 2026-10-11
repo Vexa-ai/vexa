@@ -190,12 +190,17 @@ vexaai/vexa-bot:v012
 {{- end -}}
 {{- end -}}
 
-{{/* The agent-worker image ref (AGENT_WORKER_IMAGE; the dedicated worker build — core/agent/worker/Dockerfile — NOT the agent-api image). */}}
+{{/* The agent-worker image ref (AGENT_WORKER_IMAGE; the dedicated worker build — core/agent/worker/Dockerfile — NOT the agent-api image).
+global.imageTag replaces the TAG only: the repository is runtime.agentWorkerImage's, so an install that
+mirrors the images (Harbor, a GitLab registry) and pins one tag gets its workers from the mirror, like
+every other image. It used to be the literal `vexaai/v012-agent-worker:<tag>`, so a mirrored install
+spawned every chat worker from Docker Hub and, offline, none started. */}}
 {{- define "vexa.agentWorkerImage" -}}
+{{- $img := .Values.runtime.agentWorkerImage | default "vexaai/v012-agent-worker:v012" -}}
 {{- if .Values.global.imageTag -}}
-{{- printf "vexaai/v012-agent-worker:%s" .Values.global.imageTag -}}
+{{- printf "%s:%s" (regexReplaceAll "(@sha256:[a-f0-9]+|:[^:/]+)$" $img "") .Values.global.imageTag -}}
 {{- else -}}
-{{- .Values.runtime.agentWorkerImage | default "vexaai/v012-agent-worker:v012" -}}
+{{- $img -}}
 {{- end -}}
 {{- end -}}
 

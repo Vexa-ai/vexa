@@ -125,6 +125,7 @@
           "deployment",
           "deployment-lite",
           "deployment-kubernetes",
+          "deployment-helm-agent-tools",
           "configuration",
           "connections",
           "upgrade-from-minio",
