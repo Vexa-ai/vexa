@@ -421,6 +421,16 @@ def build(**d) -> APIRouter:
                                  names=body.room_participant_names,
                                  speakers=body.room_speakers,
                                  read_max=body.room_read_max)
+        # A MEETING'S NOTES ARE WRITTEN ONLY FOR A MEETING THE CALLER CAN READ (the one meeting view,
+        # 2026-10-11). Update notes / Create notes on the meeting view is the Extend act naming a
+        # MEETING (`extend-meeting`): it reads that meeting's transcript and rewrites its notes. The
+        # meeting id rides the body, so it is checked here — the same access decision the transcript
+        # stream and `/api/meeting/note` make — before any preset is read or any turn is queued. A
+        # refusal costs a 403, never a partly-run turn; another person's meeting gets the same answer
+        # as one that does not exist.
+        _intent_meeting = chat_intents.page_meeting(body.intent)
+        if _intent_meeting and _meeting_access(subject, _intent_meeting) is None:
+            raise HTTPException(status_code=403, detail="not authorized for this meeting")
         # THE SCAFFOLD (PRD 5.5). When the turn names one and it is THIS subject's, the record
         # — not the client — decides two things: which workspaces this chat mounts, and what
         # the opening ask is. Both used to be composed client-side, and that is precisely why

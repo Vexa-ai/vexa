@@ -5,20 +5,36 @@ import type { MeetingMock } from "../surfaces/meetingModel";
 import { splitLeadingH1 } from "./workspaceFrontPage";
 import { type as ty } from "./tokens";
 
-export function meetingHeader(body: string, meeting?: MeetingMock) {
+/** What the header's one metadata line says about where the meeting is: `live · N min` while the
+ *  bot is in the room, the bot's own word while it is getting there or leaving, and nothing once the
+ *  meeting is over — a finished meeting's line is just platform · when · who. */
+export function meetingStatus(meeting: MeetingMock | undefined, now: number = Date.now()): string {
+  if (!meeting) return "";
+  const raw = meeting.live_status || (meeting.status === "live" ? "active" : "");
+  if (!raw || ["completed", "stopped", "past"].includes(raw)) return "";
+  if (raw === "active") {
+    const start = Date.parse(meeting.start_time ?? "");
+    const mins = Number.isFinite(start) ? Math.max(0, Math.floor((now - start) / 60000)) : NaN;
+    return Number.isFinite(mins) ? `live · ${mins} min` : "live";
+  }
+  return raw.replaceAll("_", " ");
+}
+
+export function meetingHeader(body: string, meeting?: MeetingMock, now: number = Date.now()) {
   const heading = splitLeadingH1(body).title;
   const generic = !heading || /^(google meet|zoom|microsoft teams|teams|live)?\s*meeting$/i.test(heading);
   const title = meeting?.title_custom || (!generic ? heading : meeting?.title) || heading || "Meeting";
   const when = meeting?.start_time || meeting?.scheduled_at;
   const date = when ? new Date(when) : null;
-  const status = meeting?.live_status || (meeting?.status === "live" ? "live" : meeting ? "past" : "");
+  const status = meetingStatus(meeting, now);
+  const people = meeting?.participants.length ?? 0;
   const metadata = [
     meeting?.platform,
     date && Number.isFinite(date.getTime()) ? new Intl.DateTimeFormat(undefined, {
       month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short",
     }).format(date) : undefined,
-    status ? status.replaceAll("_", " ") : undefined,
-    meeting?.participants.length ? `${meeting.participants.length} participant${meeting.participants.length === 1 ? "" : "s"}` : undefined,
+    people ? `${people} ${people === 1 ? "person" : "people"}` : undefined,
+    status || undefined,
   ].filter(Boolean).join(" · ");
   return { title, metadata };
 }

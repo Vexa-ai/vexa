@@ -10,7 +10,7 @@ import { LayoutServiceId, type TabDescriptor } from "../workbench/layout";
 import { registerList, registerTab, registerCommand, type TabProps } from "../contributions";
 import { Icon } from "../ui-kit";
 import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
-import { MEETING_CANVAS_CONTENT_INSET, MeetingCanvasView } from "../canvas/MeetingCanvasView";
+import { MeetingView } from "../canvas/MeetingView";
 import { type MeetingMock } from "./meetingModel";
 import { ApiError, presentError, readApiFailure } from "./apiClient";
 import { resolveJoinError, serviceDenialFromError, type ServiceDenialPresentation } from "./serviceDenial";
@@ -953,14 +953,12 @@ function MeetingTab({ params }: TabProps) {
   const layout = useService(LayoutServiceId);
   const liveList = useLiveMeetings();
   const listLoaded = useLiveMeetingsLoaded();
-  const connected = useLiveMeetingsConnection();
   const requestedMeetingId = params.meetingId as string;
   // ONE resolver, shared with the canvas body (useMeeting.resolveMeeting): the real meetings list is the
   // only source of truth — a mock never shadows a real id, and a real id never falls back to a mock. While
   // the async list is still loading the row is simply not-yet-resolved; we render the canvas bound to the
   // id with a neutral header (never a wrong/mock meeting), so the header can't disagree with the body.
   const m = liveList.find((x) => x.id === requestedMeetingId || x.native_id === requestedMeetingId);
-  const header = meetingHeaderState(m, connected);
   // An id the list does not carry is a QUESTION before it is an answer: re-ask the list once, and
   // only call the meeting missing if the fresh snapshot still lacks it (see meetingLookupState).
   const graceExpired = useMeetingLookupGrace(!m && listLoaded, requestedMeetingId);
@@ -981,40 +979,11 @@ function MeetingTab({ params }: TabProps) {
     );
   }
 
-  return (
-    <div style={{ width: "100%", height: "100%", minHeight: 0, display: "flex", flexDirection: "column", padding: "16px 0 24px", boxSizing: "border-box" }}>
-      <header style={{ flex: "none", marginBottom: 16, padding: `0 ${MEETING_CANVAS_CONTENT_INSET}px`, boxSizing: "border-box" }}>
-        {/* WRAPS. This header was written for the full-width centre pane and its controls are all
-            `flex: none`; rendered in a narrower column (minutes mode puts this same canvas in the
-            resizable pages panel) a single non-wrapping row does not truncate, it OVERLAPS — the
-            bot controls paint across the meeting's own name. Wrapping costs nothing at the width it
-            was designed for and stays legible at every width below it. */}
-        <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 12, rowGap: 8, fontSize: 13, minWidth: 0 }}>
-          <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 9, rowGap: 6, minWidth: 0 }}>
-            {header === "live"
-              ? <span style={{ display: "inline-flex", alignItems: "center", gap: 6, color: "var(--green)", fontWeight: 600, letterSpacing: ".04em", fontSize: 11, textTransform: "uppercase", flex: "none" }}><span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--green)", boxShadow: "0 0 0 3px var(--greenbg)" }} />Live</span>
-              : header === "reconnecting"
-                ? <span style={{ display: "inline-flex", alignItems: "center", gap: 6, color: "var(--accent)", fontWeight: 600, letterSpacing: ".04em", fontSize: 11, textTransform: "uppercase", flex: "none" }} title="Live connection lost — the last known state may be stale"><span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--accent)", boxShadow: "0 0 0 3px var(--accentbg)" }} />Reconnecting…</span>
-                : header === "recap"
-                  ? <span style={{ display: "inline-flex", alignItems: "center", color: "var(--violet)", background: "var(--violetbg)", fontWeight: 600, letterSpacing: ".06em", fontSize: 10.5, textTransform: "uppercase", borderRadius: 999, padding: "2px 9px", flex: "none" }}>Recap</span>
-                  : <span style={{ fontSize: 11, color: "var(--t3)", fontWeight: 600, letterSpacing: ".04em", textTransform: "uppercase", flex: "none" }}>Connecting…</span>}
-            <span style={{ width: 3, height: 3, borderRadius: "50%", background: "var(--t3)", flex: "none" }} />
-            <span style={{ color: "var(--t1)", fontWeight: 550, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m ? (m.title_custom ?? (m.native_id ?? m.title).replace(/^Google Meet · /, "")) : "Meeting"}</span>
-            {m && <span style={{ color: "var(--t3)", flex: "none", fontSize: 12 }}>{m.platform}</span>}
-            {m && <span style={{ color: "var(--t3)", flex: "none" }}>{m.participants.length} in the room</span>}
-          </div>
-          {/* the spacer keeps the controls right-aligned while they fit on the title's line, and
-              collapses to nothing once they have wrapped to their own */}
-          <div style={{ flex: "1 0 0", minWidth: 0 }} />
-          {m && <BotControls m={m} connected={connected} />}
-          {m?.native_id && <ShareSessionButton platform={platformSlug(m.platform)} native={m.native_id} />}
-        </div>
-      </header>
-      <div style={{ flex: 1, minHeight: 0 }}>
-        <MeetingCanvasView key={requestedMeetingId} meetingId={requestedMeetingId} />
-      </div>
-    </div>
-  );
+  // ONE MEETING VIEW (founder-approved design, 2026-10-11): header, notes, transcript — the same
+  // page the chat's panel shows, so a meeting opened from the list, a link or a chat reads alike.
+  // The old chrome that stood here (a "Recap"/"Live" pill, the name, the bot and share controls)
+  // is the view's header now (`MeetingPageHeader`), which is where those controls live.
+  return <MeetingView key={requestedMeetingId} meetingId={requestedMeetingId} />;
 }
 
 registerList({ id: "meetings", label: "Meetings", icon: "cal", order: 20, component: MeetingsList,

@@ -93,7 +93,7 @@ describe("parseScaffold", () => {
 });
 
 describe("scaffoldToChat", () => {
-  it("a meeting scaffold lands in the MEETING's own chat, with the phase's tab names", () => {
+  it("a meeting scaffold lands in the MEETING's own chat, on the one meeting view", () => {
     const rec = scaffoldToChat(parseScaffold(WIRE)!);   // native comes off the RECORD now
     expect(rec.id).toBe("meet-97");        // not a parallel conversation
     expect(rec.label).toBe("");            // the rail names it from the meeting
@@ -101,34 +101,32 @@ describe("scaffoldToChat", () => {
     // the chat's HOME leads the strip (decision 28.5); the declared pages follow in the preset's
     // own order, which is the author's reading order
     expect(rec.artifacts[0]).toMatchObject({ path: "README.md", desk: true });
-    expect(rec.artifacts.slice(1)).toMatchObject([
-      { path: "kg/entities/meeting/2026-03-02-show-b-lighting-dailies.md", label: "Minutes" },   // post → Minutes, at the path the SERVER named
-      { kind: "meeting", path: "97", label: "Transcript" },
+    // `meeting:note` and `meeting:transcript` are both the meeting view now — declared ONCE
+    expect(rec.artifacts.slice(1)).toEqual([
+      { kind: "meeting", path: "97", label: "Meeting", pinned: true, at: 1 },
     ]);
-    expect(rec.focus).toBe("|kg/entities/meeting/2026-03-02-show-b-lighting-dailies.md");
+    expect(rec.focus).toBe("@meeting|97");
   });
 
-  it("without a note_path the note is DROPPED, not guessed at", () => {
-    // a tab pointing at a guessed path opens a page that can never load — worse than one fewer
-    // tab. The guess used to be `kg/entities/meeting/<native>.md`, and it was ALWAYS wrong; the
-    // path is now the server's answer or there is no tab (F55).
+  it("without a note_path the meeting still opens — the view finds its notes itself, nothing is guessed", () => {
     const rec = scaffoldToChat(parseScaffold(
       { ...WIRE, refs: { ...WIRE.refs, note_path: undefined } })!);
     expect(rec.artifacts.filter((a) => !a.desk))
-      .toMatchObject([{ kind: "meeting", path: "97", label: "Transcript" }]);
+      .toMatchObject([{ kind: "meeting", path: "97", label: "Meeting" }]);
+    expect(rec.artifacts.map((a) => a.path)).not.toContain("kg/entities/meeting/abc-defg-hij.md");
     // and the native alone cannot resurrect it — that is the whole point
     expect(parseScaffold({ ...WIRE, refs: { ...WIRE.refs, note_path: undefined } })!.native)
       .toBe("abc-defg-hij");
   });
 
   it("phase null keeps the meeting's own layout and never infers `post`", () => {
-    // null is a REAL answer — "we could not read the row" — not a default. Inferring post would
-    // name an unheld meeting's brief "Minutes".
+    // null is a REAL answer — "we could not read the row" — not a default. The view is the same
+    // in every phase, so nothing about the strip depends on guessing one.
     const s = parseScaffold({ ...WIRE, phase: null })!;
     expect(s.phase).toBeNull();
     const rec = scaffoldToChat(s);
     expect(rec.artifacts.filter((a) => !a.desk)[0])
-      .toMatchObject({ path: "kg/entities/meeting/2026-03-02-show-b-lighting-dailies.md", label: "Brief" });
+      .toMatchObject({ kind: "meeting", path: "97", label: "Meeting" });
   });
 
   it("a scaffold with no meeting opens its own chat over its declared workspaces", () => {
@@ -279,8 +277,8 @@ describe("the scaffold DELIVERS the strip (decision 28.5)", () => {
     // home first (the chat mounts a group, so the GROUP's README, not the desk), then the pin,
     // then the rest in the preset's own order
     expect(rec.artifacts[0]).toMatchObject({ path: "README.md", slug: "grp-showb", desk: true });
-    expect(rec.artifacts[1]).toMatchObject({ path: "kg/entities/meeting/2026-03-02-show-b-lighting-dailies.md", pinned: true });
-    expect(rec.artifacts[2]).toMatchObject({ kind: "meeting", path: "97" });
+    expect(rec.artifacts[1]).toMatchObject({ kind: "meeting", path: "97", pinned: true });
+    expect(rec.artifacts).toHaveLength(2);   // both tokens are the one meeting view
   });
 
   it("a DECLARED tab is a pinned tab, bare token or not (founder ruling 2026-09-06)", () => {
@@ -298,8 +296,7 @@ describe("the scaffold DELIVERS the strip (decision 28.5)", () => {
     for (const n of ["a", "b", "c"]) strip = touchHistory(strip, { path: `kg/${n}.md`, label: n }, 10);
     expect(strip.map((a) => a.path)).toEqual([
       "README.md",                                                   // the home
-      "kg/entities/meeting/2026-03-02-show-b-lighting-dailies.md",   // …then both declared tabs
-      "97",
+      "97",                                                          // …then the meeting view
       "kg/c.md",                                                     // …then the one preview slot
     ]);
   });

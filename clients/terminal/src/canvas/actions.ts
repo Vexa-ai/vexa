@@ -67,7 +67,7 @@ function postMeetingTurn(prompt: string, session: string): void {
 //  opens empty. A flag with no reader is a flag that goes stale in silence, so it goes with the
 //  listener that read it rather than staying as a call every arrival still has to remember to make.
 
-export const MINUTES_ONBOARDING_GREETING = "👋 I kept the minutes of your meeting — they're in this workspace, with the full transcript. Ask me anything about it. To make this space yours: **what's your role at your organisation?** One line is enough — it decides what I pay attention to for you.";
+export const MINUTES_ONBOARDING_GREETING = "👋 I kept notes on your meeting — they're beside this chat, with the full transcript under them. Ask me anything about it. To make this space yours: **what's your role at your organisation?** One line is enough — it decides what I pay attention to for you.";
 // Pre-meeting variant: the person arrived from the CONFIRM email — nothing has happened yet, so
 // the conversation is a BRIEFING, and the role question rides inside it.
 export const MINUTES_PREP_GREETING = "👋 I'm booked for your meeting. Brief me so it lands well: **what do you want out of it?** Anything I should read, anyone who matters, decisions you expect — one or two lines is plenty. (And what's your role? It decides what I pay attention to for you.)";

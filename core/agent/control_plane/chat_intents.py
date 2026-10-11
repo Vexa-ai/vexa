@@ -225,6 +225,22 @@ INTENT_VARIANTS: dict[str, str] = {
 }
 
 
+def page_meeting(intent) -> str:
+    """The MEETING a page act names — `extend`/`create` carrying `meeting` — or `""`.
+
+    That is the meeting view's Update notes and Create notes: an act that reads this meeting's
+    transcript and writes its notes. The chat route checks the caller may read the meeting before
+    it runs one (`routers/chats.py`), so the notes are written only for a meeting the caller can
+    open. Other kinds that carry a meeting (explore, highlight, a transcript passage) read through
+    the meetings tools, which make the same check on every read."""
+    if not isinstance(intent, dict):
+        return ""
+    kind = str(intent.get("kind") or "").strip().lower()
+    if kind not in ("extend", "create"):
+        return ""
+    return str(intent.get("meeting") or "").strip()
+
+
 def preset_for(intent) -> str | None:
     """The preset name this intent runs, or None when there is nothing safe to run."""
     names = presets_for(intent)

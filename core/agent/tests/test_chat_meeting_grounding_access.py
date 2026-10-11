@@ -186,3 +186,46 @@ def test_chat_route_folds_the_meeting_for_its_owner_and_workspace_members(stack)
         r = _chat(client, uid, f"s-{uid}")
         assert r.status_code == 200
         assert SECRET_LINE in _sent(runtime), f"{uid} lost the grounding they are entitled to"
+
+
+# ── the meeting view's Update notes / Create notes (the one meeting view, 2026-10-11) ───────────
+#
+# Both are the Extend act naming a MEETING: the agent reads that meeting's transcript and rewrites
+# its notes on the caller's desk. The meeting id rides the body, so the route checks it with the same
+# access decision before any preset is read or any turn is queued.
+
+def _update_notes(client, subject, session, kind="extend", meeting=ROW):
+    return client.post("/api/chat", headers={"X-User-Id": subject}, json={
+        "prompt": "Extend: kg/entities/meeting/x.md", "session": session,
+        "intent": {"kind": kind, "path": "kg/entities/meeting/x.md", "meeting": meeting}})
+
+
+@pytest.mark.parametrize("kind", ["extend", "create"])
+def test_update_notes_for_another_persons_meeting_is_refused_before_any_turn(stack, kind):
+    client, runtime = stack
+    r = _update_notes(client, STRANGER, "s-notes-stranger", kind=kind)
+    assert r.status_code == 403
+    assert runtime.envs == [], "a refused notes update must not queue a turn"
+
+
+def test_update_notes_for_a_meeting_that_does_not_exist_is_the_same_refusal(stack):
+    client, runtime = stack
+    r = _update_notes(client, OWNER, "s-notes-missing", meeting="999999")
+    assert r.status_code == 403
+    assert runtime.envs == []
+
+
+def test_update_notes_runs_for_the_owner_and_a_workspace_member(stack):
+    client, runtime = stack
+    for uid in (OWNER, MEMBER):
+        r = _update_notes(client, uid, f"s-notes-{uid}")
+        assert r.status_code == 200, f"{uid} may read this meeting and must be able to update its notes"
+    assert len(runtime.envs) == 2
+
+
+def test_an_extend_that_names_no_meeting_is_not_checked_against_one(stack):
+    client, runtime = stack
+    r = client.post("/api/chat", headers={"X-User-Id": STRANGER}, json={
+        "prompt": "Extend: drafts/plan.md", "session": "s-plain-extend",
+        "intent": {"kind": "extend", "path": "drafts/plan.md"}})
+    assert r.status_code == 200

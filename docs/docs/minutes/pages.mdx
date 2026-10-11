@@ -52,7 +52,7 @@ Under a page you will find one of these cards:
 | Card | Shown on | What the agent does |
 |---|---|---|
 | **Extend this page** | any page | "Research it, write what is found around it, link both ways." |
-| **Extend this meeting page** | a meeting page | "Take in what has been said since last time, page what it names, link both ways." |
+| **Extend this meeting page** | a meeting's notes file, opened on its own | "Take in what has been said since last time, page what it names, link both ways." |
 | **Create this page** | an empty path | "Research it, write it, link what is found around it both ways." |
 
 Press the card, optionally type one line in **what to do with it (optional)**, and press
@@ -63,9 +63,10 @@ free for other questions, and the page comes into view when the job commits.
 What Extend researches, and where it looks, is described in
 [Onboarding research and Extend](/how-to/onboarding-research#extend).
 
-**Extend this meeting page** reads only the transcript that arrived since the last extend. The page
-keeps a `transcript_cursor` in its frontmatter; a page with no cursor, or an older page whose cursor is
-not a whole number, is read from the top.
+**Extend this meeting page** is the same act as **Update notes** in the
+[meeting view](/minutes/meetings#read-and-update-the-notes). It reads only the transcript that arrived
+since the last update. The page keeps a `transcript_cursor` in its frontmatter; a page with no cursor,
+or an older page whose cursor is not a whole number, is read from the top.
 
 To ask about *part* of a page or transcript, select the text. An **Ask about this** button appears; it
 drafts a quote into the chat box, and you decide whether to send it. A selection never starts a job.

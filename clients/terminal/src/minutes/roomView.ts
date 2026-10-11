@@ -61,11 +61,11 @@ export function pageForMeetingRef(ref: string): Page {
  *
  *  Four shapes, in the order they are tried:
  *
- *    `meeting:transcript`  the meeting canvas, bound to the ROW id (live segments, recording)
- *    `meeting:note`        the meeting's own document — "Brief" before it happened, "Minutes"
- *                          after, which is the same file under the name the reader needs today.
- *                          Its PATH comes from the scaffold (`refs.note_path`), never from a
- *                          shape assembled here; without one the token drops.
+ *    `meeting:transcript`  THE MEETING VIEW, bound to the ROW id — header, notes, transcript
+ *    `meeting:note`        the same view: the notes are IN it, above the transcript, so a preset
+ *                          that names either token opens the one view (founder-approved design,
+ *                          2026-10-11). Only a `?mock=1` fixture, which has no row, falls back to
+ *                          the notes file itself, at the path the scaffold gave (`refs.note_path`).
  *    `<workspace>/<path>`  workspace-qualified, e.g. `_global/PRINCIPLES.md`. The first segment is
  *                          a workspace ONLY when it is one this chat actually mounts — otherwise
  *                          `kg/entities/meeting/x.md` would resolve to a workspace called `kg`.
@@ -85,18 +85,15 @@ export function artifactFromToken(
   if (!t || t.split("/").includes("..")) return null;
   const named = (p: string) => (p.split("/").pop() ?? p).replace(/\.md$/i, "");
 
-  if (/^meeting:transcript$/i.test(t)) {
-    return ctx.meetingId ? { kind: "meeting", path: String(ctx.meetingId), label: "Transcript" } : null;
-  }
-  if (/^meeting:note$/i.test(t)) {
-    // THE SERVER SAYS WHERE THE NOTE IS. This used to build `kg/entities/meeting/<native>.md`
-    // while `drop_to_attendees` wrote `kg/entities/meeting/<day>-<slug>.md` — one path, two
-    // spellings, in two languages, and they never matched: the Minutes tab pointed at a file
-    // nothing writes, so it read "No page here yet" on every meeting that HAD been written and
-    // mailed. The path now arrives on the scaffold (`refs.note_path`), computed once by the step
-    // that writes the file. No path → drop the token, per the rule above.
-    if (!ctx.notePath) return null;
-    return { path: ctx.notePath, label: ctx.phase === "post" ? "Minutes" : "Brief" };
+  // BOTH MEETING TOKENS OPEN THE ONE VIEW. It renders the notes file and the transcript together,
+  // so a preset that lists `meeting:transcript, meeting:note` gets one tab, not two (the dedupe in
+  // `artifactsFromTokens` keys them alike).
+  if (/^meeting:(transcript|note)$/i.test(t)) {
+    if (ctx.meetingId) return { kind: "meeting", path: String(ctx.meetingId), label: MEETING_VIEW_LABEL };
+    // No row behind the meeting (a `?mock=1` fixture): the notes file is the only thing there is,
+    // and only when the server named its path — never a path composed here (Vexa-ai/vexa#1588).
+    if (/^meeting:note$/i.test(t) && ctx.notePath) return { path: ctx.notePath, label: NOTES_LABEL };
+    return null;
   }
   const slash = t.indexOf("/");
   if (slash > 0) {
@@ -158,7 +155,7 @@ export function pageForArtifact(ev: { workspace?: string; path?: string }): Page
   // not fall through and render a document at the literal path "meeting:".
   if (/^meeting:/.test(path)) {
     const id = path.slice("meeting:".length).trim();
-    return id && !id.includes("/") ? { kind: "meeting", path: id, label: "Transcript" } : null;
+    return id && !id.includes("/") ? { kind: "meeting", path: id, label: MEETING_VIEW_LABEL } : null;
   }
   // A path that walks out of the mount is refused, as everywhere else here — a write we cannot
   // name honestly opens no tab rather than a tab pointing somewhere it should not.
@@ -205,110 +202,72 @@ export const VIEW_KEY = "vexa.composedView";
 /** The reader's own page. Present in every room: there is always somewhere to write. */
 export const personalPage = (): Page => ({ path: "README.md", label: "Personal page" });
 
-/** The pages a meeting room shows — TWO shapes, keyed on whether a transcript exists.
- *  `native` absent = nothing captured under this row yet, so there is only the personal page.
- *
- *  A TRANSCRIPT IS NOT A FILE (founder ruling 2026-09-01). `kg/entities/meeting/<native>.transcript.md`
- *  was a dead pointer — nothing writes it — and a document that has to be POLLED to look alive was
- *  only ever the mock's trick. The real transcript is the meeting canvas the workbench already
- *  registers: it fetches by row id and streams live segments over the copilot subscription, so it
- *  is live-aware by construction rather than by a 2.5s timer.
- *
- *  `meetingId` is the ROW ID that canvas binds to. Absent = there is no row behind this meeting,
- *  which today means exactly one thing: a `?mock=1` fixture. Those keep the canned markdown page,
- *  because a fabricated meeting has nothing for the canvas to fetch.
- *
- *  ⚠ `notePath` IS AN INPUT, and this function cannot know it (Vexa-ai/vexa#1588). The meeting's
- *  own document is `kg/entities/meeting/<meeting-day>-<title-slug>.md`, where the day is rendered
- *  in the ORGANISER's timezone and the slug through a server-side allow-list — neither is derivable
- *  here. This used to build `kg/entities/meeting/<native>.md` and hand it back as Brief/Minutes: a
- *  second spelling of one path, in a second language, and it matched nothing `drop_to_attendees`
- *  writes. The room read "No page here yet" on every meeting whose report HAD been written, mailed
- *  and dropped — which is the same defect `artifactFromToken` fixed for `meeting:note` while this
- *  path kept composing. It arrives from `/api/meeting/note` (or, for a chat born from a link, off
- *  the scaffold), and ABSENT it drops the page rather than guessing one: a tab pointing at a
- *  guessed path opens a document that can never load. */
-export function pagesForPhase(phase: MeetingPhase, native?: string | null, meetingId?: string | null,
-                              notePath?: string | null,
-                              opts: { noteHasTranscript?: boolean } = {}): Page[] {
-  if (!native) return [personalPage()];
-  return [...meetingPages(phase, meetingId, notePath, native, opts), personalPage()];
+/** WHAT THE MEETING TAB IS CALLED. One view, one name — never "Brief", never "Minutes", never
+ *  "Transcript" (founder-approved design, 2026-10-11: those names told people the same meeting was
+ *  three different things, and the transcript was shown twice). */
+export const MEETING_VIEW_LABEL = "Meeting";
+
+/** What the meeting's markdown file is called wherever it is named on its own. */
+export const NOTES_LABEL = "Notes";
+
+/** THE MEETING VIEW, as a tab: the meeting's header, its notes and its transcript, bound to the row
+ *  id. The same page wherever a meeting is opened — a chat bound to it, the Calls list, a
+ *  `/?meeting=…` link — because every one of those routes ends here. */
+export function meetingView(meetingId: string): Page {
+  return { kind: "meeting", path: String(meetingId), label: MEETING_VIEW_LABEL, permanent: true };
 }
 
-/** THE MEETING'S OWN PAGES — the transcript and its document, in reading order, and nothing else.
+/** The pages a meeting room shows: the meeting view, then the reader's own page.
+ *  With neither a row nor a native id there is nothing to show but the personal page.
  *
- *  Split out of `pagesForPhase` for Vexa-ai/vexa#1597: a chat that BINDS a meeting mid-conversation
- *  gains the meeting's furniture without gaining a room. It already has a home (the strip's desk
- *  entry) and a reader looking at something, so `personalPage()` — the room's "there is always
- *  somewhere to write" — would be a tab nobody asked for. What binding adds is exactly the two
- *  pages that did not exist a moment ago.
+ *  `notePath` is used only by a `?mock=1` fixture (no row behind it — see `meetingPages`). A real
+ *  meeting's notes are read by the view itself, from `/api/meeting/note`, so the room no longer
+ *  needs the path to lay itself out — and no longer depends on the page EXISTING to open the
+ *  meeting at all. */
+export function pagesForPhase(phase: MeetingPhase, native?: string | null, meetingId?: string | null,
+                              notePath?: string | null): Page[] {
+  // A ROW IS A MEETING, native id or not (an imported call carries none): the view opens on it and
+  // says what it has. Without a row (a mock) the canned pages are keyed on the native id.
+  if (!native && !meetingId) return [personalPage()];
+  return [...meetingPages(phase, meetingId, notePath, native), personalPage()];
+}
+
+/** THE MEETING'S OWN PAGES — and for a real meeting that is ONE page: the meeting view.
  *
- *  ONE WRITER for what a meeting shows: `pagesForPhase` is this plus the personal page, rather than
- *  a second spelling of the same two rules. `native` is here only for the `?mock=1` fallback, where
- *  a fixture with no row keeps its canned markdown transcript.
+ *  The two-tab room (a "Transcript" canvas beside a "Brief"/"Minutes" document) is gone. The view
+ *  renders the notes file at the top and the transcript under it, so a second tab could only ever
+ *  show one of the two again. Every phase is the same shape: before a meeting there is nothing said
+ *  yet and the view says so; it never needs the notes file to exist.
  *
- *  …AND THE ONE WRITER OF `permanent` (Vexa-ai/vexa#1600). Founder, on the "Open transcript" chip:
- *  *"just keep a tab that can't be closed instead"*. These pages are the meeting's, not the
- *  reader's, so they carry no close control and every close path refuses them. The flag is stamped
- *  HERE because this function is already the single answer to "what does this meeting show" — a
- *  second place deciding it is how the strip and the panel come to disagree. The personal page is
- *  the ROOM's, not the meeting's, and stays closable: it is not in this list. */
+ *  ONE WRITER of `permanent` (Vexa-ai/vexa#1600): the meeting's page carries no close control, and
+ *  this is the only function that stamps it.
+ *
+ *  A `?mock=1` fixture has no row, so there is nothing for the view to bind to: it keeps its canned
+ *  markdown pages, named "Transcript" and "Notes". */
 export function meetingPages(phase: MeetingPhase, meetingId?: string | null,
-                             notePath?: string | null, native?: string | null,
-                             opts: { noteHasTranscript?: boolean } = {}): Page[] {
-  // The meeting doc is the SAME file in every phase — it is the brief while the room is running and
-  // the minutes once it is not, so only its NAME moves. That half was always right.
-  const doc: Page[] = notePath ? [{ path: notePath, label: phase === "post" ? "Minutes" : "Brief", permanent: true }] : [];
-  // prep: no transcript yet. The one page that matters before the room — what you walk in to decide.
-  if (phase === "prep") return doc;
-  // ONE PAGE, NOT TWO (Vexa-ai/vexa#1598). Founder, live: *"we want this doc to open alongside
-  // transcript as a single thing in the right side so it's a kind of doc that has live transcript
-  // widget in it"*. When the meeting's own page DECLARES the widget, the transcript is already on
-  // that page — a second Transcript tab is then the same words in two tabs, which is the shape he
-  // asked to be rid of.
-  //
-  // GATED ON THE PAGE'S OWN DECLARATION, never on "a note exists". Every report written before the
-  // widget is on somebody's desk right now and carries none; dropping the tab for those would take
-  // the room off the screen of exactly the people whose meetings predate this, silently. The server
-  // reads the declaration off the file (`/api/meeting/note` → `transcript`) and absent is the
-  // honest answer, which lands them on the two-page room they have today.
-  if (opts.noteHasTranscript && doc.length) return doc;
-  // otherwise: a transcript exists, and the doc leads it — the page is what the meeting IS about,
-  // the transcript is what was said in it.
-  const transcript: Page = meetingId
-    ? { kind: "meeting", path: meetingId, label: "Transcript", permanent: true }
-    : { path: `kg/entities/meeting/${native}.transcript.md`, label: "Transcript", permanent: true };
-  return [transcript, ...doc];
+                             notePath?: string | null, native?: string | null): Page[] {
+  if (meetingId) return [meetingView(meetingId)];
+  const doc: Page[] = notePath ? [{ path: notePath, label: NOTES_LABEL, permanent: true }] : [];
+  if (phase === "prep" || !native) return doc;
+  return [{ path: `kg/entities/meeting/${native}.transcript.md`, label: "Transcript", permanent: true }, ...doc];
 }
 
 /** MERGE the meeting's pages into a strip the reader is already using, PINNED (Vexa-ai/vexa#1597).
  *
- *  The founder's rule for a chat that creates a meeting: *"this transcript should be pinned"*. He
- *  had closed the transcript tab and could not get back to it, because the pages a meeting chat owns
- *  are laid out at OPEN — and this chat was a plain conversation when it opened.
+ *  A chat that sends a bot becomes the meeting's chat mid-conversation; its strip gains the meeting
+ *  view without the room being re-opened. A page already in the strip is pinned IN PLACE, never
+ *  duplicated, and takes the meeting's current name — a strip stored when this tab was called
+ *  "Transcript" reads "Meeting" from the next open. The desk is left alone.
  *
- *  So the binding lays them out now, and it ADDS rather than replaces. The reader is mid-turn with a
- *  document in front of them; re-opening the room would put the desk back in front and undo the
- *  transcript the send itself just fronted. Nothing here decides what is in front — the pages arrive
- *  behind the reader, pinned so the single preview slot cannot evict them, which is exactly the rule
- *  `openChat` applies to a room's own pages (founder ruling #1585: a room's pages are declared tabs).
- *
- *  A page already in the strip is PINNED IN PLACE, never duplicated — and the desk is left alone,
- *  because it is a product default rather than something the reader put there (`homeEntry`).
- *
- *  IT IS ALSO THE MIGRATION (Vexa-ai/vexa#1600). `permanent` is a property of the page, and a strip
- *  STORED before that rule carries none — which is every meeting chat anybody has actually used, and
- *  a stored strip is otherwise replayed verbatim forever. So the flag is stamped here, on the way
- *  in, rather than only where the pages are composed; `openChat` runs a meeting chat's stored strip
- *  through this for exactly that reason, and a transcript closed under the old rule comes back with
- *  it. Nothing else in the strip is touched: a reader owns their tabs. */
+ *  IT IS ALSO THE MIGRATION for `permanent` (Vexa-ai/vexa#1600): a stored strip carries no flag, so
+ *  it is stamped here, on the way in. */
 export function withMeetingPages(strip: Artifact[], pages: Page[]): Artifact[] {
   const out = [...strip];
   for (const pg of pages) {
     const key = artifactKey(pg);
     const i = out.findIndex((a) => artifactKey(a) === key);
     if (i >= 0) {
-      if (!out[i].desk) out[i] = { ...out[i], pinned: true, permanent: pg.permanent };
+      if (!out[i].desk) out[i] = { ...out[i], label: pg.label, pinned: true, permanent: pg.permanent };
       continue;
     }
     out.push({ kind: pg.kind, path: pg.path, slug: pg.slug, label: pg.label, pinned: true, permanent: pg.permanent });
@@ -316,44 +275,28 @@ export function withMeetingPages(strip: Artifact[], pages: Page[]): Artifact[] {
   return orderHistory(out);
 }
 
-/** THE PAGE A FRESHLY BOUND MEETING OPENS — its own document, or nothing (Vexa-ai/vexa#1601).
+/** THE TWO-TAB ERA'S DOCUMENT TAB, taken out of a stored strip (the one-view design, 2026-10-11).
  *
- *  The founder sent a bot from a chat, watched the transcript open beside it, and asked *"where is
- *  it?"* — the meeting doc. It did not exist: it was written when the call ENDED. It is minted at
- *  bot-send now, so the send has a page to put in front, and this says which.
- *
- *  ONLY WHEN THE PAGE CARRIES THE WIDGET. `note.transcript` is the meeting the page's own slot
- *  names, read off the file by the server (#1598) — so a non-empty value means the live transcript
- *  renders INSIDE this document and the document is the whole room. A note without it is a report
- *  written before the widget existed: those rooms keep the transcript tab they have today, and
- *  fronting a static report over a live transcript would be the exact regression that guards. */
-export function boundMeetingView(
-  pages: Page[],
-  note: { path?: string | null; transcript?: string },
-): Page | null {
-  const path = String(note?.path ?? "").trim();
-  if (!path || !String(note?.transcript ?? "").trim()) return null;
-  return pages.find((p) => p.kind !== "meeting" && p.path === path) ?? null;
+ *  A meeting chat opened before this stored its notes file as a permanent tab named "Brief" or
+ *  "Minutes", beside the transcript. The view now renders that file itself, so the tab is the same
+ *  notes twice and, worse, the old name. It is removed on POSITIVE EVIDENCE only: `permanent` was
+ *  stamped by `meetingPages` and nothing else, on the meeting's own furniture — never on a page a
+ *  reader opened. A reader's own pinned tabs, the desk and the meeting view itself are untouched,
+ *  and so is the FILE: this edits a list of tabs, never the workspace. */
+export function withoutRetiredMeetingDocs(strip: Artifact[]): Artifact[] {
+  return strip.filter((a) => !(a.permanent && a.kind !== "meeting" && !a.desk));
 }
 
-/** The strip WITHOUT the separate transcript tab for one meeting (Vexa-ai/vexa#1601).
- *
- *  The `bot_send` artifact pins and fronts `meeting:<row>` — the transcript canvas — because until
- *  the page existed that was the only way to see the room. A moment later the page arrives carrying
- *  the widget, and then the canvas is the same words in a second tab: *"we want this doc to open
- *  alongside transcript as a single thing in the right side"* (#1598). So the tab the send pinned
- *  gives way to the page, and `meetingPages`' own `noteHasTranscript` rule is what decides.
- *
- *  IT IS NOT A CLOSE PATH, which is why it may take a `permanent` tab (Vexa-ai/vexa#1600) that a
- *  reader may not. `permanent` says the transcript is the MEETING's furniture rather than a tab
- *  somebody chose; this is the meeting's own answer changing — the room moved into one page — and
- *  `meetingPages` is still the only thing that decides it.
- *
- *  It removes ONE identity and nothing else — never the desk, never a page the reader opened. */
-export function withoutSeparateTranscript(strip: Artifact[], meetingId: string): Artifact[] {
-  const id = String(meetingId ?? "").trim();
-  if (!id) return strip;
-  return strip.filter((a) => !(a.kind === "meeting" && a.path === id && !a.desk));
+/** WHAT A MEETING CHAT OPENS ON: its meeting view, unless the reader was last on another page of
+ *  theirs (the one-view design, 2026-10-11). `picked` is what the chat would otherwise open on —
+ *  its stored view, its focus, or the strip's first entry — and the desk counts as "nothing
+ *  chosen": it leads every strip by construction, so landing there says nothing about the reader. */
+export function meetingChatFront(list: Page[], picked: Page | undefined): Page | undefined {
+  const view = list.find((pg) => pg.kind === "meeting");
+  if (!view) return picked;
+  if (!picked) return view;
+  const inStrip = list.find((pg) => artifactKey(pg) === artifactKey(picked));
+  return picked.desk || inStrip?.desk ? view : picked;
 }
 
 /** THE RETIRED SPELLING — `kg/entities/meeting/<native>.md`, the path this client used to compose
@@ -387,9 +330,14 @@ export interface ResolvedView {
   focus: Page | null;
 }
 
+/** The words a link may use for the meeting view. `minutes` and `brief` are the names the meeting's
+ *  page had before the one view, and `transcript` the name of the tab beside it: links carrying any
+ *  of them keep working — they open the meeting view, which holds all three. */
+export const MEETING_VIEW_WORDS: readonly string[] = ["meeting", "notes", "transcript", "minutes", "brief"];
+
 /** Resolve a `?view=` spec into a chat's opening `artifacts[]`.
  *
- *  `transcript` | `minutes` | `brief` — focus that page (matched on the label the room produced)
+ *  `meeting` | `notes` | `transcript` | `minutes` | `brief` — focus the meeting view
  *  `file:<path>`                      — add that page and focus it
  *  comma-separated; the last token that RESOLVES keeps focus. Unresolvable names are ignored, so
  *  a stale link degrades to the room's own layout instead of an empty panel. */
@@ -412,7 +360,14 @@ export function resolveView(spec: string | null | undefined, phasePages: Page[])
       focus = added;
       continue;
     }
-    const hit = pages.find((pg) => labelMatches(pg.label, token.toLowerCase()));
+    const word = token.toLowerCase();
+    if (MEETING_VIEW_WORDS.includes(word)) {
+      const view = pages.find((pg) => pg.kind === "meeting");
+      if (view) { focus = view; continue; }
+    }
+    // a `?mock=1` room has no view: its notes page answers to the old names too
+    const name = word === "minutes" || word === "brief" ? "notes" : word;
+    const hit = pages.find((pg) => labelMatches(pg.label, name));
     if (hit) focus = hit;   // no hit → ignored on purpose; the default survives
   }
   return { pages, focus };

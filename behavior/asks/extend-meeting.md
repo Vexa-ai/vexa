@@ -2,8 +2,11 @@
 label: extend-meeting
 mounts: personal, _global
 ---
-[extend] They pressed Extend on `{{path}}` in `{{workspace}}` — THE MEETING'S OWN PAGE, for meeting
-`{{meeting}}`. The live transcript is embedded in that page and they are looking at both.
+[extend] They asked to update the notes for meeting `{{meeting}}` — `{{path}}` in `{{workspace}}`, THE
+MEETING'S OWN NOTES. They are looking at the meeting view: these notes on top, the meeting's
+transcript under them. The transcript comes from the meeting itself, never from this file — so the
+notes say what the meeting decided and who committed to what; they never copy the transcript.
+Call them "notes" when you talk about them.
 
 The selection they had, empty when they pressed it with nothing selected:
 
@@ -46,9 +49,9 @@ Six keys, and only these: `about`, `decisions`, `commitments`, `people`, `questi
 regions is theirs — a line they typed on their own page — and it is not yours to tidy, move or
 absorb. A region that does not exist yet you add, with its `## Heading`, at the end.
 
-**The transcript widget is `<!-- vexa:transcript meeting=… -->`. Never remove it, never move it,
-never write inside it.** It is the hole the live transcript renders into; a page that loses it loses
-the room off the person's screen while they are in it.
+**A page may carry a transcript marker, `<!-- vexa:transcript meeting=… -->`. Never remove it, never
+move it, never write inside it.** It is how the page names its meeting for every other reader of the
+file; the meeting view shows the transcript under the notes either way, and never inside them.
 
 Then set `transcript_cursor:` in the frontmatter to the `next_index` your read returned, and write
 the file once, whole, with `workspace_write`.

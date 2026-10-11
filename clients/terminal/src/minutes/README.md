@@ -19,7 +19,8 @@ By concern:
   page), `ExtendAction.tsx` and `extend.ts` (Extend and Create as background jobs; a text selection's
   **Ask about this**, which drafts a quote into the chat), `machinery.ts` (what a reader is not shown
   as files), `deskPanel.ts` and `deskTouch.ts` (the right panel when a chat names no page).
-- **Meetings** — `MeetingPageHeader.tsx`, `MeetingControls.tsx`, `meetingNote.ts`,
+- **Meetings** — `MeetingPageHeader.tsx` (the meeting view's header; the view itself is
+  `canvas/MeetingView.tsx`), `MeetingControls.tsx`, `meetingNote.ts` (where the notes are),
   `RecordingPlayer.tsx` and `meetingPlayback.ts` (playback that follows the transcript).
 - **Chat helpers** — `ProposalChips.tsx` and `proposals.ts` (suggested next moves),
   `FlowProposalAct.tsx`, `PoliciesAct.tsx`.

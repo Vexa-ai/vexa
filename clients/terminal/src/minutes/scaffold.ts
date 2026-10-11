@@ -320,7 +320,9 @@ export function scaffoldToChat(s: Scaffold, opts: { native?: string | null } = {
     // reader's first click, i.e. the set the scaffold composed would disappear without anybody
     // closing it. The wire still accepts `{token, pinned}`; it simply no longer distinguishes.
     // `at` is the preset's own order, so the last declared page sits nearest the current one.
-    if (a) declared.push({ ...a, pinned: true, at: i + 1 });
+    // ONE TAB PER THING (the one-view design, 2026-10-11): `meeting:transcript` and `meeting:note`
+    // are both the meeting view now, so a preset listing both declares it once.
+    if (a && !declared.some((d) => artifactKey(d) === artifactKey(a))) declared.push({ ...a, pinned: true, at: i + 1 });
   });
   const artifacts = withHome(declared, s.workspaces);
   const focusArt = s.focus ? artifactsFromTokens([s.focus], ctx)[0] : undefined;

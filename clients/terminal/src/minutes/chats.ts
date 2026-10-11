@@ -16,8 +16,8 @@ import { meetingPhase, type MeetingMock, type MeetingPhase } from "../surfaces/m
 
 /** One open document in the right panel — a TAB. Identical in shape to `Page`, and deliberately so:
  *  the panel's tab strip and the chat's saved artifacts are the same list, not two lists kept in
- *  step. `label` is carried rather than recomputed because a phase page's name ("Minutes" vs
- *  "Brief") is a property of the room that produced it, not of the path. */
+ *  step. `label` is carried rather than recomputed because a page's name is a property of the room
+ *  that produced it, not of the path (`withMeetingPages` renames a stored meeting tab in place). */
 export type Artifact = {
   kind?: "doc" | "meeting"; path: string; slug?: string; label: string;
   /** WHEN THIS PAGE WAS LAST IN FRONT — the strip is a history bar, ordered by it (decision 28,
