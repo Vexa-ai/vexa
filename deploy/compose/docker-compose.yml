@@ -1304,6 +1304,23 @@ services:
       # tenant, but only sign-ins whose ID token carries `xms_edov: true` (an optional claim to add in
       # the app registration). Google sign-ins need a verified email.
       - MICROSOFT_TENANT_ID=${MICROSOFT_TENANT_ID:-common}
+      # Generic OpenID Connect sign-in (ADFS, Keycloak; clients/terminal/config.v1.json VEXA_OIDC_*).
+      # Set the issuer to turn it on; then the client id and secret are required or the terminal
+      # refuses to start. Register ${NEXTAUTH_URL}/api/auth/callback/oidc at the provider. For an
+      # internal PKI, mount the CA bundle in a docker-compose.override.yml and name it here.
+      # Guide: docs/docs/sign-in-oidc.mdx.
+      - VEXA_OIDC_ISSUER=${VEXA_OIDC_ISSUER:-}
+      - VEXA_OIDC_CLIENT_ID=${VEXA_OIDC_CLIENT_ID:-}
+      - VEXA_OIDC_CLIENT_SECRET=${VEXA_OIDC_CLIENT_SECRET:-}
+      - VEXA_OIDC_SCOPES=${VEXA_OIDC_SCOPES:-}
+      - VEXA_OIDC_RESOURCE=${VEXA_OIDC_RESOURCE:-}
+      - VEXA_OIDC_DISPLAY_NAME=${VEXA_OIDC_DISPLAY_NAME:-}
+      - VEXA_OIDC_CA_FILE=${VEXA_OIDC_CA_FILE:-}
+      - VEXA_OIDC_EMAIL_CLAIM=${VEXA_OIDC_EMAIL_CLAIM:-}
+      - VEXA_OIDC_NAME_CLAIM=${VEXA_OIDC_NAME_CLAIM:-}
+      - VEXA_OIDC_REQUIRE_EMAIL_VERIFIED=${VEXA_OIDC_REQUIRE_EMAIL_VERIFIED:-}
+      # Which sign-in doors to offer: a subset of google,microsoft,oidc,email (empty = all configured).
+      - VEXA_SIGNIN_METHODS=${VEXA_SIGNIN_METHODS:-}
       # Sign-in link mail (clients/terminal/src/app/api/auth/mailer.ts) goes through the deployment's
       # mail relay — the VEXA_MAIL_SMTP_* family flows sends through too (declared in
       # clients/terminal/config.v1.json). Unset, the mailer dials localhost:1025 inside THIS

@@ -1,8 +1,9 @@
 /** Instance status for the login surface — UNAUTHENTICATED by design: the sign-in screen needs
  *  to know, before any identity exists, one thing it cannot ask an authenticated edge for.
  *
- *  Exposes exactly ONE BOOLEAN, which a visitor infers from the screen anyway:
+ *  Exposes exactly TWO BOOLEANS, which a visitor infers from the screen anyway:
  *    • `admin_exists` — is a claim screen showing or isn't it.
+ *    • `email_link` — does the card offer the emailed link (`VEXA_SIGNIN_METHODS`, oidcConfig.mjs).
  *
  *  It used to carry `global_setup` too (the company-layer gate, founder ruling 2026-09-02). That
  *  gate is gone (founder ruling 2026-10-08: "let's remove global setup at all so that there is no
@@ -10,15 +11,17 @@
  *  Nothing else crosses: in particular the company name, which would identify a customer to anyone
  *  who curls an anonymous endpoint on a self-hosted box.
  *
- *  The internal secret stays server-side. Providers are NOT repeated here — the client already
- *  discovers them via /api/auth/providers.
+ *  The internal secret stays server-side. OAuth providers are NOT repeated here — the client already
+ *  discovers them via /api/auth/providers. The emailed link is not a NextAuth provider, so whether it
+ *  is offered is said here.
  */
 import { NextResponse } from "next/server";
 import { instanceState } from "../adminApi";
+import { signinMethodEnabled } from "../oidcConfig.mjs";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
   const state = await instanceState();
-  return NextResponse.json({ admin_exists: state.admin_exists }, { headers: { "Cache-Control": "no-store" } });
+  return NextResponse.json({ admin_exists: state.admin_exists, email_link: signinMethodEnabled("email") }, { headers: { "Cache-Control": "no-store" } });
 }

@@ -654,6 +654,34 @@ terminal:
     user: ""
     secure: ""
     tlsInsecure: ""
+  # Sign-in through the organisation's own OpenID Connect provider (ADFS, Keycloak). Off unless
+  # `issuer` is set. Register this redirect URI at the provider: <publicUrl>/api/auth/callback/oidc
+  # (publicUrl must be set). The terminal pod needs HTTPS egress to the issuer. A half-filled block
+  # does not deploy a login without its door: the terminal refuses to start and names the missing key.
+  # Operator guide: docs/docs/sign-in-oidc.mdx.
+  oidc:
+    issuer: ""                # e.g. https://adfs.example.com/adfs or https://keycloak.example.com/realms/corp
+    clientId: ""
+    # The client secret is read from a Secret you create (never from values):
+    #   kubectl create secret generic vexa-oidc --from-literal=client-secret=...
+    existingSecret: ""
+    existingSecretKey: client-secret
+    scopes: ""                # empty = "openid email profile"; ADFS: "openid email profile allatclaims"
+    resource: ""              # ADFS: the Web API identifier (usually = clientId); others: leave empty
+    displayName: ""           # the button reads "Continue with <displayName>"; empty = "Single sign-on"
+    emailClaim: ""            # empty = "email" (ADFS without an email rule: "upn")
+    nameClaim: ""             # empty = "name"
+    requireEmailVerified: ""  # "1" = refuse unless the ID token says email_verified: true
+    # The CA chain the provider's TLS certificate is issued under, when it is an internal PKI. Name a
+    # ConfigMap OR a Secret holding the PEM bundle under `key`; it is added to the public roots.
+    caBundle:
+      configMap: ""
+      secret: ""
+      key: ca.crt
+  # Which sign-in doors to offer: a comma-separated subset of google, microsoft, oidc, email.
+  # Empty = every configured door. "oidc" alone hides the emailed link and any Google/Microsoft
+  # provider; a door left out is not registered at all (its routes refuse).
+  signinMethods: ""
   resources:
     requests: { cpu: 100m, memory: 256Mi }
     limits:   { cpu: 1000m, memory: 1Gi }

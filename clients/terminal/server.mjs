@@ -18,6 +18,7 @@ import nextEnv from "@next/env";
 import next from "next";
 import { WebSocketServer, WebSocket } from "ws";
 import { authSecretStartupError } from "./src/app/api/auth/authSecret.mjs";
+import { signinConfigStartupError } from "./src/app/api/auth/oidcConfig.mjs";
 import { stampClientAddress, trustedProxies } from "./src/app/api/auth/clientAddress.mjs";
 import { isImageOptimizerPath, refuseImageOptimizer } from "./src/app/api/imageOptimizer.mjs";
 
@@ -30,6 +31,15 @@ loadEnvConfig(process.cwd(), dev);
 const secretError = authSecretStartupError(process.env);
 if (secretError) {
   console.error(`[terminal] refusing to start: ${secretError}`);
+  process.exit(1);
+}
+
+// The sign-in doors, likewise: a generic OIDC issuer set without the client, secret or a readable CA
+// bundle it needs, or a VEXA_SIGNIN_METHODS naming a door that does not exist, is a deploy whose
+// login is not what the operator wrote. Refuse and name the key (oidcConfig.mjs).
+const signinError = signinConfigStartupError(process.env);
+if (signinError) {
+  console.error(`[terminal] refusing to start: ${signinError}`);
   process.exit(1);
 }
 

@@ -6,7 +6,8 @@ Terminal-owned authentication. The auth contract downstream is the httpOnly `vex
 
 Two doors, and no third:
 
-- **OAuth** — `[...nextauth]/` brokers Google + Microsoft sign-in via NextAuth. Its `signIn`
+- **OAuth** — `[...nextauth]/` brokers Google, Microsoft and a generic OIDC provider (ADFS,
+  Keycloak; `oidcConfig.mjs`, `VEXA_OIDC_*`) via NextAuth. Its `signIn`
   callback runs the same find-or-create+mint flow as everything else (`adminApi.ts`) and sets the
   two cookies. Providers self-gate on env presence (`GOOGLE_CLIENT_*` / `MICROSOFT_CLIENT_*`,
   `NEXTAUTH_URL`, `NEXTAUTH_SECRET` — sourced from `vexa-secrets`). The UI (`AuthGate.tsx`)
@@ -40,6 +41,12 @@ nothing is minted or verified.
 One link is both door and destination: `/api/auth/redeem?t=<token>&next=<relative-path>` carries
 the deeplink the visitor was reaching for (`?ask=`, `?meeting=`, `?view=`), so a click lands them
 authenticated and where they meant to be, in one hop.
+
+**Which doors exist** is `VEXA_SIGNIN_METHODS` (`oidcConfig.mjs`): a subset of google, microsoft,
+oidc, email. A door left out is not registered, or for the emailed link its routes answer 404, and
+`instance/` says `email_link: false` so the card draws no form. `server.mjs` refuses to start on an
+unknown method or a half-configured OIDC provider. Operator guide:
+[`docs/docs/sign-in-oidc.mdx`](../../../../../../docs/docs/sign-in-oidc.mdx).
 
 `login/` — direct email login — is **development-only** and answers 403 on any other build. To sign
 in against a deployed container, request a link and redeem it. `logout/` clears the vexa cookies and the NextAuth session cookies. `adminApi.ts` is the

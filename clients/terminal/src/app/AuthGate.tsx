@@ -2,9 +2,10 @@
 /** Login gate. Polls /api/auth/me on mount; if unauthenticated, renders the sign-in card.
  *
  *  Two real doors, and no third:
- *   • OAuth — Google / Microsoft (next-auth/react `signIn`, which works without a SessionProvider).
- *     Enabled providers are discovered from NextAuth's /api/auth/providers, so a deploy with no
- *     OAuth creds simply hides the buttons.
+ *   • OAuth — Google / Microsoft / the instance's own OIDC issuer (ADFS, Keycloak), via next-auth/react
+ *     `signIn`, which works without a SessionProvider. Enabled providers are discovered from
+ *     NextAuth's /api/auth/providers, so a deploy with no OAuth creds simply hides the buttons; the
+ *     OIDC button carries the name the operator gave it (`VEXA_OIDC_DISPLAY_NAME`).
  *   • EMAIL MAGIC LINK — the address goes to /api/auth/request-link, which mails a signed,
  *     single-use link; clicking it hits /api/auth/redeem, which sets the session cookies and
  *     drops the visitor exactly where they were headed. The card's job here ends at
@@ -14,6 +15,9 @@
  *  to /api/auth/login, and a "debug sign-in" form onto the same route. Both were password-less —
  *  anyone who could type a URL could become anyone. The emailed link replaces them; the mailbox is
  *  the proof. /api/auth/login still exists for local dev tooling and is refused in production.
+ *
+ *  An operator can close the emailed link (`VEXA_SIGNIN_METHODS` without `email`); /api/auth/instance
+ *  then says `email_link: false` and the form is not drawn. The routes refuse on their own either way.
  *
  *  FIRST RUN: /api/auth/instance says whether an admin exists. On a fresh instance the card becomes
  *  the one-time "Set up your instance" claim screen. It asks first for the ADMIN CLAIM CODE that
@@ -56,7 +60,18 @@ import { signinErrorMessage } from "./signinRefusal";
 import { SESSION_ENDED_HEADLINE } from "../surfaces/apiClient";
 
 type Status = "checking" | "out" | "in";
-type Providers = { google: boolean; microsoft: boolean };
+/** `oidc` is the button's label when the instance's OIDC provider is registered, else null. */
+type Providers = { google: boolean; microsoft: boolean; oidc: string | null };
+
+/** The enabled providers, from NextAuth's /api/auth/providers answer. */
+export function providersFrom(p: Record<string, unknown>): Providers {
+  const oidc = p.oidc as { name?: unknown } | undefined;
+  return {
+    google: !!p.google,
+    microsoft: !!p.microsoft,
+    oidc: oidc ? (typeof oidc.name === "string" && oidc.name.trim() ? oidc.name.trim() : "Single sign-on") : null,
+  };
+}
 
 /** Where the link should land: whatever deeplink the visitor already had in the URL (`?ask=`,
  *  `?meeting=`, `?view=`) travels through the mail, so the click is door AND destination. */
@@ -103,8 +118,10 @@ export function gateVerdict(input: {
 
 export function AuthGate({ children }: { children: React.ReactNode }) {
   const [status, setStatus] = useState<Status>("checking");
-  const [providers, setProviders] = useState<Providers>({ google: false, microsoft: false });
+  const [providers, setProviders] = useState<Providers>({ google: false, microsoft: false, oidc: null });
   const [adminExists, setAdminExists] = useState(true); // fail-safe: plain sign-in until told otherwise
+  // Is the emailed link offered? Drawn unless the instance says it is closed; the routes refuse anyway.
+  const [emailLink, setEmailLink] = useState(true);
   // Has the instance probe SETTLED (answered or failed)? Distinct from its value, because "we have
   // not asked yet" and "we asked and an admin exists" must not render the same thing.
   const [instanceProbed, setInstanceProbed] = useState(false);
@@ -168,16 +185,17 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     fetch("/api/auth/providers", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : {}))
       .then((p: Record<string, unknown>) =>
-        active && setProviders({ google: !!p.google, microsoft: !!p.microsoft }))
+        active && setProviders(providersFrom(p)))
       .catch(() => undefined);
     // First-run probe — {admin_exists:false} flips the card into the admin-claim variant. It
     // defaults to "an admin exists" on any failure (a bad response, a parse error, an unreachable
     // server), so a probe that cannot answer never shows a claim screen that cannot succeed.
     fetch("/api/auth/instance", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : { admin_exists: true }))
-      .then((d: { admin_exists?: boolean }) => {
+      .then((d: { admin_exists?: boolean; email_link?: boolean }) => {
         if (!active) return;
         setAdminExists(d.admin_exists !== false);
+        setEmailLink(d.email_link !== false);
         setInstanceProbed(true);
       })
       // A probe that could not run has still SETTLED — it settled on the fail-safe values already in
@@ -295,7 +313,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   const needCode = claiming && !codeAccepted;     // …once the claim code has been accepted
   // With no OAuth configured (this deploy's /api/auth/providers is empty) the emailed link is not
   // an alternative to anything — it is the door. "Or …" would read as if a button were missing.
-  const hasOAuth = providers.google || providers.microsoft;
+  const hasOAuth = providers.google || providers.microsoft || !!providers.oidc;
 
   return (
     <div style={{ height: "100vh", background: "var(--bg)", display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -389,8 +407,18 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
                 <MicrosoftMark /> Continue with Microsoft
               </button>
             )}
+            {!needCode && providers.oidc && (
+              <button data-testid="signin-oidc" onClick={() => signIn("oidc", { callbackUrl: destination() })} style={oauthBtn}>
+                Continue with {providers.oidc}
+              </button>
+            )}
+            {!needCode && !hasOAuth && !emailLink && (
+              <div style={{ fontSize: 12, color: "var(--danger)", lineHeight: 1.5 }}>
+                No sign-in method is configured on this instance. Ask its operator.
+              </div>
+            )}
 
-            {!needCode && <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {!needCode && emailLink && <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               <div style={{ fontSize: 11, color: "var(--t3)", lineHeight: 1.4 }}>
                 {hasOAuth
                   ? "Or get a sign-in link by email."

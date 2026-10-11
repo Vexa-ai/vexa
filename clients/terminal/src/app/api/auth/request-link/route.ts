@@ -33,6 +33,7 @@ import { startLinkDelivery } from "../linkDelivery";
 import { takeLinkRequest } from "../linkRateLimit";
 import { CLIENT_ADDRESS_HEADER } from "../clientAddress.mjs";
 import { isWellFormedEmail } from "../emailAddress";
+import { signinMethodEnabled } from "../oidcConfig.mjs";
 
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
@@ -57,6 +58,11 @@ function baseUrl(): string | null {
 }
 
 export async function POST(request: NextRequest) {
+  // CLOSED BY THE OPERATOR (`VEXA_SIGNIN_METHODS` without `email`): the door does not exist on this
+  // instance, so it answers as an absent route does — before the body is read or anything is spent.
+  if (!signinMethodEnabled("email")) {
+    return NextResponse.json({ error: "Not found" }, { status: 404, headers: NO_STORE });
+  }
   let body: { email?: unknown; next?: unknown };
   try {
     body = await request.json();

@@ -105,12 +105,12 @@
       "properties": { "first": { "const": true, "description": "This redemption is the link's first." } }
     },
     "ProviderSubjectBindRequest": {
-      "description": "PUT /internal/users/{id}/provider-subject — the terminal binds the account a Google or Microsoft sign-in reached to that identity's stable subject, before it mints a token. The first sign-in through a provider records the subject; a later one must carry the same (200 ProviderSubjectBindResponse), and one with another subject is refused with 409, changing nothing. 404 for an unknown account.",
+      "description": "PUT /internal/users/{id}/provider-subject — the terminal binds the account a Google, Microsoft or generic OIDC sign-in reached to that identity's stable subject, before it mints a token. The first sign-in through a provider records the subject; a later one must carry the same (200 ProviderSubjectBindResponse), and one with another subject is refused with 409, changing nothing. 404 for an unknown account.",
       "type": "object",
       "additionalProperties": false,
       "required": ["subject"],
       "properties": {
-        "subject": { "type": "string", "pattern": "^(?:google:[A-Za-z0-9._-]{1,255}|microsoft:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$", "description": "google:<sub>, or microsoft:<tenant id>:<object id>." }
+        "subject": { "type": "string", "pattern": "^(?:google:[A-Za-z0-9._-]{1,255}|microsoft:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|oidc:[0-9a-f]{64})$", "description": "google:<sub>, microsoft:<tenant id>:<object id>, or oidc:<sha256 hex of the issuer and sub>." }
       }
     },
     "ProviderSubjectBindResponse": {
