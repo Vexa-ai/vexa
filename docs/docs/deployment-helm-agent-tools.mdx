@@ -59,6 +59,8 @@ networkPolicy:
 | `models.agentModel` | `VEXA_AGENT_MODEL` | agent-api | the model id. |
 | `runtime.agentWorkerImage` | `AGENT_WORKER_IMAGE` | runtime | the worker image. With `global.imageTag` set, only its tag is replaced, so a mirrored registry is kept. |
 
+Every value is also in the [configuration reference](/configuration#agent-inference-bring-your-own) and the [chart README](https://github.com/Vexa-ai/vexa/blob/main/deploy/helm/charts/vexa/README.md).
+
 The runtime passes the model route on to each agent worker it starts. So the route must be on the
 runtime, not only on agent-api, and the chart sets it on both. A person's own endpoint, set under
 **Settings → Models**, still replaces the deployment's route for that person.

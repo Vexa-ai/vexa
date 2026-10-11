@@ -1,4 +1,4 @@
-- **Helm: the chat agent's model route is a chart value, and a model without tool calling says so.**
+- **Helm: the chat agent's model route is a chart value, and a model without tool calling says so (#1824).**
   `models.runner`, `models.llmBaseUrl`, `models.llmExtraBody` and `secrets.llmApiKey` set the
   openai-agent harness on both agent-api and the runtime, which passes them to every agent worker. With
   them, the agent on a Helm install sends the bot, reads the transcript and stops the bot through its
