@@ -8,6 +8,9 @@ imported into **any other Vexa deployment** — self-hosted to cloud, staging to
 team's install to another's. On the importing side it is a normal meeting owned by the person who
 imported it: the canvas, search, recordings and the agent see it like any recorded meeting.
 
+Meetings are described in [Meetings](/core/meetings); the routes are in the
+[Meetings API](/api/meetings#export-and-import-a-meeting).
+
 The file format is a sealed, versioned contract, [`meeting-bundle.v1`](https://github.com/Vexa-ai/vexa/tree/main/deploy/contracts/meeting-bundle.v1),
 documented for anyone who wants to produce or read bundles outside Vexa.
 
@@ -186,7 +189,8 @@ refused rather than produced without it).
    `validate.mjs` reads it, must hold `manifest.json` and `meeting.json`, and a manifest it can
    inflate must name a `meeting-bundle` contract. That decides only *where the file goes* — a file
    that fails it is attached as before; one that passes goes to the import route, which checks
-   everything else. The chat (`surfaces/ChatBundleImport.tsx`) sends it with the same client call
+   everything else. A file the browser has already typed as a picture, text or a document is
+   attached without being read. The chat (`surfaces/ChatBundleImport.tsx`) sends it with the same client call
    the meetings list's **Import meeting** uses (`confirmImport`), with upload progress, once per
    file at a time; on `409 duplicate_import` it asks the dry run which meeting the file already is,
    to link it. **Import meeting** sends `?dry_run=true` first for its preview. Either way the
@@ -280,3 +284,10 @@ is stable, distinct per deployment, and reveals nothing).
 - **In the chat.** Detection reads only the zip's directory and its manifest, never the recordings,
   and grants nothing: the server's checks are the verdict. Every value from the file or the server
   is rendered as text.
+
+## Related
+
+- [Meetings](/core/meetings) — what a meeting is, from plan to transcript.
+- [Meetings API § Export and import a meeting](/api/meetings#export-and-import-a-meeting) — the routes, statuses and refusals.
+- [Plan and share a meeting](/how-to/plan-a-meeting) — share a meeting inside one deployment instead of moving it.
+- [`meeting-bundle.v1`](https://github.com/Vexa-ai/vexa/tree/main/deploy/contracts/meeting-bundle.v1) — the file format, for producing or reading bundles outside Vexa.

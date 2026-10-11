@@ -437,6 +437,9 @@ With `dry_run=true`: `200` and a preview (meeting, segment count, speakers, medi
 only. A refusal is `{"detail": {"code", "detail"}}` — `409 duplicate_import`, `413 too_large`, or
 `422` with one of the codes in the [refusal table](/how-to/move-a-meeting#what-you-see-when-it-is-refused).
 
+In the Terminal the same import runs when a person drops the bundle file into any chat; see
+[Move a meeting between deployments](/how-to/move-a-meeting#import).
+
 ## Meeting participants
 
 ```bash GET /meetings/{platform}/{native_meeting_id}/participants

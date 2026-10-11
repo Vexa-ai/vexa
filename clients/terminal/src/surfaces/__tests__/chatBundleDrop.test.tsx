@@ -20,6 +20,7 @@ import { Chat } from "../chat";
 import { ServicesProvider, createContainer, reg, CommandServiceId, OPEN_MEETING_EVENT, type CommandService } from "../../platform";
 import { LayoutServiceId, createLayoutService } from "../../workbench/layout";
 import { sniffMeetingBundle } from "../meetingBundleSniff";
+import { mayBeBundle } from "../ChatBundleImport";
 
 const GOLDEN = join(__dirname, "../../../../../deploy/contracts/meeting-bundle.v1/golden");
 const golden = (rel: string, name = rel.split("/").pop()!) =>
@@ -94,6 +95,14 @@ describe("which dropped file is a meeting bundle — the contract's rules, never
       expect(await sniffMeetingBundle(golden(f, "call.meeting-bundle.zip")), f).toBe("not_bundle");
     }
     expect(await sniffMeetingBundle(new File(["hello"], "x.meeting-bundle.zip"))).toBe("not_bundle");
+  });
+
+  it("only a file typed as a picture, text or a document skips the read; a zip, raw bytes or no type is read", () => {
+    expect(mayBeBundle(new File(["x"], "a.png", { type: "image/png" }))).toBe(false);
+    expect(mayBeBundle(new File(["x"], "a.txt", { type: "text/plain" }))).toBe(false);
+    expect(mayBeBundle(new File(["x"], "a.zip", { type: "application/zip" }))).toBe(true);
+    expect(mayBeBundle(new File(["x"], "a.zip", { type: "application/x-zip-compressed" }))).toBe(true);
+    expect(mayBeBundle(new File(["x"], "a", { type: "" }))).toBe(true);
   });
 
   it("a bundle renamed to anything is still a bundle", async () => {

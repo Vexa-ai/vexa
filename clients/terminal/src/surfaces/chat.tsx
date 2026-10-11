@@ -959,7 +959,9 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
   // attached exactly as before.
   const addFiles = (files: File[]) => {
     if (files.length === 0) return;
-    void bundleImports.route(files).then(attachFiles);
+    const { now, check } = bundleImports.split(files);
+    attachFiles(now);
+    if (check.length > 0) void bundleImports.route(check).then(attachFiles);
   };
 
   const attachFiles = (files: File[]) => {

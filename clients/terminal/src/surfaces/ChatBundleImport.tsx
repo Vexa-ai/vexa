@@ -60,6 +60,15 @@ function fileKey(f: File): string {
   return `${f.name}\u0000${f.size}\u0000${f.lastModified}`;
 }
 
+/** Could this file be a bundle at all? A file the browser already typed as something else — a
+ *  picture, text, a PDF, an office document — is not one, and is attached at once without being
+ *  read. Everything typed as a zip, as raw bytes, or not typed at all is read by the contract's rules
+ *  (`sniffMeetingBundle`); this only spares that read, it never decides that a file IS a bundle. */
+export function mayBeBundle(f: File): boolean {
+  const t = (f.type || "").toLowerCase();
+  return t === "" || t.includes("zip") || t === "application/octet-stream";
+}
+
 export function openCall(meetingId: number): void {
   window.dispatchEvent(new CustomEvent(OPEN_MEETING_EVENT, { detail: { ref: String(meetingId) } }));
 }
@@ -128,9 +137,15 @@ export function useBundleImports() {
     return rest;
   }, [importOne]);
 
+  /** The files to attach NOW (they cannot be bundles), and the ones to read first. */
+  const split = useCallback((files: File[]) => ({
+    now: files.filter((f) => !mayBeBundle(f)),
+    check: files.filter(mayBeBundle),
+  }), []);
+
   const dismiss = useCallback((id: string) => setCards((all) => all.filter((c) => c.id !== id || c.state === "importing")), []);
 
-  return { cards, route, dismiss };
+  return { cards, route, split, dismiss };
 }
 
 const card: CSSProperties = {
