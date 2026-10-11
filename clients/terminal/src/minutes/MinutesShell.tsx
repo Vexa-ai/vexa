@@ -43,7 +43,7 @@ import { scaffoldToChat, type Scaffold, type ScaffoldRefusal } from "./scaffold"
 import { pendingArrival, useScaffoldArrival } from "./arrival";
 import { chatForDeepLink, resolveWorkspaceDeepLink, type DeepLinkOutcome } from "./deepLink";
 import { workspaceRouteFromPath, type WorkspaceRoute } from "../app/workspaceRoute";
-import { artifactsFromTokens, artifactViewEffect, isRetiredNotePath, meetingPages, pageForArtifact, pageForDocRef, pageForMeetingRef, pagesForPhase, resolveView, withMeetingPages, withoutRetiredMeetingDocs, VIEW_KEY, VIEW_NAVIGATE_EVENT, type ViewSlot } from "./roomView";
+import { artifactsFromTokens, artifactViewEffect, isRetiredNotePath, meetingPages, pageForArtifact, pageForDocRef, pageForMeetingRef, pagesForPhase, resolveView, meetingChatFront, withMeetingPages, withoutRetiredMeetingDocs, VIEW_KEY, VIEW_NAVIGATE_EVENT, type ViewSlot } from "./roomView";
 import { fetchMeetingNotePath } from "./meetingNote";
 import { deskPanelPages } from "./deskPanel";
 import { reportOpened } from "./deskTouch";
@@ -477,7 +477,11 @@ export function MinutesShell() {
     const stored = storedRaw && retiredKeys.has(artifactKey(storedRaw))
       ? (list.find((pg) => pg.kind === "meeting") ?? null)
       : storedRaw;
-    const front = stored ?? focus ?? list[0];
+    // A MEETING CHAT OPENS ON ITS MEETING (the one-view design, 2026-10-11): the view is the same
+    // wherever a meeting is opened, so a chat about one leads with it — unless the reader was last
+    // on some other page of theirs, which is where they were and stays where they land.
+    const picked = stored ?? focus ?? list[0];
+    const front = c.meeting ? meetingChatFront(list, picked) : picked;
     setSel({
       kind: c.meeting ? "meeting" : "chat",
       chatId: c.id,

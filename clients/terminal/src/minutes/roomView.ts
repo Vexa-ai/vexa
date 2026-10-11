@@ -285,6 +285,18 @@ export function withoutRetiredMeetingDocs(strip: Artifact[]): Artifact[] {
   return strip.filter((a) => !(a.permanent && a.kind !== "meeting" && !a.desk));
 }
 
+/** WHAT A MEETING CHAT OPENS ON: its meeting view, unless the reader was last on another page of
+ *  theirs (the one-view design, 2026-10-11). `picked` is what the chat would otherwise open on —
+ *  its stored view, its focus, or the strip's first entry — and the desk counts as "nothing
+ *  chosen": it leads every strip by construction, so landing there says nothing about the reader. */
+export function meetingChatFront(list: Page[], picked: Page | undefined): Page | undefined {
+  const view = list.find((pg) => pg.kind === "meeting");
+  if (!view) return picked;
+  if (!picked) return view;
+  const inStrip = list.find((pg) => artifactKey(pg) === artifactKey(picked));
+  return picked.desk || inStrip?.desk ? view : picked;
+}
+
 /** THE RETIRED SPELLING — `kg/entities/meeting/<native>.md`, the path this client used to compose
  *  for a meeting's own document and which nothing has ever written.
  *

@@ -8,7 +8,7 @@
  *  The pairing is the point: a link may re-order attention inside a room, never manufacture a page
  *  the meeting does not have, and never leave the panel empty. */
 import { describe, expect, it } from "vitest";
-import { labelMatches, MEETING_VIEW_WORDS, pagesForPhase, resolveView } from "../../minutes/roomView";
+import { labelMatches, MEETING_VIEW_WORDS, meetingChatFront, pagesForPhase, resolveView } from "../../minutes/roomView";
 
 const labels = (pages: { label: string }[]) => pages.map((p) => p.label);
 
@@ -144,5 +144,23 @@ describe("resolveView — the link decides what is in front", () => {
     const before = [...post];
     resolveView("file:notes/plan.md", post);
     expect(post).toEqual(before);
+  });
+});
+
+describe("meetingChatFront — a meeting chat opens on its meeting", () => {
+  const desk = { path: "README.md", label: "Desk", desk: true };
+  const view = { kind: "meeting" as const, path: "7", label: "Meeting", permanent: true };
+  const plan = { path: "drafts/plan.md", label: "plan" };
+  const list = [desk, view, plan];
+  it("the view, when the chat would otherwise open on the desk or on nothing", () => {
+    expect(meetingChatFront(list, desk)).toBe(view);
+    expect(meetingChatFront(list, { path: "README.md", label: "Desk" })).toBe(view);
+    expect(meetingChatFront(list, undefined)).toBe(view);
+  });
+  it("the reader's own page, when that is where they were", () => {
+    expect(meetingChatFront(list, plan)).toBe(plan);
+  });
+  it("a chat with no meeting view keeps what it picked", () => {
+    expect(meetingChatFront([desk, plan], desk)).toBe(desk);
   });
 });
