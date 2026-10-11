@@ -16,13 +16,15 @@ import type { Row } from "./chats";
 import { AccountBadge } from "./AccountBadge";
 import { CollapseButton } from "./Collapse";
 import { PanelLeft, Plus, X } from "lucide-react";
-import { Badge, ConfirmDialog, IconButton, Tabs } from "../ui-kit";
+import { ConfirmDialog, IconButton, Tabs } from "../ui-kit";
 import { WorkspaceName } from "../ui-kit/WsLink";
 
 /* THE ROW'S LOOK IS THE ui-kit ROW's (guidelines §4.8): 28px, selected = a fill, weight 500 and a
  * 2px accent bar inside the radius, actions revealed on hover and focus-within without reflowing
- * the row. Status is a Badge ("Held"), the write target a muted Tag, and LIVE is the success
- * colour with its word — accent is reserved for "this is the one". */
+ * the row. The write target is a muted Tag, and LIVE is the success colour with its word — accent is
+ * reserved for "this is the one". A meeting that is over carries NO status word (founder 2026-10-11:
+ * *"i think this 'held' does not make sense anymore"*): it shows its date in the time column like
+ * every other row, and the filled dot (a chat's is a ring) is what says it is a call. */
 function ActivityDot({ r }: { r: Row }) {
   const active = useChatActive(r.chatId);
   if (active) return <span data-row-activity="active" role="img" aria-label="Agent is working" title="Agent is working" className="vx-dot vx-rail-dot" data-tone="info" />;
@@ -46,7 +48,7 @@ export function Rail(p: {
   const chatRow = (r: Row) => {
     const on = r.key === p.selKey;
     return (
-      <div key={r.key} className="vx-row2" data-selected={on ? "" : undefined}
+      <div key={r.key} className="vx-row2" data-selected={on ? "" : undefined} data-row-key={r.key}
         draggable={!!p.onMove} onDragStart={e => { setDragging(r.key); e.dataTransfer.setData("text/plain", r.key); e.dataTransfer.effectAllowed="move"; }}
         onDragEnd={()=>setDragging(null)} onDragOver={e=>{if(dragging){e.preventDefault();e.dataTransfer.dropEffect="move";}}}
         onDrop={e=>{e.preventDefault();if(dragging)p.onMove?.(dragging,r.key);setDragging(null);}}>
@@ -60,7 +62,10 @@ export function Rail(p: {
               on nearly every row is chrome. A row that is NOT the ordinary case is the information
               — and it is the case the founder lost a morning's files to. */}
           {r.target && <span data-row-target={r.target} className="vx-tag vx-rail-target"><WorkspaceName slug={r.target} /></span>}
-          {r.status === "held" && <span data-row-status="held"><Badge>Held</Badge></span>}
+          {/* NO "Held" BADGE (founder 2026-10-11, *"this 'held' does not make sense anymore"*): almost
+              every meeting row is over, so a word saying so on each of them is chrome, and the row
+              action drew over it. The meeting's date sits in the time column like any chat's time;
+              the filled dot marks the row as a call; `live` keeps its success word. */}
           <span className="vx-row2-meta" data-live={r.live ? "" : undefined}>{r.whenLabel}</span>
         </button>
         {r.chatId && (

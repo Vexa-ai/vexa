@@ -214,8 +214,11 @@ describe("the rail renders the status the row carries", () => {
       onNewChat={() => {}} onDeleteChat={() => {}} />,
   );
 
-  it("marks a finished meeting's chat `held`", () => {
-    expect(rail([HELD]).container.querySelector('[data-row-status="held"]')?.textContent).toBe("Held");
+  it("a finished meeting's chat carries no status word — its date, in the time column (founder 2026-10-11)", () => {
+    const { container } = rail([HELD]);
+    expect(container.querySelector("[data-row-status]")).toBeNull();
+    expect(container.querySelector("[data-chat-row]")?.textContent).not.toMatch(/held/i);
+    expect(container.querySelector(".vx-row2-meta")?.textContent).not.toBe("");
   });
 
   it("does not say `live` twice — the accent word where the time goes already does", () => {

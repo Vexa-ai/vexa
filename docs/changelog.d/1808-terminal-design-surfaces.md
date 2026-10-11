@@ -6,4 +6,5 @@
   workspace or a planned meeting silently did nothing. Keyboard focus in a dialog no longer jumps
   back to Cancel when the chat list refreshes, and the delete-chat dialog opens on "Delete chat", so
   Enter deletes it and Esc cancels. Every keyboard-focused field shows a focus
-  ring. See [Terminal UI design](/governance/ui-design).
+  ring. In the chat list a finished meeting's row shows its date instead of a "Held" badge, and a
+  row's action takes the time's place on hover instead of drawing over it. See [Terminal UI design](/governance/ui-design).

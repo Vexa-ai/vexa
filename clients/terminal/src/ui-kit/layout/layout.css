@@ -134,6 +134,12 @@
 .vx-rail-dot:not([data-tone])[data-kind="meeting"] { background: var(--border); }
 .vx-rail-target { max-width: 96px; overflow: hidden; text-overflow: ellipsis; flex: none; }
 .vx-row2-meta[data-live] { color: var(--success-text); }
+/* THE ROW ACTION TAKES THE TIME'S PLACE (founder 2026-10-11: it drew over "Held" and over a short
+ * time). The time column is at least as wide as the action and right-aligned, so the overlaid action
+ * lands inside the time's own box; on hover or focus the time steps aside (kept in layout, so nothing
+ * shifts) and only the action is there. */
+.vx-rail .vx-row2-meta { min-width: var(--control-xs); text-align: right; }
+.vx-rail .vx-row2:hover .vx-row2-meta, .vx-rail .vx-row2:focus-within .vx-row2-meta { visibility: hidden; }
 .vx-acct { position: relative; flex: none; border-top: 1px solid var(--border-subtle); }
 .vx-acct-menu { bottom: calc(100% + 6px); left: var(--space-2); right: var(--space-2); }
 .vx-acct-badge { display: flex; align-items: center; gap: var(--space-2); width: 100%; padding: var(--space-2) 10px; background: transparent; border: none; cursor: pointer; text-align: left; font: inherit; color: inherit; }
