@@ -1403,7 +1403,7 @@
    "unique-id": "flows-rows",
    "node-type": "data-asset",
    "name": "flows-rows",
-   "description": "the reaction + effect_receipt tables (core/flows/schema.sql); a retry consults the receipt before touching the outside world again. TWO writers: flows-worker runs the steps and stamps the receipts, and flows-api admits facts (POST /events \u2192 admit() \u2192 INSERT INTO reaction) and registers flow versions (INSERT INTO flow_version) in its own process"
+   "description": "the reaction + effect_receipt tables (core/flows/schema.sql); a retry consults the receipt before touching the outside world again. TWO writers: flows-worker runs the steps and stamps the receipts, and flows-api admits facts (POST /events \u2192 admit() \u2192 INSERT INTO reaction) and registers flow versions (INSERT INTO flow_version) in its own process. The friction_occurrence table (the repeat counter behind POST /friction's dedup: one row per subject + tool + normalised reason + UTC hour) is written ONLY by flows-api's POST /friction (flows_integrations/friction_dedup.py) and read by flows-timeline's friction_for_subject"
   },
   {
    "unique-id": "flows.v1",

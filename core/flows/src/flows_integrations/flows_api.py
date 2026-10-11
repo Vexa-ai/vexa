@@ -98,6 +98,7 @@ import flows_pages  # noqa: E402 — the page renderer `GET /flows/pages` serves
 from flows_defs import production  # noqa: E402
 from flows_steps.common import (db_url, internal_secret,  # noqa: E402
                                 require_internal_secret, setting)
+from flows_integrations import friction_dedup  # noqa: E402 — the repeat counter POST /friction keeps
 from flows_integrations.subject_auth import (REFUSAL, Caller,  # noqa: E402
                                               IdentityUnavailable, SubjectUnknown, resolve)
 # ALIASED, and it is not style. The route below is also called `list_reactions`, and `def` rebinds
@@ -1231,7 +1232,21 @@ def report_friction(
     # question for whoever reads the sink, later, with all of them in front of them.
     sev = _field("severity", severity).strip()[:200] or "annoyance"
     knd = _field("kind", kind).strip()[:200]
-    fid = _friction_id()
+    # ONE ROW PER EDGE PER HOUR (dedup). A reporter stuck in a loop files the same report on every
+    # pass; the first is admitted below as before, and a repeat with the same (uid, tool,
+    # normalised reason, UTC hour) only bumps a counter on it — `friction_dedup` is the one writer
+    # of that counter, and this route is its one caller.
+    tool_sent = _field("tool", tool)
+    tool_sent = tool_sent.strip()[:200] if isinstance(tool_sent, str) else ""
+    now = clock.now()
+    dkey = friction_dedup.dedup_key(uid=subj, tool=tool_sent, what_happened=happened,
+                                    what_i_tried=tried, now=now)
+    fid, seen = friction_dedup.record_occurrence(db, key=dkey, friction_id=_friction_id(),
+                                                 uid=subj, now=now)
+    if seen > 1:
+        return {"id": fid, "recorded": False, "duplicate_of": fid, "occurrences": seen,
+                "kind": knd, "severity": sev, "session": sess,
+                "instruction": (f"already reported {seen} times; do not report it again this run")}
     refs = {"uid": subj, "friction_id": fid,
            "what_i_tried": tried, "what_happened": happened, "severity": sev}
     if sess:
@@ -1264,7 +1279,10 @@ def report_friction(
     # refuses: the reporter stops filing, and nobody learns anything. `admit()` returns how many
     # reactions it created; 0 means no flow matched `friction.reported` (or this exact report was
     # already filed), and the caller is told that in the same field it already reads.
+    if created:
+        friction_dedup.mark_admitted(db, key=dkey, friction_id=fid)
     if not created:
+        friction_dedup.forget(db, key=dkey)   # nothing to fold repeats into — let the next try admit
         logger.error(
             "friction %s was NOT recorded: admit() created no reaction for friction.reported "
             "(no flow matches it in this registry, or the report was a duplicate). "
