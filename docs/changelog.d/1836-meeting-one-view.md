@@ -7,4 +7,4 @@
   starts collapsed to its last three lines, which keep moving during a live meeting; expand it for
   Highlight, Ask about this and click-to-play. Links with `view=transcript`, `minutes` or `brief`
   still work and open the meeting view. A notes update for a meeting the caller cannot read is now
-  refused with `403` before a turn is queued. See [Meetings](/minutes/meetings).
+  refused with `403` before a turn is queued. (#1836) See [Meetings](/minutes/meetings).
