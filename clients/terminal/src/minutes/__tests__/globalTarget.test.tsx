@@ -1,19 +1,17 @@
-/** THE ADMIN CAN AIM A CHAT AT THE COMPANY LAYER (Vexa-ai/vexa#1616) — the client half.
+/** ONLY THE ADMIN ACCOUNT HAS THE COMPANY LAYER — the client half.
  *
- *  Founder, 2026-09-06 15:20Z, as the admin, looking at the header's `+` menu (it offered `Example Bank`
- *  and "Attach existing repo…"):
+ *  Founder ruling 2026-10-11: *"let's change so that admin is a special account that has global only
+ *  and this being the only one that has control to global"*. It replaces #1616's shape, where the
+ *  instance admin — a person, on their everyday account — could aim any chat at `_global` from the
+ *  header's `+` menu. Now:
  *
- *      *"as admin i should just have global as option to choose here as workspace to write to"*
+ *    * the ADMIN ACCOUNT (identity's `admin_account`) sees one chip, Company, always the target, and
+ *      no `+` menu — it has no desk, no workspace and nothing to add;
+ *    * every everyday account — the instance admin's included — is never offered Company and never
+ *      shows its chip, whatever the chat's record says.
  *
- *  `_global` was hidden from the chip by the first walk's ruling — which was about ORDINARY
- *  MEMBERS, for whom it is mounted in every chat and therefore a constant. For the admin it is not
- *  a constant: it is the one workspace they may write that nobody chose. So it is offered in the
- *  `+` menu, it wears a chip while the chat is aimed at it, and clicking that chip opens
- *  `_global/README.md`. For everybody else nothing appears, and nothing can.
- *
- *  The server half — the turn's line naming the company layer with the rule that applies there, and
- *  the refusal that stops a non-admin session pointing a chat at `_global` — is pinned in
- *  `core/agent/tests/test_global_target.py`.
+ *  The server half — the mount table, the refusals and the cwd — is pinned in
+ *  `core/agent/tests/test_admin_account.py` and `core/agent/tests/test_global_target.py`.
  */
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { render, cleanup, fireEvent } from "@testing-library/react";
@@ -21,12 +19,11 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { ContextBar, GLOBAL_MOUNT, focusSet } from "../ContextBar";
+import { buildWorkspaces } from "../navigatorApi";
 import { COMPANY_WORD } from "../vocabulary";
 
-// The real component's contract, which is what these tests are about: a NAME from the registry
-// wins, the caller's fallback comes next, and the slug is the last resort nobody should ever see.
-// `_global` is absent here on purpose — the tier has no name until the setup conversation writes
-// the company's, and that gap is exactly where a chip would print `_global` without a fallback.
+// The real component's contract: a NAME from the registry wins, the caller's fallback comes next,
+// and the slug is the last resort nobody should ever see. `_global` is absent here on purpose.
 const NAMED: Record<string, string> = { "bank-4040f6": "Example Bank" };
 vi.mock("../../ui-kit/WsLink", () => ({
   WorkspaceName: ({ slug, fallback }: { slug: string; fallback?: string }) =>
@@ -42,7 +39,7 @@ const sel = (target?: string, workspaces = ["personal", "_global", BANK]) => ({
 });
 
 function bar(opts: {
-  admin?: boolean; target?: string; workspaces?: string[];
+  adminAccount?: boolean; target?: string; workspaces?: string[];
   memberships?: { workspace_id: string; role: string }[];
 } = {}) {
   const onTargetGlobal = vi.fn();
@@ -52,128 +49,75 @@ function bar(opts: {
     <ContextBar sel={sel(opts.target, opts.workspaces)} flavor="chat"
       memberships={(opts.memberships ?? []) as never[]}
       onAddWorkspace={onAddWorkspace} onRemoveWorkspace={vi.fn()} onSetTarget={onSetTarget}
-      isAdmin={opts.admin} onTargetGlobal={onTargetGlobal} />);
-  const openMenu = () =>
-    fireEvent.click(container.querySelector('[aria-label="Add a workspace to this chat"]') as HTMLElement);
-  return { container, onTargetGlobal, onSetTarget, onAddWorkspace, openMenu };
+      adminAccount={opts.adminAccount} onTargetGlobal={onTargetGlobal} />);
+  const plus = () => container.querySelector('[aria-label="Add a workspace to this chat"]') as HTMLElement | null;
+  const openMenu = () => fireEvent.click(plus() as HTMLElement);
+  return { container, onTargetGlobal, onSetTarget, onAddWorkspace, openMenu, plus };
 }
 
 const chipFor = (c: HTMLElement, slug: string) => c.querySelector(`[data-ws="${slug}"]`) as HTMLElement;
-const globalEntry = (c: HTMLElement) => c.querySelector('[data-ctx="global"]') as HTMLElement | null;
+const chips = (c: HTMLElement) => [...c.querySelectorAll("[data-ws]")].map((n) => n.getAttribute("data-ws"));
 
-// ── the + menu ───────────────────────────────────────────────────────────────────────────────────
+// ── the admin account: Company, and nothing else ─────────────────────────────────────────────────
 
-describe("the + menu offers the company layer, to the admin and to nobody else", () => {
-  it("offers it to the admin", () => {
-    const { container, openMenu } = bar({ admin: true });
-    openMenu();
-    expect(globalEntry(container)).toBeTruthy();
-    // The same name the chip will wear — one word for one place, resolved the same way.
-    expect(globalEntry(container)?.textContent).toBe(COMPANY_WORD);
+describe("the admin account's header is the company layer and nothing else", () => {
+  it("shows one chip, Company, whatever the chat's record holds", () => {
+    const { container } = bar({ adminAccount: true, target: undefined, workspaces: ["personal", BANK] });
+    expect(chips(container)).toEqual([GLOBAL_MOUNT]);
+    expect(chipFor(container, GLOBAL_MOUNT).textContent).toBe(COMPANY_WORD);
   });
 
-  it("does not offer it to anyone else", () => {
-    const { container, openMenu } = bar({ admin: false });
-    openMenu();
-    expect(globalEntry(container)).toBeNull();
-  });
-
-  it("does not offer it when nobody has said who this is", () => {
-    // `is_admin` is three-valued upstream and this prop is not. An unknown answer must not open a
-    // door the server would then slam — so the offer is made on a literal `true` and nothing else.
-    const { container, openMenu } = bar({});
-    openMenu();
-    expect(globalEntry(container)).toBeNull();
-  });
-
-  it("does not offer it when the chat already writes there — a row that changes nothing reads as broken", () => {
-    const { container, openMenu } = bar({ admin: true, target: GLOBAL_MOUNT });
-    openMenu();
-    expect(globalEntry(container)).toBeNull();
-  });
-
-  it("aims the chat at it on the click, and closes the menu", () => {
-    const { container, openMenu, onTargetGlobal } = bar({ admin: true });
-    openMenu();
-    fireEvent.click(globalEntry(container) as HTMLElement);
-    expect(onTargetGlobal).toHaveBeenCalledTimes(1);
-    expect(container.querySelector('[role="menu"]')).toBeNull();
-  });
-
-  it("stops saying the menu is empty when it is not", () => {
-    const { container, openMenu } = bar({ admin: true });
-    openMenu();
-    expect(container.textContent).not.toContain("No other workspace to add");
-  });
-
-  it("still says so to everyone else with nothing to add", () => {
-    const { container, openMenu } = bar({ admin: false });
-    openMenu();
-    expect(container.textContent).toContain("No other workspace to add");
-  });
-
-  it("lists it above the workspaces somebody was invited to", () => {
-    const { container, openMenu } = bar({
-      admin: true, workspaces: ["personal"], memberships: [{ workspace_id: BANK, role: "owner" }],
-    });
-    openMenu();
-    const items = [...container.querySelectorAll('[role="menuitem"]')].map((n) => n.textContent);
-    expect(items[0]).toBe(COMPANY_WORD);
-    expect(items).toContain("Example Bank");
-  });
-});
-
-// ── the chip ─────────────────────────────────────────────────────────────────────────────────────
-
-describe("the chip is on screen exactly while the chat writes there", () => {
-  it("appears for the admin once the chat is aimed at it", () => {
-    const { container } = bar({ admin: true, target: GLOBAL_MOUNT });
-    expect(chipFor(container, GLOBAL_MOUNT)).toBeTruthy();
-  });
-
-  it("stays hidden for the admin while the chat writes somewhere else", () => {
-    // The rail's rule, one level in: nearly every chat writes to the desk, so a chip saying so on
-    // nearly every chat is chrome. The case that is NOT ordinary is the information.
-    const { container } = bar({ admin: true, target: BANK });
-    expect(chipFor(container, GLOBAL_MOUNT)).toBeNull();
-  });
-
-  it("never appears for anyone else, whatever the record says", () => {
-    const { container } = bar({ admin: false, target: GLOBAL_MOUNT });
-    expect(chipFor(container, GLOBAL_MOUNT)).toBeNull();
-  });
-
-  it("is visibly the target, and says so to a screen reader", () => {
-    const { container } = bar({ admin: true, target: GLOBAL_MOUNT });
+  it("the chip is always the target, and says so to a screen reader", () => {
+    const { container } = bar({ adminAccount: true });
     expect(chipFor(container, GLOBAL_MOUNT).getAttribute("data-target")).toBe("1");
     expect(chipFor(container, GLOBAL_MOUNT).getAttribute("aria-current")).toBe("true");
   });
 
-  it("falls back to a word, never to the slug (#1585/#1602)", () => {
-    // In the running product the registry answers and the chip wears the company's own name. This
-    // pins the gap under it: until something knows that name, the chip must still not read
-    // `_global`, which is a directory showing through in the one place names belong.
-    const { container } = bar({ admin: true, target: GLOBAL_MOUNT });
-    expect(chipFor(container, GLOBAL_MOUNT).textContent).toBe(COMPANY_WORD);
-    expect(chipFor(container, GLOBAL_MOUNT).textContent).not.toContain("_global");
+  it("offers no + menu — it has no desk, no workspace and nothing to add", () => {
+    const { plus } = bar({ adminAccount: true, memberships: [{ workspace_id: BANK, role: "owner" }] });
+    expect(plus()).toBeNull();
   });
 
-  it("opens it on the click — the chip is the door, not only a label", () => {
-    // It is the target already, so the ordinary "make this the target" click is a no-op. A chip
-    // that names a place and refuses to open it is worse than no chip.
-    const { container, onTargetGlobal, onSetTarget } = bar({ admin: true, target: GLOBAL_MOUNT });
+  it("opens the company layer on the chip's click, and carries no ×", () => {
+    const { container, onTargetGlobal, onSetTarget } = bar({ adminAccount: true });
     fireEvent.click(container.querySelector(`[data-ws-target="${GLOBAL_MOUNT}"]`) as HTMLElement);
     expect(onTargetGlobal).toHaveBeenCalledTimes(1);
     expect(onSetTarget).not.toHaveBeenCalled();
-  });
-
-  it("carries no × — it is mounted in every chat, so removing it is not a thing that can happen", () => {
-    const { container } = bar({ admin: true, target: GLOBAL_MOUNT });
     expect(chipFor(container, GLOBAL_MOUNT).querySelector('[aria-label^="Remove"]')).toBeNull();
   });
 
+  it("falls back to a word, never to the slug (#1585/#1602)", () => {
+    const { container } = bar({ adminAccount: true });
+    expect(chipFor(container, GLOBAL_MOUNT).textContent).not.toContain("_global");
+  });
+});
+
+// ── everyday accounts: never Company ─────────────────────────────────────────────────────────────
+
+describe("an everyday account is never offered Company", () => {
+  for (const [name, adminAccount] of [["an everyday account", false], ["an unanswered probe", undefined]] as const) {
+    it(`${name}: the + menu has no Company row`, () => {
+      const { container, openMenu } = bar({ adminAccount });
+      openMenu();
+      const items = [...container.querySelectorAll('[role="menuitem"]')].map((n) => n.textContent);
+      expect(items).not.toContain(COMPANY_WORD);
+      expect(container.querySelector('[data-ctx="global"]')).toBeNull();
+    });
+
+    it(`${name}: no Company chip, even on a record aimed there`, () => {
+      const { container } = bar({ adminAccount, target: GLOBAL_MOUNT });
+      expect(chipFor(container, GLOBAL_MOUNT)).toBeNull();
+    });
+  }
+
+  it("still says so with nothing to add", () => {
+    const { container, openMenu } = bar({ adminAccount: false });
+    openMenu();
+    expect(container.textContent).toContain("No other workspace to add");
+  });
+
   it("leaves every other chip exactly as it was", () => {
-    const { container, onSetTarget } = bar({ admin: true, target: GLOBAL_MOUNT });
+    const { container, onSetTarget } = bar({ adminAccount: false });
     fireEvent.click(container.querySelector(`[data-ws-target="${BANK}"]`) as HTMLElement);
     expect(onSetTarget).toHaveBeenCalledWith(BANK);
     expect(chipFor(container, BANK).querySelector('[aria-label^="Remove"]')).toBeTruthy();
@@ -183,29 +127,31 @@ describe("the chip is on screen exactly while the chat writes there", () => {
 // ── the rule, without rendering anything ─────────────────────────────────────────────────────────
 
 describe("which chips a chat shows", () => {
-  it("hides both implicit mounts by default — the ruling this issue narrows, not the one it undoes", () => {
+  it("hides both implicit mounts for everybody else", () => {
     expect(focusSet(["personal", "_global", "_system", BANK])).toEqual(["personal", BANK]);
-  });
-
-  it("adds the company layer for an admin aimed at it", () => {
-    expect(focusSet(["personal", "_global"], { admin: true, target: GLOBAL_MOUNT }))
-      .toEqual(["personal", GLOBAL_MOUNT]);
-  });
-
-  it("adds it even when the mount set never carried it", () => {
-    // A row restored from the server can hold the target without `_global` in `workspaces` — and a
-    // header that stayed silent then is the exact failure #1611 exists to end.
-    expect(focusSet(["personal"], { admin: true, target: GLOBAL_MOUNT }))
-      .toEqual(["personal", GLOBAL_MOUNT]);
-  });
-
-  it("never adds `_system`, for anybody", () => {
-    expect(focusSet(["personal", "_system"], { admin: true, target: "_system" })).toEqual(["personal"]);
-  });
-
-  it("adds nothing for a non-admin, and nothing for an admin aimed elsewhere", () => {
     expect(focusSet(["personal", "_global"], { admin: false, target: GLOBAL_MOUNT })).toEqual(["personal"]);
-    expect(focusSet(["personal", "_global"], { admin: true, target: BANK })).toEqual(["personal"]);
+  });
+
+  it("is the company layer alone for the admin account", () => {
+    expect(focusSet(["personal", BANK], { admin: true })).toEqual([GLOBAL_MOUNT]);
+    expect(focusSet([], { admin: true, target: "_system" })).toEqual([GLOBAL_MOUNT]);
+  });
+});
+
+describe("the navigator", () => {
+  const active = [
+    { slug: "_global", repo: "", ref: "", role: "global", path: "/w/_global", write: true, primary: false, name: "Acme" },
+  ];
+
+  it("lists only the company layer for the admin account — no desk row", () => {
+    const rows = buildWorkspaces({ active: active as never, subject: "7", adminAccount: true,
+                                   memberships: [{ workspace_id: BANK, name: "Example Bank" }] });
+    expect(rows.map((r) => r.key)).toEqual(["_global"]);
+    expect(rows[0].name).toBe("Acme");
+  });
+
+  it("keeps the desk first for everybody else", () => {
+    expect(buildWorkspaces({ active: [], subject: "7" })[0].kind).toBe("desk");
   });
 });
 
@@ -231,7 +177,9 @@ describe("the shell mounts it, aims at it, and opens it — in that order", () =
     expect(handler).toContain("readerChoseFocus.current = true");
   });
 
-  it("asks the server who this is, and believes only a literal yes", () => {
-    expect(shell).toMatch(/setIsAdmin\(\(d as \{ is_admin\?: boolean \} \| null\)\?\.is_admin === true\)/);
+  it("asks the server whether this is the admin account, and believes only a literal yes", () => {
+    expect(shell).toMatch(/setIsAdminAccount\(\(d as \{ admin_account\?: boolean \} \| null\)\?\.admin_account === true\)/);
+    expect(shell).toContain("adminAccount={isAdminAccount}");
+    expect(shell).not.toMatch(/isAdmin=\{/);
   });
 });

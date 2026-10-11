@@ -17,6 +17,8 @@ import subprocess
 from pathlib import Path
 
 import pytest
+
+from tests import admin_accounts
 from fastapi.testclient import TestClient
 
 from control_plane import membership_acts as acts
@@ -73,9 +75,9 @@ def _owned(root: Path, workspace_id: str = WS, idx=None):
 
 
 def _settings(root: Path, *, admins: str = "", ui: str = "https://app.example.test"):
+    admin_accounts.name(admins)
     return load_settings(workspaces_dir=str(root),
                          global_system_workspace_path=str(root / "_global"),
-                         global_admin_subjects=admins,
                          internal_api_secret="s", ui_url=ui, redis_url="")
 
 
@@ -546,3 +548,7 @@ def test_the_asks_tell_the_agent_to_ask_confirm_then_call_the_verb():
         said = (repo / "behavior" / "asks" / f"{name}.md").read_text()
         assert verb in said and "{{member}}" in said
     assert "role=\"remove\"" in (repo / "behavior" / "asks" / "member-remove.md").read_text()
+
+
+# Identity's admin-account answer, faked at agent-api's one reader (tests/admin_accounts.py).
+pytestmark = pytest.mark.usefixtures("fake_admin_accounts")

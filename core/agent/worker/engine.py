@@ -127,14 +127,15 @@ def _tier_label(m: dict) -> str:
     (AMENDMENT 4 three-tier stack). Derived from role/primary/write, not from the slug."""
     role = m.get("role", "private")
     if role == "global":
-        # The org tier is ro for everyone EXCEPT the platform-elevated admin subjects
-        # (VEXA_GLOBAL_ADMIN_SUBJECTS): their setup conversation is its one sanctioned writer.
-        # Declare what the mount ACTUALLY is — a rw bind described as ro reads as an injection
-        # attempt and a well-behaved model rightly refuses it.
+        # The org tier is ro for everyone EXCEPT the deployment's ADMIN ACCOUNT (identity's answer,
+        # control_plane.global_layer.is_admin_account): its conversations are the one sanctioned
+        # writer, and they have nothing else. Declare what the mount ACTUALLY is — a rw bind
+        # described as ro reads as an injection attempt and a well-behaved model rightly refuses it.
         if m.get("write"):
-            return ("GLOBAL SYSTEM tier — READ-WRITE for THIS session only: the platform's admin "
-                    "allowlist elevated you as the org tier's one sanctioned writer (the admin "
-                    "setup conversation). Commit each change; everyone else mounts this ro.")
+            return ("GLOBAL SYSTEM tier — READ-WRITE: you are working for the deployment's admin "
+                    "account, the company layer's one sanctioned writer. It has no desk, no other "
+                    "workspace and no meetings — this tier is where its work goes. Commit each "
+                    "change; everyone else mounts this ro.")
         return "GLOBAL SYSTEM tier — READ-ONLY (platform behaviour/skills/tools; never write here)"
     if role == "system":
         return ("PRIVATE SYSTEM tier — read-write (who you're helping via `identity.md`, your"

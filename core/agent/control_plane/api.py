@@ -29,7 +29,7 @@ import time
 from pathlib import Path
 from typing import Callable, Iterator, Optional
 
-from fastapi import APIRouter, Body, FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Body, Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from jsonschema.exceptions import ValidationError
 from pydantic import BaseModel
@@ -111,6 +111,7 @@ from control_plane.routers import clock as routers_clock
 from control_plane.routers import workspaces as routers_workspaces
 from control_plane.routers import sharing as routers_sharing
 from control_plane import route_policy
+from control_plane import admin_account_scope
 from control_plane.ceiling import reads_within, require_in_ceiling
 from control_plane.api_shared import (
     logger, _PHASE_WORD, _iso, _provenance_line, _epoch_text, _Sessions, _LiveMeetings)
@@ -205,8 +206,16 @@ def create_app(
     # WHICH VERBS NEED A PERSON IN THE LOOP is data — `routes.v1.json`'s `verbs` rows — and this is
     # the one place it is enforced: an app-level dependency, so it runs for the route a request
     # matched, before the handler, and no route asks for it by hand (`route_policy.py`).
-    app = FastAPI(title="vexa-agent-api", version="0.12.0", dependencies=[route_policy.PERSON_GATE])
     settings = dispatcher.settings if dispatcher is not None else None
+    # THE ADMIN ACCOUNT'S DOORS (founder ruling 2026-10-11), the same shape: an app-level dependency
+    # over the route a request matched, declared as data in `admin_account_scope.REFUSED` — creating,
+    # importing or joining a workspace, and every meeting surface. Identity answers who the admin
+    # account is (`global_layer.is_admin_account`); with no settings (a bare harness) nobody is.
+    _admin_account_gate = admin_account_scope.gate(
+        (lambda subj: global_layer.is_admin_account(settings, subj)) if settings is not None
+        else (lambda subj: False))
+    app = FastAPI(title="vexa-agent-api", version="0.12.0",
+                  dependencies=[route_policy.PERSON_GATE, Depends(_admin_account_gate)])
     # THE DOOR FOR `x-user-*` (gateway-identity.v1). Every request that names a person must carry the
     # gateway's signature over that identity, or come from the internal tier (flows, the terminal's
     # server-side admin routes, the dogfood rig) with `X-Internal-Secret`. Anything else that names a
@@ -408,6 +417,14 @@ def create_app(
         something and an endpoint that refuses it is worse than either answer alone."""
         subject = subject_of(request)
         target = (slug or "").strip()
+        # THE ADMIN ACCOUNT ADDRESSES `_global` AND `_system`, NOTHING ELSE (admin_account_scope, seam
+        # 2). Not its own desk — it has none — and not anybody else's workspace, read or write. Asked
+        # only when the slug is something else, so the company layer's own reads cost no lookup.
+        if (not admin_account_scope.confined_slug(target, global_slug=system_mounts.GLOBAL_SLUG,
+                                                  system_slug=system_mounts.SYSTEM_SLUG)
+                and settings is not None
+                and global_layer.is_admin_account(settings, str(subject))):
+            raise HTTPException(status_code=403, detail=admin_account_scope.REFUSAL)
         # _system — the caller's OWN private-system workspace (RW, surfaced hidden-by-default in the files
         # panel). It's a per-subject dispatch mount, not in the active set, so authorize it directly here:
         # it can only ever resolve to THIS subject's own .system store — never another user's.
@@ -1008,6 +1025,7 @@ def create_app(
         app.include_router(_r.build(**_deps))
     # A `verbs` row naming a route this app does not serve protects nothing — refuse the boot.
     route_policy.assert_served(app.routes)
+    admin_account_scope.assert_served(app.routes)
 
     return app
 
@@ -1029,6 +1047,18 @@ def _build_production_app() -> FastAPI:
             "VEXA_INTERNAL_API_SECRET is DEPRECATED — rename it to INTERNAL_API_SECRET, the one "
             "name the whole internal tier uses (compose/helm secret key, admin-api, gateway, "
             "meeting-api). The prefixed spelling is honoured this release and removed in the next."
+        )
+
+    # RETIRED, AND SAID SO (founder ruling 2026-10-11). `_global` is written by the deployment's
+    # admin account and nobody else, and identity decides who that is (admin-api
+    # `VEXA_ADMIN_ACCOUNT`). A user-id list here used to grant the write too; it is ignored now, so a
+    # deployment that still sets it is told where the door moved rather than finding `_global`
+    # read-only for the people it named.
+    if (os.environ.get("VEXA_GLOBAL_ADMIN_SUBJECTS") or "").strip():
+        logger.warning(
+            "VEXA_GLOBAL_ADMIN_SUBJECTS is RETIRED and ignored: nobody it names writes _global. The "
+            "company layer is written only by the deployment's admin account — set VEXA_ADMIN_ACCOUNT "
+            "on admin-api to a fresh address and sign in as it (docs: Workspaces → The admin account)."
         )
 
     # config.v1 boot preflight (ADR-0026): INTERNAL_API_SECRET is required-explicit and must not

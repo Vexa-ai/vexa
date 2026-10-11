@@ -69,8 +69,10 @@ export const GLOBAL_MOUNT = "_global";
  *  the target without the mount in its set — and a header that stayed silent then would be the
  *  exact failure #1611 exists to end: writes landing somewhere the header does not name. */
 export const focusSet = (workspaces: string[], opts: { admin?: boolean; target?: string } = {}) => {
-  const set = workspaces.filter((w) => !IMPLICIT_MOUNTS.includes(w));
-  return opts.admin === true && opts.target === GLOBAL_MOUNT ? [...set, GLOBAL_MOUNT] : set;
+  // THE ADMIN ACCOUNT HAS ONE WORKSPACE (founder ruling 2026-10-11): the company layer, always the
+  // target, whatever the chat's stored set says. No desk chip, no group chip.
+  if (opts.admin === true) return [GLOBAL_MOUNT];
+  return workspaces.filter((w) => !IMPLICIT_MOUNTS.includes(w));
 };
 
 const wsChip: CSSProperties = {
@@ -103,10 +105,12 @@ export function ContextBar(p: {
   onAddWorkspace: (id: string) => void; onRemoveWorkspace: (id: string) => void;
   onSetTarget?: (id: string) => void;
   onAttachRepo?: (workspaceId?: string) => void;
-  /** Is the signed-in person this instance's admin (Vexa-ai/vexa#1616)? Absent or false → the
-   *  company layer is not offered and not shown, which is every other person's whole experience
-   *  of this file. Three-valued upstream; only a literal `true` reaches here. */
-  isAdmin?: boolean;
+  /** Is the signed-in account the deployment's ADMIN ACCOUNT (identity's `admin_account`; founder
+   *  ruling 2026-10-11)? Then the header is the company layer and nothing else: one Company chip,
+   *  always the target, and no `+` menu. Absent or false → the company layer is never offered and
+   *  never shown, which is every everyday account's whole experience of this file — the instance
+   *  admin's included. Three-valued upstream; only a literal `true` reaches here. */
+  adminAccount?: boolean;
   /** Aim this chat at the company layer and open it — the menu entry's click and the chip's, which
    *  are the same act by design. */
   onTargetGlobal?: () => void;
@@ -120,12 +124,11 @@ export function ContextBar(p: {
     return () => window.removeEventListener("mousedown", away);
   }, [picking]);
 
-  const admin = p.isAdmin === true;
+  const admin = p.adminAccount === true;
   const set = focusSet(p.sel.workspaces, { admin, target: p.sel.target });
   const addable = p.memberships.map((m) => m.workspace_id).filter((id) => !p.sel.workspaces.includes(id));
-  // Offered while it is not already where this chat writes — an entry that would change nothing is
-  // a menu row that reads as broken.
-  const offerGlobal = admin && !!p.onTargetGlobal && p.sel.target !== GLOBAL_MOUNT;
+  // The admin account's one chip IS its target, and nothing is ever offered beside it — so it has no
+  // `+` menu at all. Everybody else is never offered the company layer (it is not theirs to write).
 
   return (
     <div style={{ ...header, gridRow: 1, gridColumn: 2 }}>
@@ -139,7 +142,7 @@ export function ContextBar(p: {
         {set.map((w) => {
           // NO TARGET IS THE DESK. One spelling of the default, here as everywhere: the record
           // stores an absence and this is where the absence becomes a chip somebody can see.
-          const isTarget = isTargetChip(p.sel.target, w);
+          const isTarget = admin ? w === GLOBAL_MOUNT : isTargetChip(p.sel.target, w);
           // THE COMPANY LAYER'S CHIP IS ALSO ITS DOOR (#1616): it is only on screen while this chat
           // writes there, so a click that did nothing would leave the reader with a chip that names
           // a place and refuses to open it. It opens `_global/README.md` and re-states the target.
@@ -172,22 +175,13 @@ export function ContextBar(p: {
             </span>
           );
         })}
+        {!admin && <>
         <button aria-label="Add a workspace to this chat" title="Add a workspace to this chat"
           onClick={() => setPicking((v) => !v)}
           style={{ ...wsChip, padding: "2px 7px", color: "var(--t3)", cursor: "pointer", fontSize: 13, lineHeight: 1.15 }}>+</button>
         {picking && (
           <div role="menu" style={{ position: "absolute", top: "calc(100% + 6px)", right: 0, zIndex: 30, minWidth: 200, background: "var(--sidebar)", border: "1px solid var(--line2)", borderRadius: 10, padding: 6, boxShadow: "0 8px 24px rgba(0,0,0,.35)" }}>
-            {/* THE ADMIN'S ONE EXTRA ANSWER (#1616), above the memberships because it is the one
-                workspace in the list nobody had to be invited to. */}
-            {offerGlobal && (
-              <button role="menuitem" data-ctx="global" onClick={() => { p.onTargetGlobal?.(); setPicking(false); }}
-                style={menuItem}
-                onMouseEnter={(e) => { e.currentTarget.style.background = surface.raised; }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>
-                <WorkspaceName slug={GLOBAL_MOUNT} fallback={COMPANY_WORD} />
-              </button>
-            )}
-            {addable.length === 0 && !offerGlobal
+            {addable.length === 0
               ? <div style={{ ...ty.meta, padding: "6px 8px", lineHeight: 1.5 }}>No other workspace to add. New ones are made in conversation.</div>
               : addable.map((id) => (
                   <button key={id} role="menuitem" onClick={() => { p.onAddWorkspace(id); setPicking(false); }}
@@ -204,6 +198,7 @@ export function ContextBar(p: {
             )}
           </div>
         )}
+        </>}
       </div>
     </div>
   );

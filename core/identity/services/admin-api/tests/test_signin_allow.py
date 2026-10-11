@@ -501,7 +501,7 @@ def test_every_reason_the_rule_can_give_is_in_the_contract():
     terminal's signinWire.ts comes from. A reason the rule returns that the contract does not know
     would be refused by the terminal without anyone saying why."""
     from admin_api.app import signin_wire
-    admitted = {sa.WHY_ADMIN, sa.WHY_ADMIN_EMAIL, sa.WHY_EXISTING_USER, sa.WHY_ALLOW_LIST, sa.WHY_CLAIM_CODE}
+    admitted = {sa.WHY_ADMIN, sa.WHY_ADMIN_EMAIL, sa.WHY_ADMIN_ACCOUNT, sa.WHY_EXISTING_USER, sa.WHY_ALLOW_LIST, sa.WHY_CLAIM_CODE}
     assert admitted == set(signin_wire.ADMITTED_REASONS)
     assert {sa.WHY_NOT_ALLOWED} == set(signin_wire.REFUSED_REASONS)
     assert {sa.CLAIMED, sa.CLAIM_ADMIN_EXISTS, sa.CLAIM_BAD_CODE, sa.CLAIM_NOT_ALLOWED} == set(signin_wire.CLAIM_REASONS)

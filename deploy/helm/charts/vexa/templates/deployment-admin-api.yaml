@@ -80,6 +80,10 @@ spec:
               value: {{ .Values.adminApi.signinAllow | default "" | quote }}
             - name: VEXA_ADMIN_EMAILS
               value: {{ include "vexa.adminEmails" . | quote }}
+            # The ADMIN ACCOUNT — the one account that writes the company layer `_global`, and has
+            # nothing else (adminApi.adminAccount). Empty = nobody writes `_global`.
+            - name: VEXA_ADMIN_ACCOUNT
+              value: {{ .Values.adminApi.adminAccount | default "" | quote }}
             {{- with .Values.adminApi.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

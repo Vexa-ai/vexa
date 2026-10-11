@@ -32,6 +32,8 @@ import subprocess
 from pathlib import Path
 
 import pytest
+
+from tests import admin_accounts
 from fastapi.testclient import TestClient
 
 from control_plane import workspace_membership as m
@@ -76,9 +78,9 @@ def _page(ws: Path, rel: str, text: str = "# Example Bank\n\nThe dossier.\n") ->
 
 
 def _settings(root: Path, *, admins: str = ""):
+    admin_accounts.name(admins)
     return load_settings(workspaces_dir=str(root),
                          global_system_workspace_path=str(root / "_global"),
-                         global_admin_subjects=admins,
                          internal_api_secret="s", ui_url="https://app.example.test", redis_url="")
 
 
@@ -418,3 +420,7 @@ def test_the_turn_is_told_all_three_things_that_can_happen_to_a_page():
     assert "commits" in p.lower() or "commit" in p.lower()
     # the exact failure it exists to prevent, in words the model can act on
     assert "overwriting a page with a note saying it moved" in p
+
+
+# Identity's admin-account answer, faked at agent-api's one reader (tests/admin_accounts.py).
+pytestmark = pytest.mark.usefixtures("fake_admin_accounts")

@@ -164,7 +164,7 @@ def test_accepting_the_company_layer_needs_a_person():
     assert ("POST", "/api/global/ready") in route_policy.PERSON_VERBS
 
 
-def test_the_company_layer_commit_names_the_caller_not_the_body(tmp_path):
+def test_the_company_layer_commit_names_the_caller_not_the_body(tmp_path, fake_admin_accounts):
     from control_plane import global_layer
     from tests.test_membership_at_the_edge import ADMIN, _client
 

@@ -125,9 +125,9 @@ def build(**d) -> APIRouter:
         can fix it."""
         require_in_ceiling(request, system_mounts.GLOBAL_SLUG)
         subject = subject_of(request)
-        if not global_layer.is_admin(settings, str(subject)):
+        if not global_layer.is_admin_account(settings, str(subject)):
             raise HTTPException(status_code=403,
-                                detail="only the instance admin may accept the company layer")
+                                detail="only the admin account may accept the company layer")
         root = _global_store()
         # Top-ups before the commit, so anything added rides into the admin's own acceptance commit
         # instead of sitting untracked. Additive, never overwriting, and never raising.

@@ -259,12 +259,15 @@ meeting; with this on, one addition opens the archive.
 somebody decided to, not because it was convenient.
 
 <a id="global_admin_only"></a>
-### `global_admin_only` — only the admin writes `_global` (editors may be added)
+### `global_admin_only` — only the admin account writes `_global`
 
 **Default `on`.**
 
-**The effect.** One admin's session mounts `_global` read-write; every other agent in the deployment
-mounts it read-only. Named editors may be added; the set is never "everyone".
+**The effect.** The deployment's **admin account** — one dedicated account, never a person's everyday
+one — mounts `_global` read-write, and has nothing else: no desk, no shared workspaces, no meetings.
+Every other account in the deployment, the instance admin's included, mounts it read-only. The
+operator names the admin account (`VEXA_ADMIN_ACCOUNT` on admin-api); with none named, nobody writes
+here. The set is never "everyone".
 
 **Adoption.** One person can change how every agent in the company behaves, with no deploy.
 **Security.** That same sentence is the risk: `_global` is loaded into every turn, so a line written
@@ -386,7 +389,7 @@ product does not yet check.
 | `organizer_confirms_join` | **declared, not yet enforced** — and it is `off`, which is today's behaviour, so the line records the gate rather than claiming it |
 | `agent_writes_pages` | **declared, not yet enforced** — containment already bounds where a turn writes; this switch does not yet gate whether it writes |
 | `newcomer_reads_history` | **declared, not yet enforced** — and it is `off`, which is the safe direction to be unenforced in |
-| `global_admin_only` | **structural** — the `_global` mount is read-only except in the admin's own session; this line records it rather than deciding it |
+| `global_admin_only` | **structural** — the `_global` mount is read-only except for the admin account, which identity names; this line records it rather than deciding it |
 | `open_web` | **declared, not yet enforced** — the agent's web tools are chosen at dispatch, not read from here |
 
 Every line marked *not yet enforced* is a gap in the software, not in the policy. It belongs in

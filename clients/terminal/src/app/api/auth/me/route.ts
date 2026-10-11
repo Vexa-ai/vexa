@@ -67,6 +67,10 @@ export async function GET() {
         authenticated: true,
         // From the oracle, not the cookie — see the header note on why this is three-valued.
         is_admin: validated.isAdmin,
+        // THE ADMIN ACCOUNT (identity.v1 `admin_account`): the one account that works on the company
+        // layer, and on nothing else. The client shows it only Company, and shows Company to nobody
+        // else. Same three values as `is_admin`.
+        admin_account: validated.adminAccount,
         user: { email: validated.email ?? email ?? null, name: name ?? null },
       },
       { headers: NO_STORE },
@@ -85,7 +89,8 @@ export async function GET() {
   return NextResponse.json(
     // is_admin: null — "unknown", NOT "no". A consumer that reads this as a denial turns an
     // admin-api blip into a lockout screen for the administrator.
-    { authenticated: true, degraded: true, is_admin: null, user: { email: email ?? null, name: name ?? null } },
+    { authenticated: true, degraded: true, is_admin: null, admin_account: null,
+      user: { email: email ?? null, name: name ?? null } },
     { headers: NO_STORE },
   );
 }
