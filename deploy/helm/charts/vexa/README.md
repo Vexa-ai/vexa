@@ -39,7 +39,8 @@ the upgrade steps at
 See [`../../README.md`](../../README.md) for the cookbook (local k3s smoke, managed backing,
 ingress) and the values table. Key knobs: `global.imageTag`, `runtime.backend`
 (`k8s`|`docker`|`process`), `secrets.*` (or `secrets.existingSecretName`), `storage.s3.*`,
-`postgres/redis.enabled`, `pgbouncer.enabled`, `ingress.*`.
+`postgres/redis.enabled`, `pgbouncer.enabled`, `ingress.*`, `meetingApi.transcriptionLanguage` /
+`meetingApi.transcriptionAllowedLanguages` (the deployment's default transcription language).
 
 ## Identity, the MCP server and the network policy
 

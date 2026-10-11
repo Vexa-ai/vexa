@@ -77,6 +77,9 @@ variables in `.env`. Both are empty by default, which means auto-detect. meeting
 starts. It refuses to start on a value it cannot use, such as `German`, `de, en` (with a space), or a
 language that is not in the list, and its log names the variable and the fix.
 
+Both keys, with their defaults, are listed in [Configuration → Transcription](/configuration#transcription-stt)
+and in the Helm values table ([`deploy/helm/README.md`](https://github.com/Vexa-ai/vexa/blob/main/deploy/helm/README.md#configuration-that-matters)).
+
 ## Limits
 
 - **Transcribe only.** `task: "translate"` is accepted on the API but the bot only transcribes.
