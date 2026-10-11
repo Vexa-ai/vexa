@@ -23,11 +23,12 @@ import {
 } from "../surfaces/workspaceApi";
 import { AttachRepo } from "./AttachRepo";
 import { orderedRows, moveChat } from "./chatOrder";
+import { applyMarks, fetchMarks, markRow, NO_MARKS, type RailMark, type RailMarks } from "./railMarks";
 import { ContextBar, GLOBAL_MOUNT } from "./ContextBar";
 import { ConnectionsPanel, CONNECTIONS_CLOSE } from "./ConnectionsPanel";
 import { PagesPanel, type Listing } from "./PagesPanel";
 import {
-  bindMeeting, chatForRow, chatsFromSessions, hideChat, loadChats, loadCollapsed, loadHidden, loadRailAll, markTouched,
+  bindMeeting, chatForRow, chatsFromSessions, clearHidden, loadChats, loadCollapsed, loadHidden, loadRailAll, markTouched,
   meetingChatId, meetingTitle, mergeChats, nameChat, nameFromTurn,
   newChat, railRows, readRailOwner, resetChats, setTarget, writeRailOwner,
   removeChat, saveChats, saveCollapsed, saveRailAll, upsertChat, visibleRows, artifactKey,
@@ -281,10 +282,33 @@ export function MinutesShell() {
     fetch("/api/chat/order").then(r=>r.ok?r.json():Promise.reject()).then(d=>{if(live)setChatOrder(d.order || []);}).catch(()=>{});
     return ()=>{live=false;};
   }, [email]);
-  const rows = useMemo(() => orderedRows(railRows(allChats, meetings), chatOrder), [allChats, meetings, chatOrder]);
+  // PIN AND HIDE (`railMarks.ts`) — the person's own marks, read from the server so every device
+  // and every reload shows the same rail. The old browser-only delete list is migrated into Hide
+  // here, once: each id becomes a hidden mark, and an id the server does not know (a chat that
+  // never reached it) is simply gone. The list is cleared only when every id has been answered.
+  const [marks, setMarks] = useState<RailMarks>(NO_MARKS);
+  const [hiddenView, setHiddenView] = useState(false);
+  useEffect(() => {
+    if (!email) return;
+    let live = true;
+    void (async () => {
+      const tombstones = loadHidden();
+      let migrated = true;
+      for (const id of tombstones) {
+        try { await markRow(`c:${id}`, { hidden: true }); }
+        catch (e) { if (!String((e as Error).message).includes("404")) migrated = false; }
+      }
+      if (tombstones.length && migrated) clearHidden();
+      try { const m = await fetchMarks(); if (live) setMarks(m); } catch { /* an unmarked rail */ }
+    })();
+    return () => { live = false; };
+  }, [email]);
+  const pinnedKeys = useMemo(() => new Set(marks.pinned), [marks]);
+  const rows = useMemo(() => orderedRows(applyMarks(railRows(allChats, meetings), marks), chatOrder, pinnedKeys),
+    [allChats, meetings, chatOrder, marks, pinnedKeys]);
   const reorder = async (from: string, to: string) => {
     if (orderBusy) return;
-    const next = moveChat(rows.map(r=>r.key), from, to);
+    const next = moveChat(rows.filter((r) => r.pinned).map(r=>r.key), from, to);
     setOrderBusy(true); setOrderError("");
     try {
       const res = await fetch("/api/chat/order", {method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({order:next})});
@@ -293,9 +317,16 @@ export function MinutesShell() {
     } catch { setOrderError("Couldn't save chat order. Try again."); }
     finally { setOrderBusy(false); }
   };
+  const mark = async (row: string, m: RailMark) => {
+    setOrderError("");
+    try { setMarks(await markRow(row, m)); }
+    catch { setOrderError(m.pinned !== undefined ? "Couldn't save the pin. Try again." : "Couldn't save. Try again."); }
+  };
   const selKey = `c:${sel.chatId}`;
-  const shownRows = useMemo(() => visibleRows(rows, all, selKey), [rows, all, selKey]);
-  const hiddenCount = useMemo(() => rows.length - visibleRows(rows, false, selKey).length, [rows, selKey]);
+  const shownRows = useMemo(() => visibleRows(rows, all, selKey, hiddenView), [rows, all, selKey, hiddenView]);
+  const hiddenCount = useMemo(() => visibleRows(rows, true).length - visibleRows(rows, false, selKey).length, [rows, selKey]);
+  const hiddenMarked = useMemo(() => rows.filter((r) => r.hidden).length, [rows]);
+  useEffect(() => { if (hiddenView && hiddenMarked === 0) setHiddenView(false); }, [hiddenView, hiddenMarked]);
   const toggleAll = (v: boolean) => { setAll(v); saveRailAll(v); };
 
   /** Persist a change to the stored list. Mock chats live outside it, so a mutation aimed at one is
@@ -701,12 +732,23 @@ export function MinutesShell() {
     setDraft(d=>d?.id===id?{...d,label:title,nameSource:"human"}:d);
     setSel(x=>x.chatId===id?{...x,label:title}:x);
   };
-  const deleteChat = (chatId: string) => {
-    // …and it has to be REMEMBERED now that the rail derives from the server (Vexa-ai/vexa#1591).
-    // Dropping the stored row alone would put the chat straight back on the next fetch: the row is
-    // this reader's index, the session is the server's, and a delete is a statement about the index.
-    hideChat(chatId);
+  const deleteChat = async (chatId: string) => {
+    // DELETE IS THE SERVER'S NOW. It used to drop the stored row and write a tombstone in this
+    // browser, which left the chat on the server and on every other device — and a meeting's own
+    // chat came straight back as the meeting's derived row, under the same name: "delete chat is not
+    // working". The server removes the session and its conversation, and hides the meeting's row for
+    // this person (`hidden_meeting`). A 404 is a chat that never reached the server: removing the
+    // stored row is the whole delete.
+    setOrderError("");
+    let res: Response;
+    try { res = await fetch(`/api/sessions/${encodeURIComponent(chatId)}`, { method: "DELETE" }); }
+    catch { setOrderError("Couldn't delete the chat. Try again."); return; }
+    if (!res.ok && res.status !== 404) {
+      setOrderError(res.status === 409 ? "This chat still has queued messages. Try again when they have run." : "Couldn't delete the chat. Try again.");
+      return;
+    }
     persist((prev) => removeChat(prev, chatId));
+    try { setMarks(await fetchMarks()); } catch { /* the row is gone either way */ }
     if (sel.chatId !== chatId) return;
     // There is no home row to fall back to any more (F34 deleted it), so the shell lands on the
     // most recent chat that still exists — or, when none does, on a fresh draft: a composer with
@@ -1537,7 +1579,9 @@ export function MinutesShell() {
         ? <EdgeHandle side="left" onClick={() => collapseRail(false)} />
         : <Rail rows={shownRows} hidden={hiddenCount} all={all} onAll={toggleAll}
             selKey={selKey} onSelect={(r) => void openRow(r)}
-            onNewChat={startDraft} onDeleteChat={deleteChat} onMove={reorder}
+            onNewChat={startDraft} onDeleteChat={(id) => void deleteChat(id)} onMove={reorder}
+            onPin={(r, on) => void mark(r.key, { pinned: on })} onHide={(r, on) => void mark(r.key, { hidden: on })}
+            hiddenView={hiddenView} onHiddenView={setHiddenView} hiddenMarked={hiddenMarked}
             onCollapse={() => collapseRail(true)} />}
       {orderError && <div role="alert" style={{position:"absolute",bottom:10,left:10,zIndex:50}}>{orderError}</div>}
       <div style={{display:connectionsMode==='page'?"none":"contents"}}>

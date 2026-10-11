@@ -15,7 +15,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import {
-  chatsFromSessions, hideChat, loadHidden, mergeChats, meetingIdFromChatId, newChat,
+  chatsFromSessions, clearHidden, loadHidden, mergeChats, meetingIdFromChatId, newChat,
   RAIL_HIDDEN_KEY, railRows, resetChats, visibleRows,
   type Chat, type ServerSession,
 } from "../chats";
@@ -166,20 +166,18 @@ describe("merging the server's rail into the stored one", () => {
     expect(mergeChats([touched], chatsFromSessions([session({ session: "s", touched: false })], NOW))[0].touched).toBe(true);
   });
 
-  it("a row the reader DELETED does not come back on the next sign-in", () => {
-    // `deleteChat` has always meant "off my rail", not "destroy the thread" — its own comment says
-    // the agent session stays on the server. With the rail derived from those sessions, the delete
-    // has to be remembered or the fetch simply undoes it.
-    hideChat("meet-42");
-    expect(loadHidden()).toEqual(["meet-42"]);
+  it("an old browser-only delete keeps its chat off the rail until it has been migrated to Hide", () => {
+    // Delete used to be a tombstone in this browser and nothing on the server. Those ids are turned
+    // into server-side Hide marks once (MinutesShell); until then the merge still leaves them out.
+    localStorage.setItem(RAIL_HIDDEN_KEY, JSON.stringify(["meet-42"]));
     const server = chatsFromSessions([session({ session: "meet-42" }), session({ session: "meet-43" })], NOW);
     expect(mergeChats([], server, loadHidden()).map((c) => c.id)).toEqual(["meet-43"]);
+    clearHidden();
+    expect(loadHidden()).toEqual([]);
   });
 
-  it("…and the deletes go with the rail when a different person signs in on this browser", () => {
-    // The tombstone list is keyed to nobody. Inherited, it would silently subtract rows from the
-    // NEXT person's server sessions — chats they never touched, missing, with no way to tell.
-    hideChat("meet-42");
+  it("…and the tombstones go with the rail when a different person signs in on this browser", () => {
+    localStorage.setItem(RAIL_HIDDEN_KEY, JSON.stringify(["meet-42"]));
     resetChats();
     expect(localStorage.getItem(RAIL_HIDDEN_KEY)).toBeNull();
     expect(mergeChats([], chatsFromSessions([session({ session: "meet-42" })], NOW), loadHidden()))

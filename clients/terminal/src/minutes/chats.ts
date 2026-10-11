@@ -238,6 +238,10 @@ export type Row = {
    *  On the ROW because the rail shows it: a reader scanning their conversations should be able to
    *  see which one is working in a customer's workspace without opening it. */
   target?: string;
+  /** THE PERSON'S OWN MARKS (`railMarks.ts`), held by agent-api per person. Pinned rows lead the
+   *  list; hidden rows leave it and are listed only in the Hidden view. */
+  pinned?: boolean;
+  hidden?: boolean;
 };
 
 /** The row's status word from the meeting's phase. `prep` deliberately has none — see `Row.status`. */
@@ -328,9 +332,13 @@ export function railRows(chats: Chat[], meetings: MeetingMock[], now = Date.now(
  *  `keep` is the selected row: whatever the filter says, the row you are reading never vanishes
  *  under you — opening an untouched meeting materialises an untouched chat, and without this the
  *  row would disappear the moment it was selected. */
-export function visibleRows(rows: Row[], all: boolean, keep?: string | null): Row[] {
-  if (all) return rows;
-  return rows.filter((r) => r.touched || r.live || r.upcoming || (keep != null && r.key === keep));
+export function visibleRows(rows: Row[], all: boolean, keep?: string | null, hiddenView = false): Row[] {
+  // HIDDEN is the person's own choice and outranks both filters: a hidden row is listed only in the
+  // Hidden view, where it can be brought back. A PINNED row always shows — that is what a pin is for.
+  if (hiddenView) return rows.filter((r) => r.hidden);
+  const shown = rows.filter((r) => !r.hidden);
+  if (all) return shown;
+  return shown.filter((r) => r.pinned || r.touched || r.live || r.upcoming || (keep != null && r.key === keep));
 }
 
 // ── the server's sessions — WHERE THE RAIL ACTUALLY COMES FROM ───────────────────────
@@ -479,9 +487,8 @@ export function chatsFromSessions(rows: ServerSession[], now = Date.now()): Chat
  *     still called "New chat" that sent a bot would have been barred from taking the real title the
  *     server holds for it.
  *
- *  `hidden` is the rail's own delete. Removing a row here never removed the agent session (the
- *  comment on `deleteChat` says so), and with the rail derived from those sessions a delete would
- *  otherwise come back on the next sign-in. */
+ *  `hidden` is the old browser-only delete list (`loadHidden`), applied only until it has been
+ *  migrated into server-side Hide marks; a delete is now the server's (`DELETE /api/sessions/{id}`). */
 export function mergeChats(local: Chat[], server: Chat[], hidden: string[] = []): Chat[] {
   const drop = new Set(hidden ?? []);
   const by = new Map<string, Chat>();
@@ -1060,10 +1067,13 @@ export function saveChats(chats: Chat[]): void {
   try { localStorage.setItem(CHATS_KEY, JSON.stringify(chats)); } catch { /* ignore */ }
 }
 
-/** THE ROWS THIS READER DELETED. A tombstone list, and it exists because the rail now derives from
- *  the server: `deleteChat` has always meant *"off my rail"* rather than *"destroy the thread"*
- *  (its own comment: "its agent session stays on the server"), and without a record of the delete
- *  the next sign-in would fetch the row straight back. Local, like the choice it remembers. */
+/** THE OLD DELETE'S TOMBSTONES — read once, to MIGRATE, and never written again.
+ *
+ *  Delete used to mean "off my rail in this browser": an id in this list and nothing on the server.
+ *  It now deletes the chat on the server (`DELETE /api/sessions/{id}`), and the reversible "off my
+ *  rail" is Hide, a per-person mark the server keeps (`railMarks.ts`). Each id still in this list is
+ *  turned into a Hide once (`MinutesShell`), then the list is cleared. Until that has happened the
+ *  merge still leaves the listed chats out, so nothing a person removed reappears in between. */
 export const RAIL_HIDDEN_KEY = "vexa.minutes.chatsHidden";
 
 export function loadHidden(): string[] {
@@ -1073,11 +1083,9 @@ export function loadHidden(): string[] {
   } catch { return []; }
 }
 
-/** Remember one delete. Returns the new list so a caller never has to re-read to know it landed. */
-export function hideChat(id: string): string[] {
-  const next = [...new Set([...loadHidden(), id])];
-  try { localStorage.setItem(RAIL_HIDDEN_KEY, JSON.stringify(next)); } catch { /* ignore */ }
-  return next;
+/** The migration is done: forget the tombstones. */
+export function clearHidden(): void {
+  try { localStorage.removeItem(RAIL_HIDDEN_KEY); } catch { /* ignore */ }
 }
 
 export function loadRailAll(): boolean {

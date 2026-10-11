@@ -168,7 +168,11 @@ body {
 .vx-row { position: relative; }
 .vx-row .vx-row-act { opacity: 0; transform: translateX(2px); transition: opacity .12s ease, transform .12s ease; }
 .vx-row:hover .vx-row-act,
-.vx-row:focus-within .vx-row-act { opacity: 1; transform: none; }
+.vx-row:focus-within .vx-row-act,
+.vx-row .vx-row-act[aria-expanded="true"],
+.vx-row .vx-row-act[data-armed] { opacity: 1; transform: none; }
+/* a touch screen has no hover: the row's actions stay in reach */
+@media (hover: none) { .vx-row .vx-row-act { opacity: 1; transform: none; } }
 .vx-row .vx-row-rail { opacity: 0; transition: opacity .12s ease; }
 .vx-row:hover .vx-row-rail { opacity: 1; }
 

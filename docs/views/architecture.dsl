@@ -64,6 +64,7 @@ system agent  # the execution domain: a trigger becomes one governed agent turn 
   data-asset imports-status [writers: agent-api]
   data-asset onboarding-research-state [writers: agent-api]
   data-asset rail-order [writers: agent-api]
+  data-asset rail-marks [writers: agent-api]
   data-asset redis-acl-users [writers: agent-api, meeting-api]
   data-asset acl-units-index [writers: agent-api]
   data-asset routine-state [writers: agent-api]
@@ -200,6 +201,7 @@ edges:
   agent-api -write-> imports-status  # repository import status (workspace_import.py)
   agent-api -write-> onboarding-research-state  # onboarding research checkpoints (onboarding_research.py)
   agent-api -write-> rail-order  # SET/GET the chat rail order
+  agent-api -write-> rail-marks  # HSET/HDEL/HGETALL a person's rail pins and hides
   admin-api -write-> signin-link-redeemed  # SET NX with the link's own expiry (at most an hour) when a terminal redeems an emailed sign-in link; a write that cannot be made refuses the sign-in
   claude-plugin -req-> gateway  # the plugin's HTTP MCP server entry: Claude Code calls the gateway's /mcp with the person's Vexa API key; the plugin itself runs no code
   agent-api -write-> unit-in  # XADD the person's next message to a warm unit, signed with the unit's key

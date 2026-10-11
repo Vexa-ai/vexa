@@ -566,6 +566,11 @@
       "method": "POST",
       "path": "/agent/workspace/{workspace_id}/leave",
       "person": true
+    },
+    {
+      "method": "DELETE",
+      "path": "/agent/sessions/{session}",
+      "person": true
     }
   ]
 }

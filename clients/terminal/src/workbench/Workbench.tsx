@@ -90,11 +90,11 @@ function TabHeader(props: IDockviewPanelHeaderProps) {
     : { id: "pin-tab", label: "Pin tab", detail: "keep open until unpinned", onSelect: () => layout.pinTab(props.api.id) };
   const copyItems = params.kind === "doc" && path
     ? [
-      { id: "copy-reference", label: "Copy reference", detail: `@file:${path}`, onSelect: () => copyText(`@file:${path}`) },
-      { id: "copy-path", label: "Copy path", detail: path, onSelect: () => copyText(path) },
+      { id: "copy-reference", label: "Copy reference", detail: `@file:${path}`, mono: true, onSelect: () => copyText(`@file:${path}`) },
+      { id: "copy-path", label: "Copy path", detail: path, mono: true, onSelect: () => copyText(path) },
     ]
     : params.kind === "meeting" && meetingId
-      ? [{ id: "copy-reference", label: "Copy reference", detail: `@meeting:${meetingId}`, onSelect: () => copyText(`@meeting:${meetingId}`) }]
+      ? [{ id: "copy-reference", label: "Copy reference", detail: `@meeting:${meetingId}`, mono: true, onSelect: () => copyText(`@meeting:${meetingId}`) }]
       : [];
   return (
     <div

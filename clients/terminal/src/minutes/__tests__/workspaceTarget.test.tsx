@@ -201,10 +201,11 @@ describe("the rail says which conversation is working somewhere else", () => {
     expect(container.querySelector("[data-row-target]")).toBeNull();
   });
 
-  it("keeps the row's own name and its meeting status beside it", () => {
+  it("keeps the row's own name beside it, and a finished meeting adds no status word", () => {
     const { container } = rail([row({ target: BANK, status: "held" })]);
     expect(screen.getByText("Example Bank onboarding")).toBeTruthy();
-    expect(container.querySelector('[data-row-status="held"]')).toBeTruthy();
+    expect(container.querySelector("[data-row-target]")).toBeTruthy();
+    expect(container.querySelector("[data-row-status]")).toBeNull();
   });
 });
 

@@ -493,7 +493,7 @@ function MeetingRow({ m }: { m: MeetingMock }) {
       )}
       {menu && (
         <ContextMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)} items={[
-          { id: "copy-reference", label: "Copy reference", detail: `@meeting:${native}`, onSelect: () => copyText(`@meeting:${native}`) },
+          { id: "copy-reference", label: "Copy reference", detail: `@meeting:${native}`, mono: true, onSelect: () => copyText(`@meeting:${native}`) },
         ]} />
       )}
     </div>
