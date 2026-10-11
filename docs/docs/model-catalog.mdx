@@ -286,10 +286,68 @@ may use, call `GET /api/models/test?model=<id>`.
 4. **Worker env.** The route is stamped into the new agent's environment: the endpoint, that
    provider's one credential, the model, the effort in the provider's own field, and the output cap.
 
-The full flow, data ownership, and why it complies with the architecture and security rules, with
-the tests that prove each refusal, are in the module README
-(`core/agent/control_plane/model_providers/README.md`) and
-[ADR-0043](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0043-model-choice-catalog-behind-a-provider-port.md).
+**Who owns what.** The catalog is the operator's (agent-api's environment, nothing else writes it).
+A chat's model and effort pick has one writer, agent-api's session index. A person's default, and
+the organisation's, is admin-api's Settings → Models `default_model`. The catalog and its secrets
+never reach a worker or a bot: a worker receives only its own stamped route.
+
+**Contracts.** `models.v1` (the catalog, the listing, the effort levels), `unit.v1` `Fault` with the
+`model-provider` kinds, `config.v1` (`VEXA_MODEL_CATALOG`), `routes.v1` (`GET /agent/models/catalog`)
+and `mcp.tools.v1` (`models_list`), all sealed.
+
+**Configuration.** `VEXA_MODEL_CATALOG` and the `VEXA_MODEL_SECRET_<NAME>` variables it references,
+on agent-api only: see [Configuration](/configuration#agent-inference-bring-your-own),
+[Kubernetes: the model catalog](/deployment-kubernetes#the-model-catalog) and the
+[Helm chart README](https://github.com/Vexa-ai/vexa/blob/main/deploy/helm/charts/vexa/README.md#the-model-catalog).
+
+The module README
+([`core/agent/control_plane/model_providers/README.md`](https://github.com/Vexa-ai/vexa/blob/main/core/agent/control_plane/model_providers/README.md))
+and [ADR-0043](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0043-model-choice-catalog-behind-a-provider-port.md)
+carry the design in full.
+
+## Why it complies
+
+Rules are the [architecture principles](/governance/architecture).
+
+| Rule | How the catalog meets it | Enforced by |
+|---|---|---|
+| P2 couple through contracts | the browser and MCP see only `models.v1` ModelList; refusals travel as `unit.v1` `Fault` | `gate:isolation` |
+| P4 published schemas | the catalog, the listing and the fault kinds are sealed `.v1` contracts with goldens | `gate:schema` · `gate:contract-version` |
+| P5 adapt at the boundary | each provider's fields and headers are translated inside its adapter; dispatch never names a provider | ungated: reviewed |
+| P6 one front door | consumers import `control_plane.model_providers` only | `gate:exports` |
+| P14 config is a validated contract | one env var, validated at boot; credentials only by reference. The `VEXA_MODEL_SECRET_*` names are operator-chosen and sit outside the declared keys: the prefix is their contract | `gate:config-contract` (the catalog); the prefix: ungated, reviewed and tested |
+| P18 fail loud | a pick that cannot run is a typed `model-provider` fault, never a turn on another model; a bad catalog is refused at boot | `gate:schema` (kinds) · tests below |
+| P20 default-deny | the listing, the pick and the dispatch each check the caller's role | deny tests below |
+| P23 one writer | a chat's pick: the session index; a person's default: admin-api; the catalog: the operator | `gate:dataflow` |
+
+**Security, hop by hop.**
+
+1. **Operator → agent-api.** A credential is only ever a reference to a `VEXA_MODEL_SECRET_*`
+   variable; an inline credential is refused without being quoted, and Helm delivers only that
+   prefix, from a Secret the operator names
+   (`test_an_inline_credential_is_refused_and_never_quoted`,
+   `test_a_secret_ref_outside_the_catalog_prefix_is_refused_even_when_it_is_set`,
+   `test_the_resolver_never_reads_a_variable_outside_the_prefix`; chart checks in
+   `deploy/helm/tests/test_template.sh`).
+2. **agent-api → browser and MCP.** The listing carries no endpoint, credential or request setting,
+   and only the models the caller's role allows
+   (`test_no_listing_ever_carries_an_endpoint_or_a_credential`,
+   `test_a_member_sees_only_what_they_may_pick`).
+3. **Browser → agent-api (the pick).** Role and context are resolved again; a pick the next turn
+   could not run is refused and not stored
+   (`test_an_admins_only_model_is_refused_to_a_member_and_runs_for_an_admin`,
+   `test_a_pick_the_next_turn_could_not_run_is_refused_and_not_stored`,
+   `test_an_effort_the_model_cannot_take_is_refused_at_pick_time_and_not_stored`).
+4. **agent-api → worker (dispatch).** One credential, under its provider's header, to its provider
+   only; the deployment's subscription never goes to a gateway; with a catalog, a person's own
+   Settings → Models endpoint and key carry no turn
+   (`test_an_openrouter_entry_sends_the_operators_key_to_openrouter_only`,
+   `test_with_a_catalog_an_own_endpoint_never_carries_a_turn`,
+   `test_a_persons_own_endpoint_is_not_a_route_when_there_is_a_catalog`,
+   `test_a_pick_that_can_no_longer_run_refuses_the_turn_with_a_typed_fault`).
+5. **The Test button.** Anyone but an instance admin gets the verdict and a typed fault, never the
+   operator endpoint's response body or address
+   (`test_a_member_never_sees_the_operator_endpoints_body_or_address`).
 
 ## Security
 
