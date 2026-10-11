@@ -116,9 +116,10 @@ def _app(scheduler, *, reader=None):
     )), dispatcher
 
 
-def test_create_and_list_routines_over_http():
+def test_create_list_toggle_and_delete_routine_over_http(tmp_path):
     scheduler = _FakeScheduler()
-    client, dispatcher = _app(scheduler)
+    workspaces = tmp_path / "workspaces"
+    client, dispatcher = _app(scheduler, reader=WorkspaceReader(str(workspaces)))
 
     r = client.post("/api/routines", json={
         "subject": "u_jane", "name": "Morning brief", "cron": "0 8 * * *",
@@ -130,6 +131,8 @@ def test_create_and_list_routines_over_http():
     assert body["ran_now"] is True            # the immediate demo run dispatched the unit
     assert dispatcher.dispatched and dispatcher.dispatched[0]["identity"]["subject"] == "u_jane"
     assert len(scheduler.jobs) == 1           # the cron job is registered
+    routine_path = workspaces / "u_jane" / "routines" / "Morning brief.md"
+    assert routine_path.exists()
 
     listed = client.get("/api/routines", params={"subject": "u_jane"}).json()["routines"]
     assert len(listed) == 1 and listed[0]["name"] == "Morning brief"
@@ -139,10 +142,29 @@ def test_create_and_list_routines_over_http():
     # A different subject sees none (owner-scoped). Subject is the authenticated X-User-Id (P20).
     assert client.get("/api/routines", headers={"X-User-Id": "u_bob"}).json()["routines"] == []
 
-    # Delete cancels the scheduled job.
+    disabled = client.patch(
+        "/api/routines/Morning brief/enabled",
+        params={"subject": "u_jane"},
+        json={"enabled": False},
+    )
+    assert disabled.status_code == 200, disabled.text
+    assert disabled.json()["reconcile"]["cancelled"] == 1
+    assert client.get("/api/routines", params={"subject": "u_jane"}).json()["routines"][0]["enabled"] is False
+
+    enabled = client.patch(
+        "/api/routines/Morning brief/enabled",
+        params={"subject": "u_jane"},
+        json={"enabled": True},
+    )
+    assert enabled.status_code == 200, enabled.text
+    assert enabled.json()["reconcile"]["scheduled"] == 1
+    assert len(scheduler.jobs) == 1
+
+    # Delete cancels the scheduled job and removes the workspace source, so reconcile cannot resurrect it.
     rid = body["routine"]["id"]
     assert client.delete(f"/api/routines/{rid}", params={"subject": "u_jane"}).status_code == 200
     assert scheduler.jobs == []
+    assert not routine_path.exists()
 
 
 def test_routines_501_when_scheduler_not_wired():
