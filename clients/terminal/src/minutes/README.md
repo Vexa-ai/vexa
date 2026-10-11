@@ -14,6 +14,7 @@ By concern:
   (`?ask=` / `?meeting=` / `?view=` links and the first visit), `scaffold.ts`,
   `ScaffoldRefusalCard.tsx`.
 - **Pages** — `PagesPanel.tsx`, `Navigator.tsx` and `navigatorApi.ts` (the workspaces and files list),
+  `NavCalls.tsx` and `callsList.ts` (the navigator's Files | Calls switch and the calls list, read from the meeting list),
   `MarkdownEditor.tsx` (editing in place), `assetDrop.ts` (images), `mermaidPreview.ts`,
   `WorkspaceReadmePanel.tsx`, `workspaceReadme.ts` and `workspaceFrontPage.ts` (a workspace's front
   page), `ExtendAction.tsx` and `extend.ts` (Extend and Create as background jobs; a text selection's
