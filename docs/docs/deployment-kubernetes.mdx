@@ -553,7 +553,12 @@ the effective list is both:
 adminApi:
   signinAllow: "@example.com,alice@example.org"
   adminEmails: "admin@example.com"   # optional: names the admins, no claim code needed
+  adminAccount: "company-admin@example.com"   # optional: the one account that writes _global
 ```
+
+`adminAccount` is the deployment's [admin account](/minutes/workspaces#the-admin-account): a fresh
+address, not a person's everyday one. It is the only account that writes the company layer, and it
+has no desk, workspaces or meetings. Leave it empty and nobody writes `_global`.
 
 admin-api reads both and decides every sign-in; the Terminal only asks it. An older install that set
 `VEXA_ADMIN_EMAILS` under `terminal.extraEnv` keeps working: the chart carries it over to admin-api

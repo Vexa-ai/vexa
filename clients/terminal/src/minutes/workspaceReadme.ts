@@ -267,13 +267,15 @@ export interface WorkspaceFacts {
  *  two sentences (`workspaceFrontPage`); who is here is the People section; the repo state is the
  *  Repo section; the commits are the History list. */
 
-/** Is the signed-in person this instance's admin? Only a literal `true` counts, and an unanswered
- *  probe costs an OFFER, never a refusal — the write seam refuses a non-admin either way. */
+/** Is the signed-in account the deployment's ADMIN ACCOUNT — the company layer's one writer? Only a
+ *  literal `true` counts, and an unanswered probe costs an OFFER, never a refusal — the write seam
+ *  refuses everybody else either way. (Not `is_admin`: the instance admin is a person, and a
+ *  person's account only reads `_global`.) */
 async function amAdmin(): Promise<boolean> {
   try {
     const r = await fetch("/api/auth/me", { cache: "no-store" });
     if (!r.ok) return false;
-    return ((await r.json()) as { is_admin?: boolean } | null)?.is_admin === true;
+    return ((await r.json()) as { admin_account?: boolean } | null)?.admin_account === true;
   } catch { return false; }
 }
 

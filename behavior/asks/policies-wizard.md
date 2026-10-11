@@ -1,6 +1,6 @@
 ---
 label: policies
-mounts: _global, personal
+mounts: _global
 tabs: _global/POLICIES.md
 focus: _global/POLICIES.md
 ---

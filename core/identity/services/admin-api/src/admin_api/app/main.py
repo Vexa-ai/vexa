@@ -41,6 +41,7 @@ from .db import get_db
 from . import events as events_mod
 from . import person_settings as person_settings_mod
 from . import claim_code
+from . import admin_account
 from . import signin_allow
 from . import signin_wire
 from . import platform_settings as platform_settings_mod
@@ -545,6 +546,13 @@ def create_app() -> FastAPI:
         u = User(email=normalise_email(user_in.email), name=user_in.name,
                  max_concurrent_bots=user_in.max_concurrent_bots)
         u.data = {**(u.data or {}), "onboarding_completed_at": time.time()}
+        # THE ADMIN ACCOUNT IS BORN HERE OR NOWHERE (app/admin_account.py). A NEW row for an address
+        # VEXA_ADMIN_ACCOUNT names is created as the deployment's dedicated admin account, in this
+        # transaction. The existing-row branch above never reaches this line, so an everyday account
+        # is never promoted into one — naming its address changes nothing about it.
+        u.data = admin_account.stamp_for_new_row(u.email, u.data)
+        if admin_account.is_stamped(u.data):
+            u.max_concurrent_bots = admin_account.MAX_CONCURRENT_BOTS
         db.add(u)
         try:
             await db.commit()
@@ -1167,6 +1175,7 @@ def create_app() -> FastAPI:
             admin_claimed=admin_claimed_now,
             allow=allow,
             claim_code_ok=code_ok,
+            admin_accounts=admin_account.designated()[0],
         )
         return {"admitted": admitted, "why": why}
 
@@ -1224,8 +1233,12 @@ def create_app() -> FastAPI:
         definition of who may rewrite how every agent in the company behaves."""
         check_internal(request)
         user = await _load_user(user_id, db)
+        # `admin_account` is the question agent-api actually asks before it lets anybody write
+        # `_global`: is this the deployment's dedicated admin account (app/admin_account.py)? It is
+        # NOT `is_admin` — the instance admin is a person, and a person's chats read `_global` only.
         return {"user_id": user.id, "email": user.email,
-                "is_admin": signin_allow.is_admin(user.email, user.data, signin_allow.admin_emails()[0])}
+                "is_admin": signin_allow.is_admin(user.email, user.data, signin_allow.admin_emails()[0]),
+                "admin_account": admin_account.is_admin_account(user.email, user.data)}
 
     @app.post("/internal/release-admin", include_in_schema=False)
     async def release_admin(payload: dict, request: Request, db: AsyncSession = Depends(get_db)):
@@ -1467,7 +1480,10 @@ def create_app() -> FastAPI:
         user = await _load_user(user_id, db)
         data = user.data if isinstance(user.data, dict) else {}
         resp: dict = {
-            "max_concurrent": user.max_concurrent_bots,
+            # The admin account launches no bot, whatever its row says (app/admin_account.py).
+            "max_concurrent": (admin_account.MAX_CONCURRENT_BOTS
+                               if admin_account.is_admin_account(user.email, data)
+                               else user.max_concurrent_bots),
             "bot_name": data.get("calendar_bot_name") or "Vexa",
         }
         # Fixture collection (O-TEL-1): whether this spawn tapes its raw captured-signal stream.

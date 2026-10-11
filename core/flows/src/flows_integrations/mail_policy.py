@@ -46,8 +46,18 @@ QUARANTINE_TEMPLATE = (
     "directly.")
 
 
-def allow_domains(self_addr: str) -> set:
-    """The inbound allow-list: the declared value, else the mailbox's own domain."""
+# The refusal recorded when the company has switched invitations off (`bot_joins_on_invite: off`).
+INVITE_POLICY_OFF = "invite_policy_off"
+
+
+def allow_domains(self_addr: str, rules: dict | None = None) -> set:
+    """The inbound allow-list, in the order every rule in this engine resolves:
+    `_global/POLICIES.md` (`mail_domains`, the admin account's answer) -> `VEXA_FLOWS_MAIL_DOMAINS`
+    (the operator's) -> the mailbox's own domain. `rules` is the resolved policy dict when the
+    caller already holds one; absent, the env and the fallback decide exactly as before."""
+    page = tuple((rules or {}).get("mail_domains") or ())
+    if page:
+        return {str(d).strip().lower().lstrip("@") for d in page if str(d).strip()}
     return cfg.domains("VEXA_FLOWS_MAIL_DOMAINS", fallback=(self_addr or ""))
 
 

@@ -53,9 +53,15 @@ admits a fact. Three populations:
 | an address inside the domain allow-list | provisioned and served as before |
 | anybody else | no account, no agent turn, no model call — one `mail_quarantine` row |
 
-**An empty allow-list is the mailbox's own domain, not everyone.** Set
-`VEXA_FLOWS_MAIL_DOMAINS` (comma-separated, `@` optional) when the mailbox is hosted on a
-different domain from the organisation it serves.
+**An empty allow-list is the mailbox's own domain, not everyone.** The allow-list resolves in this
+order: `mail_domains` in `_global/POLICIES.md` (the [admin account](/minutes/admin-account#flows--mail)
+writes it, domains only), then `VEXA_FLOWS_MAIL_DOMAINS` (comma-separated, `@` optional), then the
+mailbox's own domain. With `bot_joins_on_invite: off` on the same page, every invitation is
+recorded and nothing is created, accepted or joined.
+
+The admin account reads all of this, and the outbound switches (`minutes_mail`,
+`prep_and_invite_mail`, `report_to_participants`), with the `mail_settings` tool
+(`GET /mail/settings`, operator key). Credentials are shown only as configured or not.
 
 `In-Reply-To` says *which conversation* a reply belongs to; it never says who the sender is. A
 reply continues a thread only for that thread's own participant — anyone else is judged on their
@@ -79,11 +85,20 @@ Every refusal is a row — read them with:
 SELECT at, from_addr, kind, reason FROM mail_quarantine ORDER BY at DESC;
 ```
 
-`kind` is `stranger_mail`, `thread_mismatch`, `unverified_invite` or `rate_limited`. A sender who
+`kind` is `stranger_mail`, `thread_mismatch`, `unverified_invite`, `invite_policy_off` or
+`rate_limited`. A sender who
 should be served appears here: add their domain to the allow-list, or create their account.
 
 An inbound body that is admitted reaches the agent quoted, delimited, length-capped and labelled
 as untrusted text from its sender. The text itself is never altered.
+
+## Reading the friction sink
+
+`GET /friction/all` (operator key) returns every friction report on the deployment, newest first,
+filtered by `since`, `kind`, `person` and `status` (`open` | `fixed`), with every free-text field
+scrubbed of credential-shaped text. The MCP serves it as `friction_list` to the
+[admin account](/minutes/admin-account#friction) only; every other caller reads its own reports with
+`friction_so_far` (`GET /friction`).
 
 ## Reading a reaction
 

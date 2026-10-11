@@ -58,6 +58,10 @@ ingress) and the values table. Key knobs: `global.imageTag`, `runtime.backend`
   the gateway, agent-api, the MCP service, the runtime and meeting bots. Agent workers reach neither —
   they act through the gateway. Add your own peers with `networkPolicy.agentApi.extraFrom` /
   `networkPolicy.meetingApi.extraFrom`. The policy needs a CNI that enforces NetworkPolicy.
+- **The admin account.** `adminApi.adminAccount` (admin-api `VEXA_ADMIN_ACCOUNT`) names the one
+  account that writes the company layer `_global`; it has no desk, workspaces or meetings. Use a fresh
+  address, roll admin-api, then sign in as that address. Empty means nobody writes `_global`. The old
+  `agentApi.globalAdminSubjects` value is gone; the chart no longer renders it.
 
 ## Spreading replicas across nodes
 

@@ -1,7 +1,10 @@
 {
   "user_id": 1,
-  "scopes": ["legacy"],
+  "scopes": [
+    "legacy"
+  ],
   "max_concurrent": 5,
   "email": "admin@example.com",
-  "is_admin": true
+  "is_admin": true,
+  "admin_account": false
 }

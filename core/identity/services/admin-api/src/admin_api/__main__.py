@@ -111,7 +111,8 @@ def build_production_app():
     # the boot instead, naming the key and the entry, as preflight() does for a missing key.
     from .app.signin_allow import boot_problems, open_to_everyone
     from .config_preflight import ConfigError
-    problems = boot_problems()
+    from .app import admin_account
+    problems = boot_problems() + admin_account.boot_problems()
     if problems:
         raise ConfigError("admin-api refuses to boot — malformed sign-in configuration: "
                           + "; ".join(problems))
@@ -159,8 +160,38 @@ def build_production_app():
         await _connect_with_retry(lambda: ensure_schema(app_db.get_engine(), Base))
         await _announce_admin_claim()
         await _warn_stored_open_signin()
+        await _warn_admin_account_state()
 
     return app
+
+
+async def _warn_admin_account_state() -> None:
+    """Say at boot what the admin account is (app/admin_account.py): none configured (nobody writes
+    `_global`), or a named address that already belongs to an everyday account — which is NOT turned
+    into the admin account, so the operator learns it here rather than from a refusal. Never fails
+    the boot, and never names more than the addresses the operator already wrote."""
+    from sqlalchemy import func
+    from sqlalchemy.future import select
+
+    from .app import admin_account
+    from .app import db as app_db
+    from .schema.models import User
+
+    names, _ = admin_account.designated()
+    if not names:
+        logger.info("%s is empty: there is no admin account, so nobody writes _global on this "
+                    "deployment (everybody reads it).", admin_account.ENV_KEY)
+        return
+    try:
+        async with app_db.session() as db:
+            rows = (await db.execute(
+                select(User.email, User.data).where(func.lower(User.email).in_(names)))).all()
+    except Exception as exc:  # noqa: BLE001 — a warning, never a boot failure
+        logger.warning("could not read the admin account's row at boot (%s)", type(exc).__name__)
+        return
+    conflicts = [str(e).lower() for e, d in rows if not admin_account.is_stamped(d)]
+    if conflicts:
+        logger.warning(admin_account.conflicts_message(conflicts))
 
 
 async def _warn_stored_open_signin() -> None:

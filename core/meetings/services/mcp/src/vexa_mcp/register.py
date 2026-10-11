@@ -11,8 +11,9 @@ WHAT TRAVELS: whichever credential the tool's `auth` names, and nothing else (is
 was built for. `admin` sends the key the DEPLOYMENT holds, in the header the owning domain named,
 and the caller's own credential does NOT travel with it: a door that reads an operator key has no
 use for a person's, and forwarding both would let the weaker one look like it was checked. Because
-that key is the deployment's, it is spent only for the instance admin calling with their own
-credential, confirmed with the gateway at call time (`_require_instance_admin`).
+that key is the deployment's, it is spent only for the deployment's ADMIN ACCOUNT calling with its
+own credential — the one identity that controls the company layer `_global`, flows included —
+confirmed with the gateway at call time (`_require_admin_account`).
 `none` sends neither.
 
 There is one authentication path INTO this edge (PRD 40.8) — a bearer in the header, the session
@@ -100,19 +101,23 @@ def register(app: FastAPI, bound: List[BoundTool], base_urls: Dict[str, str], *,
     return names
 
 
-#: The answer to a caller who is not the instance admin speaking for themselves.
-ADMIN_REFUSAL = ("this tool acts with the deployment's own operator key, so only the instance "
-                 "admin, calling with their own credential, may use it")
+#: The answer to a caller who is not the admin account speaking for itself.
+ADMIN_REFUSAL = ("this tool acts with the deployment's own operator key, so only the deployment's "
+                 "admin account, calling with its own credential, may use it — sign in as the admin "
+                 "account (an everyday account, the instance admin's included, cannot)")
 
 
-async def _require_instance_admin(caller_key: str, gateway_url: Optional[str],
-                                  transport: Optional[httpx.AsyncBaseTransport]) -> None:
+async def _require_admin_account(caller_key: str, gateway_url: Optional[str],
+                                 transport: Optional[httpx.AsyncBaseTransport]) -> None:
     """An `auth: admin` tool spends a key the DEPLOYMENT holds, so this edge spends it only for the
-    instance admin calling with their own credential — asked of the gateway at call time (`/auth/me`
-    answers `is_admin` from identity), never read from anything the caller sent. For a worker's
-    delegation token the gateway answers only on this edge's re-entry (the identity it signed onto
-    the `/mcp` request, `reentry.py`), and says admin only when the person the worker acts for is
-    the instance admin and is in the loop (regime `human`). No gateway to ask is a refusal too."""
+    deployment's ADMIN ACCOUNT calling with its own credential (founder ruling 2026-10-11: the admin
+    is a special account, and the only one with control of `_global`; flows authoring is that
+    control). Asked of the gateway at call time (`/auth/me` answers `admin_account` from identity),
+    never read from anything the caller sent. The instance admin (`is_admin`) is a person and is NOT
+    enough. For a worker's delegation token the gateway answers only on this edge's re-entry (the
+    identity it signed onto the `/mcp` request, `reentry.py`), and says yes only when the person the
+    worker acts for is the admin account and is in the loop (regime `human`). No gateway to ask is a
+    refusal too."""
     if not gateway_url or not caller_key:
         raise HTTPException(status_code=403, detail=ADMIN_REFUSAL)
     try:
@@ -125,7 +130,7 @@ async def _require_instance_admin(caller_key: str, gateway_url: Optional[str],
         me = r.json() if r.status_code == 200 else {}
     except Exception:  # noqa: BLE001 — an unreadable answer confirms nothing
         me = {}
-    if not isinstance(me, dict) or me.get("is_admin") is not True:
+    if not isinstance(me, dict) or me.get("admin_account") is not True:
         raise HTTPException(status_code=403, detail=ADMIN_REFUSAL)
 
 
@@ -274,7 +279,7 @@ def _add(app: FastAPI, bt: BoundTool, base: str,
         if key == "" and bt.tool.identity != "none":
             raise HTTPException(status_code=401, detail="this tool needs your Vexa credential")
         if bt.tool.auth == "admin":
-            await _require_instance_admin(key, gateway_url, transport)
+            await _require_admin_account(key, gateway_url, transport)
         raw_body = {}
         if method in ("POST", "PUT", "PATCH"):
             try:

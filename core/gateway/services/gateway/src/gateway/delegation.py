@@ -95,3 +95,19 @@ def reported_admin(user_data: Mapping, *, delegated: bool) -> bool:
     if not isinstance(dlg, Mapping):
         return False
     return str(dlg.get("regime") or "") == "human" and user_data.get("person_is_admin") is True
+
+
+def reported_admin_account(user_data: Mapping, *, delegated: bool) -> bool:
+    """`/auth/me`'s `admin_account`, from identity's own answer (`/internal/validate`).
+
+    The deployment's dedicated admin account — the one identity that writes the company layer
+    `_global` (admin-api `app/admin_account.py`). The MCP edge asks it before it spends the
+    deployment's operator key on flows authoring. Same shape as :func:`reported_admin`: a person's
+    key is the account when identity says so; a worker only when its person is the account AND that
+    person is in the loop. A missing field is no — an older identity fails closed."""
+    if not delegated:
+        return user_data.get("admin_account") is True
+    dlg: Optional[Mapping] = user_data.get("delegation")
+    if not isinstance(dlg, Mapping):
+        return False
+    return str(dlg.get("regime") or "") == "human" and user_data.get("person_admin_account") is True

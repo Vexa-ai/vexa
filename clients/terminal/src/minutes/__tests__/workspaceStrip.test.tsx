@@ -280,7 +280,7 @@ describe("what could not be read is still said", () => {
  *  visibility answers and the profile) — and this reader either its administrator or not. */
 const asCompanyLayer = (isAdmin: boolean) => {
   vi.stubGlobal("fetch", vi.fn(async (url: string) => ({
-    ok: true, json: async () => (String(url).includes("/api/auth/me") ? { is_admin: isAdmin } : []),
+    ok: true, json: async () => (String(url).includes("/api/auth/me") ? { admin_account: isAdmin } : []),
   })) as unknown as typeof fetch);
   vi.mocked(api.readWorkspaceFile).mockImplementation(async (path: string) =>
     (path === "README.md" ? "# Pilot Industries\n\nWe make the things.\n"

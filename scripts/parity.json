@@ -147,6 +147,23 @@
       ]
     },
     {
+      "id": "secret-redaction",
+      "fact": "the shape-based secret scrubber (token families, URL credentials, long opaque runs)",
+      "kind": "file-bytes",
+      "enforced": true,
+      "canonical": "core/agent/shared/git_redaction.py",
+      "how_to_agree": "edit core/agent/shared/git_redaction.py and copy it VERBATIM over core/flows/src/flows_timeline/redaction.py",
+      "why": "agent-api scrubs a friction report on the worker's way in; flows-api serves the whole friction sink to the deployment's admin account (GET /friction/all, friction_list) and scrubs every free-text field on the way out, because a report filed over MCP is stored as sent. Two images that may not import each other (P2), one rule for what a secret looks like, compared by bytes.",
+      "sites": [
+        {
+          "path": "core/agent/shared/git_redaction.py"
+        },
+        {
+          "path": "core/flows/src/flows_timeline/redaction.py"
+        }
+      ]
+    },
+    {
       "id": "workspace-paths",
       "fact": "how this domain reaches a file inside a work tree the model's tools can write",
       "kind": "file-bytes",

@@ -37,6 +37,7 @@ from sqlalchemy.future import select
 from .. import delegation as delegation_mod
 from ..schema.models import APIToken, User
 from . import delegation_revocation as revocation
+from . import admin_account
 from . import signin_allow
 from .db import get_db
 from .internal_tier import check_internal
@@ -102,18 +103,27 @@ class ValidatedIdentity(BaseModel):
     # when its person is the instance admin AND the person is in the loop (regime `human`); it asks
     # the gateway, which reads this beside the regime. Delegation tokens only.
     person_is_admin: Optional[bool] = None
+    # THE ADMIN ACCOUNT (app/admin_account.py): the deployment's dedicated account, the only one
+    # that writes `_global`. Always stated for an API key — positive evidence, so a resolver that
+    # finds it missing (an older identity) reads "no". False for a worker's delegation token: a
+    # worker is never the account; `person_admin_account` says whether its person is.
+    admin_account: Optional[bool] = None
+    person_admin_account: Optional[bool] = None
 
 
 def identity_of(user: User, *, scopes: List[str], is_admin: bool) -> Dict[str, Any]:
     """The fields of a `ValidatedIdentity` for `user` — only the ones that apply."""
+    data_blob = user.data if isinstance(user.data, dict) else {}
+    is_account = admin_account.is_admin_account(user.email, data_blob)
     resp: Dict[str, Any] = {
         "user_id": user.id,
         "scopes": scopes,
-        "max_concurrent": user.max_concurrent_bots,
+        # The admin account launches no bot, whatever its row says: 0 is meeting-api's "no bots".
+        "max_concurrent": admin_account.MAX_CONCURRENT_BOTS if is_account else user.max_concurrent_bots,
         "email": user.email,
         "is_admin": is_admin,
+        "admin_account": is_account,
     }
-    data_blob = user.data if isinstance(user.data, dict) else {}
     if data_blob.get("webhook_url"):
         resp["webhook_url"] = data_blob["webhook_url"]
         if data_blob.get("webhook_secret"):
@@ -169,6 +179,8 @@ async def _validate_delegation(token: str, db: AsyncSession) -> Dict[str, Any]:
         resp["delegation"]["target"] = str(claims["target"])
     resp["person_is_admin"] = signin_allow.is_admin(
         user.email, user.data, signin_allow.admin_emails()[0])
+    resp["person_admin_account"] = bool(resp["admin_account"])
+    resp["admin_account"] = False
     return resp
 
 

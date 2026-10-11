@@ -103,7 +103,7 @@ def _settings(tmp_path, global_path):
     from types import SimpleNamespace
     return SimpleNamespace(workspaces_dir=str(tmp_path),
                            global_system_workspace_path=str(global_path),
-                           global_system_workspace_ref="", global_admin_subjects="")
+                           global_system_workspace_ref="")
 
 
 def test_an_in_store_global_emits_NO_source_so_it_rides_the_store_bind(tmp_path):

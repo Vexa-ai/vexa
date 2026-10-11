@@ -56,6 +56,8 @@ SETTING_FIELDS = (SETTING_FIELD,)
 # The admission reasons. Named, so a log line and a test read the same word.
 WHY_ADMIN = "admin"
 WHY_ADMIN_EMAIL = "admin-email"
+#: `VEXA_ADMIN_ACCOUNT` names this address: the deployment's dedicated admin account (app/admin_account.py).
+WHY_ADMIN_ACCOUNT = "admin-account"
 WHY_EXISTING_USER = "existing-user"
 WHY_ALLOW_LIST = "allow-list"
 WHY_CLAIM_CODE = "claim-code"
@@ -266,11 +268,14 @@ def is_admin(email, data, admins: Iterable[str]) -> bool:
 
 def decide(email, *, user_exists: bool, is_admin: bool, admin_claimed: bool,
            allow: Iterable[str], admins: Iterable[str] = (),
-           claim_code_ok: bool = False) -> Tuple[bool, str]:
+           claim_code_ok: bool = False,
+           admin_accounts: Iterable[str] = ()) -> Tuple[bool, str]:
     """(admitted, why). The order only decides which reason is reported, except for the last row:
     an instance nobody has claimed and nothing has been configured for admits a sign-in that holds
     the claim code, because that sign-in is the claim. `is_admin` is the claimed role on the user
-    row; `admins` is `VEXA_ADMIN_EMAILS`; `claim_code_ok` says the sign-in presented the live code."""
+    row; `admins` is `VEXA_ADMIN_EMAILS`; `claim_code_ok` says the sign-in presented the live code;
+    `admin_accounts` is `VEXA_ADMIN_ACCOUNT` — the deployment names its admin account, so that address
+    may sign in to be created (and is stamped only if it has no row yet: `admin_account`)."""
     e = normalize_email(email)
     if not is_address(e):
         return False, WHY_NOT_ALLOWED
@@ -280,6 +285,8 @@ def decide(email, *, user_exists: bool, is_admin: bool, admin_claimed: bool,
         return True, WHY_ADMIN
     if e in admins:
         return True, WHY_ADMIN_EMAIL
+    if e in set(admin_accounts):
+        return True, WHY_ADMIN_ACCOUNT
     if user_exists:
         return True, WHY_EXISTING_USER
     if matches(e, allow):

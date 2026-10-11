@@ -55,7 +55,8 @@
           "minutes/chats",
           "minutes/pages",
           "minutes/meetings",
-          "minutes/workspaces"
+          "minutes/workspaces",
+          "minutes/admin-account"
         ]
       },
       {

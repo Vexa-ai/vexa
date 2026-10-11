@@ -17,7 +17,7 @@ from control_plane import dispatch as dispatch_mod
 from control_plane import meeting_mint as meeting_mint_mod
 from control_plane import scaffolds as scaffolds_mod
 from control_plane import unit_faults
-from control_plane import global_layer, system_mounts
+from control_plane import admin_account_scope, global_layer, system_mounts
 from control_plane.api_shared import (
     CONTEXT_SENTINEL, GLOBAL_TARGET_NOTE,
     _chat_turn_head, _context_grounding, _has_custom_model_endpoint, _is_slug,
@@ -818,9 +818,18 @@ def build(**d) -> APIRouter:
             # and entity routes already run, asked here for the same reason a target is checked
             # at all: the field exists so the agent may trust it, and a chat pointed at a
             # workspace its person cannot write is a promise the first write breaks.
-            if not global_layer.is_admin(settings, str(subject)):
+            # Since 2026-10-11 that test is the ADMIN ACCOUNT (global_layer.is_admin_account): the
+            # deployment's dedicated account, never a person's everyday one — the instance admin's
+            # included. An everyday chat can never be aimed at Company.
+            if not global_layer.is_admin_account(settings, str(subject)):
                 raise HTTPException(status_code=403,
-                                    detail="only an org admin may write into _global")
+                                    detail="only the admin account may write into _global — sign in "
+                                           "as the admin account to work on Company")
+        elif global_layer.is_admin_account(settings, str(subject)):
+            # …AND THE ADMIN ACCOUNT TARGETS NOTHING ELSE: `_global`, or "" (which its dispatch reads
+            # as `_global` too — `dispatch.build_unit_env`). It has no desk and no workspaces.
+            if wid:
+                raise HTTPException(status_code=403, detail=admin_account_scope.REFUSAL)
         elif wid:
             # WRITABLE, ASKED OF THE THING THAT KNOWS. `write=True` is the point: a target is where
             # writes go, so a workspace this subject may only READ is not one — the same seam, and

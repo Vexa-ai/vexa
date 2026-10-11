@@ -36,7 +36,8 @@ import httpx  # the downstream adapter's transport errors are mapped to 502/504 
 from fastapi import FastAPI, Request, Response, WebSocket
 
 from . import identity_token, routes_manifest
-from .delegation import McpReentry, delegated_route_response, is_delegated, reported_admin
+from .delegation import (McpReentry, delegated_route_response, is_delegated, reported_admin,
+                         reported_admin_account)
 from .multiplex import run_multiplex
 from .paths import (forwarded_param, forwarded_target_error, invalid_path_param_response,
                     path_segment, tail_path)
@@ -314,6 +315,7 @@ def create_app(
         if delegated and not _admits_mcp_reentry(request, user_data):
             return delegated_route_response()
         is_admin = reported_admin(user_data, delegated=delegated)
+        admin_account = reported_admin_account(user_data, delegated=delegated)
         set_user_id(user_data["user_id"])
         return {
             "user_id": user_data["user_id"],
@@ -321,6 +323,7 @@ def create_app(
             "scopes": user_data.get("scopes", []),
             "max_concurrent": user_data.get("max_concurrent", 3),
             "is_admin": is_admin,
+            "admin_account": admin_account,
         }
 
     # --- auth + identity prep, shared by the buffered REST proxy (_forward) and the streaming proxy

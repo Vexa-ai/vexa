@@ -837,13 +837,49 @@ def migrate_flat(card: Card) -> bool:
     return True
 
 
-def ensure_card_shape(card: Card, kind: str) -> None:
+def template_sections(kind: str, text: str) -> "tuple | None":
+    """THE KIND SECTIONS A COMPANY TEMPLATE DECLARES, in its order — or ``None`` when ``text`` is not
+    a template this writer can create a card from.
+
+    The company's templates (`_global/kg/templates/<kind>.md`, written by the deployment's admin
+    account, founder ruling 2026-10-11) may ADD sections and reorder the kind's own; they may not
+    drop one the field map files into (``CARD_SECTIONS``) nor any tail section, because a field
+    whose section is gone has nowhere to land. Anything short of that is not a shape and the caller
+    falls back to the baked one — a bad edit to a template can never break note creation.
+
+    Headings inside a fence or an HTML comment are text, not sections (``_opaque_mask``)."""
+    kind = (kind or "").strip().lower()
+    if kind not in CARD_SECTIONS:
+        return None
+    fm, body = split_frontmatter(text or "")
+    if (_fm_get(fm, "template") or "").strip().lower() != "true":
+        return None
+    if (_fm_get(fm, "type") or "").strip().lower() != kind:
+        return None
+    lines = (body or "").split("\n")
+    mask = _opaque_mask(lines)
+    heads = []
+    for line, opaque in zip(lines, mask):
+        m = _H2.match(line) if not opaque else None
+        if m:
+            name = m.group(1).strip()
+            if name and name not in heads:
+                heads.append(name)
+    if any(h not in heads for h in CARD_SECTIONS[kind]) or any(t not in heads for t in TAIL_SECTIONS):
+        return None
+    return tuple(h for h in heads if h not in TAIL_SECTIONS)
+
+
+def ensure_card_shape(card: Card, kind: str, sections: "tuple | None" = None) -> None:
     """Put the sections this tool owns where they belong, WITHOUT moving anything else.
 
     A missing kind-section lands after the last kind-section that precedes it; a missing tail
     section lands before the first tail section that follows it, else at the end. Sections a human
-    wrote are never reordered — the card is imposed around their page, not over it."""
-    named = list(CARD_SECTIONS.get(kind, ()))
+    wrote are never reordered — the card is imposed around their page, not over it.
+
+    ``sections`` is the company template's own list for this kind (``template_sections``); absent,
+    the baked ``CARD_SECTIONS``."""
+    named = list(sections if sections else CARD_SECTIONS.get(kind, ()))
     for n, head in enumerate(named):
         if card.index(head) >= 0:
             continue
@@ -1030,8 +1066,13 @@ def _sourced(line: str, src: str) -> str:
 def upsert_entity(root, kind: str, name: str, facts=(), source: str = "", *,
                   today: str | None = None, aliases=(), mounts=None, dates=None,
                   summary: str = "", fields=None, section: str = "",
-                  connections=(), open_questions=()) -> dict:
+                  connections=(), open_questions=(), template: str = "") -> dict:
     """Create or update ``kg/entities/<kind>/<slug>.md`` AS A CARD (PRD decision 24.6).
+
+    ``template`` is the COMPANY's template for this kind (`_global/kg/templates/<kind>.md`) when the
+    caller holds one. A NEW card takes its sections from it — added ones included, in its order —
+    and ``section=`` may name any of them; an existing page is never reshaped. A template that is
+    not a valid shape (``template_sections``) is ignored and the baked shape is used.
 
     The page is always parsed and re-rendered, never appended to, and that one decision carries the
     migration: a flat page — the shape the founder rejected, a title and a stack of dated bullets —
@@ -1138,7 +1179,11 @@ def upsert_entity(root, kind: str, name: str, facts=(), source: str = "", *,
     migrated = existed and (migrate_flat(card) or card.was_flat)
     if not card.title:
         card.title = name
-    ensure_card_shape(card, kind)
+    # The company's shape decides a NEW card's sections; on an existing page it only widens which
+    # sections `section=` may name (an added section the page already carries), never reshapes it.
+    company_shape = template_sections(kind, template) if template else None
+    shape = company_shape if not existed else None
+    ensure_card_shape(card, kind, shape)
 
     if not existed:
         fm = [f"type: {kind}", f"id: {slugify(name)}", f"title: {name}",
@@ -1161,7 +1206,7 @@ def upsert_entity(root, kind: str, name: str, facts=(), source: str = "", *,
         card.summary = summary.strip()
         written += 1
 
-    valid = set(CARD_SECTIONS.get(kind, ()))
+    valid = set(CARD_SECTIONS.get(kind, ())) | {h for h in (company_shape or ()) if card.index(h) >= 0}
     edges = dict(FIELD_LINKS.get(kind, {}))
     for field, values in field_lines.items():
         head = FIELD_SECTION.get(kind, {}).get(field)
@@ -1252,7 +1297,8 @@ def upsert_entity(root, kind: str, name: str, facts=(), source: str = "", *,
             "links_docs": documents,
             "links_rewritten": rewritten_all, "kind": kind, "name": name, "date": day,
             "dates": new_stamps, "back_links": back_links, "migrated": bool(migrated),
-            "filed": filed, "sections": list(CARD_SECTIONS.get(kind, ()))}
+            "filed": filed, "sections": list(shape or CARD_SECTIONS.get(kind, ())),
+            **({"template": "company"} if shape else {})}
 
 
 # ── candidate names, mechanically (the phase's pre-pass) ─────────────────────────────────────────

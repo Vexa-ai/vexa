@@ -85,7 +85,7 @@ export function createUserToken(userId: string | number): Promise<AdminResult<{ 
 //    security-relevant may ever be derived from it.
 
 export type ValidatedUser =
-  | { ok: true; userId: string | number; email: string; isAdmin: boolean }
+  | { ok: true; userId: string | number; email: string; isAdmin: boolean; adminAccount: boolean }
   | { ok: false; status: number; error: string };
 
 export async function validateAuthToken(token: string): Promise<ValidatedUser> {
@@ -106,11 +106,17 @@ export async function validateAuthToken(token: string): Promise<ValidatedUser> {
     });
     if (res.status === 401) return { ok: false, status: 401, error: "Not authenticated" };
     if (!res.ok) return { ok: false, status: 503, error: `Token validation failed (admin-api returned ${res.status})` };
-    const data = (await res.json()) as { user_id?: string | number; email?: string; is_admin?: boolean };
+    const data = (await res.json()) as {
+      user_id?: string | number; email?: string; is_admin?: boolean; admin_account?: boolean;
+    };
     if (data.user_id === undefined || data.user_id === null || !data.email) {
       return { ok: false, status: 502, error: "Token validation returned no identity" };
     }
-    return { ok: true, userId: data.user_id, email: data.email, isAdmin: data.is_admin === true };
+    // `adminAccount` — the deployment's dedicated ADMIN ACCOUNT (identity.v1 `admin_account`): the
+    // only account that writes `_global`, and that has nothing else. Positive evidence only: a
+    // missing field (an older admin-api) is no.
+    return { ok: true, userId: data.user_id, email: data.email, isAdmin: data.is_admin === true,
+             adminAccount: data.admin_account === true };
   } catch (err) {
     const e = err as Error;
     return { ok: false, status: 503, error: e.name === "TimeoutError" ? "Token validation timed out" : "Token validation unavailable" };

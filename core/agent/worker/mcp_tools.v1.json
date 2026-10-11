@@ -20,6 +20,8 @@
     "propose",
     "flow_lifecycle",
     "flows_submit",
+    "friction_list",
+    "mail_settings",
     "validate",
     "workspace_purpose",
     "workspace_write",

@@ -107,7 +107,7 @@ from flows_integrations.subject_auth import (REFUSAL, Caller,  # noqa: E402
 import config_preflight                                            # noqa: E402
 from flows_timeline import (REACTION_FOUND, REACTION_MISSING,  # noqa: E402
                             build_timeline, fetch_meetings, friction_for_subject,
-                            reaction_concerns, render_preamble, render_text)
+                            friction_sink, reaction_concerns, render_preamble, render_text)
 from flows_timeline import list_reactions as reactions_for  # noqa: E402
 from flows_timeline.model import to_epoch as _friction_since_epoch  # noqa: E402
 
@@ -1335,6 +1335,111 @@ def friction_fixed(friction_id: str, fix_ref: str = ""):
     admit(db, vocab, clock, source_event_id=f"friction-fix-{fid}",
          event_type="friction.fixed", subject_refs={"friction_id": fid, "fix_ref": ref})
     return {"id": fid, "status": "fixed", "fix_ref": ref}
+
+
+@app.get("/friction/all", dependencies=[Depends(auth)])
+def friction_all(since: str = "", kind: str = "", person: str = "", status: str = "",
+                 limit: int = 50):
+    """EVERY friction report on this deployment, newest first — the sink, read whole.
+
+    Founder ruling 2026-10-11: the deployment's admin account reads friction from the sink. This is
+    that read, and it is the one instance-wide read on this surface: OPERATOR-GATED (the operator
+    key, never a person's credential), and the MCP edge spends that key for the admin account only
+    (`friction_list`, `auth: admin`). Everybody else reads their own reports with `friction_so_far`.
+
+    Filters, all optional: `since` (epoch or ISO-8601), `kind` (the reporter's own word, case-
+    insensitive), `person` (a uid or an address — whose reports), `status` (`open` | `fixed`).
+    Every free-text field comes back SCRUBBED of credential-shaped text (`flows_timeline.redaction`):
+    the sink stores a report as it was sent, and a token somebody pasted into one must not reach the
+    person reading everybody's."""
+    st = (status or "").strip().lower()
+    if st and st not in ("open", "fixed"):
+        raise HTTPException(status_code=400, detail="status is open, fixed, or empty for both")
+    ts = (_friction_since_epoch(since) or 0.0) if since else 0.0
+    rows = friction_sink(db, since=ts, kind=kind, subject=(person or "").strip(), status=st,
+                         limit=max(1, min(int(limit or 50), 500)))
+    if rows is None:
+        raise HTTPException(status_code=404, detail=f"nobody answers to {person!r}")
+    return {"count": len(rows), "filters": {"since": since, "kind": kind, "person": person,
+                                            "status": st},
+            "reports": rows}
+
+
+#: The events a mail INTO the mailbox can start — the inbound half of the mail settings.
+_INBOUND_MAIL_EVENTS = ("invite.received", "mail.reply")
+#: The outbound rules, in the order the settings name them: kind of mail → the rule that gates it.
+_OUTBOUND_MAIL_RULES = (("minutes", "minutes_mail"), ("prep", "prep_and_invite_mail"),
+                        ("attendee_follow_up", "report_to_participants"))
+
+
+@app.get("/mail/settings", dependencies=[Depends(auth)])
+def mail_settings():
+    """THIS DEPLOYMENT'S MAIL, as it stands right now — what the mailbox accepts, what it sends and
+    which flows react to inbound mail. A READ; it changes nothing.
+
+    The runtime answers live in `_global/POLICIES.md` (`mail_domains`, `bot_joins_on_invite`,
+    `minutes_mail`, `prep_and_invite_mail`, `report_to_participants`, `external_participants`,
+    `attendee_domains`) and the mail wording in `_global/mail/<name>.md` — both written only by the
+    deployment's admin account (`workspace_write` on `_global`), never by this service. The
+    mailbox's address, credentials, relay and rate limits are deployment configuration: the address
+    is shown, every credential is reported as configured or not and NEVER as a value.
+
+    Operator-gated; the MCP edge spends the key for the admin account only (`mail_settings`)."""
+    from flows_integrations import mail_policy
+    from flows_steps import mailtext, policies
+    from flows_steps.common import ws_file
+    rules = policies.read_company()
+    addr = (flows_config.get("VEXA_MAIL_ADDR") or flows_config.get("VEXA_GRAPH_MAILBOX")
+            or "").strip().lower()
+    page = tuple(rules.get("mail_domains") or ())
+    allowed = sorted(mail_policy.allow_domains(addr, rules))
+    source = ("POLICIES.md mail_domains" if page else
+              "VEXA_FLOWS_MAIL_DOMAINS" if flows_config.get("VEXA_FLOWS_MAIL_DOMAINS") else
+              "the mailbox's own domain")
+    inbox = (flows_config.get("VEXA_MAIL_INBOX") or "imap").strip()
+    configured = {
+        "imap": bool(addr and flows_config.get("VEXA_MAIL_APP_PASSWORD")),
+        "mailpit": bool(addr),
+        "graph": bool(flows_config.get("VEXA_GRAPH_MAILBOX")
+                      and flows_config.get("VEXA_GRAPH_CLIENT_SECRET")),
+    }.get(inbox, False)
+    templates = []
+    for name in sorted(mailtext.DEFAULTS):
+        try:
+            override = bool((ws_file(policies.COMPANY_READER, f"mail/{name}.md", "_global") or "").strip())
+        except Exception:  # noqa: BLE001 — an unreachable `_global` reads as "the baked wording"
+            override = False
+        templates.append({"name": name, "path": f"_global/mail/{name}.md",
+                          "source": "_global" if override else "baked"})
+    db_flows = _db_flows()
+    inbound = [{"name": f.name, "version": f.version, "on": f.on.name, "source": "image",
+                "status": "active"} for f in vocab.flows.values()
+               if f.on.name in _INBOUND_MAIL_EVENTS]
+    inbound += [{k: f[k] for k in ("name", "version", "on", "source", "status")}
+                for f in db_flows if f["on"] in _INBOUND_MAIL_EVENTS]
+    return {
+        "mailbox": {"address": addr, "inbox": inbox, "credentials_configured": configured,
+                    "quarantine_reply": flows_config.get_bool("VEXA_FLOWS_MAIL_QUARANTINE_REPLY"),
+                    "rate_limits": {
+                        "per_sender": flows_config.get_int("VEXA_FLOWS_MAIL_RATE_PER_SENDER"),
+                        "global": flows_config.get_int("VEXA_FLOWS_MAIL_RATE_GLOBAL"),
+                        "window_s": flows_config.get_int("VEXA_FLOWS_MAIL_RATE_WINDOW_S")}},
+        "inbound": {"allow_list": allowed, "allow_list_source": source,
+                    "bot_joins_on_invite": bool(rules.get("bot_joins_on_invite", True)),
+                    "flows": inbound},
+        "outbound": {kind: bool(rules.get(rule, True)) for kind, rule in _OUTBOUND_MAIL_RULES}
+                    | {"external_participants": bool(rules.get("external_participants", True)),
+                       "attendee_domains": list(rules.get("attendee_domains") or ())},
+        "templates": templates,
+        "policy_problems": list(rules.get("problems") or ()),
+        "how_to_change": (
+            "Runtime answers: edit the front matter of _global/POLICIES.md (the admin account's "
+            "workspace_write) — mail_domains, bot_joins_on_invite, minutes_mail, "
+            "prep_and_invite_mail, report_to_participants, external_participants, "
+            "attendee_domains. Wording: _global/mail/<name>.md. A flow version that reacts to "
+            "inbound mail: flow_lifecycle. The mailbox address, its credentials, the relay and the "
+            "rate limits are the operator's deployment configuration and are not changed here."),
+    }
 
 
 def bind_host() -> str:

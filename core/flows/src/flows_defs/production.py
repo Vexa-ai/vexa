@@ -1494,6 +1494,12 @@ def build(reg: Registry, db) -> None:
         layer out.
 
         Reads: refs.{uid,organizer,title,meeting_id} · Effect: one notification."""
+        # THE DEPLOYMENT'S RULE BEFORE THE PERSON'S PREFERENCE, the shape `emit_prep` already has:
+        # `minutes_mail` in `_global/POLICIES.md` is the admin account's answer for everybody (and
+        # covers the group fan-out below, which only this step reaches); `mail_minutes` is one
+        # person's answer for themselves. Deny wins either way; an unreadable `_global` is `on`.
+        if policies.param(ctx, "minutes_mail", str(ctx.refs.get("uid") or "")) is False:
+            return Done({"skipped": "minutes_mail is off for this deployment"})
         if not setting(ctx.refs["uid"], "mail_minutes"):
             return Done({"skipped": "mail_minutes is off for this person"})
         # THE RECIPIENT. `refs["organizer"]` only exists for a calendar-invited meeting — an AD

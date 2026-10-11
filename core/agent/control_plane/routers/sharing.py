@@ -366,7 +366,7 @@ def build(**d) -> APIRouter:
         try:
             membership_acts.assert_may_manage(
                 wsr.root, body.slug, subject,
-                is_admin=bool(global_layer.is_admin(settings, str(subject))))
+                is_admin=bool(global_layer.is_admin_account(settings, str(subject))))
             rec = workspace_registry.by_slug(body.slug) or {}
             return membership_acts.invite(
                 wsr.root, body.slug, email=body.email, role=body.role, inviter=subject,
@@ -395,7 +395,7 @@ def build(**d) -> APIRouter:
         try:
             membership_acts.assert_may_manage(
                 wsr.root, body.slug, subject,
-                is_admin=bool(global_layer.is_admin(settings, str(subject))))
+                is_admin=bool(global_layer.is_admin_account(settings, str(subject))))
             return membership_acts.set_membership(
                 wsr.root, body.slug, email=body.email, role=body.role, actor=subject,
                 index=mindex, commit_fn=_act_commit(request, subject),

@@ -17,6 +17,8 @@ import subprocess
 from pathlib import Path
 
 import pytest
+
+from tests import admin_accounts
 from fastapi.testclient import TestClient
 
 from control_plane import system_mounts
@@ -39,8 +41,9 @@ def _repo(path: Path) -> Path:
 
 
 def _settings(store: Path, configured: str):
+    admin_accounts.name(ADMIN)
     return load_settings(workspaces_dir=str(store), global_system_workspace_path=configured,
-                         global_admin_subjects=ADMIN, internal_api_secret="s",
+                         internal_api_secret="s",
                          ui_url="https://app.example.test", redis_url="")
 
 
@@ -136,3 +139,7 @@ def test_no_module_decides_where_global_is_on_its_own():
         if re.search(r"settings\.global_system_workspace_path|[\"']VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH[\"']", text):
             offenders.append(path.relative_to(AGENT).as_posix())
     assert offenders == []
+
+
+# Identity's admin-account answer, faked at agent-api's one reader (tests/admin_accounts.py).
+pytestmark = pytest.mark.usefixtures("fake_admin_accounts")

@@ -60,6 +60,14 @@ FLOWS_OPENAPI = {"paths": {
         "get": {"summary": "Your own filed reports, newest first", "parameters": [
             {"name": "since", "in": "query", "schema": {"type": "string"}},
             {"name": "limit", "in": "query", "schema": {"type": "integer"}}]}},
+    # The admin account's two reads (founder ruling 2026-10-11), operator-gated on flows-api.
+    "/friction/all": {"get": {"summary": "Every friction report on this deployment", "parameters": [
+        {"name": "since", "in": "query", "schema": {"type": "string"}},
+        {"name": "kind", "in": "query", "schema": {"type": "string"}},
+        {"name": "person", "in": "query", "schema": {"type": "string"}},
+        {"name": "status", "in": "query", "schema": {"type": "string"}},
+        {"name": "limit", "in": "query", "schema": {"type": "integer"}}]}},
+    "/mail/settings": {"get": {"summary": "This deployment's mail, as it stands", "parameters": []}},
     "/flows/{name}/{version}/{action}": {"post": {"summary": "activate | retire", "parameters": []}},
 }}
 FLOWS_OPENAPI["paths"]["/flows"]["post"] = {"summary": "Author a new flow version", "requestBody": {
@@ -223,8 +231,8 @@ def test_calling_a_json_body_tool_sends_a_json_body_downstream():
     seen = []
 
     def upstream(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/auth/me":  # the edge confirms the caller is the instance admin
-            return httpx.Response(200, json={"user_id": 1, "is_admin": True})
+        if request.url.path == "/auth/me":  # the edge confirms the caller is the admin account
+            return httpx.Response(200, json={"user_id": 1, "admin_account": True})
         seen.append(request)
         return httpx.Response(201, json={"name": "n", "version": 1, "status": "active"})
 
@@ -269,8 +277,8 @@ def test_flow_lifecycles_path_parameters_still_substitute():
     seen = []
 
     def upstream(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/auth/me":  # the edge confirms the caller is the instance admin
-            return httpx.Response(200, json={"user_id": 1, "is_admin": True})
+        if request.url.path == "/auth/me":  # the edge confirms the caller is the admin account
+            return httpx.Response(200, json={"user_id": 1, "admin_account": True})
         seen.append(request)
         return httpx.Response(200, json={"name": "onboarding", "version": 3, "status": "active"})
 

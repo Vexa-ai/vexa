@@ -67,13 +67,30 @@
       "note": "Your own filed reports, newest first — the subject is taken from your credential, same as reactions_list. The whole-instance dump and the fix verb stay operator-side (the rig's friction_dump/friction_fixed) for now."
     },
     {
+      "name": "friction_list",
+      "identity": "operator",
+      "auth": "admin",
+      "requires": ["identity", "flows"],
+      "route": { "method": "GET", "path": "/friction/all" },
+      "arguments": ["since", "kind", "person", "status", "limit"],
+      "note": "The whole friction sink — every person's reports, newest first, with every free-text field scrubbed of credential-shaped text. `auth: admin` because `GET /friction/all` is gated by flows-api's own operator key, and the MCP edge spends that key for the deployment's admin account only (identity.v1 `admin_account`), never for an everyday account, the instance admin's included; everybody else reads their own reports with friction_so_far. Filters: since (epoch or ISO-8601), kind (case-insensitive), person (uid or address), status (open | fixed)."
+    },
+    {
+      "name": "mail_settings",
+      "identity": "operator",
+      "auth": "admin",
+      "requires": ["identity", "flows"],
+      "route": { "method": "GET", "path": "/mail/settings" },
+      "note": "What this deployment's mail does right now: the inbound allow-list and where it comes from, whether invitations are acted on, which outbound mails are on (minutes, prep, attendee follow-up), which mail templates are overridden in _global/mail, and which flows react to inbound mail. A read. Its answers are changed by the admin account editing _global/POLICIES.md and _global/mail/<name>.md (workspace_write, agent domain); credentials are reported as configured or not, never as values. Same admin gate as flows_submit."
+    },
+    {
       "name": "flows_submit",
       "identity": "operator",
       "auth": "admin",
       "requires": ["identity", "flows"],
       "route": { "method": "POST", "path": "/flows" },
       "arguments": ["name", "on_event", "steps", "params", "activate"],
-      "note": "Author a new flow version (ADR-0037 / PRD decision 40.5's own registry write). `auth: admin` because `POST /flows` is gated by flows-api's own operator key (flows_api.auth), not the caller's credential — a person's own key 401s here, so the caller's credential does not travel — and the MCP edge spends that key only for the instance admin calling with their own credential, confirmed with the gateway at call time. `steps` must name vocabulary flows-api already knows (`GET /flows`'s own `steps_vocabulary` lists it); an unknown step is a 400 naming it. `activate` defaults true (live within ~10s); false files a draft version."
+      "note": "Author a new flow version (ADR-0037 / PRD decision 40.5's own registry write). `auth: admin` because `POST /flows` is gated by flows-api's own operator key (flows_api.auth), not the caller's credential — a person's own key 401s here, so the caller's credential does not travel — and the MCP edge spends that key only for the deployment's admin account (the one identity that controls `_global`, identity.v1 `admin_account`) calling with its own credential, confirmed with the gateway at call time — never for an everyday account, the instance admin's included. `steps` must name vocabulary flows-api already knows (`GET /flows`'s own `steps_vocabulary` lists it); an unknown step is a 400 naming it. `activate` defaults true (live within ~10s); false files a draft version."
     },
     {
       "name": "flow_lifecycle",
@@ -81,7 +98,7 @@
       "auth": "admin",
       "requires": ["identity", "flows"],
       "route": { "method": "POST", "path": "/flows/{name}/{version}/{action}" },
-      "note": "`action` is activate | retire on one flow version, addressed by `name` + `version` — the path parameters are arguments without being declared, same shape as reaction_signal. Same admin gate as flows_submit: flows-api's `auth` dependency, not the caller's own credential, spent by the edge for the instance admin only."
+      "note": "`action` is activate | retire on one flow version, addressed by `name` + `version` — the path parameters are arguments without being declared, same shape as reaction_signal. Same admin gate as flows_submit: flows-api's `auth` dependency, not the caller's own credential, spent by the edge for the admin account only."
     }
   ],
   "publishes_events": [

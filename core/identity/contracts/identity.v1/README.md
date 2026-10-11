@@ -29,6 +29,13 @@ the internal tier (`X-Internal-Secret` = `INTERNAL_API_SECRET`).
   `ceiling_reads`; `"*"` keeps them all), because the services behind the gateway read them as the
   workspaces the bearer reads through. The gateway signs this answer onward as gateway-identity.v1
   claims.
+- **`admin_account`** — is the bearer the deployment's dedicated **admin account**, the only identity
+  that writes the company layer `_global` (admin-api `app/admin_account.py`: a row created as one
+  while `VEXA_ADMIN_ACCOUNT` names its address, and still named)? Always stated for an API key, always
+  `false` for a delegation token, whose `person_admin_account` asks it of the person instead. It is
+  not `is_admin`: the instance admin is a person, and a person's chats only read `_global`. The admin
+  account's `max_concurrent` is always `0` — it launches no bot. A resolver reads a missing field as
+  `false`, so an older identity fails closed.
 - **Failures** — `503` without an internal secret outside dev mode; `403` on a wrong one; `401`
   `Missing token` · `Invalid token` · `Token expired` · `Delegation tokens are not accepted on this
   deployment` · `Invalid delegation: <reason>` (delegation.v1 `RefusalReason`; `revoked` once the
@@ -67,7 +74,8 @@ agent-api and flows-api together.
 - `ValidateRequest.token.json` — the oracle's request.
 - `ValidateResponse.api-key.json` (a key with a webhook and a membership), `ValidateResponse.admin-key.json`
   (the admin's legacy key) and `ValidateResponse.delegation.json` (an autonomous worker acting for the
-  admin: `is_admin` false, `person_is_admin` true).
+  admin: `is_admin` false, `person_is_admin` true), and `ValidateResponse.admin-account.json` (the admin
+  account's own key: `admin_account` true, `max_concurrent` 0).
 
 ## Validate
 `node validate.mjs [--check]` — ajv2020 + ajv-formats, every golden against its `$def` (gate:schema).
