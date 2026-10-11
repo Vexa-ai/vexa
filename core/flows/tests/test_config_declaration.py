@@ -133,9 +133,10 @@ def test_the_mail_capability_names_its_keys_in_one_place():
     lookup into somebody's private credential store. Grouping the four machine-readably is what
     makes a half-configured mailbox visible as one thing rather than four rows apart."""
     assert set(cfg.MAIL_KEYS) <= set(cfg.DECLARED)
-    emailx = (SRC / "flows_steps" / "emailx.py").read_text()
+    readers = ((SRC / "flows_steps" / "emailx.py").read_text()
+               + (SRC / "flows_steps" / "mail_transport.py").read_text())
     for key in cfg.MAIL_KEYS:
-        assert key in emailx, f"{key} is grouped under the mail capability but nothing reads it"
+        assert key in readers, f"{key} is grouped under the mail capability but nothing reads it"
 
 
 def test_every_secret_is_a_declared_key_and_the_password_is_one():

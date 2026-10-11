@@ -12,6 +12,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 import flows_config
+from flows_steps import mail_transport as mt
 
 
 def creds(*, login: bool = True) -> tuple[str, str]:
@@ -57,14 +58,12 @@ def _needs_login() -> bool:
     return not flows_config.get("VEXA_MAIL_SMTP_HOST")
 
 
-def _tls_context() -> ssl.SSLContext:
+def _tls_context(host: str = "", port="") -> ssl.SSLContext:
     """The certificate check every encrypted relay connection makes — implicit TLS and STARTTLS
-    alike. VEXA_MAIL_SMTP_TLS_INSECURE turns off only the check, never the encryption."""
-    ctx = ssl.create_default_context()
-    if flows_config.get_bool("VEXA_MAIL_SMTP_TLS_INSECURE"):
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-    return ctx
+    alike. VEXA_MAIL_SMTP_CA_FILE names the bundle to trust (an on-premises relay signed by an
+    internal CA); VEXA_MAIL_SMTP_TLS_INSECURE turns off only the check, never the encryption."""
+    return mt.tls_context("smtp", host, port, flows_config.get("VEXA_MAIL_SMTP_CA_FILE"),
+                          insecure=flows_config.get_bool("VEXA_MAIL_SMTP_TLS_INSECURE"))
 
 
 def _smtp():
@@ -72,46 +71,94 @@ def _smtp():
 
     Hardcoding smtp.gmail.com meant the mail double this rig runs was never reachable: the invite
     path could not be rehearsed, only fired at real recipients. When VEXA_MAIL_SMTP_HOST is set we
-    honour it; with nothing set, behaviour is exactly as before.
+    honour it; with nothing set, behaviour is exactly as before (the Gmail preset).
 
     A SET HOST IS THE DEPLOYMENT'S RELAY, the one the terminal's sign-in mail uses too (the
-    VEXA_MAIL_SMTP_* family is one setting for every sender), so it is spoken to the same way:
-    implicit TLS when VEXA_MAIL_SMTP_SECURE is on; otherwise STARTTLS whenever the relay offers it
-    (RFC 3207, certificate verified); AUTH LOGIN when VEXA_MAIL_SMTP_USER and VEXA_MAIL_SMTP_PASSWORD
-    are both set — the relay connection comes back already authenticated.
+    VEXA_MAIL_SMTP_* family is one setting for every sender), so it is spoken to the same way.
+    VEXA_MAIL_SMTP_TLS picks how (`flows_steps.mail_transport.smtp_tls_mode`):
 
-    CREDENTIALS NEVER CROSS AN UNENCRYPTED CONNECTION: with a user and password set, a relay that
-    offers neither implicit TLS nor STARTTLS is refused before AUTH, and the connection is closed.
+      auto      implicit TLS when VEXA_MAIL_SMTP_SECURE is on; otherwise STARTTLS whenever the relay
+                offers it (RFC 3207, certificate verified) — the 0.13.2 behaviour, unchanged;
+      tls       implicit TLS (a :465 endpoint);
+      starttls  STARTTLS REQUIRED — a relay that does not offer it is refused, never used in clear;
+      none      never upgrade (a lab relay; no credentials may be sent over it).
+
+    AUTH LOGIN when VEXA_MAIL_SMTP_USER and VEXA_MAIL_SMTP_PASSWORD are both set — the relay
+    connection comes back already authenticated.
+
+    CREDENTIALS NEVER CROSS AN UNENCRYPTED CONNECTION: with a user and password set, a session still
+    in plain TCP is refused before AUTH, and the connection is closed.
+
+    EVERY FAILURE LEAVES TYPED (`MailTransportError`, P18): the password, the certificate and the
+    network are three different people's problems, and the reaction's reason says which.
     """
     if _needs_login():
-        return smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=20), True
+        try:
+            return smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=20), True
+        except BaseException as e:  # noqa: BLE001
+            raise mt.classify(e, "smtp", "smtp.gmail.com", 465, phase="connect") from e
     host, port = flows_config.get("VEXA_MAIL_SMTP_HOST"), flows_config.get_int("VEXA_MAIL_SMTP_PORT")
     user = flows_config.get("VEXA_MAIL_SMTP_USER")
     password = flows_config.get("VEXA_MAIL_SMTP_PASSWORD")
-    if flows_config.get_bool("VEXA_MAIL_SMTP_SECURE"):
-        conn = smtplib.SMTP_SSL(host, port, timeout=20, context=_tls_context())
-        encrypted = True
-    else:
-        conn = smtplib.SMTP(host, port, timeout=20)
-        encrypted = False
+    mode = mt.smtp_tls_mode()
     try:
-        if not encrypted:
-            conn.ehlo()
-            if conn.has_extn("starttls"):
-                conn.starttls(context=_tls_context())
+        if mode == "tls":
+            conn = smtplib.SMTP_SSL(host, port, timeout=20, context=_tls_context(host, port))
+        else:
+            conn = smtplib.SMTP(host, port, timeout=20)
+    except BaseException as e:  # noqa: BLE001
+        raise mt.classify(e, "smtp", host, port, phase="connect") from e
+    encrypted = mode == "tls"
+    try:
+        if not encrypted and mode != "none":
+            phase = "connect"
+            try:
                 conn.ehlo()
-                encrypted = True
+                if conn.has_extn("starttls"):
+                    phase = "tls"
+                    conn.starttls(context=_tls_context(host, port))
+                    conn.ehlo()
+                    encrypted = True
+            except BaseException as e:  # noqa: BLE001
+                raise mt.classify(e, "smtp", host, port, phase=phase) from e
+            if mode == "starttls" and not encrypted:
+                raise mt.MailTransportError(
+                    "tls", "smtp", host, port,
+                    "VEXA_MAIL_SMTP_TLS=starttls but the relay does not offer STARTTLS")
         if user and password:
             if not encrypted:
-                raise RuntimeError(
-                    f"refusing to send SMTP credentials to {host}:{port} over an unencrypted "
-                    "connection — the relay offers no STARTTLS (set VEXA_MAIL_SMTP_SECURE=1 for an "
-                    "implicit-TLS endpoint)")
-            conn.login(user, password)
+                raise mt.MailTransportError(
+                    "config", "smtp", host, port,
+                    "refusing to send SMTP credentials over an unencrypted connection — the relay "
+                    "offers no STARTTLS (set VEXA_MAIL_SMTP_TLS=tls for an implicit-TLS endpoint)")
+            try:
+                conn.login(user, password)
+            except BaseException as e:  # noqa: BLE001
+                raise mt.classify(e, "smtp", host, port, phase="login",
+                                  secrets=(password,)) from e
     except BaseException:
         conn.close()
         raise
     return conn, False
+
+
+def _deliver(conn, needs_login: bool, addr: str, pw: str, msg) -> None:
+    """Log in (the Gmail preset only) and hand the message over — typed on the way out."""
+    host = getattr(conn, "_host", "") or flows_config.get("VEXA_MAIL_SMTP_HOST") or "smtp.gmail.com"
+    port = flows_config.get_int("VEXA_MAIL_SMTP_PORT") if not needs_login else 465
+    with conn as s:
+        try:
+            if needs_login:
+                s.login(addr, pw)
+        except BaseException as e:  # noqa: BLE001
+            raise mt.classify(e, "smtp", host, port, phase="login", secrets=(pw,)) from e
+        try:
+            s.send_message(msg)
+        except smtplib.SMTPRecipientsRefused as e:
+            raise mt.MailTransportError("protocol", "smtp", host, port,
+                                        f"recipient refused: {sorted(e.recipients)}") from e
+        except BaseException as e:  # noqa: BLE001
+            raise mt.classify(e, "smtp", host, port, phase="send") from e
 
 
 def send(to: str, subject: str, body: str, *, in_reply_to: str | None = None) -> str:
@@ -123,10 +170,7 @@ def send(to: str, subject: str, body: str, *, in_reply_to: str | None = None) ->
         m["In-Reply-To"] = m["References"] = in_reply_to
     m.set_content(body)
     conn, needs_login = _smtp()
-    with conn as s:
-        if needs_login:
-            s.login(addr, pw)
-        s.send_message(m)
+    _deliver(conn, needs_login, addr, pw, m)
     return m["Message-ID"]
 
 
@@ -216,8 +260,5 @@ def send_rsvp_accept(organizer_email: str, *, ics_uid: str, start_epoch: float, 
     cal.set_param("method", "REPLY")
     msg.attach(cal)
     conn, needs_login = _smtp()
-    with conn as s:
-        if needs_login:
-            s.login(addr, pw)
-        s.send_message(msg)
+    _deliver(conn, needs_login, addr, pw, msg)
     return msg["Message-ID"]

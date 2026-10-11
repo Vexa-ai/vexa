@@ -4,7 +4,9 @@
 routing decision, the admission or the flows: every source hands back the same `InboundMessage`,
 so a Gmail invite, a mailpit invite and an Exchange invite produce byte-identical facts.
 
-    VEXA_MAIL_INBOX = imap     (default) — IMAP against imap.gmail.com, exactly as before
+    VEXA_MAIL_INBOX = imap     (default) — IMAP; the Gmail preset unless VEXA_MAIL_IMAP_HOST names
+                                          another server (on-prem Exchange: `flows_steps/
+                                          mail_transport.py` lists the endpoint keys)
                     = mailpit           — the dev stack's mail double, REST only (no IMAP/POP3)
                     = graph             — Microsoft 365 over Graph, client-credentials, for a
                                           tenant with IMAP switched off (the bank posture)
@@ -14,8 +16,9 @@ so a Gmail invite, a mailpit invite and an Exchange invite produce byte-identica
                                  inbox reads the same dial, because it is the same mechanism
     VEXA_GRAPH_*               — the Graph mailbox's four keys, see `graph_client.py`
 
-An Exchange/M365 mailbox that has IMAP ENABLED needs none of this: point the IMAP source at
-`outlook.office365.com` instead. `graph` is for the tenant that will not enable it.
+An Exchange mailbox that has IMAP ENABLED — on-premises or Exchange Online — needs none of the
+Graph machinery: point the IMAP source at it with VEXA_MAIL_IMAP_HOST (and _TLS, _USER, _CA_FILE).
+`graph` is for the Microsoft 365 tenant that will not enable IMAP.
 
 Contracts both sources keep — they are the ones the live witness paid for, so a source that
 breaks any of them is a regression, not a variant:
@@ -221,13 +224,21 @@ class Inbox:
 
 
 # ---------------------------------------------------------------------------------------------
-# IMAP — the original wiring, moved behind the seam and otherwise untouched: same host, same
-# UID search, same `n:*` guard, same single-integer cursor row.
+# IMAP — any IMAP server. Gmail is the PRESET (every endpoint key defaults to it), not the only
+# host: an on-premises Exchange with IMAP enabled is `VEXA_MAIL_IMAP_HOST` + `_TLS` + `_USER`
+# (+ `_CA_FILE` for an internal CA). Same UID search, same `n:*` guard, same single-integer cursor
+# row as the original wiring. Connection, TLS and login failures leave `_open` as a typed
+# `MailTransportError` (`flows_steps.mail_transport`) the poller reports and the probe reads.
 # ---------------------------------------------------------------------------------------------
 class ImapInbox(Inbox):
     name = "imap"
-    host = "imap.gmail.com"
-    folder = "INBOX"
+
+    def __init__(self) -> None:
+        from flows_steps import mail_transport as mt
+        self._mt = mt
+        self.settings = mt.imap_settings()      # a bad TLS mode or port is refused at construction
+        self.host = self.settings["host"]
+        self.folder = self.settings["folder"]
 
     def _creds(self):
         from flows_steps import emailx as mx
@@ -245,11 +256,12 @@ class ImapInbox(Inbox):
                    {"u": int(cursor)})
 
     def _open(self):
-        addr, pw = self._creds()
-        im = imaplib.IMAP4_SSL(self.host)
-        im.login(addr, pw)
-        im.select(self.folder)
-        return im
+        try:
+            addr, pw = self._creds()
+        except Exception as e:  # noqa: BLE001 — a half-configured pair is a config fault, typed
+            raise self._mt.MailTransportError("config", "imap", self.host,
+                                              self.settings["port"], str(e)) from e
+        return self._mt.imap_open(addr, pw, self.settings)
 
     def tail_cursor(self) -> str:
         with self._open() as im:

@@ -245,6 +245,78 @@
       ]
     },
     {
+      "key": "VEXA_MAIL_IMAP_HOST",
+      "class": "defaulted",
+      "description": "The IMAP server the mailbox reads invites from. The default is the Gmail preset; an on-premises Exchange with IMAP enabled names its own host here.",
+      "default": "imap.gmail.com",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_MAIL_IMAP_PORT",
+      "class": "defaulted",
+      "description": "The IMAP port. Empty = 993 for VEXA_MAIL_IMAP_TLS=tls, 143 for starttls and none.",
+      "default": "",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_MAIL_IMAP_TLS",
+      "class": "defaulted",
+      "description": "How the IMAP connection is secured: `tls` (implicit TLS, :993), `starttls` (upgrade on :143, refused if the server does not offer it) or `none` (cleartext, the password included — a lab server only, announced on every connection). Anything else is refused by name.",
+      "default": "tls",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_MAIL_IMAP_USER",
+      "class": "defaulted",
+      "description": "The IMAP login name when it is not the mailbox address (an Exchange `DOMAIN\\user` or UPN). Empty = VEXA_MAIL_ADDR. The password is VEXA_MAIL_APP_PASSWORD.",
+      "default": "",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_MAIL_IMAP_FOLDER",
+      "class": "defaulted",
+      "description": "The IMAP folder invites arrive in.",
+      "default": "INBOX",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_MAIL_IMAP_CA_FILE",
+      "class": "defaulted",
+      "description": "A PEM CA bundle the IMAP server's certificate must chain to, INSTEAD of the system store (an internal CA). Empty = the system store. A named file that does not exist is a config fault.",
+      "default": "",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_MAIL_SMTP_TLS",
+      "class": "defaulted",
+      "description": "How a set VEXA_MAIL_SMTP_HOST is secured: `auto` (implicit TLS when VEXA_MAIL_SMTP_SECURE is on, else STARTTLS whenever offered — the previous behaviour), `tls` (implicit), `starttls` (required; a relay that does not offer it is refused) or `none` (never upgrade; no credentials are sent). Flows only — the terminal's sign-in mail reads VEXA_MAIL_SMTP_SECURE.",
+      "default": "auto",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_MAIL_SMTP_CA_FILE",
+      "class": "defaulted",
+      "description": "A PEM CA bundle a set relay's certificate must chain to, instead of the system store. Empty = the system store. Flows only — the terminal's Node runtime takes NODE_EXTRA_CA_CERTS.",
+      "default": "",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
       "key": "VEXA_MAILPIT_URL",
       "class": "defaulted",
       "description": "mailpit's HTTP base, when the inbox is mailpit. THE ONE HOST-PORT DEFAULT IN THIS DECLARATION, and it states why: mailpit is a DEVELOPMENT inbox that only ever runs beside the process reading it, and the inbox mode has to be selected before the default is reached.",
@@ -510,15 +582,15 @@
       "description": "This deployment carries the meetings domain — scheduling a bot into a call and reading back what it recorded (PRD decision 40.7; decision 5 for meetings).",
       "when_unconfigured": "The meetings domain is not deployed. Flows still boots, still admits facts and still serves its queue; every flow step that would schedule or read a bot answers `meetings:not_present` — terminal, with the reason on the reaction, never a retry loop against a door that is not there."
     },
-      "mailbox_graph": {
-        "description": "The mailbox is a Microsoft 365 tenant reached over Graph with client-credentials — inbound poll AND outbound send, for a deployment that exposes neither IMAP nor SMTP AUTH.",
-        "mode": "all",
-        "when_unconfigured": "This deployment is not on Microsoft. `VEXA_MAIL_INBOX=graph` and `VEXA_NOTIFY_CHANNEL=graph` refuse at the moment the mailbox is constructed, naming the missing keys; every other inbox is unaffected. It is a `capability` and not `required-explicit` because config.v1 cannot express a requirement conditional on another key, and refusing the boot of every non-Microsoft deployment to express one would be worse than the gap."
-      },
-      "flow_packs": {
-        "description": "Flow definitions this deployment carries beyond the ones published in this repo — the operator's seam for steps of its own, alongside the two that already exist for words (`behavior_override`) and for flow versions (`POST /flows`).",
-        "mode": "any",
-        "when_unconfigured": "Only the flows in `flows_defs` run. That is this repo's product exactly — nothing here is shipped dark."
+    "mailbox_graph": {
+      "description": "The mailbox is a Microsoft 365 tenant reached over Graph with client-credentials — inbound poll AND outbound send, for a deployment that exposes neither IMAP nor SMTP AUTH.",
+      "mode": "all",
+      "when_unconfigured": "This deployment is not on Microsoft. `VEXA_MAIL_INBOX=graph` and `VEXA_NOTIFY_CHANNEL=graph` refuse at the moment the mailbox is constructed, naming the missing keys; every other inbox is unaffected. It is a `capability` and not `required-explicit` because config.v1 cannot express a requirement conditional on another key, and refusing the boot of every non-Microsoft deployment to express one would be worse than the gap."
+    },
+    "flow_packs": {
+      "description": "Flow definitions this deployment carries beyond the ones published in this repo — the operator's seam for steps of its own, alongside the two that already exist for words (`behavior_override`) and for flow versions (`POST /flows`).",
+      "mode": "any",
+      "when_unconfigured": "Only the flows in `flows_defs` run. That is this repo's product exactly — nothing here is shipped dark."
     }
   },
   "surface_only": [

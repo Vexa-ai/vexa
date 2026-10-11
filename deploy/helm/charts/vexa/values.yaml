@@ -839,9 +839,48 @@ flows:
   # Setting both apiKey and existingSecret is refused.
   apiKey: ""
   existingSecret: ""
+  # THE BOT MAILBOX — invite-by-email. Full operator page: docs/docs/flows/mailbox.mdx.
   mail:
-    address: ""
+    # Run the flows-mailbox Deployment (IMAP poll → invites). Unset (null) = on exactly when
+    # `address` is set, which is what an existing install already gets; true/false says so outright.
+    enabled: null
+    address: ""                       # the address the bot mailbox answers as (VEXA_MAIL_ADDR)
+    # The mailbox password (VEXA_MAIL_APP_PASSWORD): the IMAP login's password, and Gmail SMTP's.
+    # Prefer existingSecret so it never sits in values.
     appPassword: ""
+    # A Secret YOU manage carrying VEXA_MAIL_APP_PASSWORD and, optionally, VEXA_MAIL_SMTP_PASSWORD
+    # (the relay login's password). Set → the chart renders neither into its own Secret and every
+    # flows container reads them from this one by name. Setting it with appPassword is refused.
+    existingSecret: ""
+    # IMAP — where invites are read. Every empty value is the Gmail preset (imap.gmail.com, 993,
+    # implicit TLS, login = address, folder INBOX, system CA store). On-premises Exchange: host,
+    # tls "tls" (993) or "starttls" (143), user when the login is not the address
+    # (DOMAIN\user or the UPN), and ca for an internal CA. tls "none" = cleartext, lab only.
+    imap:
+      host: ""
+      port: ""
+      tls: ""                         # tls | starttls | none
+      user: ""
+      folder: ""
+    # SMTP — how the bot sends RSVPs, acknowledgements and minutes. Empty host = the deployment's
+    # relay in terminal.mail (one relay for every sender); both empty = Gmail with appPassword.
+    # tls: auto (implicit with secure "1", else STARTTLS whenever offered) | tls | starttls
+    # (required) | none. user + VEXA_MAIL_SMTP_PASSWORD (existingSecret, or secrets.mailSmtpPassword)
+    # = AUTH LOGIN, only ever over TLS.
+    smtp:
+      host: ""
+      port: ""
+      tls: ""
+      user: ""
+      secure: ""
+      tlsInsecure: ""                 # "1" skips the certificate check — development only
+    # An internal CA bundle (PEM) both wires trust INSTEAD of the system store. Name a ConfigMap or a
+    # Secret you manage (one, not both) and the key holding the bundle; it is mounted read-only into the flows
+    # pods and VEXA_MAIL_IMAP_CA_FILE / VEXA_MAIL_SMTP_CA_FILE point at it.
+    ca:
+      configMapName: ""
+      secretName: ""
+      key: ca.crt
     # WHO THE MAILBOX WILL ACT FOR. A sender who is neither a known user nor inside this list
     # gets no account, no agent turn and no model call — one quarantine row (R-B12).
     # EMPTY IS NOT "EVERYONE": it means the mailbox's own domain, exactly as an unset attendee

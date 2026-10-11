@@ -93,7 +93,7 @@ test("every image runs as a non-root USER, or is root by a stated design", () =>
 test("the Helm pods running a non-root image ask for that image's uid", { skip: !hasHelm() && "helm not installed" }, () => {
   const chart = join(ROOT, "deploy/helm/charts/vexa");
   const render = execFileSync("helm", ["template", "vexa", chart, "-n", "vexa", "-f", join(chart, "values-test.yaml"),
-    "--set", "flows.enabled=true", "--set", "migrations.enabled=true"], { encoding: "utf8" });
+    "--set", "flows.enabled=true", "--set", "flows.mail.enabled=true", "--set", "migrations.enabled=true"], { encoding: "utf8" });
   const pods = podContexts(render);
   for (const [rel, components] of Object.entries(HELM_COMPONENTS)) {
     const uid = uidOf(finalUser(rel));

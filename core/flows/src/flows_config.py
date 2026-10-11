@@ -134,7 +134,7 @@ DECLARED: dict[str, tuple[str, object, str]] = {
         "why the interim wiring had to bind the lane to the docker bridge address by hand."),
 
     # ── the mailbox: which inbox, and what it will answer ───────────────────
-    "VEXA_MAIL_INBOX": ("defaulted", "imap", "`imap` (real) or `mailpit` (the dev double)."),
+    "VEXA_MAIL_INBOX": ("defaulted", "imap", "`imap` (any IMAP server; Gmail preset), `mailpit` (the dev double) or `graph`."),
     # `capability`, not `required-explicit` — the ruling on the #1479 x #1483 collision (P14: a
     # capability is optional BY DEFINITION, and a deployment may carry no mail intake at all). The
     # pair stays grouped under `mailbox` in `all` mode, so a set address with no password is
@@ -172,6 +172,24 @@ DECLARED: dict[str, tuple[str, object, str]] = {
     "VEXA_MAIL_SMTP_TLS_INSECURE": ("defaulted", "0", "1 = skip the relay's certificate check under _SECURE; development only."),
     "VEXA_MAIL_SMTP_USER": ("defaulted", "", "AUTH LOGIN user for a set relay; used only with VEXA_MAIL_SMTP_PASSWORD."),
     "VEXA_MAIL_SMTP_PASSWORD": ("defaulted", "", "AUTH LOGIN password for a set relay, a P14 SECRET; used only with VEXA_MAIL_SMTP_USER."),
+    # THE IMAP ENDPOINT and the relay's TLS policy — `flows_steps/mail_transport.py`. Every default
+    # is the Gmail preset, so a deployment that names none of these behaves exactly as before.
+    "VEXA_MAIL_IMAP_HOST": ("defaulted", "imap.gmail.com",
+        "The IMAP server the mailbox reads invites from. The default is the Gmail preset; an on-premises Exchange with IMAP enabled names its own host here."),
+    "VEXA_MAIL_IMAP_PORT": ("defaulted", "",
+        "The IMAP port. Empty = 993 for VEXA_MAIL_IMAP_TLS=tls, 143 for starttls and none."),
+    "VEXA_MAIL_IMAP_TLS": ("defaulted", "tls",
+        "How the IMAP connection is secured: `tls` (implicit TLS, :993), `starttls` (upgrade on :143, refused if the server does not offer it) or `none` (cleartext, the password included \u2014 a lab server only, announced on every connection). Anything else is refused by name."),
+    "VEXA_MAIL_IMAP_USER": ("defaulted", "",
+        "The IMAP login name when it is not the mailbox address (an Exchange `DOMAIN\\\\user` or UPN). Empty = VEXA_MAIL_ADDR. The password is VEXA_MAIL_APP_PASSWORD."),
+    "VEXA_MAIL_IMAP_FOLDER": ("defaulted", "INBOX",
+        "The IMAP folder invites arrive in."),
+    "VEXA_MAIL_IMAP_CA_FILE": ("defaulted", "",
+        "A PEM CA bundle the IMAP server's certificate must chain to, INSTEAD of the system store (an internal CA). Empty = the system store. A named file that does not exist is a config fault."),
+    "VEXA_MAIL_SMTP_TLS": ("defaulted", "auto",
+        "How a set VEXA_MAIL_SMTP_HOST is secured: `auto` (implicit TLS when VEXA_MAIL_SMTP_SECURE is on, else STARTTLS whenever offered \u2014 the previous behaviour), `tls` (implicit), `starttls` (required; a relay that does not offer it is refused) or `none` (never upgrade; no credentials are sent). Flows only \u2014 the terminal's sign-in mail reads VEXA_MAIL_SMTP_SECURE."),
+    "VEXA_MAIL_SMTP_CA_FILE": ("defaulted", "",
+        "A PEM CA bundle a set relay's certificate must chain to, instead of the system store. Empty = the system store. Flows only \u2014 the terminal's Node runtime takes NODE_EXTRA_CA_CERTS."),
     "VEXA_MAILPIT_URL": ("defaulted", "http://127.0.0.1:8025", "mailpit's HTTP base, when the inbox is mailpit."),
     "VEXA_MAILPIT_LOOKBACK_S": ("defaulted", "300", "re-scan window behind the mailpit watermark."),
     "VEXA_NOTIFY_CHANNEL": ("defaulted", "smtp",
@@ -277,7 +295,10 @@ SECRETS = frozenset({
 #: The mail capability's keys, in one place so a half-declared control is visible as one.
 MAIL_KEYS = ("VEXA_MAIL_ADDR", "VEXA_MAIL_APP_PASSWORD", "VEXA_MAIL_SMTP_HOST",
              "VEXA_MAIL_SMTP_PORT", "VEXA_MAIL_SMTP_SECURE", "VEXA_MAIL_SMTP_TLS_INSECURE",
-             "VEXA_MAIL_SMTP_USER", "VEXA_MAIL_SMTP_PASSWORD")
+             "VEXA_MAIL_SMTP_USER", "VEXA_MAIL_SMTP_PASSWORD", "VEXA_MAIL_SMTP_TLS",
+             "VEXA_MAIL_SMTP_CA_FILE", "VEXA_MAIL_IMAP_HOST", "VEXA_MAIL_IMAP_PORT",
+             "VEXA_MAIL_IMAP_TLS", "VEXA_MAIL_IMAP_USER", "VEXA_MAIL_IMAP_FOLDER",
+             "VEXA_MAIL_IMAP_CA_FILE")
 
 
 def _decl(name: str) -> tuple[str, object, str]:

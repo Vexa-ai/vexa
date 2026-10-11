@@ -22,7 +22,11 @@ metadata:
 type: Opaque
 stringData:
   VEXA_MAIL_ADDR: {{ .Values.flows.mail.address | quote }}
+  {{- /* The mailbox password, unless it comes from a Secret you manage (flows.mail.existingSecret):
+  then it is not rendered here and every flows container reads it from that Secret by name. */}}
+  {{- if not (include "vexa.flowsMailExistingSecret" .) }}
   VEXA_MAIL_APP_PASSWORD: {{ .Values.flows.mail.appPassword | quote }}
+  {{- end }}
   # the inbound intake's authorization + ceilings (R-B12) — see values.yaml for what empty means
   VEXA_FLOWS_MAIL_DOMAINS: {{ .Values.flows.mail.domains | quote }}
   VEXA_FLOWS_MAIL_QUARANTINE_REPLY: {{ .Values.flows.mail.quarantineReply | quote }}
@@ -154,6 +158,8 @@ spec:
                 name: {{ include "vexa.componentName" (list . "flows") }}
           env:
             {{- with include "vexa.flowsApiKeyEnv" . }}{{ . | nindent 12 }}{{ end }}
+            {{- /* the bot mailbox's endpoints, TLS policy, CA path and password refs (flows.mail) */}}
+            {{- include "vexa.flowsMailEnv" . | nindent 12 }}
             - name: DB_USER
               valueFrom:
                 secretKeyRef:
@@ -210,9 +216,19 @@ spec:
           the database's health, not the loop's. The compose file says the same thing about the
           same two processes. Giving these a real liveness surface needs a health endpoint in
           flows itself; that is E4's work, not this template's. */}}
+          {{- with include "vexa.flowsMailCaMount" . }}
+          volumeMounts:{{ . | trim | nindent 12 }}
+          {{- end }}
           resources:
             requests: {cpu: 100m, memory: 128Mi}
             limits: {cpu: 500m, memory: 512Mi}
+      {{- with include "vexa.flowsMailCaVolume" . }}
+      volumes:{{ . | trim | nindent 8 }}
+      {{- end }}
+{{- /* THE MAILBOX RENDERS ONLY WHEN IT CAN RUN (vexa.flowsMailboxEnabled): an explicit
+flows.mail.enabled, or an address. Without one it used to render anyway and restart-loop on its
+first IMAP login — the "broken deployment" picture the compose profile already avoids. */}}
+{{- if include "vexa.flowsMailboxEnabled" . }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -329,6 +345,8 @@ spec:
           # quarantined on a lookup that never reached anything.
           env:
             {{- with include "vexa.flowsApiKeyEnv" . }}{{ . | nindent 12 }}{{ end }}
+            {{- /* the bot mailbox's endpoints, TLS policy, CA path and password refs (flows.mail) */}}
+            {{- include "vexa.flowsMailEnv" . | nindent 12 }}
             - name: DB_USER
               valueFrom:
                 secretKeyRef:
@@ -364,16 +382,32 @@ spec:
                 secretKeyRef:
                   name: {{ include "vexa.adminTokenSecretName" . }}
                   key: ADMIN_API_TOKEN
-          {{- /* NO PROBE, and that is a documented gap rather than an oversight (A12/E4).
-          `flows_worker/__main__.py` and `flows_integrations.mailbox` are `while True: tick();
-          sleep()` loops with no server and no port — there is nothing for an httpGet to reach,
-          and an `exec` probe over the same Postgres these processes already poll would report
-          the database's health, not the loop's. The compose file says the same thing about the
-          same two processes. Giving these a real liveness surface needs a health endpoint in
-          flows itself; that is E4's work, not this template's. */}}
+          {{- /* READINESS FROM THE LOOP'S OWN REPORT. The loop writes how its last poll went to a file
+          in its temp directory (`flows_integrations/mailbox_status.py`) and this probe reads it: a
+          wrong password, an untrusted certificate or an unreachable IMAP host shows as NotReady
+          with `mail:<kind> imap <host>:<port> — <reason>` in `kubectl describe pod`. Readiness and
+          not liveness on purpose: none of those is cured by a restart, and the loop retries on its
+          own cadence and recovers the poll after the mailbox is fixed. The emptyDir is that temp
+          directory, so a read-only root filesystem does not silence the report. */}}
+          readinessProbe:
+            exec:
+              command: ["python", "-m", "flows_integrations.mailbox_status"]
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 1
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            {{- with include "vexa.flowsMailCaMount" . }}{{ . | trim | nindent 12 }}{{ end }}
           resources:
             requests: {cpu: 50m, memory: 96Mi}
             limits: {cpu: 250m, memory: 256Mi}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        {{- with include "vexa.flowsMailCaVolume" . }}{{ . | trim | nindent 8 }}{{ end }}
+{{- end }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -481,6 +515,8 @@ spec:
                 name: {{ include "vexa.componentName" (list . "flows") }}
           env:
             {{- with include "vexa.flowsApiKeyEnv" . }}{{ . | nindent 12 }}{{ end }}
+            {{- /* the bot mailbox's endpoints, TLS policy, CA path and password refs (flows.mail) */}}
+            {{- include "vexa.flowsMailEnv" . | nindent 12 }}
             - name: DB_USER
               valueFrom:
                 secretKeyRef:
@@ -552,9 +588,15 @@ spec:
             periodSeconds: 20
             timeoutSeconds: 3
             failureThreshold: 3
+          {{- with include "vexa.flowsMailCaMount" . }}
+          volumeMounts:{{ . | trim | nindent 12 }}
+          {{- end }}
           resources:
             requests: {cpu: 50m, memory: 96Mi}
             limits: {cpu: 250m, memory: 256Mi}
+      {{- with include "vexa.flowsMailCaVolume" . }}
+      volumes:{{ . | trim | nindent 8 }}
+      {{- end }}
 ---
 apiVersion: v1
 kind: Service

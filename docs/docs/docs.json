@@ -45,7 +45,8 @@
           "flows/vocabulary",
           "flows/examples",
           "flows/developing",
-          "flows/operations"
+          "flows/operations",
+          "flows/mailbox"
         ]
       },
       {
