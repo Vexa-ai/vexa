@@ -30,6 +30,9 @@ import {
   type NavWorkspace, type TreeNode,
 } from "./navigatorApi";
 import { surface, type as ty } from "./tokens";
+import { CallsList, NavSwitch, loadNavView, saveNavView, type NavView } from "./NavCalls";
+import { callRows, callsPerWorkspace } from "./callsList";
+import { useLiveMeetings } from "../surfaces/liveMeetings";
 
 /** FIXED (founder: a "left-side bar", not a second resizable pane). The pages panel's own drag is
  *  the one width the reader sets here; a rail with its own handle would put two grips on one edge. */
@@ -69,6 +72,12 @@ export function Navigator(p: {
   const [openWs, setOpenWs] = useState<Set<string>>(() => new Set());
   const [openDirs, setOpenDirs] = useState<Set<string>>(() => new Set());
   const [q, setQ] = useState("");
+  // FILES | CALLS (founder, 2026-10-11: *"for list of calls let's have a switch files vs calls
+  // here"*). Files is the tree, unchanged; Calls is `./NavCalls`. The last choice is remembered per
+  // browser, and the filter box filters whichever view is in front.
+  const [view, setViewState] = useState<NavView>(() => loadNavView());
+  const [callsWs, setCallsWs] = useState<string | null>(null);
+  const setView = (v: NavView) => { setViewState(v); saveNavView(v); if (v === "files") setCallsWs(null); };
   const box = useRef<HTMLInputElement>(null);
   const seeded = useRef(!!p.workspaces);
   /** workspace keys whose file list has been read (or handed in) — never read back from state */
@@ -126,9 +135,9 @@ export function Navigator(p: {
   // A filter reaches ACROSS the listed workspaces (27.3), so it needs their file lists — including
   // the ones nobody expanded. Typing is what pays for that walk, and it is paid once.
   useEffect(() => {
-    if (!filtering || !workspaces) return;
+    if (view !== "files" || !filtering || !workspaces) return;
     for (const ws of workspaces) void ensureTree(ws);
-  }, [filtering, workspaces, ensureTree]);
+  }, [view, filtering, workspaces, ensureTree]);
 
   // The close handler as a REF: the key listener is registered once, and a parent that re-renders
   // (every keystroke in the filter does) must not cost a listener churn.
@@ -201,20 +210,42 @@ export function Navigator(p: {
     });
 
   const result = useMemo(
-    () => (filtering && workspaces ? filterByName(q, workspaces, trees) : null),
-    [filtering, workspaces, trees, q],
+    () => (view === "files" && filtering && workspaces ? filterByName(q, workspaces, trees) : null),
+    [view, filtering, workspaces, trees, q],
   );
+
+  // The badge on a workspace row counts the calls bound to it. Read from the same store the Calls
+  // view lists — nothing is copied onto the workspace.
+  const meetings = useLiveMeetings();
+  const wsCalls = useMemo(
+    () => callsPerWorkspace(callRows(meetings), workspaces ?? []),
+    [meetings, workspaces],
+  );
+  /** A call row's workspace chip: show that workspace in Files, expanded. */
+  const revealWorkspace = (key: string) => {
+    const ws = workspaces?.find((w) => w.key === key);
+    if (!ws) return;
+    setView("files"); setQ("");
+    setOpenWs((prev) => new Set(prev).add(ws.key));
+    void ensureTree(ws);
+    requestAnimationFrame(() => [...document.querySelectorAll<HTMLElement>("[data-nav-ws]")]
+      .find((el) => el.getAttribute("data-nav-ws") === key)?.scrollIntoView?.({ block: "nearest" }));
+  };
 
   return (
     <div data-navigator style={{
       flex: "none", width: NAV_W, display: "flex", flexDirection: "column", minHeight: 0,
       background: surface.rail, borderRight: "1px solid var(--line)",
     }}>
+      <div style={{ flex: "none", padding: "8px 8px 0" }}>
+        <NavSwitch value={view} onChange={setView} />
+      </div>
       <div style={{ flex: "none", display: "flex", alignItems: "center", gap: 6, padding: "8px 8px 6px" }}>
         <Icon name="search" size={12} style={{ flex: "none", color: "var(--t3)" }} />
         <input ref={box} data-nav-filter value={q} onChange={(e) => setQ(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); if (q) setQ(""); else p.onClose(); } }}
-          placeholder="Filter files  (> content)" aria-label="Filter files"
+          placeholder={view === "calls" ? "Filter calls  (> transcripts)" : "Filter files  (> content)"}
+          aria-label={view === "calls" ? "Filter calls" : "Filter files"}
           style={{
             ...ty.body, flex: "1 1 0%", minWidth: 0, fontSize: 12, background: surface.raised,
             border: "1px solid var(--line)", borderRadius: 6, padding: "3px 7px", color: "var(--t1)", outline: "none",
@@ -223,13 +254,16 @@ export function Navigator(p: {
       {/* CONTENT SEARCH IS NOT ON THIS BUILD. There is no workspace-content route to call, so the
           `>` is honoured as far as it can be — the names are still matched — and the reader is TOLD,
           rather than shown an empty result that reads as "no such text anywhere". */}
-      {parsed.content && (
+      {view === "files" && parsed.content && (
         <div data-nav-note style={{ ...ty.meta, padding: "0 10px 6px", lineHeight: 1.45 }}>
           Content search is not available yet — matching names.
         </div>
       )}
       <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "0 6px 12px" }}>
-        {workspaces === null
+        {view === "calls"
+          ? <CallsList query={parsed} workspaces={workspaces ?? []} workspaceFilter={callsWs}
+              onClearWorkspaceFilter={() => setCallsWs(null)} onRevealWorkspace={revealWorkspace} onOpenTab={p.onOpenTab} />
+          : workspaces === null
           ? null   /* nothing until the state is known — never a placeholder row (decision 23.1) */
           : result
             ? (result.groups.length === 0
@@ -253,14 +287,25 @@ export function Navigator(p: {
                   </>)
             : workspaces.map((ws) => {
                 const open = openWs.has(ws.key);
+                const calls = wsCalls.get(ws.key) ?? 0;
                 return (
-                  <div key={ws.key}>
+                  <div key={ws.key} data-nav-ws-item={ws.key} style={{ position: "relative" }}>
                     <button data-nav-ws={ws.key} aria-expanded={open} title={ws.name}
-                      onClick={() => toggleWs(ws)} style={wsRow}
+                      onClick={() => toggleWs(ws)} style={{ ...wsRow, paddingRight: calls ? 44 : 6 }}
                       onMouseEnter={hoverOn} onMouseLeave={hoverOff}>
                       <span style={caret(open)} aria-hidden>▶</span>
                       <span style={{ ...nameS, paddingLeft: 2 }}>{ws.name}</span>
                     </button>
+                    {/* THE MEETING ↔ WORKSPACE LINK, seen from the folder: the calls bound to this
+                        workspace (the meeting's own `workspace_id`), one click to list them. */}
+                    {calls > 0 && (
+                      <button type="button" data-nav-ws-calls={ws.key} title={`${calls} call${calls === 1 ? "" : "s"} in ${ws.name}`}
+                        aria-label={`Show ${calls} call${calls === 1 ? "" : "s"} in ${ws.name}`}
+                        onClick={() => { setCallsWs(ws.key); setViewState("calls"); saveNavView("calls"); }}
+                        style={{ ...ty.meta, position: "absolute", right: 4, top: 4, display: "flex", alignItems: "center", gap: 3, background: "transparent", border: "none", cursor: "pointer", padding: "1px 3px", borderRadius: 4 }}>
+                        <Icon name="mic" size={10} />{calls}
+                      </button>
+                    )}
                     {open && (
                       trees[ws.key]
                         ? nodes(ws, treeFrom(trees[ws.key], ws.slug), 1)
