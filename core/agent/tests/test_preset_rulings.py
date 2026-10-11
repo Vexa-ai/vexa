@@ -83,8 +83,8 @@ def test_every_company_tier_page_is_written_INTO_global_and_only_the_admins_own_
     assert "**Every company-tier page is written INTO `_global`**" in body
     assert "/workspaces/_global/kg/entities/<kind>/<slug>.md" in body
     assert 'pass `slug="_global"` for every company-tier page' in body
-    assert "Only the administrator's own\nperson page (`self: true`) goes to their desk." in body
-    assert ("A company page that lands on one person's desk is invisible to everyone else and\n"
+    assert "Only the administrator's own\nperson page (`self: true`) goes to their personal workspace." in body
+    assert ("A company page that lands in one person's personal workspace is invisible to everyone else and\n"
             "wrong.") in body
 
 
@@ -142,7 +142,7 @@ def test_who_can_see_what_is_WRITTEN_as_the_default_first_and_the_choice_offered
     # the sentence that made the files wait on an answer is GONE
     assert "Ask the administrator whether that is what they intend" not in body
     # decision 21's own words, which this ruling refines rather than replaces, are untouched
-    assert "a desk is company knowledge held by one person" in body
+    assert "a personal workspace is company knowledge held by one person" in body
     assert "what stays genuinely private is `_system`" in body
     # and disagreement is still a `MISSING.md` line, not something to smooth over
     assert "is a `MISSING.md` line, not something to smooth over" in body

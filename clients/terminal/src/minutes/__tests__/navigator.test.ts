@@ -128,7 +128,7 @@ describe("which workspaces are listed, and in what order (decisions 26–27)", (
   });
 
   it("with nothing at all there is still a desk — it is the workspace that always exists", () => {
-    expect(buildWorkspaces({})).toEqual([{ key: "desk", slug: undefined, kind: "desk", name: "Desk" }]);
+    expect(buildWorkspaces({})).toEqual([{ key: "desk", slug: undefined, kind: "desk", name: "Personal" }]);
   });
 });
 

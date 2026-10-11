@@ -128,8 +128,8 @@ submission.
 
 #### Write the report and get it to the room
 
-*when a meeting ends, write the report, mail it to everybody who was in the room, and put it on
-their desks*
+*when a meeting ends, write the report, mail it to everybody who was in the room, and put it in
+their personal workspaces*
 
 ```yaml
 on: meeting.completed

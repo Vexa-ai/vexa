@@ -67,7 +67,7 @@
         "content",
         "slug"
       ],
-      "note": "Create a page or replace it whole, committed in the workspace. An omitted `slug` is where the conversation is working (the chat's target on a worker's identity, the desk otherwise); `personal` names the desk."
+      "note": "Create a page or replace it whole, committed in the workspace. An omitted `slug` is where the conversation is working (the chat's target on a worker's identity, the person's personal workspace otherwise); `personal` names it."
     },
     {
       "name": "workspace_delete",
@@ -185,7 +185,7 @@
       "arguments": [
         "verdicts"
       ],
-      "note": "The person's word on proposed claims; the first one they stand behind makes the desk ready (`.scaffolded`)."
+      "note": "The person's word on proposed claims; the first one they stand behind makes their personal workspace ready (`.scaffolded`)."
     },
     {
       "name": "transcript_terms",

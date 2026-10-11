@@ -848,7 +848,7 @@ export function homeEntry(workspaces: string[] = []): Artifact {
   const group = workspaces.find((w) => w && w !== "_global" && w !== "personal" && !/^u_/.test(w));
   return group
     ? { path: "README.md", slug: group, label: group, desk: true }
-    : { path: "README.md", label: "Desk", desk: true };
+    : { path: "README.md", label: "Personal", desk: true };
 }
 
 /** Compose a strip with the chat's home at its head. Idempotent, and it never duplicates: a chat

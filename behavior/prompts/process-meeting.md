@@ -22,9 +22,9 @@ you actually read the meeting rather than reconstructing a plausible one.
 ## Step 3 — YOUR REPLY IS THE RECORD. WRITE NO FILES.
 
 Do not save the report into a workspace, do not create or update a meeting note, do not update an
-index, and do not update a README. This turn writes NOTHING to any desk — not the organiser's,
+index, and do not update a README. This turn writes NOTHING to any personal workspace — not the organiser's,
 not anyone's. One meeting produces one report, its home is the meeting itself, and a copy lands on
-every desk in the room afterwards by a separate step that is not your job.
+every personal workspace in the room afterwards by a separate step that is not your job.
 
 Write the report AS YOUR REPLY, in this shape:
 

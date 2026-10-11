@@ -458,7 +458,7 @@ class WorkspaceRemoveBody(BaseModel):
     """REMOVE one page from a workspace — the body behind `workspace_delete` (Vexa-ai/vexa#1621).
 
     ``path`` is workspace-RELATIVE; ``slug`` names the workspace (omitted = the chat's target, or the
-    caller's own desk when there is none).
+    caller's personal workspace when there is none).
 
     ⚠ WHY THIS IS A POST AND NOT `DELETE /api/workspace/file`, which is what it was written as
     first. `DELETE /api/workspace/{slug}` already exists and DESTROYS A WHOLE WORKSPACE
@@ -489,7 +489,7 @@ class WorkspaceMoveBody(BaseModel):
     slug: Optional[str] = Field(None, description=WRITE_SLUG_HELP)
     to_slug: Optional[str] = Field(None, description=(
         "the workspace it is going to; omit it for a rename inside the same workspace, pass "
-        "`personal` for the person's own desk"))
+        "`personal` for the person's personal workspace"))
 
 
 class WorkspaceDeactivateBody(BaseModel):

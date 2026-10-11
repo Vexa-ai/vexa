@@ -449,7 +449,10 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string; title?: s
   const eye = eyebrow(facts.kind);
   const named = (p.title || "").trim()
     || (facts.kind === "global" ? facts.company : (facts.kind === "group" || facts.kind === "private") ? facts.name : null);
-  const heading = named && named.toLowerCase() !== eye.toLowerCase() ? named : null;
+  // A README seeded before the rename (2026-10-11) still opens `# Your desk` — stored text, not
+  // migrated — and it is the same label in the old word, so it is not a title either.
+  const legacyEye = facts.kind === "desk" && /^your desk$/i.test(named || "");
+  const heading = named && named.toLowerCase() !== eye.toLowerCase() && !legacyEye ? named : null;
 
   /** OPENING THE DETAILS. History is the door and the three sections are what is behind it — all
    *  three, at once: a person who has just asked for the history should not then have to ask which
@@ -480,7 +483,7 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string; title?: s
     // where the founder met `126`) applied to the sentence an act puts in front of the agent.
     const where = {
       workspace: facts.slug,
-      name: facts.kind === "desk" ? "your desk"
+      name: facts.kind === "desk" ? "your personal workspace"
         : facts.kind === "global" ? (facts.company || "the company layer")
         : facts.name,
     };

@@ -239,7 +239,7 @@ def process_meeting(ctx: StepCtx):
                 if undo.get("reset"):
                     ctx.scratch["baseline"] = ag.dispatch_turn(
                         uid, session,
-                        "STOP. That turn WROTE TO A DESK, and this run writes to none. It "
+                        "STOP. That turn WROTE TO A WORKSPACE, and this run writes to none. It "
                         f"committed: {landed}. Those commits have been removed. Write the "
                         "report again as your REPLY and nothing else — create no file, update "
                         "no index, update no README. The reply is mailed verbatim, so no "
@@ -248,10 +248,10 @@ def process_meeting(ctx: StepCtx):
                     return Wait(seconds=12)
                 landed += f" · reset refused: {undo.get('detail') or 'no detail'}"
             raise StepError(
-                "this turn committed to the organiser's desk, and it must not (decision 22): "
+                "this turn committed to the organiser's personal workspace, and it must not (decision 22): "
                 f"HEAD moved {before[:9]} -> {after[:9]}. Landed: {landed}. The report IS the "
-                "reply; desks are written by drop_to_attendees. This step already tried to undo "
-                "it once and re-ran the turn. To recover by hand, put the desk back:\n"
+                "reply; personal workspaces are written by drop_to_attendees. This step already tried to undo "
+                "it once and re-ran the turn. To recover by hand, put the workspace back:\n"
                 f"  curl -fsS -X POST \"$AGENT_API_URL/api/workspace/git/reset\" "
                 f"-H 'X-User-Id: {uid}' -H \"X-Internal-Secret: $INTERNAL_API_SECRET\" "
                 f"-H 'Content-Type: application/json' -d '{{\"sha\":\"{before}\"}}'\n"
@@ -672,7 +672,7 @@ def drop_to_attendees(ctx: StepCtx):
     organizer = _organizer_address(ctx)
     if not organizer:
         raise StepError(
-            f"cannot drop meeting {ctx.refs.get('meeting_id')!r} to any desk: no organizer on "
+            f"cannot drop meeting {ctx.refs.get('meeting_id')!r} to any personal workspace: no organizer on "
             f"the ref and no address for uid {uid!r}.", retryable=False)
     day = _meeting_stamp(ctx, uid)[:10]          # the MEETING's day, in the organiser's zone
     date_prose = _meeting_date(ctx, uid)
@@ -758,7 +758,7 @@ def drop_to_attendees(ctx: StepCtx):
                      # every copy is these bytes plus that person's own link
                      "bytes": len(body)})
     raise StepError(
-        f"every desk drop failed for meeting {mid} ({len(room)} person(s) in the room): "
+        f"every personal-workspace drop failed for meeting {mid} ({len(room)} person(s) in the room): "
         + " · ".join(failed), retryable=True)
 ```
 

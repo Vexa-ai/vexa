@@ -374,7 +374,7 @@ def build(**d) -> APIRouter:
     def ws_file_write(request: Request, body: WorkspaceWriteBody = Body(...)):
         """WRITE one page, creating it or replacing it whole — the terminal's in-place page editor and
         the verb behind `workspace_write`. Authorization mirrors the MOUNT rules, not the read rules:
-        own desk and `_system` always; a shared workspace needs contributor+; `_global` only the
+        own personal workspace and `_system` always; a shared workspace needs contributor+; `_global` only the
         admin allowlist. Commits, so the history stays honest.
 
         Never overwrite a page with a note saying it moved or went away: `workspace_move` and
@@ -432,7 +432,7 @@ def build(**d) -> APIRouter:
         if str(slug or "") == system_mounts.SYSTEM_SLUG:
             raise HTTPException(status_code=403, detail=(
                 "`_system` holds chats, sessions and identity — the platform writes that tier; "
-                "pages are removed from a desk or a workspace, never from it"))
+                "pages are removed from a personal workspace or a shared one, never from it"))
         return _write_dir(request, subject, rel, slug)
 
     def _kg_index_after(target: Path, *rels: str) -> list[str]:
@@ -890,7 +890,8 @@ def build(**d) -> APIRouter:
         next move on a refusal is to SAY why, not to retry."""
         if not _internal_caller(request):
             raise HTTPException(status_code=403,
-                                detail="resetting a desk to a witnessed sha is an internal-tier capability")
+                                detail="resetting a personal workspace to a witnessed sha is an "
+                                       "internal-tier capability")
         sha = str((body or {}).get("sha") or "").strip()
         if not sha:
             raise HTTPException(status_code=400, detail="`sha` is required — the witness to reset to")
@@ -930,7 +931,7 @@ def build(**d) -> APIRouter:
         system_existed = (system_mounts.system_store_path(wsr.root, subject) / ".git").exists()
         system_mounts.ensure_system_workspace(str(wsr.root), subject)
         # The desk's id + registry row. Named by the address that signed in when the gateway gave
-        # us one: a desk called "Desk 126" is better than `126` and worse than the person's own
+        # us one: a desk called "Personal 126" is better than `126` and worse than the person's own
         # address, and this is the one seam that has the address.
         _ws_sync(str(subject), kind="desk", owner=str(subject), ws_dir=ws,
                  name=(request.headers.get("x-user-email") or "").strip() or None)
@@ -973,8 +974,8 @@ def build(**d) -> APIRouter:
         `claim_id` up in the book and blocks on that claim's own words, so one event for a batch
         would be one card for three questions with no way to answer two of them.
 
-        It lives in the workspaces router because the book is a file on a desk and everything this
-        needs — the subject, the reader, the desk path — is already closed over here; the state
+        It lives in the workspaces router because the book is a file in a personal workspace and everything this
+        needs — the subject, the reader, the workspace path — is already closed over here; the state
         machine itself is `control_plane.claims`, which is the concern."""
         subject = subject_of(request)
         batch = [b if isinstance(b, str) else b.model_dump() for b in body.claims]
@@ -984,7 +985,7 @@ def build(**d) -> APIRouter:
             result = claims_mod.propose(wsr.workspace_dir(subject), batch)
         except wpaths.PathRefused:
             # the book's folder or file is a link, not a plain path on this desk — never followed
-            raise HTTPException(status_code=409, detail="the claims book on this desk is not a plain "
+            raise HTTPException(status_code=409, detail="the claims book in this workspace is not a plain "
                                 "file") from None
         for cid in result["ids"]:
             publish_mod.publish(publish_mod.EVENT_CLAIM_PROPOSED,
@@ -998,7 +999,7 @@ def build(**d) -> APIRouter:
         correction; the original stays beside it) or `rejected`. Put their whole answer in ONE call,
         and only after asking them: this is their word, never an agent's guess about it.
 
-        The first claim they stand behind makes the desk ready, so answering finishes the setup.
+        The first claim they stand behind makes their personal workspace ready, so answering finishes the setup.
         An unknown id or verdict comes back in `errors` and the rest of the answer still lands."""
         subject = subject_of(request)
         if not body.verdicts:
@@ -1007,7 +1008,7 @@ def build(**d) -> APIRouter:
             return claims_mod.record_verdicts(wsr.workspace_dir(subject),
                                               [v.model_dump() for v in body.verdicts])
         except wpaths.PathRefused:
-            raise HTTPException(status_code=409, detail="the claims book on this desk is not a plain "
+            raise HTTPException(status_code=409, detail="the claims book in this workspace is not a plain "
                                 "file") from None
     @router.get("/api/workspaces/by-slug/{slug}")
     def ws_id_by_slug(slug: str, request: Request):

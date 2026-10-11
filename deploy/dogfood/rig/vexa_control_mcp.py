@@ -1512,7 +1512,7 @@ THE MAIN VERBS
 - Workspace: workspace_tree/read/write (groups via slug=...). Company facts go through
   propose() -> the person answers -> validate(); never promote your own guess.
 - WHERE WRITES LAND: the chat has a target workspace and your turn is told which one. A write
-  with no slug goes THERE, not to their desk. When they say to work somewhere else from now on,
+  with no slug goes THERE, not to their personal workspace. When they say to work somewhere else from now on,
   workspace_target(slug=...) moves it and you say so; for one write elsewhere pass slug= on that
   call instead.
 - ALREADY HAVE ONE ON GITHUB? workspace_attach(workspace, repo) makes that repo the
@@ -2639,7 +2639,7 @@ def workspace_write(path: str, content: str, slug: str = "") -> str:
 
     WHERE IT LANDS: omit `slug` and it goes where this conversation is WORKING — its target
     workspace, which your turn was told by name. Pass `slug="personal"` to write on the person's own
-    desk instead, or `slug=<workspace>` for a single write anywhere else they can write; either is
+    personal workspace instead, or `slug=<workspace>` for a single write anywhere else they can write; either is
     an explicit ask and neither moves where the conversation is working (`workspace_target` does
     that, and only when they say so).
 
@@ -2710,7 +2710,7 @@ def workspace_delete(path: str, slug: str = "") -> str:
     "removed" meant "collapsed" (friction `fr_a373e9448d2909a6`).
 
     WHERE IT LOOKS: the same rule as `workspace_write` — omit `slug` and it is this conversation's
-    target workspace, `slug="personal"` is the person's own desk, `slug=<workspace>` is one write
+    target workspace, `slug="personal"` is the person's personal workspace, `slug=<workspace>` is one write
     anywhere else they may write. Refused where they may not: `_global` unless they are the org
     admin, a workspace they only read, and the private `_system` tier always.
 
@@ -2749,7 +2749,7 @@ def workspace_move(path: str, to: str, slug: str = "", to_slug: str = "") -> str
     """Move a page — to another path, or to another workspace.
 
     `path` is where it is now, `to` is where it should be. `slug` is the workspace it is in today
-    (omitted = this conversation's target; `"personal"` = the person's own desk) and `to_slug` is
+    (omitted = this conversation's target; `"personal"` = the person's personal workspace) and `to_slug` is
     where it is going — OMIT IT for a rename inside the same workspace.
 
     INSIDE ONE WORKSPACE a pointer is left at the old path, so links written before the move still
@@ -2891,13 +2891,13 @@ def entity_upsert(kind: str, name: str, facts: list[str] = [], source: str = "",
       call. A fact with no source is refused, not written — if you do not have one, the gap belongs
       in `kg/MISSING.md`, never on the page.
     - `slug` — omitted means where this conversation is WORKING: its target workspace, which your
-      turn was told by name. `slug="personal"` records it on the person's own desk instead, and
+      turn was told by name. `slug="personal"` records it on the person's personal workspace instead, and
       `slug=<workspace>` on any other they can write. Either is an explicit ask for ONE call and
       neither moves where the conversation is working — `workspace_target` does that, when they say
       so.
     - `dates` — WHEN, for a meeting: `{"scheduled_at": ..., "held_at": ..., "report_delivered_at":
       ...}`, ISO-8601 or epoch, any subset. Record `held_at` the moment you know a meeting ran and
-      `report_delivered_at` the moment its write-up reached them. These are the fields the desk
+      `report_delivered_at` the moment its write-up reached them. These are the fields the personal workspace
       README's `Now` section and `timeline` both read, so a meeting that ran and has no write-up
       shows up as an open commitment without anyone writing a sentence about it. Any other key is
       dropped. A call with only `dates` is legal and needs no facts.
@@ -3276,9 +3276,9 @@ def workspace_target(slug: str = "") -> str:
     """Point this conversation's writes at a workspace — call it when the person SAYS SO.
 
     *"work in the Example Bank workspace"*, *"let's collect this into Copperline from now on"*, *"back to my
-    desk"*. From then on `entity_upsert`, `workspace_write` and a plain file write land there
+    personal workspace"*. From then on `entity_upsert`, `workspace_write` and a plain file write land there
     without anybody naming it again, the header chip shows it, and it survives a reload and a
-    second window. `slug=""` puts it back on their own desk.
+    second window. `slug=""` puts it back in their own personal workspace.
 
     NOT for a single write somewhere else. Pass `slug` to that one call instead — an explicit slug
     always wins and moves nothing. This verb is for *"from now on"*, and moving it silently would
@@ -3290,8 +3290,8 @@ def workspace_target(slug: str = "") -> str:
     wid = (slug or "").strip()
     if not wid:
         return json.dumps({
-            "targeted": "", "workspace": "their own desk",
-            "say": "Writes go back to your own desk from now on.",
+            "targeted": "", "workspace": "their own personal workspace",
+            "say": "Writes go back to your own personal workspace from now on.",
         })
     # WRITABLE, OR IT IS NOT A TARGET. agent-api's own write door answers this — the same seam the
     # write itself would hit — so a workspace they can only READ is refused HERE rather than
@@ -3319,7 +3319,7 @@ def workspace_target(slug: str = "") -> str:
         "targeted": wid, "role": role,
         "say": "Say, in one line, that this conversation now writes into that workspace.",
         "from_now_on": "entity_upsert, workspace_write and file writes with no workspace named go "
-                       "here. Their own desk and everything else mounted stays readable, and a "
+                       "here. Their own personal workspace and everything else mounted stays readable, and a "
                        "single write elsewhere still works — pass slug= on that one call.",
     })
 
@@ -4301,7 +4301,7 @@ def bot_send(meeting_url: str, bot_name: str = "", workspace: str = "") -> str:
     bot that belongs to the group?"*, and the person cannot see the binding otherwise.
 
     `workspace` overrides that for one call — a slug to bind elsewhere, or "personal" to keep the
-    meeting on their own desk, visible to them alone."""
+    meeting in their own personal workspace, visible to them alone."""
     uid = me()
     platform, mid = _meeting_ref(meeting_url)
     if not platform:

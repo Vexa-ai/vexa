@@ -144,7 +144,7 @@ describe("scaffoldToChat", () => {
     // `_global/README.md` is declared AND is not the home (the chat mounts no group and no desk
     // slug), so the strip carries the desk README first and the declared pair after it
     expect(rec.artifacts.map((a) => a.path)).toEqual(["README.md", "README.md", "MISSING.md"]);
-    expect(rec.artifacts[0]).toMatchObject({ desk: true, label: "Desk" });
+    expect(rec.artifacts[0]).toMatchObject({ desk: true, label: "Personal" });
     expect(rec.artifacts[0].slug).toBeUndefined();   // the reader's OWN desk carries no slug
     expect(rec.focus).toBe("_global|README.md");
   });
@@ -306,7 +306,7 @@ describe("the scaffold DELIVERS the strip (decision 28.5)", () => {
 
   it("a chat with no group is at home on the reader's own desk", () => {
     const s = parseScaffold({ ...WIRE, workspaces: ["_global", "u_priya"], tabs: [] })!;
-    expect(scaffoldToChat(s).artifacts[0]).toMatchObject({ path: "README.md", label: "Desk", desk: true });
+    expect(scaffoldToChat(s).artifacts[0]).toMatchObject({ path: "README.md", label: "Personal", desk: true });
   });
 
   it("a scaffold that names no focus opens on the HOME, never on a blank panel", () => {

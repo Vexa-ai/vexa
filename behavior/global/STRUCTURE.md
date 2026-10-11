@@ -11,10 +11,10 @@ The platform's own stance, written here as the default before anyone is asked:
 > Vexa runs on this organisation's own servers; what you and your colleagues keep in your
 > workspaces is visible to the company's agents; recordings and transcripts stay here.
 
-- a person's own space is their **desk**, and a group has a **group desk**;
-- **a desk is company knowledge held by one person** — not private from the company. The company's
+- a person's own space is their **personal workspace**, and a group has a **group workspace**;
+- **a personal workspace is company knowledge held by one person** — not private from the company. The company's
   agents may read it for a meeting that person is in;
-- what stays genuinely private is `_system` — chats, sessions and settings. That is not a desk, and
+- what stays genuinely private is `_system` — chats, sessions and settings. That is not a personal workspace, and
   no agent reads it for anybody else.
 
 The rules that make this true, and what changing any of them costs, are in

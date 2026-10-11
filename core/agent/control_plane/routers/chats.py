@@ -144,7 +144,7 @@ def build(**d) -> APIRouter:
             row = None
         mounts = [str(w) for w in ((row or {}).get("workspaces") or [])
                   if str(w) not in ("_global", "_system")]
-        desk = _ws_name(str(subject), fallback="your own desk")
+        desk = _ws_name(str(subject), fallback="your personal workspace")
         # The registry names `_global` too — `The organisation` until the setup conversation
         # writes the company's own — so this fallback is only reached when the lookup FAILS, and
         # its whole job is to keep the slug out of the one line #1585/#1602 exist to keep
