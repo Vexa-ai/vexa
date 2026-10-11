@@ -68,7 +68,7 @@ export function ActLine(p: { onFire: (instruction?: string) => void; label: stri
  *  It clears itself when the record does. The record's disappearance IS the landing: the file was
  *  written, the commit event has already refreshed the page under this control, and what is left
  *  for the control to do is stop saying anything. */
-function useFiredAct(slot: string) {
+export function useFiredAct(slot: string) {
   const [fired, setFired] = useState<string | null>(null);
   const state = useActState(fired);
   useEffect(() => { if (fired && !state) setFired(null); }, [fired, state]);

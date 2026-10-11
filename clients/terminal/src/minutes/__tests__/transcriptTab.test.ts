@@ -18,10 +18,10 @@ const labels = (ps: { label: string }[]) => ps.map((p) => p.label);
  *  names. It ARRIVES — this client cannot spell it (Vexa-ai/vexa#1588). */
 const NOTE = "kg/entities/meeting/2026-03-02-0000-dna-tsc.md";
 
-describe("pagesForPhase — a real meeting's transcript is a canvas tab", () => {
-  it("binds the transcript to the ROW ID, not to a workspace path", () => {
+describe("pagesForPhase — a real meeting is the meeting view, bound to its row", () => {
+  it("binds the view to the ROW ID, not to a workspace path", () => {
     const [transcript] = pagesForPhase("post", "abc-native", "1234");
-    expect(transcript.label).toBe("Transcript");
+    expect(transcript.label).toBe("Meeting");
     expect(transcript.kind).toBe("meeting");
     expect(transcript.path).toBe("1234");
     expect(transcript.slug).toBeUndefined();
@@ -31,14 +31,11 @@ describe("pagesForPhase — a real meeting's transcript is a canvas tab", () => 
     expect(pagesForPhase("live", "abc-native", "1234")[0].kind).toBe("meeting");
   });
 
-  it("Brief, Minutes and the personal page stay DOCUMENTS — they are real files", () => {
-    // The meeting doc is a real file at the path the SERVER names — `<native>.md` was this
-    // client's own spelling and nothing writes it (Vexa-ai/vexa#1588). What this test is about is
-    // unchanged: it is a document, not a canvas.
+  it("the notes are IN the view — no separate document tab, and the personal page stays a document", () => {
     const post = pagesForPhase("post", "abc-native", "1234", NOTE);
-    expect(labels(post)).toEqual(["Transcript", "Minutes", "Personal page"]);
-    expect(post.slice(1).every((p) => p.kind === undefined)).toBe(true);
-    expect(post[1].path).toBe(NOTE);
+    expect(labels(post)).toEqual(["Meeting", "Personal page"]);
+    expect(post.map((p) => p.path)).not.toContain(NOTE);
+    expect(post[1].kind).toBeUndefined();
   });
 
   it("a meeting with no row behind it (`?mock=1`) keeps the canned markdown page", () => {
@@ -47,8 +44,8 @@ describe("pagesForPhase — a real meeting's transcript is a canvas tab", () => 
     expect(transcript.path).toBe("kg/entities/meeting/mock-post.transcript.md");
   });
 
-  it("prep has no transcript at all, with or without a row", () => {
-    expect(labels(pagesForPhase("prep", "abc-native", "1234", NOTE))).toEqual(["Brief", "Personal page"]);
+  it("prep opens the same view — nothing said yet is something the view says, not a different room", () => {
+    expect(labels(pagesForPhase("prep", "abc-native", "1234", NOTE))).toEqual(["Meeting", "Personal page"]);
   });
 
   it("nothing captured under the row → still just the personal page", () => {
@@ -116,7 +113,7 @@ describe("resolveView — a `file:` token never lands on the canvas", () => {
     expect(r.pages.filter((p) => p.path === "1234")).toHaveLength(2);   // the canvas and the file
   });
 
-  it("`transcript` still focuses the transcript, whatever it is made of", () => {
+  it("`transcript` (an old link) focuses the meeting view, whatever it is made of", () => {
     const r = resolveView("transcript", pagesForPhase("post", "abc-native", "1234"));
     expect(r.focus?.kind).toBe("meeting");
   });
@@ -127,6 +124,6 @@ describe("the tab handed to the panel", () => {
   it("carries everything the canvas needs and nothing it does not", () => {
     const [t] = pagesForPhase("live", "abc-native", "77");
     const a: Artifact = { kind: t.kind, path: t.path, slug: t.slug, label: t.label };
-    expect(a).toEqual({ kind: "meeting", path: "77", slug: undefined, label: "Transcript" });
+    expect(a).toEqual({ kind: "meeting", path: "77", slug: undefined, label: "Meeting" });
   });
 });

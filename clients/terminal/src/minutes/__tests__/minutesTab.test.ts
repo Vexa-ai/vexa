@@ -25,11 +25,11 @@ const ROW = "147";
 const labels = (pages: { label: string }[]) => pages.map((p) => p.label);
 const paths = (pages: { path: string }[]) => pages.map((p) => p.path);
 
-describe("the room's own pages — the path is given, never spelled", () => {
-  it("shows the report the flow wrote, at the flow's own path", () => {
-    const pages = pagesForPhase("post", NATIVE, ROW, FLOW_NOTE);
-    expect(labels(pages)).toEqual(["Transcript", "Minutes", "Personal page"]);
-    expect(pages[1].path).toBe(FLOW_NOTE);
+describe("the room's own pages — the notes live in the view, never a guessed tab", () => {
+  it("a real meeting opens the meeting view, whatever the server says about its notes", () => {
+    for (const note of [FLOW_NOTE, null, undefined]) {
+      expect(labels(pagesForPhase("post", NATIVE, ROW, note))).toEqual(["Meeting", "Personal page"]);
+    }
   });
 
   it("never composes the native-id spelling — the page nothing writes", () => {
@@ -39,33 +39,17 @@ describe("the room's own pages — the path is given, never spelled", () => {
     }
   });
 
-  it("drops the page rather than guessing one when the server names none", () => {
-    // The honest degradation, and the same rule `meeting:note` already takes: a tab pointing at a
-    // guessed path opens a document that can never load.
-    expect(labels(pagesForPhase("post", NATIVE, ROW, null))).toEqual(["Transcript", "Personal page"]);
-    expect(labels(pagesForPhase("prep", NATIVE, ROW, null))).toEqual(["Personal page"]);
-    expect(labels(pagesForPhase("post", NATIVE, ROW))).toEqual(["Transcript", "Personal page"]);
-  });
-
-  it("is the SAME file before and after the room — only its name moves", () => {
-    expect(pagesForPhase("prep", NATIVE, ROW, FLOW_NOTE)[0].path)
-      .toBe(pagesForPhase("post", NATIVE, ROW, FLOW_NOTE)[1].path);
-    expect(pagesForPhase("prep", NATIVE, ROW, FLOW_NOTE)[0].label).toBe("Brief");
-    expect(pagesForPhase("live", NATIVE, ROW, FLOW_NOTE)[1].label).toBe("Brief");
-    expect(pagesForPhase("post", NATIVE, ROW, FLOW_NOTE)[1].label).toBe("Minutes");
-  });
-
-  it("still leads with the transcript, and still has nothing to show with no capture", () => {
+  it("has nothing to show with no capture", () => {
     expect(pagesForPhase("post", NATIVE, ROW, FLOW_NOTE)[0]).toMatchObject({ kind: "meeting", path: ROW });
     expect(labels(pagesForPhase("post", null, ROW, FLOW_NOTE))).toEqual(["Personal page"]);
   });
 
-  it("agrees with the scaffold's own answer for the same meeting", () => {
-    // `meeting:note` was fixed to ask (`refs.note_path`) while this path kept composing — one
-    // client, two answers for one page. They resolve to the same file now.
+  it("agrees with the scaffold's own answer for the same meeting: `meeting:note` IS the view", () => {
     const fromToken = artifactFromToken("meeting:note", { native: NATIVE, notePath: FLOW_NOTE, meetingId: ROW, phase: "post" });
-    expect(fromToken).toMatchObject({ path: FLOW_NOTE, label: "Minutes" });
-    expect(pagesForPhase("post", NATIVE, ROW, FLOW_NOTE)[1].path).toBe(fromToken!.path);
+    expect(fromToken).toMatchObject({ kind: "meeting", path: ROW, label: "Meeting" });
+    // with no row (a mock), it is the notes file the server named — called Notes, never Minutes
+    expect(artifactFromToken("meeting:note", { native: NATIVE, notePath: FLOW_NOTE, meetingId: null, phase: "post" }))
+      .toEqual({ path: FLOW_NOTE, label: "Notes" });
   });
 });
 
@@ -98,7 +82,7 @@ describe("asking the server where the note is", () => {
     expect(await fetchMeetingNotePath("", vi.fn() as unknown as typeof fetch)).toBeNull();
   });
 
-  it("costs the room its Minutes tab and nothing else when the lookup fails", async () => {
+  it("costs the view its notes and nothing else when the lookup fails", async () => {
     const thrower = (async () => { throw new Error("offline"); }) as unknown as typeof fetch;
     await expect(fetchMeetingNotePath(ROW, thrower)).resolves.toBeNull();
   });
@@ -106,36 +90,6 @@ describe("asking the server where the note is", () => {
   it("refuses a path that walks out of the workspace", async () => {
     const f = (async () => res({ path: "../../etc/passwd" })) as unknown as typeof fetch;
     expect(await fetchMeetingNotePath(ROW, f)).toBeNull();
-  });
-});
-
-// ── ONE PAGE, NOT TWO (Vexa-ai/vexa#1598) ────────────────────────────────────────────────────
-//
-// Founder, live, 2026-09-06: *"we want this doc to open alongside transcript as a single thing in
-// the right side so it's a kind of doc that has live transcript widget in it"*. So when the
-// meeting's own page declares the widget, the room shows that page and no separate Transcript tab —
-// the transcript is IN it. The claim with the plausible wrong answer is the negative one: a report
-// written before the widget existed is on somebody's desk right now, and inferring "there is a note,
-// so the transcript is in it" would take the room off THEIR screen, silently.
-
-describe("the room is one page once the page carries the transcript", () => {
-  const room = (over: { noteHasTranscript?: boolean } = {}) =>
-    labels(pagesForPhase("live", NATIVE, ROW, FLOW_NOTE, over));
-
-  it("drops the separate Transcript tab when the page declares the widget", () => {
-    expect(room({ noteHasTranscript: true })).toEqual(["Brief", "Personal page"]);
-    expect(labels(pagesForPhase("post", NATIVE, ROW, FLOW_NOTE, { noteHasTranscript: true })))
-      .toEqual(["Minutes", "Personal page"]);
-  });
-
-  it("keeps BOTH for a report written before the widget existed", () => {
-    expect(room()).toEqual(["Transcript", "Brief", "Personal page"]);
-    expect(room({ noteHasTranscript: false })).toEqual(["Transcript", "Brief", "Personal page"]);
-  });
-
-  it("keeps the transcript when there is no page at all — a widget on no page is no widget", () => {
-    expect(labels(pagesForPhase("live", NATIVE, ROW, null, { noteHasTranscript: true })))
-      .toEqual(["Transcript", "Personal page"]);
   });
 });
 

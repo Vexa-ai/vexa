@@ -118,7 +118,7 @@ describe("a LIVE meeting's transcript, opened by an artifact event", () => {
     // captured, with the Live header. A doc page cannot do that — and until this, EVERY artifact
     // event produced a doc page, so the canvas was unreachable from a turn.
     expect(pageForArtifact({ path: "meeting:97" }))
-      .toEqual({ kind: "meeting", path: "97", label: "Transcript" });
+      .toEqual({ kind: "meeting", path: "97", label: "Meeting" });
   });
 
   it("is the SAME slot the `meeting:transcript` preset token produces", () => {

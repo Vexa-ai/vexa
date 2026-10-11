@@ -43,8 +43,8 @@ import { scaffoldToChat, type Scaffold, type ScaffoldRefusal } from "./scaffold"
 import { pendingArrival, useScaffoldArrival } from "./arrival";
 import { chatForDeepLink, resolveWorkspaceDeepLink, type DeepLinkOutcome } from "./deepLink";
 import { workspaceRouteFromPath, type WorkspaceRoute } from "../app/workspaceRoute";
-import { artifactsFromTokens, artifactViewEffect, boundMeetingView, isRetiredNotePath, meetingPages, pageForArtifact, pageForDocRef, pageForMeetingRef, pagesForPhase, resolveView, withMeetingPages, withoutSeparateTranscript, VIEW_KEY, VIEW_NAVIGATE_EVENT, type ViewSlot } from "./roomView";
-import { fetchMeetingNote, fetchMeetingNotePath } from "./meetingNote";
+import { artifactsFromTokens, artifactViewEffect, isRetiredNotePath, meetingPages, pageForArtifact, pageForDocRef, pageForMeetingRef, pagesForPhase, resolveView, withMeetingPages, withoutRetiredMeetingDocs, VIEW_KEY, VIEW_NAVIGATE_EVENT, type ViewSlot } from "./roomView";
+import { fetchMeetingNotePath } from "./meetingNote";
 import { deskPanelPages } from "./deskPanel";
 import { reportOpened } from "./deskTouch";
 import { applyProposal, proposals, type Proposal } from "./proposals";
@@ -384,27 +384,16 @@ export function MinutesShell() {
     await mountSet(c.workspaces);
     const roomPages = async (): Promise<Page[]> => {
       if (c.meeting) {
-        // TWO layouts, keyed on whether a transcript exists yet (founder ruling): prep opens the
-        // brief; live and post both lead with the transcript. `meetingPhase()` still returns three —
-        // chat.tsx needs them for its mode chip — but live/post render the same room here.
-        // It is a property of the MEETING, never of the link that opened it: an emailed link is
-        // clicked at an unpredictable time, so a "prep" link followed after the meeting must not lie.
-        // A `?mock=1` meeting has no row behind it, so its transcript stays the canned markdown
-        // page; every real meeting gets the canvas, bound to its row id.
+        // ONE VIEW (founder-approved design, 2026-10-11). A real meeting opens the meeting view —
+        // header, notes, transcript — in every phase, and the view reads its own notes from
+        // `/api/meeting/note`, so laying the room out asks the server nothing and never depends on
+        // the notes file existing. It is a property of the MEETING, never of the link that opened it.
+        // A `?mock=1` meeting has no row behind it, so it keeps its canned markdown pages, keyed on
+        // the composed path (`mockPhases.ts`) — the mock composes, and only the mock.
         const fake = mock && MOCK_MEETINGS.some((x) => String(x.id) === c.meeting);
         const native = (m as { native_id?: string } | undefined)?.native_id;
-        // THE SERVER SAYS WHERE THE MEETING'S DOCUMENT IS (Vexa-ai/vexa#1588). A `?mock=1` fixture
-        // has no server to ask and its canned pages ARE keyed on the composed path
-        // (`mockPhases.ts`), so the mock composes — and only the mock.
-        // …AND WHETHER THAT DOCUMENT IS THE MEETING'S ONE PAGE (Vexa-ai/vexa#1598): a page that
-        // declares the transcript widget renders the room inside itself, so the strip carries no
-        // second Transcript tab. Read off the file by the server, never inferred from "a note
-        // exists" — the reports written before the widget carry none, and they keep both pages.
-        const note = fake
-          ? { path: native ? `kg/entities/meeting/${native}.md` : null, transcript: "", cursor: "" }
-          : await fetchMeetingNote(c.meeting);
-        return pagesForPhase(m ? meetingPhase(m) : "post", native, fake ? null : c.meeting, note.path,
-                             { noteHasTranscript: !!note.transcript });
+        const mockNote = fake && native ? `kg/entities/meeting/${native}.md` : null;
+        return pagesForPhase(m ? meetingPhase(m) : "post", native, fake ? null : c.meeting, mockNote);
       }
       // THE DESK IS THE DEFAULT PAGE (PRD decision 26.4). This used to open the ORGANISATION's
       // README for a chat with no focus — the company's document, the same for everybody, and not
@@ -441,6 +430,17 @@ export function MinutesShell() {
     // touched either way: a reader owns their tabs, and this is the one entry no reader chose.
     const hasStrip = c.artifacts.length > 0;
     let strip = c.artifacts.map((a) => ({ ...a }));
+    // THE TWO-TAB ERA'S NOTES TAB GOES (the one-view design, 2026-10-11): a meeting chat stored
+    // before it pinned its notes file as a permanent "Brief"/"Minutes" tab beside the transcript,
+    // and the view now renders that file itself. `withoutRetiredMeetingDocs` takes only what
+    // `meetingPages` stamped; the reader's own tabs are untouched. A stored VIEW on that tab lands
+    // on the meeting view instead (below), so the old name is never what a reader reopens onto.
+    const retiredKeys = new Set<string>();
+    if (hasStrip && c.meeting && !(mock && MOCK_MEETINGS.some((x) => String(x.id) === c.meeting))) {
+      const kept = withoutRetiredMeetingDocs(strip);
+      for (const a of strip) if (!kept.includes(a)) retiredKeys.add(artifactKey(a));
+      strip = kept;
+    }
     if (hasStrip && c.meeting) {
       const native = (m as { native_id?: string } | undefined)?.native_id;
       const stale = strip.findIndex((a) => a.kind !== "meeting" && isRetiredNotePath(a.path, native));
@@ -473,7 +473,10 @@ export function MinutesShell() {
     // The stored VIEW wins over the first tab: it is where the reader actually was. A chat with
     // tabs but no stored view (pre-28, or one that has never been navigated) still opens on its
     // focused tab, so nothing regresses for records written before the slot existed.
-    const stored = c.view ? { kind: c.view.kind, path: c.view.path, slug: c.view.slug, label: c.view.label } as Page : null;
+    const storedRaw = c.view ? { kind: c.view.kind, path: c.view.path, slug: c.view.slug, label: c.view.label } as Page : null;
+    const stored = storedRaw && retiredKeys.has(artifactKey(storedRaw))
+      ? (list.find((pg) => pg.kind === "meeting") ?? null)
+      : storedRaw;
     const front = stored ?? focus ?? list[0];
     setSel({
       kind: c.meeting ? "meeting" : "chat",
@@ -1134,21 +1137,14 @@ export function MinutesShell() {
    *      than at the next open;
    *    · the meetings list is ASKED for the row, which it has never listed — the bot went out a
    *      second ago;
-   *    · and the meeting's own pages join the strip, PINNED (`withMeetingPages` — it adds behind the
-   *      reader and never re-opens the room, so the transcript the send just fronted stays in front).
+   *    · and the meeting view joins the strip, PINNED (`withMeetingPages` — it adds behind the
+   *      reader and never re-opens the room, so the view the send just fronted stays in front).
    *
    *  A LATCH, exactly as `bindMeeting` and the server's index are: a chat already about a meeting is
    *  not rebound by a second send. Its identity is what the reader is looking at.
    *
-   *  THE NOTE IS NO LONGER USUALLY ABSENT (Vexa-ai/vexa#1601). It used to be — *"a meeting that
-   *  started a second ago has no report yet"* — and that is precisely what the founder hit: he sent
-   *  the bot, the transcript opened, and he asked *"where is it?"*. agent-api mints the page on this
-   *  same event now, before it relays it, so this lookup finds one; and when that page declares the
-   *  widget (#1598) it IS the room, so it comes to the front and the transcript tab the send pinned a
-   *  moment ago gives way to it. A note that carries no widget keeps today's two-page room exactly.
-   *
-   *  A path that is still absent stays `pagesForPhase`'s own rule: one document fewer, never a tab
-   *  onto a guess. */
+   *  ONE VIEW (2026-10-11): the meeting's furniture is the meeting view, which reads its own notes
+   *  (minted at bot-send, #1601) — so binding needs no note lookup and fronts nothing itself. */
   const bindMeetingHere = useCallback(async (meetingId: string) => {
     const id = selRef.current.chatId;
     if (!id || selRef.current.meetingId) return;
@@ -1161,18 +1157,11 @@ export function MinutesShell() {
     // A row the list has not caught up with is a meeting that has just begun — which is the only way
     // to reach this at all, so `live` is the honest reading rather than a default.
     const phase = m ? meetingPhase(m) : "live";
-    const note = await fetchMeetingNote(meetingId);
-    const room = meetingPages(phase, meetingId, note.path, null,
-                              { noteHasTranscript: !!note.transcript });
-    // THE PAGE IS THE ROOM, so it goes in FRONT — never over a focus the reader chose in the
-    // meantime, which is the same rule `artifactViewEffect` keeps one effect down.
-    const front = boundMeetingView(room, note);
-    if (front && !readerChoseFocus.current) openPage(front);
-    setPages((prev) => {
-      const merged = withMeetingPages(prev as Artifact[], room) as Page[];
-      return front ? (withoutSeparateTranscript(merged as Artifact[], meetingId) as Page[]) : merged;
-    });
-  }, [persist, openPage]);
+    // ONE VIEW: what binding adds is the meeting view, pinned behind whatever the reader is looking
+    // at. The send's own `meeting:<row>` artifact is what fronts it, and that is the same page.
+    const room = meetingPages(phase, meetingId, null, null);
+    setPages((prev) => withMeetingPages(prev as Artifact[], room) as Page[]);
+  }, [persist]);
 
   // ── F41, AS AMENDED BY DECISION 28: A FILE THE TURN WROTE NAVIGATES THE VIEW ────────────────
   //
